@@ -465,7 +465,10 @@ func evenerMessage(entry evenerEntry, ordinal int) ParsedMessage {
 	}
 	msg.Content = strings.TrimSpace(strings.Join(content, "\n"))
 	if msg.Content == "" && !msg.HasThinking && len(msg.ToolCalls) == 0 && len(msg.ToolResults) == 0 {
-		setEvenerPlaceholder(&msg, turn.Kind)
+		msg.Content = "[" + turn.Kind + "]"
+		if msg.IsCompactBoundary {
+			msg.SourceType = EvenerEmptyCompactionSourceType
+		}
 	}
 	msg.ThinkingText = strings.TrimSpace(strings.Join(thinking, "\n"))
 	msg.HasToolUse = len(msg.ToolCalls) > 0
@@ -475,13 +478,6 @@ func evenerMessage(entry evenerEntry, ordinal int) ParsedMessage {
 
 // EvenerEmptyCompactionSourceType identifies a generated empty boundary label.
 const EvenerEmptyCompactionSourceType = "evener_empty_compaction"
-
-func setEvenerPlaceholder(msg *ParsedMessage, kind string) {
-	msg.Content = "[" + kind + "]"
-	if msg.IsCompactBoundary {
-		msg.SourceType = EvenerEmptyCompactionSourceType
-	}
-}
 
 func evenerResultText(part evenerContent) string {
 	result := part.ToolResult

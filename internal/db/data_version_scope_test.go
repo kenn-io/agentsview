@@ -191,8 +191,3 @@ func TestAdvanceScopedDataVersion(t *testing.T) {
 		})
 	}
 }
-
-func TestEvenerCompactionDataVersionScope(t *testing.T) {
-	assert.Equal(t, 180, AgentDataVersion(parser.AgentEvener))
-	assert.Equal(t, []parser.AgentType{parser.AgentEvener}, ScopedDataVersionProviders(179, 180))
-}

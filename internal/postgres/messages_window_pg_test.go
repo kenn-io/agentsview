@@ -304,22 +304,7 @@ func TestPGGetMessagesWindow_ReportsRevisionWithRows(t *testing.T) {
 	assert.Empty(t, revision, "no rows means no revision to describe them")
 }
 
-func TestPGGetMessagesWindow_CompactBoundary(t *testing.T) {
-	t.Parallel()
-	pgURL := testPGURL(t)
-	pg := mwEnsureSchema(t, pgURL)
-	defer pg.Close()
-	mwSeedWindowMessages(t, pg, "boundary")
-	_, err := pg.ExecContext(t.Context(), `UPDATE messages SET is_compact_boundary = TRUE WHERE session_id = $1 AND ordinal IN (3, 8)`, "boundary")
-	require.NoError(t, err)
-	store := mwNewStore(t, pgURL)
-	defer store.Close()
-	msgs, err := store.GetMessagesWindow(t.Context(), "boundary", db.MessageWindow{Limit: 100, Asc: true, CompactBoundaryOnly: true})
-	require.NoError(t, err)
-	assert.Equal(t, []int{3, 8}, mwOrdinalsOf(msgs))
-}
-
-func TestPGListSessionsHasCompactionSummary(t *testing.T) {
+func TestPGCompactionSummaryReads(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)
 	pg := mwEnsureSchema(t, pgURL)
@@ -340,6 +325,9 @@ func TestPGListSessionsHasCompactionSummary(t *testing.T) {
 	}
 	store := mwNewStore(t, pgURL)
 	defer store.Close()
+	msgs, err := store.GetMessagesWindow(t.Context(), "user", db.MessageWindow{Limit: 100, Asc: true, CompactBoundaryOnly: true})
+	require.NoError(t, err)
+	assert.Equal(t, []int{3}, mwOrdinalsOf(msgs))
 	page, err := store.ListSessions(t.Context(), db.SessionFilter{ActiveSince: "2024-06-01T00:00:00Z", HasCompactionSummary: true, IncludeChildren: true})
 	require.NoError(t, err)
 	var ids []string

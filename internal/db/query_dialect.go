@@ -838,11 +838,9 @@ func buildSessionFilterWithBuilder(
 	// Opaque project-key callers have already resolved every raw label that
 	// belongs to the identity. Match those labels on each row directly so
 	// child sessions are neither excluded nor pulled in merely because their
-	// parent belongs to the requested project. Summary filtering also applies per row.
-	if f.ProjectLabels != nil || f.HasCompactionSummary {
-		if f.ProjectLabels == nil && !f.IncludeChildren && !f.HasAnnotationFilter() {
-			basePreds = append(basePreds, q("relationship_type")+" NOT IN ("+b.dialect.SidebarChildRelationshipsSQL()+")")
-		}
+	// parent belongs to the requested project. Summary filtering also matches
+	// each child by its own rows rather than its root's.
+	if f.ProjectLabels != nil || f.HasCompactionSummary && f.IncludeChildren {
 		filterPreds, oneShotPred := sessionFilterPredicates(f, b, q)
 		allPreds := slices.Concat(basePreds, filterPreds)
 		if oneShotPred != "" {

@@ -403,12 +403,12 @@ func (s *Server) humaGetMessages(
 ) (*jsonOutput[*service.MessageList], error) {
 	limit := clampLimit(in.Limit, db.DefaultMessageLimit, db.MaxMessageLimit)
 	filter := service.MessageFilter{
-		CompactBoundaryOnly: in.CompactBoundary,
-		Limit:               limit,
-		Direction:           string(in.Direction),
-		ExpectedRevision:    in.ExpectedRevision,
-		EvidenceSource:      in.EvidenceSource,
+		Limit:            limit,
+		Direction:        string(in.Direction),
+		ExpectedRevision: in.ExpectedRevision,
+		EvidenceSource:   in.EvidenceSource,
 	}
+	filter.CompactBoundaryOnly = in.CompactBoundary
 	if in.From.IsSet {
 		filter.From = &in.From.Value
 	}

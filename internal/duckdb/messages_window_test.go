@@ -39,13 +39,12 @@ func seedDuckWindowMessages(t *testing.T, local *db.DB, sessionID string) {
 	for ordinal, role := range roles {
 		content := "msg"
 		msgs = append(msgs, db.Message{
-			SessionID:         sessionID,
-			Ordinal:           ordinal,
-			Role:              role,
-			Content:           content,
-			ContentLength:     len(content),
-			IsSystem:          role == "system",
-			IsCompactBoundary: ordinal == 3 || ordinal == 8,
+			SessionID:     sessionID,
+			Ordinal:       ordinal,
+			Role:          role,
+			Content:       content,
+			ContentLength: len(content),
+			IsSystem:      role == "system",
 		})
 	}
 	require.NoError(t, local.InsertMessages(t.Context(), msgs),
@@ -273,14 +272,7 @@ func TestDuckGetMessagesWindowReadsOnlyWindowToolRows(t *testing.T) {
 	}
 }
 
-func TestDuckGetMessagesWindow_CompactBoundary(t *testing.T) {
-	store := newDuckWindowStore(t, func(local *db.DB) { seedDuckWindowMessages(t, local, "boundary") })
-	msgs, err := store.GetMessagesWindow(t.Context(), "boundary", db.MessageWindow{Limit: 100, Asc: true, CompactBoundaryOnly: true})
-	require.NoError(t, err)
-	assert.Equal(t, []int{3, 8}, duckOrdinalsOf(msgs))
-}
-
-func TestDuckListSessionsHasCompactionSummary(t *testing.T) {
+func TestDuckCompactionSummaryReads(t *testing.T) {
 	store := newDuckWindowStore(t, func(local *db.DB) {
 		ended := "2024-06-15T00:00:00Z"
 		for _, row := range []struct{ id, agent, role, subtype, content string }{
@@ -291,10 +283,16 @@ func TestDuckListSessionsHasCompactionSummary(t *testing.T) {
 			if row.id == "placeholder" {
 				sourceType = "evener_empty_compaction"
 			}
-			require.NoError(t, local.UpsertSession(t.Context(), db.Session{ID: row.id, Project: "proj", Machine: "local", Agent: row.agent, MessageCount: 1, EndedAt: &ended}))
-			require.NoError(t, local.InsertMessages(t.Context(), []db.Message{{SessionID: row.id, Ordinal: 0, Role: row.role, IsCompactBoundary: true, SourceType: sourceType, SourceSubtype: row.subtype, Content: row.content}}))
+			require.NoError(t, local.UpsertSession(t.Context(), db.Session{ID: row.id, Project: "proj", Machine: "local", Agent: row.agent, MessageCount: 2, EndedAt: &ended}))
+			require.NoError(t, local.InsertMessages(t.Context(), []db.Message{
+				{SessionID: row.id, Ordinal: 0, Role: "user", Content: "prompt"},
+				{SessionID: row.id, Ordinal: 1, Role: row.role, IsCompactBoundary: true, SourceType: sourceType, SourceSubtype: row.subtype, Content: row.content},
+			}))
 		}
 	})
+	msgs, err := store.GetMessagesWindow(t.Context(), "user", db.MessageWindow{Limit: 100, Asc: true, CompactBoundaryOnly: true})
+	require.NoError(t, err)
+	assert.Equal(t, []int{1}, duckOrdinalsOf(msgs))
 	page, err := store.ListSessions(t.Context(), db.SessionFilter{ActiveSince: "2024-06-01T00:00:00Z", HasCompactionSummary: true, IncludeChildren: true})
 	require.NoError(t, err)
 	var ids []string

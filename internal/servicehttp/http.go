@@ -89,10 +89,11 @@ type httpBackend struct {
 	recallQueries     bool
 	docbankEnabled    bool
 	// apiVersion is the probed server API version, or 0 when unknown.
+	apiVersion int
+	friction   bool
+	token      string
+	// apiVersionMu guards apiVersion, which compaction reads refresh.
 	apiVersionMu sync.Mutex
-	apiVersion   int
-	friction     bool
-	token        string
 }
 
 const recallNonRecordingAPIVersion = 4
@@ -517,13 +518,11 @@ func encodeSessionIDs(ids []string) (string, error) {
 func (b *httpBackend) Messages(
 	ctx context.Context, id string, f service.MessageFilter,
 ) (*service.MessageList, error) {
+	q := &apiclient.GetAPIV1SessionsIDMessagesQuery{}
 	if f.CompactBoundaryOnly {
 		if err := b.requireSessionAnnotations(ctx, service.CompactionSummariesAPIVersion, "compaction summaries", false); err != nil {
 			return nil, err
 		}
-	}
-	q := &apiclient.GetAPIV1SessionsIDMessagesQuery{}
-	if f.CompactBoundaryOnly {
 		q.CompactBoundary = new(true)
 	}
 	if f.From != nil {

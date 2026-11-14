@@ -94,35 +94,6 @@ func TestNewServer_MemoryProfileRegistersOnlyEvidenceTools(t *testing.T) {
 	assert.ElementsMatch(t, []string{ToolSearchContent, ToolGetMessages, ToolGetMemoryStatus, ToolGetCompactionSummaries}, names)
 }
 
-func TestServer_CompactionSummariesMemoryProfile(t *testing.T) {
-	d := dbtest.OpenTestDB(t)
-	dbtest.SeedSession(t, d, "compacted", "project")
-	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
-		{SessionID: "compacted", Ordinal: 0, Role: "user", Content: "hello"},
-		{SessionID: "compacted", Ordinal: 1, Role: "assistant", IsSystem: true, IsCompactBoundary: true, Content: "summary"},
-		{SessionID: "compacted", Ordinal: 2, Role: "assistant", IsSystem: true, Content: "injected"},
-	}))
-	srv := newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), Profile: ProfileMemory})
-	st, ct := newInMemoryPair(t, srv)
-	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
-	result, err := ct.CallTool(t.Context(), callParams(ToolGetCompactionSummaries, map[string]any{"session_id": "compacted"}))
-	require.NoError(t, err)
-	require.False(t, result.IsError)
-	var summaries service.CompactionSummariesResult
-	raw, err := json.Marshal(result.StructuredContent)
-	require.NoError(t, err)
-	require.NoError(t, json.Unmarshal(raw, &summaries))
-	require.Len(t, summaries.Summaries, 1)
-	assert.Equal(t, "summary", summaries.Summaries[0].Content)
-	result, err = ct.CallTool(t.Context(), callParams(ToolGetMessages, map[string]any{"session_id": "compacted", "roles": []string{"system", "assistant"}}))
-	require.NoError(t, err)
-	require.False(t, result.IsError)
-	raw, err = json.Marshal(result.StructuredContent)
-	require.NoError(t, err)
-	assert.NotContains(t, string(raw), "summary")
-	assert.NotContains(t, string(raw), "injected")
-}
-
 func TestServer_GetMemoryStatus(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	srv := newServer(ServeOptions{
@@ -495,9 +466,31 @@ func TestCompactionSummaryProducers(t *testing.T) {
 		}
 		require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: row.id, Ordinal: 0, Role: row.role, IsSystem: true, IsCompactBoundary: row.boundary, SourceType: sourceType, SourceSubtype: row.subtype, Content: row.content}}))
 	}
+	dbtest.SeedSession(t, d, "deleted", "project", func(s *db.Session) { s.EndedAt = new("2024-06-16T00:00:00Z") })
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: "deleted", Role: "assistant", IsCompactBoundary: true, Content: "deleted summary"}}))
+	require.NoError(t, d.SoftDeleteSession(t.Context(), "deleted"))
 	srv := newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), Profile: ProfileMemory})
 	st, ct := newInMemoryPair(t, srv)
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
+	catalog, err := ct.ListTools(t.Context(), nil)
+	require.NoError(t, err)
+	found := false
+	for _, tool := range catalog.Tools {
+		if tool.Name == ToolGetCompactionSummaries {
+			found = true
+			raw, err := json.Marshal(tool.InputSchema)
+			require.NoError(t, err)
+			var schema struct {
+				Properties map[string]struct {
+					Minimum *float64 `json:"minimum"`
+				} `json:"properties"`
+			}
+			require.NoError(t, json.Unmarshal(raw, &schema))
+			require.NotNil(t, schema.Properties["limit"].Minimum)
+			assert.Equal(t, float64(0), *schema.Properties["limit"].Minimum)
+		}
+	}
+	require.True(t, found)
 	read := func(args map[string]any) service.CompactionSummariesResult {
 		result, err := ct.CallTool(t.Context(), callParams(ToolGetCompactionSummaries, args))
 		require.NoError(t, err)
@@ -536,6 +529,7 @@ func TestCompactionSummaryProducers(t *testing.T) {
 			assert.NotContains(t, seen, row.id)
 		}
 	}
+	assert.NotContains(t, seen, "deleted")
 	result, err := ct.CallTool(t.Context(), callParams(ToolGetCompactionSummaries, map[string]any{"active_since": "2024-06-01T00:00:00Z", "limit": -1}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)

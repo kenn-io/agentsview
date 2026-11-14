@@ -668,13 +668,14 @@ func getMessagesWith(
 // MessageWindow parameterises GetMessagesWindow. Exactly one retrieval
 // mode: Around non-nil = symmetric window; otherwise linear from/limit.
 type MessageWindow struct {
-	From                *int
-	Limit               int
-	Asc                 bool
-	Around              *int
-	Before              int // used only with Around; default handled by caller
-	After               int
-	Roles               []string // empty = all roles
+	From   *int
+	Limit  int
+	Asc    bool
+	Around *int
+	Before int // used only with Around; default handled by caller
+	After  int
+	Roles  []string // empty = all roles
+	// CompactBoundaryOnly limits linear reads to compact-boundary rows.
 	CompactBoundaryOnly bool
 	// ObservedRevision, when non-nil, receives the session transcript
 	// revision from the same statement as the message rows. An empty
@@ -685,9 +686,10 @@ type MessageWindow struct {
 // GetMessagesWindow returns messages for a session using either linear
 // pagination (mirroring GetMessages, optionally role-filtered) or a
 // symmetric window centered on an ordinal (Around/Before/After). Around
-// mode includes the anchor even when Roles excludes it. Before/after counts
-// apply after filtering, so they count matching messages rather than raw
-// ordinal distance.
+// mode always includes the anchor row even when its own role is excluded
+// by Roles; the before/after counts are taken after applying the role
+// filter, so they count role-matching messages rather than raw ordinal
+// distance from the anchor.
 func (db *DB) GetMessagesWindow(
 	ctx context.Context, sessionID string, w MessageWindow,
 ) ([]Message, error) {
@@ -748,8 +750,10 @@ func (db *DB) getMessagesLinear(
 const sqliteRevisionCol = `(SELECT transcript_revision FROM sessions WHERE id = ?)`
 
 // getMessagesAroundAnchor implements MessageWindow's Around mode: the
-// before, anchor, and after rows merged into one ascending slice. The anchor
-// ignores Roles. Before/after counts apply after filtering.
+// before, anchor, and after rows merged into one ascending slice. The
+// anchor rows have no role predicate so the anchor row is always present;
+// before/after apply the role filter (when set) before taking Before/After
+// rows, so the counts reflect role-matching messages, not raw ordinals.
 //
 // The window runs as one statement that also selects the session
 // transcript revision, so a sync that replaces the session's messages

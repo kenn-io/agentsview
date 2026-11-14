@@ -48,6 +48,8 @@ var ErrBeforeAfterRequireAround = errors.New("before/after require around")
 // APIVersion is the current client and daemon contract version.
 const APIVersion = 19
 
+// CompactionSummariesAPIVersion is the first daemon API that applies the
+// compaction summary filters.
 const CompactionSummariesAPIVersion = 19
 
 // ErrSemanticUnavailable is returned by SearchContent for modes
@@ -440,33 +442,34 @@ type ListFilter struct {
 	ExclusionCounts *bool `json:"exclusion_counts,omitempty"`
 	// IDs selects explicit sessions and their host copies; nil uses discovery defaults.
 	IDs []string `json:"ids,omitzero"`
+	// HasCompactionSummary selects sessions with compaction summary text.
+	HasCompactionSummary bool `json:"has_compaction_summary,omitempty"`
 
-	Project              string `json:"project,omitempty"`
-	ExcludeProject       string `json:"exclude_project,omitempty"`
-	Machine              string `json:"machine,omitempty"`
-	GitBranch            string `json:"git_branch,omitempty"`
-	Agent                string `json:"agent,omitempty"`
-	Date                 string `json:"date,omitempty"`
-	DateFrom             string `json:"date_from,omitempty"`
-	DateTo               string `json:"date_to,omitempty"`
-	Timezone             string `json:"timezone,omitempty"`
-	ActiveSince          string `json:"active_since,omitempty"`
-	MinMessages          int    `json:"min_messages,omitempty"`
-	MaxMessages          int    `json:"max_messages,omitempty"`
-	MinUserMessages      int    `json:"min_user_messages,omitempty"`
-	IncludeOneShot       bool   `json:"include_one_shot,omitempty"`
-	OneShotFilterSet     bool   `json:"-"`
-	AutomatedFilterSet   bool   `json:"-"`
-	IncludeAutomated     bool   `json:"include_automated,omitempty"`
-	IncludeChildren      bool   `json:"include_children,omitempty"`
-	HasCompactionSummary bool   `json:"has_compaction_summary,omitempty"`
-	IncludeSource        bool   `json:"include_source,omitempty"`
-	Outcome              string `json:"outcome,omitempty"`      // comma-separated
-	HealthGrade          string `json:"health_grade,omitempty"` // comma-separated
-	Termination          string `json:"termination,omitempty"`  // comma-separated
-	MinToolFailures      *int   `json:"min_tool_failures,omitempty"`
-	HasSecret            bool   `json:"has_secret,omitempty"`
-	Starred              bool   `json:"starred,omitempty"`
+	Project            string `json:"project,omitempty"`
+	ExcludeProject     string `json:"exclude_project,omitempty"`
+	Machine            string `json:"machine,omitempty"`
+	GitBranch          string `json:"git_branch,omitempty"`
+	Agent              string `json:"agent,omitempty"`
+	Date               string `json:"date,omitempty"`
+	DateFrom           string `json:"date_from,omitempty"`
+	DateTo             string `json:"date_to,omitempty"`
+	Timezone           string `json:"timezone,omitempty"`
+	ActiveSince        string `json:"active_since,omitempty"`
+	MinMessages        int    `json:"min_messages,omitempty"`
+	MaxMessages        int    `json:"max_messages,omitempty"`
+	MinUserMessages    int    `json:"min_user_messages,omitempty"`
+	IncludeOneShot     bool   `json:"include_one_shot,omitempty"`
+	OneShotFilterSet   bool   `json:"-"`
+	AutomatedFilterSet bool   `json:"-"`
+	IncludeAutomated   bool   `json:"include_automated,omitempty"`
+	IncludeChildren    bool   `json:"include_children,omitempty"`
+	IncludeSource      bool   `json:"include_source,omitempty"`
+	Outcome            string `json:"outcome,omitempty"`      // comma-separated
+	HealthGrade        string `json:"health_grade,omitempty"` // comma-separated
+	Termination        string `json:"termination,omitempty"`  // comma-separated
+	MinToolFailures    *int   `json:"min_tool_failures,omitempty"`
+	HasSecret          bool   `json:"has_secret,omitempty"`
+	Starred            bool   `json:"starred,omitempty"`
 	// Labels keeps sessions carrying every listed label.
 	Labels []string `json:"label,omitempty"`
 	// PR keeps sessions linked to a pull request: owner/repo,
@@ -501,14 +504,13 @@ func SessionIDsRequireCSVEncoding(ids []string) bool {
 // From/Direction (see directBackend.Messages). Roles filters the result to
 // the given roles (empty = all roles) in either mode.
 type MessageFilter struct {
-	CompactBoundaryOnly bool     `json:"compact_boundary,omitempty"`
-	From                *int     `json:"from,omitempty"`
-	Limit               int      `json:"limit,omitempty"`
-	Direction           string   `json:"direction,omitempty"` // "asc" (default) or "desc"
-	Around              *int     `json:"around,omitempty"`
-	Before              *int     `json:"before,omitempty"` // default 5 when Around set
-	After               *int     `json:"after,omitempty"`  // default 5 when Around set
-	Roles               []string `json:"roles,omitempty"`
+	From      *int     `json:"from,omitempty"`
+	Limit     int      `json:"limit,omitempty"`
+	Direction string   `json:"direction,omitempty"` // "asc" (default) or "desc"
+	Around    *int     `json:"around,omitempty"`
+	Before    *int     `json:"before,omitempty"` // default 5 when Around set
+	After     *int     `json:"after,omitempty"`  // default 5 when Around set
+	Roles     []string `json:"roles,omitempty"`
 	// ExpectedRevision rejects a read when the session no longer has the
 	// transcript revision cited by search or an earlier read.
 	ExpectedRevision string `json:"expected_revision,omitempty"`
@@ -516,6 +518,8 @@ type MessageFilter struct {
 	// read. It prevents a continuation cursor from being replayed against a
 	// different archive/server instance.
 	EvidenceSource string `json:"evidence_source,omitempty"`
+	// CompactBoundaryOnly limits linear reads to compact-boundary rows.
+	CompactBoundaryOnly bool `json:"compact_boundary,omitempty"`
 }
 
 // MessageList mirrors {messages, count}. FirstOrdinal/LastOrdinal report the

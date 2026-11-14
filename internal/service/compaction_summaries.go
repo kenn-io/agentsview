@@ -47,9 +47,7 @@ func CompactionSummaries(ctx context.Context, svc SessionService, req Compaction
 	if limit == 0 {
 		limit = DefaultCompactionSessionLimit
 	}
-	if limit > MaxCompactionSessionLimit {
-		limit = MaxCompactionSessionLimit
-	}
+	limit = min(limit, MaxCompactionSessionLimit)
 	if checker, ok := svc.(interface{ CheckCompactionSummaries(context.Context) error }); ok {
 		if err := checker.CheckCompactionSummaries(ctx); err != nil {
 			return out, err
