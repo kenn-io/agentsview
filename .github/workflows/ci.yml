@@ -445,7 +445,7 @@ jobs:
           gomodcache=$(go env GOMODCACHE)
           docker run --rm -i \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -w "$GITHUB_WORKSPACE" -v "$RUNNER_TEMP:$RUNNER_TEMP" \
-            -v "$goroot:$goroot:ro" -v "$gocache:$gocache" -v "$gomodcache:$gomodcache" \
+            -v "$goroot:$goroot:ro" -v "$gomodcache:$gomodcache" \
             -e GOROOT="$goroot" -e GOCACHE="$gocache" -e GOMODCACHE="$gomodcache" -e GOFLAGS -e GOTOOLCHAIN -e CGO_CFLAGS \
             -e CGO_ENABLED=1 -e GOPROXY=off -e HOME=/tmp -e DEBIAN_FRONTEND=noninteractive \
             -e OUT="$RUNNER_TEMP/agentsview" -e IDS="$(id -u):$(id -g)" \
@@ -475,8 +475,6 @@ jobs:
             sleep 1
           done
           kill "$pid"
-        env:
-          CGO_ENABLED: "1"
 
       # Sync and DuckDB run in separate normal Linux jobs.
       - name: Run other Go tests (Linux)
