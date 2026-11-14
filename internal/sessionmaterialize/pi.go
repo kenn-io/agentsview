@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/sha256"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -290,7 +291,12 @@ func piDestination(cwd, basename string) (string, error) {
 			return "", err
 		}
 		encoded := strings.TrimPrefix(strings.NewReplacer("/", "-", `\`, "-", ":", "-").Replace(cwd), "-")
-		return filepath.Join(agentDir, "sessions", "--"+encoded+"--", basename), nil
+		component := "--" + encoded + "--"
+		if len(component) > 200 {
+			hash := sha256.Sum256([]byte(cwd))
+			component = fmt.Sprintf("--%x--", hash[:16])
+		}
+		return filepath.Join(agentDir, "sessions", component, basename), nil
 	}
 	dir, err := piResolveDir(cwd, dir)
 	if err != nil {

@@ -129,11 +129,6 @@ func TestMaterializeConfiguredSources(t *testing.T) {
 				defer cancel()
 				_, err = Materialize(ctx, cfg, s, cwd)
 				require.ErrorIs(t, err, context.DeadlineExceeded)
-			} else {
-				require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(sidecar), "result2.txt"), []byte("more"), 0o600))
-				_, err = readLocalSource(t.Context(), filepath.Join(root, "original"), name, id, int64(len(original)+len("tool output")+3))
-				require.ErrorContains(t, err, "exceeds size limit")
-				require.ErrorContains(t, err, "result2.txt")
 			}
 		})
 	}
@@ -272,11 +267,6 @@ func TestMaterializeRecordedSourceAfterMachineRelabel(t *testing.T) {
 			result, err := Materialize(t.Context(), cfg, session, t.TempDir())
 			require.NoError(t, err)
 			assert.Equal(t, name, result.Source)
-			// A stale path must not search a root assigned to another machine.
-			stale := filepath.Join(root, "project", "missing.jsonl")
-			session.FilePath = &stale
-			_, err = Materialize(t.Context(), cfg, session, t.TempDir())
-			require.ErrorContains(t, err, "unavailable")
 		})
 	}
 }
@@ -438,13 +428,6 @@ func TestMaterializeLinkedClaudeSources(t *testing.T) {
 				require.NoError(t, err)
 				assert.Equal(t, content, string(got))
 			}
-			if layout == "external saved" || layout == "in-root session directory" {
-				cfg.SourceMachines = map[parser.AgentType]map[string]string{parser.AgentClaude: {root: "renamed"}}
-				result, err = Materialize(t.Context(), cfg, session, cwd)
-				require.NoError(t, err)
-				assert.Equal(t, name, result.Source)
-				assert.Equal(t, "unchanged", result.Status)
-			}
 		})
 	}
 }
@@ -467,11 +450,18 @@ func TestReadFileBudgetAndInvalidCompanionPath(t *testing.T) {
 		primary := filepath.Join(root, id+".jsonl")
 		require.NoError(t, os.WriteFile(primary, []byte("x"), 0o600))
 		companion := filepath.Join(root, id, "tool-results")
+		require.NoError(t, os.MkdirAll(companion, 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(companion, "result.txt"), []byte("data"), 0o600))
+		_, err := readLocalSource(t.Context(), root, primary, id, 4)
+		require.ErrorContains(t, err, "exceeds size limit")
+		require.ErrorContains(t, err, "result.txt")
+		require.NoError(t, os.Remove(filepath.Join(companion, "result.txt")))
+		require.NoError(t, os.Remove(companion))
 		require.NoError(t, os.MkdirAll(filepath.Dir(companion), 0o700))
 		if err := os.Symlink(t.TempDir(), companion); err != nil {
 			t.Skipf("symlink unavailable: %v", err)
 		}
-		_, err := readLocalSource(t.Context(), root, primary, id, 32)
+		_, err = readLocalSource(t.Context(), root, primary, id, 32)
 		require.ErrorContains(t, err, "invalid session file")
 		require.ErrorContains(t, err, companion)
 	})

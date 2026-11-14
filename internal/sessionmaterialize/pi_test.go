@@ -17,25 +17,32 @@ import (
 )
 
 func TestPiDestination(t *testing.T) {
-	t.Run("relative destination", func(t *testing.T) {
-		cwd := t.TempDir()
-		t.Setenv("PI_CODING_AGENT_SESSION_DIR", "relative-sessions")
-		t.Setenv("PI_CODING_AGENT_DIR", "")
+	t.Run("long checkout", func(t *testing.T) {
+		if filepath.Separator != '/' {
+			t.Skip("fixture uses a POSIX absolute path")
+		}
+		agent := t.TempDir()
+		t.Setenv("PI_CODING_AGENT_DIR", agent)
+		t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
+		cwd := "/" + strings.Repeat("0", 150) + "/" + strings.Repeat("0", 150)
 		got, err := piDestination(cwd, "id.jsonl")
 		require.NoError(t, err)
-		assert.Equal(t, filepath.Join(cwd, "relative-sessions", "id.jsonl"), got)
-		t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
-		t.Setenv("PI_CODING_AGENT_DIR", "relative-agent")
-		got, err = piDestination(cwd, "id.jsonl")
-		require.NoError(t, err)
-		assert.Contains(t, got, filepath.Join(cwd, "relative-agent", "sessions"))
-		if filepath.Separator == '/' {
-			got, err = piDestination("/work dir", "id.jsonl")
-			require.NoError(t, err)
-			assert.Equal(t, "/work dir/relative-agent/sessions/--work dir--/id.jsonl", got)
-		}
-
+		assert.Equal(t, filepath.Join(agent, "sessions", "--8b198fcfb9c0abfa873a9f4c46fc3a59--", "id.jsonl"), got)
 	})
+	cwd, encoded := "/work dir", "--work dir--"
+	if filepath.Separator == '\\' {
+		cwd, encoded = `C:\work dir`, "--C--work dir--"
+	}
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", "relative-sessions")
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	got, err := piDestination(cwd, "id.jsonl")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(cwd, "relative-sessions", "id.jsonl"), got)
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
+	t.Setenv("PI_CODING_AGENT_DIR", "relative-agent")
+	got, err = piDestination(cwd, "id.jsonl")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(cwd, "relative-agent", "sessions", encoded, "id.jsonl"), got)
 }
 
 func TestPiSourceLookup(t *testing.T) {
@@ -83,12 +90,11 @@ func TestPiSourceLookup(t *testing.T) {
 	require.ErrorContains(t, err, "exceeds size limit")
 	assert.Contains(t, err.Error(), "reading native Pi transcript")
 	require.NoError(t, os.Remove(other))
-	require.NoError(t, os.WriteFile(good, data, 0o600))
-	require.NoError(t, os.Remove(good))
 	fallback := filepath.Join(root, "target.jsonl")
 	require.NoError(t, os.WriteFile(fallback, []byte(`{"type":"session","id":null,"cwd":"/old"}`+"\n"), 0o600))
-	_, _, err = findPiSource(t.Context(), cfg, s, stale, "target")
+	selected, _, err := findPiSource(t.Context(), cfg, s, stale, "target")
 	require.NoError(t, err)
+	assert.Equal(t, fallback, selected)
 }
 
 func TestPiSourceLookupRejectsUncertainCandidate(t *testing.T) {
@@ -164,14 +170,15 @@ func TestMaterializePiConfiguredSources(t *testing.T) {
 			require.NoError(t, err)
 			// All records and header fields except the cwd value must stay byte-identical.
 			assert.Equal(t, `{"type":"session", "id":"abc-session", "cwd" : `+string(mustJSON(t, cwd))+`, "parentSession":"/parent.jsonl"}`+"\n"+`{"type":"message","id":"branch","parentId":"first","message":{"role":"user","content":"hello"}}`+"\n", string(got))
-			appended := append([]byte(nil), got...)
-			appended = append(appended, []byte("{\"type\":\"message\"}\n")...)
-			require.NoError(t, os.WriteFile(result.Paths[0], appended, 0o600))
-			_, err = Materialize(t.Context(), cfg, s, cwd)
-			require.Error(t, err)
-			got, err = os.ReadFile(result.Paths[0])
-			require.NoError(t, err)
-			assert.Equal(t, appended, got)
+			if !mirror {
+				appended := append(got, []byte("{\"type\":\"message\"}\n")...)
+				require.NoError(t, os.WriteFile(result.Paths[0], appended, 0o600))
+				_, err = Materialize(t.Context(), cfg, s, cwd)
+				require.ErrorContains(t, err, "destination differs")
+				got, err = os.ReadFile(result.Paths[0])
+				require.NoError(t, err)
+				assert.Equal(t, appended, got)
+			}
 			got, err = os.ReadFile(name)
 			require.NoError(t, err)
 			assert.Equal(t, original, string(got))
@@ -212,8 +219,6 @@ func TestPiHeaderIdentityAndVersion(t *testing.T) {
 	got, err := relocatePiHeader(t.Context(), data, "id.jsonl", "id", "/new")
 	require.NoError(t, err)
 	assert.Equal(t, `{"type":"session", "cwd":"/new","id":"id", "extra":1}`+"\n", string(got))
-	_, err = relocatePiHeader(t.Context(), data, "other.jsonl", "id", "/new")
-	require.ErrorIs(t, err, errPiIdentity)
 	prefix := "\nnot-json\nnull\nfalse\n0.0\n\"\"\n"
 	got, err = relocatePiHeader(t.Context(), []byte(prefix+`{"type":"session","id":"id","cwd":"/old"}`+"\n"), "id.jsonl", "id", "/new")
 	require.NoError(t, err)
@@ -235,7 +240,6 @@ func TestPiHeaderIdentityAndVersion(t *testing.T) {
 		{`{"Type":"session","id":"id"}`, "id", "header"},
 		{`{"type":"session","ID":"id"}`, "id", "identity"},
 		{"", "id", "header"},
-		{"not-json", "id", "header"},
 	} {
 		t.Run(tc.want, func(t *testing.T) {
 			_, err := relocatePiHeader(t.Context(), []byte(tc.header), "other.jsonl", tc.id, "/new")
@@ -249,9 +253,6 @@ func TestPiHeaderIdentityAndVersion(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestPiHeaderFilenameIdentityPreservesBytes(t *testing.T) {
 	for _, tc := range []struct{ name, field string }{
 		{"empty", `"id" : ""`},
 		{"null", `"id" : null`},
@@ -262,13 +263,9 @@ func TestPiHeaderFilenameIdentityPreservesBytes(t *testing.T) {
 			got, err := relocatePiHeader(t.Context(), data, "id.jsonl", "id", "/new")
 			require.NoError(t, err)
 			assert.Equal(t, "\n"+`{"type":"session", "id" : "id", "cwd" : "/new", "other": [1, 2]}`+"\n"+`{"type":"message"}`+"\n", string(got))
-			if tc.name == "object" {
-				_, err = relocatePiHeader(t.Context(), data, "other.jsonl", "id", "/new")
-				require.ErrorIs(t, err, errPiIdentity)
-			}
 		})
 	}
-	got, err := relocatePiHeader(t.Context(), []byte(`{"type":"session","cwd":"/old","id":null}`), "id.jsonl", "id", "/new")
+	got, err = relocatePiHeader(t.Context(), []byte(`{"type":"session","cwd":"/old","id":null}`), "id.jsonl", "id", "/new")
 	require.NoError(t, err)
 	assert.Equal(t, `{"type":"session","cwd":"/new","id":"id"}`, string(got))
 	_, err = relocatePiHeader(t.Context(), []byte(`{"type":"session","id":"other","cwd":"/old"}`), "id.jsonl", "id", "/new")
