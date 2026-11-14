@@ -37,6 +37,7 @@ func SeedWordSearch(t *testing.T, d *db.DB) {
 	for _, entry := range []struct{ id, project, text string }{
 		{"accent-exact", "word-accent", "café rounding decision"},
 		{"accent-partial", "word-accent-partial", "café"},
+		{"accent-long-snippet", "word-accent-snippet", strings.Repeat("filler ", 80) + "café " + strings.Repeat("filler ", 80)},
 		{"accent-boundary", "word-accent-boundary", "caféine rounding"},
 		{"accent-phrase", "word-accent-phrase", "café rounding missingword"},
 		{"accent-naive", "word-accent-naive", "naïve design"},
@@ -99,6 +100,18 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 				assert.Equal(t, tc.want, project(page.Matches))
 			})
 		}
+	}
+	for _, mode := range []string{"substring", "fts", "hybrid"} {
+		t.Run("accent snippet/"+mode, func(t *testing.T) {
+			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+				Pattern: "cafe missingword", Mode: mode, Project: "word-accent-snippet",
+				KeywordOnly: mode == "hybrid",
+			})
+			require.NoError(t, err)
+			require.Len(t, page.Matches, 1)
+			assert.Equal(t, hit{"accent-long-snippet", "message", 1}, project(page.Matches)[0])
+			assert.Contains(t, page.Matches[0].Snippet, "café")
+		})
 	}
 	for _, mode := range []string{"substring", "fts", "hybrid"} {
 		t.Run("underscore/"+mode, func(t *testing.T) {

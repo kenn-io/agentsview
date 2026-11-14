@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 // contentWords is a natural-language query: the words a message can hold,
@@ -30,6 +32,13 @@ type ContentWords struct {
 // WordSnippetRange finds the first whole word in body matching a query form,
 // else pattern's first case-insensitive occurrence, else the start of body.
 func WordSnippetRange(body, pattern string, words ContentWords) (int, int) {
+	foldedForms := make([][]string, len(words.Terms))
+	for i, forms := range words.Terms {
+		foldedForms[i] = make([]string, len(forms))
+		for j, form := range forms {
+			foldedForms[i][j] = foldLatinDiacritics(form)
+		}
+	}
 	offset := 0
 	for word := range strings.FieldsFuncSeq(body, func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
@@ -40,10 +49,31 @@ func WordSnippetRange(body, pattern string, words ContentWords) (int, int) {
 				return offset, offset + len(word)
 			}
 		}
+		foldedWord := foldLatinDiacritics(word)
+		for _, forms := range foldedForms {
+			if slices.ContainsFunc(forms, func(form string) bool { return strings.EqualFold(foldedWord, form) }) {
+				return offset, offset + len(word)
+			}
+		}
 		offset += len(word)
 	}
 	start, end, _ := CaseInsensitiveSpan(body, pattern)
 	return start, end
+}
+
+func foldLatinDiacritics(text string) string {
+	decomposed := norm.NFD.String(text)
+	var folded strings.Builder
+	folded.Grow(len(decomposed))
+	previousLatin := false
+	for _, r := range decomposed {
+		if previousLatin && r >= '\u0300' && r <= '\u036f' {
+			continue
+		}
+		folded.WriteRune(r)
+		previousLatin = r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z'
+	}
+	return folded.String()
 }
 
 // RouteContentWords applies SQLite's gates for word matching to f, a
