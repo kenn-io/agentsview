@@ -43,7 +43,7 @@ func TestUsagePartsAcrossRestart(t *testing.T) {
 	keptActivityMirror(t, path, "session-a", 500)
 	writeUsageMirror(t, path,
 		`UPDATE sessions SET agentsview_push_fingerprint = 'first'`,
-		`UPDATE messages SET token_usage = '{"output_tokens":500,"recorded_cost_microdollars":2000}' WHERE id = 2`,
+		`UPDATE messages SET token_usage = '{"output_tokens":500,"recorded_cost_microdollars":2000}', usage_output_tokens = 500 WHERE id = 2`,
 	)
 	store := openUsagePartsStore(t, path)
 	f := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
@@ -72,7 +72,7 @@ func TestUsagePartsAcrossRestart(t *testing.T) {
 
 	writeUsageMirror(t, path,
 		`UPDATE sessions SET agentsview_push_fingerprint = 'second'`,
-		`UPDATE messages SET token_usage = '{"output_tokens":900}' WHERE id = 2`,
+		`UPDATE messages SET token_usage = '{"output_tokens":900}', usage_output_tokens = 900 WHERE id = 2`,
 	)
 	changed := openUsagePartsStore(t, path)
 	defer changed.Close()
@@ -115,8 +115,8 @@ func testUsagePartsPeers(t *testing.T, update string, firstOutput int, full bool
 		`UPDATE sessions SET agentsview_push_fingerprint = 'a1'`,
 		`INSERT INTO sessions SELECT * REPLACE ('session-b' AS id, 'b1' AS agentsview_push_fingerprint, 'beta' AS project) FROM sessions WHERE id = 'session-a'`,
 		`UPDATE messages SET `+update+` WHERE id = 2`,
-		`INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id, '{"output_tokens":700}' AS token_usage) FROM messages WHERE id = 2`,
-		`INSERT INTO messages SELECT * REPLACE (id + 10 AS id, ordinal + 10 AS ordinal, '{}' AS token_usage, CASE WHEN claude_message_id != '' THEN claude_message_id || '-other' ELSE '' END AS claude_message_id, CASE WHEN source_uuid != '' THEN source_uuid || '-other' ELSE '' END AS source_uuid) FROM messages WHERE id IN (2, 3)`,
+		`INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id, '{"output_tokens":700}' AS token_usage, 700 AS usage_output_tokens) FROM messages WHERE id = 2`,
+		`INSERT INTO messages SELECT * REPLACE (id + 10 AS id, ordinal + 10 AS ordinal, '{}' AS token_usage, 0 AS usage_output_tokens, CASE WHEN claude_message_id != '' THEN claude_message_id || '-other' ELSE '' END AS claude_message_id, CASE WHEN source_uuid != '' THEN source_uuid || '-other' ELSE '' END AS source_uuid) FROM messages WHERE id IN (2, 3)`,
 		`INSERT INTO sessions SELECT * REPLACE ('session-c' AS id, 'c1' AS agentsview_push_fingerprint) FROM sessions WHERE id = 'session-b'`,
 		`INSERT INTO messages SELECT * REPLACE (23 AS id, 'session-c' AS session_id) FROM messages WHERE id = 13`,
 		`INSERT INTO sessions SELECT * REPLACE ('session-d' AS id, 'd1' AS agentsview_push_fingerprint) FROM sessions WHERE id = 'session-a'`,
@@ -150,7 +150,7 @@ func testUsagePartsPeers(t *testing.T, update string, firstOutput int, full bool
 	}
 	writeUsageMirror(t, path,
 		`UPDATE sessions SET agentsview_push_fingerprint = 'a2' WHERE id = 'session-a'`,
-		`UPDATE messages SET token_usage = '{"output_tokens":900}' WHERE id = 2`,
+		`UPDATE messages SET token_usage = '{"output_tokens":900}', usage_output_tokens = 900 WHERE id = 2`,
 	)
 	store = openUsagePartsStore(t, path)
 	defer store.Close()
@@ -390,7 +390,7 @@ func TestUsagePartsReplacementDuringRefresh(t *testing.T) {
 			`UPDATE model_pricing SET updated_at = '2026-01-01T00:00:00Z'`,
 			`UPDATE sessions SET agentsview_push_fingerprint = '`+fixture.aFingerprint+`'`,
 			`INSERT INTO sessions SELECT * REPLACE ('session-b' AS id, '`+fixture.bFingerprint+`' AS agentsview_push_fingerprint) FROM sessions WHERE id = 'session-a'`,
-			`INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id, '{"output_tokens":`+strconv.Itoa(fixture.b)+`}' AS token_usage) FROM messages WHERE id = 2`,
+			`INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id, '{"output_tokens":`+strconv.Itoa(fixture.b)+`}' AS token_usage, `+strconv.Itoa(fixture.b)+` AS usage_output_tokens) FROM messages WHERE id = 2`,
 		)
 	}
 	f := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}

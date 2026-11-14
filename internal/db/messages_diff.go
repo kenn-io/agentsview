@@ -19,6 +19,7 @@ const diffDeleteChunkSize = 500
 // so the persisted tuple has exactly one definition.
 func messageInsertArgs(m Message) []any {
 	dialogue, dialogueIsContent := StoredDialogue(m.Content, m.ThinkingText, m.DialogueText)
+	usageOutputTokens, usageWebSearchRequests := storedMessageUsageCounters(string(m.TokenUsage))
 	return []any{
 		m.SessionID, m.Ordinal, m.Role, m.Content,
 		m.ThinkingText, dialogue, dialogueIsContent,
@@ -30,6 +31,7 @@ func messageInsertArgs(m Message) []any {
 		m.ClaudeMessageID, m.ClaudeRequestID,
 		m.SourceType, m.SourceSubtype, m.PromptSource, m.SourceUUID,
 		m.SourceParentUUID, m.IsSidechain, m.IsCompactBoundary,
+		usageOutputTokens, usageWebSearchRequests,
 	}
 }
 

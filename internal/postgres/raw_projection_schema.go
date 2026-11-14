@@ -181,6 +181,9 @@ func installRawProjectionUpgrade(ctx context.Context, tx *sql.Tx, schema, tenant
 	if err := createPartialIndexesPG(ctx, tx); err != nil {
 		return err
 	}
+	if _, err := backfillMessageUsageCountersPG(ctx, tx); err != nil {
+		return err
+	}
 	_, err = tx.ExecContext(ctx, rawProjectionIndexesDDL)
 	return err
 }

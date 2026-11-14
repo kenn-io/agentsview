@@ -591,6 +591,8 @@ func TestStoreUsageRanksNumericStringClaudeSnapshot(t *testing.T) {
 			 'claude-opus-4-6', '{"input_tokens":"1000","output_tokens":"631"}',
 			 'msg-numeric-string', 'req-numeric-string')`)
 	require.NoError(t, err)
+	_, err = backfillMessageUsageCountersPG(ctx, store.DB())
+	require.NoError(t, err, "store usage counters as push does")
 
 	result, err := store.GetDailyUsage(ctx, db.UsageFilter{
 		From: "2026-05-20", To: "2026-05-20", Timezone: "UTC",
@@ -637,7 +639,7 @@ func TestPGSnapshotRankedDailyUsageRowsOrdersTimestamps(t *testing.T) {
 					 'msg-tie', 'req-tie')`, tc.aTimestamp)
 			require.NoError(t, err)
 			pb := &paramBuilder{}
-			rowsSQL := pgUsageRowsSQLWithWhere(pgUsageMessageEligibility, pgUsageEventEligibility)
+			rowsSQL := pgDailyUsageRowsSQLWithWhere(pgUsageMessageEligibility, pgUsageEventEligibility)
 			ranked, _ := pgSnapshotRankedDailyUsageRowsSQL(pb, rowsSQL, db.UsageFilter{}, db.PostgresQueryDialect())
 			var sessionID, attributionSessionID, tokenJSON string
 			err = store.DB().QueryRowContext(t.Context(), `

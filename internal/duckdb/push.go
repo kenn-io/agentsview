@@ -20,9 +20,9 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/money"
-	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/signals"
 	"go.kenn.io/agentsview/internal/storage"
+	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
 func (s *Sync) syncModelPricing(ctx context.Context) error {
@@ -153,39 +153,46 @@ func scanDuckGenAIPricing(
 	return &document, nil
 }
 
-func duckGenAIEffectivePricingRow(
-	document *db.GenAIPricingDocument,
+// loadDuckGenAIPricingRow returns the pricing row of the mirror's GenAI
+// Prices document. It reads the document's provenance and DuckDB's SHA-256 of
+// its JSON first, and reads the JSON, several hundred KB, only when this
+// process has not parsed a document with those bytes yet. Over Quack that
+// keeps the JSON off the network on most reads.
+func loadDuckGenAIPricingRow(
+	ctx context.Context,
+	queryRow func(context.Context, string, ...any) interface{ Scan(...any) error },
 ) (export.EffectivePricingRow, error) {
-	if document == nil {
-		embedded := pricingpkg.EmbeddedGenAIDocument()
-		return export.EffectivePricingRow{
-			GenAI: embedded.Prices, GenAIVersion: embedded.Version,
-			GenAISource: export.PricingRowSourceEmbedded,
-		}, nil
-	}
-	parsed, err := pricingpkg.ParseGenAIDocument(
-		document.Data, document.Version, document.SourceRef,
+	var digest db.GenAIPricingDigest
+	var sum string
+	err := queryRow(ctx, `
+		SELECT version, source_ref, source, updated_at, sha256(data_json)
+		FROM genai_pricing WHERE singleton = 1`).Scan(
+		&digest.Version, &digest.SourceRef, &digest.Source, &digest.UpdatedAt, &sum,
 	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return db.GenAIEffectivePricingRow(nil)
+	}
 	if err != nil {
 		return export.EffectivePricingRow{}, fmt.Errorf(
-			"parsing duckdb GenAI pricing document: %w", err,
-		)
+			"reading duckdb GenAI pricing digest: %w", err)
 	}
-	var updatedAt *time.Time
-	if parsedTime, parseErr := time.Parse(
-		time.RFC3339Nano, document.UpdatedAt,
-	); parseErr == nil {
-		utc := parsedTime.UTC()
-		updatedAt = &utc
+	if digest.Sum, err = db.ParseGenAIPricingSum([]byte(sum)); err != nil {
+		return export.EffectivePricingRow{}, err
 	}
-	source := export.PricingRowSourceFetched
-	if document.Source == db.GenAIPricingSourceEmbedded {
-		source = export.PricingRowSourceEmbedded
+	if row, ok := db.CachedGenAIEffectivePricingRow(digest); ok {
+		return row, nil
 	}
-	return export.EffectivePricingRow{
-		GenAI: parsed.Prices, GenAIVersion: parsed.Version,
-		GenAISource: source, GenAIUpdatedAt: updatedAt,
-	}, nil
+	document, err := scanDuckGenAIPricing(queryRow(ctx, `
+		SELECT version, source_ref, source, data_json, updated_at
+		FROM genai_pricing WHERE singleton = 1`))
+	if err != nil {
+		return export.EffectivePricingRow{}, err
+	}
+	row, err := db.GenAIEffectivePricingRow(document)
+	if err != nil {
+		return export.EffectivePricingRow{}, fmt.Errorf("duckdb: %w", err)
+	}
+	return row, nil
 }
 
 func (s *Sync) syncGenAIPricing(ctx context.Context) error {
@@ -1104,6 +1111,10 @@ func insertMessages(
 ) error {
 	for _, m := range msgs {
 		dialogue, _ := db.StoredDialogue(m.Content, m.ThinkingText, m.DialogueText)
+		// Usage reads take these counters from typed columns, parsed here
+		// by the same function SQLite reads with, so no read parses
+		// token_usage.
+		usage := usagefacts.ParseTokenUsage(string(m.TokenUsage))
 		if err := batch.add(ctx, "messages",
 			m.ID, m.SessionID, m.Ordinal, m.Role, m.Content,
 			m.ThinkingText, dialogue, timeValue(m.Timestamp),
@@ -1114,6 +1125,9 @@ func insertMessages(
 			m.ClaudeMessageID, m.ClaudeRequestID,
 			m.SourceType, m.SourceSubtype, m.PromptSource, m.SourceUUID,
 			m.SourceParentUUID, m.IsSidechain, m.IsCompactBoundary,
+			usage.InputTokens, usage.OutputTokens, usage.CacheCreationTokens,
+			usage.CacheCreation1hTokens, usage.CacheReadTokens,
+			usage.ReasoningTokens, usage.WebSearchRequests,
 		); err != nil {
 			return fmt.Errorf("inserting duckdb messages: %w", err)
 		}

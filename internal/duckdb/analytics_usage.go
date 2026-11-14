@@ -328,13 +328,7 @@ func (s *Store) loadPricingResolver(
 	if err != nil {
 		return nil, err
 	}
-	document, err := scanDuckGenAIPricing(s.queryRowContext(ctx, `
-		SELECT version, source_ref, source, data_json, updated_at
-		FROM genai_pricing WHERE singleton = 1`))
-	if err != nil {
-		return nil, err
-	}
-	genAI, err := duckGenAIEffectivePricingRow(document)
+	genAI, err := loadDuckGenAIPricingRow(ctx, s.queryRowContext)
 	if err != nil {
 		return nil, err
 	}
@@ -415,7 +409,6 @@ SELECT
 	cu.occurred_at AS pricing_ts,
 	COALESCE(NULLIF(cu.model, ''), '<unknown>') AS model,
 	'' AS provider_id,
-	'' AS token_json,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
 	'' AS source_uuid,
@@ -425,6 +418,7 @@ SELECT
 	cu.cache_write_tokens AS cache_create,
 	cu.cache_read_tokens AS cache_read,
 	0 AS reasoning_tokens,
+	0 AS cache_create_1h, 0 AS web_search_requests,
 	cu.charged_microdollars AS cost_microdollars,
 	cu.agent || '-reported' AS cost_source,
 	NULL AS recorded_cost_microdollars,
@@ -502,6 +496,18 @@ type duckUsageRowScope struct {
 	messageArgs, eventArgs []any
 }
 
+// duckMessageUsageCountersSQL selects a message's token counters, under the
+// usage row column names, from the columns push fills with
+// usagefacts.ParseTokenUsage, so no read parses token_usage. Push clamps each
+// token count as SQLite reads it and floors web searches at zero.
+const duckMessageUsageCountersSQL = `m.usage_input_tokens AS input_tokens,
+				m.usage_output_tokens AS output_tokens,
+				m.usage_cache_creation_input_tokens AS cache_create,
+				m.usage_cache_read_input_tokens AS cache_read,
+				m.usage_reasoning_tokens AS reasoning_tokens,
+				m.usage_cache_creation_1h_input_tokens AS cache_create_1h,
+				m.usage_web_search_requests AS web_search_requests`
+
 func duckUsageRawSQL(f db.UsageFilter, sessionIDs []string) (string, []any) {
 	var scope duckUsageRowScope
 	if sessionIDs != nil {
@@ -527,14 +533,12 @@ func duckUsageScopedRawSQL(f db.UsageFilter, scope duckUsageRowScope) (string, [
 		SELECT m.session_id AS session_id, m.ordinal AS message_ordinal,
 			'message' AS source, COALESCE(m.timestamp, s.started_at) AS ts,
 			m.timestamp AS pricing_ts,
-			m.model AS model, m.provider_id AS provider_id, m.token_usage AS token_json,
+			m.model AS model, m.provider_id AS provider_id,
 			m.claude_message_id AS claude_message_id,
 			m.claude_request_id AS claude_request_id,
 			m.source_uuid AS source_uuid,
 			'' AS usage_dedup_key,
-				0 AS input_tokens, 0 AS output_tokens,
-				0 AS cache_create, 0 AS cache_read,
-				COALESCE(TRY_CAST(json_extract_string(m.token_usage, '$.reasoning_tokens') AS BIGINT), 0) AS reasoning_tokens,
+				`+duckMessageUsageCountersSQL+`,
 				NULL AS cost_microdollars, '' AS cost_source,
 				-- A message's harness-recorded cost (usagefacts.RecordedCostKey).
 				CASE WHEN TRY_CAST(json_extract_string(m.token_usage, '$.recorded_cost_microdollars') AS BIGINT) >= 0 THEN TRY_CAST(json_extract_string(m.token_usage, '$.recorded_cost_microdollars') AS BIGINT) END AS recorded_cost_microdollars,
@@ -551,7 +555,7 @@ func duckUsageScopedRawSQL(f db.UsageFilter, scope duckUsageRowScope) (string, [
 		SELECT ue.session_id AS session_id, ue.message_ordinal AS message_ordinal,
 			ue.source AS source, COALESCE(ue.occurred_at, s.started_at) AS ts,
 			ue.occurred_at AS pricing_ts,
-			ue.model AS model, ue.provider_id AS provider_id, '' AS token_json,
+			ue.model AS model, ue.provider_id AS provider_id,
 			'' AS claude_message_id, '' AS claude_request_id,
 			'' AS source_uuid,
 			CASE
@@ -562,6 +566,7 @@ func duckUsageScopedRawSQL(f db.UsageFilter, scope duckUsageRowScope) (string, [
 				ue.cache_creation_input_tokens AS cache_create,
 				ue.cache_read_input_tokens AS cache_read,
 				ue.reasoning_tokens AS reasoning_tokens,
+				0 AS cache_create_1h, 0 AS web_search_requests,
 				-- A harness-recorded cost is evidence, not a price: SQL treats
 				-- the row as unpriced and Go applies it only when the catalog
 				-- cannot price the model (db.ReportedCostForPricing).
@@ -786,44 +791,36 @@ func duckUsageCTEFromRaw(
 		),
 		usage_normalized AS (
 			SELECT *,
+				-- Message rows carry counters push already clamped
+				-- (duckMessageUsageCountersSQL), so the clamps below
+				-- leave them as stored.
 				CASE
-					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.input_tokens') AS BIGINT), 0), 0), %[3]d)
 					WHEN (source = 'session' OR session_id = '') THEN GREATEST(input_tokens, 0)
 					ELSE LEAST(GREATEST(input_tokens, 0), %[3]d)
 				END AS input_tokens_norm,
 				CASE
-					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.output_tokens') AS BIGINT), 0), 0), %[3]d)
 					WHEN (source = 'session' OR session_id = '') THEN GREATEST(output_tokens, 0)
 					ELSE LEAST(GREATEST(output_tokens, 0), %[3]d)
 				END AS output_tokens_norm,
 				CASE
-					WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.cache_creation_input_tokens') AS BIGINT), 0), 0), %[3]d)
 					WHEN (source = 'session' OR session_id = '') THEN GREATEST(cache_create, 0)
 					ELSE LEAST(GREATEST(cache_create, 0), %[3]d)
 				END AS cache_create_norm,
-					-- 1h-TTL subset of cache_create_norm from the nested
-					-- Anthropic breakdown; only message rows carry it.
-					CASE
-						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.cache_creation.ephemeral_1h_input_tokens') AS BIGINT), 0), 0), %[3]d)
-						ELSE 0
-					END AS cache_create_1h_norm,
-					CASE
-						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.cache_read_input_tokens') AS BIGINT), 0), 0), %[3]d)
-						WHEN (source = 'session' OR session_id = '') THEN GREATEST(cache_read, 0)
-						ELSE LEAST(GREATEST(cache_read, 0), %[3]d)
-					END AS cache_read_norm,
-					CASE
-						WHEN source = 'message' THEN LEAST(GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.reasoning_tokens') AS BIGINT), 0), 0), %[3]d)
-						WHEN (source = 'session' OR session_id = '') THEN GREATEST(reasoning_tokens, 0)
-						ELSE LEAST(GREATEST(reasoning_tokens, 0), %[3]d)
-					END AS reasoning_tokens_norm,
-					-- Anthropic bills server-side web search per request on
-					-- top of tokens. Only per-message rows carry a usage
-					-- blob; usage events never report server tool use.
-					CASE
-						WHEN source = 'message' THEN GREATEST(COALESCE(TRY_CAST(json_extract_string(token_json, '$.server_tool_use.web_search_requests') AS BIGINT), 0), 0)
-						ELSE 0
-					END AS web_search_requests_norm,
+				-- 1h-TTL subset of cache_create_norm from the nested
+				-- Anthropic breakdown; only message rows carry it.
+				cache_create_1h AS cache_create_1h_norm,
+				CASE
+					WHEN (source = 'session' OR session_id = '') THEN GREATEST(cache_read, 0)
+					ELSE LEAST(GREATEST(cache_read, 0), %[3]d)
+				END AS cache_read_norm,
+				CASE
+					WHEN (source = 'session' OR session_id = '') THEN GREATEST(reasoning_tokens, 0)
+					ELSE LEAST(GREATEST(reasoning_tokens, 0), %[3]d)
+				END AS reasoning_tokens_norm,
+				-- Anthropic bills server-side web search per request on
+				-- top of tokens. Only message rows carry the count; usage
+				-- events never report server tool use.
+				web_search_requests AS web_search_requests_norm,
 				%[6]s AS dedup_group,
 				%[2]s AS local_date,
 				%[4]s AS price_model

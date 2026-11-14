@@ -313,6 +313,13 @@ func TestMakeInputPreview(t *testing.T) {
 			want:      "ls -la",
 		},
 		{
+			name:      "non-string value falls through to the next key",
+			category:  "Read",
+			toolName:  "Read",
+			inputJSON: `{"file_path":{"uri":"x"},"path":"main.go","content":[1,2]}`,
+			want:      "main.go",
+		},
+		{
 			name:      "codex exec_command uses cmd key via category",
 			category:  "Bash",
 			toolName:  "exec_command",

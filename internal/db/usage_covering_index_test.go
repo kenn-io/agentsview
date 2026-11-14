@@ -32,6 +32,7 @@ func TestUsageSessionCoveringIndexColumns(t *testing.T) {
 	want := []string{
 		"session_id", "ordinal", "timestamp", "role", "model",
 		"provider_id", "claude_message_id", "claude_request_id", "token_usage", "source_uuid",
+		"usage_output_tokens", "usage_web_search_requests",
 	}
 	assert.Equal(t, want, got)
 }
@@ -141,6 +142,7 @@ func TestUsageIndexesMigration(t *testing.T) {
 	require.Equal(t, []string{
 		"session_id", "ordinal", "timestamp", "role", "model",
 		"provider_id", "claude_message_id", "claude_request_id", "token_usage", "source_uuid",
+		"usage_output_tokens", "usage_web_search_requests",
 	}, columns)
 	assertUsageIndexColumns(t, d, "idx_messages_activity_timestamp",
 		[]string{"timestamp", "session_id", "ordinal", "model"})

@@ -15,6 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/usagefacts"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -385,19 +386,18 @@ func (db *DB) GetSessionUsageRows(
 			OutputTokens:        outputTok,
 			CacheCreationTokens: cacheCrTok,
 			CacheReadTokens:     cacheRdTok,
-			WebSearchRequests: usageRowWebSearchRequests(
-				o.scan.usageSource, o.scan.tokenJSON),
-			Agent:           o.scan.agent,
-			ProviderID:      o.scan.providerID,
-			ClaudeMessageID: o.scan.claudeMessageID,
-			ClaudeRequestID: o.scan.claudeRequestID,
-			SourceUUID:      o.scan.sourceUUID,
-			UsageDedupKey:   o.scan.usageDedupKey,
+			WebSearchRequests:   scanRowWebSearchRequests(o.scan),
+			Agent:               o.scan.agent,
+			ProviderID:          o.scan.providerID,
+			ClaudeMessageID:     o.scan.claudeMessageID,
+			ClaudeRequestID:     o.scan.claudeRequestID,
+			SourceUUID:          o.scan.sourceUUID,
+			UsageDedupKey:       o.scan.usageDedupKey,
 		}
 		snapshotRows[i].Contributes = activity.UsageDataContributes(
 			o.scan.cost.Valid, inputTok, outputTok, reasoningTok,
 			cacheCrTok, cacheRdTok,
-			usageRowWebSearchRequests(o.scan.usageSource, o.scan.tokenJSON))
+			scanRowWebSearchRequests(o.scan))
 	}
 	return activity.SelectSessionUsageRows(ctx, snapshotRows, func(i int, webSearches int) (activity.UsagePrice, error) {
 		o := rowsAcc[i]
@@ -504,7 +504,7 @@ func sqliteSessionUsageRowTokens(
 	r usageScanRow,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok int) {
 	if r.usageSource == "message" {
-		return clampedUsageTokenCountersWithReasoning(r.tokenJSON)
+		return clampedUsageTokenCountersWithReasoning(r.tokenUsage())
 	}
 	inputTok, outputTok, cacheCrTok, cacheRdTok = UsageEventRowTokens(
 		r.usageSource,
@@ -1441,8 +1441,9 @@ func sqliteActivityReportRowStatusWithWebSearchRequests(
 	var tokens activityReportRowTokens
 	tokens.reasoning = r.reasoningTokens
 	if r.usageSource == "message" {
-		tokens.input, tokens.output, tokens.cacheCreation, tokens.cacheRead, tokens.reasoning = clampedUsageTokenCountersWithReasoning(r.tokenJSON)
-		tokens.cacheCreation1h = clampedCacheCreation1hTokens(r.tokenJSON)
+		parsed := usagefacts.ParseTokenUsage(r.tokenJSON)
+		tokens.input, tokens.output, tokens.cacheCreation, tokens.cacheRead, tokens.reasoning = clampedUsageTokenCountersWithReasoning(parsed)
+		tokens.cacheCreation1h = clampedCacheCreation1hTokens(parsed)
 	} else {
 		tokens.input, tokens.output, tokens.cacheCreation, tokens.cacheRead = UsageEventRowTokens(
 			r.usageSource,

@@ -778,8 +778,11 @@ func chStoredMessageUsable(present, model string) string {
 			AND ` + model + ` != '<synthetic>'`
 }
 
-// chUsageStoredMessageEligibility is chUsageMessageEligibility for reads of
-// usage_messages, which stores a presence flag instead of the raw JSON.
+// chUsageStoredMessageEligibility is the condition a usage_messages row meets
+// when its usage counts. It reads the presence flag the view stores instead of
+// the raw JSON. Like the messages rows it mirrors, it takes no version check: a
+// push deletes the ordinals a session no longer has from both tables in the
+// same step.
 var chUsageStoredMessageEligibility = `
 			` + chStoredMessageUsable("m.usage_present", "m.model") + `
 			AND s.deleted_at IS NULL`

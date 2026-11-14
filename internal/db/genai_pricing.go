@@ -7,7 +7,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"time"
 
+	"go.kenn.io/agentsview/internal/export"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
@@ -58,6 +60,94 @@ func (s *GenAIPricingState) Matches(document *GenAIPricingDocument) bool {
 		s.SourceRef == document.SourceRef &&
 		s.Source == document.Source &&
 		s.DataSHA256 == GenAIPricingDataSHA256(document.Data)
+}
+
+// GenAIPricingDigest is a stored document's provenance and the SHA-256 of
+// its JSON. A replica or mirror reads it in place of the JSON, which is
+// several hundred KB, to learn whether this process already parsed the
+// document.
+type GenAIPricingDigest struct {
+	Version   string
+	SourceRef string
+	Source    string
+	UpdatedAt string
+	Sum       [sha256.Size]byte
+}
+
+// ParseGenAIPricingSum reads the SHA-256 a database computed over a stored
+// GenAI Prices document. Databases return it as 32 raw bytes (PostgreSQL) or
+// as 64 hex digits in either case (ClickHouse, DuckDB, CockroachDB).
+func ParseGenAIPricingSum(dbSum []byte) ([sha256.Size]byte, error) {
+	var sum [sha256.Size]byte
+	switch len(dbSum) {
+	case len(sum):
+		copy(sum[:], dbSum)
+		return sum, nil
+	case hex.EncodedLen(len(sum)):
+		if _, err := hex.Decode(sum[:], dbSum); err != nil {
+			return sum, fmt.Errorf("decoding GenAI pricing digest: %w", err)
+		}
+		return sum, nil
+	}
+	return sum, fmt.Errorf("GenAI pricing digest has %d bytes, not a SHA-256", len(dbSum))
+}
+
+// GenAIEffectivePricingRow returns the pricing row of a stored GenAI Prices
+// document, or of the embedded document when document is nil. A document
+// this process parsed before, with the same bytes, is not parsed again.
+func GenAIEffectivePricingRow(
+	document *GenAIPricingDocument,
+) (export.EffectivePricingRow, error) {
+	if document == nil {
+		embedded := pricingpkg.EmbeddedGenAIDocument()
+		return export.EffectivePricingRow{
+			GenAI: embedded.Prices, GenAIVersion: embedded.Version,
+			GenAISource: export.PricingRowSourceEmbedded,
+		}, nil
+	}
+	parsed, err := pricingpkg.ParseStoredGenAIDocument(
+		document.Data, document.Version, document.SourceRef,
+	)
+	if err != nil {
+		return export.EffectivePricingRow{}, fmt.Errorf(
+			"parsing stored GenAI pricing document: %w", err,
+		)
+	}
+	return genAIPricingRow(parsed, document.Source, document.UpdatedAt), nil
+}
+
+// CachedGenAIEffectivePricingRow returns the pricing row of the stored
+// document that digest describes, when this process already parsed a
+// document with the same bytes. Callers read the JSON only when it reports
+// false.
+func CachedGenAIEffectivePricingRow(
+	digest GenAIPricingDigest,
+) (export.EffectivePricingRow, bool) {
+	parsed, ok := pricingpkg.CachedGenAIDocument(
+		digest.Sum, digest.Version, digest.SourceRef,
+	)
+	if !ok {
+		return export.EffectivePricingRow{}, false
+	}
+	return genAIPricingRow(parsed, digest.Source, digest.UpdatedAt), true
+}
+
+func genAIPricingRow(
+	parsed pricingpkg.GenAIDocument, source, updatedAt string,
+) export.EffectivePricingRow {
+	var updated *time.Time
+	if t, err := time.Parse(time.RFC3339Nano, updatedAt); err == nil {
+		utc := t.UTC()
+		updated = &utc
+	}
+	rowSource := export.PricingRowSourceFetched
+	if source == GenAIPricingSourceEmbedded {
+		rowSource = export.PricingRowSourceEmbedded
+	}
+	return export.EffectivePricingRow{
+		GenAI: parsed.Prices, GenAIVersion: parsed.Version,
+		GenAISource: rowSource, GenAIUpdatedAt: updated,
+	}
 }
 
 // GetGenAIPricing returns the stored GenAI Prices document, or nil when the

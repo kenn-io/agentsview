@@ -1214,7 +1214,8 @@ extracts each selected session through the index-only
 `idx_messages_usage_session_covering` scan. The global activity index is for
 usage-cache candidate discovery, not the Activity report; Activity pairing
 continues to avoid a global timestamp scan. Keep these indexes narrow except for
-the single session-keyed covering index that carries `token_usage`.
+the single session-keyed covering index that carries `token_usage` and the
+stored usage counters.
 
 Discovery collects distinct session IDs per bounded timestamp range before
 checking `sessions`, so each session is looked up once per range.
@@ -1232,6 +1233,20 @@ must rebuild them before the swap; a failed rebuild aborts the swap because
 read-only opens require the indexes. The same drop and rebuild suspend and
 restore the usage generation insert trigger; see
 [Usage cache divergence](#usage-cache-divergence).
+
+### Message usage counters
+
+Usage SQL reads each message's output tokens and billed web searches from
+`messages.usage_output_tokens` and `messages.usage_web_search_requests`. Every
+message write fills them with `usagefacts.ParseTokenUsage`, the parser the Go
+usage code reads with. Do not extract them from `token_usage` in read SQL.
+Copies made in SQL, such as the orphan copy during resync, fill them with the
+`agentsview_usage_output_tokens` and `agentsview_usage_web_search_requests`
+SQL functions, which compute the same values.
+
+An archive written before these columns existed gains them on its next
+writable open, which fills them for every message in the same transaction.
+PostgreSQL and DuckDB store the same counters at push.
 
 ### Sidebar tree index
 
@@ -1458,6 +1473,10 @@ the SQL.
   Never store DuckDB sync state in SQLite.
 - Store frustration-marker counts at push and rebuild when the counting rules
   change.
+- Read message token counters from the `messages.usage_*` columns, which push
+  fills with `usagefacts.ParseTokenUsage`, the parser SQLite reads with. Do not
+  extract them from `token_usage` in read SQL. Schema version 29 rebuilds the
+  mirror to fill them. The harness-recorded cost is still read from the JSON.
 - Replace whole sessions during incremental updates and gate them with
   per-session fingerprints. Do not add per-table, per-column, or diff-based
   updates.

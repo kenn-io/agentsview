@@ -233,14 +233,6 @@ func (c *schemaProbeConn) QueryContext(
 			columns: []string{"max"},
 			values:  [][]driver.Value{{int64(c.state.maxDataVersion)}},
 		}, nil
-	case strings.Contains(normalized, "agentsview_json_integer"):
-		return &schemaProbeRows{
-			columns: []string{
-				"output", "web_search", "malformed",
-				"malformed_scoped_output", "malformed_scoped_web_search",
-			},
-			values: [][]driver.Value{{"42", "2", "7", "42", "2"}},
-		}, nil
 	case strings.Contains(normalized, "select id, first_message"):
 		return &schemaProbeRows{
 			columns: []string{
@@ -391,41 +383,6 @@ func TestEnsureSchemaBatchesColumnIntrospection(t *testing.T) {
 
 	assert.Equal(t, 2, state.informationQueryCount(),
 		"information_schema.columns queries")
-}
-
-func TestEnsureSchemaFallsBackWhenPLpgSQLUsageHelperIsUnsupported(
-	t *testing.T,
-) {
-	pg, state := newSchemaProbeDB(t, map[string][]string{
-		"sessions": {
-			"has_total_output_tokens",
-			"has_peak_context_tokens",
-		},
-		"messages": {
-			"has_context_tokens",
-			"has_output_tokens",
-		},
-	})
-	state.syncMetadataKeys = map[string]bool{
-		tokenCoverageRepairMetadataKey:        true,
-		sourceCurationBackfillMetadataKey:     true,
-		projectIdentityRemoteScrubMetadataKey: true,
-	}
-	state.execErrors = []schemaProbeQueryError{{
-		contains: "language plpgsql",
-		err:      &pgconn.PgError{Code: "0A000", Message: `unimplemented: PL/pgSQL exception blocks`},
-	}}
-
-	require.NoError(t, EnsureSchema(t.Context(), pg, "agentsview"))
-
-	executed := strings.ToLower(state.executedSQL())
-	primary := strings.Index(executed, "language plpgsql")
-	fallback := strings.Index(executed, "language sql")
-	require.NotEqual(t, -1, primary, "must feature-probe PL/pgSQL helper")
-	require.NotEqual(t, -1, fallback, "must install SQL fallback")
-	assert.Less(t, primary, fallback, "fallback must follow failed probe")
-	assert.Contains(t, executed, "json_valid(raw_value)")
-	assert.Contains(t, state.queriedSQL(), "agentsview_json_integer")
 }
 
 func TestEnsureSchemaMigratesSessionDeletionCause(t *testing.T) {
@@ -709,17 +666,19 @@ func TestCheckSchemaCompatRequiresMachineLabelMetadata(t *testing.T) {
 	assert.Contains(t, err.Error(), "sync_metadata table missing required columns")
 }
 
-func TestCheckSchemaCompatRequiresUsageJSONHelper(t *testing.T) {
+// Usage reads take message counters only from the stored columns, so a schema
+// no current push has upgraded must fail the read check.
+func TestCheckSchemaCompatRequiresMessageUsageCounters(t *testing.T) {
 	pg, state := newSchemaProbeDB(t, nil)
-	state.queryErrors = []schemaProbeQueryError{{
-		contains: "agentsview_json_integer",
-		err:      &pgconn.PgError{Code: "42883", Message: `function agentsview_json_integer does not exist`},
+	state.execErrors = []schemaProbeQueryError{{
+		contains: "usage_web_search_requests",
+		err:      &pgconn.PgError{Code: "42703", Message: `column "usage_web_search_requests" does not exist`},
 	}}
 
 	err := CheckSchemaCompat(t.Context(), pg)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "usage JSON helper missing or incompatible")
+	assert.Contains(t, err.Error(), "messages table missing required columns")
 }
 
 func TestCheckSchemaCompatRequiresCurationBaselineColumns(t *testing.T) {

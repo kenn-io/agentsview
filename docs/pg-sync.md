@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-12
+last_edited: 2026-11-13
 title: PostgreSQL Sync
 description: Share sessions across machines with PostgreSQL push sync, an auto-push service, and a read-only server
 ---
@@ -152,6 +152,15 @@ The first tracking audit checks and stamps every session once. Different classif
 settings cause a full recheck and restamp. Publishers
 without schema-change privileges keep using a full audit until that upgrade.
 CockroachDB keeps the full audit.
+
+Push stores each message's output tokens and billed web searches in their own
+columns, so Usage reads them without parsing the message's token JSON. The
+first push after upgrading adds the columns and fills them for every existing
+message. Each later push also fills messages that an older binary pushed in
+the meantime. Until then, Usage leaves out those messages' web search fees, and
+when Claude logged one request more than once, Usage may count a copy with
+fewer output tokens. A read-only `pg serve` fails its schema check until a
+push upgrades the schema.
 
 The next push using the schema-owner connection installs
 `idx_sessions_data_version`, `idx_sessions_parentless_workers`, and

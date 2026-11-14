@@ -149,7 +149,6 @@ SELECT
 	cu.occurred_at AS pricing_ts,
 	if(cu.model = '', '<unknown>', cu.model) AS model,
 	'' AS provider_id,
-	'' AS token_json,
 	'' AS claude_message_id,
 	'' AS claude_request_id,
 	'' AS source_uuid,
@@ -181,9 +180,6 @@ const chUsageMessageSourceEligibility = `
 			m.token_usage != ''
 			AND m.model != ''
 			AND m.model != '<synthetic>'`
-
-const chUsageMessageEligibility = chUsageMessageSourceEligibility + `
-			AND s.deleted_at IS NULL`
 
 const chUsageMatchingMessageSourceEligibility = `
 			m.role = 'assistant'
@@ -237,7 +233,7 @@ func chUsageSourceWheres(
 
 func chUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 	messageWhere, messageArgs, eventWhere, eventArgs := chUsageSourceWheres(
-		f, sessionID, chUsageMessageEligibility, chUsageBoundsForFilter(f))
+		f, sessionID, chUsageStoredMessageEligibility, chUsageBoundsForFilter(f))
 	return chUsageRawSQLFromWheres(
 		false, messageWhere, messageArgs, eventWhere, eventArgs)
 }
@@ -261,26 +257,10 @@ const chUsageUnjoinedSessionColumns = `
 			CAST(NULL AS Nullable(DateTime64(6, 'UTC'))) AS started_at,
 			CAST(NULL AS Nullable(DateTime64(6, 'UTC'))) AS activity_at`
 
-// chUsageRawMessageUsage selects a messages row's usage. Message rows carry
-// the token JSON, which chUsageRawNormSource reads.
-var chUsageRawMessageUsage = `m.token_usage AS token_json,
-			m.claude_message_id AS claude_message_id,
-			m.claude_request_id AS claude_request_id,
-			m.source_uuid AS source_uuid,
-			'' AS usage_dedup_key,
-				0 AS input_tokens, 0 AS output_tokens,
-				0 AS cache_create, 0 AS cache_read,
-				JSONExtractInt(m.token_usage, 'reasoning_tokens') AS reasoning_tokens,
-				JSONExtractInt(m.token_usage, 'cache_creation', 'ephemeral_1h_input_tokens') AS cache_create_1h,
-				JSONExtractInt(m.token_usage, 'server_tool_use', 'web_search_requests') AS web_search_requests,
-				NULL AS cost_microdollars, '' AS cost_source,
-				` + chRecordedCostSQL("m.token_usage") + ` AS recorded_cost_microdollars,`
-
 // chUsageStoredMessageUsage selects a usage_messages row's usage. The view
 // extracted the counters from the token JSON at insert time, so message rows
 // carry them in the counter columns, which chUsageStoredNormSource reads.
-const chUsageStoredMessageUsage = `'' AS token_json,
-			m.claude_message_id AS claude_message_id,
+const chUsageStoredMessageUsage = `m.claude_message_id AS claude_message_id,
 			m.claude_request_id AS claude_request_id,
 			m.source_uuid AS source_uuid,
 			'' AS usage_dedup_key,
@@ -293,29 +273,27 @@ const chUsageStoredMessageUsage = `'' AS token_json,
 				m.` + usageRecordedCostColumn + ` AS recorded_cost_microdollars,`
 
 // chUsageRawSQLFromWheres renders the message and usage-event raw rows.
-// Readers join each row's session and read messages.
+// Message usage comes from usage_messages, whose counters the view extracted
+// from the token JSON at insert time, so no read parses the JSON again. The
+// table holds only the usage columns and indexes every 64 rows; reading
+// messages instead read whole index granules of the wide table: about 1.5
+// million rows for 100 sessions that held under 3,000 usage rows on a
+// production mirror. Callers normalize with chUsageStoredNormSource.
 //
-// pricing renders the rows for push pricing, which reads them without their
-// sessions: no pricing input comes from the session, and a batch is priced
-// before its session rows land. Its rows then carry empty session columns,
-// and ts is the row's own timestamp. It reads message usage from
-// usage_messages, which holds only the usage columns and indexes every 64
-// rows. Reading messages instead read whole index granules of the wide table
-// for each session in a batch: about 1.5 million rows for 100 sessions that
-// held under 3,000 usage rows on a production mirror. Pricing callers
-// normalize with chUsageStoredNormSource.
+// Readers join each row's session. pricing renders the rows for push
+// pricing, which reads them without their sessions: no pricing input comes
+// from the session, and a batch is priced before its session rows land. Its
+// rows then carry empty session columns, and ts is the row's own timestamp.
 func chUsageRawSQLFromWheres(
 	pricing bool, messageWhere string, messageArgs []any,
 	eventWhere string, eventArgs []any,
 ) (string, []any) {
 	messageTS, eventTS := "m.timestamp", "ue.occurred_at"
-	messageFrom, messageUsage := "usage_messages m", chUsageStoredMessageUsage
 	messageJoin, eventJoin := "", ""
 	sessionColumns := chUsageUnjoinedSessionColumns
 	if !pricing {
 		messageTS = "COALESCE(m.timestamp, s.started_at)"
 		eventTS = "COALESCE(ue.occurred_at, s.started_at)"
-		messageFrom, messageUsage = "messages m", chUsageRawMessageUsage
 		messageJoin = "\n\t\tJOIN sessions s ON s.id = m.session_id"
 		eventJoin = "\n\t\tJOIN sessions s ON s.id = ue.session_id"
 		sessionColumns = chUsageJoinedSessionColumns
@@ -325,13 +303,13 @@ func chUsageRawSQLFromWheres(
 			'message' AS source, %[1]s AS ts,
 			m.timestamp AS pricing_ts,
 			m.model AS model, m.provider_id AS provider_id, %[8]s%[5]s
-		FROM %[9]s%[3]s
+		FROM usage_messages m%[3]s
 		WHERE %[6]s
 		UNION ALL
 		SELECT ue.session_id AS session_id, ue.message_ordinal AS message_ordinal,
 			ue.source AS source, %[2]s AS ts,
 			ue.occurred_at AS pricing_ts,
-			ue.model AS model, ue.provider_id AS provider_id, '' AS token_json,
+			ue.model AS model, ue.provider_id AS provider_id,
 			'' AS claude_message_id, '' AS claude_request_id,
 			'' AS source_uuid,
 			if(ue.dedup_key != '',
@@ -349,7 +327,7 @@ func chUsageRawSQLFromWheres(
 		FROM usage_events ue%[4]s
 		WHERE %[7]s`,
 		messageTS, eventTS, messageJoin, eventJoin, sessionColumns,
-		messageWhere, eventWhere, messageUsage, messageFrom)
+		messageWhere, eventWhere, chUsageStoredMessageUsage)
 	args := make([]any, 0, len(messageArgs)+len(eventArgs))
 	args = append(args, messageArgs...)
 	args = append(args, eventArgs...)
@@ -526,7 +504,7 @@ func chPreparedUsageRawSQLWith(
 func chPreparedUsageRawSelect() string {
 	return `p.session_id AS session_id, p.message_ordinal AS message_ordinal,
 			p.source AS source, p.ts AS ts, p.pricing_ts AS pricing_ts,
-			p.model AS model, p.provider_id AS provider_id, '' AS token_json,
+			p.model AS model, p.provider_id AS provider_id,
 			p.claude_message_id AS claude_message_id,
 			p.claude_request_id AS claude_request_id,
 			p.source_uuid AS source_uuid,
@@ -743,12 +721,12 @@ func (s *Store) dailyUsageCTE(
 func chUsageCTE(f db.UsageFilter, sessionID string) (string, []any) {
 	rawSQL, args := chUsageRawSQL(
 		chUsageSnapshotInputFilter(f), sessionID)
-	return chUsageCTEFromRawSource(f, rawSQL, args, true, chUsageRawNormSource(), sessionID)
+	return chUsageCTEFromRawSource(f, rawSQL, args, true, chUsageStoredNormSource(), sessionID)
 }
 
 func chDailyUsageCTE(f db.UsageFilter) (string, []any) {
 	rawSQL, args := chDailyUsageRawSQL(f)
-	return chUsageCTEFromRaw(f, rawSQL, args, true)
+	return chUsageCTEFromRawSource(f, rawSQL, args, true, chUsageStoredNormSource(), "")
 }
 
 func chUsageSnapshotInputFilter(f db.UsageFilter) db.UsageFilter {
@@ -788,46 +766,22 @@ func chPriceModelCaseSQL() string {
 	return b.String()
 }
 
-func chClampedJSONInt(jsonExpr string, keys ...string) string {
-	args := make([]string, 0, 1+len(keys))
-	args = append(args, jsonExpr)
-	for _, key := range keys {
-		args = append(args, chSQLString(key))
-	}
-	return chClampTokens("JSONExtractInt(" + strings.Join(args, ", ") + ")")
-}
-
 // chClampTokens clamps a token count expression to [0, db.MaxPlausibleTokens].
 func chClampTokens(expr string) string {
 	return fmt.Sprintf("least(greatest(%s, 0), %d)", expr, db.MaxPlausibleTokens)
 }
 
 // chUsageNormSource holds the per-row expressions usage_normalized computes
-// for message rows. Raw rows carry the message's token JSON; prepared rows
-// already carry the normalized counters.
+// for message rows. Stored rows carry the counters the usage_messages view
+// extracted; prepared rows already carry the normalized counters.
 type chUsageNormSource struct {
 	input, output, cacheCreate, cacheCreate1h, cacheRead, reasoning, web string
 	priceModel, priceKey                                                 string
 }
 
-func chUsageRawNormSource() chUsageNormSource {
-	return chUsageNormSource{
-		input:         chClampedJSONInt("token_json", "input_tokens"),
-		output:        chClampedJSONInt("token_json", "output_tokens"),
-		cacheCreate:   chClampedJSONInt("token_json", "cache_creation_input_tokens"),
-		cacheCreate1h: chClampedJSONInt("token_json", "cache_creation", "ephemeral_1h_input_tokens"),
-		cacheRead:     chClampedJSONInt("token_json", "cache_read_input_tokens"),
-		reasoning:     chClampedJSONInt("token_json", "reasoning_tokens"),
-		web:           "greatest(JSONExtractInt(token_json, 'server_tool_use', 'web_search_requests'), 0)",
-		priceModel:    chPriceModelCaseSQL(),
-		priceKey:      chUsagePriceKeySQL,
-	}
-}
-
-// chUsageStoredNormSource normalizes the message rows push pricing reads
-// from usage_messages, whose counters arrive in the counter columns. It
-// clamps them as chUsageRawNormSource clamps the token JSON's values, so a
-// row gets the same price key from either table.
+// chUsageStoredNormSource normalizes the message rows read from
+// usage_messages, whose counters arrive in the counter columns. It clamps
+// them to [0, db.MaxPlausibleTokens].
 func chUsageStoredNormSource() chUsageNormSource {
 	return chUsageNormSource{
 		input:         chClampTokens("input_tokens"),
@@ -856,13 +810,6 @@ func chPreparedUsageNormSource() chUsageNormSource {
 		priceModel: "if(source = 'cursor', " + chPriceModelCaseSQL() + ", stored_price_model)",
 		priceKey:   "if(source = 'cursor', " + chUsagePriceKeySQL + ", stored_price_key)",
 	}
-}
-
-func chUsageCTEFromRaw(
-	f db.UsageFilter, rawSQL string, args []any,
-	preferCompleteClaudeSnapshots bool,
-) (string, []any) {
-	return chUsageCTEFromRawSource(f, rawSQL, args, preferCompleteClaudeSnapshots, chUsageRawNormSource(), "")
 }
 
 // chUsageCTEFromRawSource renders the usage CTEs over rawSQL. sessionID names
@@ -1953,7 +1900,7 @@ func (s *Store) usagePricingForCatalog(
 ) (*export.PricingResolver, map[string]chUsagePriceContext, [][2]string, error) {
 	catalog := snapshot.catalog
 	resolver := export.NewPricingResolverWithDigest(catalog.rows, snapshot.catalogDigest)
-	contexts, err := loadUsagePriceContexts(ctx, s.conn, catalog.digest)
+	contexts, err := s.usagePriceContexts(ctx, catalog.digest)
 	if err != nil {
 		return nil, nil, nil, err
 	}

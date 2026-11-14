@@ -36,7 +36,7 @@ import (
 // its identity. Every other group's rows are copied raw into
 // usage_rollup_exceptions and ranked at read time with today's SQL.
 const (
-	usageRollupFormat         = 1
+	usageRollupFormat         = 2
 	usageRollupMetadataKey    = "agentsview_usage_rollup"
 	usageRollupRebuildDivisor = 50
 	usageRollupBucketSeconds  = 15 * 60
@@ -96,11 +96,12 @@ var usageRollupTables = []tableSpec{
 	rollupTable("usage_rollup_exceptions", rollupColumns(
 		"session_id TEXT NOT NULL", "bucket TIMESTAMP",
 		"message_ordinal BIGINT", "source TEXT NOT NULL", "pricing_ts TIMESTAMP",
-		"model TEXT NOT NULL", "provider_id TEXT NOT NULL", "token_json TEXT NOT NULL",
+		"model TEXT NOT NULL", "provider_id TEXT NOT NULL",
 		"claude_message_id TEXT NOT NULL", "claude_request_id TEXT NOT NULL",
 		"source_uuid TEXT NOT NULL", "usage_dedup_key TEXT NOT NULL",
 		"input_tokens BIGINT", "output_tokens BIGINT",
 		"cache_create BIGINT", "cache_read BIGINT", "reasoning_tokens BIGINT",
+		"cache_create_1h BIGINT", "web_search_requests BIGINT",
 		"cost_microdollars BIGINT", "cost_source TEXT NOT NULL",
 		"recorded_cost_microdollars BIGINT",
 	)),
@@ -329,9 +330,10 @@ func (s *Sync) buildUsageRollup(ctx context.Context) (meta usageRollupMeta, err 
 	for _, stmt := range []string{
 		`INSERT INTO usage_rollup_exceptions
 		SELECT session_id, bucket, message_ordinal, source, pricing_ts, model,
-			provider_id, token_json, claude_message_id, claude_request_id,
+			provider_id, claude_message_id, claude_request_id,
 			source_uuid, usage_dedup_key, input_tokens, output_tokens,
-			cache_create, cache_read, reasoning_tokens, cost_microdollars,
+			cache_create, cache_read, reasoning_tokens,
+			cache_create_1h, web_search_requests, cost_microdollars,
 			cost_source, recorded_cost_microdollars
 		FROM usage_rollup_raw
 		WHERE dedup_group IN (SELECT dedup_group FROM usage_rollup_groups WHERE NOT finalized)`,

@@ -347,8 +347,8 @@ catalog repriced the whole mirror each time, about nine times a day on a mirror
 fed by three machines, and kept every generation.
 
 A pricing pass reads message usage from `usage_messages`, the narrow copy of the
-usage columns that the prepared and raw-host readers also read, and gets the
-same price keys a read of the token JSON in `messages` would. `usage_messages`
+usage columns that every usage reader also reads, and gets the same price keys
+a read of the token JSON in `messages` would. `usage_messages`
 indexes every 64 rows. For a batch of 100 sessions, a pass over `messages` read
 whole index granules of the wide table: about 1.5 million rows on a production
 mirror, for under 3,000 usage rows.
@@ -406,6 +406,11 @@ Reads stay correct. They price rows without a record per request. The next push
 prices the Cursor rows again; session rows wait for the next whole pass. A read
 that still finds a record without its context after three attempts prices every
 row per request.
+
+A read lists the context IDs of its digest on every request, but the store keeps
+the contexts it has decoded and fetches the JSON only for IDs it has not seen. A
+context ID is a hash of the context's JSON, so a decoded context stays valid for
+as long as its ID exists.
 
 Serve stays read-only. Missing prices and reader-specific custom rates are
 computed for that request using the current pricing rules while push fills the

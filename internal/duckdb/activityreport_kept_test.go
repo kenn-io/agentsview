@@ -27,9 +27,9 @@ func keptActivityMirror(t *testing.T, path, session string, output int) {
 	_, err = conn.ExecContext(t.Context(), `UPDATE messages SET model = '', token_usage = '', output_tokens = 0, context_tokens = 0, has_output_tokens = false, has_context_tokens = false`)
 	require.NoError(t, err)
 	_, err = conn.ExecContext(t.Context(), `INSERT INTO messages
-  (id, session_id, ordinal, role, content, timestamp, model, token_usage, output_tokens)
-  VALUES (2, ?, 1, 'assistant', 'answer', TIMESTAMP '2026-01-01 00:01:00', 'kept-model', ?, ?)`,
-		session, `{"output_tokens":`+strconv.Itoa(output)+`}`, output)
+  (id, session_id, ordinal, role, content, timestamp, model, token_usage, output_tokens, usage_output_tokens)
+  VALUES (2, ?, 1, 'assistant', 'answer', TIMESTAMP '2026-01-01 00:01:00', 'kept-model', ?, ?, ?)`,
+		session, `{"output_tokens":`+strconv.Itoa(output)+`}`, output, output)
 	require.NoError(t, err)
 	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET ended_at = TIMESTAMP '2026-01-01 00:01:00', message_count = 2`)
 	require.NoError(t, err)
@@ -271,7 +271,7 @@ func TestPartialActivityUsageRereadsPastClaudePeer(t *testing.T) {
 	require.NoError(t, err)
 	_, err = conn.ExecContext(t.Context(), `UPDATE messages SET claude_message_id = 'message', claude_request_id = 'request' WHERE id = 2`)
 	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id, TIMESTAMP '2026-01-01 12:30:00' AS timestamp, '{"output_tokens":900}' AS token_usage, 900 AS output_tokens) FROM messages WHERE id = 2`)
+	_, err = conn.ExecContext(t.Context(), `INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id, TIMESTAMP '2026-01-01 12:30:00' AS timestamp, '{"output_tokens":900}' AS token_usage, 900 AS output_tokens, 900 AS usage_output_tokens) FROM messages WHERE id = 2`)
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 	store, err := NewStore(t.Context(), path)

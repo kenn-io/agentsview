@@ -14,7 +14,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
-	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
 const pricingUpsertBatch = 100
@@ -165,32 +164,42 @@ func scanGenAIPricing(row genAIPricingRow) (*db.GenAIPricingDocument, error) {
 	return &document, nil
 }
 
-func genAIEffectivePricingRow(
-	document *db.GenAIPricingDocument,
+// loadGenAIPricingRow returns the pricing row of the mirror's GenAI Prices
+// document. It reads the document's provenance and the server's SHA-256 of
+// its JSON first, and reads the JSON, several hundred KB, only when this
+// process has not parsed a document with those bytes yet.
+func loadGenAIPricingRow(
+	ctx context.Context, q genAIPricingQuerier,
 ) (export.EffectivePricingRow, error) {
-	if document == nil {
-		embedded := pricingpkg.EmbeddedGenAIDocument()
-		return export.EffectivePricingRow{
-			GenAI: embedded.Prices, GenAIVersion: embedded.Version,
-			GenAISource: export.PricingRowSourceEmbedded,
-		}, nil
-	}
-	parsed, err := pricingpkg.ParseGenAIDocument(
-		document.Data, document.Version, document.SourceRef,
+	var digest db.GenAIPricingDigest
+	var sum string
+	err := q.QueryRowContext(ctx, `
+		SELECT version, source_ref, source, updated_at, hex(SHA256(data_json))
+		FROM genai_pricing WHERE singleton = 1`).Scan(
+		&digest.Version, &digest.SourceRef, &digest.Source, &digest.UpdatedAt, &sum,
 	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return db.GenAIEffectivePricingRow(nil)
+	}
 	if err != nil {
 		return export.EffectivePricingRow{}, fmt.Errorf(
-			"parsing clickhouse GenAI pricing document: %w", err,
-		)
+			"reading clickhouse GenAI pricing digest: %w", err)
 	}
-	source := export.PricingRowSourceFetched
-	if document.Source == db.GenAIPricingSourceEmbedded {
-		source = export.PricingRowSourceEmbedded
+	if digest.Sum, err = db.ParseGenAIPricingSum([]byte(sum)); err != nil {
+		return export.EffectivePricingRow{}, err
 	}
-	return export.EffectivePricingRow{
-		GenAI: parsed.Prices, GenAIVersion: parsed.Version,
-		GenAISource: source, GenAIUpdatedAt: genAIUpdatedAt(document.UpdatedAt),
-	}, nil
+	if row, ok := db.CachedGenAIEffectivePricingRow(digest); ok {
+		return row, nil
+	}
+	document, err := loadGenAIPricing(ctx, q)
+	if err != nil {
+		return export.EffectivePricingRow{}, err
+	}
+	row, err := db.GenAIEffectivePricingRow(document)
+	if err != nil {
+		return export.EffectivePricingRow{}, fmt.Errorf("clickhouse: %w", err)
+	}
+	return row, nil
 }
 
 // genAIUpdatedAt parses a stored document's updated_at, which is empty for
@@ -327,9 +336,9 @@ func (s *Sync) cacheGenAIPricing(document *db.GenAIPricingDocument) error {
 		s.genAI.row.GenAIUpdatedAt = genAIUpdatedAt(document.UpdatedAt)
 		return nil
 	}
-	row, err := genAIEffectivePricingRow(document)
+	row, err := db.GenAIEffectivePricingRow(document)
 	if err != nil {
-		return err
+		return fmt.Errorf("clickhouse: %w", err)
 	}
 	s.genAI = &genAIPricingCache{key: key, row: row}
 	return nil

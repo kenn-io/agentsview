@@ -121,9 +121,10 @@ func TestPGActivityReportInputRangeSwitchAfterPush(t *testing.T) {
 	pgKeptPush(t, syncer, false)
 	// Give each range enough real usage rows that all three exceed 128 MiB.
 	_, err := store.DB().ExecContext(t.Context(), `INSERT INTO messages
-		(session_id, ordinal, role, content, timestamp, model, token_usage, claude_message_id, claude_request_id)
+		(session_id, ordinal, role, content, timestamp, model, token_usage, claude_message_id, claude_request_id,
+		 usage_output_tokens, usage_web_search_requests)
 		SELECT 'a', i + 1, 'assistant', '', '2026-06-14T10:01:00Z', 'kept-model',
-		'{"output_tokens":1}', repeat('x', 500) || i::text, 'request'
+		'{"output_tokens":1}', repeat('x', 500) || i::text, 'request', 1, 0
 		FROM generate_series(1, 100000) AS i`)
 	require.NoError(t, err)
 	now := time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC)

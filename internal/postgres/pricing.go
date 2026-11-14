@@ -14,7 +14,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
-	"go.kenn.io/agentsview/internal/pricing"
 )
 
 type pricingLoad struct {
@@ -64,12 +63,6 @@ type pgGenAIPricingQuerier interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-func loadPGGenAIPricing(
-	ctx context.Context, q pgGenAIPricingQuerier,
-) (*db.GenAIPricingDocument, error) {
-	return queryPGGenAIPricing(ctx, q, true)
-}
-
 func queryPGGenAIPricing(ctx context.Context, q pgGenAIPricingQuerier, allowMissing bool) (*db.GenAIPricingDocument, error) {
 	var document db.GenAIPricingDocument
 	err := q.QueryRowContext(ctx, `
@@ -89,7 +82,7 @@ func queryPGGenAIPricing(ctx context.Context, q pgGenAIPricingQuerier, allowMiss
 
 // loadPGGenAIPricingState reads the mirror's GenAI pricing document without
 // its data, which a push compares by digest instead of transferring. A
-// missing table reads as a missing document, as in loadPGGenAIPricing.
+// missing table reads as a missing document, as in loadPGGenAIPricingRow.
 func loadPGGenAIPricingState(
 	ctx context.Context, q pgGenAIPricingQuerier,
 ) (*db.GenAIPricingState, error) {
@@ -127,39 +120,45 @@ func pricingTablesPresent(ctx context.Context, q pgGenAIPricingQuerier, tables .
 	return present, nil
 }
 
-func pgGenAIEffectivePricingRow(
-	document *db.GenAIPricingDocument,
+// loadPGGenAIPricingRow returns the GenAI pricing row. It asks the database
+// for the stored document's SHA-256 first and reads the document, several
+// hundred KB, only when this process has not parsed those bytes yet.
+// PostgreSQL's sha256 returns raw bytes and CockroachDB's returns hex; both
+// scan into a byte slice.
+func loadPGGenAIPricingRow(
+	ctx context.Context, q pgGenAIPricingQuerier, allowMissing bool,
 ) (export.EffectivePricingRow, error) {
-	if document == nil {
-		embedded := pricing.EmbeddedGenAIDocument()
-		return export.EffectivePricingRow{
-			GenAI: embedded.Prices, GenAIVersion: embedded.Version,
-			GenAISource: export.PricingRowSourceEmbedded,
-		}, nil
-	}
-	parsed, err := pricing.ParseGenAIDocument(
-		document.Data, document.Version, document.SourceRef,
+	var digest db.GenAIPricingDigest
+	var sum []byte
+	err := q.QueryRowContext(ctx, `
+		SELECT version, source_ref, source, updated_at, sha256(data_json)
+		FROM genai_pricing WHERE singleton = 1`).Scan(
+		&digest.Version, &digest.SourceRef, &digest.Source,
+		&digest.UpdatedAt, &sum,
 	)
+	if errors.Is(err, sql.ErrNoRows) || allowMissing && isUndefinedTable(err) {
+		return db.GenAIEffectivePricingRow(nil)
+	}
 	if err != nil {
 		return export.EffectivePricingRow{}, fmt.Errorf(
-			"parsing pg GenAI pricing document: %w", err,
+			"reading pg GenAI pricing digest: %w", err,
 		)
 	}
-	var updatedAt *time.Time
-	if parsedTime, parseErr := time.Parse(
-		time.RFC3339Nano, document.UpdatedAt,
-	); parseErr == nil {
-		utc := parsedTime.UTC()
-		updatedAt = &utc
+	if digest.Sum, err = db.ParseGenAIPricingSum(sum); err != nil {
+		return export.EffectivePricingRow{}, fmt.Errorf("postgres: %w", err)
 	}
-	source := export.PricingRowSourceFetched
-	if document.Source == db.GenAIPricingSourceEmbedded {
-		source = export.PricingRowSourceEmbedded
+	if row, ok := db.CachedGenAIEffectivePricingRow(digest); ok {
+		return row, nil
 	}
-	return export.EffectivePricingRow{
-		GenAI: parsed.Prices, GenAIVersion: parsed.Version,
-		GenAISource: source, GenAIUpdatedAt: updatedAt,
-	}, nil
+	document, err := queryPGGenAIPricing(ctx, q, allowMissing)
+	if err != nil {
+		return export.EffectivePricingRow{}, err
+	}
+	row, err := db.GenAIEffectivePricingRow(document)
+	if err != nil {
+		return export.EffectivePricingRow{}, fmt.Errorf("postgres: %w", err)
+	}
+	return row, nil
 }
 
 func (s *Store) loadPricingMap(
@@ -243,22 +242,21 @@ func (s *Store) readPricingMap(ctx context.Context) ([]export.EffectivePricingRo
 			s.runtimeState().pricingMu.Unlock()
 		}
 		prices = db.PricingMapRows(out)
-		var document *db.GenAIPricingDocument
+		var row export.EffectivePricingRow
 		if s.readTx == nil {
-			document, err = loadPGGenAIPricing(ctx, s.pg)
+			row, err = loadPGGenAIPricingRow(ctx, s.pg, true)
 		} else {
 			var present bool
 			present, err = pricingTablesPresent(ctx, s.pg, "genai_pricing")
-			if err == nil && present {
-				document, err = queryPGGenAIPricing(ctx, s.pg, false)
+			switch {
+			case err == nil && present:
+				row, err = loadPGGenAIPricingRow(ctx, s.pg, false)
+			case err == nil:
+				row, err = db.GenAIEffectivePricingRow(nil)
 			}
 		}
 		if err == nil {
-			var row export.EffectivePricingRow
-			row, err = pgGenAIEffectivePricingRow(document)
-			if err == nil {
-				prices = append(prices, row)
-			}
+			prices = append(prices, row)
 		}
 	}
 

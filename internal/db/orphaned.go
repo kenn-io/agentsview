@@ -2542,11 +2542,20 @@ func copySessionDataForIDs(
 			msgCols.WriteString(", " + c)
 		}
 	}
+	insertCols := msgCols.String()
+	selectCols := strings.TrimPrefix(insertCols, "session_id, ")
+	// Compute the stored usage counters from the copied JSON, so a source
+	// archive from before those columns copies the same values a write stores.
+	if oldDBHasColumn(ctx, tx, "messages", "token_usage") {
+		insertCols += ", usage_output_tokens, usage_web_search_requests"
+		selectCols += ", agentsview_usage_output_tokens(token_usage)" +
+			", agentsview_usage_web_search_requests(token_usage)"
+	}
 	// Restrict the source scan as well as mapping IDs. The join alone scans
 	// the whole archive even when only one session is missing.
 	if _, err := tx.ExecContext(ctx,
-		"INSERT INTO messages ("+msgCols.String()+") "+
-			"SELECT copied.id, "+strings.TrimPrefix(msgCols.String(), "session_id, ")+" FROM old_db.messages old_m "+
+		"INSERT INTO messages ("+insertCols+") "+
+			"SELECT copied.id, "+selectCols+" FROM old_db.messages old_m "+
 			"JOIN "+tempIDsTable+" copied ON copied.source_id = old_m.session_id "+
 			"WHERE old_m.session_id IN (SELECT source_id FROM "+tempIDsTable+")",
 	); err != nil {

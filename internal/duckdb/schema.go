@@ -35,7 +35,9 @@ import (
 // sessions.
 // v27 stores frustration marker counts at push time.
 // v28 adds the usage rollup tables (see usage_rollup.go).
-const SchemaVersion = 28
+// v29 stores each message's token usage counters in typed columns, parsed at
+// push by usagefacts.ParseTokenUsage, so usage reads never parse token_usage.
+const SchemaVersion = 29
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
@@ -368,6 +370,13 @@ var mirrorTables = append([]tableSpec{
 			source_parent_uuid TEXT NOT NULL DEFAULT '',
 			is_sidechain BOOLEAN NOT NULL DEFAULT FALSE,
 			is_compact_boundary BOOLEAN NOT NULL DEFAULT FALSE,
+			usage_input_tokens BIGINT NOT NULL DEFAULT 0,
+			usage_output_tokens BIGINT NOT NULL DEFAULT 0,
+			usage_cache_creation_input_tokens BIGINT NOT NULL DEFAULT 0,
+			usage_cache_creation_1h_input_tokens BIGINT NOT NULL DEFAULT 0,
+			usage_cache_read_input_tokens BIGINT NOT NULL DEFAULT 0,
+			usage_reasoning_tokens BIGINT NOT NULL DEFAULT 0,
+			usage_web_search_requests BIGINT NOT NULL DEFAULT 0,
 			UNIQUE(session_id, ordinal)
 		)`,
 		columns: []columnSpec{
@@ -400,6 +409,13 @@ var mirrorTables = append([]tableSpec{
 			{"source_parent_uuid", "source_parent_uuid TEXT NOT NULL DEFAULT ''"},
 			{"is_sidechain", "is_sidechain BOOLEAN NOT NULL DEFAULT FALSE"},
 			{"is_compact_boundary", "is_compact_boundary BOOLEAN NOT NULL DEFAULT FALSE"},
+			{"usage_input_tokens", "usage_input_tokens BIGINT NOT NULL DEFAULT 0"},
+			{"usage_output_tokens", "usage_output_tokens BIGINT NOT NULL DEFAULT 0"},
+			{"usage_cache_creation_input_tokens", "usage_cache_creation_input_tokens BIGINT NOT NULL DEFAULT 0"},
+			{"usage_cache_creation_1h_input_tokens", "usage_cache_creation_1h_input_tokens BIGINT NOT NULL DEFAULT 0"},
+			{"usage_cache_read_input_tokens", "usage_cache_read_input_tokens BIGINT NOT NULL DEFAULT 0"},
+			{"usage_reasoning_tokens", "usage_reasoning_tokens BIGINT NOT NULL DEFAULT 0"},
+			{"usage_web_search_requests", "usage_web_search_requests BIGINT NOT NULL DEFAULT 0"},
 		},
 		indexes: []string{
 			"CREATE INDEX IF NOT EXISTS idx_messages_session_ordinal ON messages(session_id, ordinal)",

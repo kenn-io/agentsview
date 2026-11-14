@@ -218,6 +218,14 @@ func isUndefinedTable(err error) bool {
 	return ok && pgErr.Code == "42P01"
 }
 
+// isTransactionConflict reports a deadlock (40P01) or serialization failure
+// (40001). The database rolled the failed statement back, so running it again
+// later is safe.
+func isTransactionConflict(err error) bool {
+	pgErr, ok := errors.AsType[*pgconn.PgError](err)
+	return ok && (pgErr.Code == "40P01" || pgErr.Code == "40001")
+}
+
 // isUndefinedColumn returns true when a query references a column
 // that does not exist (PG SQLSTATE 42703).
 func isUndefinedColumn(err error) bool {
@@ -485,6 +493,13 @@ func (s *Sync) EnsureSchema(ctx context.Context) error {
 
 func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
 	if s.schemaDone {
+		// An older binary can push messages without usage counters between
+		// this Sync's pushes, so the fill runs on every check, not only at
+		// schema setup. A schema dropped since setup has nothing to fill;
+		// push's marker check notices the reset and sets the schema up again.
+		if _, err := fillMessageUsageCountersPG(ctx, s.pg); err != nil && !isUndefinedTable(err) {
+			return err
+		}
 		return nil
 	}
 	if err := CheckDataVersionCompat(ctx, s.pg); err != nil {
