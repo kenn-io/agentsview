@@ -20624,6 +20624,13 @@ paths:
     get:
       operationId: get-api-v1-sessions
       parameters:
+        - description: Match child sessions individually when include_children is true
+          explode: false
+          in: query
+          name: flat
+          schema:
+            description: Match child sessions individually when include_children is true
+            type: boolean
         - description: Include default-exclusion counts; true also samples hidden children, false counts only one-shot and automated sessions. First page only.
           explode: false
           in: query
@@ -22450,6 +22457,13 @@ paths:
     get:
       operationId: get-api-v1-sessions-id-messages
       parameters:
+        - description: Only compact boundary messages
+          explode: false
+          in: query
+          name: compact_boundary
+          schema:
+            description: Only compact boundary messages
+            type: boolean
         - description: Session ID
           in: path
           name: id

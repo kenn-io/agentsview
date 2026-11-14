@@ -190,6 +190,26 @@ func TestSessionFilterActiveSince(t *testing.T) {
 	}
 }
 
+func TestSessionFilterFlatActiveChildren(t *testing.T) {
+	d := testDB(t)
+	for _, row := range []struct{ id, parent, ended string }{
+		{"active-parent", "", "2024-06-15T00:00:00Z"},
+		{"stale-child", "active-parent", "2024-01-01T00:00:00Z"},
+		{"stale-parent", "", "2024-01-01T00:00:00Z"},
+		{"active-child", "stale-parent", "2024-06-15T00:00:00Z"},
+		{"orphan", "missing", "2024-06-15T00:00:00Z"},
+	} {
+		insertSession(t, d, row.id, "project", func(s *Session) {
+			s.EndedAt = &row.ended
+			if row.parent != "" {
+				s.ParentSessionID = &row.parent
+				s.RelationshipType = "subagent"
+			}
+		})
+	}
+	requireSessions(t, d, SessionFilter{ActiveSince: "2024-06-01T00:00:00Z", IncludeChildren: true, Flat: true}, []string{"active-parent", "active-child", "orphan"})
+}
+
 func TestSessionFilterMinUserMessages(t *testing.T) {
 	d := testDB(t)
 

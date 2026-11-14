@@ -355,6 +355,7 @@ func listFilterToDB(f ListFilter) db.SessionFilter {
 		AutomatedFilterSet:   f.AutomatedFilterSet,
 		ExcludeAutomated:     !f.IncludeAutomated,
 		IncludeChildren:      f.IncludeChildren,
+		Flat:                 f.Flat,
 		IncludeSource:        f.IncludeSource,
 		Cursor:               f.Cursor,
 		Limit:                f.Limit,
@@ -409,7 +410,7 @@ const defaultAroundSpan = 5
 func (b *directBackend) Messages(
 	ctx context.Context, id string, f MessageFilter,
 ) (*MessageList, error) {
-	if f.Around != nil && (f.From != nil || f.Direction != "") {
+	if f.Around != nil && (f.From != nil || f.Direction != "" || f.CompactBoundaryOnly) {
 		return nil, ErrAroundMutuallyExclusive
 	}
 	if (f.Before != nil || f.After != nil) && f.Around == nil {
@@ -432,7 +433,7 @@ func (b *directBackend) Messages(
 		limit = db.MaxMessageLimit
 	}
 
-	w := db.MessageWindow{Limit: limit, Asc: asc, Roles: f.Roles}
+	w := db.MessageWindow{Limit: limit, Asc: asc, Roles: f.Roles, CompactBoundaryOnly: f.CompactBoundaryOnly}
 	if f.Around != nil {
 		w.Around = f.Around
 		w.Before = defaultAroundSpan

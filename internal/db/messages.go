@@ -675,6 +675,8 @@ type MessageWindow struct {
 	Before int // used only with Around; default handled by caller
 	After  int
 	Roles  []string // empty = all roles
+	// CompactBoundaryOnly limits linear reads to compact-boundary rows.
+	CompactBoundaryOnly bool
 	// ObservedRevision, when non-nil, receives the session transcript
 	// revision from the same statement as the message rows. An empty
 	// result leaves it unset; the caller does not pay for a second query.
@@ -698,7 +700,7 @@ func (db *DB) GetMessagesWindow(
 	if w.From != nil {
 		from = *w.From
 	}
-	if w.ObservedRevision == nil && len(w.Roles) == 0 {
+	if w.ObservedRevision == nil && len(w.Roles) == 0 && !w.CompactBoundaryOnly {
 		return db.GetMessages(ctx, sessionID, from, w.Limit, w.Asc)
 	}
 	return db.getMessagesLinear(ctx, sessionID, from, w)
@@ -719,6 +721,9 @@ func (db *DB) getMessagesLinear(
 		dir, op = "DESC", "<="
 	}
 	roleClause, roleArgs := roleFilterClause(w.Roles)
+	if w.CompactBoundaryOnly {
+		roleClause += " AND is_compact_boundary = 1"
+	}
 	query := fmt.Sprintf(`
 		SELECT %s, %s
 		FROM messages

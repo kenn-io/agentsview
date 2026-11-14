@@ -286,6 +286,9 @@ func MessageWindowSQL(columns, revision string, revisionArgs []any, sessionID st
     WHERE session_id = ? AND ordinal > ?` + roleClause + ` ORDER BY ordinal ASC LIMIT ?) AS after_rows
   ) AS w ORDER BY w.ordinal`, args, revision != ""
 	}
+	if w.CompactBoundaryOnly {
+		roleClause += " AND is_compact_boundary = TRUE"
+	}
 	from := 0
 	if w.From != nil {
 		from = *w.From

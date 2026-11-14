@@ -23984,6 +23984,9 @@ type GetAPIV1SessionStatsQuery struct {
 }
 
 type GetAPIV1SessionsQuery struct {
+	// Flat Match child sessions individually when include_children is true
+	Flat *bool `json:"flat,omitempty"`
+
 	// ExclusionCounts Include default-exclusion counts; true also samples hidden children, false counts only one-shot and automated sessions. First page only.
 	ExclusionCounts *bool `json:"exclusion_counts,omitempty"`
 
@@ -24133,6 +24136,9 @@ func (g GetAPIV1SessionsQuery) Validate() error {
 }
 
 type GetAPIV1SessionsIDMessagesQuery struct {
+	// CompactBoundary Only compact boundary messages
+	CompactBoundary *bool `json:"compact_boundary,omitempty"`
+
 	// Limit Maximum number of messages
 	Limit *int64 `json:"limit,omitempty" validate:"omitempty,gte=0"`
 

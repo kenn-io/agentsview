@@ -380,6 +380,23 @@ agentsview session list --sort health --reverse
 
 ______________________________________________________________________
 
+### `agentsview session compactions`
+
+Read full compaction summaries for one session or sessions active since an
+RFC3339 timestamp. RooCode and legacy Kilo sessions are excluded. Older Evener
+labels that may be literal summary text appear separately as ambiguous, with
+their session ID and ordinal. The session limit does not cap response bytes;
+`--limit 0` uses the default of 20 sessions. Use `--limit` and `--cursor` to
+page sessions. Resume a cursor with the same `--active-since` value, even when a
+page has no summaries.
+
+```bash
+agentsview session compactions <id> --json
+agentsview session compactions --active-since 2024-01-01T00:00:00Z --limit 20 --json
+```
+
+The messages API accepts `compact_boundary=true` to select compaction boundaries in linear reads. It cannot be combined with `around`.
+
 ### `agentsview session messages`
 
 Return a window of messages. Response shape matches

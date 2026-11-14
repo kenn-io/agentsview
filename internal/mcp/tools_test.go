@@ -1295,7 +1295,7 @@ func TestServer_EndToEnd(t *testing.T) {
 	}
 	assert.ElementsMatch(t, []string{
 		ToolSearchSessions, ToolQueryRecall, ToolListSessions, ToolGetSessionOverview,
-		ToolGetMessages, ToolGetMemoryStatus, ToolSearchContent, ToolGetUsageSummary, ToolGetSessionUsage,
+		ToolGetMessages, ToolGetCompactionSummaries, ToolGetMemoryStatus, ToolSearchContent, ToolGetUsageSummary, ToolGetSessionUsage,
 		ToolGetToolCalls, ToolGetRecentEdits, ToolGetChildSessions, ToolCompareUsage,
 		ToolGetActivityReport, ToolGetToolUsage, ToolGetQualitySignals, ToolSearchDocs,
 		ToolGetFrictionDigest, ToolListFrictionPatterns,
@@ -1723,12 +1723,12 @@ func TestGetMessages_AroundValidation(t *testing.T) {
 		{
 			name:    "around with direction rejected",
 			in:      getMessagesIn{SessionID: "s1", Around: &anchor, Direction: "desc"},
-			wantErr: "around is mutually exclusive with from/direction",
+			wantErr: "around is mutually exclusive with from/direction/compact_boundary",
 		},
 		{
 			name:    "around with from rejected",
 			in:      getMessagesIn{SessionID: "s1", Around: &anchor, From: &from},
-			wantErr: "around is mutually exclusive with from/direction",
+			wantErr: "around is mutually exclusive with from/direction/compact_boundary",
 		},
 		{
 			name:    "before without around rejected",

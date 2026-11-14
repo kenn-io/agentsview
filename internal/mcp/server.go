@@ -48,6 +48,8 @@ const (
 
 const ToolGetSessionFileReferences = "get_session_file_references"
 
+const ToolGetCompactionSummaries = "get_compaction_summaries"
+
 // Profile selects the tools advertised by an MCP server while keeping their
 // implementations and schemas shared.
 type Profile string
@@ -140,6 +142,8 @@ func newServer(opts ServeOptions) *mcp.Server {
 		IdempotentHint: true, OpenWorldHint: &openWorld,
 	}
 	memoryOnly := opts.Profile == ProfileMemory
+
+	mcp.AddTool(s, &mcp.Tool{Name: ToolGetCompactionSummaries, Description: "Read full compaction summaries for one session_id or sessions active since active_since. Use next_cursor to continue.", Annotations: readOnly}, t.compactionSummaries)
 
 	if !memoryOnly {
 		addFileReferencesTool(s, t, externalRead)
