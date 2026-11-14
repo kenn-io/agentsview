@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -8,27 +9,37 @@ import (
 )
 
 func TestDocbankIntegrationValidation(t *testing.T) {
-	for _, tc := range []struct {
-		name, endpoint, key string
-		wantErr             string
-	}{
-		{"disabled", "", "", ""},
-		{"missing key", "https://example.com", "", "[integrations.docbank] url and api_key_env are required together"},
-		{"remote plaintext", "http://example.com", "DOCBANK_TEST_KEY", "[integrations.docbank] url must be https, or http to a loopback host"},
-		{"loopback", "http://127.0.0.1", "DOCBANK_TEST_KEY", ""},
-		{"https", "https://example.com", "DOCBANK_TEST_KEY", ""},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			err := (DocbankIntegration{URL: tc.endpoint, APIKeyEnv: tc.key}).Validate()
-			if tc.wantErr == "" {
-				assert.NoError(t, err)
-			} else {
-				assert.EqualError(t, err, tc.wantErr)
-			}
-		})
+	for _, field := range []string{"url", "web_url"} {
+		for _, tc := range []struct {
+			name, endpoint, wantErr string
+			allow                   bool
+		}{
+			{"container without opt-in", "http://docbank:8485", "[integrations.docbank] %s must be https, or http to a loopback host; set allow_http = true to permit other HTTP hosts", false},
+			{"container with opt-in", "http://docbank:8485", "", true},
+			{"public IP with opt-in", "http://8.8.8.8:8485", "", true},
+			{"missing host", "https://:443", "[integrations.docbank] invalid %s", true},
+			{"unsupported scheme", "ftp://docbank:8485", "[integrations.docbank] %s must use http or https", true},
+		} {
+			t.Run(field+"/"+tc.name, func(t *testing.T) {
+				apiURL, webURL := tc.endpoint, ""
+				if field == "web_url" {
+					apiURL, webURL = "https://docbank.example", tc.endpoint
+				}
+				var cfg Config
+				data := fmt.Sprintf("[integrations.docbank]\nurl = %q\nweb_url = %q\napi_key_env = 'DOCBANK_TEST_KEY'\nallow_http = %t\n", apiURL, webURL, tc.allow)
+				require.NoError(t, cfg.applyConfigTOML(data))
+				err := cfg.Integrations.Docbank.Validate()
+				if tc.wantErr == "" {
+					assert.NoError(t, err)
+				} else {
+					assert.EqualError(t, err, fmt.Sprintf(tc.wantErr, field))
+				}
+			})
+		}
 	}
-	var cfg Config
-	require.NoError(t, cfg.applyConfigTOML("[integrations.docbank]\nurl = 'http://127.0.0.1:9191'\napi_key_env = 'DOCBANK_TEST_KEY'"))
-	assert.Equal(t, "http://127.0.0.1:9191", cfg.Integrations.Docbank.URL)
-	assert.True(t, cfg.Integrations.Docbank.Configured())
+	for _, endpoint := range []string{"http://127.0.0.1", "https://example.com"} {
+		require.NoError(t, (DocbankIntegration{URL: endpoint, APIKeyEnv: "DOCBANK_TEST_KEY"}).Validate())
+	}
+	require.NoError(t, (DocbankIntegration{}).Validate())
+	assert.EqualError(t, (DocbankIntegration{URL: "https://example.com"}).Validate(), "[integrations.docbank] url and api_key_env are required together")
 }
