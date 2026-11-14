@@ -2633,8 +2633,13 @@ func TestRecallListHumanShowsCursor(t *testing.T) {
 	require.NoError(t, d.Close())
 	raw, err := sql.Open("sqlite3", filepath.Join(dataDir, "sessions.db"))
 	require.NoError(t, err)
-	_, err = raw.ExecContext(t.Context(), `UPDATE recall_entries SET updated_at = CASE id
-		WHEN 'm-cli' THEN '2026-11-14T10:11:12.123Z' ELSE '2026-11-14T10:11:13.000Z' END`)
+	_, err = raw.ExecContext(t.Context(), `UPDATE recall_entries
+		SET created_at = CASE id
+			WHEN 'm-cli' THEN '2026-11-14T09:11:12.123Z'
+			ELSE '2026-11-14T09:11:13.000Z' END,
+		updated_at = CASE id
+			WHEN 'm-cli' THEN '2026-11-14T10:11:12.123Z'
+			ELSE '2026-11-14T10:11:13.000Z' END`)
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 
@@ -2642,6 +2647,7 @@ func TestRecallListHumanShowsCursor(t *testing.T) {
 		"recall", "list", "--updated-since", "2020-01-01T00:00:00Z", "--limit", "1")
 
 	require.NoError(t, err)
+	assert.Contains(t, out, "    created_at=2026-11-14T09:11:12.123Z")
 	assert.Contains(t, out, "    updated_at=2026-11-14T10:11:12.123Z")
 	assert.Contains(t, out, "    body: Verify cwd before retrying failed reads.")
 	assert.Contains(t, out, "    evidence recall-session:3-7")

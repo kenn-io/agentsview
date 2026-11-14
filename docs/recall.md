@@ -37,6 +37,10 @@ after an RFC3339 timestamp, or `--created-since <timestamp>` to list entries
 created at or after it. Both bounds include the boundary millisecond. The list
 returns entries whose `updated_at` changed.
 
+Time-bounded lists include only entries that still exist; they don't report
+deletions. Consumers that mirror Recall should periodically reconcile their
+copy against a complete listing and remove entries that are no longer present.
+
 A bounded list returns the oldest change first and includes archived entries
 as well as accepted ones, unless you set a status filter. `trusted_only` still
 selects accepted entries. Without a bound, lists show accepted entries, newest

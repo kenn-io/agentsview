@@ -1397,8 +1397,8 @@ func printRecallResultsDetailedHuman(
 type recallDetailedPrintOptions struct {
 	ShowScores   bool
 	ShowEvidence bool
-	// ShowBody adds each entry's updated_at and body, which recall list
-	// needs for reading changes and saving a checkpoint.
+	// ShowBody adds each entry's timestamps and body, which recall list needs
+	// for reading changes and saving a checkpoint.
 	ShowBody    bool
 	ContextMeta *service.RecallContextMeta
 }
@@ -1424,6 +1424,7 @@ func printRecallResultsDetailedHumanWithOptions(
 				sanitizeTerminal(recall.Agent))
 		}
 		if options.ShowBody {
+			fmt.Fprintf(w, "    created_at=%s\n", sanitizeTerminal(recall.CreatedAt))
 			fmt.Fprintf(w, "    updated_at=%s\n", sanitizeTerminal(recall.UpdatedAt))
 			fmt.Fprintf(w, "    body: %s\n", sanitizeTerminal(recall.Body))
 		}
