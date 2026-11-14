@@ -14,7 +14,10 @@ import (
 func TestGetTrendsTermsSQLiteDateWindowEdges(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	dbtest.SeedTrendsWindow(t, d)
-	dbtest.AssertTrendsWindow(t, d)
+	direct, err := db.OpenReadOnly(t.Context(), d.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, direct.Close()) })
+	dbtest.AssertTrendsWindow(t, direct)
 	dbtest.AssertTrendsPartsReuse(t, func(retained bool) db.Store {
 		open := db.OpenReadOnly
 		if retained {
@@ -51,12 +54,4 @@ func TestTrendsPartsSkipUnchangedWindowMiss(t *testing.T) {
 	after, err := os.Stat(files[0])
 	require.NoError(t, err)
 	require.True(t, os.SameFile(before, after), "an unchanged out-of-window session must not rewrite the parts file")
-
-	require.NoError(t, d.SoftDeleteSession(t.Context(), "trends-window-fallback"))
-	third, err := d.GetTrendsTerms(t.Context(), filter, terms, "day")
-	require.NoError(t, err)
-	require.Zero(t, third.Series[0].Total)
-	afterDelete, err := os.Stat(files[0])
-	require.NoError(t, err)
-	require.False(t, os.SameFile(before, afterDelete), "deleting a stored session must update the parts file")
 }

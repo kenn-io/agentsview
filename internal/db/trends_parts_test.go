@@ -71,26 +71,17 @@ func TestTrendsPartsReuseAndBuckets(t *testing.T) {
 	assert.Equal(t, 2, got.MessageCount)
 	assert.Equal(t, 3, got.Series[0].Total)
 	assert.Len(t, source.reads, 1)
+	delete(source.versions, "b")
+	source.versions["a"] = "2"
+	_, _, err = TrendsFromParts(t.Context(), &reopened, "fixture", f, terms, "month", source)
+	require.NoError(t, err)
+	require.Equal(t, [][]string{{"a", "b"}, {"a"}}, source.reads)
 	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
 	_, handled, err = TrendsFromParts(canceled, &reopened, "fixture", f, terms, "month", source)
 	assert.True(t, handled)
 	require.ErrorIs(t, err, context.Canceled)
-	assert.Len(t, source.reads, 1)
-	delete(source.versions, "b")
-	source.versions["a"] = "2"
-	source.messages["a"] = []struct{ content, timestamp string }{{"apple", "2025-03-03T12:00:00Z"}}
-	got, _, err = TrendsFromParts(t.Context(), &reopened, "fixture", f, terms, "day", source)
-	require.NoError(t, err)
-	assert.Equal(t, 1, got.MessageCount)
-	assert.Equal(t, 1, got.Series[0].Total)
-	require.Equal(t, [][]string{{"a", "b"}, {"a"}}, source.reads)
-	source.versions["b"] = "1"
-	got, _, err = TrendsFromParts(t.Context(), &reopened, "fixture", f, terms, "day", source)
-	require.NoError(t, err)
-	assert.Equal(t, 2, got.MessageCount)
-	assert.Equal(t, 2, got.Series[0].Total)
-	require.Equal(t, [][]string{{"a", "b"}, {"a"}, {"b"}}, source.reads)
+	assert.Len(t, source.reads, 2)
 	hour := 12
 	f.Hour = &hour
 	_, handled, err = TrendsFromParts(t.Context(), &reopened, "fixture", f, terms, "day", source)

@@ -20,7 +20,6 @@ func TestDuckTrendsTermsDateWindowEdges(t *testing.T) {
 	_, err := Push(t.Context(), path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	store := openPushedStore(t, path)
-	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
 	dbtest.AssertTrendsWindow(t, store)
 	require.NoError(t, store.Close())
 	dbtest.AssertTrendsPartsReuse(t, func(retained bool) db.Store {

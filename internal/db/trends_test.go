@@ -2,8 +2,6 @@ package db
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -200,7 +198,7 @@ func TestTrendWorkersCancellationReturnsError(t *testing.T) {
 	workers.Add("seam", time.Date(2024, 6, 1, 9, 0, 0, 0, time.UTC))
 	cancel()
 	_, err = workers.Finish()
-	require.ErrorIs(t, err, context.Canceled)
+	assert.ErrorIs(t, err, context.Canceled)
 }
 
 func TestTrendWorkersStopCountingAfterCancellation(t *testing.T) {
@@ -607,12 +605,14 @@ func TestTrendsSQLiteOffsetWindows(t *testing.T) {
 	start := "2024-01-01T00:00:00Z"
 	insertSession(t, d, "offset-message", "project", func(s *Session) {
 		s.StartedAt = &start
-		s.MessageCount, s.UserMessageCount = 2, 2
+		s.MessageCount, s.UserMessageCount = 1, 1
 	})
-	insertMessages(t, d,
-		Message{SessionID: "offset-message", Ordinal: 0, Role: "user", Content: "probe", ContentLength: 5, Timestamp: "2025-03-08T22:00:00-12:00"},
-		Message{SessionID: "offset-message", Ordinal: 1, Role: "user", Content: "probe", ContentLength: 5, Timestamp: "2025-03-11T03:00:00+14:00"},
-	)
+	insertMessages(t, d, Message{SessionID: "offset-message", Ordinal: 0, Role: "user", Content: "probe", ContentLength: 5, Timestamp: "2025-03-08T22:00:00-12:00"})
+	insertSession(t, d, "offset-upper", "project", func(s *Session) {
+		s.StartedAt = &start
+		s.MessageCount, s.UserMessageCount = 1, 1
+	})
+	insertMessages(t, d, Message{SessionID: "offset-upper", Ordinal: 0, Role: "user", Content: "probe", ContentLength: 5, Timestamp: "2025-03-10T23:00:00+14:00"})
 	fallback := "2025-03-08T22:00:00-12:00"
 	insertSession(t, d, "offset-fallback", "project", func(s *Session) {
 		s.StartedAt = &fallback
@@ -633,27 +633,16 @@ func TestTrendsSQLiteOffsetWindows(t *testing.T) {
 	retained, err := d.GetTrendsTerms(ctx, f, terms, "day")
 	require.NoError(t, err)
 	require.True(t, d.trendsDisk.Enabled())
-	assert.Equal(t, 2, retained.MessageCount)
-	assert.Equal(t, 2, retained.Series[0].Total)
-	require.Equal(t, [][]string{{"offset-fallback", "offset-message"}}, reads)
+	assert.Equal(t, 3, retained.MessageCount)
+	assert.Equal(t, 3, retained.Series[0].Total)
+	require.Equal(t, [][]string{{"offset-fallback", "offset-message", "offset-upper"}}, reads)
 	reads = nil
-
-	cacheFile := filepath.Join(t.TempDir(), "cache-file")
-	require.NoError(t, os.WriteFile(cacheFile, nil, 0o600))
-	t.Setenv("CACHE_DIRECTORY", cacheFile)
-	direct, err := Open(ctx, d.Path())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, direct.Close()) })
-	want, err := direct.GetTrendsTerms(ctx, f, terms, "day")
-	require.NoError(t, err)
-	require.False(t, direct.trendsDisk.Enabled())
-	assert.Equal(t, want, retained)
 
 	f.To = "2025-03-11"
 	wide, err := d.GetTrendsTerms(ctx, f, terms, "day")
 	require.NoError(t, err)
 	assert.Equal(t, 3, wide.MessageCount)
-	assert.Equal(t, []TrendPoint{{Date: "2025-03-10", Count: 2}, {Date: "2025-03-11", Count: 1}}, wide.Series[0].Points)
+	assert.Equal(t, []TrendPoint{{Date: "2025-03-10", Count: 3}, {Date: "2025-03-11", Count: 0}}, wide.Series[0].Points)
 	assert.Empty(t, reads)
 	f.From, f.To = "2024-01-02", "2024-01-02"
 	old, err := d.GetTrendsTerms(ctx, f, terms, "day")

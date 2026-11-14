@@ -22,7 +22,6 @@ func TestClickHouseTrendsTermsDateWindowEdges(t *testing.T) {
 	store, err := NewStore(t.Context(), target)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	require.NoError(t, store.openActivityReportDisk(target))
 	dbtest.AssertTrendsWindow(t, store)
 	dbtest.AssertTrendsPartsReuse(t, func(retained bool) db.Store {
 		opened, err := NewStore(t.Context(), target)
