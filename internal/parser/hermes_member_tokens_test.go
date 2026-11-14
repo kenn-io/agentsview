@@ -113,7 +113,7 @@ func TestHermesMemberTokenChanges(t *testing.T) {
 }
 
 func TestHermesMemberListingFallbacksAndDeletion(t *testing.T) {
-	for _, kind := range []string{"deleted", "prefixed deleted", "malformed", "legacy", "suppressed", "pager error", "trigger removed", "empty authority", "suppressed authority"} {
+	for _, kind := range []string{"deleted", "prefixed deleted", "malformed", "legacy", "suppressed", "suppressed cron", "pager error", "trigger removed", "missing session index", "missing id index", "empty authority", "suppressed authority"} {
 		t.Run(kind, func(t *testing.T) {
 			c, path := hermesTokenFixture(t)
 			root := filepath.Dir(path)
@@ -128,6 +128,10 @@ func TestHermesMemberListingFallbacksAndDeletion(t *testing.T) {
 				writeSourceFile(t, filepath.Join(root, "sessions", "session_s.json"), hermesProviderJSONFixture("legacy"))
 			}
 			writeSourceFile(t, filepath.Join(root, "sessions", transcript), hermesProviderJSONLFixture("fallback"))
+			if kind == "suppressed cron" {
+				_, err = c.ExecContext(t.Context(), `UPDATE sessions SET source='cron' WHERE id='s'`)
+				require.NoError(t, err)
+			}
 			source := set.stateMemberSourceRef(root, path, "s")
 			fingerprint, err := set.Fingerprint(t.Context(), source)
 			require.NoError(t, err)
@@ -139,11 +143,15 @@ func TestHermesMemberListingFallbacksAndDeletion(t *testing.T) {
 				_, err = c.ExecContext(t.Context(), `UPDATE sessions SET started_at='invalid'`)
 			case "legacy":
 				stored.FingerprintHash = strings.Repeat("a", 64)
-			case "suppressed":
+			case "suppressed", "suppressed cron":
 				stored.Suppressed = true
 				_, err = c.ExecContext(t.Context(), `UPDATE sessions SET title='changed'`)
 			case "trigger removed":
 				_, err = c.ExecContext(t.Context(), `DROP TRIGGER messages_display_revision_update`)
+			case "missing session index":
+				_, err = c.ExecContext(t.Context(), `DROP INDEX idx_messages_session`)
+			case "missing id index":
+				_, err = c.ExecContext(t.Context(), `DROP INDEX idx_messages_session_id`)
 			}
 			require.NoError(t, err)
 			rows := []StoredMemberFreshness{stored}
@@ -153,7 +161,7 @@ func TestHermesMemberListingFallbacksAndDeletion(t *testing.T) {
 			case "suppressed authority":
 				rows[0].Suppressed = true
 			}
-			if kind == "suppressed" {
+			if kind == "suppressed" || kind == "suppressed cron" {
 				// Mixed authority still skips the matching suppressed member.
 				rows = append([]StoredMemberFreshness{{Path: VirtualSourcePath(path, "a")}}, rows...)
 			}
@@ -166,7 +174,7 @@ func TestHermesMemberListingFallbacksAndDeletion(t *testing.T) {
 			sources, err := set.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: path, AllowWatermarkOnlySources: true, StoredMemberFreshnessPage: pager})
 			require.NoError(t, err)
 			switch kind {
-			case "suppressed":
+			case "suppressed", "suppressed cron":
 				assert.Empty(t, sources)
 			case "deleted", "prefixed deleted":
 				if kind == "prefixed deleted" {
@@ -249,7 +257,7 @@ func TestHermesMemberSchemaGate(t *testing.T) {
 			_, err := c.ExecContext(t.Context(), setup)
 			require.NoError(t, err)
 			ok, _ := hermesStoreTracksRewrites(t.Context(), c)
-			assert.Equal(t, strings.HasSuffix(setup, "=33") || strings.HasPrefix(setup, "DROP INDEX"), ok)
+			assert.Equal(t, strings.HasSuffix(setup, "=33"), ok)
 		})
 	}
 }
