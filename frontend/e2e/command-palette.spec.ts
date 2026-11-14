@@ -12,6 +12,52 @@ async function openSearch(page: Page, query: string) {
   await input.fill(query);
 }
 
+test.describe("mobile search", () => {
+  test.use({ timezoneId: "UTC" });
+
+  test("keeps the full date visible with a long project", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 900 });
+    await page.addInitScript(() => localStorage.setItem("agentsview-always-show-year", "true"));
+    await page.route("**/api/v1/search?**", (route) =>
+      route.fulfill({
+        json: {
+          results: [
+            {
+              ...searchResults[0],
+              project: "mmmmmmmmmmmmmmmmmmmm",
+              session_ended_at: "2024-01-15T12:00:00Z",
+            },
+          ],
+        },
+      }),
+    );
+    await page.goto("/usage");
+    await openSearch(page, "first");
+    const meta = page.locator(".palette-item .item-meta");
+    await expect(meta).toContainText("2024");
+    const bounds = await meta.evaluate((el) => {
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      let node: Node | null;
+      while ((node = walker.nextNode())) {
+        const start = node.textContent!.indexOf("Jan 15, 2024");
+        if (start < 0) continue;
+        const range = document.createRange();
+        range.setStart(node, start);
+        range.setEnd(node, node.textContent!.length);
+        return {
+          dateLeft: range.getBoundingClientRect().left,
+          dateRight: range.getBoundingClientRect().right,
+          containerLeft: el.getBoundingClientRect().left,
+          containerRight: el.getBoundingClientRect().right,
+        };
+      }
+      throw new Error("Expected the January 2024 date");
+    });
+    expect(bounds.dateLeft).toBeGreaterThanOrEqual(bounds.containerLeft);
+    expect(bounds.dateRight).toBeLessThanOrEqual(bounds.containerRight);
+  });
+});
+
 for (const theme of ["light", "dark"] as const) {
   test(`search filters share one enabled field style in ${theme}`, async ({ page }) => {
     await page.addInitScript((t) => localStorage.setItem("theme", t), theme);
