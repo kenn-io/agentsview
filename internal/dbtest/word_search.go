@@ -41,6 +41,7 @@ func SeedWordSearch(t *testing.T, d *db.DB) {
 		{"accent-partial", "word-accent-partial", "café"},
 		{"accent-multiple", "word-accent-multiple", "rộunding parsing"},
 		{"accent-long-snippet", "word-accent-snippet", strings.Repeat("filler ", 80) + "café " + strings.Repeat("filler ", 80)},
+		{"exact-long-snippet", "word-exact-snippet", "invoice " + strings.Repeat("filler ", 80) + "invoice rounding decision"},
 		{"accent-boundary", "word-accent-boundary", "caféine rounding"},
 		{"accent-phrase", "word-accent-phrase", "café rounding missingword"},
 		{"accent-naive", "word-accent-naive", "naïve design"},
@@ -164,6 +165,17 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 			{"invoice-version", "message", 1},
 		}, paged)
 	})
+	for _, mode := range []string{"substring", "fts", "hybrid"} {
+		t.Run("exact phrase snippet/"+mode, func(t *testing.T) {
+			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+				Pattern: "invoice rounding decision", Mode: mode, Project: "word-exact-snippet",
+				KeywordOnly: mode == "hybrid",
+			})
+			require.NoError(t, err)
+			require.Len(t, page.Matches, 1)
+			assert.Contains(t, page.Matches[0].Snippet, "invoice rounding decision")
+		})
+	}
 	for _, mode := range []string{"substring", "fts", "hybrid"} {
 		t.Run("accent snippet/"+mode, func(t *testing.T) {
 			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{

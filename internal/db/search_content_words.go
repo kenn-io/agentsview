@@ -27,9 +27,12 @@ type ContentWords struct {
 	Phrases []string
 }
 
-// WordSnippetRange finds the first whole word in body matching a query form,
-// else pattern's first case-insensitive occurrence, else the start of body.
+// WordSnippetRange finds the exact pattern or the first whole word matching a
+// query form, falling back to the start of body.
 func WordSnippetRange(body, pattern string, words ContentWords) (int, int) {
+	if start, end, ok := CaseInsensitiveSpan(body, pattern); ok {
+		return start, end
+	}
 	foldedForms := make([][]string, len(words.Terms))
 	for i, forms := range words.Terms {
 		foldedForms[i] = make([]string, len(forms))
@@ -55,8 +58,7 @@ func WordSnippetRange(body, pattern string, words ContentWords) (int, int) {
 		}
 		offset += len(word)
 	}
-	start, end, _ := CaseInsensitiveSpan(body, pattern)
-	return start, end
+	return 0, 0
 }
 
 // RouteContentWords applies SQLite's gates for word matching to f, a
