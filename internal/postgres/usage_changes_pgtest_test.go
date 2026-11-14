@@ -18,15 +18,35 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 )
 
+// usageJournalTestSchema is the schema of a test's first usage journal
+// fixture.
+const usageJournalTestSchema = "usage_journal_test"
+
+// newUsageJournalFixture returns a local archive, a Sync, and a Store on a
+// schema EnsureSchema created, change journal included. The first fixture in
+// a test's database uses the copy of the schema's template; later ones, such
+// as one per subtest, get a new schema.
 func newUsageJournalFixture(t *testing.T) (*db.DB, *Sync, *Store) {
 	t.Helper()
-	schema := fmt.Sprintf("usage_journal_%x", rand.Uint64())
+	schema := usageJournalTestSchema
+	pgURL := testPGSchemaURL(t, schema)
+	fresh := takeFreshSchemaCopy(t, pgURL, schema)
+	if !fresh {
+		schema = fmt.Sprintf("usage_journal_%x", rand.Uint64())
+	}
 	local := testDB(t)
-	syncer, err := New(t.Context(), testPGURL(t), schema, local, "test-machine", true, storage.PusherOptions{})
+	syncer, err := New(t.Context(), pgURL, schema, local, "test-machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, syncer.Close()); cleanNamedPGSchema(t, testPGURL(t), schema) })
+	t.Cleanup(func() {
+		require.NoError(t, syncer.Close())
+		// The test's database goes with the test; a later fixture's schema
+		// goes with its subtest.
+		if !fresh {
+			cleanNamedPGSchema(t, pgURL, schema)
+		}
+	})
 	require.NoError(t, syncer.EnsureSchema(t.Context()))
-	store, err := NewStore(t.Context(), testPGURL(t), schema, true)
+	store, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	return local, syncer, store
@@ -323,6 +343,9 @@ func TestUsageChangeJournalCommitOrder(t *testing.T) {
 
 func TestUsageChangeJournalInstallIdempotent(t *testing.T) {
 	t.Parallel()
+	// An empty database: this test drops the change journal and tests how
+	// EnsureSchema reinstalls it.
+	testPGURL(t)
 	_, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
 	before, err := store.UsageChangeRevision(ctx)
@@ -362,6 +385,9 @@ func TestUsageChangeJournalInstallIdempotent(t *testing.T) {
 
 func TestUsageChangeJournalDropClearsHistory(t *testing.T) {
 	t.Parallel()
+	// An empty database: this test drops the change journal and tests how
+	// its installer recreates it.
+	testPGURL(t)
 	_, syncer, _ := newUsageJournalFixture(t)
 	ctx := t.Context()
 	var token string
@@ -382,6 +408,9 @@ func TestUsageChangeJournalDropClearsHistory(t *testing.T) {
 
 func TestUsageChangeJournalNewerVersion(t *testing.T) {
 	t.Parallel()
+	// An empty database: this test drops the change journal and tests that
+	// its installer leaves a newer version alone.
+	testPGURL(t)
 	_, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
 	_, err := syncer.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
@@ -457,6 +486,9 @@ func TestUsageChangeJournalLateGrantedReader(t *testing.T) {
 
 func TestUsageJournalUpgradesHistoryToken(t *testing.T) {
 	t.Parallel()
+	// An empty database: this test rewinds the change journal to version 1
+	// and tests how EnsureSchema upgrades it.
+	testPGURL(t)
 	_, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
 	// Version 1 stamped revisions and account changes without a history token.

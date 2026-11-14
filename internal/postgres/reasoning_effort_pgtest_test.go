@@ -11,12 +11,10 @@ import (
 func TestReasoningEffortPostgresSchemaAndRead(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	schema := "agentsview_reasoning_effort_test"
-	pg, err := Open(t.Context(), testPGURL(t), schema, true)
+	const schema = pgPushTestSchema
+	pg, err := Open(t.Context(), testPGSchemaURL(t, schema), schema, true)
 	require.NoError(t, err)
 	defer pg.Close()
-	_, err = pg.ExecContext(t.Context(), "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
-	require.NoError(t, err)
 	require.NoError(t, EnsureSchema(ctx, pg, schema))
 	_, err = pg.ExecContext(t.Context(), `INSERT INTO sessions (id, project, machine, agent, created_at)
 		VALUES ('effort-session', 'proj', 'machine', 'claude', NOW())`)

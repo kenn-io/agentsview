@@ -14,7 +14,7 @@ func TestPGRetainedCommitLinksAfterNarrowRebuild(t *testing.T) {
 	for _, policy := range []config.ArchiveContent{config.ArchiveContentTranscripts} {
 		for _, full := range []bool{false, true} {
 			t.Run(string(policy)+map[bool]string{false: "/generation", true: "/full"}[full], func(t *testing.T) {
-				syncer, a, pg, ctx := newSessionProvenancePushSync(t, "agentsview_commit_rebuild_test")
+				syncer, a, pg, ctx := newSessionProvenancePushSync(t, "agentsview")
 				b := dbtest.OpenTestDB(t)
 				dbtest.SeedRetainedCommitLink(t, a, "shared", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 				dbtest.SeedRetainedCommitLink(t, b, "shared", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")

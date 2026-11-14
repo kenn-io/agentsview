@@ -342,7 +342,6 @@ func TestFrictionPatternsReadWithoutTheLinksTable(t *testing.T) {
 	const schema = "agentsview_friction_nolinks_test"
 	pgURL := testPGURL(t)
 	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 	ctx := t.Context()
 	pg, err := Open(ctx, pgURL, schema, true)
 	require.NoError(t, err)
@@ -471,7 +470,6 @@ func TestAddFrictionIssueLinkReturnsAConcurrentWinner(t *testing.T) {
 	const schema = "agentsview_friction_race_test"
 	pgURL := testPGURL(t)
 	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 	ctx := t.Context()
 	pg, err := Open(ctx, pgURL, schema, true)
 	require.NoError(t, err)
@@ -532,7 +530,6 @@ func TestFrictionLinkWritersDoNotDeadlock(t *testing.T) {
 	const schema = "agentsview_friction_lock_test"
 	pgURL := testPGURL(t)
 	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 	ctx := t.Context()
 	pg, err := Open(ctx, pgURL, schema, true)
 	require.NoError(t, err)

@@ -35,41 +35,70 @@ var pgTestDatabases = struct {
 // creating it on first use. It skips the test when TEST_PG_URL is unset.
 func testPGURL(tb testing.TB) string {
 	tb.Helper()
-	dsn, _ := pgTestDatabase(tb, false)
+	dsn, _ := pgTestDatabase(tb, pgTemplate{})
 	return dsn
 }
 
-// testPGStoreURL is testPGURL for tests that read through the testSchema
-// store. On PostgreSQL a new database is a copy of a template in which
-// EnsureSchema already created testSchema, and ensureStoreSchema skips
-// creating it again. Copying takes about 10 ms; EnsureSchema takes about
-// 70 ms.
-func testPGStoreURL(tb testing.TB) string {
+// testPGSchemaURL is testPGURL for tests that only need schema to exist
+// before they start. On PostgreSQL a new database is a copy of a template in
+// which EnsureSchema already created schema, so the test's own EnsureSchema
+// finds it current: copying and checking take about 20 ms, and creating the
+// schema takes about 90 ms. Tests of how EnsureSchema creates or upgrades a
+// schema use testPGURL.
+func testPGSchemaURL(tb testing.TB, schema string) string {
 	tb.Helper()
-	dsn, cloned := pgTestDatabase(tb, true)
+	return testPGTemplateURL(tb, pgTemplate{schema: schema})
+}
+
+// testPGHostedURL is testPGSchemaURL for a schema that EnsureHostedTenant
+// provisions for tenant.
+func testPGHostedURL(tb testing.TB, schema, tenant string) string {
+	tb.Helper()
+	return testPGTemplateURL(tb, pgTemplate{schema: schema, tenant: tenant})
+}
+
+func testPGTemplateURL(tb testing.TB, tmpl pgTemplate) string {
+	tb.Helper()
+	dsn, cloned := pgTestDatabase(tb, tmpl)
 	if cloned {
-		pgFreshStoreDatabases.Store(pgDatabaseName(tb, dsn), struct{}{})
+		pgFreshSchemaCopies.Store(pgDatabaseName(tb, dsn), tmpl.schema)
 	}
 	return dsn
 }
 
-// pgFreshStoreDatabases holds the names of template copies whose testSchema
-// no test has used yet.
-var pgFreshStoreDatabases sync.Map
+// pgTemplate names what a template database holds: schema as EnsureSchema
+// creates it, or as EnsureHostedTenant provisions it when tenant is set. The
+// zero value means no template.
+type pgTemplate struct {
+	schema string
+	tenant string
+}
 
-// takeFreshStoreDatabase reports whether dsn is a template copy whose
-// testSchema is still untouched, and marks it used.
-func takeFreshStoreDatabase(tb testing.TB, dsn string) bool {
+// testPGStoreURL is testPGSchemaURL for tests that read through the
+// testSchema store.
+func testPGStoreURL(tb testing.TB) string {
 	tb.Helper()
-	_, fresh := pgFreshStoreDatabases.LoadAndDelete(pgDatabaseName(tb, dsn))
-	return fresh
+	return testPGSchemaURL(tb, testSchema)
+}
+
+// pgFreshSchemaCopies maps the names of template copies that no setup helper
+// has used yet to the schema their template holds.
+var pgFreshSchemaCopies sync.Map
+
+// takeFreshSchemaCopy reports whether dsn is a template copy holding schema
+// that no setup helper has used yet, and marks it used. A setup helper that
+// drops and recreates schema skips both when this is true: the copy already
+// holds a schema EnsureSchema just created.
+func takeFreshSchemaCopy(tb testing.TB, dsn, schema string) bool {
+	tb.Helper()
+	return pgFreshSchemaCopies.CompareAndDelete(pgDatabaseName(tb, dsn), schema)
 }
 
 // pgTestDatabase returns the calling top-level test's database, creating
-// it on first use, and reports whether it created a copy of the store
-// template. It copies the template only when storeTemplate is set and the
-// server is PostgreSQL.
-func pgTestDatabase(tb testing.TB, storeTemplate bool) (string, bool) {
+// it on first use, and reports whether it created a copy of the template
+// tmpl. It copies a template only when tmpl is set and the server is
+// PostgreSQL; CockroachDB has no database templates.
+func pgTestDatabase(tb testing.TB, tmpl pgTemplate) (string, bool) {
 	tb.Helper()
 	test, _, _ := strings.Cut(tb.Name(), "/")
 	pgTestDatabases.Lock()
@@ -79,8 +108,10 @@ func pgTestDatabase(tb testing.TB, storeTemplate bool) (string, bool) {
 		return dsn, false
 	}
 	server, _ := testPGServer(tb)
-	cloned := storeTemplate && !server.cockroach
-	dsn = newPGTestDatabase(tb, cloned)
+	if server.cockroach {
+		tmpl = pgTemplate{}
+	}
+	dsn = newPGTestDatabase(tb, tmpl)
 	pgTestDatabases.Lock()
 	pgTestDatabases.byTest[test] = dsn
 	pgTestDatabases.Unlock()
@@ -91,14 +122,14 @@ func pgTestDatabase(tb testing.TB, storeTemplate bool) (string, bool) {
 		delete(pgTestDatabases.byTest, test)
 		pgTestDatabases.Unlock()
 	})
-	return dsn, cloned
+	return dsn, tmpl != pgTemplate{}
 }
 
 // isolatedPGDatabase returns a database separate from testPGURL's, for tests
 // that need several fresh databases.
 func isolatedPGDatabase(t *testing.T) string {
 	t.Helper()
-	return newPGTestDatabase(t, false)
+	return newPGTestDatabase(t, pgTemplate{})
 }
 
 // testPGStandbyURL points TEST_PG_STANDBY_URL, a physical standby of the
@@ -270,17 +301,16 @@ func waitPGTestSlot(tb testing.TB, server *pgTestServer) *flock.Flock {
 }
 
 // newPGTestDatabase creates a database and drops it when t finishes. The
-// database is empty, or a copy of the store template when storeTemplate is
-// set.
-func newPGTestDatabase(tb testing.TB, storeTemplate bool) string {
+// database is empty, or a copy of the template for tmpl when tmpl is set.
+func newPGTestDatabase(tb testing.TB, tmpl pgTemplate) string {
 	tb.Helper()
 	server, baseURL := testPGServer(tb)
 	// Registered before the drop, so the slot is released after it.
 	holdPGTestSlot(tb, server)
 	name := fmt.Sprintf("agentsview_test_%016x", rand.Uint64())
 	create := "CREATE DATABASE " + name
-	if storeTemplate {
-		create += " TEMPLATE " + pgStoreTemplateName(tb, server, baseURL)
+	if tmpl != (pgTemplate{}) {
+		create += " TEMPLATE " + pgTemplateName(tb, server, baseURL, tmpl)
 	}
 	_, err := server.admin.ExecContext(tb.Context(), create)
 	require.NoError(tb, err, "creating test database")
@@ -295,58 +325,80 @@ func newPGTestDatabase(tb testing.TB, storeTemplate bool) string {
 	return withPGDatabase(tb, baseURL, name)
 }
 
-// pgStoreTemplate is a database in which EnsureSchema created testSchema.
-// It is built once per test binary and dropped by TestMain.
-var pgStoreTemplate struct {
+// pgTemplateDatabase is a template database. Each is built once per test
+// binary, by the first test that asks for it, and dropped by TestMain.
+type pgTemplateDatabase struct {
 	once sync.Once
 	name string
 	err  error
 }
 
-func pgStoreTemplateName(tb testing.TB, server *pgTestServer, baseURL string) string {
+var pgTemplates = struct {
+	sync.Mutex
+	byTemplate map[pgTemplate]*pgTemplateDatabase
+}{byTemplate: map[pgTemplate]*pgTemplateDatabase{}}
+
+func pgTemplateName(tb testing.TB, server *pgTestServer, baseURL string, tmpl pgTemplate) string {
 	tb.Helper()
-	pgStoreTemplate.once.Do(func() {
+	pgTemplates.Lock()
+	database, ok := pgTemplates.byTemplate[tmpl]
+	if !ok {
+		database = &pgTemplateDatabase{}
+		pgTemplates.byTemplate[tmpl] = database
+	}
+	pgTemplates.Unlock()
+	database.once.Do(func() {
 		// Every test that copies the template shares this build, so no one
 		// test's context bounds it. Building takes well under a second.
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute) //nolint:usetesting // shared by every test in the binary
 		defer cancel()
-		name := fmt.Sprintf("agentsview_test_template_%016x", rand.Uint64())
-		if _, err := server.admin.ExecContext(ctx, "CREATE DATABASE "+name); err != nil {
-			pgStoreTemplate.err = fmt.Errorf("creating store template: %w", err)
-			return
-		}
-		pgStoreTemplate.name = name
-		parsed, err := url.Parse(baseURL)
-		if err != nil {
-			pgStoreTemplate.err = fmt.Errorf("parsing TEST_PG_URL: %w", err)
-			return
-		}
-		parsed.Path = "/" + name
-		pg, err := Open(ctx, parsed.String(), testSchema, true)
-		if err != nil {
-			pgStoreTemplate.err = fmt.Errorf("connecting to store template: %w", err)
-			return
-		}
-		pgStoreTemplate.err = EnsureSchema(ctx, pg, testSchema)
-		// CREATE DATABASE ... TEMPLATE fails while anyone is connected to
-		// the template, so no connection may outlive the build.
-		if err := pg.Close(); err != nil && pgStoreTemplate.err == nil {
-			pgStoreTemplate.err = fmt.Errorf("closing store template: %w", err)
-		}
+		database.name, database.err = buildPGTemplate(ctx, server, baseURL, tmpl)
 	})
-	require.NoError(tb, pgStoreTemplate.err, "building store template")
-	return pgStoreTemplate.name
+	require.NoError(tb, database.err, "building template for schema %s", tmpl.schema)
+	return database.name
+}
+
+// buildPGTemplate returns the template's name even when building it fails
+// after the database exists, so TestMain still drops it.
+func buildPGTemplate(ctx context.Context, server *pgTestServer, baseURL string, tmpl pgTemplate) (string, error) {
+	name := fmt.Sprintf("agentsview_test_template_%016x", rand.Uint64())
+	if _, err := server.admin.ExecContext(ctx, "CREATE DATABASE "+name); err != nil {
+		return "", fmt.Errorf("creating template: %w", err)
+	}
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return name, fmt.Errorf("parsing TEST_PG_URL: %w", err)
+	}
+	parsed.Path = "/" + name
+	pg, err := Open(ctx, parsed.String(), tmpl.schema, true)
+	if err != nil {
+		return name, fmt.Errorf("connecting to template: %w", err)
+	}
+	if tmpl.tenant == "" {
+		err = EnsureSchema(ctx, pg, tmpl.schema)
+	} else {
+		err = EnsureHostedTenant(ctx, pg, tmpl.schema, tmpl.tenant)
+	}
+	// CREATE DATABASE ... TEMPLATE fails while anyone is connected to the
+	// template, so no connection may outlive the build.
+	if closeErr := pg.Close(); closeErr != nil && err == nil {
+		err = fmt.Errorf("closing template: %w", closeErr)
+	}
+	return name, err
 }
 
 func TestMain(m *testing.M) {
 	code := m.Run()
-	if pgStoreTemplate.name != "" {
+	for _, database := range pgTemplates.byTemplate {
+		if database.name == "" {
+			continue
+		}
 		// Runs after every test has ended, so no test's context remains.
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-		_, err := pgTestServerConn.admin.ExecContext(ctx, "DROP DATABASE IF EXISTS "+pgStoreTemplate.name+" WITH (FORCE)")
+		_, err := pgTestServerConn.admin.ExecContext(ctx, "DROP DATABASE IF EXISTS "+database.name+" WITH (FORCE)")
 		cancel()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "dropping store template %s: %v\n", pgStoreTemplate.name, err)
+			fmt.Fprintf(os.Stderr, "dropping template %s: %v\n", database.name, err)
 			code = max(code, 1)
 		}
 	}

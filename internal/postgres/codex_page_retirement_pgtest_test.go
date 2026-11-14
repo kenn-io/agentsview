@@ -348,11 +348,9 @@ func TestCodexPageUpgradeIncrementalPushCopiesFriction(t *testing.T) {
 	const threadUUID = "11111111-1111-4111-8111-111111111111"
 	const thread = "codex:" + threadUUID
 	const page = thread + "_22222222-2222-4222-8222-222222222222"
-	const schema = "agentsview_codex_page_friction_test"
+	const schema = pgPushTestSchema
 	ctx := t.Context()
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	pgURL := testPGSchemaURL(t, schema)
 	local := testDB(t)
 	pagePath := filepath.Join(t.TempDir(), "rollout-2026-09-25T12-00-00-"+page[len("codex:"):]+".jsonl")
 	headPath := filepath.Join(t.TempDir(), "rollout-2026-09-25T11-00-00-"+threadUUID+".jsonl")
@@ -418,10 +416,12 @@ func TestFilteredFullPushKeepsCuratedCodexThreadWhosePageIsExcluded(t *testing.T
 			curated := mode == "curated"
 			const thread = "codex:11111111-1111-4111-8111-111111111111"
 			const page = thread + "_22222222-2222-4222-8222-222222222222"
-			const schema = "agentsview_codex_page_filtered_cleanup_test"
+			const schema = pgPushTestSchema
 			ctx := t.Context()
-			pgURL := testPGURL(t)
-			cleanNamedPGSchema(t, pgURL, schema)
+			pgURL := testPGSchemaURL(t, schema)
+			if !takeFreshSchemaCopy(t, pgURL, schema) {
+				cleanNamedPGSchema(t, pgURL, schema)
+			}
 			t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 			source := testDB(t)
 			sourcePath := source.Path()
@@ -533,11 +533,9 @@ func TestFullPushKeepsRemotelyRestoredCodexThread(t *testing.T) {
 	t.Parallel()
 	const thread = "codex:11111111-1111-4111-8111-111111111111"
 	const page = thread + "_22222222-2222-4222-8222-222222222222"
-	const schema = "agentsview_codex_page_restored_cleanup_test"
+	const schema = pgPushTestSchema
 	ctx := t.Context()
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	pgURL := testPGSchemaURL(t, schema)
 	source := testDB(t)
 	sourcePath := source.Path()
 	pagePath := filepath.Join(t.TempDir(), "rollout-2026-09-25T12-00-00-"+page[len("codex:"):]+".jsonl")

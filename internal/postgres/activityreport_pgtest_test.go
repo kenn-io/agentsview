@@ -64,7 +64,7 @@ func seedPGDailyFixture(t *testing.T, store *Store) {
 
 func TestPGActivityReportReadersAvoidPreparedStatements(t *testing.T) {
 	t.Parallel()
-	_, store := prepareUsageSchema(t, "agentsview_activity_fresh_plan_test")
+	_, store := prepareUsageSchema(t, usageTestSchema)
 	seedPGDailyFixture(t, store)
 	tx, err := store.DB().BeginTx(t.Context(), nil)
 	require.NoError(t, err)
@@ -88,7 +88,7 @@ func TestPGActivityReportReadersAvoidPreparedStatements(t *testing.T) {
 
 func TestPGActivityReportSourceProbeUsesMirrorSchema(t *testing.T) {
 	t.Parallel()
-	_, store := prepareUsageSchema(t, "agentsview_activity_probe_test")
+	_, store := prepareUsageSchema(t, usageTestSchema)
 	ctx := t.Context()
 
 	before, err := store.ActivityReportSourceProbe(ctx)
@@ -135,7 +135,7 @@ func TestPGActivityReportSourceProbeReportsNewestPricingTime(t *testing.T) {
 
 func TestPGGetActivityReport(t *testing.T) {
 	t.Parallel()
-	_, store := prepareUsageSchema(t, "agentsview_daily_report_test")
+	_, store := prepareUsageSchema(t, usageTestSchema)
 	ctx := t.Context()
 	seedPGDailyFixture(t, store)
 
@@ -151,7 +151,7 @@ func TestPGGetActivityReport(t *testing.T) {
 
 func TestPGActivityReportSecondRead(t *testing.T) {
 	t.Parallel()
-	_, store := prepareUsageSchema(t, "agentsview_activity_second_read_test")
+	_, store := prepareUsageSchema(t, usageTestSchema)
 	seedPGDailyFixture(t, store)
 	ctx := t.Context()
 	q := pgDayQuery(t, "2026-06-16", "UTC")
@@ -193,7 +193,7 @@ func TestPGActivityReportSecondRead(t *testing.T) {
 // TestGetActivityReport_OpenSessionWithInRangeMessageIncluded.
 func TestPGGetActivityReportOpenSessionWithInRangeMessageIncluded(t *testing.T) {
 	t.Parallel()
-	_, store := prepareUsageSchema(t, "agentsview_daily_report_open_test")
+	_, store := prepareUsageSchema(t, usageTestSchema)
 	ctx := t.Context()
 
 	// Started the day before, never closed (ended_at NULL), active in-range.
@@ -236,7 +236,7 @@ func TestPGGetActivityReportOpenSessionWithInRangeMessageIncluded(t *testing.T) 
 // the SQLite reference behavior.
 func TestPGGetActivityReportUsageCostAndTokens(t *testing.T) {
 	t.Parallel()
-	_, store := prepareUsageSchema(t, "agentsview_daily_report_usage_test")
+	_, store := prepareUsageSchema(t, usageTestSchema)
 	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
@@ -286,7 +286,7 @@ func TestPGGetActivityReportUsageCostAndTokens(t *testing.T) {
 
 func TestPGGetActivityReportCopilotReportedCostReplacesSessionEstimates(t *testing.T) {
 	t.Parallel()
-	_, store := prepareUsageSchema(t, "agentsview_activity_copilot_authoritative_test")
+	_, store := prepareUsageSchema(t, usageTestSchema)
 	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
@@ -342,7 +342,7 @@ func TestPGGetActivityReportCopilotReportedCostReplacesSessionEstimates(t *testi
 // replayed usage row dedups away, so it adds a session row but no cost.
 func TestPGGetActivityReportIncludesSubagentUsage(t *testing.T) {
 	t.Parallel()
-	_, store := prepareUsageSchema(t, "agentsview_daily_report_subagent_test")
+	_, store := prepareUsageSchema(t, usageTestSchema)
 	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
@@ -420,7 +420,7 @@ func TestPGGetActivityReportIncludesSubagentUsage(t *testing.T) {
 
 func TestPGGetActivityReportPricingModelsOnlyIncludeDedupSurvivors(t *testing.T) {
 	t.Parallel()
-	_, store := prepareUsageSchema(t, "agentsview_daily_report_pricing_survivor_test")
+	_, store := prepareUsageSchema(t, usageTestSchema)
 	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
@@ -474,7 +474,7 @@ func TestPGGetActivityReportPricingModelsOnlyIncludeDedupSurvivors(t *testing.T)
 // falls outside the target day from contributing to that day.
 func TestPGGetActivityReportExcludesOtherDays(t *testing.T) {
 	t.Parallel()
-	_, store := prepareUsageSchema(t, "agentsview_daily_report_otherday_test")
+	_, store := prepareUsageSchema(t, usageTestSchema)
 	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
@@ -530,7 +530,7 @@ func reportSessionIDsPG(sessions []activity.SessionRow) map[string]struct{} {
 // inside the pad must NOT appear in the target day's report.
 func TestPGGetActivityReportPriorDayWithinPadExcluded(t *testing.T) {
 	t.Parallel()
-	_, store := prepareUsageSchema(t, "agentsview_daily_report_pad_test")
+	_, store := prepareUsageSchema(t, usageTestSchema)
 	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
@@ -573,7 +573,7 @@ func TestPGGetActivityReportPriorDayWithinPadExcluded(t *testing.T) {
 // the day totals.
 func TestPGGetActivityReportExcludesIneligibleUsage(t *testing.T) {
 	t.Parallel()
-	_, store := prepareUsageSchema(t, "agentsview_daily_report_eligible_test")
+	_, store := prepareUsageSchema(t, usageTestSchema)
 	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
@@ -620,7 +620,7 @@ func TestPGGetActivityReportExcludesIneligibleUsage(t *testing.T) {
 // candidate-ID order.
 func TestPGGetActivityReportDedupUsesChronologicalOrder(t *testing.T) {
 	t.Parallel()
-	_, store := prepareUsageSchema(t, "agentsview_daily_report_chunk_test")
+	_, store := prepareUsageSchema(t, usageTestSchema)
 	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
@@ -711,8 +711,7 @@ func TestPGGetActivityReportFiltersAfterCrossSessionSnapshotSelection(
 	t *testing.T,
 ) {
 	t.Parallel()
-	_, store := prepareUsageSchema(
-		t, "agentsview_activity_filtered_snapshot_test")
+	_, store := prepareUsageSchema(t, usageTestSchema)
 	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -758,8 +757,7 @@ func TestPGGetActivityReportFiltersAfterCrossSessionSnapshotSelection(
 
 func TestPGGetActivityReportDeduplicatesAfterProjectFilter(t *testing.T) {
 	t.Parallel()
-	_, store := prepareUsageSchema(
-		t, "agentsview_activity_filtered_dedup_test")
+	_, store := prepareUsageSchema(t, usageTestSchema)
 	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -799,7 +797,7 @@ func TestPGGetActivityReportDeduplicatesAfterProjectFilter(t *testing.T) {
 // TestGetActivityReport_AutomationFilterAndSessionSplit.
 func TestPGGetActivityReportAutomationFilterAndSessionSplit(t *testing.T) {
 	t.Parallel()
-	_, store := prepareUsageSchema(t, "agentsview_daily_report_automation_test")
+	_, store := prepareUsageSchema(t, usageTestSchema)
 	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `

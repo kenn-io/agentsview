@@ -18,6 +18,9 @@ func mwEnsureSchema(t *testing.T, pgURL string) *sql.DB {
 	t.Helper()
 	pg, err := Open(t.Context(), pgURL, mwTestSchema, true)
 	require.NoError(t, err, "Open")
+	if takeFreshSchemaCopy(t, pgURL, mwTestSchema) {
+		return pg
+	}
 	ctx := t.Context()
 	_, err = pg.ExecContext(ctx,
 		`DROP SCHEMA IF EXISTS `+mwTestSchema+` CASCADE`,
@@ -77,7 +80,7 @@ func mwOrdinalsOf(msgs []db.Message) []int {
 // TestGetMessagesWindow_AroundMidSession.
 func TestPGGetMessagesWindow_AroundMidSession(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGSchemaURL(t, mwTestSchema)
 	pg := mwEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
@@ -102,7 +105,7 @@ func TestPGGetMessagesWindow_AroundMidSession(t *testing.T) {
 // TestGetMessagesWindow_RoleFilterCountsFilteredMessages.
 func TestPGGetMessagesWindow_RoleFilterCountsFilteredMessages(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGSchemaURL(t, mwTestSchema)
 	pg := mwEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
@@ -128,7 +131,7 @@ func TestPGGetMessagesWindow_RoleFilterCountsFilteredMessages(t *testing.T) {
 // TestGetMessagesWindow_AnchorIncludedEvenWhenRoleFiltered.
 func TestPGGetMessagesWindow_AnchorIncludedEvenWhenRoleFiltered(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGSchemaURL(t, mwTestSchema)
 	pg := mwEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
@@ -155,7 +158,7 @@ func TestPGGetMessagesWindow_AnchorIncludedEvenWhenRoleFiltered(t *testing.T) {
 // TestGetMessagesWindow_AroundOrdinalZeroHasNoBefore.
 func TestPGGetMessagesWindow_AroundOrdinalZeroHasNoBefore(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGSchemaURL(t, mwTestSchema)
 	pg := mwEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
@@ -180,7 +183,7 @@ func TestPGGetMessagesWindow_AroundOrdinalZeroHasNoBefore(t *testing.T) {
 // TestGetMessagesWindow_AroundLastOrdinalHasNoAfter.
 func TestPGGetMessagesWindow_AroundLastOrdinalHasNoAfter(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGSchemaURL(t, mwTestSchema)
 	pg := mwEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
@@ -205,7 +208,7 @@ func TestPGGetMessagesWindow_AroundLastOrdinalHasNoAfter(t *testing.T) {
 // TestGetMessagesWindow_LinearModeWithRoles.
 func TestPGGetMessagesWindow_LinearModeWithRoles(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGSchemaURL(t, mwTestSchema)
 	pg := mwEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
@@ -229,7 +232,7 @@ func TestPGGetMessagesWindow_LinearModeWithRoles(t *testing.T) {
 // TestGetMessagesWindow_EmptyRolesEquivalentToGetMessages.
 func TestPGGetMessagesWindow_EmptyRolesEquivalentToGetMessages(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGSchemaURL(t, mwTestSchema)
 	pg := mwEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
@@ -257,7 +260,7 @@ func TestPGGetMessagesWindow_EmptyRolesEquivalentToGetMessages(t *testing.T) {
 // window statements select alongside their rows.
 func TestPGGetMessagesWindow_ReportsRevisionWithRows(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
+	pgURL := testPGSchemaURL(t, mwTestSchema)
 	pg := mwEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {

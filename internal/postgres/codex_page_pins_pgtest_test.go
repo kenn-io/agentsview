@@ -36,10 +36,12 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 			const threadUUID = "11111111-1111-4111-8111-111111111111"
 			thread := tc.prefix + threadUUID
 			page := thread + "_22222222-2222-4222-8222-222222222222"
-			const schema = "agentsview_codex_page_pin_test"
+			const schema = pgPushTestSchema
 			ctx := t.Context()
-			pgURL := testPGURL(t)
-			cleanNamedPGSchema(t, pgURL, schema)
+			pgURL := testPGSchemaURL(t, schema)
+			if !takeFreshSchemaCopy(t, pgURL, schema) {
+				cleanNamedPGSchema(t, pgURL, schema)
+			}
 			t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 			source := testDB(t)
 			sourcePath := source.Path()

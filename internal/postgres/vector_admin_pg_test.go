@@ -35,9 +35,7 @@ func pushAdminGeneration(
 // genA-only doc, and that dropping a nonexistent id errors clearly.
 func TestListAndDropVectorGenerations(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_admin_test")
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "X")
@@ -159,9 +157,7 @@ func TestListVectorGenerationsMissingTable(t *testing.T) {
 // that still exist.
 func TestVectorPushToleratesMissingChunkTable(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_admin_dangling_test")
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "S")

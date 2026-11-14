@@ -30,7 +30,7 @@ const lostStateReason = "the local archive lost its record of earlier pushes, as
 // PostgreSQL can hold rows the rebuild dropped. The next push must be full.
 func TestPushAfterArchiveRebuildIsFull(t *testing.T) {
 	t.Parallel()
-	f := newResumeFixture(t, "agentsview_push_generation_test")
+	f := newResumeFixture(t)
 	_, err := f.sync().Push(t.Context(), false, nil)
 	require.NoError(t, err)
 	res, err := f.sync().Push(t.Context(), false, nil)
@@ -61,7 +61,7 @@ func TestPushAfterArchiveRebuildRemovesMissingSessions(t *testing.T) {
 		{name: "excluded projects", excludeProjects: []string{"outside"}, want: []string{"foreign", "legacy", "new", "outside"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newResumeFixture(t, "agentsview_push_generation_test")
+			f := newResumeFixture(t)
 			for _, id := range []string{"foreign", "legacy", "outside"} {
 				project := "proj"
 				if id == "outside" {
@@ -131,7 +131,7 @@ func TestPushAfterArchiveRebuildRemovesMissingSessions(t *testing.T) {
 // it must not claim it lost any.
 func TestFirstFilteredPushDoesNotClaimLostState(t *testing.T) {
 	t.Parallel()
-	f := newResumeFixture(t, "agentsview_push_generation_test")
+	f := newResumeFixture(t)
 	_, err := f.sync().Push(t.Context(), false, nil)
 	require.NoError(t, err)
 
@@ -149,7 +149,7 @@ func TestFirstFilteredPushDoesNotClaimLostState(t *testing.T) {
 // full.
 func TestPushFailsWhenTheArchiveIsRebuiltDuringIt(t *testing.T) {
 	t.Parallel()
-	f := newResumeFixture(t, "agentsview_push_generation_test")
+	f := newResumeFixture(t)
 	_, err := f.sync().Push(t.Context(), false, nil)
 	require.NoError(t, err)
 	require.NoError(t, f.local.InsertMessages(t.Context(), []db.Message{{
@@ -175,7 +175,7 @@ func TestPushFailsWhenTheArchiveIsRebuiltDuringIt(t *testing.T) {
 // never started, so a watch keeps the --full request.
 func TestFullPushFailingBeforeItsRunIsNotStarted(t *testing.T) {
 	t.Parallel()
-	f := newResumeFixture(t, "agentsview_push_generation_test")
+	f := newResumeFixture(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	for _, full := range []bool{false, true} {
@@ -191,7 +191,7 @@ func TestFullPushFailingBeforeItsRunIsNotStarted(t *testing.T) {
 // daemon shutdown.
 func TestFailedFullPushProgressSaveEnds(t *testing.T) {
 	t.Parallel()
-	f := newResumeFixture(t, "agentsview_push_generation_test")
+	f := newResumeFixture(t)
 	s := f.sync()
 	s.fullRunSaveTimeout = 100 * time.Millisecond
 	ctx, cancel := context.WithCancel(t.Context())

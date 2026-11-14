@@ -22,12 +22,15 @@ import (
 	"go.kenn.io/agentsview/internal/testutil"
 )
 
+// pgPushTestSchema is the schema push tests write to. Each top-level test has
+// its own database, so tests share this name and start from one template copy
+// in which EnsureSchema already created it.
+const pgPushTestSchema = "agentsview_push_test"
+
 func TestPushPreservesLegacyOffsetTimestamps(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	const schema = "agentsview_push_legacy_time_test"
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 
 	ctx := t.Context()
 	pg, err := Open(t.Context(), pgURL, schema, true)
@@ -114,10 +117,8 @@ func TestPushPreservesLegacyOffsetTimestamps(t *testing.T) {
 
 func TestPGUsageEventFingerprintsPreserveExactMicrodollars(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	const schema = "agentsview_usage_fingerprint_money_test"
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 
 	ctx := t.Context()
 	pg, err := Open(t.Context(), pgURL, schema, true)
@@ -166,14 +167,12 @@ func TestPushMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 	t *testing.T,
 ) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	const schema = "agentsview_push_project_snapshot_test"
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	defer pg.Close()
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err)
 	require.NoError(t, EnsureSchema(ctx, pg, schema))
 
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -262,15 +261,13 @@ func TestPushMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 func TestFilteredIdentityPublicationPreservesUnfilteredMetadata(t *testing.T) {
 	t.Parallel()
 	const (
-		schema            = "agentsview_unfiltered_identity_owner_test"
+		schema            = pgPushTestSchema
 		includedSessionID = "snapshot-included"
 		excludedSessionID = "snapshot-excluded"
 		includedProject   = "included_project"
 		excludedProject   = "excluded_project"
 	)
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	pgURL := testPGSchemaURL(t, schema)
 	ctx := t.Context()
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
@@ -339,13 +336,11 @@ func TestFilteredIdentityPublicationPreservesUnfilteredMetadata(t *testing.T) {
 func TestFilteredIdentityPublicationAdoptsLegacyOwnerlessScope(t *testing.T) {
 	t.Parallel()
 	const (
-		schema          = "agentsview_legacy_identity_scope_test"
+		schema          = pgPushTestSchema
 		includedProject = "included_project"
 		excludedProject = "excluded_project"
 	)
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	pgURL := testPGSchemaURL(t, schema)
 	ctx := t.Context()
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
@@ -437,9 +432,8 @@ func TestFilteredThenUnfilteredIdentityPublicationIncludesExcludedProject(
 	t *testing.T,
 ) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	const schema = "agentsview_filtered_identity_revision_test"
-	cleanNamedPGSchema(t, pgURL, schema)
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 	ctx := t.Context()
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -509,9 +503,8 @@ func TestAlternatingFilteredPublicationsPreserveEachScopesMetadata(
 	t *testing.T,
 ) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	const schema = "agentsview_filtered_metadata_scope_test"
-	cleanNamedPGSchema(t, pgURL, schema)
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 	ctx := t.Context()
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -613,11 +606,13 @@ func TestPushProjectMoveReconcilesFilteredScope(t *testing.T) {
 		{name: "exclude former", excludeProjects: []string{sourceProject}, wantSession: true, wantTargetObs: true, wantSnapshot: true},
 		{name: "exclude target", excludeProjects: []string{targetProject}},
 	}
-	pgURL := testPGURL(t)
-	for i, tc := range tests {
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
+	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			schema := fmt.Sprintf("agentsview_project_move_%d", i)
-			cleanNamedPGSchema(t, pgURL, schema)
+			if !takeFreshSchemaCopy(t, pgURL, schema) {
+				cleanNamedPGSchema(t, pgURL, schema)
+			}
 			t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 			ctx := t.Context()
 			local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -742,9 +737,8 @@ func TestIdentityPublicationUpdatesOnlyChangedRowsAndAppliesTombstones(
 	t *testing.T,
 ) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	const schema = "agentsview_identity_delta_test"
-	cleanNamedPGSchema(t, pgURL, schema)
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 	ctx := t.Context()
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -847,16 +841,13 @@ func TestIdentityPublicationUpdatesOnlyChangedRowsAndAppliesTombstones(
 // and republishes the updated message flags.
 func TestPushSystemReclassificationRepublishes(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_push_sysfingerprint_test"
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	// Local SQLite DB.
@@ -929,16 +920,13 @@ func TestPushSystemReclassificationRepublishes(t *testing.T) {
 
 func TestPushMessageNanosecondTimestampNoRewriteRegression(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_push_msgtime_nanos_test"
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -993,16 +981,13 @@ func TestPushMessageNanosecondTimestampNoRewriteRegression(t *testing.T) {
 // ON CONFLICT DO UPDATE path.
 func TestPushSessionTerminationStatus(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_push_termstatus_test"
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -1067,16 +1052,13 @@ func TestPushSessionTerminationStatus(t *testing.T) {
 
 func TestPushSessionPreservesSourceMachine(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_push_source_machine_test"
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -1117,16 +1099,13 @@ func TestPushSessionPreservesSourceMachine(t *testing.T) {
 
 func TestPushPreservesPGServeLocalCurationFields(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_push_preserve_pg_curation_test"
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -1206,13 +1185,11 @@ func TestPushPreservesPGServeLocalCurationFields(t *testing.T) {
 
 func TestPushKeepsSourceAvailabilityLocalAndPreservesPGUserTrash(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	const schema = "agentsview_push_source_missing_test"
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	defer pg.Close()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err)
 	t.Cleanup(func() {
 		_, _ = pg.ExecContext(context.WithoutCancel(t.Context()), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
 	})
@@ -1334,16 +1311,13 @@ func TestPushKeepsSourceAvailabilityLocalAndPreservesPGUserTrash(t *testing.T) {
 
 func TestPushPreservesPGServePermanentDeletes(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_push_preserve_pg_deletes_test"
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -1458,16 +1432,13 @@ func TestPushPreservesPGServePermanentDeletes(t *testing.T) {
 
 func TestPushPurgesRowsForPGExcludedSessions(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_push_excluded_purge_test"
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -1551,16 +1522,13 @@ func TestPushPurgesRowsForPGExcludedSessions(t *testing.T) {
 
 func TestPushSessionSkipsPGExcludedSession(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_push_session_excluded_test"
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -1606,16 +1574,13 @@ func TestPushSessionSkipsPGExcludedSession(t *testing.T) {
 
 func TestPushUpdatesSourceCurationFieldsWithoutPGOverride(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_push_source_curation_update_test"
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -1704,16 +1669,13 @@ func TestPushUpdatesSourceCurationFieldsWithoutPGOverride(t *testing.T) {
 
 func TestPushPreservesLegacyPGCurationWithoutSourceBaseline(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_push_legacy_source_curation_test"
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -1836,16 +1798,13 @@ func TestPushPreservesLegacyPGCurationWithoutSourceBaseline(t *testing.T) {
 // otherwise the dashboard shows tokens with a $0 cost.
 func TestPushSyncsUsageEventsForZeroMessageSession(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_push_zeromsg_usage_test"
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -1938,16 +1897,13 @@ func TestPushSyncsUsageEventsForZeroMessageSession(t *testing.T) {
 
 func TestPushSyncsCursorUsageEventsIntoPGDailyUsage(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_cursor_usage_pg_test"
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "sessions.db"))
@@ -2095,16 +2051,13 @@ func TestPushCursorUsageEventsDedupsAfterLegacyMoneyMigration(t *testing.T) {
 
 func TestPushCursorUsageEventsPreservesRowsFromOtherMachines(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_cursor_usage_append_only_pg_test"
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	_, err = pg.ExecContext(ctx, `
@@ -2161,16 +2114,13 @@ func TestPushCursorUsageEventsPreservesRowsFromOtherMachines(t *testing.T) {
 // a full push sends them all again.
 func TestPushSendsOnlyNewCursorUsageEvents(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_cursor_usage_high_water_pg_test"
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(ctx, `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	localDB, err := db.Open(ctx, filepath.Join(t.TempDir(), "sessions.db"))
@@ -2329,16 +2279,13 @@ func pgMessageCTID(
 // regardless of any single parser fix.
 func TestPushMessagesSanitizesNULBytes(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_push_nul_test"
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	localDB, err := db.Open(t.Context(),
@@ -2432,16 +2379,13 @@ func TestPushMessagesSanitizesNULBytes(t *testing.T) {
 // second incremental push is a no-op rather than a forced full re-push.
 func TestPushIncrementalWithOnlyForeignMachineSessions(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_push_foreign_machine_test"
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -2520,16 +2464,13 @@ func TestPushIncrementalWithOnlyForeignMachineSessions(t *testing.T) {
 // the reset is detected and the session is re-pushed.
 func TestPushDetectsResetWhenCompetingMachineRowsExist(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_push_reset_competing_test"
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -2600,16 +2541,13 @@ func TestPushDetectsResetWhenCompetingMachineRowsExist(t *testing.T) {
 // skipped indefinitely.
 func TestPushMarkerNotWrittenWhenResetRecoveryFails(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_push_reset_recovery_fail_test"
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -2707,16 +2645,13 @@ func TestPushMarkerNotWrittenWhenResetRecoveryFails(t *testing.T) {
 // it would match and be skipped, leaving PG with the stale machine name.
 func TestPushUpdatesSentinelMachineWhenSyncMachineChanges(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_push_sentinel_machine_test"
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -2776,16 +2711,13 @@ func TestPushUpdatesSentinelMachineWhenSyncMachineChanges(t *testing.T) {
 
 func TestPushAdoptsOwnerlessRowsFromPreviousMarkerMachine(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_push_legacy_marker_machine_test"
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -2901,16 +2833,13 @@ func TestPushAdoptsOwnerlessRowsFromPreviousMarkerMachine(t *testing.T) {
 
 func TestFilteredPushAdoptsOwnerlessRowsFromLegacyUnscopedMarker(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_push_filtered_legacy_marker_test"
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -3000,16 +2929,13 @@ func TestFilteredPushAdoptsOwnerlessRowsFromLegacyUnscopedMarker(t *testing.T) {
 
 func TestPushReportsSkippedConflicts(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_push_skipped_conflicts_test"
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -3057,19 +2983,23 @@ func TestPushReportsSkippedConflicts(t *testing.T) {
 
 // newSessionProvenancePushSync creates a fresh schema and a Sync wired to a
 // local SQLite DB, for tests exercising session provenance push behavior.
+// The test's first call starts from a template copy holding schema; callers
+// that pass pgPushTestSchema share one template.
 func newSessionProvenancePushSync(
 	t *testing.T, schema string,
 ) (*Sync, *db.DB, *sql.DB, context.Context) {
 	t.Helper()
-	pgURL := testPGURL(t)
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	t.Cleanup(func() { _ = pg.Close() })
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
-	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+	if !takeFreshSchemaCopy(t, pgURL, schema) {
+		_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
+		require.NoError(t, err, "drop schema")
+		require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+	}
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
@@ -3116,7 +3046,7 @@ func seedProvenanceSession(
 // archive id and source file path onto the pushed PG sessions row.
 func TestPushWritesSessionProvenance(t *testing.T) {
 	t.Parallel()
-	const schema = "agentsview_push_provenance_test"
+	const schema = pgPushTestSchema
 	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 
 	seedProvenanceSession(t, localDB, "sess-1", "workstation", "proj",
@@ -3139,7 +3069,7 @@ func TestPushWritesSessionProvenance(t *testing.T) {
 
 func TestArchiveIdentityChangeRepublishesUnchangedSessions(t *testing.T) {
 	t.Parallel()
-	const schema = "agentsview_push_archive_identity_change_test"
+	const schema = pgPushTestSchema
 	syncer, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 	seedProvenanceSession(t, localDB, "sess-1", "workstation", "proj", "")
 	dbtest.SeedRetainedCommitLink(t, localDB, "retained", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
@@ -3241,9 +3171,8 @@ func TestFilteredArchiveIdentityRepairPreservesOtherPublicationScope(
 	t *testing.T,
 ) {
 	t.Parallel()
-	const schema = "agentsview_filtered_archive_identity_repair_test"
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 	ctx := t.Context()
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -3391,7 +3320,7 @@ func TestFilteredArchiveIdentityRepairPreservesOtherPublicationScope(
 // out-of-band after the marker was written.
 func TestSessionProvenanceBackfillForcesOneFullPush(t *testing.T) {
 	t.Parallel()
-	const schema = "agentsview_push_provenance_backfill_test"
+	const schema = pgPushTestSchema
 	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 
 	seedProvenanceSession(t, localDB, "sess-1", "workstation", "proj", "")
@@ -3422,7 +3351,7 @@ func TestSessionProvenanceBackfillForcesOneFullPush(t *testing.T) {
 // retries the one-time backfill instead of silently skipping it.
 func TestSessionProvenanceBackfillMarkerNotWrittenOnFailure(t *testing.T) {
 	t.Parallel()
-	const schema = "agentsview_push_provenance_backfill_fail_test"
+	const schema = pgPushTestSchema
 	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 
 	seedProvenanceSession(t, localDB, "sess-1", "workstation", "proj", "")
@@ -3450,7 +3379,7 @@ func TestSessionProvenanceBackfillMarkerNotWrittenOnFailure(t *testing.T) {
 // marker for sessions outside that filter.
 func TestSessionProvenanceBackfillCompletesPerFilterScope(t *testing.T) {
 	t.Parallel()
-	const schema = "agentsview_push_provenance_filtered_test"
+	const schema = pgPushTestSchema
 	unfiltered, localDB, _, ctx := newSessionProvenancePushSync(t, schema)
 
 	seedProvenanceSession(t, localDB, "sess-in", "workstation", "proj", "")
@@ -3524,12 +3453,15 @@ type usagePushFixture struct {
 // newUsagePushFixture stores one session with a single message and the given
 // usage events, then completes an initial push.
 func newUsagePushFixture(
-	t *testing.T, schema string, events []db.UsageEvent,
+	t *testing.T, events []db.UsageEvent,
 ) usagePushFixture {
 	t.Helper()
 	ctx := t.Context()
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
+	if !takeFreshSchemaCopy(t, pgURL, schema) {
+		cleanNamedPGSchema(t, pgURL, schema)
+	}
 	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 
 	local := testDB(t)
@@ -3613,7 +3545,7 @@ func TestPGPushMetadataChangesPreserveUnchangedUsage(t *testing.T) {
 					OccurredAt: timestamp, DedupKey: fmt.Sprintf("event-%d", i),
 				}
 			}
-			f := newUsagePushFixture(t, "agentsview_usage_timestamp_test", events)
+			f := newUsagePushFixture(t, events)
 			archived, err := f.local.UsageEventFingerprints(t.Context(), []string{f.session.ID})
 			require.NoError(t, err)
 			before := readMessage(t, f)
@@ -3642,7 +3574,7 @@ func TestPGPushReplacesChangedUsage(t *testing.T) {
 		Source: "session", Model: "model", InputTokens: 10, OutputTokens: 2,
 		DedupKey: "session:usage",
 	}
-	f := newUsagePushFixture(t, "agentsview_usage_change_test", []db.UsageEvent{usage})
+	f := newUsagePushFixture(t, []db.UsageEvent{usage})
 	usage.SessionID = f.session.ID
 
 	_, err := f.pusher.DB().ExecContext(t.Context(), `UPDATE sessions SET updated_at='2000-01-01T00:00:00Z' WHERE id=$1`, f.session.ID)
@@ -3690,11 +3622,9 @@ func TestFilteredPushReconcilesProjectMoveCommittedDuringPush(t *testing.T) {
 		sessionID     = "pg-concurrent-move"
 		sourceProject = "source_project"
 		targetProject = "target_project"
-		schema        = "agentsview_concurrent_move"
+		schema        = pgPushTestSchema
 	)
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	pgURL := testPGSchemaURL(t, schema)
 	ctx := t.Context()
 	local, err := db.Open(ctx, filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
