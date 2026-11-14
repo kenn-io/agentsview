@@ -816,23 +816,21 @@
     margin-top: 6px;
   }
 
-  /* A child's dot moves into the left of the empty 18px tree-dash slot and
-     gives up its own width. The checkbox takes the rest of that slot, so
-     the full date fits after it even when a wide fallback font draws the
-     Hangul. */
-  .session-item.years.compact > .tree-dash ~ :global(.kit-status-dot) {
-    order: -1;
-    margin-left: 2px;
-    margin-right: -12px;
-  }
-
-  .session-item.years.compact > .tree-dash ~ :global(.kit-status-bubble) {
-    order: -1;
-    margin-right: -14px;
+  /* A child's tree dash shrinks and its checkbox moves into the space, so
+     the checkbox, dot, and title keep the parent's order and the full date
+     still fits when a wide fallback font draws the Hangul. */
+  .session-item.years.compact > .tree-dash {
+    width: 8px;
   }
 
   .session-item.years.compact > .tree-dash ~ .select-checkbox {
     margin-left: -10px;
+  }
+
+  /* The waiting bubble takes the dot's width so the title doesn't move. */
+  .session-item.years.compact > .tree-dash ~ :global(.kit-status-bubble) {
+    margin-left: -2px;
+    margin-right: -2px;
   }
 
   .session-item.years .session-info-link {

@@ -540,6 +540,8 @@ test.describe("sidebar agent names", () => {
           }).length;
           const name = element.querySelector<HTMLElement>(".session-name")!;
           const column = element.querySelector(".session-info")!.getBoundingClientRect();
+          const box = element.querySelector(".select-checkbox")!.getBoundingClientRect();
+          const dot = element.querySelector(".kit-status-dot")!.getBoundingClientRect();
           const fontSize = (node: HTMLElement) => parseFloat(getComputedStyle(node).fontSize);
           return {
             gapToNext: next ? next.getBoundingClientRect().top - itemRect.bottom : 0,
@@ -555,6 +557,9 @@ test.describe("sidebar agent names", () => {
             countClipped:
               escapes(count.getBoundingClientRect()) || count.scrollWidth > count.clientWidth + 1,
             name: element.querySelector(".session-name")!.getBoundingClientRect().width,
+            // Like a parent row: checkbox, then dot, then the title.
+            dotAfterBox: dot.left - box.right,
+            dotToTitle: name.getBoundingClientRect().left - dot.right,
           };
         });
         console.log(`width=220px years locale=${locale} multi-select ${id} ${JSON.stringify(row)}`);
@@ -568,6 +573,9 @@ test.describe("sidebar agent names", () => {
         expect(row.countClipped).toBe(false);
         expect(row.name).toBeGreaterThan(0);
         expect(row.gapToNext).toBeGreaterThanOrEqual(-0.5);
+        expect(row.dotAfterBox).toBeGreaterThanOrEqual(0);
+        expect(row.dotToTitle).toBeGreaterThanOrEqual(0);
+        expect(row.dotToTitle).toBeLessThanOrEqual(8);
       }
     }
   });
