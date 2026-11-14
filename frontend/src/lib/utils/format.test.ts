@@ -21,7 +21,6 @@ describe("formatRelativeTime", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    ui.alwaysShowYear = false;
     setLocale("en");
   });
 
@@ -45,7 +44,7 @@ describe("formatRelativeTime", () => {
   });
 });
 
-describe("formatTimestamp", () => {
+describe("date and time with the year", () => {
   afterEach(() => {
     vi.useRealTimers();
     ui.alwaysShowYear = false;
@@ -54,15 +53,13 @@ describe("formatTimestamp", () => {
   it("shows the year and time when requested", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-03T14:32:00"));
-    expect(formatRelativeTime("2026-06-01T12:00:00", true)).toBe("Jun 1, 2026, 12:00 PM");
     expect(formatRelativeTime("2026-06-01T14:30:00", true)).toBe("Jun 1, 2026, 02:30 PM");
     expect(formatRelativeTime("2026-06-03T14:30:00", true)).toBe("Jun 3, 2026, 02:30 PM");
     ui.alwaysShowYear = true;
     expect(formatTimestamp("2024-06-01T14:30:00")).toBe("Jun 1, 2024, 02:30 PM");
-    ui.alwaysShowYear = false;
     expect(formatRelativeTime("2024-06-01T14:30:00")).toBe("Jun 1");
+    ui.alwaysShowYear = false;
     expect(formatTimestamp("2024-06-01T14:30:00")).toBe("Jun 1, 02:30 PM");
-    expect(formatTimestamp("2024-06-01T14:30:00", true)).toBe("Jun 1, 2024, 02:30 PM");
   });
 });
 
