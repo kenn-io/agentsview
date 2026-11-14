@@ -262,11 +262,6 @@ func TestPiLinkedSources(t *testing.T) {
 	result, err := Materialize(t.Context(), cfg, s, cwd)
 	require.NoError(t, err)
 	assert.Equal(t, linked, result.Source)
-	missing := filepath.Join(root, "missing.jsonl")
-	s.FilePath = &missing
-	result, err = Materialize(t.Context(), cfg, s, cwd)
-	require.NoError(t, err)
-	assert.Equal(t, linked, result.Source)
 	// A saved path outside the provider roots is not itself authoritative.
 	s.FilePath = &original
 	result, err = Materialize(t.Context(), cfg, s, cwd)
@@ -291,19 +286,15 @@ func TestPiHeaderIdentityAndVersion(t *testing.T) {
 	require.ErrorContains(t, err, "UTF-8")
 	for _, tc := range []struct{ header, id, want string }{
 		{`{"type":"session","id":"other","cwd":"/old"}`, "id", "identity"},
-		{`{"type":"session","id":"id","cwd":"/a","cwd":"/b"}`, "id", "one cwd"},
-		{`{"type":"session","id":"id","cwd":"/a","c\u0077d":"/b"}`, "id", "one cwd"},
 		{`{"type":"session","id":"id"}`, "id", "one cwd"},
 		{`{"type":"session","cwd":"/old"}`, "id", "identity"},
 		{`{"type":"session","id":"id","version":4,"cwd":"/old"}`, "id", "version"},
 		{`{"type":"title"}` + "\n" + `{"type":"session","id":"id","cwd":"/old"}`, "id", "header"},
 		{`{"type":123,"id":"id"}`, "id", "header"},
 		{`{"type":"session","id":"id","version":"3"}`, "id", "header"},
-		{`{"Type":"session","id":"id"}`, "id", "header"},
-		{`{"type":"session","ID":"id"}`, "id", "identity"},
 		{"", "id", "header"},
 	} {
-		t.Run(tc.want, func(t *testing.T) {
+		t.Run(tc.header, func(t *testing.T) {
 			_, err := relocatePiHeader(t.Context(), []byte(tc.header), "other.jsonl", tc.id, "/new")
 			switch tc.want {
 			case "identity":

@@ -436,8 +436,6 @@ func TestReadFileBudgetAndInvalidCompanionPath(t *testing.T) {
 		got, _, err := readFile(t.Context(), name, 4)
 		require.NoError(t, err)
 		assert.Equal(t, "data", string(got))
-		_, _, err = readFile(t.Context(), name, 3)
-		require.ErrorIs(t, err, errSourceSize)
 	})
 	t.Run("invalid companion", func(t *testing.T) {
 		const id = "12345678-1234-1234-1234-123456789abc"

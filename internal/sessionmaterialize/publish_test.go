@@ -2,6 +2,7 @@ package sessionmaterialize
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -19,7 +20,9 @@ func TestPublishPreservesExistingFiles(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, created)
 	_, err = publishFiles(t.Context(), []installFile{{p, []byte("other")}})
-	require.ErrorContains(t, err, "destination differs")
+	var differs *DestinationDiffersError
+	require.True(t, errors.As(err, &differs))
+	assert.Equal(t, p, differs.Path)
 	contents, err := os.ReadFile(p)
 	require.NoError(t, err)
 	assert.Equal(t, "first", string(contents))

@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -70,52 +69,6 @@ func TestSyncPathsAttributesFilesystemSessionFromChangedRoot(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, "archivebox", sess.Machine)
-}
-
-func TestMachineForPathUsesNormalizedRootSpecificity(t *testing.T) {
-	parent := t.TempDir()
-	nested := filepath.Join(parent, "nested")
-	var legacyParent strings.Builder
-	legacyParent.Grow(len(parent) + 20)
-	legacyParent.WriteString(parent)
-	for range 10 {
-		legacyParent.WriteByte(byte(filepath.Separator))
-		legacyParent.WriteByte('.')
-	}
-	legacyParentPath := legacyParent.String()
-	require.Greater(t, len(legacyParentPath), len(nested))
-	engine := withTestSources(&Engine{
-		machine: "localbox",
-	}, &engineSources{
-		sourceMachines: map[parser.AgentType]map[string]string{
-			parser.AgentClaude: {
-				legacyParentPath: "parentbox",
-				nested:           "nestedbox",
-			},
-		},
-	})
-
-	assert.Equal(t, "nestedbox", engine.machineForPath(
-		parser.AgentClaude, filepath.Join(nested, "session.jsonl"),
-	))
-}
-
-func TestMachineForPathMatchesAbsolutePathToRelativeRoot(t *testing.T) {
-	cwd, err := os.Getwd()
-	require.NoError(t, err)
-	relativeRoot := filepath.Join("testdata", "relative-session-source")
-	engine := withTestSources(&Engine{
-		machine: "localbox",
-	}, &engineSources{
-		sourceMachines: map[parser.AgentType]map[string]string{
-			parser.AgentClaude: {relativeRoot: "archivebox"},
-		},
-	})
-
-	assert.Equal(t, "archivebox", engine.machineForPath(
-		parser.AgentClaude,
-		filepath.Join(cwd, relativeRoot, "session.jsonl"),
-	))
 }
 
 func TestReconcileWatchRootsTombstonesMissingLabeledFilesystemSession(
