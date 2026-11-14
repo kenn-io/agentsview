@@ -588,8 +588,12 @@ func TestTrendsPartsRecountChangedSessionStart(t *testing.T) {
 	got, err := d.trendsTerms(t.Context(), f, terms, "day")
 	require.NoError(t, err)
 	assert.Equal(t, []TrendPoint{{Date: "2024-06-05", Count: 1}, {Date: "2024-06-06", Count: 0}}, got.Series[0].Points)
-	_, err = d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET started_at = ? WHERE id = ?`, "2024-06-06T09:00:00Z", "s1")
+	session, err := d.GetSession(t.Context(), "s1")
 	require.NoError(t, err)
+	require.NotNil(t, session)
+	start = "2024-06-06T09:00:00Z"
+	session.StartedAt = &start
+	require.NoError(t, d.UpsertSession(t.Context(), *session))
 	var reads [][]string
 	reset := SetTrendPartsReadObserver(func(ids []string) { reads = append(reads, append([]string(nil), ids...)) })
 	t.Cleanup(reset)
