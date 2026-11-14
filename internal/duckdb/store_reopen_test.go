@@ -160,13 +160,17 @@ func TestStoreReadsWhileRowsHeldAcrossReplacement(t *testing.T) {
 
 	store.WatchMirrorReplacement(t.Context(), 20*time.Millisecond, nil)
 	require.NoError(t, swapMirrorFile(next, path))
+	replacementCtx, cancelReplacement := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelReplacement()
 	require.Eventually(t, func() bool {
-		return store.queryRowContext(t.Context(), `SELECT id FROM sessions`).Scan(&id) == nil && id == "new-session"
+		return store.queryRowContext(replacementCtx, `SELECT id FROM sessions`).Scan(&id) == nil && id == "new-session"
 	}, 5*time.Second, 20*time.Millisecond)
 	current, err := store.queryContext(t.Context(), `SELECT id FROM sessions`)
 	require.NoError(t, err)
 	defer current.Close()
-	require.NoError(t, store.queryRowContext(t.Context(), `SELECT id FROM sessions`).Scan(&id))
+	currentReadCtx, cancelCurrentRead := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelCurrentRead()
+	require.NoError(t, store.queryRowContext(currentReadCtx, `SELECT id FROM sessions`).Scan(&id))
 	require.True(t, current.Next())
 	require.NoError(t, current.Scan(&id))
 	require.Equal(t, "new-session", id)
