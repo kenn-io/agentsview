@@ -16,6 +16,7 @@ import (
 )
 
 func TestRawProjectionPiebaldSourceLocalIdentity(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	source, err := sql.Open("sqlite3", filepath.Join(root, parser.PiebaldDBFilename))
 	require.NoError(t, err)

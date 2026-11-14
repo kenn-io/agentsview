@@ -53,7 +53,7 @@ func callParams(name string, args map[string]any) *mcp.CallToolParams {
 	return &mcp.CallToolParams{Name: name, Arguments: args}
 }
 
-func TestNewServer_RegistersTwentyReadOnlyTools(t *testing.T) {
+func TestNewServer_RegistersReadOnlyTools(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	srv := newServer(ServeOptions{
 		Service: service.NewDirectBackend(d, nil, withTestDocbank()),
@@ -62,7 +62,7 @@ func TestNewServer_RegistersTwentyReadOnlyTools(t *testing.T) {
 	require.NotNil(t, srv)
 
 	tools := listCatalog(t, srv)
-	require.Len(t, tools.Tools, 20)
+	require.Len(t, tools.Tools, 21)
 	for _, tl := range tools.Tools {
 		require.NotNil(t, tl.Annotations, "tool %s missing annotations", tl.Name)
 		require.True(t, tl.Annotations.ReadOnlyHint,
@@ -79,7 +79,7 @@ func TestNewServer_MemoryProfileRegistersOnlyEvidenceTools(t *testing.T) {
 	})
 
 	tools := listCatalog(t, srv)
-	require.Len(t, tools.Tools, 3)
+	require.Len(t, tools.Tools, 4)
 	names := make([]string, 0, len(tools.Tools))
 	for _, tool := range tools.Tools {
 		names = append(names, tool.Name)
@@ -91,7 +91,7 @@ func TestNewServer_MemoryProfileRegistersOnlyEvidenceTools(t *testing.T) {
 				"memory-profile tools must not refer to unavailable tools")
 		}
 	}
-	assert.ElementsMatch(t, []string{ToolSearchContent, ToolGetMessages, ToolGetMemoryStatus}, names)
+	assert.ElementsMatch(t, []string{ToolSearchContent, ToolGetMessages, ToolGetMemoryStatus, ToolGetCompactionSummaries}, names)
 }
 
 func TestServer_GetMemoryStatus(t *testing.T) {
@@ -217,7 +217,7 @@ func TestNewServer_OmitsRecallToolForUnsupportedBackend(t *testing.T) {
 	st, ct := newInMemoryPair(t, srv)
 	tools, err := ct.ListTools(t.Context(), nil)
 	require.NoError(t, err)
-	require.Len(t, tools.Tools, 18)
+	require.Len(t, tools.Tools, 19)
 	for _, tool := range tools.Tools {
 		assert.NotEqual(t, ToolQueryRecall, tool.Name)
 	}
@@ -432,4 +432,41 @@ func TestServer_ArchiveFreshnessWarning(t *testing.T) {
 		}
 		assert.Equal(t, value, warning)
 	}
+}
+
+func TestCompactionSummaryTool(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	dbtest.SeedSession(t, d, "codex:session", "project")
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: "codex:session", Role: "assistant", Content: "summary", IsSystem: true, IsCompactBoundary: true}}))
+	srv := newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), Profile: ProfileMemory})
+	st, ct := newInMemoryPair(t, srv)
+	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
+	catalog, err := ct.ListTools(t.Context(), nil)
+	require.NoError(t, err)
+	var minimum *float64
+	for _, tool := range catalog.Tools {
+		if tool.Name == ToolGetCompactionSummaries {
+			raw, err := json.Marshal(tool.InputSchema)
+			require.NoError(t, err)
+			var schema struct {
+				Properties map[string]struct {
+					Minimum *float64 `json:"minimum"`
+				} `json:"properties"`
+			}
+			require.NoError(t, json.Unmarshal(raw, &schema))
+			minimum = schema.Properties["limit"].Minimum
+		}
+	}
+	require.NotNil(t, minimum)
+	assert.InDelta(t, 0, *minimum, 0)
+	result, err := ct.CallTool(t.Context(), callParams(ToolGetCompactionSummaries, map[string]any{"session_id": "session"}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+	raw, err := json.Marshal(result.StructuredContent)
+	require.NoError(t, err)
+	var out service.CompactionSummariesResult
+	require.NoError(t, json.Unmarshal(raw, &out))
+	require.Len(t, out.Summaries, 1)
+	assert.Equal(t, "summary", out.Summaries[0].Content)
+	assert.Equal(t, "codex:session", out.Summaries[0].SessionID)
 }

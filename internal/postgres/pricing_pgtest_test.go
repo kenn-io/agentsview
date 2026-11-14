@@ -18,6 +18,7 @@ import (
 // loadPricingMap must still honor config.CustomModelPricing on that
 // fallback path.
 func TestLoadPricingMapAppliesCustomWhenTableMissing(t *testing.T) {
+	t.Parallel()
 	_, store := prepareUsageSchema(
 		t, "agentsview_pricing_missing_table_test",
 	)

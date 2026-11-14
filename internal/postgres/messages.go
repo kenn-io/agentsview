@@ -91,7 +91,7 @@ func (s *Store) GetMessagesWindow(
 	if w.From != nil {
 		from = *w.From
 	}
-	if w.ObservedRevision == nil && len(w.Roles) == 0 {
+	if w.ObservedRevision == nil && len(w.Roles) == 0 && !w.CompactBoundaryOnly {
 		return s.GetMessages(ctx, sessionID, from, w.Limit, w.Asc)
 	}
 	return s.getMessagesLinear(ctx, sessionID, from, w)
@@ -109,6 +109,9 @@ func (s *Store) getMessagesLinear(
 		dir, op = "DESC", "<="
 	}
 	roleClause, roleArgs := pgRoleFilterClause(w.Roles, 3)
+	if w.CompactBoundaryOnly {
+		roleClause += " AND is_compact_boundary = TRUE"
+	}
 	query := fmt.Sprintf(`
 		SELECT %s, %s
 		FROM messages

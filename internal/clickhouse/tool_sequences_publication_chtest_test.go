@@ -232,7 +232,7 @@ func TestToolSequencesAfterStoredCountUpgrade(t *testing.T) {
 	result, err := newTestSync(t, local, target, storage.PusherOptions{}).Push(ctx, false, nil)
 	require.NoError(t, err)
 	assert.True(t, result.Full)
-	assert.Equal(t, "publishing stored session counts", result.FullReason)
+	assert.Equal(t, "republishing session rows from an older format", result.FullReason)
 	assert.Zero(t, result.Errors)
 	res = get()
 	assert.Equal(t, http.StatusOK, res.Code, res.Body.String())
@@ -247,7 +247,7 @@ func TestToolSequencesAfterStoredCountUpgrade(t *testing.T) {
 	assert.Equal(t, http.StatusNotImplemented, get().Code)
 	result, err = newTestSync(t, local, target, storage.PusherOptions{}).Push(ctx, false, nil)
 	require.NoError(t, err)
-	assert.Equal(t, "publishing stored session counts", result.FullReason)
+	assert.Equal(t, "republishing session rows from an older format", result.FullReason)
 	res = get()
 	assert.Equal(t, http.StatusOK, res.Code, res.Body.String())
 
@@ -256,7 +256,7 @@ func TestToolSequencesAfterStoredCountUpgrade(t *testing.T) {
 	require.NoError(t, err)
 	result, err = newTestSync(t, local, target, storage.PusherOptions{}).Push(ctx, false, nil)
 	require.NoError(t, err)
-	assert.Equal(t, "publishing stored session counts", result.FullReason)
+	assert.Equal(t, "republishing session rows from an older format", result.FullReason)
 	assert.Equal(t, 1, chtest.Count(t, conn, "sessions", "id = ? AND dashboard_facts_version = ?", fixtureBetaID, dashboardFactsVersion))
 
 	// A repair that republishes the unknown row but fails another session's row keeps repairing on the next push,

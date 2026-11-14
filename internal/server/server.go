@@ -19,6 +19,7 @@ import (
 	"strings"
 	gosync "sync"
 	"time"
+	"uuid"
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
@@ -75,7 +76,7 @@ type VersionInfo struct {
 // Bump it when a client-visible contract cannot be decoded safely by an older
 // CLI or daemon.
 const (
-	APIVersion = 15
+	APIVersion = 21
 	// KataAPIVersion is the first daemon API that serves /api/v1/kata/status.
 	KataAPIVersion = 14
 	// FrictionAPIVersion is the first daemon API that serves
@@ -106,6 +107,7 @@ const (
 
 // Server is the HTTP server that serves the SPA and REST API.
 type Server struct {
+	instanceID           uuid.UUID
 	modelGroups          service.ModelGroups
 	mu                   gosync.RWMutex
 	cfg                  config.Config
@@ -165,9 +167,11 @@ type Server struct {
 	// (e.g. "/agentsview"). When set, all routes are served
 	// under this prefix and a <base href> tag is injected
 	// into the SPA's index.html.
-	basePath      string
-	idle          *IdleTracker
-	persistDaemon func() error
+	basePath                       string
+	idle                           *IdleTracker
+	persistDaemon                  func() error
+	projectIdentityBackfillFailure func() string
+	restartDaemon                  func(context.Context, config.Config) error
 
 	ingestionFreshness IngestionFreshness
 
@@ -302,6 +306,7 @@ func New(
 	}
 
 	s := &Server{
+		instanceID:                uuid.New(),
 		cfg:                       cfg,
 		modelGroups:               modelGroups,
 		activeDisabledAgents:      append([]parser.AgentType(nil), cfg.DisabledAgents...),
@@ -659,6 +664,11 @@ type IngestionFreshness interface {
 // WithIngestionFreshness waits for local ingestion before archive operations.
 func WithIngestionFreshness(f IngestionFreshness) Option {
 	return func(s *Server) { s.ingestionFreshness = f }
+}
+
+// WithProjectIdentityBackfillFailure reports worker failures independently of the archive.
+func WithProjectIdentityBackfillFailure(f func() string) Option {
+	return func(s *Server) { s.projectIdentityBackfillFailure = f }
 }
 
 func WithIdleTracker(t *IdleTracker) Option {
@@ -1026,7 +1036,7 @@ func (s *Server) archiveStaleMiddleware(next http.Handler) http.Handler {
 			probe := archiveFreshnessProbe(r.URL.Path)
 			pending := false
 			if !probe && s.ingestionFreshness != nil &&
-				(r.Method != http.MethodPost || (r.URL.Path != "/api/v1/resync" && (r.URL.Path != "/api/v1/sync" || !archiveWriteRequest(r)))) {
+				(r.Method != http.MethodPost || (r.URL.Path != "/api/v1/daemon/restart" && r.URL.Path != "/api/v1/resync" && (r.URL.Path != "/api/v1/sync" || !archiveWriteRequest(r)))) {
 				pending = !s.ingestionFreshness.EnsureFresh(r.Context())
 			}
 			if !probe && (s.archiveStale() || pending) {
@@ -1062,7 +1072,7 @@ func archiveWriteRequest(r *http.Request) bool {
 		return !startupOnly
 	case "/api/v1/recall/import":
 		return r.URL.Query().Get("dry_run") != "true"
-	case "/api/v1/daemon/persist", "/api/v1/settings", "/api/v1/recall/query", "/api/v1/commits/sessions", "/api/v1/settings/worktree-mappings/preview", "/api/v1/data/strip-images/preview", "/api/v1/memory/refresh", "/api/v1/raw-sync/tokens":
+	case "/api/v1/daemon/persist", "/api/v1/daemon/restart", "/api/v1/settings", "/api/v1/recall/query", "/api/v1/commits/sessions", "/api/v1/settings/worktree-mappings/preview", "/api/v1/data/strip-images/preview", "/api/v1/memory/refresh", "/api/v1/raw-sync/tokens":
 		return false
 	}
 	for _, prefix := range []string{"/api/v1/config/", "/api/v1/telemetry/", "/api/v1/remote-sync/", "/api/v1/embeddings/", "/api/v1/raw-sync/uploads", "/api/v1/import/claude-ai/sync/results/"} {
@@ -1560,7 +1570,13 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 	if srv != nil {
 		shutdownCount++
-		go func() { shutdownErrors <- srv.Shutdown(ctx) }()
+		go func() {
+			err := srv.Shutdown(ctx)
+			if err != nil {
+				err = errors.Join(err, srv.Close())
+			}
+			shutdownErrors <- err
+		}()
 	}
 	for range shutdownCount {
 		err = errors.Join(err, <-shutdownErrors)
@@ -1585,13 +1601,14 @@ func (s *Server) Shutdown(ctx context.Context) error {
 // binding to the specified host. It returns an error instead of reusing an
 // occupied port when the candidate range is exhausted.
 func FindAvailablePort(ctx context.Context, host string, start int) (int, error) {
-	return findAvailablePort(ctx, host, start, selectEphemeralPort)
+	return findAvailablePort(ctx, host, start, selectEphemeralPort, listenProbesFree)
 }
 
 func findAvailablePort(ctx context.Context,
 	host string,
 	start int,
 	selectEphemeral func(context.Context, string) (int, error),
+	portFree func(context.Context, []listenProbe, int) bool,
 ) (int, error) {
 	if start == 0 {
 		if !isWildcardListenHost(host) {
@@ -1603,7 +1620,7 @@ func findAvailablePort(ctx context.Context,
 			if err != nil {
 				return 0, err
 			}
-			if listenProbesFree(ctx, probes, port) {
+			if portFree(ctx, probes, port) {
 				return port, nil
 			}
 		}
@@ -1615,7 +1632,7 @@ func findAvailablePort(ctx context.Context,
 	probes := listenProbes(ctx, host)
 	last := min(start+99, 65535)
 	for port := start; port <= last; port++ {
-		if listenProbesFree(ctx, probes, port) {
+		if portFree(ctx, probes, port) {
 			return port, nil
 		}
 	}
@@ -1859,4 +1876,9 @@ func WithRawSyncTenant(tenant string) Option { return func(s *Server) { s.rawSyn
 // WithDaemonPersistence installs the writable local daemon's lifetime publisher.
 func WithDaemonPersistence(publish func() error) Option {
 	return func(s *Server) { s.persistDaemon = publish }
+}
+
+// WithDaemonRestart installs the background daemon's restart launcher.
+func WithDaemonRestart(restart func(context.Context, config.Config) error) Option {
+	return func(s *Server) { s.restartDaemon = restart }
 }

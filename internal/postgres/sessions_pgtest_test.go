@@ -14,7 +14,8 @@ import (
 )
 
 func TestGetActiveProjectLabelsIncludesRelationshipSessions(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	store, err := NewStore(t.Context(), pgURL, testSchema, true)
@@ -42,7 +43,8 @@ func TestGetActiveProjectLabelsIncludesRelationshipSessions(t *testing.T) {
 }
 
 func TestSessionFilterIncludesEmptyForProjectMapping(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err)
@@ -69,7 +71,8 @@ func TestSessionFilterIncludesEmptyForProjectMapping(t *testing.T) {
 }
 
 func TestListSessionsDateFilterIncludesOverlappingSessions(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	store, err := NewStore(t.Context(), pgURL, testSchema, true)
@@ -146,7 +149,8 @@ func TestListSessionsDateFilterIncludesOverlappingSessions(t *testing.T) {
 // TestListSessions_HasSecret verifies that the HasSecret filter
 // returns only sessions where secret_leak_count > 0.
 func TestListSessions_HasSecret(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	store, err := NewStore(t.Context(), pgURL, testSchema, true)
@@ -230,7 +234,8 @@ func TestListSessions_HasSecret(t *testing.T) {
 // correctly on PostgreSQL (numbered placeholders, ::bigint cast). Scoped to a
 // unique project so the schema's seed session does not interfere.
 func TestListSessions_Sort(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	store, err := NewStore(t.Context(), pgURL, testSchema, true)
@@ -289,7 +294,8 @@ func TestListSessions_Sort(t *testing.T) {
 // ::timestamptz casts on the equality and comparison clauses. The paginated walk
 // must match the full listing.
 func TestListSessions_SortMultiKey(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	store, err := NewStore(t.Context(), pgURL, testSchema, true)
@@ -355,7 +361,8 @@ func TestListSessions_SortMultiKey(t *testing.T) {
 // renders on PostgreSQL, where the gating CASE places numbered placeholders
 // inside both ORDER BY and the keyset cursor predicate.
 func TestListSessions_SortSecretsVersioned(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	store, err := NewStore(t.Context(), pgURL, testSchema, true)
@@ -429,7 +436,8 @@ func TestListSessions_SortSecretsVersioned(t *testing.T) {
 // TestListSessions_SortNullsLast verifies a nullable sort (health) places NULL
 // rows last on PostgreSQL and paginates across the sentinel boundary.
 func TestListSessions_SortNullsLast(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	store, err := NewStore(t.Context(), pgURL, testSchema, true)
@@ -471,6 +479,7 @@ func TestListSessions_SortNullsLast(t *testing.T) {
 }
 
 func TestFindSessionIDsByPartialLiteralCaseSensitivePG(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	const schema = "agentsview_partial_lookup_test"
 
@@ -517,6 +526,7 @@ func TestFindSessionIDsByPartialLiteralCaseSensitivePG(t *testing.T) {
 }
 
 func TestFindSessionIDsByRawSuffixPG(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	const schema = "agentsview_raw_suffix_test"
 
@@ -585,7 +595,8 @@ func TestFindSessionIDsByRawSuffixPG(t *testing.T) {
 }
 
 func TestGetMatchingMachineIDs(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err)

@@ -34,6 +34,15 @@ func NewWatchBatchAccumulator(
 }
 
 func (a *WatchBatchAccumulator) Add(batch WatchBatch) {
+	prepared := batch.preparedRecovery
+	if !a.pending.Empty() && a.pending.preparedRecovery != prepared {
+		prepared = nil
+	}
+	defer func() {
+		if !a.pending.fullSync {
+			a.pending.preparedRecovery = prepared
+		}
+	}()
 	if a.pending.fullSync {
 		a.pending.lostEvents = a.pending.lostEvents || batch.LostEvents
 		return

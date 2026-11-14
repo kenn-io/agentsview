@@ -431,7 +431,7 @@ Each session item shows:
   from other machines show a machine name tag. Only visible in shared multi-host
   deployments.
 - **Project name** — abbreviated, right-aligned
-- **Relative time** — "2h ago", "Mon", "Dec 1"
+- **Session time** — relative time such as "2h ago", or the date and time with the year when **Always show year** is on
 - **User prompt count** — number of user messages in the session
 
 Antigravity sessions show the conversation title Antigravity saves in
@@ -703,9 +703,10 @@ agents still collapses to its prompts and final answers.
 
 ![Focused transcript mode](/docs/assets/generated/screenshots/focused-transcript.png)
 
-Toggle between Normal and Focused mode using the transcript mode button in the
-session header. The header adjusts responsively to fit the available space. The
-mode preference is saved in localStorage.
+Switch between Normal and Focused mode in the **Transcript view** menu in the
+session header: under **Content**, choose **All messages and tool calls** or
+**Only your prompts and final answers**. The mode preference is saved in
+localStorage.
 
 ### Message Display
 
@@ -1074,6 +1075,9 @@ Search in one of three modes:
 The palette remembers the last mode you selected across openings and browser
 sessions. Results update after a 300ms typing pause.
 
+The palette automatically retries a transient Full text search failure once. If
+the search still fails, select **Retry** to try again.
+
 !!! tip
 
     For deeper searches across full transcripts — including thinking, tool inputs, tool result
@@ -1269,13 +1273,33 @@ Then attach `session-context.md` to another agent run or paste its contents into
 a prompt so the next agent can inspect the full session tree without opening the
 AgentsView UI.
 
+### Secrets in exports
+
+The HTML and Markdown exports mask detected secrets, such as API keys, tokens
+and private keys. They use the same detector and masked form as search results,
+for example `AKIA…PLJM` for an AWS access key. Message text, thinking text, and
+tool input and output are all masked. Detection is best-effort; see
+[SECURITY.md](https://github.com/kenn-io/agentsview/blob/main/SECURITY.md#secrets-subsystem)
+for its limits.
+
+To export the stored text unchanged, add `reveal=true`:
+
+```bash
+curl "http://127.0.0.1:8080/api/v1/sessions/<session-id>/md?depth=all&reveal=true" \
+  -o session-context.md
+```
+
+Only a request made directly from localhost may use `reveal`. A remote or
+proxied request that asks for it gets HTTP 403, the same rule as revealing
+secrets in search and the secrets list.
+
 ______________________________________________________________________
 
 ## Publish to Gist
 
-Press `p` or click the publish button to share a session via GitHub Gist. As of
-0.33.0, the publish button is a dropdown with two entries: **Publish public
-Gist** and **Publish secret Gist**. The `p` shortcut publishes publicly.
+Press `p` or open the **More actions** menu in the header to share a session via
+GitHub Gist. The menu has two entries: **Publish public Gist** and **Publish
+secret Gist**. The `p` shortcut publishes publicly.
 
 ![Publish modal](/docs/assets/generated/screenshots/publish-modal.png)
 
@@ -1304,6 +1328,11 @@ After publishing, the modal shows two URLs:
 - **Gist URL** — direct GitHub link
 
 Both have copy buttons and an "Open in Browser" action.
+
+The published gist masks detected secrets in the transcript and in the gist
+description, the same way as [session export](#secrets-in-exports). The publish
+endpoint, `POST /api/v1/sessions/{id}/publish`, accepts the same
+localhost-only `reveal=true` parameter; the UI does not use it.
 
 ______________________________________________________________________
 
@@ -1365,7 +1394,7 @@ organized into sections:
 | Section            | What You Can Configure                                                                                   |
 | ------------------ | -------------------------------------------------------------------------------------------------------- |
 | Language           | Interface language (Azerbaijani, English, French, Japanese, Korean, Spanish, Simplified Chinese, or Traditional Chinese)       |
-| Appearance         | Theme (light/dark), high-contrast mode, chart colors, message colors, message layout, zoom, block visibility |
+| Appearance         | Theme (light/dark), high-contrast mode, chart colors, message colors, message layout, zoom, always show year, block visibility |
 | Date ranges        | Browser-local checkbox for linking date selections across Sessions, Usage, Activity, Trends, and Quality |
 | Session Providers  | Enable session providers, inspect their session directories, and add alternate agent homes               |
 | Tool-result images | Choose whether future imports keep, drop, or offload tool-result images; preview and remove images already stored |

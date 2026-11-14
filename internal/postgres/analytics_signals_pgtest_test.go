@@ -19,6 +19,7 @@ import (
 // confirm the aggregated response matches what the SQLite
 // implementation would have produced over the same data.
 func TestStoreGetAnalyticsSignals(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
@@ -105,6 +106,7 @@ func TestStoreGetAnalyticsSignals(t *testing.T) {
 func TestStoreGetAnalyticsSignalSessionsModelFilterUsesMatchingMessages(
 	t *testing.T,
 ) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })

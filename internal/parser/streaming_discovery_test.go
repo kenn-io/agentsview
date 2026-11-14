@@ -12,6 +12,47 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestIncompleteDiscoveryScopesRequireCompleteFailureCoverage(t *testing.T) {
+	root := t.TempDir()
+	scope := DiscoveryScope{Root: root, Path: filepath.Join(root, "unavailable"), Subtree: true}
+	localised := incompleteDiscoveryScope(AgentType("filesystem"), scope, "read subtree", os.ErrNotExist)
+	opaque := errors.New("archive writer failed")
+	var excessive []error
+	for i := range 257 {
+		excessive = append(excessive, incompleteDiscoveryScope(AgentType("filesystem"), DiscoveryScope{
+			Root: root, Path: filepath.Join(root, fmt.Sprintf("missing-%d", i)), Subtree: true,
+		}, "read subtree", os.ErrNotExist))
+	}
+	for _, tc := range []struct {
+		name string
+		err  error
+		want []DiscoveryScope
+	}{
+		{name: "localised", err: localised, want: []DiscoveryScope{scope}},
+		{name: "wrapped", err: fmt.Errorf("discovery: %w", localised), want: []DiscoveryScope{scope}},
+		{name: "duplicate", err: errors.Join(localised, localised), want: []DiscoveryScope{scope}},
+		{name: "opaque", err: opaque},
+		{name: "mixed", err: errors.Join(localised, opaque)},
+		{name: "wrapped mixed", err: fmt.Errorf("discovery: %w", errors.Join(localised, opaque))},
+		{name: "canceled", err: errors.Join(localised, context.Canceled)},
+		{name: "too many scopes", err: errors.Join(excessive...)},
+		{name: "outside root", err: incompleteDiscoveryScope(AgentType("filesystem"), DiscoveryScope{
+			Root: root, Path: filepath.Join(root, "..", "outside"), Subtree: true,
+		}, "read subtree", os.ErrNotExist)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scopes, complete := IncompleteDiscoveryScopes(tc.err)
+			assert.Equal(t, struct {
+				Scopes   []DiscoveryScope
+				Complete bool
+			}{tc.want, len(tc.want) > 0}, struct {
+				Scopes   []DiscoveryScope
+				Complete bool
+			}{scopes, complete})
+		})
+	}
+}
+
 func TestStreamDirectoryTreeContinuesAfterUnreadableSubtree(t *testing.T) {
 	root := t.TempDir()
 	nested := filepath.Join(root, "a-nested")

@@ -42,7 +42,7 @@ func (s *Store) scanUserBoundaryOrdinals(
 		WITH spans AS (` + strings.Join(parts, " UNION ALL ") + `)
 		SELECT sp.idx, m.ordinal
 		FROM spans sp JOIN messages m ON m.session_id = sp.session_id
-		WHERE ` + clickhouseEmbeddableUserSQL("m")
+		WHERE ` + clickhouseEmbeddableUserSQL("m") + systemPrefixSettings
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("querying clickhouse nearest user boundaries: %w", err)
@@ -290,7 +290,7 @@ func (s *Store) lookupAnchorMetaChunk(
 		`, true, false)
 		FROM refs r
 		JOIN sessions s ON s.id = r.session_id
-		LEFT JOIN messages m ON m.session_id = r.session_id AND m.ordinal = r.ordinal`
+		LEFT JOIN messages m ON m.session_id = r.session_id AND m.ordinal = r.ordinal` + systemPrefixSettings
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("looking up clickhouse match anchors: %w", err)

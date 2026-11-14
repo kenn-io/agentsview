@@ -1,0 +1,3 @@
+{"id":"tc-123","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}
+{"role":"user","content":[{"type":"text","text":"Read the file."}]}
+{"role":"assistant","content":[{"type":"reasoning","text":"Let me think about this.","provider":"anthropic","subtype":"thinking"},{"type":"text","text":"I will read it now."},{"type":"tool-call","toolCallId":"tc1","toolName":"Read","input":{"file_path":"main.go"}}]}

@@ -269,8 +269,8 @@ These defaults have costs:
 - **A hung server takes a long time to fail.** The 5-minute timeout applies to
   each attempt, and retries and batch splits add attempts. A search makes up
   to `max_retries` attempts, 3 by default, so it can wait about 15 minutes. A
-  build halves a batch of 8 three times and then retries the single input, so
-  it can wait about 30 minutes before it reports the failure.
+  build also halves a batch of 8 three times before it reaches a single input,
+  so it can wait about half an hour before it reports the failure.
 - **CPU builds are slow.** The first build of a large archive on Kit's server
   can take hours. Later builds embed only new or changed content. A
   [remote server](#named-embeddings-servers) with a GPU can run the first
@@ -289,14 +289,12 @@ timeout = "10m"
 
 #### Timeouts during a build
 
-When a document build request of several inputs times out, AgentsView retries it
-at once as two requests of half the size, and keeps halving while requests time
-out. Each split costs one full timeout first. Kit's server stops work on an
-abandoned request after its current input. A single input that times out fails
-the build with
-`embed request failed: no response within the <timeout> request timeout`, and
-the next build retries it. If builds keep logging
-`embed request for N inputs timed out`, raise `timeout` or lower `batch_size`.
+When a request of several inputs times out, Kit's client retries it as two
+requests of half the size, and keeps halving while requests time out. Each split
+costs one full timeout first. Kit's server stops work on an abandoned request
+after its current input. A single input that times out fails the build with
+`embed request timed out`, and the next build retries it. If builds keep
+failing this way, raise `timeout` or lower `batch_size`.
 
 ### Role-aware task prefixes
 

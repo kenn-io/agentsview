@@ -1,7 +1,8 @@
 import { debounce } from "@kenn-io/kit-ui";
 import { SearchService } from "../api/generated/index.js";
-import { ApiError, isAbortError } from "../api/runtime.js";
+import { ApiError, getServerUrl, isAbortError, isTransient } from "../api/runtime.js";
 import type { DbSearchResult as SearchResult } from "../api/generated/index.js";
+import type { GetApiV1SearchParams } from "../api/generated/models/getApiV1SearchParams.js";
 import { resolveRange, type RangeSelection } from "../components/shared/rangeSelection.js";
 import { reportErrorShown, reportTelemetry } from "../utils/telemetry.js";
 
@@ -19,6 +20,13 @@ export interface PaletteSearchResult {
   snippet: string;
   rank: number;
   snippetFormat: SnippetFormat;
+}
+
+/** The palette's state when it closed on a picked result. */
+export interface RetainedSearch {
+  query: string;
+  project: string;
+  selectedIndex: number;
 }
 
 export interface SearchFailure {
@@ -125,6 +133,19 @@ function failureKind(
   return isTimeoutDetail(detail) ? "timeout" : "generic";
 }
 
+/** Retries one transient failure, unless another tab selected a different server meanwhile. */
+async function searchFullText(params: GetApiV1SearchParams, signal: AbortSignal) {
+  const server = getServerUrl();
+  try {
+    return await SearchService.getApiV1Search(params, { signal });
+  } catch (error: unknown) {
+    if ((error instanceof ApiError && error.status === 501) || !isTransient(error)) throw error;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    if (getServerUrl() !== server) throw error;
+    return SearchService.getApiV1Search(params, { signal });
+  }
+}
+
 export class SearchStore {
   query: string = $state("");
   project: string = $state("");
@@ -142,8 +163,15 @@ export class SearchStore {
   private storage: SearchModeStorage | null;
   private abortController: AbortController | null = null;
   private requestVersion = 0;
+  // A query waiting out the debounce, which has no request in flight yet.
+  private queued = false;
+  // Set by retain() and taken by the next palette open through restore().
+  private retained: RetainedSearch | null = null;
+  // The retained results belong to an earlier query than the retained one.
+  private retainedStale = false;
 
   private debouncedSearch = debounce((query: string, project: string) => {
+    this.queued = false;
     void this.executeSearch(query, project);
   }, SEARCH_DEBOUNCE_MS);
 
@@ -158,13 +186,15 @@ export class SearchStore {
 
     this.cancelInFlight();
     if (!query.trim()) {
-      this.debouncedSearch.cancel();
+      this.cancelQueued();
       this.results = [];
       this.error = null;
       this.isSearching = false;
       return;
     }
 
+    this.queued = true;
+    this.isSearching = true;
     this.debouncedSearch(query, this.project);
   }
 
@@ -177,7 +207,7 @@ export class SearchStore {
       // Storage can be disabled; the in-memory preference still applies.
     }
 
-    this.debouncedSearch.cancel();
+    this.cancelQueued();
     this.cancelInFlight();
     if (this.query.trim()) {
       void this.executeSearch(this.query, this.project);
@@ -187,7 +217,7 @@ export class SearchStore {
   setSort(sort: SearchSort) {
     this.sort = sort;
     if (this.query.trim()) {
-      this.debouncedSearch.cancel();
+      this.cancelQueued();
       this.cancelInFlight();
       void this.executeSearch(this.query, this.project);
     }
@@ -195,14 +225,14 @@ export class SearchStore {
 
   retry() {
     if (!this.query.trim() || !this.error) return;
-    this.debouncedSearch.cancel();
+    this.cancelQueued();
     this.cancelInFlight();
     void this.executeSearch(this.query, this.project);
   }
 
   setRange(range: RangeSelection) {
     this.range = range;
-    this.debouncedSearch.cancel();
+    this.cancelQueued();
     this.cancelInFlight();
     if (this.query.trim()) {
       void this.executeSearch(this.query, this.project);
@@ -218,8 +248,44 @@ export class SearchStore {
     this.results = [];
     this.error = null;
     this.isSearching = false;
-    this.debouncedSearch.cancel();
+    this.retained = null;
+    this.retainedStale = false;
+    this.cancelQueued();
     this.cancelInFlight();
+  }
+
+  /**
+   * Keeps the query, project, sort, range and results for the next palette
+   * open, so a picked result that turns out wrong is one Cmd+K away from the
+   * list it came from. The palette calls this instead of clear() when it
+   * closes on a picked result.
+   */
+  retain(search: RetainedSearch) {
+    this.retainedStale = this.queued || this.isSearching;
+    this.cancelQueued();
+    this.cancelInFlight();
+    this.isSearching = false;
+    this.query = search.query;
+    this.project = search.project;
+    this.retained = search;
+  }
+
+  /**
+   * Hands the retained search to a new palette open, once. Returns null when
+   * nothing was retained. When the retained results predate the query, the
+   * query runs again and the selection starts from the top.
+   */
+  restore(): RetainedSearch | null {
+    const search = this.retained;
+    const stale = this.retainedStale;
+    this.retained = null;
+    this.retainedStale = false;
+    if (search === null) return null;
+    if (stale && this.query.trim()) {
+      void this.executeSearch(this.query, this.project);
+      return { ...search, selectedIndex: 0 };
+    }
+    return search;
   }
 
   resetSort() {
@@ -231,6 +297,11 @@ export class SearchStore {
     if (this.endedEmpty) reportTelemetry("search_empty");
     this.endedEmpty = false;
     this.reportedModes.clear();
+  }
+
+  private cancelQueued() {
+    this.queued = false;
+    this.debouncedSearch.cancel();
   }
 
   private cancelInFlight() {
@@ -262,16 +333,14 @@ export class SearchStore {
     try {
       let results: PaletteSearchResult[];
       if (mode === "fulltext") {
-        const response = await SearchService.getApiV1Search(
-          {
-            q: query,
-            project: project || undefined,
-            limit: PALETTE_RESULT_LIMIT,
-            sort: this.sort,
-            ...dates,
-          },
-          { signal },
-        );
+        const params = {
+          q: query,
+          project: project || undefined,
+          limit: PALETTE_RESULT_LIMIT,
+          sort: this.sort,
+          ...dates,
+        };
+        const response = await searchFullText(params, signal);
         results = normalizeFullText(response.results ?? []);
       } else {
         const response = await SearchService.getApiV1SearchContent(

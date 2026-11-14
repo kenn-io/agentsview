@@ -38,12 +38,15 @@ func SupportsRecallQueries(svc SessionService) bool {
 // window vs. linear pagination) cannot both be requested. The HTTP handler
 // maps it to a 400 response.
 var ErrAroundMutuallyExclusive = errors.New(
-	"around is mutually exclusive with from/direction",
+	"around is mutually exclusive with from/direction/compact_boundary",
 )
 
 // ErrBeforeAfterRequireAround is returned by Messages when Before or After
 // is set without Around. The HTTP handler maps it to a 400 response.
 var ErrBeforeAfterRequireAround = errors.New("before/after require around")
+
+// CompactionAPIVersion is the first daemon version with flat session reads.
+const CompactionAPIVersion = 20
 
 // ErrSemanticUnavailable is returned by SearchContent for modes
 // "semantic" and hybrid requests without keyword fallback when the backing
@@ -435,6 +438,8 @@ type ListFilter struct {
 	ExclusionCounts *bool `json:"exclusion_counts,omitempty"`
 	// IDs selects explicit sessions and their host copies; nil uses discovery defaults.
 	IDs []string `json:"ids,omitzero"`
+	// Flat matches child sessions individually when IncludeChildren is set.
+	Flat bool `json:"flat,omitempty"`
 
 	Project            string `json:"project,omitempty"`
 	ExcludeProject     string `json:"exclude_project,omitempty"`
@@ -509,6 +514,8 @@ type MessageFilter struct {
 	// read. It prevents a continuation cursor from being replayed against a
 	// different archive/server instance.
 	EvidenceSource string `json:"evidence_source,omitempty"`
+	// CompactBoundaryOnly limits linear reads to compact-boundary rows.
+	CompactBoundaryOnly bool `json:"compact_boundary,omitempty"`
 }
 
 // MessageList mirrors {messages, count}. FirstOrdinal/LastOrdinal report the

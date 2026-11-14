@@ -15,6 +15,7 @@ import (
 )
 
 func TestRawResumableUploadEndToEnd(t *testing.T) {
+	t.Parallel()
 	pg, dataDir := newRawUploadTestDatabase(t)
 	repository, err := artifact.OpenRepository(t.Context(), dataDir)
 	require.NoError(t, err)

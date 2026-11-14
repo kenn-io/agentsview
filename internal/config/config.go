@@ -35,6 +35,7 @@ import (
 	"go.kenn.io/agentsview/internal/pathutil"
 	"go.kenn.io/kit/atomicfile"
 	"go.kenn.io/kit/embedconfig"
+	"go.kenn.io/kit/embedlocal"
 )
 
 // TerminalConfig holds terminal launch preferences.
@@ -383,9 +384,9 @@ const (
 // where one full-context input can take seconds, so a request carries fewer
 // inputs, builds send one request at a time, and each request may run longer.
 const (
-	defaultBuiltinEmbeddingsBatchSize   = 8
+	defaultBuiltinEmbeddingsBatchSize   = embedlocal.BatchItems
 	defaultBuiltinEmbeddingsConcurrency = 1
-	defaultBuiltinEmbeddingsTimeout     = "5m"
+	defaultBuiltinEmbeddingsTimeout     = embedlocal.RequestTimeout
 )
 
 // normalizedEmbeddingsServers fills each named server's unset transport
@@ -407,7 +408,7 @@ func normalizedEmbeddingsServers(
 		if s.Endpoint == "" {
 			batchSize = defaultBuiltinEmbeddingsBatchSize
 			concurrency = defaultBuiltinEmbeddingsConcurrency
-			timeout = defaultBuiltinEmbeddingsTimeout
+			timeout = defaultBuiltinEmbeddingsTimeout.String()
 		}
 		if !meta.IsDefined("vector", "embeddings", "servers", name, "batch_size") {
 			s.BatchSize = batchSize
@@ -1229,6 +1230,8 @@ type Config struct {
 	HostExplicit bool `json:"-" toml:"-"`
 	// PortExplicit is true when the user passed --port on the CLI.
 	PortExplicit bool `json:"-" toml:"-"`
+	// AuthSettingsSaved records that Settings owns authentication for this lifetime.
+	AuthSettingsSaved bool `json:"-" toml:"-"`
 
 	// DeploymentEmbeddings is the embedding transport from deployment env,
 	// set only without a [vector] section.
@@ -1616,6 +1619,22 @@ func Load(fs *flag.FlagSet) (Config, error) {
 // LoadPFlags builds a Config from a parsed Cobra/pflag FlagSet.
 func LoadPFlags(fs *pflag.FlagSet) (Config, error) {
 	return LoadPFlagsFor(fs, 0)
+}
+
+// LoadSettingsRestartConfig keeps a successful Settings auth save authoritative
+// across Settings restarts while reading later edits to the saved config.
+func LoadSettingsRestartConfig(current Config, fs *pflag.FlagSet) (Config, error) {
+	cfg, err := LoadPFlags(fs)
+	if err != nil || !current.AuthSettingsSaved {
+		return cfg, err
+	}
+	saved, err := loadReadOnlyFor(ScopeLocal, current.DataDir)
+	if err != nil {
+		return cfg, err
+	}
+	cfg.RequireAuth = saved.RequireAuth
+	cfg.AuthSettingsSaved = true
+	return cfg, nil
 }
 
 // LoadPFlagsFor loads a command's config, warning about invalid unused sections.
@@ -2754,7 +2773,7 @@ func RegisterServeFlags(fs *flag.FlagSet) {
 	)
 	fs.Duration(
 		"write-timeout", 30*time.Second,
-		"Max time to write an API response before a 503 request-timed-out; raise for slow aggregates over large datasets (0 disables)",
+		"Max API response time before a 503 (0 disables); some long-running routes are exempt",
 	)
 }
 
@@ -2822,7 +2841,7 @@ func RegisterServePFlags(fs *pflag.FlagSet) {
 	)
 	fs.Duration(
 		"write-timeout", 30*time.Second,
-		"Max time to write an API response before a 503 request-timed-out; raise for slow aggregates over large datasets (0 disables)",
+		"Max API response time before a 503 (0 disables); some long-running routes are exempt",
 	)
 }
 
@@ -4115,6 +4134,7 @@ func (c *Config) SaveSettings(patch map[string]any) error {
 		if v, ok := patch["require_auth"]; ok {
 			if b, ok := v.(bool); ok {
 				c.RequireAuth = b
+				c.AuthSettingsSaved = true
 			}
 		}
 		if v, ok := patch["chart_palette"]; ok {
@@ -4246,6 +4266,78 @@ func (c *Config) VectorSetupEmbeddings() (VectorEmbeddingsConfig, error) {
 		return err
 	})
 	return embeddings, err
+}
+
+// VectorExplicitlyDisabled reports a saved opt-out.
+func (c *Config) VectorExplicitlyDisabled() (bool, error) {
+	existing, err := c.readConfigMap()
+	if err != nil {
+		return false, err
+	}
+	section, _ := existing["vector"].(map[string]any)
+	enabled, ok := section["enabled"].(bool)
+	return ok && !enabled, nil
+}
+
+// SharedVectorSetup returns an in-memory setup when the current settings permit it.
+func (c *Config) SharedVectorSetup() (Config, bool, error) {
+	var candidate Config
+	eligible := false
+	err := c.withConfigLock(func() error {
+		existing, err := c.readConfigMap()
+		if err != nil {
+			return err
+		}
+		if c.Vector.Embeddings.Servers != nil || c.Vector.Embeddings.DefaultServer != "" || (c.Vector.Embeddings.Model != "" && c.Vector.Embeddings.Model != defaultNomicModel) {
+			return nil
+		}
+		section, _ := existing["vector"].(map[string]any)
+		if enabled, ok := section["enabled"].(bool); ok && !enabled {
+			return nil
+		}
+		embeddings, _ := section["embeddings"].(map[string]any)
+		if model, _ := embeddings["model"].(string); model != "" && model != defaultNomicModel {
+			return nil
+		}
+		if _, ok := embeddings["servers"]; ok {
+			return nil
+		}
+		if _, ok := embeddings["default_server"]; ok {
+			return nil
+		}
+		pg, err := c.ResolvePGTargets()
+		if err != nil {
+			return err
+		}
+		for _, target := range pg {
+			if target.Config.URL != "" && target.Config.PushVectorsEnabled() {
+				return nil
+			}
+		}
+		ch, err := c.ResolveClickHouseTargets()
+		if err != nil {
+			return err
+		}
+		for _, target := range ch {
+			if target.Config.URL != "" && target.Config.PushVectorsEnabled() {
+				return nil
+			}
+		}
+		_, candidate, err = c.vectorSetupCandidate()
+		if err != nil {
+			return err
+		}
+		candidate.Vector.DBPath = c.Vector.DBPath
+		name, server, err := candidate.Vector.Embeddings.Server("")
+		if err != nil {
+			return err
+		}
+		server.Local = true
+		candidate.Vector.Embeddings.Servers = map[string]VectorEmbeddingsServerConfig{name: server}
+		eligible = true
+		return nil
+	})
+	return candidate, eligible, err
 }
 
 // SaveVectorSetup records the selected action while keeping omitted defaults omitted.

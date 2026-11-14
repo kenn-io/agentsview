@@ -5,7 +5,7 @@ import { parseContent } from "../utils/content-parser.js";
 import type { Session } from "../api/types.js";
 import type { DbMessage as Message } from "../api/generated/index.js";
 import type { ServiceMessageList as MessagesResponse } from "../api/generated/index.js";
-import { ApiError } from "../api/runtime.js";
+import { ApiError, TransportError } from "../api/runtime.js";
 
 const api = vi.hoisted(() => ({
   getMessages: vi.fn(),
@@ -16,15 +16,8 @@ const runtimeMocks = vi.hoisted(() => ({
   signals: [] as AbortSignal[],
 }));
 
-vi.mock("../api/runtime.js", () => ({
-  ApiError: class ApiError extends Error {
-    constructor(
-      public readonly status: number,
-      message: string,
-    ) {
-      super(message);
-    }
-  },
+vi.mock("../api/runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../api/runtime.js")>()),
   isAbortError: (err: unknown) => {
     if (err instanceof DOMException && err.name === "AbortError") {
       return true;
@@ -315,7 +308,7 @@ describe("MessagesStore", () => {
             .mockRejectedValueOnce(new ApiError(503, "unavailable"))
             .mockResolvedValue(makeSession("s1", 2));
           vi.mocked(api.getMessages)
-            .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+            .mockRejectedValueOnce(new TransportError(new TypeError("Failed to fetch")))
             .mockResolvedValue(makeMessagesResponse([makeMessage(0), makeMessage(1)]));
         }
         const reload = messages.reload();

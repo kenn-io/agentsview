@@ -70,7 +70,11 @@ func (s *Store) DB() *sql.DB {
 // Close closes the underlying database connection.
 func (s *Store) Close() error {
 	if pool := s.DB(); pool != nil {
-		return pool.Close()
+		var cacheErr error
+		if s.usageCache != nil {
+			cacheErr = s.usageCache.Close()
+		}
+		return errors.Join(cacheErr, pool.Close())
 	}
 	return nil
 }

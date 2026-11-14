@@ -1,0 +1,7 @@
+{"role": "system", "content": "You are gptme, a personal AI assistant running in the terminal.", "timestamp": "2026-06-13T10:00:00.000000", "pinned": true, "hide": true}
+{"role": "user", "content": "Write a hello world program in Python.", "timestamp": "2026-06-13T10:00:01.000000"}
+{"role": "assistant", "content": "I'll write a hello world program in Python.\n\n```python\nprint('Hello, World!')\n```", "timestamp": "2026-06-13T10:00:05.000000", "metadata": {"model": "openrouter/anthropic/claude-sonnet-4-6", "usage": {"input_tokens": 120, "output_tokens": 42, "cache_read_tokens": 80, "cache_creation_tokens": 0}, "cost": 0.0012}}
+{"role": "tool", "content": "Saved file: hello.py", "timestamp": "2026-06-13T10:00:06.000000"}
+{"role": "user", "content": "Run it.", "timestamp": "2026-06-13T10:00:10.000000"}
+{"role": "assistant", "content": "Running the program now.", "timestamp": "2026-06-13T10:00:12.000000", "metadata": {"model": "openrouter/anthropic/claude-sonnet-4-6", "usage": {"input_tokens": 200, "output_tokens": 15, "cache_read_tokens": 120, "cache_creation_tokens": 0}, "cost": 0.0008}}
+{"role": "tool", "content": "Hello, World!", "timestamp": "2026-06-13T10:00:13.000000"}

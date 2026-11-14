@@ -122,7 +122,13 @@ func (b *SessionRunsBuilder) Add(c IntervalCandidate) {
 		start = b.reach
 	}
 	b.reach, b.reached = end, true
-	model := candidateModel(c)
+	b.AddPiece(candidateModel(c), start, end, trimmed)
+}
+
+// AddPiece appends a piece Add has already resolved: it spans [start, end)
+// in Unix microseconds, starts where the session's earlier pieces reach or
+// later, and is trimmed when its candidate started under an earlier piece.
+func (b *SessionRunsBuilder) AddPiece(model string, start, end int64, trimmed bool) {
 	r := &b.runs
 	if n := len(r.runs); n > 0 && r.runs[n-1].model == model && r.bounds[r.runs[n-1].last] == start {
 		r.bounds = append(r.bounds, end)

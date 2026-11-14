@@ -27,7 +27,7 @@
   import { settingsPanels } from "./settingsPanels.js";
 
   let authTokenInput: string = $state("");
-  let active = $state(router.params.panel ?? "appearance");
+  let active = $derived(router.params.panel ?? "appearance");
   let searchQuery = $state("");
   let pageElement: HTMLElement;
   const panels = $derived(settingsPanels());
@@ -174,7 +174,7 @@
       {/if}
     </div>
   {:else}
-    <SettingsLayout categories={layoutCategories} bind:active title={m.settings_title()}>
+    <SettingsLayout categories={layoutCategories} bind:active={() => active, (value) => router.replaceParams({ ...router.params, panel: value })} title={m.settings_title()}>
       {#snippet sidebarHeader()}
         <SearchInput
           bind:value={searchQuery}

@@ -1,0 +1,1 @@
+{"command":"go test ./internal/auth/...","description":"Run the auth tests"}

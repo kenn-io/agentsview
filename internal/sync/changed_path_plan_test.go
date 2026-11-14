@@ -273,6 +273,76 @@ func TestPlanChangedPathsUnprovenPathsUseOwningProviderFallback(t *testing.T) {
 	}
 }
 
+func TestPlanChangedPathsPiArtifactBoundary(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentPi, parser.AgentOMO, parser.AgentStepCode} {
+		for _, tc := range []struct {
+			name       string
+			path       string
+			rootOrder  string
+			wantSource bool
+		}{
+			{name: "artifact", path: "project/subagent-artifacts/outputs/copy.jsonl"},
+			{name: "nested artifact", path: "project/parent/run/subagent-artifacts/copy.jsonl"},
+			{name: "nested session", path: "project/parent/run/session.jsonl", wantSource: true},
+			{name: "similar directory", path: "project/subagent-artifacts-copy/session.jsonl", wantSource: true},
+			{name: "explicit root", path: "project/subagent-artifacts/session.jsonl", rootOrder: "only", wantSource: true},
+			{name: "broad root first", path: "project/subagent-artifacts/session.jsonl", rootOrder: "broad", wantSource: true},
+			{name: "explicit root first", path: "project/subagent-artifacts/session.jsonl", rootOrder: "explicit", wantSource: true},
+		} {
+			t.Run(string(agent)+"/"+tc.name, func(t *testing.T) {
+				root := t.TempDir()
+				artifactRoot := filepath.Join(root, "project", "subagent-artifacts")
+				roots := []string{root}
+				switch tc.rootOrder {
+				case "only":
+					roots = []string{artifactRoot}
+				case "broad":
+					roots = []string{root, artifactRoot}
+				case "explicit":
+					roots = []string{artifactRoot, root}
+				}
+				path := filepath.Join(root, filepath.FromSlash(tc.path))
+				for _, candidate := range []string{path, filepath.Join(root, "unrelated.jsonl")} {
+					require.NoError(t, os.MkdirAll(filepath.Dir(candidate), 0o755))
+					require.NoError(t, os.WriteFile(candidate, []byte(
+						"{\"type\":\"session\",\"id\":\"fixture\",\"cwd\":\"/work\"}\n",
+					), 0o600))
+				}
+				engine := NewEngine(t.Context(), dbtest.OpenTestDB(t), EngineConfig{
+					AgentDirs: map[parser.AgentType][]string{agent: roots},
+					Machine:   "remote",
+				})
+				t.Cleanup(engine.Close)
+
+				plan, err := engine.PlanChangedPathsContext(t.Context(), []string{path})
+				require.NoError(t, err)
+				type plannedWork struct {
+					Paths             []string
+					FallbackProviders []parser.AgentType
+				}
+				got := plannedWork{FallbackProviders: plan.FallbackProviders}
+				for _, file := range plan.Files {
+					got.Paths = append(got.Paths, file.Path)
+				}
+				want := plannedWork{}
+				if tc.wantSource {
+					want.Paths = []string{path}
+				}
+				assert.Equal(t, want, got)
+				if tc.wantSource {
+					return
+				}
+				result, err := engine.SyncChangedPathPlanContext(t.Context(), plan, nil)
+				require.NoError(t, err)
+				assert.Equal(t, ChangedPathSyncResult{
+					CachedSourceKeys:        map[string]struct{}{},
+					CachedFallbackProviders: map[parser.AgentType]int{},
+				}, result)
+			})
+		}
+	}
+}
+
 func TestPlanChangedPathsClaudeProcessesOnlyChangedSession(t *testing.T) {
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "project-a")

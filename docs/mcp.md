@@ -84,6 +84,7 @@ client will see these tools:
 | `search_sessions`             | Full-text search across recorded sessions                                |
 | `list_sessions`               | List recent or filtered sessions                                         |
 | `get_session_overview`        | Fetch metadata and a compact message preview                             |
+| `get_compaction_summaries`    | Read compaction summaries for one or more sessions                       |
 | `get_messages`                | Read paginated message bodies from one session                           |
 | `get_memory_status`           | Report archive, lexical, semantic, and source readiness                  |
 | `search_content`              | Substring, regex, terms, semantic, or hybrid search over session text    |
@@ -101,6 +102,11 @@ client will see these tools:
 | `search_docs`                 | Search the AgentsView guides bundled with this version                   |
 | `get_friction_digest`         | Read a dated Friction Log digest as Markdown or the summary object       |
 | `list_friction_patterns`      | List recurring friction patterns ranked by occurrences                   |
+
+`get_compaction_summaries` accepts a session ID or `active_since` timestamp.
+The limit counts sessions; 0 uses the default of 20. Resume `next_cursor` with
+the same `active_since`, even when a page has no summaries. Ambiguous older
+Evener labels appear separately with their session ID and ordinal.
 
 The two Friction Log tools appear when the backend stores the Friction Log.
 `get_friction_digest` defaults to the latest digest; pass `date` (YYYY-MM-DD)
@@ -135,8 +141,8 @@ profile:
 }
 ```
 
-This profile advertises only `get_memory_status`, `search_content`, and
-`get_messages`. The status tool reports the authenticated archive backend,
+This profile advertises only `get_memory_status`, `search_content`,
+`get_messages`, and `get_compaction_summaries`. The status tool reports the authenticated archive backend,
 read-only mode, server version, lexical availability, semantic generation
 coverage, and whether per-source freshness telemetry is available. Its `ready`,
 `partial`, `unavailable`, or `unknown` states come from the same provider as the
@@ -148,30 +154,19 @@ complete tool list above.
 
 This profile's tool list is about 21 KB, and the same test holds it under 24 KB.
 
-The native
-[AgentsView Memory package](https://github.com/kenn-io/agentsview/tree/main/plugins/agentsview-memory)
-registers this profile for Claude Code and Codex and bundles the recall skill,
-Claude's focused search agent, and a session-start hook. Install it through your
-client's native plugin flow and ensure `agentsview` is on the client's `PATH`.
-The package README explains local and hosted setup.
+Run `agentsview agent setup` to install the recall skill and focused MCP profile for installed Claude Code and Codex clients. Use `--agent claude` or `--agent codex` to select a client, and `--check` to inspect setup. Setup refuses to replace a different `agentsview` MCP entry without `--force` and preserves other entries. Use `--force` to replace the entry and overwrite edited skills.
 
-For a standalone skill installation, use `agentsview skills install`; see
-[the CLI reference](/docs/commands/#agentsview-skills) for client and project
-scope. Choose one installation route per client to avoid loading duplicate
-skills. Both routes teach agents to search relevant history, distinguish
-proposals from accepted decisions, and cite transcript evidence.
+For a remote archive, set the hosted environment variables below for the focused profile. For skill-only or project-level installation, use `agentsview skills install`; see [the CLI reference](/docs/commands/#agentsview-skills).
 
-The native package's MCP process reads `AGENTSVIEW_MEMORY_SERVER`,
+The memory profile reads `AGENTSVIEW_MEMORY_SERVER`,
 `AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, or `AGENTSVIEW_MEMORY_PG`; explicit
 command flags still win. A token-file setting without a server fails instead of
 falling back to the local archive. PostgreSQL reads use the configured
 `default_pg` target.
 
 Run `agentsview doctor memory` to inspect this server status together with the
-local client integration. Pass the native package root with `--plugin-root` to
-check its skill, MCP profile, and SessionStart hook. The diagnostic uses
-read-only metadata and does not start a daemon, sync transcripts, or rebuild
-vectors.
+installed client integrations. Pass the native package root with `--plugin-root` to
+check its skill, MCP profile, and SessionStart hook. The client check may start the configured client and MCP process. It calls no data tools and does not start the local archive daemon, sync transcripts, or rebuild vectors. Codex may create its own runtime state.
 
 `search_sessions` accepts optional `date_from` and `date_to` bounds in
 `YYYY-MM-DD` format, just like `list_sessions` and `search_content`. Dates
@@ -215,11 +210,22 @@ especially when the exact wording is unknown. Hybrid combines semantic
 similarity with keyword matching. Use `context` to include surrounding messages.
 Hybrid returns its keyword matches when search by meaning is unavailable. The
 response includes `effective_mode: "hybrid_keyword"` and a `note` beside
-`coverage` explaining why. Keyword matches need the query words to appear. If
-there are no matches or only a few, try one or two short substring queries with
-key terms or synonyms. Preserve `scope`, inclusion, and current-session filters.
-Disclose keyword-only results once. Use substring/regex for exact errors,
+`coverage` explaining why. On SQLite, keyword matches rank messages holding
+every query word first, then those holding fewer of them. On other archives,
+keyword matches need the query words to appear; if there are no matches or only
+a few, try one or two short substring queries with key terms or synonyms.
+Preserve `scope`, inclusion, and current-session filters. Disclose keyword-only
+results once. Use fully quoted substring text or regex for exact errors,
 identifiers, and code fragments. The default remains substring.
+
+On SQLite, a substring search of several words lists matches of the exact text
+first, from every selected source, then messages holding every word, then those
+holding fewer of the words. Each match reports `matched_words`, the number of
+query words it holds, excluding unquoted stop words; other searches report `0`.
+A single word, a fully quoted pattern, and searches without the `messages`
+source match the exact text only. A quoted phrase inside a longer query requires
+its words together and in order. Hybrid keyword matches also report their word
+count.
 
 `search_content` accepts a `mode` of `substring` (default), `regex`, `terms`,
 `semantic`, or `hybrid`. `terms` splits `pattern` on whitespace and requires

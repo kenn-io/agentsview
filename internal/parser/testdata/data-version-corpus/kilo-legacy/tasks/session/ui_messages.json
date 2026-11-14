@@ -1,0 +1,1 @@
+[{"ts":1700000000000,"type":"say","say":"text","text":"Review the new parser implementation"},{"ts":1700000005000,"type":"say","say":"text","text":"I will inspect the file structure first."},{"ts":1700000010000,"type":"ask","ask":"tool","text":"{\"tool\":\"readFile\",\"path\":\"src/foo.ts\"}"}]

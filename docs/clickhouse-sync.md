@@ -165,6 +165,9 @@ to fan out across every configured target. `--all --watch` is rejected.
    [Vector Push](#vector-push).
 1. Advances this archive's cursor in the mirror's `sync_metadata` only when
    every session succeeded.
+1. Compacts the rewritten tables when the push rewrote at least a quarter of
+   the mirror's live messages, as a `--full` push does: see
+   [Compaction after a large push](#compaction-after-a-large-push).
 
 Use `--full` to bypass fingerprints and re-push everything — for example after a
 schema reset or when message content was rewritten in place.
@@ -192,6 +195,31 @@ push cleanly.
 If any sessions fail during an incremental push, the cursor is not advanced, so
 the next push retries them. The exit code is 1 when any errors occur, 0
 otherwise.
+
+#### Compaction after a large push
+
+A rewritten session keeps its older rows on disk until ClickHouse merges them
+away, and after full pushes those merges rarely happen on their own. Every
+dashboard read then pays to skip the older copies. When a push rewrote at least
+a quarter of the mirror's live messages, it runs `OPTIMIZE TABLE ... FINAL` on
+each table it rewrote, largest first, and waits for each merge before it
+returns. The push log names each table and how long its merge took. A full push
+that resumes after an interruption counts the messages its earlier attempt
+wrote, so it compacts like a full push that ran straight through. A push that
+ends with session errors does not compact; the push that later finishes cleanly
+compacts what both wrote.
+
+Reads keep working during the merge, though they compete with it for CPU and
+disk. ClickHouse starts the merge only when the disk has free space for twice
+the size of the table it merges; otherwise the push logs the refusal.
+
+The push role needs the `OPTIMIZE` grant on the mirror database and
+`SELECT ON system.parts`. Without them, the push logs
+`skipped compacting the rewritten tables` with the server's error and still
+succeeds; reads stay correct but slow down as older copies pile up. To grant
+them, run `GRANT OPTIMIZE ON <database>.* TO <push_user>` and
+`GRANT SELECT ON system.parts TO <push_user>`, or add the matching `<query>`
+lines to an XML-managed user's `<grants>`.
 
 #### Automatic Push Watcher
 
@@ -659,8 +687,14 @@ ______________________________________________________________________
   rather than per-generation pgvector tables, and search is an exact cosine
   scan. There is no hosted raw-sync control plane.
 - `clickhouse serve` does not run PostgreSQL-style migrations beyond
-  `CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, and the one-time
-  fill of derived usage and terminal-event tables described above.
+  `CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, the one-time fill
+  of derived usage and terminal-event tables described above, and changing
+  string columns with few distinct values, such as message roles, models, and
+  agents, to `LowCardinality(String)`. That change keeps every value. The
+  `ALTER` returns at once, and ClickHouse rewrites existing data in a
+  background mutation, which on a large mirror takes a while and needs
+  temporary disk space. Older AgentsView versions can keep pushing to the
+  converted mirror.
 - Deletes are version-bounded `DELETE` statements. ClickHouse applies them at
   merge time; readers always open connections with `final=1` so they see one
   row per key without writing `FINAL` in query text.

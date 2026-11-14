@@ -75,15 +75,15 @@ func TestPushCompatibilityUpgradePreservesPendingWork(t *testing.T) {
 	for _, id := range []string{"complete", "retry"} {
 		insertSession(t, d, id, "project", func(s *Session) { s.Agent = "claude" })
 	}
-	insertSession(t, d, "codex", "project", func(s *Session) { s.Agent = "codex" })
-	require.NoError(t, d.SetSessionDataVersion(ctx, "complete", 173))
-	require.NoError(t, d.SetSessionDataVersion(ctx, "retry", 172))
-	require.NoError(t, d.SetSessionDataVersion(ctx, "codex", 173))
+	insertSession(t, d, "evener", "project", func(s *Session) { s.Agent = "evener" })
+	require.NoError(t, d.SetSessionDataVersion(ctx, "complete", 181))
+	require.NoError(t, d.SetSessionDataVersion(ctx, "retry", 180))
+	require.NoError(t, d.SetSessionDataVersion(ctx, "evener", 181))
 	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
-		if err := writeUserVersion(ctx, tx, 173); err != nil {
+		if err := writeUserVersion(ctx, tx, 181); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, "INSERT INTO stats(key, value) VALUES (?, ?)", scopedUpgradePendingKey, 173)
+		_, err := tx.ExecContext(ctx, "INSERT INTO stats(key, value) VALUES (?, ?)", scopedUpgradePendingKey, 181)
 		return err
 	}))
 	require.NoError(t, d.Close())
@@ -92,8 +92,8 @@ func TestPushCompatibilityUpgradePreservesPendingWork(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
 	assert.False(t, reopened.NeedsResync())
 	assert.Equal(t, SessionPushDataVersion, reopened.GetSessionDataVersion(ctx, "complete"))
-	assert.Equal(t, 172, reopened.GetSessionDataVersion(ctx, "retry"))
-	assert.Equal(t, 173, reopened.GetSessionDataVersion(ctx, "codex"))
+	assert.Equal(t, 180, reopened.GetSessionDataVersion(ctx, "retry"))
+	assert.Equal(t, 181, reopened.GetSessionDataVersion(ctx, "evener"))
 	var pending int
 	require.NoError(t, reopened.getReader().QueryRow(ctx, "SELECT value FROM stats WHERE key = ?", scopedUpgradePendingKey).Scan(&pending))
 	assert.Equal(t, SessionPushDataVersion, pending)

@@ -307,13 +307,15 @@ func TestChangeStreamResumesAfterCursorWithoutRepeats(t *testing.T) {
 	// catch-up can send the session alone before the messages arrive.
 	live := caughtUp.changesWithMessages(t, 2)
 	assert.Equal(t, changes.To, live[0].From)
-	var sessions []string
+	ids := messageIDs(live)
+	assert.Len(t, ids, 2)
+	slices.Sort(ids)
+	assert.Len(t, slices.Compact(ids), 2, "no message repeats")
 	for _, event := range live {
 		for _, message := range event.Messages {
-			sessions = append(sessions, message.SessionID)
+			assert.Equal(t, "stream-c", message.SessionID)
 		}
 	}
-	assert.Equal(t, []string{"stream-c", "stream-c"}, sessions)
 }
 
 func TestChangeStreamResetsForeignAndInvalidCursors(t *testing.T) {
@@ -586,10 +588,16 @@ func TestChangeStreamInitializesAColdArchive(t *testing.T) {
 
 	seedChangeStreamSession(t, te, "warm")
 	te.broadcaster.Emit("messages")
-	live := stream.changes(t, 2)[1]
-	assert.Equal(t, replay.To, live.From)
-	require.Len(t, live.Messages, 2, "later writes keep the index current")
-	assert.Equal(t, "warm", live.Messages[0].SessionID)
+	live := stream.changesWithMessages(t, len(replay.Messages)+2)[1:]
+	assert.Len(t, messageIDs(live), 2, "later writes keep the index current")
+	cursor := replay.To
+	for _, event := range live {
+		assert.Equal(t, cursor, event.From)
+		cursor = event.To
+		for _, message := range event.Messages {
+			assert.Equal(t, "warm", message.SessionID)
+		}
+	}
 }
 
 func TestChangeStreamWakesWithoutEventCoalescing(t *testing.T) {
@@ -609,10 +617,18 @@ func TestChangeStreamWakesWithoutEventCoalescing(t *testing.T) {
 	seedChangeStreamSession(t, te, "second")
 	coalesced.Emit("sessions")
 
-	update := stream.changes(t, 2)[1]
-	assert.Equal(t, replay.To, update.From)
-	require.Len(t, update.Messages, 2)
-	assert.Equal(t, "second", update.Messages[0].SessionID)
+	// The leading wake can read the session before its messages commit.
+	// Wait for both messages without assuming they share one event.
+	updates := stream.changesWithMessages(t, len(replay.Messages)+2)[1:]
+	assert.Len(t, messageIDs(updates), 2)
+	cursor := replay.To
+	for _, event := range updates {
+		assert.Equal(t, cursor, event.From)
+		cursor = event.To
+		for _, message := range event.Messages {
+			assert.Equal(t, "second", message.SessionID)
+		}
+	}
 	select {
 	case <-events:
 		assert.Fail(t, "the coalesced data_changed signal must still wait for its window")

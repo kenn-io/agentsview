@@ -1,4 +1,5 @@
 import { defineConfig } from "@playwright/test";
+import { AUTH_SERVER_TOKEN, authServerPort } from "./e2e/helpers/auth-server";
 
 const isCI = process.env.CI === "true";
 const isSelfHostedCI = isCI && process.env.RUNNER_ENVIRONMENT === "self-hosted";
@@ -62,6 +63,10 @@ export default defineConfig({
   ],
   webServer: {
     command: "bash ../scripts/e2e-server.sh",
+    env: {
+      AGENTSVIEW_E2E_AUTH_PORT: String(authServerPort(e2ePort)),
+      AGENTSVIEW_E2E_AUTH_TOKEN: AUTH_SERVER_TOKEN,
+    },
     port: e2ePort,
     reuseExistingServer: false,
     timeout: 30_000,

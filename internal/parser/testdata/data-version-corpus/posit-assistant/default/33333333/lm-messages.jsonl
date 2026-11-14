@@ -1,0 +1,2 @@
+{"id":0,"message":{"role":"user","content":"hello","providerOptions":{"providerMetadata":{"positai":{"timestamp":1735776000000}}}}}
+{"id":1,"message":{"role":"assistant","content":[{"type":"text","text":"Hi! How can I help?"}],"providerOptions":{"providerMetadata":{"positai":{"timestamp":1735776001000,"modelId":"claude-sonnet-4-6","usage":{"inputTokens":8,"outputTokens":6,"totalTokens":14,"cacheReadTokens":0,"cacheWriteTokens":0}}}}}}

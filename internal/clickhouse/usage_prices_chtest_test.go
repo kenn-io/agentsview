@@ -252,7 +252,7 @@ func dailyUsageGroupRowStats(
 	t.Helper()
 	catalog, err := chLoadPricingCatalog(t.Context(), store.conn, store.customPricing)
 	require.NoError(t, err)
-	contexts, err := loadUsagePriceContexts(t.Context(), store.conn, catalog.digest)
+	contexts, err := store.usagePriceContexts(t.Context(), catalog.digest)
 	require.NoError(t, err)
 	customModels := chCustomPricedModels(contexts, export.NewPricingResolver(catalog.rows))
 	var stats usageGroupRowStats
@@ -1057,4 +1057,53 @@ func TestPushRepricesCursorRowsAfterTheirRecordsAreDropped(t *testing.T) {
 		"SELECT count() FROM usage_event_prices WHERE pricing_digest = ?", digest).Scan(&records))
 	// The fixture's two Cursor events; session rows wait for a whole pass.
 	assert.Equal(t, 2, records)
+}
+
+// A context ID names its content, so a read reuses a decoded context even
+// after the stored JSON changes, and still picks up a context a later push
+// adds under the same digest.
+func TestUsagePriceContextsReuseDecodedContexts(t *testing.T) {
+	t.Parallel()
+	store, _, _ := newUsagePriceStore(t)
+	var digest string
+	require.NoError(t, store.DB().QueryRowContext(t.Context(),
+		"SELECT value FROM sync_metadata WHERE key = ?", usagePricedDigestKey).Scan(&digest))
+	first, err := store.usagePriceContexts(t.Context(), digest)
+	require.NoError(t, err)
+	require.NotEmpty(t, first)
+
+	execPreparedUsage(t, store, `ALTER TABLE usage_price_contexts UPDATE context_json = 'not json'
+		WHERE 1 SETTINGS mutations_sync = 2`)
+	again, err := store.usagePriceContexts(t.Context(), digest)
+	require.NoError(t, err, "cached contexts are not decoded again")
+	assert.Equal(t, first, again)
+
+	execPreparedUsage(t, store, `
+		INSERT INTO usage_price_contexts (pricing_digest, context_id, context_json, push_version)
+		SELECT `+chSQLString(digest)+`, 'added-context', '{"reported_model":"added-model","ok":true,"input":7}', 1`)
+	added, err := store.usagePriceContexts(t.Context(), digest)
+	require.NoError(t, err)
+	assert.Len(t, added, len(first)+1)
+	assert.Equal(t, "added-model", added["added-context"].ReportedModel)
+	assert.EqualValues(t, 7, added["added-context"].Input)
+}
+
+// A warm read names its decoded context IDs in the query. A digest with more
+// contexts than fit in ClickHouse's default 256 KiB max_query_size must still
+// read.
+func TestUsagePriceContextsReadManyContexts(t *testing.T) {
+	t.Parallel()
+	store, _, _ := newUsagePriceStore(t)
+	const digest = "many-contexts-digest"
+	execPreparedUsage(t, store, `
+		INSERT INTO usage_price_contexts (pricing_digest, context_id, context_json, push_version)
+		SELECT `+chSQLString(digest)+`, lower(hex(MD5(toString(number)))),
+			concat('{"reported_model":"m-', toString(number), '","ok":true}'), 1
+		FROM numbers(8000)`)
+	first, err := store.usagePriceContexts(t.Context(), digest)
+	require.NoError(t, err)
+	require.Len(t, first, 8000)
+	again, err := store.usagePriceContexts(t.Context(), digest)
+	require.NoError(t, err)
+	assert.Equal(t, first, again)
 }

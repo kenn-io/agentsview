@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -43,6 +42,7 @@ func recipeSource(fingerprint string, params map[string]string) *fakeVectorSourc
 }
 
 func TestVectorRecipePublishedAndBackfilled(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	sync, localDB, pg := newVectorPushTestSync(t, pgURL, "agentsview_vector_recipe_test")
 	ctx := t.Context()
@@ -113,6 +113,7 @@ func TestVectorRecipePublishedAndBackfilled(t *testing.T) {
 }
 
 func TestVectorRecipeWriterWithoutOwnershipKeepsPushingVectors(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	const schema = "agentsview_vector_recipe_role_test"
 	const role = "agentsview_vector_recipe_writer"
@@ -195,7 +196,6 @@ func TestVectorRecipeWriterWithoutOwnershipKeepsPushingVectors(t *testing.T) {
 
 			localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 			require.NoError(t, err)
-			dbtest.SeedPricingMeta(t, localDB)
 			t.Cleanup(func() { _ = localDB.Close() })
 			seedVectorSession(t, localDB, "A")
 			sync := &Sync{
@@ -249,6 +249,7 @@ func (p *preparingVectorSource) BeginExport(
 }
 
 func TestVectorPushPreparesSourceOnlyWhenVectorsCanBeStored(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	const schema = "agentsview_vector_prepare_test"
 	const prepareRole = "agentsview_vector_prepare_writer"

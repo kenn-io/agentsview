@@ -11,6 +11,14 @@ type jsonlParseFileFunc func(
 	ctx context.Context, path string, req ParseRequest,
 ) ([]ParseResult, []string, error)
 
+// JSONLDiscoveryPreparation describes the configured root selected for traversal.
+// FullRoot distinguishes a whole-root request from a bounded descendant request;
+// it does not certify that discovery has completed.
+type JSONLDiscoveryPreparation struct {
+	Root     string
+	FullRoot bool
+}
+
 // JSONLOption configures a JSONLSourceSet (or DirectoryJSONLSourceSet) at
 // construction. Options compose left to right; a later option of the same kind
 // overwrites an earlier one. Every field has a sensible zero value, so a source
@@ -23,6 +31,13 @@ type JSONLOption func(*JSONLSourceSetOptions)
 // direct children.
 func WithRecursive() JSONLOption {
 	return func(o *JSONLSourceSetOptions) { o.Recursive = true }
+}
+
+// WithPrepareDiscovery refreshes metadata before traversing each selected
+// configured root. Full and scoped discovery share this preparation; an error
+// prevents traversal of that root.
+func WithPrepareDiscovery(prepare func(context.Context, JSONLDiscoveryPreparation) error) JSONLOption {
+	return func(o *JSONLSourceSetOptions) { o.PrepareDiscovery = prepare }
 }
 
 // WithExtensions restricts sources to the given file extensions (default

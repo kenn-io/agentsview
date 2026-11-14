@@ -11,10 +11,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
 )
 
 func TestPushSessionTranscriptRevisionRoundTrip(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	const schema = "agentsview_read_progress_test"
 	pg, err := Open(t.Context(), pgURL, schema, true)
@@ -28,7 +28,6 @@ func TestPushSessionTranscriptRevisionRoundTrip(t *testing.T) {
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
-	dbtest.SeedPricingMeta(t, localDB)
 	defer localDB.Close()
 	syncer := &Sync{
 		pg: pg, local: localDB, machine: "test-machine",

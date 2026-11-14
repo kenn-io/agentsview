@@ -112,6 +112,16 @@ func schemaColumnMigrations() []columnMigration {
 			"adding messages.output_tokens",
 		},
 		{
+			"messages", "usage_output_tokens",
+			`usage_output_tokens BIGINT`,
+			"adding messages.usage_output_tokens",
+		},
+		{
+			"messages", "usage_web_search_requests",
+			`usage_web_search_requests BIGINT`,
+			"adding messages.usage_web_search_requests",
+		},
+		{
 			"messages", "provider_id",
 			`provider_id TEXT NOT NULL DEFAULT ''`,
 			"adding messages.provider_id",

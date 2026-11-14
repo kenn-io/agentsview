@@ -1,11 +1,17 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +22,26 @@ import (
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/skills"
 )
+
+func init() {
+	if runtime.GOOS != "windows" || os.Getenv("AGENTSVIEW_FAKE_AGENT") != "1" {
+		return
+	}
+	executable, _ := os.Executable()
+	if strings.EqualFold(filepath.Base(executable), "codex.exe") {
+		scanner := bufio.NewScanner(os.Stdin)
+		scanner.Scan()
+		fmt.Println(`{"id":1,"result":{}}`)
+		scanner.Scan()
+		scanner.Scan()
+		fmt.Println(`{"id":2,"result":{"data":[{"name":"agentsview","tools":{"search_content":{}}}]}}`)
+		for scanner.Scan() {
+		}
+	} else {
+		fmt.Print(strings.ReplaceAll(os.Getenv("AGENTSVIEW_FAKE_RESPONSE"), `\n`, "\n"))
+	}
+	os.Exit(0)
+}
 
 func TestDoctorMemoryReadsLocalArchiveWithoutCreatingConfig(t *testing.T) {
 	home := t.TempDir()
@@ -140,21 +166,29 @@ func TestDoctorMemoryPluginMCPRequiresFocusedProfileInClaudeManifest(t *testing.
 
 func TestDoctorMemoryReportsStandaloneTargetMismatch(t *testing.T) {
 	home := t.TempDir()
-	setTestHome(t, home)
-	pkg, err := skills.RenderPackage(skills.HarnessAgents, version, skills.Remote{
-		Server: "https://archive-a.invalid",
-	})
+	setDoctorMemoryTestEnvironment(t, home)
+	fakeAgent(t, "codex", "")
+	pkg, err := skills.RenderPackage(skills.HarnessAgents, version, skills.Remote{})
 	require.NoError(t, err)
 	path := filepath.Join(home, pkg[0].RelativePath)
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	require.NoError(t, os.WriteFile(path, []byte(pkg[0].Content), 0o644))
 
+	out, err := executeCommand(newRootCommand(), "agent", "setup")
+	require.NoError(t, err, out)
 	client := inspectDoctorMemoryClient("", doctorMemoryTargetSelection{
 		Kind: "server", server: "https://archive-b.invalid",
 	})
 	require.Len(t, client.Standalone, 1)
 	assert.Equal(t, "target_mismatch", client.Standalone[0].Reason)
 	assert.Equal(t, service.MemoryPartial, client.Status)
+	client = inspectDoctorAgentSetup(t.Context(), client)
+	assert.Equal(t, service.MemoryPartial, client.Status)
+	assert.Equal(t, "standalone_target_mismatch", client.Reason)
+
+	client = inspectDoctorMemoryClient("", doctorMemoryTargetSelection{Kind: "postgresql"})
+	require.Len(t, client.Standalone, 1)
+	assert.NotEqual(t, "target_mismatch", client.Standalone[0].Reason)
 }
 
 func TestDoctorMemoryHumanOutputSeparatesTargetAndClient(t *testing.T) {
@@ -206,15 +240,47 @@ func TestDoctorMemoryHumanOutputSeparatesTargetAndClient(t *testing.T) {
 func setDoctorMemoryTestEnvironment(t *testing.T, home string) {
 	t.Helper()
 	setTestHome(t, home)
+	t.Setenv("PATH", t.TempDir())
 	for _, name := range []string{
 		"AGENTSVIEW_MEMORY_SERVER",
 		"AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE",
 		"AGENTSVIEW_MEMORY_PG",
+		"AGENTSVIEW_SKILLS_SERVER",
+		"AGENTSVIEW_SKILLS_SERVER_TOKEN_FILE",
 		"PLUGIN_ROOT",
 		"CLAUDE_PLUGIN_ROOT",
+		"CLAUDE_CONFIG_DIR",
+		"CODEX_HOME",
 	} {
 		t.Setenv(name, "")
 	}
+}
+
+func fakeAgent(t *testing.T, name, response string) {
+	t.Helper()
+	if response == "" {
+		response = "Scope: User config\\nStatus: Connected\\n"
+	}
+	if runtime.GOOS == "windows" {
+		t.Setenv("AGENTSVIEW_FAKE_AGENT", "1")
+		t.Setenv("AGENTSVIEW_FAKE_RESPONSE", response)
+		executable, err := os.Executable()
+		require.NoError(t, err)
+		source, err := os.Open(executable)
+		require.NoError(t, err)
+		defer source.Close()
+		target, err := os.Create(filepath.Join(os.Getenv("PATH"), name+".exe"))
+		require.NoError(t, err)
+		_, err = io.Copy(target, source)
+		require.NoError(t, err)
+		require.NoError(t, target.Close())
+		return
+	}
+	script := "#!/bin/sh\nprintf '" + response + "'\n"
+	if name == "codex" {
+		script = "#!/bin/sh\nread line\nprintf '{\"id\":1,\"result\":{}}\\n'\nread line\nread line\nprintf '{\"id\":2,\"result\":{\"data\":[{\"name\":\"agentsview\",\"tools\":{\"search_content\":{}}}]}}\\n'\nwhile read line; do :; done\n"
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(os.Getenv("PATH"), name), []byte(script), 0o755))
 }
 
 func memoryStatusServer(t *testing.T, status service.MemoryStatus) *httptest.Server {
@@ -250,4 +316,67 @@ func writeDoctorMemoryPlugin(t *testing.T) string {
 	write("hooks/hooks.json", `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"scripts/session-start.sh"}]}]}}`, 0o644)
 	write("scripts/session-start.sh", "#!/bin/sh\nexec agentsview memory session-start --hook\n", 0o755)
 	return root
+}
+
+func TestDoctorMemoryReportsInstalledAgentSetup(t *testing.T) {
+	home := t.TempDir()
+	setDoctorMemoryTestEnvironment(t, home)
+	fakeAgent(t, "claude", "")
+	fakeAgent(t, "codex", "")
+	out, err := executeCommand(newRootCommand(), "agent", "setup")
+	require.NoError(t, err, out)
+	server := memoryStatusServer(t, service.MemoryStatus{Status: service.MemoryReady, ObservedAt: time.Now()})
+	out, err = executeCommand(newRootCommand(), "doctor", "memory", "--server", server.URL, "--format", "json")
+	require.NoError(t, err, out)
+	var report doctorMemoryReport
+	require.NoError(t, json.Unmarshal([]byte(out), &report))
+	require.Len(t, report.Client.Rows, 4)
+	for _, row := range report.Client.Rows {
+		require.EqualValues(t, "ok", row.State)
+	}
+	for _, index := range []int{1, 3} {
+		require.Equal(t, "mcp agentsview", report.Client.Rows[index].Piece)
+	}
+	require.NoError(t, os.Remove(filepath.Join(home, ".claude.json")))
+	require.NoError(t, os.Remove(filepath.Join(home, ".codex", "config.toml")))
+	out, err = executeCommand(newRootCommand(), "doctor", "memory", "--server", server.URL, "--format", "json")
+	require.NoError(t, err, out)
+	require.NoError(t, json.Unmarshal([]byte(out), &report))
+	for _, index := range []int{1, 3} {
+		require.EqualValues(t, "missing", report.Client.Rows[index].State)
+		require.Equal(t, "agentsview agent setup", report.Client.Rows[index].NextStep)
+	}
+	out, err = executeCommand(newRootCommand(), "doctor", "memory", "--server", server.URL)
+	require.NoError(t, err, out)
+	require.Contains(t, out, "Client integration: partial")
+	require.Contains(t, out, "agentsview agent setup")
+	require.NotContains(t, out, "agent_setup_incomplete")
+}
+
+func TestDoctorMemoryRedactsMCPFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name, response, state string
+	}{
+		{"failed", "Scope: User config\\nStatus: Failed to connect\\nIssue: https://private.example/token\\n", "failed"},
+		{"unknown", "Scope: User config\\nStatus: Waiting for https://private.example/token\\n", "unknown"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			setDoctorMemoryTestEnvironment(t, home)
+			fakeAgent(t, "claude", tc.response)
+			require.NoError(t, os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"mcpServers":{"agentsview":{"type":"stdio","command":"agentsview","args":["mcp","--profile","memory"]}}}`), 0o600))
+			selection := doctorMemoryTargetSelection{Kind: "local"}
+			client := inspectDoctorAgentSetup(t.Context(), inspectDoctorMemoryClient("", selection))
+			require.Len(t, client.Rows, 2)
+			require.EqualValues(t, tc.state, client.Rows[1].State)
+			encoded, err := json.Marshal(client)
+			require.NoError(t, err)
+			require.NotContains(t, string(encoded), home)
+			require.NotContains(t, string(encoded), "private.example")
+			var text bytes.Buffer
+			require.NoError(t, writeDoctorMemoryReport(&text, doctorMemoryReport{Client: client}))
+			require.NotContains(t, text.String(), home)
+			require.NotContains(t, text.String(), "private.example")
+		})
+	}
 }

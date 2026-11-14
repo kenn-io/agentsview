@@ -20,6 +20,7 @@ import (
 )
 
 func TestBackfillIsAutomatedPGUsesBoundedEvidence(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
@@ -110,6 +111,7 @@ func TestBackfillIsAutomatedPGUsesBoundedEvidence(t *testing.T) {
 }
 
 func TestHeadlessClassificationRepairPG(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
@@ -238,6 +240,7 @@ func TestPushSessionTrustsLocalIsAutomated(t *testing.T) {
 }
 
 func TestAutomationAuditPGIncremental(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
@@ -287,6 +290,7 @@ func TestAutomationAuditPGIncremental(t *testing.T) {
 }
 
 func TestAutomationAuditPGMessageOnlyPush(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
@@ -375,6 +379,7 @@ func TestAutomationAuditPGConcurrentClassifiers(t *testing.T) {
 }
 
 func TestBackfillIsAutomatedPGPreservesUsageOnlyClassification(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })

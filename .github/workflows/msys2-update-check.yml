@@ -1,6 +1,7 @@
 name: MSYS2 Update Check
 
 env:
+  API_VERSION_BASE: HEAD^1
   GOTRACEBACK: all
   # "|" falls back to direct on any proxy error (e.g. HTTP/2 INTERNAL_ERROR), not just 404/410.
   GOPROXY: "https://proxy.golang.org|direct"
@@ -73,7 +74,7 @@ jobs:
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.48.3
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.53.0
 
       - name: Restore pricing snapshot
         shell: bash

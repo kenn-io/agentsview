@@ -1787,7 +1787,7 @@ func parseAntigravityCLITrajectory(
 		}
 		// NOTE: We emit a synthetic User message with empty content containing these tool results.
 		// This relies on the sync engine's internal contract (specifically pairToolResults and
-		// pairAndFilter in engine.go) which matches tool results to tool calls by ToolUseID,
+		// pairAndFilter in engine_session_convert.go) which matches tool results to tool calls by ToolUseID,
 		// and then filters out empty-content synthetic User messages from final display.
 		// Future maintainers: do not "clean up" this empty message behavior as it is critical
 		// for correct UI rendering.

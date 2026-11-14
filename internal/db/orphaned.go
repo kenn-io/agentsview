@@ -261,6 +261,9 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 			return nil, err
 		}
 	}
+	if err := copyResyncFrustrationMarkers(ctx, tx, d.usageOnlyStorage()); err != nil {
+		return nil, fmt.Errorf("copying frustration markers: %w", err)
+	}
 	if err := retainConversationTombstonesTx(ctx, tx); err != nil {
 		return nil, fmt.Errorf("retaining conversation tombstones: %w", err)
 	}
@@ -279,6 +282,36 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 	}
 
 	return ids, nil
+}
+
+func copyResyncFrustrationMarkers(ctx context.Context, tx *sql.Tx, usageOnly bool) error {
+	if usageOnly || !oldDBHasTable(ctx, tx, "session_frustration_markers") {
+		return nil
+	}
+	// Reparsed sessions were reconciled above. For copied orphans, compare
+	// prompts after sanitization and projection before reusing their counts.
+	_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO main.session_frustration_markers
+		(session_id, transcript_key, marker_version, count)
+		SELECT current.id, current.transcript_revision || '|' || current.created_at,
+			markers.marker_version, markers.count
+		FROM main.sessions current
+		LEFT JOIN _orphaned_ids orphan ON orphan.id = current.id
+		JOIN old_db.sessions old ON old.id = COALESCE(orphan.source_id, current.id)
+		JOIN old_db.session_frustration_markers markers ON markers.session_id = old.id
+		WHERE current.transcript_revision = old.transcript_revision
+			AND markers.transcript_key = old.transcript_revision || '|' || old.created_at
+			AND current.deleted_at IS NULL
+			AND (orphan.id IS NULL OR (
+				NOT EXISTS (SELECT ordinal, content FROM old_db.messages
+					WHERE session_id = old.id AND role = 'user' AND source_subtype <> 'tool_result' AND is_system = 0
+					EXCEPT SELECT ordinal, content FROM main.messages
+					WHERE session_id = current.id AND role = 'user' AND source_subtype <> 'tool_result' AND is_system = 0)
+				AND NOT EXISTS (SELECT ordinal, content FROM main.messages
+					WHERE session_id = current.id AND role = 'user' AND source_subtype <> 'tool_result' AND is_system = 0
+					EXCEPT SELECT ordinal, content FROM old_db.messages
+					WHERE session_id = old.id AND role = 'user' AND source_subtype <> 'tool_result' AND is_system = 0)
+			))`)
+	return err
 }
 
 // CopyTrashedDataFrom copies soft-deleted sessions and their
@@ -1733,8 +1766,11 @@ func (d *DB) CopySessionMetadataFrom(
 				'project_identity_publication_revision',
 				'session_deletion_publication_revision',
 				'usage_change_revision',
+				'analytics_change_revision',
 				'usage_pricing_revision',
 				'conversation_publication_revision',
+				'conversation_pruned_revision',
+				'conversation_prune_mark',
 				'conversation_usage_revision',
 				'worktree_mapping_publication_revision'
 			)
@@ -2507,11 +2543,20 @@ func copySessionDataForIDs(
 			msgCols.WriteString(", " + c)
 		}
 	}
+	insertCols := msgCols.String()
+	selectCols := strings.TrimPrefix(insertCols, "session_id, ")
+	// Compute the stored usage counters from the copied JSON, so a source
+	// archive from before those columns copies the same values a write stores.
+	if oldDBHasColumn(ctx, tx, "messages", "token_usage") {
+		insertCols += ", usage_output_tokens, usage_web_search_requests"
+		selectCols += ", agentsview_usage_output_tokens(token_usage)" +
+			", agentsview_usage_web_search_requests(token_usage)"
+	}
 	// Restrict the source scan as well as mapping IDs. The join alone scans
 	// the whole archive even when only one session is missing.
 	if _, err := tx.ExecContext(ctx,
-		"INSERT INTO messages ("+msgCols.String()+") "+
-			"SELECT copied.id, "+strings.TrimPrefix(msgCols.String(), "session_id, ")+" FROM old_db.messages old_m "+
+		"INSERT INTO messages ("+insertCols+") "+
+			"SELECT copied.id, "+selectCols+" FROM old_db.messages old_m "+
 			"JOIN "+tempIDsTable+" copied ON copied.source_id = old_m.session_id "+
 			"WHERE old_m.session_id IN (SELECT source_id FROM "+tempIDsTable+")",
 	); err != nil {
@@ -2533,12 +2578,16 @@ func copySessionDataForIDs(
 				input_tokens, output_tokens,
 				cache_creation_input_tokens, cache_read_input_tokens,
 				reasoning_tokens, cost_microdollars, cost_status, cost_source,
-				occurred_at, dedup_key`
+				occurred_at, dedup_key, occurred_at_us`
+		// Derive occurred_at_us from the text rather than copy it, so rows
+		// from an archive that predates the column get one too.
 		usageEventSelect += `,
 				input_tokens, output_tokens,
 				cache_creation_input_tokens, cache_read_input_tokens,
 				reasoning_tokens, cost_microdollars, cost_status, cost_source,
-				occurred_at, dedup_key`
+				occurred_at, dedup_key,
+				CASE WHEN typeof(occurred_at) = 'text'
+					THEN agentsview_timestamp_unix_micro(occurred_at) END`
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO usage_events (`+usageEventCols+`)
 			SELECT `+usageEventSelect+`
@@ -2560,6 +2609,18 @@ func copySessionDataForIDs(
 			)`,
 		); err != nil {
 			return fmt.Errorf("copying session_plan_usage: %w", err)
+		}
+	}
+	if oldDBHasTable(ctx, tx, "session_usage_totals") {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO session_usage_totals (session_id, `+SessionUsageTotalColumns+`)
+			SELECT session_id, `+SessionUsageTotalColumns+`
+			FROM old_db.session_usage_totals
+			WHERE session_id IN (
+				SELECT id FROM `+tempIDsTable+`
+			)`,
+		); err != nil {
+			return fmt.Errorf("copying session_usage_totals: %w", err)
 		}
 	}
 

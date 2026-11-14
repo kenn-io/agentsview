@@ -22,6 +22,7 @@ import (
 )
 
 func TestRawUploadStoreResumesAfterRestartAndRepairsCrashTail(t *testing.T) {
+	t.Parallel()
 	pg, dataDir := newRawUploadTestDatabase(t)
 	first, err := NewRawUploadStore(t.Context(), pg, dataDir)
 	require.NoError(t, err)
@@ -86,6 +87,7 @@ func TestRawUploadStoreResumesAfterRestartAndRepairsCrashTail(t *testing.T) {
 }
 
 func TestRawUploadStoreFencesTenantDeviceExpiryAndCompletion(t *testing.T) {
+	t.Parallel()
 	pg, dataDir := newRawUploadTestDatabase(t)
 	store, err := NewRawUploadStore(t.Context(), pg, dataDir)
 	require.NoError(t, err)
@@ -139,6 +141,7 @@ func TestRawUploadStoreFencesTenantDeviceExpiryAndCompletion(t *testing.T) {
 }
 
 func TestRawUploadStoreResetLeavesTruncationToNextLockedAppend(t *testing.T) {
+	t.Parallel()
 	pg, dataDir := newRawUploadTestDatabase(t)
 	store, err := NewRawUploadStore(t.Context(), pg, dataDir)
 	require.NoError(t, err)
@@ -176,6 +179,7 @@ func TestRawUploadStoreResetLeavesTruncationToNextLockedAppend(t *testing.T) {
 }
 
 func TestRawUploadStoreResetFencesVerifiedGeneration(t *testing.T) {
+	t.Parallel()
 	pg, dataDir := newRawUploadTestDatabase(t)
 	store, err := NewRawUploadStore(t.Context(), pg, dataDir)
 	require.NoError(t, err)
@@ -221,6 +225,7 @@ func TestRawUploadStoreResetFencesVerifiedGeneration(t *testing.T) {
 }
 
 func TestRawUploadStoreRetriesFailedStageDirectorySync(t *testing.T) {
+	t.Parallel()
 	pg, dataDir := newRawUploadTestDatabase(t)
 	store, err := NewRawUploadStore(t.Context(), pg, dataDir)
 	require.NoError(t, err)
@@ -257,6 +262,7 @@ func TestRawUploadStoreRetriesFailedStageDirectorySync(t *testing.T) {
 }
 
 func TestRawUploadStoreStartupCleansExpiredCompletedAndOrphanedSpools(t *testing.T) {
+	t.Parallel()
 	pg, dataDir := newRawUploadTestDatabase(t)
 	store, err := NewRawUploadStore(t.Context(), pg, dataDir)
 	require.NoError(t, err)
@@ -311,6 +317,7 @@ func TestRawUploadStoreStartupCleansExpiredCompletedAndOrphanedSpools(t *testing
 }
 
 func TestRawUploadStorePeriodicCleanupRunsOnTick(t *testing.T) {
+	t.Parallel()
 	pg, dataDir := newRawUploadTestDatabase(t)
 	store, err := NewRawUploadStore(t.Context(), pg, dataDir)
 	require.NoError(t, err)
@@ -341,6 +348,7 @@ func TestRawUploadStorePeriodicCleanupRunsOnTick(t *testing.T) {
 }
 
 func TestRawUploadStoreCleanupBoundsEachPass(t *testing.T) {
+	t.Parallel()
 	pg, dataDir := newRawUploadTestDatabase(t)
 	store, err := NewRawUploadStore(t.Context(), pg, dataDir)
 	require.NoError(t, err)

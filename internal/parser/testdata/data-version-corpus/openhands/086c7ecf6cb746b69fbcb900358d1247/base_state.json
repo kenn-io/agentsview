@@ -1,0 +1,4 @@
+{
+		"id":"086c7ecf-6cb7-46b6-9fbc-b900358d1247",
+		"agent":{"llm":{"model":"litellm_proxy/claude-sonnet-4-6"}}
+	}

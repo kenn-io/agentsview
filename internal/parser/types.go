@@ -49,6 +49,7 @@ const (
 	AgentOMP            AgentType = "omp"
 	AgentOMO            AgentType = "omo"
 	AgentStepCode       AgentType = "stepcode"
+	AgentDirectAPI      AgentType = "direct-api"
 	AgentQwen           AgentType = "qwen"
 	AgentCommandCode    AgentType = "commandcode"
 	AgentDeepSeekTUI    AgentType = "deepseek-tui"
@@ -652,6 +653,18 @@ var Registry = []AgentDef{
 		DefaultDirs:       []string{".stepcode/agent/sessions"},
 		IDPrefix:          "stepcode:",
 		FileBased:         true,
+	},
+	{
+		// Direct API sessions come from tools that call model APIs directly.
+		// They write a body-free subset of Pi's v3 JSONL, so the Pi provider
+		// ingests them for token and cost accounting.
+		Type:        AgentDirectAPI,
+		DisplayName: "Direct API",
+		EnvVar:      "DIRECT_API_DIR",
+		ConfigKey:   "direct_api_dirs",
+		DefaultDirs: []string{".agentsview/direct-api"},
+		IDPrefix:    "direct-api:",
+		FileBased:   true,
 	},
 	{
 		Type:        AgentQwen,
@@ -1613,6 +1626,12 @@ type ParsedSession struct {
 	// token records.
 	PlanUsage *ParsedPlanUsage
 
+	// SessionTotal is a usage total the agent recorded for the whole
+	// session, such as Claude Code's cost-state. It overlaps the session's
+	// usage rows, so it is stored apart from them and never summed with
+	// them; see ParsedSessionTotal.
+	SessionTotal *ParsedSessionTotal
+
 	// CountsAuthoritative marks parsers that own MessageCount and
 	// UserMessageCount even when they intentionally emit no transcript rows.
 	CountsAuthoritative bool
@@ -1786,6 +1805,44 @@ type ParsedCaptureCoverage struct {
 	UncapturedTurns int
 }
 
+// Subagent scopes of a ParsedSessionTotal: whether its figures include
+// the usage of the session's subagent sessions.
+const (
+	SubagentScopeUnknown  = ""
+	SubagentScopeIncluded = "included"
+	SubagentScopeExcluded = "excluded"
+)
+
+// ParsedSessionTotal is a total the agent recorded for a whole session.
+// It is a reconciliation value, not usage: it covers calls that also have
+// their own usage rows, and with SubagentScope included it also covers the
+// subagent sessions' rows. AgentsView stores it apart from usage rows and
+// only shows it next to its own totals. A parser must set SubagentScope
+// from producer evidence; leave it unknown otherwise.
+type ParsedSessionTotal struct {
+	Source        string
+	SubagentScope string
+	// Cost is the agent's own estimate for the session, nil when absent.
+	Cost *money.Money
+	// Incomplete reports that the agent could not price every model, so
+	// Cost leaves some usage out.
+	Incomplete bool
+	Models     []ParsedSessionTotalModel
+}
+
+// ParsedSessionTotalModel is one model's share of a ParsedSessionTotal.
+// OutputTokens includes ReasoningTokens; input counters are disjoint.
+type ParsedSessionTotalModel struct {
+	Model                    string
+	InputTokens              int64
+	OutputTokens             int64
+	ReasoningTokens          int64
+	CacheCreationInputTokens int64
+	CacheReadInputTokens     int64
+	WebSearchRequests        int64
+	Cost                     *money.Money
+}
+
 // ParsedPlanUsage is a session's plan usage: OpenAI's latest report of
 // the thread's share of the plan's limits and its credits, and the newest
 // outcome record written after that report. The report fields are empty
@@ -1822,6 +1879,18 @@ type ParsedPlanUsageGroup struct {
 // ParsedUsageEvent records session-level usage emitted by parsers
 // when an agent exposes aggregate accounting instead of per-message
 // token_usage rows.
+//
+// Every event is additive: usage reads sum it with the session's message
+// rows and its other events. A total that already covers those rows must
+// not be emitted as an event.
+//
+// Cost carries a cost the harness wrote itself; CostStatus says how much to
+// trust it. usagefacts.CostStatusRecorded marks a harness estimate kept as
+// evidence: it prices the row only when the catalog has no rate for Model,
+// and a recorded $0 never does. Any other status makes Cost the row's price.
+// A recorded cost for one message belongs on that message instead, through
+// ParsedMessage.SetRecordedCost. An event with a Cost and no Model is stored
+// under usagefacts.UnknownModel.
 type ParsedUsageEvent struct {
 	SessionID                string
 	MessageOrdinal           *int
@@ -2080,6 +2149,9 @@ type ParseResult struct {
 	// checkpoint so it never re-reads the source after a full parse.
 	CheckpointHashState    []byte
 	CheckpointAnchorDigest string
+	// replacesStored marks a single-file parse whose messages replace the
+	// stored transcript instead of appending to it (ParseOutcome.ForceReplace).
+	replacesStored bool
 }
 
 // PromoteParentlessWorker classifies workers without an existing parent or relationship.

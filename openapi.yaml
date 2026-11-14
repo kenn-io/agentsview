@@ -1409,6 +1409,10 @@ components:
           type: string
         machine:
           type: string
+        matched_words:
+          description: Number of retained query words the match holds in ranked word search; unquoted stop words are dropped. Zero for other searches.
+          format: int64
+          type: integer
         ordinal:
           format: int64
           type: integer
@@ -1460,6 +1464,7 @@ components:
         - ordinal
         - timestamp
         - snippet
+        - matched_words
         - ordinal_range
       type: object
     DbCursorAttributionMetrics:
@@ -3122,6 +3127,32 @@ components:
         - created_at
         - updated_at
       type: object
+    DbSessionRecordedCost:
+      additionalProperties: false
+      properties:
+        computed:
+          $ref: "#/components/schemas/MoneyMoney"
+        difference:
+          $ref: "#/components/schemas/MoneyMoney"
+        fallback_rows:
+          format: int64
+          type: integer
+        recorded:
+          $ref: "#/components/schemas/MoneyMoney"
+        rows:
+          format: int64
+          type: integer
+        unpriced_rows:
+          format: int64
+          type: integer
+      required:
+        - recorded
+        - computed
+        - difference
+        - rows
+        - fallback_rows
+        - unpriced_rows
+      type: object
     DbSessionShapeResponse:
       additionalProperties: false
       properties:
@@ -3251,6 +3282,57 @@ components:
         - running
         - activity
         - activity_totals
+      type: object
+    DbSessionUsageTotal:
+      additionalProperties: false
+      properties:
+        cost:
+          $ref: "#/components/schemas/MoneyMoney"
+        incomplete:
+          type: boolean
+        models:
+          items:
+            $ref: "#/components/schemas/DbSessionUsageTotalModel"
+          type: array
+        source:
+          type: string
+        subagent_scope:
+          type: string
+      required:
+        - source
+        - models
+      type: object
+    DbSessionUsageTotalModel:
+      additionalProperties: false
+      properties:
+        cache_creation_input_tokens:
+          format: int64
+          type: integer
+        cache_read_input_tokens:
+          format: int64
+          type: integer
+        cost:
+          $ref: "#/components/schemas/MoneyMoney"
+        input_tokens:
+          format: int64
+          type: integer
+        model:
+          type: string
+        output_tokens:
+          format: int64
+          type: integer
+        reasoning_tokens:
+          format: int64
+          type: integer
+        web_search_requests:
+          format: int64
+          type: integer
+      required:
+        - model
+        - input_tokens
+        - output_tokens
+        - cache_creation_input_tokens
+        - cache_read_input_tokens
       type: object
     DbSidebarSessionIndex:
       additionalProperties: false
@@ -6067,11 +6149,16 @@ components:
       properties:
         healthy:
           type: boolean
+        instance_id:
+          format: uuid
+          type: string
         ok:
           type: boolean
         pid:
           format: int64
           type: integer
+        project_identity_backfill_error:
+          type: string
         service:
           type: string
         sync:
@@ -6079,6 +6166,7 @@ components:
         version:
           type: string
       required:
+        - instance_id
         - ok
         - healthy
       type: object
@@ -8275,6 +8363,10 @@ components:
         output_tokens:
           format: int64
           type: integer
+        recorded_cost:
+          $ref: "#/components/schemas/MoneyMoney"
+        recorded_cost_priced:
+          type: boolean
         source:
           type: string
         subagent_session_id:
@@ -8338,6 +8430,8 @@ components:
           $ref: "#/components/schemas/DbPlanUsageView"
         project:
           type: string
+        recorded_cost:
+          $ref: "#/components/schemas/DbSessionRecordedCost"
         rollup_cost:
           $ref: "#/components/schemas/MoneyMoney"
         rollup_cost_source:
@@ -8349,6 +8443,8 @@ components:
           type: boolean
         session_id:
           type: string
+        session_total:
+          $ref: "#/components/schemas/DbSessionUsageTotal"
         subagent_count:
           format: int64
           type: integer
@@ -8433,6 +8529,10 @@ components:
           type: boolean
         require_auth:
           type: boolean
+        restart_required:
+          type: boolean
+        restart_supported:
+          type: boolean
         session_providers:
           items:
             $ref: "#/components/schemas/SessionProviderResponse"
@@ -8474,6 +8574,8 @@ components:
         - insight_default_agent
         - require_auth
         - read_only
+        - restart_supported
+        - restart_required
       type: object
     SettingsUpdateRequest:
       additionalProperties: false
@@ -13298,6 +13400,81 @@ paths:
                 $ref: "#/components/schemas/ApiErrorResponse"
           description: Gateway Timeout
       summary: Keep the daemon running until stopped
+      tags:
+        - Daemon
+  /api/v1/daemon/restart:
+    post:
+      operationId: post-api-v1-daemon-restart
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  type: boolean
+                type: object
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Restart the daemon with saved settings
       tags:
         - Daemon
   /api/v1/data/compact:
@@ -20495,6 +20672,13 @@ paths:
     get:
       operationId: get-api-v1-sessions
       parameters:
+        - description: Match child sessions individually when include_children is true
+          explode: false
+          in: query
+          name: flat
+          schema:
+            description: Match child sessions individually when include_children is true
+            type: boolean
         - description: Include default-exclusion counts; true also samples hidden children, false counts only one-shot and automated sessions. First page only.
           explode: false
           in: query
@@ -22005,6 +22189,13 @@ paths:
           schema:
             description: Session ID
             type: string
+        - description: Export unredacted secret values; localhost callers only
+          explode: false
+          in: query
+          name: reveal
+          schema:
+            description: Export unredacted secret values; localhost callers only
+            type: boolean
       responses:
         "200":
           content:
@@ -22297,6 +22488,13 @@ paths:
               - "1"
               - all
             type: string
+        - description: Export unredacted secret values; localhost callers only
+          explode: false
+          in: query
+          name: reveal
+          schema:
+            description: Export unredacted secret values; localhost callers only
+            type: boolean
       responses:
         "200":
           content:
@@ -22392,6 +22590,13 @@ paths:
     get:
       operationId: get-api-v1-sessions-id-messages
       parameters:
+        - description: Only compact boundary messages
+          explode: false
+          in: query
+          name: compact_boundary
+          schema:
+            description: Only compact boundary messages
+            type: boolean
         - description: Session ID
           in: path
           name: id
@@ -23201,6 +23406,13 @@ paths:
           name: secret
           schema:
             description: Create a secret gist instead of a public one
+            type: boolean
+        - description: Publish unredacted secret values; localhost callers only
+          explode: false
+          in: query
+          name: reveal
+          schema:
+            description: Publish unredacted secret values; localhost callers only
             type: boolean
       responses:
         "200":

@@ -1,0 +1,6 @@
+{"Role":1,"Content":[
+  {"Type":3,"Thinking":"Plan it."},
+  {"Type":2,"Text":"Listing the directory first."},
+  {"ID":"toolu_1","Type":5,"ToolName":"bash","ToolInput":{"cmd":"ls"}},
+  {"Type":6,"ToolUseID":"toolu_1","ToolResult":[{"Type":2,"Text":"file1\nfile2"}],"ToolError":false}
+]}

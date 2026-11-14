@@ -11,9 +11,15 @@ import (
 // PushOptions controls a single replica push. The zero value is an
 // incremental push with generation-wide vector reconciliation.
 type PushOptions struct {
-	// Full bypasses unchanged-fingerprint and unchanged-hash skips so
-	// every session is resent.
+	// Full compares every in-scope session with the replica and removes
+	// replica sessions missing locally. PostgreSQL resends every session;
+	// ClickHouse resends only the sessions whose replica rows differ unless
+	// RewriteUnchanged is also set.
 	Full bool
+	// RewriteUnchanged makes a full ClickHouse push rewrite every session,
+	// including ones whose replica rows already match: the repair an explicit
+	// --full asks for. It has no effect without Full.
+	RewriteUnchanged bool
 	// FullVectors bypasses unchanged-hash skips in the vector phase while
 	// sessions stay incremental.
 	FullVectors bool
@@ -74,13 +80,21 @@ type PushResult struct {
 	// SkippedResumed counts sessions a resumed full push left alone because
 	// the unfinished run it continues already pushed them as they are now.
 	SkippedResumed int
+	// SessionRowsOnly counts pushed sessions whose other replica rows
+	// already held the local content, so the push rewrote only the session
+	// row. SessionsPushed includes them.
+	SessionRowsOnly int
+	// CommitLinksOnly counts sessions whose commit links alone a push
+	// rewrote to bring them to the current format.
+	CommitLinksOnly int
 	// DeletedStale counts replica sessions removed because they no longer
 	// exist locally or left the push scope.
 	DeletedStale int
 	Errors       int
 	Duration     time.Duration
-	// Full reports whether the push rewrote every in-scope session, and
-	// FullReason says why when the caller did not ask for it. A requested
+	// Full reports whether the push ran as a full push (see
+	// PushOptions.Full), and FullReason says why when the caller did not ask
+	// for it. A requested
 	// full push that discarded an unfinished one says so in FullReason.
 	Full       bool
 	FullReason string

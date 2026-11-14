@@ -1,10 +1,7 @@
 <script lang="ts">
   import { errorTelemetry } from "../../utils/error-telemetry.js";
-  import {
-    usage,
-    type GroupBy,
-    type AttributionView,
-  } from "../../stores/usage.svelte.js";
+  import { usage } from "../../stores/usage.svelte.js";
+  import type { AttributionView, GroupBy } from "../../stores/usagePreferences.js";
   import { tick } from "svelte";
   import { Button } from "@kenn-io/kit-ui";
   import { seriesSwatchBackground, type SeriesStyle } from "@kenn-io/kit-ui/utils/palette";

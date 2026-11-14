@@ -67,9 +67,9 @@ is true.
 ## Failures and fallbacks
 
 Read the note. For `effective_mode: hybrid_keyword`, disclose keyword-only
-results once and use the matches without retry. For thin or empty results,
-try short `mode: substring` queries with key terms or synonyms. Preserve
-`scope`, inclusion, and current-session flags.
+results once and use the matches without retry.{{if .ServerArgs}} For thin or
+empty results, try short `mode: substring` queries with key terms or
+synonyms.{{end}} Preserve `scope`, inclusion, and current-session flags.
 
 Disclose explicit semantic errors. Use a lexical fallback only for an
 unavailable index or transient embedding error; retry transient errors once

@@ -4,7 +4,7 @@ This document records the runtime and cost-model contracts that keep active
 session writers from turning into unbounded background work. The implementation
 lives primarily in `internal/sync/watcher.go`,
 `internal/parser/codex_cursor.go`, and the provider incremental path in
-`internal/sync/engine.go`.
+`internal/sync/engine_incremental.go`.
 
 ## Watcher runtime contract
 

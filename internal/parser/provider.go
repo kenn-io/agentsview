@@ -17,6 +17,7 @@ const (
 	ProviderFeatureWatchRoots           = "watch roots"
 	ProviderFeatureActivityHints        = "activity hints"
 	ProviderFeatureChangedPathRelevance = "changed path relevance"
+	ProviderFeatureScopedDiscovery      = "scoped discovery"
 )
 
 // ErrUnsupportedProviderFeature identifies optional provider behavior that is
@@ -1314,7 +1315,7 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newOpenCodeProviderFactory(def)
 	case AgentOpenCodeReview:
 		return newOpenCodeReviewProviderFactory(def)
-	case AgentOMP, AgentOMO, AgentStepCode:
+	case AgentOMP, AgentOMO, AgentStepCode, AgentDirectAPI:
 		return newPiProviderFactory(def)
 	case AgentOpenClaw:
 		return newOpenClawProviderFactory(def)

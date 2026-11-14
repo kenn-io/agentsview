@@ -1,0 +1,13 @@
+{
+			"id":"e1",
+			"timestamp":"2026-04-02T15:25:41.706887",
+			"source":"agent",
+			"thought":[{"type":"text","text":"I'll inspect the logs first."}],
+			"thinking_blocks":[{"type":"thinking","thinking":"Start with the failing process and collect output."}],
+			"action":{"command":"tail -40 /tmp/server.log","kind":"TerminalAction"},
+			"tool_name":"terminal",
+			"tool_call_id":"toolu_123",
+			"tool_call":{"id":"toolu_123","name":"terminal","arguments":"{\"command\":\"tail -40 /tmp/server.log\",\"summary\":\"Inspect latest server logs\"}"},
+			"summary":"Inspect latest server logs",
+			"kind":"ActionEvent"
+		}

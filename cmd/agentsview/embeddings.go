@@ -431,6 +431,14 @@ func runEmbeddingsBuild(
 	case opts.IncludeAutomatedSet:
 		flag = "include-automated"
 	}
+	var activeClient embeddingsDaemonClient
+	active := false
+	if needsSetup && flag != "" {
+		activeClient, active = activeEmbeddingsDaemon(ctx, cfg)
+		if active {
+			needsSetup = false
+		}
+	}
 	if !needsSetup && flag != "" {
 		_, needsSetup = daemonSetupClient(ctx, cfg)
 	}
@@ -480,8 +488,10 @@ func runEmbeddingsBuild(
 			return nil
 		}
 	}
-	if err := prepareLocalEmbeddings(ctx, cfg, opts.Using, confirmation, out); err != nil {
-		return err
+	if !active {
+		if err := prepareLocalEmbeddings(ctx, cfg, opts.Using, confirmation, out); err != nil {
+			return err
+		}
 	}
 
 	req := vector.BuildRequest{
@@ -491,6 +501,10 @@ func runEmbeddingsBuild(
 		RepairInvalid:    opts.RepairInvalid,
 		IncludeAutomated: includeAutomated,
 		Using:            opts.Using,
+	}
+	if active {
+		activeClient.store = daemonEmbeddingStore(spec.Name)
+		return buildViaDaemon(ctx, out, activeClient, req)
 	}
 	if IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
 		err := runEmbeddingsBuildDaemon(ctx, out, cfg, req)
@@ -862,8 +876,10 @@ func runEmbeddingsList(ctx context.Context, out io.Writer, jsonOutput bool, stor
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
-	if err := requireVectorEnabled(cfg); err != nil {
-		return err
+	if _, active := activeEmbeddingsDaemon(ctx, cfg); !active {
+		if err := requireVectorEnabled(cfg); err != nil {
+			return err
+		}
 	}
 	spec, err := vectorStoreSpec(store)
 	if err != nil {
@@ -958,8 +974,10 @@ func runEmbeddingsGenerationAction(
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
-	if err := requireVectorEnabled(cfg); err != nil {
-		return err
+	if _, active := activeEmbeddingsDaemon(ctx, cfg); !active {
+		if err := requireVectorEnabled(cfg); err != nil {
+			return err
+		}
 	}
 	spec, err := vectorStoreSpec(store)
 	if err != nil {
@@ -1114,13 +1132,33 @@ func joinActiveSetup(ctx context.Context, out io.Writer, cfg config.Config, clie
 		if err != nil {
 			return true, fmt.Errorf("loading config: %w", err)
 		}
-		if !cfg.Vector.Enabled {
+		disabled, err := cfg.VectorExplicitlyDisabled()
+		if err != nil {
+			return true, err
+		}
+		if disabled {
 			return true, errors.New("search by meaning is off in the config; run `agentsview daemon restart` before retrying setup")
 		}
 		fmt.Fprintln(out, "Search by meaning is on.")
 		return true, buildViaDaemon(ctx, out, client, vector.BuildRequest{IncludeAutomated: vector.MessageIndexSpec().NormalizeIncludeAutomated(cfg.Vector.IncludeAutomated)})
 	}
 	return false, nil
+}
+
+func activeEmbeddingsDaemon(ctx context.Context, cfg config.Config) (embeddingsDaemonClient, bool) {
+	if cfg.Vector.Enabled || cfg.ArchiveContent.UsageOnly() || !IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
+		return embeddingsDaemonClient{}, false
+	}
+	disabled, err := cfg.VectorExplicitlyDisabled()
+	if err != nil || disabled {
+		return embeddingsDaemonClient{}, false
+	}
+	client, err := resolveEmbeddingsDaemonClient(cfg)
+	if err != nil {
+		return client, false
+	}
+	status, err := client.status(ctx)
+	return client, err == nil && status.Setup != nil && status.Setup.Enabled && status.Setup.Action == ""
 }
 
 func (c embeddingsDaemonClient) startSetup(ctx context.Context, approved int64) error {

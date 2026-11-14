@@ -40,6 +40,11 @@ Search matches text extracted from tool-result images when
 [`[image_text]`](configuration.md#image-text) is enabled locally. The first
 push after upgrading rebuilds the mirror to copy existing image text.
 
+Usage and Activity load faster because the mirror stores each message's token
+counts. After upgrading, run `agentsview replica duckdb push` once to rebuild
+the mirror; `agentsview replica duckdb serve` refuses to open an older mirror
+until you do.
+
 ## Quick Start
 
 ```bash
@@ -92,15 +97,31 @@ and `duckdb serve`.
 proxy and TLS flags) and is read-only in the same way — no uploads, file
 watching, or local sync.
 
-Local `duckdb serve` keeps finished Activity ranges in memory and past days a
-client opens on disk, so reopening them is quick, including after a restart.
+Local `duckdb serve` keeps usage totals for Activity ranges that include today
+in memory. A push, pricing change, or restart clears those totals. Finished
+Activity reports are also kept in memory, which restart clears. Eligible
+past-day reports can be saved to disk and reused after restart.
 Finished Usage results stay in memory for the same mirror file and custom
 pricing, with up to 64 selections and 64 MiB per read kind.
+Dashboard reports share a separate in-memory cache with up to 64 entries and
+64 MiB. Each entry holds one panel, filter, and metric or time-bucket selection.
+Reports are reused until the mirror or pricing changes. Time-dependent
+termination filters and recently active selections read fresh; the recently
+active control generates a new cutoff on each refresh. Quack remote reads do
+not use this cache.
 Disk reports are reused with the same mirror file, binary, and custom pricing.
 They live under `$CACHE_DIRECTORY/duckdb-activity-reports`, or under
 `agentsview/duckdb-activity-reports` in the user cache directory. Reports no one
 opens for 30 days are removed. Deleting them only slows the next open. If the
 cache directory cannot be created, serve keeps reports in memory only.
+Usage results for the same dates and selection also use
+`$CACHE_DIRECTORY/duckdb-usage`, or `agentsview/duckdb-usage` in the user cache
+directory. Deleting these files is
+safe and makes the next Usage visit read the mirror again.
+
+Trends keeps per-session counts in `duckdb-usage` and, after a push, recounts
+only changed sessions. Quack clients keep them per endpoint in the same
+directory.
 
 ## Quack Remote Access
 

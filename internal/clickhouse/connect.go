@@ -224,6 +224,27 @@ func OpenForAdmin(ctx context.Context, t Target) (*sql.DB, error) {
 	return openDatabase(ctx, t.URL, "default", 0)
 }
 
+// compactionReadTimeout is how long one OPTIMIZE may run before the push stops
+// waiting for it. The server sends nothing while it merges, so the driver's
+// default five-minute read timeout would end the wait for a large table on a
+// slow server while the merge keeps running.
+const compactionReadTimeout = time.Hour
+
+// openCompaction opens the one-connection pool a push compacts through; see
+// compactionReadTimeout.
+func openCompaction(ctx context.Context, t Target) (*sql.DB, error) {
+	database, err := t.DatabaseName()
+	if err != nil {
+		return nil, err
+	}
+	opt, err := connectOptions(t.URL, database, 1)
+	if err != nil {
+		return nil, err
+	}
+	opt.ReadTimeout = max(opt.ReadTimeout, compactionReadTimeout)
+	return openWithOptions(ctx, t.URL, opt)
+}
+
 // openDatabase opens a pool of poolSize connections, or of the URL's
 // max_open_conns (default defaultMaxOpenConns) when poolSize is 0.
 func openDatabase(ctx context.Context, dsn, database string, poolSize int) (*sql.DB, error) {
@@ -231,6 +252,10 @@ func openDatabase(ctx context.Context, dsn, database string, poolSize int) (*sql
 	if err != nil {
 		return nil, err
 	}
+	return openWithOptions(ctx, dsn, opt)
+}
+
+func openWithOptions(ctx context.Context, dsn string, opt *clickhouse.Options) (*sql.DB, error) {
 	conn := clickhouse.OpenDB(opt)
 	conn.SetMaxOpenConns(opt.MaxOpenConns)
 	conn.SetMaxIdleConns(opt.MaxIdleConns)

@@ -1,0 +1,8 @@
+{
+  "messages": [
+    {"id": "msg_u1", "role": "user", "type": "text"},
+    {"id": "msg_a1", "role": "assistant", "type": "text"},
+    {"id": "msg_t1", "role": "tool", "type": "text"},
+    {"id": "msg_a2", "role": "assistant", "type": "text"}
+  ]
+}

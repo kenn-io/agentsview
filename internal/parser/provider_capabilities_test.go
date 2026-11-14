@@ -80,7 +80,8 @@ func TestProviderCapabilitiesChangedPathRelevanceMatchConsumers(t *testing.T) {
 			agent == AgentMiMoCode || agent == AgentIcodemate || agent == AgentJunie ||
 			agent == AgentCodebuff || agent == AgentVibe ||
 			agent == AgentAntigravityCLI || agent == AgentAntigravity ||
-			agent == AgentGemini {
+			agent == AgentGemini || agent == AgentPi ||
+			agent == AgentOMO || agent == AgentStepCode {
 			assert.Equal(t, CapabilitySupported, got)
 			provider := factory.NewProvider(ProviderConfig{
 				Roots: []string{t.TempDir()},

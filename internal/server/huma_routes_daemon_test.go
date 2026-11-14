@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -76,6 +77,45 @@ func TestDaemonPersistenceDuringArchiveRebuild(t *testing.T) {
 	res := serveJSON(t, f.handler, http.MethodPost, "/api/v1/daemon/persist", nil)
 	require.Equal(t, http.StatusOK, res.Code, res.Body.String())
 	assert.True(t, published)
+}
+
+func TestDaemonRestart(t *testing.T) {
+	f := newSyncRouteFixture(t, withStaleDB())
+	settings := func() bool {
+		t.Helper()
+		res := serveJSON(t, f.handler, http.MethodGet, "/api/v1/settings", nil)
+		require.Equal(t, http.StatusOK, res.Code, res.Body.String())
+		var body struct {
+			RestartSupported bool `json:"restart_supported"`
+		}
+		require.NoError(t, json.Unmarshal(res.Body.Bytes(), &body))
+		return body.RestartSupported
+	}
+	assert.False(t, settings())
+	res := serveJSON(t, f.handler, http.MethodPost, "/api/v1/daemon/restart", nil)
+	require.Equal(t, http.StatusNotImplemented, res.Code, res.Body.String())
+	assert.Contains(t, res.Body.String(), "Restart AgentsView the way you started it")
+
+	f.srv.mu.Lock()
+	f.srv.cfg.Host = "example"
+	f.srv.mu.Unlock()
+	called := false
+	f.srv.restartDaemon = func(ctx context.Context, cfg config.Config) error {
+		called = true
+		assert.Equal(t, "example", cfg.Host)
+		assert.NoError(t, ctx.Err())
+		return nil
+	}
+	assert.True(t, settings())
+	// Restart must remain available when the archive writer is closed.
+	require.NoError(t, f.db.CloseWriter())
+	res = serveJSON(t, f.handler, http.MethodPost, "/api/v1/daemon/restart", nil)
+	require.Equal(t, http.StatusOK, res.Code, res.Body.String())
+	assert.True(t, called)
+
+	f.srv.restartDaemon = func(context.Context, config.Config) error { return errors.New("launch failed") }
+	res = serveJSON(t, f.handler, http.MethodPost, "/api/v1/daemon/restart", nil)
+	assert.Equal(t, http.StatusInternalServerError, res.Code, res.Body.String())
 }
 
 func TestDaemonPersistencePublishedWriteFailureKeepsDaemonRunning(t *testing.T) {

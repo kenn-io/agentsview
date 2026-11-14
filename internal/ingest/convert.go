@@ -139,6 +139,33 @@ func ConvertUsageEventsContext(
 	return events, stats, err
 }
 
+// ConvertSessionTotal converts the usage total the agent recorded for a
+// whole session into its storage row, or nil when the parser reported none.
+func ConvertSessionTotal(total *parser.ParsedSessionTotal) *db.SessionUsageTotal {
+	if total == nil {
+		return nil
+	}
+	row := &db.SessionUsageTotal{
+		Source:        db.SanitizeUTF8(total.Source),
+		SubagentScope: db.SanitizeUTF8(total.SubagentScope),
+		Cost:          total.Cost,
+		Incomplete:    total.Incomplete,
+	}
+	for _, model := range total.Models {
+		row.Models = append(row.Models, db.SessionUsageTotalModel{
+			Model:                    db.SanitizeUTF8(model.Model),
+			InputTokens:              model.InputTokens,
+			OutputTokens:             model.OutputTokens,
+			ReasoningTokens:          model.ReasoningTokens,
+			CacheCreationInputTokens: model.CacheCreationInputTokens,
+			CacheReadInputTokens:     model.CacheReadInputTokens,
+			WebSearchRequests:        model.WebSearchRequests,
+			Cost:                     model.Cost,
+		})
+	}
+	return row
+}
+
 // ConvertPlanUsage converts a session's plan usage and live-capture
 // coverage into its plan usage row, or nil when the parser reported
 // neither.

@@ -3,6 +3,7 @@ import { setLocale } from "../i18n/index.js";
 import { testMoney } from "../test/money.js";
 import {
   formatRelativeTime,
+  formatTimestamp,
   sanitizeSnippet,
   highlightTerms,
   _resetNonceCounter,
@@ -39,6 +40,21 @@ describe("formatRelativeTime", () => {
     expect(formatRelativeTime("2026-06-17T12:00:00Z")).toBe("刚刚");
     expect(formatRelativeTime("2026-06-17T11:58:00Z")).toBe("2 分钟前");
     expect(formatRelativeTime("2026-06-15T12:00:00Z")).toBe("2 天前");
+  });
+});
+
+describe("date and time with the year", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("shows the year and time when requested", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-03T14:32:00"));
+    expect(formatRelativeTime("2026-06-03T14:30:00", true)).toBe("Jun 3, 2026, 02:30 PM");
+    expect(formatTimestamp("2024-06-01T14:30:00", true)).toBe("Jun 1, 2024, 02:30 PM");
+    expect(formatRelativeTime("2024-06-01T14:30:00")).toBe("Jun 1");
+    expect(formatTimestamp("2024-06-01T14:30:00")).toBe("Jun 1, 02:30 PM");
   });
 });
 

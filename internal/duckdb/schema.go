@@ -31,23 +31,32 @@ import (
 // the rebuild drops the copies older pushes wrote.
 // v25 adds text extracted from tool result images (image_text); the rebuild
 // copies it for resident sessions.
-const SchemaVersion = 25
+// v26 adds session_usage_totals, the usage totals agents record for whole
+// sessions.
+// v27 stores frustration marker counts at push time.
+// v28 adds the usage rollup tables (see usage_rollup.go).
+// v29 stores each message's token usage counters in typed columns, parsed at
+// push by usagefacts.ParseTokenUsage, so usage reads never parse token_usage.
+// v30 moves the OpenRouter ownership list from a model_pricing row into
+// pricing_meta and stores pricing times as TIMESTAMP.
+const SchemaVersion = 30
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
 // Mirror metadata keys recorded by writeMirrorMetadata and read back by
 // readMirrorMetadata / ProbeMirror.
 const (
-	dataVersionMetadataKey      = "agentsview_source_data_version"
-	sourceDatabaseIDMetadataKey = "agentsview_source_database_id"
-	sourceArchiveIDMetadataKey  = "agentsview_source_archive_id"
-	pushScopeMetadataKey        = "agentsview_push_scope"
-	lastPushAtMetadataKey       = "agentsview_last_push_at"
-	lastPushMachineMetadataKey  = "agentsview_last_push_machine"
-	lastPushCutoffMetadataKey   = "agentsview_last_push_cutoff"
-	deletionRevisionMetadataKey = "agentsview_session_deletion_revision"
-	identityRevisionMetadataKey = "agentsview_project_identity_revision"
-	mappingRevisionMetadataKey  = "agentsview_worktree_mapping_revision"
+	frustrationMarkersVersionMetadataKey = "agentsview_frustration_markers_version"
+	dataVersionMetadataKey               = "agentsview_source_data_version"
+	sourceDatabaseIDMetadataKey          = "agentsview_source_database_id"
+	sourceArchiveIDMetadataKey           = "agentsview_source_archive_id"
+	pushScopeMetadataKey                 = "agentsview_push_scope"
+	lastPushAtMetadataKey                = "agentsview_last_push_at"
+	lastPushMachineMetadataKey           = "agentsview_last_push_machine"
+	lastPushCutoffMetadataKey            = "agentsview_last_push_cutoff"
+	deletionRevisionMetadataKey          = "agentsview_session_deletion_revision"
+	identityRevisionMetadataKey          = "agentsview_project_identity_revision"
+	mappingRevisionMetadataKey           = "agentsview_worktree_mapping_revision"
 )
 
 // curationFingerprintMetadataKey stores a hash of the local in-scope
@@ -96,7 +105,7 @@ type columnSpec struct {
 	def  string
 }
 
-var mirrorTables = []tableSpec{
+var mirrorTables = append([]tableSpec{
 	{
 		name: "commit_links",
 		create: `CREATE TABLE IF NOT EXISTS commit_links (
@@ -242,7 +251,8 @@ var mirrorTables = []tableSpec{
 			pr_links VARCHAR NOT NULL DEFAULT '',
 			labels VARCHAR[],
 			agentsview_push_fingerprint TEXT,
-			source_archive_id TEXT NOT NULL DEFAULT ''
+			source_archive_id TEXT NOT NULL DEFAULT '',
+			frustration_marker_count INTEGER NOT NULL DEFAULT 0
 		)`,
 		columns: []columnSpec{
 			{"id", "id TEXT"},
@@ -318,6 +328,7 @@ var mirrorTables = []tableSpec{
 			{"labels", "labels VARCHAR[]"},
 			{"agentsview_push_fingerprint", "agentsview_push_fingerprint TEXT"},
 			{"source_archive_id", "source_archive_id TEXT NOT NULL DEFAULT ''"},
+			{"frustration_marker_count", "frustration_marker_count INTEGER NOT NULL DEFAULT 0"},
 		},
 		indexes: []string{
 			"CREATE INDEX IF NOT EXISTS idx_sessions_ended ON sessions(ended_at, id)",
@@ -361,6 +372,13 @@ var mirrorTables = []tableSpec{
 			source_parent_uuid TEXT NOT NULL DEFAULT '',
 			is_sidechain BOOLEAN NOT NULL DEFAULT FALSE,
 			is_compact_boundary BOOLEAN NOT NULL DEFAULT FALSE,
+			usage_input_tokens BIGINT NOT NULL DEFAULT 0,
+			usage_output_tokens BIGINT NOT NULL DEFAULT 0,
+			usage_cache_creation_input_tokens BIGINT NOT NULL DEFAULT 0,
+			usage_cache_creation_1h_input_tokens BIGINT NOT NULL DEFAULT 0,
+			usage_cache_read_input_tokens BIGINT NOT NULL DEFAULT 0,
+			usage_reasoning_tokens BIGINT NOT NULL DEFAULT 0,
+			usage_web_search_requests BIGINT NOT NULL DEFAULT 0,
 			UNIQUE(session_id, ordinal)
 		)`,
 		columns: []columnSpec{
@@ -393,6 +411,13 @@ var mirrorTables = []tableSpec{
 			{"source_parent_uuid", "source_parent_uuid TEXT NOT NULL DEFAULT ''"},
 			{"is_sidechain", "is_sidechain BOOLEAN NOT NULL DEFAULT FALSE"},
 			{"is_compact_boundary", "is_compact_boundary BOOLEAN NOT NULL DEFAULT FALSE"},
+			{"usage_input_tokens", "usage_input_tokens BIGINT NOT NULL DEFAULT 0"},
+			{"usage_output_tokens", "usage_output_tokens BIGINT NOT NULL DEFAULT 0"},
+			{"usage_cache_creation_input_tokens", "usage_cache_creation_input_tokens BIGINT NOT NULL DEFAULT 0"},
+			{"usage_cache_creation_1h_input_tokens", "usage_cache_creation_1h_input_tokens BIGINT NOT NULL DEFAULT 0"},
+			{"usage_cache_read_input_tokens", "usage_cache_read_input_tokens BIGINT NOT NULL DEFAULT 0"},
+			{"usage_reasoning_tokens", "usage_reasoning_tokens BIGINT NOT NULL DEFAULT 0"},
+			{"usage_web_search_requests", "usage_web_search_requests BIGINT NOT NULL DEFAULT 0"},
 		},
 		indexes: []string{
 			"CREATE INDEX IF NOT EXISTS idx_messages_session_ordinal ON messages(session_id, ordinal)",
@@ -490,6 +515,31 @@ var mirrorTables = []tableSpec{
 		},
 	},
 	{
+		// One row per session, the agent's own total for it. Never read by
+		// usage queries. No primary key: a push deletes and reinserts the row
+		// in one transaction, as for session_plan_usage.
+		name: "session_usage_totals",
+		create: `CREATE TABLE IF NOT EXISTS session_usage_totals (
+			session_id TEXT NOT NULL,
+			source TEXT NOT NULL DEFAULT '',
+			subagent_scope TEXT NOT NULL DEFAULT '',
+			cost_microdollars BIGINT,
+			incomplete BOOLEAN NOT NULL DEFAULT FALSE,
+			models_json TEXT NOT NULL DEFAULT '[]'
+		)`,
+		columns: []columnSpec{
+			{"session_id", "session_id TEXT NOT NULL DEFAULT ''"},
+			{"source", "source TEXT NOT NULL DEFAULT ''"},
+			{"subagent_scope", "subagent_scope TEXT NOT NULL DEFAULT ''"},
+			{"cost_microdollars", "cost_microdollars BIGINT"},
+			{"incomplete", "incomplete BOOLEAN NOT NULL DEFAULT FALSE"},
+			{"models_json", "models_json TEXT NOT NULL DEFAULT '[]'"},
+		},
+		indexes: []string{
+			"CREATE INDEX IF NOT EXISTS idx_session_usage_totals_session ON session_usage_totals(session_id)",
+		},
+	},
+	{
 		name: "cursor_usage_events",
 		create: `CREATE TABLE IF NOT EXISTS cursor_usage_events (
 			id BIGINT,
@@ -540,7 +590,7 @@ var mirrorTables = []tableSpec{
 			cache_creation_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
 			cache_creation_1h_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
 			cache_read_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
-			updated_at TEXT NOT NULL DEFAULT ''
+			updated_at TIMESTAMP
 		)`,
 		columns: []columnSpec{
 			{"model_pattern", "model_pattern TEXT"},
@@ -549,7 +599,7 @@ var mirrorTables = []tableSpec{
 			{"cache_creation_microdollars_per_mtok", "cache_creation_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0"},
 			{"cache_creation_1h_microdollars_per_mtok", "cache_creation_1h_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0"},
 			{"cache_read_microdollars_per_mtok", "cache_read_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0"},
-			{"updated_at", "updated_at TEXT NOT NULL DEFAULT ''"},
+			{"updated_at", "updated_at TIMESTAMP"},
 		},
 	},
 	{
@@ -562,7 +612,7 @@ var mirrorTables = []tableSpec{
 			cache_creation_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
 			cache_creation_1h_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
 			cache_read_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
-			updated_at TEXT NOT NULL DEFAULT '',
+			updated_at TIMESTAMP,
 			PRIMARY KEY (model_pattern, above_input_tokens),
 			FOREIGN KEY (model_pattern) REFERENCES model_pricing(model_pattern)
 		)`,
@@ -574,7 +624,7 @@ var mirrorTables = []tableSpec{
 			{"cache_creation_microdollars_per_mtok", "cache_creation_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0"},
 			{"cache_creation_1h_microdollars_per_mtok", "cache_creation_1h_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0"},
 			{"cache_read_microdollars_per_mtok", "cache_read_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0"},
-			{"updated_at", "updated_at TEXT NOT NULL DEFAULT ''"},
+			{"updated_at", "updated_at TIMESTAMP"},
 		},
 	},
 	{
@@ -585,7 +635,7 @@ var mirrorTables = []tableSpec{
 			source_ref TEXT NOT NULL DEFAULT '',
 			source TEXT NOT NULL,
 			data_json BLOB NOT NULL,
-			updated_at TEXT NOT NULL DEFAULT ''
+			updated_at TIMESTAMP
 		)`,
 		columns: []columnSpec{
 			{"singleton", "singleton SMALLINT"},
@@ -593,7 +643,18 @@ var mirrorTables = []tableSpec{
 			{"source_ref", "source_ref TEXT NOT NULL DEFAULT ''"},
 			{"source", "source TEXT NOT NULL"},
 			{"data_json", "data_json BLOB NOT NULL"},
-			{"updated_at", "updated_at TEXT NOT NULL DEFAULT ''"},
+			{"updated_at", "updated_at TIMESTAMP"},
+		},
+	},
+	{
+		name: "pricing_meta",
+		create: `CREATE TABLE IF NOT EXISTS pricing_meta (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		)`,
+		columns: []columnSpec{
+			{"key", "key TEXT"},
+			{"value", "value TEXT NOT NULL"},
 		},
 	},
 	{
@@ -886,7 +947,7 @@ var mirrorTables = []tableSpec{
 			"CREATE INDEX IF NOT EXISTS idx_pinned_created ON pinned_messages(created_at)",
 		},
 	},
-}
+}, usageRollupTables...)
 
 // EnsureSchema creates the DuckDB mirror schema. It has no production
 // callers: Sync.Push always goes through ProbeMirror to pick buildMirror
@@ -956,8 +1017,9 @@ func recordMetadataKey(
 // the source revisions needed to detect deletions and identity changes that
 // happened after the mirror was built.
 type mirrorMetadata struct {
-	SchemaVersion int
-	DataVersion   int
+	SchemaVersion             int
+	DataVersion               int
+	FrustrationMarkersVersion int
 	// SourceDatabaseID is the archive_metadata database_id of the SQLite
 	// archive the mirror was built from. It identifies the archive
 	// GENERATION, not just the path: a resync builds a fresh archive with a
@@ -987,6 +1049,7 @@ func writeMirrorMetadata(ctx context.Context, db *sql.DB, meta mirrorMetadata) e
 		value string
 	}{
 		{schemaVersionMetadataKey, strconv.Itoa(meta.SchemaVersion)},
+		{frustrationMarkersVersionMetadataKey, strconv.Itoa(meta.FrustrationMarkersVersion)},
 		{dataVersionMetadataKey, strconv.Itoa(meta.DataVersion)},
 		{sourceDatabaseIDMetadataKey, meta.SourceDatabaseID},
 		{sourceArchiveIDMetadataKey, meta.SourceArchiveID},
@@ -1011,9 +1074,9 @@ func writeMirrorMetadata(ctx context.Context, db *sql.DB, meta mirrorMetadata) e
 // errors so callers (ProbeMirror) can surface them as shape issues rather
 // than silently treating a corrupt mirror as version 0.
 func readMirrorMetadata(ctx context.Context, db *sql.DB) (mirrorMetadata, error) {
-	raw := make(map[string]string, 11)
+	raw := make(map[string]string, 12)
 	for _, key := range []string{
-		schemaVersionMetadataKey, dataVersionMetadataKey,
+		schemaVersionMetadataKey, dataVersionMetadataKey, frustrationMarkersVersionMetadataKey,
 		sourceDatabaseIDMetadataKey, sourceArchiveIDMetadataKey,
 		pushScopeMetadataKey,
 		lastPushCutoffMetadataKey, lastPushAtMetadataKey, lastPushMachineMetadataKey,
@@ -1037,6 +1100,11 @@ func readMirrorMetadata(ctx context.Context, db *sql.DB) (mirrorMetadata, error)
 	var err error
 	if meta.SchemaVersion, err = parseMirrorMetadataInt(
 		schemaVersionMetadataKey, raw[schemaVersionMetadataKey],
+	); err != nil {
+		return mirrorMetadata{}, err
+	}
+	if meta.FrustrationMarkersVersion, err = parseMirrorMetadataInt(
+		frustrationMarkersVersionMetadataKey, raw[frustrationMarkersVersionMetadataKey],
 	); err != nil {
 		return mirrorMetadata{}, err
 	}

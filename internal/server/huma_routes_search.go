@@ -16,7 +16,7 @@ func (s *Server) registerSearchRoutes() {
 	group := huma.NewGroup(s.api, "/api/v1/search")
 	configureRouteGroup(group, "Search")
 
-	s.get(group, "", "Search sessions", s.humaSearch)
+	s.getLong(group, "", "Search sessions", s.humaSearch)
 	s.getLong(group, "/content", "Search session content", s.humaSearchContent)
 }
 

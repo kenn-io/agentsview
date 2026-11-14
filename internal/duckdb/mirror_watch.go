@@ -91,6 +91,9 @@ func PrimeFileIdentity(info os.FileInfo) {
 // change yet" rather than an error: the watcher keeps serving the old
 // handle and checks again on the next tick.
 func (s *Store) checkMirrorReplacement(ctx context.Context, onEvent func(err error)) {
+	// Serialize the stat, open, and swap so an older check cannot overwrite a newer handle.
+	s.replacementMu.Lock()
+	defer s.replacementMu.Unlock()
 	info, err := os.Stat(s.path)
 	if err != nil {
 		return
@@ -159,7 +162,7 @@ func openMirrorAlias(ctx context.Context, path string) (conn *sql.DB, alias stri
 	if err := os.Link(path, alias); err != nil {
 		return nil, "", fmt.Errorf("hardlinking duckdb mirror for reopen: %w", err)
 	}
-	conn, err = OpenReadOnly(ctx, alias)
+	conn, err = openServingReadOnly(ctx, alias)
 	if err != nil {
 		_ = os.Remove(alias)
 		return nil, "", err
@@ -228,6 +231,8 @@ func (s *Store) swapHandle(conn *sql.DB, alias string, info os.FileInfo) {
 	// Replacement aliases open the checkpointed main file without a sibling WAL.
 	s.walStamp = "nowal"
 	s.reports.Clear()
+	s.activityUsageSums.DeleteSlots(func(string) bool { return true })
+	s.analyticsReads.Clear()
 	s.dailyUsage.Clear()
 	s.planUsage.Clear()
 	s.topUsage.Clear()

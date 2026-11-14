@@ -14,6 +14,7 @@ import (
 )
 
 func TestAccountUsageAgentsPostgresParity(t *testing.T) {
+	t.Parallel()
 	const billingScale = 1_000_000_000
 	const schema = "agentsview_account_usage_parity_test"
 	pgURL := testPGURL(t)
@@ -104,6 +105,7 @@ func TestAccountUsageAgentsPostgresParity(t *testing.T) {
 }
 
 func TestAccountUsageAgentMigrationPreservesCursorRows(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_account_usage_migration_test"
 	_, store := prepareUsageSchema(t, schema)
 	_, err := store.DB().ExecContext(t.Context(), `
@@ -147,6 +149,7 @@ func TestAccountUsageAgentMigrationPreservesCursorRows(t *testing.T) {
 }
 
 func TestHostedTenantUpgradePreservesAccountUsage(t *testing.T) {
+	t.Parallel()
 	f := newHostedFixture(t, "tenant-a")
 	_, err := f.runtime.ExecContext(t.Context(), `
 		INSERT INTO cursor_usage_events (occurred_at, model, input_tokens,

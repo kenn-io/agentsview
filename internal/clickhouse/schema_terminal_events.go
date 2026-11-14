@@ -9,6 +9,8 @@ import (
 
 // Session publication follows dependent inserts and removal of older versions.
 // Recompute the maximum there so corrections and empty replacements can lower it.
+// The events carry the session's content_version, which a push that keeps them
+// carries over when it republishes only the session row.
 //
 // A materialized view runs inside the insert and reads the joined table in
 // full. Inside the view, the inner sessions reference is the inserted block, so
@@ -20,7 +22,7 @@ const terminalEventSnapshotSelect = `SELECT s.id AS session_id, s.push_version A
   SELECT session_id, push_version, timestamp FROM tool_result_events
   WHERE session_id IN (SELECT id FROM sessions)
   AND source = 'tool_execution' AND status IN ('completed', 'errored')
- ) tre ON tre.session_id = s.id AND tre.push_version = s.push_version
+ ) tre ON tre.session_id = s.id AND tre.push_version = s.content_version
  GROUP BY s.id, s.push_version`
 
 var terminalEventSnapshotView = mirrorView{

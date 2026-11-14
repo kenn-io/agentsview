@@ -57,6 +57,7 @@ const legacyPGActivityReportCandidatesSQL = `SELECT
 			ORDER BY m.timestamp, m.session_id, m.ordinal`
 
 func TestPGActivityReportPairingMatchesSQLPairing(t *testing.T) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_activity_pairing_test")
 	sessions := map[string][]struct{ role, ts, model string }{
 		"a-mixed": {
@@ -129,6 +130,7 @@ func TestPGActivityReportPairingMatchesSQLPairing(t *testing.T) {
 }
 
 func TestPGActivityReportCandidateSourceStopsOnConsumerError(t *testing.T) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_activity_pairing_stop_test")
 	seedPGDailyFixture(t, store)
 	q := pgDayQuery(t, "2026-06-16", "UTC")

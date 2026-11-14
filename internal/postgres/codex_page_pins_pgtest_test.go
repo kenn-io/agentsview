@@ -14,6 +14,7 @@ import (
 )
 
 func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ name, prefix, agent string }{
 		{"full_push", "codex:", "codex"},
 		{"head_first", "host~traex:", "traex"},

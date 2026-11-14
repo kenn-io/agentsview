@@ -19,6 +19,7 @@ AgentsView stores all persistent data under a single directory, defaulting to
 ├── assets/          # Images stored outside SQLite
 ├── vectors.db       # Semantic-search vector index (when [vector] is enabled)
 ├── usage-cache-v6-<id>.db # Disposable usage-aggregate cache
+├── usage-postgres/  # Disposable PostgreSQL usage caches
 ├── telemetry-install-id # Application installation ID
 ├── telemetry-daemon-active.lock  # Serializes daily daemon reports
 ├── telemetry-setup-finished.lock # Serializes the one-time setup report
@@ -43,12 +44,16 @@ has stopped before rotating. Debug log writes share `debug.log.rotate.lock`
 and wait while rotation holds it exclusively. If the lock is busy or the
 backup fails, AgentsView keeps the active log intact.
 
-`usage-cache-v6-<id>.db` is a derived cache of usage aggregates, not user data.
-It is safe to delete when no AgentsView process is running; the next usage query
-rebuilds it automatically. Back up `sessions.db` for session history, `assets/`
+`usage-cache-v6-<id>.db` and `usage-postgres/` contain derived usage aggregates.
+They are safe to delete when no AgentsView process is running; the next usage
+query rebuilds them automatically. Back up `sessions.db` for session history, `assets/`
 for images stored outside SQLite, `config.toml` for settings, and
 `telemetry-install-id` for installation identity. Keep the database and assets
 together when restoring or moving the archive.
+
+Trends keeps per-session counts under `$CACHE_DIRECTORY/sqlite-trends`, or
+`agentsview/sqlite-trends` in the user cache directory, up to 256 MiB per
+archive. They are safe to delete; the next Trends visit counts messages again.
 
 SQLite needs a writable temp directory for session writes and large sorts.
 AgentsView uses the system temp directory: `TMP` or `TEMP` on Windows, and
@@ -155,8 +160,8 @@ writes keep inline content, and archives that omit tool content write no assets.
 See [image storage](/docs/data/#ingest-time-image-offload) for retries, backups,
 and remote-backend limits.
 
-You can also select **Offload** under **Settings > Tool-result images**. The
-restart notice appears after you save a changed policy.
+You can also select **Offload** under **Settings > Tool-result images**. After
+you save a changed policy, select **Restart now** in the notice to apply it.
 
 ![Tool-result image policy in Settings](/docs/assets/generated/screenshots/settings-archive-content.png)
 
@@ -633,6 +638,7 @@ keeps its default directories.
 | Tau                   | `~/.tau/sessions/`                                                                                                                                               | JSONL transcripts under `<project>/`, with metadata `index.jsonl` excluded                                                                                    |
 | Prime Agent           | `~/.prime/agent/sessions/`                                                                                                                                       | Flat Pi-family JSONL sessions                                                                                                                                 |
 | StepCode              | `~/.stepcode/agent/sessions/`                                                                                                                                    | JSONL per session                                                                                                                                             |
+| Direct API            | `~/.agentsview/direct-api/`                                                                                                                                      | Body-free JSONL usage files                                                                                                                                   |
 | Poolside              | `~/Library/Application Support/poolside/trajectories/` (macOS), `~/.local/state/poolside/trajectories/` (Linux), `%APPDATA%\\poolside\\trajectories\\` (Windows) | NDJSON trajectory files                                                                                                                                       |
 | Piebald               | `~/.local/share/piebald/`                                                                                                                                        | SQLite database (`app.db`)                                                                                                                                    |
 | Posit Assistant       | `~/.posit/assistant/workspaces/`                                                                                                                                 | Per-conversation `conversation.json` tree plus `lm-messages.jsonl` transcript                                                                                 |
@@ -777,8 +783,10 @@ one or more explicit roots.
 Grok sessions are read from `summary.json` (title, timestamps, project),
 optional `signals.json` (token counters), and `chat_history.jsonl` when present
 for the full transcript (user turns, assistant replies, thinking, and tool
-calls). If `chat_history.jsonl` is missing, AgentsView falls back to
-summary-only mode. Set `GROK_DIR` or `agents.grok.dirs` to override the default
+calls). Grok trims `chat_history.jsonl` each time it compacts a session, so
+AgentsView rebuilds the turns before each compaction from `updates.jsonl` and
+marks each compaction in the transcript. If `chat_history.jsonl` is missing,
+AgentsView falls back to summary-only mode. Set `GROK_DIR` or `agents.grok.dirs` to override the default
 directory.
 
 **Goose default directories** are:
@@ -2179,6 +2187,15 @@ Change detection uses file size, mtime, inode, and device tracking to validate
 incremental parses more reliably. A pool of 8 workers processes files in
 parallel during sync.
 
+On `main` (not yet released), shared JSONL discovery can isolate an inaccessible
+file or subtree when the provider supports scoped traversal. A dangling symlink
+remains incomplete, but retries inspect only the unfinished scope. Archived
+sessions beneath that scope remain available, and unrelated session changes
+continue importing. Restoring access lets the retained retry complete without a
+daemon restart. Actual source removal still follows the normal source-missing
+policy. Opaque failures and passes with more than 256 reported failure scopes
+retain the original conservative retry scope.
+
 Codex history hints are available when the producing frontend writes
 `history.jsonl`. In Codex configuration, `[history] persistence = "none"`
 disables those writes; sessions whose stored activity is recent still get
@@ -2442,12 +2459,23 @@ A regular file replacing the directory or an ancestor releases polling.
 A directory symlink keeps polling. Removing a root from the watch plan releases
 its polling obligations. Budget or native watch resource exhaustion keeps
 root-level polling. Event-buffer overflow puts every recursive root on polling.
+On macOS, when FSEvents reports dropped or must-rescan events for one session
+folder, AgentsView rescans only that folder and keeps watching it natively.
+Other folders are not affected and nothing moves to polling. If the drop hid
+the folder's own removal or replacement, only that folder is polled until it
+can be watched again.
 
 Roots that fall back to polling are picked up by:
 
 - the existing 15-minute periodic full sync, plus
-- a new 2-minute fallback sync loop that runs whenever any roots are unwatched
+- a 2-minute fallback sync loop that runs whenever any roots are unwatched
     (it reconciles the affected scopes)
+
+After a fallback pass finishes, the loop waits 2 minutes or as long as that pass
+took, whichever is longer, so polling uses at most about half of wall-clock
+time. A pass reconciles one provider at a time, and watcher syncs that are
+waiting run between providers, so live sessions keep updating during a long
+pass.
 
 The startup polling summary counts roots handed to fallback polling. It excludes
 folders already covered by separate polling obligations. Runtime
@@ -2527,13 +2555,18 @@ Optional features that send data externally when you enable them:
     `model`, or to the selected agent CLI when neither is set.
 - [Publish to Gist](/docs/usage/#publish-to-gist) uploads a session to GitHub.
 
-The automatic outbound requests are update checks and anonymous telemetry:
+The automatic outbound requests are update checks, pricing refreshes, and
+anonymous telemetry:
 
-- **CLI and web UI** — on startup, the server contacts the GitHub API to check
-    for new releases. No identifying information is sent beyond what a standard
-    GitHub API request includes (IP address, user-agent).
+- **CLI and web UI** — when the web UI loads, the server requests
+    `github.com/kenn-io/agentsview/releases/latest` to find the newest release
+    and caches the answer for an hour. No identifying information is sent
+    beyond what a standard HTTPS request includes (IP address, user-agent).
 - **Desktop app** — uses Tauri's native updater, which checks the GitHub release
     feed independently.
+- **Pricing** — the server downloads public model-pricing catalogs from GitHub
+    and OpenRouter at startup and daily; see
+    [Pricing Source](/docs/token-usage/#pricing-source).
 - **Anonymous daemon telemetry** — see below.
 
 ### Anonymous Daemon Telemetry
@@ -2667,6 +2700,7 @@ Every event contains only:
 - operating system and CPU architecture
 - the application-owned installation ID stored in
   `~/.agentsview/telemetry-install-id`
+- whole hours since that ID was created
 - for the five UI actions, the one listed value above
 - for feature outcomes, the listed kind or reason
 - for screen views, the listed screen name and `surface: web`

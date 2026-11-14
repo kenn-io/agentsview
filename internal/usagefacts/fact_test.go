@@ -275,3 +275,27 @@ func TestParseTimestamp(t *testing.T) {
 	assert.Equal(t, "not-a-time", raw)
 	assert.False(t, fallback)
 }
+
+func TestFromMessageReportsRecordedCost(t *testing.T) {
+	tests := []struct {
+		name       string
+		usage      string
+		wantCost   *int64
+		wantStatus string
+	}{
+		{"absent", `{"input_tokens":10}`, nil, ""},
+		{"recorded", `{"input_tokens":10,"recorded_cost_microdollars":1250}`, new(int64(1250)), CostStatusRecorded},
+		{"recorded zero", `{"recorded_cost_microdollars":0,"output_tokens":3}`, new(int64(0)), CostStatusRecorded},
+		{"negative ignored", `{"recorded_cost_microdollars":-5,"output_tokens":3}`, nil, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fact, ok := FromMessage(MessageInput{
+				Role: "assistant", Model: "m", TokenUsage: tt.usage,
+			})
+			require.True(t, ok)
+			assert.Equal(t, tt.wantCost, fact.ReportedCostMicrodollars)
+			assert.Equal(t, tt.wantStatus, fact.CostStatus)
+		})
+	}
+}

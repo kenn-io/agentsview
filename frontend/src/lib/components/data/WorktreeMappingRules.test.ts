@@ -600,7 +600,7 @@ describe("WorktreeMappingRules", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(settingsService.deleteApiV1SettingsWorktreeMappingsById).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog").textContent).toContain("source files still exist");
-    expect(screen.getByRole("dialog").textContent).toContain("Orphaned sessions");
+    expect(screen.getByRole("dialog").textContent).toContain("Sessions without source files");
 
     await fireEvent.click(screen.getByRole("button", { name: "Delete mapping" }));
     expect(settingsService.deleteApiV1SettingsWorktreeMappingsById).toHaveBeenCalledWith({

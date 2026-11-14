@@ -149,6 +149,7 @@ func reAddEdit(
 
 // TestPGRecentEditsGroupingAndOrdering mirrors TestRecentEditsGroupingAndOrdering.
 func TestPGRecentEditsGroupingAndOrdering(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	pg := reEnsureSchema(t, pgURL)
 	defer pg.Close()
@@ -183,6 +184,7 @@ func TestPGRecentEditsGroupingAndOrdering(t *testing.T) {
 
 // TestPGRecentEditsExcludesTrash mirrors TestRecentEditsExcludesTrash.
 func TestPGRecentEditsExcludesTrash(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	pg := reEnsureSchema(t, pgURL)
 	defer pg.Close()
@@ -207,6 +209,7 @@ func TestPGRecentEditsExcludesTrash(t *testing.T) {
 
 // TestPGRecentEditsProjectFilter mirrors TestRecentEditsProjectFilter.
 func TestPGRecentEditsProjectFilter(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	pg := reEnsureSchema(t, pgURL)
 	defer pg.Close()
@@ -232,6 +235,7 @@ func TestPGRecentEditsProjectFilter(t *testing.T) {
 
 // TestPGRecentEditsSearchFilter mirrors TestRecentEditsSearchFilter.
 func TestPGRecentEditsSearchFilter(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	pg := reEnsureSchema(t, pgURL)
 	defer pg.Close()
@@ -277,6 +281,7 @@ func TestPGRecentEditsSearchFilter(t *testing.T) {
 
 // TestPGRecentEditsTruncationAndHasMore mirrors TestRecentEditsTruncationAndHasMore.
 func TestPGRecentEditsTruncationAndHasMore(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	pg := reEnsureSchema(t, pgURL)
 	defer pg.Close()
@@ -318,6 +323,7 @@ func TestPGRecentEditsTruncationAndHasMore(t *testing.T) {
 
 // TestPGRecentEditsNullTimestampsSortLast mirrors TestRecentEditsNullTimestampsSortLast.
 func TestPGRecentEditsNullTimestampsSortLast(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	pg := reEnsureSchema(t, pgURL)
 	defer pg.Close()
@@ -344,6 +350,7 @@ func TestPGRecentEditsNullTimestampsSortLast(t *testing.T) {
 
 // TestPGRecentEditsTieByCallIndex mirrors TestRecentEditsTieByCallIndex.
 func TestPGRecentEditsTieByCallIndex(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	pg := reEnsureSchema(t, pgURL)
 	defer pg.Close()

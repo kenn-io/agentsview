@@ -1,0 +1,9 @@
+{
+  "version": 178,
+  "digest": "d2394a0044467c5ba9a19492d6b2269707c11a1930e9fae598ce9907e2613f26",
+  "providers": {
+    "opencode": {
+      "opencode-reasoning.db#ses_reason": "050a82d3cf12e896d8bb901b6231ff1a84c2534bf1e16d04551fd8c2670e63ae"
+    }
+  }
+}

@@ -414,7 +414,7 @@ func stopDaemonRuntimeForUpgradeImpl(ctx context.Context,
 		}
 		// A wider bind may also overlap an unrelated listener on the same port.
 		if !reusesEndpoint {
-			if _, err := prepareServeRuntimeConfig(ctx, cfg, serveRuntimeOptions{}); err != nil {
+			if _, err := prepareServeRuntimeConfig(ctx, cfg, serveRuntimeOptions{RequestedPort: cfg.Port}); err != nil {
 				return err
 			}
 		}
@@ -490,7 +490,7 @@ func probeDaemonRecord(
 			Timeout:         500 * time.Millisecond,
 		},
 	)
-	return info, err == nil && info.PID == rec.PID
+	return info.PingInfo, err == nil && info.PID == rec.PID
 }
 
 // processIdentityConfirmed reports whether the process now holding rec.PID is

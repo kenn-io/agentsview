@@ -1,18 +1,18 @@
 import { flushSync } from "svelte";
 import { toStore } from "svelte/store";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
+import { createSessionsStore } from "./sessions.svelte.js";
+import { buildSessionGroups } from "./sessionGroups.js";
+import { getSessionStatus } from "./sessionStatus.svelte.js";
 import {
-  createSessionsStore,
-  buildSessionGroups,
-  getSessionStatus,
   parseFiltersFromParams,
   filtersToParams,
   splitExcludeProjectParam,
-} from "./sessions.svelte.js";
+} from "./sessionFilters.js";
 import { SessionsService, SettingsService, type DbSession } from "../api/generated/index";
 import { starred } from "./starred.svelte.js";
 import { yokedDates } from "./yokedDates.svelte.js";
-import type { Filters } from "./sessions.svelte.js";
+import type { Filters } from "./sessionFilters.js";
 import type { Session } from "../api/types.js";
 import { router } from "./router.svelte.js";
 import { events } from "./events.svelte.js";

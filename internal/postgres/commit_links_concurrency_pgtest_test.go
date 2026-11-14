@@ -29,6 +29,7 @@ func (b *retainedDeleteBarrier) TraceQueryStart(ctx context.Context, _ *pgx.Conn
 func (*retainedDeleteBarrier) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
 func TestPGRetainedCommitLinkPublicationRace(t *testing.T) {
+	t.Parallel()
 	for _, withPrompt := range []bool{true, false} {
 		t.Run(map[bool]string{false: "empty", true: "prompt"}[withPrompt], func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)

@@ -6,7 +6,6 @@ import (
 	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -19,13 +18,10 @@ import (
 )
 
 func TestToolSequencesHTTPParity(t *testing.T) {
-	pgURL := os.Getenv("TEST_PG_URL")
-	if pgURL == "" {
-		t.Skip("TEST_PG_URL must point to a dedicated test database")
-	}
+	t.Parallel()
+	pgURL := postgres.PGTestURL(t)
 	_, dataDir := newPGE2ETestDatabase(t)
 	local := dbtest.OpenTestDB(t)
-	dbtest.SeedPricingMeta(t, local)
 	sessionIDs := dbtest.SeedToolSequencesParity(t, local)
 
 	localHandler := server.New(config.Config{Host: "127.0.0.1", InstallationID: "local"}, local, nil).Handler()

@@ -40,6 +40,7 @@ describe("KNOWN_AGENTS", () => {
       "visualstudio-copilot",
       "pi",
       "stepcode",
+      "direct-api",
       "fx",
       "tau",
       "prime-agent",
@@ -171,6 +172,7 @@ describe("agentLabel", () => {
     expect(agentLabel("deepseek-harness")).toBe("DeepSeek Harness");
     expect(agentLabel("prime-agent")).toBe("Prime Agent");
     expect(agentLabel("stepcode")).toBe("StepCode");
+    expect(agentLabel("direct-api")).toBe("Direct API");
     expect(agentLabel("qoder")).toBe("Qoder");
     expect(agentLabel("roocode")).toBe("RooCode");
     expect(agentLabel("omnigent")).toBe("Omnigent");

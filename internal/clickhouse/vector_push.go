@@ -442,29 +442,44 @@ func (s *Sync) readVectorPushState(
 
 // archiveResidentSessionIDs reports which of ids have a session row this
 // archive pushed to the mirror.
+//
+// The filter cannot use the sessions sorting key, and a batch of ids in map
+// order spreads over nearly every granule, so each batched read scans almost
+// the whole table. When ids need more than one batch, as on a
+// generation-wide pass, one read of the archive's ids costs about as much as
+// a single batch.
 func (s *Sync) archiveResidentSessionIDs(ctx context.Context, ids []string) (map[string]bool, error) {
+	ids = uniqueIDs(ids)
 	resident := make(map[string]bool, len(ids))
-	for batch := range idBatches(uniqueIDs(ids)) {
-		placeholders, args := inArgs(batch)
-		if err := func() error {
-			rows, err := s.conn.QueryContext(ctx,
-				"SELECT id FROM sessions WHERE source_archive_id = ? AND id IN ("+placeholders+")",
-				append([]any{s.archiveID}, args...)...)
-			if err != nil {
-				return fmt.Errorf("reading clickhouse vector resident sessions: %w", err)
-			}
-			defer rows.Close()
-			for rows.Next() {
-				var id string
-				if err := rows.Scan(&id); err != nil {
-					return fmt.Errorf("scanning clickhouse vector resident session: %w", err)
-				}
-				resident[id] = true
-			}
-			return rows.Err()
-		}(); err != nil {
-			return nil, err
+	if len(ids) == 0 {
+		return resident, nil
+	}
+	query, args := "SELECT id FROM sessions WHERE source_archive_id = ?", []any{s.archiveID}
+	if len(ids) <= idBatchSize {
+		placeholders, idArgs := inArgs(ids)
+		query += " AND id IN (" + placeholders + ")"
+		args = append(args, idArgs...)
+	}
+	wanted := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		wanted[id] = true
+	}
+	rows, err := s.conn.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("reading clickhouse vector resident sessions: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning clickhouse vector resident session: %w", err)
 		}
+		if wanted[id] {
+			resident[id] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading clickhouse vector resident sessions: %w", err)
 	}
 	return resident, nil
 }

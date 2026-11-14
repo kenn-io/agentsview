@@ -120,6 +120,7 @@ func longPrompt(line string) string {
 // long prompts whose caps ratio the bound cannot rule out; the rest are
 // sent back with their content and judged in Go.
 func TestFrustrationMarkerScanCountsEdgeCases(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		prompt markerPrompt
@@ -192,6 +193,7 @@ func TestFrustrationMarkerScanCountsEdgeCases(t *testing.T) {
 // signals.IsFrustrationMarker counts them. Only prompts with such runes, or
 // stripped prompts too long to count exactly, may come back with content.
 func TestFrustrationMarkerScanMatchesGoOnRandomPrompts(t *testing.T) {
+	t.Parallel()
 	plain := []string{
 		"the", "build", "fails", "again", "please", "fix", "it", "a", "I", "x", "_", "x1", "9",
 		"WHY", "API", "OK", "NOW", "BROKEN", "STOP", "CI", "JSONParser",
@@ -283,6 +285,7 @@ func TestFrustrationMarkerScanMatchesGoOnRandomPrompts(t *testing.T) {
 // bound parameter to LATIN1 before the statement runs, so the read must not
 // bind the plain-alphabet pattern there. Go judges every prompt instead.
 func TestFrustrationMarkerScanOnLatin1Database(t *testing.T) {
+	t.Parallel()
 	admin, err := Open(t.Context(), testPGURL(t), "public", false)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, admin.Close()) })

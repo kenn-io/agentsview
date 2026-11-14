@@ -12,7 +12,6 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -38,7 +37,6 @@ func newPlanUsagePushFixture(t *testing.T, schema string) planUsagePushFixture {
 
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
-	dbtest.SeedPricingMeta(t, local)
 	t.Cleanup(func() { assert.NoError(t, local.Close()) })
 	started := "2026-10-01T09:00:00Z"
 	require.NoError(t, local.UpsertSession(t.Context(), db.Session{
@@ -89,6 +87,7 @@ func fullPlanUsage() *db.SessionPlanUsage {
 }
 
 func TestPushPlanUsageRoundTrip(t *testing.T) {
+	t.Parallel()
 	f := newPlanUsagePushFixture(t, "agentsview_push_plan_usage_roundtrip")
 	require.NoError(t, f.local.ReplaceSessionPlanUsage(t.Context(), planUsageRootID, fullPlanUsage()))
 	f.push(t)
@@ -105,6 +104,7 @@ func TestPushPlanUsageRoundTrip(t *testing.T) {
 }
 
 func TestPushPlanUsageChangeRepushes(t *testing.T) {
+	t.Parallel()
 	f := newPlanUsagePushFixture(t, "agentsview_push_plan_usage_change")
 	require.NoError(t, f.local.ReplaceSessionPlanUsage(t.Context(), planUsageRootID, fullPlanUsage()))
 	f.push(t)
@@ -131,6 +131,7 @@ func TestPushPlanUsageChangeRepushes(t *testing.T) {
 }
 
 func TestPGSessionUsageIncludesPlanUsage(t *testing.T) {
+	t.Parallel()
 	t.Run("direct", func(t *testing.T) {
 		f := newPlanUsagePushFixture(t, "agentsview_push_plan_usage_session_usage")
 		require.NoError(t, f.local.ReplaceSessionPlanUsage(t.Context(), planUsageRootID, fullPlanUsage()))
@@ -168,6 +169,7 @@ func TestPGSessionUsageIncludesPlanUsage(t *testing.T) {
 }
 
 func TestHostedProjectionWritesPlanUsage(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "capture-a", "")
 	p := projectionOutcome("descendant thread")
@@ -208,6 +210,7 @@ func TestHostedProjectionWritesPlanUsage(t *testing.T) {
 }
 
 func TestHostedGrandchildUsageRootMapped(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "capture-a", "")
 	root := projectionOutcome("root")
@@ -235,6 +238,7 @@ func TestHostedGrandchildUsageRootMapped(t *testing.T) {
 }
 
 func TestHostedReprovisionAddsPlanUsageTable(t *testing.T) {
+	t.Parallel()
 	f := newHostedFixture(t, "tenant-plan-usage-upgrade")
 	_, err := f.admin.ExecContext(t.Context(), `DROP TABLE session_plan_usage`)
 	require.NoError(t, err)
@@ -246,6 +250,7 @@ func TestHostedReprovisionAddsPlanUsageTable(t *testing.T) {
 }
 
 func TestHostedRuntimeRequiresPlanUsageInsert(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	require.NoError(t, CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull))
 	_, err := f.admin.ExecContext(t.Context(), `REVOKE INSERT ON session_plan_usage FROM "`+f.role+`"`)

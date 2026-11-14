@@ -23,6 +23,7 @@ import (
 )
 
 func TestPushCompactComparisons(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	const id = "compact"
 	schema := fmt.Sprintf("agentsview_compact_%x", rand.Uint64())
@@ -125,6 +126,7 @@ func TestPushCompactComparisons(t *testing.T) {
 }
 
 func TestPushCompactLegacyTextRewrittenOnce(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	schema := fmt.Sprintf("agentsview_compact_legacy_%x", rand.Uint64())
 	const id = "legacy"
@@ -212,6 +214,7 @@ func (c *pushResponseConn) Read(p []byte) (int, error) {
 }
 
 func TestPushCompactResponseBytesDoNotGrowWithTranscriptBodies(t *testing.T) {
+	t.Parallel()
 	small := compactPushResponseBytes(t, 4<<10)
 	large := compactPushResponseBytes(t, 256<<10)
 	assert.LessOrEqual(t, large-small, int64(32<<10), "response traffic must not grow with transcript bodies")

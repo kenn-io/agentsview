@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/stringutil"
+	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
 // This file is the single centralized validation and sanitization pass
@@ -31,7 +32,8 @@ import (
 //     terminal escape through intact.
 //   - Model: clamped to MaxModelLen bytes. Real model ids are well under
 //     that; a verified repro pushed a multi-megabyte printable string
-//     through as a model id.
+//     through as a model id. A usage event with a cost but no model is
+//     labeled usagefacts.UnknownModel so usage reads keep it.
 //   - Token counts: clamped to maxPlausibleTokens. Implausible values
 //     (e.g. a nanosecond-latency counter misread as a token field) are
 //     bounded rather than stored verbatim.
@@ -278,6 +280,12 @@ func SanitizeUsageEvent(ev *UsageEvent) ValidationStats {
 	sanitizeStringField(&ev.Model, &stats)
 	if ClampModel(&ev.Model) {
 		stats.ModelClamped++
+	}
+	// Usage reads require a model. A costed event that names none goes to
+	// the unknown-model bucket so its tokens and cost still count; it has no
+	// catalog rate, so only its own cost prices it.
+	if ev.Model == "" && ev.Cost != nil {
+		ev.Model = usagefacts.UnknownModel
 	}
 
 	if clampUsageEventTokens(ev.Source, &ev.InputTokens) {

@@ -15,6 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/usagefacts"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -67,6 +68,8 @@ type activityReportBackend struct {
 	read                   *[]string
 	counted                *activityReportCounted
 	usage                  activityUsageWindow
+	keptUsage              *activityKeptUsage
+	usageResult            *activityKeptUsage
 }
 
 // activityReportCounted holds the counted messages of the build's sessions,
@@ -108,8 +111,14 @@ func (b activityReportBackend) ActivityReportSecondRead() (func(), bool) {
 func (b activityReportBackend) ActivityReportUsage(
 	ctx context.Context, ids []string, q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
-	rows, pricing, read, err := b.activityReportCachedUsage(
-		ctx, b.usage, ids, b.lowerBound, b.upperBound, q, b.read != nil)
+	if b.keptUsage != nil {
+		return b.keptUsage.rows, b.keptUsage.pricing, nil
+	}
+	rows, pricing, read, next, err := b.activityReportCachedUsage(
+		ctx, b.usage, ids, b.lowerBound, b.upperBound, q, b.read != nil, b.usageResult != nil)
+	if err == nil && b.usageResult != nil {
+		b.usageResult.rows, b.usageResult.pricing, b.usageResult.from, b.usageResult.next = rows, pricing, q.EffectiveEnd, next
+	}
 	if b.read != nil {
 		*b.read = append(*b.read, read...)
 	}
@@ -153,12 +162,18 @@ func (db *DB) BuildActivityReportArtifacts(
 
 	var selection, version string
 	var revision int64
-	if !q.Partial && !db.readOnly && !TerminationUsesTime(f.Termination) {
+	if !db.readOnly && !TerminationUsesTime(f.Termination) {
 		version, revision, err = db.activityKeptVersion(ctx)
 		if err != nil {
 			return activity.CandidateArtifacts{}, err
 		}
-		selection = kept.Selection(f, q)
+		if q.Partial {
+			selection = activityUsageSelection(f, q)
+		} else {
+			selection = kept.Selection(f, q)
+		}
+	}
+	if selection != "" && !q.Partial {
 		report, hit, err := db.keptActivityReport(ctx, selection, version, revision, f, q)
 		if err != nil {
 			return activity.CandidateArtifacts{}, err
@@ -183,7 +198,27 @@ func (db *DB) BuildActivityReportArtifacts(
 	// A report without candidate sessions reads no usage, so it leaves the
 	// cache alone.
 	var usage activityUsageWindow
-	if len(ids) > 0 {
+	var cachedUsage *activityKeptUsage
+	if q.Partial && selection != "" && len(ids) > 0 {
+		if entries, ok := db.activityKept.Get(selection, version); ok {
+			entry := entries[0]
+			if entry.usage != nil && !q.EffectiveEnd.Before(entry.usage.from) && !q.EffectiveEnd.After(entry.usage.next) {
+				var valid bool
+				valid, err = db.keptActivityChangesValid(ctx, entry.revision, entry.read, ids, f, q)
+				if err != nil {
+					return activity.CandidateArtifacts{}, err
+				}
+				if valid {
+					if revision > entry.revision {
+						entry.revision = revision
+						db.activityKept.Put(selection, version, []activityKept{entry})
+					}
+					cachedUsage = entry.usage
+				}
+			}
+		}
+	}
+	if len(ids) > 0 && cachedUsage == nil {
 		// Filling the usage cache takes its own archive reads. Waiting for
 		// them while holding one could exhaust the bulk-read slots.
 		release()
@@ -204,7 +239,12 @@ func (db *DB) BuildActivityReportArtifacts(
 		read = slices.Clone(ids)
 		readSet = &read
 	}
+	var usageResult *activityKeptUsage
+	if q.Partial && selection != "" && len(ids) > 0 && cachedUsage == nil {
+		usageResult = &activityKeptUsage{}
+	}
 	backend := activityReportBackend{
+		keptUsage: cachedUsage, usageResult: usageResult,
 		read:       readSet,
 		DB:         db,
 		lowerBound: lowerBound, upperBound: upperBound,
@@ -213,15 +253,18 @@ func (db *DB) BuildActivityReportArtifacts(
 	}
 	artifacts, done, err := activity.BuildReportArtifacts(
 		ctx, backend, sessions, ids, q, onProgress, "aggregating activity report")
-	if err == nil && selection != "" {
+	if err == nil && selection != "" && (!q.Partial || usageResult != nil) {
 		slices.Sort(read)
 		read = slices.Compact(read)
 		boundedRead := make([]string, len(read))
 		copy(boundedRead, read)
 		read = boundedRead
-		entry := activityKept{
-			report: kept.Report{Artifacts: artifacts, Done: done}, revision: revision,
-			read: read, labels: activity.ProjectLabels(sessions),
+		entry := activityKept{revision: revision, read: read}
+		if q.Partial {
+			entry.usage = usageResult
+		} else {
+			entry.report = kept.Report{Artifacts: artifacts, Done: done}
+			entry.labels = activity.ProjectLabels(sessions)
 		}
 		entry.size = activityKeptSize(entry)
 		db.activityKept.Put(selection, version, []activityKept{entry})
@@ -343,19 +386,18 @@ func (db *DB) GetSessionUsageRows(
 			OutputTokens:        outputTok,
 			CacheCreationTokens: cacheCrTok,
 			CacheReadTokens:     cacheRdTok,
-			WebSearchRequests: usageRowWebSearchRequests(
-				o.scan.usageSource, o.scan.tokenJSON),
-			Agent:           o.scan.agent,
-			ProviderID:      o.scan.providerID,
-			ClaudeMessageID: o.scan.claudeMessageID,
-			ClaudeRequestID: o.scan.claudeRequestID,
-			SourceUUID:      o.scan.sourceUUID,
-			UsageDedupKey:   o.scan.usageDedupKey,
+			WebSearchRequests:   scanRowWebSearchRequests(o.scan),
+			Agent:               o.scan.agent,
+			ProviderID:          o.scan.providerID,
+			ClaudeMessageID:     o.scan.claudeMessageID,
+			ClaudeRequestID:     o.scan.claudeRequestID,
+			SourceUUID:          o.scan.sourceUUID,
+			UsageDedupKey:       o.scan.usageDedupKey,
 		}
 		snapshotRows[i].Contributes = activity.UsageDataContributes(
 			o.scan.cost.Valid, inputTok, outputTok, reasoningTok,
 			cacheCrTok, cacheRdTok,
-			usageRowWebSearchRequests(o.scan.usageSource, o.scan.tokenJSON))
+			scanRowWebSearchRequests(o.scan))
 	}
 	return activity.SelectSessionUsageRows(ctx, snapshotRows, func(i int, webSearches int) (activity.UsagePrice, error) {
 		o := rowsAcc[i]
@@ -368,6 +410,8 @@ func (db *DB) GetSessionUsageRows(
 			costRow.cost = sql.NullInt64{}
 			rateResolver.RecordUnattributedReported()
 		}
+		costRow.cost = ReportedCostForPricing(costRow.cost, costRow.costStatus,
+			catalogPricesAt(rateResolver, costRow.model, costRow.pricingTS))
 		cost, priced, contributes, priceErr := sessionRowCostWithWebSearchRequests(
 			costRow, webSearches, rateResolver)
 		if priceErr != nil {
@@ -377,9 +421,10 @@ func (db *DB) GetSessionUsageRows(
 		if costRow.cost.Valid {
 			costSource = export.CostSourceReported
 		}
+		recorded, _ := RecordedRowCost(r.cost, r.costStatus, costRow.cost)
 		return activity.UsagePrice{
 			Cost: cost, CostSource: costSource, SessionCost: sessionCost,
-			Priced: priced, Contributes: contributes,
+			RecordedCost: recorded, Priced: priced, Contributes: contributes,
 		}, nil
 	})
 }
@@ -459,7 +504,7 @@ func sqliteSessionUsageRowTokens(
 	r usageScanRow,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok int) {
 	if r.usageSource == "message" {
-		return clampedUsageTokenCountersWithReasoning(r.tokenJSON)
+		return clampedUsageTokenCountersWithReasoning(r.tokenUsage())
 	}
 	inputTok, outputTok, cacheCrTok, cacheRdTok = UsageEventRowTokens(
 		r.usageSource,
@@ -712,11 +757,11 @@ const activityReportTerminalCandidatesSQL = `WITH
 	session_ids AS (
 		SELECT value AS session_id FROM json_each(?)
 	),
-	terminal_events AS (
+	terminal_events AS MATERIALIZED (
 		SELECT tre.session_id, tre.tool_call_message_ordinal AS ordinal,
 			tre.call_index, tre.event_index, tre.timestamp
-		FROM tool_result_events tre
-		JOIN session_ids ids ON ids.session_id = tre.session_id
+		FROM session_ids ids
+		CROSS JOIN tool_result_events tre ON tre.session_id = ids.session_id
 		WHERE tre.source = 'tool_execution'
 			AND tre.status IN ('completed', 'errored')
 			AND tre.timestamp IS NOT NULL
@@ -1061,25 +1106,21 @@ func (db *DB) activityReportUsageFrom(
 		return nil, nil, nil, err
 	}
 	sortActivityReportUsageCandidates(candidates)
-	baseRows := make([]activity.UsageRow, len(candidates))
+	selection := make([]activity.UsageSelectionRow, len(candidates))
 	var read []string
 	if collectRead {
 		read = make([]string, 0, len(candidates))
 	}
 	for i := range candidates {
-		candidate := &candidates[i]
-		row := candidate.usageRow()
+		c := &candidates[i]
+		r := &c.scan
 		if collectRead {
-			read = append(read, row.SessionID)
+			read = append(read, r.sessionID)
 		}
-		_, row.OutputTokens, _, _, _ = dailyUsageRowTokens(candidate.scan)
-		row.WebSearchRequests = usageRowWebSearchRequests(
-			candidate.scan.usageSource, candidate.scan.tokenJSON)
-		baseRows[i] = row
+		_, output, _, _, _ := dailyUsageRowTokens(*r)
+		selection[i] = activity.UsageSelectionRow{SessionID: r.sessionID, MessageOrdinal: c.ordinal, Timestamp: c.ts, TimestampValid: c.validTS, OutputTokens: output, WebSearchRequests: usageRowWebSearchRequests(r.usageSource, r.tokenJSON), Agent: r.agent, ClaudeMessageID: r.claudeMessageID, ClaudeRequestID: r.claudeRequestID, SourceUUID: r.sourceUUID, UsageDedupKey: r.usageDedupKey}
 	}
-	mask, attribution, webSearchRequests, err := activity.UsageSurvivorSelectionForSessions(
-		ctx, q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows, ids,
-	)
+	mask, attribution, webSearchRequests, err := activity.SelectUsageSurvivorsForSessions(ctx, q.RangeStart, q.RangeEnd, q.EffectiveEnd, selection, ids)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -1307,6 +1348,8 @@ func materializeActivityReportUsageCandidates(
 			costRow.cost = sql.NullInt64{}
 			rateResolver.RecordUnattributedReported()
 		}
+		costRow.cost = ReportedCostForPricing(costRow.cost, costRow.costStatus,
+			catalogPricesAt(rateResolver, costRow.model, costRow.pricingTS))
 		webSearches := usageRowWebSearchRequests(
 			candidate.scan.usageSource, candidate.scan.tokenJSON)
 		if webSearchRequests != nil {
@@ -1398,8 +1441,9 @@ func sqliteActivityReportRowStatusWithWebSearchRequests(
 	var tokens activityReportRowTokens
 	tokens.reasoning = r.reasoningTokens
 	if r.usageSource == "message" {
-		tokens.input, tokens.output, tokens.cacheCreation, tokens.cacheRead, tokens.reasoning = clampedUsageTokenCountersWithReasoning(r.tokenJSON)
-		tokens.cacheCreation1h = clampedCacheCreation1hTokens(r.tokenJSON)
+		parsed := usagefacts.ParseTokenUsage(r.tokenJSON)
+		tokens.input, tokens.output, tokens.cacheCreation, tokens.cacheRead, tokens.reasoning = clampedUsageTokenCountersWithReasoning(parsed)
+		tokens.cacheCreation1h = clampedCacheCreation1hTokens(parsed)
 	} else {
 		tokens.input, tokens.output, tokens.cacheCreation, tokens.cacheRead = UsageEventRowTokens(
 			r.usageSource,

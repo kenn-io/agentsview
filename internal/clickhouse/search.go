@@ -20,6 +20,8 @@ func embeddableMessagePredicate(alias string) string {
 		db.ClickHouseSystemPrefixSQL(alias+".content", alias+".role")
 }
 
+const systemPrefixSettings = " SETTINGS short_circuit_function_evaluation = 'force_enable'"
+
 // toolCallMessageJoin joins tool calls to their message on the mirror's
 // stable (session_id, ordinal) key.
 const toolCallMessageJoin = `JOIN messages m ON m.session_id = tc.session_id
@@ -52,7 +54,7 @@ func imageTextResultBranches(f db.ContentSearchFilter, scopeWhere, callPredicate
 				FROM tool_calls tc ` + imageTextCallJoin + `
 				JOIN sessions s ON s.id = tc.session_id
 				` + toolCallMessageJoin + `
-				WHERE it.source_kind = 'tool_call' AND it.push_version >= s.push_version
+				WHERE it.source_kind = 'tool_call' AND it.push_version >= s.content_version
 					AND ` + toolCallWithoutEvents + `
 					AND it.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `) AND ` +
 			db.LexicalAnchorScopeSQL(f, "s", "m", db.ClickHouseQueryDialect()) + callPredicate, `
@@ -66,7 +68,7 @@ func imageTextResultBranches(f db.ContentSearchFilter, scopeWhere, callPredicate
 				FROM tool_result_events tre ` + imageTextEventJoin + `
 				JOIN sessions s ON s.id = tre.session_id
 				` + db.LexicalEventAnchorJoinSQL(f.Scope) + `
-				WHERE it.source_kind = 'event' AND it.push_version >= s.push_version
+				WHERE it.source_kind = 'event' AND it.push_version >= s.content_version
 					AND it.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `) AND ` +
 			db.LexicalAnchorScopeSQL(f, "s", "m", db.ClickHouseQueryDialect()) + eventPredicate,
 	}
@@ -191,7 +193,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 				) AS rn
 			FROM image_text it
 			JOIN sessions s ON s.id = it.session_id
-			WHERE `+imageTermPredicate+` AND it.push_version >= s.push_version
+			WHERE `+imageTermPredicate+` AND it.push_version >= s.content_version
 				AND s.deleted_at IS NULL
 				AND (it.session_id, it.message_ordinal) IN (
 					SELECT mx.session_id, mx.ordinal FROM messages mx
@@ -256,7 +258,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 			SELECT * FROM name_matches
 		) AS combined
 		ORDER BY `+orderBy+`
-		LIMIT ? OFFSET ?`, args...)
+		LIMIT ? OFFSET ?`+systemPrefixSettings, args...)
 	if err != nil {
 		return db.SearchPage{}, fmt.Errorf("clickhouse search: %w", err)
 	}
@@ -303,7 +305,7 @@ func (s *Store) SearchSession(ctx context.Context, sessionID, query string) ([]i
 			AND (m.content ILIKE ?
 				OR tc.result_content ILIKE ?
 				OR tre.content ILIKE ?)
-		ORDER BY m.ordinal ASC`,
+		ORDER BY m.ordinal ASC`+systemPrefixSettings,
 		sessionID, pattern, pattern, pattern)
 	if err != nil {
 		return nil, fmt.Errorf("clickhouse session search: %w", err)
@@ -531,6 +533,9 @@ func (s *Store) collectContentSubstringMatches(
 			src ASC, row_id ASC, call_index ASC, event_index ASC, body ASC
 		LIMIT ? OFFSET ?`
 	args = append(args, f.Limit+1, f.Cursor)
+	if f.ExcludeSystem && (slices.Contains(f.Sources, "messages") || slices.Contains(f.Sources, "thinking")) {
+		query += systemPrefixSettings
+	}
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("clickhouse content search: %w", err)
@@ -695,6 +700,9 @@ func (s *Store) collectContentSource(
 			ORDER BY session_id, ordinal, src, row_id, call_index, event_index`
 	default:
 		return nil, &db.SearchInputError{Msg: fmt.Sprintf("search: unknown source %q", source)}
+	}
+	if f.ExcludeSystem && (source == "messages" || source == "thinking") {
+		query += systemPrefixSettings
 	}
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {

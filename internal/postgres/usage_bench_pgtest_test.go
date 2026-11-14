@@ -252,6 +252,7 @@ func (f *pgUsageBenchmarkFixture) replaceDeltaSessionMessage(
 }
 
 func TestPGUsageBenchmarkFixture(t *testing.T) {
+	t.Parallel()
 	fixture := openPGUsageBenchmarkFixture(t)
 	sessions, messages := pgUsageRemoteCardinality(t, fixture.remote)
 	require.Zero(t, sessions)
@@ -290,6 +291,7 @@ func TestPGUsageBenchmarkFixture(t *testing.T) {
 }
 
 func TestPGUsageBenchmarkActivityOnlySessionCoverage(t *testing.T) {
+	t.Parallel()
 	fixture := openPGUsageBenchmarkFixture(t)
 	fixture.prime(t)
 	filter := db.UsageFilter{Timezone: "UTC"}
@@ -325,6 +327,7 @@ func (s pgUsageCountsOverride) GetUsageSessionCounts(
 }
 
 func TestPGUsageBenchmarkReadPreflightRejectsMismatchedCompleteResult(t *testing.T) {
+	t.Parallel()
 	fixture := openPGUsageBenchmarkFixture(t)
 	fixture.prime(t)
 	filter := pgUsageBenchmarkFilter(pgUsageBenchmarkCases()[0])
@@ -332,7 +335,7 @@ func TestPGUsageBenchmarkReadPreflightRejectsMismatchedCompleteResult(t *testing
 	require.NoError(t, err)
 	counts.Total++
 	remote := pgUsageCountsOverride{Store: fixture.remote, counts: counts}
-	require.Error(t, completeUsageParity(t.Context(), fixture.local, remote, filter),
+	require.Error(t, completeUsageParity(t.Context(), fixture.local, remote, filter, "snapshot-winner", true),
 		"complete preflight must reject a non-empty PostgreSQL count mismatch")
 
 	recorded := &pgUsageMethodRecorder{Store: fixture.remote}

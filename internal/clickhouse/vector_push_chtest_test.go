@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"testing"
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2"
@@ -546,6 +547,46 @@ func TestVectorPushFollowsMirrorResidency(t *testing.T) {
 	assert.Equal(t, 0, chtest.Count(t, conn, "vector_chunks", "session_id = ?", fixtureBetaID))
 	assert.Equal(t, 0, chtest.Count(t, conn, "vector_push_state", "session_id = ?", fixtureBetaID))
 	assert.Equal(t, 3, chtest.Count(t, conn, "vector_chunks", "session_id = ?", fixtureAlphaID))
+}
+
+// TestArchiveResidentSessionIDsMatchesFinalRows pins the residency answer for
+// a candidate list that fits one id batch and one that needs several, which
+// reads the archive's sessions instead of listing the ids. Only ids whose
+// current row names this archive are resident: a row another archive pushed
+// later wins under FINAL.
+func TestArchiveResidentSessionIDsMatchesFinalRows(t *testing.T) {
+	t.Parallel()
+	for _, size := range []int{4, idBatchSize + 1} {
+		t.Run(strconv.Itoa(size), func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			local, target := seedFixture(t)
+			s := newTestSync(t, local, target, storage.PusherOptions{})
+			conn := chtest.Open(t, target.URL, target.Database)
+			insert := func(id, archive string, version uint64) {
+				t.Helper()
+				_, err := conn.ExecContext(ctx,
+					`INSERT INTO sessions (id, project, source_archive_id, push_version) VALUES (?, ?, ?, ?)`,
+					id, "p", archive, version)
+				require.NoError(t, err)
+			}
+			insert("mine", s.archiveID, 1)
+			insert("unlisted-mine", s.archiveID, 1)
+			insert("theirs", "other-archive", 1)
+			insert("moved", s.archiveID, 1)
+			insert("moved", "other-archive", 2)
+
+			ids := []string{"mine", "theirs", "moved", "absent"}
+			for i := len(ids); i < size; i++ {
+				ids = append(ids, fmt.Sprintf("absent-%03d", i))
+			}
+			require.Len(t, ids, size)
+
+			resident, err := s.archiveResidentSessionIDs(ctx, ids)
+			require.NoError(t, err)
+			assert.Equal(t, map[string]bool{"mine": true}, resident)
+		})
+	}
 }
 
 // TestVectorPushScopedPromotesUntilArchiveCompletes pins the watch-mode

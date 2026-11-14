@@ -48,6 +48,8 @@ const (
 
 const ToolGetSessionFileReferences = "get_session_file_references"
 
+const ToolGetCompactionSummaries = "get_compaction_summaries"
+
 // Profile selects the tools advertised by an MCP server while keeping their
 // implementations and schemas shared.
 type Profile string
@@ -141,6 +143,8 @@ func newServer(opts ServeOptions) *mcp.Server {
 	}
 	memoryOnly := opts.Profile == ProfileMemory
 
+	mcp.AddTool(s, &mcp.Tool{Name: ToolGetCompactionSummaries, Description: "Read full compaction summaries for one session_id or sessions active since active_since. Use next_cursor to continue.", Annotations: readOnly}, t.compactionSummaries)
+
 	if !memoryOnly {
 		addFileReferencesTool(s, t, externalRead)
 		mcp.AddTool(s, &mcp.Tool{
@@ -216,9 +220,10 @@ func newServer(opts ServeOptions) *mcp.Server {
 			"prior work and answering contextual questions, especially when the exact wording is unknown. " +
 			"Hybrid returns keyword matches with effective_mode hybrid_keyword and a note when search by meaning is unavailable. " +
 			"Use terms when every literal term must occur within one " +
-			"user/assistant exchange, or substring/regex for exact error messages, identifiers, and code fragments. " +
+			"user/assistant exchange, or fully quoted substring text or regex for exact error messages, identifiers, and code fragments. " +
 			"Use concepts with two to five semantic ideas to keep only sessions with evidence for every idea. " +
-			"The default mode remains substring. Scope defaults to all, including child sessions and sidechain messages; " +
+			"The default mode remains substring. On SQLite, a substring search of several words lists exact text first, " +
+			"then messages holding every word, then those holding more of the words, and reports matched_words. Scope defaults to all, including child sessions and sidechain messages; " +
 			"top excludes them and subordinate returns only them. Child sessions bypass the one-shot exclusion. " +
 			"The response reports effective_scope and exclusions.children. Set context to include N messages of " +
 			"surrounding conversation with each match. Matches from the last 10 minutes (including the " +

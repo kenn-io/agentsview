@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	gosync "sync"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
@@ -148,4 +149,248 @@ func (e *Engine) splitResultsByCwdFilter(
 		}
 	}
 	return allowed, len(results) - len(allowed)
+}
+
+type sourceCwdPathKey struct {
+	path  string
+	agent string
+}
+
+type sourceCwdSessionKey struct {
+	id    string
+	path  string
+	agent string
+}
+
+type sourceCwdReconciliationBatch struct {
+	mu       gosync.Mutex
+	sessions map[sourceCwdSessionKey]string
+	paths    map[sourceCwdPathKey]string
+}
+
+func newSourceCwdReconciliationBatch() *sourceCwdReconciliationBatch {
+	return &sourceCwdReconciliationBatch{
+		sessions: make(map[sourceCwdSessionKey]string),
+		paths:    make(map[sourceCwdPathKey]string),
+	}
+}
+
+type sourceCwdDecision struct {
+	resolution parser.SourceCwdResolution
+	storedCwd  string
+	storedOK   bool
+	forceParse bool
+}
+
+type sourceCwdReader interface {
+	GetCwdByAgentPath(ctx context.Context, path, agent string) (string, bool)
+}
+
+// sourceCwdDecision compares provider-owned Cwd authority with the archive row
+// before any generic freshness gate can discard the source.
+func (e *Engine) sourceCwdDecision(ctx context.Context,
+	source parser.SourceRef,
+) sourceCwdDecision {
+	resolution := source.CwdResolution
+	decision := sourceCwdDecision{resolution: resolution}
+	if resolution.State == parser.SourceCwdUnspecified || e.db == nil {
+		return decision
+	}
+	path := e.sourceCwdLookupPath(source)
+	reader := sourceCwdReader(e.db)
+	if e.archiveStore != nil {
+		if archived, ok := e.archiveStore.(sourceCwdReader); ok {
+			reader = archived
+		}
+	}
+	decision.storedCwd, decision.storedOK = reader.GetCwdByAgentPath(ctx,
+		path, string(source.Provider),
+	)
+	switch resolution.State {
+	case parser.SourceCwdResolved:
+		decision.forceParse = decision.storedOK &&
+			decision.storedCwd != resolution.Path
+	case parser.SourceCwdNone, parser.SourceCwdAmbiguous,
+		parser.SourceCwdRemote:
+		decision.forceParse = decision.storedOK && decision.storedCwd != ""
+	case parser.SourceCwdUnspecified, parser.SourceCwdUnavailable:
+		// Without source authority, keep the stored working directory.
+	}
+	return decision
+}
+
+func (e *Engine) sourceCwdLookupPath(source parser.SourceRef) string {
+	path := providerDiscoveredPath(source)
+	if path == "" {
+		path = source.FingerprintKey
+	}
+	if e.pathRewriter != nil {
+		path = e.pathRewriter(path)
+	}
+	return path
+}
+
+func sourceCwdParticipates(resolution parser.SourceCwdResolution) bool {
+	return resolution.State != parser.SourceCwdUnspecified
+}
+
+func sourceCwdForFilter(parsed string, decision sourceCwdDecision) string {
+	switch decision.resolution.State {
+	case parser.SourceCwdResolved:
+		return decision.resolution.Path
+	case parser.SourceCwdNone, parser.SourceCwdAmbiguous,
+		parser.SourceCwdRemote:
+		return ""
+	case parser.SourceCwdUnavailable:
+		if decision.storedOK && decision.storedCwd != "" {
+			return decision.storedCwd
+		}
+	case parser.SourceCwdUnspecified:
+		return parsed
+	}
+	return parsed
+}
+
+func (e *Engine) reconcileFilteredSourceCwd(ctx context.Context,
+	results []parser.ParseResult, decision sourceCwdDecision,
+) (bool, error) {
+	if e.cwdFilter.empty() || !sourceCwdParticipates(decision.resolution) {
+		return false, nil
+	}
+	target := sourceCwdForFilter("", decision)
+	changed := false
+	for _, result := range results {
+		if e.cwdFilter.allows(sourceCwdForFilter(
+			result.Session.Cwd, decision,
+		)) {
+			continue
+		}
+		id := applyIDPrefixToID(e.idPrefix, result.Session.ID)
+		agent := string(result.Session.Agent)
+		path := e.effectiveSourcePath(result.Session.File.Path)
+		if id == "" || agent == "" || path == "" {
+			continue
+		}
+		key := sourceCwdSessionKey{id: id, path: path, agent: agent}
+		if e.deferredSourceCwd != nil {
+			e.deferredSourceCwd.mu.Lock()
+			e.deferredSourceCwd.sessions[key] = target
+			e.deferredSourceCwd.mu.Unlock()
+		} else {
+			updated, err := e.db.UpdateSessionCwdByIdentity(ctx,
+				id, path, agent, target,
+			)
+			if err != nil {
+				return changed, err
+			}
+			changed = changed || updated
+		}
+	}
+	return changed, nil
+}
+
+func (e *Engine) reconcileSourceCwdByPath(ctx context.Context,
+	source parser.SourceRef, decision sourceCwdDecision,
+) (bool, error) {
+	changed, err := e.reconcileSourceCwdAtPath(ctx,
+		e.sourceCwdLookupPath(source), source.Provider, decision,
+	)
+	return changed, err
+}
+
+func (e *Engine) reconcileSourceCwdAtPath(ctx context.Context,
+	path string, agent parser.AgentType, decision sourceCwdDecision,
+) (bool, error) {
+	if !sourceCwdParticipates(decision.resolution) ||
+		path == "" || e.db == nil {
+		return false, nil
+	}
+	target := sourceCwdForFilter("", decision)
+	// The decision already captured the stored Cwd for this source under the
+	// same locked pass, so a second per-source point query is redundant.
+	if !decision.storedOK || decision.storedCwd == target {
+		return false, nil
+	}
+	if e.deferredSourceCwd != nil {
+		e.deferredSourceCwd.mu.Lock()
+		e.deferredSourceCwd.paths[sourceCwdPathKey{
+			path: path, agent: string(agent),
+		}] = target
+		e.deferredSourceCwd.mu.Unlock()
+	} else {
+		updated, err := e.db.UpdateCwdByAgentPathCount(ctx,
+			path, string(agent), target,
+		)
+		if err != nil {
+			return false, err
+		}
+		return updated > 0, nil
+	}
+	return true, nil
+}
+
+func (e *Engine) reconcileSkippedSourceCwd(ctx context.Context, r syncJob) (bool, error) {
+	if r.sourceCwdResolution.State == parser.SourceCwdUnspecified {
+		return false, nil
+	}
+	return e.reconcileSourceCwdAtPath(ctx,
+		r.sourceCwdPath,
+		r.sourceCwdAgent,
+		sourceCwdDecision{
+			resolution: r.sourceCwdResolution,
+			storedCwd:  r.sourceCwdStored,
+			storedOK:   r.sourceCwdStoredOK,
+		},
+	)
+}
+
+func (e *Engine) applyDeferredSourceCwd(ctx context.Context,
+	target *db.DB, batch *sourceCwdReconciliationBatch,
+) (int, error) {
+	if batch == nil {
+		return 0, nil
+	}
+	batch.mu.Lock()
+	defer batch.mu.Unlock()
+	updated := 0
+	for key, cwd := range batch.sessions {
+		rowUpdated, err := target.UpdateSessionCwdByIdentity(ctx,
+			key.id, key.path, key.agent, cwd,
+		)
+		if err != nil {
+			return updated, err
+		}
+		if rowUpdated {
+			updated++
+		}
+	}
+	for key, cwd := range batch.paths {
+		count, err := target.UpdateCwdByAgentPathCount(ctx,
+			key.path, key.agent, cwd,
+		)
+		if err != nil {
+			return updated, err
+		}
+		updated += count
+	}
+	return updated, nil
+}
+
+func applySourceCwdResolution(
+	s *db.Session, resolution parser.SourceCwdResolution,
+	storedCwd string, storedOK bool,
+) {
+	switch resolution.State {
+	case parser.SourceCwdResolved:
+		s.Cwd = resolution.Path
+	case parser.SourceCwdNone, parser.SourceCwdAmbiguous,
+		parser.SourceCwdRemote:
+		s.Cwd = ""
+	case parser.SourceCwdUnavailable:
+		if storedOK && storedCwd != "" {
+			s.Cwd = storedCwd
+		}
+	case parser.SourceCwdUnspecified:
+		// This source does not override the parsed working directory.
+	}
 }

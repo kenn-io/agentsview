@@ -24,6 +24,7 @@ func (f projectionFixture) hosted(t *testing.T) *HostedStore {
 }
 
 func TestRawProjectionTombstoneRetainsArchivedSession(t *testing.T) {
+	t.Parallel()
 	appended := projectionOutcome("needle")
 	appended.Outcome.Results[0].Result.Messages = append(appended.Outcome.Results[0].Result.Messages, parser.ParsedMessage{Ordinal: 2, Role: parser.RoleUser, Content: "follow-up"})
 	tests := []struct {
@@ -102,6 +103,7 @@ func TestRawProjectionTombstoneRetainsArchivedSession(t *testing.T) {
 // Another device's shorter copy must not replace the longer transcript just
 // because the device that captured it no longer holds the file.
 func TestRawProjectionTombstoneKeepsLongerCopyFromDepartedDevice(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	h := f.hosted(t)
 	short := projectionOutcome("same prompt")
@@ -129,6 +131,7 @@ func TestRawProjectionTombstoneKeepsLongerCopyFromDepartedDevice(t *testing.T) {
 // Retention covers only a source leaving its device. Sessions the user, the
 // parser, or the provider already removed stay removed.
 func TestRawProjectionTombstoneDoesNotRestoreRemovedSessions(t *testing.T) {
+	t.Parallel()
 	type fixture struct {
 		projectionFixture
 		h        *HostedStore
@@ -201,6 +204,7 @@ func TestRawProjectionTombstoneDoesNotRestoreRemovedSessions(t *testing.T) {
 // A parser upgrade reschedules each source's current head. For a departed
 // source that head is the tombstone, which must still withdraw nothing.
 func TestRawProjectionTombstoneReparseRetainsSession(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	h := f.hosted(t)
 	m, accepted := f.accept(t, "device-a", "visible", "")
@@ -228,6 +232,7 @@ func TestRawProjectionTombstoneReparseRetainsSession(t *testing.T) {
 }
 
 func TestRawProjectionRejectsTombstoneCarryingParseOutcome(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		outcome parser.ParseOutcome
@@ -263,6 +268,7 @@ func TestRawProjectionRejectsTombstoneCarryingParseOutcome(t *testing.T) {
 // A departed device sends no further snapshot, so a copy that conflicts with
 // another device's stays a variant until the user deletes it.
 func TestRawProjectionTombstoneKeepsDivergentVariantUntilUserDeletesIt(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	h := f.hosted(t)
 	a, _ := f.accept(t, "device-a", "kept", "")

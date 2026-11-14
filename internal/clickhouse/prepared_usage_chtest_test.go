@@ -321,7 +321,7 @@ func TestEnsurePreparedUsageRebuildsOutdatedTable(t *testing.T) {
 	store, _, _ := newPushedStore(t)
 	conn := store.DB()
 	selection := clickUsageNormalizedQueryFrom("", chUsageStoredMessageEligibility, chUsageEventEligibility,
-		"usage_session_snapshots s ARRAY JOIN s.usage_facts AS m",
+		chSnapshotMessageFrom, chSnapshotMessageRecordedCost,
 		"usage_session_snapshots s ARRAY JOIN s.usage_events AS ue", "1", "")
 	for _, query := range []string{
 		"SYSTEM STOP VIEW prepare_usage",
@@ -870,13 +870,15 @@ func TestRefreshPreparedUsageWithoutViewFollowsRebuildLock(t *testing.T) {
 		return preparedUsageTables(t, conn, "prepare")
 	}
 	require.NoError(t, dropPreparedUsageView(ctx, conn))
-	require.NoError(t, refreshPreparedUsage(ctx, conn, true))
+	_, err := refreshPreparedUsage(ctx, conn, true)
+	require.NoError(t, err)
 	require.Empty(t, tables(), "a push must not rebuild or take a lock without one")
 
 	require.NoError(t, createRebuildLock(ctx, conn, 3, rebuildLockState{Status: rebuildLockRetired}))
-	_, err := conn.ExecContext(ctx, "CREATE TABLE prepared_usage_build_2 AS prepared_usage")
+	_, err = conn.ExecContext(ctx, "CREATE TABLE prepared_usage_build_2 AS prepared_usage")
 	require.NoError(t, err)
-	require.NoError(t, refreshPreparedUsage(ctx, conn, true))
+	_, err = refreshPreparedUsage(ctx, conn, true)
+	require.NoError(t, err)
 	require.Equal(t, []string{"prepare_usage ", "prepared_usage_rebuild_lock_3 retired"}, tables())
 }
 

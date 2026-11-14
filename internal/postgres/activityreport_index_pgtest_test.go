@@ -12,6 +12,7 @@ import (
 )
 
 func TestPGActivityReportTerminalLookupIndex(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_activity_index_test"
 	_, store := prepareUsageSchema(t, schema)
 	for _, status := range []string{"completed", "errored", "started"} {

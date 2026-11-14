@@ -34,10 +34,10 @@ coding yesterday?" — across multiple coding agents from one archive.
     **Qwen Code**, **OpenClaw**, **QClaw**, **Hermes**, **WorkBuddy**, **Forge**,
     **Piebald**, **Antigravity IDE/CLI**, **Zed**, **VS Code Copilot**, **Visual
     Studio Copilot**, **Mistral Vibe**, **gptme**, **Amp**, **Junie CLI**, **OMO**,
-    and **StepCode**. Coverage also includes **Cline CLI**, **Tencent CodeBuddy
-    CN**, **Augure Code**, **Open Interpreter**, **Augure Desktop 3 beta**,
-    **Charm Crush**, **fx**, and **Muse Code**, and reads **DeepSeek Harness**
-    formats through version 3.
+    **StepCode**, and **Direct API** usage files. Coverage also includes **Cline
+    CLI**, **Tencent CodeBuddy CN**, **Augure Code**, **Open Interpreter**,
+    **Augure Desktop 3 beta**, **Charm Crush**, **fx**, and **Muse Code**, and
+    reads **DeepSeek Harness** formats through version 3.
 
     Command Code forks count only usage produced after the fork.
 
@@ -513,6 +513,44 @@ fetched and embedded catalogs. Processing variants such as Batch, Flex,
 regional, Ultrafast, and one-hour cache pricing are not inferred when the stored
 usage does not identify that service tier. Codex Fast is the exception; see below.
 
+### Costs the Agent Records Itself
+
+Some agents compute a cost from their own price table and write it into the
+session. AgentsView keeps that figure as a recorded cost, but uses it as the
+price only when its own catalog has no rate for the model. When the catalog can
+price the model, the catalog price is used and the recorded cost is kept for
+comparison. A recorded cost of $0 never prices a row, because agents write $0
+for models they have no rate for; those rows stay unpriced.
+
+AgentsView keeps recorded costs from Pi and the agents built on it, OpenClaw,
+QClaw, Shelley, fx, and OpenCode, Kilo, and MiMo Code. For the OpenCode family
+it sums the cost of each model request in a message. Some of these figures are
+what a provider or gateway billed rather than an estimate; they follow the same
+rule. fx costs are kept only when fx has a billing record for every request.
+Existing sessions from these agents are re-read once after upgrading.
+
+`agentsview session usage <id>` compares the two: an `Agent cost:` line, and a
+`recorded_cost` object in JSON, show what the agent recorded next to what
+AgentsView charged for the same rows. A large gap usually means the agent
+used different rates, or that the transcript is missing calls the agent
+billed.
+
+Claude Code also writes a running total for each session: its own cost
+estimate and token counts per model, including subagents and side calls such
+as title generation that never reach the transcript. AgentsView keeps the last
+one and shows it as an `Agent total:` line and a `session_total` object. It is
+never added to usage totals, because it overlaps the per-call rows. Compare
+it with a report that includes subagents, which is the default. Expect it to
+run slightly above AgentsView's figure in short sessions, where the title call
+is a larger share of the work.
+
+Costs that an agent or provider reports as billed keep their existing
+treatment: the reported cost is the price.
+
+A usage record that carries a cost but names no model is counted under the
+`<unknown>` model, the same label Cursor account imports use. Its cost and
+tokens appear in totals and breakdowns instead of being dropped.
+
 ### Anthropic Web Search Fee
 
 Anthropic charges a flat
@@ -816,6 +854,30 @@ Amp's exports record only main-thread inference, so tokens spent by `oracle`,
 Note that recent Amp versions keep complete threads server-side and leave only
 stub files on disk. AgentsView reports usage for whatever complete threads are
 present locally; threads that exist only as stubs have nothing to read.
+
+### Direct API Sessions
+
+Tools that call model APIs directly, with no coding agent in between, can
+record their token usage as **Direct API** sessions. The tool writes one
+body-free JSONL file per session: never prompts, documents, or replies. Each
+line is one JSON object, and each line's `parentId` is the `id` of the line
+before it:
+
+1. Header, with a UUID4 `id`, an ISO `timestamp`, and the absolute `cwd`:
+   `{"type":"session","version":3,"id":<uuid4>,"timestamp":<iso>,"cwd":<cwd>}`
+2. Name, with an 8-hex `id` and a null `parentId`:
+   `{"type":"session_info","id":<8 hex>,"parentId":null,"timestamp":<iso>,"name":<name>}`
+3. One line per model call, with an 8-hex `id` and `timestamp` in epoch
+   milliseconds inside `message`:
+   `{"type":"message","id":<8 hex>,"parentId":<previous line id>,"timestamp":<iso>,"message":{"role":"assistant","provider":<provider>,"model":<model>,"content":[],"usage":{"input":I,"output":O,"cacheRead":C,"cacheWrite":0,"totalTokens":I+O+C},"timestamp":<epoch ms>}}`
+
+`input` excludes cached prompt tokens, and `cacheRead` is the cached prompt
+tokens, so `totalTokens` is `input + output + cacheRead`. AgentsView prices the
+tokens from the catalog.
+
+Files go in `~/.agentsview/direct-api/` by default. Set `DIRECT_API_DIR`, or
+`direct_api_dirs` in the [config file](configuration.md), to read another
+directory.
 
 ## Reporting Model
 

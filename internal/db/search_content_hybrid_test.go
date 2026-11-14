@@ -144,6 +144,25 @@ func TestSearchContentHybridFTSSnippetUsesDialogue(t *testing.T) {
 	assert.Equal(t, "answerneedle", page.Matches[0].Snippet)
 }
 
+func TestSearchContentHybridWordSnippetWithSecret(t *testing.T) {
+	d := testDB(t)
+	if !d.HasFTS(t.Context()) {
+		t.Skip("fts5 not available")
+	}
+	secret := "AKIA7QHWN2DKR4FYPLJM"
+	content := strings.Repeat("filler ", 100) + "connecting with key " + secret
+	seedSearchSession(t, d, "s1", "proj", [][2]string{{"user", content}})
+	d.SetVectorSearcher(&fakeVectorSearcher{})
+
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "connection unrelated", Mode: "hybrid", Limit: 50,
+	})
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Contains(t, page.Matches[0].Snippet, "connecting")
+	assert.NotContains(t, page.Matches[0].Snippet, secret)
+}
+
 // TestSearchContentHybridScoresStrictlyDescending pins that fused RRF scores
 // order the page strictly descending, with no inversions or unexpected ties
 // across a mix of a double-leg hit and single-leg (vector-only) hits.
@@ -671,13 +690,17 @@ func TestSearchContentHybridFTSLegScopeExcludedRowsRefill(t *testing.T) {
 		},
 	}})
 
-	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
-		Pattern: "zebra", Mode: "hybrid", Scope: "subordinate", Limit: 10,
-	})
-	require.NoError(t, err, "SearchContent hybrid")
-	require.Len(t, page.Matches, 1,
-		"the subordinate match past the excluded top-level rows must be fetched")
-	assert.Equal(t, "sub", page.Matches[0].SessionID)
+	for _, pattern := range []string{"zebra", `"zebra" OR "absent"`} {
+		t.Run(pattern, func(t *testing.T) {
+			page, err := d.SearchContent(t.Context(), ContentSearchFilter{
+				Pattern: pattern, Mode: "hybrid", Scope: "subordinate", Limit: 10,
+			})
+			require.NoError(t, err, "SearchContent hybrid")
+			require.Len(t, page.Matches, 1,
+				"the subordinate match past the excluded top-level rows must be fetched")
+			assert.Equal(t, "sub", page.Matches[0].SessionID)
+		})
+	}
 }
 
 // TestSearchContentHybridVectorOnlyMatchCarriesUnitRange pins the

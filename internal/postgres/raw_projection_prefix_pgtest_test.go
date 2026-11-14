@@ -15,6 +15,7 @@ import (
 )
 
 func TestRawProjectionPrefixCopiesRetainSourceHistory(t *testing.T) {
+	t.Parallel()
 	for _, longerFirst := range []bool{false, true} {
 		t.Run(fmt.Sprint(longerFirst), func(t *testing.T) {
 			f := newProjectionFixture(t)
@@ -82,6 +83,7 @@ func TestRawProjectionPrefixCopiesRetainSourceHistory(t *testing.T) {
 }
 
 func TestRawProjectionPrefixDoesNotChooseDivergentContinuation(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	for i := range 3 {
 		outcome := projectionOutcome("shared prompt")

@@ -2,11 +2,12 @@
   import { m } from "../../i18n/index.js";
   import {
     Button,
+    IconButton,
     KbdBadge,
     SegmentedControl,
     type SegmentedControlOption,
   } from "@kenn-io/kit-ui";
-  import { SearchIcon } from "../../icons.js";
+  import { EraserIcon, SearchIcon } from "../../icons.js";
   import { tick, onDestroy, untrack } from "svelte";
   import { ui } from "../../stores/ui.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
@@ -29,6 +30,7 @@
   import type { Session } from "../../api/types.js";
   import type {
     PaletteSearchResult,
+    RetainedSearch,
     SearchMode,
   } from "../../stores/search.svelte.js";
 
@@ -54,21 +56,31 @@
     { title: 54, snippet: 76 },
     { title: 66, snippet: 84 },
   ];
-  let project = $state(sessions.filters.project);
-  let selectedIndex: number = $state(0);
-  let inputValue: string = $state(searchStore.query ?? "");
+  // An open after a picked result reopens that search, with the picked
+  // result selected. Any other open starts from the sidebar's project.
+  const restored = searchStore.restore();
+  let project = $state(restored?.project ?? sessions.filters.project);
+  let selectedIndex: number = $state(restored?.selectedIndex ?? 0);
+  let inputValue: string = $state(restored?.query ?? "");
+  // Set when the palette closes on a picked result.
+  let retainOnClose: RetainedSearch | null = null;
   let searchModeOptions = $derived<SegmentedControlOption[]>([
     { value: "fulltext", label: m.command_palette_mode_fulltext() },
     { value: "semantic", label: m.command_palette_mode_semantic() },
     { value: "hybrid", label: m.command_palette_mode_hybrid() },
   ]);
 
-  // Clear state and reset sort whenever the palette is unmounted, regardless
-  // of close path (Escape key, overlay click, command-palette toggle, or any other
-  // mechanism). This ensures stale results and in-flight requests are always
-  // cancelled even when the caller bypasses close().
+  // Closing on a picked result keeps the search for the next open. Every
+  // other close path (Escape key, overlay click, command-palette toggle, or any
+  // other mechanism) clears state and resets sort and range on unmount, so
+  // stale results and in-flight requests are cancelled even when the caller
+  // bypasses close().
   onDestroy(() => {
     searchStore.endSession();
+    if (retainOnClose) {
+      searchStore.retain(retainOnClose);
+      return;
+    }
     searchStore.clear();
     searchStore.resetSort();
     searchStore.resetRange();
@@ -109,7 +121,7 @@
 
   let totalItems = $derived(
     showSearchResults
-      ? searchStore.results.length
+      ? (searchStore.isSearching ? 0 : searchStore.results.length)
       : recentSessions.length,
   );
 
@@ -123,6 +135,18 @@
     } else {
       searchStore.clear();
     }
+  }
+
+  // Starts over, as a fresh open would: no query, the sidebar's project, and
+  // the default sort and date range.
+  function clearSearch() {
+    inputValue = "";
+    project = sessions.filters.project;
+    selectedIndex = 0;
+    searchStore.clear();
+    searchStore.resetSort();
+    searchStore.resetRange();
+    inputRef?.focus();
   }
 
   function handleKeydown(e: KeyboardEvent) {
@@ -139,7 +163,7 @@
 
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      selectedIndex = Math.min(selectedIndex + 1, totalItems - 1);
+      selectedIndex = Math.max(0, Math.min(selectedIndex + 1, totalItems - 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
       selectedIndex = Math.max(selectedIndex - 1, 0);
@@ -192,6 +216,7 @@
   }
 
   function selectCurrent() {
+    if (showSearchResults && searchStore.isSearching) return;
     if (showSearchResults) {
       const result = searchStore.results[selectedIndex];
       if (result) {
@@ -211,11 +236,13 @@
   // starts hydration under the old route, where it can be cancelled
   // or lost (#1190).
   function selectSession(s: Session) {
+    retainSelection(recentSessions.indexOf(s));
     router.navigateToSession(s.id);
     close();
   }
 
   function selectSearchResult(r: PaletteSearchResult) {
+    retainSelection(searchStore.results.indexOf(r));
     router.navigateToSession(r.session_id);
     if (r.ordinal !== -1) {
       ui.scrollToOrdinal(r.ordinal, r.session_id);
@@ -225,6 +252,10 @@
       ui.clearScrollState();
     }
     close();
+  }
+
+  function retainSelection(index: number) {
+    retainOnClose = { query: inputValue, project, selectedIndex: Math.max(index, 0) };
   }
 
   function close() {
@@ -293,6 +324,15 @@
         value={inputValue}
         oninput={handleInput}
       />
+      {#if inputValue}
+        <IconButton
+          size="sm"
+          ariaLabel={m.command_palette_clear_search()}
+          onclick={clearSearch}
+        >
+          <EraserIcon size="14" aria-hidden="true" />
+        </IconButton>
+      {/if}
       <KbdBadge keys={["Esc"]} joiner="compact" ariaLabel="Escape" />
     </div>
 
@@ -384,19 +424,23 @@
             {#if searchStore.error.kind === "timeout"}
               <strong>{m.command_palette_search_timeout_title()}</strong>
               <span>{m.command_palette_search_timeout_detail()}</span>
-              <div class="palette-error-action">
-                <Button
-                  size="sm"
-                  tone="info"
-                  surface="soft"
-                  label={m.shared_retry()}
-                  onclick={() => searchStore.retry()}
-                />
-              </div>
             {:else}
               <strong>{m.command_palette_search_error()}</strong>
               <span>{searchStore.error.detail ?? m.command_palette_search_failed()}</span>
             {/if}
+            <div class="palette-error-action">
+              <Button
+                size="sm"
+                tone="info"
+                surface="soft"
+                label={m.shared_retry()}
+                onclick={() => {
+                  inputRef?.focus();
+                  selectedIndex = 0;
+                  searchStore.retry();
+                }}
+              />
+            </div>
           </div>
         {:else if searchStore.results.length === 0}
           <div class="palette-empty">{m.command_palette_no_results()}</div>
@@ -424,8 +468,9 @@
                 {/if}
               </span>
               <span class="item-agent" style:--agent-ink={agentInk(result.agent)}>{agentLabel(result.agent)}</span>
-              <span class="item-meta">
-                {truncate(result.project, 20)}{result.timestamp ? ' · ' + formatRelativeTime(result.timestamp) : ''}
+              <span class="item-meta search-meta">
+                <span class="item-project">{truncate(result.project, 20)}</span>
+                {#if result.timestamp}<span class="item-date">{'\u00a0· '}{formatRelativeTime(result.timestamp, ui.alwaysShowYear)}</span>{/if}
               </span>
               <!-- svelte-ignore a11y_click_events_have_key_events -->
               <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -457,7 +502,7 @@
             </span>
             <span class="item-agent" style:--agent-ink={agentInk(session.agent)}>{agentLabel(session.agent, session.agent_label)}</span>
             <span class="item-meta">
-              {formatRelativeTime(session.ended_at ?? session.started_at)}
+              {formatRelativeTime(session.ended_at ?? session.started_at, ui.alwaysShowYear)}
             </span>
           </button>
         {/each}
@@ -543,7 +588,7 @@
   .palette-controls {
     --kit-control-font-size: 12px;
     --typeahead-min-width: 120px;
-    --typeahead-max-width: 140px;
+    --typeahead-max-width: 120px;
     display: flex;
     flex-wrap: wrap;
     align-items: center;
@@ -666,6 +711,21 @@
     padding-top: 2px;
     text-align: right;
     font-variant-numeric: tabular-nums;
+  }
+
+  .search-meta {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .item-project {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .item-date {
+    flex-shrink: 0;
   }
 
   /* Laid out like .palette-item, so rows land about where results will.
@@ -858,6 +918,10 @@
       overflow: hidden;
       text-overflow: ellipsis;
       text-align: left;
+    }
+
+    .search-meta {
+      justify-content: flex-start;
     }
   }
 </style>

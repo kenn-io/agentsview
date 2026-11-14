@@ -11,10 +11,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
 )
 
 func TestPGClaudeProvenanceVisibleInReadPaths(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_session_identity_test"
@@ -29,7 +29,6 @@ func TestPGClaudeProvenanceVisibleInReadPaths(t *testing.T) {
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
-	dbtest.SeedPricingMeta(t, localDB)
 	defer localDB.Close()
 
 	filePath := "/fixtures/sessions/sid-001.jsonl"

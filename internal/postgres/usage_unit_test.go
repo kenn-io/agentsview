@@ -116,7 +116,7 @@ func (c *usageProbeConn) QueryContext(
 				"band_updated_at",
 			},
 			values: [][]driver.Value{{
-				"claude-sonnet", int64(3000000), int64(15000000), int64(3750000), int64(0), int64(300000), "2026-06-08",
+				"claude-sonnet", int64(3000000), int64(15000000), int64(3750000), int64(0), int64(300000), time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC),
 				nil, nil, nil, nil, nil, nil, nil,
 			}},
 		}, nil
@@ -188,6 +188,7 @@ func (c *usageProbeConn) QueryContext(
 				"cache_read_input_tokens",
 				"reasoning_tokens",
 				"cost_microdollars",
+				"cost_status",
 				"cost_source",
 				"claude_message_id",
 				"claude_request_id",
@@ -224,6 +225,7 @@ func usageProbeUsageRow(
 		int64(0),
 		int64(0),
 		nil,
+		"",
 		"",
 		"msg-dup",
 		"req-dup",
@@ -405,7 +407,8 @@ func TestPGUsageRowQueryPushesDateBoundsIntoUnion(t *testing.T) {
 	assert.NotContains(t, normalized, " or ")
 	assert.NotContains(t, normalized, "display_name")
 	assert.NotContains(t, normalized, "first_message")
-	assert.NotContains(t, normalized, "cost_status")
+	// Cost status decides whether a harness-recorded cost prices the row.
+	assert.Contains(t, normalized, "u.cost_status")
 	assert.Contains(t, normalized, "u.cost_source")
 	assert.Contains(t, normalized, "u.reasoning_tokens")
 	assert.NotContains(t, normalized, "user_message_count")
@@ -552,7 +555,8 @@ func TestPGTopSessionsUsageRowQueryUsesNarrowScan(t *testing.T) {
 	assert.Contains(t, normalized, "attributed.started_at as group_started_at")
 	assert.NotContains(t, normalized, "display_name")
 	assert.NotContains(t, normalized, "first_message")
-	assert.NotContains(t, normalized, "cost_status")
+	// Cost status decides whether a harness-recorded cost prices the row.
+	assert.Contains(t, normalized, "u.cost_status")
 	assert.Contains(t, normalized, "u.cost_source")
 	assert.Contains(t, normalized, "u.reasoning_tokens")
 	assert.NotContains(t, normalized, "user_message_count")

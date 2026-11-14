@@ -204,3 +204,13 @@ func TestGetMessagesWindow_AroundReportsRevisionWithRows(t *testing.T) {
 	assert.Empty(t, msgs)
 	assert.Empty(t, revision, "a missing session has no revision")
 }
+
+func TestGetMessagesWindow_CompactBoundary(t *testing.T) {
+	d := testDB(t)
+	seedWindowMessages(t, d, "boundary")
+	_, err := d.getWriter().Exec(t.Context(), "UPDATE messages SET is_compact_boundary = 1, is_system = 1 WHERE session_id = ? AND ordinal IN (3, 8)", "boundary")
+	require.NoError(t, err)
+	messages, err := d.GetMessagesWindow(t.Context(), "boundary", MessageWindow{Limit: 100, Asc: true, CompactBoundaryOnly: true})
+	require.NoError(t, err)
+	assert.Equal(t, []int{3, 8}, ordinalsOf(messages))
+}

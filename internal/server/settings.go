@@ -23,6 +23,8 @@ type settingsResponse struct {
 	AuthToken           string                    `json:"auth_token,omitempty"`
 	RequireAuth         bool                      `json:"require_auth"`
 	ReadOnly            bool                      `json:"read_only"`
+	RestartSupported    bool                      `json:"restart_supported"`
+	RestartRequired     bool                      `json:"restart_required"`
 }
 
 type sessionProviderResponse struct {

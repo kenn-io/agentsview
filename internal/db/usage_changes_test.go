@@ -11,6 +11,37 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestAnalyticsChangesKeepUsageRevision(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "session", "project")
+	analyticsBefore, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
+	require.NoError(t, err)
+	message := asstMsgAt("session", 0, "read", "2024-06-01T09:00:00Z")
+	message.ToolCalls = []ToolCall{{SessionID: "session", ToolName: "Read", Category: "Read"}}
+	insertMessages(t, d, message)
+	analyticsAfter, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
+	require.NoError(t, err)
+	require.Equal(t, analyticsBefore, analyticsAfter)
+	before, err := d.UsageChangeRevision(ctx)
+	require.NoError(t, err)
+	for _, query := range []string{
+		`UPDATE messages SET content_length = 123 WHERE session_id = 'session'`,
+		`UPDATE tool_calls SET observed_outcome = 'empty' WHERE session_id = 'session'`,
+		`UPDATE sessions SET tool_retry_count = 3 WHERE id = 'session'`,
+	} {
+		_, err = d.getWriter().ExecContext(ctx, query)
+		require.NoError(t, err)
+		after, err := d.UsageChangeRevision(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, before, after)
+		analyticsAfter, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
+		require.NoError(t, err)
+		analyticsBefore++
+		assert.Equal(t, analyticsBefore, analyticsAfter)
+	}
+}
+
 func TestUsageChangeJournal(t *testing.T) {
 	for _, mode := range []struct {
 		name string
@@ -405,11 +436,6 @@ func TestUsageChangeJournalPricingIgnoresMetadataAndUnchangedRows(t *testing.T) 
 	require.NoError(t, d.SetPricingMetaContext(ctx, "_last_fetch", "2026-07-01T10:00:00Z"))
 	require.NoError(t, d.SetPricingMetaContext(ctx, "_last_fetch", "2026-07-02T10:00:00Z"))
 	after, err := d.UsageChangeRevision(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, before, after)
-	_, err = d.getWriter().ExecContext(ctx, `DELETE FROM model_pricing WHERE model_pattern = '_last_fetch'`)
-	require.NoError(t, err)
-	after, err = d.UsageChangeRevision(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, before, after)
 

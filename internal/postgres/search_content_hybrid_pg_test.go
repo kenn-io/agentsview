@@ -91,6 +91,7 @@ const (
 // result whose anchor ordinal is the keyword-matched message (overriding the
 // vector leg's chunk anchor) and whose snippet centers on the keyword text.
 func TestPGHybridBothLegsFuseKeywordAnchor(t *testing.T) {
+	t.Parallel()
 	f := &hybridFakeSearcher{hits: []db.VectorHit{
 		{
 			SessionID: "s1", Ordinal: 1, OrdinalStart: 1, OrdinalEnd: 2,
@@ -124,6 +125,7 @@ func TestPGHybridBothLegsFuseKeywordAnchor(t *testing.T) {
 // hit found only by the vector leg and a hit found only by the keyword leg
 // both survive fusion, not just the leg-overlapping ones.
 func TestPGHybridVectorOnlyAndKeywordOnlyBothAppear(t *testing.T) {
+	t.Parallel()
 	f := &hybridFakeSearcher{hits: []db.VectorHit{
 		{SessionID: "vec-only", Ordinal: 0, Score: 0.9, Snippet: "totally unrelated content"},
 	}}
@@ -152,6 +154,7 @@ func TestPGHybridVectorOnlyAndKeywordOnlyBothAppear(t *testing.T) {
 // ordinal, carrying a structurally derived unit range (the uncovered hit sits
 // in a two-message assistant run) rather than a self-range.
 func TestPGHybridKeywordHitOutsideUniverseKeepsMessageGranularity(t *testing.T) {
+	t.Parallel()
 	f := &hybridFakeSearcher{hits: []db.VectorHit{
 		{SessionID: "covered", Ordinal: 0, Score: 0.9, Snippet: "unrelated content"},
 	}}
@@ -188,6 +191,7 @@ func TestPGHybridKeywordHitOutsideUniverseKeepsMessageGranularity(t *testing.T) 
 // subordinate hit, while scope=subordinate keeps only them. The keyword-leg
 // subordinate flag comes from the resolved unit.
 func TestPGHybridScopeFiltersBothLegs(t *testing.T) {
+	t.Parallel()
 	f := &hybridFakeSearcher{
 		hits: []db.VectorHit{
 			{SessionID: "topvec", Ordinal: 0, Score: 0.9, Snippet: "topvec body"},
@@ -235,6 +239,7 @@ func TestPGHybridScopeFiltersBothLegs(t *testing.T) {
 // tie between the two single-leg units breaks by ascending fusion key (the
 // message key sorts before the unit key), independent of session recency.
 func TestPGHybridRRFOrderParity(t *testing.T) {
+	t.Parallel()
 	f := &hybridFakeSearcher{hits: []db.VectorHit{
 		{SessionID: "both", Ordinal: 0, Score: 0.9, Snippet: "needle here"},
 		{SessionID: "vec", Ordinal: 0, Score: 0.8, Snippet: "no match here"},
@@ -281,6 +286,7 @@ func TestPGHybridRRFOrderParity(t *testing.T) {
 // the message start. The first matched term sits far past the start window, so
 // under the old raw-pattern centering the snippet would not contain it.
 func TestPGHybridKeywordSnippetCentersOnTerm(t *testing.T) {
+	t.Parallel()
 	f := &hybridFakeSearcher{}
 	store := wireHybrid(t, f)
 
@@ -310,6 +316,7 @@ func hybridSessionIDs(page db.ContentSearchPage) []string {
 }
 
 func TestPGHybridSnippetUsesDialogue(t *testing.T) {
+	t.Parallel()
 	for _, leg := range []string{"keyword", "fused", "vector"} {
 		t.Run(leg, func(t *testing.T) {
 			f := &hybridFakeSearcher{}

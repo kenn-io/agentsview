@@ -1,0 +1,7 @@
+{
+  "id": "msg_a1",
+  "role": "assistant",
+  "createdAt": "2026-09-17T02:00:05.000Z",
+  "message": "{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Let me check.\"},{\"type\":\"tool-call\",\"toolCallId\":\"call_999\",\"toolName\":\"execute_command\",\"args\":{\"command\":\"ls -la\"}}]}",
+  "extra": "{\"modelId\":\"deepseek-v4.1-flash\",\"lastStepInputTokens\":100,\"lastStepOutputTokens\":25,\"lastStepCachedInputTokens\":80}"
+}

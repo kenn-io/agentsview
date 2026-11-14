@@ -80,7 +80,8 @@
   import RecentEditsPage from "./lib/components/recentedits/RecentEditsPage.svelte";
   import DataPage from "./lib/components/data/DataPage.svelte";
   import SettingsPage from "./lib/components/settings/SettingsPage.svelte";
-  import { sessions, filtersToParams } from "./lib/stores/sessions.svelte.js";
+  import { sessions } from "./lib/stores/sessions.svelte.js";
+  import { filtersToParams } from "./lib/stores/sessionFilters.js";
   import { messages } from "./lib/stores/messages.svelte.js";
   import { sync } from "./lib/stores/sync.svelte.js";
   import { parseScrollCall, ui, type ScrollCall } from "./lib/stores/ui.svelte.js";

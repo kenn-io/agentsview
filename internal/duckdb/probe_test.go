@@ -38,7 +38,7 @@ func TestProbeMirrorReadsMetadataAndFlagsShapeIssues(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, createSchema(t.Context(), conn))
 	require.NoError(t, writeMirrorMetadata(t.Context(), conn, mirrorMetadata{
-		SchemaVersion: SchemaVersion, DataVersion: 68,
+		SchemaVersion: SchemaVersion, DataVersion: 68, FrustrationMarkersVersion: frustrationMarkersVersion,
 		SourceDatabaseID: "database-1", SourceArchiveID: "archive-1", Scope: "",
 		LastPushCutoff: "2026-07-18T00:00:00.000Z", LastPushMachine: "machine-a",
 	}))
@@ -282,7 +282,7 @@ func TestProbeMirrorSucceedsWhileMirrorHeldReadOnly(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, createSchema(ctx, conn))
 	require.NoError(t, writeMirrorMetadata(ctx, conn, mirrorMetadata{
-		SchemaVersion: SchemaVersion, DataVersion: 68,
+		SchemaVersion: SchemaVersion, DataVersion: 68, FrustrationMarkersVersion: frustrationMarkersVersion,
 		SourceDatabaseID: "database-1", SourceArchiveID: "archive-1",
 		LastPushCutoff: "2026-07-18T00:00:00.000Z", LastPushMachine: "machine-a",
 	}))
@@ -311,7 +311,7 @@ func TestRebuildReasonReportsEachTrigger(t *testing.T) {
 	baseProbe := func() MirrorProbe {
 		return MirrorProbe{
 			FileExists: true, ShapeOK: true,
-			SchemaVersion: SchemaVersion, DataVersion: 1, Scope: "",
+			SchemaVersion: SchemaVersion, DataVersion: 1, FrustrationMarkersVersion: frustrationMarkersVersion, Scope: "",
 		}
 	}
 	tests := []struct {
@@ -345,6 +345,16 @@ func TestRebuildReasonReportsEachTrigger(t *testing.T) {
 			want: fmt.Sprintf(
 				"schema version %d vs %d", SchemaVersion-1, SchemaVersion,
 			),
+		},
+		{
+			name: "frustration markers version mismatch",
+			probe: func() MirrorProbe {
+				p := baseProbe()
+				p.FrustrationMarkersVersion = 0
+				return p
+			}(),
+			dataVer: 1,
+			want:    "frustration marker rules changed",
 		},
 		{
 			name: "data version mismatch", probe: baseProbe(), dataVer: 2,

@@ -19,6 +19,7 @@ import (
 // tool events, gaps of exactly the cap, and sub-second activity across hour
 // boundaries and the effective end's microsecond.
 func TestPGActivityRunsMatchCandidateSweep(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	_, store := prepareUsageSchema(t, "agentsview_activity_runs_test")
 	rng := rand.New(rand.NewPCG(4, 9))

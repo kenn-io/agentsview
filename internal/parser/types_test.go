@@ -233,6 +233,7 @@ func TestAgentByType(t *testing.T) {
 		{AgentPrimeAgent, true},
 		{AgentOMP, true},
 		{AgentStepCode, true},
+		{AgentDirectAPI, true},
 		{AgentDevin, true},
 		{AgentDeepSeekTUI, true},
 		{AgentDeepSeekHarness, true},
@@ -383,6 +384,12 @@ func TestAgentByPrefix(t *testing.T) {
 			true,
 		},
 		{
+			"direct-api prefix",
+			"direct-api:run-1",
+			AgentDirectAPI,
+			true,
+		},
+		{
 			"devin prefix",
 			"devin:session-id",
 			AgentDevin,
@@ -508,6 +515,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentOMP,
 		AgentOMO,
 		AgentStepCode,
+		AgentDirectAPI,
 		AgentQwen,
 		AgentCommandCode,
 		AgentDeepSeekTUI,

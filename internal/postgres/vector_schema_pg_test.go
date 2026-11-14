@@ -33,6 +33,7 @@ func cleanVectorSchemaTestPG(t *testing.T, pgURL string) {
 // ensureVectorGeneration, ensureVectorChunkTable, and
 // LookupVectorGeneration.
 func TestEnsureVectorBaseSchema(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanVectorSchemaTestPG(t, pgURL)
 	t.Cleanup(func() { cleanVectorSchemaTestPG(t, pgURL) })
@@ -84,6 +85,7 @@ func TestEnsureVectorBaseSchema(t *testing.T) {
 // reports the table absent, so serve degrades to unavailable instead of
 // wiring a searcher that fails every query with a missing-relation error.
 func TestVectorChunkTableExists(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanVectorSchemaTestPG(t, pgURL)
 	t.Cleanup(func() { cleanVectorSchemaTestPG(t, pgURL) })
@@ -119,6 +121,7 @@ func TestVectorChunkTableExists(t *testing.T) {
 // ListVectorGenerationInfo returns empty, both without error, so pg
 // serve records a "semantic unavailable" reason instead of aborting startup.
 func TestVectorGenerationLookupTolerateMissingTable(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanVectorSchemaTestPG(t, pgURL)
 	t.Cleanup(func() { cleanVectorSchemaTestPG(t, pgURL) })
@@ -149,6 +152,7 @@ func TestVectorGenerationLookupTolerateMissingTable(t *testing.T) {
 // (oldest generation first), the order the serve startup notice lists the
 // generations PG already has, with their model and dimension.
 func TestListVectorGenerationInfo(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanVectorSchemaTestPG(t, pgURL)
 	t.Cleanup(func() { cleanVectorSchemaTestPG(t, pgURL) })
@@ -200,6 +204,7 @@ func tableExistsPG(t *testing.T, pg *sql.DB, table string) bool {
 // post-upgrade pg push must still create them via the fast path's best-effort
 // vector setup, otherwise semantic search never becomes available.
 func TestEnsureSchemaFastPathCreatesVectorTables(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanVectorSchemaTestPG(t, pgURL)
 	t.Cleanup(func() { cleanVectorSchemaTestPG(t, pgURL) })
@@ -250,6 +255,7 @@ func TestEnsureSchemaFastPathCreatesVectorTables(t *testing.T) {
 // pgvector the gate degrades to a reason instead of an error, which is what
 // keeps an old or missing extension from hard-failing `pg push`.
 func TestVectorHalfvecGate(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanVectorSchemaTestPG(t, pgURL)
 	t.Cleanup(func() { cleanVectorSchemaTestPG(t, pgURL) })

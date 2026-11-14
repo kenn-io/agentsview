@@ -3292,3 +3292,20 @@ func TestSaveVectorSetupRejectsInvalidCurrentSettings(t *testing.T) {
 		})
 	}
 }
+
+func TestAuthFlagRetiredOnlyBySuccessfulAuthSave(t *testing.T) {
+	cfg, err := loadConfigFromPFlags(t, "--require-auth=false")
+	require.NoError(t, err)
+	require.False(t, cfg.AuthSettingsSaved)
+	require.NoError(t, cfg.SaveSettings(map[string]any{"tool_result_images": ToolResultImages("drop")}))
+	assert.False(t, cfg.AuthSettingsSaved)
+	configPath := cfg.configPath()
+	saved, err := os.ReadFile(configPath)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(configPath, []byte("[invalid"), 0o600))
+	require.Error(t, cfg.SaveSettings(map[string]any{"require_auth": false}))
+	assert.False(t, cfg.AuthSettingsSaved)
+	require.NoError(t, os.WriteFile(configPath, saved, 0o600))
+	require.NoError(t, cfg.SaveSettings(map[string]any{"require_auth": false}))
+	assert.True(t, cfg.AuthSettingsSaved)
+}

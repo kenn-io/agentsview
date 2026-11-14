@@ -1,0 +1,1 @@
+[{"id":"call_r1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"docs/usage.md\"}"}},{"id":"call_r2","type":"function","function":{"name":"search_files","arguments":"{\"pattern\":\"TODO\"}"}}]

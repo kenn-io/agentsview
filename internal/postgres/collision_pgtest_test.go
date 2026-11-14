@@ -24,6 +24,7 @@ import (
 //  3. Assert that the row's machine column is still "machine-a" (not overwritten).
 //  4. Assert that no messages were written for the conflicting session.
 func TestPushSessionGuardsAgainstCrossMachineCollision(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_collision_guard_test"
@@ -109,6 +110,7 @@ func TestPushSessionGuardsAgainstCrossMachineCollision(t *testing.T) {
 }
 
 func TestPushSessionAllowsMachineRenameForSameOwnerMarker(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_collision_owner_marker_test"
@@ -168,6 +170,7 @@ func TestPushSessionAllowsMachineRenameForSameOwnerMarker(t *testing.T) {
 }
 
 func TestPushSessionAdoptsLegacyLocalSentinelRow(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_collision_legacy_local_test"

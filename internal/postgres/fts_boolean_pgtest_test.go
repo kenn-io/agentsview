@@ -12,6 +12,7 @@ import (
 )
 
 func TestPGFTSBooleanSemantics(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	for _, row := range []struct{ id, body string }{
 		{"a", "reader 压缩 archive"},
@@ -74,6 +75,7 @@ func TestPGFTSBooleanSemantics(t *testing.T) {
 // after text that holds a non-matching operand, a negated operand, or an
 // operator word.
 func TestPGFTSBooleanSnippetCentersOnMatchedOperand(t *testing.T) {
+	t.Parallel()
 	filler := strings.Repeat("filler ", 40)
 	for _, tc := range []struct {
 		name, query, body, want string

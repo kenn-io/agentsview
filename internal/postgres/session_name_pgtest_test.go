@@ -12,7 +12,6 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -20,6 +19,7 @@ import (
 // SessionName (agent-provided title, no user rename) surfaces its name through
 // all PG read paths.
 func TestPGSessionNameVisibleInReadPaths(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 
 	const schema = "agentsview_session_name_test"
@@ -35,7 +35,6 @@ func TestPGSessionNameVisibleInReadPaths(t *testing.T) {
 	// Local SQLite DB used by the Sync push path.
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
-	dbtest.SeedPricingMeta(t, localDB)
 	defer localDB.Close()
 
 	agentTitle := "Agent Title"
@@ -120,6 +119,7 @@ func TestPGSessionNameVisibleInReadPaths(t *testing.T) {
 func strPtr(s string) *string { return &s }
 
 func TestPGPushUsageOnlyClearsRenamedTitle(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })

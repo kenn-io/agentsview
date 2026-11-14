@@ -678,7 +678,24 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // call as hidden usage-only rows. Re-parse OpenCode-format, OpenClaw, QClaw,
 // Forge, Cline, Codex-format, and Gemini sources in place; source and session
 // identities are unchanged.)
-// (176: prevent older binaries from writing archives with pushed sessions.)
+// (176: keep the cost Pi, OpenClaw, Shelley, fx, and OpenCode-format agents
+// record for their requests, as a recorded cost.)
+// (177: keep Claude Code's cost-state session total.)
+// (178: rebuild Grok history before each compaction from updates.jsonl, mark
+// compactions as compact boundaries, and render Grok tool calls in assistant
+// rows. Re-parse Grok sources in place; source and session identities are
+// unchanged.)
+// (179: count OpenCode-family reasoning tokens in output when the writer
+// stored output without them, and record reasoning_tokens. Re-parse OpenCode,
+// Kilo, MiMo Code and ICodeMate sources in place; source and session
+// identities are unchanged.)
+// (180: prevent older binaries from writing usage events without
+// occurred_at_us or querying the index it replaced.)
+// (181: prevent older binaries from reading or writing pricing metadata as
+// model_pricing rows after it moved to pricing_meta.)
+// (182: distinguish empty Evener compaction labels from source text. Re-parse
+// Evener sources in place; source and session identities are unchanged.)
+// (183: prevent older binaries from writing archives with pushed sessions.)
 const dataVersion = SessionPushDataVersion
 
 const archiveOnlyVersionBase = 1 << 20
@@ -932,6 +949,10 @@ type DB struct {
 	usageCache           *usageCacheManager
 	activityMemo         activityCandidateMemo
 	activityKept         kept.Memo[activityKept]
+	analyticsKept        kept.Reads[any]
+	trendsDisk           kept.Disk
+	trendsDiskOnce       sync.Once
+	usageKept            kept.Memo[DailyUsageResult]
 	sessionStatsFacts    *sessionStatsFactsMemo
 	frustrationMemo      FrustrationMarkerMemo
 	usageBackfillMu      sync.Mutex
@@ -1009,6 +1030,11 @@ type DB struct {
 	// reuse prepared statements, so a SQLite authorizer sees one compilation
 	// per query shape rather than one per page.
 	memberFreshnessPages atomic.Int64
+
+	usageSource           UsageCacheSource
+	usageSourceIdentityMu sync.Mutex
+	// usageSourceDatabaseID holds the external source identity from the latest capture.
+	usageSourceDatabaseID atomic.Pointer[string]
 }
 
 // MessagesLoadCount returns the total number of GetAllMessages calls the
@@ -1265,6 +1291,7 @@ func (db *DB) SetCustomPricing(p map[string]config.CustomModelRate) {
 	db.customPricing = p
 	db.effectivePricing = nil
 	db.invalidateSessionStatsFacts()
+	db.usageKept.DeleteSlots(func(string) bool { return true })
 }
 
 // SetEffectivePricing installs in-memory pricing rows with explicit provenance
@@ -1279,6 +1306,7 @@ func (db *DB) SetEffectivePricing(
 		db.effectivePricing[model] = rates
 	}
 	db.invalidateSessionStatsFacts()
+	db.usageKept.DeleteSlots(func(string) bool { return true })
 }
 
 // SetEmptyCatalogPricing installs in-memory rates that are used only when the
@@ -1292,6 +1320,7 @@ func (db *DB) SetEmptyCatalogPricing(
 		db.emptyCatalogPricing[model] = rates
 	}
 	db.invalidateSessionStatsFacts()
+	db.usageKept.DeleteSlots(func(string) bool { return true })
 }
 
 // SetCursorSecret updates the secret key used for cursor signing.
@@ -1487,9 +1516,18 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 	if err == nil {
 		err = ensureConversationSchemaLocked(ctx, d.getWriter())
 	}
+	if err == nil {
+		// Date-bounded usage reads name these indexes, and a read-only open
+		// requires them. schema.sql cannot create them, because it runs
+		// before older archives gain the columns they cover.
+		err = ensureUsageIndexesLocked(ctx, d.getWriter())
+	}
+	if err == nil {
+		err = d.ensureUsageEventsSchemaLocked(ctx, d.getWriter())
+	}
 	d.mu.Unlock()
 	if err != nil {
-		return closeOnError(fmt.Errorf("initializing fresh archive triggers and export state: %w", err))
+		return closeOnError(fmt.Errorf("initializing fresh archive triggers, indexes, and export state: %w", err))
 	}
 	if _, err := d.GetOrCreateDatabaseID(ctx); err != nil {
 		return closeOnError(fmt.Errorf("initializing database id: %w", err))
@@ -2046,6 +2084,7 @@ func OpenReadOnly(ctx context.Context, path string) (*DB, error) {
 	db := &DB{
 		path: path, readOnly: true,
 		usageCache: newUsageCacheManager(path),
+		usageKept:  newDailyUsageMemo(),
 	}
 	db.dataStale.Store(dataStale)
 	db.usageCache.attachArchive(db)
@@ -2068,6 +2107,7 @@ var readOnlyRequiredTables = []string{
 	"stats",
 	"usage_events",
 	"session_plan_usage",
+	"session_usage_totals",
 	"tool_calls",
 	"tool_result_events",
 	"image_text_cache",
@@ -2088,6 +2128,7 @@ var readOnlyRequiredTables = []string{
 	"model_pricing",
 	"model_pricing_bands",
 	"genai_pricing",
+	"pricing_meta",
 	"secret_findings",
 	"friction_digests",
 	"friction_digest_sessions",
@@ -2264,6 +2305,8 @@ func checkReadOnlySchemaCompatibility(ctx context.Context, conn *sql.DB) error {
 		"idx_messages_usage_timestamp",
 		"idx_messages_usage_session_covering",
 		"idx_messages_activity_timestamp",
+		"idx_usage_events_occurred_us",
+		"idx_usage_events_occurred_unparsed",
 	} {
 		var present bool
 		if err := conn.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_master
@@ -2483,6 +2526,7 @@ func schemaColumnMigrations() []schemaColumnMigration {
 	return []schemaColumnMigration{
 		{"sessions", "usage_generation", "ALTER TABLE sessions ADD COLUMN usage_generation TEXT;" +
 			" UPDATE sessions SET usage_generation=lower(hex(randomblob(8)))"},
+		{"sessions", "trends_generation", "ALTER TABLE sessions ADD COLUMN trends_generation TEXT"},
 		{
 			"sessions", "automation_audit",
 			"ALTER TABLE sessions ADD COLUMN automation_audit INTEGER NOT NULL DEFAULT 1",
@@ -3022,6 +3066,17 @@ func schemaColumnMigrations() []schemaColumnMigration {
 	}
 }
 
+// A random generation distinguishes transcript histories after restoring a backup.
+const trendsGenerationSchemaSQL = `
+CREATE TRIGGER IF NOT EXISTS sessions_trends_generation_insert AFTER INSERT ON sessions BEGIN
+    UPDATE sessions SET trends_generation=lower(hex(randomblob(16))) WHERE id=NEW.id;
+END;
+CREATE TRIGGER IF NOT EXISTS sessions_trends_generation_update AFTER UPDATE OF transcript_revision ON sessions
+WHEN OLD.transcript_revision IS NOT NEW.transcript_revision BEGIN
+    UPDATE sessions SET trends_generation=lower(hex(randomblob(16))) WHERE id=NEW.id;
+END;
+`
+
 // A tail append preserves the generation. Every change to an existing usage
 // input invalidates the prefix retained by incremental usage-cache fills.
 const usageGenerationSchemaSQL = `
@@ -3082,6 +3137,9 @@ func applySchemaColumnMigrations(ctx context.Context, w *writerHandle, progress 
 		progress,
 	); err != nil {
 		return err
+	}
+	if _, err := tx.ExecContext(ctx, trendsGenerationSchemaSQL); err != nil {
+		return fmt.Errorf("installing trends generation triggers: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, usageGenerationSchemaSQL); err != nil {
 		return fmt.Errorf("installing usage generation triggers: %w", err)
@@ -3351,6 +3409,9 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 	if _, err := w.ExecContext(ctx, genAIPricingSchemaSQL); err != nil {
 		return fmt.Errorf("creating GenAI pricing storage: %w", err)
 	}
+	if err := movePricingMetaLocked(ctx, w); err != nil {
+		return err
+	}
 	if _, err := w.ExecContext(ctx, artifactSessionQueueTriggerDropsSQL); err != nil {
 		return fmt.Errorf("dropping artifact session queue triggers: %w", err)
 	}
@@ -3361,6 +3422,9 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 		return err
 	}
 	if err := addDialogueIsContent(ctx, w, progress); err != nil {
+		return err
+	}
+	if err := addMessageUsageCounters(ctx, w, progress); err != nil {
 		return err
 	}
 	if _, err := w.ExecContext(ctx, artifactSessionQueueTriggerCreatesSQL); err != nil {
@@ -4229,6 +4293,7 @@ var messageVelocityIndexColumns = []string{
 var usageSessionCoveringIndexColumns = []string{
 	"session_id", "ordinal", "timestamp", "role", "model",
 	"provider_id", "claude_message_id", "claude_request_id", "token_usage", "source_uuid",
+	"usage_output_tokens", "usage_web_search_requests",
 }
 
 func ensureUsageIndexesLocked(ctx context.Context, w *writerHandle) error {
@@ -4258,7 +4323,8 @@ func ensureUsageIndexesLocked(ctx context.Context, w *writerHandle) error {
 		w, "idx_messages_usage_session_covering", usageSessionCoveringIndexColumns,
 		`CREATE INDEX IF NOT EXISTS idx_messages_usage_session_covering
 		 ON messages(session_id, ordinal, timestamp, role, model, provider_id,
-		             claude_message_id, claude_request_id, token_usage, source_uuid)
+		             claude_message_id, claude_request_id, token_usage, source_uuid,
+		             usage_output_tokens, usage_web_search_requests)
 		 WHERE token_usage != '' AND model != '' AND model != '<synthetic>'`,
 	); err != nil {
 		return err
@@ -4990,6 +5056,7 @@ func openAndInit(
 
 	db := &DB{
 		path: path, usageCache: newUsageCacheManager(path),
+		usageKept:         newDailyUsageMemo(),
 		activityKept:      newActivityKeptMemo(),
 		sessionStatsFacts: newSessionStatsFactsMemo(),
 	}
@@ -5354,11 +5421,12 @@ func (db *DB) checkFTSModuleLoads(
 
 // HasFTS checks if Full Text Search is available.
 func (db *DB) HasFTS(ctx context.Context) bool {
-	// We need to actually try to access the table, because it might exist
-	// in sqlite_master but fail to load if the fts5 module is missing
-	// in the current runtime.
+	// We need to actually query the table, because it might exist in
+	// sqlite_master but fail to load if the fts5 module is missing in the
+	// current runtime. A MATCH reads the index instead of scanning rows, and
+	// succeeds whether or not any row matches.
 	_, err := db.getReader().Exec(ctx,
-		"SELECT 1 FROM messages_fts LIMIT 1",
+		"SELECT 1 FROM messages_fts WHERE messages_fts MATCH 'agentsviewprobe' LIMIT 1",
 	)
 	return err == nil
 }
@@ -5823,6 +5891,8 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 	oldWriter := db.writer.Swap(writer)
 	var oldReader *sql.DB
 	db.activityKept.DeleteSlots(func(string) bool { return true })
+	db.analyticsKept.Clear()
+	db.usageKept.DeleteSlots(func(string) bool { return true })
 	db.activityMemo.swap(func() {
 		db.frustrationMemo.Swap(func() { db.sessionStatsFacts.Swap(func() { oldReader = db.reader.Swap(reader) }) })
 	})

@@ -1017,7 +1017,7 @@ func forEachSessionUsageCredit(
 			Timestamp:         r.ts,
 			MessageOrdinal:    ordinal,
 			OutputTokens:      outputTok,
-			WebSearchRequests: usageRowWebSearchRequests(r.usageSource, r.tokenJSON),
+			WebSearchRequests: scanRowWebSearchRequests(r),
 			ClaudeMessageID:   r.claudeMessageID,
 			ClaudeRequestID:   r.claudeRequestID,
 		}
@@ -1048,6 +1048,8 @@ func forEachSessionUsageCredit(
 			costRow.cost = sql.NullInt64{}
 			resolver.RecordUnattributedReported()
 		}
+		costRow.cost = ReportedCostForPricing(costRow.cost, costRow.costStatus,
+			catalogPricesAt(resolver, costRow.model, costRow.pricingTS))
 		credit.cost, credit.priced, credit.contributes, err = sessionRowCostWithWebSearchRequests(
 			costRow, snapshotWebSearchRequests[i], resolver)
 		if err != nil {
@@ -1262,7 +1264,7 @@ func sessionExportUsageTokens(
 	r usageScanRow,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok int) {
 	if r.usageSource == "message" {
-		return clampedUsageTokenCountersWithReasoning(r.tokenJSON)
+		return clampedUsageTokenCountersWithReasoning(r.tokenUsage())
 	}
 	inputTok, outputTok, cacheCrTok, cacheRdTok = UsageEventRowTokens(
 		r.usageSource,

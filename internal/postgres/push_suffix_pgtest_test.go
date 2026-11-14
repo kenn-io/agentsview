@@ -27,6 +27,7 @@ func suffixPrefixVersions(t *testing.T, syncer *Sync, boundary int) []string {
 }
 
 func TestPushSuffixPublication(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name      string
 		boundary  int
@@ -167,6 +168,7 @@ func TestPushSuffixPublication(t *testing.T) {
 }
 
 func TestPushLegacyVSCodeReplyPin(t *testing.T) {
+	t.Parallel()
 	for _, agent := range []string{"vscode-copilot", "positron"} {
 		t.Run(agent, func(t *testing.T) {
 			const schema = "agentsview_legacy_reply_pin_test"

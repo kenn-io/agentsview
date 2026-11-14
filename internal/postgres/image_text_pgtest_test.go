@@ -18,6 +18,7 @@ import (
 // TestPGImageTextPushAndSearch pushes a screenshot session before OCR, then
 // publishes its image-only text through ordinary incremental pushes.
 func TestPGImageTextPushAndSearch(t *testing.T) {
+	t.Parallel()
 	syncer, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_image_text_test")
 	image := `[{"type":"input_image","image_url":"data:image/png;base64,` +
 		base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\nimage")) + `"}]`
@@ -162,6 +163,7 @@ func TestPGImageTextPushAndSearch(t *testing.T) {
 }
 
 func TestPGStampedCodexPageMigration(t *testing.T) {
+	t.Parallel()
 	const thread = "codex:11111111-1111-4111-8111-111111111111"
 	const rollout = "22222222-2222-4222-8222-222222222222"
 	const page = thread + "_" + rollout
@@ -234,6 +236,7 @@ func TestPGStampedCodexPageMigration(t *testing.T) {
 }
 
 func TestPGImageTextPendingSessionVersion(t *testing.T) {
+	t.Parallel()
 	syncer, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_image_text_version_test")
 	image := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
 	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "pending", Project: "proj", Machine: "workstation", Agent: "test"}))

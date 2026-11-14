@@ -16,6 +16,7 @@ import (
 func TestStoreGetAnalyticsActivityModelFilterCountsOnlyMatchingMessages(
 	t *testing.T,
 ) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_activity_model_messages_test")
 	ctx := t.Context()
 
@@ -57,6 +58,7 @@ func TestStoreGetAnalyticsActivityModelFilterCountsOnlyMatchingMessages(
 func TestStoreGetAnalyticsActivityModelFilterKeepsNullTimestampSessionsWithoutTimeFilter(
 	t *testing.T,
 ) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_activity_model_null_ts_test")
 	ctx := t.Context()
 
@@ -98,6 +100,7 @@ func TestStoreGetAnalyticsActivityModelFilterKeepsNullTimestampSessionsWithoutTi
 func TestStoreGetAnalyticsActivityModelAndHourFilterUseSameMessage(
 	t *testing.T,
 ) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_activity_model_hour_test")
 	ctx := t.Context()
 
@@ -135,6 +138,7 @@ func TestStoreGetAnalyticsActivityModelAndHourFilterUseSameMessage(
 func TestStoreGetAnalyticsActivityModelAndHourFilterKeepsPairedUserTurn(
 	t *testing.T,
 ) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_activity_model_hour_paired_test")
 	ctx := t.Context()
 
@@ -179,6 +183,7 @@ func TestStoreGetAnalyticsActivityModelAndHourFilterKeepsPairedUserTurn(
 func TestStoreGetAnalyticsHeatmapSessionsModelAndHourFilterKeepsPairedUserTurn(
 	t *testing.T,
 ) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_heatmap_sessions_paired_test")
 	ctx := t.Context()
 
@@ -219,6 +224,7 @@ func TestStoreGetAnalyticsHeatmapSessionsModelAndHourFilterKeepsPairedUserTurn(
 func TestStoreGetAnalyticsTopSessionsDurationModelAndHourFilterKeepsPairedUserTurn(
 	t *testing.T,
 ) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_top_duration_paired_test")
 	ctx := t.Context()
 
@@ -260,6 +266,7 @@ func TestStoreGetAnalyticsTopSessionsDurationModelAndHourFilterKeepsPairedUserTu
 func TestStoreGetAnalyticsActivityModelAndHourFilterCountsOnlyMatchingHourRows(
 	t *testing.T,
 ) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_activity_model_hour_rows_test")
 	ctx := t.Context()
 
@@ -311,6 +318,7 @@ func TestStoreGetAnalyticsActivityModelAndHourFilterCountsOnlyMatchingHourRows(
 func TestStoreGetAnalyticsHourOfWeekModelFilterCountsOnlyMatchingMessages(
 	t *testing.T,
 ) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_hour_of_week_model_messages_test")
 	ctx := t.Context()
 
@@ -348,6 +356,7 @@ func TestStoreGetAnalyticsHourOfWeekModelFilterCountsOnlyMatchingMessages(
 func TestStoreGetAnalyticsHourOfWeekModelFilterIncludesPairedUserTurns(
 	t *testing.T,
 ) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_hour_of_week_model_paired_test")
 	ctx := t.Context()
 
@@ -387,6 +396,7 @@ func TestStoreGetAnalyticsHourOfWeekModelFilterIncludesPairedUserTurns(
 func TestStoreGetAnalyticsToolsModelFilterCountsOnlyMatchingToolCalls(
 	t *testing.T,
 ) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_tools_model_calls_test")
 	ctx := t.Context()
 
@@ -449,6 +459,7 @@ func TestStoreGetAnalyticsToolsModelFilterCountsOnlyMatchingToolCalls(
 func TestStoreGetAnalyticsToolsModelAndHourFilterCountsOnlyMatchingHourToolCalls(
 	t *testing.T,
 ) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_tools_model_hour_calls_test")
 	ctx := t.Context()
 
@@ -502,6 +513,7 @@ func TestStoreGetAnalyticsToolsModelAndHourFilterCountsOnlyMatchingHourToolCalls
 func TestStoreGetAnalyticsSkillsModelFilterCountsOnlyMatchingSkillCalls(
 	t *testing.T,
 ) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_skills_model_calls_test")
 	ctx := t.Context()
 
@@ -552,6 +564,7 @@ func TestStoreGetAnalyticsSkillsModelFilterCountsOnlyMatchingSkillCalls(
 func TestStoreGetAnalyticsSummaryModelFilterCountsOnlyMatchingMessages(
 	t *testing.T,
 ) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_summary_model_messages_test")
 	ctx := t.Context()
 
@@ -595,6 +608,7 @@ func TestStoreGetAnalyticsSummaryModelFilterCountsOnlyMatchingMessages(
 func TestStoreGetAnalyticsSummaryModelsUseMatchingHourRowsOnly(
 	t *testing.T,
 ) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_summary_hour_models_test")
 	ctx := t.Context()
 
@@ -633,6 +647,7 @@ func TestStoreGetAnalyticsSummaryModelsUseMatchingHourRowsOnly(
 func TestStoreGetAnalyticsSummaryModelFilterUsesFilteredOutputTokens(
 	t *testing.T,
 ) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_summary_model_output_tokens_test")
 	ctx := t.Context()
 
@@ -691,6 +706,7 @@ func TestStoreGetAnalyticsSummaryModelFilterUsesFilteredOutputTokens(
 func TestStoreGetAnalyticsProjectsModelFilterCountsOnlyMatchingMessages(
 	t *testing.T,
 ) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_projects_model_messages_test")
 	ctx := t.Context()
 
@@ -731,6 +747,7 @@ func TestStoreGetAnalyticsProjectsModelFilterCountsOnlyMatchingMessages(
 func TestStoreGetAnalyticsHeatmapModelFilterCountsOnlyMatchingMessages(
 	t *testing.T,
 ) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_heatmap_model_messages_test")
 	ctx := t.Context()
 
@@ -768,6 +785,7 @@ func TestStoreGetAnalyticsHeatmapModelFilterCountsOnlyMatchingMessages(
 func TestStoreGetAnalyticsHeatmapModelFilterUsesFilteredOutputTokens(
 	t *testing.T,
 ) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_heatmap_model_output_tokens_test")
 	ctx := t.Context()
 
@@ -823,6 +841,7 @@ func TestStoreGetAnalyticsHeatmapModelFilterUsesFilteredOutputTokens(
 func TestStoreGetAnalyticsTopSessionsMessagesUseFilteredModelCounts(
 	t *testing.T,
 ) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_top_sessions_model_messages_test")
 	ctx := t.Context()
 
@@ -876,6 +895,7 @@ func TestStoreGetAnalyticsTopSessionsMessagesUseFilteredModelCounts(
 func TestStoreGetAnalyticsTopSessionsOutputTokensUseFilteredModelTotals(
 	t *testing.T,
 ) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_top_sessions_model_output_tokens_test")
 	ctx := t.Context()
 
@@ -949,6 +969,7 @@ func TestStoreGetAnalyticsTopSessionsOutputTokensUseFilteredModelTotals(
 func TestStoreGetAnalyticsTopSessionsModelFilterCapsAtTen(
 	t *testing.T,
 ) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_top_sessions_model_cap_test")
 	ctx := t.Context()
 
@@ -1012,6 +1033,7 @@ func TestStoreGetAnalyticsTopSessionsModelFilterCapsAtTen(
 func TestStoreGetAnalyticsVelocityModelFilterUsesMatchingRowsOnly(
 	t *testing.T,
 ) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_velocity_model_rows_test")
 	ctx := t.Context()
 
@@ -1068,6 +1090,7 @@ func TestStoreGetAnalyticsVelocityModelFilterUsesMatchingRowsOnly(
 func TestStoreGetAnalyticsVelocityModelFilterPreservesSubsecondTimestamps(
 	t *testing.T,
 ) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_velocity_model_subsecond_test")
 	ctx := t.Context()
 
@@ -1107,6 +1130,7 @@ func TestStoreGetAnalyticsVelocityModelFilterPreservesSubsecondTimestamps(
 func TestStoreGetAnalyticsVelocityModelFilterCountsNullTimestampToolCallsWithoutTimeFilter(
 	t *testing.T,
 ) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_velocity_model_null_tool_ts_test")
 	ctx := t.Context()
 
@@ -1162,6 +1186,7 @@ func TestStoreGetAnalyticsVelocityModelFilterCountsNullTimestampToolCallsWithout
 func TestStoreGetAnalyticsSignalSessionsModelFilterKeepsParserUserEvidence(
 	t *testing.T,
 ) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_signal_model_parser_user_test")
 	ctx := t.Context()
 
@@ -1203,6 +1228,7 @@ func TestStoreGetAnalyticsSignalSessionsModelFilterKeepsParserUserEvidence(
 func TestStoreGetAnalyticsSessionShapeModelFilterUsesMatchingRowsOnly(
 	t *testing.T,
 ) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_shape_model_rows_test")
 	ctx := t.Context()
 
@@ -1283,6 +1309,7 @@ func TestStoreGetAnalyticsSessionShapeModelFilterUsesMatchingRowsOnly(
 func TestStoreGetAnalyticsVelocityModelFilterUsesMatchingComplexityBucket(
 	t *testing.T,
 ) {
+	t.Parallel()
 	_, store := prepareUsageSchema(t, "agentsview_velocity_model_complexity_test")
 	ctx := t.Context()
 

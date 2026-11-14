@@ -526,8 +526,8 @@
       />
       <Button
         label={generationAction.kind === "activate"
-          ? m.recall_page_generation_activate_title()
-          : m.recall_page_generation_retire_title()}
+          ? m.recall_page_generation_activate()
+          : m.recall_page_generation_retire()}
         tone={generationAction.kind === "activate" ? "info" : "danger"}
         surface="solid"
         disabled={generationActionLoading}
@@ -563,7 +563,6 @@
   <div class="recall-corpus-heading">
     <PageHeader
       title={m.recall_page_title()}
-      description={m.recall_page_subtitle()}
       level={2}
     >
       {#snippet actions()}

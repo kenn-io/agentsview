@@ -82,10 +82,10 @@ func newMemorySessionStartCommand() *cobra.Command {
 	var pluginRoot string
 	cmd := &cobra.Command{
 		Use:   "session-start",
-		Short: "Run the bounded memory lifecycle action for a session start",
-		Long: "Queue a local refresh, wake a hosted contributor's existing " +
-			"push owner, or check a hosted reader target. The command returns " +
-			"within two seconds without waiting for archive reconciliation.",
+		Short: "Update session memory when a session starts",
+		Long: "Queue a local refresh, ask a hosted contributor to sync, " +
+			"or check a hosted reader. The command returns " +
+			"within two seconds without waiting for the refresh to finish.",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {

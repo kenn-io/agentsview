@@ -1,6 +1,6 @@
 module go.kenn.io/agentsview/tools
 
-go 1.27.3
+go 1.27.4
 
 tool (
 	go.kenn.io/kit/cmd/huma-check

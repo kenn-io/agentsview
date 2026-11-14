@@ -17,6 +17,7 @@ import (
 )
 
 func TestCodexPagePublicationDuringThreadPurge(t *testing.T) {
+	t.Parallel()
 	for _, hosted := range []bool{false, true} {
 		for _, empty := range []bool{false, true} {
 			for _, first := range []string{"purge", "push"} {

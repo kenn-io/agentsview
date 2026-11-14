@@ -514,8 +514,10 @@ func (lw *lockedWriter) Write(p []byte) (n int, err error) {
 }
 
 // TestUnwatchedPollWaitsAfterAPassLongerThanTheInterval asserts that if the
-// previous pass took longer than the interval, the worker waits until
-// lastCompletion + interval before starting the next pass.
+// previous pass took longer than the interval, the worker waits as long as
+// that pass ran before starting the next one (issue 2567). A pass that takes
+// an hour must not restart two minutes later, so polling occupies at most half
+// of wall-clock time.
 func TestUnwatchedPollWaitsAfterAPassLongerThanTheInterval(t *testing.T) {
 	ticks := make(chan time.Time, 2)
 	passRelease := make(chan struct{})
@@ -586,9 +588,10 @@ func TestUnwatchedPollWaitsAfterAPassLongerThanTheInterval(t *testing.T) {
 	// Second tick arrives while the pass is running; gets buffered.
 	ticks <- t0.Add(unwatchedPollInterval)
 
-	// Advance "now" to simulate the pass taking longer than the interval.
+	// Advance "now" to simulate the pass taking an hour.
+	const passDuration = time.Hour
 	nowMu.Lock()
-	now = t0.Add(unwatchedPollInterval + 500*time.Millisecond)
+	now = t0.Add(passDuration)
 	nowMu.Unlock()
 
 	// Release the first pass.
@@ -605,8 +608,12 @@ func TestUnwatchedPollWaitsAfterAPassLongerThanTheInterval(t *testing.T) {
 	args := append([]time.Duration(nil), afterArgs...)
 	afterMu.Unlock()
 	require.Len(t, args, 1)
-	assert.Greater(t, args[0], time.Duration(0),
-		"the cooldown must wait a positive duration when the pass ran over the interval")
+	assert.Equal(t, passDuration, args[0],
+		"the cooldown after a pass longer than the interval must equal that pass")
+	callMu.Lock()
+	calls := callCount
+	callMu.Unlock()
+	assert.Equal(t, 1, calls, "no second pass may start during the cooldown")
 }
 
 type manualProviderPollSyncer struct {

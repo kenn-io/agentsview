@@ -15,6 +15,7 @@ import (
 // worktree mapping to the PG mirror, even when there are no sessions to
 // push (the mapping-only publication path).
 func TestPushReplicatesWorktreeMappings(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_push_mapping_test"
 	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 
@@ -45,6 +46,7 @@ func TestPushReplicatesWorktreeMappings(t *testing.T) {
 // TestPushMappingDeleteTombstones verifies that deleting a local mapping and
 // pushing again removes the corresponding mirror row.
 func TestPushMappingDeleteTombstones(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_push_mapping_delete_test"
 	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 
@@ -74,6 +76,7 @@ func TestPushMappingDeleteTombstones(t *testing.T) {
 // publication (this archive's first push) does not touch rows published by
 // another archive under the same (machine, path_prefix) natural key.
 func TestMappingReplicationIsArchiveScoped(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_push_mapping_scope_test"
 	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 
@@ -119,6 +122,7 @@ func TestMappingReplicationIsArchiveScoped(t *testing.T) {
 }
 
 func TestFilteredMappingPublicationOmitsOutOfScopeMetadata(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_push_mapping_filter_test"
 	_, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 
@@ -199,6 +203,7 @@ func TestFilteredMappingPublicationOmitsOutOfScopeMetadata(t *testing.T) {
 }
 
 func TestFilteredMappingPublicationPreservesUnfilteredMappings(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_push_mapping_unfiltered_owner_test"
 	unfiltered, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 
@@ -261,6 +266,7 @@ func TestFilteredMappingPublicationPreservesUnfilteredMappings(t *testing.T) {
 // unset, so the next push retries a full publication instead of silently
 // skipping the mapping that failed to mirror.
 func TestMappingCursorNotAdvancedOnFailure(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_push_mapping_fail_test"
 	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 

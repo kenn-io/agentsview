@@ -149,6 +149,7 @@ func semMatchesByKey(
 // reorders them, snippets come from message content, Location is "message", and
 // a run hit carries the unit's ordinal range with the anchor member's snippet.
 func TestPGSemanticSearchRankedResults(t *testing.T) {
+	t.Parallel()
 	store, genID, _ := setupSemanticSearch(t)
 	wireSemanticSearcher(t, store, genID)
 
@@ -196,6 +197,7 @@ func TestPGSemanticSearchRankedResults(t *testing.T) {
 // TestPGSemanticSearchProjectFilter pins that a project filter drops sessions
 // whose metadata does not match, before the ranking is assembled.
 func TestPGSemanticSearchProjectFilter(t *testing.T) {
+	t.Parallel()
 	store, genID, _ := setupSemanticSearch(t)
 	wireSemanticSearcher(t, store, genID)
 
@@ -213,6 +215,7 @@ func TestPGSemanticSearchProjectFilter(t *testing.T) {
 // TestPGSemanticSearchScope pins Scope: "top" drops subordinate units and
 // "subordinate" keeps only them, applied before the penalty and the limit.
 func TestPGSemanticSearchScope(t *testing.T) {
+	t.Parallel()
 	store, genID, _ := setupSemanticSearch(t)
 	wireSemanticSearcher(t, store, genID)
 	ctx := t.Context()
@@ -237,6 +240,7 @@ func TestPGSemanticSearchScope(t *testing.T) {
 }
 
 func TestPGSearchAuditPromotionPreservesCachedSubordination(t *testing.T) {
+	t.Parallel()
 	store, genID, table := setupSemanticSearch(t)
 	wireSemanticSearcher(t, store, genID)
 	ctx := t.Context()
@@ -305,6 +309,7 @@ func TestPGSearchAuditPromotionPreservesCachedSubordination(t *testing.T) {
 // penalty, while every match keeps the searcher's own score (not the fusion
 // score).
 func TestPGSemanticSearchSubordinatePenaltyReorders(t *testing.T) {
+	t.Parallel()
 	store, genID, _ := setupSemanticSearch(t)
 	wireSemanticSearcher(t, store, genID)
 
@@ -328,6 +333,7 @@ func TestPGSemanticSearchSubordinatePenaltyReorders(t *testing.T) {
 // TestPGSemanticSearchNoSearcherUnavailable pins that a store with no searcher
 // wired returns db.ErrSemanticUnavailable carrying the configured reason.
 func TestPGSemanticSearchNoSearcherUnavailable(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	store.SetSemanticUnavailableReason("no embeddings generation built")
 
@@ -346,6 +352,7 @@ func TestPGSemanticSearchNoSearcherUnavailable(t *testing.T) {
 // *db.SearchInputError, validated before the capability gate even with a
 // searcher wired.
 func TestPGSemanticSearchInvalidInput(t *testing.T) {
+	t.Parallel()
 	store, genID, _ := setupSemanticSearch(t)
 	wireSemanticSearcher(t, store, genID)
 	ctx := t.Context()

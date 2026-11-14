@@ -32,6 +32,7 @@ func projectRulesByPrefix(rules []db.ProjectRule) map[string]db.ProjectRule {
 // count, and a rule for a different machine is excluded from the rules
 // list but its machine still appears in the typeahead list.
 func TestPGProjectRulesMatchesSQLite(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_project_rules_test"
 	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 

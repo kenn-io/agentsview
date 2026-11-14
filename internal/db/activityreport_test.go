@@ -312,11 +312,25 @@ func TestSQLiteActivityReportCandidatesMatchGoPairingWithoutModels(t *testing.T)
 	}, priors)
 }
 
-func TestSQLiteActivityReportTerminalPriorModelSeeksAssistantModelIndex(t *testing.T) {
+func TestSQLiteActivityReportTerminalQuerySeeksSessionsWithStaleStats(t *testing.T) {
 	d := testDB(t)
+	ctx := t.Context()
+	_, err := d.getWriter().Exec(ctx, `ANALYZE;
+		DELETE FROM sqlite_stat1 WHERE idx IN ('idx_tool_result_events_terminal', 'idx_tool_result_events_session');
+		INSERT INTO sqlite_stat1(tbl, idx, stat) VALUES
+			('tool_result_events', 'idx_tool_result_events_terminal', '2 1 1'),
+			('tool_result_events', 'idx_tool_result_events_session', '856763 28');
+		ANALYZE sqlite_schema;`)
+	require.NoError(t, err)
+	reader, err := OpenReadOnly(ctx, d.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reader.Close()) })
 	q := dayQuery(t, "2026-06-16", "UTC")
-	plan := queryPlanOf(t, d, activityReportTerminalCandidatesSQL, `["session"]`,
+	plan := queryPlanOf(t, reader, activityReportTerminalCandidatesSQL, `["session"]`,
 		q.RangeStart.Add(-5*time.Minute).UnixMicro(), q.EffectiveEnd.UnixMicro())
+	assert.Contains(t, plan, "MATERIALIZE terminal_events")
+	assert.Contains(t, plan, "SEARCH tre USING INDEX idx_tool_result_events_terminal (session_id=?")
+	assert.NotContains(t, plan, "SCAN tre")
 	assert.Contains(t, plan,
 		"SEARCH prior USING INDEX idx_messages_assistant_model (session_id=? AND ordinal<?)")
 }

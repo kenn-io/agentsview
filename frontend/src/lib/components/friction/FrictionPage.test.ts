@@ -643,7 +643,7 @@ describe("FrictionPage", () => {
     friction.digest = null;
     await render();
     const text = document.body.textContent ?? "";
-    expect(text).toContain("built automatically");
+    expect(text).toContain("fills in missed days automatically");
     expect(text).toContain("require_auth");
     expect(text).not.toContain("Build now");
   });

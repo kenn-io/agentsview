@@ -236,7 +236,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     <div class="header-meta">
       {#if tokenSummary}<span class="message-tokens">{tokenSummary}</span>{/if}
       {#if turnSummary}<span class="turn-summary" class:slow={turnSummary.slow} class:running={turnSummary.running}>{turnSummary.text}</span>{/if}
-      <span class="timestamp">{formatTimestamp(message.timestamp)}</span>
+      <span class="timestamp">{formatTimestamp(message.timestamp, ui.alwaysShowYear)}</span>
       {#if offMainModel}<span class="message-model" title={offMainModel}>{offMainModel}</span>{/if}
     </div>
   </div>

@@ -13,6 +13,7 @@ import (
 )
 
 func TestPGPushRepushesDialogueOnlyChanges(t *testing.T) {
+	t.Parallel()
 	syncer, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_dialogue_repush_test")
 	dbtest.SeedDialogueSearch(t, local)
 	session, err := local.GetSession(ctx, "dialogue-search")
@@ -66,6 +67,7 @@ func TestPGPushRepushesDialogueOnlyChanges(t *testing.T) {
 }
 
 func TestPGDialogueBackfillPerScope(t *testing.T) {
+	t.Parallel()
 	unfiltered, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_dialogue_backfill_test")
 	dbtest.SeedDialogueSearch(t, local)
 	projects := []string{"dialogue-search"}
@@ -88,6 +90,7 @@ func TestPGDialogueBackfillPerScope(t *testing.T) {
 }
 
 func TestPGPushStoresDialogueCopyOnceAndMigratesOldCopies(t *testing.T) {
+	t.Parallel()
 	syncer, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_dialogue_dedupe_test")
 	dbtest.SeedDialogueSearch(t, local)
 	session, err := local.GetSession(ctx, "dialogue-search")

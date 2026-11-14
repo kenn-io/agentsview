@@ -302,6 +302,18 @@ func (b *httpBackend) FindSessionIDsByRawSuffix(
 	return response.JSON200.Ids, nil
 }
 
+// CheckCompactionSummaries probes once per request because the daemon can change.
+func (b *httpBackend) CheckCompactionSummaries(ctx context.Context) error {
+	capabilities, err := ProbeHTTPServerCapabilities(ctx, b.baseURL, b.token)
+	if err != nil {
+		return err
+	}
+	if capabilities.APIVersion < service.CompactionAPIVersion {
+		return fmt.Errorf("server API version %d does not support compaction summaries; use API version %d or later", capabilities.APIVersion, service.CompactionAPIVersion)
+	}
+	return nil
+}
+
 // Probe only when the backend has no version so unfiltered lists need no extra request.
 func (b *httpBackend) requireSessionAnnotations(ctx context.Context) error {
 	version := b.apiVersion
@@ -435,6 +447,9 @@ func filterToQuery(f service.ListFilter) (*apiclient.GetAPIV1SessionsQuery, erro
 	if f.IncludeChildren {
 		q.IncludeChildren = new(true)
 	}
+	if f.Flat {
+		q.Flat = new(true)
+	}
 	if f.IncludeSource {
 		q.IncludeSource = new(true)
 	}
@@ -502,6 +517,9 @@ func (b *httpBackend) Messages(
 	ctx context.Context, id string, f service.MessageFilter,
 ) (*service.MessageList, error) {
 	q := &apiclient.GetAPIV1SessionsIDMessagesQuery{}
+	if f.CompactBoundaryOnly {
+		q.CompactBoundary = new(true)
+	}
 	if f.From != nil {
 		q.From = new(int64(*f.From))
 	}
@@ -794,7 +812,9 @@ func (b *httpBackend) Search(
 	if req.Limit > 0 {
 		q.Limit = new(int64(req.Limit))
 	}
-	api, err := b.apiClient(b.client)
+	// Broad searches on large archives can exceed 30 seconds; the caller can
+	// cancel the request through its context.
+	api, err := b.apiClient(b.longRunningClient)
 	if err != nil {
 		return nil, err
 	}
@@ -1180,6 +1200,19 @@ func (b *httpBackend) SessionUsage(
 	}
 	if wire.SubagentCount != nil {
 		out.SubagentCount = int(*wire.SubagentCount)
+	}
+	if out.RecordedCost, err = db.SummarizeRecordedCost(out.Breakdown); err != nil {
+		return nil, err
+	}
+	if wire.SessionTotal != nil {
+		// The wire and storage shapes share one JSON encoding.
+		encoded, err := json.Marshal(wire.SessionTotal)
+		if err != nil {
+			return nil, fmt.Errorf("session usage: encoding session total: %w", err)
+		}
+		if err := json.Unmarshal(encoded, &out.SessionTotal); err != nil {
+			return nil, fmt.Errorf("session usage: decoding session total: %w", err)
+		}
 	}
 	return out, nil
 }

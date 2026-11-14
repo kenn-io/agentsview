@@ -21,16 +21,17 @@ func (s *Store) SessionSourceChanged(err error) bool {
 }
 
 // SessionSourceBinding names the push that published the visible session row
-// and refuses while any evidence row comes from another push, or while fewer
-// messages are readable than that push stored. A row with no stored count
-// reports db.ErrSessionRevisionUnavailable, since no retry can help it.
+// and refuses while any evidence row comes from a push other than the one
+// that wrote the row's content, or while fewer messages are readable than
+// that push stored. A row with no stored count reports
+// db.ErrSessionRevisionUnavailable, since no retry can help it.
 func (s *Store) SessionSourceBinding(ctx context.Context, id string) (string, error) {
-	var published uint64
+	var published, content uint64
 	var stored sql.NullInt64
 	// message_count can exceed the stored rows (metadata-only sessions, usage-only archives), so compare against what the push stored.
 	err := s.queryRowContext(ctx,
-		"SELECT push_version, stored_message_count FROM sessions PREWHERE id = ? WHERE deleted_at IS NULL", id,
-	).Scan(&published, &stored)
+		"SELECT push_version, content_version, stored_message_count FROM sessions PREWHERE id = ? WHERE deleted_at IS NULL", id,
+	).Scan(&published, &content, &stored)
 	if errors.Is(err, sql.ErrNoRows) {
 		// No visible row to read; the route answers not found.
 		return "", nil
@@ -59,7 +60,7 @@ func (s *Store) SessionSourceBinding(ctx context.Context, id string) (string, er
 		if err := rows.Scan(&table, &count, &low, &high); err != nil {
 			return "", fmt.Errorf("scanning clickhouse session evidence versions: %w", err)
 		}
-		if count > 0 && (low != published || high != published) {
+		if count > 0 && (low != content || high != content) {
 			return "", fmt.Errorf("%w: %s", errEvidenceUnpublished, table)
 		}
 		// A different message count means a deletion or an unpublished replacement is partway through.

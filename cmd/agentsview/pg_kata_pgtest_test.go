@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -35,20 +36,25 @@ func TestPGServeKataHubConnection(t *testing.T) {
 
 	kataServer := katatest.New(t)
 	cfg := config.Config{
-		Host: "127.0.0.1",
-		Port: 8080,
-		PG:   config.PGConfig{URL: pgURL},
+		Host:    "127.0.0.1",
+		Port:    8080,
+		DataDir: t.TempDir(),
+		PG:      config.PGConfig{URL: pgURL},
 		Kata: config.KataConfig{
 			Enabled: true, Endpoint: kataServer.Endpoint(), Project: "agentsview",
 		},
 	}
 	opts, cleanup, err := (pgReplica{}).serveOptions(
-		t.Context(), cfg, storage.ReplicaTarget{Schema: schema}, store,
+		t.Context(), cfg, storage.ReplicaTarget{URL: pgURL, Schema: schema}, store,
 	)
 	require.NoError(t, err)
 	if cleanup != nil {
 		t.Cleanup(func() { require.NoError(t, cleanup()) })
 	}
+	entries, err := os.ReadDir(filepath.Join(cfg.DataDir, "usage-postgres"))
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.True(t, entries[0].IsDir())
 	srv := server.New(cfg, store, nil, opts...)
 
 	get := func(path string) *httptest.ResponseRecorder {

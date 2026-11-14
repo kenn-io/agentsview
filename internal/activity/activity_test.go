@@ -2,6 +2,7 @@ package activity
 
 import (
 	"encoding/json/v2"
+	"strconv"
 	"testing"
 	"time"
 
@@ -528,6 +529,32 @@ func TestAggregate_UsageOnlySessionZeroCostKeepsPrimaryModel(t *testing.T) {
 	assert.Equal(t, "m1", row.PrimaryModel,
 		"zero-cost usage must still report its known model as primary")
 	assert.Equal(t, []string{"m1"}, row.Models)
+}
+
+// A usage-only session whose models cost the same reports the first model by
+// name as its primary, so the report does not change between reads.
+func TestAggregate_UsageOnlySessionTiedCostPrimaryModel(t *testing.T) {
+	loc := mustLoad(t, "UTC")
+	start := mustStart(t, "2026-06-16T00:00:00Z")
+	end := start.AddDate(0, 0, 1)
+	p := Params{
+		RangeStart: start, RangeEnd: end, Loc: loc,
+		EffectiveEnd: end, Partial: false,
+		GapCapSeconds: 300, Bucket: BucketSpec{BucketMinute, 300},
+	}
+	var usage []UsageRow
+	for i, model := range []string{"m-d", "m-b", "m-a", "m-c"} {
+		usage = append(usage, UsageRow{
+			SessionID: "u", Model: model, Timestamp: "2026-06-16T10:00:00Z",
+			Cost: money.MustParseDollars("1"), ClaudeMessageID: model, ClaudeRequestID: strconv.Itoa(i),
+		})
+	}
+	sessions := []SessionMeta{{SessionID: "u", Project: "P", Agent: "claude"}}
+	for range 20 {
+		r := mustAggregate(t, p, sessions, nil, usage)
+		require.Len(t, r.BySession, 1)
+		require.Equal(t, "m-a", r.BySession[0].PrimaryModel)
+	}
 }
 
 // TestAggregate_BreakdownCostDeterministicAcrossSessionOrder pins that the

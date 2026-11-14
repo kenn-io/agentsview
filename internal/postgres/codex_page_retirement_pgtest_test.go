@@ -17,6 +17,7 @@ import (
 )
 
 func TestCodexPageUpgradeRetiresMissingPostgresHead(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name              string
 		pinned            bool
@@ -343,6 +344,7 @@ func TestCodexPageUpgradeRetiresMissingPostgresHead(t *testing.T) {
 // the later friction comparison then sees current metadata. The migration
 // must also carry the findings that metadata describes.
 func TestCodexPageUpgradeIncrementalPushCopiesFriction(t *testing.T) {
+	t.Parallel()
 	const threadUUID = "11111111-1111-4111-8111-111111111111"
 	const thread = "codex:" + threadUUID
 	const page = thread + "_22222222-2222-4222-8222-222222222222"
@@ -410,6 +412,7 @@ func TestCodexPageUpgradeIncrementalPushCopiesFriction(t *testing.T) {
 // holds the only copy of its pins, star, and title. A thread with no curation
 // has nothing to lose, so the push deletes it and succeeds.
 func TestFilteredFullPushKeepsCuratedCodexThreadWhosePageIsExcluded(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"curated", "uncurated", "pinned during push"} {
 		t.Run(mode, func(t *testing.T) {
 			curated := mode == "curated"
@@ -527,6 +530,7 @@ func TestFilteredFullPushKeepsCuratedCodexThreadWhosePageIsExcluded(t *testing.T
 // version, so page migration no longer recognizes it. A full push after an
 // archive rebuild must keep the thread and its curation rather than delete it.
 func TestFullPushKeepsRemotelyRestoredCodexThread(t *testing.T) {
+	t.Parallel()
 	const thread = "codex:11111111-1111-4111-8111-111111111111"
 	const page = thread + "_22222222-2222-4222-8222-222222222222"
 	const schema = "agentsview_codex_page_restored_cleanup_test"

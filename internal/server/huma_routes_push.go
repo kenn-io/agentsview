@@ -797,7 +797,8 @@ func (s *Server) humaReplicaPush(
 				func(forceFull bool) error {
 					var err error
 					result, err = session.Push(pushCtx, storage.PushOptions{
-						Full: forceFull,
+						Full:             forceFull,
+						RewriteUnchanged: body.Full,
 						ScopeVectorsToChangedSessions: body.
 							ScopeVectorsToChangedSessions,
 						LastReconciledVectorGeneration: body.

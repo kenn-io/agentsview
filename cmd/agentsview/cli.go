@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/config"
@@ -144,6 +145,7 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newClassifierCommand())
 	root.AddCommand(newSecretsCommand())
 	root.AddCommand(newSkillsCommand())
+	root.AddCommand(newAgentCommand())
 	root.AddCommand(newMemoryCommand())
 	root.AddCommand(newSigningCommand())
 	root.AddCommand(newDoctorCommand())
@@ -210,17 +212,17 @@ func newServeCommandWithDaemonDeps(deps daemonCommandDeps) *cobra.Command {
 				)
 				return nil
 			}
-			runServe(cmd.Context(), mustLoadConfig(cmd), serveOptions{
+			return runServeLoop(cmd.Context(), mustLoadConfig(cmd), serveOptions{
 				ReplaceDaemon:   replace,
 				NoSyncExplicit:  cmd.Flags().Changed("no-sync"),
 				SkipInitialSync: skipInitialSync,
 				BasePath:        basePath,
 				Pprof:           pprofEnabled,
+				RestartArgs:     serveRestartArgs(cmd.Flags()),
 				ReloadConfig: func() (config.Config, error) {
 					return config.LoadPFlags(cmd.Flags())
 				},
-			}, restartPort)
-			return nil
+			}, restartPort, runServe)
 		},
 	}
 	cmd.Flags().BoolVar(
@@ -268,6 +270,24 @@ func newServeCommandWithDaemonDeps(deps daemonCommandDeps) *cobra.Command {
 	cmd.AddCommand(newServeStopCommand())
 	cmd.AddCommand(newServeRestartCommand(deps))
 	return cmd
+}
+
+func serveRestartArgs(flags *pflag.FlagSet) []string {
+	var args []string
+	flags.Visit(func(flag *pflag.Flag) {
+		switch flag.Name {
+		case "background", "replace", "check-data-version", "port", "restart-port":
+			return
+		}
+		args = append(args, "--"+flag.Name+"="+flag.Value.String())
+	})
+	return args
+}
+
+func serveReplacementArgs(args []string, current config.Config) []string {
+	return slices.DeleteFunc(slices.Clone(args), func(arg string) bool {
+		return current.AuthSettingsSaved && strings.HasPrefix(arg, "--require-auth=")
+	})
 }
 
 func applyServeRestartPort(cfg config.Config, port int) (config.Config, int) {
@@ -975,6 +995,7 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w, "  QWENPAW_DIR             QwenPaw workspaces directory")
 	fmt.Fprintln(w, "  OMO_DIR                 OMO sessions directory")
 	fmt.Fprintln(w, "  STEPCODE_DIR            StepCode sessions directory")
+	fmt.Fprintln(w, "  DIRECT_API_DIR          Direct API sessions directory")
 	fmt.Fprintln(w, "  OMP_DIR                 OhMyPi sessions directory")
 	fmt.Fprintln(w, "  MUSE_SESSIONS_DIR       Muse Code sessions directory")
 	fmt.Fprintln(w, "  DEEPSEEK_TUI_SESSIONS_DIR")

@@ -191,9 +191,9 @@ func TestSessionDiagnosisEvidenceAndPrivacy(t *testing.T) {
 	// The usage block above this point belongs to session usage. Everything
 	// the diagnosis adds must vary with the session; fixed coverage notices
 	// stay in the JSON coverage object.
-	_, evidence, found := strings.Cut(human.String(), "Observed usage rows:")
+	_, evidence, found := strings.Cut(human.String(), "Recorded token totals:")
 	require.True(t, found)
-	assert.Equal(t, " uncached input 45; cache read 60; cache write 20; output 12 (coverage may be incomplete)\n"+
+	assert.Equal(t, " uncached input 45; cache read 60; cache write 20; output 12. Some usage data may be missing.\n"+
 		"Context observations: 1; compactions: [7]\n"+
 		"  Context #3: 120 tokens (model-a)\n"+
 		"Largest tool results (length is not billed tokens):\n"+

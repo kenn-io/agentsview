@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -24,6 +25,31 @@ import (
 	"go.kenn.io/agentsview/internal/server"
 	agentsync "go.kenn.io/agentsview/internal/sync"
 )
+
+func TestRestartDoesNotWaitForIdleCatchup(t *testing.T) {
+	f := newIngestionLifecycleFixture(t)
+	f.ingestion.Suspend()
+	f.ingestion.applying.Wait()
+	entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(finished)
+		_ = f.engine.RunExclusive(func() error { close(entered); <-release; return nil })
+	}()
+	<-entered
+	defer func() { close(release); <-finished }()
+	ts := serveIngestionArchive(t, f.cfg, f.database, f.engine, f.ingestion,
+		server.WithDaemonRestart(func(context.Context, config.Config) error { return nil }))
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ts.URL+"/api/v1/daemon/restart", nil)
+	require.NoError(t, err)
+	req.Header.Set("Origin", ts.URL)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.True(t, f.ingestion.Pending())
+}
 
 func TestIdleDirectReadWakesDaemon(t *testing.T) {
 	for _, slow := range []bool{false, true} {

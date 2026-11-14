@@ -93,7 +93,7 @@ func BenchmarkDuckDBActivityReportRefresh(b *testing.B) {
 	b.Run("before/counts", func(b *testing.B) {
 		artifacts := emptyArtifacts()
 		for b.Loop() {
-			require.NoError(b, store.scanActivityCountedMessages(ctx, ids, q, activity.NewMessageAccumulator(q, &artifacts).Add))
+			require.NoError(b, store.scanActivityCountedMessages(ctx, ids, activity.NewMessageAccumulator(q, &artifacts).Add))
 		}
 	})
 

@@ -52,6 +52,7 @@ func checkHostedSidebarPages(t *testing.T, h *HostedStore, filter db.SessionFilt
 }
 
 func TestHostedSidebarPagesKeepMixedParentGraphs(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "capture-a", "")
 	parsed := projectionOutcome("raw parent")

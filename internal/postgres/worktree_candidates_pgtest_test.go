@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/export"
 )
 
@@ -72,6 +71,7 @@ func seedPGCandidateSessionNoSnapshot(
 // snapshot group spans an old (2020) and a new (2025) session, both of which
 // must appear in the combined group.
 func TestPGWorktreeCandidatesArchiveWideMatchesSQLite(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_worktree_candidates_test"
 	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 	const project = "candidate-project"
@@ -166,6 +166,7 @@ func TestPGWorktreeCandidatesArchiveWideMatchesSQLite(t *testing.T) {
 }
 
 func TestPGWorktreeCandidatesCollapseObservedParents(t *testing.T) {
+	t.Parallel()
 	push, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_candidate_parents_test")
 	for id, cwd := range map[string]string{
 		"worktree-a": "/srv/repo/.claude/worktrees/run-a",
@@ -195,6 +196,7 @@ func TestPGWorktreeCandidatesCollapseObservedParents(t *testing.T) {
 }
 
 func TestPGWorktreeCandidatesUseSessionDatabaseGeneration(t *testing.T) {
+	t.Parallel()
 	const (
 		schema        = "agentsview_worktree_candidates_generation_test"
 		sessionID     = "generation-session"
@@ -230,7 +232,6 @@ func TestPGWorktreeCandidatesUseSessionDatabaseGeneration(t *testing.T) {
 	require.NoError(t, err)
 	newLocalDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "new-local.db"))
 	require.NoError(t, err)
-	dbtest.SeedPricingMeta(t, newLocalDB)
 	t.Cleanup(func() { require.NoError(t, newLocalDB.Close()) })
 	require.NoError(t, newLocalDB.SetArchiveIdentityForTest(
 		ctx, archiveID, archiveSalt,

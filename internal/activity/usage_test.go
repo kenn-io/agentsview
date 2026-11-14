@@ -290,3 +290,21 @@ func TestClaudeSnapshotSurvivorSelectionWithoutRequestID(t *testing.T) {
 	}
 	assert.Equal(t, []int{460, 5, 7}, output)
 }
+
+func TestSelectUsageSurvivorsForSessions(t *testing.T) {
+	start := mustStart(t, "2026-06-16T10:00:00Z")
+	end := mustStart(t, "2026-06-16T10:00:01Z")
+	rows := []UsageSelectionRow{
+		{SessionID: "a", Timestamp: start.Add(time.Nanosecond), TimestampValid: true, OutputTokens: 1, WebSearchRequests: 4, ClaudeMessageID: "snapshot"},
+		{SessionID: "b", Timestamp: start.Add(2 * time.Nanosecond), TimestampValid: true, OutputTokens: 5, WebSearchRequests: 1, ClaudeMessageID: "snapshot"},
+		{SessionID: "a", Timestamp: end, TimestampValid: true, OutputTokens: 10, ClaudeMessageID: "snapshot"},
+		{SessionID: "excluded", Timestamp: start, TimestampValid: true, Agent: "agent", SourceUUID: "same"},
+		{SessionID: "a", Timestamp: start, TimestampValid: true, Agent: "agent", SourceUUID: "same"},
+		{SessionID: "a", Timestamp: start, TimestampValid: false},
+	}
+	mask, attribution, searches, err := SelectUsageSurvivorsForSessions(t.Context(), start, end, end, rows, []string{"a"})
+	require.NoError(t, err)
+	assert.Equal(t, []bool{false, true, false, false, true, false}, mask)
+	assert.Equal(t, "a", attribution[1])
+	assert.Equal(t, 4, searches[1])
+}

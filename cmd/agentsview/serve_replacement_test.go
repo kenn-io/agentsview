@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -234,7 +235,7 @@ func TestPrepareForegroundServeDaemonRefusesFreshStartWhenBackgroundLaunchHeld(
 	assert.False(t, IsDaemonStarting(dir))
 }
 
-func TestPrepareForegroundServeDaemonKeepsLaunchLockForFreshStart(
+func TestPrepareForegroundServeDaemonKeepsLaunchLockForStartAndRestart(
 	t *testing.T,
 ) {
 	dir := runtimeTestDir(t)
@@ -253,10 +254,112 @@ func TestPrepareForegroundServeDaemonKeepsLaunchLockForFreshStart(
 	assert.False(t, ok,
 		"foreground startup must hold launch lock until startup handoff")
 
-	release()
+	cont, adopted, err := prepareForegroundServeDaemon(t.Context(),
+		&config.Config{DataDir: dir}, serveReplacementOptions{},
+	)
+	require.NoError(t, err)
+	require.True(t, cont)
+	adopted()
 	launchLock, ok = acquireBackgroundLaunchLock(dir)
 	require.True(t, ok)
 	require.NoError(t, launchLock.Unlock())
+	release()
+}
+
+func TestRestartReleasesLaunchLockWhenNextCommandFails(t *testing.T) {
+	dir := runtimeTestDir(t)
+	release, err := acquireForegroundServeLaunchLock(config.Config{DataDir: dir})
+	require.NoError(t, err)
+	t.Cleanup(release)
+	args := os.Args
+	t.Cleanup(func() { os.Args = args })
+	calls := 0
+	err = runServeLoop(t.Context(), config.Config{}, serveOptions{}, 0, func(context.Context, config.Config, serveOptions, int) error {
+		calls++
+		if calls == 1 {
+			return &foregroundRestartError{args: []string{"serve"}, release: release}
+		}
+		return errors.New("replacement failed")
+	})
+	require.Error(t, err)
+	lock, ok := acquireBackgroundLaunchLock(dir)
+	require.True(t, ok, "failed replacement must release launch ownership")
+	require.NoError(t, lock.Unlock())
+}
+
+// The replacement is rebuilt once the old server stops, so it starts with
+// settings saved after the restart was accepted. If that rebuild fails, the
+// plan checked at acceptance still starts the replacement.
+func TestRestartStartsReplacementFromSettingsAtHandoff(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		replan   func(context.Context) (*foregroundRestartError, error)
+		wantHost string
+		wantArgs []string
+	}{
+		{
+			name: "rebuilt settings",
+			replan: func(context.Context) (*foregroundRestartError, error) {
+				return &foregroundRestartError{args: []string{"serve", "--require-auth=true"}, cfg: config.Config{Host: "saved-after-accept"}}, nil
+			},
+			wantHost: "saved-after-accept",
+			wantArgs: []string{"serve", "--require-auth=true"},
+		},
+		{
+			name: "rebuild fails",
+			replan: func(context.Context) (*foregroundRestartError, error) {
+				return nil, errors.New("config became unreadable")
+			},
+			wantHost: "checked-at-accept",
+			wantArgs: []string{"serve"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := os.Args
+			t.Cleanup(func() { os.Args = args })
+			released := 0
+			var started config.Config
+			calls := 0
+			err := runServeLoop(t.Context(), config.Config{}, serveOptions{}, 0, func(_ context.Context, cfg config.Config, _ serveOptions, _ int) error {
+				calls++
+				if calls == 1 {
+					return &foregroundRestartError{
+						args: []string{"serve"}, release: func() { released++ },
+						cfg: config.Config{Host: "checked-at-accept"}, replan: tc.replan,
+					}
+				}
+				started = cfg
+				return nil
+			})
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantHost, started.Host)
+			assert.Equal(t, tc.wantArgs, os.Args[1:])
+			assert.Equal(t, 1, released, "launch ownership must be released once the replacement exits")
+		})
+	}
+}
+
+func TestRestartReleasesLaunchLockWhenCallerStops(t *testing.T) {
+	dir := runtimeTestDir(t)
+	release, err := acquireForegroundServeLaunchLock(config.Config{DataDir: dir})
+	require.NoError(t, err)
+	t.Cleanup(release)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	calls := 0
+	err = runServeLoop(ctx, config.Config{}, serveOptions{}, 0, func(context.Context, config.Config, serveOptions, int) error {
+		calls++
+		if calls > 1 {
+			return errors.New("replacement started after termination")
+		}
+		cancel()
+		return &foregroundRestartError{args: []string{"serve"}, release: release}
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, calls)
+	lock, ok := acquireBackgroundLaunchLock(dir)
+	require.True(t, ok, "termination must release restart ownership")
+	require.NoError(t, lock.Unlock())
 }
 
 func TestPrepareForegroundServeDaemonBackgroundChildUsesParentLaunchLock(

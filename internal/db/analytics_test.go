@@ -5201,6 +5201,136 @@ func TestGetAnalyticsToolsExcludesOutOfRangeToolCallRowsInSQL(t *testing.T) {
 	t.Log("production tool query carried the message window predicate; TotalCalls == 3; sessions == 2")
 }
 
+func TestGetAnalyticsToolsLocalDayBoundaries(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "boundary", "window", func(s *Session) { s.StartedAt = new("2025-03-09T12:00:00Z") })
+	for n, ts := range []string{
+		"2025-03-10T03:59:59.999999999Z",
+		"2025-03-10T00:30:00+01:00",
+		"2025-03-10T04:00:00Z",
+		"2025-03-10T04:01:00Z",
+		"2025-03-10 malformed",
+		"2025-03-10T24:00:00Z",
+		"",
+	} {
+		m := asstMsgAt("boundary", n, "read", ts)
+		m.ToolCalls = []ToolCall{{SessionID: "boundary", ToolName: "Read", Category: "Read"}}
+		insertMessages(t, d, m)
+	}
+	filter := AnalyticsFilter{From: "2025-03-01", To: "2025-03-12", Timezone: "America/New_York"}
+	rows, err := d.analyticsToolRows(t.Context(), filter)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	counts := make(map[string]int)
+	for _, row := range rows {
+		counts[row.Date] = row.Count
+	}
+	assert.Equal(t, map[string]int{"2025-03-09": 3, "2025-03-10": 4}, counts)
+	resp, err := d.GetAnalyticsTools(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, 7, resp.TotalCalls)
+	require.Len(t, resp.ByTool, 1)
+	assert.Equal(t, 1, resp.ByTool[0].SessionCount)
+	assert.Equal(t, []ToolTrendEntry{
+		{Date: "2025-03-03", ByCat: map[string]int{"Read": 3}},
+		{Date: "2025-03-10", ByCat: map[string]int{"Read": 4}},
+	}, resp.Trend)
+}
+
+func TestGetAnalyticsToolsBlankAndMalformedTimestamps(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "blank-time", "window", func(s *Session) {
+		s.StartedAt = new("2025-03-09T12:00:00Z")
+	})
+	for n, ts := range []string{"\t", "\u00a0", "bad"} {
+		m := asstMsgAt("blank-time", n, "read", ts)
+		m.ToolCalls = []ToolCall{{SessionID: "blank-time", ToolName: "Read", Category: "Read"}}
+		insertMessages(t, d, m)
+	}
+	for _, zone := range []string{"UTC", "America/New_York"} {
+		resp, err := d.GetAnalyticsTools(t.Context(), AnalyticsFilter{From: "2025-03-09", To: "2025-03-09", Timezone: zone})
+		require.NoError(t, err)
+		assert.Equal(t, 2, resp.TotalCalls, "zone %s", zone)
+		assert.Equal(t, []ToolTrendEntry{{Date: "2025-03-03", ByCat: map[string]int{"Read": 2}}}, resp.Trend, "zone %s", zone)
+	}
+	resp, err := d.GetAnalyticsTools(t.Context(), AnalyticsFilter{Timezone: "America/New_York"})
+	require.NoError(t, err)
+	assert.Equal(t, 3, resp.TotalCalls)
+	assert.Equal(t, []ToolTrendEntry{
+		{Date: "", ByCat: map[string]int{"Read": 1}},
+		{Date: "2025-03-03", ByCat: map[string]int{"Read": 2}},
+	}, resp.Trend)
+}
+
+func TestSQLiteToolsDateKeyMatchesResolver(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "keys", "window", func(s *Session) { s.StartedAt = new("2025-03-09T12:00:00Z") })
+	stamps := []string{
+		"2025-03-09T06:59:59Z", "2025-03-09T07:00:00Z", "2025-03-10T03:59:59.999999999Z",
+		"2025-03-10T04:00:00Z", "2025-03-09T18:14:59Z", "2025-03-09T18:15:00Z",
+		"2025-11-02T05:59:59Z", "2025-11-02T06:00:00Z", "2025-03-10T00:30:00+01:00",
+		"2025-03-10T24:00:00Z", "2025-03-10 malformed", "2025-03-10Z", "2024-01-01T00:00:00Z",
+		"", "\t", "bad", "２０２５-03-09T12:00:00Z",
+	}
+	for n, ts := range stamps {
+		insertMessages(t, d, asstMsgAt("keys", n, "read", ts))
+	}
+	for _, f := range []AnalyticsFilter{
+		{From: "2025-03-01", To: "2025-03-12", Timezone: "UTC"},
+		{From: "2025-03-01", To: "2025-03-12", Timezone: "America/New_York"},
+		{From: "2025-03-01", To: "2025-03-12", Timezone: "Asia/Kathmandu"},
+		{From: "2025-10-30", To: "2025-11-04", Timezone: "America/New_York"},
+		{From: "bad", To: "2025-12-31", Timezone: "America/New_York"},
+		{Timezone: "America/New_York"},
+	} {
+		key := sqliteToolsDateKey(f)
+		require.NotEmpty(t, key)
+		rows, err := d.getReader().QueryContext(t.Context(), `SELECT COALESCE(m.timestamp, ''), COALESCE(NULLIF(s.started_at, ''), s.created_at), `+key+`
+			FROM messages m JOIN sessions s ON s.id = m.session_id WHERE m.session_id = 'keys'`, f.Timezone)
+		require.NoError(t, err)
+		defer rows.Close()
+		seen := 0
+		for rows.Next() {
+			var msg, session, got string
+			require.NoError(t, rows.Scan(&msg, &session, &got))
+			_, want, _ := (AnalyticsFilter{Timezone: f.Timezone}).ResolveSkillRowTime(msg, session)
+			assert.Equal(t, want, got, "%s %s..%s %q", f.Timezone, f.From, f.To, msg)
+			seen++
+		}
+		require.NoError(t, rows.Err())
+		require.NoError(t, rows.Close())
+		assert.Equal(t, len(stamps), seen)
+	}
+}
+
+func TestGetAnalyticsToolsLocalWeeks(t *testing.T) {
+	for _, tc := range []struct {
+		name, zone, before, after, firstWeek, secondWeek string
+	}{
+		{"fall DST", "America/New_York", "2025-11-03T04:59:59Z", "2025-11-03T05:00:00Z", "2025-10-27", "2025-11-03"},
+		{"unknown zone", "Invalid/Zone", "2025-03-09T23:59:59Z", "2025-03-10T00:00:00Z", "2025-03-03", "2025-03-10"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "weeks", "window", func(s *Session) { s.StartedAt = new(tc.before) })
+			for n, ts := range []string{tc.before, tc.after} {
+				m := asstMsgAt("weeks", n, "read", ts)
+				m.ToolCalls = []ToolCall{{SessionID: "weeks", ToolName: "Read", Category: "Read"}}
+				insertMessages(t, d, m)
+			}
+			resp, err := d.GetAnalyticsTools(t.Context(), AnalyticsFilter{From: "2025-01-01", To: "2025-12-31", Timezone: tc.zone})
+			require.NoError(t, err)
+			require.Len(t, resp.Trend, 2)
+			assert.Equal(t, tc.firstWeek, resp.Trend[0].Date)
+			assert.Equal(t, tc.secondWeek, resp.Trend[1].Date)
+			assert.Equal(t, 1, resp.Trend[0].ByCat["Read"])
+			assert.Equal(t, 1, resp.Trend[1].ByCat["Read"])
+			assert.Equal(t, 2, resp.TotalCalls)
+			assert.Equal(t, 1, resp.ByTool[0].SessionCount)
+		})
+	}
+}
+
 func TestAnalyticsMessageWindowBoundsDoNotOverflowMaxDate(t *testing.T) {
 	from, to := (AnalyticsFilter{
 		From: "9999-12-31", To: "9999-12-31", Timezone: "UTC",
@@ -5263,7 +5393,7 @@ func TestGetAnalyticsToolsChunksSessionsAtMaxSQLVars(t *testing.T) {
 	from, to := f.messageWindowBoundsUTC()
 	pred, windowArgs := analyticsMessageWindowPred("m.timestamp", from, to)
 	args = append(append(args, modelArgs...), windowArgs...)
-	rows, err := d.getReader().QueryContext(t.Context(), analyticsToolsQuery(ph, modelPred, pred, true), args...)
+	rows, err := d.getReader().QueryContext(t.Context(), analyticsToolsQuery(ph, modelPred, pred, true, sqliteAnalyticsMinuteKey()), args...)
 	require.NoError(t, err)
 	defer rows.Close()
 	var all []ToolAnalyticsRow
