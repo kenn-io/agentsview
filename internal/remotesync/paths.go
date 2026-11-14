@@ -57,6 +57,11 @@ func remappedRemotePath(tempDir, remotePath string) string {
 	return local
 }
 
+// SafeRemappedRemotePath resolves a remote path within a mirror root.
+func SafeRemappedRemotePath(tempDir, remotePath string) (string, error) {
+	return safeRemappedRemotePath(tempDir, remotePath)
+}
+
 func safeRemappedRemotePath(tempDir, remotePath string) (string, error) {
 	name, err := safeRemotePathArchiveName(remotePath)
 	if err != nil {

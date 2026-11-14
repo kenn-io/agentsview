@@ -155,6 +155,19 @@ evidence; they do not establish whether a tool helped the task.
 
 ## Claude Code (`claude`)
 
+- **Native resume (checked 2026-11-11):** Claude Code 2.1.322's installed
+  producer resolves the checkout through realpath when possible and replaces each
+  non-ASCII-alphanumeric UTF-16 unit with `-` without Unicode normalization. For
+  paths over 200 units it appends a base-36 signed 32-bit hash after the first 200
+  encoded units. `CLAUDE_CODE_PROJECT_DIR_NAME` is accepted in local mode only
+  with a nonempty `CLAUDE_CONFIG_DIR` and a valid non-reserved name. The
+  producer reads `worktree-state` records last-wins per session and recognizes
+  `worktreeSession: null` as an explicit clear. Materialization appends that
+  native clear only for a selected session whose final binding is non-null;
+  the rest of the source bytes remain unchanged. The
+  [official session documentation](https://code.claude.com/docs/en/sessions)
+  describes project storage and resume behavior.
+
 - **Hook output (checked 2026-11-04):** The parser reads the `hook_success`
   attachment shape reported in
   [#2456](https://github.com/kenn-io/agentsview/issues/2456) with `content`,
