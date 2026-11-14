@@ -437,7 +437,11 @@ jobs:
           image="ubuntu:$(. /etc/os-release && echo "$VERSION_ID")"
           kit-retry 3 5 docker pull "$image"
           goroot=$(go env GOROOT)
-          gocache=$(go env GOCACHE)
+          # Go identifies a released C compiler only by its version line, and
+          # the amd64v3 and plain GCC builds report the same one. A fresh build
+          # cache keeps the runner's x86-64-v3 C objects out of this build.
+          gocache="$RUNNER_TEMP/plain-amd64-gocache"
+          mkdir -p "$gocache"
           gomodcache=$(go env GOMODCACHE)
           docker run --rm -i \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -w "$GITHUB_WORKSPACE" -v "$RUNNER_TEMP:$RUNNER_TEMP" \
@@ -451,7 +455,7 @@ jobs:
             [ "$attempt" -lt 3 ] || exit 1
             sleep 5
           done
-          # Build as the runner user so the shared Go caches stay writable.
+          # Build as the runner user so the shared module cache stays writable.
           setpriv --reuid="${IDS%:*}" --regid="${IDS#*:}" --clear-groups \
             "$GOROOT/bin/go" build -buildvcs=false -tags fts5 -o "$OUT" ./cmd/agentsview
           EOF
