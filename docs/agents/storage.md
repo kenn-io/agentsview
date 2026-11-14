@@ -1620,6 +1620,9 @@ top-level test in `internal/postgres` creates its own database on the
 `TEST_PG_URL` server, named `agentsview_test_<hex>`, and drops it when the test
 ends.
 
+The `TEST_PG_URL` server must run PostgreSQL 15 or later, because the tests
+create their databases with `STRATEGY FILE_COPY`.
+
 The role in `TEST_PG_URL` needs `CREATEDB`. Without it, every test fails with
 `creating test database`. Grant it as a superuser, using the role from
 `TEST_PG_URL`:
