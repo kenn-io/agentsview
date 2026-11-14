@@ -65,17 +65,19 @@ type UsageCacheReader struct {
 	// deferWork makes reads hand large preparation to the warm worker.
 	deferWork bool
 
-	warmMu        sync.Mutex
-	warmPending   map[string]bool // timezone names waiting for a warm pass
-	warmRequested map[string]time.Time
-	warmDiscover  bool          // retry launch discovery after a transient failure
-	warmRunning   string        // timezone of the running warm pass
-	warmBusy      bool          // a warm pass is running
-	warmIdle      chan struct{} // closed while no warm pass runs
-	warmCtx       context.Context
-	warmCancel    context.CancelFunc
-	readyID       string
-	readyZones    map[string]bool
+	warmMu               sync.Mutex
+	warmPending          map[string]bool // timezone names waiting for a warm pass
+	warmRequested        map[string]time.Time
+	warmDiscover         bool // retry launch discovery after a transient failure
+	warmUnavailableRetry bool
+	warmRunning          string        // timezone of the running warm pass
+	warmBusy             bool          // a warm pass is running
+	warmIdle             chan struct{} // closed while no warm pass runs
+	warmCtx              context.Context
+	warmCancel           context.CancelFunc
+	warmRetryDelay       time.Duration
+	readyID              string
+	readyZones           map[string]bool
 	// directReads counts callers serving a direct read after a deferred
 	// read; lastDeferred is when a read last deferred. A warm pass waits
 	// for both to settle, so it does not compete with those direct reads.
@@ -106,10 +108,11 @@ const (
 	// reads, so steady traffic cannot postpone it indefinitely.
 	usageWarmDirectReadWait = 30 * time.Second
 	// Give the page time to consume a direct response before warming resumes.
-	usageWarmDeferGrace   = time.Second
-	usageWarmPollInterval = 10 * time.Millisecond
-	usageWarmRetryDelay   = 5 * time.Second
-	usageWarmWriteTimeout = 30 * time.Second
+	usageWarmDeferGrace       = time.Second
+	usageWarmPollInterval     = 10 * time.Millisecond
+	usageWarmRetryDelay       = 5 * time.Second
+	usageWarmWriteTimeout     = 5 * time.Second
+	usageWarmDiscoveryTimeout = 30 * time.Second
 )
 
 type usageWarmCheckpointKey struct{}
@@ -130,7 +133,7 @@ func NewUsageCacheReader(directory string, source UsageCacheSource) (*UsageCache
 	close(idle)
 	return &UsageCacheReader{
 		engine: engine, warmPending: make(map[string]bool), warmRequested: make(map[string]time.Time), warmIdle: idle,
-		warmCtx: warmCtx, warmCancel: warmCancel,
+		warmCtx: warmCtx, warmCancel: warmCancel, warmRetryDelay: usageWarmRetryDelay,
 	}, nil
 }
 
@@ -148,12 +151,14 @@ func (reader *UsageCacheReader) Logger() *log.Logger {
 }
 
 func (reader *UsageCacheReader) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), usageWarmWriteTimeout)
+	defer cancel()
 	reader.warmMu.Lock()
 	reader.warmCancel()
 	idle := reader.warmIdle
 	reader.warmMu.Unlock()
 	<-idle
-	reader.flushWarmRequests()
+	reader.flushWarmRequests(ctx)
 	return reader.engine.usageCache.Close()
 }
 
@@ -167,10 +172,11 @@ func (reader *UsageCacheReader) WarmUnready(ctx context.Context) error {
 		return nil
 	}
 	err := reader.warmUnready(ctx)
-	if err != nil && ctx.Err() == nil && !errors.Is(err, ErrUsageSourceUnavailable) {
+	if err != nil && ctx.Err() == nil {
 		reader.warmMu.Lock()
 		if reader.warmCtx.Err() == nil {
 			reader.warmDiscover = true
+			reader.warmUnavailableRetry = errors.Is(err, ErrUsageSourceUnavailable)
 			reader.startWarmLocked()
 		}
 		reader.warmMu.Unlock()
@@ -350,7 +356,7 @@ func (reader *UsageCacheReader) markUnavailable(err error) bool {
 		return false
 	}
 	reader.warmMu.Lock()
-	reader.warmRetryAt = time.Now().Add(usageWarmRetryDelay)
+	reader.warmRetryAt = time.Now().Add(reader.warmRetryDelay)
 	reader.readyZones = nil
 	reader.warmMu.Unlock()
 	return true
@@ -432,7 +438,7 @@ func (reader *UsageCacheReader) startWarmLocked() {
 	go reader.runWarm(idle)
 }
 
-func (reader *UsageCacheReader) flushWarmRequests() {
+func (reader *UsageCacheReader) flushWarmRequests(parent context.Context) {
 	reader.warmMu.Lock()
 	requests := reader.warmRequested
 	reader.warmRequested = make(map[string]time.Time)
@@ -440,7 +446,7 @@ func (reader *UsageCacheReader) flushWarmRequests() {
 	if len(requests) == 0 {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), usageWarmWriteTimeout)
+	ctx, cancel := context.WithTimeout(parent, usageWarmWriteTimeout)
 	defer cancel()
 	id := reader.engine.usageSourceDatabaseID.Load()
 	var cache *usageCache
@@ -473,7 +479,9 @@ func (reader *UsageCacheReader) flushWarmRequests() {
 				reader.warmRequested[timezone] = stamp
 			}
 			reader.warmMu.Unlock()
-			reader.Logger().Printf("recording usage timezone %q: %v", timezone, writeErr)
+			if !errors.Is(writeErr, ErrUsageSourceUnavailable) {
+				reader.Logger().Printf("recording usage timezone %q: %v", timezone, writeErr)
+			}
 		}
 	}
 }
@@ -483,22 +491,34 @@ func (reader *UsageCacheReader) flushWarmRequests() {
 // coverage for the zone, so later reads of any window refresh only the
 // sessions changed since. One worker keeps the warm's memory to one pass.
 func (reader *UsageCacheReader) runWarm(idle chan struct{}) {
+	unavailableRetried := false
 	for {
 		reader.warmMu.Lock()
 		if reader.warmDiscover && reader.warmCtx.Err() == nil {
 			reader.warmDiscover = false
+			delayed := reader.warmUnavailableRetry
+			reader.warmUnavailableRetry = false
 			reader.warmMu.Unlock()
-			ctx, cancel := context.WithTimeout(reader.warmCtx, usageWarmWriteTimeout)
+			if delayed {
+				if !reader.waitWarmRetry() {
+					continue
+				}
+				unavailableRetried = true
+			}
+			ctx, cancel := context.WithTimeout(reader.warmCtx, usageWarmDiscoveryTimeout)
 			err := reader.LoadReadiness(ctx)
 			if err == nil {
 				err = reader.warmUnready(ctx)
 			}
 			cancel()
-			if err != nil && !errors.Is(err, ErrUsageSourceUnavailable) && reader.warmCtx.Err() == nil {
+			if errors.Is(err, ErrUsageSourceUnavailable) && !unavailableRetried {
+				reader.warmMu.Lock()
+				reader.warmDiscover = true
+				reader.warmUnavailableRetry = true
+				reader.warmMu.Unlock()
+			} else if err != nil && !errors.Is(err, ErrUsageSourceUnavailable) && reader.warmCtx.Err() == nil {
 				reader.Logger().Printf("discovering usage cache timezones: %v", err)
-				select {
-				case <-reader.warmCtx.Done():
-				case <-time.After(usageWarmRetryDelay):
+				if reader.waitWarmRetry() {
 					reader.warmMu.Lock()
 					reader.warmDiscover = true
 					reader.warmMu.Unlock()
@@ -521,7 +541,7 @@ func (reader *UsageCacheReader) runWarm(idle chan struct{}) {
 		}
 		reader.warmBusy, reader.warmRunning = true, timezone
 		reader.warmMu.Unlock()
-		reader.flushWarmRequests()
+		reader.flushWarmRequests(reader.warmCtx)
 		reader.waitForDirectReads()
 		if reader.warmCtx.Err() != nil {
 			continue
@@ -531,7 +551,7 @@ func (reader *UsageCacheReader) runWarm(idle chan struct{}) {
 		if err == nil {
 			err = reader.LoadReadiness(ctx)
 		}
-		reader.flushWarmRequests()
+		reader.flushWarmRequests(reader.warmCtx)
 		if reader.markUnavailable(err) {
 			continue
 		}
@@ -539,14 +559,23 @@ func (reader *UsageCacheReader) runWarm(idle chan struct{}) {
 			reader.Logger().Printf("warming usage cache for timezone %q: %v", timezone, err)
 			// Keep failed work alive even when later requests hit a memoized
 			// direct result and do not queue another warm pass.
-			select {
-			case <-reader.warmCtx.Done():
-			case <-time.After(usageWarmRetryDelay):
+			if reader.waitWarmRetry() {
 				reader.warmMu.Lock()
 				reader.queueWarmLocked(timezone)
 				reader.warmMu.Unlock()
 			}
 		}
+	}
+}
+
+func (reader *UsageCacheReader) waitWarmRetry() bool {
+	timer := time.NewTimer(reader.warmRetryDelay)
+	defer timer.Stop()
+	select {
+	case <-reader.warmCtx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 

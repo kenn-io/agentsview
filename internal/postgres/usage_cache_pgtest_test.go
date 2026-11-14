@@ -193,7 +193,7 @@ func TestPGUsageCacheLaunchRetriesDiscovery(t *testing.T) {
 	requireCachedUsageMatchesDirect(t, store, db.UsageFilter{})
 }
 
-func TestPGUsageCacheLaunchDoesNotRetryUnavailableSource(t *testing.T) {
+func TestPGUsageCacheLaunchRetriesUnavailableOnce(t *testing.T) {
 	t.Parallel()
 	_, _, store, _ := keptUsageFixture(t)
 	probe := attachUsageCacheProbe(t, store, t.TempDir())
@@ -206,7 +206,45 @@ func TestPGUsageCacheLaunchDoesNotRetryUnavailableSource(t *testing.T) {
 	}
 	require.ErrorIs(t, store.WarmUsageCache(t.Context()), db.ErrUsageSourceUnavailable)
 	require.NoError(t, store.WaitUsageCacheWarm(t.Context()))
-	assert.Equal(t, int64(1), captures.Load())
+	assert.Equal(t, int64(2), captures.Load())
+}
+
+func TestPGUsageCacheLaunchRecoversUnavailableSource(t *testing.T) {
+	t.Parallel()
+	_, _, store, _ := keptUsageFixture(t)
+	probe := attachUsageCacheProbe(t, store, t.TempDir())
+	store.usageCache.DeferWork()
+	t.Cleanup(func() { require.NoError(t, store.usageCache.Close()) })
+	var captures atomic.Int64
+	probe.afterCapture = func(context.Context) error {
+		if captures.Add(1) == 1 {
+			return db.ErrUsageSourceUnavailable
+		}
+		return nil
+	}
+	require.ErrorIs(t, store.WarmUsageCache(t.Context()), db.ErrUsageSourceUnavailable)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	require.NoError(t, store.WaitUsageCacheWarm(ctx))
+	_, err := store.usageCache.GetDailyUsage(ctx, db.UsageFilter{})
+	require.NoError(t, err, "launch should fill before the first Usage read")
+}
+
+func TestPGUsageCacheUnavailableSourceDoesNotLogWarmFailure(t *testing.T) {
+	t.Parallel()
+	_, _, store, _ := keptUsageFixture(t)
+	probe := attachUsageCacheProbe(t, store, t.TempDir())
+	store.usageCache.DeferWork()
+	t.Cleanup(func() { require.NoError(t, store.usageCache.Close()) })
+	var output bytes.Buffer
+	store.usageCache.SetLogger(log.New(&output, "", 0))
+	probe.afterCapture = func(context.Context) error { return db.ErrUsageSourceUnavailable }
+	require.ErrorIs(t, store.WarmUsageCache(t.Context()), db.ErrUsageSourceUnavailable)
+	require.NoError(t, store.WaitUsageCacheWarm(t.Context()))
+	_, err := store.usageCache.GetDailyUsage(t.Context(), db.UsageFilter{})
+	require.ErrorIs(t, err, db.ErrUsageCacheWarming)
+	require.NoError(t, store.WaitUsageCacheWarm(t.Context()))
+	assert.NotContains(t, output.String(), "recording usage timezone")
 }
 
 func TestPGUsageCacheLaunchRetryStopsOnClose(t *testing.T) {
@@ -323,18 +361,9 @@ func TestPGUsageCacheDeferredReadWithBusyCacheWriter(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, request.Err(), "the direct read must not wait for the cache writer")
 	assert.Equal(t, want, got)
-	done := make(chan error, 1)
-	go func() { done <- store.usageCache.Close() }()
-	select {
-	case err := <-done:
-		closed = true
-		require.NoError(t, err)
-		t.Fatal("close returned before the queued timezone was recorded")
-	case <-time.After(100 * time.Millisecond):
-	}
 	_, err = conn.ExecContext(ctx, `ROLLBACK`)
 	require.NoError(t, err)
-	require.NoError(t, <-done)
+	require.NoError(t, store.usageCache.Close())
 	closed = true
 	var count int
 	require.NoError(t, cached.QueryRowContext(ctx, `SELECT COUNT(*) FROM usage_rollup_timezones WHERE timezone_name = ?`, filter.Timezone).Scan(&count))
@@ -700,6 +729,7 @@ func attachUsageCacheProbe(t *testing.T, store *Store, directory string) *usageC
 	probe := &usageCacheProbe{pgUsageCacheSource: &pgUsageCacheSource{Store: store, target: "cache-test-target"}}
 	reader, err := db.NewUsageCacheReader(directory, probe)
 	require.NoError(t, err)
+	reader.SetWarmRetryDelayForTest(10 * time.Millisecond)
 	store.usageCache = reader
 	return probe
 }

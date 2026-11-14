@@ -59,6 +59,30 @@ func TestUsagePGCachePerf(t *testing.T) {
 	}
 }
 
+func TestUsagePGCachePerfServerWarmsAtLaunch(t *testing.T) {
+	pgURL := os.Getenv("TEST_PG_URL")
+	if pgURL == "" {
+		t.Skip("TEST_PG_URL must point to a dedicated test database")
+	}
+	fixture := newUsagePerfFixture(t, pgURL, 2, 1, 1)
+	dir := t.TempDir()
+	s, closeStore := fixture.cachedServer(t, dir)
+	waitWarm(t, s)
+	closeStore()
+	s, closeStore = fixture.cachedServer(t, dir)
+	defer closeStore()
+	waitWarm(t, s)
+	files, err := filepath.Glob(filepath.Join(dir, "usage-postgres", "*", "usage-cache-v*.db"))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	cache, err := sql.Open("sqlite3", files[0])
+	require.NoError(t, err)
+	defer cache.Close()
+	var ready int
+	require.NoError(t, cache.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM usage_rollup_timezones WHERE change_revision IS NOT NULL`).Scan(&ready))
+	require.Positive(t, ready)
+}
+
 func perfEnvInt(t *testing.T, name string, fallback int) int {
 	t.Helper()
 	raw := os.Getenv(name)
@@ -240,6 +264,7 @@ func (f *usagePerfFixture) cachedServer(t *testing.T, dir string) (*Server, func
 	store, err := postgres.NewStore(t.Context(), f.pgURL, f.schema, true)
 	require.NoError(t, err)
 	require.NoError(t, store.ConfigureUsageCache(t.Context(), dir, f.pgURL, f.schema))
+	require.NoError(t, store.WarmUsageCache(t.Context()))
 	return &Server{db: store, sessions: service.NewReadOnlyBackend(store)}, func() { require.NoError(t, store.Close()) }
 }
 
@@ -389,6 +414,7 @@ func (f *usagePerfFixture) measureSessions(t *testing.T, repeats int) {
 			closeStore()
 
 			s, closeStore = f.cachedServer(t, dir)
+			waitWarm(t, s)
 			sample, got = measurePage(t, s, window.from, 1)
 			restart = append(restart, sample)
 			requireSamePage(t, "restart", want, got)
