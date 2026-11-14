@@ -446,5 +446,5 @@ func (s *Store) sumActivityUsage(
 	if err != nil {
 		return nil, err
 	}
-	return readbase.AssembleActivityUsage(pricing, sums.schedule, sums.groups)
+	return readbase.AssembleActivityUsage(pricing, sums.Schedule, sums.Groups)
 }

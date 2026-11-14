@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"unsafe"
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/ext"
@@ -15,7 +14,6 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/readbase"
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
@@ -91,36 +89,15 @@ func (s *Store) keptActivityUsageSums(
 	// The range, zone, and bucket decide the bucket windows.
 	slot := fmt.Sprintf("%s|%s|%d|%d|%s|%+v|%s|%s", lowerBound, upperBound, q.RangeStart.UnixNano(), q.RangeEnd.UnixNano(),
 		q.Loc, q.Bucket, pricingDigest, chSessionIDsDigest(ids))
-	if kept, ok := s.activityUsageSums.Get(slot, version); ok && kept[0].endUS <= endUS && endUS <= kept[0].nextUS {
-		return readbase.AssembleActivityUsage(pricing, kept[0].schedule, kept[0].groups)
+	if kept, ok := s.activityUsageSums.Get(slot, version); ok && kept[0].Covers(endUS) {
+		return readbase.AssembleActivityUsage(pricing, kept[0].Schedule, kept[0].Groups)
 	}
 	sums, err := s.readActivityUsageSums(ctx, source, candidates, q, pricing, startUS, endUS)
 	if err != nil {
 		return nil, err
 	}
-	s.activityUsageSums.Put(slot, version, []*activityUsageSums{sums})
-	return readbase.AssembleActivityUsage(pricing, sums.schedule, sums.groups)
-}
-
-// activityUsageSums is what one usage query returns: the groups, priced
-// under schedule, of the survivors before endUS, and nextUS, the first
-// source row at or after endUS, math.MaxInt64 when there is none.
-type activityUsageSums struct {
-	schedule      readbase.UsageRateSchedule
-	groups        []readbase.ActivityUsageGroup
-	endUS, nextUS int64
-}
-
-func (u *activityUsageSums) bytes() int64 {
-	n := int64(unsafe.Sizeof(*u)) + int64(cap(u.schedule.Rates))*int64(unsafe.Sizeof(readbase.UsageRate{})) +
-		int64(cap(u.groups))*int64(unsafe.Sizeof(readbase.ActivityUsageGroup{}))
-	for _, rate := range u.schedule.Rates {
-		n += kept.JSONBytes(rate)
-	}
-	for _, g := range u.groups {
-		n += stringBytes(g.Session, g.Model, g.ProviderID, g.Kind, g.RawSession, g.RawSource, g.RawKey)
-	}
-	return n
+	s.activityUsageSums.Put(slot, version, []*readbase.ActivityUsageSums{sums})
+	return readbase.AssembleActivityUsage(pricing, sums.Schedule, sums.Groups)
 }
 
 // readActivityUsageSums selects, prices, and sums in SQL the usage
@@ -147,7 +124,7 @@ func (u *activityUsageSums) bytes() int64 {
 func (s *Store) readActivityUsageSums(
 	ctx context.Context, source activityUsageSource, candidates chSessionSet,
 	q activity.Query, pricing *export.PricingResolver, startUS, endUS int64,
-) (*activityUsageSums, error) {
+) (*readbase.ActivityUsageSums, error) {
 	keys, nextUS, err := s.activityUsageRateKeys(ctx, source, candidates, endUS)
 	if err != nil {
 		return nil, err
@@ -160,7 +137,7 @@ func (s *Store) readActivityUsageSums(
 	if err != nil {
 		return nil, err
 	}
-	return &activityUsageSums{schedule: schedule, groups: groups, endUS: endUS, nextUS: nextUS}, nil
+	return &readbase.ActivityUsageSums{Schedule: schedule, Groups: groups, EndUS: endUS, NextUS: nextUS}, nil
 }
 
 // activityUsageRateKeys reads the models and providers of the source rows
