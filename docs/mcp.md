@@ -89,7 +89,7 @@ client will see these tools:
 | `search_content`              | Substring, regex, terms, semantic, or hybrid search over session text    |
 | `get_usage_summary`           | Aggregate token and cost usage                                           |
 | `get_session_usage`           | Show one session's tokens and cost by model and by request               |
-| `list_recall`                 | List Recall entries with time bounds and a pagination cursor |
+| `list_recall`                 | List Recall entries changed or created since a time, with a cursor       |
 | `query_recall`                | Search extracted Recall entries when the backend supports Recall queries |
 | `get_session_file_references` | Find retained image bytes in Docbank, including prior versions and trash |
 | `get_tool_calls`              | List the tool calls one session made, with inputs and result sizes       |

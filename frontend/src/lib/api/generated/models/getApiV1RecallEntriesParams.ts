@@ -20,6 +20,7 @@ export type GetApiV1RecallEntriesParams = {
   superseded_by_entry_id?: string;
   cursor?: string;
   updated_since?: string;
+  created_since?: string;
   limit?: number;
   trusted_only?: boolean;
 };

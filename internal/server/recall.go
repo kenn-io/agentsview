@@ -47,6 +47,8 @@ func handleInvalidRecallQuery(w http.ResponseWriter, err error) bool {
 	return false
 }
 
+var errStaleRecallPagination = errors.New("stale recall pagination")
+
 type recallQueryRevisionProvider interface {
 	RecallQueryRevision(context.Context) (string, error)
 }
@@ -80,6 +82,7 @@ func (s *Server) handleListRecallEntries(
 	query := db.RecallQuery{
 		Text:                q.Get("q"),
 		UpdatedSince:        q.Get("updated_since"),
+		CreatedSince:        q.Get("created_since"),
 		Project:             q.Get("project"),
 		CWD:                 q.Get("cwd"),
 		GitBranch:           q.Get("git_branch"),
@@ -128,8 +131,9 @@ func (s *Server) handleListRecallEntries(
 		if s.handleReadOnly(w, err) {
 			return
 		}
-		if errors.Is(err, service.ErrStaleRecallPagination) {
-			writeError(w, http.StatusConflict, service.ErrStaleRecallPagination.Error())
+		if errors.Is(err, errStaleRecallPagination) {
+			writeError(w, http.StatusConflict,
+				"recall corpus changed; restart pagination")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -196,7 +200,7 @@ func (s *Server) listRankedRecallEntriesPage(
 		return page.RecallEntries, "", err
 	}
 	if cursor != nil && cursor.Revision != revision {
-		return nil, "", service.ErrStaleRecallPagination
+		return nil, "", errStaleRecallPagination
 	}
 	query.Limit = min(offset+pageLimit+1, db.MaxRecallEntryLimit)
 	page, err := s.db.QueryRecallEntries(ctx, query)
@@ -208,7 +212,7 @@ func (s *Server) listRankedRecallEntriesPage(
 		return nil, "", err
 	}
 	if currentRevision != revision {
-		return nil, "", service.ErrStaleRecallPagination
+		return nil, "", errStaleRecallPagination
 	}
 	if offset >= len(page.RecallEntries) {
 		return []db.RecallResult{}, "", nil

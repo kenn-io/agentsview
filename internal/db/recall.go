@@ -101,10 +101,10 @@ type RecallQuery struct {
 	SupersedesEntryID   string
 	SupersededByEntryID string
 	UpdatedSince        string
+	CreatedSince        string
 	CursorUpdatedAt     string
 	CursorID            string
 	ProbeNext           bool
-	invalidUpdatedSince bool
 	TrustedOnly         bool
 	Limit               int
 }
@@ -726,9 +726,12 @@ func (db *DB) ListRecallEntries(
 	if q.ProbeNext {
 		limit++
 	}
+	order := " ORDER BY updated_at DESC, id ASC LIMIT ?"
+	if q.timeBounded() {
+		order = " ORDER BY updated_at ASC, id DESC LIMIT ?"
+	}
 	query := "SELECT " + recallBaseCols +
-		" FROM recall_entries WHERE " + where +
-		" ORDER BY updated_at DESC, id ASC LIMIT ?"
+		" FROM recall_entries WHERE " + where + order
 	args = append(args, limit)
 
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
@@ -1336,15 +1339,7 @@ func NormalizeRecallQuery(q RecallQuery) RecallQuery {
 	q.SupersedesEntryID = strings.TrimSpace(q.SupersedesEntryID)
 	q.SupersededByEntryID = strings.TrimSpace(q.SupersededByEntryID)
 	q.UpdatedSince = strings.TrimSpace(q.UpdatedSince)
-	q.invalidUpdatedSince = false
-	if q.UpdatedSince != "" {
-		if t, err := time.Parse(time.RFC3339, q.UpdatedSince); err == nil {
-			t = t.UTC().Truncate(time.Millisecond)
-			q.UpdatedSince = t.Format(extractTimeLayout)
-		} else {
-			q.invalidUpdatedSince = true
-		}
-	}
+	q.CreatedSince = strings.TrimSpace(q.CreatedSince)
 	q.CursorUpdatedAt = strings.TrimSpace(q.CursorUpdatedAt)
 	q.CursorID = strings.TrimSpace(q.CursorID)
 	return q
@@ -1355,8 +1350,10 @@ func NormalizeRecallQuery(q RecallQuery) RecallQuery {
 // for another explicit status is therefore a caller error, not an empty page.
 func ValidateRecallQuery(q RecallQuery) error {
 	q = NormalizeRecallQuery(q)
-	if q.invalidUpdatedSince {
-		return fmt.Errorf("%w: invalid timestamp %q", ErrInvalidRecallQuery, q.UpdatedSince)
+	for _, bound := range []string{q.UpdatedSince, q.CreatedSince} {
+		if _, err := recallBound(bound); err != nil {
+			return err
+		}
 	}
 	switch q.Mode {
 	case RecallQueryModeLexical, RecallQueryModeVector, RecallQueryModeHybrid:
@@ -1525,7 +1522,7 @@ func buildRecallEntryWhere(q RecallQuery, includeText bool) (string, []any) {
 	preds := []string{"1=1"}
 	var args []any
 	status := q.Status
-	if status == "" && (q.TrustedOnly || q.UpdatedSince == "") {
+	if status == "" && (q.TrustedOnly || !q.timeBounded()) {
 		status = corerecall.StatusAccepted
 	}
 	if status != "" {
@@ -1584,13 +1581,24 @@ func buildRecallEntryWhere(q RecallQuery, includeText bool) (string, []any) {
 		preds = append(preds, "superseded_by_entry_id = ?")
 		args = append(args, q.SupersededByEntryID)
 	}
-	if q.UpdatedSince != "" {
+	if bound, _ := recallBound(q.UpdatedSince); bound != "" {
 		preds = append(preds, "updated_at >= ?")
-		args = append(args, q.UpdatedSince)
+		args = append(args, bound)
+	}
+	if bound, _ := recallBound(q.CreatedSince); bound != "" {
+		preds = append(preds, "created_at >= ?")
+		args = append(args, bound)
 	}
 	if q.CursorUpdatedAt != "" {
-		preds = append(preds,
-			"(updated_at < ? OR (updated_at = ? AND id > ?))")
+		// Bounded lists page oldest change first, so an entry changed
+		// mid-walk moves to the end of the walk and is still returned.
+		if q.timeBounded() {
+			preds = append(preds,
+				"(updated_at > ? OR (updated_at = ? AND id < ?))")
+		} else {
+			preds = append(preds,
+				"(updated_at < ? OR (updated_at = ? AND id > ?))")
+		}
 		args = append(args,
 			q.CursorUpdatedAt, q.CursorUpdatedAt, q.CursorID)
 	}
@@ -1712,6 +1720,24 @@ func recallFTSUnavailable(err error) bool {
 
 func recallQueryTerms(text string) []string {
 	return corerecall.ScoringQueryTerms(text)
+}
+
+func (q RecallQuery) timeBounded() bool {
+	return q.UpdatedSince != "" || q.CreatedSince != ""
+}
+
+// recallBound parses an RFC3339 bound into the stored timestamp layout,
+// flooring to the millisecond so a bound taken from a returned updated_at
+// still includes that entry.
+func recallBound(s string) (string, error) {
+	if s == "" {
+		return "", nil
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return "", fmt.Errorf("%w: invalid timestamp %q", ErrInvalidRecallQuery, s)
+	}
+	return t.UTC().Truncate(time.Millisecond).Format(extractTimeLayout), nil
 }
 
 // RecallLimit returns the effective page size for a Recall list.

@@ -2185,15 +2185,6 @@ func TestListRecallPagesWithEvidence(t *testing.T) {
 	require.Len(t, next.Entries, 1)
 	assert.NotEqual(t, out.Entries[0].ID, next.Entries[0].ID)
 	assert.Empty(t, next.NextCursor)
-	_, err = d.InsertRecallEntry(t.Context(), db.RecallEntry{ID: "c", Type: "fact", Scope: "project", Status: "archived", Title: "c", Body: "c", SourceSessionID: "s1"})
-	require.NoError(t, err)
-	res, err = ct.CallTool(t.Context(), callParams("list_recall", map[string]any{"limit": 1, "updated_since": "2020-01-01T00:00:00Z", "cursor": out.NextCursor}))
-	require.NoError(t, err)
-	require.True(t, res.IsError)
-	require.Len(t, res.Content, 1)
-	text, ok := res.Content[0].(*mcp.TextContent)
-	require.True(t, ok)
-	assert.Contains(t, text.Text, "recall corpus changed; restart pagination")
 }
 
 func TestListRecallFiltersSourceSession(t *testing.T) {

@@ -33,18 +33,20 @@ The current implementation is local and SQLite-only. The CLI provides:
 - `recall import --dry-run` for validating reviewed JSONL candidates.
 
 Use `recall list --updated-since <timestamp>` to list entries changed at or
-after an RFC3339 timestamp, including the boundary. Updates include review,
-supersession, activation, and provenance changes. Without a time bound, lists
-default to accepted entries. With a time bound and no status filter, lists
-include every status, including archived and superseded entries. `trusted_only`
-continues to select accepted entries. The HTTP list and MCP `list_recall` accept
-`updated_since`. Each returns a `next_cursor` when another page is available.
-Record the time you start listing and use it as the next `updated_since` bound.
-The bound includes its entire millisecond, so entries from earlier in that
-millisecond may overlap. A write during a time-bound walk can return
-"recall corpus changed; restart pagination"; restart with the same bound.
+after an RFC3339 timestamp, or `--created-since <timestamp>` to list entries
+created at or after it. Both bounds include the boundary millisecond. Changes
+include review, supersession, activation, and provenance updates.
 
-Each entry's `source_run_id` labels its extraction generation. Activating a generation promotes its entries and updates their `updated_at`, so an update delta immediately after activation includes that generation.
+A bounded list returns the oldest change first and includes archived entries
+as well as accepted ones, unless you set a status filter. `trusted_only` still
+selects accepted entries. Without a bound, lists show accepted entries, newest
+first. Each entry's `source_run_id` names the extraction generation it came
+from.
+
+The HTTP list and MCP `list_recall` accept `updated_since` and `created_since`,
+and return `next_cursor` when more entries remain. To follow changes, pass the
+last returned entry's `updated_at` as the next `updated_since`. An entry that
+changes during a walk appears again later in it, so dedupe by `id`.
 
 The top-level **Recall** page has two tabs:
 
