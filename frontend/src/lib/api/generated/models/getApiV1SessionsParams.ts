@@ -4,6 +4,10 @@
 
 export type GetApiV1SessionsParams = {
   /**
+   * Apply filters to each session, including child sessions
+   */
+  match_each_session?: boolean;
+  /**
    * Include default-exclusion counts; true also samples hidden children, false counts only one-shot and automated sessions. First page only.
    */
   exclusion_counts?: boolean;

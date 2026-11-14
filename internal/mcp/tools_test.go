@@ -2156,6 +2156,7 @@ func TestCompactionSummaries(t *testing.T) {
 		{SessionID: "compacted", Ordinal: 0, Role: "user", Content: "hello"},
 		{SessionID: "compacted", Ordinal: 1, Role: "assistant", IsSystem: true, IsCompactBoundary: true, Timestamp: "2024-06-15T10:00:00Z", Content: "full summary"},
 		{SessionID: "compacted", Ordinal: 2, Role: "assistant", IsSystem: true, Content: "injected"},
+		{SessionID: "compacted", Ordinal: 3, Role: "assistant", IsSystem: true, IsCompactBoundary: true, Content: "   \n"},
 	}))
 	_, out, err := ts.compactionSummaries(t.Context(), nil, compactionSummariesIn{SessionID: "compacted"})
 	require.NoError(t, err)
@@ -2174,6 +2175,11 @@ func TestCompactionSummaries(t *testing.T) {
 	require.Error(t, err)
 	_, _, err = ts.compactionSummaries(t.Context(), nil, compactionSummariesIn{SessionID: "compacted", ActiveSince: "2024-06-01T00:00:00Z"})
 	require.Error(t, err)
+	_, _, err = ts.compactionSummaries(t.Context(), nil, compactionSummariesIn{SessionID: "compacted", Cursor: "cursor"})
+	require.ErrorContains(t, err, "cursor requires active_since")
+	_, _, err = ts.compactionSummaries(t.Context(), nil, compactionSummariesIn{ActiveSince: "yesterday"})
+	require.ErrorContains(t, err, "invalid active_since")
+	require.ErrorContains(t, err, "RFC3339")
 }
 
 func TestCompactionSummariesActiveSince(t *testing.T) {
@@ -2193,4 +2199,31 @@ func TestCompactionSummariesActiveSince(t *testing.T) {
 	summaries := append(first.Summaries, second.Summaries...)
 	require.Len(t, summaries, 1)
 	assert.Equal(t, "recent summary", summaries[0].Content)
+}
+
+func TestCompactionSummariesActiveChildren(t *testing.T) {
+	ts, d := newTestToolset(t)
+	for _, row := range []struct{ id, parent, ended string }{
+		{"active-root", "", "2024-06-15T00:00:00Z"},
+		{"stale-child", "active-root", "2024-01-01T00:00:00Z"},
+		{"old-root", "", "2024-01-01T00:00:00Z"},
+		{"active-child", "old-root", "2024-06-15T00:00:00Z"},
+		{"orphan", "missing", "2024-06-15T00:00:00Z"},
+	} {
+		dbtest.SeedSession(t, d, row.id, "project", func(s *db.Session) {
+			s.EndedAt = &row.ended
+			if row.parent != "" {
+				s.ParentSessionID = &row.parent
+				s.RelationshipType = "subagent"
+			}
+		})
+		require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: row.id, Ordinal: 0, Role: "assistant", IsSystem: true, IsCompactBoundary: true, Content: row.id}}))
+	}
+	_, out, err := ts.compactionSummaries(t.Context(), nil, compactionSummariesIn{ActiveSince: "2024-06-01T00:00:00Z"})
+	require.NoError(t, err)
+	var ids []string
+	for _, row := range out.Summaries {
+		ids = append(ids, row.SessionID)
+	}
+	assert.ElementsMatch(t, []string{"active-root", "active-child", "orphan"}, ids)
 }

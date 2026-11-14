@@ -20,6 +20,9 @@ func newSessionCompactionsCommand() *cobra.Command {
 			}
 			limit, _ := cmd.Flags().GetInt("limit")
 			cursor, _ := cmd.Flags().GetString("cursor")
+			if len(args) == 1 && cursor != "" {
+				return cliUsageError(errors.New("--cursor requires --active-since"), "omit --cursor or use --active-since")
+			}
 			svc, cleanup, err := resolveService(cmd)
 			if err != nil {
 				return err
@@ -49,7 +52,7 @@ func newSessionCompactionsCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().String("active-since", "", "Sessions active since this RFC3339 timestamp")
-	cmd.Flags().Int("limit", 20, "Maximum sessions to scan (max 100)")
-	cmd.Flags().String("cursor", "", "Session pagination cursor")
+	cmd.Flags().Int("limit", service.DefaultCompactionSessionLimit, fmt.Sprintf("Maximum sessions to scan (max %d)", service.MaxCompactionSessionLimit))
+	cmd.Flags().String("cursor", "", "Session cursor; resume with the same --active-since")
 	return cmd
 }

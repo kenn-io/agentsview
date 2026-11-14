@@ -355,6 +355,7 @@ func listFilterToDB(f ListFilter) db.SessionFilter {
 		AutomatedFilterSet:   f.AutomatedFilterSet,
 		ExcludeAutomated:     !f.IncludeAutomated,
 		IncludeChildren:      f.IncludeChildren,
+		MatchEachSession:     f.MatchEachSession,
 		IncludeSource:        f.IncludeSource,
 		Cursor:               f.Cursor,
 		Limit:                f.Limit,
@@ -409,6 +410,9 @@ const defaultAroundSpan = 5
 func (b *directBackend) Messages(
 	ctx context.Context, id string, f MessageFilter,
 ) (*MessageList, error) {
+	if f.Around != nil && f.CompactBoundaryOnly {
+		return nil, ErrCompactBoundaryAround
+	}
 	if f.Around != nil && (f.From != nil || f.Direction != "") {
 		return nil, ErrAroundMutuallyExclusive
 	}

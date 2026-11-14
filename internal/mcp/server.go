@@ -25,25 +25,26 @@ import (
 // Tool names. The same constant is used to register a tool and to refer
 // to it in tests.
 const (
-	ToolSearchSessions       = "search_sessions"
-	ToolQueryRecall          = "query_recall"
-	ToolListSessions         = "list_sessions"
-	ToolGetSessionOverview   = "get_session_overview"
-	ToolGetMessages          = "get_messages"
-	ToolSearchContent        = "search_content"
-	ToolGetMemoryStatus      = "get_memory_status"
-	ToolGetUsageSummary      = "get_usage_summary"
-	ToolGetSessionUsage      = "get_session_usage"
-	ToolGetToolCalls         = "get_tool_calls"
-	ToolGetRecentEdits       = "get_recent_edits"
-	ToolGetChildSessions     = "get_child_sessions"
-	ToolCompareUsage         = "compare_usage"
-	ToolGetActivityReport    = "get_activity_report"
-	ToolGetToolUsage         = "get_tool_usage"
-	ToolGetQualitySignals    = "get_quality_signals"
-	ToolSearchDocs           = "search_docs"
-	ToolGetFrictionDigest    = "get_friction_digest"
-	ToolListFrictionPatterns = "list_friction_patterns"
+	ToolSearchSessions         = "search_sessions"
+	ToolQueryRecall            = "query_recall"
+	ToolListSessions           = "list_sessions"
+	ToolGetSessionOverview     = "get_session_overview"
+	ToolGetMessages            = "get_messages"
+	ToolGetCompactionSummaries = "get_compaction_summaries"
+	ToolSearchContent          = "search_content"
+	ToolGetMemoryStatus        = "get_memory_status"
+	ToolGetUsageSummary        = "get_usage_summary"
+	ToolGetSessionUsage        = "get_session_usage"
+	ToolGetToolCalls           = "get_tool_calls"
+	ToolGetRecentEdits         = "get_recent_edits"
+	ToolGetChildSessions       = "get_child_sessions"
+	ToolCompareUsage           = "compare_usage"
+	ToolGetActivityReport      = "get_activity_report"
+	ToolGetToolUsage           = "get_tool_usage"
+	ToolGetQualitySignals      = "get_quality_signals"
+	ToolSearchDocs             = "search_docs"
+	ToolGetFrictionDigest      = "get_friction_digest"
+	ToolListFrictionPatterns   = "list_friction_patterns"
 )
 
 const ToolGetSessionFileReferences = "get_session_file_references"
@@ -142,7 +143,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 	memoryOnly := opts.Profile == ProfileMemory
 
 	if !memoryOnly {
-		mcp.AddTool(s, &mcp.Tool{Name: "get_compaction_summaries", Description: "Read compaction summaries; empty pages can carry next_cursor.", Annotations: readOnly}, t.compactionSummaries)
+		mcp.AddTool(s, &mcp.Tool{Name: ToolGetCompactionSummaries, Description: "Read compaction summaries; empty pages can carry next_cursor.", Annotations: readOnly}, t.compactionSummaries)
 		addFileReferencesTool(s, t, externalRead)
 		mcp.AddTool(s, &mcp.Tool{
 			Name: ToolSearchSessions,

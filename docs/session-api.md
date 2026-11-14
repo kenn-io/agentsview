@@ -382,14 +382,14 @@ ______________________________________________________________________
 
 ### `agentsview session compactions`
 
-Read full compaction summaries for one session or sessions active since an RFC3339 timestamp. Use `--limit` and `--cursor` to page sessions; an empty page can include `next_cursor`.
+Read full compaction summaries for one session or sessions active since an RFC3339 timestamp. The session limit does not cap response bytes. Use `--limit` and `--cursor` to page sessions; an empty page can include `next_cursor`. Resume a cursor with the same `--active-since` value.
 
 ```bash
 agentsview session compactions <id> --json
 agentsview session compactions --active-since 2024-01-01T00:00:00Z --limit 20 --json
 ```
 
-The messages API accepts `compact_boundary=true` to select compaction boundaries.
+The messages API accepts `compact_boundary=true` to select compaction boundaries in linear reads. It cannot be combined with `around`. The sessions API accepts `match_each_session=true` to filter each session, including children, by its own activity.
 
 ### `agentsview session messages`
 

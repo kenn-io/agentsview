@@ -214,7 +214,6 @@ func TestGetMessagesWindow_CompactBoundary(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []int{3, 8}, ordinalsOf(messages))
 	anchor := 6
-	messages, err = d.GetMessagesWindow(t.Context(), "boundary", MessageWindow{Around: &anchor, Before: 1, After: 1, CompactBoundaryOnly: true})
-	require.NoError(t, err)
-	assert.Equal(t, []int{3, 8}, ordinalsOf(messages))
+	_, err = d.GetMessagesWindow(t.Context(), "boundary", MessageWindow{Around: &anchor, CompactBoundaryOnly: true})
+	require.ErrorIs(t, err, ErrCompactBoundaryAround)
 }

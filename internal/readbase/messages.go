@@ -13,6 +13,9 @@ func (s Sessions) GetMessages(ctx context.Context, sessionID string, from, limit
 }
 
 func (s Sessions) GetMessagesWindow(ctx context.Context, sessionID string, w db.MessageWindow) ([]db.Message, error) {
+	if w.Around != nil && w.CompactBoundaryOnly {
+		return nil, db.ErrCompactBoundaryAround
+	}
 	if w.Limit <= 0 || w.Limit > db.MaxMessageLimit {
 		w.Limit = db.DefaultMessageLimit
 	}
@@ -266,11 +269,6 @@ func MessageWindowSQL(columns, revision string, revisionArgs []any, sessionID st
 		}
 		roleClause = " AND role IN (" + strings.Join(placeholders, ",") + ")"
 	}
-	boundaryClause := ""
-	if w.CompactBoundaryOnly {
-		boundaryClause = " AND is_compact_boundary = TRUE"
-		roleClause += boundaryClause
-	}
 	args := append([]any(nil), revisionArgs...)
 	if w.Around != nil {
 		anchor := *w.Around
@@ -286,10 +284,13 @@ func MessageWindowSQL(columns, revision string, revisionArgs []any, sessionID st
 		return `SELECT ` + projection + ` FROM (
    SELECT * FROM (SELECT ` + columns + ` FROM messages
     WHERE session_id = ? AND ordinal < ?` + roleClause + ` ORDER BY ordinal DESC LIMIT ?) AS before_rows
-   UNION ALL SELECT ` + columns + ` FROM messages WHERE session_id = ? AND ordinal = ?` + boundaryClause + `
+   UNION ALL SELECT ` + columns + ` FROM messages WHERE session_id = ? AND ordinal = ?
    UNION ALL SELECT * FROM (SELECT ` + columns + ` FROM messages
     WHERE session_id = ? AND ordinal > ?` + roleClause + ` ORDER BY ordinal ASC LIMIT ?) AS after_rows
   ) AS w ORDER BY w.ordinal`, args, revision != ""
+	}
+	if w.CompactBoundaryOnly {
+		roleClause += " AND is_compact_boundary = TRUE"
 	}
 	from := 0
 	if w.From != nil {

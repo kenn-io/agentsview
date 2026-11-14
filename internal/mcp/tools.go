@@ -1027,7 +1027,7 @@ func (t *toolset) fileReferences(ctx context.Context, _ *mcp.CallToolRequest, in
 type compactionSummariesIn struct {
 	SessionID   string `json:"session_id,omitempty" jsonschema:"Session ID."`
 	ActiveSince string `json:"active_since,omitempty" jsonschema:"RFC3339 timestamp."`
-	Cursor      string `json:"cursor,omitempty" jsonschema:"Session pagination cursor."`
+	Cursor      string `json:"cursor,omitempty" jsonschema:"Session cursor; resume with the same active_since."`
 	Limit       int    `json:"limit,omitempty" jsonschema:"Sessions per page, default 20, max 100."`
 }
 

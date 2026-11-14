@@ -558,8 +558,22 @@ func TestStoreMessageWindowCompactBoundary(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Equal(t, 2, got[0].Ordinal)
 	anchor := 1
-	got, err = store.GetMessagesWindow(ctx, fixtureAlphaID, db.MessageWindow{Around: &anchor, Before: 1, After: 1, CompactBoundaryOnly: true})
+	_, err = store.GetMessagesWindow(ctx, fixtureAlphaID, db.MessageWindow{Around: &anchor, CompactBoundaryOnly: true})
+	require.ErrorIs(t, err, db.ErrCompactBoundaryAround)
+}
+
+func TestStoreListSessionsMatchEachSession(t *testing.T) {
+	t.Parallel()
+	store, syncer, local := newPushedStore(t)
+	ctx := t.Context()
+	ended := "2028-06-15T00:00:00Z"
+	s := db.Session{ID: "active-child", Project: "alpha", Machine: fixtureMachine, Agent: "claude", MessageCount: 1, CreatedAt: "2028-06-15T00:00:00Z", EndedAt: &ended, ParentSessionID: new(fixtureAlphaID), RelationshipType: "subagent"}
+	require.NoError(t, local.UpsertSession(ctx, s))
+	require.NoError(t, local.InsertMessages(ctx, []db.Message{{SessionID: s.ID, Ordinal: 0, Role: "user", Content: "hello"}}))
+	_, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
-	require.Len(t, got, 1)
-	assert.Equal(t, 2, got[0].Ordinal)
+	page, err := store.ListSessions(ctx, db.SessionFilter{ActiveSince: "2028-06-01T00:00:00Z", MatchEachSession: true})
+	require.NoError(t, err)
+	require.Len(t, page.Sessions, 1)
+	assert.Equal(t, "active-child", page.Sessions[0].ID)
 }

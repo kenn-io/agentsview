@@ -665,6 +665,8 @@ func getMessagesWith(
 	return msgs, nil
 }
 
+var ErrCompactBoundaryAround = errors.New("compact_boundary cannot be combined with around")
+
 // MessageWindow parameterises GetMessagesWindow. Exactly one retrieval
 // mode: Around non-nil = symmetric window; otherwise linear from/limit.
 type MessageWindow struct {
@@ -685,12 +687,15 @@ type MessageWindow struct {
 // GetMessagesWindow returns messages for a session using either linear
 // pagination (mirroring GetMessages, optionally role-filtered) or a
 // symmetric window centered on an ordinal (Around/Before/After). Around
-// mode includes the anchor even when Roles excludes it, provided it matches
-// CompactBoundaryOnly when set. Before/after counts apply after filtering,
-// so they count matching messages rather than raw ordinal distance.
+// mode includes the anchor even when Roles excludes it. Before/after counts
+// apply after filtering, so they count matching messages rather than raw
+// ordinal distance.
 func (db *DB) GetMessagesWindow(
 	ctx context.Context, sessionID string, w MessageWindow,
 ) ([]Message, error) {
+	if w.Around != nil && w.CompactBoundaryOnly {
+		return nil, ErrCompactBoundaryAround
+	}
 	if w.Around != nil {
 		return db.getMessagesAroundAnchor(ctx, sessionID, w)
 	}
@@ -749,8 +754,7 @@ const sqliteRevisionCol = `(SELECT transcript_revision FROM sessions WHERE id = 
 
 // getMessagesAroundAnchor implements MessageWindow's Around mode: the
 // before, anchor, and after rows merged into one ascending slice. The anchor
-// ignores Roles but must match CompactBoundaryOnly when set. Before/after
-// counts apply after filtering.
+// ignores Roles. Before/after counts apply after filtering.
 //
 // The window runs as one statement that also selects the session
 // transcript revision, so a sync that replaces the session's messages
@@ -761,11 +765,6 @@ func (db *DB) getMessagesAroundAnchor(
 ) ([]Message, error) {
 	anchor := *w.Around
 	roleClause, roleArgs := roleFilterClause(w.Roles)
-	boundaryClause := ""
-	if w.CompactBoundaryOnly {
-		boundaryClause = " AND is_compact_boundary = 1"
-		roleClause += boundaryClause
-	}
 	query := fmt.Sprintf(`
 		SELECT %[1]s, w.*
 		FROM (
@@ -774,14 +773,14 @@ func (db *DB) getMessagesAroundAnchor(
 				WHERE session_id = ? AND ordinal < ?%[3]s
 				ORDER BY ordinal DESC LIMIT ?)
 			UNION ALL
-			SELECT %[2]s FROM messages WHERE session_id = ? AND ordinal = ?%[4]s
+			SELECT %[2]s FROM messages WHERE session_id = ? AND ordinal = ?
 			UNION ALL
 			SELECT * FROM (
 				SELECT %[2]s FROM messages
 				WHERE session_id = ? AND ordinal > ?%[3]s
 				ORDER BY ordinal ASC LIMIT ?)
 		) AS w
-		ORDER BY w.ordinal`, sqliteRevisionCol, selectMessageCols, roleClause, boundaryClause)
+		ORDER BY w.ordinal`, sqliteRevisionCol, selectMessageCols, roleClause)
 	args := append([]any{sessionID, sessionID, anchor}, roleArgs...)
 	args = append(args, max(w.Before, 0), sessionID, anchor, sessionID, anchor)
 	args = append(args, roleArgs...)

@@ -84,6 +84,9 @@ const pgRevisionCol = `COALESCE((SELECT transcript_revision FROM sessions WHERE 
 func (s *Store) GetMessagesWindow(
 	ctx context.Context, sessionID string, w db.MessageWindow,
 ) ([]db.Message, error) {
+	if w.Around != nil && w.CompactBoundaryOnly {
+		return nil, db.ErrCompactBoundaryAround
+	}
 	if w.Around != nil {
 		return s.getMessagesAroundAnchor(ctx, sessionID, w)
 	}
@@ -135,11 +138,6 @@ func (s *Store) getMessagesAroundAnchor(
 ) ([]db.Message, error) {
 	anchor := *w.Around
 	roleClause, roleArgs := pgRoleFilterClause(w.Roles, 4)
-	boundaryClause := ""
-	if w.CompactBoundaryOnly {
-		boundaryClause = " AND is_compact_boundary = TRUE"
-		roleClause += boundaryClause
-	}
 	query := fmt.Sprintf(`
 		SELECT %s, w.*
 		FROM (
@@ -148,7 +146,7 @@ func (s *Store) getMessagesAroundAnchor(
 				WHERE session_id = $1 AND ordinal < $2%s
 				ORDER BY ordinal DESC LIMIT $3) AS before_rows
 			UNION ALL
-			SELECT %s FROM messages WHERE session_id = $1 AND ordinal = $2%s
+			SELECT %s FROM messages WHERE session_id = $1 AND ordinal = $2
 			UNION ALL
 			SELECT * FROM (
 				SELECT %s FROM messages
@@ -156,7 +154,7 @@ func (s *Store) getMessagesAroundAnchor(
 				ORDER BY ordinal ASC LIMIT $%d) AS after_rows
 		) AS w
 		ORDER BY w.ordinal`,
-		pgRevisionCol, pgMessageCols, roleClause, pgMessageCols, boundaryClause,
+		pgRevisionCol, pgMessageCols, roleClause, pgMessageCols,
 		pgMessageCols, roleClause, len(roleArgs)+4)
 	args := append([]any{sessionID, anchor, max(w.Before, 0)}, roleArgs...)
 	args = append(args, max(w.After, 0))

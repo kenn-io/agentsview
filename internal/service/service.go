@@ -45,6 +45,10 @@ var ErrAroundMutuallyExclusive = errors.New(
 // is set without Around. The HTTP handler maps it to a 400 response.
 var ErrBeforeAfterRequireAround = errors.New("before/after require around")
 
+var ErrCompactBoundaryAround = db.ErrCompactBoundaryAround
+
+const CompactionSummariesAPIVersion = 19
+
 // ErrSemanticUnavailable is returned by SearchContent for modes
 // "semantic" and hybrid requests without keyword fallback when the backing
 // store has no VectorSearcher wired in.
@@ -454,6 +458,7 @@ type ListFilter struct {
 	AutomatedFilterSet bool   `json:"-"`
 	IncludeAutomated   bool   `json:"include_automated,omitempty"`
 	IncludeChildren    bool   `json:"include_children,omitempty"`
+	MatchEachSession   bool   `json:"match_each_session,omitempty"`
 	IncludeSource      bool   `json:"include_source,omitempty"`
 	Outcome            string `json:"outcome,omitempty"`      // comma-separated
 	HealthGrade        string `json:"health_grade,omitempty"` // comma-separated

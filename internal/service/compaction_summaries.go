@@ -3,9 +3,14 @@ package service
 import (
 	"context"
 	"errors"
-	"time"
+	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
+)
+
+const (
+	DefaultCompactionSessionLimit = 20
+	MaxCompactionSessionLimit     = 100
 )
 
 type CompactionSummariesRequest struct {
@@ -32,19 +37,19 @@ func CompactionSummaries(ctx context.Context, svc SessionService, req Compaction
 	if (req.SessionID == "") == (req.ActiveSince == "") {
 		return out, errors.New("provide exactly one of session_id or active_since")
 	}
+	if req.SessionID != "" && req.Cursor != "" {
+		return out, errors.New("cursor requires active_since")
+	}
 	ids := []string{req.SessionID}
 	if req.ActiveSince != "" {
-		if _, err := time.Parse(time.RFC3339, req.ActiveSince); err != nil {
-			return out, err
-		}
 		limit := req.Limit
 		if limit <= 0 {
-			limit = 20
+			limit = DefaultCompactionSessionLimit
 		}
-		if limit > 100 {
-			limit = 100
+		if limit > MaxCompactionSessionLimit {
+			limit = MaxCompactionSessionLimit
 		}
-		page, err := svc.List(ctx, ListFilter{ActiveSince: req.ActiveSince, Cursor: req.Cursor, Limit: limit, IncludeOneShot: true, OneShotFilterSet: true, IncludeAutomated: true, AutomatedFilterSet: true, IncludeChildren: true})
+		page, err := svc.List(ctx, ListFilter{ActiveSince: req.ActiveSince, Cursor: req.Cursor, Limit: limit, IncludeOneShot: true, OneShotFilterSet: true, IncludeAutomated: true, AutomatedFilterSet: true, MatchEachSession: true})
 		if err != nil {
 			return out, err
 		}
@@ -62,7 +67,9 @@ func CompactionSummaries(ctx context.Context, svc SessionService, req Compaction
 				return out, err
 			}
 			for _, m := range page.Messages {
-				out.Summaries = append(out.Summaries, CompactionSummary{SessionID: id, Ordinal: m.Ordinal, Timestamp: m.Timestamp, Content: m.Content})
+				if strings.TrimSpace(m.Content) != "" {
+					out.Summaries = append(out.Summaries, CompactionSummary{SessionID: id, Ordinal: m.Ordinal, Timestamp: m.Timestamp, Content: m.Content})
+				}
 			}
 			if len(page.Messages) < db.MaxMessageLimit {
 				break

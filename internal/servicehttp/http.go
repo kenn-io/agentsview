@@ -322,9 +322,29 @@ func (b *httpBackend) requireSessionAnnotations(ctx context.Context) error {
 	return nil
 }
 
+func (b *httpBackend) requireCompactionSummaries(ctx context.Context) error {
+	version := b.apiVersion
+	if version == 0 {
+		capabilities, err := ProbeHTTPServerCapabilities(ctx, b.baseURL, b.token)
+		if err != nil {
+			return err
+		}
+		version = capabilities.APIVersion
+	}
+	if version < service.CompactionSummariesAPIVersion {
+		return fmt.Errorf("server API version %d does not support compaction summaries; restart or upgrade the server", version)
+	}
+	return nil
+}
+
 func (b *httpBackend) List(
 	ctx context.Context, f service.ListFilter,
 ) (*service.SessionList, error) {
+	if f.MatchEachSession {
+		if err := b.requireCompactionSummaries(ctx); err != nil {
+			return nil, err
+		}
+	}
 	if len(f.Labels) > 0 || f.PR != "" {
 		if err := b.requireSessionAnnotations(ctx); err != nil {
 			return nil, err
@@ -413,7 +433,7 @@ func filterToQuery(f service.ListFilter) (*apiclient.GetAPIV1SessionsQuery, erro
 	if f.ActiveSince != "" {
 		parsedActiveSince, err := time.Parse(time.RFC3339, f.ActiveSince)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("invalid active_since %q: use RFC3339: %w", f.ActiveSince, err)
 		}
 		q.ActiveSince = &parsedActiveSince
 	}
@@ -434,6 +454,9 @@ func filterToQuery(f service.ListFilter) (*apiclient.GetAPIV1SessionsQuery, erro
 	}
 	if f.IncludeChildren {
 		q.IncludeChildren = new(true)
+	}
+	if f.MatchEachSession {
+		q.MatchEachSession = new(true)
 	}
 	if f.IncludeSource {
 		q.IncludeSource = new(true)
@@ -501,6 +524,14 @@ func encodeSessionIDs(ids []string) (string, error) {
 func (b *httpBackend) Messages(
 	ctx context.Context, id string, f service.MessageFilter,
 ) (*service.MessageList, error) {
+	if f.CompactBoundaryOnly && f.Around != nil {
+		return nil, service.ErrCompactBoundaryAround
+	}
+	if f.CompactBoundaryOnly {
+		if err := b.requireCompactionSummaries(ctx); err != nil {
+			return nil, err
+		}
+	}
 	q := &apiclient.GetAPIV1SessionsIDMessagesQuery{}
 	if f.CompactBoundaryOnly {
 		q.CompactBoundary = new(true)
