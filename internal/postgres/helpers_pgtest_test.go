@@ -171,15 +171,15 @@ func testPGServer(tb testing.TB) (*pgTestServer, string) {
 }
 
 // pgTestSlotConfig sizes the server's test slots. Every PostgreSQL
-// connection shares one lock table, sized by max_connections, and a test
-// that creates a schema takes hundreds of locks: on a server with 100
-// connections, 16 concurrent tests ran out of lock memory and 12 did not.
+// connection shares one lock table. Hosted schema creation and cleanup can
+// exhaust it even with 12 concurrent tests on a default 100-connection server.
 // CockroachDB has no shared lock table, so it gets no slots.
 func pgTestSlotConfig(ctx context.Context, admin *sql.DB, baseURL string) (int, string, error) {
-	var maxConnections int
-	err := admin.QueryRowContext(ctx, "SELECT current_setting('max_connections')::int").Scan(&maxConnections)
+	var maxConnections, maxLocksPerTransaction int
+	err := admin.QueryRowContext(ctx, `SELECT current_setting('max_connections')::int,
+ current_setting('max_locks_per_transaction')::int`).Scan(&maxConnections, &maxLocksPerTransaction)
 	if err != nil {
-		return 0, "", fmt.Errorf("reading max_connections: %w", err)
+		return 0, "", fmt.Errorf("reading PostgreSQL test capacity: %w", err)
 	}
 	parsed, err := url.Parse(baseURL)
 	if err != nil {
@@ -192,7 +192,11 @@ func pgTestSlotConfig(ctx context.Context, admin *sql.DB, baseURL string) (int, 
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return 0, "", fmt.Errorf("creating test slot directory: %w", err)
 	}
-	return max(1, maxConnections/8), dir, nil
+	// Reserve 2,048 shared lock entries per test for schema work, including
+	// cleanup, while keeping the existing connection limit. The default
+	// 100 connections and 64 locks per transaction permit three tests at once.
+	lockSlots := maxConnections * maxLocksPerTransaction / 2048
+	return max(1, min(maxConnections/8, lockSlots)), dir, nil
 }
 
 // A top-level test holds one server slot while any of its databases exist.
