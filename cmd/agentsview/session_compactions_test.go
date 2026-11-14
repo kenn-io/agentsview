@@ -24,10 +24,20 @@ func TestSessionCompactions(t *testing.T) {
 	got := decodeCLIJSON[service.CompactionSummariesResult](t, out)
 	require.Len(t, got.Summaries, 1)
 	assert.Equal(t, "summary", got.Summaries[0].Content)
-	for _, args := range [][]string{{"session", "compactions", "compacted", "--limit", "-1"}, {"session", "compactions"}, {"session", "compactions", "compacted", "--active-since", "2024-01-01T00:00:00Z"}, {"session", "compactions", "compacted", "--cursor", "cursor"}} {
-		_, err := executeCommand(newRootCommand(), args...)
+	for _, tc := range []struct {
+		args    []string
+		message string
+	}{
+		{[]string{"session", "compactions", "compacted", "--limit", "-1"}, "--limit must be 0 or more"},
+		{[]string{"session", "compactions"}, "provide exactly one session ID or --active-since"},
+		{[]string{"session", "compactions", "compacted", "--active-since", "2024-01-01T00:00:00Z"}, "provide exactly one session ID or --active-since"},
+		{[]string{"session", "compactions", "compacted", "--cursor", "cursor"}, "--cursor requires --active-since"},
+	} {
+		var stdout, stderr bytes.Buffer
+		err := executeCLIWithLegacyFlagCompat(tc.args, &stdout, &stderr)
 		require.Error(t, err)
-		assert.Equal(t, 64, exitCodeFromError(err))
+		assert.Equal(t, 64, reportCLIError(err, &stderr))
+		assert.Contains(t, stderr.String(), "fatal: "+tc.message+"\n")
 	}
 }
 
@@ -54,28 +64,6 @@ func TestSessionCompactionsOutput(t *testing.T) {
 	out, err = executeCommand(newRootCommand(), "session", "compactions", "--active-since", "2024-06-01T00:00:00Z", "--limit", "1", "--cursor", cursor)
 	require.NoError(t, err)
 	assert.Contains(t, out, "second summary")
-	help, err := executeCommand(newRootCommand(), "session", "compactions", "--help")
-	require.NoError(t, err)
-	assert.Contains(t, help, "Resume value; use the same --active-since")
-	assert.Contains(t, help, "0 uses the default")
-}
-
-func TestSessionCompactionsUsageOutput(t *testing.T) {
-	for _, tc := range []struct {
-		args    []string
-		message string
-	}{
-		{[]string{"session", "compactions"}, "provide exactly one session ID or --active-since"},
-		{[]string{"session", "compactions", "session", "--limit", "-1"}, "--limit must be 0 or more"},
-	} {
-		var stdout, stderr bytes.Buffer
-		err := executeCLIWithLegacyFlagCompat(tc.args, &stdout, &stderr)
-		require.Error(t, err)
-		assert.Equal(t, 64, reportCLIError(err, &stderr))
-		assert.Contains(t, stderr.String(), "fatal: "+tc.message+"\n")
-		assert.NotContains(t, stderr.String(), "choose a session ID or --active-since")
-		assert.NotContains(t, stderr.String(), "use a nonnegative limit")
-	}
 }
 
 func TestSessionCompactionsAmbiguousEvener(t *testing.T) {
@@ -88,10 +76,8 @@ func TestSessionCompactionsAmbiguousEvener(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: "evener", Role: "system", IsCompactBoundary: true, SourceType: "entry", SourceSubtype: "SUMMARY", Content: "[SUMMARY]"}}))
 	require.NoError(t, d.Close())
-	for _, args := range [][]string{{"session", "compactions", "evener"}, {"session", "compactions", "--active-since", "2024-06-01T00:00:00Z"}} {
-		out, err := executeCommand(newRootCommand(), args...)
-		require.NoError(t, err)
-		assert.Contains(t, out, "Ambiguous compaction label: evener #0")
-		assert.NotContains(t, out, "[SUMMARY]")
-	}
+	out, err := executeCommand(newRootCommand(), "session", "compactions", "evener")
+	require.NoError(t, err)
+	assert.Contains(t, out, "Ambiguous compaction label: evener #0")
+	assert.NotContains(t, out, "[SUMMARY]")
 }

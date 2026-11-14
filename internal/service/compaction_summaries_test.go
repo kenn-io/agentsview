@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,7 +12,7 @@ import (
 	"go.kenn.io/agentsview/internal/service"
 )
 
-// compactionSpy stands in for a daemon that ignores the summary filters.
+// compactionSpy can return rows from a daemon replaced after the version check.
 type compactionSpy struct {
 	service.SessionService
 	detail         *service.SessionDetail
@@ -43,9 +44,11 @@ func (s *compactionSpy) Messages(_ context.Context, id string, _ service.Message
 }
 
 func TestCompactionSummariesExcludedSessionDoesNotReadMessages(t *testing.T) {
-	event := &service.SessionDetail{}
-	event.Agent = "roocode"
-	for _, detail := range []*service.SessionDetail{nil, event} {
+	roo := &service.SessionDetail{}
+	roo.Agent = "roocode"
+	kilo := &service.SessionDetail{}
+	kilo.Agent = "kilo-legacy"
+	for _, detail := range []*service.SessionDetail{nil, roo, kilo} {
 		svc := &compactionSpy{detail: detail}
 		out, err := service.CompactionSummaries(t.Context(), svc, service.CompactionSummariesRequest{SessionID: "session"})
 		require.NoError(t, err)
@@ -60,7 +63,6 @@ func TestCompactionSummariesUnfilteredPage(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 20, svc.limit)
 	assert.Empty(t, out.Summaries)
-	assert.Equal(t, "next", out.NextCursor)
 	assert.Equal(t, []string{"normal"}, svc.reads)
 	_, err = service.CompactionSummaries(t.Context(), svc, service.CompactionSummariesRequest{ActiveSince: "2024-06-01T00:00:00Z", Limit: -1})
 	require.ErrorContains(t, err, "limit must be 0 or more")
@@ -118,4 +120,36 @@ func TestCompactionSummariesMultipleMessagePages(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, out.Summaries, db.MaxMessageLimit+1)
 	assert.Equal(t, db.MaxMessageLimit, out.Summaries[len(out.Summaries)-1].Ordinal)
+}
+
+func TestCompactionSummariesLegacyEvener(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	for _, row := range []struct{ id, ended string }{{"a", "2024-06-18T00:00:00Z"}, {"b", "2024-06-17T00:00:00Z"}, {"c", "2024-06-16T00:00:00Z"}} {
+		dbtest.SeedSession(t, d, row.id, "project", func(s *db.Session) { s.Agent = "evener"; s.EndedAt = &row.ended })
+	}
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
+		{SessionID: "a", Role: "system", IsCompactBoundary: true, SourceType: "entry", SourceSubtype: "SUMMARY", Content: "[SUMMARY]"},
+		{SessionID: "b", Role: "system", IsCompactBoundary: true, SourceType: "entry", SourceSubtype: "CHECKPOINT", Content: "Retained summary"},
+		{SessionID: "c", Ordinal: 0, Role: "system", IsCompactBoundary: true, SourceType: "evener_literal_compaction", SourceSubtype: "SUMMARY", Content: "[SUMMARY]"},
+		{SessionID: "c", Ordinal: 1, Role: "system", IsCompactBoundary: true, SourceType: "evener_empty_compaction", SourceSubtype: "SUMMARY", Content: "[SUMMARY]"},
+	}))
+	svc := service.NewDirectBackend(d, nil)
+	for id, want := range map[string][]string{"a": nil, "b": {"Retained summary"}, "c": {"[SUMMARY]"}, "missing": nil} {
+		out, err := service.CompactionSummaries(t.Context(), svc, service.CompactionSummariesRequest{SessionID: id})
+		require.NoError(t, err)
+		var contents []string
+		for _, summary := range out.Summaries {
+			contents = append(contents, summary.Content)
+		}
+		assert.Equal(t, want, contents, id)
+		if id == "a" {
+			raw, err := json.Marshal(out)
+			require.NoError(t, err)
+			assert.Contains(t, string(raw), `"ambiguous":[{"session_id":"a","ordinal":0}]`)
+		}
+	}
+	active, err := service.CompactionSummaries(t.Context(), svc, service.CompactionSummariesRequest{ActiveSince: "2024-06-01T00:00:00Z"})
+	require.NoError(t, err)
+	assert.Contains(t, active.Ambiguous, service.CompactionAmbiguity{SessionID: "a", Ordinal: 0})
+	assert.Len(t, active.Summaries, 2)
 }

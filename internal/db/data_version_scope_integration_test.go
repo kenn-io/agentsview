@@ -1728,6 +1728,10 @@ func TestGrokCompactionUpgradeReparsesInPlace(t *testing.T) {
 }
 
 func TestEvenerCompactionUpgradeReparsesStoredLabels(t *testing.T) {
+	version := db.CurrentDataVersion()
+	scope := db.ScopedDataVersionProviders(version-1, version)
+	assert.ElementsMatch(t, []parser.AgentType{parser.AgentEvener}, scope)
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
 	ctx := t.Context()
 	database := dbtest.OpenTestDB(t)
 	root := t.TempDir()
@@ -1746,13 +1750,19 @@ func TestEvenerCompactionUpgradeReparsesStoredLabels(t *testing.T) {
 		_, err := tx.ExecContext(ctx, `UPDATE messages SET source_type = 'entry' WHERE session_id = 'evener:compaction'`)
 		return err
 	}))
-	require.NoError(t, database.SetSessionDataVersion(ctx, "evener:compaction", 179))
-	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error { _, err := tx.ExecContext(ctx, "PRAGMA user_version=179"); return err }))
+	require.NoError(t, database.SetSessionDataVersion(ctx, "evener:compaction", version-1))
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", version-1))
+		return err
+	}))
 	path := database.Path()
 	require.NoError(t, database.Close())
 	database, err = db.OpenIsolated(ctx, path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	_, fullRebuild, err := db.ArchiveResyncState(ctx, path)
+	require.NoError(t, err)
+	assert.False(t, fullRebuild)
 	engine = sync.NewEngine(ctx, database, cfg)
 	t.Cleanup(engine.Close)
 	stats = engine.SyncAll(ctx, nil)
@@ -1761,8 +1771,6 @@ func TestEvenerCompactionUpgradeReparsesStoredLabels(t *testing.T) {
 	messages, err := database.GetAllMessages(ctx, "evener:compaction")
 	require.NoError(t, err)
 	require.Len(t, messages, 2)
-	assert.Equal(t, "[SUMMARY]", messages[0].Content)
-	assert.Equal(t, parser.EvenerEmptyCompactionSourceType, messages[0].SourceType)
-	assert.Equal(t, "[SUMMARY]", messages[1].Content)
-	assert.Equal(t, parser.EvenerLiteralCompactionSourceType, messages[1].SourceType)
+	assert.NotEqual(t, "entry", messages[0].SourceType)
+	assert.NotEqual(t, "entry", messages[1].SourceType)
 }

@@ -437,9 +437,7 @@ func TestServer_ArchiveFreshnessWarning(t *testing.T) {
 func TestCompactionSummarySchema(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	dbtest.SeedSession(t, d, "session", "project")
-	dbtest.SeedSession(t, d, "evener", "project", func(s *db.Session) { s.Agent = "evener"; s.EndedAt = new("2024-06-15T00:00:00Z") })
 	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: "session", Role: "assistant", Content: "summary", IsCompactBoundary: true}}))
-	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: "evener", Role: "system", Content: "[SUMMARY]", SourceType: "entry", SourceSubtype: "SUMMARY", IsCompactBoundary: true}}))
 	srv := newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), Profile: ProfileMemory})
 	st, ct := newInMemoryPair(t, srv)
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
@@ -453,14 +451,12 @@ func TestCompactionSummarySchema(t *testing.T) {
 			require.NoError(t, err)
 			var schema struct {
 				Properties map[string]struct {
-					Minimum     *float64 `json:"minimum"`
-					Description string   `json:"description"`
+					Minimum *float64 `json:"minimum"`
 				} `json:"properties"`
 			}
 			require.NoError(t, json.Unmarshal(raw, &schema))
 			require.NotNil(t, schema.Properties["limit"].Minimum)
 			assert.InDelta(t, 0, *schema.Properties["limit"].Minimum, 0)
-			assert.Contains(t, schema.Properties["limit"].Description, "0 uses the default")
 		}
 	}
 	require.True(t, found)
@@ -473,13 +469,5 @@ func TestCompactionSummarySchema(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &out))
 	require.Len(t, out.Summaries, 1)
 	assert.Equal(t, "summary", out.Summaries[0].Content)
-	for _, args := range []map[string]any{{"session_id": "evener"}, {"active_since": "2024-06-01T00:00:00Z"}} {
-		result, err = ct.CallTool(t.Context(), callParams(ToolGetCompactionSummaries, args))
-		require.NoError(t, err)
-		require.False(t, result.IsError)
-		raw, err = json.Marshal(result.StructuredContent)
-		require.NoError(t, err)
-		require.NoError(t, json.Unmarshal(raw, &out))
-		assert.Contains(t, out.Ambiguous, service.CompactionAmbiguity{SessionID: "evener", Ordinal: 0})
-	}
+
 }

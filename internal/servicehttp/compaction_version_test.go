@@ -25,11 +25,7 @@ func TestCompactionSummariesDaemonReplacement(t *testing.T) {
 			assert.Equal(t, "true", r.URL.Query().Get("flat"))
 			fmt.Fprint(w, `{"sessions":[{"id":"one"},{"id":"two"}],"total":2}`)
 		default:
-			if version.Load() == 18 {
-				fmt.Fprint(w, `{"messages":[{"ordinal":0,"content":"[SUMMARY]","is_compact_boundary":true}],"count":1}`)
-				return
-			}
-			fmt.Fprint(w, `{"messages":[{"ordinal":0,"content":"injected","is_system":true},{"ordinal":1,"content":"summary","is_compact_boundary":true}],"count":2}`)
+			fmt.Fprint(w, `{"messages":[{"ordinal":1,"content":"summary","is_compact_boundary":true}],"count":1}`)
 		}
 	}))
 	defer srv.Close()

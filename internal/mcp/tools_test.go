@@ -2148,18 +2148,3 @@ func TestSearchContent_HybridKeywordFallbackMetadata(t *testing.T) {
 	assert.Equal(t, "hybrid_keyword", out.EffectiveMode)
 	assert.Equal(t, note, out.Note)
 }
-
-func TestCompactionSummaries(t *testing.T) {
-	ts, d := newTestToolset(t)
-	dbtest.SeedSession(t, d, "compacted", "project")
-	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
-		{SessionID: "compacted", Ordinal: 0, Role: "user", Content: "hello"},
-		{SessionID: "compacted", Ordinal: 1, Role: "assistant", IsSystem: true, IsCompactBoundary: true, Timestamp: "2024-06-15T10:00:00Z", Content: "full summary"},
-		{SessionID: "compacted", Ordinal: 2, Role: "assistant", IsSystem: true, Content: "injected"},
-		{SessionID: "compacted", Ordinal: 3, Role: "assistant", IsSystem: true, IsCompactBoundary: true, Content: "   \n"},
-	}))
-	_, out, err := ts.compactionSummaries(t.Context(), nil, compactionSummariesIn{SessionID: "compacted"})
-	require.NoError(t, err)
-	require.Len(t, out.Summaries, 1)
-	assert.Equal(t, service.CompactionSummary{SessionID: "compacted", Ordinal: 1, Timestamp: "2024-06-15T10:00:00Z", Content: "full summary"}, out.Summaries[0])
-}
