@@ -303,7 +303,7 @@ func (b *httpBackend) FindSessionIDsByRawSuffix(
 }
 
 // Probe only when the backend has no version so unfiltered lists need no extra request.
-func (b *httpBackend) requireSessionAnnotations(ctx context.Context) error {
+func (b *httpBackend) requireAPIVersion(ctx context.Context, minVersion int, feature string) error {
 	version := b.apiVersion
 	if version == 0 {
 		capabilities, err := ProbeHTTPServerCapabilities(ctx, b.baseURL, b.token)
@@ -312,11 +312,10 @@ func (b *httpBackend) requireSessionAnnotations(ctx context.Context) error {
 		}
 		version = capabilities.APIVersion
 	}
-	if version < service.SessionAnnotationsAPIVersion {
+	if version < minVersion {
 		return fmt.Errorf(
-			"server API version %d does not support session labels, parent links, or their filters; "+
-				"restart or upgrade the server",
-			version,
+			"server API version %d does not support %s; restart or upgrade the server",
+			version, feature,
 		)
 	}
 	return nil
@@ -326,7 +325,7 @@ func (b *httpBackend) List(
 	ctx context.Context, f service.ListFilter,
 ) (*service.SessionList, error) {
 	if len(f.Labels) > 0 || f.PR != "" {
-		if err := b.requireSessionAnnotations(ctx); err != nil {
+		if err := b.requireAPIVersion(ctx, service.SessionAnnotationsAPIVersion, "session labels, parent links, or their filters"); err != nil {
 			return nil, err
 		}
 	}
@@ -1309,9 +1308,6 @@ func (b *httpBackend) UsagePairwiseComparison(
 	return out, nil
 }
 
-// recallTimeBoundsAPIVersion mirrors server.RecallTimeBoundsAPIVersion.
-const recallTimeBoundsAPIVersion = 19
-
 func (b *httpBackend) ListRecallEntries(
 	ctx context.Context, f service.RecallFilter,
 ) (*service.RecallList, error) {
@@ -1322,17 +1318,9 @@ func (b *httpBackend) ListRecallEntries(
 	if err != nil {
 		return nil, err
 	}
-	if f.UpdatedSince != "" || f.CreatedSince != "" {
-		version := b.apiVersion
-		if version == 0 {
-			capabilities, err := probeHTTPServerCapabilities(ctx, api)
-			if err != nil {
-				return nil, err
-			}
-			version = capabilities.APIVersion
-		}
-		if version < recallTimeBoundsAPIVersion {
-			return nil, fmt.Errorf("server API version %d does not support recall time bounds; upgrade or restart the server", version)
+	if f.UpdatedSince != "" || f.Cursor != "" {
+		if err := b.requireAPIVersion(ctx, service.RecallUpdatedSinceAPIVersion, "Recall time bounds and cursors"); err != nil {
+			return nil, err
 		}
 	}
 	q := recallFilterToQuery(f)
@@ -1527,9 +1515,6 @@ func recallFilterToQuery(f service.RecallFilter) *apiclient.GetAPIV1RecallEntrie
 	q := &apiclient.GetAPIV1RecallEntriesQuery{}
 	if f.UpdatedSince != "" {
 		q.UpdatedSince = new(f.UpdatedSince)
-	}
-	if f.CreatedSince != "" {
-		q.CreatedSince = new(f.CreatedSince)
 	}
 	if f.Cursor != "" {
 		q.Cursor = new(f.Cursor)

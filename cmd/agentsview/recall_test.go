@@ -337,7 +337,6 @@ func TestRecallListUsesExplicitServerURL(t *testing.T) {
 			return
 		}
 		assert.Equal(t, "2026-11-12T22:00:00-05:00", r.URL.Query().Get("updated_since"))
-		assert.Equal(t, "2026-11-12T20:00:00Z", r.URL.Query().Get("created_since"))
 		assert.Equal(t, "page-token", r.URL.Query().Get("cursor"))
 		if !assert.Equal(t, "agentsview", r.URL.Query().Get("project")) {
 			return
@@ -360,7 +359,7 @@ func TestRecallListUsesExplicitServerURL(t *testing.T) {
 
 	out, err := executeCommand(newRootCommand(),
 		"recall", "--server", " "+srv.URL+"/ ",
-		"list", "--project", "agentsview", "--updated-since", "2026-11-12T22:00:00-05:00", "--created-since", "2026-11-12T20:00:00Z", "--cursor", "page-token", "--format", "json")
+		"list", "--project", "agentsview", "--updated-since", "2026-11-12T22:00:00-05:00", "--cursor", "page-token", "--format", "json")
 
 	require.NoError(t, err)
 	assert.Equal(t, "/api/v1/recall/entries", gotPath)
@@ -2103,7 +2102,7 @@ func TestRecallListFiltersBySupersessionLinks(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Contains(t, replacements, "m-cli-replacement")
-	assert.NotContains(t, replacements, "m-cli  procedure")
+	assert.NotContains(t, replacements, "ID:       m-cli\n")
 
 	archived, err := executeCommand(newRootCommand(),
 		"recall", "list",
@@ -2112,8 +2111,8 @@ func TestRecallListFiltersBySupersessionLinks(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Contains(t, archived, "m-cli")
-	assert.Contains(t, archived, "superseded_by=m-cli-replacement")
-	assert.NotContains(t, archived, "m-cli-replacement  procedure")
+	assert.Contains(t, archived, "Superseded by: m-cli-replacement")
+	assert.NotContains(t, archived, "ID:       m-cli-replacement\n")
 }
 
 func TestRecallListAndGetHuman(t *testing.T) {
@@ -2126,7 +2125,8 @@ func TestRecallListAndGetHuman(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, list, "m-cli")
 	assert.Contains(t, list, "Check cwd before file reads")
-	assert.Contains(t, list, "review transferable=false provenance_ok=false evidence=1")
+	assert.Contains(t, list, "Review:   human_reviewed")
+	assert.Contains(t, list, "Evidence: recall-session:3-7")
 
 	get, err := executeCommand(newRootCommand(), "recall", "get", "m-cli")
 	require.NoError(t, err)
@@ -2207,8 +2207,8 @@ func TestRecallListHumanShowsSupersessionLifecycle(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Contains(t, archived, "m-cli")
-	assert.Contains(t, archived, "lifecycle status=archived")
-	assert.Contains(t, archived, "superseded_by=m-cli-replacement")
+	assert.Contains(t, archived, "Status:   archived")
+	assert.Contains(t, archived, "Superseded by: m-cli-replacement")
 }
 
 // setRecallTestEnv points the CLI at the given data dir and registers an
@@ -2621,8 +2621,18 @@ func seedRecallEntrySourceSessionFixture(
 func TestRecallTimeFlagsOnlyOnList(t *testing.T) {
 	list := newRecallListCommand()
 	stats := newRecallStatsCommand()
-	for _, name := range []string{"updated-since", "created-since", "cursor"} {
+	for _, name := range []string{"updated-since", "cursor"} {
 		assert.NotNil(t, list.Flags().Lookup(name))
 		assert.Nil(t, stats.Flags().Lookup(name))
 	}
+}
+
+func TestRecallListHumanShowsBodyAndEvidence(t *testing.T) {
+	dataDir := t.TempDir()
+	setRecallTestEnv(t, dataDir)
+	seedRecallEntryFixture(t, dataDir)
+	out, err := executeCommand(newRootCommand(), "recall", "list", "--updated-since", "2020-01-01T00:00:00Z")
+	require.NoError(t, err)
+	assert.Contains(t, out, "Body:     Verify cwd before retrying failed reads.")
+	assert.Contains(t, out, "recall-session:3-7")
 }

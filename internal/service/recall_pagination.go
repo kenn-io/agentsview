@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json/v2"
+
 	"go.kenn.io/agentsview/internal/db"
 )
 
@@ -32,6 +33,7 @@ func ListRecentRecallEntriesPage(
 	pageLimit int,
 	cursor *RecallListCursor,
 ) ([]db.RecallResult, string, error) {
+	pageLimit = db.RecallLimit(pageLimit)
 	if cursor != nil {
 		if cursor.Kind != RecallListCursorRecency {
 			return nil, "", db.ErrInvalidRecallQuery

@@ -230,7 +230,6 @@ type ContentSearchResult struct {
 // RecallFilter mirrors GET /api/v1/recall/entries query parameters.
 type RecallFilter struct {
 	UpdatedSince        string `json:"updated_since,omitempty"`
-	CreatedSince        string `json:"created_since,omitempty"`
 	Cursor              string `json:"cursor,omitempty"`
 	Query               string `json:"q,omitempty"`
 	Project             string `json:"project,omitempty"`
@@ -432,6 +431,9 @@ type SessionList struct {
 // SessionAnnotationsAPIVersion is the first daemon API that applies label
 // and pull request filters; older daemons ignore them.
 const SessionAnnotationsAPIVersion = 11
+
+// RecallUpdatedSinceAPIVersion first supports Recall time bounds and cursors.
+const RecallUpdatedSinceAPIVersion = 19
 
 // ListFilter mirrors the HTTP query parameters in handleListSessions.
 // Field names map to HTTP query param names via json tags.

@@ -1461,11 +1461,7 @@ func (b *directBackend) ListRecallEntries(
 			}
 			cursor = &decoded
 		}
-		limit := query.Limit
-		if limit <= 0 {
-			limit = db.DefaultRecallEntryLimit
-		}
-		entries, next, err := ListRecentRecallEntriesPage(ctx, b.db, query, limit, cursor)
+		entries, next, err := ListRecentRecallEntriesPage(ctx, b.db, query, query.Limit, cursor)
 		if err != nil {
 			return nil, err
 		}
@@ -1518,7 +1514,6 @@ func recallFilterToDB(f RecallFilter) db.RecallQuery {
 	return db.RecallQuery{
 		Text:                f.Query,
 		UpdatedSince:        f.UpdatedSince,
-		CreatedSince:        f.CreatedSince,
 		Project:             f.Project,
 		CWD:                 f.CWD,
 		GitBranch:           f.GitBranch,

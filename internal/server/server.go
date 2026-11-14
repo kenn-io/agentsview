@@ -77,8 +77,6 @@ type VersionInfo struct {
 // CLI or daemon.
 const (
 	APIVersion = 19
-	// RecallTimeBoundsAPIVersion first supports recall time bounds.
-	RecallTimeBoundsAPIVersion = 19
 	// KataAPIVersion is the first daemon API that serves /api/v1/kata/status.
 	KataAPIVersion = 14
 	// FrictionAPIVersion is the first daemon API that serves

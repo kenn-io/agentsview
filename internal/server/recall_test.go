@@ -394,13 +394,13 @@ func TestListRecallEntriesPaginatesWithoutRepeatingEntries(t *testing.T) {
 		})
 	}
 
-	first := te.get(t, "/api/v1/recall/entries?limit=2&updated_since=2020-01-01T00:00:00Z&created_since=2020-01-01T00:00:00Z")
+	first := te.get(t, "/api/v1/recall/entries?limit=2&updated_since=2020-01-01T00:00:00Z")
 	assertStatus(t, first, http.StatusOK)
 	firstPage := decode[listRecallEntriesResponse](t, first)
 	require.Len(t, firstPage.RecallEntries, 2)
 	require.NotEmpty(t, firstPage.NextCursor)
 
-	second := te.get(t, "/api/v1/recall/entries?limit=2&updated_since=2020-01-01T00:00:00Z&created_since=2020-01-01T00:00:00Z&cursor="+
+	second := te.get(t, "/api/v1/recall/entries?limit=2&updated_since=2020-01-01T00:00:00Z&cursor="+
 		url.QueryEscape(firstPage.NextCursor))
 	assertStatus(t, second, http.StatusOK)
 	secondPage := decode[listRecallEntriesResponse](t, second)
@@ -1986,7 +1986,7 @@ func TestListRecallEntriesTimeBounds(t *testing.T) {
 	te := setup(t)
 	seedRecallEntrySession(t, te)
 	seedRecallEntry(t, te, db.RecallEntry{ID: "bounds", Title: "bounds", Body: "bounds", SourceSessionID: "recall-session"})
-	for _, param := range []string{"updated_since", "created_since"} {
+	for _, param := range []string{"updated_since"} {
 		bad := te.get(t, "/api/v1/recall/entries?"+param+"=invalid")
 		assertStatus(t, bad, http.StatusBadRequest)
 		future := te.get(t, "/api/v1/recall/entries?"+param+"=2999-01-01T00:00:00Z")
@@ -1998,13 +1998,14 @@ func TestListRecallEntriesTimeBounds(t *testing.T) {
 func TestListRecallEntriesTimeBoundsIncludeArchived(t *testing.T) {
 	te := setup(t)
 	seedRecallEntrySession(t, te)
-	seedRecallEntry(t, te, db.RecallEntry{ID: "archived", Status: "archived", Title: "archived", Body: "archived", SourceSessionID: "recall-session"})
-	for _, param := range []string{"updated_since", "created_since"} {
+	seedRecallEntry(t, te, db.RecallEntry{ID: "archived", Status: "archived", Title: "archived", Body: "archived", SourceSessionID: "recall-session", SourceRunID: "generation"})
+	for _, param := range []string{"updated_since"} {
 		w := te.get(t, "/api/v1/recall/entries?"+param+"=2020-01-01T00:00:00Z")
 		assertStatus(t, w, http.StatusOK)
 		entries := decode[listRecallEntriesResponse](t, w).RecallEntries
 		require.Len(t, entries, 1)
 		assert.Equal(t, "archived", entries[0].Status)
+		assert.Equal(t, "generation", entries[0].SourceRunID)
 	}
 	w := te.get(t, "/api/v1/recall/entries")
 	assertStatus(t, w, http.StatusOK)

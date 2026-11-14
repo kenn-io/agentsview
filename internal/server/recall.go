@@ -82,7 +82,6 @@ func (s *Server) handleListRecallEntries(
 	query := db.RecallQuery{
 		Text:                q.Get("q"),
 		UpdatedSince:        q.Get("updated_since"),
-		CreatedSince:        q.Get("created_since"),
 		Project:             q.Get("project"),
 		CWD:                 q.Get("cwd"),
 		GitBranch:           q.Get("git_branch"),
@@ -118,15 +117,8 @@ func (s *Server) handleListRecallEntries(
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	pageLimit := query.Limit
-	if pageLimit <= 0 {
-		pageLimit = db.DefaultRecallEntryLimit
-	}
-	if pageLimit > db.MaxRecallEntryLimit {
-		pageLimit = db.MaxRecallEntryLimit
-	}
 	results, nextCursor, err := s.listRecallEntriesPage(
-		r.Context(), query, pageLimit, cursor,
+		r.Context(), query, query.Limit, cursor,
 	)
 	if err != nil {
 		if handleContextError(w, err) {
@@ -165,7 +157,7 @@ func (s *Server) listRecallEntriesPage(
 ) ([]db.RecallResult, string, error) {
 	if strings.TrimSpace(query.Text) != "" {
 		return s.listRankedRecallEntriesPage(
-			ctx, query, pageLimit, cursor,
+			ctx, query, db.RecallLimit(pageLimit), cursor,
 		)
 	}
 	return service.ListRecentRecallEntriesPage(ctx, s.db, query, pageLimit, cursor)

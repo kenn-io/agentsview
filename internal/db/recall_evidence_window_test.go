@@ -1298,3 +1298,25 @@ func captureRecallEvidenceLog(t *testing.T) *recallEvidenceLogBuffer {
 	})
 	return &output
 }
+
+func TestRecallEvidenceReconciliationUpdatesDeltaOnlyWhenPointerChanges(t *testing.T) {
+	d := testDB(t)
+	seedRecallEvidenceWindow(t, d, "rewrite-delta", 10, "stable", "")
+	insertVerifiedRecallSelection(t, d, "delta-entry", "rewrite-delta", 10, 11, []string{"tool-a"})
+	_, err := d.getWriter().Exec(t.Context(), `UPDATE recall_entries SET updated_at = '2020-01-01T00:00:00.000Z' WHERE id = 'delta-entry'`)
+	require.NoError(t, err)
+	unchanged := shiftedRecallMessages(t, d, "rewrite-delta", 0)
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "rewrite-delta", unchanged))
+	assert.Equal(t, "2020-01-01T00:00:00.000Z", requireRecallEntry(t, d, "delta-entry").UpdatedAt)
+	entries, err := d.ListRecallEntries(t.Context(), RecallQuery{UpdatedSince: "2021-01-01T00:00:00Z"})
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+	shifted := shiftedRecallMessages(t, d, "rewrite-delta", 1)
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "rewrite-delta", shifted))
+	entries, err = d.ListRecallEntries(t.Context(), RecallQuery{UpdatedSince: "2021-01-01T00:00:00Z"})
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "delta-entry", entries[0].ID)
+	require.Len(t, entries[0].Evidence, 1)
+	assert.Equal(t, 11, entries[0].Evidence[0].MessageStartOrdinal)
+}

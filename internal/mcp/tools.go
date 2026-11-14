@@ -263,7 +263,6 @@ func (t *toolset) queryRecall(
 
 type listRecallIn struct {
 	UpdatedSince    string `json:"updated_since,omitempty" jsonschema:"Include entries updated at or after this RFC3339 timestamp."`
-	CreatedSince    string `json:"created_since,omitempty" jsonschema:"Include entries created at or after this RFC3339 timestamp."`
 	Project         string `json:"project,omitempty"`
 	CWD             string `json:"cwd,omitempty"`
 	GitBranch       string `json:"git_branch,omitempty"`
@@ -286,7 +285,7 @@ type listRecallOut struct {
 
 func (t *toolset) listRecall(ctx context.Context, _ *mcp.CallToolRequest, in listRecallIn) (*mcp.CallToolResult, listRecallOut, error) {
 	result, err := t.svc.ListRecallEntries(ctx, service.RecallFilter{
-		UpdatedSince: in.UpdatedSince, CreatedSince: in.CreatedSince, Project: in.Project,
+		UpdatedSince: in.UpdatedSince, Project: in.Project,
 		CWD: in.CWD, GitBranch: in.GitBranch, Agent: in.Agent, Type: in.Type,
 		Scope: in.Scope, Status: in.Status, ExtractorMethod: in.ExtractorMethod,
 		SourceRunID: in.SourceRunID, TrustedOnly: in.TrustedOnly, Cursor: in.Cursor,

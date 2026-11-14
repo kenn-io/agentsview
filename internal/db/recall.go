@@ -101,10 +101,10 @@ type RecallQuery struct {
 	SupersedesEntryID   string
 	SupersededByEntryID string
 	UpdatedSince        string
-	CreatedSince        string
 	CursorUpdatedAt     string
 	CursorID            string
 	ProbeNext           bool
+	invalidUpdatedSince bool
 	TrustedOnly         bool
 	Limit               int
 }
@@ -722,7 +722,7 @@ func (db *DB) ListRecallEntries(
 	}
 	q = NormalizeRecallQuery(q)
 	where, args := buildRecallEntryWhere(q, false)
-	limit := recallLimit(q.Limit)
+	limit := RecallLimit(q.Limit)
 	if q.ProbeNext {
 		limit++
 	}
@@ -848,7 +848,7 @@ func (db *DB) listRecallFTSCandidates(
 	ctx context.Context, q RecallQuery, terms []string,
 ) ([]RecallEntry, error) {
 	where, args := buildRecallEntryWhere(q, false)
-	limit := recallLimit(q.Limit)
+	limit := RecallLimit(q.Limit)
 	query := "SELECT " + recallBaseColsQualified +
 		" FROM recall_entries_fts" +
 		" JOIN recall_entries ON recall_entries.rowid = recall_entries_fts.rowid" +
@@ -877,7 +877,7 @@ func (db *DB) listRecallEntryLikeCandidates(
 ) ([]RecallEntry, error) {
 	where, args := buildRecallEntryWhere(q, false)
 	textWhere, textArgs := buildRecallEntryTextWhere(terms)
-	limit := recallLimit(q.Limit)
+	limit := RecallLimit(q.Limit)
 	query := "SELECT " + recallBaseCols +
 		" FROM recall_entries WHERE " + where +
 		" AND (" + textWhere + ")" +
@@ -963,7 +963,7 @@ func (db *DB) listRecallEvidenceFTSCandidates(
 ) ([]RecallEntry, error) {
 	where, args := buildRecallEntryWhere(q, false)
 	scoreExpr, scoreArgs := buildRecallEvidenceMatchScoreExpr(terms)
-	limit := recallLimit(q.Limit)
+	limit := RecallLimit(q.Limit)
 	query := "SELECT " + recallBaseColsQualified +
 		" FROM recall_evidence_fts" +
 		" JOIN recall_evidence" +
@@ -993,7 +993,7 @@ func (db *DB) listRecallEvidenceLikeCandidates(
 	where, args := buildRecallEntryWhere(q, false)
 	textWhere, textArgs := buildRecallEvidenceTextWhere(terms)
 	scoreExpr, scoreArgs := buildRecallEvidenceMatchScoreExpr(terms)
-	limit := recallLimit(q.Limit)
+	limit := RecallLimit(q.Limit)
 	query := "SELECT " + recallBaseColsQualified +
 		" FROM recall_entries" +
 		" JOIN recall_evidence ON recall_evidence.entry_id = recall_entries.id" +
@@ -1085,7 +1085,7 @@ func (db *DB) queryRecallEntriesLexical(
 		byID[m.ID] = m
 	}
 	sortRecallResultsByStableSource(results, byID)
-	results = diversifyRecallResults(results, byID, recallLimit(q.Limit))
+	results = diversifyRecallResults(results, byID, RecallLimit(q.Limit))
 	page := RecallPage{RecallEntries: make([]RecallResult, 0, len(results))}
 	for _, result := range results {
 		m := byID[result.Entry.ID]
@@ -1109,10 +1109,10 @@ func (db *DB) queryRecallEntriesVector(
 			"recall index is not available; run 'agentsview index embeddings build --store recall'",
 		)
 	}
-	limit := recallLimit(q.Limit)
+	limit := RecallLimit(q.Limit)
 	ceiling := searcher.MaxRecallSearchCandidates()
 	k := clampRecallVectorCandidates(
-		max(recallLimit(q.Limit)*4, SemanticOverfetchMin), ceiling,
+		max(RecallLimit(q.Limit)*4, SemanticOverfetchMin), ceiling,
 	)
 	for {
 		hits, exhausted, snapshot, err := searcher.SearchRecall(ctx, q.Text, k)
@@ -1198,7 +1198,7 @@ func (db *DB) recallPageFromVectorHits(
 func (db *DB) queryRecallEntriesHybrid(
 	ctx context.Context, q RecallQuery,
 ) (RecallPage, error) {
-	limit := recallLimit(q.Limit)
+	limit := RecallLimit(q.Limit)
 	candidateQuery := q
 	candidateQuery.Limit = MaxRecallEntryLimit
 	// The vector leg waits on query encoding, so the lexical leg reads after
@@ -1335,15 +1335,18 @@ func NormalizeRecallQuery(q RecallQuery) RecallQuery {
 	q.SourceRunID = strings.TrimSpace(q.SourceRunID)
 	q.SupersedesEntryID = strings.TrimSpace(q.SupersedesEntryID)
 	q.SupersededByEntryID = strings.TrimSpace(q.SupersededByEntryID)
-	for _, value := range []*string{&q.UpdatedSince, &q.CreatedSince} {
-		*value = strings.TrimSpace(*value)
-		if t, err := time.Parse(time.RFC3339, *value); err == nil {
+	q.UpdatedSince = strings.TrimSpace(q.UpdatedSince)
+	q.invalidUpdatedSince = false
+	if q.UpdatedSince != "" {
+		if t, err := time.Parse(time.RFC3339, q.UpdatedSince); err == nil {
 			t = t.UTC()
 			// Stored timestamps have millisecond precision; exclude earlier rows.
 			if remainder := t.Nanosecond() % int(time.Millisecond); remainder != 0 {
 				t = t.Add(time.Millisecond - time.Duration(remainder))
 			}
-			*value = t.Format(extractTimeLayout)
+			q.UpdatedSince = t.Format(extractTimeLayout)
+		} else {
+			q.invalidUpdatedSince = true
 		}
 	}
 	q.CursorUpdatedAt = strings.TrimSpace(q.CursorUpdatedAt)
@@ -1356,12 +1359,8 @@ func NormalizeRecallQuery(q RecallQuery) RecallQuery {
 // for another explicit status is therefore a caller error, not an empty page.
 func ValidateRecallQuery(q RecallQuery) error {
 	q = NormalizeRecallQuery(q)
-	for _, value := range []string{q.UpdatedSince, q.CreatedSince} {
-		if value != "" {
-			if _, err := time.Parse(time.RFC3339, value); err != nil {
-				return fmt.Errorf("%w: invalid timestamp %q", ErrInvalidRecallQuery, value)
-			}
-		}
+	if q.invalidUpdatedSince {
+		return fmt.Errorf("%w: invalid timestamp %q", ErrInvalidRecallQuery, q.UpdatedSince)
 	}
 	switch q.Mode {
 	case RecallQueryModeLexical, RecallQueryModeVector, RecallQueryModeHybrid:
@@ -1530,7 +1529,7 @@ func buildRecallEntryWhere(q RecallQuery, includeText bool) (string, []any) {
 	preds := []string{"1=1"}
 	var args []any
 	status := q.Status
-	if status == "" && (q.TrustedOnly || (q.UpdatedSince == "" && q.CreatedSince == "")) {
+	if status == "" && (q.TrustedOnly || q.UpdatedSince == "") {
 		status = corerecall.StatusAccepted
 	}
 	if status != "" {
@@ -1592,10 +1591,6 @@ func buildRecallEntryWhere(q RecallQuery, includeText bool) (string, []any) {
 	if q.UpdatedSince != "" {
 		preds = append(preds, "updated_at >= ?")
 		args = append(args, q.UpdatedSince)
-	}
-	if q.CreatedSince != "" {
-		preds = append(preds, "created_at >= ?")
-		args = append(args, q.CreatedSince)
 	}
 	if q.CursorUpdatedAt != "" {
 		preds = append(preds,
@@ -1723,7 +1718,8 @@ func recallQueryTerms(text string) []string {
 	return corerecall.ScoringQueryTerms(text)
 }
 
-func recallLimit(limit int) int {
+// RecallLimit returns the effective page size for a Recall list.
+func RecallLimit(limit int) int {
 	if limit <= 0 {
 		return DefaultRecallEntryLimit
 	}

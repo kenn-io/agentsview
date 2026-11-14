@@ -32,7 +32,7 @@ func (s *Server) registerRecallRoutes() {
 		body                        reflect.Type
 		contentType                 string
 	}{
-		{http.MethodGet, "/entries", "List recall entries", s.handleListRecallEntries, reflect.TypeFor[recallEntriesResponse](), "q project cwd git_branch agent type scope status review_state extractor_method source_session_id source_episode_id source_run_id supersedes_entry_id superseded_by_entry_id cursor updated_since created_since", "limit", "trusted_only", nil, ""},
+		{http.MethodGet, "/entries", "List recall entries", s.handleListRecallEntries, reflect.TypeFor[recallEntriesResponse](), "q project cwd git_branch agent type scope status review_state extractor_method source_session_id source_episode_id source_run_id supersedes_entry_id superseded_by_entry_id cursor updated_since", "limit", "trusted_only", nil, ""},
 		{http.MethodGet, "/entries/{id}", "Get recall entry", s.handleGetRecallEntry, reflect.TypeFor[db.RecallEntry](), "", "", "", nil, ""},
 		{http.MethodPost, "/entries/{id}/review", "Review recall entry", s.handleReviewRecallEntry, reflect.TypeFor[db.RecallEntry](), "", "", "", reflect.TypeFor[reviewRecallEntryRequest](), "application/json"},
 		{http.MethodGet, "/extraction/status", "Get recall extraction status", s.handleRecallExtractionStatus, reflect.TypeFor[recallExtractionStatusResponse](), "", "", "", nil, ""},

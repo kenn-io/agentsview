@@ -6,6 +6,7 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1113,7 +1114,7 @@ func TestDirectRecallListPages(t *testing.T) {
 		seedServiceRecallEntry(t, d, db.RecallEntry{ID: id, Title: id, Body: id, SourceSessionID: "recall-session"})
 	}
 	svc := service.NewReadOnlyBackend(d)
-	f := service.RecallFilter{Limit: 2, UpdatedSince: "2020-01-01T00:00:00Z", CreatedSince: "2020-01-01T00:00:00Z"}
+	f := service.RecallFilter{Limit: 2, UpdatedSince: "2020-01-01T00:00:00Z"}
 	first, err := svc.ListRecallEntries(t.Context(), f)
 	require.NoError(t, err)
 	require.Len(t, first.RecallEntries, 2)
@@ -1127,4 +1128,23 @@ func TestDirectRecallListPages(t *testing.T) {
 	f.Query = "page"
 	_, err = svc.ListRecallEntries(t.Context(), f)
 	require.ErrorIs(t, err, db.ErrInvalidRecallQuery)
+}
+
+func TestDirectRecallListClampsLargePage(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	seedServiceRecallEntrySession(t, d)
+	for i := range 502 {
+		seedServiceRecallEntry(t, d, db.RecallEntry{ID: fmt.Sprintf("page-%03d", i), Title: "entry", Body: "entry", SourceSessionID: "recall-session"})
+	}
+	svc := service.NewReadOnlyBackend(d)
+	f := service.RecallFilter{Limit: 1000, UpdatedSince: "2020-01-01T00:00:00Z"}
+	first, err := svc.ListRecallEntries(t.Context(), f)
+	require.NoError(t, err)
+	require.Len(t, first.RecallEntries, 500)
+	require.NotEmpty(t, first.NextCursor)
+	f.Cursor = first.NextCursor
+	second, err := svc.ListRecallEntries(t.Context(), f)
+	require.NoError(t, err)
+	require.Len(t, second.RecallEntries, 2)
+	assert.Empty(t, second.NextCursor)
 }
