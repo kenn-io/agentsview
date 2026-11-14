@@ -304,12 +304,12 @@ func (b *httpBackend) FindSessionIDsByRawSuffix(
 	return response.JSON200.Ids, nil
 }
 
-// Probe only when the backend has no version so unfiltered lists need no extra request.
-func (b *httpBackend) requireSessionAnnotations(ctx context.Context, minVersion int, feature string) error {
+// Refresh compaction capabilities because the daemon at the URL can change.
+func (b *httpBackend) requireSessionAnnotations(ctx context.Context, minVersion int, feature string, refresh bool) error {
 	b.apiVersionMu.Lock()
 	defer b.apiVersionMu.Unlock()
 	version := b.apiVersion
-	if version == 0 {
+	if version == 0 || refresh {
 		capabilities, err := ProbeHTTPServerCapabilities(ctx, b.baseURL, b.token)
 		if err != nil {
 			return err
@@ -326,14 +326,12 @@ func (b *httpBackend) requireSessionAnnotations(ctx context.Context, minVersion 
 func (b *httpBackend) List(
 	ctx context.Context, f service.ListFilter,
 ) (*service.SessionList, error) {
-	minVersion, feature := 0, ""
 	if f.HasCompactionSummary {
-		minVersion, feature = service.CompactionSummariesAPIVersion, "compaction summaries"
+		if err := b.requireSessionAnnotations(ctx, service.CompactionSummariesAPIVersion, "compaction summaries", true); err != nil {
+			return nil, err
+		}
 	} else if len(f.Labels) > 0 || f.PR != "" {
-		minVersion, feature = service.SessionAnnotationsAPIVersion, "session labels, parent links, or their filters"
-	}
-	if minVersion != 0 {
-		if err := b.requireSessionAnnotations(ctx, minVersion, feature); err != nil {
+		if err := b.requireSessionAnnotations(ctx, service.SessionAnnotationsAPIVersion, "session labels, parent links, or their filters", false); err != nil {
 			return nil, err
 		}
 	}
@@ -512,7 +510,7 @@ func (b *httpBackend) Messages(
 	ctx context.Context, id string, f service.MessageFilter,
 ) (*service.MessageList, error) {
 	if f.CompactBoundaryOnly {
-		if err := b.requireSessionAnnotations(ctx, service.CompactionSummariesAPIVersion, "compaction summaries"); err != nil {
+		if err := b.requireSessionAnnotations(ctx, service.CompactionSummariesAPIVersion, "compaction summaries", true); err != nil {
 			return nil, err
 		}
 	}

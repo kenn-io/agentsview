@@ -68,7 +68,9 @@ func CompactionSummaries(ctx context.Context, svc SessionService, req Compaction
 		out.NextCursor = page.NextCursor
 		ids = ids[:0]
 		for _, session := range page.Sessions {
-			ids = append(ids, session.ID)
+			if !db.IsCompactionEventAgent(session.Agent) {
+				ids = append(ids, session.ID)
+			}
 		}
 	}
 	for _, id := range ids {
@@ -79,7 +81,7 @@ func CompactionSummaries(ctx context.Context, svc SessionService, req Compaction
 				return out, err
 			}
 			for _, m := range page.Messages {
-				if strings.TrimSpace(m.Content) != "" && !db.IsCompactionPlaceholder(m.SourceSubtype, m.Content) {
+				if m.IsCompactBoundary && strings.TrimSpace(m.Content) != "" && !db.IsCompactionPlaceholder(m.SourceSubtype, m.Content) {
 					out.Summaries = append(out.Summaries, CompactionSummary{SessionID: id, Ordinal: m.Ordinal, Timestamp: m.Timestamp, Content: m.Content})
 				}
 			}
