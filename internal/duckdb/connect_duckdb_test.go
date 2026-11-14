@@ -40,7 +40,7 @@ func TestLocalConnectionLimits(t *testing.T) {
 		max  int
 	}{
 		{"probe", OpenReadOnly, 1},
-		{"serving", openServingReadOnly, 4},
+		{"serving", openServingReadOnly, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			duck, err := tc.open(t.Context(), path)

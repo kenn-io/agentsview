@@ -19,7 +19,7 @@ import (
 const (
 	quackAttachmentName = "agentsview_remote"
 	// Bound concurrent reads while allowing Dashboard panels to run together.
-	servingReaderMaxOpenConns = 4
+	servingReaderMaxOpenConns = 2
 )
 
 // DefaultAttachTimeout bounds a remote Quack ATTACH (and its TCP preflight)
