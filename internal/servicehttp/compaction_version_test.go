@@ -30,10 +30,10 @@ func TestCompactionSummariesDaemonReplacement(t *testing.T) {
 	defer srv.Close()
 	backend := servicehttp.NewHTTPBackend(srv.URL, "", false, "")
 	req := service.CompactionSummariesRequest{ActiveSince: "2024-06-01T00:00:00Z"}
-	for i, v := range []int32{19, 18, 19, 20} {
+	for i, v := range []int32{20, 19, 20, 21} {
 		version.Store(v)
 		out, err := service.CompactionSummaries(t.Context(), backend, req)
-		if v >= 19 {
+		if v >= 20 {
 			require.NoError(t, err)
 			require.Len(t, out.Summaries, 2)
 			assert.Equal(t, "summary", out.Summaries[0].Content)

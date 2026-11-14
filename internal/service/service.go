@@ -46,7 +46,7 @@ var ErrAroundMutuallyExclusive = errors.New(
 var ErrBeforeAfterRequireAround = errors.New("before/after require around")
 
 // CompactionAPIVersion is the first daemon version with flat session reads.
-const CompactionAPIVersion = 19
+const CompactionAPIVersion = 20
 
 // ErrSemanticUnavailable is returned by SearchContent for modes
 // "semantic" and hybrid requests without keyword fallback when the backing
