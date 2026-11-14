@@ -50,14 +50,15 @@ func hasDotDotPathComponent(p string) bool {
 }
 
 func remappedRemotePath(tempDir, remotePath string) string {
-	local, err := safeRemappedRemotePath(tempDir, remotePath)
+	local, err := SafeRemappedRemotePath(tempDir, remotePath)
 	if err != nil {
 		return tempDir
 	}
 	return local
 }
 
-func safeRemappedRemotePath(tempDir, remotePath string) (string, error) {
+// SafeRemappedRemotePath resolves a remote path within a mirror root.
+func SafeRemappedRemotePath(tempDir, remotePath string) (string, error) {
 	name, err := safeRemotePathArchiveName(remotePath)
 	if err != nil {
 		return "", err
@@ -130,6 +131,26 @@ func validateTargetSetPaths(targets TargetSet) error {
 	for _, root := range targets.ForbiddenRoots {
 		if _, err := safeRemotePathArchiveName(root); err != nil {
 			return fmt.Errorf("forbidden root %q: %w", root, err)
+		}
+	}
+	return validateCodexHomeRoots(targets)
+}
+
+func validateCodexHomeRoots(targets TargetSet) error {
+	for home, roles := range targets.CodexHomeRoots {
+		if home == "" || (roles.Sessions == "" && roles.ArchivedSessions == "") {
+			return fmt.Errorf("invalid Codex home roots %q", home)
+		}
+		if roles.Sessions != "" && roles.Sessions == roles.ArchivedSessions {
+			return fmt.Errorf("contradictory Codex home roots %q", home)
+		}
+		if _, err := safeRemotePathArchiveName(home); err != nil {
+			return fmt.Errorf("invalid Codex home %q: %w", home, err)
+		}
+		for _, root := range []string{roles.Sessions, roles.ArchivedSessions} {
+			if root != "" && !slices.Contains(targets.Dirs[parser.AgentCodex], root) {
+				return fmt.Errorf("codex home root %q is not advertised", root)
+			}
 		}
 	}
 	return nil

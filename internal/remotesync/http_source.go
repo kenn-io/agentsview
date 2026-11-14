@@ -164,21 +164,41 @@ func generatedTargets(targets TargetSet) apiclient.RemotesyncTargetSet {
 	return apiclient.RemotesyncTargetSet{
 		Dirs: generatedProviderPaths(targets.Dirs), Files: generatedProviderPaths(targets.Files),
 		ProviderExtraFiles: generatedProviderPaths(targets.ProviderExtraFiles), ExtraFiles: targets.ExtraFiles,
-		CodexIndexFiles: targets.CodexIndexFiles, ForbiddenRoots: targets.ForbiddenRoots,
+		CodexIndexFiles: targets.CodexIndexFiles, CodexHomeRoots: generatedCodexTargets(targets.CodexHomeRoots), ForbiddenRoots: targets.ForbiddenRoots,
 	}
+}
+
+func generatedCodexTargets(homes map[string]CodexHomeRoots) map[string]apiclient.RemotesyncCodexHomeRoots {
+	result := make(map[string]apiclient.RemotesyncCodexHomeRoots, len(homes))
+	for home, roots := range homes {
+		var converted apiclient.RemotesyncCodexHomeRoots
+		if roots.Sessions != "" {
+			converted.Sessions = new(roots.Sessions)
+		}
+		if roots.ArchivedSessions != "" {
+			converted.ArchivedSessions = new(roots.ArchivedSessions)
+		}
+		result[home] = converted
+	}
+	return result
+}
+
+func generatedArchiveRequest(request ArchiveRequest) apiclient.RemotesyncArchiveRequest {
+	targets := generatedTargets(request.TargetSet)
+	body := apiclient.RemotesyncArchiveRequest{
+		Dirs: targets.Dirs, Files: targets.Files, ProviderExtraFiles: targets.ProviderExtraFiles,
+		ExtraFiles: targets.ExtraFiles, CodexIndexFiles: targets.CodexIndexFiles, CodexHomeRoots: targets.CodexHomeRoots, ForbiddenRoots: targets.ForbiddenRoots,
+	}
+	if request.DeltaFiles != nil {
+		body.DeltaFiles = new(request.DeltaFiles)
+	}
+	return body
 }
 
 func (s HTTPSource) requestArchive(
 	ctx context.Context, request ArchiveRequest,
 ) (*http.Response, error) {
-	targets := generatedTargets(request.TargetSet)
-	body := apiclient.RemotesyncArchiveRequest{
-		Dirs: targets.Dirs, Files: targets.Files, ProviderExtraFiles: targets.ProviderExtraFiles,
-		ExtraFiles: targets.ExtraFiles, CodexIndexFiles: targets.CodexIndexFiles, ForbiddenRoots: targets.ForbiddenRoots,
-	}
-	if request.DeltaFiles != nil {
-		body.DeltaFiles = new(request.DeltaFiles)
-	}
+	body := generatedArchiveRequest(request)
 	return apiclient.RawRequest(s.URL, s.client(), func(api *apiclient.Client) error {
 		_, err := api.PostAPIV1RemoteSyncArchiveWithResponse(ctx, &apiclient.PostAPIV1RemoteSyncArchiveRequestOptions{Body: &body})
 		return err

@@ -10152,7 +10152,7 @@ type recordingRebuildCommitter struct {
 	commitErr error
 }
 
-func (c *recordingRebuildCommitter) Commit() error {
+func (c *recordingRebuildCommitter) Commit(ctx context.Context) error {
 	*c.events = append(*c.events, "commit")
 	return c.commitErr
 }

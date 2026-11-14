@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -71,16 +72,26 @@ func TestPreparedHTTPSyncRebuildContributor(t *testing.T) {
 	}(t)
 	targets := TargetSet{Dirs: map[parser.AgentType][]string{
 		parser.AgentClaude: {remoteDir, skippedDir},
-	}}
+		parser.AgentCodex:  {"/remote-codex"},
+	}, CodexHomeRoots: map[string]CodexHomeRoots{"/home": {Sessions: "/remote-codex"}}}
 	targetsJSON, err := json.Marshal(targets)
 	require.NoError(t, err)
+	delete(targets.Dirs, parser.AgentCodex)
+	targets.CodexHomeRoots = nil
+	withoutCodexJSON, err := json.Marshal(targets)
+	require.NoError(t, err)
+	var revokeCodex atomic.Bool
 	manifestJSON, err := json.Marshal(manifest)
 	require.NoError(t, err)
 	server := newCurrentProtocolServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/remote-sync/targets":
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write(targetsJSON)
+			if revokeCodex.Load() {
+				_, _ = w.Write(withoutCodexJSON)
+			} else {
+				_, _ = w.Write(targetsJSON)
+			}
 		case "/api/v1/remote-sync/manifest":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write(manifestJSON)
@@ -122,9 +133,13 @@ func TestPreparedHTTPSyncRebuildContributor(t *testing.T) {
 		"AfterSync runs before swap and must retain the journal")
 	require.NotNil(t, prepared.mirrorImport)
 	assert.Equal(t, JournalPendingSwap, prepared.mirrorImport.outcome)
-	require.NoError(t, prepared.Commit())
+	require.NoError(t, prepared.Commit(t.Context()))
+	metadata, err := LoadMirrorCodexMetadata(t.Context(), prepared.Root())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/remote-codex"}, metadata.Dirs)
+	assert.Equal(t, map[string]CodexHomeRoots{"/home": {Sessions: "/remote-codex"}}, metadata.Homes)
 	assert.NoFileExists(t, journalPath)
-	require.NoError(t, prepared.Commit(), "post-swap commit is idempotent")
+	require.NoError(t, prepared.Commit(t.Context()), "post-swap commit is idempotent")
 
 	full, err := database.GetSessionFull(t.Context(), "devbox~"+sessionID)
 	require.NoError(t, err)
@@ -155,14 +170,60 @@ func TestPreparedHTTPSyncRebuildContributor(t *testing.T) {
 	assert.NotContains(t, remoteCache, remoteFile,
 		"a full contributor must not load the active database's stale host cache")
 
-	prepared.targets = TargetSet{Dirs: map[parser.AgentType][]string{
-		parser.AgentClaude: {skippedDir},
-	}}
 	activeStats, err := prepared.ImportActive(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, 0, activeStats.Failed)
 	assert.Equal(t, 0, activeStats.Skipped,
 		"reusing a prepared bootstrap import must preserve its full-parse scope")
+	require.NoError(t, prepared.Close())
+	// An unchanged mirror must backfill missing metadata and defer rebuild
+	// persistence until the successful swap has completed.
+	require.NoError(t, os.Remove(mirrorCodexRootsPath(prepared.Root())))
+	unchanged, err := hs.Prepare(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, unchanged.Close()) })
+	require.Nil(t, unchanged.mirrorImport)
+	require.Error(t, unchanged.Commit(t.Context()))
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = unchanged.ImportActive(cancelled)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.NoFileExists(t, mirrorCodexRootsPath(unchanged.Root()))
+	_, err = unchanged.ImportActive(t.Context())
+	require.NoError(t, err)
+	metadata, err = LoadMirrorCodexMetadata(t.Context(), unchanged.Root())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/remote-codex"}, metadata.Dirs)
+	assert.Equal(t, map[string]CodexHomeRoots{"/home": {Sessions: "/remote-codex"}}, metadata.Homes)
+	require.NoError(t, os.Remove(mirrorCodexRootsPath(unchanged.Root())))
+	unchangedContributor, err := unchanged.RebuildContributor(t.Context())
+	require.NoError(t, err)
+	assert.NoFileExists(t, mirrorCodexRootsPath(unchanged.Root()))
+	stats, err = localEngine.ResyncAllWithOptions(t.Context(), nil,
+		syncpkg.RebuildOptions{Contributors: []syncpkg.RebuildContributor{unchangedContributor}})
+	require.NoError(t, err)
+	assert.False(t, stats.Aborted)
+	assert.NoFileExists(t, mirrorCodexRootsPath(unchanged.Root()))
+	require.NoError(t, unchanged.Commit(t.Context()))
+	metadata, err = LoadMirrorCodexMetadata(t.Context(), unchanged.Root())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/remote-codex"}, metadata.Dirs)
+	assert.Equal(t, map[string]CodexHomeRoots{"/home": {Sessions: "/remote-codex"}}, metadata.Homes)
+	require.NoError(t, unchanged.Commit(t.Context()))
+	require.NoError(t, unchanged.Close())
+	revokeCodex.Store(true)
+	next, err := hs.Prepare(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, next.Close()) })
+	assert.NotContains(t, next.Targets().Dirs, parser.AgentCodex)
+	activeStats, err = next.ImportActive(t.Context())
+	require.NoError(t, err)
+	metadata, err = LoadMirrorCodexMetadata(t.Context(), next.Root())
+	require.NoError(t, err)
+	assert.Empty(t, metadata.Dirs)
+	assert.Empty(t, metadata.Homes)
+	assert.Equal(t, 0, activeStats.Failed)
+	assert.Equal(t, 0, activeStats.Skipped)
 }
 
 func TestPreparedHTTPSyncRebuildOutcomeClassification(t *testing.T) {
@@ -218,7 +279,7 @@ func TestPreparedHTTPSyncDeferredRebuildIsNotCommitReady(t *testing.T) {
 	contributor.Finished(syncpkg.SyncStats{Deferred: 1}, nil)
 	assert.False(t, prepared.commitReady)
 	assert.Equal(t, JournalProcessingFailures, prepared.mirrorImport.outcome)
-	require.ErrorContains(t, prepared.Commit(), "not ready to commit")
+	require.ErrorContains(t, prepared.Commit(t.Context()), "not ready to commit")
 	assert.FileExists(t, mirrorJournalPath(MirrorDir(hs.DataDir, hs.Host)))
 }
 
@@ -237,7 +298,7 @@ func TestPreparedHTTPSyncRebuildRetirementFailureRecordsDuration(t *testing.T) {
 			return errors.New("retirement sentinel")
 		}
 
-		require.ErrorContains(t, prepared.Commit(), "retirement sentinel")
+		require.ErrorContains(t, prepared.Commit(t.Context()), "retirement sentinel")
 		assert.Equal(t, JournalRetirementFailed, prepared.mirrorImport.outcome)
 		assert.Equal(t, time.Second, prepared.mirrorImport.pending.Stats.RetirementDuration)
 	})

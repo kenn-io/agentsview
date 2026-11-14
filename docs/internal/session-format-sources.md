@@ -155,6 +155,21 @@ evidence; they do not establish whether a tool helped the task.
 
 ## Claude Code (`claude`)
 
+- **Native resume (checked 2026-11-11):** Claude Code 2.1.322's installed
+  producer resolves the checkout through realpath when possible, normalizes it
+  to NFC, replaces each non-ASCII-alphanumeric UTF-16 unit with `-`, and for
+  paths over 200 units appends a base-36 signed 32-bit hash after the first 200
+  encoded units. `CLAUDE_CODE_PROJECT_DIR_NAME` is accepted in local mode only
+  with a nonempty `CLAUDE_CONFIG_DIR` and a valid non-reserved name. The
+  producer reads `worktree-state` records last-wins per session and recognizes
+  `worktreeSession: null` as an explicit clear. Materialization appends that
+  native clear only for a selected session whose final binding is non-null;
+  the rest of the source bytes remain unchanged. Snapshot-attached originals
+  use the same native files and worktree clear. The
+  [official session documentation](https://code.claude.com/docs/en/sessions)
+  describes project storage and resume behavior. A running-session attachment
+  can retain its existing directory; the in-app picker may use recorded paths.
+
 - **Hook output (checked 2026-11-04):** The parser reads the `hook_success`
   attachment shape reported in
   [#2456](https://github.com/kenn-io/agentsview/issues/2456) with `content`,
@@ -761,6 +776,28 @@ fixtures retain this field; missing identities remain source-local.
   `internal/parser/cowork_paths.go`, and `internal/parser/cowork_provider.go`.
 
 ## Codex (`codex`)
+
+- **Native resume materialization (checked 2026-11-12 at
+  `6b9826e3aa83b1a5947db50f4332cb9c65f1b340`):** The
+  [resolver](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/thread-store/src/local/thread_rollout_resolver.rs)
+  selects native rollout paths, including paths already known to a running
+  writer or the state database. The
+  [lineage reader](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/thread-store/src/local/rollout_lineage.rs)
+  follows `history_base` across rollout IDs and checks cutoff bounds. The
+  [rollout list](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/rollout/src/list.rs)
+  supplies the dated filename layout, selects the newest thread rollout by
+  timestamp and ID, and searches live before archived rollouts. Its filesystem
+  traversal follows an explicitly linked native root, but skips linked descendant
+  directories and files. The
+  [compression reader](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/rollout/src/compression.rs)
+  chooses a plain file before its compressed sibling. The
+  [prefix reader](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/rollout/src/seekable_reader.rs)
+  checks the cutoff against decoded bytes. Materialization preserves the original
+  bytes and installs the newest available page and its ancestors without
+  modifying Codex state or launching Codex. The pinned
+  [CLI resume arguments](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/cli/src/cli_main.rs#L348-L370)
+  and [resume test](https://github.com/openai/codex/blob/6b9826e3aa83b1a5947db50f4332cb9c65f1b340/codex-rs/cli/src/cli_main.rs#L4222-L4261)
+  establish the session ID and `-C` checkout arguments.
 
 - **Reasoning, compaction, and usage repeats (checked 2026-11-11 at
   `87b7bdbf2efb9cb6fb15d821ef535061012c0138`):** The pinned
@@ -3472,6 +3509,23 @@ schemas keep their existing ordering behavior.
   stored path or fingerprint hint scans discovered session headers after the
   filename and directory lookups miss. Data version 109 reparses stored native
   Pi sessions to repair lineage edges and fork classification.
+- **Native resume, reverified 2026-11-12:** The
+  [session manager](https://github.com/earendil-works/pi/blob/acaa253cc8e3f159e6100b6f3874861b1f0bfc99/packages/coding-agent/src/core/session-manager.ts),
+  [CLI](https://github.com/earendil-works/pi/blob/acaa253cc8e3f159e6100b6f3874861b1f0bfc99/packages/coding-agent/src/main.ts),
+  and [path normalization](https://github.com/earendil-works/pi/blob/acaa253cc8e3f159e6100b6f3874861b1f0bfc99/packages/coding-agent/src/utils/paths.ts)
+  at `acaa253cc8e3f159e6100b6f3874861b1f0bfc99` support Windows shell drive
+  paths, unlike the older format pin above. Current format version is 3; the
+  first parsed entry must be a session with a string ID. Blank and malformed lines can precede that entry, while a parsed
+  title cannot. An idless legacy file can be indexed by Agentsview but cannot
+  be opened by this Pi version. `SessionManager.open` uses the header cwd;
+  materialization changes only that value, resolves the checkout through
+  symlinks, and preserves the native ID. Custom IDs may contain interior dots;
+  the CLI also opens renamed `.jsonl` paths using the identity in their session
+  header. Startup chooses the session directory from the environment, then
+  merged project/global settings, then the default
+  encoded checkout directory. The installer bounds header lookup to 1 MiB and
+  refuses versions outside 1–3 as an Agentsview policy, and unsafe
+  identity-derived filenames. Malformed or oversized settings fail closed.
 
 ## Prime Agent (`prime-agent`)
 

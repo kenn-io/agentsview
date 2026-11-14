@@ -245,7 +245,7 @@ func TestRemoteSyncAppliesAChangeTooLargeToHoldInMemory(t *testing.T) {
 			}
 			assert.NoFileExists(t, stale)
 			assert.NoFileExists(t, vanished)
-			added, err := safeRemappedRemotePath(mirrorRoot, filepath.Join(remoteDir, "project-b", "project-b.jsonl"))
+			added, err := SafeRemappedRemotePath(mirrorRoot, filepath.Join(remoteDir, "project-b", "project-b.jsonl"))
 			require.NoError(t, err)
 			assert.FileExists(t, added)
 			sessions, err := database.ListSessions(t.Context(), db.SessionFilter{})

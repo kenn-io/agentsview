@@ -2165,6 +2165,7 @@ agentsview session messages <id>         # paginated messages
 agentsview session commits <id>          # commits and their prompts
 agentsview session tool-calls <id>       # flat tool-call list
 agentsview session export <id>           # stream raw source, secrets masked
+agentsview session materialize <id> --cwd <path> # install files for native resume
 agentsview session sync <path-or-id>     # parse + insert
 agentsview session watch <id>            # NDJSON event stream
 agentsview session search <pattern>      # content search across sessions
@@ -2175,6 +2176,78 @@ agentsview session usage-batch <id>...   # ordered usage results for several ses
 agentsview session label <id> k=v ...    # add or remove labels
 agentsview session parent <id> <parent>  # record the launching session
 ```
+
+`session materialize <id> --cwd <path>` installs the original Claude Code, Pi,
+or Codex transcript for an existing local checkout, with native companions for
+Claude and the required history pages for Codex, then prints a resume command.
+It reads the local archive without starting a daemon and finds originals in
+configured local roots or remote mirrors. Claude and
+Codex also support configured S3 roots and snapshot attachments that own the
+session. Local retained and directory captures are not yet supported. Pi has
+no retained captures. Claude archive-only fork sessions cannot be installed;
+select a session with a native Claude UUID. The transcript and companions
+together are limited to 512 MiB and are buffered in memory. Snapshot recovery
+also needs scratch space for a saved archive database of up to 16 GiB. It holds
+a snapshot repository lease; if the repository is busy, retry after the other
+operation finishes. `--server`, `--server-token-file`, and `--pg` are unavailable.
+Use `--json` for the source, installed paths, checkout, command, and installed
+or unchanged status. For snapshot recovery, the source is `snapshot:<id>`.
+Claude's native home and supported environment overrides determine its
+destination. Pi uses its native agent directory, or its session directory from
+settings or `PI_CODING_AGENT_SESSION_DIR` (which takes priority). For Pi
+discovery, `PI_DIR` takes precedence over `PI_CODING_AGENT_SESSION_DIR`; either
+overrides configured discovery roots.
+Local companions must resolve inside the configured root when the transcript is
+inside it; an externally linked project is confined to that project. Remote
+mirror files must remain inside the mirror root. Codex mirror recovery uses
+the roots advertised by the last successful sync; older mirrors need a
+successful sync before materialization. For linked Codex home roots, upgrade
+the remote AgentsView and sync again to record their association; older mirror
+metadata only associates sibling roots. A recorded local source path
+can still be used after its configured machine label changes.
+An explicitly set `CLAUDE_CONFIG_DIR` must be an absolute path; the printed
+command preserves its spelling so Claude uses the same credentials.
+
+Existing identical files are reused; a different or non-regular file causes
+an error, including a previously installed file that has since been extended.
+Dependencies are installed before the transcript. If publication stops
+partway through, retry to reuse files that are still identical. The command
+does not rewrite existing transcript records. If its last worktree binding is
+non-null, it appends Claude's native null worktree-state record to prevent
+restoring the original checkout, as observed in Claude Code 2.1.322. For Pi,
+the command changes only the session header `cwd` to the selected checkout;
+all other transcript bytes, including branch and parent records, stay intact.
+The Pi checkout is resolved through symlinks, and relative Pi directory
+overrides are resolved from that checkout. Pi files must have a session header
+with an ID; Agentsview refuses versions outside 1–3. Some older indexed
+sessions without IDs and Pi-family files with a leading title cannot be opened
+by the verified Pi consumer and are not installed. Header lookup is bounded to
+1 MiB. Malformed or oversized Pi settings cause materialization to fail. A
+nonunique source name such as `session.jsonl` is installed using its session ID
+as the filename.
+
+For Codex, the command installs the newest available page and its complete
+`history_base` chain with their original names and bytes, including compressed
+files. It chooses live before archived originals, and plain before compressed
+copies. Equal-rank locations for a selected page are refused. Archived
+originals are installed under the live sessions directory. Human output reports
+the requested ID and installed page; JSON uses `requested_id` and
+`installed_page`. The printed command resumes the native thread in the requested
+checkout. Codex may choose an already-running thread or an existing indexed
+path before these installed files. Its filesystem fallback may select a newer,
+different rollout. Materialization does not update its index; `installed_page`
+identifies the page installed here. Different bytes for the same rollout are
+refused before publication.
+
+An already-running Claude session can attach in that process's existing
+directory. Claude's in-app resume picker can also fall back to a recorded
+project path for an unbound session. Start the printed command in a new process
+when the selected checkout matters: end the existing running session first.
+Materialize after the native session and any S3 uploader finish; S3 files can
+otherwise reflect different upload moments.
+If the destination is a configured Claude, Pi, or Codex source root, a later sync may
+discover the installed copy and deduplicate it by native session ID. The stored
+file path or checkout directory may then update.
 
 `agentsview session commits <id>` lists transcript and Git trailer commits
 linked to a session. The `SOURCE` column distinguishes `transcript` from

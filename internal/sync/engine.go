@@ -3378,7 +3378,7 @@ type RebuildCleanup interface {
 // RebuildCommitter finalizes durable source state only after the replacement
 // archive has been installed successfully.
 type RebuildCommitter interface {
-	Commit() error
+	Commit(ctx context.Context) error
 }
 
 type rebuildCleanupError struct {
@@ -3471,7 +3471,7 @@ func (e *Engine) SyncThenRunWithRebuild(
 			return stats, err
 		}
 		if committer, ok := cleanup.(RebuildCommitter); ok {
-			if err := committer.Commit(); err != nil {
+			if err := committer.Commit(ctx); err != nil {
 				if rebuildDone != nil {
 					rebuildDone(stats, err)
 				}

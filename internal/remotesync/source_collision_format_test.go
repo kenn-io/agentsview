@@ -171,7 +171,7 @@ func TestHTTPSourceCollisionRebuildWithoutLocalRoots(t *testing.T) {
 			require.NoError(t, err)
 			require.False(t, stats.Aborted, "%v", stats.Warnings)
 			require.Zero(t, stats.Failed)
-			require.NoError(t, prepared.Commit())
+			require.NoError(t, prepared.Commit(t.Context()))
 
 			after, err := database.ListSessionPathRecords(t.Context(), baseID)
 			require.NoError(t, err)

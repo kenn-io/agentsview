@@ -85,7 +85,7 @@ func mirrorAntigravityTitlesPath(mirrorRoot string) string {
 func mirrorRelativeRemoteChangePath(
 	mirrorRoot, remotePath string,
 ) (string, error) {
-	localPath, err := safeRemappedRemotePath(mirrorRoot, remotePath)
+	localPath, err := SafeRemappedRemotePath(mirrorRoot, remotePath)
 	if err != nil {
 		return "", fmt.Errorf("normalize remote mirror change: %w", err)
 	}

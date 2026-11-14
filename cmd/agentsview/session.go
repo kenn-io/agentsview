@@ -52,6 +52,7 @@ func newSessionCommand() *cobra.Command {
 		"Read session data from configured PostgreSQL",
 	)
 
+	cmd.AddCommand(newSessionMaterializeCommand())
 	cmd.AddCommand(newSessionGetCommand())
 	cmd.AddCommand(newSessionUsageCommand())
 	cmd.AddCommand(newSessionUsageBatchCommand())

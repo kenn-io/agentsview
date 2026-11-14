@@ -396,7 +396,7 @@ func (p *PreparedRemoteSyncs) Close() error {
 
 // Commit finalizes each successfully rebuilt persistent source. It is
 // idempotent; a failure leaves every uncommitted source owned for retry.
-func (p *PreparedRemoteSyncs) Commit() error {
+func (p *PreparedRemoteSyncs) Commit(ctx context.Context) error {
 	if p == nil {
 		return nil
 	}
@@ -406,7 +406,7 @@ func (p *PreparedRemoteSyncs) Commit() error {
 		if source == nil {
 			continue
 		}
-		if err := source.Commit(); err != nil {
+		if err := source.Commit(ctx); err != nil {
 			return &HostError{Host: source.sync.Host, Operation: "commit rebuild", Err: err}
 		}
 	}
@@ -587,6 +587,9 @@ func (p *PreparedRemote) ImportActive(ctx context.Context) (SyncStats, error) {
 		if p.legacy {
 			return p.sync.importRoot(ctx, p.targets, p.root)
 		}
+		if err := p.persistCodexRoots(ctx); err != nil {
+			return SyncStats{}, fmt.Errorf("persist Codex mirror roots: %w", err)
+		}
 		return SyncStats{}, nil
 	}
 	stats, err := p.mirrorImport.pending.Execute(ctx)
@@ -602,6 +605,12 @@ func (p *PreparedRemote) ImportActive(ctx context.Context) (SyncStats, error) {
 		return stats, ctxErr
 	}
 	retireStart := time.Now()
+	if err := p.persistCodexRoots(ctx); err != nil {
+		stats.JournalOutcome = JournalRetirementFailed
+		p.mirrorImport.outcome = stats.JournalOutcome
+		p.reportDeltaImport(stats)
+		return stats, fmt.Errorf("persist Codex mirror roots: %w", err)
+	}
 	if err := p.persistAntigravityTitleStates(); err != nil {
 		log.Printf("Antigravity title verification: %v", err)
 	}
@@ -764,14 +773,21 @@ func (p *PreparedRemote) RebuildContributor(
 }
 
 // Commit retires a processed persistent journal after an atomic rebuild swap.
-func (p *PreparedRemote) Commit() error {
-	if p == nil || p.mirrorImport == nil || p.committed {
+func (p *PreparedRemote) Commit(ctx context.Context) error {
+	if p == nil || p.legacy || p.committed {
 		return nil
 	}
 	if !p.commitReady {
 		return errors.New("prepared remote journal is not ready to commit")
 	}
 	start := time.Now()
+	if err := p.persistCodexRoots(ctx); err != nil {
+		return fmt.Errorf("persist Codex mirror roots after rebuild: %w", err)
+	}
+	if p.mirrorImport == nil {
+		p.committed = true
+		return nil
+	}
 	if err := p.persistAntigravityTitleStates(); err != nil {
 		log.Printf("Antigravity title verification: %v", err)
 	}
@@ -891,7 +907,7 @@ func mirrorFileScopedRoots(
 	var roots []string
 	for _, remoteDirs := range dirs {
 		for _, remoteDir := range remoteDirs {
-			root, err := safeRemappedRemotePath(mirrorRoot, remoteDir)
+			root, err := SafeRemappedRemotePath(mirrorRoot, remoteDir)
 			if err != nil {
 				return nil, err
 			}
@@ -1302,7 +1318,7 @@ func (p *PreparedRemote) antigravityTitlesPending() (bool, error) {
 	}
 	current := make(map[string]parser.SQLiteContainerState)
 	for _, remoteRoot := range p.targets.Dirs[parser.AgentAntigravity] {
-		root, err := safeRemappedRemotePath(p.root, remoteRoot)
+		root, err := SafeRemappedRemotePath(p.root, remoteRoot)
 		if err != nil {
 			return false, err
 		}
