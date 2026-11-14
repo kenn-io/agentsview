@@ -3088,8 +3088,12 @@ func TestRecallListTimeBounds(t *testing.T) {
 		{"trusted", RecallQuery{UpdatedSince: "2026-01-01T00:00:00.000001Z", TrustedOnly: true}, []string{"before", "boundary", "old", "changed", "new"}, false},
 		{"updated with offset", RecallQuery{UpdatedSince: "2026-11-12T22:00:00-05:00"}, []string{"changed", "new"}, false},
 		{"created with offset", RecallQuery{CreatedSince: "2026-11-12T22:00:00-05:00"}, []string{"new"}, false},
+		{"updated with padding", RecallQuery{UpdatedSince: " 2026-11-12T22:00:00-05:00 "}, []string{"changed", "new"}, false},
+		{"created with padding", RecallQuery{CreatedSince: " 2026-11-12T22:00:00-05:00 "}, []string{"new"}, false},
 		{"bad updated", RecallQuery{UpdatedSince: "yesterday"}, nil, true},
 		{"bad created", RecallQuery{CreatedSince: "yesterday"}, nil, true},
+		{"whitespace updated", RecallQuery{UpdatedSince: "  "}, nil, true},
+		{"whitespace created", RecallQuery{CreatedSince: " \t "}, nil, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			entries, err := d.ListRecallEntries(t.Context(), tc.q)

@@ -763,6 +763,31 @@ func TestDirectBackend_ListRecallEntriesRejectsSearchWithTimeBounds(t *testing.T
 	}
 }
 
+func TestDirectBackend_ListRecallEntriesRejectsWhitespaceTimeBounds(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	svc := service.NewReadOnlyBackend(d)
+	for _, test := range []struct {
+		name   string
+		filter service.RecallFilter
+	}{
+		{
+			name:   "updated since",
+			filter: service.RecallFilter{UpdatedSince: "  "},
+		},
+		{
+			name:   "created since",
+			filter: service.RecallFilter{CreatedSince: " \t "},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := svc.ListRecallEntries(t.Context(), test.filter)
+
+			require.ErrorIs(t, err, db.ErrInvalidRecallQuery)
+			assert.Nil(t, result)
+		})
+	}
+}
+
 func TestDirectBackend_ListRecallEntriesWithoutQueryUsesUpdatedOrder(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(
