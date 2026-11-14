@@ -2201,6 +2201,31 @@ func TestCompactionSummariesActiveSince(t *testing.T) {
 	assert.Equal(t, "recent summary", summaries[0].Content)
 }
 
+func TestCompactionSummariesSkipsEmptySessionPages(t *testing.T) {
+	ts, d := newTestToolset(t)
+	for _, row := range []struct{ id, ended string }{
+		{"empty", "2024-06-17T10:00:00Z"},
+		{"first", "2024-06-16T10:00:00Z"},
+		{"second", "2024-06-15T10:00:00Z"},
+	} {
+		dbtest.SeedSession(t, d, row.id, "project", func(session *db.Session) { session.EndedAt = &row.ended })
+	}
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
+		{SessionID: "first", Ordinal: 0, Role: "assistant", IsSystem: true, IsCompactBoundary: true, Content: "first summary"},
+		{SessionID: "second", Ordinal: 0, Role: "assistant", IsSystem: true, IsCompactBoundary: true, Content: "second summary"},
+	}))
+	_, first, err := ts.compactionSummaries(t.Context(), nil, compactionSummariesIn{ActiveSince: "2024-06-01T00:00:00Z", Limit: 1})
+	require.NoError(t, err)
+	require.Len(t, first.Summaries, 1)
+	assert.Equal(t, "first summary", first.Summaries[0].Content)
+	require.NotEmpty(t, first.NextCursor)
+	_, second, err := ts.compactionSummaries(t.Context(), nil, compactionSummariesIn{ActiveSince: "2024-06-01T00:00:00Z", Limit: 1, Cursor: first.NextCursor})
+	require.NoError(t, err)
+	require.Len(t, second.Summaries, 1)
+	assert.Equal(t, "second summary", second.Summaries[0].Content)
+	assert.Empty(t, second.NextCursor)
+}
+
 func TestCompactionSummariesActiveChildren(t *testing.T) {
 	ts, d := newTestToolset(t)
 	for _, row := range []struct{ id, parent, ended string }{

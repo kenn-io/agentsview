@@ -40,42 +40,49 @@ func CompactionSummaries(ctx context.Context, svc SessionService, req Compaction
 	if req.SessionID != "" && req.Cursor != "" {
 		return out, errors.New("cursor requires active_since")
 	}
-	ids := []string{req.SessionID}
-	if req.ActiveSince != "" {
-		limit := req.Limit
-		if limit <= 0 {
-			limit = DefaultCompactionSessionLimit
-		}
-		if limit > MaxCompactionSessionLimit {
-			limit = MaxCompactionSessionLimit
-		}
-		page, err := svc.List(ctx, ListFilter{ActiveSince: req.ActiveSince, Cursor: req.Cursor, Limit: limit, IncludeOneShot: true, OneShotFilterSet: true, IncludeAutomated: true, AutomatedFilterSet: true, MatchEachSession: true})
-		if err != nil {
-			return out, err
-		}
-		out.NextCursor = page.NextCursor
-		ids = ids[:0]
-		for _, session := range page.Sessions {
-			ids = append(ids, session.ID)
-		}
+	limit := req.Limit
+	if limit <= 0 {
+		limit = DefaultCompactionSessionLimit
 	}
-	for _, id := range ids {
-		from := 0
-		for {
-			page, err := svc.Messages(ctx, id, MessageFilter{From: &from, Direction: "asc", Limit: db.MaxMessageLimit, CompactBoundaryOnly: true})
+	if limit > MaxCompactionSessionLimit {
+		limit = MaxCompactionSessionLimit
+	}
+	cursor := req.Cursor
+	for {
+		ids := []string{req.SessionID}
+		if req.ActiveSince != "" {
+			page, err := svc.List(ctx, ListFilter{ActiveSince: req.ActiveSince, Cursor: cursor, Limit: limit, IncludeOneShot: true, OneShotFilterSet: true, IncludeAutomated: true, AutomatedFilterSet: true, MatchEachSession: true})
 			if err != nil {
 				return out, err
 			}
-			for _, m := range page.Messages {
-				if strings.TrimSpace(m.Content) != "" {
-					out.Summaries = append(out.Summaries, CompactionSummary{SessionID: id, Ordinal: m.Ordinal, Timestamp: m.Timestamp, Content: m.Content})
-				}
+			out.NextCursor = page.NextCursor
+			ids = ids[:0]
+			for _, session := range page.Sessions {
+				ids = append(ids, session.ID)
 			}
-			if len(page.Messages) < db.MaxMessageLimit {
-				break
-			}
-			from = page.Messages[len(page.Messages)-1].Ordinal + 1
 		}
+		for _, id := range ids {
+			from := 0
+			for {
+				page, err := svc.Messages(ctx, id, MessageFilter{From: &from, Direction: "asc", Limit: db.MaxMessageLimit, CompactBoundaryOnly: true})
+				if err != nil {
+					return out, err
+				}
+				for _, m := range page.Messages {
+					if strings.TrimSpace(m.Content) != "" {
+						out.Summaries = append(out.Summaries, CompactionSummary{SessionID: id, Ordinal: m.Ordinal, Timestamp: m.Timestamp, Content: m.Content})
+					}
+				}
+				if len(page.Messages) < db.MaxMessageLimit {
+					break
+				}
+				from = page.Messages[len(page.Messages)-1].Ordinal + 1
+			}
+		}
+		if len(out.Summaries) > 0 || out.NextCursor == "" {
+			break
+		}
+		cursor = out.NextCursor
 	}
 	return out, nil
 }
