@@ -50,11 +50,11 @@ func listHermesMemberTokens(ctx context.Context, conn *sql.DB, id string, yield 
 	if err != nil {
 		return err
 	}
+	defer messageRows.Close()
 	for messageRows.Next() {
 		var sid string
 		var messageID, timestamp, finish any
 		if err := messageRows.Scan(&sid, &messageID, &timestamp, &finish); err != nil {
-			messageRows.Close()
 			return err
 		}
 		h := checksums[sid]
