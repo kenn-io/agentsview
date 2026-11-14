@@ -21,16 +21,6 @@ type trendWindowRace struct {
 	beforeWindow func()
 }
 
-type trendMessageRace struct {
-	*DB
-	beforeVisit func()
-}
-
-func (s trendMessageRace) VisitTrendMessages(ctx context.Context, f AnalyticsFilter, ids []string, visit func(string, string, time.Time)) error {
-	s.beforeVisit()
-	return s.DB.VisitTrendMessages(ctx, f, ids, visit)
-}
-
 func TestTrendsPartsRetainsStableSessionsDuringRecount(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	d := testDB(t)
@@ -46,9 +36,11 @@ func TestTrendsPartsRetainsStableSessionsDuringRecount(t *testing.T) {
 	require.NoError(t, err)
 	d.trendsPartsDisk()
 	var writeErr error
-	_, handled, err := TrendsFromParts(ctx, &d.trendsDisk, identity, f, terms, "day", trendMessageRace{d, func() {
+	reset := SetTrendPartsReadObserver(func([]string) {
 		writeErr = d.ReplaceSessionMessages(ctx, "a", []Message{{SessionID: "a", Role: "user", Content: "banana", Timestamp: "2025-03-10T12:00:00Z"}})
-	}})
+	})
+	_, handled, err := TrendsFromParts(ctx, &d.trendsDisk, identity, f, terms, "day", d)
+	reset()
 	require.NoError(t, writeErr)
 	require.NoError(t, err)
 	require.False(t, handled)
@@ -59,7 +51,7 @@ func TestTrendsPartsRetainsStableSessionsDuringRecount(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, want.Series[0].Total)
 	var reads [][]string
-	reset := SetTrendPartsReadObserver(func(ids []string) { reads = append(reads, append([]string(nil), ids...)) })
+	reset = SetTrendPartsReadObserver(func(ids []string) { reads = append(reads, append([]string(nil), ids...)) })
 	t.Cleanup(reset)
 	got, handled, err := TrendsFromParts(ctx, &d.trendsDisk, identity, f, terms, "day", d)
 	require.NoError(t, err)
