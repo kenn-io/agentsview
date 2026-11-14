@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sessionmaterialize"
 	"go.kenn.io/agentsview/internal/shellquote"
@@ -50,7 +52,7 @@ func newSessionMaterializeCommand() *cobra.Command {
 			if id == "" {
 				return fmt.Errorf("session not in local archive: %s", args[0])
 			}
-			session, err := database.GetSessionFull(cmd.Context(), id)
+			session, err := loadMaterializeSession(cmd.Context(), database, id, args[0])
 			if err != nil {
 				return err
 			}
@@ -94,6 +96,14 @@ func (e *piResumeConflictError) Error() string {
 }
 
 func (e *piResumeConflictError) Unwrap() error { return e.err }
+
+func loadMaterializeSession(ctx context.Context, database *db.DB, id, requested string) (*db.Session, error) {
+	session, err := database.GetSessionFull(ctx, id)
+	if err == nil && session == nil {
+		return nil, fmt.Errorf("session not in local archive: %s", requested)
+	}
+	return session, err
+}
 
 func claudeResumeCommand(cwd, id, home, project string, windows bool) string {
 	if home == "" {
