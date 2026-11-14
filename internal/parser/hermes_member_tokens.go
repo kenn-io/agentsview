@@ -140,12 +140,15 @@ var (
 func hermesStoreTracksRewrites(ctx context.Context, conn *sql.DB) (bool, error) {
 	// Schema 33 is the verified ceiling, not a promise against additive changes.
 	var version any
-	err := conn.QueryRowContext(ctx, `SELECT version FROM schema_version LIMIT 1`).Scan(&version)
+	var indexes int
+	err := conn.QueryRowContext(ctx, `SELECT version,
+ (SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN ('idx_messages_session_id','idx_messages_session'))
+ FROM schema_version LIMIT 1`).Scan(&version, &indexes)
 	if err != nil {
 		return false, err
 	}
 	v, ok := version.(int64)
-	if !ok || v < 1 || v > 33 {
+	if !ok || v < 1 || v > 33 || indexes != 2 {
 		return false, nil
 	}
 	revision, err := hermesHasTranscriptRevision(ctx, conn)
@@ -226,13 +229,8 @@ func (s hermesSourceSet) changedHermesMembers(ctx context.Context, root, stateDB
 		if err != nil {
 			return err
 		}
-		if found {
-			if row.Suppressed {
-				return nil
-			}
-			if stored, ok := hermesStoredMemberToken(row.FingerprintHash); ok && stored == token && !cron {
-				return nil
-			}
+		if skipStoredTokenMember(row, found, token, cron, hermesStoredMemberToken) {
+			return nil
 		}
 		source := s.stateMemberSourceRef(root, stateDB, id)
 		src := source.Opaque.(hermesSource)
