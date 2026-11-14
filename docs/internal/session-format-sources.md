@@ -155,6 +155,19 @@ evidence; they do not establish whether a tool helped the task.
 
 ## Claude Code (`claude`)
 
+- **Native resume (checked 2026-11-11):** Claude Code 2.1.322's installed
+  producer resolves the checkout through realpath when possible and replaces each
+  non-ASCII-alphanumeric UTF-16 unit with `-` without Unicode normalization. For
+  paths over 200 units it appends a base-36 signed 32-bit hash after the first 200
+  encoded units. `CLAUDE_CODE_PROJECT_DIR_NAME` is accepted in local mode only
+  with a nonempty `CLAUDE_CONFIG_DIR` and a valid non-reserved name. The
+  producer reads `worktree-state` records last-wins per session and recognizes
+  `worktreeSession: null` as an explicit clear. Materialization appends that
+  native clear only for a selected session whose final binding is non-null;
+  the rest of the source bytes remain unchanged. The
+  [official session documentation](https://code.claude.com/docs/en/sessions)
+  describes project storage and resume behavior.
+
 - **Hook output (checked 2026-11-04):** The parser reads the `hook_success`
   attachment shape reported in
   [#2456](https://github.com/kenn-io/agentsview/issues/2456) with `content`,
@@ -3394,6 +3407,8 @@ schemas keep their existing ordering behavior.
   `PI_CODING_AGENT_DIR` replaces `~/.pi/agent`, with default sessions under
   `sessions/`. `PI_CODING_AGENT_SESSION_DIR` supplies the session directory
   directly and takes precedence over that default. Both accept tilde paths.
+  `piResolveDir` mirrors the `~`, `file://`, and Windows shell-drive forms in
+  [Pi 1.5.2's path normalizer](https://github.com/earendil-works/pi/blob/b4afdddf44e059c67ccf5097e5317d913521b470/packages/coding-agent/src/utils/paths.ts).
   The pinned
   [session manager](https://github.com/earendil-works/pi/blob/acaa253cc8e3f159e6100b6f3874861b1f0bfc99/packages/coding-agent/src/core/session-manager.ts)
   writes files directly into an explicit session directory; default sessions
@@ -3472,6 +3487,20 @@ schemas keep their existing ordering behavior.
   stored path or fingerprint hint scans discovered session headers after the
   filename and directory lookups miss. Data version 109 reparses stored native
   Pi sessions to repair lineage edges and fork classification.
+- **Native resume, reverified 2026-11-12:** The pinned session manager, CLI,
+  and path normalizer above support Windows shell drive paths, unlike the older
+  format pin above. Current format version is 3; the first parsed entry must be
+  a session with a string ID. Blank and malformed
+  lines can precede that entry, while a parsed title cannot. Pi cannot open a
+  file with a missing or non-string ID until materialization writes the
+  filename-derived ID. It accepts an empty ID, which materialization also replaces.
+  `SessionManager.open` uses the header cwd; materialization changes that value
+  and resolves the checkout through symlinks. Custom IDs may contain interior dots;
+  the CLI also opens renamed `.jsonl` paths using the identity in their session
+  header. Startup chooses the session directory from the environment, then
+  merged project/global settings, then the default
+  encoded checkout directory. The installer refuses unsafe identity-derived
+  filenames.
 
 ## Prime Agent (`prime-agent`)
 

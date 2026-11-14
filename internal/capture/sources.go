@@ -96,7 +96,7 @@ func locateRoot(ctx context.Context, m manifest) ([]string, error) {
 	switch Provider(m.Provider) {
 	case ProviderClaude:
 		path := filepath.Join(
-			m.ProviderRoot, encodeClaudeWorkDir(m.ProviderWorkDir),
+			m.ProviderRoot, ClaudeProjectDir(m.ProviderWorkDir),
 			m.ProviderSessionID+".jsonl",
 		)
 		if _, err := os.Stat(path); err != nil {
@@ -123,7 +123,7 @@ func locateCodexRoot(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if !validUUID(id) {
+	if !ValidUUID(id) {
 		return nil, nil
 	}
 	days := make(map[string]struct{})
