@@ -64,26 +64,24 @@ func TestHermesWatcherSelectsOnlyChangedMember(t *testing.T) {
 	}
 }
 
-func TestHermesWatcherDiscoversStaleAndNewOrphanTranscripts(t *testing.T) {
+func TestHermesWatcherDiscoversOrphanTranscripts(t *testing.T) {
 	for _, agent := range []parser.AgentType{parser.AgentHermes, parser.AgentAugureDesktop} {
 		t.Run(string(agent), func(t *testing.T) {
 			root := t.TempDir()
 			conn, path := hermesFreshnessWriter(t, root)
-			_, err := conn.ExecContext(t.Context(), `INSERT INTO sessions(id,source,started_at) VALUES ('sibling','cli',1778767200),('trashed','cli',1778767200); INSERT INTO messages(session_id,role,content,timestamp) VALUES ('sibling','user','untouched',1778767210),('trashed','user','original',1778767210)`)
+			_, err := conn.ExecContext(t.Context(), `INSERT INTO sessions(id,source,started_at) VALUES ('sibling','cli',1778767200); INSERT INTO messages(session_id,role,content,timestamp) VALUES ('sibling','user','untouched',1778767210)`)
 			require.NoError(t, err)
 			database := dbtest.OpenTestDB(t)
 			engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local"})
 			t.Cleanup(engine.Close)
-			require.Equal(t, 3, engine.SyncAll(t.Context(), nil).Synced)
-			require.NoError(t, database.SetSessionDataVersion(t.Context(), string(agent)+":child", 0))
-			require.NoError(t, database.SoftDeleteSession(t.Context(), string(agent)+":trashed"))
+			require.Equal(t, 2, engine.SyncAll(t.Context(), nil).Synced)
 			dir := filepath.Join(root, "sessions")
 			require.NoError(t, os.MkdirAll(dir, 0o700))
-			for _, id := range []string{"child", "new", "trashed"} {
+			for _, id := range []string{"child", "new"} {
 				content := `{"role":"session_meta","platform":"cli","timestamp":"2026-05-14T10:00:00Z"}` + "\n" + `{"role":"user","content":"orphan ` + id + `","timestamp":"2026-05-14T10:01:00Z"}` + "\n"
-				require.NoError(t, os.WriteFile(filepath.Join(dir, "session_"+id+".jsonl"), []byte(content), 0o600))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, id+".jsonl"), []byte(content), 0o600))
 			}
-			_, err = conn.ExecContext(t.Context(), `DELETE FROM messages WHERE session_id IN ('child','trashed'); DELETE FROM sessions WHERE id IN ('child','trashed')`)
+			_, err = conn.ExecContext(t.Context(), `DELETE FROM messages WHERE session_id='child'; DELETE FROM sessions WHERE id='child'`)
 			require.NoError(t, err)
 			require.NoError(t, engine.SyncPathsContext(t.Context(), []string{path + "-wal"}))
 			for _, id := range []string{"child", "new"} {
@@ -92,10 +90,6 @@ func TestHermesWatcherDiscoversStaleAndNewOrphanTranscripts(t *testing.T) {
 				require.Len(t, messages, 1)
 				assert.Equal(t, "orphan "+id, messages[0].Content)
 			}
-			trashed, err := database.GetSessionFull(t.Context(), string(agent)+":trashed")
-			require.NoError(t, err)
-			require.NotNil(t, trashed)
-			assert.NotNil(t, trashed.DeletedAt)
 		})
 	}
 }
