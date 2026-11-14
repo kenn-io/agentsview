@@ -438,6 +438,8 @@ type ListFilter struct {
 	ExclusionCounts *bool `json:"exclusion_counts,omitempty"`
 	// IDs selects explicit sessions and their host copies; nil uses discovery defaults.
 	IDs []string `json:"ids,omitzero"`
+	// Flat matches child sessions individually when IncludeChildren is set.
+	Flat bool `json:"flat,omitempty"`
 
 	Project            string `json:"project,omitempty"`
 	ExcludeProject     string `json:"exclude_project,omitempty"`

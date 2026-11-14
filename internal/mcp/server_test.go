@@ -79,7 +79,7 @@ func TestNewServer_MemoryProfileRegistersOnlyEvidenceTools(t *testing.T) {
 	})
 
 	tools := listCatalog(t, srv)
-	require.Len(t, tools.Tools, 3)
+	require.Len(t, tools.Tools, 4)
 	names := make([]string, 0, len(tools.Tools))
 	for _, tool := range tools.Tools {
 		names = append(names, tool.Name)
@@ -91,7 +91,7 @@ func TestNewServer_MemoryProfileRegistersOnlyEvidenceTools(t *testing.T) {
 				"memory-profile tools must not refer to unavailable tools")
 		}
 	}
-	assert.ElementsMatch(t, []string{ToolSearchContent, ToolGetMessages, ToolGetMemoryStatus}, names)
+	assert.ElementsMatch(t, []string{ToolSearchContent, ToolGetMessages, ToolGetMemoryStatus, ToolGetCompactionSummaries}, names)
 }
 
 func TestServer_GetMemoryStatus(t *testing.T) {
@@ -438,7 +438,7 @@ func TestCompactionSummarySchema(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	dbtest.SeedSession(t, d, "session", "project")
 	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: "session", Role: "assistant", Content: "summary", IsCompactBoundary: true}}))
-	srv := newServer(ServeOptions{Service: service.NewDirectBackend(d, nil)})
+	srv := newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), Profile: ProfileMemory})
 	st, ct := newInMemoryPair(t, srv)
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
 	catalog, err := ct.ListTools(t.Context(), nil)

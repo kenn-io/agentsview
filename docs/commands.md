@@ -2608,7 +2608,7 @@ SQLite archive directly. See
 daemon again.
 
 Use `--profile memory` when the client should discover only the
-`get_memory_status`, `search_content`, and `get_messages` conversation-memory
+`get_memory_status`, `search_content`, `get_messages`, and `get_compaction_summaries` conversation-memory
 tools. `get_memory_status` reports archive, lexical, semantic, vector coverage,
 and source-telemetry readiness without running a search probe. The default
 `full` profile preserves the complete MCP tool surface. Profile selection works

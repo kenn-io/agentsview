@@ -48,6 +48,11 @@ func CompactionSummaries(ctx context.Context, svc SessionService, req Compaction
 		limit = DefaultCompactionSessionLimit
 	}
 	limit = min(limit, MaxCompactionSessionLimit)
+	if checker, ok := svc.(interface{ CheckCompactionSummaries(context.Context) error }); ok {
+		if err := checker.CheckCompactionSummaries(ctx); err != nil {
+			return out, err
+		}
+	}
 	ids := []string{req.SessionID}
 	if req.SessionID != "" {
 		detail, err := svc.Get(ctx, req.SessionID)
@@ -58,7 +63,7 @@ func CompactionSummaries(ctx context.Context, svc SessionService, req Compaction
 			return out, nil
 		}
 	} else {
-		page, err := svc.List(ctx, ListFilter{ActiveSince: req.ActiveSince, Cursor: req.Cursor, Limit: limit, IncludeOneShot: true, OneShotFilterSet: true, IncludeAutomated: true, AutomatedFilterSet: true})
+		page, err := svc.List(ctx, ListFilter{ActiveSince: req.ActiveSince, Cursor: req.Cursor, Limit: limit, IncludeOneShot: true, OneShotFilterSet: true, IncludeAutomated: true, AutomatedFilterSet: true, IncludeChildren: true, Flat: true})
 		if err != nil {
 			return out, err
 		}

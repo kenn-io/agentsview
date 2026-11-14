@@ -136,8 +136,8 @@ profile:
 }
 ```
 
-This profile advertises only `get_memory_status`, `search_content`, and
-`get_messages`. The status tool reports the authenticated archive backend,
+This profile advertises only `get_memory_status`, `search_content`,
+`get_messages`, and `get_compaction_summaries`. The status tool reports the authenticated archive backend,
 read-only mode, server version, lexical availability, semantic generation
 coverage, and whether per-source freshness telemetry is available. Its `ready`,
 `partial`, `unavailable`, or `unknown` states come from the same provider as the

@@ -302,6 +302,18 @@ func (b *httpBackend) FindSessionIDsByRawSuffix(
 	return response.JSON200.Ids, nil
 }
 
+// CheckCompactionSummaries probes once per request because the daemon can change.
+func (b *httpBackend) CheckCompactionSummaries(ctx context.Context) error {
+	capabilities, err := ProbeHTTPServerCapabilities(ctx, b.baseURL, b.token)
+	if err != nil {
+		return err
+	}
+	if capabilities.APIVersion != service.APIVersion {
+		return fmt.Errorf("server API version %d does not support compaction summaries; use API version %d", capabilities.APIVersion, service.APIVersion)
+	}
+	return nil
+}
+
 // Probe only when the backend has no version so unfiltered lists need no extra request.
 func (b *httpBackend) requireSessionAnnotations(ctx context.Context) error {
 	version := b.apiVersion
@@ -434,6 +446,9 @@ func filterToQuery(f service.ListFilter) (*apiclient.GetAPIV1SessionsQuery, erro
 	}
 	if f.IncludeChildren {
 		q.IncludeChildren = new(true)
+	}
+	if f.Flat {
+		q.Flat = new(true)
 	}
 	if f.IncludeSource {
 		q.IncludeSource = new(true)

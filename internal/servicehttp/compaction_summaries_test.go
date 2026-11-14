@@ -78,3 +78,45 @@ func TestCompactionSummariesEvenerPlaceholdersOverHTTP(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, response.StatusCode)
 	})
 }
+
+func TestCompactionSummariesActiveChildren(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	for _, row := range []struct{ id, parent, ended string }{
+		{"active-parent", "", "2024-06-15T00:00:00Z"},
+		{"stale-child", "active-parent", "2024-01-01T00:00:00Z"},
+		{"stale-parent", "", "2024-01-01T00:00:00Z"},
+		{"active-child", "stale-parent", "2024-06-15T00:00:00Z"},
+		{"orphan", "missing", "2024-06-15T00:00:00Z"},
+	} {
+		dbtest.SeedSession(t, d, row.id, "project", func(s *db.Session) {
+			s.EndedAt = &row.ended
+			if row.parent != "" {
+				s.ParentSessionID = &row.parent
+				s.RelationshipType = "subagent"
+			}
+		})
+		require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: row.id, Role: "assistant", Content: row.id, IsCompactBoundary: true}}))
+	}
+	daemon := httptest.NewUnstartedServer(nil)
+	s := server.New(config.Config{Host: "127.0.0.1", Port: daemon.Listener.Addr().(*net.TCPAddr).Port, DataDir: t.TempDir()}, d, nil)
+	daemon.Config.Handler = s.Handler()
+	daemon.Start()
+	defer daemon.Close()
+	for _, svc := range []service.SessionService{service.NewDirectBackend(d, nil), servicehttp.NewHTTPBackend(daemon.URL, "", true, "")} {
+		var ids []string
+		cursor := ""
+		for range 4 {
+			out, err := service.CompactionSummaries(t.Context(), svc, service.CompactionSummariesRequest{ActiveSince: "2024-06-01T00:00:00Z", Limit: 1, Cursor: cursor})
+			require.NoError(t, err)
+			for _, summary := range out.Summaries {
+				ids = append(ids, summary.SessionID)
+			}
+			cursor = out.NextCursor
+			if cursor == "" {
+				break
+			}
+		}
+		assert.Empty(t, cursor)
+		assert.ElementsMatch(t, []string{"active-parent", "active-child", "orphan"}, ids)
+	}
+}
