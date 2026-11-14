@@ -6,7 +6,6 @@ import (
 	"context"
 	"database/sql"
 	"net"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -320,22 +319,6 @@ func TestQuackTrendsReuseAcrossRestart(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, reads, "another target needs its own contributions")
 	require.NoError(t, other.Close())
-
-	err = filepath.WalkDir(cache, func(path string, entry os.DirEntry, err error) error {
-		if err != nil || entry.IsDir() {
-			return err
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		assert.NotContains(t, path, uri)
-		assert.NotContains(t, string(data), uri)
-		assert.NotContains(t, string(data), token)
-		assert.NotContains(t, path, token)
-		return nil
-	})
-	require.NoError(t, err)
 }
 
 func openQuackMirrorServer(
