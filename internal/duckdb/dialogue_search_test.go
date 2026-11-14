@@ -26,6 +26,15 @@ func TestDuckDBDialogueSearchParity(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	dbtest.AssertDialogueSearchParity(t, local, store, "substring", "regex", "fts")
 	dbtest.AssertWordSearch(t, store)
+	t.Run("single word FTS keeps substring matches", func(t *testing.T) {
+		page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "invoice", Mode: "fts", Project: "word-search"})
+		require.NoError(t, err)
+		var ids []string
+		for _, match := range page.Matches {
+			ids = append(ids, match.SessionID)
+		}
+		assert.Contains(t, ids, "near")
+	})
 }
 
 func TestDialogueOnlyDuckDBChangeRepushesSession(t *testing.T) {
