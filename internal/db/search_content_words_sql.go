@@ -148,17 +148,78 @@ func wordFoldPatternSQL(b *QueryBuilder, pattern string) string {
 }
 
 func wordContainsSQL(b *QueryBuilder, column, pattern string, fold, columnFolded bool) string {
-	pattern = "%" + EscapeLikePattern(pattern) + "%"
-	var patternSQL string
-	if fold {
-		if !columnFolded {
-			column = WordFoldSQL(b.dialect, column)
-		}
-		patternSQL = wordFoldPatternSQL(b, pattern)
-	} else {
-		patternSQL = b.Add(pattern)
+	patterns := wordCandidateLikePatterns(pattern)
+	if fold && !columnFolded {
+		column = WordFoldSQL(b.dialect, column)
 	}
-	return column + " " + b.dialect.caseInsensitiveLike + " " + patternSQL + " " + b.dialect.caseInsensitiveLikeEsc
+	predicates := make([]string, len(patterns))
+	for i, candidate := range patterns {
+		var patternSQL string
+		if fold {
+			patternSQL = wordFoldPatternSQL(b, candidate)
+		} else {
+			patternSQL = b.Add(candidate)
+		}
+		predicates[i] = column + " " + b.dialect.caseInsensitiveLike + " " + patternSQL + " " + b.dialect.caseInsensitiveLikeEsc
+	}
+	return "(" + strings.Join(predicates, " OR ") + ")"
+}
+
+// Bound candidate SQL growth when a word has several simple-fold aliases.
+const maxWordCaseFoldVariants = 2
+
+func wordCandidateLikePatterns(pattern string) []string {
+	runes := []rune(pattern)
+	choices := make([][]rune, len(runes))
+	for i, r := range runes {
+		choices[i] = append([]rune{r}, wordCaseFoldAliases(r)...)
+	}
+	variants := [][]rune{{}}
+	for i := range runes {
+		if len(variants) > maxWordCaseFoldVariants/len(choices[i]) {
+			return []string{wordWildcardCaseFoldPattern(runes, choices)}
+		}
+		next := make([][]rune, 0, len(variants)*len(choices[i]))
+		for _, variant := range variants {
+			for _, folded := range choices[i] {
+				candidate := append(slices.Clone(variant), folded)
+				next = append(next, candidate)
+			}
+		}
+		variants = next
+	}
+	patterns := make([]string, len(variants))
+	for i, variant := range variants {
+		patterns[i] = "%" + EscapeLikePattern(string(variant)) + "%"
+	}
+	return patterns
+}
+
+func wordWildcardCaseFoldPattern(runes []rune, choices [][]rune) string {
+	var wildcard strings.Builder
+	wildcard.WriteByte('%')
+	for i, r := range runes {
+		if len(choices[i]) > 1 {
+			wildcard.WriteByte('_')
+		} else {
+			wildcard.WriteString(EscapeLikePattern(string(r)))
+		}
+	}
+	wildcard.WriteByte('%')
+	return wildcard.String()
+}
+
+func wordCaseFoldAliases(r rune) []rune {
+	if r > unicode.MaxASCII || !unicode.IsLetter(r) {
+		return nil
+	}
+	var aliases []rune
+	for folded := unicode.SimpleFold(r); folded != r; folded = unicode.SimpleFold(folded) {
+		if folded > unicode.MaxASCII {
+			aliases = append(aliases, folded)
+		}
+	}
+	return aliases
 }
 
 // wordTermSQL matches any of forms as a whole word, case-insensitively.
@@ -219,10 +280,27 @@ func compactForms(forms []string) string {
 	prefix := wordPrefix(forms)
 	suffixes := make([]string, len(forms))
 	for i, form := range forms {
-		suffixes[i] = regexp.QuoteMeta(form[len(prefix):])
+		suffixes[i] = wordCaseFoldRegex(form[len(prefix):])
 	}
 	slices.Sort(suffixes)
-	return regexp.QuoteMeta(prefix) + "(" + strings.Join(slices.Compact(suffixes), "|") + ")"
+	return wordCaseFoldRegex(prefix) + "(" + strings.Join(slices.Compact(suffixes), "|") + ")"
+}
+
+func wordCaseFoldRegex(word string) string {
+	var pattern strings.Builder
+	for _, r := range word {
+		folds := append([]rune{r}, wordCaseFoldAliases(r)...)
+		if len(folds) == 1 {
+			pattern.WriteString(regexp.QuoteMeta(string(r)))
+			continue
+		}
+		pattern.WriteByte('[')
+		for _, folded := range folds {
+			pattern.WriteRune(folded)
+		}
+		pattern.WriteByte(']')
+	}
+	return pattern.String()
 }
 
 // wordPrefix returns the common prefix of forms, which always hold the word.

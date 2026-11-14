@@ -44,6 +44,8 @@ func SeedWordSearch(t *testing.T, d *db.DB) {
 		{"accent-overlap", "word-accent-overlap", "résumé parsing"},
 		{"accent-unicode-boundary", "word-accent-unicode-boundary", "café漢字"},
 		{"accent-greek", "word-accent-greek", "αρχή parsing"},
+		{"long-s", "word-long-s", "teſt"},
+		{"long-s-multiple", "word-long-s-multiple", "aſſessment"},
 	} {
 		SeedSession(t, d, entry.id, entry.project, func(s *db.Session) { s.UserMessageCount = 2 })
 		require.NoError(t, d.ReplaceSessionMessages(t.Context(), entry.id, []db.Message{{
@@ -91,6 +93,8 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 		{"accent folding does not count an ASCII interior", "sum parsing missingword", "word-accent-overlap", []hit{{"accent-overlap", "message", 1}}},
 		{"accent folding keeps Unicode boundaries", "café missingword", "word-accent-unicode-boundary", nil},
 		{"Greek accents stay distinct", "αρχη missingword", "word-accent-greek", nil},
+		{"long s follows SQLite case folding", "test absentword", "word-long-s", []hit{{"long-s", "message", 1}}},
+		{"multiple long s folds stay candidates", "assessment absentword", "word-long-s-multiple", []hit{{"long-s-multiple", "message", 1}}},
 	} {
 		for _, mode := range []string{"substring", "fts", "hybrid"} {
 			t.Run(tc.name+"/"+mode, func(t *testing.T) {
