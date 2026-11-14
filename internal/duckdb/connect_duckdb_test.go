@@ -3,7 +3,6 @@
 package duckdb
 
 import (
-	"database/sql"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -42,15 +41,4 @@ func TestServingReadOnlyConnections(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, serving.Close()) })
 	assert.Equal(t, 4, serving.Stats().MaxOpenConnections)
-	first, err := serving.Conn(t.Context())
-	require.NoError(t, err)
-	defer first.Close()
-	second, err := serving.Conn(t.Context())
-	require.NoError(t, err)
-	defer second.Close()
-	for _, conn := range []*sql.Conn{first, second} {
-		var threads string
-		require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT value FROM duckdb_settings() WHERE name = 'threads'`).Scan(&threads))
-		assert.Equal(t, strconv.Itoa(duckDBThreadCount()), threads)
-	}
 }

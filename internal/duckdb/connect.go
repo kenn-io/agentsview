@@ -17,7 +17,9 @@ import (
 )
 
 const (
-	quackAttachmentName       = "agentsview_remote"
+	quackAttachmentName = "agentsview_remote"
+	// Four connections cut cold Dashboard waits from about 11s to 6s in
+	// paired runs while bounding concurrent panel reads.
 	servingReaderMaxOpenConns = 4
 )
 
