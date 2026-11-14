@@ -58,7 +58,7 @@ func newSessionMaterializeCommand() *cobra.Command {
 			if err != nil {
 				if session.Agent == "pi" {
 					if differs, ok := errors.AsType[*sessionmaterialize.DestinationDiffersError](err); ok {
-						return fmt.Errorf("%w; if this is the same session, resume it with: %s", err, piResumeCommand(result.Cwd, differs.Path, runtime.GOOS == "windows"))
+						return &piResumeConflictError{err: err, command: piResumeCommand(result.Cwd, differs.Path, runtime.GOOS == "windows")}
 					}
 				}
 				return err
@@ -83,6 +83,17 @@ func newSessionMaterializeCommand() *cobra.Command {
 	cmd.Flags().StringVar(&cwd, "cwd", "", "Existing local checkout for the resumed session")
 	return cmd
 }
+
+type piResumeConflictError struct {
+	err     error
+	command string
+}
+
+func (e *piResumeConflictError) Error() string {
+	return "destination differs; if this is the same session, resume it with: " + e.command
+}
+
+func (e *piResumeConflictError) Unwrap() error { return e.err }
 
 func claudeResumeCommand(cwd, id, home, project string, windows bool) string {
 	if home == "" {

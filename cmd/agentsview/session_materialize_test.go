@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/sessionmaterialize"
 )
 
 func TestSessionMaterializeRejectsRemoteBackends(t *testing.T) {
@@ -90,6 +92,10 @@ func TestPiMaterializeCommandReturnsNativeResume(t *testing.T) {
 	}
 	_, err = executeCommand(newRootCommand(), "session", "materialize", "pi:example", "--cwd", relative)
 	require.ErrorContains(t, err, "if this is the same session, resume it with: "+result.Command)
+	assert.Equal(t, 1, strings.Count(err.Error(), path))
+	var differs *sessionmaterialize.DestinationDiffersError
+	require.ErrorAs(t, err, &differs)
+	assert.Equal(t, path, differs.Path)
 
 	database, err = db.OpenIsolatedContext(t.Context(), filepath.Join(dataDir, "sessions.db"))
 	require.NoError(t, err)
