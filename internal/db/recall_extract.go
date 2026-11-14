@@ -1973,11 +1973,10 @@ func syncExtractedEntryContextTx(
 // Evidence digests cover rows the units digest ignores (system and empty
 // messages), so the reconciler can revoke an entry whose extraction output
 // never changed; a same-digest revisit repairs such entries instead of
-// settling the coverage stamp over a permanently dark corpus. Returns how
-// many entries had provenance restored.
+// settling the coverage stamp over a permanently dark corpus.
 func rebindExtractedSessionEvidenceTx(
 	ctx context.Context, tx *sql.Tx, fingerprint, sessionID string,
-) (int, error) {
+) error {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT e.id, e.entry_id,
 		       e.message_start_ordinal, e.message_end_ordinal
@@ -1988,7 +1987,7 @@ func rebindExtractedSessionEvidenceTx(
 		  AND e.session_id = ?`,
 		fingerprint, sessionID, sessionID)
 	if err != nil {
-		return 0, fmt.Errorf(
+		return fmt.Errorf(
 			"reading evidence for session %s: %w", sessionID, err)
 	}
 	defer rows.Close()
@@ -2004,13 +2003,13 @@ func rebindExtractedSessionEvidenceTx(
 			&row.id, &row.entryID, &row.start, &row.end,
 		); err != nil {
 			rows.Close()
-			return 0, fmt.Errorf("scanning evidence row: %w", err)
+			return fmt.Errorf("scanning evidence row: %w", err)
 		}
 		evidence = append(evidence, row)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf(
+		return fmt.Errorf(
 			"reading evidence for session %s: %w", sessionID, err)
 	}
 	type ordinalRange struct{ start, end int }
@@ -2023,7 +2022,7 @@ func rebindExtractedSessionEvidenceTx(
 			window, err := buildRecallEvidenceWindow(
 				ctx, tx, sessionID, key.start, key.end)
 			if err != nil {
-				return 0, fmt.Errorf(
+				return fmt.Errorf(
 					"rebinding evidence %d-%d for session %s: %w",
 					key.start, key.end, sessionID, err)
 			}
@@ -2032,13 +2031,13 @@ func rebindExtractedSessionEvidenceTx(
 				MessageEndOrdinal:   key.end,
 			})
 			if err != nil {
-				return 0, fmt.Errorf(
+				return fmt.Errorf(
 					"rebinding evidence %d-%d for session %s: %w",
 					key.start, key.end, sessionID, err)
 			}
 			bound[key] = metadata
 		}
-		if _, err := tx.ExecContext(ctx, `
+		result, err := tx.ExecContext(ctx, `
 			UPDATE recall_evidence
 			SET content_digest = ?1, message_start_source_uuid = ?2,
 			    message_end_source_uuid = ?3
@@ -2048,33 +2047,31 @@ func rebindExtractedSessionEvidenceTx(
 			metadata.MessageStartSourceUUID,
 			metadata.MessageEndSourceUUID,
 			row.id,
-		); err != nil {
-			return 0, fmt.Errorf(
+		)
+		if err != nil {
+			return fmt.Errorf(
 				"re-stamping evidence for entry %s: %w", row.entryID, err)
 		}
-		entryIDs[row.entryID] = true
+		changed, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf(
+				"checking re-stamped evidence for entry %s: %w", row.entryID, err)
+		}
+		entryIDs[row.entryID] = entryIDs[row.entryID] || changed > 0
 	}
-	restored := 0
-	for entryID := range entryIDs {
-		result, err := tx.ExecContext(ctx, `
+	for entryID, changed := range entryIDs {
+		if _, err := tx.ExecContext(ctx, `
 			UPDATE recall_entries
 			SET provenance_ok = 1,
 			    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-			WHERE id = ? AND provenance_ok = 0`,
-			entryID,
-		)
-		if err != nil {
-			return 0, fmt.Errorf(
+			WHERE id = ? AND (provenance_ok = 0 OR ?)`,
+			entryID, changed,
+		); err != nil {
+			return fmt.Errorf(
 				"restoring provenance for entry %s: %w", entryID, err)
 		}
-		affected, err := result.RowsAffected()
-		if err != nil {
-			return 0, fmt.Errorf(
-				"restoring provenance for entry %s: %w", entryID, err)
-		}
-		restored += int(affected)
 	}
-	return restored, nil
+	return nil
 }
 
 // ExtractCoverageRefresh is one same-digest revisit's guarded write: the
@@ -2164,7 +2161,7 @@ func (db *DB) RefreshExtractedSessionCoverage(
 	); err != nil {
 		return zero, err
 	}
-	if _, err := rebindExtractedSessionEvidenceTx(
+	if err := rebindExtractedSessionEvidenceTx(
 		ctx, tx, u.Fingerprint, u.Session.ID,
 	); err != nil {
 		return zero, err
