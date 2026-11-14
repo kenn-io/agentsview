@@ -500,60 +500,75 @@ test.describe("sidebar agent names", () => {
       expect(row.meta).toBeGreaterThanOrEqual(row.column - 1);
     }
 
-    await openSessions(page, 1280, 220);
-    // Expanding the parent also opens its subagent group.
-    await page.locator(`[data-session-id="${CROWDED_ID}"] .tree-toggle`).click();
-    await page.locator(".select-toggle-btn").click();
+    for (const locale of ["az", "en", "es", "fr", "ja", "ko", "zh-CN", "zh-TW"]) {
+      await page.addInitScript((value) => localStorage.setItem("agentsview-locale", value), locale);
+      await openSessions(page, 1280, 220);
+      // Expanding the parent also opens its subagent group.
+      await page.locator(`[data-session-id="${CROWDED_ID}"] .tree-toggle`).click();
+      await page.locator(".select-toggle-btn").click();
 
-    for (const id of [CROWDED_ID, "crowded-subagent", "crowded-teammate"]) {
-      const item = page.locator(`[data-session-id="${id}"]`);
-      await expect(item.locator(".select-checkbox")).toBeVisible();
-      const row = await item.evaluate((element) => {
-        const itemRect = element.getBoundingClientRect();
-        const rows = [...document.querySelectorAll("#session-sidebar .session-item")];
-        const next = rows[rows.indexOf(element) + 1];
-        const time = element.querySelector<HTMLElement>(".session-time")!;
-        const count = element.querySelector<HTMLElement>(".session-count")!;
-        const range = document.createRange();
-        range.selectNodeContents(time);
-        const text = range.getBoundingClientRect();
-        const escapes = (rect: DOMRect) =>
-          rect.left < itemRect.left - 1 ||
-          rect.right > itemRect.right + 1 ||
-          rect.top < itemRect.top - 1 ||
-          rect.bottom > itemRect.bottom + 1;
-        const overlapped = [
-          ...element.querySelectorAll<HTMLElement>(
-            ".tree-toggle, .select-checkbox, .kit-status-dot, .session-name, .session-meta",
-          ),
-        ].filter((other) => {
-          const rect = other.getBoundingClientRect();
-          return (
-            rect.width > 0 &&
-            rect.left < text.right - 1 &&
-            rect.right > text.left + 1 &&
-            rect.top < text.bottom - 1 &&
-            rect.bottom > text.top + 1
-          );
-        }).length;
-        return {
-          gapToNext: next ? next.getBoundingClientRect().top - itemRect.bottom : 0,
-          text: time.textContent,
-          timeEscapes: escapes(text),
-          overlapped,
-          countClipped:
-            escapes(count.getBoundingClientRect()) || count.scrollWidth > count.clientWidth + 1,
-          name: element.querySelector(".session-name")!.getBoundingClientRect().width,
-        };
-      });
-      console.log(`width=220px years locale=ko multi-select ${id} ${JSON.stringify(row)}`);
-      expect(row.text).toContain("2026");
-      expect(row.text).toMatch(/\d{1,2}:\d{2}/);
-      expect(row.timeEscapes).toBe(false);
-      expect(row.overlapped).toBe(0);
-      expect(row.countClipped).toBe(false);
-      expect(row.name).toBeGreaterThan(0);
-      expect(row.gapToNext).toBeGreaterThanOrEqual(-0.5);
+      for (const id of [CROWDED_ID, "crowded-subagent", "crowded-teammate"]) {
+        const item = page.locator(`[data-session-id="${id}"]`);
+        await expect(item.locator(".select-checkbox")).toBeVisible();
+        const row = await item.evaluate((element) => {
+          const itemRect = element.getBoundingClientRect();
+          const rows = [...document.querySelectorAll("#session-sidebar .session-item")];
+          const next = rows[rows.indexOf(element) + 1];
+          const time = element.querySelector<HTMLElement>(".session-time")!;
+          const count = element.querySelector<HTMLElement>(".session-count")!;
+          const range = document.createRange();
+          range.selectNodeContents(time);
+          const text = range.getBoundingClientRect();
+          const escapes = (rect: DOMRect) =>
+            rect.left < itemRect.left - 1 ||
+            rect.right > itemRect.right + 1 ||
+            rect.top < itemRect.top - 1 ||
+            rect.bottom > itemRect.bottom + 1;
+          const overlapped = [
+            ...element.querySelectorAll<HTMLElement>(
+              ".tree-toggle, .select-checkbox, .kit-status-dot, .session-name, .session-meta",
+            ),
+          ].filter((other) => {
+            const rect = other.getBoundingClientRect();
+            return (
+              rect.width > 0 &&
+              rect.left < text.right - 1 &&
+              rect.right > text.left + 1 &&
+              rect.top < text.bottom - 1 &&
+              rect.bottom > text.top + 1
+            );
+          }).length;
+          const name = element.querySelector<HTMLElement>(".session-name")!;
+          const column = element.querySelector(".session-info")!.getBoundingClientRect();
+          const fontSize = (node: HTMLElement) => parseFloat(getComputedStyle(node).fontSize);
+          return {
+            gapToNext: next ? next.getBoundingClientRect().top - itemRect.bottom : 0,
+            text: time.textContent,
+            // The timestamp reads as part of its own row: it starts at the
+            // title's edge, stays inside the text column, and is smaller
+            // than the title it describes.
+            leftOfTitle: name.getBoundingClientRect().left - text.left,
+            pastColumn: text.right - column.right,
+            sizeOverTitle: fontSize(time) - fontSize(name),
+            timeEscapes: escapes(text),
+            overlapped,
+            countClipped:
+              escapes(count.getBoundingClientRect()) || count.scrollWidth > count.clientWidth + 1,
+            name: element.querySelector(".session-name")!.getBoundingClientRect().width,
+          };
+        });
+        console.log(`width=220px years locale=${locale} multi-select ${id} ${JSON.stringify(row)}`);
+        expect(row.text).toContain("2026");
+        expect(row.text).toMatch(/\d{1,2}:\d{2}/);
+        expect(row.leftOfTitle).toBeLessThanOrEqual(0.5);
+        expect(row.pastColumn).toBeLessThanOrEqual(0.5);
+        expect(row.sizeOverTitle).toBeLessThan(0);
+        expect(row.timeEscapes).toBe(false);
+        expect(row.overlapped).toBe(0);
+        expect(row.countClipped).toBe(false);
+        expect(row.name).toBeGreaterThan(0);
+        expect(row.gapToNext).toBeGreaterThanOrEqual(-0.5);
+      }
     }
   });
 

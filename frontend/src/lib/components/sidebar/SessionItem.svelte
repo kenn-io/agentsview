@@ -816,6 +816,20 @@
     margin-top: 6px;
   }
 
+  /* A child's dot moves into the empty 18px tree-dash slot and gives up
+     its own width, so the full date fits after the child's checkbox. */
+  .session-item.years.compact > .tree-dash ~ :global(.kit-status-dot) {
+    order: -1;
+    margin-left: 6px;
+    margin-right: -16px;
+  }
+
+  .session-item.years.compact > .tree-dash ~ :global(.kit-status-bubble) {
+    order: -1;
+    margin-left: 4px;
+    margin-right: -18px;
+  }
+
   .session-item.years .session-info-link {
     display: flex;
     flex-direction: column;
@@ -825,19 +839,18 @@
     display: contents;
   }
 
-  /* The line starts under the title. A timestamp wider than the column,
-     as in a narrow, nested, or multi-select row, ends at the column's right
-     edge and runs left into the empty gutter below the checkbox and dot. */
+  /* The line starts under the title, so it reads as part of its own row.
+     One step below the meta line, the longest full date (Korean) fits a
+     220px sidebar in multi-select. */
   .session-item.years .session-time {
     order: 1;
-    display: flex;
-    justify-content: flex-end;
+    font-size: 10px;
     line-height: 13px;
   }
 
-  .session-item.years .session-time::after {
-    content: "";
-    flex: 1;
+  /* A child row's time matches its meta line, below its smaller title. */
+  .session-item.years.compact .session-time {
+    font-size: 9px;
   }
 
   .session-info-link {
