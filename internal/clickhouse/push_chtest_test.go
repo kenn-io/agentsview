@@ -402,6 +402,20 @@ func TestTrendsPartsAfterInterruptedPush(t *testing.T) {
 	got, err := retained.GetTrendsTerms(ctx, f, terms, "day")
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
+
+	require.NoError(t, local.ReplaceSessionMessages(ctx, fixtureAlphaID, nil))
+	result, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Errors)
+	directEmpty, err := NewStore(ctx, target)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, directEmpty.Close()) })
+	want, err = directEmpty.GetTrendsTerms(ctx, f, terms, "day")
+	require.NoError(t, err)
+	require.Zero(t, want.Series[0].Total)
+	got, err = retained.GetTrendsTerms(ctx, f, terms, "day")
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
 }
 
 func TestPushHonorsProjectScopeAndRemovesMovedSessions(t *testing.T) {
