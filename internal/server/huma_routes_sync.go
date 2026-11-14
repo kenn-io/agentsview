@@ -576,24 +576,37 @@ func (s *Server) humaSyncRemotes(
 	}
 	req := in.Body
 	req.Hosts = hosts
+	// A remote import is shared daemon work that can take many minutes. A
+	// requester that disconnects, such as a CLI killed by its caller's
+	// timeout, must not cancel it: a canceled import keeps the host at its
+	// old data version, so every retry repeats the whole download and
+	// reparse. The server's base context still bounds the run at shutdown.
+	runCtx := s.baseCtx
+	if runCtx == nil {
+		runCtx = context.WithoutCancel(ctx)
+	}
 
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
 		if strings.Contains(hctx.Header("Accept"), "text/event-stream") {
 			stream, ok := newHumaSSEStream(hctx)
 			if ok {
 				response := s.runRemoteSyncRequest(
-					ctx, local, engine, req,
+					runCtx, local, engine, req,
 					func(progress syncpkg.Progress) {
-						stream.SendJSON("progress", progress)
+						if ctx.Err() == nil {
+							stream.SendJSON("progress", progress)
+						}
 					},
 				)
-				stream.SendJSON("done", response)
+				if ctx.Err() == nil {
+					stream.SendJSON("done", response)
+				}
 				return
 			}
 		}
 		writeHumaJSON(
 			hctx, http.StatusOK,
-			s.runRemoteSyncRequest(ctx, local, engine, req, nil),
+			s.runRemoteSyncRequest(runCtx, local, engine, req, nil),
 		)
 	}}, nil
 }
