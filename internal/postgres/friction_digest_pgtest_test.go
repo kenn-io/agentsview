@@ -15,7 +15,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/friction"
 )
 
@@ -100,7 +99,6 @@ func openFrictionParityStores(t *testing.T) (*db.DB, *Store) {
 
 	local, err := db.Open(ctx, filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
-	dbtest.SeedPricingMeta(t, local)
 	t.Cleanup(func() { _ = local.Close() })
 	seed := func(id, ended string, parent *string) {
 		s := db.Session{

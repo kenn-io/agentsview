@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -89,7 +88,6 @@ func TestPushAfterArchiveRebuildRemovesMissingSessions(t *testing.T) {
 
 			rebuilt, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "rebuilt.db"))
 			require.NoError(t, err)
-			dbtest.SeedPricingMeta(t, rebuilt)
 			t.Cleanup(func() { require.NoError(t, rebuilt.Close()) })
 			require.NoError(t, rebuilt.CopyArchiveIdentityFrom(t.Context(), f.local.Path()))
 			require.NoError(t, rebuilt.CopySyncStateFrom(t.Context(), f.local.Path()))

@@ -3,7 +3,9 @@
 package duckdb
 
 import (
+	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -32,7 +34,7 @@ func TestSyncGenAIPricingComparesByDigest(t *testing.T) {
 			}
 			syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 			require.NoError(t, createSchema(ctx, syncer.DB()))
-			mirrored := func() (data []byte, updatedAt string) {
+			mirrored := func() (data []byte, updatedAt sql.NullTime) {
 				t.Helper()
 				require.NoError(t, syncer.DB().QueryRowContext(ctx,
 					`SELECT data_json, updated_at FROM genai_pricing WHERE singleton = 1`,
@@ -49,11 +51,12 @@ func TestSyncGenAIPricingComparesByDigest(t *testing.T) {
 			require.Equal(t, want, data, "a missing mirror document is inserted")
 
 			_, err := syncer.DB().ExecContext(ctx,
-				`UPDATE genai_pricing SET updated_at = 'mirror-observed' WHERE singleton = 1`)
+				`UPDATE genai_pricing SET updated_at = '2026-07-01 00:00:00' WHERE singleton = 1`)
 			require.NoError(t, err)
 			require.NoError(t, syncer.syncGenAIPricing(ctx))
 			_, updatedAt := mirrored()
-			assert.Equal(t, "mirror-observed", updatedAt, "a matching document is not rewritten")
+			assert.True(t, updatedAt.Time.Equal(time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)),
+				"a matching document is not rewritten: %v", updatedAt)
 
 			require.NoError(t, local.UpsertGenAIPricing(ctx, db.GenAIPricingDocument{
 				Version: "genai-prices-test", SourceRef: "upstream-ref",

@@ -252,7 +252,7 @@ func BenchmarkUsagePricingDigest(b *testing.B) {
 	embedded := db.EmbeddedGenAIPricingDocument()
 	genAI, err := db.GenAIEffectivePricingRow(&embedded)
 	require.NoError(b, err)
-	rows := append(db.MirrorPricingRows(db.FallbackPricingMap()), genAI)
+	rows := append(db.MirrorPricingRows(db.FallbackRateMap()), genAI)
 	patterns := make([]string, 0, len(rows))
 	for _, row := range rows {
 		if row.ModelPattern != "" {

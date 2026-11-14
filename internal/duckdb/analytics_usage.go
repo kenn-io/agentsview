@@ -234,10 +234,9 @@ func (s *Store) loadPricing(ctx context.Context) (map[string]export.ModelRates, 
 	for rows.Next() {
 		var model string
 		var rates export.ModelRates
-		var updatedAt string
+		var updatedAt, bandUpdatedAt sql.NullTime
 		var threshold, input, output, cacheCreation, cacheCreation1h,
 			cacheRead sql.NullInt64
-		var bandUpdatedAt sql.NullString
 		if err := rows.Scan(
 			&model, &rates.InputPerMTok, &rates.OutputPerMTok,
 			&rates.CacheWritePerMTok, &rates.CacheWrite1hPerMTok,
@@ -247,15 +246,9 @@ func (s *Store) loadPricing(ctx context.Context) (map[string]export.ModelRates, 
 		); err != nil {
 			return nil, err
 		}
-		if strings.HasPrefix(model, "_") {
-			continue
-		}
 		stored, exists := out[model]
 		if !exists {
-			if parsed, err := time.Parse(time.RFC3339Nano, updatedAt); err == nil {
-				t := parsed.UTC()
-				rates.UpdatedAt = &t
-			}
+			rates.UpdatedAt = duckTimePointer(updatedAt)
 			stored = rates
 			count++
 		}
@@ -267,13 +260,6 @@ func (s *Store) loadPricing(ctx context.Context) (map[string]export.ModelRates, 
 					model, err,
 				)
 			}
-			var parsedUpdatedAt *time.Time
-			if parsed, err := time.Parse(
-				time.RFC3339Nano, bandUpdatedAt.String,
-			); err == nil {
-				t := parsed.UTC()
-				parsedUpdatedAt = &t
-			}
 			stored.Bands = append(stored.Bands, export.PricingBand{
 				AboveInputTokens:    aboveInputTokens,
 				InputPerMTok:        money.Money{Microdollars: input.Int64},
@@ -281,7 +267,7 @@ func (s *Store) loadPricing(ctx context.Context) (map[string]export.ModelRates, 
 				CacheWritePerMTok:   money.Money{Microdollars: cacheCreation.Int64},
 				CacheWrite1hPerMTok: money.Money{Microdollars: cacheCreation1h.Int64},
 				CacheReadPerMTok:    money.Money{Microdollars: cacheRead.Int64},
-				UpdatedAt:           parsedUpdatedAt,
+				UpdatedAt:           duckTimePointer(bandUpdatedAt),
 			})
 		}
 		out[model] = stored
@@ -290,9 +276,9 @@ func (s *Store) loadPricing(ctx context.Context) (map[string]export.ModelRates, 
 		return nil, err
 	}
 	if count == 0 {
-		out = db.FallbackPricingMap()
+		out = db.FallbackRateMap()
 	} else {
-		fallback := db.FallbackPricingMap()
+		fallback := db.FallbackRateMap()
 		for model, rates := range out {
 			rates.Source = db.ModelPricingSource(model, rates, fallback)
 			out[model] = rates
@@ -319,6 +305,15 @@ func (s *Store) loadPricing(ctx context.Context) (map[string]export.ModelRates, 
 		out[model] = rates
 	}
 	return out, nil
+}
+
+// duckTimePointer returns a pricing time as UTC, or nil for NULL.
+func duckTimePointer(t sql.NullTime) *time.Time {
+	if !t.Valid {
+		return nil
+	}
+	utc := t.Time.UTC()
+	return &utc
 }
 
 func (s *Store) loadPricingResolver(

@@ -37,7 +37,6 @@ func TestPushPreservesLegacyOffsetTimestamps(t *testing.T) {
 
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
-	dbtest.SeedPricingMeta(t, local)
 	defer local.Close()
 
 	const sessionID = "legacy-offset-time"
@@ -623,7 +622,6 @@ func TestPushProjectMoveReconcilesFilteredScope(t *testing.T) {
 			ctx := t.Context()
 			local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 			require.NoError(t, err)
-			dbtest.SeedPricingMeta(t, local)
 			t.Cleanup(func() { require.NoError(t, local.Close()) })
 			startedAt := "2026-07-16T12:00:00.000Z"
 			localModifiedAt := startedAt
@@ -866,7 +864,6 @@ func TestPushSystemReclassificationRepublishes(t *testing.T) {
 		filepath.Join(t.TempDir(), "local.db"),
 	)
 	require.NoError(t, err, "db.Open")
-	dbtest.SeedPricingMeta(t, localDB)
 	defer localDB.Close()
 
 	sync := &Sync{
@@ -946,7 +943,6 @@ func TestPushMessageNanosecondTimestampNoRewriteRegression(t *testing.T) {
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
-	dbtest.SeedPricingMeta(t, localDB)
 	defer localDB.Close()
 
 	sync := &Sync{
@@ -1135,7 +1131,6 @@ func TestPushPreservesPGServeLocalCurationFields(t *testing.T) {
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
-	dbtest.SeedPricingMeta(t, localDB)
 	defer localDB.Close()
 
 	sync := &Sync{
@@ -1225,7 +1220,6 @@ func TestPushKeepsSourceAvailabilityLocalAndPreservesPGUserTrash(t *testing.T) {
 
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
-	dbtest.SeedPricingMeta(t, local)
 	defer local.Close()
 	syncer := &Sync{
 		pg: pg, local: local, machine: "test-machine",
@@ -1354,7 +1348,6 @@ func TestPushPreservesPGServePermanentDeletes(t *testing.T) {
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
-	dbtest.SeedPricingMeta(t, localDB)
 	defer localDB.Close()
 
 	sync := &Sync{
@@ -1479,7 +1472,6 @@ func TestPushPurgesRowsForPGExcludedSessions(t *testing.T) {
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
-	dbtest.SeedPricingMeta(t, localDB)
 	defer localDB.Close()
 
 	sync := &Sync{
@@ -1628,7 +1620,6 @@ func TestPushUpdatesSourceCurationFieldsWithoutPGOverride(t *testing.T) {
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
-	dbtest.SeedPricingMeta(t, localDB)
 	defer localDB.Close()
 
 	sync := &Sync{
@@ -1727,7 +1718,6 @@ func TestPushPreservesLegacyPGCurationWithoutSourceBaseline(t *testing.T) {
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
-	dbtest.SeedPricingMeta(t, localDB)
 	defer localDB.Close()
 
 	sync := &Sync{
@@ -1860,7 +1850,6 @@ func TestPushSyncsUsageEventsForZeroMessageSession(t *testing.T) {
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
-	dbtest.SeedPricingMeta(t, localDB)
 	defer localDB.Close()
 
 	sync := &Sync{
@@ -2078,7 +2067,6 @@ func TestPushCursorUsageEventsDedupsAfterLegacyMoneyMigration(t *testing.T) {
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "sessions.db"))
 	require.NoError(t, err, "open local db")
-	dbtest.SeedPricingMeta(t, localDB)
 	defer localDB.Close()
 	require.NoError(t, localDB.InsertCursorUsageEvents(t.Context(), []db.CursorUsageEvent{{
 		OccurredAt:       "2026-05-14T10:05:00.123456789Z",
@@ -2138,7 +2126,6 @@ func TestPushCursorUsageEventsPreservesRowsFromOtherMachines(t *testing.T) {
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "sessions.db"))
 	require.NoError(t, err, "open local db")
-	dbtest.SeedPricingMeta(t, localDB)
 	defer localDB.Close()
 	require.NoError(t, localDB.InsertCursorUsageEvents(t.Context(), []db.CursorUsageEvent{{
 		OccurredAt:       "2026-05-14T10:05:00Z",
@@ -2188,7 +2175,6 @@ func TestPushSendsOnlyNewCursorUsageEvents(t *testing.T) {
 
 	localDB, err := db.Open(ctx, filepath.Join(t.TempDir(), "sessions.db"))
 	require.NoError(t, err, "open local db")
-	dbtest.SeedPricingMeta(t, localDB)
 	defer localDB.Close()
 	event := func(dedupKey string) []db.CursorUsageEvent {
 		return []db.CursorUsageEvent{{
@@ -2359,7 +2345,6 @@ func TestPushMessagesSanitizesNULBytes(t *testing.T) {
 		filepath.Join(t.TempDir(), "local.db"),
 	)
 	require.NoError(t, err, "db.Open")
-	dbtest.SeedPricingMeta(t, localDB)
 	defer localDB.Close()
 
 	sync := &Sync{
@@ -2461,7 +2446,6 @@ func TestPushIncrementalWithOnlyForeignMachineSessions(t *testing.T) {
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
-	dbtest.SeedPricingMeta(t, localDB)
 	defer localDB.Close()
 
 	sync := &Sync{
@@ -2550,7 +2534,6 @@ func TestPushDetectsResetWhenCompetingMachineRowsExist(t *testing.T) {
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
-	dbtest.SeedPricingMeta(t, localDB)
 	defer localDB.Close()
 
 	sync := &Sync{
@@ -2631,7 +2614,6 @@ func TestPushMarkerNotWrittenWhenResetRecoveryFails(t *testing.T) {
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
-	dbtest.SeedPricingMeta(t, localDB)
 	defer localDB.Close()
 
 	sync := &Sync{
@@ -2739,7 +2721,6 @@ func TestPushUpdatesSentinelMachineWhenSyncMachineChanges(t *testing.T) {
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
-	dbtest.SeedPricingMeta(t, localDB)
 	defer localDB.Close()
 
 	sync := &Sync{
@@ -2809,7 +2790,6 @@ func TestPushAdoptsOwnerlessRowsFromPreviousMarkerMachine(t *testing.T) {
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
-	dbtest.SeedPricingMeta(t, localDB)
 	defer localDB.Close()
 
 	const markerID = "legacy-marker-1"
@@ -2935,7 +2915,6 @@ func TestFilteredPushAdoptsOwnerlessRowsFromLegacyUnscopedMarker(t *testing.T) {
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
-	dbtest.SeedPricingMeta(t, localDB)
 	defer localDB.Close()
 
 	const markerID = "legacy-marker-filtered-1"
@@ -3035,7 +3014,6 @@ func TestPushReportsSkippedConflicts(t *testing.T) {
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
-	dbtest.SeedPricingMeta(t, localDB)
 	defer localDB.Close()
 
 	sync := &Sync{
@@ -3095,7 +3073,6 @@ func newSessionProvenancePushSync(
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
-	dbtest.SeedPricingMeta(t, localDB)
 	t.Cleanup(func() { _ = localDB.Close() })
 
 	sync := &Sync{
@@ -3271,7 +3248,6 @@ func TestFilteredArchiveIdentityRepairPreservesOtherPublicationScope(
 	ctx := t.Context()
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
-	dbtest.SeedPricingMeta(t, local)
 	t.Cleanup(func() { require.NoError(t, local.Close()) })
 	for _, project := range []string{"alpha", "beta"} {
 		sessionID := "session-" + project
@@ -3722,7 +3698,6 @@ func TestFilteredPushReconcilesProjectMoveCommittedDuringPush(t *testing.T) {
 	ctx := t.Context()
 	local, err := db.Open(ctx, filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
-	dbtest.SeedPricingMeta(t, local)
 	t.Cleanup(func() { require.NoError(t, local.Close()) })
 	startedAt := "2026-07-16T12:00:00.000Z"
 	require.NoError(t, local.UpsertSession(ctx, db.Session{

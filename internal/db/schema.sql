@@ -1367,6 +1367,13 @@ CREATE TABLE IF NOT EXISTS genai_pricing (
         DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
+-- Values the price refresh keeps between runs, such as the embedded catalog
+-- version and the model patterns OpenRouter supplied.
+CREATE TABLE IF NOT EXISTS pricing_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+) WITHOUT ROWID;
+
 -- Git aggregation TTL cache: memoizes `git log --numstat` and
 -- `gh pr list` results per (repo, author, window) tuple so
 -- repeated `agentsview stats` invocations don't re-shell out.

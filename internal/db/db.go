@@ -691,7 +691,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // identities are unchanged.)
 // (180: prevent older binaries from writing usage events without
 // occurred_at_us or querying the index it replaced.)
-const dataVersion = 180
+// (181: prevent older binaries from reading or writing pricing metadata as
+// model_pricing rows after it moved to pricing_meta.)
+const dataVersion = 181
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -2121,6 +2123,7 @@ var readOnlyRequiredTables = []string{
 	"model_pricing",
 	"model_pricing_bands",
 	"genai_pricing",
+	"pricing_meta",
 	"secret_findings",
 	"friction_digests",
 	"friction_digest_sessions",
@@ -3385,6 +3388,9 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 	}
 	if _, err := w.ExecContext(ctx, genAIPricingSchemaSQL); err != nil {
 		return fmt.Errorf("creating GenAI pricing storage: %w", err)
+	}
+	if err := movePricingMetaLocked(ctx, w); err != nil {
+		return err
 	}
 	if _, err := w.ExecContext(ctx, artifactSessionQueueTriggerDropsSQL); err != nil {
 		return fmt.Errorf("dropping artifact session queue triggers: %w", err)

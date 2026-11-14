@@ -111,18 +111,26 @@ func TestPGActivityReportSourceProbeUsesMirrorSchema(t *testing.T) {
 		"identity-only mirror updates must change the Activity probe")
 }
 
-func TestPGActivityReportSourceProbeIgnoresPricingSentinels(t *testing.T) {
-	_, store := prepareUsageSchema(t, "agentsview_activity_probe_sentinel_test")
+// The probe reports the newest pricing time across model prices and the
+// GenAI document, so a change to either refreshes open Activity reports. A
+// table without a time does not hide the other's.
+func TestPGActivityReportSourceProbeReportsNewestPricingTime(t *testing.T) {
+	_, store := prepareUsageSchema(t, "agentsview_activity_probe_pricing_test")
 	ctx := t.Context()
-	_, err := store.DB().ExecContext(ctx, `INSERT INTO model_pricing
-		(model_pattern, updated_at) VALUES
-		('_openrouter_models', '["or/model-a"]'),
-		('probe-model', '2026-07-01T00:00:02.000Z')`)
-	require.NoError(t, err)
-
-	probe, err := store.ActivityReportSourceProbe(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, "2026-07-01T00:00:02.000Z", probe.MaxPricingUpdated)
+	for _, step := range []struct{ sql, want string }{
+		{`SELECT 1`, ""},
+		{`INSERT INTO genai_pricing (singleton, version, source, data_json)
+		  VALUES (1, 'v1', 'embedded', '\x7b7d')`, ""},
+		{`INSERT INTO model_pricing (model_pattern, updated_at)
+		  VALUES ('probe-model', '2026-07-01T00:00:02Z')`, "2026-07-01 00:00:02+00"},
+		{`UPDATE genai_pricing SET updated_at = '2026-07-02T00:00:00Z'`, "2026-07-02 00:00:00+00"},
+	} {
+		_, err := store.DB().ExecContext(ctx, step.sql)
+		require.NoError(t, err, step.sql)
+		probe, err := store.ActivityReportSourceProbe(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, step.want, probe.MaxPricingUpdated, step.sql)
+	}
 }
 
 func TestPGGetActivityReport(t *testing.T) {
@@ -235,7 +243,7 @@ func TestPGGetActivityReportUsageCostAndTokens(t *testing.T) {
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('claude-sonnet-4-20250514', 3000000, 15000000, 0, 0, 'seed')`)
+		) VALUES ('claude-sonnet-4-20250514', 3000000, 15000000, 0, 0, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -285,8 +293,8 @@ func TestPGGetActivityReportCopilotReportedCostReplacesSessionEstimates(t *testi
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
 		) VALUES
-			('copilot-model-a', 10000000, 0, 0, 0, 'seed'),
-			('copilot-model-b', 20000000, 0, 0, 0, 'seed')`)
+			('copilot-model-a', 10000000, 0, 0, 0, '2026-01-01T00:00:00Z'),
+			('copilot-model-b', 20000000, 0, 0, 0, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err)
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -342,8 +350,8 @@ func TestPGGetActivityReportIncludesSubagentUsage(t *testing.T) {
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
 		) VALUES
-			('root-model', 3000000, 15000000, 0, 0, 'seed'),
-			('sub-model', 3000000, 15000000, 0, 0, 'seed')`)
+			('root-model', 3000000, 15000000, 0, 0, '2026-01-01T00:00:00Z'),
+			('sub-model', 3000000, 15000000, 0, 0, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -420,8 +428,8 @@ func TestPGGetActivityReportPricingModelsOnlyIncludeDedupSurvivors(t *testing.T)
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
 		) VALUES
-			('partial-model', 3000000, 15000000, 0, 0, 'seed'),
-			('complete-model', 3000000, 15000000, 0, 0, 'seed')`)
+			('partial-model', 3000000, 15000000, 0, 0, '2026-01-01T00:00:00Z'),
+			('complete-model', 3000000, 15000000, 0, 0, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -572,7 +580,7 @@ func TestPGGetActivityReportExcludesIneligibleUsage(t *testing.T) {
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('claude-sonnet-4-20250514', 3000000, 15000000, 0, 0, 'seed')`)
+		) VALUES ('claude-sonnet-4-20250514', 3000000, 15000000, 0, 0, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err, "insert pricing")
 	_, err = store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -619,7 +627,7 @@ func TestPGGetActivityReportDedupUsesChronologicalOrder(t *testing.T) {
 		INSERT INTO model_pricing (
 			model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok, cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('claude-sonnet-4-20250514', 3000000, 15000000, 0, 0, 'seed')`)
+		) VALUES ('claude-sonnet-4-20250514', 3000000, 15000000, 0, 0, '2026-01-01T00:00:00Z')`)
 	require.NoError(t, err, "insert pricing")
 
 	// dup-a: earlier timestamp and 500 output tokens -> the correct global

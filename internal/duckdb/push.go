@@ -20,13 +20,14 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/money"
+	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/signals"
 	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
 func (s *Sync) syncModelPricing(ctx context.Context) error {
-	prices, err := s.local.ListModelPricing(ctx)
+	prices, localOpenRouter, err := s.local.ListModelPricingWithOpenRouter(ctx)
 	if err != nil {
 		return err
 	}
@@ -41,14 +42,19 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	prices, removePatterns, err := db.PlanModelPricingSync(existing, prices)
+	existingOpenRouter, err := s.duckPricingMeta(ctx, pricingpkg.OpenRouterModelsMetaKey)
+	if err != nil {
+		return err
+	}
+	plan, err := db.PlanModelPricingSync(existing, existingOpenRouter, prices, localOpenRouter)
 	if err != nil {
 		return fmt.Errorf("planning duckdb pricing sync: %w", err)
 	}
-	if len(prices) == 0 && len(removePatterns) == 0 {
+	prices = plan.Changed
+	if len(prices) == 0 && len(plan.Remove) == 0 && plan.OpenRouterModels == "" {
 		return s.syncGenAIPricing(ctx)
 	}
-	if err := s.removeDuckModelPricing(ctx, removePatterns); err != nil {
+	if err := s.removeDuckModelPricing(ctx, plan.Remove); err != nil {
 		return err
 	}
 
@@ -63,7 +69,10 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	for i := 0; i < len(prices); i += duckPricingUpsertBatch {
 		end := min(i+duckPricingUpsertBatch, len(prices))
 		batch := prices[i:end]
-		query, args := duckPricingUpsertStatement(batch)
+		query, args, err := duckPricingUpsertStatement(batch)
+		if err != nil {
+			return err
+		}
 		if err := s.execMutation(ctx, tx, query, args...); err != nil {
 			return fmt.Errorf(
 				"syncing duckdb pricing batch starting at %d: %w",
@@ -93,7 +102,10 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	}
 	for i := 0; i < len(bands); i += duckPricingUpsertBatch {
 		end := min(i+duckPricingUpsertBatch, len(bands))
-		query, args := duckPricingBandInsertStatement(bands[i:end])
+		query, args, err := duckPricingBandInsertStatement(bands[i:end])
+		if err != nil {
+			return err
+		}
 		if err := s.execMutation(ctx, tx, query, args...); err != nil {
 			return fmt.Errorf(
 				"inserting duckdb pricing bands batch starting at %d: %w",
@@ -101,10 +113,35 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 			)
 		}
 	}
+	if plan.OpenRouterModels != "" {
+		if err := s.execMutation(ctx, tx, `
+			INSERT INTO pricing_meta (key, value) VALUES (?, ?)
+			ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+			pricingpkg.OpenRouterModelsMetaKey, plan.OpenRouterModels,
+		); err != nil {
+			return fmt.Errorf("writing duckdb OpenRouter models: %w", err)
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing duckdb pricing sync: %w", err)
 	}
 	return s.syncGenAIPricing(ctx)
+}
+
+// duckPricingMeta reads a pricing_meta value from the mirror. Returns ""
+// if not found.
+func (s *Sync) duckPricingMeta(ctx context.Context, key string) (string, error) {
+	var value string
+	err := s.duck.QueryRowContext(ctx,
+		`SELECT value FROM pricing_meta WHERE key = ?`, key,
+	).Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("reading duckdb pricing meta %q: %w", key, err)
+	}
+	return value, nil
 }
 
 type duckGenAIPricingQuerier interface {
@@ -121,11 +158,12 @@ func loadDuckGenAIPricingState(
 	ctx context.Context, q duckGenAIPricingQuerier,
 ) (*db.GenAIPricingState, error) {
 	var state db.GenAIPricingState
+	var updatedAt sql.NullTime
 	err := q.QueryRowContext(ctx, `
 		SELECT version, source_ref, source, sha256(data_json), updated_at
 		FROM genai_pricing WHERE singleton = 1`).Scan(
 		&state.Version, &state.SourceRef, &state.Source,
-		&state.DataSHA256, &state.UpdatedAt,
+		&state.DataSHA256, &updatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -133,6 +171,7 @@ func loadDuckGenAIPricingState(
 	if err != nil {
 		return nil, fmt.Errorf("reading duckdb GenAI pricing state: %w", err)
 	}
+	state.UpdatedAt = db.FormatMirrorPricingTime(updatedAt)
 	return &state, nil
 }
 
@@ -140,9 +179,10 @@ func scanDuckGenAIPricing(
 	row duckGenAIPricingRow,
 ) (*db.GenAIPricingDocument, error) {
 	var document db.GenAIPricingDocument
+	var updatedAt sql.NullTime
 	err := row.Scan(
 		&document.Version, &document.SourceRef, &document.Source,
-		&document.Data, &document.UpdatedAt,
+		&document.Data, &updatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -150,6 +190,7 @@ func scanDuckGenAIPricing(
 	if err != nil {
 		return nil, fmt.Errorf("reading duckdb GenAI pricing document: %w", err)
 	}
+	document.UpdatedAt = db.FormatMirrorPricingTime(updatedAt)
 	return &document, nil
 }
 
@@ -164,10 +205,11 @@ func loadDuckGenAIPricingRow(
 ) (export.EffectivePricingRow, error) {
 	var digest db.GenAIPricingDigest
 	var sum string
+	var updatedAt sql.NullTime
 	err := queryRow(ctx, `
 		SELECT version, source_ref, source, updated_at, sha256(data_json)
 		FROM genai_pricing WHERE singleton = 1`).Scan(
-		&digest.Version, &digest.SourceRef, &digest.Source, &digest.UpdatedAt, &sum,
+		&digest.Version, &digest.SourceRef, &digest.Source, &updatedAt, &sum,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return db.GenAIEffectivePricingRow(nil)
@@ -176,6 +218,7 @@ func loadDuckGenAIPricingRow(
 		return export.EffectivePricingRow{}, fmt.Errorf(
 			"reading duckdb GenAI pricing digest: %w", err)
 	}
+	digest.UpdatedAt = db.FormatMirrorPricingTime(updatedAt)
 	if digest.Sum, err = db.ParseGenAIPricingSum([]byte(sum)); err != nil {
 		return export.EffectivePricingRow{}, err
 	}
@@ -216,6 +259,10 @@ func (s *Sync) syncGenAIPricing(ctx context.Context) error {
 	if existing.Matches(document) {
 		return nil
 	}
+	updatedAt, err := db.MirrorPricingTime(document.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("GenAI pricing document: %w", err)
+	}
 	if err := s.execMutation(ctx, tx, `
 		INSERT INTO genai_pricing
 			(singleton, version, source_ref, source, data_json, updated_at)
@@ -227,7 +274,7 @@ func (s *Sync) syncGenAIPricing(ctx context.Context) error {
 			data_json = excluded.data_json,
 			updated_at = excluded.updated_at`,
 		document.Version, document.SourceRef, document.Source,
-		document.Data, document.UpdatedAt,
+		document.Data, updatedAt,
 	); err != nil {
 		return fmt.Errorf("upserting duckdb GenAI pricing document: %w", err)
 	}
@@ -298,7 +345,7 @@ type duckModelPricingBand struct {
 	band         db.PricingBand
 }
 
-func duckPricingBandInsertStatement(bands []duckModelPricingBand) (string, []any) {
+func duckPricingBandInsertStatement(bands []duckModelPricingBand) (string, []any, error) {
 	var b strings.Builder
 	b.WriteString(`INSERT INTO model_pricing_bands (
 		model_pattern, above_input_tokens,
@@ -313,9 +360,13 @@ func duckPricingBandInsertStatement(bands []duckModelPricingBand) (string, []any
 			b.WriteString(", ")
 		}
 		b.WriteString("(?, ?, ?, ?, ?, ?, ?, ?)")
-		updatedAt := item.band.UpdatedAt
-		if updatedAt == "" {
-			updatedAt = item.updatedAt
+		stored := item.band.UpdatedAt
+		if stored == "" {
+			stored = item.updatedAt
+		}
+		updatedAt, err := db.MirrorPricingTime(stored)
+		if err != nil {
+			return "", nil, fmt.Errorf("pricing band for %q: %w", item.modelPattern, err)
 		}
 		args = append(args,
 			item.modelPattern,
@@ -328,12 +379,12 @@ func duckPricingBandInsertStatement(bands []duckModelPricingBand) (string, []any
 			updatedAt,
 		)
 	}
-	return b.String(), args
+	return b.String(), args, nil
 }
 
 const duckPricingUpsertBatch = 100
 
-func duckPricingUpsertStatement(prices []db.ModelPricing) (string, []any) {
+func duckPricingUpsertStatement(prices []db.ModelPricing) (string, []any, error) {
 	var b strings.Builder
 	b.WriteString(`INSERT INTO model_pricing (
 		model_pattern, input_microdollars_per_mtok, output_microdollars_per_mtok,
@@ -346,6 +397,10 @@ func duckPricingUpsertStatement(prices []db.ModelPricing) (string, []any) {
 			b.WriteString(", ")
 		}
 		b.WriteString("(?, ?, ?, ?, ?, ?, ?)")
+		updatedAt, err := db.MirrorPricingTime(p.UpdatedAt)
+		if err != nil {
+			return "", nil, fmt.Errorf("pricing for %q: %w", p.ModelPattern, err)
+		}
 		args = append(args,
 			p.ModelPattern,
 			p.InputPerMTok.Microdollars,
@@ -353,7 +408,7 @@ func duckPricingUpsertStatement(prices []db.ModelPricing) (string, []any) {
 			p.CacheCreationPerMTok.Microdollars,
 			p.CacheCreation1hPerMTok.Microdollars,
 			p.CacheReadPerMTok.Microdollars,
-			p.UpdatedAt,
+			updatedAt,
 		)
 	}
 	b.WriteString(`
@@ -364,7 +419,7 @@ func duckPricingUpsertStatement(prices []db.ModelPricing) (string, []any) {
 		cache_creation_1h_microdollars_per_mtok = excluded.cache_creation_1h_microdollars_per_mtok,
 		cache_read_microdollars_per_mtok = excluded.cache_read_microdollars_per_mtok,
 		updated_at = excluded.updated_at`)
-	return b.String(), args
+	return b.String(), args, nil
 }
 
 func (s *Sync) listDuckModelPricing(ctx context.Context) ([]db.ModelPricing, error) {
@@ -394,7 +449,7 @@ func (s *Sync) listDuckModelPricing(ctx context.Context) ([]db.ModelPricing, err
 		var p db.ModelPricing
 		var threshold, input, output, cacheCreation, cacheCreation1h,
 			cacheRead sql.NullInt64
-		var bandUpdatedAt sql.NullString
+		var updatedAt, bandUpdatedAt sql.NullTime
 		if err := rows.Scan(
 			&p.ModelPattern,
 			&p.InputPerMTok,
@@ -402,7 +457,7 @@ func (s *Sync) listDuckModelPricing(ctx context.Context) ([]db.ModelPricing, err
 			&p.CacheCreationPerMTok,
 			&p.CacheCreation1hPerMTok,
 			&p.CacheReadPerMTok,
-			&p.UpdatedAt,
+			&updatedAt,
 			&threshold,
 			&input,
 			&output,
@@ -413,6 +468,7 @@ func (s *Sync) listDuckModelPricing(ctx context.Context) ([]db.ModelPricing, err
 		); err != nil {
 			return nil, fmt.Errorf("scanning duckdb pricing: %w", err)
 		}
+		p.UpdatedAt = db.FormatMirrorPricingTime(updatedAt)
 		i, exists := byPattern[p.ModelPattern]
 		if !exists {
 			i = len(out)
@@ -434,7 +490,7 @@ func (s *Sync) listDuckModelPricing(ctx context.Context) ([]db.ModelPricing, err
 				CacheCreationPerMTok:   money.Money{Microdollars: cacheCreation.Int64},
 				CacheCreation1hPerMTok: money.Money{Microdollars: cacheCreation1h.Int64},
 				CacheReadPerMTok:       money.Money{Microdollars: cacheRead.Int64},
-				UpdatedAt:              bandUpdatedAt.String,
+				UpdatedAt:              db.FormatMirrorPricingTime(bandUpdatedAt),
 			})
 		}
 	}

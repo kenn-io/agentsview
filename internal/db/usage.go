@@ -2106,9 +2106,6 @@ func (db *DB) loadPricingMapFrom(
 	fallback := FallbackRateMap()
 	out := make(map[string]export.ModelRates)
 	for _, p := range prices {
-		if strings.HasPrefix(p.ModelPattern, "_") {
-			continue
-		}
 		rates := ModelPricingRates(p)
 		rates.Source = ModelPricingSource(p.ModelPattern, rates, fallback)
 		out[p.ModelPattern] = rates
@@ -3908,25 +3905,13 @@ func (db *DB) getUsageMatchingSessionCountLegacy(
 	return len(seen), nil
 }
 
-// FallbackPricingMap returns FallbackRateMap without metadata entries whose
-// pattern starts with "_".
-func FallbackPricingMap() map[string]export.ModelRates {
-	out := FallbackRateMap()
-	for model := range out {
-		if strings.HasPrefix(model, "_") {
-			delete(out, model)
-		}
-	}
-	return out
-}
-
 // MirrorPricingRows converts a rate map to effective pricing rows, copying
 // bands and deriving a missing source from the fallback table.
 func MirrorPricingRows(
 	in map[string]export.ModelRates,
 ) []export.EffectivePricingRow {
 	out := make([]export.EffectivePricingRow, 0, len(in))
-	fallback := FallbackPricingMap()
+	fallback := FallbackRateMap()
 	for pattern, rates := range in {
 		source := rates.Source
 		if source == "" {

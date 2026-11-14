@@ -18,7 +18,10 @@ import (
 // so an older mirror upgrades in place; the version tells operators and
 // status output which shape a mirror has. Version 11 converts string columns
 // with few distinct values to LowCardinality (see convertToLowCardinality).
-const SchemaVersion = 11
+// Version 12 moves pricing metadata out of model_pricing (see
+// movePricingMeta) and stores pricing times as timestamps (see
+// typePricingTimes).
+const SchemaVersion = 12
 
 // Metadata keys shared by every archive that pushes into the mirror.
 const (
@@ -151,7 +154,7 @@ var pricingRateColumns = []columnSpec{
 	col("cache_creation_microdollars_per_mtok", tInt),
 	col("cache_creation_1h_microdollars_per_mtok", tInt),
 	col("cache_read_microdollars_per_mtok", tInt),
-	col("updated_at", tString),
+	col("updated_at", tNullTime),
 }
 
 var projectIdentityColumns = []columnSpec{
@@ -444,9 +447,14 @@ var mirrorTables = []tableSpec{
 			col("source_ref", tString),
 			col("source", tString),
 			col("data_json", tString),
-			col("updated_at", tString),
+			col("updated_at", tNullTime),
 		},
 		orderBy: []string{"singleton"},
+	},
+	{
+		name:    "pricing_meta",
+		columns: []columnSpec{col("key", tString), col("value", tString)},
+		orderBy: []string{"key"},
 	},
 	{
 		// usage_event_prices holds what Go priced for one distinct set of
@@ -786,6 +794,12 @@ func EnsureSchemaOn(ctx context.Context, conn *sql.DB) error {
 	if err := ensureUsageMessages(ctx, conn, existing["usage_messages"]); err != nil {
 		return err
 	}
+	if err := movePricingMeta(ctx, conn); err != nil {
+		return err
+	}
+	if err := typePricingTimes(ctx, conn); err != nil {
+		return err
+	}
 	for _, i := range retiredSkipIndexes {
 		if _, has := existingIndexes[i.table][i.name]; !has {
 			continue
@@ -807,6 +821,77 @@ func EnsureSchemaOn(ctx context.Context, conn *sql.DB) error {
 		schemaVersionKey:     strconv.Itoa(SchemaVersion),
 		sourceDataVersionKey: strconv.Itoa(db.CurrentDataVersion()),
 	})
+}
+
+// movePricingMeta moves pricing metadata out of model_pricing. Mirrors
+// before schema version 12 kept the OpenRouter ownership list as a
+// model_pricing row whose pattern starts with "_", with the list in
+// updated_at. Each moved row keeps its push_version, so a value a newer
+// push already wrote to pricing_meta still wins.
+func movePricingMeta(ctx context.Context, conn *sql.DB) error {
+	var rows uint64
+	if err := conn.QueryRowContext(ctx, `
+		SELECT count() FROM model_pricing
+		WHERE startsWith(model_pattern, '_')`).Scan(&rows); err != nil {
+		return fmt.Errorf("counting clickhouse pricing metadata rows: %w", err)
+	}
+	if rows == 0 {
+		return nil
+	}
+	if _, err := conn.ExecContext(ctx, `
+		INSERT INTO pricing_meta (key, value, push_version)
+		SELECT model_pattern, argMax(updated_at, push_version), max(push_version)
+		FROM model_pricing
+		WHERE startsWith(model_pattern, '_')
+		GROUP BY model_pattern`); err != nil {
+		return fmt.Errorf("copying clickhouse pricing metadata to pricing_meta: %w", err)
+	}
+	for _, table := range []string{"model_pricing_bands", "model_pricing"} {
+		if _, err := conn.ExecContext(ctx,
+			"DELETE FROM "+table+" WHERE startsWith(model_pattern, '_')",
+		); err != nil {
+			return fmt.Errorf("deleting clickhouse pricing metadata from %s: %w", table, err)
+		}
+	}
+	return nil
+}
+
+// typePricingTimes converts the pricing tables' updated_at columns from
+// String to Nullable(DateTime64). Mirrors before schema version 12 kept
+// them as strings because pricing metadata shared model_pricing (see
+// movePricingMeta). The old column is renamed aside, the column loop in
+// EnsureSchemaOn or this function adds the typed one, a mutation fills it,
+// and the old column is dropped. A time that does not parse, such as an
+// empty one, becomes NULL. Every step can be repeated, so a run that stops
+// partway finishes on the next start.
+func typePricingTimes(ctx context.Context, conn *sql.DB) error {
+	existing, err := readColumns(ctx, conn)
+	if err != nil {
+		return err
+	}
+	for _, table := range []string{"model_pricing", "model_pricing_bands", "genai_pricing"} {
+		columns := existing[table]
+		var statements []string
+		if columns["updated_at"] == tString {
+			statements = append(statements,
+				"ALTER TABLE "+table+" RENAME COLUMN updated_at TO updated_at_text")
+		} else if _, ok := columns["updated_at_text"]; !ok {
+			continue
+		}
+		statements = append(statements,
+			"ALTER TABLE "+table+" ADD COLUMN IF NOT EXISTS updated_at "+tNullTime,
+			"ALTER TABLE "+table+" UPDATE updated_at = "+
+				"parseDateTime64BestEffortOrNull(updated_at_text, 6, 'UTC') "+
+				"WHERE true SETTINGS mutations_sync = 2",
+			"ALTER TABLE "+table+" DROP COLUMN updated_at_text",
+		)
+		for _, statement := range statements {
+			if _, err := conn.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("typing clickhouse %s.updated_at: %w", table, err)
+			}
+		}
+	}
+	return nil
 }
 
 // repartitionCacheTables drops a partitioned table that an older version
@@ -1010,6 +1095,14 @@ func CheckSchemaCompat(ctx context.Context, conn *sql.DB) error {
 	if cols, ok := existing["usage_messages"]; ok {
 		if _, has := cols[usageRecordedCostColumn]; !has {
 			missing = append(missing, "usage_messages."+usageRecordedCostColumn)
+		}
+	}
+	for _, table := range []string{"model_pricing", "model_pricing_bands", "genai_pricing"} {
+		if existing[table]["updated_at"] == tString {
+			return fmt.Errorf(
+				"clickhouse %s comes from an older agentsview version; "+
+					"run `agentsview replica clickhouse push` to upgrade it",
+				table)
 		}
 	}
 	if len(missing) == 0 {

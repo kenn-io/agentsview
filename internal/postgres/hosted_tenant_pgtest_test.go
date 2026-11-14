@@ -515,6 +515,66 @@ func TestHostedTenantUpgradeInstallsTablesBeforeCatalogCheck(t *testing.T) {
 	}
 }
 
+// Hosted schemas provisioned before pricing_meta kept the OpenRouter
+// ownership list as a model_pricing row and the pricing times as text.
+// Provisioning, for an adopted mirror and for an already bound tenant,
+// moves the list into a tenant-protected pricing_meta and types the times.
+func TestHostedTenantProvisioningUpgradesOldPricingLayout(t *testing.T) {
+	oldLayout := func(t *testing.T, db *sql.DB, tenantColumn, tenantValue string) {
+		t.Helper()
+		for _, statement := range []string{
+			`DROP TABLE pricing_meta`,
+			`ALTER TABLE model_pricing DROP COLUMN updated_at`,
+			`ALTER TABLE model_pricing ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''`,
+			`INSERT INTO model_pricing (` + tenantColumn + `model_pattern, updated_at) VALUES
+				(` + tenantValue + `'_openrouter_models', '["or/model-a"]'),
+				(` + tenantValue + `'acme/model', '2026-07-01T00:00:02Z')`,
+		} {
+			_, err := db.ExecContext(t.Context(), statement)
+			require.NoError(t, err, statement)
+		}
+	}
+	// Only pushes, which run as the owner, read pricing_meta; the runtime
+	// role reads prices.
+	upgraded := func(t *testing.T, owner, runtime *sql.DB) {
+		t.Helper()
+		var owned string
+		require.NoError(t, owner.QueryRowContext(t.Context(),
+			`SELECT value FROM pricing_meta WHERE key = '_openrouter_models'`,
+		).Scan(&owned))
+		assert.Equal(t, `["or/model-a"]`, owned)
+		var patterns []string
+		rows, err := runtime.QueryContext(t.Context(), `SELECT model_pattern FROM model_pricing`)
+		require.NoError(t, err)
+		defer rows.Close()
+		for rows.Next() {
+			var pattern string
+			require.NoError(t, rows.Scan(&pattern))
+			patterns = append(patterns, pattern)
+		}
+		require.NoError(t, rows.Err())
+		assert.Equal(t, []string{"acme/model"}, patterns)
+		require.NoError(t, CheckSchemaCompat(t.Context(), runtime),
+			"typed pricing times pass the reader's schema check")
+	}
+
+	t.Run("bound tenant", func(t *testing.T) {
+		f := newHostedFixture(t, "tenant-a")
+		oldLayout(t, f.admin, "tenant_id, ", "'tenant-a', ")
+		require.NoError(t, EnsureHostedTenant(t.Context(), f.admin, f.schema, f.tenant))
+		require.NoError(t, CheckHostedTenant(t.Context(), f.runtime, f.schema, f.tenant))
+		upgraded(t, f.admin, f.runtime)
+	})
+	t.Run("adopted mirror", func(t *testing.T) {
+		pg := newHostedLegacyFixture(t)
+		var schema string
+		require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT current_schema()`).Scan(&schema))
+		oldLayout(t, pg, "", "")
+		require.NoError(t, EnsureHostedTenant(t.Context(), pg, schema, "tenant-a"))
+		upgraded(t, pg, pg)
+	})
+}
+
 func TestHostedTenantConcurrentProvisioning(t *testing.T) {
 	t.Parallel()
 	pg := newHostedLegacyFixture(t)

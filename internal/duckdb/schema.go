@@ -37,7 +37,9 @@ import (
 // v28 adds the usage rollup tables (see usage_rollup.go).
 // v29 stores each message's token usage counters in typed columns, parsed at
 // push by usagefacts.ParseTokenUsage, so usage reads never parse token_usage.
-const SchemaVersion = 29
+// v30 moves the OpenRouter ownership list from a model_pricing row into
+// pricing_meta and stores pricing times as TIMESTAMP.
+const SchemaVersion = 30
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
@@ -588,7 +590,7 @@ var mirrorTables = append([]tableSpec{
 			cache_creation_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
 			cache_creation_1h_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
 			cache_read_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
-			updated_at TEXT NOT NULL DEFAULT ''
+			updated_at TIMESTAMP
 		)`,
 		columns: []columnSpec{
 			{"model_pattern", "model_pattern TEXT"},
@@ -597,7 +599,7 @@ var mirrorTables = append([]tableSpec{
 			{"cache_creation_microdollars_per_mtok", "cache_creation_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0"},
 			{"cache_creation_1h_microdollars_per_mtok", "cache_creation_1h_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0"},
 			{"cache_read_microdollars_per_mtok", "cache_read_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0"},
-			{"updated_at", "updated_at TEXT NOT NULL DEFAULT ''"},
+			{"updated_at", "updated_at TIMESTAMP"},
 		},
 	},
 	{
@@ -610,7 +612,7 @@ var mirrorTables = append([]tableSpec{
 			cache_creation_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
 			cache_creation_1h_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
 			cache_read_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0,
-			updated_at TEXT NOT NULL DEFAULT '',
+			updated_at TIMESTAMP,
 			PRIMARY KEY (model_pattern, above_input_tokens),
 			FOREIGN KEY (model_pattern) REFERENCES model_pricing(model_pattern)
 		)`,
@@ -622,7 +624,7 @@ var mirrorTables = append([]tableSpec{
 			{"cache_creation_microdollars_per_mtok", "cache_creation_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0"},
 			{"cache_creation_1h_microdollars_per_mtok", "cache_creation_1h_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0"},
 			{"cache_read_microdollars_per_mtok", "cache_read_microdollars_per_mtok BIGINT NOT NULL DEFAULT 0"},
-			{"updated_at", "updated_at TEXT NOT NULL DEFAULT ''"},
+			{"updated_at", "updated_at TIMESTAMP"},
 		},
 	},
 	{
@@ -633,7 +635,7 @@ var mirrorTables = append([]tableSpec{
 			source_ref TEXT NOT NULL DEFAULT '',
 			source TEXT NOT NULL,
 			data_json BLOB NOT NULL,
-			updated_at TEXT NOT NULL DEFAULT ''
+			updated_at TIMESTAMP
 		)`,
 		columns: []columnSpec{
 			{"singleton", "singleton SMALLINT"},
@@ -641,7 +643,18 @@ var mirrorTables = append([]tableSpec{
 			{"source_ref", "source_ref TEXT NOT NULL DEFAULT ''"},
 			{"source", "source TEXT NOT NULL"},
 			{"data_json", "data_json BLOB NOT NULL"},
-			{"updated_at", "updated_at TEXT NOT NULL DEFAULT ''"},
+			{"updated_at", "updated_at TIMESTAMP"},
+		},
+	},
+	{
+		name: "pricing_meta",
+		create: `CREATE TABLE IF NOT EXISTS pricing_meta (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		)`,
+		columns: []columnSpec{
+			{"key", "key TEXT"},
+			{"value", "value TEXT NOT NULL"},
 		},
 	},
 	{
