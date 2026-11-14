@@ -192,7 +192,7 @@ func piHeader(ctx context.Context, r io.Reader, name, id string, limit int64) ([
 						headerID = ""
 					}
 				}
-				if headerID != id && !(headerID == "" && strings.TrimSuffix(filepath.Base(name), ".jsonl") == id) {
+				if headerID != id && (headerID != "" || strings.TrimSuffix(filepath.Base(name), ".jsonl") != id) {
 					return nil, 0, errPiIdentity
 				}
 				if value, ok := header["version"]; ok && json.Unmarshal(value, &version) != nil {

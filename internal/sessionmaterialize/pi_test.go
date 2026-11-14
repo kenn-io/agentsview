@@ -207,7 +207,8 @@ func TestMaterializePiConfiguredSources(t *testing.T) {
 			require.NoError(t, err)
 			// All records and header fields except the cwd value must stay byte-identical.
 			assert.Equal(t, `{"type":"session", "id":"abc-session", "cwd" : `+string(mustJSON(t, cwd))+`, "parentSession":"/parent.jsonl"}`+"\n"+`{"type":"message","id":"branch","parentId":"first","message":{"role":"user","content":"hello"}}`+"\n", string(got))
-			appended := append(got, []byte("{\"type\":\"message\"}\n")...)
+			appended := append([]byte(nil), got...)
+			appended = append(appended, []byte("{\"type\":\"message\"}\n")...)
 			require.NoError(t, os.WriteFile(result.Paths[0], appended, 0o600))
 			_, err = Materialize(t.Context(), cfg, s, cwd)
 			require.Error(t, err)
@@ -358,7 +359,6 @@ func TestPiUsesIdentityForNonuniqueNames(t *testing.T) {
 			got, err := os.ReadFile(result.Paths[0])
 			require.NoError(t, err)
 			assert.Equal(t, `{"type":"session","id":"`+id+`","cwd":`+string(mustJSON(t, cwd))+"}\n", string(got))
-
 		})
 	}
 }

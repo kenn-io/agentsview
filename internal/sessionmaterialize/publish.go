@@ -22,7 +22,7 @@ type DestinationDiffersError struct {
 }
 
 func (e *DestinationDiffersError) Error() string {
-	return fmt.Sprintf("destination differs: %s", e.Path)
+	return "destination differs: " + e.Path
 }
 
 // publishFiles preflights every destination before publishing in order. Callers
