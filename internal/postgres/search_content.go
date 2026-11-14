@@ -716,9 +716,9 @@ func (s *Store) searchContentWordsPG(
 	ctx context.Context, f db.ContentSearchFilter, words db.ContentWords,
 	scopeWhere string, branches []string, branchArgs []any,
 ) (db.ContentSearchPage, error) {
-	union := ""
+	var union strings.Builder
 	for _, branch := range branches {
-		union += fmt.Sprintf("SELECT exact.*, 0 AS tier, %d AS n FROM (%s) exact UNION ALL ", len(words.Terms), branch)
+		fmt.Fprintf(&union, "SELECT exact.*, 0 AS tier, %d AS n FROM (%s) exact UNION ALL ", len(words.Terms), branch)
 	}
 	sysPred := "TRUE"
 	if f.ExcludeSystem {
@@ -737,7 +737,7 @@ func (s *Store) searchContentWordsPG(
 				FROM word_matches WHERE n >= 1
 			) sub ORDER BY tier, n DESC, sort_ts DESC NULLS LAST, session_id ASC, ordinal ASC, src ASC, row_id ASC, snippet ASC
 			LIMIT %s OFFSET %s`,
-			scopeWhere, pgWordMatches(f, words, all, from, pb), union, pb.add(f.Limit+1), pb.add(f.Cursor))
+			scopeWhere, pgWordMatches(f, words, all, from, pb), union.String(), pb.add(f.Limit+1), pb.add(f.Cursor))
 		page, err = s.scanPGContentMatches(ctx, query, pb.args, f.Limit, f.Cursor, func(body string) string {
 			start, end := db.WordSnippetRange(body, f.Pattern, words)
 			return f.BuildSnippet(body, start, end)

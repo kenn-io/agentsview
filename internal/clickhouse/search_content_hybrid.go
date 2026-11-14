@@ -133,7 +133,8 @@ func (s *Store) fetchHybridKeywordBatch(
 	kf.Mode = "fts"
 	var args []any
 	_, words, ranked := db.RouteContentWords(kf)
-	count, contentPred := "0", ""
+	count := "0"
+	var contentPred string
 	if ranked {
 		b := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
 		count = db.WordCountSQL(b, "COALESCE(m.dialogue_text, m.content)", words)
