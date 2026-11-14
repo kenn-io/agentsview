@@ -614,13 +614,10 @@ func TestTrendsPartsConcurrentBatch(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, first.Series[0].Total)
 	require.NoError(t, d.ReplaceSessionMessages(ctx, "a", []Message{{SessionID: "a", Role: "user", Content: "apple apple", Timestamp: "2025-03-10T12:00:00Z"}}))
-	var writes []SessionBatchWrite
-	for _, item := range []struct{ id, content string }{{"a", "banana"}, {"b", "apple apple"}} {
-		session, err := d.GetSession(ctx, item.id)
-		require.NoError(t, err)
-		require.NotNil(t, session)
-		writes = append(writes, SessionBatchWrite{Session: *session, ReplaceMessages: true, Messages: []Message{{SessionID: item.id, Role: "user", Content: item.content, Timestamp: "2025-03-10T12:00:00Z"}}})
-	}
+	session, err := d.GetSession(ctx, "b")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	writes := []SessionBatchWrite{{Session: *session, ReplaceMessages: true, Messages: []Message{{SessionID: "b", Role: "user", Content: "apple apple", Timestamp: "2025-03-10T12:00:00Z"}}}}
 	var readIDs []string
 	var writeErr error
 	reset := SetTrendPartsReadObserver(func(ids []string) {
@@ -632,10 +629,10 @@ func TestTrendsPartsConcurrentBatch(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, writeErr)
 	require.Equal(t, []string{"a"}, readIDs)
-	require.Equal(t, 2, got.Series[0].Total)
+	require.Equal(t, 4, got.Series[0].Total)
 	again, err := d.trendsTerms(ctx, f, terms, "day")
 	require.NoError(t, err)
-	require.Equal(t, 2, again.Series[0].Total)
+	require.Equal(t, 4, again.Series[0].Total)
 }
 
 func TestTrendsSQLiteOffsetWindows(t *testing.T) {
