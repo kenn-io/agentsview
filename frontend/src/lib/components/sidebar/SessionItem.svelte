@@ -816,18 +816,23 @@
     margin-top: 6px;
   }
 
-  /* A child's dot moves into the empty 18px tree-dash slot and gives up
-     its own width, so the full date fits after the child's checkbox. */
+  /* A child's dot moves into the left of the empty 18px tree-dash slot and
+     gives up its own width. The checkbox takes the rest of that slot, so
+     the full date fits after it even when a wide fallback font draws the
+     Hangul. */
   .session-item.years.compact > .tree-dash ~ :global(.kit-status-dot) {
     order: -1;
-    margin-left: 6px;
-    margin-right: -16px;
+    margin-left: 2px;
+    margin-right: -12px;
   }
 
   .session-item.years.compact > .tree-dash ~ :global(.kit-status-bubble) {
     order: -1;
-    margin-left: 4px;
-    margin-right: -18px;
+    margin-right: -14px;
+  }
+
+  .session-item.years.compact > .tree-dash ~ .select-checkbox {
+    margin-left: -10px;
   }
 
   .session-item.years .session-info-link {
