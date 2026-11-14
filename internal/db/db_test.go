@@ -318,6 +318,9 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
+	if err := os.Setenv("CACHE_DIRECTORY", filepath.Join(testDBFixtureTempDir, "cache")); err != nil {
+		panic(err)
+	}
 	code := m.Run()
 	_ = os.RemoveAll(testDBFixtureTempDir)
 	if testDBTemplateDir != "" {

@@ -51,6 +51,10 @@ for images stored outside SQLite, `config.toml` for settings, and
 `telemetry-install-id` for installation identity. Keep the database and assets
 together when restoring or moving the archive.
 
+Trends keeps per-session counts under `$CACHE_DIRECTORY/sqlite-trends`, or
+`agentsview/sqlite-trends` in the user cache directory, up to 256 MiB per
+archive. They are safe to delete; the next Trends visit counts messages again.
+
 SQLite needs a writable temp directory for session writes and large sorts.
 AgentsView uses the system temp directory: `TMP` or `TEMP` on Windows, and
 `TMPDIR` elsewhere. If that directory cannot be written, for example inside a

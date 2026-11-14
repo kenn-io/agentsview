@@ -7,20 +7,24 @@ import (
 	"path/filepath"
 )
 
-// OpenActivityReportDisk enables reuse across restarts for a local mirror.
+// OpenActivityReportDisk enables reuse across restarts for a mirror.
 func (s *Store) OpenActivityReportDisk(ctx context.Context) error {
-	if s.path == "" {
+	id := s.trendsCacheID
+	if s.path != "" {
+		path, err := filepath.Abs(s.path)
+		if err != nil {
+			return err
+		}
+		sum := sha256.Sum256([]byte(path))
+		id = hex.EncodeToString(sum[:8])
+	}
+	if id == "" {
 		return nil
 	}
-	path, err := filepath.Abs(s.path)
-	if err != nil {
+	if err := s.reports.OpenDisk("duckdb-activity-reports", id); err != nil {
 		return err
 	}
-	id := sha256.Sum256([]byte(path))
-	if err := s.reports.OpenDisk("duckdb-activity-reports", hex.EncodeToString(id[:8])); err != nil {
-		return err
-	}
-	err = s.usageDisk.Open("duckdb-usage", hex.EncodeToString(id[:8]), 128<<20, 256<<20)
+	err := s.usageDisk.Open("duckdb-usage", id, 128<<20, 256<<20)
 	s.reports.StartSweep(ctx, s.usageDisk.Sweep)
 	return err
 }

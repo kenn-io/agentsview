@@ -10,13 +10,6 @@ import (
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
-type usagePart[T any] struct {
-	ID, Fingerprint string
-	Group           string
-	Present         bool
-	Value           T
-}
-
 var (
 	usagePartReadObserver    func([]string)
 	usagePartPublishObserver func()
@@ -28,31 +21,16 @@ func refreshUsageParts[T any](ctx context.Context, s *Store, slot, priceDigest s
 		return read(ctx, nil)
 	}
 	stamp := s.keptVersion()
+	if stamp == "" {
+		return read(ctx, nil)
+	}
 	versions, err := s.usagePartVersions(ctx)
 	if err != nil {
 		return nil, err
 	}
 	version := usagePartsVersion(f, priceDigest)
-	old := map[string]usagePart[T]{}
-	if data, ok := s.usageDisk.Get(slot, version); ok {
-		if rows, ok := kept.DecodeRows[usagePart[T]](data); ok {
-			for _, row := range rows {
-				old[row.ID] = row
-			}
-		}
-	}
-	changed := map[string]bool{}
-	for id, fingerprint := range versions {
-		part, ok := old[id]
-		if !ok || fingerprint == "" || fingerprint != part.Fingerprint {
-			changed[id] = true
-		}
-	}
-	for id := range old {
-		if _, ok := versions[id]; !ok {
-			changed[id] = true
-		}
-	}
+	old := kept.LoadParts[T](&s.usageDisk, slot, version)
+	changed := kept.StaleParts(old, versions)
 	if len(changed) == 0 && len(old) != 0 {
 		values := make(map[string]T, len(old))
 		for id, part := range old {
@@ -112,39 +90,20 @@ func refreshUsageParts[T any](ctx context.Context, s *Store, slot, priceDigest s
 		usagePartPublishObserver()
 	}
 	if ctx.Err() == nil && stamp != "" && stamp == s.keptVersion() {
-		rows := make([]usagePart[T], 0, len(versions))
+		rows := make([]kept.Part[T], 0, len(versions))
 		for id, fingerprint := range versions {
 			value, present := values[id]
-			rows = append(rows, usagePart[T]{id, fingerprint, peers[id], present, value})
+			rows = append(rows, kept.Part[T]{ID: id, Fingerprint: fingerprint, Group: peers[id], Present: present, Value: value})
 		}
-		if data, err := kept.EncodeRows(rows, 128<<20, func(part usagePart[T]) int64 {
-			return int64(len(part.ID)+len(part.Fingerprint)+len(part.Group)) + size(part.Value)
-		}); err == nil {
-			s.usageDisk.Put(slot, version, data)
-		}
+		kept.SaveParts(&s.usageDisk, slot, version, rows, size)
 	}
 	return values, nil
 }
 
 func (s *Store) usagePartVersions(ctx context.Context) (map[string]string, error) {
-	rows, err := s.queryContext(ctx, `SELECT id, COALESCE(agentsview_push_fingerprint, '') FROM sessions WHERE deleted_at IS NULL`)
+	versions, err := db.ScanTrendVersions(s.queryContext(ctx, `SELECT id, COALESCE(agentsview_push_fingerprint, '') FROM sessions WHERE deleted_at IS NULL`))
 	if err != nil {
 		return nil, fmt.Errorf("querying usage fingerprints: %w", err)
-	}
-	defer rows.Close()
-	versions := map[string]string{}
-	for rows.Next() {
-		var id, fingerprint string
-		if err := rows.Scan(&id, &fingerprint); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		versions[id] = fingerprint
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return nil, err
 	}
 	var count int64
 	var hash uint64

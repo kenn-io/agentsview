@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/readbase"
 )
 
@@ -380,7 +381,24 @@ func (s analyticsSQL) TrendsSQL(f, sessionFilter db.AnalyticsFilter, _ bool) (st
 	return readbase.AnalyticsTrendsSQL(
 		f, duckAnalyticsMessageWindowPred,
 		db.DuckDBSystemPrefixSQL("m.content", "m.role"), db.DuckDBQueryDialect(),
-		"m.session_id IN (SELECT s.id FROM sessions s WHERE "+where+")", args, true)
+		"m.session_id IN (SELECT s.id FROM sessions s WHERE "+where+")", args, true, false)
+}
+
+// The disk is opened per mirror path or Quack endpoint; fingerprints version each session.
+func (s analyticsSQL) TrendsDisk() (*kept.Disk, string) { return &s.store.usageDisk, "duckdb" }
+
+func (s analyticsSQL) TrendSessionVersions(ctx context.Context, f db.AnalyticsFilter) (map[string]string, error) {
+	sf := f.TrendsSessionFilter()
+	where, args := duckBuildAnalyticsWhere(sf, "COALESCE(s.started_at, s.created_at)", "s.", true, true)
+	return db.ScanTrendVersions(s.QueryContext(ctx, `SELECT s.id, COALESCE(s.agentsview_push_fingerprint, '') FROM sessions s WHERE `+where, args...))
+}
+
+func (s analyticsSQL) TrendSessionWindow(f db.AnalyticsFilter, set string, args []any) (string, []any) {
+	return readbase.TrendSessionWindowSQL(f, duckAnalyticsMessageWindowPred, set, args)
+}
+
+func (s analyticsSQL) TrendMessagesSQL(set string, args []any) (string, []any) {
+	return readbase.AnalyticsTrendsSQL(db.AnalyticsFilter{}, duckAnalyticsMessageWindowPred, db.DuckDBSystemPrefixSQL("m.content", "m.role"), db.DuckDBQueryDialect(), "m.session_id IN "+set, args, true, true)
 }
 
 func (s analyticsSQL) FormatTime(v any) string { return formatDBTime(v) }

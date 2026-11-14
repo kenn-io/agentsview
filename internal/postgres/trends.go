@@ -24,6 +24,9 @@ func (s *Store) loadTrendsTerms(ctx context.Context, f db.AnalyticsFilter, terms
 	if granularity == "" {
 		granularity = "week"
 	}
+	if result, handled, err := db.TrendsFromParts(ctx, &s.trendsDisk, s.trendsIdentity, f, terms, granularity, s); handled {
+		return result, err
+	}
 	acc := db.NewTrendWorkers(ctx, f.From, f.To, granularity, terms)
 	defer func() {
 		if acc != nil {
@@ -31,22 +34,12 @@ func (s *Store) loadTrendsTerms(ctx context.Context, f db.AnalyticsFilter, terms
 		}
 	}()
 	loc := analyticsLocation(f)
-	sessionFilter := f
-	sessionFilter.From = ""
-	sessionFilter.To = ""
-	sessionFilter.DayOfWeek = nil
-	sessionFilter.Hour = nil
-	sessionFilter.Model = ""
 	pb := &paramBuilder{}
 	preds := []string{buildAnalyticsWhereWithDate(
-		sessionFilter, "", pb, false, "s.id", s.sessionDialect(),
+		f.TrendsSessionFilter(), "", pb, false, "s.id", s.sessionDialect(),
 	)}
-	// The window bounds are inlined as literals. pgx caches prepared
-	// statements per connection, and from the sixth run PostgreSQL may switch
-	// to a generic plan that cannot see how narrow the window is.
-	if sessionWindow := pgAnalyticsMessageWindowLiteral(f, pgDateCol); sessionWindow != "" {
-		messageWindow := pgAnalyticsMessageWindowLiteral(f, "wm.timestamp")
-		preds = append(preds, "s.id IN (SELECT sessions.id FROM sessions WHERE ("+sessionWindow+" OR EXISTS (SELECT 1 FROM messages wm WHERE wm.session_id = sessions.id AND wm.timestamp IS NOT NULL AND "+messageWindow+")))")
+	if sessionWindow := pgTrendSessionWindow(f); sessionWindow != "" {
+		preds = append(preds, "s.id IN (SELECT sessions.id FROM sessions WHERE "+sessionWindow+")")
 	}
 	flt := f.MessageScopeFilter()
 	modelFiltering := len(flt.Models) > 0
