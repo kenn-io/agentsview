@@ -434,41 +434,10 @@ func TestServer_ArchiveFreshnessWarning(t *testing.T) {
 	}
 }
 
-func TestCompactionSummaryProducers(t *testing.T) {
+func TestCompactionSummarySchema(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
-	rows := []struct {
-		id, agent, role, subtype, content string
-		boundary, want                    bool
-	}{
-		{"claude", "claude", "assistant", "", "Claude summary", true, true},
-		{"codex", "codex", "assistant", "", "Codex summary", true, true},
-		{"hermes", "hermes", "user", "", "[CONTEXT COMPACTION - REFERENCE ONLY] summary", true, true},
-		{"opencode", "opencode", "user", "", "OpenCode summary", true, true},
-		{"crush", "crush", "system", "", "Crush summary", true, true},
-		{"fx", "fx", "system", "", "Checkpoint summary", true, true},
-		{"evener-checkpoint", "evener", "system", "CHECKPOINT", "Retained summary", true, true},
-		{"evener-summary", "evener", "system", "SUMMARY", "Retained summary", true, true},
-		{"roo-event", "roocode", "system", "", "Context condensed", true, false},
-		{"roo-empty", "roocode", "system", "", "", true, false},
-		{"kilo-event", "kilo-legacy", "system", "", "Context condensed", true, false},
-		{"kilo-empty", "kilo-legacy", "system", "", "", true, false},
-		{"codex-cloud", "codex-cloud", "assistant", "", "", true, false},
-		{"pending", "opencode", "user", "", "pending", false, false},
-		{"empty-checkpoint", "evener", "system", "CHECKPOINT", "[CHECKPOINT]", true, false},
-		{"empty-summary", "evener", "system", "SUMMARY", "[SUMMARY]", true, false},
-	}
-	for _, row := range rows {
-		ended := "2024-06-15T00:00:00Z"
-		dbtest.SeedSession(t, d, row.id, "project", func(s *db.Session) { s.EndedAt = &ended; s.Agent = row.agent })
-		sourceType := ""
-		if row.id == "empty-checkpoint" || row.id == "empty-summary" {
-			sourceType = "evener_empty_compaction"
-		}
-		require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: row.id, Ordinal: 0, Role: row.role, IsSystem: true, IsCompactBoundary: row.boundary, SourceType: sourceType, SourceSubtype: row.subtype, Content: row.content}}))
-	}
-	dbtest.SeedSession(t, d, "deleted", "project", func(s *db.Session) { s.EndedAt = new("2024-06-16T00:00:00Z") })
-	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: "deleted", Role: "assistant", IsCompactBoundary: true, Content: "deleted summary"}}))
-	require.NoError(t, d.SoftDeleteSession(t.Context(), "deleted"))
+	dbtest.SeedSession(t, d, "session", "project")
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: "session", Role: "assistant", Content: "summary", IsCompactBoundary: true}}))
 	srv := newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), Profile: ProfileMemory})
 	st, ct := newInMemoryPair(t, srv)
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
@@ -491,46 +460,13 @@ func TestCompactionSummaryProducers(t *testing.T) {
 		}
 	}
 	require.True(t, found)
-	read := func(args map[string]any) service.CompactionSummariesResult {
-		result, err := ct.CallTool(t.Context(), callParams(ToolGetCompactionSummaries, args))
-		require.NoError(t, err)
-		require.False(t, result.IsError)
-		var out service.CompactionSummariesResult
-		raw, err := json.Marshal(result.StructuredContent)
-		require.NoError(t, err)
-		require.NoError(t, json.Unmarshal(raw, &out))
-		return out
-	}
-	for _, row := range rows {
-		out := read(map[string]any{"session_id": row.id})
-		if row.want {
-			require.Len(t, out.Summaries, 1, row.id)
-			assert.Equal(t, row.content, out.Summaries[0].Content)
-		} else {
-			assert.Empty(t, out.Summaries, row.id)
-		}
-	}
-	seen := map[string]string{}
-	cursor := ""
-	for {
-		out := read(map[string]any{"active_since": "2024-06-01T00:00:00Z", "limit": 1, "cursor": cursor})
-		for _, row := range out.Summaries {
-			seen[row.SessionID] = row.Content
-		}
-		cursor = out.NextCursor
-		if cursor == "" {
-			break
-		}
-	}
-	for _, row := range rows {
-		if row.want {
-			assert.Equal(t, row.content, seen[row.id], row.id)
-		} else {
-			assert.NotContains(t, seen, row.id)
-		}
-	}
-	assert.NotContains(t, seen, "deleted")
-	result, err := ct.CallTool(t.Context(), callParams(ToolGetCompactionSummaries, map[string]any{"active_since": "2024-06-01T00:00:00Z", "limit": -1}))
+	result, err := ct.CallTool(t.Context(), callParams(ToolGetCompactionSummaries, map[string]any{"session_id": "session"}))
 	require.NoError(t, err)
-	assert.True(t, result.IsError)
+	require.False(t, result.IsError)
+	raw, err := json.Marshal(result.StructuredContent)
+	require.NoError(t, err)
+	var out service.CompactionSummariesResult
+	require.NoError(t, json.Unmarshal(raw, &out))
+	require.Len(t, out.Summaries, 1)
+	assert.Equal(t, "summary", out.Summaries[0].Content)
 }

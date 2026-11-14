@@ -37,7 +37,7 @@ func TestCompactionFiltersRequireAPIVersion(t *testing.T) {
 			var version, probes atomic.Int32
 			version.Store(v)
 			b := NewHTTPBackend(compactionDaemon(t, &version, &probes).URL, "", false, "")
-			_, listErr := b.List(t.Context(), service.ListFilter{HasCompactionSummary: true, Labels: []string{"label"}})
+			_, listErr := b.List(t.Context(), service.ListFilter{HasCompactionSummary: true})
 			_, messagesErr := b.Messages(t.Context(), "one", service.MessageFilter{CompactBoundaryOnly: true})
 			if v == 19 {
 				require.NoError(t, listErr)
@@ -49,9 +49,6 @@ func TestCompactionFiltersRequireAPIVersion(t *testing.T) {
 			assert.EqualValues(t, 1, probes.Load())
 		})
 	}
-}
-
-func TestCompactionSummariesFollowDaemonVersion(t *testing.T) {
 	var version, probes atomic.Int32
 	b := NewHTTPBackend(compactionDaemon(t, &version, &probes).URL, "", false, "")
 	req := service.CompactionSummariesRequest{ActiveSince: "2024-06-01T00:00:00Z"}

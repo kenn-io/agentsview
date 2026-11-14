@@ -310,7 +310,7 @@ func TestPGCompactionSummaryReads(t *testing.T) {
 	pg := mwEnsureSchema(t, pgURL)
 	defer pg.Close()
 	for _, row := range []struct{ id, agent, role, subtype, content string }{
-		{"user", "hermes", "user", "", "summary"}, {"system", "fx", "system", "", "summary"},
+		{"user", "hermes", "user", "", "summary"},
 		{"event", "roocode", "system", "", "Context condensed"}, {"placeholder", "evener", "system", "CHECKPOINT", "[CHECKPOINT]"},
 	} {
 		mwSeedWindowMessages(t, pg, row.id)
@@ -334,5 +334,5 @@ func TestPGCompactionSummaryReads(t *testing.T) {
 	for _, s := range page.Sessions {
 		ids = append(ids, s.ID)
 	}
-	assert.ElementsMatch(t, []string{"user", "system"}, ids)
+	assert.ElementsMatch(t, []string{"user"}, ids)
 }

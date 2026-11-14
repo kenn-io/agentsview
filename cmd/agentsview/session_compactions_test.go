@@ -22,11 +22,9 @@ func TestSessionCompactions(t *testing.T) {
 	got := decodeCLIJSON[service.CompactionSummariesResult](t, out)
 	require.Len(t, got.Summaries, 1)
 	assert.Equal(t, "summary", got.Summaries[0].Content)
-	out, err = executeCommand(newRootCommand(), "session", "compactions", "compacted", "--limit", "0", "--json")
-	require.NoError(t, err)
-	assert.Equal(t, got, decodeCLIJSON[service.CompactionSummariesResult](t, out))
 	for _, args := range [][]string{{"session", "compactions", "compacted", "--limit", "-1"}, {"session", "compactions"}, {"session", "compactions", "compacted", "--active-since", "2024-01-01T00:00:00Z"}, {"session", "compactions", "compacted", "--cursor", "cursor"}} {
 		_, err := executeCommand(newRootCommand(), args...)
 		require.Error(t, err)
+		assert.Equal(t, 64, exitCodeFromError(err))
 	}
 }

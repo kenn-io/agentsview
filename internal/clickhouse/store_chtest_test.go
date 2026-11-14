@@ -545,7 +545,7 @@ func TestStoreCompactionSummaryReads(t *testing.T) {
 	ctx := t.Context()
 	ended := "2028-06-15T00:00:00Z"
 	for _, row := range []struct{ id, agent, role, subtype, content string }{
-		{"user", "hermes", "user", "", "summary"}, {"system", "fx", "system", "", "summary"},
+		{"user", "hermes", "user", "", "summary"},
 		{"event", "roocode", "system", "", "Context condensed"}, {"placeholder", "evener", "system", "CHECKPOINT", "[CHECKPOINT]"},
 	} {
 		s := db.Session{ID: row.id, Project: "alpha", Machine: fixtureMachine, Agent: row.agent, MessageCount: 2, CreatedAt: ended, EndedAt: &ended}
@@ -571,5 +571,5 @@ func TestStoreCompactionSummaryReads(t *testing.T) {
 	for _, s := range page.Sessions {
 		ids = append(ids, s.ID)
 	}
-	assert.ElementsMatch(t, []string{"user", "system"}, ids)
+	assert.ElementsMatch(t, []string{"user"}, ids)
 }

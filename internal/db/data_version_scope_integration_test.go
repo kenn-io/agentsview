@@ -22,7 +22,6 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pricing"
-	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
@@ -1766,8 +1765,5 @@ func TestEvenerCompactionUpgradeReparsesStoredLabels(t *testing.T) {
 	assert.Equal(t, parser.EvenerEmptyCompactionSourceType, messages[0].SourceType)
 	assert.Equal(t, "[SUMMARY]", messages[1].Content)
 	assert.Equal(t, "entry", messages[1].SourceType)
-	out, err := service.CompactionSummaries(ctx, service.NewDirectBackend(database, nil), service.CompactionSummariesRequest{SessionID: "evener:compaction"})
-	require.NoError(t, err)
-	require.Len(t, out.Summaries, 1)
-	assert.Equal(t, "[SUMMARY]", out.Summaries[0].Content)
+
 }

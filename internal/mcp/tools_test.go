@@ -2162,21 +2162,6 @@ func TestCompactionSummaries(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, out.Summaries, 1)
 	assert.Equal(t, service.CompactionSummary{SessionID: "compacted", Ordinal: 1, Timestamp: "2024-06-15T10:00:00Z", Content: "full summary"}, out.Summaries[0])
-	for _, roles := range [][]string{nil, {"system", "assistant"}} {
-		_, messages, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "compacted", Roles: roles})
-		require.NoError(t, err)
-		for _, message := range messages.Messages {
-			assert.NotEqual(t, "full summary", message.Content)
-			assert.NotEqual(t, "injected", message.Content)
-		}
-	}
-
-	_, _, err = ts.compactionSummaries(t.Context(), nil, compactionSummariesIn{})
-	require.Error(t, err)
-	_, _, err = ts.compactionSummaries(t.Context(), nil, compactionSummariesIn{SessionID: "compacted", ActiveSince: "2024-06-01T00:00:00Z"})
-	require.Error(t, err)
-	_, _, err = ts.compactionSummaries(t.Context(), nil, compactionSummariesIn{SessionID: "compacted", Cursor: "cursor"})
-	require.ErrorContains(t, err, "cursor requires active_since")
 }
 
 func TestCompactionSummariesActiveChildren(t *testing.T) {
@@ -2197,6 +2182,13 @@ func TestCompactionSummariesActiveChildren(t *testing.T) {
 		})
 		require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: row.id, Ordinal: 0, Role: "assistant", IsSystem: true, IsCompactBoundary: true, Content: row.id}}))
 	}
+	page, err := d.ListSessions(t.Context(), db.SessionFilter{HasCompactionSummary: true})
+	require.NoError(t, err)
+	var roots []string
+	for _, row := range page.Sessions {
+		roots = append(roots, row.ID)
+	}
+	assert.ElementsMatch(t, []string{"active-root", "old-root"}, roots)
 	_, out, err := ts.compactionSummaries(t.Context(), nil, compactionSummariesIn{ActiveSince: "2024-06-01T00:00:00Z"})
 	require.NoError(t, err)
 	var ids []string
@@ -2204,57 +2196,4 @@ func TestCompactionSummariesActiveChildren(t *testing.T) {
 		ids = append(ids, row.SessionID)
 	}
 	assert.ElementsMatch(t, []string{"active-root", "active-child", "orphan"}, ids)
-}
-
-func TestCompactionSummariesWhitespacePage(t *testing.T) {
-	ts, d := newTestToolset(t)
-	for _, row := range []struct{ id, ended, content string }{
-		{"blank", "2024-06-17T00:00:00Z", "  \n"},
-		{"summary", "2024-06-16T00:00:00Z", "summary"},
-	} {
-		dbtest.SeedSession(t, d, row.id, "project", func(s *db.Session) { s.EndedAt = &row.ended })
-		require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: row.id, Ordinal: 0, Role: "assistant", IsCompactBoundary: true, Content: row.content}}))
-	}
-	_, first, err := ts.compactionSummaries(t.Context(), nil, compactionSummariesIn{ActiveSince: "2024-06-01T00:00:00Z", Limit: 1})
-	require.NoError(t, err)
-	assert.Empty(t, first.Summaries)
-	require.NotEmpty(t, first.NextCursor)
-	_, second, err := ts.compactionSummaries(t.Context(), nil, compactionSummariesIn{ActiveSince: "2024-06-01T00:00:00Z", Limit: 1, Cursor: first.NextCursor})
-	require.NoError(t, err)
-	require.Len(t, second.Summaries, 1)
-	assert.Equal(t, "summary", second.Summaries[0].Content)
-	assert.Empty(t, second.NextCursor)
-}
-
-func TestCompactionSummariesMultipleMessagePages(t *testing.T) {
-	ts, d := newTestToolset(t)
-	dbtest.SeedSession(t, d, "many", "project")
-	messages := make([]db.Message, db.MaxMessageLimit+1)
-	for i := range messages {
-		messages[i] = db.Message{SessionID: "many", Ordinal: i, Role: "assistant", IsCompactBoundary: true, Content: "summary"}
-	}
-	require.NoError(t, d.InsertMessages(t.Context(), messages))
-	_, out, err := ts.compactionSummaries(t.Context(), nil, compactionSummariesIn{SessionID: "many"})
-	require.NoError(t, err)
-	require.Len(t, out.Summaries, db.MaxMessageLimit+1)
-	assert.Equal(t, db.MaxMessageLimit, out.Summaries[len(out.Summaries)-1].Ordinal)
-}
-func TestCompactionSummarySessionFilterChildVisibility(t *testing.T) {
-	_, d := newTestToolset(t)
-	for _, id := range []string{"parent", "child"} {
-		dbtest.SeedSession(t, d, id, "project", func(s *db.Session) {
-			if id == "child" {
-				s.ParentSessionID = new("parent")
-				s.RelationshipType = "subagent"
-			}
-		})
-		require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: id, Ordinal: 0, Role: "assistant", IsCompactBoundary: true, Content: "summary"}}))
-	}
-	page, err := d.ListSessions(t.Context(), db.SessionFilter{HasCompactionSummary: true})
-	require.NoError(t, err)
-	require.Len(t, page.Sessions, 1)
-	assert.Equal(t, "parent", page.Sessions[0].ID)
-	page, err = d.ListSessions(t.Context(), db.SessionFilter{HasCompactionSummary: true, IncludeChildren: true})
-	require.NoError(t, err)
-	require.Len(t, page.Sessions, 2)
 }

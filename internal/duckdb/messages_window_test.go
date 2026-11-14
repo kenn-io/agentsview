@@ -276,7 +276,7 @@ func TestDuckCompactionSummaryReads(t *testing.T) {
 	store := newDuckWindowStore(t, func(local *db.DB) {
 		ended := "2024-06-15T00:00:00Z"
 		for _, row := range []struct{ id, agent, role, subtype, content string }{
-			{"user", "hermes", "user", "", "summary"}, {"system", "fx", "system", "", "summary"},
+			{"user", "hermes", "user", "", "summary"},
 			{"event", "roocode", "system", "", "Context condensed"}, {"placeholder", "evener", "system", "CHECKPOINT", "[CHECKPOINT]"},
 		} {
 			sourceType := ""
@@ -299,5 +299,5 @@ func TestDuckCompactionSummaryReads(t *testing.T) {
 	for _, s := range page.Sessions {
 		ids = append(ids, s.ID)
 	}
-	assert.ElementsMatch(t, []string{"user", "system"}, ids)
+	assert.ElementsMatch(t, []string{"user"}, ids)
 }

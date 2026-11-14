@@ -1,6 +1,7 @@
 package servicehttp_test
 
 import (
+	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -25,6 +26,7 @@ func TestCompactionSummariesEvenerPlaceholdersOverHTTP(t *testing.T) {
 		{SessionID: "a", Ordinal: 0, Role: "system", IsCompactBoundary: true, SourceType: "evener_empty_compaction", SourceSubtype: "CHECKPOINT", Content: "[CHECKPOINT]"},
 		{SessionID: "a", Ordinal: 1, Role: "system", IsCompactBoundary: true, SourceType: "evener_empty_compaction", SourceSubtype: "SUMMARY", Content: "[SUMMARY]"},
 		{SessionID: "b", Ordinal: 0, Role: "system", IsCompactBoundary: true, SourceSubtype: "CHECKPOINT", Content: "Retained summary"},
+		{SessionID: "b", Ordinal: 1, Role: "user", Content: "ordinary"},
 		{SessionID: "c", Ordinal: 0, Role: "system", IsCompactBoundary: true, SourceSubtype: "SUMMARY", Content: "[SUMMARY]"},
 	}))
 	daemon := httptest.NewUnstartedServer(nil)
@@ -51,8 +53,20 @@ func TestCompactionSummariesEvenerPlaceholdersOverHTTP(t *testing.T) {
 	require.Len(t, second.Summaries, 1)
 	assert.Equal(t, "c", second.Summaries[0].SessionID)
 	assert.Empty(t, second.NextCursor)
-	response, err := daemon.Client().Get(daemon.URL + "/api/v1/sessions/b/messages?compact_boundary=true&around=0")
+	response, err := daemon.Client().Get(daemon.URL + "/api/v1/sessions/b/messages?compact_boundary=true")
 	require.NoError(t, err)
 	defer response.Body.Close()
-	assert.Equal(t, http.StatusBadRequest, response.StatusCode)
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	var raw struct {
+		Messages []db.Message `json:"messages"`
+	}
+	require.NoError(t, json.NewDecoder(response.Body).Decode(&raw))
+	require.Len(t, raw.Messages, 1)
+	assert.Equal(t, "Retained summary", raw.Messages[0].Content)
+	t.Run("around rejects boundary filter", func(t *testing.T) {
+		response, err := daemon.Client().Get(daemon.URL + "/api/v1/sessions/b/messages?compact_boundary=true&around=0")
+		require.NoError(t, err)
+		defer response.Body.Close()
+		assert.Equal(t, http.StatusBadRequest, response.StatusCode)
+	})
 }
