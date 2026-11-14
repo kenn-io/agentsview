@@ -591,14 +591,11 @@ func TestSyncThenRunForPushWorkerRunnerRouting(t *testing.T) {
 			engine := f.srv.syncEngineForLocal(t.Context(), f.db)
 			t.Cleanup(engine.Close)
 
-			err := f.srv.syncThenRunForPush(
-				t.Context(), engine, f.db, tt.full, nil, nil, nil,
-				func(forceFull bool) error {
-					workCalls++
-					assert.Equal(t, tt.wantForceFull, forceFull)
-					return nil
-				},
-			)
+			err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, pushSyncScope{full: tt.full, batch: nil, recovery: nil}, nil, func(forceFull bool) error {
+				workCalls++
+				assert.Equal(t, tt.wantForceFull, forceFull)
+				return nil
+			})
 
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantRunner, runnerCalls)
@@ -620,13 +617,10 @@ func TestSyncThenRunForPushRunnerErrorSkipsPush(t *testing.T) {
 	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
 	t.Cleanup(engine.Close)
 
-	err := f.srv.syncThenRunForPush(
-		t.Context(), engine, f.db, true, nil, nil, nil,
-		func(bool) error {
-			require.FailNow(t, "push work must not run after a failed worker pass")
-			return nil
-		},
-	)
+	err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, pushSyncScope{full: true, batch: nil, recovery: nil}, nil, func(bool) error {
+		require.FailNow(t, "push work must not run after a failed worker pass")
+		return nil
+	})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "resync build reported failed")
@@ -656,19 +650,18 @@ func TestSyncThenRunForPushCopiesHealthyArchiveBesideCorruptSource(t *testing.T)
 			hctx := humago.NewContext(&huma.Operation{}, request, recorder)
 			runPushStream(hctx, func(_, _ func(storage.PushProgress)) (any, error) {
 				var result storage.PushResult
-				err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, false, nil, nil, nil,
-					func(forceFull bool) error {
-						assert.False(t, forceFull)
-						session, err := f.db.GetSession(t.Context(), "healthy")
-						require.NoError(t, err)
-						require.NotNil(t, session)
-						copied = append(copied, session.ID)
-						result = storage.PushResult{
-							SessionsPushed: 1, Errors: 2,
-							Vectors: storage.VectorPushResult{SessionsDeferred: 3},
-						}
-						return nil
-					})
+				err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, pushSyncScope{full: false, batch: nil, recovery: nil}, nil, func(forceFull bool) error {
+					assert.False(t, forceFull)
+					session, err := f.db.GetSession(t.Context(), "healthy")
+					require.NoError(t, err)
+					require.NotNil(t, session)
+					copied = append(copied, session.ID)
+					result = storage.PushResult{
+						SessionsPushed: 1, Errors: 2,
+						Vectors: storage.VectorPushResult{SessionsDeferred: 3},
+					}
+					return nil
+				})
 				return result, err
 			})
 			assert.Equal(t, []string{"healthy"}, copied)
@@ -686,8 +679,7 @@ func TestSyncThenRunForPushCopiesHealthyArchiveBesideCorruptSource(t *testing.T)
 		})
 	}
 	pushFailure := errors.New("mirror write failed")
-	err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, false, nil, nil, nil,
-		func(bool) error { return pushFailure })
+	err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, pushSyncScope{full: false, batch: nil, recovery: nil}, nil, func(bool) error { return pushFailure })
 	require.ErrorIs(t, err, pushFailure)
 	_, notStarted := errors.AsType[storage.PushNotStartedError](err)
 	assert.False(t, notStarted, "an error from the push work may follow a started copy")
@@ -700,10 +692,9 @@ func TestSyncThenRunForPushLeavesSyncLockFreeDuringPush(t *testing.T) {
 	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
 	t.Cleanup(engine.Close)
 
-	err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, false, nil, nil, nil,
-		func(bool) error {
-			return engine.TryRunExclusive(func() error { return nil })
-		})
+	err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, pushSyncScope{full: false, batch: nil, recovery: nil}, nil, func(bool) error {
+		return engine.TryRunExclusive(func() error { return nil })
+	})
 
 	require.NoError(t, err, "a sync must be able to run while the push runs")
 }
@@ -732,28 +723,25 @@ func TestSyncThenRunForPushRunsOnePushAtATime(t *testing.T) {
 	releaseFirst := make(chan struct{})
 	first := make(chan error, 1)
 	go func() {
-		first <- f.srv.syncThenRunForPush(t.Context(), engine, f.db, false, nil, nil, nil,
-			func(bool) error {
-				close(firstStarted)
-				<-releaseFirst
-				record("first done")
-				return nil
-			})
+		first <- f.srv.syncThenRunForPush(t.Context(), engine, f.db, pushSyncScope{full: false, batch: nil, recovery: nil}, nil, func(bool) error {
+			close(firstStarted)
+			<-releaseFirst
+			record("first done")
+			return nil
+		})
 	}()
 	<-firstStarted
 	waiting := make(chan struct{})
 	second := make(chan error, 1)
 	go func() {
-		second <- f.srv.syncThenRunForPush(t.Context(), engine, f.db, true, nil, nil,
-			func(phase string) {
-				if phase == storage.PushPhaseWaiting {
-					close(waiting)
-				}
-			},
-			func(bool) error {
-				record("second start")
-				return nil
-			})
+		second <- f.srv.syncThenRunForPush(t.Context(), engine, f.db, pushSyncScope{full: true, batch: nil, recovery: nil}, func(phase string) {
+			if phase == storage.PushPhaseWaiting {
+				close(waiting)
+			}
+		}, func(bool) error {
+			record("second start")
+			return nil
+		})
 	}()
 
 	<-waiting
@@ -777,16 +765,14 @@ func TestSyncThenRunForPushStopsWaitingForTurnWhenContextEnds(t *testing.T) {
 	waiting := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
-		done <- f.srv.syncThenRunForPush(ctx, engine, f.db, false, nil, nil,
-			func(phase string) {
-				if phase == storage.PushPhaseWaiting {
-					close(waiting)
-				}
-			},
-			func(bool) error {
-				assert.Fail(t, "a push must not run while another push holds the turn")
-				return nil
-			})
+		done <- f.srv.syncThenRunForPush(ctx, engine, f.db, pushSyncScope{full: false, batch: nil, recovery: nil}, func(phase string) {
+			if phase == storage.PushPhaseWaiting {
+				close(waiting)
+			}
+		}, func(bool) error {
+			assert.Fail(t, "a push must not run while another push holds the turn")
+			return nil
+		})
 	}()
 	<-waiting
 	cancel()
@@ -802,13 +788,10 @@ func TestSyncThenRunForPushDeferredWorkerSkipsPush(t *testing.T) {
 	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
 	t.Cleanup(engine.Close)
 
-	err := f.srv.syncThenRunForPush(
-		t.Context(), engine, f.db, true, nil, nil, nil,
-		func(bool) error {
-			require.FailNow(t, "push work must not run after deferred worker processing")
-			return nil
-		},
-	)
+	err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, pushSyncScope{full: true, batch: nil, recovery: nil}, nil, func(bool) error {
+		require.FailNow(t, "push work must not run after deferred worker processing")
+		return nil
+	})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "local sync processing incomplete")
@@ -824,19 +807,16 @@ func TestSyncThenRunForPushAppliesCurrentWatchBatchBeforeWork(t *testing.T) {
 	t.Cleanup(engine.Close)
 	batch := syncpkg.WatchBatch{Paths: []string{changed}}
 
-	err := f.srv.syncThenRunForPush(
-		t.Context(), engine, f.db, false, &batch, nil, nil,
-		func(forceFull bool) error {
-			assert.False(t, forceFull)
-			changedSession, getErr := f.db.GetSession(t.Context(), "changed")
-			require.NoError(t, getErr)
-			require.NotNil(t, changedSession)
-			untouchedSession, getErr := f.db.GetSession(t.Context(), "untouched")
-			require.NoError(t, getErr)
-			assert.Nil(t, untouchedSession)
-			return nil
-		},
-	)
+	err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, pushSyncScope{full: false, batch: &batch, recovery: nil}, nil, func(forceFull bool) error {
+		assert.False(t, forceFull)
+		changedSession, getErr := f.db.GetSession(t.Context(), "changed")
+		require.NoError(t, getErr)
+		require.NotNil(t, changedSession)
+		untouchedSession, getErr := f.db.GetSession(t.Context(), "untouched")
+		require.NoError(t, getErr)
+		assert.Nil(t, untouchedSession)
+		return nil
+	})
 
 	require.NoError(t, err)
 	assert.FileExists(t, untouched)
@@ -859,14 +839,11 @@ func TestSyncThenRunForPushStaleArchiveIgnoresBatchAndUsesWorker(t *testing.T) {
 	batch := syncpkg.WatchBatch{Paths: []string{path}}
 	workCalls := 0
 
-	err := f.srv.syncThenRunForPush(
-		t.Context(), engine, f.db, false, &batch, nil, nil,
-		func(forceFull bool) error {
-			workCalls++
-			assert.True(t, forceFull)
-			return nil
-		},
-	)
+	err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, pushSyncScope{full: false, batch: &batch, recovery: nil}, nil, func(forceFull bool) error {
+		workCalls++
+		assert.True(t, forceFull)
+		return nil
+	})
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, runnerCalls)
@@ -896,6 +873,16 @@ func TestPGPushRejectsMalformedWatchScopeBeforeSSE(t *testing.T) {
 			name:  "recovery without batch",
 			body:  map[string]any{"watch_recovery": map[string]any{}},
 			match: "watch recovery requires",
+		},
+		{
+			name:  "archive copy with batch",
+			body:  map[string]any{"no_source_sync": true, "watch_batch": map[string]any{}},
+			match: "no_source_sync cannot be combined with a watch scope",
+		},
+		{
+			name:  "archive copy with recovery",
+			body:  map[string]any{"no_source_sync": true, "watch_recovery": map[string]any{}},
+			match: "no_source_sync cannot be combined with a watch scope",
 		},
 	}
 	for _, tt := range tests {
@@ -1385,8 +1372,7 @@ func TestSyncThenRunForPushCountsARebuildAsStarted(t *testing.T) {
 	connectErr := storage.PushNotStartedError{Err: errors.New("connection refused")}
 
 	for _, full := range []bool{false, true} {
-		err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, full, nil, nil, nil,
-			func(bool) error { return connectErr })
+		err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, pushSyncScope{full: full, batch: nil, recovery: nil}, nil, func(bool) error { return connectErr })
 		require.ErrorIs(t, err, connectErr.Err)
 		assert.Equal(t, full, pushErrorBody(err.Error(), err).PushStarted,
 			"full=%t: only a push that rebuilt the archive counts as started", full)
@@ -1423,13 +1409,10 @@ func TestSyncThenRunForPushRejectsDeferredRebuild(t *testing.T) {
 			engine := f.srv.syncEngineForLocal(t.Context(), f.db)
 			t.Cleanup(engine.Close)
 
-			err := f.srv.syncThenRunForPush(
-				t.Context(), engine, f.db, true, nil, nil, nil,
-				func(bool) error {
-					require.FailNow(t, "push work must not run while a fork is deferred")
-					return nil
-				},
-			)
+			err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, pushSyncScope{full: true, batch: nil, recovery: nil}, nil, func(bool) error {
+				require.FailNow(t, "push work must not run while a fork is deferred")
+				return nil
+			})
 
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "local sync processing incomplete")
@@ -1449,13 +1432,10 @@ func TestSyncThenRunForPushRejectsDeferredRebuildWithAttachmentFailure(t *testin
 	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
 	t.Cleanup(engine.Close)
 
-	err := f.srv.syncThenRunForPush(
-		t.Context(), engine, f.db, true, nil, nil, nil,
-		func(bool) error {
-			require.FailNow(t, "push work must not run while a fork is deferred")
-			return nil
-		},
-	)
+	err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, pushSyncScope{full: true, batch: nil, recovery: nil}, nil, func(bool) error {
+		require.FailNow(t, "push work must not run while a fork is deferred")
+		return nil
+	})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "local sync processing incomplete")

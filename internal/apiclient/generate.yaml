@@ -13,6 +13,7 @@ filter:
       - get-startup-probe
       - post-api-v1-daemon-persist
       - get-api-v1-version
+      - get-api-v1-events
       - get-api-v1-memory-status
       - get-api-v1-machines
       - get-api-v1-sessions-id

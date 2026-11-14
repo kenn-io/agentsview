@@ -1514,11 +1514,17 @@ source trees out of remote exports.
 A change saved on the Settings page applies to the running daemon right away:
 file watching and polling switch to the new provider set. Sessions already on
 disk for a newly enabled provider arrive with the next sync. The daemon reads
-edits made directly to `config.toml` at its next start. Restart any separate
-`pg push --watch`, `clickhouse push --watch`, or `duckdb push --watch` process
-after changing the setting. Previously archived sessions from a disabled
-provider remain available and exportable, including during archive rebuilds.
-The setting does not disable that provider as a Recall execution backend.
+edits made directly to `config.toml` at its next start. Previously archived
+sessions from a disabled provider remain available and exportable, including
+when the archive is rebuilt. The setting does not disable that provider as a
+Recall execution backend.
+
+Daemon-backed `pg push --watch`, `clickhouse push --watch`, and
+`duckdb push --watch` processes follow committed archive changes from the daemon.
+Only the daemon discovers and watches source roots, so provider changes do not
+require restarting these push watchers. Startup, lifecycle, periodic catch-up
+and shutdown pushes still sync sources through the archive owner. If a push watcher owns the
+archive without a daemon, restart that process after changing this setting.
 
 ### Multiple Directories
 
@@ -1615,8 +1621,9 @@ metadata paths remain separate from the shared transcript root.
 
 The Session Providers section of the Settings page edits the same lists. Adding
 or removing a home there updates `homes` in that provider's `[agents.<id>]`
-table in `config.toml`. Like the provider enable toggles, the change takes
-effect after the AgentsView daemon and any separate push-watch process restart.
+table in `config.toml`. Provider-home changes take effect after the AgentsView
+daemon restarts. A push watcher that owns the archive without a daemon must
+also restart.
 
 ![Codex alternate homes in Session Providers settings](/docs/assets/generated/screenshots/settings-agent-homes.png)
 

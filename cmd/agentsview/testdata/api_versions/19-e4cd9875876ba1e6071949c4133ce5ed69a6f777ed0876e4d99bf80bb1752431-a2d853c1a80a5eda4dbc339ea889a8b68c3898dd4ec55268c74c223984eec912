@@ -1,0 +1,1 @@
+Daemon push watchers can copy committed archive changes without rescanning source files.

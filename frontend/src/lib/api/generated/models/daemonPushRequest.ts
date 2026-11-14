@@ -13,6 +13,8 @@ export interface DaemonPushRequest {
   full: boolean;
   last_reconciled_vector_generation?: number;
   migrate_legacy_sync_state?: boolean;
+  /** Copy committed archive changes without scanning source files. Full pushes and stale archives still synchronise sources. */
+  no_source_sync?: boolean;
   no_vectors?: boolean;
   projects?: string[];
   replica?: DaemonReplicaTarget;

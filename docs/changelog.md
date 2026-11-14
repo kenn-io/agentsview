@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-13
+last_edited: 2026-11-14
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -87,6 +87,12 @@ The latest release is
   client rewrote this way.
 
 **Bug fixes**
+
+- Daemon-backed PostgreSQL, ClickHouse and DuckDB push watchers no longer reject
+  change-triggered pushes when the client and daemon use different source roots.
+  Push watchers follow committed archive changes from the daemon without starting
+  a second filesystem watcher. Startup, periodic catch-up and shutdown still sync
+  sources through the archive owner.
 
 - A growing Codex session no longer leaves a removed copy of every earlier
   message in the conversation export index each time it is fully re-read. A

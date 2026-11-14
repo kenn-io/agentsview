@@ -17,12 +17,12 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/storage"
-	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
-// ReplicaPushConfig carries the `<backend> push` flags plus the watch loop's
-// internal per-push scope.
+// ReplicaPushConfig includes the `<backend> push` flags and the watch loop's
+// internal publication options.
 type ReplicaPushConfig struct {
+	NoSourceSync    bool
 	Full            bool
 	AllTargets      bool
 	ProjectsFlag    string
@@ -50,10 +50,6 @@ type ReplicaPushConfig struct {
 	// loop so a scoped push can promote to generation-wide when the
 	// active generation id has changed; it has no CLI flag.
 	LastReconciledVectorGeneration int64
-	// WatchBatch and WatchRecovery are internal watch-loop scope. Explicit
-	// pushes leave them nil and retain the historical unscoped sync.
-	WatchBatch    *syncpkg.WatchBatch
-	WatchRecovery *syncpkg.WatchRecoveryScope
 	// LifecycleWake carries nonblocking SessionStart notifications from the
 	// process runtime owner into the existing debounced push loop.
 	LifecycleWake <-chan struct{}
