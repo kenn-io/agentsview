@@ -16,6 +16,7 @@ import {
   type InsightLogEvent,
 } from "../api/client.js";
 import { localDateStr } from "../utils/dates.js";
+import { failureMessage } from "../utils/failure.js";
 import { LatestRead } from "../utils/latest-read.js";
 
 /** Agent used until the server reports a configured default. */
@@ -75,6 +76,8 @@ class InsightsStore {
   selectedId: number | null = $state(null);
   selectedTaskId: string | null = $state(null);
   loading = $state(false);
+  /** Why the last list load failed; null after a load succeeds. */
+  error: string | null = $state(null);
   promptText: string = $state("");
   tasks: InsightTask[] = $state([]);
 
@@ -104,15 +107,15 @@ class InsightsStore {
       const res = await InsightsService.getApiV1Insights({}, { signal });
       if (this.#version === v && this.#listRead.isCurrent(signal)) {
         this.items = res.insights;
+        this.error = null;
         if (this.selectedId !== null && !this.items.some((s) => s.id === this.selectedId)) {
           this.selectedId = null;
         }
       }
     } catch (e) {
       if (isAbortError(e) || !this.#listRead.isCurrent(signal)) return;
-      if (this.#version === v) {
-        this.items = [];
-      }
+      // Saved reports from an earlier read stay listed under the error.
+      if (this.#version === v) this.error = failureMessage(e);
     } finally {
       if (this.#listRead.finish(signal)) {
         this.loading = false;
@@ -365,6 +368,9 @@ class InsightsStore {
         return;
       }
     }
+    // A list read still in flight may predate the delete and would bring
+    // the report back, so drop its result.
+    this.#version++;
     this.items = this.items.filter((s) => s.id !== id);
     if (this.selectedId === id) {
       this.selectedId = null;

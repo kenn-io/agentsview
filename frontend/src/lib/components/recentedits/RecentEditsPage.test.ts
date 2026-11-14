@@ -190,6 +190,59 @@ describe("RecentEditsPage", () => {
     expect(calls[1]![0].offset).toBe(2);
   });
 
+  it("shows a failed first page with Retry instead of the empty state", async () => {
+    mocks.getApiV1RecentEdits.mockRejectedValueOnce(new Error("database is locked"));
+
+    component = mount(RecentEditsPage, { target: document.body });
+    const alert = await vi.waitFor(() => {
+      const el = document.querySelector('[role="alert"]');
+      expect(el).not.toBeNull();
+      return el!;
+    });
+
+    expect(alert.textContent).toContain("Failed to load");
+    expect(alert.textContent).toContain("database is locked");
+    expect(document.body.textContent).not.toContain("No file edits found yet.");
+
+    alert.querySelector<HTMLButtonElement>("button")!.click();
+    await vi.waitFor(() => expect(document.body.textContent).toContain("b/config.go"));
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("keeps loaded rows and retries the next page after it fails", async () => {
+    const fileAt = (path: string) => ({
+      project: "p",
+      file_path: path,
+      edit_count: 1,
+      last_edited_at: "2026-06-24T12:00:00Z",
+      last_session_id: "s1",
+      edits_truncated: false,
+      edits: [],
+    });
+    mocks.getApiV1RecentEdits
+      .mockResolvedValueOnce({ files: [fileAt("/x/a.go")], has_more: true })
+      .mockRejectedValueOnce(new Error("connection reset"))
+      .mockResolvedValueOnce({ files: [fileAt("/x/c.go")], has_more: false });
+
+    component = mount(RecentEditsPage, { target: document.body });
+    await vi.waitFor(() => expect(document.querySelector(".re-load-more")).not.toBeNull());
+    document.querySelector<HTMLButtonElement>(".re-load-more")!.click();
+
+    const alert = await vi.waitFor(() => {
+      const el = document.querySelector('[role="alert"]');
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(alert.textContent).toContain("connection reset");
+    expect(document.body.textContent).toContain("x/a.go");
+
+    alert.querySelector<HTMLButtonElement>("button")!.click();
+    await vi.waitFor(() => expect(document.body.textContent).toContain("x/c.go"));
+    const calls = mocks.getApiV1RecentEdits.mock.calls as unknown as Array<[{ offset: number }]>;
+    expect(calls.map((call) => call[0].offset)).toEqual([0, 1, 1]);
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+  });
+
   it("debounces the search box and sends the term as a reset request", async () => {
     vi.useFakeTimers();
     try {

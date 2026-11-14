@@ -1,3 +1,5 @@
+import { m } from "../i18n/index.js";
+
 export interface GradeStyle {
   bg: string;
   text: string;
@@ -34,11 +36,12 @@ const outcomeColors: Record<string, string> = {
   unknown: "var(--text-muted)",
 };
 
-const outcomeLabels: Record<string, string> = {
-  completed: "Completed",
-  abandoned: "Abandoned",
-  errored: "Errored",
-  unknown: "Outcome unknown",
+// Looked up at call time, so each label follows the active locale.
+const outcomeLabels: Record<string, () => string> = {
+  completed: m.grade_outcome_completed,
+  abandoned: m.grade_outcome_abandoned,
+  errored: m.grade_outcome_errored,
+  unknown: m.grade_outcome_unknown,
 };
 
 export function getOutcomeColor(outcome: string): string {
@@ -46,42 +49,42 @@ export function getOutcomeColor(outcome: string): string {
 }
 
 export function getOutcomeLabel(outcome: string): string {
-  return outcomeLabels[outcome] ?? outcome;
+  return outcomeLabels[outcome]?.() ?? outcome;
 }
 
-const penaltyLabels: Record<string, string> = {
-  outcome_errored: "outcome (errored)",
-  outcome_abandoned: "outcome (abandoned)",
-  tool_failure_signals: "tool failures",
-  tool_retries: "retries",
-  edit_churn: "edit churn",
-  consecutive_failures: "failure streak",
-  compactions: "compactions",
-  mid_task_compactions: "mid-task compactions",
-  context_pressure_high: "context pressure",
-  repeated_failing_tool_cycles: "repeated failing tool cycles",
-  runaway_loop: "repeated failing tool cycles",
-  constraintless_first_prompt: "unstructured task start",
-  missing_success_criteria: "missing success criteria",
-  stuck_repeated_prompts: "stuck repeated prompts",
-  repeated_prompts: "stuck repeated prompts",
+const penaltyLabels: Record<string, () => string> = {
+  outcome_errored: m.grade_penalty_outcome_errored,
+  outcome_abandoned: m.grade_penalty_outcome_abandoned,
+  tool_failure_signals: m.grade_penalty_tool_failure_signals,
+  tool_retries: m.grade_penalty_tool_retries,
+  edit_churn: m.grade_penalty_edit_churn,
+  consecutive_failures: m.grade_penalty_consecutive_failures,
+  compactions: m.grade_penalty_compactions,
+  mid_task_compactions: m.grade_penalty_mid_task_compactions,
+  context_pressure_high: m.grade_penalty_context_pressure_high,
+  repeated_failing_tool_cycles: m.grade_penalty_repeated_failing_tool_cycles,
+  runaway_loop: m.grade_penalty_repeated_failing_tool_cycles,
+  constraintless_first_prompt: m.grade_penalty_constraintless_first_prompt,
+  missing_success_criteria: m.grade_penalty_missing_success_criteria,
+  stuck_repeated_prompts: m.grade_penalty_stuck_repeated_prompts,
+  repeated_prompts: m.grade_penalty_stuck_repeated_prompts,
 };
 
 export function getPenaltyLabel(key: string): string {
-  return penaltyLabels[key] ?? key;
+  return penaltyLabels[key]?.() ?? key;
 }
 
-const basisLabels: Record<string, string> = {
-  outcome: "Outcome",
-  tool_health: "Tool health",
-  context_pressure: "Context pressure",
-  prompt_quality: "Prompt quality",
-  context_quality: "Context quality",
-  workflow_quality: "Workflow quality",
+const basisLabels: Record<string, () => string> = {
+  outcome: m.grade_basis_outcome,
+  tool_health: m.grade_basis_tool_health,
+  context_pressure: m.grade_basis_context_pressure,
+  prompt_quality: m.grade_basis_prompt_quality,
+  context_quality: m.grade_basis_context_quality,
+  workflow_quality: m.grade_basis_workflow_quality,
 };
 
 export function getBasisLabel(key: string): string {
-  return basisLabels[key] ?? key;
+  return basisLabels[key]?.() ?? key;
 }
 
 export function scoreToGrade(score: number): string {

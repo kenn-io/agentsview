@@ -60,10 +60,10 @@ describe("HourOfWeekHeatmap", () => {
   it("renders Sunday first, preserves filter values, and retains the chart beside failures", async () => {
     const component = mountWithData();
     await tick();
-    expect(document.querySelector(".loading")).toBeNull();
+    expect(document.querySelector(".loading-state")).toBeNull();
     analytics.errors.hourOfWeek = "request failed";
     await tick();
-    expect(document.querySelector(".error")).not.toBeNull();
+    expect(document.querySelector(".load-error")).not.toBeNull();
     expect(document.querySelector(".how-chart")).not.toBeNull();
 
     const dayLabels = Array.from(document.querySelectorAll(".day-label")).map((el) =>

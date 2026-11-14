@@ -43,7 +43,7 @@ it.each(["summary", "velocity", "tools"] as const)(
     expect(comparison().querySelector(".comparison-table")).toBeNull();
     analytics.errors[source] = `${source} failed`;
     await tick();
-    comparison().querySelector<HTMLButtonElement>(".error button")!.click();
+    comparison().querySelector<HTMLButtonElement>(".load-error button")!.click();
     await vi.waitFor(() => expect(comparison().querySelector(".comparison-table")).not.toBeNull());
     expect(comparison().textContent).toContain("claude");
     expect(comparison().textContent).toContain("codex");

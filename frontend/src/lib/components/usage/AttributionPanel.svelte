@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { errorTelemetry } from "../../utils/error-telemetry.js";
+  import LoadError from "../shared/LoadError.svelte";
   import { usage } from "../../stores/usage.svelte.js";
   import type { AttributionView, GroupBy } from "../../stores/usagePreferences.js";
   import { tick } from "svelte";
@@ -316,11 +316,17 @@
     </div>
   </div>
   {#if zoomedProject && usage.errors.zoom}
-    <div class="empty" {@attach errorTelemetry("analytics")}>{usage.errors.zoom}</div>
+    <LoadError message={usage.errors.zoom} onRetry={() => void usage.fetchZoom()} telemetry="analytics" />
+  {/if}
+  {#if zoomedProject && usage.errors.zoom && usage.zoomRows === null}
+    <!-- Nothing loaded to keep under the error. -->
   {:else if zoomedProject && usage.loading.zoom && usage.zoomRows === null}
     <div class="empty">{m.usage_loading()}</div>
   {:else if rows.length === 0}
-    <div class="empty">{m.shared_no_data_for_period()}</div>
+    <!-- Without a current summary, the summary error or refresh status says why. -->
+    {#if zoomedProject ? !usage.errors.zoom : (usage.attributionSummary !== null || usage.summary !== null) && !usage.errors.summary}
+      <div class="empty">{m.shared_no_data_for_period()}</div>
+    {/if}
   {:else}
     {#if !zoomedProject}<div class="hint">{groupBy === "project" ? m.usage_click_project_hint() : m.usage_click_to_focus_hint()}</div>{/if}
     {#if view === "treemap"}

@@ -28,6 +28,8 @@
   import { inSessionSearch } from "../../stores/inSessionSearch.svelte.js";
   import { sessionActivity } from "../../stores/sessionActivity.svelte.js";
   import SessionFindView from "./SessionFindView.svelte";
+  import LoadError from "../shared/LoadError.svelte";
+  import LoadingState from "../shared/LoadingState.svelte";
   import {
     getLatestDisplayIndex,
     type ScrollAlign,
@@ -996,7 +998,7 @@
     {/snippet}
   </EmptyState>
 {:else if messages.loading && messages.messages.length === 0}
-  <EmptyState title={m.message_list_loading()} />
+  <LoadingState align="center" label={m.message_list_loading()} />
 {:else if sessions.activeSessionNotFound && messages.messages.length === 0}
   <div class="missing-session" {@attach errorTelemetry("session")}>
     <EmptyState
@@ -1011,7 +1013,22 @@
       </Button>
     </EmptyState>
   </div>
+{:else if messages.loadError && messages.messages.length === 0}
+  <LoadError
+    class="message-list-error"
+    message={messages.loadError}
+    onRetry={() => void messages.retryLoad()}
+    telemetry="session"
+  />
 {:else}
+  {#if messages.loadError}
+    <LoadError
+      class="message-list-error"
+      message={messages.loadError}
+      onRetry={() => void messages.retryLoad()}
+      telemetry="session"
+    />
+  {/if}
   <SessionFindView
     items={displayItemsAsc}
     totalSize={virtualizer.instance?.getTotalSize() ?? 0}
@@ -1094,6 +1111,10 @@
 <style>
   .missing-session {
     display: contents;
+  }
+
+  :global(.message-list-error) {
+    margin: 8px 12px;
   }
 
   .message-list-scroll {

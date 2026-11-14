@@ -1,6 +1,5 @@
 <script lang="ts">
   import { formatCount } from "../../utils/format.js";
-  import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { m } from "../../i18n/index.js";
   import { onMount, onDestroy, untrack } from "svelte";
   import { analytics } from "../../stores/analytics.svelte.js";
@@ -21,7 +20,8 @@
   import { scoreToGrade } from "../../utils/grade.js";
   import { agentLabel } from "../../utils/agents.js";
   import type { AutomatedScope } from "../../api/types.js";
-  import { Card, Typeahead } from "@kenn-io/kit-ui";
+  import { Card, EmptyState, Typeahead } from "@kenn-io/kit-ui";
+  import LoadError from "../shared/LoadError.svelte";
   import StatCard from "../analytics/StatCard.svelte";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import FilterChip from "../shared/FilterChip.svelte";
@@ -471,7 +471,10 @@
         </p>
       </div>
 
-      {#if recommendations.length === 0}
+      {#if !signals}
+        <!-- Recommendations come from the quality signals; until they load,
+             the Quality patterns section below shows loading or the error. -->
+      {:else if recommendations.length === 0}
         <Card level="default" padding="none" class="state-panel compact-state">
           <strong>{m.insights_page_no_rule_actions()}</strong>
           <span>
@@ -531,29 +534,20 @@
           {/each}
         </div>
       {:else if error && !signals}
-        <Card level="default" padding="none" class="state-panel error">
-          <div class="state-panel-alert" role="alert" {@attach errorTelemetry("analytics")}>
-            <strong>{m.insights_page_could_not_load()}</strong>
-            <span>{error}</span>
-            <button onclick={fetchQualitySignals}>
-              {m.insights_page_retry()}
-            </button>
-          </div>
-        </Card>
+        <LoadError message={error} onRetry={fetchQualitySignals} telemetry="analytics" />
+      {:else if !hasData && error}
+        <!-- The last good read was empty; say the refresh failed rather
+             than repeat that empty result. -->
+        <LoadError message={error} onRetry={fetchQualitySignals} telemetry="analytics" />
       {:else if !hasData}
-        <Card level="default" padding="none" class="state-panel">
-          <strong>{m.insights_page_no_scored_data()}</strong>
-          <span>
-            {m.insights_page_no_scored_data_hint()}
-          </span>
-        </Card>
+        <EmptyState
+          align="top"
+          title={m.insights_page_no_scored_data()}
+          description={m.insights_page_no_scored_data_hint()}
+        />
       {:else}
         {#if error}
-          <Card level="default" padding="none" class="inline-warning">
-            <div role="status">
-              {m.insights_page_cached_warning({ error })}
-            </div>
-          </Card>
+          <LoadError message={error} onRetry={fetchQualitySignals} telemetry="analytics" />
         {/if}
 
         <div class="summary-grid">
@@ -996,54 +990,12 @@
     display: contents;
   }
 
-  .state-panel-alert {
-    display: grid;
-    gap: 6px;
-    min-width: 0;
-  }
-
   .content :global(.state-panel strong) {
     color: var(--text-primary);
   }
 
-  .content :global(.state-panel button) {
-    justify-self: start;
-    margin-top: 6px;
-    height: 26px;
-    padding: 0 10px;
-    background: var(--accent-blue);
-    color: var(--accent-blue-foreground);
-    border-radius: var(--radius-sm);
-    font-size: 12px;
-    font-weight: 700;
-  }
-
-  .content :global(.state-panel.error) {
-    border-color: color-mix(
-      in srgb,
-      var(--accent-red) 35%,
-      var(--border-muted)
-    );
-  }
-
   .content :global(.compact-state) {
     padding: 14px;
-  }
-
-  .content :global(.inline-warning) {
-    padding: 9px 10px;
-    background: color-mix(
-      in srgb,
-      var(--accent-amber) 10%,
-      var(--bg-surface)
-    );
-    border-color: color-mix(
-      in srgb,
-      var(--accent-amber) 24%,
-      var(--border-muted)
-    );
-    color: var(--text-secondary);
-    font-size: 12px;
   }
 
   .skeleton-card,

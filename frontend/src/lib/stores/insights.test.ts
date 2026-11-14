@@ -96,6 +96,7 @@ beforeEach(() => {
   insights.selectedId = null;
   insights.selectedTaskId = null;
   insights.loading = false;
+  insights.error = null;
   insights.tasks = [];
   insights.setDateFrom("2025-01-15");
   insights.setDateTo("2025-01-15");
@@ -149,6 +150,22 @@ describe("load", () => {
     expect(api.listInsights).toHaveBeenCalledWith();
     expect(insights.items).toHaveLength(2);
     expect(insights.loading).toBe(false);
+  });
+
+  it("reports a failed list read, keeps saved reports, and clears the error on success", async () => {
+    const saved = makeInsight({ id: 2 });
+    insights.items = [saved];
+    vi.mocked(api.listInsights).mockRejectedValueOnce(new Error("insights table missing"));
+    await insights.load();
+
+    expect(insights.items).toEqual([saved]);
+    expect(insights.error).toBe("insights table missing");
+
+    vi.mocked(api.listInsights).mockResolvedValueOnce({ insights: [makeInsight({ id: 3 })] });
+    await insights.load();
+
+    expect(insights.error).toBeNull();
+    expect(insights.items).toHaveLength(1);
   });
 
   it("clears selectedId when insight no longer in list", async () => {
@@ -829,13 +846,32 @@ describe("cancelAll", () => {
 });
 
 describe("load error handling", () => {
-  it("clears items on API error", async () => {
+  it("does not bring back a report deleted while a list read was in flight", async () => {
+    const kept = makeInsight({ id: 1 });
+    const deleted = makeInsight({ id: 2 });
+    insights.items = [kept, deleted];
+    let resolveList!: (value: { insights: Insight[] }) => void;
+    vi.mocked(api.listInsights).mockImplementationOnce(
+      () => new Promise((resolve) => (resolveList = resolve)),
+    );
+    const listing = insights.load();
+
+    await insights.deleteItem(2);
+    resolveList({ insights: [kept, deleted] });
+    await listing;
+
+    expect(insights.items.map((item) => item.id)).toEqual([1]);
+    expect(insights.loading).toBe(false);
+  });
+
+  it("keeps items and reports the error on API error", async () => {
     insights.items = [makeInsight({ id: 1 })];
     vi.mocked(api.listInsights).mockRejectedValueOnce(new Error("network error"));
 
     await insights.load();
 
-    expect(insights.items).toHaveLength(0);
+    expect(insights.items).toHaveLength(1);
+    expect(insights.error).toBe("network error");
     expect(insights.loading).toBe(false);
   });
 

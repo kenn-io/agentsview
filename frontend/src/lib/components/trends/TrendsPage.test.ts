@@ -87,6 +87,22 @@ describe("TrendsPage", () => {
     settings.chartPalette = "agentsview";
   });
 
+  it("shows a failed read in place of the chart and recovers through Retry", async () => {
+    mocks.getApiV1TrendsTerms.mockRejectedValueOnce(new Error("trends index unavailable"));
+    component = mount(TrendsPage, { target: document.body });
+
+    const alert = await vi.waitFor(() => {
+      const el = document.querySelector('[role="alert"]');
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(alert.textContent).toContain("trends index unavailable");
+    expect(document.body.textContent).not.toContain("No trend data");
+
+    alert.querySelector<HTMLButtonElement>("button")!.click();
+    await vi.waitFor(() => expect(document.querySelector('[role="alert"]')).toBeNull());
+  });
+
   it("refreshes with the changed date value", async () => {
     window.history.replaceState(null, "", "/trends?from=2024-01-02&to=2024-01-31");
     component = mount(TrendsPage, { target: document.body });
