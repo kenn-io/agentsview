@@ -34,7 +34,6 @@ func (s *compactionSpy) Messages(_ context.Context, id string, _ service.Message
 	messages := []db.Message{
 		{Content: "injected prompt", IsSystem: true},
 		{Content: "ordinary message"},
-		{Content: "[CHECKPOINT]", SourceType: "evener_empty_compaction", SourceSubtype: "CHECKPOINT", IsCompactBoundary: true},
 		{Content: "  ", IsCompactBoundary: true},
 	}
 	if s.includeSummary {

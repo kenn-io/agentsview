@@ -34,7 +34,7 @@ func TestCompactionSummaryEventAgents(t *testing.T) {
 				out, err := provider.Parse(parser.WithoutFilesystemProjectDiscovery(t.Context()), parser.ParseRequest{Source: source, Machine: "test"})
 				require.NoError(t, err)
 				for _, result := range out.Results {
-					assert.True(t, db.IsCompactionEventAgent(string(result.Result.Session.Agent)))
+					assert.True(t, db.IsCompactionSummaryExcludedAgent(string(result.Result.Session.Agent)))
 					for _, m := range result.Result.Messages {
 						if m.IsCompactBoundary {
 							events = append(events, m.Content)

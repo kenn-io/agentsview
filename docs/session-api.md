@@ -382,7 +382,7 @@ ______________________________________________________________________
 
 ### `agentsview session compactions`
 
-Read full compaction summaries for one session or sessions active since an RFC3339 timestamp. The session limit does not cap response bytes. Use `--limit` and `--cursor` to page sessions. Resume a cursor with the same `--active-since` value, even when a page has no summaries.
+Read full compaction summaries for one session or sessions active since an RFC3339 timestamp. Evener, RooCode, and legacy Kilo sessions are excluded. The session limit does not cap response bytes. Use `--limit` and `--cursor` to page sessions. Resume a cursor with the same `--active-since` value, even when a page has no summaries.
 
 ```bash
 agentsview session compactions <id> --json
