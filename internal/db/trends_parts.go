@@ -90,15 +90,11 @@ func TrendsFromParts(ctx context.Context, disk *kept.Disk, identity string, f An
 	parts := kept.LoadParts[map[string]*trendDay](disk, slot, version)
 	changed := kept.StaleParts(parts, versions)
 	ids := make([]string, 0, len(changed))
-	dirty := false
 	for id := range changed {
 		if _, ok := versions[id]; ok {
 			ids = append(ids, id)
 		}
-		if _, ok := parts[id]; ok {
-			delete(parts, id)
-			dirty = true
-		}
+		delete(parts, id)
 	}
 	if len(ids) > 0 {
 		ids, err = src.TrendWindowSessions(ctx, f, ids)
@@ -126,7 +122,7 @@ func TrendsFromParts(ctx context.Context, disk *kept.Disk, identity string, f An
 	if err := ctx.Err(); err != nil {
 		return TrendsTermsResponse{}, true, err
 	}
-	if dirty || len(ids) > 0 {
+	if len(ids) > 0 {
 		rows := make([]kept.Part[map[string]*trendDay], 0, len(parts))
 		for _, part := range parts {
 			rows = append(rows, part)

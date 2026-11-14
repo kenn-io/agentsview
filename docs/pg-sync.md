@@ -58,14 +58,10 @@ created, the reader uses temporary storage. The cache is disposable and contains
 no source sessions. Plan usage, per-session details, and Activity retain their
 existing read paths.
 
-Trends reuses per-session daily counts across restarts and date ranges, then
-recounts sessions changed by a push. Native PostgreSQL stores these counts under
-`$CACHE_DIRECTORY/postgres-trends`, or `agentsview/postgres-trends` in the user
-cache directory. Each selection can use up to 128 MiB, with a 256 MiB limit per
-target. Hour and model filters, the local timezone, and time-dependent session
-filters read messages directly. Hosted and borrowed transaction readers
-also read directly. The files are disposable; deleting them makes the next
-Trends visit count messages again.
+Trends keeps per-session counts under `$CACHE_DIRECTORY/postgres-trends`, or
+`agentsview/postgres-trends` in the user cache directory, and after a push
+recounts only changed sessions. Hosted and borrowed transaction readers read
+directly. The files are disposable.
 
 The sync direction is one-way: SQLite to PostgreSQL. Each machine pushes its own
 sessions; `pg serve` reads from the shared database. The resulting UI includes

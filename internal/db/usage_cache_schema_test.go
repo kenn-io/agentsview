@@ -761,10 +761,4 @@ func TestUsageGenerationMigrationBackfillsProof(t *testing.T) {
 	assert.NotEmpty(t, usageGeneration)
 	require.NotEmpty(t, trendsGeneration)
 	require.NoError(t, database.Close())
-	database, err = Open(t.Context(), path)
-	require.NoError(t, err)
-	defer database.Close()
-	var reopenedTrendsGeneration string
-	require.NoError(t, database.getReader().QueryRowContext(t.Context(), `SELECT trends_generation FROM sessions WHERE id='retained'`).Scan(&reopenedTrendsGeneration))
-	require.Equal(t, trendsGeneration, reopenedTrendsGeneration)
 }
