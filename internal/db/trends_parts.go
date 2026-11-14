@@ -117,13 +117,14 @@ func TrendsFromParts(ctx context.Context, disk *kept.Disk, identity string, f An
 			parts[id] = kept.Part[map[string]*trendDay]{ID: id, Fingerprint: versions[id], Present: true, Value: days[id]}
 		}
 	}
+	latest := versions
 	if len(changed) > 0 {
-		latest, err := src.TrendSessionVersions(ctx, f)
+		latest, err = src.TrendSessionVersions(ctx, f)
 		if err != nil {
 			return TrendsTermsResponse{}, true, err
 		}
-		if !maps.Equal(versions, latest) {
-			return TrendsTermsResponse{}, false, nil
+		for id := range kept.StaleParts(parts, latest) {
+			delete(parts, id)
 		}
 	}
 	if len(ids) > 0 {
@@ -134,6 +135,9 @@ func TrendsFromParts(ctx context.Context, disk *kept.Disk, identity string, f An
 		kept.SaveParts(disk, slot, version, rows, func(days map[string]*trendDay) int64 {
 			return int64(len(days) * (18 + 8*len(terms)))
 		})
+	}
+	if !maps.Equal(versions, latest) {
+		return TrendsTermsResponse{}, false, nil
 	}
 
 	acc := NewTrendAccumulator(f.From, f.To, granularity, terms)

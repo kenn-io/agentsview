@@ -21,6 +21,53 @@ type trendWindowRace struct {
 	beforeWindow func()
 }
 
+type trendMessageRace struct {
+	*DB
+	beforeVisit func()
+}
+
+func (s trendMessageRace) VisitTrendMessages(ctx context.Context, f AnalyticsFilter, ids []string, visit func(string, string, time.Time)) error {
+	s.beforeVisit()
+	return s.DB.VisitTrendMessages(ctx, f, ids, visit)
+}
+
+func TestTrendsPartsRetainsStableSessionsDuringRecount(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	for _, id := range []string{"a", "b"} {
+		insertSession(t, d, id, "project", func(s *Session) { s.MessageCount, s.UserMessageCount = 1, 1 })
+		insertMessages(t, d, Message{SessionID: id, Role: "user", Content: "apple", Timestamp: "2025-03-10T12:00:00Z"})
+	}
+	terms, err := ParseTrendTerms([]string{"apple"})
+	require.NoError(t, err)
+	f := AnalyticsFilter{From: "2025-03-10", To: "2025-03-10", Timezone: "UTC"}
+	identity, err := d.GetDatabaseID(ctx)
+	require.NoError(t, err)
+	d.trendsPartsDisk()
+	var writeErr error
+	_, handled, err := TrendsFromParts(ctx, &d.trendsDisk, identity, f, terms, "day", trendMessageRace{d, func() {
+		writeErr = d.ReplaceSessionMessages(ctx, "a", []Message{{SessionID: "a", Role: "user", Content: "banana", Timestamp: "2025-03-10T12:00:00Z"}})
+	}})
+	require.NoError(t, writeErr)
+	require.NoError(t, err)
+	require.False(t, handled)
+	direct, err := OpenReadOnly(ctx, d.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, direct.Close()) })
+	want, err := direct.trendsTerms(ctx, f, terms, "day")
+	require.NoError(t, err)
+	require.Equal(t, 1, want.Series[0].Total)
+	var reads [][]string
+	reset := SetTrendPartsReadObserver(func(ids []string) { reads = append(reads, append([]string(nil), ids...)) })
+	t.Cleanup(reset)
+	got, handled, err := TrendsFromParts(ctx, &d.trendsDisk, identity, f, terms, "day", d)
+	require.NoError(t, err)
+	require.True(t, handled)
+	assert.Equal(t, want, got)
+	assert.Equal(t, [][]string{{"a"}}, reads)
+}
+
 func (s trendWindowRace) TrendWindowSessions(ctx context.Context, f AnalyticsFilter, ids []string) ([]string, error) {
 	s.beforeWindow()
 	return s.DB.TrendWindowSessions(ctx, f, ids)
