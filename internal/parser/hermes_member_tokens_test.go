@@ -113,7 +113,7 @@ func TestHermesMemberTokenChanges(t *testing.T) {
 }
 
 func TestHermesMemberListingFallbacksAndDeletion(t *testing.T) {
-	for _, kind := range []string{"deleted", "prefixed deleted", "malformed", "legacy", "suppressed", "suppressed cron", "pager error", "trigger removed", "missing session index", "missing id index", "empty authority", "suppressed authority"} {
+	for _, kind := range []string{"deleted", "prefixed deleted", "malformed", "legacy", "future token", "suppressed", "suppressed cron", "pager error", "trigger removed", "missing session index", "missing id index", "empty authority", "suppressed authority"} {
 		t.Run(kind, func(t *testing.T) {
 			c, path := hermesTokenFixture(t)
 			root := filepath.Dir(path)
@@ -143,6 +143,8 @@ func TestHermesMemberListingFallbacksAndDeletion(t *testing.T) {
 				_, err = c.ExecContext(t.Context(), `UPDATE sessions SET started_at='invalid'`)
 			case "legacy":
 				stored.FingerprintHash = strings.Repeat("a", 64)
+			case "future token":
+				stored.FingerprintHash = strings.Replace(fingerprint.Hash, "hst1:", "hst2:", 1)
 			case "suppressed", "suppressed cron":
 				stored.Suppressed = true
 				_, err = c.ExecContext(t.Context(), `UPDATE sessions SET title='changed'`)
@@ -188,7 +190,7 @@ func TestHermesMemberListingFallbacksAndDeletion(t *testing.T) {
 			default:
 				require.Len(t, sources, 1)
 				assert.Equal(t, VirtualSourcePath(path, "s"), sources[0].FingerprintKey)
-				assert.Equal(t, kind == "legacy", sources[0].Opaque.(hermesSource).FingerprintSingleMember)
+				assert.Equal(t, kind == "legacy" || kind == "future token", sources[0].Opaque.(hermesSource).FingerprintSingleMember)
 			}
 		})
 	}
