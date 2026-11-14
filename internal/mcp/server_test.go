@@ -456,7 +456,7 @@ func TestCompactionSummarySchema(t *testing.T) {
 			}
 			require.NoError(t, json.Unmarshal(raw, &schema))
 			require.NotNil(t, schema.Properties["limit"].Minimum)
-			assert.Equal(t, float64(0), *schema.Properties["limit"].Minimum)
+			assert.InDelta(t, 0, *schema.Properties["limit"].Minimum, 0)
 		}
 	}
 	require.True(t, found)

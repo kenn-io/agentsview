@@ -277,7 +277,8 @@ func TestDuckCompactionSummaryReads(t *testing.T) {
 		ended := "2024-06-15T00:00:00Z"
 		for _, row := range []struct{ id, agent, role, subtype, content string }{
 			{"user", "hermes", "user", "", "summary"},
-			{"event", "roocode", "system", "", "Context condensed"}, {"placeholder", "evener", "system", "CHECKPOINT", "[CHECKPOINT]"},
+			{"event", "roocode", "system", "", "Context condensed"},
+			{"placeholder", "evener", "system", "CHECKPOINT", "[CHECKPOINT]"},
 		} {
 			sourceType := ""
 			if row.id == "placeholder" {

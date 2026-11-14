@@ -24,7 +24,7 @@ func TestCompactionSummaryEventAgents(t *testing.T) {
 			rows = append(rows, map[string]any{"ts": 1700000020000, "type": "say", "say": "condense_context", "text": "Context condensed"})
 			data, err = json.Marshal(rows)
 			require.NoError(t, err)
-			require.NoError(t, os.WriteFile(path, data, 0600))
+			require.NoError(t, os.WriteFile(path, data, 0o600))
 			provider, ok := parser.NewProvider(agent, parser.ProviderConfig{Roots: []string{root}, Machine: "test"})
 			require.True(t, ok)
 			sources, err := provider.Discover(t.Context())

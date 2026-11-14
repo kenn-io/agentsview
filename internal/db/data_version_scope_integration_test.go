@@ -1765,5 +1765,4 @@ func TestEvenerCompactionUpgradeReparsesStoredLabels(t *testing.T) {
 	assert.Equal(t, parser.EvenerEmptyCompactionSourceType, messages[0].SourceType)
 	assert.Equal(t, "[SUMMARY]", messages[1].Content)
 	assert.Equal(t, "entry", messages[1].SourceType)
-
 }

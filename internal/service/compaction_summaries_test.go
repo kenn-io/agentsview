@@ -44,7 +44,9 @@ func (s *compactionSpy) Messages(_ context.Context, id string, _ service.Message
 }
 
 func TestCompactionSummariesExcludedSessionDoesNotReadMessages(t *testing.T) {
-	for _, detail := range []*service.SessionDetail{nil, {Session: db.Session{Agent: "roocode"}}} {
+	event := &service.SessionDetail{}
+	event.Agent = "roocode"
+	for _, detail := range []*service.SessionDetail{nil, event} {
 		svc := &compactionSpy{detail: detail}
 		out, err := service.CompactionSummaries(t.Context(), svc, service.CompactionSummariesRequest{SessionID: "session"})
 		require.NoError(t, err)

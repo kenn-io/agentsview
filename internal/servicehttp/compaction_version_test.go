@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync/atomic"
 	"testing"
 
@@ -13,6 +14,7 @@ import (
 )
 
 func compactionDaemon(t *testing.T, version, probes *atomic.Int32) *httptest.Server {
+	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -33,7 +35,7 @@ func compactionDaemon(t *testing.T, version, probes *atomic.Int32) *httptest.Ser
 
 func TestCompactionFiltersRequireAPIVersion(t *testing.T) {
 	for _, v := range []int32{18, 19, 20} {
-		t.Run(fmt.Sprint(v), func(t *testing.T) {
+		t.Run(strconv.Itoa(int(v)), func(t *testing.T) {
 			var version, probes atomic.Int32
 			version.Store(v)
 			b := NewHTTPBackend(compactionDaemon(t, &version, &probes).URL, "", false, "")
@@ -64,6 +66,7 @@ func TestCompactionFiltersRequireAPIVersion(t *testing.T) {
 		assert.EqualValues(t, i+1, probes.Load())
 	}
 }
+
 func TestCompactionFiltersInvalidActiveSince(t *testing.T) {
 	_, err := filterToQuery(service.ListFilter{ActiveSince: "yesterday"})
 	require.ErrorContains(t, err, "invalid active_since")

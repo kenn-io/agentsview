@@ -16,11 +16,11 @@ func newSessionCompactionsCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			since, _ := cmd.Flags().GetString("active-since")
 			if (len(args) == 0) == (since == "") {
-				return cliUsageError(errors.New("provide exactly one session ID or --active-since"), "choose a session ID or --active-since")
+				return cliUsageError(errors.New("provide exactly one session ID or --active-since"), "")
 			}
 			limit, _ := cmd.Flags().GetInt("limit")
 			if limit < 0 {
-				return cliUsageError(errors.New("--limit must be 0 or more"), "use a nonnegative limit")
+				return cliUsageError(errors.New("--limit must be 0 or more"), "")
 			}
 			cursor, _ := cmd.Flags().GetString("cursor")
 			if len(args) == 1 && cursor != "" {
@@ -49,13 +49,13 @@ func newSessionCompactionsCommand() *cobra.Command {
 				fmt.Fprintf(cmd.OutOrStdout(), "--- %s  #%d  %s ---\n%s\n\n", sanitizeTerminal(summary.SessionID), summary.Ordinal, sanitizeTerminal(summary.Timestamp), sanitizeTerminal(summary.Content))
 			}
 			if result.NextCursor != "" {
-				fmt.Fprintf(cmd.OutOrStdout(), "Next cursor: %s\n", sanitizeTerminal(result.NextCursor))
+				fmt.Fprintf(cmd.OutOrStdout(), "More results: --cursor %s\n", sanitizeTerminal(result.NextCursor))
 			}
 			return nil
 		},
 	}
 	cmd.Flags().String("active-since", "", "Sessions active since this RFC3339 timestamp")
 	cmd.Flags().Int("limit", service.DefaultCompactionSessionLimit, fmt.Sprintf("Sessions per page, 0 or more (max %d)", service.MaxCompactionSessionLimit))
-	cmd.Flags().String("cursor", "", "Session cursor; resume with the same --active-since")
+	cmd.Flags().String("cursor", "", "Resume value; use the same --active-since")
 	return cmd
 }

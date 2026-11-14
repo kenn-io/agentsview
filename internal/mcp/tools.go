@@ -1037,7 +1037,7 @@ func (t *toolset) compactionSummaries(ctx context.Context, _ *mcp.CallToolReques
 		if err != nil {
 			return nil, service.CompactionSummariesResult{}, err
 		}
-		in.SessionID = detail.Session.ID
+		in.SessionID = detail.ID
 	}
 	out, err := service.CompactionSummaries(ctx, t.svc, service.CompactionSummariesRequest{SessionID: in.SessionID, ActiveSince: in.ActiveSince, Cursor: in.Cursor, Limit: in.Limit})
 	return nil, out, err
