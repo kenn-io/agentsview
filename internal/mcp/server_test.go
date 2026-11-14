@@ -437,7 +437,7 @@ func TestServer_ArchiveFreshnessWarning(t *testing.T) {
 func TestCompactionSummaryTool(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	dbtest.SeedSession(t, d, "codex:session", "project")
-	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: "codex:session", Role: "assistant", Content: "summary", IsCompactBoundary: true}}))
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: "codex:session", Role: "assistant", Content: "summary", IsSystem: true, IsCompactBoundary: true}}))
 	srv := newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), Profile: ProfileMemory})
 	st, ct := newInMemoryPair(t, srv)
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()

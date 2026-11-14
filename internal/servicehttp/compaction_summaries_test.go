@@ -50,7 +50,7 @@ func TestCompactionSummariesActiveChildren(t *testing.T) {
 				s.RelationshipType = "subagent"
 			}
 		})
-		require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: row.id, Role: "assistant", Content: row.id, IsCompactBoundary: true}}))
+		require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: row.id, Role: "assistant", Content: row.id, IsSystem: true, IsCompactBoundary: true}}))
 	}
 	daemon := httptest.NewUnstartedServer(nil)
 	s := server.New(config.Config{Host: "127.0.0.1", Port: daemon.Listener.Addr().(*net.TCPAddr).Port, DataDir: t.TempDir()}, d, nil)

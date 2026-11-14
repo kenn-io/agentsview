@@ -3,6 +3,7 @@
 package duckdb
 
 import (
+	"database/sql"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -274,7 +275,13 @@ func TestDuckGetMessagesWindowReadsOnlyWindowToolRows(t *testing.T) {
 }
 
 func TestDuckGetMessagesWindow_CompactBoundary(t *testing.T) {
-	store := newDuckWindowStore(t, func(local *db.DB) { seedDuckWindowMessages(t, local, "boundary") })
+	store := newDuckWindowStore(t, func(local *db.DB) {
+		seedDuckWindowMessages(t, local, "boundary")
+		require.NoError(t, local.Update(t.Context(), func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(t.Context(), "UPDATE messages SET is_system = 1 WHERE session_id = ? AND ordinal IN (3, 8)", "boundary")
+			return err
+		}))
+	})
 	msgs, err := store.GetMessagesWindow(t.Context(), "boundary", db.MessageWindow{Limit: 100, Asc: true, CompactBoundaryOnly: true})
 	require.NoError(t, err)
 	assert.Equal(t, []int{3, 8}, duckOrdinalsOf(msgs))

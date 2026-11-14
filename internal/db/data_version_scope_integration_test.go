@@ -1728,7 +1728,7 @@ func TestGrokCompactionUpgradeReparsesInPlace(t *testing.T) {
 }
 
 func TestEvenerCompactionUpgradeReparsesStoredLabels(t *testing.T) {
-	version := db.CurrentDataVersion()
+	const version = 180
 	scope := db.ScopedDataVersionProviders(179, 180)
 	assert.ElementsMatch(t, []parser.AgentType{parser.AgentEvener}, scope)
 	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))

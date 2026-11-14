@@ -45,10 +45,10 @@ func (s *compactionSpy) Messages(_ context.Context, id string, f service.Message
 	messages := []db.Message{
 		{Content: "injected prompt", IsSystem: true},
 		{Content: "ordinary message"},
-		{Content: "  ", IsCompactBoundary: true},
+		{Content: "  ", IsSystem: true, IsCompactBoundary: true},
 	}
 	if s.includeSummary {
-		messages = append(messages, db.Message{Content: "retained summary", IsCompactBoundary: true})
+		messages = append(messages, db.Message{Content: "retained summary", IsSystem: true, IsCompactBoundary: true})
 	}
 	return &service.MessageList{Messages: messages}, nil
 }

@@ -51,8 +51,8 @@ func TestSessionCompactionsOutput(t *testing.T) {
 	d, err := db.Open(t.Context(), filepath.Join(dataDir, "sessions.db"))
 	require.NoError(t, err)
 	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
-		{SessionID: "first", Role: "assistant", IsCompactBoundary: true, Content: "first summary"},
-		{SessionID: "second", Role: "assistant", IsCompactBoundary: true, Content: "second summary"},
+		{SessionID: "first", Role: "assistant", IsSystem: true, IsCompactBoundary: true, Content: "first summary"},
+		{SessionID: "second", Role: "assistant", IsSystem: true, IsCompactBoundary: true, Content: "second summary"},
 		{SessionID: "evener", Role: "system", IsSystem: true, IsCompactBoundary: true, SourceType: "entry", SourceSubtype: "SUMMARY", Content: "[SUMMARY]"},
 	}))
 	require.NoError(t, d.Close())
