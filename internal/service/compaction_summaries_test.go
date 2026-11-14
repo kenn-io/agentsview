@@ -3,6 +3,7 @@ package service_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -19,6 +20,12 @@ type compactionSpy struct {
 	limit          int
 	reads          []string
 	includeSummary bool
+	checked        bool
+}
+
+func (s *compactionSpy) CheckCompactionSummaries(context.Context) error {
+	s.checked = true
+	return nil
 }
 
 func (s *compactionSpy) Get(context.Context, string) (*service.SessionDetail, error) {
@@ -30,7 +37,11 @@ func (s *compactionSpy) List(_ context.Context, f service.ListFilter) (*service.
 	return &service.SessionList{Sessions: []db.Session{{ID: "event", Agent: "roocode"}, {ID: "normal", Agent: "claude"}}, NextCursor: "next"}, nil
 }
 
-func (s *compactionSpy) Messages(_ context.Context, id string, _ service.MessageFilter) (*service.MessageList, error) {
+func (s *compactionSpy) Messages(_ context.Context, id string, f service.MessageFilter) (*service.MessageList, error) {
+	if !s.checked || !f.CompactBoundaryOnly {
+		return nil, errors.New("expected a successful preflight and boundary filter")
+	}
+	// The replacement ignores the boundary filter after preflight succeeds.
 	s.reads = append(s.reads, id)
 	messages := []db.Message{
 		{Content: "injected prompt", IsSystem: true},
@@ -61,6 +72,7 @@ func TestCompactionSummariesUnfilteredPage(t *testing.T) {
 	svc := &compactionSpy{}
 	out, err := service.CompactionSummaries(t.Context(), svc, service.CompactionSummariesRequest{ActiveSince: "2024-06-01T00:00:00Z"})
 	require.NoError(t, err)
+	assert.True(t, svc.checked)
 	assert.Equal(t, 20, svc.limit)
 	assert.Empty(t, out.Summaries)
 	assert.Equal(t, []string{"normal"}, svc.reads)
