@@ -802,13 +802,14 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
   `internal/clickhouse`. Go resolves each model to its rates over the range as
   a schedule of segments; SQL picks a row's segment and pricing band and does
   the integer cost math. Both backends share the schedule and the assembly of
-  the summed groups in `internal/readbase/activityusage.go`. DuckDB keeps usage
-  totals for ranges that include today in memory. A push, pricing change, or
-  restart clears those totals. Finished reports also use memory, which restart
-  clears. Eligible past-day reports can be saved to disk and reused after restart.
-  DuckDB also derives session runs in SQL with `activitySessionRuns`. The SQLite
-  and PostgreSQL reports keep the Go rules in `internal/activity`, because the
-  SQL was slower for them on a one-year archive of 30,000 sessions:
+  the summed groups in `internal/readbase/activityusage.go`. DuckDB keeps
+  usage totals for ranges that include today in memory. A push, pricing
+  change, or restart clears those totals. Finished reports also use memory,
+  which restart clears. Eligible past-day reports can be saved to disk and
+  reused after restart. DuckDB also derives session runs in SQL with
+  `activitySessionRuns`. The SQLite and PostgreSQL reports keep the Go rules
+  in `internal/activity`, because the SQL was slower for them on a one-year
+  archive of 30,000 sessions:
     - SQLite: the usage step took 6.2 s in SQL and 0.99 s in Go, 6.3x slower. One
       sort of the 600,000 usage rows already takes 1.1 s, and the rules need
       several. The runs SQL took 11.1 s against 1.9 s for the Go pairing, 5.8x
@@ -1467,10 +1468,10 @@ the SQL.
   that a push builds; see
   [Usage rollup](../../internal/duckdb/README.md#usage-rollup). A read must
   return what it returns without the rollup. A change to how usage rows are
-  deduplicated, dated, or priced must keep both copies of the rules in step,
-  and a change to what a build stores must bump the rollup format as that
-  section describes. Test fixtures that edit a pushed mirror by hand must drop
-  the rollup, because those edits leave push fingerprints unchanged.
+  deduplicated, dated, or priced must keep both copies of the rules in step, and
+  a change to what a build stores must bump the rollup format as that section
+  describes. Test fixtures that edit a pushed mirror by hand must drop the
+  rollup, because those edits leave push fingerprints unchanged.
 - Keep Quack read-only. `duckdb push` writes the local mirror; it never writes
   to a remote DuckDB service.
 - Replace a file only after identifying it as an agentsview DuckDB mirror. Fail
@@ -1501,9 +1502,9 @@ own metadata, which is why the docs below call the database a mirror.
   push cursor and version in the mirror's `sync_metadata`. Never store
   ClickHouse sync state in SQLite.
 - A push that rewrote at least `compactionShare` of the live messages runs
-  `OPTIMIZE TABLE ... FINAL` on `compactionTables` (`compactAfterRewrite`). Add
-  every new table a session push rewrites to that list. Compaction failures
-  are logged and never fail the push. See
+  `OPTIMIZE TABLE ... FINAL` on `compactionTables` (`compactAfterRewrite`).
+  Add every new table a session push rewrites to that list. Compaction
+  failures are logged and never fail the push. See
   [Compaction after a large rewrite](../internal/clickhouse-mirror.md#compaction-after-a-large-rewrite).
 - Every mirrored table is `ReplacingMergeTree(push_version)`. Every connection
   sets `final = 1` and, unless the URL sets it, `max_threads = 8`. Do not
@@ -1535,9 +1536,9 @@ own metadata, which is why the docs below call the database a mirror.
   design section.
 - Usage reads add priced sums from `usage_rollup`, built from `prepared_usage`
   under the same stamp, and rank only the rows the rollup does not sum. A read
-  must return what it returns without the rollup; when a condition cannot hold,
-  read without it. Any change to how usage rows are deduplicated, dated, or
-  priced must also change the rollup's build and read SQL, and the
+  must return what it returns without the rollup; when a condition cannot
+  hold, read without it. Any change to how usage rows are deduplicated, dated,
+  or priced must also change the rollup's build and read SQL, and the
   `usage_rollup_chtest_test.go` comparisons must keep passing. See
   [Usage rollup](../internal/clickhouse-mirror.md#usage-rollup).
 - `clickhouse push` stores per-session dashboard facts on `sessions`
@@ -1615,22 +1616,24 @@ Because each test owns a database, the tests run in parallel:
   returns another, separate database.
 - Tests that call `ensureStoreSchema` get their database from
   `testPGStoreURL(t)`. On PostgreSQL that database is a copy of a template in
-  which `EnsureSchema` already created the store schema, which saves about
-  60 ms per test. The template is built once per test binary and dropped at
-  exit. CockroachDB has no `CREATE DATABASE ... TEMPLATE`, so there the test
-  gets an empty database and creates the schema itself.
+  which `EnsureSchema` already created the store schema, which saves about 60
+  ms per test. The template is built once per test binary and dropped at exit.
+  CockroachDB has no `CREATE DATABASE ... TEMPLATE`, so there the test gets an
+  empty database and creates the schema itself.
 - Leave out `t.Parallel()` when the test changes process-wide state, such as
   `t.Setenv`, `time.Local`, `log.SetOutput`, `db.SetUserAutomationPrefixes`,
   or `pricing.SetConfiguredAliases`. Go runs those tests one at a time before
   the parallel ones start.
 - Roles are server-wide. Give each role a name no other test uses.
-- Concurrent tests share the server's connections and lock table. Against a
-  server with the default 100 connections, 16 concurrent tests ran out of lock
-  memory (SQLSTATE 53200) and 12 did not. So on PostgreSQL a top-level test
-  holds one of `max_connections / 8` slots while its databases exist, and
-  waits when none is free. The slots are lock files in the system temporary
-  directory, keyed by server address, so every test process against one
-  server shares them. CockroachDB has no shared lock table and no slots.
+- Concurrent tests share the server's connections and lock table. Hosted schema
+  creation and cleanup can exhaust lock memory (SQLSTATE 53200) with 12
+  concurrent tests on a default 100-connection server. Each top-level test
+  holds a slot while its databases exist. PostgreSQL permits the smaller of
+  `max_connections / 8` and `max_connections * max_locks_per_transaction / 2048`
+  tests, with at least one slot. The default settings permit three tests.
+  Slot files in the system temporary directory, keyed by server address, share
+  this limit across test processes. CockroachDB has no shared lock table and
+  no slots.
 - Run CockroachDB with an in-memory store
   (`start-single-node --store=type=mem,size=4GiB`). Schema setup takes about
   10 s per test there, against 86 s on a disk store.
