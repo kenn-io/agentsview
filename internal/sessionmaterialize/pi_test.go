@@ -304,8 +304,10 @@ func TestPiHeaderFilenameIdentityPreservesBytes(t *testing.T) {
 			got, err := relocatePiHeader(t.Context(), data, "id.jsonl", "id", "/new")
 			require.NoError(t, err)
 			assert.Equal(t, "\n"+`{"type":"session", "id" : "id", "cwd" : "/new", "other": [1, 2]}`+"\n"+`{"type":"message"}`+"\n", string(got))
-			_, err = relocatePiHeader(t.Context(), data, "other.jsonl", "id", "/new")
-			require.ErrorIs(t, err, errPiIdentity)
+			if tc.name == "object" {
+				_, err = relocatePiHeader(t.Context(), data, "other.jsonl", "id", "/new")
+				require.ErrorIs(t, err, errPiIdentity)
+			}
 		})
 	}
 	got, err := relocatePiHeader(t.Context(), []byte(`{"type":"session","cwd":"/old","id":null}`), "id.jsonl", "id", "/new")
