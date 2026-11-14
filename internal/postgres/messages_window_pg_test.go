@@ -324,18 +324,23 @@ func TestPGListSessionsHasCompactionSummary(t *testing.T) {
 	pgURL := testPGURL(t)
 	pg := mwEnsureSchema(t, pgURL)
 	defer pg.Close()
-	mwSeedWindowMessages(t, pg, "old-root")
-	mwSeedWindowMessages(t, pg, "active-child")
-	_, err := pg.ExecContext(t.Context(), `UPDATE sessions SET ended_at = '2024-01-01T00:00:00Z' WHERE id = 'old-root'`)
-	require.NoError(t, err)
-	_, err = pg.ExecContext(t.Context(), `UPDATE sessions SET ended_at = '2024-06-15T00:00:00Z', parent_session_id = 'old-root', relationship_type = 'subagent' WHERE id = 'active-child'`)
-	require.NoError(t, err)
-	_, err = pg.ExecContext(t.Context(), `UPDATE messages SET is_compact_boundary = TRUE, role = 'assistant' WHERE session_id = 'active-child' AND ordinal = 3`)
-	require.NoError(t, err)
+	for _, row := range []struct{ id, agent, role, subtype, content string }{
+		{"user", "hermes", "user", "", "summary"}, {"system", "fx", "system", "", "summary"},
+		{"event", "roocode", "system", "", "Context condensed"}, {"placeholder", "evener", "system", "CHECKPOINT", "[CHECKPOINT]"},
+	} {
+		mwSeedWindowMessages(t, pg, row.id)
+		_, err := pg.ExecContext(t.Context(), `UPDATE sessions SET agent = $1, ended_at = '2024-06-15T00:00:00Z' WHERE id = $2`, row.agent, row.id)
+		require.NoError(t, err)
+		_, err = pg.ExecContext(t.Context(), `UPDATE messages SET is_compact_boundary = TRUE, role = $1, source_subtype = $2, content = $3 WHERE session_id = $4 AND ordinal = 3`, row.role, row.subtype, row.content, row.id)
+		require.NoError(t, err)
+	}
 	store := mwNewStore(t, pgURL)
 	defer store.Close()
 	page, err := store.ListSessions(t.Context(), db.SessionFilter{ActiveSince: "2024-06-01T00:00:00Z", HasCompactionSummary: true, IncludeChildren: true})
 	require.NoError(t, err)
-	require.Len(t, page.Sessions, 1)
-	assert.Equal(t, "active-child", page.Sessions[0].ID)
+	var ids []string
+	for _, s := range page.Sessions {
+		ids = append(ids, s.ID)
+	}
+	assert.ElementsMatch(t, []string{"user", "system"}, ids)
 }

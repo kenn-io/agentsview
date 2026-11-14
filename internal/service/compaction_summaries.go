@@ -41,13 +41,25 @@ func CompactionSummaries(ctx context.Context, svc SessionService, req Compaction
 		return out, errors.New("cursor requires active_since")
 	}
 	limit := req.Limit
-	if limit <= 0 {
+	if limit < 0 {
+		return out, errors.New("limit must be 0 or more")
+	}
+	if limit == 0 {
 		limit = DefaultCompactionSessionLimit
 	}
 	if limit > MaxCompactionSessionLimit {
 		limit = MaxCompactionSessionLimit
 	}
 	ids := []string{req.SessionID}
+	if req.SessionID != "" {
+		detail, err := svc.Get(ctx, req.SessionID)
+		if err != nil {
+			return out, err
+		}
+		if detail == nil || db.IsCompactionEventAgent(detail.Agent) {
+			return out, nil
+		}
+	}
 	if req.ActiveSince != "" {
 		page, err := svc.List(ctx, ListFilter{ActiveSince: req.ActiveSince, Cursor: req.Cursor, Limit: limit, IncludeOneShot: true, OneShotFilterSet: true, IncludeAutomated: true, AutomatedFilterSet: true, IncludeChildren: true, HasCompactionSummary: true})
 		if err != nil {
@@ -62,12 +74,12 @@ func CompactionSummaries(ctx context.Context, svc SessionService, req Compaction
 	for _, id := range ids {
 		from := 0
 		for {
-			page, err := svc.Messages(ctx, id, MessageFilter{From: &from, Direction: "asc", Limit: db.MaxMessageLimit, Roles: []string{"assistant"}, CompactBoundaryOnly: true})
+			page, err := svc.Messages(ctx, id, MessageFilter{From: &from, Direction: "asc", Limit: db.MaxMessageLimit, CompactBoundaryOnly: true})
 			if err != nil {
 				return out, err
 			}
 			for _, m := range page.Messages {
-				if strings.TrimSpace(m.Content) != "" {
+				if strings.TrimSpace(m.Content) != "" && !db.IsCompactionPlaceholder(m.SourceSubtype, m.Content) {
 					out.Summaries = append(out.Summaries, CompactionSummary{SessionID: id, Ordinal: m.Ordinal, Timestamp: m.Timestamp, Content: m.Content})
 				}
 			}

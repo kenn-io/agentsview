@@ -564,13 +564,21 @@ func TestStoreListSessionsHasCompactionSummary(t *testing.T) {
 	store, syncer, local := newPushedStore(t)
 	ctx := t.Context()
 	ended := "2028-06-15T00:00:00Z"
-	s := db.Session{ID: "active-child", Project: "alpha", Machine: fixtureMachine, Agent: "claude", MessageCount: 1, CreatedAt: "2028-06-15T00:00:00Z", EndedAt: &ended, ParentSessionID: new(fixtureAlphaID), RelationshipType: "subagent"}
-	require.NoError(t, local.UpsertSession(ctx, s))
-	require.NoError(t, local.InsertMessages(ctx, []db.Message{{SessionID: s.ID, Ordinal: 0, Role: "assistant", IsCompactBoundary: true, Content: "hello"}}))
+	for _, row := range []struct{ id, agent, role, subtype, content string }{
+		{"user", "hermes", "user", "", "summary"}, {"system", "fx", "system", "", "summary"},
+		{"event", "roocode", "system", "", "Context condensed"}, {"placeholder", "evener", "system", "CHECKPOINT", "[CHECKPOINT]"},
+	} {
+		s := db.Session{ID: row.id, Project: "alpha", Machine: fixtureMachine, Agent: row.agent, MessageCount: 1, CreatedAt: ended, EndedAt: &ended}
+		require.NoError(t, local.UpsertSession(ctx, s))
+		require.NoError(t, local.InsertMessages(ctx, []db.Message{{SessionID: s.ID, Ordinal: 0, Role: row.role, IsCompactBoundary: true, SourceSubtype: row.subtype, Content: row.content}}))
+	}
 	_, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	page, err := store.ListSessions(ctx, db.SessionFilter{ActiveSince: "2028-06-01T00:00:00Z", HasCompactionSummary: true, IncludeChildren: true})
 	require.NoError(t, err)
-	require.Len(t, page.Sessions, 1)
-	assert.Equal(t, "active-child", page.Sessions[0].ID)
+	var ids []string
+	for _, s := range page.Sessions {
+		ids = append(ids, s.ID)
+	}
+	assert.ElementsMatch(t, []string{"user", "system"}, ids)
 }

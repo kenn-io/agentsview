@@ -19,6 +19,9 @@ func newSessionCompactionsCommand() *cobra.Command {
 				return cliUsageError(errors.New("provide exactly one session ID or --active-since"), "choose a session ID or --active-since")
 			}
 			limit, _ := cmd.Flags().GetInt("limit")
+			if limit < 0 {
+				return cliUsageError(errors.New("--limit must be 0 or more"), "use a nonnegative limit")
+			}
 			cursor, _ := cmd.Flags().GetString("cursor")
 			if len(args) == 1 && cursor != "" {
 				return cliUsageError(errors.New("--cursor requires --active-since"), "omit --cursor or use --active-since")
@@ -52,7 +55,7 @@ func newSessionCompactionsCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().String("active-since", "", "Sessions active since this RFC3339 timestamp")
-	cmd.Flags().Int("limit", service.DefaultCompactionSessionLimit, fmt.Sprintf("Sessions per page (max %d)", service.MaxCompactionSessionLimit))
+	cmd.Flags().Int("limit", service.DefaultCompactionSessionLimit, fmt.Sprintf("Sessions per page, 0 or more (max %d)", service.MaxCompactionSessionLimit))
 	cmd.Flags().String("cursor", "", "Session cursor; resume with the same --active-since")
 	return cmd
 }

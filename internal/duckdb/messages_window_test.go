@@ -282,18 +282,20 @@ func TestDuckGetMessagesWindow_CompactBoundary(t *testing.T) {
 
 func TestDuckListSessionsHasCompactionSummary(t *testing.T) {
 	store := newDuckWindowStore(t, func(local *db.DB) {
-		for _, item := range []struct{ id, parent, ended string }{{"old-root", "", "2024-01-01T00:00:00Z"}, {"active-child", "old-root", "2024-06-15T00:00:00Z"}} {
-			s := db.Session{ID: item.id, Project: "proj", Machine: "local", Agent: "claude", MessageCount: 1, EndedAt: &item.ended}
-			if item.parent != "" {
-				s.ParentSessionID = &item.parent
-				s.RelationshipType = "subagent"
-			}
-			require.NoError(t, local.UpsertSession(t.Context(), s))
-			require.NoError(t, local.InsertMessages(t.Context(), []db.Message{{SessionID: item.id, Ordinal: 0, Role: "assistant", IsCompactBoundary: true, Content: "hello"}}))
+		ended := "2024-06-15T00:00:00Z"
+		for _, row := range []struct{ id, agent, role, subtype, content string }{
+			{"user", "hermes", "user", "", "summary"}, {"system", "fx", "system", "", "summary"},
+			{"event", "roocode", "system", "", "Context condensed"}, {"placeholder", "evener", "system", "CHECKPOINT", "[CHECKPOINT]"},
+		} {
+			require.NoError(t, local.UpsertSession(t.Context(), db.Session{ID: row.id, Project: "proj", Machine: "local", Agent: row.agent, MessageCount: 1, EndedAt: &ended}))
+			require.NoError(t, local.InsertMessages(t.Context(), []db.Message{{SessionID: row.id, Ordinal: 0, Role: row.role, IsCompactBoundary: true, SourceSubtype: row.subtype, Content: row.content}}))
 		}
 	})
 	page, err := store.ListSessions(t.Context(), db.SessionFilter{ActiveSince: "2024-06-01T00:00:00Z", HasCompactionSummary: true, IncludeChildren: true})
 	require.NoError(t, err)
-	require.Len(t, page.Sessions, 1)
-	assert.Equal(t, "active-child", page.Sessions[0].ID)
+	var ids []string
+	for _, s := range page.Sessions {
+		ids = append(ids, s.ID)
+	}
+	assert.ElementsMatch(t, []string{"user", "system"}, ids)
 }

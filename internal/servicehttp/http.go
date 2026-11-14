@@ -326,13 +326,14 @@ func (b *httpBackend) requireSessionAnnotations(ctx context.Context, minVersion 
 func (b *httpBackend) List(
 	ctx context.Context, f service.ListFilter,
 ) (*service.SessionList, error) {
+	minVersion, feature := 0, ""
 	if f.HasCompactionSummary {
-		if err := b.requireSessionAnnotations(ctx, service.CompactionSummariesAPIVersion, "compaction summaries"); err != nil {
-			return nil, err
-		}
+		minVersion, feature = service.CompactionSummariesAPIVersion, "compaction summaries"
+	} else if len(f.Labels) > 0 || f.PR != "" {
+		minVersion, feature = service.SessionAnnotationsAPIVersion, "session labels, parent links, or their filters"
 	}
-	if !f.HasCompactionSummary && (len(f.Labels) > 0 || f.PR != "") {
-		if err := b.requireSessionAnnotations(ctx, service.SessionAnnotationsAPIVersion, "session labels, parent links, or their filters"); err != nil {
+	if minVersion != 0 {
+		if err := b.requireSessionAnnotations(ctx, minVersion, feature); err != nil {
 			return nil, err
 		}
 	}

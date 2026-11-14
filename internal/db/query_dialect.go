@@ -931,12 +931,17 @@ func sessionFilterPredicates(
 ) ([]string, string) {
 	var preds []string
 	if f.HasCompactionSummary {
-		pred := "m.is_compact_boundary = " + b.dialect.trueLiteral + " AND m.role = 'assistant' AND m.content <> ''"
+		pred := compactionSummaryMembership(b)
 		sessionID := q("id")
 		if sessionID == "id" {
 			sessionID = "sessions.id"
 		}
 		preds = append(preds, b.dialect.MessageMembershipSQL(sessionID, pred))
+		var agents []string
+		for _, agent := range compactionEventAgents {
+			agents = append(agents, b.Add(agent))
+		}
+		preds = append(preds, q("agent")+" NOT IN ("+strings.Join(agents, ", ")+")")
 	}
 	if f.IDs != nil {
 		preds = append(preds, sessionIDsPredicate(f, b, q("id")))

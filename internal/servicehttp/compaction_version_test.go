@@ -148,3 +148,29 @@ func TestCompactionSummariesProbeOnceForMultipleSessions(t *testing.T) {
 	require.Len(t, out.Summaries, 2)
 	assert.EqualValues(t, 1, probes.Load())
 }
+
+func TestCompactionAndLabelsRequireVersion19(t *testing.T) {
+	for _, version := range []int{18, 19} {
+		t.Run(fmt.Sprint(version), func(t *testing.T) {
+			var probes atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == "/api/v1/version" {
+					probes.Add(1)
+					fmt.Fprintf(w, `{"api_version":%d}`, version)
+					return
+				}
+				fmt.Fprint(w, `{"sessions":[],"total":0}`)
+			}))
+			defer srv.Close()
+			b := NewHTTPBackend(srv.URL, "", false, "")
+			_, err := b.List(t.Context(), service.ListFilter{HasCompactionSummary: true, Labels: []string{"label"}})
+			if version < 19 {
+				require.ErrorContains(t, err, "compaction summaries")
+			} else {
+				require.NoError(t, err)
+			}
+			assert.EqualValues(t, 1, probes.Load())
+		})
+	}
+}

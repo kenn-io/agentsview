@@ -389,7 +389,7 @@ agentsview session compactions <id> --json
 agentsview session compactions --active-since 2024-01-01T00:00:00Z --limit 20 --json
 ```
 
-The messages API accepts `compact_boundary=true` to select compaction boundaries in linear reads. It cannot be combined with `around`. The sessions API accepts `has_compaction_summary=true` to select sessions with a non-empty assistant compaction boundary.
+The messages API accepts `compact_boundary=true` to select compaction boundaries in linear reads. It cannot be combined with `around`. The sessions API accepts `has_compaction_summary=true` to select sessions with summary text. The read returns boundary text under any stored role. RooCode and legacy Kilo boundaries are events, so their sessions are excluded. Evener empty checkpoints and summaries use `[CHECKPOINT]` and `[SUMMARY]`; those placeholders are skipped, while real text is returned. A page can be empty with a cursor when its text is whitespace.
 
 ### `agentsview session messages`
 

@@ -120,6 +120,8 @@ include each session's labels, pull request links, and parent session. See
 With Docbank and every optional tool listed, the tool list the server sends is
 about 87 KB. `TestNewServer_CatalogFitsBudget` fails when it grows past 96 KB.
 
+The read returns boundary text under any stored role. RooCode and legacy Kilo boundaries are events, so their sessions are excluded. Evener empty checkpoints and summaries use `[CHECKPOINT]` and `[SUMMARY]`; those placeholders are skipped, while real text is returned. A page can be empty with a cursor when its text is whitespace.
+
 ### Focused memory profile
 
 Clients that use AgentsView only for conversation memory can select the focused

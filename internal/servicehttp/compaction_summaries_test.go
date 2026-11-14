@@ -52,3 +52,48 @@ func TestCompactionSummariesRoundTrip(t *testing.T) {
 	defer response.Body.Close()
 	assert.Equal(t, http.StatusBadRequest, response.StatusCode)
 }
+
+func TestCompactionSummariesEvenerPlaceholders(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	for _, row := range []struct{ id, ended string }{{"a", "2024-06-18T00:00:00Z"}, {"b", "2024-06-17T00:00:00Z"}, {"c", "2024-06-16T00:00:00Z"}} {
+		dbtest.SeedSession(t, d, row.id, "project", func(s *db.Session) { s.Agent = "evener"; s.EndedAt = &row.ended })
+	}
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
+		{SessionID: "a", Ordinal: 0, Role: "system", IsCompactBoundary: true, SourceSubtype: "CHECKPOINT", Content: "[CHECKPOINT]"},
+		{SessionID: "a", Ordinal: 1, Role: "system", IsCompactBoundary: true, SourceSubtype: "SUMMARY", Content: "[SUMMARY]"},
+		{SessionID: "b", Ordinal: 0, Role: "system", IsCompactBoundary: true, SourceSubtype: "CHECKPOINT", Content: "Retained summary"},
+		{SessionID: "c", Ordinal: 0, Role: "system", IsCompactBoundary: true, SourceSubtype: "CHECKPOINT", Content: "[SUMMARY]"},
+		{SessionID: "c", Ordinal: 1, Role: "system", IsCompactBoundary: true, SourceSubtype: "SUMMARY", Content: "[CHECKPOINT]"},
+	}))
+	daemon := httptest.NewUnstartedServer(nil)
+	s := server.New(config.Config{Host: "127.0.0.1", Port: daemon.Listener.Addr().(*net.TCPAddr).Port, DataDir: t.TempDir()}, d, nil)
+	daemon.Config.Handler = s.Handler()
+	daemon.Start()
+	defer daemon.Close()
+	for _, svc := range []service.SessionService{service.NewDirectBackend(d, nil), servicehttp.NewHTTPBackend(daemon.URL, "", true, "")} {
+		for _, tc := range []struct {
+			id       string
+			contents []string
+		}{{"a", nil}, {"b", []string{"Retained summary"}}, {"c", []string{"[SUMMARY]", "[CHECKPOINT]"}}, {"missing", nil}} {
+			out, err := service.CompactionSummaries(t.Context(), svc, service.CompactionSummariesRequest{SessionID: tc.id})
+			require.NoError(t, err)
+			var contents []string
+			for _, summary := range out.Summaries {
+				contents = append(contents, summary.Content)
+			}
+			assert.Equal(t, tc.contents, contents)
+		}
+		first, err := service.CompactionSummaries(t.Context(), svc, service.CompactionSummariesRequest{ActiveSince: "2024-06-01T00:00:00Z", Limit: 1})
+		require.NoError(t, err)
+		require.Len(t, first.Summaries, 1)
+		assert.Equal(t, "b", first.Summaries[0].SessionID)
+		require.NotEmpty(t, first.NextCursor)
+		second, err := service.CompactionSummaries(t.Context(), svc, service.CompactionSummariesRequest{ActiveSince: "2024-06-01T00:00:00Z", Limit: 1, Cursor: first.NextCursor})
+		require.NoError(t, err)
+		require.Len(t, second.Summaries, 2)
+		assert.Equal(t, "c", second.Summaries[0].SessionID)
+		assert.Empty(t, second.NextCursor)
+		_, err = service.CompactionSummaries(t.Context(), svc, service.CompactionSummariesRequest{SessionID: "b", Limit: -1})
+		require.ErrorContains(t, err, "limit must be 0 or more")
+	}
+}
