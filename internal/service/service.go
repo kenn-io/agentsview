@@ -48,6 +48,9 @@ var ErrBeforeAfterRequireAround = errors.New("before/after require around")
 // APIVersion is the current client and daemon contract version.
 const APIVersion = 19
 
+// CompactionAPIVersion is the first daemon version with flat session reads.
+const CompactionAPIVersion = 19
+
 // ErrSemanticUnavailable is returned by SearchContent for modes
 // "semantic" and hybrid requests without keyword fallback when the backing
 // store has no VectorSearcher wired in.

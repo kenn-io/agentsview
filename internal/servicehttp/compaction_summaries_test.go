@@ -20,18 +20,14 @@ import (
 func TestCompactionSummariesLegacyEvenerOverHTTP(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	for _, row := range []struct{ id, ended string }{{"a", "2024-06-18T00:00:00Z"}, {"b", "2024-06-17T00:00:00Z"}, {"c", "2024-06-16T00:00:00Z"}} {
-		dbtest.SeedSession(t, d, row.id, "project", func(s *db.Session) {
-			if row.id == "a" {
-				s.Agent = "evener"
-			}
-			s.EndedAt = &row.ended
-		})
+		dbtest.SeedSession(t, d, row.id, "project", func(s *db.Session) { s.Agent = "evener"; s.EndedAt = &row.ended })
 	}
 	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		{SessionID: "a", Ordinal: 0, Role: "system", IsCompactBoundary: true, SourceType: "entry", SourceSubtype: "SUMMARY", Content: "[SUMMARY]"},
-		{SessionID: "b", Ordinal: 0, Role: "system", IsCompactBoundary: true, SourceSubtype: "CHECKPOINT", Content: "Retained summary"},
+		{SessionID: "b", Ordinal: 0, Role: "system", IsCompactBoundary: true, SourceType: "entry", SourceSubtype: "CHECKPOINT", Content: "Retained summary"},
 		{SessionID: "b", Ordinal: 1, Role: "user", Content: "ordinary"},
-		{SessionID: "c", Ordinal: 0, Role: "system", IsCompactBoundary: true, SourceSubtype: "SUMMARY", Content: "[SUMMARY]"},
+		{SessionID: "c", Ordinal: 0, Role: "system", IsCompactBoundary: true, SourceType: "evener_literal_compaction", SourceSubtype: "SUMMARY", Content: "[SUMMARY]"},
+		{SessionID: "c", Ordinal: 1, Role: "system", IsCompactBoundary: true, SourceType: "evener_empty_compaction", SourceSubtype: "SUMMARY", Content: "[SUMMARY]"},
 	}))
 	daemon := httptest.NewUnstartedServer(nil)
 	s := server.New(config.Config{Host: "127.0.0.1", Port: daemon.Listener.Addr().(*net.TCPAddr).Port, DataDir: t.TempDir()}, d, nil)
@@ -47,10 +43,18 @@ func TestCompactionSummariesLegacyEvenerOverHTTP(t *testing.T) {
 			contents = append(contents, summary.Content)
 		}
 		assert.Equal(t, want, contents, id)
+		if id == "a" {
+			raw, err := json.Marshal(out)
+			require.NoError(t, err)
+			assert.Contains(t, string(raw), `"ambiguous":[{"session_id":"a","ordinal":0}]`)
+		}
 	}
 	first, err := service.CompactionSummaries(t.Context(), svc, service.CompactionSummariesRequest{ActiveSince: "2024-06-01T00:00:00Z", Limit: 1})
 	require.NoError(t, err)
 	assert.Empty(t, first.Summaries)
+	rawFirst, err := json.Marshal(first)
+	require.NoError(t, err)
+	assert.Contains(t, string(rawFirst), `"ambiguous":[{"session_id":"a","ordinal":0}]`)
 	require.NotEmpty(t, first.NextCursor)
 	second, err := service.CompactionSummaries(t.Context(), svc, service.CompactionSummariesRequest{ActiveSince: "2024-06-01T00:00:00Z", Limit: 1, Cursor: first.NextCursor})
 	require.NoError(t, err)

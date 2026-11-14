@@ -148,7 +148,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 			"session_id":   map[string]any{"type": "string", "description": "Session ID."},
 			"active_since": map[string]any{"type": "string", "description": "RFC3339 timestamp."},
 			"cursor":       map[string]any{"type": "string", "description": "Session cursor; resume with the same active_since."},
-			"limit":        map[string]any{"type": "integer", "minimum": 0, "description": "Sessions per page, 0 or more; default 20, max 100."},
+			"limit":        map[string]any{"type": "integer", "minimum": 0, "description": "Sessions per page; 0 uses the default 20, max 100."},
 		},
 	}}, t.compactionSummaries)
 

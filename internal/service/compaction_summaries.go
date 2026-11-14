@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 const (
@@ -28,8 +29,14 @@ type CompactionSummary struct {
 }
 
 type CompactionSummariesResult struct {
-	Summaries  []CompactionSummary `json:"summaries"`
-	NextCursor string              `json:"next_cursor,omitempty"`
+	Summaries  []CompactionSummary   `json:"summaries"`
+	Ambiguous  []CompactionAmbiguity `json:"ambiguous,omitempty"`
+	NextCursor string                `json:"next_cursor,omitempty"`
+}
+
+type CompactionAmbiguity struct {
+	SessionID string `json:"session_id"`
+	Ordinal   int    `json:"ordinal"`
 }
 
 func CompactionSummaries(ctx context.Context, svc SessionService, req CompactionSummariesRequest) (CompactionSummariesResult, error) {
@@ -53,7 +60,7 @@ func CompactionSummaries(ctx context.Context, svc SessionService, req Compaction
 			return out, err
 		}
 	}
-	ids := []string{req.SessionID}
+	var sessions []db.Session
 	if req.SessionID != "" {
 		detail, err := svc.Get(ctx, req.SessionID)
 		if err != nil {
@@ -62,30 +69,28 @@ func CompactionSummaries(ctx context.Context, svc SessionService, req Compaction
 		if detail == nil || db.IsCompactionSummaryExcludedAgent(detail.Agent) {
 			return out, nil
 		}
+		sessions = append(sessions, detail.Session)
 	} else {
 		page, err := svc.List(ctx, ListFilter{ActiveSince: req.ActiveSince, Cursor: req.Cursor, Limit: limit, IncludeOneShot: true, OneShotFilterSet: true, IncludeAutomated: true, AutomatedFilterSet: true, IncludeChildren: true, Flat: true})
 		if err != nil {
 			return out, err
 		}
 		out.NextCursor = page.NextCursor
-		ids = ids[:0]
 		for _, session := range page.Sessions {
 			if !db.IsCompactionSummaryExcludedAgent(session.Agent) {
-				ids = append(ids, session.ID)
+				sessions = append(sessions, session)
 			}
 		}
 	}
-	for _, id := range ids {
+	for _, session := range sessions {
 		from := 0
 		for {
-			page, err := svc.Messages(ctx, id, MessageFilter{From: &from, Direction: "asc", Limit: db.MaxMessageLimit, CompactBoundaryOnly: true})
+			page, err := svc.Messages(ctx, session.ID, MessageFilter{From: &from, Direction: "asc", Limit: db.MaxMessageLimit, CompactBoundaryOnly: true})
 			if err != nil {
 				return out, err
 			}
 			for _, m := range page.Messages {
-				if m.IsCompactBoundary && strings.TrimSpace(m.Content) != "" {
-					out.Summaries = append(out.Summaries, CompactionSummary{SessionID: id, Ordinal: m.Ordinal, Timestamp: m.Timestamp, Content: m.Content})
-				}
+				appendCompactionSummary(&out, session, m)
 			}
 			if len(page.Messages) < db.MaxMessageLimit {
 				break
@@ -94,4 +99,20 @@ func CompactionSummaries(ctx context.Context, svc SessionService, req Compaction
 		}
 	}
 	return out, nil
+}
+
+func appendCompactionSummary(out *CompactionSummariesResult, session db.Session, m db.Message) {
+	if !m.IsCompactBoundary || strings.TrimSpace(m.Content) == "" {
+		return
+	}
+	if session.Agent == string(parser.AgentEvener) {
+		if m.SourceType == parser.EvenerEmptyCompactionSourceType {
+			return
+		}
+		if (m.SourceSubtype == "SUMMARY" || m.SourceSubtype == "CHECKPOINT") && m.Content == "["+m.SourceSubtype+"]" && m.SourceType != parser.EvenerLiteralCompactionSourceType {
+			out.Ambiguous = append(out.Ambiguous, CompactionAmbiguity{SessionID: session.ID, Ordinal: m.Ordinal})
+			return
+		}
+	}
+	out.Summaries = append(out.Summaries, CompactionSummary{SessionID: session.ID, Ordinal: m.Ordinal, Timestamp: m.Timestamp, Content: m.Content})
 }

@@ -57,6 +57,7 @@ func TestSessionCompactionsOutput(t *testing.T) {
 	help, err := executeCommand(newRootCommand(), "session", "compactions", "--help")
 	require.NoError(t, err)
 	assert.Contains(t, help, "Resume value; use the same --active-since")
+	assert.Contains(t, help, "0 uses the default")
 }
 
 func TestSessionCompactionsUsageOutput(t *testing.T) {
@@ -74,5 +75,23 @@ func TestSessionCompactionsUsageOutput(t *testing.T) {
 		assert.Contains(t, stderr.String(), "fatal: "+tc.message+"\n")
 		assert.NotContains(t, stderr.String(), "choose a session ID or --active-since")
 		assert.NotContains(t, stderr.String(), "use a nonnegative limit")
+	}
+}
+
+func TestSessionCompactionsAmbiguousEvener(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	seedSessionWithOpts(t, dataDir, "evener", "project", func(s *db.Session) {
+		s.Agent = "evener"
+		s.EndedAt = new("2024-06-15T00:00:00Z")
+	})
+	d, err := db.Open(t.Context(), filepath.Join(dataDir, "sessions.db"))
+	require.NoError(t, err)
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: "evener", Role: "system", IsCompactBoundary: true, SourceType: "entry", SourceSubtype: "SUMMARY", Content: "[SUMMARY]"}}))
+	require.NoError(t, d.Close())
+	for _, args := range [][]string{{"session", "compactions", "evener"}, {"session", "compactions", "--active-since", "2024-06-01T00:00:00Z"}} {
+		out, err := executeCommand(newRootCommand(), args...)
+		require.NoError(t, err)
+		assert.Contains(t, out, "Ambiguous compaction label: evener #0")
+		assert.NotContains(t, out, "[SUMMARY]")
 	}
 }

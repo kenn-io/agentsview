@@ -308,8 +308,8 @@ func (b *httpBackend) CheckCompactionSummaries(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if capabilities.APIVersion != service.APIVersion {
-		return fmt.Errorf("server API version %d does not support compaction summaries; use API version %d", capabilities.APIVersion, service.APIVersion)
+	if capabilities.APIVersion < service.CompactionAPIVersion {
+		return fmt.Errorf("server API version %d does not support compaction summaries; use API version %d or later", capabilities.APIVersion, service.CompactionAPIVersion)
 	}
 	return nil
 }

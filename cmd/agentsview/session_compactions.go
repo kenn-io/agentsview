@@ -48,6 +48,9 @@ func newSessionCompactionsCommand() *cobra.Command {
 			for _, summary := range result.Summaries {
 				fmt.Fprintf(cmd.OutOrStdout(), "--- %s  #%d  %s ---\n%s\n\n", sanitizeTerminal(summary.SessionID), summary.Ordinal, sanitizeTerminal(summary.Timestamp), sanitizeTerminal(summary.Content))
 			}
+			for _, item := range result.Ambiguous {
+				fmt.Fprintf(cmd.OutOrStdout(), "Ambiguous compaction label: %s #%d\n", sanitizeTerminal(item.SessionID), item.Ordinal)
+			}
 			if result.NextCursor != "" {
 				fmt.Fprintf(cmd.OutOrStdout(), "More results: --cursor %s\n", sanitizeTerminal(result.NextCursor))
 			}
@@ -55,7 +58,7 @@ func newSessionCompactionsCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().String("active-since", "", "Sessions active since this RFC3339 timestamp")
-	cmd.Flags().Int("limit", service.DefaultCompactionSessionLimit, fmt.Sprintf("Sessions per page, 0 or more (max %d)", service.MaxCompactionSessionLimit))
+	cmd.Flags().Int("limit", service.DefaultCompactionSessionLimit, fmt.Sprintf("Sessions per page, 0 uses the default (max %d)", service.MaxCompactionSessionLimit))
 	cmd.Flags().String("cursor", "", "Resume value; use the same --active-since")
 	return cmd
 }

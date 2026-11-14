@@ -6,8 +6,8 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-// These agents do not reliably distinguish summaries from boundary labels.
-var compactionExcludedAgents = [...]string{string(parser.AgentRooCode), string(parser.AgentKiloLegacy), string(parser.AgentEvener)}
+// RooCode and legacy Kilo mark context-management events as boundaries.
+var compactionExcludedAgents = [...]string{string(parser.AgentRooCode), string(parser.AgentKiloLegacy)}
 
 func IsCompactionSummaryExcludedAgent(agent string) bool {
 	return slices.Contains(compactionExcludedAgents[:], agent)

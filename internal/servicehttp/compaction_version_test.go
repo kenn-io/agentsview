@@ -38,7 +38,7 @@ func TestCompactionSummariesDaemonReplacement(t *testing.T) {
 	for i, v := range []int32{19, 18, 19, 20} {
 		version.Store(v)
 		out, err := service.CompactionSummaries(t.Context(), backend, req)
-		if v == 19 {
+		if v >= 19 {
 			require.NoError(t, err)
 			require.Len(t, out.Summaries, 2)
 			assert.Equal(t, "summary", out.Summaries[0].Content)
