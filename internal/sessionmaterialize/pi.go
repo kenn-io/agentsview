@@ -275,7 +275,7 @@ func relocatePiHeader(ctx context.Context, data []byte, name, id, cwd string) ([
 		if idStart < 0 {
 			encoded = slices.Concat(encoded, []byte(`,"id":`), encodedID)
 		} else if idStart > start {
-			data = slices.Concat(data[:offset+idStart], encodedID, data[offset+idEnd:])
+			data = slices.Concat(data[:offset+idStart], encodedID, data[offset+idEnd:]) //nolint:nilaway // A valid header requires nonempty data.
 		} else {
 			data = slices.Concat(data[:offset+start], encoded, data[offset+end:])
 			return slices.Concat(data[:offset+idStart], encodedID, data[offset+idEnd:]), nil
