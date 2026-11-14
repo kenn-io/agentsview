@@ -1,5 +1,5 @@
 ---
-# generated-by: agentsview 0.1.0 hash:557d8c17328ffa103324e7d66a11e9d57f2f294439c9a172edb0126d533743f1 — do not edit; re-run `agentsview skills install`
+# generated-by: agentsview 0.1.0 hash:139d5c5e71f81a1cb1f46734ce5f17c05701a7d613b19974b4a14b7dac327e8c — do not edit; re-run `agentsview skills install`
 name: agentsview-finding-history
 description: Use proactively when prior decisions, rationale, solutions, pitfalls, project context, or repeated workflows may help, when stuck, or before guessing about something learned previously — searches AgentsView conversation history for evidence.
 ---
@@ -68,7 +68,8 @@ is true.
 ## Failures and fallbacks
 
 Read the note. For `effective_mode: hybrid_keyword`, disclose keyword-only
-results once and use the matches without retry. Preserve `scope`, inclusion, and current-session flags.
+results once and use the matches without retry. Preserve `scope`, inclusion,
+and current-session flags.
 
 Disclose explicit semantic errors. Use a lexical fallback only for an
 unavailable index or transient embedding error; retry transient errors once

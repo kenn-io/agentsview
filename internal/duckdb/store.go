@@ -1042,7 +1042,10 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 			&db.SearchInputError{Msg: fmt.Sprintf("search: invalid mode %q", f.Mode)}
 	}
 	limit := f.Limit
-	// Keyword-only fusion uses message keys, so it needs no semantic overfetch.
+	if f.KeywordOnly {
+		// RRFMerge can move a subordinate match down by five ranks.
+		f.Limit += 5
+	}
 	matches, err := s.collectContentMatches(ctx, f)
 	if err != nil {
 		return db.ContentSearchPage{}, err
