@@ -107,7 +107,7 @@ type Store struct {
 	activityInputQueries atomic.Int64
 	// activityUsageSums keeps the result of the latest usage query per
 	// report selection; see keptActivityUsageSums.
-	activityUsageSums kept.Memo[*activityUsageSums]
+	activityUsageSums kept.Memo[*readbase.ActivityUsageSums]
 	// readinessLog holds the last prepared usage readiness logged.
 	readinessLog struct {
 		sync.Mutex
@@ -175,7 +175,7 @@ func NewStoreFromDB(conn *sql.DB, bulk chdriver.Conn) *Store {
 	s.usageSessionRows.Size = usageSessionRowBytes
 	s.topSessionTotals.Size = db.TopSessionBytes
 	s.analyticsSessionRows.Size = analyticsSessionBytes
-	s.activityUsageSums.Size = (*activityUsageSums).bytes
+	s.activityUsageSums.Size = (*readbase.ActivityUsageSums).Bytes
 	s.activitySessionListings.Size = sessionListingBytes
 	return s
 }

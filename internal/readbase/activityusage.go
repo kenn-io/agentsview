@@ -6,9 +6,11 @@ import (
 	"math"
 	"slices"
 	"time"
+	"unsafe"
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
 )
 
@@ -367,4 +369,30 @@ func CeilMicros(t time.Time) int64 {
 		us++
 	}
 	return us
+}
+
+// ActivityUsageSums holds priced groups through EndUS and the next source row.
+type ActivityUsageSums struct {
+	Schedule      UsageRateSchedule
+	Groups        []ActivityUsageGroup
+	EndUS, NextUS int64
+}
+
+// Covers reports whether no source row has entered or left the saved span.
+func (u *ActivityUsageSums) Covers(endUS int64) bool {
+	return u.EndUS <= endUS && endUS <= u.NextUS
+}
+
+// Bytes estimates the memory held by the sums.
+func (u *ActivityUsageSums) Bytes() int64 {
+	n := int64(unsafe.Sizeof(*u)) + int64(cap(u.Schedule.Rates))*int64(unsafe.Sizeof(UsageRate{})) + int64(cap(u.Groups))*int64(unsafe.Sizeof(ActivityUsageGroup{}))
+	for _, rate := range u.Schedule.Rates {
+		n += kept.JSONBytes(rate)
+	}
+	for _, g := range u.Groups {
+		for _, v := range []string{g.Session, g.Model, g.ProviderID, g.Kind, g.RawSession, g.RawSource, g.RawKey} {
+			n += int64(len(v))
+		}
+	}
+	return n
 }

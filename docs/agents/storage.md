@@ -790,10 +790,13 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
   `internal/clickhouse`. Go resolves each model to its rates over the range as
   a schedule of segments; SQL picks a row's segment and pricing band and does
   the integer cost math. Both backends share the schedule and the assembly of
-  the summed groups in `internal/readbase/activityusage.go`. DuckDB also
-  derives session runs in SQL with `activitySessionRuns`. The SQLite and
-  PostgreSQL reports keep the Go rules in `internal/activity`, because the SQL
-  was slower for them on a one-year archive of 30,000 sessions:
+  the summed groups in `internal/readbase/activityusage.go`. DuckDB keeps usage
+  totals for ranges that include today in memory. A push, pricing change, or
+  restart clears those totals. Finished reports also use memory, which restart
+  clears. Eligible past-day reports can be saved to disk and reused after restart.
+  DuckDB also derives session runs in SQL with `activitySessionRuns`. The SQLite
+  and PostgreSQL reports keep the Go rules in `internal/activity`, because the
+  SQL was slower for them on a one-year archive of 30,000 sessions:
     - SQLite: the usage step took 6.2 s in SQL and 0.99 s in Go, 6.3x slower. One
       sort of the 600,000 usage rows already takes 1.1 s, and the rules need
       several. The runs SQL took 11.1 s against 1.9 s for the Go pairing, 5.8x

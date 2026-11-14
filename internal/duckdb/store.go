@@ -41,21 +41,22 @@ func (s *Store) MemoryBackendName() string { return "duckdb" }
 // directly on path.
 type Store struct {
 	readbase.MirrorStubs
-	path           string
-	handleMu       sync.RWMutex
-	replacementMu  sync.Mutex
-	duck           *sql.DB
-	fileInfo       os.FileInfo
-	walStamp       string
-	reports        kept.Reports
-	usageDisk      kept.Disk
-	analyticsReads kept.Reads[[]byte]
-	dailyUsage     kept.Reads[db.DailyUsageResult]
-	planUsage      kept.Reads[*db.PlanUsageCountSummary]
-	topUsage       kept.Reads[[]db.TopSessionEntry]
-	pricingDigest  string
-	aliasPath      string
-	closed         bool
+	path              string
+	handleMu          sync.RWMutex
+	replacementMu     sync.Mutex
+	duck              *sql.DB
+	fileInfo          os.FileInfo
+	walStamp          string
+	reports           kept.Reports
+	activityUsageSums kept.Memo[*readbase.ActivityUsageSums]
+	usageDisk         kept.Disk
+	analyticsReads    kept.Reads[[]byte]
+	dailyUsage        kept.Reads[db.DailyUsageResult]
+	planUsage         kept.Reads[*db.PlanUsageCountSummary]
+	topUsage          kept.Reads[[]db.TopSessionEntry]
+	pricingDigest     string
+	aliasPath         string
+	closed            bool
 	// retiring tracks in-flight mirror-replacement checks, registered in
 	// beginReplacementCheck before a check opens anything and spanning
 	// swapHandle's tail cleanup (closing the replaced handle and removing
@@ -105,8 +106,9 @@ func NewStore(ctx context.Context, path string) (*Store, error) {
 	}
 	return &Store{
 		path: path, duck: conn, fileInfo: info, walStamp: walStamp,
-		topUsage:       kept.Reads[[]db.TopSessionEntry]{Size: db.TopSessionsBytes},
-		analyticsReads: kept.Reads[[]byte]{Size: func(b []byte) int64 { return int64(len(b)) }},
+		activityUsageSums: kept.Memo[*readbase.ActivityUsageSums]{Size: (*readbase.ActivityUsageSums).Bytes},
+		topUsage:          kept.Reads[[]db.TopSessionEntry]{Size: db.TopSessionsBytes},
+		analyticsReads:    kept.Reads[[]byte]{Size: func(b []byte) int64 { return int64(len(b)) }},
 	}, nil
 }
 
@@ -286,6 +288,7 @@ func (s *Store) SetCustomPricing(p map[string]config.CustomModelRate) {
 	digest := sha256.Sum256(fmt.Appendf(nil, "%#v", p))
 	s.pricingDigest = hex.EncodeToString(digest[:])
 	s.reports.Clear()
+	s.activityUsageSums.DeleteSlots(func(string) bool { return true })
 	s.dailyUsage.Clear()
 	s.planUsage.Clear()
 	s.topUsage.Clear()
