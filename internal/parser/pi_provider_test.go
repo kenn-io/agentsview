@@ -54,6 +54,47 @@ func TestOMOProviderKeepsPiLineageAndOMOIdentity(t *testing.T) {
 	assert.True(t, foundTool)
 }
 
+func TestDirectAPIProviderParsesUsageOnlySessions(t *testing.T) {
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "tools", "run-1.jsonl")
+	writeSourceFile(t, sourcePath, strings.Join([]string{
+		`{"type":"session","version":3,"id":"run-1","timestamp":"2026-01-01T10:00:00Z","cwd":"/work/example-project"}`,
+		`{"type":"session_info","id":"aaaaaaaa","parentId":null,"timestamp":"2026-01-01T10:00:00Z","name":"example intake"}`,
+		`{"type":"message","id":"bbbbbbbb","parentId":"aaaaaaaa","timestamp":"2026-01-01T10:00:01Z","message":{"role":"assistant","provider":"example","model":"model-a","content":[],"usage":{"input":800,"output":50,"cacheRead":200,"cacheWrite":0,"totalTokens":1050},"timestamp":1767261601000}}`,
+		`{"type":"message","id":"cccccccc","parentId":"bbbbbbbb","timestamp":"2026-01-01T10:00:02Z","message":{"role":"assistant","provider":"example","model":"model-b","content":[],"usage":{"input":10,"output":5,"cacheRead":0,"cacheWrite":0,"totalTokens":15},"timestamp":1767261602000}}`,
+	}, "\n"))
+
+	provider, ok := NewProvider(AgentDirectAPI, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, AgentDirectAPI, discovered[0].Provider)
+
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: discovered[0]})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	result := outcome.Results[0].Result
+	sess := result.Session
+	assert.Equal(t, "direct-api:run-1", sess.ID)
+	assert.Equal(t, AgentDirectAPI, sess.Agent)
+	assert.Equal(t, "example_project", sess.Project)
+	assert.Equal(t, "example intake", sess.SessionName)
+	assert.Empty(t, sess.ParentSessionID)
+	assert.Empty(t, sess.RelationshipType)
+	assert.Equal(t, 55, sess.TotalOutputTokens)
+
+	require.Len(t, result.Messages, 2)
+	assert.Equal(t, "model-a", result.Messages[0].Model)
+	assert.Equal(t, 50, result.Messages[0].OutputTokens)
+	assert.Equal(t, "model-b", result.Messages[1].Model)
+	assert.Equal(t, 5, result.Messages[1].OutputTokens)
+}
+
 func TestOMPProviderSourceMethods(t *testing.T) {
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "encoded-cwd", "session-123.jsonl")

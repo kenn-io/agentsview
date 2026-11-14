@@ -49,6 +49,7 @@ const (
 	AgentOMP            AgentType = "omp"
 	AgentOMO            AgentType = "omo"
 	AgentStepCode       AgentType = "stepcode"
+	AgentDirectAPI      AgentType = "direct-api"
 	AgentQwen           AgentType = "qwen"
 	AgentCommandCode    AgentType = "commandcode"
 	AgentDeepSeekTUI    AgentType = "deepseek-tui"
@@ -652,6 +653,18 @@ var Registry = []AgentDef{
 		DefaultDirs:       []string{".stepcode/agent/sessions"},
 		IDPrefix:          "stepcode:",
 		FileBased:         true,
+	},
+	{
+		// Direct API sessions come from tools that call model APIs directly.
+		// They write a body-free subset of Pi's v3 JSONL, so the Pi provider
+		// ingests them for token and cost accounting.
+		Type:        AgentDirectAPI,
+		DisplayName: "Direct API",
+		EnvVar:      "DIRECT_API_DIR",
+		ConfigKey:   "direct_api_dirs",
+		DefaultDirs: []string{".agentsview/direct-api"},
+		IDPrefix:    "direct-api:",
+		FileBased:   true,
 	},
 	{
 		Type:        AgentQwen,

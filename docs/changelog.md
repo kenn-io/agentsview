@@ -11,6 +11,12 @@ The latest release is
 
 **New features**
 
+- Track token usage and cost for tools that call model APIs directly, with no
+  coding agent in between. Such a tool writes body-free session files to
+  `~/.agentsview/direct-api/`, and AgentsView lists them as **Direct API**
+  sessions. `DIRECT_API_DIR` or `direct_api_dirs` change the directory. See
+  [Direct API Sessions](/docs/token-usage/#direct-api-sessions).
+
 - A `[custom_model_pricing."<model>"]` entry can set `price_as` to price a model
   name exactly like a catalog model, such as a private gateway deployment name
   that serves `gpt-6-sol`. The name inherits that model's long-context tiers
