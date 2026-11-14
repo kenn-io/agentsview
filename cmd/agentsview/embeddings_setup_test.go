@@ -340,12 +340,19 @@ func TestLiveEmbeddingsSetupStatusAndExportDuringWriteLockRetry(t *testing.T) {
 	releaseHeld := sync.OnceFunc(func() { require.NoError(t, held.Close()) })
 	defer releaseHeld()
 	var inspections atomic.Int64
+	reloaded := make(chan struct{})
+	inspectedReload := make(chan struct{})
+	notifyInspectedReload := sync.OnceFunc(func() { close(inspectedReload) })
 	inspectLocalEmbeddings = func(context.Context, embedlocal.Options) (embedlocal.Status, error) {
 		inspections.Add(1)
+		select {
+		case <-reloaded:
+			notifyInspectedReload()
+		default:
+		}
 		return embedlocal.Status{OllamaAvailable: true}, nil
 	}
 	localEmbeddingEndpoint = func(context.Context, embedlocal.Options) (string, error) { return "http://127.0.0.1:1/v1", nil }
-	reloaded := make(chan struct{})
 	notifyReload := sync.OnceFunc(func() { close(reloaded) })
 	owner, err := newLiveVectorServing(t.Context(), cfg, database, nil, func() (config.Config, error) {
 		cfg, err := config.LoadReadOnly()
@@ -358,7 +365,9 @@ func TestLiveEmbeddingsSetupStatusAndExportDuringWriteLockRetry(t *testing.T) {
 	cfg.Host, cfg.Port = "127.0.0.1", port
 	ts := startTestServer(t, ln, server.New(cfg, database, nil, owner.ServerOptions()...).Handler())
 	embeddingRequest(t, ts.Client(), ts.URL, "POST", "/api/v1/embeddings/setup", "application/json", strings.NewReader(`{}`), 202)
-	<-reloaded
+	// Activation probes the model after reloading config. Wait for that probe
+	// so it cannot change the count while we check that status adds no probes.
+	<-inspectedReload
 	before := inspections.Load()
 	status, err := owner.SetupStatus(t.Context())
 	require.NoError(t, err)
