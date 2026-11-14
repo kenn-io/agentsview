@@ -3,12 +3,17 @@
 package clickhouse
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/clickhouse/chtest"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // A mirror in the old pricing layout kept updated_at as a string and the
@@ -69,4 +74,59 @@ func TestEnsureSchemaUpgradesOldPricingLayout(t *testing.T) {
 		assert.Equal(t, tNullTime, columns[table]["updated_at"], table)
 		assert.NotContains(t, columns[table], "updated_at_text", table)
 	}
+}
+
+// A ClickHouse push has no transaction around its price and ownership
+// writes. A push that saved a new OpenRouter price and then failed must
+// still leave that price recorded as OpenRouter's. Otherwise the retry
+// takes the row for another machine's price and withholds every later
+// update to it.
+func TestSyncModelPricingRetryKeepsOpenRouterOwnership(t *testing.T) {
+	ctx := t.Context()
+	local, target := seedFixture(t)
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	price := func(input string) db.ModelPricing {
+		return db.ModelPricing{
+			ModelPattern:  "or/new-model",
+			InputPerMTok:  money.MustParseDollars(input),
+			OutputPerMTok: money.MustParseDollars("2"),
+			Bands: []db.PricingBand{{
+				AboveInputTokens: 1000,
+				InputPerMTok:     money.MustParseDollars("5"),
+				OutputPerMTok:    money.MustParseDollars("6"),
+			}},
+		}
+	}
+	owned := db.PricingMeta{
+		Key:   pricing.OpenRouterModelsMetaKey,
+		Value: `["or/new-model"]`,
+	}
+	require.NoError(t, local.ReconcileModelPricingContext(
+		ctx, []db.ModelPricing{price("1")}, nil, owned))
+
+	_, err := syncer.conn.ExecContext(ctx, `ALTER TABLE model_pricing_bands
+		ADD CONSTRAINT stop_push CHECK model_pattern != 'or/new-model'`)
+	require.NoError(t, err)
+	require.Error(t, syncer.syncModelPricing(ctx),
+		"the band insert fails after the price row is saved")
+	_, err = syncer.conn.ExecContext(ctx,
+		`ALTER TABLE model_pricing_bands DROP CONSTRAINT stop_push`)
+	require.NoError(t, err)
+	require.NoError(t, syncer.syncModelPricing(ctx))
+
+	require.NoError(t, local.ReconcileModelPricingContext(
+		ctx, []db.ModelPricing{price("3")}, nil, owned))
+	require.NoError(t, syncer.syncModelPricing(ctx))
+
+	prices, err := readModelPricing(ctx, syncer.conn)
+	require.NoError(t, err)
+	i := slices.IndexFunc(prices, func(p db.ModelPricing) bool {
+		return p.ModelPattern == "or/new-model"
+	})
+	require.GreaterOrEqual(t, i, 0, "the OpenRouter price reaches the mirror")
+	assert.Equal(t, money.MustParseDollars("3"), prices[i].InputPerMTok,
+		"a later price change reaches the mirror")
+	mirrorOwned, err := readPricingMeta(ctx, syncer.conn, pricing.OpenRouterModelsMetaKey)
+	require.NoError(t, err)
+	assert.Equal(t, `["or/new-model"]`, mirrorOwned)
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 
@@ -42,6 +43,23 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("planning clickhouse pricing sync: %w", err)
 	}
+	// ClickHouse has no transaction around the price and ownership
+	// writes, and a later plan treats a mirror row the list does not own
+	// as another machine's price. A push that saved a new OpenRouter price
+	// but stopped before recording its ownership would leave that price
+	// withheld from every later push. So new ownership is recorded before
+	// the price writes, and ownership this push retires only after them.
+	recorded := existingOpenRouter
+	if plan.OpenRouterModels != "" {
+		grown, err := addedOpenRouterModels(existingOpenRouter, plan.OpenRouterModels)
+		if err != nil {
+			return err
+		}
+		if err := s.writeOpenRouterModels(ctx, recorded, grown); err != nil {
+			return err
+		}
+		recorded = grown
+	}
 	if err := s.removeModelPricing(ctx, plan.Remove); err != nil {
 		return err
 	}
@@ -49,13 +67,38 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 		return err
 	}
 	if plan.OpenRouterModels != "" {
-		if err := insertRows(ctx, s.conn, "pricing_meta", [][]any{{
-			pricingpkg.OpenRouterModelsMetaKey, plan.OpenRouterModels, newPushVersion(),
-		}}); err != nil {
+		if err := s.writeOpenRouterModels(ctx, recorded, plan.OpenRouterModels); err != nil {
 			return err
 		}
 	}
 	return s.syncGenAIPricing(ctx)
+}
+
+// addedOpenRouterModels returns the mirror's ownership list with the
+// patterns of the planned list added and none removed.
+func addedOpenRouterModels(existing, planned string) (string, error) {
+	owned, err := pricingpkg.DecodeOpenRouterModels(existing)
+	if err != nil {
+		return "", fmt.Errorf("mirror OpenRouter models: %w", err)
+	}
+	added, err := pricingpkg.DecodeOpenRouterModels(planned)
+	if err != nil {
+		return "", fmt.Errorf("planned OpenRouter models: %w", err)
+	}
+	owned = append(owned, added...)
+	slices.Sort(owned)
+	return pricingpkg.EncodeOpenRouterModels(slices.Compact(owned)), nil
+}
+
+// writeOpenRouterModels stores the ownership list when it differs from
+// the one the mirror holds.
+func (s *Sync) writeOpenRouterModels(ctx context.Context, recorded, models string) error {
+	if models == recorded {
+		return nil
+	}
+	return insertRows(ctx, s.conn, "pricing_meta", [][]any{{
+		pricingpkg.OpenRouterModelsMetaKey, models, newPushVersion(),
+	}})
 }
 
 // readPricingMeta reads a pricing_meta value from the mirror. Returns ""
