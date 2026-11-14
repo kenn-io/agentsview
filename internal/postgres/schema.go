@@ -2499,8 +2499,8 @@ func CheckSchemaCompat(
 		for _, table := range pricingTimeTables {
 			if types[table]["updated_at"] == "text" {
 				return errors.New(
-					"pg pricing tables store updated_at as text; " +
-						"run `agentsview replica pg push` to upgrade the schema")
+					"pg pricing tables come from an older agentsview version; " +
+						"run `agentsview replica pg push` to upgrade them")
 			}
 		}
 

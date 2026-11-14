@@ -62,7 +62,7 @@ func MirrorPricingTime(stored string) (any, error) {
 	}
 	t, ok := ParseStoredTimestamp(stored)
 	if !ok {
-		return nil, fmt.Errorf("pricing time %q is not an RFC 3339 time", stored)
+		return nil, fmt.Errorf("pricing time %q in the local archive is not a valid date and time", stored)
 	}
 	return t.UTC(), nil
 }

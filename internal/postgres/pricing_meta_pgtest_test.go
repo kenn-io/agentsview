@@ -50,7 +50,7 @@ func TestEnsureSchemaUpgradesOldPricingLayout(t *testing.T) {
 		_, err := pg.ExecContext(ctx, statement)
 		require.NoError(t, err, statement)
 	}
-	require.ErrorContains(t, CheckSchemaCompat(ctx, pg), "updated_at as text",
+	require.ErrorContains(t, CheckSchemaCompat(ctx, pg), "older agentsview version",
 		"a reader must not scan text times before the upgrade")
 
 	require.NoError(t, EnsureSchema(ctx, pg, schema))

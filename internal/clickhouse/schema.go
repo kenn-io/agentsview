@@ -1100,7 +1100,8 @@ func CheckSchemaCompat(ctx context.Context, conn *sql.DB) error {
 	for _, table := range []string{"model_pricing", "model_pricing_bands", "genai_pricing"} {
 		if existing[table]["updated_at"] == tString {
 			return fmt.Errorf(
-				"clickhouse %s stores updated_at as text; run `agentsview replica clickhouse push` to upgrade the schema",
+				"clickhouse %s comes from an older agentsview version; "+
+					"run `agentsview replica clickhouse push` to upgrade it",
 				table)
 		}
 	}
