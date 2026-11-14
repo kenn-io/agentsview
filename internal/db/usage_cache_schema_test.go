@@ -749,13 +749,22 @@ func TestUsageGenerationMigrationBackfillsProof(t *testing.T) {
 	legacy, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
 	_, err = legacy.ExecContext(t.Context(), `DROP TRIGGER messages_usage_generation_insert; DROP TRIGGER messages_usage_generation_delete;
-		DROP TRIGGER messages_usage_generation_update; ALTER TABLE sessions DROP COLUMN usage_generation`)
+		DROP TRIGGER messages_usage_generation_update; ALTER TABLE sessions DROP COLUMN usage_generation;
+		DROP TRIGGER sessions_trends_generation_insert; DROP TRIGGER sessions_trends_generation_update;
+		ALTER TABLE sessions DROP COLUMN trends_generation`)
 	require.NoError(t, err)
 	require.NoError(t, legacy.Close())
 	database, err = Open(t.Context(), path)
 	require.NoError(t, err)
-	var generation string
-	require.NoError(t, database.getReader().QueryRowContext(t.Context(), `SELECT usage_generation FROM sessions WHERE id='retained'`).Scan(&generation))
-	assert.NotEmpty(t, generation)
+	var usageGeneration, trendsGeneration string
+	require.NoError(t, database.getReader().QueryRowContext(t.Context(), `SELECT usage_generation, trends_generation FROM sessions WHERE id='retained'`).Scan(&usageGeneration, &trendsGeneration))
+	assert.NotEmpty(t, usageGeneration)
+	require.NotEmpty(t, trendsGeneration)
 	require.NoError(t, database.Close())
+	database, err = Open(t.Context(), path)
+	require.NoError(t, err)
+	defer database.Close()
+	var reopenedTrendsGeneration string
+	require.NoError(t, database.getReader().QueryRowContext(t.Context(), `SELECT trends_generation FROM sessions WHERE id='retained'`).Scan(&reopenedTrendsGeneration))
+	require.Equal(t, trendsGeneration, reopenedTrendsGeneration)
 }

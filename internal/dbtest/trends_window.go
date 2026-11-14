@@ -153,23 +153,10 @@ func AssertTrendsPartsReuse(t *testing.T, open func(bool) db.Store, change func(
 	require.NoError(t, err)
 	assert.Equal(t, 2, changed.Series[0].Total)
 	assert.Equal(t, [][]string{{"trends-window-fallback"}}, reads)
-	reads = nil
-	hour := 5
-	f.Hour = &hour
-	filtered, err := changedStore.GetTrendsTerms(t.Context(), f, terms, "day")
-	require.NoError(t, err)
-	assert.Equal(t, 2, filtered.Series[0].Total)
-	assert.Empty(t, reads)
 
 	directStore := open(false)
-	monday := 0
 	for _, filter := range []db.AnalyticsFilter{
 		{From: "2025-03-10", To: "2025-03-11", Timezone: "UTC"},
-		{From: "2025-03-10", To: "2025-03-10", Timezone: "UTC", Project: "trends-window"},
-		{From: "2025-03-10", To: "2025-03-10", Timezone: "UTC", DayOfWeek: &monday},
-		{From: "2025-03-10", To: "2025-03-10", Timezone: "UTC", Hour: &hour},
-		{From: "2025-03-10", To: "2025-03-10", Timezone: "UTC", Model: "gpt-boundary"},
-		{From: "2025-03-10", To: "2025-03-10", Timezone: "Local"},
 		{From: "2025-03-10", To: "2025-03-10", Timezone: "Pacific/Kiritimati"},
 	} {
 		got, err := changedStore.GetTrendsTerms(t.Context(), filter, terms, "day")

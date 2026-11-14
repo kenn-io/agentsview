@@ -297,14 +297,6 @@ func TestQuackTrendsReuseAcrossRestart(t *testing.T) {
 		return store
 	}
 	first := open(uri)
-	previousUsageObserver := usagePartReadObserver
-	usageReads := 0
-	usagePartReadObserver = func([]string) { usageReads++ }
-	t.Cleanup(func() { usagePartReadObserver = previousUsageObserver })
-	usage, err := first.GetDailyUsage(ctx, db.UsageFilter{From: filter.From, To: filter.To, Timezone: filter.Timezone})
-	require.NoError(t, err)
-	require.Zero(t, usage.Totals.OutputTokens)
-	require.Zero(t, usageReads, "remote Usage reads directly without a mirror stamp")
 	got, err := first.GetTrendsTerms(ctx, filter, terms, "day")
 	require.NoError(t, err)
 	require.Equal(t, 1, got.Series[0].Total)

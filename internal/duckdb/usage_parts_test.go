@@ -84,9 +84,16 @@ func TestUsagePartsAcrossRestart(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, reads)
 	fresh := NewStoreFromDB(changed.DB())
+	fresh.trendsCacheID = "remote"
+	require.NoError(t, fresh.OpenActivityReportDisk(t.Context()))
+	usageReads := 0
+	previousUsageObserver := usagePartReadObserver
+	usagePartReadObserver = func([]string) { usageReads++ }
+	t.Cleanup(func() { usagePartReadObserver = previousUsageObserver })
 	want, err := fresh.GetDailyUsage(t.Context(), f)
 	require.NoError(t, err)
 	require.Equal(t, want, got)
+	require.Zero(t, usageReads, "remote Usage reads directly without a mirror stamp")
 	wantTop, err := fresh.GetTopSessionsByCost(t.Context(), f, 10)
 	require.NoError(t, err)
 	require.Equal(t, wantTop, gotTop)
