@@ -34,6 +34,14 @@ func SeedWordSearch(t *testing.T, d *db.DB) {
 		}
 		require.NoError(t, d.ReplaceSessionMessages(t.Context(), entry.id, []db.Message{m}))
 	}
+	SeedSession(t, d, "underscore", "word-boundary", func(s *db.Session) { s.UserMessageCount = 2 })
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "underscore", []db.Message{{SessionID: "underscore", Role: "assistant", Content: "invoice_rounding_decision"}}))
+	SeedSession(t, d, "boundary-near", "word-boundary", func(s *db.Session) { s.UserMessageCount = 2 })
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "boundary-near", []db.Message{{SessionID: "boundary-near", Role: "assistant", Content: "xinvoice rounding decisionx"}}))
+	SeedSession(t, d, "prefix-near", "word-prefix", func(s *db.Session) { s.UserMessageCount = 2 })
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "prefix-near", []db.Message{{SessionID: "prefix-near", Role: "assistant", Content: "invoice rounding decisionx"}}))
+	SeedSession(t, d, "multiline", "word-multiline", func(s *db.Session) { s.UserMessageCount = 2 })
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "multiline", []db.Message{{SessionID: "multiline", Role: "assistant", Content: "decision\ninvoice_rounding"}}))
 	SeedSession(t, d, "long", "word-snippet", func(s *db.Session) { s.UserMessageCount = 2 })
 	body := strings.Repeat("filler ", 80) + "invoices " + strings.Repeat("filler ", 80)
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "long", []db.Message{{SessionID: "long", Role: "assistant", Content: body}}))
@@ -52,6 +60,42 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 			hits = append(hits, hit{m.SessionID, m.Location, m.MatchedWords})
 		}
 		return hits
+	}
+	for _, mode := range []string{"substring", "fts", "hybrid"} {
+		t.Run("underscore/"+mode, func(t *testing.T) {
+			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "invoice rounding decision", Mode: mode, Project: "word-boundary", KeywordOnly: mode == "hybrid"})
+			require.NoError(t, err)
+			want := []hit{{"underscore", "message", 3}, {"boundary-near", "message", 1}}
+			if mode == "substring" {
+				want = []hit{{"boundary-near", "message", 3}, {"underscore", "message", 3}}
+			}
+			assert.Equal(t, want, project(page.Matches))
+		})
+	}
+	for _, mode := range []string{"substring", "fts", "hybrid"} {
+		t.Run("underscore phrase/"+mode, func(t *testing.T) {
+			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: `"invoice rounding" decision`, Mode: mode, Project: "word-boundary", KeywordOnly: mode == "hybrid"})
+			require.NoError(t, err)
+			assert.Equal(t, []hit{{"underscore", "message", 3}}, project(page.Matches))
+		})
+	}
+	for _, mode := range []string{"substring", "fts", "hybrid"} {
+		t.Run("prefix boundary/"+mode, func(t *testing.T) {
+			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "invoice rounding decision", Mode: mode, Project: "word-prefix", KeywordOnly: mode == "hybrid"})
+			require.NoError(t, err)
+			words := 2
+			if mode == "substring" {
+				words = 3
+			}
+			assert.Equal(t, []hit{{"prefix-near", "message", words}}, project(page.Matches))
+		})
+	}
+	for _, mode := range []string{"substring", "fts", "hybrid"} {
+		t.Run("multiline/"+mode, func(t *testing.T) {
+			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "invoice rounding decision", Mode: mode, Project: "word-multiline", KeywordOnly: mode == "hybrid"})
+			require.NoError(t, err)
+			assert.Equal(t, []hit{{"multiline", "message", 3}}, project(page.Matches))
+		})
 	}
 	for _, mode := range []string{"substring", "fts", "hybrid"} {
 		t.Run("snippet/"+mode, func(t *testing.T) {

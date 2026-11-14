@@ -755,8 +755,8 @@ func (s *Store) searchContentWordsPG(
 // pgWordMatches renders CTEs listing as word_matches the messages in from, a
 // FROM clause over messages m and sessions s ending in WHERE conditions, that
 // hold every query word, or with all false any of them, n being how many.
-// Outside fts mode it leaves the exact text to the caller. Materializing keeps
-// the regexes off rows the indexed ILIKE rejects and computes n once.
+// Outside fts mode it leaves the exact text to the caller. The partial pass
+// materializes candidates and computes n once.
 func pgWordMatches(
 	f db.ContentSearchFilter, words db.ContentWords, all bool, from string, pb *paramBuilder,
 ) string {
@@ -771,6 +771,11 @@ func pgWordMatches(
 		n = db.WordCountSQL(b, "body", words)
 	}
 	regex := db.WordRegexSQL(b, "body", words, all)
+	if all {
+		if prefix := db.WordPrefixSQL(b, "body", f, words); prefix != "" {
+			regex = "(" + prefix + " OR " + regex + ")"
+		}
+	}
 	pb.args = append(pb.args, b.Args()...)
 	pb.n += len(b.Args())
 	return fmt.Sprintf(`word_candidates AS MATERIALIZED (

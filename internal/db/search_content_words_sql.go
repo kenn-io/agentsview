@@ -41,6 +41,23 @@ func WordRegexSQL(b *QueryBuilder, column string, q ContentWords, all bool) stri
 	return "(" + strings.Join(parts, " AND ") + ")"
 }
 
+// WordPrefixSQL proves an all-word match when a plain query starts the body.
+func WordPrefixSQL(b *QueryBuilder, column string, f ContentSearchFilter, q ContentWords) string {
+	fields := strings.Fields(f.Pattern)
+	if len(q.Phrases) != 0 || len(fields) != len(q.Terms) || strings.Join(fields, " ") != f.Pattern {
+		return ""
+	}
+	for i, field := range fields {
+		if strings.ContainsFunc(field, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) }) ||
+			!slices.ContainsFunc(q.Terms[i], func(form string) bool { return strings.EqualFold(field, form) }) {
+			return ""
+		}
+	}
+	prefix := b.Add(f.Pattern)
+	length := b.Add(f.Pattern)
+	return "(" + column + " ILIKE " + prefix + " || '%' AND substring(" + column + " from char_length(" + length + ")+1 for 1) !~ '[[:alnum:]]')"
+}
+
 // WordCountSQL counts the query words column holds as whole words.
 func WordCountSQL(b *QueryBuilder, column string, q ContentWords) string {
 	parts := make([]string, len(q.Terms))
@@ -84,15 +101,14 @@ func WordRankSQL(b *QueryBuilder, column string, f ContentSearchFilter, q Conten
 
 // wordPattern matches any of forms as a whole word, case-insensitively.
 // PostgreSQL's ~* ignores case; RE2 takes (?i), which ClickHouse's
-// regexPredicate repeats harmlessly. RE2's ASCII \b is far cheaper than
-// Unicode classes, so those serve only non-ASCII words.
+// regexPredicate repeats harmlessly. ASCII classes serve ASCII words.
 func wordPattern(b *QueryBuilder, forms []string) string {
 	pattern := compactForms(forms)
 	switch {
 	case b.dialect.name == "postgres":
-		return `\m` + pattern + `\M`
+		return `(^|[^[:alnum:]])` + pattern + `($|[^[:alnum:]])`
 	case !strings.ContainsFunc(strings.Join(forms, ""), func(r rune) bool { return r > unicode.MaxASCII }):
-		return `(?i)\b` + pattern + `\b`
+		return `(?i)(^|[^[:alnum:]])` + pattern + `($|[^[:alnum:]])`
 	default:
 		return `(?i)(^|[^\p{L}\p{N}])` + pattern + `($|[^\p{L}\p{N}])`
 	}
@@ -111,7 +127,7 @@ func phrasePattern(b *QueryBuilder, phrase string) string {
 		words[i] = regexp.QuoteMeta(words[i])
 	}
 	if b.dialect.name == "postgres" {
-		return `\m` + strings.Join(words, `[^[:alnum:]]+`) + `\M`
+		return `(^|[^[:alnum:]])` + strings.Join(words, `[^[:alnum:]]+`) + `($|[^[:alnum:]])`
 	}
 	return `(?i)(^|[^\p{L}\p{N}])` + strings.Join(words, `[^\p{L}\p{N}]+`) + `($|[^\p{L}\p{N}])`
 }
