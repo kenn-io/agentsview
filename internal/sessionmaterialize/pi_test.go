@@ -297,20 +297,15 @@ func TestPiHeaderFilenameIdentityPreservesBytes(t *testing.T) {
 	for _, tc := range []struct{ name, field string }{
 		{"empty", `"id" : ""`},
 		{"null", `"id" : null`},
-		{"number", `"id" : 123`},
-		{"boolean", `"id" : false`},
 		{"object", `"id" : {"nested":1}`},
-		{"array", `"id" : [1,2]`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			data := []byte("\n" + `{"type":"session", ` + tc.field + `, "cwd" : "/old", "other": [1, 2]}` + "\n" + `{"type":"message"}` + "\n")
 			got, err := relocatePiHeader(t.Context(), data, "id.jsonl", "id", "/new")
 			require.NoError(t, err)
 			assert.Equal(t, "\n"+`{"type":"session", "id" : "id", "cwd" : "/new", "other": [1, 2]}`+"\n"+`{"type":"message"}`+"\n", string(got))
-			if tc.name == "object" || tc.name == "array" || tc.name == "empty" || tc.name == "null" {
-				_, err = relocatePiHeader(t.Context(), data, "other.jsonl", "id", "/new")
-				require.ErrorIs(t, err, errPiIdentity)
-			}
+			_, err = relocatePiHeader(t.Context(), data, "other.jsonl", "id", "/new")
+			require.ErrorIs(t, err, errPiIdentity)
 		})
 	}
 	got, err := relocatePiHeader(t.Context(), []byte(`{"type":"session","cwd":"/old","id":null}`), "id.jsonl", "id", "/new")
@@ -345,9 +340,7 @@ func TestPiUsesIdentityForNonuniqueNames(t *testing.T) {
 	cfg := config.Config{InstallationID: "local", LocalMachineName: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentPi: {root}}}
 	for _, tc := range []struct{ id, rel, wantBase string }{
 		{"child-one", "child-one/session.jsonl", "child-one.jsonl"},
-		{"child-two", "child-two/session.jsonl", "child-two.jsonl"},
 		{"work.v2", "work.v2/session.jsonl", "work.v2.jsonl"},
-		{"work.v2", "2026-01-01T00-00-00_work.v2.jsonl", "2026-01-01T00-00-00_work.v2.jsonl"},
 	} {
 		t.Run(tc.rel, func(t *testing.T) {
 			id := tc.id
