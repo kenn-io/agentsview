@@ -5,6 +5,7 @@ export const ITEM_HEIGHT = 42;
 // A row showing years carries its timestamp on a third line.
 const YEAR_ITEM_HEIGHT = 56;
 const CHILD_ITEM_HEIGHT = 34;
+const YEAR_CHILD_ITEM_HEIGHT = 50;
 const TEAM_HEADER_HEIGHT = 28;
 export const HEADER_HEIGHT = 28;
 export const OVERSCAN = 10;
@@ -156,6 +157,8 @@ function emitGroupItems(
   alwaysShowYear: boolean,
 ): void {
   const hasChildren = g.sessions.length > 1;
+  const itemHeight = alwaysShowYear ? YEAR_ITEM_HEIGHT : ITEM_HEIGHT;
+  const childHeight = alwaysShowYear ? YEAR_CHILD_ITEM_HEIGHT : CHILD_ITEM_HEIGHT;
   const isExpanded = hasChildren && expandedGroups.has(g.key);
 
   // Primary session (depth 0)
@@ -166,10 +169,10 @@ function emitGroupItems(
     count: 0,
     group: g,
     depth: 0,
-    height: alwaysShowYear ? YEAR_ITEM_HEIGHT : ITEM_HEIGHT,
+    height: itemHeight,
     top: y.value,
   });
-  y.value += alwaysShowYear ? YEAR_ITEM_HEIGHT : ITEM_HEIGHT;
+  y.value += itemHeight;
 
   if (!isExpanded) return;
 
@@ -221,10 +224,10 @@ function emitGroupItems(
       isChild: true,
       depth: 1,
       isLastChild: isLast,
-      height: CHILD_ITEM_HEIGHT,
+      height: childHeight,
       top: y.value,
     });
-    y.value += CHILD_ITEM_HEIGHT;
+    y.value += childHeight;
   }
 
   // Count depth-1 group headers (subagents + team).
@@ -266,10 +269,10 @@ function emitGroupItems(
           isChild: true,
           depth: 2,
           isLastChild: i === subagents.length - 1,
-          height: CHILD_ITEM_HEIGHT,
+          height: childHeight,
           top: y.value,
         });
-        y.value += CHILD_ITEM_HEIGHT;
+        y.value += childHeight;
       }
     }
   }
@@ -306,10 +309,10 @@ function emitGroupItems(
           isChild: true,
           depth: 2,
           isLastChild: i === teammates.length - 1,
-          height: CHILD_ITEM_HEIGHT,
+          height: childHeight,
           top: y.value,
         });
-        y.value += CHILD_ITEM_HEIGHT;
+        y.value += childHeight;
       }
     }
   }

@@ -63,15 +63,15 @@ describe("SessionItem identity", () => {
     (compact) => {
       const ended = "2024-06-01T12:00:00Z";
       mountSession({ ended_at: ended }, { compact });
-      const time = document.querySelector<HTMLElement>(".session-time")!;
-      expect(time.title).toBe(formatTimestamp(ended, true));
-      expect(time.textContent).not.toContain("2024");
+      const time = () => document.querySelector<HTMLElement>(".session-time")!;
+      expect(time().title).toBe(formatTimestamp(ended, true));
+      expect(time().textContent).not.toContain("2024");
       ui.alwaysShowYear = true;
       flushSync();
-      expect(time.textContent).toContain("2024");
+      expect(time().textContent).toContain("2024");
       ui.alwaysShowYear = false;
       flushSync();
-      expect(time.textContent).not.toContain("2024");
+      expect(time().textContent).not.toContain("2024");
     },
   );
 

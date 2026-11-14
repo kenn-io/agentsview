@@ -154,11 +154,11 @@
   });
 
   const userMessageCount = $derived(session.user_message_count ?? 0);
-  let timeStr = $derived(
-    formatRelativeTime(session.ended_at ?? session.started_at, ui.alwaysShowYear),
-  );
-
   let fullTime = $derived(formatTimestamp(session.ended_at ?? session.started_at, true));
+
+  let timeStr = $derived(
+    ui.alwaysShowYear ? fullTime : formatRelativeTime(session.ended_at ?? session.started_at),
+  );
 
   let isStarred = $derived(starred.isStarred(session.id));
 
@@ -483,7 +483,7 @@
       >
         <!-- Two lines: the title with its time, then project, message count,
              machine, and agent. Compact child rows put the time on the meta line;
-             a row showing years moves it to a third line. -->
+             a row showing years, compact or not, moves it to a third line. -->
         <div class="session-name-row">
           <div
             class="session-name"
@@ -497,7 +497,7 @@
               {displayLabel.text}
             {/if}
           </div>
-          {#if !compact}
+          {#if !compact || ui.alwaysShowYear}
             <span class="session-time" title={fullTime}>{timeStr}</span>
           {/if}
         </div>
@@ -506,7 +506,7 @@
           {#if !hideProject}
             <span class="session-project" title={session.project}>{session.project}</span>
           {/if}
-          {#if compact}
+          {#if compact && !ui.alwaysShowYear}
             <span class="session-time" title={fullTime}>{timeStr}</span>
           {/if}
           {#if hasUnread}
@@ -795,13 +795,49 @@
     height: 56px;
   }
 
-  .session-item.years:not(.compact) .session-name-row {
+  .session-item.years.compact {
+    height: 50px;
+  }
+
+  /* The title line's extra leading already separates it from the meta
+     line; this gives the time line the same visual gap. */
+  .session-item.years.compact .session-time {
+    margin-top: 2px;
+  }
+
+  /* The dot stays on the title line rather than centering on the meta line. */
+  .session-item.years.compact > :global(.kit-status-dot) {
+    align-self: flex-start;
+    margin-top: 8px;
+  }
+
+  .session-item.years.compact > :global(.kit-status-bubble) {
+    align-self: flex-start;
+    margin-top: 6px;
+  }
+
+  .session-item.years .session-info-link {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .session-item.years .session-name-row {
     display: contents;
   }
 
-  .session-item.years:not(.compact) .session-time {
+  /* The line starts under the title. A timestamp wider than the column,
+     as in a narrow, nested, or multi-select row, ends at the column's right
+     edge and runs left into the empty gutter below the checkbox and dot. */
+  .session-item.years .session-time {
     order: 1;
+    display: flex;
+    justify-content: flex-end;
     line-height: 13px;
+  }
+
+  .session-item.years .session-time::after {
+    content: "";
+    flex: 1;
   }
 
   .session-info-link {

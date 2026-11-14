@@ -503,6 +503,80 @@ test.describe("sidebar agent names", () => {
     }
   });
 
+  test("rows showing years keep the timestamp and count at 220px in Korean multi-select, children included", async ({
+    page,
+  }) => {
+    // Korean writes the widest dates, and a nested child in multi-select has
+    // the narrowest column.
+    const ended_at = "2026-12-15T12:00:00Z";
+    await page.route("**/api/v1/sessions/sidebar-index**", (route) =>
+      route.fulfill({
+        json: { ...sidebarResponse(), sessions: fixtureRows.map((row) => ({ ...row, ended_at })) },
+      }),
+    );
+    await page.addInitScript(() => {
+      localStorage.setItem("agentsview-always-show-year", "true");
+      localStorage.setItem("agentsview-locale", "ko");
+    });
+    await openSessions(page, 1280, 220);
+    // Expanding the parent also opens its subagent group.
+    await page.locator(`[data-session-id="${CROWDED_ID}"] .tree-toggle`).click();
+    await page.locator(".select-toggle-btn").click();
+
+    for (const id of [CROWDED_ID, "crowded-subagent", "crowded-teammate"]) {
+      const item = page.locator(`[data-session-id="${id}"]`);
+      await expect(item.locator(".select-checkbox")).toBeVisible();
+      const row = await item.evaluate((element) => {
+        const itemRect = element.getBoundingClientRect();
+        const rows = [...document.querySelectorAll("#session-sidebar .session-item")];
+        const next = rows[rows.indexOf(element) + 1];
+        const time = element.querySelector<HTMLElement>(".session-time")!;
+        const count = element.querySelector<HTMLElement>(".session-count")!;
+        const range = document.createRange();
+        range.selectNodeContents(time);
+        const text = range.getBoundingClientRect();
+        const escapes = (rect: DOMRect) =>
+          rect.left < itemRect.left - 1 ||
+          rect.right > itemRect.right + 1 ||
+          rect.top < itemRect.top - 1 ||
+          rect.bottom > itemRect.bottom + 1;
+        const overlapped = [
+          ...element.querySelectorAll<HTMLElement>(
+            ".tree-toggle, .select-checkbox, .kit-status-dot, .session-name, .session-meta",
+          ),
+        ].filter((other) => {
+          const rect = other.getBoundingClientRect();
+          return (
+            rect.width > 0 &&
+            rect.left < text.right - 1 &&
+            rect.right > text.left + 1 &&
+            rect.top < text.bottom - 1 &&
+            rect.bottom > text.top + 1
+          );
+        }).length;
+        return {
+          gapToNext: next ? next.getBoundingClientRect().top - itemRect.bottom : 0,
+          text: time.textContent,
+          title: time.title,
+          timeEscapes: escapes(text),
+          overlapped,
+          countClipped:
+            escapes(count.getBoundingClientRect()) || count.scrollWidth > count.clientWidth + 1,
+          name: element.querySelector(".session-name")!.getBoundingClientRect().width,
+        };
+      });
+      console.log(`width=220px years locale=ko multi-select ${id} ${JSON.stringify(row)}`);
+      expect(row.text).toContain("2026");
+      expect(row.text).toMatch(/\d{1,2}:\d{2}/);
+      expect(row.text).toBe(row.title);
+      expect(row.timeEscapes).toBe(false);
+      expect(row.overlapped).toBe(0);
+      expect(row.countClipped).toBe(false);
+      expect(row.name).toBeGreaterThan(0);
+      expect(row.gapToNext).toBeGreaterThanOrEqual(-0.5);
+    }
+  });
+
   test("metadata boundary preserves rows and controls across desktop and mobile widths", async ({
     page,
   }, testInfo) => {
