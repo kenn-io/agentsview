@@ -1430,13 +1430,13 @@ func createPartialIndexesPG(ctx context.Context, db pgSessionExecer) error {
 	return nil
 }
 
-// createContentSearchIndexesPG accelerates content, dialogue, and thinking
-// substring searches. Callers decide whether unavailable pg_trgm is fatal.
-// The opclass is qualified because the extension can live outside search_path.
 const (
 	dialogueFoldedUnicode61IndexPG = "idx_messages_dialogue_folded_unicode61_v1_trgm"
 )
 
+// createContentSearchIndexesPG accelerates content, dialogue, and thinking
+// substring searches. Callers decide whether unavailable pg_trgm is fatal.
+// The opclass is qualified because the extension can live outside search_path.
 func createContentSearchIndexesPG(ctx context.Context, pg interface {
 	pgSessionExecer
 	hostedQuerier

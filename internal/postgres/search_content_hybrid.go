@@ -160,18 +160,23 @@ func (s *Store) fetchHybridKeywordBatchPG(
 	kf := f
 	kf.Mode = "fts"
 	kf.ExcludeSystem = true
+	kf.Limit, kf.Cursor = k-1, offset
 	if !s.cockroach {
 		if _, words, ok := db.RouteContentWords(kf); ok {
-			from := `FROM messages m JOIN sessions s ON s.id = m.session_id JOIN scoped sc ON sc.id = m.session_id
+			from := `FROM messages m JOIN scoped s ON s.id = m.session_id
 			WHERE m.role IN ('user', 'assistant') AND m.is_system = FALSE
 			  AND ` + db.PostgresSystemPrefixSQL("m.content", "m.role")
 			var hits []pgHybridDisplay
 			var err error
 			for _, all := range []bool{true, false} {
 				pb := &paramBuilder{n: len(scopeArgs), args: append([]any{}, scopeArgs...)}
-				matches := pgWordMatches(kf, words, all, from, pb)
-				query := fmt.Sprintf(`WITH scoped AS (
-					SELECT id, COALESCE(ended_at, started_at, created_at) AS sort_ts FROM sessions WHERE %s
+				matches := pgWordMatches(kf, words, all, from, pb, true)
+				selectedOffset := offset
+				if all {
+					selectedOffset = 0
+				}
+				query := fmt.Sprintf(`WITH scoped AS NOT MATERIALIZED (
+					SELECT * FROM sessions WHERE %s
 				), %s,
 				selected AS MATERIALIZED (
 					SELECT session_id, ordinal, ts, sort_ts, n FROM word_matches WHERE n >= 1
@@ -181,7 +186,7 @@ func (s *Store) fetchHybridKeywordBatchPG(
 				SELECT selected.session_id, selected.ordinal, COALESCE(m.dialogue_text, m.content), selected.n
 				FROM selected JOIN messages m ON m.session_id = selected.session_id AND m.ordinal = selected.ordinal
 				ORDER BY selected.n DESC, selected.sort_ts DESC NULLS LAST, selected.session_id ASC, selected.ordinal ASC`,
-					scopeWhere, matches, pb.add(k), pb.add(offset))
+					scopeWhere, matches, pb.add(k), pb.add(selectedOffset))
 				if hits, err = s.scanHybridKeywordPG(ctx, f.Pattern, words, query, pb.args); err != nil || len(hits) == k {
 					break
 				}

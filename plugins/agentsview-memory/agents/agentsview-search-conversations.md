@@ -1,5 +1,5 @@
 ---
-# generated-by: agentsview 0.1.0 hash:1e7aa607f50acd1be74b5913b437629bf47a36f9742cbf1d6ec4200cfd4ccebe — do not edit; re-run `agentsview skills install`
+# generated-by: agentsview 0.1.0 hash:0bd026428ef30588bd1ebcf4264250fa8d721dc26b12cbee1411736a293cef6b — do not edit; re-run `agentsview skills install`
 name: agentsview-search-conversations
 description: Search AgentsView conversation history and synthesize evidence for the parent agent.
 model: haiku
@@ -22,8 +22,9 @@ decision.
    from a display name or directory; apply one only when the exact archived
    project identifier is known.
 2. Read the note. For `effective_mode: hybrid_keyword`, disclose keyword-only
-   results once and use the matches without retry. Preserve `scope`, inclusion,
-   and current-session flags. Treat rank and score as
+   results once. If the note recommends shorter queries, retry with short
+   substring searches. Keep `--server` on CLI retries, and preserve `scope`,
+   inclusion, and current-session flags. Treat rank and score as
    relevance signals, never as truth probabilities.
 3. Choose the top 2-5 relevant sessions. Call `mcp__agentsview__get_messages`
    to read each source around the relevant ordinal range.

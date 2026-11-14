@@ -51,10 +51,6 @@ func (s *Store) searchContentHybrid(
 		}
 	}
 	k := max(f.Limit*4, db.SemanticOverfetchMin)
-	if f.KeywordOnly && (f.Scope == "" || f.Scope == "all") {
-		// RRFMerge can move a subordinate match down by five ranks.
-		k = f.Limit + 5
-	}
 	var vecLeg hybridLeg
 	var err error
 	if searcher != nil {

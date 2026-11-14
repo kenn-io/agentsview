@@ -33,7 +33,7 @@ func TestPGDialogueSearchParity(t *testing.T) {
 	})
 	dbtest.AssertDialogueSearchParity(t, local, store, "substring", "regex", "fts")
 	if !store.cockroach {
-		dbtest.AssertWordSearch(t, store)
+		dbtest.AssertWordSearch(t, store, true)
 	}
 	t.Run("fts ignores sources", func(t *testing.T) {
 		for _, pattern := range []string{"answerneedle", "reasoningneedle"} {

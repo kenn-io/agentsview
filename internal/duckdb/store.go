@@ -1043,8 +1043,7 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 	}
 	limit := f.Limit
 	if f.KeywordOnly {
-		// RRFMerge can move a subordinate match down by five ranks.
-		f.Limit += 5
+		f.Limit = max(limit*4, db.SemanticOverfetchMin)
 	}
 	matches, err := s.collectContentMatches(ctx, f)
 	if err != nil {
@@ -1135,8 +1134,14 @@ func (s *Store) collectContentSubstringMatches(
 ) ([]db.ContentMatch, error) {
 	f, words, ranked := db.RouteContentWords(f)
 	if ranked {
-		if f.KeywordOnly {
-			return s.collectContentSubstringPass(ctx, f, words, true, false)
+		if f.Mode != "fts" {
+			exact, err := s.collectContentSubstringPass(ctx, f, words, false, false)
+			if err != nil || len(exact) > f.Limit {
+				for i := range exact {
+					exact[i].MatchedWords = len(words.Terms)
+				}
+				return exact, err
+			}
 		}
 		matches, err := s.collectContentSubstringPass(ctx, f, words, true, true)
 		if err != nil || len(matches) > f.Limit {

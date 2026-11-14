@@ -955,6 +955,9 @@ matching unless the query starts with a quote and holds only
 quoted phrases or FTS5 operators, which keeps FTS5 behavior. Other searches
 report `matched_words` as `0`.
 
+DuckDB word matching keeps accents in stored text: `cafe` may miss `café`.
+An accented query such as `café` can also match unaccented `cafe`.
+
 On CockroachDB, default search matches the entire query as a case-insensitive substring. `--fts` and hybrid keyword search require every query word or phrase as a case-insensitive substring; they do not rank partial word matches. On PostgreSQL and CockroachDB, an explicit `--fts` query starting with a quote honors `AND`, `OR`, `NOT`, and parentheses as SQLite does. `NEAR(...)` and prefix `*` are not supported there; `*` matches literally.
 
 Every match, in every mode, carries the conversation-unit citation described in

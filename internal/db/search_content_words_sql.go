@@ -16,7 +16,7 @@ import (
 func WordCandidateSQL(b *QueryBuilder, column string, q ContentWords, all, fold bool) string {
 	parts := make([]string, len(q.Terms))
 	for i, forms := range q.Terms {
-		prefix := wordPrefix(forms)
+		prefix := wordCandidatePrefix(forms)
 		if fold {
 			parts[i] = wordContainsSQL(b, column, prefix, true, false)
 			continue
@@ -71,7 +71,11 @@ func WordCountSQL(b *QueryBuilder, raw, folded string, q ContentWords) string {
 }
 
 func wordCountCandidateSQL(b *QueryBuilder, raw, folded string, forms []string) string {
-	prefix := wordPrefix(forms)
+	prefix := wordCandidatePrefix(forms)
+	if b.dialect.name == "duckdb" {
+		// Query forms can match Unicode case variants that LIKE does not.
+		return "TRUE"
+	}
 	foldedCandidate := wordContainsSQL(b, folded, prefix, true, true)
 	rawCandidate := wordContainsSQL(b, raw, prefix, false, false)
 	foldedPrefix := foldUnicode61(prefix)
@@ -90,6 +94,10 @@ func WordFilterSQL(b *QueryBuilder, column string, f ContentSearchFilter, q Cont
 		exact = b.ContainsPredicate(column, f.Pattern) + " OR "
 	}
 	raw := WordCandidateSQL(b, column, q, all, false)
+	if b.dialect.name == "duckdb" {
+		return "(" + exact + "(" + raw + " AND " +
+			WordRegexSQL(b, column, column, q, all) + "))"
+	}
 	folded := WordCandidateSQL(b, column, q, all, true)
 	candidate := "(" + raw + " OR (CASE WHEN " + WordNonASCIISQL(b.dialect, column) +
 		" THEN " + folded + " ELSE FALSE END))"
@@ -114,12 +122,13 @@ func WordRankSQL(b *QueryBuilder, column string, f ContentSearchFilter, q Conten
 	return n + " AS n, " + tier + " AS tier"
 }
 
-// WordFoldSQL applies the pinned SQLite Unicode61 fold to expression.
+// WordFoldSQL applies the SQLite Unicode61 fold except on DuckDB, where
+// folding each body exceeds the search latency bound.
 func WordFoldSQL(d QueryDialect, expression string) string {
 	from := "'" + unicode61FoldFrom + "'"
 	to := "'" + unicode61FoldTo + "'"
 	switch d.name {
-	case "postgres", "duckdb":
+	case "postgres":
 		return "translate(" + expression + ", " + from + ", " + to + ")"
 	case "clickhouse":
 		return "translateUTF8(" + expression + ", " + from + ", " + to + ")"
@@ -162,12 +171,14 @@ func wordTermSQL(b *QueryBuilder, raw, folded string, forms []string) string {
 	for i, form := range forms {
 		foldedForms[i] = foldUnicode61(form)
 	}
-	compact := compactForms(foldedForms)
-	if b.dialect.name == "postgres" {
-		return b.dialect.regexPredicate(folded, b.Add(boundedPattern(b, true, compact)))
+	if b.dialect.name == "duckdb" {
+		foldedForms = append(foldedForms, forms...)
 	}
-	asciiPattern := b.Add(boundedPattern(b, false, compact))
-	unicodePattern := b.Add(boundedPattern(b, true, compact))
+	if b.dialect.name == "postgres" {
+		return b.dialect.regexPredicate(folded, b.Add(boundedPattern(b, true, compactForms(b, foldedForms, true))))
+	}
+	asciiPattern := b.Add(boundedPattern(b, false, compactForms(b, foldedForms, false)))
+	unicodePattern := b.Add(boundedPattern(b, true, compactForms(b, foldedForms, true)))
 	ascii := "NOT " + WordNonASCIISQL(b.dialect, raw)
 	return "CASE WHEN " + ascii + " THEN " + b.dialect.regexPredicate(raw, asciiPattern) +
 		" ELSE " + b.dialect.regexPredicate(folded, unicodePattern) + " END"
@@ -189,14 +200,43 @@ func boundedPattern(b *QueryBuilder, unicodeClasses bool, words ...string) strin
 
 // compactForms folds forms to their common prefix and an alternation of
 // suffixes, which roughly halves PostgreSQL's regex cost.
-func compactForms(forms []string) string {
+func compactForms(b *QueryBuilder, forms []string, unicodeClasses bool) string {
+	if slices.ContainsFunc(forms, func(form string) bool {
+		return strings.IndexFunc(form, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) }) >= 0
+	}) {
+		patterns := make([]string, len(forms))
+		for i, form := range forms {
+			patterns[i] = wordFormRegex(b, form, unicodeClasses)
+		}
+		return "(" + strings.Join(patterns, "|") + ")"
+	}
 	prefix := wordPrefix(forms)
 	suffixes := make([]string, len(forms))
 	for i, form := range forms {
-		suffixes[i] = wordCaseFoldRegex(form[len(prefix):])
+		suffixes[i] = wordFormRegex(b, form[len(prefix):], unicodeClasses)
 	}
 	slices.Sort(suffixes)
-	return wordCaseFoldRegex(prefix) + "(" + strings.Join(slices.Compact(suffixes), "|") + ")"
+	return wordFormRegex(b, prefix, unicodeClasses) + "(" + strings.Join(slices.Compact(suffixes), "|") + ")"
+}
+
+func wordFormRegex(b *QueryBuilder, form string, unicodeClasses bool) string {
+	parts := strings.FieldsFunc(form, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) })
+	for i := range parts {
+		parts[i] = wordCaseFoldRegex(parts[i])
+	}
+	gap := "[^[:alnum:]]+"
+	if b.dialect.name != "postgres" && unicodeClasses {
+		gap = `[^\p{L}\p{N}]+`
+	}
+	return strings.Join(parts, gap)
+}
+
+func wordCandidatePrefix(forms []string) string {
+	prefix := wordPrefix(forms)
+	if i := strings.IndexFunc(prefix, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) }); i >= 0 {
+		return prefix[:i]
+	}
+	return prefix
 }
 
 func wordCaseFoldRegex(word string) string {

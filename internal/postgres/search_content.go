@@ -729,19 +729,21 @@ func (s *Store) searchContentWordsPG(
 	if f.ExcludeSystem {
 		sysPred = "m.is_system = FALSE AND " + db.PostgresSystemPrefixSQL("m.content", "m.role")
 	}
-	from := "FROM messages m JOIN sessions s ON s.id = m.session_id JOIN scoped sc ON sc.id = m.session_id WHERE " +
+	from := "FROM messages m JOIN scoped s ON s.id = m.session_id WHERE " +
 		sysPred + " AND " + db.LexicalAnchorScopeSQL(f, "s", "m", db.PostgresQueryDialect())
-	scopedSelect := "SELECT id FROM sessions"
-	if compact {
-		scopedSelect = "SELECT id, COALESCE(ended_at, started_at, created_at) AS sort_ts FROM sessions"
-	}
+	scopedSelect := "SELECT * FROM sessions"
 	var page db.ContentSearchPage
 	var err error
 	for _, all := range []bool{true, false} {
 		pb := &paramBuilder{n: len(branchArgs), args: append([]any{}, branchArgs...)}
 		var query string
 		if compact {
-			query = fmt.Sprintf(`WITH scoped AS (%s WHERE %s), %s,
+			matches := pgWordMatches(f, words, all, from, pb, true)
+			offset := f.Cursor
+			if all {
+				offset = 0
+			}
+			query = fmt.Sprintf(`WITH scoped AS NOT MATERIALIZED (%s WHERE %s), %s,
 				selected AS MATERIALIZED (
 					SELECT session_id, ordinal, ts, sort_ts, n FROM word_matches
 					WHERE n >= 1 ORDER BY n DESC, sort_ts DESC NULLS LAST, session_id ASC, ordinal ASC
@@ -755,20 +757,20 @@ func (s *Store) searchContentWordsPG(
 				JOIN sessions s ON s.id = selected.session_id
 				ORDER BY selected.n DESC, selected.sort_ts DESC NULLS LAST,
 					selected.session_id ASC, selected.ordinal ASC`,
-				scopedSelect, scopeWhere, pgWordMatches(f, words, all, from, pb), pb.add(f.Limit+1), pb.add(f.Cursor))
+				scopedSelect, scopeWhere, matches, pb.add(f.Limit+1), pb.add(offset))
 		} else {
 			matchesFilter := " WHERE n >= 1"
 			if all {
 				matchesFilter = ""
 			}
-			query = fmt.Sprintf(`WITH scoped AS (%s WHERE %s), %s
+			query = fmt.Sprintf(`WITH scoped AS NOT MATERIALIZED (%s WHERE %s), %s
 				SELECT session_id, project, agent, transcript_revision, location, role, tool_name, ordinal, ts, snippet, n
 				FROM (%sSELECT session_id, project, agent, transcript_revision, 'message' AS location, role,
 					'' AS tool_name, ordinal, ts, body AS snippet, 0 AS src, 0::bigint AS row_id, sort_ts, 1 AS tier, n
 					FROM word_matches%s
 				) sub ORDER BY tier, n DESC, sort_ts DESC NULLS LAST, session_id ASC, ordinal ASC, src ASC, row_id ASC, snippet ASC
 				LIMIT %s OFFSET %s`,
-				scopedSelect, scopeWhere, pgWordMatches(f, words, all, from, pb), union.String(), matchesFilter,
+				scopedSelect, scopeWhere, pgWordMatches(f, words, all, from, pb, false), union.String(), matchesFilter,
 				pb.add(f.Limit+1), pb.add(f.Cursor))
 		}
 		page, err = s.scanPGContentMatches(ctx, query, pb.args, f.Limit, f.Cursor, func(body string) string {
@@ -788,7 +790,7 @@ func (s *Store) searchContentWordsPG(
 // Outside fts mode it leaves the exact text to the caller. The partial pass
 // materializes candidates and computes n once.
 func pgWordMatches(
-	f db.ContentSearchFilter, words db.ContentWords, all bool, from string, pb *paramBuilder,
+	f db.ContentSearchFilter, words db.ContentWords, all bool, from string, pb *paramBuilder, early bool,
 ) string {
 	column := "COALESCE(m.dialogue_text, m.content)"
 	dialect := db.PostgresQueryDialect()
@@ -819,6 +821,12 @@ func pgWordMatches(
 		candidateMaterialized = " AS"
 		matchesMaterialized = " AS"
 	}
+	var order, window string
+	if early && all {
+		order = " ORDER BY sort_ts DESC NULLS LAST, session_id ASC, ordinal ASC"
+		window = order + " LIMIT " + pb.add(f.Limit+1) + " OFFSET " + pb.add(f.Cursor)
+		order += " OFFSET 0"
+	}
 	folded := db.WordFoldSQL(dialect, "word_candidates.body")
 	foldedBody := "CASE WHEN " + db.WordNonASCIISQL(dialect, "word_candidates.body") +
 		" THEN " + folded + " ELSE word_candidates.body END"
@@ -835,13 +843,13 @@ func pgWordMatches(
 		), word_candidates%s (
 			SELECT * FROM raw_word_candidates
 			UNION ALL
-			SELECT * FROM folded_word_candidates
+			SELECT * FROM folded_word_candidates%s
 		), word_matches%s (
 			SELECT %s, %s AS n
-			%s WHERE %s
+			%s WHERE %s%s
 		)`, candidates, rawWhere, candidates, db.WordNonASCIISQL(dialect, column), foldedCandidate,
 		foldedRawExclusion,
-		candidateMaterialized,
+		candidateMaterialized, order,
 		matchesMaterialized,
-		wordMatchColumns, n, wordMatchFrom, regex)
+		wordMatchColumns, n, wordMatchFrom, regex, window)
 }

@@ -54,6 +54,7 @@ func SeedWordSearch(t *testing.T, d *db.DB) {
 		{"invoice-path", "word-punctuation", "/tmp/invoice"},
 		{"invoice-email", "word-punctuation", "a@invoice.example"},
 		{"invoice-version", "word-punctuation", "v2.invoice"},
+		{"split-punctuation", "word-split-punctuation", "invoice txt"},
 	} {
 		SeedSession(t, d, entry.id, entry.project, func(s *db.Session) { s.UserMessageCount = 2 })
 		require.NoError(t, d.ReplaceSessionMessages(t.Context(), entry.id, []db.Message{{
@@ -74,7 +75,7 @@ func SeedWordSearch(t *testing.T, d *db.DB) {
 }
 
 // AssertWordSearch checks the user-visible ranking and paging contract.
-func AssertWordSearch(t *testing.T, store db.Store) {
+func AssertWordSearch(t *testing.T, store db.Store, foldsAccents bool) {
 	t.Helper()
 	type hit struct {
 		session, location string
@@ -107,9 +108,11 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 		name, pattern, project string
 		want                   []hit
 	}{
+		{"punctuation splits query words", "invoice.txt missingword", "word-split-punctuation", []hit{{"split-punctuation", "message", 1}}},
 		{"all words fold accents", "cafe rounding decision", "word-accent", []hit{{"accent-exact", "message", 3}}},
 		{"decomposed accent candidate", "cafe absentword", "word-accent-decomposed", []hit{{"accent-decomposed", "message", 1}}},
 		{"accented query finds ASCII body", "café absentword", "word-accent-ascii-body", []hit{{"accent-ascii-body", "message", 1}}},
+		{"accented query finds accented body", "café missingword", "word-accent-partial", []hit{{"accent-partial", "message", 1}}},
 		{"partial candidates fold accents", "cafe missingword", "word-accent-partial", []hit{{"accent-partial", "message", 1}}},
 		{"multiple diacritics stay distinct", "rounding missingword", "word-accent-multiple", nil},
 		{"natural words fold accents", "naive design", "word-accent-naive", []hit{{"accent-naive", "message", 2}}},
@@ -130,7 +133,18 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 					KeywordOnly: mode == "hybrid",
 				})
 				require.NoError(t, err)
-				assert.Equal(t, tc.want, project(page.Matches))
+				want := tc.want
+				if !foldsAccents {
+					switch tc.name {
+					case "all words fold accents":
+						want = []hit{{"accent-exact", "message", 2}}
+					case "partial candidates fold accents":
+						want = nil
+					case "natural words fold accents":
+						want = []hit{{"accent-naive", "message", 1}}
+					}
+				}
+				assert.Equal(t, want, project(page.Matches))
 			})
 		}
 	}
@@ -190,6 +204,10 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 				KeywordOnly: mode == "hybrid",
 			})
 			require.NoError(t, err)
+			if !foldsAccents {
+				assert.Empty(t, page.Matches)
+				return
+			}
 			require.Len(t, page.Matches, 1)
 			assert.Equal(t, hit{"accent-long-snippet", "message", 1}, project(page.Matches)[0])
 			assert.Contains(t, page.Matches[0].Snippet, "café")

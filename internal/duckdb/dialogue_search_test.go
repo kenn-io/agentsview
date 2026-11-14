@@ -25,7 +25,7 @@ func TestDuckDBDialogueSearchParity(t *testing.T) {
 	store := openPushedStore(t, path)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	dbtest.AssertDialogueSearchParity(t, local, store, "substring", "regex", "fts")
-	dbtest.AssertWordSearch(t, store)
+	dbtest.AssertWordSearch(t, store, false)
 }
 
 func TestDialogueOnlyDuckDBChangeRepushesSession(t *testing.T) {

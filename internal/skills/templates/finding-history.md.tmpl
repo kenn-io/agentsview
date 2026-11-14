@@ -67,8 +67,9 @@ is true.
 ## Failures and fallbacks
 
 Read the note. For `effective_mode: hybrid_keyword`, disclose keyword-only
-results once and use the matches without retry. Preserve `scope`, inclusion,
-and current-session flags.
+results once. If the note recommends shorter queries, retry with short substring
+searches. Keep `--server` on CLI retries, and preserve `scope`, inclusion, and
+current-session flags.
 
 Disclose explicit semantic errors. Use a lexical fallback only for an
 unavailable index or transient embedding error; retry transient errors once
