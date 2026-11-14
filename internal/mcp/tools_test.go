@@ -2191,6 +2191,11 @@ func TestListRecallPagesWithEvidenceAndSourceSessionFilter(t *testing.T) {
 		Title: "c", Body: "c", SourceSessionID: "s2",
 	})
 	require.NoError(t, err)
+	_, err = d.InsertRecallEntry(t.Context(), db.RecallEntry{
+		ID: "d", Type: "fact", Scope: "project", Status: "accepted",
+		Title: "d", Body: "d", SourceSessionID: "s1",
+	})
+	require.NoError(t, err)
 	res, err = ct.CallTool(t.Context(), callParams("list_recall", map[string]any{"source_session_id": "s2"}))
 	require.NoError(t, err)
 	require.False(t, res.IsError)
