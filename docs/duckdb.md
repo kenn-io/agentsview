@@ -93,9 +93,9 @@ proxy and TLS flags) and is read-only in the same way — no uploads, file
 watching, or local sync.
 
 Local `duckdb serve` keeps usage totals for Activity ranges that include today
-in memory. A push, pricing change, or restart clears those totals. It also keeps
-finished Activity reports in memory and saves opened past-day reports to disk.
-Those disk reports can be reused after a restart.
+in memory. A push, pricing change, or restart clears those totals. Finished
+Activity reports are also kept in memory, which restart clears. Eligible
+past-day reports can be saved to disk and reused after restart.
 Finished Usage results stay in memory for the same mirror file and custom
 pricing, with up to 64 selections and 64 MiB per read kind.
 Dashboard reports share a separate in-memory cache with up to 64 entries and
