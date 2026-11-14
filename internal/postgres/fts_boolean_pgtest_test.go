@@ -42,16 +42,16 @@ func TestPGFTSBooleanSemantics(t *testing.T) {
 		{`"reader"AND"archive"`, []string{"a"}},
 		{`"reader" OR "definitely_absent"`, []string{"a", "b", "e"}},
 		{`"reader" NOT "压缩"`, []string{"b", "e"}},
-		{`"fix bug" login`, []string{"f"}},
+		{`"fix bug" login`, []string{"f", "g"}},
 		{`"reader" ""`, []string{"a", "b", "e"}},
 		{`""`, nil},
-		{`NOT "reader"`, []string{"e"}},
+		{`NOT "reader"`, []string{"e", "a", "b"}},
 		{`"a" OR "b" "c"`, []string{"a", "b", "d", "e", "h", "i", "k", "l", "n", "o"}},
 		{`"b" AND ("only" OR "c")`, []string{"i", "j"}},
-		{`"a" or "b"`, []string{"n"}},
+		{`"a" or "b"`, []string{"n", "o"}},
 		{`"a" NEAR "b"`, []string{"o"}},
 		{`"read"*`, []string{"k"}},
-		{`read*`, []string{"k"}},
+		{`read*`, []string{"k", "l"}},
 	} {
 		t.Run(tc.query, func(t *testing.T) {
 			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: tc.query, Mode: "fts", Limit: 50})

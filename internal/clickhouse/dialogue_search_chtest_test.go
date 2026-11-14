@@ -19,6 +19,7 @@ func TestClickHouseDialogueSearchParity(t *testing.T) {
 	t.Parallel()
 	local, target := seedFixture(t)
 	dbtest.SeedDialogueSearch(t, local)
+	dbtest.SeedWordSearch(t, local)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
 	_, err := syncer.Push(t.Context(), false, nil)
 	require.NoError(t, err)
@@ -26,6 +27,7 @@ func TestClickHouseDialogueSearchParity(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	dbtest.AssertDialogueSearchParity(t, local, store, "substring", "regex", "fts")
+	dbtest.AssertWordSearch(t, store)
 }
 
 func TestDialogueClickHouseBackfillsExistingPushCursor(t *testing.T) {
@@ -197,6 +199,6 @@ func TestDialogueClickHouseStoresContentCopyOnce(t *testing.T) {
 		Pattern: "alpha first", Mode: "substring", Sources: []string{"messages"}, IncludeOneShot: true,
 	})
 	require.NoError(t, err)
-	require.Len(t, got.Matches, 1)
+	require.Len(t, got.Matches, 2, "the exact text first, then the message holding one word")
 	assert.Equal(t, "alpha first", got.Matches[0].Snippet)
 }

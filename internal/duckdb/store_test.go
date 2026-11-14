@@ -554,7 +554,7 @@ func TestSearchContentFTSMatchesNonContiguousTerms(t *testing.T) {
 		Limit:          10,
 	})
 	require.NoError(t, err)
-	require.Len(t, got.Matches, 1)
+	require.Len(t, got.Matches, 2, "the message holding both words first, then the one holding one")
 	assert.Equal(t, "duck-fts-both", got.Matches[0].SessionID)
 	assert.Contains(t, got.Matches[0].Snippet, "quick")
 	assert.Contains(t, got.Matches[0].Snippet, "fox")

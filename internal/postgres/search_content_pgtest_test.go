@@ -809,7 +809,7 @@ func TestPGSearchContentFTSMatchesNonContiguousTerms(t *testing.T) {
 		Sources: []string{"messages"}, Limit: 50,
 	})
 	require.NoError(t, err, "SearchContent fts")
-	require.Len(t, got.Matches, 1)
+	require.Len(t, got.Matches, 2, "the message holding both words first, then the one holding one")
 	assert.Equal(t, "cs-fts-both", got.Matches[0].SessionID)
 	assert.Equal(t, "message", got.Matches[0].Location)
 }

@@ -19,6 +19,7 @@ type hybridDisplay struct {
 	subordinate  bool
 	snippet      string
 	content      string
+	matchedWords int
 }
 
 // hybridLeg is one rank-ordered fusion leg: entries for db.RRFMerge plus
@@ -131,18 +132,27 @@ func (s *Store) fetchHybridKeywordBatch(
 	kf := f
 	kf.Mode = "fts"
 	var args []any
-	contentPred := contentSearchPredicate("COALESCE(m.dialogue_text, m.content)", kf, &args)
+	_, words, ranked := db.RouteContentWords(kf)
+	count, contentPred := "0", ""
+	if ranked {
+		b := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
+		count = db.WordCountSQL(b, "COALESCE(m.dialogue_text, m.content)", words)
+		contentPred = db.WordFilterSQL(b, "COALESCE(m.dialogue_text, m.content)", kf, words, false)
+		args = b.Args()
+	} else {
+		contentPred = contentSearchPredicate("COALESCE(m.dialogue_text, m.content)", kf, &args)
+	}
 	args = append(args, scopeArgs...)
 	args = append(args, k, offset)
 	rows, err := s.queryContext(ctx, `
-		SELECT m.session_id, m.ordinal, COALESCE(m.dialogue_text, m.content)
+		SELECT m.session_id, m.ordinal, COALESCE(m.dialogue_text, m.content), `+count+` AS n
 		FROM messages m
 		JOIN sessions s ON s.id = m.session_id
 		WHERE `+contentPred+`
 			AND m.role IN ('user', 'assistant')
 			AND `+embeddableMessagePredicate("m")+`
 			AND m.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`)
-		ORDER BY COALESCE(s.ended_at, s.started_at, s.created_at) DESC NULLS LAST,
+		ORDER BY n DESC, COALESCE(s.ended_at, s.started_at, s.created_at) DESC NULLS LAST,
 			m.session_id ASC, m.ordinal ASC
 		LIMIT ? OFFSET ?`+systemPrefixSettings, args...)
 	if err != nil {
@@ -154,11 +164,14 @@ func (s *Store) fetchHybridKeywordBatch(
 		var hit hybridDisplay
 		var ordinal int64
 		var content string
-		if err := rows.Scan(&hit.sessionID, &ordinal, &content); err != nil {
+		if err := rows.Scan(&hit.sessionID, &ordinal, &content, &hit.matchedWords); err != nil {
 			return nil, fmt.Errorf("scanning clickhouse hybrid keyword hit: %w", err)
 		}
 		hit.ordinal = int(ordinal)
 		start, end := db.FTSSnippetRange(f.Pattern, content)
+		if ranked {
+			start, end = db.WordSnippetRange(content, words)
+		}
 		lo, hi := db.SnippetBounds(content, start, end, db.ContentSnippetRadius)
 		hit.content = content
 		hit.snippet = content[lo:hi]
@@ -316,6 +329,7 @@ func (s *Store) enrichHybridMatches(
 			Timestamp:       info.timestamp,
 			Snippet:         snippet,
 			Score:           &score,
+			MatchedWords:    d.matchedWords,
 		})
 	}
 	return db.ContentSearchPage{Matches: out}, nil

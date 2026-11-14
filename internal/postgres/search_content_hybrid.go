@@ -20,6 +20,7 @@ type pgHybridDisplay struct {
 	ordinalEnd   int
 	subordinate  bool
 	snippet      string
+	matchedWords int
 }
 
 // pgHybridLeg is one rank-ordered fusion leg: entries for db.RRFMerge plus each
@@ -140,10 +141,10 @@ func (s *Store) hybridKeywordLegPG(
 	return leg, nil
 }
 
-// fetchHybridKeywordBatchPG fetches one recency-ordered batch of at most k
-// keyword message rows, starting at offset. The term-AND ILIKE predicate
-// (pgContentSearchPredicate with Mode "fts") preserves SQLite's implicit-AND
-// FTS-term semantics; recency ordering is the documented PG keyword ranking (no
+// fetchHybridKeywordBatchPG fetches one batch of at most k keyword message
+// rows, starting at offset. Natural queries rank by matched words first, as
+// SQLite does; explicit FTS expressions use the term-AND ILIKE predicate
+// (pgContentSearchPredicate with Mode "fts"). Recency ordering is the documented PG keyword ranking (no
 // BM25), with (session_id, ordinal) as a deterministic tiebreak so OFFSET
 // continuation is stable across batches. The display snippet is windowed in Go
 // around the first case-insensitive pattern occurrence; it centers the redacted
@@ -158,6 +159,25 @@ func (s *Store) fetchHybridKeywordBatchPG(
 
 	kf := f
 	kf.Mode = "fts"
+	if _, words, ok := db.RouteContentWords(kf); ok {
+		from := `FROM messages m JOIN sessions s ON s.id = m.session_id
+			WHERE m.role IN ('user', 'assistant') AND m.is_system = FALSE
+			  AND ` + db.PostgresSystemPrefixSQL("m.content", "m.role") + `
+			  AND m.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)`
+		var hits []pgHybridDisplay
+		var err error
+		for _, all := range []bool{true, false} {
+			pb := &paramBuilder{n: len(scopeArgs), args: append([]any{}, scopeArgs...)}
+			query := "WITH " + pgWordMatches(kf, words, all, from, pb) + `
+				SELECT session_id, ordinal, body, n FROM word_matches WHERE n >= 1
+				ORDER BY n DESC, sort_ts DESC NULLS LAST, session_id ASC, ordinal ASC
+				LIMIT ` + pb.add(k) + " OFFSET " + pb.add(offset)
+			if hits, err = s.scanHybridKeywordPG(ctx, f, query, pb.args); err != nil || len(hits) == k {
+				break
+			}
+		}
+		return hits, err
+	}
 	contentPred, err := pgContentSearchPredicate("COALESCE(m.dialogue_text, m.content)", kf, escapeLike(f.Pattern), pb)
 	if err != nil {
 		return nil, err
@@ -166,7 +186,7 @@ func (s *Store) fetchHybridKeywordBatchPG(
 	offsetP := pb.add(offset)
 
 	query := fmt.Sprintf(`
-		SELECT m.session_id, m.ordinal, COALESCE(m.dialogue_text, m.content)
+		SELECT m.session_id, m.ordinal, COALESCE(m.dialogue_text, m.content), 0
 		FROM messages m
 		JOIN sessions s ON s.id = m.session_id
 		WHERE %s
@@ -178,8 +198,13 @@ func (s *Store) fetchHybridKeywordBatchPG(
 		LIMIT %s OFFSET %s`,
 		contentPred, db.PostgresSystemPrefixSQL("m.content", "m.role"),
 		scopeWhere, limitP, offsetP)
+	return s.scanHybridKeywordPG(ctx, f, query, pb.args)
+}
 
-	rows, err := s.pg.QueryContext(ctx, query, pb.args...)
+func (s *Store) scanHybridKeywordPG(
+	ctx context.Context, f db.ContentSearchFilter, query string, args []any,
+) ([]pgHybridDisplay, error) {
+	rows, err := s.pg.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("pg hybrid keyword leg: %w", err)
 	}
@@ -189,10 +214,10 @@ func (s *Store) fetchHybridKeywordBatchPG(
 	for rows.Next() {
 		var hit pgHybridDisplay
 		var content string
-		if err := rows.Scan(&hit.sessionID, &hit.ordinal, &content); err != nil {
+		if err := rows.Scan(&hit.sessionID, &hit.ordinal, &content, &hit.matchedWords); err != nil {
 			return nil, fmt.Errorf("scan hybrid keyword hit: %w", err)
 		}
-		hit.snippet = pgKeywordApproxSnippet(content, f.Pattern)
+		hit.snippet = pgKeywordApproxSnippet(content, f)
 		hits = append(hits, hit)
 	}
 	if err := rows.Err(); err != nil {
@@ -201,17 +226,16 @@ func (s *Store) fetchHybridKeywordBatchPG(
 	return hits, nil
 }
 
-// pgKeywordApproxSnippet windows content around the pattern's term-aware span
-// (db.FTSSnippetRange, the same helper the fts snippet path uses via
-// pgSubstringSnippet), rune-snapped via db.SnippetBounds. Centering on the raw
-// pattern would fall back to the message start for quoted phrases or multi-term
-// queries whose pattern is not a literal substring; FTSSnippetRange instead
-// locates the de-quoted phrase, then the operand that satisfied the Boolean
-// query, then the start. The result is the raw, unredacted centering text
-// SemanticSnippet later locates in the full content; redaction always runs on
-// the full content, not this window.
-func pgKeywordApproxSnippet(content, pattern string) string {
-	start, end := db.FTSSnippetRange(pattern, content)
+// pgKeywordApproxSnippet returns an unredacted window for SemanticSnippet.
+// Natural word searches center it on the first matching form; explicit FTS
+// expressions use the term-aware span.
+func pgKeywordApproxSnippet(content string, f db.ContentSearchFilter) string {
+	start, end := db.FTSSnippetRange(f.Pattern, content)
+	kf := f
+	kf.Mode = "fts"
+	if _, words, ok := db.RouteContentWords(kf); ok {
+		start, end = db.WordSnippetRange(content, words)
+	}
 	lo, hi := db.SnippetBounds(content, start, end, db.ContentSnippetRadius)
 	return content[lo:hi]
 }
@@ -377,6 +401,7 @@ func (s *Store) enrichHybridMatchesPG(
 			Timestamp:          info.timestamp,
 			Snippet:            f.SemanticSnippet(content, d.snippet),
 			Score:              &score,
+			MatchedWords:       d.matchedWords,
 		})
 	}
 	return db.ContentSearchPage{Matches: out}, nil

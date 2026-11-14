@@ -4,11 +4,9 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -877,66 +875,6 @@ func TestSessionSearchSQLiteQuotedPatternOmitsFTSHint(t *testing.T) {
 	fts, err := executeCommand(newRootCommand(), "session", "search", `"decoding failure"`, "--fts", "--json")
 	require.NoError(t, err)
 	require.Len(t, decodeCLIJSON[service.ContentSearchResult](t, fts).Matches, 1)
-}
-
-func TestSessionSearchRemoteFTSHints(t *testing.T) {
-	newAgentDataDir(t)
-	tokenFile := filepath.Join(t.TempDir(), "token")
-	require.NoError(t, os.WriteFile(tokenFile, []byte("search-token"), 0o600))
-	ftsCalls := 0
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "Bearer search-token", r.Header.Get("Authorization"))
-		if r.URL.Path == "/api/v1/memory/status" {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"status":"ready","observed_at":"2026-01-01T00:00:00Z","archive":{"backend":"postgres","read_only":true},"lexical":{"status":"ready"},"semantic":{"status":"ready"},"sources":{"status":"ready"}}`))
-			return
-		}
-		if r.URL.Query().Get("mode") == "fts" {
-			ftsCalls++
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"matches":[{"session_id":"visible"}]}`))
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Query().Get("include_one_shot") == "true" {
-			_, _ = w.Write([]byte(`{"matches":[{"session_id":"hidden"}]}`))
-		} else {
-			_, _ = w.Write([]byte(`{"matches":[]}`))
-		}
-	}))
-	defer ts.Close()
-	for _, tc := range []struct {
-		pattern, source string
-		regex, hint     bool
-	}{
-		{"decode error notes", "", false, true},
-		{"decode error notes", "messages", false, true},
-		{"decode error notes", "tool_result", false, false},
-		{"decoding", "messages", false, false},
-		{"decode error notes", "messages", true, false},
-	} {
-		before := ftsCalls
-		out, err := executeCommand(newRootCommand(), "session", "--server", ts.URL, "--server-token-file", tokenFile, "search", tc.pattern, "--in", tc.source, "--json", "--regex="+strconv.FormatBool(tc.regex))
-		require.NoError(t, err)
-		got := decodeCLIJSON[struct {
-			Hints []contentSearchCLIHint `json:"hints"`
-		}](t, out)
-		var ftsHints []contentSearchCLIHint
-		for _, hint := range got.Hints {
-			if hint.Code == "try_fts" {
-				ftsHints = append(ftsHints, hint)
-			}
-		}
-		if tc.hint {
-			require.Len(t, ftsHints, 1)
-			assert.Equal(t, before+1, ftsCalls)
-			assert.Contains(t, ftsHints[0].Next, "--server="+ts.URL)
-			assert.Contains(t, ftsHints[0].Next, "--server-token-file="+tokenFile)
-		} else {
-			assert.Empty(t, ftsHints)
-			assert.Equal(t, before, ftsCalls)
-		}
-	}
 }
 
 func TestSessionSearchRetryQuotesForPlatform(t *testing.T) {

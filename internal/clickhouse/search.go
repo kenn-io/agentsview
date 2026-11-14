@@ -411,8 +411,23 @@ func contentSearchPredicate(column string, f db.ContentSearchFilter, args *[]any
 	return strings.Join(clauses, " AND ")
 }
 
+// collectContentSubstringMatches lists exact text, then messages holding every
+// query word, then, when those don't fill the page, messages holding fewer.
 func (s *Store) collectContentSubstringMatches(
 	ctx context.Context, f db.ContentSearchFilter,
+) ([]db.ContentMatch, error) {
+	f, words, ranked := db.RouteContentWords(f)
+	if ranked {
+		rows, err := s.collectContentSubstringPass(ctx, f, words, true, true)
+		if err != nil || len(rows) > f.Limit {
+			return rows, err
+		}
+	}
+	return s.collectContentSubstringPass(ctx, f, words, ranked, false)
+}
+
+func (s *Store) collectContentSubstringPass(
+	ctx context.Context, f db.ContentSearchFilter, words db.ContentWords, ranked, all bool,
 ) ([]db.ContentMatch, error) {
 	eventAnchorJoin := db.LexicalEventAnchorJoinSQL(f.Scope)
 
@@ -431,7 +446,14 @@ func (s *Store) collectContentSubstringMatches(
 			if f.ExcludeSystem {
 				sysPred = embeddableMessagePredicate("m")
 			}
-			contentPred := addSearchArgs("COALESCE(m.dialogue_text, m.content)")
+			var contentPred string
+			if ranked {
+				b := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
+				contentPred = db.WordFilterSQL(b, "COALESCE(m.dialogue_text, m.content)", f, words, all)
+				args = append(append(args, b.Args()...), scopeArgs...)
+			} else {
+				contentPred = addSearchArgs("COALESCE(m.dialogue_text, m.content)")
+			}
 			branches = append(branches, `
 				SELECT m.session_id AS session_id, s.project AS project, s.agent AS agent,
 					'message' AS location, m.role AS role, '' AS tool_name, m.ordinal AS ordinal,
@@ -525,11 +547,17 @@ func (s *Store) collectContentSubstringMatches(
 	if len(branches) == 0 {
 		return nil, nil
 	}
+	rank, order := "0 AS n, 0 AS tier", ""
+	if ranked {
+		b := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
+		rank, order = db.WordRankSQL(b, "body", f, words, all), "tier, n DESC, "
+		args = append(b.Args(), args...) // rank precedes the branches in the SQL
+	}
 	query := `
 		SELECT session_id, project, agent, location, role, tool_name,
-			ordinal, ts, body
+			ordinal, ts, body, ` + rank + `
 		FROM (` + strings.Join(branches, " UNION ALL ") + `) AS matches
-		ORDER BY sort_ts DESC, session_id ASC, ordinal ASC,
+		ORDER BY ` + order + `sort_ts DESC, session_id ASC, ordinal ASC,
 			src ASC, row_id ASC, call_index ASC, event_index ASC, body ASC
 		LIMIT ? OFFSET ?`
 	args = append(args, f.Limit+1, f.Cursor)
@@ -541,6 +569,13 @@ func (s *Store) collectContentSubstringMatches(
 		return nil, fmt.Errorf("clickhouse content search: %w", err)
 	}
 	return scanContentRows(rows, func(body string) string {
+		if ranked {
+			start, end := db.WordSnippetRange(body, words)
+			if end == 0 {
+				start, end, _ = db.CaseInsensitiveSpan(body, f.Pattern)
+			}
+			return f.BuildSnippet(body, start, end)
+		}
 		if f.Mode == "fts" {
 			start, end := db.FTSSnippetRange(f.Pattern, body)
 			return f.BuildSnippet(body, start, end)
@@ -779,8 +814,9 @@ func scanContentRows(rows *sql.Rows, makeSnippet func(string) string) ([]db.Cont
 		var m db.ContentMatch
 		var body string
 		var ts any
+		var tier int
 		if err := rows.Scan(&m.SessionID, &m.Project, &m.Agent,
-			&m.Location, &m.Role, &m.ToolName, &m.Ordinal, &ts, &body); err != nil {
+			&m.Location, &m.Role, &m.ToolName, &m.Ordinal, &ts, &body, &m.MatchedWords, &tier); err != nil {
 			return nil, fmt.Errorf("scanning clickhouse content match: %w", err)
 		}
 		m.Timestamp = formatDBTime(ts)

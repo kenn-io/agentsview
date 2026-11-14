@@ -946,7 +946,7 @@ substring (the default) and regex modes also walk `tool_calls.input_json`,
 (`--cursor` is rejected) — see [Semantic Search](/docs/semantic-search/) for
 setup, scoring, and limitations.
 
-On SQLite, a default search of several words that includes `messages` returns
+A default search of several words that includes `messages` returns
 exact text matches first, then messages ordered by how many query words they
 hold, with that count in `matched_words`. Unquoted stop words do not count.
 Regular word forms count, and a quoted phrase inside the query requires its
@@ -955,7 +955,7 @@ matching unless the query starts with a quote and holds only
 quoted phrases or FTS5 operators, which keeps FTS5 behavior. Other searches
 report `matched_words` as `0`.
 
-On PostgreSQL, `--fts` matches each word or quoted phrase as a case-insensitive substring; a query that starts with a quote also honors `AND`, `OR`, `NOT`, and parentheses as SQLite does. `NEAR(...)` and prefix `*` are not supported there; `*` matches literally.
+On PostgreSQL, an explicit `--fts` query starting with a quote honors `AND`, `OR`, `NOT`, and parentheses as SQLite does. `NEAR(...)` and prefix `*` are not supported there; `*` matches literally.
 
 Every match, in every mode, carries the conversation-unit citation described in
 [Hit shape](/docs/semantic-search/#hit-shape-ranges-and-anchors):

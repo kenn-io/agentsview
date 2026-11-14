@@ -14,9 +14,66 @@ import (
 // contentWords is a natural-language query: the words a message can hold,
 // counted per message, and the quoted phrases it must contain.
 type contentWords struct {
-	terms   []string // one FTS expression per word, covering its regular forms
-	phrases []string // quoted phrases checked against the message's own words
-	match   string   // FTS expression requiring word-bearing phrases
+	terms   []string   // one FTS expression per word, covering its regular forms
+	phrases []string   // quoted phrases checked against the message's own words
+	match   string     // FTS expression requiring word-bearing phrases
+	forms   [][]string // each word's regular forms, for the other backends
+}
+
+// ContentWords is a natural query for backends without FTS5: each word's
+// regular forms and the quoted phrases a match must hold.
+type ContentWords struct {
+	Terms   [][]string
+	Phrases []string
+}
+
+// WordSnippetRange finds the first whole word matching a query form.
+func WordSnippetRange(body string, words ContentWords) (int, int) {
+	start := -1
+	for i, r := range body {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) {
+			if start < 0 {
+				start = i
+			}
+			continue
+		}
+		if start >= 0 {
+			for _, forms := range words.Terms {
+				for _, form := range forms {
+					if strings.EqualFold(body[start:i], form) {
+						return start, i
+					}
+				}
+			}
+			start = -1
+		}
+	}
+	if start >= 0 {
+		for _, forms := range words.Terms {
+			for _, form := range forms {
+				if strings.EqualFold(body[start:], form) {
+					return start, len(body)
+				}
+			}
+		}
+	}
+	return 0, 0
+}
+
+// RouteContentWords applies SQLite's gates for word matching to f, a
+// substring or fts search. It returns f with a fully quoted pattern unquoted.
+func RouteContentWords(f ContentSearchFilter) (ContentSearchFilter, ContentWords, bool) {
+	words := f.Mode == "fts" && !explicitFTSExpression(f.Pattern)
+	if f.Mode != "fts" && hasSource(f, "messages") {
+		var quoted bool
+		f.Pattern, quoted = unquoteContentSearch(f.Pattern)
+		words = !quoted && len(strings.Fields(f.Pattern)) > 1
+	}
+	if !words {
+		return f, ContentWords{}, false
+	}
+	q, ok := contentWordsQuery(f.Pattern)
+	return f, ContentWords{Terms: q.forms, Phrases: q.phrases}, ok
 }
 
 // contentWordsQuery prepares pattern for ranked word search. It reports false
@@ -37,6 +94,7 @@ func contentWordsQuery(pattern string) (contentWords, bool) {
 	}
 	for _, term := range natural.CountTerms {
 		q.terms = append(q.terms, term.Match)
+		q.forms = append(q.forms, term.Forms)
 	}
 	return q, true
 }

@@ -2248,15 +2248,12 @@ flags. JSON adds `hints` entries with `code`, `message`, and a full `next` comma
 Counts use a bounded search and say `more than N` when more matches exist, or
 `at least N` for semantic and hybrid searches or when filtering or candidate
 limits prevent an exact count.
-For multi-word substring queries over messages on a PostgreSQL, DuckDB, or
-ClickHouse archive, a hint offers `--fts` only when that retry finds matches.
-SQLite's default search already matches the words, so it never offers that
-hint. `excluded_combined` gives a retry with the remaining
+`excluded_combined` gives a retry with the remaining
 include flags for matches beyond the individual class hints. Failed diagnostic
 searches add no hint.
 
 `session search` supports substring (default), `--regex`, `--fts`, `--semantic`,
-and `--hybrid` modes. On SQLite, a default search of several words lists matches
+and `--hybrid` modes. A default search of several words lists matches
 of the exact text first, from every selected source. Messages holding every
 word follow, then messages holding fewer of the words; `matched_words` in JSON
 counts them, excluding unquoted stop words. Regular word forms match, so
