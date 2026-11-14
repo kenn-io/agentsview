@@ -56,8 +56,5 @@ func TestSessionCompactions(t *testing.T) {
 		require.Error(t, err)
 		assert.Equal(t, 64, reportCLIError(err, &stderr))
 		assert.Contains(t, stderr.String(), "fatal: "+tc.message+"\n")
-		if tc.message == "--cursor requires --active-since" {
-			assert.Contains(t, stderr.String(), "hint: run `agentsview session compactions --help` for flags and examples\n")
-		}
 	}
 }

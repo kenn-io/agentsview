@@ -47,7 +47,8 @@ get_child_sessions, compare_usage, get_activity_report, get_tool_usage,
 get_quality_signals, and search_docs, plus query_recall for distilled session
 knowledge and get_friction_digest/list_friction_patterns for the Friction Log.
 Use --profile memory to advertise only get_memory_status, search_content,
-get_messages, and get_compaction_summaries for conversation-memory clients.
+get_messages, and get_compaction_summaries for focused conversation-memory
+clients. The full profile is the default.
 
 The server talks to the local agentsview daemon, starting it when needed, and
 reuses the connection until the daemon restarts or a call fails. A failed call
