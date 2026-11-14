@@ -14,6 +14,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/pricing"
 )
 
 type pricingLoad struct {
@@ -131,11 +132,12 @@ func loadPGGenAIPricingRow(
 ) (export.EffectivePricingRow, error) {
 	var digest db.GenAIPricingDigest
 	var sum []byte
+	var updatedAt sql.NullTime
 	err := q.QueryRowContext(ctx, `
 		SELECT version, source_ref, source, updated_at, sha256(data_json)
 		FROM genai_pricing WHERE singleton = 1`).Scan(
 		&digest.Version, &digest.SourceRef, &digest.Source,
-		&digest.UpdatedAt, &sum,
+		&updatedAt, &sum,
 	)
 	if errors.Is(err, sql.ErrNoRows) || allowMissing && isUndefinedTable(err) {
 		return db.GenAIEffectivePricingRow(nil)
@@ -145,6 +147,7 @@ func loadPGGenAIPricingRow(
 			"reading pg GenAI pricing digest: %w", err,
 		)
 	}
+	digest.UpdatedAt = db.FormatMirrorPricingTime(updatedAt)
 	if digest.Sum, err = db.ParseGenAIPricingSum(sum); err != nil {
 		return export.EffectivePricingRow{}, fmt.Errorf("postgres: %w", err)
 	}

@@ -20,6 +20,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/money"
+	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/signals"
 	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/agentsview/internal/usagefacts"
@@ -204,10 +205,11 @@ func loadDuckGenAIPricingRow(
 ) (export.EffectivePricingRow, error) {
 	var digest db.GenAIPricingDigest
 	var sum string
+	var updatedAt sql.NullTime
 	err := queryRow(ctx, `
 		SELECT version, source_ref, source, updated_at, sha256(data_json)
 		FROM genai_pricing WHERE singleton = 1`).Scan(
-		&digest.Version, &digest.SourceRef, &digest.Source, &digest.UpdatedAt, &sum,
+		&digest.Version, &digest.SourceRef, &digest.Source, &updatedAt, &sum,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return db.GenAIEffectivePricingRow(nil)
@@ -216,6 +218,7 @@ func loadDuckGenAIPricingRow(
 		return export.EffectivePricingRow{}, fmt.Errorf(
 			"reading duckdb GenAI pricing digest: %w", err)
 	}
+	digest.UpdatedAt = db.FormatMirrorPricingTime(updatedAt)
 	if digest.Sum, err = db.ParseGenAIPricingSum([]byte(sum)); err != nil {
 		return export.EffectivePricingRow{}, err
 	}

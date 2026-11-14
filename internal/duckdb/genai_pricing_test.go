@@ -34,7 +34,7 @@ func TestLoadDuckGenAIPricingRowFollowsStoredDocument(t *testing.T) {
 	embedded := pricing.EmbeddedGenAIDocument()
 	_, err = conn.ExecContext(ctx, `
 		INSERT INTO genai_pricing (singleton, version, source_ref, source, data_json, updated_at)
-		VALUES (1, '', 'ref-a', 'fetched', ?, '')`,
+		VALUES (1, '', 'ref-a', 'fetched', ?, NULL)`,
 		embedded.RawJSON())
 	require.NoError(t, err)
 	row, err = loadDuckGenAIPricingRow(ctx, queryRow)

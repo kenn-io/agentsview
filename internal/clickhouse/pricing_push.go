@@ -15,6 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
 const pricingUpsertBatch = 100
@@ -244,10 +245,11 @@ func loadGenAIPricingRow(
 ) (export.EffectivePricingRow, error) {
 	var digest db.GenAIPricingDigest
 	var sum string
+	var updatedAt sql.NullTime
 	err := q.QueryRowContext(ctx, `
 		SELECT version, source_ref, source, updated_at, hex(SHA256(data_json))
 		FROM genai_pricing WHERE singleton = 1`).Scan(
-		&digest.Version, &digest.SourceRef, &digest.Source, &digest.UpdatedAt, &sum,
+		&digest.Version, &digest.SourceRef, &digest.Source, &updatedAt, &sum,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return db.GenAIEffectivePricingRow(nil)
@@ -256,6 +258,7 @@ func loadGenAIPricingRow(
 		return export.EffectivePricingRow{}, fmt.Errorf(
 			"reading clickhouse GenAI pricing digest: %w", err)
 	}
+	digest.UpdatedAt = db.FormatMirrorPricingTime(updatedAt)
 	if digest.Sum, err = db.ParseGenAIPricingSum([]byte(sum)); err != nil {
 		return export.EffectivePricingRow{}, err
 	}
