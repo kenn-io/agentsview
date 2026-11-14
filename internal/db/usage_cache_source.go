@@ -65,19 +65,18 @@ type UsageCacheReader struct {
 	// deferWork makes reads hand large preparation to the warm worker.
 	deferWork bool
 
-	warmMu               sync.Mutex
-	warmPending          map[string]bool // timezone names waiting for a warm pass
-	warmRequested        map[string]time.Time
-	warmDiscover         bool // retry launch discovery after a transient failure
-	warmUnavailableRetry bool
-	warmRunning          string        // timezone of the running warm pass
-	warmBusy             bool          // a warm pass is running
-	warmIdle             chan struct{} // closed while no warm pass runs
-	warmCtx              context.Context
-	warmCancel           context.CancelFunc
-	warmRetryDelay       time.Duration
-	readyID              string
-	readyZones           map[string]bool
+	warmMu         sync.Mutex
+	warmPending    map[string]bool // timezone names waiting for a warm pass
+	warmRequested  map[string]time.Time
+	warmDiscover   bool          // retry launch discovery after a transient failure
+	warmRunning    string        // timezone of the running warm pass
+	warmBusy       bool          // a warm pass is running
+	warmIdle       chan struct{} // closed while no warm pass runs
+	warmCtx        context.Context
+	warmCancel     context.CancelFunc
+	warmRetryDelay time.Duration
+	readyID        string
+	readyZones     map[string]bool
 	// directReads counts callers serving a direct read after a deferred
 	// read; lastDeferred is when a read last deferred. A warm pass waits
 	// for both to settle, so it does not compete with those direct reads.
@@ -151,14 +150,12 @@ func (reader *UsageCacheReader) Logger() *log.Logger {
 }
 
 func (reader *UsageCacheReader) Close() error {
-	ctx, cancel := context.WithTimeout(context.Background(), usageWarmWriteTimeout)
-	defer cancel()
-	reader.warmMu.Lock()
 	reader.warmCancel()
+	reader.warmMu.Lock()
 	idle := reader.warmIdle
 	reader.warmMu.Unlock()
 	<-idle
-	reader.flushWarmRequests(ctx)
+	reader.flushWarmRequests(context.Background())
 	return reader.engine.usageCache.Close()
 }
 
@@ -176,7 +173,6 @@ func (reader *UsageCacheReader) WarmUnready(ctx context.Context) error {
 		reader.warmMu.Lock()
 		if reader.warmCtx.Err() == nil {
 			reader.warmDiscover = true
-			reader.warmUnavailableRetry = errors.Is(err, ErrUsageSourceUnavailable)
 			reader.startWarmLocked()
 		}
 		reader.warmMu.Unlock()
@@ -331,6 +327,7 @@ func (reader *UsageCacheReader) deferRead(filter UsageFilter, requested bool) bo
 	key := usageTimezoneIdentityFor(filter.Location(), nil).Key
 	id := reader.engine.usageSourceDatabaseID.Load()
 	reader.warmMu.Lock()
+	defer reader.warmMu.Unlock()
 	queued := time.Now().Before(reader.warmRetryAt) || reader.warmPending[filter.Timezone] ||
 		(reader.warmBusy && reader.warmRunning == filter.Timezone)
 	unready := id == nil || *id != reader.readyID || !reader.readyZones[key]
@@ -340,9 +337,8 @@ func (reader *UsageCacheReader) deferRead(filter UsageFilter, requested bool) bo
 			reader.warmRequested[filter.Timezone] = reader.lastDeferred
 		}
 	}
-	reader.warmMu.Unlock()
 	if unready && !queued {
-		reader.queueWarm(filter.Timezone)
+		reader.queueWarmLocked(filter.Timezone)
 	}
 	return queued || unready
 }
@@ -412,9 +408,7 @@ func (reader *UsageCacheReader) waitForDirectReads() {
 func (reader *UsageCacheReader) queueWarm(timezone string) {
 	reader.warmMu.Lock()
 	defer reader.warmMu.Unlock()
-	if !reader.warmPending[timezone] && !(reader.warmBusy && reader.warmRunning == timezone) {
-		reader.queueWarmLocked(timezone)
-	}
+	reader.queueWarmLocked(timezone)
 }
 
 // queueWarmLocked queues a pass for timezone. The caller holds warmMu.
@@ -487,19 +481,13 @@ func (reader *UsageCacheReader) flushWarmRequests(parent context.Context) {
 // coverage for the zone, so later reads of any window refresh only the
 // sessions changed since. One worker keeps the warm's memory to one pass.
 func (reader *UsageCacheReader) runWarm(idle chan struct{}) {
-	unavailableRetried := false
 	for {
 		reader.warmMu.Lock()
 		if reader.warmDiscover && reader.warmCtx.Err() == nil {
 			reader.warmDiscover = false
-			delayed := reader.warmUnavailableRetry
-			reader.warmUnavailableRetry = false
 			reader.warmMu.Unlock()
-			if delayed {
-				if !reader.waitWarmRetry() {
-					continue
-				}
-				unavailableRetried = true
+			if !reader.waitWarmRetry() {
+				continue
 			}
 			ctx, cancel := context.WithTimeout(reader.warmCtx, usageWarmDiscoveryTimeout)
 			err := reader.LoadReadiness(ctx)
@@ -507,18 +495,11 @@ func (reader *UsageCacheReader) runWarm(idle chan struct{}) {
 				err = reader.warmUnready(ctx)
 			}
 			cancel()
-			if errors.Is(err, ErrUsageSourceUnavailable) && !unavailableRetried {
+			if err != nil && !errors.Is(err, ErrUsageSourceUnavailable) && reader.warmCtx.Err() == nil {
+				reader.Logger().Printf("discovering usage cache timezones: %v", err)
 				reader.warmMu.Lock()
 				reader.warmDiscover = true
-				reader.warmUnavailableRetry = true
 				reader.warmMu.Unlock()
-			} else if err != nil && !errors.Is(err, ErrUsageSourceUnavailable) && reader.warmCtx.Err() == nil {
-				reader.Logger().Printf("discovering usage cache timezones: %v", err)
-				if reader.waitWarmRetry() {
-					reader.warmMu.Lock()
-					reader.warmDiscover = true
-					reader.warmMu.Unlock()
-				}
 			}
 			continue
 		}
@@ -557,7 +538,7 @@ func (reader *UsageCacheReader) runWarm(idle chan struct{}) {
 			// direct result and do not queue another warm pass.
 			if reader.waitWarmRetry() {
 				reader.warmMu.Lock()
-				reader.queueWarmLocked(timezone)
+				reader.warmPending[timezone] = true
 				reader.warmMu.Unlock()
 			}
 		}
