@@ -147,7 +147,8 @@ func TestPiSourceLookupRejectsUncertainCandidate(t *testing.T) {
 			target := filepath.Join(root, "readable.jsonl")
 			require.NoError(t, os.WriteFile(target, data, 0o600))
 			candidate := filepath.Join(root, "candidate.jsonl")
-			if tc.name == "unreadable" {
+			switch tc.name {
+			case "unreadable":
 				require.NoError(t, os.WriteFile(candidate, data, 0o000))
 				t.Cleanup(func() { assert.NoError(t, os.Chmod(candidate, 0o600)) })
 				f, err := os.Open(candidate)
@@ -156,16 +157,17 @@ func TestPiSourceLookupRejectsUncertainCandidate(t *testing.T) {
 					t.Skip("file permissions do not prevent reads")
 				}
 				require.ErrorIs(t, err, os.ErrPermission)
-			} else if tc.name == "unsupported version" {
+			case "unsupported version":
 				require.NoError(t, os.WriteFile(candidate, []byte(`{"type":"session","id":"target","version":4,"cwd":"/old"}`+"\n"), 0o600))
-			} else {
+			default:
 				size, id := 64<<20, "target"
 				if tc.name != "large header" {
 					size = 1 << 20
 				}
-				if tc.name == "large unrelated header" {
+				switch tc.name {
+				case "large unrelated header":
 					id = "other"
-				} else if tc.name == "large matching header" {
+				case "large matching header":
 					candidate = target
 				}
 				header := `{"type":"session","parentSession":"` + strings.Repeat("a", size) + `","id":"` + id + `","cwd":"/old"}` + "\n"
@@ -323,8 +325,13 @@ func TestPiHeaderIdentityAndVersion(t *testing.T) {
 
 func TestPiUsesIdentityForNonuniqueNames(t *testing.T) {
 	for _, tc := range []struct{ id, wantBase string }{
-		{"child-one", "child-one.jsonl"}, {"work.v2", "work.v2.jsonl"},
-		{"..", ""}, {".work", ""}, {"work.", ""}, {"a/b", ""}, {`a\b`, ""},
+		{"child-one", "child-one.jsonl"},
+		{"work.v2", "work.v2.jsonl"},
+		{"..", ""},
+		{".work", ""},
+		{"work.", ""},
+		{"a/b", ""},
+		{`a\b`, ""},
 	} {
 		t.Run(tc.id, func(t *testing.T) {
 			root, dest, cwd := t.TempDir(), t.TempDir(), t.TempDir()
