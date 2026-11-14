@@ -157,7 +157,7 @@
   let fullTime = $derived(formatTimestamp(session.ended_at ?? session.started_at, true));
 
   let timeStr = $derived(
-    ui.alwaysShowYear ? fullTime : formatRelativeTime(session.ended_at ?? session.started_at),
+    formatRelativeTime(session.ended_at ?? session.started_at, ui.alwaysShowYear),
   );
 
   let isStarred = $derived(starred.isStarred(session.id));

@@ -29,11 +29,10 @@ export function formatRelativeTime(
   alwaysShowYear = false,
 ): string {
   if (!isoString) return "—";
+  if (alwaysShowYear) return formatTimestamp(isoString, true);
 
   const date = new Date(isoString);
   const diffSec = Math.floor((Date.now() - date.getTime()) / 1000);
-
-  if (alwaysShowYear) return formatTimestamp(isoString, true);
 
   if (diffSec < MINUTE) return m.shared_relative_just_now();
   if (diffSec < HOUR) {
