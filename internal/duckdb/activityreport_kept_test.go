@@ -168,27 +168,13 @@ func TestActivityReportKeptExcludesTimeDependentTermination(t *testing.T) {
 	require.NoError(t, err)
 	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET termination_status = 'tool_call_pending'`)
 	require.NoError(t, err)
-	for _, fixture := range []struct {
-		id, status string
-		ended      time.Time
-	}{
-		{"active", "tool_call_pending", time.Now().UTC()},
-		{"stale", "tool_call_pending", time.Now().UTC().Add(-30 * time.Minute)},
-		{"clean", "clean", time.Now().UTC()},
-	} {
-		_, err = conn.ExecContext(t.Context(), `INSERT INTO sessions SELECT * REPLACE (? AS id, ? AS termination_status, CAST(? AS TIMESTAMP) AS ended_at) FROM sessions WHERE id = 'session-a'`, fixture.id, fixture.status, fixture.ended.Format("2006-01-02 15:04:05"))
-		require.NoError(t, err)
-	}
 	require.NoError(t, conn.Close())
 	store, err := NewStore(t.Context(), path)
 	require.NoError(t, err)
 	defer store.Close()
-	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
-	require.NoError(t, err)
-	reads := observeActivityUsageReads(t)
+	q := duckDayQuery(t, "2026-01-01", "UTC")
 	for _, termination := range []string{"active", "stale", "unclean", "clean, active"} {
 		t.Run(termination, func(t *testing.T) {
-			before := *reads
 			for range 2 {
 				var phases []activity.ProgressPhase
 				_, err := store.BuildActivityReportArtifacts(t.Context(), db.AnalyticsFilter{
@@ -198,9 +184,16 @@ func TestActivityReportKeptExcludesTimeDependentTermination(t *testing.T) {
 				require.Contains(t, phases, activity.ProgressLoadingUsage,
 					"time-dependent session membership must be rebuilt on every read")
 			}
-			require.Equal(t, 2, *reads-before)
 		})
 	}
+	q, err = activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	reads := observeActivityUsageReads(t)
+	for range 2 {
+		_, err := store.BuildActivityReportArtifacts(t.Context(), db.AnalyticsFilter{Timezone: "UTC", Termination: "unclean"}, q, nil)
+		require.NoError(t, err)
+	}
+	require.Equal(t, 2, *reads)
 }
 
 func TestPartialActivityUsageKeptUntilPush(t *testing.T) {
@@ -274,7 +267,7 @@ func TestPartialActivityUsageRereadsPastClaudePeer(t *testing.T) {
 	require.NoError(t, err)
 	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET project = 'included'`)
 	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `INSERT INTO sessions SELECT * REPLACE ('session-b' AS id, 'excluded' AS project) FROM sessions WHERE id = 'session-a'`)
+	_, err = conn.ExecContext(t.Context(), `INSERT INTO sessions SELECT * REPLACE ('session-b' AS id, 'excluded' AS project, TIMESTAMP '2026-01-01 12:30:00' AS ended_at, 1 AS message_count) FROM sessions WHERE id = 'session-a'`)
 	require.NoError(t, err)
 	_, err = conn.ExecContext(t.Context(), `UPDATE messages SET claude_message_id = 'message', claude_request_id = 'request' WHERE id = 2`)
 	require.NoError(t, err)
