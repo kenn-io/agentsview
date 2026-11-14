@@ -12,6 +12,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/pathutil"
 )
 
 // ResolveTargets resolves the advertised target set for every
@@ -27,6 +28,7 @@ func ResolveTargets(ctx context.Context, cfg config.Config) (TargetSet, error) {
 	files := make(map[parser.AgentType][]string)
 	providerExtraFiles := make(map[parser.AgentType][]string)
 	codexIndexFiles := make(map[string][]string)
+	codexHomeRoots := make(map[string]CodexHomeRoots)
 	var forbiddenRoots []string
 	for _, factory := range parser.ProviderFactories() {
 		def := factory.Definition()
@@ -157,20 +159,8 @@ func ResolveTargets(ctx context.Context, cfg config.Config) (TargetSet, error) {
 			}
 			dirs[def.Type] = append(dirs[def.Type], dir)
 			if def.Type == parser.AgentCodex {
-				// An empty association must not become inferred parent metadata on import.
-				codexIndexFiles[dir] = nil
-				for _, index := range metadata.IndexFiles(dir) {
-					if info, err := os.Stat(index); err != nil || info.IsDir() {
-						continue
-					}
-					if !slices.Contains(codexIndexFiles[dir], index) {
-						codexIndexFiles[dir] = append(codexIndexFiles[dir], index)
-					}
-					if !slices.Contains(providerExtraFiles[def.Type], index) {
-						providerExtraFiles[def.Type] = append(
-							providerExtraFiles[def.Type], index,
-						)
-					}
+				if err := collectCodexTargets(cfg, dir, metadata, codexIndexFiles, codexHomeRoots, providerExtraFiles); err != nil {
+					return TargetSet{}, err
 				}
 			}
 		}
@@ -178,8 +168,44 @@ func ResolveTargets(ctx context.Context, cfg config.Config) (TargetSet, error) {
 	return filterForbiddenTargets(TargetSet{
 		Dirs: dirs, Files: files, ProviderExtraFiles: providerExtraFiles,
 		CodexIndexFiles: codexIndexFiles,
+		CodexHomeRoots:  codexHomeRoots,
 		ForbiddenRoots:  forbiddenRoots,
 	}), nil
+}
+
+func collectCodexTargets(cfg config.Config, root string, metadata parser.CodexMetadata, indexes map[string][]string, homes map[string]CodexHomeRoots, extras map[parser.AgentType][]string) error {
+	indexes[root] = nil
+	for _, index := range metadata.IndexFiles(root) {
+		if info, err := os.Stat(index); err != nil || info.IsDir() {
+			continue
+		}
+		if !slices.Contains(indexes[root], index) {
+			indexes[root] = append(indexes[root], index)
+		}
+		if !slices.Contains(extras[parser.AgentCodex], index) {
+			extras[parser.AgentCodex] = append(extras[parser.AgentCodex], index)
+		}
+	}
+	for _, home := range cfg.ProviderMetadata[parser.AgentCodex][root] {
+		roles := homes[home]
+		for _, role := range []string{"sessions", "archived_sessions"} {
+			resolved, err := pathutil.ResolveAbsolute(filepath.Join(home, role))
+			if err != nil {
+				return err
+			}
+			if resolved == root {
+				if role == "sessions" {
+					roles.Sessions = root
+				} else {
+					roles.ArchivedSessions = root
+				}
+			}
+		}
+		if roles.Sessions != "" || roles.ArchivedSessions != "" {
+			homes[home] = roles
+		}
+	}
+	return nil
 }
 
 // resolveFileScopedTarget asks the provider for the exact session files it
@@ -365,8 +391,27 @@ func filterForbiddenTargets(t TargetSet) TargetSet {
 		}
 		t.ProviderExtraFiles[agent] = kept
 	}
-	t.CodexIndexFiles = selectedCodexIndexFiles(t, t.CodexIndexFiles)
+	selectCodexTargetMetadata(&t, t)
 	return t
+}
+
+func selectCodexTargetMetadata(selected *TargetSet, allowed TargetSet) {
+	selected.CodexIndexFiles = selectedCodexIndexFiles(*selected, allowed.CodexIndexFiles)
+	selected.CodexHomeRoots = nil
+	for home, roles := range allowed.CodexHomeRoots {
+		if !slices.Contains(selected.Dirs[parser.AgentCodex], roles.Sessions) {
+			roles.Sessions = ""
+		}
+		if !slices.Contains(selected.Dirs[parser.AgentCodex], roles.ArchivedSessions) {
+			roles.ArchivedSessions = ""
+		}
+		if roles.Sessions != "" || roles.ArchivedSessions != "" {
+			if selected.CodexHomeRoots == nil {
+				selected.CodexHomeRoots = make(map[string]CodexHomeRoots)
+			}
+			selected.CodexHomeRoots[home] = roles
+		}
+	}
 }
 
 // Keep associations only for roots and files retained in this target set.
@@ -1017,7 +1062,7 @@ func SelectAllowedTargets(allowed TargetSet, requested TargetSet) (TargetSet, bo
 			)
 		}
 	}
-	selected.CodexIndexFiles = selectedCodexIndexFiles(selected, allowed.CodexIndexFiles)
+	selectCodexTargetMetadata(&selected, allowed)
 	return selected, true
 }
 

@@ -362,6 +362,10 @@ eligible. It does not initialize unrelated tables, run data repairs, or
 reclassify sessions. Other missing core schema still requires the normal
 writable daemon migration or full resync.
 
+Schema upgrades refuse while a daemon or another writer owns the archive; stop
+the daemon or wait for the owner to finish, then retry. Already-current exports
+remain read-only.
+
 When an older archive lacks per-session identity snapshots, the writable daemon
 reconstructs them in a resumable background migration. This reconstruction is
 best-effort: it combines stored session metadata with the repository and Git

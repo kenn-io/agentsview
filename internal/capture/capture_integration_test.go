@@ -642,19 +642,19 @@ func TestProviderRootsDoNotRequireHomeWhenConfigured(t *testing.T) {
 
 	claudeRoot := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", claudeRoot)
-	got, err := producerRoot(ProviderClaude, "")
+	got, err := ProducerRoot(ProviderClaude, "")
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(claudeRoot, "projects"), got)
 
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	codexRoot := t.TempDir()
 	t.Setenv("CODEX_HOME", codexRoot)
-	got, err = producerRoot(ProviderCodex, "")
+	got, err = ProducerRoot(ProviderCodex, "")
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(codexRoot, "sessions"), got)
 
 	explicit := t.TempDir()
-	got, err = producerRoot(ProviderClaude, explicit)
+	got, err = ProducerRoot(ProviderClaude, explicit)
 	require.NoError(t, err)
 	assert.Equal(t, explicit, got)
 }

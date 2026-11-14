@@ -474,8 +474,8 @@ func rawCaptureSourceIdentityMatches(
 		return planKey == manifestKey
 	}
 	return primaryEntry != "" &&
-		sourceKeyEndsWithEntry(planKey, primaryEntry) &&
-		sourceKeyEndsWithEntry(manifestKey, primaryEntry)
+		SourceKeyEndsWithEntry(planKey, primaryEntry) &&
+		SourceKeyEndsWithEntry(manifestKey, primaryEntry)
 }
 
 type stablePathMap struct {
@@ -514,7 +514,7 @@ func newStablePathMap(
 func manifestPrimaryEntry(manifest rawsync.CanonicalManifest) string {
 	primary := ""
 	for _, entry := range manifest.Manifest.Entries {
-		if sourceKeyEndsWithEntry(manifest.Manifest.SourceKey, entry.Path) &&
+		if SourceKeyEndsWithEntry(manifest.Manifest.SourceKey, entry.Path) &&
 			len(entry.Path) > len(primary) {
 			primary = entry.Path
 		}
@@ -641,7 +641,8 @@ func (m *stablePathMap) resolve(stable string) (string, bool) {
 	return local, ok
 }
 
-func sourceKeyEndsWithEntry(sourceKey, entry string) bool {
+// SourceKeyEndsWithEntry checks the lexical source-key binding at a path boundary.
+func SourceKeyEndsWithEntry(sourceKey, entry string) bool {
 	key := strings.ReplaceAll(sourceKey, "\\", "/")
 	return key == entry || strings.HasSuffix(key, "/"+entry)
 }

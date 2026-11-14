@@ -624,6 +624,38 @@ func TestExportSessionsUpgradesRecordedRepositoryColumn(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, raw.Close())
 
+			before, err := os.ReadFile(dbPath)
+			require.NoError(t, err)
+			// The seeded database remains open until cleanup, so its WAL may
+			// already contain the fixture and schema change.
+			sidecars := make(map[string][]byte)
+			for _, suffix := range []string{"-wal", "-journal"} {
+				data, err := os.ReadFile(dbPath + suffix)
+				if err != nil {
+					require.ErrorIs(t, err, os.ErrNotExist)
+					continue
+				}
+				sidecars[suffix] = data
+			}
+			owner := holdWriteOwnerLockForTest(t, dataDir)
+			blockedOut, blockedErr, err := executeExportSessionsCommand(newRootCommand(), "export", "sessions", "--format", "json")
+			require.ErrorContains(t, err, writeOwnerLockPath(dataDir))
+			assert.Empty(t, blockedOut)
+			assert.Empty(t, blockedErr)
+			after, err := os.ReadFile(dbPath)
+			require.NoError(t, err)
+			assert.Equal(t, before, after)
+			for _, suffix := range []string{"-wal", "-journal"} {
+				data, err := os.ReadFile(dbPath + suffix)
+				if want, exists := sidecars[suffix]; exists {
+					require.NoError(t, err)
+					assert.Equal(t, want, data)
+				} else {
+					require.ErrorIs(t, err, os.ErrNotExist)
+				}
+			}
+			require.NoError(t, owner.Release())
+
 			stdout, stderr, err := executeExportSessionsCommand(
 				newRootCommand(), "export", "sessions", "--format", "json",
 			)
@@ -637,6 +669,8 @@ func TestExportSessionsUpgradesRecordedRepositoryColumn(t *testing.T) {
 				assert.Len(t, doc.Sessions, 2)
 				assert.Equal(t, "export-sessions-test-db", doc.DatabaseID)
 			}
+			next := acquireWriteOwnerLockForTest(t, dataDir)
+			require.NoError(t, next.Close())
 			// The schema is readable, but export must not bypass parser upgrades.
 			readonly, err := db.OpenReadOnly(t.Context(), dbPath)
 			require.NoError(t, err)

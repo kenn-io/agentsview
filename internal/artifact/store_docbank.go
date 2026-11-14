@@ -126,13 +126,28 @@ func (s *docbankStore) Stat(ctx context.Context, ref Ref) (Entry, error) {
 func (s *docbankStore) Open(
 	ctx context.Context, ref Ref,
 ) (Entry, VerifiedReader, error) {
+	return openDocbankContent(ctx, s.vault, ref)
+}
+
+type contentOpener interface {
+	OpenContent(context.Context, string) (*docbank.Content, error)
+}
+
+// ContentReaderOpener adapts a borrowed read-only vault without transferring ownership.
+type ContentReaderOpener struct{ Reader *docbank.ContentReader }
+
+func (r ContentReaderOpener) Open(ctx context.Context, ref Ref) (Entry, VerifiedReader, error) {
+	return openDocbankContent(ctx, r.Reader, ref)
+}
+
+func openDocbankContent(ctx context.Context, source contentOpener, ref Ref) (Entry, VerifiedReader, error) {
 	if err := ctx.Err(); err != nil {
 		return Entry{}, nil, artifactStoreError("open", ref, err)
 	}
 	if err := validateStoreRef(ref); err != nil {
 		return Entry{}, nil, artifactStoreError("open", ref, err)
 	}
-	content, err := s.vault.OpenContent(ctx, docbankPath(ref))
+	content, err := source.OpenContent(ctx, docbankPath(ref))
 	if err != nil {
 		return Entry{}, nil, artifactStoreError("open", ref, mapDocbankError(err))
 	}

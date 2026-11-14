@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -285,47 +286,55 @@ func TestMaterializerRejectsConflictingEntryPathsBeforeCreatingFiles(t *testing.
 }
 
 func TestMaterializeDelegatesInFlightCancellationToObjectStore(t *testing.T) {
-	t.Parallel()
-	data := []byte("session-body")
-	object := objectRefForBytes(t, data)
-	_, manifest := materializerTestManifest(t, []rawsync.Entry{{
-		Path: "session.jsonl", Type: "file", Length: int64(len(data)),
-		Objects: []rawsync.ObjectRef{object},
-	}})
-	copyStarted := make(chan struct{})
-	store := &materializerStore{
-		objects: map[rawsync.ObjectRef][]byte{object: data},
-		copyObject: func(ctx context.Context, _ []byte, _ io.Writer) error {
-			close(copyStarted)
+	for _, selected := range []bool{false, true} {
+		t.Run(fmt.Sprintf("selected=%t", selected), func(t *testing.T) {
+			data := []byte("session-body")
+			object := objectRefForBytes(t, data)
+			_, manifest := materializerTestManifest(t, []rawsync.Entry{{
+				Path: "session.jsonl", Type: "file", Length: int64(len(data)), Objects: []rawsync.ObjectRef{object},
+			}})
+			baseDir := t.TempDir()
+			copyStarted := make(chan struct{})
+			store := &materializerStore{objects: map[rawsync.ObjectRef][]byte{object: data}, copyObject: func(ctx context.Context, _ []byte, _ io.Writer) error {
+				close(copyStarted)
+				select {
+				case <-ctx.Done():
+				case <-time.After(5 * time.Second):
+				}
+				return ctx.Err()
+			}}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				m := Materializer{Store: store, BaseDir: baseDir, MaxTotalBytes: 1 << 20}
+				var err error
+				if selected {
+					_, err = m.MaterializeEntries(ctx, manifest.Identity, manifest.Manifest.CapturedAt, manifest.Manifest.Entries)
+				} else {
+					_, err = m.Materialize(ctx, manifest)
+				}
+				done <- err
+			}()
 			select {
-			case <-ctx.Done():
+			case <-copyStarted:
 			case <-time.After(5 * time.Second):
+				require.FailNow(t, "the materializer never started copying the object")
 			}
-			return ctx.Err()
-		},
-	}
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	done := make(chan error, 1)
-	go func() {
-		_, err := (Materializer{
-			Store: store, BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20,
-		}).Materialize(ctx, manifest)
-		done <- err
-	}()
-	select {
-	case <-copyStarted:
-	case <-time.After(5 * time.Second):
-		require.FailNow(t, "the materializer never started copying the object")
-	}
-	cancel()
-
-	select {
-	case err := <-done:
-		require.ErrorIs(t, err, context.Canceled,
-			"the materializer must pass attempt cancellation into the store-owned copy")
-	case <-time.After(5 * time.Second):
-		require.FailNow(t, "the materialized copy never observed cancellation")
+			entries, err := os.ReadDir(baseDir)
+			require.NoError(t, err)
+			require.Len(t, entries, 1, "copy must have created its owned scratch tree")
+			cancel()
+			select {
+			case err := <-done:
+				require.ErrorIs(t, err, context.Canceled)
+			case <-time.After(5 * time.Second):
+				require.FailNow(t, "the materialized copy never observed cancellation")
+			}
+			entries, err = os.ReadDir(baseDir)
+			require.NoError(t, err)
+			assert.Empty(t, entries)
+		})
 	}
 }
 
@@ -499,4 +508,47 @@ func materializerTestManifest(
 	}, rawsync.DefaultManifestLimits())
 	require.NoError(t, err)
 	return identity, canonical
+}
+
+func TestMaterializerEntryBatch(t *testing.T) {
+	data := []byte("continuation")
+	ref := objectRefForBytes(t, data)
+	entry := rawsync.Entry{Path: "session/subagents/agent.jsonl", Type: "file", Length: int64(len(data)), Objects: []rawsync.ObjectRef{ref}}
+	_, manifest := materializerTestManifest(t, []rawsync.Entry{entry})
+	store := &materializerStore{objects: map[rawsync.ObjectRef][]byte{ref: data}}
+	m := Materializer{Store: store, BaseDir: t.TempDir(), MaxTotalBytes: int64(len(data))}
+	tree, err := m.MaterializeEntries(t.Context(), manifest.Identity, manifest.Manifest.CapturedAt, []rawsync.Entry{entry})
+	require.NoError(t, err)
+	require.NoError(t, tree.Cleanup())
+	assert.Equal(t, []rawsync.ObjectRef{ref}, store.opened)
+	_, err = m.MaterializeEntries(t.Context(), manifest.Identity, manifest.Manifest.CapturedAt, []rawsync.Entry{entry, entry})
+	require.ErrorIs(t, err, rawsync.ErrInvalid)
+	large := rawsync.Entry{Path: "sibling.jsonl", Type: "file", Length: 513 << 20, Objects: []rawsync.ObjectRef{{SHA256: strings.Repeat("a", 64), Length: 513 << 20}}}
+	_, err = m.MaterializeEntries(t.Context(), manifest.Identity, manifest.Manifest.CapturedAt, []rawsync.Entry{entry, large})
+	require.ErrorIs(t, err, ErrSizeLimit)
+	assert.Equal(t, []rawsync.ObjectRef{ref}, store.opened)
+}
+
+func TestMaterializerAcceptsValidatedCardinalityBeyondDefaults(t *testing.T) {
+	ref := objectRefForBytes(t, nil)
+	identity, err := rawsync.NewAuthIdentity("tenant-a", "device-a")
+	require.NoError(t, err)
+	limits := rawsync.DefaultManifestLimits()
+	entries := make([]rawsync.Entry, limits.MaxEntries+1)
+	for i := range entries {
+		entries[i] = rawsync.Entry{Path: fmt.Sprintf("file-%05d.jsonl", i), Type: "file", Objects: []rawsync.ObjectRef{ref}}
+	}
+	limits.MaxEntries = len(entries)
+	limits.MaxCanonicalBytes = 4 << 20
+	manifest, err := rawsync.ValidateAndCanonicalize(identity, rawsync.Manifest{
+		SchemaVersion: rawsync.ManifestSchemaVersion, Provider: "claude", ConfiguredRootID: "root-a", SourceKey: "fixture", CaptureID: "capture-a", CapturedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), Kind: rawsync.ManifestSnapshot, Entries: entries,
+	}, limits)
+	require.NoError(t, err)
+	copyReached := errors.New("copy reached")
+	store := &materializerStore{objects: map[rawsync.ObjectRef][]byte{ref: nil}, copyObject: func(context.Context, []byte, io.Writer) error { return copyReached }}
+	materializer := Materializer{Store: store, BaseDir: t.TempDir(), MaxTotalBytes: 1}
+	_, err = materializer.Materialize(t.Context(), manifest)
+	require.ErrorIs(t, err, copyReached)
+	_, err = materializer.MaterializeEntries(t.Context(), identity, manifest.Manifest.CapturedAt, entries)
+	require.ErrorIs(t, err, copyReached)
 }

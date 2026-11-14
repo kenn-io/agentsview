@@ -107,7 +107,7 @@ func newImportLayout(targets TargetSet, root string) (importLayout, error) {
 	layout.paths.forbiddenRoots = targets.ForbiddenRoots
 	for agentType, agentDirList := range targets.Dirs {
 		for _, remoteDir := range agentDirList {
-			local, err := safeRemappedRemotePath(root, remoteDir)
+			local, err := SafeRemappedRemotePath(root, remoteDir)
 			if err != nil {
 				return importLayout{}, err
 			}
@@ -126,7 +126,7 @@ func newImportLayout(targets TargetSet, root string) (importLayout, error) {
 	// Windows/UNC remotes. Registering each extra file as its own
 	// remote->local pair fixes both the skip cache and the rewriter.
 	for _, remoteFile := range targets.AllExtraFiles() {
-		local, err := safeRemappedRemotePath(root, remoteFile)
+		local, err := SafeRemappedRemotePath(root, remoteFile)
 		if err != nil {
 			return importLayout{}, err
 		}
@@ -135,13 +135,13 @@ func newImportLayout(targets TargetSet, root string) (importLayout, error) {
 	}
 	codexMetadata := make(map[string][]string)
 	for remoteRoot, indexes := range selectedCodexIndexFiles(targets, targets.CodexIndexFiles) {
-		localRoot, err := safeRemappedRemotePath(root, remoteRoot)
+		localRoot, err := SafeRemappedRemotePath(root, remoteRoot)
 		if err != nil {
 			return importLayout{}, err
 		}
 		codexMetadata[localRoot] = nil
 		for _, index := range indexes {
-			localIndex, err := safeRemappedRemotePath(root, index)
+			localIndex, err := SafeRemappedRemotePath(root, index)
 			if err != nil {
 				return importLayout{}, err
 			}

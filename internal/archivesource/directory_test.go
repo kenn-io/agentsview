@@ -105,6 +105,10 @@ func testAttachedRestoredDirectory(t *testing.T, layout string) {
 	after, err := os.ReadFile(filepath.Join(moved, application, "sessions.db"))
 	require.NoError(t, err)
 	assert.Equal(t, sha256.Sum256(saved), sha256.Sum256(after), "source database is never migrated or rewritten")
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+		_, err := os.Lstat(filepath.Join(moved, application, "sessions.db") + suffix)
+		require.ErrorIs(t, err, os.ErrNotExist)
+	}
 }
 
 func TestAttachedDirectoryRefusesActiveWriter(t *testing.T) {
@@ -117,6 +121,69 @@ func TestAttachedDirectoryRefusesActiveWriter(t *testing.T) {
 	defer lock.Close()
 	_, err = OpenIndex(t.Context(), source, t.TempDir(), nil)
 	require.ErrorContains(t, err, "in use")
+}
+
+func TestAttachedDirectorySidecarSourceStillDiscovered(t *testing.T) {
+	_, inputs := archiveFixture(t)
+	directory := filepath.Join(inputs, "seed")
+	saved := filepath.Join(directory, "sessions.db")
+	writer, err := db.OpenIsolatedContext(t.Context(), saved)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = writer.Close() })
+	before, err := os.ReadFile(saved)
+	require.NoError(t, err)
+	roots, err := writer.ListRawArchiveRoots(t.Context())
+	require.NoError(t, err)
+	sourcesBefore, err := writer.ListRawArchiveSources(t.Context(), "", 100)
+	require.NoError(t, err)
+	require.NotEmpty(t, sourcesBefore)
+	var root db.RawArchiveRoot
+	for _, candidate := range roots {
+		if candidate.ID == sourcesBefore[0].RootID {
+			root = candidate
+			break
+		}
+	}
+	require.NotEmpty(t, root.ID)
+	root.Machine = "updated-in-wal"
+	require.NoError(t, writer.RegisterRawArchiveRoot(t.Context(), root))
+	require.FileExists(t, saved+"-wal")
+	require.FileExists(t, saved+"-shm")
+	index, err := OpenIndex(t.Context(), config.ArchiveSource{Name: "history", Directory: directory}, t.TempDir(), nil)
+	require.NoError(t, err)
+	sources, err := index.Sources(t.Context(), "", 100)
+	require.NoError(t, err)
+	found := false
+	for _, source := range sources {
+		if source.Root.ID == root.ID {
+			found = true
+			assert.Equal(t, "updated-in-wal", source.Root.Machine)
+		}
+	}
+	require.True(t, found)
+	require.NoError(t, index.Close())
+	after, err := os.ReadFile(saved)
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+	require.NoError(t, writer.Close())
+}
+
+func TestAttachedDirectoryPendingCompactionRefused(t *testing.T) {
+	_, inputs := archiveFixture(t)
+	directory := filepath.Join(inputs, "seed")
+	saved := filepath.Join(directory, "sessions.db")
+	before, err := os.ReadFile(saved)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(directory, "compact-recovery.json"), []byte("pending"), 0o600))
+	_, err = OpenIndex(t.Context(), config.ArchiveSource{Name: "history", Directory: directory}, t.TempDir(), nil)
+	require.ErrorContains(t, err, "compaction recovery is pending")
+	after, err := os.ReadFile(saved)
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+		_, err := os.Lstat(saved + suffix)
+		require.ErrorIs(t, err, os.ErrNotExist)
+	}
 }
 
 func TestAttachedDirectoryMachineNameRequiresOneMachine(t *testing.T) {

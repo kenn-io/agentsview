@@ -66,6 +66,14 @@ func openDirectoryIndex(ctx context.Context, source config.ArchiveSource, cache 
 		}
 	}()
 	uri := "file:" + (&url.URL{Path: saved}).EscapedPath() + "?mode=ro"
+	switch err := checkSavedQuiescent(saved); {
+	case err == nil:
+		uri = immutableURI(saved)
+	case errors.Is(err, errSavedSidecars):
+		// The exclusive owner lock keeps the WAL stable while mode=ro replays it.
+	default:
+		return nil, err
+	}
 	database, err := sql.Open("sqlite3", uri)
 	if err != nil {
 		return nil, err

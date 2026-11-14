@@ -15,8 +15,20 @@ import (
 
 const rawObjectStatConcurrency = 32
 
+type artifactOpener interface {
+	Open(context.Context, artifact.Ref) (artifact.Entry, artifact.VerifiedReader, error)
+}
+
+type ArtifactObjectReader struct{ opener artifactOpener }
+
 type artifactObjectStore struct {
+	ArtifactObjectReader
 	store artifact.ArtifactStore
+}
+
+// NewArtifactObjectReader provides only verified copying from a borrowed opener.
+func NewArtifactObjectReader(opener artifactOpener) *ArtifactObjectReader {
+	return &ArtifactObjectReader{opener: opener}
 }
 
 // NewArtifactObjectStore adapts the verified artifact ledger for raw custody.
@@ -24,7 +36,7 @@ func NewArtifactObjectStore(store artifact.ArtifactStore) (ObjectStore, error) {
 	if store == nil {
 		return nil, fmt.Errorf("%w: artifact store is required", ErrInvalid)
 	}
-	return &artifactObjectStore{store: store}, nil
+	return &artifactObjectStore{opener: store, store: store}, nil
 }
 
 func (s *artifactObjectStore) PutObject(
@@ -68,7 +80,7 @@ func (s *artifactObjectStore) StatObject(
 	return objectInfoFromArtifact(entry), nil
 }
 
-func (s *artifactObjectStore) OpenObject(
+func (s *ArtifactObjectReader) OpenObject(
 	ctx context.Context,
 	tenantID string,
 	object ObjectRef,
@@ -77,7 +89,7 @@ func (s *artifactObjectStore) OpenObject(
 	if err != nil {
 		return ObjectInfo{}, nil, err
 	}
-	entry, reader, err := s.store.Open(ctx, ref)
+	entry, reader, err := s.opener.Open(ctx, ref)
 	if err != nil {
 		return ObjectInfo{}, nil, mapArtifactError("opening raw object", err)
 	}
@@ -94,7 +106,7 @@ func (s *artifactObjectStore) OpenObject(
 // store owns the reader lifecycle. The artifact reader is opened with ctx and
 // is read and closed sequentially; callers never need to assume that Close is
 // safe to race with an in-flight Read.
-func (s *artifactObjectStore) CopyObject(
+func (s *ArtifactObjectReader) CopyObject(
 	ctx context.Context,
 	tenantID string,
 	object ObjectRef,

@@ -1049,6 +1049,12 @@ type Reader interface {
 	) *sql.Row
 }
 
+// BeginReadTx borrows a guarded reader connection for a coherent read.
+// The caller must close the transaction before the database is reopened.
+func (db *DB) BeginReadTx(ctx context.Context) (*sql.Tx, error) {
+	return db.getReader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+}
+
 type readerHandle struct {
 	owner *DB
 }

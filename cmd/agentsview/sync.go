@@ -490,7 +490,7 @@ func (l *preparedHTTPRebuildLeaseCLI) Close() error {
 	return l.prepared.Close()
 }
 
-func (l *preparedHTTPRebuildLeaseCLI) Commit() error {
+func (l *preparedHTTPRebuildLeaseCLI) Commit(ctx context.Context) error {
 	if l == nil || l.prepared == nil || l.committed {
 		return nil
 	}
@@ -498,7 +498,7 @@ func (l *preparedHTTPRebuildLeaseCLI) Commit() error {
 	if !ok {
 		return nil
 	}
-	if err := committer.Commit(); err != nil {
+	if err := committer.Commit(ctx); err != nil {
 		return err
 	}
 	l.committed = true

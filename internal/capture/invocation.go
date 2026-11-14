@@ -13,9 +13,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf16"
+
+	"golang.org/x/text/unicode/norm"
 
 	"go.kenn.io/agentsview/internal/pathutil"
 )
@@ -150,7 +154,7 @@ func hasNamedOption(args []string, names ...string) bool {
 }
 
 func validateClaudeSessionID(value string) error {
-	if !validUUID(value) {
+	if !ValidUUID(value) {
 		return errors.New("claude session ID must be a UUID")
 	}
 	if value != strings.ToLower(value) {
@@ -218,7 +222,8 @@ func newUUID() (string, error) {
 	return string(encoded), nil
 }
 
-func validUUID(value string) bool {
+// ValidUUID reports whether value has the native UUID text shape.
+func ValidUUID(value string) bool {
 	if len(value) != 36 {
 		return false
 	}
@@ -286,7 +291,7 @@ func (m *threadMarker) consumeLine() {
 		ThreadID string `json:"thread_id"`
 	}
 	if json.Unmarshal(m.line, &event) != nil || event.Type != "thread.started" ||
-		!validUUID(event.ThreadID) {
+		!ValidUUID(event.ThreadID) {
 		return
 	}
 	id := strings.ToLower(event.ThreadID)
@@ -421,7 +426,8 @@ func defaultStreams(streams Streams) Streams {
 	return streams
 }
 
-func producerRoot(provider Provider, explicit string) (string, error) {
+// ProducerRoot resolves the native session directory for capture.
+func ProducerRoot(provider Provider, explicit string) (string, error) {
 	if explicit != "" {
 		return absoluteExpandedPath(explicit)
 	}
@@ -451,6 +457,37 @@ func absoluteExpandedPath(path string) (string, error) {
 		return "", err
 	}
 	return filepath.Abs(expanded)
+}
+
+// ClaudeProjectDir encodes a checkout path as Claude Code 2.1.322 does.
+func ClaudeProjectDir(dir string) string {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		abs = filepath.Clean(dir)
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = resolved
+	}
+	units := utf16.Encode([]rune(norm.NFC.String(abs)))
+	var b strings.Builder
+	var hash int32
+	for _, c := range units {
+		hash = hash*31 + int32(c)
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' {
+			b.WriteByte(byte(c))
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	name := b.String()
+	if len(name) <= 200 {
+		return name
+	}
+	h := int64(hash)
+	if h < 0 {
+		h = -h
+	}
+	return name[:200] + "-" + strconv.FormatInt(h, 36)
 }
 
 func encodeClaudeWorkDir(dir string) string {

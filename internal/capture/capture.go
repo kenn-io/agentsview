@@ -135,7 +135,7 @@ func prepareRun(opts RunOptions) (preparedRun, error) {
 		return preparedRun{}, errors.New(
 			"a Claude wrapper requires --claude-work-dir with its actual Claude working directory")
 	}
-	root, err := producerRoot(opts.Provider, opts.ProviderRoot)
+	root, err := ProducerRoot(opts.Provider, opts.ProviderRoot)
 	if err != nil {
 		return preparedRun{}, fmt.Errorf("resolving provider session root: %w", err)
 	}
