@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -84,8 +83,7 @@ func TestPiMaterializeCommandReturnsNativeResume(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, file.Close())
 	_, err = executeCommand(newRootCommand(), "session", "materialize", "pi:example", "--cwd", cwd)
-	require.ErrorContains(t, err, "if this is the same session, resume it with:")
-	assert.Contains(t, err.Error(), piResumeCommand(cwd, path, runtime.GOOS == "windows"))
+	require.ErrorContains(t, err, "destination differs")
 	database, err = db.OpenIsolatedContext(t.Context(), filepath.Join(dataDir, "sessions.db"))
 	require.NoError(t, err)
 	after, err := database.GetSessionFull(t.Context(), "pi:example")

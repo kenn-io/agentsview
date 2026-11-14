@@ -5,16 +5,13 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"crypto/sha256"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 
@@ -83,7 +80,7 @@ func materializePi(ctx context.Context, cfg config.Config, session *db.Session, 
 		}
 		basename = id + ".jsonl"
 	}
-	dest, err := piDestination(ctx, cwd, basename)
+	dest, err := piDestination(cwd, basename)
 	if err != nil {
 		return Result{}, err
 	}
@@ -284,86 +281,25 @@ func relocatePiHeader(ctx context.Context, data []byte, name, id, cwd string) ([
 	return slices.Concat(data[:offset+start], encoded, data[offset+end:]), nil
 }
 
-func piDestination(ctx context.Context, cwd, basename string) (string, error) {
+func piDestination(cwd, basename string) (string, error) {
 	def, _ := parser.AgentByType(parser.AgentPi)
-	agentDir, err := piResolveDir(cwd, cmp.Or(os.Getenv(def.DefaultRootEnvVar), "~/"+def.DefaultRootDir))
-	if err != nil {
-		return "", err
-	}
 	dir := os.Getenv(def.NativeEnvVar)
 	if dir == "" {
-		dir, err = piSettingsSessionDir(ctx, agentDir, cwd, filepath.Dir(def.DefaultRootDir))
+		agentDir, err := piResolveDir(cwd, cmp.Or(os.Getenv(def.DefaultRootEnvVar), "~/"+def.DefaultRootDir))
 		if err != nil {
 			return "", err
 		}
-	}
-	if dir == "" {
 		encoded := strings.TrimPrefix(strings.NewReplacer("/", "-", `\`, "-", ":", "-").Replace(cwd), "-")
-		component := "--" + encoded + "--"
-		if len(component) > 200 {
-			hash := sha256.Sum256([]byte(cwd))
-			component = fmt.Sprintf("--%x--", hash[:16])
-		}
-		return filepath.Join(agentDir, "sessions", component, basename), nil
+		return filepath.Join(agentDir, "sessions", "--"+encoded+"--", basename), nil
 	}
-	dir, err = piResolveDir(cwd, dir)
+	dir, err := piResolveDir(cwd, dir)
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(dir, basename), nil
 }
 
-// Pi merges global and project settings, with the project value taking precedence.
-func piSettingsSessionDir(ctx context.Context, agentDir, cwd, projectConfig string) (string, error) {
-	var dir string
-	for _, name := range []string{filepath.Join(agentDir, "settings.json"), filepath.Join(cwd, projectConfig, "settings.json")} {
-		data, _, err := readFile(ctx, name, 8<<20)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return "", fmt.Errorf("read Pi settings: %w", err)
-		}
-		var settings map[string]jsontext.Value
-		if err := json.Unmarshal(bytes.TrimPrefix(data, []byte("\xef\xbb\xbf")), &settings, jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true)); err != nil {
-			return "", fmt.Errorf("invalid Pi settings: %w", err)
-		}
-		if value, ok := settings["sessionDir"]; ok {
-			dir = ""
-			if err := json.Unmarshal(value, &dir, jsontext.AllowInvalidUTF8(true)); err != nil {
-				return "", errors.New("native Pi settings sessionDir must be a string")
-			}
-		}
-	}
-	return dir, nil
-}
-
 func piResolveDir(cwd, dir string) (string, error) {
-	if runtime.GOOS == "windows" {
-		dir = piWindowsShellPath(dir)
-	}
-	if strings.HasPrefix(dir, "file://") {
-		u, err := url.Parse(dir)
-		if err != nil || u.Path == "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
-			return "", errors.New("invalid Pi directory file URL")
-		}
-		escaped := strings.ToLower(u.EscapedPath())
-		if strings.Contains(escaped, "%2f") || (runtime.GOOS == "windows" && strings.Contains(escaped, "%5c")) {
-			return "", errors.New("invalid Pi directory file URL")
-		}
-		if u.Host != "" && u.Host != "localhost" {
-			if runtime.GOOS != "windows" {
-				return "", errors.New("native Pi directory file URL must be local")
-			}
-			dir = "//" + u.Host + u.Path
-		} else {
-			dir = u.Path
-			if runtime.GOOS == "windows" && len(dir) >= 3 && dir[0] == '/' && dir[2] == ':' {
-				dir = dir[1:]
-			}
-		}
-		dir = filepath.FromSlash(dir)
-	}
 	expanded, err := pathutil.ExpandHome(dir)
 	if err != nil {
 		return "", err
@@ -372,21 +308,4 @@ func piResolveDir(cwd, dir string) (string, error) {
 		expanded = filepath.Join(cwd, expanded)
 	}
 	return filepath.Clean(expanded), nil
-}
-
-// piWindowsShellPath matches Pi's MSYS, Cygwin and WSL drive spellings.
-func piWindowsShellPath(dir string) string {
-	if !strings.HasPrefix(dir, "/") || strings.HasPrefix(dir, "//") || strings.Contains(dir, `\`) {
-		return dir
-	}
-	part := strings.TrimPrefix(dir, "/")
-	if len(part) >= 4 && strings.EqualFold(part[:4], "mnt/") {
-		part = part[4:]
-	} else if len(part) >= 9 && strings.EqualFold(part[:9], "cygdrive/") {
-		part = part[9:]
-	}
-	if len(part) == 0 || (part[0] < 'a' || part[0] > 'z') && (part[0] < 'A' || part[0] > 'Z') || len(part) > 1 && part[1] != '/' {
-		return dir
-	}
-	return strings.ToUpper(part[:1]) + `:\` + strings.ReplaceAll(strings.TrimPrefix(part[1:], "/"), "/", `\`)
 }
