@@ -2013,27 +2013,41 @@ func TestListRecallEntriesTimeBoundsIncludeArchived(t *testing.T) {
 }
 
 func TestListRecallEntriesBoundedPageConflictsAfterSameMillisecondInsert(t *testing.T) {
-	te := setup(t)
-	seedRecallEntrySession(t, te)
-	raw, err := sql.Open("sqlite3", filepath.Join(te.dataDir, "test.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { raw.Close() })
-	seed := func(id string) {
-		seedRecallEntry(t, te, db.RecallEntry{ID: id, Title: id, Body: id, SourceSessionID: "recall-session"})
-		_, err := raw.ExecContext(t.Context(), "UPDATE recall_entries SET updated_at = '2026-11-14T07:56:43.261Z' WHERE id = ?", id)
-		require.NoError(t, err)
+	tests := []struct {
+		name  string
+		bound string
+	}{
+		{"updated since", "updated_since=2026-11-14T00:00:00Z"},
+		{"created since", "created_since=2020-01-01T00:00:00Z"},
 	}
-	seed("page-a")
-	seed("page-b")
-	const path = "/api/v1/recall/entries?limit=1&updated_since=2026-11-14T00:00:00Z"
-	first := te.get(t, path)
-	assertStatus(t, first, http.StatusOK)
-	cursor := decode[listRecallEntriesResponse](t, first).NextCursor
-	require.NotEmpty(t, cursor)
-	seed("page-c")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			te := setup(t)
+			seedRecallEntrySession(t, te)
+			raw, err := sql.Open("sqlite3", filepath.Join(te.dataDir, "test.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { raw.Close() })
+			seed := func(id string) {
+				seedRecallEntry(t, te, db.RecallEntry{ID: id, Title: id, Body: id, SourceSessionID: "recall-session"})
+				_, err := raw.ExecContext(t.Context(), "UPDATE recall_entries SET updated_at = '2026-11-14T07:56:43.261Z' WHERE id = ?", id)
+				require.NoError(t, err)
+			}
+			seed("page-a")
+			seed("page-b")
+			path := "/api/v1/recall/entries?limit=1&" + tt.bound
+			first := te.get(t, path)
+			assertStatus(t, first, http.StatusOK)
+			cursor := decode[listRecallEntriesResponse](t, first).NextCursor
+			require.NotEmpty(t, cursor)
+			seed("page-c")
 
-	second := te.get(t, path+"&cursor="+url.QueryEscape(cursor))
+			second := te.get(t, path+"&cursor="+url.QueryEscape(cursor))
 
-	assertStatus(t, second, http.StatusConflict)
-	assertErrorResponse(t, second, service.ErrStaleRecallPagination.Error())
+			assertStatus(t, second, http.StatusConflict)
+			msg := decode[map[string]string](t, second)["error"]
+			assert.Equal(t, service.ErrStaleRecallPagination.Error(), msg)
+			// The restart rule must fit a walk bounded by either field.
+			assert.NotContains(t, msg, "updated_since")
+		})
+	}
 }

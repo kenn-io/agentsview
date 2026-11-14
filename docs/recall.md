@@ -51,9 +51,10 @@ and return `next_cursor` when more entries remain. To follow changes:
 1. After the last page, save the last entry's `updated_at` as the new
    checkpoint. The next walk may return that entry again, so dedupe by `id`.
 1. If a write lands during the walk, the next page fails with "recall corpus
-   changed during pagination" (HTTP 409). Restart from the first page with the
-   same `updated_since` and keep the old checkpoint. Restarting from the last
-   entry you received can miss an entry written in the same millisecond.
+   changed during pagination" (HTTP 409). Restart from the first page with
+   every bound from the original walk, `updated_since`, `created_since`, or
+   both, and keep the old checkpoint. Restarting from the last entry you
+   received can miss an entry written in the same millisecond.
 
 A read-only archive from before Recall tracked changes cannot change during a
 walk, so it pages without this check.

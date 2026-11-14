@@ -28,10 +28,10 @@ type RecallListCursor struct {
 
 // ErrStaleRecallPagination reports that the corpus changed between or during
 // the pages of one walk. A cursor cannot say which entries were missed, so the
-// caller starts over from the first page with the walk's original bound.
+// caller starts over from the first page with the walk's original bounds.
 var ErrStaleRecallPagination = errors.New(
 	"recall corpus changed during pagination; restart from the first page " +
-		"with the same updated_since bound, and keep the saved checkpoint " +
+		"with the same original time bound(s), and keep the saved checkpoint " +
 		"until the last page returns",
 )
 
