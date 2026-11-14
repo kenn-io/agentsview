@@ -171,6 +171,7 @@ func TestStoreReadsWhileRowsHeldAcrossReplacement(t *testing.T) {
 	currentReadCtx, cancelCurrentRead := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancelCurrentRead()
 	require.NoError(t, store.queryRowContext(currentReadCtx, `SELECT id FROM sessions`).Scan(&id))
+	require.Equal(t, "new-session", id)
 	require.True(t, current.Next())
 	require.NoError(t, current.Scan(&id))
 	require.Equal(t, "new-session", id)
