@@ -1328,7 +1328,7 @@ test.describe('Command palette', () => {
     const palette = page.locator('.palette-overlay');
     await palette.locator('.palette-input').fill('implement');
     await palette.getByTitle('Select project', { exact: true }).click();
-    await page.getByRole('option', { name: /^agentsview \d+$/ }).first().click();
+    await page.getByRole('option', { name: /^agentsview \S+$/ }).first().click();
     await expect(palette.locator('.palette-item').first()).toBeVisible();
     await palette.getByRole('button', { name: 'All time', exact: true }).click();
     await expect(page.getByRole('radio', { name: 'Calendar', exact: true })).toBeVisible();

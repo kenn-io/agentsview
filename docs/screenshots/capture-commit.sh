@@ -60,7 +60,7 @@ prepared_sha256="$(python3 "$script_dir/prepare.py" prepare \
   --output "$work/prepared")"
 
 CORPUS_MANIFEST="$corpus" \
-CORPUS_SHA256="$(sha256sum "$corpus" | cut -d' ' -f1)" \
+CORPUS_SHA256="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$corpus")" \
 PREPARED_INPUTS="$work/prepared" \
 PREPARED_SHA256="$prepared_sha256" \
 CAPTURE_REVISION="$revision" \
