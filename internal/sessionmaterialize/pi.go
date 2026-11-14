@@ -217,7 +217,7 @@ func checkPiHeaderFile(ctx context.Context, name, id string) error {
 		return err
 	}
 	defer file.Close()
-	_, _, err = piHeader(ctx, file, name, id, 1<<20)
+	_, _, err = piHeader(ctx, file, name, id, 64<<20)
 	return err
 }
 

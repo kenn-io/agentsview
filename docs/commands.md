@@ -2209,7 +2209,7 @@ The Pi checkout is resolved through symlinks, and relative Pi directory
 overrides are resolved from that checkout. Pi files must have a session header
 of version 1–3. Pi-family files with a leading title cannot be opened by the
 verified Pi consumer and are not installed. Stored headers share the 512 MiB
-source limit; fallback discovery scans at most 1 MiB per candidate. A nonunique
+source limit; fallback discovery scans at most 64 MiB per candidate. A nonunique
 source name such as `session.jsonl` is installed using its session ID as the
 filename. For a checkout whose encoded directory exceeds 255 bytes, the file
 goes under a hash-named directory in `sessions/`. Pi's all-sessions list shows

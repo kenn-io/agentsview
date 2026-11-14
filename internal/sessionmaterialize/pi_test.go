@@ -132,7 +132,7 @@ func TestPiSourceLookupRejectsUncertainCandidate(t *testing.T) {
 				}
 				require.ErrorIs(t, err, os.ErrPermission)
 			} else {
-				header := `{"type":"session","extra":"` + strings.Repeat("a", 1<<20) + `","id":"target","cwd":"/old"}` + "\n"
+				header := `{"type":"session","extra":"` + strings.Repeat("a", 64<<20) + `","id":"target","cwd":"/old"}` + "\n"
 				require.NoError(t, os.WriteFile(candidate, []byte(header), 0o600))
 			}
 			cfg := config.Config{InstallationID: "local", LocalMachineName: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentPi: {root}}}
@@ -144,6 +144,24 @@ func TestPiSourceLookupRejectsUncertainCandidate(t *testing.T) {
 			require.ErrorIs(t, err, os.ErrNotExist)
 		})
 	}
+}
+
+func TestPiSourceLookupWithLargeUnrelatedHeader(t *testing.T) {
+	root, dest, cwd := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", dest)
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	t.Setenv("PI_DIR", "")
+	large := `{"type":"session","parentSession":"` + strings.Repeat("a", 1<<20) + `","id":"other","cwd":"/old"}` + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(root, "unrelated.jsonl"), []byte(large), 0o600))
+	target := filepath.Join(root, "target.jsonl")
+	require.NoError(t, os.WriteFile(target, []byte(`{"type":"session","id":"target","cwd":"/old"}`+"\n"), 0o600))
+	stale := filepath.Join(root, "missing.jsonl")
+	cfg := config.Config{InstallationID: "local", LocalMachineName: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentPi: {root}}}
+	session := &db.Session{ID: "pi:target", Agent: "pi", Machine: "local", FilePath: &stale}
+	result, err := Materialize(t.Context(), cfg, session, cwd)
+	require.NoError(t, err)
+	assert.Equal(t, target, result.Source)
+	assert.Equal(t, []string{filepath.Join(dest, "target.jsonl")}, result.Paths)
 }
 
 func TestMaterializePiConfiguredSources(t *testing.T) {
