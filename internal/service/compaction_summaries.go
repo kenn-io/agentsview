@@ -3,11 +3,15 @@ package service
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 )
+
+// RooCode and legacy Kilo mark context-management events as boundaries.
+var compactionExcludedAgents = [...]string{string(parser.AgentRooCode), string(parser.AgentKiloLegacy)}
 
 const (
 	DefaultCompactionSessionLimit = 20
@@ -66,7 +70,7 @@ func CompactionSummaries(ctx context.Context, svc SessionService, req Compaction
 		if err != nil {
 			return out, err
 		}
-		if detail == nil || db.IsCompactionSummaryExcludedAgent(detail.Agent) {
+		if detail == nil || slices.Contains(compactionExcludedAgents[:], detail.Agent) {
 			return out, nil
 		}
 		sessions = append(sessions, detail.Session)
@@ -77,7 +81,7 @@ func CompactionSummaries(ctx context.Context, svc SessionService, req Compaction
 		}
 		out.NextCursor = page.NextCursor
 		for _, session := range page.Sessions {
-			if !db.IsCompactionSummaryExcludedAgent(session.Agent) {
+			if !slices.Contains(compactionExcludedAgents[:], session.Agent) {
 				sessions = append(sessions, session)
 			}
 		}

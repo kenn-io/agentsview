@@ -58,7 +58,7 @@ func newSessionCompactionsCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().String("active-since", "", "Sessions active since this RFC3339 timestamp")
-	cmd.Flags().Int("limit", service.DefaultCompactionSessionLimit, fmt.Sprintf("Sessions per page, 0 uses the default (max %d)", service.MaxCompactionSessionLimit))
+	cmd.Flags().Int("limit", service.DefaultCompactionSessionLimit, fmt.Sprintf("Sessions per page (0: default, max %d)", service.MaxCompactionSessionLimit))
 	cmd.Flags().String("cursor", "", "Resume value; use the same --active-since")
 	return cmd
 }

@@ -425,7 +425,7 @@ func filterToQuery(f service.ListFilter) (*apiclient.GetAPIV1SessionsQuery, erro
 	if f.ActiveSince != "" {
 		parsedActiveSince, err := time.Parse(time.RFC3339, f.ActiveSince)
 		if err != nil {
-			return nil, fmt.Errorf("invalid active_since %q: use RFC3339: %w", f.ActiveSince, err)
+			return nil, err
 		}
 		q.ActiveSince = &parsedActiveSince
 	}

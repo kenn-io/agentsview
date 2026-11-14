@@ -84,7 +84,7 @@ client will see these tools:
 | `search_sessions`             | Full-text search across recorded sessions                                |
 | `list_sessions`               | List recent or filtered sessions                                         |
 | `get_session_overview`        | Fetch metadata and a compact message preview                             |
-| `get_compaction_summaries`    | Read full compaction summaries for a session or sessions active since a timestamp. The limit counts sessions; 0 uses the default of 20. Resume `next_cursor` with the same `active_since`, even when a page has no summaries. Ambiguous older Evener labels appear separately with their session ID and ordinal. |
+| `get_compaction_summaries`    | Read compaction summaries for one or more sessions                       |
 | `get_messages`                | Read paginated message bodies from one session                           |
 | `get_memory_status`           | Report archive, lexical, semantic, and source readiness                  |
 | `search_content`              | Substring, regex, terms, semantic, or hybrid search over session text    |
@@ -102,6 +102,11 @@ client will see these tools:
 | `search_docs`                 | Search the AgentsView guides bundled with this version                   |
 | `get_friction_digest`         | Read a dated Friction Log digest as Markdown or the summary object       |
 | `list_friction_patterns`      | List recurring friction patterns ranked by occurrences                   |
+
+`get_compaction_summaries` accepts a session ID or `active_since` timestamp.
+The limit counts sessions; 0 uses the default of 20. Resume `next_cursor` with
+the same `active_since`, even when a page has no summaries. Ambiguous older
+Evener labels appear separately with their session ID and ordinal.
 
 The two Friction Log tools appear when the backend stores the Friction Log.
 `get_friction_digest` defaults to the latest digest; pass `date` (YYYY-MM-DD)

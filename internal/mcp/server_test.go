@@ -434,10 +434,10 @@ func TestServer_ArchiveFreshnessWarning(t *testing.T) {
 	}
 }
 
-func TestCompactionSummarySchema(t *testing.T) {
+func TestCompactionSummaryTool(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
-	dbtest.SeedSession(t, d, "session", "project")
-	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: "session", Role: "assistant", Content: "summary", IsCompactBoundary: true}}))
+	dbtest.SeedSession(t, d, "codex:session", "project")
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{SessionID: "codex:session", Role: "assistant", Content: "summary", IsCompactBoundary: true}}))
 	srv := newServer(ServeOptions{Service: service.NewDirectBackend(d, nil), Profile: ProfileMemory})
 	st, ct := newInMemoryPair(t, srv)
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
@@ -469,5 +469,5 @@ func TestCompactionSummarySchema(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &out))
 	require.Len(t, out.Summaries, 1)
 	assert.Equal(t, "summary", out.Summaries[0].Content)
-
+	assert.Equal(t, "codex:session", out.Summaries[0].SessionID)
 }

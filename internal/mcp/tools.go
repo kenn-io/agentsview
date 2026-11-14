@@ -1028,7 +1028,7 @@ type compactionSummariesIn struct {
 	SessionID   string `json:"session_id,omitempty" jsonschema:"Session ID."`
 	ActiveSince string `json:"active_since,omitempty" jsonschema:"RFC3339 timestamp."`
 	Cursor      string `json:"cursor,omitempty" jsonschema:"Session cursor; resume with the same active_since."`
-	Limit       int    `json:"limit,omitempty" jsonschema:"Sessions per page; 0 uses the default 20, max 100."`
+	Limit       uint   `json:"limit,omitempty" jsonschema:"Sessions per page; 0 uses the default 20, max 100."`
 }
 
 func (t *toolset) compactionSummaries(ctx context.Context, _ *mcp.CallToolRequest, in compactionSummariesIn) (*mcp.CallToolResult, service.CompactionSummariesResult, error) {
@@ -1039,6 +1039,6 @@ func (t *toolset) compactionSummaries(ctx context.Context, _ *mcp.CallToolReques
 		}
 		in.SessionID = detail.ID
 	}
-	out, err := service.CompactionSummaries(ctx, t.svc, service.CompactionSummariesRequest{SessionID: in.SessionID, ActiveSince: in.ActiveSince, Cursor: in.Cursor, Limit: in.Limit})
+	out, err := service.CompactionSummaries(ctx, t.svc, service.CompactionSummariesRequest{SessionID: in.SessionID, ActiveSince: in.ActiveSince, Cursor: in.Cursor, Limit: int(min(in.Limit, service.MaxCompactionSessionLimit))})
 	return nil, out, err
 }

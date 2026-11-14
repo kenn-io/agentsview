@@ -2201,7 +2201,10 @@ agentsview session label <id> k=v ...    # add or remove labels
 agentsview session parent <id> <parent>  # record the launching session
 ```
 
-For `session compactions`, `--limit` counts sessions per page, not response bytes; `--limit 0` uses the default of 20. Resume `--cursor` with the same `--active-since`, even when a page has no summaries. Ambiguous older Evener labels are reported separately with their session ID and ordinal.
+For `session compactions`, `--limit` counts sessions per page, not response
+bytes; `--limit 0` uses the default of 20. Resume `--cursor` with the same
+`--active-since`, even when a page has no summaries. Ambiguous older Evener
+labels are reported separately with their session ID and ordinal.
 
 `agentsview session commits <id>` lists transcript and Git trailer commits
 linked to a session. The `SOURCE` column distinguishes `transcript` from

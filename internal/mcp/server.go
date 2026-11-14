@@ -143,14 +143,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 	}
 	memoryOnly := opts.Profile == ProfileMemory
 
-	mcp.AddTool(s, &mcp.Tool{Name: ToolGetCompactionSummaries, Description: "Read full compaction summaries for one session_id or sessions active since active_since. Use next_cursor to continue.", Annotations: readOnly, InputSchema: map[string]any{
-		"type": "object", "properties": map[string]any{
-			"session_id":   map[string]any{"type": "string", "description": "Session ID."},
-			"active_since": map[string]any{"type": "string", "description": "RFC3339 timestamp."},
-			"cursor":       map[string]any{"type": "string", "description": "Session cursor; resume with the same active_since."},
-			"limit":        map[string]any{"type": "integer", "minimum": 0, "description": "Sessions per page; 0 uses the default 20, max 100."},
-		},
-	}}, t.compactionSummaries)
+	mcp.AddTool(s, &mcp.Tool{Name: ToolGetCompactionSummaries, Description: "Read full compaction summaries for one session_id or sessions active since active_since. Use next_cursor to continue.", Annotations: readOnly}, t.compactionSummaries)
 
 	if !memoryOnly {
 		addFileReferencesTool(s, t, externalRead)
