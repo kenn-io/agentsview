@@ -58,6 +58,63 @@ afterEach(() => {
 });
 
 describe("SettingsPage", () => {
+  it("writes the selected panel while preserving other parameters", async () => {
+    router.route = "settings";
+    router.params = { source: "example" };
+    settingsService.getApiV1Settings.mockResolvedValue({
+      agent_dirs: {},
+      chart_palette: "agentsview",
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" },
+    });
+    const component = mount(SettingsPage, { target: document.body });
+    try {
+      await tick();
+      await tick();
+      const nav = document.querySelector(".kit-settings__nav")!;
+      const button = [...nav.querySelectorAll("button")].find((item) =>
+        item.textContent?.includes("Tool-result images"),
+      )!;
+      button.click();
+      await tick();
+      expect(router.params).toMatchObject({ panel: "tool-result-images", source: "example" });
+    } finally {
+      unmount(component);
+    }
+  });
+
+  it("follows browser navigation between settings panels", async () => {
+    window.history.replaceState(null, "", "/settings?panel=appearance");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    settingsService.getApiV1Settings.mockResolvedValue({
+      agent_dirs: {},
+      chart_palette: "agentsview",
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" },
+    });
+    const component = mount(SettingsPage, { target: document.body });
+    try {
+      await tick();
+      await tick();
+      window.history.pushState(null, "", "/settings?panel=tool-result-images");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+      await tick();
+      expect(document.querySelector(".settings-panel:not([hidden])")?.textContent).toContain(
+        "Tool-result images",
+      );
+    } finally {
+      unmount(component);
+    }
+  });
+
   it("opens Session Providers from the requested panel", async () => {
     router.params = { panel: "agent-directories" };
     settingsService.getApiV1Settings.mockResolvedValue({

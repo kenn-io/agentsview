@@ -156,8 +156,8 @@ writes keep inline content, and archives that omit tool content write no assets.
 See [image storage](/docs/data/#ingest-time-image-offload) for retries, backups,
 and remote-backend limits.
 
-You can also select **Offload** under **Settings > Tool-result images**. The
-restart notice appears after you save a changed policy.
+You can also select **Offload** under **Settings > Tool-result images**. After
+you save a changed policy, select **Restart now** in the notice to apply it.
 
 ![Tool-result image policy in Settings](/docs/assets/generated/screenshots/settings-archive-content.png)
 

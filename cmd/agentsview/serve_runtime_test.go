@@ -177,6 +177,18 @@ func TestPrepareRunServeRuntimeConfigRestartPreservesConfiguredURLRewrite(t *tes
 	), got.PublicURL)
 	assert.Equal(t, []string{got.PublicURL}, got.PublicOrigins)
 	assert.Equal(t, got.PublicURL, strings.TrimRight(browserURL(got), "/"))
+
+	t.Run("explicit zero with a preferred port", func(t *testing.T) {
+		url := "https://viewer.example.test:0"
+		got, _, err := prepareRunServeRuntimeConfig(t.Context(), config.Config{
+			Host: "127.0.0.1", Port: 0, PortExplicit: true,
+			PublicURL: url, PublicOrigins: []string{url},
+		}, runtimePort, nil)
+		require.NoError(t, err)
+		assert.NotEqual(t, runtimePort, got.Port)
+		assert.Equal(t, fmt.Sprintf("https://viewer.example.test:%d", got.Port), got.PublicURL)
+		assert.Equal(t, []string{got.PublicURL}, got.PublicOrigins)
+	})
 }
 
 func TestWaitForBackendReadyRejectsUnrelatedHTTPListener(t *testing.T) {

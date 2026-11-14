@@ -42,13 +42,18 @@ async function openArchiveContent(page: Page) {
 // Every test that does not measure persistence fulfils the PUT itself.
 async function stubSettingsWrite(page: Page) {
   await page.route("**/api/v1/settings", async (route) => {
-    if (route.request().method() !== "PUT") return route.fallback();
+    const method = route.request().method();
+    if (method !== "PUT") return route.fallback();
     const patch = JSON.parse(route.request().postData() ?? "{}");
     const current = await (await page.request.get("/api/v1/settings")).json();
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ ...current, ...patch }),
+      body: JSON.stringify({
+        ...current,
+        ...patch,
+        restart_required: patch.tool_result_images === "drop",
+      }),
     });
   });
 }

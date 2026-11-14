@@ -2,6 +2,7 @@
   import { SegmentedControl } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import InlineCode from "../shared/InlineCode.svelte";
+  import RestartAction from "./RestartAction.svelte";
   import {
     settings,
     type ToolResultImagesPolicy,
@@ -13,8 +14,6 @@
       { value: "drop", label: m.settings_tool_result_images_drop() },
       { value: "offload", label: m.settings_tool_result_images_offload() },
     ]);
-
-  let restartRequired = $state(false);
 
   // Every locale keeps the command verbatim inside the hint; render it as
   // code by splitting the translated sentence around it. A locale that
@@ -47,11 +46,9 @@
         onchange={async (value) => {
           if (value !== "keep" && value !== "drop" && value !== "offload") return;
           if (value === settings.toolResultImages) return;
-          // A failed write leaves the stored policy alone, so the notice waits
-          // for the save the way AgentDirSettings does.
-          if (await settings.save({ tool_result_images: value })) {
-            restartRequired = true;
-          }
+          // The server reports whether the saved policy still waits for a
+          // restart, so the notice survives a reload.
+          await settings.save({ tool_result_images: value });
         }}
       />
       <p class="setting-hint">
@@ -59,10 +56,8 @@
             >{MIGRATE_IMAGES_COMMAND}</InlineCode
           >{/if}{imagesHint.after}
       </p>
-      {#if restartRequired}
-        <p class="setting-hint" role="status" aria-live="polite">
-          {m.settings_tool_result_images_restart_notice()}
-        </p>
+      {#if settings.restartRequired}
+        <RestartAction notice={m.settings_tool_result_images_restart_notice()} />
       {/if}
     </div>
   </div>

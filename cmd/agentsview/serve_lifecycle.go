@@ -414,7 +414,7 @@ func stopDaemonRuntimeForUpgradeImpl(ctx context.Context,
 		}
 		// A wider bind may also overlap an unrelated listener on the same port.
 		if !reusesEndpoint {
-			if _, err := prepareServeRuntimeConfig(ctx, cfg, serveRuntimeOptions{}); err != nil {
+			if _, err := prepareServeRuntimeConfig(ctx, cfg, serveRuntimeOptions{RequestedPort: cfg.Port}); err != nil {
 				return err
 			}
 		}

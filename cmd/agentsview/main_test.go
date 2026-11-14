@@ -4133,3 +4133,33 @@ func TestNewDaemonIdleTrackerExplicitLifetime(t *testing.T) {
 		assert.False(t, stopped)
 	})
 }
+
+func TestServeLifetimesReleaseDebugLog(t *testing.T) {
+	_, dir := isolateServeTestHome(t)
+	cfg, err := config.Load(nil)
+	require.NoError(t, err)
+	cfg.Host = "127.0.0.1"
+	cfg.Port = 0
+	cfg.NoSync = true
+	original := log.Writer()
+	for range 2 {
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() { done <- runServe(ctx, cfg, serveOptions{}, 0) }()
+		require.Eventually(t, func() bool { return FindDaemonRuntime(dir) != nil }, 30*time.Second, 100*time.Millisecond)
+		cancel()
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(30 * time.Second):
+			require.FailNow(t, "server did not stop")
+		}
+		require.Same(t, original, log.Writer())
+		if runtime.GOOS == "windows" {
+			path := filepath.Join(dir, "debug.log")
+			moved := filepath.Join(dir, "debug-moved.log")
+			require.NoError(t, os.Rename(path, moved))
+			require.NoError(t, os.Remove(moved))
+		}
+	}
+}

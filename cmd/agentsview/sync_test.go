@@ -129,18 +129,22 @@ func newDirectSyncFixture(t *testing.T) (config.Config, *db.DB) {
 	return cfg, database
 }
 
-func isolateDirectCLISources(t *testing.T) {
+func isolateCLISources(t *testing.T, root string) {
 	t.Helper()
-	root := t.TempDir()
-	t.Setenv("HOME", root)
+	setTestHome(t, root)
 	for _, def := range parser.Registry {
 		if def.EnvVar != "" {
-			t.Setenv(def.EnvVar, filepath.Join(root, string(def.Type)))
+			t.Setenv(def.EnvVar, filepath.Join(root, "empty", string(def.Type)))
 		}
 		if def.DefaultRootEnvVar != "" {
-			t.Setenv(def.DefaultRootEnvVar, root)
+			t.Setenv(def.DefaultRootEnvVar, filepath.Join(root, "empty-root", string(def.Type)))
 		}
 	}
+}
+
+func isolateDirectCLISources(t *testing.T) {
+	t.Helper()
+	isolateCLISources(t, t.TempDir())
 }
 
 func TestDoSyncConfiguredFullUsesUnifiedHTTPContributor(t *testing.T) {
