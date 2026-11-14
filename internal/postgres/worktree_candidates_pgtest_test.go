@@ -72,7 +72,7 @@ func seedPGCandidateSessionNoSnapshot(
 // must appear in the combined group.
 func TestPGWorktreeCandidatesArchiveWideMatchesSQLite(t *testing.T) {
 	t.Parallel()
-	const schema = "agentsview_worktree_candidates_test"
+	const schema = pgPushTestSchema
 	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 	const project = "candidate-project"
 	const machine = "host-a.example"
@@ -167,7 +167,7 @@ func TestPGWorktreeCandidatesArchiveWideMatchesSQLite(t *testing.T) {
 
 func TestPGWorktreeCandidatesCollapseObservedParents(t *testing.T) {
 	t.Parallel()
-	push, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_candidate_parents_test")
+	push, local, pg, ctx := newSessionProvenancePushSync(t, pgPushTestSchema)
 	for id, cwd := range map[string]string{
 		"worktree-a": "/srv/repo/.claude/worktrees/run-a",
 		"worktree-b": "/srv/repo/.claude/worktrees/run-b/src",
@@ -198,7 +198,7 @@ func TestPGWorktreeCandidatesCollapseObservedParents(t *testing.T) {
 func TestPGWorktreeCandidatesUseSessionDatabaseGeneration(t *testing.T) {
 	t.Parallel()
 	const (
-		schema        = "agentsview_worktree_candidates_generation_test"
+		schema        = pgPushTestSchema
 		sessionID     = "generation-session"
 		machine       = "host-a.example"
 		oldProject    = "old-project"

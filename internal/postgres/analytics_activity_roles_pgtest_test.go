@@ -19,9 +19,7 @@ import (
 // user rows count toward the total but not the user segment on every backend.
 func TestAnalyticsActivityRoleSplitParity(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 	local := testDB(t)
 	ctx := t.Context()
 

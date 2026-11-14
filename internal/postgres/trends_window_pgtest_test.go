@@ -12,10 +12,9 @@ import (
 
 func TestStoreGetTrendsTermsDateWindowEdges(t *testing.T) {
 	t.Parallel()
-	const schema = "agentsview_trends_window_test"
-	pgURL := testPGURL(t)
+	const schema = pgPushTestSchema
 	syncer, local, _, ctx := newSessionProvenancePushSync(t, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	pgURL := testPGURL(t)
 	dbtest.SeedTrendsWindow(t, local)
 	_, err := syncer.Push(ctx, true, nil)
 	require.NoError(t, err)

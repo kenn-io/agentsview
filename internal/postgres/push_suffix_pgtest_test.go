@@ -67,10 +67,11 @@ func TestPushSuffixPublication(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			const id = "suffix"
-			const schema = "agentsview_suffix_test"
-			url := testPGURL(t)
-			cleanNamedPGSchema(t, url, schema)
-			t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
+			const schema = pgPushTestSchema
+			url := testPGSchemaURL(t, schema)
+			if !takeFreshSchemaCopy(t, url, schema) {
+				cleanNamedPGSchema(t, url, schema)
+			}
 			local := testDB(t)
 			session := db.Session{ID: id, Agent: "claude", Project: "sample", Machine: "machine", MessageCount: 5}
 			require.NoError(t, local.UpsertSession(t.Context(), session))
@@ -171,10 +172,11 @@ func TestPushLegacyVSCodeReplyPin(t *testing.T) {
 	t.Parallel()
 	for _, agent := range []string{"vscode-copilot", "positron"} {
 		t.Run(agent, func(t *testing.T) {
-			const schema = "agentsview_legacy_reply_pin_test"
-			url := testPGURL(t)
-			cleanNamedPGSchema(t, url, schema)
-			t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
+			const schema = pgPushTestSchema
+			url := testPGSchemaURL(t, schema)
+			if !takeFreshSchemaCopy(t, url, schema) {
+				cleanNamedPGSchema(t, url, schema)
+			}
 			local := testDB(t)
 			require.NoError(t, local.UpsertSession(t.Context(), db.Session{ID: "s1", Agent: agent, Project: "project", Machine: "machine", MessageCount: 2}))
 			messages := []db.Message{

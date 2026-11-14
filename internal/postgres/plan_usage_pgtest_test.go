@@ -27,13 +27,15 @@ type planUsagePushFixture struct {
 
 func newPlanUsagePushFixture(t *testing.T, schema string) planUsagePushFixture {
 	t.Helper()
-	pgURL := testPGURL(t)
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, pg.Close()) })
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err)
-	require.NoError(t, EnsureSchema(t.Context(), pg, schema))
+	if !takeFreshSchemaCopy(t, pgURL, schema) {
+		_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
+		require.NoError(t, err)
+		require.NoError(t, EnsureSchema(t.Context(), pg, schema))
+	}
 
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
@@ -88,7 +90,7 @@ func fullPlanUsage() *db.SessionPlanUsage {
 
 func TestPushPlanUsageRoundTrip(t *testing.T) {
 	t.Parallel()
-	f := newPlanUsagePushFixture(t, "agentsview_push_plan_usage_roundtrip")
+	f := newPlanUsagePushFixture(t, usageTestSchema)
 	require.NoError(t, f.local.ReplaceSessionPlanUsage(t.Context(), planUsageRootID, fullPlanUsage()))
 	f.push(t)
 
@@ -105,7 +107,7 @@ func TestPushPlanUsageRoundTrip(t *testing.T) {
 
 func TestPushPlanUsageChangeRepushes(t *testing.T) {
 	t.Parallel()
-	f := newPlanUsagePushFixture(t, "agentsview_push_plan_usage_change")
+	f := newPlanUsagePushFixture(t, usageTestSchema)
 	require.NoError(t, f.local.ReplaceSessionPlanUsage(t.Context(), planUsageRootID, fullPlanUsage()))
 	f.push(t)
 	var updatedBefore time.Time
@@ -133,7 +135,7 @@ func TestPushPlanUsageChangeRepushes(t *testing.T) {
 func TestPGSessionUsageIncludesPlanUsage(t *testing.T) {
 	t.Parallel()
 	t.Run("direct", func(t *testing.T) {
-		f := newPlanUsagePushFixture(t, "agentsview_push_plan_usage_session_usage")
+		f := newPlanUsagePushFixture(t, usageTestSchema)
 		require.NoError(t, f.local.ReplaceSessionPlanUsage(t.Context(), planUsageRootID, fullPlanUsage()))
 		f.push(t)
 		usage, err := f.store.GetSessionUsage(t.Context(), planUsageRootID, false)
@@ -239,6 +241,9 @@ func TestHostedGrandchildUsageRootMapped(t *testing.T) {
 
 func TestHostedReprovisionAddsPlanUsageTable(t *testing.T) {
 	t.Parallel()
+	// An empty database: this test drops a tenant table and tests how
+	// EnsureHostedTenant restores it.
+	testPGURL(t)
 	f := newHostedFixture(t, "tenant-plan-usage-upgrade")
 	_, err := f.admin.ExecContext(t.Context(), `DROP TABLE session_plan_usage`)
 	require.NoError(t, err)

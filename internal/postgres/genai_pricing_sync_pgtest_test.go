@@ -5,8 +5,6 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"fmt"
-	"math/rand/v2"
 	"net"
 	"sync/atomic"
 	"testing"
@@ -30,10 +28,8 @@ import (
 func TestSyncModelPricingComparesGenAIByDigest(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	url := testPGURL(t)
-	schema := fmt.Sprintf("agentsview_genai_digest_%x", rand.Uint64())
-	cleanNamedPGSchema(t, url, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
+	const schema = usageTestSchema
+	url := testPGSchemaURL(t, schema)
 	local := testDB(t)
 	// One model price keeps the push from copying the fallback catalog,
 	// which would swamp the byte count this test measures.

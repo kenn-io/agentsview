@@ -66,7 +66,7 @@ func TestPGFullPushRewritesTranscriptsOnlyWhenRequested(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			syncer, localDB, pg, ctx := newSessionProvenancePushSync(t, "agentsview_transcript_rewrite_test")
+			syncer, localDB, pg, ctx := newSessionProvenancePushSync(t, pgPushTestSchema)
 			seedProvenanceSession(t, localDB, "rewrite-scope", "workstation", "project", "")
 			_, err := syncer.Push(ctx, false, nil)
 			require.NoError(t, err)

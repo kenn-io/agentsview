@@ -27,7 +27,6 @@ func newFrustrationFixture(t *testing.T, schema string) *frustrationFixture {
 	t.Helper()
 	syncer, local, pg, ctx := newSessionProvenancePushSync(t, schema)
 	url := testPGURL(t)
-	t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
 	for _, id := range []string{"one", "two"} {
 		require.NoError(t, local.UpsertSession(ctx, db.Session{ID: id, Agent: "claude", Project: "sample", Machine: "workstation", MessageCount: 1}))
 		require.NoError(t, local.InsertMessages(ctx, []db.Message{{SessionID: id, Ordinal: 0, Role: "user", Content: "this is broken"}}))
@@ -60,7 +59,7 @@ func (f *frustrationFixture) replace(t *testing.T, id, content string) {
 
 func TestFrustrationCountsRulesAndRestart(t *testing.T) {
 	t.Parallel()
-	f := newFrustrationFixture(t, "agentsview_frustration_rules_test")
+	f := newFrustrationFixture(t, "agentsview")
 	result, err := f.open(t).GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
 	require.NoError(t, err)
 	require.Equal(t, 2, result.QualityHealth.Totals.FrustrationMarkerCount)
@@ -96,6 +95,9 @@ func TestFrustrationCountsRulesAndRestart(t *testing.T) {
 }
 
 func TestFrustrationCountsUnavailable(t *testing.T) {
+	// An empty database: the missing-table case repairs the schema with its
+	// own EnsureSchema run, so the schema must not come from a template copy.
+	testPGURL(t)
 	t.Run("restricted reader", func(t *testing.T) {
 		f := newFrustrationFixture(t, "agentsview_frustration_reader_test")
 		if f.versionColumn != "xmin" {
@@ -151,7 +153,7 @@ func TestFrustrationCountsUnavailable(t *testing.T) {
 
 func TestFrustrationCountsDelayedSave(t *testing.T) {
 	t.Parallel()
-	f := newFrustrationFixture(t, "agentsview_frustration_delayed_test")
+	f := newFrustrationFixture(t, "agentsview")
 	store := f.open(t)
 	_, versions, err := store.signalRows(f.ctx, db.AnalyticsFilter{}, f.versionColumn)
 	require.NoError(t, err)
@@ -173,7 +175,7 @@ func TestFrustrationCountsDelayedSave(t *testing.T) {
 
 func TestFrustrationCountsBulkSaves(t *testing.T) {
 	t.Parallel()
-	f := newFrustrationFixture(t, "agentsview_frustration_bulk_test")
+	f := newFrustrationFixture(t, "agentsview")
 	_, err := f.pg.ExecContext(f.ctx, `INSERT INTO sessions (id, machine, project, agent) SELECT 'bulk-' || n, 'test', 'sample', 'claude' FROM generate_series(1, 10000) n`)
 	require.NoError(t, err)
 	rows, err := f.pg.QueryContext(f.ctx, `SELECT id, `+frustrationSessionVersion(f.versionColumn)+` FROM sessions WHERE id LIKE 'bulk-%'`)
@@ -221,7 +223,7 @@ func TestFrustrationCountsBulkSaves(t *testing.T) {
 
 func TestFrustrationEvidenceWithLockedCount(t *testing.T) {
 	t.Parallel()
-	f := newFrustrationFixture(t, "agentsview_frustration_locked_test")
+	f := newFrustrationFixture(t, "agentsview")
 	_, err := f.open(t).GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
 	require.NoError(t, err)
 	_, err = f.pg.ExecContext(f.ctx, `UPDATE session_frustration_counts SET rules_version = 0 WHERE session_id = 'one'`)

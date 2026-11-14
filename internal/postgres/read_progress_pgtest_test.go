@@ -15,15 +15,13 @@ import (
 
 func TestPushSessionTranscriptRevisionRoundTrip(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	const schema = "agentsview_read_progress_test"
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err)
 	require.NoError(t, EnsureSchema(ctx, pg, schema))
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))

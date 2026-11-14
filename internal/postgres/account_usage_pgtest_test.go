@@ -16,10 +16,8 @@ import (
 func TestAccountUsageAgentsPostgresParity(t *testing.T) {
 	t.Parallel()
 	const billingScale = 1_000_000_000
-	const schema = "agentsview_account_usage_parity_test"
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	const schema = usageTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	local := testDB(t)
 	seedUsageParityFixture(t, local)
 	require.NoError(t, local.InsertCursorUsageEvents(t.Context(), []db.CursorUsageEvent{
@@ -107,6 +105,9 @@ func TestAccountUsageAgentsPostgresParity(t *testing.T) {
 func TestAccountUsageAgentMigrationPreservesCursorRows(t *testing.T) {
 	t.Parallel()
 	const schema = "agentsview_account_usage_migration_test"
+	// An empty database: this test rewinds the schema to a legacy shape and
+	// tests how EnsureSchema migrates it.
+	testPGURL(t)
 	_, store := prepareUsageSchema(t, schema)
 	_, err := store.DB().ExecContext(t.Context(), `
 		INSERT INTO cursor_usage_events (occurred_at, model, input_tokens,
@@ -150,6 +151,9 @@ func TestAccountUsageAgentMigrationPreservesCursorRows(t *testing.T) {
 
 func TestHostedTenantUpgradePreservesAccountUsage(t *testing.T) {
 	t.Parallel()
+	// An empty database: this test rewinds the tenant schema to a legacy
+	// shape and tests how EnsureHostedTenant upgrades it.
+	testPGURL(t)
 	f := newHostedFixture(t, "tenant-a")
 	_, err := f.runtime.ExecContext(t.Context(), `
 		INSERT INTO cursor_usage_events (occurred_at, model, input_tokens,
