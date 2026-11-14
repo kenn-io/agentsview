@@ -2186,8 +2186,7 @@ command, and installed or unchanged status. Claude's native home and supported
 environment overrides determine the destination, independently of discovery
 roots. Pi uses its native agent directory, or its configured session directory
 from settings or `PI_CODING_AGENT_SESSION_DIR` (which takes priority). For
-discovery, `PI_DIR` takes precedence over
-`PI_CODING_AGENT_SESSION_DIR`; either
+discovery, `PI_DIR` takes precedence over `PI_CODING_AGENT_SESSION_DIR`; either
 overrides configured discovery roots. Local companions must resolve inside the
 configured root when the transcript is inside it; an externally linked project
 is confined to that project. Remote mirror files must remain inside the mirror
@@ -2215,8 +2214,8 @@ source limit; fallback discovery scans at most 64 MiB per candidate. Malformed P
 settings are ignored with a warning; oversized settings cause materialization to
 fail. A nonunique source name such as `session.jsonl` is installed using its
 session ID as the filename. For a checkout whose encoded directory exceeds 255
-bytes, the file goes under a hash-named directory in `sessions/`. Pi's all-sessions list shows
-it, while the checkout-filtered `/resume` list does not.
+bytes, the file goes under a hash-named directory in `sessions/`. Pi's
+all-sessions list shows it, while the checkout-filtered `/resume` list does not.
 
 An already-running Claude session can attach in that process's existing
 directory. Claude's in-app resume picker can also fall back to a recorded

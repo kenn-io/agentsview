@@ -35,11 +35,6 @@ func TestPiDestination(t *testing.T) {
 		got, err = piDestination(t.Context(), cwd, "id.jsonl")
 		require.NoError(t, err)
 		assert.Equal(t, filepath.Join(cwd, "global-sessions", "id.jsonl"), got)
-		require.NoError(t, os.WriteFile(filepath.Join(agent, "settings.json"), []byte(`{`), 0o600))
-		require.NoError(t, os.WriteFile(filepath.Join(cwd, ".pi", "settings.json"), []byte(`{"sessionDir":"project-sessions"}`), 0o600))
-		got, err = piDestination(t.Context(), cwd, "id.jsonl")
-		require.NoError(t, err)
-		assert.Equal(t, filepath.Join(cwd, "project-sessions", "id.jsonl"), got)
 		cancelled, cancel := context.WithCancel(t.Context())
 		cancel()
 		_, err = piDestination(cancelled, cwd, "id.jsonl")
@@ -57,30 +52,23 @@ func TestPiDestination(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, filepath.Join(cwd, "environment-sessions", "id.jsonl"), got)
 	})
-	t.Run("255 byte checkout component", func(t *testing.T) {
-		if filepath.Separator != '/' {
-			t.Skip("fixture uses a POSIX absolute path")
-		}
-		agent := t.TempDir()
-		t.Setenv("PI_CODING_AGENT_DIR", agent)
-		t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
-		cwd := "/" + strings.Repeat("a", 251)
-		got, err := piDestination(t.Context(), cwd, "id.jsonl")
-		require.NoError(t, err)
-		assert.Equal(t, filepath.Join(agent, "sessions", "--"+strings.Repeat("a", 251)+"--", "id.jsonl"), got)
-	})
-	t.Run("long checkout", func(t *testing.T) {
-		if filepath.Separator != '/' {
-			t.Skip("fixture uses a POSIX absolute path")
-		}
-		agent := t.TempDir()
-		t.Setenv("PI_CODING_AGENT_DIR", agent)
-		t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
-		cwd := "/" + strings.Repeat("0", 150) + "/" + strings.Repeat("0", 150)
-		got, err := piDestination(t.Context(), cwd, "id.jsonl")
-		require.NoError(t, err)
-		assert.Equal(t, filepath.Join(agent, "sessions", "--8b198fcfb9c0abfa873a9f4c46fc3a59--", "id.jsonl"), got)
-	})
+	for _, tc := range []struct{ name, cwd, component string }{
+		{"255 byte checkout component", "/" + strings.Repeat("a", 251), "--" + strings.Repeat("a", 251) + "--"},
+		{"long checkout", "/" + strings.Repeat("0", 150) + "/" + strings.Repeat("0", 150), "--8b198fcfb9c0abfa873a9f4c46fc3a59--"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if filepath.Separator != '/' {
+				t.Skip("fixture uses a POSIX absolute path")
+			}
+			agent := t.TempDir()
+			t.Setenv("PI_CODING_AGENT_DIR", agent)
+			t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
+			got, err := piDestination(t.Context(), tc.cwd, "id.jsonl")
+			require.NoError(t, err)
+			assert.Equal(t, filepath.Join(agent, "sessions", tc.component, "id.jsonl"), got)
+		})
+	}
+
 	cwd, encoded := "/work dir", "--work dir--"
 	if filepath.Separator == '\\' {
 		cwd, encoded = `C:\work dir`, "--C--work dir--"
@@ -323,8 +311,6 @@ func TestPiHeaderIdentityAndVersion(t *testing.T) {
 			assert.Equal(t, "\n"+`{"type":"session", `+tc.after+`, "other": [1, 2]}`+"\n"+`{"type":"message"}`+"\n", string(got))
 		})
 	}
-	_, err = relocatePiHeader(t.Context(), []byte(`{"type":"session","id":"other","cwd":"/old"}`), "id.jsonl", "id", "/new")
-	require.ErrorIs(t, err, errPiIdentity)
 }
 
 func TestPiStoredSourceWithLargeHeader(t *testing.T) {

@@ -82,21 +82,15 @@ func TestPiMaterializeCommandReturnsNativeResume(t *testing.T) {
 	_, err = file.WriteString("{\"type\":\"message\"}\n")
 	require.NoError(t, err)
 	require.NoError(t, file.Close())
-	_, err = executeCommand(newRootCommand(), "session", "materialize", "pi:example", "--cwd", cwd)
-	require.ErrorContains(t, err, "if this is the same session, resume it with:")
-	assert.Contains(t, err.Error(), "pi --session")
-	assert.Contains(t, err.Error(), cwd)
-	assert.Contains(t, err.Error(), path)
-	t.Run("relative checkout", func(t *testing.T) {
-		workdir, err := os.Getwd()
-		require.NoError(t, err)
-		relative, err := filepath.Rel(workdir, cwd)
-		if err != nil {
-			t.Skipf("checkout is on a different volume: %v", err)
-		}
-		_, err = executeCommand(newRootCommand(), "session", "materialize", "pi:example", "--cwd", relative)
-		require.ErrorContains(t, err, result.Command)
-	})
+	workdir, err := os.Getwd()
+	require.NoError(t, err)
+	relative, err := filepath.Rel(workdir, cwd)
+	if err != nil {
+		relative = cwd
+	}
+	_, err = executeCommand(newRootCommand(), "session", "materialize", "pi:example", "--cwd", relative)
+	require.ErrorContains(t, err, "if this is the same session, resume it with: "+result.Command)
+
 	database, err = db.OpenIsolatedContext(t.Context(), filepath.Join(dataDir, "sessions.db"))
 	require.NoError(t, err)
 	after, err := database.GetSessionFull(t.Context(), "pi:example")

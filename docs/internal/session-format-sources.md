@@ -3413,8 +3413,7 @@ schemas keep their existing ordering behavior.
   [session manager](https://github.com/earendil-works/pi/blob/acaa253cc8e3f159e6100b6f3874861b1f0bfc99/packages/coding-agent/src/core/session-manager.ts)
   writes files directly into an explicit session directory; default sessions
   live one encoded project directory below the session root. Agentsview
-  discovers both layouts.
-  Reverified 2026-09-22 against
+  discovers both layouts. Reverified 2026-09-22 against
   [pi-subagents](https://github.com/nicobailon/pi-subagents) v0.70.1 at
   `9b8356d4351747a7108695344e0c26a7c85e84de`: the extension's
   `getSubagentSessionRoot` puts a child session under the parent transcript's
@@ -3488,13 +3487,10 @@ schemas keep their existing ordering behavior.
   stored path or fingerprint hint scans discovered session headers after the
   filename and directory lookups miss. Data version 109 reparses stored native
   Pi sessions to repair lineage edges and fork classification.
-- **Native resume, reverified 2026-11-12:** The
-  [session manager](https://github.com/earendil-works/pi/blob/acaa253cc8e3f159e6100b6f3874861b1f0bfc99/packages/coding-agent/src/core/session-manager.ts),
-  [CLI](https://github.com/earendil-works/pi/blob/acaa253cc8e3f159e6100b6f3874861b1f0bfc99/packages/coding-agent/src/main.ts),
-  and [path normalization](https://github.com/earendil-works/pi/blob/acaa253cc8e3f159e6100b6f3874861b1f0bfc99/packages/coding-agent/src/utils/paths.ts)
-  at `acaa253cc8e3f159e6100b6f3874861b1f0bfc99` support Windows shell drive
-  paths, unlike the older format pin above. Current format version is 3; the
-  first parsed entry must be a session with a string ID. Blank and malformed
+- **Native resume, reverified 2026-11-12:** The pinned session manager, CLI,
+  and path normalizer above support Windows shell drive paths, unlike the older
+  format pin above. Current format version is 3; the first parsed entry must be
+  a session with a string ID. Blank and malformed
   lines can precede that entry, while a parsed title cannot. Pi cannot open an
   file with a missing or non-string ID until materialization writes the
   filename-derived ID. It accepts an empty ID, which materialization also replaces.
