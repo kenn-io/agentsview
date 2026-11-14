@@ -364,6 +364,11 @@ parse failure is then retained in the existing error-skip cache, retried on
 replay as a skip, and re-armed only when the remote path changes again. Recovery
 work is bounded; overflow collapses to one conservative full import.
 
+A remote sync requested from a running daemon, such as `agentsview sync` while
+`agentsview serve` runs, belongs to the daemon. If the requesting client
+disconnects or is killed, the daemon stops sending it progress and finishes the
+import. Only daemon shutdown cancels the run.
+
 Windsurf is a special case. Its state database is sanitized into a curated
 export for every transfer, so the raw tree cannot safely participate in the
 manifest. AgentsView fetches that small export as a separate full archive on
