@@ -271,7 +271,7 @@ func TestPartialActivityUsageRereadsPastClaudePeer(t *testing.T) {
 	require.NoError(t, err)
 	_, err = conn.ExecContext(t.Context(), `UPDATE messages SET claude_message_id = 'message', claude_request_id = 'request' WHERE id = 2`)
 	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id, TIMESTAMP '2026-01-01 12:30:00' AS timestamp, '{"output_tokens":900}' AS token_usage, 900 AS output_tokens) FROM messages WHERE id = 2`)
+	_, err = conn.ExecContext(t.Context(), `INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id, TIMESTAMP '2026-01-01 12:30:00' AS timestamp, '{"output_tokens":900}' AS token_usage, 900 AS output_tokens, 900 AS usage_output_tokens) FROM messages WHERE id = 2`)
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 	store, err := NewStore(t.Context(), path)
