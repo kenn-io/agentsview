@@ -525,7 +525,7 @@ func (m *usageCacheManager) Generation(
 
 	cache, err := m.openPersistentGeneration(ctx, databaseID)
 	if err != nil {
-		log.Printf("warning: opening persistent usage cache failed; using a temporary cache: %v", err)
+		log.Printf("warning: opening persistent usage cache in %s failed; using a temporary cache: %v", filepath.Dir(m.archivePath), err)
 		cache, err = openTemporaryUsageCache(ctx, databaseID)
 		if err != nil {
 			return nil, fmt.Errorf("opening temporary usage cache: %w", err)
@@ -947,7 +947,8 @@ func probeUsageCacheWithBusyTimeout(
 		return probe
 	}
 	probe.RetirementProtocolVersion, _ = strconv.Atoi(retirementProtocolText)
-	if probe.FormatVersion == usageCacheFormatVersion && probe.SourceDatabaseID != "" && probe.RetirementProtocolVersion == usageCacheRetirementProtocolVersion {
+	if probe.FormatVersion == usageCacheFormatVersion && probe.SourceDatabaseID != "" &&
+		probe.RetirementProtocolVersion == usageCacheRetirementProtocolVersion {
 		probe.Compatible, probe.Err = usageCacheSchemaComplete(ctx, database)
 	}
 	return probe
