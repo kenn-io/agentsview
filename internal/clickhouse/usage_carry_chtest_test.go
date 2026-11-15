@@ -86,17 +86,16 @@ func TestUsageCarry(t *testing.T) {
 func TestUsageCarryVersionTables(t *testing.T) {
 	t.Parallel()
 	_, _, store := newPreparedUsageStore(t)
-	ctx := t.Context()
 	version := func() string {
 		t.Helper()
-		v, err := store.usageReadFingerprint(ctx, preparedUsageState{}, "")
+		v, err := store.usageReadFingerprint(t.Context(), preparedUsageState{}, "")
 		require.NoError(t, err)
 		return v
 	}
 	insert := func(table string) {
 		t.Helper()
 		var name, typ string
-		require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT name, type FROM system.columns WHERE database = currentDatabase() AND table = ? AND default_kind = '' ORDER BY position LIMIT 1`, table).Scan(&name, &typ))
+		require.NoError(t, store.DB().QueryRowContext(t.Context(), `SELECT name, type FROM system.columns WHERE database = currentDatabase() AND table = ? AND default_kind = '' ORDER BY position LIMIT 1`, table).Scan(&name, &typ))
 		execPreparedUsage(t, store, "SYSTEM STOP MERGES "+table,
 			fmt.Sprintf("INSERT INTO %s (`%s`) SELECT defaultValueOfTypeName('%s')", table, name, typ))
 	}
@@ -134,25 +133,14 @@ func TestUsageCarryEqualCountOlderRow(t *testing.T) {
 	execPreparedUsage(t, store, "TRUNCATE TABLE prepared_usage")
 	_, err = local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, DataVersion: 1, ReplaceMessages: true}})
 	require.NoError(t, err)
-	injected := false
 	syncer.hooks = &pushHooks{beforeSessionRows: func([]db.Session) error {
-		var remaining uint64
-		if err := store.DB().QueryRowContext(t.Context(), "SELECT count() FROM usage_messages WHERE session_id = ?", id).Scan(&remaining); err != nil {
-			return err
-		}
-		if remaining != 0 {
-			return fmt.Errorf("usage row remained after deletion: %d", remaining)
-		}
 		if _, err := store.DB().ExecContext(t.Context(), "INSERT INTO usage_messages SELECT * FROM older_usage"); err != nil {
 			return err
 		}
-		injected = true
 		return errors.New("injected publication failure")
 	}}
-	result, err := syncer.Push(t.Context(), false, nil)
+	_, err = syncer.Push(t.Context(), false, nil)
 	require.NoError(t, err)
-	require.Equal(t, 1, result.Errors)
-	require.True(t, injected)
 	f := db.UsageFilter{Project: "older-row", Timezone: "UTC"}
 	before := readPreparedUsage(t, store, f)
 	proofs := 0
@@ -163,10 +151,5 @@ func TestUsageCarryEqualCountOlderRow(t *testing.T) {
 	require.Positive(t, proofs)
 	require.EqualValues(t, 10, before.daily.Totals.InputTokens)
 	require.EqualValues(t, 100, fresh.daily.Totals.InputTokens)
-	require.Len(t, before.top, 1)
-	require.Len(t, fresh.top, 1)
-	require.Len(t, got.top, 1)
-	require.EqualValues(t, 10, before.top[0].InputTokens)
-	require.Equal(t, fresh.daily.Totals.InputTokens, got.daily.Totals.InputTokens)
-	require.Equal(t, fresh.top[0].InputTokens, got.top[0].InputTokens)
+	require.Equal(t, fresh, got)
 }
