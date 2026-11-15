@@ -385,6 +385,68 @@ func TestPlanChangedPathsClaudeProcessesOnlyChangedSession(t *testing.T) {
 	assert.Equal(t, "session-05", page.Sessions[0].ID)
 }
 
+// A remote mirror journal lists changed tool-result sidecars as well as
+// transcripts. The Claude parse reads those sidecars, so a changed sidecar
+// must select its owning transcript instead of re-reading every Claude
+// session on the host.
+func TestPlanChangedPathsClaudeToolResultSelectsOwningSession(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "project-a")
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
+	for i := range 12 {
+		path := filepath.Join(projectDir, fmt.Sprintf("session-%02d.jsonl", i))
+		body := testjsonl.NewSessionBuilder().AddClaudeUser(
+			"2026-08-14T10:00:00Z", fmt.Sprintf("message %d", i),
+		).String()
+		require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+	}
+	owner := filepath.Join(projectDir, "session-05.jsonl")
+	subagent := filepath.Join(projectDir, "session-05", "subagents", "agent-a1.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(subagent), 0o755))
+	require.NoError(t, os.WriteFile(subagent, []byte(testjsonl.NewSessionBuilder().
+		AddClaudeUser("2026-08-14T10:00:00Z", "subagent").String()), 0o600))
+	tests := []struct {
+		name  string
+		path  string
+		files []string
+	}{
+		{
+			// Root results are also read by the root's subagents.
+			name:  "session result",
+			path:  filepath.Join(projectDir, "session-05", "tool-results", "out.txt"),
+			files: []string{owner, subagent},
+		},
+		{
+			name: "subagent result",
+			path: filepath.Join(
+				projectDir, "session-05", "subagents", "agent-a1", "tool-results", "out.txt",
+			),
+			files: []string{subagent},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, os.MkdirAll(filepath.Dir(tc.path), 0o755))
+			require.NoError(t, os.WriteFile(tc.path, []byte("output\n"), 0o600))
+			database := dbtest.OpenTestDB(t)
+			engine := NewEngine(t.Context(), database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
+				Machine:   "remote",
+			})
+			t.Cleanup(engine.Close)
+
+			plan, err := engine.PlanChangedPathsContext(t.Context(), []string{tc.path})
+			require.NoError(t, err)
+			paths := make([]string, 0, len(plan.Files))
+			for _, file := range plan.Files {
+				paths = append(paths, file.Path)
+			}
+			assert.Equal(t, tc.files, paths)
+			assert.Empty(t, plan.FallbackProviders)
+		})
+	}
+}
+
 func TestPlanChangedPathsCodexIndexUsesStoredArchivedDuplicate(t *testing.T) {
 	root := t.TempDir()
 	liveRoot := filepath.Join(root, "sessions")

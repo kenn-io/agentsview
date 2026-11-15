@@ -116,7 +116,7 @@ func (s *icodemateCLISourceSet) Parse(
 // sourcesForToolResultPath maps a changed path under a per-session
 // tool-results directory back to the transcripts whose parses read it: the
 // owning session plus, for a root session's results, every subagent
-// transcript beneath it. It is consulted only for specs with sidecarSources.
+// transcript beneath it.
 func (s claudeSourceSet) sourcesForToolResultPath(
 	root, changedPath string,
 ) ([]SourceRef, error) {

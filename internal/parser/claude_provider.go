@@ -522,10 +522,12 @@ type claudeLayoutSpec struct {
 	watchGlobs    []string
 	listFiles     func(string) []DiscoveredFile
 	// sidecarSources includes persisted tool-result companions in watch
-	// coverage, changed-path mapping, and source fingerprints. The Claude
-	// provider keeps this off: its stored fingerprints hash only the
-	// transcript, and switching to composite hashes would invalidate every
-	// archived Claude fingerprint and force a full reparse.
+	// coverage and source fingerprints. The Claude provider keeps this off:
+	// its stored fingerprints hash only the transcript, and switching to
+	// composite hashes would invalidate every archived Claude fingerprint and
+	// force a full reparse. Changed-path mapping resolves a companion to its
+	// owning transcripts for every spec, because both parses read companions
+	// and a remote mirror journal lists them.
 	sidecarSources bool
 }
 
@@ -728,10 +730,8 @@ func (s claudeSourceSet) SourcesForChangedPath(
 		if !s.hasRoot(root) {
 			return nil, nil
 		}
-		if s.spec.sidecarSources {
-			if sources, err := s.sourcesForToolResultPath(root, req.Path); err != nil || len(sources) > 0 {
-				return sources, err
-			}
+		if sources, err := s.sourcesForToolResultPath(root, req.Path); err != nil || len(sources) > 0 {
+			return sources, err
 		}
 		source, ok := s.sourceForChangedPath(root, req.Path, allowMissing)
 		if !ok {
@@ -740,10 +740,8 @@ func (s claudeSourceSet) SourcesForChangedPath(
 		return []SourceRef{source}, nil
 	}
 	for _, root := range s.roots {
-		if s.spec.sidecarSources {
-			if sources, err := s.sourcesForToolResultPath(root, req.Path); err != nil || len(sources) > 0 {
-				return sources, err
-			}
+		if sources, err := s.sourcesForToolResultPath(root, req.Path); err != nil || len(sources) > 0 {
+			return sources, err
 		}
 		source, ok := s.sourceForChangedPath(root, req.Path, allowMissing)
 		if ok {
