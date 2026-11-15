@@ -66,6 +66,28 @@ func TestSearchKeptCJKAvailability(t *testing.T) {
 	require.EqualValues(t, 2, loads.Load())
 }
 
+func TestSearchKeptFirstMessageEdit(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	session := Session{ID: "session", Project: "project", Machine: defaultMachine, Agent: defaultAgent, MessageCount: 1, FirstMessage: new("needle")}
+	require.NoError(t, d.UpsertSession(ctx, session))
+	insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "other"})
+	var loads atomic.Int32
+	d.searchKept.Size = func(SearchPage) int64 { loads.Add(1); return 1 }
+	filter := SearchFilter{Query: "needle"}
+	page, err := d.Search(ctx, filter)
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	_, err = d.Search(ctx, filter)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, loads.Load())
+	session.FirstMessage = new("other")
+	require.NoError(t, d.UpsertSession(ctx, session))
+	page, err = d.Search(ctx, filter)
+	require.NoError(t, err)
+	require.Empty(t, page.Results)
+}
+
 func TestSearchKeptSearchableEdits(t *testing.T) {
 	dialogue := func(content string, text *string, messagesOnly bool) func(*testing.T, *DB) {
 		return func(t *testing.T, d *DB) {
