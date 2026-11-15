@@ -1045,6 +1045,9 @@ jobs:
           POSTGRES_USER: agentsview_test
           POSTGRES_PASSWORD: agentsview_test_password
           POSTGRES_DB: agentsview_test
+          # Lock memory sizes how many tests run at once; 256 allows 12
+          # (see docs/agents/storage.md).
+          POSTGRES_INITDB_ARGS: -c max_locks_per_transaction=256
         ports:
           - 5433:5432
         # PG18 keeps its data under /var/lib/postgresql/18/docker. The suite
