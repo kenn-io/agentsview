@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -41,12 +40,10 @@ const (
 const (
 	legacyGoalContextPrefix        = "<goal_context>"
 	codexInternalContextTagPrefix  = "<codex_internal_context"
-	goalContextSourceAttr          = `source="goal"`
 	goalContextSourceAttrSQLPrefix = ` source="goal"`
 )
 
-var goalContextSourceAttrRe = regexp.MustCompile(`(?:^|\s)` +
-	regexp.QuoteMeta(goalContextSourceAttr) + `(?:\s|/|$)`)
+var goalContextWhitespace = strings.NewReplacer("\t", " ", "\n", " ", "\v", " ", "\f", " ", "\r", " ")
 
 // IsGoalContextPrefixed reports whether a user-role message is a legacy
 // Codex /goal continuation wrapper that may already be stored in older
@@ -61,7 +58,13 @@ func IsGoalContextPrefixed(content, role string) bool {
 	}
 	if strings.HasPrefix(trimmed, codexInternalContextTagPrefix) {
 		openTag, _, ok := strings.Cut(trimmed, ">")
-		return ok && goalContextSourceAttrRe.MatchString(openTag)
+		if !ok {
+			return false
+		}
+		openTag = goalContextWhitespace.Replace(openTag + ">")
+		return strings.Contains(openTag, goalContextSourceAttrSQLPrefix+" ") ||
+			strings.Contains(openTag, goalContextSourceAttrSQLPrefix+">") ||
+			strings.Contains(openTag, goalContextSourceAttrSQLPrefix+"/>")
 	}
 	return false
 }
@@ -92,7 +95,8 @@ func PostgresSystemPrefixSQLWithoutGuard(contentCol, roleCol string) string {
 	return systemPrefixSQL(contentCol, roleCol, systemPrefixPostgres, false)
 }
 
-// DuckDBSystemPrefixSQL is the DuckDB form of SystemPrefixSQL.
+// DuckDBSystemPrefixSQL is the DuckDB form of SystemPrefixSQL. Tests use it
+// to check stored DuckDB verdicts against the original read-time rule.
 func DuckDBSystemPrefixSQL(contentCol, roleCol string) string {
 	return systemPrefixSQL(contentCol, roleCol, systemPrefixDuckDB, false)
 }
@@ -281,7 +285,8 @@ const systemPrefixTrimCutset = " \t\n\v\f\r" +
 // message identified by a SystemMsgPrefixes prefix. It is the Go equivalent
 // of SystemPrefixSQL for callers that filter in Go rather than SQL: only
 // user-role messages match, and leading whitespace is trimmed with the same
-// cutset before the case-sensitive prefix comparison.
+// cutset before the case-sensitive prefix comparison. Changes to its verdicts
+// require a DuckDB SchemaVersion bump to rebuild stored classifications.
 func IsSystemPrefixed(content, role string) bool {
 	if role != "user" {
 		return false

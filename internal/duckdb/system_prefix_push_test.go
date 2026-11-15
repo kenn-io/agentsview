@@ -35,6 +35,7 @@ func TestSystemPrefixPush(t *testing.T) {
 		{"<system-reminder>broken", "user", false},
 		{"<goal_context>goal</goal_context>", "user", true},
 		{"<codex_internal_context source=\"goal\">goal", "user", true},
+		{"<codex_internal_context source=\"goal\"/other>goal", "user", false},
 		{"<task-notification>task", "assistant", false},
 	}
 	msgs := make([]db.Message, len(cases))
@@ -71,8 +72,36 @@ func TestSystemPrefixPush(t *testing.T) {
 }
 
 func TestSystemPrefixRuleVersion(t *testing.T) {
-	got := fmt.Sprintf("%x", sha256.Sum256([]byte(db.DuckDBSystemPrefixSQL("c", "r"))))
-	require.Equal(t, "5ea07257a66f4605c2be0cc001efe601b44ff590aa74d1f6156a1d7b4b4ac78b", got, "system-prefix rules changed; bump SchemaVersion")
+	// Keep this corpus and version together: changing a verdict needs a mirror
+	// rebuild and fresh Trends parts, even if the SQL oracle is unchanged.
+	inputs := []string{
+		"", "ordinary", "<task-notification>", "<TASK-NOTIFICATION>",
+		"<system-reminder>x</system-reminder>",
+		"<system-reminder>x</system-reminder>ordinary",
+		"<system-reminder>x</system-reminder><task-notification>",
+		"<system-reminder>x</system-reminder><system-reminder>y</system-reminder>",
+		"<system-reminder>broken", "<goal_context>goal",
+		`<codex_internal_context source="goal">`,
+		`<codex_internal_context source="goal"/>`,
+		`<codex_internal_context source="goal"/other>`,
+		`<codex_internal_context data-source="goal">`,
+		`<codex_internal_context source="goal"`,
+		"<codex_internal_context\vsource=\"goal\">",
+	}
+	for _, prefix := range db.SystemMsgPrefixes {
+		inputs = append(inputs, prefix)
+	}
+	for _, space := range " \t\n\v\f\r\u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff" {
+		inputs = append(inputs, string(space)+"<task-notification>")
+	}
+	hash := sha256.New()
+	fmt.Fprintln(hash, SchemaVersion)
+	for _, content := range inputs {
+		for _, role := range []string{"user", "assistant"} {
+			fmt.Fprintf(hash, "%q %q %t\n", content, role, db.IsSystemPrefixed(content, role))
+		}
+	}
+	require.Equal(t, "e6b98b1005cc3b61a2fb51711a858784803ff72ecdc1c4fe524ca6f5851053ba", fmt.Sprintf("%x", hash.Sum(nil)), "system-prefix rules changed; bump SchemaVersion and update this digest")
 }
 
 func TestSystemPrefixSearchAndTrends(t *testing.T) {
@@ -100,4 +129,16 @@ func TestSystemPrefixSearchAndTrends(t *testing.T) {
 	trends, err := store.GetTrendsTerms(t.Context(), db.AnalyticsFilter{From: "2026-05-01", To: "2026-05-01", Timezone: "UTC"}, terms, "day")
 	require.NoError(t, err)
 	require.Equal(t, 1, trends.Series[0].Total)
+}
+
+func TestSearchRetainsMalformedGoalContext(t *testing.T) {
+	store := newUnitsStore(t, []db.SessionBatchWrite{{
+		Session:     unitSession("malformed-goal", 1),
+		Messages:    []db.Message{unitMsg("malformed-goal", 0, "user", `<codex_internal_context source="goal"/other> uniqueparityterm`, false, false)},
+		DataVersion: 1, ReplaceMessages: true,
+	}})
+	page, err := store.Search(t.Context(), db.SearchFilter{Query: "uniqueparityterm", Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	require.Equal(t, "malformed-goal", page.Results[0].SessionID)
 }

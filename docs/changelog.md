@@ -40,6 +40,10 @@ The latest release is
 
 **Improvements**
 
+- Search and cold Trends visits open faster with DuckDB. After upgrading, run
+  `agentsview replica duckdb push` on the mirror's owning machine to rebuild
+  it before serving it.
+
 - Native PostgreSQL serving starts filling the Usage cache at launch.
 
 - The Usage page opens faster on ClickHouse and DuckDB mirrors. On a
