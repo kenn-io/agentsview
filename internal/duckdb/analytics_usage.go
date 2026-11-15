@@ -108,9 +108,6 @@ func duckAnalyticsMessageTimeExists(
 
 func (s analyticsSQL) VisitSessionIDSets(ctx context.Context, ids []string, visit func(ctx context.Context, idSet string, args []any) error) error {
 	// DuckDB binds the full selection as a single list.
-	if len(ids) == 0 {
-		return nil
-	}
 	return visit(ctx, "(SELECT unnest(?))", []any{ids})
 }
 

@@ -25,6 +25,7 @@ func (s *Store) analytics() *readbase.Analytics {
 }
 
 func (s analyticsSQL) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	observeAnalyticsQuery(query)
 	return s.store.queryContext(ctx, query, args...)
 }
 

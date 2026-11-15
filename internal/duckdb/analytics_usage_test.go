@@ -2091,24 +2091,23 @@ func TestDuckAnalyticsLargeSessionSelection(t *testing.T) {
 			visit := func(context.Context, string, []any) error { calls++; return nil }
 			require.NoError(t, tc.visit(ctx, ids, visit))
 			assert.Equal(t, tc.want, calls)
-			calls = 0
-			require.NoError(t, tc.visit(ctx, nil, visit))
-			assert.Zero(t, calls)
 		})
 	}
 	filter := db.AnalyticsFilter{From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", Project: "included"}
-	summary, err := store.GetAnalyticsSummary(ctx, filter)
-	require.NoError(t, err)
-	assert.Equal(t, 901, summary.TotalSessions)
-	assert.Equal(t, []string{"model-a", "model-z"}, summary.Models)
 	queries := 0
 	previousObserver := analyticsQueryObserver
 	analyticsQueryObserver = func(query string) {
-		if strings.Contains(query, "FROM tool_calls tc") {
+		if strings.Contains(query, "SELECT DISTINCT model") || strings.Contains(query, "FROM tool_calls tc") {
 			queries++
 		}
 	}
 	t.Cleanup(func() { analyticsQueryObserver = previousObserver })
+	summary, err := store.GetAnalyticsSummary(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, 901, summary.TotalSessions)
+	assert.Equal(t, []string{"model-a", "model-z"}, summary.Models)
+	assert.Equal(t, 1, queries)
+	queries = 0
 	tools, err := store.GetAnalyticsTools(ctx, filter)
 	require.NoError(t, err)
 	assert.Equal(t, 1, queries)
