@@ -95,3 +95,46 @@ func TestSearchKeptReadOnlyBypassesCache(t *testing.T) {
 	}
 	require.Zero(t, loads.Load())
 }
+
+func TestSearchKeptImageTextPreservesAnalytics(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
+	insertSession(t, d, "image", "project")
+	content := testInlineImageContent()
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	var loads atomic.Int32
+	d.analyticsKept.Size = func(any) int64 { loads.Add(1); return 1 }
+	before, err := d.GetAnalyticsTools(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	identity, err := ocr.NewIdentity("test", "model", "revision")
+	require.NoError(t, err)
+	require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "invoice", false))
+	after, err := d.GetAnalyticsTools(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+	require.EqualValues(t, 1, loads.Load())
+}
+
+func TestSearchKeptCJKAvailability(t *testing.T) {
+	if !simpleFTSRuntimeConfig.available() {
+		t.Skip("simple FTS runtime is not installed")
+	}
+	d := testDB(t)
+	ctx := t.Context()
+	seedSearchSession(t, d, "chinese", "project", [][2]string{{"user", "法国的首都是巴黎。"}})
+	require.True(t, d.HasCJKFTS(ctx))
+	var loads atomic.Int32
+	d.searchKept.Size = func(SearchPage) int64 { loads.Add(1); return 1 }
+	filter := SearchFilter{Query: "巴黎"}
+	page, err := d.Search(ctx, filter)
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE stats SET value = 'stale' WHERE key = ?`, cjkFTSFingerprintStatsKey)
+	require.NoError(t, err)
+	require.False(t, d.HasCJKFTS(ctx))
+	page, err = d.Search(ctx, filter)
+	require.NoError(t, err)
+	require.Empty(t, page.Results)
+	require.EqualValues(t, 2, loads.Load())
+}

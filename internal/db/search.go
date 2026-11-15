@@ -408,19 +408,15 @@ func (db *DB) Search(
 	if err != nil {
 		return db.search(ctx, f)
 	}
-	id, err := db.GetDatabaseID(ctx)
+	version, err := db.keptAnalyticsVersion(ctx)
 	if err != nil {
 		return db.search(ctx, f)
 	}
-	revision, err := db.UsageChangeRevision(ctx)
+	imageRevision, err := db.archiveJournalRevision(ctx, archiveMetadataImageTextRevisionKey, "image text")
 	if err != nil {
 		return db.search(ctx, f)
 	}
-	analyticsRevision, err := db.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
-	if err != nil {
-		return db.search(ctx, f)
-	}
-	return db.searchKept.Do(ctx, string(key), fmt.Sprintf("%s|%d|%d", id, revision, analyticsRevision), func(ctx context.Context) (SearchPage, error) {
+	return db.searchKept.Do(ctx, string(key), fmt.Sprintf("%s|%d", version, imageRevision), func(ctx context.Context) (SearchPage, error) {
 		return db.search(ctx, f)
 	})
 }

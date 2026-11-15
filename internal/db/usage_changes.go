@@ -10,6 +10,7 @@ const (
 	archiveMetadataUsageChangeRevisionKey     = "usage_change_revision"
 	archiveMetadataUsagePricingRevisionKey    = "usage_pricing_revision"
 	archiveMetadataAnalyticsChangeRevisionKey = "analytics_change_revision"
+	archiveMetadataImageTextRevisionKey       = "image_text_revision"
 )
 
 const counterTemplate = `
@@ -25,6 +26,7 @@ var usageChangeJournalTriggerDropsSQL, usageChangeJournalTriggerSQL = usageChang
 func usageChangeJournalSQL() (string, string) {
 	counterBody := strings.ReplaceAll(counterTemplate, "{{counter}}", archiveMetadataUsageChangeRevisionKey)
 	analyticsCounterBody := strings.ReplaceAll(counterTemplate, "{{counter}}", archiveMetadataAnalyticsChangeRevisionKey)
+	imageTextCounterBody := strings.ReplaceAll(counterTemplate, "{{counter}}", archiveMetadataImageTextRevisionKey)
 	const pricingRevisionBody = `
  INSERT INTO archive_metadata (key, value)
   VALUES ('usage_pricing_revision', (
@@ -48,6 +50,8 @@ func usageChangeJournalSQL() (string, string) {
 			body = strings.ReplaceAll(sessionBody, "{{session_id}}", sessionID)
 		}
 		switch table {
+		case "image_text_cache", "image_text_occurrences":
+			body = imageTextCounterBody
 		case "model_pricing", "model_pricing_bands", "genai_pricing":
 			body += pricingRevisionBody
 		}
@@ -75,11 +79,11 @@ func usageChangeJournalSQL() (string, string) {
 		changes[i] = "OLD." + column + " IS NOT NEW." + column
 	}
 	add("trg_sessions_analytics_change_update", "UPDATE OF "+strings.Join(columns, ", "), "sessions", strings.Join(changes, " OR "), "", true)
-	add("trg_image_text_cache_analytics_insert", "INSERT", "image_text_cache", "", "", true)
-	add("trg_image_text_cache_analytics_delete", "DELETE", "image_text_cache", "", "", true)
-	add("trg_image_text_cache_analytics_update", "UPDATE OF text, succeeded", "image_text_cache", "OLD.text IS NOT NEW.text OR OLD.succeeded IS NOT NEW.succeeded", "", true)
-	add("trg_image_text_occurrences_analytics_insert", "INSERT", "image_text_occurrences", "", "", true)
-	add("trg_image_text_occurrences_analytics_delete", "DELETE", "image_text_occurrences", "", "", true)
+	add("trg_image_text_cache_search_insert", "INSERT", "image_text_cache", "", "", true)
+	add("trg_image_text_cache_search_delete", "DELETE", "image_text_cache", "", "", true)
+	add("trg_image_text_cache_search_update", "UPDATE OF text, succeeded", "image_text_cache", "OLD.text IS NOT NEW.text OR OLD.succeeded IS NOT NEW.succeeded", "", true)
+	add("trg_image_text_occurrences_search_insert", "INSERT", "image_text_occurrences", "", "", true)
+	add("trg_image_text_occurrences_search_delete", "DELETE", "image_text_occurrences", "", "", true)
 	add("trg_messages_analytics_change_length", "UPDATE OF content_length", "messages", "OLD.content_length IS NOT NEW.content_length", "", true)
 	add("trg_tool_calls_analytics_change_delete", "DELETE", "tool_calls", "", "", true)
 	columns = []string{"session_id", "message_id", "category", "tool_name", "observed_outcome", "observed_repeat", "sequence_ending"}

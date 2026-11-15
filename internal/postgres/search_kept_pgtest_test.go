@@ -72,3 +72,32 @@ func TestSearchKeptStandbyReadsFresh(t *testing.T) {
 	require.Len(t, page.Results, 1)
 	require.Contains(t, page.Results[0].Snippet, "second")
 }
+
+func TestSearchKeptMessagePushInvalidates(t *testing.T) {
+	local, syncer, store := newUsageJournalFixture(t)
+	ctx := t.Context()
+	write := func(content string) {
+		t.Helper()
+		require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "session", Project: "project", Machine: "device", Agent: "claude", MessageCount: 1}))
+		require.NoError(t, local.ReplaceSessionMessages(ctx, "session", []db.Message{{SessionID: "session", Role: "user", Content: content}}))
+		pgKeptPush(t, syncer, false)
+	}
+	write("needle first")
+	filter := db.SearchFilter{Query: "needle"}
+	for range 2 {
+		page, err := store.Search(ctx, filter)
+		require.NoError(t, err)
+		require.Len(t, page.Results, 1)
+		require.Contains(t, page.Results[0].Snippet, "first")
+	}
+	var before time.Time
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT updated_at FROM sessions WHERE id='session'`).Scan(&before))
+	write("needle second")
+	var after time.Time
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT updated_at FROM sessions WHERE id='session'`).Scan(&after))
+	require.True(t, after.After(before))
+	page, err := store.Search(ctx, filter)
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	require.Contains(t, page.Results[0].Snippet, "second")
+}
