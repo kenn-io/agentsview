@@ -281,18 +281,17 @@ func (s analyticsSQL) VisitSkills(ctx context.Context, f db.AnalyticsFilter, ids
 		from, to := readbase.AnalyticsWindowBounds(f)
 		windowPred, windowArgs := duckAnalyticsMessageWindowPred("m.timestamp", from, to)
 		args = append(args, windowArgs...)
-		query := `SELECT tc.session_id, TRIM(COALESCE(tc.skill_name, '')),
+		rows, qErr := s.QueryContext(ctx, `SELECT tc.session_id, TRIM(COALESCE(tc.skill_name, '')),
 				COUNT(*), MAX(m.timestamp)
 				FROM tool_calls tc
 				LEFT JOIN messages m
 					ON m.session_id = tc.session_id
 					AND m.id = tc.message_id
-				WHERE tc.session_id IN ` + ph + `
+				WHERE tc.session_id IN `+ph+`
 					AND TRIM(COALESCE(tc.skill_name, '')) != ''
-					` + readbase.AnalyticsAndClause(modelPred) + readbase.AnalyticsAndClause(windowPred) + `
+					`+readbase.AnalyticsAndClause(modelPred)+readbase.AnalyticsAndClause(windowPred)+`
 				GROUP BY tc.session_id, TRIM(COALESCE(tc.skill_name, '')),
-					date_trunc('minute', m.timestamp)`
-		rows, qErr := s.QueryContext(ctx, query, args...)
+					date_trunc('minute', m.timestamp)`, args...)
 		if qErr != nil {
 			return qErr
 		}
