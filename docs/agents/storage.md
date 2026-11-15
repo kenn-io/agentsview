@@ -1542,6 +1542,10 @@ own metadata, which is why the docs below call the database a mirror.
   Add every new table a session push rewrites to that list. Compaction
   failures are logged and never fail the push. See
   [Compaction after a large rewrite](../internal/clickhouse-mirror.md#compaction-after-a-large-rewrite).
+- ClickHouse cannot change `index_granularity` or other read-only table
+  settings on an existing table. Changing one means rebuilding the table
+  without losing rows, as `rebuildUsageSnapshots` does; see
+  [Snapshot table granularity](../internal/clickhouse-mirror.md#snapshot-table-granularity).
 - Every mirrored table is `ReplacingMergeTree(push_version)`. Every connection
   sets `final = 1` and, unless the URL sets it, `max_threads = 8`. Do not
   write `FINAL` in query text. One exception: a lookup may collect sort keys

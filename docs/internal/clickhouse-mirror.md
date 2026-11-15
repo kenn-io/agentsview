@@ -312,9 +312,10 @@ On a copy of production's tables with their stored copies (merges stopped
 while copying, then started on every table as on the server), compaction took
 233 s on a machine that runs production queries 2.4x to 3x faster:
 `tool_result_events` 79 s (13.1 GiB to 2.0 GiB), `usage_session_snapshots`
-133 s (1.11 GiB to 217 MiB), `messages` 13 s (6.88 GiB to 797 MiB, after
-background merges had started on it), and under 5 s for each other table. Expect
-about 10 minutes on the production server. Cold pages, the first request after
+133 s (1.11 GiB to 217 MiB, with the one-row granules described below),
+`messages` 13 s (6.88 GiB to 797 MiB, after background merges had started on
+it), and under 5 s for each other table. Expect about 10 minutes on the
+production server. Cold pages, the first request after
 a serve restart and the median of three:
 
 | Page                        | Copies (s) | Compacted (s) | Speed-up |
@@ -328,6 +329,73 @@ a serve restart and the median of three:
 
 Usage reads `prepared_usage`, a plain `MergeTree` without stored copies, and a
 one-year Activity report spends most of its time in Go, so neither changes much.
+
+### Snapshot table granularity
+
+Releases before this change created `usage_session_snapshots` with
+`index_granularity = 1`, one row per granule. A merge reads a part one granule
+at a time, so every merge of that table processed one-row blocks through each
+of its columns and array substreams. The merge was CPU-bound and far slower per
+byte than any other table: production's compaction merge of about 505,000 rows
+took 437 s, 407 s of it CPU, and loaded 19.2 million marks.
+
+The table now uses ClickHouse's default granularity (8,192 rows, with each
+granule capped at 10 MiB, about 850 snapshot rows). On a copy of production's
+snapshots, four versions of 114,792 sessions (459,168 rows):
+
+| Granularity | `OPTIMIZE ... FINAL` (s) | Speed-up | Insert of 152,094 rows (s) | Speed-up |
+| ----------- | ------------------------ | -------- | -------------------------- | -------- |
+| 1           | 166.8                    | 1.0x     | 16.6                       | 1.0x     |
+| 64          | 4.7                      | 35x      | 4.0                        | 4.2x     |
+| 8192        | 2.6                      | 64x      | 3.3                        | 5.0x     |
+
+Reads of the compacted copy, median of three with `final = 1` and
+`max_threads = 8`:
+
+| Read                                    | Granularity 1 (ms) | Default (ms) | Speed-up |
+| --------------------------------------- | ------------------ | ------------ | -------- |
+| Prepared usage refresh query, all rows  | 1539               | 625          | 2.5x     |
+| Snapshot stamp                          | 32                 | 9            | 3.6x     |
+| Revisions of 2,000 changed sessions     | 21                 | 5            | 4.2x     |
+| Prepared rows of 2,000 changed sessions | 224                | 162          | 1.4x     |
+| Prepared rows of 50 changed sessions    | 36                 | 61           | 0.59x    |
+
+Only reads of a few sessions slow down, because each reads a whole granule. A
+granularity of 64 kept those reads as they were, but merged half as fast and did
+not speed up full scans.
+
+ClickHouse cannot change `index_granularity` on an existing table, so the
+schema step rebuilds a table it finds with one-row granules
+(`rebuildUsageSnapshots`):
+
+1. It creates `usage_session_snapshots_rebuild` with the old table's columns,
+   including the `MATERIALIZED` expressions that table was created with, and
+   the default granularity. The fixed name is the lock: `CREATE TABLE` fails
+   when it exists, so one process rebuilds at a time.
+2. It copies every row, older versions included, with the stored values of the
+   `MATERIALIZED` columns (`insert_allow_materialized_columns`), so nothing is
+   recomputed.
+3. It deletes the copied rows the old table no longer holds and copies the rows
+   it gained, which covers pushes from other processes during the copy.
+4. It swaps the tables with `EXCHANGE TABLES`, so reads and pushes always find
+   a complete table.
+5. It copies the rows a push wrote to the old table since step 3, then drops the
+   old table.
+
+On 140,912 production rows the copy took 1.4 s and the checks in steps 3 and 5
+under 0.5 s on the faster test machine. A write in the instant between step 5's
+copy and the swap finishing can be lost, and a delete in the instant between
+step 3 and the swap can come back; the next full push repairs either.
+
+A rebuild table under an hour old belongs to another process, before or after
+its swap, and the schema step leaves both tables alone. An older one belongs to
+a process that stopped: before the swap the schema step drops it and rebuilds;
+after the swap it only drops it, since copying its rows that late could bring
+back sessions deleted since. `EXCHANGE TABLES` keeps each table's metadata
+time, so the rebuild rewrites the old table's comment just before the swap to
+make the swapped-out table look as new as the swap. A database that cannot swap
+tables keeps one-row granules: two renames would leave a moment with no
+snapshot table.
 
 ## Stored usage prices
 
