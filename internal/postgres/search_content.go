@@ -370,7 +370,7 @@ func (s *Store) scanPGContentMatches(
 	ctx context.Context, query string, args []any, limit, cursor int,
 	makeSnippet func(body string) string,
 ) (db.ContentSearchPage, error) {
-	rows, err := s.pg.QueryContext(ctx, query, args...)
+	rows, err := s.pg.QueryContext(ctx, s.latin1SearchSQL(query), args...)
 	if err != nil {
 		return db.ContentSearchPage{}, fmt.Errorf("pg content search: %w", err)
 	}
@@ -744,6 +744,7 @@ func (s *Store) searchContentWordsPG(
 	ctx context.Context, f db.ContentSearchFilter, words db.ContentWords,
 	scopeWhere string, scopeArgs []any,
 ) (db.ContentSearchPage, error) {
+	dialect := s.wordSearchDialect()
 	sysPred := "TRUE"
 	if f.ExcludeSystem {
 		sysPred = "m.is_system = FALSE AND " + db.PostgresSystemPrefixSQL("m.content", "m.role")
@@ -754,7 +755,7 @@ func (s *Store) searchContentWordsPG(
 	var err error
 	for _, all := range []bool{true, false} {
 		pb := &paramBuilder{n: len(scopeArgs), args: append([]any{}, scopeArgs...)}
-		matches := pgWordMatches(f, words, all, from, pb)
+		matches := pgWordMatches(f, words, all, from, pb, dialect)
 		query := pgSelectedWordsSQL(scopeWhere, matches, pb, f.Limit+1, f.Cursor, all) + `
 				SELECT m.session_id, s.project, s.agent, s.transcript_revision, 'message' AS location,
 					m.role, '' AS tool_name, m.ordinal, m.timestamp AS ts,
@@ -773,6 +774,21 @@ func (s *Store) searchContentWordsPG(
 		}
 	}
 	return page, err
+}
+
+func (s *Store) wordSearchDialect() db.QueryDialect {
+	dialect := db.PostgresQueryDialect()
+	if s.serverEncoding == "LATIN1" {
+		dialect = dialect.WithPostgresEscapedWordChars()
+	}
+	return dialect
+}
+
+func (s *Store) latin1SearchSQL(query string) string {
+	if s.serverEncoding == "LATIN1" {
+		return db.PostgresLatin1SearchSQL(query)
+	}
+	return query
 }
 
 // pgSelectedWordsSQL selects as selected one page of word_matches, as
@@ -796,10 +812,10 @@ func pgSelectedWordsSQL(scopeWhere, matches string, pb *paramBuilder, limit, off
 // Outside fts mode it leaves the exact text to the caller. The partial pass
 // materializes candidates and computes n once.
 func pgWordMatches(
-	f db.ContentSearchFilter, words db.ContentWords, all bool, from string, pb *paramBuilder,
+	f db.ContentSearchFilter, words db.ContentWords, all bool, from string, pb *paramBuilder, dialect db.QueryDialect,
 ) string {
 	column := "COALESCE(m.dialogue_text, m.content)"
-	b := db.NewQueryBuilder(db.PostgresQueryDialect(), pb.n)
+	b := db.NewQueryBuilder(dialect, pb.n)
 	rawWhere := db.WordCandidateSQL(b, column, words, all)
 	if f.Mode != "fts" {
 		rawWhere += " AND NOT " + b.ContainsPredicate(column, f.Pattern)

@@ -3,6 +3,7 @@
 package postgres
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -17,6 +18,60 @@ import (
 // contentSearchSchema is an isolated schema for content-search tests so
 // they don't interfere with other pgtest suites that reuse testSchema.
 const contentSearchSchema = "agentsview_content_search_test"
+
+func TestPGSearchContentLatin1WordBoundaries(t *testing.T) {
+	t.Parallel()
+	baseURL := testPGURL(t)
+	server, _ := testPGServer(t)
+	if server.cockroach {
+		t.Skip("LATIN1 databases require PostgreSQL")
+	}
+	name := pgDatabaseName(t, baseURL) + "_latin1"
+	_, err := server.admin.ExecContext(t.Context(), `CREATE DATABASE `+name+` WITH TEMPLATE template0 ENCODING 'LATIN1' LC_COLLATE 'C' LC_CTYPE 'C'`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, err := server.admin.ExecContext(context.WithoutCancel(t.Context()), `DROP DATABASE `+name+` WITH (FORCE)`)
+		assert.NoError(t, err)
+	})
+	url := mustParseURL(t, withPGDatabase(t, baseURL, name))
+	params := url.Query()
+	params.Set("client_encoding", "UTF8")
+	url.RawQuery = params.Encode()
+	pg, err := Open(t.Context(), url.String(), contentSearchSchema, true)
+	require.NoError(t, err)
+	require.NoError(t, EnsureSchema(t.Context(), pg, contentSearchSchema))
+	require.NoError(t, pg.Close())
+	store, err := NewStore(t.Context(), url.String(), contentSearchSchema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, store.Close()) })
+
+	for _, row := range []struct{ id, body string }{
+		{"match", "invoice ready"},
+		{"adjacent", "éinvoice ready"},
+		{"adjacent-after", "invoiceé ready"},
+	} {
+		insertCSSession(t, store, row.id, "project", "claude", "2024-06-15T10:00:00Z", "2024-06-15T11:00:00Z")
+		insertCSMessage(t, store, row.id, 0, "user", row.body, "2024-06-15T10:00:00Z", false)
+	}
+	for _, tc := range []struct {
+		name, mode    string
+		excludeSystem bool
+	}{
+		{"default", "", false},
+		{"fts", "fts", false},
+		{"hybrid", "hybrid", false},
+		{"exclude_system", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+				Pattern: "invoice absentword", Mode: tc.mode, KeywordOnly: true, Limit: 10, ExcludeSystem: tc.excludeSystem,
+			})
+			require.NoError(t, err)
+			require.Len(t, page.Matches, 1)
+			assert.Equal(t, "match", page.Matches[0].SessionID)
+		})
+	}
+}
 
 func TestSearchContentNegativeCursor(t *testing.T) {
 	store := setupContentSearch(t)

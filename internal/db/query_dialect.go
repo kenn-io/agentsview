@@ -58,6 +58,7 @@ type QueryDialect struct {
 	caseInsensitiveLike         string
 	caseInsensitiveLikeEsc      string
 	regexPredicate              func(string, string) string
+	postgresEscapedWordChars    bool
 	sidebarChildRelationships   []string
 	canonicalChildRelationships []string
 	nullsLast                   bool
@@ -84,6 +85,12 @@ type QueryDialect struct {
 	// orphanPredicate renders the "parent row is missing" test used by
 	// BuildCanonicalRootWhere. Nil uses the configured parent relation.
 	orphanPredicate func(sessionAlias, parentAlias string) string
+}
+
+// WithPostgresEscapedWordChars renders word boundaries with ASCII regex escapes.
+func (d QueryDialect) WithPostgresEscapedWordChars() QueryDialect {
+	d.postgresEscapedWordChars = true
+	return d
 }
 
 // Position renders substring position syntax and panics for unsupported dialects.

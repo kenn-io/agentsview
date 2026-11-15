@@ -122,6 +122,9 @@ func boundedPattern(b *QueryBuilder, ascii bool, words ...string) string {
 func wordGap(b *QueryBuilder, ascii bool) string {
 	switch {
 	case b.dialect.name == "postgres":
+		if b.dialect.postgresEscapedWordChars {
+			return "[^" + postgresEscapedWordCharacters + "]"
+		}
 		return "[^" + postgresWordCharacters + "]"
 	case ascii:
 		return "[^a-zA-Z0-9]"
@@ -151,6 +154,28 @@ var postgresWordCharacters = func() string {
 	}
 	return chars.String()
 }()
+
+// Regex escapes keep the pattern representable in LATIN1 databases. Their
+// character values agree with Unicode for every character LATIN1 can store.
+var postgresEscapedWordCharacters = func() string {
+	var chars strings.Builder
+	for _, r := range postgresWordCharacters {
+		switch {
+		case r < 128:
+			chars.WriteRune(r)
+		case r <= 0xffff:
+			chars.WriteString(`\u` + leftPadHex(r, 4))
+		default:
+			chars.WriteString(`\U` + leftPadHex(r, 8))
+		}
+	}
+	return chars.String()
+}()
+
+func leftPadHex(r rune, width int) string {
+	hex := strconv.FormatInt(int64(r), 16)
+	return strings.Repeat("0", width-len(hex)) + hex
+}
 
 // compactForms folds forms to their common prefix and an alternation of
 // suffixes, which roughly halves PostgreSQL's regex cost.

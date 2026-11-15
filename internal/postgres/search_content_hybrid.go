@@ -162,6 +162,7 @@ func (s *Store) fetchHybridKeywordBatchPG(
 	kf.Limit, kf.Cursor = k-1, offset
 	if !s.cockroach {
 		if _, words, ok := db.RouteContentWords(kf); ok {
+			dialect := s.wordSearchDialect()
 			from := `FROM messages m JOIN scoped s ON s.id = m.session_id
 			WHERE m.role IN ('user', 'assistant') AND m.is_system = FALSE
 			  AND ` + db.PostgresSystemPrefixSQL("m.content", "m.role")
@@ -169,7 +170,7 @@ func (s *Store) fetchHybridKeywordBatchPG(
 			var err error
 			for _, all := range []bool{true, false} {
 				pb := &paramBuilder{n: len(scopeArgs), args: append([]any{}, scopeArgs...)}
-				matches := pgWordMatches(kf, words, all, from, pb)
+				matches := pgWordMatches(kf, words, all, from, pb, dialect)
 				query := pgSelectedWordsSQL(scopeWhere, matches, pb, k, offset, all) + `
 				SELECT selected.session_id, selected.ordinal, COALESCE(m.dialogue_text, m.content), selected.n
 				FROM selected JOIN messages m ON m.session_id = selected.session_id AND m.ordinal = selected.ordinal
@@ -207,7 +208,7 @@ func (s *Store) fetchHybridKeywordBatchPG(
 func (s *Store) scanHybridKeywordPG(
 	ctx context.Context, pattern string, words db.ContentWords, query string, args []any,
 ) ([]pgHybridDisplay, error) {
-	rows, err := s.pg.QueryContext(ctx, query, args...)
+	rows, err := s.pg.QueryContext(ctx, s.latin1SearchSQL(query), args...)
 	if err != nil {
 		return nil, fmt.Errorf("pg hybrid keyword leg: %w", err)
 	}

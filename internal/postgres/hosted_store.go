@@ -80,7 +80,15 @@ func newHostedAdapter(ctx context.Context, pg *sql.DB, tenant string) (*HostedSt
 	if err != nil {
 		return nil, fmt.Errorf("detecting database engine: %w", err)
 	}
-	h := &HostedStore{physical: &Store{pg: pg, ownedDB: pg, hostedRelations: true, cockroach: version == "crdb_internal_mvcc_timestamp"}, core: core, tenant: tenant, cursor: &hostedCursorState{}}
+	cockroach := version == "crdb_internal_mvcc_timestamp"
+	var encoding string
+	if !cockroach {
+		encoding, err = pgServerEncoding(ctx, pg)
+		if err != nil {
+			return nil, err
+		}
+	}
+	h := &HostedStore{physical: &Store{pg: pg, ownedDB: pg, hostedRelations: true, cockroach: cockroach, serverEncoding: encoding}, core: core, tenant: tenant, cursor: &hostedCursorState{}}
 	core.curationGuard = h.guardCurationIdentity
 	if _, err = rand.Read(h.cursor.key[:]); err != nil {
 		return nil, err
