@@ -605,6 +605,17 @@ func (s *Store) GetAnalyticsSignalSessions(
 	return s.analytics().GetAnalyticsSignalSessions(ctx, f, signal, limit)
 }
 
+func trendsTermsKeys(
+	f db.AnalyticsFilter, terms []db.TrendTermInput, granularity string,
+) (string, string, error) {
+	key, err := json.Marshal(struct {
+		Filter  db.AnalyticsFilter
+		Variant string
+	}{f, db.TrendsKeptVariant(terms, granularity)})
+	selection := string(key)
+	return selection, "trends|" + selection, err
+}
+
 func (s *Store) GetTrendsTerms(
 	ctx context.Context, f db.AnalyticsFilter,
 	terms []db.TrendTermInput, granularity string,
@@ -615,16 +626,44 @@ func (s *Store) GetTrendsTerms(
 	if f.ActiveSince != "" || db.TerminationUsesTime(f.Termination) {
 		return load(ctx)
 	}
-	key, err := json.Marshal(struct {
-		Filter  db.AnalyticsFilter
-		Variant string
-	}{f, db.TrendsKeptVariant(terms, granularity)})
+	key, diskSlot, err := trendsTermsKeys(f, terms, granularity)
 	if err != nil {
 		return load(ctx)
 	}
-	version, err := s.tablePartsFingerprint(ctx, []string{"sessions", "messages"})
-	if err != nil {
+	version, ok, err := s.usageRowsVersion(ctx, []string{"sessions", "messages"}, "")
+	if err != nil || !ok {
 		return load(ctx)
 	}
-	return s.trendsReads.Do(ctx, string(key), version, load)
+	version += "|" + db.TrendsTimezoneKey(f)
+	if report, ok := s.trendsReads.Get(key, version); ok {
+		s.keepTrendsDisk(diskSlot, version, report)
+		return report, nil
+	}
+	return s.trendsReads.Do(ctx, key, version, func(ctx context.Context) (db.TrendsTermsResponse, error) {
+		if data, ok := s.usageDisk.Get(diskSlot, version); ok {
+			var report db.TrendsTermsResponse
+			if json.Unmarshal(data, &report) == nil {
+				return report, nil
+			}
+		}
+		report, err := load(ctx)
+		if err == nil {
+			s.putTrendsDisk(diskSlot, version, report)
+		}
+		return report, err
+	})
+}
+
+func (s *Store) putTrendsDisk(slot, version string, report db.TrendsTermsResponse) {
+	if data, err := json.Marshal(report, json.FormatNilSliceAsNull(true)); err == nil {
+		s.usageDisk.Put(slot, version, data)
+	}
+}
+
+// keepTrendsDisk touches the saved report for a memory hit. A missing file or
+// one left by an older version is rewritten from the report in memory.
+func (s *Store) keepTrendsDisk(slot, version string, report db.TrendsTermsResponse) {
+	if _, ok := s.usageDisk.Get(slot, version); !ok {
+		s.putTrendsDisk(slot, version, report)
+	}
 }
