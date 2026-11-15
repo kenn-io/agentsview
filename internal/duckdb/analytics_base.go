@@ -14,6 +14,7 @@ import (
 
 type analyticsSQL struct{ store *Store }
 
+// trendsAnalyticsSQL keeps Dashboard list binding out of Trends reads.
 type trendsAnalyticsSQL struct{ analyticsSQL }
 
 func (s trendsAnalyticsSQL) VisitSessionIDSets(ctx context.Context, ids []string, visit func(context.Context, string, []any) error) error {

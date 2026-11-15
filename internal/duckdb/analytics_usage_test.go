@@ -2095,8 +2095,12 @@ func TestDuckAnalyticsLargeSessionSelection(t *testing.T) {
 	}
 	filter := db.AnalyticsFilter{From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", Project: "included"}
 	queries := 0
+	candidateQueries := 0
 	previousObserver := analyticsQueryObserver
 	analyticsQueryObserver = func(query string) {
+		if strings.Contains(query, "SELECT session_id, ordinal, role, source_subtype, is_system, model") {
+			candidateQueries++
+		}
 		if strings.Contains(query, "SELECT DISTINCT model") || strings.Contains(query, "FROM tool_calls tc") {
 			queries++
 		}
@@ -2107,6 +2111,14 @@ func TestDuckAnalyticsLargeSessionSelection(t *testing.T) {
 	assert.Equal(t, 901, summary.TotalSessions)
 	assert.Equal(t, []string{"model-a", "model-z"}, summary.Models)
 	assert.Equal(t, 1, queries)
+	filtered := filter
+	filtered.Model = "model-a,model-z"
+	filteredSummary, err := store.GetAnalyticsSummary(ctx, filtered)
+	require.NoError(t, err)
+	assert.Equal(t, 901, filteredSummary.TotalSessions)
+	assert.Equal(t, 901, filteredSummary.TotalMessages)
+	assert.Equal(t, []string{"model-a", "model-z"}, filteredSummary.Models)
+	assert.Equal(t, 1, candidateQueries)
 	queries = 0
 	tools, err := store.GetAnalyticsTools(ctx, filter)
 	require.NoError(t, err)
