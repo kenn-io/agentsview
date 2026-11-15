@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"database/sql"
-	"encoding/json/v2"
 	"fmt"
 	"regexp"
 	"sort"
@@ -350,6 +349,9 @@ type SearchFilter struct {
 	Limit    int
 }
 
+// Slot identifies an exact search selection.
+func (f SearchFilter) Slot() string { return fmt.Sprintf("%#v", f) }
+
 // SearchPage holds paginated search results.
 type SearchPage struct {
 	Results    []SearchResult `json:"results"`
@@ -401,13 +403,7 @@ func (db *DB) Search(
 	if db.readOnly {
 		return db.search(ctx, f)
 	}
-	key, err := json.Marshal(struct {
-		Filter SearchFilter
-		CJK    bool
-	}{f, db.HasCJKFTS(ctx)})
-	if err != nil {
-		return db.search(ctx, f)
-	}
+	key := fmt.Sprintf("%s|%t", f.Slot(), db.HasCJKFTS(ctx))
 	version, err := db.keptAnalyticsVersion(ctx)
 	if err != nil {
 		return db.search(ctx, f)
@@ -416,7 +412,7 @@ func (db *DB) Search(
 	if err != nil {
 		return db.search(ctx, f)
 	}
-	return db.searchKept.Do(ctx, string(key), fmt.Sprintf("%s|%d", version, imageRevision), func(ctx context.Context) (SearchPage, error) {
+	return db.searchKept.Do(ctx, key, fmt.Sprintf("%s|%d", version, imageRevision), func(ctx context.Context) (SearchPage, error) {
 		return db.search(ctx, f)
 	})
 }

@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"database/sql"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -28,7 +29,7 @@ func TestSearchKeptHostedReadsFresh(t *testing.T) {
 	require.Equal(t, 2, reads)
 }
 
-func TestSearchKeptStandbyReadsFresh(t *testing.T) {
+func TestSearchKeptStandbyRetainsAndRefreshes(t *testing.T) {
 	standbyURL := testPGStandbyURL(t)
 	local, syncer, primary := newUsageJournalFixture(t)
 	ctx := t.Context()
@@ -55,8 +56,8 @@ func TestSearchKeptStandbyReadsFresh(t *testing.T) {
 	reader, err := NewStore(ctx, standbyURL, syncer.schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, reader.Close()) })
-	counter := &analyticsReadCounter{storeExecutor: reader.pg}
-	reader.pg = counter
+	var loads atomic.Int32
+	reader.runtimeState().search.Size = func(db.SearchPage) int64 { loads.Add(1); return 1 }
 	filter := db.SearchFilter{Query: "needle"}
 	for range 2 {
 		page, err := reader.Search(ctx, filter)
@@ -64,7 +65,7 @@ func TestSearchKeptStandbyReadsFresh(t *testing.T) {
 		require.Len(t, page.Results, 1)
 		require.Contains(t, page.Results[0].Snippet, "first")
 	}
-	require.Equal(t, 2, counter.count())
+	require.EqualValues(t, 1, loads.Load())
 	write("needle second")
 	catchUp()
 	page, err := reader.Search(ctx, filter)
@@ -83,6 +84,8 @@ func TestSearchKeptMessagePushInvalidates(t *testing.T) {
 		pgKeptPush(t, syncer, false)
 	}
 	write("needle first")
+	var loads atomic.Int32
+	store.runtimeState().search.Size = func(db.SearchPage) int64 { loads.Add(1); return 1 }
 	filter := db.SearchFilter{Query: "needle"}
 	for range 2 {
 		page, err := store.Search(ctx, filter)
@@ -90,6 +93,7 @@ func TestSearchKeptMessagePushInvalidates(t *testing.T) {
 		require.Len(t, page.Results, 1)
 		require.Contains(t, page.Results[0].Snippet, "first")
 	}
+	require.EqualValues(t, 1, loads.Load())
 	var before time.Time
 	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT updated_at FROM sessions WHERE id='session'`).Scan(&before))
 	write("needle second")
@@ -100,4 +104,69 @@ func TestSearchKeptMessagePushInvalidates(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, page.Results, 1)
 	require.Contains(t, page.Results[0].Snippet, "second")
+}
+
+func TestSearchKeptRestoredHistory(t *testing.T) {
+	local, syncer, store := newUsageJournalFixture(t)
+	ctx := t.Context()
+	write := func(content string) {
+		t.Helper()
+		require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "session", Project: "project", Machine: "device", Agent: "claude", MessageCount: 1}))
+		require.NoError(t, local.ReplaceSessionMessages(ctx, "session", []db.Message{{SessionID: "session", Role: "user", Content: content}}))
+		pgKeptPush(t, syncer, false)
+	}
+	write("needle first")
+	filter := db.SearchFilter{Query: "needle"}
+	page, err := store.Search(ctx, filter)
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	require.Contains(t, page.Results[0].Snippet, "first")
+	var revision int64
+	var oldToken string
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT (SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'), (SELECT value FROM sync_metadata WHERE key='usage_history_token')`).Scan(&revision, &oldToken))
+	write("needle second")
+	_, err = store.pg.ExecContext(ctx, `UPDATE sync_metadata SET value=$1::bigint::text WHERE key='usage_change_revision'`, revision)
+	require.NoError(t, err)
+	var newToken string
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='usage_history_token'`).Scan(&newToken))
+	require.NotEqual(t, oldToken, newToken)
+	page, err = store.Search(ctx, filter)
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	require.Contains(t, page.Results[0].Snippet, "second")
+}
+
+func TestSearchKeptMissingHistoryBypasses(t *testing.T) {
+	for _, mode := range []string{"version 1", "missing token", "malformed token", "borrowed"} {
+		t.Run(mode, func(t *testing.T) {
+			local, syncer, store := newUsageJournalFixture(t)
+			ctx := t.Context()
+			pgKeptSession(t, local, "session", "project", "2026-06-14")
+			pgKeptPush(t, syncer, false)
+			switch mode {
+			case "version 1":
+				_, err := store.pg.ExecContext(ctx, `UPDATE sync_metadata SET value='1' WHERE key='usage_change_journal_version'`)
+				require.NoError(t, err)
+			case "missing token":
+				_, err := store.pg.ExecContext(ctx, `DELETE FROM sync_metadata WHERE key='usage_history_token'`)
+				require.NoError(t, err)
+			case "malformed token":
+				_, err := store.pg.ExecContext(ctx, `UPDATE sync_metadata SET value='invalid' WHERE key='usage_history_token'`)
+				require.NoError(t, err)
+			case "borrowed":
+				tx, err := store.DB().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+				require.NoError(t, err)
+				defer tx.Rollback()
+				store = store.readView(tx)
+			}
+			counter := &analyticsReadCounter{storeExecutor: store.pg}
+			store.pg = counter
+			filter := db.SearchFilter{Query: "session"}
+			for range 2 {
+				_, err := store.Search(ctx, filter)
+				require.NoError(t, err)
+			}
+			require.Equal(t, 2, counter.count())
+		})
+	}
 }

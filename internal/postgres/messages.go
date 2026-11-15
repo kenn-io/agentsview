@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"context"
-	"encoding/json/v2"
 	"fmt"
 	"strings"
 	"time"
@@ -318,12 +317,14 @@ func (s *Store) Search(
 		f.Limit = db.DefaultSearchLimit
 	}
 
-	key, err := json.Marshal(f)
-	if err != nil {
-		return s.search(ctx, f)
+	runtime := s.runtimeState()
+	page, handled, err := snapshotRetained(ctx, s, "search|"+f.Slot(), &runtime.search, &runtime.standbySearch, func(ctx context.Context, view *Store) (db.SearchPage, error) {
+		return view.search(ctx, f)
+	})
+	if handled || err != nil {
+		return page, err
 	}
-	slot := "search|" + string(key)
-	return s.runtimeState().search.Do(ctx, slot, s.keptAnalyticsVersion(ctx, slot), func(ctx context.Context) (db.SearchPage, error) { return s.search(ctx, f) })
+	return s.search(ctx, f)
 }
 
 func (s *Store) search(ctx context.Context, f db.SearchFilter) (db.SearchPage, error) {

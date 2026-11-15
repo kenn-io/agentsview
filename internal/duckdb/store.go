@@ -743,11 +743,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 	if s.path != "" {
 		s.checkMirrorReplacement(ctx, nil)
 	}
-	key, err := json.Marshal(f)
-	if err != nil {
-		return s.search(ctx, f)
-	}
-	return s.searchReads.Do(ctx, string(key), s.keptVersion(), func(ctx context.Context) (db.SearchPage, error) { return s.search(ctx, f) })
+	return s.searchReads.Do(ctx, f.Slot(), s.keptVersion(), func(ctx context.Context) (db.SearchPage, error) { return s.search(ctx, f) })
 }
 
 func (s *Store) search(ctx context.Context, f db.SearchFilter) (db.SearchPage, error) {

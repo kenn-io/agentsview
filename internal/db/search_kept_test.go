@@ -74,7 +74,7 @@ func TestSearchKeptImageText(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, page.Results, 1)
 	require.NoError(t, d.ClearImageText(ctx))
-	page, err = d.Search(ctx, f)
+	page, err = d.Search(ctx, SearchFilter{Query: "receipt"})
 	require.NoError(t, err)
 	require.Empty(t, page.Results)
 }
@@ -137,4 +137,74 @@ func TestSearchKeptCJKAvailability(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, page.Results)
 	require.EqualValues(t, 2, loads.Load())
+}
+
+func TestSearchKeptSearchableEdits(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		seed func(*testing.T, *DB)
+		edit func(*testing.T, *DB)
+	}{
+		{"message", func(t *testing.T, d *DB) {
+			insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "needle first"})
+		}, func(t *testing.T, d *DB) {
+			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "session", []Message{{SessionID: "session", Role: "user", Content: "other"}}))
+		}},
+		{"name", func(t *testing.T, d *DB) {
+			insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "other"})
+			require.NoError(t, d.RenameSession(t.Context(), "session", new("needle first")))
+		}, func(t *testing.T, d *DB) {
+			require.NoError(t, d.RenameSession(t.Context(), "session", new("other")))
+		}},
+		{"first message", func(t *testing.T, d *DB) {
+			insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "other"})
+			_, err := d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET first_message='needle first' WHERE id='session'`)
+			require.NoError(t, err)
+		}, func(t *testing.T, d *DB) {
+			_, err := d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET first_message='other' WHERE id='session'`)
+			require.NoError(t, err)
+		}},
+		{"deleted", func(t *testing.T, d *DB) {
+			insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "needle first"})
+		}, func(t *testing.T, d *DB) {
+			_, err := d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET deleted_at='2024-06-02' WHERE id='session'`)
+			require.NoError(t, err)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "session", "project")
+			tc.seed(t, d)
+			filter := SearchFilter{Query: "needle"}
+			page, err := d.Search(t.Context(), filter)
+			require.NoError(t, err)
+			require.Len(t, page.Results, 1)
+			tc.edit(t, d)
+			page, err = d.Search(t.Context(), filter)
+			require.NoError(t, err)
+			require.Empty(t, page.Results)
+		})
+	}
+}
+
+func TestSearchKeptImageTextBackfill(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
+	insertSession(t, d, "image", "project")
+	content := testInlineImageContent()
+	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	identity, err := ocr.NewIdentity("test", "model", "revision")
+	require.NoError(t, err)
+	require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "invoice", false))
+	_, err = d.getWriter().ExecContext(ctx, `DELETE FROM image_text_occurrences; DELETE FROM stats WHERE key=?`, imageTextBackfillKey)
+	require.NoError(t, err)
+	filter := SearchFilter{Query: "invoice"}
+	page, err := d.Search(ctx, filter)
+	require.NoError(t, err)
+	require.Empty(t, page.Results)
+	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
+	page, err = d.Search(ctx, filter)
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
 }
