@@ -34,6 +34,13 @@ type pgActivityInputs struct {
 	changed    []string
 }
 
+func (inputs *pgActivityInputs) setUsage(rows []pgActivityUsageRow, candidates map[string]bool) {
+	inputs.usage = rows
+	inputs.candidates = candidates
+	inputs.changed = nil
+	inputs.priced = nil
+}
+
 const pgActivityInputsMaxBytes = 256 << 20
 
 type pgActivityPriced struct {
@@ -41,6 +48,10 @@ type pgActivityPriced struct {
 	pricingDigest                            string
 	block                                    *export.PricingBlock
 	rows                                     []pgActivityPricedRow
+}
+
+func (p *pgActivityPriced) covers(q activity.Query, digest string) bool {
+	return p.rangeStart.Equal(q.RangeStart) && p.rangeEnd.Equal(q.RangeEnd) && p.pricingDigest == digest && !q.EffectiveEnd.Before(p.effectiveEnd) && (p.next.IsZero() || !p.next.Before(q.EffectiveEnd))
 }
 
 type pgActivityPricedRow struct {
@@ -330,10 +341,7 @@ func (s *Store) activityUsageInputs(ctx context.Context, ids []string, lower, up
 		return nil, err
 	}
 	if inputs.candidates == nil {
-		inputs.usage = slices.Clip(slices.Clone(fresh))
-		inputs.priced = nil
-		inputs.candidates = selected
-		inputs.changed = nil
+		inputs.setUsage(slices.Clip(slices.Clone(fresh)), selected)
 		return inputs.usage, nil
 	}
 	replaced := make(map[string]bool, len(read))
@@ -363,10 +371,7 @@ func (s *Store) activityUsageInputs(ctx context.Context, ids []string, lower, up
 	merged = slices.DeleteFunc(merged, func(r pgActivityUsageRow) bool {
 		return !selected[r.sessionID.Value()] && !keys[key{r.claudeMessageID, r.claudeRequestID}]
 	})
-	inputs.usage = slices.Clip(slices.Clone(merged))
-	inputs.priced = nil
-	inputs.candidates = selected
-	inputs.changed = nil
+	inputs.setUsage(slices.Clip(slices.Clone(merged)), selected)
 	return merged, nil
 }
 

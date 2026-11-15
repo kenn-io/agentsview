@@ -779,7 +779,7 @@ func (s *Store) activityReportUsage(
 
 	if inputs != nil && inputs.priced != nil {
 		p := inputs.priced
-		if p.rangeStart.Equal(q.RangeStart) && p.rangeEnd.Equal(q.RangeEnd) && p.pricingDigest == pricingDigest && !q.EffectiveEnd.Before(p.effectiveEnd) && (p.next.IsZero() || !p.next.Before(q.EffectiveEnd)) {
+		if p.covers(q, pricingDigest) {
 			return pgAssembleActivityUsage(raw, p.rows), p.block, nil
 		}
 	}
