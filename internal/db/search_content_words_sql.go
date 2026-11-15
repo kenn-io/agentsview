@@ -99,7 +99,7 @@ func WordRankedSQL(b *QueryBuilder, branches []string, f ContentSearchFilter, q 
 // which ClickHouse's regexPredicate repeats harmlessly.
 func boundedPattern(b *QueryBuilder, words ...string) string {
 	if b.dialect.name == "postgres" {
-		return "(^|_|\\m)" + strings.Join(words, "[^[:alnum:]]+") + "($|_|\\M)"
+		return "(^|_|[^[:alnum:]_])" + strings.Join(words, "[^[:alnum:]]+") + "($|_|[^[:alnum:]_])"
 	}
 	flags, gap := "(?i)", `[^\p{L}\p{N}]`
 	return flags + "(^|" + gap + ")" + strings.Join(words, gap+"+") + "($|" + gap + ")"

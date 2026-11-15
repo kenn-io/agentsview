@@ -83,6 +83,29 @@ func TestPGWordSearchParity(t *testing.T) {
 	}
 }
 
+func TestPGWordSearchCLocale(t *testing.T) {
+	t.Parallel()
+	server, _ := testPGServer(t)
+	if server.cockroach {
+		t.Skip("PostgreSQL only")
+	}
+	pgURL := testPGURL(t)
+	name := pgDatabaseName(t, pgURL)
+	_, err := server.admin.ExecContext(t.Context(), "DROP DATABASE "+name)
+	require.NoError(t, err)
+	_, err = server.admin.ExecContext(t.Context(), "CREATE DATABASE "+name+" TEMPLATE template0 ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C'")
+	require.NoError(t, err)
+	store := setupContentSearch(t)
+	insertCSSession(t, store, "accent", "project-a", "claude", "2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
+	insertCSMessage(t, store, "accent", 0, "user", "see the café résumé", "2026-05-01T10:00:00Z", false)
+	insertCSSession(t, store, "longer", "project-a", "claude", "2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
+	insertCSMessage(t, store, "longer", 0, "user", "see the cafétéria menu", "2026-05-01T10:00:00Z", false)
+	page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "café", Mode: "fts", Sources: []string{"messages"}, Limit: 50})
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "accent", page.Matches[0].SessionID)
+}
+
 func TestPGCockroachNaturalFtsCompatibility(t *testing.T) {
 	t.Parallel()
 	store := setupContentSearch(t)
