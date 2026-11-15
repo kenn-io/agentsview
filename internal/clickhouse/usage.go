@@ -2675,11 +2675,10 @@ var chRawHostUsageTables = []string{"usage_messages", "usage_events"}
 
 // Preparation changes none of these tables. They name all inputs to a raw
 // read, excluding sync_metadata, which the schema step can update.
-var chUsageCarryTables = []string{
-	"sessions", "usage_session_snapshots", "cursor_usage_events", "usage_event_prices",
-	"usage_price_contexts", "model_pricing", "model_pricing_bands", "genai_pricing",
-	"usage_messages", "usage_events", "usage_price_models",
-}
+var chUsageCarryTables = slices.Concat(
+	slices.DeleteFunc(slices.Clone(chUsageReadTables), func(table string) bool { return table == "sync_metadata" }),
+	chRawHostUsageTables, []string{"usage_price_models"},
+)
 
 // carryRawUsage promotes an existing raw result only after the published
 // snapshots are shown to contain those same rows.
@@ -2711,7 +2710,7 @@ func (s *Store) usageCarryPublished(ctx context.Context, version string) bool {
 	}
 	// Newer raw rows identify an interrupted publication. Equal usable-row
 	// counts also reject a replacement interrupted after deleting old rows.
-	// Equal publication versions ensure snapshot metadata matches the session.
+	// A newer snapshot can contain metadata the session has not published yet.
 	raw := clickUsageNormalizedQuery(chUsageStoredMessageEligibility, chUsageEventEligibility)
 	query := `SELECT
 		(SELECT count() FROM (SELECT session_id, max(push_version) AS version FROM (
@@ -2724,7 +2723,7 @@ func (s *Store) usageCarryPublished(ctx context.Context, version string) bool {
 				s.usage_facts.usage_present, s.usage_facts.model)
 				+ arrayCount(model -> ` + chUsageEventUsable("model") + `, s.usage_events.model), 0) != ifNull(r.n, 0))
 		+ (SELECT count() FROM usage_session_snapshots AS u FINAL
-			INNER JOIN sessions AS s FINAL ON s.id = u.id WHERE u.push_version != s.push_version)`
+			INNER JOIN sessions AS s FINAL ON s.id = u.id WHERE u.push_version > s.push_version)`
 	var violations uint64
 	err := s.queryRowContext(ctx, query).Scan(&violations)
 	if s.beforeUsageCarryCheck != nil {
