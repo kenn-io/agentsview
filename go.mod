@@ -28,7 +28,7 @@ require (
 	github.com/jellydator/ttlcache/v3 v3.4.1
 	github.com/klauspost/compress v1.20.3
 	github.com/mattn/go-runewidth v0.0.31
-	github.com/mattn/go-sqlite3 v1.14.52
+	github.com/mattn/go-sqlite3 v1.14.53
 	github.com/moby/moby/api v1.56.1
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/oklog/ulid/v2 v2.1.2
