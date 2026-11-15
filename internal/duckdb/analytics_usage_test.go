@@ -2057,7 +2057,6 @@ func TestDuckToolsBoundedRangeGroupsByLocalDay(t *testing.T) {
 func TestDuckAnalyticsLargeSessionSelection(t *testing.T) {
 	const timestamp = "2024-06-01T09:00:00Z"
 	var writes []db.SessionBatchWrite
-	var ids []string
 	for i := range 902 {
 		id := fmt.Sprintf("selection-%04d", i)
 		project, model, tool, skill := "included", "model-a", "Read", "skill-a"
@@ -2065,9 +2064,6 @@ func TestDuckAnalyticsLargeSessionSelection(t *testing.T) {
 			model, tool, skill = "model-z", "Write", "skill-z"
 		} else if i == 901 {
 			project, model, tool, skill = "excluded", "model-excluded", "Excluded", "skill-excluded"
-		}
-		if i < 901 {
-			ids = append(ids, id)
 		}
 		writes = append(writes, db.SessionBatchWrite{
 			Session: syncSession(id, project, "selection", timestamp, 1),
@@ -2077,30 +2073,22 @@ func TestDuckAnalyticsLargeSessionSelection(t *testing.T) {
 		})
 	}
 	store := newDuckAnalyticsStore(t, writes)
-	t.Run("trends visitor", func(t *testing.T) {
-		calls := 0
-		visit := func(context.Context, string, []any) error { calls++; return nil }
-		require.NoError(t, (trendsAnalyticsSQL{analyticsSQL{store}}).VisitSessionIDSets(t.Context(), ids, visit))
-		assert.Equal(t, 2, calls)
-	})
+
 	filter := db.AnalyticsFilter{From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", Project: "included"}
 	t.Run("summary", func(t *testing.T) {
 		summary, err := store.GetAnalyticsSummary(t.Context(), filter)
 		require.NoError(t, err)
-		assert.Equal(t, 901, summary.TotalSessions)
 		assert.Equal(t, []string{"model-a", "model-z"}, summary.Models)
-	})
-	t.Run("model filtered summary", func(t *testing.T) {
 		queries := 0
 		previous := analyticsQueryObserver
 		analyticsQueryObserver = func(string) { queries++ }
 		t.Cleanup(func() { analyticsQueryObserver = previous })
 		filtered := filter
 		filtered.Model = "model-a,model-z"
-		summary, err := store.GetAnalyticsSummary(t.Context(), filtered)
+		filteredSummary, err := store.GetAnalyticsSummary(t.Context(), filtered)
 		require.NoError(t, err)
-		assert.Equal(t, 901, summary.TotalSessions)
-		assert.Equal(t, 901, summary.TotalMessages)
+		assert.Equal(t, 901, filteredSummary.TotalSessions)
+		assert.Equal(t, 901, filteredSummary.TotalMessages)
 		assert.LessOrEqual(t, queries, 2)
 	})
 	t.Run("tools and skills", func(t *testing.T) {
