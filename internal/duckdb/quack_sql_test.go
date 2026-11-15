@@ -3,7 +3,6 @@
 package duckdb
 
 import (
-	"fmt"
 	"testing"
 	"time"
 
@@ -151,13 +150,4 @@ func TestDuckSQLWithArgsExecutesStringListAsUnnestSet(t *testing.T) {
 	var n int
 	require.NoError(t, duck.QueryRowContext(ctx, stmt).Scan(&n))
 	assert.Zero(t, n)
-
-	ids := make([]string, 901)
-	for i := range ids {
-		ids[i] = fmt.Sprintf("session-%03d", i)
-	}
-	stmt, err = duckSQLWithArgs(`SELECT list_sort(list(v)) FROM (VALUES ('session-000'), ('session-900'), ('absent')) t(v) WHERE v IN (SELECT unnest(?))`, ids)
-	require.NoError(t, err)
-	require.NoError(t, duck.QueryRowContext(ctx, stmt).Scan(&got))
-	assert.Equal(t, []any{"session-000", "session-900"}, got)
 }

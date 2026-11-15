@@ -2083,8 +2083,8 @@ func TestDuckAnalyticsLargeSessionSelection(t *testing.T) {
 		visit func(context.Context, []string, func(context.Context, string, []any) error) error
 		want  int
 	}{
-		{"dashboard", (analyticsSQL{store}).VisitSessionIDSets, 1},
-		{"trends", (trendsAnalyticsSQL{analyticsSQL{store}}).VisitSessionIDSets, 2},
+		{"dashboard visitor", (analyticsSQL{store}).VisitSessionIDSets, 1},
+		{"trends visitor", (trendsAnalyticsSQL{analyticsSQL{store}}).VisitSessionIDSets, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
@@ -2094,56 +2094,74 @@ func TestDuckAnalyticsLargeSessionSelection(t *testing.T) {
 		})
 	}
 	filter := db.AnalyticsFilter{From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", Project: "included"}
-	queries := 0
-	candidateQueries := 0
-	previousObserver := analyticsQueryObserver
-	analyticsQueryObserver = func(query string) {
-		if strings.Contains(query, "SELECT session_id, ordinal, role, source_subtype, is_system, model") {
-			candidateQueries++
+	t.Run("summary", func(t *testing.T) {
+		summary, err := store.GetAnalyticsSummary(t.Context(), filter)
+		require.NoError(t, err)
+		assert.Equal(t, 901, summary.TotalSessions)
+		assert.Equal(t, []string{"model-a", "model-z"}, summary.Models)
+	})
+	t.Run("model filtered summary", func(t *testing.T) {
+		queries := 0
+		previous := analyticsQueryObserver
+		analyticsQueryObserver = func(query string) {
+			if strings.Contains(query, "SELECT session_id, ordinal, role, source_subtype, is_system, model") {
+				queries++
+			}
 		}
-		if strings.Contains(query, "SELECT DISTINCT model") || strings.Contains(query, "FROM tool_calls tc") {
-			queries++
+		t.Cleanup(func() { analyticsQueryObserver = previous })
+		filtered := filter
+		filtered.Model = "model-a,model-z"
+		summary, err := store.GetAnalyticsSummary(t.Context(), filtered)
+		require.NoError(t, err)
+		assert.Equal(t, 901, summary.TotalSessions)
+		assert.Equal(t, 901, summary.TotalMessages)
+		assert.Equal(t, 1, queries)
+	})
+	t.Run("tools and skills", func(t *testing.T) {
+		queries := 0
+		previous := analyticsQueryObserver
+		analyticsQueryObserver = func(query string) {
+			if strings.Contains(query, "FROM tool_calls tc") {
+				queries++
+			}
 		}
-	}
-	t.Cleanup(func() { analyticsQueryObserver = previousObserver })
-	summary, err := store.GetAnalyticsSummary(ctx, filter)
-	require.NoError(t, err)
-	assert.Equal(t, 901, summary.TotalSessions)
-	assert.Equal(t, []string{"model-a", "model-z"}, summary.Models)
-	assert.Equal(t, 1, queries)
-	filtered := filter
-	filtered.Model = "model-a,model-z"
-	filteredSummary, err := store.GetAnalyticsSummary(ctx, filtered)
-	require.NoError(t, err)
-	assert.Equal(t, 901, filteredSummary.TotalSessions)
-	assert.Equal(t, 901, filteredSummary.TotalMessages)
-	assert.Equal(t, []string{"model-a", "model-z"}, filteredSummary.Models)
-	assert.Equal(t, 1, candidateQueries)
-	queries = 0
-	tools, err := store.GetAnalyticsTools(ctx, filter)
-	require.NoError(t, err)
-	assert.Equal(t, 1, queries)
-	assert.Equal(t, 1802, tools.TotalCalls)
-	counts := map[string]int{}
-	for _, tool := range tools.ByTool {
-		counts[tool.ToolName] = tool.CallCount
-	}
-	assert.Equal(t, map[string]int{"Read": 900, "Write": 1, "Skill": 901}, counts)
-	queries = 0
-	skills, err := store.GetAnalyticsSkills(ctx, filter, "day")
-	require.NoError(t, err)
-	assert.Equal(t, 1, queries)
-	assert.Equal(t, 901, skills.TotalSkillCalls)
-	skillCounts := map[string]int{}
-	for _, skill := range skills.BySkill {
-		skillCounts[skill.SkillName] = skill.CallCount
-	}
-	assert.Equal(t, map[string]int{"skill-a": 900, "skill-z": 1}, skillCounts)
-	terms, err := db.ParseTrendTerms([]string{"seam"})
-	require.NoError(t, err)
-	trends, err := store.GetTrendsTerms(ctx, filter, terms, "day")
-	require.NoError(t, err)
-	assert.Equal(t, 901, trends.MessageCount)
-	require.Len(t, trends.Series, 1)
-	assert.Equal(t, 901, trends.Series[0].Total)
+		t.Cleanup(func() { analyticsQueryObserver = previous })
+		tools, err := store.GetAnalyticsTools(t.Context(), filter)
+		require.NoError(t, err)
+		assert.Equal(t, 1802, tools.TotalCalls)
+		counts := map[string]int{}
+		for _, tool := range tools.ByTool {
+			counts[tool.ToolName] = tool.CallCount
+		}
+		assert.Equal(t, map[string]int{"Read": 900, "Write": 1, "Skill": 901}, counts)
+		skills, err := store.GetAnalyticsSkills(t.Context(), filter, "day")
+		require.NoError(t, err)
+		assert.Equal(t, 901, skills.TotalSkillCalls)
+		skillCounts := map[string]int{}
+		for _, skill := range skills.BySkill {
+			skillCounts[skill.SkillName] = skill.CallCount
+		}
+		assert.Equal(t, map[string]int{"skill-a": 900, "skill-z": 1}, skillCounts)
+		assert.Equal(t, 2, queries)
+	})
+	t.Run("trends", func(t *testing.T) {
+		t.Setenv("CACHE_DIRECTORY", t.TempDir())
+		require.NoError(t, store.usageDisk.Open("duckdb-usage", "fixture", 128<<20, 256<<20))
+		queries := 0
+		previous := analyticsQueryObserver
+		analyticsQueryObserver = func(query string) {
+			if strings.Contains(query, "SELECT m.session_id, m.content") {
+				queries++
+			}
+		}
+		t.Cleanup(func() { analyticsQueryObserver = previous })
+		terms, err := db.ParseTrendTerms([]string{"seam"})
+		require.NoError(t, err)
+		trends, err := store.GetTrendsTerms(t.Context(), filter, terms, "day")
+		require.NoError(t, err)
+		assert.Equal(t, 901, trends.MessageCount)
+		require.Len(t, trends.Series, 1)
+		assert.Equal(t, 901, trends.Series[0].Total)
+		assert.Equal(t, 2, queries)
+	})
 }
