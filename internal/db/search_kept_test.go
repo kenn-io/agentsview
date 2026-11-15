@@ -115,27 +115,35 @@ func TestSearchKeptSearchableEdits(t *testing.T) {
 		edit func(*testing.T, *DB)
 	}{
 		{"message", func(t *testing.T, d *DB) {
+			t.Helper()
 			insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "needle first"})
 		}, func(t *testing.T, d *DB) {
+			t.Helper()
 			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "session", []Message{{SessionID: "session", Role: "user", Content: "other"}}))
 		}},
 		{"name", func(t *testing.T, d *DB) {
+			t.Helper()
 			insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "other"})
 			require.NoError(t, d.RenameSession(t.Context(), "session", new("needle first")))
 		}, func(t *testing.T, d *DB) {
+			t.Helper()
 			require.NoError(t, d.RenameSession(t.Context(), "session", new("other")))
 		}},
 		{"first message", func(t *testing.T, d *DB) {
+			t.Helper()
 			insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "other"})
 			_, err := d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET first_message='needle first' WHERE id='session'`)
 			require.NoError(t, err)
 		}, func(t *testing.T, d *DB) {
+			t.Helper()
 			_, err := d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET first_message='other' WHERE id='session'`)
 			require.NoError(t, err)
 		}},
 		{"deleted", func(t *testing.T, d *DB) {
+			t.Helper()
 			insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "needle first"})
 		}, func(t *testing.T, d *DB) {
+			t.Helper()
 			_, err := d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET deleted_at='2024-06-02' WHERE id='session'`)
 			require.NoError(t, err)
 		}},
