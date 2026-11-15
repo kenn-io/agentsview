@@ -1370,18 +1370,20 @@ func antigravityUserInputText(fields []agProtoField) string {
 	if !ok || input.Nested == nil {
 		return ""
 	}
-	var text strings.Builder
 	for _, item := range input.Nested {
 		if item.Number != 3 || item.Nested == nil {
 			continue
 		}
 		if field, ok := agProtoFind(item.Nested, 1); ok {
 			if value, ok := agProtoString(field); ok {
-				text.WriteString(agProtoSanitizeString(value))
+				value = agProtoSanitizeString(value)
+				if strings.TrimSpace(value) != "" {
+					return value
+				}
 			}
 		}
 	}
-	return strings.TrimSpace(text.String())
+	return ""
 }
 
 // collectAntigravityBareURLs returns bare-URL strings from the step

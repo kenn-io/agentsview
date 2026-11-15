@@ -4805,8 +4805,10 @@ func TestDecodeAntigravityStepStructuredUserInput(t *testing.T) {
 		items []pbField
 		want  string
 	}{
-		{"joined", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte("First ")}, {num: 2, wire: pbWireBytes, bytes: []byte("attachment")}, {num: 1, wire: pbWireBytes, bytes: []byte("second")}}, "First second"},
+		{"later text", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte("  ")}, {num: 2, wire: pbWireBytes, bytes: []byte("attachment")}, {num: 1, wire: pbWireBytes, bytes: []byte(" second ")}}, " second "},
 		{"short", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte("你好")}}, "你好"},
+		{"nul", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte("a\x00b")}}, "a�b"},
+		{"blank text", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte(" \n")}, {num: 2, wire: pbWireBytes, bytes: []byte("A longer skill expansion with enough text to be selected")}}, "A longer skill expansion with enough text to be selected"},
 		{"fallback", []pbField{{num: 2, wire: pbWireBytes, bytes: []byte("A longer skill expansion with enough text to be selected")}}, "A longer skill expansion with enough text to be selected"},
 	}
 	for _, tc := range cases {
@@ -4902,4 +4904,41 @@ func TestAntigravityCLIDBStructuredHistoryGapDoesNotDuplicate(t *testing.T) {
 	require.Len(t, msgs, 3)
 	assert.ElementsMatch(t, []string{"比较这两个游戏 /grill-me", "second structured prompt", "earlier history prompt"}, []string{msgs[0].Content, msgs[1].Content, msgs[2].Content})
 	assert.Equal(t, 3, sess.UserMessageCount)
+}
+
+func TestAntigravityCLIDBStructuredPromptPreservesWhitespace(t *testing.T) {
+	const (
+		id     = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+		prompt = "    def greet():\n        return 42\n"
+	)
+	for _, withHistory := range []bool{false, true} {
+		name := "without history"
+		if withHistory {
+			name = "matching history"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			dbPath := filepath.Join(root, "conversations", id+".db")
+			mustMkdir(t, filepath.Dir(dbPath))
+			conn, err := sql.Open("sqlite3", dbPath)
+			require.NoError(t, err)
+			createAntigravityStepTables(t, conn)
+			text := encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: []byte(prompt)}})
+			skill := encodePB([]pbField{{num: 2, wire: pbWireBytes, bytes: []byte("A longer skill expansion that should not replace the typed request")}})
+			input := encodePB([]pbField{{num: 3, wire: pbWireBytes, bytes: text}, {num: 3, wire: pbWireBytes, bytes: skill}})
+			payload := encodePB([]pbField{{num: 19, wire: pbWireBytes, bytes: input}})
+			mustExec(t, conn, `INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`, 0, 14, payload)
+			require.NoError(t, conn.Close())
+			if withHistory {
+				row, err := json.Marshal(map[string]any{"conversationId": id, "timestamp": 1779000000000, "display": prompt})
+				require.NoError(t, err)
+				mustWrite(t, filepath.Join(root, "history.jsonl"), append(row, '\n'))
+			}
+			_, msgs, err := parseAntigravityCLITestSession(t, dbPath, "", "test-machine")
+			require.NoError(t, err)
+			require.Len(t, msgs, 1)
+			assert.Equal(t, prompt, msgs[0].Content)
+			assert.Equal(t, len(prompt), msgs[0].ContentLength)
+		})
+	}
 }
