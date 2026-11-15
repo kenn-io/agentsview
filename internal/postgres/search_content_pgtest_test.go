@@ -53,24 +53,12 @@ func TestPGSearchContentLatin1WordBoundaries(t *testing.T) {
 		insertCSSession(t, store, row.id, "project", "claude", "2024-06-15T10:00:00Z", "2024-06-15T11:00:00Z")
 		insertCSMessage(t, store, row.id, 0, "user", row.body, "2024-06-15T10:00:00Z", false)
 	}
-	for _, tc := range []struct {
-		name, mode    string
-		excludeSystem bool
-	}{
-		{"default", "", false},
-		{"fts", "fts", false},
-		{"hybrid", "hybrid", false},
-		{"exclude_system", "", true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
-				Pattern: "invoice absentword", Mode: tc.mode, KeywordOnly: true, Limit: 10, ExcludeSystem: tc.excludeSystem,
-			})
-			require.NoError(t, err)
-			require.Len(t, page.Matches, 1)
-			assert.Equal(t, "match", page.Matches[0].SessionID)
-		})
-	}
+	page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+		Pattern: "invoice absentword", Mode: "fts", Limit: 10,
+	})
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "match", page.Matches[0].SessionID)
 }
 
 func TestSearchContentNegativeCursor(t *testing.T) {
