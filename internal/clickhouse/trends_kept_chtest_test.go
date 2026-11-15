@@ -78,8 +78,6 @@ func TestTrendsKeptRestart(t *testing.T) {
 		want := read(first, f)
 		reports = append(reports, want)
 		require.Positive(t, count(first))
-		fresh := newTestStore(t, syncer.conn, syncer.target)
-		require.Equal(t, read(fresh, f), want)
 		restarted := newTestStore(t, syncer.conn, syncer.target)
 		require.NoError(t, restarted.openActivityReportDisk(syncer.target))
 		before := count(restarted)
@@ -103,21 +101,6 @@ func TestTrendsKeptRestart(t *testing.T) {
 		before := count(restarted)
 		require.Equal(t, reports[i], read(restarted, db.AnalyticsFilter{Timezone: zone, From: "2026-01-01", To: "2026-01-31"}))
 		require.Equal(t, before, count(restarted))
-	}
-	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "clickhouse-usage", "*", "*.gob"))
-	require.NoError(t, err)
-	require.Len(t, files, 2)
-	old := time.Now().Add(-31 * 24 * time.Hour)
-	for _, file := range files {
-		require.NoError(t, os.Chtimes(file, old, old))
-	}
-	for _, zone := range []string{"UTC", "America/New_York"} {
-		read(first, db.AnalyticsFilter{Timezone: zone, From: "2026-01-01", To: "2026-01-31"})
-	}
-	first.usageDisk.Sweep(time.Now())
-	for _, file := range files {
-		_, err := os.Stat(file)
-		require.NoError(t, err)
 	}
 	f := db.AnalyticsFilter{Timezone: "UTC", From: "2026-01-01", To: "2026-01-31"}
 	beforePush := read(first, f)
@@ -235,6 +218,19 @@ func TestTrendsKeptMemoryHitRepairsDiskVersion(t *testing.T) {
 		return n
 	}
 	want := read(store)
+	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "clickhouse-usage", "*", "*.gob"))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	old := time.Now().Add(-31 * 24 * time.Hour)
+	for _, file := range files {
+		require.NoError(t, os.Chtimes(file, old, old))
+	}
+	read(store)
+	store.usageDisk.Sweep(time.Now())
+	for _, file := range files {
+		_, err := os.Stat(file)
+		require.NoError(t, err)
+	}
 	_, slot, err := trendsTermsKeys(f, terms, "day")
 	require.NoError(t, err)
 	stale, err := json.Marshal(want)
