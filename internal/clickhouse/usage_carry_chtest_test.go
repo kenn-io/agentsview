@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"testing"
 
+	chdriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -112,6 +113,47 @@ func TestUsageCarryDiskFirst(t *testing.T) {
 	require.Equal(t, proofs, afterProofs)
 	// Counts have no disk entry, so the first ready visit reads them once.
 	require.EqualValues(t, 1, afterResults-results)
+}
+
+func TestUsageCarryInterruptedSoftDelete(t *testing.T) {
+	t.Parallel()
+	local, syncer, store := newPreparedUsageStore(t)
+	ctx := t.Context()
+	require.NoError(t, local.SoftDeleteSession(ctx, usagePriceRoundID))
+	syncer.hooks = &pushHooks{afterUsageSnapshots: func([]db.Session) error { return errors.New("injected session publication failure") }}
+	result, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.NotZero(t, result.Errors)
+	syncer.hooks = nil
+	var snapshotDeleted, sessionDeleted, prepares bool
+	require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT s.deleted_at IS NOT NULL, u.deleted_at IS NOT NULL, u.prepares_usage FROM sessions s INNER JOIN usage_session_snapshots u ON s.id = u.id WHERE s.id = ?`, usagePriceRoundID).Scan(&sessionDeleted, &snapshotDeleted, &prepares))
+	require.False(t, sessionDeleted)
+	require.True(t, snapshotDeleted)
+	require.False(t, prepares)
+	execPreparedUsage(t, store, "TRUNCATE TABLE prepared_usage")
+	f := db.UsageFilter{Timezone: "UTC", Breakdowns: true}
+	before := readPreparedUsage(t, store, f)
+	runPreparedUsageRefresh(t, store)
+	fresh := readPreparedUsage(t, NewStoreFromDB(store.DB(), store.bulk), f)
+	require.NotEqual(t, before.daily, fresh.daily)
+	require.Equal(t, fresh, readPreparedUsage(t, store, f))
+}
+
+func TestUsageCarryNullableJoin(t *testing.T) {
+	t.Parallel()
+	_, _, store := newPreparedUsageStore(t)
+	ctx := chdriver.Context(t.Context(), chdriver.WithSettings(chdriver.Settings{"join_use_nulls": 1}))
+	ctx, err := store.withPartsSnapshot(ctx)
+	require.NoError(t, err)
+	require.True(t, store.usageCarryPublished(ctx, "before"))
+	execPreparedUsage(t, store,
+		fmt.Sprintf("ALTER TABLE usage_messages DELETE WHERE session_id = '%s' SETTINGS mutations_sync = 2", usagePriceRoundID),
+		fmt.Sprintf("ALTER TABLE usage_events DELETE WHERE session_id = '%s' SETTINGS mutations_sync = 2", usagePriceRoundID))
+	ctx, err = store.withPartsSnapshot(ctx)
+	require.NoError(t, err)
+	require.False(t, store.usageCarryPublished(ctx, "after"))
+	require.True(t, store.usageCarry.valid, "the proof must reject the missing rows without a query error")
+	require.Equal(t, "after", store.usageCarry.version)
 }
 
 func TestUsageCarryVersionTables(t *testing.T) {

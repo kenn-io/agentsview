@@ -2714,7 +2714,8 @@ func (s *Store) usageCarryPublished(ctx context.Context, version string) bool {
 		return s.usageCarry.pass && s.usageCaptureStable(ctx, chUsageCarryTables...)
 	}
 	// Newer raw rows identify an interrupted publication. Equal usable-row
-	// counts also reject a replacement interrupted after deleting old rows.
+	// counts also reject a replacement interrupted after deleting old rows,
+	// or after publishing a deleted snapshot before its session row.
 	raw := clickUsageNormalizedQuery(chUsageStoredMessageEligibility, chUsageEventEligibility)
 	query := `SELECT
 		(SELECT count() FROM (SELECT session_id, max(push_version) AS version FROM (
@@ -2723,9 +2724,9 @@ func (s *Store) usageCarryPublished(ctx context.Context, version string) bool {
 			INNER JOIN sessions AS s FINAL ON s.id = r.session_id WHERE r.version > s.content_version)
 		+ (SELECT count() FROM usage_session_snapshots AS s FINAL
 			LEFT JOIN (SELECT session_id, count() AS n FROM (` + raw + `) GROUP BY session_id) r ON r.session_id = s.id
-			WHERE s.prepares_usage AND (arrayCount((present, model) -> ` + chStoredMessageUsable("present", "model") + `,
+			WHERE if(s.prepares_usage, arrayCount((present, model) -> ` + chStoredMessageUsable("present", "model") + `,
 				s.usage_facts.usage_present, s.usage_facts.model)
-				+ arrayCount(model -> ` + chUsageEventUsable("model") + `, s.usage_events.model)) != r.n)`
+				+ arrayCount(model -> ` + chUsageEventUsable("model") + `, s.usage_events.model), 0) != ifNull(r.n, 0))`
 	var violations uint64
 	err := s.queryRowContext(ctx, query).Scan(&violations)
 	if s.beforeUsageCarryCheck != nil {
