@@ -378,7 +378,7 @@ func (s *Store) scanPGContentMatches(
 	ctx context.Context, query string, args []any, limit, cursor int,
 	makeSnippet func(body string) string,
 ) (db.ContentSearchPage, error) {
-	rows, err := s.pg.QueryContext(ctx, s.latin1SearchSQL(query), args...)
+	rows, err := s.pg.QueryContext(ctx, query, args...)
 	if err != nil {
 		return db.ContentSearchPage{}, fmt.Errorf("pg content search: %w", err)
 	}
@@ -752,7 +752,7 @@ func (s *Store) searchContentWordsPG(
 	ctx context.Context, f db.ContentSearchFilter, words db.ContentWords,
 	scopeWhere string, scopeArgs []any,
 ) (db.ContentSearchPage, error) {
-	dialect := s.wordSearchDialect()
+	dialect := db.PostgresQueryDialect()
 	sysPred := "TRUE"
 	if f.ExcludeSystem {
 		sysPred = "m.is_system = FALSE AND " + db.PostgresSystemPrefixSQL("m.content", "m.role")
@@ -782,21 +782,6 @@ func (s *Store) searchContentWordsPG(
 		}
 	}
 	return page, err
-}
-
-func (s *Store) wordSearchDialect() db.QueryDialect {
-	dialect := db.PostgresQueryDialect()
-	if s.serverEncoding == "LATIN1" {
-		dialect = dialect.WithPostgresEscapedWordChars()
-	}
-	return dialect
-}
-
-func (s *Store) latin1SearchSQL(query string) string {
-	if s.serverEncoding == "LATIN1" {
-		return db.PostgresLatin1SearchSQL(query)
-	}
-	return query
 }
 
 // pgSelectedWordsSQL selects as selected one page of word_matches, as

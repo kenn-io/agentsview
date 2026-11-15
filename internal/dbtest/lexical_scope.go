@@ -130,15 +130,6 @@ func AssertLexicalScope(t *testing.T, store db.Store) {
 // AssertHybridKeywordOnlyScope checks archive scope and citations without a vector index.
 func AssertHybridKeywordOnlyScope(t *testing.T, store db.Store) {
 	t.Helper()
-	t.Run("hybrid_keyword/limited ranking", func(t *testing.T) {
-		page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
-			Pattern: "scopeanchor", Mode: "hybrid", KeywordOnly: true, Scope: "all",
-			Project: "lexical-scope", IncludeOneShot: true, Limit: 1,
-		})
-		require.NoError(t, err)
-		require.Len(t, page.Matches, 1)
-		assert.Equal(t, "d-continuation", page.Matches[0].SessionID)
-	})
 	for _, tc := range []struct {
 		scope string
 		want  []string

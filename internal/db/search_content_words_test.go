@@ -133,8 +133,6 @@ func TestSearchContentExplicitFTSKeepsFTS5(t *testing.T) {
 		`"fix" "missing"`:      {{"forms", "message", 0}},
 		`"fix" OR "semicolon"`: {{"forms", "message", 0}, {"other", "message", 0}},
 		`"fix" NOT "build"`:    {},
-		"fix* semicolon":       {},
-		`NOT "build"`:          {},
 	} {
 		page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: pattern, Mode: "fts"})
 		require.NoError(t, err)

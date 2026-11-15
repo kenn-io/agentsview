@@ -946,7 +946,7 @@ substring (the default) and regex modes also walk `tool_calls.input_json`,
 (`--cursor` is rejected) — see [Semantic Search](/docs/semantic-search/) for
 setup, scoring, and limitations.
 
-A default search of several words that includes `messages` returns
+On SQLite, PostgreSQL, DuckDB, and ClickHouse, a default search of several words that includes `messages` returns
 exact text matches first, then messages ordered by how many query words they
 hold, with that count in `matched_words`. Unquoted stop words do not count.
 Regular word forms count, and a quoted phrase inside the query requires its
@@ -955,14 +955,7 @@ matching unless the query starts with a quote and holds only
 quoted phrases or FTS5 operators, which keeps FTS5 behavior. Other searches
 report `matched_words` as `0`.
 
-SQLite folds Latin accents and some other Unicode characters in word search.
-For example, `cafe` can match `café`, and `test` can match `teſt`. PostgreSQL,
-DuckDB, and ClickHouse use case-insensitive matching without those folds.
-SQLite also uses Porter stemming, so some word forms match only there. SQLite
-`--fts` and hybrid keyword search use relevance within each word-count tier;
-mirrors order matches within a tier by recency.
-
-On CockroachDB, default search matches the entire query as a case-insensitive substring. `--fts` and hybrid keyword search require every query word or phrase as a case-insensitive substring; they do not rank partial word matches. On PostgreSQL and CockroachDB, an explicit `--fts` query starting with a quote honors `AND`, `OR`, `NOT`, and parentheses as SQLite does. `NEAR(...)` and prefix `*` are not supported there; `*` matches literally.
+On PostgreSQL, an explicit `--fts` query that starts with a quote honors `AND`, `OR`, `NOT`, and parentheses as SQLite does. `NEAR(...)` and prefix `*` are not supported there; `*` matches literally.
 
 Every match, in every mode, carries the conversation-unit citation described in
 [Hit shape](/docs/semantic-search/#hit-shape-ranges-and-anchors):

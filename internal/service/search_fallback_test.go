@@ -17,13 +17,6 @@ type fallbackVectorSearcher struct {
 	err error
 }
 
-type namedFallbackStoreStub struct {
-	*db.DB
-	name string
-}
-
-func (s *namedFallbackStoreStub) MemoryBackendName() string { return s.name }
-
 func (s *fallbackVectorSearcher) PrepareSemanticSearch(context.Context, string) (db.VectorSearchPage, int, error) {
 	return nil, 0, s.err
 }
@@ -35,10 +28,7 @@ func TestDirectBackendHybridKeywordFallback(t *testing.T) {
 		optIn                       bool
 		empty                       bool
 		wantSetup                   bool
-		backendName                 string
-		wantShortQueryHint          bool
 	}{
-		{name: "cockroach guidance", mode: "hybrid", optIn: true, reason: "not set up", wantSetup: true, backendName: "cockroach", wantShortQueryHint: true},
 		{name: "not configured", mode: "hybrid", optIn: true, reason: "not set up", wantSetup: true},
 		{name: "building", mode: "hybrid", optIn: true, cause: fmt.Errorf("search unavailable: %w", db.NewSemanticUnavailableError("index is building: 40% complete")), reason: "index is building: 40% complete"},
 		{name: "empty", mode: "hybrid", optIn: true, pattern: "absent", empty: true, reason: "not set up", wantSetup: true},
@@ -56,15 +46,11 @@ func TestDirectBackendHybridKeywordFallback(t *testing.T) {
 			if tc.cause != nil {
 				d.SetVectorSearcher(searcher)
 			}
-			backend := service.NewDirectBackend(d, nil)
-			if tc.backendName != "" {
-				backend = service.NewReadOnlyBackend(&namedFallbackStoreStub{DB: d, name: tc.backendName})
-			}
 			pattern := tc.pattern
 			if pattern == "" {
 				pattern = "needle"
 			}
-			result, err := backend.SearchContent(t.Context(), service.ContentSearchRequest{Pattern: pattern, Mode: tc.mode, KeywordFallback: tc.optIn})
+			result, err := service.NewDirectBackend(d, nil).SearchContent(t.Context(), service.ContentSearchRequest{Pattern: pattern, Mode: tc.mode, KeywordFallback: tc.optIn})
 			if tc.wantErr != nil {
 				require.ErrorIs(t, err, tc.wantErr)
 				return
@@ -74,9 +60,6 @@ func TestDirectBackendHybridKeywordFallback(t *testing.T) {
 			// SQLite keyword matches already include messages holding some of
 			// the words, so the note suggests no shorter retry.
 			wantNote := "Search by meaning is unavailable: " + tc.reason + ". Returned hybrid keyword matches only."
-			if tc.wantShortQueryHint {
-				wantNote += " Query words must appear. If matches are empty or few, try short substring queries with key terms or synonyms."
-			}
 			if tc.wantSetup {
 				wantNote += " To enable search by meaning, run `agentsview index embeddings build` or turn it on in Settings → Embeddings → Turn on."
 			}

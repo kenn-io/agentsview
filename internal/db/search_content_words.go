@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
-	"unicode/utf8"
 )
 
 // contentWords is a natural-language query: the words a message can hold,
@@ -55,6 +54,9 @@ func WordSnippetRange(body, pattern string, words ContentWords) (int, int) {
 // RouteContentWords applies SQLite's gates for word matching to f, a
 // substring or fts search. It returns f with a fully quoted pattern unquoted.
 func RouteContentWords(f ContentSearchFilter) (ContentSearchFilter, ContentWords, bool) {
+	if f.Mode == "fts" && (strings.Contains(f.Pattern, "*") || strings.HasPrefix(strings.TrimSpace(f.Pattern), `NOT "`)) {
+		return f, ContentWords{}, false
+	}
 	f, q, ok := routeContentWords(f)
 	return f, ContentWords{Terms: q.forms, Phrases: q.phrases}, ok
 }
@@ -102,78 +104,18 @@ func (q contentWords) snippetTerm() string { return strings.Join(q.terms, " OR "
 // phraseMatch reports whether body holds the words of phrase adjacent and in
 // order, ignoring case, with only punctuation or space between them.
 func phraseMatch(body, phrase string) bool {
-	return tokensHold(strings.FieldsFunc(body, isWordSeparator), phrase)
-}
-
-func isWordSeparator(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) }
-
-// tokensHold reports whether tokens, a body's words, hold the words of phrase
-// adjacent and in order, ignoring case.
-func tokensHold(tokens []string, phrase string) bool {
-	want := strings.FieldsFunc(phrase, isWordSeparator)
-	for i := 0; i+len(want) <= len(tokens); i++ {
-		if slices.EqualFunc(tokens[i:i+len(want)], want, strings.EqualFold) {
+	isSeparator := func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) }
+	want := strings.FieldsFunc(phrase, isSeparator)
+	have := strings.FieldsFunc(body, isSeparator)
+	for i := 0; i+len(want) <= len(have); i++ {
+		if slices.EqualFunc(have[i:i+len(want)], want, strings.EqualFold) {
 			return true
 		}
 	}
 	return false
 }
 
-// HoldsWords reports whether body holds every query word, in any regular form,
-// as a whole word, and every quoted phrase. Words are runs of letters and
-// digits, so punctuation, underscores, and spaces separate them but CJK
-// characters do not.
-func (q ContentWords) HoldsWords(body string) bool {
-	tokens := strings.FieldsFunc(body, isWordSeparator)
-	for _, forms := range q.Terms {
-		if !slices.ContainsFunc(forms, func(form string) bool { return tokensHold(tokens, form) }) {
-			return false
-		}
-	}
-	return !slices.ContainsFunc(q.Phrases, func(phrase string) bool { return !tokensHold(tokens, phrase) })
-}
-
-// WordPage cuts one page from DuckDB or ClickHouse all-word candidates read in
-// result order. The SQL filter bounds words by ASCII characters, so it also
-// returns bodies such as "漢invoice" that fail the Unicode word boundary.
-// Rejected candidates leave no mark on the cursor, which counts accepted rows.
-type WordPage struct {
-	words ContentWords
-	skip  int
-	want  int
-}
-
-// NewWordPage returns a page that skips cursor accepted rows, then takes
-// limit+1 so the caller can tell whether another page follows.
-func NewWordPage(words ContentWords, cursor, limit int) *WordPage {
-	return &WordPage{words: words, skip: cursor, want: limit + 1}
-}
-
-// Take reports whether the next candidate belongs on the page, and whether
-// the page is full so the caller can stop reading. exactText marks a body that
-// holds the whole query text, which needs no word check.
-func (p *WordPage) Take(body string, exactText bool) (taken, full bool) {
-	if !exactText && !isASCII(body) && !p.words.HoldsWords(body) {
-		return false, false
-	}
-	if p.skip > 0 {
-		p.skip--
-		return false, false
-	}
-	p.want--
-	return true, p.want == 0
-}
-
-// isASCII reports whether s holds only ASCII bytes, the bodies on which the
-// ASCII word boundary equals the Unicode one.
-func isASCII(s string) bool {
-	for i := range len(s) {
-		if s[i] >= utf8.RuneSelf {
-			return false
-		}
-	}
-	return true
-}
+func isWordSeparator(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) }
 
 // unquoteContentSearch returns the text inside a single fully quoted query.
 func unquoteContentSearch(pattern string) (string, bool) {
@@ -192,9 +134,6 @@ func unquoteContentSearch(pattern string) (string, bool) {
 
 // explicitFTSExpression reports whether a pattern uses explicit FTS syntax.
 func explicitFTSExpression(pattern string) bool {
-	if strings.Contains(pattern, "*") || strings.HasPrefix(strings.TrimSpace(pattern), `NOT "`) {
-		return true
-	}
 	if !strings.HasPrefix(strings.TrimSpace(pattern), `"`) {
 		return false
 	}
