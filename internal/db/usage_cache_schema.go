@@ -706,9 +706,12 @@ func publishUsageCache(
 	if usageCacheFormatVersion == usageCacheUpgradeTo {
 		seeded, err = seedUpgradedUsageCache(ctx, archivePath, temporaryPath, databaseID)
 		if err != nil {
-			if ctx.Err() != nil {
+			if ctx.Err() != nil || errors.Is(err, errUsageCacheCopy) {
 				_ = removeUsageCacheFiles(temporaryPath)
-				return nil, false, ctx.Err()
+				if ctx.Err() != nil {
+					return nil, false, ctx.Err()
+				}
+				return nil, false, err
 			}
 			log.Printf("warning: upgrading usage cache: %v", err)
 			_ = removeUsageCacheFiles(temporaryPath)

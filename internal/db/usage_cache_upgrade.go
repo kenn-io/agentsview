@@ -8,6 +8,8 @@ import (
 	"os"
 )
 
+var errUsageCacheCopy = errors.New("copying prior usage cache")
+
 // seedUpgradedUsageCache copies the audited format 23 cache into a private candidate.
 func seedUpgradedUsageCache(ctx context.Context, archivePath, candidate, databaseID string) (bool, error) {
 	oldPath := usageCacheGenerationPath(archivePath, usageCacheUpgradeFrom, databaseID)
@@ -35,7 +37,7 @@ func seedUpgradedUsageCache(ctx context.Context, archivePath, candidate, databas
 	_, err = source.ExecContext(ctx, "VACUUM INTO ?", candidate)
 	closeErr := source.Close()
 	if err != nil {
-		return false, fmt.Errorf("copying prior usage cache: %w", err)
+		return false, fmt.Errorf("%w: %w", errUsageCacheCopy, err)
 	}
 	if closeErr != nil {
 		return false, closeErr
@@ -58,11 +60,13 @@ func seedUpgradedUsageCache(ctx context.Context, archivePath, candidate, databas
 		`ALTER TABLE usage_rollup_exceptions ADD COLUMN ranking_output_tokens INTEGER`,
 		usageCacheAccountTotalsSQL,
 		`INSERT INTO usage_cache_metadata(key, value) VALUES ('reset_epoch', '0'), ('source_mutation_revision', '0')`,
-		`UPDATE usage_cache_metadata SET value = '24' WHERE key = 'format_version'`,
 	} {
 		if _, err := tx.ExecContext(ctx, query); err != nil {
 			return false, fmt.Errorf("converting usage cache: %w", err)
 		}
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE usage_cache_metadata SET value = ? WHERE key = 'format_version'`, usageCacheUpgradeTo); err != nil {
+		return false, fmt.Errorf("updating usage cache format: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return false, err

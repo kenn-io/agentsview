@@ -26,6 +26,31 @@ func makeFormat23Cache(t *testing.T, path string) {
 		_, err := db.ExecContext(t.Context(), query)
 		require.NoError(t, err)
 	}
+	// Compare against the schema shipped by the format 23 writer, not the
+	// current schema from which this populated fixture was derived.
+	schema, err := os.ReadFile("testdata/usage-cache-v23-schema.sql")
+	require.NoError(t, err)
+	reference := openRawUsageCacheTestDB(t, filepath.Join(t.TempDir(), "v23.db"))
+	_, err = reference.ExecContext(t.Context(), string(schema))
+	require.NoError(t, err)
+	objects := `SELECT type, name, tbl_name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' AND name != 'padding' ORDER BY type, name`
+	assert.Equal(t, usageSpoolFactValues(t, reference, objects), usageSpoolFactValues(t, db, objects))
+	rows, err := reference.QueryContext(t.Context(), `SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'`)
+	require.NoError(t, err)
+	defer rows.Close()
+	var tables []string
+	for rows.Next() {
+		var table string
+		require.NoError(t, rows.Scan(&table))
+		tables = append(tables, table)
+	}
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+	for _, table := range tables {
+		query := `SELECT name, type, "notnull", dflt_value, pk FROM pragma_table_info(?) ORDER BY cid`
+		assert.Equal(t, usageSpoolFactValues(t, reference, query, table), usageSpoolFactValues(t, db, query, table), table)
+	}
+	require.NoError(t, reference.Close())
 	require.NoError(t, db.Close())
 }
 
