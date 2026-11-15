@@ -159,7 +159,6 @@ func (s *Store) fetchHybridKeywordBatchPG(
 
 	kf := f
 	kf.Mode = "fts"
-	kf.ExcludeSystem = true
 	kf.Limit, kf.Cursor = k-1, offset
 	if !s.cockroach {
 		if _, words, ok := db.RouteContentWords(kf); ok {
@@ -234,9 +233,11 @@ func (s *Store) scanHybridKeywordPG(
 // Natural word searches center it on the first matching form; explicit FTS
 // expressions use the term-aware span.
 func pgKeywordApproxSnippet(content, pattern string, words db.ContentWords) string {
-	start, end := db.FTSSnippetRange(pattern, content)
+	var start, end int
 	if len(words.Terms) > 0 {
 		start, end = db.WordSnippetRange(content, pattern, words)
+	} else {
+		start, end = db.FTSSnippetRange(pattern, content)
 	}
 	lo, hi := db.SnippetBounds(content, start, end, db.ContentSnippetRadius)
 	return content[lo:hi]

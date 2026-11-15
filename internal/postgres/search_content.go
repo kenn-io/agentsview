@@ -782,7 +782,7 @@ func pgSelectedWordsSQL(scopeWhere, matches string, pb *paramBuilder, limit, off
 	}
 	return fmt.Sprintf(`WITH scoped AS NOT MATERIALIZED (SELECT * FROM sessions WHERE %s), %s,
 				selected AS MATERIALIZED (
-					SELECT session_id, ordinal, ts, sort_ts, n FROM word_matches
+					SELECT session_id, ordinal, sort_ts, n FROM word_matches
 					WHERE n >= 1 ORDER BY n DESC, sort_ts DESC NULLS LAST, session_id ASC, ordinal ASC
 					LIMIT %s OFFSET %s
 				)`, scopeWhere, matches, pb.add(limit), pb.add(offset))

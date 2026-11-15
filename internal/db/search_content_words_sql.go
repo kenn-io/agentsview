@@ -27,7 +27,7 @@ func WordRegexSQL(b *QueryBuilder, raw string, q ContentWords, all bool) string 
 	parts := []string{"1=1"}
 	if all {
 		for _, forms := range q.Terms {
-			parts = append(parts, wordTermSQL(b, raw, forms))
+			parts = append(parts, b.RegexPredicate(raw, boundedPattern(b, compactForms(b, forms))))
 		}
 	}
 	for _, phrase := range q.Phrases {
@@ -49,7 +49,7 @@ func WordCountSQL(b *QueryBuilder, raw string, q ContentWords) string {
 	parts := make([]string, len(q.Terms))
 	for i, forms := range q.Terms {
 		parts[i] = "CASE WHEN " + b.ContainsPredicate(raw, wordCandidatePrefix(forms)) +
-			" AND " + wordTermSQL(b, raw, forms) + " THEN 1 ELSE 0 END"
+			" AND " + b.RegexPredicate(raw, boundedPattern(b, compactForms(b, forms))) + " THEN 1 ELSE 0 END"
 	}
 	return "(" + strings.Join(parts, " + ") + ")"
 }
@@ -92,10 +92,6 @@ func WordRankedSQL(b *QueryBuilder, branches []string, f ContentSearchFilter, q 
 			ORDER BY tier, n DESC, sort_ts DESC, session_id ASC, ordinal ASC,
 				src ASC, row_id ASC, call_index ASC, event_index ASC, body ASC
 			LIMIT ? OFFSET ?`
-}
-
-func wordTermSQL(b *QueryBuilder, raw string, forms []string) string {
-	return b.dialect.regexPredicate(raw, b.Add(boundedPattern(b, compactForms(b, forms))))
 }
 
 // boundedPattern matches words separated by non-letter, non-digit runs, with

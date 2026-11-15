@@ -1134,15 +1134,6 @@ func (s *Store) collectContentSubstringMatches(
 ) ([]db.ContentMatch, error) {
 	f, words, ranked := db.RouteContentWords(f)
 	if ranked {
-		if f.Mode != "fts" {
-			exact, err := s.collectContentSubstringPass(ctx, f, words, false, false)
-			if err != nil || len(exact) > f.Limit {
-				for i := range exact {
-					exact[i].MatchedWords = len(words.Terms)
-				}
-				return exact, err
-			}
-		}
 		matches, err := s.collectContentSubstringPass(ctx, f, words, true, true)
 		if err != nil || len(matches) > f.Limit {
 			return matches, err
