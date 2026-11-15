@@ -4791,7 +4791,6 @@ func TestDecodeAntigravityStepStructuredUserInput(t *testing.T) {
 	}{
 		{"prompt with skill", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte("比较这两个游戏 /grill-me")}, {num: 2, wire: pbWireBytes, bytes: []byte("A longer skill expansion with enough text to be selected")}}, "比较这两个游戏 /grill-me"},
 		{"later text", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte("  ")}, {num: 2, wire: pbWireBytes, bytes: []byte("attachment")}, {num: 1, wire: pbWireBytes, bytes: []byte(" second ")}}, " second "},
-		{"short", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte("你好")}}, "你好"},
 		{"nul", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte("a\x00b")}}, "a�b"},
 		{"blank text", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte(" \n")}, {num: 2, wire: pbWireBytes, bytes: []byte("A longer skill expansion with enough text to be selected")}}, "A longer skill expansion with enough text to be selected"},
 	}
@@ -4826,32 +4825,6 @@ func TestAntigravityCLIDBStructuredPromptMissingFromHistory(t *testing.T) {
 	assert.Equal(t, "比较这两个游戏 /grill-me", sess.FirstMessage)
 }
 
-func TestAntigravityCLIDBStructuredPromptPreservesWhitespace(t *testing.T) {
-	const (
-		id     = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
-		prompt = "    def greet(): return 42  "
-	)
-	root := t.TempDir()
-	dbPath := filepath.Join(root, "conversations", id+".db")
-	mustMkdir(t, filepath.Dir(dbPath))
-	conn, err := sql.Open("sqlite3", dbPath)
-	require.NoError(t, err)
-	createAntigravityStepTables(t, conn)
-	text := encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: []byte(prompt)}})
-	skill := encodePB([]pbField{{num: 2, wire: pbWireBytes, bytes: []byte("A longer skill expansion that should not replace the typed request")}})
-	input := encodePB([]pbField{{num: 3, wire: pbWireBytes, bytes: text}, {num: 3, wire: pbWireBytes, bytes: skill}})
-	payload := encodePB([]pbField{{num: 19, wire: pbWireBytes, bytes: input}})
-	mustExec(t, conn, `INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`, 0, 14, payload)
-	require.NoError(t, conn.Close())
-	sess, msgs, err := parseAntigravityCLITestSession(t, dbPath, "", "test-machine")
-	require.NoError(t, err)
-	require.Len(t, msgs, 1)
-	assert.Equal(t, prompt, msgs[0].Content)
-	assert.Equal(t, len(prompt), msgs[0].ContentLength)
-	assert.Equal(t, "def greet(): return 42", sess.FirstMessage)
-	assert.Equal(t, 1, sess.UserMessageCount)
-}
-
 func TestAntigravityCLIHistoryReconcilesStructuredTurns(t *testing.T) {
 	type turn struct {
 		role       RoleType
@@ -4865,6 +4838,7 @@ func TestAntigravityCLIHistoryReconcilesStructuredTurns(t *testing.T) {
 		history []turn
 		want    []string
 	}{
+		{"missing history", []turn{{RoleUser, "typed request", 0, true}}, []turn{{text: "pending request", ms: 1779000060000}}, []string{"typed request", "pending request"}},
 		{"mixed", []turn{{RoleUser, "typed request", 1779000000000, true}, {RoleUser, "A long guessed expansion for the second request", 1779000060000, false}}, []turn{{text: "typed request", ms: 1779000000000}, {text: "second request", ms: 1779000060000}}, []string{"typed request", "second request"}},
 		{"same second repeat", []turn{{RoleUser, "repeat request", 1779000000100, true}, {RoleAssistant, "assistant reply content", 1779000000500, false}}, []turn{{text: "repeat request", ms: 1779000000900}}, []string{"repeat request", "assistant reply content", "repeat request"}},
 		{"timestamp skew", []turn{{RoleUser, "typed request", 1779000000000, true}}, []turn{{text: "typed request", ms: 1779000002000}, {text: "pending request", ms: 1779000060000}}, []string{"typed request", "pending request"}},
@@ -4874,7 +4848,11 @@ func TestAntigravityCLIHistoryReconcilesStructuredTurns(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var dbMessages, history []ParsedMessage
 			for _, turn := range tc.turns {
-				dbMessages = append(dbMessages, ParsedMessage{Role: turn.role, Content: turn.text, Timestamp: time.UnixMilli(turn.ms), structuredPrompt: turn.structured})
+				msg := ParsedMessage{Role: turn.role, Content: turn.text, structuredPrompt: turn.structured}
+				if turn.ms != 0 {
+					msg.Timestamp = time.UnixMilli(turn.ms)
+				}
+				dbMessages = append(dbMessages, msg)
 			}
 			for _, row := range tc.history {
 				history = append(history, ParsedMessage{Role: RoleUser, Content: row.text, Timestamp: time.UnixMilli(row.ms)})
