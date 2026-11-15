@@ -288,8 +288,7 @@ func TestProbeMirrorSucceedsWhileMirrorHeldReadOnly(t *testing.T) {
 	require.NoError(t, createSchema(ctx, conn))
 	require.NoError(t, writeMirrorMetadata(ctx, conn, mirrorMetadata{
 		SchemaVersion: SchemaVersion, DataVersion: 68, FrustrationMarkersVersion: frustrationMarkersVersion,
-		SystemPrefixRulesVersion: db.SystemPrefixRulesVersion(),
-		SourceDatabaseID:         "database-1", SourceArchiveID: "archive-1",
+		SourceDatabaseID: "database-1", SourceArchiveID: "archive-1",
 		LastPushCutoff: "2026-07-18T00:00:00.000Z", LastPushMachine: "machine-a",
 	}))
 	require.NoError(t, conn.Close())

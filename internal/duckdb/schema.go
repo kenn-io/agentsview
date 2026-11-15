@@ -45,7 +45,7 @@ import (
 const SchemaVersion = 31
 
 func trendsPartsIdentity() string {
-	return "duckdb|" + strconv.Itoa(SchemaVersion) + "|" + db.SystemPrefixRulesVersion()
+	return "duckdb|" + db.SystemPrefixRulesVersion()
 }
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
