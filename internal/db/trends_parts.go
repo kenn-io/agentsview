@@ -60,6 +60,19 @@ var trendPartsObserver struct {
 	read func([]string)
 }
 
+var trendTimezoneKeys sync.Map
+
+// TrendsTimezoneKey identifies the resolved rules used to bucket messages.
+func TrendsTimezoneKey(f AnalyticsFilter) string {
+	loc := f.location()
+	if key, ok := trendTimezoneKeys.Load(loc.String()); ok {
+		return key.(string)
+	}
+	key := timezoneRuleFingerprint(loc.String(), loc, time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC))
+	actual, _ := trendTimezoneKeys.LoadOrStore(loc.String(), key)
+	return actual.(string)
+}
+
 // SetTrendPartsReadObserver installs an observer for tests and returns its reset function.
 func SetTrendPartsReadObserver(observe func([]string)) func() {
 	trendPartsObserver.Lock()

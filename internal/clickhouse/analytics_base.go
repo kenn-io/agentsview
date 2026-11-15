@@ -628,12 +628,26 @@ func (s *Store) GetTrendsTerms(
 	if err != nil {
 		return load(ctx)
 	}
+	if err := ctx.Err(); err != nil {
+		return db.TrendsTermsResponse{}, err
+	}
+	diskEnabled := f.Timezone != "Local" && s.usageDisk.Enabled()
+	diskSlot := "trends|" + string(key)
+	diskVersion := ""
+	if diskEnabled {
+		diskVersion = trendsDiskVersion + db.TrendsTimezoneKey(f) + "|" + version
+		if report, ok := s.trendsReads.Get(string(key), version); ok {
+			s.usageDisk.Keep(diskSlot, diskVersion, func() ([]byte, error) {
+				return json.Marshal(report, json.FormatNilSliceAsNull(true))
+			})
+			return report, nil
+		}
+	}
 	return s.trendsReads.Do(ctx, string(key), version, func(ctx context.Context) (db.TrendsTermsResponse, error) {
-		if f.Timezone == "Local" || !s.usageDisk.Enabled() {
+		if !diskEnabled {
 			return load(ctx)
 		}
-		slot := "trends|" + string(key)
-		if data, ok := s.usageDisk.Get(slot, trendsDiskVersion+version); ok {
+		if data, ok := s.usageDisk.Get(diskSlot, diskVersion); ok {
 			var report db.TrendsTermsResponse
 			if json.Unmarshal(data, &report) == nil {
 				return report, nil
@@ -642,7 +656,7 @@ func (s *Store) GetTrendsTerms(
 		report, err := load(ctx)
 		if err == nil {
 			if data, marshalErr := json.Marshal(report, json.FormatNilSliceAsNull(true)); marshalErr == nil {
-				s.usageDisk.Put(slot, trendsDiskVersion+version, data)
+				s.usageDisk.Put(diskSlot, diskVersion, data)
 			}
 		}
 		return report, err
