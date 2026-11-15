@@ -1262,6 +1262,7 @@ func EnsureSchema(
 		time.Since(step).Round(time.Millisecond), filled,
 	)
 	step = time.Now()
+	// The counter fill bumps updated_at, which clears automation audit stamps.
 	if err := backfillIsAutomatedPG(ctx, db); err != nil {
 		return err
 	}

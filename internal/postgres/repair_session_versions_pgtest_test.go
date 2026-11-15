@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -29,11 +30,12 @@ func TestPGSchemaRepairsLeaveSessionVersionsSettled(t *testing.T) {
 		{"runSchemaDataRepairsPG", func() error { return runSchemaDataRepairsPG(ctx, ps.DB()) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CACHE_DIRECTORY", t.TempDir())
 			_, err := ps.DB().ExecContext(ctx, `DELETE FROM sessions`)
 			require.NoError(t, err)
-			_, err = ps.DB().ExecContext(ctx, `INSERT INTO sessions (id, machine, project, agent) VALUES ('one', 'host', 'project', 'codex'), ('two', 'host', 'project', 'codex')`)
+			_, err = ps.DB().ExecContext(ctx, `INSERT INTO sessions (id, machine, project, agent, message_count) VALUES ('one', 'host', 'project', 'codex', 1), ('two', 'host', 'project', 'codex', 1)`)
 			require.NoError(t, err)
-			_, err = ps.DB().ExecContext(ctx, `INSERT INTO messages (session_id, ordinal, role, content) VALUES ('one', 0, 'user', 'hello'), ('two', 0, 'user', 'hello')`)
+			_, err = ps.DB().ExecContext(ctx, `INSERT INTO messages (session_id, ordinal, role, content, timestamp) VALUES ('one', 0, 'user', 'hello', '2026-01-01T12:00:00Z'), ('two', 0, 'user', 'hello', '2026-01-01T12:00:00Z')`)
 			require.NoError(t, err)
 			_, err = ps.DB().ExecContext(ctx, `UPDATE messages SET usage_output_tokens = NULL, usage_web_search_requests = NULL`)
 			require.NoError(t, err)
@@ -61,8 +63,39 @@ func TestPGSchemaRepairsLeaveSessionVersionsSettled(t *testing.T) {
 				return versions
 			}
 			before := snapshot()
+			terms, err := db.ParseTrendTerms([]string{"hello"})
+			require.NoError(t, err)
+			filter := db.AnalyticsFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
+			cacheDir := t.TempDir()
+			store, err := NewStore(ctx, pgURL, "agentsview", true)
+			require.NoError(t, err)
+			require.NoError(t, store.ConfigureUsageCache(ctx, cacheDir, pgURL, "agentsview"))
+			require.True(t, store.trendsDisk.Enabled())
+			require.NotEmpty(t, store.trendsIdentity)
+			var reads [][]string
+			reset := db.SetTrendPartsReadObserver(func(ids []string) { reads = append(reads, append([]string(nil), ids...)) })
+			t.Cleanup(reset)
+			report, err := store.GetTrendsTerms(ctx, filter, terms, "day")
+			require.NoError(t, err)
+			require.Len(t, reads, 1)
+			assert.ElementsMatch(t, []string{"one", "two"}, reads[0])
+			assert.Equal(t, 2, report.MessageCount)
+			require.Len(t, report.Series, 1)
+			assert.Equal(t, 2, report.Series[0].Total)
+			require.NoError(t, store.Close())
+			reads = nil
 			require.NoError(t, tc.repair())
 			assert.Equal(t, before, snapshot())
+			store, err = NewStore(ctx, pgURL, "agentsview", true)
+			require.NoError(t, err)
+			defer store.Close()
+			require.NoError(t, store.ConfigureUsageCache(ctx, cacheDir, pgURL, "agentsview"))
+			require.True(t, store.trendsDisk.Enabled())
+			require.NotEmpty(t, store.trendsIdentity)
+			after, err := store.GetTrendsTerms(ctx, filter, terms, "day")
+			require.NoError(t, err)
+			assert.Equal(t, report, after)
+			assert.Empty(t, reads)
 		})
 	}
 }
