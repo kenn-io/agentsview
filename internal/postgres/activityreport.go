@@ -821,7 +821,11 @@ func (s *Store) activityReportUsage(
 	if err != nil {
 		return nil, nil, err
 	}
-	saved.rows = make([]pgActivityPricedRow, 0, len(order))
+	if inputs != nil {
+		saved.rows = make([]pgActivityPricedRow, 0, len(order))
+	} else {
+		out = make([]activity.UsageRow, 0, len(order))
+	}
 	for i, index := range order {
 		r := raw[index] //nolint:nilaway // order contains only indices from raw.
 		if !mask[i] {
@@ -846,11 +850,16 @@ func (s *Store) activityReportUsage(
 		if priceErr != nil {
 			return nil, nil, priceErr
 		}
-		saved.rows = append(saved.rows, pgActivityPricedRow{
+		p := pgActivityPricedRow{
 			index: int32(index), attribution: unique.Make(attribution[i]), cost: cost.Microdollars,
 			webSearches: int32(webSearchRequests[i]), reported: costRow.costValid,
 			sessionCost: r.copilotReported && r.costValid, priced: priced, contributes: contributes,
-		})
+		}
+		if inputs != nil {
+			saved.rows = append(saved.rows, p)
+		} else {
+			out = append(out, pgAssembleActivityUsageRow(&raw[index], p))
+		}
 	}
 	block, err := rateResolver.BuildBlock()
 	if err != nil {
@@ -859,30 +868,34 @@ func (s *Store) activityReportUsage(
 	saved.block = &block
 	if inputs != nil {
 		inputs.priced = saved
+		out = pgAssembleActivityUsage(raw, saved.rows)
 	}
-	return pgAssembleActivityUsage(raw, saved.rows), saved.block, nil
+	return out, saved.block, nil
 }
 
 func pgAssembleActivityUsage(raw []pgActivityUsageRow, priced []pgActivityPricedRow) []activity.UsageRow {
 	out := make([]activity.UsageRow, 0, len(priced))
 	for _, p := range priced {
-		r := raw[p.index]
-		source := export.CostSourceComputed
-		if p.reported {
-			source = export.CostSourceReported
-		}
-		var sessionCost *money.Money
-		if p.sessionCost {
-			sessionCost = &money.Money{Microdollars: r.cost}
-		}
-		row := activity.UsageRow{SessionID: p.attribution.Value(), Model: r.model.Value(), Timestamp: FormatISO8601(time.UnixMicro(r.us).UTC()), Agent: r.agent.Value(), ProviderID: r.providerID.Value(), ClaudeMessageID: r.claudeMessageID, ClaudeRequestID: r.claudeRequestID, SourceUUID: r.sourceUUID, UsageDedupKey: r.usageDedupKey}
-		row.InputTokens, row.OutputTokens = int(r.input), int(r.output)
-		row.WebSearchRequests = int(p.webSearches)
-		row.Cost, row.CostSource, row.SessionCost = money.Money{Microdollars: p.cost}, source, sessionCost
-		row.Priced, row.Contributes = p.priced, p.contributes
-		out = append(out, row)
+		out = append(out, pgAssembleActivityUsageRow(&raw[p.index], p))
 	}
 	return out
+}
+
+func pgAssembleActivityUsageRow(r *pgActivityUsageRow, p pgActivityPricedRow) activity.UsageRow {
+	source := export.CostSourceComputed
+	if p.reported {
+		source = export.CostSourceReported
+	}
+	var sessionCost *money.Money
+	if p.sessionCost {
+		sessionCost = &money.Money{Microdollars: r.cost}
+	}
+	row := activity.UsageRow{SessionID: p.attribution.Value(), Model: r.model.Value(), Timestamp: FormatISO8601(time.UnixMicro(r.us).UTC()), Agent: r.agent.Value(), ProviderID: r.providerID.Value(), ClaudeMessageID: r.claudeMessageID, ClaudeRequestID: r.claudeRequestID, SourceUUID: r.sourceUUID, UsageDedupKey: r.usageDedupKey}
+	row.InputTokens, row.OutputTokens = int(r.input), int(r.output)
+	row.WebSearchRequests = int(p.webSearches)
+	row.Cost, row.CostSource, row.SessionCost = money.Money{Microdollars: p.cost}, source, sessionCost
+	row.Priced, row.Contributes = p.priced, p.contributes
+	return row
 }
 
 func pgActivityReportRowStatusWithWebSearchRequests(
