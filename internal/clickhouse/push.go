@@ -1096,12 +1096,9 @@ func (s *Sync) pushSessionBatch(
 		switch {
 		case w.content:
 			content = append(content, contentWrite{payload: p, keep: w.keepMessages})
-			rows, ok, err := messageRowsFingerprint(p.messages, p.imageText, len(p.messages))
+			rows, err := messageRowsFingerprint(p.messages, p.imageText, len(p.messages))
 			if err != nil {
 				return nil, err
-			}
-			if !ok {
-				rows = ""
 			}
 			publication := sessionPublication{contentVersion: version, messageRows: rows}
 			if w.keepMessages > 0 {
@@ -1174,8 +1171,8 @@ func (s *Sync) keptPrefixMatches(p sessionPayload, w sessionWrite) (int, bool, e
 	if w.keepMessages > len(p.messages) {
 		return 0, false, nil
 	}
-	prefix, ok, err := messageRowsFingerprint(p.messages, p.imageText, w.keepMessages)
-	if err != nil || !ok || prefix != w.keptMessageRows {
+	prefix, err := messageRowsFingerprint(p.messages, p.imageText, w.keepMessages)
+	if err != nil || prefix != w.keptMessageRows {
 		return 0, false, err
 	}
 	return p.messages[w.keepMessages-1].Ordinal, true, nil

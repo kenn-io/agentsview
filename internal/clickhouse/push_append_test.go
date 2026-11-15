@@ -35,16 +35,15 @@ func appendTestImages() []db.ImageTextRow {
 func TestMessageRowsFingerprintMatchesStoredPrefixAfterGrowth(t *testing.T) {
 	full := appendTestMessages()
 	images := appendTestImages()
-	stored, ok, err := messageRowsFingerprint(full[:2], images[:1], 2)
+	stored, err := messageRowsFingerprint(full[:2], images[:1], 2)
 	require.NoError(t, err)
-	require.True(t, ok)
+	require.NotEmpty(t, stored)
 
-	prefix, ok, err := messageRowsFingerprint(full, images, 2)
+	prefix, err := messageRowsFingerprint(full, images, 2)
 	require.NoError(t, err)
-	require.True(t, ok)
 	assert.Equal(t, stored, prefix, "image text after the kept messages is not part of the prefix")
 
-	all, _, err := messageRowsFingerprint(full, images, len(full))
+	all, err := messageRowsFingerprint(full, images, len(full))
 	require.NoError(t, err)
 	assert.NotEqual(t, stored, all)
 }
@@ -52,7 +51,7 @@ func TestMessageRowsFingerprintMatchesStoredPrefixAfterGrowth(t *testing.T) {
 // Any change a kept row would carry changes the prefix fingerprint, so the
 // push rewrites the session instead of appending.
 func TestMessageRowsFingerprintTracksKeptRows(t *testing.T) {
-	stored, _, err := messageRowsFingerprint(appendTestMessages(), appendTestImages(), 2)
+	stored, err := messageRowsFingerprint(appendTestMessages(), appendTestImages(), 2)
 	require.NoError(t, err)
 	for name, change := range map[string]func(ms []db.Message, images []db.ImageTextRow){
 		"message content":   func(ms []db.Message, _ []db.ImageTextRow) { ms[0].Content = "edited" },
@@ -64,9 +63,9 @@ func TestMessageRowsFingerprintTracksKeptRows(t *testing.T) {
 	} {
 		ms, images := appendTestMessages(), appendTestImages()
 		change(ms, images)
-		got, ok, err := messageRowsFingerprint(ms, images, 2)
+		got, err := messageRowsFingerprint(ms, images, 2)
 		require.NoError(t, err, name)
-		require.True(t, ok, name)
+		require.NotEmpty(t, got, name)
 		assert.NotEqual(t, stored, got, name)
 	}
 }
@@ -74,7 +73,7 @@ func TestMessageRowsFingerprintTracksKeptRows(t *testing.T) {
 func TestMessageRowsFingerprintRejectsUnorderedOrdinals(t *testing.T) {
 	ms := appendTestMessages()
 	ms[2].Ordinal = 1
-	_, ok, err := messageRowsFingerprint(ms, nil, 2)
+	got, err := messageRowsFingerprint(ms, nil, 2)
 	require.NoError(t, err)
-	assert.False(t, ok)
+	assert.Empty(t, got)
 }

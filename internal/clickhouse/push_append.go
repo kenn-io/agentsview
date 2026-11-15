@@ -43,12 +43,12 @@ var messageOrdinalColumn = map[string]string{
 // messageRowsFingerprint hashes the rows a push stores in the ordinal-keyed
 // tables for the first n messages: each message row, its tool call and
 // result event rows, then the image text rows anchored at or before the
-// n-th message's ordinal. It reports false when the messages are not in
+// n-th message's ordinal. It returns "" when the messages are not in
 // strictly increasing ordinal order, since an append then cannot tell kept
 // rows from new ones.
-func messageRowsFingerprint(messages []db.Message, images []db.ImageTextRow, n int) (string, bool, error) {
+func messageRowsFingerprint(messages []db.Message, images []db.ImageTextRow, n int) (string, error) {
 	if !ordinalsIncrease(messages) {
-		return "", false, nil
+		return "", nil
 	}
 	h := sha256.New()
 	write := func(row []any) error {
@@ -62,15 +62,15 @@ func messageRowsFingerprint(messages []db.Message, images []db.ImageTextRow, n i
 	}
 	for _, m := range messages[:n] {
 		if err := write(messageRow(m, 0)); err != nil {
-			return "", false, err
+			return "", err
 		}
 		for i, tc := range m.ToolCalls {
 			if err := write(toolCallRow(m, tc, i, 0)); err != nil {
-				return "", false, err
+				return "", err
 			}
 			for _, ev := range tc.ResultEvents {
 				if err := write(toolResultEventRow(m, i, ev, 0)); err != nil {
-					return "", false, err
+					return "", err
 				}
 			}
 		}
@@ -80,12 +80,12 @@ func messageRowsFingerprint(messages []db.Message, images []db.ImageTextRow, n i
 		for _, r := range images {
 			if r.MessageOrdinal <= last {
 				if err := write(imageTextRow(r, 0)); err != nil {
-					return "", false, err
+					return "", err
 				}
 			}
 		}
 	}
-	return hex.EncodeToString(h.Sum(nil)), true, nil
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func ordinalsIncrease(messages []db.Message) bool {
