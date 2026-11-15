@@ -140,10 +140,10 @@ func TestSearchContentNaturalPhrasesMatchText(t *testing.T) {
 	requireFTS(t, d)
 	seedWordSearch(t, d, "proj",
 		[3]string{"phrase", "rounding, of invoices decision", ""},
-		[3]string{"stemmed", "round of invoice decision", ""},
 		[3]string{"curly", "alpha beta gamma", ""},
 		[3]string{"separated", "alpha beta then gamma", ""},
 	)
+	seedWordSearch(t, d, "stemmed", [3]string{"stemmed", "round of invoice decision", ""})
 	for _, tc := range []struct {
 		pattern, mode, project string
 		want                   []wordHit
