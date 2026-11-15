@@ -2448,29 +2448,32 @@ func (s *Store) GetTopSessionsByCost(
 		}
 	}
 	if !ok {
-		out, ok = carryRawUsage(ctx, s, &s.topSessionTotals, state, memoSlot, memoVersion, "top", f, pricing.digest+"|"+pricing.catalog.digest, nil)
-		if !ok {
-			catalogDigest := pricing.catalog.digest
-			out, err = retryUsagePriceContexts(pricing, func(pricing *pricingSnapshot) ([]db.TopSessionEntry, error) {
-				catalogDigest = pricing.catalog.digest
-				return s.topSessionsForCatalog(ctx, f, pricing)
-			})
-			if err != nil {
-				return nil, err
-			}
-			if f.TopSessionsByGroup {
-				if err := s.loadTopSessionMetadata(ctx, out); err != nil {
-					return nil, err
-				}
-			}
-			ok = catalogDigest == pricing.catalog.digest && (!state.ready || len(state.raw) != 0 || s.usageCaptureStable(ctx))
-			if ok {
-				s.topSessionTotals.Put(memoSlot, memoVersion, out)
-			}
-		}
-		if ok && diskReady {
+		if out, ok = carryRawUsage(ctx, s, &s.topSessionTotals, state, memoSlot, memoVersion, "top", f, pricing.digest+"|"+pricing.catalog.digest, nil); ok && diskReady {
 			if data, err := kept.EncodeRows(out, kept.DefaultMaxBytes, db.TopSessionBytes); err == nil {
 				s.usageDisk.Put(memoSlot, topUsageDiskVersion+memoVersion, data)
+			}
+		}
+	}
+	if !ok {
+		catalogDigest := pricing.catalog.digest
+		out, err = retryUsagePriceContexts(pricing, func(pricing *pricingSnapshot) ([]db.TopSessionEntry, error) {
+			catalogDigest = pricing.catalog.digest
+			return s.topSessionsForCatalog(ctx, f, pricing)
+		})
+		if err != nil {
+			return nil, err
+		}
+		if f.TopSessionsByGroup {
+			if err := s.loadTopSessionMetadata(ctx, out); err != nil {
+				return nil, err
+			}
+		}
+		if catalogDigest == pricing.catalog.digest && (!state.ready || len(state.raw) != 0 || s.usageCaptureStable(ctx)) {
+			s.topSessionTotals.Put(memoSlot, memoVersion, out)
+			if diskReady {
+				if data, err := kept.EncodeRows(out, kept.DefaultMaxBytes, db.TopSessionBytes); err == nil {
+					s.usageDisk.Put(memoSlot, topUsageDiskVersion+memoVersion, data)
+				}
 			}
 		}
 	}

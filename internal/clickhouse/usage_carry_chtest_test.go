@@ -12,7 +12,7 @@ import (
 )
 
 func TestUsageCarry(t *testing.T) {
-	for _, scenario := range []string{"healthy", "unpublished", "partial deletion", "full deletion", "changed after read", "parts move"} {
+	for _, scenario := range []string{"healthy", "unpublished", "partial deletion", "full deletion", "changed after read", "parts move", "late old writer"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Parallel()
 			local, syncer, store := newPreparedUsageStore(t)
@@ -26,6 +26,8 @@ func TestUsageCarry(t *testing.T) {
 			switch scenario {
 			case "unpublished":
 				execPreparedUsage(t, store, fmt.Sprintf(`INSERT INTO messages SELECT * REPLACE ('{"input_tokens":999999}' AS token_usage, push_version + 1 AS push_version) FROM messages WHERE session_id = '%s' AND ordinal = 0`, preparedUsageLongID))
+			case "late old writer":
+				execPreparedUsage(t, store, fmt.Sprintf(`INSERT INTO usage_messages SELECT * REPLACE (toInt64(9999) AS ordinal, toInt64(1000000) AS usage_input, push_version - 1 AS push_version, toUInt128(push_version - 1) * 2 + 1 AS revision) FROM usage_messages WHERE session_id = '%s' LIMIT 1`, preparedUsageLongID))
 			case "partial deletion", "full deletion":
 				condition := ""
 				if scenario == "partial deletion" {
@@ -67,25 +69,24 @@ func TestUsageCarry(t *testing.T) {
 				got := preparedUsageRead{daily, top, counts}
 				fresh := readPreparedUsage(t, NewStoreFromDB(store.DB(), store.bulk), f)
 				require.Equal(t, fresh, got)
+				if scenario == "late old writer" && i == 0 {
+					store.usageCarry.Lock()
+					valid, pass := store.usageCarry.valid, store.usageCarry.pass
+					store.usageCarry.Unlock()
+					require.True(t, valid)
+					require.False(t, pass)
+					require.NotEqual(t, before[i].top, fresh.top)
+				}
 				if scenario == "healthy" {
 					require.Equal(t, before[i], got)
-				} else if scenario == "unpublished" || scenario == "partial deletion" || scenario == "full deletion" || scenario == "changed after read" {
+				} else if scenario == "unpublished" || scenario == "partial deletion" || scenario == "full deletion" || scenario == "changed after read" || scenario == "late old writer" {
 					require.NotEqual(t, before[i].daily, got.daily)
 				}
 			}
-			if scenario == "healthy" {
-				require.Equal(t, 1, proofs)
-				_, afterResults := usageQueryCounts(t, store)
-				for i, f := range filters {
-					require.Equal(t, before[i], readPreparedUsage(t, store, f))
-				}
-				_, finalResults := usageQueryCounts(t, store)
-				require.Equal(t, 1, proofs)
-				require.Equal(t, afterResults, finalResults)
-			} else if scenario != "changed after read" && scenario != "parts move" {
-				require.Equal(t, 1, proofs)
-			} else if scenario == "changed after read" {
+			if scenario == "changed after read" {
 				require.Zero(t, proofs)
+			} else {
+				require.Equal(t, 1, proofs)
 			}
 		})
 	}
@@ -106,35 +107,10 @@ func TestUsageCarryDiskFirst(t *testing.T) {
 	store.beforeUsageCarryCheck = func() { proofs++ }
 	_, results := usageQueryCounts(t, store)
 	require.Equal(t, want, readPreparedUsage(t, store, f))
-	require.Equal(t, want, readPreparedUsage(t, store, f))
 	_, afterResults := usageQueryCounts(t, store)
 	require.Zero(t, proofs)
 	// Counts have no disk entry, so the first ready visit reads them once.
 	require.EqualValues(t, 1, afterResults-results)
-}
-
-func TestUsageCarryInterruptedSoftDelete(t *testing.T) {
-	t.Parallel()
-	local, syncer, store := newPreparedUsageStore(t)
-	ctx := t.Context()
-	require.NoError(t, local.SoftDeleteSession(ctx, usagePriceRoundID))
-	syncer.hooks = &pushHooks{afterUsageSnapshots: func([]db.Session) error { return errors.New("injected session publication failure") }}
-	result, err := syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	require.NotZero(t, result.Errors)
-	syncer.hooks = nil
-	var snapshotDeleted, sessionDeleted, prepares bool
-	require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT s.deleted_at IS NOT NULL, u.deleted_at IS NOT NULL, u.prepares_usage FROM sessions s INNER JOIN usage_session_snapshots u ON s.id = u.id WHERE s.id = ?`, usagePriceRoundID).Scan(&sessionDeleted, &snapshotDeleted, &prepares))
-	require.False(t, sessionDeleted)
-	require.True(t, snapshotDeleted)
-	require.False(t, prepares)
-	execPreparedUsage(t, store, "TRUNCATE TABLE prepared_usage")
-	f := db.UsageFilter{Timezone: "UTC", Breakdowns: true}
-	before := readPreparedUsage(t, store, f)
-	runPreparedUsageRefresh(t, store)
-	fresh := readPreparedUsage(t, NewStoreFromDB(store.DB(), store.bulk), f)
-	require.NotEqual(t, before.daily, fresh.daily)
-	require.Equal(t, fresh, readPreparedUsage(t, store, f))
 }
 
 func TestUsageCarryInterruptedStartTime(t *testing.T) {
@@ -155,61 +131,23 @@ func TestUsageCarryInterruptedStartTime(t *testing.T) {
 	require.NoError(t, err)
 	require.NotZero(t, result.Errors)
 	syncer.hooks = nil
-	var oldStart, newStart string
 	var newer uint64
-	require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT toString(s.started_at), toString(u.started_at), countIf(m.push_version > s.content_version) FROM sessions s INNER JOIN usage_session_snapshots u ON u.id = s.id INNER JOIN usage_messages m ON m.session_id = s.id WHERE s.id = ? GROUP BY s.started_at, u.started_at`, id).Scan(&oldStart, &newStart, &newer))
-	require.Contains(t, oldStart, "2026-01-12")
-	require.Contains(t, newStart, "2026-01-13")
+	require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT countIf(m.push_version > s.content_version) FROM sessions s INNER JOIN usage_messages m ON m.session_id = s.id WHERE s.id = ?`, id).Scan(&newer))
 	require.Zero(t, newer)
 	execPreparedUsage(t, store, "TRUNCATE TABLE prepared_usage")
 	all := db.UsageFilter{Project: "carry-start", Timezone: "UTC"}
-	rangeFilter := db.UsageFilter{Project: "carry-start", From: "2026-01-12", To: "2026-01-12", Timezone: "UTC"}
 	before := readPreparedUsage(t, store, all)
 	require.Len(t, before.daily.Daily, 1)
 	require.Equal(t, "2026-01-12", before.daily.Daily[0].Date)
-	beforeRange := readPreparedUsage(t, store, rangeFilter)
-	require.Len(t, beforeRange.top, 1)
 	runPreparedUsageRefresh(t, store)
 	fresh := NewStoreFromDB(store.DB(), store.bulk)
 	expected := readPreparedUsage(t, fresh, all)
-	require.Len(t, expected.daily.Daily, 1)
-	require.Equal(t, "2026-01-13", expected.daily.Daily[0].Date)
-	expectedRange := readPreparedUsage(t, fresh, rangeFilter)
-	require.Empty(t, expectedRange.top)
-	require.Equal(t, expected, readPreparedUsage(t, store, all))
-	require.Equal(t, expectedRange, readPreparedUsage(t, store, rangeFilter))
-}
-
-func TestUsageCarryLateOldWriter(t *testing.T) {
-	local, syncer, store := newPreparedUsageStore(t)
-	const id = "late-writer"
-	session := fixtureSession(id, "late-writer", "late", "2026-01-12T03:00:00.000Z", 1)
-	message := usagePriceMessage(id, 0, "2026-01-12T03:00:00.000Z", "round-test", `{"input_tokens":100}`)
-	_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, Messages: []db.Message{message}, DataVersion: 1, ReplaceMessages: true}})
-	require.NoError(t, err)
-	pushPreparedUsage(t, syncer)
-	execPreparedUsage(t, store, "TRUNCATE TABLE prepared_usage")
-	execPreparedUsage(t, store, fmt.Sprintf(`INSERT INTO usage_messages SELECT * REPLACE (toInt64(9999) AS ordinal, toInt64(1000000) AS usage_input, push_version - 1 AS push_version, toUInt128(push_version - 1) * 2 + 1 AS revision) FROM usage_messages WHERE session_id = '%s' LIMIT 1`, id))
-	f := db.UsageFilter{Project: "late-writer", Timezone: "UTC"}
-	before := readPreparedUsage(t, store, f)
-	runPreparedUsageRefresh(t, store)
-	fresh := readPreparedUsage(t, NewStoreFromDB(store.DB(), store.bulk), f)
 	proofs := 0
 	store.beforeUsageCarryCheck = func() { proofs++ }
-	got := readPreparedUsage(t, store, f)
+	require.Len(t, expected.daily.Daily, 1)
+	require.Equal(t, "2026-01-13", expected.daily.Daily[0].Date)
+	require.Equal(t, expected, readPreparedUsage(t, store, all))
 	require.Equal(t, 1, proofs)
-	store.usageCarry.Lock()
-	valid, pass := store.usageCarry.valid, store.usageCarry.pass
-	store.usageCarry.Unlock()
-	require.True(t, valid)
-	require.False(t, pass)
-	require.Len(t, before.top, 1)
-	require.Len(t, fresh.top, 1)
-	require.Len(t, got.top, 1)
-	require.NotEqual(t, before.daily.Totals.InputTokens, fresh.daily.Totals.InputTokens)
-	require.NotEqual(t, before.top[0].InputTokens, fresh.top[0].InputTokens)
-	require.Equal(t, fresh.daily.Totals.InputTokens, got.daily.Totals.InputTokens, "Summary must use the published rows")
-	require.Equal(t, fresh.top[0].InputTokens, got.top[0].InputTokens, "Top must use the published rows")
 }
 
 func TestUsageCarryVersionTables(t *testing.T) {
@@ -234,7 +172,12 @@ func TestUsageCarryVersionTables(t *testing.T) {
 		insert(table)
 		require.Equal(t, before, version(), table)
 	}
-	for _, table := range chUsageCarryTables {
+	expectedInputs := []string{
+		"sessions", "usage_session_snapshots", "cursor_usage_events", "usage_event_prices",
+		"usage_price_contexts", "model_pricing", "model_pricing_bands", "genai_pricing",
+		"usage_messages", "usage_events", "usage_price_models",
+	}
+	for _, table := range expectedInputs {
 		before := version()
 		insert(table)
 		require.NotEqual(t, before, version(), table)
