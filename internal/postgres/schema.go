@@ -1233,14 +1233,6 @@ func EnsureSchema(
 			"creating idx_sessions_termination_status: %w", err,
 		)
 	}
-	if err := backfillIsAutomatedPG(ctx, db); err != nil {
-		return err
-	}
-	log.Printf(
-		"pg schema: automated-session backfill step completed in %s",
-		time.Since(step).Round(time.Millisecond),
-	)
-	step = time.Now()
 	if err := dedupeStoredDialoguePG(ctx, db); err != nil {
 		return err
 	}
@@ -1268,6 +1260,14 @@ func EnsureSchema(
 		"pg schema: message usage counter backfill completed in %s"+
 			" (%d row(s) filled)",
 		time.Since(step).Round(time.Millisecond), filled,
+	)
+	step = time.Now()
+	if err := backfillIsAutomatedPG(ctx, db); err != nil {
+		return err
+	}
+	log.Printf(
+		"pg schema: automated-session backfill step completed in %s",
+		time.Since(step).Round(time.Millisecond),
 	)
 	step = time.Now()
 	if err := createContentSearchIndexesPG(ctx, db); err != nil {
@@ -1481,10 +1481,8 @@ func backfillIsAutomatedPG(
 // flags. The one-time automation tracking installation
 // holds an exclusive sessions lock until commit, blocking reads and writes.
 // Subsequent repairs use row-level writes.
+// Run the automation audit after repairs that bump updated_at, which clears its stamps.
 func runSchemaDataRepairsPG(ctx context.Context, db *sql.DB) error {
-	if err := backfillIsAutomatedPG(ctx, db); err != nil {
-		return err
-	}
 	if _, err := runSourceCurationBackfill(ctx, db, false); err != nil {
 		return err
 	}
@@ -1501,6 +1499,9 @@ func runSchemaDataRepairsPG(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	if _, err := fillMessageUsageCountersPG(ctx, db); err != nil {
+		return err
+	}
+	if err := backfillIsAutomatedPG(ctx, db); err != nil {
 		return err
 	}
 	runRepair, err := shouldRunTokenCoverageRepair(ctx, db, false)
