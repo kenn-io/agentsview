@@ -260,19 +260,44 @@ cursor_admin_api_key = "key_xxxxx"
 daemon_idle_timeout = "20m"
 sync_idle_after = "10m"
 sync_interval = "5s"
+background_sync_interval = "10m"
 chart_palette = "agentsview"
 zoom_level = 120
 ```
 
+`background_sync_interval` defaults to `"10m"`. While nobody is watching the
+archive, local serve syncs changed session files at most this often. The first
+change after a quiet period syncs right away; later changes wait for the
+interval. Three things bring changes in sooner:
+
+- An open web UI syncs at `sync_interval` (default `"5s"`) while its tab is
+  visible.
+- An open [change stream](/docs/conversation-export/#follow-changes-live) syncs
+  up to once a second.
+- Any other archive request, such as a CLI or MCP read, first syncs the files
+  that changed since the last sync, and checks sessions that are still being
+  written. Such requests start a sync at most once per `sync_interval` and
+  share the two-second wait budget described below.
+
+A session watch stream keeps its own session current without changing the
+interval for the rest. Polling of live agent activity and of roots that cannot
+be watched follows the same rule: its usual pace while someone is watching, and
+the background interval otherwise. A read does not poll roots that cannot be
+watched, so their sessions can be one background interval behind. Set
+`background_sync_interval` to `"0s"` to sync at `sync_interval` all the time.
+Restart the server after changing it.
+
 `sync_idle_after` defaults to `"10m"`. After this long without a client request
-or an open event stream, local serve stops watching session files and pauses its
-local sync timers, remote-source sync, S3 imports, and attachment imports.
+or an open event stream, local serve pauses its local sync. It keeps watching
+session files and remembers which ones change, but syncs nothing and pauses its
+polling timers, remote-source sync, S3 imports, and attachment imports.
 Remote-host polling, Codex Cloud capture, replica push, and raw uploads keep their
 own schedules.
-The next archive request starts catch-up for files changed or added since
-collection paused. Requests share a two-second wait budget from the start of
-catch-up. After that, reads return immediately with a stale-results warning
-while catch-up continues in the
+The next archive request starts catch-up. The daemon syncs the files that
+changed during the pause without scanning every session directory, and runs
+the periodic sync if the pause skipped one. Requests share a two-second wait
+budget from the start of catch-up. After that, reads return immediately with a
+stale-results warning while catch-up continues in the
 background.
 The warning clears when catch-up finishes or fails, and failures are logged.
 Every client request except `/api/ping` counts as activity. Version and sync-status
@@ -298,7 +323,8 @@ Set it to `"0"` to keep syncing while idle. Restart the server after changing it
 | `public_origins`                    | Additional trusted origins for request Host/Origin checks                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `daemon_idle_timeout`               | Idle timeout for automatically started and `serve --background` writable daemons; set to `"0s"` to keep them alive                                                                                                                                                                                                                                                                                                                                                               |
 | `sync_idle_after`                   | Pause local collection after this long without client activity; defaults to `"10m"`, with `"0"` disabling the pause                                                                                                                                                                                                                                                                                                                                                              |
-| `sync_interval`                     | Minimum time between watcher-triggered session sync starts in `serve` and archive push commands. Default `"5s"`; use `"60s"` for less frequent syncs. Zero or negative durations disable the minimum interval. While a [change stream](/docs/conversation-export/#follow-changes-live) is open, `serve` uses at most `"1s"`. Applies on restart or when provider changes rebuild watchers. Raw sync, live-activity polling, and periodic catch-up keep their own timers.         |
+| `sync_interval`                     | Minimum time between watcher-triggered session sync starts while the web UI is open, and in archive push commands. Default `"5s"`; use `"60s"` for less frequent syncs. Zero or negative durations disable the minimum interval. While a [change stream](/docs/conversation-export/#follow-changes-live) is open, `serve` uses at most `"1s"`. Applies on restart or when provider changes rebuild watchers. Raw sync and periodic catch-up keep their own timers.               |
+| `background_sync_interval`          | Minimum time between watcher-triggered session sync starts in `serve` while nobody is watching the archive. Default `"10m"`. Archive requests sync pending changes first. `"0s"` uses `sync_interval` all the time, and a longer `sync_interval` takes precedence. Applies on restart.                                                                                                                                                                                           |
 | `chart_palette`                     | Server-wide categorical chart colors: `"agentsview"` (default), `"matplotlib"`, or `"colorblind"`; also configurable under **Settings > Appearance**                                                                                                                                                                                                                                                                                                                             |
 | `zoom_level`                        | Default interface zoom for clients without a local preference: `67`, `75`, `80`, `90`, `100`, `110`, `120`, `125`, `130`, `150`, `175`, or `200`. Defaults to `100` when omitted. Restart the daemon after manual edits                                                                                                                                                                                                                                                          |
 | `disabled_agents`                   | Session providers to exclude from local filesystem scanning — see [Disabling Session Providers](#disabling-session-providers)                                                                                                                                                                                                                                                                                                                                                    |
@@ -2145,8 +2171,9 @@ mechanisms:
 
 1. **File watcher** — uses FSEvents on macOS and fsnotify elsewhere to detect
     file changes. An isolated edit is batched for 500ms; watcher-driven sync
-    start times remain at least five seconds apart by default (see
-    [`sync_interval`](#config-file)). Common dependency and build
+    start times remain at least ten minutes apart while nobody is watching the
+    archive, and five seconds apart while the web UI is open (see
+    [`background_sync_interval`](#config-file)). Common dependency and build
     folders (`node_modules`, `__pycache__`, `.git`, `vendor`, `dist`, etc.) are
     automatically skipped to reduce noise and overhead. On macOS, FSEvents
     reports a file that its producer keeps open only when the file is created

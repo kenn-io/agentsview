@@ -2525,13 +2525,24 @@ func formatByteProgress(p sync.Progress) string {
 	return formatBytes(p.BytesDone)
 }
 
+// fileWatcher holds the controls of a started file watcher. A watcher that
+// could not start leaves every control a no-op and reports all roots as
+// unwatched.
+type fileWatcher struct {
+	stop          func()
+	openDispatch  func()
+	pauseDispatch func()
+	queueRetry    func(sync.WatchBatch)
+	flushPending  func(context.Context) error
+	unwatchedDirs []string
+}
+
+// startFileWatcher watches cfg's session roots and delivers change batches
+// whose starts are at least minInterval apart.
 func startFileWatcher(
-	cfg config.Config, engine *sync.Engine, onChange sync.WatchCallback,
-	options sync.WatcherOptions,
-) (
-	stopWatcher func(), openDispatch func(), unwatchedDirs []string,
-	queueRetry func(sync.WatchBatch), flushPending func(context.Context) error,
-) {
+	cfg config.Config, minInterval time.Duration, engine *sync.Engine,
+	onChange sync.WatchCallback, options sync.WatcherOptions,
+) fileWatcher {
 	t := time.Now()
 	roots, unwatchedDirs, symlinkGatedDirs, persistentDirAgents := collectWatchRoots(cfg)
 	if engine != nil && options.OnNativeEventsLost == nil {
@@ -2539,7 +2550,7 @@ func startFileWatcher(
 	}
 	watcher, err := sync.NewWatcherWithCallback(
 		watcherBatchDelay,
-		cfg.SyncInterval,
+		minInterval,
 		onChange,
 		cfg.WatchExcludePatterns,
 		options,
@@ -2558,7 +2569,12 @@ func startFileWatcher(
 				"; will poll every %s",
 			err, unwatchedPollInterval,
 		)
-		return func() {}, func() {}, []string{"all"}, func(sync.WatchBatch) {}, func(context.Context) error { return nil }
+		return fileWatcher{
+			stop: func() {}, openDispatch: func() {}, pauseDispatch: func() {},
+			queueRetry:    func(sync.WatchBatch) {},
+			flushPending:  func(context.Context) error { return nil },
+			unwatchedDirs: []string{"all"},
+		}
 	}
 
 	var totalWatched int
@@ -2622,9 +2638,14 @@ func startFileWatcher(
 			len(unwatchedDirs), unwatchedPollInterval,
 		)
 	}
-	flushPending = startWatcherCollection(watcher.StartCollecting, watcher.FlushPending)
-	return watcher.Stop, watcher.OpenDispatch, unwatchedDirs,
-		watcher.QueueRetryBatch, flushPending
+	return fileWatcher{
+		stop:          watcher.Stop,
+		openDispatch:  watcher.OpenDispatch,
+		pauseDispatch: watcher.PauseDispatch,
+		queueRetry:    watcher.QueueRetryBatch,
+		flushPending:  startWatcherCollection(watcher.StartCollecting, watcher.FlushPending),
+		unwatchedDirs: unwatchedDirs,
+	}
 }
 
 func startWatcherCollection(start func() error, flush func(context.Context) error) func(context.Context) error {
@@ -3345,6 +3366,22 @@ func startPeriodicSync(
 		}
 	}
 
+	// Roots follow provider settings changes, and the scheduled reconcile
+	// targets are re-probed each pass because disk availability changes.
+	runScheduled := func(ctx context.Context) {
+		log.Println("Running scheduled reconciliation...")
+		current := ingestion.Config()
+		runScheduledSyncPass(ctx, engine, scheduledReconcileTargets(current))
+		runRemoteSourceSyncPass(ctx, engine, remoteSourceSyncRoots(current))
+		if _, err := attachedSources.DrainScheduled(ctx); err != nil && ctx.Err() == nil {
+			log.Printf("archive sources: %v", err)
+		}
+		recomputePendingSessions(ctx, engine, database)
+		engine.ReconcileCommitTrailers(ctx)
+		recomputeStaleFriction(ctx, engine)
+	}
+	ingestion.setScheduled(runScheduled)
+
 	ticker := time.NewTicker(periodicSyncInterval)
 	defer ticker.Stop()
 	for {
@@ -3353,24 +3390,10 @@ func startPeriodicSync(
 			return
 		case <-ticker.C:
 		}
-		if !ingestion.Active() {
+		if !ingestion.AdmitScheduled() {
 			continue
 		}
-		log.Println("Running scheduled reconciliation...")
-		idleTracker.Do(func() {
-			// Roots follow provider settings changes, and the scheduled
-			// reconcile targets are re-probed each tick because disk
-			// availability changes.
-			current := ingestion.Config()
-			runScheduledSyncPass(ctx, engine, scheduledReconcileTargets(current))
-			runRemoteSourceSyncPass(ctx, engine, remoteSourceSyncRoots(current))
-			if _, err := attachedSources.DrainScheduled(ctx); err != nil && ctx.Err() == nil {
-				log.Printf("archive sources: %v", err)
-			}
-			recomputePendingSessions(ctx, engine, database)
-			engine.ReconcileCommitTrailers(ctx)
-			recomputeStaleFriction(ctx, engine)
-		})
+		idleTracker.Do(func() { runScheduled(ctx) })
 	}
 }
 

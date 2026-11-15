@@ -34,7 +34,7 @@ func TestWatcherIntervalOverride(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				override := &IntervalOverride{}
-				override.Set(tt.shorter)
+				t.Cleanup(override.Hold(tt.shorter))
 				backend := newFakeWatchBackend()
 				var calls []time.Time
 				w, err := newWatcherWithBackendOptions(
@@ -102,12 +102,14 @@ func TestWatcherIntervalOverrideChangeReschedules(t *testing.T) {
 		synctest.Wait()
 		require.Len(t, calls, 1)
 
-		override.Set(time.Second)
+		releaseSlow := override.Hold(3 * time.Second)
+		release := override.Hold(time.Second)
 		synctest.Wait()
-		require.Len(t, calls, 2, "a shorter override must release the waiting sync")
+		require.Len(t, calls, 2, "the shortest hold must release the waiting sync")
 		assert.Equal(t, 2*time.Second, calls[1].Sub(start))
 
-		override.Set(0)
+		release()
+		releaseSlow()
 		time.Sleep(100 * time.Millisecond)
 		backend.sendEvent(t, "/sessions/active.jsonl")
 		time.Sleep(10 * time.Second)
@@ -116,4 +118,28 @@ func TestWatcherIntervalOverrideChangeReschedules(t *testing.T) {
 		assert.Equal(t, 7*time.Second, calls[2].Sub(start),
 			"removing the override must restore the configured interval")
 	})
+}
+
+func TestIntervalOverrideUsesShortestHold(t *testing.T) {
+	override := &IntervalOverride{}
+	require.Zero(t, override.Value())
+
+	releaseUI := override.Hold(5 * time.Second)
+	releaseStream := override.Hold(time.Second)
+	assert.Equal(t, time.Second, override.Value())
+
+	releaseStream()
+	releaseStream()
+	assert.Equal(t, 5*time.Second, override.Value(),
+		"releasing one hold twice must not release another")
+
+	releaseSecondUI := override.Hold(5 * time.Second)
+	releaseUI()
+	assert.Equal(t, 5*time.Second, override.Value(),
+		"an equal hold from another holder remains")
+
+	releaseSecondUI()
+	assert.Zero(t, override.Value())
+	assert.NotPanics(t, override.Hold(0), "a hold of zero holds nothing")
+	assert.Zero(t, override.Value())
 }

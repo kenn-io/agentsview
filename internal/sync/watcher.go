@@ -1150,6 +1150,20 @@ func (w *Watcher) OpenDispatch() {
 	w.eventSink.signal()
 }
 
+// PauseDispatch returns a dispatching watcher to collecting. Changes keep
+// accumulating under the usual bounds, a callback already running finishes,
+// and nothing new is delivered until OpenDispatch. A paused watcher starts no
+// timers, so it costs nothing beyond receiving events.
+func (w *Watcher) PauseDispatch() {
+	w.lifecycleMu.Lock()
+	defer w.lifecycleMu.Unlock()
+	if w.lifecycle != watcherDispatching {
+		return
+	}
+	w.lifecycle = watcherCollecting
+	w.dispatchEnabled.Store(false)
+}
+
 // FlushPending waits for the current callback and a snapshot of fresh work,
 // including backend deliveries already ready when the request is handled.
 // The dispatch loop owns both callbacks; retained retries keep their backoff.

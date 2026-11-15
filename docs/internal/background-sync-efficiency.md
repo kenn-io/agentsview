@@ -10,10 +10,34 @@ lives primarily in `internal/sync/watcher.go`,
 
 - Production watcher events use a 500 ms first-event batching window. Later
   events join the pending set without postponing its deadline.
-- Watcher callback start times are at least five seconds apart by default (see
-  [`sync_interval`](../configuration.md#config-file)). One worker runs
-  callbacks serially while the fsnotify loop continues draining events and
-  errors, so a long sync cannot block event intake or overlap another sync.
+- Watcher callback start times are at least one dispatch floor apart. One worker
+  runs callbacks serially while the fsnotify loop continues draining events
+  and errors, so a long sync cannot block event intake or overlap another
+  sync.
+- The daemon's floor is the background interval, ten minutes by default (see
+  [`background_sync_interval`](../configuration.md#config-file)). A holder of
+  `IntervalOverride` shortens it for as long as someone is watching the
+  archive: `/api/v1/events`, which the web UI keeps open only while its tab is
+  visible, holds `sync_interval`, and `/api/v1/changes/stream` holds one
+  second. The shortest hold wins. Archive push commands use `sync_interval` as
+  their floor.
+- An archive read flushes the pending set through `Watcher.FlushPending` before
+  it is served, so a reader never waits out the background interval. It also
+  runs one live-activity poll, unless one ran in the last 30 seconds, because
+  an agent that keeps its session file open produces no file event on macOS as
+  the file grows. Reads start this catch-up at most once per `sync_interval`,
+  only while no hold is active, and wait at most two seconds for it.
+  Remote-sync export requests read session files, not the archive, and start
+  no catch-up.
+- The live-activity poller and the unwatched-root poller follow the same pace
+  through the daemon's collection gap: their own interval while a hold is
+  active, the background interval otherwise, and no polling during an idle
+  pause.
+- The idle pause (`sync_idle_after`) pauses dispatch with
+  `Watcher.PauseDispatch` and leaves the watcher attached. The pending set
+  keeps growing under its usual bounds. The next archive request reopens
+  dispatch and flushes that set, so a wake costs the changed files and not a
+  discovery pass. It also runs the periodic pass if the pause skipped one.
 - An idle watcher has no running timer or ticker. The first relevant event
   creates the next one-shot timer.
 - Each pending or in-flight batch retains at most 8,192 unique paths and 2 MiB

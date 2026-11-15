@@ -1209,8 +1209,12 @@ type Config struct {
 	SyncIdleAfter     time.Duration `json:"sync_idle_after,omitzero" toml:"sync_idle_after"`
 	DaemonIdleTimeout time.Duration `json:"daemon_idle_timeout,omitzero" toml:"daemon_idle_timeout"`
 
-	// SyncInterval is the minimum time between starts of watcher-triggered syncs.
+	// SyncInterval is the minimum time between starts of watcher-triggered
+	// syncs while someone is watching the archive, and in archive push commands.
 	SyncInterval time.Duration `json:"sync_interval,omitzero" toml:"sync_interval"`
+	// BackgroundSyncInterval is the same minimum for the daemon while nobody is
+	// watching. Restart to apply changes.
+	BackgroundSyncInterval time.Duration `json:"background_sync_interval,omitzero" toml:"background_sync_interval"`
 
 	ModelAliases       map[string]string          `json:"model_aliases,omitempty" toml:"model_aliases"`
 	CustomModelPricing map[string]CustomModelRate `json:"custom_model_pricing,omitempty" toml:"custom_model_pricing"`
@@ -1265,6 +1269,13 @@ func (c *Config) UnmarshalJSONFrom(in *jsontext.Decoder) error {
 	}
 	*c = Config(decoded)
 	return nil
+}
+
+// BackgroundSyncFloor is the minimum time between watcher-triggered syncs in
+// the daemon while nobody is watching the archive: background_sync_interval,
+// or sync_interval when that is longer or the background interval is off.
+func (c Config) BackgroundSyncFloor() time.Duration {
+	return max(c.BackgroundSyncInterval, c.SyncInterval)
 }
 
 func (c Config) ResolvedChartPalette() ChartPalette {
@@ -1532,6 +1543,7 @@ func Default() (Config, error) {
 		DaemonIdleTimeout:              20 * time.Minute,
 		SyncIdleAfter:                  10 * time.Minute,
 		SyncInterval:                   5 * time.Second,
+		BackgroundSyncInterval:         10 * time.Minute,
 		Agent:                          map[string]AgentConfig{},
 		CodexCloud:                     defaultCodexCloudConfig(),
 		Vector: VectorConfig{
@@ -2008,6 +2020,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		DaemonIdleTimeout              time.Duration          `toml:"daemon_idle_timeout"`
 		SyncIdleAfter                  time.Duration          `toml:"sync_idle_after"`
 		SyncInterval                   time.Duration          `toml:"sync_interval"`
+		BackgroundSyncInterval         time.Duration          `toml:"background_sync_interval"`
 		RemoteHosts                    []RemoteHost           `toml:"remote_hosts"`
 		ArchiveSources                 []ArchiveSource        `toml:"archive_sources"`
 		SessionSources                 []sessionSourceConfig  `toml:"session_sources"`
@@ -2383,6 +2396,9 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if meta.IsDefined("sync_interval") {
 		c.SyncInterval = file.SyncInterval
+	}
+	if meta.IsDefined("background_sync_interval") {
+		c.BackgroundSyncInterval = file.BackgroundSyncInterval
 	}
 	if file.Automated.Prefixes != nil {
 		c.Automated.Prefixes = file.Automated.Prefixes

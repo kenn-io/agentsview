@@ -1451,6 +1451,9 @@ func (s *Server) humaEvents(
 		}
 		sub, unsub := s.broadcaster.Subscribe()
 		defer unsub()
+		// The web UI keeps this stream open only while it is visible, so a
+		// subscriber means someone is looking at the archive.
+		defer s.holdSyncInterval(s.liveSyncInterval())()
 		if !stream.SendJSON("events_ready", struct{}{}) {
 			return
 		}

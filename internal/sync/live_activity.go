@@ -103,6 +103,9 @@ type LiveActivityPoller struct {
 	recent    LiveActivityRecentLookup
 	syncPaths LiveActivitySync
 	logf      func(string, ...any)
+	gap       func() time.Duration
+	requests  chan chan struct{}
+	stopped   chan struct{}
 
 	cursors map[liveActivityCursorKey]*activityHintCursor
 	hot     map[string]*liveActivityHotEntry
@@ -130,6 +133,8 @@ func NewLiveActivityPoller(
 		lookup:    lookup,
 		syncPaths: syncPaths,
 		logf:      logf,
+		requests:  make(chan chan struct{}),
+		stopped:   make(chan struct{}),
 		cursors:   make(map[liveActivityCursorKey]*activityHintCursor),
 		hot:       make(map[string]*liveActivityHotEntry),
 		retries:   make(map[string]*liveActivityRetryEntry),
@@ -601,18 +606,59 @@ func (p *LiveActivityPoller) PollOnce(
 	return stats, err
 }
 
+// SetGap makes Run skip a tick until gap() has passed since its last poll, so
+// an owner can poll less often than the ticker fires, or not at all, while
+// nobody needs live activity. Call it before Run.
+func (p *LiveActivityPoller) SetGap(gap func() time.Duration) {
+	p.gap = gap
+}
+
+// PollNow runs one poll on Run's goroutine and waits for it, so a reader sees
+// growth that no file event reported without waiting out the owner's gap. A
+// request within one ticker interval of the last poll starts none, so readers
+// never poll more often than the ticker does. It returns early when ctx ends
+// or Run has returned. Run must be running or about to run.
+func (p *LiveActivityPoller) PollNow(ctx context.Context) {
+	done := make(chan struct{})
+	select {
+	case p.requests <- done:
+	case <-p.stopped:
+		return
+	case <-ctx.Done():
+		return
+	}
+	select {
+	case <-done:
+	case <-p.stopped:
+	case <-ctx.Done():
+	}
+}
+
+// Run polls until ctx ends. It may be called once.
 func (p *LiveActivityPoller) Run(ctx context.Context) {
+	defer close(p.stopped)
 	if ctx.Err() != nil {
 		return
 	}
-	_, _ = p.PollOnce(ctx, time.Now())
+	last := time.Now()
+	_, _ = p.PollOnce(ctx, last)
 	ticker := time.NewTicker(liveActivityPollInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case done := <-p.requests:
+			if now := time.Now(); now.Sub(last) >= liveActivityPollInterval {
+				last = now
+				_, _ = p.PollOnce(ctx, now)
+			}
+			close(done)
 		case now := <-ticker.C:
+			if p.gap != nil && now.Sub(last) < p.gap() {
+				continue
+			}
+			last = now
 			_, _ = p.PollOnce(ctx, now)
 		}
 	}
