@@ -69,8 +69,8 @@ const (
 	// Version 24 separates snapshot ranking from billed output and stores priced
 	// totals for external account rows that cannot deduplicate against other usage.
 	usageCacheFormatVersion = 24
-	// This is the only audited cache upgrade.
-	usageCacheUpgradeFrom               = 23
+	// Formats 21 through 23 are audited sources for format 24.
+	usageCacheUpgradeFrom               = 21
 	usageCacheUpgradeTo                 = 24
 	usageCacheApplicationID             = 0x41565543
 	usageCacheKind                      = "agentsview-usage-facts"
@@ -223,9 +223,7 @@ CREATE TABLE usage_facts (
     ranking_output_tokens INTEGER,
     PRIMARY KEY (cached_session_id, fact_index)
 ) WITHOUT ROWID;
-CREATE INDEX usage_facts_claude_identity
-    ON usage_facts (claude_message_id, claude_request_id)
-    WHERE claude_message_id != '';
+` + usageCacheClaudeIdentityIndexSQL + `
 CREATE INDEX usage_facts_source_uuid
     ON usage_facts (source_uuid) WHERE source_uuid != '';
 CREATE INDEX usage_facts_usage_dedup_key
@@ -396,6 +394,10 @@ CREATE INDEX usage_rollup_exceptions_window
         local_date, rollup_install_id, group_kind, group_key
     );
 ` + usageCacheAccountTotalsSQL
+
+const usageCacheClaudeIdentityIndexSQL = `CREATE INDEX usage_facts_claude_identity
+    ON usage_facts (claude_message_id, claude_request_id)
+    WHERE claude_message_id != '';`
 
 const usageCacheAccountTotalsSQL = `CREATE TABLE usage_rollup_account_totals (
     rollup_install_id INTEGER NOT NULL REFERENCES usage_rollup_installs(id)

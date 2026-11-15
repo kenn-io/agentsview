@@ -5,6 +5,8 @@ package db
 import (
 	"compress/gzip"
 	"context"
+	"database/sql"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -13,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 func TestUsageCacheUpgradePreservesWarmFacts(t *testing.T) {
@@ -31,6 +34,8 @@ func TestUsageCacheUpgradePreservesWarmFacts(t *testing.T) {
 	require.NoError(t, err)
 	var extracted []usageSourceVersion
 	cache.fill.observer.beforeExtract = func(versions []usageSourceVersion) { extracted = append(extracted, versions...) }
+	var installed int
+	cache.rollup.observer.beforeInstall = func(builds []usageRollupBuild) { installed += len(builds) }
 	freshPath, freshOld, _ := copyUsageV23Fixture(t)
 	require.NoError(t, os.Remove(freshOld))
 	fresh, err := Open(t.Context(), freshPath)
@@ -57,6 +62,7 @@ func TestUsageCacheUpgradePreservesWarmFacts(t *testing.T) {
 	}
 	compare()
 	assert.Empty(t, extracted)
+	assert.Zero(t, installed)
 	assert.Equal(t, facts, usageSpoolFactValues(t, cache.db, factsQuery))
 	assert.Equal(t, revisions, usageSpoolFactValues(t, cache.db, revisionsQuery))
 	probe := probeUsageCache(t.Context(), cache.path)
@@ -70,32 +76,7 @@ func TestUsageCacheUpgradePreservesWarmFacts(t *testing.T) {
 	assert.NoFileExists(t, old)
 	freshCache, err := fresh.usageCache.Generation(t.Context(), id)
 	require.NoError(t, err)
-	objects := `SELECT 0, type, name, tbl_name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name`
-	freshObjects := usageSpoolFactValues(t, freshCache.db, objects)
-	assert.Equal(t, freshObjects, usageSpoolFactValues(t, cache.db, objects))
-	for _, object := range freshObjects {
-		kind, name := object[0].(string), object[1].(string)
-		var queries []string
-		switch kind {
-		case "table":
-			queries = []string{
-				`SELECT 0, name, type, "notnull", dflt_value, pk FROM pragma_table_info(?) ORDER BY name`,
-				`SELECT 0, id, seq, "table", "from", "to", on_update, on_delete, match FROM pragma_foreign_key_list(?) ORDER BY id, seq`,
-				`SELECT 0, name, "unique", origin, partial FROM pragma_index_list(?) ORDER BY name`,
-			}
-		}
-		for _, query := range queries {
-			assert.Equal(t, usageSpoolFactValues(t, freshCache.db, query, name), usageSpoolFactValues(t, cache.db, query, name), name)
-		}
-	}
-	indexesQuery := `SELECT 0, name FROM sqlite_schema WHERE type='index' ORDER BY name`
-	indexes := usageSpoolFactValues(t, freshCache.db, indexesQuery)
-	assert.Equal(t, indexes, usageSpoolFactValues(t, cache.db, indexesQuery))
-	for _, index := range indexes {
-		query := `SELECT 0, seqno, cid, name, "desc", coll, key FROM pragma_index_xinfo(?) ORDER BY seqno`
-		name := index[0].(string)
-		assert.Equal(t, usageSpoolFactValues(t, freshCache.db, query, name), usageSpoolFactValues(t, cache.db, query, name), name)
-	}
+	assertUsageCacheSchema(t, freshCache.db, cache.db)
 	for _, db := range []*DB{database, fresh} {
 		require.NoError(t, db.InsertMessages(t.Context(), []Message{{SessionID: "one", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-10T23:40:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":50}`)}}))
 		require.NoError(t, db.SoftDeleteSession(t.Context(), "two"))
@@ -108,6 +89,38 @@ func TestUsageCacheUpgradePreservesWarmFacts(t *testing.T) {
 		ids = append(ids, version.SessionID)
 	}
 	assert.ElementsMatch(t, []string{"one", "new-peer"}, ids)
+}
+
+func assertUsageCacheSchema(t *testing.T, fresh, upgraded *sql.DB) {
+	t.Helper()
+	objects := `SELECT 0, type, name, tbl_name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name`
+	freshObjects := usageSpoolFactValues(t, fresh, objects)
+	assert.Equal(t, freshObjects, usageSpoolFactValues(t, upgraded, objects))
+	for _, object := range freshObjects {
+		kind, name := object[0].(string), object[1].(string)
+		var queries []string
+		switch kind {
+		case "table":
+			queries = []string{
+				`SELECT 0, name, type, "notnull", CASE WHEN name='cost_status' THEN NULL ELSE dflt_value END, pk FROM pragma_table_info(?) ORDER BY name`,
+				`SELECT 0, id, seq, "table", "from", "to", on_update, on_delete, match FROM pragma_foreign_key_list(?) ORDER BY id, seq`,
+				`SELECT 0, name, "unique", origin, partial FROM pragma_index_list(?) ORDER BY name`,
+			}
+		}
+		for _, query := range queries {
+			assert.Equal(t, usageSpoolFactValues(t, fresh, query, name), usageSpoolFactValues(t, upgraded, query, name), name)
+		}
+	}
+	indexesQuery := `SELECT 0, name FROM sqlite_schema WHERE type='index' ORDER BY name`
+	indexes := usageSpoolFactValues(t, fresh, indexesQuery)
+	assert.Equal(t, indexes, usageSpoolFactValues(t, upgraded, indexesQuery))
+	for _, index := range indexes {
+		query := `SELECT 0, seqno, name, "desc", coll, key FROM pragma_index_xinfo(?) ORDER BY seqno`
+		name := index[0].(string)
+		assert.Equal(t, usageSpoolFactValues(t, fresh, query, name), usageSpoolFactValues(t, upgraded, query, name), name)
+		sqlQuery := `SELECT 0, sql FROM sqlite_schema WHERE type='index' AND name=?`
+		assert.Equal(t, usageSpoolFactValues(t, fresh, sqlQuery, name), usageSpoolFactValues(t, upgraded, sqlQuery, name), name)
+	}
 }
 
 func TestUsageCacheUpgradeRejectsInvalidCandidate(t *testing.T) {
@@ -189,9 +202,14 @@ func TestUsageCacheUpgradeConcurrentPublishAndLease(t *testing.T) {
 
 func copyUsageV23Fixture(t *testing.T) (string, string, string) {
 	t.Helper()
+	return copyUsageFixture(t, 23)
+}
+
+func copyUsageFixture(t *testing.T, format int) (string, string, string) {
+	t.Helper()
 	dir := t.TempDir()
 	for _, name := range []string{"archive.db", "cache.db"} {
-		input, err := os.Open(filepath.Join("testdata/usage-cache-v23", name+".gz"))
+		input, err := os.Open(filepath.Join(fmt.Sprintf("testdata/usage-cache-v%d", format), name+".gz"))
 		require.NoError(t, err)
 		reader, err := gzip.NewReader(input)
 		require.NoError(t, err)
@@ -209,7 +227,7 @@ func copyUsageV23Fixture(t *testing.T) (string, string, string) {
 	id := readUsageCacheMetadata(t, db)[usageCacheMetadataSourceDatabaseID]
 	require.NotEmpty(t, id)
 	require.NoError(t, db.Close())
-	old := usageCacheGenerationPath(archive, 23, id)
+	old := usageCacheGenerationPath(archive, format, id)
 	require.NoError(t, os.Rename(cache, old))
 	return archive, old, id
 }
@@ -242,4 +260,129 @@ func TestUsageCacheUpgradeCorruptFactsRebuilds(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, again.temporary)
 	assert.Equal(t, path, again.path)
+}
+
+func TestUsageCacheUpgradeReleasedFacts(t *testing.T) {
+	path, old, id := copyUsageFixture(t, 21)
+	prior := openRawUsageCacheTestDB(t, old)
+	var facts int
+	require.NoError(t, prior.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_facts`).Scan(&facts))
+	require.Positive(t, facts)
+	require.NoError(t, prior.Close())
+	database, err := Open(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	cache, err := database.usageCache.Generation(t.Context(), id)
+	require.NoError(t, err)
+	var got int
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_facts`).Scan(&got))
+	assert.Equal(t, facts, got)
+	var zones int
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_rollup_timezones`).Scan(&zones))
+	assert.Zero(t, zones)
+	assert.Empty(t, readUsageCacheMetadata(t, cache.db)[usageCacheMetadataBackfillCompletedAt])
+	var extracted []string
+	cache.fill.observer.beforeExtract = func(versions []usageSourceVersion) {
+		for _, version := range versions {
+			extracted = append(extracted, version.SessionID)
+		}
+	}
+	freshPath, freshOld, _ := copyUsageFixture(t, 21)
+	require.NoError(t, os.Remove(freshOld))
+	fresh, err := Open(t.Context(), freshPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, fresh.Close()) })
+	filter := UsageFilter{Timezone: "UTC", Breakdowns: true, PairwiseSides: true}
+	price := func(rate int64) {
+		for _, db := range []*DB{database, fresh} {
+			db.SetCustomPricing(map[string]config.CustomModelRate{"journal-model": {InputMicrodollarsPerMTok: rate}})
+		}
+	}
+	check := func(input, output int, cost int64, wantIDs ...string) {
+		t.Helper()
+		want, err := fresh.GetDailyUsage(t.Context(), filter)
+		require.NoError(t, err)
+		result, err := database.GetDailyUsage(t.Context(), filter)
+		require.NoError(t, err)
+		assert.Equal(t, want, result)
+		assert.Equal(t, input, result.Totals.InputTokens)
+		assert.Equal(t, output, result.Totals.OutputTokens)
+		assert.Equal(t, cost, result.Totals.TotalCost.Microdollars)
+		wantTop, err := fresh.GetTopSessionsByCost(t.Context(), filter, 10)
+		require.NoError(t, err)
+		gotTop, err := database.GetTopSessionsByCost(t.Context(), filter, 10)
+		require.NoError(t, err)
+		assert.Equal(t, wantTop, gotTop)
+		wantCounts, err := fresh.GetUsageSessionCounts(t.Context(), filter)
+		require.NoError(t, err)
+		gotCounts, err := database.GetUsageSessionCounts(t.Context(), filter)
+		require.NoError(t, err)
+		assert.Equal(t, wantCounts, gotCounts)
+		assert.ElementsMatch(t, wantIDs, extracted)
+		extracted = nil
+	}
+	price(1_000_000)
+	check(330, 100, 300)
+	var exceptions int
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_rollup_exceptions WHERE cost_status='' AND request_scoped IN (0, 1)`).Scan(&exceptions))
+	assert.Positive(t, exceptions)
+	freshCache, err := fresh.usageCache.Generation(t.Context(), id)
+	require.NoError(t, err)
+	assertUsageCacheSchema(t, freshCache.db, cache.db)
+	price(2_000_000)
+	check(330, 100, 600)
+	for _, db := range []*DB{database, fresh} {
+		require.NoError(t, db.InsertMessages(t.Context(), []Message{{SessionID: "one", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-10T23:40:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":50}`)}}))
+	}
+	check(380, 100, 700, "one")
+	for _, db := range []*DB{database, fresh} {
+		require.NoError(t, db.SoftDeleteSession(t.Context(), "two"))
+	}
+	check(280, 80, 500)
+	for _, db := range []*DB{database, fresh} {
+		require.NoError(t, db.ReplaceSessionMessages(t.Context(), "one", []Message{
+			{SessionID: "one", Ordinal: 0, Role: "assistant", Timestamp: "2026-08-10T23:30:00Z", Model: "unknown-recorded-model", TokenUsage: []byte(`{"input_tokens":100,"output_tokens":20,"recorded_cost_microdollars":7000}`)},
+			{SessionID: "one", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-10T23:40:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":50}`)},
+		}))
+	}
+	check(280, 80, 7300, "one")
+	cost := money.Money{Microdollars: 3000}
+	for _, db := range []*DB{database, fresh} {
+		require.NoError(t, db.ReplaceSessionUsageEvents(t.Context(), "event-owner", []UsageEvent{{Source: "session", Model: "unknown-event-model", Cost: &cost, CostStatus: "recorded", OccurredAt: "2026-08-10T12:00:00Z", DedupKey: "event"}}))
+	}
+	check(280, 80, 10300, "event-owner")
+	require.NoError(t, database.Close())
+	database, err = Open(t.Context(), path)
+	require.NoError(t, err)
+	cache, err = database.usageCache.Generation(t.Context(), id)
+	require.NoError(t, err)
+	cache.fill.observer.beforeExtract = func(versions []usageSourceVersion) {
+		for _, version := range versions {
+			extracted = append(extracted, version.SessionID)
+		}
+	}
+	price(2_000_000)
+	check(280, 80, 10300)
+}
+
+func TestUsageCacheUpgradeFormat22(t *testing.T) {
+	archive, old, id := copyUsageFixture(t, 21)
+	db := openRawUsageCacheTestDB(t, old)
+	_, err := db.ExecContext(t.Context(), `DROP INDEX usage_facts_claude_identity; `+usageCacheClaudeIdentityIndexSQL+` UPDATE usage_cache_metadata SET value='22' WHERE key='format_version'`)
+	require.NoError(t, err)
+	var facts int
+	require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_facts`).Scan(&facts))
+	require.NoError(t, db.Close())
+	old22 := usageCacheGenerationPath(archive, 22, id)
+	require.NoError(t, os.Rename(old, old22))
+	manager := newUsageCacheManager(archive)
+	t.Cleanup(func() { require.NoError(t, manager.Close()) })
+	cache, err := manager.Generation(t.Context(), id)
+	require.NoError(t, err)
+	var actual, zones int
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_facts`).Scan(&actual))
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_rollup_timezones`).Scan(&zones))
+	assert.Equal(t, facts, actual)
+	assert.Zero(t, zones)
+	assert.NoFileExists(t, old22)
 }

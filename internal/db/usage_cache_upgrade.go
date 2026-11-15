@@ -16,16 +16,24 @@ func unusableUsageCache(err error, conversion bool) bool {
 	return ok && (sqliteErr.Code == sqlite3.ErrCorrupt || sqliteErr.Code == sqlite3.ErrNotADB || conversion && sqliteErr.Code == sqlite3.ErrError)
 }
 
-// seedUpgradedUsageCache copies the audited format 23 cache into a private candidate.
+// seedUpgradedUsageCache copies an audited older cache into a private candidate.
 func seedUpgradedUsageCache(ctx context.Context, archivePath, candidate, databaseID string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	oldPath := usageCacheGenerationPath(archivePath, usageCacheUpgradeFrom, databaseID)
-	if _, err := os.Stat(oldPath); os.IsNotExist(err) {
+	var oldPath string
+	var from int
+	for version := usageCacheUpgradeTo - 1; version >= usageCacheUpgradeFrom; version-- {
+		path := usageCacheGenerationPath(archivePath, version, databaseID)
+		if _, err := os.Stat(path); err == nil {
+			oldPath, from = path, version
+			break
+		} else if !os.IsNotExist(err) {
+			return false, err
+		}
+	}
+	if oldPath == "" {
 		return false, ctx.Err()
-	} else if err != nil {
-		return false, err
 	}
 	lease, err := acquireUsageCacheLease(oldPath)
 	if err != nil {
@@ -40,7 +48,7 @@ func seedUpgradedUsageCache(ctx context.Context, archivePath, candidate, databas
 		}
 		return false, probe.Err
 	}
-	if !probe.Recognized || probe.FormatVersion != usageCacheUpgradeFrom || probe.SourceDatabaseID != databaseID || probe.RetirementProtocolVersion != usageCacheRetirementProtocolVersion {
+	if !probe.Recognized || probe.FormatVersion != from || probe.SourceDatabaseID != databaseID || probe.RetirementProtocolVersion != usageCacheRetirementProtocolVersion {
 		log.Printf("warning: rebuilding incompatible usage cache %s", oldPath)
 		return false, nil
 	}
@@ -73,12 +81,25 @@ func seedUpgradedUsageCache(ctx context.Context, archivePath, candidate, databas
 		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	for _, query := range []string{
+	var queries []string
+	if from <= 22 {
+		queries = append(queries,
+			`ALTER TABLE usage_facts ADD COLUMN cost_status TEXT NOT NULL DEFAULT ''`,
+			`ALTER TABLE usage_rollup_exceptions ADD COLUMN cost_status TEXT NOT NULL DEFAULT ''`,
+			`DELETE FROM usage_rollup_timezones`,
+			`UPDATE usage_cache_metadata SET value = '' WHERE key = 'backfill_completed_at'`,
+		)
+	}
+	if from == 21 {
+		queries = append(queries, `DROP INDEX usage_facts_claude_identity`, usageCacheClaudeIdentityIndexSQL)
+	}
+	queries = append(queries,
 		`ALTER TABLE usage_facts ADD COLUMN ranking_output_tokens INTEGER`,
 		`ALTER TABLE usage_rollup_exceptions ADD COLUMN ranking_output_tokens INTEGER`,
 		usageCacheAccountTotalsSQL,
 		`INSERT INTO usage_cache_metadata(key, value) VALUES ('reset_epoch', '0'), ('source_mutation_revision', '0')`,
-	} {
+	)
+	for _, query := range queries {
 		if _, err := tx.ExecContext(ctx, query); err != nil {
 			if unusableUsageCache(err, true) {
 				log.Printf("warning: rebuilding unusable usage cache: %v", err)
