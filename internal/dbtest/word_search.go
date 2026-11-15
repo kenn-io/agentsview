@@ -125,6 +125,7 @@ func AssertWordSearch(t *testing.T, store db.Store, foldsAccents bool) {
 		{"Greek accents stay distinct", "αρχη missingword", "word-accent-greek", nil},
 		{"Greek final sigma folds in caps", "οδυσσευς here", "word-unicode-final-sigma", []hit{{"greek-final-sigma", "message", 2}}},
 		{"long s folds inside quoted phrases", `missingword "test phrase"`, "word-long-s-phrase", []hit{{"long-s-phrase", "message", 2}}},
+		{"long s matches a partial word query", "test absentword", "word-long-s-phrase", []hit{{"long-s-phrase", "message", 1}}},
 		{"underscore phrase", `"invoice rounding" decision`, "word-boundary", []hit{{"underscore", "message", 3}}},
 		{"multiline", "invoice rounding decision", "word-multiline", []hit{{"multiline", "message", 3}}},
 	} {

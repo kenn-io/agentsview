@@ -95,7 +95,7 @@ func WordFilterSQL(b *QueryBuilder, column string, f ContentSearchFilter, q Cont
 	}
 	raw := WordCandidateSQL(b, column, q, all, false)
 	if b.dialect.name == "duckdb" {
-		return "(" + exact + "(" + raw + " AND " +
+		return "(" + exact + "((" + raw + " OR " + WordNonASCIISQL(b.dialect, column) + ") AND " +
 			WordRegexSQL(b, column, column, q, all) + "))"
 	}
 	folded := WordCandidateSQL(b, column, q, all, true)
@@ -181,9 +181,9 @@ func wordContainsSQL(b *QueryBuilder, column, pattern string, fold, columnFolded
 // RE2's Unicode classes are slower, so non-PostgreSQL dialects use ASCII
 // classes only when the raw body is ASCII.
 func wordTermSQL(b *QueryBuilder, raw, folded string, forms []string) string {
-	foldedForms := make([]string, len(forms))
-	for i, form := range forms {
-		foldedForms[i] = foldUnicode61(form)
+	foldedForms := make([]string, 0, 2*len(forms))
+	for _, form := range forms {
+		foldedForms = append(foldedForms, foldUnicode61(form))
 	}
 	if b.dialect.name == "duckdb" {
 		foldedForms = append(foldedForms, forms...)

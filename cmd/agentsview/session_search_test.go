@@ -929,7 +929,7 @@ func TestSessionSearchRemoteDefaultFTSHint(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			newAgentDataDir(t)
 			tokenFile := filepath.Join(t.TempDir(), "token")
-			require.NoError(t, os.WriteFile(tokenFile, []byte("test-token"), 0600))
+			require.NoError(t, os.WriteFile(tokenFile, []byte("test-token"), 0o600))
 			var modes []string
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				assert.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))

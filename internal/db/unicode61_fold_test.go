@@ -23,6 +23,7 @@ func TestUnicode61FoldMatchesSQLiteLettersAndMarks(t *testing.T) {
 	require.NoError(t, err)
 	stmt, err := tx.PrepareContext(ctx, `INSERT INTO unicode61_letters(rowid, token) VALUES (?, ?)`)
 	require.NoError(t, err)
+	defer stmt.Close()
 	for r := rune(0); r <= unicode.MaxRune; r++ {
 		if unicode.IsLetter(r) {
 			_, err = stmt.ExecContext(ctx, int(r)+1, string(r))
