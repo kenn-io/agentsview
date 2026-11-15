@@ -19,7 +19,7 @@ func mustBundledSkills() *mcpskills.Catalog {
 	catalog, err := mcpskills.New(mcpskills.Config{
 		ToolName: ToolSkills,
 		Guides: []mcpskills.Guide{{
-			Entry: mcpskills.Entry{
+			Entry: {
 				Name:    "agentsview-finding-history",
 				Title:   "Finding conversation history",
 				Summary: "Search prior conversations and read source messages before drawing conclusions.",

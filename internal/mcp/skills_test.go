@@ -67,6 +67,7 @@ func TestSkillsRejectsInvalidLookups(t *testing.T) {
 		require.NoError(t, cs.Close())
 		require.NoError(t, ss.Wait())
 	})
+
 	for _, args := range []map[string]any{
 		{"name": "missing"}, {"name": "../../SKILL.md"}, {"name": "/etc/passwd"},
 		{"name": ""}, {"name": nil}, {"name": 1}, {"path": "SKILL.md"},
