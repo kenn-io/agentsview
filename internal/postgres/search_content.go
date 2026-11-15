@@ -370,7 +370,7 @@ func (s *Store) scanPGContentMatches(
 	ctx context.Context, query string, args []any, limit, cursor int,
 	makeSnippet func(body string) string,
 ) (db.ContentSearchPage, error) {
-	rows, err := s.pg.QueryContext(ctx, s.latin1SearchSQL(query), args...)
+	rows, err := s.pg.QueryContext(ctx, query, args...)
 	if err != nil {
 		return db.ContentSearchPage{}, fmt.Errorf("pg content search: %w", err)
 	}

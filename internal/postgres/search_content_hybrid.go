@@ -208,7 +208,7 @@ func (s *Store) fetchHybridKeywordBatchPG(
 func (s *Store) scanHybridKeywordPG(
 	ctx context.Context, pattern string, words db.ContentWords, query string, args []any,
 ) ([]pgHybridDisplay, error) {
-	rows, err := s.pg.QueryContext(ctx, s.latin1SearchSQL(query), args...)
+	rows, err := s.pg.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("pg hybrid keyword leg: %w", err)
 	}

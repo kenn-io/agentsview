@@ -1,6 +1,7 @@
 package db
 
 import (
+	"fmt"
 	"regexp"
 	"slices"
 	"strconv"
@@ -160,22 +161,14 @@ var postgresWordCharacters = func() string {
 var postgresEscapedWordCharacters = func() string {
 	var chars strings.Builder
 	for _, r := range postgresWordCharacters {
-		switch {
-		case r < 128:
+		if r < 128 {
 			chars.WriteRune(r)
-		case r <= 0xffff:
-			chars.WriteString(`\u` + leftPadHex(r, 4))
-		default:
-			chars.WriteString(`\U` + leftPadHex(r, 8))
+		} else {
+			fmt.Fprintf(&chars, `\U%08x`, r)
 		}
 	}
 	return chars.String()
 }()
-
-func leftPadHex(r rune, width int) string {
-	hex := strconv.FormatInt(int64(r), 16)
-	return strings.Repeat("0", width-len(hex)) + hex
-}
 
 // compactForms folds forms to their common prefix and an alternation of
 // suffixes, which roughly halves PostgreSQL's regex cost.
