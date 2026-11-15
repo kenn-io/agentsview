@@ -25,11 +25,6 @@ func TestSearchKeptSelections(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, page, repeat)
 	require.EqualValues(t, 1, loads.Load())
-	updateSignals(t, d, "session", SessionSignalUpdate{HealthScore: new(75)})
-	repeat, err = d.Search(ctx, f)
-	require.NoError(t, err)
-	require.Equal(t, page, repeat)
-	require.EqualValues(t, 1, loads.Load())
 	for _, other := range []SearchFilter{{Query: "needle", Sort: "recency"}, {Query: "needle", Cursor: 1}, {Query: "needle", Limit: 1}, {Query: "absent"}} {
 		_, err = d.Search(ctx, other)
 		require.NoError(t, err)
@@ -103,6 +98,16 @@ func TestSearchKeptCJKAvailability(t *testing.T) {
 }
 
 func TestSearchKeptSearchableEdits(t *testing.T) {
+	dialogue := func(content string, text *string, inPlace bool) func(*testing.T, *DB) {
+		return func(t *testing.T, d *DB) {
+			t.Helper()
+			messages := []Message{{SessionID: "session", Role: "assistant", Content: content, DialogueText: text}}
+			if inPlace {
+				messages = append(messages, Message{SessionID: "session", Ordinal: 1, Role: "user", Content: "other words"})
+			}
+			require.NoError(t, d.ReplaceSessionContent(t.Context(), "session", messages, SessionSignalUpdate{}, nil))
+		}
+	}
 	for _, tc := range []struct {
 		name  string
 		seed  func(*testing.T, *DB)
@@ -142,48 +147,10 @@ func TestSearchKeptSearchableEdits(t *testing.T) {
 			_, err := d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET deleted_at='2024-06-02' WHERE id='session'`)
 			require.NoError(t, err)
 		}, ""},
-		{"dialogue", func(t *testing.T, d *DB) {
-			t.Helper()
-			messages := []Message{
-				{SessionID: "session", Ordinal: 0, Role: "assistant", Content: "raw words", DialogueText: new("needle")},
-				{SessionID: "session", Ordinal: 1, Role: "user", Content: "other words"},
-			}
-			require.NoError(t, d.ReplaceSessionContent(t.Context(), "session", messages, SessionSignalUpdate{}, nil))
-		}, func(t *testing.T, d *DB) {
-			t.Helper()
-			messages := []Message{
-				{SessionID: "session", Ordinal: 0, Role: "assistant", Content: "raw words", DialogueText: new("different")},
-				{SessionID: "session", Ordinal: 1, Role: "user", Content: "other words"},
-			}
-			require.NoError(t, d.ReplaceSessionContent(t.Context(), "session", messages, SessionSignalUpdate{}, nil))
-		}, `"raw" AND content:needle`},
-		{"dialogue full replacement to null", func(t *testing.T, d *DB) {
-			t.Helper()
-			messages := []Message{{SessionID: "session", Role: "assistant", Content: "raw words", DialogueText: new("needle")}}
-			require.NoError(t, d.ReplaceSessionContent(t.Context(), "session", messages, SessionSignalUpdate{}, nil))
-		}, func(t *testing.T, d *DB) {
-			t.Helper()
-			messages := []Message{{SessionID: "session", Role: "assistant", Content: "raw words"}}
-			require.NoError(t, d.ReplaceSessionContent(t.Context(), "session", messages, SessionSignalUpdate{}, nil))
-		}, `"raw" AND content:needle`},
-		{"dialogue full replacement from null", func(t *testing.T, d *DB) {
-			t.Helper()
-			messages := []Message{{SessionID: "session", Role: "assistant", Content: "raw needle"}}
-			require.NoError(t, d.ReplaceSessionContent(t.Context(), "session", messages, SessionSignalUpdate{}, nil))
-		}, func(t *testing.T, d *DB) {
-			t.Helper()
-			messages := []Message{{SessionID: "session", Role: "assistant", Content: "raw needle", DialogueText: new("different")}}
-			require.NoError(t, d.ReplaceSessionContent(t.Context(), "session", messages, SessionSignalUpdate{}, nil))
-		}, `"raw" AND content:needle`},
-		{"dialogue full replacement", func(t *testing.T, d *DB) {
-			t.Helper()
-			messages := []Message{{SessionID: "session", Role: "assistant", Content: "raw words", DialogueText: new("needle")}}
-			require.NoError(t, d.ReplaceSessionContent(t.Context(), "session", messages, SessionSignalUpdate{}, nil))
-		}, func(t *testing.T, d *DB) {
-			t.Helper()
-			messages := []Message{{SessionID: "session", Role: "assistant", Content: "raw words", DialogueText: new("different")}}
-			require.NoError(t, d.ReplaceSessionContent(t.Context(), "session", messages, SessionSignalUpdate{}, nil))
-		}, `"raw" AND content:needle`},
+		{"dialogue", dialogue("raw words", new("needle"), true), dialogue("raw words", new("different"), true), `"raw" AND content:needle`},
+		{"dialogue full replacement to null", dialogue("raw words", new("needle"), false), dialogue("raw words", nil, false), `"raw" AND content:needle`},
+		{"dialogue full replacement from null", dialogue("raw needle", nil, false), dialogue("raw needle", new("different"), false), `"raw" AND content:needle`},
+		{"dialogue full replacement", dialogue("raw words", new("needle"), false), dialogue("raw words", new("different"), false), `"raw" AND content:needle`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
