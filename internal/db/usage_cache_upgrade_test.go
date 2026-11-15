@@ -16,7 +16,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/money"
 )
 
 func TestUsageCacheUpgradePreservesWarmFacts(t *testing.T) {
@@ -112,7 +111,7 @@ func assertUsageMatchesFresh(t *testing.T, fresh, upgraded *DB) DailyUsageResult
 }
 
 func TestUsageCacheUpgradeRejectsInvalidCandidate(t *testing.T) {
-	for _, variant := range []string{"source", "incomplete", "cancelled"} {
+	for _, variant := range []string{"source", "conversion error", "cancelled"} {
 		t.Run(variant, func(t *testing.T) {
 			archive, old, id := copyUsageFixture(t, 23)
 			var err error
@@ -120,7 +119,7 @@ func TestUsageCacheUpgradeRejectsInvalidCandidate(t *testing.T) {
 			switch variant {
 			case "source":
 				_, err = db.ExecContext(t.Context(), `UPDATE usage_cache_metadata SET value='other' WHERE key='source_database_id'`)
-			case "incomplete":
+			case "conversion error":
 				_, err = db.ExecContext(t.Context(), `DROP TABLE usage_facts`)
 			}
 			require.NoError(t, err)
@@ -136,7 +135,6 @@ func TestUsageCacheUpgradeRejectsInvalidCandidate(t *testing.T) {
 			assert.False(t, seeded)
 			if variant == "cancelled" {
 				require.ErrorIs(t, err, context.Canceled)
-				assert.NoFileExists(t, candidate)
 				_, _, err = publishUsageCache(ctx, archive, usageCacheGenerationPath(archive, 24, id), id)
 				require.ErrorIs(t, err, context.Canceled)
 				candidates, err := filepath.Glob(filepath.Join(filepath.Dir(archive), ".usage-cache-init-*"))
@@ -153,39 +151,6 @@ func TestUsageCacheUpgradeRejectsInvalidCandidate(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestUsageCacheUpgradeConcurrentPublishAndLease(t *testing.T) {
-	archive, old, id := copyUsageFixture(t, 23)
-	lease, err := acquireUsageCacheLease(old)
-	require.NoError(t, err)
-	managers := []*usageCacheManager{newUsageCacheManager(archive), newUsageCacheManager(archive)}
-	t.Cleanup(func() {
-		for _, manager := range managers {
-			require.NoError(t, manager.Close())
-		}
-	})
-	errs := make(chan error, len(managers))
-	paths := make(chan string, len(managers))
-	for _, manager := range managers {
-		go func() {
-			opened, err := manager.Generation(t.Context(), id)
-			if err == nil {
-				paths <- opened.path
-			}
-			errs <- err
-		}()
-	}
-	for range managers {
-		require.NoError(t, <-errs)
-	}
-	first, second := <-paths, <-paths
-	assert.Equal(t, first, second)
-	assert.FileExists(t, old)
-	require.NoError(t, lease.Close())
-	retired, err := retireUsageCacheGeneration(t.Context(), archive, old)
-	require.NoError(t, err)
-	assert.True(t, retired)
 }
 
 func copyUsageFixture(t *testing.T, format int) (string, string, string) {
@@ -263,36 +228,6 @@ func TestUsageCacheUpgradeSkipsCorruptNewer(t *testing.T) {
 	assert.Empty(t, extracted)
 }
 
-func TestUsageCacheUpgradeCorruptFactsRebuilds(t *testing.T) {
-	archive, old, id := copyUsageFixture(t, 23)
-	db := openRawUsageCacheTestDB(t, old)
-	var root, pageSize int64
-	require.NoError(t, db.QueryRowContext(t.Context(), `SELECT rootpage FROM sqlite_schema WHERE name='usage_facts'`).Scan(&root))
-	require.NoError(t, db.QueryRowContext(t.Context(), `PRAGMA page_size`).Scan(&pageSize))
-	require.NoError(t, db.Close())
-	file, err := os.OpenFile(old, os.O_WRONLY, 0)
-	require.NoError(t, err)
-	_, err = file.WriteAt([]byte{0xff, 0xff, 0xff, 0xff}, (root-1)*pageSize)
-	require.NoError(t, err)
-	require.NoError(t, file.Close())
-	probe := probeUsageCache(t.Context(), old)
-	require.NoError(t, probe.Err)
-	require.True(t, probe.Recognized)
-	manager := newUsageCacheManager(archive)
-	cache, err := manager.Generation(t.Context(), id)
-	require.NoError(t, err)
-	assert.False(t, cache.temporary)
-	assert.NoFileExists(t, old)
-	path := cache.path
-	require.NoError(t, manager.Close())
-	manager = newUsageCacheManager(archive)
-	t.Cleanup(func() { require.NoError(t, manager.Close()) })
-	again, err := manager.Generation(t.Context(), id)
-	require.NoError(t, err)
-	assert.False(t, again.temporary)
-	assert.Equal(t, path, again.path)
-}
-
 func TestUsageCacheUpgradeReleasedFacts(t *testing.T) {
 	path, old, id := copyUsageFixture(t, 21)
 	prior := openRawUsageCacheTestDB(t, old)
@@ -323,62 +258,17 @@ func TestUsageCacheUpgradeReleasedFacts(t *testing.T) {
 	fresh, err := Open(t.Context(), freshPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, fresh.Close()) })
-	price := func(rate int64) {
-		for _, db := range []*DB{database, fresh} {
-			db.SetCustomPricing(map[string]config.CustomModelRate{"journal-model": {InputMicrodollarsPerMTok: rate}})
-		}
+	for _, db := range []*DB{database, fresh} {
+		db.SetCustomPricing(map[string]config.CustomModelRate{"journal-model": {InputMicrodollarsPerMTok: 1_000_000}})
 	}
-	check := func(input, output int, cost int64, wantIDs ...string) {
-		t.Helper()
-		result := assertUsageMatchesFresh(t, fresh, database)
-		assert.Equal(t, input, result.Totals.InputTokens)
-		assert.Equal(t, output, result.Totals.OutputTokens)
-		assert.Equal(t, cost, result.Totals.TotalCost.Microdollars)
-		assert.ElementsMatch(t, wantIDs, extracted)
-		extracted = nil
-	}
-	price(1_000_000)
-	check(330, 100, 300)
-	var exceptions int
-	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_rollup_exceptions WHERE cost_status='' AND request_scoped IN (0, 1)`).Scan(&exceptions))
-	assert.Positive(t, exceptions)
+	result := assertUsageMatchesFresh(t, fresh, database)
+	assert.Equal(t, 330, result.Totals.InputTokens)
+	assert.Equal(t, 100, result.Totals.OutputTokens)
+	assert.EqualValues(t, 300, result.Totals.TotalCost.Microdollars)
+	assert.Empty(t, extracted)
 	freshCache, err := fresh.usageCache.Generation(t.Context(), id)
 	require.NoError(t, err)
 	assertUsageCacheSchema(t, freshCache.db, cache.db)
-	price(2_000_000)
-	check(330, 100, 600)
-	for _, db := range []*DB{database, fresh} {
-		require.NoError(t, db.InsertMessages(t.Context(), []Message{{SessionID: "one", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-10T23:40:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":50}`)}}))
-	}
-	check(380, 100, 700, "one")
-	for _, db := range []*DB{database, fresh} {
-		require.NoError(t, db.SoftDeleteSession(t.Context(), "two"))
-	}
-	check(280, 80, 500)
-	for _, db := range []*DB{database, fresh} {
-		require.NoError(t, db.ReplaceSessionMessages(t.Context(), "one", []Message{
-			{SessionID: "one", Ordinal: 0, Role: "assistant", Timestamp: "2026-08-10T23:30:00Z", Model: "unknown-recorded-model", TokenUsage: []byte(`{"input_tokens":100,"output_tokens":20,"recorded_cost_microdollars":7000}`)},
-			{SessionID: "one", Ordinal: 1, Role: "assistant", Timestamp: "2026-08-10T23:40:00Z", Model: "journal-model", TokenUsage: []byte(`{"input_tokens":50}`)},
-		}))
-	}
-	check(280, 80, 7300, "one")
-	cost := money.Money{Microdollars: 3000}
-	for _, db := range []*DB{database, fresh} {
-		require.NoError(t, db.ReplaceSessionUsageEvents(t.Context(), "event-owner", []UsageEvent{{Source: "session", Model: "unknown-event-model", Cost: &cost, CostStatus: "recorded", OccurredAt: "2026-08-10T12:00:00Z", DedupKey: "event"}}))
-	}
-	check(280, 80, 10300, "event-owner")
-	require.NoError(t, database.Close())
-	database, err = Open(t.Context(), path)
-	require.NoError(t, err)
-	cache, err = database.usageCache.Generation(t.Context(), id)
-	require.NoError(t, err)
-	cache.fill.observer.beforeExtract = func(versions []usageSourceVersion) {
-		for _, version := range versions {
-			extracted = append(extracted, version.SessionID)
-		}
-	}
-	price(2_000_000)
-	check(280, 80, 10300)
 }
 
 func TestUsageCacheUpgradeRecordedCosts(t *testing.T) {

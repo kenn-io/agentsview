@@ -80,9 +80,6 @@ func seedUsageCacheFrom(ctx context.Context, archivePath, candidate, databaseID,
 		}
 		return false, fmt.Errorf("copying prior usage cache: %w", err)
 	}
-	if err := os.Chmod(candidate, 0o600); err != nil {
-		return false, err
-	}
 	db, err := openUsageCacheDatabase(ctx, candidate)
 	if err != nil {
 		return false, err
