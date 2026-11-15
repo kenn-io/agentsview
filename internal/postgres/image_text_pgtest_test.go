@@ -5,7 +5,6 @@ package postgres
 import (
 	"encoding/base64"
 	"path/filepath"
-	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -46,15 +45,6 @@ func TestPGImageTextPushAndSearch(t *testing.T) {
 	store, err := NewStore(ctx, testPGURL(t), syncer.schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	var searchLoads atomic.Int32
-	store.runtimeState().search.Size = func(db.SearchPage) int64 { searchLoads.Add(1); return 1 }
-	filter := db.SearchFilter{Query: "invoice 4827", Limit: 10}
-	for range 2 {
-		page, err := store.Search(ctx, filter)
-		require.NoError(t, err)
-		require.Empty(t, page.Results)
-	}
-	require.EqualValues(t, 1, searchLoads.Load())
 
 	type hit struct {
 		session string

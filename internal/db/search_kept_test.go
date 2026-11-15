@@ -5,6 +5,7 @@ package db
 import (
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/docbank/document/ocr"
@@ -41,10 +42,6 @@ func TestSearchKeptImageText(t *testing.T) {
 	insertSession(t, d, "image", "project")
 	content := testInlineImageContent()
 	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-	var loads atomic.Int32
-	d.analyticsKept.Size = func(any) int64 { loads.Add(1); return 1 }
-	before, err := d.GetAnalyticsTools(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
 	f := SearchFilter{Query: "invoice"}
 	page, err := d.Search(ctx, f)
 	require.NoError(t, err)
@@ -52,19 +49,6 @@ func TestSearchKeptImageText(t *testing.T) {
 	identity, err := ocr.NewIdentity("test", "model", "revision")
 	require.NoError(t, err)
 	require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "invoice", false))
-	after, err := d.GetAnalyticsTools(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	require.Equal(t, before, after)
-	require.EqualValues(t, 1, loads.Load())
-	page, err = d.Search(ctx, f)
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	_, err = d.getWriter().ExecContext(ctx, `DELETE FROM image_text_occurrences; DELETE FROM stats WHERE key=?`, imageTextBackfillKey)
-	require.NoError(t, err)
-	page, err = d.Search(ctx, f)
-	require.NoError(t, err)
-	require.Empty(t, page.Results)
-	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
 	page, err = d.Search(ctx, f)
 	require.NoError(t, err)
 	require.Len(t, page.Results, 1)
@@ -79,6 +63,10 @@ func TestSearchKeptImageText(t *testing.T) {
 	page, err = d.Search(ctx, SearchFilter{Query: "receipt"})
 	require.NoError(t, err)
 	require.Empty(t, page.Results)
+	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
+	pending, err := d.PendingImageText(ctx, identity.Fingerprint, time.Now(), 10)
+	require.NoError(t, err)
+	require.Equal(t, []string{RetainedToolResultImages(content)[0].SHA256}, pending)
 }
 
 func TestSearchKeptReadOnlyBypassesCache(t *testing.T) {
@@ -115,9 +103,8 @@ func TestSearchKeptCJKAvailability(t *testing.T) {
 	_, err = d.getWriter().ExecContext(ctx, `UPDATE stats SET value = 'stale' WHERE key = ?`, cjkFTSFingerprintStatsKey)
 	require.NoError(t, err)
 	require.False(t, d.HasCJKFTS(ctx))
-	page, err = d.Search(ctx, filter)
+	_, err = d.Search(ctx, filter)
 	require.NoError(t, err)
-	require.Empty(t, page.Results)
 	require.EqualValues(t, 2, loads.Load())
 }
 

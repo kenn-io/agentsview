@@ -94,7 +94,7 @@ func TestOpenMovesExistingDuplicateDialogue(t *testing.T) {
 	found, err = d.Search(t.Context(), SearchFilter{Query: "freshneedle"})
 	require.NoError(t, err)
 	assert.Len(t, found.Results, 1)
-	found, err = d.Search(t.Context(), SearchFilter{Query: "plainneedle"})
+	found, err = d.Search(t.Context(), SearchFilter{Query: "plainneedle", Sort: "recency"})
 	require.NoError(t, err)
 	assert.Empty(t, found.Results)
 }

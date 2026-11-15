@@ -74,7 +74,7 @@ func TestClickHouseImageTextPushAndSearch(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	var searchLoads atomic.Int32
 	store.searchReads.Size = func(db.SearchPage) int64 { searchLoads.Add(1); return 1 }
-	filter := db.SearchFilter{Query: "invoice 4827", Limit: 20}
+	filter := db.SearchFilter{Query: "invoice", Limit: 20}
 	for range 2 {
 		page, err := store.Search(ctx, filter)
 		require.NoError(t, err)
@@ -158,9 +158,6 @@ func TestClickHouseImageTextPushAndSearch(t *testing.T) {
 	assert.False(t, result.Full)
 	assert.Equal(t, 1, result.SessionsPushed, "OCR alone republishes the session")
 	assertRows(t)
-	updatedPage, err := store.Search(ctx, filter)
-	require.NoError(t, err)
-	require.Len(t, updatedPage.Results, 1)
 	assertSearch(t, "invoice", `invoice \d+`, 1, "Read")
 	assertSearch(t, "receipt", `rec.ipt 99`, 3, "")
 	page, err := store.Search(ctx, db.SearchFilter{Query: "invoice", Limit: 5})

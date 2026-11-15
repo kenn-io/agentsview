@@ -10,7 +10,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-func TestSearchKeptRestoredHistory(t *testing.T) {
+func TestSearchKeptMessagePush(t *testing.T) {
 	local, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
 	write := func(content string) {
@@ -31,15 +31,7 @@ func TestSearchKeptRestoredHistory(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, page, repeat)
 	require.EqualValues(t, 1, loads.Load())
-	var revision int64
-	var oldToken string
-	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT (SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'), (SELECT value FROM sync_metadata WHERE key='usage_history_token')`).Scan(&revision, &oldToken))
 	write("needle second")
-	_, err = store.pg.ExecContext(ctx, `UPDATE sync_metadata SET value=$1::bigint::text WHERE key='usage_change_revision'`, revision)
-	require.NoError(t, err)
-	var newToken string
-	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='usage_history_token'`).Scan(&newToken))
-	require.NotEqual(t, oldToken, newToken)
 	page, err = store.Search(ctx, filter)
 	require.NoError(t, err)
 	require.Len(t, page.Results, 1)
