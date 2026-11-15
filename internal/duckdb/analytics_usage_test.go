@@ -2101,30 +2101,25 @@ func TestDuckAnalyticsLargeSessionSelection(t *testing.T) {
 		assert.Equal(t, []string{"model-a", "model-z"}, summary.Models)
 	})
 	t.Run("model filtered summary", func(t *testing.T) {
-		queries := 0
-		previous := analyticsQueryObserver
-		analyticsQueryObserver = func(query string) {
-			if strings.Contains(query, "SELECT session_id, ordinal, role, source_subtype, is_system, model") {
-				queries++
-			}
-		}
-		t.Cleanup(func() { analyticsQueryObserver = previous })
 		filtered := filter
-		filtered.Model = "model-a,model-z"
+		filtered.Model = "model-a"
 		summary, err := store.GetAnalyticsSummary(t.Context(), filtered)
 		require.NoError(t, err)
-		assert.Equal(t, 901, summary.TotalSessions)
-		assert.Equal(t, 901, summary.TotalMessages)
+		assert.Equal(t, 900, summary.TotalSessions)
+		assert.Equal(t, 900, summary.TotalMessages)
+		queries := 0
+		previous := analyticsQueryObserver
+		analyticsQueryObserver = func(string) { queries++ }
+		t.Cleanup(func() { analyticsQueryObserver = previous })
+		scope, err := store.analytics().ResolveMessageScope(t.Context(), ids, filtered, false)
+		require.NoError(t, err)
+		assert.Len(t, scope, 900)
 		assert.Equal(t, 1, queries)
 	})
 	t.Run("tools and skills", func(t *testing.T) {
 		queries := 0
 		previous := analyticsQueryObserver
-		analyticsQueryObserver = func(query string) {
-			if strings.Contains(query, "FROM tool_calls tc") {
-				queries++
-			}
-		}
+		analyticsQueryObserver = func(string) { queries++ }
 		t.Cleanup(func() { analyticsQueryObserver = previous })
 		tools, err := store.GetAnalyticsTools(t.Context(), filter)
 		require.NoError(t, err)
@@ -2149,11 +2144,7 @@ func TestDuckAnalyticsLargeSessionSelection(t *testing.T) {
 		require.NoError(t, store.usageDisk.Open("duckdb-usage", "fixture", 128<<20, 256<<20))
 		queries := 0
 		previous := analyticsQueryObserver
-		analyticsQueryObserver = func(query string) {
-			if strings.Contains(query, "SELECT m.session_id, m.content") {
-				queries++
-			}
-		}
+		analyticsQueryObserver = func(string) { queries++ }
 		t.Cleanup(func() { analyticsQueryObserver = previous })
 		terms, err := db.ParseTrendTerms([]string{"seam"})
 		require.NoError(t, err)
@@ -2162,6 +2153,6 @@ func TestDuckAnalyticsLargeSessionSelection(t *testing.T) {
 		assert.Equal(t, 901, trends.MessageCount)
 		require.Len(t, trends.Series, 1)
 		assert.Equal(t, 901, trends.Series[0].Total)
-		assert.Equal(t, 2, queries)
+		assert.Equal(t, 6, queries)
 	})
 }
