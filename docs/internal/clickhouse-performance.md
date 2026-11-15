@@ -152,8 +152,9 @@ that answers page reads.
 Counting trend terms in ClickHouse SQL instead of in Go took 2.0 s against 11.6
 s on production's stored copies (5.7x). On the compacted copy at serve's
 settings, the two queries take the same time (0.50 s against 0.51 s), and Go
-counting adds about 0.26 s to a 0.76 s page. Open pull request #3084 reuses
-finished Trends reports on repeat visits.
+counting adds about 0.26 s to a 0.76 s page. Finished Trends reports share the
+Usage disk cache, while `ActiveSince` and time-based `Termination` selections
+read the mirror instead.
 
 Content search scans 12 GiB of text per query on the stored copies and 2.6 s
 after compaction. Production served no searches in the four days its query log
