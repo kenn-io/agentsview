@@ -139,6 +139,49 @@ func TestUsageCarryInterruptedSoftDelete(t *testing.T) {
 	require.Equal(t, fresh, readPreparedUsage(t, store, f))
 }
 
+func TestUsageCarryInterruptedStartTime(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	local, syncer, store := newPreparedUsageStore(t)
+	const id = "carry-start"
+	session := fixtureSession(id, "carry-start", "start", "2026-01-12T03:00:00.000Z", 1)
+	message := usagePriceMessage(id, 0, "", "round-test", `{"input_tokens":123}`)
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{Session: session, Messages: []db.Message{message}, DataVersion: 1, ReplaceMessages: true}})
+	require.NoError(t, err)
+	pushPreparedUsage(t, syncer)
+	session.StartedAt = new("2026-01-13T03:00:00.000Z")
+	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{Session: session, DataVersion: 1, ReplaceMessages: false}})
+	require.NoError(t, err)
+	syncer.hooks = &pushHooks{afterUsageSnapshots: func([]db.Session) error { return errors.New("injected session publication failure") }}
+	result, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.NotZero(t, result.Errors)
+	syncer.hooks = nil
+	var oldStart, newStart string
+	var newer uint64
+	require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT toString(s.started_at), toString(u.started_at), countIf(m.push_version > s.content_version) FROM sessions s INNER JOIN usage_session_snapshots u ON u.id = s.id INNER JOIN usage_messages m ON m.session_id = s.id WHERE s.id = ? GROUP BY s.started_at, u.started_at`, id).Scan(&oldStart, &newStart, &newer))
+	require.Contains(t, oldStart, "2026-01-12")
+	require.Contains(t, newStart, "2026-01-13")
+	require.Zero(t, newer)
+	execPreparedUsage(t, store, "TRUNCATE TABLE prepared_usage")
+	all := db.UsageFilter{Project: "carry-start", Timezone: "UTC"}
+	rangeFilter := db.UsageFilter{Project: "carry-start", From: "2026-01-12", To: "2026-01-12", Timezone: "UTC"}
+	before := readPreparedUsage(t, store, all)
+	require.Len(t, before.daily.Daily, 1)
+	require.Equal(t, "2026-01-12", before.daily.Daily[0].Date)
+	beforeRange := readPreparedUsage(t, store, rangeFilter)
+	require.Len(t, beforeRange.top, 1)
+	runPreparedUsageRefresh(t, store)
+	fresh := NewStoreFromDB(store.DB(), store.bulk)
+	expected := readPreparedUsage(t, fresh, all)
+	require.Len(t, expected.daily.Daily, 1)
+	require.Equal(t, "2026-01-13", expected.daily.Daily[0].Date)
+	expectedRange := readPreparedUsage(t, fresh, rangeFilter)
+	require.Empty(t, expectedRange.top)
+	require.Equal(t, expected, readPreparedUsage(t, store, all))
+	require.Equal(t, expectedRange, readPreparedUsage(t, store, rangeFilter))
+}
+
 func TestUsageCarryNullableJoin(t *testing.T) {
 	t.Parallel()
 	_, _, store := newPreparedUsageStore(t)
