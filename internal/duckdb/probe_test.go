@@ -370,7 +370,7 @@ func TestRebuildReasonReportsEachTrigger(t *testing.T) {
 				return p
 			}(),
 			dataVer: 1,
-			want:    "system prefix classifier rules changed",
+			want:    "system message filters changed",
 		},
 		{
 			name: "data version mismatch", probe: baseProbe(), dataVer: 2,

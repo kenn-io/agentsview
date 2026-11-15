@@ -304,7 +304,7 @@ func rebuildReason(
 	case probe.FrustrationMarkersVersion != frustrationMarkersVersion:
 		return "frustration marker rules changed"
 	case probe.SystemPrefixRulesVersion != db.SystemPrefixRulesVersion():
-		return "system prefix classifier rules changed"
+		return "system message filters changed"
 	case probe.DataVersion != sourceDataVersion:
 		return fmt.Sprintf(
 			"data version %d vs %d", probe.DataVersion, sourceDataVersion,

@@ -82,7 +82,7 @@ func TestIncrementalPushReclassifiesOldMirrorFlags(t *testing.T) {
 	result, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	require.True(t, result.Diagnostics.Full)
-	require.Equal(t, "system prefix classifier rules changed", result.Diagnostics.RebuildReason)
+	require.Equal(t, "system message filters changed", result.Diagnostics.RebuildReason)
 
 	store := openPushedStore(t, path)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
