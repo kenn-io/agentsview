@@ -53,6 +53,10 @@ func TestSystemPrefixPush(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, result.Diagnostics.Full)
 	check()
+}
+
+func TestSystemPrefixSQLParity(t *testing.T) {
+	ctx := t.Context()
 	inputs := []string{
 		"", "ordinary", "<task-notification>", "<TASK-NOTIFICATION>",
 		"<system-reminder>x</system-reminder>",
