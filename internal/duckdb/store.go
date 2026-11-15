@@ -1289,19 +1289,14 @@ func (s *Store) collectContentSubstringPass(
 		query = db.WordRankedSQL(b, branches, f, words, all)
 		args = append(args, b.Args()...)
 	}
+	var page *db.WordPage
 	if ranked && all {
 		// The all-word SQL is unpaged; Go validates non-ASCII bodies, then pages.
-		rows, err := s.queryContext(ctx, query, args...)
-		if err != nil {
-			return nil, fmt.Errorf("duckdb content search: %w", err)
-		}
-		return scanDuckWordPage(rows, db.NewWordPage(words, f.Cursor, f.Limit), func(body string) string {
-			start, end := db.WordSnippetRange(body, f.Pattern, words)
-			return f.BuildSnippet(body, start, end)
-		})
+		page = db.NewWordPage(words, f.Cursor, f.Limit)
+	} else {
+		args = append(args, f.Limit+1, f.Cursor)
 	}
-	args = append(args, f.Limit+1, f.Cursor)
-	return s.scanContentMatches(ctx, query, args, func(body string) string {
+	return s.scanContentMatches(ctx, query, args, page, func(body string) string {
 		if ranked {
 			start, end := db.WordSnippetRange(body, f.Pattern, words)
 			return f.BuildSnippet(body, start, end)
@@ -1572,37 +1567,18 @@ func (s *Store) collectContentSource(
 }
 
 func (s *Store) scanContentMatches(
-	ctx context.Context, query string, args []any, makeSnippet func(string) string,
+	ctx context.Context, query string, args []any, page *db.WordPage, makeSnippet func(string) string,
 ) ([]db.ContentMatch, error) {
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("duckdb content search: %w", err)
 	}
-	return scanDuckContentRows(rows, makeSnippet)
+	return scanDuckContentRows(rows, page, makeSnippet)
 }
 
-func scanDuckContentRows(rows *sql.Rows, makeSnippet func(string) string) ([]db.ContentMatch, error) {
-	defer rows.Close()
-	var out []db.ContentMatch
-	for rows.Next() {
-		var m db.ContentMatch
-		var body string
-		var ts any
-		if err := rows.Scan(&m.SessionID, &m.Project, &m.Agent,
-			&m.Location, &m.Role, &m.ToolName, &m.Ordinal,
-			&ts, &body, &m.MatchedWords); err != nil {
-			return nil, err
-		}
-		m.Timestamp = formatDBTime(ts)
-		m.Snippet = makeSnippet(body)
-		out = append(out, m)
-	}
-	return out, rows.Err()
-}
-
-// scanDuckWordPage reads WordRankedSQL's unpaged all-word rows until page is
-// full, so a long tail of rejected candidates is never read.
-func scanDuckWordPage(rows *sql.Rows, page *db.WordPage, makeSnippet func(string) string) ([]db.ContentMatch, error) {
+// scanDuckContentRows reads content matches. A non-nil page reads
+// WordRankedSQL's unpaged all-word rows only until the page is full.
+func scanDuckContentRows(rows *sql.Rows, page *db.WordPage, makeSnippet func(string) string) ([]db.ContentMatch, error) {
 	defer rows.Close()
 	var out []db.ContentMatch
 	for rows.Next() {
@@ -1610,19 +1586,26 @@ func scanDuckWordPage(rows *sql.Rows, page *db.WordPage, makeSnippet func(string
 		var body string
 		var ts any
 		var exactText bool
-		if err := rows.Scan(&m.SessionID, &m.Project, &m.Agent,
+		dest := []any{&m.SessionID, &m.Project, &m.Agent,
 			&m.Location, &m.Role, &m.ToolName, &m.Ordinal,
-			&ts, &body, &m.MatchedWords, &exactText); err != nil {
+			&ts, &body, &m.MatchedWords}
+		if page != nil {
+			dest = append(dest, &exactText)
+		}
+		if err := rows.Scan(dest...); err != nil {
 			return nil, err
 		}
-		taken, full := page.Take(body, exactText)
+		taken, full := true, false
+		if page != nil {
+			taken, full = page.Take(body, exactText)
+		}
 		if taken {
 			m.Timestamp = formatDBTime(ts)
 			m.Snippet = makeSnippet(body)
 			out = append(out, m)
 		}
 		if full {
-			return out, nil
+			break
 		}
 	}
 	return out, rows.Err()

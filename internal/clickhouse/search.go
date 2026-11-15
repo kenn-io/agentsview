@@ -575,14 +575,12 @@ func (s *Store) collectContentSubstringPass(
 	if err != nil {
 		return nil, fmt.Errorf("clickhouse content search: %w", err)
 	}
+	var page *db.WordPage
 	if ranked && all {
 		// The all-word SQL is unpaged; Go validates non-ASCII bodies, then pages.
-		return scanWordPage(rows, db.NewWordPage(words, f.Cursor, f.Limit), func(body string) string {
-			start, end := db.WordSnippetRange(body, f.Pattern, words)
-			return f.BuildSnippet(body, start, end)
-		})
+		page = db.NewWordPage(words, f.Cursor, f.Limit)
 	}
-	return scanContentRows(rows, func(body string) string {
+	return scanContentRows(rows, page, func(body string) string {
 		if ranked {
 			start, end := db.WordSnippetRange(body, f.Pattern, words)
 			return f.BuildSnippet(body, start, end)
@@ -818,27 +816,9 @@ func sortContentCandidates(all []contentCandidate) {
 	})
 }
 
-func scanContentRows(rows *sql.Rows, makeSnippet func(string) string) ([]db.ContentMatch, error) {
-	defer rows.Close()
-	var out []db.ContentMatch
-	for rows.Next() {
-		var m db.ContentMatch
-		var body string
-		var ts any
-		if err := rows.Scan(&m.SessionID, &m.Project, &m.Agent,
-			&m.Location, &m.Role, &m.ToolName, &m.Ordinal, &ts, &body, &m.MatchedWords); err != nil {
-			return nil, fmt.Errorf("scanning clickhouse content match: %w", err)
-		}
-		m.Timestamp = formatDBTime(ts)
-		m.Snippet = makeSnippet(body)
-		out = append(out, m)
-	}
-	return out, rows.Err()
-}
-
-// scanWordPage reads WordRankedSQL's unpaged all-word rows until page is full,
-// so a long tail of rejected candidates is never read.
-func scanWordPage(rows *sql.Rows, page *db.WordPage, makeSnippet func(string) string) ([]db.ContentMatch, error) {
+// scanContentRows reads content matches. A non-nil page reads WordRankedSQL's
+// unpaged all-word rows only until the page is full.
+func scanContentRows(rows *sql.Rows, page *db.WordPage, makeSnippet func(string) string) ([]db.ContentMatch, error) {
 	defer rows.Close()
 	var out []db.ContentMatch
 	for rows.Next() {
@@ -846,18 +826,25 @@ func scanWordPage(rows *sql.Rows, page *db.WordPage, makeSnippet func(string) st
 		var body string
 		var ts any
 		var exactText int
-		if err := rows.Scan(&m.SessionID, &m.Project, &m.Agent,
-			&m.Location, &m.Role, &m.ToolName, &m.Ordinal, &ts, &body, &m.MatchedWords, &exactText); err != nil {
+		dest := []any{&m.SessionID, &m.Project, &m.Agent,
+			&m.Location, &m.Role, &m.ToolName, &m.Ordinal, &ts, &body, &m.MatchedWords}
+		if page != nil {
+			dest = append(dest, &exactText)
+		}
+		if err := rows.Scan(dest...); err != nil {
 			return nil, fmt.Errorf("scanning clickhouse content match: %w", err)
 		}
-		taken, full := page.Take(body, exactText == 1)
+		taken, full := true, false
+		if page != nil {
+			taken, full = page.Take(body, exactText == 1)
+		}
 		if taken {
 			m.Timestamp = formatDBTime(ts)
 			m.Snippet = makeSnippet(body)
 			out = append(out, m)
 		}
 		if full {
-			return out, nil
+			break
 		}
 	}
 	return out, rows.Err()

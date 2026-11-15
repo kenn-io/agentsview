@@ -35,36 +35,16 @@ func WordSnippetRange(body, pattern string, words ContentWords) (int, int) {
 		return start, end
 	}
 	offset := 0
-	separator := func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) }
-	for word := range strings.FieldsFuncSeq(body, func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
-	}) {
+	for word := range strings.FieldsFuncSeq(body, isWordSeparator) {
 		offset += strings.Index(body[offset:], word)
 		for _, forms := range words.Terms {
-			for _, form := range forms {
-				parts := strings.FieldsFunc(form, separator)
-				if len(parts) == 0 || !strings.EqualFold(word, parts[0]) {
-					continue
-				}
-				end := offset + len(word)
-				for _, part := range parts[1:] {
-					next := strings.IndexFunc(body[end:], func(r rune) bool { return !separator(r) })
-					if next < 0 {
-						break
-					}
-					end += next
-					candidate := body[end:]
-					if n := strings.IndexFunc(candidate, separator); n >= 0 {
-						candidate = candidate[:n]
-					}
-					if !strings.EqualFold(candidate, part) {
-						break
-					}
-					end += len(candidate)
-				}
-				if phraseMatch(body[offset:end], form) {
-					return offset, end
-				}
+			// A form spanning punctuation centers on its first word, as
+			// ftsTermSpan does for phrases matched across punctuation.
+			if slices.ContainsFunc(forms, func(form string) bool {
+				parts := strings.FieldsFunc(form, isWordSeparator)
+				return len(parts) > 0 && strings.EqualFold(word, parts[0])
+			}) {
+				return offset, offset + len(word)
 			}
 		}
 		offset += len(word)

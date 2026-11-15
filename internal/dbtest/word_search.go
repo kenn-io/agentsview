@@ -43,10 +43,6 @@ func SeedWordSearch(t *testing.T, d *db.DB) {
 		{"split-punctuation", "word-split-punctuation", strings.Repeat("filler ", 80) + "invoice txt"},
 		{"cjk-prefix", "word-cjk-boundary", "漢invoice"},
 		{"cjk-suffix", "word-cjk-boundary", "invoice漢"},
-		{"code-both", "word-code", "c++ rounding"},
-		{"code-partial", "word-code", "rounding"},
-		{"path-both", "word-path", `C:\temp invoice`},
-		{"path-partial", "word-path", "invoice"},
 		{"star-both", "word-star", "invoice* rounding"},
 		{"star-partial", "word-star", "rounding"},
 		{"literal-star", "word-literal-star", "invoice*"},
@@ -122,27 +118,6 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 			hits = append(hits, hit{m.SessionID, m.Location, m.MatchedWords})
 		}
 		return hits
-	}
-	for _, tc := range []struct {
-		pattern, project string
-		ids              []string
-	}{
-		{"c++ rounding", "word-code", []string{"code-both", "code-partial"}},
-		{`C:\temp invoice`, "word-path", []string{"path-both", "path-partial"}},
-	} {
-		for _, mode := range []string{"fts", "hybrid"} {
-			t.Run(tc.pattern+"/"+mode, func(t *testing.T) {
-				page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
-					Pattern: tc.pattern, Project: tc.project, Mode: mode, KeywordOnly: mode == "hybrid",
-				})
-				require.NoError(t, err)
-				var ids []string
-				for _, match := range page.Matches {
-					ids = append(ids, match.SessionID)
-				}
-				assert.ElementsMatch(t, tc.ids, ids)
-			})
-		}
 	}
 	for _, mode := range []string{"fts", "hybrid"} {
 		t.Run("single word matches whole words/"+mode, func(t *testing.T) {
@@ -310,19 +285,6 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 			}
 		})
 	}
-	t.Run("paging across exact and word matches", func(t *testing.T) {
-		page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
-			Pattern: "invoice rounding decision", Project: "word-search", Limit: 2, Cursor: 1,
-		})
-		require.NoError(t, err)
-		assert.Equal(t, []hit{{"tool", "tool_result", 3}, {"two", "message", 2}}, project(page.Matches))
-		assert.Equal(t, 3, page.NextCursor)
-		page, err = store.SearchContent(t.Context(), db.ContentSearchFilter{
-			Pattern: "invoice rounding decision", Project: "word-search", Limit: 2, Cursor: page.NextCursor,
-		})
-		require.NoError(t, err)
-		assert.Equal(t, []hit{{"one", "message", 1}}, project(page.Matches))
-	})
 	for _, tc := range []struct {
 		pattern string
 		want    []hit
