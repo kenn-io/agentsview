@@ -95,11 +95,6 @@ type Store struct {
 		unknown bool
 		valid   bool
 	}
-	usageCarry struct {
-		sync.Mutex
-		version     string
-		valid, pass bool
-	}
 	sessionAggregateRows kept.Memo[CHUsageAggregateRow]
 	usageSessionRows     kept.Memo[chUsageSessionRow]
 	// topSessionTotals keeps each session's totals per top-sessions read.

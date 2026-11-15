@@ -1084,11 +1084,6 @@ func (s *Sync) pushSessionBatch(
 	if err := s.insertUsageSessionSnapshots(ctx, published, contentVersions, version); err != nil {
 		return nil, err
 	}
-	if s.hooks != nil && s.hooks.afterUsageSnapshots != nil {
-		if err := s.hooks.afterUsageSnapshots(batch); err != nil {
-			return nil, err
-		}
-	}
 	if err := s.insertSessions(ctx, published, contentVersions, version); err != nil {
 		return nil, err
 	}

@@ -1534,11 +1534,6 @@ func (s *Store) forEachDailyUsageGroupRow(
 					return err
 				}
 			}
-			if diskReady {
-				if data, err := kept.EncodeRows(rows, dailyUsageRowsBytes, dailyUsageRowBytes); err == nil {
-					s.usageDisk.Put(memoSlot, usageDiskVersion+memoVersion, data)
-				}
-			}
 			return nil
 		}
 	}
@@ -2448,11 +2443,8 @@ func (s *Store) GetTopSessionsByCost(
 		}
 	}
 	if !ok {
-		if out, ok = carryRawUsage(ctx, s, &s.topSessionTotals, state, memoSlot, memoVersion, "top", f, pricing.digest+"|"+pricing.catalog.digest, nil); ok && diskReady {
-			if data, err := kept.EncodeRows(out, kept.DefaultMaxBytes, db.TopSessionBytes); err == nil {
-				s.usageDisk.Put(memoSlot, topUsageDiskVersion+memoVersion, data)
-			}
-		}
+		out, ok = carryRawUsage(ctx, s, &s.topSessionTotals, state, memoSlot, memoVersion,
+			"top", f, pricing.digest+"|"+pricing.catalog.digest, nil)
 	}
 	if !ok {
 		catalogDigest := pricing.catalog.digest
@@ -2698,31 +2690,26 @@ func carryRawUsage[T any](ctx context.Context, s *Store, memo *kept.Memo[T], sta
 		return nil, false
 	}
 	rows, ok := memo.Get(rawSlot, rawVersion)
-	if !ok || !s.usageCarryPublished(ctx, rawVersion) {
+	if !ok || !s.usageCarryPublished(ctx) {
 		return nil, false
 	}
 	memo.Put(slot, version, rows)
 	return rows, true
 }
 
-func (s *Store) usageCarryPublished(ctx context.Context, version string) bool {
-	s.usageCarry.Lock()
-	defer s.usageCarry.Unlock()
-	if s.usageCarry.valid && s.usageCarry.version == version {
-		return s.usageCarry.pass && s.usageCaptureStable(ctx, chUsageCarryTables...)
-	}
-	// Newer raw rows identify an interrupted publication. Equal usable-row
-	// counts also reject a replacement interrupted after deleting old rows.
+func (s *Store) usageCarryPublished(ctx context.Context) bool {
+	// Rows from a different content version identify an interrupted publication.
+	// Unequal usable-row counts reject a replacement interrupted after deleting old rows.
 	// A newer snapshot can contain metadata the session has not published yet.
 	// Count all rows raw Usage reads, including older content versions.
 	raw := clickUsageNormalizedQueryFrom("", chUsageStoredMessageEligibility, chUsageEventEligibility,
 		"usage_messages m JOIN sessions s ON s.id = m.session_id", chStoredMessageRecordedCost,
 		"usage_events ue JOIN sessions s ON s.id = ue.session_id", "1", "")
 	query := `SELECT
-		(SELECT count() FROM (SELECT session_id, max(push_version) AS version FROM (
+		(SELECT count() FROM (SELECT session_id, min(push_version) AS oldest, max(push_version) AS newest FROM (
 			SELECT session_id, push_version FROM usage_messages UNION ALL
 			SELECT session_id, push_version FROM usage_events) GROUP BY session_id) r
-			INNER JOIN sessions AS s ON s.id = r.session_id WHERE r.version > s.content_version)
+			INNER JOIN sessions AS s ON s.id = r.session_id WHERE r.oldest < s.content_version OR r.newest > s.content_version)
 		+ (SELECT count() FROM usage_session_snapshots AS s
 			LEFT JOIN (SELECT session_id, count() AS n FROM (` + raw + `) GROUP BY session_id) r ON r.session_id = s.id
 			WHERE if(s.prepares_usage, arrayCount((present, model) -> ` + chStoredMessageUsable("present", "model") + `,
@@ -2735,11 +2722,7 @@ func (s *Store) usageCarryPublished(ctx context.Context, version string) bool {
 	if s.beforeUsageCarryCheck != nil {
 		s.beforeUsageCarryCheck()
 	}
-	if err != nil || !s.usageCaptureStable(ctx, chUsageCarryTables...) {
-		return false
-	}
-	s.usageCarry.version, s.usageCarry.valid, s.usageCarry.pass = version, true, violations == 0
-	return s.usageCarry.pass
+	return err == nil && violations == 0 && s.usageCaptureStable(ctx, chUsageCarryTables...)
 }
 
 // usageReadFingerprint identifies the rows a usage read sees. Fully prepared
