@@ -10,7 +10,7 @@ import (
 	"go.kenn.io/docbank/document/ocr"
 )
 
-func TestSearchKeptSelectionsAndWrites(t *testing.T) {
+func TestSearchKeptSelections(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "session", "project")
@@ -32,20 +32,6 @@ func TestSearchKeptSelectionsAndWrites(t *testing.T) {
 		require.NoError(t, err)
 	}
 	require.EqualValues(t, 5, loads.Load())
-	insertMessages(t, d, Message{SessionID: "session", Ordinal: 1, Role: "user", Content: "newly added", Timestamp: "2024-06-01T09:01:00Z"})
-	page, err = d.Search(ctx, SearchFilter{Query: "newly added"})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	_, err = d.getWriter().ExecContext(ctx, `UPDATE sessions SET first_message='fresh term' WHERE id='session'`)
-	require.NoError(t, err)
-	page, err = d.Search(ctx, SearchFilter{Query: "fresh term"})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	_, err = d.getWriter().ExecContext(ctx, `UPDATE sessions SET deleted_at='2024-06-02' WHERE id='session'`)
-	require.NoError(t, err)
-	page, err = d.Search(ctx, f)
-	require.NoError(t, err)
-	require.Empty(t, page.Results)
 }
 
 func TestSearchKeptImageText(t *testing.T) {
@@ -55,6 +41,10 @@ func TestSearchKeptImageText(t *testing.T) {
 	insertSession(t, d, "image", "project")
 	content := testInlineImageContent()
 	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
+	var loads atomic.Int32
+	d.analyticsKept.Size = func(any) int64 { loads.Add(1); return 1 }
+	before, err := d.GetAnalyticsTools(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
 	f := SearchFilter{Query: "invoice"}
 	page, err := d.Search(ctx, f)
 	require.NoError(t, err)
@@ -62,6 +52,18 @@ func TestSearchKeptImageText(t *testing.T) {
 	identity, err := ocr.NewIdentity("test", "model", "revision")
 	require.NoError(t, err)
 	require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "invoice", false))
+	after, err := d.GetAnalyticsTools(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+	require.EqualValues(t, 1, loads.Load())
+	page, err = d.Search(ctx, f)
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	_, err = d.getWriter().ExecContext(ctx, `DELETE FROM image_text_occurrences; DELETE FROM stats WHERE key=?`, imageTextBackfillKey)
+	require.NoError(t, err)
+	page, err = d.Search(ctx, f)
+	require.NoError(t, err)
+	require.Empty(t, page.Results)
 	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
 	page, err = d.Search(ctx, f)
 	require.NoError(t, err)
@@ -94,26 +96,6 @@ func TestSearchKeptReadOnlyBypassesCache(t *testing.T) {
 		require.Len(t, page.Results, 1)
 	}
 	require.Zero(t, loads.Load())
-}
-
-func TestSearchKeptImageTextPreservesAnalytics(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
-	insertSession(t, d, "image", "project")
-	content := testInlineImageContent()
-	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-	var loads atomic.Int32
-	d.analyticsKept.Size = func(any) int64 { loads.Add(1); return 1 }
-	before, err := d.GetAnalyticsTools(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	identity, err := ocr.NewIdentity("test", "model", "revision")
-	require.NoError(t, err)
-	require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "invoice", false))
-	after, err := d.GetAnalyticsTools(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	require.Equal(t, before, after)
-	require.EqualValues(t, 1, loads.Load())
 }
 
 func TestSearchKeptCJKAvailability(t *testing.T) {
@@ -185,26 +167,4 @@ func TestSearchKeptSearchableEdits(t *testing.T) {
 			require.Empty(t, page.Results)
 		})
 	}
-}
-
-func TestSearchKeptImageTextBackfill(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
-	insertSession(t, d, "image", "project")
-	content := testInlineImageContent()
-	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-	identity, err := ocr.NewIdentity("test", "model", "revision")
-	require.NoError(t, err)
-	require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "invoice", false))
-	_, err = d.getWriter().ExecContext(ctx, `DELETE FROM image_text_occurrences; DELETE FROM stats WHERE key=?`, imageTextBackfillKey)
-	require.NoError(t, err)
-	filter := SearchFilter{Query: "invoice"}
-	page, err := d.Search(ctx, filter)
-	require.NoError(t, err)
-	require.Empty(t, page.Results)
-	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
-	page, err = d.Search(ctx, filter)
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
 }
