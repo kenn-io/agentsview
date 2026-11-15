@@ -5,7 +5,6 @@ package db
 import (
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/docbank/document/ocr"
@@ -63,10 +62,6 @@ func TestSearchKeptImageText(t *testing.T) {
 	page, err = d.Search(ctx, SearchFilter{Query: "receipt"})
 	require.NoError(t, err)
 	require.Empty(t, page.Results)
-	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
-	pending, err := d.PendingImageText(ctx, identity.Fingerprint, time.Now(), 10)
-	require.NoError(t, err)
-	require.Equal(t, []string{RetainedToolResultImages(content)[0].SHA256}, pending)
 }
 
 func TestSearchKeptReadOnlyBypassesCache(t *testing.T) {
@@ -177,17 +172,9 @@ func TestSearchKeptDialogueReplacement(t *testing.T) {
 	page, err := d.Search(ctx, filter)
 	require.NoError(t, err)
 	require.Len(t, page.Results, 1)
-	var loads atomic.Int32
-	d.analyticsKept.Size = func(any) int64 { loads.Add(1); return 1 }
-	before, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
 	messages[0].DialogueText = new("different")
 	require.NoError(t, d.ReplaceSessionContent(ctx, "session", messages, SessionSignalUpdate{}, nil))
 	page, err = d.Search(ctx, filter)
 	require.NoError(t, err)
 	require.Empty(t, page.Results)
-	after, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	require.Equal(t, before, after)
-	require.EqualValues(t, 1, loads.Load())
 }

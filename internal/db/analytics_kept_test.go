@@ -11,7 +11,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/docbank/document/ocr"
 )
 
 func TestAnalyticsKeptPreservesMalformedToolName(t *testing.T) {
@@ -51,15 +50,10 @@ func TestAnalyticsKeptTracksWrites(t *testing.T) {
 		s.StartedAt = new("2024-06-01T09:00:00Z")
 		s.MessageCount = 1
 	})
-	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
-	content := testInlineImageContent()
 	message := asstMsgAt("session", 0, "hello", "2024-06-01T09:00:00Z")
-	message.ToolCalls = []ToolCall{{ToolName: "Read", ResultContent: content}}
 	insertMessages(t, d, message)
 	updateSignals(t, d, "session", SessionSignalUpdate{ToolRetryCount: 1, QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}})
 
-	var loads atomic.Int32
-	d.analyticsKept.Size = func(any) int64 { loads.Add(1); return 1 }
 	signals, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
 	assert.Equal(t, 1, signals.ToolHealth.TotalRetries)
@@ -67,13 +61,6 @@ func TestAnalyticsKeptTracksWrites(t *testing.T) {
 	signals, err = d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
 	assert.Equal(t, 3, signals.ToolHealth.TotalRetries)
-	identity, err := ocr.NewIdentity("test", "model", "revision")
-	require.NoError(t, err)
-	require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "invoice", false))
-	after, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, signals, after)
-	assert.EqualValues(t, 2, loads.Load())
 }
 
 func TestAnalyticsKeptContentLengthRepair(t *testing.T) {

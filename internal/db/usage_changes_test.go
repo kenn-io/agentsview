@@ -9,16 +9,19 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/docbank/document/ocr"
 )
 
 func TestAnalyticsChangesKeepUsageRevision(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "session", "project")
+	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
 	analyticsBefore, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
 	require.NoError(t, err)
 	message := asstMsgAt("session", 0, "read", "2024-06-01T09:00:00Z")
-	message.ToolCalls = []ToolCall{{SessionID: "session", ToolName: "Read", Category: "Read"}}
+	content := testInlineImageContent()
+	message.ToolCalls = []ToolCall{{SessionID: "session", ToolName: "Read", Category: "Read", ResultContent: content}}
 	insertMessages(t, d, message)
 	analyticsAfter, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
 	require.NoError(t, err)
@@ -38,6 +41,24 @@ func TestAnalyticsChangesKeepUsageRevision(t *testing.T) {
 		analyticsAfter, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
 		require.NoError(t, err)
 		analyticsBefore++
+		assert.Equal(t, analyticsBefore, analyticsAfter)
+	}
+	identity, err := ocr.NewIdentity("test", "model", "revision")
+	require.NoError(t, err)
+	for _, write := range []func() error{
+		func() error {
+			_, err := d.getWriter().ExecContext(ctx, `UPDATE messages SET dialogue_text = 'repaired' WHERE session_id = 'session'`)
+			return err
+		},
+		func() error {
+			return d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "invoice", false)
+		},
+		func() error { return d.ClearImageText(ctx) },
+		func() error { return d.BackfillImageTextOccurrences(ctx) },
+	} {
+		require.NoError(t, write())
+		analyticsAfter, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
+		require.NoError(t, err)
 		assert.Equal(t, analyticsBefore, analyticsAfter)
 	}
 }

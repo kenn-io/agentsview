@@ -4,6 +4,7 @@ package clickhouse
 
 import (
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2"
@@ -64,6 +65,14 @@ func TestClickHouseSearchResultsAndPages(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	f := db.SearchFilter{Query: "context", Limit: 1}
+	var searchLoads atomic.Int32
+	store.searchReads.Size = func(db.SearchPage) int64 { searchLoads.Add(1); return 1 }
+	for range 2 {
+		page, err := store.Search(ctx, f)
+		require.NoError(t, err)
+		require.Len(t, page.Results, 1)
+	}
+	require.EqualValues(t, 1, searchLoads.Load())
 	for _, want := range []struct {
 		id, snippet   string
 		ordinal, next int

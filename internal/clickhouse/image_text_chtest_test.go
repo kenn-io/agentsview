@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -72,16 +71,6 @@ func TestClickHouseImageTextPushAndSearch(t *testing.T) {
 	store, err := NewStore(ctx, target)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	var searchLoads atomic.Int32
-	store.searchReads.Size = func(db.SearchPage) int64 { searchLoads.Add(1); return 1 }
-	filter := db.SearchFilter{Query: "invoice", Limit: 20}
-	for range 2 {
-		page, err := store.Search(ctx, filter)
-		require.NoError(t, err)
-		require.Empty(t, page.Results)
-	}
-	require.EqualValues(t, 1, searchLoads.Load())
-
 	search := func(t *testing.T, read interface {
 		Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, error)
 		SearchContent(ctx context.Context, f db.ContentSearchFilter) (db.ContentSearchPage, error)
