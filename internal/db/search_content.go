@@ -355,7 +355,7 @@ func hasSource(f ContentSearchFilter, name string) bool {
 func (db *DB) searchContentSubstring(
 	ctx context.Context, f ContentSearchFilter,
 ) (ContentSearchPage, error) {
-	f, _, words := RouteContentWords(f)
+	f, q, words := routeContentWords(f)
 	if f.SessionID == "" {
 		release, err := db.acquireBulkRead(ctx)
 		if err != nil {
@@ -364,9 +364,7 @@ func (db *DB) searchContentSubstring(
 		defer release()
 	}
 	if words && db.HasFTS(ctx) {
-		if q, ok := contentWordsQuery(f.Pattern); ok {
-			return db.searchContentWordsOrSubstring(ctx, f, q)
-		}
+		return db.searchContentWordsOrSubstring(ctx, f, q)
 	}
 	return db.searchContentLiteral(ctx, f)
 }
@@ -1075,10 +1073,8 @@ func (db *DB) searchContentFTS(
 	if !db.HasFTS(ctx) {
 		return ContentSearchPage{}, errFTSUnavailable
 	}
-	if _, _, words := RouteContentWords(f); words {
-		if q, ok := contentWordsQuery(f.Pattern); ok {
-			return db.searchContentWords(ctx, f, q, false)
-		}
+	if _, q, words := routeContentWords(f); words {
+		return db.searchContentWords(ctx, f, q, false)
 	}
 	ftsQuery, err := db.prepareMessageFTSQuery(ctx, f.Pattern)
 	if err != nil {
