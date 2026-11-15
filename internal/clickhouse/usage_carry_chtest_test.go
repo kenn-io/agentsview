@@ -166,6 +166,28 @@ func TestUsageCarryDiskRestart(t *testing.T) {
 	for i, f := range filters {
 		old[i] = readPreparedUsage(t, store, f)
 	}
+	execPreparedUsage(t, store, "TRUNCATE TABLE prepared_usage")
+	store = newTestStore(t, syncer.conn, syncer.target)
+	require.NoError(t, store.openActivityReportDisk(syncer.target))
+	candidate := readPreparedUsage(t, store, filters[0])
+	runPreparedUsageRefresh(t, store)
+	seed := newTestStore(t, syncer.conn, syncer.target)
+	require.NoError(t, seed.openActivityReportDisk(syncer.target))
+	prepared := readPreparedUsage(t, seed, filters[0])
+	require.Equal(t, candidate, prepared)
+	proofs := 0
+	store.beforeUsageCarryCheck = func() { proofs++ }
+	_, before := usageQueryCounts(t, store)
+	daily, err := store.GetDailyUsage(t.Context(), filters[0])
+	require.NoError(t, err)
+	top, err := store.GetTopSessionsByCost(t.Context(), filters[0], 10)
+	require.NoError(t, err)
+	_, after := usageQueryCounts(t, store)
+	require.Equal(t, prepared.daily, daily)
+	require.Equal(t, prepared.top, top)
+	require.Equal(t, before, after)
+	require.Zero(t, proofs)
+	store.beforeUsageCarryCheck = nil
 	republishRoundSession(t, local, 123)
 	pushPreparedUsage(t, syncer)
 	execPreparedUsage(t, store, "TRUNCATE TABLE prepared_usage")
