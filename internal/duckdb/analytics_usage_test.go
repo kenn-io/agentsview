@@ -2060,9 +2060,10 @@ func TestDuckAnalyticsLargeSessionSelection(t *testing.T) {
 	for i := range 902 {
 		id := fmt.Sprintf("selection-%04d", i)
 		project, model, tool, skill := "included", "model-a", "Read", "skill-a"
-		if i == 900 {
+		switch i {
+		case 900:
 			model, tool, skill = "model-z", "Write", "skill-z"
-		} else if i == 901 {
+		case 901:
 			project, model, tool, skill = "excluded", "model-excluded", "Excluded", "skill-excluded"
 		}
 		writes = append(writes, db.SessionBatchWrite{
