@@ -34,7 +34,7 @@ func TestPGRetainedCommitLinkPublicationRace(t *testing.T) {
 		t.Run(map[bool]string{false: "empty", true: "prompt"}[withPrompt], func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 			defer cancel()
-			a, localA, pg, _ := newSessionProvenancePushSync(t, "agentsview_commit_race_test")
+			a, localA, pg, _ := newSessionProvenancePushSync(t, "agentsview")
 			localB := testDB(t)
 			dbtest.SeedCommitLinks(t, localA)
 			dbtest.SeedCommitLinks(t, localB)

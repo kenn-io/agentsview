@@ -15,16 +15,13 @@ import (
 
 func TestPGClaudeProvenanceVisibleInReadPaths(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_session_identity_test"
+	const schema = "agentsview"
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))

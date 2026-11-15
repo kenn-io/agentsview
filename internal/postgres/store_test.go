@@ -22,7 +22,7 @@ func ensureStoreSchema(t *testing.T, pgURL string) {
 	defer pg.Close()
 
 	ctx := t.Context()
-	if !takeFreshStoreDatabase(t, pgURL) {
+	if !takeFreshSchemaCopy(t, pgURL, testSchema) {
 		_, err = pg.ExecContext(ctx, `
 			DROP SCHEMA IF EXISTS `+testSchema+` CASCADE;
 		`)
@@ -68,7 +68,7 @@ func ensureAnalyticsTokenStoreSchema(
 	defer pg.Close()
 
 	ctx := t.Context()
-	if !takeFreshStoreDatabase(t, pgURL) {
+	if !takeFreshSchemaCopy(t, pgURL, testSchema) {
 		_, err = pg.ExecContext(ctx, `
 			DROP SCHEMA IF EXISTS `+testSchema+` CASCADE;
 		`)

@@ -48,10 +48,16 @@ const (
 var goalContextSourceAttrRe = regexp.MustCompile(`(?:^|\s)` +
 	regexp.QuoteMeta(goalContextSourceAttr) + `(?:\s|/|$)`)
 
+var goalContextWhitespace = strings.NewReplacer("\t", " ", "\n", " ", "\v", " ", "\f", " ", "\r", " ")
+
 // IsGoalContextPrefixed reports whether a user-role message is a legacy
 // Codex /goal continuation wrapper that may already be stored in older
 // archives or read-only stores.
 func IsGoalContextPrefixed(content, role string) bool {
+	return goalContextPrefixed(content, role, goalContextSourceAttrRe.MatchString)
+}
+
+func goalContextPrefixed(content, role string, attrMatch func(string) bool) bool {
 	if role != "user" {
 		return false
 	}
@@ -61,9 +67,18 @@ func IsGoalContextPrefixed(content, role string) bool {
 	}
 	if strings.HasPrefix(trimmed, codexInternalContextTagPrefix) {
 		openTag, _, ok := strings.Cut(trimmed, ">")
-		return ok && goalContextSourceAttrRe.MatchString(openTag)
+		return ok && attrMatch(openTag)
 	}
 	return false
+}
+
+func duckDBGoalContextPrefixed(content, role string) bool {
+	return goalContextPrefixed(content, role, func(openTag string) bool {
+		openTag = goalContextWhitespace.Replace(openTag + ">")
+		return strings.Contains(openTag, goalContextSourceAttrSQLPrefix+" ") ||
+			strings.Contains(openTag, goalContextSourceAttrSQLPrefix+">") ||
+			strings.Contains(openTag, goalContextSourceAttrSQLPrefix+"/>")
+	})
 }
 
 type systemPrefixSQLDialect int
@@ -283,6 +298,15 @@ const systemPrefixTrimCutset = " \t\n\v\f\r" +
 // user-role messages match, and leading whitespace is trimmed with the same
 // cutset before the case-sensitive prefix comparison.
 func IsSystemPrefixed(content, role string) bool {
+	return systemPrefixed(content, role, IsGoalContextPrefixed)
+}
+
+// IsDuckDBSystemPrefixed preserves the DuckDB search filter's goal-tag rules.
+func IsDuckDBSystemPrefixed(content, role string) bool {
+	return systemPrefixed(content, role, duckDBGoalContextPrefixed)
+}
+
+func systemPrefixed(content, role string, goal func(string, string) bool) bool {
 	if role != "user" {
 		return false
 	}
@@ -294,7 +318,7 @@ func IsSystemPrefixed(content, role string) bool {
 		}
 		trimmed = remainder
 	}
-	if IsGoalContextPrefixed(trimmed, role) {
+	if goal(trimmed, role) {
 		return true
 	}
 	for _, p := range SystemMsgPrefixes {

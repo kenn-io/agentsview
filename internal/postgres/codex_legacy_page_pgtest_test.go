@@ -22,11 +22,9 @@ func TestCodexLegacyHeaderPageMovesToCanonicalPostgresRow(t *testing.T) {
 	const thread = "codex:11111111-1111-4111-8111-111111111111"
 	const rollout = "codex:22222222-2222-4222-8222-222222222222"
 	const page = thread + "_22222222-2222-4222-8222-222222222222"
-	const schema = "agentsview_codex_legacy_page_test"
+	const schema = pgPushTestSchema
 	ctx := t.Context()
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	pgURL := testPGSchemaURL(t, schema)
 
 	source := testDB(t)
 	sourcePath := source.Path()
@@ -115,11 +113,9 @@ func TestCodexPurgedRolloutExclusionBlocksCanonicalPage(t *testing.T) {
 	const thread = "codex:11111111-1111-4111-8111-111111111111"
 	const rollout = "codex:22222222-2222-4222-8222-222222222222"
 	const page = thread + "_22222222-2222-4222-8222-222222222222"
-	const schema = "agentsview_codex_purged_rollout_test"
+	const schema = pgPushTestSchema
 	ctx := t.Context()
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	pgURL := testPGSchemaURL(t, schema)
 
 	local := testDB(t)
 	pagePath := filepath.Join(t.TempDir(), "rollout-2026-09-25T12-00-00-"+page[len("codex:"):]+".jsonl")

@@ -62,7 +62,7 @@ func TestNewServer_RegistersReadOnlyTools(t *testing.T) {
 	require.NotNil(t, srv)
 
 	tools := listCatalog(t, srv)
-	require.Len(t, tools.Tools, 21)
+	require.Len(t, tools.Tools, 22)
 	for _, tl := range tools.Tools {
 		require.NotNil(t, tl.Annotations, "tool %s missing annotations", tl.Name)
 		require.True(t, tl.Annotations.ReadOnlyHint,
@@ -220,6 +220,7 @@ func TestNewServer_OmitsRecallToolForUnsupportedBackend(t *testing.T) {
 	require.Len(t, tools.Tools, 19)
 	for _, tool := range tools.Tools {
 		assert.NotEqual(t, ToolQueryRecall, tool.Name)
+		assert.NotEqual(t, ToolListRecall, tool.Name)
 	}
 	require.NoError(t, ct.Close())
 	require.NoError(t, st.Wait())

@@ -989,7 +989,16 @@ func installUsageRollupRows(
 	}
 	for _, row := range build.Exceptions {
 		fact := row.Fact
-		_, err := conn.ExecContext(ctx, `INSERT INTO usage_rollup_exceptions VALUES(
+		_, err := conn.ExecContext(ctx, `INSERT INTO usage_rollup_exceptions (
+			rollup_install_id, group_kind, group_key, cached_session_id, fact_index,
+			source_session_id, local_date, source, message_ordinal, timestamp_ms,
+			timestamp_ns, raw_timestamp, uses_session_start, model, provider_id,
+			input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens,
+			cache_creation_1h_tokens, cache_read_tokens, web_search_requests,
+			reported_cost_microdollars, cost_source, cost_status, request_scoped,
+			is_headless, claude_message_id, claude_request_id, source_uuid,
+			usage_dedup_key, ranking_output_tokens
+		) VALUES (
 			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			installID, row.GroupKind, row.GroupKey, fact.CachedSessionID,
 			fact.FactIndex, fact.SourceSessionID, fact.LocalDate, fact.Fact.Source,

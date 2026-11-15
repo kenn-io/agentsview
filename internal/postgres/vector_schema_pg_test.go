@@ -36,7 +36,6 @@ func TestEnsureVectorBaseSchema(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanVectorSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanVectorSchemaTestPG(t, pgURL) })
 
 	pg, err := Open(t.Context(), pgURL, vectorSchemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
@@ -86,9 +85,7 @@ func TestEnsureVectorBaseSchema(t *testing.T) {
 // wiring a searcher that fails every query with a missing-relation error.
 func TestVectorChunkTableExists(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanVectorSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanVectorSchemaTestPG(t, pgURL) })
+	pgURL := testPGSchemaURL(t, vectorSchemaTestSchema)
 
 	pg, err := Open(t.Context(), pgURL, vectorSchemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
@@ -124,7 +121,6 @@ func TestVectorGenerationLookupTolerateMissingTable(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanVectorSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanVectorSchemaTestPG(t, pgURL) })
 
 	pg, err := Open(t.Context(), pgURL, vectorSchemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
@@ -153,9 +149,7 @@ func TestVectorGenerationLookupTolerateMissingTable(t *testing.T) {
 // generations PG already has, with their model and dimension.
 func TestListVectorGenerationInfo(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanVectorSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanVectorSchemaTestPG(t, pgURL) })
+	pgURL := testPGSchemaURL(t, vectorSchemaTestSchema)
 
 	pg, err := Open(t.Context(), pgURL, vectorSchemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
@@ -207,7 +201,6 @@ func TestEnsureSchemaFastPathCreatesVectorTables(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanVectorSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanVectorSchemaTestPG(t, pgURL) })
 
 	pg, err := Open(t.Context(), pgURL, vectorSchemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
@@ -258,7 +251,6 @@ func TestVectorHalfvecGate(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanVectorSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanVectorSchemaTestPG(t, pgURL) })
 
 	pg, err := Open(t.Context(), pgURL, vectorSchemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")

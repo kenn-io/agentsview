@@ -25,10 +25,8 @@ import (
 // a session with no timestamp at all, and sessions each default filter
 // must exclude.
 func TestAnalyticsToolsSkillsSQLiteParity(t *testing.T) {
-	const schema = "agentsview_tools_skills_parity_test"
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	const schema = usageTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 
 	local := testDB(t)
 	seedToolsSkillsParityFixture(t, local)
@@ -434,10 +432,8 @@ func seedToolsSkillsParityFixture(t *testing.T, local *db.DB) {
 
 func TestToolEffectivenessSQLitePGParity(t *testing.T) {
 	t.Parallel()
-	const schema = "agentsview_tool_rates_parity_test"
-	url := testPGURL(t)
-	cleanNamedPGSchema(t, url, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
+	const schema = usageTestSchema
+	url := testPGSchemaURL(t, schema)
 	local := testDB(t)
 	call := func(id string, ordinal int, ts, tool, model, input, result string) db.Message {
 		return db.Message{SessionID: id, Ordinal: ordinal, Timestamp: ts, Role: "assistant", Model: model, HasToolUse: true, ToolCalls: []db.ToolCall{{SessionID: id, ToolName: tool, Category: tool, InputJSON: input, ResultContent: result}}}
