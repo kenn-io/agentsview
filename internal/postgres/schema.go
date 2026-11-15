@@ -1262,7 +1262,6 @@ func EnsureSchema(
 		time.Since(step).Round(time.Millisecond), filled,
 	)
 	step = time.Now()
-	// The counter fill bumps updated_at, which clears automation audit stamps.
 	if err := backfillIsAutomatedPG(ctx, db); err != nil {
 		return err
 	}
@@ -1468,6 +1467,7 @@ func createContentSearchIndexesPG(ctx context.Context, pg interface {
 // backfillIsAutomatedPG corrects stale automation verdicts. Per-row
 // classifier stamps track freshness when available; deleting the global
 // metadata key requests a complete recheck.
+// Run repairs that bump updated_at first, because they clear audit stamps.
 func backfillIsAutomatedPG(
 	ctx context.Context, pg *sql.DB,
 ) error {
@@ -1482,7 +1482,6 @@ func backfillIsAutomatedPG(
 // flags. The one-time automation tracking installation
 // holds an exclusive sessions lock until commit, blocking reads and writes.
 // Subsequent repairs use row-level writes.
-// Run the automation audit after repairs that bump updated_at, which clears its stamps.
 func runSchemaDataRepairsPG(ctx context.Context, db *sql.DB) error {
 	if _, err := runSourceCurationBackfill(ctx, db, false); err != nil {
 		return err
