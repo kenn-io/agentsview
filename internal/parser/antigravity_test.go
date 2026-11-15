@@ -4912,3 +4912,65 @@ func TestAntigravityCLIDBRepeatedPendingPromptKeepsTurnOrder(t *testing.T) {
 	assert.Equal(t, prompt, msgs[2].Content)
 	assert.Equal(t, 2, sess.UserMessageCount)
 }
+
+func TestAntigravityCLIHistoryReconcilesStructuredTurns(t *testing.T) {
+	const id = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+	type turn struct {
+		role       RoleType
+		text       string
+		ms         int64
+		structured bool
+	}
+	cases := []struct {
+		name    string
+		turns   []turn
+		history []turn
+		want    []string
+	}{
+		{"mixed", []turn{{RoleUser, "typed request", 1779000000000, true}, {RoleUser, "A long guessed expansion for the second request", 1779000060000, false}}, []turn{{text: "typed request", ms: 1779000000000}, {text: "second request", ms: 1779000060000}}, []string{"typed request", "second request"}},
+		{"same second repeat", []turn{{RoleUser, "repeat request", 1779000000100, true}, {RoleAssistant, "assistant reply content", 1779000000500, false}}, []turn{{text: "repeat request", ms: 1779000000900}}, []string{"repeat request", "assistant reply content", "repeat request"}},
+		{"timestamp skew", []turn{{RoleUser, "typed request", 1779000000000, true}}, []turn{{text: "typed request", ms: 1779000002000}, {text: "pending request", ms: 1779000060000}}, []string{"typed request", "pending request"}},
+		{"different display", []turn{{RoleUser, "typed request with pasted text", 1779000000000, true}}, []turn{{text: "[pasted text]", ms: 1779000000000}, {text: "pending request", ms: 1779000060000}}, []string{"typed request with pasted text", "pending request"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "conversations", id+".db")
+			mustMkdir(t, filepath.Dir(path))
+			conn, err := sql.Open("sqlite3", path)
+			require.NoError(t, err)
+			createAntigravityStepTables(t, conn)
+			for i, turn := range tc.turns {
+				ts := encodePB([]pbField{{num: 1, wire: pbWireVarint, varint: uint64(turn.ms / 1000)}, {num: 2, wire: pbWireVarint, varint: uint64(turn.ms%1000) * 1000000}})
+				fields := []pbField{{num: 5, wire: pbWireBytes, bytes: ts}}
+				kind := 17
+				if turn.role == RoleUser {
+					kind = 14
+				}
+				if turn.structured {
+					text := encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: []byte(turn.text)}})
+					input := encodePB([]pbField{{num: 3, wire: pbWireBytes, bytes: text}})
+					fields = append(fields, pbField{num: 19, wire: pbWireBytes, bytes: input})
+				} else {
+					fields = append(fields, pbField{num: 17, wire: pbWireBytes, bytes: []byte(turn.text)})
+				}
+				mustExec(t, conn, `INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`, i, kind, encodePB(fields))
+			}
+			require.NoError(t, conn.Close())
+			var history []byte
+			for _, row := range tc.history {
+				encoded, err := json.Marshal(map[string]any{"conversationId": id, "timestamp": row.ms, "display": row.text})
+				require.NoError(t, err)
+				history = append(history, append(encoded, '\n')...)
+			}
+			mustWrite(t, filepath.Join(root, "history.jsonl"), history)
+			_, msgs, err := parseAntigravityCLITestSession(t, path, "", "test-machine")
+			require.NoError(t, err)
+			var got []string
+			for _, msg := range msgs {
+				got = append(got, msg.Content)
+			}
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
