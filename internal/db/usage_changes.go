@@ -55,7 +55,7 @@ func usageChangeJournalSQL() (string, string) {
 		case "model_pricing", "model_pricing_bands", "genai_pricing":
 			body += pricingRevisionBody
 		}
-		if name == "trg_messages_search_dialogue" || name == "trg_sessions_search_first_message" {
+		if strings.HasPrefix(name, "trg_messages_search_dialogue") || name == "trg_sessions_search_first_message" {
 			body = searchCounterBody
 		}
 		if condition != "" {
@@ -89,6 +89,8 @@ func usageChangeJournalSQL() (string, string) {
 	add("trg_image_text_occurrences_search_insert", "INSERT", "image_text_occurrences", "", "", true)
 	add("trg_image_text_occurrences_search_delete", "DELETE", "image_text_occurrences", "", "", true)
 	add("trg_messages_search_dialogue", "UPDATE OF dialogue_text", "messages", "OLD.dialogue_text IS NOT NEW.dialogue_text", "", false)
+	add("trg_messages_search_dialogue_insert", "INSERT", "messages", "NEW.dialogue_text IS NOT NULL", "", false)
+	add("trg_messages_search_dialogue_delete", "DELETE", "messages", "OLD.dialogue_text IS NOT NULL", "", false)
 	add("trg_messages_analytics_change_length", "UPDATE OF content_length", "messages", "OLD.content_length IS NOT NEW.content_length", "", true)
 	add("trg_tool_calls_analytics_change_delete", "DELETE", "tool_calls", "", "", true)
 	columns = []string{"session_id", "message_id", "category", "tool_name", "observed_outcome", "observed_repeat", "sequence_ending"}

@@ -157,6 +157,33 @@ func TestSearchKeptSearchableEdits(t *testing.T) {
 			}
 			require.NoError(t, d.ReplaceSessionContent(t.Context(), "session", messages, SessionSignalUpdate{}, nil))
 		}, `"raw" AND content:needle`},
+		{"dialogue full replacement to null", func(t *testing.T, d *DB) {
+			t.Helper()
+			messages := []Message{{SessionID: "session", Role: "assistant", Content: "raw words", DialogueText: new("needle")}}
+			require.NoError(t, d.ReplaceSessionContent(t.Context(), "session", messages, SessionSignalUpdate{}, nil))
+		}, func(t *testing.T, d *DB) {
+			t.Helper()
+			messages := []Message{{SessionID: "session", Role: "assistant", Content: "raw words"}}
+			require.NoError(t, d.ReplaceSessionContent(t.Context(), "session", messages, SessionSignalUpdate{}, nil))
+		}, `"raw" AND content:needle`},
+		{"dialogue full replacement from null", func(t *testing.T, d *DB) {
+			t.Helper()
+			messages := []Message{{SessionID: "session", Role: "assistant", Content: "raw needle"}}
+			require.NoError(t, d.ReplaceSessionContent(t.Context(), "session", messages, SessionSignalUpdate{}, nil))
+		}, func(t *testing.T, d *DB) {
+			t.Helper()
+			messages := []Message{{SessionID: "session", Role: "assistant", Content: "raw needle", DialogueText: new("different")}}
+			require.NoError(t, d.ReplaceSessionContent(t.Context(), "session", messages, SessionSignalUpdate{}, nil))
+		}, `"raw" AND content:needle`},
+		{"dialogue full replacement", func(t *testing.T, d *DB) {
+			t.Helper()
+			messages := []Message{{SessionID: "session", Role: "assistant", Content: "raw words", DialogueText: new("needle")}}
+			require.NoError(t, d.ReplaceSessionContent(t.Context(), "session", messages, SessionSignalUpdate{}, nil))
+		}, func(t *testing.T, d *DB) {
+			t.Helper()
+			messages := []Message{{SessionID: "session", Role: "assistant", Content: "raw words", DialogueText: new("different")}}
+			require.NoError(t, d.ReplaceSessionContent(t.Context(), "session", messages, SessionSignalUpdate{}, nil))
+		}, `"raw" AND content:needle`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
