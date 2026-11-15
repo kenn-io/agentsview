@@ -2699,7 +2699,7 @@ func usageVersionKey(table, pricingDigest string) string {
 // usageRowsVersion names the rows of the tables as of the request's parts
 // snapshot. The sessions, snapshot, and price record tables are followed
 // by finalRows trackers, whose checks read only the keys new parts hold;
-// the other, small tables are hashed again when their parts change. If
+// the other tables are hashed again when their parts change. If
 // parts move during the probe or the probe fails, the read is served
 // uncached. The version names only pricingDigest's price records: hashing
 // every digest's records read the whole table, which took two minutes on a
