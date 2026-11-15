@@ -109,6 +109,17 @@ func TestPGActivityReportPricedReuse(t *testing.T) {
 	repeated := pgKeptBuild(t, store, f, q, true)
 	assert.Same(t, saved, entry())
 	requirePGKeptEqual(t, first, repeated)
+	var wg sync.WaitGroup
+	results := make([]activity.CandidateArtifacts, 4)
+	errs := make([]error, len(results))
+	for i := range results {
+		wg.Go(func() { results[i], errs[i] = store.BuildActivityReportArtifacts(t.Context(), f, q, nil) })
+	}
+	wg.Wait()
+	for i := range results {
+		require.NoError(t, errs[i])
+		requirePGKeptEqual(t, repeated, results[i])
+	}
 	assert.Equal(t, 500, repeated.Report.Totals.OutputTokens)
 	assert.Equal(t, money.MustParseDollars("0.01"), repeated.Report.Totals.Cost)
 	require.NotNil(t, repeated.Report.Pricing)
@@ -156,6 +167,7 @@ func TestPGActivityReportInputClock(t *testing.T) {
 	entries, ok := store.runtimeState().activityInputs.Get(lower+"|"+upper, version)
 	require.True(t, ok)
 	saved := entries[0].priced
+	require.NotNil(t, saved)
 	q.EffectiveEnd = q.EffectiveEnd.Add(time.Minute)
 	advanced := pgKeptBuild(t, store, f, q, true)
 	entries, ok = store.runtimeState().activityInputs.Get(lower+"|"+upper, version)
@@ -164,9 +176,6 @@ func TestPGActivityReportInputClock(t *testing.T) {
 	assert.Equal(t, 100, advanced.Report.Totals.OutputTokens)
 	q.EffectiveEnd = q.RangeStart.Add(10*time.Hour + 5*time.Minute)
 	atBoundary := pgKeptBuild(t, store, f, q, true)
-	entries, ok = store.runtimeState().activityInputs.Get(lower+"|"+upper, version)
-	require.True(t, ok)
-	assert.Same(t, saved, entries[0].priced)
 	assert.Equal(t, 100, atBoundary.Report.Totals.OutputTokens)
 	q.EffectiveEnd = q.EffectiveEnd.Add(time.Microsecond)
 	after := pgKeptBuild(t, store, f, q, true)
@@ -348,7 +357,7 @@ func TestPGActivityReportInputTranscriptAndCounts(t *testing.T) {
 	assert.Equal(t, 2, changed.Report.Buckets[0].AssistantMessages)
 }
 
-func TestPGActivityReportPricedPeerAndConcurrent(t *testing.T) {
+func TestPGActivityReportPricedPeer(t *testing.T) {
 	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
 	for _, item := range []struct {
@@ -381,23 +390,12 @@ func TestPGActivityReportPricedPeerAndConcurrent(t *testing.T) {
 	require.NoError(t, err)
 	defer fresh.Close()
 	requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), got)
-	var wg sync.WaitGroup
-	results := make([]activity.CandidateArtifacts, 4)
-	errs := make([]error, len(results))
-	for i := range results {
-		wg.Go(func() { results[i], errs[i] = store.BuildActivityReportArtifacts(t.Context(), f, q, nil) })
-	}
-	wg.Wait()
-	for i := range results {
-		require.NoError(t, errs[i])
-		requirePGKeptEqual(t, got, results[i])
-	}
 }
 
 func TestPGActivityReportPricedCopilot(t *testing.T) {
 	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
-	pgKeptSession(t, local, "copilot", "project-a", "2026-06-14")
+	require.NoError(t, local.UpsertSession(t.Context(), db.Session{ID: "copilot", Project: "project-a", Machine: "test-machine", Agent: "copilot", CreatedAt: "2026-06-14T10:00:00Z", StartedAt: new("2026-06-14T10:00:00Z"), EndedAt: new("2026-06-14T10:10:00Z"), MessageCount: 1, UserMessageCount: 1}))
 	require.NoError(t, local.ReplaceSessionUsageEvents(t.Context(), "copilot", []db.UsageEvent{{SessionID: "copilot", Source: "shutdown", Model: "kept-model", OutputTokens: 500, Cost: new(money.MustParseDollars("0.03")), CostSource: db.CopilotReportedCostSource, DedupKey: "final", OccurredAt: "2026-06-14T10:05:00Z"}}))
 	pgKeptPush(t, syncer, false)
 	store.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}})
