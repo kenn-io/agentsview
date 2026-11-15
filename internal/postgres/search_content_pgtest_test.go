@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 	"testing"
@@ -18,6 +19,31 @@ import (
 // contentSearchSchema is an isolated schema for content-search tests so
 // they don't interfere with other pgtest suites that reuse testSchema.
 const contentSearchSchema = "agentsview_content_search_test"
+
+func TestSearchContentUsesExistingSnapshot(t *testing.T) {
+	t.Parallel()
+	store := setupContentSearch(t)
+	insertCSSession(t, store, "snapshot", "snapshot", "claude", "2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
+	insertCSMessage(t, store, "snapshot", 0, "user", "invoice rounding", "2026-05-01T10:00:00Z", false)
+
+	tx, err := store.DB().BeginTx(t.Context(), &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tx.Rollback() })
+	var body string
+	require.NoError(t, tx.QueryRowContext(t.Context(), "SELECT content FROM messages WHERE session_id = $1", "snapshot").Scan(&body))
+	_, err = store.DB().ExecContext(t.Context(), "UPDATE messages SET content = $1 WHERE session_id = $2", "invoice only", "snapshot")
+	require.NoError(t, err)
+
+	filter := db.ContentSearchFilter{Pattern: "invoice rounding", Project: "snapshot"}
+	page, err := store.readView(tx).SearchContent(t.Context(), filter)
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Contains(t, page.Matches[0].Snippet, "invoice rounding")
+	page, err = store.SearchContent(t.Context(), filter)
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Contains(t, page.Matches[0].Snippet, "invoice only")
+}
 
 func TestPGSearchContentWordBoundariesCLocale(t *testing.T) {
 	t.Parallel()

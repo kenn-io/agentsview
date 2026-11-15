@@ -146,6 +146,14 @@ func (s *Store) searchContentSubstringPG(
 	if !s.cockroach {
 		f, words, ranked = db.RouteContentWords(f)
 	}
+	if ranked && s.readTx == nil {
+		tx, err := s.beginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+		if err != nil {
+			return db.ContentSearchPage{}, err
+		}
+		defer func() { _ = tx.Rollback() }()
+		s = s.readView(tx)
+	}
 	scopeWhere, scopeArgs := db.BuildContentScopeSQL(f, s.sessionDialect())
 	scopeWhere, scopeArgs = appendExcludeSessionIDsPG(
 		scopeWhere, scopeArgs, "id", f.ExcludeSessionIDs)
