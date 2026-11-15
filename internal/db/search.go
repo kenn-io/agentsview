@@ -409,11 +409,11 @@ func (db *DB) Search(
 	if err != nil {
 		return db.search(ctx, f, cjk)
 	}
-	imageRevision, err := db.archiveJournalRevision(ctx, archiveMetadataImageTextRevisionKey, "image text")
+	searchRevision, err := db.archiveJournalRevision(ctx, archiveMetadataSearchChangeRevisionKey, "search change")
 	if err != nil {
 		return db.search(ctx, f, cjk)
 	}
-	return db.searchKept.Do(ctx, key, fmt.Sprintf("%s|%d", version, imageRevision), func(ctx context.Context) (SearchPage, error) {
+	return db.searchKept.Do(ctx, key, fmt.Sprintf("%s|%d", version, searchRevision), func(ctx context.Context) (SearchPage, error) {
 		return db.search(ctx, f, cjk)
 	})
 }
