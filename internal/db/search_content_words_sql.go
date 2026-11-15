@@ -94,13 +94,8 @@ func WordRankedSQL(b *QueryBuilder, branches []string, f ContentSearchFilter, q 
 			LIMIT ? OFFSET ?`
 }
 
-func hasNonASCII(s string) bool {
-	return strings.IndexFunc(s, func(r rune) bool { return r > unicode.MaxASCII }) >= 0
-}
-
 func wordTermSQL(b *QueryBuilder, raw string, forms []string) string {
-	unicodeClasses := slices.ContainsFunc(forms, hasNonASCII)
-	return b.dialect.regexPredicate(raw, b.Add(boundedPattern(b, compactForms(b, forms, unicodeClasses))))
+	return b.dialect.regexPredicate(raw, b.Add(boundedPattern(b, compactForms(b, forms))))
 }
 
 // boundedPattern matches words separated by non-letter, non-digit runs, with
@@ -116,32 +111,32 @@ func boundedPattern(b *QueryBuilder, words ...string) string {
 
 // compactForms folds forms to their common prefix and an alternation of
 // suffixes, which roughly halves PostgreSQL's regex cost.
-func compactForms(b *QueryBuilder, forms []string, unicodeClasses bool) string {
+func compactForms(b *QueryBuilder, forms []string) string {
 	if slices.ContainsFunc(forms, func(form string) bool {
 		return strings.IndexFunc(form, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) }) >= 0
 	}) {
 		patterns := make([]string, len(forms))
 		for i, form := range forms {
-			patterns[i] = wordFormRegex(b, form, unicodeClasses)
+			patterns[i] = wordFormRegex(b, form)
 		}
 		return "(" + strings.Join(patterns, "|") + ")"
 	}
 	prefix := wordPrefix(forms)
 	suffixes := make([]string, len(forms))
 	for i, form := range forms {
-		suffixes[i] = wordFormRegex(b, form[len(prefix):], unicodeClasses)
+		suffixes[i] = wordFormRegex(b, form[len(prefix):])
 	}
 	slices.Sort(suffixes)
-	return wordFormRegex(b, prefix, unicodeClasses) + "(" + strings.Join(slices.Compact(suffixes), "|") + ")"
+	return wordFormRegex(b, prefix) + "(" + strings.Join(slices.Compact(suffixes), "|") + ")"
 }
 
-func wordFormRegex(b *QueryBuilder, form string, unicodeClasses bool) string {
+func wordFormRegex(b *QueryBuilder, form string) string {
 	parts := strings.FieldsFunc(form, func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) })
 	for i := range parts {
 		parts[i] = regexp.QuoteMeta(parts[i])
 	}
 	gap := "[^[:alnum:]]+"
-	if b.dialect.name != "postgres" && unicodeClasses {
+	if b.dialect.name != "postgres" {
 		gap = `[^\p{L}\p{N}]+`
 	}
 	return strings.Join(parts, gap)

@@ -41,6 +41,9 @@ func SeedWordSearch(t *testing.T, d *db.DB) {
 		{"invoice-email", "word-punctuation", "a@invoice.example"},
 		{"invoice-version", "word-punctuation", "v2.invoice"},
 		{"split-punctuation", "word-split-punctuation", "invoice txt"},
+		{"unicode-gap", "word-unicode-gap", "invoiceétxt"},
+		{"utf-exact", "word-utf-gap", "utf-8 decode"},
+		{"utf-unicode-gap", "word-utf-gap", "utf é 8 decode"},
 		{"cjk-prefix", "word-cjk-boundary", "漢invoice"},
 		{"cjk-suffix", "word-cjk-boundary", "invoice漢"},
 	} {
@@ -95,6 +98,8 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 		want                   []hit
 	}{
 		{"punctuation splits query words", "invoice.txt missingword", "word-split-punctuation", []hit{{"split-punctuation", "message", 1}}},
+		{"Unicode letters do not split query words", "invoice.txt missingword", "word-unicode-gap", nil},
+		{"Unicode letters do not split numeric forms", "utf-8 missing", "word-utf-gap", []hit{{"utf-exact", "message", 1}}},
 		{"underscore phrase", `"invoice rounding" decision`, "word-boundary", []hit{{"underscore", "message", 3}}},
 		{"multiline", "invoice rounding decision", "word-multiline", []hit{{"multiline", "message", 3}}},
 	} {
