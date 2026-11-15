@@ -15,6 +15,8 @@ import (
 
 type analyticsSQL struct{ store *Store }
 
+const trendsDiskVersion = "trends-1|"
+
 func (s *Store) analytics() *readbase.Analytics {
 	return readbase.NewAnalytics(analyticsSQL{s}, "clickhouse")
 }
@@ -626,5 +628,23 @@ func (s *Store) GetTrendsTerms(
 	if err != nil {
 		return load(ctx)
 	}
-	return s.trendsReads.Do(ctx, string(key), version, load)
+	return s.trendsReads.Do(ctx, string(key), version, func(ctx context.Context) (db.TrendsTermsResponse, error) {
+		if f.Timezone == "Local" || !s.usageDisk.Enabled() {
+			return load(ctx)
+		}
+		slot := "trends|" + string(key)
+		if data, ok := s.usageDisk.Get(slot, trendsDiskVersion+version); ok {
+			var report db.TrendsTermsResponse
+			if json.Unmarshal(data, &report) == nil {
+				return report, nil
+			}
+		}
+		report, err := load(ctx)
+		if err == nil {
+			if data, marshalErr := json.Marshal(report, json.FormatNilSliceAsNull(true)); marshalErr == nil {
+				s.usageDisk.Put(slot, trendsDiskVersion+version, data)
+			}
+		}
+		return report, err
+	})
 }

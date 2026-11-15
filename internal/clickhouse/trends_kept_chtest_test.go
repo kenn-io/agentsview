@@ -3,6 +3,8 @@
 package clickhouse
 
 import (
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 
@@ -10,6 +12,77 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storage"
 )
+
+func TestTrendsKeptRestart(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	first, syncer, local := newPushedStore(t)
+	require.NoError(t, first.openActivityReportDisk(syncer.target))
+	terms := []db.TrendTermInput{{Term: "alpha", Variants: []string{"alpha"}, Matchers: []string{"alpha"}}}
+	read := func(store *Store, f db.AnalyticsFilter) db.TrendsTermsResponse {
+		t.Helper()
+		result, err := store.GetTrendsTerms(t.Context(), f, terms, "day")
+		require.NoError(t, err)
+		return result
+	}
+	count := func(store *Store) uint64 {
+		t.Helper()
+		n, _ := usageQueryCountsOf(t, store, "startsWith(trimLeft(query, ' \\n\\t\\r'), 'SELECT m.content, COALESCE(m.timestamp')")
+		return n
+	}
+	var reports []db.TrendsTermsResponse
+	for _, zone := range []string{"UTC", "America/New_York"} {
+		f := db.AnalyticsFilter{Timezone: zone, From: "2026-01-01", To: "2026-01-31"}
+		want := read(first, f)
+		reports = append(reports, want)
+		require.Positive(t, count(first))
+		fresh := newTestStore(t, syncer.conn, syncer.target)
+		require.Equal(t, read(fresh, f), want)
+		restarted := newTestStore(t, syncer.conn, syncer.target)
+		require.NoError(t, restarted.openActivityReportDisk(syncer.target))
+		before := count(restarted)
+		require.Equal(t, want, read(restarted, f))
+		require.Equal(t, before, count(restarted))
+	}
+	require.NotEqual(t, reports[0].Buckets, reports[1].Buckets)
+	empty := db.AnalyticsFilter{Timezone: "UTC", Project: "no-such-project"}
+	wantEmpty := read(first, empty)
+	emptyRestart := newTestStore(t, syncer.conn, syncer.target)
+	require.NoError(t, emptyRestart.openActivityReportDisk(syncer.target))
+	beforeEmpty := count(emptyRestart)
+	require.Equal(t, wantEmpty, read(emptyRestart, empty))
+	require.Equal(t, beforeEmpty, count(emptyRestart))
+	f := db.AnalyticsFilter{Timezone: "UTC", From: "2026-01-01", To: "2026-01-31"}
+	beforePush := read(first, f)
+	appendMessage(t, local, fixtureAlphaID, "alpha", "2026-01-12T05:00:00Z")
+	_, err := syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	restarted := newTestStore(t, syncer.conn, syncer.target)
+	require.NoError(t, restarted.openActivityReportDisk(syncer.target))
+	updated := read(restarted, f)
+	require.Greater(t, updated.Series[0].Total, beforePush.Series[0].Total)
+	require.Equal(t, read(newTestStore(t, syncer.conn, syncer.target), f), updated)
+	again := newTestStore(t, syncer.conn, syncer.target)
+	require.NoError(t, again.openActivityReportDisk(syncer.target))
+	before := count(again)
+	require.Equal(t, updated, read(again, f))
+	require.Equal(t, before, count(again))
+
+	files := func() []string {
+		t.Helper()
+		paths, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "clickhouse-usage", "*", "*.gob"))
+		require.NoError(t, err)
+		return paths
+	}
+	prior := files()
+	for _, filter := range []db.AnalyticsFilter{
+		{Timezone: "UTC", ActiveSince: "2026-01-01T00:00:00Z"},
+		{Timezone: "UTC", Termination: "active"},
+		{Timezone: "Local"},
+	} {
+		read(first, filter)
+	}
+	require.Equal(t, prior, files())
+}
 
 func TestTrendsKeptPush(t *testing.T) {
 	local, target := seedFixture(t)
