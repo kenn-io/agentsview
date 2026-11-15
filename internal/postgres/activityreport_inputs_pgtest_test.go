@@ -16,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 )
 
@@ -408,4 +409,34 @@ func TestPGActivityReportPricedCopilot(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("0.03"), report.BySession[0].Cost)
 	require.NotNil(t, repeat.Report.Pricing)
 	assert.Contains(t, repeat.Report.Pricing.Models, "kept-model")
+
+	version, err := store.activityKeptVersion(t.Context(), "")
+	require.NoError(t, err)
+	lower := db.PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
+	upper := db.PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
+	entries, ok := store.runtimeState().activityInputs.Get(lower+"|"+upper, version)
+	require.True(t, ok)
+	inputs := entries[0]
+	inputs.priced = nil
+	pricing, err := store.loadPricingMap(t.Context())
+	require.NoError(t, err)
+	digest, err := export.EffectivePricingDigest(pricing)
+	require.NoError(t, err)
+	miss, _, err := store.activityReportUsage(t.Context(), []string{"copilot"}, lower, upper, q, nil, pricing, digest, &inputs)
+	require.NoError(t, err)
+	saved := inputs.priced
+	require.NotNil(t, saved)
+	hit, _, err := store.activityReportUsage(t.Context(), []string{"copilot"}, lower, upper, q, nil, pricing, digest, &inputs)
+	require.NoError(t, err)
+	assert.Same(t, saved, inputs.priced)
+	assert.Equal(t, miss, hit)
+	var reported []activity.UsageRow
+	for _, row := range hit {
+		if row.SessionCost != nil {
+			reported = append(reported, row)
+		}
+	}
+	require.Len(t, reported, 1)
+	assert.Equal(t, money.MustParseDollars("0.03"), *reported[0].SessionCost)
+	assert.Equal(t, money.MustParseDollars("0.01"), reported[0].Cost)
 }
