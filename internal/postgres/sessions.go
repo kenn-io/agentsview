@@ -68,6 +68,7 @@ type storeRuntime struct {
 	usageIdentityDenied atomic.Bool
 	dailyUsage          kept.Reads[db.DailyUsageResult]
 	analytics           kept.Reads[[]byte]
+	search              kept.Reads[db.SearchPage]
 	planUsage           kept.Reads[*db.PlanUsageCountSummary]
 	topUsage            kept.Reads[[]db.TopSessionEntry]
 	standbyDaily        kept.Flights[snapshotResult[db.DailyUsageResult]]

@@ -949,6 +949,7 @@ type DB struct {
 	activityMemo         activityCandidateMemo
 	activityKept         kept.Memo[activityKept]
 	analyticsKept        kept.Reads[any]
+	searchKept           kept.Reads[SearchPage]
 	trendsDisk           kept.Disk
 	trendsDiskOnce       sync.Once
 	usageKept            kept.Memo[DailyUsageResult]
@@ -5891,6 +5892,7 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 	var oldReader *sql.DB
 	db.activityKept.DeleteSlots(func(string) bool { return true })
 	db.analyticsKept.Clear()
+	db.searchKept.Clear()
 	db.usageKept.DeleteSlots(func(string) bool { return true })
 	db.activityMemo.swap(func() {
 		db.frustrationMemo.Swap(func() { db.sessionStatsFacts.Swap(func() { oldReader = db.reader.Swap(reader) }) })

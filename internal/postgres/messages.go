@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json/v2"
 	"fmt"
 	"strings"
 	"time"
@@ -317,6 +318,15 @@ func (s *Store) Search(
 		f.Limit = db.DefaultSearchLimit
 	}
 
+	key, err := json.Marshal(f)
+	if err != nil {
+		return s.search(ctx, f)
+	}
+	slot := "search|" + string(key)
+	return s.runtimeState().search.Do(ctx, slot, s.keptAnalyticsVersion(ctx, slot), func(ctx context.Context) (db.SearchPage, error) { return s.search(ctx, f) })
+}
+
+func (s *Store) search(ctx context.Context, f db.SearchFilter) (db.SearchPage, error) {
 	// plainTerm is the de-quoted query joined back into one string. It feeds
 	// the name-branch ILIKE (matching the typed text against the short session
 	// name) and centers the message snippet, mirroring SQLite's plainQuery.

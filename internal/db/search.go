@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json/v2"
 	"fmt"
 	"regexp"
 	"sort"
@@ -397,6 +398,34 @@ func (db *DB) Search(
 	if f.Limit <= 0 || f.Limit > MaxSearchLimit {
 		f.Limit = DefaultSearchLimit
 	}
+	if db.readOnly {
+		return db.search(ctx, f)
+	}
+	key, err := json.Marshal(struct {
+		Filter SearchFilter
+		CJK    bool
+	}{f, db.HasCJKFTS(ctx)})
+	if err != nil {
+		return db.search(ctx, f)
+	}
+	id, err := db.GetDatabaseID(ctx)
+	if err != nil {
+		return db.search(ctx, f)
+	}
+	revision, err := db.UsageChangeRevision(ctx)
+	if err != nil {
+		return db.search(ctx, f)
+	}
+	analyticsRevision, err := db.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
+	if err != nil {
+		return db.search(ctx, f)
+	}
+	return db.searchKept.Do(ctx, string(key), fmt.Sprintf("%s|%d|%d", id, revision, analyticsRevision), func(ctx context.Context) (SearchPage, error) {
+		return db.search(ctx, f)
+	})
+}
+
+func (db *DB) search(ctx context.Context, f SearchFilter) (SearchPage, error) {
 	ftsQuery, err := db.prepareMessageFTSQuery(ctx, f.Query)
 	if err != nil {
 		return SearchPage{}, err

@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -71,6 +72,15 @@ func TestClickHouseImageTextPushAndSearch(t *testing.T) {
 	store, err := NewStore(ctx, target)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	var searchLoads atomic.Int32
+	store.searchReads.Size = func(db.SearchPage) int64 { searchLoads.Add(1); return 1 }
+	filter := db.SearchFilter{Query: "invoice 4827", Limit: 20}
+	for range 2 {
+		page, err := store.Search(ctx, filter)
+		require.NoError(t, err)
+		require.Empty(t, page.Results)
+	}
+	require.EqualValues(t, 1, searchLoads.Load())
 
 	search := func(t *testing.T, read interface {
 		Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, error)
@@ -148,6 +158,9 @@ func TestClickHouseImageTextPushAndSearch(t *testing.T) {
 	assert.False(t, result.Full)
 	assert.Equal(t, 1, result.SessionsPushed, "OCR alone republishes the session")
 	assertRows(t)
+	updatedPage, err := store.Search(ctx, filter)
+	require.NoError(t, err)
+	require.Len(t, updatedPage.Results, 1)
 	assertSearch(t, "invoice", `invoice \d+`, 1, "Read")
 	assertSearch(t, "receipt", `rec.ipt 99`, 3, "")
 	page, err := store.Search(ctx, db.SearchFilter{Query: "invoice", Limit: 5})

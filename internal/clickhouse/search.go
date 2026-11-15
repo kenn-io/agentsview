@@ -3,6 +3,7 @@ package clickhouse
 import (
 	"context"
 	"database/sql"
+	"encoding/json/v2"
 	"fmt"
 	"regexp"
 	"slices"
@@ -83,6 +84,18 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 	if f.Limit <= 0 || f.Limit > db.MaxSearchLimit {
 		f.Limit = db.DefaultSearchLimit
 	}
+	key, err := json.Marshal(f)
+	if err != nil {
+		return s.search(ctx, f)
+	}
+	version, err := s.tablePartsFingerprint(ctx, []string{"sessions", "messages", "image_text"})
+	if err != nil {
+		return s.search(ctx, f)
+	}
+	return s.searchReads.Do(ctx, string(key), version, func(ctx context.Context) (db.SearchPage, error) { return s.search(ctx, f) })
+}
+
+func (s *Store) search(ctx context.Context, f db.SearchFilter) (db.SearchPage, error) {
 	if f.Query == "" {
 		return db.SearchPage{}, nil
 	}
