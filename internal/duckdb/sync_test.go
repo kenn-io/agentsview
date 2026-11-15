@@ -316,6 +316,14 @@ func TestPushRebuildTriggers(t *testing.T) {
 			wantReasonHas: "frustration",
 		},
 		{
+			name: "system prefix classifier version drift",
+			mangle: func(t *testing.T, path string) {
+				t.Helper()
+				setMirrorMetadataValue(t, path, systemPrefixRulesVersionMetadataKey, "old-rules")
+			},
+			wantReasonHas: "system prefix classifier rules changed",
+		},
+		{
 			name: "scope drift",
 			mangle: func(t *testing.T, path string) {
 				t.Helper()

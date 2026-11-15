@@ -270,10 +270,11 @@ func TestValidateBuiltMirrorRejectsBadMirrors(t *testing.T) {
 				require.NoError(t, err)
 				require.NoError(t, createSchema(ctx, conn))
 				require.NoError(t, writeMirrorMetadata(ctx, conn, mirrorMetadata{
-					SchemaVersion:  SchemaVersion,
-					DataVersion:    1,
-					Scope:          "",
-					LastPushCutoff: "2026-07-18T00:00:00.000Z",
+					SchemaVersion:            SchemaVersion,
+					SystemPrefixRulesVersion: db.SystemPrefixRulesVersion(),
+					DataVersion:              1,
+					Scope:                    "",
+					LastPushCutoff:           "2026-07-18T00:00:00.000Z",
 				}))
 				// Insert 2 sessions
 				_, err = conn.ExecContext(ctx, `
@@ -314,10 +315,11 @@ func TestValidateBuiltMirrorRejectsBadMirrors(t *testing.T) {
 				require.NoError(t, err)
 				require.NoError(t, createSchema(ctx, conn))
 				require.NoError(t, writeMirrorMetadata(ctx, conn, mirrorMetadata{
-					SchemaVersion:  2, // wrong version
-					DataVersion:    1,
-					Scope:          "",
-					LastPushCutoff: "2026-07-18T00:00:00.000Z",
+					SchemaVersion:            2, // wrong version
+					SystemPrefixRulesVersion: db.SystemPrefixRulesVersion(),
+					DataVersion:              1,
+					Scope:                    "",
+					LastPushCutoff:           "2026-07-18T00:00:00.000Z",
 				}))
 				require.NoError(t, conn.Close())
 				return 0

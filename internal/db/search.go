@@ -48,16 +48,10 @@ const (
 var goalContextSourceAttrRe = regexp.MustCompile(`(?:^|\s)` +
 	regexp.QuoteMeta(goalContextSourceAttr) + `(?:\s|/|$)`)
 
-var goalContextWhitespace = strings.NewReplacer("\t", " ", "\n", " ", "\v", " ", "\f", " ", "\r", " ")
-
 // IsGoalContextPrefixed reports whether a user-role message is a legacy
 // Codex /goal continuation wrapper that may already be stored in older
 // archives or read-only stores.
 func IsGoalContextPrefixed(content, role string) bool {
-	return goalContextPrefixed(content, role, goalContextSourceAttrRe.MatchString)
-}
-
-func goalContextPrefixed(content, role string, attrMatch func(string) bool) bool {
 	if role != "user" {
 		return false
 	}
@@ -67,18 +61,9 @@ func goalContextPrefixed(content, role string, attrMatch func(string) bool) bool
 	}
 	if strings.HasPrefix(trimmed, codexInternalContextTagPrefix) {
 		openTag, _, ok := strings.Cut(trimmed, ">")
-		return ok && attrMatch(openTag)
+		return ok && goalContextSourceAttrRe.MatchString(openTag)
 	}
 	return false
-}
-
-func duckDBGoalContextPrefixed(content, role string) bool {
-	return goalContextPrefixed(content, role, func(openTag string) bool {
-		openTag = goalContextWhitespace.Replace(openTag + ">")
-		return strings.Contains(openTag, goalContextSourceAttrSQLPrefix+" ") ||
-			strings.Contains(openTag, goalContextSourceAttrSQLPrefix+">") ||
-			strings.Contains(openTag, goalContextSourceAttrSQLPrefix+"/>")
-	})
 }
 
 type systemPrefixSQLDialect int
@@ -107,8 +92,7 @@ func PostgresSystemPrefixSQLWithoutGuard(contentCol, roleCol string) string {
 	return systemPrefixSQL(contentCol, roleCol, systemPrefixPostgres, false)
 }
 
-// DuckDBSystemPrefixSQL is the DuckDB form of SystemPrefixSQL. Tests use it
-// to check stored DuckDB verdicts against the original read-time rule.
+// DuckDBSystemPrefixSQL is the DuckDB form of SystemPrefixSQL.
 func DuckDBSystemPrefixSQL(contentCol, roleCol string) string {
 	return systemPrefixSQL(contentCol, roleCol, systemPrefixDuckDB, false)
 }
@@ -294,21 +278,11 @@ const systemPrefixTrimCutset = " \t\n\v\f\r" +
 	"\u2028\u2029\u202F\u205F\u3000\uFEFF"
 
 // IsSystemPrefixed reports whether a user-role message is a system-injected
-// message identified by a SystemMsgPrefixes prefix. Only user-role messages
-// match, and leading whitespace is trimmed before the case-sensitive prefix
-// comparison. DuckDB uses IsDuckDBSystemPrefixed to preserve its SQL rules.
+// message identified by a SystemMsgPrefixes prefix. It is the Go equivalent
+// of SystemPrefixSQL for callers that filter in Go rather than SQL: only
+// user-role messages match, and leading whitespace is trimmed with the same
+// cutset before the case-sensitive prefix comparison.
 func IsSystemPrefixed(content, role string) bool {
-	return systemPrefixed(content, role, IsGoalContextPrefixed)
-}
-
-// IsDuckDBSystemPrefixed matches DuckDBSystemPrefixSQL at push time. A verdict
-// change to either rule requires a DuckDB SchemaVersion bump to rebuild stored
-// values.
-func IsDuckDBSystemPrefixed(content, role string) bool {
-	return systemPrefixed(content, role, duckDBGoalContextPrefixed)
-}
-
-func systemPrefixed(content, role string, goal func(string, string) bool) bool {
 	if role != "user" {
 		return false
 	}
@@ -320,7 +294,7 @@ func systemPrefixed(content, role string, goal func(string, string) bool) bool {
 		}
 		trimmed = remainder
 	}
-	if goal(trimmed, role) {
+	if IsGoalContextPrefixed(trimmed, role) {
 		return true
 	}
 	for _, p := range SystemMsgPrefixes {

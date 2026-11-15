@@ -66,11 +66,6 @@ Run the DuckDB-backed browser smoke test with:
 make e2e-duckdb
 ```
 
-## System messages
-
-Push stores each message's system-prefix verdict. A change to the rule bumps
-`SchemaVersion`, rebuilding the mirror and invalidating saved Trends parts.
-
 ## Signals frustration markers
 
 Push stores frustration marker counts for each session. A change to the marker

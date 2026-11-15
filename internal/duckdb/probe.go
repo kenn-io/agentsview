@@ -7,6 +7,8 @@ import (
 	"os"
 	"sort"
 	"strings"
+
+	"go.kenn.io/agentsview/internal/db"
 )
 
 // MirrorProbe summarizes a DuckDB mirror file's shape and push-scope
@@ -44,6 +46,7 @@ type MirrorProbe struct {
 	SchemaVersion             int
 	DataVersion               int
 	FrustrationMarkersVersion int
+	SystemPrefixRulesVersion  string
 	// SourceDatabaseID is the database_id of the SQLite archive generation
 	// the mirror was built from (see mirrorMetadata.SourceDatabaseID). "" on
 	// mirrors written before the id was recorded.
@@ -149,6 +152,7 @@ func probeOpenMirror(ctx context.Context, conn *sql.DB) MirrorProbe {
 	probe.SchemaVersion = meta.SchemaVersion
 	probe.DataVersion = meta.DataVersion
 	probe.FrustrationMarkersVersion = meta.FrustrationMarkersVersion
+	probe.SystemPrefixRulesVersion = meta.SystemPrefixRulesVersion
 	probe.SourceDatabaseID = meta.SourceDatabaseID
 	probe.SourceArchiveID = meta.SourceArchiveID
 	probe.Scope = meta.Scope
@@ -236,6 +240,7 @@ func (p MirrorProbe) NeedsRebuild(scope string, sourceDataVersion int) bool {
 	}
 	return p.SchemaVersion != SchemaVersion ||
 		p.FrustrationMarkersVersion != frustrationMarkersVersion ||
+		p.SystemPrefixRulesVersion != db.SystemPrefixRulesVersion() ||
 		p.DataVersion != sourceDataVersion ||
 		p.Scope != scope
 }
@@ -298,6 +303,8 @@ func rebuildReason(
 		)
 	case probe.FrustrationMarkersVersion != frustrationMarkersVersion:
 		return "frustration marker rules changed"
+	case probe.SystemPrefixRulesVersion != db.SystemPrefixRulesVersion():
+		return "system prefix classifier rules changed"
 	case probe.DataVersion != sourceDataVersion:
 		return fmt.Sprintf(
 			"data version %d vs %d", probe.DataVersion, sourceDataVersion,
