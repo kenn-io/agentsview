@@ -1,0 +1,144 @@
+//go:build chtest
+
+package clickhouse
+
+import (
+	"errors"
+	"fmt"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
+)
+
+func TestUsageCarry(t *testing.T) {
+	for _, scenario := range []string{"healthy", "unpublished", "partial deletion", "full deletion", "changed after read", "failed push after read", "parts move"} {
+		t.Run(scenario, func(t *testing.T) {
+			t.Parallel()
+			local, syncer, store := newPreparedUsageStore(t)
+			writeLongUsageSession(t, local, 100)
+			if scenario == "healthy" {
+				republishRoundSession(t, local, 123)
+				require.NoError(t, local.SoftDeleteSession(t.Context(), usagePriceTierID))
+			}
+			pushPreparedUsage(t, syncer)
+			execPreparedUsage(t, store, "TRUNCATE TABLE prepared_usage")
+			switch scenario {
+			case "unpublished":
+				execPreparedUsage(t, store, fmt.Sprintf(`INSERT INTO messages SELECT * REPLACE ('{"input_tokens":999999}' AS token_usage, push_version + 1 AS push_version) FROM messages WHERE session_id = '%s' AND ordinal = 0`, preparedUsageLongID))
+			case "partial deletion", "full deletion":
+				condition := ""
+				if scenario == "partial deletion" {
+					condition = " AND ordinal = 0"
+				}
+				execPreparedUsage(t, store, fmt.Sprintf("ALTER TABLE usage_messages DELETE WHERE session_id = '%s'%s SETTINGS mutations_sync = 2", preparedUsageLongID, condition))
+			}
+			filters := []db.UsageFilter{{Timezone: "UTC", Breakdowns: true}, {From: "2026-01-01", To: "2026-01-30", Timezone: "UTC", Breakdowns: true}}
+			before := make([]preparedUsageRead, len(filters))
+			for i, f := range filters {
+				before[i] = readPreparedUsage(t, store, f)
+			}
+			if scenario == "changed after read" {
+				republishRoundSession(t, local, 123)
+				pushPreparedUsage(t, syncer)
+			}
+			if scenario == "failed push after read" {
+				republishRoundSession(t, local, 123)
+				syncer.hooks = &pushHooks{beforeSessionRows: func([]db.Session) error { return errors.New("injected publication failure") }}
+				result, err := syncer.Push(t.Context(), false, nil)
+				require.NoError(t, err)
+				require.NotZero(t, result.Errors)
+				syncer.hooks = nil
+			}
+			runPreparedUsageRefresh(t, store)
+			if scenario == "parts move" {
+				store.beforeUsageCarryCheck = func() {
+					store.beforeUsageCarryCheck = nil
+					execPreparedUsage(t, store, "INSERT INTO usage_messages SELECT * FROM usage_messages")
+				}
+			}
+			proofs, results := usageQueryCountsOf(t, store, "startsWith(query, 'SELECT') AND position(query, 'max(push_version) AS version') > 0 AND position(query, 's.prepares_usage') > 0")
+			for i, f := range filters {
+				got := readPreparedUsage(t, store, f)
+				if scenario == "parts move" && i == 0 {
+					require.False(t, store.usageCarry.valid)
+				}
+				fresh := readPreparedUsage(t, NewStoreFromDB(store.DB(), store.bulk), f)
+				require.Equal(t, fresh, got)
+				if scenario == "healthy" {
+					require.Equal(t, before[i], got)
+				} else if scenario == "unpublished" || scenario == "partial deletion" || scenario == "full deletion" || scenario == "changed after read" {
+					require.NotEqual(t, before[i].daily, got.daily)
+				}
+			}
+			afterProofs, afterResults := usageQueryCountsOf(t, store, "startsWith(query, 'SELECT') AND position(query, 'max(push_version) AS version') > 0 AND position(query, 's.prepares_usage') > 0")
+			if scenario == "healthy" {
+				require.EqualValues(t, 1, afterProofs-proofs)
+				// Fresh stores issue three queries each; counts read once per filter.
+				require.EqualValues(t, 8, afterResults-results)
+				for i, f := range filters {
+					require.Equal(t, before[i], readPreparedUsage(t, store, f))
+				}
+				finalProofs, finalResults := usageQueryCountsOf(t, store, "startsWith(query, 'SELECT') AND position(query, 'max(push_version) AS version') > 0 AND position(query, 's.prepares_usage') > 0")
+				require.Equal(t, afterProofs, finalProofs)
+				require.Equal(t, afterResults, finalResults)
+			} else if scenario != "changed after read" && scenario != "failed push after read" && scenario != "parts move" {
+				require.EqualValues(t, 1, afterProofs-proofs)
+				require.Greater(t, afterResults-results, uint64(8))
+			} else if scenario == "changed after read" || scenario == "failed push after read" {
+				require.Equal(t, proofs, afterProofs)
+				require.Greater(t, afterResults-results, uint64(8))
+			}
+		})
+	}
+}
+
+func TestUsageCarryDiskFirst(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	_, syncer, prepared := newPreparedUsageStore(t)
+	require.NoError(t, prepared.openActivityReportDisk(syncer.target))
+	f := db.UsageFilter{From: "2026-01-01", To: "2026-01-30", Timezone: "UTC", Breakdowns: true}
+	want := readPreparedUsage(t, prepared, f)
+	execPreparedUsage(t, prepared, "TRUNCATE TABLE prepared_usage")
+	store := newTestStore(t, syncer.conn, syncer.target)
+	require.NoError(t, store.openActivityReportDisk(syncer.target))
+	require.Equal(t, want, readPreparedUsage(t, store, f))
+	runPreparedUsageRefresh(t, store)
+	probe := "startsWith(query, 'SELECT') AND position(query, 'max(push_version) AS version') > 0 AND position(query, 's.prepares_usage') > 0"
+	proofs, results := usageQueryCountsOf(t, store, probe)
+	require.Equal(t, want, readPreparedUsage(t, store, f))
+	require.Equal(t, want, readPreparedUsage(t, store, f))
+	afterProofs, afterResults := usageQueryCountsOf(t, store, probe)
+	require.Equal(t, proofs, afterProofs)
+	// Counts have no disk entry, so the first ready visit reads them once.
+	require.EqualValues(t, 1, afterResults-results)
+}
+
+func TestUsageCarryVersionTables(t *testing.T) {
+	t.Parallel()
+	_, _, store := newPreparedUsageStore(t)
+	ctx := t.Context()
+	version := func() string {
+		t.Helper()
+		v, err := store.usageReadFingerprint(ctx, preparedUsageState{}, "")
+		require.NoError(t, err)
+		return v
+	}
+	insert := func(table string) {
+		t.Helper()
+		var name, typ string
+		require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT name, type FROM system.columns WHERE database = currentDatabase() AND table = ? AND default_kind = '' ORDER BY position LIMIT 1`, table).Scan(&name, &typ))
+		execPreparedUsage(t, store, "SYSTEM STOP MERGES "+table,
+			fmt.Sprintf("INSERT INTO %s (`%s`) SELECT defaultValueOfTypeName('%s')", table, name, typ))
+	}
+	for _, table := range []string{"prepared_usage", "sync_metadata"} {
+		before := version()
+		insert(table)
+		require.Equal(t, before, version(), table)
+	}
+	for _, table := range chUsageCarryTables {
+		before := version()
+		insert(table)
+		require.NotEqual(t, before, version(), table)
+	}
+}

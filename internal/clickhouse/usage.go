@@ -1527,6 +1527,21 @@ func (s *Store) forEachDailyUsageGroupRow(
 			}
 		}
 	}
+	if !top {
+		if rows, ok := carryRawUsage(ctx, s, &s.dailyUsageRows, state, memoSlot, memoVersion, "daily", f, pricingDigest, customModels); ok {
+			for _, row := range rows {
+				if err := visit(row); err != nil {
+					return err
+				}
+			}
+			if diskReady {
+				if data, err := kept.EncodeRows(rows, dailyUsageRowsBytes, dailyUsageRowBytes); err == nil {
+					s.usageDisk.Put(memoSlot, usageDiskVersion+memoVersion, data)
+				}
+			}
+			return nil
+		}
+	}
 	readCtx, err := withUsageDeltaTables(ctx, state)
 	if err != nil {
 		return err
@@ -2433,6 +2448,14 @@ func (s *Store) GetTopSessionsByCost(
 		}
 	}
 	if !ok {
+		out, ok = carryRawUsage(ctx, s, &s.topSessionTotals, state, memoSlot, memoVersion, "top", f, pricing.digest+"|"+pricing.catalog.digest, nil)
+		if ok && diskReady {
+			if data, err := kept.EncodeRows(out, kept.DefaultMaxBytes, db.TopSessionBytes); err == nil {
+				s.usageDisk.Put(memoSlot, topUsageDiskVersion+memoVersion, data)
+			}
+		}
+	}
+	if !ok {
 		catalogDigest := pricing.catalog.digest
 		out, err = retryUsagePriceContexts(pricing, func(pricing *pricingSnapshot) ([]db.TopSessionEntry, error) {
 			catalogDigest = pricing.catalog.digest
@@ -2654,12 +2677,77 @@ var chUsageReadTables = []string{
 // host is read raw; see preparedUsageState.raw.
 var chRawHostUsageTables = []string{"usage_messages", "usage_events"}
 
+// Preparation changes none of these tables. They name all inputs to a raw
+// read, excluding sync_metadata, which the schema step can update.
+var chUsageCarryTables = []string{
+	"sessions", "usage_session_snapshots", "cursor_usage_events", "usage_event_prices",
+	"usage_price_contexts", "model_pricing", "model_pricing_bands", "genai_pricing",
+	"usage_messages", "usage_events", "usage_price_models",
+}
+
+// carryRawUsage promotes an existing raw result only after the published
+// snapshots are shown to contain those same rows.
+func carryRawUsage[T any](ctx context.Context, s *Store, memo *kept.Memo[T], state preparedUsageState, slot, version, kind string, f db.UsageFilter, pricing string, custom [][2]string) ([]T, bool) {
+	if !state.ready || len(state.raw) != 0 || slot == "" {
+		return nil, false
+	}
+	rawVersion, err := s.usageReadFingerprint(ctx, preparedUsageState{}, "")
+	if err != nil || rawVersion == "" {
+		return nil, false
+	}
+	rawSlot, err := usageRowMemoKeyFor(kind, f, "", pricing, custom)
+	if err != nil {
+		return nil, false
+	}
+	rows, ok := memo.Get(rawSlot, rawVersion)
+	if !ok || !s.usageCarryPublished(ctx, rawVersion) {
+		return nil, false
+	}
+	memo.Put(slot, version, rows)
+	return rows, true
+}
+
+func (s *Store) usageCarryPublished(ctx context.Context, version string) bool {
+	s.usageCarry.Lock()
+	defer s.usageCarry.Unlock()
+	if s.usageCarry.valid && s.usageCarry.version == version {
+		return s.usageCarry.pass && s.usageCaptureStable(ctx, chUsageCarryTables...)
+	}
+	// Newer raw rows identify an interrupted publication. Equal usable-row
+	// counts also reject a replacement interrupted after deleting old rows.
+	raw := clickUsageNormalizedQuery(chUsageStoredMessageEligibility, chUsageEventEligibility)
+	query := `SELECT
+		(SELECT count() FROM (SELECT session_id, max(push_version) AS version FROM (
+			SELECT session_id, push_version FROM usage_messages UNION ALL
+			SELECT session_id, push_version FROM usage_events) GROUP BY session_id) r
+			INNER JOIN sessions AS s FINAL ON s.id = r.session_id WHERE r.version > s.content_version)
+		+ (SELECT count() FROM usage_session_snapshots AS s FINAL
+			LEFT JOIN (SELECT session_id, count() AS n FROM (` + raw + `) GROUP BY session_id) r ON r.session_id = s.id
+			WHERE s.prepares_usage AND (arrayCount((present, model) -> ` + chStoredMessageUsable("present", "model") + `,
+				s.usage_facts.usage_present, s.usage_facts.model)
+				+ arrayCount(model -> ` + chUsageEventUsable("model") + `, s.usage_events.model)) != r.n)`
+	var violations uint64
+	err := s.queryRowContext(ctx, query).Scan(&violations)
+	if s.beforeUsageCarryCheck != nil {
+		s.beforeUsageCarryCheck()
+	}
+	if err != nil || !s.usageCaptureStable(ctx, chUsageCarryTables...) {
+		return false
+	}
+	s.usageCarry.version, s.usageCarry.valid, s.usageCarry.pass = version, true, violations == 0
+	return s.usageCarry.pass
+}
+
 // usageReadFingerprint identifies the rows a usage read sees. Fully prepared
 // reads keep their version across merges. Raw and mixed reads name parts.
 // pricingDigest names the price records the read joins; see usageRowsVersion.
 func (s *Store) usageReadFingerprint(ctx context.Context, state preparedUsageState, pricingDigest string) (string, error) {
 	if !state.ready {
-		return s.partsFingerprint(ctx)
+		fingerprint, err := s.tablePartsFingerprint(ctx, chUsageCarryTables)
+		if err != nil {
+			return "", err
+		}
+		return "raw|" + fingerprint, nil
 	}
 	if len(state.raw) == 0 {
 		version, ok, err := s.usageRowsVersion(ctx, chUsageReadTables, pricingDigest)
