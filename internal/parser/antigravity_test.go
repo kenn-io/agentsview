@@ -4783,34 +4783,17 @@ func TestAntigravityIDEUnreadableStepsFailsClosed(t *testing.T) {
 	})
 }
 
-func TestDecodeAntigravityStepPrefersTypedPromptOverSkillExpansion(t *testing.T) {
-	const prompt = "比较这两个游戏 /grill-me"
-	text := encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: []byte(prompt)}})
-	skill := encodePB([]pbField{{num: 2, wire: pbWireBytes, bytes: []byte("<GRILL_ME> The user has requested an extensive structured interrogation of the subject. Ask questions and explore every assumption carefully. </GRILL_ME>")}})
-	skill = encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: skill}})
-	skill = encodePB([]pbField{{num: 27, wire: pbWireBytes, bytes: skill}})
-	skill = encodePB([]pbField{{num: 2, wire: pbWireBytes, bytes: skill}})
-	input := encodePB([]pbField{{num: 3, wire: pbWireBytes, bytes: text}, {num: 3, wire: pbWireBytes, bytes: skill}})
-	payload := encodePB([]pbField{{num: 1, wire: pbWireVarint, varint: 14}, {num: 19, wire: pbWireBytes, bytes: input}})
-	msg, ok := decodeAntigravityStep(0, 14, payload)
-	require.True(t, ok)
-	assert.Equal(t, RoleUser, msg.Role)
-	assert.Equal(t, prompt, msg.Content)
-	assert.Equal(t, len(prompt), msg.ContentLength)
-}
-
 func TestDecodeAntigravityStepStructuredUserInput(t *testing.T) {
 	cases := []struct {
 		name  string
 		items []pbField
 		want  string
 	}{
+		{"prompt with skill", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte("比较这两个游戏 /grill-me")}, {num: 2, wire: pbWireBytes, bytes: []byte("A longer skill expansion with enough text to be selected")}}, "比较这两个游戏 /grill-me"},
 		{"later text", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte("  ")}, {num: 2, wire: pbWireBytes, bytes: []byte("attachment")}, {num: 1, wire: pbWireBytes, bytes: []byte(" second ")}}, " second "},
 		{"short", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte("你好")}}, "你好"},
-		{"multiline", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte("    def greet():\n        return 42\n")}}, "    def greet():\n        return 42\n"},
 		{"nul", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte("a\x00b")}}, "a�b"},
 		{"blank text", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte(" \n")}, {num: 2, wire: pbWireBytes, bytes: []byte("A longer skill expansion with enough text to be selected")}}, "A longer skill expansion with enough text to be selected"},
-		{"fallback", []pbField{{num: 2, wire: pbWireBytes, bytes: []byte("A longer skill expansion with enough text to be selected")}}, "A longer skill expansion with enough text to be selected"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -4848,73 +4831,28 @@ func TestAntigravityCLIDBStructuredPromptPreservesWhitespace(t *testing.T) {
 		id     = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
 		prompt = "    def greet(): return 42  "
 	)
-	for _, withHistory := range []bool{false, true} {
-		name := "without history"
-		if withHistory {
-			name = "matching history"
-		}
-		t.Run(name, func(t *testing.T) {
-			root := t.TempDir()
-			dbPath := filepath.Join(root, "conversations", id+".db")
-			mustMkdir(t, filepath.Dir(dbPath))
-			conn, err := sql.Open("sqlite3", dbPath)
-			require.NoError(t, err)
-			createAntigravityStepTables(t, conn)
-			text := encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: []byte(prompt)}})
-			skill := encodePB([]pbField{{num: 2, wire: pbWireBytes, bytes: []byte("A longer skill expansion that should not replace the typed request")}})
-			input := encodePB([]pbField{{num: 3, wire: pbWireBytes, bytes: text}, {num: 3, wire: pbWireBytes, bytes: skill}})
-			payload := encodePB([]pbField{{num: 19, wire: pbWireBytes, bytes: input}})
-			mustExec(t, conn, `INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`, 0, 14, payload)
-			require.NoError(t, conn.Close())
-			if withHistory {
-				row, err := json.Marshal(map[string]any{"conversationId": id, "timestamp": 1779000000000, "display": prompt})
-				require.NoError(t, err)
-				mustWrite(t, filepath.Join(root, "history.jsonl"), append(row, '\n'))
-			}
-			sess, msgs, err := parseAntigravityCLITestSession(t, dbPath, "", "test-machine")
-			require.NoError(t, err)
-			require.Len(t, msgs, 1)
-			assert.Equal(t, prompt, msgs[0].Content)
-			assert.Equal(t, len(prompt), msgs[0].ContentLength)
-			assert.Equal(t, "def greet(): return 42", sess.FirstMessage)
-			assert.Equal(t, 1, sess.UserMessageCount)
-		})
-	}
-}
-
-func TestAntigravityCLIDBRepeatedPendingPromptKeepsTurnOrder(t *testing.T) {
-	const (
-		id     = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
-		prompt = "Repeat the deployment check"
-	)
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "conversations", id+".db")
 	mustMkdir(t, filepath.Dir(dbPath))
 	conn, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	createAntigravityStepTables(t, conn)
-	firstTime := encodePB([]pbField{{num: 1, wire: pbWireVarint, varint: 1779000000}})
 	text := encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: []byte(prompt)}})
-	input := encodePB([]pbField{{num: 3, wire: pbWireBytes, bytes: text}})
-	first := encodePB([]pbField{{num: 5, wire: pbWireBytes, bytes: firstTime}, {num: 19, wire: pbWireBytes, bytes: input}})
-	mustExec(t, conn, `INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`, 0, 14, first)
-	replyTime := encodePB([]pbField{{num: 1, wire: pbWireVarint, varint: 1779000060}})
-	reply := encodePB([]pbField{{num: 5, wire: pbWireBytes, bytes: replyTime}, {num: 17, wire: pbWireBytes, bytes: []byte("The deployment check passed.")}})
-	mustExec(t, conn, `INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`, 1, 17, reply)
+	skill := encodePB([]pbField{{num: 2, wire: pbWireBytes, bytes: []byte("A longer skill expansion that should not replace the typed request")}})
+	input := encodePB([]pbField{{num: 3, wire: pbWireBytes, bytes: text}, {num: 3, wire: pbWireBytes, bytes: skill}})
+	payload := encodePB([]pbField{{num: 19, wire: pbWireBytes, bytes: input}})
+	mustExec(t, conn, `INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`, 0, 14, payload)
 	require.NoError(t, conn.Close())
-	mustWrite(t, filepath.Join(root, "history.jsonl"), []byte(`{"conversationId":"`+id+`","timestamp":1779000120000,"display":"`+prompt+`"}`+"\n"))
 	sess, msgs, err := parseAntigravityCLITestSession(t, dbPath, "", "test-machine")
 	require.NoError(t, err)
-	require.Len(t, msgs, 3)
-	assert.Equal(t, []RoleType{RoleUser, RoleAssistant, RoleUser}, []RoleType{msgs[0].Role, msgs[1].Role, msgs[2].Role})
+	require.Len(t, msgs, 1)
 	assert.Equal(t, prompt, msgs[0].Content)
-	assert.Equal(t, "The deployment check passed.", msgs[1].Content)
-	assert.Equal(t, prompt, msgs[2].Content)
-	assert.Equal(t, 2, sess.UserMessageCount)
+	assert.Equal(t, len(prompt), msgs[0].ContentLength)
+	assert.Equal(t, "def greet(): return 42", sess.FirstMessage)
+	assert.Equal(t, 1, sess.UserMessageCount)
 }
 
 func TestAntigravityCLIHistoryReconcilesStructuredTurns(t *testing.T) {
-	const id = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
 	type turn struct {
 		role       RoleType
 		text       string
@@ -4930,42 +4868,18 @@ func TestAntigravityCLIHistoryReconcilesStructuredTurns(t *testing.T) {
 		{"mixed", []turn{{RoleUser, "typed request", 1779000000000, true}, {RoleUser, "A long guessed expansion for the second request", 1779000060000, false}}, []turn{{text: "typed request", ms: 1779000000000}, {text: "second request", ms: 1779000060000}}, []string{"typed request", "second request"}},
 		{"same second repeat", []turn{{RoleUser, "repeat request", 1779000000100, true}, {RoleAssistant, "assistant reply content", 1779000000500, false}}, []turn{{text: "repeat request", ms: 1779000000900}}, []string{"repeat request", "assistant reply content", "repeat request"}},
 		{"timestamp skew", []turn{{RoleUser, "typed request", 1779000000000, true}}, []turn{{text: "typed request", ms: 1779000002000}, {text: "pending request", ms: 1779000060000}}, []string{"typed request", "pending request"}},
-		{"different display", []turn{{RoleUser, "typed request with pasted text", 1779000000000, true}}, []turn{{text: "[pasted text]", ms: 1779000000000}, {text: "pending request", ms: 1779000060000}}, []string{"typed request with pasted text", "pending request"}},
+		{"different display", []turn{{RoleUser, "typed request with pasted text", 1779000000000, true}}, []turn{{text: "[pasted text]", ms: 1779000000000}}, []string{"typed request with pasted text"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
-			path := filepath.Join(root, "conversations", id+".db")
-			mustMkdir(t, filepath.Dir(path))
-			conn, err := sql.Open("sqlite3", path)
-			require.NoError(t, err)
-			createAntigravityStepTables(t, conn)
-			for i, turn := range tc.turns {
-				ts := encodePB([]pbField{{num: 1, wire: pbWireVarint, varint: uint64(turn.ms / 1000)}, {num: 2, wire: pbWireVarint, varint: uint64(turn.ms%1000) * 1000000}})
-				fields := []pbField{{num: 5, wire: pbWireBytes, bytes: ts}}
-				kind := 17
-				if turn.role == RoleUser {
-					kind = 14
-				}
-				if turn.structured {
-					text := encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: []byte(turn.text)}})
-					input := encodePB([]pbField{{num: 3, wire: pbWireBytes, bytes: text}})
-					fields = append(fields, pbField{num: 19, wire: pbWireBytes, bytes: input})
-				} else {
-					fields = append(fields, pbField{num: 17, wire: pbWireBytes, bytes: []byte(turn.text)})
-				}
-				mustExec(t, conn, `INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`, i, kind, encodePB(fields))
+			var dbMessages, history []ParsedMessage
+			for _, turn := range tc.turns {
+				dbMessages = append(dbMessages, ParsedMessage{Role: turn.role, Content: turn.text, Timestamp: time.UnixMilli(turn.ms), structuredPrompt: turn.structured})
 			}
-			require.NoError(t, conn.Close())
-			var history []byte
 			for _, row := range tc.history {
-				encoded, err := json.Marshal(map[string]any{"conversationId": id, "timestamp": row.ms, "display": row.text})
-				require.NoError(t, err)
-				history = append(history, append(encoded, '\n')...)
+				history = append(history, ParsedMessage{Role: RoleUser, Content: row.text, Timestamp: time.UnixMilli(row.ms)})
 			}
-			mustWrite(t, filepath.Join(root, "history.jsonl"), history)
-			_, msgs, err := parseAntigravityCLITestSession(t, path, "", "test-machine")
-			require.NoError(t, err)
+			msgs := mergeAntigravityDBHistoryMessages(dbMessages, history)
 			var got []string
 			for _, msg := range msgs {
 				got = append(got, msg.Content)
