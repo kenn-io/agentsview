@@ -52,6 +52,7 @@ type Store interface {
 	// Search.
 	HasFTS(ctx context.Context) bool
 	HasSemantic() bool
+	// Search pages may be shared; callers must not modify them.
 	Search(ctx context.Context, f SearchFilter) (SearchPage, error)
 	SearchSession(ctx context.Context, sessionID, query string) ([]int, error)
 	SearchContent(ctx context.Context, f ContentSearchFilter) (ContentSearchPage, error)

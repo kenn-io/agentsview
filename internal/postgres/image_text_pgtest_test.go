@@ -94,11 +94,12 @@ func TestPGImageTextPushAndSearch(t *testing.T) {
 		require.NoError(t, pg.QueryRowContext(ctx, `SELECT updated_at < '2001-01-01' FROM sessions WHERE id='shot'`).Scan(&stale))
 		return stale
 	}
+	// Set the stale timestamp before caching the empty page so the OCR push alone invalidates it.
+	staleUpdatedAt()
 	require.Empty(t, searches())
 	require.Empty(t, published())
 
 	// OCR-only change: the ordinary incremental push publishes it.
-	staleUpdatedAt()
 	require.NoError(t, local.BackfillImageTextOccurrences(ctx))
 	require.NoError(t, local.SaveImageText(ctx, hash, ocr.Identity{Fingerprint: "proc-a", Provider: "glm-ocr", Model: "glm-ocr", Revision: "r1"}, "invoice 4827", false))
 	push()

@@ -229,6 +229,21 @@ func transcriptMessagesEqual(stored, incoming []Message) bool {
 	return true
 }
 
+func dialogueMessagesChanged(stored, incoming []Message) bool {
+	byOrdinal := make(map[int]*string, len(stored))
+	for _, msg := range stored {
+		byOrdinal[msg.Ordinal] = msg.DialogueText
+	}
+	for _, msg := range incoming {
+		old := byOrdinal[msg.Ordinal]
+		if old != msg.DialogueText &&
+			(old == nil || msg.DialogueText == nil || *old != *msg.DialogueText) {
+			return true
+		}
+	}
+	return false
+}
+
 // transcriptMessagesGainSourceIDs reports whether incoming repeats stored
 // except that rows stored without a source ID now carry one, and each such ID
 // occurs once in incoming. These are the same messages after a parser starts

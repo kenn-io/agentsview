@@ -103,6 +103,7 @@ type Store struct {
 	analyticsSessionRows kept.Memo[readbase.AnalyticsSession]
 	// trendsReads keeps finished Trends reports by selection and parts fingerprint.
 	trendsReads kept.Reads[db.TrendsTermsResponse]
+	searchReads kept.Reads[db.SearchPage]
 	// analyticsListings shares one listing read among concurrent requests.
 	analyticsListings singleflight.Group
 	// activitySessions keeps activity pairing inputs per session version.
