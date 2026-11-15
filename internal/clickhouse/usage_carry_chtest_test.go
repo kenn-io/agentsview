@@ -50,13 +50,21 @@ func TestUsageCarry(t *testing.T) {
 					execPreparedUsage(t, store, "INSERT INTO usage_messages SELECT * FROM usage_messages")
 				}
 			}
-			_, results := usageQueryCounts(t, store)
 			for i, f := range filters {
-				got := readPreparedUsage(t, store, f)
-				if scenario == "parts move" && i == 0 {
-					_, afterMovedRead := usageQueryCounts(t, store)
-					require.Greater(t, afterMovedRead-results, uint64(1))
+				_, beforeResults := usageQueryCounts(t, store)
+				daily, err := store.GetDailyUsage(t.Context(), f)
+				require.NoError(t, err)
+				top, err := store.GetTopSessionsByCost(t.Context(), f, 10)
+				require.NoError(t, err)
+				_, afterResults := usageQueryCounts(t, store)
+				if scenario == "healthy" {
+					require.Equal(t, beforeResults, afterResults)
+				} else {
+					require.Greater(t, afterResults, beforeResults)
 				}
+				counts, err := store.GetUsageSessionCounts(t.Context(), f)
+				require.NoError(t, err)
+				got := preparedUsageRead{daily, top, counts}
 				fresh := readPreparedUsage(t, NewStoreFromDB(store.DB(), store.bulk), f)
 				require.Equal(t, fresh, got)
 				if scenario == "healthy" {
@@ -65,11 +73,9 @@ func TestUsageCarry(t *testing.T) {
 					require.NotEqual(t, before[i].daily, got.daily)
 				}
 			}
-			_, afterResults := usageQueryCounts(t, store)
 			if scenario == "healthy" {
 				require.Equal(t, 1, proofs)
-				// Fresh stores issue three queries each; counts read once per filter.
-				require.EqualValues(t, 8, afterResults-results)
+				_, afterResults := usageQueryCounts(t, store)
 				for i, f := range filters {
 					require.Equal(t, before[i], readPreparedUsage(t, store, f))
 				}
@@ -78,10 +84,8 @@ func TestUsageCarry(t *testing.T) {
 				require.Equal(t, afterResults, finalResults)
 			} else if scenario != "changed after read" && scenario != "parts move" {
 				require.Equal(t, 1, proofs)
-				require.Greater(t, afterResults-results, uint64(8))
 			} else if scenario == "changed after read" {
 				require.Zero(t, proofs)
-				require.Greater(t, afterResults-results, uint64(8))
 			}
 		})
 	}
@@ -174,6 +178,38 @@ func TestUsageCarryInterruptedStartTime(t *testing.T) {
 	require.Empty(t, expectedRange.top)
 	require.Equal(t, expected, readPreparedUsage(t, store, all))
 	require.Equal(t, expectedRange, readPreparedUsage(t, store, rangeFilter))
+}
+
+func TestUsageCarryLateOldWriter(t *testing.T) {
+	local, syncer, store := newPreparedUsageStore(t)
+	const id = "late-writer"
+	session := fixtureSession(id, "late-writer", "late", "2026-01-12T03:00:00.000Z", 1)
+	message := usagePriceMessage(id, 0, "2026-01-12T03:00:00.000Z", "round-test", `{"input_tokens":100}`)
+	_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, Messages: []db.Message{message}, DataVersion: 1, ReplaceMessages: true}})
+	require.NoError(t, err)
+	pushPreparedUsage(t, syncer)
+	execPreparedUsage(t, store, "TRUNCATE TABLE prepared_usage")
+	execPreparedUsage(t, store, fmt.Sprintf(`INSERT INTO usage_messages SELECT * REPLACE (toInt64(9999) AS ordinal, toInt64(1000000) AS usage_input, push_version - 1 AS push_version, toUInt128(push_version - 1) * 2 + 1 AS revision) FROM usage_messages WHERE session_id = '%s' LIMIT 1`, id))
+	f := db.UsageFilter{Project: "late-writer", Timezone: "UTC"}
+	before := readPreparedUsage(t, store, f)
+	runPreparedUsageRefresh(t, store)
+	fresh := readPreparedUsage(t, NewStoreFromDB(store.DB(), store.bulk), f)
+	proofs := 0
+	store.beforeUsageCarryCheck = func() { proofs++ }
+	got := readPreparedUsage(t, store, f)
+	require.Equal(t, 1, proofs)
+	store.usageCarry.Lock()
+	valid, pass := store.usageCarry.valid, store.usageCarry.pass
+	store.usageCarry.Unlock()
+	require.True(t, valid)
+	require.False(t, pass)
+	require.Len(t, before.top, 1)
+	require.Len(t, fresh.top, 1)
+	require.Len(t, got.top, 1)
+	require.NotEqual(t, before.daily.Totals.InputTokens, fresh.daily.Totals.InputTokens)
+	require.NotEqual(t, before.top[0].InputTokens, fresh.top[0].InputTokens)
+	require.Equal(t, fresh.daily.Totals.InputTokens, got.daily.Totals.InputTokens, "Summary must use the published rows")
+	require.Equal(t, fresh.top[0].InputTokens, got.top[0].InputTokens, "Top must use the published rows")
 }
 
 func TestUsageCarryVersionTables(t *testing.T) {

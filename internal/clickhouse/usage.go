@@ -2711,19 +2711,22 @@ func (s *Store) usageCarryPublished(ctx context.Context, version string) bool {
 	// Newer raw rows identify an interrupted publication. Equal usable-row
 	// counts also reject a replacement interrupted after deleting old rows.
 	// A newer snapshot can contain metadata the session has not published yet.
-	raw := clickUsageNormalizedQuery(chUsageStoredMessageEligibility, chUsageEventEligibility)
+	// Count all rows raw Usage reads, including older content versions.
+	raw := clickUsageNormalizedQueryFrom("", chUsageStoredMessageEligibility, chUsageEventEligibility,
+		"usage_messages m JOIN sessions s ON s.id = m.session_id", chStoredMessageRecordedCost,
+		"usage_events ue JOIN sessions s ON s.id = ue.session_id", "1", "")
 	query := `SELECT
 		(SELECT count() FROM (SELECT session_id, max(push_version) AS version FROM (
 			SELECT session_id, push_version FROM usage_messages UNION ALL
 			SELECT session_id, push_version FROM usage_events) GROUP BY session_id) r
-			INNER JOIN sessions AS s FINAL ON s.id = r.session_id WHERE r.version > s.content_version)
-		+ (SELECT count() FROM usage_session_snapshots AS s FINAL
+			INNER JOIN sessions AS s ON s.id = r.session_id WHERE r.version > s.content_version)
+		+ (SELECT count() FROM usage_session_snapshots AS s
 			LEFT JOIN (SELECT session_id, count() AS n FROM (` + raw + `) GROUP BY session_id) r ON r.session_id = s.id
 			WHERE if(s.prepares_usage, arrayCount((present, model) -> ` + chStoredMessageUsable("present", "model") + `,
 				s.usage_facts.usage_present, s.usage_facts.model)
 				+ arrayCount(model -> ` + chUsageEventUsable("model") + `, s.usage_events.model), 0) != ifNull(r.n, 0))
-		+ (SELECT count() FROM usage_session_snapshots AS u FINAL
-			INNER JOIN sessions AS s FINAL ON s.id = u.id WHERE u.push_version > s.push_version)`
+		+ (SELECT count() FROM usage_session_snapshots AS u
+			INNER JOIN sessions AS s ON s.id = u.id WHERE u.push_version > s.push_version)`
 	var violations uint64
 	err := s.queryRowContext(ctx, query).Scan(&violations)
 	if s.beforeUsageCarryCheck != nil {
