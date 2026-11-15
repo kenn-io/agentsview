@@ -196,3 +196,19 @@ func TestTrendsPartsReuseAndBuckets(t *testing.T) {
 		assert.False(t, handled)
 	}
 }
+
+func TestTrendsPartsIdentityInvalidates(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	var disk kept.Disk
+	require.NoError(t, disk.Open("trends-identity", "fixture", 128<<20, 256<<20))
+	source := &trendPartsFixture{versions: map[string]string{"a": "1", "b": "1"}}
+	terms, err := ParseTrendTerms([]string{"apple"})
+	require.NoError(t, err)
+	f := AnalyticsFilter{From: "2025-03-10", To: "2025-03-10", Timezone: "UTC"}
+	for _, identity := range []string{"a", "a", "b"} {
+		_, handled, err := TrendsFromParts(t.Context(), &disk, identity, f, terms, "day", source)
+		require.NoError(t, err)
+		require.True(t, handled)
+	}
+	require.Equal(t, [][]string{{"a", "b"}, {"a", "b"}}, source.reads)
+}

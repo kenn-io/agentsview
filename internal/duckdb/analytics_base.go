@@ -380,12 +380,14 @@ func (s analyticsSQL) TrendsSQL(f, sessionFilter db.AnalyticsFilter, _ bool) (st
 		sessionFilter, "COALESCE(s.started_at, s.created_at)", "s.", true, true)
 	return readbase.AnalyticsTrendsSQL(
 		f, duckAnalyticsMessageWindowPred,
-		db.DuckDBSystemPrefixSQL("m.content", "m.role"), db.DuckDBQueryDialect(),
+		"m.is_system_prefixed = FALSE", db.DuckDBQueryDialect(),
 		"m.session_id IN (SELECT s.id FROM sessions s WHERE "+where+")", args, true, false)
 }
 
 // The disk is opened per mirror path or Quack endpoint; fingerprints version each session.
-func (s analyticsSQL) TrendsDisk() (*kept.Disk, string) { return &s.store.usageDisk, "duckdb" }
+func (s analyticsSQL) TrendsDisk() (*kept.Disk, string) {
+	return &s.store.usageDisk, trendsPartsIdentity()
+}
 
 func (s analyticsSQL) TrendSessionVersions(ctx context.Context, f db.AnalyticsFilter) (map[string]string, error) {
 	sf := f.TrendsSessionFilter()
@@ -398,7 +400,7 @@ func (s analyticsSQL) TrendSessionWindow(f db.AnalyticsFilter, set string, args 
 }
 
 func (s analyticsSQL) TrendMessagesSQL(set string, args []any) (string, []any) {
-	return readbase.AnalyticsTrendsSQL(db.AnalyticsFilter{}, duckAnalyticsMessageWindowPred, db.DuckDBSystemPrefixSQL("m.content", "m.role"), db.DuckDBQueryDialect(), "m.session_id IN "+set, args, true, true)
+	return readbase.AnalyticsTrendsSQL(db.AnalyticsFilter{}, duckAnalyticsMessageWindowPred, "m.is_system_prefixed = FALSE", db.DuckDBQueryDialect(), "m.session_id IN "+set, args, true, true)
 }
 
 func (s analyticsSQL) FormatTime(v any) string { return formatDBTime(v) }

@@ -39,7 +39,11 @@ import (
 // push by usagefacts.ParseTokenUsage, so usage reads never parse token_usage.
 // v30 moves the OpenRouter ownership list from a model_pricing row into
 // pricing_meta and stores pricing times as TIMESTAMP.
-const SchemaVersion = 30
+// v31 stores system-prefix verdicts. Changes to IsSystemPrefixed verdicts
+// must bump this version.
+const SchemaVersion = 31
+
+func trendsPartsIdentity() string { return "duckdb|" + strconv.Itoa(SchemaVersion) }
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
@@ -379,6 +383,7 @@ var mirrorTables = append([]tableSpec{
 			usage_cache_read_input_tokens BIGINT NOT NULL DEFAULT 0,
 			usage_reasoning_tokens BIGINT NOT NULL DEFAULT 0,
 			usage_web_search_requests BIGINT NOT NULL DEFAULT 0,
+			is_system_prefixed BOOLEAN NOT NULL DEFAULT FALSE,
 			UNIQUE(session_id, ordinal)
 		)`,
 		columns: []columnSpec{
@@ -418,6 +423,7 @@ var mirrorTables = append([]tableSpec{
 			{"usage_cache_read_input_tokens", "usage_cache_read_input_tokens BIGINT NOT NULL DEFAULT 0"},
 			{"usage_reasoning_tokens", "usage_reasoning_tokens BIGINT NOT NULL DEFAULT 0"},
 			{"usage_web_search_requests", "usage_web_search_requests BIGINT NOT NULL DEFAULT 0"},
+			{"is_system_prefixed", "is_system_prefixed BOOLEAN NOT NULL DEFAULT FALSE"},
 		},
 		indexes: []string{
 			"CREATE INDEX IF NOT EXISTS idx_messages_session_ordinal ON messages(session_id, ordinal)",
