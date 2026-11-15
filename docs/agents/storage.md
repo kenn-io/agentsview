@@ -903,11 +903,13 @@ cache lacks current coverage for the timezone, the catalog or account generation
 changed, or more than 64 sessions changed. A background worker then reads all
 history in that timezone to rebuild the cache and claim coverage; see
 [Usage cache backfill](background-work.md#usage-cache-backfill). Format 24
-converts a SQLite format 23 usage cache and keeps its facts and rollups. Both
+converts a SQLite format 23 usage cache and keeps its facts and rollups. Earlier
+release formats rebuild. A corrupt or incompatible format 23 cache also rebuilds;
+a copy failure leaves it for a retry on the next launch. Both
 implementations are co-maintained under the same behavior contract: daily usage,
 top sessions, billed session counts, relaxed matching counts, and per-session
-usage must remain observably equal. The `pgtest` complete-result parity fixture is the
-acceptance boundary. Track the PostgreSQL-native optimization in
+usage must remain observably equal. The `pgtest` complete-result parity fixture
+is the acceptance boundary. Track the PostgreSQL-native optimization in
 [issue #1451](https://github.com/kenn-io/agentsview/issues/1451).
 
 The usage cache filename is derived from its format version and the archive

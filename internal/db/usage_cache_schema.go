@@ -706,15 +706,13 @@ func publishUsageCache(
 	if usageCacheFormatVersion == usageCacheUpgradeTo {
 		seeded, err = seedUpgradedUsageCache(ctx, archivePath, temporaryPath, databaseID)
 		if err != nil {
-			if ctx.Err() != nil || errors.Is(err, errUsageCacheCopy) {
-				_ = removeUsageCacheFiles(temporaryPath)
-				if ctx.Err() != nil {
-					return nil, false, ctx.Err()
-				}
+			_ = removeUsageCacheFiles(temporaryPath)
+			return nil, false, err
+		}
+		if !seeded {
+			if err := removeUsageCacheFiles(temporaryPath); err != nil {
 				return nil, false, err
 			}
-			log.Printf("warning: upgrading usage cache: %v", err)
-			_ = removeUsageCacheFiles(temporaryPath)
 		}
 	}
 	var cache *usageCache
@@ -959,14 +957,13 @@ func probeUsageCacheWithBusyTimeout(
 		return probe
 	}
 	probe.RetirementProtocolVersion, _ = strconv.Atoi(retirementProtocolText)
-	probe.Compatible = probe.FormatVersion == usageCacheFormatVersion &&
-		probe.SourceDatabaseID != "" &&
-		probe.RetirementProtocolVersion == usageCacheRetirementProtocolVersion &&
-		usageCacheSchemaComplete(ctx, database)
+	if probe.FormatVersion == usageCacheFormatVersion && probe.SourceDatabaseID != "" && probe.RetirementProtocolVersion == usageCacheRetirementProtocolVersion {
+		probe.Compatible, probe.Err = usageCacheSchemaComplete(ctx, database)
+	}
 	return probe
 }
 
-func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
+func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) (bool, error) {
 	var metadataCount int
 	if err := database.QueryRowContext(ctx, `
 		SELECT count(*) FROM usage_cache_metadata
@@ -976,8 +973,11 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 			'next_rollup_install_revision',
 			'deletion_revision', 'cursor_high_water_mark',
 			'backfill_completed_at', 'retirement_protocol_version', 'reset_epoch'
-		)`).Scan(&metadataCount); err != nil || metadataCount != 10 {
-		return false
+		)`).Scan(&metadataCount); err != nil {
+		return usageCacheSchemaCheckError(err)
+	}
+	if metadataCount != 10 {
+		return false, nil
 	}
 	queries := []string{
 		`SELECT key, value FROM usage_cache_metadata LIMIT 0`,
@@ -1044,7 +1044,7 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 	}
 	for _, query := range queries {
 		if _, err := database.ExecContext(ctx, query); err != nil {
-			return false
+			return usageCacheSchemaCheckError(err)
 		}
 	}
 	for _, index := range []string{
@@ -1056,11 +1056,21 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 		if err := database.QueryRowContext(ctx,
 			`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name=?)`,
 			index,
-		).Scan(&exists); err != nil || !exists {
-			return false
+		).Scan(&exists); err != nil {
+			return usageCacheSchemaCheckError(err)
+		}
+		if !exists {
+			return false, nil
 		}
 	}
-	return true
+	return true, nil
+}
+
+func usageCacheSchemaCheckError(err error) (bool, error) {
+	if unusableUsageCache(err, true) {
+		return false, nil
+	}
+	return false, err
 }
 
 func removeUsageCacheFiles(path string) error {

@@ -58,8 +58,10 @@ The latest release is
   pushes. When that cache would first need a large rebuild, such as on first
   use, after a price change, or after new account usage, Usage shows the direct
   PostgreSQL result and rebuilds the cache in the background. Its disposable
-  cache lives in `<data-dir>/usage-postgres/`. SQLite rebuilds its Usage cache
-  once after this upgrade.
+  cache lives in `<data-dir>/usage-postgres/`. SQLite converts a format 23
+  Usage cache, preserving its facts and rollups. Earlier release formats and
+  corrupt or incompatible format 23 caches rebuild once. A failed copy keeps
+  the old cache for another attempt on the next launch.
 
 - Session exports now mask API keys, tokens, and other detected secrets by
   default, using the same masked form as search results. This covers the HTML

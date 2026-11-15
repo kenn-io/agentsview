@@ -5,13 +5,22 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"os"
+
+	"github.com/mattn/go-sqlite3"
 )
 
-var errUsageCacheCopy = errors.New("copying prior usage cache")
+func unusableUsageCache(err error, conversion bool) bool {
+	sqliteErr, ok := errors.AsType[sqlite3.Error](err)
+	return ok && (sqliteErr.Code == sqlite3.ErrCorrupt || sqliteErr.Code == sqlite3.ErrNotADB || conversion && sqliteErr.Code == sqlite3.ErrError)
+}
 
 // seedUpgradedUsageCache copies the audited format 23 cache into a private candidate.
 func seedUpgradedUsageCache(ctx context.Context, archivePath, candidate, databaseID string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	oldPath := usageCacheGenerationPath(archivePath, usageCacheUpgradeFrom, databaseID)
 	if _, err := os.Stat(oldPath); os.IsNotExist(err) {
 		return false, ctx.Err()
@@ -25,10 +34,15 @@ func seedUpgradedUsageCache(ctx context.Context, archivePath, candidate, databas
 	defer lease.Close()
 	probe := probeUsageCache(ctx, oldPath)
 	if probe.Err != nil {
+		if unusableUsageCache(probe.Err, false) {
+			log.Printf("warning: rebuilding unusable usage cache: %v", probe.Err)
+			return false, nil
+		}
 		return false, probe.Err
 	}
 	if !probe.Recognized || probe.FormatVersion != usageCacheUpgradeFrom || probe.SourceDatabaseID != databaseID || probe.RetirementProtocolVersion != usageCacheRetirementProtocolVersion {
-		return false, fmt.Errorf("incompatible prior usage cache %s", oldPath)
+		log.Printf("warning: rebuilding incompatible usage cache %s", oldPath)
+		return false, nil
 	}
 	source, err := sql.Open("sqlite3", makeDSN(oldPath, true))
 	if err != nil {
@@ -36,11 +50,15 @@ func seedUpgradedUsageCache(ctx context.Context, archivePath, candidate, databas
 	}
 	_, err = source.ExecContext(ctx, "VACUUM INTO ?", candidate)
 	closeErr := source.Close()
-	if err != nil {
-		return false, fmt.Errorf("%w: %w", errUsageCacheCopy, err)
-	}
 	if closeErr != nil {
 		return false, closeErr
+	}
+	if err != nil {
+		if unusableUsageCache(err, false) {
+			log.Printf("warning: rebuilding unusable usage cache: %v", err)
+			return false, nil
+		}
+		return false, fmt.Errorf("copying prior usage cache: %w", err)
 	}
 	if err := os.Chmod(candidate, 0o600); err != nil {
 		return false, err
@@ -62,10 +80,18 @@ func seedUpgradedUsageCache(ctx context.Context, archivePath, candidate, databas
 		`INSERT INTO usage_cache_metadata(key, value) VALUES ('reset_epoch', '0'), ('source_mutation_revision', '0')`,
 	} {
 		if _, err := tx.ExecContext(ctx, query); err != nil {
+			if unusableUsageCache(err, true) {
+				log.Printf("warning: rebuilding unusable usage cache: %v", err)
+				return false, nil
+			}
 			return false, fmt.Errorf("converting usage cache: %w", err)
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE usage_cache_metadata SET value = ? WHERE key = 'format_version'`, usageCacheUpgradeTo); err != nil {
+		if unusableUsageCache(err, true) {
+			log.Printf("warning: rebuilding unusable usage cache: %v", err)
+			return false, nil
+		}
 		return false, fmt.Errorf("updating usage cache format: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -79,7 +105,8 @@ func seedUpgradedUsageCache(ctx context.Context, archivePath, candidate, databas
 		return false, upgraded.Err
 	}
 	if !upgraded.Compatible {
-		return false, errors.New("upgraded usage cache is incomplete")
+		log.Printf("warning: rebuilding incomplete usage cache %s", oldPath)
+		return false, nil
 	}
 	return true, nil
 }
