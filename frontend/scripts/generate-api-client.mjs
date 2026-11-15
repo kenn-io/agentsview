@@ -238,7 +238,13 @@ await generate(
   frontendDir,
 );
 writeIndex();
-run("vp", ["fmt", generatedDir], { cwd: frontendDir });
+// Name every file: a directory walk honors the checkout's Git excludes, which
+// can hide a generated folder (such as artifacts/) and leave it unformatted.
+run(
+  "vp",
+  ["fmt", ...[...generatedSources(generatedDir).keys()].map((path) => join(generatedDir, path))],
+  { cwd: frontendDir },
+);
 if (verifyGenerated && previousSpec !== readFileSync(specPath, "utf8")) {
   throw new Error("OpenAPI YAML was stale and has been regenerated");
 }
