@@ -123,19 +123,22 @@ func TestSystemPrefixSearchAndContentExcludePrefixedMessages(t *testing.T) {
 	text := "uniqueterm"
 	store := newUnitsStore(t, []db.SessionBatchWrite{
 		{
-			Session: unitSession("prefix-search", 1),
+			Session: unitSession("prefix-search", 2),
 			Messages: []db.Message{
 				unitMsg("prefix-search", 0, "user", "<task-notification>"+text, false, false),
+				unitMsg("prefix-search", 1, "user", text, false, false),
 			},
 			DataVersion: 1, ReplaceMessages: true,
 		},
 	})
 	search, err := store.Search(t.Context(), db.SearchFilter{Query: "uniqueterm", Limit: 10})
 	require.NoError(t, err)
-	require.Empty(t, search.Results)
+	require.Len(t, search.Results, 1)
+	require.Equal(t, 1, search.Results[0].Ordinal)
 	page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
 		Pattern: "uniqueterm", Mode: "substring", Sources: []string{"messages"}, IncludeOneShot: true, ExcludeSystem: true, Limit: 50,
 	})
 	require.NoError(t, err)
-	require.Empty(t, page.Matches)
+	require.Len(t, page.Matches, 1)
+	require.Equal(t, 1, page.Matches[0].Ordinal)
 }
