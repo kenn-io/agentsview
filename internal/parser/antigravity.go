@@ -1086,7 +1086,8 @@ func isPlausibleModelName(s string) bool {
 //   - role: protobuf field 1 carries CortexStepType when present;
 //     USER_INPUT (14) is user, and PLANNER_RESPONSE (15) plus other
 //     non-user step kinds are assistant.
-//   - content: best-effort human-facing strings found in the
+//   - content: structured user-input text when available, otherwise
+//     best-effort human-facing strings found in the
 //     payload tree. Internal ids, local Antigravity config paths,
 //     model placeholders, and duplicate payload echoes are filtered
 //     out. User-input steps prefer a single prompt-like string.
@@ -1333,6 +1334,11 @@ func dedupeStrings(in []string) []string {
 // removed. Callers fall back to urlOnly when a step would otherwise have
 // no content, so URL-only assistant messages are not silently dropped.
 func cleanAntigravityStepStrings(step antigravityStep) (cleaned, urlOnly []string) {
+	if step.role == RoleUser {
+		if text := antigravityUserInputText(step.fields); text != "" {
+			return []string{text}, nil
+		}
+	}
 	for _, s := range dedupeStrings(agProtoCollectStrings(step.fields, 20)) {
 		s = strings.TrimSpace(s)
 		if isNoisyAntigravityStepString(s) {
@@ -1356,6 +1362,25 @@ func cleanAntigravityStepStrings(step antigravityStep) (cleaned, urlOnly []strin
 		return cleaned, nil
 	}
 	return cleaned, bareURLs
+}
+
+func antigravityUserInputText(fields []agProtoField) string {
+	input, ok := agProtoFind(fields, 19)
+	if !ok || input.Nested == nil {
+		return ""
+	}
+	var text strings.Builder
+	for _, item := range input.Nested {
+		if item.Number != 3 || item.Nested == nil {
+			continue
+		}
+		if field, ok := agProtoFind(item.Nested, 1); ok {
+			if value, ok := agProtoString(field); ok {
+				text.WriteString(strings.ReplaceAll(value, "\x00", "\uFFFD"))
+			}
+		}
+	}
+	return strings.TrimSpace(text.String())
 }
 
 // collectAntigravityBareURLs returns bare-URL strings from the step

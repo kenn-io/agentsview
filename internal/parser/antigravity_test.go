@@ -4782,3 +4782,43 @@ func TestAntigravityIDEUnreadableStepsFailsClosed(t *testing.T) {
 		assert.Empty(t, usageEvents)
 	})
 }
+
+func TestDecodeAntigravityStepPrefersTypedPromptOverSkillExpansion(t *testing.T) {
+	const prompt = "比较这两个游戏 /grill-me"
+	text := encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: []byte(prompt)}})
+	skill := encodePB([]pbField{{num: 2, wire: pbWireBytes, bytes: []byte("<GRILL_ME> The user has requested an extensive structured interrogation of the subject. Ask questions and explore every assumption carefully. </GRILL_ME>")}})
+	skill = encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: skill}})
+	skill = encodePB([]pbField{{num: 27, wire: pbWireBytes, bytes: skill}})
+	skill = encodePB([]pbField{{num: 2, wire: pbWireBytes, bytes: skill}})
+	input := encodePB([]pbField{{num: 3, wire: pbWireBytes, bytes: text}, {num: 3, wire: pbWireBytes, bytes: skill}})
+	payload := encodePB([]pbField{{num: 1, wire: pbWireVarint, varint: 14}, {num: 19, wire: pbWireBytes, bytes: input}})
+	msg, ok := decodeAntigravityStep(0, 14, payload)
+	require.True(t, ok)
+	assert.Equal(t, RoleUser, msg.Role)
+	assert.Equal(t, prompt, msg.Content)
+	assert.Equal(t, len(prompt), msg.ContentLength)
+}
+
+func TestDecodeAntigravityStepStructuredUserInput(t *testing.T) {
+	cases := []struct {
+		name  string
+		items []pbField
+		want  string
+	}{
+		{"joined", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte("First ")}, {num: 2, wire: pbWireBytes, bytes: []byte("attachment")}, {num: 1, wire: pbWireBytes, bytes: []byte("second")}}, "First second"},
+		{"short", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte("你好")}}, "你好"},
+		{"fallback", []pbField{{num: 2, wire: pbWireBytes, bytes: []byte("A longer skill expansion with enough text to be selected")}}, "A longer skill expansion with enough text to be selected"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var items []pbField
+			for _, item := range tc.items {
+				items = append(items, pbField{num: 3, wire: pbWireBytes, bytes: encodePB([]pbField{item})})
+			}
+			payload := encodePB([]pbField{{num: 19, wire: pbWireBytes, bytes: encodePB(items)}})
+			msg, ok := decodeAntigravityStep(0, 14, payload)
+			require.True(t, ok)
+			assert.Equal(t, tc.want, msg.Content)
+		})
+	}
+}
