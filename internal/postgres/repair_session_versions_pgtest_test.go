@@ -19,6 +19,8 @@ func TestPGSchemaRepairsLeaveSessionVersionsSettled(t *testing.T) {
 	defer ps.Close()
 	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, ps.DB(), "agentsview"))
+	versionColumn, err := sessionVersionColumnPG(ctx, ps.DB())
+	require.NoError(t, err)
 
 	for _, tc := range []struct {
 		name   string
@@ -37,7 +39,7 @@ func TestPGSchemaRepairsLeaveSessionVersionsSettled(t *testing.T) {
 			require.NoError(t, tc.repair())
 			snapshot := func() map[string]string {
 				t.Helper()
-				rows, err := ps.DB().QueryContext(ctx, `SELECT id, xmin::text FROM sessions`)
+				rows, err := ps.DB().QueryContext(ctx, `SELECT id, `+versionColumn+`::text FROM sessions`)
 				require.NoError(t, err)
 				defer rows.Close()
 				versions := map[string]string{}
