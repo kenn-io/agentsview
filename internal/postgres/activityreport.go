@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sort"
 	"time"
+	"unique"
 
 	"github.com/jackc/pgx/v5"
 	"go.kenn.io/agentsview/internal/activity"
@@ -220,6 +221,9 @@ func (s *Store) BuildActivityReportArtifacts(
 			if !inputs.candidates[id] {
 				delete(inputs.sessions, id)
 			}
+		}
+		if pgActivityInputBytes(*inputs) > s.runtimeState().activityInputs.MaxBytes {
+			inputs.priced = nil
 		}
 		s.runtimeState().activityInputs.Put(lowerBound+"|"+upperBound, inputVersion, []pgActivityInputs{*inputs})
 	}
@@ -773,9 +777,20 @@ func (s *Store) activityReportUsage(
 		return out, &block, nil
 	}
 
+	if inputs != nil && inputs.priced != nil {
+		p := inputs.priced
+		if p.rangeStart.Equal(q.RangeStart) && p.rangeEnd.Equal(q.RangeEnd) && p.pricingDigest == pricingDigest && !q.EffectiveEnd.Before(p.effectiveEnd) && (p.next.IsZero() || !p.next.Before(q.EffectiveEnd)) {
+			return pgAssembleActivityUsage(raw, p.rows), p.block, nil
+		}
+	}
+	saved := &pgActivityPriced{rangeStart: q.RangeStart, rangeEnd: q.RangeEnd, effectiveEnd: q.EffectiveEnd, pricingDigest: pricingDigest}
 	order := make([]int, len(raw))
 	for i, r := range raw {
 		order[i] = i
+		at := time.UnixMicro(r.us).UTC()
+		if !at.Before(q.EffectiveEnd) && at.Before(q.RangeEnd) && (saved.next.IsZero() || at.Before(saved.next)) {
+			saved.next = at
+		}
 		if read != nil {
 			read[r.sessionID.Value()] = struct{}{}
 		}
@@ -806,18 +821,14 @@ func (s *Store) activityReportUsage(
 	if err != nil {
 		return nil, nil, err
 	}
-	out = make([]activity.UsageRow, 0, len(order))
+	saved.rows = make([]pgActivityPricedRow, 0, len(order))
 	for i, index := range order {
 		r := raw[index] //nolint:nilaway // order contains only indices from raw.
 		if !mask[i] {
 			continue
 		}
-		inputTok, outputTok := int(r.input), int(r.output)
 		costRow := r
-		var sessionCost *money.Money
 		if r.copilotReported && r.costValid {
-			v := money.Money{Microdollars: r.cost}
-			sessionCost = &v
 			costRow.costValid = false
 			rateResolver.RecordUnattributedReported()
 		}
@@ -835,26 +846,43 @@ func (s *Store) activityReportUsage(
 		if priceErr != nil {
 			return nil, nil, priceErr
 		}
-		costSource := export.CostSourceComputed
-		if costRow.costValid {
-			costSource = export.CostSourceReported
-		}
-		row := activity.UsageRow{SessionID: attribution[i], Model: r.model.Value(), Timestamp: FormatISO8601(time.UnixMicro(r.us).UTC()), Agent: r.agent.Value(), ProviderID: r.providerID.Value(), ClaudeMessageID: r.claudeMessageID, ClaudeRequestID: r.claudeRequestID, SourceUUID: r.sourceUUID, UsageDedupKey: r.usageDedupKey}
-		row.InputTokens = inputTok
-		row.OutputTokens = outputTok
-		row.WebSearchRequests = webSearchRequests[i]
-		row.Cost = cost
-		row.CostSource = costSource
-		row.SessionCost = sessionCost
-		row.Priced = priced
-		row.Contributes = contributes
-		out = append(out, row)
+		saved.rows = append(saved.rows, pgActivityPricedRow{
+			index: int32(index), attribution: unique.Make(attribution[i]), cost: cost.Microdollars,
+			webSearches: int32(webSearchRequests[i]), reported: costRow.costValid,
+			sessionCost: r.copilotReported && r.costValid, priced: priced, contributes: contributes,
+		})
 	}
 	block, err := rateResolver.BuildBlock()
 	if err != nil {
 		return nil, nil, fmt.Errorf("building pricing block: %w", err)
 	}
-	return out, &block, nil
+	saved.block = &block
+	if inputs != nil {
+		inputs.priced = saved
+	}
+	return pgAssembleActivityUsage(raw, saved.rows), saved.block, nil
+}
+
+func pgAssembleActivityUsage(raw []pgActivityUsageRow, priced []pgActivityPricedRow) []activity.UsageRow {
+	out := make([]activity.UsageRow, 0, len(priced))
+	for _, p := range priced {
+		r := raw[p.index]
+		source := export.CostSourceComputed
+		if p.reported {
+			source = export.CostSourceReported
+		}
+		var sessionCost *money.Money
+		if p.sessionCost {
+			sessionCost = &money.Money{Microdollars: r.cost}
+		}
+		row := activity.UsageRow{SessionID: p.attribution.Value(), Model: r.model.Value(), Timestamp: FormatISO8601(time.UnixMicro(r.us).UTC()), Agent: r.agent.Value(), ProviderID: r.providerID.Value(), ClaudeMessageID: r.claudeMessageID, ClaudeRequestID: r.claudeRequestID, SourceUUID: r.sourceUUID, UsageDedupKey: r.usageDedupKey}
+		row.InputTokens, row.OutputTokens = int(r.input), int(r.output)
+		row.WebSearchRequests = int(p.webSearches)
+		row.Cost, row.CostSource, row.SessionCost = money.Money{Microdollars: p.cost}, source, sessionCost
+		row.Priced, row.Contributes = p.priced, p.contributes
+		out = append(out, row)
+	}
+	return out
 }
 
 func pgActivityReportRowStatusWithWebSearchRequests(

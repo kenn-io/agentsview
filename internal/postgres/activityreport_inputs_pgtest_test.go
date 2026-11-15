@@ -15,6 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 type activityInputReadCounter struct {
@@ -83,6 +84,52 @@ func TestPGActivityReportInputReads(t *testing.T) {
 	assert.Len(t, counter.usageReads, 2)
 }
 
+func TestPGActivityReportPricedReuse(t *testing.T) {
+	t.Parallel()
+	local, syncer, store := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	store.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}})
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	q.Partial, q.EffectiveEnd = true, q.RangeEnd.Add(-time.Hour)
+	version, err := store.activityKeptVersion(t.Context(), "")
+	require.NoError(t, err)
+	lower := db.PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
+	upper := db.PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
+	entry := func() *pgActivityPriced {
+		got, ok := store.runtimeState().activityInputs.Get(lower+"|"+upper, version)
+		require.True(t, ok)
+		require.NotNil(t, got[0].priced)
+		return got[0].priced
+	}
+	first := pgKeptBuild(t, store, f, q, true)
+	saved := entry()
+	repeated := pgKeptBuild(t, store, f, q, true)
+	assert.Same(t, saved, entry())
+	requirePGKeptEqual(t, first, repeated)
+	assert.Equal(t, 500, repeated.Report.Totals.OutputTokens)
+	assert.Equal(t, money.MustParseDollars("0.01"), repeated.Report.Totals.Cost)
+	require.NotNil(t, repeated.Report.Pricing)
+	store.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 40_000_000}})
+	changed := pgKeptBuild(t, store, f, q, true)
+	assert.NotSame(t, saved, entry())
+	assert.Equal(t, money.MustParseDollars("0.02"), changed.Report.Totals.Cost)
+	fresh, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
+	require.NoError(t, err)
+	defer fresh.Close()
+	fresh.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 40_000_000}})
+	requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), changed)
+	entries, ok := store.runtimeState().activityInputs.Get(lower+"|"+upper, version)
+	require.True(t, ok)
+	rawOnly := entries[0]
+	rawOnly.priced = nil
+	store.runtimeState().activityInputs.MaxBytes = pgActivityInputBytes(rawOnly)
+	requirePGKeptEqual(t, changed, pgKeptBuild(t, store, f, q, true))
+	entries, ok = store.runtimeState().activityInputs.Get(lower+"|"+upper, version)
+	require.True(t, ok)
+	assert.Nil(t, entries[0].priced)
+}
+
 func TestPGActivityReportInputClock(t *testing.T) {
 	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
@@ -100,7 +147,10 @@ func TestPGActivityReportInputClock(t *testing.T) {
 	q.EffectiveEnd = q.RangeStart.Add(10*time.Hour + time.Minute)
 	before := pgKeptBuild(t, store, f, q, true)
 	assert.Equal(t, 100, before.Report.Totals.OutputTokens)
-	q.EffectiveEnd = q.EffectiveEnd.Add(5 * time.Minute)
+	q.EffectiveEnd = q.RangeStart.Add(10*time.Hour + 5*time.Minute)
+	atBoundary := pgKeptBuild(t, store, f, q, true)
+	assert.Equal(t, 100, atBoundary.Report.Totals.OutputTokens)
+	q.EffectiveEnd = q.EffectiveEnd.Add(time.Microsecond)
 	after := pgKeptBuild(t, store, f, q, true)
 	assert.Equal(t, 400, after.Report.Totals.OutputTokens)
 	assert.Len(t, counter.transcriptReads, 1)

@@ -1154,8 +1154,10 @@ effective end of the slot. The usage change journal invalidates changed sessions
 and their matching snapshot peers. Tool events are not journaled; a tool event
 change reaches PostgreSQL through a push that also changes the session's
 `transcript_revision`, which the journal records. Each visit selects sessions,
-pairs only sessions without an entry, sweeps the runs, selects usage snapshots,
-and prices the surviving rows again. On a scratch database of 100,000 sessions
+pairs only sessions without an entry and sweeps the runs. It retains survivor
+prices and pricing metadata within the same budget. A changed input or price, a
+clock rewind, or the clock passing a usage row rebuilds the survivor prices.
+When those prices exceed the budget, the raw inputs remain eligible for reuse. On a scratch database of 100,000 sessions
 and 2.6 million candidates over seven months, the kept activity took 71 MiB, and
 a refresh with ten changed sessions spent 90 ms pairing instead of 3.2 s and 209
 ms sweeping instead of 1.0 s. Journal replacement, a changed gap cap, and

@@ -14,6 +14,8 @@ import (
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/stringutil"
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
@@ -27,8 +29,25 @@ type pgActivityInputs struct {
 	sessions   map[string]pgActivitySession
 	gapCap     float64
 	usage      []pgActivityUsageRow
+	priced     *pgActivityPriced
 	candidates map[string]bool
 	changed    []string
+}
+
+const pgActivityInputsMaxBytes = 256 << 20
+
+type pgActivityPriced struct {
+	rangeStart, rangeEnd, effectiveEnd, next time.Time
+	pricingDigest                            string
+	block                                    *export.PricingBlock
+	rows                                     []pgActivityPricedRow
+}
+
+type pgActivityPricedRow struct {
+	attribution                                unique.Handle[string]
+	cost                                       int64
+	index, webSearches                         int32
+	reported, priced, contributes, sessionCost bool
 }
 
 // pgActivitySession is one session's activity over all time: its runs and
@@ -68,6 +87,9 @@ func pgCompactActivityUsage(r pgDailyUsageScanRow, handle func(string) unique.Ha
 
 func pgActivityInputBytes(e pgActivityInputs) int64 {
 	size := int64(unsafe.Sizeof(e))
+	if e.priced != nil {
+		size += int64(unsafe.Sizeof(*e.priced)) + int64(cap(e.priced.rows))*int64(unsafe.Sizeof(pgActivityPricedRow{})) + kept.JSONBytes(e.priced.block)
+	}
 	shared := map[unique.Handle[string]]struct{}{}
 	for id, session := range e.sessions {
 		size += int64(len(id)) + 80 + int64(unsafe.Sizeof(session)) + session.runs.Bytes() +
@@ -118,6 +140,7 @@ func (s *Store) activityReportInputs(ctx context.Context, version, lower, upper 
 			}
 		}
 		next.usage = old.usage
+		next.priced = old.priced
 		next.candidates = old.candidates
 	}
 	return next, nil
@@ -308,6 +331,7 @@ func (s *Store) activityUsageInputs(ctx context.Context, ids []string, lower, up
 	}
 	if inputs.candidates == nil {
 		inputs.usage = slices.Clip(slices.Clone(fresh))
+		inputs.priced = nil
 		inputs.candidates = selected
 		inputs.changed = nil
 		return inputs.usage, nil
@@ -340,6 +364,7 @@ func (s *Store) activityUsageInputs(ctx context.Context, ids []string, lower, up
 		return !selected[r.sessionID.Value()] && !keys[key{r.claudeMessageID, r.claudeRequestID}]
 	})
 	inputs.usage = slices.Clip(slices.Clone(merged))
+	inputs.priced = nil
 	inputs.candidates = selected
 	inputs.changed = nil
 	return merged, nil
