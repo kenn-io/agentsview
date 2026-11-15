@@ -720,6 +720,7 @@ func (s *Sync) finalizeIncrementalPush(
 	return writeMirrorMetadata(ctx, s.duck, mirrorMetadata{
 		SchemaVersion:             SchemaVersion,
 		FrustrationMarkersVersion: frustrationMarkersVersion,
+		SystemPrefixRulesVersion:  db.SystemPrefixRulesVersion(),
 		DataVersion:               db.CurrentDataVersion(),
 		SourceDatabaseID:          sourceDatabaseID,
 		SourceArchiveID:           s.archiveID,

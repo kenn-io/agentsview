@@ -224,6 +224,7 @@ type rebuildRun struct {
 	Reason                    string `json:"reason"`
 	SchemaVersion             int    `json:"schema_version"`
 	FrustrationMarkersVersion int    `json:"frustration_markers_version"`
+	SystemPrefixRulesVersion  string `json:"system_prefix_rules_version"`
 	DataVersion               int    `json:"data_version"`
 	Scope                     string `json:"scope"`
 	Machine                   string `json:"machine"`
@@ -252,6 +253,7 @@ func newRebuildRun(
 		Reason:                    reason,
 		SchemaVersion:             SchemaVersion,
 		FrustrationMarkersVersion: frustrationMarkersVersion,
+		SystemPrefixRulesVersion:  db.SystemPrefixRulesVersion(),
 		DataVersion:               db.CurrentDataVersion(),
 		Scope:                     db.CanonicalPushScope(opts.Projects, opts.ExcludeProjects),
 		Machine:                   machine,
@@ -843,6 +845,7 @@ func (s *Sync) writeRebuildMetadata(
 	return writeMirrorMetadata(ctx, s.duck, mirrorMetadata{
 		SchemaVersion:             SchemaVersion,
 		FrustrationMarkersVersion: frustrationMarkersVersion,
+		SystemPrefixRulesVersion:  db.SystemPrefixRulesVersion(),
 		DataVersion:               db.CurrentDataVersion(),
 		SourceDatabaseID:          snapshot.sourceDatabaseID,
 		SourceArchiveID:           snapshot.sourceArchiveID,
