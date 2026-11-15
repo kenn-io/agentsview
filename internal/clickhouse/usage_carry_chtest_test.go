@@ -3,6 +3,7 @@
 package clickhouse
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
@@ -125,15 +126,38 @@ func TestUsageCarryEqualCountOlderRow(t *testing.T) {
 	local, syncer, store := newPreparedUsageStore(t)
 	const id = "older-row"
 	session := fixtureSession(id, "older-row", "older", "2026-01-12T03:00:00.000Z", 1)
-	message := usagePriceMessage(id, 0, "2026-01-12T03:00:00.000Z", "round-test", `{"input_tokens":100}`)
+	message := usagePriceMessage(id, 0, "2026-01-12T03:00:00.000Z", "round-test", `{"input_tokens":10}`)
 	_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, Messages: []db.Message{message}, DataVersion: 1, ReplaceMessages: true}})
 	require.NoError(t, err)
 	pushPreparedUsage(t, syncer)
-	execPreparedUsage(t, store, "TRUNCATE TABLE prepared_usage",
-		"CREATE TABLE older_usage AS usage_messages ENGINE = Memory",
-		fmt.Sprintf(`INSERT INTO older_usage SELECT * REPLACE (toInt64(10) AS usage_input, push_version - 1 AS push_version, toUInt128(push_version - 1) * 2 + 1 AS revision) FROM usage_messages WHERE session_id = '%s'`, id),
-		fmt.Sprintf("ALTER TABLE usage_messages DELETE WHERE session_id = '%s' SETTINGS mutations_sync = 2", id),
-		"INSERT INTO usage_messages SELECT * FROM older_usage")
+	execPreparedUsage(t, store, "CREATE TABLE older_usage AS usage_messages ENGINE = Memory",
+		fmt.Sprintf("INSERT INTO older_usage SELECT * FROM usage_messages WHERE session_id = '%s'", id))
+	message.TokenUsage = []byte(`{"input_tokens":100}`)
+	_, err = local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, Messages: []db.Message{message}, DataVersion: 1, ReplaceMessages: true}})
+	require.NoError(t, err)
+	pushPreparedUsage(t, syncer)
+	execPreparedUsage(t, store, "TRUNCATE TABLE prepared_usage")
+	_, err = local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, DataVersion: 1, ReplaceMessages: true}})
+	require.NoError(t, err)
+	injected := false
+	syncer.hooks = &pushHooks{beforeSessionRows: func([]db.Session) error {
+		var remaining uint64
+		if err := store.DB().QueryRowContext(t.Context(), "SELECT count() FROM usage_messages WHERE session_id = ?", id).Scan(&remaining); err != nil {
+			return err
+		}
+		if remaining != 0 {
+			return fmt.Errorf("usage row remained after deletion: %d", remaining)
+		}
+		if _, err := store.DB().ExecContext(t.Context(), "INSERT INTO usage_messages SELECT * FROM older_usage"); err != nil {
+			return err
+		}
+		injected = true
+		return errors.New("injected publication failure")
+	}}
+	result, err := syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Errors)
+	require.True(t, injected)
 	f := db.UsageFilter{Project: "older-row", Timezone: "UTC"}
 	before := readPreparedUsage(t, store, f)
 	runPreparedUsageRefresh(t, store)
