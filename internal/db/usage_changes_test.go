@@ -45,6 +45,8 @@ func TestAnalyticsChangesKeepUsageRevision(t *testing.T) {
 	}
 	identity, err := ocr.NewIdentity("test", "model", "revision")
 	require.NoError(t, err)
+	searchBefore, err := d.archiveJournalRevision(ctx, archiveMetadataSearchChangeRevisionKey, "search change")
+	require.NoError(t, err)
 	for _, write := range []func() error{
 		func() error {
 			_, err := d.getWriter().ExecContext(ctx, `UPDATE messages SET dialogue_text = 'repaired' WHERE session_id = 'session'`)
@@ -60,6 +62,13 @@ func TestAnalyticsChangesKeepUsageRevision(t *testing.T) {
 		analyticsAfter, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
 		require.NoError(t, err)
 		assert.Equal(t, analyticsBefore, analyticsAfter)
+		after, err := d.UsageChangeRevision(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, before, after)
+		searchAfter, err := d.archiveJournalRevision(ctx, archiveMetadataSearchChangeRevisionKey, "search change")
+		require.NoError(t, err)
+		assert.Greater(t, searchAfter, searchBefore)
+		searchBefore = searchAfter
 	}
 }
 

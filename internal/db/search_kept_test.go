@@ -37,6 +37,17 @@ func TestSearchKeptSelections(t *testing.T) {
 		require.NoError(t, err)
 	}
 	require.EqualValues(t, 5, loads.Load())
+	readOnly, err := OpenReadOnly(ctx, d.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, readOnly.Close()) })
+	var readOnlyLoads atomic.Int32
+	readOnly.searchKept.Size = func(SearchPage) int64 { readOnlyLoads.Add(1); return 1 }
+	for range 2 {
+		page, err := readOnly.Search(ctx, f)
+		require.NoError(t, err)
+		require.Len(t, page.Results, 1)
+	}
+	require.Zero(t, readOnlyLoads.Load())
 }
 
 func TestSearchKeptImageText(t *testing.T) {
@@ -69,23 +80,6 @@ func TestSearchKeptImageText(t *testing.T) {
 	require.Empty(t, page.Results)
 }
 
-func TestSearchKeptReadOnlyBypassesCache(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "session", "project")
-	insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "needle"})
-	readOnly, err := OpenReadOnly(t.Context(), d.Path())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, readOnly.Close()) })
-	var loads atomic.Int32
-	readOnly.searchKept.Size = func(SearchPage) int64 { loads.Add(1); return 1 }
-	for range 2 {
-		page, err := readOnly.Search(t.Context(), SearchFilter{Query: "needle"})
-		require.NoError(t, err)
-		require.Len(t, page.Results, 1)
-	}
-	require.Zero(t, loads.Load())
-}
-
 func TestSearchKeptCJKAvailability(t *testing.T) {
 	if !simpleFTSRuntimeConfig.available() {
 		t.Skip("simple FTS runtime is not installed")
@@ -110,9 +104,10 @@ func TestSearchKeptCJKAvailability(t *testing.T) {
 
 func TestSearchKeptSearchableEdits(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		seed func(*testing.T, *DB)
-		edit func(*testing.T, *DB)
+		name  string
+		seed  func(*testing.T, *DB)
+		edit  func(*testing.T, *DB)
+		query string
 	}{
 		{"message", func(t *testing.T, d *DB) {
 			t.Helper()
@@ -120,7 +115,7 @@ func TestSearchKeptSearchableEdits(t *testing.T) {
 		}, func(t *testing.T, d *DB) {
 			t.Helper()
 			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "session", []Message{{SessionID: "session", Role: "user", Content: "other"}}))
-		}},
+		}, ""},
 		{"name", func(t *testing.T, d *DB) {
 			t.Helper()
 			insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "other"})
@@ -128,7 +123,7 @@ func TestSearchKeptSearchableEdits(t *testing.T) {
 		}, func(t *testing.T, d *DB) {
 			t.Helper()
 			require.NoError(t, d.RenameSession(t.Context(), "session", new("other")))
-		}},
+		}, ""},
 		{"first message", func(t *testing.T, d *DB) {
 			t.Helper()
 			insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "other"})
@@ -138,7 +133,7 @@ func TestSearchKeptSearchableEdits(t *testing.T) {
 			t.Helper()
 			_, err := d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET first_message='other' WHERE id='session'`)
 			require.NoError(t, err)
-		}},
+		}, ""},
 		{"deleted", func(t *testing.T, d *DB) {
 			t.Helper()
 			insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "needle first"})
@@ -146,13 +141,32 @@ func TestSearchKeptSearchableEdits(t *testing.T) {
 			t.Helper()
 			_, err := d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET deleted_at='2024-06-02' WHERE id='session'`)
 			require.NoError(t, err)
-		}},
+		}, ""},
+		{"dialogue", func(t *testing.T, d *DB) {
+			t.Helper()
+			messages := []Message{
+				{SessionID: "session", Ordinal: 0, Role: "assistant", Content: "raw words", DialogueText: new("needle")},
+				{SessionID: "session", Ordinal: 1, Role: "user", Content: "other words"},
+			}
+			require.NoError(t, d.ReplaceSessionContent(t.Context(), "session", messages, SessionSignalUpdate{}, nil))
+		}, func(t *testing.T, d *DB) {
+			t.Helper()
+			messages := []Message{
+				{SessionID: "session", Ordinal: 0, Role: "assistant", Content: "raw words", DialogueText: new("different")},
+				{SessionID: "session", Ordinal: 1, Role: "user", Content: "other words"},
+			}
+			require.NoError(t, d.ReplaceSessionContent(t.Context(), "session", messages, SessionSignalUpdate{}, nil))
+		}, `"raw" AND content:needle`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
 			insertSession(t, d, "session", "project")
 			tc.seed(t, d)
-			filter := SearchFilter{Query: "needle"}
+			query := tc.query
+			if query == "" {
+				query = "needle"
+			}
+			filter := SearchFilter{Query: query}
 			page, err := d.Search(t.Context(), filter)
 			require.NoError(t, err)
 			require.Len(t, page.Results, 1)
@@ -162,24 +176,4 @@ func TestSearchKeptSearchableEdits(t *testing.T) {
 			require.Empty(t, page.Results)
 		})
 	}
-}
-
-func TestSearchKeptDialogueReplacement(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	insertSession(t, d, "session", "project")
-	messages := []Message{
-		{SessionID: "session", Ordinal: 0, Role: "assistant", Content: "raw words", DialogueText: new("needle")},
-		{SessionID: "session", Ordinal: 1, Role: "user", Content: "other words"},
-	}
-	require.NoError(t, d.ReplaceSessionContent(ctx, "session", messages, SessionSignalUpdate{}, nil))
-	filter := SearchFilter{Query: `"raw" AND content:needle`}
-	page, err := d.Search(ctx, filter)
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	messages[0].DialogueText = new("different")
-	require.NoError(t, d.ReplaceSessionContent(ctx, "session", messages, SessionSignalUpdate{}, nil))
-	page, err = d.Search(ctx, filter)
-	require.NoError(t, err)
-	require.Empty(t, page.Results)
 }
