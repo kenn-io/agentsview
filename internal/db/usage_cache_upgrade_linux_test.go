@@ -12,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -56,7 +57,11 @@ func TestUsageCacheUpgradeCandidateModeDuringCopy(t *testing.T) {
 		syscall.Umask(0o022)
 		fd, err := unix.InotifyInit1(unix.IN_CLOEXEC | unix.IN_NONBLOCK)
 		require.NoError(t, err)
-		defer unix.Close(fd)
+		// Let Go's file poller wait for notifications and retry interrupted reads.
+		// A runtime signal can interrupt a raw unix.Poll even during a valid copy.
+		notifications := os.NewFile(uintptr(fd), "usage-cache-writes")
+		require.NotNil(t, notifications)
+		defer notifications.Close()
 		_, err = unix.InotifyAddWatch(fd, filepath.Dir(archive), unix.IN_MODIFY)
 		require.NoError(t, err)
 		manager := newUsageCacheManager(archive)
@@ -69,13 +74,8 @@ func TestUsageCacheUpgradeCandidateModeDuringCopy(t *testing.T) {
 		buffer := make([]byte, 4096)
 		var observed bool
 		for !observed {
-			ready, err := unix.Poll([]unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}, 10000)
-			require.NoError(t, err)
-			require.NotZero(t, ready, "timed out waiting for candidate writes")
-			n, err := unix.Read(fd, buffer)
-			if errors.Is(err, unix.EAGAIN) {
-				continue
-			}
+			require.NoError(t, notifications.SetReadDeadline(time.Now().Add(10*time.Second)))
+			n, err := notifications.Read(buffer)
 			require.NoError(t, err)
 			for offset := 0; offset+unix.SizeofInotifyEvent <= n; {
 				length := int(binary.NativeEndian.Uint32(buffer[offset+12:]))
