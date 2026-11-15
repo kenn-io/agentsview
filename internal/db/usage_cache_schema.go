@@ -701,7 +701,6 @@ func publishUsageCache(
 		_ = os.Remove(temporaryPath)
 		return nil, false, err
 	}
-	_ = os.Remove(temporaryPath)
 	seeded := false
 	if usageCacheFormatVersion == usageCacheUpgradeTo {
 		seeded, err = seedUpgradedUsageCache(ctx, archivePath, temporaryPath, databaseID)
@@ -711,6 +710,14 @@ func publishUsageCache(
 		}
 		if !seeded {
 			if err := removeUsageCacheFiles(temporaryPath); err != nil {
+				return nil, false, err
+			}
+			file, err := os.OpenFile(temporaryPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+			if err != nil {
+				return nil, false, err
+			}
+			if err := file.Close(); err != nil {
+				_ = removeUsageCacheFiles(temporaryPath)
 				return nil, false, err
 			}
 		}
