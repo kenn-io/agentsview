@@ -405,7 +405,11 @@ func (db *DB) Search(
 		return db.search(ctx, f, cjk)
 	}
 	key := fmt.Sprintf("%s|%t", f.Slot(), cjk)
-	version, err := db.keptAnalyticsVersion(ctx)
+	id, err := db.GetDatabaseID(ctx)
+	if err != nil {
+		return db.search(ctx, f, cjk)
+	}
+	revision, err := db.UsageChangeRevision(ctx)
 	if err != nil {
 		return db.search(ctx, f, cjk)
 	}
@@ -413,7 +417,7 @@ func (db *DB) Search(
 	if err != nil {
 		return db.search(ctx, f, cjk)
 	}
-	return db.searchKept.Do(ctx, key, fmt.Sprintf("%s|%d", version, searchRevision), func(ctx context.Context) (SearchPage, error) {
+	return db.searchKept.Do(ctx, key, fmt.Sprintf("%s|%d|%d", id, revision, searchRevision), func(ctx context.Context) (SearchPage, error) {
 		return db.search(ctx, f, cjk)
 	})
 }

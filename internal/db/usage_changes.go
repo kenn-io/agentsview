@@ -55,7 +55,7 @@ func usageChangeJournalSQL() (string, string) {
 		case "model_pricing", "model_pricing_bands", "genai_pricing":
 			body += pricingRevisionBody
 		}
-		if name == "trg_messages_search_dialogue" {
+		if name == "trg_messages_search_dialogue" || name == "trg_sessions_search_first_message" {
 			body = searchCounterBody
 		}
 		if condition != "" {
@@ -82,6 +82,7 @@ func usageChangeJournalSQL() (string, string) {
 		changes[i] = "OLD." + column + " IS NOT NEW." + column
 	}
 	add("trg_sessions_analytics_change_update", "UPDATE OF "+strings.Join(columns, ", "), "sessions", strings.Join(changes, " OR "), "", true)
+	add("trg_sessions_search_first_message", "UPDATE OF first_message", "sessions", "OLD.first_message IS NOT NEW.first_message", "", false)
 	add("trg_image_text_cache_search_insert", "INSERT", "image_text_cache", "", "", true)
 	add("trg_image_text_cache_search_delete", "DELETE", "image_text_cache", "", "", true)
 	add("trg_image_text_cache_search_update", "UPDATE OF text, succeeded", "image_text_cache", "OLD.text IS NOT NEW.text OR OLD.succeeded IS NOT NEW.succeeded", "", true)

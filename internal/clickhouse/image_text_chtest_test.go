@@ -71,6 +71,7 @@ func TestClickHouseImageTextPushAndSearch(t *testing.T) {
 	store, err := NewStore(ctx, target)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
+
 	search := func(t *testing.T, read interface {
 		Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, error)
 		SearchContent(ctx context.Context, f db.ContentSearchFilter) (db.ContentSearchPage, error)

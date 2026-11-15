@@ -25,6 +25,11 @@ func TestSearchKeptSelections(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, page, repeat)
 	require.EqualValues(t, 1, loads.Load())
+	updateSignals(t, d, "session", SessionSignalUpdate{HealthScore: new(75)})
+	repeat, err = d.Search(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, page, repeat)
+	require.EqualValues(t, 1, loads.Load())
 	for _, other := range []SearchFilter{{Query: "needle", Sort: "recency"}, {Query: "needle", Cursor: 1}, {Query: "needle", Limit: 1}, {Query: "absent"}} {
 		_, err = d.Search(ctx, other)
 		require.NoError(t, err)

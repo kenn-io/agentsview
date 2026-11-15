@@ -80,6 +80,9 @@ const toolCallWithoutEvents = `NOT (tc.tool_use_id <> '' AND (tc.session_id, tc.
 				SELECT session_id, tool_use_id FROM tool_result_events))`
 
 func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, error) {
+	if f.Query == "" {
+		return db.SearchPage{}, nil
+	}
 	if f.Limit <= 0 || f.Limit > db.MaxSearchLimit {
 		f.Limit = db.DefaultSearchLimit
 	}
@@ -91,9 +94,6 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 }
 
 func (s *Store) search(ctx context.Context, f db.SearchFilter) (db.SearchPage, error) {
-	if f.Query == "" {
-		return db.SearchPage{}, nil
-	}
 	// plainTerm is the de-quoted query joined back into one string; it feeds
 	// the name-branch ILIKE. terms is the per-term decomposition: every term
 	// must appear in the message content (AND), matching SQLite FTS5's
