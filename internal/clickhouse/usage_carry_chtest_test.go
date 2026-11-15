@@ -53,17 +53,19 @@ func TestUsageCarry(t *testing.T) {
 				syncer.hooks = nil
 			}
 			runPreparedUsageRefresh(t, store)
-			if scenario == "parts move" {
-				store.beforeUsageCarryCheck = func() {
-					store.beforeUsageCarryCheck = nil
+			proofs := 0
+			store.beforeUsageCarryCheck = func() {
+				proofs++
+				if scenario == "parts move" && proofs == 1 {
 					execPreparedUsage(t, store, "INSERT INTO usage_messages SELECT * FROM usage_messages")
 				}
 			}
-			proofs, results := usageQueryCountsOf(t, store, "startsWith(query, 'SELECT') AND position(query, 'max(push_version) AS version') > 0 AND position(query, 's.prepares_usage') > 0")
+			_, results := usageQueryCounts(t, store)
 			for i, f := range filters {
 				got := readPreparedUsage(t, store, f)
 				if scenario == "parts move" && i == 0 {
-					require.False(t, store.usageCarry.valid)
+					_, afterMovedRead := usageQueryCounts(t, store)
+					require.Greater(t, afterMovedRead-results, uint64(1))
 				}
 				fresh := readPreparedUsage(t, NewStoreFromDB(store.DB(), store.bulk), f)
 				require.Equal(t, fresh, got)
@@ -73,22 +75,22 @@ func TestUsageCarry(t *testing.T) {
 					require.NotEqual(t, before[i].daily, got.daily)
 				}
 			}
-			afterProofs, afterResults := usageQueryCountsOf(t, store, "startsWith(query, 'SELECT') AND position(query, 'max(push_version) AS version') > 0 AND position(query, 's.prepares_usage') > 0")
+			_, afterResults := usageQueryCounts(t, store)
 			if scenario == "healthy" {
-				require.EqualValues(t, 1, afterProofs-proofs)
+				require.Equal(t, 1, proofs)
 				// Fresh stores issue three queries each; counts read once per filter.
 				require.EqualValues(t, 8, afterResults-results)
 				for i, f := range filters {
 					require.Equal(t, before[i], readPreparedUsage(t, store, f))
 				}
-				finalProofs, finalResults := usageQueryCountsOf(t, store, "startsWith(query, 'SELECT') AND position(query, 'max(push_version) AS version') > 0 AND position(query, 's.prepares_usage') > 0")
-				require.Equal(t, afterProofs, finalProofs)
+				_, finalResults := usageQueryCounts(t, store)
+				require.Equal(t, 1, proofs)
 				require.Equal(t, afterResults, finalResults)
 			} else if scenario != "changed after read" && scenario != "failed push after read" && scenario != "parts move" {
-				require.EqualValues(t, 1, afterProofs-proofs)
+				require.Equal(t, 1, proofs)
 				require.Greater(t, afterResults-results, uint64(8))
 			} else if scenario == "changed after read" || scenario == "failed push after read" {
-				require.Equal(t, proofs, afterProofs)
+				require.Zero(t, proofs)
 				require.Greater(t, afterResults-results, uint64(8))
 			}
 		})
@@ -169,12 +171,13 @@ func TestUsageCarryDiskFirst(t *testing.T) {
 	require.NoError(t, store.openActivityReportDisk(syncer.target))
 	require.Equal(t, want, readPreparedUsage(t, store, f))
 	runPreparedUsageRefresh(t, store)
-	probe := "startsWith(query, 'SELECT') AND position(query, 'max(push_version) AS version') > 0 AND position(query, 's.prepares_usage') > 0"
-	proofs, results := usageQueryCountsOf(t, store, probe)
+	proofs := 0
+	store.beforeUsageCarryCheck = func() { proofs++ }
+	_, results := usageQueryCounts(t, store)
 	require.Equal(t, want, readPreparedUsage(t, store, f))
 	require.Equal(t, want, readPreparedUsage(t, store, f))
-	afterProofs, afterResults := usageQueryCountsOf(t, store, probe)
-	require.Equal(t, proofs, afterProofs)
+	_, afterResults := usageQueryCounts(t, store)
+	require.Zero(t, proofs)
 	// Counts have no disk entry, so the first ready visit reads them once.
 	require.EqualValues(t, 1, afterResults-results)
 }
@@ -258,9 +261,12 @@ func TestUsageCarryNullableJoin(t *testing.T) {
 		fmt.Sprintf("ALTER TABLE usage_events DELETE WHERE session_id = '%s' SETTINGS mutations_sync = 2", usagePriceRoundID))
 	ctx, err = store.withPartsSnapshot(ctx)
 	require.NoError(t, err)
+	proofs := 0
+	store.beforeUsageCarryCheck = func() { proofs++ }
 	require.False(t, store.usageCarryPublished(ctx, "after"))
-	require.True(t, store.usageCarry.valid, "the proof must reject the missing rows without a query error")
-	require.Equal(t, "after", store.usageCarry.version)
+	require.False(t, store.usageCarryPublished(ctx, "after"))
+	// A completed rejection is cached; query errors would retry the proof.
+	require.Equal(t, 1, proofs)
 }
 
 func TestUsageCarryVersionTables(t *testing.T) {

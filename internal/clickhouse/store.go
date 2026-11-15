@@ -46,7 +46,8 @@ type Store struct {
 	// bulk serves the Activity reads that return many rows; see openBulk.
 	bulk chdriver.Conn
 	// beforeUsageExtent lets tests change source rows after the request snapshot.
-	beforeUsageExtent     func()
+	beforeUsageExtent func()
+	// beforeUsageCarryCheck lets tests change source rows after the carry proof.
 	beforeUsageCarryCheck func()
 	// afterTrackerReads, when set, runs after the row trackers read and
 	// before the parts are checked again. Tests use it to move parts.
