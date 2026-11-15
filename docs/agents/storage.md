@@ -1680,8 +1680,7 @@ Because each test owns a database, the tests run in parallel:
   `max_connections / 8` and `max_connections * max_locks_per_transaction / 2048`
   tests, with at least one slot. The default settings permit three tests, so
   the CI service and `docker-compose.test.yml` set
-  `max_locks_per_transaction=256`, which permits 12. On a four-CPU run of the
-  CI shards that cut wall time from about 107 s to about 70 s.
+  `max_locks_per_transaction=256`, which permits 12.
   Slot files in the system temporary directory, keyed by server address, share
   this limit across test processes. CockroachDB has no shared lock table and
   no slots.
