@@ -774,11 +774,8 @@ func (s *Store) activityReportUsage(
 		return out, &block, nil
 	}
 
-	if inputs != nil && inputs.priced != nil {
-		p := inputs.priced
-		if p.covers(q, pricingDigest) {
-			return pgAssembleActivityUsage(raw, p.rows), p.block, nil
-		}
+	if inputs != nil && inputs.priced != nil && inputs.priced.covers(q, pricingDigest) {
+		return pgAssembleActivityUsage(raw, inputs.priced.rows), inputs.priced.block, nil
 	}
 	saved := &pgActivityPriced{rangeStart: q.RangeStart, rangeEnd: q.RangeEnd, effectiveEnd: q.EffectiveEnd, pricingDigest: pricingDigest}
 	order := make([]int, len(raw))

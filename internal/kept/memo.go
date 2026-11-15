@@ -19,8 +19,8 @@ type Memo[T any] struct {
 	// Limit caps the slots; zero means memoLimit.
 	Limit int
 	// Size estimates a row's bytes. With it, MaxBytes caps the bytes kept,
-	// zero meaning DefaultMaxBytes. Put drops rows over the cap.
-	// Without Size only slots are capped.
+	// zero meaning DefaultMaxBytes, and rows over that cap are not kept.
+	// Without it only the slots are capped.
 	Size     func(T) int64
 	MaxBytes int64
 	// Shrink returns a smaller equivalent copy of a slot and its size. Put

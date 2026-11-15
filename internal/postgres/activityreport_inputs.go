@@ -35,13 +35,6 @@ type pgActivityInputs struct {
 	changed    []string
 }
 
-func (inputs *pgActivityInputs) setUsage(rows []pgActivityUsageRow, candidates map[string]bool) {
-	inputs.usage = rows
-	inputs.candidates = candidates
-	inputs.changed = nil
-	inputs.priced = nil
-}
-
 type pgActivityPriced struct {
 	rangeStart, rangeEnd, effectiveEnd, next time.Time
 	pricingDigest                            string
@@ -363,7 +356,10 @@ func (s *Store) activityUsageInputs(ctx context.Context, ids []string, lower, up
 		return nil, err
 	}
 	if inputs.candidates == nil {
-		inputs.setUsage(slices.Clip(slices.Clone(fresh)), selected)
+		inputs.usage = slices.Clip(slices.Clone(fresh))
+		inputs.candidates = selected
+		inputs.changed = nil
+		inputs.priced = nil
 		return inputs.usage, nil
 	}
 	replaced := make(map[string]bool, len(read))
@@ -393,7 +389,10 @@ func (s *Store) activityUsageInputs(ctx context.Context, ids []string, lower, up
 	merged = slices.DeleteFunc(merged, func(r pgActivityUsageRow) bool {
 		return !selected[r.sessionID.Value()] && !keys[key{r.claudeMessageID, r.claudeRequestID}]
 	})
-	inputs.setUsage(slices.Clip(slices.Clone(merged)), selected)
+	inputs.usage = slices.Clip(slices.Clone(merged))
+	inputs.candidates = selected
+	inputs.changed = nil
+	inputs.priced = nil
 	return merged, nil
 }
 
