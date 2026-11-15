@@ -96,20 +96,28 @@ func pgUsageBenchmarkSchema(t testing.TB) string {
 func openPGUsageBenchmarkFixture(t testing.TB) *pgUsageBenchmarkFixture {
 	t.Helper()
 	require := require.New(t)
-	pgURL := testPGURL(t)
-	schema := pgUsageBenchmarkSchema(t)
-	admin, err := sql.Open("pgx", pgURL)
-	require.NoError(err)
-	_, err = admin.ExecContext(t.Context(), "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
-	require.NoError(err)
-	require.NoError(admin.Close())
+	// The first fixture in a test's database uses the copy of the template;
+	// later ones, such as one per benchmark round, get a new schema.
+	schema := usageTestSchema
+	pgURL := testPGSchemaURL(t, schema)
+	fresh := takeFreshSchemaCopy(t, pgURL, schema)
+	if !fresh {
+		schema = pgUsageBenchmarkSchema(t)
+		admin, err := sql.Open("pgx", pgURL)
+		require.NoError(err)
+		_, err = admin.ExecContext(t.Context(), "DROP SCHEMA IF EXISTS "+schema+" CASCADE")
+		require.NoError(err)
+		require.NoError(admin.Close())
+	}
 
 	local, err := db.Open(t.Context(), t.TempDir()+"/usage-bench.db")
 	require.NoError(err)
 	seedUsageParityFixture(t, local)
 	syncer, err := New(t.Context(), pgURL, schema, local, "bench-machine", true, storage.PusherOptions{})
 	require.NoError(err)
-	require.NoError(EnsureSchema(t.Context(), syncer.pg, schema))
+	if !fresh {
+		require.NoError(EnsureSchema(t.Context(), syncer.pg, schema))
+	}
 	remote, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(err)
 	t.Cleanup(func() {

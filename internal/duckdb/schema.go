@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"go.kenn.io/agentsview/internal/db"
 )
 
 // SchemaVersion is the version of the DuckDB mirror schema created by
@@ -39,7 +41,12 @@ import (
 // push by usagefacts.ParseTokenUsage, so usage reads never parse token_usage.
 // v30 moves the OpenRouter ownership list from a model_pricing row into
 // pricing_meta and stores pricing times as TIMESTAMP.
-const SchemaVersion = 30
+// v31 stores system-prefix verdicts.
+const SchemaVersion = 31
+
+func trendsPartsIdentity() string {
+	return "duckdb|" + db.SystemPrefixRulesVersion()
+}
 
 const schemaVersionMetadataKey = "agentsview_schema_version"
 
@@ -47,6 +54,7 @@ const schemaVersionMetadataKey = "agentsview_schema_version"
 // readMirrorMetadata / ProbeMirror.
 const (
 	frustrationMarkersVersionMetadataKey = "agentsview_frustration_markers_version"
+	systemPrefixRulesVersionMetadataKey  = "agentsview_system_prefix_rules_version"
 	dataVersionMetadataKey               = "agentsview_source_data_version"
 	sourceDatabaseIDMetadataKey          = "agentsview_source_database_id"
 	sourceArchiveIDMetadataKey           = "agentsview_source_archive_id"
@@ -379,6 +387,7 @@ var mirrorTables = append([]tableSpec{
 			usage_cache_read_input_tokens BIGINT NOT NULL DEFAULT 0,
 			usage_reasoning_tokens BIGINT NOT NULL DEFAULT 0,
 			usage_web_search_requests BIGINT NOT NULL DEFAULT 0,
+			is_system_prefixed BOOLEAN NOT NULL DEFAULT FALSE,
 			UNIQUE(session_id, ordinal)
 		)`,
 		columns: []columnSpec{
@@ -418,6 +427,7 @@ var mirrorTables = append([]tableSpec{
 			{"usage_cache_read_input_tokens", "usage_cache_read_input_tokens BIGINT NOT NULL DEFAULT 0"},
 			{"usage_reasoning_tokens", "usage_reasoning_tokens BIGINT NOT NULL DEFAULT 0"},
 			{"usage_web_search_requests", "usage_web_search_requests BIGINT NOT NULL DEFAULT 0"},
+			{"is_system_prefixed", "is_system_prefixed BOOLEAN NOT NULL DEFAULT FALSE"},
 		},
 		indexes: []string{
 			"CREATE INDEX IF NOT EXISTS idx_messages_session_ordinal ON messages(session_id, ordinal)",
@@ -1020,6 +1030,7 @@ type mirrorMetadata struct {
 	SchemaVersion             int
 	DataVersion               int
 	FrustrationMarkersVersion int
+	SystemPrefixRulesVersion  string
 	// SourceDatabaseID is the archive_metadata database_id of the SQLite
 	// archive the mirror was built from. It identifies the archive
 	// GENERATION, not just the path: a resync builds a fresh archive with a
@@ -1050,6 +1061,7 @@ func writeMirrorMetadata(ctx context.Context, db *sql.DB, meta mirrorMetadata) e
 	}{
 		{schemaVersionMetadataKey, strconv.Itoa(meta.SchemaVersion)},
 		{frustrationMarkersVersionMetadataKey, strconv.Itoa(meta.FrustrationMarkersVersion)},
+		{systemPrefixRulesVersionMetadataKey, meta.SystemPrefixRulesVersion},
 		{dataVersionMetadataKey, strconv.Itoa(meta.DataVersion)},
 		{sourceDatabaseIDMetadataKey, meta.SourceDatabaseID},
 		{sourceArchiveIDMetadataKey, meta.SourceArchiveID},
@@ -1074,9 +1086,10 @@ func writeMirrorMetadata(ctx context.Context, db *sql.DB, meta mirrorMetadata) e
 // errors so callers (ProbeMirror) can surface them as shape issues rather
 // than silently treating a corrupt mirror as version 0.
 func readMirrorMetadata(ctx context.Context, db *sql.DB) (mirrorMetadata, error) {
-	raw := make(map[string]string, 12)
+	raw := make(map[string]string, 13)
 	for _, key := range []string{
 		schemaVersionMetadataKey, dataVersionMetadataKey, frustrationMarkersVersionMetadataKey,
+		systemPrefixRulesVersionMetadataKey,
 		sourceDatabaseIDMetadataKey, sourceArchiveIDMetadataKey,
 		pushScopeMetadataKey,
 		lastPushCutoffMetadataKey, lastPushAtMetadataKey, lastPushMachineMetadataKey,
@@ -1090,12 +1103,13 @@ func readMirrorMetadata(ctx context.Context, db *sql.DB) (mirrorMetadata, error)
 		raw[key] = value
 	}
 	meta := mirrorMetadata{
-		SourceDatabaseID: raw[sourceDatabaseIDMetadataKey],
-		SourceArchiveID:  raw[sourceArchiveIDMetadataKey],
-		Scope:            raw[pushScopeMetadataKey],
-		LastPushCutoff:   raw[lastPushCutoffMetadataKey],
-		LastPushAt:       raw[lastPushAtMetadataKey],
-		LastPushMachine:  raw[lastPushMachineMetadataKey],
+		SystemPrefixRulesVersion: raw[systemPrefixRulesVersionMetadataKey],
+		SourceDatabaseID:         raw[sourceDatabaseIDMetadataKey],
+		SourceArchiveID:          raw[sourceArchiveIDMetadataKey],
+		Scope:                    raw[pushScopeMetadataKey],
+		LastPushCutoff:           raw[lastPushCutoffMetadataKey],
+		LastPushAt:               raw[lastPushAtMetadataKey],
+		LastPushMachine:          raw[lastPushMachineMetadataKey],
 	}
 	var err error
 	if meta.SchemaVersion, err = parseMirrorMetadataInt(

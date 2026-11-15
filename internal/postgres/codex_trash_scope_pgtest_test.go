@@ -35,7 +35,6 @@ func TestPreSplitPGTrashKeepsPagesHidden(t *testing.T) {
 			const schema = "agentsview_presplit_pgtrash_test"
 			pgURL := testPGURL(t)
 			cleanNamedPGSchema(t, pgURL, schema)
-			t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 			pg, err := Open(t.Context(), pgURL, schema, true)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, pg.Close()) })
@@ -150,14 +149,18 @@ func newCodexTrashMirror(t *testing.T) (*db.DB, *Sync, *Store) {
 	_, err = raw.ExecContext(ctx, `UPDATE sessions SET created_at='2020-01-01T00:00:00.000Z', local_modified_at='2020-01-01T00:00:00.000Z'`)
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
-	const schema = "agentsview_codex_trash_test"
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
+	fresh := takeFreshSchemaCopy(t, pgURL, schema)
+	if !fresh {
+		cleanNamedPGSchema(t, pgURL, schema)
+	}
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, pg.Close()) })
-	require.NoError(t, EnsureSchema(ctx, pg, schema))
+	if !fresh {
+		require.NoError(t, EnsureSchema(ctx, pg, schema))
+	}
 	syncer := &Sync{pg: pg, local: local, machine: "machine", schema: schema, schemaDone: true}
 	_, err = syncer.Push(ctx, true, nil)
 	require.NoError(t, err)
@@ -415,7 +418,6 @@ func TestCodexTrashScopeUpgradePreservesLaterPerFileDeletion(t *testing.T) {
 			const schema = "agentsview_codex_scope_upgrade_test"
 			pgURL := testPGURL(t)
 			cleanNamedPGSchema(t, pgURL, schema)
-			t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 			pg, err := Open(t.Context(), pgURL, schema, true)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, pg.Close()) })

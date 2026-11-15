@@ -379,13 +379,17 @@ func TestRawUploadStoreCleanupBoundsEachPass(t *testing.T) {
 
 func newRawUploadTestDatabase(t *testing.T) (*sql.DB, string) {
 	t.Helper()
-	pgURL := testPGURL(t)
-	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
+	pgURL := testPGSchemaURL(t, schemaTestSchema)
+	fresh := takeFreshSchemaCopy(t, pgURL, schemaTestSchema)
+	if !fresh {
+		cleanSchemaTestPG(t, pgURL)
+	}
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, pg.Close()) })
-	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
+	if !fresh {
+		require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
+	}
 	return pg, t.TempDir()
 }
 

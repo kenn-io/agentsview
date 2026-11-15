@@ -831,7 +831,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 			WHERE `+msgTermPredicate+`
 				AND s.deleted_at IS NULL
 				AND m.is_system = FALSE
-				AND `+db.DuckDBSystemPrefixSQL("m.content", "m.role")+`
+				AND m.is_system_prefixed = FALSE
 				`+project+`
 		),
 		msg_matches AS (
@@ -859,7 +859,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 			WHERE `+strings.Join(imageTermClauses, " AND ")+`
 				AND s.deleted_at IS NULL
 				AND im.is_system = FALSE
-				AND `+db.DuckDBSystemPrefixSQL("im.content", "im.role")+`
+				AND im.is_system_prefixed = FALSE
 				AND it.session_id NOT IN (SELECT session_id FROM msg_matches)
 				`+nameProject+`
 		),
@@ -890,7 +890,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 				SELECT mx.session_id FROM messages mx
 				WHERE mx.session_id IN (SELECT session_id FROM name_candidates)
 					AND mx.is_system = FALSE
-					AND `+db.DuckDBSystemPrefixSQL("mx.content", "mx.role")+`
+					AND mx.is_system_prefixed = FALSE
 			)
 		),
 		page AS MATERIALIZED (
@@ -964,7 +964,7 @@ func (s *Store) SearchSession(ctx context.Context, sessionID, query string) ([]i
 			AND tre.call_index = tc.call_index
 		WHERE m.session_id = ?
 			AND m.is_system = FALSE
-			AND `+db.DuckDBSystemPrefixSQL("m.content", "m.role")+`
+			AND m.is_system_prefixed = FALSE
 			AND (m.content ILIKE ? ESCAPE '\'
 				OR tc.result_content ILIKE ? ESCAPE '\'
 				OR tre.content ILIKE ? ESCAPE '\')
@@ -1165,7 +1165,7 @@ func (s *Store) collectContentSubstringPass(
 		case "messages":
 			sysPred := "TRUE"
 			if f.ExcludeSystem {
-				sysPred = "m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
+				sysPred = "m.is_system = FALSE AND m.is_system_prefixed = FALSE"
 			}
 			if f.KeywordOnly {
 				sysPred += " AND m.role IN ('user', 'assistant')"
@@ -1193,7 +1193,7 @@ func (s *Store) collectContentSubstringPass(
 		case "thinking":
 			sysPred := "TRUE"
 			if f.ExcludeSystem {
-				sysPred = "m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
+				sysPred = "m.is_system = FALSE AND m.is_system_prefixed = FALSE"
 			}
 			contentPred := duckContentSearchPredicate("m.thinking_text", f, &args)
 			if slices.Contains(f.Sources, "messages") {
@@ -1471,7 +1471,7 @@ func (s *Store) collectContentSource(
 			WHERE m.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `) AND ` + db.LexicalAnchorScopeSQL(f, "s", "m", db.DuckDBQueryDialect())
 		query += prefixFilter("COALESCE(m.dialogue_text, m.content)")
 		if f.ExcludeSystem {
-			query += " AND m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
+			query += " AND m.is_system = FALSE AND m.is_system_prefixed = FALSE"
 		}
 		orderBy = "m.session_id, m.ordinal, COALESCE(m.id, 0)"
 	case "thinking":
@@ -1485,7 +1485,7 @@ func (s *Store) collectContentSource(
 			WHERE m.thinking_text <> '' AND m.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `) AND ` + db.LexicalAnchorScopeSQL(f, "s", "m", db.DuckDBQueryDialect())
 		query += prefixFilter("m.thinking_text")
 		if f.ExcludeSystem {
-			query += " AND m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
+			query += " AND m.is_system = FALSE AND m.is_system_prefixed = FALSE"
 		}
 		orderBy = "m.session_id, m.ordinal, COALESCE(m.id, 0)"
 	case "tool_input":

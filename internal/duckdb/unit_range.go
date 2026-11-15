@@ -30,13 +30,10 @@ const duckUnitSessionChunk = readbase.MaxSQLVars / 2
 const duckUnitExtentChunk = readbase.MaxSQLVars / 6
 
 // duckEmbeddableUserSQL is the DuckDB predicate matching an embeddable user
-// row under the given alias: user role, is_system = FALSE, and the DuckDB
-// dialect SystemPrefixSQL check — the DuckDB form of internal/db's
-// embeddableUserSQL. (The assistant-side member predicate skips the prefix
-// check: SystemPrefixSQL constrains user rows only.)
+// row under the given alias: user role, is_system = FALSE, and the stored
+// system-prefix verdict. Assistant rows do not need the prefix check.
 func duckEmbeddableUserSQL(alias string) string {
-	return fmt.Sprintf("%[1]s.role = 'user' AND %[1]s.is_system = FALSE AND %[2]s",
-		alias, db.DuckDBSystemPrefixSQL(alias+".content", alias+".role"))
+	return fmt.Sprintf("%[1]s.role = 'user' AND %[1]s.is_system = FALSE AND %[1]s.is_system_prefixed = FALSE", alias)
 }
 
 // NearestUserBoundaries returns, per probe, the nearest embeddable user
@@ -292,8 +289,7 @@ func (s *Store) lookupAnchorMetaChunkDuck(
 		"SELECT r.session_id, r.ordinal, " +
 		"s.relationship_type, COALESCE(s.parent_session_id, ''), s.machine, COALESCE(s.display_name, s.session_name), " +
 		"m.role, m.is_sidechain, " +
-		"CASE WHEN m.is_system = FALSE AND " +
-		db.DuckDBSystemPrefixSQL("m.content", "m.role") +
+		"CASE WHEN m.is_system = FALSE AND m.is_system_prefixed = FALSE" +
 		" THEN TRUE ELSE FALSE END " +
 		"FROM refs r " +
 		"JOIN sessions s ON s.id = r.session_id " +

@@ -63,7 +63,7 @@ func seedWebSearchUsage(t *testing.T, store *Store, model string) {
 
 func TestStoreSessionUsageBillsWebSearchRequests(t *testing.T) {
 	t.Parallel()
-	_, store := prepareUsageSchema(t, "agentsview_usage_websearch_test")
+	_, store := prepareUsageSchema(t, usageTestSchema)
 	seedWebSearchUsage(t, store, "claude-websearch-test")
 	ctx := t.Context()
 
@@ -96,8 +96,7 @@ func TestStoreSessionUsageBillsWebSearchRequests(t *testing.T) {
 
 func TestPGAsymmetricClaudeSnapshotsPreserveWebSearchFee(t *testing.T) {
 	t.Parallel()
-	_, store := prepareUsageSchema(
-		t, "agentsview_usage_websearch_asymmetric_test")
+	_, store := prepareUsageSchema(t, usageTestSchema)
 	seedWebSearchUsage(t, store, "claude-websearch-test")
 	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
@@ -146,7 +145,7 @@ func TestPGAsymmetricClaudeSnapshotsPreserveWebSearchFee(t *testing.T) {
 
 func TestPGUsageJSONExtractionUsesExactPathsAndMalformedFallback(t *testing.T) {
 	t.Parallel()
-	_, store := prepareUsageSchema(t, "agentsview_usage_json_paths_test")
+	_, store := prepareUsageSchema(t, usageTestSchema)
 	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
@@ -213,8 +212,7 @@ func TestPGUsageJSONExtractionUsesExactPathsAndMalformedFallback(t *testing.T) {
 // rates, while the session stays reported as an incomplete estimate.
 func TestStoreSessionUsageBillsWebSearchOnUnpricedModel(t *testing.T) {
 	t.Parallel()
-	_, store := prepareUsageSchema(
-		t, "agentsview_usage_websearch_unpriced_test")
+	_, store := prepareUsageSchema(t, usageTestSchema)
 	seedWebSearchUsage(t, store, "some-unlisted-model")
 	ctx := t.Context()
 

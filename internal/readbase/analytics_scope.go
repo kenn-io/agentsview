@@ -24,13 +24,15 @@ func (s *Analytics) ResolveMessageScope(
 	flt := f.MessageScopeFilter()
 	loc := analyticsLocation(f.Timezone)
 	bySession := make(db.MessageScope, len(unique))
+	if len(unique) == 0 {
+		return bySession, nil
+	}
 	emit := func(m db.ScopedMessage) {
 		bySession[m.SessionID] = append(bySession[m.SessionID], m)
 	}
 
-	if err := db.QueryChunkedSize(unique, MaxSQLVars, func(chunk []string) error {
+	if err := s.backend.VisitSessionIDSets(ctx, unique, func(ctx context.Context, ph string, args []any) error {
 		reducer := db.NewScopeReducer(flt, emit)
-		ph, args := db.InPlaceholders(chunk)
 		query := analyticsCandidateMessagesSQL(ph, includeContent)
 		rows, err := s.backend.QueryContext(ctx, query, args...)
 		if err != nil {

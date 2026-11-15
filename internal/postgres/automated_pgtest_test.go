@@ -21,9 +21,7 @@ import (
 
 func TestBackfillIsAutomatedPGUsesBoundedEvidence(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 	ps, err := New(
@@ -112,9 +110,7 @@ func TestBackfillIsAutomatedPGUsesBoundedEvidence(t *testing.T) {
 
 func TestHeadlessClassificationRepairPG(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 	local := testDB(t)
 	ps, err := New(t.Context(), pgURL, "agentsview", local, "test-machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
@@ -187,9 +183,7 @@ func TestHeadlessClassificationRepairPG(t *testing.T) {
 // IsAutomated=1.
 func TestPushSessionTrustsLocalIsAutomated(t *testing.T) {
 	t.Cleanup(func() { db.SetUserAutomationPrefixes(nil) })
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 
@@ -241,9 +235,7 @@ func TestPushSessionTrustsLocalIsAutomated(t *testing.T) {
 
 func TestAutomationAuditPGIncremental(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 	local := testDB(t)
 	ps, err := New(t.Context(), pgURL, "agentsview", local, "audit-machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
@@ -291,9 +283,7 @@ func TestAutomationAuditPGIncremental(t *testing.T) {
 
 func TestAutomationAuditPGMessageOnlyPush(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 	local := testDB(t)
 	ps, err := New(t.Context(), pgURL, "agentsview", local, "audit-machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
@@ -332,9 +322,11 @@ func TestAutomationAuditPGMessageOnlyPush(t *testing.T) {
 func TestAutomationAuditPGConcurrentClassifiers(t *testing.T) {
 	for _, older := range []bool{false, true} {
 		t.Run(fmt.Sprint("older=", older), func(t *testing.T) {
-			url := testPGURL(t)
-			cleanPGSchema(t, url)
-			t.Cleanup(func() { cleanPGSchema(t, url); db.SetUserAutomationPrefixes(nil) })
+			url := testPGSchemaURL(t, "agentsview")
+			if !takeFreshSchemaCopy(t, url, "agentsview") {
+				cleanPGSchema(t, url)
+			}
+			t.Cleanup(func() { db.SetUserAutomationPrefixes(nil) })
 			ps, err := New(t.Context(), url, "agentsview", testDB(t), "host", true, storage.PusherOptions{})
 			require.NoError(t, err)
 			defer ps.Close()
@@ -380,9 +372,7 @@ func TestAutomationAuditPGConcurrentClassifiers(t *testing.T) {
 
 func TestBackfillIsAutomatedPGPreservesUsageOnlyClassification(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 	local := testDB(t)
 	local.SetArchiveContent(config.ArchiveContentUsage)
 	for _, tc := range []struct {

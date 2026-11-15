@@ -19,7 +19,7 @@ import (
 // publishes its image-only text through ordinary incremental pushes.
 func TestPGImageTextPushAndSearch(t *testing.T) {
 	t.Parallel()
-	syncer, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_image_text_test")
+	syncer, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview")
 	image := `[{"type":"input_image","image_url":"data:image/png;base64,` +
 		base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\nimage")) + `"}]`
 	messages := func(result string) []db.Message {
@@ -174,7 +174,7 @@ func TestPGStampedCodexPageMigration(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			old := tc.old
 			ctx := t.Context()
-			syncer, local, pg, _ := newSessionProvenancePushSync(t, "agentsview_stamped_codex_test")
+			syncer, local, pg, _ := newSessionProvenancePushSync(t, "agentsview")
 			path := filepath.Join(t.TempDir(), "rollout-2026-09-25T12-00-00-"+page[len("codex:"):]+".jsonl")
 			sess := db.Session{ID: old, Agent: "codex", Project: "proj", Machine: "workstation", FilePath: &path, MessageCount: 1}
 			image := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
@@ -237,7 +237,7 @@ func TestPGStampedCodexPageMigration(t *testing.T) {
 
 func TestPGImageTextPendingSessionVersion(t *testing.T) {
 	t.Parallel()
-	syncer, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_image_text_version_test")
+	syncer, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview")
 	image := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
 	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "pending", Project: "proj", Machine: "workstation", Agent: "test"}))
 	require.NoError(t, local.InsertMessages(ctx, []db.Message{{SessionID: "pending", Role: "assistant", ToolCalls: []db.ToolCall{{ToolName: "Read", ResultContent: image}}}}))

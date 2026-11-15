@@ -830,6 +830,9 @@ func TestPGUsageCacheAccountReplacementAndPricing(t *testing.T) {
 
 func TestPGUsageAccountUpgradeWaitsForOldWriter(t *testing.T) {
 	t.Parallel()
+	// An empty database: this test rewinds the change journal to a version
+	// without account revisions and tests how its installer upgrades it.
+	testPGURL(t)
 	_, _, store, _ := keptUsageFixture(t)
 	ctx := t.Context()
 	var schema string
@@ -1722,6 +1725,9 @@ func TestPGUsageAccountRevisionTracksCommittedChanges(t *testing.T) {
 
 func TestPGUsageAccountRevisionLeavesNewerJournalUntouched(t *testing.T) {
 	t.Parallel()
+	// An empty database: this test marks the change journal newer and tests
+	// that its installer leaves it alone.
+	testPGURL(t)
 	_, syncer, _, _ := keptUsageFixture(t)
 	ctx := t.Context()
 	_, err := syncer.pg.ExecContext(ctx, `UPDATE sync_metadata SET value='999' WHERE key='usage_change_journal_version';

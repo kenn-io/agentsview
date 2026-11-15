@@ -1233,14 +1233,6 @@ func EnsureSchema(
 			"creating idx_sessions_termination_status: %w", err,
 		)
 	}
-	if err := backfillIsAutomatedPG(ctx, db); err != nil {
-		return err
-	}
-	log.Printf(
-		"pg schema: automated-session backfill step completed in %s",
-		time.Since(step).Round(time.Millisecond),
-	)
-	step = time.Now()
 	if err := dedupeStoredDialoguePG(ctx, db); err != nil {
 		return err
 	}
@@ -1268,6 +1260,14 @@ func EnsureSchema(
 		"pg schema: message usage counter backfill completed in %s"+
 			" (%d row(s) filled)",
 		time.Since(step).Round(time.Millisecond), filled,
+	)
+	step = time.Now()
+	if err := backfillIsAutomatedPG(ctx, db); err != nil {
+		return err
+	}
+	log.Printf(
+		"pg schema: automated-session backfill step completed in %s",
+		time.Since(step).Round(time.Millisecond),
 	)
 	step = time.Now()
 	if err := createContentSearchIndexesPG(ctx, db); err != nil {
@@ -1467,6 +1467,7 @@ func createContentSearchIndexesPG(ctx context.Context, pg interface {
 // backfillIsAutomatedPG corrects stale automation verdicts. Per-row
 // classifier stamps track freshness when available; deleting the global
 // metadata key requests a complete recheck.
+// Run repairs that bump updated_at first, because they clear audit stamps.
 func backfillIsAutomatedPG(
 	ctx context.Context, pg *sql.DB,
 ) error {
@@ -1482,9 +1483,6 @@ func backfillIsAutomatedPG(
 // holds an exclusive sessions lock until commit, blocking reads and writes.
 // Subsequent repairs use row-level writes.
 func runSchemaDataRepairsPG(ctx context.Context, db *sql.DB) error {
-	if err := backfillIsAutomatedPG(ctx, db); err != nil {
-		return err
-	}
 	if _, err := runSourceCurationBackfill(ctx, db, false); err != nil {
 		return err
 	}
@@ -1501,6 +1499,9 @@ func runSchemaDataRepairsPG(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	if _, err := fillMessageUsageCountersPG(ctx, db); err != nil {
+		return err
+	}
+	if err := backfillIsAutomatedPG(ctx, db); err != nil {
 		return err
 	}
 	runRepair, err := shouldRunTokenCoverageRepair(ctx, db, false)

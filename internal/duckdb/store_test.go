@@ -2480,10 +2480,11 @@ func TestTrendsTermsApplySessionFiltersAndSystemPrefixExclusion(t *testing.T) {
 	start := "2026-01-22T09:00:00.000Z"
 	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{
 		{
-			Session: syncSession("duck-trend-a", "alpha", "trend a", start, 2),
+			Session: syncSession("duck-trend-a", "alpha", "trend a", start, 3),
 			Messages: []db.Message{
 				syncMessage("duck-trend-a", 0, "user", db.SystemMsgPrefixes[0]+" seam", start),
 				syncMessage("duck-trend-a", 1, "user", "seam", start),
+				syncMessage("duck-trend-a", 2, "user", `<codex_internal_context source="goal"/unexpected>seam`, start),
 			},
 			DataVersion:     1,
 			ReplaceMessages: true,
@@ -2514,7 +2515,7 @@ func TestTrendsTermsApplySessionFiltersAndSystemPrefixExclusion(t *testing.T) {
 	}, trendTerms, "day")
 	require.NoError(t, err)
 	require.Len(t, trends.Series, 1)
-	assert.Equal(t, 1, trends.Series[0].Total)
+	assert.Equal(t, 2, trends.Series[0].Total)
 }
 
 func TestDailyUsageDefaultsToLocalTimezone(t *testing.T) {
