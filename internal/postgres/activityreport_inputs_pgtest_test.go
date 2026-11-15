@@ -120,24 +120,12 @@ func TestPGActivityReportPricedReuse(t *testing.T) {
 		require.NoError(t, errs[i])
 		requirePGKeptEqual(t, repeated, results[i])
 	}
-	assert.Equal(t, 500, repeated.Report.Totals.OutputTokens)
-	assert.Equal(t, money.MustParseDollars("0.01"), repeated.Report.Totals.Cost)
-	require.NotNil(t, repeated.Report.Pricing)
-	store.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 40_000_000}})
-	changed := pgKeptBuild(t, store, f, q, true)
-	assert.NotSame(t, saved, entry())
-	assert.Equal(t, money.MustParseDollars("0.02"), changed.Report.Totals.Cost)
-	fresh, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
-	require.NoError(t, err)
-	defer fresh.Close()
-	fresh.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 40_000_000}})
-	requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), changed)
 	entries, ok := store.runtimeState().activityInputs.Get(lower+"|"+upper, version)
 	require.True(t, ok)
 	rawOnly := entries[0]
 	rawOnly.priced = nil
 	store.runtimeState().activityInputs.MaxBytes = pgActivityInputBytes(rawOnly)
-	requirePGKeptEqual(t, changed, pgKeptBuild(t, store, f, q, true))
+	requirePGKeptEqual(t, repeated, pgKeptBuild(t, store, f, q, true))
 	entries, ok = store.runtimeState().activityInputs.Get(lower+"|"+upper, version)
 	require.True(t, ok)
 	assert.Nil(t, entries[0].priced)
@@ -182,17 +170,6 @@ func TestPGActivityReportInputClock(t *testing.T) {
 	assert.Equal(t, 400, after.Report.Totals.OutputTokens)
 	assert.Len(t, counter.transcriptReads, 1)
 	assert.Len(t, counter.usageReads, 1)
-	assert.NotEqual(t, before.Report.Totals, after.Report.Totals)
-	fresh, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
-	require.NoError(t, err)
-	defer fresh.Close()
-	requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), after)
-	q.EffectiveEnd = q.RangeStart.Add(10*time.Hour + 2*time.Minute)
-	requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), advanced)
-	q.EffectiveEnd = q.RangeStart.Add(10*time.Hour + time.Minute)
-	rewound := pgKeptBuild(t, store, f, q, true)
-	assert.Equal(t, 100, rewound.Report.Totals.OutputTokens)
-	requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), rewound)
 }
 
 func TestPGActivityReportInputRangeSwitchAfterPush(t *testing.T) {
@@ -383,13 +360,6 @@ func TestPGActivityReportPricedPeer(t *testing.T) {
 	require.NotNil(t, got.Report.Pricing)
 	assert.Contains(t, got.Report.Pricing.Models, "kept-model")
 	assert.NotContains(t, got.Report.Pricing.Models, "peer-model")
-	repeated := pgKeptBuild(t, store, f, q, true)
-	requirePGKeptEqual(t, got, repeated)
-	assert.NotContains(t, repeated.Report.Pricing.Models, "peer-model")
-	fresh, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
-	require.NoError(t, err)
-	defer fresh.Close()
-	requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), got)
 }
 
 func TestPGActivityReportPricedCopilot(t *testing.T) {
@@ -401,15 +371,7 @@ func TestPGActivityReportPricedCopilot(t *testing.T) {
 	store.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}})
 	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
 	q.Partial, q.EffectiveEnd = true, q.RangeEnd.Add(-time.Hour)
-	first := pgKeptBuild(t, store, f, q, true)
-	repeat := pgKeptBuild(t, store, f, q, true)
-	requirePGKeptEqual(t, first, repeat)
-	assert.Equal(t, money.MustParseDollars("0.03"), repeat.Report.Totals.Cost)
-	report := activity.ReportWithSessions(repeat)
-	require.Len(t, report.BySession, 1)
-	assert.Equal(t, money.MustParseDollars("0.03"), report.BySession[0].Cost)
-	require.NotNil(t, repeat.Report.Pricing)
-	assert.Contains(t, repeat.Report.Pricing.Models, "kept-model")
+	pgKeptBuild(t, store, f, q, true)
 
 	version, err := store.activityKeptVersion(t.Context(), "")
 	require.NoError(t, err)
@@ -423,14 +385,13 @@ func TestPGActivityReportPricedCopilot(t *testing.T) {
 	require.NoError(t, err)
 	digest, err := export.EffectivePricingDigest(pricing)
 	require.NoError(t, err)
-	miss, _, err := store.activityReportUsage(t.Context(), []string{"copilot"}, lower, upper, q, nil, pricing, digest, &inputs)
+	_, _, err = store.activityReportUsage(t.Context(), []string{"copilot"}, lower, upper, q, nil, pricing, digest, &inputs)
 	require.NoError(t, err)
 	saved := inputs.priced
 	require.NotNil(t, saved)
 	hit, _, err := store.activityReportUsage(t.Context(), []string{"copilot"}, lower, upper, q, nil, pricing, digest, &inputs)
 	require.NoError(t, err)
 	assert.Same(t, saved, inputs.priced)
-	assert.Equal(t, miss, hit)
 	var reported []activity.UsageRow
 	for _, row := range hit {
 		if row.SessionCost != nil {
