@@ -309,7 +309,7 @@ var mirrorTables = []tableSpec{
 			colDefault("content_version", tVersion, pushVersionCol),
 			// agentsview_message_rows_fingerprint hashes the message, tool
 			// call, result event, and image text rows stored for the
-			// session (see messageRowsFingerprint), so a later push can
+			// session (see messageRowsFingerprints), so a later push can
 			// tell that those rows are a prefix of the local session and
 			// append only the rest. Rows written before the column existed
 			// hold '' and get a full rewrite when their content changes.

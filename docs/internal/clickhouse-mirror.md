@@ -227,8 +227,9 @@ left superseded copies for merges to collapse.
 When the content fingerprint differs, the local session has at least
 `stored_message_count` messages, and the mirror row has a message rows
 fingerprint, the plan asks to keep the stored rows. The batch then hashes the
-rows it would write for that many leading local messages. A match proves the
-mirror already holds them, so the push:
+rows it would write, one message at a time, and records the hash after that
+many leading local messages on its way to the new message rows fingerprint. A
+match proves the mirror already holds those rows, so the push:
 
 1. Inserts the rows of the later messages, and the image text anchored after
    the last kept message, at the new version.

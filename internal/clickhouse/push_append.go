@@ -1,10 +1,12 @@
 package clickhouse
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/v2"
 	"fmt"
+	"slices"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -40,52 +42,61 @@ var messageOrdinalColumn = map[string]string{
 	"usage_messages":     "ordinal",
 }
 
-// messageRowsFingerprint hashes the rows a push stores in the ordinal-keyed
-// tables for the first n messages: each message row, its tool call and
-// result event rows, then the image text rows anchored at or before the
-// n-th message's ordinal. It returns "" when the messages are not in
-// strictly increasing ordinal order, since an append then cannot tell kept
-// rows from new ones.
-func messageRowsFingerprint(messages []db.Message, images []db.ImageTextRow, n int) (string, error) {
+// messageRowsFingerprints hashes the rows a push stores in the ordinal-keyed
+// tables, in one pass over the messages, and returns the hash after the
+// first keep messages and the hash after all of them. Each message
+// contributes its message row, its tool call and result event rows, then the
+// image text rows anchored after the previous message's ordinal and at or
+// before its own; image text after the last message is not hashed. The prefix
+// hash of a grown session therefore equals the full hash a push stored before
+// the session grew. Both hashes are "" when the messages are not in strictly
+// increasing ordinal order, since an append then cannot tell kept rows from
+// new ones. The prefix hash is "" when keep is 0.
+func messageRowsFingerprints(messages []db.Message, images []db.ImageTextRow, keep int) (prefix, full string, err error) {
 	if !ordinalsIncrease(messages) {
-		return "", nil
+		return "", "", nil
 	}
+	byOrdinal := slices.Clone(images)
+	slices.SortStableFunc(byOrdinal, func(a, b db.ImageTextRow) int {
+		return cmp.Compare(a.MessageOrdinal, b.MessageOrdinal)
+	})
 	h := sha256.New()
 	write := func(row []any) error {
-		data, err := json.Marshal(row)
-		if err != nil {
+		if err := json.MarshalWrite(h, row); err != nil {
 			return fmt.Errorf("encoding message rows fingerprint: %w", err)
 		}
-		_, _ = h.Write(data)
 		_, _ = h.Write([]byte{'\n'})
 		return nil
 	}
-	for _, m := range messages[:n] {
-		if err := write(messageRow(m, 0)); err != nil {
-			return "", err
+	next := 0
+	for i, m := range messages {
+		if i == keep && keep > 0 {
+			prefix = hex.EncodeToString(h.Sum(nil))
 		}
-		for i, tc := range m.ToolCalls {
-			if err := write(toolCallRow(m, tc, i, 0)); err != nil {
-				return "", err
+		if err := write(messageRow(m, 0)); err != nil {
+			return "", "", err
+		}
+		for j, tc := range m.ToolCalls {
+			if err := write(toolCallRow(m, tc, j, 0)); err != nil {
+				return "", "", err
 			}
 			for _, ev := range tc.ResultEvents {
-				if err := write(toolResultEventRow(m, i, ev, 0)); err != nil {
-					return "", err
+				if err := write(toolResultEventRow(m, j, ev, 0)); err != nil {
+					return "", "", err
 				}
 			}
 		}
-	}
-	if n > 0 {
-		last := messages[n-1].Ordinal
-		for _, r := range images {
-			if r.MessageOrdinal <= last {
-				if err := write(imageTextRow(r, 0)); err != nil {
-					return "", err
-				}
+		for ; next < len(byOrdinal) && byOrdinal[next].MessageOrdinal <= m.Ordinal; next++ {
+			if err := write(imageTextRow(byOrdinal[next], 0)); err != nil {
+				return "", "", err
 			}
 		}
 	}
-	return hex.EncodeToString(h.Sum(nil)), nil
+	full = hex.EncodeToString(h.Sum(nil))
+	if keep > 0 && keep == len(messages) {
+		prefix = full
+	}
+	return prefix, full, nil
 }
 
 func ordinalsIncrease(messages []db.Message) bool {

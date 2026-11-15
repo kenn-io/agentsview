@@ -1,6 +1,7 @@
 package clickhouse
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -29,29 +30,32 @@ func appendTestImages() []db.ImageTextRow {
 	}
 }
 
-// The fingerprint a push stores for all of a session's rows equals the
-// fingerprint the next push computes for the same leading messages after the
-// session grew, which is what lets it append.
-func TestMessageRowsFingerprintMatchesStoredPrefixAfterGrowth(t *testing.T) {
-	full := appendTestMessages()
+// The hash a push stores for all of a session's rows equals the prefix hash
+// the next push computes for the same leading messages after the session
+// grew, which is what lets it append.
+func TestMessageRowsFingerprintsMatchStoredPrefixAfterGrowth(t *testing.T) {
+	msgs := appendTestMessages()
 	images := appendTestImages()
-	stored, err := messageRowsFingerprint(full[:2], images[:1], 2)
+	storedPrefix, stored, err := messageRowsFingerprints(msgs[:2], images[:1], 2)
 	require.NoError(t, err)
 	require.NotEmpty(t, stored)
+	assert.Equal(t, stored, storedPrefix, "keeping every message hashes them all")
 
-	prefix, err := messageRowsFingerprint(full, images, 2)
+	prefix, all, err := messageRowsFingerprints(msgs, images, 2)
 	require.NoError(t, err)
 	assert.Equal(t, stored, prefix, "image text after the kept messages is not part of the prefix")
-
-	all, err := messageRowsFingerprint(full, images, len(full))
-	require.NoError(t, err)
 	assert.NotEqual(t, stored, all)
+
+	slices.Reverse(images)
+	prefix, _, err = messageRowsFingerprints(msgs, images, 2)
+	require.NoError(t, err)
+	assert.Equal(t, stored, prefix, "image text is hashed with its message whatever order it is listed in")
 }
 
-// Any change a kept row would carry changes the prefix fingerprint, so the
-// push rewrites the session instead of appending.
-func TestMessageRowsFingerprintTracksKeptRows(t *testing.T) {
-	stored, err := messageRowsFingerprint(appendTestMessages(), appendTestImages(), 2)
+// Any change a kept row would carry changes the prefix hash, so the push
+// rewrites the session instead of appending.
+func TestMessageRowsFingerprintsTrackKeptRows(t *testing.T) {
+	stored, _, err := messageRowsFingerprints(appendTestMessages(), appendTestImages(), 2)
 	require.NoError(t, err)
 	for name, change := range map[string]func(ms []db.Message, images []db.ImageTextRow){
 		"message content":   func(ms []db.Message, _ []db.ImageTextRow) { ms[0].Content = "edited" },
@@ -63,17 +67,18 @@ func TestMessageRowsFingerprintTracksKeptRows(t *testing.T) {
 	} {
 		ms, images := appendTestMessages(), appendTestImages()
 		change(ms, images)
-		got, err := messageRowsFingerprint(ms, images, 2)
+		got, _, err := messageRowsFingerprints(ms, images, 2)
 		require.NoError(t, err, name)
 		require.NotEmpty(t, got, name)
 		assert.NotEqual(t, stored, got, name)
 	}
 }
 
-func TestMessageRowsFingerprintRejectsUnorderedOrdinals(t *testing.T) {
+func TestMessageRowsFingerprintsRejectUnorderedOrdinals(t *testing.T) {
 	ms := appendTestMessages()
 	ms[2].Ordinal = 1
-	got, err := messageRowsFingerprint(ms, nil, 2)
+	prefix, full, err := messageRowsFingerprints(ms, nil, 2)
 	require.NoError(t, err)
-	assert.Empty(t, got)
+	assert.Empty(t, prefix)
+	assert.Empty(t, full)
 }

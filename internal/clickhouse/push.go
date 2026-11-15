@@ -1079,27 +1079,28 @@ func (s *Sync) pushSessionBatch(
 			// next push sees the change and rewrites the session.
 			w = rewriteSession
 		}
-		if w.keepMessages > 0 {
-			// The plan only knew the counts; keep the stored rows only if
-			// they are the rows this push would write for those messages.
-			kept, ok, err := s.keptPrefixMatches(p, w)
+		var rows string
+		if w.content {
+			keep := min(w.keepMessages, len(p.messages))
+			prefix, full, err := messageRowsFingerprints(p.messages, p.imageText, keep)
 			if err != nil {
 				return nil, err
 			}
-			if !ok {
+			rows = full
+			// The plan only knew the counts; keep the stored rows only if
+			// they are the rows this push would write for those messages.
+			switch {
+			case w.keepMessages == 0:
+			case w.keepMessages > len(p.messages) || prefix != w.keptMessageRows:
 				w = rewriteSession
-			} else {
-				keptThrough[sess.ID] = kept
+			default:
+				keptThrough[sess.ID] = p.messages[keep-1].Ordinal
 			}
 		}
 		n := 0
 		switch {
 		case w.content:
 			content = append(content, contentWrite{payload: p, keep: w.keepMessages})
-			rows, err := messageRowsFingerprint(p.messages, p.imageText, len(p.messages))
-			if err != nil {
-				return nil, err
-			}
 			publication := sessionPublication{contentVersion: version, messageRows: rows}
 			if w.keepMessages > 0 {
 				publication.contentVersion = w.keptVersion
@@ -1162,20 +1163,6 @@ func (s *Sync) pushSessionBatch(
 		return nil, err
 	}
 	return written, nil
-}
-
-// keptPrefixMatches reports whether the rows the mirror stores for the
-// planned number of leading messages are the rows this push would write for
-// them, and returns the ordinal of the last kept message.
-func (s *Sync) keptPrefixMatches(p sessionPayload, w sessionWrite) (int, bool, error) {
-	if w.keepMessages > len(p.messages) {
-		return 0, false, nil
-	}
-	prefix, err := messageRowsFingerprint(p.messages, p.imageText, w.keepMessages)
-	if err != nil || prefix != w.keptMessageRows {
-		return 0, false, err
-	}
-	return p.messages[w.keepMessages-1].Ordinal, true, nil
 }
 
 func sessionsOf(payloads []sessionPayload) []db.Session {
