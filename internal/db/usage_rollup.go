@@ -89,14 +89,14 @@ func usageTimezoneIdentityFor(
 }
 
 func usageTimezoneRuleFingerprint(name string, location *time.Location) string {
-	// Usage timestamps outside this range are treated as clock skew.
-	return timezoneRuleFingerprint(name, location, time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2101, 1, 1, 0, 0, 0, 0, time.UTC))
-}
-
-func timezoneRuleFingerprint(name string, location *time.Location, start, end time.Time) string {
 	digest := sha256.New()
 	writeUsageHashString(digest, name)
-	for cursor := start; cursor.Before(end); {
+	// Hash every rule regime and its exact end instant from 1970 through 2100
+	// so any zoneinfo update that adds, removes, or moves a transition in that
+	// range selects a new rollup generation. Usage timestamps outside the range
+	// would be clock skew, so rule changes beyond it are out of scope.
+	end := time.Date(2101, 1, 1, 0, 0, 0, 0, time.UTC)
+	for cursor := time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC); cursor.Before(end); {
 		localized := cursor.In(location)
 		zone, offset := localized.Zone()
 		writeUsageHashString(digest, zone)

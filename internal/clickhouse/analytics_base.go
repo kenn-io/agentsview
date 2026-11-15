@@ -15,8 +15,6 @@ import (
 
 type analyticsSQL struct{ store *Store }
 
-const trendsDiskVersion = "trends-1|"
-
 func (s *Store) analytics() *readbase.Analytics {
 	return readbase.NewAnalytics(analyticsSQL{s}, "clickhouse")
 }
@@ -624,30 +622,23 @@ func (s *Store) GetTrendsTerms(
 	if err != nil {
 		return load(ctx)
 	}
-	version, err := s.tablePartsFingerprint(ctx, []string{"sessions", "messages"})
-	if err != nil {
+	version, ok, err := s.usageRowsVersion(ctx, []string{"sessions"}, "")
+	if err != nil || !ok {
 		return load(ctx)
 	}
+	version += "|" + db.TrendsTimezoneKey(f)
 	if err := ctx.Err(); err != nil {
 		return db.TrendsTermsResponse{}, err
 	}
-	diskEnabled := f.Timezone != "Local" && s.usageDisk.Enabled()
 	diskSlot := "trends|" + string(key)
-	diskVersion := ""
-	if diskEnabled {
-		diskVersion = trendsDiskVersion + db.TrendsTimezoneKey(f) + "|" + version
-		if report, ok := s.trendsReads.Get(string(key), version); ok {
-			s.usageDisk.Keep(diskSlot, diskVersion, func() ([]byte, error) {
-				return json.Marshal(report, json.FormatNilSliceAsNull(true))
-			})
-			return report, nil
-		}
+	if report, ok := s.trendsReads.Get(string(key), version); ok {
+		s.usageDisk.Keep(diskSlot, version, func() ([]byte, error) {
+			return json.Marshal(report, json.FormatNilSliceAsNull(true))
+		})
+		return report, nil
 	}
 	return s.trendsReads.Do(ctx, string(key), version, func(ctx context.Context) (db.TrendsTermsResponse, error) {
-		if !diskEnabled {
-			return load(ctx)
-		}
-		if data, ok := s.usageDisk.Get(diskSlot, diskVersion); ok {
+		if data, ok := s.usageDisk.Get(diskSlot, version); ok {
 			var report db.TrendsTermsResponse
 			if json.Unmarshal(data, &report) == nil {
 				return report, nil
@@ -656,7 +647,7 @@ func (s *Store) GetTrendsTerms(
 		report, err := load(ctx)
 		if err == nil {
 			if data, marshalErr := json.Marshal(report, json.FormatNilSliceAsNull(true)); marshalErr == nil {
-				s.usageDisk.Put(diskSlot, diskVersion, data)
+				s.usageDisk.Put(diskSlot, version, data)
 			}
 		}
 		return report, err

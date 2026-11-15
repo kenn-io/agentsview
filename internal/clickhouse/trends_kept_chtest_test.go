@@ -49,6 +49,23 @@ func TestTrendsKeptRestart(t *testing.T) {
 		require.Equal(t, before, count(restarted))
 	}
 	require.NotEqual(t, reports[0].Buckets, reports[1].Buckets)
+	partsBefore, err := first.tablePartsFingerprint(t.Context(), []string{"sessions", "messages"})
+	require.NoError(t, err)
+	execPreparedUsage(t, first,
+		"SYSTEM STOP MERGES sessions", "SYSTEM STOP MERGES messages",
+		"INSERT INTO sessions SELECT * FROM sessions", "INSERT INTO messages SELECT * FROM messages",
+		"SYSTEM START MERGES sessions", "SYSTEM START MERGES messages",
+		"OPTIMIZE TABLE sessions FINAL", "OPTIMIZE TABLE messages FINAL")
+	partsAfter, err := first.tablePartsFingerprint(t.Context(), []string{"sessions", "messages"})
+	require.NoError(t, err)
+	require.NotEqual(t, partsBefore, partsAfter)
+	for i, zone := range []string{"UTC", "America/New_York"} {
+		restarted := newTestStore(t, syncer.conn, syncer.target)
+		require.NoError(t, restarted.openActivityReportDisk(syncer.target))
+		before := count(restarted)
+		require.Equal(t, reports[i], read(restarted, db.AnalyticsFilter{Timezone: zone, From: "2026-01-01", To: "2026-01-31"}))
+		require.Equal(t, before, count(restarted))
+	}
 	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "clickhouse-usage", "*", "*.gob"))
 	require.NoError(t, err)
 	require.Len(t, files, 2)
@@ -63,6 +80,13 @@ func TestTrendsKeptRestart(t *testing.T) {
 	for _, file := range files {
 		_, err := os.Stat(file)
 		require.NoError(t, err)
+	}
+	for i, zone := range []string{"UTC", "America/New_York"} {
+		restarted := newTestStore(t, syncer.conn, syncer.target)
+		require.NoError(t, restarted.openActivityReportDisk(syncer.target))
+		before := count(restarted)
+		require.Equal(t, reports[i], read(restarted, db.AnalyticsFilter{Timezone: zone, From: "2026-01-01", To: "2026-01-31"}))
+		require.Equal(t, before, count(restarted))
 	}
 	require.NoError(t, os.Remove(files[0]))
 	for _, zone := range []string{"UTC", "America/New_York"} {
@@ -103,7 +127,6 @@ func TestTrendsKeptRestart(t *testing.T) {
 	for _, filter := range []db.AnalyticsFilter{
 		{Timezone: "UTC", ActiveSince: "2026-01-01T00:00:00Z"},
 		{Timezone: "UTC", Termination: "active"},
-		{Timezone: "Local"},
 	} {
 		read(first, filter)
 	}
@@ -117,7 +140,7 @@ func TestTrendsKeptTimezoneProcess(t *testing.T) {
 		require.NoError(t, err)
 		defer store.Close()
 		require.NoError(t, store.openActivityReportDisk(target))
-		f := db.AnalyticsFilter{Timezone: "Test/Shift", Project: "alpha", From: "2026-01-01", To: "2026-01-31"}
+		f := db.AnalyticsFilter{Timezone: os.Getenv("TRENDS_TZ_FILTER"), Project: "alpha", From: "2026-01-01", To: "2026-01-31"}
 		terms := []db.TrendTermInput{{Term: "alpha", Variants: []string{"alpha"}, Matchers: []string{"alpha"}}}
 		report, err := store.GetTrendsTerms(t.Context(), f, terms, "day")
 		require.NoError(t, err)
@@ -157,20 +180,29 @@ func TestTrendsKeptTimezoneProcess(t *testing.T) {
 		n, _ := usageQueryCountsOf(t, store, "startsWith(trimLeft(query, ' \\n\\t\\r'), 'SELECT m.content, COALESCE(m.timestamp')")
 		return n
 	}
-	run := func(zone, date string) {
+	run := func(filter, zone, date string) {
 		t.Helper()
 		require.NoError(t, os.WriteFile(filepath.Join(zoneDir, "Test", "Shift"), readZone(zone), 0o600))
 		cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestTrendsKeptTimezoneProcess$")
-		cmd.Env = append(os.Environ(), "TRENDS_TZ_CHILD=1", "TRENDS_TZ_URL="+syncer.target.URL, "TRENDS_TZ_DATABASE="+syncer.target.Database, "TRENDS_TZ_DATE="+date, "ZONEINFO="+zoneDir)
+		cmd.Env = append(os.Environ(), "TRENDS_TZ_CHILD=1", "TRENDS_TZ_URL="+syncer.target.URL, "TRENDS_TZ_DATABASE="+syncer.target.Database, "TRENDS_TZ_DATE="+date, "TRENDS_TZ_FILTER="+filter, "ZONEINFO="+zoneDir, "TZ=:"+filepath.Join(zoneDir, "Test", "Shift"))
 		output, err := cmd.CombinedOutput()
 		require.NoError(t, err, "%s", output)
 	}
-	run("Etc/GMT+12", "2026-01-09")
+	run("Test/Shift", "Etc/GMT+12", "2026-01-09")
 	before := count()
-	run("Etc/GMT-12", "2026-01-10")
+	run("Test/Shift", "Etc/GMT-12", "2026-01-10")
 	after := count()
 	require.Greater(t, after, before)
-	run("Etc/GMT-12", "2026-01-10")
+	run("Test/Shift", "Etc/GMT-12", "2026-01-10")
+	require.Equal(t, after, count())
+	run("Local", "Etc/GMT+12", "2026-01-09")
+	before = count()
+	run("Local", "Etc/GMT+12", "2026-01-09")
+	require.Equal(t, before, count())
+	run("Local", "Etc/GMT-12", "2026-01-10")
+	after = count()
+	require.Greater(t, after, before)
+	run("Local", "Etc/GMT-12", "2026-01-10")
 	require.Equal(t, after, count())
 }
 
