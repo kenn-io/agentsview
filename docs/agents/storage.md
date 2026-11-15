@@ -902,20 +902,20 @@ than warm reads. Native PostgreSQL serves its direct read instead whenever the
 cache lacks current coverage for the timezone, the catalog or account generation
 changed, or more than 64 sessions changed. A background worker then reads all
 history in that timezone to rebuild the cache and claim coverage; see
-[Usage cache backfill](background-work.md#usage-cache-backfill). Format 24
-converts SQLite caches from formats 21 through 23 and keeps their facts. Formats
-21 and 22 rebuild daily rollups once; format 23 keeps them. Older formats and
-corrupt or incompatible caches rebuild. A copy failure leaves the old cache for
-a retry on the next launch. Both implementations are co-maintained under the
-same behavior contract: daily usage, top sessions, billed session counts,
-relaxed matching counts, and per-session usage must remain observably equal. The `pgtest` complete-result parity fixture
-is the acceptance boundary. Track the PostgreSQL-native optimization in
+[Usage cache backfill](background-work.md#usage-cache-backfill). Cache format 24
+converts SQLite caches from cache formats 21 through 23 and keeps their facts.
+Formats 21 and 22 rebuild daily rollups once; format 23 keeps them. Older formats
+and corrupt or incompatible caches rebuild. A copy failure leaves the old cache
+for a retry on the next launch. Both implementations are co-maintained under the
+same behavior contract: daily usage, top sessions,
+billed session counts, relaxed matching counts, and per-session usage must
+remain observably equal. The `pgtest` complete-result parity fixture is the
+acceptance boundary. Track the PostgreSQL-native optimization in
 [issue #1451](https://github.com/kenn-io/agentsview/issues/1451).
 
 The usage cache filename is derived from its format version and the archive
-`database_id`. A format or database-ID change selects a new generation without
-rewriting the archive. Future format changes reuse facts only through an audited
-conversion; otherwise the cache rebuilds. Facts contain only message- and
+`database_id`. A format or database-ID change selects a new generation; it does
+not migrate or rewrite the archive. Facts contain only message- and
 usage-event-derived data. Aggregate fingerprints bake session `agent`,
 `started_at`, `project`, `machine`, `git_branch`, `group_key`, the cron label
 derived from `session_name`, `is_automated`, and `user_message_count`. Those

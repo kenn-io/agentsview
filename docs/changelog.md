@@ -59,7 +59,8 @@ The latest release is
   use, after a price change, or after new account usage, Usage shows the direct
   PostgreSQL result and rebuilds the cache in the background. Its disposable
   cache lives in `<data-dir>/usage-postgres/`. SQLite keeps cached facts from
-  formats 21 through 23. Formats 21 and 22 rebuild daily rollups once; format 23
+  v0.47.0 and subsequent development builds (cache formats 21 through 23).
+  Formats 21 and 22 rebuild daily rollups once; format 23
   keeps them. Older formats and corrupt or incompatible caches rebuild. A failed
   copy keeps the old cache for another attempt on the next launch.
 

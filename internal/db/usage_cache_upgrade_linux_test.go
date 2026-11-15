@@ -32,7 +32,7 @@ func TestUsageCacheUpgradeCopyFailure(t *testing.T) {
 		assert.NoFileExists(t, usageCacheGenerationPath(archive, 24, id))
 		return
 	}
-	archive, old, id := copyUsageV23Fixture(t)
+	archive, old, id := copyUsageFixture(t, 23)
 	cache := openRawUsageCacheTestDB(t, old)
 	_, err := cache.ExecContext(t.Context(), `CREATE TABLE padding (data BLOB); INSERT INTO padding VALUES (zeroblob(4194304))`)
 	require.NoError(t, err)
@@ -106,7 +106,7 @@ func TestUsageCacheUpgradeCandidateModeDuringCopy(t *testing.T) {
 		require.NoError(t, <-done)
 		return
 	}
-	archive, old, id := copyUsageV23Fixture(t)
+	archive, old, id := copyUsageFixture(t, 23)
 	require.NoError(t, os.Chmod(filepath.Dir(archive), 0o755))
 	cache := openRawUsageCacheTestDB(t, old)
 	_, err := cache.ExecContext(t.Context(), `CREATE TABLE padding (data BLOB); INSERT INTO padding VALUES (zeroblob(67108864))`)

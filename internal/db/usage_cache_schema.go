@@ -525,10 +525,7 @@ func (m *usageCacheManager) Generation(
 
 	cache, err := m.openPersistentGeneration(ctx, databaseID)
 	if err != nil {
-		log.Printf(
-			"warning: usage cache is non-persistent because %s is unavailable: %v",
-			filepath.Dir(m.archivePath), err,
-		)
+		log.Printf("warning: opening persistent usage cache failed; using a temporary cache: %v", err)
 		cache, err = openTemporaryUsageCache(ctx, databaseID)
 		if err != nil {
 			return nil, fmt.Errorf("opening temporary usage cache: %w", err)
@@ -703,26 +700,10 @@ func publishUsageCache(
 		_ = os.Remove(temporaryPath)
 		return nil, false, err
 	}
-	seeded := false
-	if usageCacheFormatVersion == usageCacheUpgradeTo {
-		seeded, err = seedUpgradedUsageCache(ctx, archivePath, temporaryPath, databaseID)
-		if err != nil {
-			_ = removeUsageCacheFiles(temporaryPath)
-			return nil, false, err
-		}
-		if !seeded {
-			if err := removeUsageCacheFiles(temporaryPath); err != nil {
-				return nil, false, err
-			}
-			file, err := os.OpenFile(temporaryPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-			if err != nil {
-				return nil, false, err
-			}
-			if err := file.Close(); err != nil {
-				_ = removeUsageCacheFiles(temporaryPath)
-				return nil, false, err
-			}
-		}
+	seeded, err := seedUpgradedUsageCache(ctx, archivePath, temporaryPath, databaseID)
+	if err != nil {
+		_ = removeUsageCacheFiles(temporaryPath)
+		return nil, false, err
 	}
 	var cache *usageCache
 	if seeded {

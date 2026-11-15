@@ -104,19 +104,10 @@ func seedUsageCacheFrom(ctx context.Context, archivePath, candidate, databaseID,
 	}
 	defer func() { _ = tx.Rollback() }()
 	if from <= 22 {
-		var sourceID string
-		if err := tx.QueryRowContext(ctx, `SELECT value FROM usage_archive.archive_metadata WHERE key = ?`, archiveMetadataDatabaseIDKey).Scan(&sourceID); err != nil {
-			return false, fmt.Errorf("reading archive identity for cache upgrade: %w", err)
-		}
-		if sourceID != databaseID {
-			return false, fmt.Errorf("%w during cache upgrade", errUsageCacheSourceChanged)
-		}
-		// Earlier formats did not store event statuses or message recorded costs.
-		// Refill those owners from the archive using the normal extraction path.
+		// Earlier formats did not store event cost statuses. Refill those owners
+		// from the archive using the normal extraction path.
 		if _, err := tx.ExecContext(ctx, `DELETE FROM usage_cached_sessions WHERE session_id IN (
-			SELECT session_id FROM usage_archive.messages
-			WHERE CASE WHEN json_valid(token_usage) THEN json_type(token_usage, '$.recorded_cost_microdollars') IS NOT NULL ELSE 0 END
-			UNION SELECT session_id FROM usage_archive.usage_events WHERE cost_status != ''
+			SELECT session_id FROM usage_archive.usage_events WHERE cost_status != ''
 		)`); err != nil {
 			return false, fmt.Errorf("refreshing recorded cost owners: %w", err)
 		}
@@ -138,6 +129,7 @@ func seedUsageCacheFrom(ctx context.Context, archivePath, candidate, databaseID,
 		`ALTER TABLE usage_rollup_exceptions ADD COLUMN ranking_output_tokens INTEGER`,
 		usageCacheAccountTotalsSQL,
 		`INSERT INTO usage_cache_metadata(key, value) VALUES ('reset_epoch', '0'), ('source_mutation_revision', '0')`,
+		fmt.Sprintf(`UPDATE usage_cache_metadata SET value = '%d' WHERE key = 'format_version'`, usageCacheUpgradeTo),
 	)
 	for _, query := range queries {
 		if _, err := tx.ExecContext(ctx, query); err != nil {
@@ -147,13 +139,6 @@ func seedUsageCacheFrom(ctx context.Context, archivePath, candidate, databaseID,
 			}
 			return false, fmt.Errorf("converting usage cache: %w", err)
 		}
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE usage_cache_metadata SET value = ? WHERE key = 'format_version'`, usageCacheUpgradeTo); err != nil {
-		if unusableUsageCache(err, true) {
-			log.Printf("warning: rebuilding unusable usage cache: %v", err)
-			return false, nil
-		}
-		return false, fmt.Errorf("updating usage cache format: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return false, err

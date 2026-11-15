@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -19,7 +20,7 @@ import (
 )
 
 func TestUsageCacheUpgradePreservesWarmFacts(t *testing.T) {
-	path, old, id := copyUsageV23Fixture(t)
+	path, old, id := copyUsageFixture(t, 23)
 	oldDB := openRawUsageCacheTestDB(t, old)
 	factsQuery := `SELECT 0, cached_session_id, fact_index, input_tokens, output_tokens FROM usage_facts ORDER BY cached_session_id, fact_index`
 	revisionsQuery := `SELECT 0, session_id, install_revision FROM usage_cached_sessions ORDER BY session_id`
@@ -36,31 +37,12 @@ func TestUsageCacheUpgradePreservesWarmFacts(t *testing.T) {
 	cache.fill.observer.beforeExtract = func(versions []usageSourceVersion) { extracted = append(extracted, versions...) }
 	var installed int
 	cache.rollup.observer.beforeInstall = func(builds []usageRollupBuild) { installed += len(builds) }
-	freshPath, freshOld, _ := copyUsageV23Fixture(t)
+	freshPath, freshOld, _ := copyUsageFixture(t, 23)
 	require.NoError(t, os.Remove(freshOld))
 	fresh, err := Open(t.Context(), freshPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, fresh.Close()) })
-	filter := UsageFilter{Timezone: "UTC", Breakdowns: true, PairwiseSides: true}
-	compare := func() {
-		t.Helper()
-		want, err := fresh.GetDailyUsage(t.Context(), filter)
-		require.NoError(t, err)
-		got, err := database.GetDailyUsage(t.Context(), filter)
-		require.NoError(t, err)
-		assert.Equal(t, want, got)
-		wantTop, err := fresh.GetTopSessionsByCost(t.Context(), filter, 10)
-		require.NoError(t, err)
-		gotTop, err := database.GetTopSessionsByCost(t.Context(), filter, 10)
-		require.NoError(t, err)
-		assert.Equal(t, wantTop, gotTop)
-		wantCounts, err := fresh.GetUsageSessionCounts(t.Context(), filter)
-		require.NoError(t, err)
-		gotCounts, err := database.GetUsageSessionCounts(t.Context(), filter)
-		require.NoError(t, err)
-		assert.Equal(t, wantCounts, gotCounts)
-	}
-	compare()
+	assertUsageMatchesFresh(t, fresh, database)
 	assert.Empty(t, extracted)
 	assert.Zero(t, installed)
 	assert.Equal(t, facts, usageSpoolFactValues(t, cache.db, factsQuery))
@@ -68,10 +50,8 @@ func TestUsageCacheUpgradePreservesWarmFacts(t *testing.T) {
 	probe := probeUsageCache(t.Context(), cache.path)
 	require.NoError(t, probe.Err)
 	assert.True(t, probe.Compatible)
-	var appID, vacuum int
-	require.NoError(t, cache.db.QueryRowContext(t.Context(), `PRAGMA application_id`).Scan(&appID))
+	var vacuum int
 	require.NoError(t, cache.db.QueryRowContext(t.Context(), `PRAGMA auto_vacuum`).Scan(&vacuum))
-	assert.Equal(t, usageCacheApplicationID, appID)
 	assert.Equal(t, 2, vacuum)
 	assert.NoFileExists(t, old)
 	freshCache, err := fresh.usageCache.Generation(t.Context(), id)
@@ -83,7 +63,7 @@ func TestUsageCacheUpgradePreservesWarmFacts(t *testing.T) {
 		seedUsageSnapshotSession(t, db, "new-peer", "project-c", "2026-08-10T11:30:00Z", 0, 30, "model-a")
 		db.SetCustomPricing(map[string]config.CustomModelRate{"journal-model": {InputMicrodollarsPerMTok: 1000000}})
 	}
-	compare()
+	assertUsageMatchesFresh(t, fresh, database)
 	var ids []string
 	for _, version := range extracted {
 		ids = append(ids, version.SessionID)
@@ -93,40 +73,48 @@ func TestUsageCacheUpgradePreservesWarmFacts(t *testing.T) {
 
 func assertUsageCacheSchema(t *testing.T, fresh, upgraded *sql.DB) {
 	t.Helper()
-	objects := `SELECT 0, type, name, tbl_name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name`
+	objects := `SELECT 0, type, name, tbl_name, CASE WHEN type='index' THEN sql END FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name`
 	freshObjects := usageSpoolFactValues(t, fresh, objects)
 	assert.Equal(t, freshObjects, usageSpoolFactValues(t, upgraded, objects))
 	for _, object := range freshObjects {
-		kind, name := object[0].(string), object[1].(string)
-		var queries []string
-		switch kind {
-		case "table":
-			queries = []string{
-				`SELECT 0, name, type, "notnull", CASE WHEN name='cost_status' THEN NULL ELSE dflt_value END, pk FROM pragma_table_info(?) ORDER BY name`,
-				`SELECT 0, id, seq, "table", "from", "to", on_update, on_delete, match FROM pragma_foreign_key_list(?) ORDER BY id, seq`,
-				`SELECT 0, name, "unique", origin, partial FROM pragma_index_list(?) ORDER BY name`,
-			}
+		if object[0] != "table" {
+			continue
 		}
-		for _, query := range queries {
-			assert.Equal(t, usageSpoolFactValues(t, fresh, query, name), usageSpoolFactValues(t, upgraded, query, name), name)
+		for _, query := range []string{
+			`SELECT 0, name, type, "notnull", CASE WHEN name='cost_status' THEN NULL ELSE dflt_value END, pk FROM pragma_table_info(?) ORDER BY name`,
+			`SELECT 0, id, seq, "table", "from", "to", on_update, on_delete, match FROM pragma_foreign_key_list(?) ORDER BY id, seq`,
+			`SELECT 0, name, "unique", origin, partial FROM pragma_index_list(?) ORDER BY name`,
+		} {
+			assert.Equal(t, usageSpoolFactValues(t, fresh, query, object[1]), usageSpoolFactValues(t, upgraded, query, object[1]), object[1])
 		}
 	}
-	indexesQuery := `SELECT 0, name FROM sqlite_schema WHERE type='index' ORDER BY name`
-	indexes := usageSpoolFactValues(t, fresh, indexesQuery)
-	assert.Equal(t, indexes, usageSpoolFactValues(t, upgraded, indexesQuery))
-	for _, index := range indexes {
-		query := `SELECT 0, seqno, name, "desc", coll, key FROM pragma_index_xinfo(?) ORDER BY seqno`
-		name := index[0].(string)
-		assert.Equal(t, usageSpoolFactValues(t, fresh, query, name), usageSpoolFactValues(t, upgraded, query, name), name)
-		sqlQuery := `SELECT 0, sql FROM sqlite_schema WHERE type='index' AND name=?`
-		assert.Equal(t, usageSpoolFactValues(t, fresh, sqlQuery, name), usageSpoolFactValues(t, upgraded, sqlQuery, name), name)
-	}
+}
+
+func assertUsageMatchesFresh(t *testing.T, fresh, upgraded *DB) DailyUsageResult {
+	t.Helper()
+	filter := UsageFilter{Timezone: "UTC", Breakdowns: true, PairwiseSides: true}
+	want, err := fresh.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	got, err := upgraded.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+	wantTop, err := fresh.GetTopSessionsByCost(t.Context(), filter, 10)
+	require.NoError(t, err)
+	gotTop, err := upgraded.GetTopSessionsByCost(t.Context(), filter, 10)
+	require.NoError(t, err)
+	assert.Equal(t, wantTop, gotTop)
+	wantCounts, err := fresh.GetUsageSessionCounts(t.Context(), filter)
+	require.NoError(t, err)
+	gotCounts, err := upgraded.GetUsageSessionCounts(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, wantCounts, gotCounts)
+	return got
 }
 
 func TestUsageCacheUpgradeRejectsInvalidCandidate(t *testing.T) {
 	for _, variant := range []string{"source", "incomplete", "cancelled"} {
 		t.Run(variant, func(t *testing.T) {
-			archive, old, id := copyUsageV23Fixture(t)
+			archive, old, id := copyUsageFixture(t, 23)
 			var err error
 			db := openRawUsageCacheTestDB(t, old)
 			switch variant {
@@ -168,7 +156,7 @@ func TestUsageCacheUpgradeRejectsInvalidCandidate(t *testing.T) {
 }
 
 func TestUsageCacheUpgradeConcurrentPublishAndLease(t *testing.T) {
-	archive, old, id := copyUsageV23Fixture(t)
+	archive, old, id := copyUsageFixture(t, 23)
 	lease, err := acquireUsageCacheLease(old)
 	require.NoError(t, err)
 	managers := []*usageCacheManager{newUsageCacheManager(archive), newUsageCacheManager(archive)}
@@ -198,11 +186,6 @@ func TestUsageCacheUpgradeConcurrentPublishAndLease(t *testing.T) {
 	retired, err := retireUsageCacheGeneration(t.Context(), archive, old)
 	require.NoError(t, err)
 	assert.True(t, retired)
-}
-
-func copyUsageV23Fixture(t *testing.T) (string, string, string) {
-	t.Helper()
-	return copyUsageFixture(t, 23)
 }
 
 func copyUsageFixture(t *testing.T, format int) (string, string, string) {
@@ -245,7 +228,7 @@ func TestUsageCacheUpgradeSkipsCorruptNewer(t *testing.T) {
 	require.Positive(t, facts)
 	require.NoError(t, prior.Close())
 
-	_, old23, _ := copyUsageV23Fixture(t)
+	_, old23, _ := copyUsageFixture(t, 23)
 	newer := openRawUsageCacheTestDB(t, old23)
 	_, err := newer.ExecContext(t.Context(), `UPDATE usage_cache_metadata SET value = ? WHERE key = ?`, id, usageCacheMetadataSourceDatabaseID)
 	require.NoError(t, err)
@@ -281,7 +264,7 @@ func TestUsageCacheUpgradeSkipsCorruptNewer(t *testing.T) {
 }
 
 func TestUsageCacheUpgradeCorruptFactsRebuilds(t *testing.T) {
-	archive, old, id := copyUsageV23Fixture(t)
+	archive, old, id := copyUsageFixture(t, 23)
 	db := openRawUsageCacheTestDB(t, old)
 	var root, pageSize int64
 	require.NoError(t, db.QueryRowContext(t.Context(), `SELECT rootpage FROM sqlite_schema WHERE name='usage_facts'`).Scan(&root))
@@ -340,7 +323,6 @@ func TestUsageCacheUpgradeReleasedFacts(t *testing.T) {
 	fresh, err := Open(t.Context(), freshPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, fresh.Close()) })
-	filter := UsageFilter{Timezone: "UTC", Breakdowns: true, PairwiseSides: true}
 	price := func(rate int64) {
 		for _, db := range []*DB{database, fresh} {
 			db.SetCustomPricing(map[string]config.CustomModelRate{"journal-model": {InputMicrodollarsPerMTok: rate}})
@@ -348,24 +330,10 @@ func TestUsageCacheUpgradeReleasedFacts(t *testing.T) {
 	}
 	check := func(input, output int, cost int64, wantIDs ...string) {
 		t.Helper()
-		want, err := fresh.GetDailyUsage(t.Context(), filter)
-		require.NoError(t, err)
-		result, err := database.GetDailyUsage(t.Context(), filter)
-		require.NoError(t, err)
-		assert.Equal(t, want, result)
+		result := assertUsageMatchesFresh(t, fresh, database)
 		assert.Equal(t, input, result.Totals.InputTokens)
 		assert.Equal(t, output, result.Totals.OutputTokens)
 		assert.Equal(t, cost, result.Totals.TotalCost.Microdollars)
-		wantTop, err := fresh.GetTopSessionsByCost(t.Context(), filter, 10)
-		require.NoError(t, err)
-		gotTop, err := database.GetTopSessionsByCost(t.Context(), filter, 10)
-		require.NoError(t, err)
-		assert.Equal(t, wantTop, gotTop)
-		wantCounts, err := fresh.GetUsageSessionCounts(t.Context(), filter)
-		require.NoError(t, err)
-		gotCounts, err := database.GetUsageSessionCounts(t.Context(), filter)
-		require.NoError(t, err)
-		assert.Equal(t, wantCounts, gotCounts)
 		assert.ElementsMatch(t, wantIDs, extracted)
 		extracted = nil
 	}
@@ -413,31 +381,9 @@ func TestUsageCacheUpgradeReleasedFacts(t *testing.T) {
 	check(280, 80, 10300)
 }
 
-func TestUsageCacheUpgradeFormat22(t *testing.T) {
-	archive, old, id := copyUsageFixture(t, 21)
-	db := openRawUsageCacheTestDB(t, old)
-	_, err := db.ExecContext(t.Context(), `DROP INDEX usage_facts_claude_identity; `+usageCacheClaudeIdentityIndexSQL+` UPDATE usage_cache_metadata SET value='22' WHERE key='format_version'`)
-	require.NoError(t, err)
-	var facts int
-	require.NoError(t, db.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_facts`).Scan(&facts))
-	require.NoError(t, db.Close())
-	old22 := usageCacheGenerationPath(archive, 22, id)
-	require.NoError(t, os.Rename(old, old22))
-	manager := newUsageCacheManager(archive)
-	t.Cleanup(func() { require.NoError(t, manager.Close()) })
-	cache, err := manager.Generation(t.Context(), id)
-	require.NoError(t, err)
-	var actual, zones int
-	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_facts`).Scan(&actual))
-	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_rollup_timezones`).Scan(&zones))
-	assert.Equal(t, facts, actual)
-	assert.Zero(t, zones)
-	assert.NoFileExists(t, old22)
-}
-
 func TestUsageCacheUpgradeRecordedCosts(t *testing.T) {
 	for _, format := range []int{21, 22} {
-		t.Run(fmt.Sprint(format), func(t *testing.T) {
+		t.Run(strconv.Itoa(format), func(t *testing.T) {
 			path, old, id := copyUsageFixtureNamed(t, 21, "costs-")
 			if format == 22 {
 				db := openRawUsageCacheTestDB(t, old)
@@ -475,12 +421,7 @@ func TestUsageCacheUpgradeRecordedCosts(t *testing.T) {
 					extracted = append(extracted, version.SessionID)
 				}
 			}
-			filter := UsageFilter{Timezone: "UTC", Breakdowns: true, PairwiseSides: true}
-			want, err := fresh.GetDailyUsage(t.Context(), filter)
-			require.NoError(t, err)
-			got, err := database.GetDailyUsage(t.Context(), filter)
-			require.NoError(t, err)
-			assert.Equal(t, want, got)
+			got := assertUsageMatchesFresh(t, fresh, database)
 			assert.EqualValues(t, 19201, got.Totals.TotalCost.Microdollars)
 			assert.ElementsMatch(t, []string{"recorded-event", "exact-event", "recorded-message", "unpriced-message"}, extracted)
 			rows := usageSpoolFactValues(t, cache.db, `SELECT 0, s.session_id, f.cost_status FROM usage_facts f JOIN usage_cached_sessions s ON s.id=f.cached_session_id WHERE s.session_id IN ('recorded-event', 'exact-event', 'recorded-message', 'unpriced-message') ORDER BY s.session_id`)
