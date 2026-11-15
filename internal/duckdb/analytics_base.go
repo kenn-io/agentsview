@@ -265,8 +265,7 @@ func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids 
 		query += `
 				GROUP BY tc.session_id, tc.category,
 					TRIM(tc.tool_name), ` + group
-		observeAnalyticsQuery(query)
-		rows, qErr := s.store.queryContext(ctx, query, args...)
+		rows, qErr := s.QueryContext(ctx, query, args...)
 		if qErr != nil {
 			return qErr
 		}
@@ -293,8 +292,7 @@ func (s analyticsSQL) VisitSkills(ctx context.Context, f db.AnalyticsFilter, ids
 					` + readbase.AnalyticsAndClause(modelPred) + readbase.AnalyticsAndClause(windowPred) + `
 				GROUP BY tc.session_id, TRIM(COALESCE(tc.skill_name, '')),
 					date_trunc('minute', m.timestamp)`
-		observeAnalyticsQuery(query)
-		rows, qErr := s.store.queryContext(ctx, query, args...)
+		rows, qErr := s.QueryContext(ctx, query, args...)
 		if qErr != nil {
 			return qErr
 		}
