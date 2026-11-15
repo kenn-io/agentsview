@@ -952,10 +952,8 @@ hold, with that count in `matched_words`. Unquoted stop words do not count.
 Regular word forms count, and a quoted phrase inside the query requires its
 words together and in order. `--fts` and hybrid's keyword leg use the same word
 matching unless the query starts with a quote and holds only
-quoted phrases or FTS5 operators, which keeps FTS5 behavior on SQLite. A fully
-quoted `--fts` phrase reports `matched_words` as `0` on SQLite and as the number
-of query words on PostgreSQL, DuckDB, and ClickHouse. Other searches report
-`matched_words` as `0`.
+quoted phrases or FTS5 operators, which keeps FTS5 behavior. Other searches
+report `matched_words` as `0`.
 
 SQLite folds Latin accents and some other Unicode characters in word search.
 For example, `cafe` can match `café`, and `test` can match `teſt`. PostgreSQL,

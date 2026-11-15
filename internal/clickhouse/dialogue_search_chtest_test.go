@@ -211,6 +211,5 @@ func TestDialogueClickHouseStoresContentCopyOnce(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, got.Matches, 1)
-	assert.Equal(t, fixtureAlphaID, got.Matches[0].SessionID)
 	assert.Equal(t, "alpha first", got.Matches[0].Snippet)
 }

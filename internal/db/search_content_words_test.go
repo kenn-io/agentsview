@@ -69,11 +69,41 @@ func wordHits(page ContentSearchPage) []wordHit {
 	return out
 }
 
+func TestSearchContentRanksExactTextThenWords(t *testing.T) {
+	d := testDB(t)
+	requireFTS(t, d)
+	seedWordSearch(t, d, "proj",
+		[3]string{"one-word", "an invoice arrived", ""},
+		[3]string{"two-words", "we settled the rounding of invoices", ""},
+		[3]string{"unrelated", "nothing to see", ""},
+		[3]string{"tool", "ran the report", "invoice rounding decision recorded"},
+	)
+	search := func(pattern, mode string) []wordHit {
+		t.Helper()
+		page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: pattern, Mode: mode})
+		require.NoError(t, err)
+		return wordHits(page)
+	}
+
+	assert.Equal(t, []wordHit{
+		{"tool", "tool_result", 3},
+		{"two-words", "message", 2},
+		{"one-word", "message", 1},
+	}, search("invoice rounding decision", ""))
+	assert.Equal(t, []wordHit{{"two-words", "message", 0}}, search(`"rounding of invoices"`, ""))
+	assert.Equal(t, []wordHit{{"tool", "tool_result", 0}}, search(`“invoice rounding decision”`, ""))
+	assert.Equal(t, []wordHit{
+		{"two-words", "message", 2},
+		{"one-word", "message", 1},
+	}, search("invoice rounding decision", "fts"))
+}
+
 func TestSearchContentKeepsSubstringSearch(t *testing.T) {
 	d := testDB(t)
 	requireFTS(t, d)
 	seedWordSearch(t, d, "proj",
-		[3]string{"tool", "ran the report", "invoice rounding decision recorded"},
+		[3]string{"embedded", "prefixrounding happened", ""},
+		[3]string{"words", "rounding of invoices", "invoices need rounding"},
 		[3]string{"curly-tool", "no match", "found “invoices need” here"},
 	)
 	for _, tc := range []struct {
@@ -82,9 +112,14 @@ func TestSearchContentKeepsSubstringSearch(t *testing.T) {
 		want   []wordHit
 	}{
 		{
-			"curly quoted tool result with default sources",
-			ContentSearchFilter{Pattern: `“invoice rounding decision”`},
-			[]wordHit{{"tool", "tool_result", 0}},
+			"single word",
+			ContentSearchFilter{Pattern: "rounding"},
+			[]wordHit{{"embedded", "message", 0}, {"words", "message", 0}, {"words", "tool_result", 0}},
+		},
+		{
+			"no messages source",
+			ContentSearchFilter{Pattern: "invoices need", Sources: []string{"tool_result"}},
+			[]wordHit{{"words", "tool_result", 0}, {"curly-tool", "tool_result", 0}},
 		},
 		{
 			"curly quotes without messages are literal",
@@ -122,21 +157,57 @@ func TestSearchContentNaturalPhrasesMatchText(t *testing.T) {
 	d := testDB(t)
 	requireFTS(t, d)
 	seedWordSearch(t, d, "proj",
+		[3]string{"phrase", "rounding, of invoices decision", ""},
+		[3]string{"stemmed", "round of invoice decision", ""},
 		[3]string{"curly", "alpha beta gamma", ""},
 		[3]string{"separated", "alpha beta then gamma", ""},
 	)
-	seedWordSearch(t, d, "stemmed", [3]string{"stemmed", "round of invoice decision", ""})
 	for _, tc := range []struct {
-		pattern, mode, project string
-		want                   []wordHit
+		pattern, mode string
+		want          []wordHit
 	}{
-		{`decision "rounding of invoices"`, "fts", "stemmed", []wordHit{}},
-		{"alpha “beta gamma”", "", "proj", []wordHit{{"curly", "message", 3}}},
+		{`decision "rounding of invoices"`, "", []wordHit{{"phrase", "message", 4}}},
+		{`decision "rounding of invoices"`, "fts", []wordHit{{"phrase", "message", 4}}},
+		{`decision "rounding of invoices"`, "hybrid", []wordHit{{"phrase", "message", 4}}},
+		{`"rounding of invoices" decision`, "fts", []wordHit{{"phrase", "message", 4}}},
+		{`missing "rounding of invoices"`, "fts", []wordHit{{"phrase", "message", 3}}},
+		{"alpha “beta gamma”", "", []wordHit{{"curly", "message", 3}}},
 	} {
-		page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: tc.pattern, Mode: tc.mode, Project: tc.project})
+		page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: tc.pattern, Mode: tc.mode, KeywordOnly: tc.mode == "hybrid"})
 		require.NoError(t, err)
 		assert.Equal(t, tc.want, wordHits(page), "%s mode %q", tc.pattern, tc.mode)
 	}
+}
+
+func TestSearchContentPhraseWordPages(t *testing.T) {
+	d := testDB(t)
+	requireFTS(t, d)
+	seedWordSearch(t, d, "proj",
+		[3]string{"phrase-heavy", "alpha beta alpha beta alpha beta gamma", ""},
+		[3]string{"word-heavy", "alpha beta gamma gamma gamma gamma", ""},
+		[3]string{"balanced", "alpha beta gamma", ""},
+		[3]string{"partial", "alpha beta", ""},
+		[3]string{"partial2", "alpha beta", ""},
+		[3]string{"partial3", "alpha beta", ""},
+		[3]string{"partial4", "alpha beta", ""},
+		[3]string{"partial5", "alpha beta", ""},
+	)
+	filter := ContentSearchFilter{Pattern: `"alpha beta" gamma`, Mode: "fts", Limit: 20}
+	whole, err := d.SearchContent(t.Context(), filter)
+	require.NoError(t, err)
+	require.Len(t, whole.Matches, 8)
+	filter.Limit = 2
+	var paged []wordHit
+	for range 10 {
+		page, err := d.SearchContent(t.Context(), filter)
+		require.NoError(t, err)
+		paged = append(paged, wordHits(page)...)
+		if page.NextCursor == 0 {
+			break
+		}
+		filter.Cursor = page.NextCursor
+	}
+	assert.Equal(t, wordHits(whole), paged)
 }
 
 func TestSearchContentWordPagesFollowExactTotal(t *testing.T) {
@@ -179,42 +250,6 @@ func TestSearchContentWordPagesFollowExactTotal(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, page.Matches)
 	assert.Zero(t, page.NextCursor)
-
-	t.Run("phrase plus word", func(t *testing.T) {
-		d := testDB(t)
-		requireFTS(t, d)
-		seedWordSearch(t, d, "proj",
-			[3]string{"phrase-heavy", "alpha beta alpha beta alpha beta gamma", ""},
-			[3]string{"word-heavy", "alpha beta gamma gamma gamma gamma", ""},
-			[3]string{"balanced", "alpha beta gamma", ""},
-			[3]string{"partial", "alpha beta", ""},
-			[3]string{"partial2", "alpha beta", ""},
-			[3]string{"partial3", "alpha beta", ""},
-			[3]string{"partial4", "alpha beta", ""},
-			[3]string{"partial5", "alpha beta", ""},
-		)
-		whole, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: `"alpha beta" gamma`, Mode: "fts", Limit: 20})
-		require.NoError(t, err)
-		require.Len(t, whole.Matches, 8)
-		var paged []wordHit
-		cursor := 0
-		for range 10 {
-			page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: `"alpha beta" gamma`, Mode: "fts", Limit: 2, Cursor: cursor})
-			require.NoError(t, err)
-			paged = append(paged, wordHits(page)...)
-			if page.NextCursor == 0 {
-				break
-			}
-			assert.Equal(t, cursor+2, page.NextCursor)
-			cursor = page.NextCursor
-		}
-		assert.Equal(t, wordHits(whole), paged)
-
-		page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: `"alpha beta" gamma`, Mode: "fts", Limit: 2, Cursor: 8})
-		require.NoError(t, err)
-		assert.Empty(t, page.Matches)
-		assert.Zero(t, page.NextCursor)
-	})
 }
 
 func TestSearchContentWordTierOrder(t *testing.T) {

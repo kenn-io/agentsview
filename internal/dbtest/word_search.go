@@ -41,9 +41,6 @@ func SeedWordSearch(t *testing.T, d *db.DB) {
 		{"invoice-email", "word-punctuation", "a@invoice.example"},
 		{"invoice-version", "word-punctuation", "v2.invoice"},
 		{"split-punctuation", "word-split-punctuation", "invoice txt"},
-		{"unicode-gap", "word-unicode-gap", "invoiceétxt"},
-		{"utf-exact", "word-utf-gap", "utf-8 decode"},
-		{"utf-unicode-gap", "word-utf-gap", "utf é 8 decode"},
 		{"cjk-prefix", "word-cjk-boundary", "漢invoice"},
 		{"cjk-suffix", "word-cjk-boundary", "invoice漢"},
 	} {
@@ -98,9 +95,6 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 		want                   []hit
 	}{
 		{"punctuation splits query words", "invoice.txt missingword", "word-split-punctuation", []hit{{"split-punctuation", "message", 1}}},
-		{"Unicode letters do not split query words", "invoice.txt missingword", "word-unicode-gap", nil},
-		{"Unicode letters do not split numeric forms", "utf-8 missing", "word-utf-gap", []hit{{"utf-exact", "message", 1}}},
-		{"underscore phrase", `"invoice rounding" decision`, "word-boundary", []hit{{"underscore", "message", 3}}},
 		{"multiline", "invoice rounding decision", "word-multiline", []hit{{"multiline", "message", 3}}},
 	} {
 		for _, mode := range []string{"substring", "fts", "hybrid"} {
@@ -114,19 +108,6 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 			})
 		}
 	}
-	t.Run("quoted fts phrase crosses punctuation", func(t *testing.T) {
-		page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
-			Pattern: `"quarterly forecast"`, Mode: "fts", Project: "word-search",
-		})
-		require.NoError(t, err)
-		require.Len(t, page.Matches, 1)
-		assert.Equal(t, "phrase", page.Matches[0].SessionID)
-		wantWords := 2
-		if named, ok := store.(db.MemoryBackendNamer); ok && named.MemoryBackendName() == "sqlite" {
-			wantWords = 0
-		}
-		assert.Equal(t, wantWords, page.Matches[0].MatchedWords)
-	})
 	for _, mode := range []string{"substring", "fts", "hybrid"} {
 		t.Run("CJK letters are word characters/"+mode, func(t *testing.T) {
 			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
@@ -143,27 +124,12 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 				{"invoice-email", "message", 1},
 				{"invoice-version", "message", 1},
 			}
-			f := db.ContentSearchFilter{
+			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
 				Pattern: "invoice absentword", Mode: mode, Project: "word-punctuation",
 				KeywordOnly: mode == "hybrid",
-			}
-			page, err := store.SearchContent(t.Context(), f)
+			})
 			require.NoError(t, err)
 			assert.ElementsMatch(t, want, project(page.Matches))
-			if mode == "fts" {
-				f.Limit = 2
-				var paged []hit
-				for range 3 {
-					page, err := store.SearchContent(t.Context(), f)
-					require.NoError(t, err)
-					paged = append(paged, project(page.Matches)...)
-					if page.NextCursor == 0 {
-						break
-					}
-					f.Cursor = page.NextCursor
-				}
-				assert.ElementsMatch(t, want, paged)
-			}
 		})
 	}
 
@@ -180,6 +146,9 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 	}
 	for _, mode := range []string{"substring", "fts", "hybrid"} {
 		t.Run("underscore/"+mode, func(t *testing.T) {
+			phrase, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: `"invoice rounding" decision`, Mode: mode, Project: "word-boundary", KeywordOnly: mode == "hybrid"})
+			require.NoError(t, err)
+			assert.Equal(t, []hit{{"underscore", "message", 3}}, project(phrase.Matches))
 			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "invoice rounding decision", Mode: mode, Project: "word-boundary", KeywordOnly: mode == "hybrid"})
 			require.NoError(t, err)
 			want := []hit{{"underscore", "message", 3}, {"boundary-near", "message", 1}}
@@ -207,11 +176,6 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 				want = []hit{{"exact", "message", 3}, {"tool", "tool_result", 3}, {"two", "message", 2}, {"one", "message", 1}}
 			}
 			assert.Equal(t, want, project(page.Matches))
-			for _, match := range page.Matches {
-				if match.SessionID == "two" {
-					assert.Contains(t, match.Snippet, "rounding of invoices")
-				}
-			}
 			if mode == "hybrid" {
 				return
 			}

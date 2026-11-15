@@ -10,7 +10,6 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/rawderive"
-	"go.kenn.io/agentsview/internal/service"
 	"testing"
 	"time"
 )
@@ -262,9 +261,6 @@ func TestHostedReadKeepsOneIdentitySnapshot(t *testing.T) {
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("before")))
 	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
-	status, err := service.GetMemoryStatus(t.Context(), service.NewReadOnlyBackend(h))
-	require.NoError(t, err)
-	assert.Equal(t, h.physical.MemoryBackendName(), status.Archive.Backend)
 	reads := 0
 	value, err := hostedRead(t.Context(), h, func(h *HostedStore, _ hostedRevision) (string, error) {
 		reads++

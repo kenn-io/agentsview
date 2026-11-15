@@ -658,8 +658,10 @@ func TestPGSearchContentEmptyToolUseIDNotSuppressed(t *testing.T) {
 	}
 }
 
-// TestPGContentSearchTrigramIndex verifies EnsureSchema installs the trigram index used by content search. Index creation is
-// best-effort, so the check is skipped when pg_trgm cannot be installed.
+// TestPGContentSearchTrigramIndex verifies EnsureSchema installs the pg_trgm
+// extension and the messages.content trigram index that keeps ILIKE content
+// search off a sequential scan. Index creation is best-effort, so the check is
+// skipped on an instance where pg_trgm cannot be installed.
 func TestPGContentSearchTrigramIndex(t *testing.T) {
 	t.Parallel()
 	store := setupContentSearch(t)
@@ -700,7 +702,6 @@ func TestPGContentSearchTrigramIndex(t *testing.T) {
 	).Scan(&fastupdateOff), "query pg_class.reloptions")
 	assert.True(t, fastupdateOff,
 		"idx_messages_content_trgm must have fastupdate=off")
-
 }
 
 // TestPGContentSearchTrigramIndexUpgrade verifies the upgrade path: a store

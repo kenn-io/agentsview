@@ -18,6 +18,7 @@ func TestCockroachSchemaAndCodexScope(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, pg.Close()) })
 	require.NoError(t, EnsureSchema(t.Context(), pg, schema))
+
 	_, err = pg.ExecContext(t.Context(), `DELETE FROM sync_metadata WHERE key = $1`, codexThreadScopeMetadataKey)
 	require.NoError(t, err)
 	_, err = pg.ExecContext(t.Context(), `INSERT INTO excluded_sessions (id) VALUES ($1)`, codexTrashThread)

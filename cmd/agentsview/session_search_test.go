@@ -2,13 +2,13 @@ package main
 
 import (
 	"bytes"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -879,6 +879,73 @@ func TestSessionSearchSQLiteQuotedPatternOmitsFTSHint(t *testing.T) {
 	require.Len(t, decodeCLIJSON[service.ContentSearchResult](t, fts).Matches, 1)
 }
 
+func TestSessionSearchRemoteFTSHints(t *testing.T) {
+	newAgentDataDir(t)
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	require.NoError(t, os.WriteFile(tokenFile, []byte("search-token"), 0o600))
+	ftsCalls, backend := 0, ""
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "Bearer search-token", r.Header.Get("Authorization"))
+		if r.URL.Path == "/api/v1/memory/status" {
+			if backend == "" {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"status":"ready","observed_at":"2026-01-01T00:00:00Z","archive":{"backend":"` + backend + `","read_only":true},"lexical":{"status":"ready"},"semantic":{"status":"ready"},"sources":{"status":"ready"}}`))
+			return
+		}
+		if r.URL.Query().Get("mode") == "fts" {
+			ftsCalls++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"matches":[{"session_id":"visible"}]}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("include_one_shot") == "true" {
+			_, _ = w.Write([]byte(`{"matches":[{"session_id":"hidden"}]}`))
+		} else {
+			_, _ = w.Write([]byte(`{"matches":[]}`))
+		}
+	}))
+	defer ts.Close()
+	for _, tc := range []struct {
+		backend, pattern, source string
+		regex, hint              bool
+	}{
+		{"cockroach", "decode error notes", "", false, true},
+		{"cockroach", "decode error notes", "messages", false, true},
+		{"cockroach", "decode error notes", "tool_result", false, false},
+		{"cockroach", "decoding", "messages", false, false},
+		{"cockroach", "decode error notes", "messages", true, false},
+		{"", "decode error notes", "messages", false, true},
+		{"postgres", "decode error notes", "messages", false, false},
+	} {
+		before := ftsCalls
+		backend = tc.backend
+		out, err := executeCommand(newRootCommand(), "session", "--server", ts.URL, "--server-token-file", tokenFile, "search", tc.pattern, "--in", tc.source, "--json", "--regex="+strconv.FormatBool(tc.regex))
+		require.NoError(t, err)
+		got := decodeCLIJSON[struct {
+			Hints []contentSearchCLIHint `json:"hints"`
+		}](t, out)
+		var ftsHints []contentSearchCLIHint
+		for _, hint := range got.Hints {
+			if hint.Code == "try_fts" {
+				ftsHints = append(ftsHints, hint)
+			}
+		}
+		if tc.hint {
+			require.Len(t, ftsHints, 1)
+			assert.Equal(t, before+1, ftsCalls)
+			assert.Contains(t, ftsHints[0].Next, "--server="+ts.URL)
+			assert.Contains(t, ftsHints[0].Next, "--server-token-file="+tokenFile)
+		} else {
+			assert.Empty(t, ftsHints)
+			assert.Equal(t, before, ftsCalls)
+		}
+	}
+}
+
 func TestSessionSearchRetryQuotesForPlatform(t *testing.T) {
 	root := newRootCommand()
 	cmd, _, err := root.Find([]string{"session", "search"})
@@ -910,75 +977,6 @@ func TestSessionSearchRetryQuotesForPlatform(t *testing.T) {
 		output, err := exec.CommandContext(t.Context(), powershell, "-NoProfile", "-NonInteractive", "-Command", "function agentsview { $args[-1] }; "+windowsRetry).CombinedOutput()
 		require.NoError(t, err, string(output))
 		assert.Equal(t, "can't decode", strings.TrimSpace(string(output)))
-	}
-}
-
-func TestSessionSearchRemoteDefaultFTSHint(t *testing.T) {
-	for _, tc := range []struct {
-		name, backend, pattern, mode string
-		flags                        []string
-		retry                        bool
-	}{
-		{name: "cockroach", backend: "cockroach", pattern: "invoice rounding", mode: "substring", retry: true},
-		{name: "old server", pattern: "invoice rounding", mode: "substring", retry: true},
-		{name: "postgres", backend: "postgres", pattern: "invoice rounding", mode: "substring"},
-		{name: "tool result", backend: "cockroach", pattern: "invoice rounding", mode: "substring", flags: []string{"--in", "tool_result"}},
-		{name: "single word", backend: "cockroach", pattern: "invoice", mode: "substring"},
-		{name: "regex", backend: "cockroach", pattern: "invoice rounding", mode: "regex", flags: []string{"--regex"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			newAgentDataDir(t)
-			tokenFile := filepath.Join(t.TempDir(), "token")
-			require.NoError(t, os.WriteFile(tokenFile, []byte("test-token"), 0o600))
-			var modes []string
-			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				assert.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
-				if r.URL.Path == "/api/v1/memory/status" {
-					if tc.backend == "" {
-						http.NotFound(w, r)
-					} else {
-						w.Header().Set("Content-Type", "application/json")
-						_, _ = fmt.Fprintf(w, `{"archive":{"backend":%q},"lexical":{"status":"ready"}}`, tc.backend)
-					}
-					return
-				}
-				assert.Equal(t, "/api/v1/search/content", r.URL.Path)
-				assert.Equal(t, tc.pattern, r.URL.Query().Get("pattern"))
-				mode := r.URL.Query().Get("mode")
-				modes = append(modes, mode)
-				w.Header().Set("Content-Type", "application/json")
-				if mode == "fts" {
-					_, _ = w.Write([]byte(`{"matches":[{"session_id":"match","location":"message","snippet":"invoices"}]}`))
-					return
-				}
-				_, _ = w.Write([]byte(`{"matches":[]}`))
-			}))
-			defer ts.Close()
-
-			cmd := newRootCommand()
-			var stdout, stderr bytes.Buffer
-			cmd.SetOut(&stdout)
-			cmd.SetErr(&stderr)
-			// Include every session category to avoid a hidden-result retry
-			// adding another substring call to modes.
-			args := []string{"session", "--server", ts.URL, "--server-token-file", tokenFile, "search", tc.pattern, "--include-children", "--include-automated", "--include-one-shot", "--json"}
-			cmd.SetArgs(append(args, tc.flags...))
-			require.NoError(t, cmd.Execute())
-			if tc.retry {
-				assert.Equal(t, []string{"substring", "fts"}, modes)
-				got := decodeCLIJSON[struct {
-					Hints []contentSearchCLIHint `json:"hints"`
-				}](t, stdout.String())
-				require.Len(t, got.Hints, 1)
-				assert.Equal(t, "try_fts", got.Hints[0].Code)
-				assert.Contains(t, got.Hints[0].Next, "--fts=true")
-				assert.Contains(t, got.Hints[0].Next, "--server="+ts.URL)
-				assert.Contains(t, got.Hints[0].Next, "--server-token-file="+tokenFile)
-			} else {
-				assert.Equal(t, []string{tc.mode}, modes)
-				assert.NotContains(t, stdout.String(), "try_fts")
-			}
-		})
 	}
 }
 

@@ -52,13 +52,6 @@ func WordSnippetRange(body, pattern string, words ContentWords) (int, int) {
 // substring or fts search. It returns f with a fully quoted pattern unquoted.
 func RouteContentWords(f ContentSearchFilter) (ContentSearchFilter, ContentWords, bool) {
 	f, q, ok := routeContentWords(f)
-	// Mirrors use phrase boundaries for a single quoted FTS phrase. SQLite
-	// sends that expression to FTS5 directly.
-	if !ok && f.Mode == "fts" {
-		if _, quoted := unquoteContentSearch(f.Pattern); quoted {
-			q, ok = contentWordsQuery(f.Pattern)
-		}
-	}
 	return f, ContentWords{Terms: q.forms, Phrases: q.phrases}, ok
 }
 
