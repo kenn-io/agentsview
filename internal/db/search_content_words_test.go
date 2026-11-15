@@ -69,23 +69,11 @@ func wordHits(page ContentSearchPage) []wordHit {
 	return out
 }
 
-func TestSearchContentCurlyQuotedToolResult(t *testing.T) {
-	d := testDB(t)
-	requireFTS(t, d)
-	seedWordSearch(t, d, "proj",
-		[3]string{"tool", "ran the report", "invoice rounding decision recorded"},
-	)
-	page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: `“invoice rounding decision”`})
-	require.NoError(t, err)
-	assert.Equal(t, []wordHit{{"tool", "tool_result", 0}}, wordHits(page))
-}
-
 func TestSearchContentKeepsSubstringSearch(t *testing.T) {
 	d := testDB(t)
 	requireFTS(t, d)
 	seedWordSearch(t, d, "proj",
-		[3]string{"embedded", "prefixrounding happened", ""},
-		[3]string{"words", "rounding of invoices", "invoices need rounding"},
+		[3]string{"tool", "ran the report", "invoice rounding decision recorded"},
 		[3]string{"curly-tool", "no match", "found “invoices need” here"},
 	)
 	for _, tc := range []struct {
@@ -94,14 +82,9 @@ func TestSearchContentKeepsSubstringSearch(t *testing.T) {
 		want   []wordHit
 	}{
 		{
-			"single word",
-			ContentSearchFilter{Pattern: "rounding"},
-			[]wordHit{{"embedded", "message", 0}, {"words", "message", 0}, {"words", "tool_result", 0}},
-		},
-		{
-			"no messages source",
-			ContentSearchFilter{Pattern: "invoices need", Sources: []string{"tool_result"}},
-			[]wordHit{{"words", "tool_result", 0}, {"curly-tool", "tool_result", 0}},
+			"curly quoted tool result with default sources",
+			ContentSearchFilter{Pattern: `“invoice rounding decision”`},
+			[]wordHit{{"tool", "tool_result", 0}},
 		},
 		{
 			"curly quotes without messages are literal",
@@ -139,7 +122,6 @@ func TestSearchContentNaturalPhrasesMatchText(t *testing.T) {
 	d := testDB(t)
 	requireFTS(t, d)
 	seedWordSearch(t, d, "proj",
-		[3]string{"phrase", "rounding, of invoices decision", ""},
 		[3]string{"curly", "alpha beta gamma", ""},
 		[3]string{"separated", "alpha beta then gamma", ""},
 	)

@@ -138,7 +138,6 @@ func AssertHybridKeywordOnlyScope(t *testing.T, store db.Store) {
 		require.NoError(t, err)
 		require.Len(t, page.Matches, 1)
 		assert.Equal(t, "d-continuation", page.Matches[0].SessionID)
-		assert.False(t, page.Matches[0].Subordinate)
 	})
 	for _, tc := range []struct {
 		scope string

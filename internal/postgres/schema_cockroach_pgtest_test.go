@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/agentsview/internal/service"
 )
 
 func TestCockroachSchemaAndCodexScope(t *testing.T) {
@@ -19,15 +18,6 @@ func TestCockroachSchemaAndCodexScope(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, pg.Close()) })
 	require.NoError(t, EnsureSchema(t.Context(), pg, schema))
-	store, err := NewStore(t.Context(), pgURL, schema, true)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	if store.cockroach {
-		status, err := service.GetMemoryStatus(t.Context(), service.NewReadOnlyBackend(store))
-		require.NoError(t, err)
-		require.Equal(t, "cockroach", status.Archive.Backend)
-	}
-
 	_, err = pg.ExecContext(t.Context(), `DELETE FROM sync_metadata WHERE key = $1`, codexThreadScopeMetadataKey)
 	require.NoError(t, err)
 	_, err = pg.ExecContext(t.Context(), `INSERT INTO excluded_sessions (id) VALUES ($1)`, codexTrashThread)

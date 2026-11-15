@@ -18,13 +18,22 @@ import (
 func TestDuckDBDialogueSearchParity(t *testing.T) {
 	local := newLocalDB(t)
 	dbtest.SeedDialogueSearch(t, local)
-	dbtest.SeedWordSearch(t, local)
 	path := filepath.Join(t.TempDir(), "dialogue.duckdb")
 	_, err := Push(t.Context(), path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	store := openPushedStore(t, path)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	dbtest.AssertDialogueSearchParity(t, local, store, "substring", "regex", "fts")
+}
+
+func TestDuckDBWordSearchParity(t *testing.T) {
+	local := newLocalDB(t)
+	dbtest.SeedWordSearch(t, local)
+	path := filepath.Join(t.TempDir(), "words.duckdb")
+	_, err := Push(t.Context(), path, local, "m", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+	store := openPushedStore(t, path)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	dbtest.AssertWordSearch(t, store)
 }
 

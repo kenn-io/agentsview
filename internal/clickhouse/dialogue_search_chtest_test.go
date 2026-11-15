@@ -19,7 +19,6 @@ func TestClickHouseDialogueSearchParity(t *testing.T) {
 	t.Parallel()
 	local, target := seedFixture(t)
 	dbtest.SeedDialogueSearch(t, local)
-	dbtest.SeedWordSearch(t, local)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
 	_, err := syncer.Push(t.Context(), false, nil)
 	require.NoError(t, err)
@@ -27,6 +26,18 @@ func TestClickHouseDialogueSearchParity(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	dbtest.AssertDialogueSearchParity(t, local, store, "substring", "regex", "fts")
+}
+
+func TestClickHouseWordSearchParity(t *testing.T) {
+	t.Parallel()
+	local, target := seedFixture(t)
+	dbtest.SeedWordSearch(t, local)
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	_, err := syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	store, err := NewStore(t.Context(), target)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	dbtest.AssertWordSearch(t, store)
 }
 
@@ -196,10 +207,10 @@ func TestDialogueClickHouseStoresContentCopyOnce(t *testing.T) {
 	assert.True(t, isNull)
 	assert.Zero(t, size, "the rewrite must drop the copy's bytes, not only mask them")
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
-		Pattern: "alpha first", Mode: "substring", Sources: []string{"messages"}, IncludeOneShot: true,
+		Pattern: `"alpha first"`, Mode: "substring", Sources: []string{"messages"}, IncludeOneShot: true,
 	})
 	require.NoError(t, err)
-	require.NotEmpty(t, got.Matches)
+	require.Len(t, got.Matches, 1)
 	assert.Equal(t, fixtureAlphaID, got.Matches[0].SessionID)
 	assert.Equal(t, "alpha first", got.Matches[0].Snippet)
 }

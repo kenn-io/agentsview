@@ -9,22 +9,19 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/service"
 )
 
 func TestPGDialogueSearchParity(t *testing.T) {
 	t.Parallel()
 	syncer, local, _, ctx := newSessionProvenancePushSync(t, "agentsview_dialogue_search_test")
 	dbtest.SeedDialogueSearch(t, local)
-	dbtest.SeedWordSearch(t, local)
 	_, err := syncer.Push(ctx, true, nil)
 	require.NoError(t, err)
 	store, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
 	require.NoError(t, err)
 	defer store.Close()
 	dbtest.AssertDialogueSearchParity(t, local, store, "substring", "regex", "fts")
-	if !store.cockroach {
-		dbtest.AssertWordSearch(t, store)
-	}
 	t.Run("fts ignores sources", func(t *testing.T) {
 		for _, pattern := range []string{"answerneedle", "reasoningneedle"} {
 			f := db.ContentSearchFilter{Pattern: pattern, Mode: "fts", Project: "dialogue-search", Sources: []string{"thinking"}, Limit: 50}
@@ -72,12 +69,29 @@ func TestPGDialogueSearchParity(t *testing.T) {
 	})
 }
 
+func TestPGWordSearchParity(t *testing.T) {
+	t.Parallel()
+	syncer, local, _, ctx := newSessionProvenancePushSync(t, "agentsview_word_search_test")
+	dbtest.SeedWordSearch(t, local)
+	_, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	if !store.cockroach {
+		dbtest.AssertWordSearch(t, store)
+	}
+}
+
 func TestPGCockroachNaturalFtsCompatibility(t *testing.T) {
 	t.Parallel()
 	store := setupContentSearch(t)
 	if !store.cockroach {
 		t.Skip("CockroachDB only")
 	}
+	status, err := service.GetMemoryStatus(t.Context(), service.NewReadOnlyBackend(store))
+	require.NoError(t, err)
+	assert.Equal(t, "cockroach", status.Archive.Backend)
 	insertCSSession(t, store, "crdb-search-compat", "search-compat", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
 	insertCSMessage(t, store, "crdb-search-compat", 0, "user",

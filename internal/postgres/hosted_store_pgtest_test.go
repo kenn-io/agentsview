@@ -10,6 +10,7 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/rawderive"
+	"go.kenn.io/agentsview/internal/service"
 	"testing"
 	"time"
 )
@@ -75,9 +76,6 @@ func TestHostedPublicReadBoundary(t *testing.T) {
 	store, err := NewHostedStore(t.Context(), f.dsn, f.schema, f.tenant, false)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	named, ok := any(store).(db.MemoryBackendNamer)
-	require.True(t, ok)
-	assert.Equal(t, "postgres", named.MemoryBackendName())
 	session, err := store.GetSession(t.Context(), "codex:portable")
 	require.NoError(t, err)
 	require.NotNil(t, session)
@@ -264,6 +262,9 @@ func TestHostedReadKeepsOneIdentitySnapshot(t *testing.T) {
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("before")))
 	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
+	status, err := service.GetMemoryStatus(t.Context(), service.NewReadOnlyBackend(h))
+	require.NoError(t, err)
+	assert.Equal(t, h.physical.MemoryBackendName(), status.Archive.Backend)
 	reads := 0
 	value, err := hostedRead(t.Context(), h, func(h *HostedStore, _ hostedRevision) (string, error) {
 		reads++

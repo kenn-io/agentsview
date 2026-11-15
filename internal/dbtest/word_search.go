@@ -137,42 +137,36 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 			assert.Empty(t, page.Matches)
 		})
 		t.Run("partial punctuation candidates keep word boundaries/"+mode, func(t *testing.T) {
-			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
-				Pattern: "invoice absentword", Mode: mode, Project: "word-punctuation",
-				KeywordOnly: mode == "hybrid",
-			})
-			require.NoError(t, err)
-			assert.ElementsMatch(t, []hit{
+			want := []hit{
 				{"invoice-dot", "message", 1},
 				{"invoice-path", "message", 1},
 				{"invoice-email", "message", 1},
 				{"invoice-version", "message", 1},
-			}, project(page.Matches))
-		})
-	}
-	t.Run("partial punctuation paging", func(t *testing.T) {
-		f := db.ContentSearchFilter{
-			Pattern: "invoice absentword", Mode: "fts", Project: "word-punctuation", Limit: 2,
-		}
-		var paged []hit
-		for range 3 {
+			}
+			f := db.ContentSearchFilter{
+				Pattern: "invoice absentword", Mode: mode, Project: "word-punctuation",
+				KeywordOnly: mode == "hybrid",
+			}
 			page, err := store.SearchContent(t.Context(), f)
 			require.NoError(t, err)
-			for _, match := range page.Matches {
-				paged = append(paged, hit{match.SessionID, match.Location, match.MatchedWords})
+			assert.ElementsMatch(t, want, project(page.Matches))
+			if mode == "fts" {
+				f.Limit = 2
+				var paged []hit
+				for range 3 {
+					page, err := store.SearchContent(t.Context(), f)
+					require.NoError(t, err)
+					paged = append(paged, project(page.Matches)...)
+					if page.NextCursor == 0 {
+						break
+					}
+					f.Cursor = page.NextCursor
+				}
+				assert.ElementsMatch(t, want, paged)
 			}
-			if page.NextCursor == 0 {
-				break
-			}
-			f.Cursor = page.NextCursor
-		}
-		assert.ElementsMatch(t, []hit{
-			{"invoice-dot", "message", 1},
-			{"invoice-path", "message", 1},
-			{"invoice-email", "message", 1},
-			{"invoice-version", "message", 1},
-		}, paged)
-	})
+		})
+	}
+
 	for _, mode := range []string{"substring", "fts", "hybrid"} {
 		t.Run("exact phrase snippet/"+mode, func(t *testing.T) {
 			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
