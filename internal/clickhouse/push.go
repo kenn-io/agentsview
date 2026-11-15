@@ -734,11 +734,6 @@ func (s *Sync) deleteMirrorSessions(ctx context.Context, ids []string) error {
 				return fmt.Errorf("deleting clickhouse %s rows: %w", table, err)
 			}
 		}
-		if s.hooks != nil && s.hooks.beforeDeletedSessions != nil {
-			if err := s.hooks.beforeDeletedSessions(batch); err != nil {
-				return err
-			}
-		}
 		for _, table := range []string{usageSessionSnapshotTable, "sessions"} {
 			if _, err := s.conn.ExecContext(ctx,
 				"DELETE FROM "+table+" WHERE id IN ("+placeholders+")", args...); err != nil {

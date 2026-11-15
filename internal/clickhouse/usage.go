@@ -2741,11 +2741,7 @@ func (s *Store) usageCarryPublished(ctx context.Context, version string) bool {
 // pricingDigest names the price records the read joins; see usageRowsVersion.
 func (s *Store) usageReadFingerprint(ctx context.Context, state preparedUsageState, pricingDigest string) (string, error) {
 	if !state.ready {
-		fingerprint, err := s.tablePartsFingerprint(ctx, chUsageCarryTables)
-		if err != nil {
-			return "", err
-		}
-		return "raw|" + fingerprint, nil
+		return s.tablePartsFingerprint(ctx, chUsageCarryTables)
 	}
 	if len(state.raw) == 0 {
 		version, ok, err := s.usageRowsVersion(ctx, chUsageReadTables, pricingDigest)

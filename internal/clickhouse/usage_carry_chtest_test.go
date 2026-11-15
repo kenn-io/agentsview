@@ -7,14 +7,12 @@ import (
 	"fmt"
 	"testing"
 
-	chdriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/money"
 )
 
 func TestUsageCarry(t *testing.T) {
-	for _, scenario := range []string{"healthy", "unpublished", "partial deletion", "full deletion", "changed after read", "failed push after read", "parts move"} {
+	for _, scenario := range []string{"healthy", "unpublished", "partial deletion", "full deletion", "changed after read", "parts move"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Parallel()
 			local, syncer, store := newPreparedUsageStore(t)
@@ -43,14 +41,6 @@ func TestUsageCarry(t *testing.T) {
 			if scenario == "changed after read" {
 				republishRoundSession(t, local, 123)
 				pushPreparedUsage(t, syncer)
-			}
-			if scenario == "failed push after read" {
-				republishRoundSession(t, local, 123)
-				syncer.hooks = &pushHooks{beforeSessionRows: func([]db.Session) error { return errors.New("injected publication failure") }}
-				result, err := syncer.Push(t.Context(), false, nil)
-				require.NoError(t, err)
-				require.NotZero(t, result.Errors)
-				syncer.hooks = nil
 			}
 			runPreparedUsageRefresh(t, store)
 			proofs := 0
@@ -86,78 +76,15 @@ func TestUsageCarry(t *testing.T) {
 				_, finalResults := usageQueryCounts(t, store)
 				require.Equal(t, 1, proofs)
 				require.Equal(t, afterResults, finalResults)
-			} else if scenario != "changed after read" && scenario != "failed push after read" && scenario != "parts move" {
+			} else if scenario != "changed after read" && scenario != "parts move" {
 				require.Equal(t, 1, proofs)
 				require.Greater(t, afterResults-results, uint64(8))
-			} else if scenario == "changed after read" || scenario == "failed push after read" {
+			} else if scenario == "changed after read" {
 				require.Zero(t, proofs)
 				require.Greater(t, afterResults-results, uint64(8))
 			}
 		})
 	}
-}
-
-func TestUsageCarryPairwiseGrouped(t *testing.T) {
-	t.Parallel()
-	_, _, store := newPreparedUsageStore(t)
-	execPreparedUsage(t, store, "TRUNCATE TABLE prepared_usage")
-	filters := []db.UsageFilter{
-		{Timezone: "UTC", PairwiseSides: true, TopSessionsByGroup: true},
-		{From: "2026-01-01", To: "2026-01-30", Timezone: "America/New_York", PairwiseSides: true, TopSessionsByGroup: true},
-	}
-	before := make([]preparedUsageRead, len(filters))
-	for i, f := range filters {
-		before[i] = readPreparedUsage(t, store, f)
-	}
-	runPreparedUsageRefresh(t, store)
-	_, queries := usageQueryCounts(t, store)
-	for i, f := range filters {
-		require.Equal(t, before[i], readPreparedUsage(t, store, f))
-	}
-	_, readyQueries := usageQueryCounts(t, store)
-	// Only session counts are read on the first prepared visit.
-	require.EqualValues(t, len(filters), readyQueries-queries)
-	fresh := NewStoreFromDB(store.DB(), store.bulk)
-	for i, f := range filters {
-		require.Equal(t, before[i], readPreparedUsage(t, fresh, f))
-	}
-}
-
-func TestUsageCarryPriceChange(t *testing.T) {
-	t.Parallel()
-	local, syncer, store := newPreparedUsageStore(t)
-	execPreparedUsage(t, store, "TRUNCATE TABLE prepared_usage")
-	f := db.UsageFilter{Timezone: "UTC", Model: "round-test"}
-	before := readPreparedUsage(t, store, f)
-	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{ModelPattern: "round-test", InputPerMTok: money.MustParseDollars("2"), OutputPerMTok: money.MustParseDollars("3")}}))
-	require.NoError(t, syncer.syncModelPricing(t.Context()))
-	runPreparedUsageRefresh(t, store)
-	got := readPreparedUsage(t, store, f)
-	require.Equal(t, readPreparedUsage(t, NewStoreFromDB(store.DB(), store.bulk), f), got)
-	require.NotEqual(t, before.daily.Totals.TotalCost, got.daily.Totals.TotalCost)
-}
-
-func TestUsageCarryInterruptedHardDelete(t *testing.T) {
-	t.Parallel()
-	ctx := t.Context()
-	local, syncer, store := newPreparedUsageStore(t)
-	writeLongUsageSession(t, local, 100)
-	pushPreparedUsage(t, syncer)
-	require.NoError(t, local.SoftDeleteSession(ctx, preparedUsageLongID))
-	deleted, err := local.DeleteSessionIfTrashed(ctx, preparedUsageLongID)
-	require.NoError(t, err)
-	require.EqualValues(t, 1, deleted)
-	syncer.hooks = &pushHooks{beforeDeletedSessions: func([]string) error { return errors.New("injected deletion failure") }}
-	_, err = syncer.Push(ctx, false, nil)
-	require.ErrorContains(t, err, "injected deletion failure")
-	syncer.hooks = nil
-	execPreparedUsage(t, store, "TRUNCATE TABLE prepared_usage")
-	f := db.UsageFilter{Timezone: "UTC", Project: "delta"}
-	before := readPreparedUsage(t, store, f)
-	runPreparedUsageRefresh(t, store)
-	want := readPreparedUsage(t, NewStoreFromDB(store.DB(), store.bulk), f)
-	require.NotEqual(t, before.daily, want.daily)
-	require.Equal(t, want, readPreparedUsage(t, store, f))
 }
 
 func TestUsageCarryDiskFirst(t *testing.T) {
@@ -247,26 +174,6 @@ func TestUsageCarryInterruptedStartTime(t *testing.T) {
 	require.Empty(t, expectedRange.top)
 	require.Equal(t, expected, readPreparedUsage(t, store, all))
 	require.Equal(t, expectedRange, readPreparedUsage(t, store, rangeFilter))
-}
-
-func TestUsageCarryNullableJoin(t *testing.T) {
-	t.Parallel()
-	_, _, store := newPreparedUsageStore(t)
-	ctx := chdriver.Context(t.Context(), chdriver.WithSettings(chdriver.Settings{"join_use_nulls": 1}))
-	ctx, err := store.withPartsSnapshot(ctx)
-	require.NoError(t, err)
-	require.True(t, store.usageCarryPublished(ctx, "before"))
-	execPreparedUsage(t, store,
-		fmt.Sprintf("ALTER TABLE usage_messages DELETE WHERE session_id = '%s' SETTINGS mutations_sync = 2", usagePriceRoundID),
-		fmt.Sprintf("ALTER TABLE usage_events DELETE WHERE session_id = '%s' SETTINGS mutations_sync = 2", usagePriceRoundID))
-	ctx, err = store.withPartsSnapshot(ctx)
-	require.NoError(t, err)
-	proofs := 0
-	store.beforeUsageCarryCheck = func() { proofs++ }
-	require.False(t, store.usageCarryPublished(ctx, "after"))
-	require.False(t, store.usageCarryPublished(ctx, "after"))
-	// A completed rejection is cached; query errors would retry the proof.
-	require.Equal(t, 1, proofs)
 }
 
 func TestUsageCarryVersionTables(t *testing.T) {

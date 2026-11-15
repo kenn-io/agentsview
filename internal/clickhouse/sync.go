@@ -85,8 +85,6 @@ type pushHooks struct {
 	beforeSessionRows func(batch []db.Session) error
 	// afterUsageSnapshots runs before the corresponding session rows land.
 	afterUsageSnapshots func(batch []db.Session) error
-	// beforeDeletedSessions runs after dependent rows are removed.
-	beforeDeletedSessions func(ids []string) error
 	// beforeVectorState runs after a vector batch's documents and chunks are
 	// written and its stale rows deleted, before its push state rows land.
 	beforeVectorState func(sessionIDs []string) error
