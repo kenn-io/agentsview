@@ -310,3 +310,56 @@ func TestSearchContentWordPagesWithFilteredTiers(t *testing.T) {
 		assert.Equal(t, tc.want, wordHits(page), "cursor %d", tc.cursor)
 	}
 }
+
+func TestContentWordsHoldsWords(t *testing.T) {
+	words := ContentWords{
+		Terms:   [][]string{{"invoice", "invoices"}, {"rounding"}},
+		Phrases: []string{"decision log"},
+	}
+	for _, tc := range []struct {
+		name, body string
+		want       bool
+	}{
+		{"inflected form", "the rounding of invoices, decision log", true},
+		{"mixed case", "INVOICE Rounding Decision-Log", true},
+		{"underscore separates words", "invoice_rounding_decision_log", true},
+		{"CJK before word", "漢invoice rounding decision log", false},
+		{"CJK after word", "invoice漢 rounding decision log", false},
+		{"CJK between words", "invoice 漢 rounding decision log", true},
+		{"letter prefix", "xinvoice rounding decision log", false},
+		{"missing word", "invoice decision log", false},
+		{"phrase out of order", "invoice rounding log decision", false},
+		{"phrase split by another word", "invoice rounding decision of log", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, words.HoldsWords(tc.body))
+		})
+	}
+}
+
+func TestWordPageCursorCountsOnlyAcceptedRows(t *testing.T) {
+	words := ContentWords{Terms: [][]string{{"invoice"}, {"rounding"}}}
+	candidates := []struct {
+		body      string
+		exactText bool
+	}{
+		{"漢invoice rounding", false},    // rejected: CJK touches the word
+		{"invoice rounding one", false}, // accepted 0
+		{"invoice漢 rounding", false},    // rejected
+		{"invoice漢 rounding", true},     // accepted 1: exact text needs no check
+		{"rounding invoice three", false},
+		{"invoice rounding four", false},
+	}
+	page := NewWordPage(words, 1, 2)
+	var taken []int
+	for i, c := range candidates {
+		ok, full := page.Take(c.body, c.exactText)
+		if ok {
+			taken = append(taken, i)
+		}
+		if full {
+			break
+		}
+	}
+	assert.Equal(t, []int{3, 4, 5}, taken)
+}

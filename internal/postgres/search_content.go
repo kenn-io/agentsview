@@ -751,7 +751,7 @@ func (s *Store) searchContentWordsPG(
 	var err error
 	for _, all := range []bool{true, false} {
 		pb := &paramBuilder{n: len(scopeArgs), args: append([]any{}, scopeArgs...)}
-		matches := pgWordMatches(f, words, all, from, pb, true)
+		matches := pgWordMatches(f, words, all, from, pb)
 		query := pgSelectedWordsSQL(scopeWhere, matches, pb, f.Limit+1, f.Cursor, all) + `
 				SELECT m.session_id, s.project, s.agent, s.transcript_revision, 'message' AS location,
 					m.role, '' AS tool_name, m.ordinal, m.timestamp AS ts,
@@ -773,7 +773,7 @@ func (s *Store) searchContentWordsPG(
 }
 
 // pgSelectedWordsSQL selects as selected one page of word_matches, as
-// pgWordMatches renders them with early set, ranked by matched words. The
+// pgWordMatches renders them, ranked by matched words. The
 // all-word pass applies its offset inside word_matches.
 func pgSelectedWordsSQL(scopeWhere, matches string, pb *paramBuilder, limit, offset int, all bool) string {
 	if all {
@@ -793,7 +793,7 @@ func pgSelectedWordsSQL(scopeWhere, matches string, pb *paramBuilder, limit, off
 // Outside fts mode it leaves the exact text to the caller. The partial pass
 // materializes candidates and computes n once.
 func pgWordMatches(
-	f db.ContentSearchFilter, words db.ContentWords, all bool, from string, pb *paramBuilder, early bool,
+	f db.ContentSearchFilter, words db.ContentWords, all bool, from string, pb *paramBuilder,
 ) string {
 	column := "COALESCE(m.dialogue_text, m.content)"
 	b := db.NewQueryBuilder(db.PostgresQueryDialect(), pb.n)
@@ -818,7 +818,7 @@ func pgWordMatches(
 		materialized = " AS"
 	}
 	var order, window string
-	if early && all {
+	if all {
 		order = " ORDER BY sort_ts DESC NULLS LAST, session_id ASC, ordinal ASC"
 		window = order + " LIMIT " + pb.add(f.Limit+1) + " OFFSET " + pb.add(f.Cursor)
 		order += " OFFSET 0"

@@ -59,6 +59,24 @@ func SeedWordSearch(t *testing.T, d *db.DB) {
 			SessionID: entry.id, Role: "assistant", Content: entry.text,
 		}}))
 	}
+	// Newest first, so the sessions whose boundary fails the all-word pass
+	// precede the whole-word matches in recency order.
+	for i, entry := range []struct{ id, text string }{
+		{"page-cjk-prefix", "漢invoice and rounding"},
+		{"page-cjk-suffix", "invoice漢 and rounding"},
+		{"page-inflected", "we settled the rounding of invoices"},
+		{"page-underscore", "invoice_and_rounding"},
+		{"page-reordered", "rounding for each invoice"},
+	} {
+		ended := fmt.Sprintf("2026-05-21T12:00:%02dZ", 59-i)
+		SeedSession(t, d, entry.id, "word-page", func(s *db.Session) {
+			s.EndedAt = &ended
+			s.UserMessageCount = 2
+		})
+		require.NoError(t, d.ReplaceSessionMessages(t.Context(), entry.id, []db.Message{{
+			SessionID: entry.id, Role: "assistant", Content: entry.text, Timestamp: ended,
+		}}))
+	}
 	SeedSession(t, d, "underscore", "word-boundary", func(s *db.Session) { s.UserMessageCount = 2 })
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "underscore", []db.Message{{SessionID: "underscore", Role: "assistant", Content: "invoice_rounding_decision"}}))
 	SeedSession(t, d, "boundary-near", "word-boundary", func(s *db.Session) { s.UserMessageCount = 2 })
@@ -247,6 +265,49 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 				f.Cursor = page.NextCursor
 			}
 			assert.Equal(t, want, paged)
+		})
+	}
+	for _, mode := range []string{"substring", "fts", "hybrid"} {
+		t.Run("one-row pages read past candidates that fail a word boundary/"+mode, func(t *testing.T) {
+			f := db.ContentSearchFilter{
+				Pattern: "invoice rounding", Mode: mode, Project: "word-page",
+				Limit: 1, KeywordOnly: mode == "hybrid",
+			}
+			var paged []hit
+			if mode == "hybrid" {
+				f.Limit = 50
+			}
+			for range 10 {
+				page, err := store.SearchContent(t.Context(), f)
+				require.NoError(t, err)
+				paged = append(paged, project(page.Matches)...)
+				if page.NextCursor == 0 {
+					break
+				}
+				f.Cursor = page.NextCursor
+			}
+			// Every whole-word match comes before the two rows that hold
+			// only "rounding"; ranking among equal counts differs by mode.
+			require.Len(t, paged, 5)
+			for _, h := range paged[:3] {
+				assert.Equal(t, 2, h.words, h.session)
+			}
+			assert.ElementsMatch(t, []hit{
+				{"page-inflected", "message", 2},
+				{"page-underscore", "message", 2},
+				{"page-reordered", "message", 2},
+				{"page-cjk-prefix", "message", 1},
+				{"page-cjk-suffix", "message", 1},
+			}, paged)
+			if mode == "substring" {
+				assert.Equal(t, []hit{
+					{"page-inflected", "message", 2},
+					{"page-underscore", "message", 2},
+					{"page-reordered", "message", 2},
+					{"page-cjk-prefix", "message", 1},
+					{"page-cjk-suffix", "message", 1},
+				}, paged)
+			}
 		})
 	}
 	t.Run("paging across exact and word matches", func(t *testing.T) {

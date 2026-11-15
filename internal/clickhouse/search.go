@@ -559,7 +559,9 @@ func (s *Store) collectContentSubstringPass(
 		query = db.WordRankedSQL(b, branches, f, words, all)
 		args = append(args, b.Args()...)
 	}
-	args = append(args, f.Limit+1, f.Cursor)
+	if !ranked || !all {
+		args = append(args, f.Limit+1, f.Cursor)
+	}
 	materialize := ranked && !all
 	if f.ExcludeSystem && (slices.Contains(f.Sources, "messages") || slices.Contains(f.Sources, "thinking")) {
 		query += systemPrefixSettings
@@ -572,6 +574,13 @@ func (s *Store) collectContentSubstringPass(
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("clickhouse content search: %w", err)
+	}
+	if ranked && all {
+		// The all-word SQL is unpaged; Go validates non-ASCII bodies, then pages.
+		return scanWordPage(rows, db.NewWordPage(words, f.Cursor, f.Limit), func(body string) string {
+			start, end := db.WordSnippetRange(body, f.Pattern, words)
+			return f.BuildSnippet(body, start, end)
+		})
 	}
 	return scanContentRows(rows, func(body string) string {
 		if ranked {
@@ -823,6 +832,33 @@ func scanContentRows(rows *sql.Rows, makeSnippet func(string) string) ([]db.Cont
 		m.Timestamp = formatDBTime(ts)
 		m.Snippet = makeSnippet(body)
 		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// scanWordPage reads WordRankedSQL's unpaged all-word rows until page is full,
+// so a long tail of rejected candidates is never read.
+func scanWordPage(rows *sql.Rows, page *db.WordPage, makeSnippet func(string) string) ([]db.ContentMatch, error) {
+	defer rows.Close()
+	var out []db.ContentMatch
+	for rows.Next() {
+		var m db.ContentMatch
+		var body string
+		var ts any
+		var exactText int
+		if err := rows.Scan(&m.SessionID, &m.Project, &m.Agent,
+			&m.Location, &m.Role, &m.ToolName, &m.Ordinal, &ts, &body, &m.MatchedWords, &exactText); err != nil {
+			return nil, fmt.Errorf("scanning clickhouse content match: %w", err)
+		}
+		taken, full := page.Take(body, exactText == 1)
+		if taken {
+			m.Timestamp = formatDBTime(ts)
+			m.Snippet = makeSnippet(body)
+			out = append(out, m)
+		}
+		if full {
+			return out, nil
+		}
 	}
 	return out, rows.Err()
 }

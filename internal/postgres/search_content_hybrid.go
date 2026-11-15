@@ -169,7 +169,7 @@ func (s *Store) fetchHybridKeywordBatchPG(
 			var err error
 			for _, all := range []bool{true, false} {
 				pb := &paramBuilder{n: len(scopeArgs), args: append([]any{}, scopeArgs...)}
-				matches := pgWordMatches(kf, words, all, from, pb, true)
+				matches := pgWordMatches(kf, words, all, from, pb)
 				query := pgSelectedWordsSQL(scopeWhere, matches, pb, k, offset, all) + `
 				SELECT selected.session_id, selected.ordinal, COALESCE(m.dialogue_text, m.content), selected.n
 				FROM selected JOIN messages m ON m.session_id = selected.session_id AND m.ordinal = selected.ordinal
