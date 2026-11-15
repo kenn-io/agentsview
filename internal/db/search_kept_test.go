@@ -67,14 +67,18 @@ func TestSearchKeptCJKAvailability(t *testing.T) {
 }
 
 func TestSearchKeptSearchableEdits(t *testing.T) {
-	dialogue := func(content string, text *string, inPlace bool) func(*testing.T, *DB) {
+	dialogue := func(content string, text *string, inPlace, messagesOnly bool) func(*testing.T, *DB) {
 		return func(t *testing.T, d *DB) {
 			t.Helper()
 			messages := []Message{{SessionID: "session", Role: "assistant", Content: content, DialogueText: text}}
 			if inPlace {
 				messages = append(messages, Message{SessionID: "session", Ordinal: 1, Role: "user", Content: "other words"})
 			}
-			require.NoError(t, d.ReplaceSessionContent(t.Context(), "session", messages, SessionSignalUpdate{}, nil))
+			if messagesOnly {
+				require.NoError(t, d.ReplaceSessionMessages(t.Context(), "session", messages))
+			} else {
+				require.NoError(t, d.ReplaceSessionContent(t.Context(), "session", messages, SessionSignalUpdate{}, nil))
+			}
 		}
 	}
 	for _, tc := range []struct {
@@ -90,7 +94,9 @@ func TestSearchKeptSearchableEdits(t *testing.T) {
 			t.Helper()
 			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "session", []Message{{SessionID: "session", Role: "user", Content: "other"}}))
 		}, ""},
-		{"dialogue", dialogue("raw words", new("needle"), true), dialogue("raw words", new("different"), true), `"raw" AND content:needle`},
+		{"dialogue in place", dialogue("raw words", new("needle"), true, false), dialogue("raw words", new("different"), true, false), `"raw" AND content:needle`},
+		{"dialogue full content replacement", dialogue("raw words", new("needle"), false, false), dialogue("raw words", new("different"), false, false), `"raw" AND content:needle`},
+		{"dialogue full message replacement", dialogue("raw words", new("needle"), false, true), dialogue("raw words", new("different"), false, true), `"raw" AND content:needle`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)

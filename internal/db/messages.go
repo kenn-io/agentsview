@@ -2173,6 +2173,10 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 			return err
 		}
+	} else if !useDiff && dialogueMessagesChanged(stored, msgs) {
+		if err := bumpSearchChangeRevisionTx(tx); err != nil {
+			return err
+		}
 	}
 	if err := refreshMessageDiffImageTextTx(tx, sessionID, plan, useDiff); err != nil {
 		return err
@@ -2623,6 +2627,10 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 	}
 	if transcriptChanged {
 		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
+			return err
+		}
+	} else if !useDiff && dialogueMessagesChanged(stored, msgs) {
+		if err := bumpSearchChangeRevisionTx(tx); err != nil {
 			return err
 		}
 	}

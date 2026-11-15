@@ -60,14 +60,6 @@ func TestAnalyticsChangesKeepUsageRevision(t *testing.T) {
 			return err
 		}, 1, 1},
 		{func() error {
-			_, err := d.getWriter().ExecContext(ctx, `INSERT INTO messages (session_id, ordinal, role, content, dialogue_text) VALUES ('session', 1, 'assistant', 'raw', 'dialogue')`)
-			return err
-		}, 0, 1},
-		{func() error {
-			_, err := d.getWriter().ExecContext(ctx, `DELETE FROM messages WHERE session_id = 'session' AND ordinal = 1`)
-			return err
-		}, 0, 1},
-		{func() error {
 			return d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "invoice", false)
 		}, 0, 1},
 		{func() error {

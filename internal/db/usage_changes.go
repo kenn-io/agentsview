@@ -20,6 +20,15 @@ const counterTemplate = `
   value = CAST(value AS INTEGER) + 1,
   updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');`
 
+// Full replacements need this when only derived dialogue changes: transcript
+// equality ignores dialogue, and the replacement does not fire UPDATE triggers.
+func bumpSearchChangeRevisionTx(tx transactionQueries) error {
+	if _, err := tx.Exec(strings.ReplaceAll(counterTemplate, "{{counter}}", archiveMetadataSearchChangeRevisionKey)); err != nil {
+		return fmt.Errorf("advancing search change revision: %w", err)
+	}
+	return nil
+}
+
 // Replace triggers atomically with column migrations.
 var usageChangeJournalTriggerDropsSQL, usageChangeJournalTriggerSQL = usageChangeJournalSQL()
 
@@ -89,8 +98,6 @@ func usageChangeJournalSQL() (string, string) {
 	add("trg_image_text_occurrences_search_insert", "INSERT", "image_text_occurrences", "", "", true)
 	add("trg_image_text_occurrences_search_delete", "DELETE", "image_text_occurrences", "", "", true)
 	add("trg_messages_search_dialogue", "UPDATE OF dialogue_text", "messages", "OLD.dialogue_text IS NOT NEW.dialogue_text", "", false)
-	add("trg_messages_search_dialogue_insert", "INSERT", "messages", "NEW.dialogue_text IS NOT NULL", "", false)
-	add("trg_messages_search_dialogue_delete", "DELETE", "messages", "OLD.dialogue_text IS NOT NULL", "", false)
 	add("trg_messages_analytics_change_length", "UPDATE OF content_length", "messages", "OLD.content_length IS NOT NEW.content_length", "", true)
 	add("trg_tool_calls_analytics_change_delete", "DELETE", "tool_calls", "", "", true)
 	columns = []string{"session_id", "message_id", "category", "tool_name", "observed_outcome", "observed_repeat", "sequence_ending"}
