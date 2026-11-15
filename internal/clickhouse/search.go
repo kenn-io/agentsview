@@ -547,33 +547,17 @@ func (s *Store) collectContentSubstringPass(
 	if len(branches) == 0 {
 		return nil, nil
 	}
-	var query string
-	if ranked {
-		b := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
-		rank := db.WordRankSQL(b, "body", f, words, all)
-		args = append(args, b.Args()...)
-		materialized, matched := "", ""
-		if !all {
-			materialized, matched = " MATERIALIZED", " WHERE n >= 1"
-		}
-		query = `WITH candidates AS (` + strings.Join(branches, " UNION ALL ") + `),
-			ranked AS` + materialized + ` (
-				SELECT candidates.*, ` + rank + ` FROM candidates
-			)
-			SELECT session_id, project, agent, location, role, tool_name,
-				ordinal, ts, body, n
-			FROM ranked` + matched + `
-			ORDER BY tier, n DESC, sort_ts DESC, session_id ASC, ordinal ASC,
-				src ASC, row_id ASC, call_index ASC, event_index ASC, body ASC
-			LIMIT ? OFFSET ?`
-	} else {
-		query = `
+	query := `
 		SELECT session_id, project, agent, location, role, tool_name,
 			ordinal, ts, body, 0 AS n
 		FROM (` + strings.Join(branches, " UNION ALL ") + `) AS matches
 		ORDER BY sort_ts DESC, session_id ASC, ordinal ASC,
 			src ASC, row_id ASC, call_index ASC, event_index ASC, body ASC
 		LIMIT ? OFFSET ?`
+	if ranked {
+		b := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
+		query = db.WordRankedSQL(b, branches, f, words, all)
+		args = append(args, b.Args()...)
 	}
 	args = append(args, f.Limit+1, f.Cursor)
 	materialize := ranked && !all

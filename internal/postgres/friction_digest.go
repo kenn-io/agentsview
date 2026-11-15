@@ -57,22 +57,14 @@ func (s *Store) probeFrictionDiagnosticRead(ctx context.Context) (available bool
 // sessionVersionColumnPG selects the engine's committed row version.
 // Both values change with session updates without relying on writer versions.
 func sessionVersionColumnPG(ctx context.Context, pg hostedQuerier) (string, error) {
-	cockroach, err := isCockroachPG(ctx, pg)
-	if err != nil {
-		return "", err
+	var version string
+	if err := pg.QueryRowContext(ctx, "SELECT version()").Scan(&version); err != nil {
+		return "", fmt.Errorf("reading database engine: %w", err)
 	}
-	if cockroach {
+	if strings.HasPrefix(version, "CockroachDB") {
 		return "crdb_internal_mvcc_timestamp", nil
 	}
 	return "xmin", nil
-}
-
-func isCockroachPG(ctx context.Context, pg hostedQuerier) (bool, error) {
-	var version string
-	if err := pg.QueryRowContext(ctx, "SELECT version()").Scan(&version); err != nil {
-		return false, fmt.Errorf("reading database engine: %w", err)
-	}
-	return strings.HasPrefix(version, "CockroachDB"), nil
 }
 
 // DetectFrictionAvailability probes review writes and diagnostic reads

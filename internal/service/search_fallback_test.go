@@ -23,16 +23,23 @@ type namedFallbackStore struct {
 	name string
 }
 
+type unnamedFallbackStore struct{ db.Store }
+
 func (s *namedFallbackStore) MemoryBackendName() string { return s.name }
 
 func TestHybridKeywordFallbackBackendGuidance(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		want bool
-	}{{"cockroach", true}, {"postgres", false}, {"duckdb", false}, {"clickhouse", false}, {"sqlite", false}} {
+		name    string
+		unnamed bool
+		want    bool
+	}{{"cockroach", false, true}, {"unknown", false, true}, {"postgres", false, false}, {"unnamed", true, true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := dbtest.OpenTestDB(t)
-			result, err := service.NewReadOnlyBackend(&namedFallbackStore{DB: d, name: tc.name}).SearchContent(t.Context(), service.ContentSearchRequest{Pattern: "invoice rounding", Mode: "hybrid", KeywordFallback: true})
+			var store db.Store = &namedFallbackStore{DB: d, name: tc.name}
+			if tc.unnamed {
+				store = &unnamedFallbackStore{Store: d}
+			}
+			result, err := service.NewReadOnlyBackend(store).SearchContent(t.Context(), service.ContentSearchRequest{Pattern: "invoice rounding", Mode: "hybrid", KeywordFallback: true})
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, strings.Contains(result.Note, "try short substring queries"))
 		})

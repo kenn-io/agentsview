@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -914,15 +915,24 @@ func TestSessionSearchRetryQuotesForPlatform(t *testing.T) {
 
 func TestSessionSearchRemoteDefaultFTSHint(t *testing.T) {
 	for _, tc := range []struct {
-		backend string
-		retry   bool
+		name, backend, pattern, mode string
+		flags                        []string
+		retry                        bool
 	}{
-		{"cockroach", true}, {"postgres", false}, {"duckdb", false}, {"clickhouse", false}, {"sqlite", false}, {"", true},
+		{name: "cockroach", backend: "cockroach", pattern: "invoice rounding", mode: "substring", retry: true},
+		{name: "old server", pattern: "invoice rounding", mode: "substring", retry: true},
+		{name: "postgres", backend: "postgres", pattern: "invoice rounding", mode: "substring"},
+		{name: "tool result", backend: "cockroach", pattern: "invoice rounding", mode: "substring", flags: []string{"--in", "tool_result"}},
+		{name: "single word", backend: "cockroach", pattern: "invoice", mode: "substring"},
+		{name: "regex", backend: "cockroach", pattern: "invoice rounding", mode: "regex", flags: []string{"--regex"}},
 	} {
-		t.Run(tc.backend, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			newAgentDataDir(t)
+			tokenFile := filepath.Join(t.TempDir(), "token")
+			require.NoError(t, os.WriteFile(tokenFile, []byte("test-token"), 0600))
 			var modes []string
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, "Bearer test-token", r.Header.Get("Authorization"))
 				if r.URL.Path == "/api/v1/memory/status" {
 					if tc.backend == "" {
 						http.NotFound(w, r)
@@ -933,7 +943,7 @@ func TestSessionSearchRemoteDefaultFTSHint(t *testing.T) {
 					return
 				}
 				assert.Equal(t, "/api/v1/search/content", r.URL.Path)
-				assert.Equal(t, "invoice rounding", r.URL.Query().Get("pattern"))
+				assert.Equal(t, tc.pattern, r.URL.Query().Get("pattern"))
 				mode := r.URL.Query().Get("mode")
 				modes = append(modes, mode)
 				w.Header().Set("Content-Type", "application/json")
@@ -949,13 +959,24 @@ func TestSessionSearchRemoteDefaultFTSHint(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			cmd.SetOut(&stdout)
 			cmd.SetErr(&stderr)
-			cmd.SetArgs([]string{"session", "--server", ts.URL, "search", "invoice rounding", "--include-children", "--include-automated", "--include-one-shot", "--json"})
+			args := []string{"session", "--server", ts.URL, "--server-token-file", tokenFile, "search", tc.pattern, "--include-children", "--include-automated", "--include-one-shot", "--json"}
+			cmd.SetArgs(append(args, tc.flags...))
 			require.NoError(t, cmd.Execute())
 			if tc.retry {
 				assert.Equal(t, []string{"substring", "fts"}, modes)
-				assert.Contains(t, stdout.String(), "try_fts")
+				got := decodeCLIJSON[struct {
+					Hints []contentSearchCLIHint `json:"hints"`
+				}](t, stdout.String())
+				require.Len(t, got.Hints, 1)
+				assert.Equal(t, "try_fts", got.Hints[0].Code)
+				assert.Contains(t, got.Hints[0].Next, "--fts=true")
+				assert.Contains(t, got.Hints[0].Next, "--server="+ts.URL)
+				assert.Contains(t, got.Hints[0].Next, "--server-token-file="+tokenFile)
+				assert.Contains(t, got.Hints[0].Next, "--include-children=true")
+				assert.Contains(t, got.Hints[0].Next, "--include-automated=true")
+				assert.Contains(t, got.Hints[0].Next, "--include-one-shot=true")
 			} else {
-				assert.Equal(t, []string{"substring"}, modes)
+				assert.Equal(t, []string{tc.mode}, modes)
 				assert.NotContains(t, stdout.String(), "try_fts")
 			}
 		})

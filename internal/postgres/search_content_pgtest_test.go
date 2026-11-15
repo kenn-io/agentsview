@@ -737,8 +737,7 @@ func TestPGContentSearchTrigramIndex(t *testing.T) {
 		  JOIN pg_namespace n ON n.oid = c.relnamespace
 		 WHERE n.nspname = $1 AND c.relname = $2`, contentSearchSchema, foldedIndex,
 	).Scan(&initialRelFileNode), "query folded index relfilenode")
-	require.NoError(t, EnsureSchema(ctx, store.DB(), contentSearchSchema),
-		"EnsureSchema stays idempotent after index creation")
+	require.NoError(t, EnsureSchema(ctx, store.DB(), contentSearchSchema))
 	var finalRelFileNode int64
 	require.NoError(t, store.DB().QueryRowContext(ctx,
 		`SELECT c.relfilenode FROM pg_class c

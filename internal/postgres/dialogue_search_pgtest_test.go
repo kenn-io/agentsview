@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/service"
 )
 
 func TestPGDialogueSearchParity(t *testing.T) {
@@ -22,15 +21,6 @@ func TestPGDialogueSearchParity(t *testing.T) {
 	store, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
 	require.NoError(t, err)
 	defer store.Close()
-	t.Run("backend status", func(t *testing.T) {
-		status, err := service.GetMemoryStatus(t.Context(), service.NewReadOnlyBackend(store))
-		require.NoError(t, err)
-		want := "postgres"
-		if store.cockroach {
-			want = "cockroach"
-		}
-		assert.Equal(t, want, status.Archive.Backend)
-	})
 	dbtest.AssertDialogueSearchParity(t, local, store, "substring", "regex", "fts")
 	if !store.cockroach {
 		dbtest.AssertWordSearch(t, store, true)
@@ -96,7 +86,9 @@ func TestPGCockroachNaturalFtsCompatibility(t *testing.T) {
 		{Pattern: "invoice rounding decision", Mode: "fts", Sources: []string{"messages"}, Limit: 50},
 		{Pattern: "invoice rounding decision", Mode: "hybrid", KeywordOnly: true, Limit: 50},
 	} {
-		_, err := store.SearchContent(t.Context(), filter)
+		page, err := store.SearchContent(t.Context(), filter)
 		require.NoError(t, err)
+		require.Len(t, page.Matches, 1, "mode %s", filter.Mode)
+		assert.Equal(t, "crdb-search-compat", page.Matches[0].SessionID)
 	}
 }

@@ -35,12 +35,12 @@ func NewStore(
 		}
 		return nil, err
 	}
-	cockroach, err := isCockroachPG(ctx, pg)
+	version, err := sessionVersionColumnPG(ctx, pg)
 	if err != nil {
 		pg.Close()
 		return nil, fmt.Errorf("detecting database engine: %w", err)
 	}
-	return &Store{pg: pg, ownedDB: pg, cockroach: cockroach}, nil
+	return &Store{pg: pg, ownedDB: pg, cockroach: version == "crdb_internal_mvcc_timestamp"}, nil
 }
 
 // NewHostedStore opens the read adapter with the same fixed tenant boundary as

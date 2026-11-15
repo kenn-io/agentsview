@@ -132,64 +132,46 @@ func (s *Store) fetchHybridKeywordBatch(
 	kf := f
 	kf.Mode = "fts"
 	var args []any
+	contentPred := contentSearchPredicate("COALESCE(m.dialogue_text, m.content)", kf, &args)
+	args = append(args, scopeArgs...)
+	args = append(args, k, offset)
+	query := `
+		SELECT m.session_id, m.ordinal, COALESCE(m.dialogue_text, m.content), 0
+		FROM messages m
+		JOIN sessions s ON s.id = m.session_id
+		WHERE ` + contentPred + `
+			AND m.role IN ('user', 'assistant')
+			AND ` + embeddableMessagePredicate("m") + `
+			AND m.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)
+		ORDER BY COALESCE(s.ended_at, s.started_at, s.created_at) DESC NULLS LAST,
+			m.session_id ASC, m.ordinal ASC
+		LIMIT ? OFFSET ?` + systemPrefixSettings
 	_, words, ranked := db.RouteContentWords(kf)
-	var count string
-	var contentPred string
-	var rankedCandidates, rankedPass string
-	var countArgs []any
 	if ranked {
-		filterBuilder := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
+		// Natural queries rank by matched words, counted once per candidate.
 		column := "COALESCE(m.dialogue_text, m.content)"
-		folded := db.WordFoldSQL(db.ClickHouseQueryDialect(), column)
-		foldedBody := "if(" + db.WordNonASCIISQL(db.ClickHouseQueryDialect(), column) +
-			", " + folded + ", " + column + ")"
-		contentPred = db.WordFilterSQL(filterBuilder, column, kf, words, false)
-		args = append(args, filterBuilder.Args()...)
-		countBuilder := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
-		count = db.WordCountSQL(countBuilder, "body", "folded_body", words)
-		countArgs = countBuilder.Args()
-		rankedCandidates = `WITH candidates AS MATERIALIZED (
+		filter := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
+		count := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
+		query = `WITH candidates AS MATERIALIZED (
 			SELECT m.session_id, m.ordinal, ` + column + ` AS body,
-				` + foldedBody + ` AS folded_body,
+				if(` + db.WordNonASCIISQL(db.ClickHouseQueryDialect(), column) + `, ` +
+			db.WordFoldSQL(db.ClickHouseQueryDialect(), column) + `, ` + column + `) AS folded_body,
 				COALESCE(s.ended_at, s.started_at, s.created_at) AS activity
 			FROM messages m
 			JOIN sessions s ON s.id = m.session_id
-			WHERE ` + contentPred + `
+			WHERE ` + db.WordFilterSQL(filter, column, kf, words, false) + `
 				AND m.role IN ('user', 'assistant')
 				AND ` + embeddableMessagePredicate("m") + `
 				AND m.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)
 		), ranked AS MATERIALIZED (
-			SELECT candidates.*, ` + count + ` AS n FROM candidates
-		)`
-		rankedPass = " FROM ranked WHERE n >= 1"
-	} else {
-		contentPred = contentSearchPredicate("COALESCE(m.dialogue_text, m.content)", kf, &args)
+			SELECT candidates.*, ` + db.WordCountSQL(count, "body", "folded_body", words) + ` AS n FROM candidates
+		)
+		SELECT session_id, ordinal, body, n FROM ranked WHERE n >= 1
+		ORDER BY n DESC, activity DESC NULLS LAST, session_id ASC, ordinal ASC
+		LIMIT ? OFFSET ?` + systemPrefixSettings + ", enable_materialized_cte = 1"
+		args = append(append(append(filter.Args(), scopeArgs...), count.Args()...), k, offset)
 	}
-	args = append(args, scopeArgs...)
-	args = append(args, countArgs...)
-	args = append(args, k, offset)
-	var query, order string
-	if ranked {
-		query = rankedCandidates + `
-			SELECT session_id, ordinal, body, n` + rankedPass
-		order = `ORDER BY n DESC, activity DESC NULLS LAST,
-			session_id ASC, ordinal ASC`
-	} else {
-		query = `SELECT m.session_id, m.ordinal, COALESCE(m.dialogue_text, m.content), 0 AS n
-			FROM messages m
-			JOIN sessions s ON s.id = m.session_id
-			WHERE ` + contentPred + `
-				AND m.role IN ('user', 'assistant')
-				AND ` + embeddableMessagePredicate("m") + `
-				AND m.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)`
-		order = `ORDER BY n DESC, COALESCE(s.ended_at, s.started_at, s.created_at) DESC NULLS LAST,
-			m.session_id ASC, m.ordinal ASC`
-	}
-	settings := systemPrefixSettings
-	if ranked {
-		settings += ", enable_materialized_cte = 1"
-	}
-	rows, err := s.queryContext(ctx, query+"\n"+order+"\n\t\tLIMIT ? OFFSET ?"+settings, args...)
+	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("clickhouse hybrid keyword leg: %w", err)
 	}

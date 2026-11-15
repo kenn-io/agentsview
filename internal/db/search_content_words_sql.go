@@ -105,21 +105,35 @@ func WordFilterSQL(b *QueryBuilder, column string, f ContentSearchFilter, q Cont
 		WordRegexSQL(b, column, WordFoldSQL(b.dialect, column), q, all) + "))"
 }
 
-// WordRankSQL selects n, the query words a row in column holds, and tier,
-// which puts the exact text first outside fts mode.
-func WordRankSQL(b *QueryBuilder, column string, f ContentSearchFilter, q ContentWords, all bool) string {
+// WordRankedSQL orders branches, DuckDB or ClickHouse content candidates, by
+// tier, which puts the exact text first outside fts mode, then by n, the query
+// words a row holds.
+func WordRankedSQL(b *QueryBuilder, branches []string, f ContentSearchFilter, q ContentWords, all bool) string {
 	n, tier := strconv.Itoa(len(q.Terms)), "1"
 	if !all && f.Mode != "fts" {
 		// The exact text counts every word. Binds follow the SQL text.
-		n = "CASE WHEN " + b.ContainsPredicate(column, f.Pattern) + " THEN " + n + " ELSE " +
-			WordCountSQL(b, column, WordFoldSQL(b.dialect, column), q) + " END"
+		n = "CASE WHEN " + b.ContainsPredicate("body", f.Pattern) + " THEN " + n + " ELSE " +
+			WordCountSQL(b, "body", WordFoldSQL(b.dialect, "body"), q) + " END"
 	} else if !all {
-		n = WordCountSQL(b, column, WordFoldSQL(b.dialect, column), q)
+		n = WordCountSQL(b, "body", WordFoldSQL(b.dialect, "body"), q)
 	}
 	if f.Mode != "fts" {
-		tier = "CASE WHEN " + b.ContainsPredicate(column, f.Pattern) + " THEN 0 ELSE 1 END"
+		tier = "CASE WHEN " + b.ContainsPredicate("body", f.Pattern) + " THEN 0 ELSE 1 END"
 	}
-	return n + " AS n, " + tier + " AS tier"
+	materialized, matched := "", ""
+	if !all {
+		materialized, matched = " MATERIALIZED", " WHERE n >= 1"
+	}
+	return `WITH candidates AS (` + strings.Join(branches, " UNION ALL ") + `),
+			ranked AS` + materialized + ` (
+				SELECT candidates.*, ` + n + " AS n, " + tier + " AS tier" + ` FROM candidates
+			)
+			SELECT session_id, project, agent, location, role, tool_name,
+				ordinal, ts, body, n
+			FROM ranked` + matched + `
+			ORDER BY tier, n DESC, sort_ts DESC, session_id ASC, ordinal ASC,
+				src ASC, row_id ASC, call_index ASC, event_index ASC, body ASC
+			LIMIT ? OFFSET ?`
 }
 
 // WordFoldSQL applies the SQLite Unicode61 fold except on DuckDB, where

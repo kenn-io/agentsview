@@ -171,22 +171,10 @@ func (s *Store) fetchHybridKeywordBatchPG(
 			for _, all := range []bool{true, false} {
 				pb := &paramBuilder{n: len(scopeArgs), args: append([]any{}, scopeArgs...)}
 				matches := pgWordMatches(kf, words, all, from, pb, true)
-				selectedOffset := offset
-				if all {
-					selectedOffset = 0
-				}
-				query := fmt.Sprintf(`WITH scoped AS NOT MATERIALIZED (
-					SELECT * FROM sessions WHERE %s
-				), %s,
-				selected AS MATERIALIZED (
-					SELECT session_id, ordinal, ts, sort_ts, n FROM word_matches WHERE n >= 1
-					ORDER BY n DESC, sort_ts DESC NULLS LAST, session_id ASC, ordinal ASC
-					LIMIT %s OFFSET %s
-				)
+				query := pgSelectedWordsSQL(scopeWhere, matches, pb, k, offset, all) + `
 				SELECT selected.session_id, selected.ordinal, COALESCE(m.dialogue_text, m.content), selected.n
 				FROM selected JOIN messages m ON m.session_id = selected.session_id AND m.ordinal = selected.ordinal
-				ORDER BY selected.n DESC, selected.sort_ts DESC NULLS LAST, selected.session_id ASC, selected.ordinal ASC`,
-					scopeWhere, matches, pb.add(k), pb.add(selectedOffset))
+				ORDER BY selected.n DESC, selected.sort_ts DESC NULLS LAST, selected.session_id ASC, selected.ordinal ASC`
 				if hits, err = s.scanHybridKeywordPG(ctx, f.Pattern, words, query, pb.args); err != nil || len(hits) == k {
 					break
 				}

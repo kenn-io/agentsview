@@ -125,6 +125,8 @@ func AssertWordSearch(t *testing.T, store db.Store, foldsAccents bool) {
 		{"Greek accents stay distinct", "αρχη missingword", "word-accent-greek", nil},
 		{"Greek final sigma folds in caps", "οδυσσευς here", "word-unicode-final-sigma", []hit{{"greek-final-sigma", "message", 2}}},
 		{"long s folds inside quoted phrases", `missingword "test phrase"`, "word-long-s-phrase", []hit{{"long-s-phrase", "message", 2}}},
+		{"underscore phrase", `"invoice rounding" decision`, "word-boundary", []hit{{"underscore", "message", 3}}},
+		{"multiline", "invoice rounding decision", "word-multiline", []hit{{"multiline", "message", 3}}},
 	} {
 		for _, mode := range []string{"substring", "fts", "hybrid"} {
 			t.Run(tc.name+"/"+mode, func(t *testing.T) {
@@ -225,13 +227,6 @@ func AssertWordSearch(t *testing.T, store db.Store, foldsAccents bool) {
 		})
 	}
 	for _, mode := range []string{"substring", "fts", "hybrid"} {
-		t.Run("underscore phrase/"+mode, func(t *testing.T) {
-			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: `"invoice rounding" decision`, Mode: mode, Project: "word-boundary", KeywordOnly: mode == "hybrid"})
-			require.NoError(t, err)
-			assert.Equal(t, []hit{{"underscore", "message", 3}}, project(page.Matches))
-		})
-	}
-	for _, mode := range []string{"substring", "fts", "hybrid"} {
 		t.Run("prefix boundary/"+mode, func(t *testing.T) {
 			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "invoice rounding decision", Mode: mode, Project: "word-prefix", KeywordOnly: mode == "hybrid"})
 			require.NoError(t, err)
@@ -240,13 +235,6 @@ func AssertWordSearch(t *testing.T, store db.Store, foldsAccents bool) {
 				words = 3
 			}
 			assert.Equal(t, []hit{{"prefix-near", "message", words}}, project(page.Matches))
-		})
-	}
-	for _, mode := range []string{"substring", "fts", "hybrid"} {
-		t.Run("multiline/"+mode, func(t *testing.T) {
-			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "invoice rounding decision", Mode: mode, Project: "word-multiline", KeywordOnly: mode == "hybrid"})
-			require.NoError(t, err)
-			assert.Equal(t, []hit{{"multiline", "message", 3}}, project(page.Matches))
 		})
 	}
 	for _, mode := range []string{"substring", "fts", "hybrid"} {

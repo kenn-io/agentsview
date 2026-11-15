@@ -11,7 +11,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-func TestPGFTSBooleanAndWordFallbackSemantics(t *testing.T) {
+func TestPGFTSBooleanSemantics(t *testing.T) {
 	t.Parallel()
 	store := setupContentSearch(t)
 	for _, row := range []struct{ id, body string }{
