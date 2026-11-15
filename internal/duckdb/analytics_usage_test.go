@@ -2053,3 +2053,75 @@ func TestDuckToolsBoundedRangeGroupsByLocalDay(t *testing.T) {
 	require.Len(t, visits, 1)
 	assert.Equal(t, 2, visits[0].Count)
 }
+
+func TestDuckAnalyticsLargeSessionSelection(t *testing.T) {
+	const timestamp = "2024-06-01T09:00:00Z"
+	var writes []db.SessionBatchWrite
+	var ids []string
+	for i := range 902 {
+		id := fmt.Sprintf("selection-%04d", i)
+		project, model, tool, skill := "included", "model-a", "Read", "skill-a"
+		if i == 900 {
+			model, tool, skill = "model-z", "Write", "skill-z"
+		} else if i == 901 {
+			project, model, tool, skill = "excluded", "model-excluded", "Excluded", "skill-excluded"
+		}
+		if i < 901 {
+			ids = append(ids, id)
+		}
+		writes = append(writes, db.SessionBatchWrite{
+			Session: syncSession(id, project, "selection", timestamp, 1),
+			Messages: []db.Message{duckModelMessage(id, 0, "assistant", "seam", timestamp, model,
+				db.ToolCall{ToolName: tool, Category: tool}, db.ToolCall{ToolName: "Skill", Category: "Skill", SkillName: skill})},
+			DataVersion: 1, ReplaceMessages: true,
+		})
+	}
+	store := newDuckAnalyticsStore(t, writes)
+	ctx := t.Context()
+	for _, tc := range []struct {
+		name  string
+		visit func(context.Context, []string, func(context.Context, string, []any) error) error
+		want  int
+	}{
+		{"dashboard", (analyticsSQL{store}).VisitSessionIDSets, 1},
+		{"trends", (trendsAnalyticsSQL{analyticsSQL{store}}).VisitSessionIDSets, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			visit := func(context.Context, string, []any) error { calls++; return nil }
+			require.NoError(t, tc.visit(ctx, ids, visit))
+			assert.Equal(t, tc.want, calls)
+			calls = 0
+			require.NoError(t, tc.visit(ctx, nil, visit))
+			assert.Zero(t, calls)
+		})
+	}
+	filter := db.AnalyticsFilter{From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", Project: "included"}
+	summary, err := store.GetAnalyticsSummary(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, 901, summary.TotalSessions)
+	assert.Equal(t, []string{"model-a", "model-z"}, summary.Models)
+	tools, err := store.GetAnalyticsTools(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, 1802, tools.TotalCalls)
+	counts := map[string]int{}
+	for _, tool := range tools.ByTool {
+		counts[tool.ToolName] = tool.CallCount
+	}
+	assert.Equal(t, map[string]int{"Read": 900, "Write": 1, "Skill": 901}, counts)
+	skills, err := store.GetAnalyticsSkills(ctx, filter, "day")
+	require.NoError(t, err)
+	assert.Equal(t, 901, skills.TotalSkillCalls)
+	skillCounts := map[string]int{}
+	for _, skill := range skills.BySkill {
+		skillCounts[skill.SkillName] = skill.CallCount
+	}
+	assert.Equal(t, map[string]int{"skill-a": 900, "skill-z": 1}, skillCounts)
+	terms, err := db.ParseTrendTerms([]string{"seam"})
+	require.NoError(t, err)
+	trends, err := store.GetTrendsTerms(ctx, filter, terms, "day")
+	require.NoError(t, err)
+	assert.Equal(t, 901, trends.MessageCount)
+	require.Len(t, trends.Series, 1)
+	assert.Equal(t, 901, trends.Series[0].Total)
+}
