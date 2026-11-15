@@ -214,7 +214,7 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 			transcriptFidelity = TranscriptFidelityFull
 		case dbOK:
 			messages = mergeAntigravityDBHistoryMessages(
-				dbResult.messages, historyMsgs,
+				dbResult.messages, historyMsgs, dbResult.steps,
 			)
 			hasTrajectory = true
 		case sidecarOK:
@@ -594,7 +594,7 @@ func applyAntigravityBrainStepMetadata(
 }
 
 func mergeAntigravityDBHistoryMessages(
-	dbMessages []ParsedMessage, history []ParsedMessage,
+	dbMessages []ParsedMessage, history []ParsedMessage, steps []antigravityLoadedStep,
 ) []ParsedMessage {
 	if len(dbMessages) == 0 || len(history) == 0 {
 		return dbMessages
@@ -613,6 +613,23 @@ func mergeAntigravityDBHistoryMessages(
 		return appendMissingAntigravityHistoryMessages(
 			dbMessages, history,
 		)
+	}
+	// Positional replacement is safe only when every structured prompt agrees
+	// with its history row. History can omit a prompt or include a pending one.
+	userIdx, messageIdx := 0, 0
+	for _, step := range steps {
+		if !step.decoded {
+			continue
+		}
+		msg := dbMessages[messageIdx]
+		messageIdx++
+		if msg.Role != RoleUser {
+			continue
+		}
+		if step.structuredPrompt && msg.Content != history[userIdx].Content {
+			return appendMissingAntigravityHistoryMessages(dbMessages, history)
+		}
+		userIdx++
 	}
 	historyIdx := 0
 	for i := range dbMessages {

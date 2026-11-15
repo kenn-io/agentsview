@@ -417,6 +417,7 @@ func loadAntigravityStepsWithRawCount(ctx context.Context,
 		stepPositions[idx] = len(steps)
 		steps = append(steps, antigravityLoadedStep{
 			idx: idx, kind: kind, msg: msg, decoded: decoded,
+			structuredPrompt: parsed && parsedStep.role == RoleUser && antigravityUserInputText(parsedStep.fields) != "",
 		})
 		result.rawStepCount++
 	}
@@ -467,10 +468,11 @@ func loadAntigravityStepsWithRawCount(ctx context.Context,
 }
 
 type antigravityLoadedStep struct {
-	idx     int
-	kind    antigravityStepKind
-	msg     ParsedMessage
-	decoded bool
+	idx              int
+	kind             antigravityStepKind
+	msg              ParsedMessage
+	decoded          bool
+	structuredPrompt bool
 }
 
 type antigravityGenerationMetadata struct {

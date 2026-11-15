@@ -1187,7 +1187,7 @@ func TestMergeAntigravityDBHistoryMessagesAppendsMissingPrompts(t *testing.T) {
 		{Role: RoleUser, Content: "only tagged history prompt"},
 	}
 
-	got := mergeAntigravityDBHistoryMessages(msgs, history)
+	got := mergeAntigravityDBHistoryMessages(msgs, history, nil)
 
 	require.Len(t, got, 4)
 	assert.Equal(t, "first decoded prompt", got[0].Content)
@@ -1207,7 +1207,7 @@ func TestMergeAntigravityDBHistoryMessagesIgnoresBlankHistoryRows(t *testing.T) 
 		{Role: RoleUser, Content: "   "},
 	}
 
-	got := mergeAntigravityDBHistoryMessages(msgs, history)
+	got := mergeAntigravityDBHistoryMessages(msgs, history, nil)
 
 	assert.Equal(t, "history prompt", got[0].Content)
 	assert.Equal(t, len("history prompt"), got[0].ContentLength)
@@ -4821,4 +4821,40 @@ func TestDecodeAntigravityStepStructuredUserInput(t *testing.T) {
 			assert.Equal(t, tc.want, msg.Content)
 		})
 	}
+}
+
+func TestAntigravityCLIDBStructuredPromptMissingFromHistory(t *testing.T) {
+	const id = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	mustMkdir(t, filepath.Dir(dbPath))
+	fixture, err := os.ReadFile(filepath.Join("testdata", "data-version-corpus", "antigravity-cli", "conversations", id+".db"))
+	require.NoError(t, err)
+	mustWrite(t, dbPath, fixture)
+	mustWrite(t, filepath.Join(root, "history.jsonl"), []byte(`{"conversationId":"`+id+`","timestamp":1779000000000,"display":"next prompt"}`+"\n"))
+	sess, msgs, err := parseAntigravityCLITestSession(t, dbPath, "", "test-machine")
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "比较这两个游戏 /grill-me", msgs[0].Content)
+	assert.Equal(t, "next prompt", msgs[1].Content)
+	assert.Equal(t, "比较这两个游戏 /grill-me", sess.FirstMessage)
+}
+
+func TestMergeAntigravityDBHistoryMessagesRepairsFallbackBesideStructuredPrompt(t *testing.T) {
+	msgs := []ParsedMessage{
+		{Role: RoleUser, Content: "typed prompt"},
+		{Role: RoleUser, Content: "decoded expansion"},
+	}
+	steps := []antigravityLoadedStep{
+		{decoded: true, structuredPrompt: true, msg: msgs[0]},
+		{decoded: true, msg: msgs[1]},
+	}
+	history := []ParsedMessage{
+		{Role: RoleUser, Content: "typed prompt"},
+		{Role: RoleUser, Content: "history prompt"},
+	}
+	got := mergeAntigravityDBHistoryMessages(msgs, history, steps)
+	require.Len(t, got, 2)
+	assert.Equal(t, "typed prompt", got[0].Content)
+	assert.Equal(t, "history prompt", got[1].Content)
 }
