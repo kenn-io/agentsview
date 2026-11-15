@@ -1570,7 +1570,6 @@ func (s *Store) scanContentMatches(
 	return scanDuckContentRows(rows, makeSnippet)
 }
 
-// scanDuckContentRows reads content matches.
 func scanDuckContentRows(rows *sql.Rows, makeSnippet func(string) string) ([]db.ContentMatch, error) {
 	defer rows.Close()
 	var out []db.ContentMatch
@@ -1578,12 +1577,9 @@ func scanDuckContentRows(rows *sql.Rows, makeSnippet func(string) string) ([]db.
 		var m db.ContentMatch
 		var body string
 		var ts any
-		dest := []any{
-			&m.SessionID, &m.Project, &m.Agent,
+		if err := rows.Scan(&m.SessionID, &m.Project, &m.Agent,
 			&m.Location, &m.Role, &m.ToolName, &m.Ordinal,
-			&ts, &body, &m.MatchedWords,
-		}
-		if err := rows.Scan(dest...); err != nil {
+			&ts, &body, &m.MatchedWords); err != nil {
 			return nil, err
 		}
 		m.Timestamp = formatDBTime(ts)
