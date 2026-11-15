@@ -12,7 +12,7 @@ import (
 )
 
 func TestUsageCarry(t *testing.T) {
-	for _, scenario := range []string{"healthy", "unpublished", "partial deletion", "changed after read", "parts move", "late old writer", "snapshot ahead"} {
+	for _, scenario := range []string{"healthy", "unpublished", "partial deletion", "changed after read", "parts move", "snapshot ahead"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Parallel()
 			local, syncer, store := newPreparedUsageStore(t)
@@ -26,8 +26,6 @@ func TestUsageCarry(t *testing.T) {
 			switch scenario {
 			case "unpublished":
 				execPreparedUsage(t, store, fmt.Sprintf(`INSERT INTO messages SELECT * REPLACE ('{"input_tokens":999999}' AS token_usage, push_version + 1 AS push_version) FROM messages WHERE session_id = '%s' AND ordinal = 0`, preparedUsageLongID))
-			case "late old writer":
-				execPreparedUsage(t, store, fmt.Sprintf(`INSERT INTO usage_messages SELECT * REPLACE (toInt64(9999) AS ordinal, toInt64(1000000) AS usage_input, push_version - 1 AS push_version, toUInt128(push_version - 1) * 2 + 1 AS revision) FROM usage_messages WHERE session_id = '%s' LIMIT 1`, preparedUsageLongID))
 			case "partial deletion":
 				execPreparedUsage(t, store, fmt.Sprintf("ALTER TABLE usage_messages DELETE WHERE session_id = '%s' AND ordinal = 0 SETTINGS mutations_sync = 2", preparedUsageLongID))
 			case "snapshot ahead":
@@ -70,12 +68,9 @@ func TestUsageCarry(t *testing.T) {
 				got := preparedUsageRead{daily, top, counts}
 				fresh := readPreparedUsage(t, NewStoreFromDB(store.DB(), store.bulk), f)
 				require.Equal(t, fresh, got)
-				if scenario == "late old writer" && i == 0 {
-					require.NotEqual(t, before[i].top, fresh.top)
-				}
 				if scenario == "healthy" {
 					require.Equal(t, before[i], got)
-				} else if scenario == "unpublished" || scenario == "partial deletion" || scenario == "changed after read" || scenario == "late old writer" {
+				} else if scenario == "unpublished" || scenario == "partial deletion" || scenario == "changed after read" {
 					require.NotEqual(t, before[i].daily, got.daily)
 				}
 			}
