@@ -1157,10 +1157,11 @@ change reaches PostgreSQL through a push that also changes the session's
 pairs only sessions without an entry and sweeps the runs. It retains survivor
 prices and pricing metadata within the same budget. A changed input or price, a
 clock rewind, or the clock passing a usage row rebuilds the survivor prices.
-When those prices exceed the budget, the raw inputs remain eligible for reuse. On a scratch database of 100,000 sessions
-and 2.6 million candidates over seven months, the kept activity took 71 MiB, and
-a refresh with ten changed sessions spent 90 ms pairing instead of 3.2 s and 209
-ms sweeping instead of 1.0 s. Journal replacement, a changed gap cap, and
+When those prices exceed the budget, the raw inputs remain eligible for reuse.
+Before survivor prices were retained, a scratch database of 100,000 sessions and
+2.6 million candidates over seven months used 71 MiB for kept activity. A refresh
+with ten changed sessions spent 90 ms pairing instead of 3.2 s and 209 ms
+sweeping instead of 1.0 s. Journal replacement, a changed gap cap, and
 unavailable or regressed revisions rebuild the inputs. Large change sets use a
 full read, and inputs above the budget aren't retained. Hosted stores and
 transaction views use their existing reads.
