@@ -622,7 +622,7 @@ func (s *Store) GetTrendsTerms(
 	if err != nil {
 		return load(ctx)
 	}
-	version, ok, err := s.usageRowsVersion(ctx, []string{"sessions"}, "")
+	version, ok, err := s.usageRowsVersion(ctx, []string{"sessions", "messages"}, "")
 	if err != nil || !ok {
 		return load(ctx)
 	}

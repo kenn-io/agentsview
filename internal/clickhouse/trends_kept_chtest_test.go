@@ -4,6 +4,7 @@ package clickhouse
 
 import (
 	"archive/zip"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -17,6 +18,60 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storage"
 )
+
+func TestTrendsKeptPartialPush(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	store, syncer, local := newPushedStore(t)
+	require.NoError(t, store.openActivityReportDisk(syncer.target))
+	ctx := t.Context()
+	f := db.AnalyticsFilter{Timezone: "UTC", Project: "alpha", From: "2026-01-01", To: "2026-01-31"}
+	terms := []db.TrendTermInput{{Term: "alpha", Variants: []string{"alpha"}, Matchers: []string{"alpha"}}}
+	read := func(s *Store) db.TrendsTermsResponse {
+		t.Helper()
+		report, err := s.GetTrendsTerms(ctx, f, terms, "day")
+		require.NoError(t, err)
+		return report
+	}
+	before := read(store)
+	require.Equal(t, 1, before.Series[0].Total)
+	var sessionVersion uint64
+	require.NoError(t, store.DB().QueryRowContext(ctx, "SELECT push_version FROM sessions WHERE id = ?", fixtureAlphaID).Scan(&sessionVersion))
+	messages, err := local.GetAllMessages(ctx, fixtureAlphaID)
+	require.NoError(t, err)
+	messages[0].Content = "bravo"
+	messages[0].ContentLength = len(messages[0].Content)
+	require.NoError(t, local.ReplaceSessionMessages(ctx, fixtureAlphaID, messages))
+	syncer.hooks = &pushHooks{beforeSessionRows: func([]db.Session) error { return errors.New("interrupted publication") }}
+	result, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Errors)
+	var unpublishedVersion uint64
+	require.NoError(t, store.DB().QueryRowContext(ctx, "SELECT push_version FROM sessions WHERE id = ?", fixtureAlphaID).Scan(&unpublishedVersion))
+	require.Equal(t, sessionVersion, unpublishedVersion)
+	fresh := read(newTestStore(t, syncer.conn, syncer.target))
+	require.Zero(t, fresh.Series[0].Total)
+	restarted := newTestStore(t, syncer.conn, syncer.target)
+	require.NoError(t, restarted.openActivityReportDisk(syncer.target))
+	require.Equal(t, fresh, read(restarted))
+	require.Equal(t, fresh, read(store))
+	syncer.hooks = nil
+	result, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Zero(t, result.Errors)
+	count := func() uint64 {
+		t.Helper()
+		n, _ := usageQueryCountsOf(t, store, "startsWith(trimLeft(query, ' \\n\\t\\r'), 'SELECT m.content, COALESCE(m.timestamp')")
+		return n
+	}
+	beforePublishRead := count()
+	require.Equal(t, fresh, read(store))
+	afterPublishRead := count()
+	require.Greater(t, afterPublishRead, beforePublishRead)
+	again := newTestStore(t, syncer.conn, syncer.target)
+	require.NoError(t, again.openActivityReportDisk(syncer.target))
+	require.Equal(t, fresh, read(again))
+	require.Equal(t, afterPublishRead, count())
+}
 
 func TestTrendsKeptRestart(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())

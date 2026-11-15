@@ -2869,6 +2869,8 @@ func (s *Store) readUsageRowIdentities(
 	for i, table := range tables {
 		columns, where := "*", ""
 		switch table {
+		case "messages":
+			columns = "session_id, ordinal, push_version"
 		case "usage_session_snapshots":
 			// Revision identifies the usage arrays without hashing them; push_version identifies publication.
 			columns = "id, revision, push_version"
