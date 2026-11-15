@@ -658,8 +658,7 @@ func TestPGSearchContentEmptyToolUseIDNotSuppressed(t *testing.T) {
 	}
 }
 
-// TestPGContentSearchTrigramIndex verifies EnsureSchema installs the raw and
-// Unicode61-folded trigram indexes used by content search. Index creation is
+// TestPGContentSearchTrigramIndex verifies EnsureSchema installs the trigram index used by content search. Index creation is
 // best-effort, so the check is skipped when pg_trgm cannot be installed.
 func TestPGContentSearchTrigramIndex(t *testing.T) {
 	t.Parallel()
@@ -702,39 +701,6 @@ func TestPGContentSearchTrigramIndex(t *testing.T) {
 	assert.True(t, fastupdateOff,
 		"idx_messages_content_trgm must have fastupdate=off")
 
-	const foldedIndex = "idx_messages_dialogue_folded_unicode61_v1_trgm"
-	var indexDef, predicate string
-	require.NoError(t, store.DB().QueryRowContext(ctx,
-		`SELECT pg_get_indexdef(i.indexrelid), pg_get_expr(i.indpred, i.indrelid)
-		   FROM pg_index i
-		   JOIN pg_class c ON c.oid = i.indexrelid
-		   JOIN pg_namespace n ON n.oid = c.relnamespace
-		  WHERE n.nspname = $1 AND c.relname = $2`,
-		contentSearchSchema, foldedIndex,
-	).Scan(&indexDef, &predicate), "query Unicode61 folded index definition")
-	assert.Contains(t, strings.ToLower(indexDef), "translate(coalesce(dialogue_text, content)")
-	assert.Contains(t, strings.ToLower(indexDef), "gin_trgm_ops")
-	assert.Contains(t, strings.ToLower(indexDef), "fastupdate=off")
-	assert.Contains(t, strings.ToLower(predicate), "octet_length(coalesce(dialogue_text, content))")
-	assert.Contains(t, strings.ToLower(predicate), "char_length(coalesce(dialogue_text, content))")
-
-	t.Run("schema initialization preserves folded index", func(t *testing.T) {
-		var initialRelFileNode int64
-		require.NoError(t, store.DB().QueryRowContext(ctx,
-			`SELECT c.relfilenode FROM pg_class c
-			  JOIN pg_namespace n ON n.oid = c.relnamespace
-			 WHERE n.nspname = $1 AND c.relname = $2`, contentSearchSchema, foldedIndex,
-		).Scan(&initialRelFileNode), "query folded index relfilenode")
-		require.NoError(t, EnsureSchema(ctx, store.DB(), contentSearchSchema))
-		var finalRelFileNode int64
-		require.NoError(t, store.DB().QueryRowContext(ctx,
-			`SELECT c.relfilenode FROM pg_class c
-			  JOIN pg_namespace n ON n.oid = c.relnamespace
-			 WHERE n.nspname = $1 AND c.relname = $2`, contentSearchSchema, foldedIndex,
-		).Scan(&finalRelFileNode), "query folded index relfilenode after schema init")
-		assert.Equal(t, initialRelFileNode, finalRelFileNode,
-			"schema initialization must not rebuild the versioned folded index")
-	})
 }
 
 // TestPGContentSearchTrigramIndexUpgrade verifies the upgrade path: a store

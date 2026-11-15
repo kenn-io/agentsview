@@ -1203,9 +1203,8 @@ no ClickHouse counterpart yet.
 - **Porter stemming is SQLite-only.** SQLite's FTS5 matches `relational` to
   `relate`; PostgreSQL, DuckDB, and ClickHouse don't stem these terms. This can
   change `matched_words` and the order of result tiers.
-- **DuckDB keeps accents and long s in stored words.** A keyword search for
-  `cafe` may miss `café`, and `test` may miss `teſt`; an accented query can
-  also match an unaccented word.
+- **Accent-insensitive matching is SQLite-only.** A search for `cafe` may
+  miss `café` on PostgreSQL, DuckDB, and ClickHouse.
 - **Metadata filters post-filter the vector leg.** `--semantic`/`--hybrid`
   over-fetch candidates from the vector index (4x the requested limit, or a
   fixed minimum if that's larger), then drop hits whose session fails

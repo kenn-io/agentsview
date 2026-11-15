@@ -1430,10 +1430,6 @@ func createPartialIndexesPG(ctx context.Context, db pgSessionExecer) error {
 	return nil
 }
 
-const (
-	dialogueFoldedUnicode61IndexPG = "idx_messages_dialogue_folded_unicode61_v1_trgm"
-)
-
 // createContentSearchIndexesPG accelerates content, dialogue, and thinking
 // substring searches. Callers decide whether unavailable pg_trgm is fatal.
 // The opclass is qualified because the extension can live outside search_path.
@@ -1462,18 +1458,6 @@ func createContentSearchIndexesPG(ctx context.Context, pg interface {
 		if _, err := pg.ExecContext(ctx, fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s ON messages USING gin (%s %s.gin_trgm_ops) WITH (fastupdate = off)`, index.name, index.expression, quotedExt)); err != nil {
 			return err
 		}
-	}
-	body := "COALESCE(dialogue_text, content)"
-	// The suffix versions the index with its fixed Unicode61 fold. A changed
-	// fold must get a new index name so existing indexes are never reused with
-	// a different query expression.
-	if _, err := pg.ExecContext(ctx, fmt.Sprintf(`CREATE INDEX IF NOT EXISTS %s ON messages USING gin ((%s) %s.gin_trgm_ops) WITH (fastupdate = off) WHERE %s`,
-		dialogueFoldedUnicode61IndexPG,
-		db.WordFoldSQL(db.PostgresQueryDialect(), body),
-		quotedExt,
-		db.WordNonASCIISQL(db.PostgresQueryDialect(), body),
-	)); err != nil {
-		return err
 	}
 	// Existing content indexes may still have fastupdate enabled.
 	_, err = pg.ExecContext(ctx, `ALTER INDEX idx_messages_content_trgm SET (fastupdate = off)`)

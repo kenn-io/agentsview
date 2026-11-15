@@ -797,23 +797,18 @@ func pgWordMatches(
 	f db.ContentSearchFilter, words db.ContentWords, all bool, from string, pb *paramBuilder, early bool,
 ) string {
 	column := "COALESCE(m.dialogue_text, m.content)"
-	dialect := db.PostgresQueryDialect()
-	b := db.NewQueryBuilder(dialect, pb.n)
-	rawCandidate := db.WordCandidateSQL(b, column, words, all, false)
-	rawWhere := rawCandidate
-	foldedRawExclusion := " AND NOT " + rawCandidate
+	b := db.NewQueryBuilder(db.PostgresQueryDialect(), pb.n)
+	rawWhere := db.WordCandidateSQL(b, column, words, all)
 	if f.Mode != "fts" {
 		rawWhere += " AND NOT " + b.ContainsPredicate(column, f.Pattern)
 	}
-	foldedCandidate := db.WordCandidateSQL(b, column, words, all, true)
 	n := strconv.Itoa(len(words.Terms))
 	if !all {
-		n = db.WordCountSQL(b, "body", "folded_body", words)
+		n = db.WordCountSQL(b, "body", words)
 	}
-	regex := db.WordRegexSQL(b, "body", "folded_body", words, all)
+	regex := db.WordRegexSQL(b, "body", words, all)
 	pb.args = append(pb.args, b.Args()...)
 	pb.n += len(b.Args())
-	// Non-ASCII rows that miss the raw gate use the fixed folded candidate path.
 	candidateColumns := `m.session_id, s.project, s.agent, s.transcript_revision, m.role, m.ordinal,
 				m.timestamp AS ts, ` + column + ` AS body,
 				COALESCE(s.ended_at, s.started_at, s.created_at) AS sort_ts`
@@ -829,29 +824,10 @@ func pgWordMatches(
 		window = order + " LIMIT " + pb.add(f.Limit+1) + " OFFSET " + pb.add(f.Cursor)
 		order += " OFFSET 0"
 	}
-	folded := db.WordFoldSQL(dialect, "word_candidates.body")
-	foldedBody := "CASE WHEN " + db.WordNonASCIISQL(dialect, "word_candidates.body") +
-		" THEN " + folded + " ELSE word_candidates.body END"
-	wordMatchColumns := `word_candidates.session_id, word_candidates.project, word_candidates.agent,
-				word_candidates.transcript_revision, word_candidates.role, word_candidates.ordinal,
-				word_candidates.ts, word_candidates.body, word_candidates.sort_ts`
-	wordMatchFrom := `FROM (
-				SELECT word_candidates.*, ` + foldedBody + ` AS folded_body FROM word_candidates
-			) word_candidates`
-	return fmt.Sprintf(`raw_word_candidates AS (
-			%s AND %s
-		), folded_word_candidates AS (
-			%s AND %s AND %s%s
-		), word_candidates%s (
-			SELECT * FROM raw_word_candidates
-			UNION ALL
-			SELECT * FROM folded_word_candidates%s
+	return fmt.Sprintf(`word_candidates%s (
+			%s AND %s%s
 		), word_matches%s (
-			SELECT %s, %s AS n
-			%s WHERE %s%s
-		)`, candidates, rawWhere, candidates, db.WordNonASCIISQL(dialect, column), foldedCandidate,
-		foldedRawExclusion,
-		materialized, order,
-		materialized,
-		wordMatchColumns, n, wordMatchFrom, regex, window)
+			SELECT word_candidates.*, %s AS n
+			FROM word_candidates WHERE %s%s
+		)`, materialized, candidates, rawWhere, order, materialized, n, regex, window)
 }

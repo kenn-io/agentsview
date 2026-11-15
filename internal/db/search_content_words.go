@@ -33,13 +33,6 @@ func WordSnippetRange(body, pattern string, words ContentWords) (int, int) {
 	if start, end, ok := CaseInsensitiveSpan(body, pattern); ok {
 		return start, end
 	}
-	foldedForms := make([][]string, len(words.Terms))
-	for i, forms := range words.Terms {
-		foldedForms[i] = make([]string, len(forms))
-		for j, form := range forms {
-			foldedForms[i][j] = foldUnicode61(form)
-		}
-	}
 	offset := 0
 	for word := range strings.FieldsFuncSeq(body, func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
@@ -47,12 +40,6 @@ func WordSnippetRange(body, pattern string, words ContentWords) (int, int) {
 		offset += strings.Index(body[offset:], word)
 		for _, forms := range words.Terms {
 			if slices.ContainsFunc(forms, func(form string) bool { return strings.EqualFold(word, form) }) {
-				return offset, offset + len(word)
-			}
-		}
-		foldedWord := foldUnicode61(word)
-		for _, forms := range foldedForms {
-			if slices.ContainsFunc(forms, func(form string) bool { return strings.EqualFold(foldedWord, form) }) {
 				return offset, offset + len(word)
 			}
 		}

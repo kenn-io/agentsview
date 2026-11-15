@@ -154,8 +154,6 @@ func (s *Store) fetchHybridKeywordBatch(
 		count := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
 		query = `WITH candidates AS MATERIALIZED (
 			SELECT m.session_id, m.ordinal, ` + column + ` AS body,
-				if(` + db.WordNonASCIISQL(db.ClickHouseQueryDialect(), column) + `, ` +
-			db.WordFoldSQL(db.ClickHouseQueryDialect(), column) + `, ` + column + `) AS folded_body,
 				COALESCE(s.ended_at, s.started_at, s.created_at) AS activity
 			FROM messages m
 			JOIN sessions s ON s.id = m.session_id
@@ -164,7 +162,7 @@ func (s *Store) fetchHybridKeywordBatch(
 				AND ` + embeddableMessagePredicate("m") + `
 				AND m.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)
 		), ranked AS MATERIALIZED (
-			SELECT candidates.*, ` + db.WordCountSQL(count, "body", "folded_body", words) + ` AS n FROM candidates
+			SELECT candidates.*, ` + db.WordCountSQL(count, "body", words) + ` AS n FROM candidates
 		)
 		SELECT session_id, ordinal, body, n FROM ranked WHERE n >= 1
 		ORDER BY n DESC, activity DESC NULLS LAST, session_id ASC, ordinal ASC

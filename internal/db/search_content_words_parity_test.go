@@ -9,5 +9,5 @@ import (
 func TestSearchContentWordParity(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	dbtest.SeedWordSearch(t, d)
-	dbtest.AssertWordSearch(t, d, true)
+	dbtest.AssertWordSearch(t, d)
 }
