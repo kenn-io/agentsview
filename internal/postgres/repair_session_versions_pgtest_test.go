@@ -12,7 +12,7 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 )
 
-func TestPGSchemaRepairsLeaveSessionVersionsSettled(t *testing.T) {
+func TestPGSchemaRepairsPreserveTrendsParts(t *testing.T) {
 	pgURL := testPGURL(t)
 	local := testDB(t)
 	ps, err := New(t.Context(), pgURL, "agentsview", local, "test-machine", true, storage.PusherOptions{})
