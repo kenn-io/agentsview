@@ -34,6 +34,11 @@ func listHermesMemberTokens(ctx context.Context, conn *sql.DB, id string, yield 
 	if err != nil {
 		return err
 	}
+	// Legacy stores may lack the schema metadata entirely. Their tokens still
+	// support full fingerprints, but must differ from tokens made with verified
+	// tracking so an untracked edit cannot survive a later schema upgrade.
+	tracks, trackingErr := hermesStoreTracksRewrites(ctx, conn)
+	tracks = tracks && trackingErr == nil
 	usage, err := readHermesModelUsage(ctx, conn, id)
 	if err != nil {
 		return err
@@ -98,6 +103,7 @@ func listHermesMemberTokens(ctx context.Context, conn *sql.DB, id string, yield 
 			continue
 		}
 		h := sha256.New()
+		fmt.Fprintf(h, "tracks-rewrites:%t\x00", tracks)
 		for _, value := range values {
 			fmt.Fprintf(h, "%T:%q\x00", value, fmt.Sprint(value))
 		}

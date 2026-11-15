@@ -4542,7 +4542,10 @@ schemas keep their existing ordering behavior.
   unchanged members on database and WAL events. The token includes parsed
   session fields, model usage ledger rows, transcript revision, and a checksum
   over every message ID, timestamp, and finish reason. The checksum scans
-  message history.
+  message history. Tokens also include whether rewrite tracking was verified
+  when they were created, in both direct and bulk fingerprint passes. Enabling
+  tracking after an untracked edit therefore requires a full check. Tokens
+  created before this provenance was included also receive one full check.
   The native `messages_transcript_revision_update` and
   `messages_display_revision_update` definitions in
   [hermes_state_common.py](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/hermes_state_common.py)

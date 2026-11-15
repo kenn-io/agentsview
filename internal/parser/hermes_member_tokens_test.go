@@ -64,6 +64,63 @@ func TestHermesMemberTokensMatchDirectFingerprint(t *testing.T) {
 	assert.Equal(t, len(tokens), checked)
 }
 
+// A content edit made before native revision tracking is installed must not
+// become invisible when the watcher first sees the supported schema.
+func TestHermesMemberTrackingTransition(t *testing.T) {
+	for _, kind := range []string{"legacy", "incomplete triggers"} {
+		t.Run(kind, func(t *testing.T) {
+			root := t.TempDir()
+			createHermesStateDB(t, root)
+			path := filepath.Join(root, "state.db")
+			conn, err := sql.Open("sqlite3", path)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, conn.Close()) })
+			var restore string
+			if kind != "legacy" {
+				hermesfixture.CreateWatcherSchema(t, conn)
+				require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT sql FROM sqlite_master WHERE name='messages_transcript_revision_update'`).Scan(&restore))
+				_, err = conn.ExecContext(t.Context(), `DROP TRIGGER messages_transcript_revision_update`)
+				require.NoError(t, err)
+			}
+			set := newHermesSourceSet(AgentHermes, []string{root})
+			source := set.stateMemberSourceRef(root, path, "child")
+			fingerprint := func() SourceFingerprint {
+				t.Helper()
+				direct, err := set.Fingerprint(t.Context(), source)
+				require.NoError(t, err)
+				ctx, cleanup, err := WithReconciliationCache(t.Context())
+				require.NoError(t, err)
+				defer func() { require.NoError(t, cleanup()) }()
+				bulk, err := set.Fingerprint(ctx, source)
+				require.NoError(t, err)
+				assert.Equal(t, direct.Hash, bulk.Hash)
+				return direct
+			}
+			before := fingerprint()
+			_, err = conn.ExecContext(t.Context(), `UPDATE messages SET content='edited before tracking' WHERE session_id='child'`)
+			require.NoError(t, err)
+			if kind == "legacy" {
+				hermesfixture.CreateWatcherSchema(t, conn)
+			} else {
+				_, err = conn.ExecContext(t.Context(), restore)
+				require.NoError(t, err)
+			}
+			stored := []StoredMemberFreshness{{Path: source.FingerprintKey, FingerprintHash: before.Hash}}
+			changed := func() []SourceRef {
+				t.Helper()
+				sources, err := set.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: path, AllowWatermarkOnlySources: true, StoredMemberFreshnessPage: memoryFreshnessPager(stored, 1)})
+				require.NoError(t, err)
+				return sources
+			}
+			require.Len(t, changed(), 1, "transition must force a full check")
+			after := fingerprint()
+			assert.NotEqual(t, before.Hash, after.Hash)
+			stored[0].FingerprintHash = after.Hash
+			assert.Empty(t, changed(), "verified tokens must retain the unchanged shortcut")
+		})
+	}
+}
+
 func TestHermesMemberTokenChanges(t *testing.T) {
 	for _, tc := range []struct {
 		name, setup, statement string
