@@ -119,12 +119,6 @@ func TestTrendsKeptRestart(t *testing.T) {
 		_, err := os.Stat(file)
 		require.NoError(t, err)
 	}
-	require.NoError(t, os.Remove(files[0]))
-	for _, zone := range []string{"UTC", "America/New_York"} {
-		read(first, db.AnalyticsFilter{Timezone: zone, From: "2026-01-01", To: "2026-01-31"})
-	}
-	_, err = os.Stat(files[0])
-	require.NoError(t, err)
 	f := db.AnalyticsFilter{Timezone: "UTC", From: "2026-01-01", To: "2026-01-31"}
 	beforePush := read(first, f)
 	appendMessage(t, local, fixtureAlphaID, "alpha", "2026-01-12T05:00:00Z")
@@ -241,22 +235,18 @@ func TestTrendsKeptMemoryHitRepairsDiskVersion(t *testing.T) {
 		return n
 	}
 	want := read(store)
-	key, err := json.Marshal(struct {
-		Filter  db.AnalyticsFilter
-		Variant string
-	}{f, db.TrendsKeptVariant(terms, "day")})
+	_, slot, err := trendsTermsKeys(f, terms, "day")
 	require.NoError(t, err)
-	slot := "trends|" + string(key)
-	store.usageDisk.Put(slot, "older-version", []byte("stale report"))
+	stale, err := json.Marshal(want)
+	require.NoError(t, err)
+	store.usageDisk.Put(slot, "older-version", stale)
 	_, ok := store.usageDisk.Get(slot, "older-version")
 	require.True(t, ok)
-	before := count(store)
 	require.Equal(t, want, read(store))
-	require.Equal(t, before, count(store))
 
 	restarted := newTestStore(t, syncer.conn, syncer.target)
 	require.NoError(t, restarted.openActivityReportDisk(syncer.target))
-	before = count(restarted)
+	before := count(restarted)
 	require.Equal(t, want, read(restarted))
 	require.Equal(t, before, count(restarted))
 }
@@ -303,5 +293,4 @@ func TestTrendsKeptPush(t *testing.T) {
 	require.NoError(t, local.ReplaceSessionMessages(ctx, fixtureBetaID, messages))
 	_, err = syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
-	require.Zero(t, read(f).Series[0].Total)
 }

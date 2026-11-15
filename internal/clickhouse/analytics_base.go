@@ -605,6 +605,17 @@ func (s *Store) GetAnalyticsSignalSessions(
 	return s.analytics().GetAnalyticsSignalSessions(ctx, f, signal, limit)
 }
 
+func trendsTermsKeys(
+	f db.AnalyticsFilter, terms []db.TrendTermInput, granularity string,
+) (string, string, error) {
+	key, err := json.Marshal(struct {
+		Filter  db.AnalyticsFilter
+		Variant string
+	}{f, db.TrendsKeptVariant(terms, granularity)})
+	selection := string(key)
+	return selection, "trends|" + selection, err
+}
+
 func (s *Store) GetTrendsTerms(
 	ctx context.Context, f db.AnalyticsFilter,
 	terms []db.TrendTermInput, granularity string,
@@ -615,10 +626,7 @@ func (s *Store) GetTrendsTerms(
 	if f.ActiveSince != "" || db.TerminationUsesTime(f.Termination) {
 		return load(ctx)
 	}
-	key, err := json.Marshal(struct {
-		Filter  db.AnalyticsFilter
-		Variant string
-	}{f, db.TrendsKeptVariant(terms, granularity)})
+	key, diskSlot, err := trendsTermsKeys(f, terms, granularity)
 	if err != nil {
 		return load(ctx)
 	}
@@ -627,12 +635,11 @@ func (s *Store) GetTrendsTerms(
 		return load(ctx)
 	}
 	version += "|" + db.TrendsTimezoneKey(f)
-	diskSlot := "trends|" + string(key)
-	if report, ok := s.trendsReads.Get(string(key), version); ok {
+	if report, ok := s.trendsReads.Get(key, version); ok {
 		s.keepTrendsDisk(diskSlot, version, report)
 		return report, nil
 	}
-	return s.trendsReads.Do(ctx, string(key), version, func(ctx context.Context) (db.TrendsTermsResponse, error) {
+	return s.trendsReads.Do(ctx, key, version, func(ctx context.Context) (db.TrendsTermsResponse, error) {
 		if data, ok := s.usageDisk.Get(diskSlot, version); ok {
 			var report db.TrendsTermsResponse
 			if json.Unmarshal(data, &report) == nil {
