@@ -153,3 +153,50 @@ func TestUsageCarryEqualCountOlderRow(t *testing.T) {
 	require.EqualValues(t, 100, fresh.daily.Totals.InputTokens)
 	require.Equal(t, fresh, got)
 }
+
+func TestUsageCarryDiskRestart(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, store := newPreparedUsageStore(t)
+	require.NoError(t, store.openActivityReportDisk(syncer.target))
+	writeLongUsageSession(t, local, 100)
+	pushPreparedUsage(t, syncer)
+	runPreparedUsageRefresh(t, store)
+	filters := []db.UsageFilter{{Timezone: "UTC", Breakdowns: true}, {From: "2026-01-01", To: "2026-01-30", Timezone: "UTC", Breakdowns: true}}
+	old := make([]preparedUsageRead, len(filters))
+	for i, f := range filters {
+		old[i] = readPreparedUsage(t, store, f)
+	}
+	republishRoundSession(t, local, 123)
+	pushPreparedUsage(t, syncer)
+	execPreparedUsage(t, store, "TRUNCATE TABLE prepared_usage")
+	raw := make([]preparedUsageRead, len(filters))
+	for i, f := range filters {
+		raw[i] = readPreparedUsage(t, store, f)
+		require.NotEqual(t, old[i].daily, raw[i].daily)
+	}
+	runPreparedUsageRefresh(t, store)
+	for i, f := range filters {
+		_, before := usageQueryCounts(t, store)
+		daily, err := store.GetDailyUsage(t.Context(), f)
+		require.NoError(t, err)
+		top, err := store.GetTopSessionsByCost(t.Context(), f, 10)
+		require.NoError(t, err)
+		_, after := usageQueryCounts(t, store)
+		require.Equal(t, before, after)
+		require.Equal(t, raw[i].daily, daily)
+		require.Equal(t, raw[i].top, top)
+	}
+	reopened := newTestStore(t, syncer.conn, syncer.target)
+	require.NoError(t, reopened.openActivityReportDisk(syncer.target))
+	for i, f := range filters {
+		_, before := usageQueryCounts(t, reopened)
+		daily, err := reopened.GetDailyUsage(t.Context(), f)
+		require.NoError(t, err)
+		top, err := reopened.GetTopSessionsByCost(t.Context(), f, 10)
+		require.NoError(t, err)
+		_, after := usageQueryCounts(t, reopened)
+		require.Equal(t, before, after)
+		require.Equal(t, raw[i].daily, daily)
+		require.Equal(t, raw[i].top, top)
+	}
+}

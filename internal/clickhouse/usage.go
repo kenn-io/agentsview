@@ -1529,6 +1529,11 @@ func (s *Store) forEachDailyUsageGroupRow(
 	}
 	if !top {
 		if rows, ok := carryRawUsage(ctx, s, &s.dailyUsageRows, state, memoSlot, memoVersion, "daily", f, pricingDigest, customModels); ok {
+			if diskReady {
+				if data, err := kept.EncodeRows(rows, dailyUsageRowsBytes, dailyUsageRowBytes); err == nil {
+					s.usageDisk.Put(memoSlot, usageDiskVersion+memoVersion, data)
+				}
+			}
 			for _, row := range rows {
 				if err := visit(row); err != nil {
 					return err
@@ -2445,6 +2450,11 @@ func (s *Store) GetTopSessionsByCost(
 	if !ok {
 		out, ok = carryRawUsage(ctx, s, &s.topSessionTotals, state, memoSlot, memoVersion,
 			"top", f, pricing.digest+"|"+pricing.catalog.digest, nil)
+		if ok && diskReady {
+			if data, err := kept.EncodeRows(out, kept.DefaultMaxBytes, db.TopSessionBytes); err == nil {
+				s.usageDisk.Put(memoSlot, topUsageDiskVersion+memoVersion, data)
+			}
+		}
 	}
 	if !ok {
 		catalogDigest := pricing.catalog.digest
