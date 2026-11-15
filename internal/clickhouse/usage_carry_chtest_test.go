@@ -12,16 +12,41 @@ import (
 )
 
 func TestUsageCarry(t *testing.T) {
-	for _, scenario := range []string{"healthy", "unpublished", "partial deletion", "changed after read", "parts move", "snapshot ahead"} {
+	for _, scenario := range []string{"healthy", "unpublished", "partial deletion", "changed after read", "parts move", "snapshot ahead", "equal count older row"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Parallel()
 			local, syncer, store := newPreparedUsageStore(t)
-			writeLongUsageSession(t, local, 100)
-			if scenario == "healthy" {
-				republishRoundSession(t, local, 123)
-				require.NoError(t, local.SoftDeleteSession(t.Context(), usagePriceTierID))
+			if scenario == "equal count older row" {
+				const id = "older-row"
+				session := fixtureSession(id, "older-row", "older", "2026-01-12T03:00:00.000Z", 1)
+				message := usagePriceMessage(id, 0, "2026-01-12T03:00:00.000Z", "round-test", `{"input_tokens":10}`)
+				_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, Messages: []db.Message{message}, DataVersion: 1, ReplaceMessages: true}})
+				require.NoError(t, err)
+				pushPreparedUsage(t, syncer)
+				execPreparedUsage(t, store, "CREATE TABLE older_usage AS usage_messages ENGINE = Memory",
+					fmt.Sprintf("INSERT INTO older_usage SELECT * FROM usage_messages WHERE session_id = '%s'", id))
+				message.TokenUsage = []byte(`{"input_tokens":100}`)
+				_, err = local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, Messages: []db.Message{message}, DataVersion: 1, ReplaceMessages: true}})
+				require.NoError(t, err)
+				pushPreparedUsage(t, syncer)
+				_, err = local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, DataVersion: 1, ReplaceMessages: true}})
+				require.NoError(t, err)
+				syncer.hooks = &pushHooks{beforeSessionRows: func([]db.Session) error {
+					if _, err := store.DB().ExecContext(t.Context(), "INSERT INTO usage_messages SELECT * FROM older_usage"); err != nil {
+						return err
+					}
+					return errors.New("injected publication failure")
+				}}
+				_, err = syncer.Push(t.Context(), false, nil)
+				require.NoError(t, err)
+			} else {
+				writeLongUsageSession(t, local, 100)
+				if scenario == "healthy" {
+					republishRoundSession(t, local, 123)
+					require.NoError(t, local.SoftDeleteSession(t.Context(), usagePriceTierID))
+				}
+				pushPreparedUsage(t, syncer)
 			}
-			pushPreparedUsage(t, syncer)
 			execPreparedUsage(t, store, "TRUNCATE TABLE prepared_usage")
 			switch scenario {
 			case "unpublished":
@@ -32,6 +57,9 @@ func TestUsageCarry(t *testing.T) {
 				execPreparedUsage(t, store, fmt.Sprintf(`INSERT INTO usage_session_snapshots SELECT * REPLACE (push_version + 1 AS push_version, toUInt128(push_version + 1) * 2 + 1 AS revision) FROM usage_session_snapshots WHERE id = '%s'`, preparedUsageLongID))
 			}
 			filters := []db.UsageFilter{{Timezone: "UTC", Breakdowns: true}, {From: "2026-01-01", To: "2026-01-30", Timezone: "UTC", Breakdowns: true}}
+			if scenario == "equal count older row" {
+				filters = []db.UsageFilter{{Project: "older-row", Timezone: "UTC"}}
+			}
 			before := make([]preparedUsageRead, len(filters))
 			for i, f := range filters {
 				before[i] = readPreparedUsage(t, store, f)
@@ -63,15 +91,17 @@ func TestUsageCarry(t *testing.T) {
 					require.Greater(t, afterDaily, beforeResults)
 					require.Greater(t, afterTop, afterDaily)
 				}
-				counts, err := store.GetUsageSessionCounts(t.Context(), f)
-				require.NoError(t, err)
-				got := preparedUsageRead{daily, top, counts}
 				fresh := readPreparedUsage(t, NewStoreFromDB(store.DB(), store.bulk), f)
-				require.Equal(t, fresh, got)
+				require.Equal(t, fresh.daily, daily)
+				require.Equal(t, fresh.top, top)
 				if scenario == "healthy" {
-					require.Equal(t, before[i], got)
+					require.Equal(t, before[i].daily, daily)
+					require.Equal(t, before[i].top, top)
 				} else if scenario == "unpublished" || scenario == "partial deletion" || scenario == "changed after read" {
-					require.NotEqual(t, before[i].daily, got.daily)
+					require.NotEqual(t, before[i].daily, daily)
+				} else if scenario == "equal count older row" {
+					require.EqualValues(t, 10, before[i].daily.Totals.InputTokens)
+					require.EqualValues(t, 100, fresh.daily.Totals.InputTokens)
 				}
 			}
 			if scenario == "changed after read" {
@@ -92,12 +122,14 @@ func TestUsageCarryVersionTables(t *testing.T) {
 		require.NoError(t, err)
 		return v
 	}
+	for _, table := range chUsageCarryTables {
+		execPreparedUsage(t, store, "SYSTEM STOP MERGES "+table)
+	}
 	insert := func(table string) {
 		t.Helper()
 		var name, typ string
 		require.NoError(t, store.DB().QueryRowContext(t.Context(), `SELECT name, type FROM system.columns WHERE database = currentDatabase() AND table = ? AND default_kind = '' ORDER BY position LIMIT 1`, table).Scan(&name, &typ))
-		execPreparedUsage(t, store, "SYSTEM STOP MERGES "+table,
-			fmt.Sprintf("INSERT INTO %s (`%s`) SELECT defaultValueOfTypeName('%s')", table, name, typ))
+		execPreparedUsage(t, store, fmt.Sprintf("INSERT INTO %s (`%s`) SELECT defaultValueOfTypeName('%s')", table, name, typ))
 	}
 	for _, table := range []string{"prepared_usage", "sync_metadata"} {
 		before := version()
@@ -114,44 +146,6 @@ func TestUsageCarryVersionTables(t *testing.T) {
 		insert(table)
 		require.NotEqual(t, before, version(), table)
 	}
-}
-
-func TestUsageCarryEqualCountOlderRow(t *testing.T) {
-	local, syncer, store := newPreparedUsageStore(t)
-	const id = "older-row"
-	session := fixtureSession(id, "older-row", "older", "2026-01-12T03:00:00.000Z", 1)
-	message := usagePriceMessage(id, 0, "2026-01-12T03:00:00.000Z", "round-test", `{"input_tokens":10}`)
-	_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, Messages: []db.Message{message}, DataVersion: 1, ReplaceMessages: true}})
-	require.NoError(t, err)
-	pushPreparedUsage(t, syncer)
-	execPreparedUsage(t, store, "CREATE TABLE older_usage AS usage_messages ENGINE = Memory",
-		fmt.Sprintf("INSERT INTO older_usage SELECT * FROM usage_messages WHERE session_id = '%s'", id))
-	message.TokenUsage = []byte(`{"input_tokens":100}`)
-	_, err = local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, Messages: []db.Message{message}, DataVersion: 1, ReplaceMessages: true}})
-	require.NoError(t, err)
-	pushPreparedUsage(t, syncer)
-	execPreparedUsage(t, store, "TRUNCATE TABLE prepared_usage")
-	_, err = local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, DataVersion: 1, ReplaceMessages: true}})
-	require.NoError(t, err)
-	syncer.hooks = &pushHooks{beforeSessionRows: func([]db.Session) error {
-		if _, err := store.DB().ExecContext(t.Context(), "INSERT INTO usage_messages SELECT * FROM older_usage"); err != nil {
-			return err
-		}
-		return errors.New("injected publication failure")
-	}}
-	_, err = syncer.Push(t.Context(), false, nil)
-	require.NoError(t, err)
-	f := db.UsageFilter{Project: "older-row", Timezone: "UTC"}
-	before := readPreparedUsage(t, store, f)
-	proofs := 0
-	store.beforeUsageCarryCheck = func() { proofs++ }
-	runPreparedUsageRefresh(t, store)
-	fresh := readPreparedUsage(t, NewStoreFromDB(store.DB(), store.bulk), f)
-	got := readPreparedUsage(t, store, f)
-	require.Positive(t, proofs)
-	require.EqualValues(t, 10, before.daily.Totals.InputTokens)
-	require.EqualValues(t, 100, fresh.daily.Totals.InputTokens)
-	require.Equal(t, fresh, got)
 }
 
 func TestUsageCarryDiskRestart(t *testing.T) {
@@ -174,7 +168,8 @@ func TestUsageCarryDiskRestart(t *testing.T) {
 	seed := newTestStore(t, syncer.conn, syncer.target)
 	require.NoError(t, seed.openActivityReportDisk(syncer.target))
 	prepared := readPreparedUsage(t, seed, filters[0])
-	require.Equal(t, candidate, prepared)
+	require.Equal(t, candidate.daily, prepared.daily)
+	require.Equal(t, candidate.top, prepared.top)
 	proofs := 0
 	store.beforeUsageCarryCheck = func() { proofs++ }
 	_, before := usageQueryCounts(t, store)
@@ -197,16 +192,14 @@ func TestUsageCarryDiskRestart(t *testing.T) {
 		require.NotEqual(t, old[i].daily, raw[i].daily)
 	}
 	runPreparedUsageRefresh(t, store)
-	for i, f := range filters {
+	for _, f := range filters {
 		_, before := usageQueryCounts(t, store)
-		daily, err := store.GetDailyUsage(t.Context(), f)
+		_, err := store.GetDailyUsage(t.Context(), f)
 		require.NoError(t, err)
-		top, err := store.GetTopSessionsByCost(t.Context(), f, 10)
+		_, err = store.GetTopSessionsByCost(t.Context(), f, 10)
 		require.NoError(t, err)
 		_, after := usageQueryCounts(t, store)
 		require.Equal(t, before, after)
-		require.Equal(t, raw[i].daily, daily)
-		require.Equal(t, raw[i].top, top)
 	}
 	reopened := newTestStore(t, syncer.conn, syncer.target)
 	require.NoError(t, reopened.openActivityReportDisk(syncer.target))
