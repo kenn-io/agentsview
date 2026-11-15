@@ -68,7 +68,10 @@ const (
 	// price a row only when the catalog cannot.
 	// Version 24 separates snapshot ranking from billed output and stores priced
 	// totals for external account rows that cannot deduplicate against other usage.
-	usageCacheFormatVersion             = 24
+	usageCacheFormatVersion = 24
+	// This is the only audited cache upgrade.
+	usageCacheUpgradeFrom               = 23
+	usageCacheUpgradeTo                 = 24
 	usageCacheApplicationID             = 0x41565543
 	usageCacheKind                      = "agentsview-usage-facts"
 	usageCacheRetirementProtocolVersion = 1
@@ -392,7 +395,9 @@ CREATE INDEX usage_rollup_exceptions_window
     ON usage_rollup_exceptions (
         local_date, rollup_install_id, group_kind, group_key
     );
-CREATE TABLE usage_rollup_account_totals (
+` + usageCacheAccountTotalsSQL
+
+const usageCacheAccountTotalsSQL = `CREATE TABLE usage_rollup_account_totals (
     rollup_install_id INTEGER NOT NULL REFERENCES usage_rollup_installs(id)
         ON DELETE CASCADE,
     local_date TEXT NOT NULL,
@@ -633,7 +638,7 @@ func (m *usageCacheManager) openPersistentGeneration(
 		return nil, probe.Err
 	}
 	if !probe.Exists {
-		cache, published, err := publishUsageCache(ctx, path, databaseID)
+		cache, published, err := publishUsageCache(ctx, m.archivePath, path, databaseID)
 		if err != nil {
 			return nil, err
 		}
@@ -685,7 +690,7 @@ func acquireUsageCacheLease(path string) (*flock.Flock, error) {
 }
 
 func publishUsageCache(
-	ctx context.Context, path, databaseID string,
+	ctx context.Context, archivePath, path, databaseID string,
 ) (*usageCache, bool, error) {
 	file, err := os.CreateTemp(filepath.Dir(path), ".usage-cache-init-*.db")
 	if err != nil {
@@ -697,7 +702,24 @@ func publishUsageCache(
 		return nil, false, err
 	}
 	_ = os.Remove(temporaryPath)
-	cache, err := initializeUsageCache(ctx, temporaryPath, databaseID, false)
+	seeded := false
+	if usageCacheFormatVersion == usageCacheUpgradeTo {
+		seeded, err = seedUpgradedUsageCache(ctx, archivePath, temporaryPath, databaseID)
+		if err != nil {
+			if ctx.Err() != nil {
+				_ = removeUsageCacheFiles(temporaryPath)
+				return nil, false, ctx.Err()
+			}
+			log.Printf("warning: upgrading usage cache: %v", err)
+			_ = removeUsageCacheFiles(temporaryPath)
+		}
+	}
+	var cache *usageCache
+	if seeded {
+		cache, err = openUsageCache(ctx, temporaryPath, databaseID, false)
+	} else {
+		cache, err = initializeUsageCache(ctx, temporaryPath, databaseID, false)
+	}
 	if err != nil {
 		_ = removeUsageCacheFiles(temporaryPath)
 		return nil, false, err

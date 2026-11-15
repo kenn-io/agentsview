@@ -903,17 +903,17 @@ cache lacks current coverage for the timezone, the catalog or account generation
 changed, or more than 64 sessions changed. A background worker then reads all
 history in that timezone to rebuild the cache and claim coverage; see
 [Usage cache backfill](background-work.md#usage-cache-backfill). Format 24
-rebuilds each SQLite usage cache once after upgrading; the 31,000-session
-fixture previously took about 19 seconds and 92 MB. Both implementations are
-co-maintained under the same behavior contract: daily usage, top sessions,
+converts a SQLite format 23 usage cache and keeps its facts and rollups. Both
+implementations are co-maintained under the same behavior contract: daily usage, top sessions,
 billed session counts, relaxed matching counts, and per-session usage must
 remain observably equal. The `pgtest` complete-result parity fixture is the
 acceptance boundary. Track the PostgreSQL-native optimization in
 [issue #1451](https://github.com/kenn-io/agentsview/issues/1451).
 
 The usage cache filename is derived from its format version and the archive
-`database_id`. A format or database-ID change selects a new generation; it does
-not migrate or rewrite the archive. Facts contain only message- and
+`database_id`. A format or database-ID change selects a new generation without
+rewriting the archive. Future format changes reuse facts only through an audited conversion;
+otherwise the cache rebuilds. Facts contain only message- and
 usage-event-derived data. Aggregate fingerprints bake session `agent`,
 `started_at`, `project`, `machine`, `git_branch`, `group_key`, the cron label
 derived from `session_name`, `is_automated`, and `user_message_count`. Those
