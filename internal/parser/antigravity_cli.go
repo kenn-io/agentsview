@@ -214,7 +214,7 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 			transcriptFidelity = TranscriptFidelityFull
 		case dbOK:
 			messages = mergeAntigravityDBHistoryMessages(
-				dbResult.messages, historyMsgs, dbResult.steps,
+				dbResult.messages, historyMsgs,
 			)
 			hasTrajectory = true
 		case sidecarOK:
@@ -594,7 +594,7 @@ func applyAntigravityBrainStepMetadata(
 }
 
 func mergeAntigravityDBHistoryMessages(
-	dbMessages []ParsedMessage, history []ParsedMessage, steps []antigravityLoadedStep,
+	dbMessages []ParsedMessage, history []ParsedMessage,
 ) []ParsedMessage {
 	if len(dbMessages) == 0 || len(history) == 0 {
 		return dbMessages
@@ -614,41 +614,28 @@ func mergeAntigravityDBHistoryMessages(
 			dbMessages, history,
 		)
 	}
-	// Positional replacement is safe only when every structured prompt agrees
-	// with its history row. History can omit a prompt or include a pending one.
-	userIdx, messageIdx := 0, 0
-	for _, step := range steps {
-		if !step.decoded {
-			continue
-		}
-		msg := dbMessages[messageIdx]
-		messageIdx++
-		if msg.Role != RoleUser {
-			continue
-		}
-		if step.structuredPrompt && msg.Content != history[userIdx].Content {
-			return appendMissingAntigravityHistoryMessages(dbMessages, history)
-		}
-		userIdx++
-	}
 	historyIdx := 0
 	for i := range dbMessages {
 		if dbMessages[i].Role != RoleUser {
 			continue
 		}
 		if historyIdx >= len(history) {
-			return appendMissingAntigravityHistoryMessages(
-				dbMessages, history,
-			)
+			break
 		}
-		dbMessages[i].Content = history[historyIdx].Content
-		dbMessages[i].ContentLength = len(history[historyIdx].Content)
+		if dbMessages[i].structuredPrompt {
+			if normalizedAntigravityPrompt(dbMessages[i].Content) != normalizedAntigravityPrompt(history[historyIdx].Content) {
+				continue
+			}
+		} else {
+			dbMessages[i].Content = history[historyIdx].Content
+			dbMessages[i].ContentLength = len(history[historyIdx].Content)
+		}
 		if !history[historyIdx].Timestamp.IsZero() {
 			dbMessages[i].Timestamp = history[historyIdx].Timestamp
 		}
 		historyIdx++
 	}
-	return dbMessages
+	return append(dbMessages, history[historyIdx:]...)
 }
 
 // appendMissingAntigravityHistoryMessages appends history prompts that no

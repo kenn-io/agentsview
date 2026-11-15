@@ -417,7 +417,6 @@ func loadAntigravityStepsWithRawCount(ctx context.Context,
 		stepPositions[idx] = len(steps)
 		steps = append(steps, antigravityLoadedStep{
 			idx: idx, kind: kind, msg: msg, decoded: decoded,
-			structuredPrompt: parsed && parsedStep.role == RoleUser && antigravityUserInputText(parsedStep.fields) != "",
 		})
 		result.rawStepCount++
 	}
@@ -468,11 +467,10 @@ func loadAntigravityStepsWithRawCount(ctx context.Context,
 }
 
 type antigravityLoadedStep struct {
-	idx              int
-	kind             antigravityStepKind
-	msg              ParsedMessage
-	decoded          bool
-	structuredPrompt bool
+	idx     int
+	kind    antigravityStepKind
+	msg     ParsedMessage
+	decoded bool
 }
 
 type antigravityGenerationMetadata struct {
@@ -1118,7 +1116,7 @@ func decodeAntigravityParsedStep(
 		calls = extractAntigravityToolCalls(step.idx, step.fields)
 	}
 
-	strs, urlOnly := cleanAntigravityStepStrings(step)
+	strs, urlOnly, structuredPrompt := cleanAntigravityStepStrings(step)
 
 	// A non-user step whose only displayable content is a URL would
 	// otherwise vanish: the URL noise filter drops it and there are no
@@ -1137,10 +1135,11 @@ func decodeAntigravityParsedStep(
 
 	content := strings.Join(strs, "\n\n")
 	msg := ParsedMessage{
-		Role:          step.role,
-		Content:       content,
-		ContentLength: len(content),
-		Timestamp:     step.timestamp,
+		Role:             step.role,
+		Content:          content,
+		ContentLength:    len(content),
+		Timestamp:        step.timestamp,
+		structuredPrompt: structuredPrompt,
 	}
 	if len(calls) > 0 {
 		msg.ToolCalls = calls
@@ -1335,10 +1334,10 @@ func dedupeStrings(in []string) []string {
 // and, separately, any bare-URL strings that the non-user noise filter
 // removed. Callers fall back to urlOnly when a step would otherwise have
 // no content, so URL-only assistant messages are not silently dropped.
-func cleanAntigravityStepStrings(step antigravityStep) (cleaned, urlOnly []string) {
+func cleanAntigravityStepStrings(step antigravityStep) (cleaned, urlOnly []string, structuredPrompt bool) {
 	if step.role == RoleUser {
 		if text := antigravityUserInputText(step.fields); text != "" {
-			return []string{text}, nil
+			return []string{text}, nil, true
 		}
 	}
 	for _, s := range dedupeStrings(agProtoCollectStrings(step.fields, 20)) {
@@ -1359,11 +1358,11 @@ func cleanAntigravityStepStrings(step antigravityStep) (cleaned, urlOnly []strin
 		// candidates; prose, when present, still outscores a bare link.
 		candidates := append(append([]string{}, cleaned...), bareURLs...)
 		if prompt := bestAntigravityUserPrompt(candidates); prompt != "" {
-			return []string{prompt}, nil
+			return []string{prompt}, nil, false
 		}
-		return cleaned, nil
+		return cleaned, nil, false
 	}
-	return cleaned, bareURLs
+	return cleaned, bareURLs, false
 }
 
 func antigravityUserInputText(fields []agProtoField) string {

@@ -1777,6 +1777,7 @@ type ParsedMessage struct {
 	PromptSource string
 	// claudeSDKOrigin records this line's SDK origin; merged queued prompts default to false.
 	claudeSDKOrigin   bool
+	structuredPrompt  bool
 	SourceUUID        string
 	SourceParentUUID  string
 	IsSidechain       bool
