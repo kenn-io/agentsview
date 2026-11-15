@@ -3,6 +3,9 @@
 package duckdb
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 
@@ -72,21 +75,35 @@ func TestSystemPrefixSQLParity(t *testing.T) {
 		"<codex_internal_context\vsource=\"goal\">",
 		"<codex_internal_context source=\"goal\"\vother>",
 	}
-	for _, prefix := range db.SystemMsgPrefixes {
-		inputs = append(inputs, prefix)
-	}
+	inputs = append(inputs, db.SystemMsgPrefixes...)
 	for _, space := range " \t\n\v\f\r\u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff" {
 		inputs = append(inputs, string(space)+"<task-notification>")
 	}
 	conn := openTestDuckDB(t)
+	type classifierCase struct {
+		Content string
+		Role    string
+		System  bool
+	}
+	results := make([]classifierCase, 0, len(inputs)*2)
 	for _, content := range inputs {
 		for _, role := range []string{"user", "assistant"} {
 			var excluded bool
 			err := conn.QueryRowContext(ctx, `SELECT NOT (`+db.DuckDBSystemPrefixSQL("content", "role")+`) FROM (SELECT ? AS content, ? AS role)`, content, role).Scan(&excluded)
 			require.NoError(t, err)
 			require.Equal(t, excluded, db.IsDuckDBSystemPrefixed(content, role), "%q, %s", content, role)
+			results = append(results, classifierCase{Content: content, Role: role, System: excluded})
 		}
 	}
+	fingerprintJSON, err := json.Marshal(results)
+	require.NoError(t, err)
+	fingerprint := sha256.Sum256(fingerprintJSON)
+	wantBySchemaVersion := map[int]string{
+		31: "139cb85920832ad5723b30ec66b584c145cc39be69098a42c5d6738500191cfb",
+	}
+	want, ok := wantBySchemaVersion[SchemaVersion]
+	require.Truef(t, ok, "add a frozen system-prefix fingerprint for schema version %d", SchemaVersion)
+	require.Equal(t, want, hex.EncodeToString(fingerprint[:]), "system-prefix rules changed; bump SchemaVersion and record the new fingerprint")
 }
 
 func TestSystemPrefixSearchAndTrends(t *testing.T) {
