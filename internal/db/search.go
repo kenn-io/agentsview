@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -40,8 +41,12 @@ const (
 const (
 	legacyGoalContextPrefix        = "<goal_context>"
 	codexInternalContextTagPrefix  = "<codex_internal_context"
+	goalContextSourceAttr          = `source="goal"`
 	goalContextSourceAttrSQLPrefix = ` source="goal"`
 )
+
+var goalContextSourceAttrRe = regexp.MustCompile(`(?:^|\s)` +
+	regexp.QuoteMeta(goalContextSourceAttr) + `(?:\s|/|$)`)
 
 var goalContextWhitespace = strings.NewReplacer("\t", " ", "\n", " ", "\v", " ", "\f", " ", "\r", " ")
 
@@ -49,6 +54,10 @@ var goalContextWhitespace = strings.NewReplacer("\t", " ", "\n", " ", "\v", " ",
 // Codex /goal continuation wrapper that may already be stored in older
 // archives or read-only stores.
 func IsGoalContextPrefixed(content, role string) bool {
+	return goalContextPrefixed(content, role, goalContextSourceAttrRe.MatchString)
+}
+
+func goalContextPrefixed(content, role string, attrMatch func(string) bool) bool {
 	if role != "user" {
 		return false
 	}
@@ -58,15 +67,18 @@ func IsGoalContextPrefixed(content, role string) bool {
 	}
 	if strings.HasPrefix(trimmed, codexInternalContextTagPrefix) {
 		openTag, _, ok := strings.Cut(trimmed, ">")
-		if !ok {
-			return false
-		}
+		return ok && attrMatch(openTag)
+	}
+	return false
+}
+
+func duckDBGoalContextPrefixed(content, role string) bool {
+	return goalContextPrefixed(content, role, func(openTag string) bool {
 		openTag = goalContextWhitespace.Replace(openTag + ">")
 		return strings.Contains(openTag, goalContextSourceAttrSQLPrefix+" ") ||
 			strings.Contains(openTag, goalContextSourceAttrSQLPrefix+">") ||
 			strings.Contains(openTag, goalContextSourceAttrSQLPrefix+"/>")
-	}
-	return false
+	})
 }
 
 type systemPrefixSQLDialect int
@@ -282,12 +294,21 @@ const systemPrefixTrimCutset = " \t\n\v\f\r" +
 	"\u2028\u2029\u202F\u205F\u3000\uFEFF"
 
 // IsSystemPrefixed reports whether a user-role message is a system-injected
-// message identified by a SystemMsgPrefixes prefix. It is the Go equivalent
-// of SystemPrefixSQL for callers that filter in Go rather than SQL: only
-// user-role messages match, and leading whitespace is trimmed with the same
-// cutset before the case-sensitive prefix comparison. Changes to its verdicts
-// require a DuckDB SchemaVersion bump to rebuild stored classifications.
+// message identified by a SystemMsgPrefixes prefix. Only user-role messages
+// match, and leading whitespace is trimmed before the case-sensitive prefix
+// comparison. DuckDB uses IsDuckDBSystemPrefixed to preserve its SQL rules.
 func IsSystemPrefixed(content, role string) bool {
+	return systemPrefixed(content, role, IsGoalContextPrefixed)
+}
+
+// IsDuckDBSystemPrefixed matches DuckDBSystemPrefixSQL at push time. A verdict
+// change to either rule requires a DuckDB SchemaVersion bump to rebuild stored
+// values.
+func IsDuckDBSystemPrefixed(content, role string) bool {
+	return systemPrefixed(content, role, duckDBGoalContextPrefixed)
+}
+
+func systemPrefixed(content, role string, goal func(string, string) bool) bool {
 	if role != "user" {
 		return false
 	}
@@ -299,7 +320,7 @@ func IsSystemPrefixed(content, role string) bool {
 		}
 		trimmed = remainder
 	}
-	if IsGoalContextPrefixed(trimmed, role) {
+	if goal(trimmed, role) {
 		return true
 	}
 	for _, p := range SystemMsgPrefixes {

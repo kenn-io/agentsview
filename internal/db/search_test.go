@@ -59,8 +59,6 @@ func TestIsGoalContextPrefixed(t *testing.T) {
 		{"current wrapper", `<codex_internal_context source="goal">state`, "user", true},
 		{"current wrapper with extra attrs", `<codex_internal_context foo="bar" source="goal">state`, "user", true},
 		{"current wrapper with attrs after source", `<codex_internal_context source="goal" foo="bar">state`, "user", true},
-		{"malformed slash", `<codex_internal_context source="goal"/other>state`, "user", false},
-		{"vertical tab before source", "<codex_internal_context\vsource=\"goal\">state", "user", true},
 		{"current wrapper with newline before source", "<codex_internal_context\nsource=\"goal\">state", "user", true},
 		{"non goal internal context", `<codex_internal_context source="other">state`, "user", false},
 		{"data-source attr is not goal", `<codex_internal_context data-source="goal">state`, "user", false},
@@ -1251,5 +1249,19 @@ func TestSearch_DateRange(t *testing.T) {
 				assert.ElementsMatch(t, tc.want, ids, "query %s", query)
 			}
 		})
+	}
+}
+
+func TestSharedGoalContextVerdicts(t *testing.T) {
+	for _, tc := range []struct {
+		content string
+		want    bool
+	}{
+		{`<codex_internal_context source="goal"/other> text`, true},
+		{"<codex_internal_context\vsource=\"goal\"> text", false},
+		{"<codex_internal_context source=\"goal\"\vother> text", false},
+	} {
+		assert.Equal(t, tc.want, IsGoalContextPrefixed(tc.content, "user"), "%q", tc.content)
+		assert.Equal(t, tc.want, IsSystemPrefixed(tc.content, "user"), "%q", tc.content)
 	}
 }

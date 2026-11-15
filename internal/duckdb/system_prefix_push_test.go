@@ -72,8 +72,8 @@ func TestSystemPrefixPush(t *testing.T) {
 }
 
 func TestSystemPrefixRuleVersion(t *testing.T) {
-	// Keep this corpus and version together: changing a verdict needs a mirror
-	// rebuild and fresh Trends parts, even if the SQL oracle is unchanged.
+	// Changing a stored verdict needs a mirror rebuild and fresh Trends parts,
+	// even if the SQL oracle changes at the same time.
 	inputs := []string{
 		"", "ordinary", "<task-notification>", "<TASK-NOTIFICATION>",
 		"<system-reminder>x</system-reminder>",
@@ -87,6 +87,7 @@ func TestSystemPrefixRuleVersion(t *testing.T) {
 		`<codex_internal_context data-source="goal">`,
 		`<codex_internal_context source="goal"`,
 		"<codex_internal_context\vsource=\"goal\">",
+		"<codex_internal_context source=\"goal\"\vother>",
 	}
 	for _, prefix := range db.SystemMsgPrefixes {
 		inputs = append(inputs, prefix)
@@ -95,13 +96,12 @@ func TestSystemPrefixRuleVersion(t *testing.T) {
 		inputs = append(inputs, string(space)+"<task-notification>")
 	}
 	hash := sha256.New()
-	fmt.Fprintln(hash, SchemaVersion)
 	for _, content := range inputs {
 		for _, role := range []string{"user", "assistant"} {
-			fmt.Fprintf(hash, "%q %q %t\n", content, role, db.IsSystemPrefixed(content, role))
+			fmt.Fprintf(hash, "%q %q %t\n", content, role, db.IsDuckDBSystemPrefixed(content, role))
 		}
 	}
-	require.Equal(t, "e6b98b1005cc3b61a2fb51711a858784803ff72ecdc1c4fe524ca6f5851053ba", fmt.Sprintf("%x", hash.Sum(nil)), "system-prefix rules changed; bump SchemaVersion and update this digest")
+	require.Equal(t, "67e2f7c0294c8def56f41870585d4735e0aac75d4ae0663c62ad941145e1cf1e", fmt.Sprintf("%x", hash.Sum(nil)), "system-prefix rules changed; bump SchemaVersion and update this digest")
 }
 
 func TestSystemPrefixSearchAndTrends(t *testing.T) {
@@ -141,4 +141,18 @@ func TestSearchRetainsMalformedGoalContext(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, page.Results, 1)
 	require.Equal(t, "malformed-goal", page.Results[0].SessionID)
+}
+
+func TestDuckDBGoalContextWhitespaceParity(t *testing.T) {
+	conn := openTestDuckDB(t)
+	for _, content := range []string{
+		"<codex_internal_context\vsource=\"goal\"> text",
+		"<codex_internal_context source=\"goal\"\vother> text",
+	} {
+		var excluded bool
+		err := conn.QueryRowContext(t.Context(), `SELECT NOT (`+db.DuckDBSystemPrefixSQL("content", "role")+`) FROM (SELECT ? AS content, 'user' AS role)`, content).Scan(&excluded)
+		require.NoError(t, err)
+		require.True(t, excluded, "%q", content)
+		require.Equal(t, excluded, db.IsDuckDBSystemPrefixed(content, "user"), "%q", content)
+	}
 }

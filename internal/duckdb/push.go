@@ -1184,7 +1184,7 @@ func insertMessages(
 			usage.InputTokens, usage.OutputTokens, usage.CacheCreationTokens,
 			usage.CacheCreation1hTokens, usage.CacheReadTokens,
 			usage.ReasoningTokens, usage.WebSearchRequests,
-			db.IsSystemPrefixed(m.Content, m.Role),
+			db.IsDuckDBSystemPrefixed(m.Content, m.Role),
 		); err != nil {
 			return fmt.Errorf("inserting duckdb messages: %w", err)
 		}

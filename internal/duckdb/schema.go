@@ -39,7 +39,7 @@ import (
 // push by usagefacts.ParseTokenUsage, so usage reads never parse token_usage.
 // v30 moves the OpenRouter ownership list from a model_pricing row into
 // pricing_meta and stores pricing times as TIMESTAMP.
-// v31 stores system-prefix verdicts. Changes to IsSystemPrefixed verdicts
+// v31 stores system-prefix verdicts. Changes to IsDuckDBSystemPrefixed verdicts
 // must bump this version.
 const SchemaVersion = 31
 

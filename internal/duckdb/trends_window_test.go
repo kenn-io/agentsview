@@ -3,15 +3,15 @@
 package duckdb
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/kept"
+	"go.kenn.io/agentsview/internal/readbase"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -77,37 +77,10 @@ func TestDuckTrendsUnversionedSessions(t *testing.T) {
 	}
 }
 
-type legacyTrendSource struct{ analyticsSQL }
+type legacyTrendBackend struct{ analyticsSQL }
 
-func (s legacyTrendSource) TrendWindowSessions(ctx context.Context, f db.AnalyticsFilter, ids []string) ([]string, error) {
-	var selected []string
-	err := s.VisitSessionIDSets(ctx, ids, func(ctx context.Context, set string, args []any) error {
-		window, windowArgs := s.TrendSessionWindow(f, set, args)
-		found, err := db.ScanTrendIDs(s.QueryContext(ctx, "SELECT s.id FROM sessions s WHERE s.id IN "+set+window, append(args, windowArgs...)...))
-		selected = append(selected, found...)
-		return err
-	})
-	return selected, err
-}
-
-func (s legacyTrendSource) VisitTrendMessages(ctx context.Context, _ db.AnalyticsFilter, ids []string, visit func(string, string, time.Time)) error {
-	return s.VisitSessionIDSets(ctx, ids, func(ctx context.Context, set string, args []any) error {
-		query, args := s.TrendMessagesSQL(set, args)
-		rows, err := s.QueryContext(ctx, query, args...)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var id, content string
-			var ts time.Time
-			if err := rows.Scan(&id, &content, &ts); err != nil {
-				return err
-			}
-			visit(id, content, ts.UTC())
-		}
-		return rows.Err()
-	})
+func (s legacyTrendBackend) TrendsDisk() (*kept.Disk, string) {
+	return &s.store.usageDisk, "duckdb"
 }
 
 func TestDuckTrendsPartsInvalidateLegacyIdentity(t *testing.T) {
@@ -121,31 +94,22 @@ func TestDuckTrendsPartsInvalidateLegacyIdentity(t *testing.T) {
 	require.NoError(t, err)
 	f := db.AnalyticsFilter{From: "2025-03-10", To: "2025-03-10", Timezone: "UTC"}
 	store := openUsagePartsStore(t, path)
-	source := legacyTrendSource{analyticsSQL{store: store}}
-	old, handled, err := db.TrendsFromParts(t.Context(), &store.usageDisk, "duckdb", f, terms, "day", source)
-	require.NoError(t, err)
-	require.True(t, handled)
-	require.Equal(t, 1, old.Series[0].Total)
-	require.NoError(t, store.Close())
-	writeUsageMirror(t, path, `UPDATE messages SET is_system_prefixed = TRUE WHERE session_id = 'trends-window-fallback'`)
-	store = openUsagePartsStore(t, path)
 	var reads []string
 	reset := db.SetTrendPartsReadObserver(func(ids []string) { reads = append(reads, ids...) })
 	defer reset()
-	source = legacyTrendSource{analyticsSQL{store: store}}
-	stale, handled, err := db.TrendsFromParts(t.Context(), &store.usageDisk, "duckdb", f, terms, "day", source)
+	old, err := readbase.NewAnalytics(legacyTrendBackend{analyticsSQL{store: store}}, "duckdb").GetTrendsTerms(t.Context(), f, terms, "day")
 	require.NoError(t, err)
-	require.True(t, handled)
+	require.Equal(t, 1, old.Series[0].Total)
+	windowIDs := append([]string(nil), reads...)
+	require.NotEmpty(t, windowIDs)
+	require.NoError(t, store.Close())
+	writeUsageMirror(t, path, `UPDATE messages SET is_system_prefixed = TRUE WHERE session_id = 'trends-window-fallback'`)
+	store = openUsagePartsStore(t, path)
+	reads = nil
+	stale, err := readbase.NewAnalytics(legacyTrendBackend{analyticsSQL{store: store}}, "duckdb").GetTrendsTerms(t.Context(), f, terms, "day")
+	require.NoError(t, err)
 	require.Equal(t, old, stale)
 	require.Empty(t, reads)
-	versions, err := source.TrendSessionVersions(t.Context(), f)
-	require.NoError(t, err)
-	ids := make([]string, 0, len(versions))
-	for id := range versions {
-		ids = append(ids, id)
-	}
-	windowIDs, err := source.TrendWindowSessions(t.Context(), f, ids)
-	require.NoError(t, err)
 	fresh, err := store.GetTrendsTerms(t.Context(), f, terms, "day")
 	require.NoError(t, err)
 	require.Zero(t, fresh.Series[0].Total)
