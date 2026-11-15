@@ -47,27 +47,46 @@ func TestAnalyticsChangesKeepUsageRevision(t *testing.T) {
 	require.NoError(t, err)
 	searchBefore, err := d.archiveJournalRevision(ctx, archiveMetadataSearchChangeRevisionKey, "search change")
 	require.NoError(t, err)
-	for _, write := range []func() error{
-		func() error {
+	for _, tc := range []struct {
+		write                       func() error
+		analyticsDelta, searchDelta int64
+	}{
+		{func() error {
 			_, err := d.getWriter().ExecContext(ctx, `UPDATE messages SET dialogue_text = 'repaired' WHERE session_id = 'session'`)
 			return err
-		},
-		func() error {
+		}, 0, 1},
+		{func() error {
+			_, err := d.getWriter().ExecContext(ctx, `UPDATE sessions SET first_message = 'repaired' WHERE id = 'session'`)
+			return err
+		}, 1, 1},
+		{func() error {
+			_, err := d.getWriter().ExecContext(ctx, `INSERT INTO messages (session_id, ordinal, role, content, dialogue_text) VALUES ('session', 1, 'assistant', 'raw', 'dialogue')`)
+			return err
+		}, 0, 1},
+		{func() error {
+			_, err := d.getWriter().ExecContext(ctx, `DELETE FROM messages WHERE session_id = 'session' AND ordinal = 1`)
+			return err
+		}, 0, 1},
+		{func() error {
 			return d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "invoice", false)
-		},
-		func() error { return d.ClearImageText(ctx) },
-		func() error { return d.BackfillImageTextOccurrences(ctx) },
+		}, 0, 1},
+		{func() error {
+			return d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "receipt", false)
+		}, 0, 1},
+		{func() error { return d.ClearImageText(ctx) }, 0, 2},
+		{func() error { return d.BackfillImageTextOccurrences(ctx) }, 0, 1},
 	} {
-		require.NoError(t, write())
+		require.NoError(t, tc.write())
 		analyticsAfter, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
 		require.NoError(t, err)
+		analyticsBefore += tc.analyticsDelta
 		assert.Equal(t, analyticsBefore, analyticsAfter)
 		after, err := d.UsageChangeRevision(ctx)
 		require.NoError(t, err)
 		assert.Equal(t, before, after)
 		searchAfter, err := d.archiveJournalRevision(ctx, archiveMetadataSearchChangeRevisionKey, "search change")
 		require.NoError(t, err)
-		assert.Greater(t, searchAfter, searchBefore)
+		assert.Equal(t, searchBefore+tc.searchDelta, searchAfter)
 		searchBefore = searchAfter
 	}
 }

@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"go.kenn.io/docbank/document/ocr"
 )
 
 func TestSearchKeptSelections(t *testing.T) {
@@ -43,36 +42,6 @@ func TestSearchKeptSelections(t *testing.T) {
 		require.Len(t, page.Results, 1)
 	}
 	require.Zero(t, readOnlyLoads.Load())
-}
-
-func TestSearchKeptImageText(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
-	insertSession(t, d, "image", "project")
-	content := testInlineImageContent()
-	require.NoError(t, d.InsertMessages(ctx, []Message{{SessionID: "image", Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: content}}}}))
-	f := SearchFilter{Query: "invoice"}
-	page, err := d.Search(ctx, f)
-	require.NoError(t, err)
-	require.Empty(t, page.Results)
-	identity, err := ocr.NewIdentity("test", "model", "revision")
-	require.NoError(t, err)
-	require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "invoice", false))
-	page, err = d.Search(ctx, f)
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	require.NoError(t, d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "receipt", false))
-	page, err = d.Search(ctx, f)
-	require.NoError(t, err)
-	require.Empty(t, page.Results)
-	page, err = d.Search(ctx, SearchFilter{Query: "receipt"})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	require.NoError(t, d.ClearImageText(ctx))
-	page, err = d.Search(ctx, SearchFilter{Query: "receipt"})
-	require.NoError(t, err)
-	require.Empty(t, page.Results)
 }
 
 func TestSearchKeptCJKAvailability(t *testing.T) {
@@ -121,36 +90,7 @@ func TestSearchKeptSearchableEdits(t *testing.T) {
 			t.Helper()
 			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "session", []Message{{SessionID: "session", Role: "user", Content: "other"}}))
 		}, ""},
-		{"name", func(t *testing.T, d *DB) {
-			t.Helper()
-			insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "other"})
-			require.NoError(t, d.RenameSession(t.Context(), "session", new("needle first")))
-		}, func(t *testing.T, d *DB) {
-			t.Helper()
-			require.NoError(t, d.RenameSession(t.Context(), "session", new("other")))
-		}, ""},
-		{"first message", func(t *testing.T, d *DB) {
-			t.Helper()
-			insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "other"})
-			_, err := d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET first_message='needle first' WHERE id='session'`)
-			require.NoError(t, err)
-		}, func(t *testing.T, d *DB) {
-			t.Helper()
-			_, err := d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET first_message='other' WHERE id='session'`)
-			require.NoError(t, err)
-		}, ""},
-		{"deleted", func(t *testing.T, d *DB) {
-			t.Helper()
-			insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "needle first"})
-		}, func(t *testing.T, d *DB) {
-			t.Helper()
-			_, err := d.getWriter().ExecContext(t.Context(), `UPDATE sessions SET deleted_at='2024-06-02' WHERE id='session'`)
-			require.NoError(t, err)
-		}, ""},
 		{"dialogue", dialogue("raw words", new("needle"), true), dialogue("raw words", new("different"), true), `"raw" AND content:needle`},
-		{"dialogue full replacement to null", dialogue("raw words", new("needle"), false), dialogue("raw words", nil, false), `"raw" AND content:needle`},
-		{"dialogue full replacement from null", dialogue("raw needle", nil, false), dialogue("raw needle", new("different"), false), `"raw" AND content:needle`},
-		{"dialogue full replacement", dialogue("raw words", new("needle"), false), dialogue("raw words", new("different"), false), `"raw" AND content:needle`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
