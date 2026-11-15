@@ -1592,6 +1592,13 @@ own metadata, which is why the docs below call the database a mirror.
   [appends](../internal/clickhouse-mirror.md#pushes-rewrite-only-what-differs).
   Store every ClickHouse push cursor and version in the mirror's
   `sync_metadata`. Never store ClickHouse sync state in SQLite.
+- A watch push for changed files (`PushOptions.SkipIfUnchanged`) writes nothing
+  when the archive holds no change for the mirror, and `Sync.EnsureSchema`
+  skips the schema step while the mirror's tables, server, and stored exchange
+  probe match what this process last prepared. When a push starts writing
+  something new, add the local change it writes to `unchangedSinceLastPush`,
+  or a watch never pushes it before the interval push. See
+  [ClickHouse push and serve](../internal/clickhouse-mirror.md#decisions).
 - A push that rewrote at least `compactionShare` of the live messages runs
   `OPTIMIZE TABLE ... FINAL` on `compactionTables` (`compactAfterRewrite`).
   Add every new table a session push rewrites to that list. Compaction

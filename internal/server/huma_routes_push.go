@@ -799,6 +799,9 @@ func (s *Server) humaReplicaPush(
 					result, err = session.Push(pushCtx, storage.PushOptions{
 						Full:             forceFull,
 						RewriteUnchanged: body.Full,
+						// Only a watch push for a batch of changed files
+						// carries one; its startup and interval pushes do not.
+						SkipIfUnchanged: body.WatchBatch != nil,
 						ScopeVectorsToChangedSessions: body.
 							ScopeVectorsToChangedSessions,
 						LastReconciledVectorGeneration: body.
