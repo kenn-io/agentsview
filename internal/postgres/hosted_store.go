@@ -89,6 +89,8 @@ func newHostedAdapter(ctx context.Context, pg *sql.DB, tenant string) (*HostedSt
 }
 func (h *HostedStore) DB() *sql.DB  { return h.physical.DB() }
 func (h *HostedStore) Close() error { return h.physical.Close() }
+
+func (h *HostedStore) MemoryBackendName() string { return h.physical.MemoryBackendName() }
 func (h *HostedStore) SetCustomPricing(p map[string]config.CustomModelRate) {
 	h.physical.SetCustomPricing(p)
 }

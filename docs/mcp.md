@@ -226,6 +226,8 @@ its words together and in order. Hybrid keyword matches also report their word
 count.
 On CockroachDB, substring search matches the entire query as a substring;
 natural hybrid keyword searches require every word or phrase as a substring.
+SQLite and mirrors differ in Unicode folding, stemming, and order within a tier.
+See [search matching limits](/docs/session-api/#agentsview-session-search).
 
 `search_content` accepts a `mode` of `substring` (default), `regex`, `terms`,
 `semantic`, or `hybrid`. `terms` splits `pattern` on whitespace and requires

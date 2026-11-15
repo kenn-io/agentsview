@@ -2264,9 +2264,11 @@ phrase inside a longer query requires its words together and in order. `--fts`
 and hybrid's keyword matches rank messages by words the same way; hybrid
 keyword matches report their word count. An `--fts` query made only of
 quoted phrases, or one that uses FTS5 operators after a leading quote, such as
-`'"fix" OR "missing"'`, keeps its FTS5 meaning. On CockroachDB, default search
+`'"fix" OR "missing"'`, keeps its FTS5 meaning on SQLite. On CockroachDB, default search
 matches the entire query as a substring; natural `--fts` and hybrid keyword
 searches require every word or phrase as a substring.
+SQLite and mirrors differ in Unicode folding, stemming, and order within a tier.
+See [search matching limits](/docs/session-api/#agentsview-session-search).
 
 Repeatable `--exclude-session <id>` drops matches from
 those sessions before `--limit`. Hybrid returns keyword matches with a note

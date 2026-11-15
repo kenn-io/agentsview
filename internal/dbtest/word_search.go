@@ -107,6 +107,19 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 			})
 		}
 	}
+	t.Run("quoted fts phrase crosses punctuation", func(t *testing.T) {
+		page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+			Pattern: `"quarterly forecast"`, Mode: "fts", Project: "word-search",
+		})
+		require.NoError(t, err)
+		require.Len(t, page.Matches, 1)
+		assert.Equal(t, "phrase", page.Matches[0].SessionID)
+		wantWords := 2
+		if named, ok := store.(db.MemoryBackendNamer); ok && named.MemoryBackendName() == "sqlite" {
+			wantWords = 0
+		}
+		assert.Equal(t, wantWords, page.Matches[0].MatchedWords)
+	})
 	for _, mode := range []string{"substring", "fts", "hybrid"} {
 		t.Run("partial punctuation candidates keep word boundaries/"+mode, func(t *testing.T) {
 			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
