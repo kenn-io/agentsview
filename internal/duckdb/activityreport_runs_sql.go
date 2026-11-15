@@ -137,46 +137,32 @@ func activityRunsSQL(ids []string, gapUS int64) (string, []any) {
 					ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
 		),
 		activity_run_reversed_next AS (
-			SELECT session_id, ordinal, ts_us, call_index, event_index, fallback_ordinal, fallback_us,
-				fallback_role, fallback_model, 1 AS fallback_hit
-			FROM (
-				SELECT t.session_id, t.ordinal, t.ts_us, t.call_index, t.event_index,
-					m.ordinal AS fallback_ordinal, m.ts_us AS fallback_us, m.role AS fallback_role,
-					m.model AS fallback_model,
-					row_number() OVER (PARTITION BY t.session_id, t.ordinal, t.ts_us, t.call_index, t.event_index
-						ORDER BY m.ordinal) AS fallback_rank
-				FROM (
-					SELECT session_id, ordinal, ts_us, call_index, event_index
-					FROM activity_run_tool_ordered
-					WHERE is_terminal = 1 AND reached_us > ts_us
-				) t
-				JOIN (
-					SELECT session_id, ordinal, ts_us, role, model
-					FROM activity_run_tool_ordered
-					WHERE is_terminal = 0 AND ts_us IS NOT NULL
-				) m ON m.session_id = t.session_id
-				WHERE m.ordinal > t.ordinal AND m.ts_us > t.ts_us
-			) ranked
-			WHERE fallback_rank = 1
+			SELECT t.session_id, t.ordinal, t.ts_us, t.call_index, t.event_index,
+				m.ordinal AS fallback_ordinal, m.ts_us AS fallback_us, m.role AS fallback_role,
+				m.model AS fallback_model, 1 AS fallback_hit
+			FROM activity_run_tool_ordered t
+			JOIN activity_run_tool_ordered m ON m.session_id = t.session_id
+			WHERE t.is_terminal = 1 AND t.reached_us > t.ts_us
+				AND m.is_terminal = 0 AND m.ts_us IS NOT NULL
+				AND m.ordinal > t.ordinal AND m.ts_us > t.ts_us
+			QUALIFY row_number() OVER (PARTITION BY t.session_id, t.ordinal, t.ts_us, t.call_index, t.event_index
+				ORDER BY m.ordinal) = 1
 		),
-		activity_run_tool_rows AS (
+		activity_run_tool_closed AS (
 			SELECT r.*,
 				CASE WHEN r.reached_us IS NULL OR r.reached_us <= r.ts_us THEN r.record_us
 					WHEN f.fallback_hit = 1 THEN f.fallback_us END AS message_us,
 				CASE WHEN r.reached_us IS NULL OR r.reached_us <= r.ts_us THEN r.record_role
 					WHEN f.fallback_hit = 1 THEN f.fallback_role END AS message_role,
 				CASE WHEN r.reached_us IS NULL OR r.reached_us <= r.ts_us THEN r.record_model
-					WHEN f.fallback_hit = 1 THEN f.fallback_model END AS message_model
-			FROM (SELECT * FROM activity_run_tool_timed WHERE is_terminal = 1) r
+					WHEN f.fallback_hit = 1 THEN f.fallback_model END AS message_model,
+				CASE WHEN r.next_terminal_us IS NOT NULL AND (message_us IS NULL OR r.next_terminal_us < message_us)
+					THEN 1 ELSE 0 END AS closed_by_tool
+			FROM activity_run_tool_timed r
 			LEFT JOIN activity_run_reversed_next f
 				ON f.session_id = r.session_id AND f.ordinal = r.ordinal AND f.ts_us = r.ts_us
 				AND f.call_index = r.call_index AND f.event_index = r.event_index
-		),
-		activity_run_tool_closed AS (
-			SELECT *,
-				CASE WHEN next_terminal_us IS NOT NULL AND (message_us IS NULL OR next_terminal_us < message_us)
-					THEN 1 ELSE 0 END AS closed_by_tool
-			FROM activity_run_tool_rows
+			WHERE r.is_terminal = 1
 		),
 		activity_run_tool_priors AS (
 			SELECT c.session_id,

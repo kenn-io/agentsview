@@ -568,7 +568,9 @@ func (s *Store) readActivityCandidates(
 			SELECT ot.*, next_message.ordinal AS next_message_ordinal,
 				next_message.timestamp AS next_message_timestamp,
 				next_message.role AS next_message_role,
-				next_message.model AS next_message_model
+				next_message.model AS next_message_model,
+				ot.next_terminal_timestamp IS NOT NULL AND (next_message.timestamp IS NULL OR
+					ot.next_terminal_timestamp < next_message.timestamp) AS tool_closes
 			FROM ordered_terminal ot
 			LEFT JOIN LATERAL (
 				SELECT next.ordinal, next.timestamp, next.role, next.model
@@ -603,35 +605,11 @@ func (s *Store) readActivityCandidates(
 			WHERE te.timestamp > lm.timestamp
 		), candidates AS (
 			SELECT twm.session_id, twm.ordinal AS start_ordinal,
-				CASE
-					WHEN twm.next_terminal_timestamp IS NOT NULL AND
-						(twm.next_message_timestamp IS NULL OR
-						 twm.next_terminal_timestamp < twm.next_message_timestamp)
-					THEN twm.next_terminal_ordinal
-					ELSE twm.next_message_ordinal
-				END AS end_ordinal,
+				CASE WHEN twm.tool_closes THEN twm.next_terminal_ordinal ELSE twm.next_message_ordinal END AS end_ordinal,
 				twm.timestamp AS start_timestamp,
-				CASE
-					WHEN twm.next_terminal_timestamp IS NOT NULL AND
-						(twm.next_message_timestamp IS NULL OR
-						 twm.next_terminal_timestamp < twm.next_message_timestamp)
-					THEN twm.next_terminal_timestamp
-					ELSE twm.next_message_timestamp
-				END AS end_timestamp,
-				CASE
-					WHEN twm.next_terminal_timestamp IS NOT NULL AND
-						(twm.next_message_timestamp IS NULL OR
-						 twm.next_terminal_timestamp < twm.next_message_timestamp)
-					THEN 'tool'
-					ELSE twm.next_message_role
-				END AS closing_role,
-				CASE
-					WHEN twm.next_terminal_timestamp IS NOT NULL AND
-						(twm.next_message_timestamp IS NULL OR
-						 twm.next_terminal_timestamp < twm.next_message_timestamp)
-					THEN ''
-					ELSE twm.next_message_model
-				END AS closing_model,
+				CASE WHEN twm.tool_closes THEN twm.next_terminal_timestamp ELSE twm.next_message_timestamp END AS end_timestamp,
+				CASE WHEN twm.tool_closes THEN 'tool' ELSE twm.next_message_role END AS closing_role,
+				CASE WHEN twm.tool_closes THEN '' ELSE twm.next_message_model END AS closing_model,
 				twm.call_index, twm.event_index
 			FROM terminal_with_message twm
 
