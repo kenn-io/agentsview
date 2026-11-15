@@ -76,11 +76,39 @@ func seedUpgradedUsageCache(ctx context.Context, archivePath, candidate, databas
 		return false, err
 	}
 	defer db.Close()
-	tx, err := db.BeginTx(ctx, nil)
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer conn.Close()
+	if from <= 22 {
+		if _, err := conn.ExecContext(ctx, `ATTACH DATABASE ? AS usage_archive`, makeDSN(archivePath, true)); err != nil {
+			return false, fmt.Errorf("opening archive for cache upgrade: %w", err)
+		}
+	}
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if from <= 22 {
+		var sourceID string
+		if err := tx.QueryRowContext(ctx, `SELECT value FROM usage_archive.archive_metadata WHERE key = ?`, archiveMetadataDatabaseIDKey).Scan(&sourceID); err != nil {
+			return false, fmt.Errorf("reading archive identity for cache upgrade: %w", err)
+		}
+		if sourceID != databaseID {
+			return false, fmt.Errorf("%w during cache upgrade", errUsageCacheSourceChanged)
+		}
+		// Earlier formats did not store event statuses or message recorded costs.
+		// Refill those owners from the archive using the normal extraction path.
+		if _, err := tx.ExecContext(ctx, `DELETE FROM usage_cached_sessions WHERE session_id IN (
+			SELECT session_id FROM usage_archive.messages
+			WHERE CASE WHEN json_valid(token_usage) THEN json_type(token_usage, '$.recorded_cost_microdollars') IS NOT NULL ELSE 0 END
+			UNION SELECT session_id FROM usage_archive.usage_events WHERE cost_status != ''
+		)`); err != nil {
+			return false, fmt.Errorf("refreshing recorded cost owners: %w", err)
+		}
+	}
 	var queries []string
 	if from <= 22 {
 		queries = append(queries,
@@ -116,6 +144,9 @@ func seedUpgradedUsageCache(ctx context.Context, archivePath, candidate, databas
 		return false, fmt.Errorf("updating usage cache format: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	if err := conn.Close(); err != nil {
 		return false, err
 	}
 	if err := db.Close(); err != nil {

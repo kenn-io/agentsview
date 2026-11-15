@@ -207,9 +207,14 @@ func copyUsageV23Fixture(t *testing.T) (string, string, string) {
 
 func copyUsageFixture(t *testing.T, format int) (string, string, string) {
 	t.Helper()
+	return copyUsageFixtureNamed(t, format, "")
+}
+
+func copyUsageFixtureNamed(t *testing.T, format int, prefix string) (string, string, string) {
+	t.Helper()
 	dir := t.TempDir()
 	for _, name := range []string{"archive.db", "cache.db"} {
-		input, err := os.Open(filepath.Join(fmt.Sprintf("testdata/usage-cache-v%d", format), name+".gz"))
+		input, err := os.Open(filepath.Join(fmt.Sprintf("testdata/usage-cache-v%d", format), prefix+name+".gz"))
 		require.NoError(t, err)
 		reader, err := gzip.NewReader(input)
 		require.NoError(t, err)
@@ -385,4 +390,48 @@ func TestUsageCacheUpgradeFormat22(t *testing.T) {
 	assert.Equal(t, facts, actual)
 	assert.Zero(t, zones)
 	assert.NoFileExists(t, old22)
+}
+
+func TestUsageCacheUpgradeRecordedCosts(t *testing.T) {
+	for _, format := range []int{21, 22} {
+		t.Run(fmt.Sprint(format), func(t *testing.T) {
+			path, old, id := copyUsageFixtureNamed(t, 21, "costs-")
+			if format == 22 {
+				db := openRawUsageCacheTestDB(t, old)
+				_, err := db.ExecContext(t.Context(), `DROP INDEX usage_facts_claude_identity; `+usageCacheClaudeIdentityIndexSQL+` UPDATE usage_cache_metadata SET value='22' WHERE key='format_version'`)
+				require.NoError(t, err)
+				require.NoError(t, db.Close())
+				require.NoError(t, os.Rename(old, usageCacheGenerationPath(path, 22, id)))
+			}
+			freshPath, freshOld, _ := copyUsageFixtureNamed(t, 21, "costs-")
+			require.NoError(t, os.Remove(freshOld))
+			database, err := Open(t.Context(), path)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			fresh, err := Open(t.Context(), freshPath)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, fresh.Close()) })
+			for _, db := range []*DB{database, fresh} {
+				db.SetCustomPricing(map[string]config.CustomModelRate{"test-priced-model": {InputMicrodollarsPerMTok: 1_000_000}})
+			}
+			cache, err := database.usageCache.Generation(t.Context(), id)
+			require.NoError(t, err)
+			var extracted []string
+			cache.fill.observer.beforeExtract = func(versions []usageSourceVersion) {
+				for _, version := range versions {
+					extracted = append(extracted, version.SessionID)
+				}
+			}
+			filter := UsageFilter{Timezone: "UTC", Breakdowns: true, PairwiseSides: true}
+			want, err := fresh.GetDailyUsage(t.Context(), filter)
+			require.NoError(t, err)
+			got, err := database.GetDailyUsage(t.Context(), filter)
+			require.NoError(t, err)
+			assert.Equal(t, want, got)
+			assert.EqualValues(t, 19200, got.Totals.TotalCost.Microdollars)
+			assert.ElementsMatch(t, []string{"recorded-event", "exact-event", "recorded-message", "unpriced-message"}, extracted)
+			rows := usageSpoolFactValues(t, cache.db, `SELECT 0, s.session_id, f.cost_status FROM usage_facts f JOIN usage_cached_sessions s ON s.id=f.cached_session_id WHERE s.session_id IN ('recorded-event', 'exact-event', 'recorded-message', 'unpriced-message') ORDER BY s.session_id`)
+			assert.Equal(t, [][]any{{"exact-event", "exact"}, {"recorded-event", "recorded"}, {"recorded-message", "recorded"}, {"unpriced-message", "recorded"}}, rows)
+		})
+	}
 }

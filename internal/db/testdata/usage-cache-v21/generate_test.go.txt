@@ -9,6 +9,7 @@ import (
     "testing"
 
     "github.com/stretchr/testify/require"
+    "go.kenn.io/agentsview/internal/money"
 )
 
 func TestGenerateUsageCacheV21(t *testing.T) {
@@ -34,4 +35,29 @@ func TestGenerateUsageCacheV21(t *testing.T) {
     cachePath := cache.path
     require.NoError(t, database.Close())
     require.NoError(t, os.Rename(cachePath, filepath.Join(dir, "cache.db")))
+}
+
+// Run this test at v0.47.0 with USAGE_V21_FIXTURE_DIR set to an empty
+// directory, then gzip its archive.db and cache.db as costs-*.db.gz.
+func TestGenerateUsageCacheV21Costs(t *testing.T) {
+    dir := os.Getenv("USAGE_V21_FIXTURE_DIR")
+    require.NotEmpty(t, dir)
+    database, err := Open(t.Context(), filepath.Join(dir, "archive.db"))
+    require.NoError(t, err)
+    started := "2026-08-10T09:00:00Z"
+    for _, id := range []string{"recorded-event", "exact-event", "recorded-message", "unpriced-message"} {
+        insertSession(t, database, id, "cost-fixture", func(s *Session) { s.Agent = "codex"; s.StartedAt = &started })
+    }
+    seedJournaledUsage(t, database, "untouched")
+    recordedCost, exactCost := money.Money{Microdollars: 7000}, money.Money{Microdollars: 8000}
+    require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "recorded-event", []UsageEvent{{Source: "session", Model: "test-priced-model", InputTokens: 100, Cost: &recordedCost, CostStatus: "recorded", OccurredAt: started, DedupKey: "recorded"}}))
+    require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "exact-event", []UsageEvent{{Source: "session", Model: "test-priced-model", InputTokens: 100, Cost: &exactCost, CostStatus: "exact", OccurredAt: started, DedupKey: "exact"}}))
+    require.NoError(t, database.InsertMessages(t.Context(), []Message{
+        {SessionID: "recorded-message", Ordinal: 0, Role: "assistant", Timestamp: started, Model: "test-priced-model", TokenUsage: []byte(`{"input_tokens":100,"recorded_cost_microdollars":9000}`)},
+        {SessionID: "unpriced-message", Ordinal: 0, Role: "assistant", Timestamp: started, Model: "unpriced-cost-model", TokenUsage: []byte(`{"input_tokens":100,"recorded_cost_microdollars":11000}`)},
+    }))
+    cache := warmJournaledUsage(t, database, UsageFilter{Timezone: "UTC"})
+    path := cache.path
+    require.NoError(t, database.Close())
+    require.NoError(t, os.Rename(path, filepath.Join(dir, "cache.db")))
 }
