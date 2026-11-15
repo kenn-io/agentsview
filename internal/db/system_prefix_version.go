@@ -8,8 +8,8 @@ import (
 	"strings"
 )
 
-// SystemPrefixRulesVersion changes when classifier inputs or representative
-// classifications change. Mirrors use it to refresh stored verdicts.
+// SystemPrefixRulesVersion changes when DuckDB classifier inputs or
+// representative classifications change. Mirrors use it to refresh verdicts.
 func SystemPrefixRulesVersion() string {
 	parts := []string{
 		"system-reminder-open:" + strconv.Quote(systemReminderOpenTag),
@@ -33,12 +33,15 @@ func SystemPrefixRulesVersion() string {
 		legacyGoalContextPrefix+"probe",
 		codexInternalContextTagPrefix+" "+goalContextSourceAttr+">probe",
 		codexInternalContextTagPrefix+` source="other">probe`,
+		codexInternalContextTagPrefix+` source="goal"/unexpected>probe`,
+		"<codex_internal_context\vsource=\"goal\">probe",
+		"<codex_internal_context source=\"goal\"\vother>probe",
 	)
 	for _, content := range contents {
 		for _, role := range []string{"user", "assistant"} {
 			parts = append(parts, fmt.Sprintf(
 				"probe:%q:%q:%t", content, role,
-				IsSystemPrefixed(content, role),
+				IsDuckDBSystemPrefixed(content, role),
 			))
 		}
 	}
