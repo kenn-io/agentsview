@@ -614,28 +614,44 @@ func mergeAntigravityDBHistoryMessages(
 			dbMessages, history,
 		)
 	}
-	historyIdx := 0
+	matched := make([]bool, len(history))
 	for i := range dbMessages {
-		if dbMessages[i].Role != RoleUser {
+		msg := &dbMessages[i]
+		if msg.Role != RoleUser || !msg.structuredPrompt {
 			continue
 		}
-		if historyIdx >= len(history) {
-			break
-		}
-		if dbMessages[i].structuredPrompt {
-			if normalizedAntigravityPrompt(dbMessages[i].Content) != normalizedAntigravityPrompt(history[historyIdx].Content) {
-				continue
+		for j := range history {
+			if !matched[j] && normalizedAntigravityPrompt(msg.Content) == normalizedAntigravityPrompt(history[j].Content) {
+				matched[j] = true
+				if !history[j].Timestamp.IsZero() {
+					msg.Timestamp = history[j].Timestamp
+				}
+				break
 			}
-		} else {
-			dbMessages[i].Content = history[historyIdx].Content
-			dbMessages[i].ContentLength = len(history[historyIdx].Content)
 		}
+	}
+	historyIdx := 0
+	for i := range dbMessages {
+		if dbMessages[i].Role != RoleUser || dbMessages[i].structuredPrompt {
+			continue
+		}
+		for matched[historyIdx] {
+			historyIdx++
+		}
+		dbMessages[i].Content = history[historyIdx].Content
+		dbMessages[i].ContentLength = len(history[historyIdx].Content)
 		if !history[historyIdx].Timestamp.IsZero() {
 			dbMessages[i].Timestamp = history[historyIdx].Timestamp
 		}
+		matched[historyIdx] = true
 		historyIdx++
 	}
-	return append(dbMessages, history[historyIdx:]...)
+	for i, msg := range history {
+		if !matched[i] {
+			dbMessages = append(dbMessages, msg)
+		}
+	}
+	return dbMessages
 }
 
 // appendMissingAntigravityHistoryMessages appends history prompts that no

@@ -1377,7 +1377,7 @@ func antigravityUserInputText(fields []agProtoField) string {
 		}
 		if field, ok := agProtoFind(item.Nested, 1); ok {
 			if value, ok := agProtoString(field); ok {
-				text.WriteString(strings.ReplaceAll(value, "\x00", "\uFFFD"))
+				text.WriteString(agProtoSanitizeString(value))
 			}
 		}
 	}

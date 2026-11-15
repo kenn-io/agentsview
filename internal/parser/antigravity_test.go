@@ -4878,3 +4878,28 @@ func TestAntigravityCLIDBStructuredAndLegacyHistory(t *testing.T) {
 	assert.Equal(t, "second prompt", msgs[1].Content)
 	assert.Equal(t, "比较这两个游戏 /grill-me", sess.FirstMessage)
 }
+
+func TestAntigravityCLIDBStructuredHistoryGapDoesNotDuplicate(t *testing.T) {
+	const id = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	mustMkdir(t, filepath.Dir(dbPath))
+	fixture, err := os.ReadFile(filepath.Join("testdata", "data-version-corpus", "antigravity-cli", "conversations", id+".db"))
+	require.NoError(t, err)
+	mustWrite(t, dbPath, fixture)
+	conn, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	text := encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: []byte("second structured prompt")}})
+	input := encodePB([]pbField{{num: 3, wire: pbWireBytes, bytes: text}})
+	payload := encodePB([]pbField{{num: 19, wire: pbWireBytes, bytes: input}})
+	mustExec(t, conn, `INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`, 1, 14, payload)
+	require.NoError(t, conn.Close())
+	mustWrite(t, filepath.Join(root, "history.jsonl"), []byte(
+		`{"conversationId":"`+id+`","timestamp":1779000000000,"display":"earlier history prompt"}`+"\n"+
+			`{"conversationId":"`+id+`","timestamp":1779000001000,"display":"比较这两个游戏 /grill-me"}`+"\n"))
+	sess, msgs, err := parseAntigravityCLITestSession(t, dbPath, "", "test-machine")
+	require.NoError(t, err)
+	require.Len(t, msgs, 3)
+	assert.ElementsMatch(t, []string{"比较这两个游戏 /grill-me", "second structured prompt", "earlier history prompt"}, []string{msgs[0].Content, msgs[1].Content, msgs[2].Content})
+	assert.Equal(t, 3, sess.UserMessageCount)
+}
