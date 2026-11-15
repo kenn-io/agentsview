@@ -12,7 +12,7 @@ import (
 	"go.kenn.io/docbank/document/ocr"
 )
 
-func TestAnalyticsChangesKeepUsageRevision(t *testing.T) {
+func TestAnalyticsAndSearchChangesKeepUsageRevision(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "session", "project")
