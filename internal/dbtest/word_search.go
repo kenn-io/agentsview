@@ -41,6 +41,8 @@ func SeedWordSearch(t *testing.T, d *db.DB) {
 		{"invoice-email", "word-punctuation", "a@invoice.example"},
 		{"invoice-version", "word-punctuation", "v2.invoice"},
 		{"split-punctuation", "word-split-punctuation", "invoice txt"},
+		{"cjk-prefix", "word-cjk-boundary", "漢invoice"},
+		{"cjk-suffix", "word-cjk-boundary", "invoice漢"},
 	} {
 		SeedSession(t, d, entry.id, entry.project, func(s *db.Session) { s.UserMessageCount = 2 })
 		require.NoError(t, d.ReplaceSessionMessages(t.Context(), entry.id, []db.Message{{
@@ -121,6 +123,14 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 		assert.Equal(t, wantWords, page.Matches[0].MatchedWords)
 	})
 	for _, mode := range []string{"substring", "fts", "hybrid"} {
+		t.Run("CJK letters are word characters/"+mode, func(t *testing.T) {
+			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+				Pattern: "invoice absentword", Mode: mode, Project: "word-cjk-boundary",
+				KeywordOnly: mode == "hybrid",
+			})
+			require.NoError(t, err)
+			assert.Empty(t, page.Matches)
+		})
 		t.Run("partial punctuation candidates keep word boundaries/"+mode, func(t *testing.T) {
 			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
 				Pattern: "invoice absentword", Mode: mode, Project: "word-punctuation",

@@ -38,7 +38,7 @@ func WordRegexSQL(b *QueryBuilder, raw string, q ContentWords, all bool) string 
 			words[i] = regexp.QuoteMeta(words[i])
 		}
 		if len(words) > 0 {
-			parts = append(parts, b.RegexPredicate(raw, boundedPattern(b, hasNonASCII(phrase), words...)))
+			parts = append(parts, b.RegexPredicate(raw, boundedPattern(b, words...)))
 		}
 	}
 	return "(" + strings.Join(parts, " AND ") + ")"
@@ -100,20 +100,17 @@ func hasNonASCII(s string) bool {
 
 func wordTermSQL(b *QueryBuilder, raw string, forms []string) string {
 	unicodeClasses := slices.ContainsFunc(forms, hasNonASCII)
-	return b.dialect.regexPredicate(raw, b.Add(boundedPattern(b, unicodeClasses, compactForms(b, forms, unicodeClasses))))
+	return b.dialect.regexPredicate(raw, b.Add(boundedPattern(b, compactForms(b, forms, unicodeClasses))))
 }
 
 // boundedPattern matches words separated by non-letter, non-digit runs, with
 // a boundary on each side. PostgreSQL's ~* ignores case; RE2 takes (?i),
 // which ClickHouse's regexPredicate repeats harmlessly.
-func boundedPattern(b *QueryBuilder, unicodeClasses bool, words ...string) string {
+func boundedPattern(b *QueryBuilder, words ...string) string {
 	if b.dialect.name == "postgres" {
 		return "(^|_|\\m)" + strings.Join(words, "[^[:alnum:]]+") + "($|_|\\M)"
 	}
 	flags, gap := "(?i)", `[^\p{L}\p{N}]`
-	if !unicodeClasses {
-		gap = "[^[:alnum:]]"
-	}
 	return flags + "(^|" + gap + ")" + strings.Join(words, gap+"+") + "($|" + gap + ")"
 }
 
