@@ -17,12 +17,12 @@ type fallbackVectorSearcher struct {
 	err error
 }
 
-type namedFallbackStore struct {
+type namedFallbackStoreStub struct {
 	*db.DB
 	name string
 }
 
-func (s *namedFallbackStore) MemoryBackendName() string { return s.name }
+func (s *namedFallbackStoreStub) MemoryBackendName() string { return s.name }
 
 func (s *fallbackVectorSearcher) PrepareSemanticSearch(context.Context, string) (db.VectorSearchPage, int, error) {
 	return nil, 0, s.err
@@ -58,7 +58,7 @@ func TestDirectBackendHybridKeywordFallback(t *testing.T) {
 			}
 			backend := service.NewDirectBackend(d, nil)
 			if tc.backendName != "" {
-				backend = service.NewReadOnlyBackend(&namedFallbackStore{DB: d, name: tc.backendName})
+				backend = service.NewReadOnlyBackend(&namedFallbackStoreStub{DB: d, name: tc.backendName})
 			}
 			pattern := tc.pattern
 			if pattern == "" {

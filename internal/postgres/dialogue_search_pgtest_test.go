@@ -82,7 +82,7 @@ func TestPGWordSearchParity(t *testing.T) {
 	store, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	dbtest.AssertWordSearch(t, store)
+	dbtest.AssertWordSearch(t, store, true)
 	dbtest.AssertExplicitMirrorFTS(t, store, "hybrid")
 }
 
@@ -101,22 +101,18 @@ func TestPGWordSearchCLocale(t *testing.T) {
 	store := setupContentSearch(t)
 	for _, tc := range []struct {
 		name, body, pattern string
-		want                int
 	}{
-		{"cjk-after", "invoice漢", "invoice absentword", 0},
-		{"cjk-before", "漢invoice", "invoice absentword", 0},
-		{"cjk-phrase", "invoice漢rounding", `"invoice rounding" absentword`, 0},
-		{"accent-adjacent", "caféé", "café absentword", 0},
+		{"cjk-after", "invoice漢", "invoice absentword"},
+		{"cjk-before", "漢invoice", "invoice absentword"},
+		{"cjk-phrase", "invoice漢rounding", `"invoice rounding" absentword`},
+		{"accent-adjacent", "caféé", "café absentword"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			insertCSSession(t, store, tc.name, tc.name, "claude", "2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
 			insertCSMessage(t, store, tc.name, 0, "user", tc.body, "2026-05-01T10:00:00Z", false)
 			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: tc.pattern, Mode: "fts", Project: tc.name, Sources: []string{"messages"}, Limit: 50})
 			require.NoError(t, err)
-			require.Len(t, page.Matches, tc.want)
-			if tc.want > 0 {
-				assert.Equal(t, tc.name, page.Matches[0].SessionID)
-			}
+			assert.Empty(t, page.Matches)
 		})
 	}
 }

@@ -109,7 +109,7 @@ func AssertExplicitMirrorFTS(t *testing.T, store db.Store, modes ...string) {
 }
 
 // AssertWordSearch checks the user-visible ranking and paging contract.
-func AssertWordSearch(t *testing.T, store db.Store) {
+func AssertWordSearch(t *testing.T, store db.Store, mirror bool) {
 	t.Helper()
 	type hit struct {
 		session, location string
@@ -219,22 +219,27 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 		})
 	}
 	for _, mode := range []string{"substring", "fts", "hybrid"} {
+		if !mirror && mode == "hybrid" {
+			continue
+		}
 		t.Run(mode, func(t *testing.T) {
 			f := db.ContentSearchFilter{Pattern: "invoice rounding decision", Mode: mode, Project: "word-search", Limit: 50, KeywordOnly: mode == "hybrid"}
-			page, err := store.SearchContent(t.Context(), f)
-			require.NoError(t, err)
 			want := []hit{{"exact", "message", 3}, {"two", "message", 2}, {"one", "message", 1}}
 			if mode == "substring" {
 				want = []hit{{"exact", "message", 3}, {"tool", "tool_result", 3}, {"two", "message", 2}, {"one", "message", 1}}
 			}
-			assert.Equal(t, want, project(page.Matches))
+			if mirror {
+				page, err := store.SearchContent(t.Context(), f)
+				require.NoError(t, err)
+				assert.Equal(t, want, project(page.Matches))
+			}
 			if mode == "hybrid" {
 				return
 			}
 			f.Limit = 1
 			var paged []hit
 			for range 5 {
-				page, err = store.SearchContent(t.Context(), f)
+				page, err := store.SearchContent(t.Context(), f)
 				require.NoError(t, err)
 				paged = append(paged, project(page.Matches)...)
 				if page.NextCursor == 0 {
@@ -289,27 +294,33 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 		})
 	}
 	for _, tc := range []struct {
-		pattern string
-		want    []hit
+		pattern    string
+		want       []hit
+		mirrorOnly bool
 	}{
-		{`"rounding of invoices"`, []hit{{"two", "message", 0}}},
-		{`policy "quarterly forecast"`, []hit{{"phrase", "message", 2}}},
-		{`policy "forecast quarterly"`, nil},
-		{`policy "quarterly missing"`, nil},
+		{`"rounding of invoices"`, []hit{{"two", "message", 0}}, true},
+		{`policy "quarterly forecast"`, []hit{{"phrase", "message", 2}}, false},
+		{`policy "forecast quarterly"`, nil, false},
+		{`policy "quarterly missing"`, nil, false},
 	} {
+		if !mirror && tc.mirrorOnly {
+			continue
+		}
 		page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: tc.pattern, Project: "word-search"})
 		require.NoError(t, err)
 		assert.Equal(t, tc.want, project(page.Matches), tc.pattern)
 	}
 	for _, tc := range []struct {
-		name   string
-		filter db.ContentSearchFilter
-		want   []hit
+		name       string
+		filter     db.ContentSearchFilter
+		want       []hit
+		mirrorOnly bool
 	}{
 		{
-			name:   "single word remains substring search",
-			filter: db.ContentSearchFilter{Pattern: "invoice", Project: "word-search", Sources: []string{"messages"}},
-			want:   []hit{{"exact", "message", 0}, {"two", "message", 0}, {"one", "message", 0}, {"near", "message", 0}},
+			name:       "single word remains substring search",
+			filter:     db.ContentSearchFilter{Pattern: "invoice", Project: "word-search", Sources: []string{"messages"}},
+			want:       []hit{{"exact", "message", 0}, {"two", "message", 0}, {"one", "message", 0}, {"near", "message", 0}},
+			mirrorOnly: true,
 		},
 		{
 			name:   "word matching folds case",
@@ -317,11 +328,15 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 			want:   []hit{{"case", "message", 3}},
 		},
 		{
-			name:   "non-message sources stay exact",
-			filter: db.ContentSearchFilter{Pattern: "invoice rounding decision", Project: "word-search", Sources: []string{"tool_result"}},
-			want:   []hit{{"tool", "tool_result", 0}},
+			name:       "non-message sources stay exact",
+			filter:     db.ContentSearchFilter{Pattern: "invoice rounding decision", Project: "word-search", Sources: []string{"tool_result"}},
+			want:       []hit{{"tool", "tool_result", 0}},
+			mirrorOnly: true,
 		},
 	} {
+		if !mirror && tc.mirrorOnly {
+			continue
+		}
 		t.Run(tc.name, func(t *testing.T) {
 			page, err := store.SearchContent(t.Context(), tc.filter)
 			require.NoError(t, err)

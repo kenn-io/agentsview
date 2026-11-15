@@ -38,7 +38,7 @@ func TestClickHouseWordSearchParity(t *testing.T) {
 	store, err := NewStore(t.Context(), target)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	dbtest.AssertWordSearch(t, store)
+	dbtest.AssertWordSearch(t, store, true)
 	dbtest.AssertExplicitMirrorFTS(t, store)
 }
 
