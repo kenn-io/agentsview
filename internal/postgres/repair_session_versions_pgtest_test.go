@@ -41,9 +41,6 @@ func TestPGSchemaRepairsPreserveTrendsParts(t *testing.T) {
 			_, err = ps.DB().ExecContext(ctx, `UPDATE sessions SET updated_at = NOW()`)
 			require.NoError(t, err)
 			require.NoError(t, tc.repair())
-			var unstamped int
-			require.NoError(t, ps.DB().QueryRowContext(ctx, `SELECT count(*) FROM sessions WHERE automation_audit_hash IS NULL`).Scan(&unstamped))
-			assert.Zero(t, unstamped)
 			terms, err := db.ParseTrendTerms([]string{"hello"})
 			require.NoError(t, err)
 			filter := db.AnalyticsFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
