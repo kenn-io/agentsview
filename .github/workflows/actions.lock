@@ -114,7 +114,7 @@ dependencies:
         repo_id: 846733598
     'dtolnay/rust-toolchain@stable':
         ref: 'stable'
-        commit: 'sha1-39008827e6b4319a349e9a42dfc90579dd25f1ca'
+        commit: 'sha1-b725eda525362e7cf34af9a7243cac1e3f01a7ec'
         owner_id: 1940490
         repo_id: 260749683
     'kenn-io/actions@1791c94d02222ed022f31d41eab3118e4f4fcc15':

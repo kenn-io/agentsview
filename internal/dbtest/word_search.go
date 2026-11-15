@@ -40,7 +40,7 @@ func SeedWordSearch(t *testing.T, d *db.DB) {
 		{"invoice-path", "word-punctuation", "/tmp/invoice"},
 		{"invoice-email", "word-punctuation", "a@invoice.example"},
 		{"invoice-version", "word-punctuation", "v2.invoice"},
-		{"split-punctuation", "word-split-punctuation", "invoice txt"},
+		{"split-punctuation", "word-split-punctuation", strings.Repeat("filler ", 80) + "invoice txt"},
 		{"cjk-prefix", "word-cjk-boundary", "漢invoice"},
 		{"cjk-suffix", "word-cjk-boundary", "invoice漢"},
 	} {
@@ -105,6 +105,10 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 				})
 				require.NoError(t, err)
 				assert.Equal(t, tc.want, project(page.Matches))
+				if tc.name == "punctuation splits query words" {
+					require.Len(t, page.Matches, 1)
+					assert.Contains(t, page.Matches[0].Snippet, "invoice txt")
+				}
 			})
 		}
 	}
@@ -193,6 +197,19 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 			assert.Equal(t, want, paged)
 		})
 	}
+	t.Run("paging across exact and word matches", func(t *testing.T) {
+		page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+			Pattern: "invoice rounding decision", Project: "word-search", Limit: 2, Cursor: 1,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, []hit{{"tool", "tool_result", 3}, {"two", "message", 2}}, project(page.Matches))
+		assert.Equal(t, 3, page.NextCursor)
+		page, err = store.SearchContent(t.Context(), db.ContentSearchFilter{
+			Pattern: "invoice rounding decision", Project: "word-search", Limit: 2, Cursor: page.NextCursor,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, []hit{{"one", "message", 1}}, project(page.Matches))
+	})
 	for _, tc := range []struct {
 		pattern string
 		want    []hit

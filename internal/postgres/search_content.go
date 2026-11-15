@@ -142,12 +142,16 @@ func (s *Store) searchContentSubstringPG(
 	var ranked bool
 	if !s.cockroach {
 		f, words, ranked = db.RouteContentWords(f)
+		pattern := strings.TrimSpace(f.Pattern)
+		if f.Mode == "fts" && !strings.HasPrefix(pattern, `"`) && (strings.ContainsAny(pattern, "*+:^") || strings.HasPrefix(pattern, `NOT "`)) {
+			ranked = false
+		}
 	}
 	scopeWhere, scopeArgs := db.BuildContentScopeSQL(f, s.sessionDialect())
 	scopeWhere, scopeArgs = appendExcludeSessionIDsPG(
 		scopeWhere, scopeArgs, "id", f.ExcludeSessionIDs)
 	if ranked && f.Mode == "fts" {
-		return s.searchContentWordsPG(ctx, f, words, scopeWhere, nil, scopeArgs)
+		return s.searchContentWordsPG(ctx, f, words, scopeWhere, scopeArgs)
 	}
 	escapedPat := escapeLike(f.Pattern)
 
@@ -184,9 +188,12 @@ func (s *Store) searchContentSubstringPG(
 		return db.ContentSearchPage{}, nil
 	}
 
-	branchArgs := pb.args
-	limitP := pb.add(f.Limit + 1)
-	offsetP := pb.add(f.Cursor)
+	limit, offset := f.Limit, f.Cursor
+	if ranked {
+		limit, offset = f.Cursor+f.Limit, 0
+	}
+	limitP := pb.add(limit + 1)
+	offsetP := pb.add(offset)
 	query := "WITH scoped AS (SELECT id FROM sessions WHERE " + scopeWhere + ") " +
 		"SELECT session_id, project, agent, transcript_revision, location, role, tool_name, " +
 		"ordinal, ts, snippet, " + strconv.Itoa(len(words.Terms)) + " FROM (" +
@@ -194,12 +201,31 @@ func (s *Store) searchContentSubstringPG(
 		") sub ORDER BY sort_ts DESC NULLS LAST, session_id ASC, ordinal ASC, src ASC, row_id ASC, snippet ASC " +
 		"LIMIT " + limitP + " OFFSET " + offsetP
 
-	page, err := s.scanPGContentMatches(ctx, query, pb.args, f.Limit, f.Cursor,
+	page, err := s.scanPGContentMatches(ctx, query, pb.args, limit, offset,
 		func(body string) string { return pgSubstringSnippet(f, body) })
-	if !ranked || err != nil || page.NextCursor != 0 {
+	if !ranked || err != nil {
 		return page, err
 	}
-	return s.searchContentWordsPG(ctx, f, words, scopeWhere, branches, branchArgs)
+	exactCount := len(page.Matches)
+	if f.Cursor < exactCount {
+		page.Matches = page.Matches[f.Cursor:]
+	} else {
+		page.Matches = nil
+	}
+	if page.NextCursor != 0 {
+		page.NextCursor = f.Cursor + f.Limit
+		return page, nil
+	}
+	originalCursor, originalLimit := f.Cursor, f.Limit
+	f.Cursor = max(0, f.Cursor-exactCount)
+	need := f.Limit - len(page.Matches)
+	f.Limit = max(1, need)
+	wordPage, err := s.searchContentWordsPG(ctx, f, words, scopeWhere, scopeArgs)
+	page.Matches = append(page.Matches, wordPage.Matches[:min(need, len(wordPage.Matches))]...)
+	if len(wordPage.Matches) > need || wordPage.NextCursor != 0 {
+		page.NextCursor = originalCursor + originalLimit
+	}
+	return page, err
 }
 
 // pgMessagesBranch builds the messages source branch SQL.
@@ -713,18 +739,12 @@ func pgThinkingCandidateBranch(f db.ContentSearchFilter, lit string, pb *paramBu
         WHERE %s AND m.thinking_text <> '' AND %s`, predicate, sysPred)
 }
 
-// searchContentWordsPG lists the exact matches of branches, then messages
-// holding every query word. When those don't fill the page it reruns with
-// messages holding any of the words, ranked by how many they hold.
+// searchContentWordsPG lists messages holding every query word, then retries
+// with partial matches when those don't fill the page.
 func (s *Store) searchContentWordsPG(
 	ctx context.Context, f db.ContentSearchFilter, words db.ContentWords,
-	scopeWhere string, branches []string, branchArgs []any,
+	scopeWhere string, scopeArgs []any,
 ) (db.ContentSearchPage, error) {
-	compact := f.Mode == "fts"
-	var union strings.Builder
-	for _, branch := range branches {
-		fmt.Fprintf(&union, "SELECT exact.*, 0 AS tier, %d AS n FROM (%s) exact UNION ALL ", len(words.Terms), branch)
-	}
 	sysPred := "TRUE"
 	if f.ExcludeSystem {
 		sysPred = "m.is_system = FALSE AND " + db.PostgresSystemPrefixSQL("m.content", "m.role")
@@ -734,11 +754,9 @@ func (s *Store) searchContentWordsPG(
 	var page db.ContentSearchPage
 	var err error
 	for _, all := range []bool{true, false} {
-		pb := &paramBuilder{n: len(branchArgs), args: append([]any{}, branchArgs...)}
-		var query string
-		if compact {
-			matches := pgWordMatches(f, words, all, from, pb, true)
-			query = pgSelectedWordsSQL(scopeWhere, matches, pb, f.Limit+1, f.Cursor, all) + `
+		pb := &paramBuilder{n: len(scopeArgs), args: append([]any{}, scopeArgs...)}
+		matches := pgWordMatches(f, words, all, from, pb, true)
+		query := pgSelectedWordsSQL(scopeWhere, matches, pb, f.Limit+1, f.Cursor, all) + `
 				SELECT m.session_id, s.project, s.agent, s.transcript_revision, 'message' AS location,
 					m.role, '' AS tool_name, m.ordinal, m.timestamp AS ts,
 					COALESCE(m.dialogue_text, m.content) AS snippet, selected.n
@@ -747,21 +765,6 @@ func (s *Store) searchContentWordsPG(
 				JOIN sessions s ON s.id = selected.session_id
 				ORDER BY selected.n DESC, selected.sort_ts DESC NULLS LAST,
 					selected.session_id ASC, selected.ordinal ASC`
-		} else {
-			matchesFilter := " WHERE n >= 1"
-			if all {
-				matchesFilter = ""
-			}
-			query = fmt.Sprintf(`WITH scoped AS NOT MATERIALIZED (SELECT * FROM sessions WHERE %s), %s
-				SELECT session_id, project, agent, transcript_revision, location, role, tool_name, ordinal, ts, snippet, n
-				FROM (%sSELECT session_id, project, agent, transcript_revision, 'message' AS location, role,
-					'' AS tool_name, ordinal, ts, body AS snippet, 0 AS src, 0::bigint AS row_id, sort_ts, 1 AS tier, n
-					FROM word_matches%s
-				) sub ORDER BY tier, n DESC, sort_ts DESC NULLS LAST, session_id ASC, ordinal ASC, src ASC, row_id ASC, snippet ASC
-				LIMIT %s OFFSET %s`,
-				scopeWhere, pgWordMatches(f, words, all, from, pb, false), union.String(), matchesFilter,
-				pb.add(f.Limit+1), pb.add(f.Cursor))
-		}
 		page, err = s.scanPGContentMatches(ctx, query, pb.args, f.Limit, f.Cursor, func(body string) string {
 			start, end := db.WordSnippetRange(body, f.Pattern, words)
 			return f.BuildSnippet(body, start, end)
