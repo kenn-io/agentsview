@@ -16,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/kept"
+	"go.kenn.io/agentsview/internal/readbase"
 	"go.kenn.io/agentsview/internal/stringutil"
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
@@ -51,7 +52,17 @@ type pgActivityPriced struct {
 }
 
 func (p *pgActivityPriced) covers(q activity.Query, digest string) bool {
-	return p.rangeStart.Equal(q.RangeStart) && p.rangeEnd.Equal(q.RangeEnd) && p.pricingDigest == digest && !q.EffectiveEnd.Before(p.effectiveEnd) && (p.next.IsZero() || !p.next.Before(q.EffectiveEnd))
+	if !p.rangeStart.Equal(q.RangeStart) || !p.rangeEnd.Equal(q.RangeEnd) ||
+		p.pricingDigest != digest || q.EffectiveEnd.Before(p.effectiveEnd) {
+		return false
+	}
+	nextUS := int64(math.MaxInt64)
+	if !p.next.IsZero() {
+		nextUS = readbase.CeilMicros(p.next)
+	}
+	return (&readbase.ActivityUsageSums{
+		EndUS: readbase.CeilMicros(p.effectiveEnd), NextUS: nextUS,
+	}).Covers(readbase.CeilMicros(q.EffectiveEnd))
 }
 
 type pgActivityPricedRow struct {
@@ -98,9 +109,7 @@ func pgCompactActivityUsage(r pgDailyUsageScanRow, handle func(string) unique.Ha
 
 func pgActivityInputBytes(e pgActivityInputs) int64 {
 	size := int64(unsafe.Sizeof(e))
-	if e.priced != nil {
-		size += int64(unsafe.Sizeof(*e.priced)) + int64(cap(e.priced.rows))*int64(unsafe.Sizeof(pgActivityPricedRow{})) + kept.JSONBytes(e.priced.block)
-	}
+	size += pgActivityPricedBytes(e.priced)
 	shared := map[unique.Handle[string]]struct{}{}
 	for id, session := range e.sessions {
 		size += int64(len(id)) + 80 + int64(unsafe.Sizeof(session)) + session.runs.Bytes() +
@@ -124,6 +133,13 @@ func pgActivityInputBytes(e pgActivityInputs) int64 {
 		size += int64(len(id)) + 16
 	}
 	return size
+}
+
+func pgActivityPricedBytes(priced *pgActivityPriced) int64 {
+	if priced == nil {
+		return 0
+	}
+	return int64(unsafe.Sizeof(*priced)) + int64(cap(priced.rows))*int64(unsafe.Sizeof(pgActivityPricedRow{})) + kept.JSONBytes(priced.block)
 }
 
 func (s *Store) activityReportInputs(ctx context.Context, version, lower, upper string) (*pgActivityInputs, error) {

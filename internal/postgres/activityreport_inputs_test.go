@@ -28,9 +28,7 @@ func TestPGActivityPricedCovers(t *testing.T) {
 		want   bool
 	}{
 		{"same", activity.Query{RangeStart: start, RangeEnd: end, EffectiveEnd: effective}, "prices", true},
-		{"advance to row", activity.Query{RangeStart: start, RangeEnd: end, EffectiveEnd: next}, "prices", true},
-		{"advance past row", activity.Query{RangeStart: start, RangeEnd: end, EffectiveEnd: next.Add(time.Microsecond)}, "prices", false},
-		{"rewind", activity.Query{RangeStart: start, RangeEnd: end, EffectiveEnd: effective.Add(-time.Microsecond)}, "prices", false},
+		{"rewind within a microsecond", activity.Query{RangeStart: start, RangeEnd: end, EffectiveEnd: effective.Add(-time.Nanosecond)}, "prices", false},
 		{"start changes", activity.Query{RangeStart: start.Add(time.Microsecond), RangeEnd: end, EffectiveEnd: effective}, "prices", false},
 		{"end changes", activity.Query{RangeStart: start, RangeEnd: end.Add(time.Microsecond), EffectiveEnd: effective}, "prices", false},
 		{"prices change", activity.Query{RangeStart: start, RangeEnd: end, EffectiveEnd: effective}, "new prices", false},

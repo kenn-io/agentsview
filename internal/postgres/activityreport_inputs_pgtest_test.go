@@ -86,6 +86,75 @@ func TestPGActivityReportInputReads(t *testing.T) {
 	assert.Len(t, counter.usageReads, 2)
 }
 
+func TestPGActivityReportInputSharedBudget(t *testing.T) {
+	t.Parallel()
+	local, syncer, store := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	_, err := store.DB().ExecContext(t.Context(), `INSERT INTO messages
+		(session_id, ordinal, role, content, timestamp, model, token_usage, claude_message_id, claude_request_id,
+		 usage_output_tokens, usage_web_search_requests)
+		SELECT 'a', i + 1, 'assistant', '', '2026-06-14T10:01:00Z', 'kept-model',
+		'{"output_tokens":1}', repeat('x', 500) || i::text, 'request', 1, 0
+		FROM generate_series(1, 10000) AS i`)
+	require.NoError(t, err)
+	counter := &activityInputReadCounter{storeExecutor: store.pg}
+	store.pg = counter
+	f := db.AnalyticsFilter{Timezone: "UTC"}
+	day := pgDayQuery(t, "2026-06-14", "UTC")
+	day.Partial = true
+	day.EffectiveEnd = time.Date(2026, 6, 14, 11, 0, 0, 0, time.UTC)
+	month, err := activity.ResolveQuery(
+		activity.QueryInput{Preset: "month", Date: "2026-06-14", Timezone: "UTC"},
+		time.Date(2026, 6, 14, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	month.Partial = true
+	month.EffectiveEnd = day.EffectiveEnd
+	version, err := store.activityKeptVersion(t.Context(), "")
+	require.NoError(t, err)
+
+	daySlot := db.PaddedUTCBound(day.RangeStart.UTC().Format(time.RFC3339), -14) + "|" +
+		db.PaddedUTCBound(day.RangeEnd.UTC().Format(time.RFC3339), 14)
+	monthSlot := db.PaddedUTCBound(month.RangeStart.UTC().Format(time.RFC3339), -14) + "|" +
+		db.PaddedUTCBound(month.RangeEnd.UTC().Format(time.RFC3339), 14)
+	wantDay := pgKeptBuild(t, store, f, day, true)
+	wantMonth := pgKeptBuild(t, store, f, month, true)
+	dayEntry, ok := store.runtimeState().activityInputs.Get(daySlot, version)
+	require.True(t, ok)
+	monthEntry, ok := store.runtimeState().activityInputs.Get(monthSlot, version)
+	require.True(t, ok)
+	dayFullBytes := pgActivityInputBytes(dayEntry[0])
+	monthFullBytes := pgActivityInputBytes(monthEntry[0])
+	dayRaw, monthRaw := dayEntry[0], monthEntry[0]
+	dayRaw.priced, monthRaw.priced = nil, nil
+	dayRawBytes, monthRawBytes := pgActivityInputBytes(dayRaw), pgActivityInputBytes(monthRaw)
+	budget := dayRawBytes + monthRawBytes
+	require.LessOrEqual(t, dayFullBytes, budget)
+	require.LessOrEqual(t, monthFullBytes, budget)
+	require.Greater(t, dayFullBytes+monthFullBytes, budget)
+
+	store.runtimeState().activityInputs.MaxBytes = budget
+	store.runtimeState().activityInputs.DeleteSlots(func(string) bool { return true })
+	counter.mu.Lock()
+	counter.transcriptReads, counter.usageReads = nil, nil
+	counter.mu.Unlock()
+	for range 3 {
+		gotDay := pgKeptBuild(t, store, f, day, true)
+		requirePGKeptEqual(t, wantDay, gotDay)
+		gotMonth := pgKeptBuild(t, store, f, month, true)
+		requirePGKeptEqual(t, wantMonth, gotMonth)
+	}
+	assert.Len(t, counter.usageReads, 2)
+	var retained int64
+	for _, slot := range []string{daySlot, monthSlot} {
+		entries, ok := store.runtimeState().activityInputs.Get(slot, version)
+		require.True(t, ok)
+		require.Nil(t, entries[0].priced)
+		retained += pgActivityInputBytes(entries[0])
+	}
+	assert.LessOrEqual(t, retained, budget)
+}
+
 func TestPGActivityReportPricedReuse(t *testing.T) {
 	t.Parallel()
 	local, syncer, store := newUsageJournalFixture(t)
@@ -165,6 +234,9 @@ func TestPGActivityReportInputClock(t *testing.T) {
 	q.EffectiveEnd = q.RangeStart.Add(10*time.Hour + 5*time.Minute)
 	atBoundary := pgKeptBuild(t, store, f, q, true)
 	assert.Equal(t, 100, atBoundary.Report.Totals.OutputTokens)
+	q.EffectiveEnd = q.EffectiveEnd.Add(time.Nanosecond)
+	afterBoundary := pgKeptBuild(t, store, f, q, true)
+	assert.Equal(t, 400, afterBoundary.Report.Totals.OutputTokens)
 	q.EffectiveEnd = q.EffectiveEnd.Add(time.Microsecond)
 	after := pgKeptBuild(t, store, f, q, true)
 	assert.Equal(t, 400, after.Report.Totals.OutputTokens)

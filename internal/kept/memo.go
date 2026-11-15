@@ -19,8 +19,8 @@ type Memo[T any] struct {
 	// Limit caps the slots; zero means memoLimit.
 	Limit int
 	// Size estimates a row's bytes. With it, MaxBytes caps the bytes kept,
-	// zero meaning DefaultMaxBytes, and rows over that cap are not kept.
-	// Without it only the slots are capped.
+	// zero meaning DefaultMaxBytes. Put drops rows over the cap; PutWithFallback
+	// can keep a smaller equivalent form. Without Size only slots are capped.
 	Size     func(T) int64
 	MaxBytes int64
 	bytes    int64
@@ -52,21 +52,43 @@ func (m *Memo[T]) Get(slot, version string) ([]T, bool) {
 }
 
 func (m *Memo[T]) Put(slot, version string, rows []T) {
+	m.put(slot, version, rows, nil)
+}
+
+// PutWithFallback keeps a smaller equivalent form when rows or the combined
+// entries exceed the byte cap. fallback receives a copy of one slot's rows
+// and its estimated size, then returns the replacement rows and their size.
+// It runs under the memo lock and should be cheap. Existing slots are reduced
+// oldest first; any slots that still do not fit are evicted oldest first.
+func (m *Memo[T]) PutWithFallback(
+	slot, version string, rows []T,
+	fallback func(rows []T, size int64) ([]T, int64),
+) {
+	m.put(slot, version, rows, fallback)
+}
+
+func (m *Memo[T]) put(
+	slot, version string, rows []T,
+	fallback func(rows []T, size int64) ([]T, int64),
+) {
 	if slot == "" {
 		return
 	}
-	var size int64
-	if m.Size != nil {
-		for _, row := range rows {
-			size += m.Size(row)
-		}
-	}
+	size := m.rowsSize(rows)
 	maxBytes := cmp.Or(m.MaxBytes, DefaultMaxBytes)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.removeLocked(slot)
+	reduced := false
 	if m.Size != nil && size > maxBytes {
-		return
+		if fallback == nil {
+			return
+		}
+		rows, size = fallback(slices.Clone(rows), size)
+		reduced = true
+		if size > maxBytes {
+			return
+		}
 	}
 	if m.entries == nil {
 		m.entries = map[string]memoEntry[T]{}
@@ -74,9 +96,37 @@ func (m *Memo[T]) Put(slot, version string, rows []T) {
 	m.entries[slot] = memoEntry[T]{version: version, rows: rows, bytes: size}
 	m.order = append(m.order, slot)
 	m.bytes += size
-	for len(m.order) > cmp.Or(m.Limit, memoLimit) || m.bytes > maxBytes {
+	for len(m.order) > cmp.Or(m.Limit, memoLimit) {
 		m.removeLocked(m.order[0])
 	}
+	if m.Size != nil && fallback != nil && m.bytes > maxBytes {
+		for _, retained := range slices.Clone(m.order) {
+			if m.bytes <= maxBytes {
+				break
+			}
+			if retained == slot && reduced {
+				continue
+			}
+			entry := m.entries[retained]
+			oldSize := entry.bytes
+			entry.rows, entry.bytes = fallback(slices.Clone(entry.rows), entry.bytes)
+			m.bytes += entry.bytes - oldSize
+			m.entries[retained] = entry
+		}
+	}
+	for m.bytes > maxBytes {
+		m.removeLocked(m.order[0])
+	}
+}
+
+func (m *Memo[T]) rowsSize(rows []T) int64 {
+	var size int64
+	if m.Size != nil {
+		for _, row := range rows {
+			size += m.Size(row)
+		}
+	}
+	return size
 }
 
 // DeleteSlots removes the slots drop reports.
