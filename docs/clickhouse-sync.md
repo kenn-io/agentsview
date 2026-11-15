@@ -584,6 +584,11 @@ in the same cache directory. Each selection can use up to 128 MiB, with a
 pricing change, new binary, or deletion of the cache directory. If the cache is
 unavailable, Usage reads the mirror instead.
 
+Finished Trends reports share `agentsview/clickhouse-usage` and its 128 MiB
+per-selection and 256 MiB per-mirror limits. They're derived data and are
+removed 30 days after their last read. `ActiveSince` and time-dependent
+`Termination` selections read ClickHouse directly on each request.
+
 When `require_auth` is enabled, a bearer token is generated if needed and
 printed on startup. Pass it via `Authorization: Bearer <token>` on API requests.
 

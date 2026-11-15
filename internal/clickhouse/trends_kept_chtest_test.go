@@ -293,4 +293,5 @@ func TestTrendsKeptPush(t *testing.T) {
 	require.NoError(t, local.ReplaceSessionMessages(ctx, fixtureBetaID, messages))
 	_, err = syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
+	require.Zero(t, read(f).Series[0].Total)
 }

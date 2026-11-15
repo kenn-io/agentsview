@@ -1140,7 +1140,7 @@ and deletes, message content-length repairs, and signal updates advance the
 analytics counter. Message changes also advance the session transcript revision.
 PostgreSQL uses its session journal, hosted PostgreSQL uses its tenant identity,
 selection, and corpus revisions, DuckDB uses its mirror stamp, and ClickHouse
-uses its sessions and messages parts fingerprint to invalidate Trends reports.
+uses session and message row identities to invalidate Trends reports.
 Remote DuckDB through Quack reads Trends fresh because it has no reliable
 freshness token. Read-only archives and reports filtered by active, stale, or
 unclean termination status bypass this cache.
