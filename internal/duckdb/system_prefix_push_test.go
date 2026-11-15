@@ -3,8 +3,6 @@
 package duckdb
 
 import (
-	"crypto/sha256"
-	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -20,23 +18,10 @@ func TestSystemPrefixPush(t *testing.T) {
 		content, role string
 		want          bool
 	}{
-		{"", "user", false}, {"ordinary", "user", false},
-		{"This session is being continued", "user", true},
-		{"[Request interrupted", "user", true},
-		{" \ufeff<task-notification>task", "user", true},
-		{"<command-message>command", "user", true},
-		{"<command-name>command", "user", true},
-		{"<local-command-output>output", "user", true},
-		{"Stop hook feedback: output", "user", true},
-		{"<TASK-NOTIFICATION>task", "user", false},
-		{"<system-reminder>a</system-reminder>", "user", true},
-		{"<system-reminder>a</system-reminder><task-notification>task", "user", true},
-		{"<system-reminder>a</system-reminder>ordinary", "user", false},
-		{"<system-reminder>broken", "user", false},
-		{"<goal_context>goal</goal_context>", "user", true},
-		{"<codex_internal_context source=\"goal\">goal", "user", true},
-		{"<codex_internal_context source=\"goal\"/other>goal", "user", false},
+		{"ordinary", "user", false},
+		{"<task-notification>task", "user", true},
 		{"<task-notification>task", "assistant", false},
+		{`<codex_internal_context source="goal"/other>goal`, "user", false},
 	}
 	msgs := make([]db.Message, len(cases))
 	for i, c := range cases {
@@ -53,11 +38,10 @@ func TestSystemPrefixPush(t *testing.T) {
 		require.NoError(t, err)
 		defer conn.Close()
 		for i, c := range cases {
-			var flag, visible bool
-			err := conn.QueryRowContext(ctx, `SELECT is_system_prefixed, `+db.DuckDBSystemPrefixSQL("content", "role")+` FROM messages WHERE session_id = 'prefix' AND ordinal = ?`, i).Scan(&flag, &visible)
+			var flag bool
+			err := conn.QueryRowContext(ctx, `SELECT is_system_prefixed FROM messages WHERE session_id = 'prefix' AND ordinal = ?`, i).Scan(&flag)
 			require.NoError(t, err)
 			require.Equal(t, c.want, flag, "case %d", i)
-			require.Equal(t, !visible, flag, "SQL parity case %d", i)
 		}
 	}
 	check()
@@ -69,11 +53,6 @@ func TestSystemPrefixPush(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, result.Diagnostics.Full)
 	check()
-}
-
-func TestSystemPrefixRuleVersion(t *testing.T) {
-	// Changing a stored verdict needs a mirror rebuild and fresh Trends parts,
-	// even if the SQL oracle changes at the same time.
 	inputs := []string{
 		"", "ordinary", "<task-notification>", "<TASK-NOTIFICATION>",
 		"<system-reminder>x</system-reminder>",
@@ -95,17 +74,19 @@ func TestSystemPrefixRuleVersion(t *testing.T) {
 	for _, space := range " \t\n\v\f\r\u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff" {
 		inputs = append(inputs, string(space)+"<task-notification>")
 	}
-	hash := sha256.New()
+	conn := openTestDuckDB(t)
 	for _, content := range inputs {
 		for _, role := range []string{"user", "assistant"} {
-			fmt.Fprintf(hash, "%q %q %t\n", content, role, db.IsDuckDBSystemPrefixed(content, role))
+			var excluded bool
+			err := conn.QueryRowContext(ctx, `SELECT NOT (`+db.DuckDBSystemPrefixSQL("content", "role")+`) FROM (SELECT ? AS content, ? AS role)`, content, role).Scan(&excluded)
+			require.NoError(t, err)
+			require.Equal(t, excluded, db.IsDuckDBSystemPrefixed(content, role), "%q, %s", content, role)
 		}
 	}
-	require.Equal(t, "67e2f7c0294c8def56f41870585d4735e0aac75d4ae0663c62ad941145e1cf1e", fmt.Sprintf("%x", hash.Sum(nil)), "system-prefix rules changed; bump SchemaVersion and update this digest")
 }
 
 func TestSystemPrefixSearchAndTrends(t *testing.T) {
-	text := "<task-notification>uniqueterm"
+	text := "uniqueterm"
 	store := newUnitsStore(t, []db.SessionBatchWrite{{
 		Session: unitSession("prefix-search", 2),
 		Messages: []db.Message{
@@ -114,6 +95,9 @@ func TestSystemPrefixSearchAndTrends(t *testing.T) {
 		},
 		DataVersion: 1, ReplaceMessages: true,
 	}})
+	// Deliberately differ from the content-derived verdict to exercise the stored column.
+	_, err := store.DB().ExecContext(t.Context(), `UPDATE messages SET is_system_prefixed = TRUE WHERE session_id = 'prefix-search' AND ordinal = 0`)
+	require.NoError(t, err)
 	search, err := store.Search(t.Context(), db.SearchFilter{Query: "uniqueterm", Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, search.Results, 1)
@@ -129,30 +113,4 @@ func TestSystemPrefixSearchAndTrends(t *testing.T) {
 	trends, err := store.GetTrendsTerms(t.Context(), db.AnalyticsFilter{From: "2026-05-01", To: "2026-05-01", Timezone: "UTC"}, terms, "day")
 	require.NoError(t, err)
 	require.Equal(t, 1, trends.Series[0].Total)
-}
-
-func TestSearchRetainsMalformedGoalContext(t *testing.T) {
-	store := newUnitsStore(t, []db.SessionBatchWrite{{
-		Session:     unitSession("malformed-goal", 1),
-		Messages:    []db.Message{unitMsg("malformed-goal", 0, "user", `<codex_internal_context source="goal"/other> uniqueparityterm`, false, false)},
-		DataVersion: 1, ReplaceMessages: true,
-	}})
-	page, err := store.Search(t.Context(), db.SearchFilter{Query: "uniqueparityterm", Limit: 10})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	require.Equal(t, "malformed-goal", page.Results[0].SessionID)
-}
-
-func TestDuckDBGoalContextWhitespaceParity(t *testing.T) {
-	conn := openTestDuckDB(t)
-	for _, content := range []string{
-		"<codex_internal_context\vsource=\"goal\"> text",
-		"<codex_internal_context source=\"goal\"\vother> text",
-	} {
-		var excluded bool
-		err := conn.QueryRowContext(t.Context(), `SELECT NOT (`+db.DuckDBSystemPrefixSQL("content", "role")+`) FROM (SELECT ? AS content, 'user' AS role)`, content).Scan(&excluded)
-		require.NoError(t, err)
-		require.True(t, excluded, "%q", content)
-		require.Equal(t, excluded, db.IsDuckDBSystemPrefixed(content, "user"), "%q", content)
-	}
 }

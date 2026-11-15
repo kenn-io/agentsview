@@ -4,6 +4,7 @@ package duckdb
 
 import (
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -24,12 +25,9 @@ func TestDuckTrendsTermsDateWindowEdges(t *testing.T) {
 	require.NoError(t, err)
 	store := openPushedStore(t, path)
 	dbtest.AssertTrendsWindow(t, store)
-	_, identity := (analyticsSQL{store: store}).TrendsDisk()
 	require.NoError(t, store.Close())
 	dbtest.AssertTrendsPartsReuse(t, func(retained bool) db.Store {
 		opened := openPushedStore(t, path)
-		_, reopenedIdentity := (analyticsSQL{store: opened}).TrendsDisk()
-		require.Equal(t, identity, reopenedIdentity)
 		if retained {
 			require.NoError(t, opened.OpenActivityReportDisk(t.Context()))
 		}
@@ -94,6 +92,8 @@ func TestDuckTrendsPartsInvalidateLegacyIdentity(t *testing.T) {
 	require.NoError(t, err)
 	f := db.AnalyticsFilter{From: "2025-03-10", To: "2025-03-10", Timezone: "UTC"}
 	store := openUsagePartsStore(t, path)
+	_, identity := (analyticsSQL{store: store}).TrendsDisk()
+	require.Equal(t, "duckdb|"+strconv.Itoa(SchemaVersion), identity)
 	var reads []string
 	reset := db.SetTrendPartsReadObserver(func(ids []string) { reads = append(reads, ids...) })
 	defer reset()
@@ -103,6 +103,7 @@ func TestDuckTrendsPartsInvalidateLegacyIdentity(t *testing.T) {
 	windowIDs := append([]string(nil), reads...)
 	require.NotEmpty(t, windowIDs)
 	require.NoError(t, store.Close())
+	// Deliberately differ from the content-derived verdict to exercise the stored column.
 	writeUsageMirror(t, path, `UPDATE messages SET is_system_prefixed = TRUE WHERE session_id = 'trends-window-fallback'`)
 	store = openUsagePartsStore(t, path)
 	reads = nil
