@@ -183,14 +183,18 @@ Pushes send sessions newest activity first (`ended_at`, then `started_at`, then
 mirrors read to decide whether the page is trashed. PostgreSQL pushes and DuckDB
 rebuilds use the same order.
 
-**Pushes rewrite only what differs.** Each session row stores two
+**Pushes rewrite only what differs.** Each session row stores three
 fingerprints. `agentsview_push_fingerprint` hashes the session fields and all of
 its content. `agentsview_content_fingerprint` hashes only the content: messages,
 dialogue, usage and tool call digests, secret findings, pins, commit links,
-image text, plan usage, and the usage total. `content_version` records the push
-version of the dependent rows the session row describes, and readers pair a
-session with its messages, image text, usage rows, and tool result events
-through it. `push_version` stays the version of the session row itself, which
+image text, plan usage, and the usage total.
+`agentsview_message_rows_fingerprint` hashes the rows stored in the tables keyed
+by message ordinal (`messages`, `tool_calls`, `tool_result_events`, and
+`image_text`) for the session's `stored_message_count` messages, exactly as the
+push rendered them. `content_version` records the push version of the oldest
+dependent rows the session row describes. Readers pair a session with its
+messages, image text, usage rows, and tool result events by accepting rows at or
+above it. `push_version` stays the version of the session row itself, which
 caches keyed on it rely on.
 
 A push plans each session against its mirror row:
@@ -198,6 +202,7 @@ A push plans each session against its mirror row:
 | Mirror row                                           | Push writes                     |
 | ---------------------------------------------------- | ------------------------------- |
 | Missing, or content fingerprint differs              | Every table, at the new version |
+| Content differs, stored message rows still match     | New messages and small tables   |
 | Content matches, session fields differ               | Session row and usage snapshot  |
 | Fingerprint matches, row is in an older format       | Session row and usage snapshot  |
 | Fingerprint matches, another archive owns it (full)  | Session row and usage snapshot  |
@@ -211,6 +216,49 @@ message count, current dashboard facts, or a content fingerprint. Without a
 content fingerprint, any session-field change would rewrite the whole session,
 so the first push after upgrading republishes every session row of its archive
 once, with its content fingerprint, and keeps the messages.
+
+**A session that only grew gets its new messages appended.** Most changed
+sessions are agent sessions that gained messages since the last push. On one
+production mirror, two pushing machines wrote 4.28 million `messages` rows in a
+day for 44,500 new messages, 96 times what changed, because each push rewrote
+every row of each changed session. The upload took most of the insert time and
+left superseded copies for merges to collapse.
+
+When the content fingerprint differs, the local session has at least
+`stored_message_count` messages, and the mirror row has a message rows
+fingerprint, the plan asks to keep the stored rows. The batch then hashes the
+rows it would write for that many leading local messages. A match proves the
+mirror already holds them, so the push:
+
+1. Inserts the rows of the later messages, and the image text anchored after
+   the last kept message, at the new version.
+1. Rewrites the tables not keyed by message ordinal (usage events, plan usage,
+   the usage total, secret findings, pins, and commit links), which are small.
+1. Deletes rows older pushes left in the ordinal-keyed tables after the last
+   kept ordinal under keys this push did not write, such as rows an interrupted
+   push wrote before it stopped. Rows at or below that ordinal stay.
+1. Publishes the session row with the old `content_version`, the new message
+   rows fingerprint, and a new `push_version`.
+
+Anything else that changes a kept row changes the hash, and the push rewrites
+the whole session at the new version: an edited or renumbered earlier message, a
+tool result filled in for an earlier call, image text added for an earlier
+image, a resync, or a parser change. The archive renumbers every message when a
+sync replaces a session's transcript, so a session re-parsed in full gets a full
+rewrite even when it only grew. On the production mirror, about one in ten
+re-pushed sessions changed a tool call in an earlier message, and most Codex
+cloud sessions were re-parsed in full on every sync. Rows written before the
+message rows fingerprint existed record none, so the first push that changes
+such a session rewrites it in full and records one.
+
+Because an append keeps `content_version`, a session's dependent rows can carry
+several versions from `content_version` through `push_version`. Reads accept
+that range: usage and image text reads keep rows at or above `content_version`,
+the terminal event snapshot takes the latest event at or above it, and the
+session source binding accepts evidence rows from `content_version` through
+the session row's `push_version` while the stored message count matches. A
+routine push that only appends writes too few messages to trigger
+[compaction](#compaction-after-a-large-rewrite).
 
 Each full-push reason gets its own scope:
 
@@ -235,7 +283,12 @@ fingerprints do not cover needs a new marker that rewrites every session, or
 a fingerprint change. A serve binary from before `content_version` reads
 dependent rows against `push_version`, so on a mirror where a newer client
 rewrote only some session rows it hides those sessions' image text and
-Activity usage until it upgrades.
+Activity usage until it upgrades. A serve binary from before appends requires
+every evidence row at exactly `content_version`, so it refuses the source
+binding of an appended session and fails its tool-sequence and file-reference
+reads, and a pushing client from before appends
+restores the terminal event view that matches events at exactly
+`content_version`. Upgrade serve and every pushing client together.
 
 **Shared filter builder, ClickHouse dialect.** Existing SQLite, PostgreSQL, and
 DuckDB SQL stay byte-identical. ClickHouse uses `UNION ALL` in recursive CTEs,
@@ -493,7 +546,7 @@ when their version is at or above the session's; an exact match would report no
 usage for that session until its next successful push. Rows that a shorter
 republished session left behind stay below the session's version and never
 surface. Terminal snapshots are written by the session insert itself, read
-`tool_result_events` at the session's `content_version`, and match
+`tool_result_events` at or above the session's `content_version`, and match
 `sessions.push_version` exactly.
 
 The snapshot view runs inside every `sessions` insert, and ClickHouse reads a

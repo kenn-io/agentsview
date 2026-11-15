@@ -84,6 +84,11 @@ type PushResult struct {
 	// already held the local content, so the push rewrote only the session
 	// row. SessionsPushed includes them.
 	SessionRowsOnly int
+	// SessionsAppended counts pushed sessions that only grew, so the push
+	// kept the replica rows of their earlier messages and wrote the rest.
+	// SessionsPushed includes them, and MessagesPushed counts only the
+	// messages written.
+	SessionsAppended int
 	// CommitLinksOnly counts sessions whose commit links alone a push
 	// rewrote to bring them to the current format.
 	CommitLinksOnly int

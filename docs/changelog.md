@@ -114,6 +114,17 @@ The latest release is
   an older serve hides image text and Activity usage for sessions a newer
   client rewrote this way.
 
+- ClickHouse pushes upload only the new messages of a session that grew,
+  instead of every message, tool call, and tool result the session has. For a
+  2,000-message session that gained one message, the push uploaded 183 KB
+  instead of 5.0 MB (27x less) and wrote 15 rows instead of 4,015. Pushes
+  therefore take less time, leave the server fewer old row copies to merge, and
+  rarely trigger the compaction that follows a large rewrite. A session whose
+  earlier messages changed, such as a tool result that arrived later, an edit,
+  or a full re-parse, is still rewritten in full. Upgrade `clickhouse serve`
+  and every pushing client together: an older serve fails tool-sequence and
+  file-reference requests for sessions a newer client appended to.
+
 **Bug fixes**
 
 - A growing Codex session no longer leaves a removed copy of every earlier

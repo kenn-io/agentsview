@@ -1568,7 +1568,12 @@ own metadata, which is why the docs below call the database a mirror.
   `DELETE ... WHERE session_id IN (...) AND push_version < v` limited to keys
   with no row at `v` or later (`vanishedRowsDeleteSQL`), then session rows. Do
   not delete older rows whose key the push rewrote; `final=1` reads already
-  collapse them, and deleting them writes patch rows. Store every ClickHouse
+  collapse them, and deleting them writes patch rows. A push that appends to a
+  session that only grew keeps the rows of its stored messages and limits that
+  delete, in the tables listed in `messageOrdinalColumn`, to ordinals after the
+  last kept one. A change to how a push renders a row in those tables must
+  change `messageRowsFingerprint` with it, or appends will keep stale rows. See
+  [appends](../internal/clickhouse-mirror.md#pushes-rewrite-only-what-differs). Store every ClickHouse
   push cursor and version in the mirror's `sync_metadata`. Never store
   ClickHouse sync state in SQLite.
 - A push that rewrote at least `compactionShare` of the live messages runs
@@ -1592,8 +1597,9 @@ own metadata, which is why the docs below call the database a mirror.
   `ReplacingMergeTree(revision)`, where live rows use an odd revision above
   the backfill's even one. `usage_messages` rows count when they are at or
   above `sessions.content_version`, because messages land before the session
-  row is published and a push that keeps a session's messages republishes only
-  its row. `terminal_event_snapshots` rows match `sessions.push_version`
+  row is published, a push that keeps a session's messages republishes only
+  its row, and a push that appends messages keeps the older rows at their
+  versions. `terminal_event_snapshots` rows match `sessions.push_version`
   exactly. Any read that pairs a session with its dependent rows compares them
   with `content_version`, never `push_version`. A materialized view runs
   inside the insert and reads joined tables in full, so filter a joined table

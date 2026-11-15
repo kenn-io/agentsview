@@ -12,7 +12,7 @@ import (
 
 var _ db.SessionSourceBinder = (*Store)(nil)
 
-// errEvidenceUnpublished means the readable messages, tool calls or results don't all belong to the push that published the session row, so its revision doesn't describe them.
+// errEvidenceUnpublished means the readable messages, tool calls or results don't all belong to the pushes the published session row describes, so its revision doesn't describe them.
 var errEvidenceUnpublished = errors.New("session evidence does not match its published session row")
 
 // SessionSourceChanged reports a read that caught a push or deletion partway through.
@@ -21,9 +21,10 @@ func (s *Store) SessionSourceChanged(err error) bool {
 }
 
 // SessionSourceBinding names the push that published the visible session row
-// and refuses while any evidence row comes from a push other than the one
-// that wrote the row's content, or while fewer messages are readable than
-// that push stored. A row with no stored count reports
+// and refuses while any evidence row comes from a push outside the ones that
+// wrote the row's content, from its content_version through its own push
+// version, or while the readable messages differ in number from what those
+// pushes stored. A row with no stored count reports
 // db.ErrSessionRevisionUnavailable, since no retry can help it.
 func (s *Store) SessionSourceBinding(ctx context.Context, id string) (string, error) {
 	var published, content uint64
@@ -60,7 +61,8 @@ func (s *Store) SessionSourceBinding(ctx context.Context, id string) (string, er
 		if err := rows.Scan(&table, &count, &low, &high); err != nil {
 			return "", fmt.Errorf("scanning clickhouse session evidence versions: %w", err)
 		}
-		if count > 0 && (low != content || high != content) {
+		// An append keeps older rows at their versions, from content_version up.
+		if count > 0 && (low < content || high > published) {
 			return "", fmt.Errorf("%w: %s", errEvidenceUnpublished, table)
 		}
 		// A different message count means a deletion or an unpublished replacement is partway through.

@@ -1516,7 +1516,7 @@ func dropTables(ctx context.Context, conn *sql.DB, condition string, args ...any
 }
 
 func (s *Sync) insertUsageSessionSnapshots(
-	ctx context.Context, payloads []sessionPayload, contentVersions map[string]uint64, version uint64,
+	ctx context.Context, payloads []sessionPayload, publications map[string]sessionPublication, version uint64,
 ) error {
 	spec, err := usageSessionSnapshotSpec()
 	if err != nil {
@@ -1536,7 +1536,7 @@ func (s *Sync) insertUsageSessionSnapshots(
 		for _, event := range payload.usage {
 			events = append(events, usageEventRow(event, version))
 		}
-		row := s.sessionRow(payload, contentVersions[payload.session.ID], version)
+		row := s.sessionRow(payload, publications[payload.session.ID], version)
 		rows = append(rows, append(row[:len(row)-1], messages, events, version))
 	}
 	s.usageWritten = s.usageWritten || len(rows) > 0

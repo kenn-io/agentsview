@@ -307,6 +307,9 @@ func (s *Sync) pushWithOptions(
 		log.Printf("clickhouse push: rewrote only the session row of %d session(s) and only the commit links of %d whose other rows already matched",
 			result.SessionRowsOnly, result.CommitLinksOnly)
 	}
+	if result.SessionsAppended > 0 {
+		log.Printf("clickhouse push: appended to %d session(s) whose earlier message rows already matched", result.SessionsAppended)
+	}
 
 	if err := s.adoptPendingUsageModels(ctx); err != nil {
 		return result, err
@@ -483,10 +486,16 @@ type sessionWrite struct {
 	// commitLinks rewrites the session's commit links alone.
 	commitLinks bool
 	// keptContent is the content fingerprint that let the push keep the
-	// dependent rows, and keptVersion their push version, which the
+	// dependent rows, and keptVersion their content version, which the
 	// rewritten session row records as content_version.
 	keptContent string
 	keptVersion uint64
+	// keptMessageRows is the mirror's message rows fingerprint. A row-only
+	// write records it again. With content, keepMessages > 0 asks the push
+	// to keep the rows of that many leading messages, which the batch first
+	// checks against keptMessageRows, and to append the rest.
+	keptMessageRows string
+	keepMessages    int
 }
 
 func (w sessionWrite) any() bool { return w.row || w.commitLinks }
@@ -506,6 +515,10 @@ const currentSessionRowSQL = `stored_message_count IS NOT NULL AND dashboard_fac
 type mirrorSession struct {
 	fingerprint, contentFingerprint, archiveID string
 	contentVersion                             uint64
+	// messageRows is the message rows fingerprint of the storedMessages
+	// message rows the mirror holds.
+	messageRows    string
+	storedMessages int
 	// rowCurrent reports a row in the current format: a stored message
 	// count, dashboard facts at dashboardFactsVersion, and a content
 	// fingerprint.
@@ -518,7 +531,10 @@ type mirrorSession struct {
 // when the stored fingerprint shows they hold the local content: either the
 // whole fingerprint matches, or the content fingerprint does. The session row
 // stays only when, in addition, its fingerprint and facts are current and,
-// for a full push, it names this archive, which a full push takes over.
+// for a full push, it names this archive, which a full push takes over. When
+// the content differs but the session has at least as many messages as the
+// mirror stores, the plan asks to keep the stored message rows and append
+// the rest; the batch rewrites the whole session if they turn out to differ.
 func planSessionWrite(
 	local sessionFingerprint, stored mirrorSession, found bool, archiveID string, full bool,
 ) sessionWrite {
@@ -528,12 +544,21 @@ func planSessionWrite(
 	sameContent := local.full == stored.fingerprint ||
 		(stored.contentFingerprint != "" && local.content == stored.contentFingerprint)
 	if !sameContent {
-		return rewriteSession
+		if stored.messageRows == "" || stored.storedMessages == 0 || local.messages < stored.storedMessages {
+			return rewriteSession
+		}
+		return sessionWrite{
+			row: true, content: true, keptVersion: stored.contentVersion,
+			keptMessageRows: stored.messageRows, keepMessages: stored.storedMessages,
+		}
 	}
 	if local.full == stored.fingerprint && stored.rowCurrent && (!full || stored.archiveID == archiveID) {
 		return sessionWrite{}
 	}
-	return sessionWrite{row: true, keptContent: local.content, keptVersion: stored.contentVersion}
+	return sessionWrite{
+		row: true, keptContent: local.content, keptVersion: stored.contentVersion,
+		keptMessageRows: stored.messageRows,
+	}
 }
 
 // writePlan carries the push-wide inputs of planSessionWrites.
@@ -606,6 +631,7 @@ func (s *Sync) readMirrorSessions(ctx context.Context, ids []string) (map[string
 		if err := func() error {
 			rows, err := s.conn.QueryContext(ctx, `SELECT id, agentsview_push_fingerprint,
 					agentsview_content_fingerprint, source_archive_id, content_version,
+					agentsview_message_rows_fingerprint, ifNull(stored_message_count, 0),
 					`+currentSessionRowSQL+`
 				FROM sessions WHERE id IN (`+placeholders+")",
 				slices.Concat([]any{dashboardFactsVersion}, args)...)
@@ -617,11 +643,13 @@ func (s *Sync) readMirrorSessions(ctx context.Context, ids []string) (map[string
 				var id string
 				var m mirrorSession
 				var rowCurrent uint8
+				var storedMessages int64
 				if err := rows.Scan(&id, &m.fingerprint, &m.contentFingerprint, &m.archiveID,
-					&m.contentVersion, &rowCurrent); err != nil {
+					&m.contentVersion, &m.messageRows, &storedMessages, &rowCurrent); err != nil {
 					return fmt.Errorf("scanning clickhouse session fingerprint: %w", err)
 				}
 				m.rowCurrent = rowCurrent != 0
+				m.storedMessages = int(storedMessages)
 				out[id] = m
 			}
 			return rows.Err()
@@ -912,7 +940,8 @@ func (s *Sync) pushBatchWithRetry(
 	return nil
 }
 
-// sessionWritten is what pushSessionBatch wrote for one session.
+// sessionWritten is what pushSessionBatch wrote for one session. messages
+// counts the message rows it wrote.
 type sessionWritten struct {
 	write    sessionWrite
 	messages int
@@ -923,6 +952,9 @@ func countWrite(result *storage.PushResult, w sessionWritten) {
 	case w.write.content:
 		result.SessionsPushed++
 		result.MessagesPushed += w.messages
+		if w.write.keepMessages > 0 {
+			result.SessionsAppended++
+		}
 	case w.write.row:
 		result.SessionsPushed++
 		result.SessionRowsOnly++
@@ -997,20 +1029,37 @@ func (s *Sync) loadPayload(ctx context.Context, sess db.Session) (sessionPayload
 	}, nil
 }
 
+// sessionPublication is what a session row records about the dependent rows
+// it describes: their content version and message rows fingerprint.
+type sessionPublication struct {
+	contentVersion uint64
+	messageRows    string
+}
+
+// contentWrite is a session whose dependent rows a batch writes. keep is how
+// many leading messages keep their stored rows; 0 writes every row.
+type contentWrite struct {
+	payload sessionPayload
+	keep    int
+}
+
 // pushSessionBatch writes one batch in the order the consistency design
 // requires: dependents, version-bounded delete of older dependents, then
 // session rows carrying the fingerprints. A session whose dependent rows the
 // plan keeps gets only its session row and usage snapshot, which record the
-// kept rows' version as content_version, or only its commit links. Search
-// hides image text older than the winning session row's content_version,
-// including when an older writer publishes a newer row after an interrupted
-// push.
+// kept rows' version as content_version, or only its commit links. A session
+// that only grew keeps its stored message rows and gets the rest appended;
+// see push_append.go. Search hides image text older than the winning session
+// row's content_version, including when an older writer publishes a newer
+// row after an interrupted push.
 func (s *Sync) pushSessionBatch(
 	ctx context.Context, batch []db.Session, writes map[string]sessionWrite,
 	fingerprints map[string]sessionFingerprint, version uint64, loaded map[string]sessionPayload,
 ) ([]sessionWritten, error) {
-	var content, links, published []sessionPayload
-	contentVersions := make(map[string]uint64, len(batch))
+	var content []contentWrite
+	var links, published []sessionPayload
+	publications := make(map[string]sessionPublication, len(batch))
+	keptThrough := map[string]int{}
 	written := make([]sessionWritten, 0, len(batch))
 	for _, sess := range batch {
 		p, ok := loaded[sess.ID]
@@ -1030,14 +1079,38 @@ func (s *Sync) pushSessionBatch(
 			// next push sees the change and rewrites the session.
 			w = rewriteSession
 		}
+		if w.keepMessages > 0 {
+			// The plan only knew the counts; keep the stored rows only if
+			// they are the rows this push would write for those messages.
+			kept, ok, err := s.keptPrefixMatches(p, w)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				w = rewriteSession
+			} else {
+				keptThrough[sess.ID] = kept
+			}
+		}
 		n := 0
 		switch {
 		case w.content:
-			content = append(content, p)
-			contentVersions[sess.ID] = version
-			n = len(p.messages)
+			content = append(content, contentWrite{payload: p, keep: w.keepMessages})
+			rows, ok, err := messageRowsFingerprint(p.messages, p.imageText, len(p.messages))
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				rows = ""
+			}
+			publication := sessionPublication{contentVersion: version, messageRows: rows}
+			if w.keepMessages > 0 {
+				publication.contentVersion = w.keptVersion
+			}
+			publications[sess.ID] = publication
+			n = len(p.messages) - w.keepMessages
 		case w.row:
-			contentVersions[sess.ID] = w.keptVersion
+			publications[sess.ID] = sessionPublication{contentVersion: w.keptVersion, messageRows: w.keptMessageRows}
 		}
 		if w.row {
 			published = append(published, p)
@@ -1053,7 +1126,10 @@ func (s *Sync) pushSessionBatch(
 	if err := insertCommitLinks(ctx, s.conn, links, version); err != nil {
 		return nil, err
 	}
-	ids := sessionIDs(sessionsOf(content))
+	ids := make([]string, len(content))
+	for i, c := range content {
+		ids[i] = c.payload.session.ID
+	}
 	// Price the new usage rows right after they become readable. Until this
 	// returns, a usage read prices the updated session's events per request.
 	if len(ids) > 0 && s.pricer == nil {
@@ -1070,10 +1146,11 @@ func (s *Sync) pushSessionBatch(
 	}
 	// The usage_messages view never sees deletes, so a shorter republished
 	// session would leave its removed ordinals behind at the old version.
-	if err := s.deleteVanishedRows(ctx, ids, slices.Concat(dependentTables, []string{"usage_messages"}), version); err != nil {
+	if err := s.deleteVanishedRows(ctx, ids, slices.Concat(dependentTables, []string{"usage_messages"}),
+		keptThrough, version); err != nil {
 		return nil, err
 	}
-	if err := s.deleteVanishedRows(ctx, sessionIDs(sessionsOf(links)), []string{"commit_links"}, version); err != nil {
+	if err := s.deleteVanishedRows(ctx, sessionIDs(sessionsOf(links)), []string{"commit_links"}, nil, version); err != nil {
 		return nil, err
 	}
 	if s.hooks != nil && s.hooks.beforeSessionRows != nil {
@@ -1081,13 +1158,27 @@ func (s *Sync) pushSessionBatch(
 			return nil, err
 		}
 	}
-	if err := s.insertUsageSessionSnapshots(ctx, published, contentVersions, version); err != nil {
+	if err := s.insertUsageSessionSnapshots(ctx, published, publications, version); err != nil {
 		return nil, err
 	}
-	if err := s.insertSessions(ctx, published, contentVersions, version); err != nil {
+	if err := s.insertSessions(ctx, published, publications, version); err != nil {
 		return nil, err
 	}
 	return written, nil
+}
+
+// keptPrefixMatches reports whether the rows the mirror stores for the
+// planned number of leading messages are the rows this push would write for
+// them, and returns the ordinal of the last kept message.
+func (s *Sync) keptPrefixMatches(p sessionPayload, w sessionWrite) (int, bool, error) {
+	if w.keepMessages > len(p.messages) {
+		return 0, false, nil
+	}
+	prefix, ok, err := messageRowsFingerprint(p.messages, p.imageText, w.keepMessages)
+	if err != nil || !ok || prefix != w.keptMessageRows {
+		return 0, false, err
+	}
+	return p.messages[w.keepMessages-1].Ordinal, true, nil
 }
 
 func sessionsOf(payloads []sessionPayload) []db.Session {
@@ -1099,16 +1190,25 @@ func sessionsOf(payloads []sessionPayload) []db.Session {
 }
 
 // deleteVanishedRows removes, from each table, the rows older pushes wrote for
-// the sessions under keys this push did not write.
-func (s *Sync) deleteVanishedRows(ctx context.Context, ids, tables []string, version uint64) error {
+// the sessions under keys this push did not write. In an ordinal-keyed table
+// it leaves alone the rows at or below each appended session's last kept
+// ordinal in keptThrough.
+func (s *Sync) deleteVanishedRows(
+	ctx context.Context, ids, tables []string, keptThrough map[string]int, version uint64,
+) error {
 	for batchIDs := range idBatches(ids) {
-		placeholders, args := inArgs(batchIDs)
-		args = slices.Concat(args, []any{version}, args, []any{version})
+		placeholders, idArgs := inArgs(batchIDs)
 		for _, table := range tables {
-			query, err := vanishedRowsDeleteSQL(table, placeholders)
+			var bound string
+			var boundArgs []any
+			if column, ok := messageOrdinalColumn[table]; ok {
+				bound, boundArgs = keptOrdinalBound(column, batchIDs, keptThrough)
+			}
+			query, err := vanishedRowsDeleteSQL(table, placeholders, bound)
 			if err != nil {
 				return err
 			}
+			args := slices.Concat(idArgs, []any{version}, boundArgs, idArgs, []any{version})
 			if _, err := s.conn.ExecContext(ctx, query, args...); err != nil {
 				return fmt.Errorf("deleting older clickhouse %s rows: %w", table, err)
 			}
@@ -1119,7 +1219,8 @@ func (s *Sync) deleteVanishedRows(ctx context.Context, ids, tables []string, ver
 
 // vanishedRowsDeleteSQL returns the DELETE that removes the rows an older push
 // wrote to table for the sessions in placeholders under keys this push did not
-// write. It takes the session IDs and the push version twice, in that order.
+// write, further limited by bound. It takes the session IDs, the push version,
+// bound's arguments, then the session IDs and the push version again.
 //
 // A key this push rewrote keeps its older row until ReplacingMergeTree
 // collapses it, which every final=1 read already does. Deleting those rows too
@@ -1127,7 +1228,7 @@ func (s *Sync) deleteVanishedRows(ctx context.Context, ids, tables []string, ver
 // for every row it has, and every later read of the table pays to apply patch
 // rows until merges fold them in. The subquery reads without FINAL because
 // any row at or above the version marks its key as current.
-func vanishedRowsDeleteSQL(table, placeholders string) (string, error) {
+func vanishedRowsDeleteSQL(table, placeholders, bound string) (string, error) {
 	var key []string
 	if table == "usage_messages" {
 		key = usageMessagesOrderBy
@@ -1139,14 +1240,17 @@ func vanishedRowsDeleteSQL(table, placeholders string) (string, error) {
 		key = spec.orderBy
 	}
 	columns := strings.Join(key, ", ")
-	return "DELETE FROM " + table + " WHERE session_id IN (" + placeholders + ") AND push_version < ?" +
+	return "DELETE FROM " + table + " WHERE session_id IN (" + placeholders + ") AND push_version < ?" + bound +
 		" AND (" + columns + ") NOT IN (SELECT " + columns + " FROM " + table +
 		" WHERE session_id IN (" + placeholders + ") AND push_version >= ? SETTINGS final = 0)", nil
 }
 
-func (s *Sync) insertDependents(ctx context.Context, payloads []sessionPayload, version uint64) error {
+// insertDependents writes the dependent rows of each session, skipping the
+// ordinal-keyed rows of the messages a session keeps.
+func (s *Sync) insertDependents(ctx context.Context, writes []contentWrite, version uint64) error {
 	var messages, toolCalls, toolResults, images, usage, planUsage, totals, findings, pins, links [][]any
-	for _, p := range payloads {
+	for _, w := range writes {
+		p := w.payload
 		if p.planUsage != nil {
 			row, err := planUsageRow(p.session.ID, p.planUsage, version)
 			if err != nil {
@@ -1161,7 +1265,7 @@ func (s *Sync) insertDependents(ctx context.Context, payloads []sessionPayload, 
 			}
 			totals = append(totals, row)
 		}
-		for _, m := range p.messages {
+		for _, m := range p.messages[w.keep:] {
 			messages = append(messages, messageRow(m, version))
 			for i, tc := range m.ToolCalls {
 				toolCalls = append(toolCalls, toolCallRow(m, tc, i, version))
@@ -1171,6 +1275,9 @@ func (s *Sync) insertDependents(ctx context.Context, payloads []sessionPayload, 
 			}
 		}
 		for _, r := range p.imageText {
+			if w.keep > 0 && r.MessageOrdinal <= p.messages[w.keep-1].Ordinal {
+				continue
+			}
 			images = append(images, imageTextRow(r, version))
 		}
 		for _, ev := range p.usage {
@@ -1209,11 +1316,11 @@ func (s *Sync) insertDependents(ctx context.Context, payloads []sessionPayload, 
 }
 
 func (s *Sync) insertSessions(
-	ctx context.Context, payloads []sessionPayload, contentVersions map[string]uint64, version uint64,
+	ctx context.Context, payloads []sessionPayload, publications map[string]sessionPublication, version uint64,
 ) error {
 	rows := make([][]any, 0, len(payloads))
 	for _, p := range payloads {
-		rows = append(rows, s.sessionRow(p, contentVersions[p.session.ID], version))
+		rows = append(rows, s.sessionRow(p, publications[p.session.ID], version))
 	}
 	return insertRows(ctx, s.conn, "sessions", rows)
 }
@@ -1281,9 +1388,9 @@ func insertSQL(spec tableSpec) string {
 	return "INSERT INTO " + spec.name + " (" + strings.Join(names, ", ") + ")"
 }
 
-// sessionRow renders the session row. contentVersion is the push version
-// of the session's dependent rows.
-func (s *Sync) sessionRow(p sessionPayload, contentVersion, version uint64) []any {
+// sessionRow renders the session row, which records what publication says
+// about the session's dependent rows.
+func (s *Sync) sessionRow(p sessionPayload, publication sessionPublication, version uint64) []any {
 	sess := p.session
 	row := []any{
 		sess.ID, sess.Project, sess.ProjectAssigned,
@@ -1319,7 +1426,7 @@ func (s *Sync) sessionRow(p sessionPayload, contentVersion, version uint64) []an
 		int64(len(p.messages)),
 	}
 	row = append(row, computeDashboardFacts(p.messages).row()...)
-	return append(row, p.fingerprint.content, contentVersion, version)
+	return append(row, p.fingerprint.content, publication.contentVersion, publication.messageRows, version)
 }
 
 func lastMessageAt(msgs []db.Message) *time.Time {

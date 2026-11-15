@@ -127,12 +127,14 @@ func TestSnapshotFingerprintSplit(t *testing.T) {
 }
 
 func TestPlanSessionWrite(t *testing.T) {
-	local := sessionFingerprint{full: "full-new", content: "content-a"}
+	local := sessionFingerprint{full: "full-new", content: "content-a", messages: 3}
 	stored := mirrorSession{
 		fingerprint: "full-new", contentFingerprint: "content-a",
 		archiveID: "archive", contentVersion: 7, rowCurrent: true,
 	}
 	rowOnly := sessionWrite{row: true, keptContent: "content-a", keptVersion: 7}
+	grown := sessionFingerprint{full: "full-other", content: "content-b", messages: 3}
+	withRows := func(m *mirrorSession) { m.messageRows, m.storedMessages = "rows", 2 }
 	for _, tc := range []struct {
 		name   string
 		local  sessionFingerprint
@@ -148,6 +150,32 @@ func TestPlanSessionWrite(t *testing.T) {
 			name: "content changed", found: true,
 			local: sessionFingerprint{full: "full-other", content: "content-b"},
 			want:  rewriteSession,
+		},
+		{
+			name: "content changed after the stored messages", found: true,
+			local: grown, stored: withRows,
+			want: sessionWrite{
+				row: true, content: true, keptVersion: 7,
+				keptMessageRows: "rows", keepMessages: 2,
+			},
+		},
+		{
+			name: "fewer messages than stored", found: true,
+			local:  sessionFingerprint{full: "full-other", content: "content-b", messages: 1},
+			stored: withRows,
+			want:   rewriteSession,
+		},
+		{
+			name: "row written before message rows fingerprints", found: true,
+			local:  grown,
+			stored: func(m *mirrorSession) { m.storedMessages = 2 },
+			want:   rewriteSession,
+		},
+		{
+			name: "row-only write records the stored message rows", found: true,
+			local:  sessionFingerprint{full: "full-other", content: "content-a"},
+			stored: withRows,
+			want:   sessionWrite{row: true, keptContent: "content-a", keptVersion: 7, keptMessageRows: "rows"},
 		},
 		{
 			name: "session fields changed", found: true,
