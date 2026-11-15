@@ -25,6 +25,9 @@ func (s *Store) SearchContent(
 	if f.Pattern == "" {
 		return db.ContentSearchPage{}, nil
 	}
+	if f.Cursor < 0 {
+		return db.ContentSearchPage{}, &db.SearchInputError{Msg: "search: cursor must not be negative"}
+	}
 
 	// Semantic and hybrid validate Sources themselves (messages only) ahead
 	// of the substring/regex/fts source-set default just below, which fills

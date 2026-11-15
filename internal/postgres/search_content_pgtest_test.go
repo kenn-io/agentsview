@@ -18,6 +18,19 @@ import (
 // they don't interfere with other pgtest suites that reuse testSchema.
 const contentSearchSchema = "agentsview_content_search_test"
 
+func TestSearchContentNegativeCursor(t *testing.T) {
+	store := setupContentSearch(t)
+	filter := db.ContentSearchFilter{Pattern: "invoice rounding", Cursor: -1}
+	_, err := store.SearchContent(t.Context(), filter)
+	var inputErr *db.SearchInputError
+	require.ErrorAs(t, err, &inputErr)
+
+	filter.Cursor = 0
+	page, err := store.SearchContent(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Empty(t, page.Matches)
+}
+
 func TestSearchContentExcludeActiveSince(t *testing.T) {
 	t.Parallel()
 	store := setupContentSearch(t)
