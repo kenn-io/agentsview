@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -147,6 +148,19 @@ func TestPGActivityReportInputClock(t *testing.T) {
 	q.EffectiveEnd = q.RangeStart.Add(10*time.Hour + time.Minute)
 	before := pgKeptBuild(t, store, f, q, true)
 	assert.Equal(t, 100, before.Report.Totals.OutputTokens)
+	version, err := store.activityKeptVersion(t.Context(), "")
+	require.NoError(t, err)
+	lower := db.PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
+	upper := db.PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
+	entries, ok := store.runtimeState().activityInputs.Get(lower+"|"+upper, version)
+	require.True(t, ok)
+	saved := entries[0].priced
+	q.EffectiveEnd = q.EffectiveEnd.Add(time.Minute)
+	advanced := pgKeptBuild(t, store, f, q, true)
+	entries, ok = store.runtimeState().activityInputs.Get(lower+"|"+upper, version)
+	require.True(t, ok)
+	assert.Same(t, saved, entries[0].priced)
+	assert.Equal(t, 100, advanced.Report.Totals.OutputTokens)
 	q.EffectiveEnd = q.RangeStart.Add(10*time.Hour + 5*time.Minute)
 	atBoundary := pgKeptBuild(t, store, f, q, true)
 	assert.Equal(t, 100, atBoundary.Report.Totals.OutputTokens)
@@ -160,6 +174,12 @@ func TestPGActivityReportInputClock(t *testing.T) {
 	require.NoError(t, err)
 	defer fresh.Close()
 	requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), after)
+	q.EffectiveEnd = q.RangeStart.Add(10*time.Hour + 2*time.Minute)
+	requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), advanced)
+	q.EffectiveEnd = q.RangeStart.Add(10*time.Hour + time.Minute)
+	rewound := pgKeptBuild(t, store, f, q, true)
+	assert.Equal(t, 100, rewound.Report.Totals.OutputTokens)
+	requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), rewound)
 }
 
 func TestPGActivityReportInputRangeSwitchAfterPush(t *testing.T) {
@@ -322,4 +342,70 @@ func TestPGActivityReportInputTranscriptAndCounts(t *testing.T) {
 	changed := pgKeptBuild(t, store, f, q, true)
 	assert.Equal(t, 2, changed.Report.Buckets[0].UserMessages)
 	assert.Equal(t, 2, changed.Report.Buckets[0].AssistantMessages)
+}
+
+func TestPGActivityReportPricedPeerAndConcurrent(t *testing.T) {
+	t.Parallel()
+	local, syncer, store := newUsageJournalFixture(t)
+	for _, item := range []struct {
+		id, project string
+		tokens      int
+	}{{"a", "project-a", 100}, {"peer", "project-b", 200}} {
+		pgKeptSession(t, local, item.id, item.project, "2026-06-14")
+		usage := []byte(fmt.Sprintf(`{"output_tokens":%d}`, item.tokens))
+		model := "kept-model"
+		if item.id == "peer" {
+			model = "peer-model"
+		}
+		require.NoError(t, local.ReplaceSessionMessages(t.Context(), item.id, []db.Message{{SessionID: item.id, Ordinal: 0, Role: "assistant", Content: "answer", Timestamp: "2026-06-14T10:01:00Z", Model: model, TokenUsage: usage, ClaudeMessageID: "shared", ClaudeRequestID: "request"}}))
+	}
+	pgKeptPush(t, syncer, false)
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC", Project: "project-a"}
+	q.Partial, q.EffectiveEnd = true, q.RangeEnd.Add(-time.Hour)
+	pgKeptBuild(t, store, f, q, true)
+	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "peer", []db.Message{{SessionID: "peer", Ordinal: 0, Role: "assistant", Content: "answer", Timestamp: "2026-06-14T10:01:00Z", Model: "peer-model", TokenUsage: []byte(`{"output_tokens":50}`), ClaudeMessageID: "shared", ClaudeRequestID: "request"}}))
+	pgKeptPush(t, syncer, false)
+	got := pgKeptBuild(t, store, f, q, true)
+	assert.Equal(t, 100, got.Report.Totals.OutputTokens)
+	require.NotNil(t, got.Report.Pricing)
+	assert.Contains(t, got.Report.Pricing.Models, "kept-model")
+	assert.NotContains(t, got.Report.Pricing.Models, "peer-model")
+	repeated := pgKeptBuild(t, store, f, q, true)
+	requirePGKeptEqual(t, got, repeated)
+	assert.NotContains(t, repeated.Report.Pricing.Models, "peer-model")
+	fresh, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
+	require.NoError(t, err)
+	defer fresh.Close()
+	requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), got)
+	var wg sync.WaitGroup
+	results := make([]activity.CandidateArtifacts, 4)
+	errs := make([]error, len(results))
+	for i := range results {
+		wg.Go(func() { results[i], errs[i] = store.BuildActivityReportArtifacts(t.Context(), f, q, nil) })
+	}
+	wg.Wait()
+	for i := range results {
+		require.NoError(t, errs[i])
+		requirePGKeptEqual(t, got, results[i])
+	}
+}
+
+func TestPGActivityReportPricedCopilot(t *testing.T) {
+	t.Parallel()
+	local, syncer, store := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "copilot", "project-a", "2026-06-14")
+	require.NoError(t, local.ReplaceSessionUsageEvents(t.Context(), "copilot", []db.UsageEvent{{SessionID: "copilot", Source: "shutdown", Model: "kept-model", OutputTokens: 500, Cost: new(money.MustParseDollars("0.03")), CostSource: db.CopilotReportedCostSource, DedupKey: "final", OccurredAt: "2026-06-14T10:05:00Z"}}))
+	pgKeptPush(t, syncer, false)
+	store.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}})
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	q.Partial, q.EffectiveEnd = true, q.RangeEnd.Add(-time.Hour)
+	first := pgKeptBuild(t, store, f, q, true)
+	repeat := pgKeptBuild(t, store, f, q, true)
+	requirePGKeptEqual(t, first, repeat)
+	assert.Equal(t, money.MustParseDollars("0.03"), repeat.Report.Totals.Cost)
+	report := activity.ReportWithSessions(repeat)
+	require.Len(t, report.BySession, 1)
+	assert.Equal(t, money.MustParseDollars("0.03"), report.BySession[0].Cost)
+	require.NotNil(t, repeat.Report.Pricing)
+	assert.Contains(t, repeat.Report.Pricing.Models, "kept-model")
 }
