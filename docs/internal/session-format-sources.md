@@ -155,6 +155,17 @@ evidence; they do not establish whether a tool helped the task.
 
 ## Claude Code (`claude`)
 
+- **Modified-time refresh without a write (observed 2026-11-15):** On a machine
+  running Claude Code 2.1.325, four transcripts of open sessions received new
+  modified times exactly 3,600 seconds apart while their size and SHA-256
+  stayed the same. The producer code that does this was not identified, and no
+  public source was searched. Sync therefore treats a same-size transcript
+  whose content hash equals the stored hash as unchanged: it records the new
+  modified time on the session row and parser checkpoint and does not parse. A
+  same-size transcript whose hash differs is still parsed in full. See
+  `sourceOnlyTouched` in `internal/sync/engine_incremental.go` and
+  `internal/sync/claude_touch_test.go`.
+
 - **Hook output (checked 2026-11-04):** The parser reads the `hook_success`
   attachment shape reported in
   [#2456](https://github.com/kenn-io/agentsview/issues/2456) with `content`,
@@ -3434,8 +3445,9 @@ schemas keep their existing ordering behavior.
 - **Artifact directories:** Reverified 2026-11-12 against pi-subagents at
   `7e2794efba0b727af51d08c36614ea939f1a827b`: the
   [artifact writer](https://github.com/nicobailon/pi-subagents/blob/7e2794efba0b727af51d08c36614ea939f1a827b/src/shared/artifacts.ts),
+  the
   [session-root helper](https://github.com/nicobailon/pi-subagents/blob/7e2794efba0b727af51d08c36614ea939f1a827b/src/extension/index.ts),
-  and
+  and the
   [child launcher](https://github.com/nicobailon/pi-subagents/blob/7e2794efba0b727af51d08c36614ea939f1a827b/src/runs/foreground/subagent-executor.ts).
   Session-local outputs go into a `subagent-artifacts` directory beside the
   transcript. Child transcripts use the parent transcript's stem as their
@@ -3446,10 +3458,9 @@ schemas keep their existing ordering behavior.
   source lookup. They classify excluded changes as non-data so remote delta
   planning does not scan the provider. An explicitly configured root with that
   basename remains supported, including when a broader root also contains it.
-  Nested child transcripts outside artifact directories remain
-  discoverable, and unreadable session directories still report incomplete
-  discovery. The transcript format, parsed output, and data version are
-  unchanged.
+  Nested child transcripts outside artifact directories remain discoverable,
+  and unreadable session directories still report incomplete discovery. The
+  transcript format, parsed output, and data version are unchanged.
 - **Agentsview:** `internal/parser/pi.go` and `internal/parser/pi_provider.go`;
   alternate branches remain in the file but only the active ancestry is a
   conversation. Reverified 2026-09-03 against 156 local Pi transcripts: the
@@ -3663,8 +3674,8 @@ schemas keep their existing ordering behavior.
   session format documented under Pi above; checked 2026-11-13.
 
 - **Usage and cost:** Each assistant line carries input, output, cache-read, and
-  cache-write tokens with a provider and model. Agentsview derives monetary cost
-  from the catalog.
+  cache-write tokens with a provider and model. Agentsview derives monetary
+  cost from the catalog.
 
 - **Contract:** The public line shapes and usage meaning are in
   [Direct API Sessions](../token-usage.md#direct-api-sessions).
@@ -5748,9 +5759,9 @@ schemas keep their existing ordering behavior.
   identities take precedence; do not parse display prose for billing facts.
 - **Agentsview:** `internal/parser/evener.go` and `evener_provider.go`. Fixtures
   are synthetic and cover semantic content, usage, metadata and fork behavior.
-  Empty compaction labels and literal text matching those labels carry distinct
-  source types while retaining their transcript text.
-  Capture discovery uses bounded directory batches and the raw-audit progress
+  Empty compaction labels and literal text matching those labels carry
+  distinct source types while retaining their transcript text. Capture
+  discovery uses bounded directory batches and the raw-audit progress
   contract. Remote imports verify content hashes rather than trusting copied
   filesystem timestamps. Remote Evener imports derive project names from the
   recorded path without probing that directory on the receiving machine. The

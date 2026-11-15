@@ -277,10 +277,45 @@ func (e *Engine) tryProviderIncrementalAppend(
 		}
 	}
 
+	// The fingerprint's hash describes the bytes at info only when both saw
+	// the same size and modified time.
+	var currentHash string
+	if fingerprint.Size == info.Size() &&
+		fingerprint.MTimeNS == info.ModTime().UnixNano() {
+		currentHash = fingerprint.Hash
+	}
 	return e.tryIncrementalJSONL(
 		ctx, file, info, file.Agent, parseFn,
-		checkpoint, fullHash, hashState,
+		checkpoint, fullHash, hashState, currentHash,
 	)
+}
+
+// sourceOnlyTouched reports whether a same-size source still holds the bytes
+// last parsed, and records its new modified time when it does. An agent can
+// refresh a running session's modified time without writing to it; parsing
+// the whole transcript again for that would cost its full size each time.
+// currentHash is the provider fingerprint's hash of the bytes at info, so a
+// provider that folds companion files into its fingerprint still re-parses
+// when one of those changes.
+func (e *Engine) sourceOnlyTouched(
+	ctx context.Context, path string, info os.FileInfo,
+	sessionID, currentHash string,
+) bool {
+	if currentHash == "" {
+		return false
+	}
+	storedHash, ok := e.db.GetSessionFileHash(ctx, sessionID)
+	if !ok || storedHash != currentHash {
+		return false
+	}
+	changeTime, _ := fileChangeTime(path, info)
+	if err := e.db.RecordSourceTouch(
+		ctx, sessionID, info.ModTime().UnixNano(), changeTime,
+	); err != nil {
+		log.Printf("recording unchanged source %s: %v", sessionID, err)
+		return false
+	}
+	return true
 }
 
 // incrementalParseFunc reads new JSONL lines from a file
@@ -308,6 +343,7 @@ func (e *Engine) tryIncrementalJSONL(
 	checkpoint *db.ParserCheckpoint,
 	fullHash string,
 	hashState []byte,
+	currentHash string,
 ) (processResult, bool) {
 	if e.forceParse || e.forceFullParse || file.ForceFullParse {
 		// Parse-diff and explicit full imports never produce append deltas.
@@ -390,6 +426,13 @@ func (e *Engine) tryIncrementalJSONL(
 			// change when session_index.jsonl does. Let the later database
 			// freshness checks decide whether to skip or full-parse.
 			return processResult{}, false
+		}
+		// Equal times mean an earlier gate declined this row on purpose: an
+		// explicit refresh, or stored metadata that needs repair.
+		if !file.ForceParse && inc.FileMtime != info.ModTime().UnixNano() &&
+			inc.Project != "" && !parser.NeedsProjectReparse(inc.Project) &&
+			e.sourceOnlyTouched(ctx, file.Path, info, inc.ID, currentHash) {
+			return processResult{skip: true, contentVerified: true}, true
 		}
 		log.Printf(
 			"incremental %s %s: file size unchanged at %d but changed since last sync, full parse",
