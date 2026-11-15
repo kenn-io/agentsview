@@ -4,12 +4,13 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -20,23 +21,39 @@ import (
 // they don't interfere with other pgtest suites that reuse testSchema.
 const contentSearchSchema = "agentsview_content_search_test"
 
-func TestSearchContentUsesExistingSnapshot(t *testing.T) {
+func TestSearchContentSnapshotDuringUpdate(t *testing.T) {
 	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "snapshot", "snapshot", "claude", "2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
 	insertCSMessage(t, store, "snapshot", 0, "user", "invoice rounding", "2026-05-01T10:00:00Z", false)
 
-	tx, err := store.DB().BeginTx(t.Context(), &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+	conn, err := store.DB().Conn(t.Context())
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = tx.Rollback() })
-	var body string
-	require.NoError(t, tx.QueryRowContext(t.Context(), "SELECT content FROM messages WHERE session_id = $1", "snapshot").Scan(&body))
-	_, err = store.DB().ExecContext(t.Context(), "UPDATE messages SET content = $1 WHERE session_id = $2", "invoice only", "snapshot")
+	var config *pgx.ConnConfig
+	err = conn.Raw(func(driver any) error {
+		config = driver.(*stdlib.Conn).Conn().Config()
+		return nil
+	})
+	require.NoError(t, conn.Close())
 	require.NoError(t, err)
+	tracer := &hostedPendingSelectionTracer{argument: "snapshot"}
+	config.Tracer = tracer
+	pool := stdlib.OpenDB(*config)
+	t.Cleanup(func() { assert.NoError(t, pool.Close()) })
+	reader := &Store{pg: pool, ownedDB: pool}
+	var updateErr error
+	updated := false
+	tracer.after = func() {
+		tracer.after = nil
+		_, updateErr = store.DB().ExecContext(t.Context(), "UPDATE messages SET content = $1 WHERE session_id = $2", "invoice only", "snapshot")
+		updated = true
+	}
 
 	filter := db.ContentSearchFilter{Pattern: "invoice rounding", Project: "snapshot"}
-	page, err := store.readView(tx).SearchContent(t.Context(), filter)
+	page, err := reader.SearchContent(t.Context(), filter)
 	require.NoError(t, err)
+	require.True(t, updated)
+	require.NoError(t, updateErr)
 	require.Len(t, page.Matches, 1)
 	assert.Contains(t, page.Matches[0].Snippet, "invoice rounding")
 	page, err = store.SearchContent(t.Context(), filter)
