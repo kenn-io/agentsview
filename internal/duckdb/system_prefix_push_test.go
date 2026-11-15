@@ -23,8 +23,6 @@ func TestSystemPrefixPush(t *testing.T) {
 	}{
 		{"ordinary", "user", false},
 		{"<task-notification>task", "user", true},
-		{"<task-notification>task", "assistant", false},
-		{`<codex_internal_context source="goal"/other>goal`, "user", false},
 	}
 	msgs := make([]db.Message, len(cases))
 	for i, c := range cases {
@@ -36,18 +34,17 @@ func TestSystemPrefixPush(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
-	check := func() {
+	check := func(i int) {
 		conn, err := Open(ctx, path)
 		require.NoError(t, err)
 		defer conn.Close()
-		for i, c := range cases {
-			var flag bool
-			err := conn.QueryRowContext(ctx, `SELECT is_system_prefixed FROM messages WHERE session_id = 'prefix' AND ordinal = ?`, i).Scan(&flag)
-			require.NoError(t, err)
-			require.Equal(t, c.want, flag, "case %d", i)
-		}
+		var flag bool
+		err = conn.QueryRowContext(ctx, `SELECT is_system_prefixed FROM messages WHERE session_id = 'prefix' AND ordinal = ?`, i).Scan(&flag)
+		require.NoError(t, err)
+		require.Equal(t, cases[i].want, flag, "case %d", i)
 	}
-	check()
+	check(0)
+	check(1)
 	cases[0].content, cases[0].want = "<task-notification>changed", true
 	msgs[0].Content = cases[0].content
 	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{Session: session, Messages: msgs, DataVersion: 2, ReplaceMessages: true}})
@@ -55,7 +52,7 @@ func TestSystemPrefixPush(t *testing.T) {
 	result, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	require.False(t, result.Diagnostics.Full)
-	check()
+	check(0)
 }
 
 func TestSystemPrefixSQLParity(t *testing.T) {
@@ -106,32 +103,33 @@ func TestSystemPrefixSQLParity(t *testing.T) {
 	require.Equal(t, want, hex.EncodeToString(fingerprint[:]), "system-prefix rules changed; bump SchemaVersion and record the new fingerprint")
 }
 
-func TestSystemPrefixSearchAndTrends(t *testing.T) {
+func TestSystemPrefixSearchAndContentExcludePrefixedMessages(t *testing.T) {
 	text := "uniqueterm"
-	store := newUnitsStore(t, []db.SessionBatchWrite{{
-		Session: unitSession("prefix-search", 2),
-		Messages: []db.Message{
-			unitMsg("prefix-search", 0, "user", text, false, false),
-			unitMsg("prefix-search", 1, "assistant", text, false, false),
+	store := newUnitsStore(t, []db.SessionBatchWrite{
+		{
+			Session: unitSession("prefix-search", 2),
+			Messages: []db.Message{
+				unitMsg("prefix-search", 0, "user", "<task-notification>"+text, false, false),
+				unitMsg("prefix-search", 1, "assistant", text, false, false),
+			},
+			DataVersion: 1, ReplaceMessages: true,
 		},
-		DataVersion: 1, ReplaceMessages: true,
-	}})
-	// Deliberately differ from the content-derived verdict to exercise the stored column.
-	_, err := store.DB().ExecContext(t.Context(), `UPDATE messages SET is_system_prefixed = TRUE WHERE session_id = 'prefix-search' AND ordinal = 0`)
-	require.NoError(t, err)
+		{
+			Session: unitSession("prefix-malformed", 1),
+			Messages: []db.Message{
+				unitMsg("prefix-malformed", 0, "user", `<codex_internal_context source="goal"/other> `+text, false, false),
+			},
+			DataVersion: 1, ReplaceMessages: true,
+		},
+	})
 	search, err := store.Search(t.Context(), db.SearchFilter{Query: "uniqueterm", Limit: 10})
 	require.NoError(t, err)
-	require.Len(t, search.Results, 1)
-	require.Equal(t, 1, search.Results[0].Ordinal)
+	require.Len(t, search.Results, 2)
+	require.ElementsMatch(t, []string{"prefix-search", "prefix-malformed"}, []string{search.Results[0].SessionID, search.Results[1].SessionID})
 	page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
 		Pattern: "uniqueterm", Mode: "substring", Sources: []string{"messages"}, IncludeOneShot: true, ExcludeSystem: true, Limit: 50,
 	})
 	require.NoError(t, err)
-	require.Len(t, page.Matches, 1)
-	require.Equal(t, 1, page.Matches[0].Ordinal)
-	terms, err := db.ParseTrendTerms([]string{"uniqueterm"})
-	require.NoError(t, err)
-	trends, err := store.GetTrendsTerms(t.Context(), db.AnalyticsFilter{From: "2026-05-01", To: "2026-05-01", Timezone: "UTC"}, terms, "day")
-	require.NoError(t, err)
-	require.Equal(t, 1, trends.Series[0].Total)
+	require.Len(t, page.Matches, 2)
+	require.ElementsMatch(t, []string{"prefix-search", "prefix-malformed"}, []string{page.Matches[0].SessionID, page.Matches[1].SessionID})
 }

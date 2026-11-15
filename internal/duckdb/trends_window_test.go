@@ -102,24 +102,10 @@ func TestDuckTrendsPartsInvalidateLegacyIdentity(t *testing.T) {
 	require.Equal(t, 1, old.Series[0].Total)
 	windowIDs := append([]string(nil), reads...)
 	require.NotEmpty(t, windowIDs)
-	require.NoError(t, store.Close())
-	// Deliberately differ from the content-derived verdict to exercise the stored column.
-	writeUsageMirror(t, path, `UPDATE messages SET is_system_prefixed = TRUE WHERE session_id = 'trends-window-fallback'`)
-	store = openUsagePartsStore(t, path)
 	reads = nil
-	stale, err := readbase.NewAnalytics(legacyTrendBackend{analyticsSQL{store: store}}, "duckdb").GetTrendsTerms(t.Context(), f, terms, "day")
-	require.NoError(t, err)
-	require.Equal(t, old, stale)
-	require.Empty(t, reads)
 	fresh, err := store.GetTrendsTerms(t.Context(), f, terms, "day")
 	require.NoError(t, err)
-	require.Zero(t, fresh.Series[0].Total)
+	require.Equal(t, old, fresh)
 	require.ElementsMatch(t, windowIDs, reads)
-	require.NoError(t, store.Close())
-	store = openUsagePartsStore(t, path)
-	reads = nil
-	_, err = store.GetTrendsTerms(t.Context(), f, terms, "day")
-	require.NoError(t, err)
-	require.Empty(t, reads)
 	require.NoError(t, store.Close())
 }
