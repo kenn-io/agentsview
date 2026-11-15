@@ -826,8 +826,10 @@ func scanContentRows(rows *sql.Rows, page *db.WordPage, makeSnippet func(string)
 		var body string
 		var ts any
 		var exactText int
-		dest := []any{&m.SessionID, &m.Project, &m.Agent,
-			&m.Location, &m.Role, &m.ToolName, &m.Ordinal, &ts, &body, &m.MatchedWords}
+		dest := []any{
+			&m.SessionID, &m.Project, &m.Agent,
+			&m.Location, &m.Role, &m.ToolName, &m.Ordinal, &ts, &body, &m.MatchedWords,
+		}
 		if page != nil {
 			dest = append(dest, &exactText)
 		}
