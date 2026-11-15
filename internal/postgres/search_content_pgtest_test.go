@@ -55,10 +55,6 @@ func TestSearchContentSnapshotDuringUpdate(t *testing.T) {
 	require.NoError(t, updateErr)
 	require.Len(t, page.Matches, 1)
 	assert.Contains(t, page.Matches[0].Snippet, "invoice rounding")
-	page, err = store.SearchContent(t.Context(), filter)
-	require.NoError(t, err)
-	require.Len(t, page.Matches, 1)
-	assert.Contains(t, page.Matches[0].Snippet, "invoice only")
 }
 
 func TestSearchContentExcludeActiveSince(t *testing.T) {

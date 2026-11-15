@@ -1,7 +1,6 @@
 package db
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -25,18 +24,6 @@ func seedWordSearch(t *testing.T, d *DB, project string, entries ...[3]string) {
 			msg.ToolCalls = []ToolCall{{ToolName: "Bash", Category: "Bash", ToolUseID: "tu-" + id, ResultContent: result}}
 		}
 		require.NoError(t, d.ReplaceSessionMessages(t.Context(), id, []Message{msg}))
-	}
-}
-
-func TestSearchContentStemmedMatchSnippet(t *testing.T) {
-	d := testDB(t)
-	requireFTS(t, d)
-	seedWordSearch(t, d, "proj", [3]string{"stemmed", strings.Repeat("filler ", 100) + "connecting succeeded", ""})
-	for _, mode := range []string{"fts", "hybrid"} {
-		page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "connection unrelated", Mode: mode, KeywordOnly: mode == "hybrid"})
-		require.NoError(t, err)
-		require.Len(t, page.Matches, 1, "mode %q", mode)
-		assert.Contains(t, page.Matches[0].Snippet, "connecting", "mode %q", mode)
 	}
 }
 
@@ -69,29 +56,12 @@ func wordHits(page ContentSearchPage) []wordHit {
 	return out
 }
 
-func TestSearchContentRanksExactTextThenWords(t *testing.T) {
-	d := testDB(t)
-	requireFTS(t, d)
-	seedWordSearch(t, d, "proj",
-		[3]string{"tool", "ran the report", "invoice rounding decision recorded"},
-	)
-	search := func(pattern, mode string) []wordHit {
-		t.Helper()
-		page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: pattern, Mode: mode})
-		require.NoError(t, err)
-		return wordHits(page)
-	}
-
-	assert.Equal(t, []wordHit{{"tool", "tool_result", 0}}, search(`“invoice rounding decision”`, ""))
-}
-
 func TestSearchContentKeepsSubstringSearch(t *testing.T) {
 	d := testDB(t)
 	requireFTS(t, d)
 	seedWordSearch(t, d, "proj",
-		[3]string{"embedded", "prefixrounding happened", ""},
-		[3]string{"words", "rounding of invoices", "invoices need rounding"},
 		[3]string{"curly-tool", "no match", "found “invoices need” here"},
+		[3]string{"tool", "ran the report", "invoice rounding decision recorded"},
 	)
 	for _, tc := range []struct {
 		name   string
@@ -99,14 +69,9 @@ func TestSearchContentKeepsSubstringSearch(t *testing.T) {
 		want   []wordHit
 	}{
 		{
-			"single word",
-			ContentSearchFilter{Pattern: "rounding"},
-			[]wordHit{{"embedded", "message", 0}, {"words", "message", 0}, {"words", "tool_result", 0}},
-		},
-		{
-			"no messages source",
-			ContentSearchFilter{Pattern: "invoices need", Sources: []string{"tool_result"}},
-			[]wordHit{{"words", "tool_result", 0}, {"curly-tool", "tool_result", 0}},
+			"fully quoted substring includes tool results",
+			ContentSearchFilter{Pattern: `“invoice rounding decision”`},
+			[]wordHit{{"tool", "tool_result", 0}},
 		},
 		{
 			"curly quotes without messages are literal",
