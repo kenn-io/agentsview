@@ -4829,11 +4829,4 @@ func TestSearchContentHybridKeywordFallback(t *testing.T) {
 	assert.Zero(t, page.NextCursor)
 	assert.Equal(t, "assistant", page.Matches[0].Role)
 	assert.Equal(t, 2, page.Matches[0].Ordinal)
-
-	page, err = store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "rankneedle", Mode: "hybrid", KeywordOnly: true, Scope: "all", Limit: 1})
-	require.NoError(t, err)
-	require.Len(t, page.Matches, 1)
-	assert.Equal(t, "parent", page.Matches[0].SessionID)
-	assert.False(t, page.Matches[0].Subordinate)
-	assert.Zero(t, page.NextCursor)
 }

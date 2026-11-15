@@ -85,14 +85,17 @@ func SeedWordSearch(t *testing.T, d *db.DB) {
 }
 
 // AssertExplicitMirrorFTS checks the mirrors' existing literal expression handling.
-func AssertExplicitMirrorFTS(t *testing.T, store db.Store) {
+func AssertExplicitMirrorFTS(t *testing.T, store db.Store, modes ...string) {
 	t.Helper()
+	if len(modes) == 0 {
+		modes = []string{"fts", "hybrid"}
+	}
 	for _, tc := range []struct{ pattern, project, want string }{
 		{"invoice*", "word-literal-star", "literal-star"},
 		{"invoice* rounding", "word-star", "star-both"},
 		{`NOT "invoice"`, "word-literal-not", "literal-not"},
 	} {
-		for _, mode := range []string{"fts", "hybrid"} {
+		for _, mode := range modes {
 			t.Run("explicit fts/"+tc.pattern+"/"+mode, func(t *testing.T) {
 				page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
 					Pattern: tc.pattern, Project: tc.project, Mode: mode, KeywordOnly: mode == "hybrid",
@@ -138,9 +141,10 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 	for _, tc := range []struct {
 		name, pattern, project string
 		want                   []hit
+		snippet                string
 	}{
-		{"punctuation splits query words", "invoice.txt missingword", "word-split-punctuation", []hit{{"split-punctuation", "message", 1}}},
-		{"multiline", "invoice rounding decision", "word-multiline", []hit{{"multiline", "message", 3}}},
+		{"punctuation splits query words", "invoice.txt missingword", "word-split-punctuation", []hit{{"split-punctuation", "message", 1}}, "invoice txt"},
+		{"multiline", "invoice rounding decision", "word-multiline", []hit{{"multiline", "message", 3}}, ""},
 	} {
 		for _, mode := range []string{"substring", "fts", "hybrid"} {
 			t.Run(tc.name+"/"+mode, func(t *testing.T) {
@@ -150,36 +154,35 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 				})
 				require.NoError(t, err)
 				assert.Equal(t, tc.want, project(page.Matches))
-				if tc.name == "punctuation splits query words" {
+				if tc.snippet != "" {
 					require.Len(t, page.Matches, 1)
-					assert.Contains(t, page.Matches[0].Snippet, "invoice txt")
+					assert.Contains(t, page.Matches[0].Snippet, tc.snippet)
 				}
 			})
 		}
 	}
-	for _, mode := range []string{"substring", "fts", "hybrid"} {
-		t.Run("CJK letters are word characters/"+mode, func(t *testing.T) {
-			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
-				Pattern: "invoice absentword", Mode: mode, Project: "word-cjk-boundary",
-				KeywordOnly: mode == "hybrid",
+	for _, tc := range []struct {
+		name, project string
+		want          []hit
+	}{
+		{"CJK letters are word characters", "word-cjk-boundary", nil},
+		{"partial punctuation candidates keep word boundaries", "word-punctuation", []hit{
+			{"invoice-dot", "message", 1},
+			{"invoice-path", "message", 1},
+			{"invoice-email", "message", 1},
+			{"invoice-version", "message", 1},
+		}},
+	} {
+		for _, mode := range []string{"substring", "fts", "hybrid"} {
+			t.Run(tc.name+"/"+mode, func(t *testing.T) {
+				page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+					Pattern: "invoice absentword", Mode: mode, Project: tc.project,
+					KeywordOnly: mode == "hybrid",
+				})
+				require.NoError(t, err)
+				assert.ElementsMatch(t, tc.want, project(page.Matches))
 			})
-			require.NoError(t, err)
-			assert.Empty(t, page.Matches)
-		})
-		t.Run("partial punctuation candidates keep word boundaries/"+mode, func(t *testing.T) {
-			want := []hit{
-				{"invoice-dot", "message", 1},
-				{"invoice-path", "message", 1},
-				{"invoice-email", "message", 1},
-				{"invoice-version", "message", 1},
-			}
-			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
-				Pattern: "invoice absentword", Mode: mode, Project: "word-punctuation",
-				KeywordOnly: mode == "hybrid",
-			})
-			require.NoError(t, err)
-			assert.ElementsMatch(t, want, project(page.Matches))
-		})
+		}
 	}
 
 	for _, mode := range []string{"substring", "fts", "hybrid"} {
@@ -243,7 +246,11 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 		})
 	}
 	for _, mode := range []string{"substring", "fts", "hybrid"} {
-		t.Run("one-row pages read past candidates that fail a word boundary/"+mode, func(t *testing.T) {
+		name := "one-row pages read past candidates that fail a word boundary"
+		if mode == "hybrid" {
+			name = "candidates that fail a word boundary rank last"
+		}
+		t.Run(name+"/"+mode, func(t *testing.T) {
 			f := db.ContentSearchFilter{
 				Pattern: "invoice rounding", Mode: mode, Project: "word-page",
 				Limit: 1, KeywordOnly: mode == "hybrid",
@@ -263,25 +270,21 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 			}
 			// Every whole-word match comes before the two rows that hold
 			// only "rounding"; ranking among equal counts differs by mode.
-			require.Len(t, paged, 5)
-			for _, h := range paged[:3] {
-				assert.Equal(t, 2, h.words, h.session)
-			}
-			assert.ElementsMatch(t, []hit{
+			want := []hit{
 				{"page-inflected", "message", 2},
 				{"page-underscore", "message", 2},
 				{"page-reordered", "message", 2},
 				{"page-cjk-prefix", "message", 1},
 				{"page-cjk-suffix", "message", 1},
-			}, paged)
+			}
 			if mode == "substring" {
-				assert.Equal(t, []hit{
-					{"page-inflected", "message", 2},
-					{"page-underscore", "message", 2},
-					{"page-reordered", "message", 2},
-					{"page-cjk-prefix", "message", 1},
-					{"page-cjk-suffix", "message", 1},
-				}, paged)
+				assert.Equal(t, want, paged)
+			} else {
+				require.Len(t, paged, 5)
+				for _, h := range paged[:3] {
+					assert.Equal(t, 2, h.words, h.session)
+				}
+				assert.ElementsMatch(t, want, paged)
 			}
 		})
 	}

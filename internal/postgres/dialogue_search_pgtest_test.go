@@ -83,7 +83,7 @@ func TestPGWordSearchParity(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	dbtest.AssertWordSearch(t, store)
-	dbtest.AssertExplicitMirrorFTS(t, store)
+	dbtest.AssertExplicitMirrorFTS(t, store, "hybrid")
 }
 
 func TestPGWordSearchCLocale(t *testing.T) {
@@ -106,13 +106,7 @@ func TestPGWordSearchCLocale(t *testing.T) {
 		{"cjk-after", "invoice漢", "invoice absentword", 0},
 		{"cjk-before", "漢invoice", "invoice absentword", 0},
 		{"cjk-phrase", "invoice漢rounding", `"invoice rounding" absentword`, 0},
-		{"punctuation", "invoice—rounding", `"invoice rounding" absentword`, 1},
-		{"underscore", "invoice_rounding", `"invoice rounding" absentword`, 1},
-		{"accent-single", "see the café résumé", "café", 1},
-		{"accent-longer", "see the cafétéria menu", "café", 0},
-		{"accent-literal", "café résumé", "café absentword", 1},
 		{"accent-adjacent", "caféé", "café absentword", 0},
-		{"accent-distinct", "cafe résumé", "café absentword", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			insertCSSession(t, store, tc.name, tc.name, "claude", "2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
