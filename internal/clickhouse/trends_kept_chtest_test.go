@@ -9,7 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -212,7 +212,9 @@ func TestTrendsKeptTimezoneProcess(t *testing.T) {
 	store, syncer, _ := newPushedStore(t)
 	zoneDir := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(zoneDir, "Test"), 0o700))
-	zones, err := zip.OpenReader(filepath.Join(runtime.GOROOT(), "lib", "time", "zoneinfo.zip"))
+	goRoot, err := exec.CommandContext(t.Context(), "go", "env", "GOROOT").Output()
+	require.NoError(t, err)
+	zones, err := zip.OpenReader(filepath.Join(strings.TrimSpace(string(goRoot)), "lib", "time", "zoneinfo.zip"))
 	require.NoError(t, err)
 	defer zones.Close()
 	readZone := func(name string) []byte {
