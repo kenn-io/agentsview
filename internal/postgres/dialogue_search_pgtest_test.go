@@ -98,14 +98,32 @@ func TestPGWordSearchCLocale(t *testing.T) {
 	_, err = server.admin.ExecContext(t.Context(), "CREATE DATABASE "+name+" TEMPLATE template0 ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C'")
 	require.NoError(t, err)
 	store := setupContentSearch(t)
-	insertCSSession(t, store, "accent", "project-a", "claude", "2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
-	insertCSMessage(t, store, "accent", 0, "user", "see the café résumé", "2026-05-01T10:00:00Z", false)
-	insertCSSession(t, store, "longer", "project-a", "claude", "2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
-	insertCSMessage(t, store, "longer", 0, "user", "see the cafétéria menu", "2026-05-01T10:00:00Z", false)
-	page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "café", Mode: "fts", Sources: []string{"messages"}, Limit: 50})
-	require.NoError(t, err)
-	require.Len(t, page.Matches, 1)
-	assert.Equal(t, "accent", page.Matches[0].SessionID)
+	for _, tc := range []struct {
+		name, body, pattern string
+		want                int
+	}{
+		{"cjk-after", "invoice漢", "invoice absentword", 0},
+		{"cjk-before", "漢invoice", "invoice absentword", 0},
+		{"cjk-phrase", "invoice漢rounding", `"invoice rounding" absentword`, 0},
+		{"punctuation", "invoice—rounding", `"invoice rounding" absentword`, 1},
+		{"underscore", "invoice_rounding", `"invoice rounding" absentword`, 1},
+		{"accent-single", "see the café résumé", "café", 1},
+		{"accent-longer", "see the cafétéria menu", "café", 0},
+		{"accent-literal", "café résumé", "café absentword", 1},
+		{"accent-adjacent", "caféé", "café absentword", 0},
+		{"accent-distinct", "cafe résumé", "café absentword", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			insertCSSession(t, store, tc.name, tc.name, "claude", "2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
+			insertCSMessage(t, store, tc.name, 0, "user", tc.body, "2026-05-01T10:00:00Z", false)
+			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: tc.pattern, Mode: "fts", Project: tc.name, Sources: []string{"messages"}, Limit: 50})
+			require.NoError(t, err)
+			require.Len(t, page.Matches, tc.want)
+			if tc.want > 0 {
+				assert.Equal(t, tc.name, page.Matches[0].SessionID)
+			}
+		})
+	}
 }
 
 func TestPGCockroachNaturalFtsCompatibility(t *testing.T) {

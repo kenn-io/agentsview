@@ -99,11 +99,35 @@ func WordRankedSQL(b *QueryBuilder, branches []string, f ContentSearchFilter, q 
 // which ClickHouse's regexPredicate repeats harmlessly.
 func boundedPattern(b *QueryBuilder, words ...string) string {
 	if b.dialect.name == "postgres" {
-		return "(^|_|[^[:alnum:]_])" + strings.Join(words, "[^[:alnum:]]+") + "($|_|[^[:alnum:]_])"
+		gap := "[^" + postgresWordCharacters + "]"
+		return "(^|" + gap + ")" + strings.Join(words, gap+"+") + "($|" + gap + ")"
 	}
 	flags, gap := "(?i)", `[^\p{L}\p{N}]`
 	return flags + "(^|" + gap + ")" + strings.Join(words, gap+"+") + "($|" + gap + ")"
 }
+
+// PostgreSQL character classes depend on LC_CTYPE. Build the same letter and
+// number class used by the other dialects from Go's Unicode tables instead.
+var postgresWordCharacters = func() string {
+	var chars strings.Builder
+	for r := rune(0); r <= unicode.MaxRune; {
+		if !unicode.IsLetter(r) && !unicode.IsNumber(r) {
+			r++
+			continue
+		}
+		start := r
+		for r < unicode.MaxRune && (unicode.IsLetter(r+1) || unicode.IsNumber(r+1)) {
+			r++
+		}
+		chars.WriteRune(start)
+		if r > start {
+			chars.WriteByte('-')
+			chars.WriteRune(r)
+		}
+		r++
+	}
+	return chars.String()
+}()
 
 // compactForms folds forms to their common prefix and an alternation of
 // suffixes, which roughly halves PostgreSQL's regex cost.
@@ -131,7 +155,7 @@ func wordFormRegex(b *QueryBuilder, form string) string {
 	for i := range parts {
 		parts[i] = regexp.QuoteMeta(parts[i])
 	}
-	gap := "[^[:alnum:]]+"
+	gap := "[^" + postgresWordCharacters + "]+"
 	if b.dialect.name != "postgres" {
 		gap = `[^\p{L}\p{N}]+`
 	}
