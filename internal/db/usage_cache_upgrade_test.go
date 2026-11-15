@@ -237,6 +237,49 @@ func copyUsageFixtureNamed(t *testing.T, format int, prefix string) (string, str
 	return archive, old, id
 }
 
+func TestUsageCacheUpgradeSkipsCorruptNewer(t *testing.T) {
+	archive, old21, id := copyUsageFixture(t, 21)
+	prior := openRawUsageCacheTestDB(t, old21)
+	var facts int
+	require.NoError(t, prior.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_facts`).Scan(&facts))
+	require.Positive(t, facts)
+	require.NoError(t, prior.Close())
+
+	_, old23, _ := copyUsageV23Fixture(t)
+	newer := openRawUsageCacheTestDB(t, old23)
+	_, err := newer.ExecContext(t.Context(), `UPDATE usage_cache_metadata SET value = ? WHERE key = ?`, id, usageCacheMetadataSourceDatabaseID)
+	require.NoError(t, err)
+	var root, pageSize int64
+	require.NoError(t, newer.QueryRowContext(t.Context(), `SELECT rootpage FROM sqlite_schema WHERE name='usage_facts'`).Scan(&root))
+	require.NoError(t, newer.QueryRowContext(t.Context(), `PRAGMA page_size`).Scan(&pageSize))
+	require.NoError(t, newer.Close())
+	newerPath := usageCacheGenerationPath(archive, 23, id)
+	require.NoError(t, os.Rename(old23, newerPath))
+	file, err := os.OpenFile(newerPath, os.O_WRONLY, 0)
+	require.NoError(t, err)
+	_, err = file.WriteAt([]byte{0xff, 0xff, 0xff, 0xff}, (root-1)*pageSize)
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+	probe := probeUsageCache(t.Context(), newerPath)
+	require.NoError(t, probe.Err)
+	require.True(t, probe.Recognized)
+
+	database, err := Open(t.Context(), archive)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	cache, err := database.usageCache.Generation(t.Context(), id)
+	require.NoError(t, err)
+	assert.False(t, cache.temporary)
+	var got int
+	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT count(*) FROM usage_facts`).Scan(&got))
+	assert.Equal(t, facts, got)
+	var extracted []usageSourceVersion
+	cache.fill.observer.beforeExtract = func(versions []usageSourceVersion) { extracted = append(extracted, versions...) }
+	_, err = database.GetDailyUsage(t.Context(), UsageFilter{Timezone: "UTC"})
+	require.NoError(t, err)
+	assert.Empty(t, extracted)
+}
+
 func TestUsageCacheUpgradeCorruptFactsRebuilds(t *testing.T) {
 	archive, old, id := copyUsageV23Fixture(t)
 	db := openRawUsageCacheTestDB(t, old)

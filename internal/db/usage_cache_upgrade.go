@@ -21,20 +21,32 @@ func seedUpgradedUsageCache(ctx context.Context, archivePath, candidate, databas
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	var oldPath string
-	var from int
 	for version := usageCacheUpgradeTo - 1; version >= usageCacheUpgradeFrom; version-- {
 		path := usageCacheGenerationPath(archivePath, version, databaseID)
-		if _, err := os.Stat(path); err == nil {
-			oldPath, from = path, version
-			break
-		} else if !os.IsNotExist(err) {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			continue
+		} else if err != nil {
+			return false, err
+		}
+		seeded, err := seedUsageCacheFrom(ctx, archivePath, candidate, databaseID, path, version)
+		if err != nil || seeded {
+			return seeded, err
+		}
+		if err := removeUsageCacheFiles(candidate); err != nil {
+			return false, err
+		}
+		file, err := os.OpenFile(candidate, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err != nil {
+			return false, err
+		}
+		if err := file.Close(); err != nil {
 			return false, err
 		}
 	}
-	if oldPath == "" {
-		return false, ctx.Err()
-	}
+	return false, ctx.Err()
+}
+
+func seedUsageCacheFrom(ctx context.Context, archivePath, candidate, databaseID, oldPath string, from int) (bool, error) {
 	lease, err := acquireUsageCacheLease(oldPath)
 	if err != nil {
 		return false, err
