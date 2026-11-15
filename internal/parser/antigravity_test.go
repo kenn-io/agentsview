@@ -4807,6 +4807,7 @@ func TestDecodeAntigravityStepStructuredUserInput(t *testing.T) {
 	}{
 		{"later text", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte("  ")}, {num: 2, wire: pbWireBytes, bytes: []byte("attachment")}, {num: 1, wire: pbWireBytes, bytes: []byte(" second ")}}, " second "},
 		{"short", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte("你好")}}, "你好"},
+		{"multiline", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte("    def greet():\n        return 42\n")}}, "    def greet():\n        return 42\n"},
 		{"nul", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte("a\x00b")}}, "a�b"},
 		{"blank text", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte(" \n")}, {num: 2, wire: pbWireBytes, bytes: []byte("A longer skill expansion with enough text to be selected")}}, "A longer skill expansion with enough text to be selected"},
 		{"fallback", []pbField{{num: 2, wire: pbWireBytes, bytes: []byte("A longer skill expansion with enough text to be selected")}}, "A longer skill expansion with enough text to be selected"},
@@ -4909,7 +4910,7 @@ func TestAntigravityCLIDBStructuredHistoryGapDoesNotDuplicate(t *testing.T) {
 func TestAntigravityCLIDBStructuredPromptPreservesWhitespace(t *testing.T) {
 	const (
 		id     = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
-		prompt = "    def greet():\n        return 42\n"
+		prompt = "    def greet(): return 42  "
 	)
 	for _, withHistory := range []bool{false, true} {
 		name := "without history"
@@ -4934,11 +4935,13 @@ func TestAntigravityCLIDBStructuredPromptPreservesWhitespace(t *testing.T) {
 				require.NoError(t, err)
 				mustWrite(t, filepath.Join(root, "history.jsonl"), append(row, '\n'))
 			}
-			_, msgs, err := parseAntigravityCLITestSession(t, dbPath, "", "test-machine")
+			sess, msgs, err := parseAntigravityCLITestSession(t, dbPath, "", "test-machine")
 			require.NoError(t, err)
 			require.Len(t, msgs, 1)
 			assert.Equal(t, prompt, msgs[0].Content)
 			assert.Equal(t, len(prompt), msgs[0].ContentLength)
+			assert.Equal(t, "def greet(): return 42", sess.FirstMessage)
+			assert.Equal(t, 1, sess.UserMessageCount)
 		})
 	}
 }
