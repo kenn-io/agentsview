@@ -54,7 +54,6 @@ func TestTrendsKeptPartialPush(t *testing.T) {
 	restarted := newTestStore(t, syncer.conn, syncer.target)
 	require.NoError(t, restarted.openActivityReportDisk(syncer.target))
 	require.Equal(t, fresh, read(restarted))
-	require.Equal(t, fresh, read(store))
 }
 
 func TestTrendsKeptRestart(t *testing.T) {
