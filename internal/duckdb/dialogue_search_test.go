@@ -34,7 +34,7 @@ func TestDuckDBWordSearchParity(t *testing.T) {
 	require.NoError(t, err)
 	store := openPushedStore(t, path)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	dbtest.AssertWordSearch(t, store, true)
+	dbtest.AssertWordSearch(t, store)
 	dbtest.AssertExplicitMirrorFTS(t, store)
 }
 

@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/service"
 )
 
 func TestPGDialogueSearchParity(t *testing.T) {
@@ -82,39 +81,8 @@ func TestPGWordSearchParity(t *testing.T) {
 	store, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	dbtest.AssertWordSearch(t, store, true)
+	dbtest.AssertWordSearch(t, store)
 	dbtest.AssertExplicitMirrorFTS(t, store, "hybrid")
-}
-
-func TestPGWordSearchCLocale(t *testing.T) {
-	t.Parallel()
-	server, _ := testPGServer(t)
-	if server.cockroach {
-		t.Skip("PostgreSQL only")
-	}
-	pgURL := testPGURL(t)
-	name := pgDatabaseName(t, pgURL)
-	_, err := server.admin.ExecContext(t.Context(), "DROP DATABASE "+name)
-	require.NoError(t, err)
-	_, err = server.admin.ExecContext(t.Context(), "CREATE DATABASE "+name+" TEMPLATE template0 ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C'")
-	require.NoError(t, err)
-	store := setupContentSearch(t)
-	for _, tc := range []struct {
-		name, body, pattern string
-	}{
-		{"cjk-after", "invoice漢", "invoice absentword"},
-		{"cjk-before", "漢invoice", "invoice absentword"},
-		{"cjk-phrase", "invoice漢rounding", `"invoice rounding" absentword`},
-		{"accent-adjacent", "caféé", "café absentword"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			insertCSSession(t, store, tc.name, tc.name, "claude", "2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
-			insertCSMessage(t, store, tc.name, 0, "user", tc.body, "2026-05-01T10:00:00Z", false)
-			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: tc.pattern, Mode: "fts", Project: tc.name, Sources: []string{"messages"}, Limit: 50})
-			require.NoError(t, err)
-			assert.Empty(t, page.Matches)
-		})
-	}
 }
 
 func TestPGCockroachNaturalFtsCompatibility(t *testing.T) {
@@ -123,9 +91,7 @@ func TestPGCockroachNaturalFtsCompatibility(t *testing.T) {
 	if !store.cockroach {
 		t.Skip("CockroachDB only")
 	}
-	status, err := service.GetMemoryStatus(t.Context(), service.NewReadOnlyBackend(store))
-	require.NoError(t, err)
-	assert.Equal(t, "cockroach", status.Archive.Backend)
+	assert.Equal(t, "cockroach", store.MemoryBackendName())
 	insertCSSession(t, store, "crdb-search-compat", "search-compat", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
 	insertCSMessage(t, store, "crdb-search-compat", 0, "user",

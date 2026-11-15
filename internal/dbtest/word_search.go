@@ -109,7 +109,7 @@ func AssertExplicitMirrorFTS(t *testing.T, store db.Store, modes ...string) {
 }
 
 // AssertWordSearch checks the user-visible ranking and paging contract.
-func AssertWordSearch(t *testing.T, store db.Store, mirror bool) {
+func AssertWordSearch(t *testing.T, store db.Store) {
 	t.Helper()
 	type hit struct {
 		session, location string
@@ -219,20 +219,15 @@ func AssertWordSearch(t *testing.T, store db.Store, mirror bool) {
 		})
 	}
 	for _, mode := range []string{"substring", "fts", "hybrid"} {
-		if !mirror && mode == "hybrid" {
-			continue
-		}
 		t.Run(mode, func(t *testing.T) {
 			f := db.ContentSearchFilter{Pattern: "invoice rounding decision", Mode: mode, Project: "word-search", Limit: 50, KeywordOnly: mode == "hybrid"}
 			want := []hit{{"exact", "message", 3}, {"two", "message", 2}, {"one", "message", 1}}
 			if mode == "substring" {
 				want = []hit{{"exact", "message", 3}, {"tool", "tool_result", 3}, {"two", "message", 2}, {"one", "message", 1}}
 			}
-			if mirror {
-				page, err := store.SearchContent(t.Context(), f)
-				require.NoError(t, err)
-				assert.Equal(t, want, project(page.Matches))
-			}
+			page, err := store.SearchContent(t.Context(), f)
+			require.NoError(t, err)
+			assert.Equal(t, want, project(page.Matches))
 			if mode == "hybrid" {
 				return
 			}
@@ -294,33 +289,27 @@ func AssertWordSearch(t *testing.T, store db.Store, mirror bool) {
 		})
 	}
 	for _, tc := range []struct {
-		pattern    string
-		want       []hit
-		mirrorOnly bool
+		pattern string
+		want    []hit
 	}{
-		{`"rounding of invoices"`, []hit{{"two", "message", 0}}, true},
-		{`policy "quarterly forecast"`, []hit{{"phrase", "message", 2}}, false},
-		{`policy "forecast quarterly"`, nil, false},
-		{`policy "quarterly missing"`, nil, false},
+		{`"rounding of invoices"`, []hit{{"two", "message", 0}}},
+		{`policy "quarterly forecast"`, []hit{{"phrase", "message", 2}}},
+		{`policy "forecast quarterly"`, nil},
+		{`policy "quarterly missing"`, nil},
 	} {
-		if !mirror && tc.mirrorOnly {
-			continue
-		}
 		page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: tc.pattern, Project: "word-search"})
 		require.NoError(t, err)
 		assert.Equal(t, tc.want, project(page.Matches), tc.pattern)
 	}
 	for _, tc := range []struct {
-		name       string
-		filter     db.ContentSearchFilter
-		want       []hit
-		mirrorOnly bool
+		name   string
+		filter db.ContentSearchFilter
+		want   []hit
 	}{
 		{
-			name:       "single word remains substring search",
-			filter:     db.ContentSearchFilter{Pattern: "invoice", Project: "word-search", Sources: []string{"messages"}},
-			want:       []hit{{"exact", "message", 0}, {"two", "message", 0}, {"one", "message", 0}, {"near", "message", 0}},
-			mirrorOnly: true,
+			name:   "single word remains substring search",
+			filter: db.ContentSearchFilter{Pattern: "invoice", Project: "word-search", Sources: []string{"messages"}},
+			want:   []hit{{"exact", "message", 0}, {"two", "message", 0}, {"one", "message", 0}, {"near", "message", 0}},
 		},
 		{
 			name:   "word matching folds case",
@@ -328,15 +317,11 @@ func AssertWordSearch(t *testing.T, store db.Store, mirror bool) {
 			want:   []hit{{"case", "message", 3}},
 		},
 		{
-			name:       "non-message sources stay exact",
-			filter:     db.ContentSearchFilter{Pattern: "invoice rounding decision", Project: "word-search", Sources: []string{"tool_result"}},
-			want:       []hit{{"tool", "tool_result", 0}},
-			mirrorOnly: true,
+			name:   "non-message sources stay exact",
+			filter: db.ContentSearchFilter{Pattern: "invoice rounding decision", Project: "word-search", Sources: []string{"tool_result"}},
+			want:   []hit{{"tool", "tool_result", 0}},
 		},
 	} {
-		if !mirror && tc.mirrorOnly {
-			continue
-		}
 		t.Run(tc.name, func(t *testing.T) {
 			page, err := store.SearchContent(t.Context(), tc.filter)
 			require.NoError(t, err)

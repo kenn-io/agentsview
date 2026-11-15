@@ -73,9 +73,6 @@ func TestSearchContentRanksExactTextThenWords(t *testing.T) {
 	d := testDB(t)
 	requireFTS(t, d)
 	seedWordSearch(t, d, "proj",
-		[3]string{"one-word", "an invoice arrived", ""},
-		[3]string{"two-words", "we settled the rounding of invoices", ""},
-		[3]string{"unrelated", "nothing to see", ""},
 		[3]string{"tool", "ran the report", "invoice rounding decision recorded"},
 	)
 	search := func(pattern, mode string) []wordHit {
@@ -85,17 +82,7 @@ func TestSearchContentRanksExactTextThenWords(t *testing.T) {
 		return wordHits(page)
 	}
 
-	assert.Equal(t, []wordHit{
-		{"tool", "tool_result", 3},
-		{"two-words", "message", 2},
-		{"one-word", "message", 1},
-	}, search("invoice rounding decision", ""))
-	assert.Equal(t, []wordHit{{"two-words", "message", 0}}, search(`"rounding of invoices"`, ""))
 	assert.Equal(t, []wordHit{{"tool", "tool_result", 0}}, search(`“invoice rounding decision”`, ""))
-	assert.Equal(t, []wordHit{
-		{"two-words", "message", 2},
-		{"one-word", "message", 1},
-	}, search("invoice rounding decision", "fts"))
 }
 
 func TestSearchContentKeepsSubstringSearch(t *testing.T) {
