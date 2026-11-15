@@ -160,19 +160,18 @@ func TestUsageCarryEqualCountOlderRow(t *testing.T) {
 	require.True(t, injected)
 	f := db.UsageFilter{Project: "older-row", Timezone: "UTC"}
 	before := readPreparedUsage(t, store, f)
+	proofs := 0
+	store.beforeUsageCarryCheck = func() { proofs++ }
 	runPreparedUsageRefresh(t, store)
 	fresh := readPreparedUsage(t, NewStoreFromDB(store.DB(), store.bulk), f)
 	got := readPreparedUsage(t, store, f)
+	require.Positive(t, proofs)
 	require.EqualValues(t, 10, before.daily.Totals.InputTokens)
 	require.EqualValues(t, 100, fresh.daily.Totals.InputTokens)
 	require.Len(t, before.top, 1)
 	require.Len(t, fresh.top, 1)
 	require.Len(t, got.top, 1)
 	require.EqualValues(t, 10, before.top[0].InputTokens)
-	if fresh.daily.Totals.InputTokens != got.daily.Totals.InputTokens {
-		t.Errorf("Summary input tokens: want %d, got %d", fresh.daily.Totals.InputTokens, got.daily.Totals.InputTokens)
-	}
-	if fresh.top[0].InputTokens != got.top[0].InputTokens {
-		t.Errorf("Top input tokens: want %d, got %d", fresh.top[0].InputTokens, got.top[0].InputTokens)
-	}
+	require.Equal(t, fresh.daily.Totals.InputTokens, got.daily.Totals.InputTokens)
+	require.Equal(t, fresh.top[0].InputTokens, got.top[0].InputTokens)
 }
