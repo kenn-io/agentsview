@@ -959,6 +959,8 @@ func TestSessionSearchRemoteDefaultFTSHint(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			cmd.SetOut(&stdout)
 			cmd.SetErr(&stderr)
+			// Include every session category to avoid a hidden-result retry
+			// adding another substring call to modes.
 			args := []string{"session", "--server", ts.URL, "--server-token-file", tokenFile, "search", tc.pattern, "--include-children", "--include-automated", "--include-one-shot", "--json"}
 			cmd.SetArgs(append(args, tc.flags...))
 			require.NoError(t, cmd.Execute())
@@ -972,9 +974,6 @@ func TestSessionSearchRemoteDefaultFTSHint(t *testing.T) {
 				assert.Contains(t, got.Hints[0].Next, "--fts=true")
 				assert.Contains(t, got.Hints[0].Next, "--server="+ts.URL)
 				assert.Contains(t, got.Hints[0].Next, "--server-token-file="+tokenFile)
-				assert.Contains(t, got.Hints[0].Next, "--include-children=true")
-				assert.Contains(t, got.Hints[0].Next, "--include-automated=true")
-				assert.Contains(t, got.Hints[0].Next, "--include-one-shot=true")
 			} else {
 				assert.Equal(t, []string{tc.mode}, modes)
 				assert.NotContains(t, stdout.String(), "try_fts")

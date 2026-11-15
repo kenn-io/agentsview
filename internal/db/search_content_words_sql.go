@@ -95,7 +95,7 @@ func WordFilterSQL(b *QueryBuilder, column string, f ContentSearchFilter, q Cont
 	}
 	raw := WordCandidateSQL(b, column, q, all, false)
 	if b.dialect.name == "duckdb" {
-		return "(" + exact + "((" + raw + " OR " + WordNonASCIISQL(b.dialect, column) + ") AND " +
+		return "(" + exact + "(" + raw + " AND " +
 			WordRegexSQL(b, column, column, q, all) + "))"
 	}
 	folded := WordCandidateSQL(b, column, q, all, true)
@@ -158,10 +158,8 @@ func WordNonASCIISQL(d QueryDialect, expression string) string {
 		return "octet_length(" + expression + ") > char_length(" + expression + ")"
 	case "duckdb":
 		return "strlen(" + expression + ") > length(" + expression + ")"
-	case "clickhouse":
-		return "length(" + expression + ") > lengthUTF8(" + expression + ")"
 	default:
-		return "1=0"
+		return "length(" + expression + ") > lengthUTF8(" + expression + ")"
 	}
 }
 

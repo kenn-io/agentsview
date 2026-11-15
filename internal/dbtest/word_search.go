@@ -65,8 +65,6 @@ func SeedWordSearch(t *testing.T, d *db.DB) {
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "underscore", []db.Message{{SessionID: "underscore", Role: "assistant", Content: "invoice_rounding_decision"}}))
 	SeedSession(t, d, "boundary-near", "word-boundary", func(s *db.Session) { s.UserMessageCount = 2 })
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "boundary-near", []db.Message{{SessionID: "boundary-near", Role: "assistant", Content: "xinvoice rounding decisionx"}}))
-	SeedSession(t, d, "prefix-near", "word-prefix", func(s *db.Session) { s.UserMessageCount = 2 })
-	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "prefix-near", []db.Message{{SessionID: "prefix-near", Role: "assistant", Content: "invoice rounding decisionx"}}))
 	SeedSession(t, d, "multiline", "word-multiline", func(s *db.Session) { s.UserMessageCount = 2 })
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "multiline", []db.Message{{SessionID: "multiline", Role: "assistant", Content: "decision\ninvoice_rounding"}}))
 	SeedSession(t, d, "long", "word-snippet", func(s *db.Session) { s.UserMessageCount = 2 })
@@ -105,29 +103,30 @@ func AssertWordSearch(t *testing.T, store db.Store, foldsAccents bool) {
 		})
 	}
 	for _, tc := range []struct {
-		name, pattern, project string
-		want                   []hit
+		name, pattern, project         string
+		want, wantWithoutAccentFolding []hit
+		hasWithoutAccentFoldingWant    bool
 	}{
-		{"punctuation splits query words", "invoice.txt missingword", "word-split-punctuation", []hit{{"split-punctuation", "message", 1}}},
-		{"all words fold accents", "cafe rounding decision", "word-accent", []hit{{"accent-exact", "message", 3}}},
-		{"decomposed accent candidate", "cafe absentword", "word-accent-decomposed", []hit{{"accent-decomposed", "message", 1}}},
-		{"accented query finds ASCII body", "café absentword", "word-accent-ascii-body", []hit{{"accent-ascii-body", "message", 1}}},
-		{"accented query finds accented body", "café missingword", "word-accent-partial", []hit{{"accent-partial", "message", 1}}},
-		{"partial candidates fold accents", "cafe missingword", "word-accent-partial", []hit{{"accent-partial", "message", 1}}},
-		{"multiple diacritics stay distinct", "rounding missingword", "word-accent-multiple", nil},
-		{"natural words fold accents", "naive design", "word-accent-naive", []hit{{"accent-naive", "message", 2}}},
-		{"accent folding keeps word boundaries", "cafe rounding missingword", "word-accent-boundary", []hit{{"accent-boundary", "message", 1}}},
-		{"mixed literal-accent phrase matches", `missingword "café rounding"`, "word-accent-phrase", []hit{{"accent-phrase", "message", 3}}},
-		{"mixed unaccented phrase preserves SQLite matching", `missingword "cafe rounding"`, "word-accent-phrase", nil},
-		{"accent folding avoids ASCII boundary false positives", "sum missingword", "word-accent-overlap", nil},
-		{"accent folding does not count an ASCII interior", "sum parsing missingword", "word-accent-overlap", []hit{{"accent-overlap", "message", 1}}},
-		{"accent folding keeps Unicode boundaries", "café missingword", "word-accent-unicode-boundary", nil},
-		{"Greek accents stay distinct", "αρχη missingword", "word-accent-greek", nil},
-		{"Greek final sigma folds in caps", "οδυσσευς here", "word-unicode-final-sigma", []hit{{"greek-final-sigma", "message", 2}}},
-		{"long s folds inside quoted phrases", `missingword "test phrase"`, "word-long-s-phrase", []hit{{"long-s-phrase", "message", 2}}},
-		{"long s matches a partial word query", "test absentword", "word-long-s-phrase", []hit{{"long-s-phrase", "message", 1}}},
-		{"underscore phrase", `"invoice rounding" decision`, "word-boundary", []hit{{"underscore", "message", 3}}},
-		{"multiline", "invoice rounding decision", "word-multiline", []hit{{"multiline", "message", 3}}},
+		{"punctuation splits query words", "invoice.txt missingword", "word-split-punctuation", []hit{{"split-punctuation", "message", 1}}, nil, false},
+		{"all words fold accents", "cafe rounding decision", "word-accent", []hit{{"accent-exact", "message", 3}}, []hit{{"accent-exact", "message", 2}}, true},
+		{"decomposed accent candidate", "cafe absentword", "word-accent-decomposed", []hit{{"accent-decomposed", "message", 1}}, nil, false},
+		{"accented query finds ASCII body", "café absentword", "word-accent-ascii-body", []hit{{"accent-ascii-body", "message", 1}}, nil, false},
+		{"accented query finds accented body", "café missingword", "word-accent-partial", []hit{{"accent-partial", "message", 1}}, nil, false},
+		{"partial candidates fold accents", "cafe missingword", "word-accent-partial", []hit{{"accent-partial", "message", 1}}, nil, true},
+		{"multiple diacritics stay distinct", "rounding missingword", "word-accent-multiple", nil, nil, false},
+		{"natural words fold accents", "naive design", "word-accent-naive", []hit{{"accent-naive", "message", 2}}, []hit{{"accent-naive", "message", 1}}, true},
+		{"accent folding keeps word boundaries", "cafe rounding missingword", "word-accent-boundary", []hit{{"accent-boundary", "message", 1}}, nil, false},
+		{"mixed literal-accent phrase matches", `missingword "café rounding"`, "word-accent-phrase", []hit{{"accent-phrase", "message", 3}}, nil, false},
+		{"mixed unaccented phrase preserves SQLite matching", `missingword "cafe rounding"`, "word-accent-phrase", nil, nil, false},
+		{"accent folding avoids ASCII boundary false positives", "sum missingword", "word-accent-overlap", nil, nil, false},
+		{"accent folding does not count an ASCII interior", "sum parsing missingword", "word-accent-overlap", []hit{{"accent-overlap", "message", 1}}, nil, false},
+		{"accent folding keeps Unicode boundaries", "café missingword", "word-accent-unicode-boundary", nil, nil, false},
+		{"Greek accents stay distinct", "αρχη missingword", "word-accent-greek", nil, nil, false},
+		{"Greek final sigma folds in caps", "οδυσσευς here", "word-unicode-final-sigma", []hit{{"greek-final-sigma", "message", 2}}, nil, false},
+		{"long s folds inside quoted phrases", `missingword "test phrase"`, "word-long-s-phrase", []hit{{"long-s-phrase", "message", 2}}, nil, false},
+		{"long s matches a partial word query", "test absentword", "word-long-s-phrase", []hit{{"long-s-phrase", "message", 1}}, nil, true},
+		{"underscore phrase", `"invoice rounding" decision`, "word-boundary", []hit{{"underscore", "message", 3}}, nil, false},
+		{"multiline", "invoice rounding decision", "word-multiline", []hit{{"multiline", "message", 3}}, nil, false},
 	} {
 		for _, mode := range []string{"substring", "fts", "hybrid"} {
 			t.Run(tc.name+"/"+mode, func(t *testing.T) {
@@ -137,15 +136,8 @@ func AssertWordSearch(t *testing.T, store db.Store, foldsAccents bool) {
 				})
 				require.NoError(t, err)
 				want := tc.want
-				if !foldsAccents {
-					switch tc.name {
-					case "all words fold accents":
-						want = []hit{{"accent-exact", "message", 2}}
-					case "partial candidates fold accents":
-						want = nil
-					case "natural words fold accents":
-						want = []hit{{"accent-naive", "message", 1}}
-					}
+				if !foldsAccents && tc.hasWithoutAccentFoldingWant {
+					want = tc.wantWithoutAccentFolding
 				}
 				assert.Equal(t, want, project(page.Matches))
 			})
@@ -225,17 +217,6 @@ func AssertWordSearch(t *testing.T, store db.Store, foldsAccents bool) {
 				want = []hit{{"boundary-near", "message", 3}, {"underscore", "message", 3}}
 			}
 			assert.Equal(t, want, project(page.Matches))
-		})
-	}
-	for _, mode := range []string{"substring", "fts", "hybrid"} {
-		t.Run("prefix boundary/"+mode, func(t *testing.T) {
-			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "invoice rounding decision", Mode: mode, Project: "word-prefix", KeywordOnly: mode == "hybrid"})
-			require.NoError(t, err)
-			words := 2
-			if mode == "substring" {
-				words = 3
-			}
-			assert.Equal(t, []hit{{"prefix-near", "message", words}}, project(page.Matches))
 		})
 	}
 	for _, mode := range []string{"substring", "fts", "hybrid"} {

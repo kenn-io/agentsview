@@ -81,7 +81,11 @@ func TestPGCockroachNaturalFtsCompatibility(t *testing.T) {
 	insertCSSession(t, store, "crdb-search-compat", "search-compat", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
 	insertCSMessage(t, store, "crdb-search-compat", 0, "user",
-		"invoice rounding decision", "2026-05-01T10:00:00Z", false)
+		"invoice records rounding before a final decision", "2026-05-01T10:00:00Z", false)
+	insertCSSession(t, store, "crdb-search-partial", "search-compat", "claude",
+		"2026-05-01T11:00:00Z", "2026-05-01T11:30:00Z")
+	insertCSMessage(t, store, "crdb-search-partial", 0, "user",
+		"invoice and rounding", "2026-05-01T11:00:00Z", false)
 	for _, filter := range []db.ContentSearchFilter{
 		{Pattern: "invoice rounding decision", Mode: "fts", Sources: []string{"messages"}, Limit: 50},
 		{Pattern: "invoice rounding decision", Mode: "hybrid", KeywordOnly: true, Limit: 50},
