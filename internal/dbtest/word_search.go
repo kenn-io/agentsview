@@ -43,6 +43,16 @@ func SeedWordSearch(t *testing.T, d *db.DB) {
 		{"split-punctuation", "word-split-punctuation", strings.Repeat("filler ", 80) + "invoice txt"},
 		{"cjk-prefix", "word-cjk-boundary", "漢invoice"},
 		{"cjk-suffix", "word-cjk-boundary", "invoice漢"},
+		{"code-both", "word-code", "c++ rounding"},
+		{"code-partial", "word-code", "rounding"},
+		{"path-both", "word-path", `C:\temp invoice`},
+		{"path-partial", "word-path", "invoice"},
+		{"star-both", "word-star", "invoice* rounding"},
+		{"star-partial", "word-star", "rounding"},
+		{"literal-star", "word-literal-star", "invoice*"},
+		{"plain-invoice", "word-literal-star", "invoice"},
+		{"literal-not", "word-literal-not", `NOT "invoice"`},
+		{"plain-not-invoice", "word-literal-not", "invoice"},
 	} {
 		SeedSession(t, d, entry.id, entry.project, func(s *db.Session) { s.UserMessageCount = 2 })
 		require.NoError(t, d.ReplaceSessionMessages(t.Context(), entry.id, []db.Message{{
@@ -60,6 +70,27 @@ func SeedWordSearch(t *testing.T, d *db.DB) {
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "long", []db.Message{{SessionID: "long", Role: "assistant", Content: body}}))
 }
 
+// AssertExplicitMirrorFTS checks the mirrors' existing literal expression handling.
+func AssertExplicitMirrorFTS(t *testing.T, store db.Store) {
+	t.Helper()
+	for _, tc := range []struct{ pattern, project, want string }{
+		{"invoice*", "word-literal-star", "literal-star"},
+		{"invoice* rounding", "word-star", "star-both"},
+		{`NOT "invoice"`, "word-literal-not", "literal-not"},
+	} {
+		for _, mode := range []string{"fts", "hybrid"} {
+			t.Run("explicit fts/"+tc.pattern+"/"+mode, func(t *testing.T) {
+				page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+					Pattern: tc.pattern, Project: tc.project, Mode: mode, KeywordOnly: mode == "hybrid",
+				})
+				require.NoError(t, err)
+				require.Len(t, page.Matches, 1)
+				assert.Equal(t, tc.want, page.Matches[0].SessionID)
+			})
+		}
+	}
+}
+
 // AssertWordSearch checks the user-visible ranking and paging contract.
 func AssertWordSearch(t *testing.T, store db.Store) {
 	t.Helper()
@@ -73,6 +104,27 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 			hits = append(hits, hit{m.SessionID, m.Location, m.MatchedWords})
 		}
 		return hits
+	}
+	for _, tc := range []struct {
+		pattern, project string
+		ids              []string
+	}{
+		{"c++ rounding", "word-code", []string{"code-both", "code-partial"}},
+		{`C:\temp invoice`, "word-path", []string{"path-both", "path-partial"}},
+	} {
+		for _, mode := range []string{"fts", "hybrid"} {
+			t.Run(tc.pattern+"/"+mode, func(t *testing.T) {
+				page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+					Pattern: tc.pattern, Project: tc.project, Mode: mode, KeywordOnly: mode == "hybrid",
+				})
+				require.NoError(t, err)
+				var ids []string
+				for _, match := range page.Matches {
+					ids = append(ids, match.SessionID)
+				}
+				assert.ElementsMatch(t, tc.ids, ids)
+			})
+		}
 	}
 	for _, mode := range []string{"fts", "hybrid"} {
 		t.Run("single word matches whole words/"+mode, func(t *testing.T) {

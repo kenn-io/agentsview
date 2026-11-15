@@ -142,10 +142,6 @@ func (s *Store) searchContentSubstringPG(
 	var ranked bool
 	if !s.cockroach {
 		f, words, ranked = db.RouteContentWords(f)
-		pattern := strings.TrimSpace(f.Pattern)
-		if f.Mode == "fts" && !strings.HasPrefix(pattern, `"`) && (strings.ContainsAny(pattern, "*+:^") || strings.HasPrefix(pattern, `NOT "`)) {
-			ranked = false
-		}
 	}
 	scopeWhere, scopeArgs := db.BuildContentScopeSQL(f, s.sessionDialect())
 	scopeWhere, scopeArgs = appendExcludeSessionIDsPG(

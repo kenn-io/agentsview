@@ -35,6 +35,7 @@ func TestDuckDBWordSearchParity(t *testing.T) {
 	store := openPushedStore(t, path)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	dbtest.AssertWordSearch(t, store)
+	dbtest.AssertExplicitMirrorFTS(t, store)
 }
 
 func TestDialogueOnlyDuckDBChangeRepushesSession(t *testing.T) {

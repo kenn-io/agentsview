@@ -147,8 +147,11 @@ func unquoteContentSearch(pattern string) (string, bool) {
 	return pattern, false
 }
 
-// explicitFTSExpression reports whether a leading-quote pattern uses FTS5 syntax.
+// explicitFTSExpression reports whether a pattern uses explicit FTS syntax.
 func explicitFTSExpression(pattern string) bool {
+	if strings.Contains(pattern, "*") || strings.HasPrefix(strings.TrimSpace(pattern), `NOT "`) {
+		return true
+	}
 	if !strings.HasPrefix(strings.TrimSpace(pattern), `"`) {
 		return false
 	}
