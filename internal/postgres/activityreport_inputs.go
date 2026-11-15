@@ -42,8 +42,6 @@ func (inputs *pgActivityInputs) setUsage(rows []pgActivityUsageRow, candidates m
 	inputs.priced = nil
 }
 
-const pgActivityInputsMaxBytes = 256 << 20
-
 type pgActivityPriced struct {
 	rangeStart, rangeEnd, effectiveEnd, next time.Time
 	pricingDigest                            string
@@ -133,6 +131,14 @@ func pgActivityInputBytes(e pgActivityInputs) int64 {
 		size += int64(len(id)) + 16
 	}
 	return size
+}
+
+func pgActivityInputsWithoutPrices(inputs []pgActivityInputs, size int64) ([]pgActivityInputs, int64) {
+	for i := range inputs {
+		size -= pgActivityPricedBytes(inputs[i].priced)
+		inputs[i].priced = nil
+	}
+	return inputs, size
 }
 
 func pgActivityPricedBytes(priced *pgActivityPriced) int64 {

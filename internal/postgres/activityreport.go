@@ -222,18 +222,7 @@ func (s *Store) BuildActivityReportArtifacts(
 				delete(inputs.sessions, id)
 			}
 		}
-		s.runtimeState().activityInputs.PutWithFallback(
-			lowerBound+"|"+upperBound,
-			inputVersion,
-			[]pgActivityInputs{*inputs},
-			func(inputs []pgActivityInputs, size int64) ([]pgActivityInputs, int64) {
-				for i := range inputs {
-					size -= pgActivityPricedBytes(inputs[i].priced)
-					inputs[i].priced = nil
-				}
-				return inputs, size
-			},
-		)
+		s.runtimeState().activityInputs.Put(lowerBound+"|"+upperBound, inputVersion, []pgActivityInputs{*inputs})
 	}
 	if err == nil && selection != "" {
 		candidates := slices.Clip(slices.Clone(ids))
