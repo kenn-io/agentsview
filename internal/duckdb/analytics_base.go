@@ -14,11 +14,19 @@ import (
 
 type analyticsSQL struct{ store *Store }
 
+// trendsAnalyticsSQL keeps Dashboard list binding out of Trends reads.
+type trendsAnalyticsSQL struct{ analyticsSQL }
+
+func (s trendsAnalyticsSQL) VisitSessionIDSets(ctx context.Context, ids []string, visit func(context.Context, string, []any) error) error {
+	return readbase.VisitChunkedSessionIDs(ctx, ids, visit)
+}
+
 func (s *Store) analytics() *readbase.Analytics {
 	return readbase.NewAnalytics(analyticsSQL{s}, "duckdb")
 }
 
 func (s analyticsSQL) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	observeAnalyticsQuery(query)
 	return s.store.queryContext(ctx, query, args...)
 }
 
@@ -228,8 +236,7 @@ func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids 
 			group = dateGroup.String()
 		}
 	}
-	err := db.QueryChunkedSize(ids, readbase.MaxSQLVars, func(chunk []string) error {
-		ph, args := db.InPlaceholders(chunk)
+	return s.VisitSessionIDSets(ctx, ids, func(ctx context.Context, ph string, args []any) error {
 		modelPred, modelArgs := readbase.AnalyticsCSVPredicate("m.model", f.Model, db.DuckDBQueryDialect())
 		args = append(args, modelArgs...)
 		for _, predicate := range db.ToolSelectionPredicates("tc", "s.quality_signal_version", f, func(value string) string { args = append(args, value); return "?" }) {
@@ -258,30 +265,23 @@ func (s analyticsSQL) VisitTools(ctx context.Context, f db.AnalyticsFilter, ids 
 		query += `
 				GROUP BY tc.session_id, tc.category,
 					TRIM(tc.tool_name), ` + group
-		observeAnalyticsQuery(query)
-		rows, qErr := s.store.queryContext(ctx, query, args...)
+		rows, qErr := s.QueryContext(ctx, query, args...)
 		if qErr != nil {
 			return qErr
 		}
 		defer rows.Close()
 		return readbase.ScanAnalyticsTools(rows, "duckdb", formatDBTime, emit)
 	})
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 func (s analyticsSQL) VisitSkills(ctx context.Context, f db.AnalyticsFilter, ids []string, emit func(sessionID, name, timestamp string, count int)) error {
-	err := db.QueryChunkedSize(ids, readbase.MaxSQLVars, func(chunk []string) error {
-		ph, args := db.InPlaceholders(chunk)
+	return s.VisitSessionIDSets(ctx, ids, func(ctx context.Context, ph string, args []any) error {
 		modelPred, modelArgs := readbase.AnalyticsCSVPredicate("m.model", f.Model, db.DuckDBQueryDialect())
 		args = append(args, modelArgs...)
 		from, to := readbase.AnalyticsWindowBounds(f)
 		windowPred, windowArgs := duckAnalyticsMessageWindowPred("m.timestamp", from, to)
 		args = append(args, windowArgs...)
-		rows, qErr := s.store.queryContext(ctx,
-			`SELECT tc.session_id, TRIM(COALESCE(tc.skill_name, '')),
+		rows, qErr := s.QueryContext(ctx, `SELECT tc.session_id, TRIM(COALESCE(tc.skill_name, '')),
 				COUNT(*), MAX(m.timestamp)
 				FROM tool_calls tc
 				LEFT JOIN messages m
@@ -298,10 +298,6 @@ func (s analyticsSQL) VisitSkills(ctx context.Context, f db.AnalyticsFilter, ids
 		defer rows.Close()
 		return readbase.ScanAnalyticsSkills(rows, "duckdb", formatDBTime, emit)
 	})
-	if err != nil {
-		return err
-	}
-	return nil
 }
 
 func (s analyticsSQL) ToolSessionWindow(f db.AnalyticsFilter) (string, []any) {
@@ -517,6 +513,6 @@ func (s *Store) GetTrendsTerms(
 		s.checkMirrorReplacement(ctx, nil)
 	}
 	return keptAnalytics(ctx, s, "trends", f, db.TrendsKeptVariant(terms, granularity), func(ctx context.Context) (db.TrendsTermsResponse, error) {
-		return s.analytics().GetTrendsTerms(ctx, f, terms, granularity)
+		return readbase.NewAnalytics(trendsAnalyticsSQL{analyticsSQL{s}}, "duckdb").GetTrendsTerms(ctx, f, terms, granularity)
 	})
 }
