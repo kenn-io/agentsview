@@ -32,11 +32,11 @@
   let loading = $state(false);
   let failed = $state(false);
   let read: AbortController | null = null;
-  // The session and transcript revision `prompts` were read from. A list
-  // from another session, or from before a resync renumbered messages,
-  // must not be picked while the next read runs.
+  // The session `prompts` belong to; another session's must not be picked.
   let promptsFor: string | null = null;
-  let promptsRevision: string | null = null;
+  // The transcript revision `prompts` were read from. Their ordinals are
+  // only safe to jump to while the transcript shows that same revision.
+  let promptsRevision: string | null = $state(null);
 
   // Every prompt, newest first, read again on each opening so a live
   // session's new prompts show up.
@@ -46,7 +46,7 @@
     read?.abort();
     const controller = new AbortController();
     read = controller;
-    if (promptsFor !== id || promptsRevision !== messages.loadedRevision) prompts = [];
+    if (promptsFor !== id) prompts = [];
     loading = true;
     failed = false;
     try {
@@ -112,12 +112,19 @@
     }
   }
 
+  // A resync can renumber messages, so prompts read from a revision other
+  // than the transcript's wait until the two agree: a cached list once the
+  // transcript moves on, or a fresh read the transcript has not caught up
+  // with yet.
+  let current = $derived(promptsRevision === messages.loadedRevision);
+
   // The transcript's own rule, so a prompt it hides is never offered as a
   // place to jump. A filtered code fence keeps a placeholder, so it counts.
   // A prompt newer than the transcript's newest row has no card to scroll
   // to, and loading a missing message only reaches back for older ones.
   // It shows up here once the transcript's own refresh brings it in.
   let shown = $derived.by(() => {
+    if (!current) return [];
     const newest = messages.messages.at(-1)?.ordinal ?? -1;
     return prompts.filter(
       (p) =>
@@ -150,7 +157,7 @@
     placeholder={m.session_toc_search()}
     fallbackLabel={m.session_toc_search()}
     emptyLabel={query.trim() ? m.session_toc_no_match() : m.session_toc_empty()}
-    loading={loading && prompts.length === 0}
+    loading={!failed && (loading || !current) && shown.length === 0}
     loadingLabel={m.session_toc_loading()}
     error={failed ? m.session_toc_load_failed() : undefined}
     placement="bottom"

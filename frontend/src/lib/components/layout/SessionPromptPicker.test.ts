@@ -105,6 +105,7 @@ describe("SessionPromptPicker", () => {
     read.mockRejectedValueOnce(new ApiError(409, "transcript changed"));
     page("r2", [prompt(0, "Rewritten prompt")]);
     messages.messages = [prompt(0, "Rewritten prompt")];
+    messages.loadedRevision = "r2";
     await open();
 
     expect(read.mock.calls.map((call) => call[1])).toEqual([
@@ -144,6 +145,46 @@ describe("SessionPromptPicker", () => {
     await open();
     expect(labels()).toEqual([]);
     expect(document.body.textContent).toContain("Loading prompts…");
+  });
+
+  it("withdraws an open list when the transcript moves to another revision", async () => {
+    serve([prompt(0, "Before the resync")]);
+    await open();
+    expect(labels()).toEqual(["Before the resync"]);
+
+    messages.loadedRevision = "r2";
+    await settle();
+    expect(labels()).toEqual([]);
+    expect(document.body.textContent).toContain("Loading prompts…");
+  });
+
+  it("waits for the transcript to reach the revision the prompts were read from", async () => {
+    vi.spyOn(SessionsService, "getApiV1SessionsByIdMessages").mockResolvedValueOnce({
+      messages: [prompt(0, "Rewritten prompt")],
+      transcript_revision: "r2",
+    } as never);
+    messages.messages = [prompt(0, "Old prompt")];
+    messages.loadedRevision = "r1";
+    await open();
+    expect(labels()).toEqual([]);
+    expect(document.body.textContent).toContain("Loading prompts…");
+
+    messages.messages = [prompt(0, "Rewritten prompt")];
+    messages.loadedRevision = "r2";
+    await settle();
+    expect(labels()).toEqual(["Rewritten prompt"]);
+  });
+
+  it("offers no cached prompts when a reread fails after a resync", async () => {
+    serve([prompt(0, "Before the resync")]);
+    await open();
+    await close();
+
+    messages.loadedRevision = "r2";
+    vi.spyOn(SessionsService, "getApiV1SessionsByIdMessages").mockRejectedValue(new Error("down"));
+    await open();
+    expect(labels()).toEqual([]);
+    expect(screen.getByRole("alert").textContent).toContain("Could not load prompts");
   });
 
   it("holds back prompts the transcript has not loaded yet", async () => {
