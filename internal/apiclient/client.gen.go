@@ -23600,6 +23600,8 @@ type GetAPIV1RecallEntriesQuery struct {
 	SupersedesEntryID   *string `json:"supersedes_entry_id,omitempty"`
 	SupersededByEntryID *string `json:"superseded_by_entry_id,omitempty"`
 	Cursor              *string `json:"cursor,omitempty"`
+	UpdatedSince        *string `json:"updated_since,omitempty"`
+	CreatedSince        *string `json:"created_since,omitempty"`
 	Limit               *int    `json:"limit,omitempty"`
 	TrustedOnly         *bool   `json:"trusted_only,omitempty"`
 }
