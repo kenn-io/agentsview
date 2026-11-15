@@ -2101,16 +2101,27 @@ func TestDuckAnalyticsLargeSessionSelection(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 901, summary.TotalSessions)
 	assert.Equal(t, []string{"model-a", "model-z"}, summary.Models)
+	queries := 0
+	previousObserver := analyticsQueryObserver
+	analyticsQueryObserver = func(query string) {
+		if strings.Contains(query, "FROM tool_calls tc") {
+			queries++
+		}
+	}
+	t.Cleanup(func() { analyticsQueryObserver = previousObserver })
 	tools, err := store.GetAnalyticsTools(ctx, filter)
 	require.NoError(t, err)
+	assert.Equal(t, 1, queries)
 	assert.Equal(t, 1802, tools.TotalCalls)
 	counts := map[string]int{}
 	for _, tool := range tools.ByTool {
 		counts[tool.ToolName] = tool.CallCount
 	}
 	assert.Equal(t, map[string]int{"Read": 900, "Write": 1, "Skill": 901}, counts)
+	queries = 0
 	skills, err := store.GetAnalyticsSkills(ctx, filter, "day")
 	require.NoError(t, err)
+	assert.Equal(t, 1, queries)
 	assert.Equal(t, 901, skills.TotalSkillCalls)
 	skillCounts := map[string]int{}
 	for _, skill := range skills.BySkill {
