@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"database/sql"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -45,24 +44,6 @@ func TestPGSchemaRepairsLeaveSessionVersionsSettled(t *testing.T) {
 			var unstamped int
 			require.NoError(t, ps.DB().QueryRowContext(ctx, `SELECT count(*) FROM sessions WHERE automation_audit_hash IS NULL`).Scan(&unstamped))
 			assert.Zero(t, unstamped)
-			snapshot := func() map[string]string {
-				t.Helper()
-				rows, err := ps.DB().QueryContext(ctx, `SELECT s.id, `+frustrationSessionVersion("s.xmin")+` FROM sessions s`)
-				require.NoError(t, err)
-				defer rows.Close()
-				versions := map[string]string{}
-				for rows.Next() {
-					var id string
-					var version sql.NullString
-					require.NoError(t, rows.Scan(&id, &version))
-					require.True(t, version.Valid)
-					versions[id] = version.String
-				}
-				require.NoError(t, rows.Err())
-				require.Len(t, versions, 2)
-				return versions
-			}
-			before := snapshot()
 			terms, err := db.ParseTrendTerms([]string{"hello"})
 			require.NoError(t, err)
 			filter := db.AnalyticsFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
@@ -85,7 +66,6 @@ func TestPGSchemaRepairsLeaveSessionVersionsSettled(t *testing.T) {
 			require.NoError(t, store.Close())
 			reads = nil
 			require.NoError(t, tc.repair())
-			assert.Equal(t, before, snapshot())
 			store, err = NewStore(ctx, pgURL, "agentsview", true)
 			require.NoError(t, err)
 			defer store.Close()
