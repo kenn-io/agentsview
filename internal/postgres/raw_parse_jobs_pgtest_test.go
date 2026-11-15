@@ -460,8 +460,8 @@ func TestClaimRawParseJobsLeasesAndSupersedesOnlyParseStageJobs(t *testing.T) {
 // locking clause) is exercised by both statements end to end.
 func TestClaimRawParseJobsRunsUnderRestrictedParseWorkerPrivileges(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
 	pg, store := newRawIngestTestStore(t)
+	pgURL := testPGURL(t)
 	const role = "agentsview_parse_worker"
 	const rolePassword = "agentsview_parse_worker_pw"
 

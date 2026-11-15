@@ -13,11 +13,10 @@ import (
 
 func TestFrustrationMemoCommittedVersionsWithEqualTimestamps(t *testing.T) {
 	t.Parallel()
-	const schema = "agentsview_signals_version_test"
+	const schema = pgPushTestSchema
 	const id = "signals-version"
 	syncer, local, pg, ctx := newSessionProvenancePushSync(t, schema)
 	url := testPGURL(t)
-	t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
 	require.NoError(t, local.UpsertSession(ctx, db.Session{
 		ID: id, Agent: "claude", Project: "sample", Machine: "workstation", MessageCount: 1,
 	}))
@@ -67,11 +66,10 @@ func TestFrustrationMemoPublicationBetweenReads(t *testing.T) {
 		{"remove-session", "this is broken", 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			const schema = "agentsview_signals_memo_race_test"
+			const schema = pgPushTestSchema
 			const id = "signals-memo-race"
 			syncer, local, pg, ctx := newSessionProvenancePushSync(t, schema)
 			url := testPGURL(t)
-			t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
 			require.NoError(t, local.UpsertSession(ctx, db.Session{
 				ID: id, Agent: "claude", Project: "sample", Machine: "workstation", MessageCount: 1,
 			}))
@@ -144,11 +142,10 @@ func TestFrustrationMemo(t *testing.T) {
 		{"replace", 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			const schema = "agentsview_signals_memo_test"
+			const schema = pgPushTestSchema
 			const id = "signals-memo"
 			syncer, local, _, ctx := newSessionProvenancePushSync(t, schema)
 			url := testPGURL(t)
-			t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
 			session := db.Session{ID: id, Agent: "claude", Project: "sample", Machine: "workstation", MessageCount: 2}
 			require.NoError(t, local.UpsertSession(ctx, session))
 			// The system row is not a prompt, so its marker text must not count.

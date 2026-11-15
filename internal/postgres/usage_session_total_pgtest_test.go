@@ -13,11 +13,9 @@ import (
 
 func TestSessionUsageTotalPushesApartFromUsage(t *testing.T) {
 	t.Parallel()
-	const schema = "agentsview_session_total_test"
+	const schema = usageTestSchema
 	ctx := t.Context()
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	pgURL := testPGSchemaURL(t, schema)
 
 	local := testDB(t)
 	dbtest.SeedSessionUsageTotal(t, local)

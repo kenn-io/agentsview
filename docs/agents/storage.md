@@ -1623,6 +1623,9 @@ top-level test in `internal/postgres` creates its own database on the
 `TEST_PG_URL` server, named `agentsview_test_<hex>`, and drops it when the test
 ends.
 
+The `TEST_PG_URL` server must run PostgreSQL 15 or later, because the tests
+create their databases with `STRATEGY FILE_COPY`.
+
 The role in `TEST_PG_URL` needs `CREATEDB`. Without it, every test fails with
 `creating test database`. Grant it as a superuser, using the role from
 `TEST_PG_URL`:
@@ -1631,8 +1634,8 @@ The role in `TEST_PG_URL` needs `CREATEDB`. Without it, every test fails with
 ALTER ROLE agentsview_test CREATEDB;
 ```
 
-A test binary that is killed leaves its databases behind, along with the store
-template described below (`agentsview_test_template_<hex>`). List them with:
+A test binary that is killed leaves its databases behind, along with the
+templates described below (`agentsview_test_template_<hex>`). List them with:
 
 ```sql
 SELECT datname FROM pg_database WHERE datname LIKE 'agentsview\_test\_%';
@@ -1648,12 +1651,26 @@ Because each test owns a database, the tests run in parallel:
   `testPGURL(t)`, or `PGTestURL(t)` in the external `postgres_test` package.
   Subtests share their top-level test's database. `isolatedPGDatabase(t)`
   returns another, separate database.
-- Tests that call `ensureStoreSchema` get their database from
-  `testPGStoreURL(t)`. On PostgreSQL that database is a copy of a template in
-  which `EnsureSchema` already created the store schema, which saves about 60
-  ms per test. The template is built once per test binary and dropped at exit.
-  CockroachDB has no `CREATE DATABASE ... TEMPLATE`, so there the test gets an
-  empty database and creates the schema itself.
+- A test that only needs a schema to exist before it starts gets its database
+  from `testPGSchemaURL(t, schema)`. On PostgreSQL that database is a copy of
+  a template in which `EnsureSchema` already created `schema`. Copying and the
+  test's own `EnsureSchema`, which finds the schema current, take about 20 ms;
+  creating the schema takes about 90 ms. `testPGStoreURL(t)` does this for
+  the store schema, and `newHostedFixture` does it for tenants through
+  `testPGHostedURL`.
+- Each schema name gets one template, built once per test binary by the first
+  test that asks for it and dropped at exit. Tests share a template only when
+  they use the same schema name, so tests that need one schema share a name,
+  such as `pgPushTestSchema`.
+- The first call decides a test's database. A test that calls `testPGURL(t)`
+  before `testPGSchemaURL` gets an empty database.
+- Setup helpers that drop and recreate their schema skip both when
+  `takeFreshSchemaCopy(t, dsn, schema)` reports an untouched copy, and reset
+  the schema on later calls, such as one per subtest.
+- Tests of how `EnsureSchema` creates, upgrades, or repairs a schema use
+  `testPGURL(t)`, so the code under test runs on an empty database.
+- CockroachDB has no `CREATE DATABASE ... TEMPLATE`, so there every test gets
+  an empty database and creates its schema itself.
 - Leave out `t.Parallel()` when the test changes process-wide state, such as
   `t.Setenv`, `time.Local`, `log.SetOutput`, `db.SetUserAutomationPrefixes`,
   or `pricing.SetConfiguredAliases`. Go runs those tests one at a time before
@@ -1664,7 +1681,9 @@ Because each test owns a database, the tests run in parallel:
   concurrent tests on a default 100-connection server. Each top-level test
   holds a slot while its databases exist. PostgreSQL permits the smaller of
   `max_connections / 8` and `max_connections * max_locks_per_transaction / 2048`
-  tests, with at least one slot. The default settings permit three tests.
+  tests, with at least one slot. The default settings permit three tests, so
+  the CI service and `docker-compose.test.yml` set
+  `max_locks_per_transaction=256`, which permits 12.
   Slot files in the system temporary directory, keyed by server address, share
   this limit across test processes. CockroachDB has no shared lock table and
   no slots.

@@ -67,16 +67,17 @@ func TestSearchContentExcludeActiveSince(t *testing.T) {
 // at it plus a raw *sql.DB for direct inserts.
 func setupContentSearch(t *testing.T) *Store {
 	t.Helper()
-	pgURL := testPGURL(t)
+	pgURL := testPGSchemaURL(t, contentSearchSchema)
 
-	pg, err := Open(t.Context(), pgURL, contentSearchSchema, true)
-	require.NoError(t, err, "Open")
-	defer pg.Close()
+	if !takeFreshSchemaCopy(t, pgURL, contentSearchSchema) {
+		pg, err := Open(t.Context(), pgURL, contentSearchSchema, true)
+		require.NoError(t, err, "Open")
+		defer pg.Close()
 
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+contentSearchSchema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
-	ctx := t.Context()
-	require.NoError(t, EnsureSchema(ctx, pg, contentSearchSchema), "EnsureSchema")
+		_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+contentSearchSchema+` CASCADE`)
+		require.NoError(t, err, "drop schema")
+		require.NoError(t, EnsureSchema(t.Context(), pg, contentSearchSchema), "EnsureSchema")
+	}
 
 	store, err := NewStore(t.Context(), pgURL, contentSearchSchema, true)
 	require.NoError(t, err, "NewStore")
@@ -664,6 +665,9 @@ func TestPGSearchContentEmptyToolUseIDNotSuppressed(t *testing.T) {
 // skipped on an instance where pg_trgm cannot be installed.
 func TestPGContentSearchTrigramIndex(t *testing.T) {
 	t.Parallel()
+	// An empty database, so setupContentSearch's own EnsureSchema builds the
+	// schema under test instead of reusing a template copy.
+	testPGURL(t)
 	store := setupContentSearch(t)
 	ctx := t.Context()
 
@@ -709,6 +713,9 @@ func TestPGContentSearchTrigramIndex(t *testing.T) {
 // fastupdate=on gets fastupdate=off reapplied on the next EnsureSchema run.
 func TestPGContentSearchTrigramIndexUpgrade(t *testing.T) {
 	t.Parallel()
+	// An empty database, so setupContentSearch's own EnsureSchema builds the
+	// schema under test instead of reusing a template copy.
+	testPGURL(t)
 	store := setupContentSearch(t)
 	ctx := t.Context()
 

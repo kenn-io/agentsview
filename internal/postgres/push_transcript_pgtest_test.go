@@ -19,13 +19,11 @@ import (
 func TestPushKeepsPinWhenTranscriptShiftsDuringCopy(t *testing.T) {
 	t.Parallel()
 	const id = "claude:pin-shift"
-	const schema = "agentsview_pin_shift_test"
+	const schema = pgPushTestSchema
 	const total = db.MaxMessageLimit + 500
 	const dropped = 300
 	ctx := t.Context()
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	pgURL := testPGSchemaURL(t, schema)
 	local := testDB(t)
 	transcript := func(from int) []db.Message {
 		msgs := make([]db.Message, 0, total-from)
@@ -87,13 +85,11 @@ func TestPushKeepsPinWhenTranscriptShiftsDuringCopy(t *testing.T) {
 func TestPushCopiesSessionThatGrowsDuringTheCopy(t *testing.T) {
 	t.Parallel()
 	const id = "claude:pin-grow"
-	const schema = "agentsview_pin_grow_test"
+	const schema = pgPushTestSchema
 	const total = db.MaxMessageLimit + 500
 	const orphaned = 5
 	ctx := t.Context()
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	pgURL := testPGSchemaURL(t, schema)
 	local := testDB(t)
 	message := func(ordinal int) db.Message {
 		return db.Message{
