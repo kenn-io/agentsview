@@ -609,47 +609,25 @@ func mergeAntigravityDBHistoryMessages(
 			userCount++
 		}
 	}
-	if userCount != len(history) {
+	if userCount != len(history) || slices.ContainsFunc(dbMessages, func(m ParsedMessage) bool { return m.structuredPrompt }) {
 		return appendMissingAntigravityHistoryMessages(
 			dbMessages, history,
 		)
 	}
-	matched := make([]bool, len(history))
-	for i := range dbMessages {
-		msg := &dbMessages[i]
-		if msg.Role != RoleUser || !msg.structuredPrompt {
-			continue
-		}
-		for j := range history {
-			if !matched[j] && normalizedAntigravityPrompt(msg.Content) == normalizedAntigravityPrompt(history[j].Content) {
-				matched[j] = true
-				if !history[j].Timestamp.IsZero() {
-					msg.Timestamp = history[j].Timestamp
-				}
-				break
-			}
-		}
-	}
 	historyIdx := 0
 	for i := range dbMessages {
-		if dbMessages[i].Role != RoleUser || dbMessages[i].structuredPrompt {
+		if dbMessages[i].Role != RoleUser {
 			continue
 		}
-		for matched[historyIdx] {
-			historyIdx++
+		if historyIdx >= len(history) {
+			return appendMissingAntigravityHistoryMessages(dbMessages, history)
 		}
 		dbMessages[i].Content = history[historyIdx].Content
 		dbMessages[i].ContentLength = len(history[historyIdx].Content)
 		if !history[historyIdx].Timestamp.IsZero() {
 			dbMessages[i].Timestamp = history[historyIdx].Timestamp
 		}
-		matched[historyIdx] = true
 		historyIdx++
-	}
-	for i, msg := range history {
-		if !matched[i] {
-			dbMessages = append(dbMessages, msg)
-		}
 	}
 	return dbMessages
 }
@@ -657,7 +635,8 @@ func mergeAntigravityDBHistoryMessages(
 // appendMissingAntigravityHistoryMessages appends history prompts that no
 // existing user turn accounts for. Repeated prompts are matched one to one:
 // first by exact timestamp, then by the same second (for sources that record
-// whole seconds), then by text alone, so each history row keeps its own turn.
+// whole seconds), then by text when either timestamp is missing, so each
+// history row keeps its own turn.
 func appendMissingAntigravityHistoryMessages(
 	dbMessages []ParsedMessage, history []ParsedMessage,
 ) []ParsedMessage {
@@ -685,7 +664,7 @@ func appendMissingAntigravityHistoryMessages(
 			return !existing.IsZero() && !want.IsZero() &&
 				existing.Unix() == want.Unix()
 		},
-		func(time.Time, time.Time) bool { return true },
+		func(existing, want time.Time) bool { return existing.IsZero() || want.IsZero() },
 	}
 	keys := make([]string, len(history))
 	matched := make([]bool, len(history))
