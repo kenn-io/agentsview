@@ -457,6 +457,16 @@ func TestUsageCacheUpgradeRecordedCosts(t *testing.T) {
 			for _, db := range []*DB{database, fresh} {
 				db.SetCustomPricing(map[string]config.CustomModelRate{"test-priced-model": {InputMicrodollarsPerMTok: 1_000_000}})
 			}
+			// v0.47.0 parsers never wrote recorded message costs; a newer parser's
+			// rewrite gives those sessions a new generation.
+			for _, message := range []Message{
+				{SessionID: "recorded-message", Role: "assistant", Timestamp: "2026-08-10T09:00:00Z", Model: "test-priced-model", TokenUsage: []byte(`{"input_tokens":100,"recorded_cost_microdollars":9001}`)},
+				{SessionID: "unpriced-message", Role: "assistant", Timestamp: "2026-08-10T09:00:00Z", Model: "unpriced-cost-model", TokenUsage: []byte(`{"input_tokens":100,"recorded_cost_microdollars":11001}`)},
+			} {
+				for _, db := range []*DB{database, fresh} {
+					require.NoError(t, db.ReplaceSessionMessages(t.Context(), message.SessionID, []Message{message}))
+				}
+			}
 			cache, err := database.usageCache.Generation(t.Context(), id)
 			require.NoError(t, err)
 			var extracted []string
@@ -471,7 +481,7 @@ func TestUsageCacheUpgradeRecordedCosts(t *testing.T) {
 			got, err := database.GetDailyUsage(t.Context(), filter)
 			require.NoError(t, err)
 			assert.Equal(t, want, got)
-			assert.EqualValues(t, 19200, got.Totals.TotalCost.Microdollars)
+			assert.EqualValues(t, 19201, got.Totals.TotalCost.Microdollars)
 			assert.ElementsMatch(t, []string{"recorded-event", "exact-event", "recorded-message", "unpriced-message"}, extracted)
 			rows := usageSpoolFactValues(t, cache.db, `SELECT 0, s.session_id, f.cost_status FROM usage_facts f JOIN usage_cached_sessions s ON s.id=f.cached_session_id WHERE s.session_id IN ('recorded-event', 'exact-event', 'recorded-message', 'unpriced-message') ORDER BY s.session_id`)
 			assert.Equal(t, [][]any{{"exact-event", "exact"}, {"recorded-event", "recorded"}, {"recorded-message", "recorded"}, {"unpriced-message", "recorded"}}, rows)
