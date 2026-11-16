@@ -13,7 +13,7 @@ import (
 )
 
 func TestClickHouseTrendsTermsDateWindowEdges(t *testing.T) {
-	t.Parallel()
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	local, target := seedFixture(t)
 	dbtest.SeedTrendsWindow(t, local)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
