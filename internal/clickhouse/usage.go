@@ -2807,15 +2807,27 @@ func (s *Store) usageRawPartsVersion(snapshot partsSnapshot) string {
 			previous := maps.Clone(old.rawParts)
 			// Mutation numbers consume block numbers without creating inserted
 			// blocks. Include those known gaps when proving a later merge.
+			oldParts := slices.Collect(maps.Values(old.rawParts))
+			gaps := map[string]map[int64]bool{}
+			for _, q := range oldParts {
+				if q.mutation == 0 {
+					continue
+				}
+				if gaps[q.partition] == nil {
+					gaps[q.partition] = map[int64]bool{}
+				}
+				if _, checked := gaps[q.partition][q.mutation]; !checked {
+					gaps[q.partition][q.mutation] = !slices.ContainsFunc(oldParts, func(r partInfo) bool {
+						return r.partition == q.partition && r.minBlock <= q.mutation && q.mutation <= r.maxBlock
+					})
+				}
+			}
 			for _, p := range tp.parts {
 				if _, found := old.rawParts[p.name]; found {
 					continue
 				}
-				for _, q := range old.rawParts {
-					m := q.mutation
-					if m == 0 || q.partition != p.partition || m < p.minBlock || m > p.maxBlock || slices.ContainsFunc(slices.Collect(maps.Values(old.rawParts)), func(r partInfo) bool {
-						return r.partition == p.partition && r.minBlock <= m && m <= r.maxBlock
-					}) {
+				for m, gap := range gaps[p.partition] {
+					if !gap || m < p.minBlock || m > p.maxBlock {
 						continue
 					}
 					name := fmt.Sprintf("mutation-gap:%s:%d", p.partition, m)
