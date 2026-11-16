@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json/v2"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
-	"uuid"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -87,24 +87,21 @@ func (s *Store) keptDashboardVersion(ctx context.Context, panel string, f db.Ana
 	if db.DashboardUsesMessageScope(f) {
 		tokens = append(tokens, scope)
 	}
-	for _, value := range tokens {
-		if _, err := uuid.Parse(value); err != nil {
-			return ""
-		}
+	if slices.Contains(tokens, "") {
+		return ""
 	}
 	return strings.Join(tokens, "|")
 }
 
-// frustrationGeneration invalidates prompt counts when direct message edits
-// change the Signals token without changing session versions.
+// frustrationGeneration invalidates prompt counts when message edits change
+// the Signals token without changing session versions.
 func (s *Store) frustrationGeneration(ctx context.Context, hasRows bool) (uint64, error) {
 	if !hasRows {
 		return 0, nil
 	}
 	var token string
 	err := s.pg.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='dashboard_signals'`).Scan(&token)
-	_, parseErr := uuid.Parse(token)
-	if err == nil && parseErr == nil {
+	if err == nil && token != "" {
 		_, err = s.runtimeState().analytics.Do(ctx, "\x00signals-memo", token, func(context.Context) ([]byte, error) {
 			s.runtimeState().frustrationMarkers.Swap(func() {})
 			return []byte{}, nil
@@ -112,8 +109,6 @@ func (s *Store) frustrationGeneration(ctx context.Context, hasRows bool) (uint64
 		if err != nil {
 			return 0, err
 		}
-	} else if !s.hostedRelations {
-		s.runtimeState().frustrationMarkers.Swap(func() {})
 	}
 	return s.runtimeState().frustrationMarkers.Generation(), nil
 }

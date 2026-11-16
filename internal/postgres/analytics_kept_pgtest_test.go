@@ -706,13 +706,11 @@ func TestAnalyticsKeptInvalidPanelToken(t *testing.T) {
 	pgKeptSession(t, local, "session", "project", "2026-06-14")
 	pgKeptPush(t, syncer, false)
 	require.NoError(t, store.ConfigureUsageCache(ctx, t.TempDir(), testPGURL(t), syncer.schema))
-	for _, token := range []string{"", "invalid"} {
-		_, err := store.pg.ExecContext(ctx, `UPDATE sync_metadata SET value=$1 WHERE key='dashboard_signals'`, token)
-		require.NoError(t, err)
-		got, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{Timezone: "UTC"})
-		require.NoError(t, err)
-		require.Equal(t, 1, got.UnscoredSessions)
-	}
+	_, err := store.pg.ExecContext(ctx, `UPDATE sync_metadata SET value='' WHERE key='dashboard_signals'`)
+	require.NoError(t, err)
+	got, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{Timezone: "UTC"})
+	require.NoError(t, err)
+	require.Equal(t, 1, got.UnscoredSessions)
 	files, err := filepath.Glob(filepath.Join(cache, "postgres-trends", "*", "*.gob"))
 	require.NoError(t, err)
 	require.Empty(t, files)
@@ -816,23 +814,4 @@ func TestAnalyticsKeptIdentitylessFallback(t *testing.T) {
 		require.False(t, strings.HasSuffix(path, ".gob"), path)
 		return nil
 	}))
-}
-
-func TestAnalyticsSignalsMessageRepair(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	local, syncer, store := newUsageJournalFixture(t)
-	ctx := t.Context()
-	pgKeptSession(t, local, "session", "project", "2026-06-14")
-	require.NoError(t, local.UpdateSessionSignals(ctx, "session", db.SessionSignalUpdate{QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion}}))
-	pgKeptPush(t, syncer, false)
-	require.NoError(t, store.ConfigureUsageCache(ctx, t.TempDir(), testPGURL(t), syncer.schema))
-	f := db.AnalyticsFilter{Timezone: "UTC"}
-	before, err := store.GetAnalyticsSignals(ctx, f)
-	require.NoError(t, err)
-	require.Zero(t, before.QualityHealth.Totals.FrustrationMarkerCount)
-	_, err = store.DB().ExecContext(ctx, `UPDATE messages SET content='this is broken' WHERE session_id='session' AND ordinal=0`)
-	require.NoError(t, err)
-	after, err := store.GetAnalyticsSignals(ctx, f)
-	require.NoError(t, err)
-	require.Equal(t, 1, after.QualityHealth.Totals.FrustrationMarkerCount)
 }

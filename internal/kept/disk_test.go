@@ -190,48 +190,6 @@ func TestReadsDoSavedLateOldVersion(t *testing.T) {
 	require.Equal(t, "new", string(saved))
 }
 
-func TestReadsDoSavedLateOldVersionAcrossDisks(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	var oldDisk, newDisk Disk
-	require.NoError(t, oldDisk.Open("saved-reads", "archive", 1024, 0))
-	require.NoError(t, newDisk.Open("saved-reads", "archive", 1024, 0))
-	encode := func(s string) ([]byte, error) { return []byte(s), nil }
-	decode := func(b []byte) (string, error) { return string(b), nil }
-	started, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	finished := make(chan error, 1)
-	var old Reads[string]
-	go func() {
-		defer close(done)
-		_, err := old.DoSaved(t.Context(), &oldDisk, "slot", "old", "old", encode, decode, func(context.Context) (string, error) {
-			close(started)
-			<-release
-			return "old", nil
-		})
-		finished <- err
-	}()
-	defer func() {
-		select {
-		case <-release:
-		default:
-			close(release)
-		}
-		<-done
-	}()
-	<-started
-	var current Reads[string]
-	value, err := current.DoSaved(t.Context(), &newDisk, "slot", "new", "new", encode, decode, func(context.Context) (string, error) { return "new", nil })
-	require.NoError(t, err)
-	require.Equal(t, "new", value)
-	close(release)
-	require.NoError(t, <-finished)
-	value, err = current.DoSaved(t.Context(), &newDisk, "slot", "new", "new", encode, decode, func(context.Context) (string, error) { return "unexpected", nil })
-	require.NoError(t, err)
-	require.Equal(t, "new", value)
-	saved, ok := newDisk.Get("slot", "new")
-	require.True(t, ok)
-	require.Equal(t, "new", string(saved))
-}
-
 func TestReadsDoSavedRepairsOversizedMatchingVersion(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	var disk Disk

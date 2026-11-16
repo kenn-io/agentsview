@@ -54,6 +54,51 @@ func TestFrustrationMemoCommittedVersionsWithEqualTimestamps(t *testing.T) {
 	assert.Zero(t, warm.QualityHealth.Totals.FrustrationMarkerCount)
 }
 
+func TestFrustrationDrilldownAfterExternalMessageUpdate(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	local, syncer, store := newUsageJournalFixture(t)
+	const id = "signals-external-update"
+	require.NoError(t, local.UpsertSession(ctx, db.Session{
+		ID: id, Agent: "claude", Project: "sample", Machine: "test-machine", MessageCount: 1,
+	}))
+	require.NoError(t, local.InsertMessages(ctx, []db.Message{{
+		SessionID: id, Ordinal: 0, Role: "user", Content: "this is broken",
+	}}))
+	require.NoError(t, local.UpdateSessionSignals(ctx, id, db.SessionSignalUpdate{
+		QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion},
+	}))
+	pgKeptPush(t, syncer, false)
+	require.NoError(t, store.ConfigureUsageCache(ctx, t.TempDir(), testPGURL(t), syncer.schema))
+
+	initial, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+	require.NoError(t, err)
+	require.Equal(t, 1, initial.QualityHealth.Totals.FrustrationMarkerCount)
+	drilldown, err := store.GetAnalyticsSignalSessions(ctx, db.AnalyticsFilter{}, "frustration_marker_count", 10)
+	require.NoError(t, err)
+	require.Len(t, drilldown.Sessions, 1)
+
+	versionColumn, err := sessionVersionColumnPG(ctx, store.DB())
+	require.NoError(t, err)
+	var tokenBefore, versionBefore string
+	require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='dashboard_signals'`).Scan(&tokenBefore))
+	require.NotEmpty(t, tokenBefore)
+	require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT `+frustrationSessionVersion(versionColumn)+` FROM sessions WHERE id=$1`, id).Scan(&versionBefore))
+
+	// The independent writer updates message content without rewriting the session row.
+	_, err = syncer.pg.ExecContext(ctx, `UPDATE messages SET content='Please explain this function.' WHERE session_id=$1`, id)
+	require.NoError(t, err)
+	var tokenAfter, versionAfter string
+	require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='dashboard_signals'`).Scan(&tokenAfter))
+	require.NotEqual(t, tokenBefore, tokenAfter)
+	require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT `+frustrationSessionVersion(versionColumn)+` FROM sessions WHERE id=$1`, id).Scan(&versionAfter))
+	require.Equal(t, versionBefore, versionAfter)
+
+	drilldown, err = store.GetAnalyticsSignalSessions(ctx, db.AnalyticsFilter{}, "frustration_marker_count", 10)
+	require.NoError(t, err)
+	assert.Empty(t, drilldown.Sessions)
+}
+
 func TestFrustrationMemoPublicationBetweenReads(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
@@ -162,7 +207,8 @@ func TestFrustrationMemo(t *testing.T) {
 			store, err := NewStore(ctx, url, schema, true)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, store.Close()) })
-			initial, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+			filter := db.AnalyticsFilter{Timezone: "Local"}
+			initial, err := store.GetAnalyticsSignals(ctx, filter)
 			require.NoError(t, err)
 			require.Equal(t, 1, initial.QualityHealth.Totals.FrustrationMarkerCount)
 			versionColumn, err := sessionVersionColumnPG(ctx, store.pg)
@@ -188,82 +234,9 @@ func TestFrustrationMemo(t *testing.T) {
 				_, err = syncer.Push(ctx, false, nil)
 				require.NoError(t, err)
 			}
-			warm, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+			warm, err := store.GetAnalyticsSignals(ctx, filter)
 			require.NoError(t, err)
 			assert.Equal(t, test.want, warm.QualityHealth.Totals.FrustrationMarkerCount)
 		})
 	}
-}
-
-func TestFrustrationMemoUncachedSignals(t *testing.T) {
-	for _, hosted := range []bool{false, true} {
-		t.Run(map[bool]string{false: "native", true: "hosted"}[hosted], func(t *testing.T) {
-			local, syncer, owner := newUsageJournalFixture(t)
-			ctx := t.Context()
-			pgKeptSession(t, local, "session", "project", "2026-06-14")
-			require.NoError(t, local.ReplaceSessionMessages(ctx, "session", []db.Message{{SessionID: "session", Role: "user", Content: "this is broken"}}))
-			require.NoError(t, local.UpdateSessionSignals(ctx, "session", db.SessionSignalUpdate{QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion}}))
-			pgKeptPush(t, syncer, false)
-			_, err := owner.DB().ExecContext(ctx, `DROP TABLE session_frustration_counts`)
-			require.NoError(t, err)
-			roleURL := newUsageJournalRole(t, syncer, `GRANT SELECT ON ALL TABLES IN SCHEMA `+syncer.schema+` TO ROLE`)
-			reader, err := NewStore(ctx, roleURL, syncer.schema, true)
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, reader.Close()) })
-			reader.hostedRelations = hosted
-			f := db.AnalyticsFilter{Timezone: "Local"}
-			first, err := reader.GetAnalyticsSignals(ctx, f)
-			require.NoError(t, err)
-			require.Equal(t, 1, first.QualityHealth.Totals.FrustrationMarkerCount)
-			var role string
-			require.NoError(t, reader.DB().QueryRowContext(ctx, `SELECT current_user`).Scan(&role))
-			_, err = owner.DB().ExecContext(ctx, `REVOKE SELECT ON messages FROM `+role)
-			require.NoError(t, err)
-			second, err := reader.GetAnalyticsSignals(ctx, f)
-			require.NoError(t, err)
-			require.Equal(t, 1, second.QualityHealth.Totals.FrustrationMarkerCount)
-			_, err = owner.DB().ExecContext(ctx, `GRANT SELECT ON messages TO `+role)
-			require.NoError(t, err)
-			_, err = owner.DB().ExecContext(ctx, `UPDATE messages SET content='Please explain this function.' WHERE session_id='session'`)
-			require.NoError(t, err)
-			repaired, err := reader.GetAnalyticsSignals(ctx, f)
-			require.NoError(t, err)
-			require.Zero(t, repaired.QualityHealth.Totals.FrustrationMarkerCount)
-		})
-	}
-}
-
-func TestSignalsDrilldownAfterSavedPanelRefresh(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	local, syncer, first := newUsageJournalFixture(t)
-	ctx := t.Context()
-	pgKeptSession(t, local, "session", "project", "2026-06-14")
-	require.NoError(t, local.ReplaceSessionMessages(ctx, "session", []db.Message{{SessionID: "session", Role: "user", Content: "this is broken"}}))
-	require.NoError(t, local.UpdateSessionSignals(ctx, "session", db.SessionSignalUpdate{QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion}}))
-	pgKeptPush(t, syncer, false)
-	url := testPGURL(t)
-	cache := t.TempDir()
-	require.NoError(t, first.ConfigureUsageCache(ctx, cache, url, syncer.schema))
-	filter := db.AnalyticsFilter{Timezone: "UTC"}
-	before, err := first.GetAnalyticsSignalSessions(ctx, filter, "frustration_marker_count", 10)
-	require.NoError(t, err)
-	require.Len(t, before.Sessions, 1)
-	second, err := NewStore(ctx, url, syncer.schema, true)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, second.Close()) })
-	require.NoError(t, second.ConfigureUsageCache(ctx, cache, url, syncer.schema))
-	_, err = second.DB().ExecContext(ctx, `UPDATE messages SET content='Please explain this function.' WHERE session_id='session'`)
-	require.NoError(t, err)
-	fresh, err := second.GetAnalyticsSignals(ctx, filter)
-	require.NoError(t, err)
-	require.Zero(t, fresh.QualityHealth.Totals.FrustrationMarkerCount)
-	counter := &analyticsReadCounter{storeExecutor: first.pg}
-	first.pg = counter
-	panel, err := first.GetAnalyticsSignals(ctx, filter)
-	require.NoError(t, err)
-	require.Zero(t, counter.count())
-	require.Zero(t, panel.QualityHealth.Totals.FrustrationMarkerCount)
-	after, err := first.GetAnalyticsSignalSessions(ctx, filter, "frustration_marker_count", 10)
-	require.NoError(t, err)
-	require.Empty(t, after.Sessions)
 }

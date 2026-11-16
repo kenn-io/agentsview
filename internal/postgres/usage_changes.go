@@ -141,10 +141,7 @@ func installUsageAccountRevisionPG(ctx context.Context, tx *sql.Tx) error {
 	if err := tx.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key = 'usage_change_journal_version'`).Scan(&version); err != nil {
 		return err
 	}
-	if version != "1" && version != "2" && version != strconv.Itoa(usageChangeJournalVersionPG) {
-		return nil
-	}
-	if version == strconv.Itoa(usageChangeJournalVersionPG) {
+	if version != "1" && version != "2" {
 		return nil
 	}
 	var installed, historyInstalled bool
@@ -215,10 +212,7 @@ func installUsageHistoryTokenPG(ctx context.Context, tx *sql.Tx) error {
 	if err := tx.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='usage_change_journal_version'`).Scan(&version); err != nil {
 		return err
 	}
-	if version != "1" && version != "2" && version != strconv.Itoa(usageChangeJournalVersionPG) {
-		return nil
-	}
-	if version == strconv.Itoa(usageChangeJournalVersionPG) {
+	if version != "1" && version != "2" {
 		return nil
 	}
 	var installed bool

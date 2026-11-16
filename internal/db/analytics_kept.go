@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json/v2"
 	"fmt"
 )
@@ -37,11 +36,7 @@ func keptAnalytics[T analyticsReport](ctx context.Context, db *DB, panel string,
  COALESCE((SELECT value FROM archive_metadata WHERE key='dashboard_common'), ''),
  COALESCE((SELECT value FROM archive_metadata WHERE key=?), ''),
  COALESCE((SELECT value FROM archive_metadata WHERE key='dashboard_scope'), '')`, "dashboard_"+panel).Scan(&common, &panelToken, &scope)
-		valid := func(token string) bool {
-			decoded, err := hex.DecodeString(token)
-			return err == nil && len(decoded) == 16
-		}
-		if err != nil || !valid(common) || !valid(panelToken) || (DashboardUsesMessageScope(f) && !valid(scope)) {
+		if err != nil || common == "" || panelToken == "" || (DashboardUsesMessageScope(f) && scope == "") {
 			return load(ctx, f)
 		}
 		version = id + "|" + common + "|" + panelToken
@@ -79,16 +74,15 @@ func keptAnalytics[T analyticsReport](ctx context.Context, db *DB, panel string,
 	return result.(T), nil
 }
 
-// frustrationGeneration invalidates prompt counts when direct message edits
-// change the Signals token without changing transcript versions.
+// frustrationGeneration invalidates prompt counts when message edits change
+// the Signals token without changing transcript versions.
 func (db *DB) frustrationGeneration(ctx context.Context, hasRows bool) (uint64, error) {
 	if !hasRows {
 		return 0, nil
 	}
 	var token string
 	err := db.getReader().QueryRowContext(ctx, `SELECT value FROM archive_metadata WHERE key='dashboard_signals'`).Scan(&token)
-	decoded, decodeErr := hex.DecodeString(token)
-	if err == nil && decodeErr == nil && len(decoded) == 16 {
+	if err == nil && token != "" {
 		_, err = db.analyticsKept.Do(ctx, "\x00signals-memo", token, func(context.Context) (any, error) {
 			db.frustrationMemo.Swap(func() {})
 			return struct{}{}, nil
@@ -96,8 +90,6 @@ func (db *DB) frustrationGeneration(ctx context.Context, hasRows bool) (uint64, 
 		if err != nil {
 			return 0, err
 		}
-	} else if !db.readOnly {
-		db.frustrationMemo.Swap(func() {})
 	}
 	return db.frustrationMemo.Generation(), nil
 }

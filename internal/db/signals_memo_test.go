@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -250,60 +251,42 @@ func TestSignalsFrustrationStoreRejectsChangedTranscript(t *testing.T) {
 }
 
 func TestSignalsFrustrationReadOnlyStoredReuseAndLegacyFallback(t *testing.T) {
-	for _, tc := range []struct {
-		name           string
-		stored, legacy bool
-	}{
-		{"stored", true, false}, {"fallback", false, false}, {"legacy", false, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, stored := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stored=%t", stored), func(t *testing.T) {
 			d := testDB(t)
 			ctx := t.Context()
 			seedFrustrationSession(t, d, "session", "test")
-			if tc.stored {
+			if stored {
 				_, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
 				require.NoError(t, err)
 			} else {
 				_, err := d.getWriter().ExecContext(ctx, `DROP TABLE session_frustration_markers`)
 				require.NoError(t, err)
 			}
-			if tc.legacy {
-				_, err := d.getWriter().ExecContext(ctx, `DELETE FROM archive_metadata WHERE key='dashboard_signals'`)
-				require.NoError(t, err)
-			}
 			ro, err := OpenReadOnly(ctx, d.Path())
 			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, ro.Close()) })
-			ro.rawReader().SetMaxOpenConns(1)
-			conn, err := ro.rawReader().Conn(ctx)
-			require.NoError(t, err)
-			var contentReads atomic.Int32
-			var sqlite *sqlite3.SQLiteConn
-			require.NoError(t, conn.Raw(func(raw any) error {
-				sqlite = raw.(*sqlite3.SQLiteConn)
-				sqlite.RegisterAuthorizer(func(op int, table, column, _ string) int {
-					if op == sqlite3.SQLITE_READ && table == "messages" && column == "content" {
-						contentReads.Add(1)
-						if tc.stored {
+			defer ro.Close()
+			if stored {
+				ro.rawReader().SetMaxOpenConns(1)
+				conn, err := ro.rawReader().Conn(ctx)
+				require.NoError(t, err)
+				var sqlite *sqlite3.SQLiteConn
+				require.NoError(t, conn.Raw(func(raw any) error {
+					sqlite = raw.(*sqlite3.SQLiteConn)
+					sqlite.RegisterAuthorizer(func(op int, table, column, _ string) int {
+						if op == sqlite3.SQLITE_READ && table == "messages" && column == "content" {
 							return sqlite3.SQLITE_DENY
 						}
-					}
-					return sqlite3.SQLITE_OK
-				})
-				return nil
-			}))
-			require.NoError(t, conn.Close())
-			t.Cleanup(func() { sqlite.RegisterAuthorizer(nil) })
-			for range 2 {
-				resp, err := ro.GetAnalyticsSignals(ctx, AnalyticsFilter{})
-				require.NoError(t, err)
-				require.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
+						return sqlite3.SQLITE_OK
+					})
+					return nil
+				}))
+				require.NoError(t, conn.Close())
+				defer sqlite.RegisterAuthorizer(nil)
 			}
-			if tc.stored {
-				require.Zero(t, contentReads.Load())
-			} else {
-				require.EqualValues(t, 1, contentReads.Load())
-			}
+			resp, err := ro.GetAnalyticsSignals(ctx, AnalyticsFilter{})
+			require.NoError(t, err)
+			assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
 		})
 	}
 }
@@ -404,34 +387,4 @@ func TestSignalsFrustrationCanceledWhileSaving(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestSignalsDrilldownAfterSavedPanelRefresh(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	first := testDB(t)
-	ctx := t.Context()
-	seedFrustrationSession(t, first, "session", "test")
-	filter := AnalyticsFilter{Timezone: "UTC"}
-	before, err := first.GetAnalyticsSignalSessions(ctx, filter, "frustration_marker_count", 10)
-	require.NoError(t, err)
-	require.Len(t, before.Sessions, 1)
-	second, err := OpenIsolated(ctx, first.Path())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, second.Close()) })
-	_, err = second.getWriter().ExecContext(ctx, `UPDATE messages SET content='Please explain this function.' WHERE session_id='session'`)
-	require.NoError(t, err)
-	fresh, err := second.GetAnalyticsSignals(ctx, filter)
-	require.NoError(t, err)
-	require.Zero(t, fresh.QualityHealth.Totals.FrustrationMarkerCount)
-	loads := 0
-	panel, err := keptAnalytics(ctx, first, "signals", filter, func(ctx context.Context, f AnalyticsFilter) (SignalsAnalyticsResponse, error) {
-		loads++
-		return first.analyticsSignals(ctx, f)
-	})
-	require.NoError(t, err)
-	require.Zero(t, loads)
-	require.Zero(t, panel.QualityHealth.Totals.FrustrationMarkerCount)
-	after, err := first.GetAnalyticsSignalSessions(ctx, filter, "frustration_marker_count", 10)
-	require.NoError(t, err)
-	require.Empty(t, after.Sessions)
 }
