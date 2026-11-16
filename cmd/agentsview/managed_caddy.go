@@ -418,6 +418,21 @@ func buildManagedCaddyfile(
 	b.WriteString("{\n")
 	b.WriteString("\tadmin off\n")
 	b.WriteString("\tauto_https off\n")
+	// Caddy logs the full request URI on proxy errors, and its output lands
+	// in the daemon log. Event streams accept the bearer token as ?token=
+	// for native EventSource clients, so drop that parameter from logs.
+	// Caddy before 2.8 needs the fields block and an explicit wrap encoder;
+	// JSON is what Caddy already writes when its output is not a terminal.
+	b.WriteString("\tlog default {\n")
+	b.WriteString("\t\tformat filter {\n")
+	b.WriteString("\t\t\twrap json\n")
+	b.WriteString("\t\t\tfields {\n")
+	b.WriteString("\t\t\t\trequest>uri query {\n")
+	b.WriteString("\t\t\t\t\tdelete token\n")
+	b.WriteString("\t\t\t\t}\n")
+	b.WriteString("\t\t\t}\n")
+	b.WriteString("\t\t}\n")
+	b.WriteString("\t}\n")
 	b.WriteString("}\n\n")
 	b.WriteString(publicURL)
 	b.WriteString(" {\n")

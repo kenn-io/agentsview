@@ -63,6 +63,8 @@ func TestDailyUsageFactsMatchesLegacy(t *testing.T) {
 					t.Context(), test.filter,
 				)
 				require.NoError(t, err)
+				// The legacy reader has no internal Pairwise evidence.
+				facts.Pairwise = nil
 				assert.Equal(t, legacy, facts)
 			})
 		}

@@ -12,7 +12,8 @@ import (
 )
 
 func TestPGDialogueSearchParity(t *testing.T) {
-	syncer, local, _, ctx := newSessionProvenancePushSync(t, "agentsview_dialogue_search_test")
+	t.Parallel()
+	syncer, local, _, ctx := newSessionProvenancePushSync(t, "agentsview")
 	dbtest.SeedDialogueSearch(t, local)
 	_, err := syncer.Push(ctx, true, nil)
 	require.NoError(t, err)
@@ -65,4 +66,22 @@ func TestPGDialogueSearchParity(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestPGWordSearchParity(t *testing.T) {
+	t.Parallel()
+	server, _ := testPGServer(t)
+	if server.cockroach {
+		t.Skip("PostgreSQL only")
+	}
+	syncer, local, _, ctx := newSessionProvenancePushSync(t, "agentsview_word_search_test")
+	dbtest.SeedWordSearch(t, local)
+	_, err := syncer.Push(ctx, true, nil)
+	require.NoError(t, err)
+	store, err := NewStore(t.Context(), testPGURL(t), syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	dbtest.AssertWordSearch(t, store)
+	dbtest.AssertMirrorWordAccents(t, store)
+	dbtest.AssertExplicitMirrorFTS(t, store, "hybrid")
 }

@@ -8,7 +8,7 @@ workflows:
         - 'actions/checkout@v7.0.1'
         - 'actions/setup-go@v7.0.0'
         - 'actions/upload-artifact@v7.0.2'
-        - 'kenn-io/kit@v0.48.3'
+        - 'kenn-io/kit@v0.53.2'
     '.github/workflows/ci-pr.yml': []
     '.github/workflows/ci.yml':
         - 'actions/cache@v6.1.0'
@@ -18,9 +18,9 @@ workflows:
         - 'actions/setup-python@v7.1.0'
         - 'actions/upload-artifact@v7.0.2'
         - 'astral-sh/setup-uv@v10.3.3'
-        - 'kenn-io/actions@98e621dcda6f5d7de8590248e353e3d55c28ecf2'
+        - 'kenn-io/actions@33ced853fa88b70eb178ecd40ec74ef64420479d'
         - 'kenn-io/actions@main'
-        - 'kenn-io/kit@v0.48.3'
+        - 'kenn-io/kit@v0.53.2'
         - 'msys2/setup-msys2@v2.33.0'
         - 'step-security/rust-cache@v2.9.2'
     '.github/workflows/cjk-fts.yml':
@@ -28,7 +28,7 @@ workflows:
         - 'actions/checkout@v7.0.1'
         - 'actions/setup-go@v7.0.0'
         - 'actions/upload-artifact@v7.0.2'
-        - 'kenn-io/kit@v0.48.3'
+        - 'kenn-io/kit@v0.53.2'
     '.github/workflows/desktop-artifacts-pr.yml': []
     '.github/workflows/desktop-artifacts.yml':
         - 'actions/cache@v6.1.0'
@@ -37,8 +37,8 @@ workflows:
         - 'actions/setup-go@v7.0.0'
         - 'actions/setup-node@v7.1.0'
         - 'actions/upload-artifact@v7.0.2'
-        - 'dtolnay/rust-toolchain@stable'
-        - 'kenn-io/kit@v0.48.3'
+        - 'dtolnay/rust-toolchain@master'
+        - 'kenn-io/kit@v0.53.2'
         - 'msys2/setup-msys2@v2.33.0'
         - 'step-security/rust-cache@v2.9.2'
     '.github/workflows/desktop-macos-main.yml':
@@ -47,8 +47,8 @@ workflows:
         - 'actions/setup-go@v7.0.0'
         - 'actions/setup-node@v7.1.0'
         - 'actions/upload-artifact@v7.0.2'
-        - 'dtolnay/rust-toolchain@stable'
-        - 'kenn-io/kit@v0.48.3'
+        - 'dtolnay/rust-toolchain@master'
+        - 'kenn-io/kit@v0.53.2'
         - 'msys2/setup-msys2@v2.33.0'
         - 'step-security/rust-cache@v2.9.2'
     '.github/workflows/fuzz.yml':
@@ -56,12 +56,12 @@ workflows:
         - 'actions/checkout@v7.0.1'
         - 'actions/setup-go@v7.0.0'
         - 'actions/upload-artifact@v7.0.2'
-        - 'kenn-io/kit@v0.48.3'
+        - 'kenn-io/kit@v0.53.2'
     '.github/workflows/msys2-update-check.yml':
         - 'actions/cache@v6.1.0'
         - 'actions/checkout@v7.0.1'
         - 'actions/setup-go@v7.0.0'
-        - 'kenn-io/kit@v0.48.3'
+        - 'kenn-io/kit@v0.53.2'
         - 'msys2/setup-msys2@v2.33.0'
     '.github/workflows/release-commands.yml':
         - 'actions/checkout@v7.0.1'
@@ -70,7 +70,7 @@ workflows:
         - 'kenn-io/actions@main'
     '.github/workflows/workflow-validation.yml':
         - 'actions/checkout@v7.0.1'
-        - 'kenn-io/kit@v0.48.3'
+        - 'kenn-io/kit@v0.53.2'
 dependencies:
     'actions/cache@v6.1.0':
         ref: 'v6.1.0'
@@ -112,14 +112,14 @@ dependencies:
         commit: 'sha1-68559e99cc807c1eb7e9238fd43a15bba460eec2'
         owner_id: 115962839
         repo_id: 846733598
-    'dtolnay/rust-toolchain@stable':
-        ref: 'stable'
-        commit: 'sha1-b725eda525362e7cf34af9a7243cac1e3f01a7ec'
+    'dtolnay/rust-toolchain@master':
+        ref: 'master'
+        commit: 'sha1-df2a88e9fe4098bad09cb42c3dec7187f15861fc'
         owner_id: 1940490
         repo_id: 260749683
-    'kenn-io/actions@98e621dcda6f5d7de8590248e353e3d55c28ecf2':
+    'kenn-io/actions@33ced853fa88b70eb178ecd40ec74ef64420479d':
         ref: 'main'
-        commit: 'sha1-98e621dcda6f5d7de8590248e353e3d55c28ecf2'
+        commit: 'sha1-33ced853fa88b70eb178ecd40ec74ef64420479d'
         owner_id: 259885253
         repo_id: 1427332808
         uses:
@@ -133,9 +133,9 @@ dependencies:
             - 'actions/checkout@v7.0.1'
             - 'actions/setup-go@v7.0.0'
             - 'step-security/paths-filter@v4.0.3'
-    'kenn-io/kit@v0.48.3':
-        ref: 'v0.48.3'
-        commit: 'sha1-d69c47a1ac993386cc8390de279276bec363b6b4'
+    'kenn-io/kit@v0.53.2':
+        ref: 'v0.53.2'
+        commit: 'sha1-c6eb6a1d91e8bb79ad18231914890e584c8c8e80'
         owner_id: 259885253
         repo_id: 1238000987
     'msys2/setup-msys2@v2.33.0':

@@ -19,6 +19,7 @@ type hybridDisplay struct {
 	subordinate  bool
 	snippet      string
 	content      string
+	matchedWords int
 }
 
 // hybridLeg is one rank-ordered fusion leg: entries for db.RRFMerge plus
@@ -134,17 +135,41 @@ func (s *Store) fetchHybridKeywordBatch(
 	contentPred := contentSearchPredicate("COALESCE(m.dialogue_text, m.content)", kf, &args)
 	args = append(args, scopeArgs...)
 	args = append(args, k, offset)
-	rows, err := s.queryContext(ctx, `
-		SELECT m.session_id, m.ordinal, COALESCE(m.dialogue_text, m.content)
+	query := `
+		SELECT m.session_id, m.ordinal, COALESCE(m.dialogue_text, m.content), 0
 		FROM messages m
 		JOIN sessions s ON s.id = m.session_id
-		WHERE `+contentPred+`
+		WHERE ` + contentPred + `
 			AND m.role IN ('user', 'assistant')
-			AND `+embeddableMessagePredicate("m")+`
-			AND m.session_id IN (SELECT id FROM sessions WHERE `+scopeWhere+`)
+			AND ` + embeddableMessagePredicate("m") + `
+			AND m.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)
 		ORDER BY COALESCE(s.ended_at, s.started_at, s.created_at) DESC NULLS LAST,
 			m.session_id ASC, m.ordinal ASC
-		LIMIT ? OFFSET ?`, args...)
+		LIMIT ? OFFSET ?` + systemPrefixSettings
+	_, words, ranked := db.RouteContentWords(kf)
+	if ranked {
+		// Natural queries rank by matched words, counted once per candidate.
+		column := "COALESCE(m.dialogue_text, m.content)"
+		filter := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
+		count := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
+		query = `WITH candidates AS MATERIALIZED (
+			SELECT m.session_id, m.ordinal, ` + column + ` AS body,
+				COALESCE(s.ended_at, s.started_at, s.created_at) AS activity
+			FROM messages m
+			JOIN sessions s ON s.id = m.session_id
+			WHERE ` + db.WordFilterSQL(filter, column, kf, words, false) + `
+				AND m.role IN ('user', 'assistant')
+				AND ` + embeddableMessagePredicate("m") + `
+				AND m.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `)
+		), ranked AS MATERIALIZED (
+			SELECT candidates.*, ` + db.WordCountSQL(count, "body", words) + ` AS n FROM candidates
+		)
+		SELECT session_id, ordinal, body, n FROM ranked WHERE n >= 1
+		ORDER BY n DESC, activity DESC NULLS LAST, session_id ASC, ordinal ASC
+		LIMIT ? OFFSET ?` + systemPrefixSettings + ", enable_materialized_cte = 1"
+		args = append(append(append(filter.Args(), scopeArgs...), count.Args()...), k, offset)
+	}
+	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("clickhouse hybrid keyword leg: %w", err)
 	}
@@ -154,11 +179,14 @@ func (s *Store) fetchHybridKeywordBatch(
 		var hit hybridDisplay
 		var ordinal int64
 		var content string
-		if err := rows.Scan(&hit.sessionID, &ordinal, &content); err != nil {
+		if err := rows.Scan(&hit.sessionID, &ordinal, &content, &hit.matchedWords); err != nil {
 			return nil, fmt.Errorf("scanning clickhouse hybrid keyword hit: %w", err)
 		}
 		hit.ordinal = int(ordinal)
 		start, end := db.FTSSnippetRange(f.Pattern, content)
+		if ranked {
+			start, end = db.WordSnippetRange(content, f.Pattern, words)
+		}
 		lo, hi := db.SnippetBounds(content, start, end, db.ContentSnippetRadius)
 		hit.content = content
 		hit.snippet = content[lo:hi]
@@ -316,6 +344,7 @@ func (s *Store) enrichHybridMatches(
 			Timestamp:       info.timestamp,
 			Snippet:         snippet,
 			Score:           &score,
+			MatchedWords:    d.matchedWords,
 		})
 	}
 	return db.ContentSearchPage{Matches: out}, nil

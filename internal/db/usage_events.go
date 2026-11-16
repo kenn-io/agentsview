@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"slices"
 	"strings"
 
@@ -69,15 +70,14 @@ func (db *DB) ensureUsageEventsSchemaLocked(ctx context.Context, w *writerHandle
 			cost_status TEXT NOT NULL DEFAULT '',
 			cost_source TEXT NOT NULL DEFAULT '',
 			occurred_at TEXT,
-			dedup_key TEXT NOT NULL DEFAULT ''
+			dedup_key TEXT NOT NULL DEFAULT '',
+			occurred_at_us INTEGER
 		);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_events_dedup
 			ON usage_events(session_id, source, dedup_key)
 			WHERE dedup_key != '';
 		CREATE INDEX IF NOT EXISTS idx_usage_events_session
 			ON usage_events(session_id);
-		CREATE INDEX IF NOT EXISTS idx_usage_events_occurred
-			ON usage_events(occurred_at);
 	`); err != nil {
 		return fmt.Errorf("creating usage_events: %w", err)
 	}
@@ -95,7 +95,90 @@ func (db *DB) ensureUsageEventsSchemaLocked(ctx context.Context, w *writerHandle
 			return fmt.Errorf("adding usage_events.provider_id: %w", err)
 		}
 	}
+	if err := addUsageEventMicros(ctx, w); err != nil {
+		return err
+	}
+	if _, err := w.Exec(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_usage_events_occurred_us
+			ON usage_events(occurred_at_us);
+		CREATE INDEX IF NOT EXISTS idx_usage_events_occurred_unparsed
+			ON usage_events(occurred_at) WHERE occurred_at_us IS NULL;
+		DROP INDEX IF EXISTS idx_usage_events_occurred;
+	`); err != nil {
+		return fmt.Errorf("indexing usage_events.occurred_at_us: %w", err)
+	}
 	return nil
+}
+
+// usageEventMicrosDataVersion is the first data version whose writers fill
+// usage_events.occurred_at_us. Older binaries would write rows without it and
+// query the text index it replaced.
+const usageEventMicrosDataVersion = 180
+
+// usageEventRecordColumns are the usage_events columns that hold recorded
+// usage. occurred_at_us is derived from occurred_at, so an update that only
+// fills it changes no usage and must not publish a usage change.
+var usageEventRecordColumns = []string{
+	"id", "session_id", "message_ordinal", "source", "model", "provider_id",
+	"input_tokens", "output_tokens", "cache_creation_input_tokens",
+	"cache_read_input_tokens", "reasoning_tokens", "cost_microdollars",
+	"cost_status", "cost_source", "occurred_at", "dedup_key",
+}
+
+// addUsageEventMicros adds usage_events.occurred_at_us and fills it for
+// existing rows in one transaction, so the column's presence means the fill
+// finished. The column holds occurred_at as UTC Unix microseconds, NULL when
+// the text is blank or does not parse. Range filters seek it, because text
+// order is not time order across offsets and fractional seconds. occurred_at
+// stays the record that exports and fingerprints read.
+func addUsageEventMicros(ctx context.Context, w *writerHandle) error {
+	var present bool
+	if err := w.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pragma_table_info('usage_events')
+		WHERE name = 'occurred_at_us')`).Scan(&present); err != nil {
+		return fmt.Errorf("checking usage_events.occurred_at_us: %w", err)
+	}
+	if present {
+		return nil
+	}
+	tx, err := w.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("starting usage_events.occurred_at_us migration: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx,
+		`ALTER TABLE usage_events ADD COLUMN occurred_at_us INTEGER`,
+	); err != nil {
+		return fmt.Errorf("adding usage_events.occurred_at_us: %w", err)
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE usage_events
+		SET occurred_at_us = agentsview_timestamp_unix_micro(occurred_at)
+		WHERE typeof(occurred_at) = 'text' AND occurred_at != ''`)
+	if err != nil {
+		return fmt.Errorf("filling usage_events.occurred_at_us: %w", err)
+	}
+	filled, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("counting filled usage_events.occurred_at_us: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing usage_events.occurred_at_us migration: %w", err)
+	}
+	log.Printf("migration: added column usage_events.occurred_at_us; filled %d rows", filled)
+	return nil
+}
+
+// usageEventMicros returns occurred_at as UTC Unix microseconds, or NULL when
+// the text is blank or does not parse. It matches the fill in
+// addUsageEventMicros.
+func usageEventMicros(occurredAt sql.NullString) sql.NullInt64 {
+	if !occurredAt.Valid {
+		return sql.NullInt64{}
+	}
+	timestamp, ok := ParseStoredTimestamp(occurredAt.String)
+	if !ok {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: timestamp.UTC().UnixMicro(), Valid: true}
 }
 
 // ReplaceSessionUsageEvents replaces all usage events for one session
@@ -200,13 +283,13 @@ func replaceSessionUsageEventsTx(
 				input_tokens, output_tokens, provider_id,
 				cache_creation_input_tokens, cache_read_input_tokens,
 				reasoning_tokens, cost_microdollars, cost_status, cost_source,
-				occurred_at, dedup_key
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				occurred_at, dedup_key, occurred_at_us
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			sessionID, r.ordinal, r.source, r.model,
 			r.input, r.output, r.providerID,
 			r.cacheCreation, r.cacheRead,
 			r.reasoning, r.cost, r.costStatus, r.costSource,
-			r.occurredAt, r.dedupKey,
+			r.occurredAt, r.dedupKey, usageEventMicros(r.occurredAt),
 		); err != nil {
 			return fmt.Errorf("inserting usage event: %w", err)
 		}

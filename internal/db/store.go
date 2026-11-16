@@ -52,6 +52,7 @@ type Store interface {
 	// Search.
 	HasFTS(ctx context.Context) bool
 	HasSemantic() bool
+	// Search pages may be shared; callers must not modify them.
 	Search(ctx context.Context, f SearchFilter) (SearchPage, error)
 	SearchSession(ctx context.Context, sessionID, query string) ([]int, error)
 	SearchContent(ctx context.Context, f ContentSearchFilter) (ContentSearchPage, error)
@@ -88,6 +89,7 @@ type Store interface {
 	GetAnalyticsProjects(ctx context.Context, f AnalyticsFilter) (ProjectsAnalyticsResponse, error)
 	GetAnalyticsHourOfWeek(ctx context.Context, f AnalyticsFilter) (HourOfWeekResponse, error)
 	GetAnalyticsSessionShape(ctx context.Context, f AnalyticsFilter) (SessionShapeResponse, error)
+	// Tools, Velocity, Signals, and Trends reports may be shared; callers must not modify them.
 	GetAnalyticsTools(ctx context.Context, f AnalyticsFilter) (ToolsAnalyticsResponse, error)
 	GetAnalyticsSkills(ctx context.Context, f AnalyticsFilter, granularity string) (SkillsAnalyticsResponse, error)
 	GetAnalyticsVelocity(ctx context.Context, f AnalyticsFilter) (VelocityResponse, error)

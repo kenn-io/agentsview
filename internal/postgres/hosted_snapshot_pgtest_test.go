@@ -43,6 +43,7 @@ func tracedHostedReader(t *testing.T, f projectionFixture, argument string) (*Ho
 // A real publication between SQL statements must not replace or invalidate
 // the published transcript currently being read. The writer uses its own pool.
 func TestHostedPublicReadsDuringPublication(t *testing.T) {
+	t.Parallel()
 	for _, operation := range []string{"search", "list", "sidebar", "session", "messages", "pins"} {
 		t.Run(operation, func(t *testing.T) {
 			f := newProjectionFixture(t)
@@ -130,6 +131,7 @@ func TestHostedPublicReadsDuringPublication(t *testing.T) {
 }
 
 func TestHostedPricedReadWithSingleConnection(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "priced", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("priced transcript")))
@@ -154,6 +156,7 @@ func TestHostedPricedReadWithSingleConnection(t *testing.T) {
 }
 
 func TestHostedCanceledReadReleasesConnection(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "initial", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("initial needle")))
@@ -173,6 +176,7 @@ func TestHostedCanceledReadReleasesConnection(t *testing.T) {
 }
 
 func TestHostedReadViewRetainsTransactionOwnership(t *testing.T) {
+	t.Parallel()
 	f := newHostedFixture(t, "tenant-read-owner")
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()

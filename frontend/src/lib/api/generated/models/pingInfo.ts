@@ -5,8 +5,10 @@ import type { SyncProgress } from "./syncProgress.ts";
 
 export interface PingInfo {
   healthy: boolean;
+  instance_id: string;
   ok: boolean;
   pid?: number;
+  project_identity_backfill_error?: string;
   service?: string;
   sync?: SyncProgress;
   version?: string;

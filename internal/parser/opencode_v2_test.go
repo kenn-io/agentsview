@@ -208,7 +208,9 @@ func TestOpenCodeV2Projection(t *testing.T) {
 	assert.Equal(t, "[Thinking]\nInspect the plan\n[/Thinking]\nUse the index", msgs[1].Content)
 	assert.True(t, msgs[1].HasThinking)
 	assert.Equal(t, "gpt-5.4", msgs[1].Model)
-	assert.JSONEq(t, `{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":30,"cache_creation_input_tokens":0}`, string(msgs[1].TokenUsage))
+	// v2 writers store output without reasoning; stored output adds it back.
+	assert.JSONEq(t, `{"input_tokens":100,"output_tokens":25,"reasoning_tokens":5,"cache_read_input_tokens":30,"cache_creation_input_tokens":0}`, string(msgs[1].TokenUsage))
+	assert.Equal(t, 25, msgs[1].OutputTokens)
 	require.Len(t, msgs[1].ToolCalls, 1)
 	call := msgs[1].ToolCalls[0]
 	assert.Equal(t, "call_a", call.ToolUseID)

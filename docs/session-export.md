@@ -255,6 +255,10 @@ Session summary export omits transcript text, first-message text, thinking text,
 tool input, tool output, and raw transcript bytes. It may include metadata that
 came from sessions, such as sanitized project labels, branch names, model names,
 token totals, and cost totals. It does not emit raw working-directory paths.
+Because no message text leaves the archive, this export has no secret masking or
+`--reveal` flag. Exports that return message text, such as
+[conversation export](conversation-export.md#secrets-are-masked-by-default),
+mask detected secrets by default.
 
 ## Project Evidence
 
@@ -331,7 +335,7 @@ artifacts.
 The cursor embeds the archive `database_id`, filter parameters, ordering,
 watermark, last keyset position, snapshot digest, prefix digest, and limit.
 Passing `--cursor` with any query-affecting flag is an error. Only `--format`,
-`--json`, and `--limit` may be used with `--cursor`; filters such as
+`--json`, `--limit`, and `--wait` may be used with `--cursor`; filters such as
 `--project`, `--exclude-project`, `--machine`, `--git-branch`, `--agent`, date
 filters, `--active-since`, message-count filters, `--include-one-shot`,
 `--include-automated`, `--include-children`, `--outcome`, `--health-grade`,
@@ -364,8 +368,10 @@ best-effort: it combines stored session metadata with the repository and Git
 configuration visible when the migration runs, so a repository that moved or
 changed remotes may not reproduce its original checkout context. Existing stored
 snapshots remain authoritative. `agentsview export status` reports pending,
-running, failed, and completed state; failed status includes the last recorded
-error.
+running, failed, and completed state; a failure includes its cause and recovery
+commands, including when the daemon could not save the failure. Run
+`agentsview export sessions --wait` to start the local daemon if needed and wait
+for this work before exporting.
 
 ## Versioning
 

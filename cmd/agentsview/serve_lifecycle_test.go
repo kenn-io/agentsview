@@ -527,8 +527,10 @@ func TestStopDaemonProcessForceKillsMatchedIdentity(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	// The grace budget also bounds exit after SIGKILL. Allow the OS time to
+	// schedule the child under race-detector CI load.
 	require.NoError(t, stopDaemonProcess(
-		onlyLiveRuntimeRecord(t, dir), 50*time.Millisecond,
+		onlyLiveRuntimeRecord(t, dir), time.Second,
 	))
 	<-reaped
 	assert.False(t, daemon.ProcessAlive(pid))

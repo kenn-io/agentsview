@@ -15,6 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/usagefacts"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -67,6 +68,8 @@ type activityReportBackend struct {
 	read                   *[]string
 	counted                *activityReportCounted
 	usage                  activityUsageWindow
+	keptUsage              *activityKeptUsage
+	usageResult            *activityKeptUsage
 }
 
 // activityReportCounted holds the counted messages of the build's sessions,
@@ -108,8 +111,14 @@ func (b activityReportBackend) ActivityReportSecondRead() (func(), bool) {
 func (b activityReportBackend) ActivityReportUsage(
 	ctx context.Context, ids []string, q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
-	rows, pricing, read, err := b.activityReportCachedUsage(
-		ctx, b.usage, ids, b.lowerBound, b.upperBound, q, b.read != nil)
+	if b.keptUsage != nil {
+		return b.keptUsage.rows, b.keptUsage.pricing, nil
+	}
+	rows, pricing, read, next, err := b.activityReportCachedUsage(
+		ctx, b.usage, ids, b.lowerBound, b.upperBound, q, b.read != nil, b.usageResult != nil)
+	if err == nil && b.usageResult != nil {
+		b.usageResult.rows, b.usageResult.pricing, b.usageResult.from, b.usageResult.next = rows, pricing, q.EffectiveEnd, next
+	}
 	if b.read != nil {
 		*b.read = append(*b.read, read...)
 	}
@@ -153,12 +162,18 @@ func (db *DB) BuildActivityReportArtifacts(
 
 	var selection, version string
 	var revision int64
-	if !q.Partial && !db.readOnly && !TerminationUsesTime(f.Termination) {
+	if !db.readOnly && !TerminationUsesTime(f.Termination) {
 		version, revision, err = db.activityKeptVersion(ctx)
 		if err != nil {
 			return activity.CandidateArtifacts{}, err
 		}
-		selection = kept.Selection(f, q)
+		if q.Partial {
+			selection = activityUsageSelection(f, q)
+		} else {
+			selection = kept.Selection(f, q)
+		}
+	}
+	if selection != "" && !q.Partial {
 		report, hit, err := db.keptActivityReport(ctx, selection, version, revision, f, q)
 		if err != nil {
 			return activity.CandidateArtifacts{}, err
@@ -183,7 +198,27 @@ func (db *DB) BuildActivityReportArtifacts(
 	// A report without candidate sessions reads no usage, so it leaves the
 	// cache alone.
 	var usage activityUsageWindow
-	if len(ids) > 0 {
+	var cachedUsage *activityKeptUsage
+	if q.Partial && selection != "" && len(ids) > 0 {
+		if entries, ok := db.activityKept.Get(selection, version); ok {
+			entry := entries[0]
+			if entry.usage != nil && !q.EffectiveEnd.Before(entry.usage.from) && !q.EffectiveEnd.After(entry.usage.next) {
+				var valid bool
+				valid, err = db.keptActivityChangesValid(ctx, entry.revision, entry.read, ids, f, q)
+				if err != nil {
+					return activity.CandidateArtifacts{}, err
+				}
+				if valid {
+					if revision > entry.revision {
+						entry.revision = revision
+						db.activityKept.Put(selection, version, []activityKept{entry})
+					}
+					cachedUsage = entry.usage
+				}
+			}
+		}
+	}
+	if len(ids) > 0 && cachedUsage == nil {
 		// Filling the usage cache takes its own archive reads. Waiting for
 		// them while holding one could exhaust the bulk-read slots.
 		release()
@@ -204,7 +239,12 @@ func (db *DB) BuildActivityReportArtifacts(
 		read = slices.Clone(ids)
 		readSet = &read
 	}
+	var usageResult *activityKeptUsage
+	if q.Partial && selection != "" && len(ids) > 0 && cachedUsage == nil {
+		usageResult = &activityKeptUsage{}
+	}
 	backend := activityReportBackend{
+		keptUsage: cachedUsage, usageResult: usageResult,
 		read:       readSet,
 		DB:         db,
 		lowerBound: lowerBound, upperBound: upperBound,
@@ -213,15 +253,18 @@ func (db *DB) BuildActivityReportArtifacts(
 	}
 	artifacts, done, err := activity.BuildReportArtifacts(
 		ctx, backend, sessions, ids, q, onProgress, "aggregating activity report")
-	if err == nil && selection != "" {
+	if err == nil && selection != "" && (!q.Partial || usageResult != nil) {
 		slices.Sort(read)
 		read = slices.Compact(read)
 		boundedRead := make([]string, len(read))
 		copy(boundedRead, read)
 		read = boundedRead
-		entry := activityKept{
-			report: kept.Report{Artifacts: artifacts, Done: done}, revision: revision,
-			read: read, labels: activity.ProjectLabels(sessions),
+		entry := activityKept{revision: revision, read: read}
+		if q.Partial {
+			entry.usage = usageResult
+		} else {
+			entry.report = kept.Report{Artifacts: artifacts, Done: done}
+			entry.labels = activity.ProjectLabels(sessions)
 		}
 		entry.size = activityKeptSize(entry)
 		db.activityKept.Put(selection, version, []activityKept{entry})
@@ -343,19 +386,18 @@ func (db *DB) GetSessionUsageRows(
 			OutputTokens:        outputTok,
 			CacheCreationTokens: cacheCrTok,
 			CacheReadTokens:     cacheRdTok,
-			WebSearchRequests: usageRowWebSearchRequests(
-				o.scan.usageSource, o.scan.tokenJSON),
-			Agent:           o.scan.agent,
-			ProviderID:      o.scan.providerID,
-			ClaudeMessageID: o.scan.claudeMessageID,
-			ClaudeRequestID: o.scan.claudeRequestID,
-			SourceUUID:      o.scan.sourceUUID,
-			UsageDedupKey:   o.scan.usageDedupKey,
+			WebSearchRequests:   scanRowWebSearchRequests(o.scan),
+			Agent:               o.scan.agent,
+			ProviderID:          o.scan.providerID,
+			ClaudeMessageID:     o.scan.claudeMessageID,
+			ClaudeRequestID:     o.scan.claudeRequestID,
+			SourceUUID:          o.scan.sourceUUID,
+			UsageDedupKey:       o.scan.usageDedupKey,
 		}
 		snapshotRows[i].Contributes = activity.UsageDataContributes(
 			o.scan.cost.Valid, inputTok, outputTok, reasoningTok,
 			cacheCrTok, cacheRdTok,
-			usageRowWebSearchRequests(o.scan.usageSource, o.scan.tokenJSON))
+			scanRowWebSearchRequests(o.scan))
 	}
 	return activity.SelectSessionUsageRows(ctx, snapshotRows, func(i int, webSearches int) (activity.UsagePrice, error) {
 		o := rowsAcc[i]
@@ -379,9 +421,10 @@ func (db *DB) GetSessionUsageRows(
 		if costRow.cost.Valid {
 			costSource = export.CostSourceReported
 		}
+		recorded, _ := RecordedRowCost(r.cost, r.costStatus, costRow.cost)
 		return activity.UsagePrice{
 			Cost: cost, CostSource: costSource, SessionCost: sessionCost,
-			Priced: priced, Contributes: contributes,
+			RecordedCost: recorded, Priced: priced, Contributes: contributes,
 		}, nil
 	})
 }
@@ -461,7 +504,7 @@ func sqliteSessionUsageRowTokens(
 	r usageScanRow,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok int) {
 	if r.usageSource == "message" {
-		return clampedUsageTokenCountersWithReasoning(r.tokenJSON)
+		return clampedUsageTokenCountersWithReasoning(r.tokenUsage())
 	}
 	inputTok, outputTok, cacheCrTok, cacheRdTok = UsageEventRowTokens(
 		r.usageSource,
@@ -714,11 +757,12 @@ const activityReportTerminalCandidatesSQL = `WITH
 	session_ids AS (
 		SELECT value AS session_id FROM json_each(?)
 	),
-	terminal_events AS (
+	terminal_events AS MATERIALIZED (
 		SELECT tre.session_id, tre.tool_call_message_ordinal AS ordinal,
-			tre.call_index, tre.event_index, tre.timestamp
-		FROM tool_result_events tre
-		JOIN session_ids ids ON ids.session_id = tre.session_id
+			tre.call_index, tre.event_index, tre.timestamp,
+			agentsview_timestamp_unix_micro(tre.timestamp) AS ts_us
+		FROM session_ids ids
+		CROSS JOIN tool_result_events tre ON tre.session_id = ids.session_id
 		WHERE tre.source = 'tool_execution'
 			AND tre.status IN ('completed', 'errored')
 			AND tre.timestamp IS NOT NULL
@@ -732,11 +776,12 @@ const activityReportTerminalCandidatesSQL = `WITH
 	ordered_terminal AS (
 		SELECT te.*,
 			LEAD(te.ordinal) OVER terminal_order AS next_terminal_ordinal,
-			LEAD(te.timestamp) OVER terminal_order AS next_terminal_timestamp
+			LEAD(te.timestamp) OVER terminal_order AS next_terminal_timestamp,
+			LEAD(te.ts_us) OVER terminal_order AS next_terminal_us
 		FROM terminal_events te
 		WINDOW terminal_order AS (
 			PARTITION BY te.session_id
-			ORDER BY agentsview_timestamp_unix_micro(te.timestamp),
+			ORDER BY te.ts_us,
 				te.call_index, te.event_index
 		)
 	),
@@ -744,7 +789,15 @@ const activityReportTerminalCandidatesSQL = `WITH
 		SELECT ot.*, next_message.ordinal AS next_message_ordinal,
 			next_message.timestamp AS next_message_timestamp,
 			next_message.role AS next_message_role,
-			next_message.model AS next_message_model
+			next_message.model AS next_message_model,
+			-- CASE, unlike OR, keeps SQLite from calling the timestamp
+			-- function on a NULL.
+			CASE
+				WHEN ot.next_terminal_us IS NULL THEN 0
+				WHEN next_message.timestamp IS NULL THEN 1
+				ELSE ot.next_terminal_us <
+					agentsview_timestamp_unix_micro(next_message.timestamp)
+			END AS tool_closes
 		FROM ordered_terminal ot
 		LEFT JOIN messages next_message ON next_message.id = (
 			SELECT next.id
@@ -753,14 +806,14 @@ const activityReportTerminalCandidatesSQL = `WITH
 				AND next.ordinal > ot.ordinal
 				AND next.timestamp IS NOT NULL
 				AND next.timestamp != ''
-				AND agentsview_timestamp_unix_micro(next.timestamp) >
-					agentsview_timestamp_unix_micro(ot.timestamp)
+				AND agentsview_timestamp_unix_micro(next.timestamp) > ot.ts_us
 			ORDER BY next.ordinal
 			LIMIT 1
 		)
 	),
 	last_messages AS (
-		SELECT m.session_id, m.ordinal, m.timestamp
+		SELECT m.session_id, m.ordinal, m.timestamp,
+			agentsview_timestamp_unix_micro(m.timestamp) AS ts_us
 		FROM terminal_sessions ts
 		JOIN messages m ON m.id = (
 			SELECT latest.id
@@ -774,60 +827,30 @@ const activityReportTerminalCandidatesSQL = `WITH
 		)
 	),
 	first_tail_events AS (
-		SELECT lm.session_id, lm.ordinal, lm.timestamp,
+		SELECT lm.session_id, lm.ordinal, lm.timestamp, lm.ts_us,
 			te.call_index, te.event_index, te.timestamp AS terminal_timestamp,
 			ROW_NUMBER() OVER (
 				PARTITION BY lm.session_id
-				ORDER BY agentsview_timestamp_unix_micro(te.timestamp),
-					te.call_index, te.event_index
+				ORDER BY te.ts_us, te.call_index, te.event_index
 			) AS row_num
 		FROM last_messages lm
 		JOIN terminal_events te ON te.session_id = lm.session_id
-		WHERE agentsview_timestamp_unix_micro(te.timestamp) >
-				agentsview_timestamp_unix_micro(lm.timestamp)
+		WHERE te.ts_us > lm.ts_us
 	),
 	candidates AS (
 		SELECT twm.session_id, twm.ordinal AS start_ordinal,
-			CASE
-				WHEN twm.next_terminal_timestamp IS NOT NULL AND
-					(twm.next_message_timestamp IS NULL OR
-					 agentsview_timestamp_unix_micro(twm.next_terminal_timestamp) <
-					 agentsview_timestamp_unix_micro(twm.next_message_timestamp))
-				THEN twm.next_terminal_ordinal
-				ELSE twm.next_message_ordinal
-			END AS end_ordinal,
-			twm.timestamp AS start_timestamp,
-			CASE
-				WHEN twm.next_terminal_timestamp IS NOT NULL AND
-					(twm.next_message_timestamp IS NULL OR
-					 agentsview_timestamp_unix_micro(twm.next_terminal_timestamp) <
-					 agentsview_timestamp_unix_micro(twm.next_message_timestamp))
-				THEN twm.next_terminal_timestamp
-				ELSE twm.next_message_timestamp
-			END AS end_timestamp,
-			CASE
-				WHEN twm.next_terminal_timestamp IS NOT NULL AND
-					(twm.next_message_timestamp IS NULL OR
-					 agentsview_timestamp_unix_micro(twm.next_terminal_timestamp) <
-					 agentsview_timestamp_unix_micro(twm.next_message_timestamp))
-				THEN 'tool'
-				ELSE twm.next_message_role
-			END AS closing_role,
-			CASE
-				WHEN twm.next_terminal_timestamp IS NOT NULL AND
-					(twm.next_message_timestamp IS NULL OR
-					 agentsview_timestamp_unix_micro(twm.next_terminal_timestamp) <
-					 agentsview_timestamp_unix_micro(twm.next_message_timestamp))
-				THEN ''
-				ELSE twm.next_message_model
-			END AS closing_model,
+			CASE WHEN twm.tool_closes THEN twm.next_terminal_ordinal ELSE twm.next_message_ordinal END AS end_ordinal,
+			twm.timestamp AS start_timestamp, twm.ts_us AS start_us,
+			CASE WHEN twm.tool_closes THEN twm.next_terminal_timestamp ELSE twm.next_message_timestamp END AS end_timestamp,
+			CASE WHEN twm.tool_closes THEN 'tool' ELSE twm.next_message_role END AS closing_role,
+			CASE WHEN twm.tool_closes THEN '' ELSE twm.next_message_model END AS closing_model,
 			twm.call_index, twm.event_index
 		FROM terminal_with_message twm
 
 		UNION ALL
 
 		SELECT fte.session_id, fte.ordinal, fte.ordinal,
-			fte.timestamp, fte.terminal_timestamp, 'tool', '',
+			fte.timestamp, fte.ts_us, fte.terminal_timestamp, 'tool', '',
 			fte.call_index, fte.event_index
 		FROM first_tail_events fte
 		WHERE fte.row_num = 1
@@ -847,9 +870,8 @@ SELECT candidate.session_id, candidate.start_ordinal, candidate.end_ordinal,
 	), 'unknown')
 FROM candidates candidate
 WHERE candidate.end_timestamp IS NOT NULL
-	AND agentsview_timestamp_unix_micro(candidate.start_timestamp) < ?
-ORDER BY agentsview_timestamp_unix_micro(candidate.start_timestamp),
-	candidate.session_id, candidate.start_ordinal,
+	AND candidate.start_us < ?
+ORDER BY candidate.start_us, candidate.session_id, candidate.start_ordinal,
 	candidate.call_index, candidate.event_index`
 
 // activityReportCandidateSQL pairs the sessions' messages. When counted is set,
@@ -1063,25 +1085,21 @@ func (db *DB) activityReportUsageFrom(
 		return nil, nil, nil, err
 	}
 	sortActivityReportUsageCandidates(candidates)
-	baseRows := make([]activity.UsageRow, len(candidates))
+	selection := make([]activity.UsageSelectionRow, len(candidates))
 	var read []string
 	if collectRead {
 		read = make([]string, 0, len(candidates))
 	}
 	for i := range candidates {
-		candidate := &candidates[i]
-		row := candidate.usageRow()
+		c := &candidates[i]
+		r := &c.scan
 		if collectRead {
-			read = append(read, row.SessionID)
+			read = append(read, r.sessionID)
 		}
-		_, row.OutputTokens, _, _, _ = dailyUsageRowTokens(candidate.scan)
-		row.WebSearchRequests = usageRowWebSearchRequests(
-			candidate.scan.usageSource, candidate.scan.tokenJSON)
-		baseRows[i] = row
+		_, output, _, _, _ := dailyUsageRowTokens(*r)
+		selection[i] = activity.UsageSelectionRow{SessionID: r.sessionID, MessageOrdinal: c.ordinal, Timestamp: c.ts, TimestampValid: c.validTS, OutputTokens: output, WebSearchRequests: usageRowWebSearchRequests(r.usageSource, r.tokenJSON), Agent: r.agent, ClaudeMessageID: r.claudeMessageID, ClaudeRequestID: r.claudeRequestID, SourceUUID: r.sourceUUID, UsageDedupKey: r.usageDedupKey}
 	}
-	mask, attribution, webSearchRequests, err := activity.UsageSurvivorSelectionForSessions(
-		ctx, q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows, ids,
-	)
+	mask, attribution, webSearchRequests, err := activity.SelectUsageSurvivorsForSessions(ctx, q.RangeStart, q.RangeEnd, q.EffectiveEnd, selection, ids)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -1402,8 +1420,9 @@ func sqliteActivityReportRowStatusWithWebSearchRequests(
 	var tokens activityReportRowTokens
 	tokens.reasoning = r.reasoningTokens
 	if r.usageSource == "message" {
-		tokens.input, tokens.output, tokens.cacheCreation, tokens.cacheRead, tokens.reasoning = clampedUsageTokenCountersWithReasoning(r.tokenJSON)
-		tokens.cacheCreation1h = clampedCacheCreation1hTokens(r.tokenJSON)
+		parsed := usagefacts.ParseTokenUsage(r.tokenJSON)
+		tokens.input, tokens.output, tokens.cacheCreation, tokens.cacheRead, tokens.reasoning = clampedUsageTokenCountersWithReasoning(parsed)
+		tokens.cacheCreation1h = clampedCacheCreation1hTokens(parsed)
 	} else {
 		tokens.input, tokens.output, tokens.cacheCreation, tokens.cacheRead = UsageEventRowTokens(
 			r.usageSource,

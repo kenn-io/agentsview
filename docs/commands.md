@@ -560,6 +560,27 @@ agentsview daemon stop
 | `restart` | Stop and restart the writable daemon; start it if it is already stopped    |
 | `stop`    | Stop the writable daemon, or report that it is already stopped             |
 
+Settings offers **Restart now** on writable detached daemons and foreground
+servers. It preserves launch options and can interrupt sync. It reloads the
+configuration within the existing process, keeping its process ID, foreground
+attachment, and loaded executable. Use the external restart or update workflow
+to apply a newly installed binary.
+The settings page reloads after an identified replacement answers and returns to
+the selected panel. Read-only servers cannot restart from Settings.
+Authentication changes take effect immediately.
+
+An explicit `--require-auth` flag takes precedence until authentication is saved
+in Settings. Later Settings restarts use the latest saved value, including
+subsequent file edits. A fresh CLI start or restart uses normal deployment and
+flag precedence.
+
+If the page cannot reconnect within 30 seconds, **Check connection** polls for
+another 30 seconds. To find the server address, run `agentsview serve status`
+on the server machine and open the
+address it prints. If the server stopped or never restarted, restart it the way
+you originally started it. An automatically selected port may change when the
+old port is occupied. An explicitly selected port must be available.
+
 `daemon start` and `daemon restart` load the normal effective configuration from
 `config.toml` and supported environment variables. They accept no serve-specific
 flags: persistent daemon settings belong in configuration. `--no-sync` is
@@ -644,13 +665,15 @@ in `config.toml` is busy. An explicit nonzero `--port` exits when that port is
 occupied. Use `--port 0` to select any available port. For a supervised daemon
 that must keep a fixed port, pass `--port` in its launch command.
 
-When replacing a running daemon, an occupied explicit port is rejected before
-the daemon stops. The daemon's existing host and port can be reused, including
-narrowing a wildcard bind to loopback. To widen a bind on the same explicit
-port, stop the daemon first with `agentsview daemon stop`.
+When replacing a running daemon, an occupied fixed positive port is rejected
+before the daemon stops. The daemon's existing host and port can be reused,
+including narrowing a wildcard bind to loopback. To widen a bind on the same
+explicit port, stop the daemon first with `agentsview daemon stop`.
 
-`agentsview update` preserves the original `--port` choice recorded by the
-running daemon, including `0`. Without an explicit port, restart tries the
+Settings restart tries to reuse an automatically selected address so the page
+can reconnect, with fallback if the address is occupied. `agentsview update`
+preserves the original `--port` choice recorded by the running daemon,
+including `0`. Without an explicit port, restart tries the
 previous listening port and retains automatic fallback. See
 [Remote Access](/docs/remote-access/) for details on the remote access and proxy
 flags.
@@ -1069,6 +1092,18 @@ Reclaim unused space in the local SQLite archive. The command writes and checks
 a compacted database before replacing the original, and truncates the
 write-ahead log (WAL). It preserves stored sessions and does not change what
 future imports retain.
+
+Compaction first removes deleted-message records from the conversation export
+index, except records of messages with a native source ID, which stay so a
+returning message keeps its export ID. The daemon also removes the same records
+on its own once they are a week or two old, but only compaction shrinks the
+database file. Change-stream and
+conversation-export readers keep these records only so they can learn about a
+deletion. A reader whose position predates a removed record restarts: the change
+stream sends `reset`, and `export conversations changes` returns
+`reconciliation_required`. Readers that have already read past every removed
+record continue unchanged. The `--dry-run` estimate does not include the space
+these records free.
 
 ```bash
 agentsview db compact [flags]
@@ -2021,6 +2056,7 @@ agentsview export sessions [flags]
 | `--limit`             | `500`   | Maximum sessions to return; max `db.MaxSessionLimit`      |
 | `--cursor`            |         | Opaque cursor from a previous response                    |
 | `--all`               | `false` | Export every eligible page as one output stream           |
+| `--wait`              | `false` | Wait for project identification                           |
 | `--project`           |         | Filter by exact project name                              |
 | `--exclude-project`   |         | Exclude sessions from the given project                   |
 | `--machine`           |         | ID, alias, ID/alias list, or unique display name          |
@@ -2040,6 +2076,12 @@ agentsview export sessions [flags]
 | `--health-grade`      |         | Comma-separated health grade filter                       |
 | `--min-tool-failures` |         | Minimum tool-failure signal count                         |
 | `--has-secret`        | `false` | Only sessions with detected secret leaks                  |
+
+With `--wait`, export starts or discovers the local daemon and waits for project
+identity evidence to finish. Progress goes to standard error. Cancel the command
+to stop waiting. A failed backfill or unavailable daemon reports recovery
+commands. Archive-only databases cannot run the backfill; finish it on the
+writable source and restore an archive containing the evidence.
 
 By default, one-shot and automated sessions are excluded, so token and cost
 totals can be lower than the full archive unless the corresponding include flags
@@ -2065,8 +2107,9 @@ For performance diagnosis, `export sessions`, `export hour`, `export day`, and
 `--trace <file>`. These write profiling data to files and keep the export on
 stdout.
 
-When `--cursor` is present, only `--format`, `--json`, `--limit`, and the
-profiling flags may be combined with it. Cursor reset errors write structured
+When `--cursor` is present, only `--format`, `--json`, `--limit`, `--wait`, and
+the profiling flags may be combined with it. With a cursor, `--wait` suppresses
+progress to keep stderr machine-readable. Cursor reset errors write structured
 JSON to stderr, leave stdout empty, and exit with code 4:
 
 ```json
@@ -2085,12 +2128,18 @@ checkpoint and coverage rules.
 ```bash
 agentsview export conversations changes
 agentsview export conversations changes --checkpoint SAVED_CHECKPOINT
+agentsview export conversations changes --tool-summaries
 agentsview export conversations message SESSION_ID MESSAGE_ID \
   --database-id DATABASE_ID --revision REVISION
 ```
 
 These commands read the local archive and do not send content to another system.
-Existing session summary and activity exports remain content-free.
+`--tool-summaries` adds each session's tool call totals and skills to the
+listing; see
+[Session tool summaries](/docs/conversation-export/#session-tool-summaries).
+`message` masks detected secrets by default and marks such bodies with
+`redacted: true`; pass `--reveal` to return the stored text unchanged. Existing
+session summary and activity exports remain content-free.
 
 ______________________________________________________________________
 
@@ -2140,9 +2189,11 @@ agentsview session get <id>              # metadata + signals
 agentsview session list [flags]          # filtered list
 agentsview session list --resume         # recently-active resume table
 agentsview session messages <id>         # paginated messages
+agentsview session compactions <id>      # compaction summaries
+agentsview session compactions --active-since 2024-01-01T00:00:00Z --json
 agentsview session commits <id>          # commits and their prompts
 agentsview session tool-calls <id>       # flat tool-call list
-agentsview session export <id>           # stream raw source file
+agentsview session export <id>           # stream raw source, secrets masked
 agentsview session sync <path-or-id>     # parse + insert
 agentsview session watch <id>            # NDJSON event stream
 agentsview session search <pattern>      # content search across sessions
@@ -2153,6 +2204,11 @@ agentsview session usage-batch <id>...   # ordered usage results for several ses
 agentsview session label <id> k=v ...    # add or remove labels
 agentsview session parent <id> <parent>  # record the launching session
 ```
+
+For `session compactions`, `--limit` counts sessions per page, not response
+bytes; `--limit 0` uses the default of 20. Resume `--cursor` with the same
+`--active-since`, even when a page has no summaries. Ambiguous older Evener
+labels are reported separately with their session ID and ordinal.
 
 `agentsview session commits <id>` lists transcript and Git trailer commits
 linked to a session. The `SOURCE` column distinguishes `transcript` from
@@ -2196,13 +2252,23 @@ flags. JSON adds `hints` entries with `code`, `message`, and a full `next` comma
 Counts use a bounded search and say `more than N` when more matches exist, or
 `at least N` for semantic and hybrid searches or when filtering or candidate
 limits prevent an exact count.
-For multi-word substring queries over messages, a hint offers `--fts` only when
-that retry finds matches. `excluded_combined` gives a retry with the remaining
+`excluded_combined` gives a retry with the remaining
 include flags for matches beyond the individual class hints. Failed diagnostic
 searches add no hint.
 
 `session search` supports substring (default), `--regex`, `--fts`, `--semantic`,
-and `--hybrid` modes. Repeatable `--exclude-session <id>` drops matches from
+and `--hybrid` modes. On SQLite, PostgreSQL, DuckDB, and ClickHouse, a default search of several words lists matches
+of the exact text first, from every selected source. Messages holding every
+word follow, then messages holding fewer of the words; `matched_words` in JSON
+counts them, excluding unquoted stop words. Regular word forms match, so
+`invoice` also finds `invoices`.
+A single word, a fully quoted query such as `'"rounding of invoices"'`, and a
+search whose `--in` leaves out `messages` match the exact text only. A quoted
+phrase inside a longer query requires its words together and in order. `--fts`
+and hybrid's keyword matches rank messages by words the same way; hybrid
+keyword matches report their word count. An `--fts` query made only of
+quoted phrases, or one that uses FTS5 operators after a leading quote, such as
+`'"fix" OR "missing"'`, keeps its FTS5 meaning. Repeatable `--exclude-session <id>` drops matches from
 those sessions before `--limit`. Hybrid returns keyword matches with a note
 while the embedding index is unavailable. Semantic and hybrid
 results can be scoped with `--scope top|all|subordinate` (default `all`) to include or exclude sidechain and subagent content — see
@@ -2276,7 +2342,7 @@ scoring, and trust policy evolve. See [Recall (Experimental)](/docs/recall/) for
 its current guarantees and limitations.
 
 ```bash
-agentsview recall list
+agentsview recall list [--updated-since <timestamp>] [--created-since <timestamp>] [--cursor <cursor>]
 agentsview recall get <id>
 agentsview recall query <text>
 agentsview recall brief <task>
@@ -2289,6 +2355,13 @@ agentsview recall extract doctor
 agentsview recall extract preview --session <id>
 agentsview recall import <accepted-recall.jsonl> --dry-run
 ```
+
+`--updated-since` and `--created-since` take RFC3339 timestamps and include
+the boundary. A bounded list returns the oldest change first and includes
+archived entries. Pass the returned `next_cursor` to `--cursor` for the next
+page. If Recall changes during the walk, restart from the first page with the
+same original time bound(s). See [Recall](/docs/recall/) for following changes over
+time.
 
 Model-backed extraction requires an enabled `[recall.extract]` config section —
 see [Recall](/docs/recall/#automatic-extraction). `preview` replaces the earlier
@@ -2363,6 +2436,18 @@ sent to an explicitly supplied server.
 
 ______________________________________________________________________
 
+### `agentsview agent setup`
+
+Install the conversation search skill and focused MCP profile for installed Claude Code and Codex clients:
+
+```bash
+agentsview agent setup [--agent claude|codex] [--check] [--force]
+```
+
+Setup refuses to replace a different `agentsview` MCP entry without `--force` and preserves other entries. Pass `--force` to replace the entry and overwrite edited skill files. The memory profile supports `AGENTSVIEW_MEMORY_SERVER`, `AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, and `AGENTSVIEW_MEMORY_PG`.
+
+______________________________________________________________________
+
 ### `agentsview doctor memory`
 
 Inspect the selected conversation-memory target and the local client package:
@@ -2382,15 +2467,13 @@ older remote server reports `unknown` with reason `unsupported`; authentication
 and transport failures remain command errors instead of looking like an empty
 archive.
 
-The client section checks the native package's recall skill, focused MCP
+By default the client section checks installed Claude Code and Codex integrations. It checks the native package's recall skill, focused MCP
 configuration, and SessionStart hook when `--plugin-root`, `PLUGIN_ROOT`, or
 `CLAUDE_PLUGIN_ROOT` identifies the package. It also detects standalone
 AgentsView skills and reports when their baked target differs from the selected
 archive. Human and JSON output omit plugin paths, server URLs, and token values.
 
-Local diagnostics open the archive read-only and do not start a daemon. Every
-mode is metadata-only: the command does not sync transcripts, rebuild vectors,
-probe an embedding provider, or modify client files. `--server`, `--pg`, and
+Local diagnostics open the archive read-only. The client check may start the configured client and MCP process; it calls no data tools and does not start the local archive daemon, sync transcripts, or rebuild vectors. Codex may create its own runtime state. The diagnostic does not probe an embedding provider or modify client configuration. `--server`, `--pg`, and
 the `AGENTSVIEW_MEMORY_SERVER`, `AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, and
 `AGENTSVIEW_MEMORY_PG` environment variables select the same read target used
 by `agentsview mcp --profile memory`.
@@ -2536,7 +2619,7 @@ SQLite archive directly. See
 daemon again.
 
 Use `--profile memory` when the client should discover only the
-`get_memory_status`, `search_content`, and `get_messages` conversation-memory
+`get_memory_status`, `search_content`, `get_messages`, and `get_compaction_summaries` conversation-memory
 tools. `get_memory_status` reports archive, lexical, semantic, vector coverage,
 and source-telemetry readiness without running a search probe. The default
 `full` profile preserves the complete MCP tool surface. Profile selection works
@@ -2755,6 +2838,7 @@ agentsview help
 | `KIRO_IDE_DIR`                        | (platform-specific)                                                             | Kiro IDE sessions directory                                                                                     |
 | `MIMOCODE_DIR`                        | `~/.local/share/mimocode`                                                       | MiMoCode data directory                                                                                         |
 | `MUSE_SESSIONS_DIR`                   | `~/.local/share/muse/sessions`                                                  | Muse Code sessions directory; defaults to `$XDG_DATA_HOME/muse/sessions` when set                               |
+| `MUSE_PERSONAL_AGENTS_DIR`            | `~/agents`                                                                      | Muse Personal agents directory; scans `agent-<uuid>/sessions/` beneath it                                       |
 | `VIBE_SESSIONS_DIR`                   | `~/.vibe/logs/session`                                                          | Mistral Vibe sessions directory                                                                                 |
 | `OMP_DIR`                             | `~/.omp/agent/sessions`                                                         | OhMyPi sessions directory                                                                                       |
 | `OPENCLAW_DIR`                        | `~/.openclaw/agents` and `~/.kimi_openclaw/agents`                              | OpenClaw agents directory                                                                                       |
@@ -2765,6 +2849,7 @@ agentsview help
 | `PI_DIR`                              | `~/.pi/agent/sessions`                                                          | Pi sessions directory                                                                                           |
 | `PI_CODING_AGENT_DIR`                 | unset                                                                           | Pi agent home that re-roots the default `sessions/` discovery path                                              |
 | `PI_CODING_AGENT_SESSION_DIR`         | unset                                                                           | Pi session directory override; `PI_DIR` takes precedence                                                        |
+| `DIRECT_API_DIR`                      | `~/.agentsview/direct-api`                                                      | Direct API sessions directory                                                                                   |
 | `STEPCODE_DIR`                        | `~/.stepcode/agent/sessions`                                                    | StepCode sessions directory                                                                                     |
 | `STEP_CODING_AGENT_DIR`               | unset                                                                           | StepCode agent home that re-roots the default `sessions/` discovery path                                        |
 | `STEP_CODING_AGENT_SESSION_DIR`       | unset                                                                           | StepCode session directory override; `STEPCODE_DIR` takes precedence                                            |

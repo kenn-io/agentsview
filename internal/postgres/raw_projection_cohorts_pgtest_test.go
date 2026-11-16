@@ -12,6 +12,7 @@ import (
 )
 
 func TestRawProjectionThreeSourceCohortNamesAndPinNotes(t *testing.T) {
+	t.Parallel()
 	for _, reverse := range []bool{false, true} {
 		t.Run(fmt.Sprint(reverse), func(t *testing.T) {
 			f := newProjectionFixture(t)

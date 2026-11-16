@@ -1304,6 +1304,8 @@ func TestDirectBackend_Messages_AroundMutuallyExclusiveWithFrom(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "around is mutually exclusive with from/direction")
+	_, err = svc.Messages(t.Context(), sid, service.MessageFilter{Around: &around, CompactBoundaryOnly: true})
+	assert.ErrorIs(t, err, service.ErrAroundMutuallyExclusive)
 }
 
 // TestDirectBackend_Messages_AroundMutuallyExclusiveWithDirection is the

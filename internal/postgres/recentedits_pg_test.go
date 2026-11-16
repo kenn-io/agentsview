@@ -19,6 +19,9 @@ func reEnsureSchema(t *testing.T, pgURL string) *sql.DB {
 	t.Helper()
 	pg, err := Open(t.Context(), pgURL, reTestSchema, true)
 	require.NoError(t, err, "Open")
+	if takeFreshSchemaCopy(t, pgURL, reTestSchema) {
+		return pg
+	}
 	ctx := t.Context()
 	_, err = pg.ExecContext(ctx,
 		`DROP SCHEMA IF EXISTS `+reTestSchema+` CASCADE`,
@@ -149,7 +152,8 @@ func reAddEdit(
 
 // TestPGRecentEditsGroupingAndOrdering mirrors TestRecentEditsGroupingAndOrdering.
 func TestPGRecentEditsGroupingAndOrdering(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, reTestSchema)
 	pg := reEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
@@ -183,7 +187,8 @@ func TestPGRecentEditsGroupingAndOrdering(t *testing.T) {
 
 // TestPGRecentEditsExcludesTrash mirrors TestRecentEditsExcludesTrash.
 func TestPGRecentEditsExcludesTrash(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, reTestSchema)
 	pg := reEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
@@ -207,7 +212,8 @@ func TestPGRecentEditsExcludesTrash(t *testing.T) {
 
 // TestPGRecentEditsProjectFilter mirrors TestRecentEditsProjectFilter.
 func TestPGRecentEditsProjectFilter(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, reTestSchema)
 	pg := reEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
@@ -232,7 +238,8 @@ func TestPGRecentEditsProjectFilter(t *testing.T) {
 
 // TestPGRecentEditsSearchFilter mirrors TestRecentEditsSearchFilter.
 func TestPGRecentEditsSearchFilter(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, reTestSchema)
 	pg := reEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
@@ -277,7 +284,8 @@ func TestPGRecentEditsSearchFilter(t *testing.T) {
 
 // TestPGRecentEditsTruncationAndHasMore mirrors TestRecentEditsTruncationAndHasMore.
 func TestPGRecentEditsTruncationAndHasMore(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, reTestSchema)
 	pg := reEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
@@ -318,7 +326,8 @@ func TestPGRecentEditsTruncationAndHasMore(t *testing.T) {
 
 // TestPGRecentEditsNullTimestampsSortLast mirrors TestRecentEditsNullTimestampsSortLast.
 func TestPGRecentEditsNullTimestampsSortLast(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, reTestSchema)
 	pg := reEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
@@ -344,7 +353,8 @@ func TestPGRecentEditsNullTimestampsSortLast(t *testing.T) {
 
 // TestPGRecentEditsTieByCallIndex mirrors TestRecentEditsTieByCallIndex.
 func TestPGRecentEditsTieByCallIndex(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, reTestSchema)
 	pg := reEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {

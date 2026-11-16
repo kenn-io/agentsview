@@ -3,12 +3,14 @@ package clickhouse
 import (
 	"context"
 	"database/sql"
+	"encoding/json/v2"
 	"fmt"
 	"slices"
 	"strconv"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/readbase"
 )
 
@@ -516,10 +518,32 @@ func (s analyticsSQL) ScanTopSession(rows *sql.Rows) (db.TopSession, error) {
 
 func (s analyticsSQL) TrendsSQL(f, sessionFilter db.AnalyticsFilter, ordered bool) (string, []any) {
 	sessionPred, args := chAnalyticsSessionSet(sessionFilter).in("m.session_id")
-	return readbase.AnalyticsTrendsSQL(
+	query, args := readbase.AnalyticsTrendsSQL(
 		f, chAnalyticsMessageWindowPred,
 		db.ClickHouseSystemPrefixSQL("m.content", "m.role"), db.ClickHouseQueryDialect(),
-		sessionPred, args, ordered)
+		sessionPred, args, ordered, false)
+	return query + systemPrefixSettings, args
+}
+
+func (s analyticsSQL) TrendsDisk() (*kept.Disk, string) {
+	return &s.store.usageDisk, "clickhouse|" + db.SystemPrefixRulesVersion()
+}
+
+func (s analyticsSQL) TrendSessionVersions(ctx context.Context, f db.AnalyticsFilter) (map[string]string, error) {
+	sf := f.TrendsSessionFilter()
+	where, args := chBuildAnalyticsWhere(sf, "COALESCE(s.started_at, s.created_at)", "s.", true, true)
+	// A content push writes all messages at one version, then deletes vanished rows.
+	// The maximum version detects the insert; the count detects the subsequent delete.
+	return db.ScanTrendVersions(s.QueryContext(ctx, `SELECT s.id, concat(toString(s.push_version), '|', toString(m.n), '|', toString(m.v)) FROM sessions s LEFT JOIN (SELECT session_id, count() AS n, max(push_version) AS v FROM messages GROUP BY session_id) m ON m.session_id = s.id WHERE `+where, args...))
+}
+
+func (s analyticsSQL) TrendSessionWindow(f db.AnalyticsFilter, set string, args []any) (string, []any) {
+	return readbase.TrendSessionWindowSQL(f, chAnalyticsMessageWindowPred, set, args)
+}
+
+func (s analyticsSQL) TrendMessagesSQL(set string, args []any) (string, []any) {
+	query, args := readbase.AnalyticsTrendsSQL(db.AnalyticsFilter{}, chAnalyticsMessageWindowPred, db.ClickHouseSystemPrefixSQL("m.content", "m.role"), db.ClickHouseQueryDialect(), "m.session_id IN "+set, args, false, true)
+	return query + systemPrefixSettings, args
 }
 
 func (s analyticsSQL) FormatTime(v any) string { return formatDBTime(v) }
@@ -603,9 +627,65 @@ func (s *Store) GetAnalyticsSignalSessions(
 	return s.analytics().GetAnalyticsSignalSessions(ctx, f, signal, limit)
 }
 
+func trendsTermsKeys(
+	f db.AnalyticsFilter, terms []db.TrendTermInput, granularity string,
+) (string, string, error) {
+	key, err := json.Marshal(struct {
+		Filter  db.AnalyticsFilter
+		Variant string
+	}{f, db.TrendsKeptVariant(terms, granularity)})
+	selection := string(key)
+	return selection, "trends|" + selection, err
+}
+
 func (s *Store) GetTrendsTerms(
 	ctx context.Context, f db.AnalyticsFilter,
 	terms []db.TrendTermInput, granularity string,
 ) (db.TrendsTermsResponse, error) {
-	return s.analytics().GetTrendsTerms(ctx, f, terms, granularity)
+	load := func(ctx context.Context) (db.TrendsTermsResponse, error) {
+		return s.analytics().GetTrendsTerms(ctx, f, terms, granularity)
+	}
+	if f.ActiveSince != "" || db.TerminationUsesTime(f.Termination) {
+		return load(ctx)
+	}
+	key, diskSlot, err := trendsTermsKeys(f, terms, granularity)
+	if err != nil {
+		return load(ctx)
+	}
+	version, ok, err := s.usageRowsVersion(ctx, []string{"sessions", "messages"}, "")
+	if err != nil || !ok {
+		return load(ctx)
+	}
+	version += "|" + db.TrendsTimezoneKey(f)
+	if report, ok := s.trendsReads.Get(key, version); ok {
+		s.keepTrendsDisk(diskSlot, version, report)
+		return report, nil
+	}
+	return s.trendsReads.Do(ctx, key, version, func(ctx context.Context) (db.TrendsTermsResponse, error) {
+		if data, ok := s.usageDisk.Get(diskSlot, version); ok {
+			var report db.TrendsTermsResponse
+			if json.Unmarshal(data, &report) == nil {
+				return report, nil
+			}
+		}
+		report, err := load(ctx)
+		if err == nil {
+			s.putTrendsDisk(diskSlot, version, report)
+		}
+		return report, err
+	})
+}
+
+func (s *Store) putTrendsDisk(slot, version string, report db.TrendsTermsResponse) {
+	if data, err := json.Marshal(report, json.FormatNilSliceAsNull(true)); err == nil {
+		s.usageDisk.Put(slot, version, data)
+	}
+}
+
+// keepTrendsDisk touches the saved report for a memory hit. A missing file or
+// one left by an older version is rewritten from the report in memory.
+func (s *Store) keepTrendsDisk(slot, version string, report db.TrendsTermsResponse) {
+	if _, ok := s.usageDisk.Get(slot, version); !ok {
+		s.putTrendsDisk(slot, version, report)
+	}
 }

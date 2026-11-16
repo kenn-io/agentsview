@@ -41,7 +41,7 @@ describe("Heatmap", () => {
     const component = mount(Heatmap, { target: document.body });
     await tick();
 
-    expect(document.querySelector(".loading")).toBeNull();
+    expect(document.querySelector(".loading-state")).toBeNull();
     const container = document.querySelector<HTMLElement>(".heatmap-scroll");
     const chart = container?.querySelector<SVGSVGElement>("svg");
     expect(container).not.toBeNull();
@@ -61,7 +61,7 @@ describe("Heatmap", () => {
     expect(document.body.textContent).toContain("No data for this period");
     analytics.errors.heatmap = "request failed";
     await tick();
-    expect(document.querySelector(".error")).not.toBeNull();
+    expect(document.querySelector(".load-error")).not.toBeNull();
     expect(document.body.textContent).toContain("No data for this period");
     analytics.heatmap = null;
     await tick();

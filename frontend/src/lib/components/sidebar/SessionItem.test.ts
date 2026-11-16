@@ -5,6 +5,8 @@ import { createClassComponent } from "svelte/legacy";
 import SessionItem from "./SessionItem.svelte";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { starred } from "../../stores/starred.svelte.js";
+import { ui } from "../../stores/ui.svelte.js";
+import { formatTimestamp } from "../../utils/format.js";
 
 let component: ReturnType<typeof mount> | undefined;
 
@@ -12,6 +14,7 @@ afterEach(() => {
   if (component) unmount(component);
   component = undefined;
   document.body.innerHTML = "";
+  ui.alwaysShowYear = false;
   sessions.machineLabels = {};
   sessions.details.clear();
 });
@@ -55,6 +58,23 @@ describe("SessionItem identity", () => {
     });
     flushSync();
   }
+
+  it.each([false, true])(
+    "updates the date and keeps the full hover time in compact=%s",
+    (compact) => {
+      const ended = "2024-06-01T12:00:00Z";
+      mountSession({ ended_at: ended }, { compact });
+      const time = () => document.querySelector<HTMLElement>(".session-time")!;
+      expect(time().title).toBe(formatTimestamp(ended, true));
+      expect(time().textContent).not.toContain("2024");
+      ui.alwaysShowYear = true;
+      flushSync();
+      expect(time().textContent).toContain("2024");
+      ui.alwaysShowYear = false;
+      flushSync();
+      expect(time().textContent).not.toContain("2024");
+    },
+  );
 
   it("updates a mounted row when its title arrives", () => {
     mountSession({ first_message: null, is_index_only: true });
@@ -202,16 +222,14 @@ describe("SessionItem identity", () => {
     });
     mountSession({ id: "menu-edge" });
 
-    document
-      .querySelector<HTMLElement>(".session-info-link")!
-      .dispatchEvent(
-        new MouseEvent("contextmenu", {
-          bubbles: true,
-          cancelable: true,
-          clientX: 780,
-          clientY: 565,
-        }),
-      );
+    document.querySelector<HTMLElement>(".session-info-link")!.dispatchEvent(
+      new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        clientX: 780,
+        clientY: 565,
+      }),
+    );
     flushSync();
 
     const menu = document.querySelector<HTMLElement>(".context-menu")!;

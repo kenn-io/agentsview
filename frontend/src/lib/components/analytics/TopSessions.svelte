@@ -1,10 +1,8 @@
 <script lang="ts">
   import { analytics } from "../../stores/analytics.svelte.js";
   import PanelStatus from "./PanelStatus.svelte";
-  import {
-    sessions,
-    getSessionStatus,
-  } from "../../stores/sessions.svelte.js";
+  import { sessions } from "../../stores/sessions.svelte.js";
+  import { getSessionStatus } from "../../stores/sessionStatus.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { formatCount } from "../../utils/format.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";

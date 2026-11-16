@@ -2,19 +2,14 @@
   import { modelPickerItems } from "../../utils/model-groups.js";
   import { Card } from "@kenn-io/kit-ui";
   import { onDestroy, onMount, tick, untrack } from "svelte";
+  import { usage, type UsageMode } from "../../stores/usage.svelte.js";
   import {
-    usage,
     buildUsageUrlParams,
     mergeUsageAndSessionUrlParams,
     parseWindowDays,
-    type UsageMode,
-  } from "../../stores/usage.svelte.js";
-  import {
-    sessions,
-    filtersToParams,
-    parseFiltersFromParams,
-    splitExcludeProjectParam,
-  } from "../../stores/sessions.svelte.js";
+  } from "../../stores/usageUrl.js";
+  import { sessions } from "../../stores/sessions.svelte.js";
+  import { filtersToParams, parseFiltersFromParams, splitExcludeProjectParam } from "../../stores/sessionFilters.js";
   import {
     SESSION_LABEL_PARAM,
     SESSION_PR_PARAM,

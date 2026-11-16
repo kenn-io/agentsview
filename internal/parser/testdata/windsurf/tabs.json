@@ -1,0 +1,12 @@
+{
+  "tabs": [
+    {
+      "tabId": "tab-session",
+      "chatTitle": "Flaky test",
+      "bubbles": [
+        {"type": "user", "text": "Why does the watcher test flake?"},
+        {"type": "assistant", "text": "It sleeps instead of waiting for the event."}
+      ]
+    }
+  ]
+}

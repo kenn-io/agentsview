@@ -18,6 +18,9 @@ func mwEnsureSchema(t *testing.T, pgURL string) *sql.DB {
 	t.Helper()
 	pg, err := Open(t.Context(), pgURL, mwTestSchema, true)
 	require.NoError(t, err, "Open")
+	if takeFreshSchemaCopy(t, pgURL, mwTestSchema) {
+		return pg
+	}
 	ctx := t.Context()
 	_, err = pg.ExecContext(ctx,
 		`DROP SCHEMA IF EXISTS `+mwTestSchema+` CASCADE`,
@@ -76,7 +79,8 @@ func mwOrdinalsOf(msgs []db.Message) []int {
 // TestPGGetMessagesWindow_AroundMidSession mirrors
 // TestGetMessagesWindow_AroundMidSession.
 func TestPGGetMessagesWindow_AroundMidSession(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, mwTestSchema)
 	pg := mwEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
@@ -100,7 +104,8 @@ func TestPGGetMessagesWindow_AroundMidSession(t *testing.T) {
 // TestPGGetMessagesWindow_RoleFilterCountsFilteredMessages mirrors
 // TestGetMessagesWindow_RoleFilterCountsFilteredMessages.
 func TestPGGetMessagesWindow_RoleFilterCountsFilteredMessages(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, mwTestSchema)
 	pg := mwEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
@@ -125,7 +130,8 @@ func TestPGGetMessagesWindow_RoleFilterCountsFilteredMessages(t *testing.T) {
 // TestPGGetMessagesWindow_AnchorIncludedEvenWhenRoleFiltered mirrors
 // TestGetMessagesWindow_AnchorIncludedEvenWhenRoleFiltered.
 func TestPGGetMessagesWindow_AnchorIncludedEvenWhenRoleFiltered(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, mwTestSchema)
 	pg := mwEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
@@ -151,7 +157,8 @@ func TestPGGetMessagesWindow_AnchorIncludedEvenWhenRoleFiltered(t *testing.T) {
 // TestPGGetMessagesWindow_AroundOrdinalZeroHasNoBefore mirrors
 // TestGetMessagesWindow_AroundOrdinalZeroHasNoBefore.
 func TestPGGetMessagesWindow_AroundOrdinalZeroHasNoBefore(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, mwTestSchema)
 	pg := mwEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
@@ -175,7 +182,8 @@ func TestPGGetMessagesWindow_AroundOrdinalZeroHasNoBefore(t *testing.T) {
 // TestPGGetMessagesWindow_AroundLastOrdinalHasNoAfter mirrors
 // TestGetMessagesWindow_AroundLastOrdinalHasNoAfter.
 func TestPGGetMessagesWindow_AroundLastOrdinalHasNoAfter(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, mwTestSchema)
 	pg := mwEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
@@ -199,7 +207,8 @@ func TestPGGetMessagesWindow_AroundLastOrdinalHasNoAfter(t *testing.T) {
 // TestPGGetMessagesWindow_LinearModeWithRoles mirrors
 // TestGetMessagesWindow_LinearModeWithRoles.
 func TestPGGetMessagesWindow_LinearModeWithRoles(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, mwTestSchema)
 	pg := mwEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
@@ -222,7 +231,8 @@ func TestPGGetMessagesWindow_LinearModeWithRoles(t *testing.T) {
 // TestPGGetMessagesWindow_EmptyRolesEquivalentToGetMessages mirrors
 // TestGetMessagesWindow_EmptyRolesEquivalentToGetMessages.
 func TestPGGetMessagesWindow_EmptyRolesEquivalentToGetMessages(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, mwTestSchema)
 	pg := mwEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
@@ -249,7 +259,8 @@ func TestPGGetMessagesWindow_EmptyRolesEquivalentToGetMessages(t *testing.T) {
 // TestPGGetMessagesWindow_ReportsRevisionWithRows covers the revision the
 // window statements select alongside their rows.
 func TestPGGetMessagesWindow_ReportsRevisionWithRows(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, mwTestSchema)
 	pg := mwEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
@@ -294,4 +305,19 @@ func TestPGGetMessagesWindow_ReportsRevisionWithRows(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, msgs)
 	assert.Empty(t, revision, "no rows means no revision to describe them")
+}
+
+func TestPGGetMessagesWindow_CompactBoundary(t *testing.T) {
+	t.Parallel()
+	pgURL := testPGURL(t)
+	pg := mwEnsureSchema(t, pgURL)
+	defer pg.Close()
+	mwSeedWindowMessages(t, pg, "boundary")
+	_, err := pg.ExecContext(t.Context(), `UPDATE messages SET is_compact_boundary = TRUE, is_system = TRUE WHERE session_id = $1 AND ordinal IN (3, 8)`, "boundary")
+	require.NoError(t, err)
+	store := mwNewStore(t, pgURL)
+	defer store.Close()
+	msgs, err := store.GetMessagesWindow(t.Context(), "boundary", db.MessageWindow{Limit: 100, Asc: true, CompactBoundaryOnly: true})
+	require.NoError(t, err)
+	assert.Equal(t, []int{3, 8}, mwOrdinalsOf(msgs))
 }

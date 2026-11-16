@@ -512,6 +512,11 @@ func (db *DB) reportingUsageSessionsFrom(
 	// A usage row is in range when its own timestamp is, or, when it has
 	// none, its session's start is. One branch per case lets the timestamp
 	// indexes seek the range instead of reading every usage row.
+	lowerTime, lowerErr := time.Parse(time.RFC3339Nano, lowerBound)
+	upperTime, upperErr := time.Parse(time.RFC3339Nano, upperBound)
+	if err := errors.Join(lowerErr, upperErr); err != nil {
+		return nil, nil, fmt.Errorf("parsing reporting usage bounds: %w", err)
+	}
 	rows, err := tx.QueryContext(ctx, `
 		WITH usage_session_ids AS (
 			SELECT m.session_id
@@ -535,9 +540,16 @@ func (db *DB) reportingUsageSessionsFrom(
 				AND s.started_at >= ?1 AND s.started_at <= ?2
 			UNION
 			SELECT ue.session_id
-			FROM usage_events ue
+			FROM usage_events ue INDEXED BY idx_usage_events_occurred_us
 			JOIN sessions s ON s.id = ue.session_id
 			WHERE`+usageEventEligibility+`
+				AND ue.occurred_at_us >= ?3 AND ue.occurred_at_us <= ?4
+			UNION
+			SELECT ue.session_id
+			FROM usage_events ue INDEXED BY idx_usage_events_occurred_unparsed
+			JOIN sessions s ON s.id = ue.session_id
+			WHERE`+usageEventEligibility+`
+				AND ue.occurred_at_us IS NULL
 				AND ue.occurred_at >= ?1 AND ue.occurred_at <= ?2
 			UNION
 			SELECT ue.session_id
@@ -562,6 +574,7 @@ func (db *DB) reportingUsageSessionsFrom(
 		WHERE s.id != '' AND s.id IN usage_session_ids
 		ORDER BY s.id`,
 		lowerBound, upperBound,
+		lowerTime.UTC().UnixMicro(), upperTime.UTC().UnixMicro(),
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf(

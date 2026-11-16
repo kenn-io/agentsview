@@ -82,7 +82,8 @@ func TestUsageDayTotalsOwnerLookupSeeksDates(t *testing.T) {
 			plan := strings.Join(explainQueryPlanDetails(t, rows), "\n")
 			dateSearch := "local_date>"
 			if bounds.from == "" {
-				dateSearch = "local_date<"
+				// End-only reads also bound the start to exclude undated usage.
+				dateSearch = "local_date>? AND local_date<?"
 			}
 			assert.Contains(t, plan, "SEARCH r USING COVERING INDEX usage_daily_rollups_window ("+dateSearch)
 			assert.Contains(t, plan, "SEARCH e USING COVERING INDEX usage_rollup_exceptions_window ("+dateSearch)

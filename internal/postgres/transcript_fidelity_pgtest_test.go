@@ -10,28 +10,24 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
 )
 
 // TestPGTranscriptFidelityRoundTripsAndRepushes verifies that the
 // transcript_fidelity column is pushed to PostgreSQL, read back correctly,
 // and that a change triggers a re-push via the IS DISTINCT FROM guard.
 func TestPGTranscriptFidelityRoundTripsAndRepushes(t *testing.T) {
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_transcript_fidelity_test"
+	t.Parallel()
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
-	dbtest.SeedPricingMeta(t, localDB)
 	defer localDB.Close()
 
 	sync := &Sync{

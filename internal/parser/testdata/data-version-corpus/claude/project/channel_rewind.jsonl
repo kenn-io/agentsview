@@ -1,0 +1,10 @@
+{"type":"user","uuid":"root","timestamp":"2026-10-22T19:00:00Z","message":{"content":"start"}}
+{"type":"user","uuid":"c0","parentUuid":"root","timestamp":"2026-10-22T19:01:00Z","isMeta":true,"origin":{"kind":"channel"},"message":{"content":"<channel source=\"telegram\">\nquestion 0\n</channel>"}}
+{"type":"assistant","uuid":"a0","parentUuid":"c0","timestamp":"2026-10-22T19:01:05Z","message":{"content":[{"type":"text","text":"answer 0"}]}}
+{"type":"user","uuid":"c1","parentUuid":"a0","timestamp":"2026-10-22T19:02:00Z","isMeta":true,"origin":{"kind":"channel"},"message":{"content":"<channel source=\"telegram\">\nquestion 1\n</channel>"}}
+{"type":"assistant","uuid":"a1","parentUuid":"c1","timestamp":"2026-10-22T19:02:05Z","message":{"content":[{"type":"text","text":"answer 1"}]}}
+{"type":"user","uuid":"c2","parentUuid":"a1","timestamp":"2026-10-22T19:03:00Z","isMeta":true,"origin":{"kind":"channel"},"message":{"content":"<channel source=\"telegram\">\nquestion 2\n</channel>"}}
+{"type":"assistant","uuid":"a2","parentUuid":"c2","timestamp":"2026-10-22T19:03:05Z","message":{"content":[{"type":"text","text":"answer 2"}]}}
+{"type":"user","uuid":"c3","parentUuid":"a2","timestamp":"2026-10-22T19:04:00Z","isMeta":true,"origin":{"kind":"channel"},"message":{"content":"<channel source=\"telegram\">\nquestion 3\n</channel>"}}
+{"type":"assistant","uuid":"a3","parentUuid":"c3","timestamp":"2026-10-22T19:04:05Z","message":{"content":[{"type":"text","text":"answer 3"}]}}
+{"type":"user","uuid":"retry","parentUuid":"root","timestamp":"2026-10-22T19:05:00Z","message":{"content":"try again"}}

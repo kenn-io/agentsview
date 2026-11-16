@@ -36,7 +36,7 @@
         {#if result.kind === "group"}
           <div class="result-group">
             <span>{result.group.message.role === "user" ? m.message_content_role_user() : m.message_content_role_assistant()}</span>
-            <time>{formatTimestamp(result.group.message.timestamp)}</time>
+            <time>{formatTimestamp(result.group.message.timestamp, ui.alwaysShowYear)}</time>
             <span class="result-count">{m.session_find_results_group_count({ count: result.group.count })}</span>
           </div>
         {:else}

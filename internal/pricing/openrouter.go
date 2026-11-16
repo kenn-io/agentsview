@@ -10,9 +10,8 @@ import (
 	"go.kenn.io/agentsview/internal/pricing/catalog"
 )
 
-// OpenRouterModelsMetaKey names the model_pricing sentinel row whose
-// updated_at holds the JSON list of patterns OpenRouter contributed to the
-// stored catalog. Refreshes use it to retire those rows once LiteLLM lists
+// OpenRouterModelsMetaKey names the pricing_meta entry that holds the JSON
+// list of patterns OpenRouter contributed to the stored catalog. Refreshes use it to retire those rows once LiteLLM lists
 // the same model, and push targets use it to mirror that retirement.
 const OpenRouterModelsMetaKey = "_openrouter_models"
 
@@ -188,7 +187,7 @@ func ShadowedPatterns(catalog, candidates []string) []string {
 	return shadowed
 }
 
-// EncodeOpenRouterModels renders an ownership list as the sentinel value.
+// EncodeOpenRouterModels renders an ownership list as the stored value.
 func EncodeOpenRouterModels(patterns []string) string {
 	if patterns == nil {
 		patterns = []string{}
@@ -197,7 +196,7 @@ func EncodeOpenRouterModels(patterns []string) string {
 	return string(encoded)
 }
 
-// DecodeOpenRouterModels parses a sentinel value written by
+// DecodeOpenRouterModels parses a value written by
 // EncodeOpenRouterModels. An empty value decodes to no patterns.
 func DecodeOpenRouterModels(value string) ([]string, error) {
 	if value == "" {

@@ -1,12 +1,8 @@
 package clickhouse
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
-	"encoding/gob"
-	"errors"
-	"io"
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -17,45 +13,8 @@ const (
 	topUsageDiskVersion = "usage-top-2|"
 )
 
-func encodeUsageRows[T any](rows []T, limit int64, size func(T) int64) ([]byte, error) {
-	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
-	if err := enc.Encode(len(rows)); err != nil {
-		return nil, err
-	}
-	var total int64
-	for _, row := range rows {
-		total += size(row)
-		if total > limit {
-			return nil, errors.New("usage selection exceeds limit")
-		}
-		if err := enc.Encode(row); err != nil {
-			return nil, err
-		}
-	}
-	return buf.Bytes(), nil
-}
-
-func decodeUsageRows[T any](data []byte) ([]T, bool) {
-	dec := gob.NewDecoder(bytes.NewReader(data))
-	var count int
-	if err := dec.Decode(&count); err != nil || count < 0 {
-		return nil, false
-	}
-	rows := []T{}
-	for range count {
-		var row T
-		if err := dec.Decode(&row); err != nil {
-			return nil, false
-		}
-		rows = append(rows, row)
-	}
-	var extra T
-	return rows, errors.Is(dec.Decode(&extra), io.EOF)
-}
-
 // usageCaptureStable validates a fill against the parts captured for its request.
-func (s *Store) usageCaptureStable(ctx context.Context) bool {
+func (s *Store) usageCaptureStable(ctx context.Context, tables ...string) bool {
 	before, ok := ctx.Value(partsSnapshotKey{}).(partsSnapshot)
 	if !ok || ctx.Err() != nil {
 		return false
@@ -64,7 +23,10 @@ func (s *Store) usageCaptureStable(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
-	for _, table := range append(append([]string{}, chUsageReadTables...), "prepared_usage", "usage_price_models") {
+	if len(tables) == 0 {
+		tables = append(append([]string{}, chUsageReadTables...), "prepared_usage", "usage_price_models")
+	}
+	for _, table := range tables {
 		if before[table].digest != after[table].digest {
 			return false
 		}

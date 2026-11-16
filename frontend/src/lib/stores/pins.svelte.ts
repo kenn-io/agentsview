@@ -1,12 +1,15 @@
 import type { DbPinnedMessage as PinnedMessage } from "../api/generated/index.js";
 import { PinsService } from "../api/generated/index";
 import { isAbortError } from "../api/runtime.js";
+import { failureMessage } from "../utils/failure.js";
 import { LatestRead } from "../utils/latest-read.js";
 
 class PinsStore {
   /** All pins across all sessions (loaded for pinned tab). */
   pins: PinnedMessage[] = $state([]);
   loading: boolean = $state(false);
+  /** Why the last all-pins load failed; null after a load succeeds. */
+  error: string | null = $state(null);
 
   /** Message IDs that are pinned in the currently viewed session. */
   sessionPinIds: Set<number> = $state(new Set());
@@ -46,10 +49,11 @@ class PinsStore {
       ) {
         this.pins = res.pins;
         this.#loadedProject = project;
+        this.error = null;
       }
     } catch (e) {
       if (isAbortError(e) || !this.#allPinsRead.isCurrent(signal)) return;
-      // Silently ignore — pins are non-critical.
+      if (this.#loadAllVersion === loadVer) this.error = failureMessage(e);
     } finally {
       if (this.#allPinsRead.finish(signal)) {
         this.loading = false;

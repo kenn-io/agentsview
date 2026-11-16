@@ -8,6 +8,7 @@ import type {
   UsageSummaryResponse,
 } from "../api/generated/index";
 import { testMoney } from "../test/money.js";
+import { buildUsageUrlParams } from "./usageUrl.js";
 
 const usageServiceMocks = vi.hoisted(() => {
   const money = (dollars: number) => ({
@@ -1020,7 +1021,8 @@ describe("UsageStore session filter params", () => {
         expect(usage.loading.pairwise).toBe(false);
         expect(usage.querying.pairwise).toBe(false);
         expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(1);
-        expect(usage.errors.pairwise).toBeNull();
+        // A failed refresh keeps the earlier comparison and reports the failure.
+        expect(usage.errors.pairwise).toBe(outcome === "failure" ? "comparison failed" : null);
         expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison());
         if (outcome !== "aborted first load") expect(usage.summary).not.toBeNull();
       } finally {
@@ -2537,202 +2539,6 @@ describe("UsageStore time-series range selection", () => {
   });
 });
 
-describe("buildUsageUrlParams", () => {
-  it("omits from/to when isPinned is false with default window, includes header filters", async () => {
-    const { buildUsageUrlParams } = await loadStore();
-    const params = buildUsageUrlParams({
-      from: "2026-03-26",
-      to: "2026-04-25",
-      isPinned: false,
-      windowDays: 30,
-      excludedProjects: "p1",
-      excludedProjectKeys: "pk1",
-      excludedAgents: "a1",
-      excludedModels: "m1",
-    });
-    expect(params).toEqual({
-      exclude_project: "p1",
-      exclude_agent: "a1",
-      exclude_model: "m1",
-    });
-  });
-
-  it("includes from/to when isPinned is true", async () => {
-    const { buildUsageUrlParams } = await loadStore();
-    const params = buildUsageUrlParams({
-      from: "2026-01-01",
-      to: "2026-01-15",
-      isPinned: true,
-      windowDays: 30,
-      excludedProjects: "",
-      excludedProjectKeys: "",
-      excludedAgents: "",
-      excludedModels: "",
-    });
-    expect(params).toEqual({
-      from: "2026-01-01",
-      to: "2026-01-15",
-    });
-  });
-
-  it("returns empty object when nothing is set", async () => {
-    const { buildUsageUrlParams } = await loadStore();
-    const params = buildUsageUrlParams({
-      from: "",
-      to: "",
-      isPinned: false,
-      windowDays: 30,
-      excludedProjects: "",
-      excludedProjectKeys: "",
-      excludedAgents: "",
-      excludedModels: "",
-    });
-    expect(params).toEqual({});
-  });
-
-  it("omits empty from/to even when pinned", async () => {
-    const { buildUsageUrlParams } = await loadStore();
-    const params = buildUsageUrlParams({
-      from: "",
-      to: "",
-      isPinned: true,
-      windowDays: 30,
-      excludedProjects: "",
-      excludedProjectKeys: "",
-      excludedAgents: "",
-      excludedModels: "",
-    });
-    expect(params).toEqual({});
-  });
-
-  it("emits window_days for unpinned non-default windows", async () => {
-    const { buildUsageUrlParams } = await loadStore();
-    const params = buildUsageUrlParams({
-      from: "2026-04-19",
-      to: "2026-04-25",
-      isPinned: false,
-      windowDays: 7,
-      excludedProjects: "",
-      excludedProjectKeys: "",
-      excludedAgents: "",
-      excludedModels: "",
-    });
-    expect(params).toEqual({ window_days: "7" });
-  });
-
-  it("omits window_days when isPinned is true", async () => {
-    const { buildUsageUrlParams } = await loadStore();
-    const params = buildUsageUrlParams({
-      from: "2026-01-01",
-      to: "2026-01-15",
-      isPinned: true,
-      windowDays: 7,
-      excludedProjects: "",
-      excludedProjectKeys: "",
-      excludedAgents: "",
-      excludedModels: "",
-    });
-    expect(params).toEqual({
-      from: "2026-01-01",
-      to: "2026-01-15",
-    });
-  });
-});
-
-describe("mergeUsageAndSessionUrlParams", () => {
-  it("merges overlapping CSV params instead of overwriting usage filters", async () => {
-    const { mergeUsageAndSessionUrlParams } = await loadStore();
-
-    expect(
-      mergeUsageAndSessionUrlParams(
-        {
-          exclude_project: "alpha,beta",
-          model: "gpt-5.5",
-        },
-        {
-          exclude_project: "unknown,beta",
-          machine: "host-a",
-        },
-      ),
-    ).toEqual({
-      exclude_project: "alpha,beta,unknown",
-      model: "gpt-5.5",
-      machine: "host-a",
-    });
-  });
-
-  it("omits hidden session date params from usage URLs", async () => {
-    const { mergeUsageAndSessionUrlParams } = await loadStore();
-
-    expect(
-      mergeUsageAndSessionUrlParams(
-        {
-          from: "2026-02-01",
-          to: "2026-02-07",
-        },
-        {
-          date: "2026-01-15",
-          date_from: "2026-01-01",
-          date_to: "2026-01-31",
-          project: "agentsview",
-        },
-      ),
-    ).toEqual({
-      from: "2026-02-01",
-      to: "2026-02-07",
-      project: "agentsview",
-    });
-  });
-
-  it("preserves supported termination params in usage URLs", async () => {
-    const { mergeUsageAndSessionUrlParams } = await loadStore();
-
-    expect(
-      mergeUsageAndSessionUrlParams(
-        {
-          from: "2026-02-01",
-          to: "2026-02-07",
-        },
-        {
-          termination: "unclean",
-          project: "agentsview",
-        },
-      ),
-    ).toEqual({
-      from: "2026-02-01",
-      to: "2026-02-07",
-      termination: "unclean",
-      project: "agentsview",
-    });
-  });
-});
-
-describe("parseWindowDays", () => {
-  it("returns the parsed integer for valid positive integers", async () => {
-    const { parseWindowDays } = await loadStore();
-    expect(parseWindowDays("7")).toBe(7);
-    expect(parseWindowDays("365")).toBe(365);
-  });
-
-  it("rejects non-positive, non-integer, and malformed values", async () => {
-    const { parseWindowDays } = await loadStore();
-    expect(parseWindowDays(undefined)).toBeNull();
-    expect(parseWindowDays("")).toBeNull();
-    expect(parseWindowDays("0")).toBeNull();
-    expect(parseWindowDays("-7")).toBeNull();
-    expect(parseWindowDays("7.5")).toBeNull();
-    expect(parseWindowDays("7d")).toBeNull();
-    expect(parseWindowDays("abc")).toBeNull();
-  });
-
-  it("accepts values up to the 100-year cap and rejects beyond", async () => {
-    const { parseWindowDays } = await loadStore();
-    expect(parseWindowDays("36500")).toBe(36500);
-    expect(parseWindowDays("36501")).toBeNull();
-    expect(parseWindowDays("1000000000")).toBeNull();
-  });
-});
-
 describe("UsageStore attribution focus", () => {
   beforeEach(() => {
     installStorage();
@@ -2848,7 +2654,7 @@ describe("UsageStore attribution focus", () => {
 
   it("keeps model selection in memory while saving exclusions", async () => {
     localStorage.setItem("usage-filters", JSON.stringify({ selectedModel: "old-model" }));
-    const { usage, buildUsageUrlParams } = await loadStore();
+    const { usage } = await loadStore();
     expect(usage.selectedModel).toBe("");
     usage.toggleSelection("model", "gpt-4o");
     usage.excludedModels = "hidden-model";
@@ -3194,7 +3000,7 @@ describe("UsageStore project zoom", () => {
   });
 
   it.each(["a metric change", "a same-range refresh", "a cancelled read"])(
-    "keeps zoom rows through %s",
+    "keeps zoom rows through a failed refetch after %s",
     async (event) => {
       const { usage } = await loadStore();
       usageServiceMocks.getUsageZoom.mockResolvedValueOnce([group(1)]);
@@ -3208,7 +3014,6 @@ describe("UsageStore project zoom", () => {
             reject = r;
           }),
       );
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       const refreshed =
         event === "a metric change"
           ? Promise.resolve(usage.setMode("token"))
@@ -3224,11 +3029,9 @@ describe("UsageStore project zoom", () => {
       await refreshed;
       await vi.waitFor(() => expect(usage.querying.zoom).toBe(false));
       expect(usage.zoomRows).toEqual([group(1)]);
-      expect(usage.errors.zoom).toBeNull();
-      if (event === "a cancelled read") expect(warn).not.toHaveBeenCalled();
-      else
-        expect(warn).toHaveBeenCalledWith("usage.zoom refetch failed:", new Error("zoom failed"));
-      warn.mockRestore();
+      // A failed refetch keeps the rows and reports the failure; a cancelled
+      // read reports nothing.
+      expect(usage.errors.zoom).toBe(event === "a cancelled read" ? null : "zoom failed");
       usage.cancelInFlightReads();
     },
   );
@@ -3273,14 +3076,12 @@ describe("UsageStore project zoom", () => {
 
     now.mockReturnValue(Date.parse("2026-10-08T12:05:00Z"));
     usageServiceMocks.getUsageZoom.mockRejectedValueOnce(new Error("zoom failed"));
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     await usage.fetchAll({ preserveTimeRange: true });
     expect(usageServiceMocks.getUsageZoom.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({ active_since: "2026-10-07T12:05:00.000Z" }),
     );
     expect(usage.zoomRows).toEqual([group(2)]);
-    expect(usage.errors.zoom).toBeNull();
-    warn.mockRestore();
+    expect(usage.errors.zoom).toBe("zoom failed");
     now.mockRestore();
   });
 

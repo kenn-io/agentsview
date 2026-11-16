@@ -12,6 +12,7 @@ import (
 )
 
 func TestHostedRuntimeIdleAndMaintenanceQueriesStayBounded(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "current", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("indexed")))

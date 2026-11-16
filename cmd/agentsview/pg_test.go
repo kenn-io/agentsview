@@ -635,3 +635,18 @@ func TestPGPushProgressPrinterKeepsCompletedStages(t *testing.T) {
 			"line %d must end with an elapsed suffix", i)
 	}
 }
+
+func TestWriteReplicaPushSummaryReportsPartialRewrites(t *testing.T) {
+	var out bytes.Buffer
+
+	writeReplicaPushSummary(&out, "ClickHouse", storage.PushResult{
+		SessionsPushed:  5,
+		SessionRowsOnly: 3,
+		CommitLinksOnly: 4,
+		Duration:        time.Second,
+	})
+
+	assert.Contains(t, out.String(),
+		"Rewrote only the session row of 3 pushed session(s) whose messages were unchanged")
+	assert.Contains(t, out.String(), "Rewrote only the commit links of 4 session(s)")
+}

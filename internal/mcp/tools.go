@@ -261,6 +261,48 @@ func (t *toolset) queryRecall(
 	}, nil
 }
 
+type listRecallIn struct {
+	UpdatedSince    string `json:"updated_since,omitempty" jsonschema:"Include entries updated at or after this RFC3339 timestamp."`
+	CreatedSince    string `json:"created_since,omitempty" jsonschema:"Include entries created at or after this RFC3339 timestamp."`
+	Project         string `json:"project,omitempty"`
+	CWD             string `json:"cwd,omitempty"`
+	GitBranch       string `json:"git_branch,omitempty"`
+	Agent           string `json:"agent,omitempty"`
+	Type            string `json:"type,omitempty"`
+	Scope           string `json:"scope,omitempty"`
+	Status          string `json:"status,omitempty"`
+	ExtractorMethod string `json:"extractor_method,omitempty"`
+	SourceSessionID string `json:"source_session_id,omitempty"`
+	SourceRunID     string `json:"source_run_id,omitempty"`
+	TrustedOnly     bool   `json:"trusted_only,omitempty"`
+	Cursor          string `json:"cursor,omitempty" jsonschema:"Cursor from a previous next_cursor."`
+	Limit           int    `json:"limit,omitempty" jsonschema:"Max results, default 20, max 100."`
+}
+
+type listRecallOut struct {
+	Entries     []db.RecallEntry `json:"entries"`
+	TrustedOnly bool             `json:"trusted_only"`
+	NextCursor  string           `json:"next_cursor,omitempty"`
+}
+
+func (t *toolset) listRecall(ctx context.Context, _ *mcp.CallToolRequest, in listRecallIn) (*mcp.CallToolResult, listRecallOut, error) {
+	result, err := t.svc.ListRecallEntries(ctx, service.RecallFilter{
+		UpdatedSince: in.UpdatedSince, CreatedSince: in.CreatedSince, Project: in.Project,
+		CWD: in.CWD, GitBranch: in.GitBranch, Agent: in.Agent, Type: in.Type,
+		Scope: in.Scope, Status: in.Status, ExtractorMethod: in.ExtractorMethod,
+		SourceSessionID: in.SourceSessionID, SourceRunID: in.SourceRunID, TrustedOnly: in.TrustedOnly, Cursor: in.Cursor,
+		Limit: clampLimit(in.Limit, defaultListLimit, maxListLimit),
+	})
+	if err != nil {
+		return nil, listRecallOut{}, err
+	}
+	entries := make([]db.RecallEntry, 0, len(result.RecallEntries))
+	for _, entry := range result.RecallEntries {
+		entries = append(entries, entry.RecallEntry)
+	}
+	return nil, listRecallOut{Entries: entries, TrustedOnly: result.TrustedOnly, NextCursor: result.NextCursor}, nil
+}
+
 // --- list_sessions ---
 
 type listSessionsIn struct {
@@ -732,7 +774,7 @@ func (t *toolset) getMessageBodyContinuation(
 // --- search_content ---
 
 type searchContentIn struct {
-	Pattern          string   `json:"pattern,omitempty" jsonschema:"Natural-language query for semantic/hybrid, whitespace-separated literals for terms, or exact substring/regex for lexical search across message text, thinking, and tool inputs/results. Mutually exclusive with concepts."`
+	Pattern          string   `json:"pattern,omitempty" jsonschema:"Natural-language query for semantic/hybrid, whitespace-separated literals for terms, or substring/regex for lexical search across message text, thinking, and tool inputs/results. A fully quoted substring pattern matches only its text. Mutually exclusive with concepts."`
 	Concepts         []string `json:"concepts,omitempty" jsonschema:"Two to five semantic concepts that must all have evidence in the same session, even in different messages. Implies mode semantic, does not page, and is mutually exclusive with pattern."`
 	Mode             string   `json:"mode,omitempty" jsonschema:"substring (default), regex, terms, semantic, or hybrid. Prefer hybrid for contextual questions. Hybrid returns keyword matches with a note when search by meaning is unavailable; semantic requires a ready index."`
 	Scope            string   `json:"scope,omitempty" jsonschema:"Substring/regex/terms/semantic/hybrid result scope: top, all (default), or subordinate."`
@@ -784,6 +826,7 @@ type contentMatch struct {
 	Ordinal         int      `json:"ordinal"`
 	Timestamp       string   `json:"timestamp"`
 	Snippet         string   `json:"snippet"`
+	MatchedWords    int      `json:"matched_words" jsonschema:"Number of retained query words the match holds in ranked word search; unquoted stop words are dropped. Zero for other searches."`
 	Score           *float64 `json:"score,omitempty" jsonschema:"Relevance score for semantic/hybrid modes; omitted for substring/regex/fts."`
 	OrdinalRange    [2]int   `json:"ordinal_range" jsonschema:"[start, end] ordinals of the conversation unit containing this match; equal to the match ordinal for single-message units."`
 	Subordinate     bool     `json:"subordinate,omitzero" jsonschema:"True when this match belongs to a subordinate unit: a sidechain run, or a subagent/fork session."`
@@ -966,6 +1009,7 @@ func (t *toolset) searchContent(
 			WebURL: m.WebURL, SessionID: m.SessionID, Project: m.Project, Agent: m.Agent,
 			Location: m.Location, Role: m.Role, Ordinal: m.Ordinal,
 			Timestamp: m.Timestamp, Snippet: m.Snippet, Score: m.Score,
+			MatchedWords: m.MatchedWords,
 			OrdinalRange: m.OrdinalRange, Subordinate: m.Subordinate,
 			Relationship: m.Relationship, ParentSessionID: m.ParentSessionID,
 			Sidechain:          m.Sidechain,
@@ -1020,4 +1064,23 @@ type fileReferencesIn struct {
 func (t *toolset) fileReferences(ctx context.Context, _ *mcp.CallToolRequest, in fileReferencesIn) (*mcp.CallToolResult, service.FileReferencesResult, error) {
 	result, err := service.FileReferences(ctx, t.svc, in.SessionID)
 	return nil, result, err
+}
+
+type compactionSummariesIn struct {
+	SessionID   string `json:"session_id,omitempty" jsonschema:"Session ID."`
+	ActiveSince string `json:"active_since,omitempty" jsonschema:"RFC3339 timestamp."`
+	Cursor      string `json:"cursor,omitempty" jsonschema:"Session cursor; resume with the same active_since."`
+	Limit       uint   `json:"limit,omitempty" jsonschema:"Sessions per page; 0 uses the default 20, max 100."`
+}
+
+func (t *toolset) compactionSummaries(ctx context.Context, _ *mcp.CallToolRequest, in compactionSummariesIn) (*mcp.CallToolResult, service.CompactionSummariesResult, error) {
+	if in.SessionID != "" && in.ActiveSince == "" {
+		detail, err := t.resolveSession(ctx, in.SessionID)
+		if err != nil {
+			return nil, service.CompactionSummariesResult{}, err
+		}
+		in.SessionID = detail.ID
+	}
+	out, err := service.CompactionSummaries(ctx, t.svc, service.CompactionSummariesRequest{SessionID: in.SessionID, ActiveSince: in.ActiveSince, Cursor: in.Cursor, Limit: int(min(in.Limit, service.MaxCompactionSessionLimit))})
+	return nil, out, err
 }

@@ -351,6 +351,20 @@ describe("CostTimeSeriesChart", () => {
     unmount(component);
   });
 
+  it("leaves the empty state to a loaded summary when the summary read failed", async () => {
+    usage.summary = null;
+    usage.errors.summary = "summary failed";
+    try {
+      const component = mountChart();
+      await tick();
+
+      expect(document.body.textContent).not.toContain("No data for this period");
+      unmount(component);
+    } finally {
+      usage.errors.summary = null;
+    }
+  });
+
   it("marks a selected range and exposes a clear-selection action", async () => {
     const component = mountChart();
     await tick();

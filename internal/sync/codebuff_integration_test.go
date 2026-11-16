@@ -515,8 +515,8 @@ func TestSyncCodebuffMetaOnlySessionKeepsCounts(t *testing.T) {
 
 // TestSyncCodebuffMetaOnlyDriftReparsesSession pins the roborev LOW
 // carryover at internal/parser/codebuff_provider.go:194 and the matching
-// freshness gate in internal/sync/engine.go around line 12253: a future
-// regression that drops chat-meta.json from the composite stat would
+// freshness gate in processProviderFile (internal/sync/engine_process_file.go): a
+// future regression that drops chat-meta.json from the composite stat would
 // silently orphan rows whose only on-disk change is a meta touch. The
 // stat-only freshness gate must observe the meta-only mtime bump and
 // reparse exactly one session while leaving the other five unchanged.
@@ -565,7 +565,7 @@ func TestSyncCodebuffMetaOnlyDriftReparsesSession(t *testing.T) {
 
 // TestSyncCodebuffRunStateOnlyDriftReparsesSession pins the run-state.json
 // leg of the freshness composite trio at internal/parser/codebuff_provider.go:196
-// and engine.go around line 12260: a future regression that drops
+// and processProviderFile in engine_process_file.go: a future regression that drops
 // run-state.json from the composite stat would silently orphan rows whose
 // only on-disk change is a run-state touch (e.g. when the upstream agent
 // accumulates credits without appending to chat-messages.json). The

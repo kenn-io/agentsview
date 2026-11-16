@@ -90,6 +90,7 @@ export const ALL_BLOCK_TYPES: BlockType[] = [
 
 const BLOCK_FILTER_KEY = "agentsview-block-filters";
 const TRANSCRIPT_MODE_KEY = "agentsview-transcript-mode";
+const ALWAYS_SHOW_YEAR_KEY = "agentsview-always-show-year";
 const UNKNOWN_XML_PREFORMATTED_KEY = "agentsview-unknown-xml-preformatted";
 const VITALS_KEY = "agentsview-session-vitals";
 const VITALS_CALLS_EXPANDED_KEY = "agentsview-session-vitals-calls-expanded";
@@ -329,6 +330,7 @@ class UIStore {
 
   private localZoomLevel = readStoredZoom();
   zoomLevel: ZoomLevel = $state(this.localZoomLevel ?? ZOOM_DEFAULT);
+  alwaysShowYear: boolean = $state(readStoredBool(ALWAYS_SHOW_YEAR_KEY, false));
   renderUnknownXmlBlocksAsPreformatted: boolean = $state(
     readStoredBool(UNKNOWN_XML_PREFORMATTED_KEY, false),
   );
@@ -433,6 +435,14 @@ class UIStore {
           );
         } else {
           setCssZoom(factor);
+        }
+      });
+
+      $effect(() => {
+        try {
+          localStorage?.setItem(ALWAYS_SHOW_YEAR_KEY, String(this.alwaysShowYear));
+        } catch {
+          // ignore
         }
       });
 
@@ -588,6 +598,10 @@ class UIStore {
 
   setTranscriptMode(mode: TranscriptMode) {
     this.transcriptMode = mode;
+  }
+
+  toggleAlwaysShowYear() {
+    this.alwaysShowYear = !this.alwaysShowYear;
   }
 
   toggleUnknownXmlBlocksAsPreformatted() {

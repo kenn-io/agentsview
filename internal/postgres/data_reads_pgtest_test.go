@@ -22,7 +22,8 @@ import (
 // depth; this test's job is narrower: prove all three methods are reachable
 // through db.Store on a store built the way the HTTP server builds it.
 func TestPGDataReadsThroughStoreInterface(t *testing.T) {
-	const schema = "agentsview_data_reads_test"
+	t.Parallel()
+	const schema = pgPushTestSchema
 	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 
 	// seedPGCandidateSessionNoSnapshot (worktree_candidates_pgtest_test.go)

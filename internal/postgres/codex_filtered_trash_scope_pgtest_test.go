@@ -12,6 +12,7 @@ import (
 )
 
 func TestCodexFilteredPageRestoreSyncsExcludedAnchorScope(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		opts storage.PusherOptions
@@ -76,6 +77,7 @@ func TestCodexFilteredPageRestoreSyncsExcludedAnchorScope(t *testing.T) {
 }
 
 func TestCodexFilteredPageRestorePreservesRemoteThreadTrash(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, initial, store := newCodexTrashMirror(t)
 	_, err := store.RestoreSession(ctx, codexTrashThread)
@@ -121,6 +123,7 @@ func TestCodexFilteredPageRestorePreservesRemoteThreadTrash(t *testing.T) {
 }
 
 func TestCodexFilteredScopeSyncRespectsArchiveOwnership(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	_, initial, store := newCodexTrashMirror(t)
 	other := testDB(t)

@@ -103,7 +103,25 @@ App-level glue that remains local:
   whole page or a panel under its header, so the state sits the same fixed
   step below the header on every page. Keep `StateNotice` for framed notes
   that sit above content that still renders (read-only mode, date-filter
-  scope), and the alert card for failed loads.
+  scope).
+- Every page and panel that loads data uses one state order, built from
+  shared pieces in `frontend/src/lib/components/shared/`:
+  1. Failed with nothing loaded: `LoadError`, a kit-ui error `Notice` with
+     the failure detail, Retry, and optional error telemetry. It replaces
+     the content.
+  1. Loading with nothing loaded: `LoadingState`, a kit-ui `EmptyState`
+     with a `Spinner`. Pages with a skeleton in the loaded layout (Activity,
+     Quality) keep the skeleton.
+  1. Loaded with no rows: kit-ui `EmptyState`.
+  1. Loaded: the content. When a refresh or next page fails, keep the
+     content and put `LoadError` above it, or where the next page would go,
+     until a load succeeds. Never fall through to the empty state on a
+     failure.
+- Stores keep the failure as a string (`error`, `loadError`, `errors.*`)
+  and use `utils/failure.ts` for the message. Dashboard panels get the same
+  order through `analytics/PanelStatus.svelte`. A failed action (restore,
+  delete) goes to the error flash banner (`showFlash` with `tone:
+  "danger"`), not `LoadError`.
 - `frontend/src/lib/components/content/SessionFindBar.svelte` wires kit-ui
   `FindBar` to the in-session search store.
 - kit-ui `SettingsLayout` owns grouped settings navigation and scroll behavior;

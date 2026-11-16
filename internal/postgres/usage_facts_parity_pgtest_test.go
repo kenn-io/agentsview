@@ -84,10 +84,9 @@ type usageParityAgentBreakdown struct {
 }
 
 func TestSQLiteFactsAndPostgresLiveUsageParity(t *testing.T) {
-	const schema = "agentsview_usage_facts_parity_test"
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	t.Parallel()
+	const schema = usageTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 
 	local := testDB(t)
 	seedUsageParityFixture(t, local)
@@ -178,10 +177,9 @@ func TestSQLiteFactsAndPostgresLiveUsageParity(t *testing.T) {
 }
 
 func TestUsageCSVFiltersParity(t *testing.T) {
-	const schema = "agentsview_usage_csv_test"
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	t.Parallel()
+	const schema = usageTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	local := testDB(t)
 	seedUsageParityFixture(t, local)
 	syncer, err := New(t.Context(), pgURL, schema, local, "host-a", true, storage.PusherOptions{})
@@ -221,10 +219,9 @@ func TestUsageCSVFiltersParity(t *testing.T) {
 }
 
 func TestPGUsageFractionalMicrodollarRoundingParity(t *testing.T) {
-	const schema = "agentsview_usage_fractional_rounding_test"
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	t.Parallel()
+	const schema = usageTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 
 	local := testDB(t)
 	seedUsageParityFixture(t, local)
@@ -294,11 +291,11 @@ func requireCompleteUsageParity(
 	t testing.TB, local, remote db.Store, filter db.UsageFilter,
 ) {
 	t.Helper()
-	require.NoError(t, completeUsageParity(t.Context(), local, remote, filter))
+	require.NoError(t, completeUsageParity(t.Context(), local, remote, filter, "snapshot-winner", true))
 }
 
 func completeUsageParity(
-	ctx context.Context, local, remote db.Store, filter db.UsageFilter,
+	ctx context.Context, local, remote usageAggregateReader, filter db.UsageFilter, sessionID string, crossBackend bool,
 ) error {
 	localDaily, err := local.GetDailyUsage(ctx, filter)
 	if err != nil {
@@ -308,18 +305,27 @@ func completeUsageParity(
 	if err != nil {
 		return fmt.Errorf("remote GetDailyUsage: %w", err)
 	}
-	// Compare public results; Pairwise holds backend-specific read metadata.
+	// Pairwise ranking metadata is private to each backend; compare its public
+	// result through the service instead.
 	localDaily.Pairwise, remoteDaily.Pairwise = nil, nil
 	if !reflect.DeepEqual(localDaily, remoteDaily) {
 		return fmt.Errorf("complete daily result differs")
 	}
-	localTop, err := local.GetTopSessionsByCost(ctx, filter, 10)
+	limit := 20
+	if crossBackend {
+		limit = 10
+	}
+	localTop, err := local.GetTopSessionsByCost(ctx, filter, limit)
 	if err != nil {
 		return fmt.Errorf("local GetTopSessionsByCost: %w", err)
 	}
-	remoteTop, err := remote.GetTopSessionsByCost(ctx, filter, 10)
+	remoteTop, err := remote.GetTopSessionsByCost(ctx, filter, limit)
 	if err != nil {
 		return fmt.Errorf("remote GetTopSessionsByCost: %w", err)
+	}
+	if !crossBackend {
+		normalizeUsageTopTimes(localTop)
+		normalizeUsageTopTimes(remoteTop)
 	}
 	if !reflect.DeepEqual(localTop, remoteTop) {
 		return fmt.Errorf("complete top-session result differs")
@@ -346,11 +352,14 @@ func completeUsageParity(
 	if localMatching != remoteMatching {
 		return fmt.Errorf("complete matching-session-count result differs")
 	}
-	localSession, err := local.GetSessionUsage(ctx, "snapshot-winner", filter.Breakdowns)
+	if sessionID == "" {
+		return nil
+	}
+	localSession, err := local.(db.Store).GetSessionUsage(ctx, sessionID, filter.Breakdowns)
 	if err != nil {
 		return fmt.Errorf("local GetSessionUsage: %w", err)
 	}
-	remoteSession, err := remote.GetSessionUsage(ctx, "snapshot-winner", filter.Breakdowns)
+	remoteSession, err := remote.(db.Store).GetSessionUsage(ctx, sessionID, filter.Breakdowns)
 	if err != nil {
 		return fmt.Errorf("remote GetSessionUsage: %w", err)
 	}
@@ -564,10 +573,9 @@ func captureUsageParitySession(
 // messages, messages that fall back to the session start, and usage events.
 // A day before a skipped local midnight keeps its last hour.
 func TestUsageMatchingSessionCountLocalDayParity(t *testing.T) {
-	const schema = "agentsview_usage_matching_day_test"
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	t.Parallel()
+	const schema = usageTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 
 	local := testDB(t)
 	message := func(sessionID, ts string) db.Message {

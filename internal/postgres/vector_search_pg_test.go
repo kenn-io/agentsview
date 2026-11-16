@@ -30,18 +30,25 @@ func fixedEncoder(vec []float32) storage.VectorQueryEncoder {
 	return func(context.Context, string) ([]float32, error) { return vec, nil }
 }
 
+// vectorSearchTestSchema is the schema newVectorSearchTestPG searches.
+const vectorSearchTestSchema = "agentsview_vector_search_test"
+
 // newVectorSearchTestPG drops and recreates the schema with the base vector
 // tables and skips when pgvector is unavailable.
-func newVectorSearchTestPG(t *testing.T, pgURL, schema string) *sql.DB {
+func newVectorSearchTestPG(t *testing.T) *sql.DB {
 	t.Helper()
+	const schema = vectorSearchTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	t.Cleanup(func() { _ = pg.Close() })
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
-	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+	if !takeFreshSchemaCopy(t, pgURL, schema) {
+		_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
+		require.NoError(t, err, "drop schema")
+		require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+	}
 
 	unavailable, err := ensureVectorBaseSchemaPG(ctx, pg)
 	require.NoError(t, err, "ensureVectorBaseSchemaPG")
@@ -133,8 +140,8 @@ var (
 )
 
 func TestPGVectorSearcher(t *testing.T) {
-	pgURL := testPGURL(t)
-	pg := newVectorSearchTestPG(t, pgURL, "agentsview_vector_search_test")
+	t.Parallel()
+	pg := newVectorSearchTestPG(t)
 	ctx := t.Context()
 
 	genID, _ := seedVectorSearchFixture(t, pg)
@@ -275,8 +282,8 @@ func TestPGVectorSearcher(t *testing.T) {
 // than k chunks would surface the outside-k doc, so this guards the LIMIT k
 // candidate pool that keeps PG parity with the local sqlite-vec searcher.
 func TestPGVectorSearcherExactK(t *testing.T) {
-	pgURL := testPGURL(t)
-	pg := newVectorSearchTestPG(t, pgURL, "agentsview_vector_search_exactk_test")
+	t.Parallel()
+	pg := newVectorSearchTestPG(t)
 	ctx := t.Context()
 
 	genID, err := ensureVectorGeneration(ctx, pg, "fp-exactk", "m", 4)
@@ -309,8 +316,8 @@ func TestPGVectorSearcherExactK(t *testing.T) {
 // k inside the query transaction; without that the KNN silently caps the pool
 // below k, diverging from the local backend's exact scan.
 func TestPGVectorSearcherEfSearchRecall(t *testing.T) {
-	pgURL := testPGURL(t)
-	pg := newVectorSearchTestPG(t, pgURL, "agentsview_vector_search_efsearch_test")
+	t.Parallel()
+	pg := newVectorSearchTestPG(t)
 	ctx := t.Context()
 
 	genID, err := ensureVectorGeneration(ctx, pg, "fp-efsearch", "m", 4)
@@ -345,8 +352,8 @@ func TestPGVectorSearcherEfSearchRecall(t *testing.T) {
 // rows remain, so the page must not report the index exhausted. The table is
 // large enough that the planner scans the index instead of sorting rows.
 func TestPGVectorSearcherCappedScanIsNotExhausted(t *testing.T) {
-	pgURL := testPGURL(t)
-	pg := newVectorSearchTestPG(t, pgURL, "agentsview_vector_search_capped_test")
+	t.Parallel()
+	pg := newVectorSearchTestPG(t)
 	ctx := t.Context()
 
 	genID, err := ensureVectorGeneration(ctx, pg, "fp-capped", "m", 4)

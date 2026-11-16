@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"sync"
 
@@ -37,6 +38,25 @@ type liveVectorServing struct {
 
 func newLiveVectorServing(ctx context.Context, cfg config.Config, database *db.DB, idle *server.IdleTracker, reload func() (config.Config, error)) (*liveVectorServing, error) {
 	ctx, cancel := context.WithCancel(ctx)
+	automatic := false
+	if !cfg.Vector.Enabled && cfg.DeploymentEmbeddings == nil && !cfg.ArchiveContent.UsageOnly() && !database.ArchiveContent().UsageOnly() {
+		chosen, err := embedlocal.ChoiceRecorded()
+		if err != nil {
+			log.Printf("search by meaning: read shared choice: %v", err)
+		} else if chosen {
+			status, err := inspectLocalEmbeddings(ctx, embedlocal.Options{SkipOllama: true})
+			if err != nil {
+				log.Printf("search by meaning: inspect shared files: %v", err)
+			} else if status.DownloadBytes == 0 {
+				candidate, eligible, err := cfg.SharedVectorSetup()
+				if err != nil {
+					log.Printf("search by meaning: shared setup: %v", err)
+				} else if eligible {
+					cfg.Vector, automatic = candidate.Vector, true
+				}
+			}
+		}
+	}
 	serving, err := setupVectorServing(ctx, cfg, database, idle)
 	if err != nil {
 		cancel()
@@ -48,6 +68,9 @@ func newLiveVectorServing(ctx context.Context, cfg config.Config, database *db.D
 		push: &vectorPushSource{cfg: cfg},
 	}
 	v.startSchedulers()
+	if automatic && serving.Scheduler != nil {
+		serving.Scheduler.Notify()
+	}
 	return v, nil
 }
 
@@ -224,6 +247,9 @@ func (v *liveVectorServing) Setup(approvedBytes int64) error {
 	if status.Action != "turn-on" {
 		return fmt.Errorf("%w: setup action is unavailable for the current embeddings provider", vector.ErrInvalidBuildRequest)
 	}
+	if status.Provider == "built-in" {
+		deployment.Local = true
+	}
 	release, ok := v.idle.BeginWork()
 	if !ok {
 		return errors.New("server is shutting down")
@@ -232,7 +258,7 @@ func (v *liveVectorServing) Setup(approvedBytes int64) error {
 	v.done = make(chan struct{})
 	go func() {
 		defer release()
-		err := v.activate(deployment, approvedBytes)
+		err := v.activate(deployment, approvedBytes, status.Provider == "built-in")
 		v.mu.Lock()
 		v.setup.Busy = false
 		if err != nil {
@@ -250,7 +276,7 @@ func (v *liveVectorServing) Setup(approvedBytes int64) error {
 	return nil
 }
 
-func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64) error {
+func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerConfig, approvedBytes int64, builtin bool) error {
 	cfg := v.cfg
 	_, err := resolveLocalEmbeddings(v.ctx, deployment,
 		func(_ context.Context, size int64) (bool, error) {
@@ -279,6 +305,8 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 		if err != nil {
 			return err
 		}
+		status, err := embeddingsSetupStatus(v.ctx, server.EmbeddingsSetupStatus{}, cfg)
+		builtin = builtin && err == nil && status.Provider == "built-in"
 		// Opening can wait on another process's write lock; status stays available.
 		serving, err := setupVectorServing(v.ctx, cfg, v.database, v.idle)
 		if err != nil {
@@ -296,7 +324,12 @@ func (v *liveVectorServing) activate(deployment config.VectorEmbeddingsServerCon
 	}
 	err = v.serving.manager.StartBuild(vector.BuildRequest{IncludeAutomated: cfg.Vector.IncludeAutomated})
 	if errors.Is(err, vector.ErrBuildRunning) {
-		return nil
+		err = nil
+	}
+	if err == nil && builtin {
+		if err := embedlocal.RecordChoice(); err != nil {
+			log.Printf("search by meaning: record shared choice: %v", err)
+		}
 	}
 	return err
 }

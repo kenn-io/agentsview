@@ -2,6 +2,8 @@ package db
 
 import (
 	"database/sql"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -85,4 +87,32 @@ func TestReportingUsageSessionsFromMatchesUsageTimestamps(t *testing.T) {
 	require.Len(t, metas, len(ids))
 	assert.Equal(t, "msg-in", metas[3].SessionID)
 	assert.Equal(t, outOfRange, metas[3].StartedAt)
+}
+
+// A fresh archive skips the migrations that build the usage time indexes, so
+// it must build them itself: bounded reports name them, and a read-only open
+// requires them.
+func TestFreshArchiveSupportsBoundedUsageReads(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fresh.db")
+	require.NoError(t, os.WriteFile(path, nil, 0o600))
+	d, err := OpenFreshIsolatedContext(t.Context(), path)
+	require.NoError(t, err)
+	require.NoError(t, d.UpsertSession(t.Context(), Session{ID: "event-in", Project: "p", Machine: "local", Agent: "hermes"}))
+	require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(), "event-in", []UsageEvent{{
+		SessionID: "event-in", Source: "test", Model: "model-a", InputTokens: 1,
+		OccurredAt: "2026-06-10T12:00:00Z",
+	}}))
+
+	tx, err := d.getReader().BeginTx(t.Context(), &sql.TxOptions{ReadOnly: true})
+	require.NoError(t, err)
+	_, ids, err := d.reportingUsageSessionsFrom(
+		t.Context(), tx, "2026-06-10T00:00:00Z", "2026-06-10T23:59:59Z")
+	require.NoError(t, tx.Rollback())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"event-in"}, ids)
+	require.NoError(t, d.Close())
+
+	readOnly, err := OpenReadOnly(t.Context(), path)
+	require.NoError(t, err)
+	require.NoError(t, readOnly.Close())
 }

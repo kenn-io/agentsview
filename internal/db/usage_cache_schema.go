@@ -66,7 +66,12 @@ const (
 	// absent.
 	// Version 23 stores each fact's cost status so harness-recorded costs
 	// price a row only when the catalog cannot.
-	usageCacheFormatVersion             = 23
+	// Version 24 separates snapshot ranking from billed output and stores priced
+	// totals for external account rows that cannot deduplicate against other usage.
+	usageCacheFormatVersion = 24
+	// Formats 21 through 23 are audited sources for format 24.
+	usageCacheUpgradeFrom               = 21
+	usageCacheUpgradeTo                 = 24
 	usageCacheApplicationID             = 0x41565543
 	usageCacheKind                      = "agentsview-usage-facts"
 	usageCacheRetirementProtocolVersion = 1
@@ -79,6 +84,8 @@ const (
 	usageCacheMetadataNextRollupRevision  = "next_rollup_install_revision"
 	usageCacheMetadataDeletionRevision    = "deletion_revision"
 	usageCacheMetadataCursorHighWaterMark = "cursor_high_water_mark"
+	usageCacheMetadataResetEpoch          = "reset_epoch"
+	usageCacheMetadataSourceMutation      = "source_mutation_revision"
 	usageCacheMetadataBackfillCompletedAt = "backfill_completed_at"
 	usageCacheMetadataRetirementProtocol  = "retirement_protocol_version"
 )
@@ -213,11 +220,10 @@ CREATE TABLE usage_facts (
     usage_dedup_key TEXT NOT NULL DEFAULT '',
     token_eligible INTEGER NOT NULL,
     activity_eligible INTEGER NOT NULL,
+    ranking_output_tokens INTEGER,
     PRIMARY KEY (cached_session_id, fact_index)
 ) WITHOUT ROWID;
-CREATE INDEX usage_facts_claude_identity
-    ON usage_facts (claude_message_id, claude_request_id)
-    WHERE claude_message_id != '';
+` + usageCacheClaudeIdentityIndexSQL + `
 CREATE INDEX usage_facts_source_uuid
     ON usage_facts (source_uuid) WHERE source_uuid != '';
 CREATE INDEX usage_facts_usage_dedup_key
@@ -378,6 +384,7 @@ CREATE TABLE usage_rollup_exceptions (
     claude_request_id TEXT NOT NULL,
     source_uuid TEXT NOT NULL,
     usage_dedup_key TEXT NOT NULL,
+    ranking_output_tokens INTEGER,
     PRIMARY KEY (
         rollup_install_id, group_kind, group_key, cached_session_id, fact_index
     )
@@ -385,7 +392,44 @@ CREATE TABLE usage_rollup_exceptions (
 CREATE INDEX usage_rollup_exceptions_window
     ON usage_rollup_exceptions (
         local_date, rollup_install_id, group_kind, group_key
-    );`
+    );
+` + usageCacheAccountTotalsSQL
+
+const usageCacheClaudeIdentityIndexSQL = `CREATE INDEX usage_facts_claude_identity
+    ON usage_facts (claude_message_id, claude_request_id)
+    WHERE claude_message_id != '';`
+
+const usageCacheAccountTotalsSQL = `CREATE TABLE usage_rollup_account_totals (
+    rollup_install_id INTEGER NOT NULL REFERENCES usage_rollup_installs(id)
+        ON DELETE CASCADE,
+    local_date TEXT NOT NULL,
+    agent TEXT NOT NULL,
+    is_headless INTEGER NOT NULL,
+    reported_model TEXT NOT NULL,
+    provider_id TEXT NOT NULL,
+    priced_model TEXT NOT NULL,
+    matched_pattern TEXT NOT NULL,
+    rate_ok INTEGER NOT NULL,
+    rate_hash TEXT NOT NULL,
+    band_threshold INTEGER NOT NULL,
+    pricing_key TEXT NOT NULL,
+    pricing_timestamp TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL,
+    output_tokens INTEGER NOT NULL,
+    reasoning_tokens INTEGER NOT NULL,
+    cache_creation_tokens INTEGER NOT NULL,
+    cache_read_tokens INTEGER NOT NULL,
+    estimated_cost_microdollars INTEGER NOT NULL,
+    savings_microdollars INTEGER NOT NULL,
+    computed_request_count INTEGER NOT NULL,
+    computed_aggregate_count INTEGER NOT NULL,
+    reported_count INTEGER NOT NULL,
+    base_request_count INTEGER NOT NULL,
+    PRIMARY KEY (
+        rollup_install_id, local_date, agent, is_headless, reported_model,
+        provider_id, rate_hash, band_threshold
+    )
+) WITHOUT ROWID;`
 
 type usageCache struct {
 	db         *sql.DB
@@ -422,6 +466,8 @@ type usageCacheManager struct {
 	cancel      context.CancelFunc
 
 	mu          sync.Mutex
+	retireMu    sync.Mutex
+	retireWait  sync.WaitGroup
 	generations map[string]*usageCache
 	currentID   string
 	closed      bool
@@ -479,10 +525,7 @@ func (m *usageCacheManager) Generation(
 
 	cache, err := m.openPersistentGeneration(ctx, databaseID)
 	if err != nil {
-		log.Printf(
-			"warning: usage cache is non-persistent because %s is unavailable: %v",
-			filepath.Dir(m.archivePath), err,
-		)
+		log.Printf("warning: opening persistent usage cache in %s failed; using a temporary cache: %v", filepath.Dir(m.archivePath), err)
 		cache, err = openTemporaryUsageCache(ctx, databaseID)
 		if err != nil {
 			return nil, fmt.Errorf("opening temporary usage cache: %w", err)
@@ -594,7 +637,7 @@ func (m *usageCacheManager) openPersistentGeneration(
 		return nil, probe.Err
 	}
 	if !probe.Exists {
-		cache, published, err := publishUsageCache(ctx, path, databaseID)
+		cache, published, err := publishUsageCache(ctx, m.archivePath, path, databaseID)
 		if err != nil {
 			return nil, err
 		}
@@ -646,7 +689,7 @@ func acquireUsageCacheLease(path string) (*flock.Flock, error) {
 }
 
 func publishUsageCache(
-	ctx context.Context, path, databaseID string,
+	ctx context.Context, archivePath, path, databaseID string,
 ) (*usageCache, bool, error) {
 	file, err := os.CreateTemp(filepath.Dir(path), ".usage-cache-init-*.db")
 	if err != nil {
@@ -657,8 +700,17 @@ func publishUsageCache(
 		_ = os.Remove(temporaryPath)
 		return nil, false, err
 	}
-	_ = os.Remove(temporaryPath)
-	cache, err := initializeUsageCache(ctx, temporaryPath, databaseID, false)
+	seeded, err := seedUpgradedUsageCache(ctx, archivePath, temporaryPath, databaseID)
+	if err != nil {
+		_ = removeUsageCacheFiles(temporaryPath)
+		return nil, false, err
+	}
+	var cache *usageCache
+	if seeded {
+		cache, err = openUsageCache(ctx, temporaryPath, databaseID, false)
+	} else {
+		cache, err = initializeUsageCache(ctx, temporaryPath, databaseID, false)
+	}
 	if err != nil {
 		_ = removeUsageCacheFiles(temporaryPath)
 		return nil, false, err
@@ -743,6 +795,8 @@ func initializeUsageCache(
 		{usageCacheMetadataNextRollupRevision, "1"},
 		{usageCacheMetadataDeletionRevision, "0"},
 		{usageCacheMetadataCursorHighWaterMark, "0"},
+		{usageCacheMetadataResetEpoch, "0"},
+		{usageCacheMetadataSourceMutation, "0"},
 		{usageCacheMetadataBackfillCompletedAt, ""},
 		{
 			usageCacheMetadataRetirementProtocol,
@@ -893,14 +947,14 @@ func probeUsageCacheWithBusyTimeout(
 		return probe
 	}
 	probe.RetirementProtocolVersion, _ = strconv.Atoi(retirementProtocolText)
-	probe.Compatible = probe.FormatVersion == usageCacheFormatVersion &&
-		probe.SourceDatabaseID != "" &&
-		probe.RetirementProtocolVersion == usageCacheRetirementProtocolVersion &&
-		usageCacheSchemaComplete(ctx, database)
+	if probe.FormatVersion == usageCacheFormatVersion && probe.SourceDatabaseID != "" &&
+		probe.RetirementProtocolVersion == usageCacheRetirementProtocolVersion {
+		probe.Compatible, probe.Err = usageCacheSchemaComplete(ctx, database)
+	}
 	return probe
 }
 
-func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
+func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) (bool, error) {
 	var metadataCount int
 	if err := database.QueryRowContext(ctx, `
 		SELECT count(*) FROM usage_cache_metadata
@@ -909,9 +963,12 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 			'source_database_id', 'next_install_revision',
 			'next_rollup_install_revision',
 			'deletion_revision', 'cursor_high_water_mark',
-			'backfill_completed_at', 'retirement_protocol_version'
-		)`).Scan(&metadataCount); err != nil || metadataCount != 9 {
-		return false
+			'backfill_completed_at', 'retirement_protocol_version', 'reset_epoch'
+		)`).Scan(&metadataCount); err != nil {
+		return usageCacheSchemaCheckError(err)
+	}
+	if metadataCount != 10 {
+		return false, nil
 	}
 	queries := []string{
 		`SELECT key, value FROM usage_cache_metadata LIMIT 0`,
@@ -926,7 +983,7 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 		        cache_read_tokens, web_search_requests,
 		        reported_cost_microdollars, cost_source, cost_status, request_scoped,
 		        claude_message_id, claude_request_id, source_uuid,
-		        usage_dedup_key, token_eligible, activity_eligible
+		        usage_dedup_key, token_eligible, activity_eligible, ranking_output_tokens
 		 FROM usage_facts LIMIT 0`,
 		`SELECT source_id, agent, timestamp_ms, raw_timestamp, model,
 		        input_tokens, output_tokens, cache_creation_tokens,
@@ -959,17 +1016,26 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 		`SELECT rollup_install_id, group_kind, group_key, cached_session_id,
 		        fact_index, source_session_id, local_date, source,
 		        message_ordinal, timestamp_ms, timestamp_ns, raw_timestamp,
-		        uses_session_start, model, input_tokens, output_tokens,
+		        uses_session_start, model, input_tokens, output_tokens, ranking_output_tokens,
 		        reasoning_tokens, cache_creation_tokens,
 		        cache_creation_1h_tokens, cache_read_tokens,
 		        web_search_requests, reported_cost_microdollars, cost_source,
 		        cost_status, request_scoped, is_headless, claude_message_id, claude_request_id,
 		        source_uuid, usage_dedup_key
 		 FROM usage_rollup_exceptions LIMIT 0`,
+		`SELECT rollup_install_id, local_date, agent, is_headless,
+		        reported_model, provider_id, priced_model, matched_pattern,
+		        rate_ok, rate_hash, band_threshold, pricing_key,
+		        pricing_timestamp, input_tokens, output_tokens,
+		        reasoning_tokens, cache_creation_tokens, cache_read_tokens,
+		        estimated_cost_microdollars, savings_microdollars,
+		        computed_request_count, computed_aggregate_count,
+		        reported_count, base_request_count
+		 FROM usage_rollup_account_totals LIMIT 0`,
 	}
 	for _, query := range queries {
 		if _, err := database.ExecContext(ctx, query); err != nil {
-			return false
+			return usageCacheSchemaCheckError(err)
 		}
 	}
 	for _, index := range []string{
@@ -981,11 +1047,21 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 		if err := database.QueryRowContext(ctx,
 			`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name=?)`,
 			index,
-		).Scan(&exists); err != nil || !exists {
-			return false
+		).Scan(&exists); err != nil {
+			return usageCacheSchemaCheckError(err)
+		}
+		if !exists {
+			return false, nil
 		}
 	}
-	return true
+	return true, nil
+}
+
+func usageCacheSchemaCheckError(err error) (bool, error) {
+	if unusableUsageCache(err, true) {
+		return false, nil
+	}
+	return false, err
 }
 
 func removeUsageCacheFiles(path string) error {
@@ -1133,6 +1209,8 @@ func (m *usageCacheManager) detachAllLocked() []*usageCache {
 }
 
 func (m *usageCacheManager) RetireExcept(databaseID string) error {
+	m.retireMu.Lock()
+	defer m.retireMu.Unlock()
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
@@ -1151,7 +1229,40 @@ func (m *usageCacheManager) RetireExcept(databaseID string) error {
 	return retireUsageCaches(caches, m.archivePath, true)
 }
 
+// retireExceptAsync detaches the old generation immediately; callers can hold
+// a lease on it until their request unwinds, so closing it must happen later.
+func (m *usageCacheManager) retireExceptAsync(databaseID string) {
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return
+	}
+	m.currentID = databaseID
+	var caches []*usageCache
+	for id, cache := range m.generations {
+		if id != databaseID {
+			caches = append(caches, cache)
+			delete(m.generations, id)
+			cache.beginRetirement()
+		}
+	}
+	if len(caches) == 0 {
+		m.mu.Unlock()
+		return
+	}
+	m.retireWait.Add(1)
+	m.mu.Unlock()
+	go func() {
+		defer m.retireWait.Done()
+		if err := retireUsageCaches(caches, m.archivePath, true); err != nil {
+			log.Printf("warning: retiring usage cache generations: %v", err)
+		}
+	}()
+}
+
 func (m *usageCacheManager) Close() error {
+	m.retireMu.Lock()
+	defer m.retireMu.Unlock()
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
@@ -1161,5 +1272,7 @@ func (m *usageCacheManager) Close() error {
 	m.cancel()
 	caches := m.detachAllLocked()
 	m.mu.Unlock()
-	return retireUsageCaches(caches, m.archivePath, false)
+	err := retireUsageCaches(caches, m.archivePath, false)
+	m.retireWait.Wait()
+	return err
 }

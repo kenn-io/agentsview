@@ -205,11 +205,11 @@ describe("TopSkills", () => {
     const component = mount(TopSkills, { target: document.body });
     await tick();
 
-    expect(document.querySelector(".loading")).not.toBeNull();
+    expect(document.querySelector(".loading-state")).not.toBeNull();
     analytics.skills = data;
     await tick();
     expect(document.body.textContent).toContain("No skill usage data");
-    expect(document.querySelector(".loading")).toBeNull();
+    expect(document.querySelector(".loading-state")).toBeNull();
 
     analytics.errors.skills = "request failed";
     await tick();
@@ -219,7 +219,7 @@ describe("TopSkills", () => {
     expect(document.body.textContent).not.toContain("No skill usage data");
 
     const retry = vi.spyOn(analytics, "fetchSkills").mockResolvedValue("ok");
-    document.querySelector<HTMLButtonElement>(".error button")!.click();
+    document.querySelector<HTMLButtonElement>(".load-error button")!.click();
     expect(retry).toHaveBeenCalledExactlyOnceWith();
     await unmount(component);
   });
@@ -235,7 +235,7 @@ describe("TopSkills", () => {
       await tick();
       expect(document.body.textContent).toContain("9 calls");
       expect(document.body.textContent).not.toContain("Month failed");
-      expect(document.querySelector(".error button")).toBeNull();
+      expect(document.querySelector(".load-error button")).toBeNull();
     } finally {
       await analytics.fetchSkills("week");
     }

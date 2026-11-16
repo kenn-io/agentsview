@@ -13,7 +13,8 @@ import (
 )
 
 func TestStoreGetTrendsTerms(t *testing.T) {
-	_, store := prepareUsageSchema(t, "agentsview_trends_terms_test")
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
 	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -59,7 +60,8 @@ func TestStoreGetTrendsTerms(t *testing.T) {
 }
 
 func TestStoreGetTrendsTermsUsesMessageTimestampFilters(t *testing.T) {
-	_, store := prepareUsageSchema(t, "agentsview_trends_terms_message_filters_test")
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
 	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -100,7 +102,8 @@ func TestStoreGetTrendsTermsUsesMessageTimestampFilters(t *testing.T) {
 func TestStoreGetTrendsTermsModelFilterStaysOnMatchingMessages(
 	t *testing.T,
 ) {
-	_, store := prepareUsageSchema(t, "agentsview_trends_terms_model_messages_test")
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
 	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -168,7 +171,8 @@ func trendPointCounts(points []db.TrendPoint) []int {
 }
 
 func TestStoreGetTrendsTermsSessionWindow(t *testing.T) {
-	_, store := prepareUsageSchema(t, "agentsview_trends_session_window_test")
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
 	ctx := t.Context()
 	cases := testutil.TrendsSessionWindowCases()
 	for _, tc := range cases {

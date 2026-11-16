@@ -726,6 +726,42 @@ func (m *genAIModel) activePrices(timestamp time.Time) map[string]genAIRate {
 	return m.prices[0].prices
 }
 
+// PriceChanges returns, in order, every instant strictly between from and
+// to at which some model's active conditional price can change: each start
+// date, and each daily start and end of a time-of-day window. Resolve
+// returns the same price for every timestamp between two adjacent instants.
+func (p *GenAIPrices) PriceChanges(from, to time.Time) []time.Time {
+	if p == nil || !from.Before(to) {
+		return nil
+	}
+	var out []time.Time
+	add := func(t time.Time) {
+		if t.After(from) && t.Before(to) {
+			out = append(out, t)
+		}
+	}
+	firstDay := from.UTC().Truncate(24 * time.Hour)
+	for _, provider := range p.providers {
+		for _, model := range provider.models {
+			for _, conditional := range model.prices {
+				c := conditional.constraint
+				switch c.kind {
+				case genAIConstraintAlways:
+				case genAIConstraintStartDate:
+					add(c.startDate)
+				case genAIConstraintTimeOfDay:
+					for day := firstDay; day.Before(to); day = day.Add(24 * time.Hour) {
+						add(day.Add(c.startTime))
+						add(day.Add(c.endTime))
+					}
+				}
+			}
+		}
+	}
+	slices.SortFunc(out, time.Time.Compare)
+	return slices.CompactFunc(out, time.Time.Equal)
+}
+
 func (c genAIConstraint) active(timestamp time.Time) bool {
 	switch c.kind {
 	case genAIConstraintAlways:

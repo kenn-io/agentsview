@@ -14,7 +14,8 @@ import (
 )
 
 func TestStoreSessionAndMessageTokenUsage(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	pg, err := Open(t.Context(), pgURL, testSchema, false)
@@ -78,9 +79,8 @@ func TestStoreSessionAndMessageTokenUsage(t *testing.T) {
 }
 
 func TestPushTokenUsageToPostgres(t *testing.T) {
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 	ps, err := New(t.Context(), pgURL, "agentsview", local, "test-machine", true, storage.PusherOptions{})
@@ -140,9 +140,9 @@ func TestPushTokenUsageToPostgres(t *testing.T) {
 }
 
 func TestEnsureSchemaBackfillsTokenCoverageFlags(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 
 	pg, err := Open(t.Context(), pgURL, "agentsview", false)
 	require.NoError(t, err, "Open")

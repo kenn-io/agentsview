@@ -13,11 +13,13 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-// A range still in progress keeps every session's usage rows. After a push
-// its report re-reads only the pushed session, whether the pushed rows are
-// still in the read-time delta or already refreshed, and still matches the
-// local archive, including the Claude peers of a filtered report.
-func TestPartialActivityUsageRereadsOnlyPushedSessions(t *testing.T) {
+// A range still in progress keeps its usage sums until a push: a later
+// report, even one whose effective end has moved past rows no session
+// holds, reads no usage again. After a push its report reads again and
+// still matches the local archive, whether the pushed rows are still in the
+// read-time delta or already refreshed, including the Claude peers of a
+// filtered report.
+func TestPartialActivityUsageKeptUntilPush(t *testing.T) {
 	t.Parallel()
 	store, syncer, local := newPushedStore(t)
 	ctx := t.Context()
@@ -78,7 +80,7 @@ func TestPartialActivityUsageRereadsOnlyPushedSessions(t *testing.T) {
 	require.True(t, q.Partial)
 	filtered := db.AnalyticsFilter{Timezone: "UTC", Project: "range"}
 	everything := db.AnalyticsFilter{Timezone: "UTC"}
-	requireParity := func(label string) {
+	requireParity := func(label string, q activity.Query) {
 		t.Helper()
 		for _, f := range []db.AnalyticsFilter{filtered, everything} {
 			want, err := local.GetActivityReport(ctx, f, q)
@@ -90,9 +92,13 @@ func TestPartialActivityUsageRereadsOnlyPushedSessions(t *testing.T) {
 			require.Equal(t, want.Totals.Sessions, got.Totals.Sessions, "%s, project %q", label, f.Project)
 		}
 	}
-	requireParity("first read")
-	first := store.activityUsageRowsRead.Load()
-	require.Positive(t, first)
+	requireParity("first read", q)
+	reads := store.activityUsageQueries.Load()
+	require.Positive(t, reads)
+	later := q
+	later.EffectiveEnd = later.EffectiveEnd.Add(time.Minute)
+	requireParity("later end", later)
+	require.Equal(t, reads, store.activityUsageQueries.Load(), "the kept sums answer without a push")
 
 	// With the refresh stopped, the pushed peer's rows come from the delta
 	// prepared at read time.
@@ -101,21 +107,17 @@ func TestPartialActivityUsageRereadsOnlyPushedSessions(t *testing.T) {
 	writePeer(4)
 	_, err = syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
-	requireParity("delta")
-	reread := store.activityUsageRowsRead.Load() - first
-	require.Equal(t, int64(len(peerMessages(4))), reread, "only the pushed peer's rows are read again")
+	requireParity("delta", q)
+	require.Greater(t, store.activityUsageQueries.Load(), reads, "a push reads the usage again")
 
-	// The refresh stores the same rows the delta supplied, so nothing is
-	// read again.
+	// The refresh stores the rows the delta supplied.
 	_, err = store.DB().ExecContext(ctx, "SYSTEM START VIEW prepare_usage")
 	require.NoError(t, err)
 	_, err = store.DB().ExecContext(ctx, "SYSTEM REFRESH VIEW prepare_usage")
 	require.NoError(t, err)
 	_, err = store.DB().ExecContext(ctx, "SYSTEM WAIT VIEW prepare_usage")
 	require.NoError(t, err)
-	before := store.activityUsageRowsRead.Load()
-	requireParity("refreshed")
-	require.Equal(t, before, store.activityUsageRowsRead.Load(), "a refresh alone reads no rows")
+	requireParity("refreshed", q)
 }
 
 // A host that has not published usage snapshots is read raw while every
@@ -139,13 +141,13 @@ func TestHostWithoutSnapshotsIsReadRaw(t *testing.T) {
 	for _, query := range []string{
 		`INSERT INTO usage_session_snapshots (` + snapshotColumns + `) SELECT * EXCEPT (revision) REPLACE ('older-snapshot' AS id, 'host-b' AS machine, toUInt64(1) AS push_version)
 		 FROM (SELECT * FROM usage_session_snapshots FINAL WHERE id = '` + fixtureAlphaID + `')`,
-		`INSERT INTO sessions SELECT * REPLACE ('older-snapshot' AS id, 'host-b' AS machine, toUInt64(1) AS push_version)
+		`INSERT INTO sessions SELECT * REPLACE ('older-snapshot' AS id, 'host-b' AS machine, toUInt64(1) AS push_version, toUInt64(1) AS content_version)
 		 FROM (SELECT * FROM sessions FINAL WHERE id = '` + fixtureAlphaID + `')`,
 		"SYSTEM REFRESH VIEW prepare_usage",
 		"SYSTEM WAIT VIEW prepare_usage",
 		`INSERT INTO messages (session_id,ordinal,timestamp,model,token_usage,claude_message_id,claude_request_id,push_version) VALUES
 		 ('older-snapshot',0,'2026-01-10 13:00:00','claude-test','{"input_tokens":1,"output_tokens":40}','older-m0','older-r0',2)`,
-		`INSERT INTO sessions SELECT * REPLACE ('older-snapshot' AS id, 'host-b' AS machine, toUInt64(2) AS push_version, 1 AS message_count)
+		`INSERT INTO sessions SELECT * REPLACE ('older-snapshot' AS id, 'host-b' AS machine, toUInt64(2) AS push_version, toUInt64(2) AS content_version, 1 AS message_count)
 		 FROM (SELECT * FROM sessions FINAL WHERE id = '` + fixtureAlphaID + `')`,
 	} {
 		_, err := store.DB().ExecContext(ctx, query)
@@ -217,109 +219,4 @@ func TestHostWithoutSnapshotsIsReadRaw(t *testing.T) {
 	require.Equal(t, raw.partial.Totals, mixed.partial.Totals)
 	require.Equal(t, raw.partial.BySession, mixed.partial.BySession)
 	require.Equal(t, dailyUsageWire(t, raw.daily, false), dailyUsageWire(t, mixed.daily, false))
-}
-
-// A change to the rows while the slices of a range read run leaves them
-// reading different versions of the rows, so the read must discard them
-// and read the range again in one query. Here each change lands after
-// every slice is read, so the rows are read twice. Each change but the
-// refresh moves rows across slice boundaries, as a push that corrects a
-// message's timestamp does.
-func TestSlicedActivityUsageRereadsAfterChange(t *testing.T) {
-	t.Parallel()
-	const lower, upper = "2020-01-01T00:00:00Z", "2030-01-01T00:00:00Z"
-	tests := []struct {
-		name string
-		// raw adds a host without snapshots, whose rows are read from the
-		// raw tables.
-		raw bool
-		// moves marks a change that moves rows, so the second read differs
-		// from the first.
-		moves  bool
-		change []string
-	}{
-		{
-			name:   "view refresh",
-			change: []string{"SYSTEM REFRESH VIEW prepare_usage", "SYSTEM WAIT VIEW prepare_usage"},
-		},
-		{
-			// A database that cannot exchange tables rebuilds prepared_usage
-			// this way, which keeps the table's UUID and metadata.
-			name:  "rebuild by partition replacement",
-			moves: true,
-			change: []string{
-				"CREATE TABLE moved_usage AS prepared_usage",
-				`INSERT INTO moved_usage SELECT * REPLACE (
-					if(ts_key = (SELECT min(ts_key) FROM prepared_usage), toDateTime64('2029-12-31 00:00:00', 6, 'UTC'), ts) AS ts,
-					if(ts_key = (SELECT min(ts_key) FROM prepared_usage), toDateTime64('2029-12-31 00:00:00', 6, 'UTC'), ts_key) AS ts_key)
-				 FROM prepared_usage`,
-				"ALTER TABLE prepared_usage REPLACE PARTITION tuple() FROM moved_usage",
-				"DROP TABLE moved_usage SYNC",
-			},
-		},
-		{
-			name:  "raw host push",
-			raw:   true,
-			moves: true,
-			change: []string{
-				`INSERT INTO messages (session_id,ordinal,timestamp,model,token_usage,claude_message_id,claude_request_id,push_version) VALUES
-				 ('other-host',0,'2029-12-31 00:00:00','claude-test','{"input_tokens":3,"output_tokens":17}','other-m0','other-r0',2)`,
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			store, _, _ := newPushedStore(t)
-			ctx := t.Context()
-			_, err := store.DB().ExecContext(ctx, "SYSTEM WAIT VIEW prepare_usage")
-			require.NoError(t, err)
-			if tt.raw {
-				for _, query := range []string{
-					`INSERT INTO messages (session_id,ordinal,timestamp,model,token_usage,claude_message_id,claude_request_id,push_version) VALUES
-					 ('other-host',0,'2026-01-10 12:00:00','claude-test','{"input_tokens":3,"output_tokens":17}','other-m0','other-r0',1),
-					 ('other-host',1,'2026-01-10 12:05:00','claude-test','{"input_tokens":4,"output_tokens":5}','other-m1','other-r1',1)`,
-					`INSERT INTO sessions (id,project,machine,agent,started_at,ended_at,message_count,push_version) VALUES
-					 ('other-host','elsewhere','host-b','claude','2026-01-10 12:00:00','2026-01-10 12:05:00',2,1)`,
-				} {
-					_, err := store.DB().ExecContext(ctx, query)
-					require.NoError(t, err, query)
-				}
-			}
-			state, err := store.preparedUsageState(ctx)
-			require.NoError(t, err)
-			require.True(t, state.ready)
-			if tt.raw {
-				require.Equal(t, []string{"other-host"}, state.raw)
-			}
-			whole, err := store.readActivityUsageSlices(ctx, state, lower, upper)
-			require.NoError(t, err)
-			require.NotZero(t, whole.count)
-
-			sliced := NewStoreFromDB(store.DB(), store.bulk)
-			sliced.usageSliceRows = 1
-			got, err := sliced.readActivityUsageSlices(ctx, state, lower, upper)
-			require.NoError(t, err)
-			require.Equal(t, int64(whole.count), sliced.activityUsageRowsRead.Load(), "an undisturbed sliced read reads each row once")
-			require.Equal(t, keptTestRows(whole), keptTestRows(got))
-
-			changed := NewStoreFromDB(store.DB(), store.bulk)
-			changed.usageSliceRows = 1
-			changed.afterUsageSlices = func() {
-				for _, query := range tt.change {
-					_, err := store.DB().ExecContext(ctx, query)
-					require.NoError(t, err, query)
-				}
-			}
-			got, err = changed.readActivityUsageSlices(ctx, state, lower, upper)
-			require.NoError(t, err)
-			require.Equal(t, 2*int64(whole.count), changed.activityUsageRowsRead.Load(), "the changed range is read again")
-			want, err := store.readActivityUsageSlices(ctx, state, lower, upper)
-			require.NoError(t, err)
-			require.Equal(t, keptTestRows(want), keptTestRows(got))
-			if tt.moves {
-				require.NotEqual(t, keptTestRows(whole), keptTestRows(want))
-			}
-		})
-	}
 }

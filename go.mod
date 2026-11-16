@@ -1,6 +1,6 @@
 module go.kenn.io/agentsview
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/BurntSushi/toml v1.6.0
@@ -23,11 +23,12 @@ require (
 	github.com/gofrs/flock v0.13.1
 	github.com/google/go-cmp v0.7.0
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
+	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.12.0
 	github.com/jellydator/ttlcache/v3 v3.4.1
 	github.com/klauspost/compress v1.20.3
 	github.com/mattn/go-runewidth v0.0.31
-	github.com/mattn/go-sqlite3 v1.14.52
+	github.com/mattn/go-sqlite3 v1.14.53
 	github.com/moby/moby/api v1.56.1
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/oklog/ulid/v2 v2.1.2
@@ -42,8 +43,8 @@ require (
 	github.com/tidwall/gjson v1.20.0
 	github.com/yuin/goldmark/v2 v2.1.13
 	go.kenn.io/docbank v0.17.0
-	go.kenn.io/kata v0.22.0
-	go.kenn.io/kit v0.52.0
+	go.kenn.io/kata v0.23.0
+	go.kenn.io/kit v0.53.2
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/exp v0.0.0-20261014143641-f0251eb4aa3e
 	golang.org/x/mod v0.42.0
@@ -89,6 +90,7 @@ require (
 	github.com/containerd/log v0.1.0 // indirect
 	github.com/containerd/platforms v0.2.1 // indirect
 	github.com/cpuguy83/dockercfg v0.3.2 // indirect
+	github.com/creachadair/tomledit v0.0.29 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/dnephin/pflag v1.0.7 // indirect
 	github.com/docker/go-connections v0.8.2 // indirect
@@ -110,7 +112,6 @@ require (
 	github.com/goccy/go-json v0.11.2 // indirect
 	github.com/google/flatbuffers v25.12.19+incompatible // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/hhrutter/tiff v1.0.6 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
@@ -148,6 +149,7 @@ require (
 	github.com/shopspring/decimal v1.5.0 // indirect
 	github.com/sirupsen/logrus v1.10.2 // indirect
 	github.com/spf13/pathologize v1.1.0 // indirect
+	github.com/tailscale/hujson v0.0.0-20260727124030-b80ff77dac4f // indirect
 	github.com/tdewolff/parse/v2 v2.8.16 // indirect
 	github.com/tetratelabs/wazero v1.12.0 // indirect
 	github.com/tidwall/match v1.2.0 // indirect
@@ -184,6 +186,7 @@ require (
 	gotest.tools/gotestsum v1.13.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
+	mvdan.cc/sh/v3 v3.14.1 // indirect
 )
 
 tool gotest.tools/gotestsum

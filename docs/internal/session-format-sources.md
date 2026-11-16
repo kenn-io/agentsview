@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-11
+last_edited: 2026-11-12
 ---
 
 # Session Format Source Inventory
@@ -154,6 +154,17 @@ non-text results remain unknown. These classifications describe retained
 evidence; they do not establish whether a tool helped the task.
 
 ## Claude Code (`claude`)
+
+- **Modified-time refresh without a write (observed 2026-11-15):** On a machine
+  running Claude Code 2.1.325, four transcripts of open sessions received new
+  modified times exactly 3,600 seconds apart while their size and SHA-256
+  stayed the same. The producer code that does this was not identified, and no
+  public source was searched. Sync therefore treats a same-size transcript
+  whose content hash equals the stored hash as unchanged: it records the new
+  modified time on the session row and parser checkpoint and does not parse. A
+  same-size transcript whose hash differs is still parsed in full. See
+  `sourceOnlyTouched` in `internal/sync/engine_incremental.go` and
+  `internal/sync/claude_touch_test.go`.
 
 - **Hook output (checked 2026-11-04):** The parser reads the `hook_success`
   attachment shape reported in
@@ -493,6 +504,28 @@ fixtures retain this field; missing identities remain source-local.
   it, and an absent or malformed breakdown falls back to the 5m rate for the
   whole write total (issue #1452).
 
+- **Session cost total (`cost-state`, checked 2026-11-11):** Claude Code appends
+  `cost-state` records with `totalCostUSD`, `hasUnknownModelCost`, and
+  per-model `modelUsage` (`inputTokens`, `outputTokens`, `thinkingTokens`,
+  `cacheReadInputTokens`, `cacheCreationInputTokens`, `webSearchRequests`,
+  `costUSD`). No public producer source exists; this is observed evidence from
+  1,480 records in 917 local Claude Code 2.1 transcripts. The records are
+  cumulative snapshots: every record in a file shares one `startTime`, and no
+  total decreases, so the last record is the file's total. Subagent
+  transcripts never carry one. The total includes subagent calls: across 81
+  sessions with subagents, transcript output was 49% of `outputTokens` for the
+  parent file alone and 103.5% with its subagent files, while 817 sessions
+  without subagents matched within 1-3%. It also includes side calls that are
+  never written to the transcript: 130 of the 131 sessions whose transcript
+  output is more than 10% below the total have an `ai-title` record, and
+  titled sessions run a median of 31 output and 1,520 input tokens above their
+  transcripts while untitled ones match. Agentsview keeps the last record with
+  usage as the session total, with subagent scope `included`, in
+  `session_usage_totals` (data version 177). It is never added to usage or cost;
+  `session usage` shows it as `session_total` and an `Agent total:` line. An
+  appended record with usage makes the incremental parser fall back to a full
+  parse.
+
 - **Server tool use (web search):** Anthropic bills server-side web search at
   $10 per 1,000 requests on top of tokens and reports the count in
   `message.usage.server_tool_use.web_search_requests`, which Claude Code
@@ -755,20 +788,20 @@ fixtures retain this field; missing identities remain source-local.
   and remote compaction leaves it empty. A read-only scan of 17,779 local
   rollouts found 230,292 reasoning items: 27,822 had summary text, none had
   raw `content`, and the rest were encrypted only. It also found 177
-  `compacted` records, 160 with a summary. Local compaction writes the
-  summary model's reply as an ordinary assistant message, followed by its
+  `compacted` records, 160 with a summary. Local compaction writes the summary
+  model's reply as an ordinary assistant message, followed by its
   `token_count`, before the `compacted` record. Agentsview stores readable
-  reasoning as an assistant thinking row: summary text first, raw content
-  only when there is no summary, and no row for encrypted-only reasoning.
-  Each `compacted` record becomes a system compact-boundary row whose content
-  is `message`. When remote compaction leaves it empty, the row has no
-  content, because the transcript divider already labels every compaction.
-  `replacement_history` is not replayed. Usage attachment skips boundary
-  rows. A reasoning row takes usage only while it is the newest assistant row
-  of the turn, so the message or call that follows it in the same response
-  keeps that response's usage. In the scan, 9 `token_count` events from
-  responses that produced only reasoning used to be dropped and now count,
-  and 57 move from an older assistant message to their own response. Native
+  reasoning as an assistant thinking row: summary text first, raw content only
+  when there is no summary, and no row for encrypted-only reasoning. Each
+  `compacted` record becomes a system compact-boundary row whose content is
+  `message`. When remote compaction leaves it empty, the row has no content,
+  because the transcript divider already labels every compaction.
+  `replacement_history` is not replayed. Usage attachment skips boundary rows.
+  A reasoning row takes usage only while it is the newest assistant row of the
+  turn, so the message or call that follows it in the same response keeps that
+  response's usage. In the scan, 9 `token_count` events from responses that
+  produced only reasoning used to be dropped and now count, and 57 move from
+  an older assistant message to their own response. Native
   `token_usage_record` rows carry `response_id`, per-response `usage`, and
   running turn and thread totals
   ([protocol.rs](https://github.com/openai/codex/blob/87b7bdbf2efb9cb6fb15d821ef535061012c0138/codex-rs/protocol/src/protocol.rs)).
@@ -777,12 +810,11 @@ fixtures retain this field; missing identities remain source-local.
   the parser still reads only `token_count` and adds no session totals.
   Repeated `token_count` events are now recognized by their whole `info`
   object, including the cumulative `total_token_usage`, so two calls with
-  equal per-call counts both count. The scan suppressed the same
-  753 repeats under both keys. Usage that still finds no row stays
-  unattached. Data version 174 reparses Codex, TraeX, Augure Code, Open
-  Interpreter, and Codex Cloud sources in place, and the parser checkpoint
-  moves to version 6, so a stored cursor makes the next append a full parse.
-  Covered by
+  equal per-call counts both count. The scan suppressed the same 753 repeats
+  under both keys. Usage that still finds no row stays unattached. Data
+  version 174 reparses Codex, TraeX, Augure Code, Open Interpreter, and Codex
+  Cloud sources in place, and the parser checkpoint moves to version 6, so a
+  stored cursor makes the next append a full parse. Covered by
   `TestCodexReasoningKeptAsThinking`, `TestCodexReasoningUsageAttachment`,
   `TestCodexCompactedRecordBecomesBoundary`,
   `TestCodexTokenCountDedupUsesCumulativeTotal`,
@@ -1443,6 +1475,7 @@ fixtures retain this field; missing identities remain source-local.
   The prefix seed applies the same attach rule as the full parse, so later
   ordinals do not shift. TraeX, Augure Code, and Open Interpreter share this
   decoder.
+
 - **Agentsview:** `internal/parser/codex.go` and
   `internal/parser/codex_provider.go`; usage is taken from the last-turn
   counters rather than repeatedly counting cumulative totals. Reverified
@@ -1601,10 +1634,10 @@ fixtures retain this field; missing identities remain source-local.
   Scripts with several tool calls cannot start new commit links. Their polls
   need output process IDs matching earlier commit calls. The reused-process-ID
   case checks that a new native commit execution owns its repository and
-  prompt after a batch poll.
-  An archived `shell` call records `command` as an array. Scripts passed to
-  `sh`, `bash`, or `zsh` with `-c` or `-lc` are read as-is; direct Git
-  arguments are quoted word by word. Other executables are not classified.
+  prompt after a batch poll. An archived `shell` call records `command` as an
+  array. Scripts passed to `sh`, `bash`, or `zsh` with `-c` or `-lc` are read
+  as-is; direct Git arguments are quoted word by word. Other executables are
+  not classified.
 
 - **Pending calls reverified 2026-09-07:** the pinned upstream
   [task abort path](https://github.com/openai/codex/blob/406dc9239492aff6d295cca5eebe2a548548d42f/codex-rs/core/src/tasks/mod.rs#L846-L915)
@@ -2042,6 +2075,62 @@ fixtures retain this field; missing identities remain source-local.
   derived `chat_history.jsonl` model-message cache, and an authoritative
   `updates.jsonl` stream of timestamped ACP and xAI session notifications.
 
+- **Compaction (reverified 2026-11-12):** A compaction appends a
+  `compaction_checkpoint` record to `updates.jsonl`, writes
+  `compaction_checkpoints/<id>.json`, and replaces `chat_history.jsonl` with
+  the compacted history. The pinned
+  [chat rebuild reducer](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-grok-shell/src/session/storage/mod.rs#L256-L620)
+  truncates the cache at each checkpoint, so only `updates.jsonl` keeps the
+  turns before it. The
+  [compacted history](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-chat-state/src/compaction_utils.rs#L920-L1000)
+  opens with the system prompt, a user-info `compaction_meta` row, the
+  carried user query, and recent messages, then the summary row. That row is
+  the `compaction_meta` row whose text starts with the
+  [continuation preamble](https://github.com/xai-org/grok-build/blob/2bdd1d6a6369de0e8c68132ea4539e9abd9e14a8/crates/codegen/xai-chat-state/src/compaction_utils.rs#L811-L819);
+  the checkpoint file's `compacted_history` holds the same rows. Agentsview
+  rebuilds each pre-checkpoint segment from `updates.jsonl` with the reducer's
+  turn rules: a switch between user and agent output closes the open item, and
+  a finished tool call closes the agent item before its result. Unlike the
+  reducer, it keeps `agent_thought_chunk` text as thinking. It names calls
+  from `_meta["x.ai/tool"].name`, because later updates replace `title` with
+  display text. Chunks marked `hostTurn` close the open items, and user chunks
+  marked `syntheticPrompt` are dropped. Each checkpoint becomes a compact
+  boundary carrying its summary. The replayed prefix before the summary row in
+  `chat_history.jsonl` is dropped when the stream supplied those turns. Local
+  sessions written from 2026-09-20 to 2026-11-12 match this shape: 11
+  compacted sessions with up to 8 checkpoints each, every checkpoint file
+  present, and only the latest compaction's rows in `chat_history.jsonl`.
+  Sessions do not record the Grok Build version that wrote them. A fresh
+  session from Grok Build 1.0.77, the latest stable release on 2026-11-12,
+  compacted twice with `/compact`, matches the same shape and parses to 23
+  rows with 2 boundaries. The `syntheticPrompt` marker was observed in the
+  older sessions and is absent from the pinned source.
+
+- **Rebuilt models and web searches (observed 2026-11-12):** Agent output in
+  `updates.jsonl` carries no model. Each turn's `turn_completed` record names
+  its model as the one key of `usage.modelUsage`, such as `grok-4.7-build`,
+  the name `chat_history.jsonl` writes as `model_id`. Agentsview stamps that
+  model on the turn's rebuilt assistant rows, including rows before a
+  checkpoint the turn ran across. User chunks carry `_meta.modelId` without
+  the `-build` suffix, so it is not used. In local sessions, 310 of 311 turns
+  name one model; a turn naming several leaves its rows without one. A backend
+  web search starts with title `Web search:` and `rawInput`
+  `{"variant":"WebSearch","backend":true}`; its query arrives in the finished
+  update's `rawOutput.action`. Agentsview rebuilds it as `web_search` with
+  that action as input, as `chat_history.jsonl` records it.
+
+- **Archive writes:** Later records change rows an earlier sync stored: a result
+  pairs onto a stored call, and a compaction renumbers rebuilt rows. A Grok
+  parse with every source file present therefore replaces the stored
+  transcript. A parse missing `chat_history.jsonl`, `updates.jsonl` after a
+  compaction, or a needed checkpoint file appends instead and keeps the
+  archived rows.
+
+- **Tool rows:** Assistant rows keep their calls in `tool_calls` and add a
+  rendered block per call to the row text, as Claude rows do. Results pair
+  onto their calls by `tool_call_id`. This matches the Claude and Codex
+  layout, so Grok emits no standalone tool-role rows.
+
 - **Evidence:** `source`.
 
 - **Upstream:** Clone `https://github.com/xai-org/grok-build.git` at
@@ -2056,7 +2145,9 @@ fixtures retain this field; missing identities remain source-local.
   confirm that the derived chat rows themselves carry no message timestamps.
   Agentsview maps timestamped `tool_call` and terminal `tool_call_update`
   records to the existing tool-result event model, so Activity can use tool
-  completion time without adding derived transcript messages.
+  completion time. Transcript rows after the last compaction come from
+  `chat_history.jsonl`; earlier rows are rebuilt from the stream, as the
+  compaction entry below describes.
 
 - **Usage and cost:** Durable `turn_completed` updates may carry per-model
   input, output, cache-read, cache-creation, and reasoning tokens plus
@@ -2113,9 +2204,11 @@ fixtures retain this field; missing identities remain source-local.
   [copied-fork](https://github.com/xai-org/grok-build/blob/d71f6e0c1f5acc5469e503e192fe14824e6f8c90/crates/codegen/xai-grok-shell/src/agent/subagent/mod.rs#L1291-L1306)
   summary writes in `subagent/mod.rs` at the commit above.
 
-- **Agentsview:** `internal/parser/grok.go`, `internal/parser/grok_provider.go`,
-  colocated tests, and the sanitized upstream-generated fixtures in
-  `internal/parser/testdata/grok-build`.
+- **Agentsview:** `internal/parser/grok.go`,
+  `internal/parser/grok_compaction.go`, `internal/parser/grok_provider.go`,
+  colocated tests, and the sanitized fixtures in
+  `internal/parser/testdata/grok-build`. The `compacted` fixture follows the
+  record shapes of local Grok Build sessions with invented content.
 
 - **Watcher evidence (2026-09-20):** Rechecked the pinned session guide above:
   `summary.json` indexes the session, while transcript and signal files are
@@ -2140,8 +2233,17 @@ fixtures retain this field; missing identities remain source-local.
   [usage normalization and cost calculation](https://github.com/XiaomiMiMo/MiMo-Code/blob/f24ce4eb7341bfba6bb608436c1d27a843508adf/packages/opencode/src/session/session.ts).
 - **Usage and cost:** Assistant message data persists input, output, reasoning,
   cache-read, cache-write, model, and a calculated currency cost. Agentsview
-  reads the token/model fields but deliberately ignores the stored cost and
-  catalog-prices the normalized usage.
+  catalog-prices the normalized usage. Reverified 2026-11-11: `getUsage`
+  estimates each step's cost from models.dev rates (0 when unpriced) and
+  writes it on the `step-finish` part; in max mode the message `cost` also
+  includes losing candidates and the judge
+  ([processor](https://github.com/XiaomiMiMo/MiMo-Code/blob/f24ce4eb7341bfba6bb608436c1d27a843508adf/packages/opencode/src/session/processor.ts#L982)).
+  Agentsview keeps the sum of the `step-finish` costs as a recorded cost, as
+  for OpenCode. The pinned `getUsage` stores `output` as the SDK output minus
+  reasoning and bills `reasoning` separately at the output rate. Every tagged
+  release from v0.1.1 through v0.1.16 (where the file moved to `packages/cli`)
+  and the 2026-11-09 default branch do the same. Stored output adds reasoning
+  back; see the shared rule in the `opencode` entry.
 - **Agentsview:** `internal/parser/mimocode.go` delegates to
   `internal/parser/opencode.go`; compare MiMo's pinned schema with OpenCode
   whenever their shared parser changes.
@@ -2421,22 +2523,59 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   user message and falls back to the title only when there is none. Kilo and
   MiMo Code share this parser.
 
-- **Usage and cost:** Assistant messages persist input, output, cache-read, and
-  cache-write tokens, plus model/provider identity. Agentsview computes price
-  from those tokens rather than consuming a persisted USD total. Reverified
-  2026-09-07: the pinned `message-v2.ts` hydrates message data independently
-  of its part rows. Agentsview retains model identity even when no recognized
-  token fields are available; usage-only resync guards check model loss before
-  checking token counts.
+- **Usage and cost:** Assistant messages persist input, output, reasoning,
+  cache-read, and cache-write tokens, plus model/provider identity. Agentsview
+  computes price from those tokens. Reverified 2026-11-11 at the pinned
+  commit: each `step-finish` part stores the `cost` of one model request,
+  which
+  [`Session.getUsage`](https://github.com/anomalyco/opencode/blob/dff8fbc149fb7492e4f07b713ac31ea70d9a541c/packages/opencode/src/session/session.ts#L338)
+  estimates in USD from models.dev or configured rates (0 when a model has
+  no rate; GitHub Copilot responses use the provider's nano-AIU charge). The
+  [processor](https://github.com/anomalyco/opencode/blob/dff8fbc149fb7492e4f07b713ac31ea70d9a541c/packages/opencode/src/session/processor.ts#L458)
+  adds each step's cost to the message `cost` but overwrites the message
+  `tokens` with the last step's, so a multi-step message's tokens cover only
+  its last request. Agentsview keeps the sum of the message's `step-finish`
+  costs as a recorded cost (data version 176), which prices the message only
+  when the catalog has no rate for its model. The message `cost` is not used,
+  because Kilo and MiMo Code add costs that belong to other requests to it.
+  The experimental `session_message` table always stores `cost: 0`, so the v2
+  path records none. Reverified 2026-09-07: the pinned `message-v2.ts`
+  hydrates message data independently of its part rows. Agentsview retains
+  model identity even when no recognized token fields are available;
+  usage-only resync guards check model loss before checking token counts.
 
-- **Usage-only records (checked 2026-11-11 at `v1.19.5`, the last release
-  that writes the v1 tables):** On every `step-finish`,
+- **Usage-only records (checked 2026-11-11 at `v1.19.5`, the last release that
+  writes the v1 tables):** On every `step-finish`,
   [processor.ts](https://github.com/anomalyco/opencode/blob/810c0eba1a7348036f8bdf61e6632d0c36c6876c/packages/opencode/src/session/processor.ts#L435-L470)
   saves the step's tokens on the assistant message, whatever parts the step
   produced. A v1 message can therefore carry usage with no text, reasoning
   text, or tool part. Agentsview stores it as a hidden usage-only row, as the
   v2 projection already did. Kilo, MiMo Code, and ICodeMate share this
   decoder.
+
+- **Reasoning tokens (2026-11-11):** The `tokens.output` convention changed.
+  Through v1.3.15, `getUsage` stored the SDK output count, which includes
+  reasoning. Commit
+  [`280eb16e`](https://github.com/anomalyco/opencode/commit/280eb16e7704791b031481bc5415fbecfdec0319)
+  (#21047, first released in v1.3.16) stores output minus reasoning and
+  bills reasoning separately; the pinned
+  [session.ts](https://github.com/anomalyco/opencode/blob/67caf894e0843ee370e72839e8265e483233479b/packages/opencode/src/session/session.ts#L338)
+  still does. The v2 `session_message` writer,
+  [publish-llm-event.ts](https://github.com/anomalyco/opencode/blob/67caf894e0843ee370e72839e8265e483233479b/packages/core/src/session/runner/publish-llm-event.ts#L18),
+  stores `visibleOutputTokens`, also output minus reasoning, and first
+  shipped in v1.16.0; its tokens carry no `total`. Since v1.1.57 (commit
+  `0fd6f365`) v1 records also persist `tokens.total`, the SDK
+  input-plus-output total. Agentsview stores `output_tokens` with reasoning
+  included and `reasoning_tokens` as the subset, which pricing bills once. For
+  a v1 record it adds reasoning back only when `total` equals input,
+  cache-read, cache-write, output, and reasoning combined; a record without
+  `total` (all older than the change) or matching neither sum keeps its stored
+  output. v2 projections always add it. Kilo, MiMo Code, and ICodeMate share
+  this rule. `TestParseOpenCodeDB_ReasoningTokens` and
+  `TestOpenCodeFamilyReasoningTokensArePricedOnce` cover both conventions
+  through parse, storage, and cost. Data version 179 reparses the four
+  providers in place.
+
 - **Working directory:** SQLite sessions store a per-session `directory` and a
   `project_id`. The synthetic `global` project uses `worktree=/`. Agentsview
   prefers a concrete `session.directory` over `project.worktree` when
@@ -2577,17 +2716,17 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   at a local Ollama server therefore yields Ollama tags such as
   `kimi-k2.7-code:cloud`, and `data.providerID` is that config's own key
   rather than a catalog provider, so the parser does not retain it. OpenCode
-  writes `cost: 0` for such models because it has no rate for them, and the
-  parser never imports OpenCode cost, so every such turn is priced by
+  writes `cost: 0` for such models because it has no rate for them. A recorded
+  $0 never prices a row, so every such turn is priced by
   agentsview. Ollama's [pricing page](https://ollama.com/pricing) bills cloud
   models per million tokens; on the check date it listed `kimi-k2.7-code` at
-  $0.95 input, $0.19 cached input, and $4.00 output, equal to the `moonshotai`
-  row in the embedded GenAI Prices document. `PricingResolver.ResolveAt`
-  therefore retries the untagged name (`pricing.OllamaCloudBaseModel`) only
-  after every exact, custom, historical, and canonical attempt on the tagged
-  name fails. The pinned LiteLLM snapshot lists `ollama/*-cloud` rows at $0;
-  those exact rows still win, and local tags such as `:27b-mlx` or `:latest`
-  stay unpriced.
+  $0.95 input, $0.19 cached input, and $4.00 output, equal to the
+  `moonshotai` row in the embedded GenAI Prices document.
+  `PricingResolver.ResolveAt` therefore retries the untagged name
+  (`pricing.OllamaCloudBaseModel`) only after every exact, custom, historical,
+  and canonical attempt on the tagged name fails. The pinned LiteLLM snapshot
+  lists `ollama/*-cloud` rows at $0; those exact rows still win, and local tags
+  such as `:27b-mlx` or `:latest` stay unpriced.
 
 - **Agentsview:** `internal/parser/opencode.go`,
   `internal/parser/opencode_provider.go`, and
@@ -2612,8 +2751,20 @@ preservation of archived messages for OpenCode, Kilo, MiMoCode, and Icodemate.
   and
   [message.ts](https://github.com/Kilo-Org/kilocode/blob/938919ab72e3977d1512e0363417270e3337c7b1/packages/core/src/session/message.ts).
 - **Usage and cost:** Compatible message data includes input, output,
-  cache-read, and cache-write tokens with model identity. The parser does not
-  consume a Kilo-reported currency total; Agentsview catalog-prices tokens.
+  cache-read, and cache-write tokens with model identity. Agentsview
+  catalog-prices tokens. Reverified 2026-11-11: Kilo's `getUsage` prefers the
+  provider's reported charge (OpenRouter, the Kilo gateway, Vercel AI Gateway)
+  and otherwise estimates from rates, and the stored value does not say which.
+  [`KiloCostPropagation`](https://github.com/Kilo-Org/kilocode/blob/938919ab72e3977d1512e0363417270e3337c7b1/packages/opencode/src/kilocode/session/cost-propagation.ts#L63)
+  adds child subagent session costs into the parent message `cost`, so
+  Agentsview keeps only the sum of the message's `step-finish` costs as a
+  recorded cost, as for OpenCode. Kilo merged OpenCode's reasoning change
+  (`280eb16e`) in v7.2.6; v7.2.5 and earlier store output with reasoning
+  included. The pinned
+  [session.ts](https://github.com/Kilo-Org/kilocode/blob/938919ab72e3977d1512e0363417270e3337c7b1/packages/opencode/src/session/session.ts#L443)
+  subtracts reasoning, and its v2 writer stores `visibleOutputTokens`. Kilo
+  had no `session_message` writer before v7.2.6. The `opencode` entry's
+  reasoning rule applies.
 - **Agentsview:** `internal/parser/kilo.go` uses the OpenCode family parser.
   Kilo migrations mean the pinned current source must be compared with legacy
   fixtures when changing compatibility.
@@ -2716,8 +2867,8 @@ schemas keep their existing ordering behavior.
   provider-executed tool activity, which lives in
   `metadata.modelToolActivities`. Every assistant message carries `metrics`.
   Agentsview stores such a message as a hidden usage-only row. When any
-  message carries metrics, the session aggregate event keeps only the
-  reported cost, so the row does not double count.
+  message carries metrics, the session aggregate event keeps only the reported
+  cost, so the row does not double count.
 - **Agentsview:** `internal/parser/cline.go` and
   `internal/parser/cline_provider.go`. User input in `<id>.messages.json` is
   wrapped in `<user_input mode="...">` envelopes and can contain internal
@@ -2943,9 +3094,10 @@ schemas keep their existing ordering behavior.
   update (3.16.29) has shrunk or wiped some users' `cursorDiskKV` rows, so the
   parser tolerates a `fullConversationHeadersOnly` entry whose `bubbleId` row
   is missing rather than failing the whole session.
-- **Chunked headers:** [Issue #2863](https://github.com/kenn-io/agentsview/issues/2863)
-  reports a `_v: 18` composer with an empty inline header list and a
-  `headerLog` containing `count` and `chunkCount`. Its ordered headers live in
+- **Chunked headers:**
+  [Issue #2863](https://github.com/kenn-io/agentsview/issues/2863) reports a
+  `_v: 18` composer with an empty inline header list and a `headerLog`
+  containing `count` and `chunkCount`. Its ordered headers live in
   `composerConvHeaders:<composerId>:<six-digit index>` rows. The synthetic
   parser and sync tests reproduce this reported shape. Agentsview reads only
   the declared chunks and marks missing, empty, or short sets truncated.
@@ -3000,18 +3152,19 @@ schemas keep their existing ordering behavior.
   rewrite that leaves size and mtime unchanged still misses the skip cache; a
   member-level fingerprint digests every parse input of that one composer (the
   raw `composerData` document plus its bubble and header rows' keys and
-  values), so an equal-length bubble rewrite, a header reorder, or a rename that
-  leaves `lastUpdatedAt` untouched still reads as changed. A chat deleted inside
-  Cursor IDE is retired through stored-source-hint tombstones on `state.vscdb`
-  change events and through complete-container ownership reconciliation. A
-  `state.vscdb` watcher event hashes each composer's `composerData` document
-  and parses only composers whose hash differs from the archived one; chats
-  trashed or permanently deleted in agentsview are skipped. Edits confined to
-  bubble or header rows, composers whose value became NULL or headerless, and a
-  replacement database whose composer documents are byte-identical wait for
-  the 15-minute scheduled reconciliation, which reparses the whole database
-  whenever its container fingerprint moved. A malformed `composerData` value
-  fails that scheduled pass until it is fixed.
+  values), so an equal-length bubble rewrite, a header reorder, or a rename
+  that leaves `lastUpdatedAt` untouched still reads as changed. A chat deleted
+  inside Cursor IDE is retired through stored-source-hint tombstones on
+  `state.vscdb` change events and through complete-container ownership
+  reconciliation. A `state.vscdb` watcher event hashes each composer's
+  `composerData` document and parses only composers whose hash differs from
+  the archived one; chats trashed or permanently deleted in agentsview are
+  skipped. Edits confined to bubble or header rows, composers whose value
+  became NULL or headerless, and a replacement database whose composer
+  documents are byte-identical wait for the 15-minute scheduled reconciliation,
+  which reparses the whole database whenever its container fingerprint
+  moved. A malformed `composerData` value fails that scheduled pass until it
+  is fixed.
 
 ## Amp (`amp`)
 
@@ -3225,7 +3378,13 @@ schemas keep their existing ordering behavior.
   cache-read and cache-write/creation values in nested or historical flat
   shapes. Model IDs are present. Agentsview catalog-prices the tokens. Data
   version 81 reparses existing Pi-family archives after adding the flat
-  `cacheWrite` spelling.
+  `cacheWrite` spelling. Each assistant message also stores `usage.cost.total`
+  in USD, which
+  [`calculateCost`](https://github.com/earendil-works/pi/blob/f1c587dde39025c75d7397bc14532d8fa5c001d9/packages/ai/src/models.ts#L639)
+  estimates from the model registry; custom models have zero rates and
+  record $0. Agentsview keeps it as a recorded cost (data version 176), which
+  prices the message only when the catalog has no rate for its model.
+  Reverified 2026-11-11.
 - **Reasoning effort:** Assistant messages store the Pi thinking level as
   `message.thinkingLevel`, written since Pi v0.99.0 (2026-09-29, upstream
   commit `540e174c72`, "Virtual models"). Older logs carry only
@@ -3277,6 +3436,31 @@ schemas keep their existing ordering behavior.
   against 133 local run directories, with and without the header: all type as
   subagents with a parent, none resolve to themselves, and the other Pi
   sessions keep their fork type. Data version 156 reparses Pi-format archives.
+- **Scoped recovery:** Reverified 2026-11-10 against the shared JSONL source set
+  and Pi's streaming discovery adapter. Pi forwards requested scopes to the
+  shared walker, so inaccessible session paths use
+  [scoped retries][pi-scoped-retries] without changing configured source
+  identities. The transcript format, parsed output, and data version are
+  unchanged.
+- **Artifact directories:** Reverified 2026-11-12 against pi-subagents at
+  `7e2794efba0b727af51d08c36614ea939f1a827b`: the
+  [artifact writer](https://github.com/nicobailon/pi-subagents/blob/7e2794efba0b727af51d08c36614ea939f1a827b/src/shared/artifacts.ts),
+  the
+  [session-root helper](https://github.com/nicobailon/pi-subagents/blob/7e2794efba0b727af51d08c36614ea939f1a827b/src/extension/index.ts),
+  and the
+  [child launcher](https://github.com/nicobailon/pi-subagents/blob/7e2794efba0b727af51d08c36614ea939f1a827b/src/runs/foreground/subagent-executor.ts).
+  Session-local outputs go into a `subagent-artifacts` directory beside the
+  transcript. Child transcripts use the parent transcript's stem as their
+  directory, separately from artifacts. A local reproduction with a dangling
+  package-cache symlink inside an artifact output caused incomplete Pi
+  discovery and repeated reconciliation. Pi, OMO, and StepCode exclude
+  `subagent-artifacts` descendants from discovery, changed-path mapping, and
+  source lookup. They classify excluded changes as non-data so remote delta
+  planning does not scan the provider. An explicitly configured root with that
+  basename remains supported, including when a broader root also contains it.
+  Nested child transcripts outside artifact directories remain discoverable,
+  and unreadable session directories still report incomplete discovery. The
+  transcript format, parsed output, and data version are unchanged.
 - **Agentsview:** `internal/parser/pi.go` and `internal/parser/pi_provider.go`;
   alternate branches remain in the file but only the active ancestry is a
   conversation. Reverified 2026-09-03 against 156 local Pi transcripts: the
@@ -3478,6 +3662,33 @@ schemas keep their existing ordering behavior.
   prefix StepCode's resume picker hides, and leaves them unlinked because the
   parent transcript doesn't record the child ID.
 
+## Direct API (`direct-api`)
+
+- **Format:** A body-free subset of Pi v3 JSONL, written by tools that call
+  model APIs directly instead of through a coding agent. Producers never write
+  prompts, documents, or replies.
+
+- **Evidence:** `no-public-source`.
+
+- **Upstream:** None. AgentsView owns this contract, a subset of the Pi v3
+  session format documented under Pi above; checked 2026-11-13.
+
+- **Usage and cost:** Each assistant line carries input, output, cache-read, and
+  cache-write tokens with a provider and model. Agentsview derives monetary
+  cost from the catalog.
+
+- **Contract:** The public line shapes and usage meaning are in
+  [Direct API Sessions](../token-usage.md#direct-api-sessions).
+
+- **Agentsview:** Direct API reuses the Pi-family provider in
+  `internal/parser/pi.go` and `internal/parser/pi_provider.go`; no separate
+  parser is needed. Its registry entry supplies the default directory
+  (`.agentsview/direct-api`), the `DIRECT_API_DIR` override, the
+  `direct_api_dirs` config key, and the `direct-api:` session-ID prefix, so
+  these sessions never merge into Pi's. Sessions are found at any depth below
+  the directory, and a bare header UUID falls back to a header scan. Cost is
+  derived from the catalog.
+
 ## Qwen Code (`qwen`)
 
 - **Format:** Gemini-derived project chat-record JSONL.
@@ -3493,10 +3704,10 @@ schemas keep their existing ordering behavior.
   catalog-derived.
 - **Usage-only records (checked 2026-11-11 at the pinned commit):**
   [geminiChat.ts](https://github.com/QwenLM/qwen-code/blob/076427650d363ce9e9a0962f389361b474c170dc/packages/core/src/core/geminiChat.ts#L3906-L3931)
-  throws before recording a reply with no text, thought, or function call, so
-  no usage-only assistant record reaches the file. Thought-only replies with
-  `usageMetadata` are recorded, and Agentsview already keeps them. No change
-  was needed.
+  throws before recording a reply with no text, thought, or function call,
+  so no usage-only assistant record reaches the file. Thought-only replies
+  with `usageMetadata` are recorded, and Agentsview already keeps them. No
+  change was needed.
 - **Session names (2026-09-30):** `/rename` and the title generator append
   `{"type":"system","subtype":"custom_title","systemPayload":{"customTitle":"<name>","titleSource":"manual"|"auto"}}`
   to the same chat JSONL, and the last record wins. Records written before
@@ -3758,9 +3969,15 @@ schemas keep their existing ordering behavior.
   and
   [usage-accumulator.ts](https://github.com/openclaw/openclaw/blob/40d31f34813c2a01284b097c0d0d785fbb173400/src/agents/embedded-agent-runner/usage-accumulator.ts).
 - **Usage and cost:** Messages persist input, output, cache-read, cache-write,
-  model identity, and sometimes `usage.cost.total`. Agentsview intentionally
-  ignores the reported cost and catalog-prices normalized token fields to keep
-  pricing attribution consistent.
+  model identity, and sometimes `usage.cost.total`. Agentsview catalog-prices
+  normalized token fields and keeps `usage.cost.total` as a recorded cost
+  (data version 176), which prices the message only when the catalog has no
+  rate for its model. Reverified 2026-11-11:
+  [`calculateCost`](https://github.com/openclaw/openclaw/blob/40d31f34813c2a01284b097c0d0d785fbb173400/packages/ai/src/model-utils.ts#L9)
+  estimates it from catalog or configured rates (0 when unpriced), and
+  [`applyProviderReportedUsageCost`](https://github.com/openclaw/openclaw/blob/40d31f34813c2a01284b097c0d0d785fbb173400/packages/ai/src/model-utils.ts#L23)
+  replaces only `total` with the provider's charge and sets
+  `cost.totalOrigin` to `provider-billed`.
 - **Usage-only records (checked 2026-11-11 at the pinned commit):** The agent
   loop emits the provider's final message, usage included, as `message_end`
   without checking its content
@@ -3840,7 +4057,7 @@ schemas keep their existing ordering behavior.
   the compatible format family, not the exact QClaw build.
 - **Usage and cost:** Compatible records can contain input, output, cache-read,
   cache-write, model, and reported total cost. As for OpenClaw, Agentsview
-  ignores the reported monetary field and catalog-prices tokens.
+  catalog-prices tokens and keeps `usage.cost.total` as a recorded cost.
 - **Agentsview:** `internal/parser/qclaw.go` has its own decoder for the
   OpenClaw record shape. Like OpenClaw, it keeps an assistant message with
   usage and no text or tool call as a hidden usage-only row (rechecked
@@ -4329,6 +4546,47 @@ schemas keep their existing ordering behavior.
   under the Hermes folder (`state.db`, `state.db-wal`, `sessions/<name>`)
   rather than its absolute local path, so an archive unpacked into a fresh
   folder keeps its fingerprints (`TestHermesFingerprintsIgnoreTheLocalFolder`).
+- **Watcher change check (2026-11-10):** Reverified the entire producer tree at
+  [Hermes `aca4f1df`](https://github.com/NousResearch/hermes-agent/tree/aca4f1df).
+  Stores with a positive integer schema version at most 33,
+  `transcript_revision`, and complete native message-update triggers use a
+  per-session token to skip unchanged members on database and WAL events. The
+  token includes parsed session fields, model usage ledger rows, transcript
+  revision, and a checksum over every message ID, timestamp, and finish
+  reason. The checksum scans message history. Tokens also include whether
+  rewrite tracking was verified when they were created, in both direct and
+  bulk fingerprint passes. Enabling tracking after an untracked edit therefore
+  requires a full check. Tokens created before this provenance was included
+  also receive one full check. The native `messages_transcript_revision_update`
+  and `messages_display_revision_update` definitions in
+  [hermes_state_common.py](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/hermes_state_common.py)
+  cover payload and display rewrites. Coverage is rechecked on every event:
+  an older writer can recreate shorter triggers. Invalid or future schema
+  versions and incomplete trigger coverage retain full checks.
+  [Native recovery](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/hermes_cli/session_recovery.py)
+  repairs all out-of-window timestamps in fresh recovery output. Installing
+  that output changes the timestamp checksum even when revision and live count
+  stay unchanged. No replacement tracker is used. Reverify these couplings
+  when the producer changes: additive changes can occur without a
+  schema-version bump. The pinned tree has no independent message session-ID
+  reassignment. A finish-reason change in
+  [transcript repair](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/agent/transcript_repair.py#L317-L328)
+  names content and display metadata in the update, advancing the revision.
+  [Prune rewrites](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/hermes_state_prune_rewrite.py#L225-L249)
+  first insert a retained row with a new ID, advancing the greatest message
+  ID. Transcript-file edits use their own `sessions/` events. Listing costs
+  session metadata, distinct lifetime ledger keys, and message history, not
+  only changed sessions. Auxiliary same-key ledger UPSERTs can leave session
+  fields/revision unchanged, so the full ledger read remains necessary under
+  the current producer contract. Ledger keys aggregate route/task usage; their
+  lifetime count has no verified constant bound per session. Database events
+  also scan transcript directory entries and check membership in the same read
+  snapshot, so transcripts for missing or unreadable rows remain discoverable.
+  Unchanged members need only indexed session lookups; selected members also
+  check message readability. Cron members still receive full fingerprint
+  checks because an ancestor can change their resolved job. Other selected
+  members read transcript payloads. The new fingerprint format causes one
+  reparse of previously imported sessions as they are checked.
 - **Model usage check (2026-10-22):**
   [hermes_state_usage.py](https://github.com/NousResearch/hermes-agent/blob/3ba2b0787ed3a73ec3b08085ed0137f235209cf4/hermes_state_usage.py)
   records per-model and billing-route deltas in `session_model_usage`.
@@ -4383,7 +4641,12 @@ schemas keep their existing ordering behavior.
   clear surviving children's parent links. A cron continuation whose
   ancestors were pruned keeps its stored job, including transcript-only parses
   and Augure Desktop. Cron member fingerprints include the resolved job ID in
-  direct and cached reads for both providers.
+  direct and cached reads for both providers. Scoped reconciliation recognises
+  virtual state members from membership proofs or configured archive paths,
+  including after a profile disappears. Reverified 2026-11-12 with a state
+  session moved between two configured roots: syncing its former root, even
+  after removing the old profile, preserves the complete archived session as
+  source-present. This includes profiles named `sessions` or `state.db`.
 
 ## Forge (`forge`)
 
@@ -4768,7 +5031,10 @@ schemas keep their existing ordering behavior.
   `internal/parser/antigravity_proto.go`,
   `internal/parser/antigravity_brain_transcript.go`, and
   `internal/parser/antigravity_provider.go`; field decoding is deliberately
-  marked as reverse engineering. The brain transcript needs no such decoding:
+  marked as reverse engineering. [agentsview#3135](https://github.com/kenn-io/agentsview/issues/3135)
+  reports `USER_INPUT` field 19 → 3 → 1 as typed text and
+  19 → 3 → 2 → 27 → 1 → 2 as the skill expansion; the parser prefers the typed
+  text, checked only against a synthetic CLI fixture. The brain transcript needs no such decoding:
   it is line-delimited JSON with named fields, verified 2026-09-26 against
   transcripts two Antigravity builds wrote, and it is read as untrusted
   structured input. Rechecked 2026-09-29 with synthetic transcripts through
@@ -4973,8 +5239,13 @@ schemas keep their existing ordering behavior.
   message.usage token fields) is compatible-family evidence from the `claude`
   entry.
 - **Usage and cost:** Compatible messages can persist input, output, cache-read,
-  cache-write, and model identity. Agentsview catalog-prices these values and
-  consumes no product-reported USD total.
+  cache-write, and model identity. Agentsview catalog-prices these values. On
+  the VSCode OpenCode path, a `step-finish` part `cost` is kept as a recorded
+  cost through the shared OpenCode parser, which prices a message only when
+  the catalog has no rate. No iCodeMate store with step costs was inspected.
+  Without producer source, the `opencode` entry's reasoning rule applies by
+  inference: a v1 record adds reasoning to output only when its own
+  `tokens.total` shows output excludes it, and a v2 projection always adds it.
 - **Agentsview:** `internal/parser/icodemate.go` delegates to
   `internal/parser/opencode.go` for the VSCode OpenCode path;
   `internal/parser/icodemate_cli.go` parses the Claude-format CLI projects
@@ -5212,29 +5483,39 @@ schemas keep their existing ordering behavior.
 
 - **Format:** A `shelley.db` SQLite database containing conversations, messages,
   and JSON usage data.
-- **Evidence:** `documentation`.
-- **Upstream:** The first-party
-  [Shelley launch and storage documentation](https://blog.exe.dev/shelley) was
-  checked 2026-07-19 and identifies the SQLite store at
-  `~/.config/shelley/shelley.db`. No public migration, table schema, or
-  producer source was found, so column-level details remain observed evidence.
-- **Usage and cost:** `usage_data` can persist input, cache-creation,
-  cache-read, output, model, and exact `cost_usd`. Agentsview intentionally
-  ignores `cost_usd` while emitting token usage, avoiding mixed/double cost
-  attribution and using catalog pricing instead.
+- **Evidence:** `source`.
+- **Upstream:** Clone `https://github.com/boldsoftware/shelley.git` at
+  `4c77f06f2b5596a01acca12eeee82e81a83481c1` (found 2026-11-11); see the
+  [messages schema](https://github.com/boldsoftware/shelley/blob/4c77f06f2b5596a01acca12eeee82e81a83481c1/db/schema/002-messages.sql)
+  and the
+  [`Usage` type](https://github.com/boldsoftware/shelley/blob/4c77f06f2b5596a01acca12eeee82e81a83481c1/llm/llm.go#L786).
+  The first-party
+  [launch and storage documentation](https://blog.exe.dev/shelley) identifies
+  the SQLite store at `~/.config/shelley/shelley.db`.
+- **Usage and cost:** `usage_data` persists input, cache-creation, cache-read,
+  output, model, and `cost_usd`. `cost_usd` is the exe.dev gateway's
+  `Exedev-Gateway-Cost` response header, or 0 when the header is missing
+  ([`CostUSDFromResponse`](https://github.com/boldsoftware/shelley/blob/4c77f06f2b5596a01acca12eeee82e81a83481c1/llm/llm.go#L769)).
+  Agentsview catalog-prices the tokens and keeps `cost_usd` as a recorded
+  cost (data version 176), which prices the message only when the catalog has
+  no rate for its model. Indirect calls in `other_usage_data` are not read.
 - **Agentsview:** `internal/parser/shelley.go` and
-  `internal/parser/shelley_provider.go`; schema and cost-field behavior are
-  observed implementation evidence.
+  `internal/parser/shelley_provider.go`.
 
 ## Mistral Vibe (`vibe`)
 
 - **Format:** Legacy sessions are a directory containing `messages.jsonl` and
   `meta.json`. Since the CLI's unified harness rollout (around September 2026)
   sessions are written under `unified/<session-id>/`. Agentsview reads store
-  v1 minors 1–8, manifest v1, projection v1, required runtime v3, and journal
-  record v1. Missing store, manifest, and projection versions default to v1; a
-  missing store minor defaults to 1. Newer versions return an error. The
-  session directory holds these files:
+  v1 at any minor, manifest v1, projection v1, and journal record v1. Missing
+  store, manifest, and projection versions default to v1; a missing store
+  minor defaults to 1. A different store format, manifest, projection, or
+  journal record version returns an error. The producer bumps the store minor
+  for changes an older writer must not attempt; minors 9 and 10 (Vibe 3.1)
+  changed runtime and checkpoint baselines that Agentsview does not read, so
+  the minor is not a compatibility gate for a read-only consumer.
+  `runtime-state.json` is not version-checked, because Agentsview reads only
+  its identity and session metadata. The session directory holds these files:
     - `CURRENT` names the newest generation and pins its `manifest.json` by
       `manifest_sha256`, the SHA-256 of the document without its trailing
       newline. Agentsview rejects a mismatch, as the producer does.
@@ -5248,10 +5529,15 @@ schemas keep their existing ordering behavior.
     - `journal/<sequence>.jsonl` holds digest-chained records. The producer
       journals every durable projection change as a `projection_delta`
       (`append_entry`, `replace_entry`, `remove_entry`, `set_history_entries`,
-      `set_envelope`) or `projection_advanced` record. It folds the journal into
-      a new generation only when the session settles, so a running turn exists
+      `set_envelope`) or `projection_advanced` record. Since store minor 9 a
+      session move journals `session_relocated`, which replaces the session
+      metadata and applies its own projection delta, usually a `checkpoint`
+      entry. Only `cwd` changes: `relocate_session` in `_runtime.py` copies
+      `active_model` from the stored runtime state. It folds the journal into a
+      new generation only when the session settles, so a running turn exists
       only in the journal. Agentsview replays these records like
-      `_apply_journal`, ignores runtime records, and skips a final record
+      `_apply_journal`, lets the relocated `cwd` supersede `runtime-state.json`
+      and `meta.json`, ignores other runtime records, and skips a final record
       without its newline.
 - **Evidence:** `source`.
 - **Upstream:** Clone `https://github.com/mistralai/mistral-vibe.git` at
@@ -5260,7 +5546,10 @@ schemas keep their existing ordering behavior.
   and
   [history_manager.py](https://github.com/mistralai/mistral-vibe/blob/0685654a40a4035966891289065379a751a7e617/vibe/cli/history_manager.py).
   The unified store is verified against v2.26.1, commit
-  `4ae5c5955da8e761318916bdb1a7f46f0b50c7d0`. See
+  `4ae5c5955da8e761318916bdb1a7f46f0b50c7d0`, and store minors 9–10 against
+  v3.1.2, commit `b20313e01d6926d4191da89c32d5da11e3a0a060`
+  ([\_storage.py](https://github.com/mistralai/mistral-vibe/blob/b20313e01d6926d4191da89c32d5da11e3a0a060/harness/runtimes/python/python/mistralai_vibe_local_harness/vibe/_storage.py)
+  for `STORE_FORMAT_MINOR` and `SessionRelocatedRecordV1`). See
   [\_storage.py](https://github.com/mistralai/mistral-vibe/blob/4ae5c5955da8e761318916bdb1a7f46f0b50c7d0/harness/runtimes/python/python/mistralai_vibe_local_harness/vibe/_storage.py)
   for `apply_projection_delta` at line 893 and `_apply_journal` at line
   3631,
@@ -5332,7 +5621,10 @@ schemas keep their existing ordering behavior.
   `meta.json`, and journal segments are data-bearing; publication temporaries,
   generation directories, chunks, and the `active/` session leases are not.
   Reverified 2026-10-16 with `TestVibeUnifiedProviderParseJournal` and
-  `TestSyncVibeUnifiedJournalAppends`.
+  `TestSyncVibeUnifiedJournalAppends`. Reverified 2026-11-16 by syncing a
+  session the Vibe 3.1.2 CLI wrote at store minor 10, before and after a
+  `session_relocated` record written through the producer's
+  `UnifiedSessionStore.relocate_session`.
 - **Agentsview:** `internal/parser/vibe.go`, `internal/parser/vibe_unified.go`,
   and `internal/parser/vibe_provider.go`.
 
@@ -5527,7 +5819,9 @@ schemas keep their existing ordering behavior.
   identities take precedence; do not parse display prose for billing facts.
 - **Agentsview:** `internal/parser/evener.go` and `evener_provider.go`. Fixtures
   are synthetic and cover semantic content, usage, metadata and fork behavior.
-  Capture discovery uses bounded directory batches and the raw-audit progress
+  Empty compaction labels and literal text matching those labels carry
+  distinct source types while retaining their transcript text. Capture
+  discovery uses bounded directory batches and the raw-audit progress
   contract. Remote imports verify content hashes rather than trusting copied
   filesystem timestamps. Remote Evener imports derive project names from the
   recorded path without probing that directory on the receiving machine. The
@@ -5773,7 +6067,12 @@ schemas keep their existing ordering behavior.
   The local daemon's startup sync establishes its baseline first. Failed
   metadata-only updates recover on the next full sync (normally within 15
   minutes) or transcript write. Direct session lookups refresh metadata
-  without consuming the watcher baseline.
+  without consuming the watcher baseline, including ID-only and unsuccessful
+  lookups. Reverified 2026-11-11 against two-session metadata edits and
+  metadata-only reconciliation fixtures: full and scoped discovery use shared
+  preparation for selected roots. Descendant scans refresh their active index
+  snapshot without acknowledging pending metadata changes for other sessions;
+  whole-root discovery still establishes the watcher baseline.
 
 ## fx (`fx`)
 
@@ -5823,12 +6122,18 @@ schemas keep their existing ordering behavior.
   [vercel-labs/fx#1226](https://github.com/vercel-labs/fx/pull/1226), so only
   older sessions have it. Input includes cache reads and writes. AgentsView
   subtracts those tokens from fresh input and prices the separate token counts
-  from its catalog. It omits fx's reported cost, which can be zero for
-  subscription runs. Cumulative totals leave peak context unknown. Usage dates
-  use the earlier of the latest transcript event and the usage file's
-  modification time, falling back to the latest event or session start when
-  the modification time is unavailable. Optional counts can be null, which
-  AgentsView treats as unknown with zero tokens.
+  from its catalog. Each model entry's `total_cost` is the Vercel AI Gateway
+  charge
+  ([gateway client](https://github.com/vercel-labs/fx/blob/b9ca60d0102cf84cea061456c41206f66149b311/src/gateway/client.zig#L3359)),
+  and 0 for Codex and Grok subscription runs. Agentsview keeps it as a
+  recorded cost (data version 176) only when `snapshot.billing` is `complete`,
+  the same condition fx uses before it reports a cost; it prices the model's
+  usage only when the catalog has no rate. Reverified 2026-11-11. Cumulative
+  totals leave peak context unknown. Usage dates use the earlier of the latest
+  transcript event and the usage file's modification time, falling back to the
+  latest event or session start when the modification time is unavailable.
+  Optional counts can be null, which AgentsView treats as unknown with zero
+  tokens.
 - **Agentsview:** Sessions require schema 4. Event frames support schemas 1 to
   3, usage envelopes and owner markers schema 1, and usage snapshots schema 3.
   Unsupported session, event, or owner versions skip the source. Encrypted
@@ -5935,6 +6240,70 @@ schemas keep their existing ordering behavior.
   not been observed in a published log and are not rendered.
   `session-index.db` is not read.
 
+## Muse Personal (`muse-personal`)
+
+- **Format:** Meta's personal assistant writes version-1 transcripts under
+  `~/agents/agent-<uuid>/sessions/<session-uuid>.jsonl`, with an optional sibling
+  `sessions.json` index. This is a different product and persistence format from
+  Muse Code. The first record is `session_header` with `version`, `session_id`,
+  `agent_id` and RFC 3339 `created_at`. Each `item` has a non-negative integer
+  `seq`, open-ended `source`, RFC 3339 `created_at` and typed `item`. Supported
+  variants are `message`, `message_parts`, `thinking`, `commentary_text`,
+  `function_call` and `function_call_output`. Output `metadata` is an optional
+  JSON string. `compaction_checkpoint.created_at` is integer Unix epoch seconds;
+  its summary is visible and its nested `details_json` history is opaque.
+  The version-1 index has a `sessions` array with identity, timestamps, transcript
+  path, sequence-space counts and optional context-window snapshots. Unknown
+  index keys are ignored. Its `transcript_path` is never a filesystem authority.
+- **Evidence:** `no-public-source`.
+- **Upstream:** Meta documentation was checked 2026-11-02. Searches of Meta's
+  public product and developer documentation did not locate this persistence
+  schema. The [Muse product page](https://ai.meta.com/muse/) identifies the
+  personal assistant only; it is not format evidence. Muse Code's public SDK
+  schema does not describe these files. Shapes were independently checked
+  against two private byte-preserved native captures on 2026-11-02: 7 and 92
+  items, 1 and 27 call/output pairs, and one compaction. These captures are not
+  repository fixtures. `internal/parser/testdata/muse_personal/` contains only
+  developer-authored synthetic examples; their six transcript/index SHA-256
+  hashes were checked against the synthetic source packet on 2026-11-02.
+  The captures confirmed out-of-order physical writes for late finalized
+  thinking, output records without metadata and additional unknown index keys.
+- **Usage and cost:** None emitted. `context_window_usage` is a context snapshot,
+  not per-message usage. Internal `model_id` is not exposed as a public model
+  name. Titles, parent links and chat/subagent classification remain unknown.
+- **Agentsview:** `internal/parser/muse_personal.go` and
+  `internal/parser/muse_personal_provider.go` require UUID layout and matching
+  version-1 header identity. Recognized future transcript versions and duplicate
+  session identities leave discovery incomplete so they cannot authorize raw
+  custody tombstones. Sessions use `muse-personal:<session_id>`.
+  Visible assistant commentary participates in dialogue search and export.
+  Items are sorted by sequence before pairing; ties keep physical order.
+  Only byte-identical same-sequence records are deduplicated. A checkpoint is
+  anchored after the highest preceding physical item sequence; it does not
+  replay nested history or discard previous rows. Outputs attach only to a
+  unique preceding unmatched call ID; sequential reuse works, ambiguity leaves
+  outputs unpaired. Source/sequence occurrence provenance distinguishes retained
+  rows. Unknown variants retain a bounded sanitized type marker even when their
+  body fields have unfamiliar JSON shapes; their bodies stay raw-only. Unknown
+  records accept the RFC3339 and integer epoch-second timestamp shapes already
+  used by known records. Null or invalid record timestamps count as malformed.
+  File parts retain inert recorded references. Thinking signatures,
+  output metadata, checkpoint details and context snapshots stay in raw custody.
+  An unterminated final line defers publication. Raw capture includes the original
+  transcript and regular index, even when the index version cannot enrich the
+  session. Reverified against synthetic fixtures on 2026-11-10: index freshness
+  uses the matching session ID, agent ID and normalized creation instant, with
+  update timestamps in row order (the first eligible row extends end time).
+  Each verified index generation is decoded once per sync pass. Arrival, edits
+  and removal refresh only affected session projections; unrelated fields,
+  whitespace and sibling rows do not force replacement. The complete index
+  remains in raw custody, including malformed or opaque bytes. Local and
+  hosted parsing use the same provider; logical hosted paths remain stable
+  across generations. Nonregular transcripts are rejected before opening;
+  unreadable owned directories and observed cancellation cannot authorize a
+  complete discovery or replacement. An unfinished header also defers parsing
+  and makes discovery nonauthoritative until the rewrite completes.
+
 [evener-source-1]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/transcript/transcript.go
 [evener-source-2]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/turn.go
 [evener-source-3]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/llm/types.go
@@ -5943,3 +6312,4 @@ schemas keep their existing ordering behavior.
 [grok-subagent-resume]: https://github.com/xai-org/grok-build/blob/d71f6e0c1f5acc5469e503e192fe14824e6f8c90/crates/codegen/xai-grok-shell/src/agent/subagent/mod.rs#L1180-L1195
 [omo-configuration-paths]: https://github.com/code-yeongyu/senpi/blob/b50f58c8a21b0e94b12c4269a9a8c608e03d308c/packages/coding-agent/src/config.ts
 [omo-session-manager]: https://github.com/code-yeongyu/senpi/blob/b50f58c8a21b0e94b12c4269a9a8c608e03d308c/packages/coding-agent/src/core/session-manager.ts
+[pi-scoped-retries]: ../configuration.md#sync-behavior

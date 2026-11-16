@@ -28,6 +28,7 @@ func linkChildOutcome() rawderive.ParsedManifest {
 // The fallback is bounded to the immutable capture scope, and counts content
 // cohorts rather than duplicate proofs. Public reads must not choose a variant.
 func TestHostedCrossSourceRelationshipScope(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"unique", "equal_cohort", "ambiguous", "other_device", "other_root", "other_provider"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newProjectionFixture(t)
@@ -108,6 +109,7 @@ func TestHostedCrossSourceRelationshipScope(t *testing.T) {
 }
 
 func TestHostedCrossSourceHistoricalExactAuthority(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"removed", "excluded"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newProjectionFixture(t)
@@ -144,6 +146,7 @@ func TestHostedCrossSourceHistoricalExactAuthority(t *testing.T) {
 }
 
 func TestHostedCrossSourceAliasAnchorLimitsHistoricalAuthority(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	own, accepted := f.acceptScoped(t, "device-a", "own", "", parser.AgentCodex, "root-a", "own.jsonl")
 	combined := projectionOutcome("historical parent")
@@ -169,6 +172,7 @@ func TestHostedCrossSourceAliasAnchorLimitsHistoricalAuthority(t *testing.T) {
 }
 
 func TestHostedCrossSourceLinkLookupsStayBounded(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	child, _ := f.acceptScoped(t, "device-a", "child", "", parser.AgentCodex, "root-a", "child.jsonl")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, child), child, linkChildOutcome()))
@@ -213,6 +217,7 @@ func TestHostedCrossSourceLinkLookupsStayBounded(t *testing.T) {
 }
 
 func TestHostedCrossSourcePluralOwnersRemainContextual(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	for _, device := range []string{"device-a", "device-b"} {
 		child, _ := f.acceptScoped(t, device, "child", "", parser.AgentCodex, "root-a", "child.jsonl")
@@ -243,6 +248,7 @@ func TestHostedCrossSourcePluralOwnersRemainContextual(t *testing.T) {
 // The owner is published once. Only its separately captured target changes,
 // including a target revision between physical reads and public edge mapping.
 func TestHostedCrossSourceTargetLifecycleAndReadRevision(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	own, _ := f.acceptScoped(t, "device-a", "owner", "", parser.AgentCodex, "root-a", "child.jsonl")
 	child := linkChildOutcome()
@@ -362,6 +368,7 @@ func TestHostedCrossSourceTargetLifecycleAndReadRevision(t *testing.T) {
 // A hosted raw child links to its parent through raw_session_links, so the
 // PR filter must walk that relation to keep the parent's tree.
 func TestHostedSidebarPRFilterKeepsRawChildTree(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	child, _ := f.acceptScoped(t, "device-a", "child", "", parser.AgentCodex, "root-a", "child.jsonl")
 	childOutcome := linkChildOutcome()

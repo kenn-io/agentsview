@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/url"
@@ -23,6 +24,15 @@ import (
 	"go.kenn.io/agentsview/internal/servicehttp"
 	"go.kenn.io/agentsview/internal/update"
 )
+
+type daemonProgressContextKey struct{}
+
+func daemonProgressWriter(ctx context.Context) io.Writer {
+	if w, ok := ctx.Value(daemonProgressContextKey{}).(io.Writer); ok {
+		return w
+	}
+	return os.Stderr
+}
 
 type transportMode int
 
@@ -162,7 +172,7 @@ func detectTransportContext(
 		return transport{}, err
 	}
 	if isExternalDaemonStarting(dataDir) {
-		fmt.Fprintln(os.Stderr,
+		fmt.Fprintln(daemonProgressWriter(ctx),
 			"server is starting up, waiting...")
 		if waitTimeout <= 0 {
 			waitTimeout = startupWaitTimeout
@@ -181,7 +191,7 @@ func detectTransportContext(
 		return transportFromRuntime(sf), nil
 	}
 	if IsDaemonStarting(dataDir) {
-		fmt.Fprintln(os.Stderr,
+		fmt.Fprintln(daemonProgressWriter(ctx),
 			"server is starting up, waiting...")
 		if waitTimeout <= 0 {
 			waitTimeout = startupWaitTimeout
@@ -413,7 +423,7 @@ func waitForBackgroundLaunchBeforeArchiveWrite(
 	}
 	started := time.Now()
 	deadline := started.Add(waitTimeout)
-	progress := daemonLaunchProgressWriter{w: os.Stderr}
+	progress := daemonLaunchProgressWriter{w: daemonProgressWriter(ctx)}
 	var lastUpdate time.Time
 	for isBackgroundLaunchActive(dataDir) {
 		if backgroundServeProbeHook != nil {
@@ -457,11 +467,19 @@ func shouldReplaceDaemonRuntime(rt *DaemonRuntime, currentVersion string) bool {
 	return update.IsNewer(currentVersion, rt.Record.Version)
 }
 
-func longLivedDaemonCompatibilityError(err error) error {
-	return fmt.Errorf("%w\n\nThis long-running client cannot use the running daemon and will not replace it. "+
+type longLivedCompatibilityError struct{ cause error }
+
+func (e *longLivedCompatibilityError) Unwrap() error { return e.cause }
+
+func (e *longLivedCompatibilityError) Error() string {
+	return fmt.Sprintf("%v\n\nThis long-running client cannot use the running daemon and will not replace it. "+
 		"Restart this command with the current agentsview binary (`mcp`, `pg push --watch`, "+
 		"`duckdb push --watch`, or the installed push service). If the daemon still needs "+
-		"replacement, run `agentsview daemon restart` from that install", err)
+		"replacement, run `agentsview daemon restart` from that install", e.cause)
+}
+
+func longLivedDaemonCompatibilityError(err error) error {
+	return &longLivedCompatibilityError{cause: err}
 }
 
 func shouldReplaceIncompatibleDaemonRuntime(

@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -862,50 +864,48 @@ func TestSessionSearchHiddenHints(t *testing.T) {
 	}
 }
 
-func TestSessionSearchFTSHints(t *testing.T) {
+func TestSessionSearchSQLiteQuotedPatternOmitsFTSHint(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 	seedSessionWithOpts(t, dataDir, "visible", "p", nil)
 	seedSearchMessage(t, dataDir, "visible", "decode failure error notes")
-	for _, tc := range []struct {
-		pattern, source string
-		regex           bool
-		hint            bool
-	}{
-		{"decode error notes", "", false, true},
-		{"decode error notes", "messages", false, true},
-		{"decode error notes", "tool_result", false, false},
-		{"decoding", "messages", false, false},
-		{"decode error notes", "messages", true, false},
-	} {
-		out, err := executeCommand(newRootCommand(), "session", "search", tc.pattern, "--in", tc.source, "--json", "--regex="+strconv.FormatBool(tc.regex))
-		require.NoError(t, err)
-		got := decodeCLIJSON[struct {
-			Hints []contentSearchCLIHint `json:"hints"`
-		}](t, out)
-		if tc.pattern == "decoding" {
-			fts, err := executeCommand(newRootCommand(), "session", "search", tc.pattern, "--fts", "--json")
-			require.NoError(t, err)
-			require.Len(t, decodeCLIJSON[service.ContentSearchResult](t, fts).Matches, 1)
-		}
-		if tc.hint {
-			require.Len(t, got.Hints, 1)
-			assert.Equal(t, "try_fts", got.Hints[0].Code)
-		} else {
-			assert.Empty(t, got.Hints)
-		}
-	}
+	out, err := executeCommand(newRootCommand(), "session", "search", `"decoding failure"`, "--in", "messages", "--json")
+	require.NoError(t, err)
+	got := decodeCLIJSON[struct {
+		Matches []db.ContentMatch      `json:"matches"`
+		Hints   []contentSearchCLIHint `json:"hints"`
+	}](t, out)
+	assert.Empty(t, got.Matches)
+	assert.Empty(t, got.Hints)
+	fts, err := executeCommand(newRootCommand(), "session", "search", `"decoding failure"`, "--fts", "--json")
+	require.NoError(t, err)
+	require.Len(t, decodeCLIJSON[service.ContentSearchResult](t, fts).Matches, 1)
 }
 
-func TestSessionSearchHintPreservesServer(t *testing.T) {
+func TestSessionSearchRemoteFTSHints(t *testing.T) {
 	newAgentDataDir(t)
 	tokenFile := filepath.Join(t.TempDir(), "token")
 	require.NoError(t, os.WriteFile(tokenFile, []byte("search-token"), 0o600))
-	ftsCalls := 0
+	ftsCalls, backend := 0, ""
+	ftsHasMatches := true
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "Bearer search-token", r.Header.Get("Authorization"))
+		if r.URL.Path == "/api/v1/memory/status" {
+			if backend == "" {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"status":"ready","observed_at":"2026-01-01T00:00:00Z","archive":{"backend":"` + backend + `","read_only":true},"lexical":{"status":"ready"},"semantic":{"status":"ready"},"sources":{"status":"ready"}}`))
+			return
+		}
 		if r.URL.Query().Get("mode") == "fts" {
 			ftsCalls++
-			http.Error(w, "FTS unavailable", http.StatusBadRequest)
+			w.Header().Set("Content-Type", "application/json")
+			if ftsHasMatches {
+				_, _ = w.Write([]byte(`{"matches":[{"session_id":"visible"}]}`))
+			} else {
+				_, _ = w.Write([]byte(`{"matches":[]}`))
+			}
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -916,15 +916,80 @@ func TestSessionSearchHintPreservesServer(t *testing.T) {
 		}
 	}))
 	defer ts.Close()
-	out, err := executeCommand(newRootCommand(), "session", "--server", ts.URL, "--server-token-file", tokenFile, "search", "decode error", "--json")
+	for _, tc := range []struct {
+		backend, pattern, source string
+		regex, hint              bool
+	}{
+		{"cockroach", "decode error notes", "", false, true},
+		{"cockroach", "decode error notes", "messages", false, true},
+		{"cockroach", "decode error notes", "tool_result", false, false},
+		{"cockroach", "decoding", "messages", false, false},
+		{"cockroach", "decode error notes", "messages", true, false},
+		{"", "decode error notes", "messages", false, true},
+		{"sqlite", "decode error notes", "messages", false, false},
+	} {
+		name := tc.backend
+		if name == "" {
+			name = "status endpoint missing"
+		}
+		t.Run(name, func(t *testing.T) {
+			before := ftsCalls
+			backend = tc.backend
+			out, err := executeCommand(newRootCommand(), "session", "--server", ts.URL, "--server-token-file", tokenFile, "search", tc.pattern, "--in", tc.source, "--json", "--regex="+strconv.FormatBool(tc.regex))
+			require.NoError(t, err)
+			got := decodeCLIJSON[struct {
+				Hints []contentSearchCLIHint `json:"hints"`
+			}](t, out)
+			var ftsHints []contentSearchCLIHint
+			for _, hint := range got.Hints {
+				if hint.Code == "try_fts" {
+					ftsHints = append(ftsHints, hint)
+				}
+			}
+			if tc.hint {
+				require.Len(t, ftsHints, 1)
+				assert.Equal(t, before+1, ftsCalls)
+				assert.Contains(t, ftsHints[0].Next, "--server="+ts.URL)
+				assert.Contains(t, ftsHints[0].Next, "--server-token-file="+tokenFile)
+			} else {
+				assert.Empty(t, ftsHints)
+				assert.Equal(t, before, ftsCalls)
+			}
+		})
+	}
+	ftsHasMatches = false
+	backend = "cockroach"
+	before := ftsCalls
+	out, err := executeCommand(newRootCommand(), "session", "--server", ts.URL, "--server-token-file", tokenFile, "search", "missing words", "--in", "messages", "--json")
 	require.NoError(t, err)
-	assert.Equal(t, 1, ftsCalls)
 	got := decodeCLIJSON[struct {
 		Hints []contentSearchCLIHint `json:"hints"`
 	}](t, out)
-	require.Len(t, got.Hints, 1)
-	assert.Contains(t, got.Hints[0].Next, "--server="+ts.URL)
-	assert.Contains(t, got.Hints[0].Next, "--server-token-file="+tokenFile)
+	for _, hint := range got.Hints {
+		assert.NotEqual(t, "try_fts", hint.Code)
+	}
+	assert.Equal(t, before+1, ftsCalls)
+}
+
+type unavailableStatusSearch struct{ service.SessionService }
+
+func (unavailableStatusSearch) MemoryStatus(context.Context) (service.MemoryStatus, error) {
+	return service.MemoryStatus{}, errors.New("status unavailable")
+}
+
+func (unavailableStatusSearch) SearchContent(_ context.Context, req service.ContentSearchRequest) (*service.ContentSearchResult, error) {
+	if req.Mode == "fts" {
+		return &service.ContentSearchResult{Matches: []db.ContentMatch{{SessionID: "visible"}}}, nil
+	}
+	return &service.ContentSearchResult{}, nil
+}
+
+func TestSessionSearchUnavailableStatusKeepsFTSHint(t *testing.T) {
+	cmd := newSessionSearchCommand()
+	req := service.ContentSearchRequest{Pattern: "missing words", Mode: "substring", IncludeOneShot: true, IncludeAutomated: true, IncludeChildren: true}
+	hints := contentSearchHints(t.Context(), cmd, unavailableStatusSearch{}, req, &service.ContentSearchResult{})
+	require.Len(t, hints, 1)
+	assert.Equal(t, "try_fts", hints[0].Code)
 }
 
 func TestSessionSearchRetryQuotesForPlatform(t *testing.T) {

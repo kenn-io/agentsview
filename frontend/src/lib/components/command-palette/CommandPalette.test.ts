@@ -14,6 +14,7 @@ const {
 } = vi.hoisted(() => ({
   mockUi: {
     activeModal: "commandPalette" as "commandPalette" | null,
+    alwaysShowYear: false,
     scrollToOrdinal: vi.fn(),
     clearSelection: vi.fn(),
     clearScrollState: vi.fn(),
@@ -56,6 +57,8 @@ const {
     setRange: vi.fn(),
     resetRange: vi.fn(),
     endSession: vi.fn(),
+    retain: vi.fn(),
+    restore: vi.fn((): { query: string; project: string; selectedIndex: number } | null => null),
   },
   mockRouter: {
     navigateToSession: vi.fn(),
@@ -190,9 +193,38 @@ describe("CommandPalette", () => {
       mockSessions.activeSessionId = null;
     });
     mockUi.activeModal = "commandPalette";
+    mockUi.alwaysShowYear = false;
     mockSessions.filters.project = "";
     mockSessions.sessions = [makeSession("s1", "cursor"), makeSession("s2", "unknown")];
   });
+
+  it.each([false, true])(
+    "formats recent sessions and search results with year=%s",
+    async (showYear) => {
+      const clock = vi
+        .spyOn(Date, "now")
+        .mockReturnValue(new Date("2026-06-01T12:02:00Z").getTime());
+      mockUi.alwaysShowYear = showYear;
+      mockSessions.sessions = [
+        { ...makeSession("recent", "cursor"), ended_at: "2026-06-01T12:00:00Z" },
+      ];
+      mockSearchStore.results = [makeSearchResult({ timestamp: "2026-06-01T12:00:00Z" })];
+      const component = mount(CommandPalette, { target: document.body });
+      try {
+        await tick();
+        expect(document.querySelector(".item-meta")?.textContent).toContain(
+          showYear ? "2026" : "2m ago",
+        );
+        await enterSearchQuery();
+        expect(document.querySelector(".item-meta")?.textContent).toContain(
+          showYear ? "2026" : "2m ago",
+        );
+      } finally {
+        unmount(component);
+        clock.mockRestore();
+      }
+    },
+  );
 
   it("names each recent session's agent in its agent ink, including fallback", async () => {
     const component = mount(CommandPalette, {
@@ -269,6 +301,132 @@ describe("CommandPalette", () => {
     expect(mockSearchStore.endSession).toHaveBeenCalledBefore(mockSearchStore.clear);
     expect(mockSearchStore.clear).toHaveBeenCalledOnce();
     expect(mockSearchStore.resetSort).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the search for the next open when a result is picked", async () => {
+    mockSessions.filters.project = "proj-a";
+    mockSearchStore.results = [
+      makeSearchResult({ session_id: "codex:first" }),
+      makeSearchResult({ session_id: "codex:second" }),
+    ];
+    const component = mount(CommandPalette, { target: document.body });
+    await tick();
+    await enterSearchQuery("configuration");
+
+    const items = document.querySelectorAll<HTMLElement>(".palette-item");
+    items[1]!.click();
+    await tick();
+    unmount(component);
+
+    expect(mockRouter.navigateToSession).toHaveBeenCalledWith("codex:second");
+    expect(mockSearchStore.endSession).toHaveBeenCalledBefore(mockSearchStore.retain);
+    expect(mockSearchStore.retain).toHaveBeenCalledWith({
+      query: "configuration",
+      project: "proj-a",
+      selectedIndex: 1,
+    });
+    expect(mockSearchStore.clear).not.toHaveBeenCalled();
+    expect(mockSearchStore.resetSort).not.toHaveBeenCalled();
+    expect(mockSearchStore.resetRange).not.toHaveBeenCalled();
+  });
+
+  it("discards the search when the palette closes without a pick", async () => {
+    const component = mount(CommandPalette, { target: document.body });
+    await tick();
+    await enterSearchQuery("configuration");
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", cancelable: true }));
+    await tick();
+    unmount(component);
+
+    expect(mockUi.activeModal).toBeNull();
+    expect(mockSearchStore.retain).not.toHaveBeenCalled();
+    expect(mockSearchStore.clear).toHaveBeenCalledOnce();
+  });
+
+  it("reopens a retained search with its query selected and its pick highlighted", async () => {
+    mockSessions.filters.project = "";
+    mockSearchStore.restore.mockReturnValueOnce({
+      query: "configuration",
+      project: "proj-a",
+      selectedIndex: 1,
+    });
+    mockSearchStore.results = [
+      makeSearchResult({ session_id: "codex:first" }),
+      makeSearchResult({ session_id: "codex:second" }),
+    ];
+    const component = mount(CommandPalette, { target: document.body });
+    try {
+      await tick();
+      const input = document.querySelector<HTMLInputElement>(".palette-input")!;
+      expect(input.value).toBe("configuration");
+      expect([input.selectionStart, input.selectionEnd]).toEqual([0, "configuration".length]);
+      const items = document.querySelectorAll<HTMLElement>(".palette-item");
+      expect(items[1]!.classList.contains("selected")).toBe(true);
+      expect(document.querySelector(".palette-controls")?.textContent).toContain("proj-a");
+      expect(mockSearchStore.search).not.toHaveBeenCalled();
+
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      expect(mockRouter.navigateToSession).toHaveBeenCalledWith("codex:second");
+    } finally {
+      unmount(component);
+    }
+  });
+
+  it("offers the clear button only while there is a query", async () => {
+    const component = mount(CommandPalette, { target: document.body });
+    try {
+      await tick();
+      const clearButton = () =>
+        document.querySelector<HTMLButtonElement>('button[aria-label="Clear search"]');
+      expect(clearButton()).toBeNull();
+
+      await enterSearchQuery("co");
+      expect(clearButton()).not.toBeNull();
+
+      await enterSearchQuery("");
+      expect(clearButton()).toBeNull();
+    } finally {
+      unmount(component);
+    }
+  });
+
+  it("clears a reopened search back to a fresh palette", async () => {
+    mockSessions.filters.project = "";
+    mockSearchStore.restore.mockReturnValueOnce({
+      query: "configuration",
+      project: "proj-a",
+      selectedIndex: 1,
+    });
+    mockSearchStore.results = [
+      makeSearchResult({ session_id: "codex:first" }),
+      makeSearchResult({ session_id: "codex:second" }),
+    ];
+    const component = mount(CommandPalette, { target: document.body });
+    try {
+      await tick();
+      const input = document.querySelector<HTMLInputElement>(".palette-input")!;
+      document.querySelector<HTMLButtonElement>('button[aria-label="Clear search"]')!.click();
+      await tick();
+
+      expect(input.value).toBe("");
+      expect(document.activeElement).toBe(input);
+      expect(mockUi.activeModal).toBe("commandPalette");
+      expect(mockSearchStore.clear).toHaveBeenCalledOnce();
+      expect(mockSearchStore.resetSort).toHaveBeenCalledOnce();
+      expect(mockSearchStore.resetRange).toHaveBeenCalledOnce();
+      // Recent sessions replace the results, with the first one highlighted.
+      const items = document.querySelectorAll<HTMLElement>(".palette-item");
+      expect(items).toHaveLength(mockSessions.sessions.length);
+      expect(items[0]!.classList.contains("selected")).toBe(true);
+      expect(document.querySelector('button[aria-label="Clear search"]')).toBeNull();
+
+      // The retained project is gone: the next query searches the sidebar's.
+      await enterSearchQuery("another");
+      expect(mockSearchStore.search).toHaveBeenLastCalledWith("another", "");
+    } finally {
+      unmount(component);
+    }
   });
 
   it("copies canonical session_id to clipboard, not stripped display ID", async () => {
@@ -767,6 +925,40 @@ describe("CommandPalette", () => {
     unmount(component);
   });
 
+  it.each(["generic", "timeout"] as const)("retries a %s search error", async (kind) => {
+    mockSearchStore.mode = kind === "timeout" ? "semantic" : "fulltext";
+    mockSearchStore.error = { detail: kind === "timeout" ? "request timed out" : null, kind };
+    const component = mount(CommandPalette, { target: document.body });
+    await enterSearchQuery();
+    const retry = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".palette-error button"),
+    ).find((button) => button.textContent?.trim() === "Retry");
+    expect(retry).toBeDefined();
+    retry!.focus();
+    retry!.click();
+    expect(document.activeElement).toBe(document.querySelector(".palette-input"));
+    expect(mockSearchStore.retry).toHaveBeenCalledOnce();
+    expect(mockRouter.navigateToSession).not.toHaveBeenCalled();
+
+    unmount(component);
+  });
+
+  it("keeps the first result selected after ArrowDown while stale results are hidden", async () => {
+    mockSearchStore.isSearching = true;
+    mockSearchStore.results = [makeSearchResult(), makeSearchResult({ session_id: "second" })];
+    const component = mount(CommandPalette, { target: document.body });
+    await enterSearchQuery();
+    const input = document.querySelector<HTMLInputElement>(".palette-input")!;
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(mockRouter.navigateToSession).not.toHaveBeenCalled();
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    mockSearchStore.isSearching = false;
+    mockSearchStore.results = [makeSearchResult()];
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(mockRouter.navigateToSession).toHaveBeenCalledWith("codex:search123");
+    unmount(component);
+  });
+
   it("shows the inherited project and can search all projects without changing the sidebar", async () => {
     mockSessions.filters.project = "proj-a";
     const component = mount(CommandPalette, { target: document.body });
@@ -837,7 +1029,7 @@ describe("CommandPalette", () => {
     expect(mockSearchStore.resetRange).toHaveBeenCalledOnce();
   });
 
-  it("explains a semantic timeout and offers an explicit retry", async () => {
+  it("explains a semantic timeout", async () => {
     mockSearchStore.mode = "semantic";
     mockSearchStore.error = {
       detail: "request timed out",
@@ -852,14 +1044,6 @@ describe("CommandPalette", () => {
       "Try again. The first Semantic or Hybrid search can be slower while the embedding model warms up.",
     );
     expect(error?.textContent).not.toContain("request timed out");
-
-    const retry = Array.from(error?.querySelectorAll<HTMLButtonElement>("button") ?? []).find(
-      (button) => button.textContent?.trim() === "Retry",
-    );
-    expect(retry).toBeDefined();
-    retry?.click();
-    expect(mockSearchStore.retry).toHaveBeenCalledOnce();
-    expect(mockRouter.navigateToSession).not.toHaveBeenCalled();
 
     unmount(component);
   });

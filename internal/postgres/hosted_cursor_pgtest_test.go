@@ -12,6 +12,7 @@ import (
 )
 
 func TestHostedCursorsSurviveUnpublishedGenerationSelection(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, accepted := f.accept(t, "device-a", "capture-a", "")
 	parsed := projectionOutcome("older session")

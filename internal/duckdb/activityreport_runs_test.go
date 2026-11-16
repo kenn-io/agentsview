@@ -135,7 +135,7 @@ func TestDuckDBActivityRunsMatchCandidateSweep(t *testing.T) {
 			}
 			want, err := activity.BuildCandidateArtifactsFromSource(ctx, p, metas, store.ActivityReportCandidateSource(ids, q), nil)
 			require.NoError(t, err)
-			require.NoError(t, store.scanActivityCountedMessages(ctx, ids, q, activity.NewMessageAccumulator(q, &want).Add))
+			require.NoError(t, store.scanActivityCountedMessages(ctx, ids, activity.NewMessageAccumulator(q, &want).Add))
 			if memo == "cold" {
 				store.activityRuns = activityRunsMemo{}
 			}

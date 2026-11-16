@@ -2,6 +2,7 @@ package clickhouse
 
 import (
 	"encoding/json/v2"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -170,8 +171,17 @@ func TestUsagePricingDigestFollowsResolutionToNewRow(t *testing.T) {
 }
 
 // A stored context must replay into the pricing block exactly what pricing
-// every event would have recorded.
+// every event would have recorded, whether a group holds one event or many.
 func TestUsagePriceContextReplaysPricingBlock(t *testing.T) {
+	for _, groupEvents := range []int{1, 3} {
+		t.Run(fmt.Sprintf("%d events per group", groupEvents), func(t *testing.T) {
+			testUsagePriceContextReplaysPricingBlock(t, groupEvents)
+		})
+	}
+}
+
+func testUsagePriceContextReplaysPricingBlock(t *testing.T, groupEvents int) {
+	t.Helper()
 	rows := usagePriceTestRows("1", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	type event struct {
 		input    chUsagePriceInput
@@ -192,14 +202,16 @@ func TestUsagePriceContextReplaysPricingBlock(t *testing.T) {
 	pricer := export.NewPricingResolver(rows)
 	for _, e := range events {
 		in := e.input
-		_, _, _, _, err := chUsageAggregateResolvedCost(
-			in.model, in.priceModel, in.providerID, time.Time{},
-			in.inputTok, in.outputTok, in.cacheCr, in.cacheCr1h, in.cacheRd,
-			chBillable(in, in.inputTok), chBillable(in, in.outputTok), 0,
-			chBillable(in, in.cacheCr), chBillable(in, in.cacheCr1h),
-			chBillable(in, in.cacheRd), 0, 0, in.reported,
-			in.hasOrdinal, direct)
-		require.NoError(t, err)
+		for range groupEvents {
+			_, _, _, _, err := chUsageAggregateResolvedCost(
+				in.model, in.priceModel, in.providerID, time.Time{},
+				in.inputTok, in.outputTok, in.cacheCr, in.cacheCr1h, in.cacheRd,
+				chBillable(in, in.inputTok), chBillable(in, in.outputTok), 0,
+				chBillable(in, in.cacheCr), chBillable(in, in.cacheCr1h),
+				chBillable(in, in.cacheRd), 0, 0, in.reported,
+				in.hasOrdinal, direct)
+			require.NoError(t, err)
+		}
 
 		contexts := map[string]string{}
 		rec, err := chPriceUsageInput(in, pricer, contexts)
@@ -211,7 +223,7 @@ func TestUsagePriceContextReplaysPricingBlock(t *testing.T) {
 		}
 		stored, err := decodeUsagePriceContext(contexts[contextID])
 		require.NoError(t, err)
-		require.NoError(t, stored.record(replayed, e.wantKind, rec.bandAbove, 1))
+		require.NoError(t, stored.record(replayed, e.wantKind, rec.bandAbove, groupEvents))
 	}
 
 	want, err := direct.BuildBlock()
@@ -238,9 +250,9 @@ func chBillable(in chUsagePriceInput, tokens int) int {
 // reload pays this.
 func BenchmarkUsagePricingDigest(b *testing.B) {
 	embedded := db.EmbeddedGenAIPricingDocument()
-	genAI, err := genAIEffectivePricingRow(&embedded)
+	genAI, err := db.GenAIEffectivePricingRow(&embedded)
 	require.NoError(b, err)
-	rows := append(db.MirrorPricingRows(db.FallbackPricingMap()), genAI)
+	rows := append(db.MirrorPricingRows(db.FallbackRateMap()), genAI)
 	patterns := make([]string, 0, len(rows))
 	for _, row := range rows {
 		if row.ModelPattern != "" {
@@ -288,7 +300,7 @@ func genAIHistoryDocument(t *testing.T, histBase, otherBase string) db.GenAIPric
 func genAIHistoryRows(t *testing.T, histBase, otherBase string) []export.EffectivePricingRow {
 	t.Helper()
 	document := genAIHistoryDocument(t, histBase, otherBase)
-	genAI, err := genAIEffectivePricingRow(&document)
+	genAI, err := db.GenAIEffectivePricingRow(&document)
 	require.NoError(t, err)
 	return []export.EffectivePricingRow{genAI}
 }

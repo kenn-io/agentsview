@@ -161,7 +161,7 @@ func TestLocalArchiveQuerySessionUsageNoSyncSkipsSingleSessionSync(
 		assert.Equal(t, tokenUseExitOK, exitCode)
 		assert.Equal(t, 42, out.TotalOutputTokens)
 	})
-	assert.NotContains(t, stderr, "warning: usage refresh incomplete")
+	assert.NotContains(t, stderr, "warning: couldn't refresh usage")
 }
 
 // TestLocalSessionUsageRefreshesSubagentTranscripts covers the freshness

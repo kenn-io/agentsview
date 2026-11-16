@@ -82,6 +82,16 @@ func runningAsBackgroundChild() bool {
 	return os.Getenv(backgroundChildEnvVar) == "1"
 }
 
+func serveHandoffPortArgs(port int, explicitPort *int) []string {
+	if explicitPort != nil {
+		return []string{"--port", strconv.Itoa(*explicitPort)}
+	}
+	if port > 0 {
+		return []string{"--restart-port", strconv.Itoa(port)}
+	}
+	return nil
+}
+
 // backgroundLaunchLockPath is the advisory lock that serializes concurrent
 // `serve --background` launches for a data dir.
 func backgroundLaunchLockPath(dataDir string) string {
@@ -661,7 +671,7 @@ probeDaemon:
 	if err != nil {
 		return nil, err
 	}
-	progress := daemonLaunchProgressWriter{w: os.Stderr}
+	progress := daemonLaunchProgressWriter{w: daemonProgressWriter(ctx)}
 	progress.launch(child.Process.Pid, logPath)
 	waitCh := make(chan error, 1)
 	go func() {
@@ -701,7 +711,7 @@ func waitForExternalServeStartup(
 	}
 	started := time.Now()
 	deadline := started.Add(waitTimeout)
-	progress := daemonLaunchProgressWriter{w: os.Stderr}
+	progress := daemonLaunchProgressWriter{w: daemonProgressWriter(ctx)}
 	var lastUpdate time.Time
 	for isExternalDaemonStarting(dataDir) {
 		if backgroundServeProbeHook != nil {
@@ -1109,7 +1119,7 @@ func waitForBackgroundServeReady(
 	waitCh <-chan error,
 	timeout time.Duration,
 ) (*DaemonRuntime, error) {
-	progress := daemonLaunchProgressWriter{w: os.Stderr}
+	progress := daemonLaunchProgressWriter{w: daemonProgressWriter(ctx)}
 	return waitForBackgroundServeReadyWithPolicy(
 		ctx, dataDir, authToken, waitCh, timeout,
 		backgroundServeReadyWaitPolicy{Observe: progress.progress},

@@ -11,7 +11,8 @@ import (
 )
 
 func TestRawSuffixMatchesArchivePG(t *testing.T) {
-	syncer, local, _, ctx := newSessionProvenancePushSync(t, "agentsview_raw_suffix_shared_test")
+	t.Parallel()
+	syncer, local, _, ctx := newSessionProvenancePushSync(t, pgPushTestSchema)
 	dbtest.SeedRawSuffix(t, local)
 	dbtest.TrashRawSuffix(t, local)
 	_, err := syncer.Push(ctx, true, nil)

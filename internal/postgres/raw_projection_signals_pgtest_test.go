@@ -16,6 +16,7 @@ import (
 )
 
 func TestRawProjectionTranscriptsOnlyToolCoverage(t *testing.T) {
+	t.Parallel()
 	f := newHostedFixture(t, "tenant-tool-coverage")
 	options := RawProjectionOptions{Tenant: f.tenant, Content: ingest.ContentOptions{ArchiveContent: config.ArchiveContentTranscripts}}
 	sink, err := NewRawProjectionStore(t.Context(), f.runtime, options)
@@ -59,6 +60,7 @@ func TestRawProjectionTranscriptsOnlyToolCoverage(t *testing.T) {
 }
 
 func TestRawProjectionEqualContentSettlesSignalsWithoutNewIdentity(t *testing.T) {
+	t.Parallel()
 	for _, agent := range []parser.AgentType{parser.AgentCodex, parser.AgentRooCode} {
 		t.Run(string(agent), func(t *testing.T) {
 			f := newProjectionFixture(t)

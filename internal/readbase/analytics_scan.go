@@ -179,7 +179,6 @@ func scanAnalyticsMessageScope(rows *sql.Rows, backend string, formatTime func(a
 // selects after AnalyticsSessionColumns, in field order.
 type AnalyticsSessionExtras struct {
 	PushVersion        bool
-	PushFingerprint    bool
 	FrustrationMarkers bool
 }
 
@@ -206,9 +205,6 @@ func ScanAnalyticsSessions(rows *sql.Rows, backend string, formatTime func(any) 
 		}
 		if extras.PushVersion {
 			dest = append(dest, &r.PushVersion)
-		}
-		if extras.PushFingerprint {
-			dest = append(dest, &r.PushFingerprint)
 		}
 		if extras.FrustrationMarkers {
 			dest = append(dest, &r.FrustrationMarkers)

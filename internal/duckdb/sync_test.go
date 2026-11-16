@@ -308,6 +308,14 @@ func TestPushRebuildTriggers(t *testing.T) {
 			wantReasonHas: "data version",
 		},
 		{
+			name: "frustration marker version drift",
+			mangle: func(t *testing.T, path string) {
+				t.Helper()
+				setMirrorMetadataValue(t, path, frustrationMarkersVersionMetadataKey, "0")
+			},
+			wantReasonHas: "frustration",
+		},
+		{
 			name: "scope drift",
 			mangle: func(t *testing.T, path string) {
 				t.Helper()
@@ -1259,7 +1267,7 @@ func TestSyncPushReportsProgressAcrossBatchBoundaries(t *testing.T) {
 func TestDuckSessionFingerprintCoversEveryMirroredColumn(t *testing.T) {
 	base := db.Session{CreatedAt: "2026-03-11T12:00:00Z"}
 	encodeArgs := func(s db.Session) string {
-		data, err := json.Marshal(sessionInsertArgs(s, "m", "archive", "fp"))
+		data, err := json.Marshal(sessionInsertArgs(s, "m", "archive", "fp", 0))
 		require.NoError(t, err)
 		return string(data)
 	}
@@ -1495,7 +1503,7 @@ func TestSyncModelPricingRetiresOpenRouterRows(t *testing.T) {
 	require.NoError(t, syncer.syncModelPricing(ctx))
 
 	// LiteLLM now covers the model: the local refresh retires the
-	// OpenRouter row and rewrites the ownership sentinel.
+	// OpenRouter row and rewrites the ownership list.
 	require.NoError(t, local.ReconcileModelPricing(
 		[]db.ModelPricing{{
 			ModelPattern: "minimax/MiniMax-M3",
@@ -1529,10 +1537,10 @@ func TestSyncModelPricingRetiresOpenRouterRows(t *testing.T) {
 	assert.Equal(t, int64(2_000_000), input, "replacement row mirrored")
 	var meta string
 	require.NoError(t, syncer.DB().QueryRowContext(ctx,
-		`SELECT updated_at FROM model_pricing WHERE model_pattern = ?`,
+		`SELECT value FROM pricing_meta WHERE key = ?`,
 		pricing.OpenRouterModelsMetaKey,
 	).Scan(&meta))
-	assert.Equal(t, `[]`, meta, "ownership sentinel mirrored by value")
+	assert.Equal(t, `[]`, meta, "ownership list mirrored")
 }
 
 func TestSyncModelPricingSkipsUnchangedMirrorRows(t *testing.T) {
@@ -1550,18 +1558,18 @@ func TestSyncModelPricingSkipsUnchangedMirrorRows(t *testing.T) {
 	require.NoError(t, syncer.syncModelPricing(ctx))
 	_, err := syncer.DB().ExecContext(ctx,
 		`UPDATE model_pricing SET updated_at = ? WHERE model_pattern = ?`,
-		"kept", "claude-test",
+		time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC), "claude-test",
 	)
 	require.NoError(t, err)
 
 	require.NoError(t, syncer.syncModelPricing(ctx))
 
-	var updatedAt string
+	var updatedAt time.Time
 	require.NoError(t, syncer.DB().QueryRowContext(ctx,
 		`SELECT updated_at FROM model_pricing WHERE model_pattern = ?`,
 		"claude-test",
 	).Scan(&updatedAt))
-	assert.Equal(t, "kept", updatedAt)
+	assert.True(t, updatedAt.Equal(time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)), updatedAt)
 }
 
 func TestSyncModelPricingBandsPersistsAndRemovesCompleteSet(t *testing.T) {

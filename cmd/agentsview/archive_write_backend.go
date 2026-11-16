@@ -833,6 +833,7 @@ func (b *localArchiveWriteBackend) ReplicaPush(
 	defer session.Close()
 	result, err := session.Push(ctx, storage.PushOptions{
 		Full:                           cfg.Full || didResync,
+		RewriteUnchanged:               cfg.Full,
 		ScopeVectorsToChangedSessions:  cfg.ScopeVectorsToChangedSessions,
 		LastReconciledVectorGeneration: cfg.LastReconciledVectorGeneration,
 	}, newReplicaPushProgressPrinter())
@@ -1078,6 +1079,7 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 		pusher.session.FrictionReview = engine
 	}
 	pusher.vectors.fullPending = cfg.Full
+	pusher.vectors.rewritePending = cfg.Full
 	defer pusher.session.Close()
 
 	fmt.Printf(

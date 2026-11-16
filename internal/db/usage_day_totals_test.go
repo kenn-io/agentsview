@@ -74,7 +74,7 @@ func TestUsageDayTotalsNotificationDuringReadStaysJournaled(t *testing.T) {
 		require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT baked_agent FROM usage_rollup_installs WHERE session_id='session'`).Scan(&agent))
 		require.Equal(t, "claude", agent)
 	}
-	got, err := database.GetDailyUsage(t.Context(), filter)
+	got, err := database.getDailyUsageUncached(t.Context(), filter)
 	require.NoError(t, err)
 	require.True(t, installed)
 	assert.Equal(t, []bool{true}, reads, "a notification conflict must retry without a full-window preparation")

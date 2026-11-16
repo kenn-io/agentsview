@@ -1,0 +1,23 @@
+{
+  "info": {
+    "id": "019f6000-0000-7000-8000-000000000020",
+    "cwd": "/workspace/fetchkit"
+  },
+  "session_summary": "Add retry with backoff to fetch helper",
+  "generated_title": "Add fetch retry with backoff",
+  "created_at": "2026-07-23T09:46:40.000000000+00:00",
+  "updated_at": "2026-07-23T09:47:37.000000000+00:00",
+  "last_active_at": "2026-07-23T09:47:37.000000000+00:00",
+  "num_messages": 31,
+  "num_chat_messages": 16,
+  "current_model_id": "grok-4.7",
+  "next_trace_turn": 2,
+  "chat_format_version": 1,
+  "git_root_dir": "/workspace/fetchkit",
+  "head_commit": "5f1c0de5f1c0de5f1c0de5f1c0de5f1c0de5f1c0",
+  "head_branch": "feature/fetch-retry",
+  "request_id": "0b1d0000-0000-4000-8000-0000000000a2",
+  "agent_name": "grok-build",
+  "sandbox_profile": "off",
+  "reasoning_effort": "high"
+}

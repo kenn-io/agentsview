@@ -100,8 +100,7 @@ type AnalyticsSession struct {
 	NoCodeContextCount          int
 	RunawayToolLoopCount        int
 	PushVersion                 uint64 // ClickHouse cache version; zero for DuckDB.
-	PushFingerprint             string // DuckDB cache version; empty means uncached.
-	// FrustrationMarkers is the count ClickHouse push stored on the
+	// FrustrationMarkers is the count push stored on the
 	// session; nil when the backend has none and must count them.
 	FrustrationMarkers *int
 }
@@ -954,13 +953,19 @@ func (s *Analytics) GetTrendsTerms(
 	if granularity == "" {
 		granularity = "week"
 	}
-	acc := db.NewTrendAccumulator(f.From, f.To, granularity, terms)
-	sessionFilter := f
-	sessionFilter.From = ""
-	sessionFilter.To = ""
-	sessionFilter.Model = ""
-	sessionFilter.DayOfWeek = nil
-	sessionFilter.Hour = nil
+	if backend, ok := s.backend.(trendPartsBackend); ok {
+		disk, identity := backend.TrendsDisk()
+		if result, handled, err := db.TrendsFromParts(ctx, disk, identity, f, terms, granularity, trendPartsSource{backend}); handled {
+			return result, err
+		}
+	}
+	acc := db.NewTrendWorkers(ctx, f.From, f.To, granularity, terms)
+	defer func() {
+		if acc != nil {
+			_, _ = acc.Finish()
+		}
+	}()
+	sessionFilter := f.TrendsSessionFilter()
 	loc := analyticsLocation(f.Timezone)
 	flt := f.MessageScopeFilter()
 	modelFiltering := len(flt.Models) > 0
@@ -993,17 +998,23 @@ func (s *Analytics) GetTrendsTerms(
 	for rows.Next() {
 		var row trendRow
 		var ordinal int
-		if err := rows.Scan(&row.sessionID, &ordinal, &row.role, &row.isSystem, &row.model, &row.content, &row.msgTS, &row.startedAt, &row.createdAt); err != nil {
-			return db.TrendsTermsResponse{}, err
-		}
-		ts := cmp.Or(s.backend.FormatTime(row.msgTS), s.backend.FormatTime(row.startedAt), s.backend.FormatTime(row.createdAt))
-		local, has := analyticsLocalTime(ts, loc)
 		if !modelFiltering {
+			var timestamp any
+			if err := rows.Scan(&row.content, &timestamp); err != nil {
+				return db.TrendsTermsResponse{}, err
+			}
+			local, has := trendLocalTime(s.backend, timestamp, loc)
 			if has && flt.MatchesDayHour(local, true) {
 				acc.Add(row.content, local)
 			}
 			continue
 		}
+		if err := rows.Scan(&row.sessionID, &ordinal, &row.role, &row.isSystem, &row.model, &row.content, &row.msgTS, &row.startedAt, &row.createdAt); err != nil {
+			return db.TrendsTermsResponse{}, err
+		}
+		ts := cmp.Or(s.backend.FormatTime(row.msgTS), s.backend.FormatTime(row.startedAt), s.backend.FormatTime(row.createdAt))
+		local, has := analyticsLocalTime(ts, loc)
+
 		if err := reducer.Push(db.MessageInput{
 			SessionID:    row.sessionID,
 			Ordinal:      ordinal,
@@ -1020,7 +1031,9 @@ func (s *Analytics) GetTrendsTerms(
 	if err := rows.Err(); err != nil {
 		return db.TrendsTermsResponse{}, err
 	}
-	return acc.Response(), nil
+	response, err := acc.Finish()
+	acc = nil
+	return response, err
 }
 
 func analyticsDateTime(r AnalyticsSession) string {

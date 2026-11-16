@@ -10,7 +10,8 @@ import (
 )
 
 func TestEnsureSchemaRepairsLegacySourceMissingDeletion(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	store, err := NewStore(t.Context(), pgURL, testSchema, true)

@@ -99,18 +99,23 @@ func (e *fakeVectorExport) Close() error { e.closed = true; return nil }
 // newVectorPushTestSync creates a fresh schema with the base + vector tables
 // and returns a Sync wired to a local SQLite DB. It skips the test when the
 // pgvector extension is unavailable, since the whole phase no-ops there.
-func newVectorPushTestSync(
-	t *testing.T, pgURL, schema string,
-) (*Sync, *db.DB, *sql.DB) {
+// vectorPushTestSchema is the schema newVectorPushTestSync pushes into.
+const vectorPushTestSchema = "agentsview_vector_push_test"
+
+func newVectorPushTestSync(t *testing.T) (*Sync, *db.DB, *sql.DB) {
 	t.Helper()
+	const schema = vectorPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	t.Cleanup(func() { _ = pg.Close() })
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
-	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+	if !takeFreshSchemaCopy(t, pgURL, schema) {
+		_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
+		require.NoError(t, err, "drop schema")
+		require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+	}
 
 	available, err := VectorExtensionAvailable(ctx, pg)
 	require.NoError(t, err, "VectorExtensionAvailable")
@@ -120,7 +125,6 @@ func newVectorPushTestSync(
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
-	dbtest.SeedPricingMeta(t, localDB)
 	t.Cleanup(func() { _ = localDB.Close() })
 
 	sync := &Sync{
@@ -220,9 +224,8 @@ func docOrdinal(t *testing.T, pg *sql.DB, docKey string) int {
 // relational sessions, updates exactly those, and leaves vector-only
 // changes and PG-only orphan rows for the next generation-wide push.
 func TestVectorPushChangeScoped(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_change_scoped_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
@@ -333,9 +336,8 @@ SELECT COUNT(*) FROM vector_push_state
 // register the new generation and write only the changed session's chunks,
 // leaving search reading an incomplete generation until the interval floor.
 func TestVectorPushGenerationSwitchPromotesScopedPush(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_gen_switch_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
@@ -397,9 +399,8 @@ SELECT COUNT(*) FROM vector_push_state WHERE generation_id = $1`, gen2),
 // in-memory fingerprint memo cannot leave the recreated generation populated
 // with only the changed session's chunks.
 func TestVectorPushRecreatedGenerationPromotesScopedPush(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_gen_recreated_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
@@ -463,9 +464,8 @@ SELECT COUNT(*) FROM vector_push_state WHERE generation_id = $1`, gen2),
 // so the id comparison passes and only the machine push record — wiped in
 // the same reset — reveals the new incarnation.
 func TestVectorPushRecreatedTablesReusedIDPromotesScopedPush(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_tables_recreated_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
@@ -528,9 +528,8 @@ SELECT COUNT(*) FROM vector_push_state WHERE generation_id = $1`, gen2),
 // promotion safety check: if a scoped push is promoted to generation-wide, the
 // source must be re-read with full readiness before any hash scan or PG write.
 func TestVectorPushPromotionRechecksFullReadiness(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_promotion_recheck_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
@@ -583,9 +582,8 @@ func TestVectorPushPromotionRechecksFullReadiness(t *testing.T) {
 // generation is not registered in PostgreSQL must not create that generation
 // before the full export proves ready.
 func TestVectorPushPromotionDefersRegistrationUntilReady(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_promotion_registration_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
@@ -632,9 +630,8 @@ func TestVectorPushPromotionDefersRegistrationUntilReady(t *testing.T) {
 // generation before scoped deltas are applied, the push must reopen
 // generation-wide and fill the recreated generation instead of scoping into it.
 func TestVectorPushRecreatedGenerationAfterScopedProbePromotesGenerationWide(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_probe_race_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
@@ -699,9 +696,8 @@ SELECT COUNT(*) FROM vector_push_state WHERE generation_id = $1`, gen2),
 // scoped generation probe but before success returns, the push must discard
 // the scoped result and repopulate the recreated generation generation-wide.
 func TestVectorPushRecreatedTablesAfterScopedApplyRetriesGenerationWide(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_post_apply_race_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
@@ -769,9 +765,8 @@ SELECT COUNT(*) FROM vector_push_state WHERE generation_id = $1`, gen1),
 // write the machine witness, or a later scoped push would trust an incomplete
 // baseline and skip the required promotion back to generation-wide.
 func TestVectorPushDeferredFullPassDoesNotRecordMachineWitness(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_deferred_witness_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
@@ -842,9 +837,8 @@ SELECT COUNT(*) FROM vector_push_state
 // same machine, one filter's generation-wide witness must not let another
 // filter trust a reused generation id for a scoped push.
 func TestVectorPushFilteredWitnessDoesNotCrossScopesAfterTableRecreation(t *testing.T) {
-	pgURL := testPGURL(t)
-	_, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_filtered_witness_test")
+	t.Parallel()
+	_, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSessionProject(t, localDB, "alpha", "alpha")
@@ -870,7 +864,7 @@ func TestVectorPushFilteredWitnessDoesNotCrossScopesAfterTableRecreation(t *test
 		syncState:          newScopedSyncStateStore(localDB, filterScopeAlpha, false),
 		aliasBackfillState: targetState,
 		machine:            "test-machine",
-		schema:             "agentsview_vector_push_filtered_witness_test",
+		schema:             vectorPushTestSchema,
 		targetFingerprint:  "target-fp",
 		syncStateTarget:    filterScopeAlpha,
 		projects:           []string{"alpha"},
@@ -883,7 +877,7 @@ func TestVectorPushFilteredWitnessDoesNotCrossScopesAfterTableRecreation(t *test
 		syncState:          newScopedSyncStateStore(localDB, filterScopeBeta, false),
 		aliasBackfillState: targetState,
 		machine:            "test-machine",
-		schema:             "agentsview_vector_push_filtered_witness_test",
+		schema:             vectorPushTestSchema,
 		targetFingerprint:  "target-fp",
 		syncStateTarget:    filterScopeBeta,
 		projects:           []string{"beta"},
@@ -936,9 +930,8 @@ SELECT COUNT(*) FROM vector_push_state
 // incarnation race: a full reconciliation must verify the generation survived
 // intact before it records the durable witness that later scoped pushes trust.
 func TestVectorPushFullRechecksGenerationBeforeRecordingWitness(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_full_witness_race_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
@@ -1017,9 +1010,8 @@ SELECT COUNT(*) FROM vector_push_state WHERE generation_id = $1`, gen1),
 }
 
 func TestVectorPushRoundTrip(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_roundtrip_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
@@ -1084,9 +1076,8 @@ func TestVectorPushRoundTrip(t *testing.T) {
 }
 
 func TestVectorPushDeltaNoop(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, _ := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_noop_test")
+	t.Parallel()
+	sync, localDB, _ := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
@@ -1117,9 +1108,8 @@ func TestVectorPushDeltaNoop(t *testing.T) {
 // reports the session current is invisible to a normal delta push, but a full
 // push bypasses the unchanged-hash skip and restores it.
 func TestVectorPushFullRepairsSilentCorruption(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_full_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
@@ -1175,9 +1165,8 @@ func TestVectorPushFullRepairsSilentCorruption(t *testing.T) {
 // session's chunks are restored although its push state reports it current,
 // while other sessions keep the unchanged-hash skip.
 func TestVectorPushRepairsNamedSessions(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_repair_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
@@ -1215,9 +1204,8 @@ func TestVectorPushRepairsNamedSessions(t *testing.T) {
 // sessions/messages rows its session-phase push failed to write — and that
 // the untouched delta state sends it on the next successful push.
 func TestVectorPushDeferredOnSessionError(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_deferred_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
@@ -1269,9 +1257,8 @@ func TestVectorPushDeferredOnSessionError(t *testing.T) {
 }
 
 func TestVectorPushContentChange(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_content_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
@@ -1310,9 +1297,8 @@ func TestVectorPushContentChange(t *testing.T) {
 }
 
 func TestVectorPushEviction(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_evict_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
@@ -1356,9 +1342,8 @@ func TestVectorPushEviction(t *testing.T) {
 }
 
 func TestVectorPushNoActiveGeneration(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_nogen_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
@@ -1373,9 +1358,8 @@ func TestVectorPushNoActiveGeneration(t *testing.T) {
 }
 
 func TestVectorPushSharedDocAcrossGenerations(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_sharedgen_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "X")
@@ -1435,9 +1419,8 @@ func TestVectorPushSharedDocAcrossGenerations(t *testing.T) {
 // without a UNIQUE (session_id, ordinal) violation and land on their final
 // ordinals.
 func TestVectorPushOrdinalShift(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_shift_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
@@ -1487,9 +1470,8 @@ func TestVectorPushOrdinalShift(t *testing.T) {
 // removal deletes a vanished doc's vectors from all generations, and PG must
 // match.
 func TestVectorPushDocRemovedAndShared(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_shrink_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
@@ -1572,9 +1554,8 @@ func TestVectorPushDocRemovedAndShared(t *testing.T) {
 // names another machine is skipped on push (counted in Conflicts) and left
 // untouched on evict (also counted).
 func TestVectorPushConflictSkipped(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_conflict_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
@@ -1637,9 +1618,8 @@ func TestVectorPushConflictSkipped(t *testing.T) {
 // both the push and evict paths (counted as conflicts), while this pusher's
 // own machine name self-heals — its vectors push and evict normally.
 func TestVectorPushLegacyMachineOwnership(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_legacy_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
@@ -1708,9 +1688,8 @@ func TestVectorPushLegacyMachineOwnership(t *testing.T) {
 // into one generation, PG state spans all of them, so counting these rows
 // reported every other machine's sessions as ownership conflicts.
 func TestVectorPushForeignMachineSessionsNotConflicts(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_foreign_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "mine")
@@ -1771,9 +1750,8 @@ func TestVectorPushForeignMachineSessionsNotConflicts(t *testing.T) {
 // if a later BeginExport would report the source as unready. The export still
 // sees B as absent, so the eviction proceeds from the stable snapshot.
 func TestVectorPushEvictionUsesStableExportSnapshot(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_unready_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
@@ -1820,9 +1798,8 @@ func TestVectorPushEvictionUsesStableExportSnapshot(t *testing.T) {
 // a rebuild is in progress, the whole phase skips without applying evictions,
 // and the next healthy push re-derives them from a fresh export.
 func TestVectorPushSkipsWhenSourceUnreadyAtBeginExport(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_begin_unready_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
@@ -1875,9 +1852,8 @@ func TestVectorPushSkipsWhenSourceUnreadyAtBeginExport(t *testing.T) {
 // changes. The vectors.db source carries every session regardless of scope, so
 // without the gate the beta doc would be re-pushed under a filtered push.
 func TestVectorPushProjectScope(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_scope_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSessionProject(t, localDB, "alpha", "alpha")
@@ -1944,9 +1920,8 @@ func TestVectorPushProjectScope(t *testing.T) {
 // re-push or evict its vectors. Scoping by the local project must leave them
 // untouched.
 func TestVectorPushLocalProjectMoveOutOfScope(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_localmove_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSessionProject(t, localDB, "mover", "alpha")
@@ -2017,9 +1992,8 @@ func TestVectorPushLocalProjectMoveOutOfScope(t *testing.T) {
 // (content + chunk decode) must run only after the in-tx existence probe
 // passes, so a session that always skips never re-exports docs each push.
 func TestVectorPushSkipsDocExportForMissingSession(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, _ := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_skipexport_test")
+	t.Parallel()
+	sync, localDB, _ := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	// "A" is a real session (pushed to PG). "ghost" is local-only: it never gets
@@ -2052,9 +2026,8 @@ func TestVectorPushSkipsDocExportForMissingSession(t *testing.T) {
 // TestVectorPushOrphanStateEvicted pins finding-3 rule d: a vector_push_state
 // row whose sessions row has vanished is evicted regardless of owner marker.
 func TestVectorPushOrphanStateEvicted(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_orphan_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
@@ -2106,9 +2079,8 @@ func TestVectorPushOrphanStateEvicted(t *testing.T) {
 // the partial view and record the stale scan hash as current, which a
 // same-fingerprint rebuild (same content, same hash) would never repair.
 func TestVectorPushDefersSessionWhenExportDiverges(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_push_diverge_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
@@ -2171,9 +2143,8 @@ func TestVectorPushDefersSessionWhenExportDiverges(t *testing.T) {
 // owner's chunks and push state survive — while a session whose row vanished
 // is still evicted.
 func TestVectorEvictionRechecksOwnershipInTx(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_evict_recheck_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
@@ -2242,9 +2213,8 @@ func TestVectorEvictionRechecksOwnershipInTx(t *testing.T) {
 // state running ahead of the sessions/messages rows its session-phase push
 // failed to write. It must defer instead, and evict on the next clean push.
 func TestVectorPushEvictionDefersFailedSession(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_evict_failed_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "A")
@@ -2296,9 +2266,8 @@ func TestVectorPushEvictionDefersFailedSession(t *testing.T) {
 // candidates genuinely absent from the local sessions table fall back to PG
 // project scoping.
 func TestVectorPushFilteredEvictionScopesByLocalProject(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_evict_scope_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSessionProject(t, localDB, "moved", "alpha")
@@ -2364,6 +2333,7 @@ func TestVectorPushFilteredEvictionScopesByLocalProject(t *testing.T) {
 // 42501. That must skip the vector phase with a reason — matching a database
 // without pgvector — not fail a push whose session phase succeeded.
 func TestVectorPushSkipsOnInsufficientPrivilege(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	const schema = "agentsview_vector_privilege_test"
 	const role = "agentsview_vector_restricted"
@@ -2446,8 +2416,8 @@ func TestVectorPushSkipsOnInsufficientPrivilege(t *testing.T) {
 }
 
 func TestUsageOnlyPushClearsVectors(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, local, pg := newVectorPushTestSync(t, pgURL, "agentsview_usage_vector_test")
+	t.Parallel()
+	sync, local, pg := newVectorPushTestSync(t)
 	seedVectorSession(t, local, "usage-session")
 	src := &fakeVectorSource{
 		gen: storage.VectorGenerationInfo{Fingerprint: "usage-gen", Model: "model-a", Dimension: 4}, hasGen: true,
@@ -2480,9 +2450,10 @@ func TestUsageOnlyPushClearsVectors(t *testing.T) {
 }
 
 func TestUsageOnlyPushEvictsDeletedSessionVectors(t *testing.T) {
+	t.Parallel()
 	for _, full := range []bool{false, true} {
 		t.Run(fmt.Sprintf("full=%t", full), func(t *testing.T) {
-			sync, local, pg := newVectorPushTestSync(t, testPGURL(t), "agentsview_usage_deleted_vector_test")
+			sync, local, pg := newVectorPushTestSync(t)
 			src := &fakeVectorSource{
 				gen: storage.VectorGenerationInfo{Fingerprint: "generation-a", Model: "model-a", Dimension: 4}, hasGen: true,
 				hashes: map[string]string{}, docs: map[string][]storage.VectorPushDoc{},

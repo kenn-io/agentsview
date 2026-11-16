@@ -27,9 +27,9 @@ func cleanSchemaTestPG(t *testing.T, pgURL string) {
 }
 
 func TestSessionDeletionCauseSchemaMigrationPreservesRows(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err)
 	defer pg.Close()
@@ -66,9 +66,9 @@ func TestSessionDeletionCauseSchemaMigrationPreservesRows(t *testing.T) {
 // sessions table has the secret_leak_count and
 // secrets_rules_version columns. Also asserts idempotency.
 func TestSecretFindingsSchema(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
@@ -139,9 +139,9 @@ func TestSecretFindingsSchema(t *testing.T) {
 // source_archive_id and file_path provenance columns. Also asserts
 // idempotency across two EnsureSchema runs.
 func TestEnsureSchemaCreatesMappingMirrorAndSessionProvenance(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
@@ -180,9 +180,9 @@ func TestEnsureSchemaCreatesMappingMirrorAndSessionProvenance(t *testing.T) {
 // idx_tool_calls_file_path index that backs the cross-session Recent Edits
 // feed, mirroring SQLite's index so the query surface has parity on PG.
 func TestToolCallsFilePathIndex(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
@@ -206,9 +206,9 @@ func TestToolCallsFilePathIndex(t *testing.T) {
 }
 
 func TestEnsureSchemaMigratesLegacyMoneyColumns(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
@@ -238,7 +238,7 @@ func TestEnsureSchemaMigratesLegacyMoneyColumns(t *testing.T) {
 			output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok,
 			cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('legacy-rate', 1250000, 9876543, 2500000, 125000, 'seed');
+		) VALUES ('legacy-rate', 1250000, 9876543, 2500000, 125000, '2026-01-01T00:00:00Z');
 
 		ALTER TABLE usage_events
 			ALTER COLUMN cost_microdollars TYPE DOUBLE PRECISION
@@ -350,9 +350,9 @@ func TestEnsureSchemaMigratesLegacyMoneyColumns(t *testing.T) {
 }
 
 func TestMigrateMoneyColumnsPGSerializesConcurrentUpgraders(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
@@ -439,9 +439,9 @@ func TestMigrateMoneyColumnsPGSerializesConcurrentUpgraders(t *testing.T) {
 }
 
 func TestEnsureSchemaRejectsInvalidLegacyMoneyWithoutChangingSchema(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
@@ -473,9 +473,9 @@ func TestEnsureSchemaRejectsInvalidLegacyMoneyWithoutChangingSchema(t *testing.T
 }
 
 func TestPromptEvidenceMigrationPreservesSessions(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err)
 	defer pg.Close()

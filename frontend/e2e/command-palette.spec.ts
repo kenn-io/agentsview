@@ -1,11 +1,62 @@
 import { expect, test, type Page } from "@playwright/test";
 
+const searchResults = [
+  { session_id: "first", project: "project", agent: "codex", ordinal: 0, snippet: "first" },
+  { session_id: "second", project: "project", agent: "codex", ordinal: 0, snippet: "second" },
+];
+
 async function openSearch(page: Page, query: string) {
   await page.keyboard.press("ControlOrMeta+k");
   const input = page.locator(".palette-input");
   await expect(input).toBeVisible();
   await input.fill(query);
 }
+
+test.describe("mobile search", () => {
+  test.use({ timezoneId: "UTC" });
+
+  test("keeps the full date visible with a long project", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 900 });
+    await page.addInitScript(() => localStorage.setItem("agentsview-always-show-year", "true"));
+    await page.route("**/api/v1/search?**", (route) =>
+      route.fulfill({
+        json: {
+          results: [
+            {
+              ...searchResults[0],
+              project: "mmmmmmmmmmmmmmmmmmmm",
+              session_ended_at: "2024-01-15T12:00:00Z",
+            },
+          ],
+        },
+      }),
+    );
+    await page.goto("/usage");
+    await openSearch(page, "first");
+    const meta = page.locator(".palette-item .item-meta");
+    await expect(meta).toContainText("2024");
+    const bounds = await meta.evaluate((el) => {
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      let node: Node | null;
+      while ((node = walker.nextNode())) {
+        const start = node.textContent!.indexOf("Jan 15, 2024");
+        if (start < 0) continue;
+        const range = document.createRange();
+        range.setStart(node, start);
+        range.setEnd(node, node.textContent!.length);
+        return {
+          dateLeft: range.getBoundingClientRect().left,
+          dateRight: range.getBoundingClientRect().right,
+          containerLeft: el.getBoundingClientRect().left,
+          containerRight: el.getBoundingClientRect().right,
+        };
+      }
+      throw new Error("Expected the January 2024 date");
+    });
+    expect(bounds.dateLeft).toBeGreaterThanOrEqual(bounds.containerLeft);
+    expect(bounds.dateRight).toBeLessThanOrEqual(bounds.containerRight);
+  });
+});
 
 for (const theme of ["light", "dark"] as const) {
   test(`search filters share one enabled field style in ${theme}`, async ({ page }) => {
@@ -94,7 +145,7 @@ test("keeps keyboard focus inside the open palette and returns it on close", asy
 test("keeps a real result selected when a new search returns fewer rows", async ({ page }) => {
   let release: () => void = () => {};
   const held = new Promise<void>((resolve) => (release = resolve));
-  let first: Record<string, unknown> | undefined;
+  let first: ({ session_id: string } & Record<string, unknown>) | undefined;
   await page.route(
     (url) => url.pathname === "/api/v1/search",
     async (route) => {
@@ -138,4 +189,99 @@ test("keeps a real result selected when a new search returns fewer rows", async 
   await expect(page.locator(`[id="${active}"]`)).toHaveClass(/palette-item/);
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(/\/sessions\//);
+});
+
+test("Retry sends a new search and shows its results", async ({ page }) => {
+  let attempts = 0;
+  await page.route("**/api/v1/search?**", async (route) => {
+    if (++attempts <= 2) await route.fulfill({ status: 503 });
+    else await route.fulfill({ json: { results: [searchResults[0]] } });
+  });
+  await page.goto("/usage");
+  await openSearch(page, "synchronous DB read");
+  const retry = page.getByRole("button", { name: "Retry" });
+  await expect(retry).toBeVisible();
+  await retry.click();
+  await expect(page.locator(".palette-item").first()).toBeVisible();
+  expect(attempts).toBe(3);
+});
+
+test("automatic recovery selects the first result after a populated search", async ({ page }) => {
+  let attempts = 0;
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route("**/api/v1/search?**", async (route) => {
+    if (new URL(route.request().url()).searchParams.get("q") === "initial search") {
+      await route.fulfill({ json: { results: searchResults } });
+    } else if (++attempts === 1) {
+      await held;
+      await route.fulfill({ status: 503 });
+    } else {
+      await route.fulfill({ json: { results: [searchResults[0]] } });
+    }
+  });
+  await page.goto("/usage");
+  await openSearch(page, "initial search");
+  await expect(page.locator(".palette-item")).toHaveCount(2);
+  const input = page.locator(".palette-input");
+  await input.evaluate((el: HTMLInputElement) => {
+    el.value = "recovering search";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  });
+  await expect(page.locator(".palette-loading")).toBeVisible();
+  await input.press("Enter");
+  await expect(input).toBeVisible();
+  await input.press("ArrowDown");
+  release();
+  await expect(page.locator(".palette-item")).toHaveCount(1);
+  await expect(page.locator(".palette-item").first()).toHaveClass(/selected/);
+  await input.press("Enter");
+  await expect(page).toHaveURL(/\/sessions\/first/);
+  expect(attempts).toBe(2);
+});
+
+test("client errors stay visible after another manual attempt", async ({ page }) => {
+  let attempts = 0;
+  await page.route("**/api/v1/search?**", async (route) => {
+    attempts++;
+    await route.fulfill({ status: 400, body: "invalid search" });
+  });
+  await page.goto("/usage");
+  await openSearch(page, "invalid search");
+  const retry = page.getByRole("button", { name: "Retry" });
+  await expect(retry).toBeVisible();
+  expect(attempts).toBe(1);
+  await retry.click();
+  await expect(retry).toBeVisible();
+  expect(attempts).toBe(2);
+});
+
+test("clearing a failed search prevents its delayed retry from reaching the server", async ({
+  page,
+}) => {
+  let attempts = 0;
+  await page.route("**/api/v1/search?**", async (route) => {
+    attempts++;
+    await route.fulfill({ status: 503 });
+  });
+  await page.goto("/usage");
+  await page.clock.install();
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 60_000));
+  await openSearch(page, "cancel this search");
+  const failedResponse = page.waitForResponse(
+    (response) => response.url().includes("/api/v1/search?") && response.status() === 503,
+  );
+  // Run the search debounce, then keep the retry clock paused while clearing.
+  // Real time here lets a slow test controller lose the race to the retry.
+  await page.clock.runFor(300);
+  await (await failedResponse).finished();
+  const input = page.locator(".palette-input");
+  await input.fill("");
+  await page.clock.runFor(500);
+  // Timer callbacks can start fetches whose route events arrive asynchronously.
+  await page.waitForTimeout(500);
+  expect(attempts).toBe(1);
+  await expect(input).toHaveValue("");
+  await expect(page.locator(".palette-error")).toHaveCount(0);
 });

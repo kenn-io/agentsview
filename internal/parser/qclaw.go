@@ -310,6 +310,10 @@ func applyQClawAssistantUsage(
 	pm.HasOutputTokens = hasOutput
 	pm.ContextTokens = input + cacheRead + cacheWrite
 	pm.HasContextTokens = hasInput || hasCacheRead || hasCacheWrite
+	// As for OpenClaw, usage.cost.total is kept as a recorded cost.
+	if cost, ok := recordedCostDollars(usage.Get("cost.total")); ok {
+		pm.SetRecordedCost(cost)
+	}
 }
 
 // extractQClawToolResultText extracts plain text from a QClaw

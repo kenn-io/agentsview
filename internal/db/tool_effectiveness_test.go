@@ -107,6 +107,41 @@ func TestToolEffectivenessFilteredRatesAndEvidence(t *testing.T) {
 	assert.Empty(t, evidence.Sessions)
 }
 
+func TestToolEffectivenessEvidenceDayAndHour(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "evidence-day", "project-a", func(s *Session) { s.StartedAt = new("2025-06-01T23:59:00Z") })
+	for i, ts := range []string{"2025-06-01T23:59:00Z", "2025-06-02T00:01:00Z", "2025-06-02T00:30:00Z", "2025-06-02T01:30:00Z"} {
+		m := asstMsgAt("evidence-day", i+2, "read", ts)
+		m.ToolCalls = []ToolCall{{SessionID: "evidence-day", ToolName: "Read", Category: "Read"}}
+		insertMessages(t, d, m)
+	}
+	updateSignals(t, d, "evidence-day", SessionSignalUpdate{
+		QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion},
+		ToolObservations: []ToolObservation{
+			{MessageOrdinal: 2, Outcome: "empty"},
+			{MessageOrdinal: 3, Outcome: "empty"},
+			{MessageOrdinal: 4, Outcome: "empty"},
+			{MessageOrdinal: 5, Outcome: "empty"},
+		},
+	})
+	f := AnalyticsFilter{Timezone: "UTC", ToolName: "Read", ToolCategory: "Read"}
+	response, err := d.GetAnalyticsSignalSessions(t.Context(), f, "tool_empty_rate", 10)
+	require.NoError(t, err)
+	assert.Equal(t, new(1), response.Total)
+	require.Len(t, response.Sessions, 1)
+	assert.Equal(t, "evidence-day", response.Sessions[0].SessionID)
+	assert.Equal(t, 4, response.Sessions[0].SignalTotal)
+	assert.Equal(t, "2025-06-02", response.Sessions[0].Date)
+	assert.Equal(t, new(2), response.Sessions[0].MessageOrdinal)
+	hour := 0
+	f.Hour = &hour
+	response, err = d.GetAnalyticsSignalSessions(t.Context(), f, "tool_empty_rate", 10)
+	require.NoError(t, err)
+	require.Len(t, response.Sessions, 1)
+	assert.Equal(t, 2, response.Sessions[0].SignalTotal)
+	assert.Equal(t, new(3), response.Sessions[0].MessageOrdinal)
+}
+
 func TestToolEffectivenessMissingAndUnknownDenominators(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "unknown", "project-a")

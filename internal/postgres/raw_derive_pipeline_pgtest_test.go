@@ -22,6 +22,7 @@ import (
 )
 
 func TestRawCapturedSourcesReachHostedWorker(t *testing.T) {
+	t.Parallel()
 	for _, agent := range []parser.AgentType{parser.AgentClaude, parser.AgentZCode, parser.AgentCodex} {
 		t.Run(string(agent), func(t *testing.T) {
 			f := newHostedFixture(t, "tenant-capture")
@@ -151,6 +152,7 @@ func TestRawCapturedSourcesReachHostedWorker(t *testing.T) {
 
 // Source-app deletion must not hide sessions already captured in the hosted archive.
 func TestRawProjectionCrushRetainsSessionsDeletedFromSource(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	root := t.TempDir()
 	sourceDB, err := sql.Open("sqlite3", filepath.Join(root, parser.CrushDBName))

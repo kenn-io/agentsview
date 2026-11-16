@@ -1,18 +1,18 @@
 import { flushSync } from "svelte";
 import { toStore } from "svelte/store";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
+import { createSessionsStore } from "./sessions.svelte.js";
+import { buildSessionGroups } from "./sessionGroups.js";
+import { getSessionStatus } from "./sessionStatus.svelte.js";
 import {
-  createSessionsStore,
-  buildSessionGroups,
-  getSessionStatus,
   parseFiltersFromParams,
   filtersToParams,
   splitExcludeProjectParam,
-} from "./sessions.svelte.js";
+} from "./sessionFilters.js";
 import { SessionsService, SettingsService, type DbSession } from "../api/generated/index";
 import { starred } from "./starred.svelte.js";
 import { yokedDates } from "./yokedDates.svelte.js";
-import type { Filters } from "./sessions.svelte.js";
+import type { Filters } from "./sessionFilters.js";
 import type { Session } from "../api/types.js";
 import { router } from "./router.svelte.js";
 import { events } from "./events.svelte.js";
@@ -2161,15 +2161,40 @@ describe("SessionsStore", () => {
       expect(sessions.nextCursor).toBe("current");
     });
 
-    it("preserves unrelated pagination failures", async () => {
-      sessions.nextCursor = "valid";
-      const error = new ApiError(400, "invalid timezone");
-      api.getSidebarSessionIndex.mockRejectedValueOnce(error);
+    it("reports a failed later page and retries that page", async () => {
+      api.getSidebarSessionIndex.mockResolvedValueOnce({
+        sessions: [makeSkinnyRow({ id: "listed" })],
+        total: 2,
+        next_cursor: "page-2",
+      });
+      await sessions.load();
+      api.getSidebarSessionIndex.mockRejectedValueOnce(new ApiError(503, "archive is rebuilding"));
 
-      await expect(sessions.loadMore()).rejects.toBe(error);
+      await sessions.loadMore();
 
-      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
-      expect(sessions.nextCursor).toBe("valid");
+      expect(sessions.sidebarLoadError).toBe("archive is rebuilding");
+      expect(sessions.sessions.map((s) => s.id)).toEqual(["listed"]);
+      expect(sessions.nextCursor).toBe("page-2");
+      expect(sessions.loading).toBe(false);
+
+      // Scrolling near the bottom asks again; it waits for Retry instead.
+      await sessions.loadMore();
+      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
+
+      api.getSidebarSessionIndex.mockResolvedValueOnce({
+        sessions: [makeSkinnyRow({ id: "second" })],
+        total: 2,
+        next_cursor: null,
+      });
+      await sessions.retrySidebar();
+
+      expect(api.getSidebarSessionIndex.mock.calls.map(([params]) => params.cursor)).toEqual([
+        undefined,
+        "page-2",
+        "page-2",
+      ]);
+      expect(sessions.sessions.map((s) => s.id)).toEqual(["listed", "second"]);
+      expect(sessions.sidebarLoadError).toBeNull();
     });
 
     it("should pass the browser timezone in loadMore", async () => {
@@ -2721,6 +2746,23 @@ describe("SessionsStore", () => {
         expect(sessions.sidebarLoadError).toBeNull();
       });
       expect(sessions.sessions.map((s) => s.id)).toEqual(["after-fix"]);
+    });
+
+    it("keeps the listed rows and reports a failed refresh until one succeeds", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "listed" })]);
+      await sessions.load();
+
+      vi.mocked(api.getSidebarSessionIndex).mockRejectedValueOnce(
+        new ApiError(503, "archive is rebuilding"),
+      );
+      await sessions.load({ force: true });
+
+      expect(sessions.sidebarLoadError).toBe("archive is rebuilding");
+      expect(sessions.sessions.map((s) => s.id)).toEqual(["listed"]);
+
+      mockSidebarIndex([makeSkinnyRow({ id: "listed" })]);
+      await sessions.load({ force: true });
+      expect(sessions.sidebarLoadError).toBeNull();
     });
 
     it("passes label and pull request filters to later pages", async () => {

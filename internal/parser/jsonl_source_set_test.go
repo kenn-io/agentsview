@@ -219,6 +219,75 @@ func (failingInfoDirEntry) IsDir() bool                      { return false }
 func (failingInfoDirEntry) Type() os.FileMode                { return 0 }
 func (entry failingInfoDirEntry) Info() (os.FileInfo, error) { return nil, entry.err }
 
+func TestJSONLScopedDiscoveryRetainsConfiguredSourceIdentity(t *testing.T) {
+	root := t.TempDir()
+	requested := filepath.Join(root, "project", "child")
+	path := filepath.Join(requested, "session.jsonl")
+	writeSourceFile(t, path, "{}\n")
+	unrelated := filepath.Join(root, "unrelated")
+	require.NoError(t, os.Mkdir(unrelated, 0o755))
+	if err := os.Symlink(filepath.Join(t.TempDir(), "missing"), filepath.Join(unrelated, "broken")); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	set := NewJSONLSourceSet(AgentType("filesystem"), []string{root}, WithRecursive(), WithSymlinkFollowing(),
+		WithKey(func(root, path string) string { return mustRelSlash(t, root, path) }),
+	)
+	var sources []SourceRef
+	err := set.DiscoverScopesEach(t.Context(), []ReconciliationScope{{
+		TraversalRoots: []string{root}, PhysicalProofScopes: []StoredSourceHintScope{
+			{Path: requested}, {Path: filepath.Join(root, "project")},
+		},
+	}}, func(source SourceRef) error {
+		sources = append(sources, source)
+		return nil
+	})
+	require.NoError(t, err, "an inaccessible unrequested sibling must not affect the scoped stream")
+	assert.Equal(t, []SourceRef{{
+		Provider: AgentType("filesystem"), Key: "project/child/session.jsonl",
+		DisplayPath: path, FingerprintKey: path,
+		Opaque: JSONLSource{Root: root, Path: path, RelPath: "project/child/session.jsonl"},
+	}}, sources)
+}
+
+func TestJSONLScopedDiscoveryPreservesSymlinkPolicy(t *testing.T) {
+	root := t.TempDir()
+	target := t.TempDir()
+	writeSourceFile(t, filepath.Join(target, "session.jsonl"), "{}\n")
+	link := filepath.Join(root, "linked")
+	file := filepath.Join(root, "copy.jsonl")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	require.NoError(t, os.Symlink(filepath.Join(target, "session.jsonl"), file))
+	for _, tc := range []struct {
+		name        string
+		dirs, files bool
+		want        []string
+	}{
+		{name: "neither"},
+		{name: "files", files: true, want: []string{file}},
+		{name: "directories", dirs: true, want: []string{filepath.Join(link, "session.jsonl")}},
+		{name: "both", dirs: true, files: true, want: []string{file, filepath.Join(link, "session.jsonl")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			set := jsonlSourceSetFromOptions(AgentType("filesystem"), []string{root}, JSONLSourceSetOptions{
+				Recursive: true, FollowSymlinkDirs: tc.dirs, FollowSymlinkFiles: tc.files,
+			})
+			var paths []string
+			err := set.DiscoverScopesEach(t.Context(), []ReconciliationScope{{
+				TraversalRoots: []string{root}, PhysicalProofScopes: []StoredSourceHintScope{
+					{Path: file}, {Path: filepath.Join(link, "session.jsonl")},
+				},
+			}}, func(source SourceRef) error {
+				paths = append(paths, source.DisplayPath)
+				return nil
+			})
+			require.NoError(t, err)
+			assert.ElementsMatch(t, tc.want, paths)
+		})
+	}
+}
+
 func TestJSONLSourceSetShallowDiscoveryAndFilters(t *testing.T) {
 	root := t.TempDir()
 	writeSourceFile(t, filepath.Join(root, "keep.jsonl"), "{}\n")

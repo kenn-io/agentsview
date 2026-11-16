@@ -14,6 +14,9 @@ import (
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/kept"
+	"go.kenn.io/agentsview/internal/readbase"
 	"go.kenn.io/agentsview/internal/stringutil"
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
@@ -27,8 +30,37 @@ type pgActivityInputs struct {
 	sessions   map[string]pgActivitySession
 	gapCap     float64
 	usage      []pgActivityUsageRow
+	priced     *pgActivityPriced
 	candidates map[string]bool
 	changed    []string
+}
+
+type pgActivityPriced struct {
+	rangeStart, rangeEnd, effectiveEnd, next time.Time
+	pricingDigest                            string
+	block                                    *export.PricingBlock
+	rows                                     []pgActivityPricedRow
+}
+
+func (p *pgActivityPriced) covers(q activity.Query, digest string) bool {
+	if !p.rangeStart.Equal(q.RangeStart) || !p.rangeEnd.Equal(q.RangeEnd) ||
+		p.pricingDigest != digest || q.EffectiveEnd.Before(p.effectiveEnd) {
+		return false
+	}
+	nextUS := int64(math.MaxInt64)
+	if !p.next.IsZero() {
+		nextUS = readbase.CeilMicros(p.next)
+	}
+	return (&readbase.ActivityUsageSums{
+		EndUS: readbase.CeilMicros(p.effectiveEnd), NextUS: nextUS,
+	}).Covers(readbase.CeilMicros(q.EffectiveEnd))
+}
+
+type pgActivityPricedRow struct {
+	attribution                                unique.Handle[string]
+	cost                                       int64
+	index, webSearches                         int32
+	reported, priced, contributes, sessionCost bool
 }
 
 // pgActivitySession is one session's activity over all time: its runs and
@@ -68,6 +100,7 @@ func pgCompactActivityUsage(r pgDailyUsageScanRow, handle func(string) unique.Ha
 
 func pgActivityInputBytes(e pgActivityInputs) int64 {
 	size := int64(unsafe.Sizeof(e))
+	size += pgActivityPricedBytes(e.priced)
 	shared := map[unique.Handle[string]]struct{}{}
 	for id, session := range e.sessions {
 		size += int64(len(id)) + 80 + int64(unsafe.Sizeof(session)) + session.runs.Bytes() +
@@ -91,6 +124,21 @@ func pgActivityInputBytes(e pgActivityInputs) int64 {
 		size += int64(len(id)) + 16
 	}
 	return size
+}
+
+func pgActivityInputsWithoutPrices(inputs []pgActivityInputs, size int64) ([]pgActivityInputs, int64) {
+	for i := range inputs {
+		size -= pgActivityPricedBytes(inputs[i].priced)
+		inputs[i].priced = nil
+	}
+	return inputs, size
+}
+
+func pgActivityPricedBytes(priced *pgActivityPriced) int64 {
+	if priced == nil {
+		return 0
+	}
+	return int64(unsafe.Sizeof(*priced)) + int64(cap(priced.rows))*int64(unsafe.Sizeof(pgActivityPricedRow{})) + kept.JSONBytes(priced.block)
 }
 
 func (s *Store) activityReportInputs(ctx context.Context, version, lower, upper string) (*pgActivityInputs, error) {
@@ -118,6 +166,7 @@ func (s *Store) activityReportInputs(ctx context.Context, version, lower, upper 
 			}
 		}
 		next.usage = old.usage
+		next.priced = old.priced
 		next.candidates = old.candidates
 	}
 	return next, nil
@@ -310,6 +359,7 @@ func (s *Store) activityUsageInputs(ctx context.Context, ids []string, lower, up
 		inputs.usage = slices.Clip(slices.Clone(fresh))
 		inputs.candidates = selected
 		inputs.changed = nil
+		inputs.priced = nil
 		return inputs.usage, nil
 	}
 	replaced := make(map[string]bool, len(read))
@@ -342,6 +392,7 @@ func (s *Store) activityUsageInputs(ctx context.Context, ids []string, lower, up
 	inputs.usage = slices.Clip(slices.Clone(merged))
 	inputs.candidates = selected
 	inputs.changed = nil
+	inputs.priced = nil
 	return merged, nil
 }
 

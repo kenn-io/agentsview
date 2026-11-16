@@ -20,6 +20,8 @@ func embeddableMessagePredicate(alias string) string {
 		db.ClickHouseSystemPrefixSQL(alias+".content", alias+".role")
 }
 
+const systemPrefixSettings = " SETTINGS short_circuit_function_evaluation = 'force_enable'"
+
 // toolCallMessageJoin joins tool calls to their message on the mirror's
 // stable (session_id, ordinal) key.
 const toolCallMessageJoin = `JOIN messages m ON m.session_id = tc.session_id
@@ -52,7 +54,7 @@ func imageTextResultBranches(f db.ContentSearchFilter, scopeWhere, callPredicate
 				FROM tool_calls tc ` + imageTextCallJoin + `
 				JOIN sessions s ON s.id = tc.session_id
 				` + toolCallMessageJoin + `
-				WHERE it.source_kind = 'tool_call' AND it.push_version >= s.push_version
+				WHERE it.source_kind = 'tool_call' AND it.push_version >= s.content_version
 					AND ` + toolCallWithoutEvents + `
 					AND it.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `) AND ` +
 			db.LexicalAnchorScopeSQL(f, "s", "m", db.ClickHouseQueryDialect()) + callPredicate, `
@@ -66,7 +68,7 @@ func imageTextResultBranches(f db.ContentSearchFilter, scopeWhere, callPredicate
 				FROM tool_result_events tre ` + imageTextEventJoin + `
 				JOIN sessions s ON s.id = tre.session_id
 				` + db.LexicalEventAnchorJoinSQL(f.Scope) + `
-				WHERE it.source_kind = 'event' AND it.push_version >= s.push_version
+				WHERE it.source_kind = 'event' AND it.push_version >= s.content_version
 					AND it.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `) AND ` +
 			db.LexicalAnchorScopeSQL(f, "s", "m", db.ClickHouseQueryDialect()) + eventPredicate,
 	}
@@ -78,12 +80,20 @@ const toolCallWithoutEvents = `NOT (tc.tool_use_id <> '' AND (tc.session_id, tc.
 				SELECT session_id, tool_use_id FROM tool_result_events))`
 
 func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, error) {
-	if f.Limit <= 0 || f.Limit > db.MaxSearchLimit {
-		f.Limit = db.DefaultSearchLimit
-	}
 	if f.Query == "" {
 		return db.SearchPage{}, nil
 	}
+	if f.Limit <= 0 || f.Limit > db.MaxSearchLimit {
+		f.Limit = db.DefaultSearchLimit
+	}
+	version, err := s.tablePartsFingerprint(ctx, []string{"sessions", "messages", "image_text"})
+	if err != nil {
+		return s.search(ctx, f)
+	}
+	return s.searchReads.Do(ctx, f.Slot(), version, func(ctx context.Context) (db.SearchPage, error) { return s.search(ctx, f) })
+}
+
+func (s *Store) search(ctx context.Context, f db.SearchFilter) (db.SearchPage, error) {
 	// plainTerm is the de-quoted query joined back into one string; it feeds
 	// the name-branch ILIKE. terms is the per-term decomposition: every term
 	// must appear in the message content (AND), matching SQLite FTS5's
@@ -191,7 +201,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 				) AS rn
 			FROM image_text it
 			JOIN sessions s ON s.id = it.session_id
-			WHERE `+imageTermPredicate+` AND it.push_version >= s.push_version
+			WHERE `+imageTermPredicate+` AND it.push_version >= s.content_version
 				AND s.deleted_at IS NULL
 				AND (it.session_id, it.message_ordinal) IN (
 					SELECT mx.session_id, mx.ordinal FROM messages mx
@@ -256,7 +266,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 			SELECT * FROM name_matches
 		) AS combined
 		ORDER BY `+orderBy+`
-		LIMIT ? OFFSET ?`, args...)
+		LIMIT ? OFFSET ?`+systemPrefixSettings, args...)
 	if err != nil {
 		return db.SearchPage{}, fmt.Errorf("clickhouse search: %w", err)
 	}
@@ -303,7 +313,7 @@ func (s *Store) SearchSession(ctx context.Context, sessionID, query string) ([]i
 			AND (m.content ILIKE ?
 				OR tc.result_content ILIKE ?
 				OR tre.content ILIKE ?)
-		ORDER BY m.ordinal ASC`,
+		ORDER BY m.ordinal ASC`+systemPrefixSettings,
 		sessionID, pattern, pattern, pattern)
 	if err != nil {
 		return nil, fmt.Errorf("clickhouse session search: %w", err)
@@ -409,8 +419,23 @@ func contentSearchPredicate(column string, f db.ContentSearchFilter, args *[]any
 	return strings.Join(clauses, " AND ")
 }
 
+// collectContentSubstringMatches lists exact text, then messages holding every
+// query word, then, when those don't fill the page, messages holding fewer.
 func (s *Store) collectContentSubstringMatches(
 	ctx context.Context, f db.ContentSearchFilter,
+) ([]db.ContentMatch, error) {
+	f, words, ranked := db.RouteContentWords(f)
+	if ranked {
+		rows, err := s.collectContentSubstringPass(ctx, f, words, true, true)
+		if err != nil || len(rows) > f.Limit {
+			return rows, err
+		}
+	}
+	return s.collectContentSubstringPass(ctx, f, words, ranked, false)
+}
+
+func (s *Store) collectContentSubstringPass(
+	ctx context.Context, f db.ContentSearchFilter, words db.ContentWords, ranked, all bool,
 ) ([]db.ContentMatch, error) {
 	eventAnchorJoin := db.LexicalEventAnchorJoinSQL(f.Scope)
 
@@ -429,7 +454,14 @@ func (s *Store) collectContentSubstringMatches(
 			if f.ExcludeSystem {
 				sysPred = embeddableMessagePredicate("m")
 			}
-			contentPred := addSearchArgs("COALESCE(m.dialogue_text, m.content)")
+			var contentPred string
+			if ranked {
+				b := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
+				contentPred = db.WordFilterSQL(b, "COALESCE(m.dialogue_text, m.content)", f, words, all)
+				args = append(append(args, b.Args()...), scopeArgs...)
+			} else {
+				contentPred = addSearchArgs("COALESCE(m.dialogue_text, m.content)")
+			}
 			branches = append(branches, `
 				SELECT m.session_id AS session_id, s.project AS project, s.agent AS agent,
 					'message' AS location, m.role AS role, '' AS tool_name, m.ordinal AS ordinal,
@@ -525,17 +557,35 @@ func (s *Store) collectContentSubstringMatches(
 	}
 	query := `
 		SELECT session_id, project, agent, location, role, tool_name,
-			ordinal, ts, body
+			ordinal, ts, body, 0 AS n
 		FROM (` + strings.Join(branches, " UNION ALL ") + `) AS matches
 		ORDER BY sort_ts DESC, session_id ASC, ordinal ASC,
 			src ASC, row_id ASC, call_index ASC, event_index ASC, body ASC
 		LIMIT ? OFFSET ?`
+	if ranked {
+		b := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
+		query = db.WordRankedSQL(b, branches, f, words, all)
+		args = append(args, b.Args()...)
+	}
 	args = append(args, f.Limit+1, f.Cursor)
+	materialize := ranked && !all
+	if f.ExcludeSystem && (slices.Contains(f.Sources, "messages") || slices.Contains(f.Sources, "thinking")) {
+		query += systemPrefixSettings
+		if materialize {
+			query += ", enable_materialized_cte = 1"
+		}
+	} else if materialize {
+		query += " SETTINGS enable_materialized_cte = 1"
+	}
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("clickhouse content search: %w", err)
 	}
 	return scanContentRows(rows, func(body string) string {
+		if ranked {
+			start, end := db.WordSnippetRange(body, f.Pattern, words)
+			return f.BuildSnippet(body, start, end)
+		}
 		if f.Mode == "fts" {
 			start, end := db.FTSSnippetRange(f.Pattern, body)
 			return f.BuildSnippet(body, start, end)
@@ -696,6 +746,9 @@ func (s *Store) collectContentSource(
 	default:
 		return nil, &db.SearchInputError{Msg: fmt.Sprintf("search: unknown source %q", source)}
 	}
+	if f.ExcludeSystem && (source == "messages" || source == "thinking") {
+		query += systemPrefixSettings
+	}
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("clickhouse content search: %w", err)
@@ -772,7 +825,7 @@ func scanContentRows(rows *sql.Rows, makeSnippet func(string) string) ([]db.Cont
 		var body string
 		var ts any
 		if err := rows.Scan(&m.SessionID, &m.Project, &m.Agent,
-			&m.Location, &m.Role, &m.ToolName, &m.Ordinal, &ts, &body); err != nil {
+			&m.Location, &m.Role, &m.ToolName, &m.Ordinal, &ts, &body, &m.MatchedWords); err != nil {
 			return nil, fmt.Errorf("scanning clickhouse content match: %w", err)
 		}
 		m.Timestamp = formatDBTime(ts)

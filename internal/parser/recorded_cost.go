@@ -5,6 +5,7 @@ import (
 	"encoding/json/jsontext"
 	"strconv"
 
+	"github.com/tidwall/gjson"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
@@ -79,4 +80,18 @@ func withRecordedCost(usage jsontext.Value, microdollars int64) jsontext.Value {
 	out.WriteString(member)
 	out.WriteByte('}')
 	return jsontext.Value(out.Bytes())
+}
+
+// recordedCostDollars reads a non-negative USD amount a harness wrote as a
+// JSON number. It reports false for a missing, non-numeric, or negative
+// value.
+func recordedCostDollars(value gjson.Result) (money.Money, bool) {
+	if value.Type != gjson.Number || value.Num < 0 {
+		return money.Money{}, false
+	}
+	cost, err := money.ParseDollars(value.Raw)
+	if err != nil {
+		return money.Money{}, false
+	}
+	return cost, true
 }

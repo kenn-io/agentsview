@@ -48,10 +48,16 @@ const (
 var goalContextSourceAttrRe = regexp.MustCompile(`(?:^|\s)` +
 	regexp.QuoteMeta(goalContextSourceAttr) + `(?:\s|/|$)`)
 
+var goalContextWhitespace = strings.NewReplacer("\t", " ", "\n", " ", "\v", " ", "\f", " ", "\r", " ")
+
 // IsGoalContextPrefixed reports whether a user-role message is a legacy
 // Codex /goal continuation wrapper that may already be stored in older
 // archives or read-only stores.
 func IsGoalContextPrefixed(content, role string) bool {
+	return goalContextPrefixed(content, role, goalContextSourceAttrRe.MatchString)
+}
+
+func goalContextPrefixed(content, role string, attrMatch func(string) bool) bool {
 	if role != "user" {
 		return false
 	}
@@ -61,9 +67,18 @@ func IsGoalContextPrefixed(content, role string) bool {
 	}
 	if strings.HasPrefix(trimmed, codexInternalContextTagPrefix) {
 		openTag, _, ok := strings.Cut(trimmed, ">")
-		return ok && goalContextSourceAttrRe.MatchString(openTag)
+		return ok && attrMatch(openTag)
 	}
 	return false
+}
+
+func duckDBGoalContextPrefixed(content, role string) bool {
+	return goalContextPrefixed(content, role, func(openTag string) bool {
+		openTag = goalContextWhitespace.Replace(openTag + ">")
+		return strings.Contains(openTag, goalContextSourceAttrSQLPrefix+" ") ||
+			strings.Contains(openTag, goalContextSourceAttrSQLPrefix+">") ||
+			strings.Contains(openTag, goalContextSourceAttrSQLPrefix+"/>")
+	})
 }
 
 type systemPrefixSQLDialect int
@@ -79,21 +94,31 @@ const (
 // (e.g. "m.content" or "m2.content"). Uses case-sensitive substr and
 // position checks instead of LIKE, which is case-insensitive on SQLite.
 func SystemPrefixSQL(contentCol, roleCol string) string {
-	return systemPrefixSQL(contentCol, roleCol, systemPrefixSQLite)
+	return systemPrefixSQL(contentCol, roleCol, systemPrefixSQLite, true)
 }
 
 // PostgresSystemPrefixSQL is the PostgreSQL form of SystemPrefixSQL.
 func PostgresSystemPrefixSQL(contentCol, roleCol string) string {
-	return systemPrefixSQL(contentCol, roleCol, systemPrefixPostgres)
+	return systemPrefixSQL(contentCol, roleCol, systemPrefixPostgres, true)
+}
+
+// PostgresLatin1SearchSQL removes trim characters a LATIN1 database cannot store.
+func PostgresLatin1SearchSQL(query string) string {
+	return strings.ReplaceAll(query, "'"+systemPrefixTrimCutset+"'", "' \t\n\v\f\r\u0085\u00a0'")
+}
+
+// PostgresSystemPrefixSQLWithoutGuard avoids guard overhead on small candidate sets.
+func PostgresSystemPrefixSQLWithoutGuard(contentCol, roleCol string) string {
+	return systemPrefixSQL(contentCol, roleCol, systemPrefixPostgres, false)
 }
 
 // DuckDBSystemPrefixSQL is the DuckDB form of SystemPrefixSQL.
 func DuckDBSystemPrefixSQL(contentCol, roleCol string) string {
-	return systemPrefixSQL(contentCol, roleCol, systemPrefixDuckDB)
+	return systemPrefixSQL(contentCol, roleCol, systemPrefixDuckDB, false)
 }
 
 func systemPrefixSQL(
-	contentCol, roleCol string, dialect systemPrefixSQLDialect,
+	contentCol, roleCol string, dialect systemPrefixSQLDialect, firstCharGuard bool,
 ) string {
 	// LTRIM strips the same whitespace as Go's strings.TrimSpace,
 	// JS .trim(), and the parser's isSystem helpers: ASCII whitespace,
@@ -111,8 +136,8 @@ func systemPrefixSQL(
 	parts = append(parts, systemReminderTerminalSQL(trimmed, dialect))
 	parts = append(parts, goalContextPrefixSQL(trimmed, dialect))
 	guard := ""
-	if dialect == systemPrefixSQLite {
-		guard = systemPrefixFirstCPGuardSQL(contentCol) + " AND "
+	if firstCharGuard {
+		guard = systemPrefixFirstCPGuardSQL(contentCol, dialect) + " AND "
 	}
 	return "NOT (" + roleCol + " = 'user' AND " + guard + "(" +
 		strings.Join(parts, " OR ") + "))"
@@ -126,9 +151,9 @@ func systemPrefixSQL(
 // never in the set), so rows with ordinary content skip the repeated
 // LTRIM/prefix chain after one integer IN test. The guard is AND'ed inside
 // the NOT(...), so a false guard reproduces exactly the all-branches-false
-// result. SQLite-only for now: PG (ascii) and DuckDB (unicode) analogues
-// need their own empty-string audits before the other dialects adopt it.
-func systemPrefixFirstCPGuardSQL(contentCol string) string {
+// result. PostgreSQL in SQL_ASCII treats the trim set as bytes, so its guard
+// also includes every byte of the UTF-8 trim set.
+func systemPrefixFirstCPGuardSQL(contentCol string, dialect systemPrefixSQLDialect) string {
 	seen := make(map[rune]bool)
 	var cps []int
 	add := func(r rune) {
@@ -145,12 +170,21 @@ func systemPrefixFirstCPGuardSQL(contentCol string) string {
 	for _, r := range systemPrefixTrimCutset {
 		add(r)
 	}
+	if dialect == systemPrefixPostgres {
+		for _, b := range []byte(systemPrefixTrimCutset) {
+			add(rune(b))
+		}
+	}
 	sort.Ints(cps)
 	items := make([]string, len(cps))
 	for i, cp := range cps {
 		items[i] = strconv.Itoa(cp)
 	}
-	return "COALESCE(unicode(" + contentCol + "), 0) IN (" +
+	first := "unicode(" + contentCol + ")"
+	if dialect == systemPrefixPostgres {
+		first = "ascii(NULLIF(substr(" + contentCol + ", 1, 1), ''))"
+	}
+	return "COALESCE(" + first + ", 0) IN (" +
 		strings.Join(items, ", ") + ")"
 }
 
@@ -177,7 +211,13 @@ func systemReminderTerminalSQL(
 		"substr(%s, 1, %d) = '%s'",
 		trimmed, len(systemReminderOpenTag), systemReminderOpenTag,
 	)
-	return fmt.Sprintf(`(%s AND EXISTS (WITH RECURSIVE reminder_remainder(rest) AS (
+	prefix := "(" + seedReminder + " AND "
+	suffix := ")"
+	if dialect == systemPrefixPostgres {
+		prefix = "(CASE WHEN " + seedReminder + " THEN "
+		suffix = " ELSE FALSE END)"
+	}
+	return fmt.Sprintf(`%sEXISTS (WITH RECURSIVE reminder_remainder(rest) AS (
 SELECT %s
 UNION ALL
 SELECT %s FROM reminder_remainder
@@ -185,9 +225,9 @@ WHERE substr(rest, 1, %d) = '%s' AND %s > 0
 )
 SELECT 1 FROM reminder_remainder
 WHERE %s AND (rest = '' OR %s)
-LIMIT 1))`, seedReminder, trimmed, next,
+LIMIT 1)%s`, prefix, trimmed, next,
 		len(systemReminderOpenTag), systemReminderOpenTag, closePos,
-		terminal, classification)
+		terminal, classification, suffix)
 }
 
 func terminalRemainderSQL(content string, dialect systemPrefixSQLDialect) string {
@@ -263,6 +303,15 @@ const systemPrefixTrimCutset = " \t\n\v\f\r" +
 // user-role messages match, and leading whitespace is trimmed with the same
 // cutset before the case-sensitive prefix comparison.
 func IsSystemPrefixed(content, role string) bool {
+	return systemPrefixed(content, role, IsGoalContextPrefixed)
+}
+
+// IsDuckDBSystemPrefixed preserves the DuckDB search filter's goal-tag rules.
+func IsDuckDBSystemPrefixed(content, role string) bool {
+	return systemPrefixed(content, role, duckDBGoalContextPrefixed)
+}
+
+func systemPrefixed(content, role string, goal func(string, string) bool) bool {
 	if role != "user" {
 		return false
 	}
@@ -274,7 +323,7 @@ func IsSystemPrefixed(content, role string) bool {
 		}
 		trimmed = remainder
 	}
-	if IsGoalContextPrefixed(trimmed, role) {
+	if goal(trimmed, role) {
 		return true
 	}
 	for _, p := range SystemMsgPrefixes {
@@ -329,6 +378,9 @@ type SearchFilter struct {
 	Limit    int
 }
 
+// Slot identifies an exact search selection.
+func (f SearchFilter) Slot() string { return fmt.Sprintf("%#v", f) }
+
 // SearchPage holds paginated search results.
 type SearchPage struct {
 	Results    []SearchResult `json:"results"`
@@ -377,7 +429,30 @@ func (db *DB) Search(
 	if f.Limit <= 0 || f.Limit > MaxSearchLimit {
 		f.Limit = DefaultSearchLimit
 	}
-	ftsQuery, err := db.prepareMessageFTSQuery(ctx, f.Query)
+	cjk := containsCJK(f.Query) && db.HasCJKFTS(ctx)
+	if db.readOnly {
+		return db.search(ctx, f, cjk)
+	}
+	key := fmt.Sprintf("%s|%t", f.Slot(), cjk)
+	id, err := db.GetDatabaseID(ctx)
+	if err != nil {
+		return db.search(ctx, f, cjk)
+	}
+	revision, err := db.UsageChangeRevision(ctx)
+	if err != nil {
+		return db.search(ctx, f, cjk)
+	}
+	searchRevision, err := db.archiveJournalRevision(ctx, archiveMetadataSearchChangeRevisionKey, "search change")
+	if err != nil {
+		return db.search(ctx, f, cjk)
+	}
+	return db.searchKept.Do(ctx, key, fmt.Sprintf("%s|%d|%d", id, revision, searchRevision), func(ctx context.Context) (SearchPage, error) {
+		return db.search(ctx, f, cjk)
+	})
+}
+
+func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage, error) {
+	ftsQuery, err := db.prepareMessageFTSQueryWithCJK(ctx, f.Query, cjk)
 	if err != nil {
 		return SearchPage{}, err
 	}
@@ -710,8 +785,8 @@ func (db *DB) SearchSession(
 // (including an explicit "exact phrase") and is passed through untouched, so
 // exact-phrase matching remains opt-in via a leading quote.
 //
-// This is the single source of truth shared by the SQLite, PostgreSQL, and HTTP
-// search paths so the same user query behaves identically across backends.
+// SQLite session search, PostgreSQL search, and HTTP query preparation use this
+// helper. SQLite natural-content search prepares its word queries separately.
 func PrepareFTSQuery(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || strings.HasPrefix(raw, `"`) {

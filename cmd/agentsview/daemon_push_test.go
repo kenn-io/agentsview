@@ -232,8 +232,11 @@ func TestPostDaemonPushReportsWhetherThePushStarted(t *testing.T) {
 			_, _ = w.Write([]byte("event: error\ndata: " + data + "\n\n"))
 		})
 	}
-	unreachable := httptest.NewServer(http.NotFoundHandler())
-	unreachable.Close()
+	disconnected := serve(func(http.ResponseWriter, *http.Request) {
+		// Close the connection without a response while keeping the listener
+		// bound, so another test server cannot take this server's port.
+		panic(http.ErrAbortHandler)
+	})
 
 	for _, tt := range []struct {
 		name    string
@@ -243,7 +246,7 @@ func TestPostDaemonPushReportsWhetherThePushStarted(t *testing.T) {
 		{"daemon refused", serve(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}), false},
-		{"daemon unreachable", unreachable.URL, false},
+		{"daemon disconnected before responding", disconnected, false},
 		{"older daemon streamed an error", streamError(`{"error":"push: conn reset"}`), true},
 		{"pre-push resync failed", streamError(
 			`{"error":"resync failed","push_started":false}`), false},

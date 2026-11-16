@@ -1,0 +1,18 @@
+{
+  "version": 3,
+  "sessionId": "0e4ba1a2-6f43-4c47-9c35-4d1f2c3b8a10",
+  "creationDate": 1700000000000,
+  "requests": [
+    {
+      "requestId": "req-1",
+      "message": {"text": "Run the R unit tests", "parts": []},
+      "response": [
+        {"value": "Running the tests. "},
+        {"kind": "toolInvocationSerialized", "pastTenseMessage": {"value": "Ran Rscript"}, "isConfirmed": {"type": 1}, "isComplete": true, "toolSpecificData": {"kind": "terminal", "commandLine": {"original": "Rscript -e 'testthat::test_dir(\"tests\")'"}}, "toolCallId": "call-terminal", "toolId": "run_in_terminal"},
+        {"value": "All tests pass."}
+      ],
+      "modelId": "positron/claude",
+      "timestamp": 1700000000000
+    }
+  ]
+}

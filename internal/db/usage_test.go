@@ -24,6 +24,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/parsertest"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
 func TestPaddedUTCBoundClampsBeforeYearOne(t *testing.T) {
@@ -487,15 +488,16 @@ func TestUsageRowQueryPushesDateBoundsIntoUnion(t *testing.T) {
 	assert.Contains(t, normalized, "m.timestamp <= ?")
 	assert.Contains(t, normalized, "ue.occurred_at <= ?")
 	assert.Contains(t, normalized, "s.started_at <= ?")
-	require.Len(t, args, 8)
-	assert.Equal(t, "2024-05-31T10:00:00Z", args[0])
-	assert.Equal(t, "2024-07-01T13:59:59Z", args[1])
-	assert.Equal(t, "2024-05-31T10:00:00Z", args[2])
-	assert.Equal(t, "2024-07-01T13:59:59Z", args[3])
-	assert.Equal(t, "2024-05-31T10:00:00Z", args[4])
-	assert.Equal(t, "2024-07-01T13:59:59Z", args[5])
-	assert.Equal(t, "2024-05-31T10:00:00Z", args[6])
-	assert.Equal(t, "2024-07-01T13:59:59Z", args[7])
+	assert.Contains(t, normalized, "ue.occurred_at_us >= ?")
+	assert.Contains(t, normalized, "ue.occurred_at_us <= ?")
+	padded := []any{"2024-05-31T10:00:00Z", "2024-07-01T13:59:59Z"}
+	var want []any
+	want = append(want, padded...) // m.timestamp
+	want = append(want, int64(1717149600000000), int64(1719842399000000))
+	want = append(want, padded...) // unparsed ue.occurred_at
+	want = append(want, padded...) // message s.started_at
+	want = append(want, padded...) // event s.started_at
+	assert.Equal(t, want, args)
 }
 
 func TestTopSessionsUsageRowQueryUsesNarrowScan(t *testing.T) {
@@ -522,6 +524,7 @@ func TestTopSessionsUsageRowQueryUsesNarrowScan(t *testing.T) {
 	assert.Contains(t, normalized, "ue.occurred_at is null")
 	assert.Contains(t, normalized, "m.timestamp >= ?")
 	assert.Contains(t, normalized, "ue.occurred_at >= ?")
+	assert.Contains(t, normalized, "ue.occurred_at_us >= ?")
 	assert.Contains(t, normalized,
 		"nullif(m.timestamp, '') is null\n\tand s.started_at >= ?")
 	assert.Contains(t, normalized,
@@ -531,19 +534,22 @@ func TestTopSessionsUsageRowQueryUsesNarrowScan(t *testing.T) {
 	assert.Contains(t, normalized, "julianday(u.ts) >= julianday(?)")
 	assert.Contains(t, normalized, "julianday(u.ts) < julianday(?)")
 	padded := []any{"2024-05-31T10:00:00Z", "2024-07-01T13:59:59Z"}
+	paddedMicros := []any{int64(1717149600000000), int64(1719842399000000)}
 	window := []any{
 		"2024-06-01T04:00:00Z", "2024-06-01",
 		"2024-07-01T04:00:00Z", "2024-06-30",
 	}
 	var want []any
-	want = append(want, padded...) // duplicate-request pass
-	want = append(want, padded...) // ranked rows: m.timestamp
-	want = append(want, padded...) // ranked rows: s.started_at
-	want = append(want, window...) // ranked rows: exact window
-	for range 4 {                  // row source branches
-		want = append(want, padded...)
-	}
-	want = append(want, window...) // survivors: exact window
+	want = append(want, padded...)       // duplicate-request pass
+	want = append(want, padded...)       // ranked rows: m.timestamp
+	want = append(want, padded...)       // ranked rows: s.started_at
+	want = append(want, window...)       // ranked rows: exact window
+	want = append(want, padded...)       // row source: m.timestamp
+	want = append(want, paddedMicros...) // row source: ue.occurred_at_us
+	want = append(want, padded...)       // row source: unparsed ue.occurred_at
+	want = append(want, padded...)       // row source: message s.started_at
+	want = append(want, padded...)       // row source: event s.started_at
+	want = append(want, window...)       // survivors: exact window
 	assert.Equal(t, want, args)
 }
 
@@ -1700,11 +1706,11 @@ func TestParseUsageTokenCounters(t *testing.T) {
 	assert.Equal(t, 20, cacheCreate)
 	assert.Equal(t, 300, cacheRead)
 
-	in, out, cacheCreate, cacheRead, reasoning := parseUsageTokenCountersWithReasoning(
-		`{"input_tokens":100,"output_tokens":50,` +
+	in, out, cacheCreate, cacheRead, reasoning := parsedUsageTokenCountersWithReasoning(
+		usagefacts.ParseTokenUsage(`{"input_tokens":100,"output_tokens":50,` +
 			`"cache_creation_input_tokens":20,` +
 			`"cache_read_input_tokens":300,` +
-			`"reasoning_tokens":75}`,
+			`"reasoning_tokens":75}`),
 	)
 	assert.Equal(t, 100, in)
 	assert.Equal(t, 50, out)
@@ -4171,7 +4177,7 @@ func BenchmarkUsageRollup(b *testing.B) {
 				ctx, conn, timezoneID, snapshot, window.filter)
 			require.NoError(b, readErr)
 			groups, aggregateErr := aggregateUsageRollupExceptions(
-				exceptions, snapshot, window.filter, resolver)
+				exceptions, nil, snapshot, window.filter, resolver, &usageFactsResult{})
 			require.NoError(b, aggregateErr)
 			exceptionRows := len(exceptions)
 			exceptionGroups := len(groups)
@@ -4187,7 +4193,7 @@ func BenchmarkUsageRollup(b *testing.B) {
 					require.NoError(b, readErr)
 				}
 				groups, aggregateErr = aggregateUsageRollupExceptions(
-					exceptions, snapshot, window.filter, resolver)
+					exceptions, nil, snapshot, window.filter, resolver, &usageFactsResult{})
 				if aggregateErr != nil {
 					require.NoError(b, aggregateErr)
 				}

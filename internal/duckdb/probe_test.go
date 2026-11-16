@@ -38,8 +38,9 @@ func TestProbeMirrorReadsMetadataAndFlagsShapeIssues(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, createSchema(t.Context(), conn))
 	require.NoError(t, writeMirrorMetadata(t.Context(), conn, mirrorMetadata{
-		SchemaVersion: SchemaVersion, DataVersion: 68,
-		SourceDatabaseID: "database-1", SourceArchiveID: "archive-1", Scope: "",
+		SchemaVersion: SchemaVersion, DataVersion: 68, FrustrationMarkersVersion: frustrationMarkersVersion,
+		SystemPrefixRulesVersion: db.SystemPrefixRulesVersion(),
+		SourceDatabaseID:         "database-1", SourceArchiveID: "archive-1", Scope: "",
 		LastPushCutoff: "2026-07-18T00:00:00.000Z", LastPushMachine: "machine-a",
 	}))
 	require.NoError(t, conn.Close())
@@ -50,6 +51,7 @@ func TestProbeMirrorReadsMetadataAndFlagsShapeIssues(t *testing.T) {
 	assert.True(t, p.ShapeOK)
 	assert.Equal(t, SchemaVersion, p.SchemaVersion)
 	assert.Equal(t, 68, p.DataVersion)
+	assert.Equal(t, db.SystemPrefixRulesVersion(), p.SystemPrefixRulesVersion)
 	assert.Equal(t, "database-1", p.SourceDatabaseID)
 	assert.Equal(t, "archive-1", p.SourceArchiveID)
 	assert.Equal(t, "2026-07-18T00:00:00.000Z", p.LastPushCutoff)
@@ -61,6 +63,9 @@ func TestProbeMirrorReadsMetadataAndFlagsShapeIssues(t *testing.T) {
 	assert.True(t, p.NeedsRebuild(db.CanonicalPushScope([]string{"p"}, nil), 68))
 	older := p
 	older.SchemaVersion = SchemaVersion - 1
+	assert.True(t, older.NeedsRebuild("", 68))
+	older = p
+	older.SystemPrefixRulesVersion = "old-rules"
 	assert.True(t, older.NeedsRebuild("", 68))
 	newer := p
 	newer.SchemaVersion = SchemaVersion + 1
@@ -282,7 +287,7 @@ func TestProbeMirrorSucceedsWhileMirrorHeldReadOnly(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, createSchema(ctx, conn))
 	require.NoError(t, writeMirrorMetadata(ctx, conn, mirrorMetadata{
-		SchemaVersion: SchemaVersion, DataVersion: 68,
+		SchemaVersion: SchemaVersion, DataVersion: 68, FrustrationMarkersVersion: frustrationMarkersVersion,
 		SourceDatabaseID: "database-1", SourceArchiveID: "archive-1",
 		LastPushCutoff: "2026-07-18T00:00:00.000Z", LastPushMachine: "machine-a",
 	}))
@@ -311,7 +316,8 @@ func TestRebuildReasonReportsEachTrigger(t *testing.T) {
 	baseProbe := func() MirrorProbe {
 		return MirrorProbe{
 			FileExists: true, ShapeOK: true,
-			SchemaVersion: SchemaVersion, DataVersion: 1, Scope: "",
+			SchemaVersion: SchemaVersion, DataVersion: 1, FrustrationMarkersVersion: frustrationMarkersVersion, Scope: "",
+			SystemPrefixRulesVersion: db.SystemPrefixRulesVersion(),
 		}
 	}
 	tests := []struct {
@@ -345,6 +351,26 @@ func TestRebuildReasonReportsEachTrigger(t *testing.T) {
 			want: fmt.Sprintf(
 				"schema version %d vs %d", SchemaVersion-1, SchemaVersion,
 			),
+		},
+		{
+			name: "frustration markers version mismatch",
+			probe: func() MirrorProbe {
+				p := baseProbe()
+				p.FrustrationMarkersVersion = 0
+				return p
+			}(),
+			dataVer: 1,
+			want:    "frustration marker rules changed",
+		},
+		{
+			name: "system prefix rules version mismatch",
+			probe: func() MirrorProbe {
+				p := baseProbe()
+				p.SystemPrefixRulesVersion = "old-rules"
+				return p
+			}(),
+			dataVer: 1,
+			want:    "system message filters changed",
 		},
 		{
 			name: "data version mismatch", probe: baseProbe(), dataVer: 2,

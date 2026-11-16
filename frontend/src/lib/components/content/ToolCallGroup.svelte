@@ -87,7 +87,7 @@
       copiedTitle={m.tool_call_group_copied()}
       onclick={handleCopy}
     />
-    <span class="group-timestamp">{formatTimestamp(timestamp)}</span>
+    <span class="group-timestamp">{formatTimestamp(timestamp, ui.alwaysShowYear)}</span>
   </div>
   <div class="tool-group-body">
     {#each displayMessages as message (message.ordinal)}

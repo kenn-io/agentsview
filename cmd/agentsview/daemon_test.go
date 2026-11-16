@@ -1420,3 +1420,54 @@ func TestPersistDaemonRuntimeReportsRequestFailure(t *testing.T) {
 		})
 	}
 }
+
+// Windows can report process exit before releasing its file locks.
+func TestDaemonRestartWaitsForStoppedWriter(t *testing.T) {
+	for _, cancelWait := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cancel-%t", cancelWait), func(t *testing.T) {
+			deps, out := daemonCommandTestDeps(t)
+			cfg, err := deps.loadConfig()
+			require.NoError(t, err)
+			lock, err := tryAcquireWriteOwnerLock(cfg.DataDir)
+			require.NoError(t, err)
+			t.Cleanup(func() { assert.NoError(t, lock.Close()) })
+			stopped := make(chan struct{})
+			deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
+				return []daemon.RuntimeRecord{testWritableRecord(91, "")}, nil
+			}
+			deps.stopProcess = func(daemon.RuntimeRecord, time.Duration) error {
+				close(stopped)
+				return nil
+			}
+			launched := make(chan struct{}, 1)
+			deps.startBackground = func(ctx context.Context, cfg config.Config, _ []string, _ serveReplacementOptions, _ backgroundLaunchPolicy) (backgroundLaunchResult, error) {
+				launched <- struct{}{}
+				replacementLock, err := tryAcquireWriteOwnerLock(writeLockDataDir(cfg))
+				if err != nil {
+					return backgroundLaunchResult{}, err
+				}
+				return backgroundLaunchResult{Started: true, Runtime: &DaemonRuntime{Record: daemon.RuntimeRecord{PID: 92}}}, replacementLock.Close()
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- runDaemonRestart(ctx, out, *deps) }()
+			<-stopped
+			// Hold the real file lock after the stop callback, as Windows may do.
+			select {
+			case <-launched:
+				require.FailNow(t, "replacement launched before the stopped writer released its lock")
+			case <-time.After(time.Second):
+			}
+			if cancelWait {
+				cancel()
+				require.ErrorIs(t, <-done, context.Canceled)
+				assert.Empty(t, launched, "cancellation must prevent the replacement launch")
+			} else {
+				require.NoError(t, lock.Close())
+				require.NoError(t, <-done)
+				assert.Len(t, launched, 1)
+			}
+		})
+	}
+}

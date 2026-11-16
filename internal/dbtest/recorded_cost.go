@@ -1,6 +1,7 @@
 package dbtest
 
 import (
+	"context"
 	"encoding/json/jsontext"
 	"testing"
 	"time"
@@ -26,6 +27,16 @@ type RecordedCostCase struct {
 	Models  []string
 	// Unpriced lists models the catalog cannot price and no cost covers.
 	Unpriced []string
+	// Comparison is the expected computed-versus-recorded summary.
+	Comparison *db.SessionRecordedCost
+}
+
+func comparison(recorded, computed int64, rows, fallback, unpriced int) *db.SessionRecordedCost {
+	return &db.SessionRecordedCost{
+		Recorded: money.Money{Microdollars: recorded}, Computed: money.Money{Microdollars: computed},
+		Difference: money.Money{Microdollars: computed - recorded},
+		Rows:       rows, FallbackRows: fallback, UnpricedRows: unpriced,
+	}
 }
 
 // RecordedCostCases covers how a cost a harness recorded itself, and a
@@ -34,13 +45,25 @@ type RecordedCostCase struct {
 // microdollars at catalog rates. rc-custom has no rate.
 var RecordedCostCases = []RecordedCostCase{
 	// The catalog prices the model, so its price beats the recorded 9,000.
-	{SessionID: "rc-catalog", Cost: 2_000, HasCost: true, Models: []string{"rc-priced"}},
+	{
+		SessionID: "rc-catalog", Cost: 2_000, HasCost: true, Models: []string{"rc-priced"},
+		Comparison: comparison(9_000, 2_000, 1, 0, 0),
+	},
 	// The catalog cannot price the model, so the recorded cost is the price.
-	{SessionID: "rc-fallback", Cost: 7_000, HasCost: true, Models: []string{"rc-custom"}},
+	{
+		SessionID: "rc-fallback", Cost: 7_000, HasCost: true, Models: []string{"rc-custom"},
+		Comparison: comparison(7_000, 7_000, 1, 1, 0),
+	},
 	// A recorded $0 for an unpriced model stays unpriced.
-	{SessionID: "rc-zero", Cost: 0, HasCost: false, Models: []string{"rc-custom"}, Unpriced: []string{"rc-custom"}},
+	{
+		SessionID: "rc-zero", Cost: 0, HasCost: false, Models: []string{"rc-custom"}, Unpriced: []string{"rc-custom"},
+		Comparison: comparison(0, 0, 1, 0, 1),
+	},
 	// A recorded aggregate event follows the same rule as a message.
-	{SessionID: "rc-event", Cost: 3_000 + 2_000, HasCost: true, Models: []string{"rc-custom", "rc-priced"}},
+	{
+		SessionID: "rc-event", Cost: 3_000 + 2_000, HasCost: true, Models: []string{"rc-custom", "rc-priced"},
+		Comparison: comparison(3_000+6_000, 3_000+2_000, 2, 1, 0),
+	},
 	// Any other status keeps the historical rule: the reported cost wins.
 	{SessionID: "rc-exact", Cost: 4_000, HasCost: true, Models: []string{"rc-priced"}},
 	// A cost-only message whose recorded cost loses to the catalog adds
@@ -143,6 +166,29 @@ func AssertRecordedCostUsage(t *testing.T, store db.Store) {
 			breakdown += entry.Cost.Microdollars
 		}
 		assert.Equal(t, want.Cost, breakdown, "%s breakdown cost", want.SessionID)
+		summary, err := db.SummarizeRecordedCost(got.Breakdown)
+		require.NoError(t, err)
+		assert.Equal(t, want.Comparison, summary, "%s recorded-cost comparison", want.SessionID)
+		if rows, ok := store.(interface {
+			GetSessionUsageRows(context.Context, []string) (*activity.SessionUsageRows, error)
+		}); ok {
+			// Subagent totals are rebuilt from these rows, so they must carry
+			// the same recorded costs as the breakdown.
+			rowSet, err := rows.GetSessionUsageRows(ctx, []string{want.SessionID})
+			require.NoError(t, err, "session usage rows %s", want.SessionID)
+			var fromRows, fromBreakdown []int64
+			for _, row := range rowSet.Rows {
+				if row.Contributes && row.RecordedCost != nil {
+					fromRows = append(fromRows, row.RecordedCost.Microdollars)
+				}
+			}
+			for _, entry := range got.Breakdown {
+				if entry.RecordedCost != nil {
+					fromBreakdown = append(fromBreakdown, entry.RecordedCost.Microdollars)
+				}
+			}
+			assert.ElementsMatch(t, fromBreakdown, fromRows, "%s recorded costs on usage rows", want.SessionID)
+		}
 		counted, err := store.GetSessionUsage(ctx, want.SessionID, false)
 		require.NoError(t, err, "session usage count %s", want.SessionID)
 		require.NotNil(t, counted, "session usage count %s", want.SessionID)
@@ -200,4 +246,67 @@ func AssertRecordedCostUsage(t *testing.T, store db.Store) {
 	require.NoError(t, err, "activity report")
 	assert.Equal(t, int64(RecordedCostDailyTotal), report.Totals.Cost.Microdollars,
 		"activity report cost")
+}
+
+// SessionTotalSessionID is the session SeedSessionUsageTotal writes.
+const SessionTotalSessionID = "rc-session-total"
+
+// SessionUsageTotalFixture is the total SeedSessionUsageTotal stores.
+func SessionUsageTotalFixture() *db.SessionUsageTotal {
+	return &db.SessionUsageTotal{
+		Source: "claude-cost-state", SubagentScope: "included",
+		Cost: &money.Money{Microdollars: 750_000}, Incomplete: true,
+		Models: []db.SessionUsageTotalModel{
+			{Model: "rc-custom", InputTokens: 10, OutputTokens: 4},
+			{
+				Model: "rc-priced", InputTokens: 1_500, OutputTokens: 530, ReasoningTokens: 30,
+				CacheCreationInputTokens: 7, CacheReadInputTokens: 9, WebSearchRequests: 1,
+				Cost: &money.Money{Microdollars: 750_000},
+			},
+		},
+	}
+}
+
+// SeedSessionUsageTotal writes a session with one priced message and a
+// recorded session total through the full-parse batch write.
+func SeedSessionUsageTotal(tb testing.TB, local *db.DB) {
+	tb.Helper()
+	require.NoError(tb, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern:  "rc-priced",
+		InputPerMTok:  money.Money{Microdollars: 1_000_000},
+		OutputPerMTok: money.Money{Microdollars: 2_000_000},
+	}}), "seed session-total pricing")
+	started := RecordedCostDay + "T11:00:00Z"
+	at := RecordedCostDay + "T11:05:00Z"
+	_, err := local.WriteSessionBatchAtomic(tb.Context(), []db.SessionBatchWrite{{
+		Session: db.Session{
+			ID: SessionTotalSessionID, Project: "recorded-cost", Machine: "local", Agent: "claude",
+			StartedAt: &started, EndedAt: &at, MessageCount: 1, UserMessageCount: 1,
+		},
+		Messages: []db.Message{{
+			SessionID: SessionTotalSessionID, Ordinal: 0, Role: "assistant", Timestamp: at,
+			Model: "rc-priced", TokenUsage: jsontext.Value(`{"input_tokens":1000,"output_tokens":500}`),
+		}},
+		SessionTotal: SessionUsageTotalFixture(), ReplaceSessionTotal: true,
+	}})
+	require.NoError(tb, err, "seed session total")
+}
+
+// AssertSessionUsageTotal checks that a store holding SeedSessionUsageTotal
+// reports the total beside, and never inside, the session's usage.
+func AssertSessionUsageTotal(t *testing.T, store db.Store) {
+	t.Helper()
+	ctx := t.Context()
+	got, err := store.GetSessionUsage(ctx, SessionTotalSessionID, true)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, int64(2_000), got.Cost.Microdollars, "the total is not added to cost")
+	assert.Equal(t, SessionUsageTotalFixture(), got.SessionTotal)
+	daily, err := store.GetDailyUsage(ctx, db.UsageFilter{
+		From: RecordedCostDay, To: RecordedCostDay, Timezone: "UTC", Project: "recorded-cost",
+		Agent: "claude",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int64(2_000), daily.Totals.TotalCost.Microdollars, "usage totals exclude the session total")
+	assert.Equal(t, 500, daily.Totals.OutputTokens)
 }

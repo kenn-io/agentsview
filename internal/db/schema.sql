@@ -144,6 +144,8 @@ CREATE TABLE IF NOT EXISTS messages (
     token_usage TEXT NOT NULL DEFAULT '',
     context_tokens INTEGER NOT NULL DEFAULT 0,
     output_tokens INTEGER NOT NULL DEFAULT 0,
+    usage_output_tokens INTEGER NOT NULL DEFAULT 0,
+    usage_web_search_requests INTEGER NOT NULL DEFAULT 0,
     provider_id TEXT NOT NULL DEFAULT '',
     has_context_tokens INTEGER NOT NULL DEFAULT 0,
     has_output_tokens INTEGER NOT NULL DEFAULT 0,
@@ -291,7 +293,10 @@ CREATE TABLE IF NOT EXISTS usage_events (
     cost_status TEXT NOT NULL DEFAULT '',
     cost_source TEXT NOT NULL DEFAULT '',
     occurred_at TEXT,
-    dedup_key TEXT NOT NULL DEFAULT ''
+    dedup_key TEXT NOT NULL DEFAULT '',
+    -- occurred_at as UTC Unix microseconds, NULL when blank or unparseable.
+    -- Its indexes are created after archives that predate it gain it.
+    occurred_at_us INTEGER
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_events_dedup
@@ -299,8 +304,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_events_dedup
     WHERE dedup_key != '';
 CREATE INDEX IF NOT EXISTS idx_usage_events_session
     ON usage_events(session_id);
-CREATE INDEX IF NOT EXISTS idx_usage_events_occurred
-    ON usage_events(occurred_at);
 
 -- Per-session plan usage and live-capture coverage. Codex cloud reports
 -- usage as shares of plan limits and credits, not tokens, so these never
@@ -323,6 +326,19 @@ CREATE TABLE IF NOT EXISTS session_plan_usage (
     has_coverage INTEGER NOT NULL DEFAULT 0,
     last_capture_at TEXT,
     uncaptured_turns INTEGER NOT NULL DEFAULT 0
+);
+
+-- A usage total the agent recorded for a whole session, such as Claude
+-- Code's cost-state. It overlaps the session's usage rows, and with
+-- subagent_scope 'included' its subagents' rows, so usage queries never read
+-- it; session usage shows it next to AgentsView's totals.
+CREATE TABLE IF NOT EXISTS session_usage_totals (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    source TEXT NOT NULL,
+    subagent_scope TEXT NOT NULL DEFAULT '',
+    cost_microdollars INTEGER,
+    incomplete INTEGER NOT NULL DEFAULT 0,
+    models_json TEXT NOT NULL DEFAULT '[]'
 );
 
 CREATE TABLE IF NOT EXISTS cursor_usage_events (
@@ -1351,6 +1367,13 @@ CREATE TABLE IF NOT EXISTS genai_pricing (
         DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 
+-- Values the price refresh keeps between runs, such as the embedded catalog
+-- version and the model patterns OpenRouter supplied.
+CREATE TABLE IF NOT EXISTS pricing_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+) WITHOUT ROWID;
+
 -- Git aggregation TTL cache: memoizes `git log --numstat` and
 -- `gh pr list` results per (repo, author, window) tuple so
 -- repeated `agentsview stats` invocations don't re-shell out.
@@ -1654,6 +1677,14 @@ CREATE TABLE IF NOT EXISTS session_signal_state (
     updated_at          TEXT NOT NULL
 );
 
+-- SQLite-only derived counts; these rows are never mirrored.
+CREATE TABLE IF NOT EXISTS session_frustration_markers (
+    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
+    transcript_key TEXT NOT NULL,
+    marker_version INTEGER NOT NULL,
+    count INTEGER NOT NULL
+);
+
 -- SQLite-only parser-proven conversation projection and compact latest changes.
 -- Text lives in messages and is read back by ordinal; body is retired and
 -- stays NULL. Removed rows retain metadata, not old text.
@@ -1680,6 +1711,13 @@ CREATE TABLE IF NOT EXISTS conversation_session_changes (
     gap TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_conversation_session_changes_revision ON conversation_session_changes(revision);
+-- The tool revision at which each session's tool calls last changed.
+-- The summary itself is computed from tool_calls when it is exported.
+CREATE TABLE IF NOT EXISTS conversation_tool_changes (
+    session_id TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_conversation_tool_changes_revision ON conversation_tool_changes(revision);
 
 -- Durable local raw archive identity, inventory and accepted generations.
 CREATE TABLE IF NOT EXISTS raw_archive_roots (

@@ -192,7 +192,7 @@ describe("TopSessions", () => {
     const component = mount(TopSessions, { target: document.body });
     await tick();
 
-    expect(document.querySelector(".loading")).toBeNull();
+    expect(document.querySelector(".loading-state")).toBeNull();
     expect(document.querySelector(".session-label")?.textContent?.trim()).toBe(
       "Renamed sidebar title",
     );
@@ -214,7 +214,7 @@ describe("TopSessions", () => {
     expect(document.body.textContent).toContain("No sessions in range");
     analytics.errors.topSessions = "request failed";
     await tick();
-    expect(document.querySelector(".error")).not.toBeNull();
+    expect(document.querySelector(".load-error")).not.toBeNull();
     expect(document.body.textContent).toContain("No sessions in range");
     analytics.topSessions = null;
     await tick();

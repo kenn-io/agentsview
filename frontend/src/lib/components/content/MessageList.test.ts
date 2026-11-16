@@ -582,6 +582,36 @@ describe("MessageList follow cancellation", () => {
     expect(reportErrorShown).toHaveBeenCalledTimes(2);
   });
 
+  it("shows a failed transcript load with Retry instead of an empty transcript", async () => {
+    vi.spyOn(SessionsService, "getApiV1SessionsById").mockResolvedValue({
+      id: "s1",
+      message_count: 1,
+    } as Awaited<ReturnType<typeof SessionsService.getApiV1SessionsById>>);
+    const page = vi
+      .spyOn(SessionsService, "getApiV1SessionsByIdMessages")
+      .mockRejectedValueOnce(new Error("database is locked"));
+    messages.messages = [];
+
+    component = mount(MessageList, { target: document.body });
+    await messages.loadSession("s1");
+    const alert = await vi.waitFor(() => {
+      const el = document.querySelector('[role="alert"]');
+      expect(el).not.toBeNull();
+      return el!;
+    });
+
+    expect(alert.textContent).toContain("Failed to load");
+    expect(alert.textContent).toContain("database is locked");
+    expect(reportErrorShown).toHaveBeenCalledWith("session");
+
+    page.mockResolvedValueOnce({ messages: [makeMessage(0)], count: 1 } as Awaited<
+      ReturnType<typeof SessionsService.getApiV1SessionsByIdMessages>
+    >);
+    alert.querySelector<HTMLButtonElement>("button")!.click();
+    await vi.waitFor(() => expect(document.querySelector('[role="alert"]')).toBeNull());
+    expect(messages.messages.map((message) => message.content)).toEqual(["msg 0"]);
+  });
+
   it("renders empty and loading states in Simplified Chinese", async () => {
     setLocale("zh-CN");
     sessions.activeSessionId = null;

@@ -652,7 +652,7 @@ describe("SessionVitals", () => {
     await vi.waitFor(() => {
       expect(document.body.textContent).toContain("Outdated transcript claim");
     });
-    expect(document.body.textContent).toContain("Provenance revoked");
+    expect(document.body.textContent).toContain("Source messages could not be verified");
     expect(document.body.textContent).toContain("Messages 21–23");
     const evidenceButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
       (button) => button.textContent?.includes("21–23"),

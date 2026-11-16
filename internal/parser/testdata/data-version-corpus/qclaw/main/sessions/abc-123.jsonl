@@ -1,0 +1,5 @@
+{"type":"session","version":3,"id":"real-tc","timestamp":"2026-02-25T10:00:00Z","cwd":"/workspace/project"}
+{"type":"message","id":"m1","timestamp":"2026-02-25T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"list files"}],"timestamp":"2026-02-25T10:00:01Z"}}
+{"type":"message","id":"m2","timestamp":"2026-02-25T10:00:02Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"call_1","name":"bash","input":{"command":"ls"},"arguments":{"command":"ls"}}],"timestamp":"2026-02-25T10:00:02Z"}}
+{"type":"message","id":"m3","timestamp":"2026-02-25T10:00:03Z","message":{"role":"toolResult","toolCallId":"call_1","toolName":"bash","isError":false,"content":[{"type":"toolResult","toolCallId":"call_1","tool_use_id":"call_1","name":"bash","text":"file1\nfile2"}],"timestamp":"2026-02-25T10:00:03Z"}}
+{"type":"message","id":"m4","timestamp":"2026-02-25T10:00:04Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"call_2","name":"read","arguments":{"path":"/etc/hosts"}}],"timestamp":"2026-02-25T10:00:04Z"}}

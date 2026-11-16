@@ -424,7 +424,18 @@ func (s *Sync) runIncrementalPush(
 		)
 	}
 
-	if len(pushed) > 0 || result.Diagnostics.DeletedStaleSessions > 0 {
+	// Usage reads stay exact without a current rollup, so a failed build
+	// must not keep this push's sessions from being published.
+	rollupRebuilt := false
+	if result.Errors == 0 {
+		rebuilt, rollupErr := s.refreshUsageRollup(ctx)
+		if rollupErr != nil {
+			log.Printf("duckdbsync: the usage rollup is behind; usage reads stay correct but slower: %v", rollupErr)
+		}
+		rollupRebuilt = rebuilt
+	}
+
+	if len(pushed) > 0 || result.Diagnostics.DeletedStaleSessions > 0 || rollupRebuilt {
 		if err := s.checkpointAfterMutatingPush(ctx); err != nil {
 			return result, err
 		}
@@ -707,17 +718,19 @@ func (s *Sync) finalizeIncrementalPush(
 	deletionRevision, identityRevision, mappingRevision int64,
 ) error {
 	return writeMirrorMetadata(ctx, s.duck, mirrorMetadata{
-		SchemaVersion:    SchemaVersion,
-		DataVersion:      db.CurrentDataVersion(),
-		SourceDatabaseID: sourceDatabaseID,
-		SourceArchiveID:  s.archiveID,
-		Scope:            db.CanonicalPushScope(opts.Projects, opts.ExcludeProjects),
-		LastPushCutoff:   cutoff,
-		LastPushAt:       time.Now().UTC().Format(time.RFC3339),
-		LastPushMachine:  s.machine,
-		DeletionRevision: deletionRevision,
-		IdentityRevision: identityRevision,
-		MappingRevision:  mappingRevision,
+		SchemaVersion:             SchemaVersion,
+		FrustrationMarkersVersion: frustrationMarkersVersion,
+		SystemPrefixRulesVersion:  db.SystemPrefixRulesVersion(),
+		DataVersion:               db.CurrentDataVersion(),
+		SourceDatabaseID:          sourceDatabaseID,
+		SourceArchiveID:           s.archiveID,
+		Scope:                     db.CanonicalPushScope(opts.Projects, opts.ExcludeProjects),
+		LastPushCutoff:            cutoff,
+		LastPushAt:                time.Now().UTC().Format(time.RFC3339),
+		LastPushMachine:           s.machine,
+		DeletionRevision:          deletionRevision,
+		IdentityRevision:          identityRevision,
+		MappingRevision:           mappingRevision,
 	})
 }
 
@@ -894,7 +907,7 @@ func (s *Sync) tryPushSessionBatch(
 		args[i] = sess.ID
 	}
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(args)), ",")
-	for _, table := range []string{"commit_links", "image_text", "pinned_messages", "secret_findings", "tool_result_events", "tool_calls", "usage_events", "session_plan_usage", "messages", "sessions"} {
+	for _, table := range []string{"commit_links", "image_text", "pinned_messages", "secret_findings", "tool_result_events", "tool_calls", "usage_events", "session_plan_usage", "session_usage_totals", "messages", "sessions"} {
 		key := "session_id"
 		if table == "sessions" {
 			key = "id"
@@ -923,6 +936,9 @@ func (s *Sync) tryPushSessionBatch(
 	}
 	for _, sess := range sessions {
 		if err := s.replacePlanUsage(ctx, tx, sess.ID); err != nil {
+			return nil, err
+		}
+		if err := s.replaceSessionUsageTotal(ctx, tx, sess.ID); err != nil {
 			return nil, err
 		}
 		if err := s.replaceCommitLinks(ctx, tx, sess.ID); err != nil {
@@ -993,6 +1009,10 @@ func (s *Sync) sessionFingerprints(
 	if err != nil {
 		return nil, fmt.Errorf("computing plan usage fingerprints: %w", err)
 	}
+	sessionTotals, err := s.local.SessionUsageTotalFingerprints(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("computing session total fingerprints: %w", err)
+	}
 	commitLinks, err := s.local.SessionCommitLinkRowsBySession(ctx, ids)
 	if err != nil {
 		return nil, err
@@ -1033,6 +1053,7 @@ func (s *Sync) sessionFingerprints(
 			PlanUsage      string
 			CommitLinks    []db.CommitLinkRow `json:",omitzero"`
 			ImageText      []db.ImageTextRow  `json:",omitzero"`
+			SessionTotal   string             `json:",omitzero"`
 		}{
 			SessionFields: duckSessionFingerprintFields(
 				sess, db.MirroredSessionMachine(sess, s.machine),
@@ -1046,6 +1067,7 @@ func (s *Sync) sessionFingerprints(
 			PlanUsage:      planUsage[sess.ID],
 			CommitLinks:    commitLinks[sess.ID],
 			ImageText:      imageText[sess.ID],
+			SessionTotal:   sessionTotals[sess.ID],
 		}
 		data, err := json.Marshal(payload)
 		if err != nil {

@@ -18,9 +18,8 @@ import (
 )
 
 func TestRawCustodyEndToEnd(t *testing.T) {
-	pgURL := testPGURL(t)
-	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, schemaTestSchema)
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, pg.Close()) })

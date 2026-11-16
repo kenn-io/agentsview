@@ -18,16 +18,14 @@ import (
 // SQLite to PostgreSQL and survives a round-trip via the sidebar index
 // read path and the scanPGSession read path.
 func TestPushSessionNameRoundTrip(t *testing.T) {
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_push_sessionname_test"
+	t.Parallel()
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -123,9 +121,8 @@ func TestPushSessionNameRoundTrip(t *testing.T) {
 // pushSession call. ListSessionsForMirrorWindow reads sessionFullCols, so a
 // missing session_name there would silently drop the value on every real push.
 func TestPushSessionNameViaPushPath(t *testing.T) {
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 	ps, err := New(

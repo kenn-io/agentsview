@@ -23,7 +23,12 @@ type SessionBatchWrite struct {
 	Messages          []Message
 	UsageEvents       []UsageEvent
 	// PlanUsage replaces the session's plan usage row; nil removes it.
-	PlanUsage           *SessionPlanUsage
+	PlanUsage *SessionPlanUsage
+	// SessionTotal replaces the session's recorded total when
+	// ReplaceSessionTotal is set; nil then removes it. Writes that are not
+	// a full parse leave the stored total alone.
+	SessionTotal        *SessionUsageTotal
+	ReplaceSessionTotal bool
 	IdentityObservation export.ProjectIdentityObservation
 	// IdentitySnapshotProject distinguishes legacy omission (nil, use the
 	// aggregate project) from an explicit empty parser source (omit snapshot).
@@ -963,6 +968,13 @@ func writeSessionBatchMetadataTx(ctx context.Context, tx *sql.Tx, queries transa
 		queries, write.Session.ID, write.PlanUsage, false,
 	); err != nil {
 		return err
+	}
+	if write.ReplaceSessionTotal {
+		if err := replaceSessionUsageTotalTx(
+			queries, write.Session.ID, write.SessionTotal, false,
+		); err != nil {
+			return err
+		}
 	}
 
 	return nil

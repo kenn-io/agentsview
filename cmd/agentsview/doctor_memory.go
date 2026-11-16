@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"go.kenn.io/kit/agentsetup"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/service"
@@ -39,10 +41,11 @@ type doctorMemoryStandaloneStatus struct {
 type doctorMemoryClientStatus struct {
 	Status     service.MemoryReadinessState   `json:"status"`
 	Reason     string                         `json:"reason,omitempty"`
-	Skill      doctorMemoryComponentStatus    `json:"skill"`
-	MCP        doctorMemoryComponentStatus    `json:"mcp"`
-	Hook       doctorMemoryComponentStatus    `json:"hook"`
+	Skill      doctorMemoryComponentStatus    `json:"skill,omitzero"`
+	MCP        doctorMemoryComponentStatus    `json:"mcp,omitzero"`
+	Hook       doctorMemoryComponentStatus    `json:"hook,omitzero"`
 	Standalone []doctorMemoryStandaloneStatus `json:"standalone_skills,omitempty"`
+	Rows       []agentsetup.Row               `json:"rows,omitempty"`
 }
 
 type doctorMemoryReport struct {
@@ -79,6 +82,9 @@ func newDoctorMemoryCommand() *cobra.Command {
 			}
 			root := resolveDoctorMemoryPluginRoot(pluginRoot)
 			client := inspectDoctorMemoryClient(root, selection)
+			if root == "" {
+				client = inspectDoctorAgentSetup(cmd.Context(), client)
+			}
 			report := doctorMemoryReport{
 				Status:          aggregateDoctorMemoryStatus(target.Status, client.Status),
 				ObservedAt:      target.ObservedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
@@ -193,6 +199,41 @@ func inspectDoctorMemoryClient(
 		client.Reason = "duplicate_standalone_install"
 	} else {
 		client.Reason = "standalone_install_has_no_native_mcp_or_hook"
+	}
+	return client
+}
+
+func inspectDoctorAgentSetup(ctx context.Context, client doctorMemoryClientStatus) doctorMemoryClientStatus {
+	report, err := agentsetup.Run(ctx, agentsetup.Options{SetupCommand: "agentsview agent setup", CheckOnly: true, Items: func(agent string) ([]agentsetup.Item, error) { return setupItems(agent, false) }})
+	if err != nil {
+		return client
+	}
+	client.Skill = doctorMemoryComponentStatus{}
+	client.MCP = doctorMemoryComponentStatus{}
+	client.Hook = doctorMemoryComponentStatus{}
+	for i := range report.Rows {
+		row := &report.Rows[i]
+		if row.Piece == "mcp agentsview" {
+			row.ConfigPath = ""
+			if row.State == agentsetup.StateFailed || row.State == agentsetup.StateUnknown {
+				row.Reason = "MCP client check could not verify the server"
+			}
+		}
+	}
+	client.Rows = report.Rows
+	mismatch := client.Reason == "standalone_target_mismatch"
+	client.Status = service.MemoryReady
+	client.Reason = ""
+	for _, row := range report.Rows {
+		if row.State != agentsetup.StateOK {
+			client.Status = service.MemoryPartial
+			client.Reason = "agent_setup_incomplete"
+			break
+		}
+	}
+	if mismatch {
+		client.Status = service.MemoryPartial
+		client.Reason = "standalone_target_mismatch"
 	}
 	return client
 }
@@ -332,7 +373,7 @@ func doctorMemoryTargetMatches(
 	selection doctorMemoryTargetSelection, remote skills.Remote,
 ) bool {
 	switch selection.Kind {
-	case "local":
+	case "local", "postgresql":
 		return remote.Empty()
 	case "server":
 		return strings.TrimRight(strings.TrimSpace(remote.Server), "/") == selection.server
@@ -419,14 +460,21 @@ func writeDoctorMemoryReport(w io.Writer, report doctorMemoryReport) error {
 	}
 	writeDoctorMemoryCapability(w, "Source freshness", report.Target.Sources.Status,
 		report.Target.Sources.Reason)
-	writeDoctorMemoryCapability(w, "Client integration", report.Client.Status,
-		report.Client.Reason)
-	writeDoctorMemoryCapability(w, "  Skill", report.Client.Skill.Status,
-		report.Client.Skill.Reason)
-	writeDoctorMemoryCapability(w, "  MCP", report.Client.MCP.Status,
-		report.Client.MCP.Reason)
-	writeDoctorMemoryCapability(w, "  SessionStart hook", report.Client.Hook.Status,
-		report.Client.Hook.Reason)
+	reason := report.Client.Reason
+	if reason == "agent_setup_incomplete" {
+		reason = ""
+	}
+	writeDoctorMemoryCapability(w, "Client integration", report.Client.Status, reason)
+	if len(report.Client.Rows) > 0 {
+		_ = (agentsetup.Report{Rows: report.Client.Rows}).WriteText(w, "")
+	} else {
+		writeDoctorMemoryCapability(w, "  Skill", report.Client.Skill.Status,
+			report.Client.Skill.Reason)
+		writeDoctorMemoryCapability(w, "  MCP", report.Client.MCP.Status,
+			report.Client.MCP.Reason)
+		writeDoctorMemoryCapability(w, "  SessionStart hook", report.Client.Hook.Status,
+			report.Client.Hook.Reason)
+	}
 	if report.Client.Reason == "plugin_root_unavailable" {
 		fmt.Fprintln(w, "Native plugin root was not provided; pass --plugin-root to inspect it.")
 	}

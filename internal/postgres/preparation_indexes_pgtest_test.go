@@ -14,6 +14,7 @@ import (
 )
 
 func TestPGPreparationIndexesUpgradeAndBoundEmptyChecks(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_preparation_index_test"
 	t.Run("bounded empty checks", func(t *testing.T) {
 		_, store := prepareUsageSchema(t, schema)
@@ -72,6 +73,7 @@ func TestPGPreparationIndexesUpgradeAndBoundEmptyChecks(t *testing.T) {
 }
 
 func TestPGPreparationIndexesConcurrentInstallersBothSucceed(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_preparation_concurrent_test"
 	pgURL, store := prepareUsageSchema(t, schema)
 	pg := store.DB()

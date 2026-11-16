@@ -1,0 +1,5 @@
+{"type":"ai-title","aiTitle":"Check disk usage"}
+{"id":"u1","timestamp":1778749186168,"type":"message","role":"user","content":[{"type":"input_text","text":"Check which directory uses the most disk"}],"cwd":"/home/user/code/app"}
+{"id":"fc1","timestamp":1778749187168,"type":"function_call","name":"Bash","callId":"call_1","arguments":"{\"command\":\"du -sh *\"}","providerData":{"model":"gpt-5.5","usage":{"inputTokens":20,"outputTokens":4}}}
+{"id":"fr1","timestamp":1778749188168,"type":"function_call_result","callId":"call_1","output":"1.2G node_modules\n40K src"}
+{"id":"a1","timestamp":1778749189168,"type":"message","role":"assistant","content":[{"type":"output_text","text":"node_modules takes most of the space."}],"providerData":{"model":"gpt-5.5","usage":{"inputTokens":60,"outputTokens":9,"cacheReadInputTokens":5}}}

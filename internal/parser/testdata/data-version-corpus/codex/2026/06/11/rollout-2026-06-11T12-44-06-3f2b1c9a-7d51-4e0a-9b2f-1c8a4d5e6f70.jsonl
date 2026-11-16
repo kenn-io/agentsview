@@ -1,0 +1,2 @@
+{"type":"session_meta","timestamp":"2024-01-01T10:00:00Z","payload":{"originator":"codex_cli_rs","id":"3f2b1c9a-7d51-4e0a-9b2f-1c8a4d5e6f70","cwd":"/workspace/code/api"}}
+{"type":"response_item","timestamp":"2024-01-01T10:00:01Z","payload":{"role":"user","content":[{"type":"input_text","text":"Hello"}]}}

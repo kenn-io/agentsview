@@ -20,9 +20,8 @@ import (
 // and secret_findings rows to PostgreSQL. It also verifies idempotency
 // (delete-before-insert prevents duplicates on re-push).
 func TestPGPushSecrets(t *testing.T) {
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 	ps, err := New(
@@ -122,9 +121,8 @@ func TestPGPushSecrets(t *testing.T) {
 // whether it changed any rows, so the caller can bump sessions.updated_at
 // for secret-only changes that pushSession and pushMessages would miss.
 func TestPushSecretFindingsReportsChange(t *testing.T) {
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 	ps, err := New(
@@ -240,10 +238,8 @@ func TestPGPassfileConnects(t *testing.T) {
 }
 
 func TestPGPushCycle(t *testing.T) {
-	pgURL := testPGURL(t)
-
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 	ps, err := New(

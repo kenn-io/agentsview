@@ -46,7 +46,7 @@ func appendLiveWriteMessage(
 
 func liveWriteDailyInput(t *testing.T, database *DB, project string) int {
 	t.Helper()
-	daily, err := database.GetDailyUsage(t.Context(), UsageFilter{
+	daily, err := database.getDailyUsageUncached(t.Context(), UsageFilter{
 		From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
 		Project: project, SkipSessionCounts: true,
 	})
@@ -230,6 +230,19 @@ func TestUsageNotificationLeavesCursorRollupForRequest(t *testing.T) {
 	daily, err := database.GetDailyUsage(t.Context(), UsageFilter{Timezone: "UTC"})
 	require.NoError(t, err)
 	assert.Equal(t, 1011, daily.Totals.InputTokens)
+}
+
+func TestUsageNotificationDeletesSessionAfterReset(t *testing.T) {
+	database, cache := usageSpoolExtractionFixture(t, 2)
+	require.NoError(t, cache.resetRewoundUsage(t.Context(), 0))
+	snapshot, err := database.captureUsageQuery(t.Context(), UsageFilter{}, usageQueryKindToken)
+	require.NoError(t, err)
+	_, err = cache.fill.Ensure(t.Context(), snapshot.Versions, 0)
+	require.NoError(t, err)
+	require.Equal(t, 1, usageCacheCount(t, cache, "usage_cached_sessions"))
+	require.NoError(t, database.SoftDeleteSession(t.Context(), "session"))
+	cache.fill.processNotificationBatch(map[string]bool{"session": true}, false)
+	require.Zero(t, usageCacheCount(t, cache, "usage_cached_sessions"))
 }
 
 func TestUsageNotificationRequeuesPeersWhenChannelFull(t *testing.T) {

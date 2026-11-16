@@ -1,0 +1,14 @@
+{
+  "metadata": {
+    "id": "session_basic",
+    "title": "Investigate startup",
+    "created_at": "2026-06-02T08:00:00Z",
+    "updated_at": "2026-06-02T08:01:00Z",
+    "model": "deepseek-reasoner",
+    "workspace": "/home/user/code/app"
+  },
+  "messages": [
+    {"role": "user", "content": "Inspect the server logs", "timestamp": "2026-06-02T08:00:05Z"},
+    {"role": "assistant", "content": [{"type": "text", "text": "The server failed during startup."}], "timestamp": "2026-06-02T08:00:10Z"}
+  ]
+}

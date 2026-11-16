@@ -1,0 +1,4 @@
+{"type":"session","version":3,"id":"0e4ba1a2-6f43-4c47-9c35-4d1f2c3b8a10","timestamp":"2025-01-01T10:00:00Z","cwd":"/workspace/code/my-project"}
+{"type":"session_info","id":"a1b2c3d4","parentId":null,"name":"document review"}
+{"type":"message","id":"b2c3d4e5","parentId":"a1b2c3d4","timestamp":"2025-01-01T10:00:01Z","message":{"role":"assistant","provider":"openai","model":"gpt-5.6-sol","content":[],"usage":{"input":100,"output":20,"cacheRead":30,"cacheWrite":0,"totalTokens":150},"timestamp":1735725601000}}
+{"type":"message","id":"c3d4e5f6","parentId":"b2c3d4e5","timestamp":"2025-01-01T10:00:02Z","message":{"role":"assistant","provider":"google","model":"gemini-4-argon","content":[],"usage":{"input":40,"output":5,"cacheRead":0,"cacheWrite":0,"totalTokens":45},"timestamp":1735725602000}}

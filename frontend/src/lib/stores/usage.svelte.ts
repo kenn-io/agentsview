@@ -14,10 +14,19 @@ import { sessions } from "./sessions.svelte.js";
 import { perf, type PerfEntryStatus } from "./perf.svelte.js";
 import { rollingRange, today } from "../utils/dates.js";
 import { ALL_TOKEN_TYPES, canonicalTokenTypes, type UsageTokenType } from "./usageTokenTypes.js";
+import type { TreemapLabelScale } from "../components/usage/treemapLabelSize.js";
 import {
-  isTreemapLabelScale,
-  type TreemapLabelScale,
-} from "../components/usage/treemapLabelSize.js";
+  loadToggles,
+  loadUsageFilters,
+  saveToggles,
+  saveUsageFilters,
+  type AttributionView,
+  type GroupBy,
+  type TimeSeriesView,
+  type Toggles,
+} from "./usagePreferences.js";
+import { summaryForDateRange } from "./usageRangeSummary.js";
+import { DEFAULT_WINDOW_DAYS, joinCsvParts } from "./usageUrl.js";
 
 type UsageParams = NonNullable<Parameters<typeof UsageService.getApiV1UsageSummary>[0]>;
 type UsagePairwiseParams = Parameters<typeof UsageService.getApiV1UsagePairwiseComparison>[0];
@@ -63,144 +72,8 @@ export interface UsageProjectFilterItem {
   count?: number;
 }
 
-export type GroupBy = "project" | "model" | "agent";
-export type TimeSeriesView = "smooth" | "lines" | "bars";
-export type AttributionView = "treemap" | "list" | "bars";
-
-interface Toggles {
-  timeSeries: { groupBy: GroupBy; view: TimeSeriesView };
-  attribution: { groupBy: GroupBy; view: AttributionView; labelScale: TreemapLabelScale };
-}
-
-const TOGGLES_KEY = "usage-toggles";
-
-function defaultToggles(): Toggles {
-  return {
-    timeSeries: { groupBy: "project", view: "smooth" },
-    attribution: { groupBy: "project", view: "treemap", labelScale: "sqrt" },
-  };
-}
-
-function isGroupBy(value: unknown): value is GroupBy {
-  return value === "project" || value === "model" || value === "agent";
-}
-
-function isTimeSeriesView(value: unknown): value is TimeSeriesView {
-  return value === "smooth" || value === "lines" || value === "bars";
-}
-
 function isUnknownProjectKeyError(error: unknown): boolean {
   return error instanceof ApiError && error.status === 400 && error.code === "unknown_project_key";
-}
-
-function loadToggles(): Toggles {
-  try {
-    const raw = localStorage.getItem(TOGGLES_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as Partial<Toggles>;
-      const defaults = defaultToggles();
-      // `Project | Model | Agent` selector is shared across usage
-      // panels. Migrate legacy split state by choosing one value
-      // and applying it to both widgets.
-      const sharedGroupBy = isGroupBy(parsed.timeSeries?.groupBy)
-        ? parsed.timeSeries.groupBy
-        : isGroupBy(parsed.attribution?.groupBy)
-          ? parsed.attribution.groupBy
-          : defaults.timeSeries.groupBy;
-      return {
-        timeSeries: {
-          groupBy: sharedGroupBy,
-          view: isTimeSeriesView(parsed.timeSeries?.view)
-            ? parsed.timeSeries.view
-            : defaults.timeSeries.view,
-        },
-        attribution: {
-          groupBy: sharedGroupBy,
-          view: parsed.attribution?.view ?? defaults.attribution.view,
-          labelScale: isTreemapLabelScale(parsed.attribution?.labelScale)
-            ? parsed.attribution.labelScale
-            : defaults.attribution.labelScale,
-        },
-      };
-    }
-  } catch {
-    // Corrupted localStorage — fall back to defaults.
-  }
-  return defaultToggles();
-}
-
-function saveToggles(t: Toggles): void {
-  try {
-    localStorage.setItem(TOGGLES_KEY, JSON.stringify(t));
-  } catch {
-    // localStorage full or unavailable — silently skip.
-  }
-}
-
-const DEFAULT_WINDOW_DAYS = 30;
-
-// 100 years is well beyond any realistic session history and stays
-// inside Date#setDate's safe range, so rollingRange(MAX_WINDOW_DAYS)
-// always produces valid YYYY-MM-DD strings.
-const MAX_WINDOW_DAYS = 36500;
-
-const USAGE_FILTERS_KEY = "usage-filters";
-
-export interface UsageFilterState {
-  excludedProjects: string;
-  excludedProjectKeys?: string;
-  excludedAgents: string;
-  excludedModels: string;
-}
-
-function loadUsageFilters(): UsageFilterState {
-  try {
-    const raw = localStorage.getItem(USAGE_FILTERS_KEY);
-    if (raw) {
-      const saved = JSON.parse(raw) as Partial<UsageFilterState>;
-      return {
-        excludedProjects: saved.excludedProjects ?? "",
-        excludedProjectKeys: "",
-        excludedAgents: saved.excludedAgents ?? "",
-        excludedModels: saved.excludedModels ?? "",
-      };
-    }
-  } catch {
-    // Corrupted localStorage — fall back to defaults.
-  }
-  return {
-    excludedProjects: "",
-    excludedProjectKeys: "",
-    excludedAgents: "",
-    excludedModels: "",
-  };
-}
-
-function saveUsageFilters(f: UsageFilterState): void {
-  try {
-    const data: UsageFilterState = {
-      excludedProjects: f.excludedProjects,
-      excludedAgents: f.excludedAgents,
-      excludedModels: f.excludedModels,
-    };
-    localStorage.setItem(USAGE_FILTERS_KEY, JSON.stringify(data));
-  } catch {
-    // localStorage full or unavailable — silently skip.
-  }
-}
-
-function joinCsvParts(...parts: string[]): string {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const part of parts) {
-    for (const value of part.split(",")) {
-      const trimmed = value.trim();
-      if (!trimmed || seen.has(trimmed)) continue;
-      seen.add(trimmed);
-      out.push(trimmed);
-    }
-  }
-  return out.join(",");
 }
 
 type Endpoint = "summary" | "pairwise" | "topSessions" | "zoom";
@@ -213,144 +86,6 @@ function emptyPairwiseSelection(): UsagePairwiseSelection {
 }
 
 export type UsageMode = "cost" | "token";
-
-function selectionKey(params: UsageParams): string {
-  return [params.project_key, params.model, params.agent].join("|");
-}
-
-function summaryForDateRange(
-  summary: UsageSummaryResponse,
-  from: string,
-  to: string,
-): UsageSummaryResponse {
-  const daily = summary.daily.filter((day) => day.date >= from && day.date <= to);
-  const projectTotals = new Map<string, UsageSummaryResponse["projectTotals"][number]>();
-  const modelTotals = new Map<string, UsageSummaryResponse["modelTotals"][number]>();
-  const agentTotals = new Map<string, UsageSummaryResponse["agentTotals"][number]>();
-  let inputTokens = 0;
-  let outputTokens = 0;
-  let cacheCreationTokens = 0;
-  let cacheReadTokens = 0;
-  let totalMicrodollars = 0;
-
-  for (const day of daily) {
-    inputTokens += day.inputTokens;
-    outputTokens += day.outputTokens;
-    cacheCreationTokens += day.cacheCreationTokens;
-    cacheReadTokens += day.cacheReadTokens;
-    totalMicrodollars += day.totalCost.microdollars;
-
-    for (const item of day.projectBreakdowns ?? []) {
-      const total = projectTotals.get(item.project_key) ?? {
-        project_key: item.project_key,
-        project: item.project,
-        inputTokens: 0,
-        outputTokens: 0,
-        cacheCreationTokens: 0,
-        cacheReadTokens: 0,
-        cost: { microdollars: 0 },
-      };
-      total.inputTokens += item.inputTokens;
-      total.outputTokens += item.outputTokens;
-      total.cacheCreationTokens += item.cacheCreationTokens;
-      total.cacheReadTokens += item.cacheReadTokens;
-      total.cost.microdollars += item.cost.microdollars;
-      projectTotals.set(item.project_key, total);
-    }
-
-    for (const item of day.modelBreakdowns ?? []) {
-      const total = modelTotals.get(item.modelName) ?? {
-        model: item.modelName,
-        inputTokens: 0,
-        outputTokens: 0,
-        cacheCreationTokens: 0,
-        cacheReadTokens: 0,
-        cost: { microdollars: 0 },
-      };
-      total.inputTokens += item.inputTokens;
-      total.outputTokens += item.outputTokens;
-      total.cacheCreationTokens += item.cacheCreationTokens;
-      total.cacheReadTokens += item.cacheReadTokens;
-      total.cost.microdollars += item.cost.microdollars;
-      modelTotals.set(item.modelName, total);
-    }
-
-    for (const item of day.agentBreakdowns ?? []) {
-      const total = agentTotals.get(item.agent) ?? {
-        agent: item.agent,
-        inputTokens: 0,
-        outputTokens: 0,
-        cacheCreationTokens: 0,
-        cacheReadTokens: 0,
-        cost: { microdollars: 0 },
-      };
-      total.inputTokens += item.inputTokens;
-      total.outputTokens += item.outputTokens;
-      total.cacheCreationTokens += item.cacheCreationTokens;
-      total.cacheReadTokens += item.cacheReadTokens;
-      total.cost.microdollars += item.cost.microdollars;
-      agentTotals.set(item.agent, total);
-    }
-  }
-
-  // Plan-only sessions have no usage events, so daily entries cannot place
-  // them in the range; keep each model's count from the source summary so
-  // its row still reads "Plan usage" instead of zero until the range's own
-  // summary arrives.
-  for (const source of summary.modelTotals) {
-    if (!source.planOnlySessions) continue;
-    const total = modelTotals.get(source.model) ?? {
-      model: source.model,
-      inputTokens: 0,
-      outputTokens: 0,
-      cacheCreationTokens: 0,
-      cacheReadTokens: 0,
-      cost: { microdollars: 0 },
-    };
-    total.planOnlySessions = source.planOnlySessions;
-    modelTotals.set(source.model, total);
-  }
-
-  const byCost = <T extends { cost: { microdollars: number } }>(a: T, b: T) =>
-    b.cost.microdollars - a.cost.microdollars;
-  const cacheHitDenominator = cacheReadTokens + inputTokens;
-
-  return {
-    ...summary,
-    from,
-    to,
-    daily,
-    totals: {
-      inputTokens,
-      outputTokens,
-      cacheCreationTokens,
-      cacheReadTokens,
-      totalCost: { microdollars: totalMicrodollars },
-      // Daily entries carry no per-day savings, so a derived range cannot
-      // recompute them; the UI does not read this field for derived ranges.
-      cacheSavings: { microdollars: 0 },
-    },
-    projectTotals: [...projectTotals.values()].sort(
-      (a, b) => byCost(a, b) || a.project_key.localeCompare(b.project_key),
-    ),
-    modelTotals: [...modelTotals.values()].sort(
-      (a, b) => byCost(a, b) || a.model.localeCompare(b.model),
-    ),
-    agentTotals: [...agentTotals.values()].sort(
-      (a, b) => byCost(a, b) || a.agent.localeCompare(b.agent),
-    ),
-    cacheStats: {
-      cacheReadTokens,
-      cacheCreationTokens,
-      uncachedInputTokens: inputTokens,
-      outputTokens,
-      hitRate: cacheHitDenominator > 0 ? cacheReadTokens / cacheHitDenominator : 0,
-      savingsVsUncached: { microdollars: 0 },
-    },
-    unsupportedUsage: undefined,
-    comparison: undefined,
-  };
-}
 
 class UsageStore {
   from: string = $state(rollingRange(DEFAULT_WINDOW_DAYS).from);
@@ -384,8 +119,6 @@ class UsageStore {
   // The selected-dimension-free summary over the full unbrushed window.
   referenceSummary = $state<UsageSummaryResponse | null>(null);
   private timeSeriesContextSummary = $state<UsageSummaryResponse | null>(null);
-  // Which selection the shown summary covers, so a failed reselect reports instead of showing old totals.
-  private summarySelection: string | null = null;
   // A full-window refresh is in flight, so a brush must refetch the window instead of slicing old data.
   private fullWindowPending = false;
   isTimeRangeSummaryProvisional = $state(false);
@@ -1200,7 +933,6 @@ class UsageStore {
       }
       if (this.versions.summary === v) {
         this.summary = data;
-        this.summarySelection = selectionKey(params);
         if (contextData !== null || this.selectedTimeRange === null) this.fullWindowPending = false;
         this.attributionSummary = attributionData;
         if (!attributionParams) this.referenceSummary = null;
@@ -1324,13 +1056,12 @@ class UsageStore {
                 console.warn("usage attribution restore failed:", attributionError);
             }
           }
-        } else if (
-          this.summary === null ||
-          (this.summarySelection !== null && selectionKey(params) !== this.summarySelection)
-        ) {
-          this.errors.summary = e instanceof Error ? e.message : m.shared_failed_to_load();
         } else {
-          console.warn("usage.fetchSummary refetch failed:", e);
+          // The last good summary stays loaded so the charts keep their
+          // colors. It may answer other filters or dates, so while this error
+          // stands the summary cards show no totals and no panel claims the
+          // period is empty.
+          this.errors.summary = e instanceof Error ? e.message : m.shared_failed_to_load();
         }
       }
     } finally {
@@ -1470,11 +1201,8 @@ class UsageStore {
       if (this.versions.pairwise === pairwiseVersion) {
         if (e instanceof ApiError && e.code === "invalid_machine_filter")
           this.pairwiseComparison = null;
-        if (this.pairwiseComparison === null) {
-          this.errors.pairwise = e instanceof Error ? e.message : m.shared_failed_to_load();
-        } else {
-          console.warn("usage.fetchPairwise failed:", e);
-        }
+        // A comparison from an earlier load stays on screen with the error above it.
+        this.errors.pairwise = e instanceof Error ? e.message : m.shared_failed_to_load();
       }
       return "error";
     } finally {
@@ -1506,7 +1234,7 @@ class UsageStore {
     else void this.fetchZoom();
   }
 
-  private async fetchZoom(params: UsageParams = this.baseParams()): Promise<FetchResult> {
+  async fetchZoom(params: UsageParams = this.baseParams()): Promise<FetchResult> {
     const projectKey = this.zoomedProject?.key;
     if (!projectKey) return "ok";
     return this.fetchRanking("zoom", { ...params, group_by: "group", limit: 100 });
@@ -1568,9 +1296,11 @@ class UsageStore {
           if (panel === "zoom") this.zoomRows = null;
           else this.topSessions = null;
           this.errors[panel] = error.message;
-        } else if ((panel === "zoom" ? this.zoomRows : this.topSessions) === null) {
+        } else {
+          // Zoom rows from an earlier load stay under the error; the top
+          // sessions table shows the error in place of its rows.
           this.errors[panel] = error instanceof Error ? error.message : m.shared_failed_to_load();
-        } else console.warn(`usage.${panel} refetch failed:`, error);
+        }
       }
       return status;
     } finally {
@@ -1673,66 +1403,3 @@ class UsageStore {
 }
 
 export const usage = new UsageStore();
-
-export interface UsageUrlState {
-  from: string;
-  to: string;
-  isPinned: boolean;
-  windowDays: number;
-  excludedProjects: string;
-  excludedProjectKeys: string;
-  excludedAgents: string;
-  excludedModels: string;
-}
-
-export const USAGE_DEFAULT_WINDOW_DAYS = DEFAULT_WINDOW_DAYS;
-
-export function parseWindowDays(raw: string | undefined): number | null {
-  if (!raw) return null;
-  const n = Number.parseInt(raw, 10);
-  if (!Number.isFinite(n) || n <= 0 || n > MAX_WINDOW_DAYS || String(n) !== raw) {
-    return null;
-  }
-  return n;
-}
-
-export function buildUsageUrlParams(state: UsageUrlState): Record<string, string> {
-  const params: Record<string, string> = {};
-  if (state.isPinned) {
-    if (state.from) params["from"] = state.from;
-    if (state.to) params["to"] = state.to;
-  } else if (state.windowDays > 0 && state.windowDays !== DEFAULT_WINDOW_DAYS) {
-    params["window_days"] = String(state.windowDays);
-  }
-  if (state.excludedModels) {
-    params["exclude_model"] = state.excludedModels;
-  }
-  if (state.excludedProjects) {
-    params["exclude_project"] = state.excludedProjects;
-  }
-  // Shared-store project keys are scoped to the current aggregate archive
-  // set. Keep them in live request state only; URLs outlive that scope.
-  if (state.excludedAgents) {
-    params["exclude_agent"] = state.excludedAgents;
-  }
-  return params;
-}
-
-const CSV_MERGE_URL_KEYS = new Set(["exclude_project"]);
-const SESSION_DATE_URL_KEYS = new Set(["date", "date_from", "date_to"]);
-
-export function mergeUsageAndSessionUrlParams(
-  usageParams: Record<string, string>,
-  sessionParams: Record<string, string>,
-): Record<string, string> {
-  const params = { ...usageParams };
-  for (const [key, value] of Object.entries(sessionParams)) {
-    if (SESSION_DATE_URL_KEYS.has(key)) continue;
-    if (CSV_MERGE_URL_KEYS.has(key) && params[key]) {
-      params[key] = joinCsvParts(params[key], value);
-    } else {
-      params[key] = value;
-    }
-  }
-  return params;
-}

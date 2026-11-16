@@ -318,6 +318,9 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
+	if err := os.Setenv("CACHE_DIRECTORY", filepath.Join(testDBFixtureTempDir, "cache")); err != nil {
+		panic(err)
+	}
 	code := m.Run()
 	_ = os.RemoveAll(testDBFixtureTempDir)
 	if testDBTemplateDir != "" {
@@ -778,10 +781,12 @@ func TestMigration_ResultContentColumn(t *testing.T) {
 	d.Close()
 
 	// Remove result_content via raw SQL: recreate tool_calls
-	// without the column to simulate a legacy schema.
+	// without the column to simulate a legacy schema. Session triggers
+	// read tool_calls, so the rename must not check them while it is gone.
 	conn, err := sql.Open("sqlite3", path)
 	requireNoError(t, err, "raw open")
 	_, err = conn.ExecContext(t.Context(), `
+		PRAGMA legacy_alter_table=ON;
 		CREATE TABLE tool_calls_old AS
 			SELECT id, message_id, session_id, tool_name,
 			       category, tool_use_id, input_json,
@@ -5544,7 +5549,7 @@ func TestCopyInsightsFrom(t *testing.T) {
 func TestCopyModelPricingFrom(t *testing.T) {
 	dir := t.TempDir()
 
-	// Source DB with pricing rows and a sentinel meta row.
+	// Source DB with pricing rows and a pricing metadata value.
 	srcPath := filepath.Join(dir, "src.db")
 	srcDB := testDBAtPath(t, srcPath, "src")
 	require.NoError(t, srcDB.UpsertModelPricing([]ModelPricing{
@@ -5587,7 +5592,7 @@ func TestCopyModelPricingFrom(t *testing.T) {
 
 	meta, err := dstDB.GetPricingMeta("_fallback_version")
 	require.NoError(t, err, "GetPricingMeta")
-	assert.Equal(t, "v42", meta, "sentinel meta row copied")
+	assert.Equal(t, "v42", meta, "pricing metadata copied")
 }
 
 func TestCopyModelPricingFromRollsBackParentWhenBandCopyFails(t *testing.T) {
@@ -6320,6 +6325,7 @@ func TestCopyOrphanedDataFrom_LegacyNoIsSystem(t *testing.T) {
 	// SQLite doesn't support DROP COLUMN before 3.35;
 	// recreate the table without is_system.
 	_, err = raw.ExecContext(t.Context(), `
+		DROP TABLE IF EXISTS session_frustration_markers;
 		DROP VIEW IF EXISTS message_search_content;
 		DROP VIEW IF EXISTS message_trigram_source;
 		DROP TRIGGER IF EXISTS conversation_usage_key_insert;

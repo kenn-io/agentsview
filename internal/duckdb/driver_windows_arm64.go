@@ -30,4 +30,5 @@ func newDuckAppendBatch(context.Context, any, map[string][]columnSpec) (*duckApp
 	return nil, errUnsupportedPlatform
 }
 func (*duckAppendBatch) add(context.Context, string, ...any) error { return errUnsupportedPlatform }
+func (*duckAppendBatch) flush(context.Context) error               { return errUnsupportedPlatform }
 func (*duckAppendBatch) close(context.Context) error               { return errUnsupportedPlatform }

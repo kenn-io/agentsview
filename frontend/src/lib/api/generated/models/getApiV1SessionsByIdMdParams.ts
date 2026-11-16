@@ -8,4 +8,8 @@ export type GetApiV1SessionsByIdMdParams = {
    * Child session depth
    */
   depth?: GetApiV1SessionsByIdMdDepth;
+  /**
+   * Export unredacted secret values; localhost callers only
+   */
+  reveal?: boolean;
 };

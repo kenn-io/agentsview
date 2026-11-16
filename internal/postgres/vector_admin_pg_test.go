@@ -34,9 +34,8 @@ func pushAdminGeneration(
 // generation rows, keeps the shared doc (genB still references it), prunes the
 // genA-only doc, and that dropping a nonexistent id errors clearly.
 func TestListAndDropVectorGenerations(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_admin_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "X")
@@ -130,6 +129,7 @@ func TestListAndDropVectorGenerations(t *testing.T) {
 // where the vector_generations table never existed (pgvector never installed,
 // SQLSTATE 42P01): the list is empty and no error surfaces.
 func TestListVectorGenerationsMissingTable(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	schema := "agentsview_vector_admin_missing_test"
 	pg, err := Open(t.Context(), pgURL, schema, true)
@@ -156,9 +156,8 @@ func TestListVectorGenerationsMissingTable(t *testing.T) {
 // different generation. deleteOrphanVectorDocs must reference only chunk tables
 // that still exist.
 func TestVectorPushToleratesMissingChunkTable(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_admin_dangling_test")
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "S")

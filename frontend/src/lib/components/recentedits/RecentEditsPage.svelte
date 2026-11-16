@@ -19,6 +19,9 @@
   import { formatCount, formatRelativeTime } from "../../utils/format.js";
   import ProjectTypeahead from "../layout/ProjectTypeahead.svelte";
   import LibraryPageHeader from "../shared/LibraryPageHeader.svelte";
+  import LoadError from "../shared/LoadError.svelte";
+  import LoadingState from "../shared/LoadingState.svelte";
+  import { failureMessage } from "../../utils/failure.js";
   import { LatestRead } from "../../utils/latest-read.js";
   import { loadColumnWidths, saveColumnWidths } from "./columnWidths.js";
 
@@ -45,6 +48,7 @@
   const PAGE = 50;
   let files = $state<FileRow[]>([]);
   let hasMore = $state(false);
+  let loadError: string | null = $state(null);
   let loading = $state(true);
   let expanded = $state<Set<string>>(new Set());
   let lastProject = $state<string | null>(null);
@@ -140,6 +144,7 @@
     // groups while has_more holds.
     const requestOffset = reset ? 0 : files.length;
     loading = true;
+    loadError = null;
     if (reset) {
       files = [];
     }
@@ -158,7 +163,9 @@
       hasMore = res.has_more ?? false;
     } catch (e) {
       if (isAbortError(e) || !pageRead.isCurrent(signal)) return;
-      // leave current list; empty state covers first load
+      // Rows from earlier pages stay; the error shows where the next page
+      // would have gone, and Retry asks for that page again.
+      loadError = failureMessage(e);
     } finally {
       if (pageRead.finish(signal)) loading = false;
     }
@@ -254,8 +261,10 @@
     />
   </div>
 
-  {#if loading && files.length === 0}
-    <div class="re-loading">{m.recent_edits_loading()}</div>
+  {#if loadError && files.length === 0}
+    <LoadError message={loadError} onRetry={refresh} />
+  {:else if loading && files.length === 0}
+    <LoadingState label={m.recent_edits_loading()} />
   {:else if files.length === 0}
     <EmptyState align="top" title={m.recent_edits_empty()}>
       {#snippet icon()}
@@ -373,7 +382,9 @@
       </VirtualTable>
       {/key}
     </Card>
-    {#if hasMore}
+    {#if loadError}
+      <LoadError class="re-page-error" message={loadError} onRetry={loadMore} />
+    {:else if hasMore}
       <button class="re-load-more" onclick={loadMore} disabled={loading}>
         {m.recent_edits_load_more()}
       </button>
@@ -427,12 +438,6 @@
     min-width: 0;
   }
 
-  .re-loading {
-    text-align: center;
-    color: var(--text-muted);
-    padding: 40px 0;
-    font-size: 13px;
-  }
 
   /* One table with hairline rows in a kit-ui Card frame. kit-ui's
      VirtualTable owns the column widths: the File column takes the spare
@@ -600,6 +605,10 @@
     font-style: italic;
     color: var(--text-muted);
     border-top: 1px solid var(--border-muted);
+  }
+
+  .recent-edits-page :global(.re-page-error) {
+    margin-top: 20px;
   }
 
   .re-load-more {

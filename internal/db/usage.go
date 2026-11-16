@@ -51,11 +51,27 @@ func MessageRecordedCost(tokenJSON string) (sql.NullInt64, string) {
 	if !strings.Contains(tokenJSON, usagefacts.RecordedCostKey) {
 		return sql.NullInt64{}, ""
 	}
-	cost := usagefacts.ParseTokenUsage(tokenJSON).RecordedCostMicrodollars
+	return recordedCost(usagefacts.ParseTokenUsage(tokenJSON))
+}
+
+func recordedCost(parsed usagefacts.ParsedTokenUsage) (sql.NullInt64, string) {
+	cost := parsed.RecordedCostMicrodollars
 	if cost == nil {
 		return sql.NullInt64{}, ""
 	}
 	return sql.NullInt64{Int64: *cost, Valid: true}, usagefacts.CostStatusRecorded
+}
+
+// RecordedRowCost returns a usage row's harness-recorded cost for display,
+// and whether it priced the row. original is the row's cost before
+// ReportedCostForPricing; priced is the cost that function kept.
+func RecordedRowCost(
+	original sql.NullInt64, status string, priced sql.NullInt64,
+) (*money.Money, bool) {
+	if !original.Valid || status != usagefacts.CostStatusRecorded {
+		return nil, false
+	}
+	return &money.Money{Microdollars: original.Int64}, priced.Valid
 }
 
 // catalogPricesAt returns a ReportedCostForPricing probe for an archive row
@@ -362,14 +378,13 @@ SELECT
 	m.model,
 	m.provider_id,
 	m.token_usage,
+	m.usage_output_tokens,
+	m.usage_web_search_requests,
 	0 AS input_tokens,
 	0 AS output_tokens,
 	0 AS cache_creation_input_tokens,
 	0 AS cache_read_input_tokens,
-	CASE
-		WHEN json_valid(m.token_usage) THEN COALESCE(CAST(json_extract(m.token_usage, '$.reasoning_tokens') AS INTEGER), 0)
-		ELSE 0
-	END AS reasoning_tokens,
+	0 AS reasoning_tokens,
 	NULL AS cost_microdollars,
 	'' AS cost_status,
 	'' AS cost_source,
@@ -401,6 +416,8 @@ SELECT
 	ue.model,
 	ue.provider_id,
 	'' AS token_usage,
+	0 AS usage_output_tokens,
+	0 AS usage_web_search_requests,
 	ue.input_tokens,
 	ue.output_tokens,
 	ue.cache_creation_input_tokens,
@@ -449,14 +466,13 @@ SELECT
 	m.model,
 	m.provider_id,
 	m.token_usage,
+	m.usage_output_tokens,
+	m.usage_web_search_requests,
 	0 AS input_tokens,
 	0 AS output_tokens,
 	0 AS cache_creation_input_tokens,
 	0 AS cache_read_input_tokens,
-	CASE
-		WHEN json_valid(m.token_usage) THEN COALESCE(CAST(json_extract(m.token_usage, '$.reasoning_tokens') AS INTEGER), 0)
-		ELSE 0
-	END AS reasoning_tokens,
+	0 AS reasoning_tokens,
 	NULL AS cost_microdollars,
 	'' AS cost_status,
 	'' AS cost_source,
@@ -482,6 +498,8 @@ SELECT
 	ue.model,
 	ue.provider_id,
 	'' AS token_usage,
+	0 AS usage_output_tokens,
+	0 AS usage_web_search_requests,
 	ue.input_tokens,
 	ue.output_tokens,
 	ue.cache_creation_input_tokens,
@@ -514,14 +532,13 @@ SELECT
 	m.model,
 	m.provider_id,
 	m.token_usage,
+	m.usage_output_tokens,
+	m.usage_web_search_requests,
 	0 AS input_tokens,
 	0 AS output_tokens,
 	0 AS cache_creation_input_tokens,
 	0 AS cache_read_input_tokens,
-	CASE
-		WHEN json_valid(m.token_usage) THEN COALESCE(CAST(json_extract(m.token_usage, '$.reasoning_tokens') AS INTEGER), 0)
-		ELSE 0
-	END AS reasoning_tokens,
+	0 AS reasoning_tokens,
 	NULL AS cost_microdollars,
 	'' AS cost_status,
 	'' AS cost_source,
@@ -546,6 +563,8 @@ SELECT
 	ue.model,
 	ue.provider_id,
 	'' AS token_usage,
+	0 AS usage_output_tokens,
+	0 AS usage_web_search_requests,
 	ue.input_tokens,
 	ue.output_tokens,
 	ue.cache_creation_input_tokens,
@@ -578,11 +597,37 @@ func dailyUsageRowsSQLWithWhere(
 	)
 }
 
+// usageEventTimestampRowsSelect reads one arm of usage_event_timestamp_rows;
+// each arm appends its own filter.
+const usageEventTimestampRowsSelect = `	SELECT
+		ue.id,
+		ue.session_id,
+		ue.message_ordinal,
+		ue.source,
+		ue.occurred_at,
+		ue.model,
+		ue.provider_id,
+		ue.input_tokens,
+		ue.output_tokens,
+		ue.cache_creation_input_tokens,
+		ue.cache_read_input_tokens,
+		ue.reasoning_tokens,
+		ue.cost_microdollars,
+		ue.cost_status,
+		ue.cost_source,
+		ue.dedup_key
+	FROM usage_events ue
+	WHERE `
+
 func dailyUsageRowsSQLWithTimestampCTEs(
-	messageTimestampWhere, eventTimestampWhere string,
+	messageTimestampWhere string, eventTimestampWheres []string,
 	messageTimestampJoinWhere, eventTimestampJoinWhere string,
 	messageFallbackWhere, eventFallbackWhere string,
 ) string {
+	eventTimestampSelects := make([]string, len(eventTimestampWheres))
+	for i, where := range eventTimestampWheres {
+		eventTimestampSelects[i] = usageEventTimestampRowsSelect + where
+	}
 	return `
 WITH
 message_timestamp_rows AS MATERIALIZED (
@@ -593,6 +638,8 @@ message_timestamp_rows AS MATERIALIZED (
 		m.model,
 		m.provider_id,
 		m.token_usage,
+		m.usage_output_tokens,
+		m.usage_web_search_requests,
 		m.claude_message_id,
 		m.claude_request_id,
 		m.source_uuid
@@ -600,25 +647,7 @@ message_timestamp_rows AS MATERIALIZED (
 	WHERE ` + messageTimestampWhere + `
 ),
 usage_event_timestamp_rows AS MATERIALIZED (
-	SELECT
-		ue.id,
-		ue.session_id,
-		ue.message_ordinal,
-		ue.source,
-		ue.occurred_at,
-		ue.model,
-		ue.provider_id,
-		ue.input_tokens,
-			ue.output_tokens,
-			ue.cache_creation_input_tokens,
-			ue.cache_read_input_tokens,
-			ue.reasoning_tokens,
-			ue.cost_microdollars,
-			ue.cost_status,
-			ue.cost_source,
-		ue.dedup_key
-	FROM usage_events ue
-	WHERE ` + eventTimestampWhere + `
+` + strings.Join(eventTimestampSelects, "\n\tUNION ALL\n") + `
 )
 ` + fmt.Sprintf(
 		dailyUsageMessageRowsSQLTemplate,
@@ -681,6 +710,19 @@ type usageScanRow struct {
 	terminationStatus        string
 	displayName              string
 	startedAt                string
+	// tokens is tokenJSON parsed, when tokensParsed is set. scanUsageRow
+	// fills it so the several readers of one row share one parse.
+	tokens       usagefacts.ParsedTokenUsage
+	tokensParsed bool
+}
+
+// tokenUsage returns the row's parsed token usage JSON. A row from
+// scanUsageRow carries it; a row built another way parses it here.
+func (r usageScanRow) tokenUsage() usagefacts.ParsedTokenUsage {
+	if r.tokensParsed {
+		return r.tokens
+	}
+	return usagefacts.ParseTokenUsage(r.tokenJSON)
 }
 
 func (r usageScanRow) UsageIdentity() activity.UsageIdentity {
@@ -801,19 +843,11 @@ func dailyUsageRowSelectFromRowsWithMachine(
 ) string {
 	return dailyUsageRowSelectFromRowsWithColumns(
 		rowsSQL, includeMachine, dailyUsageRowColumns{
-			session: "u.session_id",
-			webSearch: `CASE
-		WHEN u.usage_source = 'message' THEN MAX(COALESCE(CASE
-			WHEN json_valid(u.token_usage) THEN CAST(json_extract(
-				u.token_usage, '$.server_tool_use.web_search_requests'
-			) AS INTEGER)
-			ELSE agentsview_usage_web_search_requests(u.token_usage)
-		END, 0), 0)
-		ELSE 0
-	END`,
-			project: "u.project",
-			agent:   "u.agent",
-			machine: "u.machine",
+			session:   "u.session_id",
+			webSearch: "u.usage_web_search_requests",
+			project:   "u.project",
+			agent:     "u.agent",
+			machine:   "u.machine",
 		})
 }
 
@@ -904,6 +938,55 @@ func appendUsageColumnBounds(
 	return where, args
 }
 
+// usageEventTimeBranches splits the usage_events rows (alias ue) that match
+// base into one filter per index seek of their own timestamp. Rows whose
+// timestamp parses seek occurred_at_us. Rows whose text does not parse keep
+// the padded text range, so the date-prefix fallback that places them on a
+// day still finds them. A bound that does not parse as a timestamp leaves one
+// filter with the text range over every row.
+func usageEventTimeBranches(
+	base string, baseArgs []any, b usageBounds,
+) ([]string, []any) {
+	parsed, args, ok := appendUsageEventMicroBounds(
+		base+"\n\tAND ue.occurred_at_us IS NOT NULL", b, slices.Clone(baseArgs))
+	if !ok {
+		where, args := appendUsageColumnBounds(base, "ue.occurred_at", b, baseArgs)
+		return []string{where}, args
+	}
+	args = append(args, baseArgs...)
+	unparsed, args := appendUsageColumnBounds(
+		base+"\n\tAND ue.occurred_at_us IS NULL", "ue.occurred_at", b, args)
+	return []string{parsed, unparsed}, args
+}
+
+// appendUsageEventMicroBounds bounds ue.occurred_at_us by the padded RFC3339
+// bounds in b. ok is false, and where is unchanged, when a set bound does not
+// parse as a timestamp.
+func appendUsageEventMicroBounds(
+	where string, b usageBounds, args []any,
+) (string, []any, bool) {
+	var micros [2]int64
+	for i, bound := range []string{b.from, b.to} {
+		if bound == "" {
+			continue
+		}
+		parsed, err := time.Parse(time.RFC3339Nano, bound)
+		if err != nil {
+			return where, args, false
+		}
+		micros[i] = parsed.UTC().UnixMicro()
+	}
+	if b.from != "" {
+		where += "\n\tAND ue.occurred_at_us >= ?"
+		args = append(args, micros[0])
+	}
+	if b.to != "" {
+		where += "\n\tAND ue.occurred_at_us <= ?"
+		args = append(args, micros[1])
+	}
+	return where, args, true
+}
+
 func usageRowsSQLForBounds(
 	f UsageFilter, b usageBounds,
 ) (string, []any) {
@@ -950,8 +1033,8 @@ func usageBoundedRowsSQL(
 	var eventTimestampArgs []any
 	eventTimestampSourceWhere, eventTimestampArgs = f.appendUsageSourceFilterClauses(
 		eventTimestampSourceWhere, eventTimestampArgs, "ue.model")
-	eventTimestampSourceWhere, eventTimestampArgs = appendUsageColumnBounds(
-		eventTimestampSourceWhere, "ue.occurred_at", b, eventTimestampArgs)
+	eventTimestampSourceWheres, eventTimestampArgs := usageEventTimeBranches(
+		eventTimestampSourceWhere, eventTimestampArgs, b)
 	var eventTimestampJoinArgs []any
 	eventTimestampJoinWhere, eventTimestampJoinArgs := f.appendUsageSessionFilterClauses(
 		usageSessionEligibility, eventTimestampJoinArgs)
@@ -974,7 +1057,7 @@ func usageBoundedRowsSQL(
 
 	rowsSQL := dailyUsageRowsSQLWithTimestampCTEs(
 		messageTimestampSourceWhere,
-		eventTimestampSourceWhere,
+		eventTimestampSourceWheres,
 		messageTimestampJoinWhere,
 		eventTimestampJoinWhere,
 		messageFallbackWhere,
@@ -1037,6 +1120,8 @@ SELECT
 	COALESCE(NULLIF(cu.model, ''), '<unknown>') AS model,
 	'' AS provider_id,
 	'' AS token_usage,
+	0 AS usage_output_tokens,
+	0 AS usage_web_search_requests,
 	cu.input_tokens,
 	cu.output_tokens,
 	cu.cache_write_tokens AS cache_creation_input_tokens,
@@ -1179,18 +1264,6 @@ func snapshotRankedDailyUsageRowsSQL(
 		WHERE survivor.snapshot_attribution_session_id = ''
 			OR (` + filterWhere + `)`
 	}
-	outputTokens := fmt.Sprintf(`MIN(MAX(COALESCE(CASE
-						WHEN json_valid(u.token_usage) THEN CAST(json_extract(
-							u.token_usage, '$.output_tokens') AS INTEGER)
-						ELSE agentsview_usage_output_tokens(u.token_usage)
-					END, 0), 0), %d)`, MaxPlausibleTokens)
-	webSearchRequests := `MAX(COALESCE(CASE
-					WHEN json_valid(u.token_usage) THEN CAST(json_extract(
-						u.token_usage, '$.server_tool_use.web_search_requests'
-					) AS INTEGER)
-					ELSE agentsview_usage_web_search_requests(u.token_usage)
-				END, 0), 0)`
-
 	args := make([]any, 0,
 		len(dupsArgs)+len(claudeArgs)+2*len(windowArgs)+
 			len(rowsArgs)+len(filterArgs))
@@ -1209,7 +1282,7 @@ func snapshotRankedDailyUsageRowsSQL(
 				FIRST_VALUE(u.project) OVER attribution AS snapshot_project,
 				FIRST_VALUE(u.agent) OVER attribution AS snapshot_agent,
 				FIRST_VALUE(u.machine) OVER attribution AS snapshot_machine,
-				MAX(%[5]s) OVER (
+				MAX(u.usage_web_search_requests) OVER (
 					ranking ROWS BETWEEN UNBOUNDED PRECEDING
 						AND UNBOUNDED FOLLOWING
 				) AS snapshot_web_search_requests,
@@ -1224,7 +1297,7 @@ func snapshotRankedDailyUsageRowsSQL(
 					CASE WHEN julianday(u.ts) IS NULL THEN u.ts ELSE '' END ASC
 			), ranking AS (
 				PARTITION BY u.claude_message_id, u.claude_request_id
-				ORDER BY %[4]s DESC,
+				ORDER BY u.usage_output_tokens DESC,
 					julianday(u.ts) IS NULL ASC, julianday(u.ts) DESC,
 					u.session_id DESC, COALESCE(u.message_ordinal, -1) DESC,
 					CASE WHEN julianday(u.ts) IS NULL THEN u.ts ELSE '' END DESC
@@ -1238,13 +1311,13 @@ func snapshotRankedDailyUsageRowsSQL(
 				u.machine AS snapshot_machine,
 				NULL AS snapshot_web_search_requests,
 				1 AS snapshot_rank
-			FROM (%[6]s) u
+			FROM (%[4]s) u
 			WHERE %[3]s
 				AND NOT (
 					u.usage_source = 'message'
 					AND u.claude_message_id != ''
-					AND (%[8]s) IN (
-						SELECT %[9]s FROM usage_snapshot_dups
+					AND (%[6]s) IN (
+						SELECT %[7]s FROM usage_snapshot_dups
 					)
 				)
 			UNION ALL
@@ -1253,9 +1326,8 @@ func snapshotRankedDailyUsageRowsSQL(
 			WHERE r.snapshot_rank = 1
 		)
 		SELECT survivor.*
-		FROM usage_snapshot_survivors survivor%[7]s`,
-		dupsSQL, claudeRowsSQL, windowWhere, outputTokens,
-		webSearchRequests, rowsSQL, survivorFilter,
+		FROM usage_snapshot_survivors survivor%[5]s`,
+		dupsSQL, claudeRowsSQL, windowWhere, rowsSQL, survivorFilter,
 		usageSnapshotRequestKey("u."), usageSnapshotRequestKey("")), args
 }
 
@@ -1401,7 +1473,8 @@ func scanUsageRow(rows *sql.Rows) (usageScanRow, error) {
 		&r.startedAt,
 	)
 	if err == nil && r.usageSource == "message" {
-		r.cost, r.costStatus = MessageRecordedCost(r.tokenJSON)
+		r.tokens, r.tokensParsed = usagefacts.ParseTokenUsage(r.tokenJSON), true
+		r.cost, r.costStatus = recordedCost(r.tokens)
 	}
 	return r, err
 }
@@ -1457,10 +1530,9 @@ func parseUsageTokenCounters(
 		int(parsed.CacheCreationTokens), int(parsed.CacheReadTokens)
 }
 
-func parseUsageTokenCountersWithReasoning(
-	tokenJSON string,
+func parsedUsageTokenCountersWithReasoning(
+	parsed usagefacts.ParsedTokenUsage,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok int) {
-	parsed := usagefacts.ParseTokenUsage(tokenJSON)
 	return int(parsed.InputTokens), int(parsed.OutputTokens),
 		int(parsed.CacheCreationTokens), int(parsed.CacheReadTokens),
 		int(parsed.ReasoningTokens)
@@ -1473,9 +1545,8 @@ func parseUsageWebSearchRequests(tokenJSON string) int {
 // clampedCacheCreation1hTokens returns the clamped 1h-TTL subset of a
 // message row's cache-write tokens. Usage events never carry the nested
 // breakdown, so event rows always price at the base write rate.
-func clampedCacheCreation1hTokens(tokenJSON string) int {
-	return int(usagefacts.ClampPlausibleTokens(
-		usagefacts.ParseTokenUsage(tokenJSON).CacheCreation1hTokens))
+func clampedCacheCreation1hTokens(parsed usagefacts.ParsedTokenUsage) int {
+	return int(usagefacts.ClampPlausibleTokens(parsed.CacheCreation1hTokens))
 }
 
 // usageRowWebSearchRequests returns how many billed Anthropic server-side
@@ -1486,6 +1557,15 @@ func usageRowWebSearchRequests(usageSource, tokenJSON string) int {
 		return 0
 	}
 	return parseUsageWebSearchRequests(tokenJSON)
+}
+
+// scanRowWebSearchRequests is usageRowWebSearchRequests for a scanned row,
+// reusing the row's parsed token usage.
+func scanRowWebSearchRequests(r usageScanRow) int {
+	if r.usageSource != "message" {
+		return 0
+	}
+	return int(r.tokenUsage().WebSearchRequests)
 }
 
 func dailyUsageRowWebSearchRequests(r dailyUsageScanRow) int {
@@ -1524,9 +1604,9 @@ func UsageEventRowTokens(
 }
 
 func clampedUsageTokenCounters(
-	tokenJSON string,
+	parsed usagefacts.ParsedTokenUsage,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok int) {
-	inputTok, outputTok, cacheCrTok, cacheRdTok, _ = parseUsageTokenCountersWithReasoning(tokenJSON)
+	inputTok, outputTok, cacheCrTok, cacheRdTok, _ = parsedUsageTokenCountersWithReasoning(parsed)
 	return ClampPlausibleTokens(int64(inputTok)),
 		ClampPlausibleTokens(int64(outputTok)),
 		ClampPlausibleTokens(int64(cacheCrTok)),
@@ -1534,9 +1614,9 @@ func clampedUsageTokenCounters(
 }
 
 func clampedUsageTokenCountersWithReasoning(
-	tokenJSON string,
+	parsed usagefacts.ParsedTokenUsage,
 ) (inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok int) {
-	inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok = parseUsageTokenCountersWithReasoning(tokenJSON)
+	inputTok, outputTok, cacheCrTok, cacheRdTok, reasoningTok = parsedUsageTokenCountersWithReasoning(parsed)
 	return ClampPlausibleTokens(int64(inputTok)),
 		ClampPlausibleTokens(int64(outputTok)),
 		ClampPlausibleTokens(int64(cacheCrTok)),
@@ -1896,6 +1976,45 @@ type UsagePairwiseSides struct {
 	Models, Projects UsagePairwiseValues
 }
 
+// NewUsagePairwiseSides creates the side totals and membership maps.
+func NewUsagePairwiseSides() *UsagePairwiseSides {
+	return &UsagePairwiseSides{Models: make(UsagePairwiseValues), Projects: make(UsagePairwiseValues)}
+}
+
+// AddBucket records token totals and allocated project cost.
+func (s *UsagePairwiseSides) AddBucket(model, project string, totals UsageTotals) {
+	cost := totals.TotalCost
+	totals.TotalCost = money.Money{}
+	s.Models.AddTotals(model, totals)
+	if project != "" {
+		totals.TotalCost = cost
+		s.Projects.AddTotals(project, totals)
+	}
+}
+
+// AddEstimate records the cost used by model-filtered reads.
+func (s *UsagePairwiseSides) AddEstimate(model string, cost money.Money) {
+	s.Models.AddTotals(model, UsageTotals{TotalCost: cost})
+}
+
+// AddMembership records a session for each applicable dimension.
+func (s *UsagePairwiseSides) AddMembership(model, project, sessionID string) {
+	s.Models.AddSession(model, sessionID)
+	if project != "" {
+		s.Projects.AddSession(project, sessionID)
+	}
+}
+
+// MarkDifference records losing values whose filtered winner can differ.
+func (s *UsagePairwiseSides) MarkDifference(model, project, winnerModel, winnerProject string) {
+	if model != winnerModel {
+		s.Models.MarkInexact(model)
+	}
+	if project != winnerProject {
+		s.Projects.MarkInexact(project)
+	}
+}
+
 // Side combines raw ranking values, including session unions for model groups.
 // A filtered read must supply values whose totals cannot be derived exactly.
 func (s *UsagePairwiseSides) Side(dimension string, values []string) (DailyUsageResult, bool) {
@@ -1987,9 +2106,6 @@ func (db *DB) loadPricingMapFrom(
 	fallback := FallbackRateMap()
 	out := make(map[string]export.ModelRates)
 	for _, p := range prices {
-		if strings.HasPrefix(p.ModelPattern, "_") {
-			continue
-		}
 		rates := ModelPricingRates(p)
 		rates.Source = ModelPricingSource(p.ModelPattern, rates, fallback)
 		out[p.ModelPattern] = rates
@@ -2044,34 +2160,7 @@ func genAIEffectivePricingRow(
 	if err != nil {
 		return export.EffectivePricingRow{}, err
 	}
-	if stored == nil {
-		embedded := pricingpkg.EmbeddedGenAIDocument()
-		return export.EffectivePricingRow{
-			GenAI: embedded.Prices, GenAIVersion: embedded.Version,
-			GenAISource: export.PricingRowSourceEmbedded,
-		}, nil
-	}
-	document, err := pricingpkg.ParseGenAIDocument(
-		stored.Data, stored.Version, stored.SourceRef,
-	)
-	if err != nil {
-		return export.EffectivePricingRow{}, fmt.Errorf(
-			"parsing stored GenAI pricing document: %w", err,
-		)
-	}
-	var updatedAt *time.Time
-	if parsed, parseErr := time.Parse(time.RFC3339Nano, stored.UpdatedAt); parseErr == nil {
-		utc := parsed.UTC()
-		updatedAt = &utc
-	}
-	source := export.PricingRowSourceFetched
-	if stored.Source == GenAIPricingSourceEmbedded {
-		source = export.PricingRowSourceEmbedded
-	}
-	return export.EffectivePricingRow{
-		GenAI: document.Prices, GenAIVersion: document.Version,
-		GenAISource: source, GenAIUpdatedAt: updatedAt,
-	}, nil
+	return GenAIEffectivePricingRow(stored)
 }
 
 // FallbackRateMap converts the embedded fallback pricing into rates keyed by
@@ -3146,6 +3235,16 @@ type SessionUsage struct {
 	// presentation-time combining in internal/service sets it.
 	SubagentCount int                          `json:"subagent_count,omitzero"`
 	Breakdown     []SessionUsageBreakdownEntry `json:"breakdown"`
+	// RecordedCost compares Cost with the cost the agent recorded, over the
+	// breakdown rows that carry one. Nil without a breakdown or when no row
+	// has a recorded cost; see SummarizeRecordedCost.
+	RecordedCost *SessionRecordedCost `json:"recorded_cost,omitempty"`
+	// SessionTotal is the usage total the agent recorded for the queried
+	// session as a whole, such as Claude Code's cost-state. Its
+	// subagent_scope says whether it covers subagents, so compare it with
+	// a result that includes them only when the scope is "included". It is
+	// never part of Cost or the token totals.
+	SessionTotal *SessionUsageTotal `json:"session_total,omitempty"`
 	// PlanUsage is the session's plan usage and live-capture coverage
 	// row, nil when it has none. Responses carry it as the separate
 	// plan_usage and capture_coverage objects (see
@@ -3176,6 +3275,70 @@ type SessionUsageBreakdownEntry struct {
 	WebSearchRequests int         `json:"web_search_requests,omitzero"`
 	Cost              money.Money `json:"cost"`
 	HasCost           bool        `json:"has_cost"`
+	// RecordedCost is the cost the agent recorded for this row, when it
+	// recorded one. Cost prices the row from the catalog unless the catalog
+	// has no rate for the model and RecordedCost is above zero.
+	RecordedCost *money.Money `json:"recorded_cost,omitempty"`
+	// RecordedCostPriced reports that RecordedCost is the row's Cost
+	// because the catalog has no rate for its model.
+	RecordedCostPriced bool `json:"recorded_cost_priced,omitzero"`
+}
+
+// SessionRecordedCost compares AgentsView's cost with the cost the agent
+// recorded, over the breakdown rows that carry a recorded cost.
+type SessionRecordedCost struct {
+	// Recorded is the sum of the agent's own figures.
+	Recorded money.Money `json:"recorded"`
+	// Computed is AgentsView's cost for the same rows: the catalog price,
+	// or the recorded cost for rows the catalog cannot price.
+	Computed money.Money `json:"computed"`
+	// Difference is Computed minus Recorded.
+	Difference money.Money `json:"difference"`
+	Rows       int         `json:"rows"`
+	// FallbackRows is how many rows the recorded cost priced because the
+	// catalog has no rate for their model.
+	FallbackRows int `json:"fallback_rows"`
+	// UnpricedRows is how many rows neither the catalog nor a recorded cost
+	// above zero could price. Computed still includes their known fees.
+	UnpricedRows int `json:"unpriced_rows"`
+}
+
+// SummarizeRecordedCost compares computed and recorded cost over the
+// breakdown rows that carry a recorded cost. It returns nil when no row
+// does.
+func SummarizeRecordedCost(entries []SessionUsageBreakdownEntry) (*SessionRecordedCost, error) {
+	var out *SessionRecordedCost
+	for _, entry := range entries {
+		if entry.RecordedCost == nil {
+			continue
+		}
+		if out == nil {
+			out = &SessionRecordedCost{}
+		}
+		out.Rows++
+		var err error
+		if out.Recorded, err = money.Add(out.Recorded, *entry.RecordedCost); err != nil {
+			return nil, fmt.Errorf("summing recorded cost: %w", err)
+		}
+		// An unpriced row can still carry a known fee, such as web searches.
+		if out.Computed, err = money.Add(out.Computed, entry.Cost); err != nil {
+			return nil, fmt.Errorf("summing computed cost: %w", err)
+		}
+		if !entry.HasCost {
+			out.UnpricedRows++
+		}
+		if entry.RecordedCostPriced {
+			out.FallbackRows++
+		}
+	}
+	if out != nil {
+		difference, err := money.Sub(out.Computed, out.Recorded)
+		if err != nil {
+			return nil, fmt.Errorf("comparing recorded cost: %w", err)
+		}
+		out.Difference = difference
+	}
+	return out, nil
 }
 
 // SessionUsageBreakdownLabel renders a breakdown row's human label. It is
@@ -3210,7 +3373,7 @@ func sessionRowCost(
 	r usageScanRow, pricing *export.PricingResolver,
 ) (cost money.Money, priced, contributes bool, err error) {
 	return sessionRowCostWithWebSearchRequests(
-		r, usageRowWebSearchRequests(r.usageSource, r.tokenJSON), pricing)
+		r, scanRowWebSearchRequests(r), pricing)
 }
 
 func sessionRowCostWithWebSearchRequests(
@@ -3219,8 +3382,9 @@ func sessionRowCostWithWebSearchRequests(
 	var inTok, outTok, crTok, cr1hTok, rdTok int
 	reasoningTok := r.reasoningTokens
 	if r.usageSource == "message" {
-		inTok, outTok, crTok, rdTok, reasoningTok = clampedUsageTokenCountersWithReasoning(r.tokenJSON)
-		cr1hTok = clampedCacheCreation1hTokens(r.tokenJSON)
+		tokens := r.tokenUsage()
+		inTok, outTok, crTok, rdTok, reasoningTok = clampedUsageTokenCountersWithReasoning(tokens)
+		cr1hTok = clampedCacheCreation1hTokens(tokens)
 	} else {
 		inTok, outTok, crTok, rdTok = UsageEventRowTokens(
 			r.usageSource,
@@ -3289,7 +3453,7 @@ func sessionUsageBreakdownEntryWithWebSearchRequests(
 ) SessionUsageBreakdownEntry {
 	var inTok, outTok, crTok, rdTok int
 	if r.usageSource == "message" {
-		inTok, outTok, crTok, rdTok = clampedUsageTokenCounters(r.tokenJSON)
+		inTok, outTok, crTok, rdTok = clampedUsageTokenCounters(r.tokenUsage())
 	} else {
 		inTok, outTok, crTok, rdTok = UsageEventRowTokens(
 			r.usageSource,
@@ -3397,7 +3561,7 @@ func (db *DB) getSessionUsageLegacy(
 		}
 		var outputTokens int
 		if r.usageSource == "message" {
-			_, outputTokens, _, _ = clampedUsageTokenCounters(r.tokenJSON)
+			_, outputTokens, _, _ = clampedUsageTokenCounters(r.tokenUsage())
 		} else {
 			_, outputTokens, _, _ = UsageEventRowTokens(
 				r.usageSource,
@@ -3405,14 +3569,13 @@ func (db *DB) getSessionUsageLegacy(
 				r.cacheCreationInputTokens, r.cacheReadInputTokens)
 		}
 		snapshotRows[i] = activity.UsageRow{
-			SessionID:      r.sessionID,
-			Timestamp:      r.ts,
-			MessageOrdinal: UsageRowMessageOrdinal(r.messageOrdinal),
-			OutputTokens:   outputTokens,
-			WebSearchRequests: usageRowWebSearchRequests(
-				r.usageSource, r.tokenJSON),
-			ClaudeMessageID: r.claudeMessageID,
-			ClaudeRequestID: r.claudeRequestID,
+			SessionID:         r.sessionID,
+			Timestamp:         r.ts,
+			MessageOrdinal:    UsageRowMessageOrdinal(r.messageOrdinal),
+			OutputTokens:      outputTokens,
+			WebSearchRequests: scanRowWebSearchRequests(r),
+			ClaudeMessageID:   r.claudeMessageID,
+			ClaudeRequestID:   r.claudeRequestID,
 		}
 	}
 	snapshotMask, _, snapshotWebSearchRequests, err := activity.ClaudeSnapshotSurvivorSelectionContext(ctx, snapshotRows)
@@ -3470,10 +3633,11 @@ func (db *DB) getSessionUsageLegacy(
 		}
 		breakdownCount++
 		if includeBreakdown {
-			breakdown = append(breakdown,
-				sessionUsageBreakdownEntryWithWebSearchRequests(
-					r, breakdownCount, c, priced,
-					snapshotWebSearchRequests[i]))
+			entry := sessionUsageBreakdownEntryWithWebSearchRequests(
+				r, breakdownCount, c, priced, snapshotWebSearchRequests[i])
+			entry.RecordedCost, entry.RecordedCostPriced = RecordedRowCost(
+				r.cost, r.costStatus, costRow.cost)
+			breakdown = append(breakdown, entry)
 		}
 	}
 	if authoritativeCost != nil && len(breakdown) > 0 {
@@ -3527,6 +3691,10 @@ func (db *DB) getSessionUsageLegacy(
 	}
 	out.CostUSD = CostUSDFromCost(out.HasCost, out.Cost)
 	out.PlanUsage, err = sessionPlanUsageWithQuerier(ctx, db.getReader(), sess.ID)
+	if err != nil {
+		return nil, err
+	}
+	out.SessionTotal, err = sessionUsageTotalWithQuerier(ctx, db.getReader(), sess.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -3737,25 +3905,13 @@ func (db *DB) getUsageMatchingSessionCountLegacy(
 	return len(seen), nil
 }
 
-// FallbackPricingMap returns FallbackRateMap without metadata entries whose
-// pattern starts with "_".
-func FallbackPricingMap() map[string]export.ModelRates {
-	out := FallbackRateMap()
-	for model := range out {
-		if strings.HasPrefix(model, "_") {
-			delete(out, model)
-		}
-	}
-	return out
-}
-
 // MirrorPricingRows converts a rate map to effective pricing rows, copying
 // bands and deriving a missing source from the fallback table.
 func MirrorPricingRows(
 	in map[string]export.ModelRates,
 ) []export.EffectivePricingRow {
 	out := make([]export.EffectivePricingRow, 0, len(in))
-	fallback := FallbackPricingMap()
+	fallback := FallbackRateMap()
 	for pattern, rates := range in {
 		source := rates.Source
 		if source == "" {

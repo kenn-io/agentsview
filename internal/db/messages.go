@@ -52,7 +52,8 @@ const (
 		has_context_tokens, has_output_tokens,
 		claude_message_id, claude_request_id,
 		source_type, source_subtype, prompt_source, source_uuid,
-		source_parent_uuid, is_sidechain, is_compact_boundary`
+		source_parent_uuid, is_sidechain, is_compact_boundary,
+		usage_output_tokens, usage_web_search_requests`
 
 	// DefaultMessageLimit is the default number of messages returned.
 	DefaultMessageLimit = 100
@@ -66,7 +67,7 @@ const (
 	// Keep multi-row INSERT statements below SQLite's historic
 	// 999-variable limit so binaries built against older SQLite
 	// versions still work.
-	messageInsertRowsPerStmt         = 33  // 30 params per row
+	messageInsertRowsPerStmt         = 31  // 32 params per row
 	toolCallInsertRowsPerStmt        = 66  // 15 params per row
 	toolResultEventInsertRowsPerStmt = 70  // 14 params per row
 	toolCallAgentStateRowsPerStmt    = 142 // 7 params per row
@@ -674,6 +675,8 @@ type MessageWindow struct {
 	Before int // used only with Around; default handled by caller
 	After  int
 	Roles  []string // empty = all roles
+	// CompactBoundaryOnly limits linear reads to compact-boundary rows.
+	CompactBoundaryOnly bool
 	// ObservedRevision, when non-nil, receives the session transcript
 	// revision from the same statement as the message rows. An empty
 	// result leaves it unset; the caller does not pay for a second query.
@@ -697,7 +700,7 @@ func (db *DB) GetMessagesWindow(
 	if w.From != nil {
 		from = *w.From
 	}
-	if w.ObservedRevision == nil && len(w.Roles) == 0 {
+	if w.ObservedRevision == nil && len(w.Roles) == 0 && !w.CompactBoundaryOnly {
 		return db.GetMessages(ctx, sessionID, from, w.Limit, w.Asc)
 	}
 	return db.getMessagesLinear(ctx, sessionID, from, w)
@@ -718,6 +721,9 @@ func (db *DB) getMessagesLinear(
 		dir, op = "DESC", "<="
 	}
 	roleClause, roleArgs := roleFilterClause(w.Roles)
+	if w.CompactBoundaryOnly {
+		roleClause += " AND is_compact_boundary = 1"
+	}
 	query := fmt.Sprintf(`
 		SELECT %s, %s
 		FROM messages
@@ -1319,7 +1325,7 @@ func insertMessagesTx(
 	for start := 0; start < len(msgs); start += messageInsertRowsPerStmt {
 		end := min(start+messageInsertRowsPerStmt, len(msgs))
 		batch := msgs[start:end]
-		args := make([]any, 0, len(batch)*30)
+		args := make([]any, 0, len(batch)*32)
 		for i, m := range batch {
 			id := nextID + int64(start+i)
 			ids[start+i] = id
@@ -1329,7 +1335,7 @@ func insertMessagesTx(
 		query := fmt.Sprintf(
 			"INSERT INTO messages (id, %s) VALUES %s",
 			insertMessageCols,
-			multiRowPlaceholders(len(batch), 30),
+			multiRowPlaceholders(len(batch), 32),
 		)
 		if _, err := tx.Exec(query, args...); err != nil {
 			first := batch[0].Ordinal
@@ -1733,16 +1739,20 @@ func applyMessageTokenUsageUpdateTx(ctx context.Context,
 		)
 	}
 
+	usageOutputTokens, usageWebSearchRequests := storedMessageUsageCounters(incomingUsage)
 	result, err := tx.ExecContext(ctx,
 		`UPDATE messages
 		 SET token_usage = ?, context_tokens = ?, output_tokens = ?,
-		     has_context_tokens = ?, has_output_tokens = ?
+		     has_context_tokens = ?, has_output_tokens = ?,
+		     usage_output_tokens = ?, usage_web_search_requests = ?
 		 WHERE session_id = ? AND ordinal = ? AND token_usage = ''`,
 		incomingUsage,
 		update.ContextTokens,
 		update.OutputTokens,
 		update.HasContextTokens,
 		update.HasOutputTokens,
+		usageOutputTokens,
+		usageWebSearchRequests,
 		sessionID,
 		update.Ordinal,
 	)
@@ -2149,7 +2159,7 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 	}
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 
-	if err := reconcileConversationMessagesTx(tx, sessionID, msgs, true, db.usageOnlyStorage()); err != nil {
+	if err := reconcileReplacedConversationTx(tx, sessionID, msgs, plan, useDiff, db.usageOnlyStorage()); err != nil {
 		return err
 	}
 	if useDiff {
@@ -2161,6 +2171,10 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 	}
 	if transcriptChanged {
 		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
+			return err
+		}
+	} else if !useDiff && dialogueMessagesChanged(stored, msgs) {
+		if err := bumpSearchChangeRevisionTx(tx); err != nil {
 			return err
 		}
 	}
@@ -2293,6 +2307,9 @@ func replaceSessionMessagesTx(
 		if err := insertToolResultEventsTx(tx, events); err != nil {
 			return err
 		}
+	}
+	if err := journalConversationToolSessionTx(tx, sessionID); err != nil {
+		return err
 	}
 
 	return restorePinsTx(tx, sessionID, pins)
@@ -2457,7 +2474,7 @@ func deleteSessionMessageRowsTx(
 
 func deleteSessionMessagesTx(tx transactionQueries, sessionID string) error {
 	if _, err := tx.Exec(
-		"DELETE FROM tool_calls WHERE session_id = ?",
+		"DELETE FROM tool_calls WHERE session_id = ?;"+strings.ReplaceAll(counterTemplate, "{{counter}}", archiveMetadataAnalyticsChangeRevisionKey),
 		sessionID,
 	); err != nil {
 		return fmt.Errorf("deleting old tool_calls: %w", err)
@@ -2597,7 +2614,7 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 	}
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 
-	if err := reconcileConversationMessagesTx(tx, sessionID, msgs, true, db.usageOnlyStorage()); err != nil {
+	if err := reconcileReplacedConversationTx(tx, sessionID, msgs, plan, useDiff, db.usageOnlyStorage()); err != nil {
 		return err
 	}
 	if useDiff {
@@ -2613,6 +2630,10 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 	}
 	if transcriptChanged {
 		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
+			return err
+		}
+	} else if !useDiff && dialogueMessagesChanged(stored, msgs) {
+		if err := bumpSearchChangeRevisionTx(tx); err != nil {
 			return err
 		}
 	}

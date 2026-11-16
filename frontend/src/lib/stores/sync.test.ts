@@ -950,14 +950,14 @@ describe("SyncStore.remoteUnreachable", () => {
 
     expect(sync.remoteUnreachable).toBe(false);
     expect(sync.backendDegraded).toBe(true);
-    expect(sync.backendDegradedMessage).toBe("sync not ready");
+    expect(sync.backendDegradedMessage).toBe("Session data unavailable. Click to retry.");
   });
 
   it("keeps backend degraded when status recovers", async () => {
     vi.mocked(api.isRemoteConnection).mockReturnValue(true);
     const s = sync as unknown as Record<string, unknown>;
     s.backendDegraded = true;
-    s.backendDegradedMessage = "sync not ready";
+    s.backendDegradedMessage = "Session data unavailable. Click to retry.";
     vi.mocked(api.getSyncStatus).mockResolvedValue({
       last_sync: "",
       stats: MOCK_STATS,
@@ -968,14 +968,14 @@ describe("SyncStore.remoteUnreachable", () => {
 
     expect(sync.remoteUnreachable).toBe(false);
     expect(sync.backendDegraded).toBe(true);
-    expect(sync.backendDegradedMessage).toBe("sync not ready");
+    expect(sync.backendDegradedMessage).toBe("Session data unavailable. Click to retry.");
   });
 
   it("retries stats when status loads while backend is degraded", async () => {
     vi.mocked(api.isRemoteConnection).mockReturnValue(true);
     const s = sync as unknown as Record<string, unknown>;
     s.backendDegraded = true;
-    s.backendDegradedMessage = "sync not ready";
+    s.backendDegradedMessage = "Session data unavailable. Click to retry.";
     vi.mocked(api.getSyncStatus).mockResolvedValue({
       last_sync: "",
       stats: MOCK_STATS,
@@ -999,7 +999,7 @@ describe("SyncStore.remoteUnreachable", () => {
     vi.mocked(api.isRemoteConnection).mockReturnValue(true);
     const s = sync as unknown as Record<string, unknown>;
     s.backendDegraded = true;
-    s.backendDegradedMessage = "sync not ready";
+    s.backendDegradedMessage = "Session data unavailable. Click to retry.";
     vi.mocked(api.getVersion).mockResolvedValue({
       build_date: "",
       commit: "abc123",
@@ -1010,7 +1010,7 @@ describe("SyncStore.remoteUnreachable", () => {
 
     expect(sync.remoteUnreachable).toBe(false);
     expect(sync.backendDegraded).toBe(true);
-    expect(sync.backendDegradedMessage).toBe("sync not ready");
+    expect(sync.backendDegradedMessage).toBe("Session data unavailable. Click to retry.");
   });
 
   it("retries version mode detection after status recovers", async () => {
@@ -1064,7 +1064,7 @@ describe("SyncStore.remoteUnreachable", () => {
     vi.mocked(api.isRemoteConnection).mockReturnValue(true);
     const s = sync as unknown as Record<string, unknown>;
     s.backendDegraded = true;
-    s.backendDegradedMessage = "sync not ready";
+    s.backendDegradedMessage = "Session data unavailable. Click to retry.";
     vi.mocked(api.getStats).mockResolvedValue({
       earliest_session: null,
       machine_count: 1,
@@ -1083,7 +1083,7 @@ describe("SyncStore.remoteUnreachable", () => {
     vi.mocked(api.isRemoteConnection).mockReturnValue(true);
     const s = sync as unknown as Record<string, unknown>;
     s.backendDegraded = true;
-    s.backendDegradedMessage = "sync not ready";
+    s.backendDegradedMessage = "Session data unavailable. Click to retry.";
     vi.mocked(api.getSyncStatus).mockRejectedValue(new TypeError("Failed to fetch"));
 
     await sync.loadStatus();

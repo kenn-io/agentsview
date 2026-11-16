@@ -74,6 +74,7 @@ func (e *Engine) writeAttachedStaged(ctx context.Context, prepared preparedSessi
 	write := db.SessionBatchWrite{
 		CodexForkState: prepared.codexForkState, StagedToolKeys: prepared.stagedToolKeys,
 		Session: prepared.Session, Messages: prepared.Messages, UsageEvents: prepared.UsageEvents, PlanUsage: prepared.PlanUsage,
+		SessionTotal: prepared.SessionTotal, ReplaceSessionTotal: true,
 		ToolResultImages: &e.toolResultImages, ArchiveProvenance: provenance,
 		IdentityObservation: identityObservationOrZero(observation, hasObservation), IdentitySnapshotProject: &snapshotProject,
 		ReplaceMessages: true, DataVersion: dataVersionForWrite(pw), SkipSignalUpdates: e.disableSignalRecompute,

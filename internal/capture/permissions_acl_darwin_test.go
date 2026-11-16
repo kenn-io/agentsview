@@ -15,10 +15,24 @@ import (
 
 const testDirectoryACL = "everyone allow list,search,add_file,add_subdirectory,delete_child"
 
+// The ACL flags (chmod +a, ls -e) exist only in the macOS tools. Calling
+// them by absolute path keeps GNU coreutils earlier in PATH, as in a Nix
+// or Homebrew shell, from running instead.
+const (
+	macChmod = "/bin/chmod"
+	macLs    = "/bin/ls"
+)
+
+func addTestDirectoryACL(t *testing.T, dir string) {
+	t.Helper()
+	out, err := exec.CommandContext(t.Context(), macChmod, "+a", testDirectoryACL, dir).CombinedOutput()
+	require.NoError(t, err, "adding test ACL: %s", out)
+}
+
 func TestCreateStateRejectsUntrustedParentACL(t *testing.T) {
 	parent := filepath.Join(t.TempDir(), "private")
 	require.NoError(t, os.Mkdir(parent, 0o700))
-	require.NoError(t, exec.CommandContext(t.Context(), "chmod", "+a", testDirectoryACL, parent).Run())
+	addTestDirectoryACL(t, parent)
 
 	_, err := createState(filepath.Join(parent, "capture"), permissionTestManifest(t))
 
@@ -27,11 +41,11 @@ func TestCreateStateRejectsUntrustedParentACL(t *testing.T) {
 
 func TestSecureCaptureDirectoryClearsExtendedACL(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, exec.CommandContext(t.Context(), "chmod", "+a", testDirectoryACL, dir).Run())
+	addTestDirectoryACL(t, dir)
 
 	require.NoError(t, secureCaptureDirectory(dir))
 
-	listing, err := exec.CommandContext(t.Context(), "ls", "-lde", dir).Output()
+	listing, err := exec.CommandContext(t.Context(), macLs, "-lde", dir).Output()
 	require.NoError(t, err)
 	assert.NotContains(t, strings.TrimSpace(string(listing)), "\n 0:")
 }

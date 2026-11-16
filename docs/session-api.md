@@ -380,6 +380,23 @@ agentsview session list --sort health --reverse
 
 ______________________________________________________________________
 
+### `agentsview session compactions`
+
+Read full compaction summaries for one session or sessions active since an
+RFC3339 timestamp. RooCode and legacy Kilo sessions are excluded. Older Evener
+labels that may be literal summary text appear separately as ambiguous, with
+their session ID and ordinal. The session limit does not cap response bytes;
+`--limit 0` uses the default of 20 sessions. Use `--limit` and `--cursor` to
+page sessions. Resume a cursor with the same `--active-since` value, even when a
+page has no summaries.
+
+```bash
+agentsview session compactions <id> --json
+agentsview session compactions --active-since 2024-01-01T00:00:00Z --limit 20 --json
+```
+
+The messages API accepts `compact_boundary=true` to select compaction boundaries in linear reads. It cannot be combined with `around`.
+
 ### `agentsview session messages`
 
 Return a window of messages. Response shape matches
@@ -566,21 +583,31 @@ archive, never from any daemon. Both `--server` and `--format`/`--json` are
 rejected with an error — the command also rejects `--pg`. It streams raw bytes,
 so structured-output and remote-store flags don't apply.
 
+Detected secrets, such as API keys, tokens and private keys, are masked by
+default, with the same detector and masked form as search results. The command
+reads the whole source before writing. A JSON Lines source is masked inside each
+record's decoded strings, so JSON escapes such as `\n` cannot hide a key, and
+each record stays valid JSON. Any other source is masked as a whole, so a key
+block that spans lines is still caught. Pass `--reveal` to stream the source
+unchanged.
+
 ```bash
 agentsview session export <id>
+agentsview session export <id> --reveal
 ```
 
 Exit states:
 
 | State                                  | Behavior                                         |
 | -------------------------------------- | ------------------------------------------------ |
-| Session in local archive, file on disk | Streams bytes verbatim                           |
+| Session in local archive, file on disk | Streams bytes, secrets masked unless `--reveal`  |
 | Session in local archive, file missing | Exit 1: error prefixed `source file not found`   |
 | Session in local archive, path empty   | Exit 1: `source file not found for session <id>` |
 | Session not in local archive           | Exit 1: `session not in local archive: <id>`     |
 
 For a DB-derived export (HTML or markdown) use the HTTP endpoints
-`/api/v1/sessions/{id}/export` or `/api/v1/sessions/{id}/md`.
+`/api/v1/sessions/{id}/export` or `/api/v1/sessions/{id}/md`. They mask
+secrets too; see [secrets in exports](/docs/usage/#secrets-in-exports).
 
 Markdown export accepts an optional `depth` query parameter:
 
@@ -816,7 +843,8 @@ agentsview session search <pattern> [flags]
       "ordinal_range": [12, 24],
       "location": "tool_result",
       "tool_name": "Bash",
-      "snippet": "...connecting to db with token ***REDACTED***..."
+      "snippet": "...connecting to db with token ***REDACTED***...",
+      "matched_words": 3
     }
   ]
 }
@@ -918,7 +946,16 @@ substring (the default) and regex modes also walk `tool_calls.input_json`,
 (`--cursor` is rejected) — see [Semantic Search](/docs/semantic-search/) for
 setup, scoring, and limitations.
 
-On PostgreSQL, `--fts` matches each word or quoted phrase as a case-insensitive substring; a query that starts with a quote also honors `AND`, `OR`, `NOT`, and parentheses as SQLite does. `NEAR(...)` and prefix `*` are not supported there; `*` matches literally.
+On SQLite, PostgreSQL, DuckDB, and ClickHouse, a default search of several words that includes `messages` returns
+exact text matches first, then messages ordered by how many query words they
+hold, with that count in `matched_words`. Unquoted stop words do not count.
+Regular word forms count, and a quoted phrase inside the query requires its
+words together and in order. `--fts` and hybrid's keyword leg use the same word
+matching unless the query starts with a quote and holds only
+quoted phrases or FTS5 operators, which keeps FTS5 behavior. Other searches
+report `matched_words` as `0`.
+
+On PostgreSQL, an explicit `--fts` query that starts with a quote honors `AND`, `OR`, `NOT`, and parentheses as SQLite does. `NEAR(...)` and prefix `*` are not supported there; `*` matches literally.
 
 Every match, in every mode, carries the conversation-unit citation described in
 [Hit shape](/docs/semantic-search/#hit-shape-ranges-and-anchors):
@@ -1125,6 +1162,8 @@ agentsview session usage <id> [--format json] [--own-only] [--no-sync]
 | `breakdown_count`       | Number of deduplicated per-step usage rows across all included sessions; always populated                                                                                                                                                        |
 | `subagent_count`        | Number of subagent descendant sessions folded in; omitted when zero, so own-session results are byte-identical to before                                                                                                                         |
 | `breakdown`             | Per-step usage rows ordered by timestamp across all included sessions (the queried session wins ties); when a reported session total exists, row costs are estimated allocations that sum to it; CLI JSON always includes them (added in 0.37.1) |
+| `recorded_cost`         | Present with the breakdown when at least one row carries a cost the agent recorded itself. `recorded` sums those figures, `computed` is AgentsView's cost for the same rows, `difference` is `computed` minus `recorded`, and `rows`, `fallback_rows` (rows priced by the agent's figure because the catalog has no rate) and `unpriced_rows` count them. The human output shows it as an `Agent cost:` line |
+| `session_total`         | Present when the agent recorded a total for the whole session (Claude Code `cost-state`). `source`, `subagent_scope` (`included`, `excluded`, or omitted when unknown), `cost`, `incomplete` when the agent could not price every model, and per-model `models` token counts and costs. It overlaps the usage rows, so it is never part of `cost` or the token totals; compare it with a result that includes subagents when `subagent_scope` is `included`. The human output shows it as an `Agent total:` line |
 | `server_running`        | `true` when the report came from an already-running daemon                                                                                                                                                                                       |
 | `refresh_incomplete`   | Present as `true` when a requested source refresh was refused or failed; the result still contains archived totals                                                                                                                                 |
 | `rollup_cost`           | REST only, with `rollup=true`; integer microdollar object present only when `has_rollup_cost` is true, carrying the complete cost across the root and explicit subagent descendants                                                              |
@@ -1166,6 +1205,8 @@ Each `breakdown` row carries the fields shown in the example:
 | `label`               | Display label — `Prompt N` for message rows, `Step N` for other rows tied to a message, else the source name                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `web_search_requests` | Anthropic server-side web searches this row was billed for, at $0.01 each on top of tokens; omitted when the row performed none                                                                                                                                                                                                                                                                                                                                                                                      |
 | `cost`                | Per-row integer microdollar object; includes the web search fee when `web_search_requests` is present and the row's cost is computed. A row with an authoritative reported cost is assumed to already settle its own server tool use, so the fee is not added on top even when `web_search_requests` is present. Zero with `has_cost: false` when the model is unpriced and the row performed no web search; an unpriced computed row that did still reports the fee, because the fee does not depend on token rates |
+| `recorded_cost`       | The cost the agent recorded for this row, as an integer microdollar object; omitted when it recorded none. It prices the row only when the catalog has no rate for the model and it is above zero |
+| `recorded_cost_priced` | Present as `true` when `recorded_cost` is the row's `cost` because the catalog has no rate for the model |
 
 Human output is a compact summary:
 
@@ -1182,7 +1223,7 @@ The `Subagents` line appears only when the figures cover subagent transcripts,
 so a session without them (or a `--own-only` run) prints the same five lines it
 always has.
 
-When refresh is incomplete, human output adds `Usage refresh: incomplete; showing archived totals`.
+When refresh is incomplete, human output adds `Usage refresh is incomplete. Saved totals may be out of date.`.
 
 The leading `~` on the cost line marks a computed or mixed figure. A reported
 cost omits it. The parenthesized model list is shown only when contributing

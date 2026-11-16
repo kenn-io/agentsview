@@ -1,0 +1,1 @@
+Store cost status so harness-recorded costs price rows only when the catalog cannot.

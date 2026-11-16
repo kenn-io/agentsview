@@ -767,6 +767,9 @@ func newCombinedSessionUsage(
 		// usage, so the root's figures describe the combined result.
 		// withDescendantCoverage adds the descendants' capture coverage.
 		PlanUsage: root.PlanUsage,
+		// The agent's own session total keeps its subagent scope, so it
+		// stays the root's figure in the combined result.
+		SessionTotal: root.SessionTotal,
 	}
 	for _, descendant := range descendants {
 		if err := ctx.Err(); err != nil {
@@ -818,6 +821,10 @@ func usageRowBreakdownEntry(
 		WebSearchRequests:        row.WebSearchRequests,
 		Cost:                     cost,
 		HasCost:                  priced,
+		RecordedCost:             row.RecordedCost,
+		// A recorded cost prices a row only as its reported cost.
+		RecordedCostPriced: row.RecordedCost != nil &&
+			row.CostSource == export.CostSourceReported,
 	}
 	sourceSessionID := usageRowSourceSessionID(row)
 	if sourceSessionID != rootID {

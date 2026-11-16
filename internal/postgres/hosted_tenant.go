@@ -68,6 +68,9 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 		if err = installHostedCoreUpgrade(ctx, tx, schema, tenant); err != nil {
 			return err
 		}
+		if err = migratePricingLayoutPG(ctx, tx); err != nil {
+			return err
+		}
 		if err = installRawProjectionUpgrade(ctx, tx, schema, tenant); err != nil {
 			return err
 		}
@@ -91,13 +94,16 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 	if _, err = tx.ExecContext(ctx, dropUsageChangeJournalSQL); err != nil {
 		return err
 	}
+	if _, err = tx.ExecContext(ctx, `DROP TABLE IF EXISTS `+quoted+`.session_frustration_counts`); err != nil {
+		return err
+	}
 	if err = preflightHostedAdoption(ctx, tx, schema, tenant); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `CREATE SCHEMA IF NOT EXISTS `+quoted); err != nil {
 		return err
 	}
-	for _, ddl := range []string{coreDDL, frictionDDL, frictionReviewDDL, rawIngestDDL, rawIngestAppendOnlyDDL, postgresUsageJSONHelperDDL, rawProjectionDDL, rawLinksDDL} {
+	for _, ddl := range []string{coreDDL, frictionDDL, frictionReviewDDL, rawIngestDDL, rawIngestAppendOnlyDDL, rawProjectionDDL, rawLinksDDL} {
 		if _, err = tx.ExecContext(ctx, ddl); err != nil {
 			return fmt.Errorf("creating hosted application schema: %w", err)
 		}
@@ -116,6 +122,9 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 	if err = migrateAccountUsageCountersPG(ctx, tx); err != nil {
 		return err
 	}
+	if err = migratePricingLayoutPG(ctx, tx); err != nil {
+		return err
+	}
 	if err = checkDataVersionCompat(ctx, tx); err != nil {
 		return err
 	}
@@ -126,6 +135,9 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 		return err
 	}
 	if err = createPartialIndexesPG(ctx, tx); err != nil {
+		return err
+	}
+	if _, err = backfillMessageUsageCountersPG(ctx, tx); err != nil {
 		return err
 	}
 

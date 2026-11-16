@@ -57,10 +57,7 @@ func pgE2EStageName(uploadID string) string {
 // raw-sync table provisioned, and returns a throwaway data directory.
 func newPGE2ETestDatabase(t *testing.T) (*sql.DB, string) {
 	t.Helper()
-	pgURL := os.Getenv("TEST_PG_URL")
-	if pgURL == "" {
-		t.Skip("TEST_PG_URL not set; skipping PG tests")
-	}
+	pgURL := postgres.PGTestURL(t)
 	pgE2ECleanSchema(t, pgURL)
 	t.Cleanup(func() { pgE2ECleanSchema(t, pgURL) })
 	pg, err := postgres.Open(t.Context(), pgURL, pgE2ESchema, true)
@@ -90,6 +87,7 @@ func pgE2ECleanSchema(t *testing.T, pgURL string) {
 // ingest tables, and device identities and tokens in raw_devices and
 // raw_device_tokens. Only the artifact repository uses a throwaway directory.
 func TestRawClientPostgresEndToEnd(t *testing.T) {
+	t.Parallel()
 	pg, dataDir := newPGE2ETestDatabase(t)
 	ctx := t.Context()
 

@@ -1,7 +1,11 @@
 package signals
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"math/rand/v2"
+	"sort"
 	"strings"
 	"testing"
 
@@ -103,6 +107,38 @@ func TestIsFrustrationMarkerExamples(t *testing.T) {
 	} {
 		assert.Equal(t, want, IsFrustrationMarker(prompt), "%q", prompt)
 	}
+}
+
+func TestFrustrationMarkerVersionGuard(t *testing.T) {
+	prompts := []string{
+		"", "wtf", "wtf wtf w", "wtf wtf wt", "   this is broken   ",
+		"this\u00a0is\u2028broken", "come\n\t on, run it", "come ```x``` on, run it",
+		"you bro\u212ae the build", "doe\u017f not work at all", "D\u0130D YOU READ IT",
+		"\u0130\u0130\u0130\u0130\u0130", "\u023a\u023a\u023a\u023a\u023a",
+		"\xff\xfe\xfd\xfc\xfb", "\xc5 \xc5 \xc5 \xc5 \xc5",
+		"ABC def GHI jkl mno", "ABC def GHI jkl mno pqr", "AB CD ef gh ij",
+		"\u01c5\u01c5 \u01c5\u01c5 \u01c5\u01c5 ok", "\u24b6\u24b7 \u24b8\u24b9 \u24ba\u24bb now",
+		"\u03a3\u03a3 \u039b\u039b \u03a9\u03a9 ok go", "STRASSE \u00dfTRASSE ok fine",
+		"```FUCK FUCK FUCK``` please handle it", "``` unclosed FUCK FUCK FUCK",
+		"why won\u2019t it build", "why won't it build", "???", "what?? ok!! fine??",
+		"x\u0085\u0085\u0085\u0085\u0085\u0085\u0085\u0085y",
+		"\u24b6\u24b7 \u24b8\u24b9 ok fine now",
+		"this is wtf", "please come on", "why won't this work",
+		"this doesn't work", "this does not work", "still broken", "same error",
+		"you broke it", "fuck this", "please fix!!!", "please fix???",
+		"please fix!!", "please fix??", "ABC DEF ghi jkl", "ABC def ghi jkl",
+	}
+	sort.Strings(prompts)
+	h := sha256.New()
+	fmt.Fprintf(h, "%d:", FrustrationMarkerVersion)
+	for _, prompt := range prompts {
+		if IsFrustrationMarker(prompt) {
+			h.Write([]byte{1})
+		} else {
+			h.Write([]byte{0})
+		}
+	}
+	assert.Equal(t, "c2b71d27d0370a66d0770e72b5474b2b4d1cbff34d99709722911db69c8f2a5a", hex.EncodeToString(h.Sum(nil)), "matcher results changed; bump the version and record the new digest")
 }
 
 func FuzzIsFrustrationMarkerMatchesReference(f *testing.F) {

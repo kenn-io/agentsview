@@ -11,6 +11,7 @@ import (
 )
 
 func TestCodexTrashScopeRespectsArchiveOwnership(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, childAgent, childMachine, legacyMachine string
 		otherArchive, legacyOwner, belongs, renamed   bool
@@ -30,7 +31,6 @@ func TestCodexTrashScopeRespectsArchiveOwnership(t *testing.T) {
 				const schema = "agentsview_scope_ownership_probe"
 				pgURL := testPGURL(t)
 				cleanNamedPGSchema(t, pgURL, schema)
-				t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 				pg, err := Open(t.Context(), pgURL, schema, true)
 				require.NoError(t, err)
 				t.Cleanup(func() { require.NoError(t, pg.Close()) })

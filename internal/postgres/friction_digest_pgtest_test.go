@@ -15,17 +15,16 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/friction"
 )
 
 // This contract also runs against CockroachDB through TEST_PG_URL. It needs
 // only the existing replica session tables and the new digest tables.
 func TestFrictionSessionVersionPreventsStaleSave(t *testing.T) {
+	t.Parallel()
 	const schema = "agentsview_friction_version_test"
 	pgURL := testPGURL(t)
 	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	pg, err := Open(t.Context(), pgURL, schema, true)
@@ -87,19 +86,22 @@ type frictionReviewStore interface {
 
 func openFrictionParityStores(t *testing.T) (*db.DB, *Store) {
 	t.Helper()
-	pgURL := testPGURL(t)
 	const schema = "agentsview_friction_digest_test"
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	pgURL := testPGSchemaURL(t, schema)
+	fresh := takeFreshSchemaCopy(t, pgURL, schema)
+	if !fresh {
+		cleanNamedPGSchema(t, pgURL, schema)
+	}
 	ctx := t.Context()
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = pg.Close() })
-	require.NoError(t, EnsureSchema(ctx, pg, schema))
+	if !fresh {
+		require.NoError(t, EnsureSchema(ctx, pg, schema))
+	}
 
 	local, err := db.Open(ctx, filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
-	dbtest.SeedPricingMeta(t, local)
 	t.Cleanup(func() { _ = local.Close() })
 	seed := func(id, ended string, parent *string) {
 		s := db.Session{
@@ -139,6 +141,7 @@ func openFrictionParityStores(t *testing.T) (*db.DB, *Store) {
 }
 
 func TestFrictionReviewStoreParity(t *testing.T) {
+	t.Parallel()
 	local, pgStore := openFrictionParityStores(t)
 	for name, s := range map[string]frictionReviewStore{"sqlite": local, "postgres": pgStore} {
 		t.Run(name, func(t *testing.T) {
@@ -225,6 +228,7 @@ func TestFrictionReviewStoreParity(t *testing.T) {
 }
 
 func TestFrictionSubjectsSeekActivityAndMembership(t *testing.T) {
+	t.Parallel()
 	_, store := openFrictionParityStores(t)
 	_, err := store.pg.ExecContext(t.Context(), `INSERT INTO friction_digest_sessions(subject_id, date, subject_kind)
   VALUES ('c', '2026-09-15', 'session')`)

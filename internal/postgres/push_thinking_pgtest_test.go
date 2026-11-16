@@ -19,9 +19,8 @@ import (
 // or invalid UTF-8 in a thinking block would make the PG INSERT
 // reject the entire batch and stall the push.
 func TestPushThinkingText_SanitizesNullAndInvalidUTF8(t *testing.T) {
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 	ps, err := New(

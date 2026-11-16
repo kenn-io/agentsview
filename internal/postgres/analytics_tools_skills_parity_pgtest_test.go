@@ -25,10 +25,8 @@ import (
 // a session with no timestamp at all, and sessions each default filter
 // must exclude.
 func TestAnalyticsToolsSkillsSQLiteParity(t *testing.T) {
-	const schema = "agentsview_tools_skills_parity_test"
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	const schema = usageTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 
 	local := testDB(t)
 	seedToolsSkillsParityFixture(t, local)
@@ -254,6 +252,44 @@ func TestAnalyticsToolsSkillsSQLiteParity(t *testing.T) {
 			{ToolName: "Unknown", Category: "Other", CallCount: 1, SessionCount: 1, Pct: 100, MissingCalls: 1},
 		}, tools.ByTool, "07:30Z is 03:30 EDT after the spring-forward jump")
 	})
+
+	t.Run("fall-and-fractional-offset", func(t *testing.T) {
+		started := "2024-11-03T05:30:00Z"
+		require.NoError(t, local.UpsertSession(t.Context(), db.Session{
+			ID: "fall", Project: "gamma", Machine: "parity-machine", Agent: "codex",
+			StartedAt: &started, MessageCount: 4, UserMessageCount: 3,
+		}))
+		var messages []db.Message
+		for i, timestamp := range []string{"2024-11-03T05:30:00Z", "2024-11-03T06:30:00Z", "2024-11-03T20:00:00Z", "2024-11-04T05:30:00Z"} {
+			messages = append(messages, db.Message{
+				SessionID: "fall", Ordinal: i, Role: "assistant", Content: "call", Timestamp: timestamp,
+				Model: "model-a", HasToolUse: true,
+				ToolCalls: []db.ToolCall{{SessionID: "fall", ToolName: "Read", Category: "Read"}},
+			})
+		}
+		require.NoError(t, local.InsertMessages(t.Context(), messages))
+		_, err := syncer.Push(t.Context(), false, nil)
+		require.NoError(t, err)
+		for _, tc := range []struct {
+			zone                  string
+			firstWeek, secondWeek int
+		}{
+			{"America/New_York", 3, 1},
+			{"Asia/Kathmandu", 2, 2},
+		} {
+			f := db.AnalyticsFilter{From: "2024-11-03", To: "2024-11-04", Timezone: tc.zone, Project: "gamma"}
+			want, err := local.GetAnalyticsTools(t.Context(), f)
+			require.NoError(t, err)
+			got, err := remote.GetAnalyticsTools(t.Context(), f)
+			require.NoError(t, err)
+			assert.Equal(t, want, got)
+			assert.Equal(t, 4, got.TotalCalls)
+			assert.Equal(t, []db.ToolTrendEntry{
+				{Date: "2024-10-28", ByCat: map[string]int{"Read": tc.firstWeek}},
+				{Date: "2024-11-04", ByCat: map[string]int{"Read": tc.secondWeek}},
+			}, got.Trend)
+		}
+	})
 }
 
 func seedToolsSkillsParityFixture(t *testing.T, local *db.DB) {
@@ -395,10 +431,9 @@ func seedToolsSkillsParityFixture(t *testing.T, local *db.DB) {
 }
 
 func TestToolEffectivenessSQLitePGParity(t *testing.T) {
-	const schema = "agentsview_tool_rates_parity_test"
-	url := testPGURL(t)
-	cleanNamedPGSchema(t, url, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
+	t.Parallel()
+	const schema = usageTestSchema
+	url := testPGSchemaURL(t, schema)
 	local := testDB(t)
 	call := func(id string, ordinal int, ts, tool, model, input, result string) db.Message {
 		return db.Message{SessionID: id, Ordinal: ordinal, Timestamp: ts, Role: "assistant", Model: model, HasToolUse: true, ToolCalls: []db.ToolCall{{SessionID: id, ToolName: tool, Category: tool, InputJSON: input, ResultContent: result}}}

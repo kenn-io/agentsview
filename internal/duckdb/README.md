@@ -68,41 +68,60 @@ make e2e-duckdb
 
 ## Signals frustration markers
 
-The Signals panel counts each session's frustration markers, the prompts
-`signals.IsFrustrationMarker` flags. Counts are kept in memory per push
-fingerprint, so a load reads only sessions that changed since the last one.
+Push stores frustration marker counts for each session. A change to the marker
+algorithm rebuilds the mirror on the next push.
 
-For those sessions one query (`duckFrustrationPromptsSQL`) judges most prompts
-in DuckDB:
+## Usage rollup
 
-- A prompt made only of ASCII and `signals.PlainPromptSymbols` (dashes, quotes,
-  arrows, check marks, box drawing, emoji, private use) is judged in SQL. It
-  comes back only when it is a marker, without its text. ClickHouse uses the
-  same set and the same steps.
-- Any other prompt comes back with its text, and Go judges it. DuckDB stores
-  only valid UTF-8, so no prompt is sent back for its encoding.
+Usage summary, Top sessions, and usage session counts read a rollup that a push
+builds, so a read after a push does not rank and price every usage row again.
+Per-session usage and Activity reports read the live tables.
 
-The SQL follows `IsFrustrationMarker` with its exported patterns and thresholds.
-DuckDB's regular expressions are RE2: they match UTF-8, fold case under `(?i)`
-as Go does, and keep `\b` and `\w` to ASCII. `strlen` counts bytes as Go's `len`
-does; `length` would count characters. The query comment lists the three steps
-and why each matches Go over a plain prompt.
+Usage summary and Top sessions keep their per-session results in the on-disk
+usage cache. The rollup fills that cache when it is empty; a later read
+recomputes only the sessions whose push fingerprint changed, from the live
+tables.
 
-The query ends in `ORDER BY session_id`. Without that pipeline breaker, DuckDB
-evaluates the marker expression on one thread as the result streams to Go.
+The rollup holds priced usage summed by session, 15-minute UTC bucket, model,
+and provider, the pricing provenance of those rows, raw copies of the rows it
+could not sum, and the fingerprint of every session it covers. Reads sum the
+buckets into local days for the requested zone.
 
-The patterns are parameters, never part of the query text. Quack renders
-parameters into the SQL by replacing each question mark, and the patterns
-contain question marks. The session ID list renders as a `VARCHAR[]` literal.
+A push rebuilds the whole rollup when the mirror has none, when its format or
+the mirror's pricing changed, or when the usage rows of sessions changed since
+the build reach 1/50 of the rows it covers. Between rebuilds, reads take new and
+changed sessions from the live tables and skip the rollup rows of deleted ones.
 
-Tests compare the counts with `IsFrustrationMarker` on hand-labeled edge cases
-and on a seeded random corpus, require that only prompts outside the set come
-back with text, and check that DuckDB's `lower`, `upper`, and `(?i)` leave every
-symbol in the set alone. A Quack test runs the same read over a served mirror.
+A dedup group is summed only when no window, filter, or later row can change
+which of its rows wins:
 
-On a generated mirror of 2,000 sessions with 379 MB of prompt text and 1.57 GB
-on disk, judging in DuckDB took the read from 3.93 s to 1.22 s, Go allocations
-from 3.80 GB to 134 MB, and warm peak RSS growth from about 400 MB to 30-170 MB,
-with the same counts and about 3% more CPU time. On a mirror whose prompts fill
-only four row groups, wall time is unchanged, because DuckDB parallelizes by row
-group.
+- all its rows belong to one session and one bucket;
+- a non-Claude group has one model, because model filters apply before its
+  ranking;
+- no row carries a Copilot-reported session cost; and
+- no Cursor account row shares its identity.
+
+Other groups keep their rows, which reads rank with the live rows. A read also
+sends live the (session, bucket) units whose summed groups now share an identity
+with a changed session's row or a Cursor account row.
+
+A read uses the live path when the rollup's pricing differs from its own (for
+example, custom pricing), or when the zone's offset over the read's range is not
+a multiple of 15 minutes or changes off a 15-minute UTC boundary. A rollup read
+runs several queries; when a mirror replacement swaps the handle between them,
+the read runs again on the live path.
+
+A mirror keeps its rollup across releases until `usageRollupFormat` changes.
+`TestUsageRollupFormat` hashes what a build stores for a fixture and fails until
+a change to that output bumps the format and records the new digest in
+`testdata/usage-rollup-format-digests`.
+
+**Cost and gain.** On a mirror of a 43,620-session archive, a full rebuild took
+about 15 seconds longer with the rollup. First Usage requests after a serve
+start, in `America/New_York`, median of three starts:
+
+| Request | Before (s) | Rollup (s) | Speed-up |
+| --- | --- | --- | --- |
+| One-year summary | 3.2 | 0.49 | 6.5x |
+| 30-day summary | 0.83 | 0.38 | 2.2x |
+| 30-day top sessions | 0.88 | 0.25 | 3.5x |

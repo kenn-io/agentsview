@@ -1,0 +1,5 @@
+{"type":"session_header","version":1,"session_id":"11111111-2222-4333-8444-555555555555","agent_id":"66666666-7777-4888-8999-000000000000","created_at":"2026-10-05T15:04:05Z"}
+{"type":"item","seq":0,"source":"scheduler.cron","created_at":"2026-10-05T15:04:06Z","item":{"type":"message","role":"user","text":"start"}}
+{"type":"item","seq":2,"source":"scheduler.cron","created_at":"2026-10-05T15:04:07Z","item":{"type":"commentary_text","text":"working"}}
+{"type":"item","seq":1,"source":"scheduler.cron","created_at":"2026-10-05T15:04:07.074000000+00:00","item":{"type":"thinking","thinking":"consider","signature":"opaque"}}
+{"type":"item","seq":3,"source":"runtime.background_exec","created_at":"2026-10-05T15:04:08Z","item":{"type":"message","role":"assistant","text":"done"}}

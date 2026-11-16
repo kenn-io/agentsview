@@ -1,0 +1,17 @@
+[
+		{
+			"id": "ai-1",
+			"variant": "ai",
+			"content": "",
+			"timestamp": "03:04 PM",
+			"blocks": [
+				{
+					"type": "tool",
+					"toolName": "read_files",
+					"toolCallId": "tc-1",
+					"input": {"paths": ["src/main.go"]},
+					"output": "package main"
+				}
+			]
+		}
+	]

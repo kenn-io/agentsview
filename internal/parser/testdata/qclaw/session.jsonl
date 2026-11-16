@@ -1,0 +1,7 @@
+{"type":"session","version":3,"id":"2a3b4c5d-6e7f-4801-9a2b-3c4d5e6f7a8b","timestamp":"2026-03-04T09:00:00Z","cwd":"/home/user/code/app"}
+{"type":"model_change","id":"mc1","timestamp":"2026-03-04T09:00:00Z","provider":"qwen","modelId":"qwen3-coder"}
+{"type":"message","id":"m1","timestamp":"2026-03-04T09:00:01Z","message":{"role":"user","content":[{"type":"text","text":"Show me the hosts file"}],"timestamp":"2026-03-04T09:00:01Z"}}
+{"type":"message","id":"m2","timestamp":"2026-03-04T09:00:02Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Reading the file is enough."},{"type":"tool_use","id":"tu1","name":"read","input":{"path":"/etc/hosts"}}],"timestamp":"2026-03-04T09:00:02Z","provider":"qwen","model":"qwen3-coder","usage":{"input":20,"output":15,"cacheRead":4,"cacheWrite":0,"totalTokens":39}}}
+{"type":"message","id":"m3","timestamp":"2026-03-04T09:00:03Z","message":{"role":"toolResult","toolCallId":"tu1","toolName":"read","content":[{"type":"text","text":"127.0.0.1 localhost"}],"isError":false,"timestamp":"2026-03-04T09:00:03Z"}}
+{"type":"custom","id":"x1","timestamp":"2026-03-04T09:00:04Z","customType":"note"}
+{"type":"message","id":"m4","timestamp":"2026-03-04T09:00:05Z","message":{"role":"assistant","content":[{"type":"text","text":"It maps localhost to 127.0.0.1."}],"timestamp":"2026-03-04T09:00:05Z"}}

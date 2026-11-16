@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/kept"
+	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/readbase"
 )
 
@@ -40,18 +42,24 @@ func (s *Store) MemoryBackendName() string { return "duckdb" }
 // directly on path.
 type Store struct {
 	readbase.MirrorStubs
-	path          string
-	handleMu      sync.RWMutex
-	duck          *sql.DB
-	fileInfo      os.FileInfo
-	walStamp      string
-	reports       kept.Reports
-	dailyUsage    kept.Reads[db.DailyUsageResult]
-	planUsage     kept.Reads[*db.PlanUsageCountSummary]
-	topUsage      kept.Reads[[]db.TopSessionEntry]
-	pricingDigest string
-	aliasPath     string
-	closed        bool
+	path              string
+	trendsCacheID     string
+	handleMu          sync.RWMutex
+	replacementMu     sync.Mutex
+	duck              *sql.DB
+	fileInfo          os.FileInfo
+	walStamp          string
+	reports           kept.Reports
+	activityUsageSums kept.Memo[*readbase.ActivityUsageSums]
+	usageDisk         kept.Disk
+	analyticsReads    kept.Reads[[]byte]
+	searchReads       kept.Reads[db.SearchPage]
+	dailyUsage        kept.Reads[db.DailyUsageResult]
+	planUsage         kept.Reads[*db.PlanUsageCountSummary]
+	topUsage          kept.Reads[[]db.TopSessionEntry]
+	pricingDigest     string
+	aliasPath         string
+	closed            bool
 	// retiring tracks in-flight mirror-replacement checks, registered in
 	// beginReplacementCheck before a check opens anything and spanning
 	// swapHandle's tail cleanup (closing the replaced handle and removing
@@ -61,8 +69,6 @@ type Store struct {
 	// gone.
 	retiring sync.WaitGroup
 
-	// frustrationMemo reuses local mirror counts by transcript fingerprint.
-	frustrationMemo db.FrustrationMarkerMemo
 	// activityRuns keeps sessions' activity runs by push fingerprint.
 	activityRuns activityRunsMemo
 
@@ -97,13 +103,15 @@ func NewStore(ctx context.Context, path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	conn, err := OpenReadOnly(ctx, path)
+	conn, err := openServingReadOnly(ctx, path)
 	if err != nil {
 		return nil, err
 	}
 	return &Store{
 		path: path, duck: conn, fileInfo: info, walStamp: walStamp,
-		topUsage: kept.Reads[[]db.TopSessionEntry]{Size: db.TopSessionsBytes},
+		activityUsageSums: kept.Memo[*readbase.ActivityUsageSums]{Size: (*readbase.ActivityUsageSums).Bytes},
+		topUsage:          kept.Reads[[]db.TopSessionEntry]{Size: db.TopSessionsBytes},
+		analyticsReads:    kept.Reads[[]byte]{Size: func(b []byte) int64 { return int64(len(b)) }},
 	}, nil
 }
 
@@ -129,7 +137,7 @@ func (s *Store) keptVersion() string {
 	if stamp == "" {
 		return ""
 	}
-	return stamp + "|" + s.pricingDigest + "|" + s.aliasPath
+	return stamp + "|" + s.pricingDigest + "|" + s.aliasPath + "|" + pricingpkg.ConfiguredAliasesDigest()
 }
 
 // Capture before opening: DuckDB may replay a leftover WAL on open.
@@ -283,6 +291,7 @@ func (s *Store) SetCustomPricing(p map[string]config.CustomModelRate) {
 	digest := sha256.Sum256(fmt.Appendf(nil, "%#v", p))
 	s.pricingDigest = hex.EncodeToString(digest[:])
 	s.reports.Clear()
+	s.activityUsageSums.DeleteSlots(func(string) bool { return true })
 	s.dailyUsage.Clear()
 	s.planUsage.Clear()
 	s.topUsage.Clear()
@@ -729,12 +738,19 @@ func (s *Store) HasFTS(ctx context.Context) bool { return true }
 func (s *Store) HasSemantic() bool { return false }
 
 func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, error) {
-	if f.Limit <= 0 || f.Limit > db.MaxSearchLimit {
-		f.Limit = db.DefaultSearchLimit
-	}
 	if f.Query == "" {
 		return db.SearchPage{}, nil
 	}
+	if f.Limit <= 0 || f.Limit > db.MaxSearchLimit {
+		f.Limit = db.DefaultSearchLimit
+	}
+	if s.path != "" {
+		s.checkMirrorReplacement(ctx, nil)
+	}
+	return s.searchReads.Do(ctx, f.Slot(), s.keptVersion(), func(ctx context.Context) (db.SearchPage, error) { return s.search(ctx, f) })
+}
+
+func (s *Store) search(ctx context.Context, f db.SearchFilter) (db.SearchPage, error) {
 	// plainTerm is the de-quoted query joined back into one string. It feeds the
 	// name-branch ILIKE (matching the typed text against the short session name)
 	// and centers the message snippet via match_pos, mirroring SQLite's
@@ -824,7 +840,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 			WHERE `+msgTermPredicate+`
 				AND s.deleted_at IS NULL
 				AND m.is_system = FALSE
-				AND `+db.DuckDBSystemPrefixSQL("m.content", "m.role")+`
+				AND m.is_system_prefixed = FALSE
 				`+project+`
 		),
 		msg_matches AS (
@@ -852,7 +868,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 			WHERE `+strings.Join(imageTermClauses, " AND ")+`
 				AND s.deleted_at IS NULL
 				AND im.is_system = FALSE
-				AND `+db.DuckDBSystemPrefixSQL("im.content", "im.role")+`
+				AND im.is_system_prefixed = FALSE
 				AND it.session_id NOT IN (SELECT session_id FROM msg_matches)
 				`+nameProject+`
 		),
@@ -883,7 +899,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 				SELECT mx.session_id FROM messages mx
 				WHERE mx.session_id IN (SELECT session_id FROM name_candidates)
 					AND mx.is_system = FALSE
-					AND `+db.DuckDBSystemPrefixSQL("mx.content", "mx.role")+`
+					AND mx.is_system_prefixed = FALSE
 			)
 		),
 		page AS MATERIALIZED (
@@ -957,7 +973,7 @@ func (s *Store) SearchSession(ctx context.Context, sessionID, query string) ([]i
 			AND tre.call_index = tc.call_index
 		WHERE m.session_id = ?
 			AND m.is_system = FALSE
-			AND `+db.DuckDBSystemPrefixSQL("m.content", "m.role")+`
+			AND m.is_system_prefixed = FALSE
 			AND (m.content ILIKE ? ESCAPE '\'
 				OR tc.result_content ILIKE ? ESCAPE '\'
 				OR tre.content ILIKE ? ESCAPE '\')
@@ -1120,8 +1136,23 @@ func (s *Store) collectContentMatches(ctx context.Context, f db.ContentSearchFil
 	return contentCandidateMatches(all), nil
 }
 
+// collectContentSubstringMatches lists exact text, then messages holding every
+// query word, then, when those don't fill the page, messages holding fewer.
 func (s *Store) collectContentSubstringMatches(
 	ctx context.Context, f db.ContentSearchFilter,
+) ([]db.ContentMatch, error) {
+	f, words, ranked := db.RouteContentWords(f)
+	if ranked {
+		matches, err := s.collectContentSubstringPass(ctx, f, words, true, true)
+		if err != nil || len(matches) > f.Limit {
+			return matches, err
+		}
+	}
+	return s.collectContentSubstringPass(ctx, f, words, ranked, false)
+}
+
+func (s *Store) collectContentSubstringPass(
+	ctx context.Context, f db.ContentSearchFilter, words db.ContentWords, ranked, all bool,
 ) ([]db.ContentMatch, error) {
 	eventAnchorJoin := db.LexicalEventAnchorJoinSQL(f.Scope)
 
@@ -1143,12 +1174,27 @@ func (s *Store) collectContentSubstringMatches(
 		case "messages":
 			sysPred := "TRUE"
 			if f.ExcludeSystem {
-				sysPred = "m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
+				sysPred = "m.is_system = FALSE AND m.is_system_prefixed = FALSE"
 			}
 			if f.KeywordOnly {
 				sysPred += " AND m.role IN ('user', 'assistant')"
 			}
-			contentPred := addSearchArgs("COALESCE(m.dialogue_text, m.content)")
+			var contentPred string
+			if ranked {
+				b := db.NewQueryBuilder(db.DuckDBQueryDialect(), 0)
+				column := "COALESCE(m.dialogue_text, m.content)"
+				if all {
+					if f.Mode != "fts" {
+						contentPred = b.ContainsPredicate(column, f.Pattern) + " OR "
+					}
+					contentPred = "(" + contentPred + "(" + db.WordCandidateSQL(b, column, words, true) + " AND " + db.WordASCIIRegexSQL(b, column, words) + "))"
+				} else {
+					contentPred = db.WordFilterSQL(b, column, f, words, false)
+				}
+				args = append(append(args, b.Args()...), scopeArgs...)
+			} else {
+				contentPred = addSearchArgs("COALESCE(m.dialogue_text, m.content)")
+			}
 			branches = append(branches, `
 				SELECT m.session_id, s.project, s.agent, 'message' AS location,
 					m.role, '' AS tool_name, m.ordinal,
@@ -1164,7 +1210,7 @@ func (s *Store) collectContentSubstringMatches(
 		case "thinking":
 			sysPred := "TRUE"
 			if f.ExcludeSystem {
-				sysPred = "m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
+				sysPred = "m.is_system = FALSE AND m.is_system_prefixed = FALSE"
 			}
 			contentPred := duckContentSearchPredicate("m.thinking_text", f, &args)
 			if slices.Contains(f.Sources, "messages") {
@@ -1250,13 +1296,54 @@ func (s *Store) collectContentSubstringMatches(
 	}
 	query := `
 		SELECT session_id, project, agent, location, role, tool_name,
-			ordinal, ts, body
+			ordinal, ts, body, 0 AS n
 		FROM (` + strings.Join(branches, " UNION ALL ") + `)
 		ORDER BY sort_ts DESC, session_id ASC, ordinal ASC,
 			src ASC, row_id ASC, call_index ASC, event_index ASC, body ASC
 		LIMIT ? OFFSET ?`
-	args = append(args, f.Limit+1, f.Cursor)
-	return s.scanContentMatches(ctx, query, args, func(body string) string {
+	if ranked && all {
+		b := db.NewQueryBuilder(db.DuckDBQueryDialect(), 0)
+		tier := "1"
+		if f.Mode != "fts" {
+			tier = "CASE WHEN " + b.ContainsPredicate("body", f.Pattern) + " THEN 0 ELSE 1 END"
+		}
+		args = append(args, b.Args()...)
+		query = `WITH candidates AS (` + strings.Join(branches, " UNION ALL ") + `),
+			bounded AS (
+				SELECT candidates.*, ` + tier + ` AS tier FROM candidates
+			)
+			SELECT session_id, project, agent, location, role, tool_name,
+				ordinal, ts, body, CASE WHEN tier = 0 THEN -` + strconv.Itoa(len(words.Terms)) + ` ELSE ` + strconv.Itoa(len(words.Terms)) + ` END AS n
+			FROM bounded
+			ORDER BY tier, sort_ts DESC, session_id ASC, ordinal ASC,
+				src ASC, row_id ASC, call_index ASC, event_index ASC, body ASC
+			LIMIT ?`
+	} else if ranked {
+		b := db.NewQueryBuilder(db.DuckDBQueryDialect(), 0)
+		query = db.WordRankedSQL(b, branches, f, words, all)
+		args = append(args, b.Args()...)
+	}
+	var accept func(*db.ContentMatch, string) bool
+	skip := 0
+	if ranked && all {
+		args = append(args, f.Cursor+f.Limit+1)
+		skip = f.Cursor
+		accept = func(m *db.ContentMatch, body string) bool {
+			// Exact matches carry a negative count so they bypass word checks.
+			if m.MatchedWords < 0 {
+				m.MatchedWords = -m.MatchedWords
+				return true
+			}
+			return m.Location != "message" || db.ContentWordsMatch(body, words)
+		}
+	} else {
+		args = append(args, f.Limit+1, f.Cursor)
+	}
+	return s.scanContentMatches(ctx, query, args, accept, skip, func(body string) string {
+		if ranked {
+			start, end := db.WordSnippetRange(body, f.Pattern, words)
+			return f.BuildSnippet(body, start, end)
+		}
 		if f.Mode == "fts" {
 			start, end := db.FTSSnippetRange(f.Pattern, body)
 			return f.BuildSnippet(body, start, end)
@@ -1433,7 +1520,7 @@ func (s *Store) collectContentSource(
 			WHERE m.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `) AND ` + db.LexicalAnchorScopeSQL(f, "s", "m", db.DuckDBQueryDialect())
 		query += prefixFilter("COALESCE(m.dialogue_text, m.content)")
 		if f.ExcludeSystem {
-			query += " AND m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
+			query += " AND m.is_system = FALSE AND m.is_system_prefixed = FALSE"
 		}
 		orderBy = "m.session_id, m.ordinal, COALESCE(m.id, 0)"
 	case "thinking":
@@ -1447,7 +1534,7 @@ func (s *Store) collectContentSource(
 			WHERE m.thinking_text <> '' AND m.session_id IN (SELECT id FROM sessions WHERE ` + scopeWhere + `) AND ` + db.LexicalAnchorScopeSQL(f, "s", "m", db.DuckDBQueryDialect())
 		query += prefixFilter("m.thinking_text")
 		if f.ExcludeSystem {
-			query += " AND m.is_system = FALSE AND " + db.DuckDBSystemPrefixSQL("m.content", "m.role")
+			query += " AND m.is_system = FALSE AND m.is_system_prefixed = FALSE"
 		}
 		orderBy = "m.session_id, m.ordinal, COALESCE(m.id, 0)"
 	case "tool_input":
@@ -1523,16 +1610,16 @@ func (s *Store) collectContentSource(
 }
 
 func (s *Store) scanContentMatches(
-	ctx context.Context, query string, args []any, makeSnippet func(string) string,
+	ctx context.Context, query string, args []any, accept func(*db.ContentMatch, string) bool, skip int, makeSnippet func(string) string,
 ) ([]db.ContentMatch, error) {
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("duckdb content search: %w", err)
 	}
-	return scanDuckContentRows(rows, makeSnippet)
+	return scanDuckContentRows(rows, accept, skip, makeSnippet)
 }
 
-func scanDuckContentRows(rows *sql.Rows, makeSnippet func(string) string) ([]db.ContentMatch, error) {
+func scanDuckContentRows(rows *sql.Rows, accept func(*db.ContentMatch, string) bool, skip int, makeSnippet func(string) string) ([]db.ContentMatch, error) {
 	defer rows.Close()
 	var out []db.ContentMatch
 	for rows.Next() {
@@ -1541,8 +1628,15 @@ func scanDuckContentRows(rows *sql.Rows, makeSnippet func(string) string) ([]db.
 		var ts any
 		if err := rows.Scan(&m.SessionID, &m.Project, &m.Agent,
 			&m.Location, &m.Role, &m.ToolName, &m.Ordinal,
-			&ts, &body); err != nil {
+			&ts, &body, &m.MatchedWords); err != nil {
 			return nil, err
+		}
+		if accept != nil && !accept(&m, body) {
+			continue
+		}
+		if skip > 0 {
+			skip--
+			continue
 		}
 		m.Timestamp = formatDBTime(ts)
 		m.Snippet = makeSnippet(body)

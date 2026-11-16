@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vite-plus/test";
 import type { Session } from "../../api/types.js";
-import { buildSessionGroups, type SessionGroup } from "../../stores/sessions.svelte.js";
+import { buildSessionGroups, type SessionGroup } from "../../stores/sessionGroups.js";
 import {
   ITEM_HEIGHT,
   HEADER_HEIGHT,
@@ -186,6 +186,17 @@ describe("buildDisplayItems (ungrouped)", () => {
       expect(items[i]!.top).toBe(i * ITEM_HEIGHT);
       expect(items[i]!.height).toBe(ITEM_HEIGHT);
     }
+  });
+
+  it("reserves room for timestamps when years are shown", () => {
+    const groups = [makeGroup("claude", 2, "a"), makeGroup("gpt", 1, "b")];
+    const expanded = new Set(["a-session-0"]);
+    const items = buildDisplayItems(groups, [], "none", new Set(), expanded, true);
+    expect(items.map((item) => [item.top, item.height])).toEqual([
+      [0, 56],
+      [56, 50],
+      [106, 56],
+    ]);
   });
 
   it("attaches correct group reference", () => {

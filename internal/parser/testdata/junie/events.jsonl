@@ -1,0 +1,6 @@
+{"kind":"UserPromptEvent","requestId":"req-1","prompt":"context and prompt","presentablePrompt":"Add input validation to the signup form","askMode":false,"thinkMore":false,"timestampMs":1704067201000}
+{"kind":"SessionA2uxEvent","event":{"state":"IN_PROGRESS","agentEvent":{"kind":"MarkdownBlockUpdatedEvent","stepId":"step-1","text":"Looking at the form handler."}},"timestampMs":1704067203000}
+{"kind":"SessionA2uxEvent","event":{"state":"COMPLETED","agentEvent":{"kind":"ResultBlockUpdatedEvent","stepId":"step-1","cancelled":false,"result":"<!-- ANSWER -->Validation added for email and password length.","changes":[]}},"timestampMs":1704067205000}
+{"kind":"SessionA2uxEvent","taskId":"task-1","event":{"agentEvent":{"kind":"LlmResponseMetadataEvent","agent":"JUNIE","modelUsage":[{"model":"claude-sonnet-4-6","cost":0.00125,"inputTokens":100,"cacheInputTokens":20,"cacheCreateTokens":30,"outputTokens":40,"time":1}]}},"timestampMs":1704067205100}
+{"kind":"UserAsyncResponseEvent","entries":[{"question":"Run the tests too?","answer":"Yes"}],"timestampMs":1704067206000}
+{"kind":"SessionA2uxEvent","event":{"state":"COMPLETED","agentEvent":{"kind":"ResultBlockUpdatedEvent","stepId":"step-2","cancelled":false,"result":"All 12 tests pass.","changes":[]}},"timestampMs":1704067207000}

@@ -1,5 +1,5 @@
 import { m } from "../i18n/index.js";
-import type { SessionStatus } from "../stores/sessions.svelte.js";
+import type { SessionStatus } from "../stores/sessionStatus.svelte.js";
 
 /** Localized label for a session status, for the kit-ui StatusDot
  * (which takes a status string and a pre-translated label). */

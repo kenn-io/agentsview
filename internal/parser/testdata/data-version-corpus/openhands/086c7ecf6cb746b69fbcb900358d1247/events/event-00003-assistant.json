@@ -1,0 +1,8 @@
+{
+			"id":"e3",
+			"timestamp":"2026-04-02T15:25:43.706887",
+			"source":"agent",
+			"llm_message":{"role":"assistant","content":[{"type":"text","text":"The panic happens during startup."}]},
+			"thinking_blocks":[{"type":"thinking","thinking":"The stack trace indicates a nil config path."}],
+			"kind":"MessageEvent"
+		}

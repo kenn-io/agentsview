@@ -13,7 +13,8 @@ import (
 )
 
 func TestPGPushRepushesDialogueOnlyChanges(t *testing.T) {
-	syncer, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_dialogue_repush_test")
+	t.Parallel()
+	syncer, local, pg, ctx := newSessionProvenancePushSync(t, pgPushTestSchema)
 	dbtest.SeedDialogueSearch(t, local)
 	session, err := local.GetSession(ctx, "dialogue-search")
 	require.NoError(t, err)
@@ -66,7 +67,8 @@ func TestPGPushRepushesDialogueOnlyChanges(t *testing.T) {
 }
 
 func TestPGDialogueBackfillPerScope(t *testing.T) {
-	unfiltered, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_dialogue_backfill_test")
+	t.Parallel()
+	unfiltered, local, pg, ctx := newSessionProvenancePushSync(t, pgPushTestSchema)
 	dbtest.SeedDialogueSearch(t, local)
 	projects := []string{"dialogue-search"}
 	scope := pushSyncStateScope("", projects, nil)
@@ -88,7 +90,8 @@ func TestPGDialogueBackfillPerScope(t *testing.T) {
 }
 
 func TestPGPushStoresDialogueCopyOnceAndMigratesOldCopies(t *testing.T) {
-	syncer, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_dialogue_dedupe_test")
+	t.Parallel()
+	syncer, local, pg, ctx := newSessionProvenancePushSync(t, pgPushTestSchema)
 	dbtest.SeedDialogueSearch(t, local)
 	session, err := local.GetSession(ctx, "dialogue-search")
 	require.NoError(t, err)

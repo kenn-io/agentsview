@@ -10,6 +10,7 @@ import (
 )
 
 func TestHostedReprovisionRestoresMigratedColumnsAndIndexes(t *testing.T) {
+	t.Parallel()
 	f := newHostedFixture(t, "tenant-upgrade")
 	_, err := f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent) VALUES('preserved','project','device','codex')`)
 	require.NoError(t, err)
@@ -37,6 +38,7 @@ func TestHostedReprovisionRestoresMigratedColumnsAndIndexes(t *testing.T) {
 }
 
 func TestHostedRuntimeRequiresDialogueContentMarker(t *testing.T) {
+	t.Parallel()
 	f := newHostedFixture(t, "tenant-dialogue-marker")
 	// Model a hosted schema provisioned before raw_message_dialogue.is_content.
 	_, err := f.admin.ExecContext(t.Context(), `ALTER TABLE raw_message_dialogue DROP COLUMN is_content`)

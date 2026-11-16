@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/clickhouse/chtest"
@@ -304,4 +305,120 @@ func TestActivitySourceProbeMaxIDAfterMergeDuringRead(t *testing.T) {
 	got, err := store.maxFinalID(ctx, "messages", snapshot["messages"], &finalIDs{})
 	require.NoError(t, err)
 	require.EqualValues(t, 700, got)
+}
+
+// A coverage check whose parts move while it reads keeps what its trackers
+// read, so each retry reads only the new parts. Before, every retry reread
+// both tables in full.
+func TestUsageCoverageRetryReadsOnlyMovedParts(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	_, syncer, store := newPreparedUsageStore(t)
+	fullReads := func() (sessions, snapshots int) {
+		t.Helper()
+		// The log shows a key lookup's keys inline, in has(...).
+		execPreparedUsage(t, store, "SYSTEM FLUSH LOGS")
+		require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT
+			countIf(query LIKE '%sipHash128Reference(tuple(*))%FROM sessions%'),
+			countIf(query LIKE '%sipHash128Reference(tuple(id, revision, push_version))%FROM usage_session_snapshots%')
+			FROM system.query_log
+			WHERE current_database = currentDatabase() AND type = 'QueryFinish'
+				AND query NOT LIKE '%has(%' AND query NOT LIKE '%system.query_log%'`).Scan(&sessions, &snapshots))
+		return sessions, snapshots
+	}
+	// A store that has not read the tables yet, as after a restart.
+	cold := newTestStore(t, syncer.conn, syncer.target)
+	moves := 0
+	cold.afterTrackerReads = func() {
+		if moves < 2 {
+			moves++
+			execPreparedUsage(t, store, fmt.Sprintf(`INSERT INTO sessions
+				SELECT * REPLACE (concat(id, '-moved-%d') AS id) FROM sessions ORDER BY id LIMIT 1`, moves))
+		}
+	}
+	sessionsBefore, snapshotsBefore := fullReads()
+	got, err := cold.readPreparedUsageState(ctx, false)
+	require.NoError(t, err)
+	require.Equal(t, 2, moves)
+	sessionsAfter, snapshotsAfter := fullReads()
+	assert.Equal(t, 1, sessionsAfter-sessionsBefore, "full sessions reads")
+	assert.Equal(t, 1, snapshotsAfter-snapshotsBefore, "full snapshot reads")
+
+	want, err := store.readPreparedUsageState(ctx, false)
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+}
+
+// A full read of kept rows that names parts a merge removes still
+// describes the parts it read, and the next check reads only the merged
+// part when the read missed the rows. An incremental read whose parts
+// vanished cannot tell what it missed, so it is not kept.
+func TestFinalRowsSettleAfterMerge(t *testing.T) {
+	t.Parallel()
+	insert := func(ids string) string {
+		return fmt.Sprintf(`INSERT INTO sessions (id, machine, display_name, push_version)
+			SELECT arrayJoin([%s]), 'host-a', 'one', 1`, ids)
+	}
+	merge := []string{"SYSTEM START MERGES sessions", "OPTIMIZE TABLE sessions FINAL", "SYSTEM STOP MERGES sessions"}
+	for _, tc := range []struct {
+		name string
+		// tracked runs before the tracker's first read.
+		tracked bool
+		// mergeBeforeRead merges the parts between the snapshot and the read.
+		mergeBeforeRead bool
+		settles         bool
+	}{
+		{name: "full read after the merge", mergeBeforeRead: true, settles: true},
+		{name: "full read before the merge", settles: true},
+		{name: "incremental read before the merge", tracked: true, settles: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			store := newFinalRowsStore(t)
+			f := &finalRows{spec: sessionsFinalTable}
+			execPreparedUsage(t, store, "SYSTEM STOP MERGES sessions", insert("'a','b'"))
+			if tc.tracked {
+				snapshot, err := store.readPartsSnapshot(ctx)
+				require.NoError(t, err)
+				change, err := store.prepareFinalRows(ctx, f, snapshot["sessions"])
+				require.NoError(t, err)
+				f.apply(change)
+			}
+			execPreparedUsage(t, store, insert("'b','c'"))
+			snapshot, err := store.readPartsSnapshot(ctx)
+			require.NoError(t, err)
+			if tc.mergeBeforeRead {
+				execPreparedUsage(t, store, merge...)
+			}
+			change, err := store.prepareFinalRows(ctx, f, snapshot["sessions"])
+			require.NoError(t, err)
+			require.Equal(t, !tc.tracked, change.full)
+			if !tc.mergeBeforeRead {
+				execPreparedUsage(t, store, merge...)
+			}
+			fresh, err := store.readPartsSnapshot(ctx)
+			require.NoError(t, err)
+			require.Equal(t, tc.settles, change.settle(fresh["sessions"]))
+			if !tc.settles {
+				return
+			}
+			f.apply(change)
+
+			next, err := store.prepareFinalRows(ctx, f, fresh["sessions"])
+			require.NoError(t, err)
+			require.NotNil(t, next)
+			assert.False(t, next.full, "the check after a kept read must not reread the table")
+			f.apply(next)
+			var count uint64
+			var sum string
+			require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT count(),
+				reinterpretAsFixedString(sumWithOverflow(reinterpretAsUInt128(sipHash128Reference(tuple(*)))))
+				FROM sessions FINAL`).Scan(&count, &sum))
+			require.EqualValues(t, 3, count)
+			hash, err := parseRowHash(sum)
+			require.NoError(t, err)
+			assert.Equal(t, (&finalRows{count: count, sum: hash}).identity(), f.identity())
+		})
+	}
 }

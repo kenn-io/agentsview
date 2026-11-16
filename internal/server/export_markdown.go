@@ -54,6 +54,7 @@ func (s *Server) loadExportSessionTree(
 	ctx context.Context,
 	sessionID string,
 	depth string,
+	reveal bool,
 	visited map[string]bool,
 	level int,
 ) (*exportSessionTree, error) {
@@ -75,7 +76,7 @@ func (s *Server) loadExportSessionTree(
 	}
 	tree := &exportSessionTree{
 		Session:          sess,
-		Messages:         msgs,
+		Messages:         exportMessages(msgs, reveal),
 		AnchoredChildren: map[string]*exportSessionTree{},
 	}
 	if !shouldLoadMarkdownChildren(depth, level) {
@@ -87,7 +88,7 @@ func (s *Server) loadExportSessionTree(
 	}
 	anchored := markdownAnchoredChildIDs(msgs)
 	for _, child := range children {
-		childTree, err := s.loadExportSessionTree(ctx, child.ID, depth, visited, level+1)
+		childTree, err := s.loadExportSessionTree(ctx, child.ID, depth, reveal, visited, level+1)
 		if err != nil {
 			return nil, err
 		}

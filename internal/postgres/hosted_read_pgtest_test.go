@@ -35,6 +35,7 @@ func (tracer *hostedPendingSelectionTracer) TraceQueryEnd(ctx context.Context, _
 }
 
 func TestHostedPublicReadsDuringPendingSelection(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, argument string
 		deny, probe    bool

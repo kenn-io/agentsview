@@ -302,8 +302,20 @@ func (b *httpBackend) FindSessionIDsByRawSuffix(
 	return response.JSON200.Ids, nil
 }
 
+// CheckCompactionSummaries probes once per request because the daemon can change.
+func (b *httpBackend) CheckCompactionSummaries(ctx context.Context) error {
+	capabilities, err := ProbeHTTPServerCapabilities(ctx, b.baseURL, b.token)
+	if err != nil {
+		return err
+	}
+	if capabilities.APIVersion < service.CompactionAPIVersion {
+		return fmt.Errorf("server API version %d does not support compaction summaries; use API version %d or later", capabilities.APIVersion, service.CompactionAPIVersion)
+	}
+	return nil
+}
+
 // Probe only when the backend has no version so unfiltered lists need no extra request.
-func (b *httpBackend) requireSessionAnnotations(ctx context.Context) error {
+func (b *httpBackend) requireAPIVersion(ctx context.Context, minVersion int, feature string) error {
 	version := b.apiVersion
 	if version == 0 {
 		capabilities, err := ProbeHTTPServerCapabilities(ctx, b.baseURL, b.token)
@@ -312,11 +324,10 @@ func (b *httpBackend) requireSessionAnnotations(ctx context.Context) error {
 		}
 		version = capabilities.APIVersion
 	}
-	if version < service.SessionAnnotationsAPIVersion {
+	if version < minVersion {
 		return fmt.Errorf(
-			"server API version %d does not support session labels, parent links, or their filters; "+
-				"restart or upgrade the server",
-			version,
+			"server API version %d does not support %s; restart or upgrade the server",
+			version, feature,
 		)
 	}
 	return nil
@@ -326,7 +337,7 @@ func (b *httpBackend) List(
 	ctx context.Context, f service.ListFilter,
 ) (*service.SessionList, error) {
 	if len(f.Labels) > 0 || f.PR != "" {
-		if err := b.requireSessionAnnotations(ctx); err != nil {
+		if err := b.requireAPIVersion(ctx, service.SessionAnnotationsAPIVersion, "session labels, parent links, or their filters"); err != nil {
 			return nil, err
 		}
 	}
@@ -435,6 +446,9 @@ func filterToQuery(f service.ListFilter) (*apiclient.GetAPIV1SessionsQuery, erro
 	if f.IncludeChildren {
 		q.IncludeChildren = new(true)
 	}
+	if f.Flat {
+		q.Flat = new(true)
+	}
 	if f.IncludeSource {
 		q.IncludeSource = new(true)
 	}
@@ -502,6 +516,9 @@ func (b *httpBackend) Messages(
 	ctx context.Context, id string, f service.MessageFilter,
 ) (*service.MessageList, error) {
 	q := &apiclient.GetAPIV1SessionsIDMessagesQuery{}
+	if f.CompactBoundaryOnly {
+		q.CompactBoundary = new(true)
+	}
 	if f.From != nil {
 		q.From = new(int64(*f.From))
 	}
@@ -794,7 +811,9 @@ func (b *httpBackend) Search(
 	if req.Limit > 0 {
 		q.Limit = new(int64(req.Limit))
 	}
-	api, err := b.apiClient(b.client)
+	// Broad searches on large archives can exceed 30 seconds; the caller can
+	// cancel the request through its context.
+	api, err := b.apiClient(b.longRunningClient)
 	if err != nil {
 		return nil, err
 	}
@@ -1181,6 +1200,19 @@ func (b *httpBackend) SessionUsage(
 	if wire.SubagentCount != nil {
 		out.SubagentCount = int(*wire.SubagentCount)
 	}
+	if out.RecordedCost, err = db.SummarizeRecordedCost(out.Breakdown); err != nil {
+		return nil, err
+	}
+	if wire.SessionTotal != nil {
+		// The wire and storage shapes share one JSON encoding.
+		encoded, err := json.Marshal(wire.SessionTotal)
+		if err != nil {
+			return nil, fmt.Errorf("session usage: encoding session total: %w", err)
+		}
+		if err := json.Unmarshal(encoded, &out.SessionTotal); err != nil {
+			return nil, fmt.Errorf("session usage: decoding session total: %w", err)
+		}
+	}
 	return out, nil
 }
 
@@ -1300,11 +1332,16 @@ func (b *httpBackend) ListRecallEntries(
 	if err := service.ValidateRecallEntryLimit(f.Limit); err != nil {
 		return nil, err
 	}
-	q := recallFilterToQuery(f)
 	api, err := b.apiClient(b.client)
 	if err != nil {
 		return nil, err
 	}
+	if f.UpdatedSince != "" || f.CreatedSince != "" {
+		if err := b.requireAPIVersion(ctx, service.RecallTimeBoundsAPIVersion, "Recall time bounds"); err != nil {
+			return nil, err
+		}
+	}
+	q := recallFilterToQuery(f)
 	response, err := api.GetAPIV1RecallEntriesWithResponse(ctx, &apiclient.GetAPIV1RecallEntriesRequestOptions{Query: q})
 	if response == nil {
 		return nil, err
@@ -1316,9 +1353,12 @@ func (b *httpBackend) ListRecallEntries(
 				"recall list: daemon at %s: %w", b.baseURL, db.ErrReadOnly,
 			)
 		}
+		if response.HTTPResponse.StatusCode == http.StatusConflict {
+			return nil, service.ErrStaleRecallPagination
+		}
 		return nil, err
 	}
-	out := service.RecallList{RecallEntries: response.JSON200.Entries, TrustedOnly: response.JSON200.TrustedOnly}
+	out := service.RecallList{RecallEntries: response.JSON200.Entries, TrustedOnly: response.JSON200.TrustedOnly, NextCursor: response.JSON200.NextCursor}
 	if out.RecallEntries == nil {
 		out.RecallEntries = []db.RecallResult{}
 	}
@@ -1494,6 +1534,15 @@ func (b *httpBackend) ImportRecallEntries(
 
 func recallFilterToQuery(f service.RecallFilter) *apiclient.GetAPIV1RecallEntriesQuery {
 	q := &apiclient.GetAPIV1RecallEntriesQuery{}
+	if f.UpdatedSince != "" {
+		q.UpdatedSince = new(f.UpdatedSince)
+	}
+	if f.CreatedSince != "" {
+		q.CreatedSince = new(f.CreatedSince)
+	}
+	if f.Cursor != "" {
+		q.Cursor = new(f.Cursor)
+	}
 	if f.Query != "" {
 		q.Q = new(f.Query)
 	}

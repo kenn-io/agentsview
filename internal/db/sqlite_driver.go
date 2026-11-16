@@ -62,6 +62,22 @@ func (db *DB) openReader(path string) *sql.DB {
 }
 
 func configureSQLiteConnection(conn *sqlite3.SQLiteConn) error {
+	if err := conn.RegisterFunc("agentsview_local_date", func(message, session, zone string) string {
+		_, date, _ := (AnalyticsFilter{Timezone: zone}).ResolveSkillRowTime(message, session)
+		return date
+	}, true); err != nil {
+		return err
+	}
+	if err := conn.RegisterFunc("agentsview_trend_timestamp", func(message, started, created string) string {
+		for _, value := range []string{message, started, created} {
+			if _, err := time.Parse(time.RFC3339Nano, value); err == nil {
+				return value
+			}
+		}
+		return ""
+	}, true); err != nil {
+		return err
+	}
 	if err := conn.RegisterFunc(
 		"agentsview_timestamp_unix_micro",
 		sqliteTimestampUnixMicro,
@@ -81,6 +97,9 @@ func configureSQLiteConnection(conn *sqlite3.SQLiteConn) error {
 		parseUsageWebSearchRequests,
 		true,
 	); err != nil {
+		return err
+	}
+	if err := conn.RegisterFunc("agentsview_phrase_match", phraseMatch, true); err != nil {
 		return err
 	}
 	if err := conn.RegisterFunc("agentsview_top_session_started_order", func(raw string) string {

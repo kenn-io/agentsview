@@ -12,7 +12,6 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -28,17 +27,18 @@ type planUsagePushFixture struct {
 
 func newPlanUsagePushFixture(t *testing.T, schema string) planUsagePushFixture {
 	t.Helper()
-	pgURL := testPGURL(t)
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, pg.Close()) })
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err)
-	require.NoError(t, EnsureSchema(t.Context(), pg, schema))
+	if !takeFreshSchemaCopy(t, pgURL, schema) {
+		_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
+		require.NoError(t, err)
+		require.NoError(t, EnsureSchema(t.Context(), pg, schema))
+	}
 
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
-	dbtest.SeedPricingMeta(t, local)
 	t.Cleanup(func() { assert.NoError(t, local.Close()) })
 	started := "2026-10-01T09:00:00Z"
 	require.NoError(t, local.UpsertSession(t.Context(), db.Session{
@@ -89,7 +89,8 @@ func fullPlanUsage() *db.SessionPlanUsage {
 }
 
 func TestPushPlanUsageRoundTrip(t *testing.T) {
-	f := newPlanUsagePushFixture(t, "agentsview_push_plan_usage_roundtrip")
+	t.Parallel()
+	f := newPlanUsagePushFixture(t, usageTestSchema)
 	require.NoError(t, f.local.ReplaceSessionPlanUsage(t.Context(), planUsageRootID, fullPlanUsage()))
 	f.push(t)
 
@@ -105,7 +106,8 @@ func TestPushPlanUsageRoundTrip(t *testing.T) {
 }
 
 func TestPushPlanUsageChangeRepushes(t *testing.T) {
-	f := newPlanUsagePushFixture(t, "agentsview_push_plan_usage_change")
+	t.Parallel()
+	f := newPlanUsagePushFixture(t, usageTestSchema)
 	require.NoError(t, f.local.ReplaceSessionPlanUsage(t.Context(), planUsageRootID, fullPlanUsage()))
 	f.push(t)
 	var updatedBefore time.Time
@@ -131,8 +133,9 @@ func TestPushPlanUsageChangeRepushes(t *testing.T) {
 }
 
 func TestPGSessionUsageIncludesPlanUsage(t *testing.T) {
+	t.Parallel()
 	t.Run("direct", func(t *testing.T) {
-		f := newPlanUsagePushFixture(t, "agentsview_push_plan_usage_session_usage")
+		f := newPlanUsagePushFixture(t, usageTestSchema)
 		require.NoError(t, f.local.ReplaceSessionPlanUsage(t.Context(), planUsageRootID, fullPlanUsage()))
 		f.push(t)
 		usage, err := f.store.GetSessionUsage(t.Context(), planUsageRootID, false)
@@ -168,6 +171,7 @@ func TestPGSessionUsageIncludesPlanUsage(t *testing.T) {
 }
 
 func TestHostedProjectionWritesPlanUsage(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "capture-a", "")
 	p := projectionOutcome("descendant thread")
@@ -208,6 +212,7 @@ func TestHostedProjectionWritesPlanUsage(t *testing.T) {
 }
 
 func TestHostedGrandchildUsageRootMapped(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "capture-a", "")
 	root := projectionOutcome("root")
@@ -235,6 +240,10 @@ func TestHostedGrandchildUsageRootMapped(t *testing.T) {
 }
 
 func TestHostedReprovisionAddsPlanUsageTable(t *testing.T) {
+	t.Parallel()
+	// An empty database: this test drops a tenant table and tests how
+	// EnsureHostedTenant restores it.
+	testPGURL(t)
 	f := newHostedFixture(t, "tenant-plan-usage-upgrade")
 	_, err := f.admin.ExecContext(t.Context(), `DROP TABLE session_plan_usage`)
 	require.NoError(t, err)
@@ -246,6 +255,7 @@ func TestHostedReprovisionAddsPlanUsageTable(t *testing.T) {
 }
 
 func TestHostedRuntimeRequiresPlanUsageInsert(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	require.NoError(t, CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull))
 	_, err := f.admin.ExecContext(t.Context(), `REVOKE INSERT ON session_plan_usage FROM "`+f.role+`"`)

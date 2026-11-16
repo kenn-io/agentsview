@@ -24,16 +24,14 @@ import (
 //  3. Assert that the row's machine column is still "machine-a" (not overwritten).
 //  4. Assert that no messages were written for the conflicting session.
 func TestPushSessionGuardsAgainstCrossMachineCollision(t *testing.T) {
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_collision_guard_test"
+	t.Parallel()
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	// Local SQLite DB.
@@ -109,16 +107,14 @@ func TestPushSessionGuardsAgainstCrossMachineCollision(t *testing.T) {
 }
 
 func TestPushSessionAllowsMachineRenameForSameOwnerMarker(t *testing.T) {
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_collision_owner_marker_test"
+	t.Parallel()
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -168,16 +164,14 @@ func TestPushSessionAllowsMachineRenameForSameOwnerMarker(t *testing.T) {
 }
 
 func TestPushSessionAdoptsLegacyLocalSentinelRow(t *testing.T) {
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_collision_legacy_local_test"
+	t.Parallel()
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))

@@ -23,9 +23,8 @@ import (
 func TestStoreGetAnalyticsSessionShape_AutonomyExcludesSystemUsers(
 	t *testing.T,
 ) {
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 	ps, err := New(

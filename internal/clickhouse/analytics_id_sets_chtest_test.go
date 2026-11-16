@@ -134,6 +134,10 @@ func TestAnalyticsIDSetReadsMatchSQLite(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, want.Models, got.Models)
 			assert.Len(t, got.Models, tc.models)
+			if tc.name == "model_and_hour_filter" {
+				assert.Equal(t, want.TotalSessions, got.TotalSessions)
+				assert.Equal(t, want.TotalMessages, got.TotalMessages)
+			}
 		})
 	}
 

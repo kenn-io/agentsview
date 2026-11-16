@@ -68,7 +68,7 @@ override GOFLAGS += -trimpath
 endif
 export GOFLAGS
 
-.PHONY: build build-release homebrew install install-cjk-fts simple-fts frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short test-evalingest bench-backends bench-gate bench-gate-config bench-pg-usage test-postgres test-postgres-ci test-postgres-raw-sync-ci test-postgres-core-ci test-postgres-core-fast-ci test-postgres-core-heavy-ci test-s3 postgres-up postgres-down test-clickhouse test-clickhouse-ci clickhouse-up clickhouse-down e2e e2e-duckdb memory-e2e vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir pricing-snapshot sqlite-vec-header dev-snapshot help
+.PHONY: build build-release homebrew install install-cjk-fts simple-fts frontend frontend-dev dev check-air air-install desktop-dev desktop-build desktop-macos-app desktop-macos-dmg desktop-windows-installer desktop-linux-appimage desktop-app docs-install docs-build docs-serve docs-check docs-screenshots docs-assets-branch docs-generated-assets-branch docs-deploy-staging docs-deploy test test-short test-api-version test-evalingest bench-backends bench-gate bench-gate-config bench-pg-usage test-postgres test-postgres-ci test-postgres-raw-sync-ci test-postgres-core-ci test-postgres-core-fast-ci test-postgres-core-heavy-ci test-s3 postgres-up postgres-down test-clickhouse test-clickhouse-ci clickhouse-up clickhouse-down e2e e2e-duckdb memory-e2e vet lint lint-ci lint-golangci lint-golangci-ci nilaway nilaway-golangci-build lint-tools tidy clean release release-darwin-arm64 release-darwin-amd64 release-linux-amd64 install-hooks ensure-embed-dir pricing-snapshot sqlite-vec-header dev-snapshot help
 
 # Ensure go:embed has at least one file (no-op if frontend is built)
 ensure-embed-dir:
@@ -364,6 +364,11 @@ PERF_SIM_FLAGS ?=
 perf-sim: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 go run -buildvcs=true -tags fts5 ./cmd/perfsim $(PERF_SIM_FLAGS)
 
+# Check that the generated OpenAPI contract matches its API version record
+test-api-version: pricing-snapshot ensure-embed-dir
+	@base="$${API_VERSION_BASE:-}"; if [ -z "$$base" ]; then base=$$(git merge-base HEAD origin/main) || exit 1; fi; \
+	API_VERSION_BASE="$$base" go test -tags "fts5" ./cmd/agentsview -run '^(TestAPIVersionContract|TestCheckAPIVersionContract|TestLoadAPIVersionRecords|TestOpenAPIProsePreservesSchemaValues|TestBaseAPIVersionRecords)$$' -v
+
 # Run fast tests only
 test-short: pricing-snapshot ensure-embed-dir
 	go test $(GO_TEST_P_FLAG) -tags "fts5" ./... -short
@@ -399,6 +404,7 @@ bench-backends: pricing-snapshot ensure-embed-dir
 # run this target before and after a change, then compare the outputs with
 # `go run ./cmd/benchgate -old old.txt -new new.txt`.
 BENCH_GATE_PACKAGES ?= ./internal/sync ./internal/db ./internal/secrets \
+	./internal/requestsign \
 	./internal/signals ./internal/rawcheckpoint
 # Count must stay >= 5: benchgate's time gate needs at least 5
 # candidate samples for its significance test. Every -count run
@@ -476,8 +482,12 @@ test-postgres-raw-sync-ci: pricing-snapshot ensure-embed-dir
 test-postgres-core-ci:
 	$(MAKE) -j1 test-postgres-core-fast-ci test-postgres-core-heavy-ci
 
-# Each process gets its own database because tests drop schemas that own
-# database-wide extensions. Activity runs afterward on the original database.
+.PHONY: test-postgres-standby-ci
+test-postgres-standby-ci: pricing-snapshot ensure-embed-dir
+	CGO_ENABLED=1 go test -tags "fts5,pgtest" ./internal/postgres -run '^TestUsageStandbyRetainsResults$$' -count=1 -timeout=5m
+
+# Three processes split the internal/postgres tests and run them in parallel,
+# each test in its own database. Activity runs afterward on the original database.
 test-postgres-core-fast-ci: pricing-snapshot ensure-embed-dir
 	CGO_ENABLED=1 bash scripts/test-postgres-shards.sh postgres-core-fast ./internal/postgres 3 '$(POSTGRES_CORE_HEAVY_TEST)' 20m
 	CGO_ENABLED=1 $(call gotestsum,postgres-core-fast-activity,./internal/activity/...) -p 1 -tags "fts5,pgtest" -count=1 -timeout=20m
@@ -699,8 +709,14 @@ docs-preview:
 docs-check:
 	bash scripts/check-docs.sh
 
+# With DOCS_SCREENSHOTS_OUTPUT and DOCS_SCREENSHOTS_CORPUS set, capture this
+# commit and write the docs-generated-assets tree and website preview there.
 docs-screenshots:
+ifdef DOCS_SCREENSHOTS_OUTPUT
+	bash docs/screenshots/capture-commit.sh
+else
 	bash docs/screenshots/run.sh
+endif
 
 docs-assets-branch:
 	bash docs/assets/update-static-assets-branch.sh

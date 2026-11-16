@@ -1,6 +1,9 @@
 <script lang="ts">
-  import { EmptyState } from "@kenn-io/kit-ui";
+  import { EmptyState, showFlash } from "@kenn-io/kit-ui";
   import LibraryPageHeader from "../shared/LibraryPageHeader.svelte";
+  import LoadError from "../shared/LoadError.svelte";
+  import LoadingState from "../shared/LoadingState.svelte";
+  import { failureMessage } from "../../utils/failure.js";
   import { m } from "../../i18n/index.js";
   import { TrashIcon } from "../../icons.js";
   import { onDestroy, onMount } from "svelte";
@@ -15,6 +18,7 @@
   import { LatestRead } from "../../utils/latest-read.js";
   let trashedSessions: Session[] = $state([]);
   let loading = $state(true);
+  let loadError: string | null = $state(null);
   let emptying = $state(false);
   const trashRead = new LatestRead();
 
@@ -25,13 +29,14 @@
   async function loadTrash() {
     const signal = trashRead.begin();
     loading = true;
+    loadError = null;
     try {
       const res = await SessionsService.getApiV1Trash({ signal });
       if (!trashRead.isCurrent(signal)) return;
       trashedSessions = res.sessions ?? [];
     } catch (e) {
       if (isAbortError(e) || !trashRead.isCurrent(signal)) return;
-      // Silently ignore — page will show empty state.
+      loadError = failureMessage(e);
     } finally {
       if (trashRead.finish(signal)) loading = false;
     }
@@ -46,8 +51,8 @@
       sessions.clearRecentlyDeleted(id);
       sessions.invalidateFilterCaches();
       sessions.load();
-    } catch {
-      // silently fail
+    } catch (e) {
+      showFlash(failureMessage(e), { tone: "danger" });
     }
   }
 
@@ -57,8 +62,8 @@
       trashedSessions = trashedSessions.filter((s) => s.id !== id);
       sessions.clearRecentlyDeleted(id);
       sessions.invalidateFilterCaches();
-    } catch {
-      // silently fail
+    } catch (e) {
+      showFlash(failureMessage(e), { tone: "danger" });
     }
   }
 
@@ -69,8 +74,8 @@
       trashedSessions = [];
       sessions.clearRecentlyDeleted();
       sessions.invalidateFilterCaches();
-    } catch {
-      // Silently ignore — button resets to allow retry.
+    } catch (e) {
+      showFlash(failureMessage(e), { tone: "danger" });
     } finally {
       emptying = false;
     }
@@ -103,8 +108,10 @@
       {/if}
     {/snippet}
   </LibraryPageHeader>
-  {#if loading}
-    <div class="loading-state">{m.trash_loading()}</div>
+  {#if loadError && trashedSessions.length === 0}
+    <LoadError message={loadError} onRetry={loadTrash} />
+  {:else if loading && trashedSessions.length === 0}
+    <LoadingState label={m.trash_loading()} />
   {:else if trashedSessions.length === 0}
     <EmptyState align="top" title={m.trash_empty()} description={m.trash_empty_desc()}>
       {#snippet icon()}
@@ -112,7 +119,9 @@
       {/snippet}
     </EmptyState>
   {:else}
-
+    {#if loadError}
+      <LoadError message={loadError} onRetry={loadTrash} />
+    {/if}
     <div class="trash-list">
       {#each trashedSessions as session (session.id)}
         <div class="trash-card">
@@ -180,13 +189,6 @@
 
   .empty-all-btn:hover:not(:disabled) {
     background: color-mix(in srgb, var(--accent-red, #e55) 8%, transparent);
-  }
-
-  .loading-state {
-    text-align: center;
-    color: var(--text-muted);
-    padding: 40px 0;
-    font-size: 13px;
   }
 
   .trash-list {

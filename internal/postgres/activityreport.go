@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sort"
 	"time"
+	"unique"
 
 	"github.com/jackc/pgx/v5"
 	"go.kenn.io/agentsview/internal/activity"
@@ -362,9 +363,10 @@ func (s *Store) GetSessionUsageRows(
 		if costRow.cost.Valid {
 			costSource = export.CostSourceReported
 		}
+		recorded, _ := db.RecordedRowCost(r.cost, r.costStatus, costRow.cost)
 		return activity.UsagePrice{
 			Cost: cost, CostSource: costSource, SessionCost: sessionCost,
-			Priced: priced, Contributes: contributes,
+			RecordedCost: recorded, Priced: priced, Contributes: contributes,
 		}, nil
 	})
 }
@@ -566,7 +568,9 @@ func (s *Store) readActivityCandidates(
 			SELECT ot.*, next_message.ordinal AS next_message_ordinal,
 				next_message.timestamp AS next_message_timestamp,
 				next_message.role AS next_message_role,
-				next_message.model AS next_message_model
+				next_message.model AS next_message_model,
+				ot.next_terminal_timestamp IS NOT NULL AND (next_message.timestamp IS NULL OR
+					ot.next_terminal_timestamp < next_message.timestamp) AS tool_closes
 			FROM ordered_terminal ot
 			LEFT JOIN LATERAL (
 				SELECT next.ordinal, next.timestamp, next.role, next.model
@@ -601,35 +605,11 @@ func (s *Store) readActivityCandidates(
 			WHERE te.timestamp > lm.timestamp
 		), candidates AS (
 			SELECT twm.session_id, twm.ordinal AS start_ordinal,
-				CASE
-					WHEN twm.next_terminal_timestamp IS NOT NULL AND
-						(twm.next_message_timestamp IS NULL OR
-						 twm.next_terminal_timestamp < twm.next_message_timestamp)
-					THEN twm.next_terminal_ordinal
-					ELSE twm.next_message_ordinal
-				END AS end_ordinal,
+				CASE WHEN twm.tool_closes THEN twm.next_terminal_ordinal ELSE twm.next_message_ordinal END AS end_ordinal,
 				twm.timestamp AS start_timestamp,
-				CASE
-					WHEN twm.next_terminal_timestamp IS NOT NULL AND
-						(twm.next_message_timestamp IS NULL OR
-						 twm.next_terminal_timestamp < twm.next_message_timestamp)
-					THEN twm.next_terminal_timestamp
-					ELSE twm.next_message_timestamp
-				END AS end_timestamp,
-				CASE
-					WHEN twm.next_terminal_timestamp IS NOT NULL AND
-						(twm.next_message_timestamp IS NULL OR
-						 twm.next_terminal_timestamp < twm.next_message_timestamp)
-					THEN 'tool'
-					ELSE twm.next_message_role
-				END AS closing_role,
-				CASE
-					WHEN twm.next_terminal_timestamp IS NOT NULL AND
-						(twm.next_message_timestamp IS NULL OR
-						 twm.next_terminal_timestamp < twm.next_message_timestamp)
-					THEN ''
-					ELSE twm.next_message_model
-				END AS closing_model,
+				CASE WHEN twm.tool_closes THEN twm.next_terminal_timestamp ELSE twm.next_message_timestamp END AS end_timestamp,
+				CASE WHEN twm.tool_closes THEN 'tool' ELSE twm.next_message_role END AS closing_role,
+				CASE WHEN twm.tool_closes THEN '' ELSE twm.next_message_model END AS closing_model,
 				twm.call_index, twm.event_index
 			FROM terminal_with_message twm
 
@@ -772,73 +752,59 @@ func (s *Store) activityReportUsage(
 		return out, &block, nil
 	}
 
-	type ordered struct {
-		row     activity.UsageRow
-		scan    pgActivityUsageRow
-		us      int64
-		ordinal int64
+	if inputs != nil && inputs.priced != nil && inputs.priced.covers(q, pricingDigest) {
+		return pgAssembleActivityUsage(raw, inputs.priced.rows), inputs.priced.block, nil
 	}
-	rowsAcc := make([]ordered, 0, len(raw))
-	for _, r := range raw {
+	saved := &pgActivityPriced{rangeStart: q.RangeStart, rangeEnd: q.RangeEnd, effectiveEnd: q.EffectiveEnd, pricingDigest: pricingDigest}
+	order := make([]int, len(raw))
+	for i, r := range raw {
+		order[i] = i
+		at := time.UnixMicro(r.us).UTC()
+		if !at.Before(q.EffectiveEnd) && at.Before(q.RangeEnd) && (saved.next.IsZero() || at.Before(saved.next)) {
+			saved.next = at
+		}
 		if read != nil {
 			read[r.sessionID.Value()] = struct{}{}
 		}
-		ord := int64(-1)
-		if r.ordinalValid {
-			ord = int64(r.ordinal)
-		}
-		rowsAcc = append(rowsAcc, ordered{
-			us:      r.us,
-			ordinal: ord,
-			scan:    r,
-			row: activity.UsageRow{
-				SessionID:       r.sessionID.Value(),
-				Model:           r.model.Value(),
-				Timestamp:       FormatISO8601(time.UnixMicro(r.us).UTC()),
-				Agent:           r.agent.Value(),
-				ProviderID:      r.providerID.Value(),
-				ClaudeMessageID: r.claudeMessageID,
-				ClaudeRequestID: r.claudeRequestID,
-				SourceUUID:      r.sourceUUID,
-				UsageDedupKey:   r.usageDedupKey,
-			},
-		})
 	}
-
-	sort.SliceStable(rowsAcc, func(i, j int) bool {
-		a, b := rowsAcc[i], rowsAcc[j]
+	sort.SliceStable(order, func(i, j int) bool {
+		a, b := raw[order[i]], raw[order[j]]
 		if a.us != b.us {
 			return a.us < b.us
 		}
-		if a.row.SessionID != b.row.SessionID {
-			return a.row.SessionID < b.row.SessionID
+		if a.sessionID != b.sessionID {
+			return a.sessionID.Value() < b.sessionID.Value()
 		}
-		return a.ordinal < b.ordinal
+		ao, bo := int64(-1), int64(-1)
+		if a.ordinalValid {
+			ao = int64(a.ordinal)
+		}
+		if b.ordinalValid {
+			bo = int64(b.ordinal)
+		}
+		return ao < bo
 	})
-	baseRows := make([]activity.UsageRow, len(rowsAcc))
-	for i, o := range rowsAcc {
-		row := o.row
-		row.InputTokens, row.OutputTokens = int(o.scan.input), int(o.scan.output)
-		row.WebSearchRequests = int(o.scan.webSearches)
-		baseRows[i] = row
+	selection := make([]activity.UsageSelectionRow, len(order))
+	for i, index := range order {
+		r := raw[index]
+		selection[i] = activity.UsageSelectionRow{SessionID: r.sessionID.Value(), Timestamp: time.UnixMicro(r.us).UTC(), TimestampValid: true, OutputTokens: int(r.output), WebSearchRequests: int(r.webSearches), Agent: r.agent.Value(), ClaudeMessageID: r.claudeMessageID, ClaudeRequestID: r.claudeRequestID, SourceUUID: r.sourceUUID, UsageDedupKey: r.usageDedupKey}
 	}
-	mask, attribution, webSearchRequests, err := activity.UsageSurvivorSelectionForSessions(
-		ctx, q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows, ids,
-	)
+	mask, attribution, webSearchRequests, err := activity.SelectUsageSurvivorsForSessions(ctx, q.RangeStart, q.RangeEnd, q.EffectiveEnd, selection, ids)
 	if err != nil {
 		return nil, nil, err
 	}
-	out = make([]activity.UsageRow, 0, len(rowsAcc))
-	for i, o := range rowsAcc {
+	if inputs != nil {
+		saved.rows = make([]pgActivityPricedRow, 0, len(order))
+	} else {
+		out = make([]activity.UsageRow, 0, len(order))
+	}
+	for i, index := range order {
+		r := raw[index] //nolint:nilaway // order contains only indices from raw.
 		if !mask[i] {
 			continue
 		}
-		inputTok, outputTok := int(o.scan.input), int(o.scan.output)
-		costRow := o.scan
-		var sessionCost *money.Money
-		if o.scan.copilotReported && o.scan.costValid {
-			v := money.Money{Microdollars: o.scan.cost}
-			sessionCost = &v
+		costRow := r
+		if r.copilotReported && r.costValid {
 			costRow.costValid = false
 			rateResolver.RecordUnattributedReported()
 		}
@@ -856,27 +822,52 @@ func (s *Store) activityReportUsage(
 		if priceErr != nil {
 			return nil, nil, priceErr
 		}
-		costSource := export.CostSourceComputed
-		if costRow.costValid {
-			costSource = export.CostSourceReported
+		p := pgActivityPricedRow{
+			index: int32(index), attribution: unique.Make(attribution[i]), cost: cost.Microdollars,
+			webSearches: int32(webSearchRequests[i]), reported: costRow.costValid,
+			sessionCost: r.copilotReported && r.costValid, priced: priced, contributes: contributes,
 		}
-		row := o.row
-		row.SessionID = attribution[i]
-		row.InputTokens = inputTok
-		row.OutputTokens = outputTok
-		row.WebSearchRequests = webSearchRequests[i]
-		row.Cost = cost
-		row.CostSource = costSource
-		row.SessionCost = sessionCost
-		row.Priced = priced
-		row.Contributes = contributes
-		out = append(out, row)
+		if inputs != nil {
+			saved.rows = append(saved.rows, p)
+		} else {
+			out = append(out, pgAssembleActivityUsageRow(&raw[index], p))
+		}
 	}
 	block, err := rateResolver.BuildBlock()
 	if err != nil {
 		return nil, nil, fmt.Errorf("building pricing block: %w", err)
 	}
-	return out, &block, nil
+	saved.block = &block
+	if inputs != nil {
+		inputs.priced = saved
+		out = pgAssembleActivityUsage(raw, saved.rows)
+	}
+	return out, saved.block, nil
+}
+
+func pgAssembleActivityUsage(raw []pgActivityUsageRow, priced []pgActivityPricedRow) []activity.UsageRow {
+	out := make([]activity.UsageRow, 0, len(priced))
+	for _, p := range priced {
+		out = append(out, pgAssembleActivityUsageRow(&raw[p.index], p))
+	}
+	return out
+}
+
+func pgAssembleActivityUsageRow(r *pgActivityUsageRow, p pgActivityPricedRow) activity.UsageRow {
+	source := export.CostSourceComputed
+	if p.reported {
+		source = export.CostSourceReported
+	}
+	var sessionCost *money.Money
+	if p.sessionCost {
+		sessionCost = &money.Money{Microdollars: r.cost}
+	}
+	row := activity.UsageRow{SessionID: p.attribution.Value(), Model: r.model.Value(), Timestamp: FormatISO8601(time.UnixMicro(r.us).UTC()), Agent: r.agent.Value(), ProviderID: r.providerID.Value(), ClaudeMessageID: r.claudeMessageID, ClaudeRequestID: r.claudeRequestID, SourceUUID: r.sourceUUID, UsageDedupKey: r.usageDedupKey}
+	row.InputTokens, row.OutputTokens = int(r.input), int(r.output)
+	row.WebSearchRequests = int(p.webSearches)
+	row.Cost, row.CostSource, row.SessionCost = money.Money{Microdollars: p.cost}, source, sessionCost
+	row.Priced, row.Contributes = p.priced, p.contributes
+	return row
 }
 
 func pgActivityReportRowStatusWithWebSearchRequests(

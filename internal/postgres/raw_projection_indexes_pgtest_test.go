@@ -14,6 +14,7 @@ import (
 )
 
 func TestRawProjectionProofLookupsStayBounded(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, receipt := f.accept(t, "device-a", "indexed-a", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("indexed")))

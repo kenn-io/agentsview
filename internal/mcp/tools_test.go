@@ -699,6 +699,17 @@ func TestSearchContent_SubstringMatch(t *testing.T) {
 	assert.Equal(t, "s1", out.Matches[0].SessionID)
 }
 
+func TestSearchContent_ReportsMatchedWords(t *testing.T) {
+	fake := &fakeContentSearchService{result: &service.ContentSearchResult{
+		Matches: []db.ContentMatch{{MatchedWords: 2}},
+	}}
+	ts := &toolset{svc: fake}
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "invoice rounding decision", IncludeActive: true})
+	require.NoError(t, err)
+	require.Len(t, out.Matches, 1)
+	assert.Equal(t, 2, out.Matches[0].MatchedWords)
+}
+
 // TestSearchContent_ContextRedactsSecretByDefault verifies that a secret in
 // a message adjacent to a search match comes back redacted in
 // context_before through the real service (not a fake), proving the MCP
@@ -1283,8 +1294,8 @@ func TestServer_EndToEnd(t *testing.T) {
 		names = append(names, tl.Name)
 	}
 	assert.ElementsMatch(t, []string{
-		ToolSearchSessions, ToolQueryRecall, ToolListSessions, ToolGetSessionOverview,
-		ToolGetMessages, ToolGetMemoryStatus, ToolSearchContent, ToolGetUsageSummary, ToolGetSessionUsage,
+		ToolSearchSessions, ToolQueryRecall, ToolListRecall, ToolListSessions, ToolGetSessionOverview,
+		ToolGetMessages, ToolGetCompactionSummaries, ToolGetMemoryStatus, ToolSearchContent, ToolGetUsageSummary, ToolGetSessionUsage,
 		ToolGetToolCalls, ToolGetRecentEdits, ToolGetChildSessions, ToolCompareUsage,
 		ToolGetActivityReport, ToolGetToolUsage, ToolGetQualitySignals, ToolSearchDocs,
 		ToolGetFrictionDigest, ToolListFrictionPatterns,
@@ -1712,12 +1723,12 @@ func TestGetMessages_AroundValidation(t *testing.T) {
 		{
 			name:    "around with direction rejected",
 			in:      getMessagesIn{SessionID: "s1", Around: &anchor, Direction: "desc"},
-			wantErr: "around is mutually exclusive with from/direction",
+			wantErr: "around is mutually exclusive with from/direction/compact_boundary",
 		},
 		{
 			name:    "around with from rejected",
 			in:      getMessagesIn{SessionID: "s1", Around: &anchor, From: &from},
-			wantErr: "around is mutually exclusive with from/direction",
+			wantErr: "around is mutually exclusive with from/direction/compact_boundary",
 		},
 		{
 			name:    "before without around rejected",
@@ -2113,9 +2124,11 @@ func TestSearchContent_LexicalChildScope(t *testing.T) {
 	svc := servicehttp.NewHTTPBackend(httpServer.URL, "", false, "")
 	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: svc}))
 	defer func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) }()
-	for _, mode := range []string{"", "regex"} {
+	// Quotes keep the default search to the exact text instead of every
+	// message holding its words.
+	for _, tc := range []struct{ mode, pattern string }{{"", `"a-child first prompt"`}, {"regex", "a-child first prompt"}} {
 		result, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, map[string]any{
-			"pattern": "a-child first prompt", "mode": mode, "include_active": true,
+			"pattern": tc.pattern, "mode": tc.mode, "include_active": true,
 		}))
 		require.NoError(t, err)
 		require.False(t, result.IsError)
@@ -2134,4 +2147,59 @@ func TestSearchContent_HybridKeywordFallbackMetadata(t *testing.T) {
 	assert.True(t, fake.lastReq.KeywordFallback)
 	assert.Equal(t, "hybrid_keyword", out.EffectiveMode)
 	assert.Equal(t, note, out.Note)
+}
+
+func TestListRecallPagesWithEvidenceAndSourceSessionFilter(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	dbtest.SeedSession(t, d, "s1", "project")
+	dbtest.SeedSession(t, d, "s2", "project")
+	for _, id := range []string{"a", "b"} {
+		_, err := d.InsertRecallEntry(t.Context(), db.RecallEntry{
+			ID: id, Type: "fact", Scope: "project", Status: "archived", Title: id, Body: id,
+			SourceSessionID: "s1", SourceRunID: "generation", Evidence: []db.RecallEvidence{{SessionID: "s1", MessageStartOrdinal: 1, MessageEndOrdinal: 2, Snippet: "evidence"}},
+		})
+		require.NoError(t, err)
+	}
+	srv := newServer(ServeOptions{Service: service.NewDirectBackend(d, nil)})
+	st, ct := newInMemoryPair(t, srv)
+	t.Cleanup(func() { require.NoError(t, ct.Close()); require.NoError(t, st.Wait()) })
+	res, err := ct.CallTool(t.Context(), callParams("list_recall", map[string]any{"limit": 1, "updated_since": "2020-01-01T00:00:00Z"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+	var out listRecallOut
+	raw, err := json.Marshal(res.StructuredContent)
+	require.NoError(t, err)
+	assert.NotRegexp(t, `"score(_breakdown)?"\s*:`, string(raw))
+	require.NoError(t, json.Unmarshal(raw, &out))
+	require.Len(t, out.Entries, 1)
+	assert.Equal(t, "archived", out.Entries[0].Status)
+	assert.NotEmpty(t, out.Entries[0].ReviewState)
+	assert.Equal(t, "generation", out.Entries[0].SourceRunID)
+	require.Len(t, out.Entries[0].Evidence, 1)
+	require.NotEmpty(t, out.NextCursor)
+	res, err = ct.CallTool(t.Context(), callParams("list_recall", map[string]any{"limit": 1, "updated_since": "2020-01-01T00:00:00Z", "cursor": out.NextCursor}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+	var next listRecallOut
+	raw, err = json.Marshal(res.StructuredContent)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(raw, &next))
+	require.Len(t, next.Entries, 1)
+	assert.NotEqual(t, out.Entries[0].ID, next.Entries[0].ID)
+	_, err = d.InsertRecallEntry(t.Context(), db.RecallEntry{
+		ID: "c", Type: "fact", Scope: "project", Status: "accepted",
+		Title: "c", Body: "c", SourceSessionID: "s2",
+	})
+	require.NoError(t, err)
+	_, err = d.InsertRecallEntry(t.Context(), db.RecallEntry{
+		ID: "d", Type: "fact", Scope: "project", Status: "accepted",
+		Title: "d", Body: "d", SourceSessionID: "s1",
+	})
+	require.NoError(t, err)
+	res, err = ct.CallTool(t.Context(), callParams("list_recall", map[string]any{"source_session_id": "s2"}))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+	filtered := decodeStructured[listRecallOut](t, res)
+	require.Len(t, filtered.Entries, 1)
+	assert.Equal(t, "s2", filtered.Entries[0].SourceSessionID)
 }
