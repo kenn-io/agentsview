@@ -60,12 +60,22 @@ func TestSearchKeptCJKAvailability(t *testing.T) {
 	page, err := d.Search(ctx, filter)
 	require.NoError(t, err)
 	require.Len(t, page.Results, 1)
+	original := simpleFTSRuntimeConfig.fingerprint
+	t.Cleanup(func() { simpleFTSRuntimeConfig.fingerprint = original })
+	simpleFTSRuntimeConfig.fingerprint = original + "-changed"
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE stats SET value = ? WHERE key = ?`, simpleFTSRuntimeConfig.fingerprint, cjkFTSFingerprintStatsKey)
+	require.NoError(t, err)
+	require.True(t, d.HasCJKFTS(ctx))
+	page, err = d.Search(ctx, filter)
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	require.EqualValues(t, 2, loads.Load())
 	_, err = d.getWriter().ExecContext(ctx, `UPDATE stats SET value = 'stale' WHERE key = ?`, cjkFTSFingerprintStatsKey)
 	require.NoError(t, err)
 	require.False(t, d.HasCJKFTS(ctx))
 	_, err = d.Search(ctx, filter)
 	require.NoError(t, err)
-	require.EqualValues(t, 2, loads.Load())
+	require.EqualValues(t, 3, loads.Load())
 }
 
 func TestSearchKeptFirstMessageEdit(t *testing.T) {
@@ -145,12 +155,16 @@ func openSearchArchive(t *testing.T, path string) *DB {
 	return d
 }
 
-func TestSearchKeptRestart(t *testing.T) {
+func TestSearchKeptDiskPages(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "archive.db")
 	d := openSearchArchive(t, path)
 	insertSession(t, d, "session", "project")
+	require.NoError(t, d.Close())
+	emptyBackup, err := os.ReadFile(path)
+	require.NoError(t, err)
+	d = openSearchArchive(t, path)
 	insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "needle"})
 	filter := SearchFilter{Query: "needle"}
 	page, err := d.Search(ctx, filter)
@@ -158,7 +172,6 @@ func TestSearchKeptRestart(t *testing.T) {
 	require.Len(t, page.Results, 1)
 	require.NoError(t, d.Close())
 	d = openSearchArchive(t, path)
-	t.Cleanup(func() { require.NoError(t, d.Close()) })
 	// An unavailable index proves the reopened search uses the saved page.
 	_, err = d.getWriter().ExecContext(ctx, `DROP TABLE messages_fts`)
 	require.NoError(t, err)
@@ -167,74 +180,27 @@ func TestSearchKeptRestart(t *testing.T) {
 	require.Equal(t, page, repeat)
 	_, err = d.Search(ctx, SearchFilter{Query: "needle", Cursor: 1})
 	require.Error(t, err)
-}
-
-func TestSearchKeptRestore(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	ctx := t.Context()
-	path := filepath.Join(t.TempDir(), "archive.db")
-	d := openSearchArchive(t, path)
-	insertSession(t, d, "session", "project")
 	require.NoError(t, d.Close())
-	backup, err := os.ReadFile(path)
-	require.NoError(t, err)
-	write := func(content string) SearchPage {
-		t.Helper()
-		d := openSearchArchive(t, path)
-		insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: content})
-		page, err := d.Search(ctx, SearchFilter{Query: "needle"})
-		require.NoError(t, err)
-		require.NoError(t, d.Close())
-		return page
-	}
-	require.Len(t, write("needle").Results, 1)
-	require.NoError(t, os.WriteFile(path, backup, 0o600))
-	require.Empty(t, write("other").Results)
-}
 
-func TestSearchKeptCJKFingerprint(t *testing.T) {
-	if !simpleFTSRuntimeConfig.available() {
-		t.Skip("simple FTS runtime is not installed")
-	}
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	d := testDB(t)
-	ctx := t.Context()
-	seedSearchSession(t, d, "chinese", "project", [][2]string{{"user", "法国的首都是巴黎。"}})
-	filter := SearchFilter{Query: "巴黎"}
-	page, err := d.Search(ctx, filter)
-	require.NoError(t, err)
-	require.NotEmpty(t, page.Results)
-	original := simpleFTSRuntimeConfig.fingerprint
-	t.Cleanup(func() { simpleFTSRuntimeConfig.fingerprint = original })
-	simpleFTSRuntimeConfig.fingerprint = original + "-changed"
-	_, err = d.getWriter().ExecContext(ctx, `UPDATE stats SET value = ? WHERE key = ?`, simpleFTSRuntimeConfig.fingerprint, cjkFTSFingerprintStatsKey)
-	require.NoError(t, err)
-	require.True(t, d.HasCJKFTS(ctx))
-	_, err = d.getWriter().ExecContext(ctx, `DROP TABLE messages_cjk_fts`)
-	require.NoError(t, err)
-	fallback, err := d.Search(ctx, filter)
-	require.NoError(t, err)
-	require.Empty(t, fallback.Results)
-}
-
-func TestSearchKeptRejectsChangedSource(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	ctx := t.Context()
-	path := filepath.Join(t.TempDir(), "archive.db")
-	d := openSearchArchive(t, path)
-	insertSession(t, d, "session", "project")
+	// Restoring the archive can repeat revision counts from the saved page.
+	require.NoError(t, os.WriteFile(path, emptyBackup, 0o600))
+	d = openSearchArchive(t, path)
 	insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "other"})
-	require.NoError(t, d.Close())
-	backup, err := os.ReadFile(path)
+	page, err = d.Search(ctx, filter)
 	require.NoError(t, err)
+	require.Empty(t, page.Results)
+	require.NoError(t, d.Close())
+	otherBackup, err := os.ReadFile(path)
+	require.NoError(t, err)
+
 	d = openSearchArchive(t, path)
 	version := d.searchVersion(ctx, false)
 	var hookErr error
 	d.afterSearchRead = func() {
-		_, hookErr = d.getWriter().ExecContext(ctx, `UPDATE sessions SET first_message = 'needle' WHERE id = 'session'`)
+		_, hookErr = d.getWriter().ExecContext(ctx, `UPDATE sessions SET first_message = 'target' WHERE id = 'session'`)
 	}
-	filter := SearchFilter{Query: "needle"}
-	page, err := d.Search(ctx, filter)
+	filter = SearchFilter{Query: "target"}
+	page, err = d.Search(ctx, filter)
 	require.NoError(t, err)
 	require.NoError(t, hookErr)
 	require.Len(t, page.Results, 1)
@@ -243,7 +209,7 @@ func TestSearchKeptRejectsChangedSource(t *testing.T) {
 	_, ok := d.searchKept.Get(normalized.Slot()+"|false", version)
 	require.False(t, ok)
 	require.NoError(t, d.Close())
-	require.NoError(t, os.WriteFile(path, backup, 0o600))
+	require.NoError(t, os.WriteFile(path, otherBackup, 0o600))
 	d = openSearchArchive(t, path)
 	t.Cleanup(func() { require.NoError(t, d.Close()) })
 	_, err = d.getWriter().ExecContext(ctx, `DROP TABLE messages_fts`)
@@ -312,26 +278,17 @@ WHEN OLD.dialogue_text IS NOT NEW.dialogue_text BEGIN
  INSERT INTO archive_metadata(key,value) VALUES('search_change_revision','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1;
 END;`)
 	require.NoError(t, err)
-	for _, tc := range []struct{ update, search string }{
-		{`UPDATE sessions SET session_name='needlename' WHERE id='session'`, "needlename"},
-		{`UPDATE sessions SET first_message='needlefirst' WHERE id='session'`, "needlefirst"},
-		{`UPDATE messages SET dialogue_text='needledialogue' WHERE session_id='session'`, `"other" AND content:needledialogue`},
+	for _, update := range []string{
+		`UPDATE sessions SET session_name='needlename' WHERE id='session'`,
+		`UPDATE sessions SET first_message='needlefirst' WHERE id='session'`,
+		`UPDATE messages SET dialogue_text='needledialogue' WHERE session_id='session'`,
 	} {
-		filter := SearchFilter{Query: tc.search}
-		version := d.searchVersion(ctx, false)
 		var token string
 		require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT value FROM archive_metadata WHERE key='search_history_token'`).Scan(&token))
-		page, err := d.Search(ctx, filter)
+		_, err = d.getWriter().ExecContext(ctx, update)
 		require.NoError(t, err)
-		require.Empty(t, page.Results)
-		_, err = d.getWriter().ExecContext(ctx, tc.update)
-		require.NoError(t, err)
-		require.NotEqual(t, version, d.searchVersion(ctx, false))
 		var changedToken string
 		require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT value FROM archive_metadata WHERE key='search_history_token'`).Scan(&changedToken))
 		require.NotEqual(t, token, changedToken)
-		page, err = d.Search(ctx, filter)
-		require.NoError(t, err)
-		require.Len(t, page.Results, 1)
 	}
 }

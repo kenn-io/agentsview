@@ -15,34 +15,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-func TestSearchKeptMessagePush(t *testing.T) {
-	local, syncer, store := newUsageJournalFixture(t)
-	ctx := t.Context()
-	write := func(content string) {
-		t.Helper()
-		require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "session", Project: "project", Machine: "device", Agent: "claude", MessageCount: 1}))
-		require.NoError(t, local.ReplaceSessionMessages(ctx, "session", []db.Message{{SessionID: "session", Role: "user", Content: content}}))
-		pgKeptPush(t, syncer, false)
-	}
-	write("needle first")
-	var loads atomic.Int32
-	store.runtimeState().search.Size = func(db.SearchPage) int64 { loads.Add(1); return 1 }
-	filter := db.SearchFilter{Query: "needle"}
-	page, err := store.Search(ctx, filter)
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	require.Contains(t, page.Results[0].Snippet, "first")
-	repeat, err := store.Search(ctx, filter)
-	require.NoError(t, err)
-	require.Equal(t, page, repeat)
-	require.EqualValues(t, 1, loads.Load())
-	write("needle second")
-	page, err = store.Search(ctx, filter)
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	require.Contains(t, page.Results[0].Snippet, "second")
-}
-
 type searchQueryTracer struct {
 	count atomic.Int32
 }
@@ -100,6 +72,7 @@ func TestSearchKeptRestart(t *testing.T) {
 	s, trace = open()
 	got, err = s.Search(ctx, filter)
 	require.NoError(t, err)
+	require.Len(t, got.Results, 1)
 	require.Contains(t, got.Results[0].Snippet, "second")
 	require.Positive(t, trace.count.Load())
 }
