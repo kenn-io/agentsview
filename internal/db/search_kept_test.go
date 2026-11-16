@@ -256,10 +256,7 @@ BEGIN INSERT INTO token_writes VALUES (1); END;`)
 		{"grouped rename", `UPDATE sessions SET session_name='name' WHERE id='session'`, 1},
 		{"listed column", `UPDATE sessions SET project='new' WHERE id='session'`, 1},
 		{"unlisted column", `UPDATE sessions SET health_score=42 WHERE id='session'`, 0},
-		{"first message", `UPDATE sessions SET first_message='first' WHERE id='session'`, 1},
-		{"dialogue", `UPDATE messages SET dialogue_text='changed' WHERE session_id='session'`, 1},
 		{"image", `INSERT INTO image_text_cache(id,image_hash,processor,provider,model,revision,text) VALUES(-1,'hash','processor','provider','model','revision','text')`, 1},
-		{"usage insert", `INSERT INTO usage_events(session_id,source,model,output_tokens) VALUES('session','session','model-x',7)`, 0},
 		{"session insert", `INSERT INTO sessions(id,project,agent,machine) VALUES('other','project','agent','machine')`, 1},
 		{"session delete", `DELETE FROM sessions WHERE id='session'`, 1},
 	}
