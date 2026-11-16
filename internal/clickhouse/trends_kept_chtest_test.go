@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -92,9 +93,11 @@ func TestTrendsKeptRestart(t *testing.T) {
 	var reports []db.TrendsTermsResponse
 	for _, zone := range []string{"UTC", "America/New_York"} {
 		f := db.AnalyticsFilter{Timezone: zone, From: "2026-01-01", To: "2026-01-31"}
+		beforePartsRead := trendPartsTextQueryCount(t, first)
 		want := read(first, f)
 		reports = append(reports, want)
-		require.Positive(t, trendPartsTextQueryCount(t, first))
+		afterPartsRead := trendPartsTextQueryCount(t, first)
+		require.Greater(t, afterPartsRead, beforePartsRead)
 		restarted := newTestStore(t, syncer.conn, syncer.target)
 		require.NoError(t, restarted.openActivityReportDisk(syncer.target))
 		before := trendPartsTextQueryCount(t, restarted)
@@ -227,17 +230,26 @@ func TestTrendsKeptMemoryHitRepairsDiskVersion(t *testing.T) {
 	want := read(store)
 	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "clickhouse-usage", "*", "*.gob"))
 	require.NoError(t, err)
-	require.Len(t, files, 2)
-	old := time.Now().Add(-31 * 24 * time.Hour)
+	var reportFile string
 	for _, file := range files {
-		require.NoError(t, os.Chtimes(file, old, old))
+		saved, err := os.ReadFile(file)
+		require.NoError(t, err)
+		_, payload, ok := strings.Cut(string(saved), "\n")
+		if !ok {
+			continue
+		}
+		var persisted db.TrendsTermsResponse
+		if err := json.Unmarshal([]byte(payload), &persisted); err == nil && reflect.DeepEqual(want, persisted) {
+			require.Empty(t, reportFile)
+			reportFile = file
+		}
 	}
+	require.NotEmpty(t, reportFile)
+	old := time.Now().Add(-31 * 24 * time.Hour)
+	require.NoError(t, os.Chtimes(reportFile, old, old))
 	read(store)
 	store.usageDisk.Sweep(time.Now())
-	files, err = filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "clickhouse-usage", "*", "*.gob"))
-	require.NoError(t, err)
-	require.Len(t, files, 1)
-	saved, err := os.ReadFile(files[0])
+	saved, err := os.ReadFile(reportFile)
 	require.NoError(t, err)
 	_, payload, ok := strings.Cut(string(saved), "\n")
 	require.True(t, ok)
