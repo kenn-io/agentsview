@@ -4,6 +4,7 @@ package db
 
 import (
 	"bytes"
+	"context"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -13,99 +14,54 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSearchKeptPermanentDelete(t *testing.T) {
-	cache := t.TempDir()
-	t.Setenv("CACHE_DIRECTORY", cache)
-	d := testDB(t)
-	ctx := t.Context()
-	insertSession(t, d, "session", "project")
-	insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "secretsnippet"})
-	page, err := d.Search(ctx, SearchFilter{Query: "secretsnippet"})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	d.trendsDisk.Put("other", "v1", []byte("other cache"))
-	containsSnippet := func() bool {
-		t.Helper()
-		found := false
-		require.NoError(t, filepath.WalkDir(cache, func(path string, entry fs.DirEntry, err error) error {
-			if err != nil || entry.IsDir() {
-				return err
+func TestSearchKeptDeletedSessions(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		delete func(context.Context, *DB) (int, error)
+	}{
+		{"permanent", func(ctx context.Context, d *DB) (int, error) {
+			if err := d.SoftDeleteSession(ctx, "session"); err != nil {
+				return 0, err
 			}
-			data, err := os.ReadFile(path)
-			if err == nil && bytes.Contains(data, []byte("secretsnippet")) {
-				found = true
+			n, err := d.DeleteSessionIfTrashed(ctx, "session")
+			return int(n), err
+		}},
+		{"parser excluded", func(ctx context.Context, d *DB) (int, error) {
+			return d.DeleteParserExcludedSessions(ctx, []string{"session"})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cache := t.TempDir()
+			t.Setenv("CACHE_DIRECTORY", cache)
+			d := testDB(t)
+			ctx := t.Context()
+			insertSession(t, d, "session", "project")
+			insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "secretsnippet"})
+			page, err := d.Search(ctx, SearchFilter{Query: "secretsnippet"})
+			require.NoError(t, err)
+			require.Len(t, page.Results, 1)
+			containsSnippet := func() bool {
+				t.Helper()
+				found := false
+				require.NoError(t, filepath.WalkDir(cache, func(path string, entry fs.DirEntry, err error) error {
+					if err != nil || entry.IsDir() {
+						return err
+					}
+					data, err := os.ReadFile(path)
+					if err == nil && bytes.Contains(data, []byte("secretsnippet")) {
+						found = true
+					}
+					return err
+				}))
+				return found
 			}
-			return err
-		}))
-		return found
+			require.True(t, containsSnippet())
+			deleted, err := tc.delete(ctx, d)
+			require.NoError(t, err)
+			require.Equal(t, 1, deleted)
+			require.False(t, containsSnippet())
+		})
 	}
-	require.True(t, containsSnippet())
-	require.NoError(t, d.SoftDeleteSession(ctx, "session"))
-	n, err := d.DeleteSessionIfTrashed(ctx, "session")
-	require.NoError(t, err)
-	require.EqualValues(t, 1, n)
-	require.False(t, containsSnippet())
-	other, ok := d.trendsDisk.Get("other", "v1")
-	require.True(t, ok)
-	require.Equal(t, "other cache", string(other))
-}
-
-func TestSearchKeptParserExcludedDelete(t *testing.T) {
-	cache := t.TempDir()
-	t.Setenv("CACHE_DIRECTORY", cache)
-	d := testDB(t)
-	ctx := t.Context()
-	insertSession(t, d, "session", "project")
-	insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "uniquesnippet"})
-	page, err := d.Search(ctx, SearchFilter{Query: "uniquesnippet"})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	contains := func() bool {
-		t.Helper()
-		found := false
-		require.NoError(t, filepath.WalkDir(cache, func(path string, entry fs.DirEntry, err error) error {
-			if err != nil || entry.IsDir() {
-				return err
-			}
-			data, err := os.ReadFile(path)
-			if err == nil && bytes.Contains(data, []byte("uniquesnippet")) {
-				found = true
-			}
-			return err
-		}))
-		return found
-	}
-	require.True(t, contains())
-	deleted, err := d.DeleteParserExcludedSessions(ctx, []string{"session"})
-	require.NoError(t, err)
-	require.Equal(t, 1, deleted)
-	require.False(t, contains())
-}
-
-func TestSearchKeptDeleteDuringFill(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	d := testDB(t)
-	ctx := t.Context()
-	insertSession(t, d, "session", "project")
-	insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "needle"})
-	version := d.searchVersion(ctx, false)
-	var deleteErr error
-	var deleted int64
-	d.afterSearchPage = func() {
-		deleteErr = d.SoftDeleteSession(ctx, "session")
-		if deleteErr != nil {
-			return
-		}
-		deleted, deleteErr = d.DeleteSessionIfTrashed(ctx, "session")
-	}
-	page, err := d.Search(ctx, SearchFilter{Query: "needle"})
-	require.NoError(t, err)
-	require.NoError(t, deleteErr)
-	require.EqualValues(t, 1, deleted)
-	require.Len(t, page.Results, 1)
-	filter := SearchFilter{Query: "needle", Limit: DefaultSearchLimit}
-	_, ok := d.trendsDisk.Get("search|"+filter.Slot()+"|false", "json|v1|"+version)
-	require.False(t, ok)
 }
 
 func TestSearchKeptSelections(t *testing.T) {

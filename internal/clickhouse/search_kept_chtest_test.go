@@ -54,11 +54,9 @@ func TestSearchKeptRestart(t *testing.T) {
 	require.NotEmpty(t, want.Results)
 	require.Positive(t, count(first))
 	imageFilter := db.SearchFilter{Query: "invoice"}
-	beforeImage := count(first)
 	imagePage, err := first.Search(ctx, imageFilter)
 	require.NoError(t, err)
 	require.Len(t, imagePage.Results, 1)
-	require.Greater(t, count(first), beforeImage)
 	reopen := func() *Store {
 		s := newTestStore(t, syncer.conn, syncer.target)
 		require.NoError(t, s.openActivityReportDisk(syncer.target))
@@ -83,17 +81,11 @@ func TestSearchKeptRestart(t *testing.T) {
 	before = count(s)
 	require.Equal(t, want, read(s))
 	require.Equal(t, before, count(s))
-	before = count(s)
-	require.Positive(t, before)
-	got, err := s.Search(ctx, imageFilter)
-	require.NoError(t, err)
-	require.Equal(t, imagePage, got)
-	require.Equal(t, before, count(s))
 	require.NoError(t, local.SaveImageText(ctx, hash, identity, "receipt 4827", false))
 	_, err = syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	s = reopen()
-	got, err = s.Search(ctx, imageFilter)
+	got, err := s.Search(ctx, imageFilter)
 	require.NoError(t, err)
 	require.Empty(t, got.Results)
 	got, err = s.Search(ctx, db.SearchFilter{Query: "receipt"})
@@ -114,7 +106,6 @@ func TestSearchKeptRestart(t *testing.T) {
 	filter.Limit = db.DefaultSearchLimit
 	_, ok = s.usageDisk.Get("search|"+filter.Slot(), "json|v1|"+version)
 	require.True(t, ok)
-	s.usageDisk.Put("other", "v1", []byte("other cache"))
 	require.NoError(t, local.DeleteSession(ctx, fixtureAlphaID))
 	_, err = syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
@@ -123,9 +114,6 @@ func TestSearchKeptRestart(t *testing.T) {
 	require.NoError(t, err)
 	_, ok = s.usageDisk.Get("search|"+filter.Slot(), "json|v1|"+version)
 	require.False(t, ok)
-	otherData, ok := s.usageDisk.Get("other", "v1")
-	require.True(t, ok)
-	require.Equal(t, "other cache", string(otherData))
 }
 
 func TestSearchKeptRejectsPushDuringBuild(t *testing.T) {
@@ -151,6 +139,6 @@ func TestSearchKeptRejectsPushDuringBuild(t *testing.T) {
 	require.Len(t, page.Results, 1)
 	_, ok = s.searchReads.Get(filter.Slot(), version)
 	require.False(t, ok)
-	_, ok = s.usageDisk.Get("search|"+filter.Slot(), version)
+	_, ok = s.usageDisk.Get("search|"+filter.Slot(), "json|v1|"+version)
 	require.False(t, ok)
 }

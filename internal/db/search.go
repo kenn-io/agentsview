@@ -444,11 +444,7 @@ func (db *DB) Search(
 			if db.afterSearchRead != nil {
 				db.afterSearchRead()
 			}
-			page, err := db.search(ctx, f, cjk)
-			if db.afterSearchPage != nil {
-				db.afterSearchPage()
-			}
-			return page, err
+			return db.search(ctx, f, cjk)
 		})
 	})
 }
