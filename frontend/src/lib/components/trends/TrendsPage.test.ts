@@ -3,6 +3,7 @@ vi.mock("../../utils/telemetry.js", () => ({ reportErrorShown: vi.fn() }));
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
+import { screen } from "@testing-library/svelte";
 import { trends } from "../../stores/trends.svelte.js";
 import { settings } from "../../stores/settings.svelte.js";
 import { yokedDates } from "../../stores/yokedDates.svelte.js";
@@ -101,16 +102,12 @@ describe("TrendsPage", () => {
     trigger!.click();
     await tick();
 
-    const dayButton = (label: string) =>
-      document.querySelector<HTMLButtonElement>(`.kit-calendar button[aria-label="${label}"]`);
-    const fromDay = dayButton("Jan 10, 2024");
-    expect(fromDay).not.toBeNull();
-    fromDay!.click();
+    const fromDay = screen.getByRole("gridcell", { name: "Wednesday, January 10, 2024" });
+    fromDay.click();
     await tick();
-    const toDay = dayButton("Jan 25, 2024");
-    expect(toDay).not.toBeNull();
+    const toDay = screen.getByRole("gridcell", { name: "Thursday, January 25, 2024" });
     // The second click completes and commits the custom range.
-    toDay!.click();
+    toDay.click();
     await flushPromises();
 
     expect(mocks.getApiV1TrendsTerms.mock.lastCall?.[0]).toEqual(
