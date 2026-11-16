@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -50,7 +51,7 @@ func keptAnalytics[T any](ctx context.Context, s *Store, panel string, f db.Anal
 		current := s.duck == handle
 		s.handleMu.RUnlock()
 		if !current {
-			return nil, fmt.Errorf("mirror changed during analytics read")
+			return nil, errors.New("mirror changed during analytics read")
 		}
 		return b, nil
 	}, func(b []byte) ([]byte, error) {

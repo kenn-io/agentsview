@@ -9200,6 +9200,8 @@ func TestMigration_TerminationStatusColumn(t *testing.T) {
 	requireNoError(t, err, "drop artifact_sessions_update_queue trigger")
 	_, err = conn.ExecContext(t.Context(), usageChangeJournalTriggerDropsSQL)
 	requireNoError(t, err, "drop usage change journal triggers")
+	_, err = conn.ExecContext(t.Context(), `DROP TRIGGER IF EXISTS trg_dashboard_sessions_update`)
+	requireNoError(t, err, "drop dashboard sessions update trigger")
 	_, err = conn.ExecContext(t.Context(), `ALTER TABLE sessions DROP COLUMN termination_status`)
 	requireNoError(t, err, "drop termination_status column")
 

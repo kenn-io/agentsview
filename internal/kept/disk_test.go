@@ -83,7 +83,10 @@ func TestReadsDoSaved(t *testing.T) {
 	path := disk.reports.disk.path("slot")
 	old := time.Now().Add(-31 * 24 * time.Hour)
 	require.NoError(t, os.Chtimes(path, old, old))
-	noEncode := func(string) ([]byte, error) { t.Fatal("matching file was encoded again"); return nil, nil }
+	noEncode := func(string) ([]byte, error) {
+		require.FailNow(t, "matching file was encoded again")
+		return nil, nil
+	}
 	_, err = second.DoSaved(t.Context(), &disk, "slot", "memory2", "saved1", noEncode, decode, load)
 	require.NoError(t, err)
 	disk.Sweep(time.Now())

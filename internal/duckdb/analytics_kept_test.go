@@ -412,9 +412,9 @@ func TestAnalyticsKeptDigestPerHandle(t *testing.T) {
 	dir := t.TempDir()
 	path, next := filepath.Join(dir, "mirror.duckdb"), filepath.Join(dir, "next.duckdb")
 	keptActivityMirror(t, path, "session-a", 500)
-	copy, err := os.ReadFile(path)
+	data, err := os.ReadFile(path)
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(next, copy, 0o600))
+	require.NoError(t, os.WriteFile(next, data, 0o600))
 	writeUsageMirror(t, next, `UPDATE sessions SET health_score=80`)
 	store, err := NewStore(t.Context(), path)
 	require.NoError(t, err)
@@ -510,8 +510,8 @@ func TestAnalyticsKeptChangedMirrorInputs(t *testing.T) {
 	require.NotNil(t, signals.AvgHealthScore)
 	require.InDelta(t, 90, *signals.AvgHealthScore, 0)
 	require.Equal(t, [3]int{0, 0, 1}, loads)
-
 }
+
 func TestAnalyticsKeptVelocityMessageIDReplacement(t *testing.T) {
 	skipReopenTestOnWindows(t)
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
@@ -540,7 +540,6 @@ func TestAnalyticsKeptVelocityMessageIDReplacement(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, after.Overall.ToolCallsPerActiveMin)
 }
-
 
 func TestAnalyticsKeptDigestFailureLoadsSource(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
