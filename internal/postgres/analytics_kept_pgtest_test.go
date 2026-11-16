@@ -435,6 +435,7 @@ func TestAnalyticsKeptRestart(t *testing.T) {
 	local, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
 	pgKeptSession(t, local, "session", "project", "2026-06-14")
+	require.NoError(t, local.UpdateSessionSignals(ctx, "session", db.SessionSignalUpdate{HealthScore: new(30)}))
 	pgKeptPush(t, syncer, false)
 	dir := t.TempDir()
 	url := testPGURL(t)
@@ -465,28 +466,43 @@ func TestAnalyticsKeptRestart(t *testing.T) {
 	require.Equal(t, velocity, gotVelocity)
 	require.Equal(t, signals, gotSignals)
 	require.Zero(t, counter.count())
+	read := func(s *Store, counts *[3]int) db.SignalsAnalyticsResponse {
+		_, err := keptAnalytics(ctx, s, "tools", f, func(ctx context.Context, f db.AnalyticsFilter) (db.ToolsAnalyticsResponse, error) {
+			counts[0]++
+			return s.loadAnalyticsTools(ctx, f)
+		})
+		require.NoError(t, err)
+		_, err = keptAnalytics(ctx, s, "velocity", f, func(ctx context.Context, f db.AnalyticsFilter) (db.VelocityResponse, error) {
+			counts[1]++
+			return s.loadAnalyticsVelocity(ctx, f)
+		})
+		require.NoError(t, err)
+		signals, err := keptAnalytics(ctx, s, "signals", f, func(ctx context.Context, f db.AnalyticsFilter) (db.SignalsAnalyticsResponse, error) {
+			counts[2]++
+			return s.loadAnalyticsSignals(ctx, f)
+		})
+		require.NoError(t, err)
+		return signals
+	}
+	counts := [3]int{}
+	first := read(store, &counts)
+	require.NotNil(t, first.AvgHealthScore)
+	require.InDelta(t, 30, *first.AvgHealthScore, 0)
+	require.NoError(t, local.UpdateSessionSignals(ctx, "session", db.SessionSignalUpdate{HealthScore: new(60)}))
+	pgKeptPush(t, syncer, false)
+	counts = [3]int{}
+	warm := read(store, &counts)
+	require.NotNil(t, warm.AvgHealthScore)
+	require.InDelta(t, 60, *warm.AvgHealthScore, 0)
+	assert.Equal(t, [3]int{0, 0, 1}, counts)
 	require.NoError(t, local.UpdateSessionSignals(ctx, "session", db.SessionSignalUpdate{HealthScore: new(90)}))
 	pgKeptPush(t, syncer, false)
 	scoreStore, err := NewStore(ctx, url, syncer.schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, scoreStore.Close()) })
 	require.NoError(t, scoreStore.ConfigureUsageCache(ctx, dir, url, syncer.schema))
-	var counts [3]int
-	_, err = keptAnalytics(ctx, scoreStore, "tools", f, func(ctx context.Context, f db.AnalyticsFilter) (db.ToolsAnalyticsResponse, error) {
-		counts[0]++
-		return scoreStore.loadAnalyticsTools(ctx, f)
-	})
-	require.NoError(t, err)
-	_, err = keptAnalytics(ctx, scoreStore, "velocity", f, func(ctx context.Context, f db.AnalyticsFilter) (db.VelocityResponse, error) {
-		counts[1]++
-		return scoreStore.loadAnalyticsVelocity(ctx, f)
-	})
-	require.NoError(t, err)
-	score, err := keptAnalytics(ctx, scoreStore, "signals", f, func(ctx context.Context, f db.AnalyticsFilter) (db.SignalsAnalyticsResponse, error) {
-		counts[2]++
-		return scoreStore.loadAnalyticsSignals(ctx, f)
-	})
-	require.NoError(t, err)
+	counts = [3]int{}
+	score := read(scoreStore, &counts)
 	require.NotNil(t, score.AvgHealthScore)
 	require.InDelta(t, 90, *score.AvgHealthScore, 0)
 	require.Equal(t, [3]int{0, 0, 1}, counts)
@@ -526,48 +542,6 @@ func TestAnalyticsKeptRestart(t *testing.T) {
 		require.Equal(t, want, again)
 		require.Equal(t, reads, counter.count())
 	})
-}
-
-func TestAnalyticsKeptScoreOnly(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	local, syncer, store := newUsageJournalFixture(t)
-	ctx := t.Context()
-	pgKeptSession(t, local, "session", "project", "2026-06-14")
-	require.NoError(t, local.UpdateSessionSignals(ctx, "session", db.SessionSignalUpdate{HealthScore: new(30)}))
-	pgKeptPush(t, syncer, false)
-	url := testPGURL(t)
-	dir := t.TempDir()
-	require.NoError(t, store.ConfigureUsageCache(ctx, dir, url, syncer.schema))
-	f := db.AnalyticsFilter{From: "2026-06-14", To: "2026-06-14", Timezone: "UTC"}
-	read := func(s *Store, counts *[3]int) db.SignalsAnalyticsResponse {
-		_, err := keptAnalytics(ctx, s, "tools", f, func(ctx context.Context, f db.AnalyticsFilter) (db.ToolsAnalyticsResponse, error) {
-			counts[0]++
-			return s.loadAnalyticsTools(ctx, f)
-		})
-		require.NoError(t, err)
-		_, err = keptAnalytics(ctx, s, "velocity", f, func(ctx context.Context, f db.AnalyticsFilter) (db.VelocityResponse, error) {
-			counts[1]++
-			return s.loadAnalyticsVelocity(ctx, f)
-		})
-		require.NoError(t, err)
-		signals, err := keptAnalytics(ctx, s, "signals", f, func(ctx context.Context, f db.AnalyticsFilter) (db.SignalsAnalyticsResponse, error) {
-			counts[2]++
-			return s.loadAnalyticsSignals(ctx, f)
-		})
-		require.NoError(t, err)
-		return signals
-	}
-	counts := [3]int{}
-	first := read(store, &counts)
-	require.NotNil(t, first.AvgHealthScore)
-	require.InDelta(t, 30, *first.AvgHealthScore, 0)
-	require.NoError(t, local.UpdateSessionSignals(ctx, "session", db.SessionSignalUpdate{HealthScore: new(60)}))
-	pgKeptPush(t, syncer, false)
-	counts = [3]int{}
-	warm := read(store, &counts)
-	require.NotNil(t, warm.AvgHealthScore)
-	require.InDelta(t, 60, *warm.AvgHealthScore, 0)
-	assert.Equal(t, [3]int{0, 0, 1}, counts)
 }
 
 func TestAnalyticsKeptDirectSourceEvents(t *testing.T) {

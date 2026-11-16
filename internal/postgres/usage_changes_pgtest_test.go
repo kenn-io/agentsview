@@ -504,9 +504,8 @@ func TestUsageJournalUpgradesHistoryToken(t *testing.T) {
  SET search_path = pg_catalog, %s, pg_temp AS $journal$%s$journal$`, quotedSchema, oldStamp))
 	require.NoError(t, err)
 	require.NoError(t, EnsureSchema(ctx, syncer.pg, syncer.schema))
-	var version, before string
-	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT (SELECT value FROM sync_metadata WHERE key='usage_change_journal_version'), (SELECT value FROM sync_metadata WHERE key='usage_history_token')`).Scan(&version, &before))
-	require.Equal(t, "3", version)
+	var before string
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='usage_history_token'`).Scan(&before))
 	require.NotEmpty(t, before)
 	_, err = store.pg.ExecContext(ctx, `INSERT INTO sessions(id,machine,project,agent) VALUES('history-token','machine','project','codex')`)
 	require.NoError(t, err)

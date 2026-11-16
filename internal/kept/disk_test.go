@@ -156,59 +156,49 @@ func TestReadsDoSaved(t *testing.T) {
 		require.Equal(t, "from disk", string(body))
 		require.Equal(t, 3, encodeCalls)
 	})
-}
-
-func TestReadsDoSavedLateOldVersion(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	var disk Disk
-	require.NoError(t, disk.Open("saved-reads", "archive", 1024, 0))
-	encode := func(s string) ([]byte, error) { return []byte(s), nil }
-	decode := func(b []byte) (string, error) { return string(b), nil }
-	started, release := make(chan struct{}), make(chan struct{})
-	finished := make(chan error, 1)
-	var old Reads[string]
-	go func() {
-		_, err := old.DoSaved(t.Context(), &disk, "slot", "old", "old", encode, decode, func(context.Context) (string, error) {
-			close(started)
-			<-release
-			return "old", nil
-		})
-		finished <- err
-	}()
-	<-started
-	var current Reads[string]
-	value, err := current.DoSaved(t.Context(), &disk, "slot", "new", "new", encode, decode, func(context.Context) (string, error) { return "new", nil })
-	require.NoError(t, err)
-	require.Equal(t, "new", value)
-	close(release)
-	require.NoError(t, <-finished)
-	value, err = current.DoSaved(t.Context(), &disk, "slot", "new", "new", encode, decode, func(context.Context) (string, error) { return "unexpected", nil })
-	require.NoError(t, err)
-	require.Equal(t, "new", value)
-	saved, ok := disk.Get("slot", "new")
-	require.True(t, ok)
-	require.Equal(t, "new", string(saved))
-}
-
-func TestReadsDoSavedRepairsOversizedMatchingVersion(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	var disk Disk
-	require.NoError(t, disk.Open("saved-reads", "archive", 1024, 0))
-	var reads Reads[string]
-	reads.Put("slot", "memory", "current")
-	file := append(disk.reports.disk.header("saved"), []byte(strings.Repeat("x", 2048))...)
-	require.NoError(t, os.WriteFile(disk.reports.disk.path("slot"), file, 0o600))
-	_, ok := disk.Get("slot", "saved")
-	require.False(t, ok)
-	loads := 0
-	value, err := reads.DoSaved(t.Context(), &disk, "slot", "memory", "saved",
-		func(s string) ([]byte, error) { return []byte(s), nil },
-		func(b []byte) (string, error) { return string(b), nil },
-		func(context.Context) (string, error) { loads++; return "source", nil })
-	require.NoError(t, err)
-	require.Equal(t, "current", value)
-	require.Zero(t, loads)
-	saved, ok := disk.Get("slot", "saved")
-	require.True(t, ok)
-	require.Equal(t, "current", string(saved))
+	t.Run("late old version", func(t *testing.T) {
+		started, release := make(chan struct{}), make(chan struct{})
+		finished := make(chan error, 1)
+		var old Reads[string]
+		go func() {
+			_, err := old.DoSaved(t.Context(), &disk, "slot", "old", "old", encode, decode, func(context.Context) (string, error) {
+				close(started)
+				<-release
+				return "old", nil
+			})
+			finished <- err
+		}()
+		<-started
+		var current Reads[string]
+		value, err := current.DoSaved(t.Context(), &disk, "slot", "new", "new", encode, decode, func(context.Context) (string, error) { return "new", nil })
+		require.NoError(t, err)
+		require.Equal(t, "new", value)
+		close(release)
+		require.NoError(t, <-finished)
+		value, err = current.DoSaved(t.Context(), &disk, "slot", "new", "new", encode, decode, func(context.Context) (string, error) { return "unexpected", nil })
+		require.NoError(t, err)
+		require.Equal(t, "new", value)
+		saved, ok := disk.Get("slot", "new")
+		require.True(t, ok)
+		require.Equal(t, "new", string(saved))
+	})
+	t.Run("oversized matching version", func(t *testing.T) {
+		var reads Reads[string]
+		reads.Put("slot", "memory", "current")
+		file := append(disk.reports.disk.header("saved"), []byte(strings.Repeat("x", 2048))...)
+		require.NoError(t, os.WriteFile(disk.reports.disk.path("slot"), file, 0o600))
+		_, ok := disk.Get("slot", "saved")
+		require.False(t, ok)
+		loads := 0
+		value, err := reads.DoSaved(t.Context(), &disk, "slot", "memory", "saved",
+			func(s string) ([]byte, error) { return []byte(s), nil },
+			func(b []byte) (string, error) { return string(b), nil },
+			func(context.Context) (string, error) { loads++; return "source", nil })
+		require.NoError(t, err)
+		require.Equal(t, "current", value)
+		require.Zero(t, loads)
+		saved, ok := disk.Get("slot", "saved")
+		require.True(t, ok)
+		require.Equal(t, "current", string(saved))
+	})
 }

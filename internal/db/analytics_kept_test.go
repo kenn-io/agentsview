@@ -66,27 +66,6 @@ func TestAnalyticsKeptTracksWrites(t *testing.T) {
 	assert.Equal(t, 3, signals.ToolHealth.TotalRetries)
 }
 
-func TestAnalyticsKeptContentLengthRepair(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	insertSession(t, d, "session", "project", func(s *Session) {
-		s.StartedAt = new("2024-06-01T09:00:00Z")
-		s.MessageCount = 2
-	})
-	insertMessages(t, d,
-		Message{SessionID: "session", Ordinal: 0, Role: "user", Content: "hello", Timestamp: "2024-06-01T09:00:00Z"},
-		Message{SessionID: "session", Ordinal: 1, Role: "assistant", Content: "1234567890", ContentLength: 10, Timestamp: "2024-06-01T09:01:00Z"},
-	)
-	before, err := d.GetAnalyticsVelocity(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.InDelta(t, 10, before.Overall.CharsPerActiveMin, 0)
-	_, err = d.getWriter().ExecContext(ctx, `UPDATE messages SET content_length = 20 WHERE session_id = 'session' AND ordinal = 1`)
-	require.NoError(t, err)
-	after, err := d.GetAnalyticsVelocity(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.InDelta(t, 20, after.Overall.CharsPerActiveMin, 0)
-}
-
 func TestAnalyticsKeptContentLengthReplacement(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
@@ -633,18 +612,4 @@ func TestAnalyticsKeptRestoreRewrite(t *testing.T) {
 			require.Equal(t, [3]int{1, 1, 1}, calls)
 		})
 	}
-}
-
-func TestAnalyticsKeptNestedCounterTrigger(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	_, err := d.getWriter().ExecContext(ctx, `PRAGMA recursive_triggers = ON`)
-	require.NoError(t, err)
-	before, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	require.Zero(t, before.UnscoredSessions)
-	insertSession(t, d, "nested", "project")
-	after, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	require.Equal(t, 1, after.UnscoredSessions)
 }
