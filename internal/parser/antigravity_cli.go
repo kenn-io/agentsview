@@ -690,7 +690,7 @@ func reconcileAntigravityHistoryMessages(
 						continue
 					}
 					if !exactText {
-						if t.structured && level != 0 || !t.structured && !positional || t.idx <= low || t.idx >= high {
+						if (t.structured && level != 0) || (!t.structured && !positional) || t.idx <= low || t.idx >= high {
 							continue
 						}
 					}
