@@ -20,6 +20,16 @@ type Flights[T any] struct {
 	flights map[string]*sharedFlight[T]
 }
 
+// Waiters returns the number of callers waiting on the active build for key.
+func (group *Flights[T]) Waiters(key string) int {
+	group.mu.Lock()
+	defer group.mu.Unlock()
+	if flight := group.flights[key]; flight != nil {
+		return flight.waiters
+	}
+	return 0
+}
+
 func (group *Flights[T]) Do(
 	ctx context.Context,
 	key string,

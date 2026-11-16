@@ -263,11 +263,8 @@ func TestDailyUsageKeptConcurrentMissesShareBuild(t *testing.T) {
 	ranking := filter
 	ranking.PairwiseSides, ranking.SkipSessionCounts = true, true
 	go func() { result, err := database.GetDailyUsage(ctx2, ranking); second <- response{result, err} }()
-	select {
-	case <-second:
-		t.Fatal("ranking returned before the shared build finished")
-	case <-time.After(200 * time.Millisecond):
-	}
+	key := database.dailyUsageVersion(t.Context()) + "|" + UsageSlot(filter, true)
+	require.Eventually(t, func() bool { return database.usageFlights.Waiters(key) == 2 }, 5*time.Second, 10*time.Millisecond)
 	assert.EqualValues(t, 1, prepares.Load())
 	release()
 	a, b := <-first, <-second

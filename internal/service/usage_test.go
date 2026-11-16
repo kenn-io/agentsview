@@ -421,6 +421,42 @@ func TestDirectBackend_UsagePairwiseComparison_UsesRankingSides(t *testing.T) {
 	assert.EqualValues(t, 1, prepares.Load())
 }
 
+func TestDirectBackendUsageSummaryAndPairwiseShareDailyResult(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	seedPairwiseUsageFixture(t, d)
+	backend := service.NewDirectBackend(d, nil)
+	req := service.UsageRequest{From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", IncludeOneShot: true}
+	_, err := backend.UsageSummary(t.Context(), req)
+	require.NoError(t, err)
+
+	started := "2024-06-01T12:00:00Z"
+	msg := dbtest.AsstMsg("usage-new", 1, "done")
+	msg.Timestamp, msg.Model = started, "claude-sonnet-4-20250514"
+	msg.TokenUsage = []byte(`{"input_tokens":10}`)
+	dbtest.SeedSessionWithMessages(t, d, "usage-new", "alpha", []db.Message{dbtest.UserMsg("usage-new", 0, "compare usage"), msg}, dbtest.WithMessageCounts(2, 1), func(s *db.Session) {
+		s.Agent, s.StartedAt, s.EndedAt = "claude", &started, &started
+	})
+	var prepares atomic.Int32
+	d.SetUsageWindowPrepareForTest(func(context.Context) { prepares.Add(1) })
+	summary, err := backend.UsageSummary(t.Context(), req)
+	require.NoError(t, err)
+	comparison, err := backend.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{UsageRequest: req})
+	require.NoError(t, err)
+	assert.Equal(t, 210, summary.Totals.InputTokens)
+	assert.Equal(t, 100, summary.Totals.OutputTokens)
+	require.Len(t, summary.ModelTotals, 2)
+	models := make(map[string]int)
+	for _, model := range summary.ModelTotals {
+		models[model.Model] = model.InputTokens
+	}
+	assert.Equal(t, map[string]int{"claude-sonnet-4-20250514": 180, "gpt-4o": 30}, models)
+	assert.Equal(t, "claude-sonnet-4-20250514", comparison.Left.Value)
+	assert.Equal(t, 295, comparison.Left.TotalTokens)
+	assert.Equal(t, "gpt-4o", comparison.Right.Value)
+	assert.Equal(t, 50, comparison.Right.TotalTokens)
+	assert.EqualValues(t, 1, prepares.Load())
+}
+
 func TestDirectBackend_UsagePairwiseComparison_ReadsInexactSide(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	for _, row := range []struct{ id, project, model, at string }{
