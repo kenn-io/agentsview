@@ -103,9 +103,7 @@ func (m *activityRunsMemo) load(disk *kept.Disk, gap float64) {
 	parts := kept.LoadParts[activityRunsPart](disk, "activity-runs", "activity-runs-1")
 	entries := make([]activityRunsEntry, 0, len(parts))
 	for id, part := range parts {
-		if part.Present && part.Fingerprint != "" {
-			entries = append(entries, activityRunsEntry{key: activityRunsKey{id, gap}, version: part.Fingerprint, runs: part.Value.Runs, users: part.Value.Users, assistants: part.Value.Assistants})
-		}
+		entries = append(entries, activityRunsEntry{key: activityRunsKey{id, gap}, version: part.Fingerprint, runs: part.Value.Runs, users: part.Value.Users, assistants: part.Value.Assistants})
 	}
 	m.store(entries)
 	m.mu.Lock()
