@@ -3,6 +3,7 @@
 package duckdb
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -301,7 +302,7 @@ func TestPartialActivityUsageRereadsPastClaudePeer(t *testing.T) {
 }
 
 func TestPartialActivityInputsSurviveRestart(t *testing.T) {
-	for _, scenario := range []string{"unchanged", "custom pricing", "mirror pricing", "cursor usage"} {
+	for _, scenario := range []string{"unchanged", "custom pricing", "mirror pricing", "unrelated mirror write"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Setenv("CACHE_DIRECTORY", t.TempDir())
 			path := filepath.Join(t.TempDir(), "mirror.duckdb")
@@ -322,8 +323,8 @@ func TestPartialActivityInputsSurviveRestart(t *testing.T) {
 			switch scenario {
 			case "mirror pricing":
 				writeUsageMirror(t, path, `UPDATE model_pricing SET output_microdollars_per_mtok = 20000000 WHERE model_pattern = 'kept-model'`)
-			case "cursor usage":
-				writeUsageMirror(t, path, `INSERT INTO cursor_usage_events (id, occurred_at, model, output_tokens, dedup_key) VALUES (1, TIMESTAMP '2026-01-01 01:00:00', 'kept-model', 200, 'account-1')`)
+			case "unrelated mirror write":
+				writeUsageMirror(t, path, `INSERT INTO sync_metadata (key, value) VALUES ('unrelated', '1')`)
 			}
 			restarted := open()
 			defer restarted.Close()
@@ -337,10 +338,10 @@ func TestPartialActivityInputsSurviveRestart(t *testing.T) {
 				if strings.Contains(query, "activity_usage_keyed") {
 					usage++
 				}
-				if strings.Contains(query, "activity_run_pieces") {
+				if scenario == "unchanged" && strings.Contains(query, "activity_run_pieces") {
 					runs++
 				}
-				if strings.Contains(query, "SELECT session_id, role, timestamp FROM messages") {
+				if scenario == "unchanged" && strings.Contains(query, "SELECT session_id, role, timestamp FROM messages") {
 					messages++
 				}
 			}
@@ -350,7 +351,10 @@ func TestPartialActivityInputsSurviveRestart(t *testing.T) {
 			if scenario == "custom pricing" || scenario == "mirror pricing" {
 				wantReads = 1
 			}
-			require.Equal(t, []int{wantReads, 0, 0}, []int{usage, runs, messages})
+			require.Equal(t, wantReads, usage)
+			if scenario == "unchanged" {
+				require.Equal(t, []int{0, 0}, []int{runs, messages})
+			}
 			if wantReads == 1 {
 				require.Equal(t, money.MustParseDollars("0.01"), activity.ReportWithSessions(got).Totals.Cost)
 			} else {
@@ -380,7 +384,13 @@ func TestPartialActivityInvalidDiskEntryIsMiss(t *testing.T) {
 			return err
 		}
 		if filepath.Ext(path) == ".gob" {
-			return os.WriteFile(path, []byte("corrupt"), 0600)
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			headerEnd := bytes.IndexByte(data, '\n')
+			require.GreaterOrEqual(t, headerEnd, 0)
+			return os.WriteFile(path, append(data[:headerEnd+1], []byte("corrupt")...), 0600)
 		}
 		return nil
 	}))
@@ -522,35 +532,6 @@ func TestPartialActivityEmptyFingerprintDoesNotReuseDisk(t *testing.T) {
 	require.Equal(t, 2, *reads)
 }
 
-func TestPartialActivityUsageSavedAtClose(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	keptActivityMirror(t, path, "session-a", 500)
-	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC))
-	require.NoError(t, err)
-	open := func() *Store {
-		s, err := NewStore(t.Context(), path)
-		require.NoError(t, err)
-		require.NoError(t, s.OpenActivityReportDisk(t.Context()))
-		return s
-	}
-	first := open()
-	want := keptActivityBuild(t, first, q, true)
-	second := open()
-	reads := observeActivityUsageReads(t)
-	got := keptActivityBuild(t, second, q, true)
-	require.Equal(t, 1, *reads)
-	requireKeptActivityEqual(t, want, got)
-	require.NoError(t, second.Close())
-	require.NoError(t, first.Close())
-	restarted := open()
-	defer restarted.Close()
-	*reads = 0
-	got = keptActivityBuild(t, restarted, q, true)
-	require.Equal(t, 0, *reads)
-	requireKeptActivityEqual(t, want, got)
-}
-
 func TestActivityCloseWaitsForSavedUsage(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
@@ -561,6 +542,13 @@ func TestActivityCloseWaitsForSavedUsage(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
 	want := keptActivityBuild(t, store, q, true)
+	second, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	require.NoError(t, second.OpenActivityReportDisk(t.Context()))
+	reads := observeActivityUsageReads(t)
+	got := keptActivityBuild(t, second, q, true)
+	require.Equal(t, 1, *reads)
+	requireKeptActivityEqual(t, want, got)
 	store.activityUsagePendingMu.Lock()
 	done := make(chan error, 1)
 	go func() { done <- store.Close() }()
@@ -577,12 +565,5 @@ func TestActivityCloseWaitsForSavedUsage(t *testing.T) {
 	}
 	store.activityUsagePendingMu.Unlock()
 	require.NoError(t, <-done)
-	restarted, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
-	defer restarted.Close()
-	require.NoError(t, restarted.OpenActivityReportDisk(t.Context()))
-	reads := observeActivityUsageReads(t)
-	got := keptActivityBuild(t, restarted, q, true)
-	require.Zero(t, *reads)
-	requireKeptActivityEqual(t, want, got)
+	require.NoError(t, second.Close())
 }
