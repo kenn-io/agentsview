@@ -475,49 +475,6 @@ func TestAnalyticsKeptDigestPerHandle(t *testing.T) {
 	require.Equal(t, 2*firstFills, fills.Load())
 }
 
-func TestAnalyticsKeptVelocityToolJoin(t *testing.T) {
-	skipReopenTestOnWindows(t)
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	dir := t.TempDir()
-	path, next := filepath.Join(dir, "mirror.duckdb"), filepath.Join(dir, "next.duckdb")
-	keptActivityMirror(t, path, "session-a", 500)
-	writeUsageMirror(t, path,
-		`UPDATE messages SET model='model-a' WHERE id=2`,
-		`INSERT INTO messages(id,session_id,ordinal,role,content,timestamp,model) VALUES(3,'session-a',2,'assistant','answer',TIMESTAMP '2026-01-01 00:02:00','model-b')`,
-		`INSERT INTO tool_calls(id,message_id,session_id,tool_name,category) VALUES(1,2,'session-a','Read','Read')`)
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(next, data, 0o600))
-	writeUsageMirror(t, next, `UPDATE tool_calls SET message_id=3`)
-	ctx := t.Context()
-	store, err := NewStore(ctx, path)
-	require.NoError(t, err)
-	t.Cleanup(func() { store.Close() })
-	require.NoError(t, store.OpenActivityReportDisk(ctx))
-	all := db.AnalyticsFilter{Timezone: "UTC"}
-	scoped := db.AnalyticsFilter{Timezone: "UTC", Model: "model-a", Hour: new(0)}
-	var loads [2]int
-	read := func(f db.AnalyticsFilter, index int) db.VelocityResponse {
-		result, err := keptAnalytics(ctx, store, "velocity", f, "", func(ctx context.Context) (db.VelocityResponse, error) {
-			loads[index]++
-			return store.analytics().GetAnalyticsVelocity(ctx, f)
-		})
-		require.NoError(t, err)
-		return result
-	}
-	beforeAll := read(all, 0)
-	beforeScoped := read(scoped, 1)
-	require.Positive(t, beforeScoped.Overall.ToolCallsPerActiveMin)
-	require.NoError(t, swapMirrorFile(next, path))
-	store.checkMirrorReplacement(ctx, func(err error) { require.NoError(t, err) })
-	loads = [2]int{}
-	afterAll := read(all, 0)
-	afterScoped := read(scoped, 1)
-	require.Equal(t, [2]int{0, 1}, loads)
-	require.Equal(t, beforeAll, afterAll)
-	require.Zero(t, afterScoped.Overall.ToolCallsPerActiveMin)
-}
-
 func TestAnalyticsKeptChangedMirrorInputs(t *testing.T) {
 	skipReopenTestOnWindows(t)
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
@@ -776,29 +733,15 @@ func TestAnalyticsKeptSameStampReplacementWhileServing(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, changed.ScoredSessions+changed.UnscoredSessions)
 	require.NotEmpty(t, store.aliasPath)
-	aliasID := store.fileID
 	require.NoError(t, store.Close())
 	reopened, err := NewStore(t.Context(), path)
 	require.NoError(t, err)
 	t.Cleanup(func() { reopened.Close() })
 	require.Equal(t, stamp, reopened.mirrorStamp())
-	require.Equal(t, aliasID, reopened.fileID)
 	require.NoError(t, reopened.OpenActivityReportDisk(t.Context()))
 	primePanelDigests(t, reopened, filter, "signals")
 	require.NoError(t, reopened.DB().Close())
 	got, err := reopened.GetAnalyticsSignals(t.Context(), filter)
 	require.NoError(t, err)
 	require.Equal(t, 1, got.ScoredSessions+got.UnscoredSessions)
-}
-
-func TestAnalyticsKeptStartupIdentityMismatch(t *testing.T) {
-	dir := t.TempDir()
-	path, next := filepath.Join(dir, "original"), filepath.Join(dir, "replacement")
-	require.NoError(t, os.WriteFile(path, []byte("old"), 0o600))
-	require.NoError(t, os.WriteFile(next, []byte("new"), 0o600))
-	info, err := os.Stat(path)
-	require.NoError(t, err)
-	PrimeFileIdentity(info)
-	require.NoError(t, swapMirrorFile(next, path))
-	require.Empty(t, mirrorFileIdentity(path, info))
 }

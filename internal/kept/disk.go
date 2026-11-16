@@ -99,20 +99,10 @@ func (d activityReportDisk) save(selection, key string, payload []byte, maxFile 
 }
 
 func (d activityReportDisk) keep(selection, version string, maxFile int64, encode func() ([]byte, error)) (bool, error) {
-	file, err := os.Open(d.path(selection))
-	if err == nil {
-		info, statErr := file.Stat()
-		header := d.header(version)
-		actual := make([]byte, len(header))
-		_, readErr := io.ReadFull(file, actual)
-		closeErr := file.Close()
-		if statErr == nil && readErr == nil && closeErr == nil && (maxFile <= 0 || info.Size() <= maxFile) && bytes.Equal(actual, header) {
-			return false, d.touch(selection)
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+	err := d.touch(selection)
+	if !errors.Is(err, os.ErrNotExist) {
 		return false, err
 	}
-
 	body, err := encode()
 	if err != nil {
 		return false, err

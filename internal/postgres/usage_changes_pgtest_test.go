@@ -497,7 +497,7 @@ func TestUsageJournalUpgradesHistoryToken(t *testing.T) {
 	_, err = store.pg.ExecContext(ctx, fmt.Sprintf(`DROP FUNCTION mark_dashboard_sessions() CASCADE;
  DROP FUNCTION mark_dashboard_messages() CASCADE;
  DROP FUNCTION mark_dashboard_tool_calls() CASCADE;
- DELETE FROM sync_metadata WHERE key IN ('dashboard_common','dashboard_tools','dashboard_velocity','dashboard_signals','dashboard_scope','dashboard_velocity_join');
+ DELETE FROM sync_metadata WHERE key IN ('dashboard_common','dashboard_tools','dashboard_velocity','dashboard_signals','dashboard_scope');
  UPDATE sync_metadata SET value='1' WHERE key='usage_change_journal_version';
  DELETE FROM sync_metadata WHERE key='usage_history_token';
  CREATE OR REPLACE FUNCTION stamp_usage_change() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER

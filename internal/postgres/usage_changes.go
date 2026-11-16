@@ -88,7 +88,7 @@ var dropUsageChangeJournalSQL = func() string {
  DROP FUNCTION IF EXISTS stamp_usage_change();
  DO $cleanup$ BEGIN
  IF to_regclass('sync_metadata') IS NOT NULL THEN
-     DELETE FROM sync_metadata WHERE key IN ('usage_change_revision', 'usage_change_journal_lock', 'usage_change_journal_version', 'usage_account_revision', 'usage_history_token', 'dashboard_common', 'dashboard_tools', 'dashboard_velocity', 'dashboard_signals', 'dashboard_scope', 'dashboard_velocity_join');
+     DELETE FROM sync_metadata WHERE key IN ('usage_change_revision', 'usage_change_journal_lock', 'usage_change_journal_version', 'usage_account_revision', 'usage_history_token', 'dashboard_common', 'dashboard_tools', 'dashboard_velocity', 'dashboard_signals', 'dashboard_scope');
  END IF;
  END $cleanup$;`)
 	for _, table := range usageChangeTablesPG {
@@ -255,7 +255,7 @@ func installDashboardJournalPG(ctx context.Context, tx *sql.Tx) error {
 	if err != nil {
 		return err
 	}
-	groups := []string{"common", "tools", "velocity", "signals", "scope", "velocity_join"}
+	groups := []string{"common", "tools", "velocity", "signals", "scope"}
 	var ddl, stamp strings.Builder
 	stamp.WriteString(`UPDATE usage_session_changes SET revision = stamped WHERE revision = 0;
     UPDATE sync_metadata SET value = pg_catalog.gen_random_uuid()::text WHERE key = 'usage_history_token';
@@ -281,7 +281,7 @@ func installDashboardJournalPG(ctx context.Context, tx *sql.Tx) error {
 	}{
 		{"sessions", "id", map[string][]string{"common": db.DashboardSessionInputs, "tools": db.DashboardToolsSessionInputs, "signals": db.DashboardSignalsSessionInputs}},
 		{"messages", "session_id", map[string][]string{"tools": db.DashboardToolsMessageInputs, "velocity": db.DashboardVelocityMessageInputs, "signals": db.DashboardSignalsMessageInputs, "scope": db.DashboardScopeMessageInputs}},
-		{"tool_calls", "session_id", map[string][]string{"tools": append([]string{"message_ordinal"}, db.DashboardToolsCallInputs...), "velocity": db.DashboardVelocityCallInputs, "velocity_join": {"message_ordinal", "session_id"}}},
+		{"tool_calls", "session_id", map[string][]string{"tools": append([]string{"message_ordinal"}, db.DashboardToolsCallInputs...), "velocity": append([]string{"message_ordinal"}, db.DashboardVelocityCallInputs...)}},
 	}
 	for _, table := range tables {
 		var body strings.Builder

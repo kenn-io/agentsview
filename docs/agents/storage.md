@@ -1173,8 +1173,8 @@ SQLite and native PostgreSQL track the inputs to Tools, Velocity, and Signals
 with separate change tokens. A score-only edit refreshes Signals while Tools
 and Velocity remain reusable. DuckDB uses content digests for saved results
 and recomputes them when its mirror handle changes. SQLite, native PostgreSQL,
-and DuckDB save these results per selection and timezone; PostgreSQL requires
-a reliable identity and hosted PostgreSQL reads them fresh. The entries share
+and DuckDB save these results per selection and timezone; hosted PostgreSQL
+reads them fresh. The entries share
 the existing 256 MiB Trends disk budget. PostgreSQL also retains finished
 Signals in memory. Active-since selections are not saved.
 

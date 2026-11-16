@@ -144,7 +144,7 @@ var dashboardGenerationTriggerSQL = dashboardTriggerSQL()
 func dashboardTriggerSQL() string {
 	var sql strings.Builder
 	sql.WriteString("DROP TRIGGER IF EXISTS trg_dashboard_generation_insert; DROP TRIGGER IF EXISTS trg_dashboard_generation_update;\n")
-	for _, name := range []string{"common", "tools", "velocity", "signals", "scope", "velocity_join"} {
+	for _, name := range []string{"common", "tools", "velocity", "signals", "scope"} {
 		fmt.Fprintf(&sql, "INSERT INTO archive_metadata(key,value) VALUES('dashboard_%s',lower(hex(randomblob(16)))) ON CONFLICT(key) DO NOTHING;\n", name)
 	}
 	tables := []struct {
@@ -153,13 +153,13 @@ func dashboardTriggerSQL() string {
 	}{
 		{"sessions", map[string][]string{"common": DashboardSessionInputs, "tools": DashboardToolsSessionInputs, "signals": DashboardSignalsSessionInputs}},
 		{"messages", map[string][]string{"tools": append([]string{"id"}, DashboardToolsMessageInputs...), "velocity": DashboardVelocityMessageInputs, "signals": DashboardSignalsMessageInputs, "scope": DashboardScopeMessageInputs}},
-		{"tool_calls", map[string][]string{"tools": append([]string{"message_id"}, DashboardToolsCallInputs...), "velocity": DashboardVelocityCallInputs, "velocity_join": {"message_id", "session_id"}}},
+		{"tool_calls", map[string][]string{"tools": append([]string{"message_id"}, DashboardToolsCallInputs...), "velocity": append([]string{"message_id"}, DashboardVelocityCallInputs...)}},
 	}
 	for _, table := range tables {
 		for _, event := range []string{"INSERT", "UPDATE", "DELETE"} {
 			name := "trg_dashboard_" + table.name + "_" + strings.ToLower(event)
 			fmt.Fprintf(&sql, "DROP TRIGGER IF EXISTS %s; CREATE TRIGGER %s AFTER %s ON %s BEGIN\n", name, name, event, table.name)
-			for _, group := range []string{"common", "tools", "velocity", "signals", "scope", "velocity_join"} {
+			for _, group := range []string{"common", "tools", "velocity", "signals", "scope"} {
 				columns, ok := table.groups[group]
 				if !ok {
 					continue

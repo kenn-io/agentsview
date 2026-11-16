@@ -124,28 +124,6 @@ func TestReadsDoSaved(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestReadsDoSavedReplacesOldVersionOnMemoryHit(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	var disk Disk
-	require.NoError(t, disk.Open("saved-reads", "archive", 1024, 0))
-	var reads Reads[string]
-	encode := func(s string) ([]byte, error) { return []byte(s), nil }
-	decode := func(b []byte) (string, error) { return string(b), nil }
-	load := func(context.Context) (string, error) { return "current", nil }
-	_, err := reads.DoSaved(t.Context(), &disk, "slot", "memory", "new", encode, decode, load)
-	require.NoError(t, err)
-	disk.Put("slot", "old", []byte("stale"))
-	_, err = reads.DoSaved(t.Context(), &disk, "slot", "memory", "new", encode, decode, load)
-	require.NoError(t, err)
-	var restarted Reads[string]
-	got, err := restarted.DoSaved(t.Context(), &disk, "slot", "other", "new", encode, decode, func(context.Context) (string, error) {
-		t.Fatal("loaded instead of reading saved result")
-		return "", nil
-	})
-	require.NoError(t, err)
-	require.Equal(t, "current", got)
-}
-
 func TestReadsDoSavedKeepsOnlyMemoryHits(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	var disk Disk

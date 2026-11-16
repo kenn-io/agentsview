@@ -22,7 +22,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/kept"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
-	"go.kenn.io/agentsview/internal/rawcapture"
 	"go.kenn.io/agentsview/internal/readbase"
 )
 
@@ -49,7 +48,6 @@ type Store struct {
 	replacementMu     sync.Mutex
 	duck              *sql.DB
 	fileInfo          os.FileInfo
-	fileID            string
 	walStamp          string
 	reports           kept.Reports
 	activityUsageSums kept.Memo[*readbase.ActivityUsageSums]
@@ -102,7 +100,6 @@ func NewStore(ctx context.Context, path string) (*Store, error) {
 		return nil, fmt.Errorf("statting duckdb mirror %s: %w", path, err)
 	}
 	PrimeFileIdentity(info)
-	fileID := mirrorFileIdentity(path, info)
 	walStamp, err := mirrorWALStamp(path)
 	if err != nil {
 		return nil, err
@@ -111,11 +108,8 @@ func NewStore(ctx context.Context, path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	if fileID != mirrorFileIdentity(path, nil) {
-		fileID = ""
-	}
 	return &Store{
-		path: path, duck: conn, fileInfo: info, fileID: fileID, walStamp: walStamp,
+		path: path, duck: conn, fileInfo: info, walStamp: walStamp,
 		activityUsageSums: kept.Memo[*readbase.ActivityUsageSums]{Size: (*readbase.ActivityUsageSums).Bytes},
 		topUsage:          kept.Reads[[]db.TopSessionEntry]{Size: db.TopSessionsBytes},
 		analyticsReads:    kept.Reads[[]byte]{Size: func(b []byte) int64 { return int64(len(b)) }},
@@ -138,35 +132,13 @@ func (s *Store) mirrorStampLocked() string {
 
 // keptVersion names the mirror handle and custom pricing used by in-memory Usage reads.
 func (s *Store) keptVersion() string {
-	memory, _ := s.keptVersions()
-	return memory
-}
-
-func (s *Store) keptVersions() (string, string) {
 	s.handleMu.RLock()
 	defer s.handleMu.RUnlock()
 	stamp := s.mirrorStampLocked()
 	if stamp == "" {
-		return "", ""
-	}
-	saved := ""
-	if s.fileID != "" {
-		saved = stamp + "|" + s.fileID
-	}
-	return stamp + "|" + s.pricingDigest + "|" + s.aliasPath + "|" + pricingpkg.ConfiguredAliasesDigest(), saved
-}
-
-func mirrorFileIdentity(path string, expected os.FileInfo) string {
-	file, err := os.Open(path)
-	if err != nil {
 		return ""
 	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil || (expected != nil && !os.SameFile(expected, info)) {
-		return ""
-	}
-	return rawcapture.CheckpointFileIdentity(file, info)
+	return stamp + "|" + s.pricingDigest + "|" + s.aliasPath + "|" + pricingpkg.ConfiguredAliasesDigest()
 }
 
 // Capture before opening: DuckDB may replay a leftover WAL on open.

@@ -545,25 +545,6 @@ func TestAnalyticsKeptScoreOnly(t *testing.T) {
 	assert.Equal(t, [3]int{0, 0, 1}, counts)
 }
 
-func TestAnalyticsKeptPromptRepair(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	local, syncer, store := newUsageJournalFixture(t)
-	ctx := t.Context()
-	pgKeptSession(t, local, "session", "project", "2026-06-14")
-	require.NoError(t, local.UpdateSessionSignals(ctx, "session", db.SessionSignalUpdate{QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion}}))
-	pgKeptPush(t, syncer, false)
-	require.NoError(t, store.ConfigureUsageCache(ctx, t.TempDir(), testPGURL(t), syncer.schema))
-	f := db.AnalyticsFilter{Timezone: "UTC"}
-	before, err := store.GetAnalyticsSignals(ctx, f)
-	require.NoError(t, err)
-	require.Zero(t, before.QualityHealth.Totals.FrustrationMarkerCount)
-	_, err = store.pg.ExecContext(ctx, `UPDATE messages SET content='this is broken' WHERE session_id='session' AND ordinal=0`)
-	require.NoError(t, err)
-	after, err := store.GetAnalyticsSignals(ctx, f)
-	require.NoError(t, err)
-	require.Equal(t, 1, after.QualityHealth.Totals.FrustrationMarkerCount)
-}
-
 func TestAnalyticsKeptDirectSourceEvents(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	local, syncer, store := newUsageJournalFixture(t)
@@ -629,42 +610,6 @@ func TestAnalyticsKeptDirectSourceEvents(t *testing.T) {
 			}
 		}
 	}
-}
-
-func TestAnalyticsKeptVelocityToolJoin(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	local, syncer, store := newUsageJournalFixture(t)
-	ctx := t.Context()
-	pgKeptSession(t, local, "session", "project", "2026-06-14")
-	require.NoError(t, local.ReplaceSessionMessages(ctx, "session", []db.Message{
-		{SessionID: "session", Ordinal: 0, Role: "user", Content: "hello", Timestamp: "2026-06-14T10:00:00Z"},
-		{SessionID: "session", Ordinal: 1, Role: "assistant", Content: "answer", Model: "model-a", Timestamp: "2026-06-14T10:01:00Z", ToolCalls: []db.ToolCall{{ToolName: "Read", Category: "Read"}}},
-		{SessionID: "session", Ordinal: 2, Role: "assistant", Content: "answer", Model: "model-b", Timestamp: "2026-06-14T10:02:00Z"},
-	}))
-	pgKeptPush(t, syncer, false)
-	require.NoError(t, store.ConfigureUsageCache(ctx, t.TempDir(), testPGURL(t), syncer.schema))
-	all := db.AnalyticsFilter{Timezone: "UTC"}
-	scoped := db.AnalyticsFilter{Timezone: "UTC", Model: "model-a", Hour: new(10)}
-	var loads [2]int
-	read := func(f db.AnalyticsFilter, index int) db.VelocityResponse {
-		result, err := keptAnalytics(ctx, store, "velocity", f, func(ctx context.Context, f db.AnalyticsFilter) (db.VelocityResponse, error) {
-			loads[index]++
-			return store.loadAnalyticsVelocity(ctx, f)
-		})
-		require.NoError(t, err)
-		return result
-	}
-	beforeAll := read(all, 0)
-	beforeScoped := read(scoped, 1)
-	require.Positive(t, beforeScoped.Overall.ToolCallsPerActiveMin)
-	_, err := store.pg.ExecContext(ctx, `UPDATE tool_calls SET message_ordinal=2 WHERE session_id='session'`)
-	require.NoError(t, err)
-	loads = [2]int{}
-	afterAll := read(all, 0)
-	afterScoped := read(scoped, 1)
-	require.Equal(t, [2]int{0, 1}, loads)
-	require.Equal(t, beforeAll, afterAll)
-	require.Zero(t, afterScoped.Overall.ToolCallsPerActiveMin)
 }
 
 func TestAnalyticsKeptModelTimeScopeChanges(t *testing.T) {
@@ -753,7 +698,7 @@ func TestAnalyticsKeptJournalUpgrade(t *testing.T) {
 	_, _, store := newUsageJournalFixture(t)
 	ctx := t.Context()
 	_, err := store.pg.ExecContext(ctx, `DROP FUNCTION mark_dashboard_sessions() CASCADE; DROP FUNCTION mark_dashboard_messages() CASCADE; DROP FUNCTION mark_dashboard_tool_calls() CASCADE;
- DELETE FROM sync_metadata WHERE key IN ('dashboard_common','dashboard_tools','dashboard_velocity','dashboard_signals','dashboard_scope','dashboard_velocity_join');
+ DELETE FROM sync_metadata WHERE key IN ('dashboard_common','dashboard_tools','dashboard_velocity','dashboard_signals','dashboard_scope');
  UPDATE sync_metadata SET value='2' WHERE key='usage_change_journal_version'`)
 	require.NoError(t, err)
 	var revision, account, history string
@@ -802,28 +747,6 @@ func TestAnalyticsKeptRestoredHistory(t *testing.T) {
 	after, err := reopened.GetAnalyticsSignals(ctx, f)
 	require.NoError(t, err)
 	require.Equal(t, 1, after.UnscoredSessions)
-}
-
-func TestAnalyticsKeptInvalidHistoryToken(t *testing.T) {
-	cache := t.TempDir()
-	t.Setenv("CACHE_DIRECTORY", cache)
-	local, syncer, store := newUsageJournalFixture(t)
-	ctx := t.Context()
-	pgKeptSession(t, local, "session", "project", "2026-06-14")
-	pgKeptPush(t, syncer, false)
-	url := testPGURL(t)
-	require.NoError(t, store.ConfigureUsageCache(ctx, t.TempDir(), url, syncer.schema))
-	for _, value := range []string{"", "invalid"} {
-		_, err := store.pg.ExecContext(ctx, `UPDATE sync_metadata SET value=$1 WHERE key='usage_history_token'`, value)
-		require.NoError(t, err)
-		require.Empty(t, store.keptUsageDataVersion(ctx, "signals"))
-		got, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{Timezone: "UTC"})
-		require.NoError(t, err)
-		require.Equal(t, 1, got.UnscoredSessions)
-	}
-	files, err := filepath.Glob(filepath.Join(cache, "postgres-trends", "*", "*.gob"))
-	require.NoError(t, err)
-	require.Empty(t, files)
 }
 
 func TestAnalyticsKeptIdentitylessFallback(t *testing.T) {
@@ -904,4 +827,29 @@ func TestAnalyticsKeptCorruptSavedJSON(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, want, again)
 	require.Equal(t, reads, counter.count())
+}
+
+func TestAnalyticsSignalsMessageRepair(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, store := newUsageJournalFixture(t)
+	ctx := t.Context()
+	pgKeptSession(t, local, "session", "project", "2026-06-14")
+	require.NoError(t, local.UpdateSessionSignals(ctx, "session", db.SessionSignalUpdate{QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion}}))
+	pgKeptPush(t, syncer, false)
+	require.NoError(t, store.ConfigureUsageCache(ctx, t.TempDir(), testPGURL(t), syncer.schema))
+	f := db.AnalyticsFilter{Timezone: "UTC"}
+	before, err := store.GetAnalyticsSignals(ctx, f)
+	require.NoError(t, err)
+	require.Zero(t, before.QualityHealth.Totals.FrustrationMarkerCount)
+	_, err = store.DB().ExecContext(ctx, `UPDATE messages SET content='this is broken' WHERE session_id='session' AND ordinal=0`)
+	require.NoError(t, err)
+	after, err := store.GetAnalyticsSignals(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, 1, after.QualityHealth.Totals.FrustrationMarkerCount)
+	reopened, err := NewStore(ctx, testPGURL(t), syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+	again, err := reopened.GetAnalyticsSignals(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, 1, again.QualityHealth.Totals.FrustrationMarkerCount)
 }

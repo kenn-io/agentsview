@@ -194,7 +194,6 @@ func TestFrustrationMemo(t *testing.T) {
 		})
 	}
 }
-
 func TestFrustrationMemoUncachedSignals(t *testing.T) {
 	for _, hosted := range []bool{false, true} {
 		t.Run(map[bool]string{false: "native", true: "hosted"}[hosted], func(t *testing.T) {

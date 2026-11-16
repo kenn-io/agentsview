@@ -24,7 +24,7 @@ var analyticsMarshalers = json.MarshalToFunc(func(out *jsontext.Encoder, session
 })
 
 func keptAnalytics[T any](ctx context.Context, s *Store, panel string, f db.AnalyticsFilter, variant string, load func(context.Context) (T, error)) (T, error) {
-	version, savedVersion := s.keptVersions()
+	version := s.keptVersion()
 	if version == "" || f.ActiveSince != "" || db.TerminationUsesTime(f.Termination) {
 		return load(ctx)
 	}
@@ -37,10 +37,9 @@ func keptAnalytics[T any](ctx context.Context, s *Store, panel string, f db.Anal
 		var zero T
 		return zero, fmt.Errorf("encoding analytics selection: %w", err)
 	}
+	var savedVersion string
 	var handle *sql.DB
-	if !db.SavedPanel(panel) {
-		savedVersion = ""
-	} else if savedVersion != "" {
+	if db.SavedPanel(panel) {
 		savedVersion, handle = s.dashboardDigest(ctx, panel, f)
 	}
 	if savedVersion != "" {
@@ -76,9 +75,9 @@ func keptAnalytics[T any](ctx context.Context, s *Store, panel string, f db.Anal
 
 func (s *Store) dashboardDigest(ctx context.Context, panel string, f db.AnalyticsFilter) (string, *sql.DB) {
 	s.handleMu.RLock()
-	handle, fileID := s.duck, s.fileID
+	handle := s.duck
 	s.handleMu.RUnlock()
-	if handle == nil || fileID == "" {
+	if handle == nil {
 		return "", nil
 	}
 	type component struct {
@@ -95,17 +94,14 @@ func (s *Store) dashboardDigest(ctx context.Context, panel string, f db.Analytic
 	case "velocity":
 		components = append(components,
 			component{"velocity_messages", "messages", db.DashboardVelocityMessageInputs},
-			component{"velocity_calls", "tool_calls", db.DashboardVelocityCallInputs})
-		if f.Model != "" {
-			components = append(components, component{"velocity_join", "tool_calls", []string{"session_id", "message_id"}})
-		}
+			component{"velocity_calls", "tool_calls", append([]string{"message_id"}, db.DashboardVelocityCallInputs...)})
 	case "signals":
 		components = append(components, component{"signals_sessions", "sessions", append([]string{"frustration_marker_count"}, db.DashboardSignalsSessionInputs...)})
 	}
 	if db.DashboardUsesMessageScope(f) {
 		components = append(components, component{"scope", "messages", db.DashboardScopeMessageInputs})
 	}
-	version := fmt.Sprintf("%p|%s", handle, fileID)
+	version := fmt.Sprintf("%p", handle)
 	parts := make([]string, 0, len(components))
 	for _, c := range components {
 		digest, err := s.analyticsDigests.Do(ctx, c.name, version, func(ctx context.Context) (string, error) {

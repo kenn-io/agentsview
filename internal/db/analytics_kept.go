@@ -54,25 +54,21 @@ func keptAnalytics[T analyticsReport](ctx context.Context, db *DB, panel string,
 	var version string
 	var savedVersion string
 	if SavedPanel(panel) {
-		var common, panelToken, scope, velocityJoin string
+		var common, panelToken, scope string
 		err := db.getReader().QueryRowContext(ctx, `SELECT
  COALESCE((SELECT value FROM archive_metadata WHERE key='dashboard_common'), ''),
  COALESCE((SELECT value FROM archive_metadata WHERE key=?), ''),
- COALESCE((SELECT value FROM archive_metadata WHERE key='dashboard_scope'), ''),
- COALESCE((SELECT value FROM archive_metadata WHERE key='dashboard_velocity_join'), '')`, "dashboard_"+panel).Scan(&common, &panelToken, &scope, &velocityJoin)
+ COALESCE((SELECT value FROM archive_metadata WHERE key='dashboard_scope'), '')`, "dashboard_"+panel).Scan(&common, &panelToken, &scope)
 		valid := func(token string) bool {
 			decoded, err := hex.DecodeString(token)
 			return err == nil && len(decoded) == 16
 		}
-		if err != nil || !valid(common) || !valid(panelToken) || (DashboardUsesMessageScope(f) && !valid(scope)) || (panel == "velocity" && f.Model != "" && !valid(velocityJoin)) {
+		if err != nil || !valid(common) || !valid(panelToken) || (DashboardUsesMessageScope(f) && !valid(scope)) {
 			return load(ctx, f)
 		}
 		version = id + "|" + common + "|" + panelToken
 		if DashboardUsesMessageScope(f) {
 			version += "|" + scope
-		}
-		if panel == "velocity" && f.Model != "" {
-			version += "|" + velocityJoin
 		}
 		if f.ActiveSince == "" {
 			db.trendsPartsDisk()

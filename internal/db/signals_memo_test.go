@@ -430,20 +430,3 @@ func TestSignalsFrustrationCanceledWhileSaving(t *testing.T) {
 		})
 	}
 }
-
-func TestSignalsFrustrationReadOnlyPromptRepair(t *testing.T) {
-	writable := testDB(t)
-	ctx := t.Context()
-	seedFrustrationSession(t, writable, "session", "test")
-	readonly, err := OpenReadOnly(ctx, writable.Path())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, readonly.Close()) })
-	first, err := readonly.GetAnalyticsSignals(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	require.Equal(t, 1, first.QualityHealth.Totals.FrustrationMarkerCount)
-	_, err = writable.getWriter().ExecContext(ctx, `UPDATE messages SET content='Please explain this function.' WHERE session_id='session'`)
-	require.NoError(t, err)
-	second, err := readonly.GetAnalyticsSignals(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	require.Zero(t, second.QualityHealth.Totals.FrustrationMarkerCount)
-}
