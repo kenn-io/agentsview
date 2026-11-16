@@ -818,6 +818,7 @@ func TestVibeUnifiedProviderParseJournal(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		records [][2]string
+		setup   func(t *testing.T, sessionDir string)
 		check   func(t *testing.T, result ParseResult)
 	}{
 		{
@@ -855,6 +856,30 @@ func TestVibeUnifiedProviderParseJournal(t *testing.T) {
 			},
 		},
 		{
+			// Store minor 9 journals a move as session_relocated, which carries
+			// the new session metadata and a checkpoint delta.
+			name: "relocation replaces metadata and applies its delta",
+			setup: func(t *testing.T, sessionDir string) {
+				t.Helper()
+				writeSourceFile(t, filepath.Join(sessionDir, "meta.json"), `{"session_id":"`+vibeUnifiedSessionID+`"}`)
+			},
+			records: [][2]string{
+				{"session_relocated", `{"metadata":{"cwd":"/workspace/moved-repo","origin_cwd":"/workspace/my-repo","active_model":"devstral-2","root_session_id":"` + vibeUnifiedSessionID + `"},` +
+					`"plugin_lock":{},"watermark":2,"delta":[{"op":"append_entry","entry":{"type":"checkpoint","id":"checkpoint:session_relocated:1","kind":"session_relocated","message":"Moved"}}]}`},
+				{"projection_delta", `{"delta":[{"op":"remove_entry","id":"checkpoint:session_relocated:1"},` +
+					`{"op":"append_entry","entry":{"type":"message","id":"assistant-2","role":"assistant","turnId":"turn-2","content":[{"type":"text","text":"after the move"}]}}],"watermark":3}`},
+			},
+			check: func(t *testing.T, result ParseResult) {
+				t.Helper()
+				require.Len(t, result.Messages, 4)
+				assert.Equal(t, "after the move", result.Messages[3].Content)
+				assert.Equal(t, "devstral-2", result.Messages[3].Model)
+				assert.Equal(t, "/workspace/moved-repo", result.Session.Cwd)
+				require.Len(t, result.UsageEvents, 1)
+				assert.Equal(t, "devstral-2", result.UsageEvents[0].Model)
+			},
+		},
+		{
 			name: "full snapshot record",
 			records: [][2]string{{"projection_advanced", `{"snapshot":{"history":{"entries":[` +
 				`{"type":"message","id":"only","role":"user","content":[{"type":"text","text":"replaced history"}]}]},"session":{}},"watermark":2}`}},
@@ -868,6 +893,9 @@ func TestVibeUnifiedProviderParseJournal(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			sessionDir := writeVibeUnifiedSession(t, root, vibeUnifiedSessionID)
+			if tc.setup != nil {
+				tc.setup(t, sessionDir)
+			}
 			writeVibeUnifiedJournal(t, sessionDir, tc.records...)
 			journalPath := filepath.Join(sessionDir, "journal", "0000000000000002.jsonl")
 			// An append still being written has no newline yet.
@@ -953,15 +981,16 @@ func TestVibeUnifiedVersions(t *testing.T) {
 		{"default store", "CURRENT", ``, true, false},
 		{"minor one", "CURRENT", `"store_format_minor":1,`, true, false},
 		{"minor eight", "CURRENT", `"store_format_minor":8,`, true, false},
+		{"minor ten", "CURRENT", `"store_format_minor":10,`, true, false},
+		{"future minor", "CURRENT", `"store_format_minor":99,`, true, false},
 		{"new store", "CURRENT", `"store_format":"mistral.vibe.unified-session-store/v2",`, false, false},
-		{"new minor", "CURRENT", `"store_format_minor":9,`, false, false},
 		{"invalid minor", "CURRENT", `"store_format_minor":0,`, false, false},
 		{"new manifest", "manifest.json", `"manifest_version":2,`, false, false},
 		{"new projection", "projection-state.json", `"projection_state_version":2,`, false, false},
-		{"new runtime", "runtime-state.json", `"runtime_state_version":4,`, false, false},
-		{"missing runtime", "runtime-state.json", ``, false, false},
-		{"parent new minor", "CURRENT", `"store_format_minor":9,`, false, true},
-		{"parent new runtime", "runtime-state.json", `"runtime_state_version":4,`, false, true},
+		{"new runtime", "runtime-state.json", `"runtime_state_version":4,`, true, false},
+		{"missing runtime", "runtime-state.json", ``, true, false},
+		{"parent future minor", "CURRENT", `"store_format_minor":99,`, true, true},
+		{"parent new store", "CURRENT", `"store_format":"mistral.vibe.unified-session-store/v2",`, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
