@@ -11,7 +11,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.yaml.in/yaml/v3"
 )
 
 func memoryPluginRoot(t *testing.T) string {
@@ -78,18 +77,7 @@ func TestMemoryPluginAgentToolsMatchPluginServer(t *testing.T) {
 	agent, err := os.ReadFile(filepath.Join(root, "agents", "agentsview-search-conversations.md"))
 	require.NoError(t, err)
 	content := string(agent)
-	frontmatter := strings.SplitN(content, "---\n", 3)
-	require.Len(t, frontmatter, 3)
-	var metadata struct {
-		Tools []string `yaml:"tools"`
-	}
-	require.NoError(t, yaml.Unmarshal([]byte(frontmatter[1]), &metadata))
-	assert.Equal(t, []string{prefix + "search_content", prefix + "get_messages", "mcp__agentsview__search_content", "mcp__agentsview__get_messages"}, metadata.Tools)
-	assert.Contains(t, content, "`"+prefix+"search_content`")
-	assert.Contains(t, content, "`"+prefix+"get_messages`")
-	assert.Contains(t, content, "`mcp__agentsview__search_content`")
-	assert.Contains(t, content, "`mcp__agentsview__get_messages`")
-	assert.Contains(t, content, "Prefer the `"+prefix+"` server prefix when registered.")
-	assert.Contains(t, content, "Use `mcp__agentsview__` only when the plugin server is not registered.")
-	assert.Contains(t, content, "Use the chosen prefix for every search and message read.")
+	assert.Contains(t, strings.Split(content, "\n"), "tools: "+prefix+"search_content, "+prefix+"get_messages, mcp__agentsview__search_content, mcp__agentsview__get_messages")
+	assert.Contains(t, content, "`"+prefix+"search_content` when registered; otherwise call `mcp__agentsview__search_content`")
+	assert.Contains(t, content, "`"+prefix+"get_messages` or `mcp__agentsview__get_messages` using the same server as the search")
 }

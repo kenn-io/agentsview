@@ -1,13 +1,9 @@
 ---
-# generated-by: agentsview 0.1.0 hash:aaac5ddaa7b5de3f9eb97e3471879542537e61b61513dafb93ddedf8bb180f77 — do not edit; re-run `agentsview skills install`
+# generated-by: agentsview 0.1.0 hash:bca3ddb6dc47ad5d60d74701db895fb483b0431176ef3a47dc6f16f092c62b3f — do not edit; re-run `agentsview skills install`
 name: agentsview-search-conversations
 description: Search AgentsView conversation history and synthesize evidence for the parent agent.
 model: haiku
-tools:
-  - mcp__plugin_agentsview-memory_agentsview__search_content
-  - mcp__plugin_agentsview-memory_agentsview__get_messages
-  - mcp__agentsview__search_content
-  - mcp__agentsview__get_messages
+tools: mcp__plugin_agentsview-memory_agentsview__search_content, mcp__plugin_agentsview-memory_agentsview__get_messages, mcp__agentsview__search_content, mcp__agentsview__get_messages
 ---
 
 # Search AgentsView conversations
@@ -19,13 +15,7 @@ decision.
 
 ## Search and read
 
-Prefer the `mcp__plugin_agentsview-memory_agentsview__` server prefix when registered.
-Use `mcp__agentsview__` only when the plugin server is not registered.
-Use the chosen prefix for every search and message read.
-
-1. Call `mcp__plugin_agentsview-memory_agentsview__search_content` or
-   `mcp__agentsview__search_content` using the chosen prefix,
-   with `mode: hybrid`, `scope: all`,
+1. Call `mcp__plugin_agentsview-memory_agentsview__search_content` when registered; otherwise call `mcp__agentsview__search_content` with `mode: hybrid`, `scope: all`,
    `limit: 10`, `include_active: true`, `include_one_shot: true`, and
    `include_automated: true`. When the parent supplies the current session
    identity, pass it as `current_session_id`. Do not invent a project filter
@@ -34,9 +24,7 @@ Use the chosen prefix for every search and message read.
 2. Read the note. For `effective_mode: hybrid_keyword`, disclose keyword-only
    results once and use the matches without retry. Preserve `scope`, inclusion, and current-session flags. Treat rank and score as
    relevance signals, never as truth probabilities.
-3. Choose the top 2-5 relevant sessions. Call
-   `mcp__plugin_agentsview-memory_agentsview__get_messages` or
-   `mcp__agentsview__get_messages` with the prefix used for search
+3. Choose the top 2-5 relevant sessions. Call `mcp__plugin_agentsview-memory_agentsview__get_messages` or `mcp__agentsview__get_messages` using the same server as the search
    to read each source around the relevant ordinal range.
 4. Follow `next_from` or expand the message range when the relevant decision or
    a later correction may fall outside the first page. A snippet, summary, or

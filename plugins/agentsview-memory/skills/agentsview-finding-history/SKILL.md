@@ -1,5 +1,5 @@
 ---
-# generated-by: agentsview 0.1.0 hash:6eac45fa7614cfef60f1984a8af9636b9ee676ca921c62eaf22e175700914ab5 — do not edit; re-run `agentsview skills install`
+# generated-by: agentsview 0.1.0 hash:6fbb60684aab4dfa5ff0c885c9d8b9eb40f74dcb2d5a5f8462f55be4502fab4f — do not edit; re-run `agentsview skills install`
 name: agentsview-finding-history
 description: Use proactively when prior decisions, rationale, solutions, pitfalls, project context, or repeated workflows may help, when stuck, or before guessing about something learned previously — searches AgentsView conversation history for evidence.
 ---
@@ -21,10 +21,8 @@ why the code exists; the repository is the authority for what it contains now.
 
 ## Workflow
 
-1. Use the `agentsview-memory:agentsview-search-conversations` agent when
-   the agent and AgentsView memory tools are available; otherwise follow
-   these steps directly. If the agent reports that it could not
-   search, follow the remaining steps directly instead of delegating.
+1. Use the `agentsview-memory:agentsview-search-conversations` agent when the agent and AgentsView memory tools are available; otherwise follow these steps directly. If the agent reports that it could not search,
+   follow the remaining steps directly instead of delegating.
 2. Call the registered AgentsView MCP tool whose leaf name is `search_content`
    with `mode: hybrid`, `scope: all`, `limit: 10`, `include_active: true`,
    `include_one_shot: true`, and `include_automated: true`. When the current
