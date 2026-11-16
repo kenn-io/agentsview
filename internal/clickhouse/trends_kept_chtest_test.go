@@ -264,6 +264,21 @@ func TestTrendsKeptMemoryHitRepairsDiskVersion(t *testing.T) {
 	_, ok = store.usageDisk.Get(slot, "older-version")
 	require.True(t, ok)
 	require.Equal(t, want, read(store))
+	// Leave only the repaired report so restart cannot rebuild from saved parts.
+	files, err = filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "clickhouse-usage", "*", "*.gob"))
+	require.NoError(t, err)
+	removedParts := 0
+	for _, file := range files {
+		if file == reportFile {
+			continue
+		}
+		require.NoError(t, os.Remove(file))
+		removedParts++
+	}
+	require.Positive(t, removedParts)
+	files, err = filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "clickhouse-usage", "*", "*.gob"))
+	require.NoError(t, err)
+	require.Equal(t, []string{reportFile}, files)
 
 	restarted := newTestStore(t, syncer.conn, syncer.target)
 	require.NoError(t, restarted.openActivityReportDisk(syncer.target))
