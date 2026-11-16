@@ -1,6 +1,7 @@
 package kept
 
 import (
+	"encoding/json/v2"
 	"context"
 	"errors"
 	"os"
@@ -36,6 +37,45 @@ func TestDiskEvictsLeastRecentlyOpened(t *testing.T) {
 	payload, ok = trimmed.Get("first", "v1")
 	require.True(t, ok)
 	require.Equal(t, "one", string(payload))
+}
+
+func TestDropJSON(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	var disk Disk
+	require.NoError(t, disk.Open("test-search", "archive", 1024, 0))
+	disk.Put("parts", "v1", []byte("part data"))
+	_, retain, err := LoadJSON(&disk, "page", "v1", nil, func() (string, error) { return "secret snippet", nil })
+	require.NoError(t, err)
+	require.True(t, retain)
+	disk.DropJSON("")
+	_, ok := disk.Get("page", jsonVersion+"v1")
+	require.False(t, ok)
+	part, ok := disk.Get("parts", "v1")
+	require.True(t, ok)
+	require.Equal(t, "part data", string(part))
+	_, retain, err = LoadJSON(&disk, "racing", "v1", func() bool { disk.DropJSON(""); return true }, func() (string, error) { return "secret snippet", nil })
+	require.NoError(t, err)
+	require.False(t, retain)
+	_, ok = disk.Get("racing", jsonVersion+"v1")
+	require.False(t, ok)
+	data, err := json.Marshal("future snippet")
+	require.NoError(t, err)
+	disk.Put("future", "json|v99|v1", data)
+	got, retain, err := LoadJSON(&disk, "future", "v1", nil, func() (string, error) { return "current", nil })
+	require.NoError(t, err)
+	require.True(t, retain)
+	require.Equal(t, "current", got)
+	disk.Put("future-other", "json|v99|v1", data)
+	disk.Put("matching", jsonVersion+"v2", data)
+	require.True(t, disk.ObserveJSON("v2"))
+	_, ok = disk.Get("future", jsonVersion+"v1")
+	require.False(t, ok)
+	_, ok = disk.Get("future-other", "json|v99|v1")
+	require.False(t, ok)
+	_, ok = disk.Get("matching", jsonVersion+"v2")
+	require.True(t, ok)
+	_, ok = disk.Get("parts", "v1")
+	require.True(t, ok)
 }
 
 func TestDiskLimitsAndUnavailableDirectory(t *testing.T) {

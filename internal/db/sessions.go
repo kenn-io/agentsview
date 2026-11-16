@@ -1435,10 +1435,17 @@ func (db *DB) PurgeExcludedSessions(ctx context.Context) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := purgeExcludedSessionsTx(ctx, tx, false); err != nil {
+	n, err := purgeExcludedSessionsTx(ctx, tx, false)
+	if err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if n > 0 {
+		db.forgetSearchPages()
+	}
+	return nil
 }
 
 func purgeExcludedSessionsTx(ctx context.Context, tx *sql.Tx, permanentDelete bool) (int64, error) {
@@ -5758,10 +5765,17 @@ func (db *DB) DeleteSession(ctx context.Context, id string) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := deleteSessionsTx(ctx, tx, "id = ?", id); err != nil {
+	n, err := deleteSessionsTx(ctx, tx, "id = ?", id)
+	if err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if n > 0 {
+		db.forgetSearchPages()
+	}
+	return nil
 }
 
 // deleteSessionsTx preserves the scope of legacy trash before removing its
@@ -5962,6 +5976,9 @@ func (db *DB) DeleteSessionIfTrashed(ctx context.Context, id string) (int64, err
 
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit delete-if-trashed: %w", err)
+	}
+	if n > 0 {
+		db.forgetSearchPages()
 	}
 	return n, nil
 }
@@ -6529,6 +6546,9 @@ func (db *DB) EmptyTrash(ctx context.Context) (int, error) {
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit empty-trash: %w", err)
 	}
+	if n > 0 {
+		db.forgetSearchPages()
+	}
 	return int(n), nil
 }
 
@@ -6575,6 +6595,9 @@ func (db *DB) DeleteSessions(ctx context.Context, ids []string) (int, error) {
 
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("committing transaction: %w", err)
+	}
+	if total > 0 {
+		db.forgetSearchPages()
 	}
 	return total, nil
 }

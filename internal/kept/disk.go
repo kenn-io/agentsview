@@ -1,6 +1,7 @@
 package kept
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json/v2"
 	"errors"
@@ -19,7 +20,12 @@ type Disk struct {
 	reports           Reports
 	mu                sync.Mutex
 	maxFile, maxBytes int64
+	jsonGen           uint64
+	jsonSeen          string
 }
+
+// Change this when the search page format or search rules change.
+const jsonVersion = "json|v1|"
 
 func (d *Disk) Open(subdir, id string, maxFile, maxBytes int64) error {
 	if err := d.reports.OpenDisk(subdir, id); err != nil {
@@ -135,6 +141,49 @@ func (d *Disk) Put(selection, version string, payload []byte) {
 	}
 }
 
+// DropJSON removes saved search pages, preserving other kept data.
+func (d *Disk) DropJSON(keep string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.dropJSON(keep)
+}
+
+func (d *Disk) dropJSON(keep string) {
+	d.jsonGen++
+	entries, err := os.ReadDir(d.reports.disk.dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), d.reports.disk.fileSuffix()) {
+			continue
+		}
+		path := filepath.Join(d.reports.disk.dir, entry.Name())
+		file, err := os.Open(path)
+		if err != nil {
+			continue
+		}
+		line, _ := bufio.NewReader(io.LimitReader(file, 4096)).ReadString('\n')
+		_ = file.Close()
+		_, key, found := strings.Cut(strings.TrimSuffix(line, "\n"), " ")
+		if found && strings.HasPrefix(key, "json|") && (keep == "" || key != jsonVersion+keep) {
+			_ = os.Remove(path)
+		}
+	}
+}
+
+// ObserveJSON discards pages from other mirror versions.
+func (d *Disk) ObserveJSON(version string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.jsonSeen == version {
+		return false
+	}
+	d.jsonSeen = version
+	d.dropJSON(version)
+	return true
+}
+
 func (d *Disk) trim() error {
 	entries, err := os.ReadDir(d.reports.disk.dir)
 	if err != nil {
@@ -176,7 +225,7 @@ func (d *Disk) trim() error {
 
 // LoadJSON returns a saved value or loads and saves it for this version.
 func LoadJSON[T any](d *Disk, selection, version string, current func() bool, load func() (T, error)) (T, bool, error) {
-	if data, ok := d.Get(selection, version); ok {
+	if data, ok := d.Get(selection, jsonVersion+version); ok {
 		var value T
 		if json.Unmarshal(data, &value) == nil {
 			return value, current == nil || current(), nil
@@ -186,10 +235,19 @@ func LoadJSON[T any](d *Disk, selection, version string, current func() bool, lo
 	if err != nil {
 		return value, false, err
 	}
+	d.mu.Lock()
+	gen := d.jsonGen
+	d.mu.Unlock()
 	retain := current == nil || current()
 	if retain && d.Enabled() {
 		if data, encodeErr := json.Marshal(value, json.FormatNilSliceAsNull(true)); encodeErr == nil {
-			d.Put(selection, version, data)
+			d.mu.Lock()
+			if gen != d.jsonGen || (d.jsonSeen != "" && d.jsonSeen != version) {
+				retain = false
+			} else if d.reports.disk.save(selection, jsonVersion+version, data, d.maxFile) == nil {
+				_ = d.trim()
+			}
+			d.mu.Unlock()
 		}
 	}
 	return value, retain, nil
