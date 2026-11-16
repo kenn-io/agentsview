@@ -423,7 +423,7 @@ func stopDaemonRuntimeForUpgradeImpl(ctx context.Context,
 		return fmt.Errorf("stopping pid %d: %w", rt.Record.PID, err)
 	}
 	stopOrphanedCaddyChild(rt.Record)
-	return nil
+	return waitForStoppedDaemonWriter(ctx, cfg)
 }
 
 func stopWritableDaemonsForUpdate(ctx context.Context,
