@@ -10,6 +10,7 @@ import (
 	"unsafe"
 
 	"go.kenn.io/agentsview/internal/activity"
+	"go.kenn.io/agentsview/internal/kept"
 )
 
 // activityRunsMaxBytes bounds the kept runs and counted messages. A report
@@ -40,6 +41,8 @@ func (e activityRunsEntry) bytes() int64 {
 // activityRunsMemo keeps sessions' runs across mirror replacements: the push
 // fingerprint changes whenever a session's messages or tool events do.
 type activityRunsMemo struct {
+	diskMu  sync.Mutex
+	loaded  map[float64]bool
 	mu      sync.Mutex
 	entries map[activityRunsKey]*list.Element
 	order   list.List
@@ -89,6 +92,43 @@ func (m *activityRunsMemo) store(entries []activityRunsEntry) {
 	}
 }
 
+type activityRunsPart struct {
+	Runs              activity.SessionRuns
+	Users, Assistants []int64
+}
+
+func (m *activityRunsMemo) load(disk *kept.Disk, gap float64) {
+	if m.loaded[gap] {
+		return
+	}
+	if m.loaded == nil {
+		m.loaded = make(map[float64]bool)
+	}
+	m.loaded[gap] = true
+	parts := kept.LoadParts[activityRunsPart](disk, fmt.Sprintf("activity-runs|%g", gap), "activity-runs-1")
+	entries := make([]activityRunsEntry, 0, len(parts))
+	for id, part := range parts {
+		if part.Present && part.Fingerprint != "" {
+			entries = append(entries, activityRunsEntry{key: activityRunsKey{id, gap}, version: part.Fingerprint, runs: part.Value.Runs, users: part.Value.Users, assistants: part.Value.Assistants})
+		}
+	}
+	m.store(entries)
+}
+
+func (m *activityRunsMemo) save(disk *kept.Disk, gap float64) {
+	m.mu.Lock()
+	var rows []kept.Part[activityRunsPart]
+	for key, element := range m.entries {
+		if key.gapCap != gap {
+			continue
+		}
+		e := element.Value.(activityRunsEntry)
+		rows = append(rows, kept.Part[activityRunsPart]{ID: key.id, Fingerprint: e.version, Present: true, Value: activityRunsPart{e.runs, e.users, e.assistants}})
+	}
+	m.mu.Unlock()
+	kept.SaveParts(disk, fmt.Sprintf("activity-runs|%g", gap), "activity-runs-1", rows, func(p activityRunsPart) int64 { return p.Runs.Bytes() + 8*int64(len(p.Users)+len(p.Assistants)) })
+}
+
 // activityReportRuns returns the sessions' runs clipped to q, in start
 // order, and the kept entries that hold their counted messages. Sessions
 // the memo holds at their current push fingerprint are not paired again;
@@ -98,6 +138,11 @@ func (s *Store) activityReportRuns(
 ) ([]activity.Run, map[string]activityRunsEntry, error) {
 	if len(ids) == 0 {
 		return nil, nil, nil
+	}
+	if s.usageDisk.Enabled() {
+		s.activityRuns.diskMu.Lock()
+		s.activityRuns.load(&s.usageDisk, q.GapCapSeconds)
+		s.activityRuns.diskMu.Unlock()
 	}
 	// A replacement between this read and the pairing scan keeps the new
 	// mirror's runs under the old fingerprint, which a later read reaches
@@ -147,6 +192,11 @@ func (s *Store) activityReportRuns(
 		// A report too large to keep would only evict the rest.
 		if bytes <= activityRunsMaxBytes {
 			s.activityRuns.store(keep)
+			if s.usageDisk.Enabled() && ctx.Err() == nil {
+				s.activityRuns.diskMu.Lock()
+				s.activityRuns.save(&s.usageDisk, q.GapCapSeconds)
+				s.activityRuns.diskMu.Unlock()
+			}
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -193,11 +243,13 @@ func (s *Store) activityRunVersions(ctx context.Context, ids []string) (map[stri
 func (s *Store) scanActivityCountedMessages(
 	ctx context.Context, ids []string, add func(sessionID, role string, at time.Time),
 ) error {
-	rows, err := s.queryContext(ctx, `
+	query := `
 		SELECT session_id, role, timestamp FROM messages
 		WHERE session_id IN (SELECT unnest(?))
 			AND role IN ('user', 'assistant') AND is_system = false
-			AND source_subtype <> 'tool_result' AND timestamp IS NOT NULL`, ids)
+			AND source_subtype <> 'tool_result' AND timestamp IS NOT NULL`
+	observeAnalyticsQuery(query)
+	rows, err := s.queryContext(ctx, query, ids)
 	if err != nil {
 		return fmt.Errorf("querying duckdb activity counted messages: %w", err)
 	}

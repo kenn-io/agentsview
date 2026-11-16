@@ -131,13 +131,20 @@ func (s *Store) mirrorStampLocked() string {
 
 // keptVersion names the mirror handle and custom pricing used by in-memory Usage reads.
 func (s *Store) keptVersion() string {
+	memory, _ := s.keptVersions()
+	return memory
+}
+
+func (s *Store) keptVersions() (string, string) {
 	s.handleMu.RLock()
 	defer s.handleMu.RUnlock()
 	stamp := s.mirrorStampLocked()
 	if stamp == "" {
-		return ""
+		return "", ""
 	}
-	return stamp + "|" + s.pricingDigest + "|" + s.aliasPath + "|" + pricingpkg.ConfiguredAliasesDigest()
+	base := stamp + "|" + s.pricingDigest
+	aliases := pricingpkg.ConfiguredAliasesDigest()
+	return base + "|" + s.aliasPath + "|" + aliases, base + "|" + aliases
 }
 
 // Capture before opening: DuckDB may replay a leftover WAL on open.

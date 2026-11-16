@@ -28,6 +28,7 @@ func (s *Store) activitySessionRuns(
 ) (map[string]activity.SessionRuns, error) {
 	gapCap := time.Duration(gapCapSeconds) * time.Second
 	sqlText, args := activityRunsSQL(ids, gapCap.Microseconds())
+	observeAnalyticsQuery(sqlText)
 	rows, err := s.queryContext(ctx, sqlText, args...)
 	if err != nil {
 		return nil, fmt.Errorf("querying activity session runs: %w", err)

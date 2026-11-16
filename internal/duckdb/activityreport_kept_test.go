@@ -3,6 +3,7 @@
 package duckdb
 
 import (
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -235,6 +236,7 @@ func TestPartialActivityUsageKeptUntilPush(t *testing.T) {
 }
 
 func TestPartialActivityUsageRereadsPastNextRow(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	keptActivityMirror(t, path, "session-a", 500)
 	conn, err := Open(t.Context(), path)
@@ -245,11 +247,17 @@ func TestPartialActivityUsageRereadsPastNextRow(t *testing.T) {
 	store, err := NewStore(t.Context(), path)
 	require.NoError(t, err)
 	defer store.Close()
+	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
 	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
 	require.NoError(t, err)
 	reads := observeActivityUsageReads(t)
 	first := keptActivityBuild(t, store, q, true)
 	require.Equal(t, 0, activity.ReportWithSessions(first).Totals.OutputTokens)
+	require.NoError(t, store.Close())
+	store, err = NewStore(t.Context(), path)
+	require.NoError(t, err)
+	defer store.Close()
+	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
 	q.EffectiveEnd = q.EffectiveEnd.Add(time.Hour)
 	second := keptActivityBuild(t, store, q, true)
 	require.Equal(t, 500, activity.ReportWithSessions(second).Totals.OutputTokens)
@@ -294,4 +302,92 @@ func TestPartialActivityUsageRereadsPastClaudePeer(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 900, updated.Totals.OutputTokens)
 	require.Equal(t, 2, *reads)
+}
+
+func TestPartialActivityInputsSurviveRestart(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	rates := map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 10_000_000}}
+	for _, tc := range []struct {
+		name  string
+		input activity.QueryInput
+	}{
+		{"month", activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}},
+		{"year", activity.QueryInput{Preset: "custom", From: "2025-01-02T00:00:00Z", To: "2026-01-02T00:00:00Z", Timezone: "UTC"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q, err := activity.ResolveQuery(tc.input, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+			require.NoError(t, err)
+			require.True(t, q.Partial)
+			open := func() *Store {
+				s, err := NewStore(t.Context(), path)
+				require.NoError(t, err)
+				s.SetCustomPricing(rates)
+				require.NoError(t, s.OpenActivityReportDisk(t.Context()))
+				return s
+			}
+			store := open()
+			keptActivityBuild(t, store, q, true)
+			require.NoError(t, store.Close())
+			restarted := open()
+			defer restarted.Close()
+			q.EffectiveEnd = q.EffectiveEnd.Add(time.Minute)
+			usage, runs, messages := 0, 0, 0
+			previous := analyticsQueryObserver
+			analyticsQueryObserver = func(query string) {
+				if strings.Contains(query, "activity_usage_keyed") {
+					usage++
+				}
+				if strings.Contains(query, "activity_run_pieces") {
+					runs++
+				}
+				if strings.Contains(query, "SELECT session_id, role, timestamp FROM messages") {
+					messages++
+				}
+			}
+			defer func() { analyticsQueryObserver = previous }()
+			got := keptActivityBuild(t, restarted, q, true)
+			require.Equal(t, []int{0, 0, 0}, []int{usage, runs, messages})
+			fresh := NewStoreFromDB(restarted.DB())
+			fresh.SetCustomPricing(rates)
+			requireKeptActivityEqual(t, keptActivityBuild(t, fresh, q, true), got)
+			usage = 0
+			restarted.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}})
+			repriced := keptActivityBuild(t, restarted, q, true)
+			require.Equal(t, 1, usage)
+			require.Equal(t, money.MustParseDollars("0.01"), activity.ReportWithSessions(repriced).Totals.Cost)
+		})
+	}
+}
+
+func TestPartialActivityCorruptDiskEntryIsMiss(t *testing.T) {
+	cache := t.TempDir()
+	t.Setenv("CACHE_DIRECTORY", cache)
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
+	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	keptActivityBuild(t, store, q, true)
+	require.NoError(t, store.Close())
+	require.NoError(t, filepath.WalkDir(cache, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if filepath.Ext(path) == ".gob" {
+			return os.WriteFile(path, []byte("corrupt"), 0600)
+		}
+		return nil
+	}))
+	restarted, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	defer restarted.Close()
+	require.NoError(t, restarted.OpenActivityReportDisk(t.Context()))
+	reads := observeActivityUsageReads(t)
+	got := keptActivityBuild(t, restarted, q, true)
+	require.Equal(t, 1, *reads)
+	require.Equal(t, 500, activity.ReportWithSessions(got).Totals.OutputTokens)
 }

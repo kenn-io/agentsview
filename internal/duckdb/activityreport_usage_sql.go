@@ -12,6 +12,7 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/readbase"
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
@@ -50,7 +51,7 @@ const activityUsageModels = `SELECT DISTINCT model, provider_id FROM messages WH
 // report order, for activity.AllocateUsageCosts to apportion.
 func (s *Store) sumActivityUsage(
 	ctx context.Context, candidateWhere string, candidateArgs []any, lowerBound, upperBound string,
-	q activity.Query, pricing *export.PricingResolver, slot, version string,
+	q activity.Query, pricing *export.PricingResolver, slot, version, diskVersion string,
 ) ([]activity.UsageRow, error) {
 	startUS, endUS := readbase.ActivityUsageSpan(q)
 	if startUS >= endUS {
@@ -59,6 +60,14 @@ func (s *Store) sumActivityUsage(
 	if version != "" {
 		if saved, ok := s.activityUsageSums.Get(slot, version); ok && saved[0].Covers(endUS) {
 			return readbase.AssembleActivityUsage(pricing, saved[0].Schedule, saved[0].Groups)
+		}
+	}
+	if version != "" && diskVersion != "" {
+		if data, ok := s.usageDisk.Get("activity-usage|"+slot, "activity-usage-1|"+diskVersion); ok {
+			if saved, ok := kept.DecodeRows[*readbase.ActivityUsageSums](data); ok && len(saved) == 1 && saved[0] != nil && saved[0].Covers(endUS) {
+				s.activityUsageSums.Put(slot, version, saved)
+				return readbase.AssembleActivityUsage(pricing, saved[0].Schedule, saved[0].Groups)
+			}
 		}
 	}
 	with := duckActivityUsageWith(candidateWhere)
@@ -86,7 +95,20 @@ func (s *Store) sumActivityUsage(
 		if next.Valid {
 			nextUS = next.Int64
 		}
-		s.activityUsageSums.Put(slot, version, []*readbase.ActivityUsageSums{{Schedule: schedule, Groups: groups, EndUS: endUS, NextUS: nextUS}})
+		saved := []*readbase.ActivityUsageSums{{Schedule: schedule, Groups: groups, EndUS: endUS, NextUS: nextUS}}
+		s.activityUsageSums.Put(slot, version, saved)
+		canSave := diskVersion != ""
+		for _, rate := range schedule.Rates {
+			if rate.BilledErr != nil {
+				canSave = false
+				break
+			}
+		}
+		if canSave {
+			if data, err := kept.EncodeRows(saved, 128<<20, func(row *readbase.ActivityUsageSums) int64 { return row.Bytes() }); err == nil {
+				s.usageDisk.Put("activity-usage|"+slot, "activity-usage-1|"+diskVersion, data)
+			}
+		}
 	}
 	return readbase.AssembleActivityUsage(pricing, schedule, groups)
 }

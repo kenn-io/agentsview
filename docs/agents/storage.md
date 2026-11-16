@@ -803,8 +803,9 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
   a schedule of segments; SQL picks a row's segment and pricing band and does
   the integer cost math. Both backends share the schedule and the assembly of
   the summed groups in `internal/readbase/activityusage.go`. DuckDB keeps
-  usage totals for ranges that include today in memory. A push, pricing
-  change, or restart clears those totals. Finished reports also use memory,
+  usage totals for ranges that include today in memory and on disk, along with
+  session runs and message times. A push or pricing change refreshes the
+  affected inputs. Finished reports also use memory,
   which restart clears. Eligible past-day reports can be saved to disk and
   reused after restart. DuckDB also derives session runs in SQL with
   `activitySessionRuns`. The SQLite and PostgreSQL reports keep the Go rules

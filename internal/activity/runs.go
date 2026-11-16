@@ -1,8 +1,11 @@
 package activity
 
 import (
+	"bytes"
 	"cmp"
 	"context"
+	"encoding/gob"
+	"errors"
 	"runtime"
 	"slices"
 	"sort"
@@ -77,6 +80,64 @@ type sessionRun struct {
 	model string
 	// first and last index the run's start and end in bounds.
 	first, last int32
+}
+
+type encodedSessionRun struct {
+	Model       string
+	First, Last int32
+}
+
+type encodedSessionRuns struct {
+	Bounds  []int64
+	Trimmed []uint64
+	Runs    []encodedSessionRun
+}
+
+// GobEncode preserves the pieces used to clip runs to a report range.
+func (r SessionRuns) GobEncode() ([]byte, error) {
+	encoded := encodedSessionRuns{Bounds: r.bounds, Trimmed: r.trimmed}
+	for _, run := range r.runs {
+		encoded.Runs = append(encoded.Runs, encodedSessionRun{run.model, run.first, run.last})
+	}
+	var buf bytes.Buffer
+	err := gob.NewEncoder(&buf).Encode(encoded)
+	return buf.Bytes(), err
+}
+
+// GobDecode rejects invalid piece indexes in a saved run.
+func (r *SessionRuns) GobDecode(data []byte) error {
+	var encoded encodedSessionRuns
+	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&encoded); err != nil {
+		return err
+	}
+	decoded := SessionRuns{bounds: encoded.Bounds, trimmed: encoded.Trimmed}
+	next := 0
+	for _, run := range encoded.Runs {
+		if int(run.First) != next || run.Last <= run.First || int(run.Last) >= len(encoded.Bounds) {
+			return errors.New("invalid activity run bounds")
+		}
+		if next > 0 && encoded.Bounds[next-1] > encoded.Bounds[next] {
+			return errors.New("invalid activity run order")
+		}
+		for i := run.First; i < run.Last; i++ {
+			if encoded.Bounds[i] >= encoded.Bounds[i+1] {
+				return errors.New("invalid activity run order")
+			}
+		}
+		if decoded.pieceTrimmed(run.Last) {
+			return errors.New("invalid activity run trim")
+		}
+		decoded.runs = append(decoded.runs, sessionRun{run.Model, run.First, run.Last})
+		next = int(run.Last) + 1
+	}
+	if next != len(encoded.Bounds) || len(encoded.Trimmed) > (len(encoded.Bounds)+63)/64 {
+		return errors.New("invalid activity run layout")
+	}
+	if len(encoded.Trimmed) > 0 && len(encoded.Bounds)%64 != 0 && encoded.Trimmed[len(encoded.Trimmed)-1]>>(len(encoded.Bounds)%64) != 0 && len(encoded.Trimmed) == (len(encoded.Bounds)+63)/64 {
+		return errors.New("invalid activity run trim")
+	}
+	*r = decoded
+	return nil
 }
 
 // Bytes estimates the memory the runs hold.

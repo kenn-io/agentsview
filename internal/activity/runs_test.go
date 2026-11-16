@@ -1,7 +1,9 @@
 package activity
 
 import (
+	"bytes"
 	"context"
+	"encoding/gob"
 	"fmt"
 	"math/rand/v2"
 	"slices"
@@ -226,4 +228,27 @@ func TestRunsMatchCandidatesWithMicrosecondStartBound(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, want, got, "trial %d", trial)
 	}
+}
+
+func TestSessionRunsGobRoundTrip(t *testing.T) {
+	builder := NewSessionRunsBuilder(300)
+	builder.AddPiece("model-a", 1000000, 2000000, false)
+	builder.AddPiece("model-a", 2000000, 3000000, true)
+	builder.AddPiece("model-b", 4000000, 5000000, false)
+	original := builder.Finish()
+	var buf bytes.Buffer
+	require.NoError(t, gob.NewEncoder(&buf).Encode(original))
+	var restored SessionRuns
+	require.NoError(t, gob.NewDecoder(&buf).Decode(&restored))
+	start, end := time.UnixMicro(1500000), time.UnixMicro(4500000)
+	require.Equal(t, original.AppendClipped(nil, "s", start, end), restored.AppendClipped(nil, "s", start, end))
+	buf.Reset()
+	require.NoError(t, gob.NewEncoder(&buf).Encode(encodedSessionRuns{Bounds: []int64{1}, Runs: []encodedSessionRun{{First: 0, Last: 2}}}))
+	require.Error(t, restored.GobDecode(buf.Bytes()))
+	buf.Reset()
+	require.NoError(t, gob.NewEncoder(&buf).Encode(encodedSessionRuns{Bounds: []int64{2, 1}, Runs: []encodedSessionRun{{First: 0, Last: 1}}}))
+	require.Error(t, restored.GobDecode(buf.Bytes()))
+	buf.Reset()
+	require.NoError(t, gob.NewEncoder(&buf).Encode(encodedSessionRuns{Bounds: []int64{3, 4, 1, 2}, Runs: []encodedSessionRun{{First: 0, Last: 1}, {First: 2, Last: 3}}}))
+	require.Error(t, restored.GobDecode(buf.Bytes()))
 }

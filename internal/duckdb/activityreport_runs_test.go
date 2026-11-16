@@ -192,3 +192,42 @@ func TestDuckDBActivityRunsRepairUnfingerprintedSessions(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []time.Duration{3 * time.Minute}, spans())
 }
+
+func TestActivityRunsDiskReusesUnchangedSessions(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	conn := openTestDuckDB(t)
+	require.NoError(t, EnsureSchema(t.Context(), conn))
+	for _, id := range []string{"a", "b"} {
+		_, err := conn.ExecContext(t.Context(), `INSERT INTO sessions (id, machine, project, agent, agentsview_push_fingerprint) VALUES (?, 'machine', 'project', 'codex', 'v1')`, id)
+		require.NoError(t, err)
+		_, err = conn.ExecContext(t.Context(), `INSERT INTO messages (id, session_id, ordinal, role, content, timestamp) VALUES (?, ?, 0, 'user', '', TIMESTAMP '2026-01-01 00:00:00')`, map[string]int{"a": 1, "b": 2}[id], id)
+		require.NoError(t, err)
+	}
+	open := func() *Store {
+		s := NewStoreFromDB(conn)
+		require.NoError(t, s.usageDisk.Open("duckdb-usage", "runs-test", 128<<20, 256<<20))
+		return s
+	}
+	q := duckDayQuery(t, "2026-01-01", "UTC")
+	ids := []string{"a", "b"}
+	first := open()
+	_, _, err := first.activityReportRuns(t.Context(), ids, q)
+	require.NoError(t, err)
+	restarted := open()
+	_, _, err = restarted.activityReportRuns(t.Context(), ids, q)
+	require.NoError(t, err)
+	versions, err := restarted.activityRunVersions(t.Context(), ids)
+	require.NoError(t, err)
+	_, misses := restarted.activityRuns.lookup(ids, versions, q.GapCapSeconds)
+	require.Empty(t, misses)
+	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET agentsview_push_fingerprint = 'v2' WHERE id = 'b'`)
+	require.NoError(t, err)
+	versions, err = restarted.activityRunVersions(t.Context(), ids)
+	require.NoError(t, err)
+	_, misses = restarted.activityRuns.lookup(ids, versions, q.GapCapSeconds)
+	require.Equal(t, []string{"b"}, misses)
+	_, _, err = restarted.activityReportRuns(t.Context(), ids, q)
+	require.NoError(t, err)
+	_, misses = restarted.activityRuns.lookup(ids, versions, q.GapCapSeconds)
+	require.Empty(t, misses)
+}

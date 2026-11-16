@@ -744,9 +744,9 @@ func (s *Store) activityReportUsage(
 	q activity.Query,
 ) ([]activity.UsageRow, *export.PricingBlock, error) {
 	out := []activity.UsageRow{}
-	version := s.keptVersion()
+	version, diskVersion := s.keptVersions()
 	if !q.Partial || db.TerminationUsesTime(f.Termination) {
-		version = ""
+		version, diskVersion = "", ""
 	}
 	// Keep the filter and range stable while the effective end moves.
 	slotQuery := q
@@ -767,7 +767,7 @@ func (s *Store) activityReportUsage(
 
 	candidateWhere, candidateArgs := duckActivityReportCandidateWhere(
 		f, rangeStartUTC, rangeEndUTC)
-	out, err = s.sumActivityUsage(ctx, candidateWhere, candidateArgs, lowerBound, upperBound, q, rateResolver, slot, version)
+	out, err = s.sumActivityUsage(ctx, candidateWhere, candidateArgs, lowerBound, upperBound, q, rateResolver, slot, version, diskVersion)
 	if err != nil {
 		return nil, nil, fmt.Errorf("selecting duckdb activity report usage: %w", err)
 	}
