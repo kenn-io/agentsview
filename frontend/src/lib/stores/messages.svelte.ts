@@ -242,8 +242,10 @@ export class MessagesStore {
   }
 
   private failLoad(err: unknown, kind: "load" | "older" | "history") {
+    // An unresolved transcript failure keeps its kind, so Retry still runs
+    // the load or reload that publishes the read-progress token.
+    if (this.loadError === null || this.loadErrorKind !== "load") this.loadErrorKind = kind;
     this.loadError = failureMessage(err);
-    this.loadErrorKind = kind;
   }
 
   /** A history read landed, which settles an earlier history failure. A

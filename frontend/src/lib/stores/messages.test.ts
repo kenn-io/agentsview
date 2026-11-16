@@ -258,6 +258,32 @@ describe("MessagesStore", () => {
     expect(messages.activeSessionToken).toBe("rev-1");
   });
 
+  it("keeps a transcript failure through a failed search read until Retry reloads", async () => {
+    const all = Array.from({ length: 1500 }, (_, ordinal) => makeMessage(ordinal));
+    let failPageTwo = true;
+    vi.mocked(api.getSession).mockResolvedValue({
+      ...makeSession("s1", 1500),
+      transcript_revision: "rev-1",
+    } as Session);
+    vi.mocked(api.getMessages).mockImplementation(
+      async (_id: string, params: { from?: number; limit?: number }) => {
+        const limit = params.limit ?? 1000;
+        const from = params.from ?? 0;
+        if (failPageTwo && from === 1000) throw new Error("page two failed");
+        return makeMessagesResponse(all.slice(from, from + limit));
+      },
+    );
+    await messages.loadSession("s1");
+    await messages.ensureHistoryLoaded();
+    expect(messages.loadError).toBe("page two failed");
+
+    failPageTwo = false;
+    await messages.retryLoad();
+
+    expect(messages.loadError).toBeNull();
+    expect(messages.activeSessionToken).toBe("rev-1");
+  });
+
   it("keeps a failed first page through session search until Retry reloads", async () => {
     const all = Array.from({ length: 1500 }, (_, ordinal) => makeMessage(ordinal));
     let failFirstPage = true;
