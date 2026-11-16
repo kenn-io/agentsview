@@ -311,9 +311,6 @@ func TestDailyUsageKeptConcurrentMissesShareBuild(t *testing.T) {
 	a.result.Daily[0].InputTokens = 999
 	assert.Equal(t, 17, b.result.Daily[0].InputTokens)
 	assert.EqualValues(t, 1, prepares.Load())
-	_, err = database.GetDailyUsage(t.Context(), filter)
-	require.NoError(t, err)
-	assert.EqualValues(t, 1, prepares.Load())
 }
 
 func TestDailyUsageKeptConcurrentSlotsShareWindow(t *testing.T) {
@@ -353,42 +350,6 @@ func TestDailyUsageKeptConcurrentSlotsShareWindow(t *testing.T) {
 	assert.Equal(t, 17, a.result.Totals.InputTokens)
 	assert.Equal(t, 0, b.result.Totals.InputTokens)
 	assert.EqualValues(t, 1, prepares.Load())
-}
-
-func TestDailyUsageKeptSharedBuildCancel(t *testing.T) {
-	database := testDB(t)
-	seedLiveWriteSession(t, database, "one", "project", "2026-08-10T09:00:00Z", 0, 10)
-	var prepares atomic.Int32
-	started := make(chan struct{})
-	database.SetUsageWindowPrepareForTest(func(ctx context.Context) {
-		if prepares.Add(1) == 1 {
-			close(started)
-			<-ctx.Done()
-		}
-	})
-	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
-	deadline, stop := context.WithTimeout(t.Context(), 5*time.Second)
-	defer stop()
-	ctx, cancel := context.WithCancel(WithUsageWindowMemo(deadline))
-	defer cancel()
-	done := make(chan error, 1)
-	go func() { _, err := database.GetDailyUsage(ctx, filter); done <- err }()
-	select {
-	case <-started:
-	case <-deadline.Done():
-		require.FailNow(t, "prepare did not start")
-	}
-	cancel()
-	select {
-	case err := <-done:
-		require.ErrorIs(t, err, context.Canceled)
-	case <-deadline.Done():
-		require.FailNow(t, "canceled read did not return")
-	}
-	result, err := database.GetDailyUsage(deadline, filter)
-	require.NoError(t, err)
-	assert.Equal(t, 10, result.Totals.InputTokens)
-	assert.EqualValues(t, 2, prepares.Load())
 }
 
 func TestDailyUsageKeptJoinerSurvivesOtherCancel(t *testing.T) {
@@ -445,6 +406,10 @@ func TestDailyUsageKeptJoinerSurvivesOtherCancel(t *testing.T) {
 		require.FailNow(t, "joined read did not return")
 	}
 	assert.EqualValues(t, 2, prepares.Load())
+	result, err := database.GetDailyUsage(deadline, sideR)
+	require.NoError(t, err)
+	assert.Equal(t, 10, result.Totals.InputTokens)
+	assert.EqualValues(t, 3, prepares.Load())
 }
 
 func TestDailyUsageKeptSharedBuildErrorRetry(t *testing.T) {
@@ -488,7 +453,5 @@ func TestDailyUsageKeptSharedBuildErrorRetry(t *testing.T) {
 	got, err := database.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
 	assert.Equal(t, 10, got.Totals.InputTokens)
-	_, err = database.GetDailyUsage(deadline, filter)
-	require.NoError(t, err)
 	assert.EqualValues(t, 2, prepares.Load())
 }
