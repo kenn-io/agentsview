@@ -505,6 +505,9 @@ func applySessionMessageDiffTx(ctx context.Context,
 		); err != nil {
 			return err
 		}
+		if err := journalConversationToolSessionTx(tx, sessionID); err != nil {
+			return err
+		}
 	}
 
 	if len(plan.inserts) > 0 {

@@ -39,6 +39,7 @@ func newConversationChangesCommand() *cobra.Command {
 		Long: "List changed messages without their text. " +
 			"Continue a partial walk with the returned cursor; after the walk finishes, retain its checkpoint for the next changes walk. " +
 			"--cursor and --checkpoint are mutually exclusive. " +
+			"--tool-summaries adds a tool_summary change per session: calls, errors and measured time by tool category, and skills by name. " +
 			"Keep the text mode consistent with later message retrieval, and preserve reconciliation errors when the archive generation changes.",
 		Example: "  agentsview export conversations changes --text-mode stored --limit 100\n" +
 			"  agentsview export conversations changes --text-mode stored --limit 100 --checkpoint <checkpoint>",
@@ -61,6 +62,7 @@ func newConversationChangesCommand() *cobra.Command {
 	command.Flags().StringVar(&options.Checkpoint, "checkpoint", "", "Resume after a completed changes walk")
 	command.Flags().StringVar(&options.Cursor, "cursor", "", "Continue an unfinished changes walk")
 	command.Flags().IntVar(&options.Limit, "limit", db.MaxSessionLimit, "Maximum changes in this page")
+	command.Flags().BoolVar(&options.ToolSummaries, "tool-summaries", false, "Also list each session's tool call totals and skills")
 	return command
 }
 

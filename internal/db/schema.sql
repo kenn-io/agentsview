@@ -1711,6 +1711,13 @@ CREATE TABLE IF NOT EXISTS conversation_session_changes (
     gap TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_conversation_session_changes_revision ON conversation_session_changes(revision);
+-- The tool revision at which each session's tool calls last changed.
+-- The summary itself is computed from tool_calls when it is exported.
+CREATE TABLE IF NOT EXISTS conversation_tool_changes (
+    session_id TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_conversation_tool_changes_revision ON conversation_tool_changes(revision);
 
 -- Durable local raw archive identity, inventory and accepted generations.
 CREATE TABLE IF NOT EXISTS raw_archive_roots (

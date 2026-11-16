@@ -32,6 +32,13 @@ The latest release is
   `sync_interval`. See
   [Conversation Export](/docs/conversation-export/#follow-changes-live).
 
+- `agentsview export conversations changes --tool-summaries` lists what each
+  session's tools did: calls, errors and measured time by tool category, and
+  the skills the session invoked, without tool names, arguments or results. A
+  saved checkpoint keeps working; the first walk that asks returns every
+  session's summary. See
+  [Session tool summaries](/docs/conversation-export/#session-tool-summaries).
+
 - With automatic filing on, reopen linked Kata issues when a digest finding
   shows the pattern returned after the issue was closed as done.
 

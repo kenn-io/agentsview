@@ -323,6 +323,79 @@ evidence and text. Consumers should compare it across chunked reads, as they do
 project evidence. Deletions omit it; absence is not evidence that a retained
 message came from an interactive session.
 
+## Session tool summaries
+
+Exported text leaves out tool calls. Add `--tool-summaries` to the changes
+listing to learn what a session's tools did without exporting their names,
+arguments or results:
+
+```bash
+agentsview export conversations changes --tool-summaries
+agentsview export conversations changes --tool-summaries --checkpoint SAVED_CHECKPOINT
+```
+
+The listing then also contains `tool_summary` changes, one per session. Each
+carries the session's project reference and a `tool_summary` object with the
+session's complete current totals:
+
+```json
+{
+  "duration_ms": 70000,
+  "categories": [
+    {"category": "Bash", "calls": 3, "observed": 2, "errored": 1, "timed": 2, "duration_ms": 60000},
+    {"category": "Read", "calls": 1, "observed": 1, "errored": 0, "timed": 1, "duration_ms": 20000}
+  ],
+  "skills": [{"name": "review-change", "calls": 2}]
+}
+```
+
+- `categories` has one entry per tool category, sorted by name. `calls` counts
+  every call in the category, including one still running.
+- `observed` counts the calls whose result AgentsView classified, and `errored`
+  the ones it classified as an error. Report errors against `observed`, not
+  `calls`. The classification reads result text, so `errored` is a sign of
+  trouble, not proof that the task failed.
+- `timed` counts the calls with a measured start and end, and `duration_ms`
+  covers only those. A call that is not timed has an unknown duration, not a
+  zero one.
+- The top-level `duration_ms` merges overlapping calls. Category durations
+  overlap each other, so they do not add up to it. Durations are measured as
+  in the session's timing view, clipped to the session's recorded start and
+  end. For a session with no recorded start, that view clips to the first
+  prompt and the summary does not.
+- `skills` lists the skills the session invoked by name, sorted by name.
+- A subagent session has its own summary. Its parent's delegation call already
+  spans it, so do not add a parent's totals to its subagents'.
+
+A summary is sent again when the session's transcript, start or end changes,
+when a call's result is classified, when a subagent session it delegated to
+arrives, is deleted or changes its start or end, when its storage policy gap
+changes, and when the session is trashed or restored. Replace the summary you
+hold; consecutive summaries can be equal. Other rules:
+
+- A trashed session's summary has `deleted: true` and no `tool_summary`. A
+  permanently deleted session has no summary change; its session change
+  reports the deletion.
+- A session stored under `archive_content=usage` has
+  `gap: "archive_content_excluded"` and no `tool_summary`. Its calls are not
+  stored, so this means unknown, not zero.
+- A summary is not sent again when the session's project reference changes. Its
+  session change reports the new reference. A session with neither an exported
+  message nor an earlier session change gets none, so its summary keeps the
+  reference it was listed with.
+- A walk lists its summaries after its message and session changes.
+- Summaries have their own `revision` sequence. Compare a summary's revision
+  only with another summary's, and keep the same database generation rule as
+  for messages.
+
+A cursor or checkpoint records how far it has delivered summaries. When you add
+`--tool-summaries` to a walk whose saved checkpoint did not include them, the
+walk returns every session's current summary, without listing its messages
+again. A walk without the flag gives up that place, so asking again later
+returns every summary again. Responses remain schema 1. An archive last written
+by an older version needs one writable open, such as a daemon restart, before
+summaries can be listed.
+
 ## Identity, gaps and rebuilding
 
 The logical key is `(archive_id, session_id, message_id)` within one source
