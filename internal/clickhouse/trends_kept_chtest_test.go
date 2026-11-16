@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -54,6 +55,28 @@ func TestTrendsKeptPartialPush(t *testing.T) {
 	restarted := newTestStore(t, syncer.conn, syncer.target)
 	require.NoError(t, restarted.openActivityReportDisk(syncer.target))
 	require.Equal(t, fresh, read(restarted))
+
+	appendMessage(t, local, fixtureAlphaID, "alpha third", "2026-01-10T00:30:00.000Z")
+	result, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Errors)
+	want := read(newTestStore(t, syncer.conn, syncer.target))
+	require.Equal(t, 1, want.Series[0].Total)
+	require.Equal(t, want, read(store))
+
+	require.NoError(t, local.ReplaceSessionMessages(ctx, fixtureAlphaID, nil))
+	result, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Errors)
+	want = read(newTestStore(t, syncer.conn, syncer.target))
+	require.Zero(t, want.Series[0].Total)
+	require.Equal(t, want, read(store))
+}
+
+func trendPartsTextQueryCount(t *testing.T, store *Store) uint64 {
+	t.Helper()
+	n, _ := usageQueryCountsOf(t, store, "startsWith(trimLeft(query, ' \\n\\t\\r'), 'SELECT m.session_id, m.content')")
+	return n
 }
 
 func TestTrendsKeptRestart(t *testing.T) {
@@ -67,22 +90,19 @@ func TestTrendsKeptRestart(t *testing.T) {
 		require.NoError(t, err)
 		return result
 	}
-	count := func(store *Store) uint64 {
-		t.Helper()
-		n, _ := usageQueryCountsOf(t, store, "startsWith(trimLeft(query, ' \\n\\t\\r'), 'SELECT m.content, COALESCE(m.timestamp')")
-		return n
-	}
 	var reports []db.TrendsTermsResponse
 	for _, zone := range []string{"UTC", "America/New_York"} {
 		f := db.AnalyticsFilter{Timezone: zone, From: "2026-01-01", To: "2026-01-31"}
+		beforePartsRead := trendPartsTextQueryCount(t, first)
 		want := read(first, f)
 		reports = append(reports, want)
-		require.Positive(t, count(first))
+		afterPartsRead := trendPartsTextQueryCount(t, first)
+		require.Greater(t, afterPartsRead, beforePartsRead)
 		restarted := newTestStore(t, syncer.conn, syncer.target)
 		require.NoError(t, restarted.openActivityReportDisk(syncer.target))
-		before := count(restarted)
+		before := trendPartsTextQueryCount(t, restarted)
 		require.Equal(t, want, read(restarted, f))
-		require.Equal(t, before, count(restarted))
+		require.Equal(t, before, trendPartsTextQueryCount(t, restarted))
 	}
 	require.NotEqual(t, reports[0].Buckets, reports[1].Buckets)
 	partsBefore, err := first.tablePartsFingerprint(t.Context(), []string{"sessions", "messages"})
@@ -98,9 +118,9 @@ func TestTrendsKeptRestart(t *testing.T) {
 	for i, zone := range []string{"UTC", "America/New_York"} {
 		restarted := newTestStore(t, syncer.conn, syncer.target)
 		require.NoError(t, restarted.openActivityReportDisk(syncer.target))
-		before := count(restarted)
+		before := trendPartsTextQueryCount(t, restarted)
 		require.Equal(t, reports[i], read(restarted, db.AnalyticsFilter{Timezone: zone, From: "2026-01-01", To: "2026-01-31"}))
-		require.Equal(t, before, count(restarted))
+		require.Equal(t, before, trendPartsTextQueryCount(t, restarted))
 	}
 	f := db.AnalyticsFilter{Timezone: "UTC", From: "2026-01-01", To: "2026-01-31"}
 	beforePush := read(first, f)
@@ -114,9 +134,9 @@ func TestTrendsKeptRestart(t *testing.T) {
 	require.Equal(t, read(newTestStore(t, syncer.conn, syncer.target), f), updated)
 	again := newTestStore(t, syncer.conn, syncer.target)
 	require.NoError(t, again.openActivityReportDisk(syncer.target))
-	before := count(again)
+	before := trendPartsTextQueryCount(t, again)
 	require.Equal(t, updated, read(again, f))
-	require.Equal(t, before, count(again))
+	require.Equal(t, before, trendPartsTextQueryCount(t, again))
 
 	cacheFiles := func() []string {
 		t.Helper()
@@ -178,11 +198,6 @@ func TestTrendsKeptTimezoneProcess(t *testing.T) {
 		t.Fatal("zone missing from Go zoneinfo")
 		return nil
 	}
-	count := func() uint64 {
-		t.Helper()
-		n, _ := usageQueryCountsOf(t, store, "startsWith(trimLeft(query, ' \\n\\t\\r'), 'SELECT m.content, COALESCE(m.timestamp')")
-		return n
-	}
 	run := func(filter, zone, date string) {
 		t.Helper()
 		require.NoError(t, os.WriteFile(filepath.Join(zoneDir, "Test", "Shift"), readZone(zone), 0o600))
@@ -192,12 +207,12 @@ func TestTrendsKeptTimezoneProcess(t *testing.T) {
 		require.NoError(t, err, "%s", output)
 	}
 	run("Test/Shift", "Etc/GMT+12", "2026-01-09")
-	before := count()
+	before := trendPartsTextQueryCount(t, store)
 	run("Test/Shift", "Etc/GMT-12", "2026-01-10")
-	after := count()
+	after := trendPartsTextQueryCount(t, store)
 	require.Greater(t, after, before)
 	run("Test/Shift", "Etc/GMT-12", "2026-01-10")
-	require.Equal(t, after, count())
+	require.Equal(t, after, trendPartsTextQueryCount(t, store))
 }
 
 func TestTrendsKeptMemoryHitRepairsDiskVersion(t *testing.T) {
@@ -212,39 +227,64 @@ func TestTrendsKeptMemoryHitRepairsDiskVersion(t *testing.T) {
 		require.NoError(t, err)
 		return report
 	}
-	count := func(s *Store) uint64 {
-		t.Helper()
-		n, _ := usageQueryCountsOf(t, s, "startsWith(trimLeft(query, ' \\n\\t\\r'), 'SELECT m.content, COALESCE(m.timestamp')")
-		return n
-	}
 	want := read(store)
 	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "clickhouse-usage", "*", "*.gob"))
 	require.NoError(t, err)
-	require.Len(t, files, 1)
-	old := time.Now().Add(-31 * 24 * time.Hour)
+	var reportFile string
 	for _, file := range files {
-		require.NoError(t, os.Chtimes(file, old, old))
+		saved, err := os.ReadFile(file)
+		require.NoError(t, err)
+		_, payload, ok := strings.Cut(string(saved), "\n")
+		if !ok {
+			continue
+		}
+		var persisted db.TrendsTermsResponse
+		if err := json.Unmarshal([]byte(payload), &persisted); err == nil && reflect.DeepEqual(want, persisted) {
+			require.Empty(t, reportFile)
+			reportFile = file
+		}
 	}
+	require.NotEmpty(t, reportFile)
+	old := time.Now().Add(-31 * 24 * time.Hour)
+	require.NoError(t, os.Chtimes(reportFile, old, old))
 	read(store)
 	store.usageDisk.Sweep(time.Now())
-	for _, file := range files {
-		_, err := os.Stat(file)
-		require.NoError(t, err)
-	}
+	saved, err := os.ReadFile(reportFile)
+	require.NoError(t, err)
+	_, payload, ok := strings.Cut(string(saved), "\n")
+	require.True(t, ok)
+	var persisted db.TrendsTermsResponse
+	require.NoError(t, json.Unmarshal([]byte(payload), &persisted))
+	require.Equal(t, want, persisted)
 	_, slot, err := trendsTermsKeys(f, terms, "day")
 	require.NoError(t, err)
 	stale, err := json.Marshal(want)
 	require.NoError(t, err)
 	store.usageDisk.Put(slot, "older-version", stale)
-	_, ok := store.usageDisk.Get(slot, "older-version")
+	_, ok = store.usageDisk.Get(slot, "older-version")
 	require.True(t, ok)
 	require.Equal(t, want, read(store))
+	// Leave only the repaired report so restart cannot rebuild from saved parts.
+	files, err = filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "clickhouse-usage", "*", "*.gob"))
+	require.NoError(t, err)
+	removedParts := 0
+	for _, file := range files {
+		if file == reportFile {
+			continue
+		}
+		require.NoError(t, os.Remove(file))
+		removedParts++
+	}
+	require.Positive(t, removedParts)
+	files, err = filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "clickhouse-usage", "*", "*.gob"))
+	require.NoError(t, err)
+	require.Equal(t, []string{reportFile}, files)
 
 	restarted := newTestStore(t, syncer.conn, syncer.target)
 	require.NoError(t, restarted.openActivityReportDisk(syncer.target))
-	before := count(restarted)
+	before := trendPartsTextQueryCount(t, restarted)
 	require.Equal(t, want, read(restarted))
-	require.Equal(t, before, count(restarted))
+	require.Equal(t, before, trendPartsTextQueryCount(t, restarted))
 }
 
 func TestTrendsKeptPush(t *testing.T) {
