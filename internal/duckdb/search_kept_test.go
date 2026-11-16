@@ -332,3 +332,55 @@ func TestSearchKeptContentChangedDuringPush(t *testing.T) {
 		})
 	}
 }
+
+func TestSearchKeptVisibilityChangedDuringPush(t *testing.T) {
+	for _, flag := range []string{"is_system", "is_system_prefixed"} {
+		t.Run(flag, func(t *testing.T) {
+			t.Setenv("CACHE_DIRECTORY", t.TempDir())
+			ctx := t.Context()
+			local := newLocalDB(t)
+			const id, ts = "visibility", "2026-01-02T03:04:05.000Z"
+			message := syncMessage(id, 0, "assistant", "<task-notification>uniqueterm", ts)
+			require.NoError(t, local.UpsertSession(ctx, syncSession(id, "project", "session", ts, 1)))
+			require.NoError(t, local.ReplaceSessionMessages(ctx, id, []db.Message{message}))
+			path := filepath.Join(t.TempDir(), "mirror.duckdb")
+			result, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, true, nil)
+			require.NoError(t, err)
+			require.Zero(t, result.Errors)
+			backup := filepath.Join(t.TempDir(), "backup.db")
+			require.NoError(t, local.SnapshotTo(ctx, backup))
+			syncer := newTestSync(t, path, local, storage.MirrorPushOptions{})
+			sessions, err := local.ListSessionsForMirrorWindow(ctx, "", nil, nil)
+			require.NoError(t, err)
+			fingerprints, err := syncer.sessionFingerprints(ctx, sessions)
+			require.NoError(t, err)
+			if flag == "is_system" {
+				message.IsSystem = true
+			} else {
+				message.Role = "user"
+			}
+			require.NoError(t, local.ReplaceSessionMessages(ctx, id, []db.Message{message}))
+			_, err = syncer.pushSingleSession(ctx, sessions[0], fingerprints[id])
+			require.NoError(t, err)
+			require.NoError(t, syncer.Close())
+			filter := db.SearchFilter{Query: "uniqueterm"}
+			store := openUsagePartsStore(t, path)
+			page, err := store.Search(ctx, filter)
+			require.NoError(t, err)
+			require.Empty(t, page.Results)
+			require.NoError(t, store.Close())
+			restored, err := db.OpenIsolated(ctx, backup)
+			require.NoError(t, err)
+			defer restored.Close()
+			result, err = Push(ctx, path, restored, "test-machine", storage.MirrorPushOptions{}, true, nil)
+			require.NoError(t, err)
+			require.Zero(t, result.Errors)
+			store = openUsagePartsStore(t, path)
+			defer store.Close()
+			page, err = store.Search(ctx, filter)
+			require.NoError(t, err)
+			require.Len(t, page.Results, 1)
+			require.Equal(t, id, page.Results[0].SessionID)
+		})
+	}
+}

@@ -786,7 +786,7 @@ func (s *Store) searchDiskVersion(ctx context.Context) (string, bool) {
 	if err := s.queryRowContext(ctx, `SELECT COUNT(*), COALESCE(BIT_XOR(HASH(it)), 0) FROM image_text it`).Scan(&imageCount, &imageHash); err != nil {
 		return "", false
 	}
-	if err := s.queryRowContext(ctx, `SELECT COUNT(*), COALESCE(BIT_XOR(HASH(session_id, ordinal, content)), 0) FROM messages`).Scan(&messageCount, &messageHash); err != nil {
+	if err := s.queryRowContext(ctx, `SELECT COUNT(*), COALESCE(BIT_XOR(HASH(session_id, ordinal, content, is_system, is_system_prefixed)), 0) FROM messages`).Scan(&messageCount, &messageHash); err != nil {
 		return "", false
 	}
 	sum := sha256.Sum256(fmt.Appendf(data, "|%d|%d|%d|%d", imageCount, imageHash, messageCount, messageHash))
