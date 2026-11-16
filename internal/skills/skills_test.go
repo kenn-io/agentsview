@@ -56,10 +56,8 @@ func TestRenderPluginPackageReusesClaudeArtifacts(t *testing.T) {
 		"skills/agentsview-finding-history/LICENSE",
 		"agents/agentsview-search-conversations.md",
 	}, renderedPaths(plugin))
-	for _, name := range []string{"SKILL.md", licenseFileName} {
-		assert.Equal(t, artifactByBase(t, standalone, name).Content,
-			artifactByBase(t, plugin, name).Content)
-	}
+	assert.Equal(t, artifactByBase(t, standalone, licenseFileName).Content,
+		artifactByBase(t, plugin, licenseFileName).Content)
 }
 
 func TestRenderPackage_ProtectsLicenseEdits(t *testing.T) {
@@ -286,4 +284,14 @@ func TestRemoteValidateRejectsControlCharacters(t *testing.T) {
 func TestParseRemoteDropsControlCharacters(t *testing.T) {
 	body := skillFileWithRemoteLine(`{"server":"https://example.invalid\nname: evil"}`)
 	assert.True(t, ParseRemote(body).Empty())
+}
+
+func TestPluginSkillDelegationGuard(t *testing.T) {
+	plugin, err := RenderPluginPackage("dev")
+	require.NoError(t, err)
+	skill := artifactByBase(t, plugin, "SKILL.md").Content
+	assert.Contains(t, skill, "the AgentsView MCP server is registered as `agentsview` or `plugin:agentsview-memory:agentsview`")
+	standalone, err := RenderPackage(HarnessClaude, "dev", Remote{})
+	require.NoError(t, err)
+	assert.Contains(t, artifactByBase(t, standalone, "SKILL.md").Content, "the AgentsView MCP server is registered as `agentsview`; otherwise follow these steps directly")
 }

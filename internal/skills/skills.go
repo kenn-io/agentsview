@@ -201,12 +201,19 @@ type Rendered struct {
 // line two, inside the frontmatter fence, so the rendered file still begins
 // with "---".
 func Render(h Harness, version string, remote Remote) (Rendered, error) {
+	return render(h, version, remote, "")
+}
+
+func render(h Harness, version string, remote Remote, delegateOverride string) (Rendered, error) {
 	delegate, ok := delegatePhrases[h]
 	if !ok {
 		return Rendered{}, fmt.Errorf("skills: unknown harness %q", h)
 	}
 	if err := remote.Validate(); err != nil {
 		return Rendered{}, err
+	}
+	if delegateOverride != "" {
+		delegate = delegateOverride
 	}
 
 	data := templateData{Delegate: delegate, ServerArgs: remote.Args()}
@@ -235,11 +242,11 @@ func Render(h Harness, version string, remote Remote) (Rendered, error) {
 // the recall skill and its LICENSE sidecar; Claude also gets the bounded
 // search agent used by it.
 func RenderPackage(h Harness, version string, remote Remote) ([]Rendered, error) {
-	return renderPackage(h, version, remote, standaloneToolPrefix, "")
+	return renderPackage(h, version, remote, standaloneToolPrefix, "", "")
 }
 
-func renderPackage(h Harness, version string, remote Remote, toolPrefix string, alternateToolPrefix string) ([]Rendered, error) {
-	skill, err := Render(h, version, remote)
+func renderPackage(h Harness, version string, remote Remote, toolPrefix string, alternateToolPrefix string, delegateOverride string) ([]Rendered, error) {
+	skill, err := render(h, version, remote, delegateOverride)
 	if err != nil {
 		return nil, err
 	}
@@ -272,10 +279,12 @@ func renderPackage(h Harness, version string, remote Remote, toolPrefix string, 
 }
 
 // RenderPluginPackage produces the native plugin artifacts from the same
-// templates as the standalone Claude package. The skill and LICENSE stay
-// byte-identical so lifecycle diagnostics can recognize a duplicate install.
+// templates as the standalone Claude package. The LICENSE stays byte-identical.
 func RenderPluginPackage(version string) ([]Rendered, error) {
-	artifacts, err := renderPackage(HarnessClaude, version, Remote{}, pluginToolPrefix, standaloneToolPrefix)
+	delegate := "Use the `agentsview-search-conversations` agent when this harness exposes it " +
+		"and the AgentsView MCP server is registered as `agentsview` or `plugin:" + pluginName + ":" + pluginServer + "`; " +
+		"otherwise follow these steps directly"
+	artifacts, err := renderPackage(HarnessClaude, version, Remote{}, pluginToolPrefix, standaloneToolPrefix, delegate)
 	if err != nil {
 		return nil, err
 	}
