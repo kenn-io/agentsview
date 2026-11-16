@@ -265,12 +265,12 @@ func (ctx *flightWaitContext) Done() <-chan struct{} {
 	return ctx.Context.Done()
 }
 
-func (ctx *flightWaitContext) wait(t *testing.T) {
+func waitFor(t *testing.T, ch <-chan struct{}, message string) {
 	t.Helper()
 	select {
-	case <-ctx.waiting:
+	case <-ch:
 	case <-time.After(5 * time.Second):
-		require.FailNow(t, "read did not join its flight")
+		require.FailNow(t, message)
 	}
 }
 
@@ -299,7 +299,7 @@ func TestDailyUsageKeptConcurrentMissesShareBuild(t *testing.T) {
 	ranking := filter
 	ranking.PairwiseSides, ranking.SkipSessionCounts = true, true
 	go func() { result, err := database.GetDailyUsage(ctx2, ranking); second <- usageResponse{result, err} }()
-	ctx2.wait(t)
+	waitFor(t, ctx2.waiting, "read did not join its flight")
 	release()
 	a, b := <-first, <-second
 	require.NoError(t, a.err)
@@ -328,11 +328,7 @@ func TestDailyUsageKeptFailedBuildIsNotReused(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { _, err := database.GetDailyUsage(canceled, filter); done <- err }()
-	select {
-	case <-started:
-	case <-deadline.Done():
-		require.FailNow(t, "prepare did not start")
-	}
+	waitFor(t, started, "prepare did not start")
 	cancel()
 	select {
 	case err := <-done:
@@ -347,7 +343,7 @@ func TestDailyUsageKeptFailedBuildIsNotReused(t *testing.T) {
 }
 
 type retryFlightContext struct {
-	*flightWaitContext
+	context.Context
 	joined   chan struct{}
 	paused   chan struct{}
 	resume   chan struct{}
@@ -364,7 +360,7 @@ func (ctx *retryFlightContext) Done() <-chan struct{} {
 		default:
 		}
 	}
-	return ctx.flightWaitContext.Done()
+	return ctx.Context.Done()
 }
 
 func (ctx *retryFlightContext) Err() error {
@@ -392,20 +388,12 @@ func TestDailyUsageKeptJoinerSurvivesRepeatedCancel(t *testing.T) {
 			<-ctx.Done()
 		}
 	})
-	wait := func(ch <-chan struct{}) {
-		t.Helper()
-		select {
-		case <-ch:
-		case <-deadline.Done():
-			require.FailNow(t, "timed out waiting for read")
-		}
-	}
 	startOwner := func() (context.CancelFunc, <-chan error, <-chan error) {
 		t.Helper()
 		ctx, cancel := context.WithCancel(WithUsageWindowMemo(deadline))
 		rightDone, leftDone := make(chan error, 1), make(chan error, 1)
 		go func() { _, err := database.GetDailyUsage(ctx, right); rightDone <- err }()
-		wait(started)
+		waitFor(t, started, "prepare did not start")
 		memo := ctx.Value(usageWindowMemoKey{}).(*usageWindowMemo)
 		joined := make(chan struct{})
 		memo.mu.Lock()
@@ -414,23 +402,23 @@ func TestDailyUsageKeptJoinerSurvivesRepeatedCancel(t *testing.T) {
 		}
 		memo.mu.Unlock()
 		go func() { _, err := database.GetDailyUsage(ctx, left); leftDone <- err }()
-		wait(joined)
+		waitFor(t, joined, "window was not shared")
 		return cancel, rightDone, leftDone
 	}
 	cancelA, rightA, leftA := startOwner()
 	defer cancelA()
-	b := &retryFlightContext{flightWaitContext: &flightWaitContext{Context: WithUsageWindowMemo(deadline), waiting: make(chan struct{})}, joined: make(chan struct{}, 2), paused: make(chan struct{}), resume: make(chan struct{})}
+	b := &retryFlightContext{Context: WithUsageWindowMemo(deadline), joined: make(chan struct{}, 2), paused: make(chan struct{}), resume: make(chan struct{})}
 	resume := sync.OnceFunc(func() { close(b.resume) })
 	defer resume()
 	done := make(chan usageResponse, 1)
 	go func() { result, err := database.GetDailyUsage(b, left); done <- usageResponse{result, err} }()
-	wait(b.joined)
+	waitFor(t, b.joined, "read did not join its flight")
 	cancelA()
-	wait(b.paused)
+	waitFor(t, b.paused, "retry did not pause")
 	cancelC, rightC, leftC := startOwner()
 	defer cancelC()
 	resume()
-	wait(b.joined)
+	waitFor(t, b.joined, "read did not join its flight")
 	cancelC()
 	select {
 	case result := <-done:
