@@ -240,11 +240,23 @@ await generate(
 writeIndex();
 // Name every file: a directory walk honors the checkout's Git excludes, which
 // can hide a generated folder (such as artifacts/) and leave it unformatted.
-run(
-  "vp",
-  ["fmt", ...[...generatedSources(generatedDir).keys()].map((path) => join(generatedDir, path))],
-  { cwd: frontendDir },
-);
+// Split the names into batches: all of them together exceed the Windows
+// command-line limit of 32,767 characters.
+const maxFormatArgsLength = 30_000;
+const formatBatches = [[]];
+let formatBatchLength = 0;
+for (const path of generatedSources(generatedDir).keys()) {
+  const target = join(generatedDir, path);
+  if (formatBatchLength + target.length + 1 > maxFormatArgsLength && formatBatches.at(-1).length) {
+    formatBatches.push([]);
+    formatBatchLength = 0;
+  }
+  formatBatches.at(-1).push(target);
+  formatBatchLength += target.length + 1;
+}
+for (const batch of formatBatches) {
+  run("vp", ["fmt", ...batch], { cwd: frontendDir });
+}
 if (verifyGenerated && previousSpec !== readFileSync(specPath, "utf8")) {
   throw new Error("OpenAPI YAML was stale and has been regenerated");
 }
