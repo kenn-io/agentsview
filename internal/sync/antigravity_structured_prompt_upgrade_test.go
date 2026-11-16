@@ -22,7 +22,6 @@ func TestAntigravityStructuredPromptUpgradeReparsesUnchangedSource(t *testing.T)
 		oldText  = "<GRILL_ME> The user has requested an extensive structured interrogation of the subject. Ask questions and explore every assumption carefully. </GRILL_ME>"
 		previous = 182
 	)
-	assert.ElementsMatch(t, []parser.AgentType{parser.AgentAntigravity, parser.AgentAntigravityCLI}, db.ScopedDataVersionProviders(previous, 183))
 	for _, agent := range []parser.AgentType{parser.AgentAntigravity, parser.AgentAntigravityCLI} {
 		t.Run(string(agent), func(t *testing.T) {
 			t.Parallel()

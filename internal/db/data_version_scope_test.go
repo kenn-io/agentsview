@@ -29,6 +29,10 @@ func TestAntigravityCLIPromptEnvelopeUpgradeScopes(t *testing.T) {
 		ScopedDataVersionProviders(158, 160))
 }
 
+func TestAntigravityStructuredPromptUpgradeScope(t *testing.T) {
+	assert.ElementsMatch(t, []parser.AgentType{parser.AgentAntigravity, parser.AgentAntigravityCLI}, ScopedDataVersionProviders(182, 183))
+}
+
 func TestCommitLinkUpgradeScope(t *testing.T) {
 	d := testDB(t)
 	for _, agent := range []string{"codex", "claude"} {
