@@ -609,3 +609,26 @@ func TestActivityCloseWaitsForSavedUsage(t *testing.T) {
 	require.NoError(t, <-done)
 	require.NoError(t, second.Close())
 }
+
+func TestActivityUsagePendingFollowsMemoEviction(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	defer store.Close()
+	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
+	store.activityUsageSums.Limit = 1
+	for _, preset := range []string{"day", "month"} {
+		q, err := activity.ResolveQuery(activity.QueryInput{Preset: preset, Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+		require.NoError(t, err)
+		keptActivityBuild(t, store, q, true)
+	}
+	require.Len(t, store.activityUsagePending, 1)
+	for slot, pending := range store.activityUsagePending {
+		_, ok := store.activityUsageSums.Get(slot, pending.version)
+		require.True(t, ok)
+	}
+	store.SetCustomPricing(nil)
+	require.Empty(t, store.activityUsagePending)
+}

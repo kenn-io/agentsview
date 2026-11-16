@@ -230,7 +230,7 @@ func (s *Store) swapHandle(conn *sql.DB, alias string, info os.FileInfo) {
 	// Replacement aliases open the checkpointed main file without a sibling WAL.
 	s.walStamp = "nowal"
 	s.reports.Clear()
-	s.activityUsageSums.DeleteSlots(func(string) bool { return true })
+	s.clearActivityUsage()
 	s.analyticsReads.Clear()
 	s.dailyUsage.Clear()
 	s.planUsage.Clear()

@@ -98,8 +98,7 @@ func (s *Store) sumActivityUsage(
 	if diskVersion != "" {
 		if data, ok := s.usageDisk.Get("activity-usage|"+slot, "activity-usage-1|"+diskVersion); ok {
 			if saved, ok := kept.DecodeRows[*readbase.ActivityUsageSums](data); ok && len(saved) == 1 && saved[0] != nil && saved[0].Covers(endUS) {
-				s.activityUsageSums.Put(slot, version, saved)
-				s.rememberActivityUsage(slot, version, diskVersion)
+				s.keepActivityUsage(slot, version, diskVersion, saved)
 				return readbase.AssembleActivityUsage(pricing, saved[0].Schedule, saved[0].Groups)
 			}
 		}
@@ -133,12 +132,10 @@ func (s *Store) sumActivityUsage(
 			activityUsagePublishObserver()
 		}
 		saved := []*readbase.ActivityUsageSums{{Schedule: schedule, Groups: groups, EndUS: endUS, NextUS: nextUS}}
-		if version == s.keptVersion() {
-			s.activityUsageSums.Put(slot, version, saved)
+		if ctx.Err() != nil {
+			diskVersion = ""
 		}
-		if diskVersion != "" && ctx.Err() == nil && version == s.keptVersion() {
-			s.rememberActivityUsage(slot, version, diskVersion)
-		}
+		s.keepActivityUsage(slot, version, diskVersion, saved)
 	}
 	return readbase.AssembleActivityUsage(pricing, schedule, groups)
 }
@@ -428,25 +425,39 @@ type activityUsagePending struct {
 	version, diskVersion string
 }
 
-func (s *Store) rememberActivityUsage(slot, version, diskVersion string) {
+func (s *Store) keepActivityUsage(slot, version, diskVersion string, rows []*readbase.ActivityUsageSums) {
+	s.handleMu.RLock()
+	defer s.handleMu.RUnlock()
+	if version != s.keptVersionLocked() {
+		return
+	}
 	s.activityUsagePendingMu.Lock()
 	defer s.activityUsagePendingMu.Unlock()
-	if len(s.activityUsagePending) >= 64 {
-		for old := range s.activityUsagePending {
+	s.activityUsageSums.Put(slot, version, rows)
+	for old, pending := range s.activityUsagePending {
+		if _, ok := s.activityUsageSums.Get(old, pending.version); !ok || old == slot {
 			delete(s.activityUsagePending, old)
-			break
 		}
 	}
-	if s.activityUsagePending == nil {
-		s.activityUsagePending = make(map[string]activityUsagePending)
+	if _, ok := s.activityUsageSums.Get(slot, version); ok && diskVersion != "" {
+		if s.activityUsagePending == nil {
+			s.activityUsagePending = make(map[string]activityUsagePending)
+		}
+		s.activityUsagePending[slot] = activityUsagePending{version, diskVersion}
 	}
-	s.activityUsagePending[slot] = activityUsagePending{version, diskVersion}
+}
+
+func (s *Store) clearActivityUsage() {
+	s.activityUsagePendingMu.Lock()
+	defer s.activityUsagePendingMu.Unlock()
+	s.activityUsageSums.DeleteSlots(func(string) bool { return true })
+	clear(s.activityUsagePending)
 }
 
 func (s *Store) saveActivityUsage() {
+	version := s.keptVersion()
 	s.activityUsagePendingMu.Lock()
 	defer s.activityUsagePendingMu.Unlock()
-	version := s.keptVersion()
 	for slot, pending := range s.activityUsagePending {
 		if pending.version != version {
 			continue

@@ -135,6 +135,10 @@ func (s *Store) mirrorStampLocked() string {
 func (s *Store) keptVersion() string {
 	s.handleMu.RLock()
 	defer s.handleMu.RUnlock()
+	return s.keptVersionLocked()
+}
+
+func (s *Store) keptVersionLocked() string {
 	stamp := s.mirrorStampLocked()
 	if stamp == "" {
 		return ""
@@ -302,7 +306,7 @@ func (s *Store) SetCustomPricing(p map[string]config.CustomModelRate) {
 	digest := sha256.Sum256(fmt.Appendf(nil, "%#v", p))
 	s.pricingDigest = hex.EncodeToString(digest[:])
 	s.reports.Clear()
-	s.activityUsageSums.DeleteSlots(func(string) bool { return true })
+	s.clearActivityUsage()
 	s.dailyUsage.Clear()
 	s.planUsage.Clear()
 	s.topUsage.Clear()
