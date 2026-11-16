@@ -54,6 +54,7 @@ func TestUsageCarry(t *testing.T) {
 			case "partial deletion":
 				execPreparedUsage(t, store, fmt.Sprintf("ALTER TABLE usage_messages DELETE WHERE session_id = '%s' AND ordinal = 0 SETTINGS mutations_sync = 2", preparedUsageLongID))
 			case "snapshot ahead":
+				execPreparedUsage(t, store, "CREATE TABLE original_snapshot AS usage_session_snapshots ENGINE = Memory", fmt.Sprintf("INSERT INTO original_snapshot SELECT * FROM usage_session_snapshots WHERE id = '%s'", preparedUsageLongID))
 				execPreparedUsage(t, store, fmt.Sprintf(`INSERT INTO usage_session_snapshots SELECT * REPLACE (push_version + 1 AS push_version, toUInt128(push_version + 1) * 2 + 1 AS revision) FROM usage_session_snapshots WHERE id = '%s'`, preparedUsageLongID))
 			}
 			filters := []db.UsageFilter{{Timezone: "UTC", Breakdowns: true}, {From: "2026-01-01", To: "2026-01-30", Timezone: "UTC", Breakdowns: true}}
@@ -69,6 +70,9 @@ func TestUsageCarry(t *testing.T) {
 				pushPreparedUsage(t, syncer)
 			}
 			runPreparedUsageRefresh(t, store)
+			if scenario == "snapshot ahead" {
+				execPreparedUsage(t, store, "INSERT INTO usage_session_snapshots SELECT * FROM original_snapshot")
+			}
 			proofs := 0
 			store.beforeUsageCarryCheck = func() {
 				proofs++
@@ -143,6 +147,71 @@ func TestUsageCarryVersionTables(t *testing.T) {
 		insert(table)
 		require.NotEqual(t, before, version(), table)
 	}
+	before := version()
+	execPreparedUsage(t, store, "SYSTEM START MERGES usage_session_snapshots", "ALTER TABLE usage_session_snapshots MATERIALIZE COLUMN usage_recorded_costs SETTINGS mutations_sync = 2")
+	require.Equal(t, before, version())
+}
+
+func TestUsageCarryRecordedCostMaterialization(t *testing.T) {
+	t.Parallel()
+	local, syncer, store := newPreparedUsageStore(t)
+	const id = "recorded-cost"
+	session := fixtureSession(id, "recorded-cost", "cost", "2026-01-13T00:00:00.000Z", 1)
+	message := usagePriceMessage(id, 0, "2026-01-13T00:00:00.000Z", "unknown-recorded-model", `{"input_tokens":10,"recorded_cost_microdollars":1234}`)
+	_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{Session: session, Messages: []db.Message{message}, DataVersion: 1, ReplaceMessages: true}})
+	require.NoError(t, err)
+	pushPreparedUsage(t, syncer)
+	runPreparedUsageRefresh(t, store)
+	execPreparedUsage(t, store, "ALTER TABLE usage_session_snapshots DROP COLUMN usage_recorded_costs", "ALTER TABLE usage_session_snapshots ADD COLUMN "+chSnapshotRecordedCostsColumn, "TRUNCATE TABLE prepared_usage")
+	filters := []db.UsageFilter{{Project: "recorded-cost", Timezone: "UTC", Breakdowns: true}, {Project: "recorded-cost", From: "2026-01-01", To: "2026-01-30", Timezone: "UTC", Breakdowns: true}}
+	raw := make([]preparedUsageRead, len(filters))
+	for i, f := range filters {
+		raw[i] = readPreparedUsage(t, store, f)
+		require.EqualValues(t, 1234, raw[i].daily.Totals.TotalCost.Microdollars)
+	}
+	parts, err := store.tablePartsFingerprint(t.Context(), []string{usageSessionSnapshotTable})
+	require.NoError(t, err)
+	execPreparedUsage(t, store, "ALTER TABLE usage_session_snapshots MATERIALIZE COLUMN usage_recorded_costs SETTINGS mutations_sync = 2")
+	afterParts, err := store.tablePartsFingerprint(t.Context(), []string{usageSessionSnapshotTable})
+	require.NoError(t, err)
+	require.NotEqual(t, parts, afterParts)
+	runPreparedUsageRefresh(t, store)
+	proofs := 0
+	store.beforeUsageCarryCheck = func() { proofs++ }
+	for i, f := range filters {
+		_, before := usageQueryCounts(t, store)
+		daily, err := store.GetDailyUsage(t.Context(), f)
+		require.NoError(t, err)
+		top, err := store.GetTopSessionsByCost(t.Context(), f, 10)
+		require.NoError(t, err)
+		_, after := usageQueryCounts(t, store)
+		require.Equal(t, before, after)
+		fresh := readPreparedUsage(t, NewStoreFromDB(store.DB(), store.bulk), f)
+		require.Equal(t, raw[i].daily, daily)
+		require.Equal(t, raw[i].top, top)
+		require.Equal(t, fresh.daily, daily)
+		require.Equal(t, fresh.top, top)
+	}
+	require.Positive(t, proofs)
+}
+
+func TestUsageCarrySnapshotMovesDuringProbe(t *testing.T) {
+	t.Parallel()
+	local, syncer, store := newPreparedUsageStore(t)
+	writeLongUsageSession(t, local, 100)
+	pushPreparedUsage(t, syncer)
+	execPreparedUsage(t, store, "TRUNCATE TABLE prepared_usage")
+	store.afterTrackerReads = func() {
+		execPreparedUsage(t, store, fmt.Sprintf(`INSERT INTO usage_session_snapshots SELECT * REPLACE (push_version + 1 AS push_version, toUInt128(push_version + 1) * 2 + 1 AS revision) FROM usage_session_snapshots WHERE id = '%s'`, preparedUsageLongID))
+	}
+	version, err := store.usageReadFingerprint(t.Context(), preparedUsageState{}, "")
+	require.NoError(t, err)
+	require.Empty(t, version)
+	store.afterTrackerReads = nil
+	_, before := usageQueryCounts(t, store)
+	readPreparedUsage(t, store, db.UsageFilter{Timezone: "UTC"})
+	_, after := usageQueryCounts(t, store)
+	require.Greater(t, after, before)
 }
 
 func TestUsageCarryDiskRestart(t *testing.T) {

@@ -2678,12 +2678,15 @@ var chUsageReadTables = []string{
 // host is read raw; see preparedUsageState.raw.
 var chRawHostUsageTables = []string{"usage_messages", "usage_events"}
 
-// Preparation changes none of these tables. They name all inputs to a raw
-// read, excluding sync_metadata, which the schema step can update.
+// chUsageCarryTables is the stability list for the carry publication proof.
 var chUsageCarryTables = slices.Concat(
 	slices.DeleteFunc(slices.Clone(chUsageReadTables), func(table string) bool { return table == "sync_metadata" }),
 	chRawHostUsageTables, []string{"usage_price_models"},
 )
+
+var chUsageRawTables = slices.DeleteFunc(slices.Clone(chUsageCarryTables), func(table string) bool {
+	return table == usageSessionSnapshotTable
+})
 
 // carryRawUsage promotes an existing raw result only after the published
 // snapshots are shown to contain those same rows.
@@ -2736,11 +2739,20 @@ func (s *Store) usageCarryPublished(ctx context.Context) bool {
 }
 
 // usageReadFingerprint identifies the rows a usage read sees. Fully prepared
-// reads keep their version across merges. Raw and mixed reads name parts.
+// reads keep their version across merges. Raw reads name snapshot rows and
+// other parts; mixed reads name parts.
 // pricingDigest names the price records the read joins; see usageRowsVersion.
 func (s *Store) usageReadFingerprint(ctx context.Context, state preparedUsageState, pricingDigest string) (string, error) {
 	if !state.ready {
-		return s.tablePartsFingerprint(ctx, chUsageCarryTables)
+		parts, err := s.tablePartsFingerprint(ctx, chUsageRawTables)
+		if err != nil {
+			return "", err
+		}
+		snap, ok, err := s.usageRowsVersion(ctx, []string{usageSessionSnapshotTable}, "")
+		if err != nil || !ok {
+			return "", err
+		}
+		return parts + "|" + snap, nil
 	}
 	if len(state.raw) == 0 {
 		version, ok, err := s.usageRowsVersion(ctx, chUsageReadTables, pricingDigest)
