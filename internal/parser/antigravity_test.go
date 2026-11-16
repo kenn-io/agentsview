@@ -4829,10 +4829,7 @@ func TestDecodeAntigravityStepStructuredUserInput(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			var items []pbField
-			for _, item := range tc.items {
-				items = append(items, pbField{num: 3, wire: pbWireBytes, bytes: encodePB([]pbField{item})})
-			}
+			items := []pbField{{num: 3, wire: pbWireBytes, bytes: encodePB(tc.items)}}
 			payload := encodePB([]pbField{{num: 19, wire: pbWireBytes, bytes: encodePB(items)}})
 			msg, ok := decodeAntigravityStep(0, 14, payload)
 			require.True(t, ok)
