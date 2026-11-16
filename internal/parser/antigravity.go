@@ -1176,7 +1176,7 @@ func antigravityUserInputText(fields []agProtoField) string {
 	if !ok {
 		return ""
 	}
-	return strings.TrimSpace(strings.ReplaceAll(text, "\x00", "\uFFFD"))
+	return strings.TrimSpace(text)
 }
 
 // knownAntigravityToolNames is the set of tool names that Antigravity

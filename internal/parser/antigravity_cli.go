@@ -648,16 +648,14 @@ func appendMissingAntigravityHistoryMessages(
 		key  string
 		ts   time.Time
 		used bool
+		idx  int
 	}
 	var existing []existingUserTurn
-	for _, msg := range dbMessages {
-		if msg.Role != RoleUser {
-			continue
-		}
-		if key := normalizedAntigravityPrompt(msg.Content); key != "" {
-			existing = append(existing, existingUserTurn{
-				key: key, ts: msg.Timestamp,
-			})
+	for idx, msg := range dbMessages {
+		if msg.Role == RoleUser {
+			if key := normalizedAntigravityPrompt(msg.Content); key != "" {
+				existing = append(existing, existingUserTurn{key: key, ts: msg.Timestamp, idx: idx})
+			}
 		}
 	}
 	matchers := []func(existing, want time.Time) bool{
@@ -686,18 +684,20 @@ func appendMissingAntigravityHistoryMessages(
 					sameTurn(existing[i].ts, msg.Timestamp) {
 					existing[i].used = true
 					matched[hIdx] = true
+					if dbMessages[existing[i].idx].Timestamp.IsZero() {
+						dbMessages[existing[i].idx].Timestamp = msg.Timestamp
+					}
 					break
 				}
 			}
 		}
 	}
-	out := dbMessages
 	for hIdx, msg := range history {
 		if !matched[hIdx] {
-			out = append(out, msg)
+			dbMessages = append(dbMessages, msg)
 		}
 	}
-	return out
+	return dbMessages
 }
 
 func normalizedAntigravityPrompt(s string) string {

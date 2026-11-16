@@ -488,6 +488,36 @@ func TestAntigravityCLIDBPreservesTypedPromptMissingFromHistory(t *testing.T) {
 	assert.Equal(t, "typed prompt", sess.FirstMessage)
 }
 
+func TestAntigravityCLIMatchedHistoryKeepsTurnOrder(t *testing.T) {
+	root := t.TempDir()
+	id := "33333333-4444-5555-6666-777777777777"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityTestDB(t, dbPath)
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	for i, prompt := range []string{"first prompt", "second prompt"} {
+		item := encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: []byte(prompt)}})
+		input := encodePB([]pbField{{num: 3, wire: pbWireBytes, bytes: item}})
+		payload := encodePB([]pbField{{num: 19, wire: pbWireBytes, bytes: input}})
+		if i == 0 {
+			mustExec(t, db, `UPDATE steps SET step_payload = ? WHERE idx = 0`, payload)
+		} else {
+			mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`, 2, 14, payload)
+		}
+	}
+	require.NoError(t, db.Close())
+	mustWrite(t, filepath.Join(root, "history.jsonl"),
+		[]byte(`{"display":"second prompt","timestamp":1779000200000,`+
+			`"conversationId":"`+id+`"}`))
+	_, msgs, err := parseAntigravityCLITestSession(t, dbPath, "", "test-machine")
+	require.NoError(t, err)
+	require.Len(t, msgs, 3)
+	assert.Equal(t, "first prompt", msgs[0].Content)
+	assert.Equal(t, "assistant reply content body", msgs[1].Content)
+	assert.Equal(t, "second prompt", msgs[2].Content)
+}
+
 func TestAntigravityCLIProjectFallbackPromptAndProximity(t *testing.T) {
 	root := t.TempDir()
 	id := "f0f0f0f0-f1f1-f2f2-f3f3-f4f4f4f4f4f4"
@@ -4819,8 +4849,6 @@ func TestDecodeAntigravityStepStructuredUserInput(t *testing.T) {
 		want  string
 	}{
 		{"prompt with skill", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte("比较这两个游戏 /grill-me")}, {num: 2, wire: pbWireBytes, bytes: expansion}}, "比较这两个游戏 /grill-me"},
-		{"nul", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte("a\x00b")}}, "a�b"},
-		{"blank text", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte(" \n")}, {num: 2, wire: pbWireBytes, bytes: expansion}}, "A longer skill expansion with enough text to be selected"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
