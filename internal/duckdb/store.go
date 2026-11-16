@@ -187,14 +187,19 @@ func (s *Store) Close() error {
 	alias := s.aliasPath
 	s.handleMu.Unlock()
 
-	if s.usageDisk.Enabled() {
-		s.activityRuns.save(&s.usageDisk)
-		s.saveActivityUsage()
-	}
+	savesDone := make(chan struct{})
+	go func() {
+		defer close(savesDone)
+		if s.usageDisk.Enabled() {
+			s.activityRuns.save(&s.usageDisk)
+			s.saveActivityUsage()
+		}
+	}()
 	s.reports.Close()
 	err := conn.Close()
 	removeMirrorAlias(alias)
 	s.retiring.Wait()
+	<-savesDone
 	return err
 }
 

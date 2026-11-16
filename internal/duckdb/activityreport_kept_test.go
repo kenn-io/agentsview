@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/activity"
@@ -547,5 +548,41 @@ func TestPartialActivityUsageSavedAtClose(t *testing.T) {
 	*reads = 0
 	got = keptActivityBuild(t, restarted, q, true)
 	require.Equal(t, 0, *reads)
+	requireKeptActivityEqual(t, want, got)
+}
+
+func TestActivityCloseWaitsForSavedUsage(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
+	want := keptActivityBuild(t, store, q, true)
+	store.activityUsagePendingMu.Lock()
+	done := make(chan error, 1)
+	go func() { done <- store.Close() }()
+	closed := false
+	assert.Eventually(t, func() bool {
+		closed = store.DB().PingContext(t.Context()) != nil
+		return closed
+	}, 2*time.Second, 10*time.Millisecond, "database close must overlap saving")
+	select {
+	case err := <-done:
+		store.activityUsagePendingMu.Unlock()
+		t.Fatalf("Close returned before saving usage: %v", err)
+	default:
+	}
+	store.activityUsagePendingMu.Unlock()
+	require.NoError(t, <-done)
+	restarted, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	defer restarted.Close()
+	require.NoError(t, restarted.OpenActivityReportDisk(t.Context()))
+	reads := observeActivityUsageReads(t)
+	got := keptActivityBuild(t, restarted, q, true)
+	require.Zero(t, *reads)
 	requireKeptActivityEqual(t, want, got)
 }
