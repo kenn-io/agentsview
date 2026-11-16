@@ -718,6 +718,22 @@ func appendMissingAntigravityHistoryMessages(
 			}
 		}
 	}
+	for hIdx, msg := range history {
+		if matched[hIdx] || msg.Timestamp.IsZero() {
+			continue
+		}
+		for i := range existing {
+			turn := &dbMessages[existing[i].idx]
+			if !existing[i].used && !turn.antigravityTypedPrompt && !turn.Timestamp.IsZero() &&
+				turn.Timestamp.UnixMilli() == msg.Timestamp.UnixMilli() {
+				turn.Content = msg.Content
+				turn.ContentLength = len(msg.Content)
+				existing[i].used = true
+				matched[hIdx] = true
+				break
+			}
+		}
+	}
 	out := dbMessages
 	for hIdx, msg := range history {
 		if !matched[hIdx] {
@@ -732,7 +748,7 @@ func normalizedAntigravityPrompt(s string) string {
 }
 
 func normalizeAntigravityCLIUserMessage(msg *ParsedMessage, history map[string]struct{}) {
-	if msg.Role != RoleUser || msg.IsSystem {
+	if msg.Role != RoleUser || msg.IsSystem || msg.antigravityTypedPrompt {
 		return
 	}
 	if _, authored := history[strings.TrimSpace(msg.Content)]; authored {
