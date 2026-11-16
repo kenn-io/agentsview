@@ -48,7 +48,7 @@ func TestDaemonRestartSIGTERMHelperProcess(t *testing.T) {
 		select {
 		case <-ctx.Done():
 		case <-time.After(10 * time.Second):
-			t.Fatal("SIGTERM did not cancel the startup wait")
+			require.FailNow(t, "SIGTERM did not cancel the startup wait")
 		}
 		require.ErrorIs(t, ctx.Err(), context.Canceled)
 		t.Log("replacement launch observed canceled context")
