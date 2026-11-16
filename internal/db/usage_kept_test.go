@@ -263,7 +263,7 @@ func (ctx *flightWaitContext) wait(t *testing.T) {
 	select {
 	case <-ctx.waiting:
 	case <-time.After(5 * time.Second):
-		t.Fatal("read did not join its flight")
+		require.FailNow(t, "read did not join its flight")
 	}
 }
 
