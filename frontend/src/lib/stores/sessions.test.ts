@@ -2177,6 +2177,10 @@ describe("SessionsStore", () => {
       expect(sessions.nextCursor).toBe("page-2");
       expect(sessions.loading).toBe(false);
 
+      // Scrolling near the bottom asks again; it waits for Retry instead.
+      await sessions.loadMore();
+      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
+
       api.getSidebarSessionIndex.mockResolvedValueOnce({
         sessions: [makeSkinnyRow({ id: "second" })],
         total: 2,

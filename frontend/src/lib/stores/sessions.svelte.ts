@@ -562,7 +562,13 @@ class SessionsStore {
     this.signalDetailLoading = false;
   }
 
-  async loadMore() {
+  /** Load the next sidebar page. After a page fails, only Retry asks again. */
+  loadMore(): Promise<void> {
+    if (this.sidebarPageFailed) return Promise.resolve();
+    return this.loadNextPage();
+  }
+
+  private async loadNextPage() {
     if (!this.nextCursor || this.loading) return;
     const version = ++this.loadVersion;
     const signal = this.routeSignal();
@@ -627,7 +633,7 @@ class SessionsStore {
 
   /** Repeat the sidebar read behind sidebarLoadError. */
   retrySidebar(): Promise<void> {
-    if (this.sidebarPageFailed && this.nextCursor) return this.loadMore();
+    if (this.sidebarPageFailed && this.nextCursor) return this.loadNextPage();
     return this.load({ force: true });
   }
 
