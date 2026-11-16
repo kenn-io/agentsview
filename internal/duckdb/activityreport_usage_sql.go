@@ -104,10 +104,13 @@ func (s *Store) sumActivityUsage(
 				break
 			}
 		}
-		if canSave {
-			if data, err := kept.EncodeRows(saved, 128<<20, func(row *readbase.ActivityUsageSums) int64 { return row.Bytes() }); err == nil {
-				s.usageDisk.Put("activity-usage|"+slot, "activity-usage-1|"+diskVersion, data)
-			}
+		if canSave && s.usageDisk.Enabled() {
+			diskSlot := "activity-usage|" + slot
+			s.activityWrites.put(diskSlot, saved[0].Bytes(), func() {
+				if data, err := kept.EncodeRows(saved, 128<<20, func(row *readbase.ActivityUsageSums) int64 { return row.Bytes() }); err == nil {
+					s.usageDisk.Put(diskSlot, "activity-usage-1|"+diskVersion, data)
+				}
+			})
 		}
 	}
 	return readbase.AssembleActivityUsage(pricing, schedule, groups)

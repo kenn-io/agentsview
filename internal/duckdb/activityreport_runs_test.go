@@ -213,6 +213,7 @@ func TestActivityRunsDiskReusesUnchangedSessions(t *testing.T) {
 	first := open()
 	_, _, err := first.activityReportRuns(t.Context(), ids, q)
 	require.NoError(t, err)
+	first.activityWrites.close()
 	restarted := open()
 	_, _, err = restarted.activityReportRuns(t.Context(), ids, q)
 	require.NoError(t, err)
@@ -230,4 +231,5 @@ func TestActivityRunsDiskReusesUnchangedSessions(t *testing.T) {
 	require.NoError(t, err)
 	_, misses = restarted.activityRuns.lookup(ids, versions, q.GapCapSeconds)
 	require.Empty(t, misses)
+	restarted.activityWrites.close()
 }

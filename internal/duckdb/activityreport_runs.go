@@ -193,9 +193,10 @@ func (s *Store) activityReportRuns(
 		if bytes <= activityRunsMaxBytes {
 			s.activityRuns.store(keep)
 			if s.usageDisk.Enabled() && ctx.Err() == nil {
-				s.activityRuns.diskMu.Lock()
-				s.activityRuns.save(&s.usageDisk, q.GapCapSeconds)
-				s.activityRuns.diskMu.Unlock()
+				gap := q.GapCapSeconds
+				s.activityWrites.put(fmt.Sprintf("activity-runs|%g", gap), 0, func() {
+					s.activityRuns.save(&s.usageDisk, gap)
+				})
 			}
 		}
 	}

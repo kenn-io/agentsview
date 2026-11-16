@@ -70,7 +70,8 @@ type Store struct {
 	retiring sync.WaitGroup
 
 	// activityRuns keeps sessions' activity runs by push fingerprint.
-	activityRuns activityRunsMemo
+	activityRuns   activityRunsMemo
+	activityWrites activityWriter
 
 	quack          *quackClient
 	connectionKind duckDBConnectionKind
@@ -192,6 +193,7 @@ func (s *Store) Close() error {
 	alias := s.aliasPath
 	s.handleMu.Unlock()
 
+	s.activityWrites.close()
 	s.reports.Close()
 	err := conn.Close()
 	removeMirrorAlias(alias)
