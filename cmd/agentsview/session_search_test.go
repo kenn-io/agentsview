@@ -921,28 +921,34 @@ func TestSessionSearchRemoteFTSHints(t *testing.T) {
 		{"", "decode error notes", "messages", false, true},
 		{"postgres", "decode error notes", "messages", false, false},
 	} {
-		before := ftsCalls
-		backend = tc.backend
-		out, err := executeCommand(newRootCommand(), "session", "--server", ts.URL, "--server-token-file", tokenFile, "search", tc.pattern, "--in", tc.source, "--json", "--regex="+strconv.FormatBool(tc.regex))
-		require.NoError(t, err)
-		got := decodeCLIJSON[struct {
-			Hints []contentSearchCLIHint `json:"hints"`
-		}](t, out)
-		var ftsHints []contentSearchCLIHint
-		for _, hint := range got.Hints {
-			if hint.Code == "try_fts" {
-				ftsHints = append(ftsHints, hint)
+		name := tc.backend
+		if name == "" {
+			name = "status endpoint missing"
+		}
+		t.Run(name, func(t *testing.T) {
+			before := ftsCalls
+			backend = tc.backend
+			out, err := executeCommand(newRootCommand(), "session", "--server", ts.URL, "--server-token-file", tokenFile, "search", tc.pattern, "--in", tc.source, "--json", "--regex="+strconv.FormatBool(tc.regex))
+			require.NoError(t, err)
+			got := decodeCLIJSON[struct {
+				Hints []contentSearchCLIHint `json:"hints"`
+			}](t, out)
+			var ftsHints []contentSearchCLIHint
+			for _, hint := range got.Hints {
+				if hint.Code == "try_fts" {
+					ftsHints = append(ftsHints, hint)
+				}
 			}
-		}
-		if tc.hint {
-			require.Len(t, ftsHints, 1)
-			assert.Equal(t, before+1, ftsCalls)
-			assert.Contains(t, ftsHints[0].Next, "--server="+ts.URL)
-			assert.Contains(t, ftsHints[0].Next, "--server-token-file="+tokenFile)
-		} else {
-			assert.Empty(t, ftsHints)
-			assert.Equal(t, before, ftsCalls)
-		}
+			if tc.hint {
+				require.Len(t, ftsHints, 1)
+				assert.Equal(t, before+1, ftsCalls)
+				assert.Contains(t, ftsHints[0].Next, "--server="+ts.URL)
+				assert.Contains(t, ftsHints[0].Next, "--server-token-file="+tokenFile)
+			} else {
+				assert.Empty(t, ftsHints)
+				assert.Equal(t, before, ftsCalls)
+			}
+		})
 	}
 }
 

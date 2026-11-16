@@ -141,10 +141,11 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 	}
 	for _, mode := range []string{"substring", "fts", "hybrid"} {
 		t.Run("unicode boundary/all words/"+mode, func(t *testing.T) {
-			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "invoice rounding", Mode: mode, Project: "word-unicode-all", KeywordOnly: mode == "hybrid", Limit: 1})
-			require.NoError(t, err)
-			assert.Equal(t, []hit{{"both-valid", "message", 2}}, project(page.Matches))
-			if mode != "hybrid" {
+			if mode == "hybrid" {
+				page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "invoice rounding", Mode: mode, Project: "word-unicode-all", KeywordOnly: true, Limit: 1})
+				require.NoError(t, err)
+				assert.Equal(t, []hit{{"both-valid", "message", 2}}, project(page.Matches))
+			} else {
 				filter := db.ContentSearchFilter{Pattern: "invoice rounding", Mode: mode, Project: "word-unicode-all", Limit: 1}
 				var paged []hit
 				for range 3 {
@@ -155,7 +156,7 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 				}
 				assert.Equal(t, []hit{{"both-valid", "message", 2}, {"both-invalid", "message", 1}, {"both-number", "message", 1}}, paged)
 			}
-			page, err = store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "invoice rounding", Mode: mode, Project: "word-unicode-all", KeywordOnly: mode == "hybrid", Limit: 50})
+			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "invoice rounding", Mode: mode, Project: "word-unicode-all", KeywordOnly: mode == "hybrid", Limit: 50})
 			require.NoError(t, err)
 			assert.Equal(t, []hit{{"both-valid", "message", 2}, {"both-invalid", "message", 1}, {"both-number", "message", 1}}, project(page.Matches))
 		})
