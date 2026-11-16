@@ -492,6 +492,61 @@ func TestAnalyticsKeptRestart(t *testing.T) {
 	require.Positive(t, thirdCounter.count())
 }
 
+func TestAnalyticsKeptRestoredHistory(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, store := newUsageJournalFixture(t)
+	ctx := t.Context()
+	pgKeptSession(t, local, "session", "first", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	dir, url := t.TempDir(), testPGURL(t)
+	require.NoError(t, store.ConfigureUsageCache(ctx, dir, url, syncer.schema))
+	f := db.AnalyticsFilter{From: "2026-06-14", To: "2026-06-14", Timezone: "UTC", Project: "second"}
+	before, err := store.GetAnalyticsSignals(ctx, f)
+	require.NoError(t, err)
+	require.Zero(t, before.UnscoredSessions)
+	var revision int64
+	var token string
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT (SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'), (SELECT value FROM sync_metadata WHERE key='usage_history_token')`).Scan(&revision, &token))
+	_, err = store.pg.ExecContext(ctx, `UPDATE sessions SET project='second' WHERE id='session'`)
+	require.NoError(t, err)
+	_, err = store.pg.ExecContext(ctx, `UPDATE sync_metadata SET value=$1::bigint::text WHERE key='usage_change_revision'`, revision)
+	require.NoError(t, err)
+	var restoredRevision int64
+	var restoredToken string
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT (SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'), (SELECT value FROM sync_metadata WHERE key='usage_history_token')`).Scan(&restoredRevision, &restoredToken))
+	require.Equal(t, revision, restoredRevision)
+	require.NotEqual(t, token, restoredToken)
+	reopened, err := NewStore(ctx, url, syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+	require.NoError(t, reopened.ConfigureUsageCache(ctx, dir, url, syncer.schema))
+	after, err := reopened.GetAnalyticsSignals(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, 1, after.UnscoredSessions)
+}
+
+func TestAnalyticsKeptInvalidHistoryToken(t *testing.T) {
+	cache := t.TempDir()
+	t.Setenv("CACHE_DIRECTORY", cache)
+	local, syncer, store := newUsageJournalFixture(t)
+	ctx := t.Context()
+	pgKeptSession(t, local, "session", "project", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	url := testPGURL(t)
+	require.NoError(t, store.ConfigureUsageCache(ctx, t.TempDir(), url, syncer.schema))
+	for _, value := range []string{"", "invalid"} {
+		_, err := store.pg.ExecContext(ctx, `UPDATE sync_metadata SET value=$1 WHERE key='usage_history_token'`, value)
+		require.NoError(t, err)
+		require.Empty(t, store.keptUsageDataVersion(ctx, "signals"))
+		got, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{Timezone: "UTC"})
+		require.NoError(t, err)
+		require.Equal(t, 1, got.UnscoredSessions)
+	}
+	files, err := filepath.Glob(filepath.Join(cache, "postgres-trends", "*", "*.gob"))
+	require.NoError(t, err)
+	require.Empty(t, files)
+}
+
 func TestAnalyticsKeptIdentitylessFallback(t *testing.T) {
 	cache := t.TempDir()
 	t.Setenv("CACHE_DIRECTORY", cache)

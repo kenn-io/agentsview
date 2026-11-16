@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"uuid"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -75,11 +76,12 @@ func (s *Store) keptUsageDataVersion(ctx context.Context, slot string) string {
 	}
 	var revision int64
 	var journalOID sql.NullInt64
-	var systemID, timeline string
+	var systemID, timeline, historyToken string
 	err := s.pg.QueryRowContext(ctx, `SELECT `+usageChangeRevisionSQL+`,
  to_regclass('usage_session_changes')::oid, (pg_control_system()).system_identifier::text,
- substring(pg_walfile_name(pg_current_wal_lsn()), 1, 8)
- WHERE NOT pg_is_in_recovery()`, strconv.Itoa(usageChangeJournalVersionPG)).Scan(&revision, &journalOID, &systemID, &timeline)
+ substring(pg_walfile_name(pg_current_wal_lsn()), 1, 8),
+ COALESCE((SELECT value FROM sync_metadata WHERE key='usage_history_token'), '')
+ WHERE NOT pg_is_in_recovery()`, strconv.Itoa(usageChangeJournalVersionPG)).Scan(&revision, &journalOID, &systemID, &timeline, &historyToken)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return standbyUsageMarker
@@ -93,11 +95,14 @@ func (s *Store) keptUsageDataVersion(ctx context.Context, slot string) string {
 	if revision == 0 || !journalOID.Valid {
 		return ""
 	}
+	if _, err := uuid.Parse(historyToken); err != nil {
+		return ""
+	}
 	if s.usageCache != nil {
 		after, err := s.usageCache.ResetEpoch(ctx)
 		if err != nil || after != epoch {
 			return ""
 		}
 	}
-	return fmt.Sprintf("%d|%d|%s|%s|%d", revision, journalOID.Int64, systemID, timeline, epoch)
+	return fmt.Sprintf("%d|%d|%s|%s|%d|%s", revision, journalOID.Int64, systemID, timeline, epoch, historyToken)
 }
