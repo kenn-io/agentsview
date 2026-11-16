@@ -18,6 +18,7 @@ func TestMusePersonalFixture(t *testing.T) {
 	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 3)
+	checked := false
 	for _, source := range sources {
 		out, err := provider.Parse(t.Context(), ParseRequest{Source: source})
 		require.NoError(t, err)
@@ -31,6 +32,7 @@ func TestMusePersonalFixture(t *testing.T) {
 		if result.Session.SourceSessionID != "11111111-2222-4333-8444-555555555555" {
 			continue
 		}
+		checked = true
 		assert.Equal(t, "muse-personal:11111111-2222-4333-8444-555555555555", result.Session.ID)
 		require.Len(t, result.Messages, 11)
 		assert.Equal(t, 2, result.Session.UserMessageCount)
@@ -52,6 +54,7 @@ func TestMusePersonalFixture(t *testing.T) {
 			assert.Empty(t, msg.Model)
 		}
 	}
+	assert.True(t, checked, "the main fixture's content must be checked")
 }
 
 func TestMusePersonalHeaderFieldsMatchExactJSONNames(t *testing.T) {

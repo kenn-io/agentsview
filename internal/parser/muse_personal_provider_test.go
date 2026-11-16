@@ -295,6 +295,7 @@ func TestMusePersonalCancellationDoesNotPublish(t *testing.T) {
 	require.Len(t, sources, 1)
 	fp, err := p.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
+	canceled := 0
 	for budget := range 32 {
 		t.Run(strconv.Itoa(budget), func(t *testing.T) {
 			base, cancel := context.WithCancel(t.Context())
@@ -302,6 +303,7 @@ func TestMusePersonalCancellationDoesNotPublish(t *testing.T) {
 			ctx := &musePersonalCancelAfterChecks{Context: base, cancel: cancel, remaining: budget}
 			out, err := p.Parse(ctx, ParseRequest{Source: sources[0], Fingerprint: fp})
 			if base.Err() != nil {
+				canceled++
 				require.ErrorIs(t, err, context.Canceled)
 				assert.Empty(t, out.Results)
 				assert.False(t, out.ResultSetComplete)
@@ -312,6 +314,7 @@ func TestMusePersonalCancellationDoesNotPublish(t *testing.T) {
 			}
 		})
 	}
+	assert.Positive(t, canceled, "parsing must check for cancellation")
 }
 
 func TestMusePersonalTranscriptEventUsesConfiguredWatchRoot(t *testing.T) {

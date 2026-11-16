@@ -19,7 +19,7 @@ func newMusePersonalProviderFactory(def AgentDef) ProviderFactory {
 			WithFileWatchRoots(func(roots []string) []WatchRoot {
 				var out []WatchRoot
 				for _, root := range roots {
-					out = append(out, WatchRoot{Path: root, Recursive: true, IncludeGlobs: []string{"*.jsonl", "sessions.json"}, DebounceKey: "muse-personal:" + root})
+					out = append(out, WatchRoot{Path: root, Recursive: true, MaxDepth: 2, IncludeGlobs: []string{"*.jsonl", "sessions.json"}, DebounceKey: "muse-personal:" + root})
 				}
 				return out
 			}),
