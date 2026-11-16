@@ -79,6 +79,31 @@ func (r *Reads[T]) Do(ctx context.Context, slot, version string, load func(conte
 	})
 }
 
+// DoSaved keeps finished reads on disk as well as in memory.
+func (r *Reads[T]) DoSaved(ctx context.Context, disk *Disk, slot, memoryVersion, savedVersion string, encode func(T) ([]byte, error), decode func([]byte) (T, error), load func(context.Context) (T, error)) (T, error) {
+	if disk == nil || !disk.Enabled() || slot == "" || memoryVersion == "" || savedVersion == "" {
+		return r.Do(ctx, slot, memoryVersion, load)
+	}
+	value, err := r.Do(ctx, slot, memoryVersion, func(ctx context.Context) (T, error) {
+		if data, ok := disk.Get(slot, savedVersion); ok {
+			if value, err := decode(data); err == nil {
+				return value, nil
+			}
+		}
+		value, err := load(ctx)
+		if err == nil {
+			if data, err := encode(value); err == nil {
+				disk.Put(slot, savedVersion, data)
+			}
+		}
+		return value, err
+	})
+	if err == nil {
+		disk.Keep(slot, savedVersion, func() ([]byte, error) { return encode(value) })
+	}
+	return value, err
+}
+
 // JSONBytes sizes a public result, exceeding the cache cap on encoding errors.
 func JSONBytes(value any) int64 {
 	encoded, err := json.Marshal(value)

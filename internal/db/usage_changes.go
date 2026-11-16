@@ -49,6 +49,7 @@ func usageChangeJournalSQL() (string, string) {
   FROM archive_metadata WHERE key = 'usage_change_revision'
  ON CONFLICT(session_id) DO UPDATE SET revision = excluded.revision;`
 	var drops, creates strings.Builder
+	creates.WriteString(`INSERT INTO archive_metadata (key, value) VALUES ('dashboard_change_generation', lower(hex(randomblob(16)))) ON CONFLICT(key) DO NOTHING;` + "\n")
 	add := func(name, event, table, condition, sessionID string, analytics bool) {
 		fmt.Fprintf(&drops, "DROP TRIGGER IF EXISTS %s;\n", name)
 		body := counterBody
@@ -137,6 +138,23 @@ func usageChangeJournalSQL() (string, string) {
 	}
 	return drops.String(), creates.String()
 }
+
+// These triggers follow the journal rows even when an older writer replaces its own triggers.
+const dashboardGenerationTriggerSQL = `
+DROP TRIGGER IF EXISTS trg_dashboard_generation_insert;
+DROP TRIGGER IF EXISTS trg_dashboard_generation_update;
+CREATE TRIGGER trg_dashboard_generation_insert AFTER INSERT ON archive_metadata
+WHEN NEW.key IN ('usage_change_revision', 'analytics_change_revision')
+BEGIN
+ INSERT INTO archive_metadata (key, value) VALUES ('dashboard_change_generation', lower(hex(randomblob(16))))
+ ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+END;
+CREATE TRIGGER trg_dashboard_generation_update AFTER UPDATE OF value ON archive_metadata
+WHEN NEW.key IN ('usage_change_revision', 'analytics_change_revision')
+BEGIN
+ INSERT INTO archive_metadata (key, value) VALUES ('dashboard_change_generation', lower(hex(randomblob(16))))
+ ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+END;`
 
 // UsageChangeRevision returns the trigger-maintained revision for usage facts,
 // session filter dimensions, Activity session columns, and pricing catalog

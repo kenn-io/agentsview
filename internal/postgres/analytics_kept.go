@@ -14,21 +14,27 @@ func keptAnalytics[T any](ctx context.Context, s *Store, panel string, f db.Anal
 
 // keptAnalyticsVersion is the archive's report version. A standby reads fresh,
 // and a primary without a usage cache falls back to the direct change revision.
-func (s *Store) keptAnalyticsVersion(ctx context.Context, slot string) string {
-	version := s.keptUsageVersion(ctx, slot)
+func (s *Store) keptAnalyticsVersion(ctx context.Context, slot string) (string, string) {
+	version := s.keptUsageDataVersion(ctx, slot)
 	if version == standbyUsageMarker {
-		return ""
+		return "", ""
 	}
 	if version == "" && s.readTx == nil && !s.hostedRelations {
 		var standby bool
 		if err := s.pg.QueryRowContext(ctx, `SELECT pg_is_in_recovery()`).Scan(&standby); err == nil && !standby {
-			version = s.directUsageVersion(ctx, slot)
+			return s.directUsageVersion(ctx, slot), ""
 		}
 	}
-	return version
+	if version == "" {
+		return "", ""
+	}
+	runtime := s.runtimeState()
+	runtime.pricingMu.Lock()
+	defer runtime.pricingMu.Unlock()
+	return fmt.Sprintf("%s|%d", version, runtime.pricingGeneration), version
 }
 
-func keptAnalyticsWith[T any](ctx context.Context, s *Store, panel string, f db.AnalyticsFilter, versionFor func(context.Context, string) string, load func(context.Context, db.AnalyticsFilter) (T, error)) (T, error) {
+func keptAnalyticsWith[T any](ctx context.Context, s *Store, panel string, f db.AnalyticsFilter, versionFor func(context.Context, string) (string, string), load func(context.Context, db.AnalyticsFilter) (T, error)) (T, error) {
 	if f.ActiveSince != "" || f.Timezone == "Local" || db.TerminationUsesTime(f.Termination) {
 		return load(ctx, f)
 	}
@@ -37,11 +43,20 @@ func keptAnalyticsWith[T any](ctx context.Context, s *Store, panel string, f db.
 		return load(ctx, f)
 	}
 	slot := panel + "|" + string(key)
-	version := versionFor(ctx, slot)
+	version, savedVersion := versionFor(ctx, slot)
+	if !db.SavedPanel(panel) {
+		savedVersion = ""
+	}
+	if savedVersion != "" {
+		savedVersion += "|" + db.TrendsTimezoneKey(f)
+	}
 	if version == "" {
 		return load(ctx, f)
 	}
-	encoded, err := s.runtimeState().analytics.Do(ctx, slot, version, func(ctx context.Context) ([]byte, error) {
+	encoded, err := s.runtimeState().analytics.DoSaved(ctx, &s.trendsDisk, slot, version, savedVersion, func(b []byte) ([]byte, error) { return b, nil }, func(b []byte) ([]byte, error) {
+		var result T
+		return b, json.Unmarshal(b, &result)
+	}, func(ctx context.Context) ([]byte, error) {
 		result, err := load(ctx, f)
 		if err != nil {
 			return nil, err

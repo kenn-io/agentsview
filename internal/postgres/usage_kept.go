@@ -48,6 +48,17 @@ func (s *Store) standbyMarker(ctx context.Context) string {
 }
 
 func (s *Store) keptUsageVersion(ctx context.Context, slot string) string {
+	version := s.keptUsageDataVersion(ctx, slot)
+	if version == "" || version == standbyUsageMarker {
+		return version
+	}
+	runtime := s.runtimeState()
+	runtime.pricingMu.Lock()
+	defer runtime.pricingMu.Unlock()
+	return fmt.Sprintf("%s|%d", version, runtime.pricingGeneration)
+}
+
+func (s *Store) keptUsageDataVersion(ctx context.Context, slot string) string {
 	if slot == "" || s.readTx != nil || s.hostedRelations {
 		return ""
 	}
@@ -88,8 +99,5 @@ func (s *Store) keptUsageVersion(ctx context.Context, slot string) string {
 			return ""
 		}
 	}
-	runtime := s.runtimeState()
-	runtime.pricingMu.Lock()
-	defer runtime.pricingMu.Unlock()
-	return fmt.Sprintf("%d|%d|%s|%s|%d|%d", revision, journalOID.Int64, systemID, timeline, epoch, runtime.pricingGeneration)
+	return fmt.Sprintf("%d|%d|%s|%s|%d", revision, journalOID.Int64, systemID, timeline, epoch)
 }

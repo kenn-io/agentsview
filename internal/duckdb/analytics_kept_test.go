@@ -3,6 +3,7 @@
 package duckdb
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -10,11 +11,14 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
 func TestAnalyticsKeptMirrorReplacement(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	skipReopenTestOnWindows(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mirror.duckdb")
@@ -25,7 +29,8 @@ func TestAnalyticsKeptMirrorReplacement(t *testing.T) {
 	require.NoError(t, os.WriteFile(next, data, 0o600))
 	conn, err := Open(t.Context(), next)
 	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET project = 'beta', message_count = 5, health_score = 80, health_grade = 'B', outcome = 'success', ended_at = TIMESTAMP '2026-01-01 00:05:00'`)
+	// Trends uses the push fingerprint to invalidate its saved per-session data.
+	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET agentsview_push_fingerprint = 'changed', project = 'beta', message_count = 5, health_score = 80, health_grade = 'B', outcome = 'success', ended_at = TIMESTAMP '2026-01-01 00:05:00'`)
 	require.NoError(t, err)
 	_, err = conn.ExecContext(t.Context(), `UPDATE messages SET timestamp = TIMESTAMP '2026-01-02 01:00:00', content = 'changed'`)
 	require.NoError(t, err)
@@ -33,6 +38,7 @@ func TestAnalyticsKeptMirrorReplacement(t *testing.T) {
 	store, err := NewStore(t.Context(), path)
 	require.NoError(t, err)
 	t.Cleanup(func() { store.Close() })
+	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
 	f := db.AnalyticsFilter{Timezone: "UTC"}
 	cases := keptPanelCases(t.Context(), f)
 	for _, tc := range cases {
@@ -67,6 +73,29 @@ func TestAnalyticsKeptMirrorReplacement(t *testing.T) {
 			got, err := tc.read(store)
 			require.NoError(t, err, tc.name)
 			require.Equal(t, want, got, tc.name)
+		}
+	}
+	var saved []any
+	for _, tc := range keptPanelCases(t.Context(), f) {
+		if tc.name == "tools" || tc.name == "velocity" || tc.name == "signals" {
+			value, err := tc.read(store)
+			require.NoError(t, err)
+			saved = append(saved, value)
+		}
+	}
+	require.NoError(t, store.Close())
+	reopened, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { reopened.Close() })
+	require.NoError(t, reopened.OpenActivityReportDisk(t.Context()))
+	require.NoError(t, reopened.DB().Close())
+	i := 0
+	for _, tc := range keptPanelCases(t.Context(), f) {
+		if tc.name == "tools" || tc.name == "velocity" || tc.name == "signals" {
+			value, err := tc.read(reopened)
+			require.NoError(t, err, tc.name)
+			require.Equal(t, saved[i], value)
+			i++
 		}
 	}
 }
@@ -303,4 +332,193 @@ func TestAnalyticsKeptMovingSelectionsReadFresh(t *testing.T) {
 			require.Error(t, err)
 		})
 	}
+}
+
+func TestAnalyticsKeptRestart(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	buildMirrorFixture(t, path, "session-a")
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
+	f := db.AnalyticsFilter{Timezone: "UTC"}
+	var expected []any
+	for _, tc := range keptPanelCases(t.Context(), f) {
+		if tc.name == "tools" || tc.name == "velocity" || tc.name == "signals" {
+			value, err := tc.read(store)
+			require.NoError(t, err)
+			expected = append(expected, value)
+		}
+	}
+	require.NoError(t, store.Close())
+	reopened, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { reopened.Close() })
+	require.NoError(t, reopened.OpenActivityReportDisk(t.Context()))
+	require.NoError(t, reopened.DB().Close())
+	i := 0
+	for _, tc := range keptPanelCases(t.Context(), f) {
+		if tc.name == "tools" || tc.name == "velocity" || tc.name == "signals" {
+			value, err := tc.read(reopened)
+			require.NoError(t, err, tc.name)
+			require.Equal(t, expected[i], value)
+			i++
+		}
+	}
+	_, err = reopened.GetAnalyticsSummary(t.Context(), f)
+	require.Error(t, err)
+}
+
+func TestAnalyticsKeptCorruptSavedJSON(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	buildMirrorFixture(t, path, "session-a")
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
+	f := db.AnalyticsFilter{Timezone: "UTC"}
+	want, err := store.GetAnalyticsTools(t.Context(), f)
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
+	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "duckdb-usage", "*", "*.gob"))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	data, err := os.ReadFile(files[0])
+	require.NoError(t, err)
+	header, _, ok := bytes.Cut(data, []byte("\n"))
+	require.True(t, ok)
+	require.NoError(t, os.WriteFile(files[0], append(header, []byte("\n{broken")...), 0o600))
+	reopened, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { reopened.Close() })
+	require.NoError(t, reopened.OpenActivityReportDisk(t.Context()))
+	got, err := reopened.GetAnalyticsTools(t.Context(), f)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	require.NoError(t, reopened.DB().Close())
+	again, err := reopened.GetAnalyticsTools(t.Context(), f)
+	require.NoError(t, err)
+	require.Equal(t, want, again)
+}
+
+func TestAnalyticsKeptRestartWithChangedPricing(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	pricing.SetConfiguredAliases(map[string]string{"model": "first"})
+	t.Cleanup(func() { pricing.SetConfiguredAliases(nil) })
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	buildMirrorFixture(t, path, "session-a")
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
+	store.SetCustomPricing(map[string]config.CustomModelRate{"model": {OutputMicrodollarsPerMTok: 100}})
+	f := db.AnalyticsFilter{Timezone: "UTC"}
+	want, err := store.GetAnalyticsTools(t.Context(), f)
+	require.NoError(t, err)
+	require.NoError(t, store.Close())
+	pricing.SetConfiguredAliases(map[string]string{"model": "second"})
+	reopened, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { reopened.Close() })
+	reopened.SetCustomPricing(map[string]config.CustomModelRate{"model": {OutputMicrodollarsPerMTok: 200}})
+	require.NoError(t, reopened.OpenActivityReportDisk(t.Context()))
+	require.NoError(t, reopened.DB().Close())
+	got, err := reopened.GetAnalyticsTools(t.Context(), f)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+}
+
+func TestAnalyticsKeptSameStampReplacementAfterRestart(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mirror.duckdb")
+	next := filepath.Join(dir, "next.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	writeUsageMirror(t, path, `UPDATE sessions SET project='alpha'`)
+	keptActivityMirror(t, next, "session-b", 900)
+	writeUsageMirror(t, next, `UPDATE sessions SET project='beta'`)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	nextInfo, err := os.Stat(next)
+	require.NoError(t, err)
+	require.Equal(t, info.Size(), nextInfo.Size())
+	require.NoError(t, os.Chtimes(next, info.ModTime(), info.ModTime()))
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
+	filter := db.AnalyticsFilter{Timezone: "UTC", Project: "beta"}
+	before, err := store.GetAnalyticsSignals(t.Context(), filter)
+	require.NoError(t, err)
+	require.Zero(t, before.ScoredSessions+before.UnscoredSessions)
+	stamp := store.mirrorStamp()
+	require.NoError(t, store.Close())
+	require.NoError(t, swapMirrorFile(next, path))
+	reopened, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { reopened.Close() })
+	require.Equal(t, stamp, reopened.mirrorStamp())
+	require.NoError(t, reopened.OpenActivityReportDisk(t.Context()))
+	fresh, err := reopened.analytics().GetAnalyticsSignals(t.Context(), filter)
+	require.NoError(t, err)
+	require.Equal(t, 1, fresh.ScoredSessions+fresh.UnscoredSessions)
+	got, err := reopened.GetAnalyticsSignals(t.Context(), filter)
+	require.NoError(t, err)
+	require.Equal(t, 1, got.ScoredSessions+got.UnscoredSessions)
+}
+
+func TestAnalyticsKeptSameStampReplacementWhileServing(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mirror.duckdb")
+	next := filepath.Join(dir, "next.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	writeUsageMirror(t, path, `UPDATE sessions SET project='alpha'`)
+	keptActivityMirror(t, next, "session-b", 900)
+	writeUsageMirror(t, next, `UPDATE sessions SET project='beta'`)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	nextInfo, err := os.Stat(next)
+	require.NoError(t, err)
+	require.Equal(t, info.Size(), nextInfo.Size())
+	require.NoError(t, os.Chtimes(next, info.ModTime(), info.ModTime()))
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
+	filter := db.AnalyticsFilter{Timezone: "UTC", Project: "beta"}
+	before, err := store.GetAnalyticsSignals(t.Context(), filter)
+	require.NoError(t, err)
+	require.Zero(t, before.ScoredSessions+before.UnscoredSessions)
+	stamp := store.mirrorStamp()
+	require.NoError(t, swapMirrorFile(next, path))
+	store.checkMirrorReplacement(t.Context(), func(err error) { require.NoError(t, err) })
+	require.Equal(t, stamp, store.mirrorStamp())
+	changed, err := store.GetAnalyticsSignals(t.Context(), filter)
+	require.NoError(t, err)
+	require.Equal(t, 1, changed.ScoredSessions+changed.UnscoredSessions)
+	require.NotEmpty(t, store.aliasPath)
+	aliasID := store.fileID
+	require.NoError(t, store.Close())
+	reopened, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { reopened.Close() })
+	require.Equal(t, stamp, reopened.mirrorStamp())
+	require.Equal(t, aliasID, reopened.fileID)
+	require.NoError(t, reopened.OpenActivityReportDisk(t.Context()))
+	require.NoError(t, reopened.DB().Close())
+	got, err := reopened.GetAnalyticsSignals(t.Context(), filter)
+	require.NoError(t, err)
+	require.Equal(t, 1, got.ScoredSessions+got.UnscoredSessions)
+}
+
+func TestAnalyticsKeptStartupIdentityMismatch(t *testing.T) {
+	dir := t.TempDir()
+	path, next := filepath.Join(dir, "original"), filepath.Join(dir, "replacement")
+	require.NoError(t, os.WriteFile(path, []byte("old"), 0o600))
+	require.NoError(t, os.WriteFile(next, []byte("new"), 0o600))
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	PrimeFileIdentity(info)
+	require.NoError(t, swapMirrorFile(next, path))
+	require.Empty(t, mirrorFileIdentity(path, info))
 }

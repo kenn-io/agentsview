@@ -1175,10 +1175,16 @@ and deletes, message content-length repairs, and signal updates advance the
 analytics counter. Message changes also advance the session transcript revision.
 PostgreSQL uses its session journal, hosted PostgreSQL uses its tenant identity,
 selection, and corpus revisions, DuckDB uses its mirror stamp, and ClickHouse
-uses session and message row identities to invalidate Trends reports. Remote
-DuckDB through Quack reads Trends fresh because it has no reliable freshness
-token. Read-only archives and reports filtered by active, stale, or unclean
-termination status bypass this cache.
+uses session and message row identities to invalidate Trends reports.
+SQLite, native PostgreSQL, and DuckDB save finished Tools, Velocity, and Signals
+results per selection under their data versions and timezone rules. Native
+PostgreSQL saves them only when it has a reliable identity; hosted PostgreSQL
+reads them fresh. DuckDB also uses the mirror file identity for saved results.
+These entries share the existing 256 MiB Trends disk budget. PostgreSQL reuses finished Signals in memory, and active-since selections
+are not saved.
+Remote DuckDB through Quack reads Trends fresh because it has no reliable
+freshness token. Read-only archives and reports filtered by active, stale, or
+unclean termination status bypass this cache.
 
 PostgreSQL keeps ongoing Activity reports' per-session activity and raw usage
 inputs in memory with a 256 MiB estimated-size budget. Each session keeps its

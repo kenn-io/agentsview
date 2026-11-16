@@ -126,7 +126,14 @@ func (s *Store) checkMirrorReplacement(ctx context.Context, onEvent func(err err
 		)
 		return
 	}
-	s.swapHandle(conn, alias, info)
+	aliasInfo, err := os.Stat(alias)
+	if err != nil {
+		_ = conn.Close()
+		removeMirrorAlias(alias)
+		reportMirrorReplacementEvent(onEvent, err)
+		return
+	}
+	s.swapHandle(conn, alias, aliasInfo, mirrorFileIdentity(alias, aliasInfo))
 }
 
 // openMirrorAlias opens path's *current* contents read-only through a
@@ -212,7 +219,7 @@ func (s *Store) beginReplacementCheck() bool {
 // Store.Close waits for it, and a swap that finds the Store already closed
 // discards its handle and alias instead of installing them into a Store
 // nothing will ever close again.
-func (s *Store) swapHandle(conn *sql.DB, alias string, info os.FileInfo) {
+func (s *Store) swapHandle(conn *sql.DB, alias string, info os.FileInfo, fileID string) {
 	PrimeFileIdentity(info)
 	s.handleMu.Lock()
 	if s.closed {
@@ -228,6 +235,7 @@ func (s *Store) swapHandle(conn *sql.DB, alias string, info os.FileInfo) {
 	s.duck = conn
 	s.aliasPath = alias
 	s.fileInfo = info
+	s.fileID = fileID
 	// Replacement aliases open the checkpointed main file without a sibling WAL.
 	s.walStamp = "nowal"
 	s.reports.Clear()

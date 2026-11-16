@@ -3,14 +3,20 @@
 package postgres
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 )
 
@@ -163,6 +169,8 @@ func TestAnalyticsKeptPushAndSelection(t *testing.T) {
 	velocity, err := store.GetAnalyticsVelocity(ctx, f)
 	require.NoError(t, err)
 	require.Equal(t, float64(60), velocity.Overall.FirstResponseSec.P50)
+	signals, err := store.GetAnalyticsSignals(ctx, f)
+	require.NoError(t, err)
 	terms := []db.TrendTermInput{{Term: "answer", Variants: []string{"answer"}, Matchers: []string{"answer"}}}
 	trends, err := store.GetTrendsTerms(ctx, f, terms, "week")
 	require.NoError(t, err)
@@ -174,6 +182,9 @@ func TestAnalyticsKeptPushAndSelection(t *testing.T) {
 	require.NoError(t, err)
 	velocityAgain, err := store.GetAnalyticsVelocity(ctx, f)
 	require.NoError(t, err)
+	signalsAgain, err := store.GetAnalyticsSignals(ctx, f)
+	require.NoError(t, err)
+	assert.Equal(t, signals, signalsAgain)
 	assert.Equal(t, reads, counter.count())
 	freshTools, err := store.loadAnalyticsTools(ctx, f)
 	require.NoError(t, err)
@@ -223,12 +234,16 @@ func TestAnalyticsKeptPushAndSelection(t *testing.T) {
 	assert.Zero(t, changed.ByTool[0].EmptyCalls)
 	require.NoError(t, local.UpdateSessionSignals(ctx, "session", db.SessionSignalUpdate{
 		QualitySignals:   db.QualitySignals{Version: db.CurrentQualitySignalVersion},
+		ToolRetryCount:   2,
 		ToolObservations: []db.ToolObservation{{MessageOrdinal: 1, Outcome: "empty", Repeat: "none"}},
 	}))
 	pgKeptPush(t, syncer, true)
 	observed, err := store.GetAnalyticsTools(ctx, f)
 	require.NoError(t, err)
 	assert.Equal(t, 1, observed.ByTool[0].EmptyCalls)
+	updatedSignals, err := store.GetAnalyticsSignals(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, 2, updatedSignals.ToolHealth.TotalRetries)
 	projectFilter := f
 	projectFilter.Project = "project"
 	projectTools, err := store.GetAnalyticsTools(ctx, projectFilter)
@@ -413,4 +428,146 @@ func TestAnalyticsKeptCommitOrder(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, after.ByAgent, 1)
 	assert.Equal(t, 1, after.ByAgent[0].Sessions)
+}
+
+func TestAnalyticsKeptRestart(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, store := newUsageJournalFixture(t)
+	ctx := t.Context()
+	pgKeptSession(t, local, "session", "project", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	dir := t.TempDir()
+	url := testPGURL(t)
+	require.NoError(t, store.ConfigureUsageCache(ctx, dir, url, syncer.schema))
+	prices := map[string]config.CustomModelRate{"model": {OutputMicrodollarsPerMTok: 100}}
+	store.SetCustomPricing(prices)
+	store.SetCustomPricing(prices)
+	f := db.AnalyticsFilter{From: "2026-06-14", To: "2026-06-14", Timezone: "UTC"}
+	tools, err := store.GetAnalyticsTools(ctx, f)
+	require.NoError(t, err)
+	velocity, err := store.GetAnalyticsVelocity(ctx, f)
+	require.NoError(t, err)
+	signals, err := store.GetAnalyticsSignals(ctx, f)
+	require.NoError(t, err)
+	reopened, err := NewStore(ctx, url, syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+	require.NoError(t, reopened.ConfigureUsageCache(ctx, dir, url, syncer.schema))
+	reopened.SetCustomPricing(prices)
+	counter := &analyticsReadCounter{storeExecutor: reopened.pg}
+	reopened.pg = counter
+	gotTools, err := reopened.GetAnalyticsTools(ctx, f)
+	require.NoError(t, err)
+	gotVelocity, err := reopened.GetAnalyticsVelocity(ctx, f)
+	require.NoError(t, err)
+	gotSignals, err := reopened.GetAnalyticsSignals(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, tools, gotTools)
+	require.Equal(t, velocity, gotVelocity)
+	require.Equal(t, signals, gotSignals)
+	require.Zero(t, counter.count())
+	third, err := NewStore(ctx, url, syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, third.Close()) })
+	require.NoError(t, third.ConfigureUsageCache(ctx, dir, url, syncer.schema))
+	third.SetCustomPricing(map[string]config.CustomModelRate{"model": {OutputMicrodollarsPerMTok: 123}})
+	thirdCounter := &analyticsReadCounter{storeExecutor: third.pg}
+	third.pg = thirdCounter
+	_, err = third.GetAnalyticsTools(ctx, f)
+	require.NoError(t, err)
+	_, err = third.GetAnalyticsVelocity(ctx, f)
+	require.NoError(t, err)
+	_, err = third.GetAnalyticsSignals(ctx, f)
+	require.NoError(t, err)
+	require.Zero(t, thirdCounter.count())
+	pgKeptSession(t, local, "second", "project", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	_, err = third.GetAnalyticsTools(ctx, f)
+	require.NoError(t, err)
+	_, err = third.GetAnalyticsVelocity(ctx, f)
+	require.NoError(t, err)
+	updated, err := third.GetAnalyticsSignals(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, 2, updated.UnscoredSessions)
+	require.Positive(t, thirdCounter.count())
+}
+
+func TestAnalyticsKeptIdentitylessFallback(t *testing.T) {
+	cache := t.TempDir()
+	t.Setenv("CACHE_DIRECTORY", cache)
+	local, syncer, owner := newUsageJournalFixture(t)
+	ctx := t.Context()
+	pgKeptSession(t, local, "session", "project", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	roleURL := newUsageJournalRole(t, syncer, `GRANT SELECT ON ALL TABLES IN SCHEMA `+syncer.schema+` TO ROLE`)
+	_, err := owner.pg.ExecContext(ctx, `UPDATE sync_metadata SET value='1' WHERE key='usage_change_journal_version'; DELETE FROM sync_metadata WHERE key IN ('usage_account_revision', 'usage_history_token'); REVOKE EXECUTE ON FUNCTION pg_catalog.pg_control_system() FROM PUBLIC`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, err := owner.pg.ExecContext(context.WithoutCancel(ctx), `GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_system() TO PUBLIC`)
+		require.NoError(t, err)
+	})
+	reader, err := NewStore(ctx, roleURL, syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reader.Close()) })
+	require.NoError(t, reader.ConfigureUsageCache(ctx, t.TempDir(), roleURL, syncer.schema))
+	if reader.usageCache != nil {
+		require.NoError(t, reader.usageCache.Close())
+		reader.usageCache = nil
+	}
+	counter := &analyticsReadCounter{storeExecutor: reader.pg}
+	reader.pg = counter
+	f := db.AnalyticsFilter{From: "2026-06-14", To: "2026-06-14", Timezone: "UTC"}
+	first, err := reader.GetAnalyticsSignals(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, 1, first.UnscoredSessions)
+	reads := counter.count()
+	require.Positive(t, reads)
+	again, err := reader.GetAnalyticsSignals(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, first, again)
+	require.Equal(t, reads, counter.count())
+	require.True(t, reader.runtimeState().usageIdentityDenied.Load())
+	require.NoError(t, filepath.WalkDir(cache, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		require.False(t, strings.HasSuffix(path, ".gob"), path)
+		return nil
+	}))
+}
+
+func TestAnalyticsKeptCorruptSavedJSON(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, store := newUsageJournalFixture(t)
+	ctx := t.Context()
+	pgKeptSession(t, local, "session", "project", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	dir, url := t.TempDir(), testPGURL(t)
+	require.NoError(t, store.ConfigureUsageCache(ctx, dir, url, syncer.schema))
+	f := db.AnalyticsFilter{From: "2026-06-14", To: "2026-06-14", Timezone: "UTC"}
+	want, err := store.GetAnalyticsSignals(ctx, f)
+	require.NoError(t, err)
+	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-trends", "*", "*.gob"))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	data, err := os.ReadFile(files[0])
+	require.NoError(t, err)
+	header, _, ok := bytes.Cut(data, []byte("\n"))
+	require.True(t, ok)
+	require.NoError(t, os.WriteFile(files[0], append(header, []byte("\n{broken")...), 0o600))
+	reopened, err := NewStore(ctx, url, syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+	require.NoError(t, reopened.ConfigureUsageCache(ctx, dir, url, syncer.schema))
+	counter := &analyticsReadCounter{storeExecutor: reopened.pg}
+	reopened.pg = counter
+	got, err := reopened.GetAnalyticsSignals(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	reads := counter.count()
+	require.Positive(t, reads)
+	again, err := reopened.GetAnalyticsSignals(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, want, again)
+	require.Equal(t, reads, counter.count())
 }

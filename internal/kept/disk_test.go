@@ -1,6 +1,8 @@
 package kept
 
 import (
+	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -53,4 +55,92 @@ func TestDiskLimitsAndUnavailableDirectory(t *testing.T) {
 	unavailable.Put("small", "v", []byte("body"))
 	_, ok = unavailable.Get("small", "v")
 	require.False(t, ok)
+}
+
+func TestReadsDoSaved(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	var disk Disk
+	require.NoError(t, disk.Open("saved-reads", "archive", 1024, 0))
+	encode := func(s string) ([]byte, error) { return []byte(s), nil }
+	decode := func(b []byte) (string, error) {
+		if string(b) == "corrupt" {
+			return "", errors.New("corrupt")
+		}
+		return string(b), nil
+	}
+	loads := 0
+	load := func(context.Context) (string, error) { loads++; return "fresh", nil }
+	var first Reads[string]
+	got, err := first.DoSaved(t.Context(), &disk, "slot", "memory1", "saved1", encode, decode, load)
+	require.NoError(t, err)
+	require.Equal(t, "fresh", got)
+	var second Reads[string]
+	got, err = second.DoSaved(t.Context(), &disk, "slot", "memory2", "saved1", encode, decode, load)
+	require.NoError(t, err)
+	require.Equal(t, "fresh", got)
+	require.Equal(t, 1, loads)
+	path := disk.reports.disk.path("slot")
+	old := time.Now().Add(-31 * 24 * time.Hour)
+	require.NoError(t, os.Chtimes(path, old, old))
+	noEncode := func(string) ([]byte, error) { t.Fatal("matching file was encoded again"); return nil, nil }
+	_, err = second.DoSaved(t.Context(), &disk, "slot", "memory2", "saved1", noEncode, decode, load)
+	require.NoError(t, err)
+	disk.Sweep(time.Now())
+	var third Reads[string]
+	_, err = third.DoSaved(t.Context(), &disk, "slot", "memory3", "saved1", encode, decode, load)
+	require.NoError(t, err)
+	require.Equal(t, 1, loads)
+	require.NoError(t, os.Remove(path))
+	_, err = third.DoSaved(t.Context(), &disk, "slot", "memory3", "saved1", encode, decode, load)
+	require.NoError(t, err)
+	var fourth Reads[string]
+	_, err = fourth.DoSaved(t.Context(), &disk, "slot", "memory4", "saved1", encode, decode, load)
+	require.NoError(t, err)
+	require.Equal(t, 1, loads)
+	var fifth Reads[string]
+	_, err = fifth.DoSaved(t.Context(), &disk, "slot", "memory5", "saved2", encode, decode, load)
+	require.NoError(t, err)
+	require.Equal(t, 2, loads)
+	disk.Put("slot", "saved2", []byte("corrupt"))
+	var sixth Reads[string]
+	_, err = sixth.DoSaved(t.Context(), &disk, "slot", "memory6", "saved2", encode, decode, load)
+	require.NoError(t, err)
+	require.Equal(t, 3, loads)
+	failure := errors.New("load failed")
+	var failed Reads[string]
+	_, err = failed.DoSaved(t.Context(), &disk, "failure", "v", "v", encode, decode, func(context.Context) (string, error) { return "", failure })
+	require.ErrorIs(t, err, failure)
+	_, ok := disk.Get("failure", "v")
+	require.False(t, ok)
+	var unencoded Reads[string]
+	got, err = unencoded.DoSaved(t.Context(), &disk, "unencoded", "v", "v", func(string) ([]byte, error) { return nil, failure }, decode, load)
+	require.NoError(t, err)
+	require.Equal(t, "fresh", got)
+	_, ok = disk.Get("unencoded", "v")
+	require.False(t, ok)
+	var disabled Reads[string]
+	_, err = disabled.DoSaved(t.Context(), nil, "slot", "v", "v", encode, decode, load)
+	require.NoError(t, err)
+}
+
+func TestReadsDoSavedReplacesOldVersionOnMemoryHit(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	var disk Disk
+	require.NoError(t, disk.Open("saved-reads", "archive", 1024, 0))
+	var reads Reads[string]
+	encode := func(s string) ([]byte, error) { return []byte(s), nil }
+	decode := func(b []byte) (string, error) { return string(b), nil }
+	load := func(context.Context) (string, error) { return "current", nil }
+	_, err := reads.DoSaved(t.Context(), &disk, "slot", "memory", "new", encode, decode, load)
+	require.NoError(t, err)
+	disk.Put("slot", "old", []byte("stale"))
+	_, err = reads.DoSaved(t.Context(), &disk, "slot", "memory", "new", encode, decode, load)
+	require.NoError(t, err)
+	var restarted Reads[string]
+	got, err := restarted.DoSaved(t.Context(), &disk, "slot", "other", "new", encode, decode, func(context.Context) (string, error) {
+		t.Fatal("loaded instead of reading saved result")
+		return "", nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, "current", got)
 }

@@ -22,7 +22,7 @@ var analyticsMarshalers = json.MarshalToFunc(func(out *jsontext.Encoder, session
 })
 
 func keptAnalytics[T any](ctx context.Context, s *Store, panel string, f db.AnalyticsFilter, variant string, load func(context.Context) (T, error)) (T, error) {
-	version := s.keptVersion()
+	version, savedVersion := s.keptVersions()
 	if version == "" || f.ActiveSince != "" || db.TerminationUsesTime(f.Termination) {
 		return load(ctx)
 	}
@@ -35,7 +35,16 @@ func keptAnalytics[T any](ctx context.Context, s *Store, panel string, f db.Anal
 		var zero T
 		return zero, fmt.Errorf("encoding analytics selection: %w", err)
 	}
-	encoded, err := s.analyticsReads.Do(ctx, string(key), version, func(ctx context.Context) ([]byte, error) {
+	if !db.SavedPanel(panel) {
+		savedVersion = ""
+	}
+	if savedVersion != "" {
+		savedVersion += "|" + db.TrendsTimezoneKey(f)
+	}
+	encoded, err := s.analyticsReads.DoSaved(ctx, &s.usageDisk, string(key), version, savedVersion, func(b []byte) ([]byte, error) { return b, nil }, func(b []byte) ([]byte, error) {
+		var result T
+		return b, json.Unmarshal(b, &result)
+	}, func(ctx context.Context) ([]byte, error) {
 		value, err := load(ctx)
 		if err != nil {
 			return nil, err
