@@ -299,7 +299,12 @@ func (s *Store) HasSemantic() bool { return s.getVectorSearcher() != nil }
 
 // MemoryBackendName identifies this store in the transport-neutral memory
 // readiness response.
-func (s *Store) MemoryBackendName() string { return "postgres" }
+func (s *Store) MemoryBackendName() string {
+	if s.cockroach {
+		return "cockroach"
+	}
+	return "postgres"
+}
 
 // escapeLike escapes SQL LIKE metacharacters so the bind
 // parameter is treated as a literal substring.

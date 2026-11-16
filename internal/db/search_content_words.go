@@ -14,9 +14,126 @@ import (
 // contentWords is a natural-language query: the words a message can hold,
 // counted per message, and the quoted phrases it must contain.
 type contentWords struct {
-	terms   []string // one FTS expression per word, covering its regular forms
-	phrases []string // quoted phrases checked against the message's own words
-	match   string   // FTS expression requiring word-bearing phrases
+	terms   []string   // one FTS expression per word, covering its regular forms
+	phrases []string   // quoted phrases checked against the message's own words
+	match   string     // FTS expression requiring word-bearing phrases
+	forms   [][]string // each word's regular forms, for the other backends
+}
+
+// ContentWords is a natural query for backends without FTS5: each word's
+// regular forms and the quoted phrases a match must hold.
+type ContentWords struct {
+	Terms   [][][]string
+	Phrases []string
+}
+
+// ContentWordsMatch reports whether body contains every word and phrase.
+func ContentWordsMatch(body string, words ContentWords) bool {
+	for _, term := range words.Terms {
+		if !wordFormsMatch(body, term) {
+			return false
+		}
+	}
+	return !slices.ContainsFunc(words.Phrases, func(phrase string) bool { return !phraseMatch(body, phrase) })
+}
+
+func wordFormsMatch(body string, term [][]string) bool {
+	have := strings.FieldsFunc(body, isSeparator)
+	for i := 0; i+len(term) <= len(have); i++ {
+		matched := true
+		for j, forms := range term {
+			if !slices.ContainsFunc(forms, func(form string) bool { return strings.EqualFold(have[i+j], form) }) {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
+}
+
+// WordSnippetRange finds the exact pattern or the first whole word matching a
+// query form, falling back to the start of body.
+func WordSnippetRange(body, pattern string, words ContentWords) (int, int) {
+	if start, end, ok := CaseInsensitiveSpan(body, pattern); ok {
+		return start, end
+	}
+	offset := 0
+	for word := range strings.FieldsFuncSeq(body, isSeparator) {
+		offset += strings.Index(body[offset:], word)
+		for _, term := range words.Terms {
+			// A form spanning punctuation centers on its first word, as
+			// ftsTermSpan does for phrases matched across punctuation.
+			if slices.ContainsFunc(term[0], func(form string) bool {
+				parts := strings.FieldsFunc(form, isSeparator)
+				return len(parts) > 0 && strings.EqualFold(word, parts[0])
+			}) {
+				return offset, offset + len(word)
+			}
+		}
+		offset += len(word)
+	}
+	return 0, 0
+}
+
+// RouteContentWords applies SQLite's gates for word matching to f, a
+// substring or fts search. It returns f with a fully quoted pattern unquoted.
+func RouteContentWords(f ContentSearchFilter) (ContentSearchFilter, ContentWords, bool) {
+	if f.Mode == "fts" && (hasFTSPrefix(f.Pattern) || strings.HasPrefix(strings.TrimSpace(f.Pattern), `NOT "`)) {
+		return f, ContentWords{}, false
+	}
+	f, q, ok := routeContentWords(f)
+	return f, ContentWords{Terms: mirrorWordForms(q.forms), Phrases: q.phrases}, ok
+}
+
+func mirrorWordForms(terms [][]string) [][][]string {
+	result := make([][][]string, 0, len(terms))
+	for _, forms := range terms {
+		parts := strings.FieldsFunc(forms[0], isSeparator)
+		if len(parts) < 2 {
+			result = append(result, [][]string{forms})
+			continue
+		}
+		var term [][]string
+		for _, part := range parts {
+			natural, err := literalFTSAnalyzer.PrepareNatural(part)
+			if err != nil || len(natural.CountTerms) == 0 {
+				term = append(term, []string{part})
+			} else {
+				term = append(term, natural.CountTerms[0].Forms)
+			}
+		}
+		result = append(result, term)
+	}
+	return result
+}
+
+func hasFTSPrefix(pattern string) bool {
+	quoted := false
+	for _, r := range pattern {
+		if r == '"' {
+			quoted = !quoted
+		} else if r == '*' && !quoted {
+			return true
+		}
+	}
+	return false
+}
+
+func routeContentWords(f ContentSearchFilter) (ContentSearchFilter, contentWords, bool) {
+	words := f.Mode == "fts" && !explicitFTSExpression(f.Pattern)
+	if f.Mode != "fts" && hasSource(f, "messages") {
+		var quoted bool
+		f.Pattern, quoted = unquoteContentSearch(f.Pattern)
+		words = !quoted && len(strings.Fields(f.Pattern)) > 1
+	}
+	if !words {
+		return f, contentWords{}, false
+	}
+	q, ok := contentWordsQuery(f.Pattern)
+	return f, q, ok
 }
 
 // contentWordsQuery prepares pattern for ranked word search. It reports false
@@ -37,6 +154,7 @@ func contentWordsQuery(pattern string) (contentWords, bool) {
 	}
 	for _, term := range natural.CountTerms {
 		q.terms = append(q.terms, term.Match)
+		q.forms = append(q.forms, term.Forms)
 	}
 	return q, true
 }
@@ -47,7 +165,6 @@ func (q contentWords) snippetTerm() string { return strings.Join(q.terms, " OR "
 // phraseMatch reports whether body holds the words of phrase adjacent and in
 // order, ignoring case, with only punctuation or space between them.
 func phraseMatch(body, phrase string) bool {
-	isSeparator := func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) }
 	want := strings.FieldsFunc(phrase, isSeparator)
 	have := strings.FieldsFunc(body, isSeparator)
 	for i := 0; i+len(want) <= len(have); i++ {
@@ -57,6 +174,8 @@ func phraseMatch(body, phrase string) bool {
 	}
 	return false
 }
+
+func isSeparator(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) }
 
 // unquoteContentSearch returns the text inside a single fully quoted query.
 func unquoteContentSearch(pattern string) (string, bool) {

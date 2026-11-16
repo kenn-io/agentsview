@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1135,8 +1136,23 @@ func (s *Store) collectContentMatches(ctx context.Context, f db.ContentSearchFil
 	return contentCandidateMatches(all), nil
 }
 
+// collectContentSubstringMatches lists exact text, then messages holding every
+// query word, then, when those don't fill the page, messages holding fewer.
 func (s *Store) collectContentSubstringMatches(
 	ctx context.Context, f db.ContentSearchFilter,
+) ([]db.ContentMatch, error) {
+	f, words, ranked := db.RouteContentWords(f)
+	if ranked {
+		matches, err := s.collectContentSubstringPass(ctx, f, words, true, true)
+		if err != nil || len(matches) > f.Limit {
+			return matches, err
+		}
+	}
+	return s.collectContentSubstringPass(ctx, f, words, ranked, false)
+}
+
+func (s *Store) collectContentSubstringPass(
+	ctx context.Context, f db.ContentSearchFilter, words db.ContentWords, ranked, all bool,
 ) ([]db.ContentMatch, error) {
 	eventAnchorJoin := db.LexicalEventAnchorJoinSQL(f.Scope)
 
@@ -1163,7 +1179,22 @@ func (s *Store) collectContentSubstringMatches(
 			if f.KeywordOnly {
 				sysPred += " AND m.role IN ('user', 'assistant')"
 			}
-			contentPred := addSearchArgs("COALESCE(m.dialogue_text, m.content)")
+			var contentPred string
+			if ranked {
+				b := db.NewQueryBuilder(db.DuckDBQueryDialect(), 0)
+				column := "COALESCE(m.dialogue_text, m.content)"
+				if all {
+					if f.Mode != "fts" {
+						contentPred = b.ContainsPredicate(column, f.Pattern) + " OR "
+					}
+					contentPred = "(" + contentPred + "(" + db.WordCandidateSQL(b, column, words, true) + " AND " + db.WordASCIIRegexSQL(b, column, words) + "))"
+				} else {
+					contentPred = db.WordFilterSQL(b, column, f, words, false)
+				}
+				args = append(append(args, b.Args()...), scopeArgs...)
+			} else {
+				contentPred = addSearchArgs("COALESCE(m.dialogue_text, m.content)")
+			}
 			branches = append(branches, `
 				SELECT m.session_id, s.project, s.agent, 'message' AS location,
 					m.role, '' AS tool_name, m.ordinal,
@@ -1265,13 +1296,54 @@ func (s *Store) collectContentSubstringMatches(
 	}
 	query := `
 		SELECT session_id, project, agent, location, role, tool_name,
-			ordinal, ts, body
+			ordinal, ts, body, 0 AS n
 		FROM (` + strings.Join(branches, " UNION ALL ") + `)
 		ORDER BY sort_ts DESC, session_id ASC, ordinal ASC,
 			src ASC, row_id ASC, call_index ASC, event_index ASC, body ASC
 		LIMIT ? OFFSET ?`
-	args = append(args, f.Limit+1, f.Cursor)
-	return s.scanContentMatches(ctx, query, args, func(body string) string {
+	if ranked && all {
+		b := db.NewQueryBuilder(db.DuckDBQueryDialect(), 0)
+		tier := "1"
+		if f.Mode != "fts" {
+			tier = "CASE WHEN " + b.ContainsPredicate("body", f.Pattern) + " THEN 0 ELSE 1 END"
+		}
+		args = append(args, b.Args()...)
+		query = `WITH candidates AS (` + strings.Join(branches, " UNION ALL ") + `),
+			bounded AS (
+				SELECT candidates.*, ` + tier + ` AS tier FROM candidates
+			)
+			SELECT session_id, project, agent, location, role, tool_name,
+				ordinal, ts, body, CASE WHEN tier = 0 THEN -` + strconv.Itoa(len(words.Terms)) + ` ELSE ` + strconv.Itoa(len(words.Terms)) + ` END AS n
+			FROM bounded
+			ORDER BY tier, sort_ts DESC, session_id ASC, ordinal ASC,
+				src ASC, row_id ASC, call_index ASC, event_index ASC, body ASC
+			LIMIT ?`
+	} else if ranked {
+		b := db.NewQueryBuilder(db.DuckDBQueryDialect(), 0)
+		query = db.WordRankedSQL(b, branches, f, words, all)
+		args = append(args, b.Args()...)
+	}
+	var accept func(*db.ContentMatch, string) bool
+	skip := 0
+	if ranked && all {
+		args = append(args, f.Cursor+f.Limit+1)
+		skip = f.Cursor
+		accept = func(m *db.ContentMatch, body string) bool {
+			// Exact matches carry a negative count so they bypass word checks.
+			if m.MatchedWords < 0 {
+				m.MatchedWords = -m.MatchedWords
+				return true
+			}
+			return m.Location != "message" || db.ContentWordsMatch(body, words)
+		}
+	} else {
+		args = append(args, f.Limit+1, f.Cursor)
+	}
+	return s.scanContentMatches(ctx, query, args, accept, skip, func(body string) string {
+		if ranked {
+			start, end := db.WordSnippetRange(body, f.Pattern, words)
+			return f.BuildSnippet(body, start, end)
+		}
 		if f.Mode == "fts" {
 			start, end := db.FTSSnippetRange(f.Pattern, body)
 			return f.BuildSnippet(body, start, end)
@@ -1538,16 +1610,16 @@ func (s *Store) collectContentSource(
 }
 
 func (s *Store) scanContentMatches(
-	ctx context.Context, query string, args []any, makeSnippet func(string) string,
+	ctx context.Context, query string, args []any, accept func(*db.ContentMatch, string) bool, skip int, makeSnippet func(string) string,
 ) ([]db.ContentMatch, error) {
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("duckdb content search: %w", err)
 	}
-	return scanDuckContentRows(rows, makeSnippet)
+	return scanDuckContentRows(rows, accept, skip, makeSnippet)
 }
 
-func scanDuckContentRows(rows *sql.Rows, makeSnippet func(string) string) ([]db.ContentMatch, error) {
+func scanDuckContentRows(rows *sql.Rows, accept func(*db.ContentMatch, string) bool, skip int, makeSnippet func(string) string) ([]db.ContentMatch, error) {
 	defer rows.Close()
 	var out []db.ContentMatch
 	for rows.Next() {
@@ -1556,8 +1628,15 @@ func scanDuckContentRows(rows *sql.Rows, makeSnippet func(string) string) ([]db.
 		var ts any
 		if err := rows.Scan(&m.SessionID, &m.Project, &m.Agent,
 			&m.Location, &m.Role, &m.ToolName, &m.Ordinal,
-			&ts, &body); err != nil {
+			&ts, &body, &m.MatchedWords); err != nil {
 			return nil, err
+		}
+		if accept != nil && !accept(&m, body) {
+			continue
+		}
+		if skip > 0 {
+			skip--
+			continue
 		}
 		m.Timestamp = formatDBTime(ts)
 		m.Snippet = makeSnippet(body)

@@ -28,6 +28,21 @@ func TestClickHouseDialogueSearchParity(t *testing.T) {
 	dbtest.AssertDialogueSearchParity(t, local, store, "substring", "regex", "fts")
 }
 
+func TestClickHouseWordSearchParity(t *testing.T) {
+	t.Parallel()
+	local, target := seedFixture(t)
+	dbtest.SeedWordSearch(t, local)
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	_, err := syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	store, err := NewStore(t.Context(), target)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	dbtest.AssertWordSearch(t, store)
+	dbtest.AssertMirrorWordAccents(t, store)
+	dbtest.AssertExplicitMirrorFTS(t, store)
+}
+
 func TestDialogueClickHouseBackfillsExistingPushCursor(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -194,7 +209,7 @@ func TestDialogueClickHouseStoresContentCopyOnce(t *testing.T) {
 	assert.True(t, isNull)
 	assert.Zero(t, size, "the rewrite must drop the copy's bytes, not only mask them")
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
-		Pattern: "alpha first", Mode: "substring", Sources: []string{"messages"}, IncludeOneShot: true,
+		Pattern: `"alpha first"`, Mode: "substring", Sources: []string{"messages"}, IncludeOneShot: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, got.Matches, 1)

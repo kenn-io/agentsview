@@ -102,6 +102,11 @@ func PostgresSystemPrefixSQL(contentCol, roleCol string) string {
 	return systemPrefixSQL(contentCol, roleCol, systemPrefixPostgres, true)
 }
 
+// PostgresLatin1SearchSQL removes trim characters a LATIN1 database cannot store.
+func PostgresLatin1SearchSQL(query string) string {
+	return strings.ReplaceAll(query, "'"+systemPrefixTrimCutset+"'", "' \t\n\v\f\r\u0085\u00a0'")
+}
+
 // PostgresSystemPrefixSQLWithoutGuard avoids guard overhead on small candidate sets.
 func PostgresSystemPrefixSQLWithoutGuard(contentCol, roleCol string) string {
 	return systemPrefixSQL(contentCol, roleCol, systemPrefixPostgres, false)

@@ -1266,9 +1266,7 @@ func (b *directBackend) SearchContent(
 			reason = unavailable.Reason
 		}
 		filter.KeywordOnly, effectiveMode, note = true, "hybrid_keyword", "Search by meaning is unavailable: "+reason+". Returned hybrid keyword matches only."
-		// SQLite keyword matches already rank messages holding fewer of the
-		// words, so shorter retries find nothing new there.
-		if named, ok := b.db.(db.MemoryBackendNamer); !ok || named.MemoryBackendName() != "sqlite" {
+		if named, ok := b.db.(db.MemoryBackendNamer); !ok || named.MemoryBackendName() == "cockroach" {
 			note += " Query words must appear. If matches are empty or few, try short substring queries with key terms or synonyms."
 		}
 		if reason == "not set up" {
