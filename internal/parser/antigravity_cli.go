@@ -604,15 +604,17 @@ func mergeAntigravityDBHistoryMessages(
 		return dbMessages
 	}
 	userCount := 0
-	typedPrompt := false
+	unmatchedTypedPrompt := false
 	for _, msg := range dbMessages {
 		if msg.Role == RoleUser {
+			if msg.antigravityTypedPrompt && userCount < len(history) && normalizedAntigravityPrompt(msg.Content) != normalizedAntigravityPrompt(history[userCount].Content) {
+				unmatchedTypedPrompt = true
+			}
 			userCount++
-			typedPrompt = typedPrompt || msg.antigravityTypedPrompt
 		}
 	}
 	// Positional overwrite would replace a typed prompt missing from history.
-	if userCount != len(history) || typedPrompt {
+	if userCount != len(history) || unmatchedTypedPrompt {
 		return appendMissingAntigravityHistoryMessages(
 			dbMessages, history,
 		)
@@ -627,8 +629,10 @@ func mergeAntigravityDBHistoryMessages(
 				dbMessages, history,
 			)
 		}
-		dbMessages[i].Content = history[historyIdx].Content
-		dbMessages[i].ContentLength = len(history[historyIdx].Content)
+		if !dbMessages[i].antigravityTypedPrompt {
+			dbMessages[i].Content = history[historyIdx].Content
+			dbMessages[i].ContentLength = len(history[historyIdx].Content)
+		}
 		if !history[historyIdx].Timestamp.IsZero() {
 			dbMessages[i].Timestamp = history[historyIdx].Timestamp
 		}

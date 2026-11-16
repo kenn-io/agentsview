@@ -488,67 +488,80 @@ func TestAntigravityCLIDBPreservesTypedPromptMissingFromHistory(t *testing.T) {
 	assert.Equal(t, "typed prompt", sess.FirstMessage)
 }
 
-func TestAntigravityCLIMatchedHistoryKeepsTurnOrder(t *testing.T) {
-	root := t.TempDir()
-	id := "33333333-4444-5555-6666-777777777777"
-	mustMkdir(t, filepath.Join(root, "conversations"))
-	dbPath := filepath.Join(root, "conversations", id+".db")
-	createAntigravityTestDB(t, dbPath)
-	db, err := sql.Open("sqlite3", dbPath)
-	require.NoError(t, err)
-	for i, prompt := range []string{"first prompt", "second prompt"} {
-		item := encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: []byte(prompt)}})
-		input := encodePB([]pbField{{num: 3, wire: pbWireBytes, bytes: item}})
-		payload := encodePB([]pbField{{num: 19, wire: pbWireBytes, bytes: input}})
-		if i == 0 {
-			mustExec(t, db, `UPDATE steps SET step_payload = ? WHERE idx = 0`, payload)
-		} else {
-			mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`, 2, 14, payload)
-		}
+func TestAntigravityCLIPartialHistoryKeepsTurnOrder(t *testing.T) {
+	for _, tc := range []struct {
+		name, prompt string
+		timestamp    int64
+		untimedReply bool
+	}{
+		{"last prompt matched", "second prompt", 1779000200000, false},
+		{"first prompt matched", "first prompt", 1779000000000, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			id := "33333333-4444-5555-6666-777777777777"
+			mustMkdir(t, filepath.Join(root, "conversations"))
+			dbPath := filepath.Join(root, "conversations", id+".db")
+			createAntigravityTestDB(t, dbPath)
+			db, err := sql.Open("sqlite3", dbPath)
+			require.NoError(t, err)
+			for i, prompt := range []string{"first prompt", "second prompt"} {
+				item := encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: []byte(prompt)}})
+				input := encodePB([]pbField{{num: 3, wire: pbWireBytes, bytes: item}})
+				payload := encodePB([]pbField{{num: 19, wire: pbWireBytes, bytes: input}})
+				if i == 0 {
+					mustExec(t, db, `UPDATE steps SET step_payload = ? WHERE idx = 0`, payload)
+				} else {
+					mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`, 2, 14, payload)
+				}
+			}
+			if tc.untimedReply {
+				reply := encodePB([]pbField{{num: 17, wire: pbWireBytes, bytes: []byte("assistant reply content body")}})
+				mustExec(t, db, `UPDATE steps SET step_payload = ? WHERE idx = 1`, reply)
+			}
+			require.NoError(t, db.Close())
+			row, err := json.Marshal(map[string]any{"display": tc.prompt, "timestamp": tc.timestamp, "conversationId": id})
+			require.NoError(t, err)
+			mustWrite(t, filepath.Join(root, "history.jsonl"), row)
+			sess, msgs, err := parseAntigravityCLITestSession(t, dbPath, "", "test-machine")
+			require.NoError(t, err)
+			require.Len(t, msgs, 3)
+			assert.Equal(t, "first prompt", msgs[0].Content)
+			assert.Equal(t, "assistant reply content body", msgs[1].Content)
+			assert.Equal(t, "second prompt", msgs[2].Content)
+			assert.Equal(t, "first prompt", sess.FirstMessage)
+		})
 	}
-	require.NoError(t, db.Close())
-	mustWrite(t, filepath.Join(root, "history.jsonl"),
-		[]byte(`{"display":"second prompt","timestamp":1779000200000,`+
-			`"conversationId":"`+id+`"}`))
-	_, msgs, err := parseAntigravityCLITestSession(t, dbPath, "", "test-machine")
-	require.NoError(t, err)
-	require.Len(t, msgs, 3)
-	assert.Equal(t, "first prompt", msgs[0].Content)
-	assert.Equal(t, "assistant reply content body", msgs[1].Content)
-	assert.Equal(t, "second prompt", msgs[2].Content)
 }
 
-func TestAntigravityCLIPartialHistoryKeepsTurnOrder(t *testing.T) {
+func TestAntigravityCLICompleteHistoryKeepsTurnOrder(t *testing.T) {
 	root := t.TempDir()
 	id := "33333333-4444-5555-6666-777777777777"
 	mustMkdir(t, filepath.Join(root, "conversations"))
 	dbPath := filepath.Join(root, "conversations", id+".db")
-	createAntigravityTestDB(t, dbPath)
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	for i, prompt := range []string{"first prompt", "second prompt"} {
+	createAntigravityStepTables(t, db)
+	for i, prompt := range []string{"first prompt", "second prompt", "third prompt"} {
 		item := encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: []byte(prompt)}})
 		input := encodePB([]pbField{{num: 3, wire: pbWireBytes, bytes: item}})
 		payload := encodePB([]pbField{{num: 19, wire: pbWireBytes, bytes: input}})
-		if i == 0 {
-			mustExec(t, db, `UPDATE steps SET step_payload = ? WHERE idx = 0`, payload)
-		} else {
-			mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`, 2, 14, payload)
+		mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`, i*2, 14, payload)
+		if i < 2 {
+			ts := encodePB([]pbField{{num: 1, wire: pbWireVarint, varint: uint64(1779000050 + 100*i)}})
+			reply := encodePB([]pbField{{num: 5, wire: pbWireBytes, bytes: ts}, {num: 17, wire: pbWireBytes, bytes: []byte("assistant reply content body")}})
+			mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`, i*2+1, 17, reply)
 		}
 	}
-	reply := encodePB([]pbField{{num: 17, wire: pbWireBytes, bytes: []byte("assistant reply content body")}})
-	mustExec(t, db, `UPDATE steps SET step_payload = ? WHERE idx = 1`, reply)
 	require.NoError(t, db.Close())
-	mustWrite(t, filepath.Join(root, "history.jsonl"),
-		[]byte(`{"display":"first prompt","timestamp":1779000000000,`+
-			`"conversationId":"`+id+`"}`))
-	sess, msgs, err := parseAntigravityCLITestSession(t, dbPath, "", "test-machine")
+	mustWrite(t, filepath.Join(root, "history.jsonl"), []byte(
+		`{"display":"first prompt","timestamp":1779000000000,"conversationId":"`+id+`"}`+"\n"+
+			`{"display":"second prompt","timestamp":1779000100000,"conversationId":"`+id+`"}`+"\n"+
+			`{"display":"third prompt","timestamp":1779000200000,"conversationId":"`+id+`"}`))
+	_, msgs, err := parseAntigravityCLITestSession(t, dbPath, "", "test-machine")
 	require.NoError(t, err)
-	require.Len(t, msgs, 3)
-	assert.Equal(t, "first prompt", msgs[0].Content)
-	assert.Equal(t, "assistant reply content body", msgs[1].Content)
-	assert.Equal(t, "second prompt", msgs[2].Content)
-	assert.Equal(t, "first prompt", sess.FirstMessage)
+	require.Len(t, msgs, 5)
+	assert.Equal(t, []string{"first prompt", "assistant reply content body", "second prompt", "assistant reply content body", "third prompt"}, []string{msgs[0].Content, msgs[1].Content, msgs[2].Content, msgs[3].Content, msgs[4].Content})
 }
 
 func TestAntigravityCLIProjectFallbackPromptAndProximity(t *testing.T) {
@@ -4876,20 +4889,10 @@ func TestDecodeAntigravityStepStructuredUserInput(t *testing.T) {
 	for _, n := range []int{2, 1, 27} {
 		expansion = encodePB([]pbField{{num: n, wire: pbWireBytes, bytes: expansion}})
 	}
-	cases := []struct {
-		name  string
-		items []pbField
-		want  string
-	}{
-		{"prompt with skill", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte("比较这两个游戏 /grill-me")}, {num: 2, wire: pbWireBytes, bytes: expansion}}, "比较这两个游戏 /grill-me"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			items := []pbField{{num: 3, wire: pbWireBytes, bytes: encodePB(tc.items)}}
-			payload := encodePB([]pbField{{num: 19, wire: pbWireBytes, bytes: encodePB(items)}})
-			msg, ok := decodeAntigravityStep(0, 14, payload)
-			require.True(t, ok)
-			assert.Equal(t, tc.want, msg.Content)
-		})
-	}
+	item := encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: []byte("比较这两个游戏 /grill-me")}, {num: 2, wire: pbWireBytes, bytes: expansion}})
+	items := []pbField{{num: 3, wire: pbWireBytes, bytes: item}}
+	payload := encodePB([]pbField{{num: 19, wire: pbWireBytes, bytes: encodePB(items)}})
+	msg, ok := decodeAntigravityStep(0, 14, payload)
+	require.True(t, ok)
+	assert.Equal(t, "比较这两个游戏 /grill-me", msg.Content)
 }
