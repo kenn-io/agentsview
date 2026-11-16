@@ -175,9 +175,10 @@ func ParseRemote(content string) Remote {
 
 // templateData is the data passed to the finding-history template.
 type templateData struct {
-	Delegate   string
-	ServerArgs string
-	ToolPrefix string
+	Delegate            string
+	ServerArgs          string
+	ToolPrefix          string
+	AlternateToolPrefix string
 	// AgentDir is the harness's project-level agent directory, included in
 	// the delegation guard when the harness installs the search agent. Empty
 	// for harnesses that do not install one, so the guard text omits the
@@ -234,10 +235,10 @@ func Render(h Harness, version string, remote Remote) (Rendered, error) {
 // the recall skill and its LICENSE sidecar; Claude also gets the bounded
 // search agent used by it.
 func RenderPackage(h Harness, version string, remote Remote) ([]Rendered, error) {
-	return renderPackage(h, version, remote, standaloneToolPrefix)
+	return renderPackage(h, version, remote, standaloneToolPrefix, "")
 }
 
-func renderPackage(h Harness, version string, remote Remote, toolPrefix string) ([]Rendered, error) {
+func renderPackage(h Harness, version string, remote Remote, toolPrefix string, alternateToolPrefix string) ([]Rendered, error) {
 	skill, err := Render(h, version, remote)
 	if err != nil {
 		return nil, err
@@ -257,7 +258,7 @@ func renderPackage(h Harness, version string, remote Remote, toolPrefix string) 
 			"agentsview-search-conversations",
 			filepath.Join(claudeAgentDir, "agentsview-search-conversations.md"),
 			"search-conversations.md.tmpl",
-			templateData{ServerArgs: remote.Args(), ToolPrefix: toolPrefix},
+			templateData{ServerArgs: remote.Args(), ToolPrefix: toolPrefix, AlternateToolPrefix: alternateToolPrefix},
 			version,
 			"",
 		)
@@ -274,7 +275,7 @@ func renderPackage(h Harness, version string, remote Remote, toolPrefix string) 
 // templates as the standalone Claude package. The skill and LICENSE stay
 // byte-identical so lifecycle diagnostics can recognize a duplicate install.
 func RenderPluginPackage(version string) ([]Rendered, error) {
-	artifacts, err := renderPackage(HarnessClaude, version, Remote{}, pluginToolPrefix)
+	artifacts, err := renderPackage(HarnessClaude, version, Remote{}, pluginToolPrefix, standaloneToolPrefix)
 	if err != nil {
 		return nil, err
 	}

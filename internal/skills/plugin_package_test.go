@@ -77,8 +77,9 @@ func TestMemoryPluginAgentToolsMatchPluginServer(t *testing.T) {
 	agent, err := os.ReadFile(filepath.Join(root, "agents", "agentsview-search-conversations.md"))
 	require.NoError(t, err)
 	content := string(agent)
-	assert.Contains(t, strings.Split(content, "\n"), "tools: "+prefix+"search_content, "+prefix+"get_messages")
+	assert.Contains(t, strings.Split(content, "\n"), "tools: "+prefix+"search_content, "+prefix+"get_messages, mcp__agentsview__search_content, mcp__agentsview__get_messages")
 	assert.Contains(t, content, "`"+prefix+"search_content`")
 	assert.Contains(t, content, "`"+prefix+"get_messages`")
-	assert.NotContains(t, content, "mcp__agentsview__")
+	assert.Contains(t, content, "`mcp__agentsview__search_content`")
+	assert.Contains(t, content, "`mcp__agentsview__get_messages`")
 }
