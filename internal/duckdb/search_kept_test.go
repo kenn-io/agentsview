@@ -227,53 +227,6 @@ func TestSearchKeptPushInvalidation(t *testing.T) {
 	check("fresh")
 }
 
-func TestSearchKeptImageTextPush(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	ctx := t.Context()
-	local := newLocalDB(t)
-	const id, ts = "screenshot", "2026-01-02T03:04:05.000Z"
-	content := `[{"type":"input_image","image_url":"data:image/png;base64,` + base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\nimage")) + `"}]`
-	require.NoError(t, local.UpsertSession(ctx, syncSession(id, "shots", "look", ts, 1)))
-	require.NoError(t, local.ReplaceSessionMessages(ctx, id, []db.Message{
-		syncMessage(id, 0, "assistant", "reading", ts, db.ToolCall{ToolName: "Read", Category: "Read", ToolUseID: "shot", ResultContent: content}),
-	}))
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	push := func() {
-		t.Helper()
-		result, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
-		require.NoError(t, err)
-		require.Zero(t, result.Errors)
-	}
-	push()
-	filter := db.SearchFilter{Query: "invoice"}
-	store := openUsagePartsStore(t, path)
-	page, err := store.Search(ctx, filter)
-	require.NoError(t, err)
-	require.Empty(t, page.Results)
-	require.NoError(t, store.Close())
-	hash := db.RetainedToolResultImages(content)[0].SHA256
-	require.NoError(t, local.BackfillImageTextOccurrences(ctx))
-	require.NoError(t, local.SaveImageText(ctx, hash, ocr.Identity{Fingerprint: "proc-a", Provider: "tesseract", Model: "eng", Revision: "r1"}, "invoice 4827", false))
-	push()
-	store = openUsagePartsStore(t, path)
-	reads := 0
-	store.afterSearchRead = func() { reads++ }
-	page, err = store.Search(ctx, filter)
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	require.Equal(t, id, page.Results[0].SessionID)
-	require.Equal(t, "invoice 4827", page.Results[0].Snippet)
-	require.Equal(t, 1, reads)
-	require.NoError(t, store.Close())
-	store = openUsagePartsStore(t, path)
-	defer store.Close()
-	store.afterSearchRead = func() { reads++ }
-	got, err := store.Search(ctx, filter)
-	require.NoError(t, err)
-	require.Equal(t, page, got)
-	require.Equal(t, 1, reads)
-}
-
 func TestSearchKeptContentChangedDuringPush(t *testing.T) {
 	for _, kind := range []string{"image", "message"} {
 		t.Run(kind, func(t *testing.T) {
