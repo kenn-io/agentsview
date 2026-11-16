@@ -2793,18 +2793,10 @@ func (s *Store) usageRawPartsVersion(snapshot partsSnapshot) string {
 			return old.identity
 		}
 		cur := make(map[string]partInfo, len(tp.parts))
-		stable := exists
 		for _, p := range tp.parts {
 			cur[p.name] = p
-			if p.isPatch() || (old.rawParts[p.name].name != "" && old.rawParts[p.name] != p) {
-				stable = false
-			}
 		}
-		for _, p := range old.rawParts {
-			if p.isPatch() {
-				stable = false
-			}
-		}
+		stable := exists
 		if stable {
 			previous := maps.Clone(old.rawParts)
 			// Mutation numbers consume block numbers without creating inserted
