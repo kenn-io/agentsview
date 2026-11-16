@@ -3,6 +3,8 @@
 package db
 
 import (
+	"bytes"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -10,6 +12,69 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestSearchKeptPermanentDelete(t *testing.T) {
+	cache := t.TempDir()
+	t.Setenv("CACHE_DIRECTORY", cache)
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "session", "project")
+	insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "secretsnippet"})
+	page, err := d.Search(ctx, SearchFilter{Query: "secretsnippet"})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	d.trendsDisk.Put("other", "v1", []byte("other cache"))
+	containsSnippet := func() bool {
+		t.Helper()
+		found := false
+		require.NoError(t, filepath.WalkDir(cache, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil || entry.IsDir() {
+				return err
+			}
+			data, err := os.ReadFile(path)
+			if err == nil && bytes.Contains(data, []byte("secretsnippet")) {
+				found = true
+			}
+			return err
+		}))
+		return found
+	}
+	require.True(t, containsSnippet())
+	require.NoError(t, d.SoftDeleteSession(ctx, "session"))
+	n, err := d.DeleteSessionIfTrashed(ctx, "session")
+	require.NoError(t, err)
+	require.EqualValues(t, 1, n)
+	require.False(t, containsSnippet())
+	other, ok := d.trendsDisk.Get("other", "v1")
+	require.True(t, ok)
+	require.Equal(t, "other cache", string(other))
+}
+
+func TestSearchKeptDeleteDuringFill(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "session", "project")
+	insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "needle"})
+	version := d.searchVersion(ctx, false)
+	var deleteErr error
+	var deleted int64
+	d.afterSearchPage = func() {
+		deleteErr = d.SoftDeleteSession(ctx, "session")
+		if deleteErr != nil {
+			return
+		}
+		deleted, deleteErr = d.DeleteSessionIfTrashed(ctx, "session")
+	}
+	page, err := d.Search(ctx, SearchFilter{Query: "needle"})
+	require.NoError(t, err)
+	require.NoError(t, deleteErr)
+	require.EqualValues(t, 1, deleted)
+	require.Len(t, page.Results, 1)
+	filter := SearchFilter{Query: "needle", Limit: DefaultSearchLimit}
+	_, ok := d.trendsDisk.Get("search|"+filter.Slot()+"|false", "json|v1|"+version)
+	require.False(t, ok)
+}
 
 func TestSearchKeptSelections(t *testing.T) {
 	d := testDB(t)

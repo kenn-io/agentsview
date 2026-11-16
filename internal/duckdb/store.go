@@ -752,6 +752,9 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 		current := func() bool { return ctx.Err() == nil && version != "" && version == s.keptVersion() }
 		if s.path != "" && s.usageDisk.Enabled() {
 			if identity, ok := s.searchDiskVersion(ctx); ok {
+				if s.usageDisk.ObserveJSON(identity) {
+					s.searchReads.Clear()
+				}
 				return kept.LoadJSON(&s.usageDisk, "search|"+f.Slot(), identity, current, func() (db.SearchPage, error) { return s.search(ctx, f) })
 			}
 		}

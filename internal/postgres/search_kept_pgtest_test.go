@@ -85,4 +85,18 @@ func TestSearchKeptRestart(t *testing.T) {
 	require.Len(t, got.Results, 1)
 	require.Contains(t, got.Results[0].Snippet, "second")
 	require.Zero(t, trace.count.Load())
+	version := snapshotUsageVersion(ctx, s.pg, 0)
+	filter.Limit = db.DefaultSearchLimit
+	_, ok := s.trendsDisk.Get("search|"+filter.Slot(), "json|v1|"+version)
+	require.True(t, ok)
+	s.trendsDisk.Put("other", "v1", []byte("other cache"))
+	require.NoError(t, s.SoftDeleteSession(ctx, "session"))
+	deleted, err := s.DeleteSessionIfTrashed(ctx, "session")
+	require.NoError(t, err)
+	require.EqualValues(t, 1, deleted)
+	_, ok = s.trendsDisk.Get("search|"+filter.Slot(), "json|v1|"+version)
+	require.False(t, ok)
+	otherData, ok := s.trendsDisk.Get("other", "v1")
+	require.True(t, ok)
+	require.Equal(t, "other cache", string(otherData))
 }

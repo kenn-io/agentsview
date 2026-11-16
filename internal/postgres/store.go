@@ -556,6 +556,10 @@ func (s *Store) deleteSessionIfTrashed(ctx context.Context, id string) (int64, e
 			err,
 		)
 	}
+	if n > 0 {
+		s.trendsDisk.DropJSON("")
+		s.runtimeState().search.Clear()
+	}
 	return n, nil
 }
 
@@ -626,6 +630,10 @@ func (s *Store) emptyTrashOnce(ctx context.Context, legacyOnly bool) (int, error
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, mapPGWriteError("commit empty-trash", err)
+	}
+	if n > 0 {
+		s.trendsDisk.DropJSON("")
+		s.runtimeState().search.Clear()
 	}
 	return int(n), nil
 }

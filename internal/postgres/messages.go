@@ -324,7 +324,9 @@ func (s *Store) Search(
 		if version == "" {
 			return view.search(ctx, f)
 		}
-		page, _, err := kept.LoadJSON(&s.trendsDisk, "search|"+f.Slot(), version, nil, func() (db.SearchPage, error) { return view.search(ctx, f) })
+		page, _, err := kept.LoadJSON(&s.trendsDisk, "search|"+f.Slot(), version, func() bool {
+			return snapshotUsageVersion(ctx, s.pg, 0) == version
+		}, func() (db.SearchPage, error) { return view.search(ctx, f) })
 		return page, err
 	})
 	if handled || err != nil {

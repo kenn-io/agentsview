@@ -185,9 +185,26 @@ func TestSearchKeptPushInvalidation(t *testing.T) {
 	require.NoError(t, local.ReplaceSessionMessages(ctx, "sess-2", []db.Message{syncMessage("sess-2", 0, "user", "newmatch", ts)}))
 	push()
 	check("newmatch", "sess-2")
+	store := openUsagePartsStore(t, path)
+	filter := db.SearchFilter{Query: "first", Limit: db.DefaultSearchLimit}
+	_, err := store.Search(ctx, filter)
+	require.NoError(t, err)
+	identity, ok := store.searchDiskVersion(ctx)
+	require.True(t, ok)
+	_, ok = store.usageDisk.Get("search|"+filter.Slot(), "json|v1|"+identity)
+	require.True(t, ok)
+	store.usageDisk.Put("other", "v1", []byte("other cache"))
+	require.NoError(t, store.Close())
 	require.NoError(t, local.DeleteSession(ctx, "sess-1"))
 	push()
 	check("fresh")
+	store = openUsagePartsStore(t, path)
+	defer store.Close()
+	_, ok = store.usageDisk.Get("search|"+filter.Slot(), "json|v1|"+identity)
+	require.False(t, ok)
+	other, ok := store.usageDisk.Get("other", "v1")
+	require.True(t, ok)
+	require.Equal(t, "other cache", string(other))
 }
 
 func TestSearchKeptContentChangedDuringPush(t *testing.T) {

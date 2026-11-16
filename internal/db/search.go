@@ -442,7 +442,11 @@ func (db *DB) Search(
 			if db.afterSearchRead != nil {
 				db.afterSearchRead()
 			}
-			return db.search(ctx, f, cjk)
+			page, err := db.search(ctx, f, cjk)
+			if db.afterSearchPage != nil {
+				db.afterSearchPage()
+			}
+			return page, err
 		})
 	})
 }
@@ -462,6 +466,12 @@ func (db *DB) searchVersion(ctx context.Context, cjk bool) string {
 		fingerprint = simpleFTSRuntimeConfig.fingerprint
 	}
 	return fmt.Sprintf("%s|%s|%s", id, token, fingerprint)
+}
+
+func (db *DB) forgetSearchPages() {
+	db.trendsPartsDisk()
+	db.trendsDisk.DropJSON("")
+	db.searchKept.Clear()
 }
 
 func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage, error) {
