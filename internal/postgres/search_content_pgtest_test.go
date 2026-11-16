@@ -62,6 +62,21 @@ func TestSearchContentDeepExactPage(t *testing.T) {
 	assert.Equal(t, "page-4", page.Matches[0].SessionID)
 	assert.Equal(t, 6, page.NextCursor)
 	assert.EqualValues(t, 3, tracer.rows)
+
+	for i := range 5 {
+		id := fmt.Sprintf("boundary-%d", i)
+		insertCSSession(t, store, id, "tier-boundary", "claude", "2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
+		insertCSMessage(t, store, id, 0, "user", "invoice rounding", "2026-05-01T10:00:00Z", false)
+	}
+	insertCSSession(t, store, "word-tier", "tier-boundary", "claude", "2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
+	insertCSMessage(t, store, "word-tier", 0, "user", "rounding invoice", "2026-05-01T10:00:00Z", false)
+	page, err = reader.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "invoice rounding", Project: "tier-boundary", Cursor: 4, Limit: 2})
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 2)
+	assert.Equal(t, "boundary-4", page.Matches[0].SessionID)
+	assert.Equal(t, "word-tier", page.Matches[1].SessionID)
+	assert.Equal(t, 2, page.Matches[1].MatchedWords)
+	assert.Zero(t, page.NextCursor)
 }
 
 func TestSearchContentSnapshotDuringUpdate(t *testing.T) {
