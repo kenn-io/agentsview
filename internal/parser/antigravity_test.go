@@ -4842,6 +4842,7 @@ func TestAntigravityCLIHistoryReconcilesStructuredTurns(t *testing.T) {
 		{"mixed", []turn{{RoleUser, "typed request", 1779000000000, true}, {RoleUser, "A long guessed expansion for the second request", 1779000060000, false}}, []turn{{text: "typed request", ms: 1779000000000}, {text: "second request", ms: 1779000060000}}, []string{"typed request", "second request"}},
 		{"mixed without timestamps", []turn{{RoleUser, "typed request", 0, true}, {RoleUser, "A long guessed expansion for the second request", 0, false}}, []turn{{text: "typed request"}, {text: "second request"}}, []string{"typed request", "second request"}},
 		{"same second repeat", []turn{{RoleUser, "repeat request", 1779000000100, true}, {RoleAssistant, "assistant reply content", 1779000000500, false}}, []turn{{text: "repeat request", ms: 1779000000900}}, []string{"repeat request", "assistant reply content", "repeat request"}},
+		{"same second queued prompt", []turn{{RoleUser, "typed request", 1779000000100, true}}, []turn{{text: "queued request", ms: 1779000000900}}, []string{"typed request", "queued request"}},
 		{"timestamp skew", []turn{{RoleUser, "typed request", 1779000000000, true}}, []turn{{text: "typed request", ms: 1779000002000}, {text: "pending request", ms: 1779000060000}}, []string{"typed request", "pending request"}},
 		{"different display", []turn{{RoleUser, "typed request with pasted text", 1779000000000, true}}, []turn{{text: "[pasted text]", ms: 1779000000000}}, []string{"typed request with pasted text"}},
 		{"unstamped structured match", []turn{{RoleUser, "guessed first", 0, false}, {RoleUser, "typed second", 0, true}}, []turn{{text: "typed second", ms: 1779000060000}, {text: "pending", ms: 1779000120000}}, []string{"guessed first", "typed second", "pending"}},
@@ -4872,4 +4873,14 @@ func TestAntigravityCLIHistoryReconcilesStructuredTurns(t *testing.T) {
 			assert.Equal(t, tc.want, got)
 		})
 	}
+}
+
+func TestAntigravityCLIStructuredHistorySuppliesMissingTimestamp(t *testing.T) {
+	ts := time.UnixMilli(1779000000000)
+	dbMessages := []ParsedMessage{{Role: RoleUser, Content: "typed request", structuredPrompt: true}}
+	history := []ParsedMessage{{Role: RoleUser, Content: "typed request", Timestamp: ts}}
+	msgs := mergeAntigravityDBHistoryMessages(dbMessages, history)
+	require.Len(t, msgs, 1)
+	assert.Equal(t, "typed request", msgs[0].Content)
+	assert.Equal(t, ts, msgs[0].Timestamp)
 }

@@ -628,7 +628,7 @@ func appendMissingAntigravityHistoryMessages(
 // loosest, reserving text matches before pairing different text. A turn never
 // pairs with a prompt stamped after its assistant reply. Different text may
 // pair with a heuristic turn when positional is set, or with a structured
-// turn when timestamps agree exactly or to the second. Such pairs cannot cross
+// turn when timestamps agree exactly. Such pairs cannot cross
 // a reserved match, and structured turns keep their typed content.
 func reconcileAntigravityHistoryMessages(
 	dbMessages, history []ParsedMessage, positional bool,
@@ -690,7 +690,7 @@ func reconcileAntigravityHistoryMessages(
 						continue
 					}
 					if !exactText {
-						if t.structured && level == 2 || !t.structured && !positional || t.idx <= low || t.idx >= high {
+						if t.structured && level != 0 || !t.structured && !positional || t.idx <= low || t.idx >= high {
 							continue
 						}
 					}
@@ -704,6 +704,8 @@ func reconcileAntigravityHistoryMessages(
 		switch t := paired[hIdx]; {
 		case t == nil && keys[hIdx] != "":
 			out = append(out, msg)
+		case t != nil && t.structured && t.key == keys[hIdx] && out[t.idx].Timestamp.IsZero():
+			out[t.idx].Timestamp = msg.Timestamp
 		case t != nil && positional && !out[t.idx].structuredPrompt:
 			out[t.idx].Content = msg.Content
 			out[t.idx].ContentLength = len(msg.Content)
