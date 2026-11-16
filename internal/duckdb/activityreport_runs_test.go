@@ -266,47 +266,70 @@ func TestActivityRunsDiskReusesUnchangedSessions(t *testing.T) {
 func TestActivityRunsChangedSessionAfterRestart(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	conn, err := Open(t.Context(), path)
+	keptActivityMirror(t, path, "a", 500)
+	writeUsageMirror(t, path,
+		`UPDATE sessions SET agentsview_push_fingerprint = 'v1'`,
+		`INSERT INTO sessions SELECT * REPLACE ('b' AS id) FROM sessions WHERE id = 'a'`,
+		`INSERT INTO messages SELECT * REPLACE (id + 2 AS id, 'b' AS session_id) FROM messages WHERE session_id = 'a'`,
+	)
+	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
 	require.NoError(t, err)
-	require.NoError(t, EnsureSchema(t.Context(), conn))
-	for i, id := range []string{"a", "b"} {
-		_, err = conn.ExecContext(t.Context(), `INSERT INTO sessions (id, machine, project, agent, agentsview_push_fingerprint) VALUES (?, 'machine', 'project', 'codex', 'v1')`, id)
-		require.NoError(t, err)
-		_, err = conn.ExecContext(t.Context(), `INSERT INTO messages (id, session_id, ordinal, role, content, timestamp) VALUES (?, ?, 0, 'user', '', TIMESTAMP '2026-01-01 00:00:00'), (?, ?, 1, 'assistant', '', TIMESTAMP '2026-01-01 00:01:00')`, i*2+1, id, i*2+2, id)
-		require.NoError(t, err)
-	}
-	require.NoError(t, conn.Close())
 	store, err := NewStore(t.Context(), path)
 	require.NoError(t, err)
 	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
-	q := duckDayQuery(t, "2026-01-01", "UTC")
-	_, _, err = store.activityReportRuns(t.Context(), []string{"a", "b"}, q)
-	require.NoError(t, err)
+	first := keptActivityBuild(t, store, q, true)
+	require.Equal(t, 1000, activity.ReportWithSessions(first).Totals.OutputTokens)
 	require.NoError(t, store.Close())
-	writeUsageMirror(t, path, `UPDATE sessions SET agentsview_push_fingerprint = 'v2' WHERE id = 'b'`, `UPDATE messages SET timestamp = TIMESTAMP '2026-01-01 00:04:00' WHERE session_id = 'b' AND role = 'assistant'`)
+	usageReads, runReads := 0, 0
+	previous := analyticsQueryObserver
+	analyticsQueryObserver = func(query string) {
+		if strings.Contains(query, "activity_run_pieces") {
+			runReads++
+		}
+		if strings.Contains(query, "activity_usage_keyed") {
+			usageReads++
+		}
+	}
+	t.Cleanup(func() { analyticsQueryObserver = previous })
+	reused, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	require.NoError(t, reused.OpenActivityReportDisk(t.Context()))
+	requireKeptActivityEqual(t, first, keptActivityBuild(t, reused, q, true))
+	require.Zero(t, usageReads)
+	require.Zero(t, runReads)
+	require.NoError(t, reused.Close())
+	writeUsageMirror(t, path,
+		`UPDATE sessions SET agentsview_push_fingerprint = 'v2' WHERE id = 'b'`,
+		`UPDATE messages SET timestamp = TIMESTAMP '2026-01-01 00:04:00', token_usage = '{"output_tokens":900}', output_tokens = 900, usage_output_tokens = 900 WHERE session_id = 'b' AND role = 'assistant'`,
+	)
 
 	restarted, err := NewStore(t.Context(), path)
 	require.NoError(t, err)
 	defer restarted.Close()
 	require.NoError(t, restarted.OpenActivityReportDisk(t.Context()))
-	reads := 0
-	previous := analyticsQueryObserver
-	analyticsQueryObserver = func(query string) {
-		if strings.Contains(query, "activity_run_pieces") {
-			reads++
-		}
-	}
-	t.Cleanup(func() { analyticsQueryObserver = previous })
 	_, saved, err := restarted.activityReportRuns(t.Context(), []string{"a"}, q)
 	require.NoError(t, err)
-	require.Zero(t, reads)
+	require.Zero(t, runReads)
+	got := keptActivityBuild(t, restarted, q, true)
+	require.Equal(t, 1, usageReads)
+	require.Equal(t, 1, runReads)
+	report := activity.ReportWithSessions(got)
+	require.Equal(t, 1400, report.Totals.OutputTokens)
+	var changed activity.SessionRow
+	for _, session := range report.BySession {
+		if session.SessionID == "b" {
+			changed = session
+		}
+	}
+	require.Equal(t, 900, changed.OutputTokens)
 	runs, refreshed, err := restarted.activityReportRuns(t.Context(), []string{"a", "b"}, q)
 	require.NoError(t, err)
-	require.Equal(t, 1, reads)
 	// The unchanged session must still use its saved entry in the mixed request.
 	require.Same(t, &saved["a"].users[0], &refreshed["a"].users[0])
 	require.Len(t, runs, 2)
 	require.Equal(t, time.Date(2026, 1, 1, 0, 1, 0, 0, time.UTC), runs[0].End)
 	require.Equal(t, time.Date(2026, 1, 1, 0, 4, 0, 0, time.UTC), runs[1].End)
 	require.Equal(t, []int64{time.Date(2026, 1, 1, 0, 4, 0, 0, time.UTC).UnixMicro()}, refreshed["b"].assistants)
+	fresh := NewStoreFromDB(restarted.DB())
+	requireKeptActivityEqual(t, keptActivityBuild(t, fresh, q, true), got)
 }
