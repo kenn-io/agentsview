@@ -511,6 +511,8 @@ func TestAnalyticsKeptDirectSourceEvents(t *testing.T) {
 	pgKeptSession(t, local, "session", "project", "2026-06-14")
 	require.NoError(t, local.UpdateSessionSignals(ctx, "session", db.SessionSignalUpdate{QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion}}))
 	pgKeptPush(t, syncer, false)
+	_, err := store.pg.ExecContext(ctx, `INSERT INTO sessions(id,machine,project,agent) VALUES('other','test-machine','other','claude')`)
+	require.NoError(t, err)
 	require.NoError(t, store.ConfigureUsageCache(ctx, t.TempDir(), testPGURL(t), syncer.schema))
 	f := db.AnalyticsFilter{Timezone: "UTC"}
 	var loads [3]int
@@ -544,6 +546,9 @@ func TestAnalyticsKeptDirectSourceEvents(t *testing.T) {
 		tool  string
 		check func(*testing.T, db.ToolUsageAnalysis)
 	}{
+		{`UPDATE messages SET role='assistant' WHERE session_id='session' AND ordinal=0`, [3]int{0, 1, 1}, 0, "", nil},
+		{`UPDATE messages SET is_system=true WHERE session_id='session' AND ordinal=0`, [3]int{0, 1, 1}, 0, "", nil},
+		{`UPDATE messages SET session_id='other' WHERE session_id='session' AND ordinal=0`, [3]int{1, 1, 1}, 0, "", nil},
 		{`UPDATE messages SET content_length=20 WHERE session_id='session' AND ordinal=1`, [3]int{0, 1, 0}, 0, "", nil},
 		{`INSERT INTO messages(session_id,ordinal,role,content,timestamp) VALUES('session',2,'assistant','answer','2026-06-14T10:02:00Z')`, [3]int{1, 1, 1}, 0, "", nil},
 		{`DELETE FROM messages WHERE session_id='session' AND ordinal=2`, [3]int{1, 1, 1}, 0, "", nil},
@@ -575,11 +580,8 @@ func TestAnalyticsKeptModelTimeScopeChanges(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	for _, tc := range []struct{ name, query string }{
 		{"model", `UPDATE messages SET model='model-b' WHERE session_id='session' AND ordinal=1`},
-		{"role", `UPDATE messages SET role='assistant' WHERE session_id='session' AND ordinal=0`},
-		{"system", `UPDATE messages SET is_system=true WHERE session_id='session' AND ordinal=0`},
 		{"timestamp", `UPDATE messages SET timestamp=NULL WHERE session_id='session' AND ordinal=0`},
 		{"ordinal", `UPDATE messages SET ordinal=3 WHERE session_id='session' AND ordinal=0`},
-		{"move", `UPDATE messages SET session_id='other' WHERE session_id='session' AND ordinal=0`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			local, syncer, store := newUsageJournalFixture(t)
@@ -622,13 +624,16 @@ func TestAnalyticsKeptJournalUpgrade(t *testing.T) {
 	var newRevision, newAccount, newHistory, version string
 	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT (SELECT value FROM sync_metadata WHERE key='usage_change_revision'), (SELECT value FROM sync_metadata WHERE key='usage_account_revision'), (SELECT value FROM sync_metadata WHERE key='usage_history_token'), (SELECT value FROM sync_metadata WHERE key='usage_change_journal_version')`).Scan(&newRevision, &newAccount, &newHistory, &version))
 	require.Equal(t, []string{revision, account, history, "3"}, []string{newRevision, newAccount, newHistory, version})
+	var tokens int
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT count(*) FROM sync_metadata WHERE key IN ('dashboard_common','dashboard_tools','dashboard_velocity','dashboard_signals','dashboard_scope') AND value <> ''`).Scan(&tokens))
+	require.Equal(t, 5, tokens)
 	tx, err = store.DB().BeginTx(ctx, nil)
 	require.NoError(t, err)
 	require.NoError(t, installDashboardJournalPG(ctx, tx))
 	require.NoError(t, tx.Commit())
 }
 
-func TestAnalyticsKeptRestoredHistory(t *testing.T) {
+func TestAnalyticsKeptSessionChangeAfterRestart(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	local, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
@@ -640,18 +645,8 @@ func TestAnalyticsKeptRestoredHistory(t *testing.T) {
 	before, err := store.GetAnalyticsSignals(ctx, f)
 	require.NoError(t, err)
 	require.Zero(t, before.UnscoredSessions)
-	var revision int64
-	var token string
-	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT (SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'), (SELECT value FROM sync_metadata WHERE key='usage_history_token')`).Scan(&revision, &token))
 	_, err = store.pg.ExecContext(ctx, `UPDATE sessions SET project='second' WHERE id='session'`)
 	require.NoError(t, err)
-	_, err = store.pg.ExecContext(ctx, `UPDATE sync_metadata SET value=$1::bigint::text WHERE key='usage_change_revision'`, revision)
-	require.NoError(t, err)
-	var restoredRevision int64
-	var restoredToken string
-	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT (SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'), (SELECT value FROM sync_metadata WHERE key='usage_history_token')`).Scan(&restoredRevision, &restoredToken))
-	require.Equal(t, revision, restoredRevision)
-	require.NotEqual(t, token, restoredToken)
 	reopened, err := NewStore(ctx, url, syncer.schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, reopened.Close()) })

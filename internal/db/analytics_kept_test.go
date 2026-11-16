@@ -311,15 +311,9 @@ func TestAnalyticsKeptScoreOnly(t *testing.T) {
 		return signals
 	}
 	counts := [3]int{}
-	first := read(d, &counts)
-	require.NotNil(t, first.AvgHealthScore)
-	require.InDelta(t, 30, *first.AvgHealthScore, 0)
-	require.NoError(t, d.UpdateSessionSignals(ctx, "session", SessionSignalUpdate{HealthScore: new(60)}))
-	counts = [3]int{}
 	warm := read(d, &counts)
 	require.NotNil(t, warm.AvgHealthScore)
-	require.InDelta(t, 60, *warm.AvgHealthScore, 0)
-	assert.Equal(t, [3]int{0, 0, 1}, counts)
+	require.InDelta(t, 30, *warm.AvgHealthScore, 0)
 	tools, err := d.GetAnalyticsTools(ctx, f)
 	require.NoError(t, err)
 	velocity, err := d.GetAnalyticsVelocity(ctx, f)
@@ -357,6 +351,10 @@ func TestAnalyticsKeptSourceEvents(t *testing.T) {
 		chars       float64
 		frustration int
 	}{
+		{"role", `UPDATE messages SET role='assistant' WHERE ordinal=0`, [3]int{0, 1, 1}, "Read", 1, 10, 0},
+		{"system", `UPDATE messages SET is_system=1 WHERE ordinal=0`, [3]int{0, 1, 1}, "Read", 1, 10, 0},
+		{"move", `UPDATE messages SET session_id='other' WHERE ordinal=0`, [3]int{1, 1, 1}, "Read", 1, 0, 0},
+		{"score", `UPDATE sessions SET health_score=60`, [3]int{0, 0, 1}, "Read", 1, 10, 0},
 		{"length", `UPDATE messages SET content_length=20 WHERE ordinal=1`, [3]int{0, 1, 0}, "Read", 1, 20, 0},
 		{"tool name", `UPDATE tool_calls SET tool_name='Grep'`, [3]int{1, 0, 0}, "Grep", 1, 10, 0},
 		{"prompt", `UPDATE messages SET content='this is broken' WHERE ordinal=0; UPDATE sessions SET transcript_revision=CAST(transcript_revision AS INTEGER)+1`, [3]int{0, 0, 1}, "Read", 1, 10, 1},
@@ -370,6 +368,7 @@ func TestAnalyticsKeptSourceEvents(t *testing.T) {
 			d := testDB(t)
 			ctx := t.Context()
 			insertSession(t, d, "session", "project", func(s *Session) { s.StartedAt = new("2024-06-01T09:00:00Z"); s.MessageCount = 2 })
+			insertSession(t, d, "other", "other")
 			assistant := asstMsgAt("session", 1, "1234567890", "2024-06-01T09:01:00Z")
 			assistant.ContentLength = 10
 			assistant.ToolCalls = []ToolCall{{SessionID: "session", ToolName: "Read", Category: "Read"}}
@@ -411,6 +410,10 @@ func TestAnalyticsKeptSourceEvents(t *testing.T) {
 			}
 			require.InDelta(t, tc.chars, velocity.Overall.CharsPerActiveMin, 0)
 			require.Equal(t, tc.frustration, signals.QualityHealth.Totals.FrustrationMarkerCount)
+			if tc.name == "score" {
+				require.NotNil(t, signals.AvgHealthScore)
+				require.InDelta(t, 60, *signals.AvgHealthScore, 0)
+			}
 		})
 	}
 }
@@ -418,11 +421,8 @@ func TestAnalyticsKeptSourceEvents(t *testing.T) {
 func TestAnalyticsKeptModelTimeScopeChanges(t *testing.T) {
 	for _, tc := range []struct{ name, query string }{
 		{"model", `UPDATE messages SET model='model-b' WHERE session_id='session' AND ordinal=1`},
-		{"role", `UPDATE messages SET role='assistant' WHERE session_id='session' AND ordinal=0`},
-		{"system", `UPDATE messages SET is_system=1 WHERE session_id='session' AND ordinal=0`},
 		{"timestamp", `UPDATE messages SET timestamp=NULL WHERE session_id='session' AND ordinal=0`},
 		{"ordinal", `UPDATE messages SET ordinal=3 WHERE session_id='session' AND ordinal=0`},
-		{"move", `UPDATE messages SET session_id='other' WHERE session_id='session' AND ordinal=0`},
 		{"relationship", `UPDATE sessions SET relationship_type='subagent' WHERE id='session'`},
 		{"nullable date", `UPDATE sessions SET started_at=NULL WHERE id='session'`},
 	} {
@@ -455,7 +455,6 @@ func TestAnalyticsKeptRestoreRewrite(t *testing.T) {
 		name, first, second string
 		older, usage        bool
 	}{
-		{"analytics", `UPDATE sessions SET tool_retry_count=1 WHERE id='session'; UPDATE tool_calls SET tool_name='first' WHERE session_id='session'; UPDATE messages SET content_length=10 WHERE session_id='session' AND ordinal=1`, `UPDATE sessions SET tool_retry_count=2 WHERE id='session'; UPDATE tool_calls SET tool_name='second' WHERE session_id='session'; UPDATE messages SET content_length=20 WHERE session_id='session' AND ordinal=1`, false, false},
 		{"older writer", `UPDATE sessions SET tool_retry_count=1 WHERE id='session'; UPDATE tool_calls SET tool_name='first' WHERE session_id='session'; UPDATE messages SET content_length=10 WHERE session_id='session' AND ordinal=1`, `UPDATE sessions SET tool_retry_count=2 WHERE id='session'; UPDATE tool_calls SET tool_name='second' WHERE session_id='session'; UPDATE messages SET content_length=20 WHERE session_id='session' AND ordinal=1`, true, false},
 		{"usage", `UPDATE sessions SET project='first' WHERE id='session'`, `UPDATE sessions SET project='second' WHERE id='session'`, false, true},
 	} {

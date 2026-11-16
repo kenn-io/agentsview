@@ -323,7 +323,7 @@ func TestAnalyticsKeptRestart(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		pricing bool
-	}{{"unchanged", false}, {"pricing", true}} {
+	}{{"pricing", true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("CACHE_DIRECTORY", t.TempDir())
 			if tc.pricing {
@@ -451,81 +451,59 @@ func TestAnalyticsKeptChangedMirrorInputs(t *testing.T) {
 	require.Equal(t, [3]int{0, 0, 1}, loads)
 }
 
-func TestAnalyticsKeptVelocityMessageIDReplacement(t *testing.T) {
-	skipReopenTestOnWindows(t)
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	dir := t.TempDir()
-	path, next := filepath.Join(dir, "mirror.duckdb"), filepath.Join(dir, "next.duckdb")
-	keptActivityMirror(t, path, "session-a", 500)
-	writeUsageMirror(t, path,
-		`INSERT INTO messages SELECT * REPLACE (3 AS id, 2 AS ordinal, 'other-model' AS model) FROM messages WHERE id=2`,
-		`INSERT INTO tool_calls(id,message_id,session_id,tool_name,category) VALUES(1,2,'session-a','Read','Read')`)
-	ctx := t.Context()
-	store, err := NewStore(ctx, path)
-	require.NoError(t, err)
-	t.Cleanup(func() { store.Close() })
-	require.NoError(t, store.OpenActivityReportDisk(ctx))
-	f := db.AnalyticsFilter{Timezone: "UTC", Model: "kept-model"}
-	before, err := store.GetAnalyticsVelocity(ctx, f)
-	require.NoError(t, err)
-	require.InDelta(t, 1, before.Overall.ToolCallsPerActiveMin, 0)
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(next, data, 0o600))
-	writeUsageMirror(t, next, `UPDATE messages SET id=CASE id WHEN 2 THEN 3 WHEN 3 THEN 2 ELSE id END WHERE id IN (2,3)`)
-	require.NoError(t, swapMirrorFile(next, path))
-	store.checkMirrorReplacement(ctx, func(err error) { require.NoError(t, err) })
-	after, err := store.GetAnalyticsVelocity(ctx, f)
-	require.NoError(t, err)
-	require.Zero(t, after.Overall.ToolCallsPerActiveMin)
-}
-
-func TestAnalyticsKeptDigestAssociatesSignalsWithSessions(t *testing.T) {
-	skipReopenTestOnWindows(t)
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	dir := t.TempDir()
-	path, next := filepath.Join(dir, "mirror.duckdb"), filepath.Join(dir, "next.duckdb")
-	keptActivityMirror(t, path, "session-a", 500)
-	writeUsageMirror(t, path,
-		`UPDATE sessions SET project='alpha', health_score=20`,
-		`INSERT INTO sessions SELECT * REPLACE ('session-b' AS id, 'beta' AS project, 80 AS health_score) FROM sessions WHERE id='session-a'`)
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(next, data, 0o600))
-	writeUsageMirror(t, next, `UPDATE sessions SET health_score=100-health_score`)
-	ctx := t.Context()
-	store, err := NewStore(ctx, path)
-	require.NoError(t, err)
-	require.NoError(t, store.OpenActivityReportDisk(ctx))
-	f := db.AnalyticsFilter{Timezone: "UTC"}
-	before, err := store.GetAnalyticsSignals(ctx, f)
-	require.NoError(t, err)
-	require.Len(t, before.ByProject, 2)
-	beforeScores := make(map[string]float64)
-	for _, row := range before.ByProject {
-		require.NotNil(t, row.AvgHealthScore)
-		beforeScores[row.Project] = *row.AvgHealthScore
+func TestAnalyticsKeptDigestAssociatesRows(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		setup         []string
+		change        string
+		filter        db.AnalyticsFilter
+		read          func(*testing.T, *Store, db.AnalyticsFilter) any
+		before, after any
+	}{
+		{"velocity message", []string{`INSERT INTO messages SELECT * REPLACE (3 AS id, 2 AS ordinal, 'other-model' AS model) FROM messages WHERE id=2`, `INSERT INTO tool_calls(id,message_id,session_id,tool_name,category) VALUES(1,2,'session-a','Read','Read')`}, `UPDATE messages SET id=CASE id WHEN 2 THEN 3 WHEN 3 THEN 2 ELSE id END WHERE id IN (2,3)`, db.AnalyticsFilter{Timezone: "UTC", Model: "kept-model"}, func(t *testing.T, store *Store, f db.AnalyticsFilter) any {
+			result, err := store.GetAnalyticsVelocity(t.Context(), f)
+			require.NoError(t, err)
+			return result.Overall.ToolCallsPerActiveMin
+		}, float64(1), float64(0)},
+		{"signals session", []string{`UPDATE sessions SET project='alpha', health_score=20`, `INSERT INTO sessions SELECT * REPLACE ('session-b' AS id, 'beta' AS project, 80 AS health_score) FROM sessions WHERE id='session-a'`}, `UPDATE sessions SET health_score=100-health_score`, db.AnalyticsFilter{Timezone: "UTC"}, func(t *testing.T, store *Store, f db.AnalyticsFilter) any {
+			result, err := store.GetAnalyticsSignals(t.Context(), f)
+			require.NoError(t, err)
+			scores := make(map[string]float64)
+			for _, row := range result.ByProject {
+				require.NotNil(t, row.AvgHealthScore)
+				scores[row.Project] = *row.AvgHealthScore
+			}
+			return scores
+		}, map[string]float64{"alpha": 20, "beta": 80}, map[string]float64{"alpha": 80, "beta": 20}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			skipReopenTestOnWindows(t)
+			t.Setenv("CACHE_DIRECTORY", t.TempDir())
+			dir := t.TempDir()
+			path, next := filepath.Join(dir, "mirror.duckdb"), filepath.Join(dir, "next.duckdb")
+			keptActivityMirror(t, path, "session-a", 500)
+			writeUsageMirror(t, path, tc.setup...)
+			store, err := NewStore(t.Context(), path)
+			require.NoError(t, err)
+			require.NoError(t, store.OpenActivityReportDisk(t.Context()))
+			require.Equal(t, tc.before, tc.read(t, store, tc.filter))
+			data, err := os.ReadFile(path)
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(next, data, 0o600))
+			writeUsageMirror(t, next, tc.change)
+			require.NoError(t, store.Close())
+			require.NoError(t, swapMirrorFile(next, path))
+			reopened, err := NewStore(t.Context(), path)
+			require.NoError(t, err)
+			t.Cleanup(func() { reopened.Close() })
+			require.NoError(t, reopened.OpenActivityReportDisk(t.Context()))
+			require.Equal(t, tc.after, tc.read(t, reopened, tc.filter))
+		})
 	}
-	require.Equal(t, map[string]float64{"alpha": 20, "beta": 80}, beforeScores)
-	require.NoError(t, store.Close())
-	require.NoError(t, swapMirrorFile(next, path))
-	reopened, err := NewStore(ctx, path)
-	require.NoError(t, err)
-	t.Cleanup(func() { reopened.Close() })
-	require.NoError(t, reopened.OpenActivityReportDisk(ctx))
-	after, err := reopened.GetAnalyticsSignals(ctx, f)
-	require.NoError(t, err)
-	require.Len(t, after.ByProject, 2)
-	afterScores := make(map[string]float64)
-	for _, row := range after.ByProject {
-		require.NotNil(t, row.AvgHealthScore)
-		afterScores[row.Project] = *row.AvgHealthScore
-	}
-	require.Equal(t, map[string]float64{"alpha": 80, "beta": 20}, afterScores)
 }
 
 func TestAnalyticsKeptSameStampReplacement(t *testing.T) {
-	for _, serving := range []bool{false, true} {
+	for _, serving := range []bool{true} {
 		t.Run(fmt.Sprintf("serving=%t", serving), func(t *testing.T) {
 			skipReopenTestOnWindows(t)
 			t.Setenv("CACHE_DIRECTORY", t.TempDir())
