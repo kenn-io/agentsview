@@ -23,6 +23,16 @@ import (
 // they don't interfere with other pgtest suites that reuse testSchema.
 const contentSearchSchema = "agentsview_content_search_test"
 
+func TestPGSearchContentNegativeCursor(t *testing.T) {
+	t.Parallel()
+	store := setupContentSearch(t)
+	_, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+		Pattern: "invoice rounding", Cursor: -1,
+	})
+	var inputErr *db.SearchInputError
+	require.ErrorAs(t, err, &inputErr)
+}
+
 func TestPGSearchContentWordBoundariesCLocale(t *testing.T) {
 	t.Parallel()
 	baseURL := testPGURL(t)
@@ -97,16 +107,10 @@ func TestPGSearchContentWordBoundariesCLocale(t *testing.T) {
 				insertCSSession(t, store, row.id, "project", "claude", "2024-06-15T10:00:00Z", "2024-06-15T11:00:00Z")
 				insertCSMessage(t, store, row.id, 0, "user", row.body, "2024-06-15T10:00:00Z", false)
 			}
-			for _, tc := range []struct {
-				name, mode    string
-				excludeSystem bool
-			}{
-				{"default", "", false},
-				{"fts", "fts", false},
-			} {
-				t.Run(tc.name, func(t *testing.T) {
+			for _, mode := range []string{"substring", "fts"} {
+				t.Run(mode, func(t *testing.T) {
 					page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
-						Pattern: "invoice absentword", Mode: tc.mode, KeywordOnly: tc.mode == "hybrid", Limit: 10, ExcludeSystem: tc.excludeSystem,
+						Pattern: "invoice absentword", Mode: mode, Limit: 10,
 					})
 					require.NoError(t, err)
 					require.Len(t, page.Matches, 1)

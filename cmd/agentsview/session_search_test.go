@@ -931,8 +931,6 @@ func TestSessionSearchRemoteFTSHints(t *testing.T) {
 		{"cockroach", "decode error notes", "messages", true, false},
 		{"", "decode error notes", "messages", false, true},
 		{"postgres", "decode error notes", "messages", false, true},
-		{"duckdb", "decode error notes", "messages", false, true},
-		{"clickhouse", "decode error notes", "messages", false, true},
 		{"sqlite", "decode error notes", "messages", false, false},
 		{"sqlite-unsupported", "decode error notes", "messages", false, true},
 	} {

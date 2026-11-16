@@ -162,7 +162,6 @@ func (s *Store) fetchHybridKeywordBatchPG(
 	kf.Limit, kf.Cursor = k-1, offset
 	if !s.cockroach {
 		if _, words, ok := db.RouteContentWords(kf); ok {
-			dialect := db.PostgresQueryDialect()
 			from := `FROM messages m JOIN scoped s ON s.id = m.session_id
 			WHERE m.role IN ('user', 'assistant') AND m.is_system = FALSE
 			  AND ` + db.PostgresSystemPrefixSQL("m.content", "m.role")
@@ -170,7 +169,7 @@ func (s *Store) fetchHybridKeywordBatchPG(
 			var err error
 			for _, all := range []bool{true, false} {
 				pb := &paramBuilder{n: len(scopeArgs), args: append([]any{}, scopeArgs...)}
-				matches := pgWordMatches(kf, words, all, from, pb, dialect)
+				matches := pgWordMatches(kf, words, all, from, pb)
 				query := pgSelectedWordsSQL(scopeWhere, matches, pb, k, offset, all) + `
 				SELECT selected.session_id, selected.ordinal, COALESCE(m.dialogue_text, m.content), selected.n
 				FROM selected JOIN messages m ON m.session_id = selected.session_id AND m.ordinal = selected.ordinal

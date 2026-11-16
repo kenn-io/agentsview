@@ -76,12 +76,7 @@ func newHostedAdapter(ctx context.Context, pg *sql.DB, tenant string) (*HostedSt
 	if err != nil {
 		return nil, err
 	}
-	version, err := sessionVersionColumnPG(ctx, pg)
-	if err != nil {
-		return nil, fmt.Errorf("detecting database engine: %w", err)
-	}
-	cockroach := version == "crdb_internal_mvcc_timestamp"
-	encoding, err := pgServerEncoding(ctx, pg, cockroach)
+	cockroach, encoding, err := pgEngine(ctx, pg)
 	if err != nil {
 		return nil, err
 	}
