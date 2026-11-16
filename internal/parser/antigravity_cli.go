@@ -631,7 +631,8 @@ func appendMissingAntigravityHistoryMessages(
 // needs matching text. Text may differ for a heuristic prompt when positional
 // is set (the turn counts agree), and for a structured prompt when the
 // timestamps agree exactly or to the second; structured prompts keep the typed
-// content.
+// content. In a mixed session, positional matches also need timestamp
+// agreement so a pending history prompt cannot replace a guessed turn.
 func reconcileAntigravityHistoryMessages(
 	dbMessages, history []ParsedMessage, positional bool,
 ) []ParsedMessage {
@@ -643,15 +644,20 @@ func reconcileAntigravityHistoryMessages(
 		used        bool
 	}
 	var turns []*userTurn
+	hasStructured := false
 	for i, msg := range dbMessages {
-		switch last := len(turns) - 1; {
+		switch {
 		case msg.Role == RoleUser:
+			hasStructured = hasStructured || msg.structuredPrompt
 			turns = append(turns, &userTurn{
 				idx: i, key: normalizedAntigravityPrompt(msg.Content),
 				structured: msg.structuredPrompt, ts: msg.Timestamp,
 			})
-		case msg.Role == RoleAssistant && last >= 0 && turns[last].replyAt.IsZero():
-			turns[last].replyAt = msg.Timestamp
+		case msg.Role == RoleAssistant && len(turns) > 0:
+			last := turns[len(turns)-1]
+			if last != nil && last.replyAt.IsZero() {
+				last.replyAt = msg.Timestamp
+			}
 		}
 	}
 	stamped := func(a, b time.Time) bool { return !a.IsZero() && !b.IsZero() }
@@ -670,7 +676,7 @@ func reconcileAntigravityHistoryMessages(
 			for _, t := range turns {
 				if paired[hIdx] != nil || keys[hIdx] == "" || t.used ||
 					(stamped(t.replyAt, msg.Timestamp) && t.replyAt.Before(msg.Timestamp)) ||
-					t.key != keys[hIdx] && !(positional && !t.structured || t.structured && level < 2) || !near(t.ts, msg.Timestamp) {
+					t.key != keys[hIdx] && (level >= 2 || !positional && !t.structured) && (!positional || hasStructured) || !near(t.ts, msg.Timestamp) {
 					continue
 				}
 				t.used, paired[hIdx] = true, t
