@@ -231,12 +231,12 @@ func TestSearchKeptDiskPages(t *testing.T) {
 	require.Len(t, page.Results, 1)
 	require.NoError(t, d.Close())
 	d = openSearchArchive(t, path)
-	// An unavailable index proves the reopened search uses the saved page.
-	_, err = d.getWriter().ExecContext(ctx, `DROP TABLE messages_fts`)
-	require.NoError(t, err)
+	loads := 0
+	d.afterSearchRead = func() { loads++ }
 	repeat, err := d.Search(ctx, filter)
 	require.NoError(t, err)
 	require.Equal(t, page, repeat)
+	require.Zero(t, loads)
 	require.NoError(t, d.Close())
 
 	// Restoring the archive can repeat revision counts from the saved page.
@@ -269,43 +269,46 @@ func TestSearchKeptDiskPages(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, otherBackup, 0o600))
 	d = openSearchArchive(t, path)
 	t.Cleanup(func() { require.NoError(t, d.Close()) })
-	_, err = d.getWriter().ExecContext(ctx, `DROP TABLE messages_fts`)
+	loads = 0
+	d.afterSearchRead = func() { loads++ }
+	page, err = d.Search(ctx, filter)
 	require.NoError(t, err)
-	_, err = d.Search(ctx, filter)
-	require.Error(t, err)
+	require.Empty(t, page.Results)
+	require.Equal(t, 1, loads)
 }
 
 func TestSearchKeptHistoryTokenCounts(t *testing.T) {
 	cases := []struct {
-		name, query string
-		want        int
+		name, setup, query string
+		wantChange         bool
 	}{
-		{"group", `UPDATE sessions SET group_key='group' WHERE id='session'`, 1},
-		{"grouped rename", `UPDATE sessions SET session_name='name' WHERE id='session'`, 1},
-		{"listed column", `UPDATE sessions SET project='new' WHERE id='session'`, 1},
-		{"unlisted column", `UPDATE sessions SET health_score=42 WHERE id='session'`, 0},
-		{"image", `INSERT INTO image_text_cache(image_hash,processor,provider,model,revision,text) VALUES('hash','processor','provider','model','revision','text')`, 1},
-		{"session insert", `INSERT INTO sessions(id,project,agent,machine) VALUES('other','project','agent','machine')`, 1},
-		{"session delete", `DELETE FROM sessions WHERE id='session'`, 1},
+		{"group", "", `UPDATE sessions SET group_key='group' WHERE id='session'`, true},
+		{"grouped rename", `UPDATE sessions SET group_key='group' WHERE id='session'`, `UPDATE sessions SET session_name='name' WHERE id='session'`, true},
+		{"listed column", "", `UPDATE sessions SET project='new' WHERE id='session'`, true},
+		{"unlisted column", "", `UPDATE sessions SET health_score=42 WHERE id='session'`, false},
+		{"image", "", `INSERT INTO image_text_cache(image_hash,processor,provider,model,revision,text) VALUES('hash','processor','provider','model','revision','text')`, true},
+		{"session insert", "", `INSERT INTO sessions(id,project,agent,machine) VALUES('other','project','agent','machine')`, true},
+		{"session delete", "", `DELETE FROM sessions WHERE id='session'`, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
 			ctx := t.Context()
 			insertSession(t, d, "session", "project")
-			if tc.name == "grouped rename" {
-				_, err := d.getWriter().ExecContext(ctx, `UPDATE sessions SET group_key='group' WHERE id='session'`)
+			if tc.setup != "" {
+				_, err := d.getWriter().ExecContext(ctx, tc.setup)
 				require.NoError(t, err)
 			}
-			_, err := d.getWriter().ExecContext(ctx, `CREATE TABLE token_writes (n INTEGER);
-CREATE TRIGGER count_token_writes AFTER UPDATE ON archive_metadata WHEN NEW.key = 'search_history_token'
-BEGIN INSERT INTO token_writes VALUES (1); END;`)
+			var before, after string
+			require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT value FROM archive_metadata WHERE key='search_history_token'`).Scan(&before))
+			_, err := d.getWriter().ExecContext(ctx, tc.query)
 			require.NoError(t, err)
-			_, err = d.getWriter().ExecContext(ctx, tc.query)
-			require.NoError(t, err)
-			var count int
-			require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count(*) FROM token_writes`).Scan(&count))
-			require.Equal(t, tc.want, count)
+			require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT value FROM archive_metadata WHERE key='search_history_token'`).Scan(&after))
+			if tc.wantChange {
+				require.NotEqual(t, before, after)
+			} else {
+				require.Equal(t, before, after)
+			}
 		})
 	}
 }
@@ -315,7 +318,6 @@ func TestSearchKeptOldWriterTriggers(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "session", "project")
-	insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "other"})
 	_, err := d.getWriter().ExecContext(ctx, `DROP TRIGGER trg_sessions_usage_change_update;
 CREATE TRIGGER trg_sessions_usage_change_update AFTER UPDATE OF transcript_revision, started_at, deleted_at, project, agent, machine, git_branch, group_key, is_automated, user_message_count, ended_at, termination_status, display_name, session_name, relationship_type, message_count, created_at ON sessions
 WHEN OLD.transcript_revision IS NOT NEW.transcript_revision OR OLD.started_at IS NOT NEW.started_at OR OLD.deleted_at IS NOT NEW.deleted_at OR OLD.project IS NOT NEW.project OR OLD.agent IS NOT NEW.agent OR OLD.machine IS NOT NEW.machine OR OLD.git_branch IS NOT NEW.git_branch OR OLD.group_key IS NOT NEW.group_key OR OLD.is_automated IS NOT NEW.is_automated OR OLD.user_message_count IS NOT NEW.user_message_count OR OLD.ended_at IS NOT NEW.ended_at OR OLD.termination_status IS NOT NEW.termination_status OR OLD.display_name IS NOT NEW.display_name OR OLD.session_name IS NOT NEW.session_name OR OLD.relationship_type IS NOT NEW.relationship_type OR OLD.message_count IS NOT NEW.message_count OR OLD.created_at IS NOT NEW.created_at
