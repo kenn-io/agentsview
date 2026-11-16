@@ -154,6 +154,9 @@ func Push(
 			err = storage.PushNotStartedError{Err: err}
 		}
 	}()
+	if err := RequireDriver(); err != nil {
+		return result, err
+	}
 	if err := sweepStaleTempFiles(path); err != nil {
 		log.Printf("duckdbsync: sweeping stale rebuild temp files: %v", err)
 	}

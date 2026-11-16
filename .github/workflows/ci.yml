@@ -417,7 +417,7 @@ jobs:
       # Release builds leave out the DuckDB driver; check the stub they get.
       - name: Run DuckDB tests without the duckdb tag (Linux)
         if: matrix.suite == 'linux-duckdb'
-        run: go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}-default.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-default-reruns.txt --packages "./internal/duckdb ./cmd/agentsview" -- -tags "fts5" -run 'DuckDBUnavailable|WithoutDriver' -count=1 -timeout=5m
+        run: go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}-default.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-default-reruns.txt --packages "./internal/duckdb ./internal/server ./cmd/agentsview" -- -tags "fts5" -run 'DuckDBUnavailable|WithoutDriver' -count=1 -timeout=5m
         env:
           CGO_ENABLED: "1"
 

@@ -19,7 +19,10 @@ func (Mirror) Name() string { return "duckdb" }
 func (Mirror) DisplayName() string { return "DuckDB" }
 
 func (Mirror) ValidatePushTarget(cfg config.DuckDBConfig) error {
-	return ValidatePushTarget(cfg)
+	if err := ValidatePushTarget(cfg); err != nil {
+		return err
+	}
+	return RequireDriver()
 }
 
 func (Mirror) Push(
