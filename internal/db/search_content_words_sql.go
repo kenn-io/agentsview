@@ -1,10 +1,12 @@
 package db
 
 import (
+	"fmt"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -135,10 +137,40 @@ func boundedPattern(b *QueryBuilder, words ...string) string {
 // wordGap is the character class between words.
 func wordGap(b *QueryBuilder) string {
 	if b.dialect.name == "postgres" {
-		return "[^[:alnum:]]"
+		return "[^" + postgresWordCharacters + "]"
 	}
 	return `[^\p{L}\p{N}]`
 }
+
+// PostgreSQL's character classes follow LC_CTYPE. Regex escapes keep this
+// Unicode class representable in databases with non-UTF8 encodings.
+var postgresWordCharacters = func() string {
+	var chars strings.Builder
+	write := func(r rune) {
+		if r < 128 {
+			chars.WriteRune(r)
+		} else if r <= 0xffff {
+			fmt.Fprintf(&chars, `\u%04x`, r)
+		} else {
+			fmt.Fprintf(&chars, `\U%08x`, r)
+		}
+	}
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		if !unicode.IsLetter(r) && !unicode.IsNumber(r) {
+			continue
+		}
+		write(r)
+		start := r
+		for r < unicode.MaxRune && (unicode.IsLetter(r+1) || unicode.IsNumber(r+1)) {
+			r++
+		}
+		if r > start {
+			chars.WriteByte('-')
+			write(r)
+		}
+	}
+	return chars.String()
+}()
 
 // compactForms folds forms to their common prefix and an alternation of
 // suffixes, which roughly halves PostgreSQL's regex cost.

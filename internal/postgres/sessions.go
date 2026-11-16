@@ -26,6 +26,7 @@ type Store struct {
 	readbase.ReadOnlyStubs
 	hostedRelations bool
 	cockroach       bool
+	serverEncoding  string
 	pg              storeExecutor
 	ownedDB         *sql.DB
 	readTx          *sql.Tx

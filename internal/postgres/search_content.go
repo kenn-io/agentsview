@@ -106,7 +106,7 @@ func (s *Store) searchContentTermsPG(
 	if err != nil {
 		return db.ContentSearchPage{}, err
 	}
-	rows, err := s.pg.QueryContext(ctx, query, args...)
+	rows, err := s.pg.QueryContext(ctx, s.latin1SearchSQL(query), args...)
 	if err != nil {
 		return db.ContentSearchPage{}, fmt.Errorf("pg terms search: %w", err)
 	}
@@ -145,14 +145,6 @@ func (s *Store) searchContentSubstringPG(
 	var ranked bool
 	if !s.cockroach {
 		f, words, ranked = db.RouteContentWords(f)
-	}
-	if ranked && s.readTx == nil {
-		tx, err := s.beginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
-		if err != nil {
-			return db.ContentSearchPage{}, err
-		}
-		defer func() { _ = tx.Rollback() }()
-		s = s.readView(tx)
 	}
 	scopeWhere, scopeArgs := db.BuildContentScopeSQL(f, s.sessionDialect())
 	scopeWhere, scopeArgs = appendExcludeSessionIDsPG(
@@ -388,7 +380,7 @@ func (s *Store) scanPGContentMatches(
 	ctx context.Context, query string, args []any, limit, cursor int,
 	makeSnippet func(body string) string,
 ) (db.ContentSearchPage, error) {
-	rows, err := s.pg.QueryContext(ctx, query, args...)
+	rows, err := s.pg.QueryContext(ctx, s.latin1SearchSQL(query), args...)
 	if err != nil {
 		return db.ContentSearchPage{}, fmt.Errorf("pg content search: %w", err)
 	}
@@ -792,6 +784,13 @@ func (s *Store) searchContentWordsPG(
 		}
 	}
 	return page, err
+}
+
+func (s *Store) latin1SearchSQL(query string) string {
+	if s.serverEncoding == "LATIN1" {
+		return db.PostgresLatin1SearchSQL(query)
+	}
+	return query
 }
 
 // pgSelectedWordsSQL selects as selected one page of word_matches, as

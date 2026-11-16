@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -884,6 +886,7 @@ func TestSessionSearchRemoteFTSHints(t *testing.T) {
 	tokenFile := filepath.Join(t.TempDir(), "token")
 	require.NoError(t, os.WriteFile(tokenFile, []byte("search-token"), 0o600))
 	ftsCalls, backend := 0, ""
+	ftsHasMatches := true
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "Bearer search-token", r.Header.Get("Authorization"))
 		if r.URL.Path == "/api/v1/memory/status" {
@@ -898,7 +901,11 @@ func TestSessionSearchRemoteFTSHints(t *testing.T) {
 		if r.URL.Query().Get("mode") == "fts" {
 			ftsCalls++
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"matches":[{"session_id":"visible"}]}`))
+			if ftsHasMatches {
+				_, _ = w.Write([]byte(`{"matches":[{"session_id":"visible"}]}`))
+			} else {
+				_, _ = w.Write([]byte(`{"matches":[]}`))
+			}
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -919,7 +926,7 @@ func TestSessionSearchRemoteFTSHints(t *testing.T) {
 		{"cockroach", "decoding", "messages", false, false},
 		{"cockroach", "decode error notes", "messages", true, false},
 		{"", "decode error notes", "messages", false, true},
-		{"postgres", "decode error notes", "messages", false, false},
+		{"postgres", "decode error notes", "messages", false, true},
 	} {
 		name := tc.backend
 		if name == "" {
@@ -950,6 +957,38 @@ func TestSessionSearchRemoteFTSHints(t *testing.T) {
 			}
 		})
 	}
+	ftsHasMatches = false
+	before := ftsCalls
+	out, err := executeCommand(newRootCommand(), "session", "--server", ts.URL, "--server-token-file", tokenFile, "search", "missing words", "--in", "messages", "--json")
+	require.NoError(t, err)
+	got := decodeCLIJSON[struct {
+		Hints []contentSearchCLIHint `json:"hints"`
+	}](t, out)
+	for _, hint := range got.Hints {
+		assert.NotEqual(t, "try_fts", hint.Code)
+	}
+	assert.Equal(t, before+1, ftsCalls)
+}
+
+type unavailableStatusSearch struct{ service.SessionService }
+
+func (unavailableStatusSearch) MemoryStatus(context.Context) (service.MemoryStatus, error) {
+	return service.MemoryStatus{}, errors.New("status unavailable")
+}
+
+func (unavailableStatusSearch) SearchContent(_ context.Context, req service.ContentSearchRequest) (*service.ContentSearchResult, error) {
+	if req.Mode == "fts" {
+		return &service.ContentSearchResult{Matches: []db.ContentMatch{{SessionID: "visible"}}}, nil
+	}
+	return &service.ContentSearchResult{}, nil
+}
+
+func TestSessionSearchUnavailableStatusKeepsFTSHint(t *testing.T) {
+	cmd := newSessionSearchCommand()
+	req := service.ContentSearchRequest{Pattern: "missing words", Mode: "substring", IncludeOneShot: true, IncludeAutomated: true, IncludeChildren: true}
+	hints := contentSearchHints(t.Context(), cmd, unavailableStatusSearch{}, req, &service.ContentSearchResult{})
+	require.Len(t, hints, 1)
+	assert.Equal(t, "try_fts", hints[0].Code)
 }
 
 func TestSessionSearchRetryQuotesForPlatform(t *testing.T) {

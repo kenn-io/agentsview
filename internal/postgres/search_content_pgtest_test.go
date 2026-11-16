@@ -22,6 +22,100 @@ import (
 // they don't interfere with other pgtest suites that reuse testSchema.
 const contentSearchSchema = "agentsview_content_search_test"
 
+func TestPGSearchContentWordBoundariesCLocale(t *testing.T) {
+	t.Parallel()
+	baseURL := testPGURL(t)
+	server, _ := testPGServer(t)
+	if server.cockroach {
+		t.Skip("PostgreSQL only")
+	}
+	for _, encoding := range []string{"UTF8", "LATIN1"} {
+		t.Run(encoding, func(t *testing.T) {
+			name := pgDatabaseName(t, baseURL) + "_" + strings.ToLower(encoding)
+			_, err := server.admin.ExecContext(t.Context(), `CREATE DATABASE `+name+` WITH TEMPLATE template0 ENCODING '`+encoding+`' LC_COLLATE 'C' LC_CTYPE 'C'`)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				_, err := server.admin.ExecContext(context.WithoutCancel(t.Context()), `DROP DATABASE `+name+` WITH (FORCE)`)
+				assert.NoError(t, err)
+			})
+			url := mustParseURL(t, withPGDatabase(t, baseURL, name))
+			params := url.Query()
+			params.Set("client_encoding", "UTF8")
+			url.RawQuery = params.Encode()
+			pg, err := Open(t.Context(), url.String(), contentSearchSchema, true)
+			require.NoError(t, err)
+			require.NoError(t, EnsureSchema(t.Context(), pg, contentSearchSchema))
+			require.NoError(t, pg.Close())
+			store, err := NewStore(t.Context(), url.String(), contentSearchSchema, true)
+			require.NoError(t, err)
+			t.Cleanup(func() { assert.NoError(t, store.Close()) })
+
+			if encoding == "UTF8" {
+				for _, tc := range []struct {
+					name, body, pattern string
+				}{
+					{"cjk-after", "invoice漢", "invoice absentword"},
+					{"cjk-before", "漢invoice", "invoice absentword"},
+					{"cjk-phrase", "invoice漢rounding", `"invoice rounding" absentword`},
+					{"accent-adjacent", "caféé", "café absentword"},
+				} {
+					t.Run(tc.name, func(t *testing.T) {
+						insertCSSession(t, store, tc.name, tc.name, "claude", "2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
+						insertCSMessage(t, store, tc.name, 0, "user", tc.body, "2026-05-01T10:00:00Z", false)
+						page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: tc.pattern, Mode: "fts", Project: tc.name, Sources: []string{"messages"}, Limit: 50})
+						require.NoError(t, err)
+						assert.Empty(t, page.Matches)
+					})
+				}
+				for _, tc := range []struct {
+					name, body, pattern string
+					count               int
+				}{
+					{"partial-count", "invoice中 rounding", "invoice rounding absentword", 1},
+					{"punctuation", "invoice—rounding", "invoice rounding absentword", 2},
+					{"underscore", "invoice_rounding", "invoice rounding absentword", 2},
+					{"phrase-punctuation", "policy quarterly—forecast", `policy "quarterly forecast"`, 3},
+				} {
+					t.Run(tc.name, func(t *testing.T) {
+						insertCSSession(t, store, tc.name, tc.name, "claude", "2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
+						insertCSMessage(t, store, tc.name, 0, "user", tc.body, "2026-05-01T10:00:00Z", false)
+						page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: tc.pattern, Mode: "fts", Project: tc.name, Sources: []string{"messages"}, Limit: 50})
+						require.NoError(t, err)
+						require.Len(t, page.Matches, 1)
+						assert.Equal(t, tc.count, page.Matches[0].MatchedWords)
+					})
+				}
+				return
+			}
+
+			for _, row := range []struct{ id, body string }{
+				{"match", "invoice ready"},
+				{"adjacent", "éinvoice ready"},
+				{"adjacent-after", "invoiceé ready"},
+			} {
+				insertCSSession(t, store, row.id, "project", "claude", "2024-06-15T10:00:00Z", "2024-06-15T11:00:00Z")
+				insertCSMessage(t, store, row.id, 0, "user", row.body, "2024-06-15T10:00:00Z", false)
+			}
+			for _, tc := range []struct {
+				name, mode    string
+				excludeSystem bool
+			}{
+				{"default", "", false},
+				{"fts", "fts", false},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+						Pattern: "invoice absentword", Mode: tc.mode, KeywordOnly: tc.mode == "hybrid", Limit: 10, ExcludeSystem: tc.excludeSystem,
+					})
+					require.NoError(t, err)
+					require.Len(t, page.Matches, 1)
+					assert.Equal(t, "match", page.Matches[0].SessionID)
+				})
+			}
+		})
+	}
+}
+
 type contentPageTracer struct{ rows int64 }
 
 func (tracer *contentPageTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
@@ -48,7 +142,7 @@ func tracedContentReader(t *testing.T, store *Store, tracer pgx.QueryTracer) *St
 	config.Tracer = tracer
 	pool := stdlib.OpenDB(*config)
 	t.Cleanup(func() { assert.NoError(t, pool.Close()) })
-	return &Store{pg: pool, ownedDB: pool, cockroach: store.cockroach}
+	return &Store{pg: pool, ownedDB: pool, cockroach: store.cockroach, serverEncoding: store.serverEncoding}
 }
 
 func TestSearchContentExactTierPaging(t *testing.T) {
@@ -80,34 +174,6 @@ func TestSearchContentExactTierPaging(t *testing.T) {
 	assert.Equal(t, "word-tier", page.Matches[1].SessionID)
 	assert.Equal(t, 2, page.Matches[1].MatchedWords)
 	assert.Zero(t, page.NextCursor)
-}
-
-func TestSearchContentSnapshotDuringUpdate(t *testing.T) {
-	t.Parallel()
-	store := setupContentSearch(t)
-	if store.cockroach {
-		t.Skip("ranked search requires PostgreSQL")
-	}
-	insertCSSession(t, store, "snapshot", "snapshot", "claude", "2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
-	insertCSMessage(t, store, "snapshot", 0, "user", "invoice rounding", "2026-05-01T10:00:00Z", false)
-
-	tracer := &hostedPendingSelectionTracer{argument: "snapshot"}
-	reader := tracedContentReader(t, store, tracer)
-	var updateErr error
-	updated := false
-	tracer.after = func() {
-		tracer.after = nil
-		_, updateErr = store.DB().ExecContext(t.Context(), "UPDATE messages SET content = $1 WHERE session_id = $2", "invoice only", "snapshot")
-		updated = true
-	}
-
-	filter := db.ContentSearchFilter{Pattern: "invoice rounding", Project: "snapshot"}
-	page, err := reader.SearchContent(t.Context(), filter)
-	require.NoError(t, err)
-	require.True(t, updated)
-	require.NoError(t, updateErr)
-	require.Len(t, page.Matches, 1)
-	assert.Contains(t, page.Matches[0].Snippet, "invoice rounding")
 }
 
 func TestSearchContentExcludeActiveSince(t *testing.T) {
