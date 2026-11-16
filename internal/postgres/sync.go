@@ -492,6 +492,17 @@ func (s *Sync) EnsureSchema(ctx context.Context) error {
 }
 
 func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
+	if !s.schemaDone && s.schemaUnchangedSinceEnsuredLocked(ctx) {
+		// Pushes since this process prepared the schema can leave rows the
+		// repairs fix, such as sessions awaiting the automation audit, so a
+		// new Sync still runs them. Only the schema probes and DDL are
+		// skipped.
+		if err := runSchemaDataRepairsPG(ctx, s.pg); err != nil {
+			return err
+		}
+		s.schemaDone = true
+		return nil
+	}
 	if s.schemaDone {
 		// An older binary can push messages without usage counters between
 		// this Sync's pushes, so the fill runs on every check, not only at
@@ -541,12 +552,14 @@ func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
 			log.Printf("pg schema: raw custody schema skipped, insufficient privilege: %v", err)
 		}
 		s.schemaDone = true
+		s.recordEnsuredSchemaLocked(ctx)
 		return nil
 	}
 	if err := EnsureSchema(ctx, s.pg, s.schema); err != nil {
 		return err
 	}
 	s.schemaDone = true
+	s.recordEnsuredSchemaLocked(ctx)
 	return nil
 }
 
