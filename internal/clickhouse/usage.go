@@ -2708,7 +2708,9 @@ func carryRawUsage[T any](ctx context.Context, s *Store, memo *kept.Memo[T], sta
 }
 
 func (s *Store) usageCarryPublished(ctx context.Context) bool {
-	// Rows from a different content version identify an interrupted publication.
+	// Rows older than the session's content version or newer than the session
+	// row identify an interrupted publication. An append keeps older rows
+	// between the two.
 	// Unequal usable-row counts reject a replacement interrupted after deleting old rows.
 	// A newer snapshot can contain metadata the session has not published yet.
 	// Count all rows raw Usage reads, including older content versions.
@@ -2719,7 +2721,7 @@ func (s *Store) usageCarryPublished(ctx context.Context) bool {
 		(SELECT count() FROM (SELECT session_id, min(push_version) AS oldest, max(push_version) AS newest FROM (
 			SELECT session_id, push_version FROM usage_messages UNION ALL
 			SELECT session_id, push_version FROM usage_events) GROUP BY session_id) r
-			INNER JOIN sessions AS s ON s.id = r.session_id WHERE r.oldest < s.content_version OR r.newest > s.content_version)
+			INNER JOIN sessions AS s ON s.id = r.session_id WHERE r.oldest < s.content_version OR r.newest > s.push_version)
 		+ (SELECT count() FROM usage_session_snapshots AS s
 			LEFT JOIN (SELECT session_id, count() AS n FROM (` + raw + `) GROUP BY session_id) r ON r.session_id = s.id
 			WHERE if(s.prepares_usage, arrayCount((present, model) -> ` + chStoredMessageUsable("present", "model") + `,

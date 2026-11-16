@@ -19,6 +19,13 @@ func TestPushAppendsMessagesToGrownSession(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	local, s, conn := changedOnlyFixture(t)
+	store := newTestStore(t, conn, s.target)
+	usageCarryPublished := func() bool {
+		snapshotCtx, err := store.withPartsSnapshot(ctx)
+		require.NoError(t, err)
+		return store.usageCarryPublished(snapshotCtx)
+	}
+	require.True(t, usageCarryPublished())
 	before := readPushVersions(t, conn, fixtureBetaID)
 	msgs, err := local.GetAllMessages(ctx, fixtureBetaID)
 	require.NoError(t, err)
@@ -45,8 +52,8 @@ func TestPushAppendsMessagesToGrownSession(t *testing.T) {
 		"SELECT count() FROM usage_messages m JOIN sessions s ON s.id = m.session_id WHERE s.id = ? AND "+
 			chUsageMessageCurrent, fixtureBetaID).Scan(&usageRows))
 	assert.Equal(t, 2, usageRows, "usage reads see the kept and the appended message")
+	assert.True(t, usageCarryPublished(), "an appended session counts as fully published")
 
-	store := newTestStore(t, conn, s.target)
 	binding, err := store.SessionSourceBinding(ctx, fixtureBetaID)
 	require.NoError(t, err, "kept and appended rows both belong to the published session")
 	assert.NotEmpty(t, binding)
