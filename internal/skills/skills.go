@@ -281,7 +281,7 @@ func renderPackage(h Harness, version string, remote Remote, toolPrefix string, 
 // RenderPluginPackage produces the native plugin artifacts from the same
 // templates as the standalone Claude package. The LICENSE stays byte-identical.
 func RenderPluginPackage(version string) ([]Rendered, error) {
-	delegate := "Use the `agentsview-search-conversations` agent when this harness exposes it " +
+	delegate := "Use the `" + pluginName + ":agentsview-search-conversations` agent when this harness exposes it " +
 		"and the AgentsView MCP server is registered as `agentsview` or `plugin:" + pluginName + ":" + pluginServer + "`; " +
 		"otherwise follow these steps directly"
 	artifacts, err := renderPackage(HarnessClaude, version, Remote{}, pluginToolPrefix, standaloneToolPrefix, delegate)

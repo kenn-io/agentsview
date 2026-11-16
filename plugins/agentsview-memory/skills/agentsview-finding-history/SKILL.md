@@ -1,5 +1,5 @@
 ---
-# generated-by: agentsview 0.1.0 hash:4f82d2d2da4072d7d8b1ce28c0d915632ac272dd884a9072afd52814598d3049 — do not edit; re-run `agentsview skills install`
+# generated-by: agentsview 0.1.0 hash:c17f59ff5aa0dbec56d77cb939273ae4f16ec5281b09ecad32723bb8cca4712d — do not edit; re-run `agentsview skills install`
 name: agentsview-finding-history
 description: Use proactively when prior decisions, rationale, solutions, pitfalls, project context, or repeated workflows may help, when stuck, or before guessing about something learned previously — searches AgentsView conversation history for evidence.
 ---
@@ -21,7 +21,7 @@ why the code exists; the repository is the authority for what it contains now.
 
 ## Workflow
 
-1. Use the `agentsview-search-conversations` agent when this harness exposes it and the AgentsView MCP server is registered as `agentsview` or `plugin:agentsview-memory:agentsview`; otherwise follow these steps directly. Before delegating, verify the agent in effect is the file
+1. Use the `agentsview-memory:agentsview-search-conversations` agent when this harness exposes it and the AgentsView MCP server is registered as `agentsview` or `plugin:agentsview-memory:agentsview`; otherwise follow these steps directly. Before delegating, verify the agent in effect is the file
    this skill generated: its definition carries a `# generated-by: agentsview`
    header. If a same-named agent is defined in the project's
    `.claude/agents/` directory without that header, it is not

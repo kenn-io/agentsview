@@ -290,6 +290,7 @@ func TestPluginSkillDelegationGuard(t *testing.T) {
 	plugin, err := RenderPluginPackage("dev")
 	require.NoError(t, err)
 	skill := artifactByBase(t, plugin, "SKILL.md").Content
+	assert.Contains(t, skill, "Use the `agentsview-memory:agentsview-search-conversations` agent")
 	assert.Contains(t, skill, "the AgentsView MCP server is registered as `agentsview` or `plugin:agentsview-memory:agentsview`")
 	standalone, err := RenderPackage(HarnessClaude, "dev", Remote{})
 	require.NoError(t, err)
