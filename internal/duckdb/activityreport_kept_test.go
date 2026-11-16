@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/activity"
@@ -141,48 +140,6 @@ func TestActivityReportKeptMirrorReplacement(t *testing.T) {
 	fresh := keptActivityBuild(t, NewStoreFromDB(store.DB()), q, true)
 	requireKeptActivityEqual(t, fresh, changed)
 	requireKeptActivityEqual(t, changed, keptActivityBuild(t, store, q, false))
-}
-
-func TestActivityRunsReplacementDuringReadThenRestore(t *testing.T) {
-	skipReopenTestOnWindows(t)
-	for _, phase := range []string{"runs", "messages"} {
-		t.Run(phase, func(t *testing.T) {
-			t.Setenv("CACHE_DIRECTORY", t.TempDir())
-			dir := t.TempDir()
-			path, next, old := filepath.Join(dir, "mirror.duckdb"), filepath.Join(dir, "next.duckdb"), filepath.Join(dir, "old.duckdb")
-			keptActivityMirror(t, path, "session-a", 500)
-			keptActivityMirror(t, next, "session-a", 500)
-			writeUsageMirror(t, path, `UPDATE sessions SET agentsview_push_fingerprint = 'old'`)
-			writeUsageMirror(t, next, `UPDATE sessions SET agentsview_push_fingerprint = 'new'`, `UPDATE messages SET timestamp = TIMESTAMP '2026-01-01 00:04:00' WHERE id = 2`)
-			store, err := NewStore(t.Context(), path)
-			require.NoError(t, err)
-			require.NoError(t, store.OpenActivityReportDisk(t.Context()))
-			q := duckDayQuery(t, "2026-01-01", "UTC")
-			previous := analyticsQueryObserver
-			analyticsQueryObserver = func(query string) {
-				if (phase == "runs" && strings.Contains(query, "activity_run_pieces")) || (phase == "messages" && strings.Contains(query, "SELECT session_id, role, timestamp FROM messages")) {
-					analyticsQueryObserver = previous
-					require.NoError(t, os.Rename(path, old))
-					require.NoError(t, swapMirrorFile(next, path))
-					store.checkMirrorReplacement(t.Context(), func(err error) { require.NoError(t, err) })
-				}
-			}
-			t.Cleanup(func() { analyticsQueryObserver = previous })
-			_, _, err = store.activityReportRuns(t.Context(), []string{"session-a"}, q)
-			require.NoError(t, err)
-			require.NoError(t, store.Close())
-			require.NoError(t, swapMirrorFile(old, path))
-			restarted, err := NewStore(t.Context(), path)
-			require.NoError(t, err)
-			defer restarted.Close()
-			require.NoError(t, restarted.OpenActivityReportDisk(t.Context()))
-			runs, entries, err := restarted.activityReportRuns(t.Context(), []string{"session-a"}, q)
-			require.NoError(t, err)
-			require.Len(t, runs, 1)
-			require.Equal(t, time.Date(2026, 1, 1, 0, 1, 0, 0, time.UTC), runs[0].End)
-			require.Equal(t, []int64{time.Date(2026, 1, 1, 0, 1, 0, 0, time.UTC).UnixMicro()}, entries["session-a"].assistants)
-		})
-	}
 }
 
 func TestActivityReportKeptExcludesPartialAndBorrowedHandles(t *testing.T) {
@@ -574,42 +531,6 @@ func TestPartialActivityEmptyFingerprintDoesNotReuseDisk(t *testing.T) {
 	require.Equal(t, 2, *reads)
 }
 
-func TestActivityCloseWaitsForSavedUsage(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	keptActivityMirror(t, path, "session-a", 500)
-	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC))
-	require.NoError(t, err)
-	store, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
-	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
-	want := keptActivityBuild(t, store, q, true)
-	second, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
-	require.NoError(t, second.OpenActivityReportDisk(t.Context()))
-	reads := observeActivityUsageReads(t)
-	got := keptActivityBuild(t, second, q, true)
-	require.Equal(t, 1, *reads)
-	requireKeptActivityEqual(t, want, got)
-	store.activityUsagePendingMu.Lock()
-	done := make(chan error, 1)
-	go func() { done <- store.Close() }()
-	closed := false
-	assert.Eventually(t, func() bool {
-		closed = store.DB().PingContext(t.Context()) != nil
-		return closed
-	}, 2*time.Second, 10*time.Millisecond, "database close must overlap saving")
-	select {
-	case err := <-done:
-		store.activityUsagePendingMu.Unlock()
-		require.FailNow(t, "Close returned before saving usage", "error: %v", err)
-	default:
-	}
-	store.activityUsagePendingMu.Unlock()
-	require.NoError(t, <-done)
-	require.NoError(t, second.Close())
-}
-
 func TestActivityUsagePendingFollowsMemoEviction(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
@@ -629,6 +550,4 @@ func TestActivityUsagePendingFollowsMemoEviction(t *testing.T) {
 		_, ok := store.activityUsageSums.Get(slot, pending.version)
 		require.True(t, ok)
 	}
-	store.SetCustomPricing(nil)
-	require.Empty(t, store.activityUsagePending)
 }

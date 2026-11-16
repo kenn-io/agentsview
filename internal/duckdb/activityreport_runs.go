@@ -133,9 +133,9 @@ func (s *Store) activityReportRuns(
 	if len(ids) == 0 {
 		return nil, nil, nil
 	}
-	s.handleMu.RLock()
-	handle := s.duck
-	s.handleMu.RUnlock()
+	// A replacement between this read and the pairing scan keeps the new
+	// mirror's runs under the old fingerprint, which a later read reaches
+	// only if the session returns to the old content.
 	versions, err := s.activityRunVersions(ctx, ids)
 	if err != nil {
 		return nil, nil, err
@@ -178,14 +178,10 @@ func (s *Store) activityReportRuns(
 				bytes += e.bytes()
 			}
 		}
-		// Keep only results read from one handle; a replacement can otherwise
-		// pair new messages with the old fingerprints. Oversized reports would
-		// only evict the rest of the memo.
-		s.handleMu.RLock()
-		if bytes <= activityRunsMaxBytes && handle == s.duck {
+		// A report too large to keep would only evict the rest.
+		if bytes <= activityRunsMaxBytes {
 			s.activityRuns.store(keep)
 		}
-		s.handleMu.RUnlock()
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err

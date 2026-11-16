@@ -242,12 +242,7 @@ func TestSessionRunsGobRoundTrip(t *testing.T) {
 	require.NoError(t, gob.NewDecoder(&buf).Decode(&restored))
 	start, end := time.UnixMicro(1500000), time.UnixMicro(4500000)
 	require.Equal(t, original.AppendClipped(nil, "s", start, end), restored.AppendClipped(nil, "s", start, end))
-	require.Error(t, restored.GobDecode([]byte{1, 2, 0, 1, 0, 0, 2}))
-
-	// Two bounds (1s, 2s), no trimmed pieces, one model-a run.
-	data := []byte{2, 0x80, 0x89, 0x7a, 0x80, 0x92, 0xf4, 0x01, 0, 1, 7, 'm', 'o', 'd', 'e', 'l', '-', 'a', 0, 1}
-	var runs SessionRuns
-	require.NoError(t, runs.GobDecode(data))
-	require.Equal(t, []Run{{SessionID: "s", Start: time.UnixMicro(1000000).UTC(), End: time.UnixMicro(2000000).UTC(), Tail: time.UnixMicro(1000000).UTC(), Model: "model-a"}}, runs.AppendClipped(nil, "s", time.UnixMicro(0), time.UnixMicro(3000000)))
-	require.Error(t, runs.GobDecode(data[:len(data)-1]))
+	buf.Reset()
+	require.NoError(t, gob.NewEncoder(&buf).Encode(encodedSessionRuns{Bounds: []int64{1}, Runs: []encodedSessionRun{{First: 0, Last: 2}}}))
+	require.Error(t, restored.GobDecode(buf.Bytes()))
 }

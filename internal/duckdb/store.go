@@ -135,10 +135,6 @@ func (s *Store) mirrorStampLocked() string {
 func (s *Store) keptVersion() string {
 	s.handleMu.RLock()
 	defer s.handleMu.RUnlock()
-	return s.keptVersionLocked()
-}
-
-func (s *Store) keptVersionLocked() string {
 	stamp := s.mirrorStampLocked()
 	if stamp == "" {
 		return ""
@@ -191,19 +187,14 @@ func (s *Store) Close() error {
 	alias := s.aliasPath
 	s.handleMu.Unlock()
 
-	savesDone := make(chan struct{})
-	go func() {
-		defer close(savesDone)
-		if s.usageDisk.Enabled() {
-			s.activityRuns.save(&s.usageDisk)
-			s.saveActivityUsage()
-		}
-	}()
+	if s.usageDisk.Enabled() {
+		s.activityRuns.save(&s.usageDisk)
+		s.saveActivityUsage()
+	}
 	s.reports.Close()
 	err := conn.Close()
 	removeMirrorAlias(alias)
 	s.retiring.Wait()
-	<-savesDone
 	return err
 }
 
@@ -306,7 +297,7 @@ func (s *Store) SetCustomPricing(p map[string]config.CustomModelRate) {
 	digest := sha256.Sum256(fmt.Appendf(nil, "%#v", p))
 	s.pricingDigest = hex.EncodeToString(digest[:])
 	s.reports.Clear()
-	s.clearActivityUsage()
+	s.activityUsageSums.DeleteSlots(func(string) bool { return true })
 	s.dailyUsage.Clear()
 	s.planUsage.Clear()
 	s.topUsage.Clear()

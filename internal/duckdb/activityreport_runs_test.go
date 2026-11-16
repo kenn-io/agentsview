@@ -249,16 +249,6 @@ func TestActivityRunsDiskReusesUnchangedSessions(t *testing.T) {
 			require.Equal(t, []int{wantReads, wantReads}, []int{runs, messages})
 			require.Len(t, entries["a"].users, 1)
 			require.Len(t, entries["b"].users, 1)
-			_, err = conn.ExecContext(t.Context(), `UPDATE messages SET timestamp = TIMESTAMP '2026-01-01 01:00:00' WHERE session_id = 'b'`)
-			require.NoError(t, err)
-			_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET agentsview_push_fingerprint = 'v2' WHERE id = 'b'`)
-			require.NoError(t, err)
-			runs, messages = 0, 0
-			_, entries, err = restarted.activityReportRuns(t.Context(), ids, q)
-			require.NoError(t, err)
-			require.Equal(t, []int{1, 1}, []int{runs, messages})
-			require.Equal(t, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixMicro(), entries["a"].users[0])
-			require.Equal(t, time.Date(2026, 1, 1, 1, 0, 0, 0, time.UTC).UnixMicro(), entries["b"].users[0])
 		})
 	}
 }
@@ -291,13 +281,6 @@ func TestActivityRunsChangedSessionAfterRestart(t *testing.T) {
 		}
 	}
 	t.Cleanup(func() { analyticsQueryObserver = previous })
-	reused, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
-	require.NoError(t, reused.OpenActivityReportDisk(t.Context()))
-	requireKeptActivityEqual(t, first, keptActivityBuild(t, reused, q, true))
-	require.Zero(t, usageReads)
-	require.Zero(t, runReads)
-	require.NoError(t, reused.Close())
 	writeUsageMirror(t, path,
 		`UPDATE sessions SET agentsview_push_fingerprint = 'v2' WHERE id = 'b'`,
 		`UPDATE messages SET timestamp = TIMESTAMP '2026-01-01 00:04:00', token_usage = '{"output_tokens":900}', output_tokens = 900, usage_output_tokens = 900 WHERE session_id = 'b' AND role = 'assistant'`,

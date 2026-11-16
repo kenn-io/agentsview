@@ -1,9 +1,10 @@
 package activity
 
 import (
+	"bytes"
 	"cmp"
 	"context"
-	"encoding/binary"
+	"encoding/gob"
 	"errors"
 	"runtime"
 	"slices"
@@ -81,85 +82,42 @@ type sessionRun struct {
 	first, last int32
 }
 
+type encodedSessionRun struct {
+	Model       string
+	First, Last int32
+}
+
+type encodedSessionRuns struct {
+	Bounds  []int64
+	Trimmed []uint64
+	Runs    []encodedSessionRun
+}
+
 // GobEncode preserves the pieces used to clip runs to a report range.
 func (r SessionRuns) GobEncode() ([]byte, error) {
-	data := binary.AppendUvarint(nil, uint64(len(r.bounds)))
-	for _, bound := range r.bounds {
-		data = binary.AppendVarint(data, bound)
-	}
-	data = binary.AppendUvarint(data, uint64(len(r.trimmed)))
-	for _, bits := range r.trimmed {
-		data = binary.AppendUvarint(data, bits)
-	}
-	data = binary.AppendUvarint(data, uint64(len(r.runs)))
+	encoded := encodedSessionRuns{Bounds: r.bounds, Trimmed: r.trimmed}
 	for _, run := range r.runs {
-		data = binary.AppendUvarint(data, uint64(len(run.model)))
-		data = append(data, run.model...)
-		data = binary.AppendUvarint(data, uint64(run.first))
-		data = binary.AppendUvarint(data, uint64(run.last))
+		encoded.Runs = append(encoded.Runs, encodedSessionRun{run.model, run.first, run.last})
 	}
-	return data, nil
+	var buf bytes.Buffer
+	err := gob.NewEncoder(&buf).Encode(encoded)
+	return buf.Bytes(), err
 }
 
 // GobDecode rejects invalid piece indexes in a saved run.
 func (r *SessionRuns) GobDecode(data []byte) error {
-	invalid := errors.New("invalid activity runs")
-	read := func() (uint64, bool) {
-		v, n := binary.Uvarint(data)
-		if n <= 0 {
-			return 0, false
+	var encoded encodedSessionRuns
+	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&encoded); err != nil {
+		return err
+	}
+	decoded := SessionRuns{bounds: encoded.Bounds, trimmed: encoded.Trimmed}
+	var next int32
+	for _, run := range encoded.Runs {
+		if run.First < next || run.Last <= run.First || int(run.Last) >= len(encoded.Bounds) {
+			return errors.New("invalid activity run bounds")
 		}
-		data = data[n:]
-		return v, true
-	}
-	count, ok := read()
-	if !ok || count > uint64(len(data)) {
-		return invalid
-	}
-	decoded := SessionRuns{bounds: make([]int64, int(count))}
-	for i := range decoded.bounds {
-		v, n := binary.Varint(data)
-		if n <= 0 {
-			return invalid
-		}
-		decoded.bounds[i], data = v, data[n:]
-	}
-	count, ok = read()
-	if !ok || count > uint64(len(data)) {
-		return invalid
-	}
-	decoded.trimmed = make([]uint64, int(count))
-	for i := range decoded.trimmed {
-		if decoded.trimmed[i], ok = read(); !ok {
-			return invalid
-		}
-	}
-	count, ok = read()
-	if !ok || count > uint64(len(data)/3) {
-		return invalid
-	}
-	decoded.runs = make([]sessionRun, 0, int(count))
-	var next uint64
-	for range count {
-		size, ok := read()
-		if !ok || size > uint64(len(data)) {
-			return invalid
-		}
-		model := string(data[:int(size)])
-		data = data[int(size):]
-		first, ok := read()
-		if !ok {
-			return invalid
-		}
-		last, ok := read()
-		if !ok || first < next || last <= first || last >= uint64(len(decoded.bounds)) {
-			return invalid
-		}
-		decoded.runs = append(decoded.runs, sessionRun{model, int32(first), int32(last)})
-		next = last + 1
-	}
-	if len(data) != 0 {
-		return invalid
+		decoded.runs = append(decoded.runs, sessionRun{run.Model, run.First, run.Last})
+		next = run.Last + 1
 	}
 	*r = decoded
 	return nil

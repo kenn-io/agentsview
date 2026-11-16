@@ -98,6 +98,7 @@ func (s *Store) checkMirrorReplacement(ctx context.Context, onEvent func(err err
 	if err != nil {
 		return
 	}
+
 	s.handleMu.RLock()
 	prev := s.fileInfo
 	s.handleMu.RUnlock()
@@ -230,7 +231,7 @@ func (s *Store) swapHandle(conn *sql.DB, alias string, info os.FileInfo) {
 	// Replacement aliases open the checkpointed main file without a sibling WAL.
 	s.walStamp = "nowal"
 	s.reports.Clear()
-	s.clearActivityUsage()
+	s.activityUsageSums.DeleteSlots(func(string) bool { return true })
 	s.analyticsReads.Clear()
 	s.dailyUsage.Clear()
 	s.planUsage.Clear()

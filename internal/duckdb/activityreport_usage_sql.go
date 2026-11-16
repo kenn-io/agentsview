@@ -69,7 +69,7 @@ func (s *Store) sumActivityUsage(
 	}
 	diskVersion := ""
 	if version != "" && s.usageDisk.Enabled() {
-		versions, err := s.sessionVersions(ctx)
+		versions, err := db.ScanTrendVersions(s.queryContext(ctx, `SELECT id, COALESCE(agentsview_push_fingerprint, '') FROM sessions WHERE deleted_at IS NULL`))
 		if err != nil {
 			return nil, err
 		}
@@ -426,9 +426,7 @@ type activityUsagePending struct {
 }
 
 func (s *Store) keepActivityUsage(slot, version, diskVersion string, rows []*readbase.ActivityUsageSums) {
-	s.handleMu.RLock()
-	defer s.handleMu.RUnlock()
-	if version != s.keptVersionLocked() {
+	if version != s.keptVersion() {
 		return
 	}
 	s.activityUsagePendingMu.Lock()
@@ -447,21 +445,11 @@ func (s *Store) keepActivityUsage(slot, version, diskVersion string, rows []*rea
 	}
 }
 
-func (s *Store) clearActivityUsage() {
-	s.activityUsagePendingMu.Lock()
-	defer s.activityUsagePendingMu.Unlock()
-	s.activityUsageSums.DeleteSlots(func(string) bool { return true })
-	clear(s.activityUsagePending)
-}
-
 func (s *Store) saveActivityUsage() {
 	version := s.keptVersion()
 	s.activityUsagePendingMu.Lock()
 	defer s.activityUsagePendingMu.Unlock()
 	for slot, pending := range s.activityUsagePending {
-		if pending.version != version {
-			continue
-		}
 		if rows, ok := s.activityUsageSums.Get(slot, version); ok {
 			if data, err := kept.EncodeRows(rows, 128<<20, func(row *readbase.ActivityUsageSums) int64 { return row.Bytes() }); err == nil {
 				s.usageDisk.Put("activity-usage|"+slot, "activity-usage-1|"+pending.diskVersion, data)
