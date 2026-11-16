@@ -147,15 +147,28 @@ describe("SessionPromptPicker", () => {
     expect(document.body.textContent).toContain("Loading prompts…");
   });
 
-  it("withdraws an open list when the transcript moves to another revision", async () => {
-    serve([prompt(0, "Before the resync")]);
+  it("rereads an open list when the transcript moves to another revision", async () => {
+    const read = serve([prompt(0, "First prompt")]);
     await open();
-    expect(labels()).toEqual(["Before the resync"]);
+    expect(labels()).toEqual(["First prompt"]);
 
+    // A new message raises the revision; the old list is withdrawn until
+    // the reread for the new revision lands.
+    let answer!: (page: unknown) => void;
+    read.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)) as never);
+    messages.messages = [...messages.messages, prompt(1, "Second prompt")];
     messages.loadedRevision = "r2";
     await settle();
     expect(labels()).toEqual([]);
     expect(document.body.textContent).toContain("Loading prompts…");
+
+    answer({
+      messages: [prompt(0, "First prompt"), prompt(1, "Second prompt")],
+      transcript_revision: "r2",
+    });
+    await settle();
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(labels()).toEqual(["Second prompt", "First prompt"]);
   });
 
   it("waits for the transcript to reach the revision the prompts were read from", async () => {
@@ -173,6 +186,8 @@ describe("SessionPromptPicker", () => {
     messages.loadedRevision = "r2";
     await settle();
     expect(labels()).toEqual(["Rewritten prompt"]);
+    // The read was already on r2, so the transcript catching up needs no second one.
+    expect(SessionsService.getApiV1SessionsByIdMessages).toHaveBeenCalledTimes(1);
   });
 
   it("offers no cached prompts when a reread fails after a resync", async () => {

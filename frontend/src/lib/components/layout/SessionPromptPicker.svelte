@@ -1,6 +1,7 @@
 <!-- Jump to any prompt in the session: the header button opens a search
      over every prompt, including ones the transcript has not loaded. -->
 <script lang="ts">
+  import { untrack } from "svelte";
   import type { Attachment } from "svelte/attachments";
   import { IconButton, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
   import { SessionsService, type DbMessage as Message } from "../../api/generated/index";
@@ -141,8 +142,33 @@
       : shown.filter((p) => words.every((word) => p.search.includes(word)));
   });
 
+  // Whether the list is open, and the transcript revision it last read for.
+  let open = $state(false);
+  let watchedRevision: string | null = null;
+
   // The list's header exists only while the list is open.
-  const onOpen: Attachment = () => void load();
+  const onOpen: Attachment = () => {
+    untrack(() => {
+      open = true;
+      watchedRevision = messages.loadedRevision;
+      void load();
+    });
+    return () => {
+      open = false;
+    };
+  };
+
+  // Every new message raises the revision, so an open list would otherwise
+  // stay withdrawn until reopened. A read that is already on the new
+  // revision, because it got ahead of the transcript, needs no second read.
+  $effect(() => {
+    const revision = messages.loadedRevision;
+    if (!open || revision === watchedRevision) return;
+    watchedRevision = revision;
+    untrack(() => {
+      if (revision !== promptsRevision) void load();
+    });
+  });
 
   const bindTrigger: Attachment<HTMLButtonElement> = (node) => {
     setPromptPickerTrigger(node);
