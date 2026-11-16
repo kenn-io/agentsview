@@ -1553,6 +1553,9 @@ func (db *DB) DeleteParserExcludedSessions(ctx context.Context, ids []string) (i
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit parser-excluded delete: %w", err)
 	}
+	if deleted > 0 {
+		db.forgetSearchPages()
+	}
 	return int(deleted), nil
 }
 
