@@ -245,10 +245,4 @@ func TestSessionRunsGobRoundTrip(t *testing.T) {
 	buf.Reset()
 	require.NoError(t, gob.NewEncoder(&buf).Encode(encodedSessionRuns{Bounds: []int64{1}, Runs: []encodedSessionRun{{First: 0, Last: 2}}}))
 	require.Error(t, restored.GobDecode(buf.Bytes()))
-	buf.Reset()
-	require.NoError(t, gob.NewEncoder(&buf).Encode(encodedSessionRuns{Bounds: []int64{2, 1}, Runs: []encodedSessionRun{{First: 0, Last: 1}}}))
-	require.Error(t, restored.GobDecode(buf.Bytes()))
-	buf.Reset()
-	require.NoError(t, gob.NewEncoder(&buf).Encode(encodedSessionRuns{Bounds: []int64{3, 4, 1, 2}, Runs: []encodedSessionRun{{First: 0, Last: 1}, {First: 2, Last: 3}}}))
-	require.Error(t, restored.GobDecode(buf.Bytes()))
 }

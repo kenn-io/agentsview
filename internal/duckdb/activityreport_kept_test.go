@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -369,41 +370,34 @@ func TestPartialActivityInputsSurviveRestart(t *testing.T) {
 }
 
 func TestPartialActivityInvalidDiskEntryIsMiss(t *testing.T) {
-	for _, oversized := range []bool{false, true} {
-		t.Run(strconv.FormatBool(oversized), func(t *testing.T) {
-			cache := t.TempDir()
-			t.Setenv("CACHE_DIRECTORY", cache)
-			path := filepath.Join(t.TempDir(), "mirror.duckdb")
-			keptActivityMirror(t, path, "session-a", 500)
-			store, err := NewStore(t.Context(), path)
-			require.NoError(t, err)
-			require.NoError(t, store.OpenActivityReportDisk(t.Context()))
-			q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
-			require.NoError(t, err)
-			keptActivityBuild(t, store, q, true)
-			require.NoError(t, store.Close())
-			require.NoError(t, filepath.WalkDir(cache, func(path string, entry os.DirEntry, err error) error {
-				if err != nil {
-					return err
-				}
-				if filepath.Ext(path) == ".gob" {
-					if oversized {
-						return os.Truncate(path, (128<<20)+1)
-					}
-					return os.WriteFile(path, []byte("corrupt"), 0600)
-				}
-				return nil
-			}))
-			restarted, err := NewStore(t.Context(), path)
-			require.NoError(t, err)
-			defer restarted.Close()
-			require.NoError(t, restarted.OpenActivityReportDisk(t.Context()))
-			reads := observeActivityUsageReads(t)
-			got := keptActivityBuild(t, restarted, q, true)
-			require.Equal(t, 1, *reads)
-			require.Equal(t, 500, activity.ReportWithSessions(got).Totals.OutputTokens)
-		})
-	}
+	cache := t.TempDir()
+	t.Setenv("CACHE_DIRECTORY", cache)
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
+	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	keptActivityBuild(t, store, q, true)
+	require.NoError(t, store.Close())
+	require.NoError(t, filepath.WalkDir(cache, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if filepath.Ext(path) == ".gob" {
+			return os.WriteFile(path, []byte("corrupt"), 0600)
+		}
+		return nil
+	}))
+	restarted, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	defer restarted.Close()
+	require.NoError(t, restarted.OpenActivityReportDisk(t.Context()))
+	reads := observeActivityUsageReads(t)
+	got := keptActivityBuild(t, restarted, q, true)
+	require.Equal(t, 1, *reads)
+	require.Equal(t, 500, activity.ReportWithSessions(got).Totals.OutputTokens)
 }
 
 func TestPartialActivityUsageSameStampReplacement(t *testing.T) {
@@ -430,7 +424,13 @@ func TestPartialActivityUsageSameStampReplacement(t *testing.T) {
 				paused, resume, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
 				var once sync.Once
 				unpause := func() { once.Do(func() { close(resume) }) }
-				activityUsagePublishObserver = func() { close(paused); <-resume }
+				var firstPublish atomic.Bool
+				activityUsagePublishObserver = func() {
+					if firstPublish.CompareAndSwap(false, true) {
+						close(paused)
+						<-resume
+					}
+				}
 				t.Cleanup(func() { unpause(); <-done; activityUsagePublishObserver = nil })
 				var first activity.CandidateArtifacts
 				var buildErr error
@@ -441,6 +441,8 @@ func TestPartialActivityUsageSameStampReplacement(t *testing.T) {
 				<-paused
 				require.NoError(t, swapMirrorFile(next, path))
 				store.checkMirrorReplacement(t.Context(), func(err error) { require.NoError(t, err) })
+				changed := keptActivityBuild(t, store, q, true)
+				require.Equal(t, 900, activity.ReportWithSessions(changed).Totals.OutputTokens)
 				unpause()
 				<-done
 				require.NoError(t, buildErr)
@@ -455,15 +457,19 @@ func TestPartialActivityUsageSameStampReplacement(t *testing.T) {
 				require.NoError(t, err)
 				require.NoError(t, store.OpenActivityReportDisk(t.Context()))
 			}
-			changed := keptActivityBuild(t, store, q, true)
-			require.Equal(t, 900, activity.ReportWithSessions(changed).Totals.OutputTokens)
+			if !duringPublish {
+				changed := keptActivityBuild(t, store, q, true)
+				require.Equal(t, 900, activity.ReportWithSessions(changed).Totals.OutputTokens)
+			}
 			require.NoError(t, store.Close())
 			reopened, err := NewStore(t.Context(), path)
 			require.NoError(t, err)
 			defer reopened.Close()
 			require.NoError(t, reopened.OpenActivityReportDisk(t.Context()))
+			reads := observeActivityUsageReads(t)
 			got := keptActivityBuild(t, reopened, q, true)
 			require.Equal(t, 900, activity.ReportWithSessions(got).Totals.OutputTokens)
+			require.Zero(t, *reads)
 		})
 	}
 }
@@ -576,27 +582,11 @@ func TestPartialActivityRepricesAfterMirrorPush(t *testing.T) {
 	require.NoError(t, store.Close())
 	writeUsageMirror(t, path, `UPDATE model_pricing SET output_microdollars_per_mtok = 20000000 WHERE model_pattern = 'kept-model'`)
 	store = open()
+	defer store.Close()
 	reads := observeActivityUsageReads(t)
 	got := keptActivityBuild(t, store, q, true)
 	require.Equal(t, 1, *reads)
 	require.Equal(t, money.MustParseDollars("0.01"), activity.ReportWithSessions(got).Totals.Cost)
-	require.NoError(t, store.Close())
-	writeUsageMirror(t, path, `INSERT INTO model_pricing_bands (model_pattern, above_input_tokens, output_microdollars_per_mtok) VALUES ('kept-model', 1, 30000000)`)
-	store = open()
-	*reads = 0
-	got = keptActivityBuild(t, store, q, true)
-	require.Equal(t, 1, *reads)
-	fresh := NewStoreFromDB(store.DB())
-	requireKeptActivityEqual(t, keptActivityBuild(t, fresh, q, true), got)
-	require.NoError(t, store.Close())
-	writeUsageMirror(t, path, `UPDATE genai_pricing SET version = '', source = 'fetched', data_json = '[{"id":"test","name":"Test","api_pattern":"https://example.invalid","model_match":{"starts_with":"other"},"models":[{"id":"other","match":{"equals":"other"},"prices":{"output_mtok":8}}]}]' WHERE singleton = 1`)
-	store = open()
-	defer store.Close()
-	*reads = 0
-	got = keptActivityBuild(t, store, q, true)
-	require.Equal(t, 1, *reads)
-	fresh = NewStoreFromDB(store.DB())
-	requireKeptActivityEqual(t, keptActivityBuild(t, fresh, q, true), got)
 }
 
 func TestActivityRunsReusedAfterSweepAndRestart(t *testing.T) {

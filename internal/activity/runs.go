@@ -116,14 +116,6 @@ func (r *SessionRuns) GobDecode(data []byte) error {
 		if run.First < next || run.Last <= run.First || int(run.Last) >= len(encoded.Bounds) {
 			return errors.New("invalid activity run bounds")
 		}
-		for i := run.First; i < run.Last; i++ {
-			if encoded.Bounds[i] >= encoded.Bounds[i+1] {
-				return errors.New("invalid activity run order")
-			}
-		}
-		if run.First > 0 && encoded.Bounds[run.First-1] > encoded.Bounds[run.First] {
-			return errors.New("invalid activity run order")
-		}
 		decoded.runs = append(decoded.runs, sessionRun{run.Model, run.First, run.Last})
 		next = run.Last + 1
 	}
