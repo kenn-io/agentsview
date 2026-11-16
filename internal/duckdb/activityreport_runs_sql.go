@@ -138,8 +138,7 @@ func activityRunsSQL(ids []string, gapUS int64) (string, []any) {
 		),
 		activity_run_reversed_next AS (
 			SELECT t.session_id, t.ordinal, t.ts_us, t.call_index, t.event_index,
-				m.ordinal AS fallback_ordinal, m.ts_us AS fallback_us, m.role AS fallback_role,
-				m.model AS fallback_model, 1 AS fallback_hit
+				m.ts_us AS fallback_us, m.role AS fallback_role, m.model AS fallback_model
 			FROM activity_run_tool_ordered t
 			JOIN activity_run_tool_ordered m ON m.session_id = t.session_id
 			WHERE t.is_terminal = 1 AND t.reached_us > t.ts_us
@@ -151,11 +150,11 @@ func activityRunsSQL(ids []string, gapUS int64) (string, []any) {
 		activity_run_tool_closed AS (
 			SELECT r.*,
 				CASE WHEN r.reached_us IS NULL OR r.reached_us <= r.ts_us THEN r.record_us
-					WHEN f.fallback_hit = 1 THEN f.fallback_us END AS message_us,
+					ELSE f.fallback_us END AS message_us,
 				CASE WHEN r.reached_us IS NULL OR r.reached_us <= r.ts_us THEN r.record_role
-					WHEN f.fallback_hit = 1 THEN f.fallback_role END AS message_role,
+					ELSE f.fallback_role END AS message_role,
 				CASE WHEN r.reached_us IS NULL OR r.reached_us <= r.ts_us THEN r.record_model
-					WHEN f.fallback_hit = 1 THEN f.fallback_model END AS message_model,
+					ELSE f.fallback_model END AS message_model,
 				CASE WHEN r.next_terminal_us IS NOT NULL AND (message_us IS NULL OR r.next_terminal_us < message_us)
 					THEN 1 ELSE 0 END AS closed_by_tool
 			FROM activity_run_tool_timed r

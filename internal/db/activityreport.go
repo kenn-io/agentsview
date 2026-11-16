@@ -767,7 +767,6 @@ const activityReportTerminalCandidatesSQL = `WITH
 			AND tre.status IN ('completed', 'errored')
 			AND tre.timestamp IS NOT NULL
 			AND tre.timestamp != ''
-			AND agentsview_timestamp_unix_micro(tre.timestamp) IS NOT NULL
 			AND agentsview_timestamp_unix_micro(tre.timestamp) >= ?
 	),
 	terminal_sessions AS (
