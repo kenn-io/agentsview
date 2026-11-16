@@ -155,11 +155,9 @@ func (s *Sync) EnsureSchema(ctx context.Context) error {
 			ensuredSchemas.Delete(s.schemaKey)
 		}
 	}
-	if s.conn != nil {
-		if schemaUnchangedSinceEnsured(ctx, s.conn, s.schemaKey) {
-			s.schemaDone = true
-			return nil
-		}
+	if s.conn != nil && schemaUnchangedSinceEnsured(ctx, s.conn, s.schemaKey) {
+		s.schemaDone = true
+		return nil
 	}
 	if err := EnsureSchema(ctx, s.target); err != nil {
 		ensuredSchemas.Delete(s.schemaKey)

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/clickhouse/chtest"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/storage"
@@ -37,24 +38,30 @@ func mirrorQueriesSince(t *testing.T, conn *sql.DB, start time.Time, condition s
 var changeTriggered = storage.PushOptions{SkipIfUnchanged: true}
 
 // A change-triggered push with nothing new in the archive writes nothing to
-// the mirror and scans none of its sessions.
+// the mirror and scans none of its sessions, whatever the archive keeps.
 func TestChangeTriggeredPushWritesNothingWhenArchiveUnchanged(t *testing.T) {
 	t.Parallel()
-	ctx := t.Context()
-	local, target := seedFixture(t)
-	s := newTestSync(t, local, target, storage.PusherOptions{})
-	_, err := s.Push(ctx, false, nil)
-	require.NoError(t, err)
-	conn := chtest.Open(t, target.URL, target.Database)
+	for _, content := range []config.ArchiveContent{config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
+		t.Run(string(content), func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			local, target := seedFixture(t)
+			local.SetArchiveContent(content)
+			s := newTestSync(t, local, target, storage.PusherOptions{})
+			_, err := s.Push(ctx, false, nil)
+			require.NoError(t, err)
+			conn := chtest.Open(t, target.URL, target.Database)
 
-	start := time.Now()
-	res, err := s.PushWithOptions(ctx, changeTriggered, nil)
-	require.NoError(t, err)
-	assert.Zero(t, res.SessionsPushed)
-	assert.Zero(t, mirrorQueriesSince(t, conn, start, "query_kind != 'Select'"),
-		"an unchanged archive writes no rows, metadata, or schema")
-	assert.Zero(t, mirrorQueriesSince(t, conn, start, "has(tables, currentDatabase() || '.sessions')"),
-		"an unchanged archive reads no session rows")
+			start := time.Now()
+			res, err := s.PushWithOptions(ctx, changeTriggered, nil)
+			require.NoError(t, err)
+			assert.Zero(t, res.SessionsPushed)
+			assert.Zero(t, mirrorQueriesSince(t, conn, start, "query_kind != 'Select'"),
+				"an unchanged archive writes no rows, metadata, or schema")
+			assert.Zero(t, mirrorQueriesSince(t, conn, start, "has(tables, currentDatabase() || '.sessions')"),
+				"an unchanged archive reads no session rows")
+		})
+	}
 }
 
 // Each local change a change-triggered push owns reaches the mirror.

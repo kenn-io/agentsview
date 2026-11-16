@@ -117,12 +117,19 @@ func (s *Sync) pushWithOptions(
 	if err != nil {
 		return result, fmt.Errorf("reading local deletion revision: %w", err)
 	}
-	unchanged, err := s.unchangedSinceLastPush(ctx, opts, meta, databaseID, localDeletion)
+	unchanged, err := s.unchangedSinceLastPush(ctx, opts, meta, storedCutoff, storedScope, databaseID, localDeletion)
 	if err != nil {
 		return result, err
 	}
 	if unchanged {
 		log.Printf("clickhouse push: nothing changed locally since the last push; skipping the session phase")
+		if s.local.ArchiveContent().UsageOnly() {
+			// Clearing a usage-only archive's vectors is upkeep, like
+			// repricing, that the next push without SkipIfUnchanged does.
+			result.Vectors.Skipped, result.Vectors.SkippedReason = true, "usage-only archive keeps no vectors"
+			result.Duration = time.Since(start)
+			return result, nil
+		}
 		// The vector phase decides for itself whether it has work: a scoped
 		// one has none, and a generation-wide one may find vector-only
 		// changes.
@@ -472,24 +479,24 @@ func (s *Sync) pushWithOptions(
 // nothing to write: no option asks for more, nothing requires a full push,
 // and the archive holds no session, deletion, project identity, worktree
 // mapping, star, pin, or Cursor usage change since the last push finished
-// cleanly. meta holds the metadata the push read. The checks read only the
+// cleanly. meta holds the metadata the push read, and storedCutoff and
+// storedScope the cutoff and scope stored in it. The checks read only the
 // local archive.
 //
 // The push it skips would also refresh machine labels, model prices, usage
-// prices, retained commit links, prepared usage, and the usage rollup, and
-// prune rows the archive no longer owns. None of them depends on this
+// prices, retained commit links, prepared usage, and the usage rollup, clear
+// a usage-only archive's vectors, and prune rows the archive no longer owns. None of them depends on this
 // archive's sessions changing, so the next push without SkipIfUnchanged,
 // such as a watcher's interval push, does them.
 func (s *Sync) unchangedSinceLastPush(
 	ctx context.Context, opts storage.PushOptions, meta map[string]string,
-	databaseID string, localDeletion int64,
+	storedCutoff, storedScope, databaseID string, localDeletion int64,
 ) (bool, error) {
-	if !opts.SkipIfUnchanged || opts.Full || opts.RewriteUnchanged ||
+	if !opts.SkipIfUnchanged || opts.RewriteUnchanged ||
 		opts.FullVectors || len(opts.FullVectorSessions) > 0 {
 		return false, nil
 	}
-	storedCutoff := meta[s.archiveKey(lastPushCutoffKeyBase)]
-	if full, _ := s.decideFull(opts, storedCutoff, meta[s.archiveKey(pushScopeKeyBase)]); full {
+	if full, _ := s.decideFull(opts, storedCutoff, storedScope); full {
 		return false, nil
 	}
 	// Each of these starts a full push or finishes one.

@@ -352,12 +352,13 @@ archive's `sync_metadata` keys and the local archive, and when nothing requires
 a full push and no session, deletion, project identity, worktree mapping, star,
 pin, or Cursor usage row changed since the last clean push, it runs only the
 vector phase and returns (`unchangedSinceLastPush`). A scoped vector phase with
-no changed sessions does nothing.
+no changed sessions does nothing, and a usage-only archive skips it.
 
 The skipped push would also refresh machine labels, model and usage prices, and
 retained commit links, prune rows the archive no longer owns, check for session
-rows in an older format, and refresh prepared usage and the usage rollup. None
-of these depends on this archive's sessions changing. They run on the next push
+rows in an older format, refresh prepared usage and the usage rollup, and clear
+a usage-only archive's vectors. None of these depends on this archive's
+sessions changing. They run on the next push
 without the option, such as the watch's startup and interval pushes, so they lag
 by at most the watch interval.
 

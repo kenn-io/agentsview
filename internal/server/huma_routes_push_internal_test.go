@@ -1326,12 +1326,20 @@ func (r stubReplica) NewPusher(
 	return r.newPusher()
 }
 
-type failingPusher struct{ err error }
+// failingPusher returns err from every push. When opts is set, it also
+// records the options each push receives.
+type failingPusher struct {
+	err  error
+	opts *[]storage.PushOptions
+}
 
 func (failingPusher) EnsureSchema(context.Context) error { return nil }
 func (p failingPusher) PushWithOptions(
-	context.Context, storage.PushOptions, func(storage.PushProgress),
+	_ context.Context, opts storage.PushOptions, _ func(storage.PushProgress),
 ) (storage.PushResult, error) {
+	if p.opts != nil {
+		*p.opts = append(*p.opts, opts)
+	}
 	return storage.PushResult{}, p.err
 }
 func (failingPusher) Close() error { return nil }
@@ -1351,7 +1359,7 @@ func TestReplicaPushReportsWhetherTheCopyStarted(t *testing.T) {
 			return nil, errors.New("connection refused")
 		}, false},
 		{"copy failed", func() (storage.Pusher, error) {
-			return failingPusher{errors.New("conn reset")}, nil
+			return failingPusher{err: errors.New("conn reset")}, nil
 		}, true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1467,18 +1475,6 @@ func TestSyncThenRunForPushRejectsDeferredRebuildWithAttachmentFailure(t *testin
 	assert.Contains(t, err.Error(), "local sync processing incomplete")
 }
 
-// recordingPusher records the options each push receives.
-type recordingPusher struct{ opts *[]storage.PushOptions }
-
-func (recordingPusher) EnsureSchema(context.Context) error { return nil }
-func (p recordingPusher) PushWithOptions(
-	_ context.Context, opts storage.PushOptions, _ func(storage.PushProgress),
-) (storage.PushResult, error) {
-	*p.opts = append(*p.opts, opts)
-	return storage.PushResult{}, nil
-}
-func (recordingPusher) Close() error { return nil }
-
 // Only a watch push for a batch of changed files may skip when the archive
 // holds nothing new; a push without a batch keeps its upkeep.
 // Serial: requests push through one shared server.
@@ -1488,7 +1484,7 @@ func TestReplicaPushSkipsIfUnchangedOnlyForWatchBatches(t *testing.T) {
 	changed := f.writeClaudeSession(t, "proj/session.jsonl", "watch batch push")
 	var got []storage.PushOptions
 	replica := stubReplica{newPusher: func() (storage.Pusher, error) {
-		return recordingPusher{opts: &got}, nil
+		return failingPusher{opts: &got}, nil
 	}}
 	target := &daemonReplicaTarget{
 		URL: "postgres://127.0.0.1:5432/agentsview?sslmode=disable", MachineName: "test",
