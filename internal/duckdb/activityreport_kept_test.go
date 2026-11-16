@@ -467,6 +467,37 @@ func TestPartialActivityUsageSameStampReplacement(t *testing.T) {
 	}
 }
 
+func TestFinishedDayThenPartialMonthSurvivesRestart(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	open := func() *Store {
+		s, err := NewStore(t.Context(), path)
+		require.NoError(t, err)
+		require.NoError(t, s.OpenActivityReportDisk(t.Context()))
+		return s
+	}
+	store := open()
+	keptActivityBuild(t, store, duckDayQuery(t, "2026-01-01", "UTC"), true)
+	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	want := keptActivityBuild(t, store, q, true)
+	require.NoError(t, store.Close())
+	restarted := open()
+	defer restarted.Close()
+	reads := 0
+	previous := analyticsQueryObserver
+	analyticsQueryObserver = func(query string) {
+		if strings.Contains(query, "activity_run_pieces") || strings.Contains(query, "SELECT session_id, role, timestamp FROM messages") {
+			reads++
+		}
+	}
+	defer func() { analyticsQueryObserver = previous }()
+	got := keptActivityBuild(t, restarted, q, true)
+	require.Equal(t, 0, reads)
+	requireKeptActivityEqual(t, want, got)
+}
+
 func TestPartialActivityEmptyFingerprintDoesNotReuseDisk(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")

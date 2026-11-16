@@ -248,7 +248,7 @@ func TestActivityRunsDiskReusesUnchangedSessions(t *testing.T) {
 			require.Equal(t, []int{wantReads, wantReads}, []int{runs, messages})
 			require.Len(t, entries["a"].users, 1)
 			require.Len(t, entries["b"].users, 1)
-			_, err = conn.ExecContext(t.Context(), `UPDATE messages SET timestamp = TIMESTAMP '2026-01-01 01:00:00'`)
+			_, err = conn.ExecContext(t.Context(), `UPDATE messages SET timestamp = TIMESTAMP '2026-01-01 01:00:00' WHERE session_id = 'b'`)
 			require.NoError(t, err)
 			_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET agentsview_push_fingerprint = 'v2' WHERE id = 'b'`)
 			require.NoError(t, err)
