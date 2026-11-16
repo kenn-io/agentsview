@@ -2,6 +2,7 @@ package kept
 
 import (
 	"bytes"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -171,4 +172,21 @@ func (d *Disk) trim() error {
 		total -= f.size
 	}
 	return nil
+}
+
+// LoadJSON returns a saved value or loads and saves it for this version.
+func LoadJSON[T any](d *Disk, selection, version string, load func() (T, error)) (T, error) {
+	if data, ok := d.Get(selection, version); ok {
+		var value T
+		if json.Unmarshal(data, &value) == nil {
+			return value, nil
+		}
+	}
+	value, err := load()
+	if err == nil && d.Enabled() {
+		if data, encodeErr := json.Marshal(value, json.FormatNilSliceAsNull(true)); encodeErr == nil {
+			d.Put(selection, version, data)
+		}
+	}
+	return value, err
 }

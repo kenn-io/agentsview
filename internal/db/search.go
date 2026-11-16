@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/kit/search/lexical"
 )
 
@@ -443,8 +444,18 @@ func (db *DB) Search(
 	if err != nil {
 		return db.search(ctx, f, cjk)
 	}
-	return db.searchKept.Do(ctx, key, fmt.Sprintf("%s|%d|%d", id, revision, searchRevision), func(ctx context.Context) (SearchPage, error) {
+	var token string
+	if err := db.getReader().QueryRowContext(ctx, `SELECT value FROM archive_metadata WHERE key = 'search_history_token'`).Scan(&token); err != nil || token == "" {
 		return db.search(ctx, f, cjk)
+	}
+	fingerprint := ""
+	if cjk {
+		fingerprint = simpleFTSRuntimeConfig.fingerprint
+	}
+	version := fmt.Sprintf("%s|%d|%d|%s|%s", id, revision, searchRevision, token, fingerprint)
+	db.trendsPartsDisk()
+	return db.searchKept.Do(ctx, key, version, func(ctx context.Context) (SearchPage, error) {
+		return kept.LoadJSON(&db.trendsDisk, "search|"+key, version, func() (SearchPage, error) { return db.search(ctx, f, cjk) })
 	})
 }
 

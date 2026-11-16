@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/kept"
 )
 
 // embeddableMessagePredicate matches messages the search surfaces: not
@@ -86,11 +87,13 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 	if f.Limit <= 0 || f.Limit > db.MaxSearchLimit {
 		f.Limit = db.DefaultSearchLimit
 	}
-	version, err := s.tablePartsFingerprint(ctx, []string{"sessions", "messages", "image_text"})
-	if err != nil {
+	version, ok, err := s.usageRowsVersion(ctx, []string{"sessions", "messages", "image_text"}, "")
+	if err != nil || !ok {
 		return s.search(ctx, f)
 	}
-	return s.searchReads.Do(ctx, f.Slot(), version, func(ctx context.Context) (db.SearchPage, error) { return s.search(ctx, f) })
+	return s.searchReads.Do(ctx, f.Slot(), version, func(ctx context.Context) (db.SearchPage, error) {
+		return kept.LoadJSON(&s.usageDisk, "search|"+f.Slot(), version, func() (db.SearchPage, error) { return s.search(ctx, f) })
+	})
 }
 
 func (s *Store) search(ctx context.Context, f db.SearchFilter) (db.SearchPage, error) {
