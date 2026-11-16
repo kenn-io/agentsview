@@ -18,10 +18,12 @@ decision.
 
 ## Search and read
 {{if .AlternateToolPrefix}}
-Use the same server prefix for search and message reads throughout this task.
+Prefer the `{{.ToolPrefix}}` server prefix when registered.
+Use `{{.AlternateToolPrefix}}` only when the plugin server is not registered.
+Use the chosen prefix for every search and message read.
 {{end}}
 1. Call `{{.ToolPrefix}}search_content`{{if .AlternateToolPrefix}} or
-   `{{.AlternateToolPrefix}}search_content`, whichever is available,
+   `{{.AlternateToolPrefix}}search_content` using the chosen prefix,
   {{end}} with `mode: hybrid`, `scope: all`,
    `limit: 10`, `include_active: true`, `include_one_shot: true`, and
    `include_automated: true`. When the parent supplies the current session

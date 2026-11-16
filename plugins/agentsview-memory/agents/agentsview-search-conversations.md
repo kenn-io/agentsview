@@ -1,5 +1,5 @@
 ---
-# generated-by: agentsview 0.1.0 hash:4a3b229fd2ce8a21c33e72a1e0250b85f403799b36eac92946cca6d553081402 — do not edit; re-run `agentsview skills install`
+# generated-by: agentsview 0.1.0 hash:aaac5ddaa7b5de3f9eb97e3471879542537e61b61513dafb93ddedf8bb180f77 — do not edit; re-run `agentsview skills install`
 name: agentsview-search-conversations
 description: Search AgentsView conversation history and synthesize evidence for the parent agent.
 model: haiku
@@ -19,10 +19,12 @@ decision.
 
 ## Search and read
 
-Use the same server prefix for search and message reads throughout this task.
+Prefer the `mcp__plugin_agentsview-memory_agentsview__` server prefix when registered.
+Use `mcp__agentsview__` only when the plugin server is not registered.
+Use the chosen prefix for every search and message read.
 
 1. Call `mcp__plugin_agentsview-memory_agentsview__search_content` or
-   `mcp__agentsview__search_content`, whichever is available,
+   `mcp__agentsview__search_content` using the chosen prefix,
    with `mode: hybrid`, `scope: all`,
    `limit: 10`, `include_active: true`, `include_one_shot: true`, and
    `include_automated: true`. When the parent supplies the current session

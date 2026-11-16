@@ -89,5 +89,7 @@ func TestMemoryPluginAgentToolsMatchPluginServer(t *testing.T) {
 	assert.Contains(t, content, "`"+prefix+"get_messages`")
 	assert.Contains(t, content, "`mcp__agentsview__search_content`")
 	assert.Contains(t, content, "`mcp__agentsview__get_messages`")
-	assert.Contains(t, content, "Use the same server prefix for search and message reads")
+	assert.Contains(t, content, "Prefer the `"+prefix+"` server prefix when registered.")
+	assert.Contains(t, content, "Use `mcp__agentsview__` only when the plugin server is not registered.")
+	assert.Contains(t, content, "Use the chosen prefix for every search and message read.")
 }
