@@ -107,3 +107,30 @@ func TestSearchKeptRestart(t *testing.T) {
 	read(s)
 	require.Greater(t, count(s), before)
 }
+
+func TestSearchKeptRejectsPushDuringBuild(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	ctx := t.Context()
+	s, syncer, local := newPushedStore(t)
+	require.NoError(t, s.openActivityReportDisk(syncer.target))
+	snapshotCtx, err := s.withPartsSnapshot(ctx)
+	require.NoError(t, err)
+	version, ok, err := s.usageRowsVersion(snapshotCtx, []string{"sessions", "messages", "image_text"}, "")
+	require.NoError(t, err)
+	require.True(t, ok)
+	filter := db.SearchFilter{Query: "newsearchterm", Limit: db.DefaultSearchLimit}
+	var pushErr error
+	s.beforeSearch = func() {
+		s.beforeSearch = nil
+		appendMessage(t, local, fixtureAlphaID, "newsearchterm", "2026-01-12T05:00:00Z")
+		_, pushErr = syncer.Push(ctx, false, nil)
+	}
+	page, err := s.Search(ctx, filter)
+	require.NoError(t, err)
+	require.NoError(t, pushErr)
+	require.Len(t, page.Results, 1)
+	_, ok = s.searchReads.Get(filter.Slot(), version)
+	require.False(t, ok)
+	_, ok = s.usageDisk.Get("search|"+filter.Slot(), version)
+	require.False(t, ok)
+}
