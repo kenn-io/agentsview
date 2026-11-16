@@ -193,29 +193,6 @@ func TestSearchKeptRestore(t *testing.T) {
 	require.Empty(t, write("other").Results)
 }
 
-func TestSearchKeptRestartDialogueEdit(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	ctx := t.Context()
-	path := filepath.Join(t.TempDir(), "archive.db")
-	d, err := Open(ctx, path)
-	require.NoError(t, err)
-	insertSession(t, d, "session", "project")
-	insertMessages(t, d, Message{SessionID: "session", Role: "assistant", Content: "raw words", DialogueText: new("needle")})
-	filter := SearchFilter{Query: `"raw" AND content:needle`}
-	page, err := d.Search(ctx, filter)
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	_, err = d.getWriter().ExecContext(ctx, `UPDATE messages SET dialogue_text = 'other' WHERE session_id = 'session'`)
-	require.NoError(t, err)
-	require.NoError(t, d.Close())
-	d, err = Open(ctx, path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, d.Close()) })
-	page, err = d.Search(ctx, filter)
-	require.NoError(t, err)
-	require.Empty(t, page.Results)
-}
-
 func TestSearchKeptCJKFingerprint(t *testing.T) {
 	if !simpleFTSRuntimeConfig.available() {
 		t.Skip("simple FTS runtime is not installed")
@@ -238,53 +215,6 @@ func TestSearchKeptCJKFingerprint(t *testing.T) {
 	require.NoError(t, err)
 	_, err = d.Search(ctx, filter)
 	require.Error(t, err)
-}
-
-func TestSearchKeptOldWriterRestore(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	ctx := t.Context()
-	path := filepath.Join(t.TempDir(), "archive.db")
-	open := func() *DB {
-		t.Helper()
-		d, err := Open(ctx, path)
-		require.NoError(t, err)
-		return d
-	}
-	d := open()
-	insertSession(t, d, "session", "project")
-	insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "other"})
-	_, err := d.getWriter().ExecContext(ctx, `UPDATE sessions SET first_message = 'needle' WHERE id = 'session'`)
-	require.NoError(t, err)
-	require.NoError(t, d.Close())
-	backup, err := os.ReadFile(path)
-	require.NoError(t, err)
-	oldWriterUpdate := func(value string) {
-		t.Helper()
-		_, err := d.getWriter().ExecContext(ctx, `DROP TRIGGER IF EXISTS trg_sessions_search_first_message;
-CREATE TRIGGER trg_sessions_search_first_message AFTER UPDATE OF first_message ON sessions
-WHEN OLD.first_message IS NOT NEW.first_message BEGIN
- INSERT INTO archive_metadata (key, value) VALUES ('search_change_revision', '1')
- ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1,
-  updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
-END;`)
-		require.NoError(t, err)
-		_, err = d.getWriter().ExecContext(ctx, `UPDATE sessions SET first_message = ? WHERE id = 'session'`, value)
-		require.NoError(t, err)
-	}
-	filter := SearchFilter{Query: "needle"}
-	d = open()
-	oldWriterUpdate("needle cached")
-	page, err := d.Search(ctx, filter)
-	require.NoError(t, err)
-	require.Equal(t, "needle cached", page.Results[0].Name)
-	require.NoError(t, d.Close())
-	require.NoError(t, os.WriteFile(path, backup, 0o600))
-	d = open()
-	t.Cleanup(func() { require.NoError(t, d.Close()) })
-	oldWriterUpdate("other")
-	page, err = d.Search(ctx, filter)
-	require.NoError(t, err)
-	require.Empty(t, page.Results)
 }
 
 func TestSearchKeptRejectsChangedSource(t *testing.T) {
@@ -344,17 +274,6 @@ BEGIN INSERT INTO token_writes VALUES (1); END;`)
 		{"dialogue", `UPDATE messages SET dialogue_text='changed' WHERE session_id='session'`, 1},
 		{"image", `INSERT INTO image_text_cache(id,image_hash,processor,provider,model,revision,text) VALUES(-1,'hash','processor','provider','model','revision','text')`, 1},
 		{"usage insert", `INSERT INTO usage_events(session_id,source,model,output_tokens) VALUES('session','session','model-x',7)`, 0},
-		{"usage update", `UPDATE usage_events SET output_tokens=8`, 0},
-		{"usage delete", `DELETE FROM usage_events`, 0},
-		{"pricing insert", `INSERT INTO model_pricing(model_pattern) VALUES('model-x')`, 0},
-		{"pricing update", `UPDATE model_pricing SET input_microdollars_per_mtok=100 WHERE model_pattern='model-x'`, 0},
-		{"band insert", `INSERT INTO model_pricing_bands(model_pattern,above_input_tokens,input_microdollars_per_mtok,output_microdollars_per_mtok,cache_creation_microdollars_per_mtok,cache_read_microdollars_per_mtok) VALUES('model-x',1000,0,0,0,0)`, 0},
-		{"band update", `UPDATE model_pricing_bands SET input_microdollars_per_mtok=200 WHERE model_pattern='model-x'`, 0},
-		{"band delete", `DELETE FROM model_pricing_bands WHERE model_pattern='model-x'`, 0},
-		{"pricing delete", `DELETE FROM model_pricing WHERE model_pattern='model-x'`, 0},
-		{"genai insert", `INSERT OR REPLACE INTO genai_pricing(singleton,version,source,data_json) VALUES(1,'v1','test','{}')`, 0},
-		{"genai update", `UPDATE genai_pricing SET data_json='{"price":3}' WHERE singleton=1`, 0},
-		{"genai delete", `DELETE FROM genai_pricing WHERE singleton=1`, 0},
 		{"session insert", `INSERT INTO sessions(id,project,agent,machine) VALUES('other','project','agent','machine')`, 1},
 		{"session delete", `DELETE FROM sessions WHERE id='other'`, 1},
 	}

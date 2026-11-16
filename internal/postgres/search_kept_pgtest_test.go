@@ -6,10 +6,10 @@ import (
 	"context"
 	"strings"
 	"sync/atomic"
+	"testing"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
-	"testing"
 
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
