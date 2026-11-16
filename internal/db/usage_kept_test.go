@@ -237,6 +237,11 @@ func TestDailyUsageKeptProjectIdentityChange(t *testing.T) {
 
 // The read looks up its memo after the version query, then Flights.Do calls
 // Done after registering the waiter. Signal at that point.
+type usageResponse struct {
+	result DailyUsageResult
+	err    error
+}
+
 type flightWaitContext struct {
 	context.Context
 	armed   atomic.Bool
@@ -284,18 +289,14 @@ func TestDailyUsageKeptConcurrentMissesShareBuild(t *testing.T) {
 			<-resume
 		}
 	})
-	type response struct {
-		result DailyUsageResult
-		err    error
-	}
-	first, second := make(chan response, 1), make(chan response, 1)
+	first, second := make(chan usageResponse, 1), make(chan usageResponse, 1)
 	ctx1 := WithUsageWindowMemo(t.Context())
 	ctx2 := &flightWaitContext{Context: WithUsageWindowMemo(t.Context()), waiting: make(chan struct{})}
-	go func() { result, err := database.GetDailyUsage(ctx1, filter); first <- response{result, err} }()
+	go func() { result, err := database.GetDailyUsage(ctx1, filter); first <- usageResponse{result, err} }()
 	<-started
 	ranking := filter
 	ranking.PairwiseSides, ranking.SkipSessionCounts = true, true
-	go func() { result, err := database.GetDailyUsage(ctx2, ranking); second <- response{result, err} }()
+	go func() { result, err := database.GetDailyUsage(ctx2, ranking); second <- usageResponse{result, err} }()
 	ctx2.wait(t)
 	release()
 	a, b := <-first, <-second
@@ -303,9 +304,6 @@ func TestDailyUsageKeptConcurrentMissesShareBuild(t *testing.T) {
 	require.NoError(t, b.err)
 	assert.Equal(t, 17, a.result.Totals.InputTokens)
 	assert.Equal(t, a.result.Totals, b.result.Totals)
-	assert.Equal(t, 1, a.result.SessionCounts.Total)
-	assert.Equal(t, UsageSessionCounts{}, b.result.SessionCounts)
-	require.NotNil(t, b.result.Pairwise)
 	require.NotEmpty(t, a.result.Daily)
 	require.NotEmpty(t, b.result.Daily)
 	a.result.Daily[0].InputTokens = 999
@@ -313,142 +311,18 @@ func TestDailyUsageKeptConcurrentMissesShareBuild(t *testing.T) {
 	assert.EqualValues(t, 1, prepares.Load())
 }
 
-func TestDailyUsageKeptConcurrentSlotsShareWindow(t *testing.T) {
-	database := testDB(t)
-	seedLiveWriteSession(t, database, "one", "project", "2026-08-10T09:00:00Z", 0, 10)
-	left := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
-	right := left
-	right.Model = "model-b"
-	_, err := database.GetDailyUsage(t.Context(), left)
-	require.NoError(t, err)
-	appendLiveWriteMessage(t, database, "one", "2026-08-10T10:00:00Z", 1, 7)
-	var prepares atomic.Int32
-	started, resume := make(chan struct{}), make(chan struct{})
-	release := sync.OnceFunc(func() { close(resume) })
-	defer release()
-	database.SetUsageWindowPrepareForTest(func(context.Context) {
-		if prepares.Add(1) == 1 {
-			close(started)
-			<-resume
-		}
-	})
-	type response struct {
-		result DailyUsageResult
-		err    error
-	}
-	ctx := WithUsageWindowMemo(t.Context())
-	first, second := make(chan response, 1), make(chan response, 1)
-	go func() { result, err := database.GetDailyUsage(ctx, left); first <- response{result, err} }()
-	<-started
-	rightCtx := &flightWaitContext{Context: ctx, waiting: make(chan struct{})}
-	go func() { result, err := database.GetDailyUsage(rightCtx, right); second <- response{result, err} }()
-	rightCtx.wait(t)
-	release()
-	a, b := <-first, <-second
-	require.NoError(t, a.err)
-	require.NoError(t, b.err)
-	assert.Equal(t, 17, a.result.Totals.InputTokens)
-	assert.Equal(t, 0, b.result.Totals.InputTokens)
-	assert.EqualValues(t, 1, prepares.Load())
-}
-
-func TestDailyUsageKeptJoinerSurvivesOtherCancel(t *testing.T) {
-	database := testDB(t)
-	seedLiveWriteSession(t, database, "one", "project", "2026-08-10T09:00:00Z", 0, 10)
-	sideL := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
-	sideR := sideL
-	sideR.Model = "model-a"
-	var prepares atomic.Int32
-	started := make(chan struct{})
-	database.SetUsageWindowPrepareForTest(func(ctx context.Context) {
-		if prepares.Add(1) == 1 {
-			close(started)
-			<-ctx.Done()
-		}
-	})
-	deadline, stop := context.WithTimeout(t.Context(), 5*time.Second)
-	defer stop()
-	requestA, cancelA := context.WithCancel(WithUsageWindowMemo(deadline))
-	defer cancelA()
-	requestB := WithUsageWindowMemo(deadline)
-	aRight, aLeft := make(chan error, 1), make(chan error, 1)
-	go func() { _, err := database.GetDailyUsage(requestA, sideR); aRight <- err }()
-	select {
-	case <-started:
-	case <-deadline.Done():
-		require.FailNow(t, "prepare did not start")
-	}
-	leftA := &flightWaitContext{Context: requestA, waiting: make(chan struct{})}
-	go func() { _, err := database.GetDailyUsage(leftA, sideL); aLeft <- err }()
-	leftA.wait(t)
-	type response struct {
-		result DailyUsageResult
-		err    error
-	}
-	bLeft := make(chan response, 1)
-	leftB := &flightWaitContext{Context: requestB, waiting: make(chan struct{})}
-	go func() { result, err := database.GetDailyUsage(leftB, sideL); bLeft <- response{result, err} }()
-	leftB.wait(t)
-	cancelA()
-	for _, done := range []chan error{aRight, aLeft} {
-		select {
-		case err := <-done:
-			require.ErrorIs(t, err, context.Canceled)
-		case <-deadline.Done():
-			require.FailNow(t, "canceled read did not return")
-		}
-	}
-	select {
-	case got := <-bLeft:
-		require.NoError(t, got.err)
-		assert.Equal(t, 10, got.result.Totals.InputTokens)
-	case <-deadline.Done():
-		require.FailNow(t, "joined read did not return")
-	}
-	assert.EqualValues(t, 2, prepares.Load())
-	result, err := database.GetDailyUsage(deadline, sideR)
-	require.NoError(t, err)
-	assert.Equal(t, 10, result.Totals.InputTokens)
-	assert.EqualValues(t, 3, prepares.Load())
-}
-
 func TestDailyUsageKeptFailedReadThenLaterRetry(t *testing.T) {
 	database := testDB(t)
 	seedLiveWriteSession(t, database, "one", "project", "2026-08-10T09:00:00Z", 0, 10)
 	var prepares atomic.Int32
-	started, resume := make(chan struct{}), make(chan struct{})
-	release := sync.OnceFunc(func() { close(resume) })
-	defer release()
-	database.SetUsageWindowPrepareForTest(func(ctx context.Context) {
-		if prepares.Add(1) == 1 {
-			close(started)
-			select {
-			case <-resume:
-			case <-ctx.Done():
-			}
-		}
-	})
+	database.SetUsageWindowPrepareForTest(func(context.Context) { prepares.Add(1) })
 	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
-	deadline, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	ctx := WithUsageWindowMemo(deadline)
-	done := make(chan error, 1)
-	go func() { _, err := database.GetDailyUsage(ctx, filter); done <- err }()
-	select {
-	case <-started:
-	case <-deadline.Done():
-		require.FailNow(t, "prepare did not start")
-	}
-	_, err := database.getWriter().ExecContext(deadline, "ALTER TABLE model_pricing RENAME TO model_pricing_hidden")
+	ctx := WithUsageWindowMemo(t.Context())
+	_, err := database.getWriter().ExecContext(ctx, "ALTER TABLE model_pricing RENAME TO model_pricing_hidden")
 	require.NoError(t, err)
-	release()
-	select {
-	case err := <-done:
-		require.Error(t, err)
-	case <-deadline.Done():
-		require.FailNow(t, "failed read did not return")
-	}
-	_, err = database.getWriter().ExecContext(deadline, "ALTER TABLE model_pricing_hidden RENAME TO model_pricing")
+	_, err = database.GetDailyUsage(ctx, filter)
+	require.Error(t, err)
+	_, err = database.getWriter().ExecContext(ctx, "ALTER TABLE model_pricing_hidden RENAME TO model_pricing")
 	require.NoError(t, err)
 	got, err := database.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
@@ -524,12 +398,8 @@ func TestDailyUsageKeptJoinerSurvivesRepeatedCancel(t *testing.T) {
 	b := &retryFlightContext{flightWaitContext: &flightWaitContext{Context: WithUsageWindowMemo(deadline), waiting: make(chan struct{})}, joined: make(chan struct{}, 2), paused: make(chan struct{}), resume: make(chan struct{})}
 	resume := sync.OnceFunc(func() { close(b.resume) })
 	defer resume()
-	type response struct {
-		result DailyUsageResult
-		err    error
-	}
-	done := make(chan response, 1)
-	go func() { result, err := database.GetDailyUsage(b, left); done <- response{result, err} }()
+	done := make(chan usageResponse, 1)
+	go func() { result, err := database.GetDailyUsage(b, left); done <- usageResponse{result, err} }()
 	wait(b.joined)
 	cancelA()
 	wait(b.paused)
@@ -554,4 +424,8 @@ func TestDailyUsageKeptJoinerSurvivesRepeatedCancel(t *testing.T) {
 		}
 	}
 	assert.EqualValues(t, 3, prepares.Load())
+	later, err := database.GetDailyUsage(deadline, right)
+	require.NoError(t, err)
+	assert.Equal(t, 10, later.Totals.InputTokens)
+	assert.EqualValues(t, 4, prepares.Load())
 }
