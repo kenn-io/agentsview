@@ -321,7 +321,7 @@ func TestDailyUsageKeptConcurrentSlotsShareWindow(t *testing.T) {
 	seedLiveWriteSession(t, database, "one", "project", "2026-08-10T09:00:00Z", 0, 10)
 	left := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
 	right := left
-	right.Model = "model-a"
+	right.Model = "model-b"
 	_, err := database.GetDailyUsage(t.Context(), left)
 	require.NoError(t, err)
 	appendLiveWriteMessage(t, database, "one", "2026-08-10T10:00:00Z", 1, 7)
@@ -351,7 +351,7 @@ func TestDailyUsageKeptConcurrentSlotsShareWindow(t *testing.T) {
 	require.NoError(t, a.err)
 	require.NoError(t, b.err)
 	assert.Equal(t, 17, a.result.Totals.InputTokens)
-	assert.Equal(t, 17, b.result.Totals.InputTokens)
+	assert.Equal(t, 0, b.result.Totals.InputTokens)
 	assert.EqualValues(t, 1, prepares.Load())
 }
 
