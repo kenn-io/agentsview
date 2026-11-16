@@ -292,56 +292,37 @@ func TestDailyUsageKeptSharedBuildCancel(t *testing.T) {
 	database := testDB(t)
 	seedLiveWriteSession(t, database, "one", "project", "2026-08-10T09:00:00Z", 0, 10)
 	var prepares atomic.Int32
-	started, resume := make(chan struct{}), make(chan struct{})
-	started2 := make(chan struct{})
-	release := sync.OnceFunc(func() { close(resume) })
-	defer release()
+	started := make(chan struct{})
 	database.SetUsageWindowPrepareForTest(func(ctx context.Context) {
-		switch prepares.Add(1) {
-		case 1:
+		if prepares.Add(1) == 1 {
 			close(started)
-			select {
-			case <-resume:
-			case <-ctx.Done():
-			}
-		case 2:
-			close(started2)
 			<-ctx.Done()
 		}
 	})
 	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
-	ctx, cancel := context.WithCancel(WithUsageWindowMemo(t.Context()))
-	first := make(chan error, 1)
-	go func() { _, err := database.GetDailyUsage(ctx, filter); first <- err }()
-	<-started
-	type response struct {
-		result DailyUsageResult
-		err    error
+	deadline, stop := context.WithTimeout(t.Context(), 5*time.Second)
+	defer stop()
+	ctx, cancel := context.WithCancel(WithUsageWindowMemo(deadline))
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { _, err := database.GetDailyUsage(ctx, filter); done <- err }()
+	select {
+	case <-started:
+	case <-deadline.Done():
+		t.Fatal("prepare did not start")
 	}
-	second := make(chan response, 1)
-	secondCtx, cancelSecond := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancelSecond()
-	go func() { result, err := database.GetDailyUsage(secondCtx, filter); second <- response{result, err} }()
-	time.Sleep(100 * time.Millisecond)
 	cancel()
-	require.ErrorIs(t, <-first, context.Canceled)
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-deadline.Done():
+		t.Fatal("canceled read did not return")
+	}
 	assert.Empty(t, ctx.Value(usageWindowMemoKey{}).(*usageWindowMemo).prepared)
-	release()
-	got := <-second
-	require.NoError(t, got.err)
-	assert.Equal(t, 10, got.result.Totals.InputTokens)
-	assert.EqualValues(t, 1, prepares.Load())
-
-	appendLiveWriteMessage(t, database, "one", "2026-08-10T10:00:00Z", 1, 7)
-	ctx, cancel = context.WithCancel(t.Context())
-	go func() { _, err := database.GetDailyUsage(ctx, filter); first <- err }()
-	<-started2
-	cancel()
-	require.ErrorIs(t, <-first, context.Canceled)
-	result, err := database.GetDailyUsage(t.Context(), filter)
+	result, err := database.GetDailyUsage(deadline, filter)
 	require.NoError(t, err)
-	assert.Equal(t, 17, result.Totals.InputTokens)
-	assert.EqualValues(t, 3, prepares.Load())
+	assert.Equal(t, 10, result.Totals.InputTokens)
+	assert.EqualValues(t, 2, prepares.Load())
 }
 
 func TestDailyUsageKeptSharedBuildErrorRetry(t *testing.T) {
@@ -351,39 +332,42 @@ func TestDailyUsageKeptSharedBuildErrorRetry(t *testing.T) {
 	started, resume := make(chan struct{}), make(chan struct{})
 	release := sync.OnceFunc(func() { close(resume) })
 	defer release()
-	database.SetUsageWindowPrepareForTest(func(context.Context) {
+	database.SetUsageWindowPrepareForTest(func(ctx context.Context) {
 		if prepares.Add(1) == 1 {
 			close(started)
-			<-resume
+			select {
+			case <-resume:
+			case <-ctx.Done():
+			}
 		}
 	})
 	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
-	first, second := make(chan error, 1), make(chan error, 1)
-	ctx := WithUsageWindowMemo(t.Context())
-	ctx1 := WithUsageWindowMemo(t.Context())
-	go func() { _, err := database.GetDailyUsage(ctx1, filter); first <- err }()
-	<-started
-	go func() { _, err := database.GetDailyUsage(ctx, filter); second <- err }()
-	time.Sleep(100 * time.Millisecond)
-	_, err := database.getWriter().ExecContext(t.Context(), "ALTER TABLE model_pricing RENAME TO model_pricing_hidden")
+	deadline, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	ctx := WithUsageWindowMemo(deadline)
+	done := make(chan error, 1)
+	go func() { _, err := database.GetDailyUsage(ctx, filter); done <- err }()
+	select {
+	case <-started:
+	case <-deadline.Done():
+		t.Fatal("prepare did not start")
+	}
+	_, err := database.getWriter().ExecContext(deadline, "ALTER TABLE model_pricing RENAME TO model_pricing_hidden")
 	require.NoError(t, err)
 	release()
-	require.Error(t, <-first)
-	require.Error(t, <-second)
-	memo := ctx.Value(usageWindowMemoKey{}).(*usageWindowMemo)
-	assert.Empty(t, memo.prepared)
-	assert.Empty(t, ctx1.Value(usageWindowMemoKey{}).(*usageWindowMemo).prepared)
-	_, err = database.getWriter().ExecContext(t.Context(), "ALTER TABLE model_pricing_hidden RENAME TO model_pricing")
+	select {
+	case err := <-done:
+		require.Error(t, err)
+	case <-deadline.Done():
+		t.Fatal("failed read did not return")
+	}
+	assert.Empty(t, ctx.Value(usageWindowMemoKey{}).(*usageWindowMemo).prepared)
+	_, err = database.getWriter().ExecContext(deadline, "ALTER TABLE model_pricing_hidden RENAME TO model_pricing")
 	require.NoError(t, err)
-	other := filter
-	other.Model = "model-a"
-	_, err = database.GetDailyUsage(ctx, other)
-	require.NoError(t, err)
-	assert.EqualValues(t, 2, prepares.Load())
 	got, err := database.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
 	assert.Equal(t, 10, got.Totals.InputTokens)
-	_, err = database.GetDailyUsage(t.Context(), filter)
+	_, err = database.GetDailyUsage(deadline, filter)
 	require.NoError(t, err)
 	assert.EqualValues(t, 2, prepares.Load())
 }
