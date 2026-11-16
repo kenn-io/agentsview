@@ -53,6 +53,7 @@ type Store struct {
 	usageDisk         kept.Disk
 	analyticsReads    kept.Reads[[]byte]
 	searchReads       kept.Reads[db.SearchPage]
+	afterSearchRead   func()
 	dailyUsage        kept.Reads[db.DailyUsageResult]
 	planUsage         kept.Reads[*db.PlanUsageCountSummary]
 	topUsage          kept.Reads[[]db.TopSessionEntry]
@@ -746,7 +747,43 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 	if s.path != "" {
 		s.checkMirrorReplacement(ctx, nil)
 	}
-	return s.searchReads.Do(ctx, f.Slot(), s.keptVersion(), func(ctx context.Context) (db.SearchPage, error) { return s.search(ctx, f) })
+	version := s.keptVersion()
+	return s.searchReads.DoChecked(ctx, f.Slot(), version, func(ctx context.Context) (db.SearchPage, bool, error) {
+		current := func() bool { return ctx.Err() == nil && version != "" && version == s.keptVersion() }
+		if s.path != "" && s.usageDisk.Enabled() {
+			if identity, ok := s.searchDiskVersion(ctx); ok {
+				page, retain, err := kept.LoadJSON(&s.usageDisk, "search|"+f.Slot(), identity, current, func() (db.SearchPage, error) { return s.search(ctx, f) })
+				return page, retain && current(), err
+			}
+		}
+		page, err := s.search(ctx, f)
+		return page, current(), err
+	})
+}
+
+func (s *Store) searchDiskVersion(ctx context.Context) (string, bool) {
+	versions, err := db.ScanTrendVersions(s.queryContext(ctx, `SELECT id, COALESCE(agentsview_push_fingerprint, '') FROM sessions WHERE deleted_at IS NULL`))
+	if err != nil {
+		return "", false
+	}
+	ids := make([]string, 0, len(versions))
+	for id, fingerprint := range versions {
+		if fingerprint == "" {
+			return "", false
+		}
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	pairs := make([][2]string, 0, len(ids))
+	for _, id := range ids {
+		pairs = append(pairs, [2]string{id, versions[id]})
+	}
+	data, err := json.Marshal(pairs)
+	if err != nil {
+		return "", false
+	}
+	sum := sha256.Sum256(data)
+	return trendsPartsIdentity() + "|" + hex.EncodeToString(sum[:]), true
 }
 
 func (s *Store) search(ctx context.Context, f db.SearchFilter) (db.SearchPage, error) {
@@ -820,6 +857,9 @@ func (s *Store) search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 	// name_matches checks for an embeddable message only in name_candidates.
 	// A correlated EXISTS makes DuckDB evaluate the system-prefix predicate
 	// over every message before the semi join narrows it.
+	if s.afterSearchRead != nil {
+		s.afterSearchRead()
+	}
 	rows, err := s.queryContext(ctx, `
 		WITH msg_ranked AS (
 			SELECT m.session_id,
