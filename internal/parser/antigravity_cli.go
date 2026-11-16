@@ -684,7 +684,7 @@ func appendMissingAntigravityHistoryMessages(
 					sameTurn(existing[i].ts, msg.Timestamp) {
 					existing[i].used = true
 					matched[hIdx] = true
-					if dbMessages[existing[i].idx].Timestamp.IsZero() {
+					if dbMessages[existing[i].idx].Timestamp.IsZero() && !slices.ContainsFunc(dbMessages[existing[i].idx+1:], func(m ParsedMessage) bool { return m.Timestamp.IsZero() }) {
 						dbMessages[existing[i].idx].Timestamp = msg.Timestamp
 					}
 					break

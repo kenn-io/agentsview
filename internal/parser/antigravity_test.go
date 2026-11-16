@@ -518,6 +518,39 @@ func TestAntigravityCLIMatchedHistoryKeepsTurnOrder(t *testing.T) {
 	assert.Equal(t, "second prompt", msgs[2].Content)
 }
 
+func TestAntigravityCLIPartialHistoryKeepsTurnOrder(t *testing.T) {
+	root := t.TempDir()
+	id := "33333333-4444-5555-6666-777777777777"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityTestDB(t, dbPath)
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	for i, prompt := range []string{"first prompt", "second prompt"} {
+		item := encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: []byte(prompt)}})
+		input := encodePB([]pbField{{num: 3, wire: pbWireBytes, bytes: item}})
+		payload := encodePB([]pbField{{num: 19, wire: pbWireBytes, bytes: input}})
+		if i == 0 {
+			mustExec(t, db, `UPDATE steps SET step_payload = ? WHERE idx = 0`, payload)
+		} else {
+			mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`, 2, 14, payload)
+		}
+	}
+	reply := encodePB([]pbField{{num: 17, wire: pbWireBytes, bytes: []byte("assistant reply content body")}})
+	mustExec(t, db, `UPDATE steps SET step_payload = ? WHERE idx = 1`, reply)
+	require.NoError(t, db.Close())
+	mustWrite(t, filepath.Join(root, "history.jsonl"),
+		[]byte(`{"display":"first prompt","timestamp":1779000000000,`+
+			`"conversationId":"`+id+`"}`))
+	sess, msgs, err := parseAntigravityCLITestSession(t, dbPath, "", "test-machine")
+	require.NoError(t, err)
+	require.Len(t, msgs, 3)
+	assert.Equal(t, "first prompt", msgs[0].Content)
+	assert.Equal(t, "assistant reply content body", msgs[1].Content)
+	assert.Equal(t, "second prompt", msgs[2].Content)
+	assert.Equal(t, "first prompt", sess.FirstMessage)
+}
+
 func TestAntigravityCLIProjectFallbackPromptAndProximity(t *testing.T) {
 	root := t.TempDir()
 	id := "f0f0f0f0-f1f1-f2f2-f3f3-f4f4f4f4f4f4"
