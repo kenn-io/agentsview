@@ -140,7 +140,7 @@ func TestUsageCarry(t *testing.T) {
 				require.NoError(t, err)
 				_, afterTop := usageQueryCounts(t, store)
 				if scenario == "raw merge" {
-					require.LessOrEqual(t, rawScans()-scansBefore, uint64(1), "daily and top should share the publication proof")
+					require.EqualValues(t, 2, rawScans()-scansBefore, "daily and top each run a publication proof")
 				}
 				if scenario == "healthy" || scenario == "raw merge" || scenario == "snapshot merge" {
 					require.Equal(t, beforeResults, afterDaily)

@@ -2685,6 +2685,8 @@ var chUsageCarryTables = slices.Concat(
 	chRawHostUsageTables, []string{"usage_price_models"},
 )
 
+// The raw key tracks snapshot content separately so same-value rewrites keep it stable.
+// The carry proof still checks snapshot parts for changes during the proof.
 var chUsageRawTables = slices.DeleteFunc(slices.Clone(chUsageCarryTables), func(table string) bool {
 	return table == usageSessionSnapshotTable
 })
