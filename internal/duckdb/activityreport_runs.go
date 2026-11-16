@@ -42,7 +42,6 @@ func (e activityRunsEntry) bytes() int64 {
 // fingerprint changes whenever a session's messages or tool events do.
 type activityRunsMemo struct {
 	loadOnce sync.Once
-	gap      float64
 	dirty    bool
 	mu       sync.Mutex
 	entries  map[activityRunsKey]*list.Element
@@ -100,10 +99,7 @@ type activityRunsPart struct {
 }
 
 func (m *activityRunsMemo) load(disk *kept.Disk, gap float64) {
-	m.mu.Lock()
-	m.gap = gap
-	m.mu.Unlock()
-	parts := kept.LoadParts[activityRunsPart](disk, "activity-runs", fmt.Sprintf("activity-runs-1|%g", gap))
+	parts := kept.LoadParts[activityRunsPart](disk, "activity-runs", "activity-runs-1")
 	entries := make([]activityRunsEntry, 0, len(parts))
 	for id, part := range parts {
 		if part.Present && part.Fingerprint != "" {
@@ -122,17 +118,13 @@ func (m *activityRunsMemo) save(disk *kept.Disk) {
 		m.mu.Unlock()
 		return
 	}
-	gap := m.gap
 	var rows []kept.Part[activityRunsPart]
 	for key, element := range m.entries {
-		if key.gapCap != gap {
-			continue
-		}
 		e := element.Value.(activityRunsEntry)
 		rows = append(rows, kept.Part[activityRunsPart]{ID: key.id, Fingerprint: e.version, Present: true, Value: activityRunsPart{e.runs, e.users, e.assistants}})
 	}
 	m.mu.Unlock()
-	kept.SaveParts(disk, "activity-runs", fmt.Sprintf("activity-runs-1|%g", gap), rows, func(p activityRunsPart) int64 { return p.Runs.Bytes() + 8*int64(len(p.Users)+len(p.Assistants)) })
+	kept.SaveParts(disk, "activity-runs", "activity-runs-1", rows, func(p activityRunsPart) int64 { return p.Runs.Bytes() + 8*int64(len(p.Users)+len(p.Assistants)) })
 }
 
 // activityReportRuns returns the sessions' runs clipped to q, in start

@@ -81,10 +81,14 @@ func (s *Store) sumActivityUsage(
 			}
 		}
 		if valid {
+			block, err := pricing.BuildBlock()
+			if err != nil {
+				return nil, err
+			}
 			s.handleMu.RLock()
 			price := s.pricingDigest
 			s.handleMu.RUnlock()
-			data, err := json.Marshal([]any{versions, price, pricingpkg.ConfiguredAliasesDigest()})
+			data, err := json.Marshal([]any{versions, block.Digest, price, pricingpkg.ConfiguredAliasesDigest()})
 			if err != nil {
 				return nil, err
 			}

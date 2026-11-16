@@ -556,3 +556,45 @@ func TestPartialActivityEmptyFingerprintDoesNotReuseDisk(t *testing.T) {
 	}
 	require.Equal(t, 2, *reads)
 }
+
+func TestPartialActivityRepricesAfterMirrorPush(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	writeUsageMirror(t, path, `INSERT INTO model_pricing (model_pattern, output_microdollars_per_mtok) VALUES ('kept-model', 10000000)`)
+	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	open := func() *Store {
+		s, err := NewStore(t.Context(), path)
+		require.NoError(t, err)
+		require.NoError(t, s.OpenActivityReportDisk(t.Context()))
+		return s
+	}
+	store := open()
+	first := keptActivityBuild(t, store, q, true)
+	require.Equal(t, money.MustParseDollars("0.005"), activity.ReportWithSessions(first).Totals.Cost)
+	require.NoError(t, store.Close())
+	writeUsageMirror(t, path, `UPDATE model_pricing SET output_microdollars_per_mtok = 20000000 WHERE model_pattern = 'kept-model'`)
+	store = open()
+	reads := observeActivityUsageReads(t)
+	got := keptActivityBuild(t, store, q, true)
+	require.Equal(t, 1, *reads)
+	require.Equal(t, money.MustParseDollars("0.01"), activity.ReportWithSessions(got).Totals.Cost)
+	require.NoError(t, store.Close())
+	writeUsageMirror(t, path, `INSERT INTO model_pricing_bands (model_pattern, above_input_tokens, output_microdollars_per_mtok) VALUES ('kept-model', 1, 30000000)`)
+	store = open()
+	*reads = 0
+	got = keptActivityBuild(t, store, q, true)
+	require.Equal(t, 1, *reads)
+	fresh := NewStoreFromDB(store.DB())
+	requireKeptActivityEqual(t, keptActivityBuild(t, fresh, q, true), got)
+	require.NoError(t, store.Close())
+	writeUsageMirror(t, path, `UPDATE genai_pricing SET version = '', source = 'fetched', data_json = '[{"id":"test","name":"Test","api_pattern":"https://example.invalid","model_match":{"starts_with":"other"},"models":[{"id":"other","match":{"equals":"other"},"prices":{"output_mtok":8}}]}]' WHERE singleton = 1`)
+	store = open()
+	defer store.Close()
+	*reads = 0
+	got = keptActivityBuild(t, store, q, true)
+	require.Equal(t, 1, *reads)
+	fresh = NewStoreFromDB(store.DB())
+	requireKeptActivityEqual(t, keptActivityBuild(t, fresh, q, true), got)
+}
