@@ -337,12 +337,16 @@ func newVectorEncoder(
 	if err != nil {
 		return nil, fmt.Errorf("[vector.embeddings.servers.%s] %w", name, err)
 	}
+	apiKey, err := server.APIKey()
+	if err != nil {
+		return nil, fmt.Errorf("[vector.embeddings.servers.%s] %w", name, err)
+	}
 	enc, err := vector.NewEncoder(vector.EncoderConfig{
 		Model:               c.EmbedModel(),
 		Roles:               c.EmbedRoles(),
 		Deployment:          server.EmbedDeployment(),
 		Transport:           transport,
-		APIKey:              server.APIKey(),
+		APIKey:              apiKey,
 		OllamaMetalRecovery: server.OllamaCPUFallback,
 		MaxRetries:          server.MaxRetries,
 		RetryRateLimits:     retryRateLimits,

@@ -6,6 +6,7 @@ import (
 	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/storage"
+	"go.kenn.io/kit/safefileio"
 )
 
 func TestResolveDuckDBPushProjects(t *testing.T) {
@@ -465,23 +467,50 @@ func duckDBPushDaemonServerAt(
 }
 
 func TestResolveQuackServeToken(t *testing.T) {
+	secretDir := t.TempDir()
+	// Secret files under a directory others can write are refused.
+	require.NoError(t, os.Chmod(secretDir, 0o700))
+	tokenFile := filepath.Join(secretDir, "quack-token")
+	file, err := safefileio.CreatePrivateFile(tokenFile)
+	require.NoError(t, err)
+	_, err = file.WriteString("file-token\n")
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+	missingFile := filepath.Join(secretDir, "absent")
+
 	tests := []struct {
 		name       string
 		flagToken  string
-		configured string
+		configured config.DuckDBConfig
 		wantToken  string
 		wantErr    string
 	}{
 		{
 			name:       "flag token wins",
 			flagToken:  "flag-token",
-			configured: "config-token",
+			configured: config.DuckDBConfig{Token: "config-token"},
 			wantToken:  "flag-token",
 		},
 		{
 			name:       "configured token used",
-			configured: "config-token",
+			configured: config.DuckDBConfig{Token: "config-token"},
 			wantToken:  "config-token",
+		},
+		{
+			name:       "token_file used",
+			configured: config.DuckDBConfig{TokenFile: tokenFile},
+			wantToken:  "file-token",
+		},
+		{
+			name:       "flag token wins over an unreadable token_file",
+			flagToken:  "flag-token",
+			configured: config.DuckDBConfig{TokenFile: missingFile},
+			wantToken:  "flag-token",
+		},
+		{
+			name:       "unreadable token_file is an error",
+			configured: config.DuckDBConfig{TokenFile: missingFile},
+			wantErr:    "[duckdb] token_file",
 		},
 		{
 			name:    "requires explicit token",

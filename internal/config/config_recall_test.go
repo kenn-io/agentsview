@@ -262,13 +262,13 @@ func TestRecallExtractConfigValidate(t *testing.T) {
 
 func TestRecallExtractServerConfigAPIKeyEnv(t *testing.T) {
 	var server RecallExtractServerConfig
-	assert.Empty(t, server.APIKey(), "no env var configured")
+	assert.Empty(t, requireAPIKey(t, server), "no env var configured")
 
 	server.APIKeyEnv = "AGENTSVIEW_TEST_RECALL_API_KEY"
-	assert.Empty(t, server.APIKey(), "configured env var not set in environment")
+	assert.Empty(t, requireAPIKey(t, server), "configured env var not set in environment")
 
 	t.Setenv("AGENTSVIEW_TEST_RECALL_API_KEY", "secret-123")
-	assert.Equal(t, "secret-123", server.APIKey())
+	assert.Equal(t, "secret-123", requireAPIKey(t, server))
 }
 
 // TestRecallExtractValidationRedactsEndpointCredentials pins that
