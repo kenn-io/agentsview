@@ -2308,6 +2308,9 @@ func replaceSessionMessagesTx(
 			return err
 		}
 	}
+	if err := journalConversationToolSessionTx(tx, sessionID); err != nil {
+		return err
+	}
 
 	return restorePinsTx(tx, sessionID, pins)
 }
