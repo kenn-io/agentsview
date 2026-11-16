@@ -98,8 +98,6 @@ func (s *Store) checkMirrorReplacement(ctx context.Context, onEvent func(err err
 	if err != nil {
 		return
 	}
-	PrimeFileIdentity(info)
-
 	s.handleMu.RLock()
 	prev := s.fileInfo
 	s.handleMu.RUnlock()
