@@ -31,7 +31,8 @@ decision.
    or empty results, try short `mode: substring` queries with key terms or
    synonyms.{{end}} Preserve `scope`, inclusion, and current-session flags. Treat rank and score as
    relevance signals, never as truth probabilities.
-3. Choose the top 2-5 relevant sessions. Call `{{.ToolPrefix}}get_messages`{{if .AlternateToolPrefix}} or
+3. Choose the top 2-5 relevant sessions. Call{{if .AlternateToolPrefix}}
+  {{end}} `{{.ToolPrefix}}get_messages`{{if .AlternateToolPrefix}} or
    `{{.AlternateToolPrefix}}get_messages`, whichever is available,{{end}}
    to read each source around the relevant ordinal range.
 4. Follow `next_from` or expand the message range when the relevant decision or
