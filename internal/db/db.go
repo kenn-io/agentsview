@@ -1510,12 +1510,20 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 		return nil, errors.Join(err, d.CloseContext(ctx))
 	}
 	d.mu.Lock()
-	_, err = d.getWriter().ExecContext(ctx, sessionClassificationJournalTriggerSQL)
+	tx, err := d.getWriter().BeginTx(ctx, nil)
 	if err == nil {
-		_, err = d.getWriter().ExecContext(ctx, usageChangeJournalTriggerSQL)
-	}
-	if err == nil {
-		_, err = d.getWriter().ExecContext(ctx, dashboardGenerationTriggerSQL)
+		_, err = tx.ExecContext(ctx, sessionClassificationJournalTriggerSQL)
+		if err == nil {
+			_, err = tx.ExecContext(ctx, usageChangeJournalTriggerSQL)
+		}
+		if err == nil {
+			_, err = tx.ExecContext(ctx, dashboardGenerationTriggerSQL)
+		}
+		if err == nil {
+			err = tx.Commit()
+		} else {
+			_ = tx.Rollback()
+		}
 	}
 	if err == nil {
 		err = ensureConversationSchemaLocked(ctx, d.getWriter())

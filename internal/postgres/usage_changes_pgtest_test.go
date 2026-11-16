@@ -494,7 +494,11 @@ func TestUsageJournalUpgradesHistoryToken(t *testing.T) {
     END IF;`, 1)
 	quotedSchema, err := quoteIdentifier(syncer.schema)
 	require.NoError(t, err)
-	_, err = store.pg.ExecContext(ctx, fmt.Sprintf(`UPDATE sync_metadata SET value='1' WHERE key='usage_change_journal_version';
+	_, err = store.pg.ExecContext(ctx, fmt.Sprintf(`DROP FUNCTION mark_dashboard_sessions() CASCADE;
+ DROP FUNCTION mark_dashboard_messages() CASCADE;
+ DROP FUNCTION mark_dashboard_tool_calls() CASCADE;
+ DELETE FROM sync_metadata WHERE key IN ('dashboard_common','dashboard_tools','dashboard_velocity','dashboard_signals','dashboard_scope','dashboard_velocity_join');
+ UPDATE sync_metadata SET value='1' WHERE key='usage_change_journal_version';
  DELETE FROM sync_metadata WHERE key='usage_history_token';
  CREATE OR REPLACE FUNCTION stamp_usage_change() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
  SET search_path = pg_catalog, %s, pg_temp AS $journal$%s$journal$`, quotedSchema, oldStamp))
@@ -502,7 +506,7 @@ func TestUsageJournalUpgradesHistoryToken(t *testing.T) {
 	require.NoError(t, EnsureSchema(ctx, syncer.pg, syncer.schema))
 	var version, before string
 	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT (SELECT value FROM sync_metadata WHERE key='usage_change_journal_version'), (SELECT value FROM sync_metadata WHERE key='usage_history_token')`).Scan(&version, &before))
-	require.Equal(t, "2", version)
+	require.Equal(t, "3", version)
 	require.NotEmpty(t, before)
 	_, err = store.pg.ExecContext(ctx, `INSERT INTO sessions(id,machine,project,agent) VALUES('history-token','machine','project','codex')`)
 	require.NoError(t, err)

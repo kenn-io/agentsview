@@ -35,6 +35,13 @@ func (s *Store) keptAnalyticsVersion(ctx context.Context, slot string) (string, 
 }
 
 func keptAnalyticsWith[T any](ctx context.Context, s *Store, panel string, f db.AnalyticsFilter, versionFor func(context.Context, string) (string, string), load func(context.Context, db.AnalyticsFilter) (T, error)) (T, error) {
+	if panel == "signals" {
+		original := load
+		load = func(ctx context.Context, f db.AnalyticsFilter) (T, error) {
+			s.runtimeState().frustrationMarkers.Swap(func() {})
+			return original(ctx, f)
+		}
+	}
 	if f.ActiveSince != "" || f.Timezone == "Local" || db.TerminationUsesTime(f.Termination) {
 		return load(ctx, f)
 	}
@@ -44,7 +51,14 @@ func keptAnalyticsWith[T any](ctx context.Context, s *Store, panel string, f db.
 	}
 	slot := panel + "|" + string(key)
 	version, savedVersion := versionFor(ctx, slot)
-	if !db.SavedPanel(panel) {
+	if db.SavedPanel(panel) && version != "" && !s.hostedRelations && s.readTx == nil {
+		panelVersion := s.keptDashboardVersion(ctx, panel, f)
+		if panelVersion != "" {
+			version, savedVersion = panelVersion, panelVersion
+		} else {
+			savedVersion = ""
+		}
+	} else {
 		savedVersion = ""
 	}
 	if savedVersion != "" {

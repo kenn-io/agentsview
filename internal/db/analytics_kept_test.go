@@ -351,6 +351,270 @@ func TestAnalyticsKeptRestart(t *testing.T) {
 	require.Equal(t, 1, calls)
 }
 
+func TestAnalyticsKeptScoreOnly(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "session", "project", func(s *Session) {
+		s.StartedAt = new("2024-06-01T09:00:00Z")
+	})
+	message := asstMsgAt("session", 0, "read", "2024-06-01T09:00:00Z")
+	message.ToolCalls = []ToolCall{{SessionID: "session", ToolName: "Read", Category: "Read"}}
+	insertMessages(t, d, message)
+	updateSignals(t, d, "session", SessionSignalUpdate{HealthScore: new(30)})
+	f := AnalyticsFilter{Timezone: "UTC"}
+	read := func(store *DB, counts *[3]int) SignalsAnalyticsResponse {
+		tools, err := keptAnalytics(ctx, store, "tools", f, func(ctx context.Context, f AnalyticsFilter) (ToolsAnalyticsResponse, error) {
+			counts[0]++
+			return store.analyticsTools(ctx, f)
+		})
+		require.NoError(t, err)
+		require.Equal(t, 1, tools.TotalCalls)
+		_, err = keptAnalytics(ctx, store, "velocity", f, func(ctx context.Context, f AnalyticsFilter) (VelocityResponse, error) {
+			counts[1]++
+			return store.analyticsVelocity(ctx, f)
+		})
+		require.NoError(t, err)
+		signals, err := keptAnalytics(ctx, store, "signals", f, func(ctx context.Context, f AnalyticsFilter) (SignalsAnalyticsResponse, error) {
+			counts[2]++
+			return store.analyticsSignals(ctx, f)
+		})
+		require.NoError(t, err)
+		return signals
+	}
+	counts := [3]int{}
+	first := read(d, &counts)
+	require.NotNil(t, first.AvgHealthScore)
+	require.InDelta(t, 30, *first.AvgHealthScore, 0)
+	require.NoError(t, d.UpdateSessionSignals(ctx, "session", SessionSignalUpdate{HealthScore: new(60)}))
+	counts = [3]int{}
+	warm := read(d, &counts)
+	require.NotNil(t, warm.AvgHealthScore)
+	require.InDelta(t, 60, *warm.AvgHealthScore, 0)
+	assert.Equal(t, [3]int{0, 0, 1}, counts)
+	require.NoError(t, d.UpdateSessionSignals(ctx, "session", SessionSignalUpdate{HealthScore: new(90)}))
+	reopened, err := OpenIsolated(ctx, d.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+	counts = [3]int{}
+	after := read(reopened, &counts)
+	require.NotNil(t, after.AvgHealthScore)
+	require.InDelta(t, 90, *after.AvgHealthScore, 0)
+	assert.Equal(t, [3]int{0, 0, 1}, counts)
+}
+
+func TestAnalyticsKeptPromptRepair(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		t.Run(map[bool]string{false: "valid token", true: "missing token"}[missing], func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			insertSession(t, d, "session", "project")
+			insertMessages(t, d, Message{SessionID: "session", Ordinal: 0, Role: "user", Content: "please fix this", Timestamp: "2024-06-01T09:00:00Z"})
+			updateSignals(t, d, "session", SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}})
+			before, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
+			require.NoError(t, err)
+			require.Zero(t, before.QualityHealth.Totals.FrustrationMarkerCount)
+			_, err = d.getWriter().ExecContext(ctx, `UPDATE messages SET content='this is broken' WHERE session_id='session' AND ordinal=0`)
+			require.NoError(t, err)
+			if missing {
+				_, err = d.getWriter().ExecContext(ctx, `DELETE FROM archive_metadata WHERE key='dashboard_signals'`)
+				require.NoError(t, err)
+			}
+			after, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
+			require.NoError(t, err)
+			require.Equal(t, 1, after.QualityHealth.Totals.FrustrationMarkerCount)
+			_, err = d.getWriter().ExecContext(ctx, `UPDATE messages SET source_subtype='tool_result' WHERE session_id='session' AND ordinal=0`)
+			require.NoError(t, err)
+			after, err = d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
+			require.NoError(t, err)
+			require.Zero(t, after.QualityHealth.Totals.FrustrationMarkerCount)
+		})
+	}
+}
+
+func TestAnalyticsKeptSessionSelectionChanges(t *testing.T) {
+	for _, tc := range []struct{ name, query string }{
+		{"relationship", `UPDATE sessions SET relationship_type='subagent' WHERE id='session'`},
+		{"nullable date", `UPDATE sessions SET started_at=NULL WHERE id='session'`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			insertSession(t, d, "session", "project", func(s *Session) { s.StartedAt = new("2026-06-14T10:00:00Z"); s.CreatedAt = "2026-06-15T10:00:00Z" })
+			f := AnalyticsFilter{Timezone: "UTC", From: "2026-06-14", To: "2026-06-14"}
+			before, err := d.GetAnalyticsSignals(ctx, f)
+			require.NoError(t, err)
+			require.Equal(t, 1, before.UnscoredSessions)
+			_, err = d.getWriter().ExecContext(ctx, tc.query)
+			require.NoError(t, err)
+			after, err := d.GetAnalyticsSignals(ctx, f)
+			require.NoError(t, err)
+			require.Zero(t, after.UnscoredSessions)
+		})
+	}
+}
+
+func TestAnalyticsKeptSourceEvents(t *testing.T) {
+	for _, tc := range []struct {
+		name, query string
+		loads       [3]int
+		tool        string
+		calls       int
+		chars       float64
+		frustration int
+	}{
+		{"length", `UPDATE messages SET content_length=20 WHERE ordinal=1`, [3]int{0, 1, 0}, "Read", 1, 20, 0},
+		{"tool name", `UPDATE tool_calls SET tool_name='Grep'`, [3]int{1, 0, 0}, "Grep", 1, 10, 0},
+		{"prompt", `UPDATE messages SET content='this is broken' WHERE ordinal=0`, [3]int{0, 0, 1}, "Read", 1, 10, 1},
+		{"tool insert", `INSERT INTO tool_calls(message_id,session_id,tool_name,category) SELECT id,session_id,'Bash','Bash' FROM messages WHERE ordinal=1`, [3]int{1, 1, 0}, "Read", 2, 10, 0},
+		{"tool delete", `DELETE FROM tool_calls`, [3]int{1, 1, 0}, "", 0, 10, 0},
+		{"message insert", `INSERT INTO messages(session_id,ordinal,role,content,content_length,timestamp) VALUES('session',2,'assistant','answer',20,'2024-06-01T09:02:00Z')`, [3]int{1, 1, 1}, "Read", 1, 15, 0},
+		{"message delete", `DELETE FROM messages WHERE ordinal=0`, [3]int{1, 1, 1}, "Read", 1, 0, 0},
+		{"price", `INSERT INTO model_pricing(model_pattern,output_microdollars_per_mtok) VALUES('model-a',100)`, [3]int{}, "Read", 1, 10, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			insertSession(t, d, "session", "project", func(s *Session) { s.StartedAt = new("2024-06-01T09:00:00Z"); s.MessageCount = 2 })
+			assistant := asstMsgAt("session", 1, "1234567890", "2024-06-01T09:01:00Z")
+			assistant.ContentLength = 10
+			assistant.ToolCalls = []ToolCall{{SessionID: "session", ToolName: "Read", Category: "Read"}}
+			insertMessages(t, d, Message{SessionID: "session", Ordinal: 0, Role: "user", Content: "please fix", Timestamp: "2024-06-01T09:00:00Z"}, assistant)
+			updateSignals(t, d, "session", SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}})
+			f := AnalyticsFilter{Timezone: "UTC"}
+			var loads [3]int
+			read := func() (ToolsAnalyticsResponse, VelocityResponse, SignalsAnalyticsResponse) {
+				tools, err := keptAnalytics(ctx, d, "tools", f, func(ctx context.Context, f AnalyticsFilter) (ToolsAnalyticsResponse, error) {
+					loads[0]++
+					return d.analyticsTools(ctx, f)
+				})
+				require.NoError(t, err)
+				velocity, err := keptAnalytics(ctx, d, "velocity", f, func(ctx context.Context, f AnalyticsFilter) (VelocityResponse, error) {
+					loads[1]++
+					return d.analyticsVelocity(ctx, f)
+				})
+				require.NoError(t, err)
+				signals, err := keptAnalytics(ctx, d, "signals", f, func(ctx context.Context, f AnalyticsFilter) (SignalsAnalyticsResponse, error) {
+					loads[2]++
+					return d.analyticsSignals(ctx, f)
+				})
+				require.NoError(t, err)
+				return tools, velocity, signals
+			}
+			read()
+			loads = [3]int{}
+			_, err := d.getWriter().ExecContext(ctx, tc.query)
+			require.NoError(t, err)
+			tools, velocity, signals := read()
+			require.Equal(t, tc.loads, loads)
+			require.Equal(t, tc.calls, tools.TotalCalls)
+			var names []string
+			for _, row := range tools.ByTool {
+				names = append(names, row.ToolName)
+			}
+			if tc.tool != "" {
+				require.Contains(t, names, tc.tool)
+			}
+			require.InDelta(t, tc.chars, velocity.Overall.CharsPerActiveMin, 0)
+			require.Equal(t, tc.frustration, signals.QualityHealth.Totals.FrustrationMarkerCount)
+		})
+	}
+}
+
+func TestAnalyticsKeptVelocityToolJoin(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "session", "project", func(s *Session) { s.StartedAt = new("2024-06-01T09:00:00Z"); s.MessageCount = 3 })
+	first := asstMsgAt("session", 1, "answer", "2024-06-01T09:01:00Z")
+	first.Model = "model-a"
+	first.ToolCalls = []ToolCall{{SessionID: "session", ToolName: "Read", Category: "Read"}}
+	second := asstMsgAt("session", 2, "answer", "2024-06-01T09:02:00Z")
+	second.Model = "model-b"
+	insertMessages(t, d, Message{SessionID: "session", Ordinal: 0, Role: "user", Content: "hello", Timestamp: "2024-06-01T09:00:00Z"}, first, second)
+	all := AnalyticsFilter{Timezone: "UTC"}
+	scoped := AnalyticsFilter{Timezone: "UTC", Model: "model-a", Hour: new(9)}
+	var loads [2]int
+	read := func(f AnalyticsFilter, index int) VelocityResponse {
+		result, err := keptAnalytics(ctx, d, "velocity", f, func(ctx context.Context, f AnalyticsFilter) (VelocityResponse, error) {
+			loads[index]++
+			return d.analyticsVelocity(ctx, f)
+		})
+		require.NoError(t, err)
+		return result
+	}
+	beforeAll := read(all, 0)
+	beforeScoped := read(scoped, 1)
+	require.Positive(t, beforeScoped.Overall.ToolCallsPerActiveMin)
+	_, err := d.getWriter().ExecContext(ctx, `UPDATE tool_calls SET message_id=(SELECT id FROM messages WHERE session_id='session' AND ordinal=2) WHERE session_id='session'`)
+	require.NoError(t, err)
+	loads = [2]int{}
+	afterAll := read(all, 0)
+	afterScoped := read(scoped, 1)
+	require.Equal(t, [2]int{0, 1}, loads)
+	require.Equal(t, beforeAll, afterAll)
+	require.Zero(t, afterScoped.Overall.ToolCallsPerActiveMin)
+}
+
+func TestAnalyticsKeptInvalidPanelToken(t *testing.T) {
+	cache := t.TempDir()
+	t.Setenv("CACHE_DIRECTORY", cache)
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "session", "project")
+	message := asstMsgAt("session", 0, "answer", "2024-06-01T09:00:00Z")
+	message.ToolCalls = []ToolCall{{SessionID: "session", ToolName: "Read", Category: "Read"}}
+	insertMessages(t, d, message)
+	for _, query := range []string{`DELETE FROM archive_metadata WHERE key='dashboard_tools'`, `INSERT INTO archive_metadata(key,value) VALUES('dashboard_tools','invalid') ON CONFLICT(key) DO UPDATE SET value=excluded.value`} {
+		_, err := d.getWriter().ExecContext(ctx, query)
+		require.NoError(t, err)
+		tools, err := d.GetAnalyticsTools(ctx, AnalyticsFilter{Timezone: "UTC"})
+		require.NoError(t, err)
+		require.Equal(t, "Read", tools.ByTool[0].ToolName)
+		files, err := filepath.Glob(filepath.Join(cache, "sqlite-trends", "*", "*.gob"))
+		require.NoError(t, err)
+		require.Empty(t, files)
+	}
+	_, err := d.getWriter().ExecContext(ctx, `UPDATE tool_calls SET tool_name='Grep' WHERE session_id='session'`)
+	require.NoError(t, err)
+	tools, err := d.GetAnalyticsTools(ctx, AnalyticsFilter{Timezone: "UTC"})
+	require.NoError(t, err)
+	require.Equal(t, "Grep", tools.ByTool[0].ToolName)
+	files, err := filepath.Glob(filepath.Join(cache, "sqlite-trends", "*", "*.gob"))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+}
+
+func TestAnalyticsKeptModelTimeScopeChanges(t *testing.T) {
+	for _, tc := range []struct{ name, query string }{
+		{"model", `UPDATE messages SET model='model-b' WHERE session_id='session' AND ordinal=1`},
+		{"role", `UPDATE messages SET role='assistant' WHERE session_id='session' AND ordinal=0`},
+		{"system", `UPDATE messages SET is_system=1 WHERE session_id='session' AND ordinal=0`},
+		{"timestamp", `UPDATE messages SET timestamp=NULL WHERE session_id='session' AND ordinal=0`},
+		{"ordinal", `UPDATE messages SET ordinal=3 WHERE session_id='session' AND ordinal=0`},
+		{"move", `UPDATE messages SET session_id='other' WHERE session_id='session' AND ordinal=0`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			insertSession(t, d, "session", "project", func(s *Session) { s.StartedAt = new("2026-06-14T10:00:00Z"); s.MessageCount = 2 })
+			insertSession(t, d, "other", "other")
+			insertMessages(t, d,
+				Message{SessionID: "session", Ordinal: 0, Role: "user", Content: "hello", Timestamp: "2026-06-14T10:00:00Z"},
+				Message{SessionID: "session", Ordinal: 1, Role: "assistant", Content: "answer", Model: "model-a", Timestamp: "2026-06-14T11:00:00Z"},
+			)
+			f := AnalyticsFilter{Timezone: "UTC", Model: "model-a", Project: "project", Hour: new(10), DayOfWeek: new(6)}
+			before, err := d.GetAnalyticsSignals(ctx, f)
+			require.NoError(t, err)
+			require.Equal(t, 1, before.UnscoredSessions)
+			_, err = d.getWriter().ExecContext(ctx, tc.query)
+			require.NoError(t, err)
+			after, err := d.GetAnalyticsSignals(ctx, f)
+			require.NoError(t, err)
+			require.Zero(t, after.UnscoredSessions)
+		})
+	}
+}
+
 func TestAnalyticsKeptRestoreRewrite(t *testing.T) {
 	for _, tc := range []struct {
 		name, first, second string
@@ -477,11 +741,13 @@ func TestAnalyticsKeptNestedCounterTrigger(t *testing.T) {
 			ctx := t.Context()
 			_, err := d.getWriter().ExecContext(ctx, `PRAGMA recursive_triggers = `+enabled)
 			require.NoError(t, err)
-			var before, after string
-			require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT value FROM archive_metadata WHERE key='dashboard_change_generation'`).Scan(&before))
+			before, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
+			require.NoError(t, err)
+			require.Zero(t, before.UnscoredSessions)
 			insertSession(t, d, "nested", "project")
-			require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT value FROM archive_metadata WHERE key='dashboard_change_generation'`).Scan(&after))
-			require.NotEqual(t, before, after)
+			after, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
+			require.NoError(t, err)
+			require.Equal(t, 1, after.UnscoredSessions)
 		})
 	}
 }

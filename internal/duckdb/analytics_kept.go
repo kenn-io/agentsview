@@ -2,9 +2,11 @@ package duckdb
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
+	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -35,13 +37,24 @@ func keptAnalytics[T any](ctx context.Context, s *Store, panel string, f db.Anal
 		var zero T
 		return zero, fmt.Errorf("encoding analytics selection: %w", err)
 	}
+	var handle *sql.DB
 	if !db.SavedPanel(panel) {
 		savedVersion = ""
+	} else if savedVersion != "" {
+		savedVersion, handle = s.dashboardDigest(ctx, panel, f)
 	}
 	if savedVersion != "" {
 		savedVersion += "|" + db.TrendsTimezoneKey(f)
 	}
-	encoded, err := s.analyticsReads.DoSaved(ctx, &s.usageDisk, string(key), version, savedVersion, func(b []byte) ([]byte, error) { return b, nil }, func(b []byte) ([]byte, error) {
+	encoded, err := s.analyticsReads.DoSaved(ctx, &s.usageDisk, string(key), version, savedVersion, func(b []byte) ([]byte, error) {
+		s.handleMu.RLock()
+		current := s.duck == handle
+		s.handleMu.RUnlock()
+		if !current {
+			return nil, fmt.Errorf("mirror changed during analytics read")
+		}
+		return b, nil
+	}, func(b []byte) ([]byte, error) {
 		var result T
 		return b, json.Unmarshal(b, &result)
 	}, func(ctx context.Context) ([]byte, error) {
@@ -59,4 +72,52 @@ func keptAnalytics[T any](ctx context.Context, s *Store, panel string, f db.Anal
 		return result, fmt.Errorf("decoding kept analytics: %w", err)
 	}
 	return result, nil
+}
+
+func (s *Store) dashboardDigest(ctx context.Context, panel string, f db.AnalyticsFilter) (string, *sql.DB) {
+	s.handleMu.RLock()
+	handle, fileID := s.duck, s.fileID
+	s.handleMu.RUnlock()
+	if handle == nil || fileID == "" {
+		return "", nil
+	}
+	type component struct {
+		name, table string
+		columns     []string
+	}
+	components := []component{{"sessions", "sessions", db.DashboardSessionInputs}}
+	switch panel {
+	case "tools":
+		components = append(components,
+			component{"tools_sessions", "sessions", db.DashboardToolsSessionInputs},
+			component{"tools_messages", "messages", append([]string{"id"}, db.DashboardToolsMessageInputs...)},
+			component{"tools_calls", "tool_calls", append([]string{"message_id"}, db.DashboardToolsCallInputs...)})
+	case "velocity":
+		components = append(components,
+			component{"velocity_messages", "messages", db.DashboardVelocityMessageInputs},
+			component{"velocity_calls", "tool_calls", db.DashboardVelocityCallInputs})
+		if f.Model != "" {
+			components = append(components, component{"velocity_join", "tool_calls", []string{"session_id", "message_id"}})
+		}
+	case "signals":
+		components = append(components, component{"signals_sessions", "sessions", append([]string{"frustration_marker_count"}, db.DashboardSignalsSessionInputs...)})
+	}
+	if db.DashboardUsesMessageScope(f) {
+		components = append(components, component{"scope", "messages", db.DashboardScopeMessageInputs})
+	}
+	version := fmt.Sprintf("%p|%s", handle, fileID)
+	parts := make([]string, 0, len(components))
+	for _, c := range components {
+		digest, err := s.analyticsDigests.Do(ctx, c.name, version, func(ctx context.Context) (string, error) {
+			var result string
+			query := fmt.Sprintf("SELECT count(*)::VARCHAR || ':' || coalesce(sum(hash(%s)::HUGEINT), 0)::VARCHAR FROM %s", strings.Join(c.columns, ","), c.table)
+			err := handle.QueryRowContext(ctx, query).Scan(&result)
+			return result, err
+		})
+		if err != nil {
+			return "", nil
+		}
+		parts = append(parts, digest)
+	}
+	return strings.Join(parts, "|"), handle
 }

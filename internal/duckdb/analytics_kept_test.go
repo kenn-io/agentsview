@@ -6,16 +6,27 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/storage"
 )
+
+func primePanelDigests(t *testing.T, store *Store, f db.AnalyticsFilter, panels ...string) {
+	t.Helper()
+	for _, panel := range panels {
+		digest, _ := store.dashboardDigest(t.Context(), panel, f)
+		require.NotEmpty(t, digest)
+	}
+}
 
 func TestAnalyticsKeptMirrorReplacement(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
@@ -88,6 +99,7 @@ func TestAnalyticsKeptMirrorReplacement(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { reopened.Close() })
 	require.NoError(t, reopened.OpenActivityReportDisk(t.Context()))
+	primePanelDigests(t, reopened, f, "tools", "velocity", "signals")
 	require.NoError(t, reopened.DB().Close())
 	i := 0
 	for _, tc := range keptPanelCases(t.Context(), f) {
@@ -355,6 +367,7 @@ func TestAnalyticsKeptRestart(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { reopened.Close() })
 	require.NoError(t, reopened.OpenActivityReportDisk(t.Context()))
+	primePanelDigests(t, reopened, f, "tools", "velocity", "signals")
 	require.NoError(t, reopened.DB().Close())
 	i := 0
 	for _, tc := range keptPanelCases(t.Context(), f) {
@@ -367,6 +380,271 @@ func TestAnalyticsKeptRestart(t *testing.T) {
 	}
 	_, err = reopened.GetAnalyticsSummary(t.Context(), f)
 	require.Error(t, err)
+}
+
+func TestAnalyticsKeptScoreOnly(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mirror.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	writeUsageMirror(t, path, `UPDATE sessions SET health_score=30`)
+	base, err := os.ReadFile(path)
+	require.NoError(t, err)
+	makeMirror := func(path string, score int) {
+		require.NoError(t, os.WriteFile(path, base, 0o600))
+		writeUsageMirror(t, path, fmt.Sprintf(`UPDATE sessions SET health_score=%d`, score))
+	}
+	ctx := t.Context()
+	store, err := NewStore(ctx, path)
+	require.NoError(t, err)
+	require.NoError(t, store.OpenActivityReportDisk(ctx))
+	f := db.AnalyticsFilter{Timezone: "UTC"}
+	read := func(s *Store, counts *[3]int) db.SignalsAnalyticsResponse {
+		_, err := keptAnalytics(ctx, s, "tools", f, "", func(ctx context.Context) (db.ToolsAnalyticsResponse, error) {
+			counts[0]++
+			return s.analytics().GetAnalyticsTools(ctx, f)
+		})
+		require.NoError(t, err)
+		_, err = keptAnalytics(ctx, s, "velocity", f, "", func(ctx context.Context) (db.VelocityResponse, error) {
+			counts[1]++
+			return s.analytics().GetAnalyticsVelocity(ctx, f)
+		})
+		require.NoError(t, err)
+		signals, err := keptAnalytics(ctx, s, "signals", f, "", func(ctx context.Context) (db.SignalsAnalyticsResponse, error) {
+			counts[2]++
+			return s.analytics().GetAnalyticsSignals(ctx, f)
+		})
+		require.NoError(t, err)
+		return signals
+	}
+	counts := [3]int{}
+	first := read(store, &counts)
+	require.NotNil(t, first.AvgHealthScore)
+	require.InDelta(t, 30, *first.AvgHealthScore, 0)
+	next := filepath.Join(dir, "next.duckdb")
+	makeMirror(next, 60)
+	require.NoError(t, swapMirrorFile(next, path))
+	store.checkMirrorReplacement(ctx, func(err error) { require.NoError(t, err) })
+	counts = [3]int{}
+	warm := read(store, &counts)
+	require.NotNil(t, warm.AvgHealthScore)
+	require.InDelta(t, 60, *warm.AvgHealthScore, 0)
+	assert.Equal(t, [3]int{0, 0, 1}, counts)
+	makeMirror(next, 90)
+	require.NoError(t, swapMirrorFile(next, path))
+	require.NoError(t, store.Close())
+	reopened, err := NewStore(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { reopened.Close() })
+	require.NoError(t, reopened.OpenActivityReportDisk(ctx))
+	counts = [3]int{}
+	after := read(reopened, &counts)
+	require.NotNil(t, after.AvgHealthScore)
+	require.InDelta(t, 90, *after.AvgHealthScore, 0)
+	assert.Equal(t, [3]int{0, 0, 1}, counts)
+}
+
+func TestAnalyticsKeptDigestPerHandle(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	dir := t.TempDir()
+	path, next := filepath.Join(dir, "mirror.duckdb"), filepath.Join(dir, "next.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	copy, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(next, copy, 0o600))
+	writeUsageMirror(t, next, `UPDATE sessions SET health_score=80`)
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { store.Close() })
+	var fills atomic.Int32
+	store.analyticsDigests.Size = func(value string) int64 { fills.Add(1); return int64(len(value)) }
+	f := db.AnalyticsFilter{Timezone: "UTC"}
+	before, _ := store.dashboardDigest(t.Context(), "signals", f)
+	require.NotEmpty(t, before)
+	firstFills := fills.Load()
+	require.Positive(t, firstFills)
+	again, _ := store.dashboardDigest(t.Context(), "signals", f)
+	require.Equal(t, before, again)
+	require.Equal(t, firstFills, fills.Load())
+	require.NoError(t, swapMirrorFile(next, path))
+	store.checkMirrorReplacement(t.Context(), func(err error) { require.NoError(t, err) })
+	after, _ := store.dashboardDigest(t.Context(), "signals", f)
+	require.NotEmpty(t, after)
+	require.NotEqual(t, before, after)
+	require.Equal(t, 2*firstFills, fills.Load())
+}
+
+func TestAnalyticsKeptVelocityToolJoin(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	dir := t.TempDir()
+	path, next := filepath.Join(dir, "mirror.duckdb"), filepath.Join(dir, "next.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	writeUsageMirror(t, path,
+		`UPDATE messages SET model='model-a' WHERE id=2`,
+		`INSERT INTO messages(id,session_id,ordinal,role,content,timestamp,model) VALUES(3,'session-a',2,'assistant','answer',TIMESTAMP '2026-01-01 00:02:00','model-b')`,
+		`INSERT INTO tool_calls(id,message_id,session_id,tool_name,category) VALUES(1,2,'session-a','Read','Read')`)
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(next, data, 0o600))
+	writeUsageMirror(t, next, `UPDATE tool_calls SET message_id=3`)
+	ctx := t.Context()
+	store, err := NewStore(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { store.Close() })
+	require.NoError(t, store.OpenActivityReportDisk(ctx))
+	all := db.AnalyticsFilter{Timezone: "UTC"}
+	scoped := db.AnalyticsFilter{Timezone: "UTC", Model: "model-a", Hour: new(0)}
+	var loads [2]int
+	read := func(f db.AnalyticsFilter, index int) db.VelocityResponse {
+		result, err := keptAnalytics(ctx, store, "velocity", f, "", func(ctx context.Context) (db.VelocityResponse, error) {
+			loads[index]++
+			return store.analytics().GetAnalyticsVelocity(ctx, f)
+		})
+		require.NoError(t, err)
+		return result
+	}
+	beforeAll := read(all, 0)
+	beforeScoped := read(scoped, 1)
+	require.Positive(t, beforeScoped.Overall.ToolCallsPerActiveMin)
+	require.NoError(t, swapMirrorFile(next, path))
+	store.checkMirrorReplacement(ctx, func(err error) { require.NoError(t, err) })
+	loads = [2]int{}
+	afterAll := read(all, 0)
+	afterScoped := read(scoped, 1)
+	require.Equal(t, [2]int{0, 1}, loads)
+	require.Equal(t, beforeAll, afterAll)
+	require.Zero(t, afterScoped.Overall.ToolCallsPerActiveMin)
+}
+
+func TestAnalyticsKeptChangedMirrorInputs(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	dir := t.TempDir()
+	path, next := filepath.Join(dir, "mirror.duckdb"), filepath.Join(dir, "next.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	writeUsageMirror(t, path,
+		`UPDATE sessions SET health_score=30`,
+		`UPDATE messages SET content_length=10 WHERE id=2`,
+		`INSERT INTO tool_calls(id,message_id,session_id,tool_name,category) VALUES(1,2,'session-a','Read','Read')`)
+	ctx := t.Context()
+	store, err := NewStore(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { store.Close() })
+	require.NoError(t, store.OpenActivityReportDisk(ctx))
+	f := db.AnalyticsFilter{Timezone: "UTC"}
+	var loads [3]int
+	read := func() (db.ToolsAnalyticsResponse, db.VelocityResponse, db.SignalsAnalyticsResponse) {
+		tools, err := keptAnalytics(ctx, store, "tools", f, "", func(ctx context.Context) (db.ToolsAnalyticsResponse, error) {
+			loads[0]++
+			return store.analytics().GetAnalyticsTools(ctx, f)
+		})
+		require.NoError(t, err)
+		velocity, err := keptAnalytics(ctx, store, "velocity", f, "", func(ctx context.Context) (db.VelocityResponse, error) {
+			loads[1]++
+			return store.analytics().GetAnalyticsVelocity(ctx, f)
+		})
+		require.NoError(t, err)
+		signals, err := keptAnalytics(ctx, store, "signals", f, "", func(ctx context.Context) (db.SignalsAnalyticsResponse, error) {
+			loads[2]++
+			return store.analytics().GetAnalyticsSignals(ctx, f)
+		})
+		require.NoError(t, err)
+		return tools, velocity, signals
+	}
+	read()
+	for _, tc := range []struct {
+		query string
+		loads [3]int
+		tool  string
+		chars float64
+		score float64
+	}{
+		{`UPDATE tool_calls SET tool_name='Grep'`, [3]int{1, 0, 0}, "Grep", 10, 30},
+		{`UPDATE messages SET content_length=20 WHERE id=2`, [3]int{0, 1, 0}, "Grep", 20, 30},
+		{`UPDATE sessions SET health_score=80`, [3]int{0, 0, 1}, "Grep", 20, 80},
+	} {
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(next, data, 0o600))
+		writeUsageMirror(t, next, tc.query)
+		require.NoError(t, swapMirrorFile(next, path))
+		store.checkMirrorReplacement(ctx, func(err error) { require.NoError(t, err) })
+		loads = [3]int{}
+		tools, velocity, signals := read()
+		require.Equal(t, tc.loads, loads, tc.query)
+		require.Equal(t, tc.tool, tools.ByTool[0].ToolName)
+		require.InDelta(t, tc.chars, velocity.Overall.CharsPerActiveMin, 0)
+		require.NotNil(t, signals.AvgHealthScore)
+		require.InDelta(t, tc.score, *signals.AvgHealthScore, 0)
+	}
+}
+
+func TestAnalyticsKeptDigestFailureLoadsSource(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	buildMirrorFixture(t, path, "session-a")
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { store.Close() })
+	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
+	require.NoError(t, store.DB().Close())
+	loads := 0
+	got, err := keptAnalytics(t.Context(), store, "tools", db.AnalyticsFilter{}, "", func(context.Context) (db.ToolsAnalyticsResponse, error) {
+		loads++
+		return db.ToolsAnalyticsResponse{TotalCalls: 42}, nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, 42, got.TotalCalls)
+	require.Equal(t, 1, loads)
+	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "duckdb-usage", "*", "*.gob"))
+	require.NoError(t, err)
+	require.Empty(t, files)
+}
+
+func TestAnalyticsKeptDigestAssociatesSignalsWithSessions(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	dir := t.TempDir()
+	path, next := filepath.Join(dir, "mirror.duckdb"), filepath.Join(dir, "next.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	writeUsageMirror(t, path,
+		`UPDATE sessions SET project='alpha', health_score=20`,
+		`INSERT INTO sessions SELECT * REPLACE ('session-b' AS id, 'beta' AS project, 80 AS health_score) FROM sessions WHERE id='session-a'`)
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(next, data, 0o600))
+	writeUsageMirror(t, next, `UPDATE sessions SET health_score=100-health_score`)
+	ctx := t.Context()
+	store, err := NewStore(ctx, path)
+	require.NoError(t, err)
+	require.NoError(t, store.OpenActivityReportDisk(ctx))
+	f := db.AnalyticsFilter{Timezone: "UTC"}
+	before, err := store.GetAnalyticsSignals(ctx, f)
+	require.NoError(t, err)
+	require.Len(t, before.ByProject, 2)
+	beforeScores := make(map[string]float64)
+	for _, row := range before.ByProject {
+		require.NotNil(t, row.AvgHealthScore)
+		beforeScores[row.Project] = *row.AvgHealthScore
+	}
+	require.Equal(t, map[string]float64{"alpha": 20, "beta": 80}, beforeScores)
+	require.NoError(t, store.Close())
+	require.NoError(t, swapMirrorFile(next, path))
+	reopened, err := NewStore(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { reopened.Close() })
+	require.NoError(t, reopened.OpenActivityReportDisk(ctx))
+	after, err := reopened.GetAnalyticsSignals(ctx, f)
+	require.NoError(t, err)
+	require.Len(t, after.ByProject, 2)
+	afterScores := make(map[string]float64)
+	for _, row := range after.ByProject {
+		require.NotNil(t, row.AvgHealthScore)
+		afterScores[row.Project] = *row.AvgHealthScore
+	}
+	require.Equal(t, map[string]float64{"alpha": 80, "beta": 20}, afterScores)
 }
 
 func TestAnalyticsKeptCorruptSavedJSON(t *testing.T) {
@@ -421,6 +699,7 @@ func TestAnalyticsKeptRestartWithChangedPricing(t *testing.T) {
 	t.Cleanup(func() { reopened.Close() })
 	reopened.SetCustomPricing(map[string]config.CustomModelRate{"model": {OutputMicrodollarsPerMTok: 200}})
 	require.NoError(t, reopened.OpenActivityReportDisk(t.Context()))
+	primePanelDigests(t, reopened, f, "tools")
 	require.NoError(t, reopened.DB().Close())
 	got, err := reopened.GetAnalyticsTools(t.Context(), f)
 	require.NoError(t, err)
@@ -505,6 +784,7 @@ func TestAnalyticsKeptSameStampReplacementWhileServing(t *testing.T) {
 	require.Equal(t, stamp, reopened.mirrorStamp())
 	require.Equal(t, aliasID, reopened.fileID)
 	require.NoError(t, reopened.OpenActivityReportDisk(t.Context()))
+	primePanelDigests(t, reopened, filter, "signals")
 	require.NoError(t, reopened.DB().Close())
 	got, err := reopened.GetAnalyticsSignals(t.Context(), filter)
 	require.NoError(t, err)

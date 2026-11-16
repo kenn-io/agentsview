@@ -1169,19 +1169,19 @@ or an in-window Claude peer changes; a changed project identity map also
 invalidates it. Partial reports, read-only archives, and reports filtered by
 active, stale, or unclean termination status bypass this cache.
 
-SQLite uses `usage_change_revision` and `analytics_change_revision` to
-invalidate kept Tools, Velocity, Signals, and Trends reports. Tool-call updates
-and deletes, message content-length repairs, and signal updates advance the
-analytics counter. Message changes also advance the session transcript revision.
-PostgreSQL uses its session journal, hosted PostgreSQL uses its tenant identity,
+SQLite and native PostgreSQL track the inputs to Tools, Velocity, and Signals
+with separate change tokens. A score-only edit refreshes Signals while Tools
+and Velocity remain reusable. DuckDB uses content digests for saved results
+and recomputes them when its mirror handle changes. SQLite, native PostgreSQL,
+and DuckDB save these results per selection and timezone; PostgreSQL requires
+a reliable identity and hosted PostgreSQL reads them fresh. The entries share
+the existing 256 MiB Trends disk budget. PostgreSQL also retains finished
+Signals in memory. Active-since selections are not saved.
+
+SQLite invalidates Trends with its usage and analytics revisions. PostgreSQL
+uses its session journal, hosted PostgreSQL uses its tenant identity,
 selection, and corpus revisions, DuckDB uses its mirror stamp, and ClickHouse
-uses session and message row identities to invalidate Trends reports.
-SQLite, native PostgreSQL, and DuckDB save finished Tools, Velocity, and Signals
-results per selection under their data versions and timezone rules. Native
-PostgreSQL saves them only when it has a reliable identity; hosted PostgreSQL
-reads them fresh. DuckDB also uses the mirror file identity for saved results.
-These entries share the existing 256 MiB Trends disk budget. PostgreSQL reuses finished Signals in memory, and active-since selections
-are not saved.
+uses session and message row identities.
 Remote DuckDB through Quack reads Trends fresh because it has no reliable
 freshness token. Read-only archives and reports filtered by active, stale, or
 unclean termination status bypass this cache.
