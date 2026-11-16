@@ -237,7 +237,9 @@ func TestSearchKeptRejectsChangedSource(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, hookErr)
 	require.Len(t, page.Results, 1)
-	_, ok := d.searchKept.Get(filter.Slot()+"|false", version)
+	normalized := filter
+	normalized.Limit = DefaultSearchLimit
+	_, ok := d.searchKept.Get(normalized.Slot()+"|false", version)
 	require.False(t, ok)
 	require.NoError(t, d.Close())
 	require.NoError(t, os.WriteFile(path, backup, 0o600))
