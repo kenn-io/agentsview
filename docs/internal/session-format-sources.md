@@ -155,6 +155,17 @@ evidence; they do not establish whether a tool helped the task.
 
 ## Claude Code (`claude`)
 
+- **Modified-time refresh without a write (observed 2026-11-15):** On a machine
+  running Claude Code 2.1.325, four transcripts of open sessions received new
+  modified times exactly 3,600 seconds apart while their size and SHA-256
+  stayed the same. The producer code that does this was not identified, and no
+  public source was searched. Sync therefore treats a same-size transcript
+  whose content hash equals the stored hash as unchanged: it records the new
+  modified time on the session row and parser checkpoint and does not parse. A
+  same-size transcript whose hash differs is still parsed in full. See
+  `sourceOnlyTouched` in `internal/sync/engine_incremental.go` and
+  `internal/sync/claude_touch_test.go`.
+
 - **Hook output (checked 2026-11-04):** The parser reads the `hook_success`
   attachment shape reported in
   [#2456](https://github.com/kenn-io/agentsview/issues/2456) with `content`,
@@ -3434,8 +3445,9 @@ schemas keep their existing ordering behavior.
 - **Artifact directories:** Reverified 2026-11-12 against pi-subagents at
   `7e2794efba0b727af51d08c36614ea939f1a827b`: the
   [artifact writer](https://github.com/nicobailon/pi-subagents/blob/7e2794efba0b727af51d08c36614ea939f1a827b/src/shared/artifacts.ts),
+  the
   [session-root helper](https://github.com/nicobailon/pi-subagents/blob/7e2794efba0b727af51d08c36614ea939f1a827b/src/extension/index.ts),
-  and
+  and the
   [child launcher](https://github.com/nicobailon/pi-subagents/blob/7e2794efba0b727af51d08c36614ea939f1a827b/src/runs/foreground/subagent-executor.ts).
   Session-local outputs go into a `subagent-artifacts` directory beside the
   transcript. Child transcripts use the parent transcript's stem as their
@@ -3446,10 +3458,9 @@ schemas keep their existing ordering behavior.
   source lookup. They classify excluded changes as non-data so remote delta
   planning does not scan the provider. An explicitly configured root with that
   basename remains supported, including when a broader root also contains it.
-  Nested child transcripts outside artifact directories remain
-  discoverable, and unreadable session directories still report incomplete
-  discovery. The transcript format, parsed output, and data version are
-  unchanged.
+  Nested child transcripts outside artifact directories remain discoverable,
+  and unreadable session directories still report incomplete discovery. The
+  transcript format, parsed output, and data version are unchanged.
 - **Agentsview:** `internal/parser/pi.go` and `internal/parser/pi_provider.go`;
   alternate branches remain in the file but only the active ancestry is a
   conversation. Reverified 2026-09-03 against 156 local Pi transcripts: the
@@ -3663,8 +3674,8 @@ schemas keep their existing ordering behavior.
   session format documented under Pi above; checked 2026-11-13.
 
 - **Usage and cost:** Each assistant line carries input, output, cache-read, and
-  cache-write tokens with a provider and model. Agentsview derives monetary cost
-  from the catalog.
+  cache-write tokens with a provider and model. Agentsview derives monetary
+  cost from the catalog.
 
 - **Contract:** The public line shapes and usage meaning are in
   [Direct API Sessions](../token-usage.md#direct-api-sessions).
@@ -4535,6 +4546,48 @@ schemas keep their existing ordering behavior.
   under the Hermes folder (`state.db`, `state.db-wal`, `sessions/<name>`)
   rather than its absolute local path, so an archive unpacked into a fresh
   folder keeps its fingerprints (`TestHermesFingerprintsIgnoreTheLocalFolder`).
+- **Watcher change check (2026-11-10):** Reverified the entire producer tree
+  at [Hermes `aca4f1df`](https://github.com/NousResearch/hermes-agent/tree/aca4f1df).
+  Stores with a positive integer schema version at most 33, `transcript_revision`,
+  and complete native message-update triggers use a per-session token to skip
+  unchanged members on database and WAL events. The token includes parsed
+  session fields, model usage ledger rows, transcript revision, and a checksum
+  over every message ID, timestamp, and finish reason. The checksum scans
+  message history. Tokens also include whether rewrite tracking was verified
+  when they were created, in both direct and bulk fingerprint passes. Enabling
+  tracking after an untracked edit therefore requires a full check. Tokens
+  created before this provenance was included also receive one full check.
+  The native `messages_transcript_revision_update` and
+  `messages_display_revision_update` definitions in
+  [hermes_state_common.py](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/hermes_state_common.py)
+  cover payload and display rewrites. Coverage is rechecked on every event:
+  an older writer can recreate shorter triggers. Invalid or future schema
+  versions and incomplete trigger coverage retain full checks.
+  [Native recovery](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/hermes_cli/session_recovery.py)
+  repairs all out-of-window timestamps in fresh recovery output. Installing that
+  output changes the timestamp checksum even when revision and live count stay
+  unchanged. No replacement tracker is used.
+  Reverify these couplings when the producer changes: additive changes can occur
+  without a schema-version bump. The pinned tree has no independent message
+  session-ID reassignment. A finish-reason change in
+  [transcript repair](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/agent/transcript_repair.py#L317-L328)
+  names content and display metadata in the update, advancing the revision.
+  [Prune rewrites](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/hermes_state_prune_rewrite.py#L225-L249)
+  first insert a retained row with a new ID, advancing the greatest message ID.
+  Transcript-file edits use their own `sessions/` events. Listing costs session
+  metadata, distinct lifetime ledger keys, and message history, not only changed
+  sessions.
+  Auxiliary same-key ledger UPSERTs can leave session fields/revision unchanged,
+  so the full ledger read remains necessary under the current producer contract.
+  Ledger keys aggregate route/task usage; their lifetime count has no verified
+  constant bound per session. Database events also scan transcript directory
+  entries and check membership in the same read snapshot, so transcripts for
+  missing or unreadable rows remain discoverable. Unchanged members need only
+  indexed session lookups; selected members also check message readability.
+  Cron members still receive full fingerprint checks because an ancestor can
+  change their resolved job. Other selected members read transcript payloads.
+  The new fingerprint format causes one reparse of
+  previously imported sessions as they are checked.
 - **Model usage check (2026-10-22):**
   [hermes_state_usage.py](https://github.com/NousResearch/hermes-agent/blob/3ba2b0787ed3a73ec3b08085ed0137f235209cf4/hermes_state_usage.py)
   records per-model and billing-route deltas in `session_model_usage`.
@@ -4979,7 +5032,10 @@ schemas keep their existing ordering behavior.
   `internal/parser/antigravity_proto.go`,
   `internal/parser/antigravity_brain_transcript.go`, and
   `internal/parser/antigravity_provider.go`; field decoding is deliberately
-  marked as reverse engineering. The brain transcript needs no such decoding:
+  marked as reverse engineering. [agentsview#3135](https://github.com/kenn-io/agentsview/issues/3135)
+  reports `USER_INPUT` field 19 → 3 → 1 as typed text and
+  19 → 3 → 2 → 27 → 1 → 2 as the skill expansion; the parser prefers the typed
+  text, checked only against a synthetic CLI fixture. The brain transcript needs no such decoding:
   it is line-delimited JSON with named fields, verified 2026-09-26 against
   transcripts two Antigravity builds wrote, and it is read as untrusted
   structured input. Rechecked 2026-09-29 with synthetic transcripts through
@@ -5748,9 +5804,9 @@ schemas keep their existing ordering behavior.
   identities take precedence; do not parse display prose for billing facts.
 - **Agentsview:** `internal/parser/evener.go` and `evener_provider.go`. Fixtures
   are synthetic and cover semantic content, usage, metadata and fork behavior.
-  Empty compaction labels and literal text matching those labels carry distinct
-  source types while retaining their transcript text.
-  Capture discovery uses bounded directory batches and the raw-audit progress
+  Empty compaction labels and literal text matching those labels carry
+  distinct source types while retaining their transcript text. Capture
+  discovery uses bounded directory batches and the raw-audit progress
   contract. Remote imports verify content hashes rather than trusting copied
   filesystem timestamps. Remote Evener imports derive project names from the
   recorded path without probing that directory on the receiving machine. The

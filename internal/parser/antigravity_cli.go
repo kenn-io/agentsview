@@ -604,12 +604,17 @@ func mergeAntigravityDBHistoryMessages(
 		return dbMessages
 	}
 	userCount := 0
+	unmatchedTypedPrompt := false
 	for _, msg := range dbMessages {
 		if msg.Role == RoleUser {
+			if msg.antigravityTypedPrompt && userCount < len(history) && normalizedAntigravityPrompt(msg.Content) != normalizedAntigravityPrompt(history[userCount].Content) {
+				unmatchedTypedPrompt = true
+			}
 			userCount++
 		}
 	}
-	if userCount != len(history) {
+	// Positional overwrite would replace a typed prompt missing from history.
+	if userCount != len(history) || unmatchedTypedPrompt {
 		return appendMissingAntigravityHistoryMessages(
 			dbMessages, history,
 		)
@@ -624,8 +629,10 @@ func mergeAntigravityDBHistoryMessages(
 				dbMessages, history,
 			)
 		}
-		dbMessages[i].Content = history[historyIdx].Content
-		dbMessages[i].ContentLength = len(history[historyIdx].Content)
+		if !dbMessages[i].antigravityTypedPrompt {
+			dbMessages[i].Content = history[historyIdx].Content
+			dbMessages[i].ContentLength = len(history[historyIdx].Content)
+		}
 		if !history[historyIdx].Timestamp.IsZero() {
 			dbMessages[i].Timestamp = history[historyIdx].Timestamp
 		}
@@ -645,16 +652,14 @@ func appendMissingAntigravityHistoryMessages(
 		key  string
 		ts   time.Time
 		used bool
+		idx  int
 	}
 	var existing []existingUserTurn
-	for _, msg := range dbMessages {
-		if msg.Role != RoleUser {
-			continue
-		}
-		if key := normalizedAntigravityPrompt(msg.Content); key != "" {
-			existing = append(existing, existingUserTurn{
-				key: key, ts: msg.Timestamp,
-			})
+	for idx, msg := range dbMessages {
+		if msg.Role == RoleUser {
+			if key := normalizedAntigravityPrompt(msg.Content); key != "" {
+				existing = append(existing, existingUserTurn{key: key, ts: msg.Timestamp, idx: idx})
+			}
 		}
 	}
 	matchers := []func(existing, want time.Time) bool{
@@ -683,18 +688,20 @@ func appendMissingAntigravityHistoryMessages(
 					sameTurn(existing[i].ts, msg.Timestamp) {
 					existing[i].used = true
 					matched[hIdx] = true
+					if dbMessages[existing[i].idx].Timestamp.IsZero() && !slices.ContainsFunc(dbMessages[existing[i].idx+1:], func(m ParsedMessage) bool { return m.Timestamp.IsZero() }) {
+						dbMessages[existing[i].idx].Timestamp = msg.Timestamp
+					}
 					break
 				}
 			}
 		}
 	}
-	out := dbMessages
 	for hIdx, msg := range history {
 		if !matched[hIdx] {
-			out = append(out, msg)
+			dbMessages = append(dbMessages, msg)
 		}
 	}
-	return out
+	return dbMessages
 }
 
 func normalizedAntigravityPrompt(s string) string {

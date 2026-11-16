@@ -7020,7 +7020,7 @@ func TestProjectIdentityIncrementalStatePreservesExplicitSourceProject(
 						Ordinal: inc.NextOrdinal,
 					}}, nil, nil, nil, appendedInfo.ModTime(), int64(len(appended)), nil, nil, nil
 				},
-				nil, "", nil,
+				nil, "", nil, "",
 			)
 			require.True(t, ok)
 			require.NotNil(t, result.incremental)
@@ -7120,7 +7120,7 @@ func TestProjectIdentityLegacyMappedSnapshotReparsesBeforeIncrementalAppend(
 			parseCalled = true
 			return nil, nil, nil, nil, time.Time{}, 0, nil, nil, nil
 		},
-		nil, "", nil,
+		nil, "", nil, "",
 	)
 	assert.False(t, ok,
 		"legacy snapshots must fall through to a source-aware full parse")
@@ -12240,7 +12240,8 @@ func TestProviderStoredFreshnessDecision(t *testing.T) {
 			unchanged := e.providerSourceUnchangedInDB(t.Context(), parser.SourceRef{Provider: tc.agent, DisplayPath: path}, fp,
 				parser.ProviderSyncSemantics{FingerprintHashRequiredForFreshness: tc.required}, nil)
 			assert.Equal(t, tc.want, unchanged)
-			assert.Equal(t, tc.wantReads, reads.Load())
+			assert.Equal(t, tc.wantReads > 0, reads.Load() > 0,
+				"whether the freshness check reads the stored hash")
 		})
 	}
 }

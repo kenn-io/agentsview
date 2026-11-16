@@ -378,6 +378,9 @@ type SearchFilter struct {
 	Limit    int
 }
 
+// Slot identifies an exact search selection.
+func (f SearchFilter) Slot() string { return fmt.Sprintf("%#v", f) }
+
 // SearchPage holds paginated search results.
 type SearchPage struct {
 	Results    []SearchResult `json:"results"`
@@ -426,7 +429,30 @@ func (db *DB) Search(
 	if f.Limit <= 0 || f.Limit > MaxSearchLimit {
 		f.Limit = DefaultSearchLimit
 	}
-	ftsQuery, err := db.prepareMessageFTSQuery(ctx, f.Query)
+	cjk := containsCJK(f.Query) && db.HasCJKFTS(ctx)
+	if db.readOnly {
+		return db.search(ctx, f, cjk)
+	}
+	key := fmt.Sprintf("%s|%t", f.Slot(), cjk)
+	id, err := db.GetDatabaseID(ctx)
+	if err != nil {
+		return db.search(ctx, f, cjk)
+	}
+	revision, err := db.UsageChangeRevision(ctx)
+	if err != nil {
+		return db.search(ctx, f, cjk)
+	}
+	searchRevision, err := db.archiveJournalRevision(ctx, archiveMetadataSearchChangeRevisionKey, "search change")
+	if err != nil {
+		return db.search(ctx, f, cjk)
+	}
+	return db.searchKept.Do(ctx, key, fmt.Sprintf("%s|%d|%d", id, revision, searchRevision), func(ctx context.Context) (SearchPage, error) {
+		return db.search(ctx, f, cjk)
+	})
+}
+
+func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage, error) {
+	ftsQuery, err := db.prepareMessageFTSQueryWithCJK(ctx, f.Query, cjk)
 	if err != nil {
 		return SearchPage{}, err
 	}

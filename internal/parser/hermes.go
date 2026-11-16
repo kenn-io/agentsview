@@ -826,8 +826,7 @@ func readHermesStateMessages(ctx context.Context,
 	return out, rows.Err()
 }
 
-const hermesStateSessionQuery = `
-	SELECT id, source, COALESCE(model, ''),
+const hermesStateSessionColumns = `id, source, COALESCE(model, ''),
 		COALESCE(parent_session_id, ''), started_at,
 		COALESCE(ended_at, 0), COALESCE(message_count, 0),
 		COALESCE(input_tokens, 0), COALESCE(output_tokens, 0),
@@ -836,7 +835,9 @@ const hermesStateSessionQuery = `
 		COALESCE(reasoning_tokens, 0),
 		estimated_cost_usd, actual_cost_usd,
 		COALESCE(cost_status, ''), COALESCE(cost_source, ''),
-		COALESCE(title, ''), COALESCE(api_call_count, 0)
+		COALESCE(title, ''), COALESCE(api_call_count, 0)`
+
+const hermesStateSessionQuery = `SELECT ` + hermesStateSessionColumns + `
 	FROM sessions
 	WHERE id = ?`
 
@@ -1025,9 +1026,14 @@ func readHermesStateSessionSourceConn(ctx context.Context,
 // real Parse path still makes the authoritative richer-source choice when
 // a session is actually reparsed.
 func readHermesStateSessionFingerprintInputs(ctx context.Context,
-	conn *sql.DB, stateDB, rawSessionID string,
+	conn *sql.DB, stateDB, rawSessionID string, usage []hermesModelUsage,
 ) (hermesStateSession, []hermesStateMessage, []string, error) {
-	ss, found, err := readHermesStateSession(ctx, conn, rawSessionID)
+	ss, err := scanHermesStateSession(conn.QueryRowContext(ctx, hermesStateSessionQuery, rawSessionID))
+	found := !errors.Is(err, sql.ErrNoRows)
+	if !found {
+		err = nil
+	}
+	ss.modelUsage = usage
 	if err != nil {
 		return hermesStateSession{}, nil, nil, hermesStateLookupError{err: err}
 	}

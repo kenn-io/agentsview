@@ -695,7 +695,8 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // model_pricing rows after it moved to pricing_meta.)
 // (182: distinguish empty Evener compaction labels from source text. Re-parse
 // Evener sources in place; source and session identities are unchanged.)
-const dataVersion = 182
+// (183: prefer structured Antigravity user prompts over skill expansions.)
+const dataVersion = 183
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -949,6 +950,7 @@ type DB struct {
 	activityMemo         activityCandidateMemo
 	activityKept         kept.Memo[activityKept]
 	analyticsKept        kept.Reads[any]
+	searchKept           kept.Reads[SearchPage]
 	trendsDisk           kept.Disk
 	trendsDiskOnce       sync.Once
 	usageKept            kept.Memo[DailyUsageResult]
@@ -5891,6 +5893,7 @@ func (db *DB) reopenLockedWithBarrier(keepWriterBarrier bool) error {
 	var oldReader *sql.DB
 	db.activityKept.DeleteSlots(func(string) bool { return true })
 	db.analyticsKept.Clear()
+	db.searchKept.Clear()
 	db.usageKept.DeleteSlots(func(string) bool { return true })
 	db.activityMemo.swap(func() {
 		db.frustrationMemo.Swap(func() { db.sessionStatsFacts.Swap(func() { oldReader = db.reader.Swap(reader) }) })

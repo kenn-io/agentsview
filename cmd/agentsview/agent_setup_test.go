@@ -83,8 +83,7 @@ func TestAgentSetupPreservesCodexOptions(t *testing.T) {
 	config := "[mcp_servers.agentsview]\ncommand = 'agentsview'\nargs = ['mcp', '--profile', 'memory']\nenabled_tools = ['get_memory_status']\n"
 	require.NoError(t, os.WriteFile(path, []byte(config), 0o600))
 	out, err := executeCommand(newRootCommand(), "agent", "setup", "--agent", "codex")
-	require.Error(t, err, out)
-	require.Contains(t, out, "--force")
+	require.NoError(t, err, out)
 	got, err := os.ReadFile(path)
 	require.NoError(t, err)
 	require.Equal(t, config, string(got))

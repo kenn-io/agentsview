@@ -53,6 +53,7 @@ type Store struct {
 	activityUsageSums kept.Memo[*readbase.ActivityUsageSums]
 	usageDisk         kept.Disk
 	analyticsReads    kept.Reads[[]byte]
+	searchReads       kept.Reads[db.SearchPage]
 	dailyUsage        kept.Reads[db.DailyUsageResult]
 	planUsage         kept.Reads[*db.PlanUsageCountSummary]
 	topUsage          kept.Reads[[]db.TopSessionEntry]
@@ -737,12 +738,19 @@ func (s *Store) HasFTS(ctx context.Context) bool { return true }
 func (s *Store) HasSemantic() bool { return false }
 
 func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, error) {
-	if f.Limit <= 0 || f.Limit > db.MaxSearchLimit {
-		f.Limit = db.DefaultSearchLimit
-	}
 	if f.Query == "" {
 		return db.SearchPage{}, nil
 	}
+	if f.Limit <= 0 || f.Limit > db.MaxSearchLimit {
+		f.Limit = db.DefaultSearchLimit
+	}
+	if s.path != "" {
+		s.checkMirrorReplacement(ctx, nil)
+	}
+	return s.searchReads.Do(ctx, f.Slot(), s.keptVersion(), func(ctx context.Context) (db.SearchPage, error) { return s.search(ctx, f) })
+}
+
+func (s *Store) search(ctx context.Context, f db.SearchFilter) (db.SearchPage, error) {
 	// plainTerm is the de-quoted query joined back into one string. It feeds the
 	// name-branch ILIKE (matching the typed text against the short session name)
 	// and centers the message snippet via match_pos, mirroring SQLite's

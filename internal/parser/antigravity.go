@@ -1086,7 +1086,8 @@ func isPlausibleModelName(s string) bool {
 //   - role: protobuf field 1 carries CortexStepType when present;
 //     USER_INPUT (14) is user, and PLANNER_RESPONSE (15) plus other
 //     non-user step kinds are assistant.
-//   - content: best-effort human-facing strings found in the
+//   - content: structured user-input text when available, otherwise
+//     best-effort human-facing strings found in the
 //     payload tree. Internal ids, local Antigravity config paths,
 //     model placeholders, and duplicate payload echoes are filtered
 //     out. User-input steps prefer a single prompt-like string.
@@ -1115,7 +1116,16 @@ func decodeAntigravityParsedStep(
 		calls = extractAntigravityToolCalls(step.idx, step.fields)
 	}
 
-	strs, urlOnly := cleanAntigravityStepStrings(step)
+	var typedPrompt string
+	if step.role == RoleUser {
+		typedPrompt = antigravityUserInputText(step.fields)
+	}
+	var strs, urlOnly []string
+	if typedPrompt != "" {
+		strs = []string{typedPrompt}
+	} else {
+		strs, urlOnly = cleanAntigravityStepStrings(step)
+	}
 
 	// A non-user step whose only displayable content is a URL would
 	// otherwise vanish: the URL noise filter drops it and there are no
@@ -1139,11 +1149,34 @@ func decodeAntigravityParsedStep(
 		ContentLength: len(content),
 		Timestamp:     step.timestamp,
 	}
+	msg.antigravityTypedPrompt = typedPrompt != ""
 	if len(calls) > 0 {
 		msg.ToolCalls = calls
 		msg.HasToolUse = true
 	}
 	return msg, true
+}
+
+// antigravityUserInputText returns the typed text of a user-input step
+// from field 19 -> first field 3 -> field 1, trimmed, or "" when absent.
+func antigravityUserInputText(fields []agProtoField) string {
+	input, ok := agProtoFind(fields, 19)
+	if !ok || input.Nested == nil {
+		return ""
+	}
+	item, ok := agProtoFind(input.Nested, 3)
+	if !ok || item.Nested == nil {
+		return ""
+	}
+	field, ok := agProtoFind(item.Nested, 1)
+	if !ok {
+		return ""
+	}
+	text, ok := agProtoString(field)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(text)
 }
 
 // knownAntigravityToolNames is the set of tool names that Antigravity

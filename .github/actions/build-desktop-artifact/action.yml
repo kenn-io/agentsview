@@ -43,9 +43,13 @@ runs:
           desktop/package-lock.json
           frontend/package-lock.json
 
-    - uses: dtolnay/rust-toolchain@stable
+    # Pin master, not stable: upstream regenerates the stable branch, which
+    # drops the locked commit from it and stops every job at setup.
+    - uses: dtolnay/rust-toolchain@master
       id: rust-toolchain
       continue-on-error: true
+      with:
+        toolchain: stable
 
     - name: Wait before retrying Rust setup
       if: steps.rust-toolchain.outcome == 'failure'
@@ -54,7 +58,9 @@ runs:
 
     - name: Retry Rust setup
       if: steps.rust-toolchain.outcome == 'failure'
-      uses: dtolnay/rust-toolchain@stable
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: stable
 
     - name: Cache Rust dependencies
       uses: step-security/rust-cache@v2.9.2
@@ -72,7 +78,7 @@ runs:
         install: mingw-w64-x86_64-gcc
         path-type: inherit
 
-    - uses: kenn-io/kit/.github/actions/kit-retry@v0.53.0
+    - uses: kenn-io/kit/.github/actions/kit-retry@v0.53.2
 
     - name: Install Linux system dependencies
       if: runner.os == 'Linux'
