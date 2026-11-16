@@ -1528,7 +1528,7 @@ func (s *Store) forEachDailyUsageGroupRow(
 		}
 	}
 	if !top {
-		if rows, ok := carryRawUsage(ctx, s, &s.dailyUsageRows, state, memoSlot, memoVersion, "daily", f, pricingDigest, pricingDigest, customModels); ok {
+		if rows, ok := carryRawUsage(ctx, s, &s.dailyUsageRows, state, memoSlot, memoVersion, "daily", f, pricingDigest, customModels); ok {
 			if diskReady {
 				if data, err := kept.EncodeRows(rows, dailyUsageRowsBytes, dailyUsageRowBytes); err == nil {
 					s.usageDisk.Put(memoSlot, usageDiskVersion+memoVersion, data)
@@ -2449,7 +2449,7 @@ func (s *Store) GetTopSessionsByCost(
 	}
 	if !ok {
 		out, ok = carryRawUsage(ctx, s, &s.topSessionTotals, state, memoSlot, memoVersion,
-			"top", f, pricing.digest+"|"+pricing.catalog.digest, pricing.catalog.digest, nil)
+			"top", f, pricing.digest+"|"+pricing.catalog.digest, nil)
 		if ok && diskReady {
 			if data, err := kept.EncodeRows(out, kept.DefaultMaxBytes, db.TopSessionBytes); err == nil {
 				s.usageDisk.Put(memoSlot, topUsageDiskVersion+memoVersion, data)
@@ -2685,13 +2685,17 @@ var chUsageCarryTables = slices.Concat(
 	chRawHostUsageTables, []string{"usage_price_models"},
 )
 
+var chUsageRawTables = slices.DeleteFunc(slices.Clone(chUsageCarryTables), func(table string) bool {
+	return table == usageSessionSnapshotTable
+})
+
 // carryRawUsage promotes an existing raw result only after the published
 // snapshots are shown to contain those same rows.
-func carryRawUsage[T any](ctx context.Context, s *Store, memo *kept.Memo[T], state preparedUsageState, slot, version, kind string, f db.UsageFilter, pricing, pricingDigest string, custom [][2]string) ([]T, bool) {
+func carryRawUsage[T any](ctx context.Context, s *Store, memo *kept.Memo[T], state preparedUsageState, slot, version, kind string, f db.UsageFilter, pricing string, custom [][2]string) ([]T, bool) {
 	if !state.ready || len(state.raw) != 0 || slot == "" {
 		return nil, false
 	}
-	rawVersion, err := s.usageReadFingerprint(ctx, preparedUsageState{}, pricingDigest)
+	rawVersion, err := s.usageReadFingerprint(ctx, preparedUsageState{}, "")
 	if err != nil || rawVersion == "" {
 		return nil, false
 	}
@@ -2740,11 +2744,18 @@ func (s *Store) usageCarryPublished(ctx context.Context) bool {
 // pricingDigest names the price records the read joins; see usageRowsVersion.
 func (s *Store) usageReadFingerprint(ctx context.Context, state preparedUsageState, pricingDigest string) (string, error) {
 	if !state.ready {
-		version, ok, err := s.usageRowsVersion(ctx, chUsageCarryTables, pricingDigest)
+		if _, ok := ctx.Value(partsSnapshotKey{}).(partsSnapshot); !ok {
+			var err error
+			ctx, err = s.withPartsSnapshot(ctx)
+			if err != nil {
+				return "", err
+			}
+		}
+		version, ok, err := s.usageRowsVersion(ctx, []string{usageSessionSnapshotTable}, "")
 		if err != nil || !ok {
 			return "", err
 		}
-		return version, nil
+		return s.usageRawPartsVersion(ctx.Value(partsSnapshotKey{}).(partsSnapshot)) + "|" + version, nil
 	}
 	if len(state.raw) == 0 {
 		version, ok, err := s.usageRowsVersion(ctx, chUsageReadTables, pricingDigest)
@@ -2764,6 +2775,64 @@ func (s *Store) usageReadFingerprint(ctx context.Context, state preparedUsageSta
 
 type usageTableVersion struct {
 	parts, identity string
+	rawParts        map[string]partInfo
+}
+
+// usageRawPartsVersion keeps a key across proven merges, and changes it for
+// inserts, mutations, dropped parts, patches, and unrecognized replacements.
+func (s *Store) usageRawPartsVersion(snapshot partsSnapshot) string {
+	s.usageVersions.Lock()
+	defer s.usageVersions.Unlock()
+	return tableValuesFingerprint(chUsageRawTables, func(table string) string {
+		tp := snapshot[table]
+		key := "raw:" + table
+		old, exists := s.usageVersions.tables[key]
+		if exists && old.parts == tp.digest {
+			return old.identity
+		}
+		cur := make(map[string]partInfo, len(tp.parts))
+		stable := exists
+		for _, p := range tp.parts {
+			cur[p.name] = p
+			if p.isPatch() || (old.rawParts[p.name].name != "" && old.rawParts[p.name] != p) {
+				stable = false
+			}
+		}
+		for _, p := range old.rawParts {
+			if p.isPatch() {
+				stable = false
+			}
+		}
+		if stable {
+			previous := maps.Clone(old.rawParts)
+			// Mutation numbers consume block numbers without creating inserted
+			// blocks. Include those known gaps when proving a later merge.
+			for _, p := range tp.parts {
+				if _, found := old.rawParts[p.name]; found {
+					continue
+				}
+				for _, q := range old.rawParts {
+					m := q.mutation
+					if m == 0 || q.partition != p.partition || m < p.minBlock || m > p.maxBlock || slices.ContainsFunc(slices.Collect(maps.Values(old.rawParts)), func(r partInfo) bool {
+						return r.partition == p.partition && r.minBlock <= m && m <= r.maxBlock
+					}) {
+						continue
+					}
+					name := fmt.Sprintf("mutation-gap:%s:%d", p.partition, m)
+					previous[name] = partInfo{name: name, partition: p.partition, minBlock: m, maxBlock: m, mutation: m}
+				}
+			}
+			f := finalRows{parts: previous}
+			plan, ok := f.plan(cur)
+			stable = ok && len(plan.changed) == 0 && len(plan.replaced) == 0
+		}
+		identity := tp.digest
+		if stable {
+			identity = old.identity
+		}
+		s.usageVersions.tables[key] = usageTableVersion{parts: tp.digest, identity: identity, rawParts: cur}
+		return identity
+	})
 }
 
 // chUsagePriceTable keeps the price records of every pricing digest the
@@ -2878,7 +2947,7 @@ func (s *Store) usageIdentitiesLocked(
 		identities[f.spec.table] = f.identity()
 	}
 	for table, identity := range read {
-		s.usageVersions.tables[usageVersionKey(table, pricingDigest)] = usageTableVersion{snapshot[table].digest, identity}
+		s.usageVersions.tables[usageVersionKey(table, pricingDigest)] = usageTableVersion{parts: snapshot[table].digest, identity: identity}
 	}
 	for _, table := range tables {
 		if _, ok := identities[table]; !ok {

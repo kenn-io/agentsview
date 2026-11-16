@@ -62,11 +62,9 @@ func TestUsageCarry(t *testing.T) {
 			case "snapshot merge":
 				execPreparedUsage(t, store, "SYSTEM STOP MERGES usage_session_snapshots")
 			}
-			var rawVersion, rawParts string
+			var rawParts string
 			if scenario == "raw merge" {
 				var err error
-				rawVersion, err = store.usageReadFingerprint(t.Context(), preparedUsageState{}, "")
-				require.NoError(t, err)
 				rawParts, err = store.tablePartsFingerprint(t.Context(), []string{"usage_messages"})
 				require.NoError(t, err)
 			}
@@ -95,9 +93,6 @@ func TestUsageCarry(t *testing.T) {
 				parts, err := store.tablePartsFingerprint(t.Context(), []string{"usage_messages"})
 				require.NoError(t, err)
 				require.NotEqual(t, rawParts, parts)
-				version, err := store.usageReadFingerprint(t.Context(), preparedUsageState{}, "")
-				require.NoError(t, err)
-				require.Equal(t, rawVersion, version)
 			}
 			if scenario == "changed after read" {
 				republishRoundSession(t, local, 123)
@@ -114,7 +109,18 @@ func TestUsageCarry(t *testing.T) {
 					execPreparedUsage(t, store, "INSERT INTO usage_messages SELECT * FROM usage_messages")
 				}
 			}
+			rawScans := func() uint64 {
+				t.Helper()
+				execPreparedUsage(t, store, "SYSTEM FLUSH LOGS")
+				var n uint64
+				require.NoError(t, store.DB().QueryRowContext(t.Context(), `SELECT count() FROM system.query_log WHERE current_database = currentDatabase() AND type = 'QueryStart' AND is_initial_query = 1 AND (startsWith(query, 'SELECT [assumeNotNull(') OR startsWith(query, '/* final rows */ ')) AND position(query, 'FROM usage_messages') > 0`).Scan(&n))
+				return n
+			}
 			for i, f := range filters {
+				var scansBefore uint64
+				if scenario == "raw merge" {
+					scansBefore = rawScans()
+				}
 				_, beforeResults := usageQueryCounts(t, store)
 				daily, err := store.GetDailyUsage(t.Context(), f)
 				require.NoError(t, err)
@@ -122,11 +128,11 @@ func TestUsageCarry(t *testing.T) {
 				top, err := store.GetTopSessionsByCost(t.Context(), f, 10)
 				require.NoError(t, err)
 				_, afterTop := usageQueryCounts(t, store)
-				if scenario == "healthy" || scenario == "raw merge" || scenario == "snapshot merge" || (scenario == "parts move" && i > 0) {
+				if scenario == "raw merge" {
+					require.Equal(t, scansBefore, rawScans())
+				}
+				if scenario == "healthy" || scenario == "raw merge" || scenario == "snapshot merge" {
 					require.Equal(t, beforeResults, afterDaily)
-					require.Equal(t, afterDaily, afterTop)
-				} else if scenario == "parts move" {
-					require.Greater(t, afterDaily, beforeResults)
 					require.Equal(t, afterDaily, afterTop)
 				} else {
 					require.Greater(t, afterDaily, beforeResults)
@@ -197,6 +203,9 @@ func TestUsageCarryVersionTables(t *testing.T) {
 	before := version()
 	execPreparedUsage(t, store, "SYSTEM START MERGES usage_session_snapshots", "ALTER TABLE usage_session_snapshots MATERIALIZE COLUMN usage_recorded_costs SETTINGS mutations_sync = 2")
 	require.Equal(t, before, version())
+	before = version()
+	execPreparedUsage(t, store, "SYSTEM START MERGES usage_messages", "ALTER TABLE usage_messages DELETE WHERE ordinal = 0 SETTINGS mutations_sync = 2")
+	require.NotEqual(t, before, version())
 }
 
 func TestUsageCarryRecordedCostMaterialization(t *testing.T) {
