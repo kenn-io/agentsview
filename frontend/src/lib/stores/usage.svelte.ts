@@ -87,10 +87,6 @@ function emptyPairwiseSelection(): UsagePairwiseSelection {
 
 export type UsageMode = "cost" | "token";
 
-function selectionKey(params: UsageParams): string {
-  return [params.project_key, params.model, params.agent].join("|");
-}
-
 class UsageStore {
   from: string = $state(rollingRange(DEFAULT_WINDOW_DAYS).from);
   to: string = $state(today());
@@ -123,8 +119,6 @@ class UsageStore {
   // The selected-dimension-free summary over the full unbrushed window.
   referenceSummary = $state<UsageSummaryResponse | null>(null);
   private timeSeriesContextSummary = $state<UsageSummaryResponse | null>(null);
-  // Which selection the shown summary covers, so a failed reselect reports instead of showing old totals.
-  private summarySelection: string | null = null;
   // A full-window refresh is in flight, so a brush must refetch the window instead of slicing old data.
   private fullWindowPending = false;
   isTimeRangeSummaryProvisional = $state(false);
@@ -939,7 +933,6 @@ class UsageStore {
       }
       if (this.versions.summary === v) {
         this.summary = data;
-        this.summarySelection = selectionKey(params);
         if (contextData !== null || this.selectedTimeRange === null) this.fullWindowPending = false;
         this.attributionSummary = attributionData;
         if (!attributionParams) this.referenceSummary = null;
@@ -1063,13 +1056,12 @@ class UsageStore {
                 console.warn("usage attribution restore failed:", attributionError);
             }
           }
-        } else if (
-          this.summary === null ||
-          (this.summarySelection !== null && selectionKey(params) !== this.summarySelection)
-        ) {
-          this.errors.summary = e instanceof Error ? e.message : m.shared_failed_to_load();
         } else {
-          console.warn("usage.fetchSummary refetch failed:", e);
+          // The last good summary stays loaded so the charts keep their
+          // colors. It may answer other filters or dates, so while this error
+          // stands the summary cards show no totals and no panel claims the
+          // period is empty.
+          this.errors.summary = e instanceof Error ? e.message : m.shared_failed_to_load();
         }
       }
     } finally {
@@ -1209,11 +1201,8 @@ class UsageStore {
       if (this.versions.pairwise === pairwiseVersion) {
         if (e instanceof ApiError && e.code === "invalid_machine_filter")
           this.pairwiseComparison = null;
-        if (this.pairwiseComparison === null) {
-          this.errors.pairwise = e instanceof Error ? e.message : m.shared_failed_to_load();
-        } else {
-          console.warn("usage.fetchPairwise failed:", e);
-        }
+        // A comparison from an earlier load stays on screen with the error above it.
+        this.errors.pairwise = e instanceof Error ? e.message : m.shared_failed_to_load();
       }
       return "error";
     } finally {
@@ -1245,7 +1234,7 @@ class UsageStore {
     else void this.fetchZoom();
   }
 
-  private async fetchZoom(params: UsageParams = this.baseParams()): Promise<FetchResult> {
+  async fetchZoom(params: UsageParams = this.baseParams()): Promise<FetchResult> {
     const projectKey = this.zoomedProject?.key;
     if (!projectKey) return "ok";
     return this.fetchRanking("zoom", { ...params, group_by: "group", limit: 100 });
@@ -1307,9 +1296,11 @@ class UsageStore {
           if (panel === "zoom") this.zoomRows = null;
           else this.topSessions = null;
           this.errors[panel] = error.message;
-        } else if ((panel === "zoom" ? this.zoomRows : this.topSessions) === null) {
+        } else {
+          // Zoom rows from an earlier load stay under the error; the top
+          // sessions table shows the error in place of its rows.
           this.errors[panel] = error instanceof Error ? error.message : m.shared_failed_to_load();
-        } else console.warn(`usage.${panel} refetch failed:`, error);
+        }
       }
       return status;
     } finally {

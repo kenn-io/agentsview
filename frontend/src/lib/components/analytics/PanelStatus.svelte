@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { Button } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
+  import LoadError from "../shared/LoadError.svelte";
+  import LoadingState from "../shared/LoadingState.svelte";
 
   interface Props {
     hasData: boolean;
@@ -13,30 +14,16 @@
   let { hasData, pending, error, onRetry, loadingLabel = m.usage_loading() }: Props = $props();
 </script>
 
+<!-- A dashboard panel's own load state, so one failed panel never blanks
+     the others. A failed retry keeps the error until a load succeeds. -->
 {#if error}
-  <div class="error">
-    <span>{error}</span>
-    <Button size="sm" surface="soft" label={m.shared_retry()} busy={pending} onclick={onRetry} />
-  </div>
+  <LoadError class="panel-status-error" message={error} onRetry={pending ? undefined : onRetry} telemetry="analytics" />
 {:else if !hasData}
-  <div class="loading" role="status">{loadingLabel}</div>
+  <LoadingState align="center" label={loadingLabel} />
 {/if}
 
 <style>
-  .error {
-    color: var(--accent-red);
-    font-size: 12px;
-    /* Block padding only, so the message shares the panel title's left edge. */
-    padding: 12px 0;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .loading {
-    color: var(--text-muted);
-    font-size: 12px;
-    padding: 24px;
-    text-align: center;
+  :global(.panel-status-error) {
+    margin-block: 12px;
   }
 </style>

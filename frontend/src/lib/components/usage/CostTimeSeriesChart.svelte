@@ -693,7 +693,10 @@
   </div>
 
   {#if seriesData.points.length === 0}
-    <div class="empty">{m.shared_no_data_for_period()}</div>
+    <!-- Without a current summary, the summary error or refresh status says why. -->
+    {#if usage.timeSeriesSummary !== null && !usage.errors.summary}
+      <div class="empty">{m.shared_no_data_for_period()}</div>
+    {/if}
   {:else}
     {#if legendKeys.length > 1}
       <div class="legend">
