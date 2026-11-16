@@ -214,15 +214,16 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 		})
 	}
 	for _, tc := range []struct {
-		pattern string
-		want    []hit
+		pattern, mode string
+		want          []hit
 	}{
-		{`"rounding of invoices"`, []hit{{"two", "message", 0}}},
-		{`policy "quarterly forecast"`, []hit{{"phrase", "message", 2}}},
-		{`policy "forecast quarterly"`, nil},
-		{`policy "quarterly missing"`, nil},
+		{`"rounding of invoices"`, "", []hit{{"two", "message", 0}}},
+		{`policy "quarterly forecast"`, "", []hit{{"phrase", "message", 2}}},
+		{`policy "quarterly* forecast"`, "fts", []hit{{"phrase", "message", 2}}},
+		{`policy "forecast quarterly"`, "", nil},
+		{`policy "quarterly missing"`, "", nil},
 	} {
-		page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: tc.pattern, Project: "word-search"})
+		page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: tc.pattern, Mode: tc.mode, Project: "word-search"})
 		require.NoError(t, err)
 		assert.Equal(t, tc.want, project(page.Matches), tc.pattern)
 	}

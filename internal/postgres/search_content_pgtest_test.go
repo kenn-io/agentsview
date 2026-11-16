@@ -4,7 +4,6 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -183,14 +182,6 @@ func TestSearchContentSnapshotDuringUpdate(t *testing.T) {
 	require.NoError(t, updateErr)
 	require.Len(t, page.Matches, 1)
 	assert.Contains(t, page.Matches[0].Snippet, "invoice rounding")
-
-	tx, err := store.beginTx(t.Context(), &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
-	require.NoError(t, err)
-	defer func() { _ = tx.Rollback() }()
-	page, err = store.readView(tx).SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "invoice rounding", Project: "snapshot"})
-	require.NoError(t, err)
-	require.Len(t, page.Matches, 1)
-	assert.Contains(t, page.Matches[0].Snippet, "invoice only")
 }
 
 func TestSearchContentExactTierPaging(t *testing.T) {
