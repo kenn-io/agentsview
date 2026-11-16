@@ -566,26 +566,37 @@ func TestAntigravityCLIDBMixedTypedAndFallbackHistory(t *testing.T) {
 	assert.Equal(t, "actual second prompt", msgs[3].Content)
 }
 
-func TestAntigravityCLIDBTypedPromptPreservesLiteralEnvelope(t *testing.T) {
-	root := t.TempDir()
-	id := "33333333-4444-5555-6666-777777777777"
-	mustMkdir(t, filepath.Join(root, "conversations"))
-	dbPath := filepath.Join(root, "conversations", id+".db")
-	createAntigravityTestDB(t, dbPath)
-	db, err := sql.Open("sqlite3", dbPath)
-	require.NoError(t, err)
-	const prompt = "<USER_REQUEST>literal prompt</USER_REQUEST><ADDITIONAL_METADATA>literal metadata</ADDITIONAL_METADATA>"
-	item := encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: []byte(prompt)}})
-	input := encodePB([]pbField{{num: 3, wire: pbWireBytes, bytes: item}})
-	mustExec(t, db, `UPDATE steps SET step_payload = ? WHERE idx = 0`,
-		encodePB([]pbField{{num: 19, wire: pbWireBytes, bytes: input}}))
-	require.NoError(t, db.Close())
-
-	sess, msgs, err := parseAntigravityCLITestSession(t, dbPath, "", "test-machine")
-	require.NoError(t, err)
-	require.Len(t, msgs, 2)
-	assert.Equal(t, prompt, msgs[0].Content)
-	assert.Equal(t, prompt, sess.FirstMessage)
+func TestAntigravityCLIDBStructuredPromptUnwrapsEnvelope(t *testing.T) {
+	for _, withHistory := range []bool{false, true} {
+		name := "without history"
+		if withHistory {
+			name = "with clean history"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			id := "33333333-4444-5555-6666-777777777777"
+			mustMkdir(t, filepath.Join(root, "conversations"))
+			dbPath := filepath.Join(root, "conversations", id+".db")
+			createAntigravityTestDB(t, dbPath)
+			db, err := sql.Open("sqlite3", dbPath)
+			require.NoError(t, err)
+			const envelope = "<USER_REQUEST>user request</USER_REQUEST><ADDITIONAL_METADATA>injected context</ADDITIONAL_METADATA>"
+			item := encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: []byte(envelope)}})
+			input := encodePB([]pbField{{num: 3, wire: pbWireBytes, bytes: item}})
+			mustExec(t, db, `UPDATE steps SET step_payload = ? WHERE idx = 0`,
+				encodePB([]pbField{{num: 19, wire: pbWireBytes, bytes: input}}))
+			require.NoError(t, db.Close())
+			if withHistory {
+				mustWrite(t, filepath.Join(root, "history.jsonl"),
+					[]byte(`{"display":"user request","timestamp":1779000000000,"conversationId":"`+id+`"}`))
+			}
+			sess, msgs, err := parseAntigravityCLITestSession(t, dbPath, "", "test-machine")
+			require.NoError(t, err)
+			require.Len(t, msgs, 2)
+			assert.Equal(t, "user request", msgs[0].Content)
+			assert.Equal(t, "user request", sess.FirstMessage)
+		})
+	}
 }
 
 func TestAntigravityCLIDBLaterTypedPromptWithHistoryTime(t *testing.T) {

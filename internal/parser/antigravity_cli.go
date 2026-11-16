@@ -748,7 +748,7 @@ func normalizedAntigravityPrompt(s string) string {
 }
 
 func normalizeAntigravityCLIUserMessage(msg *ParsedMessage, history map[string]struct{}) {
-	if msg.Role != RoleUser || msg.IsSystem || msg.antigravityTypedPrompt {
+	if msg.Role != RoleUser || msg.IsSystem {
 		return
 	}
 	if _, authored := history[strings.TrimSpace(msg.Content)]; authored {
