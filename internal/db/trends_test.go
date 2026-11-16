@@ -571,3 +571,116 @@ func TestAppendTrendLower(t *testing.T) {
 		assert.Equal(t, strings.ToLower(text), string(buffer))
 	}
 }
+
+func TestTrendsPartsRecountChangedSessionStart(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	start := "2024-06-05T09:00:00Z"
+	insertSession(t, d, "s1", "proj-a", func(s *Session) {
+		s.StartedAt = &start
+		s.CreatedAt = "2024-06-04T08:00:00Z"
+		s.MessageCount, s.UserMessageCount = 1, 1
+	})
+	insertMessages(t, d, Message{SessionID: "s1", Ordinal: 0, Role: "user", Content: "seam", ContentLength: 4})
+	terms, err := ParseTrendTerms([]string{"seam"})
+	require.NoError(t, err)
+	f := AnalyticsFilter{From: "2024-06-05", To: "2024-06-06", Timezone: "UTC"}
+	got, err := d.trendsTerms(t.Context(), f, terms, "day")
+	require.NoError(t, err)
+	assert.Equal(t, []TrendPoint{{Date: "2024-06-05", Count: 1}, {Date: "2024-06-06", Count: 0}}, got.Series[0].Points)
+	session, err := d.GetSession(t.Context(), "s1")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	start = "2024-06-06T09:00:00Z"
+	session.StartedAt = &start
+	require.NoError(t, d.UpsertSession(t.Context(), *session))
+	var reads [][]string
+	reset := SetTrendPartsReadObserver(func(ids []string) { reads = append(reads, append([]string(nil), ids...)) })
+	t.Cleanup(reset)
+	got, err = d.trendsTerms(t.Context(), f, terms, "day")
+	require.NoError(t, err)
+	assert.Equal(t, []TrendPoint{{Date: "2024-06-05", Count: 0}, {Date: "2024-06-06", Count: 1}}, got.Series[0].Points)
+	assert.Equal(t, [][]string{{"s1"}}, reads)
+}
+
+func TestTrendsPartsConcurrentBatch(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	for _, id := range []string{"a", "b"} {
+		insertSession(t, d, id, "project", func(s *Session) { s.MessageCount, s.UserMessageCount = 1, 1 })
+		insertMessages(t, d, Message{SessionID: id, Role: "user", Content: "apple", Timestamp: "2025-03-10T12:00:00Z"})
+	}
+	terms, err := ParseTrendTerms([]string{"apple"})
+	require.NoError(t, err)
+	f := AnalyticsFilter{From: "2025-03-10", To: "2025-03-10", Timezone: "UTC"}
+	first, err := d.trendsTerms(ctx, f, terms, "day")
+	require.NoError(t, err)
+	require.Equal(t, 2, first.Series[0].Total)
+	require.NoError(t, d.ReplaceSessionMessages(ctx, "a", []Message{{SessionID: "a", Role: "user", Content: "apple apple", Timestamp: "2025-03-10T12:00:00Z"}}))
+	session, err := d.GetSession(ctx, "b")
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	writes := []SessionBatchWrite{{Session: *session, ReplaceMessages: true, Messages: []Message{{SessionID: "b", Role: "user", Content: "apple apple", Timestamp: "2025-03-10T12:00:00Z"}}}}
+	var readIDs []string
+	var writeErr error
+	reset := SetTrendPartsReadObserver(func(ids []string) {
+		readIDs = append(readIDs, ids...)
+		_, writeErr = d.WriteSessionBatchAtomic(ctx, writes)
+	})
+	got, err := d.trendsTerms(ctx, f, terms, "day")
+	reset()
+	require.NoError(t, err)
+	require.NoError(t, writeErr)
+	require.Equal(t, []string{"a"}, readIDs)
+	require.Equal(t, 4, got.Series[0].Total)
+	again, err := d.trendsTerms(ctx, f, terms, "day")
+	require.NoError(t, err)
+	require.Equal(t, 4, again.Series[0].Total)
+}
+
+func TestTrendsSQLiteOffsetWindows(t *testing.T) {
+	ctx := t.Context()
+	d := testDB(t)
+	start := "2024-01-01T00:00:00Z"
+	insertSession(t, d, "offset-upper", "project", func(s *Session) {
+		s.StartedAt = &start
+		s.MessageCount, s.UserMessageCount = 1, 1
+	})
+	insertMessages(t, d, Message{SessionID: "offset-upper", Ordinal: 0, Role: "user", Content: "probe", ContentLength: 5, Timestamp: "2025-03-10T23:00:00+14:00"})
+	fallback := "2025-03-08T22:00:00-12:00"
+	insertSession(t, d, "offset-fallback", "project", func(s *Session) {
+		s.StartedAt = &fallback
+		s.MessageCount, s.UserMessageCount = 1, 1
+	})
+	insertMessages(t, d, Message{SessionID: "offset-fallback", Ordinal: 0, Role: "user", Content: "probe", ContentLength: 5})
+	insertSession(t, d, "offset-old", "project", func(s *Session) {
+		s.StartedAt = &start
+		s.MessageCount, s.UserMessageCount = 1, 1
+	})
+	insertMessages(t, d, Message{SessionID: "offset-old", Ordinal: 0, Role: "user", Content: "probe", ContentLength: 5, Timestamp: "2024-01-01T00:00:00-12:00"})
+	terms, err := ParseTrendTerms([]string{"probe"})
+	require.NoError(t, err)
+	f := AnalyticsFilter{From: "2025-03-10", To: "2025-03-10", Timezone: "Pacific/Kiritimati"}
+	var reads [][]string
+	reset := SetTrendPartsReadObserver(func(ids []string) { reads = append(reads, append([]string(nil), ids...)) })
+	t.Cleanup(reset)
+	retained, err := d.GetTrendsTerms(ctx, f, terms, "day")
+	require.NoError(t, err)
+	assert.Equal(t, 2, retained.MessageCount)
+	assert.Equal(t, 2, retained.Series[0].Total)
+	require.Equal(t, [][]string{{"offset-fallback", "offset-upper"}}, reads)
+	reads = nil
+
+	f.To = "2025-03-11"
+	wide, err := d.GetTrendsTerms(ctx, f, terms, "day")
+	require.NoError(t, err)
+	assert.Equal(t, 2, wide.MessageCount)
+	assert.Equal(t, []TrendPoint{{Date: "2025-03-10", Count: 2}, {Date: "2025-03-11", Count: 0}}, wide.Series[0].Points)
+	assert.Empty(t, reads)
+	f.From, f.To = "2024-01-02", "2024-01-02"
+	old, err := d.GetTrendsTerms(ctx, f, terms, "day")
+	require.NoError(t, err)
+	assert.Equal(t, 1, old.Series[0].Total)
+	assert.Equal(t, [][]string{{"offset-old"}}, reads)
+}

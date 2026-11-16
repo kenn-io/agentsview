@@ -51,6 +51,10 @@ for images stored outside SQLite, `config.toml` for settings, and
 `telemetry-install-id` for installation identity. Keep the database and assets
 together when restoring or moving the archive.
 
+Trends keeps per-session counts under `$CACHE_DIRECTORY/sqlite-trends`, or
+`agentsview/sqlite-trends` in the user cache directory, up to 256 MiB per
+archive. They are safe to delete; the next Trends visit counts messages again.
+
 SQLite needs a writable temp directory for session writes and large sorts.
 AgentsView uses the system temp directory: `TMP` or `TEMP` on Windows, and
 `TMPDIR` elsewhere. If that directory cannot be written, for example inside a
@@ -156,8 +160,8 @@ writes keep inline content, and archives that omit tool content write no assets.
 See [image storage](/docs/data/#ingest-time-image-offload) for retries, backups,
 and remote-backend limits.
 
-You can also select **Offload** under **Settings > Tool-result images**. The
-restart notice appears after you save a changed policy.
+You can also select **Offload** under **Settings > Tool-result images**. After
+you save a changed policy, select **Restart now** in the notice to apply it.
 
 ![Tool-result image policy in Settings](/docs/assets/generated/screenshots/settings-archive-content.png)
 
@@ -619,6 +623,7 @@ keeps its default directories.
 | MiMoCode              | `~/.local/share/mimocode/`                                                                                                                                       | SQLite DB or `storage/` JSON files                                                                                                                            |
 | Mistral Vibe          | `~/.vibe/logs/session/`                                                                                                                                          | Legacy `messages.jsonl` plus `meta.json`, or a `unified/<session-id>/` store                                                                                  |
 | Muse Code             | `~/.local/share/muse/sessions/`                                                                                                                                  | `YYYY/MM/DD/<session>/session.jsonl` event logs, subagents under `subagent/`                                                                                  |
+| Muse Personal         | `~/agents/` on your Muse's hosted machine                                                                                                                        | `agent-<uuid>/sessions/<session-uuid>.jsonl` with optional sibling `sessions.json`; override with `MUSE_PERSONAL_AGENTS_DIR`                                  |
 | OMO                   | `~/.omo/agent/sessions/`                                                                                                                                         | Pi-family JSONL per session                                                                                                                                   |
 | OhMyPi                | `~/.omp/agent/sessions/`                                                                                                                                         | JSONL per session                                                                                                                                             |
 | OpenClaw              | `~/.openclaw/agents/` and `~/.kimi_openclaw/agents/`                                                                                                             | JSONL per session or SQLite per agent (`agent/openclaw-agent.sqlite`)                                                                                        |
@@ -1188,6 +1193,7 @@ export KIRO_IDE_DIR=~/custom/kiro-ide
 export KILO_LEGACY_DIR=~/custom/kilo-legacy
 export MIMOCODE_DIR=~/custom/mimocode
 export MUSE_SESSIONS_DIR=~/custom/muse/sessions
+export MUSE_PERSONAL_AGENTS_DIR=~/custom/agents
 export VIBE_SESSIONS_DIR=~/custom/vibe/logs/session
 export OMP_DIR=~/custom/omp
 export OPENCLAW_DIR=~/custom/openclaw
@@ -1223,6 +1229,72 @@ export ZCODE_DIR=~/custom/zcode/cli
 export ZED_DIR=~/custom/zed
 export ZENCODER_DIR=~/custom/zencoder
 ```
+
+### Muse Personal
+
+Muse Personal is Meta's personal assistant, separate from Muse Code.
+
+**AgentsView does not collect Muse Personal sessions on your laptop.** Your
+Muse runs on a machine that Meta hosts for you, and it writes its transcripts
+there. The Muse desktop, web and phone apps only connect to that machine. They
+keep no transcripts on your computer, so an AgentsView installed on your laptop
+finds no Muse Personal sessions. AgentsView must run on your Muse's own machine.
+
+To collect your Muse Personal sessions:
+
+1. Ask your Muse to install the AgentsView CLI on its machine:
+
+   ```bash
+   curl -fsSL https://agentsview.io/install.sh | bash
+   ```
+
+   The installer fetches the latest release. Release 0.47.0 and earlier
+   cannot read Muse Personal sessions. Support is on `main` and ships in the
+   first release that lists it in the [changelog](/docs/changelog/). Until then
+   the installed CLI finds no Muse Personal sessions.
+
+1. Ask your Muse to run `agentsview source sync` on that machine. AgentsView
+   reads `~/agents/agent-<uuid>/sessions/<session-uuid>.jsonl` under your
+   Muse's home directory.
+
+1. To browse these sessions beside your other agents, configure `[pg]` on your
+   Muse's machine and ask your Muse to run
+   `agentsview replica pg service install`. That service keeps pushing new
+   sessions to the PostgreSQL database your other machines push to. Your
+   Muse's machine needs network access to that database. See
+   [PostgreSQL Sync](/docs/pg-sync/#multi-machine-workflow).
+
+Each transcript must have a version-1 `session_header` with a session ID
+matching its filename. The optional sibling `sessions.json` index can extend
+the session's end time; missing, stale or unknown-version indexes do not
+prevent collection.
+
+Set `MUSE_PERSONAL_AGENTS_DIR` or configure the root explicitly:
+
+```toml
+[agents.muse-personal]
+dirs = ["/example/agents"]
+```
+
+Use an explicit root when the collecting process's `HOME` differs from the
+transcript owner's. `agentsview doctor sync` shows the resolved root.
+
+AgentsView collects sessions your Muse started on a schedule as well as ones you
+started. Raw capture keeps the transcript and any regular index as original
+bytes.
+
+Items appear in stable `seq` order, with same-sequence occurrences keeping their
+file order. Tool outputs pair only with a unique preceding unmatched call;
+ambiguous or unmatched outputs remain separate tool rows. Compaction summaries
+appear as boundaries without deleting earlier history. File references are inert
+text: AgentsView never opens their recorded paths. A final line still being
+written delays publication until it is complete.
+
+Titles, parent links, public model names, token usage and costs are not inferred
+from these files. Context-window snapshots and opaque metadata remain in raw
+custody. The maintainer
+[format evidence](https://github.com/kenn-io/agentsview/blob/main/docs/internal/session-format-sources.md#muse-personal-muse-personal)
+records the projection's limits.
 
 ### CodeBuddy
 
@@ -2755,11 +2827,27 @@ commands that connect to a daemon use the daemon's integration configuration.
 MCP offers `get_session_file_references` when its backend enables Docbank
 lookup. Connections through a signed reader listener omit this tool.
 
-| Setting                            | Purpose                                           |
-| ---------------------------------- | ------------------------------------------------- |
-| `integrations.docbank.url`         | Docbank API base URL. HTTPS, or HTTP on loopback. |
-| `integrations.docbank.web_url`     | Optional browser base URL for version links.      |
-| `integrations.docbank.api_key_env` | Environment variable containing the API key.      |
+| Setting                            | Purpose                                                              |
+| ---------------------------------- | -------------------------------------------------------------------- |
+| `integrations.docbank.url`         | Docbank API base URL. HTTPS, or HTTP under the policy below.         |
+| `integrations.docbank.web_url`     | Optional browser base URL for version links.                         |
+| `integrations.docbank.api_key_env` | Environment variable containing the API key.                         |
+| `integrations.docbank.allow_http`  | Allow plaintext HTTP to any host. Default: `false`.                  |
+
+HTTPS and loopback HTTP work by default. For a trusted private container
+network, opt in explicitly:
+
+```toml
+[integrations.docbank]
+url = "http://docbank:8485"
+api_key_env = "DOCBANK_API_KEY"
+allow_http = true
+```
+
+`allow_http` applies to both `url` and the optional `web_url`, matching the
+Insights transport policy. HTTP exposes the API key and requested digests in
+plaintext, so enable it only on a network you trust. API keys stay in request
+headers and redirects are refused.
 
 Lookup covers retained tool-result images, including offloaded assets, inline
 OpenCode `file.uri` payloads such as PDF and text files, and Markdown `asset://`

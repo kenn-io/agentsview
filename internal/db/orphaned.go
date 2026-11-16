@@ -2577,12 +2577,16 @@ func copySessionDataForIDs(
 				input_tokens, output_tokens,
 				cache_creation_input_tokens, cache_read_input_tokens,
 				reasoning_tokens, cost_microdollars, cost_status, cost_source,
-				occurred_at, dedup_key`
+				occurred_at, dedup_key, occurred_at_us`
+		// Derive occurred_at_us from the text rather than copy it, so rows
+		// from an archive that predates the column get one too.
 		usageEventSelect += `,
 				input_tokens, output_tokens,
 				cache_creation_input_tokens, cache_read_input_tokens,
 				reasoning_tokens, cost_microdollars, cost_status, cost_source,
-				occurred_at, dedup_key`
+				occurred_at, dedup_key,
+				CASE WHEN typeof(occurred_at) = 'text'
+					THEN agentsview_timestamp_unix_micro(occurred_at) END`
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO usage_events (`+usageEventCols+`)
 			SELECT `+usageEventSelect+`

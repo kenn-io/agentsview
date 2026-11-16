@@ -48,10 +48,16 @@ const (
 var goalContextSourceAttrRe = regexp.MustCompile(`(?:^|\s)` +
 	regexp.QuoteMeta(goalContextSourceAttr) + `(?:\s|/|$)`)
 
+var goalContextWhitespace = strings.NewReplacer("\t", " ", "\n", " ", "\v", " ", "\f", " ", "\r", " ")
+
 // IsGoalContextPrefixed reports whether a user-role message is a legacy
 // Codex /goal continuation wrapper that may already be stored in older
 // archives or read-only stores.
 func IsGoalContextPrefixed(content, role string) bool {
+	return goalContextPrefixed(content, role, goalContextSourceAttrRe.MatchString)
+}
+
+func goalContextPrefixed(content, role string, attrMatch func(string) bool) bool {
 	if role != "user" {
 		return false
 	}
@@ -61,9 +67,18 @@ func IsGoalContextPrefixed(content, role string) bool {
 	}
 	if strings.HasPrefix(trimmed, codexInternalContextTagPrefix) {
 		openTag, _, ok := strings.Cut(trimmed, ">")
-		return ok && goalContextSourceAttrRe.MatchString(openTag)
+		return ok && attrMatch(openTag)
 	}
 	return false
+}
+
+func duckDBGoalContextPrefixed(content, role string) bool {
+	return goalContextPrefixed(content, role, func(openTag string) bool {
+		openTag = goalContextWhitespace.Replace(openTag + ">")
+		return strings.Contains(openTag, goalContextSourceAttrSQLPrefix+" ") ||
+			strings.Contains(openTag, goalContextSourceAttrSQLPrefix+">") ||
+			strings.Contains(openTag, goalContextSourceAttrSQLPrefix+"/>")
+	})
 }
 
 type systemPrefixSQLDialect int
@@ -85,6 +100,11 @@ func SystemPrefixSQL(contentCol, roleCol string) string {
 // PostgresSystemPrefixSQL is the PostgreSQL form of SystemPrefixSQL.
 func PostgresSystemPrefixSQL(contentCol, roleCol string) string {
 	return systemPrefixSQL(contentCol, roleCol, systemPrefixPostgres, true)
+}
+
+// PostgresLatin1SearchSQL removes trim characters a LATIN1 database cannot store.
+func PostgresLatin1SearchSQL(query string) string {
+	return strings.ReplaceAll(query, "'"+systemPrefixTrimCutset+"'", "' \t\n\v\f\r\u0085\u00a0'")
 }
 
 // PostgresSystemPrefixSQLWithoutGuard avoids guard overhead on small candidate sets.
@@ -283,6 +303,15 @@ const systemPrefixTrimCutset = " \t\n\v\f\r" +
 // user-role messages match, and leading whitespace is trimmed with the same
 // cutset before the case-sensitive prefix comparison.
 func IsSystemPrefixed(content, role string) bool {
+	return systemPrefixed(content, role, IsGoalContextPrefixed)
+}
+
+// IsDuckDBSystemPrefixed preserves the DuckDB search filter's goal-tag rules.
+func IsDuckDBSystemPrefixed(content, role string) bool {
+	return systemPrefixed(content, role, duckDBGoalContextPrefixed)
+}
+
+func systemPrefixed(content, role string, goal func(string, string) bool) bool {
 	if role != "user" {
 		return false
 	}
@@ -294,7 +323,7 @@ func IsSystemPrefixed(content, role string) bool {
 		}
 		trimmed = remainder
 	}
-	if IsGoalContextPrefixed(trimmed, role) {
+	if goal(trimmed, role) {
 		return true
 	}
 	for _, p := range SystemMsgPrefixes {
@@ -349,6 +378,9 @@ type SearchFilter struct {
 	Limit    int
 }
 
+// Slot identifies an exact search selection.
+func (f SearchFilter) Slot() string { return fmt.Sprintf("%#v", f) }
+
 // SearchPage holds paginated search results.
 type SearchPage struct {
 	Results    []SearchResult `json:"results"`
@@ -397,7 +429,30 @@ func (db *DB) Search(
 	if f.Limit <= 0 || f.Limit > MaxSearchLimit {
 		f.Limit = DefaultSearchLimit
 	}
-	ftsQuery, err := db.prepareMessageFTSQuery(ctx, f.Query)
+	cjk := containsCJK(f.Query) && db.HasCJKFTS(ctx)
+	if db.readOnly {
+		return db.search(ctx, f, cjk)
+	}
+	key := fmt.Sprintf("%s|%t", f.Slot(), cjk)
+	id, err := db.GetDatabaseID(ctx)
+	if err != nil {
+		return db.search(ctx, f, cjk)
+	}
+	revision, err := db.UsageChangeRevision(ctx)
+	if err != nil {
+		return db.search(ctx, f, cjk)
+	}
+	searchRevision, err := db.archiveJournalRevision(ctx, archiveMetadataSearchChangeRevisionKey, "search change")
+	if err != nil {
+		return db.search(ctx, f, cjk)
+	}
+	return db.searchKept.Do(ctx, key, fmt.Sprintf("%s|%d|%d", id, revision, searchRevision), func(ctx context.Context) (SearchPage, error) {
+		return db.search(ctx, f, cjk)
+	})
+}
+
+func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage, error) {
+	ftsQuery, err := db.prepareMessageFTSQueryWithCJK(ctx, f.Query, cjk)
 	if err != nil {
 		return SearchPage{}, err
 	}

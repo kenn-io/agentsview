@@ -148,7 +148,8 @@ describe("UsageSummaryCards", () => {
     component = mount(UsageSummaryCards, { target: document.body });
     await usage.fetchSummary({ loadComparison: false });
     await tick();
-    expect(document.querySelector(".error-bar")?.textContent).toContain("Summary failed");
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain("Summary failed");
+    expect(cardValue("Total Input")).toBe("--");
     expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("analytics");
   });
 
@@ -321,9 +322,12 @@ describe("UsageSummaryCards", () => {
     await tick();
 
     expect(document.querySelectorAll(".summary-cards .card")).toHaveLength(10);
+    // The kept summary may answer other filters or dates, so no totals show.
     expect(cardValue("Total Input")).toBe("--");
+    const alert = document.querySelector('[role="alert"]')!;
+    expect(alert.textContent).toContain("boom");
     // Retry keeps the brush and refetches its full-window context like any refresh.
-    document.querySelector<HTMLButtonElement>(".retry-btn")!.click();
+    alert.querySelector<HTMLButtonElement>("button")!.click();
     expect(refresh).toHaveBeenCalledExactlyOnceWith({ preserveTimeRange: true });
     refresh.mockRestore();
   });

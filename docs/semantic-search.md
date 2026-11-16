@@ -800,10 +800,9 @@ agentsview session search "flaky test" --hybrid --project myapp
   matches both surface. When search by meaning is unavailable, CLI and MCP
   return the keyword matches with `effective_mode: hybrid_keyword` and a note
   beside `coverage`. The note gives the readiness reason (`not set up` or
-  indexing progress) and explains that keyword terms must appear. When keyword
-  results are empty or few, try short substring queries with key terms or
-  synonyms, retaining scope in MCP and HTTP requests and other supported
-  filters.
+  indexing progress) and explains that only keyword matches were returned.
+  On CockroachDB, keyword terms must all appear. If results are few, try short
+  substring queries with key terms or synonyms, keeping your filters.
 - Both modes are restricted to the `messages` source — the same restriction
   `--fts` already has — since only user/assistant message content is embedded
   (never raw tool_input/tool_result rows or system messages). Passing `--in`

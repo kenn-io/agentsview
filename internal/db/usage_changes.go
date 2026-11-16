@@ -10,6 +10,7 @@ const (
 	archiveMetadataUsageChangeRevisionKey     = "usage_change_revision"
 	archiveMetadataUsagePricingRevisionKey    = "usage_pricing_revision"
 	archiveMetadataAnalyticsChangeRevisionKey = "analytics_change_revision"
+	archiveMetadataSearchChangeRevisionKey    = "search_change_revision"
 )
 
 const counterTemplate = `
@@ -19,12 +20,22 @@ const counterTemplate = `
   value = CAST(value AS INTEGER) + 1,
   updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');`
 
+// Full replacements need this when only derived dialogue changes: transcript
+// equality ignores dialogue, and the replacement does not fire UPDATE triggers.
+func bumpSearchChangeRevisionTx(tx transactionQueries) error {
+	if _, err := tx.Exec(strings.ReplaceAll(counterTemplate, "{{counter}}", archiveMetadataSearchChangeRevisionKey)); err != nil {
+		return fmt.Errorf("advancing search change revision: %w", err)
+	}
+	return nil
+}
+
 // Replace triggers atomically with column migrations.
 var usageChangeJournalTriggerDropsSQL, usageChangeJournalTriggerSQL = usageChangeJournalSQL()
 
 func usageChangeJournalSQL() (string, string) {
 	counterBody := strings.ReplaceAll(counterTemplate, "{{counter}}", archiveMetadataUsageChangeRevisionKey)
 	analyticsCounterBody := strings.ReplaceAll(counterTemplate, "{{counter}}", archiveMetadataAnalyticsChangeRevisionKey)
+	searchCounterBody := strings.ReplaceAll(counterTemplate, "{{counter}}", archiveMetadataSearchChangeRevisionKey)
 	const pricingRevisionBody = `
  INSERT INTO archive_metadata (key, value)
   VALUES ('usage_pricing_revision', (
@@ -48,8 +59,13 @@ func usageChangeJournalSQL() (string, string) {
 			body = strings.ReplaceAll(sessionBody, "{{session_id}}", sessionID)
 		}
 		switch table {
+		case "image_text_cache", "image_text_occurrences":
+			body = searchCounterBody
 		case "model_pricing", "model_pricing_bands", "genai_pricing":
 			body += pricingRevisionBody
+		}
+		if strings.HasPrefix(name, "trg_messages_search_dialogue") || name == "trg_sessions_search_first_message" {
+			body = searchCounterBody
 		}
 		if condition != "" {
 			condition = "WHEN " + condition
@@ -75,6 +91,13 @@ func usageChangeJournalSQL() (string, string) {
 		changes[i] = "OLD." + column + " IS NOT NEW." + column
 	}
 	add("trg_sessions_analytics_change_update", "UPDATE OF "+strings.Join(columns, ", "), "sessions", strings.Join(changes, " OR "), "", true)
+	add("trg_sessions_search_first_message", "UPDATE OF first_message", "sessions", "OLD.first_message IS NOT NEW.first_message", "", false)
+	add("trg_image_text_cache_search_insert", "INSERT", "image_text_cache", "", "", true)
+	add("trg_image_text_cache_search_delete", "DELETE", "image_text_cache", "", "", true)
+	add("trg_image_text_cache_search_update", "UPDATE OF text, succeeded", "image_text_cache", "OLD.text IS NOT NEW.text OR OLD.succeeded IS NOT NEW.succeeded", "", true)
+	add("trg_image_text_occurrences_search_insert", "INSERT", "image_text_occurrences", "", "", true)
+	add("trg_image_text_occurrences_search_delete", "DELETE", "image_text_occurrences", "", "", true)
+	add("trg_messages_search_dialogue", "UPDATE OF dialogue_text", "messages", "OLD.dialogue_text IS NOT NEW.dialogue_text", "", false)
 	add("trg_messages_analytics_change_length", "UPDATE OF content_length", "messages", "OLD.content_length IS NOT NEW.content_length", "", true)
 	add("trg_tool_calls_analytics_change_delete", "DELETE", "tool_calls", "", "", true)
 	columns = []string{"session_id", "message_id", "category", "tool_name", "observed_outcome", "observed_repeat", "sequence_ending"}
@@ -84,7 +107,7 @@ func usageChangeJournalSQL() (string, string) {
 	}
 	add("trg_tool_calls_analytics_change_update", "UPDATE OF "+strings.Join(columns, ", "), "tool_calls", strings.Join(changes, " OR "), "", true)
 	add("trg_usage_events_usage_change_insert", "INSERT", "usage_events", "", "NEW.session_id", false)
-	columns = []string{"id", "session_id", "message_ordinal", "source", "model", "provider_id", "input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "reasoning_tokens", "cost_microdollars", "cost_status", "cost_source", "occurred_at", "dedup_key"}
+	columns = usageEventRecordColumns
 	changes = make([]string, len(columns))
 	for i, column := range columns {
 		changes[i] = "OLD." + column + " IS NOT NEW." + column
@@ -106,21 +129,8 @@ func usageChangeJournalSQL() (string, string) {
 		}
 		for _, event := range []string{"INSERT", "UPDATE", "DELETE"} {
 			condition := ""
-			if table.name != "genai_pricing" {
-				// Match isPricingMetaPattern and the pricing queries' literal underscore prefix.
-				const oldModel = `OLD.model_pattern NOT LIKE '\_%' ESCAPE '\'`
-				const newModel = `NEW.model_pattern NOT LIKE '\_%' ESCAPE '\'`
-				switch event {
-				case "INSERT":
-					condition = newModel
-				case "DELETE":
-					condition = oldModel
-				case "UPDATE":
-					condition = "(" + oldModel + " OR " + newModel + ") AND "
-				}
-			}
 			if event == "UPDATE" {
-				condition += "(" + strings.Join(changes, " OR ") + ")"
+				condition = "(" + strings.Join(changes, " OR ") + ")"
 			}
 			add("trg_"+table.name+"_usage_change_"+strings.ToLower(event), event, table.name, condition, "", false)
 		}

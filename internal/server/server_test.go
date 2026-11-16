@@ -3969,6 +3969,38 @@ func TestSettingsToolResultImagesRoundTrip(t *testing.T) {
 	assert.Equal(t, config.ToolResultImagesKeep, loadedPolicy(t))
 }
 
+func TestSettingsRestartRequired(t *testing.T) {
+	te := setup(t)
+	check := func(want bool) {
+		t.Helper()
+		w := te.get(t, "/api/v1/settings")
+		assertStatus(t, w, http.StatusOK)
+		var body struct {
+			RestartRequired bool `json:"restart_required"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+		assert.Equal(t, want, body.RestartRequired)
+	}
+	put := func(policy string) {
+		t.Helper()
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings", strings.NewReader(`{"tool_result_images":"`+policy+`"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", "http://127.0.0.1:0")
+		w := httptest.NewRecorder()
+		te.handler.ServeHTTP(w, req)
+		assertStatus(t, w, http.StatusOK)
+	}
+	check(false)
+	put("drop")
+	check(true)
+	te.db.SetToolResultImages(config.ToolResultImagesDrop)
+	check(false)
+	put("keep")
+	check(true)
+	te.db.SetToolResultImages(config.ToolResultImagesKeep)
+	check(false)
+}
+
 func TestSettingsInsightDefaultAgent(t *testing.T) {
 	t.Parallel()
 	readDefaultAgent := func(t *testing.T, te *testEnv) string {

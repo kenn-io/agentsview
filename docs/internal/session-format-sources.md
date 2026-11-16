@@ -155,6 +155,17 @@ evidence; they do not establish whether a tool helped the task.
 
 ## Claude Code (`claude`)
 
+- **Modified-time refresh without a write (observed 2026-11-15):** On a machine
+  running Claude Code 2.1.325, four transcripts of open sessions received new
+  modified times exactly 3,600 seconds apart while their size and SHA-256
+  stayed the same. The producer code that does this was not identified, and no
+  public source was searched. Sync therefore treats a same-size transcript
+  whose content hash equals the stored hash as unchanged: it records the new
+  modified time on the session row and parser checkpoint and does not parse. A
+  same-size transcript whose hash differs is still parsed in full. See
+  `sourceOnlyTouched` in `internal/sync/engine_incremental.go` and
+  `internal/sync/claude_touch_test.go`.
+
 - **Hook output (checked 2026-11-04):** The parser reads the `hook_success`
   attachment shape reported in
   [#2456](https://github.com/kenn-io/agentsview/issues/2456) with `content`,
@@ -3434,8 +3445,9 @@ schemas keep their existing ordering behavior.
 - **Artifact directories:** Reverified 2026-11-12 against pi-subagents at
   `7e2794efba0b727af51d08c36614ea939f1a827b`: the
   [artifact writer](https://github.com/nicobailon/pi-subagents/blob/7e2794efba0b727af51d08c36614ea939f1a827b/src/shared/artifacts.ts),
+  the
   [session-root helper](https://github.com/nicobailon/pi-subagents/blob/7e2794efba0b727af51d08c36614ea939f1a827b/src/extension/index.ts),
-  and
+  and the
   [child launcher](https://github.com/nicobailon/pi-subagents/blob/7e2794efba0b727af51d08c36614ea939f1a827b/src/runs/foreground/subagent-executor.ts).
   Session-local outputs go into a `subagent-artifacts` directory beside the
   transcript. Child transcripts use the parent transcript's stem as their
@@ -3446,10 +3458,9 @@ schemas keep their existing ordering behavior.
   source lookup. They classify excluded changes as non-data so remote delta
   planning does not scan the provider. An explicitly configured root with that
   basename remains supported, including when a broader root also contains it.
-  Nested child transcripts outside artifact directories remain
-  discoverable, and unreadable session directories still report incomplete
-  discovery. The transcript format, parsed output, and data version are
-  unchanged.
+  Nested child transcripts outside artifact directories remain discoverable,
+  and unreadable session directories still report incomplete discovery. The
+  transcript format, parsed output, and data version are unchanged.
 - **Agentsview:** `internal/parser/pi.go` and `internal/parser/pi_provider.go`;
   alternate branches remain in the file but only the active ancestry is a
   conversation. Reverified 2026-09-03 against 156 local Pi transcripts: the
@@ -3663,8 +3674,8 @@ schemas keep their existing ordering behavior.
   session format documented under Pi above; checked 2026-11-13.
 
 - **Usage and cost:** Each assistant line carries input, output, cache-read, and
-  cache-write tokens with a provider and model. Agentsview derives monetary cost
-  from the catalog.
+  cache-write tokens with a provider and model. Agentsview derives monetary
+  cost from the catalog.
 
 - **Contract:** The public line shapes and usage meaning are in
   [Direct API Sessions](../token-usage.md#direct-api-sessions).
@@ -4535,6 +4546,47 @@ schemas keep their existing ordering behavior.
   under the Hermes folder (`state.db`, `state.db-wal`, `sessions/<name>`)
   rather than its absolute local path, so an archive unpacked into a fresh
   folder keeps its fingerprints (`TestHermesFingerprintsIgnoreTheLocalFolder`).
+- **Watcher change check (2026-11-10):** Reverified the entire producer tree at
+  [Hermes `aca4f1df`](https://github.com/NousResearch/hermes-agent/tree/aca4f1df).
+  Stores with a positive integer schema version at most 33,
+  `transcript_revision`, and complete native message-update triggers use a
+  per-session token to skip unchanged members on database and WAL events. The
+  token includes parsed session fields, model usage ledger rows, transcript
+  revision, and a checksum over every message ID, timestamp, and finish
+  reason. The checksum scans message history. Tokens also include whether
+  rewrite tracking was verified when they were created, in both direct and
+  bulk fingerprint passes. Enabling tracking after an untracked edit therefore
+  requires a full check. Tokens created before this provenance was included
+  also receive one full check. The native `messages_transcript_revision_update`
+  and `messages_display_revision_update` definitions in
+  [hermes_state_common.py](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/hermes_state_common.py)
+  cover payload and display rewrites. Coverage is rechecked on every event:
+  an older writer can recreate shorter triggers. Invalid or future schema
+  versions and incomplete trigger coverage retain full checks.
+  [Native recovery](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/hermes_cli/session_recovery.py)
+  repairs all out-of-window timestamps in fresh recovery output. Installing
+  that output changes the timestamp checksum even when revision and live count
+  stay unchanged. No replacement tracker is used. Reverify these couplings
+  when the producer changes: additive changes can occur without a
+  schema-version bump. The pinned tree has no independent message session-ID
+  reassignment. A finish-reason change in
+  [transcript repair](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/agent/transcript_repair.py#L317-L328)
+  names content and display metadata in the update, advancing the revision.
+  [Prune rewrites](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/hermes_state_prune_rewrite.py#L225-L249)
+  first insert a retained row with a new ID, advancing the greatest message
+  ID. Transcript-file edits use their own `sessions/` events. Listing costs
+  session metadata, distinct lifetime ledger keys, and message history, not
+  only changed sessions. Auxiliary same-key ledger UPSERTs can leave session
+  fields/revision unchanged, so the full ledger read remains necessary under
+  the current producer contract. Ledger keys aggregate route/task usage; their
+  lifetime count has no verified constant bound per session. Database events
+  also scan transcript directory entries and check membership in the same read
+  snapshot, so transcripts for missing or unreadable rows remain discoverable.
+  Unchanged members need only indexed session lookups; selected members also
+  check message readability. Cron members still receive full fingerprint
+  checks because an ancestor can change their resolved job. Other selected
+  members read transcript payloads. The new fingerprint format causes one
+  reparse of previously imported sessions as they are checked.
 - **Model usage check (2026-10-22):**
   [hermes_state_usage.py](https://github.com/NousResearch/hermes-agent/blob/3ba2b0787ed3a73ec3b08085ed0137f235209cf4/hermes_state_usage.py)
   records per-model and billing-route deltas in `session_model_usage`.
@@ -4979,7 +5031,10 @@ schemas keep their existing ordering behavior.
   `internal/parser/antigravity_proto.go`,
   `internal/parser/antigravity_brain_transcript.go`, and
   `internal/parser/antigravity_provider.go`; field decoding is deliberately
-  marked as reverse engineering. The brain transcript needs no such decoding:
+  marked as reverse engineering. [agentsview#3135](https://github.com/kenn-io/agentsview/issues/3135)
+  reports `USER_INPUT` field 19 → 3 → 1 as typed text and
+  19 → 3 → 2 → 27 → 1 → 2 as the skill expansion; the parser prefers the typed
+  text, checked only against a synthetic CLI fixture. The brain transcript needs no such decoding:
   it is line-delimited JSON with named fields, verified 2026-09-26 against
   transcripts two Antigravity builds wrote, and it is read as untrusted
   structured input. Rechecked 2026-09-29 with synthetic transcripts through
@@ -5452,10 +5507,15 @@ schemas keep their existing ordering behavior.
 - **Format:** Legacy sessions are a directory containing `messages.jsonl` and
   `meta.json`. Since the CLI's unified harness rollout (around September 2026)
   sessions are written under `unified/<session-id>/`. Agentsview reads store
-  v1 minors 1–8, manifest v1, projection v1, required runtime v3, and journal
-  record v1. Missing store, manifest, and projection versions default to v1; a
-  missing store minor defaults to 1. Newer versions return an error. The
-  session directory holds these files:
+  v1 at any minor, manifest v1, projection v1, and journal record v1. Missing
+  store, manifest, and projection versions default to v1; a missing store
+  minor defaults to 1. A different store format, manifest, projection, or
+  journal record version returns an error. The producer bumps the store minor
+  for changes an older writer must not attempt; minors 9 and 10 (Vibe 3.1)
+  changed runtime and checkpoint baselines that Agentsview does not read, so
+  the minor is not a compatibility gate for a read-only consumer.
+  `runtime-state.json` is not version-checked, because Agentsview reads only
+  its identity and session metadata. The session directory holds these files:
     - `CURRENT` names the newest generation and pins its `manifest.json` by
       `manifest_sha256`, the SHA-256 of the document without its trailing
       newline. Agentsview rejects a mismatch, as the producer does.
@@ -5469,10 +5529,15 @@ schemas keep their existing ordering behavior.
     - `journal/<sequence>.jsonl` holds digest-chained records. The producer
       journals every durable projection change as a `projection_delta`
       (`append_entry`, `replace_entry`, `remove_entry`, `set_history_entries`,
-      `set_envelope`) or `projection_advanced` record. It folds the journal into
-      a new generation only when the session settles, so a running turn exists
+      `set_envelope`) or `projection_advanced` record. Since store minor 9 a
+      session move journals `session_relocated`, which replaces the session
+      metadata and applies its own projection delta, usually a `checkpoint`
+      entry. Only `cwd` changes: `relocate_session` in `_runtime.py` copies
+      `active_model` from the stored runtime state. It folds the journal into a
+      new generation only when the session settles, so a running turn exists
       only in the journal. Agentsview replays these records like
-      `_apply_journal`, ignores runtime records, and skips a final record
+      `_apply_journal`, lets the relocated `cwd` supersede `runtime-state.json`
+      and `meta.json`, ignores other runtime records, and skips a final record
       without its newline.
 - **Evidence:** `source`.
 - **Upstream:** Clone `https://github.com/mistralai/mistral-vibe.git` at
@@ -5481,7 +5546,10 @@ schemas keep their existing ordering behavior.
   and
   [history_manager.py](https://github.com/mistralai/mistral-vibe/blob/0685654a40a4035966891289065379a751a7e617/vibe/cli/history_manager.py).
   The unified store is verified against v2.26.1, commit
-  `4ae5c5955da8e761318916bdb1a7f46f0b50c7d0`. See
+  `4ae5c5955da8e761318916bdb1a7f46f0b50c7d0`, and store minors 9–10 against
+  v3.1.2, commit `b20313e01d6926d4191da89c32d5da11e3a0a060`
+  ([\_storage.py](https://github.com/mistralai/mistral-vibe/blob/b20313e01d6926d4191da89c32d5da11e3a0a060/harness/runtimes/python/python/mistralai_vibe_local_harness/vibe/_storage.py)
+  for `STORE_FORMAT_MINOR` and `SessionRelocatedRecordV1`). See
   [\_storage.py](https://github.com/mistralai/mistral-vibe/blob/4ae5c5955da8e761318916bdb1a7f46f0b50c7d0/harness/runtimes/python/python/mistralai_vibe_local_harness/vibe/_storage.py)
   for `apply_projection_delta` at line 893 and `_apply_journal` at line
   3631,
@@ -5553,7 +5621,10 @@ schemas keep their existing ordering behavior.
   `meta.json`, and journal segments are data-bearing; publication temporaries,
   generation directories, chunks, and the `active/` session leases are not.
   Reverified 2026-10-16 with `TestVibeUnifiedProviderParseJournal` and
-  `TestSyncVibeUnifiedJournalAppends`.
+  `TestSyncVibeUnifiedJournalAppends`. Reverified 2026-11-16 by syncing a
+  session the Vibe 3.1.2 CLI wrote at store minor 10, before and after a
+  `session_relocated` record written through the producer's
+  `UnifiedSessionStore.relocate_session`.
 - **Agentsview:** `internal/parser/vibe.go`, `internal/parser/vibe_unified.go`,
   and `internal/parser/vibe_provider.go`.
 
@@ -5748,7 +5819,9 @@ schemas keep their existing ordering behavior.
   identities take precedence; do not parse display prose for billing facts.
 - **Agentsview:** `internal/parser/evener.go` and `evener_provider.go`. Fixtures
   are synthetic and cover semantic content, usage, metadata and fork behavior.
-  Capture discovery uses bounded directory batches and the raw-audit progress
+  Empty compaction labels and literal text matching those labels carry
+  distinct source types while retaining their transcript text. Capture
+  discovery uses bounded directory batches and the raw-audit progress
   contract. Remote imports verify content hashes rather than trusting copied
   filesystem timestamps. Remote Evener imports derive project names from the
   recorded path without probing that directory on the receiving machine. The
@@ -6166,6 +6239,70 @@ schemas keep their existing ordering behavior.
   and fork records, compaction checkpoints, and mid-run steering prompts have
   not been observed in a published log and are not rendered.
   `session-index.db` is not read.
+
+## Muse Personal (`muse-personal`)
+
+- **Format:** Meta's personal assistant writes version-1 transcripts under
+  `~/agents/agent-<uuid>/sessions/<session-uuid>.jsonl`, with an optional sibling
+  `sessions.json` index. This is a different product and persistence format from
+  Muse Code. The first record is `session_header` with `version`, `session_id`,
+  `agent_id` and RFC 3339 `created_at`. Each `item` has a non-negative integer
+  `seq`, open-ended `source`, RFC 3339 `created_at` and typed `item`. Supported
+  variants are `message`, `message_parts`, `thinking`, `commentary_text`,
+  `function_call` and `function_call_output`. Output `metadata` is an optional
+  JSON string. `compaction_checkpoint.created_at` is integer Unix epoch seconds;
+  its summary is visible and its nested `details_json` history is opaque.
+  The version-1 index has a `sessions` array with identity, timestamps, transcript
+  path, sequence-space counts and optional context-window snapshots. Unknown
+  index keys are ignored. Its `transcript_path` is never a filesystem authority.
+- **Evidence:** `no-public-source`.
+- **Upstream:** Meta documentation was checked 2026-11-02. Searches of Meta's
+  public product and developer documentation did not locate this persistence
+  schema. The [Muse product page](https://ai.meta.com/muse/) identifies the
+  personal assistant only; it is not format evidence. Muse Code's public SDK
+  schema does not describe these files. Shapes were independently checked
+  against two private byte-preserved native captures on 2026-11-02: 7 and 92
+  items, 1 and 27 call/output pairs, and one compaction. These captures are not
+  repository fixtures. `internal/parser/testdata/muse_personal/` contains only
+  developer-authored synthetic examples; their six transcript/index SHA-256
+  hashes were checked against the synthetic source packet on 2026-11-02.
+  The captures confirmed out-of-order physical writes for late finalized
+  thinking, output records without metadata and additional unknown index keys.
+- **Usage and cost:** None emitted. `context_window_usage` is a context snapshot,
+  not per-message usage. Internal `model_id` is not exposed as a public model
+  name. Titles, parent links and chat/subagent classification remain unknown.
+- **Agentsview:** `internal/parser/muse_personal.go` and
+  `internal/parser/muse_personal_provider.go` require UUID layout and matching
+  version-1 header identity. Recognized future transcript versions and duplicate
+  session identities leave discovery incomplete so they cannot authorize raw
+  custody tombstones. Sessions use `muse-personal:<session_id>`.
+  Visible assistant commentary participates in dialogue search and export.
+  Items are sorted by sequence before pairing; ties keep physical order.
+  Only byte-identical same-sequence records are deduplicated. A checkpoint is
+  anchored after the highest preceding physical item sequence; it does not
+  replay nested history or discard previous rows. Outputs attach only to a
+  unique preceding unmatched call ID; sequential reuse works, ambiguity leaves
+  outputs unpaired. Source/sequence occurrence provenance distinguishes retained
+  rows. Unknown variants retain a bounded sanitized type marker even when their
+  body fields have unfamiliar JSON shapes; their bodies stay raw-only. Unknown
+  records accept the RFC3339 and integer epoch-second timestamp shapes already
+  used by known records. Null or invalid record timestamps count as malformed.
+  File parts retain inert recorded references. Thinking signatures,
+  output metadata, checkpoint details and context snapshots stay in raw custody.
+  An unterminated final line defers publication. Raw capture includes the original
+  transcript and regular index, even when the index version cannot enrich the
+  session. Reverified against synthetic fixtures on 2026-11-10: index freshness
+  uses the matching session ID, agent ID and normalized creation instant, with
+  update timestamps in row order (the first eligible row extends end time).
+  Each verified index generation is decoded once per sync pass. Arrival, edits
+  and removal refresh only affected session projections; unrelated fields,
+  whitespace and sibling rows do not force replacement. The complete index
+  remains in raw custody, including malformed or opaque bytes. Local and
+  hosted parsing use the same provider; logical hosted paths remain stable
+  across generations. Nonregular transcripts are rejected before opening;
+  unreadable owned directories and observed cancellation cannot authorize a
+  complete discovery or replacement. An unfinished header also defers parsing
+  and makes discovery nonauthoritative until the rewrite completes.
 
 [evener-source-1]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/transcript/transcript.go
 [evener-source-2]: https://github.com/prime-radiant-inc/evener/blob/da7c06396c9848abfae362dcffce3861a6a0c95a/agent/schema/turn.go

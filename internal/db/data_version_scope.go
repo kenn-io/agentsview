@@ -67,6 +67,11 @@ var dataVersionScopes = map[int][]parser.AgentType{
 	177: {parser.AgentClaude, parser.AgentCowork, parser.AgentQoder, parser.AgentIcodemate},
 	178: {parser.AgentGrok},
 	179: {parser.AgentOpenCode, parser.AgentKilo, parser.AgentMiMoCode, parser.AgentIcodemate},
+
+	usageEventMicrosDataVersion: {}, // Older binaries cannot maintain usage_events.occurred_at_us; nothing to reparse.
+	pricingMetaDataVersion:      {}, // Older binaries keep pricing metadata in model_pricing; nothing to reparse.
+	182:                         {parser.AgentEvener},
+	183:                         {parser.AgentAntigravity, parser.AgentAntigravityCLI},
 }
 
 // firstScopedDataVersion is the oldest version that may be declared. Released

@@ -355,10 +355,7 @@ func hasSource(f ContentSearchFilter, name string) bool {
 func (db *DB) searchContentSubstring(
 	ctx context.Context, f ContentSearchFilter,
 ) (ContentSearchPage, error) {
-	var quoted bool
-	if hasSource(f, "messages") {
-		f.Pattern, quoted = unquoteContentSearch(f.Pattern)
-	}
+	f, q, words := routeContentWords(f)
 	if f.SessionID == "" {
 		release, err := db.acquireBulkRead(ctx)
 		if err != nil {
@@ -366,10 +363,8 @@ func (db *DB) searchContentSubstring(
 		}
 		defer release()
 	}
-	if !quoted && hasSource(f, "messages") && len(strings.Fields(f.Pattern)) > 1 && db.HasFTS(ctx) {
-		if q, ok := contentWordsQuery(f.Pattern); ok {
-			return db.searchContentWordsOrSubstring(ctx, f, q)
-		}
+	if words && db.HasFTS(ctx) {
+		return db.searchContentWordsOrSubstring(ctx, f, q)
 	}
 	return db.searchContentLiteral(ctx, f)
 }
@@ -1078,10 +1073,8 @@ func (db *DB) searchContentFTS(
 	if !db.HasFTS(ctx) {
 		return ContentSearchPage{}, errFTSUnavailable
 	}
-	if !explicitFTSExpression(f.Pattern) && !containsCJK(f.Pattern) {
-		if q, ok := contentWordsQuery(f.Pattern); ok {
-			return db.searchContentWords(ctx, f, q, false)
-		}
+	if _, q, words := routeContentWords(f); words {
+		return db.searchContentWords(ctx, f, q, false)
 	}
 	ftsQuery, err := db.prepareMessageFTSQuery(ctx, f.Pattern)
 	if err != nil {

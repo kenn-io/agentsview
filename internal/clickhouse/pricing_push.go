@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 
@@ -14,12 +15,13 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
 const pricingUpsertBatch = 100
 
 func (s *Sync) syncModelPricing(ctx context.Context) error {
-	prices, err := s.local.ListModelPricing(ctx)
+	prices, localOpenRouter, err := s.local.ListModelPricingWithOpenRouter(ctx)
 	if err != nil {
 		return err
 	}
@@ -34,20 +36,82 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	prices, removePatterns, err := db.PlanModelPricingSync(existing, prices)
+	existingOpenRouter, err := readPricingMeta(ctx, s.conn, pricingpkg.OpenRouterModelsMetaKey)
+	if err != nil {
+		return err
+	}
+	plan, err := db.PlanModelPricingSync(existing, existingOpenRouter, prices, localOpenRouter)
 	if err != nil {
 		return fmt.Errorf("planning clickhouse pricing sync: %w", err)
 	}
-	if len(prices) == 0 && len(removePatterns) == 0 {
-		return s.syncGenAIPricing(ctx)
+	// ClickHouse has no transaction around the price and ownership
+	// writes, and a later plan treats a mirror row the list does not own
+	// as another machine's price. A push that saved a new OpenRouter price
+	// but stopped before recording its ownership would leave that price
+	// withheld from every later push. So new ownership is recorded before
+	// the price writes, and ownership this push retires only after them.
+	recorded := existingOpenRouter
+	if plan.OpenRouterModels != "" {
+		grown, err := addedOpenRouterModels(existingOpenRouter, plan.OpenRouterModels)
+		if err != nil {
+			return err
+		}
+		if err := s.writeOpenRouterModels(ctx, recorded, grown); err != nil {
+			return err
+		}
+		recorded = grown
 	}
-	if err := s.removeModelPricing(ctx, removePatterns); err != nil {
+	if err := s.removeModelPricing(ctx, plan.Remove); err != nil {
 		return err
 	}
-	if err := s.replaceModelPricing(ctx, prices); err != nil {
+	if err := s.replaceModelPricing(ctx, plan.Changed); err != nil {
 		return err
+	}
+	if plan.OpenRouterModels != "" {
+		if err := s.writeOpenRouterModels(ctx, recorded, plan.OpenRouterModels); err != nil {
+			return err
+		}
 	}
 	return s.syncGenAIPricing(ctx)
+}
+
+// addedOpenRouterModels returns the mirror's ownership list with the
+// patterns of the planned list added and none removed.
+func addedOpenRouterModels(existing, planned string) (string, error) {
+	owned, err := pricingpkg.DecodeOpenRouterModels(existing)
+	if err != nil {
+		return "", fmt.Errorf("mirror OpenRouter models: %w", err)
+	}
+	added, err := pricingpkg.DecodeOpenRouterModels(planned)
+	if err != nil {
+		return "", fmt.Errorf("planned OpenRouter models: %w", err)
+	}
+	owned = append(owned, added...)
+	slices.Sort(owned)
+	return pricingpkg.EncodeOpenRouterModels(slices.Compact(owned)), nil
+}
+
+// writeOpenRouterModels stores the ownership list when it differs from
+// the one the mirror holds.
+func (s *Sync) writeOpenRouterModels(ctx context.Context, recorded, models string) error {
+	if models == recorded {
+		return nil
+	}
+	return insertRows(ctx, s.conn, "pricing_meta", [][]any{{
+		pricingpkg.OpenRouterModelsMetaKey, models, newPushVersion(),
+	}})
+}
+
+// readPricingMeta reads a pricing_meta value from the mirror. Returns ""
+// if not found.
+func readPricingMeta(ctx context.Context, conn *sql.DB, key string) (string, error) {
+	var value string
+	if err := conn.QueryRowContext(ctx,
+		`SELECT argMax(value, push_version) FROM pricing_meta WHERE key = ?`, key,
+	).Scan(&value); err != nil {
+		return "", fmt.Errorf("reading clickhouse pricing meta %q: %w", key, err)
+	}
+	return value, nil
 }
 
 func (s *Sync) removeModelPricing(ctx context.Context, patterns []string) error {
@@ -72,6 +136,10 @@ func (s *Sync) replaceModelPricing(ctx context.Context, prices []db.ModelPricing
 	patterns := make([]string, 0, len(prices))
 	for _, p := range prices {
 		patterns = append(patterns, p.ModelPattern)
+		priceTime, err := db.MirrorPricingTime(p.UpdatedAt)
+		if err != nil {
+			return fmt.Errorf("pricing for %q: %w", p.ModelPattern, err)
+		}
 		priceRows = append(priceRows, []any{
 			p.ModelPattern,
 			p.InputPerMTok.Microdollars,
@@ -79,13 +147,15 @@ func (s *Sync) replaceModelPricing(ctx context.Context, prices []db.ModelPricing
 			p.CacheCreationPerMTok.Microdollars,
 			p.CacheCreation1hPerMTok.Microdollars,
 			p.CacheReadPerMTok.Microdollars,
-			p.UpdatedAt,
+			priceTime,
 			version,
 		})
 		for _, band := range p.Bands {
-			updatedAt := band.UpdatedAt
-			if updatedAt == "" {
-				updatedAt = p.UpdatedAt
+			updatedAt := priceTime
+			if band.UpdatedAt != "" {
+				if updatedAt, err = db.MirrorPricingTime(band.UpdatedAt); err != nil {
+					return fmt.Errorf("pricing band for %q: %w", p.ModelPattern, err)
+				}
 			}
 			bandRows = append(bandRows, []any{
 				p.ModelPattern,
@@ -150,9 +220,10 @@ func loadGenAIPricing(
 func scanGenAIPricing(row genAIPricingRow) (*db.GenAIPricingDocument, error) {
 	var document db.GenAIPricingDocument
 	var data string
+	var updatedAt sql.NullTime
 	err := row.Scan(
 		&document.Version, &document.SourceRef, &document.Source,
-		&data, &document.UpdatedAt,
+		&data, &updatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -161,6 +232,7 @@ func scanGenAIPricing(row genAIPricingRow) (*db.GenAIPricingDocument, error) {
 		return nil, fmt.Errorf("reading clickhouse GenAI pricing document: %w", err)
 	}
 	document.Data = []byte(data)
+	document.UpdatedAt = db.FormatMirrorPricingTime(updatedAt)
 	return &document, nil
 }
 
@@ -173,10 +245,11 @@ func loadGenAIPricingRow(
 ) (export.EffectivePricingRow, error) {
 	var digest db.GenAIPricingDigest
 	var sum string
+	var updatedAt sql.NullTime
 	err := q.QueryRowContext(ctx, `
 		SELECT version, source_ref, source, updated_at, hex(SHA256(data_json))
 		FROM genai_pricing WHERE singleton = 1`).Scan(
-		&digest.Version, &digest.SourceRef, &digest.Source, &digest.UpdatedAt, &sum,
+		&digest.Version, &digest.SourceRef, &digest.Source, &updatedAt, &sum,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return db.GenAIEffectivePricingRow(nil)
@@ -185,6 +258,7 @@ func loadGenAIPricingRow(
 		return export.EffectivePricingRow{}, fmt.Errorf(
 			"reading clickhouse GenAI pricing digest: %w", err)
 	}
+	digest.UpdatedAt = db.FormatMirrorPricingTime(updatedAt)
 	if digest.Sum, err = db.ParseGenAIPricingSum([]byte(sum)); err != nil {
 		return export.EffectivePricingRow{}, err
 	}
@@ -222,11 +296,12 @@ func loadGenAIPricingState(
 	// SHA256 returns the raw 32-byte digest; encoding it here sends half the
 	// bytes a hex string would.
 	var digest string
+	var updatedAt sql.NullTime
 	err := q.QueryRowContext(ctx, `
 		SELECT version, source_ref, source, SHA256(data_json), updated_at
 		FROM genai_pricing WHERE singleton = 1`).Scan(
 		&state.Version, &state.SourceRef, &state.Source,
-		&digest, &state.UpdatedAt,
+		&digest, &updatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -235,6 +310,7 @@ func loadGenAIPricingState(
 		return nil, fmt.Errorf("reading clickhouse GenAI pricing state: %w", err)
 	}
 	state.DataSHA256 = hex.EncodeToString([]byte(digest))
+	state.UpdatedAt = db.FormatMirrorPricingTime(updatedAt)
 	return &state, nil
 }
 
@@ -302,6 +378,10 @@ func (s *Sync) syncGenAIPricing(ctx context.Context) error {
 func (s *Sync) writeGenAIPricing(
 	ctx context.Context, document *db.GenAIPricingDocument,
 ) error {
+	updatedAt, err := db.MirrorPricingTime(document.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("GenAI pricing document: %w", err)
+	}
 	version := newPushVersion()
 	row := [][]any{{
 		int64(1),
@@ -309,7 +389,7 @@ func (s *Sync) writeGenAIPricing(
 		document.SourceRef,
 		document.Source,
 		string(document.Data),
-		document.UpdatedAt,
+		updatedAt,
 		version,
 	}}
 	if err := insertRows(ctx, s.conn, "genai_pricing", row); err != nil {
@@ -361,6 +441,7 @@ func readModelPricing(ctx context.Context, conn *sql.DB) ([]db.ModelPricing, err
 	byPattern := make(map[string]int)
 	for rows.Next() {
 		var p db.ModelPricing
+		var updatedAt sql.NullTime
 		if err := rows.Scan(
 			&p.ModelPattern,
 			&p.InputPerMTok,
@@ -368,10 +449,11 @@ func readModelPricing(ctx context.Context, conn *sql.DB) ([]db.ModelPricing, err
 			&p.CacheCreationPerMTok,
 			&p.CacheCreation1hPerMTok,
 			&p.CacheReadPerMTok,
-			&p.UpdatedAt,
+			&updatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning clickhouse pricing: %w", err)
 		}
+		p.UpdatedAt = db.FormatMirrorPricingTime(updatedAt)
 		byPattern[p.ModelPattern] = len(out)
 		out = append(out, p)
 	}
@@ -391,7 +473,8 @@ func readModelPricing(ctx context.Context, conn *sql.DB) ([]db.ModelPricing, err
 	}
 	defer bandRows.Close()
 	for bandRows.Next() {
-		var pattern, updatedAt string
+		var pattern string
+		var updatedAt sql.NullTime
 		var threshold int64
 		var input, output, cacheCreation, cacheCreation1h, cacheRead money.Money
 		if err := bandRows.Scan(
@@ -418,7 +501,7 @@ func readModelPricing(ctx context.Context, conn *sql.DB) ([]db.ModelPricing, err
 			CacheCreationPerMTok:   cacheCreation,
 			CacheCreation1hPerMTok: cacheCreation1h,
 			CacheReadPerMTok:       cacheRead,
-			UpdatedAt:              updatedAt,
+			UpdatedAt:              db.FormatMirrorPricingTime(updatedAt),
 		})
 	}
 	if err := bandRows.Err(); err != nil {

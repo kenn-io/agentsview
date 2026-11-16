@@ -36,7 +36,7 @@ func TestLoadPGGenAIPricingRowFollowsStoredDocument(t *testing.T) {
 	embedded := pricing.EmbeddedGenAIDocument()
 	_, err = pg.ExecContext(ctx, `
 		INSERT INTO genai_pricing (singleton, version, source_ref, source, data_json, updated_at)
-		VALUES (1, '', 'ref-a', 'fetched', $1, '')`, embedded.RawJSON())
+		VALUES (1, '', 'ref-a', 'fetched', $1, NULL)`, embedded.RawJSON())
 	require.NoError(t, err)
 	row, err = loadPGGenAIPricingRow(ctx, pg, true)
 	require.NoError(t, err)

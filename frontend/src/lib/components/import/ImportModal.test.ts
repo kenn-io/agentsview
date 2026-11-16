@@ -151,7 +151,7 @@ it.each(["close button", "dialog X", "overlay", "escape"])(
       await fireEvent.pointerUp(overlay);
       await fireEvent.click(overlay);
     } else if (exit === "escape") {
-      await fireEvent.keyDown(window, { key: "Escape" });
+      await fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
     } else {
       const name = exit === "close button" ? "Close" : m.import_close();
       await fireEvent.click(screen.getByRole("button", { name }));

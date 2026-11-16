@@ -114,6 +114,7 @@ type SessionListFilters = sessionFilterInput
 
 // Batch selection belongs only to the session list, not sidebar discovery.
 type listSessionsInput struct {
+	Flat            bool              `query:"flat" doc:"Match child sessions individually when include_children is true"`
 	ExclusionCounts optionalBoolParam `query:"exclusion_counts" doc:"Include default-exclusion counts; true also samples hidden children, false counts only one-shot and automated sessions. First page only."`
 	SessionListFilters
 	IDs    string `query:"ids" doc:"Comma-separated list of 1 to 100 session IDs. Quote IDs containing commas or line breaks with RFC 4180 CSV quoting; IDs containing CRLF are rejected. Raw IDs include host copies; tilde-qualified IDs match exactly. Explicit filters intersect the selection; discovery exclusions do not apply."`
@@ -159,6 +160,7 @@ func parseSessionIDs(raw string) ([]string, error) {
 }
 
 type messageListInput struct {
+	CompactBoundary  bool             `query:"compact_boundary" doc:"Only compact boundary messages"`
 	ID               string           `path:"id" required:"true" doc:"Session ID"`
 	Limit            int              `query:"limit" minimum:"0" doc:"Maximum number of messages"`
 	Direction        messageDirection `query:"direction" enum:"asc,desc" doc:"Message ordering direction"`
@@ -299,6 +301,7 @@ func (s *Server) humaListSessions(
 	if err != nil {
 		return nil, err
 	}
+	filter.Flat = in.Flat
 	filter.ExclusionCounts = optionalBoolValue(in.ExclusionCounts)
 	if in.IDsSet {
 		filter.IDs, err = parseSessionIDs(in.IDs)
@@ -405,6 +408,7 @@ func (s *Server) humaGetMessages(
 		ExpectedRevision: in.ExpectedRevision,
 		EvidenceSource:   in.EvidenceSource,
 	}
+	filter.CompactBoundaryOnly = in.CompactBoundary
 	if in.From.IsSet {
 		filter.From = &in.From.Value
 	}

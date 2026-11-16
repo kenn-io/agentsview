@@ -9,16 +9,19 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/docbank/document/ocr"
 )
 
-func TestAnalyticsChangesKeepUsageRevision(t *testing.T) {
+func TestAnalyticsAndSearchChangesKeepUsageRevision(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "session", "project")
+	require.NoError(t, d.BackfillImageTextOccurrences(ctx))
 	analyticsBefore, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
 	require.NoError(t, err)
 	message := asstMsgAt("session", 0, "read", "2024-06-01T09:00:00Z")
-	message.ToolCalls = []ToolCall{{SessionID: "session", ToolName: "Read", Category: "Read"}}
+	content := testInlineImageContent()
+	message.ToolCalls = []ToolCall{{SessionID: "session", ToolName: "Read", Category: "Read", ResultContent: content}}
 	insertMessages(t, d, message)
 	analyticsAfter, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
 	require.NoError(t, err)
@@ -39,6 +42,44 @@ func TestAnalyticsChangesKeepUsageRevision(t *testing.T) {
 		require.NoError(t, err)
 		analyticsBefore++
 		assert.Equal(t, analyticsBefore, analyticsAfter)
+	}
+	identity, err := ocr.NewIdentity("test", "model", "revision")
+	require.NoError(t, err)
+	searchBefore, err := d.archiveJournalRevision(ctx, archiveMetadataSearchChangeRevisionKey, "search change")
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		write                       func() error
+		analyticsDelta, searchDelta int64
+	}{
+		{func() error {
+			_, err := d.getWriter().ExecContext(ctx, `UPDATE messages SET dialogue_text = 'repaired' WHERE session_id = 'session'`)
+			return err
+		}, 0, 1},
+		{func() error {
+			_, err := d.getWriter().ExecContext(ctx, `UPDATE sessions SET first_message = 'repaired' WHERE id = 'session'`)
+			return err
+		}, 1, 1},
+		{func() error {
+			return d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "invoice", false)
+		}, 0, 1},
+		{func() error {
+			return d.SaveImageText(ctx, RetainedToolResultImages(content)[0].SHA256, identity, "receipt", false)
+		}, 0, 1},
+		{func() error { return d.ClearImageText(ctx) }, 0, 2},
+		{func() error { return d.BackfillImageTextOccurrences(ctx) }, 0, 1},
+	} {
+		require.NoError(t, tc.write())
+		analyticsAfter, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
+		require.NoError(t, err)
+		analyticsBefore += tc.analyticsDelta
+		assert.Equal(t, analyticsBefore, analyticsAfter)
+		after, err := d.UsageChangeRevision(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, before, after)
+		searchAfter, err := d.archiveJournalRevision(ctx, archiveMetadataSearchChangeRevisionKey, "search change")
+		require.NoError(t, err)
+		assert.Equal(t, searchBefore+tc.searchDelta, searchAfter)
+		searchBefore = searchAfter
 	}
 }
 
@@ -436,11 +477,6 @@ func TestUsageChangeJournalPricingIgnoresMetadataAndUnchangedRows(t *testing.T) 
 	require.NoError(t, d.SetPricingMetaContext(ctx, "_last_fetch", "2026-07-01T10:00:00Z"))
 	require.NoError(t, d.SetPricingMetaContext(ctx, "_last_fetch", "2026-07-02T10:00:00Z"))
 	after, err := d.UsageChangeRevision(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, before, after)
-	_, err = d.getWriter().ExecContext(ctx, `DELETE FROM model_pricing WHERE model_pattern = '_last_fetch'`)
-	require.NoError(t, err)
-	after, err = d.UsageChangeRevision(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, before, after)
 

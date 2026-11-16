@@ -27,26 +27,38 @@ type hostedFixture struct {
 
 func newHostedFixture(t *testing.T, tenant string) hostedFixture {
 	t.Helper()
-	schema := fmt.Sprintf("hosted_test_%x", rand.Uint64())
-	role := schema + "_runtime"
-	admin, err := Open(t.Context(), testPGURL(t), schema, false)
+	// The first fixture in a test's database uses the copy of the tenant's
+	// template; later ones, such as one per subtest, get a new schema.
+	schema := "hosted_test_" + strings.ReplaceAll(tenant, "-", "_")
+	pgURL := testPGHostedURL(t, schema, tenant)
+	fresh := takeFreshSchemaCopy(t, pgURL, schema)
+	if !fresh {
+		schema = fmt.Sprintf("hosted_test_%x", rand.Uint64())
+	}
+	// Roles are server-wide, so each fixture's role has its own name.
+	role := fmt.Sprintf("hosted_test_%x_runtime", rand.Uint64())
+	admin, err := Open(t.Context(), pgURL, schema, false)
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		_, err := admin.ExecContext(context.WithoutCancel(t.Context()), `DROP SCHEMA IF EXISTS "`+schema+`" CASCADE`)
-		assert.NoError(t, err)
-		_, err = admin.ExecContext(context.WithoutCancel(t.Context()), `DROP ROLE IF EXISTS "`+role+`"`)
-		assert.NoError(t, err)
-		assert.NoError(t, admin.Close())
-	})
-	require.NoError(t, EnsureHostedTenant(t.Context(), admin, schema, tenant))
+	t.Cleanup(func() { assert.NoError(t, admin.Close()) })
+	if !fresh {
+		require.NoError(t, EnsureHostedTenant(t.Context(), admin, schema, tenant))
+	}
 	_, err = admin.ExecContext(t.Context(), `CREATE ROLE "`+role+`" LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT`)
 	require.NoError(t, err)
+	// Roles are server-wide, so the role is dropped here; the schema goes
+	// with the test's database.
+	t.Cleanup(func() {
+		_, err := admin.ExecContext(context.WithoutCancel(t.Context()), `DROP OWNED BY "`+role+`"`)
+		assert.NoError(t, err)
+		_, err = admin.ExecContext(context.WithoutCancel(t.Context()), `DROP ROLE "`+role+`"`)
+		assert.NoError(t, err)
+	})
 	_, err = admin.ExecContext(t.Context(), `GRANT USAGE ON SCHEMA "`+schema+`" TO "`+role+`";
  GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "`+schema+`" TO "`+role+`";
  GRANT USAGE ON ALL SEQUENCES IN SCHEMA "`+schema+`" TO "`+role+`"`)
 	require.NoError(t, err)
 	password := setHostedFixturePassword(t, admin, role)
-	dsn, err := appendConnParams(testPGURL(t), map[string]string{"password": password, "user": role, "search_path": "public", "agentsview.tenant_id": "wrong"})
+	dsn, err := appendConnParams(pgURL, map[string]string{"password": password, "user": role, "search_path": "public", "agentsview.tenant_id": "wrong"})
 	require.NoError(t, err)
 	runtime, err := OpenHosted(t.Context(), dsn, schema, tenant, false)
 	require.NoError(t, err)
@@ -513,6 +525,66 @@ func TestHostedTenantUpgradeInstallsTablesBeforeCatalogCheck(t *testing.T) {
 			require.NoError(t, CheckHostedTenant(t.Context(), f.runtime, f.schema, f.tenant))
 		})
 	}
+}
+
+// Hosted schemas provisioned before pricing_meta kept the OpenRouter
+// ownership list as a model_pricing row and the pricing times as text.
+// Provisioning, for an adopted mirror and for an already bound tenant,
+// moves the list into a tenant-protected pricing_meta and types the times.
+func TestHostedTenantProvisioningUpgradesOldPricingLayout(t *testing.T) {
+	oldLayout := func(t *testing.T, db *sql.DB, tenantColumn, tenantValue string) {
+		t.Helper()
+		for _, statement := range []string{
+			`DROP TABLE pricing_meta`,
+			`ALTER TABLE model_pricing DROP COLUMN updated_at`,
+			`ALTER TABLE model_pricing ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''`,
+			`INSERT INTO model_pricing (` + tenantColumn + `model_pattern, updated_at) VALUES
+				(` + tenantValue + `'_openrouter_models', '["or/model-a"]'),
+				(` + tenantValue + `'acme/model', '2026-07-01T00:00:02Z')`,
+		} {
+			_, err := db.ExecContext(t.Context(), statement)
+			require.NoError(t, err, statement)
+		}
+	}
+	// Only pushes, which run as the owner, read pricing_meta; the runtime
+	// role reads prices.
+	upgraded := func(t *testing.T, owner, runtime *sql.DB) {
+		t.Helper()
+		var owned string
+		require.NoError(t, owner.QueryRowContext(t.Context(),
+			`SELECT value FROM pricing_meta WHERE key = '_openrouter_models'`,
+		).Scan(&owned))
+		assert.Equal(t, `["or/model-a"]`, owned)
+		var patterns []string
+		rows, err := runtime.QueryContext(t.Context(), `SELECT model_pattern FROM model_pricing`)
+		require.NoError(t, err)
+		defer rows.Close()
+		for rows.Next() {
+			var pattern string
+			require.NoError(t, rows.Scan(&pattern))
+			patterns = append(patterns, pattern)
+		}
+		require.NoError(t, rows.Err())
+		assert.Equal(t, []string{"acme/model"}, patterns)
+		require.NoError(t, CheckSchemaCompat(t.Context(), runtime),
+			"typed pricing times pass the reader's schema check")
+	}
+
+	t.Run("bound tenant", func(t *testing.T) {
+		f := newHostedFixture(t, "tenant-a")
+		oldLayout(t, f.admin, "tenant_id, ", "'tenant-a', ")
+		require.NoError(t, EnsureHostedTenant(t.Context(), f.admin, f.schema, f.tenant))
+		require.NoError(t, CheckHostedTenant(t.Context(), f.runtime, f.schema, f.tenant))
+		upgraded(t, f.admin, f.runtime)
+	})
+	t.Run("adopted mirror", func(t *testing.T) {
+		pg := newHostedLegacyFixture(t)
+		var schema string
+		require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT current_schema()`).Scan(&schema))
+		oldLayout(t, pg, "", "")
+		require.NoError(t, EnsureHostedTenant(t.Context(), pg, schema, "tenant-a"))
+		upgraded(t, pg, pg)
+	})
 }
 
 func TestHostedTenantConcurrentProvisioning(t *testing.T) {

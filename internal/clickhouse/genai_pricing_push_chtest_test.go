@@ -127,7 +127,7 @@ func TestPushPricesWithRetainedGenAIPricingAfterLostWrite(t *testing.T) {
 	future := uint64(time.Now().Add(time.Hour).UnixNano())
 	require.NoError(t, insertRows(ctx, syncer.conn, "genai_pricing", [][]any{{
 		int64(1), ahead.Version, ahead.SourceRef, ahead.Source,
-		string(ahead.Data), ahead.UpdatedAt, future,
+		string(ahead.Data), nil, future,
 	}}))
 	require.NoError(t, local.UpsertGenAIPricing(ctx, genAIHistoryDocument(t, "2", "1")))
 	pushPreparedUsage(t, syncer)

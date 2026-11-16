@@ -1,0 +1,28 @@
+//go:build fts5
+
+package db
+
+import (
+    "os"
+    "path/filepath"
+    "testing"
+
+    "github.com/stretchr/testify/require"
+)
+
+func TestGenerateUsageCacheV23(t *testing.T) {
+    dir := os.Getenv("USAGE_V23_FIXTURE_DIR")
+    require.NotEmpty(t, dir)
+    path := filepath.Join(dir, "archive.db")
+    database, err := Open(t.Context(), path)
+    require.NoError(t, err)
+    seedJournaledUsage(t, database, "one")
+    seedJournaledUsage(t, database, "two")
+    seedUsageSnapshotSession(t, database, "earlier", "project-a", "2026-08-10T09:00:00Z", 0, 10, "model-a")
+    seedUsageSnapshotSession(t, database, "later", "project-b", "2026-08-10T10:00:00Z", 0, 20, "model-a")
+    require.NoError(t, database.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{OccurredAt: "2026-08-10T11:00:00Z", Model: "cursor-model", InputTokens: 30, DedupKey: "cursor"}}))
+    cache := warmJournaledUsage(t, database, UsageFilter{Timezone: "UTC", Breakdowns: true, PairwiseSides: true})
+    cachePath := cache.path
+    require.NoError(t, database.Close())
+    require.NoError(t, os.Rename(cachePath, filepath.Join(dir, "cache.db")))
+}

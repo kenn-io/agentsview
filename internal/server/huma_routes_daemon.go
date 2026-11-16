@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/kit/atomicfile"
 )
 
@@ -13,6 +14,33 @@ func (s *Server) registerDaemonRoutes() {
 	group := huma.NewGroup(s.api, "/api/v1/daemon")
 	configureRouteGroup(group, "Daemon")
 	s.post(group, "/persist", "Keep the daemon running until stopped", s.humaPersistDaemon)
+	s.post(group, "/restart", "Restart the daemon with saved settings", s.humaRestartDaemon)
+}
+
+func (s *Server) restartSupported() bool {
+	return s.restartDaemon != nil && s.db != nil && !s.db.ReadOnly()
+}
+
+// ConfigSnapshot returns the server's current settings, including saves
+// made through the API since it started. A restart rebuilds its replacement
+// from this once the server has stopped, so no completed save is lost.
+func (s *Server) ConfigSnapshot() config.Config {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cfg
+}
+
+func (s *Server) humaRestartDaemon(ctx context.Context, _ *emptyInput) (*jsonOutput[map[string]bool], error) {
+	if !s.restartSupported() {
+		return nil, apiError(http.StatusNotImplemented, "Restart AgentsView the way you started it, then reload this page.")
+	}
+	s.mu.RLock()
+	current := s.cfg
+	s.mu.RUnlock()
+	if err := s.restartDaemon(ctx, current); err != nil {
+		return nil, apiError(http.StatusInternalServerError, err.Error())
+	}
+	return &jsonOutput[map[string]bool]{Body: map[string]bool{"restarting": true}}, nil
 }
 
 func (s *Server) humaPersistDaemon(_ context.Context, _ *emptyInput) (*jsonOutput[map[string]bool], error) {

@@ -17,9 +17,7 @@ import (
 
 func TestAnalyticsToolResultsAreNotUserPrompts(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 	local := testDB(t)
 	ctx := t.Context()
 	started := time.Now().UTC().Add(-time.Hour).Truncate(time.Hour).Format(time.RFC3339)

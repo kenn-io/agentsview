@@ -82,6 +82,16 @@ func runningAsBackgroundChild() bool {
 	return os.Getenv(backgroundChildEnvVar) == "1"
 }
 
+func serveHandoffPortArgs(port int, explicitPort *int) []string {
+	if explicitPort != nil {
+		return []string{"--port", strconv.Itoa(*explicitPort)}
+	}
+	if port > 0 {
+		return []string{"--restart-port", strconv.Itoa(port)}
+	}
+	return nil
+}
+
 // backgroundLaunchLockPath is the advisory lock that serializes concurrent
 // `serve --background` launches for a data dir.
 func backgroundLaunchLockPath(dataDir string) string {

@@ -265,9 +265,6 @@ func installUsageChangeJournalPG(ctx context.Context, tx *sql.Tx) error {
 				return err
 			}
 		}
-		if table.table == "model_pricing" || table.table == "model_pricing_bands" {
-			filter = `model_pattern NOT LIKE '\_%'`
-		}
 		function := "mark_usage_" + table.table
 		fmt.Fprintf(&ddl, `CREATE OR REPLACE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
  SET search_path = pg_catalog, %s, pg_temp AS $journal$%s$journal$;

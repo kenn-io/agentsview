@@ -19,9 +19,7 @@ import (
 // fallback path.
 func TestLoadPricingMapAppliesCustomWhenTableMissing(t *testing.T) {
 	t.Parallel()
-	_, store := prepareUsageSchema(
-		t, "agentsview_pricing_missing_table_test",
-	)
+	_, store := prepareUsageSchema(t, usageTestSchema)
 
 	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx,

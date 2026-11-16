@@ -55,6 +55,7 @@ var hostedTables = append([]HostedTable{
 	{Name: "model_pricing", Key: []string{"model_pattern"}},
 	{Name: "model_pricing_bands", Key: []string{"model_pattern", "above_input_tokens"}, ForeignKeys: []HostedForeignKey{{Columns: []string{"model_pattern"}, Table: "model_pricing", References: []string{"model_pattern"}, Delete: "CASCADE"}}},
 	{Name: "genai_pricing", Key: []string{"singleton"}},
+	{Name: "pricing_meta", Key: []string{"key"}},
 	{Name: "source_archives", Key: []string{"source_archive_id"}},
 	{Name: "source_project_identity_observations", Key: []string{"source_archive_id", "project", "machine", "root_path", "git_remote"}},
 	{Name: "source_project_identity_observation_scopes", Key: []string{"source_archive_id", "project", "machine", "root_path", "git_remote", "publication_scope"}, ForeignKeys: []HostedForeignKey{{Columns: []string{"source_archive_id", "project", "machine", "root_path", "git_remote"}, Table: "source_project_identity_observations", References: []string{"source_archive_id", "project", "machine", "root_path", "git_remote"}, Delete: "CASCADE"}}},
@@ -90,6 +91,7 @@ var hostedCoreUpgradeTables = []struct{ name, ddl string }{
 	{"commit_links", commitLinksDDL},
 	{"image_text", imageTextDDL},
 	{"retained_commit_links", retainedCommitLinksDDL},
+	{"pricing_meta", pricingMetaDDL},
 }
 
 // installHostedCoreUpgrade adds only missing upgrade tables to an already

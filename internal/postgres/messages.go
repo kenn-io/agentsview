@@ -91,7 +91,7 @@ func (s *Store) GetMessagesWindow(
 	if w.From != nil {
 		from = *w.From
 	}
-	if w.ObservedRevision == nil && len(w.Roles) == 0 {
+	if w.ObservedRevision == nil && len(w.Roles) == 0 && !w.CompactBoundaryOnly {
 		return s.GetMessages(ctx, sessionID, from, w.Limit, w.Asc)
 	}
 	return s.getMessagesLinear(ctx, sessionID, from, w)
@@ -109,6 +109,9 @@ func (s *Store) getMessagesLinear(
 		dir, op = "DESC", "<="
 	}
 	roleClause, roleArgs := pgRoleFilterClause(w.Roles, 3)
+	if w.CompactBoundaryOnly {
+		roleClause += " AND is_compact_boundary = TRUE"
+	}
 	query := fmt.Sprintf(`
 		SELECT %s, %s
 		FROM messages
@@ -296,7 +299,12 @@ func (s *Store) HasSemantic() bool { return s.getVectorSearcher() != nil }
 
 // MemoryBackendName identifies this store in the transport-neutral memory
 // readiness response.
-func (s *Store) MemoryBackendName() string { return "postgres" }
+func (s *Store) MemoryBackendName() string {
+	if s.cockroach {
+		return "cockroach"
+	}
+	return "postgres"
+}
 
 // escapeLike escapes SQL LIKE metacharacters so the bind
 // parameter is treated as a literal substring.
@@ -314,6 +322,17 @@ func (s *Store) Search(
 		f.Limit = db.DefaultSearchLimit
 	}
 
+	runtime := s.runtimeState()
+	page, handled, err := snapshotRetained(ctx, s, "search|"+f.Slot(), &runtime.search, &runtime.standbySearch, func(ctx context.Context, view *Store) (db.SearchPage, error) {
+		return view.search(ctx, f)
+	})
+	if handled || err != nil {
+		return page, err
+	}
+	return s.search(ctx, f)
+}
+
+func (s *Store) search(ctx context.Context, f db.SearchFilter) (db.SearchPage, error) {
 	// plainTerm is the de-quoted query joined back into one string. It feeds
 	// the name-branch ILIKE (matching the typed text against the short session
 	// name) and centers the message snippet, mirroring SQLite's plainQuery.

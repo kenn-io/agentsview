@@ -55,8 +55,8 @@ func (db *DB) ExportReportingRange(ctx context.Context, now time.Time) (Reportin
 			FROM messages m JOIN sessions s ON s.id = m.session_id
 			WHERE (`+activityWhere+`) OR (`+usageMessageEligibility+`)
 			UNION ALL
-			SELECT agentsview_timestamp_unix_micro(COALESCE(
-				NULLIF(ue.occurred_at, ''), NULLIF(s.started_at, ''), s.created_at))
+			SELECT COALESCE(ue.occurred_at_us, agentsview_timestamp_unix_micro(COALESCE(
+				NULLIF(ue.occurred_at, ''), NULLIF(s.started_at, ''), s.created_at)))
 			FROM usage_events ue JOIN sessions s ON s.id = ue.session_id
 			WHERE `+usageEventEligibility+`
 			UNION ALL

@@ -953,18 +953,19 @@ func (s *Analytics) GetTrendsTerms(
 	if granularity == "" {
 		granularity = "week"
 	}
+	if backend, ok := s.backend.(trendPartsBackend); ok {
+		disk, identity := backend.TrendsDisk()
+		if result, handled, err := db.TrendsFromParts(ctx, disk, identity, f, terms, granularity, trendPartsSource{backend}); handled {
+			return result, err
+		}
+	}
 	acc := db.NewTrendWorkers(ctx, f.From, f.To, granularity, terms)
 	defer func() {
 		if acc != nil {
 			_, _ = acc.Finish()
 		}
 	}()
-	sessionFilter := f
-	sessionFilter.From = ""
-	sessionFilter.To = ""
-	sessionFilter.Model = ""
-	sessionFilter.DayOfWeek = nil
-	sessionFilter.Hour = nil
+	sessionFilter := f.TrendsSessionFilter()
 	loc := analyticsLocation(f.Timezone)
 	flt := f.MessageScopeFilter()
 	modelFiltering := len(flt.Models) > 0
@@ -1002,18 +1003,7 @@ func (s *Analytics) GetTrendsTerms(
 			if err := rows.Scan(&row.content, &timestamp); err != nil {
 				return db.TrendsTermsResponse{}, err
 			}
-			var local time.Time
-			var has bool
-			switch value := timestamp.(type) {
-			case time.Time:
-				local, has = value.In(loc), true
-			case *time.Time:
-				if value != nil {
-					local, has = value.In(loc), true
-				}
-			default:
-				local, has = analyticsLocalTime(s.backend.FormatTime(timestamp), loc)
-			}
+			local, has := trendLocalTime(s.backend, timestamp, loc)
 			if has && flt.MatchesDayHour(local, true) {
 				acc.Add(row.content, local)
 			}

@@ -177,6 +177,10 @@ func (c *pushAliasRoutingConn) QueryContext(
 			columns: []string{"exists"},
 			values:  [][]driver.Value{{1}},
 		}, nil
+	case strings.Contains(normalized, "select table_name, column_name, data_type"):
+		return &pushAliasRoutingRows{
+			columns: []string{"table_name", "column_name", "data_type"},
+		}, nil
 	case strings.Contains(normalized, "from information_schema.columns"):
 		return &pushAliasRoutingRows{
 			columns: []string{"wide"},

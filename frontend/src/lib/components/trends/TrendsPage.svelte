@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { m } from "../../i18n/index.js";
   import { onMount } from "svelte";
   import { trends } from "../../stores/trends.svelte.js";
@@ -17,6 +16,7 @@
   import { chartSeriesStyleMap } from "../../utils/chartPalette.js";
   import type { TrendsGranularity } from "../../api/types.js";
   import { Button, SegmentedControl, Spinner, Toggle } from "@kenn-io/kit-ui";
+  import LoadError from "../shared/LoadError.svelte";
   import RangePicker from "../shared/RangePicker.svelte";
   import {
     resolveRange,
@@ -300,9 +300,6 @@
             rows="6"
             spellcheck="false"
           ></textarea>
-          {#if trends.errors.terms}
-            <div class="error" {@attach errorTelemetry("analytics")}>{trends.errors.terms}</div>
-          {/if}
         </div>
         {#if (trends.response?.series.length ?? 0) > 0}
           <div class="table-panel">
@@ -341,15 +338,36 @@
             />
           </div>
         </div>
-        <div class="chart-body">
-          <TrendsLineChart
-            buckets={trends.response?.buckets ?? []}
-            series={trends.response?.series ?? []}
-            {styleFor}
-            {activeTerm}
-            normalized={trends.normalized}
-            onHover={(term) => (activeTerm = term)}
+        {#if trends.errors.terms && trends.response !== null}
+          <!-- A failed refresh keeps the last counts under the error. -->
+          <LoadError
+            class="trends-error"
+            message={trends.errors.terms}
+            onRetry={() => void refresh()}
+            telemetry="analytics"
           />
+        {/if}
+        <div class="chart-body">
+          {#if trends.errors.terms && trends.response === null}
+            <!-- With no counts loaded, the error takes the chart's place, so
+                 the chart's own "No trend data" does not claim an empty
+                 result. The body keeps its height so the row does not shrink. -->
+            <LoadError
+              class="trends-error"
+              message={trends.errors.terms}
+              onRetry={() => void refresh()}
+              telemetry="analytics"
+            />
+          {:else}
+            <TrendsLineChart
+              buckets={trends.response?.buckets ?? []}
+              series={trends.response?.series ?? []}
+              {styleFor}
+              {activeTerm}
+              normalized={trends.normalized}
+              onHover={(term) => (activeTerm = term)}
+            />
+          {/if}
           {#if trends.loading.terms}
             <div class="loading-overlay" role="status" aria-live="polite">
               <span aria-hidden="true"><Spinner size={18} /></span>
@@ -519,11 +537,8 @@
     border-color: var(--accent-blue);
   }
 
-  .error {
-    margin-top: 8px;
-    color: var(--accent-rose);
-    font-size: 12px;
-    line-height: 1.35;
+  .chart-panel :global(.trends-error) {
+    margin: 12px 16px 0;
   }
 
   /* Takes only the rows it needs, and scrolls once they outgrow the

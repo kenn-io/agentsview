@@ -286,16 +286,15 @@ func TestSubstringSearchScansWhenImportDropsIndexMidSearch(t *testing.T) {
 	assert.Equal(t, 0, page.Matches[0].Ordinal)
 }
 
-// Cached serving queries open their snapshot during QueryContext and can finish
-// against an index dropped afterwards. Cold read-only queries take their first
-// step during Next and must retry as a scan when the index has disappeared.
+// Import can drop the search index after candidate selection but before the
+// query starts. Both serving and cold read-only queries must retry as a scan.
 func TestRegexSearchScansWhenImportDropsIndexBeforeFirstRow(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		cold      bool
 		wantIndex []bool
 	}{
-		{"serving", false, []bool{true}},
+		{"serving", false, []bool{true, false}},
 		{"cold read-only", true, []bool{true, false}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -325,12 +324,12 @@ func TestRegexSearchScansWhenImportDropsIndexBeforeFirstRow(t *testing.T) {
 			matches, err := searchWithSubstringCandidates(ctx, d, f, lit,
 				func(candidates substringCandidateFilters) ([]ContentMatch, error) {
 					usedIndex = append(usedIndex, candidates.message.sql != "")
+					if len(usedIndex) == 1 {
+						require.NoError(t, archive.DropFTS(ctx))
+					}
 					rows, err := d.regexCandidateRows(ctx, f, lit, candidates)
 					if err != nil {
 						return nil, err
-					}
-					if len(usedIndex) == 1 {
-						require.NoError(t, archive.DropFTS(ctx))
 					}
 					return regexMatches(f, re, rows)
 				})

@@ -47,6 +47,8 @@ type Store struct {
 	bulk chdriver.Conn
 	// beforeUsageExtent lets tests change source rows after the request snapshot.
 	beforeUsageExtent func()
+	// beforeUsageCarryCheck lets tests change source rows after the carry proof.
+	beforeUsageCarryCheck func()
 	// afterTrackerReads, when set, runs after the row trackers read and
 	// before the parts are checked again. Tests use it to move parts.
 	afterTrackerReads func()
@@ -101,6 +103,7 @@ type Store struct {
 	analyticsSessionRows kept.Memo[readbase.AnalyticsSession]
 	// trendsReads keeps finished Trends reports by selection and parts fingerprint.
 	trendsReads kept.Reads[db.TrendsTermsResponse]
+	searchReads kept.Reads[db.SearchPage]
 	// analyticsListings shares one listing read among concurrent requests.
 	analyticsListings singleflight.Group
 	// activitySessions keeps activity pairing inputs per session version.

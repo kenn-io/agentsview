@@ -38,12 +38,15 @@ func SupportsRecallQueries(svc SessionService) bool {
 // window vs. linear pagination) cannot both be requested. The HTTP handler
 // maps it to a 400 response.
 var ErrAroundMutuallyExclusive = errors.New(
-	"around is mutually exclusive with from/direction",
+	"around is mutually exclusive with from/direction/compact_boundary",
 )
 
 // ErrBeforeAfterRequireAround is returned by Messages when Before or After
 // is set without Around. The HTTP handler maps it to a 400 response.
 var ErrBeforeAfterRequireAround = errors.New("before/after require around")
+
+// CompactionAPIVersion is the first daemon version with flat session reads.
+const CompactionAPIVersion = 20
 
 // ErrSemanticUnavailable is returned by SearchContent for modes
 // "semantic" and hybrid requests without keyword fallback when the backing
@@ -229,6 +232,9 @@ type ContentSearchResult struct {
 
 // RecallFilter mirrors GET /api/v1/recall/entries query parameters.
 type RecallFilter struct {
+	UpdatedSince        string `json:"updated_since,omitempty"`
+	CreatedSince        string `json:"created_since,omitempty"`
+	Cursor              string `json:"cursor,omitempty"`
 	Query               string `json:"q,omitempty"`
 	Project             string `json:"project,omitempty"`
 	CWD                 string `json:"cwd,omitempty"`
@@ -249,6 +255,7 @@ type RecallFilter struct {
 
 // RecallList mirrors GET /api/v1/recall/entries.
 type RecallList struct {
+	NextCursor    string            `json:"next_cursor,omitempty"`
 	RecallEntries []db.RecallResult `json:"entries"`
 	TrustedOnly   bool              `json:"trusted_only"`
 }
@@ -429,12 +436,18 @@ type SessionList struct {
 // and pull request filters; older daemons ignore them.
 const SessionAnnotationsAPIVersion = 11
 
+// RecallTimeBoundsAPIVersion is the first daemon API that filters Recall
+// lists by updated_since and created_since; older daemons ignore them.
+const RecallTimeBoundsAPIVersion = 21
+
 // ListFilter mirrors the HTTP query parameters in handleListSessions.
 // Field names map to HTTP query param names via json tags.
 type ListFilter struct {
 	ExclusionCounts *bool `json:"exclusion_counts,omitempty"`
 	// IDs selects explicit sessions and their host copies; nil uses discovery defaults.
 	IDs []string `json:"ids,omitzero"`
+	// Flat matches child sessions individually when IncludeChildren is set.
+	Flat bool `json:"flat,omitempty"`
 
 	Project            string `json:"project,omitempty"`
 	ExcludeProject     string `json:"exclude_project,omitempty"`
@@ -509,6 +522,8 @@ type MessageFilter struct {
 	// read. It prevents a continuation cursor from being replayed against a
 	// different archive/server instance.
 	EvidenceSource string `json:"evidence_source,omitempty"`
+	// CompactBoundaryOnly limits linear reads to compact-boundary rows.
+	CompactBoundaryOnly bool `json:"compact_boundary,omitempty"`
 }
 
 // MessageList mirrors {messages, count}. FirstOrdinal/LastOrdinal report the

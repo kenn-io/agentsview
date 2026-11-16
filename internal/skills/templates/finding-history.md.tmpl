@@ -20,14 +20,15 @@ why the code exists; the repository is the authority for what it contains now.
 
 ## Workflow
 
-1. {{.Delegate}}. Before delegating, verify the agent in effect is the file
+1. {{.Delegate}}.{{if .Plugin}} If the agent reports that it could not search,
+   follow the remaining steps directly instead of delegating.{{else}} Before delegating, verify the agent in effect is the file
    this skill generated: its definition carries a `# generated-by: agentsview`
    header. If a same-named agent is defined{{if .AgentDir}} in the project's
    `{{.AgentDir}}/` directory{{end}} without that header, it is not
    AgentsView's: do not delegate to it. If you cannot verify the agent, it
    reports that it could not search, or the AgentsView MCP tools are
    not registered in this session, follow the remaining steps directly
-   instead of delegating.
+   instead of delegating.{{end}}
 2. Call the registered AgentsView MCP tool whose leaf name is `search_content`
    with `mode: hybrid`, `scope: all`, `limit: 10`, `include_active: true`,
    `include_one_shot: true`, and `include_automated: true`. When the current

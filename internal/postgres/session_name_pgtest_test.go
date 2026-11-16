@@ -12,7 +12,6 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -21,22 +20,18 @@ import (
 // all PG read paths.
 func TestPGSessionNameVisibleInReadPaths(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_session_name_test"
+	const schema = "agentsview"
+	pgURL := testPGSchemaURL(t, schema)
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	// Local SQLite DB used by the Sync push path.
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
-	dbtest.SeedPricingMeta(t, localDB)
 	defer localDB.Close()
 
 	agentTitle := "Agent Title"
@@ -122,9 +117,7 @@ func strPtr(s string) *string { return &s }
 
 func TestPGPushUsageOnlyClearsRenamedTitle(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 	local := testDB(t)
 	ps, err := New(t.Context(), pgURL, "agentsview", local, "test-machine", true, storage.PusherOptions{})
 	require.NoError(t, err)

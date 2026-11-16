@@ -160,7 +160,7 @@ func TestAnalyticsSummaryReturnsFirstReadError(t *testing.T) {
 		want string
 	}{
 		{"serving", "querying analytics summary: summary read failure"},
-		{"cold read-only", "summary read failure"},
+		{"cold read-only", "querying analytics summary: summary read failure"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
@@ -176,8 +176,8 @@ func TestAnalyticsSummaryReturnsFirstReadError(t *testing.T) {
 			d.rawReader().SetMaxOpenConns(1)
 			conn, err := d.getReader().Conn(t.Context())
 			require.NoError(t, err)
-			// Cached SQL evaluates its first row during QueryContext; cold
-			// read-only SQL evaluates it during Next. Both must return the error.
+			// Both serving and cold read-only queries must return errors
+			// from evaluating their first row.
 			require.NoError(t, conn.Raw(func(driverConn any) error {
 				return driverConn.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("strftime", func(...any) (string, error) {
 					return "", errors.New("summary read failure")

@@ -58,6 +58,11 @@ created, the reader uses temporary storage. The cache is disposable and contains
 no source sessions. Plan usage, per-session details, and Activity retain their
 existing read paths.
 
+Trends keeps per-session counts under `$CACHE_DIRECTORY/postgres-trends`, or
+`agentsview/postgres-trends` in the user cache directory, and after a push
+recounts only changed sessions. Hosted and borrowed transaction readers read
+directly. The files are disposable.
+
 The sync direction is one-way: SQLite to PostgreSQL. Each machine pushes its own
 sessions; `pg serve` reads from the shared database. The resulting UI includes
 the session browser, analytics dashboard, search, and, as of 0.23.0, the Usage

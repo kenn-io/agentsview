@@ -759,7 +759,8 @@ const activityReportTerminalCandidatesSQL = `WITH
 	),
 	terminal_events AS MATERIALIZED (
 		SELECT tre.session_id, tre.tool_call_message_ordinal AS ordinal,
-			tre.call_index, tre.event_index, tre.timestamp
+			tre.call_index, tre.event_index, tre.timestamp,
+			agentsview_timestamp_unix_micro(tre.timestamp) AS ts_us
 		FROM session_ids ids
 		CROSS JOIN tool_result_events tre ON tre.session_id = ids.session_id
 		WHERE tre.source = 'tool_execution'
@@ -775,11 +776,12 @@ const activityReportTerminalCandidatesSQL = `WITH
 	ordered_terminal AS (
 		SELECT te.*,
 			LEAD(te.ordinal) OVER terminal_order AS next_terminal_ordinal,
-			LEAD(te.timestamp) OVER terminal_order AS next_terminal_timestamp
+			LEAD(te.timestamp) OVER terminal_order AS next_terminal_timestamp,
+			LEAD(te.ts_us) OVER terminal_order AS next_terminal_us
 		FROM terminal_events te
 		WINDOW terminal_order AS (
 			PARTITION BY te.session_id
-			ORDER BY agentsview_timestamp_unix_micro(te.timestamp),
+			ORDER BY te.ts_us,
 				te.call_index, te.event_index
 		)
 	),
@@ -787,7 +789,15 @@ const activityReportTerminalCandidatesSQL = `WITH
 		SELECT ot.*, next_message.ordinal AS next_message_ordinal,
 			next_message.timestamp AS next_message_timestamp,
 			next_message.role AS next_message_role,
-			next_message.model AS next_message_model
+			next_message.model AS next_message_model,
+			-- CASE, unlike OR, keeps SQLite from calling the timestamp
+			-- function on a NULL.
+			CASE
+				WHEN ot.next_terminal_us IS NULL THEN 0
+				WHEN next_message.timestamp IS NULL THEN 1
+				ELSE ot.next_terminal_us <
+					agentsview_timestamp_unix_micro(next_message.timestamp)
+			END AS tool_closes
 		FROM ordered_terminal ot
 		LEFT JOIN messages next_message ON next_message.id = (
 			SELECT next.id
@@ -796,14 +806,14 @@ const activityReportTerminalCandidatesSQL = `WITH
 				AND next.ordinal > ot.ordinal
 				AND next.timestamp IS NOT NULL
 				AND next.timestamp != ''
-				AND agentsview_timestamp_unix_micro(next.timestamp) >
-					agentsview_timestamp_unix_micro(ot.timestamp)
+				AND agentsview_timestamp_unix_micro(next.timestamp) > ot.ts_us
 			ORDER BY next.ordinal
 			LIMIT 1
 		)
 	),
 	last_messages AS (
-		SELECT m.session_id, m.ordinal, m.timestamp
+		SELECT m.session_id, m.ordinal, m.timestamp,
+			agentsview_timestamp_unix_micro(m.timestamp) AS ts_us
 		FROM terminal_sessions ts
 		JOIN messages m ON m.id = (
 			SELECT latest.id
@@ -817,60 +827,30 @@ const activityReportTerminalCandidatesSQL = `WITH
 		)
 	),
 	first_tail_events AS (
-		SELECT lm.session_id, lm.ordinal, lm.timestamp,
+		SELECT lm.session_id, lm.ordinal, lm.timestamp, lm.ts_us,
 			te.call_index, te.event_index, te.timestamp AS terminal_timestamp,
 			ROW_NUMBER() OVER (
 				PARTITION BY lm.session_id
-				ORDER BY agentsview_timestamp_unix_micro(te.timestamp),
-					te.call_index, te.event_index
+				ORDER BY te.ts_us, te.call_index, te.event_index
 			) AS row_num
 		FROM last_messages lm
 		JOIN terminal_events te ON te.session_id = lm.session_id
-		WHERE agentsview_timestamp_unix_micro(te.timestamp) >
-				agentsview_timestamp_unix_micro(lm.timestamp)
+		WHERE te.ts_us > lm.ts_us
 	),
 	candidates AS (
 		SELECT twm.session_id, twm.ordinal AS start_ordinal,
-			CASE
-				WHEN twm.next_terminal_timestamp IS NOT NULL AND
-					(twm.next_message_timestamp IS NULL OR
-					 agentsview_timestamp_unix_micro(twm.next_terminal_timestamp) <
-					 agentsview_timestamp_unix_micro(twm.next_message_timestamp))
-				THEN twm.next_terminal_ordinal
-				ELSE twm.next_message_ordinal
-			END AS end_ordinal,
-			twm.timestamp AS start_timestamp,
-			CASE
-				WHEN twm.next_terminal_timestamp IS NOT NULL AND
-					(twm.next_message_timestamp IS NULL OR
-					 agentsview_timestamp_unix_micro(twm.next_terminal_timestamp) <
-					 agentsview_timestamp_unix_micro(twm.next_message_timestamp))
-				THEN twm.next_terminal_timestamp
-				ELSE twm.next_message_timestamp
-			END AS end_timestamp,
-			CASE
-				WHEN twm.next_terminal_timestamp IS NOT NULL AND
-					(twm.next_message_timestamp IS NULL OR
-					 agentsview_timestamp_unix_micro(twm.next_terminal_timestamp) <
-					 agentsview_timestamp_unix_micro(twm.next_message_timestamp))
-				THEN 'tool'
-				ELSE twm.next_message_role
-			END AS closing_role,
-			CASE
-				WHEN twm.next_terminal_timestamp IS NOT NULL AND
-					(twm.next_message_timestamp IS NULL OR
-					 agentsview_timestamp_unix_micro(twm.next_terminal_timestamp) <
-					 agentsview_timestamp_unix_micro(twm.next_message_timestamp))
-				THEN ''
-				ELSE twm.next_message_model
-			END AS closing_model,
+			CASE WHEN twm.tool_closes THEN twm.next_terminal_ordinal ELSE twm.next_message_ordinal END AS end_ordinal,
+			twm.timestamp AS start_timestamp, twm.ts_us AS start_us,
+			CASE WHEN twm.tool_closes THEN twm.next_terminal_timestamp ELSE twm.next_message_timestamp END AS end_timestamp,
+			CASE WHEN twm.tool_closes THEN 'tool' ELSE twm.next_message_role END AS closing_role,
+			CASE WHEN twm.tool_closes THEN '' ELSE twm.next_message_model END AS closing_model,
 			twm.call_index, twm.event_index
 		FROM terminal_with_message twm
 
 		UNION ALL
 
 		SELECT fte.session_id, fte.ordinal, fte.ordinal,
-			fte.timestamp, fte.terminal_timestamp, 'tool', '',
+			fte.timestamp, fte.ts_us, fte.terminal_timestamp, 'tool', '',
 			fte.call_index, fte.event_index
 		FROM first_tail_events fte
 		WHERE fte.row_num = 1
@@ -890,9 +870,8 @@ SELECT candidate.session_id, candidate.start_ordinal, candidate.end_ordinal,
 	), 'unknown')
 FROM candidates candidate
 WHERE candidate.end_timestamp IS NOT NULL
-	AND agentsview_timestamp_unix_micro(candidate.start_timestamp) < ?
-ORDER BY agentsview_timestamp_unix_micro(candidate.start_timestamp),
-	candidate.session_id, candidate.start_ordinal,
+	AND candidate.start_us < ?
+ORDER BY candidate.start_us, candidate.session_id, candidate.start_ordinal,
 	candidate.call_index, candidate.event_index`
 
 // activityReportCandidateSQL pairs the sessions' messages. When counted is set,

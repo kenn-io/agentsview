@@ -2,6 +2,7 @@ package kept
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -11,7 +12,8 @@ import (
 )
 
 func TestKeptReportsRoundTrip(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	cache := t.TempDir()
+	t.Setenv("CACHE_DIRECTORY", cache+string(os.PathListSeparator)+t.TempDir())
 	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
 	require.NoError(t, err)
 	var first Reports
@@ -20,6 +22,7 @@ func TestKeptReportsRoundTrip(t *testing.T) {
 	selection := Selection("filter", q)
 	first.Put(selection, "version", true, entry)
 	path := first.Path(selection)
+	require.Equal(t, filepath.Join(cache, "test-reports", "mirror"), filepath.Dir(path))
 	longAgo := time.Now().Add(-31 * 24 * time.Hour)
 	require.NoError(t, os.Chtimes(path, longAgo, longAgo))
 	_, ok := first.Get(selection, "version", true)

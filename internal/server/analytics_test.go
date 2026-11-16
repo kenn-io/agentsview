@@ -44,6 +44,9 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
+	if err := os.Setenv("CACHE_DIRECTORY", filepath.Join(serverAnalyticsFixtureRoot, "cache")); err != nil {
+		panic(err)
+	}
 	code := m.Run()
 	_ = os.RemoveAll(serverAnalyticsFixtureRoot)
 	os.Exit(code)

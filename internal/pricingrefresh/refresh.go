@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -312,10 +311,10 @@ func runCurrent(
 
 // storeCatalog reconciles a fetched catalog with the stored table (see
 // pricing.Catalog.Reconcile) and writes rows, retirements, and the
-// OpenRouter ownership sentinel in one transaction, so a crash or a
+// OpenRouter ownership list in one transaction, so a crash or a
 // concurrent push never sees rows without the metadata that retires them.
 //
-// The sentinel and stored patterns are read before that transaction, and
+// The ownership list and stored patterns are read before that transaction, and
 // the in-process refresh gate does not cover a second process on the
 // same archive (server loop beside a CLI refresh), so racing refreshes
 // can commit a plan built from a one-snapshot-stale read. The next
@@ -349,11 +348,9 @@ func storeCatalog(ctx context.Context, database *db.DB, catalog pricing.Catalog)
 	if err != nil {
 		return fmt.Errorf("listing stored pricing: %w", err)
 	}
-	stored := make([]string, 0, len(existing))
-	for _, row := range existing {
-		if !strings.HasPrefix(row.ModelPattern, "_") {
-			stored = append(stored, row.ModelPattern)
-		}
+	stored := make([]string, len(existing))
+	for i, row := range existing {
+		stored[i] = row.ModelPattern
 	}
 	prices, owned, retired := catalog.Reconcile(stored, previous)
 	return database.ReconcileModelPricingContext(
@@ -378,8 +375,8 @@ func seedEmbeddedGenAI(ctx context.Context, database *db.DB) error {
 // rows it covers under another spelling are retired and rows it lists
 // exactly pass to its ownership, in the same transaction, so a reseed
 // never leaves an OpenRouter row beside or under an embedded one while
-// the sentinel still claims it. Databases that never stored the sentinel
-// keep none.
+// the ownership list still claims it. Databases that never stored the
+// list keep none.
 func storeFallbackContext(ctx context.Context, database *db.DB) error {
 	value, err := database.GetPricingMetaContext(
 		ctx, pricing.OpenRouterModelsMetaKey,

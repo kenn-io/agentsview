@@ -16,7 +16,7 @@ import (
 func TestPGSessionAnnotationParity(t *testing.T) {
 	t.Parallel()
 	syncer, local, _, ctx := newSessionProvenancePushSync(
-		t, "agentsview_session_annotations_test",
+		t, "agentsview",
 	)
 	dbtest.SeedSessionAnnotations(t, local)
 	_, err := syncer.Push(ctx, true, nil)
@@ -31,7 +31,7 @@ func TestPGSessionAnnotationParity(t *testing.T) {
 func TestPGPushRepushesAnnotationOnlyChanges(t *testing.T) {
 	t.Parallel()
 	syncer, local, pg, ctx := newSessionProvenancePushSync(
-		t, "agentsview_session_annotations_repush_test",
+		t, "agentsview",
 	)
 	dbtest.SeedSessionAnnotations(t, local)
 	const id = dbtest.AnnotatedOtherID
@@ -87,6 +87,9 @@ func TestPGPushRepushesAnnotationOnlyChanges(t *testing.T) {
 
 func TestPGPushAddsAnnotationColumnsToOlderSchema(t *testing.T) {
 	t.Parallel()
+	// An empty database: the schema this test upgrades must come from its own
+	// EnsureSchema run, never from a template copy.
+	testPGURL(t)
 	syncer, local, pg, ctx := newSessionProvenancePushSync(
 		t, "agentsview_session_annotations_upgrade_test",
 	)
@@ -114,7 +117,7 @@ func TestPGPushAddsAnnotationColumnsToOlderSchema(t *testing.T) {
 
 func TestSessionExclusionCounts(t *testing.T) {
 	t.Parallel()
-	syncer, local, _, ctx := newSessionProvenancePushSync(t, "agentsview_session_exclusions_test")
+	syncer, local, _, ctx := newSessionProvenancePushSync(t, "agentsview")
 	dbtest.SeedSessionExclusions(t, local)
 	_, err := syncer.Push(ctx, true, nil)
 	require.NoError(t, err)

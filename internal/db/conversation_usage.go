@@ -68,7 +68,8 @@ func conversationUsageSchemaSQL() string {
 		fill(conversationUsageEventMarkSQL, "NEW", "message_ordinal"))
 	trigger("conversation_usage_event_delete", "DELETE", "usage_events", "OLD.message_ordinal IS NOT NULL",
 		fill(conversationUsageEventMarkSQL, "OLD", "message_ordinal"))
-	trigger("conversation_usage_event_update_old", "UPDATE", "usage_events", "OLD.message_ordinal IS NOT NULL",
+	trigger("conversation_usage_event_update_old", "UPDATE OF "+strings.Join(usageEventRecordColumns, ","), "usage_events",
+		"OLD.message_ordinal IS NOT NULL",
 		fill(conversationUsageEventMarkSQL, "OLD", "message_ordinal"))
 	trigger("conversation_usage_event_update_new", "UPDATE", "usage_events",
 		"NEW.message_ordinal IS NOT NULL AND (OLD.session_id IS NOT NEW.session_id OR OLD.message_ordinal IS NOT NEW.message_ordinal)",

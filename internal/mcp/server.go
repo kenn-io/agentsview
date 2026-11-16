@@ -27,6 +27,7 @@ import (
 const (
 	ToolSearchSessions       = "search_sessions"
 	ToolQueryRecall          = "query_recall"
+	ToolListRecall           = "list_recall"
 	ToolListSessions         = "list_sessions"
 	ToolGetSessionOverview   = "get_session_overview"
 	ToolGetMessages          = "get_messages"
@@ -47,6 +48,8 @@ const (
 )
 
 const ToolGetSessionFileReferences = "get_session_file_references"
+
+const ToolGetCompactionSummaries = "get_compaction_summaries"
 
 // Profile selects the tools advertised by an MCP server while keeping their
 // implementations and schemas shared.
@@ -141,6 +144,8 @@ func newServer(opts ServeOptions) *mcp.Server {
 	}
 	memoryOnly := opts.Profile == ProfileMemory
 
+	mcp.AddTool(s, &mcp.Tool{Name: ToolGetCompactionSummaries, Description: "Read full compaction summaries for one session_id or sessions active since active_since. Use next_cursor to continue.", Annotations: readOnly}, t.compactionSummaries)
+
 	if !memoryOnly {
 		addFileReferencesTool(s, t, externalRead)
 		mcp.AddTool(s, &mcp.Tool{
@@ -161,6 +166,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 		}, t.searchSessions)
 
 		if service.SupportsRecallQueries(opts.Service) {
+			mcp.AddTool(s, &mcp.Tool{Name: ToolListRecall, Description: "List distilled recall entries without a query. Lists bounded by updated_since or created_since return the oldest change first and include every status.", Annotations: readOnly}, t.listRecall)
 			mcp.AddTool(s, &mcp.Tool{
 				Name: ToolQueryRecall,
 				Description: "Search distilled knowledge extracted from prior sessions. " +
@@ -218,7 +224,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 			"Use terms when every literal term must occur within one " +
 			"user/assistant exchange, or fully quoted substring text or regex for exact error messages, identifiers, and code fragments. " +
 			"Use concepts with two to five semantic ideas to keep only sessions with evidence for every idea. " +
-			"The default mode remains substring. On SQLite, a substring search of several words lists exact text first, " +
+			"The default mode remains substring. On SQLite, PostgreSQL, DuckDB, and ClickHouse, a substring search of several words lists exact text first, " +
 			"then messages holding every word, then those holding more of the words, and reports matched_words. Scope defaults to all, including child sessions and sidechain messages; " +
 			"top excludes them and subordinate returns only them. Child sessions bypass the one-shot exclusion. " +
 			"The response reports effective_scope and exclusions.children. Set context to include N messages of " +

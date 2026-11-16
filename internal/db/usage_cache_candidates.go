@@ -295,15 +295,18 @@ func usageCandidateDiscoverySQL(
 		branches = append(branches, prefix+"\n AND "+where)
 		args = append(args, branchArgs...)
 	}
-	appendRangeBranch := func(source, eligibility, column string) {
-		where, branchArgs := appendUsageColumnBounds("1=1", column, bounds, nil)
+	appendFilteredBranch := func(source, filter string, filterArgs []any) {
 		branch := `SELECT ranged.session_id
-			FROM (SELECT DISTINCT session_id FROM ` + source + ` WHERE ` + eligibility +
-			" AND " + column + " IS NOT NULL AND " + column + " != ''\n AND " + where + `) ranged
+			FROM (SELECT DISTINCT session_id FROM ` + source + ` WHERE ` + filter + `) ranged
 			JOIN sessions s ON s.id = ranged.session_id
 			WHERE s.deleted_at IS NULL`
 		branches = append(branches, branch)
-		args = append(args, branchArgs...)
+		args = append(args, filterArgs...)
+	}
+	appendRangeBranch := func(source, eligibility, column string) {
+		where, branchArgs := appendUsageColumnBounds("1=1", column, bounds, nil)
+		appendFilteredBranch(source, eligibility+
+			" AND "+column+" IS NOT NULL AND "+column+" != ''\n AND "+where, branchArgs)
 	}
 	appendRangeBranch("messages AS m INDEXED BY idx_messages_usage_timestamp",
 		usageMessageSourceEligibility, "m.timestamp")
@@ -317,8 +320,18 @@ func usageCandidateDiscoverySQL(
 		JOIN sessions s ON s.id = m.session_id
 		WHERE `+usageMessageSourceEligibility+`
 		  AND s.deleted_at IS NULL AND m.timestamp = ''`, "s.started_at")
-	appendRangeBranch("usage_events AS ue INDEXED BY idx_usage_events_occurred",
-		usageEventSourceEligibility, "ue.occurred_at")
+	// Parsed timestamps seek occurred_at_us; text that does not parse keeps
+	// the text range on its own small index.
+	if filter, filterArgs, ok := appendUsageEventMicroBounds(
+		usageEventSourceEligibility+" AND ue.occurred_at_us IS NOT NULL", bounds, nil,
+	); ok {
+		appendFilteredBranch("usage_events AS ue INDEXED BY idx_usage_events_occurred_us",
+			filter, filterArgs)
+		appendRangeBranch("usage_events AS ue INDEXED BY idx_usage_events_occurred_unparsed",
+			usageEventSourceEligibility+" AND ue.occurred_at_us IS NULL", "ue.occurred_at")
+	} else {
+		appendRangeBranch("usage_events AS ue", usageEventSourceEligibility, "ue.occurred_at")
+	}
 	appendBranch(`SELECT ue.session_id
 		FROM usage_events ue
 		JOIN sessions s ON s.id = ue.session_id

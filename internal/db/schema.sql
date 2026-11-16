@@ -293,7 +293,10 @@ CREATE TABLE IF NOT EXISTS usage_events (
     cost_status TEXT NOT NULL DEFAULT '',
     cost_source TEXT NOT NULL DEFAULT '',
     occurred_at TEXT,
-    dedup_key TEXT NOT NULL DEFAULT ''
+    dedup_key TEXT NOT NULL DEFAULT '',
+    -- occurred_at as UTC Unix microseconds, NULL when blank or unparseable.
+    -- Its indexes are created after archives that predate it gain it.
+    occurred_at_us INTEGER
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_events_dedup
@@ -301,8 +304,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_events_dedup
     WHERE dedup_key != '';
 CREATE INDEX IF NOT EXISTS idx_usage_events_session
     ON usage_events(session_id);
-CREATE INDEX IF NOT EXISTS idx_usage_events_occurred
-    ON usage_events(occurred_at);
 
 -- Per-session plan usage and live-capture coverage. Codex cloud reports
 -- usage as shares of plan limits and credits, not tokens, so these never
@@ -1365,6 +1366,13 @@ CREATE TABLE IF NOT EXISTS genai_pricing (
     updated_at TEXT NOT NULL
         DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+
+-- Values the price refresh keeps between runs, such as the embedded catalog
+-- version and the model patterns OpenRouter supplied.
+CREATE TABLE IF NOT EXISTS pricing_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+) WITHOUT ROWID;
 
 -- Git aggregation TTL cache: memoizes `git log --numstat` and
 -- `gh pr list` results per (repo, author, window) tuple so

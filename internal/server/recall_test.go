@@ -525,7 +525,7 @@ func TestListRecallEntriesRejectsRankedCursorAfterCorpusMutation(t *testing.T) {
 
 	assertStatus(t, second, http.StatusConflict)
 	assertErrorResponse(t, second,
-		"recall corpus changed; restart pagination")
+		service.ErrStaleRecallPagination.Error())
 }
 
 func TestListRecallEntriesRejectsRankedCursorAfterRankingFieldMutation(
@@ -597,7 +597,7 @@ func TestListRecallEntriesRejectsRankedCursorAfterRankingFieldMutation(
 
 			assertStatus(t, second, http.StatusConflict)
 			assertErrorResponse(t, second,
-				"recall corpus changed; restart pagination")
+				service.ErrStaleRecallPagination.Error())
 		})
 	}
 }
@@ -1980,4 +1980,26 @@ func seedReviewableRecallEntry(
 			MessageEndOrdinal: 2, Snippet: "Supporting transcript range.",
 		}},
 	})
+}
+
+func TestListRecallEntriesTimeBounds(t *testing.T) {
+	te := setup(t)
+	seedRecallEntrySession(t, te)
+	seedRecallEntry(t, te, db.RecallEntry{ID: "bounds", Title: "bounds", Body: "bounds", SourceSessionID: "recall-session"})
+	for _, param := range []string{"updated_since", "created_since"} {
+		bad := te.get(t, "/api/v1/recall/entries?"+param+"=invalid")
+		assertStatus(t, bad, http.StatusBadRequest)
+		future := te.get(t, "/api/v1/recall/entries?"+param+"=2999-01-01T00:00:00Z")
+		assertStatus(t, future, http.StatusOK)
+		assert.Empty(t, decode[listRecallEntriesResponse](t, future).RecallEntries)
+		whitespace := te.get(t, "/api/v1/recall/entries?"+param+"="+
+			url.QueryEscape(" \t "))
+		assertStatus(t, whitespace, http.StatusBadRequest)
+		assert.Contains(t, whitespace.Body.String(), "invalid recall query")
+	}
+	search := te.get(t,
+		"/api/v1/recall/entries?q=retry&updated_since=2026-01-01T00:00:00Z")
+	assertStatus(t, search, http.StatusBadRequest)
+	assertErrorResponse(t, search,
+		"invalid recall query: cannot combine search text with time bounds; omit the search query")
 }

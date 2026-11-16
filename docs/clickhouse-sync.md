@@ -584,6 +584,10 @@ in the same cache directory. Each selection can use up to 128 MiB, with a
 pricing change, new binary, or deletion of the cache directory. If the cache is
 unavailable, Usage reads the mirror instead.
 
+Trends keeps per-session counts in the same cache. The first visit builds them,
+and after a push it recounts only changed sessions. Hour, model, Local timezone,
+and time-dependent selections still read the mirror directly.
+
 When `require_auth` is enabled, a bearer token is generated if needed and
 printed on startup. Pass it via `Authorization: Bearer <token>` on API requests.
 
@@ -687,8 +691,14 @@ ______________________________________________________________________
   rather than per-generation pgvector tables, and search is an exact cosine
   scan. There is no hosted raw-sync control plane.
 - `clickhouse serve` does not run PostgreSQL-style migrations beyond
-  `CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, and the one-time
-  fill of derived usage and terminal-event tables described above.
+  `CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, the one-time fill
+  of derived usage and terminal-event tables described above, and changing
+  string columns with few distinct values, such as message roles, models, and
+  agents, to `LowCardinality(String)`. That change keeps every value. The
+  `ALTER` returns at once, and ClickHouse rewrites existing data in a
+  background mutation, which on a large mirror takes a while and needs
+  temporary disk space. Older AgentsView versions can keep pushing to the
+  converted mirror.
 - Deletes are version-bounded `DELETE` statements. ClickHouse applies them at
   merge time; readers always open connections with `final=1` so they see one
   row per key without writing `FINAL` in query text.

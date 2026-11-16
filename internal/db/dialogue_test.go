@@ -20,6 +20,7 @@ func TestDialogueFTSUpgradePreservesMessages(t *testing.T) {
 	insertSession(t, d, "legacy", "project", func(s *Session) { s.Agent = "pi"; s.UserMessageCount = 2 })
 	require.NoError(t, d.DropFTS(t.Context()))
 	_, err := d.getWriter().Exec(t.Context(), fmt.Sprintf(`DROP VIEW message_search_content;
+ DROP TRIGGER IF EXISTS trg_messages_search_dialogue;
  ALTER TABLE messages DROP COLUMN dialogue_text;
  WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i + 1 < %d)
  INSERT INTO messages (session_id, ordinal, role, content, content_length)

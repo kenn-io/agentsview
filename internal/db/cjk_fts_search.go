@@ -19,6 +19,10 @@ type messageFTSQuery struct {
 func (db *DB) prepareMessageFTSQuery(
 	ctx context.Context, raw string,
 ) (messageFTSQuery, error) {
+	return db.prepareMessageFTSQueryWithCJK(ctx, raw, containsCJK(raw) && db.HasCJKFTS(ctx))
+}
+
+func (db *DB) prepareMessageFTSQueryWithCJK(ctx context.Context, raw string, cjk bool) (messageFTSQuery, error) {
 	trimmed := strings.TrimSpace(raw)
 	prepared := PrepareFTSQuery(trimmed)
 	query := messageFTSQuery{
@@ -26,7 +30,7 @@ func (db *DB) prepareMessageFTSQuery(
 		match: prepared,
 		plain: StripFTSQuotes(prepared),
 	}
-	if prepared == "" || !containsCJK(trimmed) || !db.HasCJKFTS(ctx) {
+	if prepared == "" || !cjk {
 		return query, nil
 	}
 

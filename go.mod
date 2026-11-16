@@ -28,7 +28,7 @@ require (
 	github.com/jellydator/ttlcache/v3 v3.4.1
 	github.com/klauspost/compress v1.20.3
 	github.com/mattn/go-runewidth v0.0.31
-	github.com/mattn/go-sqlite3 v1.14.52
+	github.com/mattn/go-sqlite3 v1.14.53
 	github.com/moby/moby/api v1.56.1
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/oklog/ulid/v2 v2.1.2
@@ -44,7 +44,7 @@ require (
 	github.com/yuin/goldmark/v2 v2.1.13
 	go.kenn.io/docbank v0.17.0
 	go.kenn.io/kata v0.23.0
-	go.kenn.io/kit v0.52.0
+	go.kenn.io/kit v0.53.2
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/exp v0.0.0-20261014143641-f0251eb4aa3e
 	golang.org/x/mod v0.42.0

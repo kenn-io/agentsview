@@ -902,10 +902,12 @@ than warm reads. Native PostgreSQL serves its direct read instead whenever the
 cache lacks current coverage for the timezone, the catalog or account generation
 changed, or more than 64 sessions changed. A background worker then reads all
 history in that timezone to rebuild the cache and claim coverage; see
-[Usage cache backfill](background-work.md#usage-cache-backfill). Format 24
-rebuilds each SQLite usage cache once after upgrading; the 31,000-session
-fixture previously took about 19 seconds and 92 MB. Both implementations are
-co-maintained under the same behavior contract: daily usage, top sessions,
+[Usage cache backfill](background-work.md#usage-cache-backfill). Cache format 24
+converts SQLite caches from cache formats 21 through 23 and keeps their facts.
+Formats 21 and 22 rebuild daily rollups once; format 23 keeps them. Older formats
+and corrupt or incompatible caches rebuild. A copy failure leaves the old cache
+for a retry on the next launch. Both implementations are co-maintained under the
+same behavior contract: daily usage, top sessions,
 billed session counts, relaxed matching counts, and per-session usage must
 remain observably equal. The `pgtest` complete-result parity fixture is the
 acceptance boundary. Track the PostgreSQL-native optimization in
@@ -1140,7 +1142,7 @@ and deletes, message content-length repairs, and signal updates advance the
 analytics counter. Message changes also advance the session transcript revision.
 PostgreSQL uses its session journal, hosted PostgreSQL uses its tenant identity,
 selection, and corpus revisions, DuckDB uses its mirror stamp, and ClickHouse
-uses its sessions and messages parts fingerprint to invalidate Trends reports.
+uses session and message row identities to invalidate Trends reports.
 Remote DuckDB through Quack reads Trends fresh because it has no reliable
 freshness token. Read-only archives and reports filtered by active, stale, or
 unclean termination status bypass this cache.
@@ -1154,11 +1156,14 @@ effective end of the slot. The usage change journal invalidates changed sessions
 and their matching snapshot peers. Tool events are not journaled; a tool event
 change reaches PostgreSQL through a push that also changes the session's
 `transcript_revision`, which the journal records. Each visit selects sessions,
-pairs only sessions without an entry, sweeps the runs, selects usage snapshots,
-and prices the surviving rows again. On a scratch database of 100,000 sessions
-and 2.6 million candidates over seven months, the kept activity took 71 MiB, and
-a refresh with ten changed sessions spent 90 ms pairing instead of 3.2 s and 209
-ms sweeping instead of 1.0 s. Journal replacement, a changed gap cap, and
+pairs only sessions without an entry and sweeps the runs. It retains survivor
+prices and pricing metadata within the same budget. A changed input or price, a
+clock rewind, or the clock passing a usage row rebuilds the survivor prices.
+When those prices exceed the budget, the raw inputs remain eligible for reuse.
+Before survivor prices were retained, a scratch database of 100,000 sessions and
+2.6 million candidates over seven months used 71 MiB for kept activity. A refresh
+with ten changed sessions spent 90 ms pairing instead of 3.2 s and 209 ms
+sweeping instead of 1.0 s. Journal replacement, a changed gap cap, and
 unavailable or regressed revisions rebuild the inputs. Large change sets use a
 full read, and inputs above the budget aren't retained. Hosted stores and
 transaction views use their existing reads.
@@ -1219,6 +1224,18 @@ stored usage counters.
 
 Discovery collects distinct session IDs per bounded timestamp range before
 checking `sessions`, so each session is looked up once per range.
+
+Usage events are found by time through `usage_events.occurred_at_us`: the
+event's `occurred_at` text as UTC Unix microseconds, set on every write and NULL
+when the text is blank or does not parse. Range reads seek it through
+`idx_usage_events_occurred_us`. Text that does not parse keeps the padded text
+range through the partial index `idx_usage_events_occurred_unparsed`, so a
+report still places it on the day its date prefix names. `occurred_at` stays the
+record that exports, fingerprints, and mirror pushes read. The writable open
+that adds the column fills it in the same transaction. The usage change and
+conversation usage triggers watch only the recorded columns, so the fill
+publishes nothing. Data version 180 requires no reparse; it keeps older binaries
+from writing rows without the column or querying the text index it replaced.
 
 Changing any of these index column lists rebuilds the affected archive index on
 the next writable open, before HTTP readiness, and must log that startup is
@@ -1608,6 +1625,9 @@ top-level test in `internal/postgres` creates its own database on the
 `TEST_PG_URL` server, named `agentsview_test_<hex>`, and drops it when the test
 ends.
 
+The `TEST_PG_URL` server must run PostgreSQL 15 or later, because the tests
+create their databases with `STRATEGY FILE_COPY`.
+
 The role in `TEST_PG_URL` needs `CREATEDB`. Without it, every test fails with
 `creating test database`. Grant it as a superuser, using the role from
 `TEST_PG_URL`:
@@ -1616,8 +1636,8 @@ The role in `TEST_PG_URL` needs `CREATEDB`. Without it, every test fails with
 ALTER ROLE agentsview_test CREATEDB;
 ```
 
-A test binary that is killed leaves its databases behind, along with the store
-template described below (`agentsview_test_template_<hex>`). List them with:
+A test binary that is killed leaves its databases behind, along with the
+templates described below (`agentsview_test_template_<hex>`). List them with:
 
 ```sql
 SELECT datname FROM pg_database WHERE datname LIKE 'agentsview\_test\_%';
@@ -1633,12 +1653,26 @@ Because each test owns a database, the tests run in parallel:
   `testPGURL(t)`, or `PGTestURL(t)` in the external `postgres_test` package.
   Subtests share their top-level test's database. `isolatedPGDatabase(t)`
   returns another, separate database.
-- Tests that call `ensureStoreSchema` get their database from
-  `testPGStoreURL(t)`. On PostgreSQL that database is a copy of a template in
-  which `EnsureSchema` already created the store schema, which saves about 60
-  ms per test. The template is built once per test binary and dropped at exit.
-  CockroachDB has no `CREATE DATABASE ... TEMPLATE`, so there the test gets an
-  empty database and creates the schema itself.
+- A test that only needs a schema to exist before it starts gets its database
+  from `testPGSchemaURL(t, schema)`. On PostgreSQL that database is a copy of
+  a template in which `EnsureSchema` already created `schema`. Copying and the
+  test's own `EnsureSchema`, which finds the schema current, take about 20 ms;
+  creating the schema takes about 90 ms. `testPGStoreURL(t)` does this for
+  the store schema, and `newHostedFixture` does it for tenants through
+  `testPGHostedURL`.
+- Each schema name gets one template, built once per test binary by the first
+  test that asks for it and dropped at exit. Tests share a template only when
+  they use the same schema name, so tests that need one schema share a name,
+  such as `pgPushTestSchema`.
+- The first call decides a test's database. A test that calls `testPGURL(t)`
+  before `testPGSchemaURL` gets an empty database.
+- Setup helpers that drop and recreate their schema skip both when
+  `takeFreshSchemaCopy(t, dsn, schema)` reports an untouched copy, and reset
+  the schema on later calls, such as one per subtest.
+- Tests of how `EnsureSchema` creates, upgrades, or repairs a schema use
+  `testPGURL(t)`, so the code under test runs on an empty database.
+- CockroachDB has no `CREATE DATABASE ... TEMPLATE`, so there every test gets
+  an empty database and creates its schema itself.
 - Leave out `t.Parallel()` when the test changes process-wide state, such as
   `t.Setenv`, `time.Local`, `log.SetOutput`, `db.SetUserAutomationPrefixes`,
   or `pricing.SetConfiguredAliases`. Go runs those tests one at a time before
@@ -1649,7 +1683,9 @@ Because each test owns a database, the tests run in parallel:
   concurrent tests on a default 100-connection server. Each top-level test
   holds a slot while its databases exist. PostgreSQL permits the smaller of
   `max_connections / 8` and `max_connections * max_locks_per_transaction / 2048`
-  tests, with at least one slot. The default settings permit three tests.
+  tests, with at least one slot. The default settings permit three tests, so
+  the CI service and `docker-compose.test.yml` set
+  `max_locks_per_transaction=256`, which permits 12.
   Slot files in the system temporary directory, keyed by server address, share
   this limit across test processes. CockroachDB has no shared lock table and
   no slots.

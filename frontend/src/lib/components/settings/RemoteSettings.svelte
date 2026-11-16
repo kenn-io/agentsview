@@ -14,6 +14,7 @@
   } from "../../api/runtime.js";
   import { MetadataService } from "../../api/generated/index.js";
   import { LatestRead } from "../../utils/latest-read.js";
+  import RestartAction from "./RestartAction.svelte";
 
   let serverUrl: string = $state(getServerUrl());
   let tokenInput: string = $state(getAuthToken());
@@ -119,9 +120,11 @@
         </Toggle>
       </div>
 
-      <p class="restart-note control-offset">
-        {m.settings_remote_restart_note()}
-      </p>
+      <div class="control-offset">
+        <!-- Auth applies on save, so a server that can't restart itself
+             needs no restart steps here. -->
+        <RestartAction notice={m.settings_remote_restart_note()} manual={false} />
+      </div>
 
       {#if settings.requireAuth && settings.authToken}
         <div class="security-warning">
@@ -316,14 +319,6 @@
 
   .msg.success {
     color: var(--accent-green, #22c55e);
-  }
-
-  /* Upright muted text, like the other settings notes. */
-  .restart-note {
-    font-size: 11px;
-    line-height: 1.4;
-    color: var(--text-muted);
-    margin: 0;
   }
 
   .security-warning {

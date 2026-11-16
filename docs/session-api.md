@@ -380,6 +380,23 @@ agentsview session list --sort health --reverse
 
 ______________________________________________________________________
 
+### `agentsview session compactions`
+
+Read full compaction summaries for one session or sessions active since an
+RFC3339 timestamp. RooCode and legacy Kilo sessions are excluded. Older Evener
+labels that may be literal summary text appear separately as ambiguous, with
+their session ID and ordinal. The session limit does not cap response bytes;
+`--limit 0` uses the default of 20 sessions. Use `--limit` and `--cursor` to
+page sessions. Resume a cursor with the same `--active-since` value, even when a
+page has no summaries.
+
+```bash
+agentsview session compactions <id> --json
+agentsview session compactions --active-since 2024-01-01T00:00:00Z --limit 20 --json
+```
+
+The messages API accepts `compact_boundary=true` to select compaction boundaries in linear reads. It cannot be combined with `around`.
+
 ### `agentsview session messages`
 
 Return a window of messages. Response shape matches
@@ -929,7 +946,7 @@ substring (the default) and regex modes also walk `tool_calls.input_json`,
 (`--cursor` is rejected) — see [Semantic Search](/docs/semantic-search/) for
 setup, scoring, and limitations.
 
-On SQLite, a default search of several words that includes `messages` returns
+On SQLite, PostgreSQL, DuckDB, and ClickHouse, a default search of several words that includes `messages` returns
 exact text matches first, then messages ordered by how many query words they
 hold, with that count in `matched_words`. Unquoted stop words do not count.
 Regular word forms count, and a quoted phrase inside the query requires its
@@ -938,7 +955,7 @@ matching unless the query starts with a quote and holds only
 quoted phrases or FTS5 operators, which keeps FTS5 behavior. Other searches
 report `matched_words` as `0`.
 
-On PostgreSQL, `--fts` matches each word or quoted phrase as a case-insensitive substring; a query that starts with a quote also honors `AND`, `OR`, `NOT`, and parentheses as SQLite does. `NEAR(...)` and prefix `*` are not supported there; `*` matches literally.
+On PostgreSQL, an explicit `--fts` query that starts with a quote honors `AND`, `OR`, `NOT`, and parentheses as SQLite does. `NEAR(...)` and prefix `*` are not supported there; `*` matches literally.
 
 Every match, in every mode, carries the conversation-unit citation described in
 [Hit shape](/docs/semantic-search/#hit-shape-ranges-and-anchors):

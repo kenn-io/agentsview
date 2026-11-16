@@ -84,11 +84,13 @@ client will see these tools:
 | `search_sessions`             | Full-text search across recorded sessions                                |
 | `list_sessions`               | List recent or filtered sessions                                         |
 | `get_session_overview`        | Fetch metadata and a compact message preview                             |
+| `get_compaction_summaries`    | Read compaction summaries for one or more sessions                       |
 | `get_messages`                | Read paginated message bodies from one session                           |
 | `get_memory_status`           | Report archive, lexical, semantic, and source readiness                  |
 | `search_content`              | Substring, regex, terms, semantic, or hybrid search over session text    |
 | `get_usage_summary`           | Aggregate token and cost usage                                           |
 | `get_session_usage`           | Show one session's tokens and cost by model and by request               |
+| `list_recall`                 | List Recall entries changed or created since a time, with a cursor       |
 | `query_recall`                | Search extracted Recall entries when the backend supports Recall queries |
 | `get_session_file_references` | Find retained image bytes in Docbank, including prior versions and trash |
 | `get_tool_calls`              | List the tool calls one session made, with inputs and result sizes       |
@@ -101,6 +103,11 @@ client will see these tools:
 | `search_docs`                 | Search the AgentsView guides bundled with this version                   |
 | `get_friction_digest`         | Read a dated Friction Log digest as Markdown or the summary object       |
 | `list_friction_patterns`      | List recurring friction patterns ranked by occurrences                   |
+
+`get_compaction_summaries` accepts a session ID or `active_since` timestamp.
+The limit counts sessions; 0 uses the default of 20. Resume `next_cursor` with
+the same `active_since`, even when a page has no summaries. Ambiguous older
+Evener labels appear separately with their session ID and ordinal.
 
 The two Friction Log tools appear when the backend stores the Friction Log.
 `get_friction_digest` defaults to the latest digest; pass `date` (YYYY-MM-DD)
@@ -135,8 +142,8 @@ profile:
 }
 ```
 
-This profile advertises only `get_memory_status`, `search_content`, and
-`get_messages`. The status tool reports the authenticated archive backend,
+This profile advertises only `get_memory_status`, `search_content`,
+`get_messages`, and `get_compaction_summaries`. The status tool reports the authenticated archive backend,
 read-only mode, server version, lexical availability, semantic generation
 coverage, and whether per-source freshness telemetry is available. Its `ready`,
 `partial`, `unavailable`, or `unknown` states come from the same provider as the
@@ -204,15 +211,13 @@ especially when the exact wording is unknown. Hybrid combines semantic
 similarity with keyword matching. Use `context` to include surrounding messages.
 Hybrid returns its keyword matches when search by meaning is unavailable. The
 response includes `effective_mode: "hybrid_keyword"` and a `note` beside
-`coverage` explaining why. On SQLite, keyword matches rank messages holding
-every query word first, then those holding fewer of them. On other archives,
-keyword matches need the query words to appear; if there are no matches or only
-a few, try one or two short substring queries with key terms or synonyms.
+`coverage` explaining why. On SQLite, PostgreSQL, DuckDB, and ClickHouse, keyword matches rank messages holding
+every query word first, then those holding fewer of them.
 Preserve `scope`, inclusion, and current-session filters. Disclose keyword-only
 results once. Use fully quoted substring text or regex for exact errors,
 identifiers, and code fragments. The default remains substring.
 
-On SQLite, a substring search of several words lists matches of the exact text
+On SQLite, PostgreSQL, DuckDB, and ClickHouse, a substring search of several words lists matches of the exact text
 first, from every selected source, then messages holding every word, then those
 holding fewer of the words. Each match reports `matched_words`, the number of
 query words it holds, excluding unquoted stop words; other searches report `0`.

@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -95,19 +96,24 @@ func TestQuackStoreReattachesAfterFailedReattach(t *testing.T) {
 	_, err = server.ExecContext(ctx, `CALL quack_stop(?)`, uri)
 	require.NoError(t, err, "stop quack server")
 
-	var got int
-	err = store.queryRowContext(ctx,
-		`SELECT value FROM failed_reattach_test WHERE id = ?`,
-		"seed",
-	).Scan(&got)
-	require.Error(t, err, "query while server is stopped should fail")
+	// The extension keeps an established session open after quack_stop, so
+	// a query alone need not fail here. Reattach directly: it detaches, then
+	// cannot attach to the stopped server, which strands the client with no
+	// attachment.
+	store.quack.reattachMu.Lock()
+	err = store.quack.reattachLocked(ctx)
+	store.quack.reattachMu.Unlock()
+	require.Error(t, err, "reattach while server is stopped should fail")
+	var attached int
+	require.NoError(t, store.quack.DB().QueryRowContext(ctx,
+		`SELECT count(*) FROM duckdb_databases() WHERE database_name = ?`,
+		quackAttachmentName,
+	).Scan(&attached))
+	require.Zero(t, attached, "failed reattach should leave no attachment")
 
 	_, err = server.ExecContext(ctx, `CALL quack_serve(?, token => ?)`, uri, token)
 	require.NoError(t, err, "restart quack server")
-	_, err = store.quack.DB().ExecContext(ctx, "USE memory")
-	require.NoError(t, err, "select local catalog before forced detach")
-	_, err = store.quack.DB().ExecContext(ctx, "DETACH "+quackAttachmentName)
-	require.NoError(t, err, "force stranded detached Quack attachment")
+	var got int
 	require.NoError(t,
 		store.queryRowContext(ctx,
 			`SELECT value FROM failed_reattach_test WHERE id = ?`,
@@ -119,6 +125,7 @@ func TestQuackStoreReattachesAfterFailedReattach(t *testing.T) {
 }
 
 func TestQuackStoreAnalyticsDashboardReads(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "agentsview-quack-analytics.duckdb")
 	uri := "quack:127.0.0.1:" + freeTCPPort(t)
@@ -158,6 +165,15 @@ func TestQuackStoreAnalyticsDashboardReads(t *testing.T) {
 	t.Cleanup(func() {
 		require.NoError(t, store.Close(), "close Quack-backed store")
 	})
+	require.NoError(t, store.OpenActivityReportDisk(ctx))
+	usageReads := 0
+	previousUsageObserver := usagePartReadObserver
+	usagePartReadObserver = func([]string) { usageReads++ }
+	t.Cleanup(func() { usagePartReadObserver = previousUsageObserver })
+	usage, err := store.GetDailyUsage(ctx, db.UsageFilter{From: "2026-01-10", To: "2026-01-10", Timezone: "UTC"})
+	require.NoError(t, err)
+	require.Positive(t, usage.Totals.OutputTokens)
+	require.Zero(t, usageReads)
 
 	configStatus, err := ReadStatusFromConfig(ctx, config.DuckDBConfig{
 		URL:         uri,
@@ -267,6 +283,57 @@ func TestQuackStoreAnalyticsDashboardReads(t *testing.T) {
 	)
 	require.NoError(t, err, "read activity report through Quack")
 	assert.GreaterOrEqual(t, report.Totals.Sessions, 1)
+}
+
+func TestQuackTrendsReuseAcrossRestart(t *testing.T) {
+	cache := t.TempDir()
+	t.Setenv("CACHE_DIRECTORY", cache)
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "trends.duckdb")
+	uri := "quack:127.0.0.1:" + freeTCPPort(t)
+	const token = "agentsview-duckdbtest-token-trends"
+	local := newLocalDB(t)
+	dbtest.SeedTrendsWindow(t, local)
+	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+	openQuackMirrorServer(t, ctx, path, uri, token)
+	terms, err := db.ParseTrendTerms([]string{"fallback"})
+	require.NoError(t, err)
+	filter := db.AnalyticsFilter{From: "2025-03-10", To: "2025-03-10", Timezone: "UTC"}
+	var reads [][]string
+	reset := db.SetTrendPartsReadObserver(func(ids []string) { reads = append(reads, append([]string(nil), ids...)) })
+	t.Cleanup(reset)
+	open := func(target string) *Store {
+		store, err := NewQuackStore(ctx, target, token, false, 0)
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, store.Close()) })
+		require.NoError(t, store.OpenActivityReportDisk(ctx))
+		return store
+	}
+	first := open(uri)
+	got, err := first.GetTrendsTerms(ctx, filter, terms, "day")
+	require.NoError(t, err)
+	require.Equal(t, 1, got.Series[0].Total)
+	require.NotEmpty(t, reads)
+	require.NoError(t, first.Close())
+	reads = nil
+	restarted := open(uri)
+	again, err := restarted.GetTrendsTerms(ctx, filter, terms, "day")
+	require.NoError(t, err)
+	require.Equal(t, got, again)
+	require.Empty(t, reads)
+	require.NoError(t, restarted.Close())
+
+	otherPath := filepath.Join(t.TempDir(), "other.duckdb")
+	_, err = Push(ctx, otherPath, local, "m", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+	otherURI := "quack:127.0.0.1:" + freeTCPPort(t)
+	openQuackMirrorServer(t, ctx, otherPath, otherURI, token)
+	other := open(otherURI)
+	_, err = other.GetTrendsTerms(ctx, filter, terms, "day")
+	require.NoError(t, err)
+	require.NotEmpty(t, reads, "another target needs its own contributions")
+	require.NoError(t, other.Close())
 }
 
 func openQuackMirrorServer(

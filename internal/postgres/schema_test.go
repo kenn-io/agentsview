@@ -203,6 +203,9 @@ func (c *schemaProbeConn) QueryContext(
 		c.state.mu.Lock()
 		c.state.informationQueries++
 		c.state.mu.Unlock()
+		if strings.Contains(normalized, "select table_name, column_name, data_type") {
+			return &schemaProbeRows{columns: []string{"table_name", "column_name", "data_type"}}, nil
+		}
 		if strings.Contains(normalized, "select exists") || strings.Contains(normalized, "data_type = 'bigint'") {
 			return &schemaProbeRows{
 				columns: []string{"exists"},
@@ -381,7 +384,7 @@ func TestEnsureSchemaBatchesColumnIntrospection(t *testing.T) {
 
 	require.NoError(t, EnsureSchema(t.Context(), db, "agentsview"))
 
-	assert.Equal(t, 2, state.informationQueryCount(),
+	assert.Equal(t, 3, state.informationQueryCount(),
 		"information_schema.columns queries")
 }
 

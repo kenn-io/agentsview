@@ -143,6 +143,16 @@
       </button>
       <span class="sep">&middot;</span>
     {/if}
+    {#if sync.statusError}
+      <button
+        class="backend-warn"
+        onclick={() => void sync.retryStatus()}
+        title={sync.statusError}
+      >
+        {m.status_bar_status_unavailable()}
+      </button>
+      <span class="sep">&middot;</span>
+    {/if}
     {#if sync.backendDegraded}
       <button
         class="backend-warn"

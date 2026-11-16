@@ -21,9 +21,7 @@ import (
 // (delete-before-insert prevents duplicates on re-push).
 func TestPGPushSecrets(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 	ps, err := New(
@@ -124,9 +122,7 @@ func TestPGPushSecrets(t *testing.T) {
 // for secret-only changes that pushSession and pushMessages would miss.
 func TestPushSecretFindingsReportsChange(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 	ps, err := New(
@@ -243,10 +239,7 @@ func TestPGPassfileConnects(t *testing.T) {
 
 func TestPGPushCycle(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 	ps, err := New(

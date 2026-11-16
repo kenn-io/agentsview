@@ -79,7 +79,7 @@ func TestClickHouseUsageMessagesReplacement(t *testing.T) {
 	_, err = store.DB().ExecContext(ctx, "DELETE FROM sync_metadata WHERE key='usage_messages_backfill' SETTINGS mutations_sync=1")
 	require.NoError(t, err)
 	require.ErrorContains(t, CheckSchemaCompat(ctx, store.DB()), "backfill is incomplete")
-	require.NoError(t, ensureUsageMessages(ctx, store.DB()))
+	require.NoError(t, ensureUsageMessages(ctx, store.DB(), nil))
 	require.NoError(t, CheckSchemaCompat(ctx, store.DB()))
 }
 

@@ -355,6 +355,7 @@ func listFilterToDB(f ListFilter) db.SessionFilter {
 		AutomatedFilterSet:   f.AutomatedFilterSet,
 		ExcludeAutomated:     !f.IncludeAutomated,
 		IncludeChildren:      f.IncludeChildren,
+		Flat:                 f.Flat,
 		IncludeSource:        f.IncludeSource,
 		Cursor:               f.Cursor,
 		Limit:                f.Limit,
@@ -409,7 +410,7 @@ const defaultAroundSpan = 5
 func (b *directBackend) Messages(
 	ctx context.Context, id string, f MessageFilter,
 ) (*MessageList, error) {
-	if f.Around != nil && (f.From != nil || f.Direction != "") {
+	if f.Around != nil && (f.From != nil || f.Direction != "" || f.CompactBoundaryOnly) {
 		return nil, ErrAroundMutuallyExclusive
 	}
 	if (f.Before != nil || f.After != nil) && f.Around == nil {
@@ -432,7 +433,7 @@ func (b *directBackend) Messages(
 		limit = db.MaxMessageLimit
 	}
 
-	w := db.MessageWindow{Limit: limit, Asc: asc, Roles: f.Roles}
+	w := db.MessageWindow{Limit: limit, Asc: asc, Roles: f.Roles, CompactBoundaryOnly: f.CompactBoundaryOnly}
 	if f.Around != nil {
 		w.Around = f.Around
 		w.Before = defaultAroundSpan
@@ -1265,9 +1266,7 @@ func (b *directBackend) SearchContent(
 			reason = unavailable.Reason
 		}
 		filter.KeywordOnly, effectiveMode, note = true, "hybrid_keyword", "Search by meaning is unavailable: "+reason+". Returned hybrid keyword matches only."
-		// SQLite keyword matches already rank messages holding fewer of the
-		// words, so shorter retries find nothing new there.
-		if named, ok := b.db.(db.MemoryBackendNamer); !ok || named.MemoryBackendName() != "sqlite" {
+		if named, ok := b.db.(db.MemoryBackendNamer); !ok || named.MemoryBackendName() == "cockroach" {
 			note += " Query words must appear. If matches are empty or few, try short substring queries with key terms or synonyms."
 		}
 		if reason == "not set up" {
@@ -1451,15 +1450,27 @@ func (b *directBackend) ListRecallEntries(
 	if err := db.ValidateRecallQuery(query); err != nil {
 		return nil, err
 	}
+	query = db.NormalizeRecallQuery(query)
+	if err := ValidateRecallListQuery(query); err != nil {
+		return nil, err
+	}
 	if strings.TrimSpace(f.Query) == "" {
-		entries, err := b.db.ListRecallEntries(ctx, query)
+		var cursor *RecallListCursor
+		if f.Cursor != "" {
+			decoded, err := DecodeRecallListCursor(f.Cursor)
+			if err != nil || decoded.FilterHash != RecallListFilterHash(query) {
+				return nil, db.ErrInvalidRecallQuery
+			}
+			cursor = &decoded
+		}
+		entries, next, err := ListRecentRecallEntriesPage(ctx, b.db, query, cursor)
 		if err != nil {
 			return nil, err
 		}
-		return &RecallList{
-			RecallEntries: recallResultsFromRecallEntries(entries),
-			TrustedOnly:   f.TrustedOnly,
-		}, nil
+		return &RecallList{RecallEntries: entries, TrustedOnly: f.TrustedOnly, NextCursor: next}, nil
+	}
+	if f.Cursor != "" {
+		return nil, db.ErrInvalidRecallQuery
 	}
 	page, err := b.db.QueryRecallEntries(ctx, query)
 	if err != nil {
@@ -1472,14 +1483,6 @@ func (b *directBackend) ListRecallEntries(
 		RecallEntries: page.RecallEntries,
 		TrustedOnly:   f.TrustedOnly,
 	}, nil
-}
-
-func recallResultsFromRecallEntries(entries []db.RecallEntry) []db.RecallResult {
-	out := make([]db.RecallResult, 0, len(entries))
-	for _, entry := range entries {
-		out = append(out, db.RecallResult{RecallEntry: entry})
-	}
-	return out
 }
 
 func (b *directBackend) GetRecallEntry(
@@ -1512,6 +1515,8 @@ func (b *directBackend) ImportRecallEntries(
 func recallFilterToDB(f RecallFilter) db.RecallQuery {
 	return db.RecallQuery{
 		Text:                f.Query,
+		UpdatedSince:        f.UpdatedSince,
+		CreatedSince:        f.CreatedSince,
 		Project:             f.Project,
 		CWD:                 f.CWD,
 		GitBranch:           f.GitBranch,

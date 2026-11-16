@@ -91,6 +91,16 @@ func (db *DB) trendsTerms(ctx context.Context, f AnalyticsFilter, terms []TrendT
 	if granularity == "" {
 		granularity = "week"
 	}
+	db.trendsPartsDisk()
+	if db.trendsDisk.Enabled() {
+		identity, err := db.GetDatabaseID(ctx)
+		if err != nil {
+			return TrendsTermsResponse{}, err
+		}
+		if result, handled, err := TrendsFromParts(ctx, &db.trendsDisk, identity, f, terms, granularity, db); handled {
+			return result, err
+		}
+	}
 	acc := NewTrendWorkers(ctx, f.From, f.To, granularity, terms)
 	defer func() {
 		if acc != nil {
@@ -98,27 +108,19 @@ func (db *DB) trendsTerms(ctx context.Context, f AnalyticsFilter, terms []TrendT
 		}
 	}()
 	loc := f.location()
-	sessionFilter := f
-	sessionFilter.From = ""
-	sessionFilter.To = ""
-	sessionFilter.DayOfWeek = nil
-	sessionFilter.Hour = nil
-	sessionFilter.Model = ""
-	where, args := sessionFilter.buildWhereWithDate("", false, "s.id")
+	where, args := f.TrendsSessionFilter().buildWhereWithDate("", false, "s.id")
 	from, to := f.messageWindowBoundsUTC()
-	if sessionWindow, wargs := analyticsMessageWindowPred("COALESCE(NULLIF(started_at, ''), created_at)", from, to); sessionWindow != "" {
-		messageWindow, messageArgs := analyticsMessageWindowPred("wm.timestamp", from, to)
+	if sessionWindow, wargs := sqliteTrendSessionWindow(f); sessionWindow != "" {
 		// Filter sessions before walking their messages.
-		where += " AND s.id IN (SELECT sessions.id FROM sessions WHERE (" + sessionWindow + " OR EXISTS (SELECT 1 FROM messages wm WHERE wm.session_id = sessions.id AND wm.timestamp != '' AND " + messageWindow + ")))"
+		where += " AND s.id IN (SELECT sessions.id FROM sessions WHERE " + sessionWindow + ")"
 		args = append(args, wargs...)
-		args = append(args, messageArgs...)
 	}
 	flt := f.MessageScopeFilter()
 	modelFiltering := len(flt.Models) > 0
 	content := "m.content"
 	var selectArgs []any
 	effectiveTime := "COALESCE(NULLIF(m.timestamp, ''), NULLIF(s.started_at, ''), s.created_at)"
-	if inWindow, wargs := analyticsMessageWindowPred(effectiveTime, from, to); inWindow != "" {
+	if inWindow, wargs := sqliteTrendWindowPred(effectiveTime, from, to); inWindow != "" {
 		rowWindow := inWindow
 		if modelFiltering {
 			content = "CASE WHEN " + inWindow + " THEN m.content ELSE '' END"
@@ -223,6 +225,7 @@ type TrendAccumulator struct {
 	messageCounts         []int
 	lower                 []byte
 	matchers              [][]trendMatcher
+	parts                 map[trendPartKey]*trendDay
 }
 
 // NewTrendAccumulator returns an accumulator for the buckets spanning
@@ -255,17 +258,18 @@ func NewTrendAccumulator(
 // Add counts content in the bucket holding local's calendar date. Messages
 // whose local date falls outside [from, to] are ignored.
 func (a *TrendAccumulator) Add(content string, local time.Time) {
-	if !InDateRange(local.Format("2006-01-02"), a.from, a.to) {
-		return
-	}
-	bucket, ok := a.index[TrendBucketDate(local, local.Location(), a.granularity)]
+	bucket, ok := a.bucket(local)
 	if !ok {
 		return
 	}
 	a.messageCounts[bucket]++
+	a.countMessage(content, func(i, count int) { a.counts[i][bucket] += count })
+}
+
+func (a *TrendAccumulator) countMessage(content string, add func(int, int)) {
 	a.lower = appendTrendLower(a.lower, content)
 	for i, matchers := range a.matchers {
-		a.counts[i][bucket] += countTrendOccurrences(a.lower, matchers)
+		add(i, countTrendOccurrences(a.lower, matchers))
 	}
 }
 

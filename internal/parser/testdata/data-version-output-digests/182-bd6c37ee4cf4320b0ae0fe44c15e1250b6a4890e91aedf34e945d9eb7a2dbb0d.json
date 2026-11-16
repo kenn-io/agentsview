@@ -1,0 +1,9 @@
+{
+  "version": 182,
+  "digest": "bd6c37ee4cf4320b0ae0fe44c15e1250b6a4890e91aedf34e945d9eb7a2dbb0d",
+  "providers": {
+    "antigravity-cli": {
+      "conversations/bbbbbbbb-cccc-dddd-eeee-ffffffffffff.db": "40701a652f8caba9c7536208812d19086bbed4c5918865b512ca6b728de2c36b"
+    }
+  }
+}

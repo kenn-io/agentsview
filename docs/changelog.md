@@ -38,7 +38,17 @@ The latest release is
 - `agentsview diagnostics append` records failures outside agent sessions in
   the daily Friction Log, grouping repeated messages with their count.
 
+- Muse Personal sessions can now appear beside your other agents, including
+  tool results and compaction summaries. Muse Personal keeps its transcripts
+  on the machine Meta hosts for your Muse, not on your laptop, so ask your Muse
+  to install and run AgentsView there. See
+  [Muse Personal](/docs/configuration/#muse-personal).
+
 **Improvements**
+
+- Search and cold Trends visits open faster with DuckDB. After upgrading, run
+  `agentsview replica duckdb push` on the mirror's owning machine to rebuild
+  it before serving it.
 
 - Native PostgreSQL serving starts filling the Usage cache at launch.
 
@@ -58,8 +68,11 @@ The latest release is
   pushes. When that cache would first need a large rebuild, such as on first
   use, after a price change, or after new account usage, Usage shows the direct
   PostgreSQL result and rebuilds the cache in the background. Its disposable
-  cache lives in `<data-dir>/usage-postgres/`. SQLite rebuilds its Usage cache
-  once after this upgrade.
+  cache lives in `<data-dir>/usage-postgres/`. SQLite keeps cached facts from
+  v0.47.0 and subsequent development builds (cache formats 21 through 23).
+  Formats 21 and 22 rebuild daily rollups once; format 23
+  keeps them. Older formats and corrupt or incompatible caches rebuild. A failed
+  copy keeps the old cache for another attempt on the next launch.
 
 - Session exports now mask API keys, tokens, and other detected secrets by
   default, using the same masked form as search results. This covers the HTML

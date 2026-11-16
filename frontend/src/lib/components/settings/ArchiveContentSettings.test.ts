@@ -22,6 +22,8 @@ const settingsService = SettingsService as unknown as {
 
 function makeSettingsResponse(toolResultImages: "keep" | "drop" | "offload") {
   return {
+    restart_required: toolResultImages !== "keep",
+    restart_supported: true,
     agent_dirs: {},
     chart_palette: "agentsview",
     tool_result_images: toolResultImages,
@@ -40,6 +42,9 @@ describe("ArchiveContentSettings", () => {
     settings.toolResultImages = "keep";
     settings.readOnly = false;
     settings.saving = false;
+    settings.saveError = null;
+    settings.restartSupported = true;
+    settings.restartRequired = false;
   });
 
   afterEach(() => {
@@ -76,31 +81,38 @@ describe("ArchiveContentSettings", () => {
     expect(getByRole("radio", { name: "Offload" }).getAttribute("aria-checked")).toBe("true");
   });
 
-  it("shows no restart notice on first render and shows it after a saved selection", async () => {
-    settingsService.putApiV1Settings.mockResolvedValue(makeSettingsResponse("drop"));
+  it("shows the restart notice while the server reports the saved policy as pending", async () => {
+    settingsService.putApiV1Settings
+      .mockResolvedValueOnce(makeSettingsResponse("drop"))
+      .mockResolvedValueOnce(makeSettingsResponse("keep"));
     const { getByRole, findByRole, queryByRole } = render(ArchiveContentSettings);
 
-    expect(queryByRole("status")).toBeNull();
-
     await fireEvent.click(getByRole("radio", { name: "Drop" }));
+    expect(await findByRole("button", { name: "Restart now" })).toBeTruthy();
+    expect(getByRole("status").textContent).toContain("after AgentsView restarts");
 
-    expect(await findByRole("status")).toBeTruthy();
+    await fireEvent.click(getByRole("radio", { name: "Keep" }));
+    await vi.waitFor(() => expect(queryByRole("status")).toBeNull());
   });
 
-  it("shows no restart notice when the save fails", async () => {
-    settingsService.putApiV1Settings.mockRejectedValue(new Error("write refused"));
+  it("keeps the pending restart notice when the save fails", async () => {
+    settingsService.putApiV1Settings
+      .mockResolvedValueOnce(makeSettingsResponse("drop"))
+      .mockRejectedValueOnce(new Error("write refused"));
     const { getByRole, queryByRole } = render(ArchiveContentSettings);
 
     await fireEvent.click(getByRole("radio", { name: "Drop" }));
+    await fireEvent.click(getByRole("radio", { name: "Offload" }));
     await vi.waitFor(() => {
-      expect(settingsService.putApiV1Settings).toHaveBeenCalled();
+      expect(settingsService.putApiV1Settings).toHaveBeenCalledTimes(2);
     });
     await tick();
 
-    expect(queryByRole("status")).toBeNull();
     // The rejected write leaves the stored policy alone, so the control stays
     // on the value the daemon still holds.
-    expect(getByRole("radio", { name: "Keep" }).getAttribute("aria-checked")).toBe("true");
+    expect(getByRole("radio", { name: "Drop" }).getAttribute("aria-checked")).toBe("true");
+    expect(queryByRole("status")).toBeTruthy();
+    expect(settings.saveError).toBe("write refused");
   });
 
   it("sets the migrate command in the hint as code without losing any of the sentence", () => {

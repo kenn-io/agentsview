@@ -51,15 +51,17 @@ VALUES ($1, $2, '', $3, $4, $5, $6, $7, 'h')`,
 // searchMaxInputChars=20, anchors to member B (ordinal 12, snippet runMemberB).
 func setupSemanticSearch(t *testing.T) (*Store, int64, string) {
 	t.Helper()
-	pgURL := testPGURL(t)
+	pgURL := testPGSchemaURL(t, semanticSearchSchema)
 
 	pg, err := Open(t.Context(), pgURL, semanticSearchSchema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 	ctx := t.Context()
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+semanticSearchSchema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
-	require.NoError(t, EnsureSchema(ctx, pg, semanticSearchSchema), "EnsureSchema")
+	if !takeFreshSchemaCopy(t, pgURL, semanticSearchSchema) {
+		_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+semanticSearchSchema+` CASCADE`)
+		require.NoError(t, err, "drop schema")
+		require.NoError(t, EnsureSchema(ctx, pg, semanticSearchSchema), "EnsureSchema")
+	}
 	unavailable, err := ensureVectorBaseSchemaPG(ctx, pg)
 	require.NoError(t, err, "ensureVectorBaseSchemaPG")
 	if unavailable != "" {

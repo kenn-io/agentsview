@@ -133,6 +133,13 @@ type AnalyticsFilter struct {
 	IncludeForks bool
 }
 
+// TrendsSessionFilter keeps session-level filters for Trends candidate selection.
+func (f AnalyticsFilter) TrendsSessionFilter() AnalyticsFilter {
+	f.From, f.To, f.Model = "", "", ""
+	f.DayOfWeek, f.Hour = nil, nil
+	return f
+}
+
 // RelationshipExclusionSQL returns the relationship_type predicate for
 // analytics aggregation. The default excludes subagent and fork rows
 // (matching the session list); IncludeSubagents and IncludeForks each

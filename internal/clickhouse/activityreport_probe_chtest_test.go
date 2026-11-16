@@ -56,9 +56,9 @@ func TestActivitySourceProbeCachePreservesFreshness(t *testing.T) {
 		{`TRUNCATE TABLE messages`, activity.SourceProbe{SessionCount: 1, MaxSessionModified: want.MaxSessionModified, MaxDataVersion: 1}},
 		{`INSERT INTO usage_events (id,session_id,push_version) VALUES (42,'probe',1)`, activity.SourceProbe{SessionCount: 1, MaxSessionModified: want.MaxSessionModified, MaxDataVersion: 1, MaxUsageID: 42}},
 		{`INSERT INTO sessions (id,push_version,data_version,local_modified_at) VALUES ('probe',2,2,'2026-01-10 00:00:00')`, activity.SourceProbe{SessionCount: 1, MaxSessionModified: want.MaxSessionModified, MaxDataVersion: 2, MaxUsageID: 42}},
-		{`INSERT INTO model_pricing (model_pattern,updated_at,push_version) VALUES ('probe','2026-01-11',1)`, activity.SourceProbe{SessionCount: 1, MaxSessionModified: want.MaxSessionModified, MaxDataVersion: 2, MaxUsageID: 42, MaxPricingUpdated: "2026-01-11"}},
-		{`INSERT INTO genai_pricing (singleton,updated_at,push_version) VALUES (1,'2026-01-12',1)`, activity.SourceProbe{SessionCount: 1, MaxSessionModified: want.MaxSessionModified, MaxDataVersion: 2, MaxUsageID: 42, MaxPricingUpdated: "2026-01-12"}},
-		{`INSERT INTO sync_metadata (key,value,push_version) VALUES ('agentsview_identity_revision:probe','7',1)`, activity.SourceProbe{SessionCount: 1, MaxSessionModified: want.MaxSessionModified, MaxDataVersion: 2, MaxUsageID: 42, MaxPricingUpdated: "2026-01-12", ProjectIdentityGeneration: 7}},
+		{`INSERT INTO model_pricing (model_pattern,updated_at,push_version) VALUES ('probe','2026-01-11',1)`, activity.SourceProbe{SessionCount: 1, MaxSessionModified: want.MaxSessionModified, MaxDataVersion: 2, MaxUsageID: 42, MaxPricingUpdated: "2026-01-11 00:00:00.000000"}},
+		{`INSERT INTO genai_pricing (singleton,updated_at,push_version) VALUES (1,'2026-01-12',1)`, activity.SourceProbe{SessionCount: 1, MaxSessionModified: want.MaxSessionModified, MaxDataVersion: 2, MaxUsageID: 42, MaxPricingUpdated: "2026-01-12 00:00:00.000000"}},
+		{`INSERT INTO sync_metadata (key,value,push_version) VALUES ('agentsview_identity_revision:probe','7',1)`, activity.SourceProbe{SessionCount: 1, MaxSessionModified: want.MaxSessionModified, MaxDataVersion: 2, MaxUsageID: 42, MaxPricingUpdated: "2026-01-12 00:00:00.000000", ProjectIdentityGeneration: 7}},
 	} {
 		_, err = conn.ExecContext(ctx, step.sql)
 		require.NoError(t, err)
