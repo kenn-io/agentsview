@@ -10,7 +10,6 @@
   "repository": "https://github.com/kenn-io/agentsview",
   "license": "MIT",
   "keywords": ["memory", "conversation-history", "agentsview"],
-  "agents": ["./agents/agentsview-search-conversations.md"],
   "mcpServers": {
     "agentsview": {
       "command": "agentsview",
