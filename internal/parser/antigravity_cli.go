@@ -608,9 +608,6 @@ func mergeAntigravityDBHistoryMessages(
 		if msg.Role != RoleUser {
 			continue
 		}
-		if msg.antigravityTypedPrompt {
-			return appendMissingAntigravityHistoryMessages(dbMessages, history)
-		}
 		userCount++
 	}
 	if userCount != len(history) {
@@ -619,6 +616,17 @@ func mergeAntigravityDBHistoryMessages(
 		)
 	}
 	historyIdx := 0
+	for _, msg := range dbMessages {
+		if msg.Role != RoleUser {
+			continue
+		}
+		if msg.antigravityTypedPrompt &&
+			normalizedAntigravityPrompt(msg.Content) != normalizedAntigravityPrompt(history[historyIdx].Content) {
+			return appendMissingAntigravityHistoryMessages(dbMessages, history)
+		}
+		historyIdx++
+	}
+	historyIdx = 0
 	for i := range dbMessages {
 		if dbMessages[i].Role != RoleUser {
 			continue
@@ -628,9 +636,12 @@ func mergeAntigravityDBHistoryMessages(
 				dbMessages, history,
 			)
 		}
-		dbMessages[i].Content = history[historyIdx].Content
-		dbMessages[i].ContentLength = len(history[historyIdx].Content)
-		if !history[historyIdx].Timestamp.IsZero() {
+		if !dbMessages[i].antigravityTypedPrompt {
+			dbMessages[i].Content = history[historyIdx].Content
+			dbMessages[i].ContentLength = len(history[historyIdx].Content)
+		}
+		if !history[historyIdx].Timestamp.IsZero() &&
+			(!dbMessages[i].antigravityTypedPrompt || dbMessages[i].Timestamp.IsZero()) {
 			dbMessages[i].Timestamp = history[historyIdx].Timestamp
 		}
 		historyIdx++
@@ -649,15 +660,16 @@ func appendMissingAntigravityHistoryMessages(
 		key  string
 		ts   time.Time
 		used bool
+		idx  int
 	}
 	var existing []existingUserTurn
-	for _, msg := range dbMessages {
+	for idx, msg := range dbMessages {
 		if msg.Role != RoleUser {
 			continue
 		}
 		if key := normalizedAntigravityPrompt(msg.Content); key != "" {
 			existing = append(existing, existingUserTurn{
-				key: key, ts: msg.Timestamp,
+				key: key, ts: msg.Timestamp, idx: idx,
 			})
 		}
 	}
@@ -687,6 +699,20 @@ func appendMissingAntigravityHistoryMessages(
 					sameTurn(existing[i].ts, msg.Timestamp) {
 					existing[i].used = true
 					matched[hIdx] = true
+					turn := &dbMessages[existing[i].idx]
+					if turn.antigravityTypedPrompt && turn.Timestamp.IsZero() {
+						// Avoid moving this turn after a later DB message.
+						ordered := true
+						for _, later := range dbMessages[existing[i].idx+1:] {
+							if later.Timestamp.Before(msg.Timestamp) {
+								ordered = false
+								break
+							}
+						}
+						if ordered {
+							turn.Timestamp = msg.Timestamp
+						}
+					}
 					break
 				}
 			}

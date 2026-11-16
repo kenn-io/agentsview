@@ -495,6 +495,82 @@ func TestAntigravityCLIDBPreservesTypedPromptMissingFromHistory(t *testing.T) {
 	require.Len(t, msgs, 2)
 	assert.Equal(t, "typed prompt", msgs[0].Content)
 	assert.Equal(t, "typed prompt", sess.FirstMessage)
+	assert.Equal(t, int64(1779000000000), msgs[0].Timestamp.UnixMilli())
+
+	mustWrite(t, filepath.Join(root, "history.jsonl"),
+		[]byte(`{"display":"typed prompt","timestamp":1779000000000,"conversationId":"`+id+`"}`+"\n"+
+			`{"display":"another prompt","timestamp":1779000200000,"conversationId":"`+id+`"}`))
+	_, msgs, err = parseAntigravityCLITestSession(t, dbPath, "", "test-machine")
+	require.NoError(t, err)
+	require.Len(t, msgs, 3)
+	assert.Equal(t, "typed prompt", msgs[0].Content)
+	assert.Equal(t, int64(1779000000000), msgs[0].Timestamp.UnixMilli())
+
+	mustWrite(t, filepath.Join(root, "history.jsonl"),
+		[]byte(`{"display":"typed prompt","timestamp":1779000200000,"conversationId":"`+id+`"}`+"\n"+
+			`{"display":"another prompt","timestamp":1779000300000,"conversationId":"`+id+`"}`))
+	_, msgs, err = parseAntigravityCLITestSession(t, dbPath, "", "test-machine")
+	require.NoError(t, err)
+	require.Len(t, msgs, 3)
+	assert.Equal(t, "typed prompt", msgs[0].Content)
+	assert.Equal(t, RoleAssistant, msgs[1].Role)
+}
+
+func TestAntigravityCLIDBMixedTypedAndFallbackHistory(t *testing.T) {
+	root := t.TempDir()
+	id := "33333333-4444-5555-6666-777777777777"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityTestDB(t, dbPath)
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	item := encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: []byte("typed prompt")}})
+	input := encodePB([]pbField{{num: 3, wire: pbWireBytes, bytes: item}})
+	mustExec(t, db, `UPDATE steps SET step_payload = ? WHERE idx = 0`,
+		encodePB([]pbField{{num: 19, wire: pbWireBytes, bytes: input}}))
+	ts := encodePB([]pbField{{num: 1, wire: pbWireVarint, varint: 1779000200}})
+	fallback := encodePB([]pbField{
+		{num: 5, wire: pbWireBytes, bytes: ts},
+		{num: 17, wire: pbWireBytes, bytes: []byte("fallback extracted content")},
+	})
+	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`,
+		2, 14, fallback)
+	require.NoError(t, db.Close())
+	mustWrite(t, filepath.Join(root, "history.jsonl"),
+		[]byte(`{"display":"typed prompt","timestamp":1779000000000,"conversationId":"`+id+`"}`+"\n"+
+			`{"display":"actual second prompt","timestamp":1779000200000,"conversationId":"`+id+`"}`))
+
+	_, msgs, err := parseAntigravityCLITestSession(t, dbPath, "", "test-machine")
+	require.NoError(t, err)
+	require.Len(t, msgs, 3)
+	assert.Equal(t, "typed prompt", msgs[0].Content)
+	assert.Equal(t, "actual second prompt", msgs[2].Content)
+}
+
+func TestAntigravityCLIDBLaterTypedPromptWithHistoryTime(t *testing.T) {
+	root := t.TempDir()
+	id := "33333333-4444-5555-6666-777777777777"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityTestDB(t, dbPath)
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	item := encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: []byte("later typed prompt")}})
+	input := encodePB([]pbField{{num: 3, wire: pbWireBytes, bytes: item}})
+	payload := encodePB([]pbField{{num: 19, wire: pbWireBytes, bytes: input}})
+	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`,
+		2, 14, payload)
+	require.NoError(t, db.Close())
+	mustWrite(t, filepath.Join(root, "history.jsonl"),
+		[]byte(`{"display":"user prompt text goes here","timestamp":1779000000000,"conversationId":"`+id+`"}`+"\n"+
+			`{"display":"later typed prompt","timestamp":1779000200000,"conversationId":"`+id+`"}`))
+
+	_, msgs, err := parseAntigravityCLITestSession(t, dbPath, "", "test-machine")
+	require.NoError(t, err)
+	require.Len(t, msgs, 3)
+	assert.Equal(t, "user prompt text goes here", msgs[0].Content)
+	assert.Equal(t, RoleAssistant, msgs[1].Role)
+	assert.Equal(t, "later typed prompt", msgs[2].Content)
 }
 
 func TestAntigravityCLIProjectFallbackPromptAndProximity(t *testing.T) {
