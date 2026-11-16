@@ -98,6 +98,7 @@ func (s *Store) checkMirrorReplacement(ctx context.Context, onEvent func(err err
 	if err != nil {
 		return
 	}
+	PrimeFileIdentity(info)
 
 	s.handleMu.RLock()
 	prev := s.fileInfo
@@ -214,6 +215,7 @@ func (s *Store) beginReplacementCheck() bool {
 // nothing will ever close again.
 func (s *Store) swapHandle(conn *sql.DB, alias string, info os.FileInfo) {
 	PrimeFileIdentity(info)
+	activityID := activityMirrorID(alias, info)
 	s.handleMu.Lock()
 	if s.closed {
 		s.handleMu.Unlock()
@@ -228,6 +230,7 @@ func (s *Store) swapHandle(conn *sql.DB, alias string, info os.FileInfo) {
 	s.duck = conn
 	s.aliasPath = alias
 	s.fileInfo = info
+	s.activityMirrorID = activityID
 	// Replacement aliases open the checkpointed main file without a sibling WAL.
 	s.walStamp = "nowal"
 	s.reports.Clear()

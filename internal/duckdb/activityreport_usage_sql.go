@@ -17,6 +17,8 @@ import (
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
+var activityUsagePublishObserver func()
+
 // activityUsageModels selects the (model, provider_id) pairs usage rows can
 // carry. A pair it misses costs one more read of the rows.
 const activityUsageModels = `SELECT DISTINCT model, provider_id FROM messages WHERE model != ''
@@ -94,6 +96,9 @@ func (s *Store) sumActivityUsage(
 		}
 		if next.Valid {
 			nextUS = next.Int64
+		}
+		if activityUsagePublishObserver != nil {
+			activityUsagePublishObserver()
 		}
 		saved := []*readbase.ActivityUsageSums{{Schedule: schedule, Groups: groups, EndUS: endUS, NextUS: nextUS}}
 		s.activityUsageSums.Put(slot, version, saved)

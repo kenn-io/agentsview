@@ -133,7 +133,7 @@ func (r *SessionRuns) GobDecode(data []byte) error {
 	if next != len(encoded.Bounds) || len(encoded.Trimmed) > (len(encoded.Bounds)+63)/64 {
 		return errors.New("invalid activity run layout")
 	}
-	if len(encoded.Trimmed) > 0 && len(encoded.Bounds)%64 != 0 && encoded.Trimmed[len(encoded.Trimmed)-1]>>(len(encoded.Bounds)%64) != 0 && len(encoded.Trimmed) == (len(encoded.Bounds)+63)/64 {
+	if len(encoded.Bounds)%64 != 0 && len(encoded.Trimmed) == (len(encoded.Bounds)+63)/64 && encoded.Trimmed[len(encoded.Trimmed)-1]>>(len(encoded.Bounds)%64) != 0 {
 		return errors.New("invalid activity run trim")
 	}
 	*r = decoded

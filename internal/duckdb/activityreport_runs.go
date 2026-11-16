@@ -139,7 +139,7 @@ func (s *Store) activityReportRuns(
 	if len(ids) == 0 {
 		return nil, nil, nil
 	}
-	if s.usageDisk.Enabled() {
+	if q.Partial && s.usageDisk.Enabled() {
 		s.activityRuns.diskMu.Lock()
 		s.activityRuns.load(&s.usageDisk, q.GapCapSeconds)
 		s.activityRuns.diskMu.Unlock()
@@ -192,7 +192,7 @@ func (s *Store) activityReportRuns(
 		// A report too large to keep would only evict the rest.
 		if bytes <= activityRunsMaxBytes {
 			s.activityRuns.store(keep)
-			if s.usageDisk.Enabled() && ctx.Err() == nil {
+			if q.Partial && s.usageDisk.Enabled() && ctx.Err() == nil {
 				gap := q.GapCapSeconds
 				s.activityWrites.put(fmt.Sprintf("activity-runs|%g", gap), 0, func() {
 					s.activityRuns.save(&s.usageDisk, gap)

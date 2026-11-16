@@ -805,7 +805,9 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
   the summed groups in `internal/readbase/activityusage.go`. DuckDB keeps
   usage totals for ranges that include today in memory and on disk, along with
   session runs and message times. A push or pricing change refreshes the
-  affected inputs. Finished reports also use memory,
+  affected inputs. Writes start after 10 seconds without another cache write;
+  `Store.Close` drains pending entries. An abrupt exit can lose pending entries,
+  which the next report rebuilds. Finished reports also use memory,
   which restart clears. Eligible past-day reports can be saved to disk and
   reused after restart. DuckDB also derives session runs in SQL with
   `activitySessionRuns`. The SQLite and PostgreSQL reports keep the Go rules

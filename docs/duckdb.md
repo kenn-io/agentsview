@@ -99,8 +99,9 @@ watching, or local sync.
 
 Local `duckdb serve` keeps usage totals for Activity ranges that include today
 in memory and on disk, along with session runs and message times. A push or
-pricing change refreshes the affected inputs. Finished
-Activity reports are also kept in memory, which restart clears. Eligible
+pricing change refreshes the affected inputs. Disk writes start after 10 seconds
+without a new cache write; shutdown saves pending entries immediately. An abrupt
+exit can lose pending entries, which the next report rebuilds. Finished Activity reports are also kept in memory, which restart clears. Eligible
 past-day reports can be saved to disk and reused after restart.
 Finished Usage results stay in memory for the same mirror file and custom
 pricing, with up to 64 selections and 64 MiB per read kind.

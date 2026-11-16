@@ -48,6 +48,7 @@ type Store struct {
 	replacementMu     sync.Mutex
 	duck              *sql.DB
 	fileInfo          os.FileInfo
+	activityMirrorID  string
 	walStamp          string
 	reports           kept.Reports
 	activityUsageSums kept.Memo[*readbase.ActivityUsageSums]
@@ -109,7 +110,7 @@ func NewStore(ctx context.Context, path string) (*Store, error) {
 		return nil, err
 	}
 	return &Store{
-		path: path, duck: conn, fileInfo: info, walStamp: walStamp,
+		path: path, duck: conn, fileInfo: info, walStamp: walStamp, activityMirrorID: activityMirrorID(path, info),
 		activityUsageSums: kept.Memo[*readbase.ActivityUsageSums]{Size: (*readbase.ActivityUsageSums).Bytes},
 		topUsage:          kept.Reads[[]db.TopSessionEntry]{Size: db.TopSessionsBytes},
 		analyticsReads:    kept.Reads[[]byte]{Size: func(b []byte) int64 { return int64(len(b)) }},
@@ -145,7 +146,11 @@ func (s *Store) keptVersions() (string, string) {
 	}
 	base := stamp + "|" + s.pricingDigest
 	aliases := pricingpkg.ConfiguredAliasesDigest()
-	return base + "|" + s.aliasPath + "|" + aliases, base + "|" + aliases
+	memory := base + "|" + s.aliasPath + "|" + aliases
+	if s.activityMirrorID == "" {
+		return memory, ""
+	}
+	return memory, base + "|" + s.activityMirrorID + "|" + aliases
 }
 
 // Capture before opening: DuckDB may replay a leftover WAL on open.

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -262,6 +263,11 @@ func TestPartialActivityUsageRereadsPastNextRow(t *testing.T) {
 	second := keptActivityBuild(t, store, q, true)
 	require.Equal(t, 500, activity.ReportWithSessions(second).Totals.OutputTokens)
 	require.Equal(t, 2, *reads)
+	require.NoError(t, store.Close())
+	store, err = NewStore(t.Context(), path)
+	require.NoError(t, err)
+	defer store.Close()
+	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
 	q.EffectiveEnd = q.EffectiveEnd.Add(-time.Hour)
 	third := keptActivityBuild(t, store, q, true)
 	require.Equal(t, 0, activity.ReportWithSessions(third).Totals.OutputTokens)
@@ -390,4 +396,66 @@ func TestPartialActivityCorruptDiskEntryIsMiss(t *testing.T) {
 	got := keptActivityBuild(t, restarted, q, true)
 	require.Equal(t, 1, *reads)
 	require.Equal(t, 500, activity.ReportWithSessions(got).Totals.OutputTokens)
+}
+
+func TestPartialActivityUsageSameStampReplacement(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	for _, duringPublish := range []bool{false, true} {
+		t.Run(strconv.FormatBool(duringPublish), func(t *testing.T) {
+			t.Setenv("CACHE_DIRECTORY", t.TempDir())
+			dir := t.TempDir()
+			path, next := filepath.Join(dir, "mirror.duckdb"), filepath.Join(dir, "next.duckdb")
+			keptActivityMirror(t, path, "session-a", 500)
+			keptActivityMirror(t, next, "session-b", 900)
+			oldInfo, err := os.Stat(path)
+			require.NoError(t, err)
+			nextInfo, err := os.Stat(next)
+			require.NoError(t, err)
+			require.Equal(t, oldInfo.Size(), nextInfo.Size())
+			require.NoError(t, os.Chtimes(next, oldInfo.ModTime(), oldInfo.ModTime()))
+			q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+			require.NoError(t, err)
+			store, err := NewStore(t.Context(), path)
+			require.NoError(t, err)
+			require.NoError(t, store.OpenActivityReportDisk(t.Context()))
+			if duringPublish {
+				paused, resume, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+				var once sync.Once
+				unpause := func() { once.Do(func() { close(resume) }) }
+				activityUsagePublishObserver = func() { close(paused); <-resume }
+				t.Cleanup(func() { unpause(); <-done; activityUsagePublishObserver = nil })
+				var first activity.CandidateArtifacts
+				var buildErr error
+				go func() {
+					defer close(done)
+					first, buildErr = store.BuildActivityReportArtifacts(t.Context(), db.AnalyticsFilter{Timezone: "UTC"}, q, nil)
+				}()
+				<-paused
+				require.NoError(t, swapMirrorFile(next, path))
+				store.checkMirrorReplacement(t.Context(), func(err error) { require.NoError(t, err) })
+				unpause()
+				<-done
+				require.NoError(t, buildErr)
+				require.Equal(t, 500, activity.ReportWithSessions(first).Totals.OutputTokens)
+				activityUsagePublishObserver = nil
+			} else {
+				first := keptActivityBuild(t, store, q, true)
+				require.Equal(t, 500, activity.ReportWithSessions(first).Totals.OutputTokens)
+				require.NoError(t, store.Close())
+				require.NoError(t, swapMirrorFile(next, path))
+				store, err = NewStore(t.Context(), path)
+				require.NoError(t, err)
+				require.NoError(t, store.OpenActivityReportDisk(t.Context()))
+			}
+			changed := keptActivityBuild(t, store, q, true)
+			require.Equal(t, 900, activity.ReportWithSessions(changed).Totals.OutputTokens)
+			require.NoError(t, store.Close())
+			reopened, err := NewStore(t.Context(), path)
+			require.NoError(t, err)
+			defer reopened.Close()
+			require.NoError(t, reopened.OpenActivityReportDisk(t.Context()))
+			got := keptActivityBuild(t, reopened, q, true)
+			require.Equal(t, 900, activity.ReportWithSessions(got).Totals.OutputTokens)
+		})
+	}
 }
