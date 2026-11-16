@@ -34,7 +34,7 @@ func SeedWordSearch(t *testing.T, d *db.DB) {
 		}
 		require.NoError(t, d.ReplaceSessionMessages(t.Context(), entry.id, []db.Message{m}))
 	}
-	for _, entry := range []struct{ id, project, text string }{
+	for i, entry := range []struct{ id, project, text string }{
 		{"star-both", "word-star", "invoice* rounding"},
 		{"star-partial", "word-star", "rounding"},
 		{"literal-star", "word-literal-star", "invoice*"},
@@ -46,9 +46,17 @@ func SeedWordSearch(t *testing.T, d *db.DB) {
 		{"unicode-phrase", "word-unicode", "quarterly中forecast"},
 		{"separator", "word-unicode", "invoice_ quarterly; forecast"},
 		{"both-invalid", "word-unicode-all", "invoice中 rounding"},
+		{"both-number", "word-unicode-all", "invoice١ rounding"},
 		{"both-valid", "word-unicode-all", "invoice_ rounding"},
+		{"accent", "word-accent", "café"},
 	} {
-		SeedSession(t, d, entry.id, entry.project, func(s *db.Session) { s.UserMessageCount = 2 })
+		SeedSession(t, d, entry.id, entry.project, func(s *db.Session) {
+			s.UserMessageCount = 2
+			if entry.project == "word-unicode-all" {
+				ended := fmt.Sprintf("2026-05-20T12:00:%02dZ", 59-i)
+				s.EndedAt = &ended
+			}
+		})
 		require.NoError(t, d.ReplaceSessionMessages(t.Context(), entry.id, []db.Message{{
 			SessionID: entry.id, Role: "assistant", Content: entry.text,
 		}}))
@@ -56,6 +64,29 @@ func SeedWordSearch(t *testing.T, d *db.DB) {
 	SeedSession(t, d, "long", "word-snippet", func(s *db.Session) { s.UserMessageCount = 2 })
 	body := strings.Repeat("filler ", 80) + "invoices " + strings.Repeat("filler ", 80)
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "long", []db.Message{{SessionID: "long", Role: "assistant", Content: body}}))
+}
+
+// AssertMirrorWordAccents checks the mirrors' literal accent matching.
+func AssertMirrorWordAccents(t *testing.T, store db.Store) {
+	t.Helper()
+	for _, mode := range []string{"substring", "fts", "hybrid"} {
+		for _, tc := range []struct {
+			pattern string
+			want    bool
+		}{{"café absentword", true}, {"cafe absentword", false}} {
+			t.Run("accent/"+tc.pattern+"/"+mode, func(t *testing.T) {
+				page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: tc.pattern, Mode: mode, Project: "word-accent", KeywordOnly: mode == "hybrid"})
+				require.NoError(t, err)
+				if tc.want {
+					require.Len(t, page.Matches, 1)
+					assert.Equal(t, "accent", page.Matches[0].SessionID)
+					assert.Equal(t, 1, page.Matches[0].MatchedWords)
+				} else {
+					assert.Empty(t, page.Matches)
+				}
+			})
+		}
+	}
 }
 
 // AssertExplicitMirrorFTS checks the mirrors' existing literal expression handling.
@@ -113,6 +144,9 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "invoice rounding", Mode: mode, Project: "word-unicode-all", KeywordOnly: mode == "hybrid", Limit: 1})
 			require.NoError(t, err)
 			assert.Equal(t, []hit{{"both-valid", "message", 2}}, project(page.Matches))
+			page, err = store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "invoice rounding", Mode: mode, Project: "word-unicode-all", KeywordOnly: mode == "hybrid", Limit: 50})
+			require.NoError(t, err)
+			assert.Equal(t, []hit{{"both-valid", "message", 2}, {"both-invalid", "message", 1}, {"both-number", "message", 1}}, project(page.Matches))
 		})
 	}
 	for _, mode := range []string{"fts", "hybrid"} {

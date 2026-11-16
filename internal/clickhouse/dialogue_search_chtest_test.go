@@ -39,6 +39,7 @@ func TestClickHouseWordSearchParity(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	dbtest.AssertWordSearch(t, store)
+	dbtest.AssertMirrorWordAccents(t, store)
 	dbtest.AssertExplicitMirrorFTS(t, store)
 }
 
