@@ -210,8 +210,8 @@ func watchBatchIsAffirmativelyNonData(
 		return false
 	}
 
-	providers := configuredWatchPathRelevanceProviders(cfg)
-	if len(providers) == 0 {
+	providers, err := configuredWatchPathRelevanceProviders(ctx, cfg)
+	if err != nil || len(providers) == 0 {
 		return false
 	}
 	for _, path := range batch.Paths {
@@ -245,8 +245,9 @@ func watchBatchIsAffirmativelyNonData(
 }
 
 func configuredWatchPathRelevanceProviders(
+	ctx context.Context,
 	cfg config.Config,
-) []watchPathRelevanceProvider {
+) ([]watchPathRelevanceProvider, error) {
 	var providers []watchPathRelevanceProvider
 	for _, factory := range cfg.LocalProviderFactories() {
 		relevanceSupported := factory.Capabilities().Source.ChangedPathRelevance ==
@@ -268,9 +269,30 @@ func configuredWatchPathRelevanceProviders(
 				root:               root,
 				relevanceSupported: relevanceSupported,
 			})
+			if !relevanceSupported {
+				continue
+			}
+			// A provider can watch directories outside its configured root,
+			// as Codex watches its home directory for the title index. Events
+			// there match the provider only through those watch roots.
+			watchRoots, err := parser.ResolveWatchRoots(ctx, provider)
+			if err != nil {
+				return nil, err
+			}
+			for _, watchRoot := range watchRoots {
+				path := absRootPath(watchRoot.Path)
+				if path == root {
+					continue
+				}
+				providers = append(providers, watchPathRelevanceProvider{
+					provider:           provider,
+					root:               path,
+					relevanceSupported: true,
+				})
+			}
 		}
 	}
-	return providers
+	return providers, nil
 }
 
 func watchBatchNeedsPushAck(batch syncpkg.WatchBatch) bool {

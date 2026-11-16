@@ -1320,6 +1320,21 @@ fixtures retain this field; missing identities remain source-local.
   pair defines the parent edge. `thread_source` is a legacy fallback, and
   `session_id` identifies the root or tree rather than the parent.
 
+- **Home directory files (observed 2026-11-15, codex-cli 0.167.0):** Besides
+  the transcript roots, `session_index.jsonl`, and `history.jsonl`, a local
+  Codex home held Codex's own SQLite databases with their `-wal` and `-shm`
+  files (`logs_2.sqlite`, `state_5.sqlite`, `goals_1.sqlite`,
+  `memories_1.sqlite`, `queue_1.sqlite`), lock files such as
+  `session_index.jsonl.lock` and `auth.json.lock`, `installation_id`,
+  configuration, caches, and tool directories. Watching the directory showed
+  the log, state, and memory databases, lock files, and `installation_id`
+  changing constantly with no session activity. Agentsview watches the home directory without recursion only for
+  the title index, so its Codex provider classifies every other direct child
+  as non-data, except a transcript root. `history.jsonl` is non-data for the
+  watch because the live-activity poller reads it on its own schedule.
+  Observational evidence from one installation, not a pinned-source
+  guarantee.
+
 - **Launch classification (reverified 2026-10-08):**
   `session_meta.payload.originator=codex_exec` is durable producer evidence of
   a non-interactive `codex exec` invocation. Agentsview persists that as
