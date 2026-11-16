@@ -234,3 +234,151 @@ func TestDailyUsageKeptProjectIdentityChange(t *testing.T) {
 	assert.Equal(t, 10, got.Totals.InputTokens)
 	assert.EqualValues(t, 2, prepares.Load())
 }
+
+func TestDailyUsageKeptConcurrentMissesShareBuild(t *testing.T) {
+	database := testDB(t)
+	seedLiveWriteSession(t, database, "one", "project", "2026-08-10T09:00:00Z", 0, 10)
+	var prepares atomic.Int32
+	started, resume := make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(resume) })
+	defer release()
+	database.SetUsageWindowPrepareForTest(func(context.Context) {
+		if prepares.Add(1) == 1 {
+			close(started)
+			<-resume
+		}
+	})
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC", Breakdowns: true}
+	type response struct {
+		result DailyUsageResult
+		err    error
+	}
+	first, second := make(chan response, 1), make(chan response, 1)
+	ctx1, ctx2 := t.Context(), WithUsageWindowMemo(t.Context())
+	go func() { result, err := database.GetDailyUsage(ctx1, filter); first <- response{result, err} }()
+	<-started
+	ranking := filter
+	ranking.PairwiseSides, ranking.SkipSessionCounts = true, true
+	go func() { result, err := database.GetDailyUsage(ctx2, ranking); second <- response{result, err} }()
+	select {
+	case <-second:
+		t.Fatal("ranking returned before the shared build finished")
+	case <-time.After(200 * time.Millisecond):
+	}
+	assert.EqualValues(t, 1, prepares.Load())
+	release()
+	a, b := <-first, <-second
+	require.NoError(t, a.err)
+	require.NoError(t, b.err)
+	assert.Equal(t, 10, a.result.Totals.InputTokens)
+	assert.Equal(t, a.result.Totals, b.result.Totals)
+	assert.Equal(t, 1, a.result.SessionCounts.Total)
+	assert.Equal(t, UsageSessionCounts{}, b.result.SessionCounts)
+	require.NotNil(t, b.result.Pairwise)
+	require.NotEmpty(t, a.result.Daily)
+	require.NotEmpty(t, b.result.Daily)
+	a.result.Daily[0].InputTokens = 999
+	assert.Equal(t, 10, b.result.Daily[0].InputTokens)
+	ranking.Breakdowns, ranking.PairwiseSides, ranking.Model = false, false, "model-a"
+	_, err := database.GetDailyUsage(ctx2, ranking)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, prepares.Load())
+}
+
+func TestDailyUsageKeptSharedBuildCancel(t *testing.T) {
+	database := testDB(t)
+	seedLiveWriteSession(t, database, "one", "project", "2026-08-10T09:00:00Z", 0, 10)
+	var prepares atomic.Int32
+	started, resume := make(chan struct{}), make(chan struct{})
+	started2 := make(chan struct{})
+	release := sync.OnceFunc(func() { close(resume) })
+	defer release()
+	database.SetUsageWindowPrepareForTest(func(ctx context.Context) {
+		switch prepares.Add(1) {
+		case 1:
+			close(started)
+			select {
+			case <-resume:
+			case <-ctx.Done():
+			}
+		case 2:
+			close(started2)
+			<-ctx.Done()
+		}
+	})
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
+	ctx, cancel := context.WithCancel(WithUsageWindowMemo(t.Context()))
+	first := make(chan error, 1)
+	go func() { _, err := database.GetDailyUsage(ctx, filter); first <- err }()
+	<-started
+	type response struct {
+		result DailyUsageResult
+		err    error
+	}
+	second := make(chan response, 1)
+	go func() { result, err := database.GetDailyUsage(t.Context(), filter); second <- response{result, err} }()
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	require.ErrorIs(t, <-first, context.Canceled)
+	assert.Empty(t, ctx.Value(usageWindowMemoKey{}).(*usageWindowMemo).prepared)
+	release()
+	got := <-second
+	require.NoError(t, got.err)
+	assert.Equal(t, 10, got.result.Totals.InputTokens)
+	assert.EqualValues(t, 1, prepares.Load())
+
+	appendLiveWriteMessage(t, database, "one", "2026-08-10T10:00:00Z", 1, 7)
+	ctx, cancel = context.WithCancel(t.Context())
+	go func() { _, err := database.GetDailyUsage(ctx, filter); first <- err }()
+	<-started2
+	cancel()
+	require.ErrorIs(t, <-first, context.Canceled)
+	result, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, 17, result.Totals.InputTokens)
+	assert.EqualValues(t, 3, prepares.Load())
+}
+
+func TestDailyUsageKeptSharedBuildErrorRetry(t *testing.T) {
+	database := testDB(t)
+	seedLiveWriteSession(t, database, "one", "project", "2026-08-10T09:00:00Z", 0, 10)
+	var prepares atomic.Int32
+	started, resume := make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(resume) })
+	defer release()
+	database.SetUsageWindowPrepareForTest(func(context.Context) {
+		if prepares.Add(1) == 1 {
+			close(started)
+			<-resume
+		}
+	})
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
+	first, second := make(chan error, 1), make(chan error, 1)
+	ctx := WithUsageWindowMemo(t.Context())
+	ctx1 := WithUsageWindowMemo(t.Context())
+	go func() { _, err := database.GetDailyUsage(ctx1, filter); first <- err }()
+	<-started
+	go func() { _, err := database.GetDailyUsage(ctx, filter); second <- err }()
+	time.Sleep(100 * time.Millisecond)
+	_, err := database.getWriter().ExecContext(t.Context(), "ALTER TABLE model_pricing RENAME TO model_pricing_hidden")
+	require.NoError(t, err)
+	release()
+	require.Error(t, <-first)
+	require.Error(t, <-second)
+	memo := ctx.Value(usageWindowMemoKey{}).(*usageWindowMemo)
+	assert.Empty(t, memo.prepared)
+	assert.Empty(t, ctx1.Value(usageWindowMemoKey{}).(*usageWindowMemo).prepared)
+	_, err = database.getWriter().ExecContext(t.Context(), "ALTER TABLE model_pricing_hidden RENAME TO model_pricing")
+	require.NoError(t, err)
+	other := filter
+	other.Model = "model-a"
+	_, err = database.GetDailyUsage(ctx, other)
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, prepares.Load())
+	got, err := database.GetDailyUsage(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, 10, got.Totals.InputTokens)
+	_, err = database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, prepares.Load())
+}

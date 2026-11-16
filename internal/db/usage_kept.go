@@ -9,6 +9,11 @@ import (
 	"go.kenn.io/agentsview/internal/kept"
 )
 
+type usageFlight struct {
+	result  DailyUsageResult
+	windows map[string]usagePreparedWindow
+}
+
 func newDailyUsageMemo() kept.Memo[DailyUsageResult] {
 	return kept.Memo[DailyUsageResult]{Size: DailyUsageResult.Bytes}
 }
@@ -59,15 +64,44 @@ func (db *DB) keptDailyUsage(ctx context.Context, filter UsageFilter) (DailyUsag
 		full := filter
 		full.SkipSessionCounts = false
 		full.PairwiseSides = filter.PairwiseSides || filter.Breakdowns
-		loadCtx := context.WithValue(ctx, usageWindowVersionKey{}, version)
-		result, err := db.getDailyUsageUncached(loadCtx, full)
+		build := func(ctx context.Context) (DailyUsageResult, error) {
+			ctx = context.WithValue(ctx, usageWindowVersionKey{}, version)
+			result, err := db.getDailyUsageUncached(ctx, full)
+			if err != nil {
+				return DailyUsageResult{}, err
+			}
+			if db.dailyUsageVersion(ctx) == version {
+				db.usageKept.Put(slot, version, []DailyUsageResult{result})
+			}
+			return result, nil
+		}
+		var flight usageFlight
+		var err error
+		if filter.Progress != nil {
+			flight.result, err = build(ctx)
+		} else {
+			memo, _ := ctx.Value(usageWindowMemoKey{}).(*usageWindowMemo)
+			seedWindows := memo.snapshot(version)
+			flight, err = db.usageFlights.Do(ctx, version+"|"+slot, func(ctx context.Context) (usageFlight, error) {
+				if rows, ok := db.usageKept.Get(slot, version); ok {
+					return usageFlight{result: rows[0]}, nil
+				}
+				ctx = WithUsageWindowMemo(ctx)
+				private := ctx.Value(usageWindowMemoKey{}).(*usageWindowMemo)
+				private.seed(seedWindows)
+				result, err := build(ctx)
+				if err != nil {
+					return usageFlight{}, err
+				}
+				return usageFlight{result: result, windows: private.snapshot(version)}, nil
+			})
+		}
 		if err != nil {
-			return result, err
+			return DailyUsageResult{}, err
 		}
-		rows = []DailyUsageResult{result}
-		if db.dailyUsageVersion(ctx) == version {
-			db.usageKept.Put(slot, version, rows)
-		}
+		memo, _ := ctx.Value(usageWindowMemoKey{}).(*usageWindowMemo)
+		memo.seed(flight.windows)
+		rows = []DailyUsageResult{flight.result}
 	}
 	result := rows[0].Clone()
 	if filter.SkipSessionCounts {

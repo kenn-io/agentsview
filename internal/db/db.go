@@ -953,6 +953,7 @@ type DB struct {
 	trendsDisk           kept.Disk
 	trendsDiskOnce       sync.Once
 	usageKept            kept.Memo[DailyUsageResult]
+	usageFlights         kept.Flights[usageFlight]
 	sessionStatsFacts    *sessionStatsFactsMemo
 	frustrationMemo      FrustrationMarkerMemo
 	usageBackfillMu      sync.Mutex
