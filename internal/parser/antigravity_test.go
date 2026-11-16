@@ -463,6 +463,40 @@ func TestAntigravityCLIDiscoverAndParseDB(t *testing.T) {
 	assert.Equal(t, "db prompt fallback", sess.FirstMessage)
 }
 
+func TestAntigravityCLIDBPreservesTypedPromptMissingFromHistory(t *testing.T) {
+	root := t.TempDir()
+	id := "33333333-4444-5555-6666-777777777777"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityTestDB(t, dbPath)
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	item := encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: []byte("typed prompt")}})
+	input := encodePB([]pbField{{num: 3, wire: pbWireBytes, bytes: item}})
+	payload := encodePB([]pbField{{num: 19, wire: pbWireBytes, bytes: input}})
+	mustExec(t, db, `UPDATE steps SET step_payload = ? WHERE idx = 0`, payload)
+	require.NoError(t, db.Close())
+	mustWrite(t, filepath.Join(root, "history.jsonl"),
+		[]byte(`{"display":"different history prompt","timestamp":1779000000000,`+
+			`"conversationId":"`+id+`"}`))
+
+	sess, msgs, err := parseAntigravityCLITestSession(t, dbPath, "", "test-machine")
+	require.NoError(t, err)
+	require.Len(t, msgs, 3)
+	assert.Equal(t, "typed prompt", msgs[0].Content)
+	assert.Equal(t, "different history prompt", msgs[1].Content)
+	assert.Equal(t, "typed prompt", sess.FirstMessage)
+
+	mustWrite(t, filepath.Join(root, "history.jsonl"),
+		[]byte(`{"display":"typed  prompt","timestamp":1779000000000,`+
+			`"conversationId":"`+id+`"}`))
+	sess, msgs, err = parseAntigravityCLITestSession(t, dbPath, "", "test-machine")
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "typed prompt", msgs[0].Content)
+	assert.Equal(t, "typed prompt", sess.FirstMessage)
+}
+
 func TestAntigravityCLIProjectFallbackPromptAndProximity(t *testing.T) {
 	root := t.TempDir()
 	id := "f0f0f0f0-f1f1-f2f2-f3f3-f4f4f4f4f4f4"
@@ -4790,7 +4824,6 @@ func TestDecodeAntigravityStepStructuredUserInput(t *testing.T) {
 		want  string
 	}{
 		{"prompt with skill", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte("比较这两个游戏 /grill-me")}, {num: 2, wire: pbWireBytes, bytes: []byte("A longer skill expansion with enough text to be selected")}}, "比较这两个游戏 /grill-me"},
-		{"later text", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte("  ")}, {num: 2, wire: pbWireBytes, bytes: []byte("attachment")}, {num: 1, wire: pbWireBytes, bytes: []byte(" second ")}}, " second "},
 		{"nul", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte("a\x00b")}}, "a�b"},
 		{"blank text", []pbField{{num: 1, wire: pbWireBytes, bytes: []byte(" \n")}, {num: 2, wire: pbWireBytes, bytes: []byte("A longer skill expansion with enough text to be selected")}}, "A longer skill expansion with enough text to be selected"},
 	}
@@ -4806,77 +4839,4 @@ func TestDecodeAntigravityStepStructuredUserInput(t *testing.T) {
 			assert.Equal(t, tc.want, msg.Content)
 		})
 	}
-}
-
-func TestAntigravityCLIDBStructuredPromptMissingFromHistory(t *testing.T) {
-	const id = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
-	root := t.TempDir()
-	dbPath := filepath.Join(root, "conversations", id+".db")
-	mustMkdir(t, filepath.Dir(dbPath))
-	fixture, err := os.ReadFile(filepath.Join("testdata", "data-version-corpus", "antigravity-cli", "conversations", id+".db"))
-	require.NoError(t, err)
-	mustWrite(t, dbPath, fixture)
-	mustWrite(t, filepath.Join(root, "history.jsonl"), []byte(`{"conversationId":"`+id+`","timestamp":1779000000000,"display":"next prompt"}`+"\n"))
-	sess, msgs, err := parseAntigravityCLITestSession(t, dbPath, "", "test-machine")
-	require.NoError(t, err)
-	require.NotEmpty(t, msgs)
-	assert.Equal(t, "比较这两个游戏 /grill-me", msgs[0].Content)
-	assert.Equal(t, "比较这两个游戏 /grill-me", sess.FirstMessage)
-}
-
-func TestAntigravityCLIHistoryReconcilesStructuredTurns(t *testing.T) {
-	type turn struct {
-		role       RoleType
-		text       string
-		ms         int64
-		structured bool
-	}
-	cases := []struct {
-		name    string
-		turns   []turn
-		history []turn
-		want    []string
-	}{
-		{"mixed without timestamps", []turn{{RoleUser, "typed request", 0, true}, {RoleUser, "A long guessed expansion for the second request", 0, false}}, []turn{{text: "typed request"}, {text: "second request"}}, []string{"typed request", "second request"}},
-		{"repeat after assistant reply", []turn{{RoleUser, "repeat request", 1779000000100, true}, {RoleAssistant, "assistant reply content", 1779000000500, false}}, []turn{{text: "repeat request", ms: 1779000000900}}, []string{"repeat request", "assistant reply content", "repeat request"}},
-		{"same second queued prompt", []turn{{RoleUser, "typed request", 1779000000100, true}, {RoleAssistant, "assistant reply", 1779000005000, false}}, []turn{{text: "queued request", ms: 1779000000900}}, []string{"typed request", "assistant reply", "queued request"}},
-		{"timestamp skew", []turn{{RoleUser, "typed request", 1779000000000, true}}, []turn{{text: "typed request", ms: 1779000002000}, {text: "pending request", ms: 1779000060000}}, []string{"typed request", "pending request"}},
-		{"different display", []turn{{RoleUser, "typed request with pasted text", 1779000000000, true}}, []turn{{text: "[pasted text]", ms: 1779000000000}}, []string{"typed request with pasted text"}},
-		{"unstamped pending prompt", []turn{{RoleUser, "guessed A", 0, false}, {RoleUser, "decoded B", 0, true}}, []turn{{text: "decoded B"}, {text: "pending C"}}, []string{"guessed A", "decoded B", "pending C"}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			var dbMessages, history []ParsedMessage
-			for _, turn := range tc.turns {
-				msg := ParsedMessage{Role: turn.role, Content: turn.text, structuredPrompt: turn.structured}
-				if turn.ms != 0 {
-					msg.Timestamp = time.UnixMilli(turn.ms)
-				}
-				dbMessages = append(dbMessages, msg)
-			}
-			for _, row := range tc.history {
-				msg := ParsedMessage{Role: RoleUser, Content: row.text}
-				if row.ms != 0 {
-					msg.Timestamp = time.UnixMilli(row.ms)
-				}
-				history = append(history, msg)
-			}
-			msgs := mergeAntigravityDBHistoryMessages(dbMessages, history)
-			var got []string
-			for _, msg := range msgs {
-				got = append(got, msg.Content)
-			}
-			assert.Equal(t, tc.want, got)
-		})
-	}
-}
-
-func TestAntigravityCLIStructuredHistorySuppliesMissingTimestamp(t *testing.T) {
-	ts := time.UnixMilli(1779000000000)
-	dbMessages := []ParsedMessage{{Role: RoleUser, Content: "typed request", structuredPrompt: true}}
-	history := []ParsedMessage{{Role: RoleUser, Content: "typed request", Timestamp: ts}}
-	msgs := mergeAntigravityDBHistoryMessages(dbMessages, history)
-	require.Len(t, msgs, 1)
-	assert.Equal(t, "typed request", msgs[0].Content)
-	assert.Equal(t, ts, msgs[0].Timestamp)
 }

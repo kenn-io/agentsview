@@ -1116,7 +1116,16 @@ func decodeAntigravityParsedStep(
 		calls = extractAntigravityToolCalls(step.idx, step.fields)
 	}
 
-	strs, urlOnly, structuredPrompt := cleanAntigravityStepStrings(step)
+	var typedPrompt string
+	if step.role == RoleUser {
+		typedPrompt = antigravityUserInputText(step.fields)
+	}
+	var strs, urlOnly []string
+	if typedPrompt != "" {
+		strs = []string{typedPrompt}
+	} else {
+		strs, urlOnly = cleanAntigravityStepStrings(step)
+	}
 
 	// A non-user step whose only displayable content is a URL would
 	// otherwise vanish: the URL noise filter drops it and there are no
@@ -1135,17 +1144,39 @@ func decodeAntigravityParsedStep(
 
 	content := strings.Join(strs, "\n\n")
 	msg := ParsedMessage{
-		Role:             step.role,
-		Content:          content,
-		ContentLength:    len(content),
-		Timestamp:        step.timestamp,
-		structuredPrompt: structuredPrompt,
+		Role:          step.role,
+		Content:       content,
+		ContentLength: len(content),
+		Timestamp:     step.timestamp,
 	}
+	msg.antigravityTypedPrompt = typedPrompt != ""
 	if len(calls) > 0 {
 		msg.ToolCalls = calls
 		msg.HasToolUse = true
 	}
 	return msg, true
+}
+
+// antigravityUserInputText returns the typed text of a user-input step
+// from field 19 -> first field 3 -> field 1, trimmed, or "" when absent.
+func antigravityUserInputText(fields []agProtoField) string {
+	input, ok := agProtoFind(fields, 19)
+	if !ok || input.Nested == nil {
+		return ""
+	}
+	item, ok := agProtoFind(input.Nested, 3)
+	if !ok || item.Nested == nil {
+		return ""
+	}
+	field, ok := agProtoFind(item.Nested, 1)
+	if !ok {
+		return ""
+	}
+	text, ok := agProtoString(field)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(strings.ReplaceAll(text, "\x00", "\uFFFD"))
 }
 
 // knownAntigravityToolNames is the set of tool names that Antigravity
@@ -1334,12 +1365,7 @@ func dedupeStrings(in []string) []string {
 // and, separately, any bare-URL strings that the non-user noise filter
 // removed. Callers fall back to urlOnly when a step would otherwise have
 // no content, so URL-only assistant messages are not silently dropped.
-func cleanAntigravityStepStrings(step antigravityStep) (cleaned, urlOnly []string, structuredPrompt bool) {
-	if step.role == RoleUser {
-		if text := antigravityUserInputText(step.fields); text != "" {
-			return []string{text}, nil, true
-		}
-	}
+func cleanAntigravityStepStrings(step antigravityStep) (cleaned, urlOnly []string) {
 	for _, s := range dedupeStrings(agProtoCollectStrings(step.fields, 20)) {
 		s = strings.TrimSpace(s)
 		if isNoisyAntigravityStepString(s) {
@@ -1358,32 +1384,11 @@ func cleanAntigravityStepStrings(step antigravityStep) (cleaned, urlOnly []strin
 		// candidates; prose, when present, still outscores a bare link.
 		candidates := append(append([]string{}, cleaned...), bareURLs...)
 		if prompt := bestAntigravityUserPrompt(candidates); prompt != "" {
-			return []string{prompt}, nil, false
+			return []string{prompt}, nil
 		}
-		return cleaned, nil, false
+		return cleaned, nil
 	}
-	return cleaned, bareURLs, false
-}
-
-func antigravityUserInputText(fields []agProtoField) string {
-	input, ok := agProtoFind(fields, 19)
-	if !ok || input.Nested == nil {
-		return ""
-	}
-	for _, item := range input.Nested {
-		if item.Number != 3 || item.Nested == nil {
-			continue
-		}
-		if field, ok := agProtoFind(item.Nested, 1); ok {
-			if value, ok := agProtoString(field); ok {
-				value = agProtoSanitizeString(value)
-				if strings.TrimSpace(value) != "" {
-					return value
-				}
-			}
-		}
-	}
-	return ""
+	return cleaned, bareURLs
 }
 
 // collectAntigravityBareURLs returns bare-URL strings from the step

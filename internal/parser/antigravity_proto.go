@@ -235,7 +235,8 @@ func agProtoCollectStrings(
 			if f.Wire == pbWireBytes && f.Nested == nil {
 				if s, ok := agProtoString(f); ok &&
 					utf8.RuneCountInString(s) >= minLen {
-					out = append(out, agProtoSanitizeString(s))
+					out = append(out,
+						strings.ReplaceAll(s, "\x00", "\uFFFD"))
 				}
 			}
 			if f.Nested != nil {
@@ -245,10 +246,6 @@ func agProtoCollectStrings(
 	}
 	walk(fields)
 	return out
-}
-
-func agProtoSanitizeString(s string) string {
-	return strings.ReplaceAll(s, "\x00", "\uFFFD")
 }
 
 // agProtoLooksLikePrefix returns true when data starts with a

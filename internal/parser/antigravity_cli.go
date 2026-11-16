@@ -605,113 +605,97 @@ func mergeAntigravityDBHistoryMessages(
 	}
 	userCount := 0
 	for _, msg := range dbMessages {
-		if msg.Role == RoleUser {
-			userCount++
+		if msg.Role != RoleUser {
+			continue
 		}
+		if msg.antigravityTypedPrompt {
+			return appendMissingAntigravityHistoryMessages(dbMessages, history)
+		}
+		userCount++
 	}
-	return reconcileAntigravityHistoryMessages(
-		dbMessages, history, userCount == len(history),
-	)
+	if userCount != len(history) {
+		return appendMissingAntigravityHistoryMessages(
+			dbMessages, history,
+		)
+	}
+	historyIdx := 0
+	for i := range dbMessages {
+		if dbMessages[i].Role != RoleUser {
+			continue
+		}
+		if historyIdx >= len(history) {
+			return appendMissingAntigravityHistoryMessages(
+				dbMessages, history,
+			)
+		}
+		dbMessages[i].Content = history[historyIdx].Content
+		dbMessages[i].ContentLength = len(history[historyIdx].Content)
+		if !history[historyIdx].Timestamp.IsZero() {
+			dbMessages[i].Timestamp = history[historyIdx].Timestamp
+		}
+		historyIdx++
+	}
+	return dbMessages
 }
 
 // appendMissingAntigravityHistoryMessages appends history prompts that no
-// existing user turn accounts for, matching by text.
+// existing user turn accounts for. Repeated prompts are matched one to one:
+// first by exact timestamp, then by the same second (for sources that record
+// whole seconds), then by text alone, so each history row keeps its own turn.
 func appendMissingAntigravityHistoryMessages(
 	dbMessages []ParsedMessage, history []ParsedMessage,
 ) []ParsedMessage {
-	return reconcileAntigravityHistoryMessages(dbMessages, history, false)
-}
-
-// reconcileAntigravityHistoryMessages pairs each history prompt with at most
-// one user turn, then appends the prompts no turn accounts for. Pairing runs
-// from the closest timestamp agreement (exact, same second, any) to the
-// loosest, reserving text matches before pairing different text. A turn never
-// pairs with a prompt stamped after its assistant reply. Different text may
-// pair with a heuristic turn when positional is set, or with a structured
-// turn when timestamps agree exactly. Such pairs cannot cross
-// a reserved match, and structured turns keep their typed content.
-func reconcileAntigravityHistoryMessages(
-	dbMessages, history []ParsedMessage, positional bool,
-) []ParsedMessage {
-	type userTurn struct {
-		idx         int
-		key         string
-		structured  bool
-		ts, replyAt time.Time
-		used        bool
+	type existingUserTurn struct {
+		key  string
+		ts   time.Time
+		used bool
 	}
-	var turns []*userTurn
-	for i, msg := range dbMessages {
-		switch {
-		case msg.Role == RoleUser:
-			turns = append(turns, &userTurn{
-				idx: i, key: normalizedAntigravityPrompt(msg.Content),
-				structured: msg.structuredPrompt, ts: msg.Timestamp,
+	var existing []existingUserTurn
+	for _, msg := range dbMessages {
+		if msg.Role != RoleUser {
+			continue
+		}
+		if key := normalizedAntigravityPrompt(msg.Content); key != "" {
+			existing = append(existing, existingUserTurn{
+				key: key, ts: msg.Timestamp,
 			})
-		case msg.Role == RoleAssistant && len(turns) > 0:
-			last := turns[len(turns)-1]
-			if last != nil && last.replyAt.IsZero() {
-				last.replyAt = msg.Timestamp
-			}
 		}
 	}
-	stamped := func(a, b time.Time) bool { return !a.IsZero() && !b.IsZero() }
-	closeness := []func(turn, want time.Time) bool{
-		func(turn, want time.Time) bool { return stamped(turn, want) && turn.Equal(want) },
-		func(turn, want time.Time) bool { return stamped(turn, want) && turn.Unix() == want.Unix() },
-		func(turn, want time.Time) bool { return true },
+	matchers := []func(existing, want time.Time) bool{
+		func(existing, want time.Time) bool {
+			return !existing.IsZero() && !want.IsZero() && existing.Equal(want)
+		},
+		func(existing, want time.Time) bool {
+			return !existing.IsZero() && !want.IsZero() &&
+				existing.Unix() == want.Unix()
+		},
+		func(time.Time, time.Time) bool { return true },
 	}
 	keys := make([]string, len(history))
+	matched := make([]bool, len(history))
 	for hIdx, msg := range history {
 		keys[hIdx] = normalizedAntigravityPrompt(msg.Content)
+		matched[hIdx] = keys[hIdx] == ""
 	}
-	paired := make([]*userTurn, len(history))
-	for _, exactText := range []bool{true, false} {
-		for level, near := range closeness {
-			for hIdx, msg := range history {
-				low, high := -1, len(dbMessages)
-				if !exactText {
-					for otherIdx, other := range paired {
-						if other == nil {
-							continue
-						}
-						if otherIdx < hIdx && other.idx > low {
-							low = other.idx
-						}
-						if otherIdx > hIdx && other.idx < high {
-							high = other.idx
-						}
-					}
-				}
-				for _, t := range turns {
-					if paired[hIdx] != nil || keys[hIdx] == "" || t.used ||
-						(stamped(t.replyAt, msg.Timestamp) && t.replyAt.Before(msg.Timestamp)) ||
-						(t.key == keys[hIdx]) != exactText || !near(t.ts, msg.Timestamp) {
-						continue
-					}
-					if !exactText {
-						if (t.structured && level != 0) || (!t.structured && !positional) || t.idx <= low || t.idx >= high {
-							continue
-						}
-					}
-					t.used, paired[hIdx] = true, t
+	for _, sameTurn := range matchers {
+		for hIdx, msg := range history {
+			if matched[hIdx] {
+				continue
+			}
+			for i := range existing {
+				if !existing[i].used && existing[i].key == keys[hIdx] &&
+					sameTurn(existing[i].ts, msg.Timestamp) {
+					existing[i].used = true
+					matched[hIdx] = true
+					break
 				}
 			}
 		}
 	}
 	out := dbMessages
 	for hIdx, msg := range history {
-		switch t := paired[hIdx]; {
-		case t == nil && keys[hIdx] != "":
+		if !matched[hIdx] {
 			out = append(out, msg)
-		case t != nil && t.structured && t.key == keys[hIdx] && out[t.idx].Timestamp.IsZero():
-			out[t.idx].Timestamp = msg.Timestamp
-		case t != nil && positional && !out[t.idx].structuredPrompt:
-			out[t.idx].Content = msg.Content
-			out[t.idx].ContentLength = len(msg.Content)
-			if !msg.Timestamp.IsZero() {
-				out[t.idx].Timestamp = msg.Timestamp
-			}
 		}
 	}
 	return out
