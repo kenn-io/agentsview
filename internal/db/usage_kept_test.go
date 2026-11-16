@@ -235,6 +235,38 @@ func TestDailyUsageKeptProjectIdentityChange(t *testing.T) {
 	assert.EqualValues(t, 2, prepares.Load())
 }
 
+// The read looks up its memo after the version query, then Flights.Do calls
+// Done after registering the waiter. Signal at that point.
+type flightWaitContext struct {
+	context.Context
+	armed   atomic.Bool
+	once    sync.Once
+	waiting chan struct{}
+}
+
+func (ctx *flightWaitContext) Value(key any) any {
+	if _, ok := key.(usageWindowMemoKey); ok {
+		ctx.armed.Store(true)
+	}
+	return ctx.Context.Value(key)
+}
+
+func (ctx *flightWaitContext) Done() <-chan struct{} {
+	if ctx.armed.Load() {
+		ctx.once.Do(func() { close(ctx.waiting) })
+	}
+	return ctx.Context.Done()
+}
+
+func (ctx *flightWaitContext) wait(t *testing.T) {
+	t.Helper()
+	select {
+	case <-ctx.waiting:
+	case <-time.After(5 * time.Second):
+		t.Fatal("read did not join its flight")
+	}
+}
+
 func TestDailyUsageKeptConcurrentMissesShareBuild(t *testing.T) {
 	database := testDB(t)
 	seedLiveWriteSession(t, database, "one", "project", "2026-08-10T09:00:00Z", 0, 10)
@@ -257,14 +289,14 @@ func TestDailyUsageKeptConcurrentMissesShareBuild(t *testing.T) {
 		err    error
 	}
 	first, second := make(chan response, 1), make(chan response, 1)
-	ctx1, ctx2 := WithUsageWindowMemo(t.Context()), WithUsageWindowMemo(t.Context())
+	ctx1 := WithUsageWindowMemo(t.Context())
+	ctx2 := &flightWaitContext{Context: WithUsageWindowMemo(t.Context()), waiting: make(chan struct{})}
 	go func() { result, err := database.GetDailyUsage(ctx1, filter); first <- response{result, err} }()
 	<-started
 	ranking := filter
 	ranking.PairwiseSides, ranking.SkipSessionCounts = true, true
 	go func() { result, err := database.GetDailyUsage(ctx2, ranking); second <- response{result, err} }()
-	key := database.dailyUsageVersion(t.Context()) + "|" + UsageSlot(filter, true)
-	require.Eventually(t, func() bool { return database.usageFlights.Waiters(key) == 2 }, 5*time.Second, 10*time.Millisecond)
+	ctx2.wait(t)
 	release()
 	a, b := <-first, <-second
 	require.NoError(t, a.err)
@@ -311,13 +343,9 @@ func TestDailyUsageKeptConcurrentSlotsShareWindow(t *testing.T) {
 	first, second := make(chan response, 1), make(chan response, 1)
 	go func() { result, err := database.GetDailyUsage(ctx, left); first <- response{result, err} }()
 	<-started
-	go func() { result, err := database.GetDailyUsage(ctx, right); second <- response{result, err} }()
-	version := database.dailyUsageVersion(t.Context())
-	leftKey, rightKey := version+"|"+UsageSlot(left, true), version+"|"+UsageSlot(right, true)
-	require.NotEqual(t, leftKey, rightKey)
-	require.Eventually(t, func() bool {
-		return database.usageFlights.Waiters(leftKey) == 1 && database.usageFlights.Waiters(rightKey) == 1
-	}, 5*time.Second, 10*time.Millisecond)
+	rightCtx := &flightWaitContext{Context: ctx, waiting: make(chan struct{})}
+	go func() { result, err := database.GetDailyUsage(rightCtx, right); second <- response{result, err} }()
+	rightCtx.wait(t)
 	release()
 	a, b := <-first, <-second
 	require.NoError(t, a.err)
@@ -389,16 +417,17 @@ func TestDailyUsageKeptJoinerSurvivesOtherCancel(t *testing.T) {
 	case <-deadline.Done():
 		require.FailNow(t, "prepare did not start")
 	}
-	keyL := database.dailyUsageVersion(t.Context()) + "|" + UsageSlot(sideL, true)
-	go func() { _, err := database.GetDailyUsage(requestA, sideL); aLeft <- err }()
-	require.Eventually(t, func() bool { return database.usageFlights.Waiters(keyL) == 1 }, 5*time.Second, 10*time.Millisecond)
+	leftA := &flightWaitContext{Context: requestA, waiting: make(chan struct{})}
+	go func() { _, err := database.GetDailyUsage(leftA, sideL); aLeft <- err }()
+	leftA.wait(t)
 	type response struct {
 		result DailyUsageResult
 		err    error
 	}
 	bLeft := make(chan response, 1)
-	go func() { result, err := database.GetDailyUsage(requestB, sideL); bLeft <- response{result, err} }()
-	require.Eventually(t, func() bool { return database.usageFlights.Waiters(keyL) == 2 }, 5*time.Second, 10*time.Millisecond)
+	leftB := &flightWaitContext{Context: requestB, waiting: make(chan struct{})}
+	go func() { result, err := database.GetDailyUsage(leftB, sideL); bLeft <- response{result, err} }()
+	leftB.wait(t)
 	cancelA()
 	for _, done := range []chan error{aRight, aLeft} {
 		select {
