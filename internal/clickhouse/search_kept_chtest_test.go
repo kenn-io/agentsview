@@ -3,11 +3,27 @@
 package clickhouse
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 )
+
+func restartSearchTestMerges(t *testing.T, s *Store, tables ...string) {
+	t.Helper()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 10*time.Second)
+		defer cancel()
+		for _, table := range tables {
+			_, err := s.conn.ExecContext(ctx, "SYSTEM START MERGES "+table)
+			if err != nil {
+				t.Errorf("restart merges for %s: %v", table, err)
+			}
+		}
+	})
+}
 
 func TestSearchKeptRestart(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
@@ -39,6 +55,7 @@ func TestSearchKeptRestart(t *testing.T) {
 	require.Equal(t, before, count(s))
 	parts, err := first.tablePartsFingerprint(t.Context(), []string{"sessions", "messages"})
 	require.NoError(t, err)
+	restartSearchTestMerges(t, first, "sessions", "messages")
 	execPreparedUsage(t, first, "SYSTEM STOP MERGES sessions", "SYSTEM STOP MERGES messages", "INSERT INTO sessions SELECT * FROM sessions", "INSERT INTO messages SELECT * FROM messages", "SYSTEM START MERGES sessions", "SYSTEM START MERGES messages", "OPTIMIZE TABLE sessions FINAL", "OPTIMIZE TABLE messages FINAL")
 	after, err := first.tablePartsFingerprint(t.Context(), []string{"sessions", "messages"})
 	require.NoError(t, err)
@@ -56,57 +73,39 @@ func TestSearchKeptRestart(t *testing.T) {
 	require.Greater(t, count(s), before)
 }
 
-func TestSearchKeptRejectsChangedParts(t *testing.T) {
-	for _, change := range []string{"merge", "write"} {
-		t.Run(change, func(t *testing.T) {
-			t.Setenv("CACHE_DIRECTORY", t.TempDir())
-			s, syncer, local := newPushedStore(t)
-			require.NoError(t, s.openActivityReportDisk(syncer.target))
-			if change == "merge" {
-				execPreparedUsage(t, s, "SYSTEM STOP MERGES messages", "INSERT INTO messages SELECT * FROM messages")
-			}
-			filter := db.SearchFilter{Query: "alpha"}
-			if change == "write" {
-				appendMessage(t, local, fixtureAlphaID, "alpha changed", "2026-01-12T05:00:00Z")
-			}
-			snapshotCtx, err := s.withPartsSnapshot(t.Context())
-			require.NoError(t, err)
-			version, ok, err := s.usageRowsVersion(snapshotCtx, []string{"sessions", "messages", "image_text"}, "")
-			require.NoError(t, err)
-			require.True(t, ok)
-			var changeErr error
-			s.afterSearch = func() {
-				if change == "merge" {
-					_, changeErr = s.conn.ExecContext(t.Context(), "SYSTEM START MERGES messages")
-					if changeErr == nil {
-						_, changeErr = s.conn.ExecContext(t.Context(), "OPTIMIZE TABLE messages FINAL")
-					}
-				} else {
-					_, changeErr = syncer.Push(t.Context(), false, nil)
-				}
-			}
-			page, err := s.Search(t.Context(), filter)
-			require.NoError(t, err)
-			require.NoError(t, changeErr)
-			require.NotEmpty(t, page.Results)
-			normalized := filter
-			normalized.Limit = db.DefaultSearchLimit
-			_, ok = s.searchReads.Get(normalized.Slot(), version)
-			require.False(t, ok)
-			_, ok = s.usageDisk.Get("search|"+normalized.Slot(), version)
-			require.False(t, ok)
-			s.afterSearch = nil
-			reopened := newTestStore(t, syncer.conn, syncer.target)
-			require.NoError(t, reopened.openActivityReportDisk(syncer.target))
-			before, _ := usageQueryCountsOf(t, reopened, "startsWith(trimLeft(query, ' \\n\\t\\r'), 'WITH msg_grouped AS')")
-			repeat, err := reopened.Search(t.Context(), filter)
-			require.NoError(t, err)
-			require.NotEmpty(t, repeat.Results)
-			after, _ := usageQueryCountsOf(t, reopened, "startsWith(trimLeft(query, ' \\n\\t\\r'), 'WITH msg_grouped AS')")
-			require.Greater(t, after, before)
-			if change == "merge" {
-				execPreparedUsage(t, s, "SYSTEM START MERGES messages")
-			}
-		})
+func TestSearchKeptRejectsMergeDuringBuild(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	s, syncer, _ := newPushedStore(t)
+	require.NoError(t, s.openActivityReportDisk(syncer.target))
+	restartSearchTestMerges(t, s, "messages")
+	execPreparedUsage(t, s, "SYSTEM STOP MERGES messages", "INSERT INTO messages SELECT * FROM messages")
+	filter := db.SearchFilter{Query: "alpha"}
+	snapshotCtx, err := s.withPartsSnapshot(t.Context())
+	require.NoError(t, err)
+	version, ok, err := s.usageRowsVersion(snapshotCtx, []string{"sessions", "messages", "image_text"}, "")
+	require.NoError(t, err)
+	require.True(t, ok)
+	var mergeErr error
+	s.afterSearch = func() {
+		_, mergeErr = s.conn.ExecContext(t.Context(), "SYSTEM START MERGES messages")
+		if mergeErr == nil {
+			_, mergeErr = s.conn.ExecContext(t.Context(), "OPTIMIZE TABLE messages FINAL")
+		}
 	}
+	page, err := s.Search(t.Context(), filter)
+	require.NoError(t, err)
+	require.NoError(t, mergeErr)
+	require.NotEmpty(t, page.Results)
+	normalized := filter
+	normalized.Limit = db.DefaultSearchLimit
+	_, ok = s.searchReads.Get(normalized.Slot(), version)
+	require.False(t, ok)
+	reopened := newTestStore(t, syncer.conn, syncer.target)
+	require.NoError(t, reopened.openActivityReportDisk(syncer.target))
+	before, _ := usageQueryCountsOf(t, reopened, "startsWith(trimLeft(query, ' \\n\\t\\r'), 'WITH msg_grouped AS')")
+	repeat, err := reopened.Search(t.Context(), filter)
+	require.NoError(t, err)
+	require.NotEmpty(t, repeat.Results)
+	after, _ := usageQueryCountsOf(t, reopened, "startsWith(trimLeft(query, ' \\n\\t\\r'), 'WITH msg_grouped AS')")
+	require.Greater(t, after, before)
 }

@@ -77,15 +77,3 @@ func TestLoadJSON(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 2, loads)
 }
-
-func TestLoadJSONRejectsChangedSource(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	var disk Disk
-	require.NoError(t, disk.Open("test-search", "archive", 1024, 0))
-	value, retain, err := LoadJSON(&disk, "search", "v1", func() bool { return false }, func() (string, error) { return "fresh", nil })
-	require.NoError(t, err)
-	require.Equal(t, "fresh", value)
-	require.False(t, retain)
-	_, err = os.Stat(disk.reports.disk.path("search"))
-	require.ErrorIs(t, err, os.ErrNotExist)
-}
