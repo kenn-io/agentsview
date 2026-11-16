@@ -52,7 +52,6 @@ type Store struct {
 	// afterTrackerReads, when set, runs after the row trackers read and
 	// before the parts are checked again. Tests use it to move parts.
 	afterTrackerReads func()
-	afterSearch       func()
 	cursorMu          sync.RWMutex
 	cursorSecret      []byte
 	customPricing     map[string]config.CustomModelRate
