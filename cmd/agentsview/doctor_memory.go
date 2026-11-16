@@ -20,7 +20,7 @@ import (
 	"go.kenn.io/agentsview/internal/skills"
 )
 
-const memoryPluginPackageVersion = "0.1.1"
+const memoryPluginPackageVersion = "0.1.0"
 
 type doctorMemoryTargetSelection struct {
 	Kind   string `json:"kind"`

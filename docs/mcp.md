@@ -161,7 +161,7 @@ This profile's tool list is about 21 KB, and the same test holds it under 24 KB.
 | --------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Plugin                      | Claude Code           | Recall skill, search agent, memory-profile server, and SessionStart sync hook; updates through `/plugin` | Use the complete memory package in Claude Code.                                                                                                               |
 | `agentsview agent setup`    | Claude Code and Codex | Recall skill, Claude search agent, and memory-profile `agentsview` server; no hook                       | Set up memory for installed clients. Use `--agent claude` or `--agent codex` to select one, and `--check` to inspect setup.                                   |
-| Plain MCP entry             | MCP clients           | Full or memory-profile tools only                                                                        | Use the [Quick Start](#quick-start) entry for tools without a skill. The assistant won't search history on its own.                                           |
+| Plain MCP entry             | MCP clients           | Full or memory-profile tools only                                                                        | Use the [Quick Start](#quick-start) entry for tools without a recall skill guiding proactive search.                                           |
 | `agentsview skills install` | Claude Code and Codex | Skill and Claude search agent only                                                                       | Install a skill with `--project` or `--server` and register a server named `agentsview` yourself. See the [CLI reference](/docs/commands/#agentsview-skills). |
 
 For the Claude Code plugin, put `agentsview` on `PATH` and run:
@@ -195,7 +195,9 @@ Claude Code treats the plugin server and project server as different connections
 so otherwise both connect and the assistant sees the memory tools twice. The
 plugin's skill, agent, and hook keep working, and the agent uses the project
 server. Other projects keep the plugin's memory server. For a remote archive,
-add the same targeting flags to the full server command.
+add `--server <url>` and, if needed, `--server-token-file <path>` to the full
+server command, or use `--pg` for PostgreSQL. The `AGENTSVIEW_MEMORY_*`
+environment variables target the memory profile and do not target the full server.
 
 For a remote archive, set the hosted environment variables below for the focused
 profile.

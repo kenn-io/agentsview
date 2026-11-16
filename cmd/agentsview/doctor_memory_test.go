@@ -297,7 +297,7 @@ func memoryStatusServer(t *testing.T, status service.MemoryStatus) *httptest.Ser
 func writeDoctorMemoryPlugin(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	artifacts, err := skills.RenderPluginPackage("0.1.1")
+	artifacts, err := skills.RenderPluginPackage("0.1.0")
 	require.NoError(t, err)
 	for _, artifact := range artifacts {
 		path := filepath.Join(root, artifact.RelativePath)

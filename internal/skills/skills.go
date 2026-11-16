@@ -23,8 +23,8 @@ import (
 //go:embed templates/*.md.tmpl templates/LICENSE
 var templatesFS embed.FS
 
-// Bump the plugin version in this directive, the renderer default, both manifests,
-// and doctor when shipped plugin contents change.
+// Bump the plugin version in this directive, the renderer default, and both
+// manifests when shipped plugin contents change.
 //go:generate go run ./cmd/render-memory-plugin -out ../../plugins/agentsview-memory -version 0.1.1
 
 // Harness identifies a skill discovery convention.
