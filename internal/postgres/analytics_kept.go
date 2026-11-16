@@ -32,28 +32,6 @@ func (s *Store) keptAnalyticsVersion(ctx context.Context, slot string) string {
 }
 
 func keptAnalyticsWith[T any](ctx context.Context, s *Store, panel string, f db.AnalyticsFilter, versionFor func(context.Context, string) string, load func(context.Context, db.AnalyticsFilter) (T, error)) (T, error) {
-	if panel == "signals" {
-		original := load
-		load = func(ctx context.Context, f db.AnalyticsFilter) (T, error) {
-			// Direct message edits can change counts without changing session versions.
-			var token string
-			err := s.pg.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='dashboard_signals'`).Scan(&token)
-			_, parseErr := uuid.Parse(token)
-			if err == nil && parseErr == nil {
-				_, err = s.runtimeState().analytics.Do(ctx, "\x00signals-memo", token, func(context.Context) ([]byte, error) {
-					s.runtimeState().frustrationMarkers.Swap(func() {})
-					return []byte{}, nil
-				})
-				if err != nil {
-					var zero T
-					return zero, err
-				}
-			} else if !s.hostedRelations {
-				s.runtimeState().frustrationMarkers.Swap(func() {})
-			}
-			return original(ctx, f)
-		}
-	}
 	if f.ActiveSince != "" || f.Timezone == "Local" || db.TerminationUsesTime(f.Termination) {
 		return load(ctx, f)
 	}
@@ -115,4 +93,27 @@ func (s *Store) keptDashboardVersion(ctx context.Context, panel string, f db.Ana
 		}
 	}
 	return strings.Join(tokens, "|")
+}
+
+// frustrationGeneration invalidates prompt counts when direct message edits
+// change the Signals token without changing session versions.
+func (s *Store) frustrationGeneration(ctx context.Context, hasRows bool) (uint64, error) {
+	if !hasRows {
+		return 0, nil
+	}
+	var token string
+	err := s.pg.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='dashboard_signals'`).Scan(&token)
+	_, parseErr := uuid.Parse(token)
+	if err == nil && parseErr == nil {
+		_, err = s.runtimeState().analytics.Do(ctx, "\x00signals-memo", token, func(context.Context) ([]byte, error) {
+			s.runtimeState().frustrationMarkers.Swap(func() {})
+			return []byte{}, nil
+		})
+		if err != nil {
+			return 0, err
+		}
+	} else if !s.hostedRelations {
+		s.runtimeState().frustrationMarkers.Swap(func() {})
+	}
+	return s.runtimeState().frustrationMarkers.Generation(), nil
 }

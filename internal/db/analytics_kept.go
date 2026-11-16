@@ -17,28 +17,6 @@ func SavedPanel(panel string) bool {
 }
 
 func keptAnalytics[T analyticsReport](ctx context.Context, db *DB, panel string, f AnalyticsFilter, load func(context.Context, AnalyticsFilter) (T, error)) (T, error) {
-	if panel == "signals" {
-		original := load
-		load = func(ctx context.Context, f AnalyticsFilter) (T, error) {
-			// Direct message edits can change counts without changing transcript versions.
-			var token string
-			err := db.getReader().QueryRowContext(ctx, `SELECT value FROM archive_metadata WHERE key='dashboard_signals'`).Scan(&token)
-			decoded, decodeErr := hex.DecodeString(token)
-			if err == nil && decodeErr == nil && len(decoded) == 16 {
-				_, err = db.analyticsKept.Do(ctx, "\x00signals-memo", token, func(context.Context) (any, error) {
-					db.frustrationMemo.Swap(func() {})
-					return struct{}{}, nil
-				})
-				if err != nil {
-					var zero T
-					return zero, err
-				}
-			} else if !db.readOnly {
-				db.frustrationMemo.Swap(func() {})
-			}
-			return original(ctx, f)
-		}
-	}
 	if db.readOnly || TerminationUsesTime(f.Termination) {
 		return load(ctx, f)
 	}
@@ -99,4 +77,27 @@ func keptAnalytics[T analyticsReport](ctx context.Context, db *DB, panel string,
 		return zero, err
 	}
 	return result.(T), nil
+}
+
+// frustrationGeneration invalidates prompt counts when direct message edits
+// change the Signals token without changing transcript versions.
+func (db *DB) frustrationGeneration(ctx context.Context, hasRows bool) (uint64, error) {
+	if !hasRows {
+		return 0, nil
+	}
+	var token string
+	err := db.getReader().QueryRowContext(ctx, `SELECT value FROM archive_metadata WHERE key='dashboard_signals'`).Scan(&token)
+	decoded, decodeErr := hex.DecodeString(token)
+	if err == nil && decodeErr == nil && len(decoded) == 16 {
+		_, err = db.analyticsKept.Do(ctx, "\x00signals-memo", token, func(context.Context) (any, error) {
+			db.frustrationMemo.Swap(func() {})
+			return struct{}{}, nil
+		})
+		if err != nil {
+			return 0, err
+		}
+	} else if !db.readOnly {
+		db.frustrationMemo.Swap(func() {})
+	}
+	return db.frustrationMemo.Generation(), nil
 }

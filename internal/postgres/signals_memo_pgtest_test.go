@@ -232,3 +232,38 @@ func TestFrustrationMemoUncachedSignals(t *testing.T) {
 		})
 	}
 }
+
+func TestSignalsDrilldownAfterSavedPanelRefresh(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, first := newUsageJournalFixture(t)
+	ctx := t.Context()
+	pgKeptSession(t, local, "session", "project", "2026-06-14")
+	require.NoError(t, local.ReplaceSessionMessages(ctx, "session", []db.Message{{SessionID: "session", Role: "user", Content: "this is broken"}}))
+	require.NoError(t, local.UpdateSessionSignals(ctx, "session", db.SessionSignalUpdate{QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion}}))
+	pgKeptPush(t, syncer, false)
+	url := testPGURL(t)
+	cache := t.TempDir()
+	require.NoError(t, first.ConfigureUsageCache(ctx, cache, url, syncer.schema))
+	filter := db.AnalyticsFilter{Timezone: "UTC"}
+	before, err := first.GetAnalyticsSignalSessions(ctx, filter, "frustration_marker_count", 10)
+	require.NoError(t, err)
+	require.Len(t, before.Sessions, 1)
+	second, err := NewStore(ctx, url, syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, second.Close()) })
+	require.NoError(t, second.ConfigureUsageCache(ctx, cache, url, syncer.schema))
+	_, err = second.DB().ExecContext(ctx, `UPDATE messages SET content='Please explain this function.' WHERE session_id='session'`)
+	require.NoError(t, err)
+	fresh, err := second.GetAnalyticsSignals(ctx, filter)
+	require.NoError(t, err)
+	require.Zero(t, fresh.QualityHealth.Totals.FrustrationMarkerCount)
+	counter := &analyticsReadCounter{storeExecutor: first.pg}
+	first.pg = counter
+	panel, err := first.GetAnalyticsSignals(ctx, filter)
+	require.NoError(t, err)
+	require.Zero(t, counter.count())
+	require.Zero(t, panel.QualityHealth.Totals.FrustrationMarkerCount)
+	after, err := first.GetAnalyticsSignalSessions(ctx, filter, "frustration_marker_count", 10)
+	require.NoError(t, err)
+	require.Empty(t, after.Sessions)
+}

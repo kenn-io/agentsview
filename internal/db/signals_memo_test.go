@@ -405,3 +405,33 @@ func TestSignalsFrustrationCanceledWhileSaving(t *testing.T) {
 		})
 	}
 }
+
+func TestSignalsDrilldownAfterSavedPanelRefresh(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	first := testDB(t)
+	ctx := t.Context()
+	seedFrustrationSession(t, first, "session", "test")
+	filter := AnalyticsFilter{Timezone: "UTC"}
+	before, err := first.GetAnalyticsSignalSessions(ctx, filter, "frustration_marker_count", 10)
+	require.NoError(t, err)
+	require.Len(t, before.Sessions, 1)
+	second, err := OpenIsolated(ctx, first.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, second.Close()) })
+	_, err = second.getWriter().ExecContext(ctx, `UPDATE messages SET content='Please explain this function.' WHERE session_id='session'`)
+	require.NoError(t, err)
+	fresh, err := second.GetAnalyticsSignals(ctx, filter)
+	require.NoError(t, err)
+	require.Zero(t, fresh.QualityHealth.Totals.FrustrationMarkerCount)
+	loads := 0
+	panel, err := keptAnalytics(ctx, first, "signals", filter, func(ctx context.Context, f AnalyticsFilter) (SignalsAnalyticsResponse, error) {
+		loads++
+		return first.analyticsSignals(ctx, f)
+	})
+	require.NoError(t, err)
+	require.Zero(t, loads)
+	require.Zero(t, panel.QualityHealth.Totals.FrustrationMarkerCount)
+	after, err := first.GetAnalyticsSignalSessions(ctx, filter, "frustration_marker_count", 10)
+	require.NoError(t, err)
+	require.Empty(t, after.Sessions)
+}
