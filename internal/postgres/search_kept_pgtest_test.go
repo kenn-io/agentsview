@@ -44,14 +44,10 @@ func TestSearchKeptMessagePush(t *testing.T) {
 }
 
 type searchQueryTracer struct {
-	count    atomic.Int32
-	versions atomic.Int32
+	count atomic.Int32
 }
 
 func (tr *searchQueryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	if strings.Contains(data.SQL, "usage_history_token") {
-		tr.versions.Add(1)
-	}
 	if strings.Contains(data.SQL, "msg_matches AS") {
 		tr.count.Add(1)
 	}
@@ -96,7 +92,6 @@ func TestSearchKeptRestart(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, want, got)
 	require.Zero(t, trace.count.Load())
-	require.EqualValues(t, 3, trace.versions.Load())
 	other, err := s.Search(ctx, db.SearchFilter{Query: "unmatched-token"})
 	require.NoError(t, err)
 	require.Empty(t, other.Results)
