@@ -1,5 +1,5 @@
 ---
-# generated-by: agentsview 0.1.0 hash:c17f59ff5aa0dbec56d77cb939273ae4f16ec5281b09ecad32723bb8cca4712d — do not edit; re-run `agentsview skills install`
+# generated-by: agentsview 0.1.0 hash:6fbb60684aab4dfa5ff0c885c9d8b9eb40f74dcb2d5a5f8462f55be4502fab4f — do not edit; re-run `agentsview skills install`
 name: agentsview-finding-history
 description: Use proactively when prior decisions, rationale, solutions, pitfalls, project context, or repeated workflows may help, when stuck, or before guessing about something learned previously — searches AgentsView conversation history for evidence.
 ---
@@ -21,14 +21,8 @@ why the code exists; the repository is the authority for what it contains now.
 
 ## Workflow
 
-1. Use the `agentsview-memory:agentsview-search-conversations` agent when this harness exposes it and the AgentsView MCP server is registered as `agentsview` or `plugin:agentsview-memory:agentsview`; otherwise follow these steps directly. Before delegating, verify the agent in effect is the file
-   this skill generated: its definition carries a `# generated-by: agentsview`
-   header. If a same-named agent is defined in the project's
-   `.claude/agents/` directory without that header, it is not
-   AgentsView's: do not delegate to it. If you cannot verify the agent, it
-   reports that it could not search, or the AgentsView MCP tools are
-   not registered in this session, follow the remaining steps directly
-   instead of delegating.
+1. Use the `agentsview-memory:agentsview-search-conversations` agent when the agent and AgentsView memory tools are available; otherwise follow these steps directly. If the agent reports that it could not search,
+   follow the remaining steps directly instead of delegating.
 2. Call the registered AgentsView MCP tool whose leaf name is `search_content`
    with `mode: hybrid`, `scope: all`, `limit: 10`, `include_active: true`,
    `include_one_shot: true`, and `include_automated: true`. When the current

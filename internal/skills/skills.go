@@ -176,6 +176,7 @@ func ParseRemote(content string) Remote {
 // templateData is the data passed to the finding-history template.
 type templateData struct {
 	Delegate            string
+	Plugin              bool
 	ServerArgs          string
 	ToolPrefix          string
 	AlternateToolPrefix string
@@ -216,7 +217,7 @@ func render(h Harness, version string, remote Remote, delegateOverride string) (
 		delegate = delegateOverride
 	}
 
-	data := templateData{Delegate: delegate, ServerArgs: remote.Args()}
+	data := templateData{Delegate: delegate, ServerArgs: remote.Args(), Plugin: delegateOverride != ""}
 	if h == HarnessClaude {
 		data.AgentDir = claudeAgentDir
 	}
@@ -281,8 +282,7 @@ func renderPackage(h Harness, version string, remote Remote, toolPrefix string, 
 // RenderPluginPackage produces the native plugin artifacts from the same
 // templates as the standalone Claude package. The LICENSE stays byte-identical.
 func RenderPluginPackage(version string) ([]Rendered, error) {
-	delegate := "Use the `" + pluginName + ":agentsview-search-conversations` agent when this harness exposes it " +
-		"and the AgentsView MCP server is registered as `agentsview` or `plugin:" + pluginName + ":" + pluginServer + "`; " +
+	delegate := "Use the `" + pluginName + ":agentsview-search-conversations` agent when the agent and AgentsView memory tools are available; " +
 		"otherwise follow these steps directly"
 	artifacts, err := renderPackage(HarnessClaude, version, Remote{}, pluginToolPrefix, standaloneToolPrefix, delegate)
 	if err != nil {
