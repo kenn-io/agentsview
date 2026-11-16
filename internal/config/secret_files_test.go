@@ -200,8 +200,9 @@ func TestSecretFileSettingsRejectUnusableFiles(t *testing.T) {
 	t.Run("servers loaded outside their scope read the file when used", func(t *testing.T) {
 		f := newConfigFixture(t)
 		dir := secretDir(t)
+		// The embeddings key file appears only after loading, so the load
+		// cannot have read it and APIKey must read it itself.
 		keyPath := filepath.Join(dir, "key")
-		writePrivateFile(t, keyPath, fileSecret+"\n")
 		missing := filepath.Join(dir, "absent")
 		f.WriteTOML(t, map[string]any{
 			"vector": map[string]any{
@@ -222,6 +223,7 @@ func TestSecretFileSettingsRejectUnusableFiles(t *testing.T) {
 		})
 		cfg, err := LoadMinimalFor(ScopeLocal)
 		require.NoError(t, err)
+		writePrivateFile(t, keyPath, fileSecret+"\n")
 		assert.Equal(t, fileSecret, requireAPIKey(t, cfg.Vector.Embeddings.Servers["remote"]))
 		_, err = cfg.Recall.Extract.Servers["remote"].APIKey()
 		requireErrorContains(t, err, "api_key_file", missing)
