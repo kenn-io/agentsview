@@ -41,6 +41,12 @@ func SeedWordSearch(t *testing.T, d *db.DB) {
 		{"plain-invoice", "word-literal-star", "invoice"},
 		{"literal-not", "word-literal-not", `NOT "invoice"`},
 		{"plain-not-invoice", "word-literal-not", "invoice"},
+		{"unicode-suffix", "word-unicode", "invoice中"},
+		{"unicode-prefix", "word-unicode", "中invoice"},
+		{"unicode-phrase", "word-unicode", "quarterly中forecast"},
+		{"separator", "word-unicode", "invoice_ quarterly; forecast"},
+		{"both-invalid", "word-unicode-all", "invoice中 rounding"},
+		{"both-valid", "word-unicode-all", "invoice_ rounding"},
 	} {
 		SeedSession(t, d, entry.id, entry.project, func(s *db.Session) { s.UserMessageCount = 2 })
 		require.NoError(t, d.ReplaceSessionMessages(t.Context(), entry.id, []db.Message{{
@@ -89,6 +95,25 @@ func AssertWordSearch(t *testing.T, store db.Store) {
 			hits = append(hits, hit{m.SessionID, m.Location, m.MatchedWords})
 		}
 		return hits
+	}
+	for _, tc := range []struct {
+		pattern string
+		words   int
+	}{{"invoice absentword", 1}, {`policy "quarterly forecast"`, 2}} {
+		for _, mode := range []string{"substring", "fts", "hybrid"} {
+			t.Run("unicode boundary/"+tc.pattern+"/"+mode, func(t *testing.T) {
+				page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: tc.pattern, Mode: mode, Project: "word-unicode", KeywordOnly: mode == "hybrid"})
+				require.NoError(t, err)
+				assert.Equal(t, []hit{{"separator", "message", tc.words}}, project(page.Matches))
+			})
+		}
+	}
+	for _, mode := range []string{"substring", "fts", "hybrid"} {
+		t.Run("unicode boundary/all words/"+mode, func(t *testing.T) {
+			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "invoice rounding", Mode: mode, Project: "word-unicode-all", KeywordOnly: mode == "hybrid", Limit: 1})
+			require.NoError(t, err)
+			assert.Equal(t, []hit{{"both-valid", "message", 2}}, project(page.Matches))
+		})
 	}
 	for _, mode := range []string{"fts", "hybrid"} {
 		t.Run("single word matches whole words/"+mode, func(t *testing.T) {

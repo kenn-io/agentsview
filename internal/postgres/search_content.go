@@ -196,9 +196,7 @@ func (s *Store) searchContentSubstringPG(
 	}
 
 	limit, offset := f.Limit, f.Cursor
-	if ranked {
-		limit, offset = f.Cursor+f.Limit, 0
-	}
+	countArgs := append([]any(nil), pb.args...)
 	limitP := pb.add(limit + 1)
 	offsetP := pb.add(offset)
 	query := "WITH scoped AS (SELECT id FROM sessions WHERE " + scopeWhere + ") " +
@@ -213,15 +211,15 @@ func (s *Store) searchContentSubstringPG(
 	if !ranked || err != nil {
 		return page, err
 	}
-	exactCount := len(page.Matches)
-	if f.Cursor < exactCount {
-		page.Matches = page.Matches[f.Cursor:]
-	} else {
-		page.Matches = nil
-	}
 	if page.NextCursor != 0 {
-		page.NextCursor = f.Cursor + f.Limit
 		return page, nil
+	}
+	exactCount := len(page.Matches)
+	if f.Cursor > 0 {
+		countQuery := "WITH scoped AS (SELECT id FROM sessions WHERE " + scopeWhere + ") SELECT count(*) FROM (" + strings.Join(branches, " UNION ALL ") + ") sub"
+		if err := s.pg.QueryRowContext(ctx, countQuery, countArgs...).Scan(&exactCount); err != nil {
+			return db.ContentSearchPage{}, fmt.Errorf("pg content count: %w", err)
+		}
 	}
 	originalCursor, originalLimit := f.Cursor, f.Limit
 	f.Cursor = max(0, f.Cursor-exactCount)

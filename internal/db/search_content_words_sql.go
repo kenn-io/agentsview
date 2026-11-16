@@ -26,7 +26,7 @@ func WordRegexSQL(b *QueryBuilder, raw string, q ContentWords, all bool) string 
 	parts := []string{"1=1"}
 	if all {
 		for _, forms := range q.Terms {
-			parts = append(parts, b.RegexPredicate(raw, boundedPattern(b, compactForms(b, forms))))
+			parts = append(parts, wordPredicate(b, raw, boundedPattern(b, compactForms(b, forms))))
 		}
 	}
 	for _, phrase := range q.Phrases {
@@ -35,7 +35,7 @@ func WordRegexSQL(b *QueryBuilder, raw string, q ContentWords, all bool) string 
 			words[i] = regexp.QuoteMeta(words[i])
 		}
 		if len(words) > 0 {
-			parts = append(parts, b.RegexPredicate(raw, boundedPattern(b, words...)))
+			parts = append(parts, wordPredicate(b, raw, boundedPattern(b, words...)))
 		}
 	}
 	return "(" + strings.Join(parts, " AND ") + ")"
@@ -46,13 +46,24 @@ func WordCountSQL(b *QueryBuilder, raw string, q ContentWords) string {
 	parts := make([]string, len(q.Terms))
 	for i, forms := range q.Terms {
 		parts[i] = "CASE WHEN " + b.ContainsPredicate(raw, wordCandidatePrefix(forms)) +
-			" AND " + b.RegexPredicate(raw, boundedPattern(b, compactForms(b, forms))) + " THEN 1 ELSE 0 END"
+			" AND " + wordPredicate(b, raw, boundedPattern(b, compactForms(b, forms))) + " THEN 1 ELSE 0 END"
 	}
 	return "(" + strings.Join(parts, " + ") + ")"
 }
 
-// WordFilterSQL selects candidate words and requires every phrase. The all-word
-// pass bounds words by ASCII characters on DuckDB and ClickHouse for speed.
+func wordPredicate(b *QueryBuilder, raw, pattern string) string {
+	if b.dialect.name == "postgres" {
+		return b.RegexPredicate(raw, pattern)
+	}
+	ascii := strings.ReplaceAll(pattern, `[^\p{L}\p{N}]`, `[^a-zA-Z0-9]`)
+	isASCII := "octet_length(encode(" + raw + ")) = length(" + raw + ")"
+	if b.dialect.name == "clickhouse" {
+		isASCII = "length(" + raw + ") = lengthUTF8(" + raw + ")"
+	}
+	return "(CASE WHEN " + isASCII + " THEN " + b.RegexPredicate(raw, ascii) + " ELSE " + b.RegexPredicate(raw, pattern) + " END)"
+}
+
+// WordFilterSQL selects candidate words and requires every phrase.
 func WordFilterSQL(b *QueryBuilder, column string, f ContentSearchFilter, q ContentWords, all bool) string {
 	exact := ""
 	if all && f.Mode != "fts" {
@@ -109,7 +120,7 @@ func wordGap(b *QueryBuilder) string {
 	if b.dialect.name == "postgres" {
 		return "[^[:alnum:]]"
 	}
-	return "[^a-zA-Z0-9]"
+	return `[^\p{L}\p{N}]`
 }
 
 // compactForms folds forms to their common prefix and an alternation of
