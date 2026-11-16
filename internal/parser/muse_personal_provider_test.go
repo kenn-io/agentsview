@@ -208,8 +208,10 @@ func TestMusePersonalRejectsSymlinkInputs(t *testing.T) {
 			require.NoError(t, err)
 			if target == "index" {
 				require.Len(t, sources, 1)
-				_, err = p.(RawCaptureProvider).PlanRawCapture(t.Context(), sources[0])
-				require.Error(t, err)
+				plan, err := p.(RawCaptureProvider).PlanRawCapture(t.Context(), sources[0])
+				require.NoError(t, err)
+				require.Len(t, plan.Entries, 1, "a linked index stays out of raw capture")
+				assert.Equal(t, path, plan.Entries[0].LocalPath)
 				out := musePersonalTestParse(t, p)
 				require.Len(t, out.Results, 1)
 				assert.Equal(t, 1, out.Results[0].Result.Session.MessageCount)

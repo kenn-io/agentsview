@@ -503,6 +503,11 @@ func (p *musePersonalProvider) PlanRawCapture(ctx context.Context, source Source
 			return RawCapturePlan{}, err
 		}
 		if !info.Mode().IsRegular() {
+			// Parsing ignores an index that is not a regular file, so capture
+			// keeps the transcript without it.
+			if path != src.Path {
+				continue
+			}
 			return RawCapturePlan{}, invalidRawCapturePlan("Muse Personal capture input is not a regular file")
 		}
 		rel, err := filepath.Rel(src.Root, path)
