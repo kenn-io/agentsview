@@ -2,17 +2,13 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/kept"
 )
-
-type usageFlight struct {
-	result  DailyUsageResult
-	windows map[string]usagePreparedWindow
-}
 
 func newDailyUsageMemo() kept.Memo[DailyUsageResult] {
 	return kept.Memo[DailyUsageResult]{Size: DailyUsageResult.Bytes}
@@ -75,33 +71,37 @@ func (db *DB) keptDailyUsage(ctx context.Context, filter UsageFilter) (DailyUsag
 			}
 			return result, nil
 		}
-		var flight usageFlight
+		var result DailyUsageResult
 		var err error
 		if filter.Progress != nil {
-			flight.result, err = build(ctx)
+			// A progress stream reports only its own build, so it never joins.
+			result, err = build(ctx)
 		} else {
+			// The flight carries the starting request's memo, so concurrent
+			// reads of one request still prepare each window once.
 			memo, _ := ctx.Value(usageWindowMemoKey{}).(*usageWindowMemo)
-			seedWindows := memo.snapshot(version)
-			flight, err = db.usageFlights.Do(ctx, version+"|"+slot, func(ctx context.Context) (usageFlight, error) {
-				if rows, ok := db.usageKept.Get(slot, version); ok {
-					return usageFlight{result: rows[0]}, nil
-				}
-				ctx = WithUsageWindowMemo(ctx)
-				private := ctx.Value(usageWindowMemoKey{}).(*usageWindowMemo)
-				private.seed(seedWindows)
-				result, err := build(ctx)
-				if err != nil {
-					return usageFlight{}, err
-				}
-				return usageFlight{result: result, windows: private.snapshot(version)}, nil
-			})
+			share := func() (DailyUsageResult, error) {
+				return db.usageFlights.Do(ctx, version+"|"+slot, func(flightCtx context.Context) (DailyUsageResult, error) {
+					if rows, ok := db.usageKept.Get(slot, version); ok {
+						return rows[0], nil
+					}
+					if memo != nil {
+						flightCtx = context.WithValue(flightCtx, usageWindowMemoKey{}, memo)
+					}
+					return build(flightCtx)
+				})
+			}
+			result, err = share()
+			// Another request's flight can cancel a memo entry this flight
+			// waited on; the failed entry is dropped, so one retry prepares it.
+			if errors.Is(err, context.Canceled) && ctx.Err() == nil {
+				result, err = share()
+			}
 		}
 		if err != nil {
 			return DailyUsageResult{}, err
 		}
-		memo, _ := ctx.Value(usageWindowMemoKey{}).(*usageWindowMemo)
-		memo.seed(flight.windows)
-		rows = []DailyUsageResult{flight.result}
+		rows = []DailyUsageResult{result}
 	}
 	result := rows[0].Clone()
 	if filter.SkipSessionCounts {

@@ -8,7 +8,6 @@ import (
 	"log"
 	"maps"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -96,16 +95,14 @@ type (
 )
 
 type usageWindowMemo struct {
-	mu       sync.Mutex
-	windows  map[string]func() (usagePreparedWindow, error)
-	prepared map[string]usagePreparedWindow
+	mu      sync.Mutex
+	windows map[string]func() (usagePreparedWindow, error)
 }
 
 // WithUsageWindowMemo reuses prepared windows across reads in one request.
 func WithUsageWindowMemo(ctx context.Context) context.Context {
 	return context.WithValue(ctx, usageWindowMemoKey{}, &usageWindowMemo{
-		windows:  make(map[string]func() (usagePreparedWindow, error)),
-		prepared: make(map[string]usagePreparedWindow),
+		windows: make(map[string]func() (usagePreparedWindow, error)),
 	})
 }
 
@@ -116,36 +113,6 @@ func (memo *usageWindowMemo) drop(key string) {
 	memo.mu.Lock()
 	defer memo.mu.Unlock()
 	delete(memo.windows, key)
-	delete(memo.prepared, key)
-}
-
-func (memo *usageWindowMemo) snapshot(version string) map[string]usagePreparedWindow {
-	if memo == nil {
-		return nil
-	}
-	memo.mu.Lock()
-	defer memo.mu.Unlock()
-	windows := make(map[string]usagePreparedWindow)
-	for key, window := range memo.prepared {
-		if strings.HasSuffix(key, "|"+version) {
-			windows[key] = window
-		}
-	}
-	return windows
-}
-
-func (memo *usageWindowMemo) seed(windows map[string]usagePreparedWindow) {
-	if memo == nil {
-		return
-	}
-	memo.mu.Lock()
-	defer memo.mu.Unlock()
-	for key, window := range windows {
-		if _, ok := memo.windows[key]; !ok {
-			memo.windows[key] = func() (usagePreparedWindow, error) { return window, nil }
-			memo.prepared[key] = window
-		}
-	}
 }
 
 func usageWindowKey(filter UsageFilter, kind usageQueryKind, cursor bool) string {
@@ -165,10 +132,6 @@ func (db *DB) sharedUsageWindow(ctx context.Context, key string, filter UsageFil
 			prepared, err := db.prepareUsageWindow(ctx, filter, kind, cursor, true, filter.Progress)
 			if err != nil {
 				memo.drop(key)
-			} else {
-				memo.mu.Lock()
-				memo.prepared[key] = prepared
-				memo.mu.Unlock()
 			}
 			return prepared, err
 		})
