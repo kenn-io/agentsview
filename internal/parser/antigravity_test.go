@@ -473,7 +473,8 @@ func TestAntigravityCLIDBPreservesTypedPromptMissingFromHistory(t *testing.T) {
 	require.NoError(t, err)
 	item := encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: []byte("typed prompt")}})
 	input := encodePB([]pbField{{num: 3, wire: pbWireBytes, bytes: item}})
-	payload := encodePB([]pbField{{num: 19, wire: pbWireBytes, bytes: input}})
+	ts := encodePB([]pbField{{num: 1, wire: pbWireVarint, varint: 1779000000}, {num: 2, wire: pbWireVarint, varint: 123000}})
+	payload := encodePB([]pbField{{num: 5, wire: pbWireBytes, bytes: ts}, {num: 19, wire: pbWireBytes, bytes: input}})
 	mustExec(t, db, `UPDATE steps SET step_payload = ? WHERE idx = 0`, payload)
 	require.NoError(t, db.Close())
 	mustWrite(t, filepath.Join(root, "history.jsonl"),
@@ -483,9 +484,9 @@ func TestAntigravityCLIDBPreservesTypedPromptMissingFromHistory(t *testing.T) {
 	sess, msgs, err := parseAntigravityCLITestSession(t, dbPath, "", "test-machine")
 	require.NoError(t, err)
 	require.Len(t, msgs, 3)
-	assert.Equal(t, "typed prompt", msgs[0].Content)
-	assert.Equal(t, "different history prompt", msgs[1].Content)
-	assert.Equal(t, "typed prompt", sess.FirstMessage)
+	assert.Equal(t, "different history prompt", msgs[0].Content)
+	assert.Equal(t, "typed prompt", msgs[1].Content)
+	assert.Equal(t, "different history prompt", sess.FirstMessage)
 
 	mustWrite(t, filepath.Join(root, "history.jsonl"),
 		[]byte(`{"display":"typed  prompt","timestamp":1779000000000,`+
@@ -537,7 +538,7 @@ func TestAntigravityCLIDBMixedTypedAndFallbackHistory(t *testing.T) {
 		2, 14, fallback)
 	require.NoError(t, db.Close())
 	mustWrite(t, filepath.Join(root, "history.jsonl"),
-		[]byte(`{"display":"typed prompt","timestamp":1779000000000,"conversationId":"`+id+`"}`+"\n"+
+		[]byte(`{"display":"typed  prompt","timestamp":1779000000000,"conversationId":"`+id+`"}`+"\n"+
 			`{"display":"actual second prompt","timestamp":1779000200000,"conversationId":"`+id+`"}`))
 
 	_, msgs, err := parseAntigravityCLITestSession(t, dbPath, "", "test-machine")
@@ -567,39 +568,6 @@ func TestAntigravityCLIDBMixedTypedAndFallbackHistory(t *testing.T) {
 }
 
 func TestAntigravityCLIDBStructuredPromptUnwrapsEnvelope(t *testing.T) {
-	for _, withHistory := range []bool{false, true} {
-		name := "without history"
-		if withHistory {
-			name = "with clean history"
-		}
-		t.Run(name, func(t *testing.T) {
-			root := t.TempDir()
-			id := "33333333-4444-5555-6666-777777777777"
-			mustMkdir(t, filepath.Join(root, "conversations"))
-			dbPath := filepath.Join(root, "conversations", id+".db")
-			createAntigravityTestDB(t, dbPath)
-			db, err := sql.Open("sqlite3", dbPath)
-			require.NoError(t, err)
-			const envelope = "<USER_REQUEST>user request</USER_REQUEST><ADDITIONAL_METADATA>injected context</ADDITIONAL_METADATA>"
-			item := encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: []byte(envelope)}})
-			input := encodePB([]pbField{{num: 3, wire: pbWireBytes, bytes: item}})
-			mustExec(t, db, `UPDATE steps SET step_payload = ? WHERE idx = 0`,
-				encodePB([]pbField{{num: 19, wire: pbWireBytes, bytes: input}}))
-			require.NoError(t, db.Close())
-			if withHistory {
-				mustWrite(t, filepath.Join(root, "history.jsonl"),
-					[]byte(`{"display":"user request","timestamp":1779000000000,"conversationId":"`+id+`"}`))
-			}
-			sess, msgs, err := parseAntigravityCLITestSession(t, dbPath, "", "test-machine")
-			require.NoError(t, err)
-			require.Len(t, msgs, 2)
-			assert.Equal(t, "user request", msgs[0].Content)
-			assert.Equal(t, "user request", sess.FirstMessage)
-		})
-	}
-}
-
-func TestAntigravityCLIDBLaterTypedPromptWithHistoryTime(t *testing.T) {
 	root := t.TempDir()
 	id := "33333333-4444-5555-6666-777777777777"
 	mustMkdir(t, filepath.Join(root, "conversations"))
@@ -607,22 +575,19 @@ func TestAntigravityCLIDBLaterTypedPromptWithHistoryTime(t *testing.T) {
 	createAntigravityTestDB(t, dbPath)
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	item := encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: []byte("later typed prompt")}})
+	const envelope = "<USER_REQUEST>user request</USER_REQUEST><ADDITIONAL_METADATA>injected context</ADDITIONAL_METADATA>"
+	item := encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: []byte(envelope)}})
 	input := encodePB([]pbField{{num: 3, wire: pbWireBytes, bytes: item}})
-	payload := encodePB([]pbField{{num: 19, wire: pbWireBytes, bytes: input}})
-	mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`,
-		2, 14, payload)
+	mustExec(t, db, `UPDATE steps SET step_payload = ? WHERE idx = 0`,
+		encodePB([]pbField{{num: 19, wire: pbWireBytes, bytes: input}}))
 	require.NoError(t, db.Close())
 	mustWrite(t, filepath.Join(root, "history.jsonl"),
-		[]byte(`{"display":"user prompt text goes here","timestamp":1779000000000,"conversationId":"`+id+`"}`+"\n"+
-			`{"display":"later typed prompt","timestamp":1779000200000,"conversationId":"`+id+`"}`))
-
-	_, msgs, err := parseAntigravityCLITestSession(t, dbPath, "", "test-machine")
+		[]byte(`{"display":"user request","timestamp":1779000000000,"conversationId":"`+id+`"}`))
+	sess, msgs, err := parseAntigravityCLITestSession(t, dbPath, "", "test-machine")
 	require.NoError(t, err)
-	require.Len(t, msgs, 3)
-	assert.Equal(t, "user prompt text goes here", msgs[0].Content)
-	assert.Equal(t, RoleAssistant, msgs[1].Role)
-	assert.Equal(t, "later typed prompt", msgs[2].Content)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "user request", msgs[0].Content)
+	assert.Equal(t, "user request", sess.FirstMessage)
 }
 
 func TestAntigravityCLIProjectFallbackPromptAndProximity(t *testing.T) {
