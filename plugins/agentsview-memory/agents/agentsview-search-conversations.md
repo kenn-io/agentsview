@@ -1,5 +1,5 @@
 ---
-# generated-by: agentsview 0.1.0 hash:20fbb875f5f482f5fc420f255fb011b9c2e5285faea373b801ab2aaaa96b5607 — do not edit; re-run `agentsview skills install`
+# generated-by: agentsview 0.1.0 hash:4a3b229fd2ce8a21c33e72a1e0250b85f403799b36eac92946cca6d553081402 — do not edit; re-run `agentsview skills install`
 name: agentsview-search-conversations
 description: Search AgentsView conversation history and synthesize evidence for the parent agent.
 model: haiku
@@ -19,6 +19,8 @@ decision.
 
 ## Search and read
 
+Use the same server prefix for search and message reads throughout this task.
+
 1. Call `mcp__plugin_agentsview-memory_agentsview__search_content` or
    `mcp__agentsview__search_content`, whichever is available,
    with `mode: hybrid`, `scope: all`,
@@ -32,7 +34,7 @@ decision.
    relevance signals, never as truth probabilities.
 3. Choose the top 2-5 relevant sessions. Call
    `mcp__plugin_agentsview-memory_agentsview__get_messages` or
-   `mcp__agentsview__get_messages`, whichever is available,
+   `mcp__agentsview__get_messages` with the prefix used for search
    to read each source around the relevant ordinal range.
 4. Follow `next_from` or expand the message range when the relevant decision or
    a later correction may fall outside the first page. A snippet, summary, or

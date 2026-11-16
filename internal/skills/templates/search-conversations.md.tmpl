@@ -17,7 +17,9 @@ Return evidence for the parent to evaluate; do not make the parent task's final
 decision.
 
 ## Search and read
-
+{{if .AlternateToolPrefix}}
+Use the same server prefix for search and message reads throughout this task.
+{{end}}
 1. Call `{{.ToolPrefix}}search_content`{{if .AlternateToolPrefix}} or
    `{{.AlternateToolPrefix}}search_content`, whichever is available,
   {{end}} with `mode: hybrid`, `scope: all`,
@@ -33,7 +35,7 @@ decision.
    relevance signals, never as truth probabilities.
 3. Choose the top 2-5 relevant sessions. Call{{if .AlternateToolPrefix}}
   {{end}} `{{.ToolPrefix}}get_messages`{{if .AlternateToolPrefix}} or
-   `{{.AlternateToolPrefix}}get_messages`, whichever is available,{{end}}
+   `{{.AlternateToolPrefix}}get_messages` with the prefix used for search{{end}}
    to read each source around the relevant ordinal range.
 4. Follow `next_from` or expand the message range when the relevant decision or
    a later correction may fall outside the first page. A snippet, summary, or

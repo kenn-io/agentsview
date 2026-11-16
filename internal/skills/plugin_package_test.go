@@ -89,4 +89,5 @@ func TestMemoryPluginAgentToolsMatchPluginServer(t *testing.T) {
 	assert.Contains(t, content, "`"+prefix+"get_messages`")
 	assert.Contains(t, content, "`mcp__agentsview__search_content`")
 	assert.Contains(t, content, "`mcp__agentsview__get_messages`")
+	assert.Contains(t, content, "Use the same server prefix for search and message reads")
 }
