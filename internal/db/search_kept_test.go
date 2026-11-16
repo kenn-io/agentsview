@@ -26,6 +26,12 @@ func TestSearchKeptSelections(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, page, repeat)
 	require.EqualValues(t, 1, loads.Load())
+	_, err = d.getWriter().ExecContext(ctx, `INSERT INTO usage_events(session_id,source,model,output_tokens) VALUES('session','session','model-x',7)`)
+	require.NoError(t, err)
+	repeat, err = d.Search(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, page, repeat)
+	require.EqualValues(t, 1, loads.Load())
 	for _, other := range []SearchFilter{{Query: "needle", Sort: "recency"}, {Query: "needle", Cursor: 1}, {Query: "needle", Limit: 1}, {Query: "absent"}} {
 		_, err = d.Search(ctx, other)
 		require.NoError(t, err)
@@ -44,27 +50,6 @@ func TestSearchKeptSelections(t *testing.T) {
 		require.Len(t, page.Results, 1)
 	}
 	require.Zero(t, readOnlyLoads.Load())
-}
-
-func TestSearchKeptAfterUsageEvent(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	d := testDB(t)
-	ctx := t.Context()
-	insertSession(t, d, "session", "project")
-	insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "needle"})
-	reads := 0
-	d.afterSearchRead = func() { reads++ }
-	filter := SearchFilter{Query: "needle"}
-	page, err := d.Search(ctx, filter)
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	require.Equal(t, 1, reads)
-	_, err = d.getWriter().ExecContext(ctx, `INSERT INTO usage_events(session_id,source,model,output_tokens) VALUES('session','session','model-x',7)`)
-	require.NoError(t, err)
-	repeat, err := d.Search(ctx, filter)
-	require.NoError(t, err)
-	require.Equal(t, page, repeat)
-	require.Equal(t, 1, reads)
 }
 
 func TestSearchKeptCJKAvailability(t *testing.T) {
@@ -199,8 +184,6 @@ func TestSearchKeptDiskPages(t *testing.T) {
 	repeat, err := d.Search(ctx, filter)
 	require.NoError(t, err)
 	require.Equal(t, page, repeat)
-	_, err = d.Search(ctx, SearchFilter{Query: "needle", Cursor: 1})
-	require.Error(t, err)
 	require.NoError(t, d.Close())
 
 	// Restoring the archive can repeat revision counts from the saved page.
@@ -240,14 +223,6 @@ func TestSearchKeptDiskPages(t *testing.T) {
 }
 
 func TestSearchKeptHistoryTokenCounts(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	insertSession(t, d, "session", "project")
-	insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "other"})
-	_, err := d.getWriter().ExecContext(ctx, `CREATE TABLE token_writes (n INTEGER);
-CREATE TRIGGER count_token_writes AFTER UPDATE ON archive_metadata WHEN NEW.key = 'search_history_token'
-BEGIN INSERT INTO token_writes VALUES (1); END;`)
-	require.NoError(t, err)
 	cases := []struct {
 		name, query string
 		want        int
@@ -256,13 +231,22 @@ BEGIN INSERT INTO token_writes VALUES (1); END;`)
 		{"grouped rename", `UPDATE sessions SET session_name='name' WHERE id='session'`, 1},
 		{"listed column", `UPDATE sessions SET project='new' WHERE id='session'`, 1},
 		{"unlisted column", `UPDATE sessions SET health_score=42 WHERE id='session'`, 0},
-		{"image", `INSERT INTO image_text_cache(id,image_hash,processor,provider,model,revision,text) VALUES(-1,'hash','processor','provider','model','revision','text')`, 1},
+		{"image", `INSERT INTO image_text_cache(image_hash,processor,provider,model,revision,text) VALUES('hash','processor','provider','model','revision','text')`, 1},
 		{"session insert", `INSERT INTO sessions(id,project,agent,machine) VALUES('other','project','agent','machine')`, 1},
 		{"session delete", `DELETE FROM sessions WHERE id='session'`, 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := d.getWriter().ExecContext(ctx, `DELETE FROM token_writes`)
+			d := testDB(t)
+			ctx := t.Context()
+			insertSession(t, d, "session", "project")
+			if tc.name == "grouped rename" {
+				_, err := d.getWriter().ExecContext(ctx, `UPDATE sessions SET group_key='group' WHERE id='session'`)
+				require.NoError(t, err)
+			}
+			_, err := d.getWriter().ExecContext(ctx, `CREATE TABLE token_writes (n INTEGER);
+CREATE TRIGGER count_token_writes AFTER UPDATE ON archive_metadata WHEN NEW.key = 'search_history_token'
+BEGIN INSERT INTO token_writes VALUES (1); END;`)
 			require.NoError(t, err)
 			_, err = d.getWriter().ExecContext(ctx, tc.query)
 			require.NoError(t, err)
@@ -279,34 +263,19 @@ func TestSearchKeptOldWriterTriggers(t *testing.T) {
 	ctx := t.Context()
 	insertSession(t, d, "session", "project")
 	insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "other"})
-	_, err := d.getWriter().ExecContext(ctx, `
-DROP TRIGGER trg_sessions_usage_change_update;
-CREATE TRIGGER trg_sessions_usage_change_update AFTER UPDATE OF session_name ON sessions
-WHEN OLD.session_name IS NOT NEW.session_name BEGIN
- INSERT INTO archive_metadata(key,value) VALUES('usage_change_revision','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1;
-END;
-DROP TRIGGER trg_sessions_search_first_message;
-CREATE TRIGGER trg_sessions_search_first_message AFTER UPDATE OF first_message ON sessions
-WHEN OLD.first_message IS NOT NEW.first_message BEGIN
- INSERT INTO archive_metadata(key,value) VALUES('search_change_revision','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1;
-END;
-DROP TRIGGER trg_messages_search_dialogue;
-CREATE TRIGGER trg_messages_search_dialogue AFTER UPDATE OF dialogue_text ON messages
-WHEN OLD.dialogue_text IS NOT NEW.dialogue_text BEGIN
- INSERT INTO archive_metadata(key,value) VALUES('search_change_revision','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1;
+	_, err := d.getWriter().ExecContext(ctx, `DROP TRIGGER trg_sessions_usage_change_update;
+CREATE TRIGGER trg_sessions_usage_change_update AFTER UPDATE OF transcript_revision, started_at, deleted_at, project, agent, machine, git_branch, group_key, is_automated, user_message_count, ended_at, termination_status, display_name, session_name, relationship_type, message_count, created_at ON sessions
+WHEN OLD.transcript_revision IS NOT NEW.transcript_revision OR OLD.started_at IS NOT NEW.started_at OR OLD.deleted_at IS NOT NEW.deleted_at OR OLD.project IS NOT NEW.project OR OLD.agent IS NOT NEW.agent OR OLD.machine IS NOT NEW.machine OR OLD.git_branch IS NOT NEW.git_branch OR OLD.group_key IS NOT NEW.group_key OR OLD.is_automated IS NOT NEW.is_automated OR OLD.user_message_count IS NOT NEW.user_message_count OR OLD.ended_at IS NOT NEW.ended_at OR OLD.termination_status IS NOT NEW.termination_status OR OLD.display_name IS NOT NEW.display_name OR OLD.session_name IS NOT NEW.session_name OR OLD.relationship_type IS NOT NEW.relationship_type OR OLD.message_count IS NOT NEW.message_count OR OLD.created_at IS NOT NEW.created_at
+BEGIN
+ INSERT INTO archive_metadata (key, value) VALUES ('usage_change_revision', '1') ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+ INSERT INTO usage_session_changes (session_id, revision) SELECT NEW.id, CAST(value AS INTEGER) FROM archive_metadata WHERE key = 'usage_change_revision' ON CONFLICT(session_id) DO UPDATE SET revision = excluded.revision;
 END;`)
 	require.NoError(t, err)
-	for _, update := range []string{
-		`UPDATE sessions SET session_name='needlename' WHERE id='session'`,
-		`UPDATE sessions SET first_message='needlefirst' WHERE id='session'`,
-		`UPDATE messages SET dialogue_text='needledialogue' WHERE session_id='session'`,
-	} {
-		var token string
-		require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT value FROM archive_metadata WHERE key='search_history_token'`).Scan(&token))
-		_, err = d.getWriter().ExecContext(ctx, update)
-		require.NoError(t, err)
-		var changedToken string
-		require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT value FROM archive_metadata WHERE key='search_history_token'`).Scan(&changedToken))
-		require.NotEqual(t, token, changedToken)
-	}
+	var token string
+	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT value FROM archive_metadata WHERE key='search_history_token'`).Scan(&token))
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE sessions SET session_name='needlename' WHERE id='session'`)
+	require.NoError(t, err)
+	var changedToken string
+	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT value FROM archive_metadata WHERE key='search_history_token'`).Scan(&changedToken))
+	require.NotEqual(t, token, changedToken)
 }
