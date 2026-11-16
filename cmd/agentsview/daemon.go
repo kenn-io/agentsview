@@ -833,6 +833,11 @@ func runDaemonRestartWithPolicy(
 			return fmt.Errorf("daemon restart: %w", err)
 		}
 	}
+	if wasRunning {
+		if err := waitForStoppedDaemonWriter(ctx, cfg); err != nil {
+			return fmt.Errorf("daemon restart: %w", err)
+		}
+	}
 	policy.ConfigOnly = true
 	policy.Operation = "daemon restart"
 	if policy.Attached {
