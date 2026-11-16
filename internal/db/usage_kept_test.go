@@ -238,6 +238,10 @@ func TestDailyUsageKeptProjectIdentityChange(t *testing.T) {
 func TestDailyUsageKeptConcurrentMissesShareBuild(t *testing.T) {
 	database := testDB(t)
 	seedLiveWriteSession(t, database, "one", "project", "2026-08-10T09:00:00Z", 0, 10)
+	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC", Breakdowns: true}
+	_, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(t, err)
+	appendLiveWriteMessage(t, database, "one", "2026-08-10T10:00:00Z", 1, 7)
 	var prepares atomic.Int32
 	started, resume := make(chan struct{}), make(chan struct{})
 	release := sync.OnceFunc(func() { close(resume) })
@@ -248,7 +252,6 @@ func TestDailyUsageKeptConcurrentMissesShareBuild(t *testing.T) {
 			<-resume
 		}
 	})
-	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC", Breakdowns: true}
 	type response struct {
 		result DailyUsageResult
 		err    error
@@ -270,7 +273,7 @@ func TestDailyUsageKeptConcurrentMissesShareBuild(t *testing.T) {
 	a, b := <-first, <-second
 	require.NoError(t, a.err)
 	require.NoError(t, b.err)
-	assert.Equal(t, 10, a.result.Totals.InputTokens)
+	assert.Equal(t, 17, a.result.Totals.InputTokens)
 	assert.Equal(t, a.result.Totals, b.result.Totals)
 	assert.Equal(t, 1, a.result.SessionCounts.Total)
 	assert.Equal(t, UsageSessionCounts{}, b.result.SessionCounts)
@@ -278,9 +281,9 @@ func TestDailyUsageKeptConcurrentMissesShareBuild(t *testing.T) {
 	require.NotEmpty(t, a.result.Daily)
 	require.NotEmpty(t, b.result.Daily)
 	a.result.Daily[0].InputTokens = 999
-	assert.Equal(t, 10, b.result.Daily[0].InputTokens)
+	assert.Equal(t, 17, b.result.Daily[0].InputTokens)
 	ranking.Breakdowns, ranking.PairwiseSides, ranking.Model = false, false, "model-a"
-	_, err := database.GetDailyUsage(ctx2, ranking)
+	_, err = database.GetDailyUsage(ctx2, ranking)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, prepares.Load())
 }
@@ -316,7 +319,9 @@ func TestDailyUsageKeptSharedBuildCancel(t *testing.T) {
 		err    error
 	}
 	second := make(chan response, 1)
-	go func() { result, err := database.GetDailyUsage(t.Context(), filter); second <- response{result, err} }()
+	secondCtx, cancelSecond := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancelSecond()
+	go func() { result, err := database.GetDailyUsage(secondCtx, filter); second <- response{result, err} }()
 	time.Sleep(100 * time.Millisecond)
 	cancel()
 	require.ErrorIs(t, <-first, context.Canceled)
