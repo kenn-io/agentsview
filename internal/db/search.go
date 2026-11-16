@@ -450,28 +450,20 @@ func (db *DB) Search(
 }
 
 func (db *DB) searchVersion(ctx context.Context, cjk bool) string {
-	var id, usage, search, token string
+	var id, token string
 	err := db.getReader().QueryRowContext(ctx, `SELECT
 		(SELECT value FROM archive_metadata WHERE key = ?),
-		COALESCE((SELECT value FROM archive_metadata WHERE key = ?), '0'),
-		COALESCE((SELECT value FROM archive_metadata WHERE key = ?), '0'),
 		(SELECT value FROM archive_metadata WHERE key = 'search_history_token')`,
-		archiveMetadataDatabaseIDKey, archiveMetadataUsageChangeRevisionKey, archiveMetadataSearchChangeRevisionKey,
-	).Scan(&id, &usage, &search, &token)
+		archiveMetadataDatabaseIDKey,
+	).Scan(&id, &token)
 	if err != nil || strings.TrimSpace(id) == "" || token == "" {
 		return ""
-	}
-	for _, raw := range []string{usage, search} {
-		n, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
-		if err != nil || n < 0 {
-			return ""
-		}
 	}
 	fingerprint := ""
 	if cjk {
 		fingerprint = simpleFTSRuntimeConfig.fingerprint
 	}
-	return fmt.Sprintf("%s|%s|%s|%s|%s", id, usage, search, token, fingerprint)
+	return fmt.Sprintf("%s|%s|%s", id, token, fingerprint)
 }
 
 func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage, error) {
