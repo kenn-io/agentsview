@@ -37,6 +37,12 @@ func TestDuckDBWordSearchParity(t *testing.T) {
 	dbtest.AssertWordSearch(t, store)
 	dbtest.AssertMirrorWordAccents(t, store)
 	dbtest.AssertExplicitMirrorFTS(t, store)
+	t.Run("asterisk inside phrase", func(t *testing.T) {
+		page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: `policy "quarterly* forecast"`, Mode: "fts", Project: "word-search"})
+		require.NoError(t, err)
+		require.Len(t, page.Matches, 1)
+		assert.Equal(t, "phrase", page.Matches[0].SessionID)
+	})
 }
 
 func TestDialogueOnlyDuckDBChangeRepushesSession(t *testing.T) {

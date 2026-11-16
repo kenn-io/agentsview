@@ -64,11 +64,23 @@ func WordSnippetRange(body, pattern string, words ContentWords) (int, int) {
 // RouteContentWords applies SQLite's gates for word matching to f, a
 // substring or fts search. It returns f with a fully quoted pattern unquoted.
 func RouteContentWords(f ContentSearchFilter) (ContentSearchFilter, ContentWords, bool) {
-	if f.Mode == "fts" && (strings.Contains(f.Pattern, "*") || strings.HasPrefix(strings.TrimSpace(f.Pattern), `NOT "`)) {
+	if f.Mode == "fts" && (hasFTSPrefix(f.Pattern) || strings.HasPrefix(strings.TrimSpace(f.Pattern), `NOT "`)) {
 		return f, ContentWords{}, false
 	}
 	f, q, ok := routeContentWords(f)
 	return f, ContentWords{Terms: q.forms, Phrases: q.phrases}, ok
+}
+
+func hasFTSPrefix(pattern string) bool {
+	quoted := false
+	for _, r := range pattern {
+		if r == '"' {
+			quoted = !quoted
+		} else if r == '*' && !quoted {
+			return true
+		}
+	}
+	return false
 }
 
 func routeContentWords(f ContentSearchFilter) (ContentSearchFilter, contentWords, bool) {

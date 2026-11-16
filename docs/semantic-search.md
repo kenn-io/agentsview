@@ -801,6 +801,8 @@ agentsview session search "flaky test" --hybrid --project myapp
   return the keyword matches with `effective_mode: hybrid_keyword` and a note
   beside `coverage`. The note gives the readiness reason (`not set up` or
   indexing progress) and explains that only keyword matches were returned.
+  On CockroachDB, keyword terms must all appear. If results are few, try short
+  substring queries with key terms or synonyms, keeping your filters.
 - Both modes are restricted to the `messages` source — the same restriction
   `--fts` already has — since only user/assistant message content is embedded
   (never raw tool_input/tool_result rows or system messages). Passing `--in`
