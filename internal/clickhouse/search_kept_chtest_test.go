@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -18,9 +19,7 @@ func restartSearchTestMerges(t *testing.T, s *Store, tables ...string) {
 		defer cancel()
 		for _, table := range tables {
 			_, err := s.conn.ExecContext(ctx, "SYSTEM START MERGES "+table)
-			if err != nil {
-				t.Errorf("restart merges for %s: %v", table, err)
-			}
+			assert.NoError(t, err, "restart merges for %s", table)
 		}
 	})
 }
@@ -53,6 +52,10 @@ func TestSearchKeptRestart(t *testing.T) {
 	before := count(s)
 	require.Equal(t, want, read(s))
 	require.Equal(t, before, count(s))
+	other, err := s.Search(t.Context(), db.SearchFilter{Query: "unmatched-token"})
+	require.NoError(t, err)
+	require.Empty(t, other.Results)
+	require.Greater(t, count(s), before)
 	parts, err := first.tablePartsFingerprint(t.Context(), []string{"sessions", "messages"})
 	require.NoError(t, err)
 	restartSearchTestMerges(t, first, "sessions", "messages")
