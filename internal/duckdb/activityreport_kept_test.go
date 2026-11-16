@@ -390,7 +390,7 @@ func TestPartialActivityInvalidDiskEntryIsMiss(t *testing.T) {
 			}
 			headerEnd := bytes.IndexByte(data, '\n')
 			require.GreaterOrEqual(t, headerEnd, 0)
-			return os.WriteFile(path, append(data[:headerEnd+1], []byte("corrupt")...), 0600)
+			return os.WriteFile(path, append(data[:headerEnd+1], []byte("corrupt")...), 0o600)
 		}
 		return nil
 	}))
@@ -560,7 +560,7 @@ func TestActivityCloseWaitsForSavedUsage(t *testing.T) {
 	select {
 	case err := <-done:
 		store.activityUsagePendingMu.Unlock()
-		t.Fatalf("Close returned before saving usage: %v", err)
+		require.FailNow(t, "Close returned before saving usage", "error: %v", err)
 	default:
 	}
 	store.activityUsagePendingMu.Unlock()
