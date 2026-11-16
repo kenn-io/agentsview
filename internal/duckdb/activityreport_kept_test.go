@@ -142,6 +142,48 @@ func TestActivityReportKeptMirrorReplacement(t *testing.T) {
 	requireKeptActivityEqual(t, changed, keptActivityBuild(t, store, q, false))
 }
 
+func TestActivityRunsReplacementDuringReadThenRestore(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	for _, phase := range []string{"runs", "messages"} {
+		t.Run(phase, func(t *testing.T) {
+			t.Setenv("CACHE_DIRECTORY", t.TempDir())
+			dir := t.TempDir()
+			path, next, old := filepath.Join(dir, "mirror.duckdb"), filepath.Join(dir, "next.duckdb"), filepath.Join(dir, "old.duckdb")
+			keptActivityMirror(t, path, "session-a", 500)
+			keptActivityMirror(t, next, "session-a", 500)
+			writeUsageMirror(t, path, `UPDATE sessions SET agentsview_push_fingerprint = 'old'`)
+			writeUsageMirror(t, next, `UPDATE sessions SET agentsview_push_fingerprint = 'new'`, `UPDATE messages SET timestamp = TIMESTAMP '2026-01-01 00:04:00' WHERE id = 2`)
+			store, err := NewStore(t.Context(), path)
+			require.NoError(t, err)
+			require.NoError(t, store.OpenActivityReportDisk(t.Context()))
+			q := duckDayQuery(t, "2026-01-01", "UTC")
+			previous := analyticsQueryObserver
+			analyticsQueryObserver = func(query string) {
+				if (phase == "runs" && strings.Contains(query, "activity_run_pieces")) || (phase == "messages" && strings.Contains(query, "SELECT session_id, role, timestamp FROM messages")) {
+					analyticsQueryObserver = previous
+					require.NoError(t, os.Rename(path, old))
+					require.NoError(t, swapMirrorFile(next, path))
+					store.checkMirrorReplacement(t.Context(), func(err error) { require.NoError(t, err) })
+				}
+			}
+			t.Cleanup(func() { analyticsQueryObserver = previous })
+			_, _, err = store.activityReportRuns(t.Context(), []string{"session-a"}, q)
+			require.NoError(t, err)
+			require.NoError(t, store.Close())
+			require.NoError(t, swapMirrorFile(old, path))
+			restarted, err := NewStore(t.Context(), path)
+			require.NoError(t, err)
+			defer restarted.Close()
+			require.NoError(t, restarted.OpenActivityReportDisk(t.Context()))
+			runs, entries, err := restarted.activityReportRuns(t.Context(), []string{"session-a"}, q)
+			require.NoError(t, err)
+			require.Len(t, runs, 1)
+			require.Equal(t, time.Date(2026, 1, 1, 0, 1, 0, 0, time.UTC), runs[0].End)
+			require.Equal(t, []int64{time.Date(2026, 1, 1, 0, 1, 0, 0, time.UTC).UnixMicro()}, entries["session-a"].assistants)
+		})
+	}
+}
+
 func TestActivityReportKeptExcludesPartialAndBorrowedHandles(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	keptActivityMirror(t, path, "session-a", 500)
