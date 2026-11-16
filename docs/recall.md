@@ -107,6 +107,7 @@ retry through a CLI.
 endpoint = "http://127.0.0.1:11434/v1"
 model = "llama3.1"
 api_key_env = "OPENAI_API_KEY" # optional; the value is read at runtime
+# api_key_file = "~/.config/agentsview/insights-key" # or a private file
 # allow_http = true            # required for non-loopback HTTP endpoints
 # default_agent = "codex"      # generator used when no endpoint is configured
 ```
@@ -319,7 +320,9 @@ Optional keys: `deployment` (labels which serving instance produced the corpus),
 — how long a session must have been ended before extraction),
 `backstop_interval` (default `"1h"`), `failure_backoff` (default `"1h"`),
 `max_window_chars` (default 50000), `max_tokens`, `candidate_findings`
-(`"block"` default, or `"allow"` — see below), per-server `api_key_env`,
+(`"block"` default, or `"allow"` — see below), per-server `api_key_env` or
+`api_key_file` (see
+[Read secrets from files](/docs/configuration/#read-secrets-from-files)),
 per-server `concurrency` (default 1 — see below), a `[recall.extract.prompts]`
 table (`profile`, `dir`), and a `[recall.extract.request]` table (`temperature`,
 `extra_body`).

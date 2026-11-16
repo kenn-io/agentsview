@@ -66,6 +66,7 @@ default_server = "local"          # server used for query encoding and unnamed b
 [vector.embeddings.servers.local]
 endpoint = "http://localhost:11434/v1"  # OpenAI-compatible base URL; "/embeddings" is appended
 api_key_env = "OPENAI_API_KEY"    # name of an env var holding the key; omit for anonymous access
+# api_key_file = "~/.config/agentsview/embeddings-key" # or a private file holding it
 batch_size = 32                   # inputs per HTTP call (default 32; 8 for a built-in server)
 max_batch_tokens = 120000         # optional provider cap across all inputs in one call
 concurrency = 4                   # documents embedded in parallel during a build (default 4; 1 for a built-in server)
@@ -151,7 +152,7 @@ Model identity — `model`, `dimension`, `request_dimensions`, `max_input_chars`
 in the `servers` table must serve that same model and input recipe, so vectors
 produced by any of them are interchangeable and land in the same generation.
 What varies per server is transport and capacity: `endpoint`, `local`,
-`api_key_env`, `timeout`, `max_retries`, `batch_size`, `max_batch_tokens`,
+`api_key_env` or `api_key_file`, `timeout`, `max_retries`, `batch_size`, `max_batch_tokens`,
 `concurrency`, and `ollama_cpu_fallback`.
 
 When `model_context_tokens` and a server's `max_batch_tokens` are both set,

@@ -291,8 +291,12 @@ func isMissingDuckDBTable(err error) bool {
 // Store's unqualified read queries work for both local and remote modes.
 func NewStoreFromConfig(ctx context.Context, cfg config.DuckDBConfig) (*Store, error) {
 	if cfg.URL != "" {
+		token, err := cfg.ResolveToken()
+		if err != nil {
+			return nil, err
+		}
 		return NewQuackStore(ctx,
-			cfg.URL, cfg.Token, cfg.AllowInsecure, cfg.AttachTimeout,
+			cfg.URL, token, cfg.AllowInsecure, cfg.AttachTimeout,
 		)
 	}
 	return NewStore(ctx, cfg.Path)

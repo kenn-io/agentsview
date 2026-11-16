@@ -299,6 +299,39 @@ so every writable open journals each session that has no row, one fresh
 `usage_change_revision` per session, so the stream can page between any two of
 them. Usage cache consumers then see those sessions change once.
 
+`export conversations changes --tool-summaries` also lists a `tool_summary`
+change per session. `conversation_tool_changes` holds only the revision at which
+each session's summary last could have changed, counted by
+`conversation_tool_revision`. That counter is separate from the publication
+revision, so the journal changes no message or session revision. The summary is
+computed from `tool_calls` and session timing in the export's snapshot, so no
+write path maintains totals. Triggers journal a session on an active archive
+when an input of its summary changes:
+
+- its `transcript_revision`, `deleted_at`, `started_at` or `ended_at`;
+- a call's `observed_outcome`;
+- the `gap` of its `conversation_session_changes` row;
+- a subagent session it delegates to being inserted, deleted, or changing its
+  `started_at` or `ended_at`, because that session times the delegating call.
+
+A write that adds, changes or links tool calls advances the transcript revision.
+A rewrite of an unchanged transcript does not, but it rebuilds the tool call
+rows it touches, and their classification can change or disappear. So
+`replaceSessionMessagesTx` and `applySessionMessageDiffTx` journal the session
+with `journalConversationToolSessionTx` whenever they rebuild tool call rows. A
+new write path that changes a summary input without advancing the transcript
+revision needs the same call. Do not add row triggers on `tool_calls` inserts or
+deletes. A change to a session's project reference is not journaled; its session
+change reports it. The subagent triggers on `sessions` read `tool_calls`, so a
+migration that rebuilds `tool_calls` must drop the `conversation_tool_*`
+triggers first; the next writable open recreates them. Each journal entry has
+its own revision, because a walk pages between revisions. The first export and
+each writable open journal sessions that have no row, one revision each. A
+rebuild keeps its own counter; `CopySessionMetadataFrom` does not copy it. An
+export position carries its own place in the journal (`tool_summary_after`,
+`tool_summary_through`), so a walk that starts asking for summaries replays the
+journal without replaying messages.
+
 Keep only digests and compact latest changes, not a body event log; bounded body
 reads take text from the archived message at the projected ordinal and reject it
 when its digest no longer matches the pinned revision. Project-only changes
@@ -908,13 +941,13 @@ changed, or more than 64 sessions changed. A background worker then reads all
 history in that timezone to rebuild the cache and claim coverage; see
 [Usage cache backfill](background-work.md#usage-cache-backfill). Cache format 24
 converts SQLite caches from cache formats 21 through 23 and keeps their facts.
-Formats 21 and 22 rebuild daily rollups once; format 23 keeps them. Older formats
-and corrupt or incompatible caches rebuild. A copy failure leaves the old cache
-for a retry on the next launch. Both implementations are co-maintained under the
-same behavior contract: daily usage, top sessions,
-billed session counts, relaxed matching counts, and per-session usage must
-remain observably equal. The `pgtest` complete-result parity fixture is the
-acceptance boundary. Track the PostgreSQL-native optimization in
+Formats 21 and 22 rebuild daily rollups once; format 23 keeps them. Older
+formats and corrupt or incompatible caches rebuild. A copy failure leaves the
+old cache for a retry on the next launch. Both implementations are co-maintained
+under the same behavior contract: daily usage, top sessions, billed session
+counts, relaxed matching counts, and per-session usage must remain observably
+equal. The `pgtest` complete-result parity fixture is the acceptance boundary.
+Track the PostgreSQL-native optimization in
 [issue #1451](https://github.com/kenn-io/agentsview/issues/1451).
 
 The usage cache filename is derived from its format version and the archive
@@ -1146,10 +1179,10 @@ and deletes, message content-length repairs, and signal updates advance the
 analytics counter. Message changes also advance the session transcript revision.
 PostgreSQL uses its session journal, hosted PostgreSQL uses its tenant identity,
 selection, and corpus revisions, DuckDB uses its mirror stamp, and ClickHouse
-uses session and message row identities to invalidate Trends reports.
-Remote DuckDB through Quack reads Trends fresh because it has no reliable
-freshness token. Read-only archives and reports filtered by active, stale, or
-unclean termination status bypass this cache.
+uses session and message row identities to invalidate Trends reports. Remote
+DuckDB through Quack reads Trends fresh because it has no reliable freshness
+token. Read-only archives and reports filtered by active, stale, or unclean
+termination status bypass this cache.
 
 PostgreSQL keeps ongoing Activity reports' per-session activity and raw usage
 inputs in memory with a 256 MiB estimated-size budget. Each session keeps its
@@ -1165,9 +1198,9 @@ prices and pricing metadata within the same budget. A changed input or price, a
 clock rewind, or the clock passing a usage row rebuilds the survivor prices.
 When those prices exceed the budget, the raw inputs remain eligible for reuse.
 Before survivor prices were retained, a scratch database of 100,000 sessions and
-2.6 million candidates over seven months used 71 MiB for kept activity. A refresh
-with ten changed sessions spent 90 ms pairing instead of 3.2 s and 209 ms
-sweeping instead of 1.0 s. Journal replacement, a changed gap cap, and
+2.6 million candidates over seven months used 71 MiB for kept activity. A
+refresh with ten changed sessions spent 90 ms pairing instead of 3.2 s and 209
+ms sweeping instead of 1.0 s. Journal replacement, a changed gap cap, and
 unavailable or regressed revisions rebuild the inputs. Large change sets use a
 full read, and inputs above the budget aren't retained. Hosted stores and
 transaction views use their existing reads.
@@ -1262,12 +1295,12 @@ Usage SQL reads each message's output tokens and billed web searches from
 message write fills them with `usagefacts.ParseTokenUsage`, the parser the Go
 usage code reads with. Do not extract them from `token_usage` in read SQL.
 Copies made in SQL, such as the orphan copy during resync, fill them with the
-`agentsview_usage_output_tokens` and `agentsview_usage_web_search_requests`
-SQL functions, which compute the same values.
+`agentsview_usage_output_tokens` and `agentsview_usage_web_search_requests` SQL
+functions, which compute the same values.
 
-An archive written before these columns existed gains them on its next
-writable open, which fills them for every message in the same transaction.
-PostgreSQL and DuckDB store the same counters at push.
+An archive written before these columns existed gains them on its next writable
+open, which fills them for every message in the same transaction. PostgreSQL and
+DuckDB store the same counters at push.
 
 ### Sidebar tree index
 
@@ -1495,9 +1528,10 @@ the SQL.
 - Store frustration-marker counts at push and rebuild when the counting rules
   change.
 - Read message token counters from the `messages.usage_*` columns, which push
-  fills with `usagefacts.ParseTokenUsage`, the parser SQLite reads with. Do not
-  extract them from `token_usage` in read SQL. Schema version 29 rebuilds the
-  mirror to fill them. The harness-recorded cost is still read from the JSON.
+  fills with `usagefacts.ParseTokenUsage`, the parser SQLite reads with. Do
+  not extract them from `token_usage` in read SQL. Schema version 29 rebuilds
+  the mirror to fill them. The harness-recorded cost is still read from the
+  JSON.
 - Replace whole sessions during incremental updates and gate them with
   per-session fingerprints. Do not add per-table, per-column, or diff-based
   updates.
@@ -1661,8 +1695,8 @@ Because each test owns a database, the tests run in parallel:
   from `testPGSchemaURL(t, schema)`. On PostgreSQL that database is a copy of
   a template in which `EnsureSchema` already created `schema`. Copying and the
   test's own `EnsureSchema`, which finds the schema current, take about 20 ms;
-  creating the schema takes about 90 ms. `testPGStoreURL(t)` does this for
-  the store schema, and `newHostedFixture` does it for tenants through
+  creating the schema takes about 90 ms. `testPGStoreURL(t)` does this for the
+  store schema, and `newHostedFixture` does it for tenants through
   `testPGHostedURL`.
 - Each schema name gets one template, built once per test binary by the first
   test that asks for it and dropped at exit. Tests share a template only when
@@ -1675,8 +1709,8 @@ Because each test owns a database, the tests run in parallel:
   the schema on later calls, such as one per subtest.
 - Tests of how `EnsureSchema` creates, upgrades, or repairs a schema use
   `testPGURL(t)`, so the code under test runs on an empty database.
-- CockroachDB has no `CREATE DATABASE ... TEMPLATE`, so there every test gets
-  an empty database and creates its schema itself.
+- CockroachDB has no `CREATE DATABASE ... TEMPLATE`, so there every test gets an
+  empty database and creates its schema itself.
 - Leave out `t.Parallel()` when the test changes process-wide state, such as
   `t.Setenv`, `time.Local`, `log.SetOutput`, `db.SetUserAutomationPrefixes`,
   or `pricing.SetConfiguredAliases`. Go runs those tests one at a time before
@@ -1689,10 +1723,9 @@ Because each test owns a database, the tests run in parallel:
   `max_connections / 8` and `max_connections * max_locks_per_transaction / 2048`
   tests, with at least one slot. The default settings permit three tests, so
   the CI service and `docker-compose.test.yml` set
-  `max_locks_per_transaction=256`, which permits 12.
-  Slot files in the system temporary directory, keyed by server address, share
-  this limit across test processes. CockroachDB has no shared lock table and
-  no slots.
+  `max_locks_per_transaction=256`, which permits 12. Slot files in the system
+  temporary directory, keyed by server address, share this limit across test
+  processes. CockroachDB has no shared lock table and no slots.
 - Run CockroachDB with an in-memory store
   (`start-single-node --store=type=mem,size=4GiB`). Schema setup takes about
   10 s per test there, against 86 s on a disk store.

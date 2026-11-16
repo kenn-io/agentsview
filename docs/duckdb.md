@@ -169,8 +169,9 @@ through `duckdb status` or `duckdb serve` pointed at the Quack URL.
 Safety defaults:
 
 - The Quack listener binds to loopback (`127.0.0.1`) by default.
-- A token is required from `--token`, `AGENTSVIEW_DUCKDB_TOKEN`, or
-  `[duckdb].token`; the token value is never printed.
+- A token is required from `--token`, `AGENTSVIEW_DUCKDB_TOKEN`,
+  `[duckdb].token`, or the file `[duckdb].token_file` names; the token value
+  is never printed.
 - Binding to a non-loopback address requires the explicit
   `--allow-insecure` flag. Quack speaks plain HTTP, so put it
   behind TLS, a VPN, or an SSH tunnel before exposing it beyond
@@ -209,6 +210,7 @@ projects = ["alpha", "beta"]
 | `path`             | `~/.agentsview/sessions.duckdb` | Local DuckDB mirror file                                                                    |
 | `url`              |                                 | Remote Quack endpoint for `duckdb status` and `duckdb serve` (`quack:` URI); read side only — `duckdb push` rejects it |
 | `token`            |                                 | Quack authentication token                                                                  |
+| `token_file`       |                                 | Private file holding the Quack token, instead of `token`; see [Read secrets from files](/docs/configuration/#read-secrets-from-files) |
 | `machine_name`     | Installation ID                 | Explicit machine key for legacy local-sentinel rows; new sessions retain their recorded installation ID                |
 | `allow_insecure`   | `false`                         | Allow plain-HTTP Quack beyond loopback                                                      |
 | `attach_timeout`   | `20s`                           | Bound on a remote Quack `ATTACH` (and its TCP preflight); `0` uses the default, a negative value disables the guard |

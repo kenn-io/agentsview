@@ -285,6 +285,7 @@ Set it to `"0"` to keep syncing while idle. Restart the server after changing it
 | `local_machine_name`                | Optional display-name override; takes effect after a daemon restart                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `cursor_secret`                     | Auto-generated HMAC key for pagination cursor signing                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `cursor_admin_api_key`              | Cursor Admin API key used by `agentsview source cursor sync-usage`                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `cursor_admin_api_key_file`         | File holding the Cursor Admin API key, as an alternative to `cursor_admin_api_key`; see [Read secrets from files](#read-secrets-from-files) |
 | `cursor_admin_email`                | Optional default Cursor Admin usage filter by member email                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `cursor_admin_user_id`              | Optional default Cursor Admin usage filter by member user ID                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `github_token`                      | Optional saved GitHub token for Gist publishing                                                                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -313,7 +314,7 @@ Set it to `"0"` to keep syncing while idle. Restart the server after changing it
 | `[integrations.docbank]` | Optional lookup of transcript image digests in Docbank; see [Find transcript images in Docbank](/docs/configuration/#find-transcript-images-in-docbank) |
 | `[insights]`                        | Optional generated-insights endpoint and model, plus `default_agent`, the agent CLI new reports start with; local loopback HTTP is allowed, remote plaintext requires `allow_http = true`, and endpoint failures do not retry through a CLI — see [Recall](/docs/recall/#current-surface)                                                                                                                                                                                        |
 | `[friction]`                        | Opt-in Friction Log review; set `enabled = true` to review changed sessions in the background after each sync — see [Friction Log](#friction-log)                                                                                                                                                                                                                                                                                                                                |
-| `[kata]`                            | Optional Kata issue-tracker connection; off by default; HTTPS needs `token_env` — see [Kata](/docs/kata/)                                         |
+| `[kata]`                            | Optional Kata issue-tracker connection; off by default; HTTPS needs `token_env` or `token_file` — see [Kata](/docs/kata/)                                         |
 | `[[remote_hosts]]`                  | Remote machines synced by a bare `agentsview source sync` — see [CLI Reference](/docs/commands/#agentsview-sync)                                                                                                                                                                                                                                                                                                                                                                 |
 | `[agents.claude-ai]`                | Organizations Claude.ai Sync imports — see [Choose which organizations Sync imports](/docs/chat-import/#choose-which-organizations-sync-imports) |
 | `[[session_sources]]`               | Additional filesystem session roots with per-root machine keys — see [Filesystem Session Sync](/docs/filesystem-sync/)                                                                                                                                                                                                                                                                                                                                                           |
@@ -355,6 +356,69 @@ one and saves it as `auth_token` in `config.toml`.
     Older configs may still contain `remote_access = true`. AgentsView still reads
     that legacy key for backward compatibility, but new setups should use
     `require_auth = true`.
+
+### Read secrets from files
+
+Connection secrets can come from a file instead of an environment variable or
+the config file itself. This suits a long-running server: the secret stays out
+of `config.toml` and out of whatever starts the process. Each secret has a
+`*_file` key next to its existing key:
+
+| Secret                                     | Existing key           | File key                    |
+| ------------------------------------------ | ---------------------- | --------------------------- |
+| `[kata]` bearer token                      | `token_env`            | `token_file`                |
+| `[integrations.docbank]` API key           | `api_key_env`          | `api_key_file`              |
+| `[insights]` API key                       | `api_key_env`          | `api_key_file`              |
+| `[vector.embeddings.servers.<name>]` key   | `api_key_env`          | `api_key_file`              |
+| `[recall.extract.servers.<name>]` key      | `api_key_env`          | `api_key_file`              |
+| `[duckdb]` Quack token                     | `token`                | `token_file`                |
+| Cursor Admin API key (top level)           | `cursor_admin_api_key` | `cursor_admin_api_key_file` |
+
+```toml
+[kata]
+enabled = true
+endpoint = "https://kata.example.com"
+token_file = "~/.config/agentsview/kata-token"
+```
+
+- Set one source per secret. Setting both keys for the same secret is a
+  configuration error; AgentsView never picks one for you.
+- A path that starts with `~/` is under your home directory.
+- AgentsView drops trailing line breaks (CR and LF) and keeps every other byte.
+  An empty or blank file, a file over 64 KiB, or a file containing a NUL byte
+  is an error.
+- The file must be private. On macOS and Linux, a file you own needs mode
+  `0600` or `0400`, and no directory on its path may be writable by group or
+  others. A umask of `002` creates group-writable directories, so check the
+  parent directory too. Files owned by root, such as systemd credentials and
+  Kubernetes secret mounts, work when only root can write them. On Windows,
+  only your user may have access to the file.
+- When a file is missing or fails these checks, the error names the setting,
+  the path, and the reason. Errors and logs never include the secret.
+
+When AgentsView reads the file:
+
+- `[kata]`, `[integrations.docbank]`, `[insights]`, `[vector]`, and
+  `[recall.extract]` read their files when the configuration loads, skipping
+  sections that are turned off. An unusable file is treated like any other
+  invalid setting: it stops the server and commands that use the section,
+  and other commands print a warning. The server reads the files at startup,
+  so restart it after you replace one.
+- An embeddings or recall extraction server whose section a command did not
+  load reads its file when the command starts using that server. An unusable
+  file then stops that work with an error; it never falls back to an
+  anonymous request.
+- `[duckdb] token_file` is read only when a command authenticates to Quack,
+  such as `duckdb quack serve` or `duckdb status` with a `url`. Local mirror
+  work never reads it, and `duckdb quack serve --token` takes precedence over
+  it. `cursor_admin_api_key_file` is read when `source cursor sync-usage`
+  runs.
+- `AGENTSVIEW_DUCKDB_TOKEN` and `AGENTSVIEW_CURSOR_ADMIN_API_KEY` replace the
+  config-file values, so the file is not read while they are set.
+
+The `AGENTSVIEW_*_FILE` variables of a
+[container deployment](#container-deployment) follow their own rules, described
+in that section.
 
 ### Container deployment
 
@@ -549,6 +613,10 @@ cursor_admin_api_key = "key_xxxxx"
 cursor_admin_email = "you@example.com" # optional
 cursor_admin_user_id = "152683922"     # optional
 ```
+
+To keep the key out of `config.toml`, set `cursor_admin_api_key_file` to a
+private file holding it instead; see
+[Read secrets from files](#read-secrets-from-files).
 
 Environment variables take precedence over the config file:
 
@@ -2819,8 +2887,10 @@ api_key_env = "DOCBANK_API_KEY"
 ```
 
 Set `DOCBANK_API_KEY` in the environment of each consumer, including the
-daemon, CLI, and MCP server. Both `url` and `api_key_env` are required to enable
-lookup. Omit the section to disable it. The server refuses to start with an
+daemon, CLI, and MCP server, or replace `api_key_env` with `api_key_file`
+naming a private file that holds the key; see
+[Read secrets from files](#read-secrets-from-files). Lookup needs `url` and one
+of `api_key_env` or `api_key_file`. Omit the section to disable it. The server refuses to start with an
 invalid section; other commands print a warning and leave lookup off. CLI
 commands that connect to a daemon use the daemon's integration configuration.
 
@@ -2832,6 +2902,7 @@ lookup. Connections through a signed reader listener omit this tool.
 | `integrations.docbank.url`         | Docbank API base URL. HTTPS, or HTTP under the policy below.         |
 | `integrations.docbank.web_url`     | Optional browser base URL for version links.                         |
 | `integrations.docbank.api_key_env` | Environment variable containing the API key.                         |
+| `integrations.docbank.api_key_file` | Private file containing the API key, instead of `api_key_env`.      |
 | `integrations.docbank.allow_http`  | Allow plaintext HTTP to any host. Default: `false`.                  |
 
 HTTPS and loopback HTTP work by default. For a trusted private container

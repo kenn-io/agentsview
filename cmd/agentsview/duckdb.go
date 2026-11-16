@@ -558,7 +558,7 @@ func runDuckDBQuackServe(ctx context.Context, cfg DuckDBQuackServeConfig) {
 	); err != nil {
 		fatal("duckdb quack serve: %v", err)
 	}
-	token, err := resolveQuackServeToken(cfg.Token, duckCfg.Token)
+	token, err := resolveQuackServeToken(cfg.Token, duckCfg)
 	if err != nil {
 		fatal("duckdb quack serve: %v", err)
 	}
@@ -770,16 +770,22 @@ func writeDuckDBQuackServeStartup(
 	fmt.Fprintln(out, "Press Ctrl+C to stop.")
 }
 
+// resolveQuackServeToken prefers --token, so a flag still works when the
+// configured token_file cannot be read.
 func resolveQuackServeToken(
-	flagToken, configuredToken string,
+	flagToken string, duckCfg config.DuckDBConfig,
 ) (string, error) {
 	if flagToken != "" {
 		return flagToken, nil
 	}
+	configuredToken, err := duckCfg.ResolveToken()
+	if err != nil {
+		return "", err
+	}
 	if configuredToken != "" {
 		return configuredToken, nil
 	}
-	return "", errors.New("token is required; set --token, AGENTSVIEW_DUCKDB_TOKEN, or [duckdb].token")
+	return "", errors.New("token is required; set --token, AGENTSVIEW_DUCKDB_TOKEN, [duckdb].token, or [duckdb].token_file")
 }
 
 func identifyQuackNode(ctx context.Context, conn *sql.DB, machine string) {

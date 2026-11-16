@@ -2128,11 +2128,15 @@ checkpoint and coverage rules.
 ```bash
 agentsview export conversations changes
 agentsview export conversations changes --checkpoint SAVED_CHECKPOINT
+agentsview export conversations changes --tool-summaries
 agentsview export conversations message SESSION_ID MESSAGE_ID \
   --database-id DATABASE_ID --revision REVISION
 ```
 
 These commands read the local archive and do not send content to another system.
+`--tool-summaries` adds each session's tool call totals and skills to the
+listing; see
+[Session tool summaries](/docs/conversation-export/#session-tool-summaries).
 `message` masks detected secrets by default and marks such bodies with
 `redacted: true`; pass `--reveal` to return the stored text unchanged. Existing
 session summary and activity exports remain content-free.
