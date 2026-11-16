@@ -1,3 +1,9 @@
+.markdown .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.25em 0;
+}
+
 /* Reset */
 *,
 *::before,

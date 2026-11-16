@@ -1,6 +1,6 @@
 /** Attach native highlights to a mounted block without rewriting its DOM. */
 import type { Attachment } from "svelte/attachments";
-import { domText, findOccurrences, type TextOccurrence } from "./dom-text.js";
+import { domText, findOccurrences, searchTextWalker, type TextOccurrence } from "./dom-text.js";
 import { highlightRegistry } from "./highlight-registry.js";
 import { createDetailsReveal } from "./details-reveal.js";
 import "./search.css";
@@ -32,10 +32,7 @@ export function mapOccurrences(
   occurrences: readonly TextOccurrence[],
 ): StaticRangeInit[] {
   const spans: TextSpan[] = [];
-  const walker = root.ownerDocument.createTreeWalker(
-    root,
-    NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
-  );
+  const walker = searchTextWalker(root);
   let node: Node | null = root;
   let offset = 0;
   while (node) {

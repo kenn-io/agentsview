@@ -10,6 +10,7 @@ import {
 // kit-ui-check-ignore: app renderer sanitizes the custom marked output above; migrating to kit-ui createMarkdownRenderer needs a dedicated behavior-preserving pass.
 import DOMPurify from "dompurify";
 import { LRUCache } from "./cache.js";
+import { mathExtension } from "./math.js";
 import { escapeHtml as escapeHTML } from "@kenn-io/kit-ui";
 import { AssetsService } from "../api/generated/index.js";
 
@@ -763,6 +764,7 @@ function createParser(renderUnknownXmlBlocksAsPreformatted: boolean): Marked {
     gfm: true,
     breaks: true,
   });
+  instance.use(mathExtension());
 
   instance.use({
     extensions: [

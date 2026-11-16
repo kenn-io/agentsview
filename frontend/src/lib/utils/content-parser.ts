@@ -2,6 +2,7 @@ import type { DbMessage as Message, DbToolCall as ToolCall } from "../api/genera
 import type { BlockType } from "../stores/ui.svelte.js";
 import { LRUCache } from "./cache.js";
 import { isHookSuccessMessage, isSystemBoundaryMessage } from "./messages.js";
+import { isMathFence, renderMathFence } from "./math.js";
 
 export type SegmentType = "text" | "thinking" | "tool" | "code" | "skill";
 
@@ -237,11 +238,18 @@ function codeBlockMatches(text: string): Match[] {
     matches.push({
       start,
       end: close.end,
-      segment: {
-        type: "code",
-        content: text.slice(contentStart, close.contentEnd),
-        label: info.trim() || undefined,
-      },
+      segment:
+        isMathFence(info.trim()) &&
+        renderMathFence(text.slice(contentStart, close.contentEnd)) !== undefined
+          ? {
+              type: "text",
+              content: text.slice(start, close.end),
+            }
+          : {
+              type: "code",
+              content: text.slice(contentStart, close.contentEnd),
+              label: info.trim() || undefined,
+            },
     });
     pos = close.end;
   }

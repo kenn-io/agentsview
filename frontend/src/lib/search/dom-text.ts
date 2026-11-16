@@ -7,6 +7,18 @@ export interface TextOccurrence {
 const SHOW_ELEMENT = 0x1;
 const SHOW_TEXT = 0x4;
 
+/** KaTeX's hidden accessibility tree duplicates the visible equation. */
+export function searchTextWalker(root: Node): TreeWalker {
+  const document = root.nodeType === 9 ? (root as Document) : root.ownerDocument!;
+  return document.createTreeWalker(root, SHOW_ELEMENT | SHOW_TEXT, {
+    acceptNode(node) {
+      return node.nodeType === 1 && (node as Element).classList.contains("katex-mathml")
+        ? 2 // FILTER_REJECT: omit the entire hidden subtree.
+        : 1;
+    },
+  });
+}
+
 function appendNodeText(node: Node, parts: string[]): void {
   if (node.nodeType === 3) {
     parts.push(node.nodeValue ?? "");
@@ -30,7 +42,7 @@ export function domText(root: Node): string {
   const parts: string[] = [];
   appendNodeText(root, parts);
 
-  const walker = document.createTreeWalker(root, SHOW_ELEMENT | SHOW_TEXT);
+  const walker = searchTextWalker(root);
   let node = walker.nextNode();
   while (node) {
     appendNodeText(node, parts);

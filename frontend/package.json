@@ -31,6 +31,7 @@
     "dompurify": "3.4.17",
     "eventsource": "^5.0.0",
     "eventsource-parser": "^4.0.0",
+    "katex": "0.19.1",
     "layerchart": "2.9.1",
     "marked": "18.1.2",
     "mermaid": "12.2.0",

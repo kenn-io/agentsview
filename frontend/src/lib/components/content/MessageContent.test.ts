@@ -559,7 +559,7 @@ describe("MessageContent filtered code fences", () => {
       "First:",
       "",
       "```latex",
-      "\\alpha",
+      "\\subsection{Alpha}",
       "```",
       "",
       "Middle",
@@ -581,7 +581,7 @@ describe("MessageContent filtered code fences", () => {
     await tick();
 
     blocks = document.querySelectorAll<HTMLElement>(".code-fence-block");
-    expect(blocks[0]!.querySelector(".code-content")?.textContent).toContain("\\alpha");
+    expect(blocks[0]!.querySelector(".code-content")?.textContent).toContain("\\subsection{Alpha}");
     expect(normalizedText(blocks[0]!.querySelector(".code-fence-toggle"))).toContain("Collapse");
     expect(blocks[0]!.querySelector(".code-fence-toggle")?.getAttribute("aria-expanded")).toBe(
       "true",
@@ -593,7 +593,7 @@ describe("MessageContent filtered code fences", () => {
 
     blocks = document.querySelectorAll<HTMLElement>(".code-fence-block");
     expect(blocks[1]!.querySelector(".code-content")?.textContent).toContain("print('x')");
-    expect(blocks[0]!.querySelector(".code-content")?.textContent).toContain("\\alpha");
+    expect(blocks[0]!.querySelector(".code-content")?.textContent).toContain("\\subsection{Alpha}");
 
     blocks[0]!.querySelector<HTMLButtonElement>(".code-fence-toggle")!.click();
     await tick();

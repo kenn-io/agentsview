@@ -823,6 +823,26 @@ so matches can be highlighted.
 
 ![Copy button on a code block](/docs/assets/generated/screenshots/code-block-copy-btn.png)
 
+### Math
+
+Session messages render KaTeX math in both the desktop app and web viewer.
+Inline expressions accept `$...$` and `\(...\)`. Display expressions accept
+`$$...$$` and `\[...\]`, on one line or across multiple lines. Bare KaTeX
+equation environments such as `equation`, `align`, `alignat`, and `gather`
+(including their starred forms) also render, as do `math`, `latex`, and `tex`
+code fences containing math.
+
+Fractions, matrices, cases, aligned equations, and other
+[KaTeX-supported functions](https://katex.org/docs/supported.html) work within
+these formats. The renderer bundles its fonts locally and works offline.
+Unsupported commands and malformed expressions remain readable as source.
+Full LaTeX documents and additional LaTeX packages are not compiled.
+
+Inline code and ordinary code fences keep their literal contents. Escape a
+dollar sign as `\$` to show it literally. Dollar-delimited inline math must
+have no whitespace just inside its delimiters; a closing dollar cannot be
+followed by a digit, so prices such as `$5 and $10` stay readable.
+
 ### Block-Type Filtering
 
 Click the filter icon in the message viewer header to open a dropdown that
