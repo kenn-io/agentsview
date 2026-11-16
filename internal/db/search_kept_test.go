@@ -46,6 +46,27 @@ func TestSearchKeptSelections(t *testing.T) {
 	require.Zero(t, readOnlyLoads.Load())
 }
 
+func TestSearchKeptAfterUsageEvent(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "session", "project")
+	insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "needle"})
+	reads := 0
+	d.afterSearchRead = func() { reads++ }
+	filter := SearchFilter{Query: "needle"}
+	page, err := d.Search(ctx, filter)
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	require.Equal(t, 1, reads)
+	_, err = d.getWriter().ExecContext(ctx, `INSERT INTO usage_events(session_id,source,model,output_tokens) VALUES('session','session','model-x',7)`)
+	require.NoError(t, err)
+	repeat, err := d.Search(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, page, repeat)
+	require.Equal(t, 1, reads)
+}
+
 func TestSearchKeptCJKAvailability(t *testing.T) {
 	if !simpleFTSRuntimeConfig.available() {
 		t.Skip("simple FTS runtime is not installed")
