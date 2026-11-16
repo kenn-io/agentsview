@@ -98,15 +98,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 	}
 	return s.searchReads.DoChecked(ctx, f.Slot(), version, func(ctx context.Context) (db.SearchPage, bool, error) {
 		ctx = context.WithValue(ctx, partsSnapshotKey{}, snapshot)
-		return kept.LoadJSON(&s.usageDisk, "search|"+f.Slot(), version, func() bool {
-			return s.usageCaptureStable(ctx, "sessions", "messages", "image_text")
-		}, func() (db.SearchPage, error) {
-			page, err := s.search(ctx, f)
-			if s.afterSearch != nil {
-				s.afterSearch()
-			}
-			return page, err
-		})
+		return kept.LoadJSON(&s.usageDisk, "search|"+f.Slot(), version, nil, func() (db.SearchPage, error) { return s.search(ctx, f) })
 	})
 }
 
