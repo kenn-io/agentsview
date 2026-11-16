@@ -23,10 +23,27 @@ func WordCandidateSQL(b *QueryBuilder, column string, q ContentWords, all bool) 
 
 // WordRegexSQL requires every phrase and, when all is true, every word.
 func WordRegexSQL(b *QueryBuilder, raw string, q ContentWords, all bool) string {
+	return wordRegexSQL(b, raw, q, all, false)
+}
+
+// WordASCIIRegexSQL admits Unicode boundary false positives for later validation.
+func WordASCIIRegexSQL(b *QueryBuilder, raw string, q ContentWords) string {
+	return wordRegexSQL(b, raw, q, true, true)
+}
+
+func wordRegexSQL(b *QueryBuilder, raw string, q ContentWords, all, ascii bool) string {
 	parts := []string{"1=1"}
+	add := func(pattern string) {
+		if ascii {
+			pattern = strings.ReplaceAll(pattern, `[^\p{L}\p{N}]`, `[^a-zA-Z0-9]`)
+			parts = append(parts, b.RegexPredicate(raw, pattern))
+		} else {
+			parts = append(parts, wordPredicate(b, raw, pattern))
+		}
+	}
 	if all {
 		for _, forms := range q.Terms {
-			parts = append(parts, wordPredicate(b, raw, boundedPattern(b, compactForms(b, forms))))
+			add(boundedPattern(b, compactForms(b, forms)))
 		}
 	}
 	for _, phrase := range q.Phrases {
@@ -35,7 +52,7 @@ func WordRegexSQL(b *QueryBuilder, raw string, q ContentWords, all bool) string 
 			words[i] = regexp.QuoteMeta(words[i])
 		}
 		if len(words) > 0 {
-			parts = append(parts, wordPredicate(b, raw, boundedPattern(b, words...)))
+			add(boundedPattern(b, words...))
 		}
 	}
 	return "(" + strings.Join(parts, " AND ") + ")"

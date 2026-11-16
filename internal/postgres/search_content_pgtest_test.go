@@ -77,6 +77,11 @@ func TestSearchContentDeepExactPage(t *testing.T) {
 	assert.Equal(t, "word-tier", page.Matches[1].SessionID)
 	assert.Equal(t, 2, page.Matches[1].MatchedWords)
 	assert.Zero(t, page.NextCursor)
+	page, err = reader.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "invoice rounding", Project: "tier-boundary", Cursor: 5, Limit: 1})
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Equal(t, "word-tier", page.Matches[0].SessionID)
+	assert.Zero(t, page.NextCursor)
 }
 
 func TestSearchContentSnapshotDuringUpdate(t *testing.T) {

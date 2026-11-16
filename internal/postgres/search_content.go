@@ -206,6 +206,22 @@ func (s *Store) searchContentSubstringPG(
 		") sub ORDER BY sort_ts DESC NULLS LAST, session_id ASC, ordinal ASC, src ASC, row_id ASC, snippet ASC " +
 		"LIMIT " + limitP + " OFFSET " + offsetP
 
+	exactCount := 0
+	if ranked && f.Cursor > 0 {
+		countQuery := "WITH scoped AS (SELECT id FROM sessions WHERE " + scopeWhere + ") SELECT count(*) FROM (" + strings.Join(branches, " UNION ALL ") + ") sub"
+		if err := s.pg.QueryRowContext(ctx, countQuery, countArgs...).Scan(&exactCount); err != nil {
+			return db.ContentSearchPage{}, fmt.Errorf("pg content count: %w", err)
+		}
+		if exactCount <= f.Cursor {
+			originalCursor := f.Cursor
+			f.Cursor -= exactCount
+			page, err := s.searchContentWordsPG(ctx, f, words, scopeWhere, scopeArgs)
+			if page.NextCursor != 0 {
+				page.NextCursor = originalCursor + f.Limit
+			}
+			return page, err
+		}
+	}
 	page, err := s.scanPGContentMatches(ctx, query, pb.args, limit, offset,
 		func(body string) string { return pgSubstringSnippet(f, body) })
 	if !ranked || err != nil {
@@ -214,12 +230,8 @@ func (s *Store) searchContentSubstringPG(
 	if page.NextCursor != 0 {
 		return page, nil
 	}
-	exactCount := len(page.Matches)
-	if f.Cursor > 0 {
-		countQuery := "WITH scoped AS (SELECT id FROM sessions WHERE " + scopeWhere + ") SELECT count(*) FROM (" + strings.Join(branches, " UNION ALL ") + ") sub"
-		if err := s.pg.QueryRowContext(ctx, countQuery, countArgs...).Scan(&exactCount); err != nil {
-			return db.ContentSearchPage{}, fmt.Errorf("pg content count: %w", err)
-		}
+	if f.Cursor == 0 {
+		exactCount = len(page.Matches)
 	}
 	originalCursor, originalLimit := f.Cursor, f.Limit
 	f.Cursor = max(0, f.Cursor-exactCount)

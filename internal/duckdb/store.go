@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1173,7 +1174,15 @@ func (s *Store) collectContentSubstringPass(
 			var contentPred string
 			if ranked {
 				b := db.NewQueryBuilder(db.DuckDBQueryDialect(), 0)
-				contentPred = db.WordFilterSQL(b, "COALESCE(m.dialogue_text, m.content)", f, words, all)
+				column := "COALESCE(m.dialogue_text, m.content)"
+				if all {
+					if f.Mode != "fts" {
+						contentPred = b.ContainsPredicate(column, f.Pattern) + " OR "
+					}
+					contentPred = "(" + contentPred + "(" + db.WordCandidateSQL(b, column, words, true) + " AND " + db.WordASCIIRegexSQL(b, column, words) + "))"
+				} else {
+					contentPred = db.WordFilterSQL(b, column, f, words, false)
+				}
 				args = append(append(args, b.Args()...), scopeArgs...)
 			} else {
 				contentPred = addSearchArgs("COALESCE(m.dialogue_text, m.content)")
@@ -1284,13 +1293,45 @@ func (s *Store) collectContentSubstringPass(
 		ORDER BY sort_ts DESC, session_id ASC, ordinal ASC,
 			src ASC, row_id ASC, call_index ASC, event_index ASC, body ASC
 		LIMIT ? OFFSET ?`
-	if ranked {
+	if ranked && all {
+		b := db.NewQueryBuilder(db.DuckDBQueryDialect(), 0)
+		tier := "1"
+		if f.Mode != "fts" {
+			tier = "CASE WHEN " + b.ContainsPredicate("body", f.Pattern) + " THEN 0 ELSE 1 END"
+		}
+		args = append(args, b.Args()...)
+		query = `WITH candidates AS (` + strings.Join(branches, " UNION ALL ") + `),
+			bounded AS (
+				SELECT candidates.*, ` + tier + ` AS tier FROM candidates
+			)
+			SELECT session_id, project, agent, location, role, tool_name,
+				ordinal, ts, body, CASE WHEN tier = 0 THEN -` + strconv.Itoa(len(words.Terms)) + ` ELSE ` + strconv.Itoa(len(words.Terms)) + ` END AS n
+			FROM bounded
+			ORDER BY tier, sort_ts DESC, session_id ASC, ordinal ASC,
+				src ASC, row_id ASC, call_index ASC, event_index ASC, body ASC
+			LIMIT ?`
+	} else if ranked {
 		b := db.NewQueryBuilder(db.DuckDBQueryDialect(), 0)
 		query = db.WordRankedSQL(b, branches, f, words, all)
 		args = append(args, b.Args()...)
 	}
-	args = append(args, f.Limit+1, f.Cursor)
-	return s.scanContentMatches(ctx, query, args, func(body string) string {
+	var accept func(*db.ContentMatch, string) bool
+	skip := 0
+	if ranked && all {
+		args = append(args, f.Cursor+f.Limit+1)
+		skip = f.Cursor
+		accept = func(m *db.ContentMatch, body string) bool {
+			// Exact matches carry a negative count so they bypass word checks.
+			if m.MatchedWords < 0 {
+				m.MatchedWords = -m.MatchedWords
+				return true
+			}
+			return m.Location != "message" || db.ContentWordsMatch(body, words)
+		}
+	} else {
+		args = append(args, f.Limit+1, f.Cursor)
+	}
+	return s.scanContentMatches(ctx, query, args, accept, skip, func(body string) string {
 		if ranked {
 			start, end := db.WordSnippetRange(body, f.Pattern, words)
 			return f.BuildSnippet(body, start, end)
@@ -1561,16 +1602,16 @@ func (s *Store) collectContentSource(
 }
 
 func (s *Store) scanContentMatches(
-	ctx context.Context, query string, args []any, makeSnippet func(string) string,
+	ctx context.Context, query string, args []any, accept func(*db.ContentMatch, string) bool, skip int, makeSnippet func(string) string,
 ) ([]db.ContentMatch, error) {
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("duckdb content search: %w", err)
 	}
-	return scanDuckContentRows(rows, makeSnippet)
+	return scanDuckContentRows(rows, accept, skip, makeSnippet)
 }
 
-func scanDuckContentRows(rows *sql.Rows, makeSnippet func(string) string) ([]db.ContentMatch, error) {
+func scanDuckContentRows(rows *sql.Rows, accept func(*db.ContentMatch, string) bool, skip int, makeSnippet func(string) string) ([]db.ContentMatch, error) {
 	defer rows.Close()
 	var out []db.ContentMatch
 	for rows.Next() {
@@ -1581,6 +1622,13 @@ func scanDuckContentRows(rows *sql.Rows, makeSnippet func(string) string) ([]db.
 			&m.Location, &m.Role, &m.ToolName, &m.Ordinal,
 			&ts, &body, &m.MatchedWords); err != nil {
 			return nil, err
+		}
+		if accept != nil && !accept(&m, body) {
+			continue
+		}
+		if skip > 0 {
+			skip--
+			continue
 		}
 		m.Timestamp = formatDBTime(ts)
 		m.Snippet = makeSnippet(body)
