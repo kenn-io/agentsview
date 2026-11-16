@@ -87,12 +87,26 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 	if f.Limit <= 0 || f.Limit > db.MaxSearchLimit {
 		f.Limit = db.DefaultSearchLimit
 	}
-	version, ok, err := s.usageRowsVersion(ctx, []string{"sessions", "messages", "image_text"}, "")
+	snapshotCtx, err := s.withPartsSnapshot(ctx)
+	if err != nil {
+		return s.search(ctx, f)
+	}
+	snapshot := snapshotCtx.Value(partsSnapshotKey{}).(partsSnapshot)
+	version, ok, err := s.usageRowsVersion(snapshotCtx, []string{"sessions", "messages", "image_text"}, "")
 	if err != nil || !ok {
 		return s.search(ctx, f)
 	}
-	return s.searchReads.Do(ctx, f.Slot(), version, func(ctx context.Context) (db.SearchPage, error) {
-		return kept.LoadJSON(&s.usageDisk, "search|"+f.Slot(), version, func() (db.SearchPage, error) { return s.search(ctx, f) })
+	return s.searchReads.DoChecked(ctx, f.Slot(), version, func(ctx context.Context) (db.SearchPage, bool, error) {
+		ctx = context.WithValue(ctx, partsSnapshotKey{}, snapshot)
+		return kept.LoadJSON(&s.usageDisk, "search|"+f.Slot(), version, func() bool {
+			return s.usageCaptureStable(ctx, "sessions", "messages", "image_text")
+		}, func() (db.SearchPage, error) {
+			page, err := s.search(ctx, f)
+			if s.afterSearch != nil {
+				s.afterSearch()
+			}
+			return page, err
+		})
 	})
 }
 

@@ -319,10 +319,13 @@ func (s *Store) Search(
 	}
 
 	runtime := s.runtimeState()
-	page, handled, err := snapshotRetained(ctx, s, "search|"+f.Slot(), &runtime.search, &runtime.standbySearch, func(ctx context.Context, view *Store, version string) (db.SearchPage, error) {
-		// Search does not depend on the process-local pricing generation.
-		version = version[:strings.LastIndexByte(version, '|')+1] + "0"
-		return kept.LoadJSON(&s.trendsDisk, "search|"+f.Slot(), version, func() (db.SearchPage, error) { return view.search(ctx, f) })
+	page, handled, err := snapshotRetained(ctx, s, "search|"+f.Slot(), &runtime.search, &runtime.standbySearch, func(ctx context.Context, view *Store) (db.SearchPage, error) {
+		version := snapshotUsageVersion(ctx, view.pg, 0)
+		if version == "" {
+			return view.search(ctx, f)
+		}
+		page, _, err := kept.LoadJSON(&s.trendsDisk, "search|"+f.Slot(), version, nil, func() (db.SearchPage, error) { return view.search(ctx, f) })
+		return page, err
 	})
 	if handled || err != nil {
 		return page, err

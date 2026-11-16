@@ -56,12 +56,21 @@ func (r *Reads[T]) Put(slot, version string, value T) {
 
 // Do returns a kept value or loads it. Empty slots or versions bypass reuse.
 func (r *Reads[T]) Do(ctx context.Context, slot, version string, load func(context.Context) (T, error)) (T, error) {
+	return r.DoChecked(ctx, slot, version, func(ctx context.Context) (T, bool, error) {
+		value, err := load(ctx)
+		return value, true, err
+	})
+}
+
+// DoChecked retains a successful load only when it permits retention.
+func (r *Reads[T]) DoChecked(ctx context.Context, slot, version string, load func(context.Context) (T, bool, error)) (T, error) {
 	if err := ctx.Err(); err != nil {
 		var zero T
 		return zero, err
 	}
 	if slot == "" || version == "" {
-		return load(ctx)
+		value, _, err := load(ctx)
+		return value, err
 	}
 	r.init()
 	if values, ok := r.memo.Get(slot, version); ok {
@@ -71,8 +80,8 @@ func (r *Reads[T]) Do(ctx context.Context, slot, version string, load func(conte
 		if values, ok := r.memo.Get(slot, version); ok {
 			return values[0], nil
 		}
-		value, err := load(ctx)
-		if err == nil {
+		value, retain, err := load(ctx)
+		if err == nil && retain {
 			r.memo.Put(slot, version, []T{value})
 		}
 		return value, err

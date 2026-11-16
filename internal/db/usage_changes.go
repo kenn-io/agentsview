@@ -53,6 +53,7 @@ func usageChangeJournalSQL() (string, string) {
   FROM archive_metadata WHERE key = 'usage_change_revision'
  ON CONFLICT(session_id) DO UPDATE SET revision = excluded.revision;`
 	var drops, creates strings.Builder
+	drops.WriteString("DROP TRIGGER IF EXISTS trg_search_history_trg_sessions_usage_change_group_label;\n")
 	creates.WriteString(`INSERT OR IGNORE INTO archive_metadata (key, value) VALUES ('search_history_token', lower(hex(randomblob(16))));` + "\n")
 	// Older writers replace journal triggers but keep these search-owned triggers.
 	for _, event := range []string{"INSERT", "UPDATE"} {
@@ -78,7 +79,7 @@ func usageChangeJournalSQL() (string, string) {
 		if strings.HasPrefix(name, "trg_messages_search_dialogue") || name == "trg_sessions_search_first_message" {
 			body = searchCounterBody
 		}
-		searchToken := table == "sessions" && strings.HasPrefix(name, "trg_sessions_usage_change_")
+		searchToken := table == "sessions" && strings.HasPrefix(name, "trg_sessions_usage_change_") && name != "trg_sessions_usage_change_group_label"
 		if condition != "" {
 			condition = "WHEN " + condition
 		}

@@ -36,7 +36,7 @@ type snapshotResult[T any] struct {
 
 // A retained result is built entirely within the snapshot whose token
 // identifies it. Failed or unavailable journal probes use the direct path.
-func snapshotRetained[T any](ctx context.Context, s *Store, slot string, reads *kept.Reads[T], flights *kept.Flights[snapshotResult[T]], load func(context.Context, *Store, string) (T, error)) (T, bool, error) {
+func snapshotRetained[T any](ctx context.Context, s *Store, slot string, reads *kept.Reads[T], flights *kept.Flights[snapshotResult[T]], load func(context.Context, *Store) (T, error)) (T, bool, error) {
 	var zero T
 	if slot == "" || s.readTx != nil || s.hostedRelations {
 		return zero, false, nil
@@ -67,7 +67,7 @@ func snapshotRetained[T any](ctx context.Context, s *Store, slot string, reads *
 	return result.value, result.handled, err
 }
 
-func snapshotLoad[T any](ctx context.Context, s *Store, slot string, reads *kept.Reads[T], load func(context.Context, *Store, string) (T, error)) (snapshotResult[T], error) {
+func snapshotLoad[T any](ctx context.Context, s *Store, slot string, reads *kept.Reads[T], load func(context.Context, *Store) (T, error)) (snapshotResult[T], error) {
 	result := snapshotResult[T]{handled: true}
 	tx, err := s.beginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
 	if err != nil {
@@ -90,7 +90,7 @@ func snapshotLoad[T any](ctx context.Context, s *Store, slot string, reads *kept
 		result.value = value
 		return result, tx.Commit()
 	}
-	result.value, err = load(ctx, view, result.version)
+	result.value, err = load(ctx, view)
 	if err != nil {
 		return result, err
 	}
