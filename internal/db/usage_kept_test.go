@@ -412,7 +412,7 @@ func TestDailyUsageKeptJoinerSurvivesOtherCancel(t *testing.T) {
 	assert.EqualValues(t, 3, prepares.Load())
 }
 
-func TestDailyUsageKeptSharedBuildErrorRetry(t *testing.T) {
+func TestDailyUsageKeptFailedReadThenLaterRetry(t *testing.T) {
 	database := testDB(t)
 	seedLiveWriteSession(t, database, "one", "project", "2026-08-10T09:00:00Z", 0, 10)
 	var prepares atomic.Int32
