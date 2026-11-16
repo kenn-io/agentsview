@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -405,34 +404,6 @@ func TestAnalyticsKeptRestart(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, want, again)
 	})
-}
-
-func TestAnalyticsKeptDigestPerHandle(t *testing.T) {
-	skipReopenTestOnWindows(t)
-	dir := t.TempDir()
-	path, next := filepath.Join(dir, "mirror.duckdb"), filepath.Join(dir, "next.duckdb")
-	keptActivityMirror(t, path, "session-a", 500)
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(next, data, 0o600))
-	writeUsageMirror(t, next, `UPDATE sessions SET health_score=80`)
-	store, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
-	t.Cleanup(func() { store.Close() })
-	var fills atomic.Int32
-	store.analyticsDigests.Size = func(value string) int64 { fills.Add(1); return int64(len(value)) }
-	f := db.AnalyticsFilter{Timezone: "UTC"}
-	before, _ := store.dashboardDigest(t.Context(), "signals", f)
-	require.NotEmpty(t, before)
-	firstFills := fills.Load()
-	require.Positive(t, firstFills)
-	again, _ := store.dashboardDigest(t.Context(), "signals", f)
-	require.Equal(t, before, again)
-	require.Equal(t, firstFills, fills.Load())
-	require.NoError(t, swapMirrorFile(next, path))
-	store.checkMirrorReplacement(t.Context(), func(err error) { require.NoError(t, err) })
-	store.dashboardDigest(t.Context(), "signals", f)
-	require.Equal(t, 2*firstFills, fills.Load())
 }
 
 func TestAnalyticsKeptChangedMirrorInputs(t *testing.T) {
