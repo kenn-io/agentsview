@@ -212,8 +212,9 @@ func TestSearchKeptCJKFingerprint(t *testing.T) {
 	require.True(t, d.HasCJKFTS(ctx))
 	_, err = d.getWriter().ExecContext(ctx, `DROP TABLE messages_cjk_fts`)
 	require.NoError(t, err)
-	_, err = d.Search(ctx, filter)
-	require.Error(t, err)
+	fallback, err := d.Search(ctx, filter)
+	require.NoError(t, err)
+	require.Empty(t, fallback.Results)
 }
 
 func TestSearchKeptRejectsChangedSource(t *testing.T) {
