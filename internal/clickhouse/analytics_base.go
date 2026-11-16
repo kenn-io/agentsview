@@ -528,6 +528,7 @@ func (s analyticsSQL) TrendsSQL(f, sessionFilter db.AnalyticsFilter, ordered boo
 func (s analyticsSQL) TrendsDisk() (*kept.Disk, string) {
 	return &s.store.usageDisk, "clickhouse|" + db.SystemPrefixRulesVersion()
 }
+
 func (s analyticsSQL) TrendSessionVersions(ctx context.Context, f db.AnalyticsFilter) (map[string]string, error) {
 	sf := f.TrendsSessionFilter()
 	where, args := chBuildAnalyticsWhere(sf, "COALESCE(s.started_at, s.created_at)", "s.", true, true)
