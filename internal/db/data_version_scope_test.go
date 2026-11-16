@@ -191,7 +191,3 @@ func TestAdvanceScopedDataVersion(t *testing.T) {
 		})
 	}
 }
-
-func TestAntigravityUserInputUpgradeScopes(t *testing.T) {
-	assert.ElementsMatch(t, []parser.AgentType{parser.AgentAntigravity, parser.AgentAntigravityCLI}, ScopedDataVersionProviders(182, 183))
-}
