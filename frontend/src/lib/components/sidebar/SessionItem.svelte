@@ -915,8 +915,11 @@
   }
 
   /* The link's text sits above its stretched layer, so hover tooltips
-     still show and a double-click can tell the title apart. */
+     still show and a double-click can tell the title apart. The title is
+     positioned itself too: with dates showing the year, its row becomes
+     display: contents and no longer forms a box. */
   .session-name-row,
+  .session-name,
   .session-meta {
     position: relative;
   }

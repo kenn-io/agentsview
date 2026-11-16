@@ -414,9 +414,10 @@
       text-overflow: ellipsis;
     }
 
+    /* Inline only: the block padding keeps the 24px hit box. */
     .usage-breakdown-trigger {
       font-size: 9px;
-      padding: 1px 4px;
+      padding-inline: 4px;
     }
 
     .usage-breakdown-menu {
