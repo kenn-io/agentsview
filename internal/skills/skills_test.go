@@ -56,9 +56,9 @@ func TestRenderPluginPackageReusesClaudeArtifacts(t *testing.T) {
 		"skills/agentsview-finding-history/LICENSE",
 		"agents/agentsview-search-conversations.md",
 	}, renderedPaths(plugin))
-	for _, artifact := range plugin {
-		assert.Equal(t, artifactByBase(t, standalone,
-			filepath.Base(artifact.RelativePath)).Content, artifact.Content)
+	for _, name := range []string{"SKILL.md", licenseFileName} {
+		assert.Equal(t, artifactByBase(t, standalone, name).Content,
+			artifactByBase(t, plugin, name).Content)
 	}
 }
 

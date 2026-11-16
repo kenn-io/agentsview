@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -59,4 +60,25 @@ func TestMemoryPluginManifestsSelectFocusedMCP(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(mcp), `"--profile", "memory"`)
 	assert.NotContains(t, string(mcp), "AGENTSVIEW_SERVER_TOKEN\"")
+}
+
+func TestMemoryPluginAgentToolsMatchPluginServer(t *testing.T) {
+	root := memoryPluginRoot(t)
+	manifest, err := os.ReadFile(filepath.Join(root, ".claude-plugin", "plugin.json"))
+	require.NoError(t, err)
+	var plugin struct {
+		Name       string                     `json:"name"`
+		MCPServers map[string]json.RawMessage `json:"mcpServers"`
+	}
+	require.NoError(t, json.Unmarshal(manifest, &plugin))
+	require.NotEmpty(t, plugin.Name)
+	require.Contains(t, plugin.MCPServers, "agentsview")
+	prefix := "mcp__plugin_" + plugin.Name + "_agentsview__"
+	agent, err := os.ReadFile(filepath.Join(root, "agents", "agentsview-search-conversations.md"))
+	require.NoError(t, err)
+	content := string(agent)
+	assert.Contains(t, strings.Split(content, "\n"), "tools: "+prefix+"search_content, "+prefix+"get_messages")
+	assert.Contains(t, content, "`"+prefix+"search_content`")
+	assert.Contains(t, content, "`"+prefix+"get_messages`")
+	assert.NotContains(t, content, "mcp__agentsview__")
 }

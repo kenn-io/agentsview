@@ -51,6 +51,13 @@ const licenseFileName = "LICENSE"
 // install path.
 const claudeAgentDir = ".claude/agents"
 
+const (
+	standaloneToolPrefix = "mcp__agentsview__"
+	pluginName           = "agentsview-memory"
+	pluginServer         = "agentsview"
+	pluginToolPrefix     = "mcp__plugin_" + pluginName + "_" + pluginServer + "__"
+)
+
 // delegatePhrases supplies the harness-specific instruction that replaces
 // {{.Delegate}} in the template: whether the harness can dispatch a search
 // subagent or must run the bounded probes itself.
@@ -170,6 +177,7 @@ func ParseRemote(content string) Remote {
 type templateData struct {
 	Delegate   string
 	ServerArgs string
+	ToolPrefix string
 	// AgentDir is the harness's project-level agent directory, included in
 	// the delegation guard when the harness installs the search agent. Empty
 	// for harnesses that do not install one, so the guard text omits the
@@ -226,6 +234,10 @@ func Render(h Harness, version string, remote Remote) (Rendered, error) {
 // the recall skill and its LICENSE sidecar; Claude also gets the bounded
 // search agent used by it.
 func RenderPackage(h Harness, version string, remote Remote) ([]Rendered, error) {
+	return renderPackage(h, version, remote, standaloneToolPrefix)
+}
+
+func renderPackage(h Harness, version string, remote Remote, toolPrefix string) ([]Rendered, error) {
 	skill, err := Render(h, version, remote)
 	if err != nil {
 		return nil, err
@@ -245,7 +257,7 @@ func RenderPackage(h Harness, version string, remote Remote) ([]Rendered, error)
 			"agentsview-search-conversations",
 			filepath.Join(claudeAgentDir, "agentsview-search-conversations.md"),
 			"search-conversations.md.tmpl",
-			templateData{ServerArgs: remote.Args()},
+			templateData{ServerArgs: remote.Args(), ToolPrefix: toolPrefix},
 			version,
 			"",
 		)
@@ -259,11 +271,10 @@ func RenderPackage(h Harness, version string, remote Remote) ([]Rendered, error)
 }
 
 // RenderPluginPackage produces the native plugin artifacts from the same
-// templates as the standalone Claude package. Keeping the rendered content
-// byte-identical lets lifecycle diagnostics recognize a duplicate standalone
-// install without maintaining a second copy of the behavioral instructions.
+// templates as the standalone Claude package. The skill and LICENSE stay
+// byte-identical so lifecycle diagnostics can recognize a duplicate install.
 func RenderPluginPackage(version string) ([]Rendered, error) {
-	artifacts, err := RenderPackage(HarnessClaude, version, Remote{})
+	artifacts, err := renderPackage(HarnessClaude, version, Remote{}, pluginToolPrefix)
 	if err != nil {
 		return nil, err
 	}
