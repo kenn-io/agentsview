@@ -2,7 +2,9 @@ package duckdb
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"math"
 	"slices"
@@ -13,6 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/kept"
+	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/readbase"
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
@@ -53,7 +56,7 @@ const activityUsageModels = `SELECT DISTINCT model, provider_id FROM messages WH
 // report order, for activity.AllocateUsageCosts to apportion.
 func (s *Store) sumActivityUsage(
 	ctx context.Context, candidateWhere string, candidateArgs []any, lowerBound, upperBound string,
-	q activity.Query, pricing *export.PricingResolver, slot, version, diskVersion string,
+	q activity.Query, pricing *export.PricingResolver, slot, version string,
 ) ([]activity.UsageRow, error) {
 	startUS, endUS := readbase.ActivityUsageSpan(q)
 	if startUS >= endUS {
@@ -62,6 +65,30 @@ func (s *Store) sumActivityUsage(
 	if version != "" {
 		if saved, ok := s.activityUsageSums.Get(slot, version); ok && saved[0].Covers(endUS) {
 			return readbase.AssembleActivityUsage(pricing, saved[0].Schedule, saved[0].Groups)
+		}
+	}
+	diskVersion := ""
+	if version != "" && s.usageDisk.Enabled() {
+		versions, err := s.usagePartVersions(ctx)
+		if err != nil {
+			return nil, err
+		}
+		valid := true
+		for _, fingerprint := range versions {
+			if fingerprint == "" {
+				valid = false
+				break
+			}
+		}
+		if valid {
+			s.handleMu.RLock()
+			price := s.pricingDigest
+			s.handleMu.RUnlock()
+			data, err := json.Marshal([]any{versions, price, pricingpkg.ConfiguredAliasesDigest()})
+			if err != nil {
+				return nil, err
+			}
+			diskVersion = fmt.Sprintf("%x", sha256.Sum256(data))
 		}
 	}
 	if version != "" && diskVersion != "" {
@@ -109,13 +136,10 @@ func (s *Store) sumActivityUsage(
 				break
 			}
 		}
-		if canSave && s.usageDisk.Enabled() {
-			diskSlot := "activity-usage|" + slot
-			s.activityWrites.put(diskSlot, saved[0].Bytes(), func() {
-				if data, err := kept.EncodeRows(saved, 128<<20, func(row *readbase.ActivityUsageSums) int64 { return row.Bytes() }); err == nil {
-					s.usageDisk.Put(diskSlot, "activity-usage-1|"+diskVersion, data)
-				}
-			})
+		if canSave && ctx.Err() == nil && version == s.keptVersion() {
+			if data, err := kept.EncodeRows(saved, 128<<20, func(row *readbase.ActivityUsageSums) int64 { return row.Bytes() }); err == nil && version == s.keptVersion() {
+				s.usageDisk.Put("activity-usage|"+slot, "activity-usage-1|"+diskVersion, data)
+			}
 		}
 	}
 	return readbase.AssembleActivityUsage(pricing, schedule, groups)

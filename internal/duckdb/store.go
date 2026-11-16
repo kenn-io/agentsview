@@ -48,7 +48,6 @@ type Store struct {
 	replacementMu     sync.Mutex
 	duck              *sql.DB
 	fileInfo          os.FileInfo
-	activityMirrorID  string
 	walStamp          string
 	reports           kept.Reports
 	activityUsageSums kept.Memo[*readbase.ActivityUsageSums]
@@ -71,8 +70,7 @@ type Store struct {
 	retiring sync.WaitGroup
 
 	// activityRuns keeps sessions' activity runs by push fingerprint.
-	activityRuns   activityRunsMemo
-	activityWrites activityWriter
+	activityRuns activityRunsMemo
 
 	quack          *quackClient
 	connectionKind duckDBConnectionKind
@@ -110,7 +108,7 @@ func NewStore(ctx context.Context, path string) (*Store, error) {
 		return nil, err
 	}
 	return &Store{
-		path: path, duck: conn, fileInfo: info, walStamp: walStamp, activityMirrorID: activityMirrorID(path, info),
+		path: path, duck: conn, fileInfo: info, walStamp: walStamp,
 		activityUsageSums: kept.Memo[*readbase.ActivityUsageSums]{Size: (*readbase.ActivityUsageSums).Bytes},
 		topUsage:          kept.Reads[[]db.TopSessionEntry]{Size: db.TopSessionsBytes},
 		analyticsReads:    kept.Reads[[]byte]{Size: func(b []byte) int64 { return int64(len(b)) }},
@@ -133,24 +131,13 @@ func (s *Store) mirrorStampLocked() string {
 
 // keptVersion names the mirror handle and custom pricing used by in-memory Usage reads.
 func (s *Store) keptVersion() string {
-	memory, _ := s.keptVersions()
-	return memory
-}
-
-func (s *Store) keptVersions() (string, string) {
 	s.handleMu.RLock()
 	defer s.handleMu.RUnlock()
 	stamp := s.mirrorStampLocked()
 	if stamp == "" {
-		return "", ""
+		return ""
 	}
-	base := stamp + "|" + s.pricingDigest
-	aliases := pricingpkg.ConfiguredAliasesDigest()
-	memory := base + "|" + s.aliasPath + "|" + aliases
-	if s.activityMirrorID == "" {
-		return memory, ""
-	}
-	return memory, base + "|" + s.activityMirrorID + "|" + aliases
+	return stamp + "|" + s.pricingDigest + "|" + s.aliasPath + "|" + pricingpkg.ConfiguredAliasesDigest()
 }
 
 // Capture before opening: DuckDB may replay a leftover WAL on open.
@@ -198,7 +185,9 @@ func (s *Store) Close() error {
 	alias := s.aliasPath
 	s.handleMu.Unlock()
 
-	s.activityWrites.close()
+	if s.usageDisk.Enabled() {
+		s.activityRuns.save(&s.usageDisk)
+	}
 	s.reports.Close()
 	err := conn.Close()
 	removeMirrorAlias(alias)

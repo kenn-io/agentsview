@@ -41,12 +41,13 @@ func (e activityRunsEntry) bytes() int64 {
 // activityRunsMemo keeps sessions' runs across mirror replacements: the push
 // fingerprint changes whenever a session's messages or tool events do.
 type activityRunsMemo struct {
-	diskMu  sync.Mutex
-	loaded  map[float64]bool
-	mu      sync.Mutex
-	entries map[activityRunsKey]*list.Element
-	order   list.List
-	bytes   int64
+	loadOnce sync.Once
+	gap      float64
+	dirty    bool
+	mu       sync.Mutex
+	entries  map[activityRunsKey]*list.Element
+	order    list.List
+	bytes    int64
 }
 
 func (m *activityRunsMemo) lookup(
@@ -80,6 +81,7 @@ func (m *activityRunsMemo) store(entries []activityRunsEntry) {
 			m.bytes -= old.Value.(activityRunsEntry).bytes()
 			m.order.Remove(old)
 		}
+		m.dirty = true
 		m.entries[entry.key] = m.order.PushBack(entry)
 		m.bytes += entry.bytes()
 	}
@@ -98,14 +100,10 @@ type activityRunsPart struct {
 }
 
 func (m *activityRunsMemo) load(disk *kept.Disk, gap float64) {
-	if m.loaded[gap] {
-		return
-	}
-	if m.loaded == nil {
-		m.loaded = make(map[float64]bool)
-	}
-	m.loaded[gap] = true
-	parts := kept.LoadParts[activityRunsPart](disk, fmt.Sprintf("activity-runs|%g", gap), "activity-runs-1")
+	m.mu.Lock()
+	m.gap = gap
+	m.mu.Unlock()
+	parts := kept.LoadParts[activityRunsPart](disk, "activity-runs", fmt.Sprintf("activity-runs-1|%g", gap))
 	entries := make([]activityRunsEntry, 0, len(parts))
 	for id, part := range parts {
 		if part.Present && part.Fingerprint != "" {
@@ -113,10 +111,18 @@ func (m *activityRunsMemo) load(disk *kept.Disk, gap float64) {
 		}
 	}
 	m.store(entries)
+	m.mu.Lock()
+	m.dirty = false
+	m.mu.Unlock()
 }
 
-func (m *activityRunsMemo) save(disk *kept.Disk, gap float64) {
+func (m *activityRunsMemo) save(disk *kept.Disk) {
 	m.mu.Lock()
+	if !m.dirty {
+		m.mu.Unlock()
+		return
+	}
+	gap := m.gap
 	var rows []kept.Part[activityRunsPart]
 	for key, element := range m.entries {
 		if key.gapCap != gap {
@@ -126,7 +132,7 @@ func (m *activityRunsMemo) save(disk *kept.Disk, gap float64) {
 		rows = append(rows, kept.Part[activityRunsPart]{ID: key.id, Fingerprint: e.version, Present: true, Value: activityRunsPart{e.runs, e.users, e.assistants}})
 	}
 	m.mu.Unlock()
-	kept.SaveParts(disk, fmt.Sprintf("activity-runs|%g", gap), "activity-runs-1", rows, func(p activityRunsPart) int64 { return p.Runs.Bytes() + 8*int64(len(p.Users)+len(p.Assistants)) })
+	kept.SaveParts(disk, "activity-runs", fmt.Sprintf("activity-runs-1|%g", gap), rows, func(p activityRunsPart) int64 { return p.Runs.Bytes() + 8*int64(len(p.Users)+len(p.Assistants)) })
 }
 
 // activityReportRuns returns the sessions' runs clipped to q, in start
@@ -136,13 +142,11 @@ func (m *activityRunsMemo) save(disk *kept.Disk, gap float64) {
 func (s *Store) activityReportRuns(
 	ctx context.Context, ids []string, q activity.Query,
 ) ([]activity.Run, map[string]activityRunsEntry, error) {
+	if s.usageDisk.Enabled() {
+		s.activityRuns.loadOnce.Do(func() { s.activityRuns.load(&s.usageDisk, q.GapCapSeconds) })
+	}
 	if len(ids) == 0 {
 		return nil, nil, nil
-	}
-	if q.Partial && s.usageDisk.Enabled() {
-		s.activityRuns.diskMu.Lock()
-		s.activityRuns.load(&s.usageDisk, q.GapCapSeconds)
-		s.activityRuns.diskMu.Unlock()
 	}
 	// A replacement between this read and the pairing scan keeps the new
 	// mirror's runs under the old fingerprint, which a later read reaches
@@ -192,12 +196,6 @@ func (s *Store) activityReportRuns(
 		// A report too large to keep would only evict the rest.
 		if bytes <= activityRunsMaxBytes {
 			s.activityRuns.store(keep)
-			if q.Partial && s.usageDisk.Enabled() && ctx.Err() == nil {
-				gap := q.GapCapSeconds
-				s.activityWrites.put(fmt.Sprintf("activity-runs|%g", gap), 0, func() {
-					s.activityRuns.save(&s.usageDisk, gap)
-				})
-			}
 		}
 	}
 	if err := ctx.Err(); err != nil {

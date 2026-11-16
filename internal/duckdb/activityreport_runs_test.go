@@ -5,8 +5,6 @@ package duckdb
 import (
 	"fmt"
 	"math/rand/v2"
-	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -216,7 +214,7 @@ func TestActivityRunsDiskReusesUnchangedSessions(t *testing.T) {
 	first := open()
 	_, _, err := first.activityReportRuns(t.Context(), ids, q)
 	require.NoError(t, err)
-	first.activityWrites.close()
+	first.activityRuns.save(&first.usageDisk)
 	restarted := open()
 	_, _, err = restarted.activityReportRuns(t.Context(), ids, q)
 	require.NoError(t, err)
@@ -234,50 +232,5 @@ func TestActivityRunsDiskReusesUnchangedSessions(t *testing.T) {
 	require.NoError(t, err)
 	_, misses = restarted.activityRuns.lookup(ids, versions, q.GapCapSeconds)
 	require.Empty(t, misses)
-	restarted.activityWrites.close()
-}
-
-func TestFinishedActivityRunsStayInMemory(t *testing.T) {
-	cache := t.TempDir()
-	t.Setenv("CACHE_DIRECTORY", cache)
-	conn := openTestDuckDB(t)
-	require.NoError(t, EnsureSchema(t.Context(), conn))
-	_, err := conn.ExecContext(t.Context(), `INSERT INTO sessions (id, machine, project, agent, agentsview_push_fingerprint) VALUES ('a', 'machine', 'project', 'codex', 'v1')`)
-	require.NoError(t, err)
-	open := func(id string) *Store {
-		s := NewStoreFromDB(conn)
-		require.NoError(t, s.usageDisk.Open("duckdb-usage", id, 128<<20, 256<<20))
-		return s
-	}
-	q := duckDayQuery(t, "2026-01-01", "UTC")
-	store := open("finished")
-	for range 2 {
-		_, _, err := store.activityReportRuns(t.Context(), []string{"a"}, q)
-		require.NoError(t, err)
-	}
-	store.activityWrites.close()
-	files, err := filepath.Glob(filepath.Join(cache, "duckdb-usage", "*", "*.gob"))
-	require.NoError(t, err)
-	require.Empty(t, files)
-	seeded := open("partial")
-	q.Partial = true
-	_, _, err = seeded.activityReportRuns(t.Context(), []string{"a"}, q)
-	require.NoError(t, err)
-	seeded.activityWrites.close()
-	restarted := open("partial")
-	q.Partial = false
-	reads := 0
-	previous := analyticsQueryObserver
-	analyticsQueryObserver = func(query string) {
-		if strings.Contains(query, "activity_run_pieces") {
-			reads++
-		}
-	}
-	defer func() { analyticsQueryObserver = previous }()
-	for range 2 {
-		_, _, err = restarted.activityReportRuns(t.Context(), []string{"a"}, q)
-		require.NoError(t, err)
-	}
-	require.Equal(t, 1, reads)
-	restarted.activityWrites.close()
+	restarted.activityRuns.save(&restarted.usageDisk)
 }

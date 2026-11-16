@@ -111,30 +111,21 @@ func (r *SessionRuns) GobDecode(data []byte) error {
 		return err
 	}
 	decoded := SessionRuns{bounds: encoded.Bounds, trimmed: encoded.Trimmed}
-	next := 0
+	var next int32
 	for _, run := range encoded.Runs {
-		if int(run.First) != next || run.Last <= run.First || int(run.Last) >= len(encoded.Bounds) {
+		if run.First < next || run.Last <= run.First || int(run.Last) >= len(encoded.Bounds) {
 			return errors.New("invalid activity run bounds")
-		}
-		if next > 0 && encoded.Bounds[next-1] > encoded.Bounds[next] {
-			return errors.New("invalid activity run order")
 		}
 		for i := run.First; i < run.Last; i++ {
 			if encoded.Bounds[i] >= encoded.Bounds[i+1] {
 				return errors.New("invalid activity run order")
 			}
 		}
-		if decoded.pieceTrimmed(run.Last) {
-			return errors.New("invalid activity run trim")
+		if run.First > 0 && encoded.Bounds[run.First-1] > encoded.Bounds[run.First] {
+			return errors.New("invalid activity run order")
 		}
 		decoded.runs = append(decoded.runs, sessionRun{run.Model, run.First, run.Last})
-		next = int(run.Last) + 1
-	}
-	if next != len(encoded.Bounds) || len(encoded.Trimmed) > (len(encoded.Bounds)+63)/64 {
-		return errors.New("invalid activity run layout")
-	}
-	if len(encoded.Bounds)%64 != 0 && len(encoded.Trimmed) == (len(encoded.Bounds)+63)/64 && encoded.Trimmed[len(encoded.Trimmed)-1]>>(len(encoded.Bounds)%64) != 0 {
-		return errors.New("invalid activity run trim")
+		next = run.Last + 1
 	}
 	*r = decoded
 	return nil

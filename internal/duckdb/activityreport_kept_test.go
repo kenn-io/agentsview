@@ -4,6 +4,7 @@ package duckdb
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -367,35 +368,42 @@ func TestPartialActivityInputsSurviveRestart(t *testing.T) {
 	}
 }
 
-func TestPartialActivityCorruptDiskEntryIsMiss(t *testing.T) {
-	cache := t.TempDir()
-	t.Setenv("CACHE_DIRECTORY", cache)
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	keptActivityMirror(t, path, "session-a", 500)
-	store, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
-	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
-	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
-	require.NoError(t, err)
-	keptActivityBuild(t, store, q, true)
-	require.NoError(t, store.Close())
-	require.NoError(t, filepath.WalkDir(cache, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if filepath.Ext(path) == ".gob" {
-			return os.WriteFile(path, []byte("corrupt"), 0600)
-		}
-		return nil
-	}))
-	restarted, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
-	defer restarted.Close()
-	require.NoError(t, restarted.OpenActivityReportDisk(t.Context()))
-	reads := observeActivityUsageReads(t)
-	got := keptActivityBuild(t, restarted, q, true)
-	require.Equal(t, 1, *reads)
-	require.Equal(t, 500, activity.ReportWithSessions(got).Totals.OutputTokens)
+func TestPartialActivityInvalidDiskEntryIsMiss(t *testing.T) {
+	for _, oversized := range []bool{false, true} {
+		t.Run(strconv.FormatBool(oversized), func(t *testing.T) {
+			cache := t.TempDir()
+			t.Setenv("CACHE_DIRECTORY", cache)
+			path := filepath.Join(t.TempDir(), "mirror.duckdb")
+			keptActivityMirror(t, path, "session-a", 500)
+			store, err := NewStore(t.Context(), path)
+			require.NoError(t, err)
+			require.NoError(t, store.OpenActivityReportDisk(t.Context()))
+			q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+			require.NoError(t, err)
+			keptActivityBuild(t, store, q, true)
+			require.NoError(t, store.Close())
+			require.NoError(t, filepath.WalkDir(cache, func(path string, entry os.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				if filepath.Ext(path) == ".gob" {
+					if oversized {
+						return os.Truncate(path, (128<<20)+1)
+					}
+					return os.WriteFile(path, []byte("corrupt"), 0600)
+				}
+				return nil
+			}))
+			restarted, err := NewStore(t.Context(), path)
+			require.NoError(t, err)
+			defer restarted.Close()
+			require.NoError(t, restarted.OpenActivityReportDisk(t.Context()))
+			reads := observeActivityUsageReads(t)
+			got := keptActivityBuild(t, restarted, q, true)
+			require.Equal(t, 1, *reads)
+			require.Equal(t, 500, activity.ReportWithSessions(got).Totals.OutputTokens)
+		})
+	}
 }
 
 func TestPartialActivityUsageSameStampReplacement(t *testing.T) {
@@ -458,4 +466,93 @@ func TestPartialActivityUsageSameStampReplacement(t *testing.T) {
 			require.Equal(t, 900, activity.ReportWithSessions(got).Totals.OutputTokens)
 		})
 	}
+}
+
+func TestFinishedDayThenPartialMonthSurvivesRestart(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	open := func() *Store {
+		s, err := NewStore(t.Context(), path)
+		require.NoError(t, err)
+		require.NoError(t, s.OpenActivityReportDisk(t.Context()))
+		return s
+	}
+	store := open()
+	keptActivityBuild(t, store, duckDayQuery(t, "2026-01-01", "UTC"), true)
+	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	want := keptActivityBuild(t, store, q, true)
+	require.NoError(t, store.Close())
+	restarted := open()
+	defer restarted.Close()
+	reads := 0
+	previous := analyticsQueryObserver
+	analyticsQueryObserver = func(query string) {
+		if strings.Contains(query, "activity_run_pieces") || strings.Contains(query, "SELECT session_id, role, timestamp FROM messages") {
+			reads++
+		}
+	}
+	defer func() { analyticsQueryObserver = previous }()
+	got := keptActivityBuild(t, restarted, q, true)
+	require.Equal(t, 0, reads)
+	requireKeptActivityEqual(t, want, got)
+}
+
+func TestPartialActivityWithoutCloseRebuildsRuns(t *testing.T) {
+	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	if path := os.Getenv("ACTIVITY_UNCLOSED_MIRROR"); path != "" {
+		store, err := NewStore(t.Context(), path)
+		require.NoError(t, err)
+		require.NoError(t, store.OpenActivityReportDisk(t.Context()))
+		keptActivityBuild(t, store, q, true)
+		os.Exit(0)
+	}
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestPartialActivityWithoutCloseRebuildsRuns$")
+	cmd.Env = append(os.Environ(), "ACTIVITY_UNCLOSED_MIRROR="+path)
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", output)
+	restarted, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	defer restarted.Close()
+	require.NoError(t, restarted.OpenActivityReportDisk(t.Context()))
+	reads := 0
+	previous := analyticsQueryObserver
+	analyticsQueryObserver = func(query string) {
+		if strings.Contains(query, "activity_run_pieces") {
+			reads++
+		}
+	}
+	t.Cleanup(func() { analyticsQueryObserver = previous })
+	got := keptActivityBuild(t, restarted, q, true)
+	require.Equal(t, 1, reads)
+	fresh := NewStoreFromDB(restarted.DB())
+	requireKeptActivityEqual(t, keptActivityBuild(t, fresh, q, true), got)
+}
+
+func TestPartialActivityEmptyFingerprintDoesNotReuseDisk(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	conn, err := Open(t.Context(), path)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET agentsview_push_fingerprint = ''`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	reads := observeActivityUsageReads(t)
+	for range 2 {
+		store, err := NewStore(t.Context(), path)
+		require.NoError(t, err)
+		require.NoError(t, store.OpenActivityReportDisk(t.Context()))
+		got := keptActivityBuild(t, store, q, true)
+		require.Equal(t, 500, activity.ReportWithSessions(got).Totals.OutputTokens)
+		require.NoError(t, store.Close())
+	}
+	require.Equal(t, 2, *reads)
 }
