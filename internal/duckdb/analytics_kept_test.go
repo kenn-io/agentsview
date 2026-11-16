@@ -461,11 +461,13 @@ func TestAnalyticsKeptDigestAssociatesRows(t *testing.T) {
 		before, after any
 	}{
 		{"velocity message", []string{`INSERT INTO messages SELECT * REPLACE (3 AS id, 2 AS ordinal, 'other-model' AS model) FROM messages WHERE id=2`, `INSERT INTO tool_calls(id,message_id,session_id,tool_name,category) VALUES(1,2,'session-a','Read','Read')`}, `UPDATE messages SET id=CASE id WHEN 2 THEN 3 WHEN 3 THEN 2 ELSE id END WHERE id IN (2,3)`, db.AnalyticsFilter{Timezone: "UTC", Model: "kept-model"}, func(t *testing.T, store *Store, f db.AnalyticsFilter) any {
+			t.Helper()
 			result, err := store.GetAnalyticsVelocity(t.Context(), f)
 			require.NoError(t, err)
 			return result.Overall.ToolCallsPerActiveMin
 		}, float64(1), float64(0)},
 		{"signals session", []string{`UPDATE sessions SET project='alpha', health_score=20`, `INSERT INTO sessions SELECT * REPLACE ('session-b' AS id, 'beta' AS project, 80 AS health_score) FROM sessions WHERE id='session-a'`}, `UPDATE sessions SET health_score=100-health_score`, db.AnalyticsFilter{Timezone: "UTC"}, func(t *testing.T, store *Store, f db.AnalyticsFilter) any {
+			t.Helper()
 			result, err := store.GetAnalyticsSignals(t.Context(), f)
 			require.NoError(t, err)
 			scores := make(map[string]float64)
