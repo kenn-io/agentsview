@@ -1248,19 +1248,21 @@ To collect your Muse Personal sessions:
    curl -fsSL https://agentsview.io/install.sh | bash
    ```
 
-   The installer fetches the latest release. Check the
-   [changelog](/docs/changelog/) to confirm that release includes Muse
-   Personal support.
+   The installer fetches the latest release. Release 0.47.0 and earlier
+   cannot read Muse Personal sessions. Support is on `main` and ships in the
+   first release that lists it in the [changelog](/docs/changelog/). Until then
+   the installed CLI finds no Muse Personal sessions.
 
 1. Ask your Muse to run `agentsview source sync` on that machine. AgentsView
    reads `~/agents/agent-<uuid>/sessions/<session-uuid>.jsonl` under your
    Muse's home directory.
 
-1. To browse these sessions beside your other agents, have the AgentsView on
-   your Muse's machine push to a PostgreSQL database that your other machines
-   also push to. See
-   [PostgreSQL Sync](/docs/pg-sync/#multi-machine-workflow). Your Muse's
-   machine needs network access to that database.
+1. To browse these sessions beside your other agents, configure `[pg]` on your
+   Muse's machine and ask your Muse to run
+   `agentsview replica pg service install`. That service keeps pushing new
+   sessions to the PostgreSQL database your other machines push to. Your
+   Muse's machine needs network access to that database. See
+   [PostgreSQL Sync](/docs/pg-sync/#multi-machine-workflow).
 
 Each transcript must have a version-1 `session_header` with a session ID
 matching its filename. The optional sibling `sessions.json` index can extend
@@ -1277,9 +1279,9 @@ dirs = ["/example/agents"]
 Use an explicit root when the collecting process's `HOME` differs from the
 transcript owner's. `agentsview doctor sync` shows the resolved root.
 
-Local sync and native raw capture include background and scheduled runs by
-default. Hosted parsing requires a server built with the Muse Personal provider.
-Raw capture retains the transcript and any regular index as original bytes.
+AgentsView collects sessions your Muse started on a schedule as well as ones you
+started. Raw capture keeps the transcript and any regular index as original
+bytes.
 
 Items appear in stable `seq` order, with same-sequence occurrences keeping their
 file order. Tool outputs pair only with a unique preceding unmatched call;
