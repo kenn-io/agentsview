@@ -120,42 +120,40 @@ func TestReadsDoSaved(t *testing.T) {
 	_, ok = disk.Get("unencoded", "v")
 	require.False(t, ok)
 	var disabled Reads[string]
+	beforeDisabled := loads
 	_, err = disabled.DoSaved(t.Context(), nil, "slot", "v", "v", encode, decode, load)
 	require.NoError(t, err)
-}
+	require.Equal(t, beforeDisabled+1, loads)
+	t.Run("retention", func(t *testing.T) {
+		encodeCalls := 0
+		encode := func(s string) ([]byte, error) { encodeCalls++; return []byte(s), nil }
+		decode := func(b []byte) (string, error) { return string(b), nil }
+		var source Reads[string]
+		load := func(context.Context) (string, error) { return strings.Repeat("a", 2048), nil }
+		got, err := source.DoSaved(t.Context(), &disk, "source", "v", "v", encode, decode, load)
+		require.NoError(t, err)
+		require.Len(t, got, 2048)
+		require.Equal(t, 1, encodeCalls)
+		_, err = source.DoSaved(t.Context(), &disk, "source", "v", "v", encode, decode, load)
+		require.NoError(t, err)
+		require.Equal(t, 2, encodeCalls)
 
-func TestReadsDoSavedKeepsOnlyMemoryHits(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	var disk Disk
-	require.NoError(t, disk.Open("saved-reads", "archive", 128, 0))
-	encodeCalls := 0
-	encode := func(s string) ([]byte, error) { encodeCalls++; return []byte(s), nil }
-	decode := func(b []byte) (string, error) { return string(b), nil }
-	var source Reads[string]
-	load := func(context.Context) (string, error) { return strings.Repeat("a", 256), nil }
-	got, err := source.DoSaved(t.Context(), &disk, "source", "v", "v", encode, decode, load)
-	require.NoError(t, err)
-	require.Len(t, got, 256)
-	require.Equal(t, 1, encodeCalls)
-	_, err = source.DoSaved(t.Context(), &disk, "source", "v", "v", encode, decode, load)
-	require.NoError(t, err)
-	require.Equal(t, 2, encodeCalls)
-
-	disk.Put("saved", "v", []byte("from disk"))
-	path := disk.reports.disk.path("saved")
-	var saved Reads[string]
-	got, err = saved.DoSaved(t.Context(), &disk, "saved", "v", "v", encode, func(b []byte) (string, error) {
-		return string(b), os.Remove(path)
-	}, func(context.Context) (string, error) { return "unexpected load", nil })
-	require.NoError(t, err)
-	require.Equal(t, "from disk", got)
-	_, err = os.Stat(path)
-	require.ErrorIs(t, err, os.ErrNotExist)
-	require.Equal(t, 2, encodeCalls)
-	_, err = saved.DoSaved(t.Context(), &disk, "saved", "v", "v", encode, decode, load)
-	require.NoError(t, err)
-	body, ok := disk.Get("saved", "v")
-	require.True(t, ok)
-	require.Equal(t, "from disk", string(body))
-	require.Equal(t, 3, encodeCalls)
+		disk.Put("saved", "v", []byte("from disk"))
+		path := disk.reports.disk.path("saved")
+		var saved Reads[string]
+		got, err = saved.DoSaved(t.Context(), &disk, "saved", "v", "v", encode, func(b []byte) (string, error) {
+			return string(b), os.Remove(path)
+		}, func(context.Context) (string, error) { return "unexpected load", nil })
+		require.NoError(t, err)
+		require.Equal(t, "from disk", got)
+		_, err = os.Stat(path)
+		require.ErrorIs(t, err, os.ErrNotExist)
+		require.Equal(t, 2, encodeCalls)
+		_, err = saved.DoSaved(t.Context(), &disk, "saved", "v", "v", encode, decode, load)
+		require.NoError(t, err)
+		body, ok := disk.Get("saved", "v")
+		require.True(t, ok)
+		require.Equal(t, "from disk", string(body))
+		require.Equal(t, 3, encodeCalls)
+	})
 }

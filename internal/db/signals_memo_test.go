@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -251,84 +250,60 @@ func TestSignalsFrustrationStoreRejectsChangedTranscript(t *testing.T) {
 }
 
 func TestSignalsFrustrationReadOnlyStoredReuseAndLegacyFallback(t *testing.T) {
-	for _, stored := range []bool{false, true} {
-		t.Run(fmt.Sprintf("stored=%t", stored), func(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		stored, legacy bool
+	}{
+		{"stored", true, false}, {"fallback", false, false}, {"legacy", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
 			ctx := t.Context()
 			seedFrustrationSession(t, d, "session", "test")
-			if stored {
+			if tc.stored {
 				_, err := d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
 				require.NoError(t, err)
 			} else {
 				_, err := d.getWriter().ExecContext(ctx, `DROP TABLE session_frustration_markers`)
 				require.NoError(t, err)
 			}
+			if tc.legacy {
+				_, err := d.getWriter().ExecContext(ctx, `DELETE FROM archive_metadata WHERE key='dashboard_signals'`)
+				require.NoError(t, err)
+			}
 			ro, err := OpenReadOnly(ctx, d.Path())
 			require.NoError(t, err)
-			defer ro.Close()
-			if stored {
-				ro.rawReader().SetMaxOpenConns(1)
-				conn, err := ro.rawReader().Conn(ctx)
-				require.NoError(t, err)
-				var sqlite *sqlite3.SQLiteConn
-				require.NoError(t, conn.Raw(func(raw any) error {
-					sqlite = raw.(*sqlite3.SQLiteConn)
-					sqlite.RegisterAuthorizer(func(op int, table, column, _ string) int {
-						if op == sqlite3.SQLITE_READ && table == "messages" && column == "content" {
-							return sqlite3.SQLITE_DENY
-						}
-						return sqlite3.SQLITE_OK
-					})
-					return nil
-				}))
-				require.NoError(t, conn.Close())
-				defer sqlite.RegisterAuthorizer(nil)
-			}
-			resp, err := ro.GetAnalyticsSignals(ctx, AnalyticsFilter{})
-			require.NoError(t, err)
-			assert.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
-		})
-	}
-}
-
-func TestSignalsFrustrationReadOnlyRepeatedFallback(t *testing.T) {
-	for _, legacy := range []bool{false, true} {
-		t.Run(fmt.Sprintf("legacy=%t", legacy), func(t *testing.T) {
-			writable := testDB(t)
-			ctx := t.Context()
-			seedFrustrationSession(t, writable, "session", "test")
-			_, err := writable.getWriter().ExecContext(ctx, `DROP TABLE session_frustration_markers`)
-			require.NoError(t, err)
-			if legacy {
-				_, err = writable.getWriter().ExecContext(ctx, `DELETE FROM archive_metadata WHERE key='dashboard_signals'`)
-				require.NoError(t, err)
-			}
-			readonly, err := OpenReadOnly(ctx, writable.Path())
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, readonly.Close()) })
-			readonly.rawReader().SetMaxOpenConns(1)
-			conn, err := readonly.rawReader().Conn(ctx)
+			t.Cleanup(func() { require.NoError(t, ro.Close()) })
+			ro.rawReader().SetMaxOpenConns(1)
+			conn, err := ro.rawReader().Conn(ctx)
 			require.NoError(t, err)
 			var contentReads atomic.Int32
-			var sqliteConn *sqlite3.SQLiteConn
+			var sqlite *sqlite3.SQLiteConn
 			require.NoError(t, conn.Raw(func(raw any) error {
-				sqliteConn = raw.(*sqlite3.SQLiteConn)
-				sqliteConn.RegisterAuthorizer(func(op int, table, column, _ string) int {
+				sqlite = raw.(*sqlite3.SQLiteConn)
+				sqlite.RegisterAuthorizer(func(op int, table, column, _ string) int {
 					if op == sqlite3.SQLITE_READ && table == "messages" && column == "content" {
 						contentReads.Add(1)
+						if tc.stored {
+							return sqlite3.SQLITE_DENY
+						}
 					}
 					return sqlite3.SQLITE_OK
 				})
 				return nil
 			}))
 			require.NoError(t, conn.Close())
-			t.Cleanup(func() { sqliteConn.RegisterAuthorizer(nil) })
+			t.Cleanup(func() { sqlite.RegisterAuthorizer(nil) })
 			for range 2 {
-				response, err := readonly.GetAnalyticsSignals(ctx, AnalyticsFilter{})
+				resp, err := ro.GetAnalyticsSignals(ctx, AnalyticsFilter{})
 				require.NoError(t, err)
-				require.Equal(t, 1, response.QualityHealth.Totals.FrustrationMarkerCount)
+				require.Equal(t, 1, resp.QualityHealth.Totals.FrustrationMarkerCount)
 			}
-			require.EqualValues(t, 1, contentReads.Load())
+			if tc.stored {
+				require.Zero(t, contentReads.Load())
+			} else {
+				require.EqualValues(t, 1, contentReads.Load())
+			}
 		})
 	}
 }
