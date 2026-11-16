@@ -14,6 +14,7 @@ import (
 )
 
 func TestAntigravityStructuredPromptUpgradeReparsesUnchangedSource(t *testing.T) {
+	t.Parallel()
 	const (
 		id       = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
 		prompt   = "比较这两个游戏 /grill-me"
