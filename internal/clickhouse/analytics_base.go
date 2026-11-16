@@ -662,17 +662,7 @@ func (s *Store) GetTrendsTerms(
 		return report, nil
 	}
 	return s.trendsReads.Do(ctx, key, version, func(ctx context.Context) (db.TrendsTermsResponse, error) {
-		if data, ok := s.usageDisk.Get(diskSlot, version); ok {
-			var report db.TrendsTermsResponse
-			if json.Unmarshal(data, &report) == nil {
-				return report, nil
-			}
-		}
-		report, err := load(ctx)
-		if err == nil {
-			s.putTrendsDisk(diskSlot, version, report)
-		}
-		return report, err
+		return kept.LoadJSON(&s.usageDisk, diskSlot, version, func() (db.TrendsTermsResponse, error) { return load(ctx) })
 	})
 }
 

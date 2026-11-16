@@ -27,7 +27,7 @@ const counterTemplate = `
 // Full replacements need this when only derived dialogue changes: transcript
 // equality ignores dialogue, and the replacement does not fire UPDATE triggers.
 func bumpSearchChangeRevisionTx(tx transactionQueries) error {
-	if _, err := tx.Exec(strings.ReplaceAll(counterTemplate, "{{counter}}", archiveMetadataSearchChangeRevisionKey) + searchTokenSQL); err != nil {
+	if _, err := tx.Exec(strings.ReplaceAll(counterTemplate, "{{counter}}", archiveMetadataSearchChangeRevisionKey)); err != nil {
 		return fmt.Errorf("advancing search change revision: %w", err)
 	}
 	return nil
@@ -54,6 +54,12 @@ func usageChangeJournalSQL() (string, string) {
  ON CONFLICT(session_id) DO UPDATE SET revision = excluded.revision;`
 	var drops, creates strings.Builder
 	creates.WriteString(`INSERT OR IGNORE INTO archive_metadata (key, value) VALUES ('search_history_token', lower(hex(randomblob(16))));` + "\n")
+	// Older writers replace journal triggers but keep these search-owned triggers.
+	for _, event := range []string{"INSERT", "UPDATE"} {
+		name := "trg_search_history_revision_" + strings.ToLower(event)
+		fmt.Fprintf(&drops, "DROP TRIGGER IF EXISTS %s;\n", name)
+		fmt.Fprintf(&creates, "CREATE TRIGGER %s AFTER %s ON archive_metadata WHEN NEW.key = 'search_change_revision' BEGIN%s\nEND;\n", name, event, searchTokenSQL)
+	}
 	add := func(name, event, table, condition, sessionID string, analytics bool) {
 		fmt.Fprintf(&drops, "DROP TRIGGER IF EXISTS %s;\n", name)
 		body := counterBody
@@ -72,13 +78,16 @@ func usageChangeJournalSQL() (string, string) {
 		if strings.HasPrefix(name, "trg_messages_search_dialogue") || name == "trg_sessions_search_first_message" {
 			body = searchCounterBody
 		}
-		if table == "sessions" && strings.HasPrefix(name, "trg_sessions_usage_change_") || body == searchCounterBody {
-			body += searchTokenSQL
-		}
+		searchToken := table == "sessions" && strings.HasPrefix(name, "trg_sessions_usage_change_")
 		if condition != "" {
 			condition = "WHEN " + condition
 		}
 		fmt.Fprintf(&creates, "CREATE TRIGGER %s AFTER %s ON %s\n%s\nBEGIN%s\nEND;\n", name, event, table, condition, body)
+		if searchToken {
+			tokenTrigger := "trg_search_history_" + name
+			fmt.Fprintf(&drops, "DROP TRIGGER IF EXISTS %s;\n", tokenTrigger)
+			fmt.Fprintf(&creates, "CREATE TRIGGER %s AFTER %s ON %s\n%s\nBEGIN%s\nEND;\n", tokenTrigger, event, table, condition, searchTokenSQL)
+		}
 	}
 	add("trg_sessions_usage_change_insert", "INSERT", "sessions", "", "NEW.id", false)
 	columns := []string{"transcript_revision", "started_at", "deleted_at", "project", "agent", "machine", "git_branch", "group_key", "is_automated", "user_message_count", "ended_at", "termination_status", "display_name", "session_name", "relationship_type", "message_count", "created_at"}

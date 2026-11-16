@@ -43,9 +43,15 @@ func TestSearchKeptMessagePush(t *testing.T) {
 	require.Contains(t, page.Results[0].Snippet, "second")
 }
 
-type searchQueryTracer struct{ count atomic.Int32 }
+type searchQueryTracer struct {
+	count    atomic.Int32
+	versions atomic.Int32
+}
 
 func (tr *searchQueryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	if strings.Contains(data.SQL, "usage_history_token") {
+		tr.versions.Add(1)
+	}
 	if strings.Contains(data.SQL, "msg_matches AS") {
 		tr.count.Add(1)
 	}
@@ -90,6 +96,7 @@ func TestSearchKeptRestart(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, want, got)
 	require.Zero(t, trace.count.Load())
+	require.EqualValues(t, 2, trace.versions.Load())
 	write("needle second")
 	s, trace = open()
 	got, err = s.Search(ctx, filter)
