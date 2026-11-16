@@ -20,6 +20,8 @@ func TestPGFTSBooleanSemantics(t *testing.T) {
 		{"c", "库 压缩"},
 		{"d", "unrelated"},
 		{"e", `reader OR literal NOT "reader"`},
+		{"f", "fix bug login"},
+		{"g", "fix bug logout"},
 		{"h", "a foo"},
 		{"i", "b c"},
 		{"j", "b only"},
@@ -31,6 +33,12 @@ func TestPGFTSBooleanSemantics(t *testing.T) {
 		insertCSSession(t, store, row.id, "fixture", "codex", "2024-06-15T10:00:00Z", "2024-06-15T11:00:00Z")
 		insertCSMessage(t, store, row.id, 0, "user", row.body, "2024-06-15T10:00:00Z", false)
 	}
+	lowercaseOr := []string{"n", "o"}
+	phraseAndWord := []string{"f", "g"}
+	if store.cockroach {
+		lowercaseOr = []string{"n"}
+		phraseAndWord = []string{"f"}
+	}
 	for _, tc := range []struct {
 		query string
 		ids   []string
@@ -40,12 +48,13 @@ func TestPGFTSBooleanSemantics(t *testing.T) {
 		{`"reader"AND"archive"`, []string{"a"}},
 		{`"reader" OR "definitely_absent"`, []string{"a", "b", "e"}},
 		{`"reader" NOT "压缩"`, []string{"b", "e"}},
+		{`"fix bug" login`, phraseAndWord},
 		{`"reader" ""`, []string{"a", "b", "e"}},
 		{`""`, nil},
 		{`NOT "reader"`, []string{"e"}},
 		{`"a" OR "b" "c"`, []string{"a", "b", "d", "e", "h", "i", "k", "l", "n", "o"}},
 		{`"b" AND ("only" OR "c")`, []string{"i", "j"}},
-		{`"a" or "b"`, []string{"n", "o"}},
+		{`"a" or "b"`, lowercaseOr},
 		{`"a" NEAR "b"`, []string{"o"}},
 		{`"read"*`, []string{"k"}},
 		{`read*`, []string{"k"}},
