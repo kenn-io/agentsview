@@ -12,7 +12,7 @@ import (
 )
 
 func TestUsageCarry(t *testing.T) {
-	for _, scenario := range []string{"healthy", "unpublished", "partial deletion", "changed after read", "parts move", "snapshot ahead", "snapshot restored", "raw merge", "equal count older row"} {
+	for _, scenario := range []string{"healthy", "unpublished", "partial deletion", "changed after read", "parts move", "snapshot ahead", "snapshot restored", "snapshot merge", "raw merge", "equal count older row"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Parallel()
 			local, syncer, store := newPreparedUsageStore(t)
@@ -59,6 +59,8 @@ func TestUsageCarry(t *testing.T) {
 				execPreparedUsage(t, store, "CREATE TABLE original_snapshot AS usage_session_snapshots ENGINE = Memory", fmt.Sprintf("INSERT INTO original_snapshot SELECT * FROM usage_session_snapshots WHERE id = '%s'", preparedUsageLongID))
 			case "raw merge":
 				execPreparedUsage(t, store, "SYSTEM STOP MERGES usage_messages", "INSERT INTO usage_messages SELECT * FROM usage_messages")
+			case "snapshot merge":
+				execPreparedUsage(t, store, "SYSTEM STOP MERGES usage_session_snapshots")
 			}
 			var rawVersion, rawParts string
 			if scenario == "raw merge" {
@@ -78,6 +80,15 @@ func TestUsageCarry(t *testing.T) {
 			}
 			if scenario == "snapshot restored" {
 				execPreparedUsage(t, store, fmt.Sprintf(`INSERT INTO usage_session_snapshots SELECT * REPLACE (push_version + 1 AS push_version, toUInt128(push_version + 1) * 2 + 1 AS revision) FROM usage_session_snapshots WHERE id = '%s'`, preparedUsageLongID))
+			}
+			if scenario == "snapshot merge" {
+				execPreparedUsage(t, store, fmt.Sprintf("INSERT INTO usage_session_snapshots SELECT * FROM usage_session_snapshots WHERE id = '%s'", preparedUsageLongID))
+				parts, err := store.tablePartsFingerprint(t.Context(), []string{usageSessionSnapshotTable})
+				require.NoError(t, err)
+				execPreparedUsage(t, store, "SYSTEM START MERGES usage_session_snapshots", "OPTIMIZE TABLE usage_session_snapshots FINAL")
+				merged, err := store.tablePartsFingerprint(t.Context(), []string{usageSessionSnapshotTable})
+				require.NoError(t, err)
+				require.NotEqual(t, parts, merged)
 			}
 			if scenario == "raw merge" {
 				execPreparedUsage(t, store, "SYSTEM START MERGES usage_messages", "OPTIMIZE TABLE usage_messages FINAL")
@@ -111,7 +122,7 @@ func TestUsageCarry(t *testing.T) {
 				top, err := store.GetTopSessionsByCost(t.Context(), f, 10)
 				require.NoError(t, err)
 				_, afterTop := usageQueryCounts(t, store)
-				if scenario == "healthy" || scenario == "raw merge" || (scenario == "parts move" && i > 0) {
+				if scenario == "healthy" || scenario == "raw merge" || scenario == "snapshot merge" || (scenario == "parts move" && i > 0) {
 					require.Equal(t, beforeResults, afterDaily)
 					require.Equal(t, afterDaily, afterTop)
 				} else if scenario == "parts move" {
