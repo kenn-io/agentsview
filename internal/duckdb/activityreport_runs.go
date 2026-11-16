@@ -60,6 +60,7 @@ func (m *activityRunsMemo) lookup(
 		if element := m.entries[activityRunsKey{id, gapCap}]; element != nil {
 			if e := element.Value.(activityRunsEntry); e.version == versions[id] {
 				kept[id] = e
+				m.dirty = true
 				m.order.MoveToBack(element)
 				continue
 			}

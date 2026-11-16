@@ -95,7 +95,7 @@ func (s *Store) sumActivityUsage(
 			diskVersion = fmt.Sprintf("%x", sha256.Sum256(data))
 		}
 	}
-	if version != "" && diskVersion != "" {
+	if diskVersion != "" {
 		if data, ok := s.usageDisk.Get("activity-usage|"+slot, "activity-usage-1|"+diskVersion); ok {
 			if saved, ok := kept.DecodeRows[*readbase.ActivityUsageSums](data); ok && len(saved) == 1 && saved[0] != nil && saved[0].Covers(endUS) {
 				s.activityUsageSums.Put(slot, version, saved)

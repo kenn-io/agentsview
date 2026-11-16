@@ -598,3 +598,37 @@ func TestPartialActivityRepricesAfterMirrorPush(t *testing.T) {
 	fresh = NewStoreFromDB(store.DB())
 	requireKeptActivityEqual(t, keptActivityBuild(t, fresh, q, true), got)
 }
+
+func TestActivityRunsReusedAfterSweepAndRestart(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	open := func() *Store {
+		s, err := NewStore(t.Context(), path)
+		require.NoError(t, err)
+		require.NoError(t, s.OpenActivityReportDisk(t.Context()))
+		return s
+	}
+	first := open()
+	keptActivityBuild(t, first, q, true)
+	require.NoError(t, first.Close())
+	reused := open()
+	keptActivityBuild(t, reused, q, true)
+	reused.usageDisk.Sweep(time.Now().Add(31 * 24 * time.Hour))
+	require.NoError(t, reused.Close())
+	restarted := open()
+	defer restarted.Close()
+	reads := 0
+	previous := analyticsQueryObserver
+	analyticsQueryObserver = func(query string) {
+		if strings.Contains(query, "activity_run_pieces") || strings.Contains(query, "SELECT session_id, role, timestamp FROM messages") {
+			reads++
+		}
+	}
+	t.Cleanup(func() { analyticsQueryObserver = previous })
+	got := keptActivityBuild(t, restarted, q, true)
+	require.Equal(t, 0, reads)
+	require.Equal(t, 500, activity.ReportWithSessions(got).Totals.OutputTokens)
+}
