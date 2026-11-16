@@ -212,11 +212,24 @@ func TestServeRestartPreservesSkipInitialSyncAfterArchiveUpgrade(t *testing.T) {
 		}
 	})
 	rt := waitForRestartRuntime(t, dataDir)
-	require.Eventually(t, func() bool {
-		needs, _, err := db.ArchiveResyncState(t.Context(), dbPath)
-		return err == nil && !needs
-	}, 30*time.Second, 100*time.Millisecond)
 	base := fmt.Sprintf("http://127.0.0.1:%d", rt.Port)
+	// Opening SQLite here can prevent the daemon from replacing the archive
+	// on Windows. Wait through HTTP until the daemon has finished the rebuild.
+	require.Eventually(t, func() bool {
+		resp, err := restartTestRequest(t, http.MethodGet, base+"/api/v1/sync/status", "", "")
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		var status struct {
+			ArchiveStale   bool `json:"archive_stale"`
+			StartupPending bool `json:"startup_pending"`
+		}
+		return resp.StatusCode == http.StatusOK && json.UnmarshalRead(resp.Body, &status) == nil && !status.ArchiveStale && !status.StartupPending
+	}, 30*time.Second, 100*time.Millisecond)
+	needsResync, _, err = db.ArchiveResyncState(t.Context(), dbPath)
+	require.NoError(t, err)
+	require.False(t, needsResync, "archive upgrade must finish before restart")
 	restartAndWait(t, dataDir, base, "")
 	contents, err := os.ReadFile(output.Name())
 	require.NoError(t, err)
