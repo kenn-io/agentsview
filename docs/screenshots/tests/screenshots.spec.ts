@@ -1668,11 +1668,12 @@ test.describe('Settings', () => {
   });
 
   test('settings archive image retention', async ({ page }) => {
-    // Save only in this browser's response fixture; other captures keep their policy.
+    // Save only in this browser's response fixture; other captures keep their
+    // policy. A real save reports that the new policy waits for a restart.
     await page.route('**/api/v1/settings', async (route) => {
       if (route.request().method() !== 'PUT') return route.continue();
       const current = await (await page.request.get('/api/v1/settings')).json();
-      await route.fulfill({ json: { ...current, ...route.request().postDataJSON() } });
+      await route.fulfill({ json: { ...current, ...route.request().postDataJSON(), restart_required: true } });
     });
     await openSettings(page);
     // The ingest policy heads the Tool-result images section; capture just
