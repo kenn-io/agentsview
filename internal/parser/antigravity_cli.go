@@ -625,14 +625,11 @@ func appendMissingAntigravityHistoryMessages(
 // reconcileAntigravityHistoryMessages pairs each history prompt with at most
 // one user turn, then appends the prompts no turn accounts for. Pairing runs
 // from the closest timestamp agreement (exact, same second, any) to the
-// loosest, so repeated prompts keep their own turns and a skewed timestamp
-// still lands on its turn. A turn never pairs with a prompt stamped after the
-// assistant reply to that turn: that prompt is a repeat. By default a pair
-// needs matching text. Text may differ for a heuristic prompt when positional
-// is set (the turn counts agree), and for a structured prompt when the
-// timestamps agree exactly or to the second; structured prompts keep the typed
-// content. In a mixed session, positional matches also need timestamp
-// agreement so a pending history prompt cannot replace a guessed turn.
+// loosest, reserving text matches before pairing different text. A turn never
+// pairs with a prompt stamped after its assistant reply. Different text may
+// pair with a heuristic turn when positional is set, or with a structured
+// turn when timestamps agree exactly or to the second. Such pairs cannot cross
+// a reserved match, and structured turns keep their typed content.
 func reconcileAntigravityHistoryMessages(
 	dbMessages, history []ParsedMessage, positional bool,
 ) []ParsedMessage {
@@ -644,11 +641,9 @@ func reconcileAntigravityHistoryMessages(
 		used        bool
 	}
 	var turns []*userTurn
-	hasStructured := false
 	for i, msg := range dbMessages {
 		switch {
 		case msg.Role == RoleUser:
-			hasStructured = hasStructured || msg.structuredPrompt
 			turns = append(turns, &userTurn{
 				idx: i, key: normalizedAntigravityPrompt(msg.Content),
 				structured: msg.structuredPrompt, ts: msg.Timestamp,
@@ -671,15 +666,36 @@ func reconcileAntigravityHistoryMessages(
 		keys[hIdx] = normalizedAntigravityPrompt(msg.Content)
 	}
 	paired := make([]*userTurn, len(history))
-	for level, near := range closeness {
-		for hIdx, msg := range history {
-			for _, t := range turns {
-				if paired[hIdx] != nil || keys[hIdx] == "" || t.used ||
-					(stamped(t.replyAt, msg.Timestamp) && t.replyAt.Before(msg.Timestamp)) ||
-					t.key != keys[hIdx] && (level >= 2 || !positional && !t.structured) && (!positional || hasStructured) || !near(t.ts, msg.Timestamp) {
-					continue
+	for _, exactText := range []bool{true, false} {
+		for level, near := range closeness {
+			for hIdx, msg := range history {
+				low, high := -1, len(dbMessages)
+				if !exactText {
+					for otherIdx, other := range paired {
+						if other == nil {
+							continue
+						}
+						if otherIdx < hIdx && other.idx > low {
+							low = other.idx
+						}
+						if otherIdx > hIdx && other.idx < high {
+							high = other.idx
+						}
+					}
 				}
-				t.used, paired[hIdx] = true, t
+				for _, t := range turns {
+					if paired[hIdx] != nil || keys[hIdx] == "" || t.used ||
+						(stamped(t.replyAt, msg.Timestamp) && t.replyAt.Before(msg.Timestamp)) ||
+						(t.key == keys[hIdx]) != exactText || !near(t.ts, msg.Timestamp) {
+						continue
+					}
+					if !exactText {
+						if t.structured && level == 2 || !t.structured && !positional || t.idx <= low || t.idx >= high {
+							continue
+						}
+					}
+					t.used, paired[hIdx] = true, t
+				}
 			}
 		}
 	}

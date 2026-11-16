@@ -4840,6 +4840,7 @@ func TestAntigravityCLIHistoryReconcilesStructuredTurns(t *testing.T) {
 	}{
 		{"missing history", []turn{{RoleUser, "typed request", 0, true}}, []turn{{text: "pending request", ms: 1779000060000}}, []string{"typed request", "pending request"}},
 		{"mixed", []turn{{RoleUser, "typed request", 1779000000000, true}, {RoleUser, "A long guessed expansion for the second request", 1779000060000, false}}, []turn{{text: "typed request", ms: 1779000000000}, {text: "second request", ms: 1779000060000}}, []string{"typed request", "second request"}},
+		{"mixed without timestamps", []turn{{RoleUser, "typed request", 0, true}, {RoleUser, "A long guessed expansion for the second request", 0, false}}, []turn{{text: "typed request"}, {text: "second request"}}, []string{"typed request", "second request"}},
 		{"same second repeat", []turn{{RoleUser, "repeat request", 1779000000100, true}, {RoleAssistant, "assistant reply content", 1779000000500, false}}, []turn{{text: "repeat request", ms: 1779000000900}}, []string{"repeat request", "assistant reply content", "repeat request"}},
 		{"timestamp skew", []turn{{RoleUser, "typed request", 1779000000000, true}}, []turn{{text: "typed request", ms: 1779000002000}, {text: "pending request", ms: 1779000060000}}, []string{"typed request", "pending request"}},
 		{"different display", []turn{{RoleUser, "typed request with pasted text", 1779000000000, true}}, []turn{{text: "[pasted text]", ms: 1779000000000}}, []string{"typed request with pasted text"}},
