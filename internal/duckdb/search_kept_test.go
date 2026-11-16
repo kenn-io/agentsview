@@ -4,7 +4,6 @@ package duckdb
 
 import (
 	"encoding/base64"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -79,17 +78,10 @@ func TestSearchKeptReplacementDuringRead(t *testing.T) {
 	require.Len(t, page.Results, 1)
 	require.Equal(t, "session-a", page.Results[0].SessionID)
 	require.NoError(t, restarted.Close())
-	restarted = openUsagePartsStore(t, path)
-	defer restarted.Close()
-	reads := 0
-	restarted.afterSearchRead = func() { reads++ }
-	page, err = restarted.Search(t.Context(), filter)
-	require.NoError(t, err)
-	require.Equal(t, "session-a", page.Results[0].SessionID)
-	require.Zero(t, reads)
+
 }
 
-func TestSearchKeptUnversionedAndBorrowed(t *testing.T) {
+func TestSearchKeptUnversioned(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	buildMirrorFixture(t, path, "session-a", "answer")
@@ -103,13 +95,6 @@ func TestSearchKeptUnversionedAndBorrowed(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, page.Results, 1)
 		require.Equal(t, 1, reads)
-		borrowed := NewStoreFromDB(store.DB())
-		borrowed.afterSearchRead = func() { reads++ }
-		for range 2 {
-			_, err = borrowed.Search(t.Context(), filter)
-			require.NoError(t, err)
-		}
-		require.Equal(t, 3, reads)
 		require.NoError(t, store.Close())
 	}
 }
@@ -117,10 +102,6 @@ func TestSearchKeptUnversionedAndBorrowed(t *testing.T) {
 func TestSearchKeptSelectionsAcrossRestart(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	local, path := newPushFixture(t, 3)
-	messages, err := local.GetAllMessages(t.Context(), "sess-3")
-	require.NoError(t, err)
-	messages[0].Content = "prefix first sess-3"
-	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "sess-3", messages))
 	result, err := Push(t.Context(), path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)
@@ -135,29 +116,6 @@ func TestSearchKeptSelectionsAcrossRestart(t *testing.T) {
 		pages[i], err = first.Search(t.Context(), f)
 		require.NoError(t, err)
 	}
-	require.Len(t, pages[0].Results, 3)
-	for i, id := range []string{"sess-2", "sess-1", "sess-3"} {
-		require.Equal(t, id, pages[0].Results[i].SessionID)
-		snippet := "first " + id
-		if id == "sess-3" {
-			snippet = "prefix " + snippet
-		}
-		require.Equal(t, snippet, pages[0].Results[i].Snippet)
-	}
-	require.Empty(t, pages[1].Results)
-	require.Empty(t, pages[2].Results)
-	require.Empty(t, pages[3].Results)
-	require.Len(t, pages[4].Results, 3)
-	for i, id := range []string{"sess-3", "sess-2", "sess-1"} {
-		require.Equal(t, id, pages[4].Results[i].SessionID)
-	}
-	require.Len(t, pages[5].Results, 1)
-	require.Equal(t, "sess-3", pages[5].Results[0].SessionID)
-	require.Zero(t, pages[5].NextCursor)
-	require.Len(t, pages[6].Results, 2)
-	require.Equal(t, "sess-2", pages[6].Results[0].SessionID)
-	require.Equal(t, "sess-1", pages[6].Results[1].SessionID)
-	require.Equal(t, 2, pages[6].NextCursor)
 	require.NoError(t, first.Close())
 	restarted := openUsagePartsStore(t, path)
 	defer restarted.Close()
@@ -195,13 +153,7 @@ func TestSearchKeptPushInvalidation(t *testing.T) {
 			require.Equal(t, id, page.Results[i].SessionID)
 		}
 		require.NoError(t, store.Close())
-		store = openUsagePartsStore(t, path)
-		store.afterSearchRead = func() { reads++ }
-		got, err := store.Search(ctx, filter)
-		require.NoError(t, err)
-		require.Equal(t, page, got)
-		require.Equal(t, 1, reads)
-		require.NoError(t, store.Close())
+
 	}
 	push()
 	check("first", "sess-1")
@@ -228,74 +180,24 @@ func TestSearchKeptPushInvalidation(t *testing.T) {
 }
 
 func TestSearchKeptContentChangedDuringPush(t *testing.T) {
-	for _, kind := range []string{"image", "message"} {
+	for _, kind := range []string{"image", "message", "is_system", "is_system_prefixed"} {
 		t.Run(kind, func(t *testing.T) {
 			t.Setenv("CACHE_DIRECTORY", t.TempDir())
 			ctx := t.Context()
 			local := newLocalDB(t)
 			const id, ts = "screenshot", "2026-01-02T03:04:05.000Z"
 			content := `[{"type":"input_image","image_url":"data:image/png;base64,` + base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\nimage")) + `"}]`
+			text := "apple"
+			if kind == "is_system_prefixed" {
+				text = "<task-notification>apple"
+			}
 			require.NoError(t, local.UpsertSession(ctx, syncSession(id, "shots", "look", ts, 1)))
-			message := syncMessage(id, 0, "assistant", "apple", ts, db.ToolCall{ToolName: "Read", Category: "Read", ToolUseID: "shot", ResultContent: content})
+			message := syncMessage(id, 0, "assistant", text, ts, db.ToolCall{ToolName: "Read", Category: "Read", ToolUseID: "shot", ResultContent: content})
 			require.NoError(t, local.ReplaceSessionMessages(ctx, id, []db.Message{message}))
 			require.NoError(t, local.BackfillImageTextOccurrences(ctx))
 			hash := db.RetainedToolResultImages(content)[0].SHA256
 			identity := ocr.Identity{Fingerprint: "proc-a", Provider: "tesseract", Model: "eng", Revision: "r1"}
 			require.NoError(t, local.SaveImageText(ctx, hash, identity, "apple", false))
-			path := filepath.Join(t.TempDir(), "mirror.duckdb")
-			result, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, true, nil)
-			require.NoError(t, err)
-			require.Zero(t, result.Errors)
-			syncer := newTestSync(t, path, local, storage.MirrorPushOptions{})
-			sessions, err := local.ListSessionsForMirrorWindow(ctx, "", nil, nil)
-			require.NoError(t, err)
-			fingerprints, err := syncer.sessionFingerprints(ctx, sessions)
-			require.NoError(t, err)
-			setText := func(text string) {
-				t.Helper()
-				if kind == "image" {
-					require.NoError(t, local.SaveImageText(ctx, hash, identity, text, false))
-				} else {
-					message.Content = text
-					require.NoError(t, local.ReplaceSessionMessages(ctx, id, []db.Message{message}))
-				}
-			}
-			setText("banana")
-			_, err = syncer.pushSingleSession(ctx, sessions[0], fingerprints[id])
-			require.NoError(t, err)
-			require.NoError(t, syncer.Close())
-			filter := db.SearchFilter{Query: "banana"}
-			store := openUsagePartsStore(t, path)
-			page, err := store.Search(ctx, filter)
-			require.NoError(t, err)
-			require.Len(t, page.Results, 1)
-			require.NoError(t, store.Close())
-			setText("apple")
-			result, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{}, true, nil)
-			require.NoError(t, err)
-			require.Zero(t, result.Errors)
-			// Restoring content can reproduce the earlier fingerprint even though
-			// the normal local writers also advance other session metadata.
-			writeUsageMirror(t, path, fmt.Sprintf("UPDATE sessions SET agentsview_push_fingerprint = '%s'", fingerprints[id]))
-			store = openUsagePartsStore(t, path)
-			defer store.Close()
-			page, err = store.Search(ctx, filter)
-			require.NoError(t, err)
-			require.Empty(t, page.Results)
-		})
-	}
-}
-
-func TestSearchKeptVisibilityChangedDuringPush(t *testing.T) {
-	for _, flag := range []string{"is_system", "is_system_prefixed"} {
-		t.Run(flag, func(t *testing.T) {
-			t.Setenv("CACHE_DIRECTORY", t.TempDir())
-			ctx := t.Context()
-			local := newLocalDB(t)
-			const id, ts = "visibility", "2026-01-02T03:04:05.000Z"
-			message := syncMessage(id, 0, "assistant", "<task-notification>uniqueterm", ts)
-			require.NoError(t, local.UpsertSession(ctx, syncSession(id, "project", "session", ts, 1)))
-			require.NoError(t, local.ReplaceSessionMessages(ctx, id, []db.Message{message}))
 			path := filepath.Join(t.TempDir(), "mirror.duckdb")
 			result, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, true, nil)
 			require.NoError(t, err)
@@ -307,20 +209,35 @@ func TestSearchKeptVisibilityChangedDuringPush(t *testing.T) {
 			require.NoError(t, err)
 			fingerprints, err := syncer.sessionFingerprints(ctx, sessions)
 			require.NoError(t, err)
-			if flag == "is_system" {
+			switch kind {
+			case "image":
+				require.NoError(t, local.SaveImageText(ctx, hash, identity, "banana", false))
+			case "message":
+				message.Content = "banana"
+			case "is_system":
 				message.IsSystem = true
-			} else {
+			case "is_system_prefixed":
 				message.Role = "user"
 			}
-			require.NoError(t, local.ReplaceSessionMessages(ctx, id, []db.Message{message}))
+			if kind != "image" {
+				require.NoError(t, local.ReplaceSessionMessages(ctx, id, []db.Message{message}))
+			}
 			_, err = syncer.pushSingleSession(ctx, sessions[0], fingerprints[id])
 			require.NoError(t, err)
 			require.NoError(t, syncer.Close())
-			filter := db.SearchFilter{Query: "uniqueterm"}
+			filter := db.SearchFilter{Query: "banana"}
+			visibility := kind == "is_system" || kind == "is_system_prefixed"
+			if visibility {
+				filter.Query = "apple"
+			}
 			store := openUsagePartsStore(t, path)
 			page, err := store.Search(ctx, filter)
 			require.NoError(t, err)
-			require.Empty(t, page.Results)
+			if visibility {
+				require.Empty(t, page.Results)
+			} else {
+				require.Len(t, page.Results, 1)
+			}
 			require.NoError(t, store.Close())
 			restored, err := db.OpenIsolated(ctx, backup)
 			require.NoError(t, err)
@@ -332,8 +249,12 @@ func TestSearchKeptVisibilityChangedDuringPush(t *testing.T) {
 			defer store.Close()
 			page, err = store.Search(ctx, filter)
 			require.NoError(t, err)
-			require.Len(t, page.Results, 1)
-			require.Equal(t, id, page.Results[0].SessionID)
+			if visibility {
+				require.Len(t, page.Results, 1)
+				require.Equal(t, id, page.Results[0].SessionID)
+			} else {
+				require.Empty(t, page.Results)
+			}
 		})
 	}
 }

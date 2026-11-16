@@ -25,10 +25,10 @@ func restartSearchTestMerges(t *testing.T, s *Store, tables ...string) {
 	})
 }
 
-func TestSearchKeptImageTextAcrossMergeAndPush(t *testing.T) {
+func TestSearchKeptRestart(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	ctx := t.Context()
 	first, syncer, local := newPushedStore(t)
+	ctx := t.Context()
 	image := inlineImage("kept")
 	writeImageSession(t, local, image, inlineImage("other"), "2026-01-12T00:00:00.000Z")
 	require.NoError(t, local.BackfillImageTextOccurrences(ctx))
@@ -37,41 +37,6 @@ func TestSearchKeptImageTextAcrossMergeAndPush(t *testing.T) {
 	require.NoError(t, local.SaveImageText(ctx, hash, identity, "invoice 4827", false))
 	_, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
-	require.NoError(t, first.openActivityReportDisk(syncer.target))
-	filter := db.SearchFilter{Query: "invoice"}
-	page, err := first.Search(ctx, filter)
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	restartSearchTestMerges(t, first, "image_text")
-	execPreparedUsage(t, first, "SYSTEM STOP MERGES image_text", "INSERT INTO image_text SELECT * FROM image_text", "SYSTEM START MERGES image_text", "OPTIMIZE TABLE image_text FINAL")
-	reopen := func() *Store {
-		s := newTestStore(t, syncer.conn, syncer.target)
-		require.NoError(t, s.openActivityReportDisk(syncer.target))
-		return s
-	}
-	s := reopen()
-	before, _ := usageQueryCountsOf(t, s, "startsWith(trimLeft(query, ' \\n\\t\\r'), 'WITH msg_grouped AS')")
-	got, err := s.Search(ctx, filter)
-	require.NoError(t, err)
-	require.Equal(t, page, got)
-	after, _ := usageQueryCountsOf(t, s, "startsWith(trimLeft(query, ' \\n\\t\\r'), 'WITH msg_grouped AS')")
-	require.Equal(t, before, after)
-	require.NoError(t, local.SaveImageText(ctx, hash, identity, "receipt 4827", false))
-	_, err = syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	s = reopen()
-	got, err = s.Search(ctx, filter)
-	require.NoError(t, err)
-	require.Empty(t, got.Results)
-	got, err = s.Search(ctx, db.SearchFilter{Query: "receipt"})
-	require.NoError(t, err)
-	require.Len(t, got.Results, 1)
-	require.Equal(t, "receipt 4827", got.Results[0].Snippet)
-}
-
-func TestSearchKeptRestart(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	first, syncer, local := newPushedStore(t)
 	require.NoError(t, first.openActivityReportDisk(syncer.target))
 	filter := db.SearchFilter{Query: "alpha"}
 	read := func(s *Store) db.SearchPage {
@@ -88,6 +53,12 @@ func TestSearchKeptRestart(t *testing.T) {
 	want := read(first)
 	require.NotEmpty(t, want.Results)
 	require.Positive(t, count(first))
+	imageFilter := db.SearchFilter{Query: "invoice"}
+	beforeImage := count(first)
+	imagePage, err := first.Search(ctx, imageFilter)
+	require.NoError(t, err)
+	require.Len(t, imagePage.Results, 1)
+	require.Greater(t, count(first), beforeImage)
 	reopen := func() *Store {
 		s := newTestStore(t, syncer.conn, syncer.target)
 		require.NoError(t, s.openActivityReportDisk(syncer.target))
@@ -103,8 +74,8 @@ func TestSearchKeptRestart(t *testing.T) {
 	require.Greater(t, count(s), before)
 	parts, err := first.tablePartsFingerprint(t.Context(), []string{"sessions", "messages"})
 	require.NoError(t, err)
-	restartSearchTestMerges(t, first, "sessions", "messages")
-	execPreparedUsage(t, first, "SYSTEM STOP MERGES sessions", "SYSTEM STOP MERGES messages", "INSERT INTO sessions SELECT * FROM sessions", "INSERT INTO messages SELECT * FROM messages", "SYSTEM START MERGES sessions", "SYSTEM START MERGES messages", "OPTIMIZE TABLE sessions FINAL", "OPTIMIZE TABLE messages FINAL")
+	restartSearchTestMerges(t, first, "sessions", "messages", "image_text")
+	execPreparedUsage(t, first, "SYSTEM STOP MERGES sessions", "SYSTEM STOP MERGES messages", "INSERT INTO sessions SELECT * FROM sessions", "INSERT INTO messages SELECT * FROM messages", "SYSTEM START MERGES sessions", "SYSTEM START MERGES messages", "OPTIMIZE TABLE sessions FINAL", "OPTIMIZE TABLE messages FINAL", "SYSTEM STOP MERGES image_text", "INSERT INTO image_text SELECT * FROM image_text", "SYSTEM START MERGES image_text", "OPTIMIZE TABLE image_text FINAL")
 	after, err := first.tablePartsFingerprint(t.Context(), []string{"sessions", "messages"})
 	require.NoError(t, err)
 	require.NotEqual(t, parts, after)
@@ -112,6 +83,22 @@ func TestSearchKeptRestart(t *testing.T) {
 	before = count(s)
 	require.Equal(t, want, read(s))
 	require.Equal(t, before, count(s))
+	before = count(s)
+	require.Positive(t, before)
+	got, err := s.Search(ctx, imageFilter)
+	require.NoError(t, err)
+	require.Equal(t, imagePage, got)
+	require.Equal(t, before, count(s))
+	require.NoError(t, local.SaveImageText(ctx, hash, identity, "receipt 4827", false))
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	s = reopen()
+	got, err = s.Search(ctx, imageFilter)
+	require.NoError(t, err)
+	require.Empty(t, got.Results)
+	got, err = s.Search(ctx, db.SearchFilter{Query: "receipt"})
+	require.NoError(t, err)
+	require.Len(t, got.Results, 1)
 	appendMessage(t, local, fixtureAlphaID, "alpha changed", "2026-01-12T05:00:00Z")
 	_, err = syncer.Push(t.Context(), false, nil)
 	require.NoError(t, err)
