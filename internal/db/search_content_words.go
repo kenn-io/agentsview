@@ -44,13 +44,13 @@ func WordSnippetRange(body, pattern string, words ContentWords) (int, int) {
 		return start, end
 	}
 	offset := 0
-	for word := range strings.FieldsFuncSeq(body, isWordSeparator) {
+	for word := range strings.FieldsFuncSeq(body, isSeparator) {
 		offset += strings.Index(body[offset:], word)
 		for _, forms := range words.Terms {
 			// A form spanning punctuation centers on its first word, as
 			// ftsTermSpan does for phrases matched across punctuation.
 			if slices.ContainsFunc(forms, func(form string) bool {
-				parts := strings.FieldsFunc(form, isWordSeparator)
+				parts := strings.FieldsFunc(form, isSeparator)
 				return len(parts) > 0 && strings.EqualFold(word, parts[0])
 			}) {
 				return offset, offset + len(word)
@@ -114,7 +114,6 @@ func (q contentWords) snippetTerm() string { return strings.Join(q.terms, " OR "
 // phraseMatch reports whether body holds the words of phrase adjacent and in
 // order, ignoring case, with only punctuation or space between them.
 func phraseMatch(body, phrase string) bool {
-	isSeparator := func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) }
 	want := strings.FieldsFunc(phrase, isSeparator)
 	have := strings.FieldsFunc(body, isSeparator)
 	for i := 0; i+len(want) <= len(have); i++ {
@@ -125,7 +124,7 @@ func phraseMatch(body, phrase string) bool {
 	return false
 }
 
-func isWordSeparator(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) }
+func isSeparator(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsNumber(r) }
 
 // unquoteContentSearch returns the text inside a single fully quoted query.
 func unquoteContentSearch(pattern string) (string, bool) {

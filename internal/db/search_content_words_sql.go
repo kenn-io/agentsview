@@ -47,7 +47,7 @@ func wordRegexSQL(b *QueryBuilder, raw string, q ContentWords, all, ascii bool) 
 		}
 	}
 	for _, phrase := range q.Phrases {
-		words := strings.FieldsFunc(phrase, isWordSeparator)
+		words := strings.FieldsFunc(phrase, isSeparator)
 		for i := range words {
 			words[i] = regexp.QuoteMeta(words[i])
 		}
@@ -144,7 +144,7 @@ func wordGap(b *QueryBuilder) string {
 // suffixes, which roughly halves PostgreSQL's regex cost.
 func compactForms(b *QueryBuilder, forms []string) string {
 	if slices.ContainsFunc(forms, func(form string) bool {
-		return strings.IndexFunc(form, isWordSeparator) >= 0
+		return strings.IndexFunc(form, isSeparator) >= 0
 	}) {
 		patterns := make([]string, len(forms))
 		for i, form := range forms {
@@ -162,7 +162,7 @@ func compactForms(b *QueryBuilder, forms []string) string {
 }
 
 func wordFormRegex(b *QueryBuilder, form string) string {
-	parts := strings.FieldsFunc(form, isWordSeparator)
+	parts := strings.FieldsFunc(form, isSeparator)
 	for i := range parts {
 		parts[i] = regexp.QuoteMeta(parts[i])
 	}
@@ -171,7 +171,7 @@ func wordFormRegex(b *QueryBuilder, form string) string {
 
 func wordCandidatePrefix(forms []string) string {
 	prefix := wordPrefix(forms)
-	if i := strings.IndexFunc(prefix, isWordSeparator); i >= 0 {
+	if i := strings.IndexFunc(prefix, isSeparator); i >= 0 {
 		return prefix[:i]
 	}
 	return prefix
