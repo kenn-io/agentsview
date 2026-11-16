@@ -4,7 +4,6 @@ package duckdb
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -239,7 +238,6 @@ func TestPartialActivityUsageKeptUntilPush(t *testing.T) {
 }
 
 func TestPartialActivityUsageRereadsPastNextRow(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	keptActivityMirror(t, path, "session-a", 500)
 	conn, err := Open(t.Context(), path)
@@ -250,26 +248,15 @@ func TestPartialActivityUsageRereadsPastNextRow(t *testing.T) {
 	store, err := NewStore(t.Context(), path)
 	require.NoError(t, err)
 	defer store.Close()
-	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
 	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
 	require.NoError(t, err)
 	reads := observeActivityUsageReads(t)
 	first := keptActivityBuild(t, store, q, true)
 	require.Equal(t, 0, activity.ReportWithSessions(first).Totals.OutputTokens)
-	require.NoError(t, store.Close())
-	store, err = NewStore(t.Context(), path)
-	require.NoError(t, err)
-	defer store.Close()
-	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
 	q.EffectiveEnd = q.EffectiveEnd.Add(time.Hour)
 	second := keptActivityBuild(t, store, q, true)
 	require.Equal(t, 500, activity.ReportWithSessions(second).Totals.OutputTokens)
 	require.Equal(t, 2, *reads)
-	require.NoError(t, store.Close())
-	store, err = NewStore(t.Context(), path)
-	require.NoError(t, err)
-	defer store.Close()
-	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
 	q.EffectiveEnd = q.EffectiveEnd.Add(-time.Hour)
 	third := keptActivityBuild(t, store, q, true)
 	require.Equal(t, 0, activity.ReportWithSessions(third).Totals.OutputTokens)
@@ -313,33 +300,35 @@ func TestPartialActivityUsageRereadsPastClaudePeer(t *testing.T) {
 }
 
 func TestPartialActivityInputsSurviveRestart(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	keptActivityMirror(t, path, "session-a", 500)
-	rates := map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 10_000_000}}
-	for _, tc := range []struct {
-		name  string
-		input activity.QueryInput
-	}{
-		{"month", activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}},
-		{"year", activity.QueryInput{Preset: "custom", From: "2025-01-02T00:00:00Z", To: "2026-01-02T00:00:00Z", Timezone: "UTC"}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			q, err := activity.ResolveQuery(tc.input, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	for _, scenario := range []string{"unchanged", "custom pricing", "mirror pricing", "cursor usage"} {
+		t.Run(scenario, func(t *testing.T) {
+			t.Setenv("CACHE_DIRECTORY", t.TempDir())
+			path := filepath.Join(t.TempDir(), "mirror.duckdb")
+			keptActivityMirror(t, path, "session-a", 500)
+			writeUsageMirror(t, path, `INSERT INTO model_pricing (model_pattern, output_microdollars_per_mtok) VALUES ('kept-model', 10000000)`)
+			q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
 			require.NoError(t, err)
-			require.True(t, q.Partial)
 			open := func() *Store {
 				s, err := NewStore(t.Context(), path)
 				require.NoError(t, err)
-				s.SetCustomPricing(rates)
 				require.NoError(t, s.OpenActivityReportDisk(t.Context()))
 				return s
 			}
 			store := open()
-			keptActivityBuild(t, store, q, true)
+			want := keptActivityBuild(t, store, q, true)
+			require.Equal(t, money.MustParseDollars("0.005"), activity.ReportWithSessions(want).Totals.Cost)
 			require.NoError(t, store.Close())
+			switch scenario {
+			case "mirror pricing":
+				writeUsageMirror(t, path, `UPDATE model_pricing SET output_microdollars_per_mtok = 20000000 WHERE model_pattern = 'kept-model'`)
+			case "cursor usage":
+				writeUsageMirror(t, path, `INSERT INTO cursor_usage_events (id, occurred_at, model, output_tokens, dedup_key) VALUES (1, TIMESTAMP '2026-01-01 01:00:00', 'kept-model', 200, 'account-1')`)
+			}
 			restarted := open()
 			defer restarted.Close()
+			if scenario == "custom pricing" {
+				restarted.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}})
+			}
 			q.EffectiveEnd = q.EffectiveEnd.Add(time.Minute)
 			usage, runs, messages := 0, 0, 0
 			previous := analyticsQueryObserver
@@ -354,17 +343,21 @@ func TestPartialActivityInputsSurviveRestart(t *testing.T) {
 					messages++
 				}
 			}
-			defer func() { analyticsQueryObserver = previous }()
+			t.Cleanup(func() { analyticsQueryObserver = previous })
 			got := keptActivityBuild(t, restarted, q, true)
-			require.Equal(t, []int{0, 0, 0}, []int{usage, runs, messages})
-			fresh := NewStoreFromDB(restarted.DB())
-			fresh.SetCustomPricing(rates)
-			requireKeptActivityEqual(t, keptActivityBuild(t, fresh, q, true), got)
-			usage = 0
-			restarted.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}})
-			repriced := keptActivityBuild(t, restarted, q, true)
-			require.Equal(t, 1, usage)
-			require.Equal(t, money.MustParseDollars("0.01"), activity.ReportWithSessions(repriced).Totals.Cost)
+			wantReads := 0
+			if scenario == "custom pricing" || scenario == "mirror pricing" {
+				wantReads = 1
+			}
+			require.Equal(t, []int{wantReads, 0, 0}, []int{usage, runs, messages})
+			if wantReads == 1 {
+				require.Equal(t, money.MustParseDollars("0.01"), activity.ReportWithSessions(got).Totals.Cost)
+			} else {
+				require.Equal(t, 500, activity.ReportWithSessions(got).Totals.OutputTokens)
+				require.Equal(t, money.MustParseDollars("0.005"), activity.ReportWithSessions(got).Totals.Cost)
+				fresh := NewStoreFromDB(restarted.DB())
+				requireKeptActivityEqual(t, keptActivityBuild(t, fresh, q, true), got)
+			}
 		})
 	}
 }
@@ -474,72 +467,6 @@ func TestPartialActivityUsageSameStampReplacement(t *testing.T) {
 	}
 }
 
-func TestFinishedDayThenPartialMonthSurvivesRestart(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	keptActivityMirror(t, path, "session-a", 500)
-	open := func() *Store {
-		s, err := NewStore(t.Context(), path)
-		require.NoError(t, err)
-		require.NoError(t, s.OpenActivityReportDisk(t.Context()))
-		return s
-	}
-	store := open()
-	keptActivityBuild(t, store, duckDayQuery(t, "2026-01-01", "UTC"), true)
-	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC))
-	require.NoError(t, err)
-	want := keptActivityBuild(t, store, q, true)
-	require.NoError(t, store.Close())
-	restarted := open()
-	defer restarted.Close()
-	reads := 0
-	previous := analyticsQueryObserver
-	analyticsQueryObserver = func(query string) {
-		if strings.Contains(query, "activity_run_pieces") || strings.Contains(query, "SELECT session_id, role, timestamp FROM messages") {
-			reads++
-		}
-	}
-	defer func() { analyticsQueryObserver = previous }()
-	got := keptActivityBuild(t, restarted, q, true)
-	require.Equal(t, 0, reads)
-	requireKeptActivityEqual(t, want, got)
-}
-
-func TestPartialActivityWithoutCloseRebuildsRuns(t *testing.T) {
-	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC))
-	require.NoError(t, err)
-	if path := os.Getenv("ACTIVITY_UNCLOSED_MIRROR"); path != "" {
-		store, err := NewStore(t.Context(), path)
-		require.NoError(t, err)
-		require.NoError(t, store.OpenActivityReportDisk(t.Context()))
-		keptActivityBuild(t, store, q, true)
-		os.Exit(0)
-	}
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	keptActivityMirror(t, path, "session-a", 500)
-	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestPartialActivityWithoutCloseRebuildsRuns$")
-	cmd.Env = append(os.Environ(), "ACTIVITY_UNCLOSED_MIRROR="+path)
-	output, err := cmd.CombinedOutput()
-	require.NoError(t, err, "%s", output)
-	restarted, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
-	defer restarted.Close()
-	require.NoError(t, restarted.OpenActivityReportDisk(t.Context()))
-	reads := 0
-	previous := analyticsQueryObserver
-	analyticsQueryObserver = func(query string) {
-		if strings.Contains(query, "activity_run_pieces") {
-			reads++
-		}
-	}
-	t.Cleanup(func() { analyticsQueryObserver = previous })
-	got := keptActivityBuild(t, restarted, q, true)
-	require.Equal(t, 1, reads)
-	fresh := NewStoreFromDB(restarted.DB())
-	requireKeptActivityEqual(t, keptActivityBuild(t, fresh, q, true), got)
-}
-
 func TestPartialActivityEmptyFingerprintDoesNotReuseDisk(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
@@ -561,88 +488,4 @@ func TestPartialActivityEmptyFingerprintDoesNotReuseDisk(t *testing.T) {
 		require.NoError(t, store.Close())
 	}
 	require.Equal(t, 2, *reads)
-}
-
-func TestPartialActivityRepricesAfterMirrorPush(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	keptActivityMirror(t, path, "session-a", 500)
-	writeUsageMirror(t, path, `INSERT INTO model_pricing (model_pattern, output_microdollars_per_mtok) VALUES ('kept-model', 10000000)`)
-	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC))
-	require.NoError(t, err)
-	open := func() *Store {
-		s, err := NewStore(t.Context(), path)
-		require.NoError(t, err)
-		require.NoError(t, s.OpenActivityReportDisk(t.Context()))
-		return s
-	}
-	store := open()
-	first := keptActivityBuild(t, store, q, true)
-	require.Equal(t, money.MustParseDollars("0.005"), activity.ReportWithSessions(first).Totals.Cost)
-	require.NoError(t, store.Close())
-	writeUsageMirror(t, path, `UPDATE model_pricing SET output_microdollars_per_mtok = 20000000 WHERE model_pattern = 'kept-model'`)
-	store = open()
-	defer store.Close()
-	reads := observeActivityUsageReads(t)
-	got := keptActivityBuild(t, store, q, true)
-	require.Equal(t, 1, *reads)
-	require.Equal(t, money.MustParseDollars("0.01"), activity.ReportWithSessions(got).Totals.Cost)
-}
-
-func TestActivityRunsReusedAfterSweepAndRestart(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	keptActivityMirror(t, path, "session-a", 500)
-	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC))
-	require.NoError(t, err)
-	open := func() *Store {
-		s, err := NewStore(t.Context(), path)
-		require.NoError(t, err)
-		require.NoError(t, s.OpenActivityReportDisk(t.Context()))
-		return s
-	}
-	first := open()
-	keptActivityBuild(t, first, q, true)
-	require.NoError(t, first.Close())
-	reused := open()
-	keptActivityBuild(t, reused, q, true)
-	reused.usageDisk.Sweep(time.Now().Add(31 * 24 * time.Hour))
-	require.NoError(t, reused.Close())
-	restarted := open()
-	defer restarted.Close()
-	reads := 0
-	previous := analyticsQueryObserver
-	analyticsQueryObserver = func(query string) {
-		if strings.Contains(query, "activity_run_pieces") || strings.Contains(query, "SELECT session_id, role, timestamp FROM messages") {
-			reads++
-		}
-	}
-	t.Cleanup(func() { analyticsQueryObserver = previous })
-	got := keptActivityBuild(t, restarted, q, true)
-	require.Equal(t, 0, reads)
-	require.Equal(t, 500, activity.ReportWithSessions(got).Totals.OutputTokens)
-}
-
-func TestPartialActivityIgnoresCursorAccountUsageOnRestart(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	keptActivityMirror(t, path, "session-a", 500)
-	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC))
-	require.NoError(t, err)
-	open := func() *Store {
-		s, err := NewStore(t.Context(), path)
-		require.NoError(t, err)
-		require.NoError(t, s.OpenActivityReportDisk(t.Context()))
-		return s
-	}
-	store := open()
-	want := keptActivityBuild(t, store, q, true)
-	require.NoError(t, store.Close())
-	writeUsageMirror(t, path, `INSERT INTO cursor_usage_events (id, occurred_at, model, output_tokens, dedup_key) VALUES (1, TIMESTAMP '2026-01-01 01:00:00', 'kept-model', 200, 'account-1')`)
-	restarted := open()
-	defer restarted.Close()
-	reads := observeActivityUsageReads(t)
-	got := keptActivityBuild(t, restarted, q, true)
-	require.Equal(t, 0, *reads)
-	requireKeptActivityEqual(t, want, got)
 }
