@@ -16,7 +16,9 @@ turn on [search by meaning](https://agentsview.io/docs/semantic-search/) from
 Settings without editing configuration. Usage and search are much faster on
 large archives. Choose message colors and a color-blind safe chart palette, and
 import Open Interpreter sessions. Commands are now grouped under `source`,
-`report`, `replica`, and `index`; older names still work.
+`report`, `replica`, and `index`; older names still work. The `main` branch also
+supports Muse Personal sessions, collected by an AgentsView that runs on your
+Muse's hosted machine rather than your laptop.
 
 <p align="center">
   <img src="https://agentsview.io/assets/generated/screenshots/dashboard.png" alt="Analytics dashboard" width="720">
@@ -345,11 +347,12 @@ agentsview report stats --include-git-outcomes
   filters in the command palette and optional CJK character and phrase search
   for Chinese, Japanese, and Korean text in SQLite, including Chinese word
   segmentation through `simple`/cppjieba
-- **Semantic search** (opt-in) -- search by meaning using local embeddings by default.
-  Choose Settings → Embeddings → Turn on or run `agentsview index embeddings build`
-  to set it up. Agents use keyword search until indexing is ready; content-search
-  matches cite the conversation unit they came from. Configure other providers
-  in [Semantic Search](https://agentsview.io/semantic-search/#enabling-vector)
+- **Semantic search** (opt-in) -- search by meaning using local embeddings by
+  default. Choose Settings → Embeddings → Turn on or run
+  `agentsview index embeddings build` to set it up. Agents use keyword search
+  until indexing is ready; content-search matches cite the conversation unit
+  they came from. Configure other providers in
+  [Semantic Search](https://agentsview.io/semantic-search/#enabling-vector)
 - **Token usage and cost dashboard** -- per-session and per-model cost
   breakdowns, total and uncached input counts, and daily spend charts with
   Smooth, Lines, and Bars views
@@ -367,8 +370,8 @@ agentsview report stats --include-git-outcomes
   adds folder suggestions, session previews, and bulk corrections
 - **Recall corpus browser** -- approve or archive experimental extracted
   knowledge and jump from entries to their supporting transcript evidence
-- **Conversation memory** -- Claude Code and Codex setup lets agents
-  search past decisions and cite source messages; see
+- **Conversation memory** -- Claude Code and Codex setup lets agents search past
+  decisions and cite source messages; see
   [MCP memory setup](https://agentsview.io/docs/mcp/#focused-memory-profile)
 - **Eight interface languages** -- Azerbaijani, English, French, Japanese,
   Korean, Spanish, Simplified Chinese, and Traditional Chinese
@@ -424,6 +427,7 @@ local Amp thread JSON files.
 | MiMoCode              | `~/.local/share/mimocode/`                                                                                                                                                                                                                           |
 | Mistral Vibe          | `~/.vibe/logs/session/`                                                                                                                                                                                                                              |
 | Muse Code             | `~/.local/share/muse/sessions/` (`$XDG_DATA_HOME/muse/sessions/` when `XDG_DATA_HOME` is set)                                                                                                                                                        |
+| Muse Personal         | `~/agents/agent-<uuid>/sessions/` on your Muse's hosted machine                                                                                                                                                                                      |
 | OpenClaw              | `~/.openclaw/agents/`                                                                                                                                                                                                                                |
 | OpenCode              | `~/.local/share/opencode/`                                                                                                                                                                                                                           |
 | Open Code Review      | `~/.opencodereview/sessions/`                                                                                                                                                                                                                        |
@@ -466,8 +470,8 @@ for the full transcript (user turns, assistant replies, thinking, and tool
 calls). Grok trims `chat_history.jsonl` each time it compacts a session, so
 AgentsView rebuilds the turns before each compaction from `updates.jsonl` and
 marks each compaction in the transcript. If `chat_history.jsonl` is missing,
-AgentsView falls back to summary-only mode. Set `GROK_DIR` or `agents.grok.dirs` to override the default
-directory.
+AgentsView falls back to summary-only mode. Set `GROK_DIR` or `agents.grok.dirs`
+to override the default directory.
 
 Goose sessions are read from its shared SQLite `sessions.db`, including
 transcript content, thinking, tool calls and results, session relationships,
