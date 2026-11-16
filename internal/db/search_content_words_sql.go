@@ -13,8 +13,8 @@ import (
 // WordCandidateSQL selects candidates holding prefixes of all or any query words.
 func WordCandidateSQL(b *QueryBuilder, column string, q ContentWords, all bool) string {
 	parts := make([]string, len(q.Terms))
-	for i, forms := range q.Terms {
-		parts[i] = b.ContainsPredicate(column, wordCandidatePrefix(forms))
+	for i, term := range q.Terms {
+		parts[i] = b.ContainsPredicate(column, wordCandidatePrefix(term[0]))
 	}
 	op := " OR "
 	if all {
@@ -44,8 +44,8 @@ func wordRegexSQL(b *QueryBuilder, raw string, q ContentWords, all, ascii bool) 
 		}
 	}
 	if all {
-		for _, forms := range q.Terms {
-			add(boundedPattern(b, compactForms(b, forms)))
+		for _, term := range q.Terms {
+			add(wordTermPattern(b, term))
 		}
 	}
 	for _, phrase := range q.Phrases {
@@ -63,11 +63,19 @@ func wordRegexSQL(b *QueryBuilder, raw string, q ContentWords, all, ascii bool) 
 // WordCountSQL counts query words held as whole words.
 func WordCountSQL(b *QueryBuilder, raw string, q ContentWords) string {
 	parts := make([]string, len(q.Terms))
-	for i, forms := range q.Terms {
-		parts[i] = "CASE WHEN " + b.ContainsPredicate(raw, wordCandidatePrefix(forms)) +
-			" AND " + wordPredicate(b, raw, boundedPattern(b, compactForms(b, forms))) + " THEN 1 ELSE 0 END"
+	for i, term := range q.Terms {
+		parts[i] = "CASE WHEN " + b.ContainsPredicate(raw, wordCandidatePrefix(term[0])) +
+			" AND " + wordPredicate(b, raw, wordTermPattern(b, term)) + " THEN 1 ELSE 0 END"
 	}
 	return "(" + strings.Join(parts, " + ") + ")"
+}
+
+func wordTermPattern(b *QueryBuilder, term [][]string) string {
+	parts := make([]string, len(term))
+	for i, forms := range term {
+		parts[i] = compactForms(b, forms)
+	}
+	return boundedPattern(b, parts...)
 }
 
 func wordPredicate(b *QueryBuilder, raw, pattern string) string {

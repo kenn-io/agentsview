@@ -48,6 +48,7 @@ func SeedWordSearch(t *testing.T, d *db.DB) {
 		{"both-invalid", "word-unicode-all", "invoice中 rounding"},
 		{"both-number", "word-unicode-all", "invoice١ rounding"},
 		{"both-valid", "word-unicode-all", "invoice_ rounding"},
+		{"compound", "word-compound", "invoices rounding decided"},
 		{"accent", "word-accent", "café"},
 	} {
 		SeedSession(t, d, entry.id, entry.project, func(s *db.Session) {
@@ -116,6 +117,13 @@ func AssertExplicitMirrorFTS(t *testing.T, store db.Store, modes ...string) {
 // AssertWordSearch checks the user-visible ranking and paging contract.
 func AssertWordSearch(t *testing.T, store db.Store) {
 	t.Helper()
+	t.Run("compound query term", func(t *testing.T) {
+		page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "invoice_rounding absentword", Mode: "fts", Project: "word-compound"})
+		require.NoError(t, err)
+		require.Len(t, page.Matches, 1)
+		assert.Equal(t, "compound", page.Matches[0].SessionID)
+		assert.Equal(t, 1, page.Matches[0].MatchedWords)
+	})
 	type hit struct {
 		session, location string
 		words             int

@@ -23,18 +23,35 @@ type contentWords struct {
 // ContentWords is a natural query for backends without FTS5: each word's
 // regular forms and the quoted phrases a match must hold.
 type ContentWords struct {
-	Terms   [][]string
+	Terms   [][][]string
 	Phrases []string
 }
 
 // ContentWordsMatch reports whether body contains every word and phrase.
 func ContentWordsMatch(body string, words ContentWords) bool {
-	for _, forms := range words.Terms {
-		if !slices.ContainsFunc(forms, func(form string) bool { return phraseMatch(body, form) }) {
+	for _, term := range words.Terms {
+		if !wordFormsMatch(body, term) {
 			return false
 		}
 	}
 	return !slices.ContainsFunc(words.Phrases, func(phrase string) bool { return !phraseMatch(body, phrase) })
+}
+
+func wordFormsMatch(body string, term [][]string) bool {
+	have := strings.FieldsFunc(body, isSeparator)
+	for i := 0; i+len(term) <= len(have); i++ {
+		matched := true
+		for j, forms := range term {
+			if !slices.ContainsFunc(forms, func(form string) bool { return strings.EqualFold(have[i+j], form) }) {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
 }
 
 // WordSnippetRange finds the exact pattern or the first whole word matching a
@@ -46,10 +63,10 @@ func WordSnippetRange(body, pattern string, words ContentWords) (int, int) {
 	offset := 0
 	for word := range strings.FieldsFuncSeq(body, isSeparator) {
 		offset += strings.Index(body[offset:], word)
-		for _, forms := range words.Terms {
+		for _, term := range words.Terms {
 			// A form spanning punctuation centers on its first word, as
 			// ftsTermSpan does for phrases matched across punctuation.
-			if slices.ContainsFunc(forms, func(form string) bool {
+			if slices.ContainsFunc(term[0], func(form string) bool {
 				parts := strings.FieldsFunc(form, isSeparator)
 				return len(parts) > 0 && strings.EqualFold(word, parts[0])
 			}) {
@@ -68,7 +85,29 @@ func RouteContentWords(f ContentSearchFilter) (ContentSearchFilter, ContentWords
 		return f, ContentWords{}, false
 	}
 	f, q, ok := routeContentWords(f)
-	return f, ContentWords{Terms: q.forms, Phrases: q.phrases}, ok
+	return f, ContentWords{Terms: mirrorWordForms(q.forms), Phrases: q.phrases}, ok
+}
+
+func mirrorWordForms(terms [][]string) [][][]string {
+	result := make([][][]string, 0, len(terms))
+	for _, forms := range terms {
+		parts := strings.FieldsFunc(forms[0], isSeparator)
+		if len(parts) < 2 {
+			result = append(result, [][]string{forms})
+			continue
+		}
+		var term [][]string
+		for _, part := range parts {
+			natural, err := literalFTSAnalyzer.PrepareNatural(part)
+			if err != nil || len(natural.CountTerms) == 0 {
+				term = append(term, []string{part})
+			} else {
+				term = append(term, natural.CountTerms[0].Forms)
+			}
+		}
+		result = append(result, term)
+	}
+	return result
 }
 
 func hasFTSPrefix(pattern string) bool {
