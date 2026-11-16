@@ -55,6 +55,8 @@ func (db *DB) keptDailyUsage(ctx context.Context, filter UsageFilter) (DailyUsag
 	if version == "" {
 		return db.getDailyUsageUncached(ctx, filter)
 	}
+	// Reads.Do cannot guard the put by version, carry the request's window
+	// memo into a flight, or bypass flights for progress streams.
 	rows, ok := db.usageKept.Get(slot, version)
 	if !ok {
 		full := filter
