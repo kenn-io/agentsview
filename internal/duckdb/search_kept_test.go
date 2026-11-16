@@ -78,7 +78,6 @@ func TestSearchKeptReplacementDuringRead(t *testing.T) {
 	require.Len(t, page.Results, 1)
 	require.Equal(t, "session-a", page.Results[0].SessionID)
 	require.NoError(t, restarted.Close())
-
 }
 
 func TestSearchKeptUnversioned(t *testing.T) {
@@ -105,24 +104,37 @@ func TestSearchKeptSelectionsAcrossRestart(t *testing.T) {
 	result, err := Push(t.Context(), path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)
-	filters := []db.SearchFilter{
-		{Query: "first"}, {Query: "missing"}, {Query: "first", Project: "other"},
-		{Query: "first", DateFrom: "2030-01-01"}, {Query: "first", Sort: "recency"},
-		{Query: "first", Cursor: 2, Limit: 2}, {Query: "first", Limit: 2},
+	cases := []struct {
+		filter db.SearchFilter
+		ids    []string
+		cursor int
+	}{
+		{db.SearchFilter{Query: "first"}, []string{"sess-3", "sess-2", "sess-1"}, 0},
+		{db.SearchFilter{Query: "missing"}, nil, 0},
+		{db.SearchFilter{Query: "first", Project: "other"}, nil, 0},
+		{db.SearchFilter{Query: "first", DateFrom: "2030-01-01"}, nil, 0},
+		{db.SearchFilter{Query: "first", Sort: "recency"}, []string{"sess-3", "sess-2", "sess-1"}, 0},
+		{db.SearchFilter{Query: "first", Cursor: 2, Limit: 2}, []string{"sess-1"}, 0},
+		{db.SearchFilter{Query: "first", Limit: 2}, []string{"sess-3", "sess-2"}, 2},
 	}
 	first := openUsagePartsStore(t, path)
-	pages := make([]db.SearchPage, len(filters))
-	for i, f := range filters {
-		pages[i], err = first.Search(t.Context(), f)
+	pages := make([]db.SearchPage, len(cases))
+	for i, tc := range cases {
+		pages[i], err = first.Search(t.Context(), tc.filter)
 		require.NoError(t, err)
+		require.Len(t, pages[i].Results, len(tc.ids))
+		for j, id := range tc.ids {
+			require.Equal(t, id, pages[i].Results[j].SessionID)
+		}
+		require.Equal(t, tc.cursor, pages[i].NextCursor)
 	}
 	require.NoError(t, first.Close())
 	restarted := openUsagePartsStore(t, path)
 	defer restarted.Close()
 	reads := 0
 	restarted.afterSearchRead = func() { reads++ }
-	for i, f := range filters {
-		page, err := restarted.Search(t.Context(), f)
+	for i, tc := range cases {
+		page, err := restarted.Search(t.Context(), tc.filter)
 		require.NoError(t, err)
 		require.Equal(t, pages[i], page)
 	}
@@ -153,7 +165,6 @@ func TestSearchKeptPushInvalidation(t *testing.T) {
 			require.Equal(t, id, page.Results[i].SessionID)
 		}
 		require.NoError(t, store.Close())
-
 	}
 	push()
 	check("first", "sess-1")
