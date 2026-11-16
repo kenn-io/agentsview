@@ -239,3 +239,50 @@ func TestSearchKeptCJKFingerprint(t *testing.T) {
 	_, err = d.Search(ctx, filter)
 	require.Error(t, err)
 }
+
+func TestSearchKeptOldWriterRestore(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "archive.db")
+	open := func() *DB {
+		t.Helper()
+		d, err := Open(ctx, path)
+		require.NoError(t, err)
+		return d
+	}
+	d := open()
+	insertSession(t, d, "session", "project")
+	insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "other"})
+	_, err := d.getWriter().ExecContext(ctx, `UPDATE sessions SET first_message = 'needle' WHERE id = 'session'`)
+	require.NoError(t, err)
+	require.NoError(t, d.Close())
+	backup, err := os.ReadFile(path)
+	require.NoError(t, err)
+	oldWriterUpdate := func(value string) {
+		t.Helper()
+		_, err := d.getWriter().ExecContext(ctx, `DROP TRIGGER IF EXISTS trg_sessions_search_first_message;
+CREATE TRIGGER trg_sessions_search_first_message AFTER UPDATE OF first_message ON sessions
+WHEN OLD.first_message IS NOT NEW.first_message BEGIN
+ INSERT INTO archive_metadata (key, value) VALUES ('search_change_revision', '1')
+ ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1,
+  updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+END;`)
+		require.NoError(t, err)
+		_, err = d.getWriter().ExecContext(ctx, `UPDATE sessions SET first_message = ? WHERE id = 'session'`, value)
+		require.NoError(t, err)
+	}
+	filter := SearchFilter{Query: "needle"}
+	d = open()
+	oldWriterUpdate("needle cached")
+	page, err := d.Search(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, "needle cached", page.Results[0].Name)
+	require.NoError(t, d.Close())
+	require.NoError(t, os.WriteFile(path, backup, 0o600))
+	d = open()
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	oldWriterUpdate("other")
+	page, err = d.Search(ctx, filter)
+	require.NoError(t, err)
+	require.Empty(t, page.Results)
+}
