@@ -4546,48 +4546,47 @@ schemas keep their existing ordering behavior.
   under the Hermes folder (`state.db`, `state.db-wal`, `sessions/<name>`)
   rather than its absolute local path, so an archive unpacked into a fresh
   folder keeps its fingerprints (`TestHermesFingerprintsIgnoreTheLocalFolder`).
-- **Watcher change check (2026-11-10):** Reverified the entire producer tree
-  at [Hermes `aca4f1df`](https://github.com/NousResearch/hermes-agent/tree/aca4f1df).
-  Stores with a positive integer schema version at most 33, `transcript_revision`,
-  and complete native message-update triggers use a per-session token to skip
-  unchanged members on database and WAL events. The token includes parsed
-  session fields, model usage ledger rows, transcript revision, and a checksum
-  over every message ID, timestamp, and finish reason. The checksum scans
-  message history. Tokens also include whether rewrite tracking was verified
-  when they were created, in both direct and bulk fingerprint passes. Enabling
-  tracking after an untracked edit therefore requires a full check. Tokens
-  created before this provenance was included also receive one full check.
-  The native `messages_transcript_revision_update` and
-  `messages_display_revision_update` definitions in
+- **Watcher change check (2026-11-10):** Reverified the entire producer tree at
+  [Hermes `aca4f1df`](https://github.com/NousResearch/hermes-agent/tree/aca4f1df).
+  Stores with a positive integer schema version at most 33,
+  `transcript_revision`, and complete native message-update triggers use a
+  per-session token to skip unchanged members on database and WAL events. The
+  token includes parsed session fields, model usage ledger rows, transcript
+  revision, and a checksum over every message ID, timestamp, and finish
+  reason. The checksum scans message history. Tokens also include whether
+  rewrite tracking was verified when they were created, in both direct and
+  bulk fingerprint passes. Enabling tracking after an untracked edit therefore
+  requires a full check. Tokens created before this provenance was included
+  also receive one full check. The native `messages_transcript_revision_update`
+  and `messages_display_revision_update` definitions in
   [hermes_state_common.py](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/hermes_state_common.py)
   cover payload and display rewrites. Coverage is rechecked on every event:
   an older writer can recreate shorter triggers. Invalid or future schema
   versions and incomplete trigger coverage retain full checks.
   [Native recovery](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/hermes_cli/session_recovery.py)
-  repairs all out-of-window timestamps in fresh recovery output. Installing that
-  output changes the timestamp checksum even when revision and live count stay
-  unchanged. No replacement tracker is used.
-  Reverify these couplings when the producer changes: additive changes can occur
-  without a schema-version bump. The pinned tree has no independent message
-  session-ID reassignment. A finish-reason change in
+  repairs all out-of-window timestamps in fresh recovery output. Installing
+  that output changes the timestamp checksum even when revision and live count
+  stay unchanged. No replacement tracker is used. Reverify these couplings
+  when the producer changes: additive changes can occur without a
+  schema-version bump. The pinned tree has no independent message session-ID
+  reassignment. A finish-reason change in
   [transcript repair](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/agent/transcript_repair.py#L317-L328)
   names content and display metadata in the update, advancing the revision.
   [Prune rewrites](https://github.com/NousResearch/hermes-agent/blob/aca4f1df/hermes_state_prune_rewrite.py#L225-L249)
-  first insert a retained row with a new ID, advancing the greatest message ID.
-  Transcript-file edits use their own `sessions/` events. Listing costs session
-  metadata, distinct lifetime ledger keys, and message history, not only changed
-  sessions.
-  Auxiliary same-key ledger UPSERTs can leave session fields/revision unchanged,
-  so the full ledger read remains necessary under the current producer contract.
-  Ledger keys aggregate route/task usage; their lifetime count has no verified
-  constant bound per session. Database events also scan transcript directory
-  entries and check membership in the same read snapshot, so transcripts for
-  missing or unreadable rows remain discoverable. Unchanged members need only
-  indexed session lookups; selected members also check message readability.
-  Cron members still receive full fingerprint checks because an ancestor can
-  change their resolved job. Other selected members read transcript payloads.
-  The new fingerprint format causes one reparse of
-  previously imported sessions as they are checked.
+  first insert a retained row with a new ID, advancing the greatest message
+  ID. Transcript-file edits use their own `sessions/` events. Listing costs
+  session metadata, distinct lifetime ledger keys, and message history, not
+  only changed sessions. Auxiliary same-key ledger UPSERTs can leave session
+  fields/revision unchanged, so the full ledger read remains necessary under
+  the current producer contract. Ledger keys aggregate route/task usage; their
+  lifetime count has no verified constant bound per session. Database events
+  also scan transcript directory entries and check membership in the same read
+  snapshot, so transcripts for missing or unreadable rows remain discoverable.
+  Unchanged members need only indexed session lookups; selected members also
+  check message readability. Cron members still receive full fingerprint
+  checks because an ancestor can change their resolved job. Other selected
+  members read transcript payloads. The new fingerprint format causes one
+  reparse of previously imported sessions as they are checked.
 - **Model usage check (2026-10-22):**
   [hermes_state_usage.py](https://github.com/NousResearch/hermes-agent/blob/3ba2b0787ed3a73ec3b08085ed0137f235209cf4/hermes_state_usage.py)
   records per-model and billing-route deltas in `session_model_usage`.
@@ -5508,10 +5507,15 @@ schemas keep their existing ordering behavior.
 - **Format:** Legacy sessions are a directory containing `messages.jsonl` and
   `meta.json`. Since the CLI's unified harness rollout (around September 2026)
   sessions are written under `unified/<session-id>/`. Agentsview reads store
-  v1 minors 1–8, manifest v1, projection v1, required runtime v3, and journal
-  record v1. Missing store, manifest, and projection versions default to v1; a
-  missing store minor defaults to 1. Newer versions return an error. The
-  session directory holds these files:
+  v1 at any minor, manifest v1, projection v1, and journal record v1. Missing
+  store, manifest, and projection versions default to v1; a missing store
+  minor defaults to 1. A different store format, manifest, projection, or
+  journal record version returns an error. The producer bumps the store minor
+  for changes an older writer must not attempt; minors 9 and 10 (Vibe 3.1)
+  changed runtime and checkpoint baselines that Agentsview does not read, so
+  the minor is not a compatibility gate for a read-only consumer.
+  `runtime-state.json` is not version-checked, because Agentsview reads only
+  its identity and session metadata. The session directory holds these files:
     - `CURRENT` names the newest generation and pins its `manifest.json` by
       `manifest_sha256`, the SHA-256 of the document without its trailing
       newline. Agentsview rejects a mismatch, as the producer does.
@@ -5525,10 +5529,15 @@ schemas keep their existing ordering behavior.
     - `journal/<sequence>.jsonl` holds digest-chained records. The producer
       journals every durable projection change as a `projection_delta`
       (`append_entry`, `replace_entry`, `remove_entry`, `set_history_entries`,
-      `set_envelope`) or `projection_advanced` record. It folds the journal into
-      a new generation only when the session settles, so a running turn exists
+      `set_envelope`) or `projection_advanced` record. Since store minor 9 a
+      session move journals `session_relocated`, which replaces the session
+      metadata and applies its own projection delta, usually a `checkpoint`
+      entry. Only `cwd` changes: `relocate_session` in `_runtime.py` copies
+      `active_model` from the stored runtime state. It folds the journal into a
+      new generation only when the session settles, so a running turn exists
       only in the journal. Agentsview replays these records like
-      `_apply_journal`, ignores runtime records, and skips a final record
+      `_apply_journal`, lets the relocated `cwd` supersede `runtime-state.json`
+      and `meta.json`, ignores other runtime records, and skips a final record
       without its newline.
 - **Evidence:** `source`.
 - **Upstream:** Clone `https://github.com/mistralai/mistral-vibe.git` at
@@ -5537,7 +5546,10 @@ schemas keep their existing ordering behavior.
   and
   [history_manager.py](https://github.com/mistralai/mistral-vibe/blob/0685654a40a4035966891289065379a751a7e617/vibe/cli/history_manager.py).
   The unified store is verified against v2.26.1, commit
-  `4ae5c5955da8e761318916bdb1a7f46f0b50c7d0`. See
+  `4ae5c5955da8e761318916bdb1a7f46f0b50c7d0`, and store minors 9–10 against
+  v3.1.2, commit `b20313e01d6926d4191da89c32d5da11e3a0a060`
+  ([\_storage.py](https://github.com/mistralai/mistral-vibe/blob/b20313e01d6926d4191da89c32d5da11e3a0a060/harness/runtimes/python/python/mistralai_vibe_local_harness/vibe/_storage.py)
+  for `STORE_FORMAT_MINOR` and `SessionRelocatedRecordV1`). See
   [\_storage.py](https://github.com/mistralai/mistral-vibe/blob/4ae5c5955da8e761318916bdb1a7f46f0b50c7d0/harness/runtimes/python/python/mistralai_vibe_local_harness/vibe/_storage.py)
   for `apply_projection_delta` at line 893 and `_apply_journal` at line
   3631,
@@ -5609,7 +5621,10 @@ schemas keep their existing ordering behavior.
   `meta.json`, and journal segments are data-bearing; publication temporaries,
   generation directories, chunks, and the `active/` session leases are not.
   Reverified 2026-10-16 with `TestVibeUnifiedProviderParseJournal` and
-  `TestSyncVibeUnifiedJournalAppends`.
+  `TestSyncVibeUnifiedJournalAppends`. Reverified 2026-11-16 by syncing a
+  session the Vibe 3.1.2 CLI wrote at store minor 10, before and after a
+  `session_relocated` record written through the producer's
+  `UnifiedSessionStore.relocate_session`.
 - **Agentsview:** `internal/parser/vibe.go`, `internal/parser/vibe_unified.go`,
   and `internal/parser/vibe_provider.go`.
 
