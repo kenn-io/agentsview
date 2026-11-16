@@ -132,3 +132,37 @@ func TestReadsConcurrentCancellation(t *testing.T) {
 		})
 	}
 }
+
+func TestReadsCheckedSharesRejectedLoad(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var reads kept.Reads[string]
+		var loads atomic.Int32
+		release := make(chan struct{})
+		load := func(context.Context) (string, bool, error) {
+			loads.Add(1)
+			<-release
+			return "fresh", false, nil
+		}
+		type result struct {
+			value string
+			err   error
+		}
+		done := make(chan result, 2)
+		for range 2 {
+			go func() { value, err := reads.DoChecked(t.Context(), "s", "v", load); done <- result{value, err} }()
+			synctest.Wait()
+		}
+		close(release)
+		for range 2 {
+			got := <-done
+			require.NoError(t, got.err)
+			require.Equal(t, "fresh", got.value)
+		}
+		require.EqualValues(t, 1, loads.Load())
+		_, ok := reads.Get("s", "v")
+		require.False(t, ok)
+		_, err := reads.DoChecked(t.Context(), "s", "v", load)
+		require.NoError(t, err)
+		require.EqualValues(t, 2, loads.Load())
+	})
+}

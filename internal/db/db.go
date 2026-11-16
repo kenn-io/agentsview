@@ -951,6 +951,7 @@ type DB struct {
 	activityKept         kept.Memo[activityKept]
 	analyticsKept        kept.Reads[any]
 	searchKept           kept.Reads[SearchPage]
+	afterSearchRead      func()
 	trendsDisk           kept.Disk
 	trendsDiskOnce       sync.Once
 	usageKept            kept.Memo[DailyUsageResult]

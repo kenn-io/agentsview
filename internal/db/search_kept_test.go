@@ -286,3 +286,135 @@ END;`)
 	require.NoError(t, err)
 	require.Empty(t, page.Results)
 }
+
+func TestSearchKeptRejectsChangedSource(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d, err := Open(ctx, path)
+	require.NoError(t, err)
+	insertSession(t, d, "session", "project")
+	insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "other"})
+	require.NoError(t, d.Close())
+	backup, err := os.ReadFile(path)
+	require.NoError(t, err)
+	d, err = Open(ctx, path)
+	require.NoError(t, err)
+	version := d.searchVersion(ctx, false)
+	var hookErr error
+	d.afterSearchRead = func() {
+		_, hookErr = d.getWriter().ExecContext(ctx, `UPDATE sessions SET first_message = 'needle' WHERE id = 'session'`)
+	}
+	filter := SearchFilter{Query: "needle"}
+	page, err := d.Search(ctx, filter)
+	require.NoError(t, err)
+	require.NoError(t, hookErr)
+	require.Len(t, page.Results, 1)
+	_, ok := d.searchKept.Get(filter.Slot()+"|false", version)
+	require.False(t, ok)
+	require.NoError(t, d.Close())
+	require.NoError(t, os.WriteFile(path, backup, 0o600))
+	d, err = Open(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	_, err = d.getWriter().ExecContext(ctx, `DROP TABLE messages_fts`)
+	require.NoError(t, err)
+	_, err = d.Search(ctx, filter)
+	require.Error(t, err)
+}
+
+func TestSearchKeptHistoryTokenCounts(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "session", "project")
+	insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "other"})
+	_, err := d.getWriter().ExecContext(ctx, `CREATE TABLE token_writes (n INTEGER);
+CREATE TRIGGER count_token_writes AFTER UPDATE ON archive_metadata WHEN NEW.key = 'search_history_token'
+BEGIN INSERT INTO token_writes VALUES (1); END;`)
+	require.NoError(t, err)
+	cases := []struct {
+		name, query string
+		want        int
+	}{
+		{"group", `UPDATE sessions SET group_key='group' WHERE id='session'`, 1},
+		{"grouped rename", `UPDATE sessions SET session_name='name' WHERE id='session'`, 1},
+		{"listed column", `UPDATE sessions SET project='new' WHERE id='session'`, 1},
+		{"unlisted column", `UPDATE sessions SET health_score=42 WHERE id='session'`, 0},
+		{"first message", `UPDATE sessions SET first_message='first' WHERE id='session'`, 1},
+		{"dialogue", `UPDATE messages SET dialogue_text='changed' WHERE session_id='session'`, 1},
+		{"image", `INSERT INTO image_text_cache(id,image_hash,processor,provider,model,revision,text) VALUES(-1,'hash','processor','provider','model','revision','text')`, 1},
+		{"usage insert", `INSERT INTO usage_events(session_id,source,model,output_tokens) VALUES('session','session','model-x',7)`, 0},
+		{"usage update", `UPDATE usage_events SET output_tokens=8`, 0},
+		{"usage delete", `DELETE FROM usage_events`, 0},
+		{"pricing insert", `INSERT INTO model_pricing(model_pattern) VALUES('model-x')`, 0},
+		{"pricing update", `UPDATE model_pricing SET input_microdollars_per_mtok=100 WHERE model_pattern='model-x'`, 0},
+		{"band insert", `INSERT INTO model_pricing_bands(model_pattern,above_input_tokens,input_microdollars_per_mtok,output_microdollars_per_mtok,cache_creation_microdollars_per_mtok,cache_read_microdollars_per_mtok) VALUES('model-x',1000,0,0,0,0)`, 0},
+		{"band update", `UPDATE model_pricing_bands SET input_microdollars_per_mtok=200 WHERE model_pattern='model-x'`, 0},
+		{"band delete", `DELETE FROM model_pricing_bands WHERE model_pattern='model-x'`, 0},
+		{"pricing delete", `DELETE FROM model_pricing WHERE model_pattern='model-x'`, 0},
+		{"genai insert", `INSERT OR REPLACE INTO genai_pricing(singleton,version,source,data_json) VALUES(1,'v1','test','{}')`, 0},
+		{"genai update", `UPDATE genai_pricing SET data_json='{"price":3}' WHERE singleton=1`, 0},
+		{"genai delete", `DELETE FROM genai_pricing WHERE singleton=1`, 0},
+		{"session insert", `INSERT INTO sessions(id,project,agent,machine) VALUES('other','project','agent','machine')`, 1},
+		{"session delete", `DELETE FROM sessions WHERE id='other'`, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := d.getWriter().ExecContext(ctx, `DELETE FROM token_writes`)
+			require.NoError(t, err)
+			_, err = d.getWriter().ExecContext(ctx, tc.query)
+			require.NoError(t, err)
+			var count int
+			require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT count(*) FROM token_writes`).Scan(&count))
+			require.Equal(t, tc.want, count)
+		})
+	}
+}
+
+func TestSearchKeptOldWriterTriggers(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "session", "project")
+	insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "other"})
+	_, err := d.getWriter().ExecContext(ctx, `
+DROP TRIGGER trg_sessions_usage_change_update;
+CREATE TRIGGER trg_sessions_usage_change_update AFTER UPDATE OF session_name ON sessions
+WHEN OLD.session_name IS NOT NEW.session_name BEGIN
+ INSERT INTO archive_metadata(key,value) VALUES('usage_change_revision','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1;
+END;
+DROP TRIGGER trg_sessions_search_first_message;
+CREATE TRIGGER trg_sessions_search_first_message AFTER UPDATE OF first_message ON sessions
+WHEN OLD.first_message IS NOT NEW.first_message BEGIN
+ INSERT INTO archive_metadata(key,value) VALUES('search_change_revision','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1;
+END;
+DROP TRIGGER trg_messages_search_dialogue;
+CREATE TRIGGER trg_messages_search_dialogue AFTER UPDATE OF dialogue_text ON messages
+WHEN OLD.dialogue_text IS NOT NEW.dialogue_text BEGIN
+ INSERT INTO archive_metadata(key,value) VALUES('search_change_revision','1') ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1;
+END;`)
+	require.NoError(t, err)
+	filter := SearchFilter{Query: "needle"}
+	var loads atomic.Int32
+	d.searchKept.Size = func(SearchPage) int64 { loads.Add(1); return 1 }
+	for _, query := range []string{
+		`UPDATE sessions SET session_name='needle' WHERE id='session'`,
+		`UPDATE sessions SET first_message='needle' WHERE id='session'`,
+		`UPDATE messages SET dialogue_text='needle' WHERE session_id='session'`,
+	} {
+		version := d.searchVersion(ctx, false)
+		var token string
+		require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT value FROM archive_metadata WHERE key='search_history_token'`).Scan(&token))
+		_, err := d.Search(ctx, filter)
+		require.NoError(t, err)
+		_, err = d.getWriter().ExecContext(ctx, query)
+		require.NoError(t, err)
+		require.NotEqual(t, version, d.searchVersion(ctx, false))
+		var changedToken string
+		require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT value FROM archive_metadata WHERE key='search_history_token'`).Scan(&changedToken))
+		require.NotEqual(t, token, changedToken)
+		_, err = d.Search(ctx, filter)
+		require.NoError(t, err)
+	}
+	require.EqualValues(t, 4, loads.Load())
+}

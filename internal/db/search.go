@@ -432,31 +432,46 @@ func (db *DB) Search(
 		return db.search(ctx, f, cjk)
 	}
 	key := fmt.Sprintf("%s|%t", f.Slot(), cjk)
-	id, err := db.GetDatabaseID(ctx)
-	if err != nil {
+	version := db.searchVersion(ctx, cjk)
+	if version == "" {
 		return db.search(ctx, f, cjk)
 	}
-	revision, err := db.UsageChangeRevision(ctx)
-	if err != nil {
-		return db.search(ctx, f, cjk)
+	db.trendsPartsDisk()
+	return db.searchKept.DoChecked(ctx, key, version, func(ctx context.Context) (SearchPage, bool, error) {
+		return kept.LoadJSON(&db.trendsDisk, "search|"+key, version, func() bool {
+			return db.searchVersion(ctx, cjk) == version
+		}, func() (SearchPage, error) {
+			if db.afterSearchRead != nil {
+				db.afterSearchRead()
+			}
+			return db.search(ctx, f, cjk)
+		})
+	})
+}
+
+func (db *DB) searchVersion(ctx context.Context, cjk bool) string {
+	var id, usage, search, token string
+	err := db.getReader().QueryRowContext(ctx, `SELECT
+		(SELECT value FROM archive_metadata WHERE key = ?),
+		COALESCE((SELECT value FROM archive_metadata WHERE key = ?), '0'),
+		COALESCE((SELECT value FROM archive_metadata WHERE key = ?), '0'),
+		(SELECT value FROM archive_metadata WHERE key = 'search_history_token')`,
+		archiveMetadataDatabaseIDKey, archiveMetadataUsageChangeRevisionKey, archiveMetadataSearchChangeRevisionKey,
+	).Scan(&id, &usage, &search, &token)
+	if err != nil || strings.TrimSpace(id) == "" || token == "" {
+		return ""
 	}
-	searchRevision, err := db.archiveJournalRevision(ctx, archiveMetadataSearchChangeRevisionKey, "search change")
-	if err != nil {
-		return db.search(ctx, f, cjk)
-	}
-	var token string
-	if err := db.getReader().QueryRowContext(ctx, `SELECT value FROM archive_metadata WHERE key = 'search_history_token'`).Scan(&token); err != nil || token == "" {
-		return db.search(ctx, f, cjk)
+	for _, raw := range []string{usage, search} {
+		n, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+		if err != nil || n < 0 {
+			return ""
+		}
 	}
 	fingerprint := ""
 	if cjk {
 		fingerprint = simpleFTSRuntimeConfig.fingerprint
 	}
-	version := fmt.Sprintf("%s|%d|%d|%s|%s", id, revision, searchRevision, token, fingerprint)
-	db.trendsPartsDisk()
-	return db.searchKept.Do(ctx, key, version, func(ctx context.Context) (SearchPage, error) {
-		return kept.LoadJSON(&db.trendsDisk, "search|"+key, version, func() (SearchPage, error) { return db.search(ctx, f, cjk) })
-	})
+	return fmt.Sprintf("%s|%s|%s|%s|%s", id, usage, search, token, fingerprint)
 }
 
 func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage, error) {

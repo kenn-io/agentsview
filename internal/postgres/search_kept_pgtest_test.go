@@ -96,7 +96,7 @@ func TestSearchKeptRestart(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, want, got)
 	require.Zero(t, trace.count.Load())
-	require.EqualValues(t, 2, trace.versions.Load())
+	require.EqualValues(t, 3, trace.versions.Load())
 	write("needle second")
 	s, trace = open()
 	got, err = s.Search(ctx, filter)
