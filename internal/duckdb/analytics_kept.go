@@ -93,7 +93,7 @@ func (s *Store) dashboardDigest(ctx context.Context, panel string, f db.Analytic
 			component{"tools_calls", "tool_calls", append([]string{"message_id"}, db.DashboardToolsCallInputs...)})
 	case "velocity":
 		components = append(components,
-			component{"velocity_messages", "messages", db.DashboardVelocityMessageInputs},
+			component{"velocity_messages", "messages", append([]string{"id"}, db.DashboardVelocityMessageInputs...)},
 			component{"velocity_calls", "tool_calls", append([]string{"message_id"}, db.DashboardVelocityCallInputs...)})
 	case "signals":
 		components = append(components, component{"signals_sessions", "sessions", append([]string{"frustration_marker_count"}, db.DashboardSignalsSessionInputs...)})

@@ -512,6 +512,35 @@ func TestAnalyticsKeptChangedMirrorInputs(t *testing.T) {
 	require.Equal(t, [3]int{0, 0, 1}, loads)
 
 }
+func TestAnalyticsKeptVelocityMessageIDReplacement(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	dir := t.TempDir()
+	path, next := filepath.Join(dir, "mirror.duckdb"), filepath.Join(dir, "next.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	writeUsageMirror(t, path,
+		`INSERT INTO messages SELECT * REPLACE (3 AS id, 2 AS ordinal, 'other-model' AS model) FROM messages WHERE id=2`,
+		`INSERT INTO tool_calls(id,message_id,session_id,tool_name,category) VALUES(1,2,'session-a','Read','Read')`)
+	ctx := t.Context()
+	store, err := NewStore(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { store.Close() })
+	require.NoError(t, store.OpenActivityReportDisk(ctx))
+	f := db.AnalyticsFilter{Timezone: "UTC", Model: "kept-model"}
+	before, err := store.GetAnalyticsVelocity(ctx, f)
+	require.NoError(t, err)
+	require.InDelta(t, 1, before.Overall.ToolCallsPerActiveMin, 0)
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(next, data, 0o600))
+	writeUsageMirror(t, next, `UPDATE messages SET id=CASE id WHEN 2 THEN 3 WHEN 3 THEN 2 ELSE id END WHERE id IN (2,3)`)
+	require.NoError(t, swapMirrorFile(next, path))
+	store.checkMirrorReplacement(ctx, func(err error) { require.NoError(t, err) })
+	after, err := store.GetAnalyticsVelocity(ctx, f)
+	require.NoError(t, err)
+	require.Zero(t, after.Overall.ToolCallsPerActiveMin)
+}
+
 
 func TestAnalyticsKeptDigestFailureLoadsSource(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
