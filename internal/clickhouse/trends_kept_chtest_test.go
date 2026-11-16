@@ -69,7 +69,7 @@ func TestTrendsKeptRestart(t *testing.T) {
 	}
 	count := func(store *Store) uint64 {
 		t.Helper()
-		n, _ := usageQueryCountsOf(t, store, "startsWith(trimLeft(query, ' \\n\\t\\r'), 'SELECT m.content, COALESCE(m.timestamp')")
+		n, _ := usageQueryCountsOf(t, store, "(startsWith(trimLeft(query, ' \\n\\t\\r'), 'SELECT m.content, COALESCE(m.timestamp') OR startsWith(trimLeft(query, ' \\n\\t\\r'), 'SELECT m.session_id, m.content'))")
 		return n
 	}
 	var reports []db.TrendsTermsResponse
@@ -180,7 +180,7 @@ func TestTrendsKeptTimezoneProcess(t *testing.T) {
 	}
 	count := func() uint64 {
 		t.Helper()
-		n, _ := usageQueryCountsOf(t, store, "startsWith(trimLeft(query, ' \\n\\t\\r'), 'SELECT m.content, COALESCE(m.timestamp')")
+		n, _ := usageQueryCountsOf(t, store, "(startsWith(trimLeft(query, ' \\n\\t\\r'), 'SELECT m.content, COALESCE(m.timestamp') OR startsWith(trimLeft(query, ' \\n\\t\\r'), 'SELECT m.session_id, m.content'))")
 		return n
 	}
 	run := func(filter, zone, date string) {
@@ -214,23 +214,22 @@ func TestTrendsKeptMemoryHitRepairsDiskVersion(t *testing.T) {
 	}
 	count := func(s *Store) uint64 {
 		t.Helper()
-		n, _ := usageQueryCountsOf(t, s, "startsWith(trimLeft(query, ' \\n\\t\\r'), 'SELECT m.content, COALESCE(m.timestamp')")
+		n, _ := usageQueryCountsOf(t, s, "(startsWith(trimLeft(query, ' \\n\\t\\r'), 'SELECT m.content, COALESCE(m.timestamp') OR startsWith(trimLeft(query, ' \\n\\t\\r'), 'SELECT m.session_id, m.content'))")
 		return n
 	}
 	want := read(store)
 	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "clickhouse-usage", "*", "*.gob"))
 	require.NoError(t, err)
-	require.Len(t, files, 1)
+	require.Len(t, files, 2)
 	old := time.Now().Add(-31 * 24 * time.Hour)
 	for _, file := range files {
 		require.NoError(t, os.Chtimes(file, old, old))
 	}
 	read(store)
 	store.usageDisk.Sweep(time.Now())
-	for _, file := range files {
-		_, err := os.Stat(file)
-		require.NoError(t, err)
-	}
+	files, err = filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "clickhouse-usage", "*", "*.gob"))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
 	_, slot, err := trendsTermsKeys(f, terms, "day")
 	require.NoError(t, err)
 	stale, err := json.Marshal(want)
