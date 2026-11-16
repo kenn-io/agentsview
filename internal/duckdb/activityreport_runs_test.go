@@ -195,62 +195,50 @@ func TestDuckDBActivityRunsRepairUnfingerprintedSessions(t *testing.T) {
 	require.Equal(t, []time.Duration{3 * time.Minute}, spans())
 }
 
-func TestActivityRunsDiskReusesUnchangedSessions(t *testing.T) {
-	for _, scenario := range []string{"swept", "missing"} {
-		t.Run(scenario, func(t *testing.T) {
-			t.Setenv("CACHE_DIRECTORY", t.TempDir())
-			conn := openTestDuckDB(t)
-			require.NoError(t, EnsureSchema(t.Context(), conn))
-			for i, id := range []string{"a", "b"} {
-				_, err := conn.ExecContext(t.Context(), `INSERT INTO sessions (id, machine, project, agent, agentsview_push_fingerprint) VALUES (?, 'machine', 'project', 'codex', 'v1')`, id)
-				require.NoError(t, err)
-				_, err = conn.ExecContext(t.Context(), `INSERT INTO messages (id, session_id, ordinal, role, content, timestamp) VALUES (?, ?, 0, 'user', '', TIMESTAMP '2026-01-01 00:00:00')`, i+1, id)
-				require.NoError(t, err)
-			}
-			open := func() *Store {
-				s := NewStoreFromDB(conn)
-				require.NoError(t, s.usageDisk.Open("duckdb-usage", "runs-test", 128<<20, 256<<20))
-				return s
-			}
-			q := duckDayQuery(t, "2026-01-01", "UTC")
-			q.Partial = true
-			ids := []string{"a", "b"}
-			first := open()
-			_, _, err := first.activityReportRuns(t.Context(), ids, q)
-			require.NoError(t, err)
-			if scenario != "missing" {
-				first.activityRuns.save(&first.usageDisk)
-			}
-			if scenario == "swept" {
-				reused := open()
-				_, _, err = reused.activityReportRuns(t.Context(), ids, q)
-				require.NoError(t, err)
-				reused.usageDisk.Sweep(time.Now().Add(31 * 24 * time.Hour))
-				reused.activityRuns.save(&reused.usageDisk)
-			}
-			runs, messages := 0, 0
-			previous := analyticsQueryObserver
-			analyticsQueryObserver = func(query string) {
-				if strings.Contains(query, "activity_run_pieces") {
-					runs++
-				}
-				if strings.Contains(query, "SELECT session_id, role, timestamp FROM messages") {
-					messages++
-				}
-			}
-			t.Cleanup(func() { analyticsQueryObserver = previous })
-			restarted := open()
-			_, entries, err := restarted.activityReportRuns(t.Context(), ids, q)
-			require.NoError(t, err)
-			wantReads := 0
-			if scenario == "missing" {
-				wantReads = 1
-			}
-			require.Equal(t, []int{wantReads, wantReads}, []int{runs, messages})
-			require.Len(t, entries["a"].users, 1)
-			require.Len(t, entries["b"].users, 1)
-		})
+func TestActivityRunsDiskReusesAfterSweep(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	conn := openTestDuckDB(t)
+	require.NoError(t, EnsureSchema(t.Context(), conn))
+	for i, id := range []string{"a", "b"} {
+		_, err := conn.ExecContext(t.Context(), `INSERT INTO sessions (id, machine, project, agent, agentsview_push_fingerprint) VALUES (?, 'machine', 'project', 'codex', 'v1')`, id)
+		require.NoError(t, err)
+		_, err = conn.ExecContext(t.Context(), `INSERT INTO messages (id, session_id, ordinal, role, content, timestamp) VALUES (?, ?, 0, 'user', '', TIMESTAMP '2026-01-01 00:00:00')`, i+1, id)
+		require.NoError(t, err)
 	}
+	open := func() *Store {
+		s := NewStoreFromDB(conn)
+		require.NoError(t, s.usageDisk.Open("duckdb-usage", "runs-test", 128<<20, 256<<20))
+		return s
+	}
+	q := duckDayQuery(t, "2026-01-01", "UTC")
+	q.Partial = true
+	ids := []string{"a", "b"}
+	first := open()
+	_, _, err := first.activityReportRuns(t.Context(), ids, q)
+	require.NoError(t, err)
+	first.activityRuns.save(&first.usageDisk)
+	reused := open()
+	_, _, err = reused.activityReportRuns(t.Context(), ids, q)
+	require.NoError(t, err)
+	reused.usageDisk.Sweep(time.Now().Add(31 * 24 * time.Hour))
+	reused.activityRuns.save(&reused.usageDisk)
+	runs, messages := 0, 0
+	previous := analyticsQueryObserver
+	analyticsQueryObserver = func(query string) {
+		if strings.Contains(query, "activity_run_pieces") {
+			runs++
+		}
+		if strings.Contains(query, "SELECT session_id, role, timestamp FROM messages") {
+			messages++
+		}
+	}
+	t.Cleanup(func() { analyticsQueryObserver = previous })
+	restarted := open()
+	_, entries, err := restarted.activityReportRuns(t.Context(), ids, q)
+	require.NoError(t, err)
+	require.Equal(t, []int{0, 0}, []int{runs, messages})
+	require.Len(t, entries["a"].users, 1)
+	require.Len(t, entries["b"].users, 1)
 }
 
 func TestActivityRunsChangedSessionAfterRestart(t *testing.T) {

@@ -435,9 +435,20 @@ func TestPartialActivityInvalidDiskEntryIsMiss(t *testing.T) {
 	require.NoError(t, err)
 	defer restarted.Close()
 	require.NoError(t, restarted.OpenActivityReportDisk(t.Context()))
-	reads := observeActivityUsageReads(t)
+	usageReads, runReads := 0, 0
+	previous := analyticsQueryObserver
+	analyticsQueryObserver = func(query string) {
+		if strings.Contains(query, "activity_usage_keyed") {
+			usageReads++
+		}
+		if strings.Contains(query, "activity_run_pieces") {
+			runReads++
+		}
+	}
+	t.Cleanup(func() { analyticsQueryObserver = previous })
 	got := keptActivityBuild(t, restarted, q, true)
-	require.Equal(t, 1, *reads)
+	require.Equal(t, 1, usageReads)
+	require.Equal(t, 1, runReads)
 	require.Equal(t, 500, activity.ReportWithSessions(got).Totals.OutputTokens)
 }
 

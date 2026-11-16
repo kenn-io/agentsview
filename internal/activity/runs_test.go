@@ -242,7 +242,13 @@ func TestSessionRunsGobRoundTrip(t *testing.T) {
 	require.NoError(t, gob.NewDecoder(&buf).Decode(&restored))
 	start, end := time.UnixMicro(1500000).UTC(), time.UnixMicro(4500000).UTC()
 	require.Equal(t, []Run{{SessionID: "s", Start: time.UnixMicro(1500000).UTC(), End: time.UnixMicro(3000000).UTC(), Tail: time.UnixMicro(2000000).UTC(), Model: "model-a"}}, restored.AppendClippedBefore(nil, "s", start, end, time.UnixMicro(2000000)))
-	buf.Reset()
-	require.NoError(t, gob.NewEncoder(&buf).Encode(encodedSessionRuns{Bounds: []int64{1}, Runs: []encodedSessionRun{{First: 0, Last: 2}}}))
-	require.Error(t, restored.GobDecode(buf.Bytes()))
+	for _, invalid := range []encodedSessionRuns{
+		{Bounds: []int64{1}, Runs: []encodedSessionRun{{First: 0, Last: 2}}},
+		{Bounds: []int64{1, 2}, Runs: []encodedSessionRun{{First: 1, Last: 1}}},
+		{Bounds: []int64{1, 2, 3}, Runs: []encodedSessionRun{{First: 0, Last: 1}, {First: 1, Last: 2}}},
+	} {
+		buf.Reset()
+		require.NoError(t, gob.NewEncoder(&buf).Encode(invalid))
+		require.Error(t, restored.GobDecode(buf.Bytes()))
+	}
 }
