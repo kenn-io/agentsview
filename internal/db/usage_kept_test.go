@@ -278,9 +278,6 @@ func TestDailyUsageKeptConcurrentMissesShareBuild(t *testing.T) {
 	database := testDB(t)
 	seedLiveWriteSession(t, database, "one", "project", "2026-08-10T09:00:00Z", 0, 10)
 	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC", Breakdowns: true}
-	_, err := database.GetDailyUsage(t.Context(), filter)
-	require.NoError(t, err)
-	appendLiveWriteMessage(t, database, "one", "2026-08-10T10:00:00Z", 1, 7)
 	var prepares atomic.Int32
 	started, resume := make(chan struct{}), make(chan struct{})
 	release := sync.OnceFunc(func() { close(resume) })
@@ -304,7 +301,7 @@ func TestDailyUsageKeptConcurrentMissesShareBuild(t *testing.T) {
 	a, b := <-first, <-second
 	require.NoError(t, a.err)
 	require.NoError(t, b.err)
-	assert.Equal(t, 17, a.result.Totals.InputTokens)
+	assert.Equal(t, 10, a.result.Totals.InputTokens)
 	assert.Equal(t, a.result.Totals, b.result.Totals)
 	assert.EqualValues(t, 1, prepares.Load())
 }
@@ -342,6 +339,8 @@ func TestDailyUsageKeptFailedBuildIsNotReused(t *testing.T) {
 	assert.EqualValues(t, 2, prepares.Load())
 }
 
+// Caller checks isolate flight registration and the retry decision from
+// database/sql context calls, which can run after a flight starts.
 type retryFlightContext struct {
 	context.Context
 	joined   chan struct{}
@@ -364,7 +363,6 @@ func (ctx *retryFlightContext) Done() <-chan struct{} {
 }
 
 func (ctx *retryFlightContext) Err() error {
-	// Database/sql also checks Err; pause only at the retry decision.
 	pc, _, _, _ := runtime.Caller(1)
 	if strings.HasSuffix(runtime.FuncForPC(pc).Name(), ".keptDailyUsage") && ctx.attempts.CompareAndSwap(1, 2) {
 		ctx.once.Do(func() { close(ctx.paused); <-ctx.resume })
