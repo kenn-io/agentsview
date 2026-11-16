@@ -5528,12 +5528,14 @@ schemas keep their existing ordering behavior.
       (`append_entry`, `replace_entry`, `remove_entry`, `set_history_entries`,
       `set_envelope`) or `projection_advanced` record. Since store minor 9 a
       session move journals `session_relocated`, which replaces the session
-      metadata (`cwd`, `active_model`) and applies its own projection delta,
-      usually a `checkpoint` entry. It folds the journal into a new generation
-      only when the session settles, so a running turn exists only in the
-      journal. Agentsview replays these records like `_apply_journal`, lets
-      relocated metadata supersede `runtime-state.json`, ignores other runtime
-      records, and skips a final record without its newline.
+      metadata and applies its own projection delta, usually a `checkpoint`
+      entry. Only `cwd` changes: `relocate_session` in `_runtime.py` copies
+      `active_model` from the stored runtime state. It folds the journal into a
+      new generation only when the session settles, so a running turn exists
+      only in the journal. Agentsview replays these records like
+      `_apply_journal`, lets the relocated `cwd` supersede `runtime-state.json`
+      and `meta.json`, ignores other runtime records, and skips a final record
+      without its newline.
 - **Evidence:** `source`.
 - **Upstream:** Clone `https://github.com/mistralai/mistral-vibe.git` at
   `0685654a40a4035966891289065379a751a7e617`; see

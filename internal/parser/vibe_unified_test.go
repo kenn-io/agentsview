@@ -857,11 +857,12 @@ func TestVibeUnifiedProviderParseJournal(t *testing.T) {
 		},
 		{
 			// Store minor 9 journals a move as session_relocated, which carries
-			// the new session metadata and a checkpoint delta.
-			// meta.json keeps the original working directory.
-			name: "relocation replaces metadata and applies its delta",
+			// the new session metadata and a checkpoint delta. meta.json keeps
+			// the original working directory. The producer copies active_model
+			// unchanged, so the generation's model stays authoritative.
+			name: "relocation moves the session and applies its delta",
 			records: [][2]string{
-				{"session_relocated", `{"metadata":{"cwd":"/workspace/moved-repo","origin_cwd":"/workspace/my-repo","active_model":"devstral-2","root_session_id":"` + vibeUnifiedSessionID + `"},` +
+				{"session_relocated", `{"metadata":{"cwd":"/workspace/moved-repo","origin_cwd":"/workspace/my-repo","active_model":"mistral-medium-3.5","root_session_id":"` + vibeUnifiedSessionID + `"},` +
 					`"plugin_lock":{},"watermark":2,"delta":[{"op":"append_entry","entry":{"type":"checkpoint","id":"checkpoint:session_relocated:1","kind":"session_relocated","message":"Moved"}}]}`},
 				{"projection_delta", `{"delta":[{"op":"remove_entry","id":"checkpoint:session_relocated:1"},` +
 					`{"op":"append_entry","entry":{"type":"message","id":"assistant-2","role":"assistant","turnId":"turn-2","content":[{"type":"text","text":"after the move"}]}}],"watermark":3}`},
@@ -870,11 +871,11 @@ func TestVibeUnifiedProviderParseJournal(t *testing.T) {
 				t.Helper()
 				require.Len(t, result.Messages, 4)
 				assert.Equal(t, "after the move", result.Messages[3].Content)
-				assert.Equal(t, "devstral-2", result.Messages[3].Model)
+				assert.Equal(t, "mistral-medium-3.5", result.Messages[3].Model)
 				assert.Equal(t, "/workspace/moved-repo", result.Session.Cwd)
 				assert.Equal(t, "moved_repo", result.Session.Project)
 				require.Len(t, result.UsageEvents, 1)
-				assert.Equal(t, "devstral-2", result.UsageEvents[0].Model)
+				assert.Equal(t, "mistral-medium-3.5", result.UsageEvents[0].Model)
 			},
 		},
 		{

@@ -105,19 +105,15 @@ type vibeUnifiedRuntimeMetadata struct {
 		Kind            string `json:"kind"`
 		ParentSessionID string `json:"parent_session_id"`
 	} `json:"identity"`
-	SessionMetadata  vibeUnifiedSessionMetadata `json:"session_metadata"`
+	SessionMetadata struct {
+		ActiveModel string `json:"active_model"`
+		Cwd         string `json:"cwd"`
+	} `json:"session_metadata"`
 	ImportProvenance *struct {
 		Source struct {
 			SessionID string `json:"session_id"`
 		} `json:"source"`
 	} `json:"import_provenance"`
-}
-
-// vibeUnifiedSessionMetadata is the part of the runtime session metadata
-// Agentsview reads. A session_relocated journal record replaces it.
-type vibeUnifiedSessionMetadata struct {
-	ActiveModel string `json:"active_model"`
-	Cwd         string `json:"cwd"`
 }
 
 type vibeUnifiedEntry struct {
@@ -252,11 +248,11 @@ func (g vibeUnifiedGeneration) journalPath() (string, error) {
 }
 
 // vibeUnifiedReplay is the state a journal replay advances: the public
-// projection and, once a session_relocated record appears, the session
-// metadata that supersedes the generation's runtime-state.json.
+// projection and the working directory of the latest session_relocated
+// record, which supersedes the generation's runtime-state.json.
 type vibeUnifiedReplay struct {
-	snapshot vibeUnifiedSnapshot
-	metadata *vibeUnifiedSessionMetadata
+	snapshot     vibeUnifiedSnapshot
+	relocatedCwd string
 }
 
 // replay returns the generation's projection advanced by its journal.
@@ -380,8 +376,10 @@ func vibeUnifiedRecordDigest(line []byte) string {
 
 // applyVibeUnifiedJournalRecord folds one journal record into state, as the
 // producer's _apply_journal does. A session_relocated record (store minor 9)
-// replaces the session metadata and applies its projection delta. Records for
-// other runtime state do not touch the transcript.
+// moves the session and applies its projection delta. The producer copies
+// every other metadata field, including active_model, from the stored runtime
+// state (_runtime.py relocate_session), so only the cwd is taken from it.
+// Records for other runtime state do not touch the transcript.
 func applyVibeUnifiedJournalRecord(record vibeUnifiedJournalRecord, state *vibeUnifiedReplay) error {
 	switch record.Type {
 	case "projection_advanced":
@@ -394,17 +392,16 @@ func applyVibeUnifiedJournalRecord(record vibeUnifiedJournalRecord, state *vibeU
 		state.snapshot = payload.Snapshot
 	case "projection_delta", "session_relocated":
 		var payload struct {
-			Delta    []vibeUnifiedProjectionOp   `json:"delta"`
-			Metadata *vibeUnifiedSessionMetadata `json:"metadata"`
+			Delta    []vibeUnifiedProjectionOp `json:"delta"`
+			Metadata struct {
+				Cwd string `json:"cwd"`
+			} `json:"metadata"`
 		}
 		if err := json.Unmarshal(record.Payload, &payload); err != nil {
 			return err
 		}
-		if record.Type == "session_relocated" {
-			if payload.Metadata == nil {
-				return errors.New("session_relocated record has no metadata")
-			}
-			state.metadata = payload.Metadata
+		if record.Type == "session_relocated" && payload.Metadata.Cwd != "" {
+			state.relocatedCwd = payload.Metadata.Cwd
 		}
 		for _, op := range payload.Delta {
 			if err := op.apply(&state.snapshot); err != nil {
@@ -485,12 +482,10 @@ func parseVibeUnifiedResultFile(ctx context.Context, anchorPath string, fileInfo
 	}
 	// A journaled relocation moves the session after meta.json recorded its
 	// working directory, so the relocated cwd wins over the sidecar.
-	relocatedCwd := ""
-	if replay.metadata != nil {
-		runtimeMeta.SessionMetadata = *replay.metadata
-		relocatedCwd = replay.metadata.Cwd
+	if replay.relocatedCwd != "" {
+		runtimeMeta.SessionMetadata.Cwd = replay.relocatedCwd
 	}
-	if result.Session.Cwd == "" || relocatedCwd != "" {
+	if result.Session.Cwd == "" || replay.relocatedCwd != "" {
 		result.Session.Cwd = runtimeMeta.SessionMetadata.Cwd
 		if project := ExtractProjectFromCwdWithBranchContext(ctx, result.Session.Cwd, result.Session.GitBranch); project != "" {
 			result.Session.Project = project
