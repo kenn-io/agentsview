@@ -179,7 +179,7 @@ func LoadJSON[T any](d *Disk, selection, version string, current func() bool, lo
 	if data, ok := d.Get(selection, version); ok {
 		var value T
 		if json.Unmarshal(data, &value) == nil {
-			return value, true, nil
+			return value, current == nil || current(), nil
 		}
 	}
 	value, err := load()

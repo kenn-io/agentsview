@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/docbank/document/ocr"
 )
 
 func restartSearchTestMerges(t *testing.T, s *Store, tables ...string) {
@@ -22,6 +23,50 @@ func restartSearchTestMerges(t *testing.T, s *Store, tables ...string) {
 			assert.NoError(t, err, "restart merges for %s", table)
 		}
 	})
+}
+
+func TestSearchKeptImageTextAcrossMergeAndPush(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	ctx := t.Context()
+	first, syncer, local := newPushedStore(t)
+	image := inlineImage("kept")
+	writeImageSession(t, local, image, inlineImage("other"), "2026-01-12T00:00:00.000Z")
+	require.NoError(t, local.BackfillImageTextOccurrences(ctx))
+	hash := db.RetainedToolResultImages(image)[0].SHA256
+	identity := ocr.Identity{Fingerprint: "proc-a", Provider: "tesseract", Model: "eng", Revision: "r1"}
+	require.NoError(t, local.SaveImageText(ctx, hash, identity, "invoice 4827", false))
+	_, err := syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.NoError(t, first.openActivityReportDisk(syncer.target))
+	filter := db.SearchFilter{Query: "invoice"}
+	page, err := first.Search(ctx, filter)
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	restartSearchTestMerges(t, first, "image_text")
+	execPreparedUsage(t, first, "SYSTEM STOP MERGES image_text", "INSERT INTO image_text SELECT * FROM image_text", "SYSTEM START MERGES image_text", "OPTIMIZE TABLE image_text FINAL")
+	reopen := func() *Store {
+		s := newTestStore(t, syncer.conn, syncer.target)
+		require.NoError(t, s.openActivityReportDisk(syncer.target))
+		return s
+	}
+	s := reopen()
+	before, _ := usageQueryCountsOf(t, s, "startsWith(trimLeft(query, ' \\n\\t\\r'), 'WITH msg_grouped AS')")
+	got, err := s.Search(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, page, got)
+	after, _ := usageQueryCountsOf(t, s, "startsWith(trimLeft(query, ' \\n\\t\\r'), 'WITH msg_grouped AS')")
+	require.Equal(t, before, after)
+	require.NoError(t, local.SaveImageText(ctx, hash, identity, "receipt 4827", false))
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	s = reopen()
+	got, err = s.Search(ctx, filter)
+	require.NoError(t, err)
+	require.Empty(t, got.Results)
+	got, err = s.Search(ctx, db.SearchFilter{Query: "receipt"})
+	require.NoError(t, err)
+	require.Len(t, got.Results, 1)
+	require.Equal(t, "receipt 4827", got.Results[0].Snippet)
 }
 
 func TestSearchKeptRestart(t *testing.T) {
