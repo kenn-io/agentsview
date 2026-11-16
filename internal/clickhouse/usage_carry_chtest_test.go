@@ -5,6 +5,7 @@ package clickhouse
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -48,6 +49,7 @@ func TestUsageCarry(t *testing.T) {
 				pushPreparedUsage(t, syncer)
 			}
 			execPreparedUsage(t, store, "TRUNCATE TABLE prepared_usage")
+			var mutation uint64
 			switch scenario {
 			case "unpublished":
 				execPreparedUsage(t, store, fmt.Sprintf(`INSERT INTO messages SELECT * REPLACE ('{"input_tokens":999999}' AS token_usage, push_version + 1 AS push_version) FROM messages WHERE session_id = '%s' AND ordinal = 0`, preparedUsageLongID))
@@ -58,7 +60,9 @@ func TestUsageCarry(t *testing.T) {
 			case "snapshot restored":
 				execPreparedUsage(t, store, "CREATE TABLE original_snapshot AS usage_session_snapshots ENGINE = Memory", fmt.Sprintf("INSERT INTO original_snapshot SELECT * FROM usage_session_snapshots WHERE id = '%s'", preparedUsageLongID))
 			case "raw merge":
-				execPreparedUsage(t, store, "SYSTEM STOP MERGES usage_messages", "INSERT INTO usage_messages SELECT * FROM usage_messages")
+				execPreparedUsage(t, store, "INSERT INTO usage_messages SELECT * FROM usage_messages", "OPTIMIZE TABLE usage_messages FINAL", "ALTER TABLE usage_messages UPDATE usage_input = usage_input WHERE 1 SETTINGS mutations_sync = 2", "SYSTEM STOP MERGES usage_messages")
+				require.NoError(t, store.DB().QueryRowContext(t.Context(), `SELECT max(data_version) FROM system.parts WHERE database = currentDatabase() AND table = 'usage_messages' AND active`).Scan(&mutation))
+				execPreparedUsage(t, store, "INSERT INTO usage_messages SELECT * FROM usage_messages")
 			case "snapshot merge":
 				execPreparedUsage(t, store, "SYSTEM STOP MERGES usage_session_snapshots")
 			}
@@ -89,10 +93,17 @@ func TestUsageCarry(t *testing.T) {
 				require.NotEqual(t, parts, merged)
 			}
 			if scenario == "raw merge" {
-				execPreparedUsage(t, store, "SYSTEM START MERGES usage_messages", "OPTIMIZE TABLE usage_messages FINAL")
-				parts, err := store.tablePartsFingerprint(t.Context(), []string{"usage_messages"})
+				beforeMerge, err := store.readPartsSnapshot(t.Context())
 				require.NoError(t, err)
-				require.NotEqual(t, rawParts, parts)
+				execPreparedUsage(t, store, "SYSTEM START MERGES usage_messages", "OPTIMIZE TABLE usage_messages FINAL")
+				afterMerge, err := store.readPartsSnapshot(t.Context())
+				require.NoError(t, err)
+				require.NotEqual(t, rawParts, afterMerge["usage_messages"].digest)
+				m := int64(mutation)
+				require.Positive(t, m)
+				require.True(t, slices.ContainsFunc(beforeMerge["usage_messages"].parts, func(p partInfo) bool { return p.mutation == m }))
+				require.False(t, slices.ContainsFunc(beforeMerge["usage_messages"].parts, func(p partInfo) bool { return p.minBlock <= m && m <= p.maxBlock }))
+				require.True(t, slices.ContainsFunc(afterMerge["usage_messages"].parts, func(p partInfo) bool { return p.minBlock < m && m < p.maxBlock }))
 			}
 			if scenario == "changed after read" {
 				republishRoundSession(t, local, 123)
