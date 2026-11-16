@@ -1,9 +1,13 @@
 ---
-# generated-by: agentsview 0.1.0 hash:ac22dda39f08f4c1112f5f6234f34773c1c6eadfa61f2b5b011f8de55ce06e18 — do not edit; re-run `agentsview skills install`
+# generated-by: agentsview 0.1.0 hash:f01f073e55bf69b10470a5ceb414e528e660397ed1091e96cd88270c87e759d1 — do not edit; re-run `agentsview skills install`
 name: agentsview-search-conversations
 description: Search AgentsView conversation history and synthesize evidence for the parent agent.
 model: haiku
-tools: mcp__plugin_agentsview-memory_agentsview__search_content, mcp__plugin_agentsview-memory_agentsview__get_messages, mcp__agentsview__search_content, mcp__agentsview__get_messages
+tools:
+  - mcp__plugin_agentsview-memory_agentsview__search_content
+  - mcp__plugin_agentsview-memory_agentsview__get_messages
+  - mcp__agentsview__search_content
+  - mcp__agentsview__get_messages
 ---
 
 # Search AgentsView conversations
@@ -15,7 +19,9 @@ decision.
 
 ## Search and read
 
-1. Call `mcp__plugin_agentsview-memory_agentsview__search_content` or `mcp__agentsview__search_content`, whichever is available, with `mode: hybrid`, `scope: all`,
+1. Call `mcp__plugin_agentsview-memory_agentsview__search_content` or
+   `mcp__agentsview__search_content`, whichever is available,
+   with `mode: hybrid`, `scope: all`,
    `limit: 10`, `include_active: true`, `include_one_shot: true`, and
    `include_automated: true`. When the parent supplies the current session
    identity, pass it as `current_session_id`. Do not invent a project filter

@@ -2,7 +2,11 @@
 name: agentsview-search-conversations
 description: Search AgentsView conversation history and synthesize evidence for the parent agent.
 model: haiku
-tools: {{.ToolPrefix}}search_content, {{.ToolPrefix}}get_messages{{if .AlternateToolPrefix}}, {{.AlternateToolPrefix}}search_content, {{.AlternateToolPrefix}}get_messages{{end}}
+{{if .AlternateToolPrefix}}tools:
+  - {{.ToolPrefix}}search_content
+  - {{.ToolPrefix}}get_messages
+  - {{.AlternateToolPrefix}}search_content
+  - {{.AlternateToolPrefix}}get_messages{{else}}tools: {{.ToolPrefix}}search_content, {{.ToolPrefix}}get_messages{{end}}
 ---
 
 # Search AgentsView conversations
@@ -14,7 +18,9 @@ decision.
 
 ## Search and read
 
-1. Call `{{.ToolPrefix}}search_content`{{if .AlternateToolPrefix}} or `{{.AlternateToolPrefix}}search_content`, whichever is available,{{end}} with `mode: hybrid`, `scope: all`,
+1. Call `{{.ToolPrefix}}search_content`{{if .AlternateToolPrefix}} or
+   `{{.AlternateToolPrefix}}search_content`, whichever is available,
+  {{end}} with `mode: hybrid`, `scope: all`,
    `limit: 10`, `include_active: true`, `include_one_shot: true`, and
    `include_automated: true`. When the parent supplies the current session
    identity, pass it as `current_session_id`. Do not invent a project filter

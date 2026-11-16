@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.yaml.in/yaml/v3"
 )
 
 func memoryPluginRoot(t *testing.T) string {
@@ -77,7 +78,13 @@ func TestMemoryPluginAgentToolsMatchPluginServer(t *testing.T) {
 	agent, err := os.ReadFile(filepath.Join(root, "agents", "agentsview-search-conversations.md"))
 	require.NoError(t, err)
 	content := string(agent)
-	assert.Contains(t, strings.Split(content, "\n"), "tools: "+prefix+"search_content, "+prefix+"get_messages, mcp__agentsview__search_content, mcp__agentsview__get_messages")
+	frontmatter := strings.SplitN(content, "---\n", 3)
+	require.Len(t, frontmatter, 3)
+	var metadata struct {
+		Tools []string `yaml:"tools"`
+	}
+	require.NoError(t, yaml.Unmarshal([]byte(frontmatter[1]), &metadata))
+	assert.Equal(t, []string{prefix + "search_content", prefix + "get_messages", "mcp__agentsview__search_content", "mcp__agentsview__get_messages"}, metadata.Tools)
 	assert.Contains(t, content, "`"+prefix+"search_content`")
 	assert.Contains(t, content, "`"+prefix+"get_messages`")
 	assert.Contains(t, content, "`mcp__agentsview__search_content`")
