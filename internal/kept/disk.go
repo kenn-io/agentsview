@@ -90,26 +90,6 @@ func (d activityReportDisk) touch(selection string) error {
 	return os.Chtimes(d.path(selection), now, now)
 }
 
-// touchHeld reports a file saved under another key as missing so the caller
-// restores a newer result after a slower older read writes to the same slot.
-func (d activityReportDisk) touchHeld(selection, key string) error {
-	file, err := os.Open(d.path(selection))
-	if err != nil {
-		return err
-	}
-	header := d.header(key)
-	got := make([]byte, len(header))
-	_, err = io.ReadFull(file, got)
-	closeErr := file.Close()
-	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || err == nil && !bytes.Equal(got, header) {
-		return os.ErrNotExist
-	}
-	if err != nil || closeErr != nil {
-		return errors.Join(err, closeErr)
-	}
-	return d.touch(selection)
-}
-
 func (d activityReportDisk) save(selection, key string, payload []byte, maxFile int64) error {
 	data := append(d.header(key), payload...)
 	if maxFile > 0 && int64(len(data)) > maxFile {
@@ -119,7 +99,7 @@ func (d activityReportDisk) save(selection, key string, payload []byte, maxFile 
 }
 
 func (d activityReportDisk) keep(selection, version string, maxFile int64, encode func() ([]byte, error)) (bool, error) {
-	err := d.touchHeld(selection, version)
+	err := d.touch(selection)
 	if !errors.Is(err, os.ErrNotExist) {
 		return false, err
 	}

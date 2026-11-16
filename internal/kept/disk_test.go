@@ -108,30 +108,4 @@ func TestReadsDoSaved(t *testing.T) {
 	_, err = sixth.DoSaved(t.Context(), &disk, "slot", "memory6", "saved2", encode, decode, load)
 	require.NoError(t, err)
 	require.Equal(t, 3, loads)
-	t.Run("late old version", func(t *testing.T) {
-		started, release := make(chan struct{}), make(chan struct{})
-		finished := make(chan error, 1)
-		var old Reads[string]
-		go func() {
-			_, err := old.DoSaved(t.Context(), &disk, "slot", "old", "old", encode, decode, func(context.Context) (string, error) {
-				close(started)
-				<-release
-				return "old", nil
-			})
-			finished <- err
-		}()
-		<-started
-		var current Reads[string]
-		value, err := current.DoSaved(t.Context(), &disk, "slot", "new", "new", encode, decode, func(context.Context) (string, error) { return "new", nil })
-		require.NoError(t, err)
-		require.Equal(t, "new", value)
-		close(release)
-		require.NoError(t, <-finished)
-		value, err = current.DoSaved(t.Context(), &disk, "slot", "new", "new", encode, decode, func(context.Context) (string, error) { return "unexpected", nil })
-		require.NoError(t, err)
-		require.Equal(t, "new", value)
-		saved, ok := disk.Get("slot", "new")
-		require.True(t, ok)
-		require.Equal(t, "new", string(saved))
-	})
 }

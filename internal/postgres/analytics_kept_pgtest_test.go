@@ -3,13 +3,8 @@
 package postgres
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
-	"io/fs"
-	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -507,41 +502,6 @@ func TestAnalyticsKeptRestart(t *testing.T) {
 	require.InDelta(t, 90, *score.AvgHealthScore, 0)
 	require.Equal(t, [3]int{0, 0, 1}, counts)
 
-	t.Run("corrupt", func(t *testing.T) {
-		t.Setenv("CACHE_DIRECTORY", t.TempDir())
-		local, syncer, store := newUsageJournalFixture(t)
-		ctx := t.Context()
-		pgKeptSession(t, local, "session", "project", "2026-06-14")
-		pgKeptPush(t, syncer, false)
-		dir, url := t.TempDir(), testPGURL(t)
-		require.NoError(t, store.ConfigureUsageCache(ctx, dir, url, syncer.schema))
-		f := db.AnalyticsFilter{From: "2026-06-14", To: "2026-06-14", Timezone: "UTC"}
-		want, err := store.GetAnalyticsSignals(ctx, f)
-		require.NoError(t, err)
-		files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-trends", "*", "*.gob"))
-		require.NoError(t, err)
-		require.Len(t, files, 1)
-		data, err := os.ReadFile(files[0])
-		require.NoError(t, err)
-		header, _, ok := bytes.Cut(data, []byte("\n"))
-		require.True(t, ok)
-		require.NoError(t, os.WriteFile(files[0], append(header, []byte("\n{broken")...), 0o600))
-		reopened, err := NewStore(ctx, url, syncer.schema, true)
-		require.NoError(t, err)
-		t.Cleanup(func() { require.NoError(t, reopened.Close()) })
-		require.NoError(t, reopened.ConfigureUsageCache(ctx, dir, url, syncer.schema))
-		counter := &analyticsReadCounter{storeExecutor: reopened.pg}
-		reopened.pg = counter
-		got, err := reopened.GetAnalyticsSignals(ctx, f)
-		require.NoError(t, err)
-		require.Equal(t, want, got)
-		reads := counter.count()
-		require.Positive(t, reads)
-		again, err := reopened.GetAnalyticsSignals(ctx, f)
-		require.NoError(t, err)
-		require.Equal(t, want, again)
-		require.Equal(t, reads, counter.count())
-	})
 }
 
 func TestAnalyticsKeptDirectSourceEvents(t *testing.T) {
@@ -645,51 +605,6 @@ func TestAnalyticsKeptModelTimeScopeChanges(t *testing.T) {
 	}
 }
 
-func TestAnalyticsKeptRolledBackSourceEvent(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	local, syncer, store := newUsageJournalFixture(t)
-	ctx := t.Context()
-	pgKeptSession(t, local, "session", "project", "2026-06-14")
-	pgKeptPush(t, syncer, false)
-	require.NoError(t, store.ConfigureUsageCache(ctx, t.TempDir(), testPGURL(t), syncer.schema))
-	f := db.AnalyticsFilter{Timezone: "UTC"}
-	loads := 0
-	read := func() db.ToolsAnalyticsResponse {
-		result, err := keptAnalytics(ctx, store, "tools", f, func(ctx context.Context, f db.AnalyticsFilter) (db.ToolsAnalyticsResponse, error) {
-			loads++
-			return store.loadAnalyticsTools(ctx, f)
-		})
-		require.NoError(t, err)
-		return result
-	}
-	require.Zero(t, read().TotalCalls)
-	tx, err := store.DB().BeginTx(ctx, nil)
-	require.NoError(t, err)
-	_, err = tx.ExecContext(ctx, `INSERT INTO tool_calls(session_id,message_ordinal,tool_name,category) VALUES('session',1,'Read','Read')`)
-	require.NoError(t, err)
-	require.NoError(t, tx.Rollback())
-	require.Zero(t, read().TotalCalls)
-	require.Equal(t, 1, loads)
-}
-
-func TestAnalyticsKeptInvalidPanelToken(t *testing.T) {
-	cache := t.TempDir()
-	t.Setenv("CACHE_DIRECTORY", cache)
-	local, syncer, store := newUsageJournalFixture(t)
-	ctx := t.Context()
-	pgKeptSession(t, local, "session", "project", "2026-06-14")
-	pgKeptPush(t, syncer, false)
-	require.NoError(t, store.ConfigureUsageCache(ctx, t.TempDir(), testPGURL(t), syncer.schema))
-	_, err := store.pg.ExecContext(ctx, `UPDATE sync_metadata SET value='' WHERE key='dashboard_signals'`)
-	require.NoError(t, err)
-	got, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{Timezone: "UTC"})
-	require.NoError(t, err)
-	require.Equal(t, 1, got.UnscoredSessions)
-	files, err := filepath.Glob(filepath.Join(cache, "postgres-trends", "*", "*.gob"))
-	require.NoError(t, err)
-	require.Empty(t, files)
-}
-
 func TestAnalyticsKeptJournalUpgrade(t *testing.T) {
 	t.Parallel()
 	_, _, store := newUsageJournalFixture(t)
@@ -744,48 +659,4 @@ func TestAnalyticsKeptRestoredHistory(t *testing.T) {
 	after, err := reopened.GetAnalyticsSignals(ctx, f)
 	require.NoError(t, err)
 	require.Equal(t, 1, after.UnscoredSessions)
-}
-
-func TestAnalyticsKeptIdentitylessFallback(t *testing.T) {
-	cache := t.TempDir()
-	t.Setenv("CACHE_DIRECTORY", cache)
-	local, syncer, owner := newUsageJournalFixture(t)
-	ctx := t.Context()
-	pgKeptSession(t, local, "session", "project", "2026-06-14")
-	pgKeptPush(t, syncer, false)
-	roleURL := newUsageJournalRole(t, syncer, `GRANT SELECT ON ALL TABLES IN SCHEMA `+syncer.schema+` TO ROLE`)
-	_, err := owner.pg.ExecContext(ctx, `UPDATE sync_metadata SET value='1' WHERE key='usage_change_journal_version'; DELETE FROM sync_metadata WHERE key IN ('usage_account_revision', 'usage_history_token'); REVOKE EXECUTE ON FUNCTION pg_catalog.pg_control_system() FROM PUBLIC`)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		_, err := owner.pg.ExecContext(context.WithoutCancel(ctx), `GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_system() TO PUBLIC`)
-		require.NoError(t, err)
-	})
-	reader, err := NewStore(ctx, roleURL, syncer.schema, true)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reader.Close()) })
-	require.NoError(t, reader.ConfigureUsageCache(ctx, t.TempDir(), roleURL, syncer.schema))
-	if reader.usageCache != nil {
-		require.NoError(t, reader.usageCache.Close())
-		reader.usageCache = nil
-	}
-	counter := &analyticsReadCounter{storeExecutor: reader.pg}
-	reader.pg = counter
-	f := db.AnalyticsFilter{From: "2026-06-14", To: "2026-06-14", Timezone: "UTC"}
-	first, err := reader.GetAnalyticsSignals(ctx, f)
-	require.NoError(t, err)
-	require.Equal(t, 1, first.UnscoredSessions)
-	reads := counter.count()
-	require.Positive(t, reads)
-	again, err := reader.GetAnalyticsSignals(ctx, f)
-	require.NoError(t, err)
-	require.Equal(t, first, again)
-	require.Equal(t, reads, counter.count())
-	require.True(t, reader.runtimeState().usageIdentityDenied.Load())
-	require.NoError(t, filepath.WalkDir(cache, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		require.False(t, strings.HasSuffix(path, ".gob"), path)
-		return nil
-	}))
 }

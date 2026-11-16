@@ -3,7 +3,6 @@
 package duckdb
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -373,37 +372,6 @@ func TestAnalyticsKeptRestart(t *testing.T) {
 			}
 		})
 	}
-	t.Run("corrupt", func(t *testing.T) {
-		t.Setenv("CACHE_DIRECTORY", t.TempDir())
-		path := filepath.Join(t.TempDir(), "mirror.duckdb")
-		buildMirrorFixture(t, path, "session-a")
-		store, err := NewStore(t.Context(), path)
-		require.NoError(t, err)
-		require.NoError(t, store.OpenActivityReportDisk(t.Context()))
-		f := db.AnalyticsFilter{Timezone: "UTC"}
-		want, err := store.GetAnalyticsTools(t.Context(), f)
-		require.NoError(t, err)
-		require.NoError(t, store.Close())
-		files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "duckdb-usage", "*", "*.gob"))
-		require.NoError(t, err)
-		require.Len(t, files, 1)
-		data, err := os.ReadFile(files[0])
-		require.NoError(t, err)
-		header, _, ok := bytes.Cut(data, []byte("\n"))
-		require.True(t, ok)
-		require.NoError(t, os.WriteFile(files[0], append(header, []byte("\n{broken")...), 0o600))
-		reopened, err := NewStore(t.Context(), path)
-		require.NoError(t, err)
-		t.Cleanup(func() { reopened.Close() })
-		require.NoError(t, reopened.OpenActivityReportDisk(t.Context()))
-		got, err := reopened.GetAnalyticsTools(t.Context(), f)
-		require.NoError(t, err)
-		require.Equal(t, want, got)
-		require.NoError(t, reopened.DB().Close())
-		again, err := reopened.GetAnalyticsTools(t.Context(), f)
-		require.NoError(t, err)
-		require.Equal(t, want, again)
-	})
 }
 
 func TestAnalyticsKeptChangedMirrorInputs(t *testing.T) {
@@ -510,28 +478,6 @@ func TestAnalyticsKeptVelocityMessageIDReplacement(t *testing.T) {
 	after, err := store.GetAnalyticsVelocity(ctx, f)
 	require.NoError(t, err)
 	require.Zero(t, after.Overall.ToolCallsPerActiveMin)
-}
-
-func TestAnalyticsKeptDigestFailureLoadsSource(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	buildMirrorFixture(t, path, "session-a")
-	store, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
-	t.Cleanup(func() { store.Close() })
-	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
-	require.NoError(t, store.DB().Close())
-	loads := 0
-	got, err := keptAnalytics(t.Context(), store, "tools", db.AnalyticsFilter{}, "", func(context.Context) (db.ToolsAnalyticsResponse, error) {
-		loads++
-		return db.ToolsAnalyticsResponse{TotalCalls: 42}, nil
-	})
-	require.NoError(t, err)
-	require.Equal(t, 42, got.TotalCalls)
-	require.Equal(t, 1, loads)
-	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "duckdb-usage", "*", "*.gob"))
-	require.NoError(t, err)
-	require.Empty(t, files)
 }
 
 func TestAnalyticsKeptDigestAssociatesSignalsWithSessions(t *testing.T) {

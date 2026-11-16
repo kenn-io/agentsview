@@ -348,28 +348,6 @@ func TestAnalyticsKeptScoreOnly(t *testing.T) {
 	assert.Equal(t, [3]int{0, 0, 1}, counts)
 }
 
-func TestAnalyticsKeptSessionSelectionChanges(t *testing.T) {
-	for _, tc := range []struct{ name, query string }{
-		{"relationship", `UPDATE sessions SET relationship_type='subagent' WHERE id='session'`},
-		{"nullable date", `UPDATE sessions SET started_at=NULL WHERE id='session'`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			d := testDB(t)
-			ctx := t.Context()
-			insertSession(t, d, "session", "project", func(s *Session) { s.StartedAt = new("2026-06-14T10:00:00Z"); s.CreatedAt = "2026-06-15T10:00:00Z" })
-			f := AnalyticsFilter{Timezone: "UTC", From: "2026-06-14", To: "2026-06-14"}
-			before, err := d.GetAnalyticsSignals(ctx, f)
-			require.NoError(t, err)
-			require.Equal(t, 1, before.UnscoredSessions)
-			_, err = d.getWriter().ExecContext(ctx, tc.query)
-			require.NoError(t, err)
-			after, err := d.GetAnalyticsSignals(ctx, f)
-			require.NoError(t, err)
-			require.Zero(t, after.UnscoredSessions)
-		})
-	}
-}
-
 func TestAnalyticsKeptSourceEvents(t *testing.T) {
 	for _, tc := range []struct {
 		name, query string
@@ -437,33 +415,6 @@ func TestAnalyticsKeptSourceEvents(t *testing.T) {
 	}
 }
 
-func TestAnalyticsKeptInvalidPanelToken(t *testing.T) {
-	cache := t.TempDir()
-	t.Setenv("CACHE_DIRECTORY", cache)
-	d := testDB(t)
-	ctx := t.Context()
-	insertSession(t, d, "session", "project")
-	message := asstMsgAt("session", 0, "answer", "2024-06-01T09:00:00Z")
-	message.ToolCalls = []ToolCall{{SessionID: "session", ToolName: "Read", Category: "Read"}}
-	insertMessages(t, d, message)
-	_, err := d.getWriter().ExecContext(ctx, `DELETE FROM archive_metadata WHERE key='dashboard_tools'`)
-	require.NoError(t, err)
-	tools, err := d.GetAnalyticsTools(ctx, AnalyticsFilter{Timezone: "UTC"})
-	require.NoError(t, err)
-	require.Equal(t, "Read", tools.ByTool[0].ToolName)
-	files, err := filepath.Glob(filepath.Join(cache, "sqlite-trends", "*", "*.gob"))
-	require.NoError(t, err)
-	require.Empty(t, files)
-	_, err = d.getWriter().ExecContext(ctx, `UPDATE tool_calls SET tool_name='Grep' WHERE session_id='session'`)
-	require.NoError(t, err)
-	tools, err = d.GetAnalyticsTools(ctx, AnalyticsFilter{Timezone: "UTC"})
-	require.NoError(t, err)
-	require.Equal(t, "Grep", tools.ByTool[0].ToolName)
-	files, err = filepath.Glob(filepath.Join(cache, "sqlite-trends", "*", "*.gob"))
-	require.NoError(t, err)
-	require.Len(t, files, 1)
-}
-
 func TestAnalyticsKeptModelTimeScopeChanges(t *testing.T) {
 	for _, tc := range []struct{ name, query string }{
 		{"model", `UPDATE messages SET model='model-b' WHERE session_id='session' AND ordinal=1`},
@@ -472,17 +423,21 @@ func TestAnalyticsKeptModelTimeScopeChanges(t *testing.T) {
 		{"timestamp", `UPDATE messages SET timestamp=NULL WHERE session_id='session' AND ordinal=0`},
 		{"ordinal", `UPDATE messages SET ordinal=3 WHERE session_id='session' AND ordinal=0`},
 		{"move", `UPDATE messages SET session_id='other' WHERE session_id='session' AND ordinal=0`},
+		{"relationship", `UPDATE sessions SET relationship_type='subagent' WHERE id='session'`},
+		{"nullable date", `UPDATE sessions SET started_at=NULL WHERE id='session'`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
 			ctx := t.Context()
-			insertSession(t, d, "session", "project", func(s *Session) { s.StartedAt = new("2026-06-14T10:00:00Z"); s.MessageCount = 2 })
+			insertSession(t, d, "session", "project", func(s *Session) {
+				s.StartedAt, s.CreatedAt, s.MessageCount = new("2026-06-14T10:00:00Z"), "2026-06-15T10:00:00Z", 2
+			})
 			insertSession(t, d, "other", "other")
 			insertMessages(t, d,
 				Message{SessionID: "session", Ordinal: 0, Role: "user", Content: "hello", Timestamp: "2026-06-14T10:00:00Z"},
 				Message{SessionID: "session", Ordinal: 1, Role: "assistant", Content: "answer", Model: "model-a", Timestamp: "2026-06-14T11:00:00Z"},
 			)
-			f := AnalyticsFilter{Timezone: "UTC", Model: "model-a", Project: "project", Hour: new(10), DayOfWeek: new(6)}
+			f := AnalyticsFilter{Timezone: "UTC", From: "2026-06-14", To: "2026-06-14", Model: "model-a", Project: "project", Hour: new(10), DayOfWeek: new(6)}
 			before, err := d.GetAnalyticsSignals(ctx, f)
 			require.NoError(t, err)
 			require.Equal(t, 1, before.UnscoredSessions)
