@@ -194,9 +194,8 @@ this project setting in `~/.claude.json`; repeat the toggle on each machine.
 Claude Code treats the plugin server and project server as different connections,
 so otherwise both connect and the assistant sees the memory tools twice. The
 plugin's skill, agent, and hook keep working, and the agent uses the project
-server. Other
-projects keep the plugin's memory server. For a remote archive, add the same
-targeting flags to the full server command.
+server. Other projects keep the plugin's memory server. For a remote archive,
+add the same targeting flags to the full server command.
 
 For a remote archive, set the hosted environment variables below for the focused
 profile.
