@@ -13,6 +13,10 @@ const (
 	archiveMetadataSearchChangeRevisionKey    = "search_change_revision"
 )
 
+const searchTokenSQL = `
+ INSERT INTO archive_metadata (key, value) VALUES ('search_history_token', lower(hex(randomblob(16))))
+ ON CONFLICT(key) DO UPDATE SET value = excluded.value;`
+
 const counterTemplate = `
  INSERT INTO archive_metadata (key, value)
   VALUES ('{{counter}}', '1')
@@ -23,7 +27,7 @@ const counterTemplate = `
 // Full replacements need this when only derived dialogue changes: transcript
 // equality ignores dialogue, and the replacement does not fire UPDATE triggers.
 func bumpSearchChangeRevisionTx(tx transactionQueries) error {
-	if _, err := tx.Exec(strings.ReplaceAll(counterTemplate, "{{counter}}", archiveMetadataSearchChangeRevisionKey)); err != nil {
+	if _, err := tx.Exec(strings.ReplaceAll(counterTemplate, "{{counter}}", archiveMetadataSearchChangeRevisionKey) + searchTokenSQL); err != nil {
 		return fmt.Errorf("advancing search change revision: %w", err)
 	}
 	return nil
@@ -49,6 +53,7 @@ func usageChangeJournalSQL() (string, string) {
   FROM archive_metadata WHERE key = 'usage_change_revision'
  ON CONFLICT(session_id) DO UPDATE SET revision = excluded.revision;`
 	var drops, creates strings.Builder
+	creates.WriteString(`INSERT OR IGNORE INTO archive_metadata (key, value) VALUES ('search_history_token', lower(hex(randomblob(16))));` + "\n")
 	add := func(name, event, table, condition, sessionID string, analytics bool) {
 		fmt.Fprintf(&drops, "DROP TRIGGER IF EXISTS %s;\n", name)
 		body := counterBody
@@ -66,6 +71,9 @@ func usageChangeJournalSQL() (string, string) {
 		}
 		if strings.HasPrefix(name, "trg_messages_search_dialogue") || name == "trg_sessions_search_first_message" {
 			body = searchCounterBody
+		}
+		if table == "sessions" && strings.HasPrefix(name, "trg_sessions_usage_change_") || body == searchCounterBody {
+			body += searchTokenSQL
 		}
 		if condition != "" {
 			condition = "WHEN " + condition

@@ -54,3 +54,23 @@ func TestDiskLimitsAndUnavailableDirectory(t *testing.T) {
 	_, ok = unavailable.Get("small", "v")
 	require.False(t, ok)
 }
+
+func TestLoadJSON(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	var disk Disk
+	require.NoError(t, disk.Open("test-search", "archive", 1024, 0))
+	loads := 0
+	load := func() ([]string, error) { loads++; return nil, nil }
+	first, err := LoadJSON(&disk, "search", "v1", load)
+	require.NoError(t, err)
+	require.Nil(t, first)
+	var reopened Disk
+	require.NoError(t, reopened.Open("test-search", "archive", 1024, 0))
+	repeat, err := LoadJSON(&reopened, "search", "v1", load)
+	require.NoError(t, err)
+	require.Nil(t, repeat)
+	require.Equal(t, 1, loads)
+	_, err = LoadJSON(&reopened, "search", "v2", load)
+	require.NoError(t, err)
+	require.Equal(t, 2, loads)
+}

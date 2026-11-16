@@ -3,6 +3,8 @@
 package db
 
 import (
+	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 
@@ -134,4 +136,106 @@ func TestSearchKeptSearchableEdits(t *testing.T) {
 			require.Empty(t, page.Results)
 		})
 	}
+}
+
+func TestSearchKeptRestart(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d, err := Open(ctx, path)
+	require.NoError(t, err)
+	insertSession(t, d, "session", "project")
+	insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "needle"})
+	filter := SearchFilter{Query: "needle"}
+	page, err := d.Search(ctx, filter)
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	require.NoError(t, d.Close())
+	d, err = Open(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	// An unavailable index proves the reopened search uses the saved page.
+	_, err = d.getWriter().ExecContext(ctx, `DROP TABLE messages_fts`)
+	require.NoError(t, err)
+	repeat, err := d.Search(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, page, repeat)
+	_, err = d.Search(ctx, SearchFilter{Query: "needle", Cursor: 1})
+	require.Error(t, err)
+}
+
+func TestSearchKeptRestore(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "archive.db")
+	open := func() *DB {
+		t.Helper()
+		d, err := Open(ctx, path)
+		require.NoError(t, err)
+		return d
+	}
+	d := open()
+	insertSession(t, d, "session", "project")
+	require.NoError(t, d.Close())
+	backup, err := os.ReadFile(path)
+	require.NoError(t, err)
+	write := func(content string) SearchPage {
+		t.Helper()
+		d := open()
+		insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: content})
+		page, err := d.Search(ctx, SearchFilter{Query: "needle"})
+		require.NoError(t, err)
+		require.NoError(t, d.Close())
+		return page
+	}
+	require.Len(t, write("needle").Results, 1)
+	require.NoError(t, os.WriteFile(path, backup, 0o600))
+	require.Empty(t, write("other").Results)
+}
+
+func TestSearchKeptRestartDialogueEdit(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d, err := Open(ctx, path)
+	require.NoError(t, err)
+	insertSession(t, d, "session", "project")
+	insertMessages(t, d, Message{SessionID: "session", Role: "assistant", Content: "raw words", DialogueText: new("needle")})
+	filter := SearchFilter{Query: `"raw" AND content:needle`}
+	page, err := d.Search(ctx, filter)
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE messages SET dialogue_text = 'other' WHERE session_id = 'session'`)
+	require.NoError(t, err)
+	require.NoError(t, d.Close())
+	d, err = Open(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	page, err = d.Search(ctx, filter)
+	require.NoError(t, err)
+	require.Empty(t, page.Results)
+}
+
+func TestSearchKeptCJKFingerprint(t *testing.T) {
+	if !simpleFTSRuntimeConfig.available() {
+		t.Skip("simple FTS runtime is not installed")
+	}
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	seedSearchSession(t, d, "chinese", "project", [][2]string{{"user", "法国的首都是巴黎。"}})
+	filter := SearchFilter{Query: "巴黎"}
+	page, err := d.Search(ctx, filter)
+	require.NoError(t, err)
+	require.NotEmpty(t, page.Results)
+	original := simpleFTSRuntimeConfig.fingerprint
+	t.Cleanup(func() { simpleFTSRuntimeConfig.fingerprint = original })
+	simpleFTSRuntimeConfig.fingerprint = original + "-changed"
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE stats SET value = ? WHERE key = ?`, simpleFTSRuntimeConfig.fingerprint, cjkFTSFingerprintStatsKey)
+	require.NoError(t, err)
+	require.True(t, d.HasCJKFTS(ctx))
+	_, err = d.getWriter().ExecContext(ctx, `DROP TABLE messages_cjk_fts`)
+	require.NoError(t, err)
+	_, err = d.Search(ctx, filter)
+	require.Error(t, err)
 }
