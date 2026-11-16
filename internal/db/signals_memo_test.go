@@ -291,6 +291,48 @@ func TestSignalsFrustrationReadOnlyStoredReuseAndLegacyFallback(t *testing.T) {
 	}
 }
 
+func TestSignalsFrustrationReadOnlyRepeatedFallback(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("legacy=%t", legacy), func(t *testing.T) {
+			writable := testDB(t)
+			ctx := t.Context()
+			seedFrustrationSession(t, writable, "session", "test")
+			_, err := writable.getWriter().ExecContext(ctx, `DROP TABLE session_frustration_markers`)
+			require.NoError(t, err)
+			if legacy {
+				_, err = writable.getWriter().ExecContext(ctx, `DELETE FROM archive_metadata WHERE key='dashboard_signals'`)
+				require.NoError(t, err)
+			}
+			readonly, err := OpenReadOnly(ctx, writable.Path())
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, readonly.Close()) })
+			readonly.rawReader().SetMaxOpenConns(1)
+			conn, err := readonly.rawReader().Conn(ctx)
+			require.NoError(t, err)
+			var contentReads atomic.Int32
+			var sqliteConn *sqlite3.SQLiteConn
+			require.NoError(t, conn.Raw(func(raw any) error {
+				sqliteConn = raw.(*sqlite3.SQLiteConn)
+				sqliteConn.RegisterAuthorizer(func(op int, table, column, _ string) int {
+					if op == sqlite3.SQLITE_READ && table == "messages" && column == "content" {
+						contentReads.Add(1)
+					}
+					return sqlite3.SQLITE_OK
+				})
+				return nil
+			}))
+			require.NoError(t, conn.Close())
+			t.Cleanup(func() { sqliteConn.RegisterAuthorizer(nil) })
+			for range 2 {
+				response, err := readonly.GetAnalyticsSignals(ctx, AnalyticsFilter{})
+				require.NoError(t, err)
+				require.Equal(t, 1, response.QualityHealth.Totals.FrustrationMarkerCount)
+			}
+			require.EqualValues(t, 1, contentReads.Load())
+		})
+	}
+}
+
 func TestSignalsFrustrationCleanup(t *testing.T) {
 	for _, action := range []string{"usage text", "usage signals"} {
 		t.Run(action, func(t *testing.T) {
@@ -387,4 +429,21 @@ func TestSignalsFrustrationCanceledWhileSaving(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSignalsFrustrationReadOnlyPromptRepair(t *testing.T) {
+	writable := testDB(t)
+	ctx := t.Context()
+	seedFrustrationSession(t, writable, "session", "test")
+	readonly, err := OpenReadOnly(ctx, writable.Path())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, readonly.Close()) })
+	first, err := readonly.GetAnalyticsSignals(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	require.Equal(t, 1, first.QualityHealth.Totals.FrustrationMarkerCount)
+	_, err = writable.getWriter().ExecContext(ctx, `UPDATE messages SET content='Please explain this function.' WHERE session_id='session'`)
+	require.NoError(t, err)
+	second, err := readonly.GetAnalyticsSignals(ctx, AnalyticsFilter{})
+	require.NoError(t, err)
+	require.Zero(t, second.QualityHealth.Totals.FrustrationMarkerCount)
 }

@@ -194,3 +194,41 @@ func TestFrustrationMemo(t *testing.T) {
 		})
 	}
 }
+
+func TestFrustrationMemoUncachedSignals(t *testing.T) {
+	for _, hosted := range []bool{false, true} {
+		t.Run(map[bool]string{false: "native", true: "hosted"}[hosted], func(t *testing.T) {
+			local, syncer, owner := newUsageJournalFixture(t)
+			ctx := t.Context()
+			pgKeptSession(t, local, "session", "project", "2026-06-14")
+			require.NoError(t, local.ReplaceSessionMessages(ctx, "session", []db.Message{{SessionID: "session", Role: "user", Content: "this is broken"}}))
+			require.NoError(t, local.UpdateSessionSignals(ctx, "session", db.SessionSignalUpdate{QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion}}))
+			pgKeptPush(t, syncer, false)
+			_, err := owner.DB().ExecContext(ctx, `DROP TABLE session_frustration_counts`)
+			require.NoError(t, err)
+			roleURL := newUsageJournalRole(t, syncer, `GRANT SELECT ON ALL TABLES IN SCHEMA `+syncer.schema+` TO ROLE`)
+			reader, err := NewStore(ctx, roleURL, syncer.schema, true)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, reader.Close()) })
+			reader.hostedRelations = hosted
+			f := db.AnalyticsFilter{Timezone: "Local"}
+			first, err := reader.GetAnalyticsSignals(ctx, f)
+			require.NoError(t, err)
+			require.Equal(t, 1, first.QualityHealth.Totals.FrustrationMarkerCount)
+			var role string
+			require.NoError(t, reader.DB().QueryRowContext(ctx, `SELECT current_user`).Scan(&role))
+			_, err = owner.DB().ExecContext(ctx, `REVOKE SELECT ON messages FROM `+role)
+			require.NoError(t, err)
+			second, err := reader.GetAnalyticsSignals(ctx, f)
+			require.NoError(t, err)
+			require.Equal(t, 1, second.QualityHealth.Totals.FrustrationMarkerCount)
+			_, err = owner.DB().ExecContext(ctx, `GRANT SELECT ON messages TO `+role)
+			require.NoError(t, err)
+			_, err = owner.DB().ExecContext(ctx, `UPDATE messages SET content='Please explain this function.' WHERE session_id='session'`)
+			require.NoError(t, err)
+			repaired, err := reader.GetAnalyticsSignals(ctx, f)
+			require.NoError(t, err)
+			require.Zero(t, repaired.QualityHealth.Totals.FrustrationMarkerCount)
+		})
+	}
+}

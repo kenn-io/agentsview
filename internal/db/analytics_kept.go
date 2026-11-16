@@ -20,7 +20,22 @@ func keptAnalytics[T analyticsReport](ctx context.Context, db *DB, panel string,
 	if panel == "signals" {
 		original := load
 		load = func(ctx context.Context, f AnalyticsFilter) (T, error) {
-			db.frustrationMemo.Swap(func() {})
+			// Direct message edits can change counts without changing transcript versions.
+			var token string
+			err := db.getReader().QueryRowContext(ctx, `SELECT value FROM archive_metadata WHERE key='dashboard_signals'`).Scan(&token)
+			decoded, decodeErr := hex.DecodeString(token)
+			if err == nil && decodeErr == nil && len(decoded) == 16 {
+				_, err = db.analyticsKept.Do(ctx, "\x00signals-memo", token, func(context.Context) (any, error) {
+					db.frustrationMemo.Swap(func() {})
+					return struct{}{}, nil
+				})
+				if err != nil {
+					var zero T
+					return zero, err
+				}
+			} else if !db.readOnly {
+				db.frustrationMemo.Swap(func() {})
+			}
 			return original(ctx, f)
 		}
 	}

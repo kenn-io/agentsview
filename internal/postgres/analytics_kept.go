@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"fmt"
+	"uuid"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -38,7 +39,22 @@ func keptAnalyticsWith[T any](ctx context.Context, s *Store, panel string, f db.
 	if panel == "signals" {
 		original := load
 		load = func(ctx context.Context, f db.AnalyticsFilter) (T, error) {
-			s.runtimeState().frustrationMarkers.Swap(func() {})
+			// Direct message edits can change counts without changing session versions.
+			var token string
+			err := s.pg.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='dashboard_signals'`).Scan(&token)
+			_, parseErr := uuid.Parse(token)
+			if err == nil && parseErr == nil {
+				_, err = s.runtimeState().analytics.Do(ctx, "\x00signals-memo", token, func(context.Context) ([]byte, error) {
+					s.runtimeState().frustrationMarkers.Swap(func() {})
+					return []byte{}, nil
+				})
+				if err != nil {
+					var zero T
+					return zero, err
+				}
+			} else if !s.hostedRelations {
+				s.runtimeState().frustrationMarkers.Swap(func() {})
+			}
 			return original(ctx, f)
 		}
 	}
