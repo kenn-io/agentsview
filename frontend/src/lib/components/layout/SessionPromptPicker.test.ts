@@ -190,6 +190,28 @@ describe("SessionPromptPicker", () => {
     expect(SessionsService.getApiV1SessionsByIdMessages).toHaveBeenCalledTimes(1);
   });
 
+  it("reads the new session's prompts when the session changes while open", async () => {
+    const read = vi.spyOn(SessionsService, "getApiV1SessionsByIdMessages");
+    let answerFirst!: (page: unknown) => void;
+    read.mockReturnValueOnce(new Promise((resolve) => (answerFirst = resolve)) as never);
+    messages.loadedRevision = "1";
+    await open();
+
+    // Back in history to another session whose revision counter also reads 1.
+    read.mockResolvedValueOnce({
+      messages: [prompt(0, "From session two")],
+      transcript_revision: "1",
+    } as never);
+    messages.sessionId = "s2";
+    messages.messages = [prompt(0, "From session two")];
+    await settle();
+    answerFirst({ messages: [prompt(0, "From session one")], transcript_revision: "1" });
+    await settle();
+
+    expect(read.mock.calls.map((call) => call[0])).toEqual([{ id: "s1" }, { id: "s2" }]);
+    expect(labels()).toEqual(["From session two"]);
+  });
+
   it("offers no cached prompts when a reread fails after a resync", async () => {
     serve([prompt(0, "Before the resync")]);
     await open();

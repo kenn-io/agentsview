@@ -33,10 +33,11 @@
   let loading = $state(false);
   let failed = $state(false);
   let read: AbortController | null = null;
-  // The session `prompts` belong to; another session's must not be picked.
-  let promptsFor: string | null = null;
-  // The transcript revision `prompts` were read from. Their ordinals are
-  // only safe to jump to while the transcript shows that same revision.
+  // The session and transcript revision `prompts` were read from. Their
+  // ordinals are only safe to jump to while the transcript shows that same
+  // session at that same revision. Revisions count per session, so two
+  // sessions can share one.
+  let promptsFor: string | null = $state(null);
   let promptsRevision: string | null = $state(null);
 
   // Every prompt, newest first, read again on each opening so a live
@@ -52,6 +53,7 @@
     failed = false;
     try {
       const { rows, revision } = await readPrompts(id, controller.signal);
+      if (messages.sessionId !== id) return;
       promptsFor = id;
       promptsRevision = revision;
       prompts = rows
@@ -117,7 +119,9 @@
   // than the transcript's wait until the two agree: a cached list once the
   // transcript moves on, or a fresh read the transcript has not caught up
   // with yet.
-  let current = $derived(promptsRevision === messages.loadedRevision);
+  let current = $derived(
+    promptsFor === messages.sessionId && promptsRevision === messages.loadedRevision,
+  );
 
   // The transcript's own rule, so a prompt it hides is never offered as a
   // place to jump. A filtered code fence keeps a placeholder, so it counts.
@@ -142,14 +146,16 @@
       : shown.filter((p) => words.every((word) => p.search.includes(word)));
   });
 
-  // Whether the list is open, and the transcript revision it last read for.
+  // Whether the list is open, and the transcript it last read for.
   let open = $state(false);
+  let watchedSession: string | null = null;
   let watchedRevision: string | null = null;
 
   // The list's header exists only while the list is open.
   const onOpen: Attachment = () => {
     untrack(() => {
       open = true;
+      watchedSession = messages.sessionId;
       watchedRevision = messages.loadedRevision;
       void load();
     });
@@ -158,15 +164,18 @@
     };
   };
 
-  // Every new message raises the revision, so an open list would otherwise
-  // stay withdrawn until reopened. A read that is already on the new
-  // revision, because it got ahead of the transcript, needs no second read.
+  // Every new message raises the revision, and navigating can switch the
+  // session under an open list, so an open list would otherwise stay
+  // withdrawn until reopened. A read that is already on the new revision,
+  // because it got ahead of the transcript, needs no second read.
   $effect(() => {
+    const session = messages.sessionId;
     const revision = messages.loadedRevision;
-    if (!open || revision === watchedRevision) return;
+    if (!open || (session === watchedSession && revision === watchedRevision)) return;
+    watchedSession = session;
     watchedRevision = revision;
     untrack(() => {
-      if (revision !== promptsRevision) void load();
+      if (session !== promptsFor || revision !== promptsRevision) void load();
     });
   });
 
