@@ -623,7 +623,7 @@ keeps its default directories.
 | MiMoCode              | `~/.local/share/mimocode/`                                                                                                                                       | SQLite DB or `storage/` JSON files                                                                                                                            |
 | Mistral Vibe          | `~/.vibe/logs/session/`                                                                                                                                          | Legacy `messages.jsonl` plus `meta.json`, or a `unified/<session-id>/` store                                                                                  |
 | Muse Code             | `~/.local/share/muse/sessions/`                                                                                                                                  | `YYYY/MM/DD/<session>/session.jsonl` event logs, subagents under `subagent/`                                                                                  |
-| Muse Personal         | `~/agents/`                                                                                                                                                      | `agent-<uuid>/sessions/<session-uuid>.jsonl` with optional sibling `sessions.json`; override with `MUSE_PERSONAL_AGENTS_DIR`                                  |
+| Muse Personal         | `~/agents/` on your Muse's hosted machine                                                                                                                        | `agent-<uuid>/sessions/<session-uuid>.jsonl` with optional sibling `sessions.json`; override with `MUSE_PERSONAL_AGENTS_DIR`                                  |
 | OMO                   | `~/.omo/agent/sessions/`                                                                                                                                         | Pi-family JSONL per session                                                                                                                                   |
 | OhMyPi                | `~/.omp/agent/sessions/`                                                                                                                                         | JSONL per session                                                                                                                                             |
 | OpenClaw              | `~/.openclaw/agents/` and `~/.kimi_openclaw/agents/`                                                                                                             | JSONL per session or SQLite per agent (`agent/openclaw-agent.sqlite`)                                                                                        |
@@ -1232,11 +1232,40 @@ export ZENCODER_DIR=~/custom/zencoder
 
 ### Muse Personal
 
-Muse Personal is Meta's personal assistant, separate from Muse Code. AgentsView
-reads `~/agents/agent-<uuid>/sessions/<session-uuid>.jsonl`. A file must have a
-version-1 `session_header` with a session ID matching its filename. The optional
-sibling `sessions.json` index can extend the session's end time; missing, stale
-or unknown-version indexes do not prevent collection.
+Muse Personal is Meta's personal assistant, separate from Muse Code.
+
+**AgentsView does not collect Muse Personal sessions on your laptop.** Your
+Muse runs on a machine that Meta hosts for you, and it writes its transcripts
+there. The Muse desktop, web and phone apps only connect to that machine. They
+keep no transcripts on your computer, so an AgentsView installed on your laptop
+finds no Muse Personal sessions. AgentsView must run on your Muse's own machine.
+
+To collect your Muse Personal sessions:
+
+1. Ask your Muse to install the AgentsView CLI on its machine:
+
+   ```bash
+   curl -fsSL https://agentsview.io/install.sh | bash
+   ```
+
+   The installer fetches the latest release. Check the
+   [changelog](/docs/changelog/) to confirm that release includes Muse
+   Personal support.
+
+1. Ask your Muse to run `agentsview source sync` on that machine. AgentsView
+   reads `~/agents/agent-<uuid>/sessions/<session-uuid>.jsonl` under your
+   Muse's home directory.
+
+1. To browse these sessions beside your other agents, have the AgentsView on
+   your Muse's machine push to a PostgreSQL database that your other machines
+   also push to. See
+   [PostgreSQL Sync](/docs/pg-sync/#multi-machine-workflow). Your Muse's
+   machine needs network access to that database.
+
+Each transcript must have a version-1 `session_header` with a session ID
+matching its filename. The optional sibling `sessions.json` index can extend
+the session's end time; missing, stale or unknown-version indexes do not
+prevent collection.
 
 Set `MUSE_PERSONAL_AGENTS_DIR` or configure the root explicitly:
 
