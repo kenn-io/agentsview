@@ -404,6 +404,9 @@ sessions from [SSH remote hosts](/docs/remote-access/#ssh-remote-sync). The
 container runs as root and reads its SSH settings from `/root/.ssh`. Give it a
 dedicated key, not your personal `~/.ssh` directory or an SSH agent socket.
 
+The SSH client is new on `main`. Released images do not include it yet, so
+the steps below fail because `ssh` is missing until the next release.
+
 1. Create a directory, for example `container-ssh/`, holding only:
 
    - `id_ed25519`: a key without a passphrase, authorized on the remote
