@@ -112,6 +112,16 @@ func TestPGSearchContentWordBoundariesCLocale(t *testing.T) {
 					assert.Equal(t, "match", page.Matches[0].SessionID)
 				})
 			}
+			t.Run("later-page-exclude-system", func(t *testing.T) {
+				insertCSSession(t, store, "match-later", "project", "claude", "2024-06-15T10:00:00Z", "2024-06-15T11:00:00Z")
+				insertCSMessage(t, store, "match-later", 0, "user", "invoice ready", "2024-06-15T10:00:00Z", false)
+				page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+					Pattern: "invoice absentword", Project: "project", Cursor: 1, Limit: 1, ExcludeSystem: true,
+				})
+				require.NoError(t, err)
+				require.Len(t, page.Matches, 1)
+				assert.Equal(t, "match-later", page.Matches[0].SessionID)
+			})
 		})
 	}
 }

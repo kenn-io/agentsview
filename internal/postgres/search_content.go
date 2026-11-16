@@ -201,7 +201,7 @@ func (s *Store) searchContentSubstringPG(
 	exactCount := 0
 	if ranked && f.Cursor > 0 {
 		countQuery := "WITH scoped AS (SELECT id FROM sessions WHERE " + scopeWhere + ") SELECT count(*) FROM (" + strings.Join(branches, " UNION ALL ") + ") sub"
-		if err := s.pg.QueryRowContext(ctx, countQuery, countArgs...).Scan(&exactCount); err != nil {
+		if err := s.pg.QueryRowContext(ctx, s.latin1SearchSQL(countQuery), countArgs...).Scan(&exactCount); err != nil {
 			return db.ContentSearchPage{}, fmt.Errorf("pg content count: %w", err)
 		}
 		if exactCount <= f.Cursor {
