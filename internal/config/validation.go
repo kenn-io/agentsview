@@ -48,15 +48,15 @@ func (c *Config) validateSections() error {
 		{ScopeServer, "daemon_idle_timeout", c.validateDaemonIdleTimeout},
 		{ScopeServer, "sync_idle_after", c.validateSyncIdleAfter},
 		// Sections with *_file secrets read them once they validate.
-		{ScopeVector, "[vector]", c.Vector.resolveSecrets},
-		{ScopeRecall, "[recall.extract]", c.Recall.Extract.resolveSecrets},
-		{ScopeInsights, "[insights]", c.Insights.resolveSecrets},
+		{ScopeVector, "[vector]", func() error { return resolveVectorSecrets(&c.Vector) }},
+		{ScopeRecall, "[recall.extract]", func() error { return resolveRecallExtractSecrets(&c.Recall.Extract) }},
+		{ScopeInsights, "[insights]", func() error { return resolveInsightsSecrets(&c.Insights) }},
 		{ScopeServer, "[image_text]", c.ImageText.Validate},
 		{ScopeServer, "[friction]", c.Friction.Validate},
-		{ScopeServer, "[kata]", c.Kata.resolveSecrets},
+		{ScopeServer, "[kata]", func() error { return resolveKataSecrets(&c.Kata) }},
 		{ScopePG, "[pg]", func() error { return c.pgConfigErr }},
 		{ScopeClickHouse, "[clickhouse]", func() error { return c.clickHouseConfigErr }},
-		{ScopeDocbank, "[integrations.docbank]", c.Integrations.Docbank.resolveSecrets},
+		{ScopeDocbank, "[integrations.docbank]", func() error { return resolveDocbankSecrets(&c.Integrations.Docbank) }},
 	} {
 		if err := c.validateSection(section.scope, section.name, section.validate); err != nil {
 			return err

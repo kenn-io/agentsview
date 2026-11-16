@@ -189,6 +189,16 @@ type DuckDBConfig struct {
 	ExcludeProjects []string      `toml:"exclude_projects" json:"exclude_projects,omitempty"`
 }
 
+// ResolveToken returns the Quack token: Token when set, else the contents
+// of the file TokenFile names, else "". Only commands that authenticate to
+// Quack call it, so an unreadable token file does not block local mirror work.
+func (c DuckDBConfig) ResolveToken() (string, error) {
+	if c.Token != "" || strings.TrimSpace(c.TokenFile) == "" {
+		return c.Token, nil
+	}
+	return readSettingSecretFile("[duckdb] token_file", c.TokenFile)
+}
+
 type duckDBConfigJSON DuckDBConfig
 
 func (c DuckDBConfig) MarshalJSONTo(out *jsontext.Encoder) error {
@@ -539,9 +549,9 @@ func (c VectorConfig) Validate() error {
 	return nil
 }
 
-// resolveSecrets validates the section and, when it is enabled, reads each
-// server's api_key_file.
-func (c *VectorConfig) resolveSecrets() error {
+// resolveVectorSecrets validates the section and, when it is enabled, reads
+// each server's api_key_file.
+func resolveVectorSecrets(c *VectorConfig) error {
 	if err := c.Validate(); err != nil {
 		return err
 	}
@@ -615,17 +625,21 @@ func (c VectorEmbeddingsServerConfig) EmbedTransport() (embedconfig.Transport, e
 	return embedconfig.Transport{Timeout: timeout}, nil
 }
 
-// APIKey returns the key read from APIKeyFile or a deployment-provided key
-// when set. Otherwise it reads the environment variable named by APIKeyEnv,
-// returning "" when unset.
-func (c VectorEmbeddingsServerConfig) APIKey() string {
+// APIKey returns the key read when the config loaded, or a
+// deployment-provided key. Otherwise it reads APIKeyFile, which a command
+// that loaded the config without the [vector] scope has not read yet, or the
+// environment variable APIKeyEnv names. It returns "" when no key is set.
+func (c VectorEmbeddingsServerConfig) APIKey() (string, error) {
 	if c.apiKey != "" {
-		return c.apiKey
+		return c.apiKey, nil
+	}
+	if strings.TrimSpace(c.APIKeyFile) != "" {
+		return readSettingSecretFile("api_key_file", c.APIKeyFile)
 	}
 	if c.APIKeyEnv == "" {
-		return ""
+		return "", nil
 	}
-	return os.Getenv(c.APIKeyEnv)
+	return os.Getenv(c.APIKeyEnv), nil
 }
 
 // validateServers checks available servers, their default and transport
@@ -906,8 +920,8 @@ func (c InsightsConfig) APIKey() string {
 	return os.Getenv(strings.TrimSpace(c.APIKeyEnv))
 }
 
-// resolveSecrets validates the section and reads APIKeyFile.
-func (c *InsightsConfig) resolveSecrets() error {
+// resolveInsightsSecrets validates the section and reads APIKeyFile.
+func resolveInsightsSecrets(c *InsightsConfig) error {
 	if err := c.Validate(); err != nil {
 		return err
 	}
@@ -3974,9 +3988,9 @@ func (c *Config) ResolveCursorAdminAPIKey() (string, error) {
 	return readSettingSecretFile("cursor_admin_api_key_file", c.CursorAdminAPIKeyFile)
 }
 
-// ResolveDuckDB returns a copy of DuckDB config with defaults applied,
-// environment variables expanded in path, URL, and token, and the token read
-// from token_file when that names it.
+// ResolveDuckDB returns a copy of DuckDB config with defaults applied
+// and environment variables expanded in path, URL, and token. It leaves
+// token_file unread; callers that authenticate use ResolveToken.
 func (c *Config) ResolveDuckDB() (DuckDBConfig, error) {
 	duck := c.DuckDB
 	if duck.Path != "" {
@@ -4003,13 +4017,6 @@ func (c *Config) ResolveDuckDB() (DuckDBConfig, error) {
 			return duck, fmt.Errorf("expanding token: %w", err)
 		}
 		duck.Token = expanded
-	}
-	if duck.Token == "" && duck.TokenFile != "" {
-		token, err := readSettingSecretFile("[duckdb] token_file", duck.TokenFile)
-		if err != nil {
-			return duck, err
-		}
-		duck.Token = token
 	}
 	if duck.Path == "" {
 		duck.Path = filepath.Join(c.DataDir, "sessions.duckdb")
@@ -4480,7 +4487,7 @@ func (c *Config) vectorSetupCandidate() (map[string]any, Config, error) {
 	if err := candidate.applyConfigTOML(string(encoded)); err != nil {
 		return nil, Config{}, invalidVectorSetupError{err}
 	}
-	if err := candidate.Vector.resolveSecrets(); err != nil {
+	if err := resolveVectorSecrets(&candidate.Vector); err != nil {
 		return nil, Config{}, invalidVectorSetupError{err}
 	}
 	return existing, candidate, nil

@@ -67,6 +67,7 @@ func TestSecretFileSettingsLoadFromConfig(t *testing.T) {
 				}}}
 			},
 			secret: func(t *testing.T, cfg Config) string {
+				t.Helper()
 				assert.True(t, cfg.Integrations.Docbank.Enabled())
 				return cfg.Integrations.Docbank.APIKey()
 			},
@@ -98,7 +99,7 @@ func TestSecretFileSettingsLoadFromConfig(t *testing.T) {
 				}}
 			},
 			secret: func(_ *testing.T, cfg Config) string {
-				return cfg.Vector.Embeddings.Servers["remote"].APIKey()
+				return requireAPIKey(t, cfg.Vector.Embeddings.Servers["remote"])
 			},
 		},
 		{
@@ -114,7 +115,7 @@ func TestSecretFileSettingsLoadFromConfig(t *testing.T) {
 				}}}
 			},
 			secret: func(_ *testing.T, cfg Config) string {
-				return cfg.Recall.Extract.Servers["remote"].APIKey()
+				return requireAPIKey(t, cfg.Recall.Extract.Servers["remote"])
 			},
 		},
 		{
@@ -126,9 +127,12 @@ func TestSecretFileSettingsLoadFromConfig(t *testing.T) {
 				}}
 			},
 			secret: func(t *testing.T, cfg Config) string {
+				t.Helper()
 				duck, err := cfg.ResolveDuckDB()
 				require.NoError(t, err)
-				return duck.Token
+				token, err := duck.ResolveToken()
+				require.NoError(t, err)
+				return token
 			},
 		},
 		{
@@ -137,6 +141,7 @@ func TestSecretFileSettingsLoadFromConfig(t *testing.T) {
 				return map[string]any{"cursor_admin_api_key_file": path}
 			},
 			secret: func(t *testing.T, cfg Config) string {
+				t.Helper()
 				key, err := cfg.ResolveCursorAdminAPIKey()
 				require.NoError(t, err)
 				return key
@@ -190,6 +195,36 @@ func TestSecretFileSettingsRejectUnusableFiles(t *testing.T) {
 		cfg, err := LoadMinimalFor(ScopeLocal)
 		require.NoError(t, err)
 		assert.Empty(t, cfg.Insights.APIKey())
+	})
+
+	t.Run("servers loaded outside their scope read the file when used", func(t *testing.T) {
+		f := newConfigFixture(t)
+		dir := secretDir(t)
+		keyPath := filepath.Join(dir, "key")
+		writePrivateFile(t, keyPath, fileSecret+"\n")
+		missing := filepath.Join(dir, "absent")
+		f.WriteTOML(t, map[string]any{
+			"vector": map[string]any{
+				"enabled": true,
+				"embeddings": map[string]any{
+					"model": "nomic-embed-text", "dimension": 768,
+					"servers": map[string]any{"remote": map[string]any{
+						"endpoint": "https://embed.example.test/v1", "api_key_file": keyPath,
+					}},
+				},
+			},
+			"recall": map[string]any{"extract": map[string]any{
+				"enabled": true, "model": "m",
+				"servers": map[string]any{"remote": map[string]any{
+					"endpoint": "https://extract.example.test/v1", "api_key_file": missing,
+				}},
+			}},
+		})
+		cfg, err := LoadMinimalFor(ScopeLocal)
+		require.NoError(t, err)
+		assert.Equal(t, fileSecret, requireAPIKey(t, cfg.Vector.Embeddings.Servers["remote"]))
+		_, err = cfg.Recall.Extract.Servers["remote"].APIKey()
+		requireErrorContains(t, err, "api_key_file", missing)
 	})
 }
 
@@ -261,6 +296,13 @@ func TestSecretFileSettingsRejectTwoSources(t *testing.T) {
 			},
 			wantErr: "set only one of cursor_admin_api_key and cursor_admin_api_key_file",
 		},
+		{
+			name: "blank inline value still counts as a source",
+			config: map[string]any{
+				"cursor_admin_api_key": "   ", "cursor_admin_api_key_file": "/run/secrets/key",
+			},
+			wantErr: "set only one of cursor_admin_api_key and cursor_admin_api_key_file",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -280,7 +322,9 @@ func TestSecretFileEnvironmentOverridesReplaceFiles(t *testing.T) {
 		cfg := f.LoadMinimal(t)
 		duck, err := cfg.ResolveDuckDB()
 		require.NoError(t, err)
-		assert.Equal(t, "env-token", duck.Token)
+		token, err := duck.ResolveToken()
+		require.NoError(t, err)
+		assert.Equal(t, "env-token", token)
 	})
 
 	t.Run("AGENTSVIEW_CURSOR_ADMIN_API_KEY", func(t *testing.T) {
@@ -295,12 +339,14 @@ func TestSecretFileEnvironmentOverridesReplaceFiles(t *testing.T) {
 		assert.Equal(t, "env-key", key)
 	})
 
-	t.Run("unreadable duckdb token_file fails when resolved", func(t *testing.T) {
+	t.Run("unreadable duckdb token_file fails only when the token is used", func(t *testing.T) {
 		f := newConfigFixture(t)
 		path := filepath.Join(f.Dir, "absent")
 		f.WriteTOML(t, map[string]any{"duckdb": map[string]any{"token_file": path}})
 		cfg := f.LoadMinimal(t)
-		_, err := cfg.ResolveDuckDB()
+		duck, err := cfg.ResolveDuckDB()
+		require.NoError(t, err, "local mirror work needs no token")
+		_, err = duck.ResolveToken()
 		requireErrorContains(t, err, "[duckdb] token_file", path)
 	})
 }

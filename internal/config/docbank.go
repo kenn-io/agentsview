@@ -43,8 +43,8 @@ func (c DocbankIntegration) APIKey() string {
 	return os.Getenv(strings.TrimSpace(c.APIKeyEnv))
 }
 
-// resolveSecrets validates the section and reads api_key_file.
-func (c *DocbankIntegration) resolveSecrets() error {
+// resolveDocbankSecrets validates the section and reads api_key_file.
+func resolveDocbankSecrets(c *DocbankIntegration) error {
 	if err := c.Validate(); err != nil {
 		return err
 	}

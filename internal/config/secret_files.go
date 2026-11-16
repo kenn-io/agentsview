@@ -24,10 +24,11 @@ func readSettingSecretFile(setting, path string) (string, error) {
 }
 
 // oneSecretSource rejects a secret configured through both keyA and keyB
-// instead of picking one silently. section prefixes the error; top-level keys
+// instead of picking one silently. Any nonempty value counts as set, matching
+// how resolvers choose a source. section prefixes the error; top-level keys
 // pass "".
 func oneSecretSource(section, keyA, valueA, keyB, valueB string) error {
-	if strings.TrimSpace(valueA) != "" && strings.TrimSpace(valueB) != "" {
+	if valueA != "" && valueB != "" {
 		return errors.New(strings.TrimSpace(
 			fmt.Sprintf("%s set only one of %s and %s", section, keyA, keyB)))
 	}

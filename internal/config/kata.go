@@ -38,9 +38,9 @@ type KataConfig struct {
 // loaded, or "" when TokenFile is unset.
 func (c KataConfig) FileToken() string { return c.token }
 
-// resolveSecrets validates the section and, when it is enabled, reads
+// resolveKataSecrets validates the section and, when it is enabled, reads
 // token_file.
-func (c *KataConfig) resolveSecrets() error {
+func resolveKataSecrets(c *KataConfig) error {
 	if err := c.Validate(); err != nil {
 		return err
 	}

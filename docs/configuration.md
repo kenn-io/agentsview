@@ -404,10 +404,17 @@ When AgentsView reads the file:
   invalid setting: it stops the server and commands that use the section,
   and other commands print a warning. The server reads the files at startup,
   so restart it after you replace one.
-- `[duckdb] token_file` and `cursor_admin_api_key_file` are read each time a
-  command needs the secret. `AGENTSVIEW_DUCKDB_TOKEN` and
-  `AGENTSVIEW_CURSOR_ADMIN_API_KEY` replace the config-file values, so the
-  file is not read while they are set.
+- An embeddings or recall extraction server whose section a command did not
+  load reads its file when the command starts using that server. An unusable
+  file then stops that work with an error; it never falls back to an
+  anonymous request.
+- `[duckdb] token_file` is read only when a command authenticates to Quack,
+  such as `duckdb quack serve` or `duckdb status` with a `url`. Local mirror
+  work never reads it, and `duckdb quack serve --token` takes precedence over
+  it. `cursor_admin_api_key_file` is read when `source cursor sync-usage`
+  runs.
+- `AGENTSVIEW_DUCKDB_TOKEN` and `AGENTSVIEW_CURSOR_ADMIN_API_KEY` replace the
+  config-file values, so the file is not read while they are set.
 
 The `AGENTSVIEW_*_FILE` variables of a
 [container deployment](#container-deployment) follow their own rules, described

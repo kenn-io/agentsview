@@ -97,16 +97,21 @@ type RecallExtractServerConfig struct {
 	apiKey string
 }
 
-// APIKey returns the key read from APIKeyFile, or else the value of the
-// environment variable APIKeyEnv names. Returns "" when neither is set.
-func (s RecallExtractServerConfig) APIKey() string {
+// APIKey returns the key read when the config loaded. Otherwise it reads
+// APIKeyFile, which a command that loaded the config without the
+// [recall.extract] scope has not read yet, or the environment variable
+// APIKeyEnv names. It returns "" when no key is set.
+func (s RecallExtractServerConfig) APIKey() (string, error) {
 	if s.apiKey != "" {
-		return s.apiKey
+		return s.apiKey, nil
+	}
+	if strings.TrimSpace(s.APIKeyFile) != "" {
+		return readSettingSecretFile("api_key_file", s.APIKeyFile)
 	}
 	if s.APIKeyEnv == "" {
-		return ""
+		return "", nil
 	}
-	return os.Getenv(s.APIKeyEnv)
+	return os.Getenv(s.APIKeyEnv), nil
 }
 
 // RecallExtractPromptsConfig selects the prompt profile and optional
@@ -167,9 +172,9 @@ func (c RecallExtractConfig) AllowCandidateFindings() bool {
 // Validate checks the extraction config for internal consistency. When the
 // section is disabled, it validates only CandidateFindings because the
 // reconcile-only daemon path still applies that policy to a serving corpus.
-// resolveSecrets validates the section and, when extraction is enabled,
-// reads each server's api_key_file.
-func (c *RecallExtractConfig) resolveSecrets() error {
+// resolveRecallExtractSecrets validates the section and, when extraction is
+// enabled, reads each server's api_key_file.
+func resolveRecallExtractSecrets(c *RecallExtractConfig) error {
 	if err := c.Validate(); err != nil {
 		return err
 	}
