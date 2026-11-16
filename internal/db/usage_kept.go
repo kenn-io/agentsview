@@ -93,11 +93,13 @@ func (db *DB) keptDailyUsage(ctx context.Context, filter UsageFilter) (DailyUsag
 					return build(flightCtx)
 				})
 			}
-			result, err = share()
 			// Another request's flight can cancel a memo entry this flight
-			// waited on; the failed entry is dropped, so one retry prepares it.
-			if errors.Is(err, context.Canceled) && ctx.Err() == nil {
+			// waited on; retry until the caller leaves or a build succeeds.
+			for {
 				result, err = share()
+				if !errors.Is(err, context.Canceled) || ctx.Err() != nil {
+					break
+				}
 			}
 		}
 		if err != nil {
