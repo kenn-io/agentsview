@@ -191,9 +191,7 @@ Approve the project's `.mcp.json`. Use `--scope local` instead of
 `--scope project` to keep the entry out of the repository. Open `/mcp` in that
 project and turn off `plugin:agentsview-memory:agentsview`. Claude Code stores
 this project setting in `~/.claude.json`; repeat the toggle on each machine.
-Claude Code treats the plugin server and project server as different connections,
-so otherwise both connect and the assistant sees the memory tools twice. The
-plugin's skill, agent, and hook keep working, and the agent uses the project
+The plugin's skill, agent, and hook keep working, and the agent uses the project
 server. Other projects keep the plugin's memory server. For a remote archive,
 add `--server <url>` and, if needed, `--server-token-file <path>` to the full
 server command, or use `--pg` for PostgreSQL. The `AGENTSVIEW_MEMORY_*`
