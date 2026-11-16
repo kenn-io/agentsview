@@ -133,14 +133,7 @@ func (s *Store) sumActivityUsage(
 		}
 		saved := []*readbase.ActivityUsageSums{{Schedule: schedule, Groups: groups, EndUS: endUS, NextUS: nextUS}}
 		s.activityUsageSums.Put(slot, version, saved)
-		canSave := diskVersion != ""
-		for _, rate := range schedule.Rates {
-			if rate.BilledErr != nil {
-				canSave = false
-				break
-			}
-		}
-		if canSave && ctx.Err() == nil && version == s.keptVersion() {
+		if diskVersion != "" && ctx.Err() == nil && version == s.keptVersion() {
 			if data, err := kept.EncodeRows(saved, 128<<20, func(row *readbase.ActivityUsageSums) int64 { return row.Bytes() }); err == nil && version == s.keptVersion() {
 				s.usageDisk.Put("activity-usage|"+slot, "activity-usage-1|"+diskVersion, data)
 			}
