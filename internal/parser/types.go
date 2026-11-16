@@ -1783,7 +1783,8 @@ type ParsedMessage struct {
 	IsCompactBoundary bool
 
 	// claudeChannelOrigin limits preview unwrapping to channel entries.
-	claudeChannelOrigin bool
+	claudeChannelOrigin    bool
+	antigravityTypedPrompt bool
 
 	// StopReason is the reason the assistant stopped generating
 	// (Claude: "end_turn", "tool_use", "max_tokens", "stop_sequence";

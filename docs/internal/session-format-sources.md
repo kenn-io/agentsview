@@ -5032,7 +5032,10 @@ schemas keep their existing ordering behavior.
   `internal/parser/antigravity_proto.go`,
   `internal/parser/antigravity_brain_transcript.go`, and
   `internal/parser/antigravity_provider.go`; field decoding is deliberately
-  marked as reverse engineering. The brain transcript needs no such decoding:
+  marked as reverse engineering. [agentsview#3135](https://github.com/kenn-io/agentsview/issues/3135)
+  reports `USER_INPUT` field 19 → 3 → 1 as typed text and
+  19 → 3 → 2 → 27 → 1 → 2 as the skill expansion; the parser prefers the typed
+  text, checked only against a synthetic CLI fixture. The brain transcript needs no such decoding:
   it is line-delimited JSON with named fields, verified 2026-09-26 against
   transcripts two Antigravity builds wrote, and it is read as untrusted
   structured input. Rechecked 2026-09-29 with synthetic transcripts through

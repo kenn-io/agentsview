@@ -695,7 +695,8 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // model_pricing rows after it moved to pricing_meta.)
 // (182: distinguish empty Evener compaction labels from source text. Re-parse
 // Evener sources in place; source and session identities are unchanged.)
-const dataVersion = 182
+// (183: prefer structured Antigravity user prompts over skill expansions.)
+const dataVersion = 183
 
 const archiveOnlyVersionBase = 1 << 20
 
