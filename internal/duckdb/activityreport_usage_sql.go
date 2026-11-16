@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"math"
 	"slices"
@@ -88,7 +88,7 @@ func (s *Store) sumActivityUsage(
 			s.handleMu.RLock()
 			price := s.pricingDigest
 			s.handleMu.RUnlock()
-			data, err := json.Marshal([]any{versions, block.Digest, price, pricingpkg.ConfiguredAliasesDigest()})
+			data, err := json.Marshal([]any{versions, block.Digest, price, pricingpkg.ConfiguredAliasesDigest()}, json.Deterministic(true))
 			if err != nil {
 				return nil, err
 			}
