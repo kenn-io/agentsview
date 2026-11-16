@@ -226,7 +226,7 @@ describe("MessagesStore", () => {
     expect(messages.activeSessionToken).toBe("rev-1");
   });
 
-  it("starts read tracking when session search completes a partial first load", async () => {
+  it("keeps a partial first-load failure through session search until Retry reloads", async () => {
     const all = Array.from({ length: 1500 }, (_, ordinal) => makeMessage(ordinal));
     let failPageTwo = true;
     vi.mocked(api.getSession).mockResolvedValue({
@@ -249,11 +249,16 @@ describe("MessagesStore", () => {
     await messages.ensureHistoryLoaded();
 
     expect(messages.messages).toHaveLength(1500);
+    expect(messages.loadError).toBe("page two failed");
+    expect(messages.activeSessionToken).toBeNull();
+
+    await messages.retryLoad();
+
     expect(messages.loadError).toBeNull();
     expect(messages.activeSessionToken).toBe("rev-1");
   });
 
-  it("starts read tracking when session search loads a transcript whose first page failed", async () => {
+  it("keeps a failed first page through session search until Retry reloads", async () => {
     const all = Array.from({ length: 1500 }, (_, ordinal) => makeMessage(ordinal));
     let failFirstPage = true;
     vi.mocked(api.getSession).mockResolvedValue({
@@ -277,6 +282,11 @@ describe("MessagesStore", () => {
     await messages.ensureHistoryLoaded();
 
     expect(messages.messages).toHaveLength(1500);
+    expect(messages.loadError).toBe("first page failed");
+    expect(messages.activeSessionToken).toBeNull();
+
+    await messages.retryLoad();
+
     expect(messages.loadError).toBeNull();
     expect(messages.activeSessionToken).toBe("rev-1");
   });

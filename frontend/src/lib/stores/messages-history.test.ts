@@ -89,7 +89,8 @@ describe("complete search history", () => {
     expect(store.loadError).not.toBeNull();
     control.failFrom = null;
     await store.ensureHistoryLoaded();
-    expect(store.loadError).toBeNull();
+    // The failed load stays reported until a load or Retry lands.
+    expect(store.loadError).toBe("injected page failure");
     expect(store.messages).toHaveLength(1500);
     expect(store.historyComplete).toBe(true);
     expect(store.messages[0]).toBe(first);

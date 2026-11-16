@@ -140,9 +140,9 @@ export class MessagesStore {
 
     // Taken before the metadata read, so a reload that starts while it is in flight outranks this load.
     const ticket = ++this.loadTicket;
-    let pendingToken: string | null = null;
     try {
       let countHint: number | null = null;
+      let pendingToken: string | null = null;
       try {
         const sess = await SessionsService.getApiV1SessionsById({ id }, { signal: ac.signal });
         countHint = sess.message_count ?? 0;
@@ -186,14 +186,6 @@ export class MessagesStore {
       if (this.loadGeneration === generation && isTransient(err)) void this.reload();
       if (this.sessionId === id && this.loadGeneration === generation) {
         this.failLoad(err, "load");
-        // Keep this revision's token pending so whichever read completes
-        // the history, Retry or session search, publishes it and read
-        // tracking starts. A full reload replaces it with its own.
-        if (!this.hasPendingSessionToken) {
-          this.pendingSessionToken = pendingToken;
-          this.hasPendingSessionToken = true;
-          this.pendingSessionUnreadOrdinal = null;
-        }
       }
     } finally {
       if (this.sessionId === id && this.loadingOwner === owner) {
@@ -254,11 +246,11 @@ export class MessagesStore {
     this.loadErrorKind = kind;
   }
 
-  /** A history read landed. It settles an earlier history failure, and
-   * any failure once the whole transcript is loaded. */
+  /** A history read landed, which settles an earlier history failure. A
+   * failed transcript load stays until a load or reload lands, because that
+   * read is the one that publishes the session's read-progress token. */
   private historyRecovered() {
-    if (this.loadError === null) return;
-    if (this.loadErrorKind !== "load" || this.historyComplete) this.loadError = null;
+    if (this.loadErrorKind !== "load") this.loadError = null;
   }
 
   /** Repeat the read behind loadError. */
