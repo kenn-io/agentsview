@@ -858,11 +858,8 @@ func TestVibeUnifiedProviderParseJournal(t *testing.T) {
 		{
 			// Store minor 9 journals a move as session_relocated, which carries
 			// the new session metadata and a checkpoint delta.
+			// meta.json keeps the original working directory.
 			name: "relocation replaces metadata and applies its delta",
-			setup: func(t *testing.T, sessionDir string) {
-				t.Helper()
-				writeSourceFile(t, filepath.Join(sessionDir, "meta.json"), `{"session_id":"`+vibeUnifiedSessionID+`"}`)
-			},
 			records: [][2]string{
 				{"session_relocated", `{"metadata":{"cwd":"/workspace/moved-repo","origin_cwd":"/workspace/my-repo","active_model":"devstral-2","root_session_id":"` + vibeUnifiedSessionID + `"},` +
 					`"plugin_lock":{},"watermark":2,"delta":[{"op":"append_entry","entry":{"type":"checkpoint","id":"checkpoint:session_relocated:1","kind":"session_relocated","message":"Moved"}}]}`},
@@ -875,6 +872,7 @@ func TestVibeUnifiedProviderParseJournal(t *testing.T) {
 				assert.Equal(t, "after the move", result.Messages[3].Content)
 				assert.Equal(t, "devstral-2", result.Messages[3].Model)
 				assert.Equal(t, "/workspace/moved-repo", result.Session.Cwd)
+				assert.Equal(t, "moved_repo", result.Session.Project)
 				require.Len(t, result.UsageEvents, 1)
 				assert.Equal(t, "devstral-2", result.UsageEvents[0].Model)
 			},

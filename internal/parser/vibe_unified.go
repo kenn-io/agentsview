@@ -483,10 +483,14 @@ func parseVibeUnifiedResultFile(ctx context.Context, anchorPath string, fileInfo
 	if err := readVibeUnifiedDoc(gen.dir, "runtime-state.json", &runtimeMeta); err != nil {
 		return result, err
 	}
+	// A journaled relocation moves the session after meta.json recorded its
+	// working directory, so the relocated cwd wins over the sidecar.
+	relocatedCwd := ""
 	if replay.metadata != nil {
 		runtimeMeta.SessionMetadata = *replay.metadata
+		relocatedCwd = replay.metadata.Cwd
 	}
-	if result.Session.Cwd == "" {
+	if result.Session.Cwd == "" || relocatedCwd != "" {
 		result.Session.Cwd = runtimeMeta.SessionMetadata.Cwd
 		if project := ExtractProjectFromCwdWithBranchContext(ctx, result.Session.Cwd, result.Session.GitBranch); project != "" {
 			result.Session.Project = project
