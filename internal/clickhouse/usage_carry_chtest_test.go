@@ -12,7 +12,7 @@ import (
 )
 
 func TestUsageCarry(t *testing.T) {
-	for _, scenario := range []string{"healthy", "unpublished", "partial deletion", "changed after read", "parts move", "snapshot ahead", "equal count older row"} {
+	for _, scenario := range []string{"healthy", "unpublished", "partial deletion", "changed after read", "parts move", "snapshot ahead", "snapshot restored", "raw merge", "equal count older row"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Parallel()
 			local, syncer, store := newPreparedUsageStore(t)
@@ -54,7 +54,19 @@ func TestUsageCarry(t *testing.T) {
 			case "partial deletion":
 				execPreparedUsage(t, store, fmt.Sprintf("ALTER TABLE usage_messages DELETE WHERE session_id = '%s' AND ordinal = 0 SETTINGS mutations_sync = 2", preparedUsageLongID))
 			case "snapshot ahead":
+				execPreparedUsage(t, store, fmt.Sprintf(`INSERT INTO usage_session_snapshots SELECT * REPLACE (push_version + 1 AS push_version, toUInt128(push_version + 1) * 2 + 1 AS revision) FROM usage_session_snapshots WHERE id = '%s'`, preparedUsageLongID))
+			case "snapshot restored":
 				execPreparedUsage(t, store, "CREATE TABLE original_snapshot AS usage_session_snapshots ENGINE = Memory", fmt.Sprintf("INSERT INTO original_snapshot SELECT * FROM usage_session_snapshots WHERE id = '%s'", preparedUsageLongID))
+			case "raw merge":
+				execPreparedUsage(t, store, "SYSTEM STOP MERGES usage_messages", "INSERT INTO usage_messages SELECT * FROM usage_messages")
+			}
+			var rawVersion, rawParts string
+			if scenario == "raw merge" {
+				var err error
+				rawVersion, err = store.usageReadFingerprint(t.Context(), preparedUsageState{}, "")
+				require.NoError(t, err)
+				rawParts, err = store.tablePartsFingerprint(t.Context(), []string{"usage_messages"})
+				require.NoError(t, err)
 			}
 			filters := []db.UsageFilter{{Timezone: "UTC", Breakdowns: true}, {From: "2026-01-01", To: "2026-01-30", Timezone: "UTC", Breakdowns: true}}
 			if scenario == "equal count older row" {
@@ -64,15 +76,24 @@ func TestUsageCarry(t *testing.T) {
 			for i, f := range filters {
 				before[i] = readPreparedUsage(t, store, f)
 			}
-			if scenario == "snapshot ahead" {
+			if scenario == "snapshot restored" {
 				execPreparedUsage(t, store, fmt.Sprintf(`INSERT INTO usage_session_snapshots SELECT * REPLACE (push_version + 1 AS push_version, toUInt128(push_version + 1) * 2 + 1 AS revision) FROM usage_session_snapshots WHERE id = '%s'`, preparedUsageLongID))
+			}
+			if scenario == "raw merge" {
+				execPreparedUsage(t, store, "SYSTEM START MERGES usage_messages", "OPTIMIZE TABLE usage_messages FINAL")
+				parts, err := store.tablePartsFingerprint(t.Context(), []string{"usage_messages"})
+				require.NoError(t, err)
+				require.NotEqual(t, rawParts, parts)
+				version, err := store.usageReadFingerprint(t.Context(), preparedUsageState{}, "")
+				require.NoError(t, err)
+				require.Equal(t, rawVersion, version)
 			}
 			if scenario == "changed after read" {
 				republishRoundSession(t, local, 123)
 				pushPreparedUsage(t, syncer)
 			}
 			runPreparedUsageRefresh(t, store)
-			if scenario == "snapshot ahead" {
+			if scenario == "snapshot restored" {
 				execPreparedUsage(t, store, "INSERT INTO usage_session_snapshots SELECT * FROM original_snapshot")
 			}
 			proofs := 0
@@ -90,8 +111,11 @@ func TestUsageCarry(t *testing.T) {
 				top, err := store.GetTopSessionsByCost(t.Context(), f, 10)
 				require.NoError(t, err)
 				_, afterTop := usageQueryCounts(t, store)
-				if scenario == "healthy" {
+				if scenario == "healthy" || scenario == "raw merge" || (scenario == "parts move" && i > 0) {
 					require.Equal(t, beforeResults, afterDaily)
+					require.Equal(t, afterDaily, afterTop)
+				} else if scenario == "parts move" {
+					require.Greater(t, afterDaily, beforeResults)
 					require.Equal(t, afterDaily, afterTop)
 				} else {
 					require.Greater(t, afterDaily, beforeResults)
@@ -107,7 +131,7 @@ func TestUsageCarry(t *testing.T) {
 					require.EqualValues(t, 100, fresh.daily.Totals.InputTokens)
 				}
 			}
-			if scenario == "changed after read" || scenario == "snapshot ahead" {
+			if scenario == "changed after read" || scenario == "snapshot restored" {
 				require.Zero(t, proofs)
 			} else {
 				require.Positive(t, proofs)
@@ -130,6 +154,10 @@ func TestUsageCarryVersionTables(t *testing.T) {
 	}
 	insert := func(table string) {
 		t.Helper()
+		if table == "genai_pricing" {
+			execPreparedUsage(t, store, "INSERT INTO genai_pricing (singleton) VALUES (42)")
+			return
+		}
 		var name, typ string
 		require.NoError(t, store.DB().QueryRowContext(t.Context(), `SELECT name, type FROM system.columns WHERE database = currentDatabase() AND table = ? AND default_kind = '' ORDER BY position LIMIT 1`, table).Scan(&name, &typ))
 		execPreparedUsage(t, store, fmt.Sprintf("INSERT INTO %s (`%s`) SELECT defaultValueOfTypeName('%s')", table, name, typ))
@@ -149,6 +177,12 @@ func TestUsageCarryVersionTables(t *testing.T) {
 		insert(table)
 		require.NotEqual(t, before, version(), table)
 	}
+	priceVersion, err := store.usageReadFingerprint(t.Context(), preparedUsageState{}, "test-digest")
+	require.NoError(t, err)
+	execPreparedUsage(t, store, "INSERT INTO usage_event_prices (pricing_digest, price_key) VALUES ('test-digest', 'test-key')")
+	updatedPriceVersion, err := store.usageReadFingerprint(t.Context(), preparedUsageState{}, "test-digest")
+	require.NoError(t, err)
+	require.NotEqual(t, priceVersion, updatedPriceVersion)
 	before := version()
 	execPreparedUsage(t, store, "SYSTEM START MERGES usage_session_snapshots", "ALTER TABLE usage_session_snapshots MATERIALIZE COLUMN usage_recorded_costs SETTINGS mutations_sync = 2")
 	require.Equal(t, before, version())
