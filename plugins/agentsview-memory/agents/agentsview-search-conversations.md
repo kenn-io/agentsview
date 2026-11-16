@@ -1,5 +1,5 @@
 ---
-# generated-by: agentsview 0.1.0 hash:618eca2811530c654869b47faa407480a5122df54459aacb39f9903f2cc45f04 — do not edit; re-run `agentsview skills install`
+# generated-by: agentsview 0.1.1 hash:618eca2811530c654869b47faa407480a5122df54459aacb39f9903f2cc45f04 — do not edit; re-run `agentsview skills install`
 name: agentsview-search-conversations
 description: Search AgentsView conversation history and synthesize evidence for the parent agent.
 model: haiku

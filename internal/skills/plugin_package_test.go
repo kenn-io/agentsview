@@ -33,7 +33,7 @@ func TestMemoryPluginHookMissingBinaryDoesNotBlockSession(t *testing.T) {
 }
 
 func TestMemoryPluginGeneratedArtifactsAreCurrent(t *testing.T) {
-	artifacts, err := RenderPluginPackage("0.1.0")
+	artifacts, err := RenderPluginPackage("0.1.1")
 	require.NoError(t, err)
 	for _, artifact := range artifacts {
 		body, readErr := os.ReadFile(filepath.Join(

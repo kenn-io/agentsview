@@ -104,10 +104,10 @@ client will see these tools:
 | `get_friction_digest`         | Read a dated Friction Log digest as Markdown or the summary object       |
 | `list_friction_patterns`      | List recurring friction patterns ranked by occurrences                   |
 
-`get_compaction_summaries` accepts a session ID or `active_since` timestamp. The
-limit counts sessions; 0 uses the default of 20. Resume `next_cursor` with the
-same `active_since`, even when a page has no summaries. Ambiguous older Evener
-labels appear separately with their session ID and ordinal.
+`get_compaction_summaries` accepts a session ID or `active_since` timestamp.
+The limit counts sessions; 0 uses the default of 20. Resume `next_cursor` with
+the same `active_since`, even when a page has no summaries. Ambiguous older
+Evener labels appear separately with their session ID and ordinal.
 
 The two Friction Log tools appear when the backend stores the Friction Log.
 `get_friction_digest` defaults to the latest digest; pass `date` (YYYY-MM-DD)
@@ -143,15 +143,15 @@ profile:
 ```
 
 This profile advertises only `get_memory_status`, `search_content`,
-`get_messages`, and `get_compaction_summaries`. The status tool reports the
-authenticated archive backend, read-only mode, server version, lexical
-availability, semantic generation coverage, and whether per-source freshness
-telemetry is available. Its `ready`, `partial`, `unavailable`, or `unknown`
-states come from the same provider as the compact `coverage` object on every
-successful `search_content` response. Older remote servers report `unknown` with
-an `unsupported` reason. The tools use the same schemas and backend selection as
-the full profile, over either stdio or StreamableHTTP. Omitting `--profile` or
-choosing `--profile full` preserves the complete tool list above.
+`get_messages`, and `get_compaction_summaries`. The status tool reports the authenticated archive backend,
+read-only mode, server version, lexical availability, semantic generation
+coverage, and whether per-source freshness telemetry is available. Its `ready`,
+`partial`, `unavailable`, or `unknown` states come from the same provider as the
+compact `coverage` object on every successful `search_content` response. Older
+remote servers report `unknown` with an `unsupported` reason. The tools use the
+same schemas and backend selection as the full profile, over either stdio or
+StreamableHTTP. Omitting `--profile` or choosing `--profile full` preserves the
+complete tool list above.
 
 This profile's tool list is about 21 KB, and the same test holds it under 24 KB.
 
@@ -189,10 +189,12 @@ claude mcp add --scope project agentsview -- agentsview mcp
 
 Approve the project's `.mcp.json`. Use `--scope local` instead of
 `--scope project` to keep the entry out of the repository. Open `/mcp` in that
-project and turn off `plugin:agentsview-memory:agentsview`. Claude Code treats
-the plugin server and project server as different connections, so otherwise both
-connect and the assistant sees the memory tools twice. The plugin's skill,
-agent, and hook keep working, and the agent uses the project server. Other
+project and turn off `plugin:agentsview-memory:agentsview`. Claude Code stores
+this project setting in `~/.claude.json`; repeat the toggle on each machine.
+Claude Code treats the plugin server and project server as different connections,
+so otherwise both connect and the assistant sees the memory tools twice. The
+plugin's skill, agent, and hook keep working, and the agent uses the project
+server. Other
 projects keep the plugin's memory server. For a remote archive, add the same
 targeting flags to the full server command.
 
@@ -206,11 +208,8 @@ falling back to the local archive. PostgreSQL reads use the configured
 `default_pg` target.
 
 Run `agentsview doctor memory` to inspect this server status together with the
-installed client integrations. Pass the native package root with `--plugin-root`
-to check its skill, MCP profile, and SessionStart hook. The client check may
-start the configured client and MCP process. It calls no data tools and does not
-start the local archive daemon, sync transcripts, or rebuild vectors. Codex may
-create its own runtime state.
+installed client integrations. Pass the native package root with `--plugin-root` to
+check its skill, MCP profile, and SessionStart hook. The client check may start the configured client and MCP process. It calls no data tools and does not start the local archive daemon, sync transcripts, or rebuild vectors. Codex may create its own runtime state.
 
 `search_sessions` accepts optional `date_from` and `date_to` bounds in
 `YYYY-MM-DD` format, just like `list_sessions` and `search_content`. Dates

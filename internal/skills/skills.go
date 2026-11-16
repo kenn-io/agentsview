@@ -23,7 +23,8 @@ import (
 //go:embed templates/*.md.tmpl templates/LICENSE
 var templatesFS embed.FS
 
-//go:generate go run ./cmd/render-memory-plugin -out ../../plugins/agentsview-memory -version 0.1.0
+// Bump the plugin version here, in both manifests, and in doctor when shipped contents change.
+//go:generate go run ./cmd/render-memory-plugin -out ../../plugins/agentsview-memory -version 0.1.1
 
 // Harness identifies a skill discovery convention.
 type Harness string
