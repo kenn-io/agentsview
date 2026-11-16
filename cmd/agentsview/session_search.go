@@ -557,16 +557,22 @@ func contentSearchRetry(cmd *cobra.Command, pattern string, changes map[string]a
 
 // wordArchive reports whether svc searches an archive whose default
 // search already matches query words anywhere in a message.
-func wordArchive(ctx context.Context, svc service.SessionService) bool {
+func wordArchive(ctx context.Context, svc service.SessionService, remote bool) bool {
 	status, err := service.GetMemoryStatus(ctx, svc)
-	return err == nil && status.Archive.Backend != "cockroach" && status.Lexical.Reason != "unsupported"
+	if err != nil || status.Lexical.Reason == "unsupported" {
+		return false
+	}
+	if remote {
+		return status.Archive.Backend == "sqlite" && status.Lexical.Status == service.MemoryReady
+	}
+	return status.Archive.Backend != "cockroach"
 }
 
 func contentSearchHints(ctx context.Context, cmd *cobra.Command, svc service.SessionService, req service.ContentSearchRequest, res *service.ContentSearchResult) []contentSearchCLIHint {
 	hints := service.SearchContentHints(ctx, svc, req, res, true, nil)
 	remote, _ := cmd.Flags().GetString("server")
 	messagesOnly := len(req.Sources) == 0 || len(req.Sources) == 1 && req.Sources[0] == "messages"
-	if len(res.Matches) == 0 && req.Cursor == 0 && res.NextCursor == 0 && !res.CandidateTruncated && req.Mode == "substring" && len(strings.Fields(req.Pattern)) > 1 && messagesOnly && (strings.TrimSpace(remote) != "" || !wordArchive(ctx, svc)) {
+	if len(res.Matches) == 0 && req.Cursor == 0 && res.NextCursor == 0 && !res.CandidateTruncated && req.Mode == "substring" && len(strings.Fields(req.Pattern)) > 1 && messagesOnly && !wordArchive(ctx, svc, strings.TrimSpace(remote) != "") {
 		retry := req
 		retry.Mode = "fts"
 		if page, err := svc.SearchContent(ctx, retry); err == nil && len(page.Matches) > 0 {

@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -153,6 +154,39 @@ func tracedContentReader(t *testing.T, store *Store, tracer pgx.QueryTracer) *St
 	pool := stdlib.OpenDB(*config)
 	t.Cleanup(func() { assert.NoError(t, pool.Close()) })
 	return &Store{pg: pool, ownedDB: pool, cockroach: store.cockroach, serverEncoding: store.serverEncoding}
+}
+
+func TestSearchContentSnapshotDuringUpdate(t *testing.T) {
+	t.Parallel()
+	store := setupContentSearch(t)
+	if store.cockroach {
+		t.Skip("ranked search requires PostgreSQL")
+	}
+	insertCSSession(t, store, "snapshot", "snapshot", "claude", "2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
+	insertCSMessage(t, store, "snapshot", 0, "user", "invoice rounding", "2026-05-01T10:00:00Z", false)
+	tracer := &hostedPendingSelectionTracer{argument: "snapshot"}
+	reader := tracedContentReader(t, store, tracer)
+	var updateErr error
+	updated := false
+	tracer.after = func() {
+		tracer.after = nil
+		_, updateErr = store.DB().ExecContext(t.Context(), "UPDATE messages SET content = $1 WHERE session_id = $2", "invoice only", "snapshot")
+		updated = true
+	}
+	page, err := reader.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "invoice rounding", Project: "snapshot"})
+	require.NoError(t, err)
+	require.True(t, updated)
+	require.NoError(t, updateErr)
+	require.Len(t, page.Matches, 1)
+	assert.Contains(t, page.Matches[0].Snippet, "invoice rounding")
+
+	tx, err := store.beginTx(t.Context(), &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+	page, err = store.readView(tx).SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "invoice rounding", Project: "snapshot"})
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Contains(t, page.Matches[0].Snippet, "invoice only")
 }
 
 func TestSearchContentExactTierPaging(t *testing.T) {

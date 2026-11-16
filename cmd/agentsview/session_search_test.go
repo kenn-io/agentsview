@@ -895,7 +895,11 @@ func TestSessionSearchRemoteFTSHints(t *testing.T) {
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"status":"ready","observed_at":"2026-01-01T00:00:00Z","archive":{"backend":"` + backend + `","read_only":true},"lexical":{"status":"ready"},"semantic":{"status":"ready"},"sources":{"status":"ready"}}`))
+			statusBackend, reason := backend, ""
+			if backend == "sqlite-unsupported" {
+				statusBackend, reason = "sqlite", "unsupported"
+			}
+			_, _ = w.Write([]byte(`{"status":"ready","observed_at":"2026-01-01T00:00:00Z","archive":{"backend":"` + statusBackend + `","read_only":true},"lexical":{"status":"ready","reason":"` + reason + `"},"semantic":{"status":"ready"},"sources":{"status":"ready"}}`))
 			return
 		}
 		if r.URL.Query().Get("mode") == "fts" {
@@ -927,6 +931,10 @@ func TestSessionSearchRemoteFTSHints(t *testing.T) {
 		{"cockroach", "decode error notes", "messages", true, false},
 		{"", "decode error notes", "messages", false, true},
 		{"postgres", "decode error notes", "messages", false, true},
+		{"duckdb", "decode error notes", "messages", false, true},
+		{"clickhouse", "decode error notes", "messages", false, true},
+		{"sqlite", "decode error notes", "messages", false, false},
+		{"sqlite-unsupported", "decode error notes", "messages", false, true},
 	} {
 		name := tc.backend
 		if name == "" {
