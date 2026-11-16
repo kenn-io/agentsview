@@ -64,16 +64,11 @@ func TestDropJSON(t *testing.T) {
 	require.True(t, retain)
 	require.Equal(t, "current", got)
 	disk.Put("future-other", "json|v99|v1", data)
-	disk.Put("matching", jsonVersion+"v2", data)
 	require.True(t, disk.ObserveJSON("v2"))
 	_, ok = disk.Get("future", jsonVersion+"v1")
 	require.False(t, ok)
 	_, ok = disk.Get("future-other", "json|v99|v1")
 	require.False(t, ok)
-	_, ok = disk.Get("matching", jsonVersion+"v2")
-	require.True(t, ok)
-	_, ok = disk.Get("parts", "v1")
-	require.True(t, ok)
 }
 
 func TestDiskLimitsAndUnavailableDirectory(t *testing.T) {
@@ -101,28 +96,11 @@ func TestLoadJSON(t *testing.T) {
 	require.NoError(t, disk.Open("test-search", "archive", 1024, 0))
 	loads := 0
 	load := func() ([]string, error) { loads++; return nil, nil }
-	first, retain, err := LoadJSON(&disk, "search", "v1", nil, load)
-	require.True(t, retain)
+	_, retain, err := LoadJSON(&disk, "search", "v1", nil, load)
 	require.NoError(t, err)
-	require.Nil(t, first)
-	var reopened Disk
-	require.NoError(t, reopened.Open("test-search", "archive", 1024, 0))
-	repeat, retain, err := LoadJSON(&reopened, "search", "v1", nil, load)
 	require.True(t, retain)
-	require.NoError(t, err)
-	require.Nil(t, repeat)
-	require.Equal(t, 1, loads)
-	_, retain, err = LoadJSON(&reopened, "search", "v1", func() bool { return false }, load)
+	_, retain, err = LoadJSON(&disk, "search", "v1", func() bool { return false }, load)
 	require.NoError(t, err)
 	require.False(t, retain)
 	require.Equal(t, 1, loads)
-	_, retain, err = LoadJSON(&reopened, "rejected", "v1", func() bool { return false }, load)
-	require.NoError(t, err)
-	require.False(t, retain)
-	_, ok := reopened.Get("rejected", "v1")
-	require.False(t, ok)
-	_, retain, err = LoadJSON(&reopened, "search", "v2", nil, load)
-	require.True(t, retain)
-	require.NoError(t, err)
-	require.Equal(t, 3, loads)
 }

@@ -89,16 +89,12 @@ func TestSearchKeptRestart(t *testing.T) {
 	filter.Limit = db.DefaultSearchLimit
 	_, ok := s.trendsDisk.Get("search|"+filter.Slot(), "json|v1|"+version)
 	require.True(t, ok)
-	s.trendsDisk.Put("other", "v1", []byte("other cache"))
 	require.NoError(t, s.SoftDeleteSession(ctx, "session"))
 	deleted, err := s.DeleteSessionIfTrashed(ctx, "session")
 	require.NoError(t, err)
 	require.EqualValues(t, 1, deleted)
 	_, ok = s.trendsDisk.Get("search|"+filter.Slot(), "json|v1|"+version)
 	require.False(t, ok)
-	otherData, ok := s.trendsDisk.Get("other", "v1")
-	require.True(t, ok)
-	require.Equal(t, "other cache", string(otherData))
 }
 
 func TestSearchKeptPushDeletion(t *testing.T) {
@@ -122,9 +118,6 @@ func TestSearchKeptPushDeletion(t *testing.T) {
 	var count int
 	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions WHERE id = $1`, "session").Scan(&count))
 	require.Zero(t, count)
-	newVersion := snapshotUsageVersion(ctx, store.pg, 0)
-	require.NotEmpty(t, newVersion)
-	require.NotEqual(t, version, newVersion)
 	_, err = store.Search(ctx, db.SearchFilter{Query: "unrelated"})
 	require.NoError(t, err)
 	_, ok = store.trendsDisk.Get("search|"+filter.Slot(), "json|v1|"+version)

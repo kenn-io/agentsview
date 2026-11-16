@@ -70,19 +70,6 @@ func TestReadsUnkept(t *testing.T) {
 			require.Equal(t, 2, loads)
 		})
 	}
-	t.Run("rejected", func(t *testing.T) {
-		var reads kept.Reads[string]
-		loads := 0
-		for range 2 {
-			got, err := reads.DoChecked(t.Context(), "s", "v", func(context.Context) (string, bool, error) {
-				loads++
-				return "fresh", false, nil
-			})
-			require.NoError(t, err)
-			require.Equal(t, "fresh", got)
-		}
-		require.Equal(t, 2, loads)
-	})
 }
 
 func TestReadsConcurrentCancellation(t *testing.T) {

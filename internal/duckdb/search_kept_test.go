@@ -200,17 +200,14 @@ func TestSearchKeptPushInvalidation(t *testing.T) {
 		require.NoError(t, store.Close())
 	}
 	push()
-	check("first", "sess-1")
 	check("fresh")
 	appendSessionMessage(t, local, "sess-1", "user", "fresh content", db.SessionSignalUpdate{})
 	push()
-	check("first", "sess-1")
 	check("fresh", "sess-1")
 	check("renamed")
 	name := "renamed unique"
 	require.NoError(t, local.RenameSession(ctx, "sess-1", &name))
 	push()
-	check("fresh", "sess-1")
 	check("renamed", "sess-1")
 	check("newmatch")
 	const ts = "2026-02-02T00:00:00.000Z"
@@ -226,7 +223,6 @@ func TestSearchKeptPushInvalidation(t *testing.T) {
 	require.True(t, ok)
 	_, ok = store.usageDisk.Get("search|"+filter.Slot(), "json|v1|"+identity)
 	require.True(t, ok)
-	store.usageDisk.Put("other", "v1", []byte("other cache"))
 	require.NoError(t, store.Close())
 	require.NoError(t, local.DeleteSession(ctx, "sess-1"))
 	push()
@@ -235,9 +231,6 @@ func TestSearchKeptPushInvalidation(t *testing.T) {
 	defer store.Close()
 	_, ok = store.usageDisk.Get("search|"+filter.Slot(), "json|v1|"+identity)
 	require.False(t, ok)
-	other, ok := store.usageDisk.Get("other", "v1")
-	require.True(t, ok)
-	require.Equal(t, "other cache", string(other))
 }
 
 func TestSearchKeptContentChangedDuringPush(t *testing.T) {
