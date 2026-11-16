@@ -4,6 +4,7 @@ package duckdb
 
 import (
 	"encoding/base64"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -271,4 +272,63 @@ func TestSearchKeptImageTextPush(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, page, got)
 	require.Equal(t, 1, reads)
+}
+
+func TestSearchKeptContentChangedDuringPush(t *testing.T) {
+	for _, kind := range []string{"image", "message"} {
+		t.Run(kind, func(t *testing.T) {
+			t.Setenv("CACHE_DIRECTORY", t.TempDir())
+			ctx := t.Context()
+			local := newLocalDB(t)
+			const id, ts = "screenshot", "2026-01-02T03:04:05.000Z"
+			content := `[{"type":"input_image","image_url":"data:image/png;base64,` + base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\nimage")) + `"}]`
+			require.NoError(t, local.UpsertSession(ctx, syncSession(id, "shots", "look", ts, 1)))
+			message := syncMessage(id, 0, "assistant", "apple", ts, db.ToolCall{ToolName: "Read", Category: "Read", ToolUseID: "shot", ResultContent: content})
+			require.NoError(t, local.ReplaceSessionMessages(ctx, id, []db.Message{message}))
+			require.NoError(t, local.BackfillImageTextOccurrences(ctx))
+			hash := db.RetainedToolResultImages(content)[0].SHA256
+			identity := ocr.Identity{Fingerprint: "proc-a", Provider: "tesseract", Model: "eng", Revision: "r1"}
+			require.NoError(t, local.SaveImageText(ctx, hash, identity, "apple", false))
+			path := filepath.Join(t.TempDir(), "mirror.duckdb")
+			result, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, true, nil)
+			require.NoError(t, err)
+			require.Zero(t, result.Errors)
+			syncer := newTestSync(t, path, local, storage.MirrorPushOptions{})
+			sessions, err := local.ListSessionsForMirrorWindow(ctx, "", nil, nil)
+			require.NoError(t, err)
+			fingerprints, err := syncer.sessionFingerprints(ctx, sessions)
+			require.NoError(t, err)
+			setText := func(text string) {
+				t.Helper()
+				if kind == "image" {
+					require.NoError(t, local.SaveImageText(ctx, hash, identity, text, false))
+				} else {
+					message.Content = text
+					require.NoError(t, local.ReplaceSessionMessages(ctx, id, []db.Message{message}))
+				}
+			}
+			setText("banana")
+			_, err = syncer.pushSingleSession(ctx, sessions[0], fingerprints[id])
+			require.NoError(t, err)
+			require.NoError(t, syncer.Close())
+			filter := db.SearchFilter{Query: "banana"}
+			store := openUsagePartsStore(t, path)
+			page, err := store.Search(ctx, filter)
+			require.NoError(t, err)
+			require.Len(t, page.Results, 1)
+			require.NoError(t, store.Close())
+			setText("apple")
+			result, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{}, true, nil)
+			require.NoError(t, err)
+			require.Zero(t, result.Errors)
+			// Restoring content can reproduce the earlier fingerprint even though
+			// the normal local writers also advance other session metadata.
+			writeUsageMirror(t, path, fmt.Sprintf("UPDATE sessions SET agentsview_push_fingerprint = '%s'", fingerprints[id]))
+			store = openUsagePartsStore(t, path)
+			defer store.Close()
+			page, err = store.Search(ctx, filter)
+			require.NoError(t, err)
+			require.Empty(t, page.Results)
+		})
+	}
 }

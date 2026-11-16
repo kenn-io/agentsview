@@ -2952,6 +2952,8 @@ func (s *Store) readUsageRowIdentities(
 		switch table {
 		case "messages":
 			columns = "session_id, ordinal, push_version"
+		case "image_text":
+			columns = "session_id, source_kind, message_ordinal, call_index, event_index, image_index, processor, push_version"
 		case "usage_session_snapshots":
 			// Revision identifies the usage arrays without hashing them; push_version identifies publication.
 			columns = "id, revision, push_version"

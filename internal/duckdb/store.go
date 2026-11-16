@@ -752,8 +752,7 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 		current := func() bool { return ctx.Err() == nil && version != "" && version == s.keptVersion() }
 		if s.path != "" && s.usageDisk.Enabled() {
 			if identity, ok := s.searchDiskVersion(ctx); ok {
-				page, retain, err := kept.LoadJSON(&s.usageDisk, "search|"+f.Slot(), identity, current, func() (db.SearchPage, error) { return s.search(ctx, f) })
-				return page, retain && current(), err
+				return kept.LoadJSON(&s.usageDisk, "search|"+f.Slot(), identity, current, func() (db.SearchPage, error) { return s.search(ctx, f) })
 			}
 		}
 		page, err := s.search(ctx, f)
@@ -782,8 +781,16 @@ func (s *Store) searchDiskVersion(ctx context.Context) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	sum := sha256.Sum256(data)
-	return trendsPartsIdentity() + "|" + hex.EncodeToString(sum[:]), true
+	var imageCount, messageCount int64
+	var imageHash, messageHash uint64
+	if err := s.queryRowContext(ctx, `SELECT COUNT(*), COALESCE(BIT_XOR(HASH(it)), 0) FROM image_text it`).Scan(&imageCount, &imageHash); err != nil {
+		return "", false
+	}
+	if err := s.queryRowContext(ctx, `SELECT COUNT(*), COALESCE(BIT_XOR(HASH(session_id, ordinal, content)), 0) FROM messages`).Scan(&messageCount, &messageHash); err != nil {
+		return "", false
+	}
+	sum := sha256.Sum256(fmt.Appendf(data, "|%d|%d|%d|%d", imageCount, imageHash, messageCount, messageHash))
+	return hex.EncodeToString(sum[:]), true
 }
 
 func (s *Store) search(ctx context.Context, f db.SearchFilter) (db.SearchPage, error) {
