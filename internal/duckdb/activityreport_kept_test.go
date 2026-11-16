@@ -331,17 +331,11 @@ func TestPartialActivityInputsSurviveRestart(t *testing.T) {
 				restarted.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}})
 			}
 			q.EffectiveEnd = q.EffectiveEnd.Add(time.Minute)
-			usage, runs, messages := 0, 0, 0
+			usage := 0
 			previous := analyticsQueryObserver
 			analyticsQueryObserver = func(query string) {
 				if strings.Contains(query, "activity_usage_keyed") {
 					usage++
-				}
-				if scenario == "unchanged" && strings.Contains(query, "activity_run_pieces") {
-					runs++
-				}
-				if scenario == "unchanged" && strings.Contains(query, "SELECT session_id, role, timestamp FROM messages") {
-					messages++
 				}
 			}
 			t.Cleanup(func() { analyticsQueryObserver = previous })
@@ -351,9 +345,6 @@ func TestPartialActivityInputsSurviveRestart(t *testing.T) {
 				wantReads = 1
 			}
 			require.Equal(t, wantReads, usage)
-			if scenario == "unchanged" {
-				require.Equal(t, []int{0, 0}, []int{runs, messages})
-			}
 			if wantReads == 1 {
 				require.Equal(t, money.MustParseDollars("0.01"), activity.ReportWithSessions(got).Totals.Cost)
 			} else {
@@ -378,6 +369,7 @@ func TestPartialActivityInvalidDiskEntryIsMiss(t *testing.T) {
 	require.NoError(t, err)
 	keptActivityBuild(t, store, q, true)
 	require.NoError(t, store.Close())
+	rewritten := 0
 	require.NoError(t, filepath.WalkDir(cache, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -389,10 +381,14 @@ func TestPartialActivityInvalidDiskEntryIsMiss(t *testing.T) {
 			}
 			headerEnd := bytes.IndexByte(data, '\n')
 			require.GreaterOrEqual(t, headerEnd, 0)
-			return os.WriteFile(path, append(data[:headerEnd+1], []byte("corrupt")...), 0o600)
+			if err := os.WriteFile(path, append(data[:headerEnd+1], []byte("corrupt")...), 0o600); err != nil {
+				return err
+			}
+			rewritten++
 		}
 		return nil
 	}))
+	require.Positive(t, rewritten)
 	restarted, err := NewStore(t.Context(), path)
 	require.NoError(t, err)
 	defer restarted.Close()

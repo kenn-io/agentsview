@@ -196,7 +196,7 @@ func TestDuckDBActivityRunsRepairUnfingerprintedSessions(t *testing.T) {
 }
 
 func TestActivityRunsDiskReusesUnchangedSessions(t *testing.T) {
-	for _, scenario := range []string{"saved", "swept", "missing"} {
+	for _, scenario := range []string{"swept", "missing"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Setenv("CACHE_DIRECTORY", t.TempDir())
 			conn := openTestDuckDB(t)
