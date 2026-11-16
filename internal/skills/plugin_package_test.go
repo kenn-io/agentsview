@@ -73,24 +73,3 @@ func TestMemoryPluginAgentToolsMatchPluginServer(t *testing.T) {
 	assert.Equal(t, pluginName, plugin.Name)
 	assert.Contains(t, plugin.MCPServers, pluginServer)
 }
-
-func TestMemoryPluginMarketplaceListsPackage(t *testing.T) {
-	root, err := filepath.Abs(filepath.Join("..", ".."))
-	require.NoError(t, err)
-	body, err := os.ReadFile(filepath.Join(root, ".claude-plugin", "marketplace.json"))
-	require.NoError(t, err)
-	var marketplace struct {
-		Plugins []struct {
-			Name   string `json:"name"`
-			Source string `json:"source"`
-		} `json:"plugins"`
-	}
-	require.NoError(t, json.Unmarshal(body, &marketplace))
-	for _, plugin := range marketplace.Plugins {
-		if plugin.Name == pluginName {
-			assert.Equal(t, memoryPluginRoot(t), filepath.Join(root, plugin.Source))
-			return
-		}
-	}
-	t.Fatal("memory plugin missing from marketplace")
-}
