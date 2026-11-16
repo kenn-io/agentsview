@@ -588,7 +588,8 @@ func TestServeRestartPortChoiceWhenOccupied(t *testing.T) {
 	t.Cleanup(func() { assert.NoError(t, listener.Close()) })
 	port := listener.Addr().(*net.TCPAddr).Port
 	processCtx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
-	defer cancel()
+	// Cancel only after cleanup has stopped and waited for the server below.
+	t.Cleanup(cancel)
 	child := exec.CommandContext(processCtx, os.Args[0], "serve", "--host=127.0.0.1", "--restart-port="+strconv.Itoa(port), "--no-sync", "--no-browser", "--no-update-check")
 	require.NoError(t, child.Start())
 	done := make(chan error, 1)
