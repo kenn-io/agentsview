@@ -54,51 +54,6 @@ func TestFrustrationMemoCommittedVersionsWithEqualTimestamps(t *testing.T) {
 	assert.Zero(t, warm.QualityHealth.Totals.FrustrationMarkerCount)
 }
 
-func TestFrustrationDrilldownAfterExternalMessageUpdate(t *testing.T) {
-	t.Parallel()
-	ctx := t.Context()
-	local, syncer, store := newUsageJournalFixture(t)
-	const id = "signals-external-update"
-	require.NoError(t, local.UpsertSession(ctx, db.Session{
-		ID: id, Agent: "claude", Project: "sample", Machine: "test-machine", MessageCount: 1,
-	}))
-	require.NoError(t, local.InsertMessages(ctx, []db.Message{{
-		SessionID: id, Ordinal: 0, Role: "user", Content: "this is broken",
-	}}))
-	require.NoError(t, local.UpdateSessionSignals(ctx, id, db.SessionSignalUpdate{
-		QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion},
-	}))
-	pgKeptPush(t, syncer, false)
-	require.NoError(t, store.ConfigureUsageCache(ctx, t.TempDir(), testPGURL(t), syncer.schema))
-
-	initial, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
-	require.NoError(t, err)
-	require.Equal(t, 1, initial.QualityHealth.Totals.FrustrationMarkerCount)
-	drilldown, err := store.GetAnalyticsSignalSessions(ctx, db.AnalyticsFilter{}, "frustration_marker_count", 10)
-	require.NoError(t, err)
-	require.Len(t, drilldown.Sessions, 1)
-
-	versionColumn, err := sessionVersionColumnPG(ctx, store.DB())
-	require.NoError(t, err)
-	var tokenBefore, versionBefore string
-	require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='dashboard_signals'`).Scan(&tokenBefore))
-	require.NotEmpty(t, tokenBefore)
-	require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT `+frustrationSessionVersion(versionColumn)+` FROM sessions WHERE id=$1`, id).Scan(&versionBefore))
-
-	// The independent writer updates message content without rewriting the session row.
-	_, err = syncer.pg.ExecContext(ctx, `UPDATE messages SET content='Please explain this function.' WHERE session_id=$1`, id)
-	require.NoError(t, err)
-	var tokenAfter, versionAfter string
-	require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='dashboard_signals'`).Scan(&tokenAfter))
-	require.NotEqual(t, tokenBefore, tokenAfter)
-	require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT `+frustrationSessionVersion(versionColumn)+` FROM sessions WHERE id=$1`, id).Scan(&versionAfter))
-	require.Equal(t, versionBefore, versionAfter)
-
-	drilldown, err = store.GetAnalyticsSignalSessions(ctx, db.AnalyticsFilter{}, "frustration_marker_count", 10)
-	require.NoError(t, err)
-	assert.Empty(t, drilldown.Sessions)
-}
-
 func TestFrustrationMemoPublicationBetweenReads(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {

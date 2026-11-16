@@ -174,16 +174,6 @@ func dashboardTriggerSQL() string {
 				}
 				fmt.Fprintf(&sql, "INSERT INTO archive_metadata(key,value) SELECT 'dashboard_%s',lower(hex(randomblob(16))) WHERE %s ON CONFLICT(key) DO UPDATE SET value=excluded.value;\n", group, condition)
 			}
-			if table.name == "messages" {
-				switch event {
-				case "INSERT":
-					sql.WriteString("DELETE FROM session_frustration_markers WHERE session_id=NEW.session_id;\n")
-				case "DELETE":
-					sql.WriteString("DELETE FROM session_frustration_markers WHERE session_id=OLD.session_id;\n")
-				case "UPDATE":
-					sql.WriteString("DELETE FROM session_frustration_markers WHERE session_id IN (OLD.session_id, NEW.session_id) AND (OLD.session_id IS NOT NEW.session_id OR OLD.content IS NOT NEW.content OR OLD.role IS NOT NEW.role OR OLD.source_subtype IS NOT NEW.source_subtype OR OLD.is_system IS NOT NEW.is_system);\n")
-				}
-			}
 			sql.WriteString("END;\n")
 		}
 	}

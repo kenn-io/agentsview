@@ -279,17 +279,13 @@ func installDashboardJournalPG(ctx context.Context, tx *sql.Tx) error {
 	}
 	for _, table := range tables {
 		var body strings.Builder
-		body.WriteString("DECLARE changed boolean; any_changed boolean := false; signals_changed boolean := false;\nBEGIN\n")
+		body.WriteString("DECLARE changed boolean; any_changed boolean := false;\nBEGIN\n")
 		for _, group := range groups {
 			columns, ok := table.groups[group]
 			if !ok {
 				continue
 			}
 			projection := strings.Join(columns, ", ")
-			setSignals := ""
-			if table.name == "messages" && group == "signals" {
-				setSignals = "signals_changed := true;"
-			}
 			fmt.Fprintf(&body, `IF TG_OP = 'INSERT' THEN
  SELECT EXISTS (SELECT 1 FROM new_rows) INTO changed;
  ELSIF TG_OP = 'DELETE' THEN
@@ -301,18 +297,8 @@ func installDashboardJournalPG(ctx context.Context, tx *sql.Tx) error {
  IF changed THEN
  PERFORM set_config('agentsview.dashboard_%[2]s_' || 'usage_session_changes'::regclass::oid, 'on', true);
  any_changed := true;
- %[3]s
  END IF;
-`, projection, group, setSignals)
-		}
-		if table.name == "messages" {
-			body.WriteString(`IF signals_changed AND to_regclass('session_frustration_counts') IS NOT NULL THEN
- IF TG_OP = 'INSERT' THEN DELETE FROM session_frustration_counts WHERE session_id IN (SELECT session_id FROM new_rows);
- ELSIF TG_OP = 'DELETE' THEN DELETE FROM session_frustration_counts WHERE session_id IN (SELECT session_id FROM old_rows);
- ELSE DELETE FROM session_frustration_counts WHERE session_id IN (SELECT session_id FROM old_rows UNION SELECT session_id FROM new_rows);
- END IF;
- END IF;
-`)
+`, projection, group)
 		}
 		fmt.Fprintf(&body, `IF any_changed THEN
  PERFORM set_config('agentsview.uc_stamped_' || 'usage_session_changes'::regclass::oid, '', true);

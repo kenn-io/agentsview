@@ -4348,11 +4348,11 @@ func (db *DB) populateFrustrationMarkers(
 	ctx context.Context,
 	rows []SignalRow,
 ) error {
-	generation, err := db.frustrationGeneration(ctx, len(rows) > 0)
-	if err != nil || len(rows) == 0 {
-		return err
+	if len(rows) == 0 {
+		return nil
 	}
 	m := &db.frustrationMemo
+	generation := m.Generation()
 	idx := make(map[string]int, len(rows))
 	ids := make([]string, 0, len(rows))
 	for i := range rows {
@@ -4408,7 +4408,7 @@ func (db *DB) populateFrustrationMarkers(
 		}
 	}
 	ids = pending
-	err = queryChunked(ids, func(chunk []string) error {
+	err := queryChunked(ids, func(chunk []string) error {
 		ph, args := InPlaceholders(chunk)
 		q := `SELECT session_id, content
 			FROM messages

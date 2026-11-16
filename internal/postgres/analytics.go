@@ -2858,11 +2858,11 @@ func (s *Store) populateFrustrationMarkers(
 	versions map[string]string,
 	versionColumn string,
 ) error {
-	generation, err := s.frustrationGeneration(ctx, rows != nil)
-	if err != nil || rows == nil {
-		return err
+	if rows == nil {
+		return nil
 	}
 	memo := &s.runtimeState().frustrationMarkers
+	generation := memo.Generation()
 	idx := make(map[string]int, len(rows))
 	ids := make([]string, 0, len(rows))
 	for i := range rows {

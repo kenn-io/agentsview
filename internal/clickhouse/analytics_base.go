@@ -648,7 +648,7 @@ func (s *Store) GetTrendsTerms(
 	if f.ActiveSince != "" || db.TerminationUsesTime(f.Termination) {
 		return load(ctx)
 	}
-	_, diskSlot, err := trendsTermsKeys(f, terms, granularity)
+	key, diskSlot, err := trendsTermsKeys(f, terms, granularity)
 	if err != nil {
 		return load(ctx)
 	}
@@ -657,11 +657,35 @@ func (s *Store) GetTrendsTerms(
 		return load(ctx)
 	}
 	version += "|" + db.TrendsTimezoneKey(f)
-	return s.trendsReads.DoSaved(ctx, &s.usageDisk, diskSlot, version, version, func(report db.TrendsTermsResponse) ([]byte, error) {
-		return json.Marshal(report, json.FormatNilSliceAsNull(true))
-	}, func(data []byte) (db.TrendsTermsResponse, error) {
-		var report db.TrendsTermsResponse
-		err := json.Unmarshal(data, &report)
+	if report, ok := s.trendsReads.Get(key, version); ok {
+		s.keepTrendsDisk(diskSlot, version, report)
+		return report, nil
+	}
+	return s.trendsReads.Do(ctx, key, version, func(ctx context.Context) (db.TrendsTermsResponse, error) {
+		if data, ok := s.usageDisk.Get(diskSlot, version); ok {
+			var report db.TrendsTermsResponse
+			if json.Unmarshal(data, &report) == nil {
+				return report, nil
+			}
+		}
+		report, err := load(ctx)
+		if err == nil {
+			s.putTrendsDisk(diskSlot, version, report)
+		}
 		return report, err
-	}, load)
+	})
+}
+
+func (s *Store) putTrendsDisk(slot, version string, report db.TrendsTermsResponse) {
+	if data, err := json.Marshal(report, json.FormatNilSliceAsNull(true)); err == nil {
+		s.usageDisk.Put(slot, version, data)
+	}
+}
+
+// keepTrendsDisk touches the saved report for a memory hit. A missing file or
+// one left by an older version is rewritten from the report in memory.
+func (s *Store) keepTrendsDisk(slot, version string, report db.TrendsTermsResponse) {
+	if _, ok := s.usageDisk.Get(slot, version); !ok {
+		s.putTrendsDisk(slot, version, report)
+	}
 }
