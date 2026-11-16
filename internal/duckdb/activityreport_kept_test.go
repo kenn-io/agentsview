@@ -600,3 +600,36 @@ func TestActivityUsagePendingFollowsMemoEviction(t *testing.T) {
 		require.True(t, ok)
 	}
 }
+
+func TestPartialActivityUsageLocalTimezoneChangesAcrossRestart(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	writeUsageMirror(t, path, `UPDATE messages SET timestamp = TIMESTAMP '2026-01-01 10:00:00' WHERE id = 2`, `UPDATE sessions SET ended_at = TIMESTAMP '2026-01-01 10:00:00'`, `INSERT INTO messages SELECT * REPLACE (3 AS id, 2 AS ordinal, TIMESTAMP '2026-01-01 02:00:00' AS timestamp, '{"output_tokens":200}' AS token_usage, 200 AS output_tokens, 200 AS usage_output_tokens) FROM messages WHERE id = 2`)
+	originalLocal := time.Local
+	t.Cleanup(func() { time.Local = originalLocal })
+	input := activity.QueryInput{Preset: "custom", From: "2025-12-31T00:00:00Z", To: "2026-01-03T00:00:00Z", Timezone: "Local", BucketOverride: "1d"}
+	now := time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC)
+	time.Local = time.UTC
+	q, err := activity.ResolveQuery(input, now)
+	require.NoError(t, err)
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
+	first, err := store.GetActivityReport(t.Context(), db.AnalyticsFilter{Timezone: "Local"}, q)
+	require.NoError(t, err)
+	require.Equal(t, 700, first.Buckets[1].OutputTokens)
+	require.NoError(t, store.Close())
+
+	time.Local = time.FixedZone("new local", -8*60*60)
+	q, err = activity.ResolveQuery(input, now)
+	require.NoError(t, err)
+	restarted, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	defer restarted.Close()
+	require.NoError(t, restarted.OpenActivityReportDisk(t.Context()))
+	report, err := restarted.GetActivityReport(t.Context(), db.AnalyticsFilter{Timezone: "Local"}, q)
+	require.NoError(t, err)
+	require.Equal(t, 200, report.Buckets[1].OutputTokens)
+	require.Equal(t, 500, report.Buckets[2].OutputTokens)
+}

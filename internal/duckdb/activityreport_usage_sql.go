@@ -58,6 +58,8 @@ func (s *Store) sumActivityUsage(
 	ctx context.Context, candidateWhere string, candidateArgs []any, lowerBound, upperBound string,
 	q activity.Query, pricing *export.PricingResolver, slot, version string,
 ) ([]activity.UsageRow, error) {
+	// Calendar bucket boundaries can change when the host local timezone changes.
+	slot += fmt.Sprint(readbase.ActivityUsageBucketStarts(q))
 	startUS, endUS := readbase.ActivityUsageSpan(q)
 	if startUS >= endUS {
 		return []activity.UsageRow{}, nil
