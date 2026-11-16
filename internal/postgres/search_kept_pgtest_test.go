@@ -100,3 +100,33 @@ func TestSearchKeptRestart(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "other cache", string(otherData))
 }
+
+func TestSearchKeptPushDeletion(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, store := newUsageJournalFixture(t)
+	ctx := t.Context()
+	require.NoError(t, store.ConfigureUsageCache(ctx, t.TempDir(), testPGURL(t), syncer.schema))
+	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "session", Project: "project", Machine: "device", Agent: "claude", MessageCount: 1}))
+	require.NoError(t, local.ReplaceSessionMessages(ctx, "session", []db.Message{{SessionID: "session", Role: "user", Content: "uniquesnippet"}}))
+	pgKeptPush(t, syncer, false)
+	filter := db.SearchFilter{Query: "uniquesnippet", Limit: db.DefaultSearchLimit}
+	page, err := store.Search(ctx, filter)
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	version := snapshotUsageVersion(ctx, store.pg, 0)
+	_, ok := store.trendsDisk.Get("search|"+filter.Slot(), "json|v1|"+version)
+	require.True(t, ok)
+	_, err = store.pg.ExecContext(ctx, `INSERT INTO excluded_sessions (id) VALUES ($1)`, "session")
+	require.NoError(t, err)
+	pgKeptPush(t, syncer, true)
+	var count int
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions WHERE id = $1`, "session").Scan(&count))
+	require.Zero(t, count)
+	newVersion := snapshotUsageVersion(ctx, store.pg, 0)
+	require.NotEmpty(t, newVersion)
+	require.NotEqual(t, version, newVersion)
+	_, err = store.Search(ctx, db.SearchFilter{Query: "unrelated"})
+	require.NoError(t, err)
+	_, ok = store.trendsDisk.Get("search|"+filter.Slot(), "json|v1|"+version)
+	require.False(t, ok)
+}

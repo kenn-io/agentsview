@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -13,6 +14,38 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/docbank/document/ocr"
 )
+
+func TestSearchKeptIdentityScanPerMirror(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, path := newPushFixture(t, 1)
+	result, err := Push(t.Context(), path, local, "m", storage.MirrorPushOptions{}, false, nil)
+	require.NoError(t, err)
+	require.Zero(t, result.Errors)
+	store := openUsagePartsStore(t, path)
+	defer store.Close()
+	previous := analyticsQueryObserver
+	reads := 0
+	analyticsQueryObserver = func(query string) {
+		if strings.Contains(query, "FROM image_text it") {
+			reads++
+		}
+	}
+	t.Cleanup(func() { analyticsQueryObserver = previous })
+	_, err = store.Search(t.Context(), db.SearchFilter{Query: "first"})
+	require.NoError(t, err)
+	_, err = store.Search(t.Context(), db.SearchFilter{Query: "missing"})
+	require.NoError(t, err)
+	require.Equal(t, 1, reads)
+	next := filepath.Join(t.TempDir(), "next.duckdb")
+	buildMirrorFixture(t, next, "session-b", "first")
+	require.NoError(t, swapMirrorFile(next, path))
+	page, err := store.Search(t.Context(), db.SearchFilter{Query: "first"})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	require.Equal(t, "session-b", page.Results[0].SessionID)
+	require.Equal(t, 2, reads)
+}
 
 func TestSearchKeptMirrorReplacement(t *testing.T) {
 	skipReopenTestOnWindows(t)

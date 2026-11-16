@@ -50,6 +50,38 @@ func TestSearchKeptPermanentDelete(t *testing.T) {
 	require.Equal(t, "other cache", string(other))
 }
 
+func TestSearchKeptParserExcludedDelete(t *testing.T) {
+	cache := t.TempDir()
+	t.Setenv("CACHE_DIRECTORY", cache)
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "session", "project")
+	insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "uniquesnippet"})
+	page, err := d.Search(ctx, SearchFilter{Query: "uniquesnippet"})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	contains := func() bool {
+		t.Helper()
+		found := false
+		require.NoError(t, filepath.WalkDir(cache, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil || entry.IsDir() {
+				return err
+			}
+			data, err := os.ReadFile(path)
+			if err == nil && bytes.Contains(data, []byte("uniquesnippet")) {
+				found = true
+			}
+			return err
+		}))
+		return found
+	}
+	require.True(t, contains())
+	deleted, err := d.DeleteParserExcludedSessions(ctx, []string{"session"})
+	require.NoError(t, err)
+	require.Equal(t, 1, deleted)
+	require.False(t, contains())
+}
+
 func TestSearchKeptDeleteDuringFill(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	d := testDB(t)
