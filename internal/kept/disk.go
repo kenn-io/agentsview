@@ -90,18 +90,12 @@ func (d activityReportDisk) touch(selection string) error {
 	return os.Chtimes(d.path(selection), now, now)
 }
 
-// touchHeld touches the selection's file when it holds key and fits maxFile. A
-// file saved under another key, such as by a slower older read on a handle
-// sharing the directory, or one too large to load, reports os.ErrNotExist so
-// the caller restores it.
-func (d activityReportDisk) touchHeld(selection, key string, maxFile int64) error {
+// touchHeld reports a file saved under another key as missing so the caller
+// restores a newer result after a slower older read writes to the same slot.
+func (d activityReportDisk) touchHeld(selection, key string) error {
 	file, err := os.Open(d.path(selection))
 	if err != nil {
 		return err
-	}
-	if info, statErr := file.Stat(); statErr == nil && maxFile > 0 && info.Size() > maxFile {
-		_ = file.Close()
-		return os.ErrNotExist
 	}
 	header := d.header(key)
 	got := make([]byte, len(header))
@@ -125,7 +119,7 @@ func (d activityReportDisk) save(selection, key string, payload []byte, maxFile 
 }
 
 func (d activityReportDisk) keep(selection, version string, maxFile int64, encode func() ([]byte, error)) (bool, error) {
-	err := d.touchHeld(selection, version, maxFile)
+	err := d.touchHeld(selection, version)
 	if !errors.Is(err, os.ErrNotExist) {
 		return false, err
 	}
