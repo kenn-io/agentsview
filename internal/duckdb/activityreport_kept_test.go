@@ -632,3 +632,27 @@ func TestActivityRunsReusedAfterSweepAndRestart(t *testing.T) {
 	require.Equal(t, 0, reads)
 	require.Equal(t, 500, activity.ReportWithSessions(got).Totals.OutputTokens)
 }
+
+func TestPartialActivityIgnoresCursorAccountUsageOnRestart(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	open := func() *Store {
+		s, err := NewStore(t.Context(), path)
+		require.NoError(t, err)
+		require.NoError(t, s.OpenActivityReportDisk(t.Context()))
+		return s
+	}
+	store := open()
+	want := keptActivityBuild(t, store, q, true)
+	require.NoError(t, store.Close())
+	writeUsageMirror(t, path, `INSERT INTO cursor_usage_events (id, occurred_at, model, output_tokens, dedup_key) VALUES (1, TIMESTAMP '2026-01-01 01:00:00', 'kept-model', 200, 'account-1')`)
+	restarted := open()
+	defer restarted.Close()
+	reads := observeActivityUsageReads(t)
+	got := keptActivityBuild(t, restarted, q, true)
+	require.Equal(t, 0, *reads)
+	requireKeptActivityEqual(t, want, got)
+}

@@ -69,7 +69,7 @@ func (s *Store) sumActivityUsage(
 	}
 	diskVersion := ""
 	if version != "" && s.usageDisk.Enabled() {
-		versions, err := s.usagePartVersions(ctx)
+		versions, err := db.ScanTrendVersions(s.queryContext(ctx, `SELECT id, COALESCE(agentsview_push_fingerprint, '') FROM sessions WHERE deleted_at IS NULL`))
 		if err != nil {
 			return nil, err
 		}

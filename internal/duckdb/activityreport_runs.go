@@ -42,7 +42,6 @@ func (e activityRunsEntry) bytes() int64 {
 // fingerprint changes whenever a session's messages or tool events do.
 type activityRunsMemo struct {
 	loadOnce sync.Once
-	dirty    bool
 	mu       sync.Mutex
 	entries  map[activityRunsKey]*list.Element
 	order    list.List
@@ -60,7 +59,6 @@ func (m *activityRunsMemo) lookup(
 		if element := m.entries[activityRunsKey{id, gapCap}]; element != nil {
 			if e := element.Value.(activityRunsEntry); e.version == versions[id] {
 				kept[id] = e
-				m.dirty = true
 				m.order.MoveToBack(element)
 				continue
 			}
@@ -81,7 +79,6 @@ func (m *activityRunsMemo) store(entries []activityRunsEntry) {
 			m.bytes -= old.Value.(activityRunsEntry).bytes()
 			m.order.Remove(old)
 		}
-		m.dirty = true
 		m.entries[entry.key] = m.order.PushBack(entry)
 		m.bytes += entry.bytes()
 	}
@@ -106,14 +103,11 @@ func (m *activityRunsMemo) load(disk *kept.Disk, gap float64) {
 		entries = append(entries, activityRunsEntry{key: activityRunsKey{id, gap}, version: part.Fingerprint, runs: part.Value.Runs, users: part.Value.Users, assistants: part.Value.Assistants})
 	}
 	m.store(entries)
-	m.mu.Lock()
-	m.dirty = false
-	m.mu.Unlock()
 }
 
 func (m *activityRunsMemo) save(disk *kept.Disk) {
 	m.mu.Lock()
-	if !m.dirty {
+	if len(m.entries) == 0 {
 		m.mu.Unlock()
 		return
 	}
