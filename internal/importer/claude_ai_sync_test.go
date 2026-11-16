@@ -990,7 +990,7 @@ func TestSyncClaudeAIInvalidListLeaf(t *testing.T) {
 		skipped     int
 		existing    bool
 	}{
-		{"absent", "", 0, false},
+		{"absent", "", 1, false},
 		{"empty", `"current_leaf_message_uuid":"",`, 0, false},
 		{"number", `"current_leaf_message_uuid":42,`, 0, false},
 		{"null without archive", `"current_leaf_message_uuid":null,`, 1, false},

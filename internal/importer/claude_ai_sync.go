@@ -146,6 +146,12 @@ func SyncClaudeAI(ctx context.Context, store BrowserSyncStore, fetch func(contex
 					cb.progress(stats)
 					continue
 				}
+				if len(marker.CurrentLeaf) == 0 {
+					// Some list items carry no leaf field at all; they have no
+					// message tree to import, so treat them like a null leaf.
+					log.Printf("import: claude.ai conversation %s has no current_leaf_message_uuid field; skipping it", marker.UUID)
+					marker.CurrentLeaf = jsontext.Value("null")
+				}
 				var leaf string
 				if err := json.Unmarshal(marker.CurrentLeaf, &leaf); err != nil || leaf == "" && string(marker.CurrentLeaf) != "null" {
 					log.Printf("import: claude.ai conversation %s skipped: current_leaf_message_uuid is %s, not a message uuid or null", marker.UUID, claudeAILeafKind(marker.CurrentLeaf))

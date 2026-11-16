@@ -7128,6 +7128,25 @@ func reconciliationWatchRoot(
 	return best
 }
 
+// cursorIDEContainerCandidateSource reports whether a reconciliation
+// candidate's resolved source addresses a whole Cursor IDE state.vscdb
+// container. Lost-events recovery normally force-parses every candidate so a
+// dropped watcher event can never leave a stale source resting on an
+// inherited cache hit; a Cursor IDE container is the one exception, because
+// clearWatcherOverflowCaches already retains (and the forced discovery pass
+// would otherwise discard) a cache entry whose key proves freshness on its
+// own, independent of which events were lost. Forcing the candidate anyway
+// would still have defeated that retained entry: forceParseBypassesCache
+// skips the cache lookup entirely whenever file.ForceParse is set, so the
+// container would be fully reparsed despite the entry surviving in memory
+// and in skipped_files.
+func cursorIDEContainerCandidateSource(
+	agent parser.AgentType, source parser.SourceRef,
+) bool {
+	return agent == parser.AgentCursorIDE &&
+		parser.IsCursorIDEContainerSource(source)
+}
+
 func (e *Engine) rehydrateReconciliationPage(
 	ctx context.Context, page []reconciliationCandidate,
 	providers map[parser.AgentType]parser.Provider,
@@ -7136,7 +7155,6 @@ func (e *Engine) rehydrateReconciliationPage(
 	e.refreshReconciliationPageContainerCaptures(page)
 	files := make([]parser.DiscoveredFile, 0, len(page))
 	for _, candidate := range page {
-		forceCandidate := force
 		provider := providers[candidate.Provider]
 		if provider == nil {
 			return nil, fmt.Errorf("rehydrate %s source: provider unavailable", candidate.Provider)
@@ -7165,7 +7183,10 @@ func (e *Engine) rehydrateReconciliationPage(
 				) {
 					file := parser.DiscoveredFile{
 						Path: candidate.Path, Project: source.ProjectHint,
-						Agent: candidate.Provider, ForceParse: forceCandidate,
+						Agent: candidate.Provider,
+						ForceParse: force && !cursorIDEContainerCandidateSource(
+							candidate.Provider, source,
+						),
 						Machine:        candidate.Machine,
 						ProviderSource: &source, ProviderProcess: true,
 					}
@@ -7207,7 +7228,10 @@ func (e *Engine) rehydrateReconciliationPage(
 		)
 		file := parser.DiscoveredFile{
 			Path: candidate.Path, Project: source.ProjectHint,
-			Agent: candidate.Provider, ForceParse: forceCandidate,
+			Agent: candidate.Provider,
+			ForceParse: force && !cursorIDEContainerCandidateSource(
+				candidate.Provider, source,
+			),
 			// Carry the candidate's stored attribution: recomputing it from the
 			// physical path is wrong for providers whose source can sit outside
 			// the labeled root it was configured under.
@@ -15654,16 +15678,35 @@ func (e *Engine) removeSkipHashSiblingsLocked(path string) int {
 // clearWatcherOverflowCaches invalidates every freshness shortcut whose
 // correctness can depend on receiving a concrete changed path. The following
 // forced discovery pass rebuilds these caches from parsed source state.
+//
+// Whole Cursor IDE state.vscdb containers are the one exception: their
+// skip-cache entry (see retainedCursorIDEContainerSkipEntries) survives.
+// providerProcessCacheKey bakes the container's filesystem-derived state hash
+// and parser data version into that entry's key, and the hash is
+// recomputed from disk on every pass regardless of which watcher events were
+// lost, so a stale key can never be mistaken for a current one: an unchanged
+// container keeps the same key and the entry still safely skips it, and a
+// changed container gets a different key and falls straight through to a
+// full reparse. Clearing it anyway (the prior behavior) had no correctness
+// benefit and forced a full re-parse of these multi-gigabyte containers,
+// which can take minutes to tens of minutes, on every overflow. Composer
+// member entries are not in this set and are cleared as before: nothing
+// recomputes a per-composer fingerprint independent of watcher events.
 func (e *Engine) clearWatcherOverflowCaches(ctx context.Context) {
 	e.skipMu.Lock()
-	e.skipCache = make(map[string]int64)
+	retainedCache, retainedFingerprints := retainedCursorIDEContainerSkipEntries(
+		e.skipCache, e.skipFingerprints,
+	)
+	e.skipCache = retainedCache
 	e.skipCacheDirty = true
-	e.skipFingerprints = make(map[string]string)
-	e.skipHashKeys = make(map[string]string)
+	e.skipFingerprints = retainedFingerprints
+	e.skipHashKeys, _ = normalizeSourceHashSkipCache(
+		e.skipCache, e.skipFingerprints,
+	)
 	e.skipMu.Unlock()
 	e.ResetFailureCache(ctx)
 	if !e.ephemeral {
-		if err := e.db.ReplaceSkippedFiles(ctx, map[string]int64{}); err != nil {
+		if err := e.db.ReplaceSkippedFiles(ctx, retainedCache); err != nil {
 			log.Printf("clearing skipped files after watcher overflow: %v", err)
 		}
 	}
@@ -15671,6 +15714,52 @@ func (e *Engine) clearWatcherOverflowCaches(ctx context.Context) {
 	e.clearTrustedSQLiteContainers()
 	e.clearVerifiedSources()
 	parser.EvictAllCodexSessionIndexes()
+}
+
+// retainedCursorIDEContainerSkipEntries returns the subset of a watcher-time
+// skip cache (and its parallel fingerprint map) that addresses whole Cursor
+// IDE state.vscdb containers, keyed exactly as the live cache already keys
+// them. See clearWatcherOverflowCaches for why this subset survives a
+// watcher overflow while every other entry, including Cursor IDE composer
+// members, is cleared.
+func retainedCursorIDEContainerSkipEntries(
+	cache map[string]int64, fingerprints map[string]string,
+) (map[string]int64, map[string]string) {
+	retainedCache := make(map[string]int64)
+	retainedFingerprints := make(map[string]string)
+	for key, mtime := range cache {
+		if !cursorIDEContainerSkipCacheKey(key) {
+			continue
+		}
+		retainedCache[key] = mtime
+		if fp, ok := fingerprints[key]; ok {
+			retainedFingerprints[key] = fp
+		}
+	}
+	return retainedCache, retainedFingerprints
+}
+
+// cursorIDEContainerSkipCacheKey reports whether key addresses a whole
+// Cursor IDE state.vscdb container rather than one "<db>#<composerID>"
+// virtual member. providerProcessCacheKey builds container keys as
+// "<path>?agent=<agent>?source_hash=<hash>&data_version=<n>"; a container key
+// always carries the cursor-ide agent qualifier (see
+// providerPersistentSharedContainerSource) and its path has no "#<memberID>"
+// suffix.
+func cursorIDEContainerSkipCacheKey(key string) bool {
+	path, suffix := SplitProviderSkipCachePath(key)
+	if suffix == "" {
+		return false
+	}
+	qualified := strings.TrimPrefix(suffix, db.ProviderAgentSkipMarker)
+	agent, _, _ := strings.Cut(qualified, "?")
+	if parser.AgentType(agent) != parser.AgentCursorIDE {
+		return false
+	}
+	return parser.IsCursorIDEContainerSource(parser.SourceRef{
+		Provider:    parser.AgentCursorIDE,
+		DisplayPath: path,
+	})
 }
 
 // InjectSkipCache merges entries into the in-memory skip
