@@ -99,6 +99,7 @@ func (s *Store) sumActivityUsage(
 		if data, ok := s.usageDisk.Get("activity-usage|"+slot, "activity-usage-1|"+diskVersion); ok {
 			if saved, ok := kept.DecodeRows[*readbase.ActivityUsageSums](data); ok && len(saved) == 1 && saved[0] != nil && saved[0].Covers(endUS) {
 				s.activityUsageSums.Put(slot, version, saved)
+				s.rememberActivityUsage(slot, version, diskVersion)
 				return readbase.AssembleActivityUsage(pricing, saved[0].Schedule, saved[0].Groups)
 			}
 		}
@@ -132,11 +133,11 @@ func (s *Store) sumActivityUsage(
 			activityUsagePublishObserver()
 		}
 		saved := []*readbase.ActivityUsageSums{{Schedule: schedule, Groups: groups, EndUS: endUS, NextUS: nextUS}}
-		s.activityUsageSums.Put(slot, version, saved)
+		if version == s.keptVersion() {
+			s.activityUsageSums.Put(slot, version, saved)
+		}
 		if diskVersion != "" && ctx.Err() == nil && version == s.keptVersion() {
-			if data, err := kept.EncodeRows(saved, 128<<20, func(row *readbase.ActivityUsageSums) int64 { return row.Bytes() }); err == nil && version == s.keptVersion() {
-				s.usageDisk.Put("activity-usage|"+slot, "activity-usage-1|"+diskVersion, data)
-			}
+			s.rememberActivityUsage(slot, version, diskVersion)
 		}
 	}
 	return readbase.AssembleActivityUsage(pricing, schedule, groups)
@@ -420,4 +421,40 @@ func activityUsageSQL(
 	args = append(args, bandArgs...)
 	args = append(args, bucketArgs...)
 	return query, args
+}
+
+// activityUsagePending identifies a memo entry to save at shutdown.
+type activityUsagePending struct {
+	version, diskVersion string
+}
+
+func (s *Store) rememberActivityUsage(slot, version, diskVersion string) {
+	s.activityUsagePendingMu.Lock()
+	defer s.activityUsagePendingMu.Unlock()
+	if len(s.activityUsagePending) >= 64 {
+		for old := range s.activityUsagePending {
+			delete(s.activityUsagePending, old)
+			break
+		}
+	}
+	if s.activityUsagePending == nil {
+		s.activityUsagePending = make(map[string]activityUsagePending)
+	}
+	s.activityUsagePending[slot] = activityUsagePending{version, diskVersion}
+}
+
+func (s *Store) saveActivityUsage() {
+	s.activityUsagePendingMu.Lock()
+	defer s.activityUsagePendingMu.Unlock()
+	version := s.keptVersion()
+	for slot, pending := range s.activityUsagePending {
+		if pending.version != version {
+			continue
+		}
+		if rows, ok := s.activityUsageSums.Get(slot, version); ok {
+			if data, err := kept.EncodeRows(rows, 128<<20, func(row *readbase.ActivityUsageSums) int64 { return row.Bytes() }); err == nil {
+				s.usageDisk.Put("activity-usage|"+slot, "activity-usage-1|"+pending.diskVersion, data)
+			}
+		}
+	}
 }

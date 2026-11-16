@@ -520,3 +520,32 @@ func TestPartialActivityEmptyFingerprintDoesNotReuseDisk(t *testing.T) {
 	}
 	require.Equal(t, 2, *reads)
 }
+
+func TestPartialActivityUsageSavedAtClose(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 2, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	open := func() *Store {
+		s, err := NewStore(t.Context(), path)
+		require.NoError(t, err)
+		require.NoError(t, s.OpenActivityReportDisk(t.Context()))
+		return s
+	}
+	first := open()
+	want := keptActivityBuild(t, first, q, true)
+	second := open()
+	reads := observeActivityUsageReads(t)
+	got := keptActivityBuild(t, second, q, true)
+	require.Equal(t, 1, *reads)
+	requireKeptActivityEqual(t, want, got)
+	require.NoError(t, second.Close())
+	require.NoError(t, first.Close())
+	restarted := open()
+	defer restarted.Close()
+	*reads = 0
+	got = keptActivityBuild(t, restarted, q, true)
+	require.Equal(t, 0, *reads)
+	requireKeptActivityEqual(t, want, got)
+}
