@@ -31,14 +31,37 @@ async function snap(page: Page, name: string) {
   });
 }
 
-async function snapEl(loc: Locator, name: string) {
-  await loc.page().evaluate(() => document.fonts.ready);
-  await loc.screenshot({
-    animations: 'disabled',
-    style: CAPTURE_STYLE,
-    path: join(DIR, `${name}.png`),
-    type: 'png',
+// Height by which the element exceeds the scrolling area that shows it. An
+// element screenshot past that area picks up fixed footers and blank space.
+async function overflowHeight(loc: Locator): Promise<number> {
+  return loc.evaluate((el) => {
+    let area = el.parentElement;
+    while (area && !/(auto|scroll)/.test(getComputedStyle(area).overflowY)) {
+      area = area.parentElement;
+    }
+    const visible = area ? area.clientHeight : window.innerHeight;
+    return Math.ceil(el.getBoundingClientRect().height - visible);
   });
+}
+
+async function snapEl(loc: Locator, name: string) {
+  const page = loc.page();
+  await page.evaluate(() => document.fonts.ready);
+  const size = page.viewportSize();
+  const overflow = size ? await overflowHeight(loc) : 0;
+  if (size && overflow > 0) {
+    await page.setViewportSize({ ...size, height: size.height + overflow });
+  }
+  try {
+    await loc.screenshot({
+      animations: 'disabled',
+      style: CAPTURE_STYLE,
+      path: join(DIR, `${name}.png`),
+      type: 'png',
+    });
+  } finally {
+    if (size && overflow > 0) await page.setViewportSize(size);
+  }
 }
 
 async function snapRange(
