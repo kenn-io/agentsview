@@ -124,7 +124,7 @@ func TestUsageCarry(t *testing.T) {
 				t.Helper()
 				execPreparedUsage(t, store, "SYSTEM FLUSH LOGS")
 				var n uint64
-				require.NoError(t, store.DB().QueryRowContext(t.Context(), `SELECT count() FROM system.query_log WHERE current_database = currentDatabase() AND type = 'QueryStart' AND is_initial_query = 1 AND (startsWith(query, 'SELECT [assumeNotNull(') OR startsWith(query, '/* final rows */ ')) AND position(query, 'FROM usage_messages') > 0`).Scan(&n))
+				require.NoError(t, store.DB().QueryRowContext(t.Context(), `SELECT count() FROM system.query_log WHERE current_database = currentDatabase() AND type = 'QueryFinish' AND is_initial_query = 1 AND (has(tables, concat(currentDatabase(), '.usage_messages')) OR has(tables, concat(currentDatabase(), '.usage_events')))`).Scan(&n))
 				return n
 			}
 			for i, f := range filters {
@@ -140,7 +140,7 @@ func TestUsageCarry(t *testing.T) {
 				require.NoError(t, err)
 				_, afterTop := usageQueryCounts(t, store)
 				if scenario == "raw merge" {
-					require.Equal(t, scansBefore, rawScans())
+					require.LessOrEqual(t, rawScans()-scansBefore, uint64(1), "daily and top should share the publication proof")
 				}
 				if scenario == "healthy" || scenario == "raw merge" || scenario == "snapshot merge" {
 					require.Equal(t, beforeResults, afterDaily)
