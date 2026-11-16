@@ -18,15 +18,41 @@ const (
 )
 
 // KataConfig configures the optional Kata spoke connection. TokenEnv names
-// the environment variable holding the bearer token; the token is not stored.
+// the environment variable holding the bearer token, or TokenFile names a
+// private file holding it; the token is not stored in config.toml.
 type KataConfig struct {
 	Enabled       bool          `json:"-" toml:"enabled"`
 	Endpoint      string        `json:"-" toml:"endpoint"`
 	TokenEnv      string        `json:"-" toml:"token_env"`
+	TokenFile     string        `json:"-" toml:"token_file"`
 	Project       string        `json:"-" toml:"project"`
 	Actor         string        `json:"-" toml:"actor"`
 	AllowInsecure bool          `json:"-" toml:"allow_insecure"`
 	Timeout       time.Duration `json:"-" toml:"timeout"`
+
+	// token holds the bearer token read from TokenFile.
+	token string
+}
+
+// FileToken returns the bearer token read from TokenFile when the section
+// loaded, or "" when TokenFile is unset.
+func (c KataConfig) FileToken() string { return c.token }
+
+// resolveSecrets validates the section and, when it is enabled, reads
+// token_file.
+func (c *KataConfig) resolveSecrets() error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	if !c.Enabled || strings.TrimSpace(c.TokenFile) == "" {
+		return nil
+	}
+	token, err := readSettingSecretFile("[kata] token_file", c.TokenFile)
+	if err != nil {
+		return err
+	}
+	c.token = token
+	return nil
 }
 
 func defaultKataConfig() KataConfig {
@@ -43,6 +69,10 @@ func (c KataConfig) Validate() error {
 	}
 	if c.Timeout <= 0 {
 		return errors.New("[kata] timeout must be positive")
+	}
+	if err := oneSecretSource("[kata]", "token_env", c.TokenEnv,
+		"token_file", c.TokenFile); err != nil {
+		return err
 	}
 	endpoint := strings.TrimSpace(c.Endpoint)
 	if endpoint == "" {
@@ -68,8 +98,8 @@ func (c KataConfig) Validate() error {
 		if u.Host == "" {
 			return fmt.Errorf("[kata] endpoint %q has no host", RedactedEndpoint(endpoint))
 		}
-		if strings.TrimSpace(c.TokenEnv) == "" {
-			return errors.New("[kata] token_env is required for https endpoints")
+		if strings.TrimSpace(c.TokenEnv) == "" && strings.TrimSpace(c.TokenFile) == "" {
+			return errors.New("[kata] token_env or token_file is required for https endpoints")
 		}
 		return nil
 	case "http":
@@ -118,6 +148,9 @@ func mergeKataTOML(dst *KataConfig, src KataConfig, meta toml.MetaData) {
 	}
 	if meta.IsDefined("kata", "token_env") {
 		dst.TokenEnv = strings.TrimSpace(src.TokenEnv)
+	}
+	if meta.IsDefined("kata", "token_file") {
+		dst.TokenFile = strings.TrimSpace(src.TokenFile)
 	}
 	if meta.IsDefined("kata", "project") {
 		dst.Project = strings.TrimSpace(src.Project)

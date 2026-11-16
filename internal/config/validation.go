@@ -47,15 +47,16 @@ func (c *Config) validateSections() error {
 		{ScopeServer, "public_url/public_origins", c.resolvePublicConfig},
 		{ScopeServer, "daemon_idle_timeout", c.validateDaemonIdleTimeout},
 		{ScopeServer, "sync_idle_after", c.validateSyncIdleAfter},
-		{ScopeVector, "[vector]", c.Vector.Validate},
-		{ScopeRecall, "[recall.extract]", c.Recall.Extract.Validate},
-		{ScopeInsights, "[insights]", c.Insights.Validate},
+		// Sections with *_file secrets read them once they validate.
+		{ScopeVector, "[vector]", c.Vector.resolveSecrets},
+		{ScopeRecall, "[recall.extract]", c.Recall.Extract.resolveSecrets},
+		{ScopeInsights, "[insights]", c.Insights.resolveSecrets},
 		{ScopeServer, "[image_text]", c.ImageText.Validate},
 		{ScopeServer, "[friction]", c.Friction.Validate},
-		{ScopeServer, "[kata]", c.Kata.Validate},
+		{ScopeServer, "[kata]", c.Kata.resolveSecrets},
 		{ScopePG, "[pg]", func() error { return c.pgConfigErr }},
 		{ScopeClickHouse, "[clickhouse]", func() error { return c.clickHouseConfigErr }},
-		{ScopeDocbank, "[integrations.docbank]", c.Integrations.Docbank.Validate},
+		{ScopeDocbank, "[integrations.docbank]", c.Integrations.Docbank.resolveSecrets},
 	} {
 		if err := c.validateSection(section.scope, section.name, section.validate); err != nil {
 			return err

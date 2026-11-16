@@ -69,7 +69,11 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 	}
 	defer closeWriteDB(database, writeLock)
 
-	apiKey := strings.TrimSpace(appCfg.CursorAdminAPIKey)
+	apiKey, err := appCfg.ResolveCursorAdminAPIKey()
+	if err != nil {
+		return err
+	}
+	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
 		return errors.New("missing Cursor admin API key")
 	}

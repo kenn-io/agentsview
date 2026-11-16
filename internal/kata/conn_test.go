@@ -4,14 +4,17 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/kit/safefileio"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/kata/katatest"
@@ -335,4 +338,32 @@ func TestConnFreshStatusDoesNotShareACanceledProbe(t *testing.T) {
 	c.mu.Unlock()
 	assert.Equal(t, StateReady, st.State, "the live caller probes for itself")
 	assert.Equal(t, 2, probes)
+}
+
+func TestConnSendsTokenFromConfigTokenFile(t *testing.T) {
+	s := katatest.New(t)
+	s.SetToken("file-token")
+	dataDir := t.TempDir()
+	secretDir := t.TempDir()
+	// Secret files under a directory others can write are refused.
+	require.NoError(t, os.Chmod(secretDir, 0o700))
+	tokenPath := filepath.Join(secretDir, "kata-token")
+	tokenFile, err := safefileio.CreatePrivateFile(tokenPath)
+	require.NoError(t, err)
+	_, err = tokenFile.WriteString("file-token\n")
+	require.NoError(t, err)
+	require.NoError(t, tokenFile.Close())
+	configText := fmt.Sprintf("[kata]\nenabled = true\nendpoint = %q\ntoken_file = %q\n",
+		s.Endpoint(), tokenPath)
+	require.NoError(t, os.WriteFile(filepath.Join(dataDir, "config.toml"), []byte(configText), 0o600))
+	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
+
+	cfg, err := config.LoadMinimal()
+	require.NoError(t, err)
+	c := NewConn(ConfigFrom(cfg.Kata, true))
+
+	require.True(t, c.Ready(t.Context()))
+	instanceReqs := s.RequestsMatching(http.MethodGet, "/api/v1/instance")
+	require.Len(t, instanceReqs, 1)
+	assert.Equal(t, "Bearer file-token", instanceReqs[0].Authorization)
 }

@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-13
+last_edited: 2026-11-16
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -10,6 +10,14 @@ The latest release is
 ## Unreleased
 
 **New features**
+
+- Keep connection secrets in private files instead of environment variables
+  or `config.toml`. Set `token_file` under `[kata]`, `api_key_file` for
+  Docbank, insights, embeddings servers, and recall extraction servers,
+  `token_file` under `[duckdb]`, or `cursor_admin_api_key_file`. A missing or
+  unsafe file is an error that names the setting; AgentsView never falls back
+  to another source. See
+  [Read secrets from files](/docs/configuration/#read-secrets-from-files).
 
 - Track token usage and cost for tools that call model APIs directly, with no
   coding agent in between. Such a tool writes body-free session files to

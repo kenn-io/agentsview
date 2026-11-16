@@ -41,5 +41,5 @@ func TestDocbankIntegrationValidation(t *testing.T) {
 		require.NoError(t, (DocbankIntegration{URL: endpoint, APIKeyEnv: "DOCBANK_TEST_KEY"}).Validate())
 	}
 	require.NoError(t, (DocbankIntegration{}).Validate())
-	assert.EqualError(t, (DocbankIntegration{URL: "https://example.com"}).Validate(), "[integrations.docbank] url and api_key_env are required together")
+	assert.EqualError(t, (DocbankIntegration{URL: "https://example.com"}).Validate(), "[integrations.docbank] url and one of api_key_env or api_key_file are required together")
 }
