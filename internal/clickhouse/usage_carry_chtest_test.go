@@ -55,7 +55,6 @@ func TestUsageCarry(t *testing.T) {
 				execPreparedUsage(t, store, fmt.Sprintf("ALTER TABLE usage_messages DELETE WHERE session_id = '%s' AND ordinal = 0 SETTINGS mutations_sync = 2", preparedUsageLongID))
 			case "snapshot ahead":
 				execPreparedUsage(t, store, "CREATE TABLE original_snapshot AS usage_session_snapshots ENGINE = Memory", fmt.Sprintf("INSERT INTO original_snapshot SELECT * FROM usage_session_snapshots WHERE id = '%s'", preparedUsageLongID))
-				execPreparedUsage(t, store, fmt.Sprintf(`INSERT INTO usage_session_snapshots SELECT * REPLACE (push_version + 1 AS push_version, toUInt128(push_version + 1) * 2 + 1 AS revision) FROM usage_session_snapshots WHERE id = '%s'`, preparedUsageLongID))
 			}
 			filters := []db.UsageFilter{{Timezone: "UTC", Breakdowns: true}, {From: "2026-01-01", To: "2026-01-30", Timezone: "UTC", Breakdowns: true}}
 			if scenario == "equal count older row" {
@@ -64,6 +63,9 @@ func TestUsageCarry(t *testing.T) {
 			before := make([]preparedUsageRead, len(filters))
 			for i, f := range filters {
 				before[i] = readPreparedUsage(t, store, f)
+			}
+			if scenario == "snapshot ahead" {
+				execPreparedUsage(t, store, fmt.Sprintf(`INSERT INTO usage_session_snapshots SELECT * REPLACE (push_version + 1 AS push_version, toUInt128(push_version + 1) * 2 + 1 AS revision) FROM usage_session_snapshots WHERE id = '%s'`, preparedUsageLongID))
 			}
 			if scenario == "changed after read" {
 				republishRoundSession(t, local, 123)
@@ -105,7 +107,7 @@ func TestUsageCarry(t *testing.T) {
 					require.EqualValues(t, 100, fresh.daily.Totals.InputTokens)
 				}
 			}
-			if scenario == "changed after read" {
+			if scenario == "changed after read" || scenario == "snapshot ahead" {
 				require.Zero(t, proofs)
 			} else {
 				require.Positive(t, proofs)
