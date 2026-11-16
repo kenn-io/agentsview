@@ -78,6 +78,8 @@ func TestMemoryPluginAgentToolsMatchPluginServer(t *testing.T) {
 	require.NoError(t, err)
 	content := string(agent)
 	assert.Contains(t, strings.Split(content, "\n"), "tools: "+prefix+"search_content, "+prefix+"get_messages, mcp__agentsview__search_content, mcp__agentsview__get_messages")
-	assert.Contains(t, content, "`"+prefix+"search_content` when registered; otherwise call `mcp__agentsview__search_content`")
+	assert.Contains(t, content, "Choose exactly one server for this task")
+	assert.Contains(t, content, "Use only the chosen server for every search and message read")
+	assert.Contains(t, content, "`"+prefix+"search_content` when registered; otherwise use `mcp__agentsview__search_content`")
 	assert.Contains(t, content, "`"+prefix+"get_messages` or `mcp__agentsview__get_messages` using the same server as the search")
 }

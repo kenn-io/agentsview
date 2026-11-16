@@ -14,7 +14,7 @@ decision.
 
 ## Search and read
 
-1. Call `{{.ToolPrefix}}search_content`{{if .AlternateToolPrefix}} when registered; otherwise call `{{.AlternateToolPrefix}}search_content`{{end}} with `mode: hybrid`, `scope: all`,
+1. {{if .AlternateToolPrefix}}Choose exactly one server for this task. Use `{{.ToolPrefix}}search_content` when registered; otherwise use `{{.AlternateToolPrefix}}search_content`. Use only the chosen server for every search and message read. Call the chosen search tool{{else}}Call `{{.ToolPrefix}}search_content`{{end}} with `mode: hybrid`, `scope: all`,
    `limit: 10`, `include_active: true`, `include_one_shot: true`, and
    `include_automated: true`. When the parent supplies the current session
    identity, pass it as `current_session_id`. Do not invent a project filter
