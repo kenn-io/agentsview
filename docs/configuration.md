@@ -397,76 +397,77 @@ matches every connection. The PostgreSQL driver ignores a missing passfile, so a
 missing mount shows up as a PostgreSQL authentication error rather than an error
 naming the file.
 
-### Hub container SSH
+### SSH hosts from a container
 
-On unreleased `main`, the container image includes an SSH client so a hub can
-pull workstation transcripts through [SSH remote sync](/docs/remote-access/#ssh-remote-sync).
-The workstation needs `sh`, `tar`, `gzip`, `mktemp`, `find`, and `uname`.
+The image includes an SSH client, so a containerized AgentsView can collect
+sessions from [SSH remote hosts](/docs/remote-access/#ssh-remote-sync). The
+container runs as root and reads its SSH settings from `/root/.ssh`. Give it a
+dedicated key, not your personal `~/.ssh` directory or an SSH agent socket.
 
-The image runs as root. Mount a directory containing only a dedicated private
-key, a pinned `known_hosts`, and an SSH `config` read-only at `/root/.ssh`.
-Never mount your personal `.ssh` directory or an agent socket. For example,
-put this in the mounted directory's `config`:
+1. Create a directory, for example `container-ssh/`, holding only:
 
-```sshconfig
-Host devbox1
-    HostName workstation.example.com
-    User collector
-    IdentityFile /root/.ssh/id_ed25519
-    IdentitiesOnly yes
-    StrictHostKeyChecking yes
-```
+   - `id_ed25519`: a key without a passphrase, authorized on the remote
+     account.
+   - `known_hosts`: the remote's host key.
+   - `config`: an entry for each host, such as:
 
-Set `transport = "ssh"` and `destination = "devbox1"` on the matching
-`[[remote_hosts]]` entry. Before mounting the dedicated files in `hub-ssh/`,
-make the directory and files owned by root as seen inside the container.
-Use mode `0700` for the directory, `0600` for the private key and `config`,
-and `0644` for `known_hosts`. OpenSSH rejects an ordinary user's ownership
-of `/root/.ssh/config` with `Bad owner or permissions`, even on a read-only
-mount.
+   ```sshconfig
+   Host devbox
+       HostName devbox.example.com
+       User collector
+       IdentityFile /root/.ssh/id_ed25519
+       IdentitiesOnly yes
+       StrictHostKeyChecking yes
+   ```
 
-For rootful Docker on Linux without user namespace remapping, prepare only
-this dedicated directory after creating its files:
+1. Make the files owned by root inside the container. OpenSSH refuses a
+   `config` owned by anyone else with `Bad owner or permissions`, even on a
+   read-only mount. With rootful Docker on Linux:
 
-```bash
-sudo chown 0:0 hub-ssh hub-ssh/id_ed25519 hub-ssh/config hub-ssh/known_hosts
-sudo chmod 0700 hub-ssh
-sudo chmod 0600 hub-ssh/id_ed25519 hub-ssh/config
-sudo chmod 0644 hub-ssh/known_hosts
-```
+   ```bash
+   sudo chown -R 0:0 container-ssh
+   sudo chmod 0700 container-ssh
+   sudo chmod 0600 container-ssh/id_ed25519 container-ssh/config
+   sudo chmod 0644 container-ssh/known_hosts
+   ```
 
-For rootless Docker or containers with user namespace remapping, use the
-host UID/GID mapped to root inside that container. Host UID/GID `0:0` may
-not map to container root. Prepare ownership using that mapping before the
-read-only mount, and keep the same modes.
+   With rootless Docker or user namespace remapping, container root maps to a
+   different host user. Use that user's UID and GID in place of `0:0`.
 
-Then preflight the same image and mounts:
+1. Add the host to the container's `config.toml`:
 
-```bash
-docker run --rm --entrypoint ssh \
-  --mount type=bind,src="$PWD/hub-ssh",dst=/root/.ssh,readonly \
-  IMAGE -o BatchMode=yes devbox1 true
-```
+   ```toml
+   [[remote_hosts]]
+   host = "devbox"
+   transport = "ssh"
+   ```
 
-This must exit 0 with empty stdout. Then pull the configured host once, using
-the directory containing the hub's `config.toml` as `hub-data/`:
+1. Check the connection. It must exit 0 and print nothing:
 
-```bash
-docker run --rm \
-  --mount type=bind,src="$PWD/hub-ssh",dst=/root/.ssh,readonly \
-  --mount type=bind,src="$PWD/hub-data",dst=/data \
-  IMAGE sync --host devbox1
-```
+   ```bash
+   docker run --rm --entrypoint ssh \
+     --mount type=bind,src="$PWD/container-ssh",dst=/root/.ssh,readonly \
+     ghcr.io/kenn-io/agentsview:latest -o BatchMode=yes devbox true
+   ```
 
-The hub key can run arbitrary commands as that workstation account.
-`authorized_keys` options (`from=`, `no-port-forwarding`,
-`no-agent-forwarding`, `no-X11-forwarding`, `no-pty`) reduce exposure but are
-not a command sandbox. A fixed serve-only forced command is incompatible
-with the current provisioning protocol. Verify the source address sshd
-actually sees before relying on `from=`.
+1. Sync the host once, mounting the data directory that holds `config.toml`:
 
-The image build checks `ssh -V`. To check a built image yourself, run
-`docker run --rm --entrypoint ssh IMAGE -V`.
+   ```bash
+   docker run --rm \
+     --mount type=bind,src="$PWD/container-ssh",dst=/root/.ssh,readonly \
+     --mount type=bind,src="$PWD/agentsview-data",dst=/data \
+     ghcr.io/kenn-io/agentsview:latest source sync --host devbox
+   ```
+
+Add the same `/root/.ssh` mount to your long-running container and set
+`interval` on the entry to sync on a schedule.
+
+The container's key can run any command as the remote account. In
+`authorized_keys`, the options `from=`, `no-port-forwarding`,
+`no-agent-forwarding`, `no-X11-forwarding`, and `no-pty` narrow what the key can
+do, but they do not sandbox it. A forced `command=` breaks sync, because sync
+runs several different commands. Before relying on `from=`, check which source
+address the remote's `sshd` logs for the container.
 
 ## Remote Hosts
 

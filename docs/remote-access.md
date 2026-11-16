@@ -271,6 +271,8 @@ skipped, because the sync had already started.
 
 - Remotes must run Linux or macOS on amd64 or arm64. Windows remotes are not
   supported.
+- The remote account needs `sh`, `tar`, `gzip`, `mktemp`, `find`, and `uname`
+  on its `PATH`.
 - Release Linux binaries link against glibc. On a remote with an older glibc,
   the check after install fails and the error shows its output.
 - Discovery sees the environment of a non-interactive SSH session. Variables set

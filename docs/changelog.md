@@ -114,9 +114,10 @@ The latest release is
   as `homebrew`. Source builds send an empty value. See
   [Privacy and Telemetry](/docs/configuration/#privacy-and-telemetry).
 
-- Hub containers can pull workstation transcripts over SSH. The image now
-  includes an SSH client; see [hub container SSH](/docs/configuration/#hub-container-ssh)
-  for dedicated-key mounts and connection checks.
+- The Docker image can sync [SSH remote hosts](/docs/remote-access/#ssh-remote-sync)
+  without a custom build, because it now includes an SSH client. See
+  [SSH hosts from a container](/docs/configuration/#ssh-hosts-from-a-container)
+  for mounting a dedicated key.
 
 **Bug fixes**
 
