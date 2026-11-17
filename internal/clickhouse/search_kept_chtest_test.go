@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/docbank/document/ocr"
 )
 
@@ -123,6 +124,13 @@ func TestSearchKeptRejectsPushDuringBuild(t *testing.T) {
 	require.Len(t, page.Results, 1)
 	_, ok = s.searchReads.Get(filter.Slot(), version)
 	require.False(t, ok)
-	_, ok = s.usageDisk.Get("search|"+filter.Slot(), "json|v1|"+version)
-	require.False(t, ok)
+	restarted := newTestStore(t, syncer.conn, syncer.target)
+	require.NoError(t, restarted.openActivityReportDisk(syncer.target))
+	loads := 0
+	_, _, err = kept.LoadJSON(&restarted.usageDisk, "search|"+filter.Slot(), version, func() bool { return false }, func() (db.SearchPage, error) {
+		loads++
+		return db.SearchPage{}, nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, loads)
 }

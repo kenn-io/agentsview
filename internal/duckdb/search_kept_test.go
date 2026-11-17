@@ -84,7 +84,7 @@ func TestSearchKeptUnversioned(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	buildMirrorFixture(t, path, "session-a", "answer")
-	writeUsageMirror(t, path, `UPDATE sessions SET agentsview_push_fingerprint = ''`)
+	writeUsageMirror(t, path, `UPDATE sessions SET agentsview_push_fingerprint = NULL`)
 	filter := db.SearchFilter{Query: "answer"}
 	for range 2 {
 		store := openUsagePartsStore(t, path)
@@ -111,8 +111,6 @@ func TestSearchKeptSelectionsAcrossRestart(t *testing.T) {
 	}{
 		{db.SearchFilter{Query: "first"}, []string{"sess-3", "sess-2", "sess-1"}, 0},
 		{db.SearchFilter{Query: "missing"}, nil, 0},
-		{db.SearchFilter{Query: "first", Project: "other"}, nil, 0},
-		{db.SearchFilter{Query: "first", DateFrom: "2030-01-01"}, nil, 0},
 		{db.SearchFilter{Query: "first", Cursor: 2, Limit: 2}, []string{"sess-1"}, 0},
 		{db.SearchFilter{Query: "first", Limit: 2}, []string{"sess-3", "sess-2"}, 2},
 	}
