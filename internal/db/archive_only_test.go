@@ -17,7 +17,7 @@ func TestArchiveOnlyPreservesPendingRebuild(t *testing.T) {
 		wantRaw     int
 		stale       bool
 	}{
-		{"pending archive", dataVersion - 1, true, (1 << 20) + dataVersion - 1, true},
+		{"pending archive", dataVersion - 1, true, (1 << 20) + dataVersion, true},
 		{"current archive", dataVersion, true, (1 << 20) + dataVersion, false},
 		{"ordinary archive", dataVersion, false, dataVersion, false},
 	} {

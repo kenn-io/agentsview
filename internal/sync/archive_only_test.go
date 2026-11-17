@@ -2,11 +2,13 @@ package sync_test
 
 import (
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 	sessionsync "go.kenn.io/agentsview/internal/sync"
@@ -41,4 +43,50 @@ func TestArchiveOnlyRefusesReceivingHostSources(t *testing.T) {
 	var mode string
 	require.NoError(t, database.Reader().QueryRow(t.Context(), "SELECT value FROM archive_metadata WHERE key='archive_only'").Scan(&mode))
 	assert.Equal(t, "1", mode)
+}
+
+func TestArchiveOnlyPromptLinkUpgradeRebuildsWithoutSources(t *testing.T) {
+	ctx := t.Context()
+	database := dbtest.OpenTestDB(t)
+	dbtest.SeedSessionWithMessages(t, database, "retained", "project", []db.Message{dbtest.UserMsg("retained", 0, "https://github.com/o/r/pull/42")})
+	require.NoError(t, database.EnableArchiveOnly(ctx))
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET pr_links=structured_pr_links WHERE id='retained'`); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM stats WHERE key='prompt_pr_links_backfill_v1'`); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version=%d`, (1<<20)+183))
+		return err
+	}))
+	path := database.Path()
+	require.NoError(t, database.Close())
+	database, err := db.OpenIsolatedContext(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = database.Close() })
+	var raw int
+	require.NoError(t, database.Reader().QueryRow(ctx, `PRAGMA user_version`).Scan(&raw))
+	version, archiveOnly := db.DecodeUserVersion(raw)
+	assert.True(t, archiveOnly)
+	assert.Greater(t, version, 183, "an older reader must reject the updated archive")
+	assert.True(t, database.NeedsResync())
+	engine := sessionsync.NewEngine(ctx, database, sessionsync.EngineConfig{})
+	defer engine.Close()
+	assert.True(t, engine.SyncAll(ctx, nil).Aborted)
+	needs, rebuild, err := db.ArchiveResyncState(ctx, path)
+	require.NoError(t, err)
+	assert.True(t, needs)
+	assert.True(t, rebuild)
+	stats, err := engine.ResyncAllWithOptions(ctx, nil, sessionsync.RebuildOptions{})
+	require.NoError(t, err)
+	require.True(t, stats.ArchiveRebuilt)
+	got, err := database.GetSession(ctx, "retained")
+	require.NoError(t, err)
+	require.Len(t, got.PRLinks, 1)
+	assert.Equal(t, "https://github.com/o/r/pull/42", got.PRLinks[0].URL)
+	needs, rebuild, err = db.ArchiveResyncState(ctx, path)
+	require.NoError(t, err)
+	assert.False(t, needs)
+	assert.False(t, rebuild)
 }

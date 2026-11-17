@@ -37,6 +37,46 @@ func TestPromptPRLinksStoredMessages(t *testing.T) {
 	assert.Equal(t, "https://github.com/o/r/pull/8", got.PRLinks[1].URL)
 }
 
+func TestPromptPRLinksArchiveOnlyUpgradeKeepsRebuildPending(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	s := Session{ID: "archived", Project: "project", Machine: "local", Agent: "claude"}
+	require.NoError(t, d.UpsertSession(ctx, s))
+	require.NoError(t, d.ReplaceSessionMessages(ctx, s.ID, []Message{{SessionID: s.ID, Role: "user", Content: "https://github.com/o/r/pull/42"}}))
+	require.NoError(t, d.EnableArchiveOnly(ctx))
+	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET pr_links=structured_pr_links WHERE id=?`, s.ID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM stats WHERE key='prompt_pr_links_backfill_v1'`); err != nil {
+			return err
+		}
+		return writeUserVersion(ctx, tx, 183)
+	}))
+	path := d.Path()
+	require.NoError(t, d.Close())
+	d, err := OpenIsolatedContext(ctx, path)
+	require.NoError(t, err)
+	got, err := d.GetSession(ctx, s.ID)
+	require.NoError(t, err)
+	require.Len(t, got.PRLinks, 1)
+	assert.Equal(t, "https://github.com/o/r/pull/42", got.PRLinks[0].URL)
+	version, archiveOnly, err := readUserVersion(ctx, d.getReader())
+	require.NoError(t, err)
+	assert.True(t, archiveOnly)
+	assert.Equal(t, 185, version)
+	assert.True(t, d.NeedsResync())
+	require.NoError(t, d.Close())
+	needs, rebuild, err := ArchiveResyncState(ctx, path)
+	require.NoError(t, err)
+	assert.True(t, needs)
+	assert.True(t, rebuild)
+	d, err = OpenIsolatedContext(ctx, path)
+	require.NoError(t, err)
+	assert.True(t, d.NeedsResync())
+	require.NoError(t, d.Close())
+}
+
 func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
 	for _, tc := range []struct {
 		name                       string

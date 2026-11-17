@@ -318,10 +318,15 @@ func (db *DB) backfillPromptPRLinksLocked(ctx context.Context, w *writerHandle) 
 			return err
 		}
 	}
-	// An archive-only upgrade with no scoped providers still needs a
-	// preservation rebuild, so its version remains the pending marker.
-	if version >= fullRebuildDataVersion() && version < 185 &&
-		(!archiveOnly || len(ScopedDataVersionProviders(version, 185)) > 0) {
+	if version >= fullRebuildDataVersion() && version < 185 {
+		// Archive-only upgrades need a preservation rebuild even when no
+		// providers need reparsing. Record it before raising the version.
+		if archiveOnly && len(ScopedDataVersionProviders(version, 185)) == 0 {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO stats(key, value) VALUES (?, ?)
+				ON CONFLICT(key) DO UPDATE SET value = max(value, excluded.value)`, scopedUpgradePendingKey, 185); err != nil {
+				return fmt.Errorf("recording pending archive rebuild: %w", err)
+			}
+		}
 		if err := advanceDataVersion(ctx, tx, 185); err != nil {
 			return err
 		}

@@ -111,6 +111,8 @@ var promptURL = regexp.MustCompile(`https?://(?:\[[^\]\s]+\]|[^\s<>"'()/\[\]]+)[
 // PromptPRLinks extracts pull and merge request URLs from text.
 func PromptPRLinks(text string) []PRLink {
 	var links prLinkCollector
+	text = strings.ReplaceAll(text, ",https://", " https://")
+	text = strings.ReplaceAll(text, ",http://", " http://")
 	for _, candidate := range promptURL.FindAllString(text, -1) {
 		candidate = strings.TrimRightFunc(candidate, func(r rune) bool {
 			return strings.ContainsRune(".,;:!?]`*_", r) || r > unicode.MaxASCII && unicode.IsPunct(r)

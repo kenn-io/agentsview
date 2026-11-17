@@ -214,3 +214,10 @@ func TestPromptPRLinks(t *testing.T) {
 		})
 	}
 }
+
+func TestPromptPRLinksAdjacentURLs(t *testing.T) {
+	links := PromptPRLinks("https://github.com/o/r/pull/1,https://github.com/o/r/pull/2")
+	require.Len(t, links, 2)
+	assert.Equal(t, "https://github.com/o/r/pull/1", links[0].URL)
+	assert.Equal(t, "https://github.com/o/r/pull/2", links[1].URL)
+}
