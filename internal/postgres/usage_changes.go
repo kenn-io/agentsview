@@ -227,9 +227,6 @@ func installUsageHistoryTokenPG(ctx context.Context, tx *sql.Tx) error {
 }
 
 func installUsageHistoryCheckpointsPG(ctx context.Context, tx *sql.Tx) error {
-	if err := lockSyncMetadataRow(ctx, tx, "usage_change_journal_lock"); err != nil {
-		return err
-	}
 	var version string
 	var installed bool
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT value FROM sync_metadata WHERE key='usage_change_journal_version'), ''), EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid='sync_metadata'::regclass AND tgname='trg_usage_history_checkpoint' AND NOT tgisinternal)`).Scan(&version, &installed); err != nil {

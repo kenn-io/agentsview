@@ -32,16 +32,16 @@ func (tr *searchQueryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d
 	if strings.Contains(data.SQL, "SELECT substring(key from length('usage_history_checkpoint:')") {
 		tr.checkpoints.Add(1)
 	}
-	if strings.Contains(data.SQL, "SELECT session_id, match_priority, match_pos, session_ended_at FROM page") {
+	if strings.Contains(data.SQL, "processor FROM page ORDER BY") {
 		tr.keys.Add(1)
 	}
 	if strings.Contains(data.SQL, "SELECT p.session_id, s.project") {
 		tr.hydrate.Add(1)
-		if ids, ok := data.Args[len(data.Args)-1].([]string); ok {
+		if ids, ok := data.Args[3].([]string); ok {
 			tr.hydrateIDs.Store(int32(len(ids)))
 		}
 	}
-	if strings.Contains(data.SQL, "SELECT session_id FROM unnest(") {
+	if strings.Contains(data.SQL, "processor FROM unnest(") {
 		tr.ties.Add(1)
 	}
 	if strings.Contains(data.SQL, "msg_matches AS") {
@@ -153,8 +153,8 @@ func TestSearchKeptRefreshAfterWrite(t *testing.T) {
 	page, err = s.Search(ctx, f)
 	require.NoError(t, err)
 	require.Equal(t, []string{"two", "one"}, []string{page.Results[0].SessionID, page.Results[1].SessionID})
-	require.EqualValues(t, 2, trace.count.Load())
-	require.EqualValues(t, 2, trace.restricted.Load())
+	require.EqualValues(t, 1, trace.count.Load())
+	require.EqualValues(t, 1, trace.restricted.Load())
 	require.EqualValues(t, 1, trace.keys.Load())
 	require.EqualValues(t, 1, trace.hydrate.Load())
 	require.EqualValues(t, 2, trace.hydrateIDs.Load())
@@ -214,9 +214,6 @@ func TestSearchKeptRefreshAfterWrite(t *testing.T) {
 	pgKeptPush(t, syncer, false)
 	check("relevance", []string{"new", "two"}, []string{"name", "shot"})
 	check("recency", []string{"name", "new"}, []string{"shot", "two"})
-	var collation string
-	require.NoError(t, pool.QueryRowContext(ctx, `SELECT datcollate FROM pg_database WHERE datname = current_database()`).Scan(&collation))
-	t.Logf("database collation: %s", collation)
 	for _, id := range []string{"a-c", "ab", "B1", "a1"} {
 		require.NoError(t, local.UpsertSession(ctx, db.Session{ID: id, Project: "ties", Machine: "device", Agent: "claude", MessageCount: 1}))
 		require.NoError(t, local.ReplaceSessionMessages(ctx, id, []db.Message{{SessionID: id, Role: "user", Content: "needle"}}))
@@ -240,48 +237,8 @@ func TestSearchKeptRefreshAfterWrite(t *testing.T) {
 		require.Equal(t, direct, got)
 	}
 }
-func TestSearchKeptRestoredOvertakenHistory(t *testing.T) {
-	local, syncer, s := newUsageJournalFixture(t)
-	ctx := t.Context()
-	require.NoError(t, s.ConfigureUsageCache(ctx, t.TempDir(), testPGURL(t), syncer.schema))
-	for _, id := range []string{"one", "two"} {
-		require.NoError(t, local.UpsertSession(ctx, db.Session{ID: id, Project: "project", Machine: "device", Agent: "claude", MessageCount: 1}))
-		require.NoError(t, local.ReplaceSessionMessages(ctx, id, []db.Message{{SessionID: id, Role: "user", Content: "needle"}}))
-	}
-	pgKeptPush(t, syncer, false)
-	f := db.SearchFilter{Query: "needle", Limit: 10}
-	first, err := s.Search(ctx, f)
-	require.NoError(t, err)
-	require.Len(t, first.Results, 2)
-	var revision int64
-	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'`).Scan(&revision))
-	// Restore an earlier history, then advance past the saved revision with a different change.
-	tx, err := syncer.pg.BeginTx(ctx, nil)
-	require.NoError(t, err)
-	_, err = tx.ExecContext(ctx, `DELETE FROM sync_metadata WHERE key LIKE 'usage_history_checkpoint:%' AND substring(key from length('usage_history_checkpoint:')+1)::bigint >= $1`, revision)
-	require.NoError(t, err)
-	_, err = tx.ExecContext(ctx, `UPDATE sync_metadata SET value=($1::bigint-2)::text WHERE key='usage_change_revision'`, revision)
-	require.NoError(t, err)
-	_, err = tx.ExecContext(ctx, `UPDATE messages SET content='gone' WHERE session_id='one'`)
-	require.NoError(t, err)
-	_, err = tx.ExecContext(ctx, `UPDATE sessions SET updated_at=now() WHERE id='one'`)
-	require.NoError(t, err)
-	require.NoError(t, tx.Commit())
-	for range 3 {
-		_, err = syncer.pg.ExecContext(ctx, `UPDATE sessions SET updated_at=clock_timestamp() WHERE id='two'`)
-		require.NoError(t, err)
-	}
-	got, err := s.Search(ctx, f)
-	require.NoError(t, err)
-	require.Len(t, got.Results, 1)
-	require.Equal(t, "two", got.Results[0].SessionID)
-	direct, err := s.search(ctx, f)
-	require.NoError(t, err)
-	require.Equal(t, direct, got)
-}
-
 func TestSearchKeptHistoryCheckpointMissing(t *testing.T) {
-	for _, mode := range []string{"same revision", "expired", "rewound"} {
+	for _, mode := range []string{"same revision", "expired", "rewound", "overtaken"} {
 		t.Run(mode, func(t *testing.T) {
 			local, syncer, s := newUsageJournalFixture(t)
 			ctx := t.Context()
@@ -305,7 +262,7 @@ func TestSearchKeptHistoryCheckpointMissing(t *testing.T) {
 			require.NoError(t, err)
 			if mode != "expired" {
 				offset := 1
-				if mode == "rewound" {
+				if mode == "rewound" || mode == "overtaken" {
 					offset = 2
 				}
 				_, err = tx.ExecContext(ctx, `UPDATE sync_metadata SET value=($1::bigint-$2)::text WHERE key='usage_change_revision'`, revision, offset)
@@ -314,6 +271,12 @@ func TestSearchKeptHistoryCheckpointMissing(t *testing.T) {
 			_, err = tx.ExecContext(ctx, `UPDATE sessions SET updated_at=clock_timestamp() WHERE id='two'`)
 			require.NoError(t, err)
 			require.NoError(t, tx.Commit())
+			if mode == "overtaken" {
+				for range 3 {
+					_, err = syncer.pg.ExecContext(ctx, `UPDATE sessions SET updated_at=clock_timestamp() WHERE id='two'`)
+					require.NoError(t, err)
+				}
+			}
 			got, err := s.Search(ctx, f)
 			require.NoError(t, err)
 			require.Empty(t, got.Results)
@@ -378,7 +341,7 @@ func TestSearchKeptOversizedThenSmaller(t *testing.T) {
 	require.Len(t, got.Results, 1)
 	require.Equal(t, "one", got.Results[0].SessionID)
 	require.EqualValues(t, 1, trace.keys.Load())
-	require.EqualValues(t, 1, trace.restricted.Load()) // Only the hydration is restricted.
+	require.Zero(t, trace.restricted.Load()) // The oversized set needs a full key search.
 	require.NoError(t, local.ReplaceSessionMessages(ctx, "one", []db.Message{{SessionID: "one", Role: "user", Content: "needle updated"}}))
 	pgKeptPush(t, syncer, false)
 	trace.keys.Store(0)
@@ -388,7 +351,7 @@ func TestSearchKeptOversizedThenSmaller(t *testing.T) {
 	require.Len(t, got.Results, 1)
 	require.Contains(t, got.Results[0].Snippet, "updated")
 	require.EqualValues(t, 1, trace.keys.Load())
-	require.EqualValues(t, 2, trace.restricted.Load()) // Changed keys and hydration are restricted.
+	require.EqualValues(t, 1, trace.restricted.Load()) // Only changed sessions are searched.
 	direct, err := s.search(ctx, f)
 	require.NoError(t, err)
 	require.Equal(t, direct, got)

@@ -882,8 +882,9 @@ ClickHouse mirrors, and local DuckDB mirrors with pushed-session fingerprints.
 It reuses a page when its filters, paging, search rules, and searchable data
 match. Searchable writes invalidate old pages; PostgreSQL keeps each session's
 best match in process memory and refreshes changed sessions when the journal
-proves the retained history. ClickHouse merges that leave rows unchanged keep
-pages valid. Deleted snippets can remain in old cache files
+proves the retained history. PostgreSQL rebuilds the matches when the retained
+revision is 128 or more commits old. ClickHouse merges that leave rows unchanged
+keep pages valid. Deleted snippets can remain in old cache files
 until the same search overwrites them or the cache is trimmed. Read-only SQLite
 and hosted or borrowed PostgreSQL views read directly. DuckDB Quack and borrowed
 handles read directly. Local DuckDB mirrors without fingerprints reuse pages in
