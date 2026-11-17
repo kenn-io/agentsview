@@ -518,27 +518,47 @@ func TestAnalyticsKeptDirectSourceEvents(t *testing.T) {
 	store.SetCustomPricing(map[string]config.CustomModelRate{"model": {OutputMicrodollarsPerMTok: 100}})
 	require.Zero(t, read().TotalCalls)
 	require.Equal(t, [3]int{}, loads)
+	scope := &db.AnalyticsFilter{Timezone: "UTC", Model: "model-a", Project: "project", Hour: new(10), DayOfWeek: new(6)}
 	for _, tc := range []struct {
-		query string
-		loads [3]int
-		calls int
-		tool  string
-		check func(*testing.T, db.ToolUsageAnalysis)
+		query  string
+		loads  [3]int
+		calls  int
+		tool   string
+		check  func(*testing.T, db.ToolUsageAnalysis)
+		filter *db.AnalyticsFilter
 	}{
-		{`UPDATE messages SET role='assistant' WHERE session_id='session' AND ordinal=0`, [3]int{0, 1, 1}, 0, "", nil},
-		{`UPDATE messages SET is_system=true WHERE session_id='session' AND ordinal=0`, [3]int{0, 1, 1}, 0, "", nil},
-		{`UPDATE messages SET content_length=20 WHERE session_id='session' AND ordinal=1`, [3]int{0, 1, 0}, 0, "", nil},
-		{`INSERT INTO messages(session_id,ordinal,role,content,timestamp) VALUES('session',2,'assistant','answer','2026-06-14T10:02:00Z')`, [3]int{1, 1, 1}, 0, "", nil},
-		{`DELETE FROM messages WHERE session_id='session' AND ordinal=2`, [3]int{1, 1, 1}, 0, "", nil},
-		{`INSERT INTO tool_calls(session_id,message_ordinal,tool_name,category) VALUES('session',1,'Read','Read')`, [3]int{1, 1, 0}, 1, "Read", nil},
-		{`UPDATE tool_calls SET tool_name='Grep' WHERE session_id='session'`, [3]int{1, 0, 0}, 1, "Grep", nil},
-		{`UPDATE tool_calls SET category='Bash' WHERE session_id='session'`, [3]int{1, 0, 0}, 1, "Grep", func(t *testing.T, row db.ToolUsageAnalysis) { require.Equal(t, "Bash", row.Category) }},
-		{`UPDATE tool_calls SET observed_outcome='empty' WHERE session_id='session'`, [3]int{1, 0, 0}, 1, "Grep", func(t *testing.T, row db.ToolUsageAnalysis) { require.Equal(t, 1, row.EmptyCalls) }},
-		{`UPDATE tool_calls SET observed_repeat='identical' WHERE session_id='session'`, [3]int{1, 0, 0}, 1, "Grep", func(t *testing.T, row db.ToolUsageAnalysis) { require.Equal(t, 1, row.RepeatedCalls) }},
-		{`UPDATE tool_calls SET sequence_ending='recovered' WHERE session_id='session'`, [3]int{1, 0, 0}, 1, "Grep", func(t *testing.T, row db.ToolUsageAnalysis) { require.Equal(t, 1, row.RecoveredSequences) }},
-		{`UPDATE tool_calls SET tool_name='Grep' WHERE session_id='session'`, [3]int{}, 1, "Grep", nil},
-		{`DELETE FROM tool_calls WHERE session_id='session'`, [3]int{1, 1, 0}, 0, "", nil},
+		{`UPDATE messages SET role='assistant' WHERE session_id='session' AND ordinal=0`, [3]int{0, 1, 1}, 0, "", nil, nil},
+		{`UPDATE messages SET is_system=true WHERE session_id='session' AND ordinal=0`, [3]int{0, 1, 1}, 0, "", nil, nil},
+		{`UPDATE messages SET content_length=20 WHERE session_id='session' AND ordinal=1`, [3]int{0, 1, 0}, 0, "", nil, nil},
+		{`INSERT INTO messages(session_id,ordinal,role,content,timestamp) VALUES('session',2,'assistant','answer','2026-06-14T10:02:00Z')`, [3]int{1, 1, 1}, 0, "", nil, nil},
+		{`DELETE FROM messages WHERE session_id='session' AND ordinal=2`, [3]int{1, 1, 1}, 0, "", nil, nil},
+		{`INSERT INTO tool_calls(session_id,message_ordinal,tool_name,category) VALUES('session',1,'Read','Read')`, [3]int{1, 1, 0}, 1, "Read", nil, nil},
+		{`UPDATE tool_calls SET tool_name='Grep' WHERE session_id='session'`, [3]int{1, 0, 0}, 1, "Grep", nil, nil},
+		{`UPDATE tool_calls SET category='Bash' WHERE session_id='session'`, [3]int{1, 0, 0}, 1, "Grep", func(t *testing.T, row db.ToolUsageAnalysis) { require.Equal(t, "Bash", row.Category) }, nil},
+		{`UPDATE tool_calls SET observed_outcome='empty' WHERE session_id='session'`, [3]int{1, 0, 0}, 1, "Grep", func(t *testing.T, row db.ToolUsageAnalysis) { require.Equal(t, 1, row.EmptyCalls) }, nil},
+		{`UPDATE tool_calls SET observed_repeat='identical' WHERE session_id='session'`, [3]int{1, 0, 0}, 1, "Grep", func(t *testing.T, row db.ToolUsageAnalysis) { require.Equal(t, 1, row.RepeatedCalls) }, nil},
+		{`UPDATE tool_calls SET sequence_ending='recovered' WHERE session_id='session'`, [3]int{1, 0, 0}, 1, "Grep", func(t *testing.T, row db.ToolUsageAnalysis) { require.Equal(t, 1, row.RecoveredSequences) }, nil},
+		{`UPDATE tool_calls SET tool_name='Grep' WHERE session_id='session'`, [3]int{}, 1, "Grep", nil, nil},
+		{`DELETE FROM tool_calls WHERE session_id='session'`, [3]int{1, 1, 0}, 0, "", nil, nil},
+		{`UPDATE messages SET model='model-b' WHERE session_id='session' AND ordinal=1`, [3]int{}, 0, "", nil, scope},
+		{`UPDATE messages SET timestamp=NULL WHERE session_id='session' AND ordinal=0`, [3]int{}, 0, "", nil, scope},
+		{`UPDATE messages SET ordinal=3 WHERE session_id='session' AND ordinal=0`, [3]int{}, 0, "", nil, scope},
 	} {
+		if tc.filter != nil {
+			_, err := store.pg.ExecContext(ctx, `UPDATE messages SET ordinal=0 WHERE session_id='session' AND ordinal=3;
+UPDATE messages SET role='user', is_system=false, timestamp='2026-06-14T10:00:00Z' WHERE session_id='session' AND ordinal=0;
+UPDATE messages SET model='model-a', timestamp='2026-06-14T11:00:00Z' WHERE session_id='session' AND ordinal=1`)
+			require.NoError(t, err)
+			before, err := store.GetAnalyticsSignals(ctx, *tc.filter)
+			require.NoError(t, err)
+			require.Equal(t, 1, before.UnscoredSessions)
+			_, err = store.pg.ExecContext(ctx, tc.query)
+			require.NoError(t, err)
+			after, err := store.GetAnalyticsSignals(ctx, *tc.filter)
+			require.NoError(t, err)
+			require.Zero(t, after.UnscoredSessions)
+			continue
+		}
 		loads = [3]int{}
 		_, err := store.pg.ExecContext(ctx, tc.query)
 		require.NoError(t, err)
@@ -551,27 +571,6 @@ func TestAnalyticsKeptDirectSourceEvents(t *testing.T) {
 				tc.check(t, tools.ByTool[0])
 			}
 		}
-	}
-	for _, tc := range []struct{ name, query string }{
-		{"model", `UPDATE messages SET model='model-b' WHERE session_id='session' AND ordinal=1`},
-		{"timestamp", `UPDATE messages SET timestamp=NULL WHERE session_id='session' AND ordinal=0`},
-		{"ordinal", `UPDATE messages SET ordinal=3 WHERE session_id='session' AND ordinal=0`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := store.pg.ExecContext(ctx, `UPDATE messages SET ordinal=0 WHERE session_id='session' AND ordinal=3;
-UPDATE messages SET role='user', is_system=false, timestamp='2026-06-14T10:00:00Z' WHERE session_id='session' AND ordinal=0;
-UPDATE messages SET model='model-a', timestamp='2026-06-14T11:00:00Z' WHERE session_id='session' AND ordinal=1`)
-			require.NoError(t, err)
-			f := db.AnalyticsFilter{Timezone: "UTC", Model: "model-a", Project: "project", Hour: new(10), DayOfWeek: new(6)}
-			before, err := store.GetAnalyticsSignals(ctx, f)
-			require.NoError(t, err)
-			require.Equal(t, 1, before.UnscoredSessions)
-			_, err = store.pg.ExecContext(ctx, tc.query)
-			require.NoError(t, err)
-			after, err := store.GetAnalyticsSignals(ctx, f)
-			require.NoError(t, err)
-			require.Zero(t, after.UnscoredSessions)
-		})
 	}
 }
 

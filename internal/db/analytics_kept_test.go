@@ -280,6 +280,7 @@ func TestTrendsKeptTracksContentAndSelection(t *testing.T) {
 }
 
 func TestAnalyticsKeptSourceEvents(t *testing.T) {
+	scope := &AnalyticsFilter{Timezone: "UTC", From: "2026-06-14", To: "2026-06-14", Model: "model-a", Project: "project", Hour: new(10), DayOfWeek: new(6)}
 	for _, tc := range []struct {
 		name, query string
 		loads       [3]int
@@ -288,29 +289,54 @@ func TestAnalyticsKeptSourceEvents(t *testing.T) {
 		chars       float64
 		frustration int
 		score       float64
+		filter      *AnalyticsFilter
 	}{
-		{"role", `UPDATE messages SET role='assistant' WHERE ordinal=0`, [3]int{0, 1, 1}, "Read", 1, 10, 0, 0},
-		{"system", `UPDATE messages SET is_system=1 WHERE ordinal=0`, [3]int{0, 1, 1}, "Read", 1, 10, 0, 0},
-		{"score", `UPDATE sessions SET health_score=60`, [3]int{0, 0, 1}, "Read", 1, 10, 0, 60},
-		{"length", `UPDATE messages SET content_length=20 WHERE ordinal=1`, [3]int{0, 1, 0}, "Read", 1, 20, 0, 0},
-		{"tool name", `UPDATE tool_calls SET tool_name='Grep'`, [3]int{1, 0, 0}, "Grep", 1, 10, 0, 0},
-		{"prompt", `UPDATE messages SET content='this is broken' WHERE ordinal=0; UPDATE sessions SET transcript_revision=CAST(transcript_revision AS INTEGER)+1`, [3]int{0, 0, 1}, "Read", 1, 10, 1, 0},
-		{"tool insert", `INSERT INTO tool_calls(message_id,session_id,tool_name,category) SELECT id,session_id,'Bash','Bash' FROM messages WHERE ordinal=1`, [3]int{1, 1, 0}, "Read", 2, 10, 0, 0},
-		{"tool delete", `DELETE FROM tool_calls`, [3]int{1, 1, 0}, "", 0, 10, 0, 0},
-		{"message insert", `INSERT INTO messages(session_id,ordinal,role,content,content_length,timestamp) VALUES('session',2,'assistant','answer',20,'2024-06-01T09:02:00Z')`, [3]int{1, 1, 1}, "Read", 1, 15, 0, 0},
-		{"message delete", `DELETE FROM messages WHERE ordinal=0`, [3]int{1, 1, 1}, "Read", 1, 0, 0, 0},
-		{"price", `INSERT INTO model_pricing(model_pattern,output_microdollars_per_mtok) VALUES('model-a',100)`, [3]int{}, "Read", 1, 10, 0, 0},
+		{"role", `UPDATE messages SET role='assistant' WHERE ordinal=0`, [3]int{0, 1, 1}, "Read", 1, 10, 0, 0, nil},
+		{"system", `UPDATE messages SET is_system=1 WHERE ordinal=0`, [3]int{0, 1, 1}, "Read", 1, 10, 0, 0, nil},
+		{"score", `UPDATE sessions SET health_score=60`, [3]int{0, 0, 1}, "Read", 1, 10, 0, 60, nil},
+		{"length", `UPDATE messages SET content_length=20 WHERE ordinal=1`, [3]int{0, 1, 0}, "Read", 1, 20, 0, 0, nil},
+		{"tool name", `UPDATE tool_calls SET tool_name='Grep'`, [3]int{1, 0, 0}, "Grep", 1, 10, 0, 0, nil},
+		{"prompt", `UPDATE messages SET content='this is broken' WHERE ordinal=0; UPDATE sessions SET transcript_revision=CAST(transcript_revision AS INTEGER)+1`, [3]int{0, 0, 1}, "Read", 1, 10, 1, 0, nil},
+		{"tool insert", `INSERT INTO tool_calls(message_id,session_id,tool_name,category) SELECT id,session_id,'Bash','Bash' FROM messages WHERE ordinal=1`, [3]int{1, 1, 0}, "Read", 2, 10, 0, 0, nil},
+		{"tool delete", `DELETE FROM tool_calls`, [3]int{1, 1, 0}, "", 0, 10, 0, 0, nil},
+		{"message insert", `INSERT INTO messages(session_id,ordinal,role,content,content_length,timestamp) VALUES('session',2,'assistant','answer',20,'2026-06-14T10:02:00Z')`, [3]int{1, 1, 1}, "Read", 1, 15, 0, 0, nil},
+		{"message delete", `DELETE FROM messages WHERE ordinal=0`, [3]int{1, 1, 1}, "Read", 1, 0, 0, 0, nil},
+		{"price", `INSERT INTO model_pricing(model_pattern,output_microdollars_per_mtok) VALUES('model-a',100)`, [3]int{}, "Read", 1, 10, 0, 0, nil},
+		{"model", `UPDATE messages SET model='model-b' WHERE ordinal=1`, [3]int{}, "", 0, 0, 0, 0, scope},
+		{"timestamp", `UPDATE messages SET timestamp=NULL WHERE ordinal=0`, [3]int{}, "", 0, 0, 0, 0, scope},
+		{"ordinal", `UPDATE messages SET ordinal=3 WHERE ordinal=0`, [3]int{}, "", 0, 0, 0, 0, scope},
+		{"relationship", `UPDATE sessions SET relationship_type='subagent' WHERE id='session'`, [3]int{}, "", 0, 0, 0, 0, scope},
+		{"nullable date", `UPDATE sessions SET started_at=NULL WHERE id='session'`, [3]int{}, "", 0, 0, 0, 0, scope},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
 			ctx := t.Context()
-			insertSession(t, d, "session", "project", func(s *Session) { s.StartedAt = new("2024-06-01T09:00:00Z"); s.MessageCount = 2 })
-			assistant := asstMsgAt("session", 1, "1234567890", "2024-06-01T09:01:00Z")
+			insertSession(t, d, "session", "project", func(s *Session) {
+				s.StartedAt = new("2026-06-14T10:00:00Z")
+				s.CreatedAt = "2026-06-15T10:00:00Z"
+				s.MessageCount = 2
+			})
+			assistant := asstMsgAt("session", 1, "1234567890", "2026-06-14T10:01:00Z")
+			if tc.filter != nil {
+				assistant.Timestamp = "2026-06-14T11:00:00Z"
+				assistant.Model = "model-a"
+			}
 			assistant.ContentLength = 10
 			assistant.ToolCalls = []ToolCall{{SessionID: "session", ToolName: "Read", Category: "Read"}}
-			insertMessages(t, d, Message{SessionID: "session", Ordinal: 0, Role: "user", Content: "please fix", Timestamp: "2024-06-01T09:00:00Z"}, assistant)
+			insertMessages(t, d, Message{SessionID: "session", Ordinal: 0, Role: "user", Content: "please fix", Timestamp: "2026-06-14T10:00:00Z"}, assistant)
 			updateSignals(t, d, "session", SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}})
 			f := AnalyticsFilter{Timezone: "UTC"}
+			if tc.filter != nil {
+				before, err := d.GetAnalyticsSignals(ctx, *tc.filter)
+				require.NoError(t, err)
+				require.Equal(t, 1, before.UnscoredSessions)
+				_, err = d.getWriter().ExecContext(ctx, tc.query)
+				require.NoError(t, err)
+				after, err := d.GetAnalyticsSignals(ctx, *tc.filter)
+				require.NoError(t, err)
+				require.Zero(t, after.UnscoredSessions)
+				return
+			}
 			var loads [3]int
 			read := func() (ToolsAnalyticsResponse, VelocityResponse, SignalsAnalyticsResponse) {
 				tools, err := keptAnalytics(ctx, d, "tools", f, func(ctx context.Context, f AnalyticsFilter) (ToolsAnalyticsResponse, error) {
@@ -350,35 +376,6 @@ func TestAnalyticsKeptSourceEvents(t *testing.T) {
 				require.NotNil(t, signals.AvgHealthScore)
 				require.InDelta(t, tc.score, *signals.AvgHealthScore, 0)
 			}
-		})
-	}
-	for _, tc := range []struct{ name, query string }{
-		{"model", `UPDATE messages SET model='model-b' WHERE session_id='session' AND ordinal=1`},
-		{"timestamp", `UPDATE messages SET timestamp=NULL WHERE session_id='session' AND ordinal=0`},
-		{"ordinal", `UPDATE messages SET ordinal=3 WHERE session_id='session' AND ordinal=0`},
-		{"relationship", `UPDATE sessions SET relationship_type='subagent' WHERE id='session'`},
-		{"nullable date", `UPDATE sessions SET started_at=NULL WHERE id='session'`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			d := testDB(t)
-			ctx := t.Context()
-			insertSession(t, d, "session", "project", func(s *Session) {
-				s.StartedAt, s.CreatedAt, s.MessageCount = new("2026-06-14T10:00:00Z"), "2026-06-15T10:00:00Z", 2
-			})
-			insertSession(t, d, "other", "other")
-			insertMessages(t, d,
-				Message{SessionID: "session", Ordinal: 0, Role: "user", Content: "hello", Timestamp: "2026-06-14T10:00:00Z"},
-				Message{SessionID: "session", Ordinal: 1, Role: "assistant", Content: "answer", Model: "model-a", Timestamp: "2026-06-14T11:00:00Z"},
-			)
-			f := AnalyticsFilter{Timezone: "UTC", From: "2026-06-14", To: "2026-06-14", Model: "model-a", Project: "project", Hour: new(10), DayOfWeek: new(6)}
-			before, err := d.GetAnalyticsSignals(ctx, f)
-			require.NoError(t, err)
-			require.Equal(t, 1, before.UnscoredSessions)
-			_, err = d.getWriter().ExecContext(ctx, tc.query)
-			require.NoError(t, err)
-			after, err := d.GetAnalyticsSignals(ctx, f)
-			require.NoError(t, err)
-			require.Zero(t, after.UnscoredSessions)
 		})
 	}
 }
