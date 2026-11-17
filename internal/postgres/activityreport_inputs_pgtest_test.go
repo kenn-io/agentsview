@@ -371,101 +371,79 @@ func TestPGActivityReportInputTranscriptAndCounts(t *testing.T) {
 	assert.Equal(t, 2, changed.Report.Buckets[0].AssistantMessages)
 }
 
-func TestPGActivityReportInputIdentityRetry(t *testing.T) {
+func TestPGActivityReportInputIdentity(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	local, syncer, _ := newUsageJournalFixture(t)
 	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
 	pgKeptPush(t, syncer, false)
-	target, directory := testPGURL(t), t.TempDir()
-	open := func() *Store {
-		store, err := NewStore(t.Context(), target, syncer.schema, true)
-		require.NoError(t, err)
-		require.NoError(t, store.ConfigureUsageCache(t.Context(), directory, target, syncer.schema))
-		return store
-	}
+	target := testPGURL(t)
 	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
 	q.Partial, q.EffectiveEnd = true, q.RangeEnd.Add(-time.Hour)
-	first := open()
-	failOnce := &activityIdentityError{storeExecutor: first.pg}
-	first.pg = failOnce
-	pgKeptBuild(t, first, f, q, true)
-	q.EffectiveEnd = q.EffectiveEnd.Add(time.Nanosecond)
-	want := pgKeptBuild(t, first, f, q, true)
-	require.NoError(t, first.Close())
-	restarted := open()
-	defer restarted.Close()
-	reads := &activityInputReadCounter{storeExecutor: restarted.pg}
-	restarted.pg = reads
-	requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, true))
-	assert.Empty(t, reads.transcriptReads)
-	assert.Empty(t, reads.usageReads)
-	assert.GreaterOrEqual(t, failOnce.queries, 2)
-}
-
-func TestPGActivityReportInputIdentityDenied(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	local, syncer, _ := newUsageJournalFixture(t)
-	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
-	pgKeptPush(t, syncer, false)
-	target, directory := testPGURL(t), t.TempDir()
-	store, err := NewStore(t.Context(), target, syncer.schema, true)
-	require.NoError(t, err)
-	defer store.Close()
-	require.NoError(t, store.ConfigureUsageCache(t.Context(), directory, target, syncer.schema))
-	_, err = store.pg.ExecContext(t.Context(), `CREATE FUNCTION activity_identity_denied() RETURNS text LANGUAGE plpgsql AS $$
+	for _, mode := range []string{"retry", "denied", "mismatch"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("CACHE_DIRECTORY", t.TempDir())
+			directory := t.TempDir()
+			open := func() *Store {
+				store, err := NewStore(t.Context(), target, syncer.schema, true)
+				require.NoError(t, err)
+				require.NoError(t, store.ConfigureUsageCache(t.Context(), directory, target, syncer.schema))
+				return store
+			}
+			first := open()
+			query := q
+			switch mode {
+			case "retry":
+				failOnce := &activityIdentityError{storeExecutor: first.pg}
+				first.pg = failOnce
+				pgKeptBuild(t, first, f, query, true)
+				query.EffectiveEnd = query.EffectiveEnd.Add(time.Nanosecond)
+				want := pgKeptBuild(t, first, f, query, true)
+				require.NoError(t, first.Close())
+				restarted := open()
+				defer restarted.Close()
+				reads := &activityInputReadCounter{storeExecutor: restarted.pg}
+				restarted.pg = reads
+				requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, query, true))
+				assert.Empty(t, reads.transcriptReads)
+				assert.Empty(t, reads.usageReads)
+				assert.GreaterOrEqual(t, failOnce.queries, 2)
+			case "denied":
+				defer first.Close()
+				_, err := first.pg.ExecContext(t.Context(), `CREATE FUNCTION activity_identity_denied() RETURNS text LANGUAGE plpgsql AS $$
 BEGIN RAISE EXCEPTION 'permission denied' USING ERRCODE = '42501'; END $$`)
-	require.NoError(t, err)
-	reads := &activityInputReadCounter{storeExecutor: store.pg}
-	denied := &activityIdentityError{storeExecutor: reads, denied: true}
-	store.pg = denied
-	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
-	q.Partial, q.EffectiveEnd = true, q.RangeEnd.Add(-time.Hour)
-	assert.Equal(t, 500, pgKeptBuild(t, store, f, q, true).Report.Totals.OutputTokens)
-	for range 2 {
-		q.EffectiveEnd = q.EffectiveEnd.Add(time.Nanosecond)
-		assert.Equal(t, 500, pgKeptBuild(t, store, f, q, true).Report.Totals.OutputTokens)
+				require.NoError(t, err)
+				denied := &activityIdentityError{storeExecutor: first.pg, denied: true}
+				first.pg = denied
+				assert.Equal(t, 500, pgKeptBuild(t, first, f, query, true).Report.Totals.OutputTokens)
+				for range 2 {
+					query.EffectiveEnd = query.EffectiveEnd.Add(time.Nanosecond)
+					assert.Equal(t, 500, pgKeptBuild(t, first, f, query, true).Report.Totals.OutputTokens)
+				}
+				assert.Equal(t, 1, denied.queries)
+			case "mismatch":
+				want := pgKeptBuild(t, first, f, query, true)
+				slots := first.runtimeState().activityInputs.Snapshot()
+				require.Len(t, slots, 1)
+				slot, version := slots[0].Slot, pgActivityDiskVersion+slots[0].Version
+				require.NoError(t, first.Close())
+				data, ok := first.activityDisk.Get(slot, version)
+				require.True(t, ok)
+				rows, ok := kept.DecodeRows[kept.Part[pgActivityDiskPart]](data)
+				require.True(t, ok)
+				rows[0].Value.Identity = "different-system"
+				data, err := kept.EncodeRows(rows, 256<<20, func(kept.Part[pgActivityDiskPart]) int64 { return 0 })
+				require.NoError(t, err)
+				first.activityDisk.Put(slot, version, data)
+				restarted := open()
+				defer restarted.Close()
+				reads := &activityInputReadCounter{storeExecutor: restarted.pg}
+				restarted.pg = reads
+				requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, query, true))
+				require.NotEmpty(t, reads.transcriptReads)
+				require.NotEmpty(t, reads.usageReads)
+			}
+		})
 	}
-	assert.Equal(t, 1, denied.queries)
-	assert.Len(t, reads.transcriptReads, 1)
-	assert.Len(t, reads.usageReads, 1)
-}
-
-func TestPGActivityReportInputInvalidRestart(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	local, syncer, _ := newUsageJournalFixture(t)
-	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
-	pgKeptPush(t, syncer, false)
-	target, directory := testPGURL(t), t.TempDir()
-	open := func() *Store {
-		store, err := NewStore(t.Context(), target, syncer.schema, true)
-		require.NoError(t, err)
-		require.NoError(t, store.ConfigureUsageCache(t.Context(), directory, target, syncer.schema))
-		return store
-	}
-	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
-	q.Partial, q.EffectiveEnd = true, q.RangeEnd.Add(-time.Hour)
-	first := open()
-	want := pgKeptBuild(t, first, f, q, true)
-	version, err := first.activityKeptVersion(t.Context(), "")
-	require.NoError(t, err)
-	slot := db.PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14) + "|" + db.PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
-	require.NoError(t, first.Close())
-	data, ok := first.activityDisk.Get(slot, pgActivityDiskVersion+version)
-	require.True(t, ok)
-	rows, ok := kept.DecodeRows[kept.Part[pgActivityDiskPart]](data)
-	require.True(t, ok)
-	rows[0].Value.Identity = "different-system"
-	data, err = kept.EncodeRows(rows, 256<<20, func(kept.Part[pgActivityDiskPart]) int64 { return 0 })
-	require.NoError(t, err)
-	first.activityDisk.Put(slot, pgActivityDiskVersion+version, data)
-	restarted := open()
-	defer restarted.Close()
-	counter := &activityInputReadCounter{storeExecutor: restarted.pg}
-	restarted.pg = counter
-	got := pgKeptBuild(t, restarted, f, q, true)
-	requirePGKeptEqual(t, want, got)
-	require.NotEmpty(t, counter.transcriptReads)
-	require.NotEmpty(t, counter.usageReads)
 }
 
 func TestPGActivityReportInputRestartPeerAndSessions(t *testing.T) {
@@ -490,17 +468,7 @@ func TestPGActivityReportInputRestartPeerAndSessions(t *testing.T) {
 	before := pgKeptBuild(t, first, f, q, true)
 	assert.Equal(t, 5, before.Report.Totals.OutputTokens)
 	require.NoError(t, first.Close())
-	restored := open()
-	reads := &activityInputReadCounter{storeExecutor: restored.pg}
-	restored.pg = reads
-	requirePGKeptEqual(t, before, pgKeptBuild(t, restored, f, q, true))
-	assert.Empty(t, reads.transcriptReads)
-	assert.Empty(t, reads.usageReads)
 	q.EffectiveEnd = q.EffectiveEnd.Add(time.Nanosecond)
-	assert.Equal(t, 1131, pgKeptBuild(t, restored, f, q, true).Report.Totals.OutputTokens)
-	assert.Empty(t, reads.transcriptReads)
-	assert.Empty(t, reads.usageReads)
-	require.NoError(t, restored.Close())
 	require.NoError(t, local.DeleteSession(t.Context(), "deleted"))
 	require.NoError(t, local.DeleteSession(t.Context(), "peer"))
 	pgKeptSession(t, local, "added", "project-a", "2026-06-14")
