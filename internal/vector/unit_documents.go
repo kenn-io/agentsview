@@ -23,6 +23,8 @@ func unitDocKey(unit db.EmbeddableUnit, occurrences map[string]int) string {
 func EncodeUnitDocuments(ctx context.Context, units []db.EmbeddableUnit, maxInputChars int, encode kitvec.EncodeFunc, batch ...kitvec.BatchOption) ([]storage.VectorPushDoc, error) {
 	occurrences := make(map[string]int)
 	docs := make([]storage.VectorPushDoc, 0, len(units))
+	chunksByDoc := make([][]kitvec.Chunk, 0, len(units))
+	var allChunks []kitvec.Chunk
 	split := kitvec.SplitOptions{MaxRunes: maxInputChars, Overlap: ChunkOverlap(maxInputChars)}
 	for _, unit := range units {
 		key := unitDocKey(unit, occurrences)
@@ -31,15 +33,23 @@ func EncodeUnitDocuments(ctx context.Context, units []db.EmbeddableUnit, maxInpu
 			return nil, err
 		}
 		chunks := kitvec.Split(unit.Content, split)
-		vectors, err := kitvec.EncodeBatched(ctx, encode, chunks, batch...)
-		if err != nil {
-			return nil, fmt.Errorf("encoding session %s: %w", unit.SessionID, err)
+		chunksByDoc = append(chunksByDoc, chunks)
+		allChunks = append(allChunks, chunks...)
+		docs = append(docs, storage.VectorPushDoc{DocKey: key, SessionID: unit.SessionID, SourceUUID: unit.SourceUUID, Ordinal: unit.Ordinal, OrdinalEnd: unit.OrdinalEnd, Subordinate: unit.Subordinate, OffsetsJSON: offsets, Content: unit.Content, ContentHash: contentHash(unit.Content)})
+	}
+	if len(units) == 0 {
+		return docs, nil
+	}
+	vectors, err := kitvec.EncodeBatched(ctx, encode, allChunks, batch...)
+	if err != nil {
+		return nil, fmt.Errorf("encoding session %s: %w", units[0].SessionID, err)
+	}
+	index := 0
+	for i, chunks := range chunksByDoc {
+		for _, chunk := range chunks {
+			docs[i].Chunks = append(docs[i].Chunks, storage.VectorPushChunk{ChunkIndex: chunk.Index, Embedding: vectors[index]})
+			index++
 		}
-		doc := storage.VectorPushDoc{DocKey: key, SessionID: unit.SessionID, SourceUUID: unit.SourceUUID, Ordinal: unit.Ordinal, OrdinalEnd: unit.OrdinalEnd, Subordinate: unit.Subordinate, OffsetsJSON: offsets, Content: unit.Content, ContentHash: contentHash(unit.Content)}
-		for i, chunk := range chunks {
-			doc.Chunks = append(doc.Chunks, storage.VectorPushChunk{ChunkIndex: chunk.Index, Embedding: vectors[i]})
-		}
-		docs = append(docs, doc)
 	}
 	return docs, nil
 }
