@@ -148,16 +148,27 @@ func TestActivityUsageReadSetKeepsCandidateOwnership(t *testing.T) {
 	require.NoError(t, err)
 	defer store.Close()
 	with := duckActivityUsageWith("s.project = 'alpha'", true)
-	var candidates, messages, events, peers int
-	err = store.queryRowContext(t.Context(), "WITH "+with+` SELECT
-		(SELECT count(*) FROM candidate_sessions), (SELECT count(*) FROM candidate_messages),
-		(SELECT count(*) FROM candidate_events), (SELECT count(*) FROM peer_messages)`,
-		"2026-01-01", "2026-01-02", []string{"session-a", "session-c"}, int64(readbase.ActivityUsageNullPricingUS)).Scan(&candidates, &messages, &events, &peers)
+	rows, err := store.queryContext(t.Context(), "WITH "+with+` SELECT session_id, source, output FROM activity_usage_rows ORDER BY session_id, source`,
+		"2026-01-01", "2026-01-02", []string{"session-a", "session-c"}, int64(readbase.ActivityUsageNullPricingUS))
 	require.NoError(t, err)
-	require.Equal(t, 2, candidates)
-	require.Equal(t, 1, messages)
-	require.Equal(t, 1, events)
-	require.Equal(t, 2, peers)
+	defer rows.Close()
+	var got []struct {
+		session, source string
+		output          int
+	}
+	for rows.Next() {
+		var row struct {
+			session, source string
+			output          int
+		}
+		require.NoError(t, rows.Scan(&row.session, &row.source, &row.output))
+		got = append(got, row)
+	}
+	require.NoError(t, rows.Err())
+	require.Equal(t, []struct {
+		session, source string
+		output          int
+	}{{"session-a", "message", 500}, {"session-a", "shutdown", 10}, {"session-b", "message", 500}, {"session-c", "message", 500}}, got)
 }
 
 func TestActivityReportKeptAcrossReopensAndRestart(t *testing.T) {
@@ -358,72 +369,60 @@ func TestPartialActivityUsageKeptUntilPush(t *testing.T) {
 }
 
 func TestPartialActivityUsageRereadsPastNextRow(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	keptActivityMirror(t, path, "session-a", 500)
-	writeUsageMirror(t, path,
-		`UPDATE sessions SET agentsview_push_fingerprint = 'a1'`,
-		`INSERT INTO sessions SELECT * REPLACE ('session-b' AS id, 'b1' AS agentsview_push_fingerprint, TIMESTAMP '2026-01-01 12:30:00' AS ended_at, 1 AS message_count, 0 AS user_message_count) FROM sessions WHERE id = 'session-a'`,
-		`INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id, TIMESTAMP '2026-01-01 12:30:00' AS timestamp) FROM messages WHERE id = 2`,
-	)
-	store := openUsagePartsStore(t, path)
-	defer store.Close()
-	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
-	require.NoError(t, err)
-	reads := observeActivityUsageReads(t)
-	first := keptActivityBuild(t, store, q, true)
-	require.Equal(t, 500, activity.ReportWithSessions(first).Totals.OutputTokens)
-	var refreshed []string
-	previous := usagePartReadObserver
-	usagePartReadObserver = func(ids []string) { refreshed = append(refreshed, ids...) }
-	t.Cleanup(func() { usagePartReadObserver = previous })
-	q.EffectiveEnd = q.EffectiveEnd.Add(time.Hour)
-	second := keptActivityBuild(t, store, q, true)
-	require.Equal(t, 1000, activity.ReportWithSessions(second).Totals.OutputTokens)
-	require.Equal(t, []string{"session-b"}, refreshed)
-	require.Equal(t, 2, *reads)
-	q.EffectiveEnd = q.EffectiveEnd.Add(-time.Hour)
-	third := keptActivityBuild(t, store, q, true)
-	require.Equal(t, 500, activity.ReportWithSessions(third).Totals.OutputTokens)
-	require.Equal(t, 3, *reads)
-}
-
-func TestPartialActivityUsageRereadsPastClaudePeer(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	keptActivityMirror(t, path, "session-a", 500)
-	conn, err := Open(t.Context(), path)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `UPDATE sessions SET project = 'included'`)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `INSERT INTO sessions SELECT * REPLACE ('session-b' AS id, 'excluded' AS project, TIMESTAMP '2026-01-01 12:30:00' AS ended_at, 1 AS message_count) FROM sessions WHERE id = 'session-a'`)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `UPDATE messages SET claude_message_id = 'message', claude_request_id = 'request' WHERE id = 2`)
-	require.NoError(t, err)
-	_, err = conn.ExecContext(t.Context(), `INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id, TIMESTAMP '2026-01-01 12:30:00' AS timestamp, '{"output_tokens":900}' AS token_usage, 900 AS output_tokens, 900 AS usage_output_tokens) FROM messages WHERE id = 2`)
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
-	store, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
-	defer store.Close()
-	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
-	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
-	require.NoError(t, err)
-	reads := observeActivityUsageReads(t)
-	filter := db.AnalyticsFilter{Project: "included", Timezone: "UTC"}
-	first, err := store.GetActivityReport(t.Context(), filter, q)
-	require.NoError(t, err)
-	require.Equal(t, 500, first.Totals.OutputTokens)
-	q.EffectiveEnd = q.EffectiveEnd.Add(time.Minute)
-	repeat, err := store.GetActivityReport(t.Context(), filter, q)
-	require.NoError(t, err)
-	require.Equal(t, 500, repeat.Totals.OutputTokens)
-	require.Equal(t, 1, *reads)
-	q.EffectiveEnd = q.EffectiveEnd.Add(time.Hour)
-	updated, err := store.GetActivityReport(t.Context(), filter, q)
-	require.NoError(t, err)
-	require.Equal(t, 900, updated.Totals.OutputTokens)
-	require.Equal(t, 2, *reads)
+	for _, peer := range []bool{false, true} {
+		t.Run(strconv.FormatBool(peer), func(t *testing.T) {
+			t.Setenv("CACHE_DIRECTORY", t.TempDir())
+			path := filepath.Join(t.TempDir(), "mirror.duckdb")
+			keptActivityMirror(t, path, "session-a", 500)
+			writeUsageMirror(t, path,
+				`UPDATE sessions SET agentsview_push_fingerprint = 'a1', project = 'included'`,
+				`INSERT INTO sessions SELECT * REPLACE ('session-b' AS id, 'b1' AS agentsview_push_fingerprint, TIMESTAMP '2026-01-01 12:30:00' AS ended_at, 1 AS message_count, 0 AS user_message_count) FROM sessions WHERE id = 'session-a'`,
+				`INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id, TIMESTAMP '2026-01-01 12:30:00' AS timestamp) FROM messages WHERE id = 2`,
+			)
+			filter := db.AnalyticsFilter{Timezone: "UTC"}
+			if peer {
+				writeUsageMirror(t, path,
+					`UPDATE sessions SET project = 'excluded' WHERE id = 'session-b'`,
+					`UPDATE messages SET claude_message_id = 'message', claude_request_id = 'request' WHERE id IN (2, 3)`,
+					`UPDATE messages SET token_usage = '{"output_tokens":900}', output_tokens = 900, usage_output_tokens = 900 WHERE id = 3`,
+				)
+				filter.Project = "included"
+			}
+			store := openUsagePartsStore(t, path)
+			defer store.Close()
+			q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+			require.NoError(t, err)
+			reads := observeActivityUsageReads(t)
+			first, err := store.GetActivityReport(t.Context(), filter, q)
+			require.NoError(t, err)
+			require.Equal(t, 500, first.Totals.OutputTokens)
+			q.EffectiveEnd = q.EffectiveEnd.Add(time.Minute)
+			repeat, err := store.GetActivityReport(t.Context(), filter, q)
+			require.NoError(t, err)
+			require.Equal(t, 500, repeat.Totals.OutputTokens)
+			require.Equal(t, 1, *reads)
+			var refreshed []string
+			previous := usagePartReadObserver
+			usagePartReadObserver = func(ids []string) { refreshed = append(refreshed, ids...) }
+			t.Cleanup(func() { usagePartReadObserver = previous })
+			q.EffectiveEnd = q.EffectiveEnd.Add(time.Hour)
+			updated, err := store.GetActivityReport(t.Context(), filter, q)
+			require.NoError(t, err)
+			if peer {
+				require.Equal(t, 900, updated.Totals.OutputTokens)
+				require.ElementsMatch(t, []string{"session-a", "session-b"}, refreshed)
+			} else {
+				require.Equal(t, 1000, updated.Totals.OutputTokens)
+				require.Equal(t, []string{"session-b"}, refreshed)
+			}
+			require.Equal(t, 2, *reads)
+			q.EffectiveEnd = q.EffectiveEnd.Add(-time.Hour)
+			third, err := store.GetActivityReport(t.Context(), filter, q)
+			require.NoError(t, err)
+			require.Equal(t, 500, third.Totals.OutputTokens)
+			require.Equal(t, 3, *reads)
+		})
+	}
 }
 
 func TestPartialActivityInputsSurviveRestart(t *testing.T) {
