@@ -19,6 +19,7 @@ import (
 )
 
 var activityUsagePublishObserver func()
+var activityUsagePartNextHook func() error
 
 // activityUsageModels selects the (model, provider_id) pairs usage rows can
 // carry. A pair it misses costs one more read of the rows.
@@ -90,9 +91,9 @@ func (s *Store) sumActivityUsage(
 				if part == nil || !part.Covers(endUS) {
 					return true
 				}
-				copy := *part
-				copy.Groups = slices.Clone(part.Groups)
-				return !remapActivityRates(&copy, schedule)
+				probe := *part
+				probe.Groups = slices.Clone(part.Groups)
+				return !remapActivityRates(&probe, schedule)
 			},
 		}, func(part *readbase.ActivityUsageSums) int64 {
 			if part == nil {
@@ -100,8 +101,8 @@ func (s *Store) sumActivityUsage(
 			}
 			return part.Bytes()
 		},
-			func(ctx context.Context, ids []string) (map[string]*readbase.ActivityUsageSums, error) {
-				return s.readActivityUsageParts(ctx, candidateWhere, candidateArgs, lowerBound, upperBound, ids, schedule, q, startUS, endUS)
+			func(ctx context.Context, ids []string, peers map[string]string) (map[string]*readbase.ActivityUsageSums, error) {
+				return s.readActivityUsageParts(ctx, candidateWhere, candidateArgs, lowerBound, upperBound, ids, peers, schedule, q, startUS, endUS)
 			})
 		if err == nil {
 			var groups []readbase.ActivityUsageGroup
@@ -188,10 +189,13 @@ func remapActivityRates(part *readbase.ActivityUsageSums, schedule readbase.Usag
 	return true
 }
 
-func (s *Store) readActivityUsageParts(ctx context.Context, candidateWhere string, candidateArgs []any, lower, upper string, ids []string, schedule readbase.UsageRateSchedule, q activity.Query, startUS, endUS int64) (map[string]*readbase.ActivityUsageSums, error) {
-	peers, err := s.usagePartPeers(ctx)
-	if err != nil {
-		return nil, err
+func (s *Store) readActivityUsageParts(ctx context.Context, candidateWhere string, candidateArgs []any, lower, upper string, ids []string, peers map[string]string, schedule readbase.UsageRateSchedule, q activity.Query, startUS, endUS int64) (map[string]*readbase.ActivityUsageSums, error) {
+	if peers == nil {
+		var err error
+		peers, err = s.usagePartPeers(ctx)
+		if err != nil {
+			return nil, err
+		}
 	}
 	all := ids == nil
 	if all {
@@ -228,9 +232,14 @@ func (s *Store) readActivityUsageParts(ctx context.Context, candidateWhere strin
 		}
 		part.Groups = append(part.Groups, g)
 	}
+	if activityUsagePartNextHook != nil {
+		if err := activityUsagePartNextHook(); err != nil {
+			return nil, fmt.Errorf("%w: %v", errActivityUsageParts, err)
+		}
+	}
 	rows, err := s.queryContext(ctx, "WITH "+with+" SELECT session_id, min(ts_us) FROM activity_usage_rows WHERE ts_us >= ? GROUP BY session_id", append(slices.Clone(args), endUS)...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", errActivityUsageParts, err)
 	}
 	defer rows.Close()
 	minimum := map[string]int64{}
@@ -244,7 +253,7 @@ func (s *Store) readActivityUsageParts(ctx context.Context, candidateWhere strin
 		var id string
 		var next int64
 		if err := rows.Scan(&id, &next); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: %v", errActivityUsageParts, err)
 		}
 		key := group(id)
 		if old, ok := minimum[key]; !ok || next < old {
@@ -252,7 +261,7 @@ func (s *Store) readActivityUsageParts(ctx context.Context, candidateWhere strin
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", errActivityUsageParts, err)
 	}
 	for id, part := range parts {
 		if next, ok := minimum[group(id)]; ok {

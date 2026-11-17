@@ -4,6 +4,7 @@ package duckdb
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -115,6 +116,24 @@ func TestActivityUsagePartsRefreshChangedSession(t *testing.T) {
 	require.Equal(t, []string{"session-b"}, refreshed)
 	fresh := NewStoreFromDB(store.DB())
 	requireKeptActivityEqual(t, keptActivityBuild(t, fresh, q, true), got)
+}
+
+func TestActivityUsagePartsBoundaryFailureFallsBack(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	store := openUsagePartsStore(t, path)
+	defer store.Close()
+	fresh := NewStoreFromDB(store.DB())
+	want := keptActivityBuild(t, fresh, q, true)
+	reads := observeActivityUsageReads(t)
+	activityUsagePartNextHook = func() error { return errors.New("injected boundary query failure") }
+	t.Cleanup(func() { activityUsagePartNextHook = nil })
+	got := keptActivityBuild(t, store, q, true)
+	require.Equal(t, 2, *reads)
+	requireKeptActivityEqual(t, want, got)
 }
 
 func TestActivityUsagePartsRefreshPeers(t *testing.T) {

@@ -22,13 +22,13 @@ type usagePartsOptions[T any] struct {
 }
 
 // refreshUsageParts retains only parts whose source sessions are unchanged.
-func refreshUsageParts[T any](ctx context.Context, s *Store, slot string, opts usagePartsOptions[T], size func(T) int64, read func(context.Context, []string) (map[string]T, error)) (map[string]T, error) {
+func refreshUsageParts[T any](ctx context.Context, s *Store, slot string, opts usagePartsOptions[T], size func(T) int64, read func(context.Context, []string, map[string]string) (map[string]T, error)) (map[string]T, error) {
 	if !s.usageDisk.Enabled() || slot == "" {
-		return read(ctx, nil)
+		return read(ctx, nil, nil)
 	}
 	stamp := s.keptVersion()
 	if stamp == "" {
-		return read(ctx, nil)
+		return read(ctx, nil, nil)
 	}
 	versions, err := s.usagePartVersions(ctx, opts.omitCursor)
 	if err != nil {
@@ -52,7 +52,7 @@ func refreshUsageParts[T any](ctx context.Context, s *Store, slot string, opts u
 			}
 		}
 		if stamp != s.keptVersion() {
-			return read(ctx, nil)
+			return read(ctx, nil, nil)
 		}
 		return values, nil
 	}
@@ -93,14 +93,14 @@ func refreshUsageParts[T any](ctx context.Context, s *Store, slot string, opts u
 		if usagePartReadObserver != nil {
 			usagePartReadObserver(ids)
 		}
-		updated, err := read(ctx, ids)
+		updated, err := read(ctx, ids, peers)
 		if err != nil {
 			return nil, err
 		}
 		maps.Copy(values, updated)
 	}
 	if stamp != s.keptVersion() {
-		return read(ctx, nil)
+		return read(ctx, nil, nil)
 	}
 	if usagePartPublishObserver != nil {
 		usagePartPublishObserver()
