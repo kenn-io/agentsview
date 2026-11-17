@@ -3,17 +3,14 @@
 package postgres
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/vector"
 )
 
-func hostedVectorUnitParity(t *testing.T) {
+func TestHostedVectorUnitParity(t *testing.T) {
 	f := newHostedFixture(t, "tenant-unit-parity")
 	sqlite, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "archive.db"))
 	require.NoError(t, err)
@@ -40,21 +37,4 @@ func hostedVectorUnitParity(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, scanHostedUnits(t.Context(), f.runtime, "parity", false, 512, func(u db.EmbeddableUnit) error { pg = append(pg, u); return nil }))
 	require.Equal(t, local, pg)
-	require.Len(t, pg, 4)
-	assert.Equal(t, "é\n\n界", pg[1].Content)
-	assert.Equal(t, []db.UnitOffset{{Ordinal: 1}, {Ordinal: 3, RuneStart: 3, ByteStart: 4}}, pg[1].Offsets)
-	docs, err := vector.UnitDocuments(pg)
-	require.NoError(t, err)
-	docs, _, err = vector.FillUnitDocuments(t.Context(), docs, 128, 1, func(_ context.Context, texts []string) ([][]float32, error) {
-		out := make([][]float32, len(texts))
-		for i := range texts {
-			out[i] = []float32{1, 0}
-		}
-		return out, nil
-	})
-	require.NoError(t, err)
-	require.Len(t, docs, 4)
-	assert.Equal(t, "u:parity:duplicate", docs[0].DocKey)
-	assert.Equal(t, "u:parity:duplicate#2", docs[3].DocKey)
-	assert.Equal(t, `[{"o":1,"r":0,"b":0},{"o":3,"r":3,"b":4}]`, docs[1].OffsetsJSON)
 }

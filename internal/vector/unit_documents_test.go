@@ -15,8 +15,8 @@ import (
 
 func TestFillUnitDocumentsBatchesSessionChunks(t *testing.T) {
 	units := []db.EmbeddableUnit{
-		{SessionID: "session", Kind: "user", Ordinal: 0, OrdinalEnd: 0, Content: "first"},
-		{SessionID: "session", Kind: "user", Ordinal: 1, OrdinalEnd: 1, Content: "second"},
+		{SessionID: "session", Kind: "user", Ordinal: 0, OrdinalEnd: 0, SourceUUID: "duplicate", Content: "first"},
+		{SessionID: "session", Kind: "user", Ordinal: 1, OrdinalEnd: 1, SourceUUID: "duplicate", Content: "second", Offsets: []db.UnitOffset{{Ordinal: 1}, {Ordinal: 3, RuneStart: 3, ByteStart: 4}}},
 	}
 	var calls [][]string
 	encode := func(_ context.Context, texts []string) ([][]float32, error) {
@@ -34,6 +34,9 @@ func TestFillUnitDocumentsBatchesSessionChunks(t *testing.T) {
 	}
 	docs, err := UnitDocuments(units)
 	require.NoError(t, err)
+	assert.Equal(t, "u:session:duplicate", docs[0].DocKey)
+	assert.Equal(t, "u:session:duplicate#2", docs[1].DocKey)
+	assert.Equal(t, `[{"o":1,"r":0,"b":0},{"o":3,"r":3,"b":4}]`, docs[1].OffsetsJSON)
 	docs, rejected, err := FillUnitDocuments(t.Context(), docs, 128, 1, encode, kitvec.WithBatchSize(2))
 	require.NoError(t, err)
 	assert.Empty(t, rejected)

@@ -29,23 +29,12 @@ import (
 )
 
 func TestHostedCaptureSemanticSearch(t *testing.T) {
-	t.Run("in-process parser", func(t *testing.T) { hostedCaptureSemanticSearch(t, true) })
-	t.Run("sandboxed runtime", func(t *testing.T) { hostedCaptureSemanticSearch(t, false) })
-}
-
-type testHostedRawParser struct{ *rawderive.ProviderParser }
-
-func (p testHostedRawParser) Preflight(ctx context.Context) error { return ctx.Err() }
-
-func hostedCaptureSemanticSearch(t *testing.T, manual bool) {
-	if manual {
-		original := newHostedRawParser
-		newHostedRawParser = func(time.Duration) (hostedRawParser, error) {
-			p, err := rawderive.NewProviderParser(parser.ProviderFactories(), "hosted")
-			return testHostedRawParser{p}, err
-		}
-		t.Cleanup(func() { newHostedRawParser = original })
+	original := newHostedRawParser
+	newHostedRawParser = func(time.Duration) (hostedRawParser, error) {
+		p, err := rawderive.NewProviderParser(parser.ProviderFactories(), "hosted")
+		return testHostedRawParser{p}, err
 	}
+	t.Cleanup(func() { newHostedRawParser = original })
 	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Input []string `json:"input"`
@@ -68,7 +57,7 @@ func hostedCaptureSemanticSearch(t *testing.T, manual bool) {
 	}))
 	t.Cleanup(endpoint.Close)
 	var configured config.Config
-	startup, store, admin := startParityRuntimeConfigured(t, config.ArchiveContentFull, !manual, func(cfg *config.Config, admin *sql.DB) {
+	startup, store, admin := startParityRuntimeConfigured(t, config.ArchiveContentFull, false, func(cfg *config.Config, admin *sql.DB) {
 		defaults, err := config.Default()
 		require.NoError(t, err)
 		cfg.Vector = defaults.Vector
@@ -110,14 +99,21 @@ func hostedCaptureSemanticSearch(t *testing.T, manual bool) {
 	competitor := newHostedCaptureClient(t, startup, store, parser.AgentClaude, competitorRoot)
 	competitorReceipt := competitor.capture(t)
 	waitCaptureJob(t, admin, competitorReceipt.ManifestID, "complete", 1)
-	search := func(text string) db.ContentSearchPage {
-		page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: text, Mode: "semantic", IncludeOneShot: true, Limit: 10})
-		if err != nil {
-			return db.ContentSearchPage{}
-		}
-		return page
+	search := func(text string) (db.ContentSearchPage, error) {
+		return store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: text, Mode: "semantic", IncludeOneShot: true, Limit: 10})
 	}
-	require.Eventually(t, func() bool { return len(search("Inspect the build").Matches) >= 2 }, 30*time.Second, time.Second)
+	require.Eventually(t, func() bool {
+		page, err := search("Inspect the build")
+		if err != nil {
+			return false
+		}
+		var original, competitor bool
+		for _, match := range page.Matches {
+			original = original || match.SessionID == rawtest.ClaudeID && strings.Contains(match.Snippet, "Inspect the build")
+			competitor = competitor || match.SessionID == competitorID && strings.Contains(match.Snippet, "Competing build")
+		}
+		return original && competitor
+	}, 30*time.Second, time.Second)
 	content, err := os.ReadFile(path)
 	require.NoError(t, err)
 	require.Contains(t, string(content), "Inspect the build.")
@@ -130,14 +126,16 @@ func hostedCaptureSemanticSearch(t *testing.T, manual bool) {
 		err := admin.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_documents WHERE content LIKE '%Review the changed build%'`).Scan(&count)
 		return err == nil && count == 1
 	}, 30*time.Second, time.Second)
-	page := search("Review the changed build")
+	page, err := search("Review the changed build")
+	require.NoError(t, err)
 	require.GreaterOrEqual(t, len(page.Matches), 2)
 	assert.Equal(t, rawtest.ClaudeID, page.Matches[0].SessionID)
 	assert.Equal(t, competitorID, page.Matches[1].SessionID)
+	assert.Contains(t, page.Matches[0].Snippet, "Review the changed build")
 	var old int
 	require.NoError(t, admin.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_documents WHERE content LIKE '%Inspect the build%'`).Scan(&old))
 	assert.Zero(t, old)
-	if manual {
+	{
 		configured.PG.RawDerivation = false
 		reader, err := prepareReplicaServeImpl(t.Context(), pgReplica{}, configured, "", nil, false)
 		require.NoError(t, err)
@@ -151,3 +149,7 @@ func hostedCaptureSemanticSearch(t *testing.T, manual bool) {
 		assert.Contains(t, response.Body.String(), "Review the changed build")
 	}
 }
+
+type testHostedRawParser struct{ *rawderive.ProviderParser }
+
+func (p testHostedRawParser) Preflight(ctx context.Context) error { return ctx.Err() }

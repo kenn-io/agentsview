@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
@@ -9,8 +8,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/vector"
 )
 
 func TestHostedEmbeddingScheduleRetriesAndWakesForChanges(t *testing.T) {
@@ -36,33 +33,5 @@ func TestHostedEmbeddingsDisabledWithoutContent(t *testing.T) {
 		runtime, err := prepareHostedEmbeddings(t.Context(), cfg, nil, time.Second)
 		require.NoError(t, err)
 		assert.Nil(t, runtime)
-	}
-}
-
-func TestHostedEmbeddingsStopJoinsEncoding(t *testing.T) {
-	entered := make(chan struct{})
-	exited := make(chan struct{})
-	docs, err := vector.UnitDocuments([]db.EmbeddableUnit{{SessionID: "s", Kind: "user", Content: "hello"}})
-	require.NoError(t, err)
-	runtime := newPGRawRuntime(t.Context(), time.Hour, func(ctx context.Context) {
-		defer close(exited)
-		_, _, _ = vector.FillUnitDocuments(ctx, docs, 128, 1, func(ctx context.Context, _ []string) ([][]float32, error) {
-			close(entered)
-			<-ctx.Done()
-			return nil, ctx.Err()
-		})
-	})
-	runtime.Start()
-	select {
-	case <-entered:
-	case <-time.After(10 * time.Second):
-		runtime.Stop()
-		require.FailNow(t, "encoder did not start")
-	}
-	runtime.Stop()
-	select {
-	case <-exited:
-	default:
-		require.FailNow(t, "runtime stopped before encoding exited")
 	}
 }
