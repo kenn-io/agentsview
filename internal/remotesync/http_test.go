@@ -1000,7 +1000,13 @@ type mirrorTestRemote struct {
 	onManifest        func() // called before serving a manifest response
 	onManifestRequest func(*http.Request)
 	rejectDelta       bool
-	ts                *httptest.Server
+	// serveManifest and serveArchive, when set, replace the default
+	// response for that endpoint. Set them before any request: the server
+	// is already accepting connections, so swapping ts.Config.Handler
+	// instead races with a request from another process.
+	serveManifest http.HandlerFunc
+	serveArchive  http.HandlerFunc
+	ts            *httptest.Server
 }
 
 func newMirrorTestRemote(t *testing.T) *mirrorTestRemote {
@@ -1020,6 +1026,10 @@ func newMirrorTestRemote(t *testing.T) *mirrorTestRemote {
 				return
 			}
 		case "/api/v1/remote-sync/manifest":
+			if remote.serveManifest != nil {
+				remote.serveManifest(w, r)
+				return
+			}
 			if remote.onManifest != nil {
 				remote.onManifest()
 			}
@@ -1060,6 +1070,10 @@ func newMirrorTestRemote(t *testing.T) *mirrorTestRemote {
 				return
 			}
 		case "/api/v1/remote-sync/archive":
+			if remote.serveArchive != nil {
+				remote.serveArchive(w, r)
+				return
+			}
 			var req ArchiveRequest
 			if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) {
 				return
