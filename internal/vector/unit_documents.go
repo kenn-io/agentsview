@@ -42,7 +42,24 @@ func EncodeUnitDocuments(ctx context.Context, units []db.EmbeddableUnit, maxInpu
 	}
 	vectors, err := kitvec.EncodeBatched(ctx, encode, allChunks, batch...)
 	if err != nil {
-		return nil, fmt.Errorf("encoding session %s: %w", units[0].SessionID, err)
+		if !isPermanentEncodeError(err) {
+			return nil, fmt.Errorf("encoding session %s: %w", units[0].SessionID, err)
+		}
+		var accepted []storage.VectorPushDoc
+		for i, chunks := range chunksByDoc {
+			vectors, err := kitvec.EncodeBatched(ctx, encode, chunks, batch...)
+			if err != nil {
+				if isPermanentEncodeError(err) {
+					continue
+				}
+				return nil, fmt.Errorf("encoding session %s: %w", units[0].SessionID, err)
+			}
+			for j, chunk := range chunks {
+				docs[i].Chunks = append(docs[i].Chunks, storage.VectorPushChunk{ChunkIndex: chunk.Index, Embedding: vectors[j]})
+			}
+			accepted = append(accepted, docs[i])
+		}
+		return accepted, nil
 	}
 	index := 0
 	for i, chunks := range chunksByDoc {

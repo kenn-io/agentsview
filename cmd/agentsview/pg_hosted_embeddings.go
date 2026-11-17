@@ -30,10 +30,8 @@ func prepareHostedEmbeddings(ctx context.Context, app config.Config, pg config.P
 		return nil, err
 	}
 	batch := (vector.BuildOptions{BatchSize: server.BatchSize, ModelContextTokens: app.Vector.Embeddings.ModelContextTokens, MaxBatchTokens: server.MaxBatchTokens}).EncodeBatchOptions()
-	if err := wireReplicaVectorSearch(ctx, app, pgReplica{}, store, "hosted pg serve"); err != nil {
-		return nil, err
-	}
 	lastDrained := int64(-1)
+	retry := postgres.NewHostedEmbeddingBackoff()
 	return newPGRawRuntime(ctx, poll, func(ctx context.Context) {
 		var revision int64
 		if err := store.DB().QueryRowContext(ctx, `SELECT COALESCE((SELECT corpus_revision FROM raw_corpus_state WHERE singleton=1),0)`).Scan(&revision); err != nil {
@@ -46,13 +44,12 @@ func prepareHostedEmbeddings(ctx context.Context, app config.Config, pg config.P
 			return
 		}
 		started := time.Now()
-		if err := postgres.EmbedBatch(ctx, store.DB(), info, encode, app.Vector.Embeddings.MaxInputChars, app.Vector.IncludeAutomated, batch...); err != nil {
+		if err := retry.EmbedBatch(ctx, store.DB(), info, encode, app.Vector.Embeddings.MaxInputChars, app.Vector.IncludeAutomated, batch...); err != nil {
 			if ctx.Err() == nil {
-				var batchError *postgres.HostedEmbeddingError
-				if errors.As(err, &batchError) {
-					log.Printf("hosted embeddings: processed=%d failed=%d elapsed=%s", batchError.Processed, batchError.Failed, time.Since(started))
+				if batchError, ok := errors.AsType[*postgres.HostedEmbeddingError](err); ok {
+					log.Printf("hosted embeddings: processed=%d failed=%d elapsed=%s cause=%s", batchError.Processed, batchError.Failed, time.Since(started), batchError.Cause)
 				} else {
-					log.Printf("hosted embeddings: pass failed elapsed=%s", time.Since(started))
+					log.Printf("hosted embeddings: pass failed elapsed=%s; check database connectivity and provisioning", time.Since(started))
 				}
 			}
 			return

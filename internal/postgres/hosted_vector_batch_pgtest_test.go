@@ -4,13 +4,16 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/storage"
+	"go.kenn.io/kit/embedclient"
 )
 
 func hostedVectorBatchRecovery(t *testing.T) {
@@ -38,19 +41,38 @@ func hostedVectorBatchRecovery(t *testing.T) {
 		for i, text := range texts {
 			calls[text]++
 			if failing && strings.Contains(text, "batch-00") {
-				return nil, fmt.Errorf("unavailable")
+				return nil, &embedclient.APIError{StatusCode: 503}
 			}
 			out[i] = []float32{1, 0}
 		}
 		return out, nil
 	}
-	require.Error(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, false))
+	retry := NewHostedEmbeddingBackoff()
+	err = retry.EmbedBatch(t.Context(), f.runtime, gen, encode, 128, false)
+	batchErr, ok := errors.AsType[*HostedEmbeddingError](err)
+	require.True(t, ok)
+	assert.Equal(t, "embedding endpoint returned HTTP 503", batchErr.Cause)
 	assert.Equal(t, 1, calls["batch-16"], "failure must not prevent later pages")
 	assert.Zero(t, calls["batch-17"], "automated session is outside the scope")
 	failing = false
-	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, false))
+	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,provenance_kind,raw_content_revision) VALUES('batch-new','p','m','codex','raw','r1'); INSERT INTO messages(session_id,ordinal,role,content) VALUES('batch-new',0,'user','batch-new')`)
+	require.NoError(t, err)
+	require.Error(t, retry.EmbedBatch(t.Context(), f.runtime, gen, encode, 128, false))
+	assert.Equal(t, 1, calls["batch-00"], "backoff skips a failed session")
+	assert.Equal(t, 1, calls["batch-new"], "new sessions proceed during backoff")
+	retry.pending["batch-00"].next = time.Time{}
+	require.NoError(t, retry.EmbedBatch(t.Context(), f.runtime, gen, encode, 128, false))
 	assert.Equal(t, 2, calls["batch-00"])
 	assert.Equal(t, 1, calls["batch-16"])
+	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET raw_content_revision='r1b' WHERE id='batch-00'`)
+	require.NoError(t, err)
+	failing = true
+	require.Error(t, retry.EmbedBatch(t.Context(), f.runtime, gen, encode, 128, false))
+	failing = false
+	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET raw_content_revision='r1c' WHERE id='batch-00'`)
+	require.NoError(t, err)
+	require.NoError(t, retry.EmbedBatch(t.Context(), f.runtime, gen, encode, 128, false))
+	assert.Equal(t, 4, calls["batch-00"], "a new revision bypasses the previous backoff")
 	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, true))
 	assert.Equal(t, 1, calls["batch-17"])
 	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, false))
@@ -70,7 +92,7 @@ func hostedVectorBatchRecovery(t *testing.T) {
 	require.Error(t, EmbedBatch(t.Context(), f.runtime, gen, racing, 128, false))
 	var stamp string
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT doc_agg_hash FROM vector_push_state WHERE generation_id=$1 AND session_id='batch-00'`, id).Scan(&stamp))
-	assert.Equal(t, "r1|false", stamp)
+	assert.Equal(t, "r1c|false", stamp)
 	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, false))
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT doc_agg_hash FROM vector_push_state WHERE generation_id=$1 AND session_id='batch-00'`, id).Scan(&stamp))
 	assert.Equal(t, "r3|false", stamp)

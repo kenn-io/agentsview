@@ -206,8 +206,9 @@ When `[vector]` is enabled for stored content, also grant `SELECT, INSERT,
 UPDATE, DELETE` on `vector_documents` and `vector_push_state`, `SELECT, DELETE`
 on each existing `vector_chunks_g<ID>` table registered in
 `vector_generations`, and `INSERT` on the configured generation's chunk table.
-Repeat the chunk-table grants after provisioning a new generation. Search
-uploaded sessions with `agentsview session search --pg --semantic "your query"`.
+Repeat the chunk-table grants after provisioning a new generation. On a machine
+configured with the hosted PostgreSQL target and query endpoint, search uploaded
+sessions with `agentsview session search --pg --semantic "your query"`.
 
 Start the effective default target:
 

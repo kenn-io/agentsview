@@ -116,4 +116,17 @@ func hostedCaptureSemanticSearch(t *testing.T, manual bool) {
 	var old int
 	require.NoError(t, admin.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_documents WHERE content LIKE '%Inspect the build%'`).Scan(&old))
 	assert.Zero(t, old)
+	if manual {
+		configured.PG.RawDerivation = false
+		reader, err := prepareReplicaServeImpl(t.Context(), pgReplica{}, configured, "", nil, false)
+		require.NoError(t, err)
+		defer reader.cleanup()
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/search/content?pattern=review&mode=semantic&include_one_shot=true", nil)
+		req.Header.Set("Authorization", "Bearer "+configured.AuthToken)
+		req.Header.Set("X-AgentsView-Search-Intent", "semantic")
+		response := httptest.NewRecorder()
+		reader.srv.Handler().ServeHTTP(response, req)
+		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+		assert.Contains(t, response.Body.String(), "Review the changed build")
+	}
 }

@@ -165,6 +165,11 @@ func prepareHostedPGServe(ctx context.Context, app config.Config, pg config.PGCo
 	if err != nil {
 		return fail(err)
 	}
+	if app.Vector.Enabled && !app.ArchiveContent.UsageOnly() {
+		if err = wireReplicaVectorSearch(ctx, app, pgReplica{}, store, "hosted pg serve"); err != nil {
+			return fail(err)
+		}
+	}
 	if pg.RawDerivation {
 		poll, attempt, maxAttempts := pg.RawWorkerBounds()
 		isolated, err := newHostedRawParser(time.Duration(attempt) * time.Second)

@@ -15,7 +15,7 @@ func ProvisionHostedVector(ctx context.Context, pg *sql.DB, schema, tenant strin
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "agentsview-hosted:"+schema); err != nil {
 		return err
 	}
