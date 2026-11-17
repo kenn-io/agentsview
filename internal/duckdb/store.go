@@ -766,9 +766,6 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 }
 
 func (s *Store) searchDiskVersion(ctx context.Context) (string, bool) {
-	if s.path == "" {
-		return s.scanSearchIdentity(ctx)
-	}
 	s.searchIdentityMu.Lock()
 	defer s.searchIdentityMu.Unlock()
 	version := s.keptVersion()
