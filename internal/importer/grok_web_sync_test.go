@@ -263,6 +263,42 @@ func TestSyncGrokRefetchesReplyInProgress(t *testing.T) {
 	}
 }
 
+// TestSyncGrokRefetchesRegeneration covers regenerating the newest reply:
+// the new reply has no text yet and sits beside the shown one, and the list
+// update time does not move when it completes.
+func TestSyncGrokRefetchesRegeneration(t *testing.T) {
+	d := testDB(t)
+	id := "grok-web:" + grokTestChat
+	q := grokSyncResponse("r1", "", "human", "Question", "2026-10-21T08:00:00Z")
+	first := grokSyncResponse("r2", "r1", "assistant", "First answer", "2026-10-21T08:00:05Z")
+	regenerating := grokSyncResponse("r3", "r1", "assistant", "", "2026-10-21T08:01:00Z")
+	regenerating["partial"] = true
+	fake := &grokFake{t: t, modified: "2026-10-21T08:01:00Z", responses: []map[string]any{q, first, regenerating}}
+	for range 2 {
+		_, err := syncGrokWeb(t.Context(), d, fake.fetch, grokTestOptions, nil)
+		require.NoError(t, err)
+	}
+	assert.Equal(t, 2, fake.details, "a regeneration in progress is not cached as fresh")
+
+	fake.responses = []map[string]any{q, first, grokSyncResponse("r3", "r1", "assistant", "Better answer", "2026-10-21T08:01:00Z")}
+	stats, err := syncGrokWeb(t.Context(), d, fake.fetch, grokTestOptions, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Updated)
+	messages, err := d.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Question", "Better answer"}, messageContents(messages))
+	copies := replacedCopies(t, d, id)
+	require.Len(t, copies, 1)
+	saved, err := d.GetAllMessages(t.Context(), copies[0].ID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Question", "First answer"}, messageContents(saved))
+
+	stats, err = syncGrokWeb(t.Context(), d, fake.fetch, grokTestOptions, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Skipped)
+	assert.Equal(t, 3, fake.details)
+}
+
 // TestSyncGrokPendingWindow checks that a reply in progress keeps a chat
 // stale only while the list time is within a day of now, so a reply that
 // never completes stops being fetched on every Sync.

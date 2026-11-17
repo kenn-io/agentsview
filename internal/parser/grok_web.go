@@ -186,8 +186,11 @@ func ParseGrokWebConversation(data []byte) (ParseResult, error) {
 // conversation: it lists an in-flight response, the shown branch has a
 // partial one, or a partial reply with no text yet hangs directly below the
 // end of the shown branch (below the root when no response has text). An
-// empty partial reply on an older branch is a failed regeneration and does
-// not count.
+// empty partial reply below an earlier response of the shown branch counts
+// only while it is newer than the end of that branch, as a regeneration is
+// while Grok writes it. Otherwise it is a failed regeneration the chat has
+// moved past. Sync bounds how long a pending chat is refetched, so a failed
+// regeneration that is still the newest response costs only refetches.
 func GrokWebPending(data []byte) bool {
 	_, body, err := decodeGrokWebConversation(data)
 	if err != nil {
@@ -209,9 +212,14 @@ func GrokWebPending(data []byte) bool {
 	for _, r := range responses {
 		parentOf[r.ResponseID] = r.ParentResponseID
 	}
-	tip := ""
+	tip, tipAt, tipTimed := "", time.Time{}, false
+	onPath := make(map[string]bool, len(path))
+	for _, r := range path {
+		onPath[r.ResponseID] = true
+	}
 	if len(path) > 0 {
 		tip = path[len(path)-1].ResponseID
+		tipAt, tipTimed = GrokWebTime(path[len(path)-1].CreateTime)
 	}
 	for _, r := range responses {
 		if !r.Partial || strings.TrimSpace(r.Message) != "" {
@@ -219,6 +227,9 @@ func GrokWebPending(data []byte) bool {
 		}
 		if len(path) > 0 {
 			if r.ParentResponseID == tip {
+				return true
+			}
+			if at, ok := GrokWebTime(r.CreateTime); ok && tipTimed && onPath[r.ParentResponseID] && at.After(tipAt) {
 				return true
 			}
 			continue

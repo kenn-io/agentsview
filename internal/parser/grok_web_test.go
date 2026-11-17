@@ -195,9 +195,26 @@ func TestGrokWebPending(t *testing.T) {
 		{"empty partial in a chat without text", []map[string]any{
 			grokTestResponse("r1", "", "human", "", at), partial("r2", "r1", ""),
 		}, true},
-		{"empty partial on an older branch", []map[string]any{
+		// Regenerating the newest reply: the new reply has no text yet and
+		// sits beside the shown one.
+		{"empty partial regeneration newer than the shown branch", []map[string]any{
 			q, partial("r2", "r1", ""),
 			grokTestResponse("r3", "r1", "assistant", "Done", "2026-10-21T08:01:00Z"),
+		}, true},
+		{"empty partial regeneration the chat moved past", []map[string]any{
+			q, partial("r2", "r1", ""),
+			grokTestResponse("r3", "r1", "assistant", "Done", "2026-10-21T08:01:00Z"),
+			grokTestResponse("r4", "r3", "human", "Next", "2026-10-21T08:03:00Z"),
+			grokTestResponse("r5", "r4", "assistant", "Reply", "2026-10-21T08:04:00Z"),
+		}, false},
+		// The prompt was resent; the empty partial reply hangs below the copy
+		// the web app no longer shows, even though it is the newest response.
+		{"empty partial below a prompt no longer shown", []map[string]any{
+			q, grokTestResponse("r2", "r1", "assistant", "A", "2026-10-21T08:00:30Z"),
+			grokTestResponse("r3", "r2", "human", "Again", "2026-10-21T08:01:00Z"),
+			grokTestResponse("r5", "r2", "human", "Again", "2026-10-21T08:01:30Z"),
+			grokTestResponse("r6", "r5", "assistant", "B", "2026-10-21T08:01:45Z"),
+			partial("r4", "r3", ""),
 		}, false},
 		{"completed reply", []map[string]any{q, grokTestResponse("r2", "r1", "assistant", "Done", at)}, false},
 		{"empty reply that is not partial", []map[string]any{q, grokTestResponse("r2", "r1", "assistant", "", at)}, false},
