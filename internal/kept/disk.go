@@ -192,11 +192,7 @@ func LoadJSON[T any](d *Disk, selection, version string, current func() bool, lo
 	retain := current == nil || current()
 	if retain && d.Enabled() {
 		if data, encodeErr := json.Marshal(value, json.FormatNilSliceAsNull(true)); encodeErr == nil {
-			d.mu.Lock()
-			if d.reports.disk.save(selection, jsonVersion+version, data, d.maxFile) == nil {
-				_ = d.trim()
-			}
-			d.mu.Unlock()
+			d.Put(selection, jsonVersion+version, data)
 		}
 	}
 	return value, retain, nil

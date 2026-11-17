@@ -62,6 +62,9 @@ Trends keeps per-session counts under `$CACHE_DIRECTORY/postgres-trends`, or
 `agentsview/postgres-trends` in the user cache directory, and after a push
 recounts only changed sessions. Hosted and borrowed transaction readers read
 directly. The files are disposable.
+The same directory can contain saved search snippets. After a session is
+deleted, snippets can remain until the same search overwrites the page or the
+cache is trimmed.
 
 The sync direction is one-way: SQLite to PostgreSQL. Each machine pushes its own
 sessions; `pg serve` reads from the shared database. The resulting UI includes
