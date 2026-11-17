@@ -46,9 +46,9 @@ async function request({ id, platform, path }, port) {
       const [reply] = await chrome.scripting.executeScript({
         target,
         world: "ISOLATED",
-        func: (name, url) =>
-          typeof globalThis[name] === "function" ? globalThis[name](url) : undefined,
-        args: [config.fetchFunction, `${config.origin}${path}`],
+        func: (name, url, headers) =>
+          typeof globalThis[name] === "function" ? globalThis[name](url, headers) : undefined,
+        args: [config.fetchFunction, `${config.origin}${path}`, config.headers ?? {}],
       });
       if (typeof reply?.result?.status !== "number")
         throw new Error("The page changed during Sync; try Sync again");

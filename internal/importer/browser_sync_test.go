@@ -53,6 +53,8 @@ const (
 	browserPathOrganization = "11111111-1111-4111-8111-111111111111"
 	browserPathConversation = "22222222-2222-4222-8222-222222222222"
 	browserPathGeminiChat   = "c_0123456789abcdef"
+	// Grok page tokens are UUIDs; the allowlist accepts no other value.
+	browserPathGrokPageToken = "33333333-3333-4333-8333-333333333333"
 )
 
 var browserPathBuilders = map[parser.AgentType]func() []string{
@@ -77,6 +79,13 @@ var browserPathBuilders = map[parser.AgentType]func() []string{
 			geminiRequest(geminiListRequest, "", "cursor+1/="),
 			geminiRequest(geminiDetailRequest, browserPathGeminiChat, ""),
 			geminiRequest(geminiDetailRequest, browserPathGeminiChat, "cursor+43/"),
+		}
+	},
+	parser.AgentGrokWeb: func() []string {
+		return []string{
+			grokRequest(grokListRequest, "", ""),
+			grokRequest(grokListPageRequest, "", browserPathGrokPageToken),
+			grokRequest(grokResponsesRequest, browserPathConversation, ""),
 		}
 	},
 }

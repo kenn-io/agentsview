@@ -56,6 +56,7 @@ describe("KNOWN_AGENTS", () => {
       "kimi-work",
       "claude-ai",
       "chatgpt",
+      "grok-web",
       "kiro",
       "kiro-ide",
       "cortex",

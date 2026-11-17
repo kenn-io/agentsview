@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-12
+last_edited: 2026-11-17
 ---
 
 # Session Format Source Inventory
@@ -2098,6 +2098,77 @@ fixtures retain this field; missing identities remain source-local.
 - **Chrome Sync code:** `internal/parser/gemini_apps_web.go`,
   `internal/importer/gemini_apps_sync.go`, and
   `frontend/chrome-extension/gemini_fetch.js`.
+
+## Grok Web (`grok-web`)
+
+- **Format:** grok.com REST JSON read by Chrome Sync.
+  `GET /rest/app-chat/conversations?pageSize=100` lists chats newest first as
+  `{conversations, nextPageToken}`; later pages add `&pageToken=<uuid>`, an
+  empty token is rejected with HTTP 400, and the last page omits
+  `nextPageToken`. Entries carry `conversationId` (UUID), `title`, and RFC
+  3339 `createTime` and `modifyTime`.
+  `GET /rest/app-chat/conversations/{id}/responses` returns
+  `{responses, inflightResponses}` with every branch in one body. Each
+  response has `responseId`, `parentResponseId` (absent on the root), `sender`
+  (`human`, `assistant`, `ASSISTANT`, or `model`), Markdown `message`,
+  `createTime`, `model`, and `partial`. A failed regeneration is an assistant
+  response with an empty `message`.
+- **Evidence:** `no-public-source`.
+- **Upstream:** xAI publishes no schema for the grok.com web API; public
+  references were searched 2026-10-21. A read-only probe of a signed-in web
+  app checked 2026-10-21 listed 79 chats (23 with branches, up to 74 responses
+  and 287 KB in one unpaged `/responses` body) and compared two branched chats
+  with the rendered page: every rendered response lay on the path from the
+  newest non-empty leaf, and its older siblings were not shown. Earlier turns
+  were not rendered by the virtualized page, so the rule is inferred for them.
+  No reply was in progress during the probe, and signed-out responses were not
+  observed. Sanitized captures with the real keys and branch structure are
+  `internal/importer/testdata/grok_web/`, exercised by
+  `TestSyncGrokCapturedPages`. `responses-branched.json` keeps the captured
+  branch points but was trimmed on 2026-11-17: two linear prompt-and-reply
+  pairs were cut, so the next prompt now follows the reply before them, and
+  each array keeps its first entry.
+- **Usage and cost:** responses name a `model` but expose no token, credit, or
+  monetary-cost fields.
+- **Agentsview:** `internal/parser/grok_web.go` and
+  `internal/importer/grok_web_sync.go`. The `grok-web` type is import-only and
+  does not affect Grok Build discovery or parsing.
+- **Chrome Sync requests:** `internal/importer/browser_requests/grok-web.txt`
+  names the first list page, a later list page by `pageToken`, and one chat's
+  `/responses`. The extension's `grok-web` entry in
+  `frontend/chrome-extension/platforms.js` pins chat IDs and page tokens to
+  UUIDs and adds `Accept: application/json` to plain cookie GETs through
+  `pageFetch`.
+- **Shown branch:** Sync stores the path from the root to the newest response
+  with text that has no descendant with text. Failed regenerations are empty,
+  so they never end the shown branch (`TestParseGrokWebConversation`,
+  `TestSyncGrokCapturedPages`).
+- **Pending replies:** A chat with an entry in `inflightResponses`, a
+  `partial` response on the shown branch, or an empty `partial` reply directly
+  below the end of the shown branch is written but its freshness is not
+  recorded, so the next Sync fetches it again. A `partial` reply on an older
+  branch does not count. This applies only while the chat's list `modifyTime`
+  is within 24 hours of the current time (`TestGrokWebPending`,
+  `TestSyncGrokRefetchesReplyInProgress`, `TestSyncGrokPendingWindow`).
+- **Sign-in:** HTTP 401 and 403 both read as an expired sign-in and end Sync
+  (`TestSyncGrokStops`).
+- **Identities and history:** Each message carries its `responseId` as the
+  source identity. Appends and completed replies keep message IDs and pins
+  (`TestSyncGrokIncrementalAndHistory`, `TestSyncGrokCompletionFillsModel`).
+  A changed shown branch replaces the chat and keeps the previous version in
+  Trash, also when the new branch repeats the stored text.
+- **Chrome Sync evidence limits:** The branch rule was checked on two chats.
+  Earlier turns were not rendered by the virtualized page, so the rule is
+  inferred for them. No reply was in progress and no signed-out response was
+  observed during the probe, so the pending rule follows the `partial` and
+  `inflightResponses` field names and the sign-in rule follows the HTTP status
+  codes. `/responses` was not seen to page: the largest body held 74 responses
+  and 287 KB. Whether `modifyTime` moves when a reply completes is unverified;
+  the 24-hour pending bound keeps a reply that never completes from being
+  fetched forever. Reasoning steps, attachments, images, search results, and
+  workspaces are not imported. The live probe predates the 2026-11-17 move onto
+  the shared Sync runner; the move was verified with synthetic tests and the
+  sanitized captures only.
 
 ## Grok Build (`grok`)
 

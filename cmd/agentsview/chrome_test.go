@@ -434,6 +434,7 @@ func TestChromeImportArguments(t *testing.T) {
 		{"sync path", []string{"--type", "claude-ai", "--sync"}, []string{"conversations.json"}, false},
 		{"sync chatgpt", []string{"--type", "chatgpt", "--sync"}, nil, true},
 		{"sync gemini-apps", []string{"--type", "gemini-apps", "--sync"}, nil, true},
+		{"sync grok-web", []string{"--type", "grok-web", "--sync"}, nil, true},
 		{"sync provider", []string{"--type", "codex", "--sync"}, nil, false},
 		{"sync replace", []string{"--type", "claude-ai", "--sync", "--replace", "claude-ai:chat"}, nil, false},
 		{"missing path", []string{"--type", "claude-ai"}, nil, false},
