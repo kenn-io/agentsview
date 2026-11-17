@@ -5,43 +5,15 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
-	"time"
 
-	"github.com/cenkalti/backoff/v7"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/agentsview/internal/vector"
 	"go.kenn.io/kit/embedclient"
 	kitvec "go.kenn.io/kit/vector"
 )
-
-// HostedEmbeddingError reports a pass that could not drain every session.
-type HostedEmbeddingError struct {
-	Processed, Failed int
-	Cause             string
-}
-
-func (e *HostedEmbeddingError) Error() string {
-	return fmt.Sprintf("%d of %d hosted embedding sessions failed", e.Failed, e.Processed)
-}
-
-type hostedEmbeddingRetry struct {
-	revision string
-	next     time.Time
-	delay    *backoff.ExponentialBackOff
-	cause    string
-}
-
-// HostedEmbeddingBackoff keeps failed sessions from monopolizing the encoder.
-// A changed revision is eligible immediately, and successful sessions are removed.
-type HostedEmbeddingBackoff struct {
-	pending map[string]*hostedEmbeddingRetry
-}
-
-func NewHostedEmbeddingBackoff() *HostedEmbeddingBackoff {
-	return &HostedEmbeddingBackoff{pending: make(map[string]*hostedEmbeddingRetry)}
-}
 
 func embeddingFailureCause(err error) string {
 	if apiErr, ok := errors.AsType[*embedclient.APIError](err); ok {
@@ -56,31 +28,8 @@ func embeddingFailureCause(err error) string {
 	return "embedding request failed; check endpoint connectivity and configuration"
 }
 
-func (b *HostedEmbeddingBackoff) record(id, revision, cause string, now time.Time) {
-	entry := b.pending[id]
-	if entry == nil || entry.revision != revision {
-		delay := backoff.NewExponentialBackOff()
-		delay.InitialInterval = 30 * time.Second
-		delay.MaxInterval = 5 * time.Minute
-		delay.Reset()
-		entry = &hostedEmbeddingRetry{revision: revision, delay: delay}
-		b.pending[id] = entry
-	}
-	entry.cause = cause
-	entry.next = now.Add(entry.delay.NextBackOff())
-}
-
-// EmbedBatch drains one pass of pending hosted sessions. Failures do not stop
-// later sessions; the caller retries the pass until all sessions succeed.
-func EmbedBatch(ctx context.Context, pg *sql.DB, generation storage.VectorGenerationInfo, encode kitvec.EncodeFunc, maxInputChars int, includeAutomated bool, batch ...kitvec.BatchOption) error {
-	return embedBatch(ctx, pg, generation, encode, maxInputChars, includeAutomated, nil, batch...)
-}
-
-func (b *HostedEmbeddingBackoff) EmbedBatch(ctx context.Context, pg *sql.DB, generation storage.VectorGenerationInfo, encode kitvec.EncodeFunc, maxInputChars int, includeAutomated bool, batch ...kitvec.BatchOption) error {
-	return embedBatch(ctx, pg, generation, encode, maxInputChars, includeAutomated, b, batch...)
-}
-
-func embedBatch(ctx context.Context, pg *sql.DB, generation storage.VectorGenerationInfo, encode kitvec.EncodeFunc, maxInputChars int, includeAutomated bool, retry *HostedEmbeddingBackoff, batch ...kitvec.BatchOption) error {
+// EmbedBatch drains one pass of pending hosted sessions.
+func EmbedBatch(ctx context.Context, pg *sql.DB, generation storage.VectorGenerationInfo, encode kitvec.EncodeFunc, maxInputChars, concurrency int, includeAutomated bool, batch ...kitvec.BatchOption) error {
 	id, _, ok, err := LookupVectorGeneration(ctx, pg, generation.Fingerprint)
 	if err != nil {
 		return err
@@ -105,9 +54,7 @@ func embedBatch(ctx context.Context, pg *sql.DB, generation storage.VectorGenera
 		return rollbackErr
 	}
 	scope := vectorPushScope{gen: vectorGeneration{id: id, halfvecType: ext + ".halfvec"}, genIDs: ids}
-	var processed, failed int
-	var cause string
-	seen := make(map[string]bool)
+	var rejectedSessions int
 	cursor := ""
 	for {
 		type pending struct{ id, revision string }
@@ -134,53 +81,30 @@ func embedBatch(ctx context.Context, pg *sql.DB, generation storage.VectorGenera
 			break
 		}
 		for _, item := range page {
-			processed++
 			cursor = item.id
-			seen[item.id] = true
-			if retry != nil {
-				if entry := retry.pending[item.id]; entry != nil && entry.revision == item.revision && time.Now().Before(entry.next) {
-					failed++
-					if cause == "" {
-						cause = entry.cause
-					}
-					continue
-				}
-			}
 			var units []db.EmbeddableUnit
-			err := scanHostedUnits(ctx, pg, item.id, includeAutomated, vector.RunMaxRunes(maxInputChars), func(u db.EmbeddableUnit) error { units = append(units, u); return nil })
-			failureCause := "reading hosted sessions failed; check database connectivity and permissions"
-			var docs []storage.VectorPushDoc
-			if err == nil {
-				docs, err = vector.EncodeUnitDocuments(ctx, units, maxInputChars, encode, batch...)
-				if err != nil {
-					failureCause = embeddingFailureCause(err)
-				}
+			if err := scanHostedUnits(ctx, pg, item.id, includeAutomated, vector.RunMaxRunes(maxInputChars), func(u db.EmbeddableUnit) error { units = append(units, u); return nil }); err != nil {
+				return fmt.Errorf("scanning session %s: %w", item.id, err)
 			}
-			if err == nil {
-				err = writeHostedVectors(ctx, pg, scope, item.id, item.revision, includeAutomated, docs)
-				failureCause = "writing hosted vectors failed; check database permissions and concurrent session changes"
-			}
+			docs, err := vector.UnitDocuments(units)
 			if err != nil {
-				failed++
-				if cause == "" {
-					cause = failureCause
-				}
-				if retry != nil {
-					retry.record(item.id, item.revision, failureCause, time.Now())
-				}
-			} else if retry != nil {
-				delete(retry.pending, item.id)
+				return err
 			}
-			if ctx.Err() != nil {
-				return ctx.Err()
+			covered, pending, err := coveredHostedDocuments(ctx, pg, scope.gen.id, item.id, item.revision, includeAutomated, docs, maxInputChars)
+			if err != nil {
+				return err
 			}
-		}
-	}
-	if retry != nil {
-		for id := range retry.pending {
-			if !seen[id] {
-				delete(retry.pending, id)
+			accepted, rejected, err := vector.FillUnitDocuments(ctx, pending, maxInputChars, concurrency, encode, batch...)
+			if err != nil {
+				return fmt.Errorf("embedding session %s: %s", item.id, embeddingFailureCause(err))
 			}
+			if len(rejected) > 0 {
+				rejectedSessions++
+			}
+			if err := writeHostedVectors(ctx, pg, scope, item.id, item.revision, includeAutomated, accepted, covered, len(rejected) > 0); err != nil {
+				return err
+			}
+
 		}
 	}
 	cursor = ""
@@ -208,18 +132,14 @@ func embedBatch(ctx context.Context, pg *sql.DB, generation storage.VectorGenera
 			break
 		}
 		for _, sessionID := range page {
-			processed++
 			cursor = sessionID
 			if err := clearHostedOrphan(ctx, pg, sessionID); err != nil {
-				failed++
-				if cause == "" {
-					cause = "removing stale vectors failed; check database connectivity and permissions"
-				}
+				return err
 			}
 		}
 	}
-	if failed > 0 {
-		return &HostedEmbeddingError{Processed: processed, Failed: failed, Cause: cause}
+	if rejectedSessions > 0 {
+		return fmt.Errorf("%d hosted sessions have rejected embedding inputs", rejectedSessions)
 	}
 	return nil
 }
@@ -230,26 +150,14 @@ func clearHostedOrphan(ctx context.Context, pg *sql.DB, sessionID string) error 
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	// A missing row cannot be locked. Fence a concurrent restore until cleanup
-	// commits so it cannot lose newly written vectors.
-	if _, err := tx.ExecContext(ctx, `LOCK TABLE sessions IN SHARE ROW EXCLUSIVE MODE`); err != nil {
-		return err
-	}
-	var id string
-	err = tx.QueryRowContext(ctx, `SELECT id FROM sessions WHERE id=$1 FOR UPDATE`, sessionID).Scan(&id)
-	if err == nil {
-		return nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return err
-	}
+
 	if err := clearSessionVectorsTx(ctx, tx, sessionID); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-func writeHostedVectors(ctx context.Context, pg *sql.DB, scope vectorPushScope, id, revision string, automated bool, docs []storage.VectorPushDoc) error {
+func writeHostedVectors(ctx context.Context, pg *sql.DB, scope vectorPushScope, id, revision string, automated bool, docs, covered []storage.VectorPushDoc, partial bool) error {
 	tx, err := pg.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -258,16 +166,73 @@ func writeHostedVectors(ctx context.Context, pg *sql.DB, scope vectorPushScope, 
 	var current string
 	err = tx.QueryRowContext(ctx, `SELECT raw_content_revision FROM sessions WHERE id=$1 AND provenance_kind='raw' FOR UPDATE`, id).Scan(&current)
 	if errors.Is(err, sql.ErrNoRows) {
-		return errors.New("session removed during encoding")
+		return nil
 	}
 	if err != nil {
 		return err
 	}
 	if current != revision {
-		return errors.New("session changed during encoding")
+		return nil
 	}
-	if _, err = writeSessionVectors(ctx, tx, scope, id, revision+"|"+strconv.FormatBool(automated), docs); err != nil {
+	stamp := revision + "|" + strconv.FormatBool(automated)
+	if partial {
+		stamp = "partial|" + stamp
+	}
+	if _, err = writeSessionVectorsKeeping(ctx, tx, scope, id, stamp, docs, covered); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+// coveredHostedDocuments trusts partial progress only for this session, revision,
+// scope, and generation, and only when every expected chunk is present.
+func coveredHostedDocuments(ctx context.Context, pg *sql.DB, generation int64, sessionID, revision string, automated bool, docs []storage.VectorPushDoc, maxInputChars int) ([]storage.VectorPushDoc, []storage.VectorPushDoc, error) {
+	var stamp string
+	err := pg.QueryRowContext(ctx, `SELECT doc_agg_hash FROM vector_push_state WHERE generation_id=$1 AND session_id=$2`, generation, sessionID).Scan(&stamp)
+	if errors.Is(err, sql.ErrNoRows) || err == nil && stamp != "partial|"+revision+"|"+strconv.FormatBool(automated) {
+		return nil, docs, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	rows, err := pg.QueryContext(ctx, fmt.Sprintf(`SELECT d.doc_key,d.content_hash,c.chunk_index FROM vector_documents d LEFT JOIN %s c ON c.doc_key=d.doc_key WHERE d.session_id=$1 AND d.ordinal>=0 ORDER BY d.doc_key,c.chunk_index`, vectorChunkTable(generation)), sessionID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	type coverage struct {
+		hash    string
+		indexes []int
+	}
+	found := make(map[string]*coverage)
+	for rows.Next() {
+		var key, hash string
+		var idx sql.NullInt64
+		if err := rows.Scan(&key, &hash, &idx); err != nil {
+			return nil, nil, err
+		}
+		if found[key] == nil {
+			found[key] = &coverage{hash: hash}
+		}
+		if idx.Valid {
+			found[key].indexes = append(found[key].indexes, int(idx.Int64))
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	var covered, pending []storage.VectorPushDoc
+	for _, doc := range docs {
+		var expected []int
+		for _, chunk := range kitvec.Split(doc.Content, kitvec.SplitOptions{MaxRunes: maxInputChars, Overlap: vector.ChunkOverlap(maxInputChars)}) {
+			expected = append(expected, chunk.Index)
+		}
+		entry := found[doc.DocKey]
+		if entry != nil && entry.hash == doc.ContentHash && slices.Equal(entry.indexes, expected) {
+			covered = append(covered, doc)
+		} else {
+			pending = append(pending, doc)
+		}
+	}
+	return covered, pending, nil
 }

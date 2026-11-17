@@ -28,6 +28,9 @@ SQLite databases captured from providers remain valid source artifacts. Hosted
 raw sync carries no archive labels or launcher parent links. Label filters on
 hosted sessions match nothing. With embeddings configured, the server builds
 vectors from uploaded sessions and makes them available for meaning search.
+The embedding worker checks stored session progress and does not read the raw
+embedding outbox. Rejected messages remain pending for a later retry while
+other messages in the session stay searchable.
 
 Device enrollment and revocation remain operator-managed. The operator supplies
 each laptop with a server URL, device ID and credential. There is no public
@@ -93,6 +96,7 @@ For meaning search, install pgvector in the database and configure `[vector]`
 and `[vector.embeddings]` on the server before provisioning. Use the same
 embedding configuration when starting the server. Provision again after changing
 the model or its recipe so the owner creates the new generation's chunk table.
+Older generation tables remain for the operator to manage.
 For example, with an OpenAI-compatible embedding endpoint:
 
 ```toml

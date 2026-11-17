@@ -166,6 +166,10 @@ func prepareHostedPGServe(ctx context.Context, app config.Config, pg config.PGCo
 		return fail(err)
 	}
 	if app.Vector.Enabled && !app.ArchiveContent.UsageOnly() {
+		fingerprint := vectorGeneration(app.Vector.Embeddings).Fingerprint()
+		if err = postgres.CheckHostedVectorPrivileges(ctx, store.DB(), pg.Schema, fingerprint); err != nil {
+			return fail(err)
+		}
 		if err = wireReplicaVectorSearch(ctx, app, pgReplica{}, store, "hosted pg serve"); err != nil {
 			return fail(err)
 		}
@@ -207,7 +211,7 @@ func prepareHostedPGServe(ctx context.Context, app config.Config, pg config.PGCo
 				log.Print("hosted raw pending-signal maintenance failed")
 			}
 		})
-		embeddingRuntime, err = prepareHostedEmbeddings(ctx, app, pg, store, time.Duration(poll)*time.Second)
+		embeddingRuntime, err = prepareHostedEmbeddings(ctx, app, store, time.Duration(poll)*time.Second)
 		if err != nil {
 			return fail(err)
 		}

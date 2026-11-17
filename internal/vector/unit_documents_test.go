@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/kit/embedclient"
 	kitvec "go.kenn.io/kit/vector"
 )
@@ -64,4 +65,20 @@ func TestEncodeUnitDocumentsSkipsRejectedInput(t *testing.T) {
 	assert.Equal(t, "last", docs[1].Content)
 	assert.Equal(t, []float32{1, 0}, docs[0].Chunks[0].Embedding)
 	assert.Equal(t, []float32{1, 0}, docs[1].Chunks[0].Embedding)
+}
+
+func TestUnitFillStorePagesPendingDocuments(t *testing.T) {
+	store := &unitFillStore{docs: []storage.VectorPushDoc{{DocKey: "a", Content: "first"}, {DocKey: "b", Content: "second"}}, saved: make(map[string][]storage.VectorPushChunk)}
+	page, err := store.PendingForGeneration(t.Context(), "generation", nil, 1)
+	require.NoError(t, err)
+	require.Len(t, page, 1)
+	assert.Equal(t, "a", page[0].Doc)
+	require.NoError(t, store.SaveVectors(t.Context(), "generation", "a", nil, []kitvec.ChunkVector{{ChunkIndex: 0, Vector: kitvec.Vector{1, 0}}}))
+	page, err = store.PendingForGeneration(t.Context(), "generation", new("a"), 1)
+	require.NoError(t, err)
+	require.Len(t, page, 1)
+	assert.Equal(t, "b", page[0].Doc)
+	page, err = store.PendingForGeneration(t.Context(), "generation", new("b"), 1)
+	require.NoError(t, err)
+	assert.Empty(t, page)
 }

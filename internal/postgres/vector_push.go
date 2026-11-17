@@ -1110,13 +1110,24 @@ func (s *Sync) pushVectorSession(
 }
 
 func writeSessionVectors(ctx context.Context, tx *sql.Tx, scope vectorPushScope, sessionID, aggHash string, docs []storage.VectorPushDoc) (vectorSessionOutcome, error) {
+	return writeSessionVectorsKeeping(ctx, tx, scope, sessionID, aggHash, docs, nil)
+}
+
+func writeSessionVectorsKeeping(ctx context.Context, tx *sql.Tx, scope vectorPushScope, sessionID, aggHash string, docs, covered []storage.VectorPushDoc) (vectorSessionOutcome, error) {
 	if err := parkSessionVectorDocs(ctx, tx, sessionID); err != nil {
 		return vectorSessionOutcome{}, err
 	}
 	if err := upsertVectorDocs(ctx, tx, docs); err != nil {
 		return vectorSessionOutcome{}, err
 	}
-	chunks, err := replaceVectorChunks(ctx, tx, scope.gen, sessionID, docs)
+	if err := upsertVectorDocs(ctx, tx, covered); err != nil {
+		return vectorSessionOutcome{}, err
+	}
+	keep := make([]string, 0, len(covered))
+	for _, doc := range covered {
+		keep = append(keep, doc.DocKey)
+	}
+	chunks, err := replaceVectorChunks(ctx, tx, scope.gen, sessionID, docs, keep)
 	if err != nil {
 		return vectorSessionOutcome{}, err
 	}
@@ -1205,13 +1216,13 @@ ON CONFLICT (doc_key) DO UPDATE SET
 // chunk rows inserted.
 func replaceVectorChunks(
 	ctx context.Context, tx *sql.Tx, gen vectorGeneration,
-	sessionID string, docs []storage.VectorPushDoc,
+	sessionID string, docs []storage.VectorPushDoc, keep []string,
 ) (int, error) {
 	table := vectorChunkTable(gen.id)
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`
 DELETE FROM %s WHERE doc_key IN (
-    SELECT doc_key FROM vector_documents WHERE session_id = $1)`, table),
-		sessionID); err != nil {
+    SELECT doc_key FROM vector_documents WHERE session_id = $1) AND NOT (doc_key = ANY($2))`, table),
+		sessionID, keep); err != nil {
 		return 0, fmt.Errorf("clearing chunks for session %s: %w", sessionID, err)
 	}
 
