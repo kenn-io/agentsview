@@ -49,9 +49,9 @@ const (
 	manifestMinDecodeVersion = 2
 	// Segment v2 adds the optional prompt_source provenance field on
 	// message records. Segment v3 adds the optional provider_id billing
-	// field. Segment v4 adds the optional reasoning_effort field; v1 through
-	// v3 segments still decode, with the fields defaulting to empty.
-	messageSegmentFormatVersion    = 4
+	// field. Segment v4 adds reasoning_effort, and v5 adds dialogue_text.
+	// Earlier segments still decode, with missing fields defaulting to empty.
+	messageSegmentFormatVersion    = 5
 	messageSegmentMinDecodeVersion = 1
 	metadataEventFormatVersion     = 1
 )
