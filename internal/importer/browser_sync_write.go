@@ -115,7 +115,7 @@ func syncKeepingHistory(ctx context.Context, store db.Store, result parser.Parse
 	// fill indices count stored-form rows, which usage-only storage thins, so
 	// the rows written come from the same slice. A chat with fewer messages
 	// than stored is not an append even when its retained rows match.
-	if len(stored) >= len(archived) && len(msgs) >= existing.MessageCount {
+	if stored != nil && len(stored) >= len(archived) && len(msgs) >= existing.MessageCount {
 		if completed, prefix := compareChatGPTPrefix(archived, stored[:len(archived)], true); prefix {
 			rows := chatGPTFillRows(archived, stored, completed, true)
 			rows = append(rows, stored[len(archived):]...)

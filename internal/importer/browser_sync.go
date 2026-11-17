@@ -137,7 +137,7 @@ type browserHTTPError struct {
 
 func (e *browserHTTPError) Error() string {
 	if e.status == 403 {
-		return fmt.Sprintf("%s access denied (HTTP 403)", e.label)
+		return e.label + " access denied (HTTP 403)"
 	}
 	return fmt.Sprintf("%s returned HTTP %d", e.label, e.status)
 }
