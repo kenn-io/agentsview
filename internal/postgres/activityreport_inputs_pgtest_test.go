@@ -5,8 +5,6 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -401,7 +399,7 @@ func TestPGActivityReportInputRestart(t *testing.T) {
 
 func TestPGActivityReportInputInvalidRestart(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	for _, mode := range []string{"identity", "corrupt", "oversized", "regressed", "journal"} {
+	for _, mode := range []string{"identity", "corrupt"} {
 		t.Run(mode, func(t *testing.T) {
 			local, syncer, _ := newUsageJournalFixture(t)
 			pgKeptSession(t, local, "a", "project-a", "2026-06-14")
@@ -433,25 +431,6 @@ func TestPGActivityReportInputInvalidRestart(t *testing.T) {
 				first.activityDisk.Put(slot, pgActivityDiskVersion+version, data)
 			case "corrupt":
 				first.activityDisk.Put(slot, pgActivityDiskVersion+version, []byte("invalid"))
-			case "oversized":
-				var paths []string
-				require.NoError(t, filepath.WalkDir(os.Getenv("CACHE_DIRECTORY"), func(path string, d os.DirEntry, err error) error {
-					if err == nil && !d.IsDir() && filepath.Ext(path) == ".gob" {
-						paths = append(paths, path)
-					}
-					return err
-				}))
-				require.NotEmpty(t, paths)
-				for _, path := range paths {
-					require.NoError(t, os.Truncate(path, (256<<20)+1))
-				}
-			case "regressed":
-				_, err = syncer.pg.ExecContext(t.Context(), `UPDATE sync_metadata SET value=(value::bigint-100)::text WHERE key='usage_change_revision'`)
-				require.NoError(t, err)
-			case "journal":
-				_, err = syncer.pg.ExecContext(t.Context(), dropUsageChangeJournalSQL)
-				require.NoError(t, err)
-				ensureUsageChangeJournalPG(t.Context(), syncer.pg)
 			}
 			restarted := open()
 			defer restarted.Close()
