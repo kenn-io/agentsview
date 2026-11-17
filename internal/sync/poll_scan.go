@@ -289,12 +289,8 @@ func (e *Engine) pollScanPlan(
 			len(watch.ExtraDirectories) > 0 || watch.MaxDepth != 0 {
 			return nil, false
 		}
-		for _, glob := range watch.IncludeGlobs {
-			// The scan matches basenames; a path glob or a malformed one would
-			// match nothing and hide every change.
-			if _, err := filepath.Match(glob, ""); err != nil || strings.ContainsAny(glob, `/\`) {
-				return nil, false
-			}
+		if !pollScanGlobsComparable(watch.IncludeGlobs) {
+			return nil, false
 		}
 	}
 	return plan.Roots, true
@@ -412,6 +408,18 @@ func scanPollRoots(
 	return result, nil
 }
 
+// pollScanGlobsComparable reports whether every glob is a valid file-name
+// pattern. The scan matches base names, so a path glob or a malformed one
+// would match nothing and hide every change.
+func pollScanGlobsComparable(globs []string) bool {
+	for _, glob := range globs {
+		if _, err := filepath.Match(glob, ""); err != nil || strings.ContainsAny(glob, `/\`) {
+			return false
+		}
+	}
+	return true
+}
+
 // pollScanLinkIgnored reports whether a link or junction cannot lead to a
 // watched file: its name matches no glob, and it is not a directory the scan
 // would descend into.
@@ -423,7 +431,8 @@ func pollScanLinkIgnored(path, name string, watch parser.WatchRoot) bool {
 		return true
 	}
 	info, err := os.Stat(path)
-	return err == nil && !info.IsDir()
+	// Discovery cannot follow a dangling link either.
+	return errors.Is(err, fs.ErrNotExist) || (err == nil && !info.IsDir())
 }
 
 func findPollScanRow(rows []pollScanRow, path uint64) (int, bool) {

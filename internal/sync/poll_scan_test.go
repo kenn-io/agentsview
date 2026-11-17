@@ -363,6 +363,7 @@ func TestPollProviderRootsGroupedComparesRootsWithUnrelatedLinks(t *testing.T) {
 	require.NoError(t, os.Symlink(elsewhere, filepath.Join(home, "skills")))
 	require.NoError(t, os.Symlink(filepath.Join(elsewhere, "notes.md"), filepath.Join(home, "AGENTS.md")))
 	require.NoError(t, os.Symlink(filepath.Join(elsewhere, "notes.md"), filepath.Join(root, "notes.md")))
+	require.NoError(t, os.Symlink(filepath.Join(elsewhere, "removed"), filepath.Join(root, "dangling")))
 	f := newPollScanFixture(t, map[parser.AgentType][]string{parser.AgentCodex: {root}})
 	group := ProviderRootsGroup{Agent: parser.AgentCodex, Roots: []string{root}}
 
@@ -514,4 +515,11 @@ func TestForgetPollScansDuringAPassDropsItsSnapshots(t *testing.T) {
 	f.poll(t, group)
 
 	assert.EqualValues(t, 2, f.reconciled.Load(), "a scan taken before the restore is not kept")
+}
+
+func TestPollScanGlobsComparable(t *testing.T) {
+	assert.True(t, pollScanGlobsComparable([]string{"*.jsonl", "session_index.jsonl"}))
+	assert.False(t, pollScanGlobsComparable([]string{"*.jsonl", "projects/*.jsonl"}), "a path glob never matches a base name")
+	assert.False(t, pollScanGlobsComparable([]string{`sub\\*.jsonl`}), "a Windows path glob never matches a base name")
+	assert.False(t, pollScanGlobsComparable([]string{"[*.jsonl"}), "a malformed glob matches nothing")
 }
