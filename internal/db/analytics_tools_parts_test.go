@@ -3,6 +3,7 @@
 package db
 
 import (
+	"encoding/json/v2"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,12 +11,45 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/kept"
 )
 
 func setToolsPartsReadObserver(observe func([]string)) func() {
 	toolsPartsReadObserver = observe
 	return func() { toolsPartsReadObserver = nil }
+}
+
+func TestToolsPartsOmitUnusedFields(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "a", "project")
+	msg := asstMsgAt("a", 5, "call", "2025-03-10T12:00:00Z")
+	msg.ToolCalls = []ToolCall{{SessionID: "a", ToolName: "Read", Category: "Read"}}
+	insertMessages(t, d, msg)
+	f := AnalyticsFilter{Timezone: "UTC"}
+	got, err := d.GetAnalyticsTools(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, 1, got.TotalCalls)
+	rows, err := d.analyticsToolRows(ctx, f)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, "project", rows[0].Project)
+	require.NotNil(t, rows[0].Ordinal)
+	require.Equal(t, 5, *rows[0].Ordinal)
+	require.Equal(t, BuildToolsAnalytics(rows), got)
+	identity, err := d.GetDatabaseID(ctx)
+	require.NoError(t, err)
+	key, err := json.Marshal(f, json.Deterministic(true))
+	require.NoError(t, err)
+	slot := "tools-parts|" + TrendsTimezoneKey(f) + "|" + string(key)
+	parts := kept.LoadParts[[]ToolAnalyticsRow](&d.trendsDisk, slot, fmt.Sprintf("%s|%d", identity, toolsPartsVersion))
+	require.Contains(t, parts, "a")
+	require.Len(t, parts["a"].Value, 1)
+	assert.Empty(t, parts["a"].Value[0].Project)
+	assert.Nil(t, parts["a"].Value[0].Ordinal)
 }
 
 func TestToolsPartsDirtyOncePerRefresh(t *testing.T) {

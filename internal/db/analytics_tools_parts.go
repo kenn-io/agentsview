@@ -101,12 +101,16 @@ func (db *DB) toolsFromParts(ctx context.Context, identity string, f AnalyticsFi
 	if len(changed) > 0 {
 		saved := make([]kept.Part[[]ToolAnalyticsRow], 0, len(parts))
 		for _, part := range parts {
+			for i := range part.Value {
+				part.Value[i].Project = ""
+				part.Value[i].Ordinal = nil
+			}
 			saved = append(saved, part)
 		}
 		kept.SaveParts(&db.trendsDisk, slot, version, saved, func(rows []ToolAnalyticsRow) int64 {
 			var size int64
 			for _, row := range rows {
-				size += int64(256 + len(row.SessionID) + len(row.Project) + len(row.Agent) + len(row.ToolName) + len(row.Category) + len(row.Date))
+				size += int64(256 + len(row.SessionID) + len(row.Agent) + len(row.ToolName) + len(row.Category) + len(row.Date))
 			}
 			return size
 		})
