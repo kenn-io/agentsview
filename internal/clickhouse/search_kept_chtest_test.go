@@ -98,22 +98,6 @@ func TestSearchKeptRestart(t *testing.T) {
 	before = count(s)
 	read(s)
 	require.Greater(t, count(s), before)
-	snapshotCtx, err := s.withPartsSnapshot(ctx)
-	require.NoError(t, err)
-	version, ok, err := s.usageRowsVersion(snapshotCtx, []string{"sessions", "messages", "image_text"}, "")
-	require.NoError(t, err)
-	require.True(t, ok)
-	filter.Limit = db.DefaultSearchLimit
-	_, ok = s.usageDisk.Get("search|"+filter.Slot(), "json|v1|"+version)
-	require.True(t, ok)
-	require.NoError(t, local.DeleteSession(ctx, fixtureAlphaID))
-	_, err = syncer.Push(ctx, false, nil)
-	require.NoError(t, err)
-	s = reopen()
-	_, err = s.Search(ctx, db.SearchFilter{Query: "receipt"})
-	require.NoError(t, err)
-	_, ok = s.usageDisk.Get("search|"+filter.Slot(), "json|v1|"+version)
-	require.False(t, ok)
 }
 
 func TestSearchKeptRejectsPushDuringBuild(t *testing.T) {

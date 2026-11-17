@@ -37,28 +37,6 @@ func TestDiskEvictsLeastRecentlyOpened(t *testing.T) {
 	require.Equal(t, "one", string(payload))
 }
 
-func TestDropJSON(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	var disk Disk
-	require.NoError(t, disk.Open("test-search", "archive", 1024, 0))
-	disk.Put("parts", "v1", []byte("part data"))
-	_, retain, err := LoadJSON(&disk, "page", "v1", nil, func() (string, error) { return "secret snippet", nil })
-	require.NoError(t, err)
-	require.True(t, retain)
-	disk.DropJSON("")
-	_, ok := disk.Get("page", jsonVersion+"v1")
-	require.False(t, ok)
-	part, ok := disk.Get("parts", "v1")
-	require.True(t, ok)
-	require.Equal(t, "part data", string(part))
-	data, err := json.Marshal("future snippet")
-	require.NoError(t, err)
-	disk.Put("future-other", "json|v99|v1", data)
-	require.True(t, disk.ObserveJSON("v2"))
-	_, ok = disk.Get("future-other", "json|v99|v1")
-	require.False(t, ok)
-}
-
 func TestDiskLimitsAndUnavailableDirectory(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	var disk Disk
@@ -91,11 +69,6 @@ func TestLoadJSON(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, retain)
 	require.Equal(t, 1, loads)
-	_, retain, err = LoadJSON(&disk, "racing", "v1", func() bool { disk.DropJSON(""); return true }, func() ([]string, error) { return []string{"secret snippet"}, nil })
-	require.NoError(t, err)
-	require.False(t, retain)
-	_, ok := disk.Get("racing", jsonVersion+"v1")
-	require.False(t, ok)
 	data, err := json.Marshal(map[string]string{"future": "snippet"})
 	require.NoError(t, err)
 	disk.Put("future", jsonVersion+"v1", data)

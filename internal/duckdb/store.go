@@ -53,7 +53,6 @@ type Store struct {
 	usageDisk         kept.Disk
 	analyticsReads    kept.Reads[[]byte]
 	searchReads       kept.Reads[db.SearchPage]
-	searchIdentity    kept.Reads[string]
 	afterSearchRead   func()
 	dailyUsage        kept.Reads[db.DailyUsageResult]
 	planUsage         kept.Reads[*db.PlanUsageCountSummary]
@@ -753,9 +752,6 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 		current := func() bool { return ctx.Err() == nil && version != "" && version == s.keptVersion() }
 		if s.path != "" && s.usageDisk.Enabled() {
 			if identity, ok := s.searchDiskVersion(ctx); ok {
-				if s.usageDisk.ObserveJSON(identity) {
-					s.searchReads.Clear()
-				}
 				return kept.LoadJSON(&s.usageDisk, "search|"+f.Slot(), identity, current, func() (db.SearchPage, error) { return s.search(ctx, f) })
 			}
 		}
@@ -765,15 +761,6 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 }
 
 func (s *Store) searchDiskVersion(ctx context.Context) (string, bool) {
-	stamp := s.keptVersion()
-	identity, err := s.searchIdentity.DoChecked(ctx, "search", stamp, func(ctx context.Context) (string, bool, error) {
-		value, ok := s.scanSearchDiskVersion(ctx)
-		return value, ok && stamp != "" && stamp == s.keptVersion(), nil
-	})
-	return identity, err == nil && identity != ""
-}
-
-func (s *Store) scanSearchDiskVersion(ctx context.Context) (string, bool) {
 	versions, err := db.ScanTrendVersions(s.queryContext(ctx, `SELECT id, COALESCE(agentsview_push_fingerprint, '') FROM sessions WHERE deleted_at IS NULL`))
 	if err != nil {
 		return "", false
@@ -796,9 +783,7 @@ func (s *Store) scanSearchDiskVersion(ctx context.Context) (string, bool) {
 	}
 	var imageCount, messageCount int64
 	var imageHash, messageHash uint64
-	imageQuery := `SELECT COUNT(*), COALESCE(BIT_XOR(HASH(it)), 0) FROM image_text it`
-	observeAnalyticsQuery(imageQuery)
-	if err := s.queryRowContext(ctx, imageQuery).Scan(&imageCount, &imageHash); err != nil {
+	if err := s.queryRowContext(ctx, `SELECT COUNT(*), COALESCE(BIT_XOR(HASH(it)), 0) FROM image_text it`).Scan(&imageCount, &imageHash); err != nil {
 		return "", false
 	}
 	if err := s.queryRowContext(ctx, `SELECT COUNT(*), COALESCE(BIT_XOR(HASH(session_id, ordinal, content, is_system, is_system_prefixed)), 0) FROM messages`).Scan(&messageCount, &messageHash); err != nil {

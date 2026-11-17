@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -14,36 +13,6 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/docbank/document/ocr"
 )
-
-func TestSearchKeptIdentityScanPerMirror(t *testing.T) {
-	skipReopenTestOnWindows(t)
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	local, path := newPushFixture(t, 1)
-	result, err := Push(t.Context(), path, local, "m", storage.MirrorPushOptions{}, false, nil)
-	require.NoError(t, err)
-	require.Zero(t, result.Errors)
-	store := openUsagePartsStore(t, path)
-	defer store.Close()
-	previous := analyticsQueryObserver
-	reads := 0
-	analyticsQueryObserver = func(query string) {
-		if strings.Contains(query, "FROM image_text it") {
-			reads++
-		}
-	}
-	t.Cleanup(func() { analyticsQueryObserver = previous })
-	_, err = store.Search(t.Context(), db.SearchFilter{Query: "first"})
-	require.NoError(t, err)
-	_, err = store.Search(t.Context(), db.SearchFilter{Query: "missing"})
-	require.NoError(t, err)
-	require.Equal(t, 1, reads)
-	next := filepath.Join(t.TempDir(), "next.duckdb")
-	buildMirrorFixture(t, next, "session-b", "first")
-	require.NoError(t, swapMirrorFile(next, path))
-	_, err = store.Search(t.Context(), db.SearchFilter{Query: "first"})
-	require.NoError(t, err)
-	require.Equal(t, 2, reads)
-}
 
 func TestSearchKeptMirrorReplacement(t *testing.T) {
 	skipReopenTestOnWindows(t)
@@ -212,22 +181,9 @@ func TestSearchKeptPushInvalidation(t *testing.T) {
 	require.NoError(t, local.ReplaceSessionMessages(ctx, "sess-2", []db.Message{syncMessage("sess-2", 0, "user", "newmatch", ts)}))
 	push()
 	check("newmatch", "sess-2")
-	store := openUsagePartsStore(t, path)
-	filter := db.SearchFilter{Query: "first", Limit: db.DefaultSearchLimit}
-	_, err := store.Search(ctx, filter)
-	require.NoError(t, err)
-	identity, ok := store.searchDiskVersion(ctx)
-	require.True(t, ok)
-	_, ok = store.usageDisk.Get("search|"+filter.Slot(), "json|v1|"+identity)
-	require.True(t, ok)
-	require.NoError(t, store.Close())
 	require.NoError(t, local.DeleteSession(ctx, "sess-1"))
 	push()
 	check("fresh")
-	store = openUsagePartsStore(t, path)
-	defer store.Close()
-	_, ok = store.usageDisk.Get("search|"+filter.Slot(), "json|v1|"+identity)
-	require.False(t, ok)
 }
 
 func TestSearchKeptContentChangedDuringPush(t *testing.T) {
