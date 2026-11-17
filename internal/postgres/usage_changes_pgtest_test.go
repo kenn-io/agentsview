@@ -527,17 +527,19 @@ func TestUsageHistoryCheckpoints(t *testing.T) {
 	var revision int64
 	var token string
 	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT r.value::bigint, t.value FROM sync_metadata r, sync_metadata t WHERE r.key='usage_change_revision' AND t.key='usage_history_token'`).Scan(&revision, &token))
-	checkpoints, err := usageHistoryCheckpoints(ctx, syncer.pg, revision)
+	current, missing, err := usageHistoryCheckpoints(ctx, syncer.pg, revision, revision+1)
 	require.NoError(t, err)
-	require.Equal(t, token, checkpoints[revision])
+	require.Equal(t, token, current)
+	require.Empty(t, missing)
 	tx, err := syncer.pg.BeginTx(ctx, nil)
 	require.NoError(t, err)
 	_, err = tx.ExecContext(ctx, `UPDATE sessions SET updated_at=clock_timestamp() WHERE id='checkpoint'`)
 	require.NoError(t, err)
 	require.NoError(t, tx.Rollback())
-	checkpoints, err = usageHistoryCheckpoints(ctx, syncer.pg, revision+1)
+	current, missing, err = usageHistoryCheckpoints(ctx, syncer.pg, revision, revision+1)
 	require.NoError(t, err)
-	require.Empty(t, checkpoints)
+	require.Equal(t, token, current)
+	require.Empty(t, missing)
 	for range 130 {
 		_, err = syncer.pg.ExecContext(ctx, `UPDATE sessions SET updated_at=clock_timestamp() WHERE id='checkpoint'`)
 		require.NoError(t, err)

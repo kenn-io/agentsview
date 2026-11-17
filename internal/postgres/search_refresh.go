@@ -71,11 +71,11 @@ func (s *Store) searchKept(ctx context.Context, view *Store, f db.SearchFilter) 
 	if through == 0 {
 		return view.search(ctx, f)
 	}
-	checkpoints, err := usageHistoryCheckpoints(ctx, view.pg, through, entry.revision)
+	currentToken, previousToken, err := usageHistoryCheckpoints(ctx, view.pg, through, entry.revision)
 	if err != nil {
 		return db.SearchPage{}, err
 	}
-	reusable := entry.token != "" && entry.token == checkpoints[entry.revision] && through >= entry.revision
+	reusable := entry.token != "" && entry.token == previousToken && through >= entry.revision
 	keys := entry.keys
 	if !reusable {
 		keys, err = view.searchKeys(ctx, f, nil)
@@ -100,8 +100,8 @@ func (s *Store) searchKept(ctx context.Context, view *Store, f db.SearchFilter) 
 	if err != nil {
 		return db.SearchPage{}, err
 	}
-	if token := checkpoints[through]; token != "" {
-		memo.Put(slot, "search", []pgSearchEntry{{through, token, keys}})
+	if currentToken != "" {
+		memo.Put(slot, "search", []pgSearchEntry{{through, currentToken, keys}})
 	}
 	start := max(f.Cursor, 0)
 	if start >= len(keys) {

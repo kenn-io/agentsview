@@ -265,26 +265,10 @@ func installUsageHistoryCheckpointsPG(ctx context.Context, tx *sql.Tx) error {
 	return err
 }
 
-func usageHistoryCheckpoints(ctx context.Context, q storeExecutor, revisions ...int64) (map[int64]string, error) {
-	keys := make([]string, len(revisions))
-	for i, revision := range revisions {
-		keys[i] = "usage_history_checkpoint:" + strconv.FormatInt(revision, 10)
-	}
-	rows, err := q.QueryContext(ctx, `SELECT substring(key from length('usage_history_checkpoint:') + 1)::bigint, value FROM sync_metadata WHERE key = ANY($1)`, keys)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	result := make(map[int64]string)
-	for rows.Next() {
-		var revision int64
-		var token string
-		if err := rows.Scan(&revision, &token); err != nil {
-			return nil, err
-		}
-		result[revision] = token
-	}
-	return result, rows.Err()
+func usageHistoryCheckpoints(ctx context.Context, q storeExecutor, current, previous int64) (string, string, error) {
+	var currentToken, previousToken string
+	err := q.QueryRowContext(ctx, `SELECT COALESCE((SELECT value FROM sync_metadata WHERE key = $1), ''), COALESCE((SELECT value FROM sync_metadata WHERE key = $2), '')`, "usage_history_checkpoint:"+strconv.FormatInt(current, 10), "usage_history_checkpoint:"+strconv.FormatInt(previous, 10)).Scan(&currentToken, &previousToken)
+	return currentToken, previousToken, err
 }
 
 func installUsageChangeJournalPG(ctx context.Context, tx *sql.Tx) error {
