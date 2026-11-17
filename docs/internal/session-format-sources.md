@@ -4161,11 +4161,15 @@ schemas keep their existing ordering behavior.
 - **Usage and cost:** The export contains conversation content and timestamps,
   not authoritative token, cache, reasoning, credit, or USD accounting.
 - **Agentsview:** `internal/parser/claude_ai.go` parses exports;
-  `internal/importer/claude_ai_sync.go` imports browser-fetched chats.
+  `internal/importer/claude_ai_sync.go` imports browser-fetched chats through
+  the shared runner in `internal/importer/browser_sync.go`.
 - **Browser sync:** The browser reads organizations, paginated conversation
   summaries, and selected conversation trees from Claude.ai's private API.
   Request shapes are shared by Go, Rust, and the Chrome extension in
-  `internal/importer/claude_ai_requests.txt`. Lists use `data` and `has_more`
+  `internal/importer/browser_requests/claude-ai.txt`;
+  `internal/importer/testdata/browser_paths/claude-ai.txt` lists the exact
+  paths Go builds, and the extension tests accept each one. Lists use `data`
+  and `has_more`
   and include active, archived, and starred chats. Details select
   `current_leaf_message_uuid` and follow string `parent_message_uuid` links to
   the root sentinel `00000000-0000-4000-8000-000000000000`. Message text comes
@@ -4178,25 +4182,37 @@ schemas keep their existing ordering behavior.
   Sync's HTTP stream contains only progress, done, and error events. Setup
   pins the extension's public-key-derived ID. Native frames are capped at 64
   MiB; oversized serialized replies become status 413. Both peers require
-  protocol revision 1 in each message, covering encoding and request shapes.
+  protocol revision 2 in each message, covering encoding and request shapes.
+  Revision 2 (2026-11-17) adds a `platform` field to each request. An
+  extension that does not know the platform replies `unsupported: true`; the
+  server fails only that request with the update message and keeps the
+  connection, checked by `TestChromeHostUnsupportedPlatformReply`. A revision
+  1 extension still answers with revision 1, so the server disconnects and
+  asks for the same update.
   `TestChromeHostLocalOnly` refuses remote-auth, bind-all, and forwarded
   requests before Chrome fetches. `TestChromeHostIncompatibleReply` checks
   mismatched replies during organization, list, and detail fetches before
   status or body consumption without imports. Sync cancels on compatibility
-  errors and returns `claude_ai_chrome_host_update_required`. Recovery is to
+  errors and returns `chrome_host_update_required`. Recovery is to
   restart AgentsView if upgraded, rerun setup, reload the extension, then
   Sync. `TestClaudeAIChromeStatus` verifies live connection status through the
   local-only GET route. Registration is per OS user; the last setup wins.
   `TestChromeHostKeepsLiveConnection` checks that a second profile is rejected
   and subsequent fetches still reach the first profile. Reverified 2026-10-11
-  against the Unix socket test. The worker test `refuses before touching tabs`
-  checks absent and unknown request revisions before tab access or fetch.
+  against the Unix socket test. The worker tests refuse unknown platforms with
+  `unsupported` and disallowed paths with an error before touching tabs, and
+  stamp every reply with the worker's own revision whatever revision the
+  request carried.
   `TestChromeSyncResults` checks the generated CLI operation with a base path,
   Origin, bearer token, partial summaries, and pre-stream error messages,
-  including `claude_ai_chrome_host_required` and `claude_ai_sync_running`.
+  including `chrome_host_required` and `chrome_sync_running`. These codes and
+  `browser_sync_auth_required` replaced the `claude_ai_` codes on 2026-11-17;
+  `claude_ai_config_invalid` is unchanged.
 - **Freshness:** Sync stores an FNV-64a hash of the list's `updated_at`, visible
   leaf, stored message count, transcript revision, title, and end time in
-  `provider_freshness`, keyed by `claude-ai` and session ID. Resync and
+  `provider_freshness`, keyed by `claude-ai` and session ID.
+  `TestClaudeAIFreshnessGolden` pins the hash bytes, so moving Claude.ai onto
+  the shared runner on 2026-11-17 did not invalidate stored hashes. Resync and
   `ResetAllMtimes` clear it. The hash includes a selected-branch-counts marker
   to refresh older cached counts once. A zip re-import that changes stored
   text, count, or title triggers a detail fetch. Title-only repairs count as
@@ -4383,6 +4399,73 @@ schemas keep their existing ordering behavior.
   data.
 - **Agentsview:** `internal/parser/chatgpt.go`; graph ancestry is flattened for
   display and the importer does not claim billing completeness.
+- **Chrome Sync:** `internal/importer/chatgpt_sync.go`, with request shapes in
+  `internal/importer/browser_requests/chatgpt.txt` and
+  `frontend/chrome-extension/chatgpt_fetch.js`. The contributor reports live
+  use of the private session, conversation list, and detail endpoints in
+  [agentsview#2226](https://github.com/kenn-io/agentsview/issues/2226),
+  checked 2026-10-17. The page fetches `/api/auth/session` for a short-lived
+  access token and sends it as a bearer header; the token never leaves the
+  page. Sync uses the export conversation parser. List timestamps accept ISO
+  strings or Unix seconds; detail timestamps use Unix seconds.
+- **Timestamps:** One supplied signed-in capture had a detail timestamp 0.68 s
+  after the list timestamp. Sync records freshness only when the two are
+  within 5 s, and fetches again when the detail is newer, checked by
+  `TestSyncChatGPTEquivalentTimestampsSkipSecondDetail` (2026-10-18). ChatGPT
+  has no signal for a reply still being written, so a chat synced mid-reply
+  keeps that reply until the list timestamp moves.
+- **Lists:** The
+  [txcript ChatGPT format notes](https://github.com/skillsynchq/txcript/blob/main/docs/formats/chatgpt.md),
+  checked 2026-10-17, document separate active (`is_archived=false`) and
+  archived (`is_archived=true`) lists. Sync pages both lists every run, checked
+  by `TestSyncChatGPTPagesActiveAndArchivedLists`.
+- **Detail format:** The
+  [conversation export format notes](https://github.com/ThierryAbalea/chatgpt-conversation-export/blob/main/docs/format.md),
+  checked 2026-10-17, describe a newer flat `messages` array with `page_info`
+  pagination. Sync does not parse it. A detail without a `mapping` object or
+  without both `conversation_id` and `id` counts as one failed chat toward the
+  two-failures stop, and the run then reports that AgentsView needs an update
+  (`TestSyncChatGPTUnsupportedFormatCountsTowardDetailStop`,
+  `TestSyncChatGPTSingleUnsupportedDetail`). A detail that parses to no
+  messages records freshness and is not fetched again until the list timestamp
+  changes (`TestSyncChatGPTEmptyConversationFreshness`, 2026-11-17). Before
+  2026-11-17 such chats were fetched on every run.
+- **Identities and history:** The parser stores each message's ChatGPT ID and
+  parent ID as source identities, for ZIP imports and Sync alike. Sync fills
+  missing identities and models in place; ZIP re-imports do not
+  (`TestImportChatGPTReimportLegacyRows`). A turn whose stored and incoming IDs
+  differ is an edit. Appends, completed tool results, and extended text keep
+  message IDs and pins. Edits, regenerations, and shorter chats replace the
+  chat and keep the previous version in Trash under full, transcripts, and
+  usage storage (`TestSyncChatGPTAppendFreshnessAndBranchChanges`,
+  `TestSyncChatGPTReplacesShorterBranchAndPreservesLostPins`,
+  `TestSyncChatGPTBackfillsLegacyIdentityBeforeReplacingEditedTurn`,
+  `TestSyncChatGPTUsageArchiveShorterBranchKeepsTrashedCopy`). Since
+  2026-11-17, a usage-only chat whose stored rows still match as a prefix but
+  that has fewer messages also keeps a Trash copy
+  (`TestSyncChatGPTUsageArchiveShorterCompatiblePrefixKeepsTrashedCopy`).
+  Stored models stay when a later reply makes the parser infer another model
+  (`TestSyncChatGPTArchiveUpdatesAppendedTurns`,
+  `TestSyncChatGPTUpdatesRetainedModelAndCachesFreshness`,
+  `TestSyncChatGPTUsageArchiveFillsModelWithUnchangedTimestamp`).
+- **Images and start time:** Browser details carry no asset identity, so images
+  show as `[image unavailable]`. Sync keeps a ZIP-imported upload on a user turn
+  whose position, role, timestamp, sanitized surrounding text, and saved IDs
+  (when present) match (`TestSyncChatGPTZipImageReconciliation`). When detail
+  `create_time` is null or absent, Sync keeps the stored start time or uses
+  the first dated message (`TestSyncChatGPTMissingCreateTime`).
+- **ChatGPT Sync errors:** Before streaming, `chrome_host_required` reports a
+  disconnected host and `chrome_sync_running` an active Chrome Sync. Stream
+  errors use `browser_sync_auth_required` for an HTTP 401 and
+  `chrome_host_update_required` for an incompatible extension. HTTP 429 that
+  outlasts five tries, or a `Retry-After` over 60 s, ends the run
+  (`TestSyncChatGPTLongRetryAfterKeepsEarlierWrites`).
+- **Evidence limits:** The 5 s skew comes from one capture. Whether the list
+  timestamp moves when a reply finishes is unverified. Project chats, Business
+  workspaces, and the flat detail format are unverified. The live checks above
+  predate the 2026-11-17 move onto the shared Sync runner; the move was
+  verified with synthetic tests only. A live run on the moved code is still
+  needed.
 
 ## Kiro CLI (`kiro`)
 

@@ -209,6 +209,76 @@ UI.
 Claude.ai's private endpoints can change without notice. Sign in again if Sync
 reports that your sign-in expired.
 
+## Sync ChatGPT chats
+
+ChatGPT Sync runs from the command line. The **Import conversations** dialog
+syncs only Claude.ai for now; it still imports ChatGPT ZIP exports.
+
+1. Set up the Chrome extension as described in
+   [Sync Claude.ai chats](#sync-claudeai-chats). If you set it up before this
+   release, rerun `agentsview source chrome setup`, reload the extension at
+   `chrome://extensions`, and approve its new access to `chatgpt.com`.
+2. Sign in to ChatGPT in the Chrome profile that has the extension enabled.
+3. With AgentsView and Chrome running, run:
+
+   ```bash
+   agentsview source import --type chatgpt --sync
+   ```
+
+Sync reuses an open ChatGPT tab. When none is open, it opens one in the
+background and leaves it open.
+
+The extension reads a short-lived access token inside the ChatGPT page and uses
+it only for the allowed conversation-list and conversation requests. The token
+does not reach AgentsView or native messaging; only the conversation responses
+do. Sync needs a local writable archive and a connected Chrome extension.
+
+What Sync fetches:
+
+- Both the active and the archived chat lists. Coverage of Project chats and
+  Business workspaces is unverified.
+- Only chats whose list `update_time` differs from the last Sync, or whose
+  stored copy changed since then. The first Sync fetches every listed chat,
+  including chats a ZIP import already stored.
+- One chat about every 3 seconds. A 2,000-chat first Sync takes about 100
+  minutes.
+- A chat with nothing to import yet is skipped until its `update_time` changes.
+
+How Sync updates stored chats:
+
+- New turns, completed tool results, and missing models are added in place.
+  Message IDs and pins stay as they are, and no copy is made.
+- An edited, regenerated, or shorter chat replaces the stored one with ChatGPT's
+  visible branch. Sync keeps the previous version in Trash with its pins,
+  notes, and archived images, under every archive policy. Syncing the same
+  change again makes no further copy.
+- Messages now store their ChatGPT message and parent IDs. Sync fills these IDs
+  and missing models into chats imported earlier. ZIP re-imports do not.
+- ChatGPT has no signal that a reply is still being written. A chat synced
+  mid-reply keeps that partial reply until its `update_time` changes. Sync
+  accepts a difference of up to 5 seconds between the list and conversation
+  timestamps, which differ slightly for the same chat.
+
+Images appear as `[image unavailable]`. Sync keeps an upload from a ZIP import
+when the user turn's position, role, timestamp, and surrounding text match, and
+when its saved message and parent IDs match if the archive has them.
+Generated images come from the browser copy, so regenerating an image drops the
+old one from the visible chat; the Trash copy keeps it.
+
+When Sync stops:
+
+- Each chat has a 32 MiB response limit. Larger chats count as failed and Sync
+  continues.
+- Two failed chats in a row end Sync. Oversized chats do not count toward this.
+- A rate limit that outlasts the retries, or a requested wait longer than 60
+  seconds, ends Sync early. Run Sync again later to continue.
+- A chat in a format this version cannot read counts as one failure. Sync
+  finishes the other chats, then reports that AgentsView needs an update.
+- An expired sign-in ends Sync. Sign in to ChatGPT in Chrome and run Sync again.
+
+Chats imported before Sync stopped stay imported. ChatGPT's private API can
+change without notice.
+
 ## Importing via the CLI
 
 Use `agentsview source import` to import from the command line:
@@ -222,6 +292,7 @@ agentsview source import --type gemini-apps ~/Downloads/takeout.zip
 | Flag | Description |
 |------|-------------|
 | `--type` | `claude-ai`, `chatgpt`, or `gemini-apps` (required) |
+| `--sync` | Sync through Chrome instead of importing a file (`claude-ai` and `chatgpt` only). Needs a running server and the Chrome extension; takes no path or `--replace`. |
 | `--replace` | Session ID whose archived messages the import may replace when the normal import refuses them; repeat for more sessions (`claude-ai` and `chatgpt` only). See [Replacing archived history](#replacing-archived-history). |
 
 The path can be a `.zip` file, a `conversations.json` file
