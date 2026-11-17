@@ -533,28 +533,37 @@ func TestPartialActivityInvalidDiskEntryIsMiss(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", cache)
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	keptActivityMirror(t, path, "session-a", 500)
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
 	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
 	require.NoError(t, err)
-	store := openUsagePartsStore(t, path)
 	keptActivityBuild(t, store, q, true)
 	require.NoError(t, store.Close())
 	rewritten := 0
 	require.NoError(t, filepath.WalkDir(cache, func(path string, entry os.DirEntry, err error) error {
-		if err != nil || entry.IsDir() || filepath.Ext(path) != ".gob" {
-			return err
-		}
-		data, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
-		header := bytes.IndexByte(data, '\n')
-		require.GreaterOrEqual(t, header, 0)
-		rewritten++
-		return os.WriteFile(path, append(data[:header+1], []byte("corrupt")...), 0o600)
+		if filepath.Ext(path) == ".gob" {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			headerEnd := bytes.IndexByte(data, '\n')
+			require.GreaterOrEqual(t, headerEnd, 0)
+			if err := os.WriteFile(path, append(data[:headerEnd+1], []byte("corrupt")...), 0o600); err != nil {
+				return err
+			}
+			rewritten++
+		}
+		return nil
 	}))
 	require.Positive(t, rewritten)
-	restarted := openUsagePartsStore(t, path)
+	restarted, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
 	defer restarted.Close()
+	require.NoError(t, restarted.OpenActivityReportDisk(t.Context()))
 	usageReads, runReads := 0, 0
 	previous := analyticsQueryObserver
 	analyticsQueryObserver = func(query string) {

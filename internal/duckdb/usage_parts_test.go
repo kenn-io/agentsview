@@ -374,90 +374,89 @@ func TestUsagePartsDefaultTimezone(t *testing.T) {
 }
 
 func TestUsagePartsReplacementDuringRefresh(t *testing.T) {
-	t.Run("changed", func(t *testing.T) {
-		skipReopenTestOnWindows(t)
-		read := func(s *Store, f db.UsageFilter) (db.DailyUsageResult, int, error) {
-			result, err := s.GetDailyUsage(t.Context(), f)
-			return result, result.Totals.OutputTokens, err
-		}
-		t.Chdir(t.TempDir())
-		t.Setenv("CACHE_DIRECTORY", "cache")
-		dir := t.TempDir()
-		old, middle, final := filepath.Join(dir, "old.duckdb"), filepath.Join(dir, "middle.duckdb"), filepath.Join(dir, "final.duckdb")
-		for _, fixture := range []struct {
-			path, aFingerprint, bFingerprint string
-			a, b                             int
-		}{{old, "a1", "b1", 100, 200}, {middle, "a2", "b1", 300, 200}, {final, "a3", "b2", 500, 400}} {
-			keptActivityMirror(t, fixture.path, "session-a", fixture.a)
-			writeUsageMirror(t, fixture.path,
-				`UPDATE model_pricing SET updated_at = '2026-01-01T00:00:00Z'`,
-				`UPDATE sessions SET agentsview_push_fingerprint = '`+fixture.aFingerprint+`'`,
-				`INSERT INTO sessions SELECT * REPLACE ('session-b' AS id, '`+fixture.bFingerprint+`' AS agentsview_push_fingerprint) FROM sessions WHERE id = 'session-a'`,
-				`INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id, '{"output_tokens":`+strconv.Itoa(fixture.b)+`}' AS token_usage, `+strconv.Itoa(fixture.b)+` AS usage_output_tokens) FROM messages WHERE id = 2`,
-			)
-		}
-		f := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
-		store := openUsagePartsStore(t, old)
-		_, total, err := read(store, f)
-		require.NoError(t, err)
-		require.Equal(t, 300, total)
-		require.NoError(t, store.Close())
-		require.NoError(t, swapMirrorFile(middle, old))
-		store = openUsagePartsStore(t, old)
-		defer store.Close()
-		previous := usagePartReadObserver
-		usagePartReadObserver = func(ids []string) {
-			require.Equal(t, []string{"session-a"}, ids)
-			require.NoError(t, swapMirrorFile(final, old))
-			store.checkMirrorReplacement(t.Context(), func(err error) { require.NoError(t, err) })
-		}
-		t.Cleanup(func() { usagePartReadObserver = previous })
-		got, total, err := read(store, f)
-		require.NoError(t, err)
-		require.Equal(t, 900, total)
-		usagePartReadObserver = nil
-		fresh := NewStoreFromDB(store.DB())
-		want, _, err := read(fresh, f)
-		require.NoError(t, err)
-		require.Equal(t, want, got)
-		stable, _, err := read(store, f)
-		require.NoError(t, err)
-		require.Equal(t, want, stable)
-		require.NoError(t, store.Close())
-		store = openUsagePartsStore(t, old)
-		defer store.Close()
-		reads := 0
-		queryObserver := analyticsQueryObserver
-		analyticsQueryObserver = func(string) { reads++ }
-		t.Cleanup(func() { analyticsQueryObserver = queryObserver })
-		restarted, _, err := read(store, f)
-		require.NoError(t, err)
-		require.Equal(t, want, restarted)
-		require.Zero(t, reads)
-	})
-	t.Run("unchanged", func(t *testing.T) {
-		skipReopenTestOnWindows(t)
-		t.Setenv("CACHE_DIRECTORY", t.TempDir())
-		dir := t.TempDir()
-		path, next := filepath.Join(dir, "mirror.duckdb"), filepath.Join(dir, "next.duckdb")
-		keptActivityMirror(t, path, "session-a", 500)
-		keptActivityMirror(t, next, "session-a", 900)
-		writeUsageMirror(t, path, `UPDATE sessions SET agentsview_push_fingerprint = 'a1'`)
-		writeUsageMirror(t, next, `UPDATE sessions SET agentsview_push_fingerprint = 'a2'`)
-		store := openUsagePartsStore(t, path)
-		defer store.Close()
-		kept.SaveParts(&store.usageDisk, "replacement-test", "v1", []kept.Part[int]{{ID: "session-a", Fingerprint: "a1", Present: true, Value: 500}}, func(int) int64 { return 1 })
-		read := func(ctx context.Context, ids []string, peers map[string]string) (map[string]int, error) {
-			var output int
-			err := store.queryRowContext(ctx, `SELECT usage_output_tokens FROM messages WHERE id = 2`).Scan(&output)
-			return map[string]int{"session-a": output}, err
-		}
-		parts, err := refreshUsageParts(t.Context(), store, "replacement-test", usagePartsOptions[int]{version: "v1", omitCursor: true, stale: func(int) bool {
-			require.NoError(t, swapMirrorFile(next, path))
-			store.checkMirrorReplacement(t.Context(), func(err error) { require.NoError(t, err) })
-			return false
-		}}, func(int) int64 { return 1 }, read)
-		require.NoError(t, err)
-		require.Equal(t, 900, parts["session-a"])
-	})
+	skipReopenTestOnWindows(t)
+	read := func(s *Store, f db.UsageFilter) (db.DailyUsageResult, int, error) {
+		result, err := s.GetDailyUsage(t.Context(), f)
+		return result, result.Totals.OutputTokens, err
+	}
+	t.Chdir(t.TempDir())
+	t.Setenv("CACHE_DIRECTORY", "cache")
+	dir := t.TempDir()
+	old, middle, final := filepath.Join(dir, "old.duckdb"), filepath.Join(dir, "middle.duckdb"), filepath.Join(dir, "final.duckdb")
+	for _, fixture := range []struct {
+		path, aFingerprint, bFingerprint string
+		a, b                             int
+	}{{old, "a1", "b1", 100, 200}, {middle, "a2", "b1", 300, 200}, {final, "a3", "b2", 500, 400}} {
+		keptActivityMirror(t, fixture.path, "session-a", fixture.a)
+		writeUsageMirror(t, fixture.path,
+			`UPDATE model_pricing SET updated_at = '2026-01-01T00:00:00Z'`,
+			`UPDATE sessions SET agentsview_push_fingerprint = '`+fixture.aFingerprint+`'`,
+			`INSERT INTO sessions SELECT * REPLACE ('session-b' AS id, '`+fixture.bFingerprint+`' AS agentsview_push_fingerprint) FROM sessions WHERE id = 'session-a'`,
+			`INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id, '{"output_tokens":`+strconv.Itoa(fixture.b)+`}' AS token_usage, `+strconv.Itoa(fixture.b)+` AS usage_output_tokens) FROM messages WHERE id = 2`,
+		)
+	}
+	f := db.UsageFilter{From: "2026-01-01", To: "2026-01-01", Timezone: "UTC"}
+	store := openUsagePartsStore(t, old)
+	_, total, err := read(store, f)
+	require.NoError(t, err)
+	require.Equal(t, 300, total)
+	require.NoError(t, store.Close())
+	require.NoError(t, swapMirrorFile(middle, old))
+	store = openUsagePartsStore(t, old)
+	defer store.Close()
+	previous := usagePartReadObserver
+	usagePartReadObserver = func(ids []string) {
+		require.Equal(t, []string{"session-a"}, ids)
+		require.NoError(t, swapMirrorFile(final, old))
+		store.checkMirrorReplacement(t.Context(), func(err error) { require.NoError(t, err) })
+	}
+	t.Cleanup(func() { usagePartReadObserver = previous })
+	got, total, err := read(store, f)
+	require.NoError(t, err)
+	require.Equal(t, 900, total)
+	usagePartReadObserver = nil
+	fresh := NewStoreFromDB(store.DB())
+	want, _, err := read(fresh, f)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	stable, _, err := read(store, f)
+	require.NoError(t, err)
+	require.Equal(t, want, stable)
+	require.NoError(t, store.Close())
+	store = openUsagePartsStore(t, old)
+	defer store.Close()
+	reads := 0
+	queryObserver := analyticsQueryObserver
+	analyticsQueryObserver = func(string) { reads++ }
+	t.Cleanup(func() { analyticsQueryObserver = queryObserver })
+	restarted, _, err := read(store, f)
+	require.NoError(t, err)
+	require.Equal(t, want, restarted)
+	require.Zero(t, reads)
+}
+
+func TestUsagePartsReplacementDuringUnchangedRead(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	dir := t.TempDir()
+	path, next := filepath.Join(dir, "mirror.duckdb"), filepath.Join(dir, "next.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	keptActivityMirror(t, next, "session-a", 900)
+	writeUsageMirror(t, path, `UPDATE sessions SET agentsview_push_fingerprint = 'a1'`)
+	writeUsageMirror(t, next, `UPDATE sessions SET agentsview_push_fingerprint = 'a2'`)
+	store := openUsagePartsStore(t, path)
+	defer store.Close()
+	kept.SaveParts(&store.usageDisk, "replacement-test", "v1", []kept.Part[int]{{ID: "session-a", Fingerprint: "a1", Present: true, Value: 500}}, func(int) int64 { return 1 })
+	read := func(ctx context.Context, ids []string, peers map[string]string) (map[string]int, error) {
+		var output int
+		err := store.queryRowContext(ctx, `SELECT usage_output_tokens FROM messages WHERE id = 2`).Scan(&output)
+		return map[string]int{"session-a": output}, err
+	}
+	parts, err := refreshUsageParts(t.Context(), store, "replacement-test", usagePartsOptions[int]{version: "v1", omitCursor: true, stale: func(int) bool {
+		require.NoError(t, swapMirrorFile(next, path))
+		store.checkMirrorReplacement(t.Context(), func(err error) { require.NoError(t, err) })
+		return false
+	}}, func(int) int64 { return 1 }, read)
+	require.NoError(t, err)
+	require.Equal(t, 900, parts["session-a"])
 }
