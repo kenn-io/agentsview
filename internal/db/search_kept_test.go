@@ -3,9 +3,6 @@
 package db
 
 import (
-	"bytes"
-	"context"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -13,56 +10,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
-
-func TestSearchKeptDeletedSessions(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		delete func(context.Context, *DB) (int, error)
-	}{
-		{"permanent", func(ctx context.Context, d *DB) (int, error) {
-			if err := d.SoftDeleteSession(ctx, "session"); err != nil {
-				return 0, err
-			}
-			n, err := d.DeleteSessionIfTrashed(ctx, "session")
-			return int(n), err
-		}},
-		{"parser excluded", func(ctx context.Context, d *DB) (int, error) {
-			return d.DeleteParserExcludedSessions(ctx, []string{"session"})
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cache := t.TempDir()
-			t.Setenv("CACHE_DIRECTORY", cache)
-			d := testDB(t)
-			ctx := t.Context()
-			insertSession(t, d, "session", "project")
-			insertMessages(t, d, Message{SessionID: "session", Role: "user", Content: "secretsnippet"})
-			page, err := d.Search(ctx, SearchFilter{Query: "secretsnippet"})
-			require.NoError(t, err)
-			require.Len(t, page.Results, 1)
-			containsSnippet := func() bool {
-				t.Helper()
-				found := false
-				require.NoError(t, filepath.WalkDir(cache, func(path string, entry fs.DirEntry, err error) error {
-					if err != nil || entry.IsDir() {
-						return err
-					}
-					data, err := os.ReadFile(path)
-					if err == nil && bytes.Contains(data, []byte("secretsnippet")) {
-						found = true
-					}
-					return err
-				}))
-				return found
-			}
-			require.True(t, containsSnippet())
-			deleted, err := tc.delete(ctx, d)
-			require.NoError(t, err)
-			require.Equal(t, 1, deleted)
-			require.False(t, containsSnippet())
-		})
-	}
-}
 
 func TestSearchKeptSelections(t *testing.T) {
 	d := testDB(t)

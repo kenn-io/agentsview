@@ -1435,15 +1435,12 @@ func (db *DB) PurgeExcludedSessions(ctx context.Context) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	n, err := purgeExcludedSessionsTx(ctx, tx, false)
+	_, err = purgeExcludedSessionsTx(ctx, tx, false)
 	if err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return err
-	}
-	if n > 0 {
-		db.forgetSearchPages()
 	}
 	return nil
 }
@@ -1552,9 +1549,6 @@ func (db *DB) DeleteParserExcludedSessions(ctx context.Context, ids []string) (i
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit parser-excluded delete: %w", err)
-	}
-	if deleted > 0 {
-		db.forgetSearchPages()
 	}
 	return int(deleted), nil
 }
@@ -5768,15 +5762,12 @@ func (db *DB) DeleteSession(ctx context.Context, id string) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	n, err := deleteSessionsTx(ctx, tx, "id = ?", id)
+	_, err = deleteSessionsTx(ctx, tx, "id = ?", id)
 	if err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return err
-	}
-	if n > 0 {
-		db.forgetSearchPages()
 	}
 	return nil
 }
@@ -5979,9 +5970,6 @@ func (db *DB) DeleteSessionIfTrashed(ctx context.Context, id string) (int64, err
 
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit delete-if-trashed: %w", err)
-	}
-	if n > 0 {
-		db.forgetSearchPages()
 	}
 	return n, nil
 }
@@ -6549,9 +6537,6 @@ func (db *DB) EmptyTrash(ctx context.Context) (int, error) {
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit empty-trash: %w", err)
 	}
-	if n > 0 {
-		db.forgetSearchPages()
-	}
 	return int(n), nil
 }
 
@@ -6598,9 +6583,6 @@ func (db *DB) DeleteSessions(ctx context.Context, ids []string) (int, error) {
 
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("committing transaction: %w", err)
-	}
-	if total > 0 {
-		db.forgetSearchPages()
 	}
 	return total, nil
 }

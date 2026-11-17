@@ -96,9 +96,6 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 	if err != nil || !ok {
 		return s.search(ctx, f)
 	}
-	if s.usageDisk.ObserveJSON(version) {
-		s.searchReads.Clear()
-	}
 	return s.searchReads.DoChecked(ctx, f.Slot(), version, func(ctx context.Context) (db.SearchPage, bool, error) {
 		ctx = context.WithValue(ctx, partsSnapshotKey{}, snapshot)
 		return kept.LoadJSON(&s.usageDisk, "search|"+f.Slot(), version, func() bool {

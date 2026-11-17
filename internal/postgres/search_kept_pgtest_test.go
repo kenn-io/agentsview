@@ -4,9 +4,11 @@ package postgres
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
@@ -26,6 +28,45 @@ func (tr *searchQueryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d
 	return ctx
 }
 func (*searchQueryTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+func TestSearchKeptSingleConnection(t *testing.T) {
+	local, syncer, store := newUsageJournalFixture(t)
+	ctx := t.Context()
+	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "session", Project: "project", Machine: "device", Agent: "claude", MessageCount: 1}))
+	require.NoError(t, local.ReplaceSessionMessages(ctx, "session", []db.Message{{SessionID: "session", Role: "user", Content: "needle0 needle1 needle2 needle3 needle4"}}))
+	pgKeptPush(t, syncer, false)
+	store.DB().SetMaxOpenConns(1)
+	searchCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	page, err := store.Search(searchCtx, db.SearchFilter{Query: "needle"})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	require.Equal(t, "session", page.Results[0].SessionID)
+	store.DB().SetMaxOpenConns(5)
+	concurrentCtx, cancelConcurrent := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelConcurrent()
+	type result struct {
+		page db.SearchPage
+		err  error
+	}
+	results := make(chan result, 5)
+	for i := range 5 {
+		go func() {
+			page, err := store.Search(concurrentCtx, db.SearchFilter{Query: fmt.Sprintf("needle%d", i)})
+			results <- result{page, err}
+		}()
+	}
+	for range 5 {
+		select {
+		case got := <-results:
+			require.NoError(t, got.err)
+			require.Len(t, got.page.Results, 1)
+			require.Equal(t, "session", got.page.Results[0].SessionID)
+		case <-concurrentCtx.Done():
+			t.Fatal("concurrent searches did not finish")
+		}
+	}
+}
 
 func TestSearchKeptRestart(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
@@ -85,41 +126,4 @@ func TestSearchKeptRestart(t *testing.T) {
 	require.Len(t, got.Results, 1)
 	require.Contains(t, got.Results[0].Snippet, "second")
 	require.Zero(t, trace.count.Load())
-	version := snapshotUsageVersion(ctx, s.pg, 0)
-	filter.Limit = db.DefaultSearchLimit
-	_, ok := s.trendsDisk.Get("search|"+filter.Slot(), "json|v1|"+version)
-	require.True(t, ok)
-	require.NoError(t, s.SoftDeleteSession(ctx, "session"))
-	deleted, err := s.DeleteSessionIfTrashed(ctx, "session")
-	require.NoError(t, err)
-	require.EqualValues(t, 1, deleted)
-	_, ok = s.trendsDisk.Get("search|"+filter.Slot(), "json|v1|"+version)
-	require.False(t, ok)
-}
-
-func TestSearchKeptPushDeletion(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	local, syncer, store := newUsageJournalFixture(t)
-	ctx := t.Context()
-	require.NoError(t, store.ConfigureUsageCache(ctx, t.TempDir(), testPGURL(t), syncer.schema))
-	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "session", Project: "project", Machine: "device", Agent: "claude", MessageCount: 1}))
-	require.NoError(t, local.ReplaceSessionMessages(ctx, "session", []db.Message{{SessionID: "session", Role: "user", Content: "uniquesnippet"}}))
-	pgKeptPush(t, syncer, false)
-	filter := db.SearchFilter{Query: "uniquesnippet", Limit: db.DefaultSearchLimit}
-	page, err := store.Search(ctx, filter)
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	version := snapshotUsageVersion(ctx, store.pg, 0)
-	_, ok := store.trendsDisk.Get("search|"+filter.Slot(), "json|v1|"+version)
-	require.True(t, ok)
-	_, err = store.pg.ExecContext(ctx, `INSERT INTO excluded_sessions (id) VALUES ($1)`, "session")
-	require.NoError(t, err)
-	pgKeptPush(t, syncer, true)
-	var count int
-	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions WHERE id = $1`, "session").Scan(&count))
-	require.Zero(t, count)
-	_, err = store.Search(ctx, db.SearchFilter{Query: "unrelated"})
-	require.NoError(t, err)
-	_, ok = store.trendsDisk.Get("search|"+filter.Slot(), "json|v1|"+version)
-	require.False(t, ok)
 }

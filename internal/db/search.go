@@ -466,12 +466,6 @@ func (db *DB) searchVersion(ctx context.Context, cjk bool) string {
 	return fmt.Sprintf("%s|%s|%s", id, token, fingerprint)
 }
 
-func (db *DB) forgetSearchPages() {
-	db.trendsPartsDisk()
-	db.trendsDisk.DropJSON("")
-	db.searchKept.Clear()
-}
-
 func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage, error) {
 	ftsQuery, err := db.prepareMessageFTSQueryWithCJK(ctx, f.Query, cjk)
 	if err != nil {
