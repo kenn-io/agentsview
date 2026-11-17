@@ -150,7 +150,7 @@ func TestHostedTenantRejectsForeignRawRowsAndUnknownTables(t *testing.T) {
 	f := newHostedFixture(t, "tenant-a")
 	_, err = f.admin.ExecContext(t.Context(), `CREATE TABLE vector_chunks_g999999 (doc_key text)`)
 	require.NoError(t, err)
-	assert.Error(t, CheckHostedTenant(t.Context(), f.runtime, f.schema, f.tenant))
+	assert.EqualError(t, CheckHostedTenant(t.Context(), f.runtime, f.schema, f.tenant), "hosted vector schema is unsupported")
 	_, err = f.admin.ExecContext(t.Context(), `DROP TABLE vector_chunks_g999999`)
 	require.NoError(t, err)
 	_, err = f.admin.ExecContext(t.Context(), `CREATE TABLE untracked_data(id integer)`)

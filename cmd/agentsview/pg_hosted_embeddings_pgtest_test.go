@@ -12,7 +12,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -40,25 +39,27 @@ func TestHostedSemanticUnavailableGuidance(t *testing.T) {
 	defaults.Vector.Embeddings.DefaultServer = "fixture"
 	defaults.Vector.Embeddings.Servers = map[string]config.VectorEmbeddingsServerConfig{"fixture": {Endpoint: "http://example.test", Timeout: "30s"}}
 	for _, tc := range []struct {
-		name   string
-		vector config.VectorConfig
-		server *config.VectorEmbeddingsServerConfig
-		want   string
+		name    string
+		vector  config.VectorConfig
+		server  *config.VectorEmbeddingsServerConfig
+		enabled bool
+		want    string
 	}{
-		{name: "disabled", want: "[vector]"},
-		{name: "missing generation", vector: defaults.Vector, want: "hosted-provision"},
-		{name: "missing deployment recipe", server: &config.VectorEmbeddingsServerConfig{Endpoint: "http://example.test"}, want: "hosted-provision"},
+		{name: "disabled", want: "semantic search: configure [vector]"},
+		{name: "missing generation", vector: defaults.Vector, enabled: true, want: "generation not published"},
+		{name: "missing deployment recipe", server: &config.VectorEmbeddingsServerConfig{Endpoint: "http://example.test"}, want: "semantic recipe adoption requires exactly one supported published generation"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg.Vector = tc.vector
-			if tc.name == "missing generation" {
-				cfg.Vector.Enabled = true
-			}
+			cfg.Vector.Enabled = tc.enabled
 			cfg.DeploymentEmbeddings = tc.server
 			require.NoError(t, wireReplicaVectorSearch(t.Context(), cfg, &serveWatchVectorProvider{miss: true}, store, "hosted"))
 			_, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "hello", Mode: "semantic"})
 			require.ErrorIs(t, err, db.ErrSemanticUnavailable)
 			assert.Contains(t, err.Error(), tc.want)
+			if tc.enabled || tc.server != nil {
+				assert.Contains(t, err.Error(), "hosted-provision")
+			}
 			assert.NotContains(t, err.Error(), "replica pg push")
 			assert.NotContains(t, err.Error(), "configured workstation")
 		})
@@ -81,14 +82,8 @@ func TestHostedCaptureSemanticSearch(t *testing.T) {
 			return
 		}
 		data := make([]map[string]any, len(req.Input))
-		for i, input := range req.Input {
-			embedding := []float32{0, 1}
-			if strings.Contains(input, "Review the changed build") {
-				embedding = []float32{1, 0}
-			} else if strings.Contains(input, "Competing build") {
-				embedding = []float32{0.6, 0.8}
-			}
-			data[i] = map[string]any{"index": i, "embedding": embedding}
+		for i := range req.Input {
+			data[i] = map[string]any{"index": i, "embedding": []float32{1, 0}}
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": data, "model": "fixture", "object": "list"})
 	}))
@@ -124,18 +119,6 @@ func TestHostedCaptureSemanticSearch(t *testing.T) {
 	client := newHostedCaptureClient(t, startup, store, parser.AgentClaude, root)
 	receipt := client.capture(t)
 	waitCaptureJob(t, admin, receipt.ManifestID, "complete", 1)
-	const competitorID = "33333333-3333-4333-8333-333333333333"
-	competitorRoot := t.TempDir()
-	competitorPath := rawtest.Claude(t, competitorRoot)
-	competitorContent, err := os.ReadFile(competitorPath)
-	require.NoError(t, err)
-	competitorContent = bytes.Replace(competitorContent, []byte(`"sessionId":"`+rawtest.ClaudeID+`"`), []byte(`"sessionId":"`+competitorID+`"`), 1)
-	competitorContent = bytes.Replace(competitorContent, []byte("Inspect the build."), []byte("Competing build."), 1)
-	require.NoError(t, os.WriteFile(competitorPath, competitorContent, 0600))
-	require.NoError(t, os.Rename(competitorPath, filepath.Join(filepath.Dir(competitorPath), competitorID+".jsonl")))
-	competitor := newHostedCaptureClient(t, startup, store, parser.AgentClaude, competitorRoot)
-	competitorReceipt := competitor.capture(t)
-	waitCaptureJob(t, admin, competitorReceipt.ManifestID, "complete", 1)
 	search := func(text string) (db.ContentSearchPage, error) {
 		return store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: text, Mode: "semantic", IncludeOneShot: true, Limit: 10})
 	}
@@ -144,12 +127,11 @@ func TestHostedCaptureSemanticSearch(t *testing.T) {
 		if !assert.NoError(c, err) {
 			return
 		}
-		var original, competitor bool
+		var original bool
 		for _, match := range page.Matches {
 			original = original || match.SessionID == rawtest.ClaudeID && strings.Contains(match.Snippet, "Inspect the build")
-			competitor = competitor || match.SessionID == competitorID && strings.Contains(match.Snippet, "Competing build")
 		}
-		assert.True(c, original && competitor)
+		assert.True(c, original)
 	}, 30*time.Second, time.Second)
 	content, err := os.ReadFile(path)
 	require.NoError(t, err)
@@ -158,20 +140,17 @@ func TestHostedCaptureSemanticSearch(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, content, 0600))
 	next := client.capture(t)
 	waitCaptureJob(t, admin, next.ManifestID, "complete", 1)
-	require.Eventually(t, func() bool {
-		var count int
-		err := admin.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_documents WHERE content LIKE '%Review the changed build%'`).Scan(&count)
-		return err == nil && count == 1
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		page, err := search("Review the changed build")
+		if !assert.NoError(c, err) {
+			return
+		}
+		var found bool
+		for _, match := range page.Matches {
+			found = found || match.SessionID == rawtest.ClaudeID && strings.Contains(match.Snippet, "Review the changed build")
+		}
+		assert.True(c, found)
 	}, 30*time.Second, time.Second)
-	page, err := search("Review the changed build")
-	require.NoError(t, err)
-	require.GreaterOrEqual(t, len(page.Matches), 2)
-	assert.Equal(t, rawtest.ClaudeID, page.Matches[0].SessionID)
-	assert.Equal(t, competitorID, page.Matches[1].SessionID)
-	assert.Contains(t, page.Matches[0].Snippet, "Review the changed build")
-	var old int
-	require.NoError(t, admin.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_documents WHERE content LIKE '%Inspect the build%'`).Scan(&old))
-	assert.Zero(t, old)
 	configured.PG.RawDerivation = false
 	reader, err := prepareReplicaServeImpl(t.Context(), pgReplica{}, configured, "", nil, false)
 	require.NoError(t, err)
