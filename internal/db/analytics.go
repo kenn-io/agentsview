@@ -3146,7 +3146,7 @@ type toolSessionInfo struct {
 }
 
 func (db *DB) analyticsToolRows(ctx context.Context, f AnalyticsFilter) ([]ToolAnalyticsRow, error) {
-	sessions, err := db.toolSessions(ctx, f)
+	sessions, err := db.toolSessions(ctx, f, false)
 	if err != nil {
 		return nil, err
 	}
@@ -3158,7 +3158,7 @@ func (db *DB) analyticsToolRows(ctx context.Context, f AnalyticsFilter) ([]ToolA
 	return db.toolRowsFor(ctx, f, sessions, ids)
 }
 
-func (db *DB) toolSessions(ctx context.Context, f AnalyticsFilter) (map[string]toolSessionInfo, error) {
+func (db *DB) toolSessions(ctx context.Context, f AnalyticsFilter, withFingerprint bool) (map[string]toolSessionInfo, error) {
 	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
 	where, args := f.buildWhereWithoutDate()
 	if pred, windowArgs := f.toolSessionWindowSQL(dateCol, "sessions.id"); pred != "" {
@@ -3167,9 +3167,9 @@ func (db *DB) toolSessions(ctx context.Context, f AnalyticsFilter) (map[string]t
 	}
 
 	// Fetch filtered session IDs and their metadata.
-	fingerprint := `json_array(COALESCE(trends_generation, ''), COALESCE(usage_generation, ''), COALESCE(tools_generation, ''), COALESCE(quality_signal_version, ''), COALESCE(agent, ''), COALESCE(project, ''), COALESCE(started_at, ''), COALESCE(created_at, ''))`
-	if db.readOnly {
-		fingerprint = `''`
+	fingerprint := `''`
+	if withFingerprint {
+		fingerprint = `json_array(COALESCE(usage_generation, ''), COALESCE(tools_generation, ''), COALESCE(quality_signal_version, ''), COALESCE(agent, ''), COALESCE(project, ''), COALESCE(started_at, ''), COALESCE(created_at, ''))`
 	}
 	sessQ := `SELECT id, ` + dateCol + `, agent, project, ` + fingerprint + ` FROM sessions WHERE ` + where
 

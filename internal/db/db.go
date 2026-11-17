@@ -1512,7 +1512,7 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 	d.mu.Lock()
 	_, err = d.getWriter().ExecContext(ctx, "ALTER TABLE sessions ADD COLUMN trends_generation TEXT; ALTER TABLE sessions ADD COLUMN tools_generation TEXT")
 	if err == nil {
-		_, err = d.getWriter().ExecContext(ctx, trendsGenerationSchemaSQL+usageGenerationSchemaSQL)
+		_, err = d.getWriter().ExecContext(ctx, usageGenerationSchemaSQL)
 	}
 	if err == nil {
 		_, err = d.getWriter().ExecContext(ctx, toolsGenerationSchemaSQL)

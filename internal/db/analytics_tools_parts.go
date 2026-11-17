@@ -4,33 +4,34 @@ import (
 	"context"
 	"encoding/json/v2"
 	"fmt"
-	"maps"
 	"sort"
-	"sync"
 
 	"go.kenn.io/agentsview/internal/kept"
 )
 
+// Increment when the stored ToolAnalyticsRow shape or meaning changes.
 const toolsPartsVersion = 1
 
-var toolsPartsObserver struct {
-	sync.Mutex
-	read func([]string)
-}
-
-// SetToolsPartsReadObserver installs an observer for tests and returns its reset function.
-func SetToolsPartsReadObserver(observe func([]string)) func() {
-	toolsPartsObserver.Lock()
-	toolsPartsObserver.read = observe
-	toolsPartsObserver.Unlock()
-	return func() { toolsPartsObserver.Lock(); toolsPartsObserver.read = nil; toolsPartsObserver.Unlock() }
-}
+var toolsPartsReadObserver func([]string)
 
 func (db *DB) toolsFromParts(ctx context.Context, identity string, f AnalyticsFilter) (ToolsAnalyticsResponse, bool, error) {
 	if f.ActiveSince != "" || TerminationUsesTime(f.Termination) || f.Timezone == "Local" {
 		return ToolsAnalyticsResponse{}, false, nil
 	}
-	sessions, err := db.toolSessions(ctx, f)
+	// These tokens cover session selection and Tools inputs during the fill.
+	readTokens := func() ([3]string, error) {
+		var tokens [3]string
+		err := db.getReader().QueryRowContext(ctx, `SELECT
+ COALESCE((SELECT value FROM archive_metadata WHERE key='dashboard_common'), ''),
+ COALESCE((SELECT value FROM archive_metadata WHERE key='dashboard_tools'), ''),
+ COALESCE((SELECT value FROM archive_metadata WHERE key='dashboard_scope'), '')`).Scan(&tokens[0], &tokens[1], &tokens[2])
+		return tokens, err
+	}
+	before, err := readTokens()
+	if err != nil || before[0] == "" || before[1] == "" || before[2] == "" {
+		return ToolsAnalyticsResponse{}, false, nil
+	}
+	sessions, err := db.toolSessions(ctx, f, true)
 	if err != nil {
 		return ToolsAnalyticsResponse{}, true, err
 	}
@@ -55,11 +56,9 @@ func (db *DB) toolsFromParts(ctx context.Context, identity string, f AnalyticsFi
 	}
 	sort.Strings(ids)
 	if len(ids) > 0 {
-		toolsPartsObserver.Lock()
-		if toolsPartsObserver.read != nil {
-			toolsPartsObserver.read(ids)
+		if toolsPartsReadObserver != nil {
+			toolsPartsReadObserver(ids)
 		}
-		toolsPartsObserver.Unlock()
 		rows, err := db.toolRowsFor(ctx, f, sessions, ids)
 		if err != nil {
 			return ToolsAnalyticsResponse{}, true, err
@@ -74,15 +73,8 @@ func (db *DB) toolsFromParts(ctx context.Context, identity string, f AnalyticsFi
 		}
 	}
 	if len(changed) > 0 {
-		latest, err := db.toolSessions(ctx, f)
-		if err != nil {
-			return ToolsAnalyticsResponse{}, true, err
-		}
-		current := make(map[string]string, len(latest))
-		for id, session := range latest {
-			current[id] = session.fingerprint
-		}
-		if !maps.Equal(versions, current) {
+		latest, err := readTokens()
+		if err != nil || before != latest {
 			return ToolsAnalyticsResponse{}, false, nil
 		}
 		saved := make([]kept.Part[[]ToolAnalyticsRow], 0, len(parts))

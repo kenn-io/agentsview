@@ -9,6 +9,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func setToolsPartsReadObserver(observe func([]string)) func() {
+	toolsPartsReadObserver = observe
+	return func() { toolsPartsReadObserver = nil }
+}
+
 func TestToolsPartsGenerationTracksUpdatesAndDeletes(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
@@ -116,7 +121,7 @@ func TestToolsPartsConcurrentChangeFallsBackWithoutSaving(t *testing.T) {
 	_, err = d.getWriter().ExecContext(ctx, `UPDATE tool_calls SET tool_name='Write' WHERE session_id='a'`)
 	require.NoError(t, err)
 	var writeErr error
-	reset := SetToolsPartsReadObserver(func([]string) {
+	reset := setToolsPartsReadObserver(func([]string) {
 		_, writeErr = d.getWriter().ExecContext(ctx, `UPDATE tool_calls SET tool_name='Write' WHERE session_id='b'`)
 	})
 	got, err := d.analyticsTools(ctx, f)
@@ -126,7 +131,7 @@ func TestToolsPartsConcurrentChangeFallsBackWithoutSaving(t *testing.T) {
 	require.Equal(t, 2, got.TotalCalls)
 	require.Len(t, got.ByTool, 1)
 	var reads [][]string
-	reset = SetToolsPartsReadObserver(func(ids []string) { reads = append(reads, append([]string(nil), ids...)) })
+	reset = setToolsPartsReadObserver(func(ids []string) { reads = append(reads, append([]string(nil), ids...)) })
 	defer reset()
 	_, err = d.analyticsTools(ctx, f)
 	require.NoError(t, err)
@@ -151,7 +156,7 @@ func TestToolsPartsAppendAndProjectMove(t *testing.T) {
 	msg.ToolCalls = []ToolCall{{SessionID: "a", ToolName: "Write", Category: "Write"}}
 	insertMessages(t, d, msg)
 	var reads [][]string
-	reset := SetToolsPartsReadObserver(func(ids []string) { reads = append(reads, append([]string(nil), ids...)) })
+	reset := setToolsPartsReadObserver(func(ids []string) { reads = append(reads, append([]string(nil), ids...)) })
 	defer reset()
 	got, err := d.analyticsTools(ctx, f)
 	require.NoError(t, err)
@@ -207,7 +212,7 @@ func TestToolsPartsRefreshOutcomeAndDeletion(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 3, initial.TotalCalls)
 	var reads [][]string
-	reset := SetToolsPartsReadObserver(func(ids []string) { reads = append(reads, append([]string(nil), ids...)) })
+	reset := setToolsPartsReadObserver(func(ids []string) { reads = append(reads, append([]string(nil), ids...)) })
 	defer reset()
 	for i, change := range []struct {
 		query, id string
@@ -326,4 +331,65 @@ func TestToolsPartsMigrationInvalidatesOldParts(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got.ByTool, 1)
 	require.Equal(t, "Write", got.ByTool[0].ToolName)
+}
+
+func TestToolsPartsFallbackFilters(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "a", "project")
+	msg := asstMsgAt("a", 0, "call", "2025-03-10T12:00:00Z")
+	msg.ToolCalls = []ToolCall{{SessionID: "a", ToolName: "Read", Category: "Read"}}
+	insertMessages(t, d, msg)
+	var reads int
+	reset := setToolsPartsReadObserver(func([]string) { reads++ })
+	defer reset()
+	for _, f := range []AnalyticsFilter{{Timezone: "Local"}, {Timezone: "UTC", ActiveSince: "2025-03-01T00:00:00Z"}, {Timezone: "UTC", Termination: "active"}} {
+		got, err := d.analyticsTools(ctx, f)
+		require.NoError(t, err)
+		rows, err := d.analyticsToolRows(ctx, f)
+		require.NoError(t, err)
+		require.Equal(t, BuildToolsAnalytics(rows), got)
+	}
+	require.Zero(t, reads)
+}
+
+func TestToolsPartsFreshMessageMetadata(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testFreshDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "a", "project")
+	msg := asstMsgAt("a", 0, "call", "2025-03-10T12:00:00Z")
+	msg.Model = "model-a"
+	msg.ToolCalls = []ToolCall{{SessionID: "a", ToolName: "Read", Category: "Read"}}
+	insertMessages(t, d, msg)
+	hour := 12
+	f := AnalyticsFilter{Timezone: "UTC", Model: "model-a", Hour: &hour}
+	got, err := d.analyticsTools(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, 1, got.TotalCalls)
+	second := asstMsgAt("a", 1, "call", "2025-03-10T12:30:00Z")
+	second.Model = "model-a"
+	second.ToolCalls = []ToolCall{{SessionID: "a", ToolName: "Write", Category: "Write"}}
+	insertMessages(t, d, second)
+	got, err = d.analyticsTools(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, 2, got.TotalCalls)
+	for _, change := range []struct {
+		query string
+		total int
+	}{
+		{`UPDATE messages SET model='model-b' WHERE session_id='a'`, 0},
+		{`UPDATE messages SET model='model-a' WHERE session_id='a'`, 2},
+		{`UPDATE messages SET timestamp='2025-03-10T13:00:00Z' WHERE session_id='a'`, 0},
+	} {
+		_, err := d.getWriter().ExecContext(ctx, change.query)
+		require.NoError(t, err)
+		got, err := d.analyticsTools(ctx, f)
+		require.NoError(t, err)
+		require.Equal(t, change.total, got.TotalCalls)
+		rows, err := d.analyticsToolRows(ctx, f)
+		require.NoError(t, err)
+		require.Equal(t, BuildToolsAnalytics(rows), got)
+	}
 }
