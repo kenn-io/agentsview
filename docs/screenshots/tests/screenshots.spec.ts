@@ -456,8 +456,11 @@ test.describe('Dashboard', () => {
       { state: 'visible', timeout: 5_000 }
     );
 
+    // Totals count subagent sessions but the other panels show root
+    // sessions only, so a model that only subagents use leaves them empty.
+    // claude-opus-4-6 runs root sessions throughout the corpus window.
     const rows = modelDropdown.locator('.kit-filter-dropdown__item');
-    await rows.filter({ hasText: /claude/i }).first().click();
+    await rows.filter({ hasText: 'claude-opus-4-6' }).click();
     await page.waitForTimeout(1500);
     await snap(page, 'analytics-model-filter');
 
