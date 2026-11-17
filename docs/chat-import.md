@@ -1,11 +1,13 @@
 ---
 title: Chat Import
-description: Import Claude.ai, ChatGPT, and Gemini Apps conversations into AgentsView
+description: Import Claude.ai, ChatGPT, Gemini Apps, and Grok web conversations into AgentsView
 ---
 
-Bring Claude.ai, ChatGPT, and Gemini Apps conversations into the same searchable
-archive as your coding sessions. [Sync Claude.ai through Chrome](#sync-claudeai-chats)
+Bring Claude.ai, ChatGPT, Gemini Apps, and Grok web conversations into the same
+searchable archive as your coding sessions. [Sync Claude.ai through Chrome](#sync-claudeai-chats)
 to fetch new and changed chats, or import the services' exported files below.
+Grok web has no export, so its chats come in only through
+[Sync](#sync-grok-web-chats).
 ChatGPT dot, Codex web, and Codex cloud task chats use the separate opt-in
 [Codex Cloud source](/docs/configuration/#codex-cloud).
 
@@ -359,6 +361,76 @@ When Sync stops:
 Chats imported before Sync stopped stay imported. Gemini's request names and
 response layout can change with any web app release.
 
+## Sync Grok web chats
+
+Grok web Sync imports your chats from grok.com and runs from the command line.
+The **Import conversations** dialog does not offer it. These sessions use the
+`grok-web` type, separate from local Grok Build sessions (`grok`). Grok has no
+export file, so Sync is the only way to import these chats.
+
+1. Set up the Chrome extension as described in
+   [Sync Claude.ai chats](#sync-claudeai-chats). If you set it up before this
+   release, rerun `agentsview source chrome setup`, reload the extension at
+   `chrome://extensions`, and approve its new access to `grok.com`.
+2. Sign in to Grok in the Chrome profile that has the extension enabled.
+3. With AgentsView and Chrome running, run:
+
+   ```bash
+   agentsview source import --type grok-web --sync
+   ```
+
+Sync reuses an open Grok tab. When none is open, it opens one in the background
+and leaves it open.
+
+The extension makes the same two read requests the Grok web app makes: the
+chat list and one chat's responses. It sends them with the tab's sign-in
+cookies, which stay in Chrome; only the responses reach the local server.
+
+What Sync imports:
+
+- Each chat becomes one `grok-web:<chat id>` session in the **grok.com**
+  project.
+- Grok keeps every regenerated reply and edited prompt as a branch. Sync
+  stores the branch Grok shows, which ends at the newest response with text,
+  and records each reply's model.
+- Prompt and reply text only. Older branches, reasoning steps, attachments,
+  images, search results, and workspaces are not imported.
+
+What Sync fetches:
+
+- Only chats whose list update time differs from the last Sync, or whose
+  stored copy changed since then. The first Sync fetches every listed chat.
+- One request about every 3 seconds. A chat's responses arrive in one request.
+- A chat with a reply Grok is still writing is stored as it is and fetched
+  again on the next Sync. This stops once the reply is complete, or once the
+  chat's list update time is more than 24 hours old, so a reply that never
+  finishes is not fetched forever.
+
+How Sync updates stored chats:
+
+- New turns and replies that were cut off are completed in place. Message IDs
+  and pins stay as they are, and no copy is made.
+- When the shown branch changes, for example after you regenerate a reply or
+  edit a prompt, Sync replaces the stored chat with what Grok shows now. Sync
+  keeps the previous version in Trash with its pins and notes.
+
+When Sync stops:
+
+- Each chat has a 32 MiB limit. Larger chats count as failed and Sync
+  continues.
+- Two failed chats in a row end Sync. Oversized chats count as failures but do
+  not count toward this.
+- A rate limit that outlasts the retries, or a requested wait longer than 60
+  seconds, ends Sync early. Run Sync again later to continue.
+- A chat in a format this version cannot read counts as a failed chat, so two
+  in a row end Sync. Either way, Sync reports that AgentsView needs an update.
+  A chat list in an unreadable format ends Sync with the same message.
+- An expired sign-in (HTTP 401 or 403) ends Sync. Sign in to Grok in Chrome
+  and run Sync again.
+
+Chats imported before Sync stopped stay imported. Grok's requests and response
+fields can change with any web app release.
+
 ## Importing via the CLI
 
 Use `agentsview source import` to import from the command line:
@@ -372,7 +444,7 @@ agentsview source import --type gemini-apps ~/Downloads/takeout.zip
 | Flag | Description |
 |------|-------------|
 | `--type` | `claude-ai`, `chatgpt`, or `gemini-apps` (required) |
-| `--sync` | Sync through Chrome instead of importing a file. Needs a running server and the Chrome extension; takes no path or `--replace`. |
+| `--sync` | Sync through Chrome instead of importing a file. Needs a running server and the Chrome extension; takes no path or `--replace`. `grok-web` imports only this way. |
 | `--replace` | Session ID whose archived messages the import may replace when the normal import refuses them; repeat for more sessions (`claude-ai` and `chatgpt` only). See [Replacing archived history](#replacing-archived-history). |
 
 The path can be a `.zip` file, a `conversations.json` file
@@ -412,8 +484,8 @@ Each imported session includes:
 
 Imported conversations appear in the session list alongside
 your locally-tracked agent sessions. They are grouped under
-the **claude.ai**, **chatgpt.com**, or **gemini.google.com** project, so you can
-filter to them using the project filter or browse them
+the **claude.ai**, **chatgpt.com**, **gemini.google.com**, or **grok.com**
+project, so you can filter to them using the project filter or browse them
 mixed in with your other sessions.
 
 Imported sessions support the same features as any other
