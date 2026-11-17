@@ -26,9 +26,10 @@ func TestCodexPageUpgradeRetiresMissingPostgresHead(t *testing.T) {
 		newerPage         bool
 		precedingSessions int
 		restoreLocal      string
+		promptLink        bool
 	}{
 		{name: "unpinned"},
-		{name: "pinned", pinned: true},
+		{name: "pinned", pinned: true, promptLink: true},
 		{name: "newer_page_curation", pinned: true, newerPage: true},
 		{name: "restore_page", pinned: true, trashAction: "page"},
 		{name: "restore_thread", pinned: true, trashAction: "thread"},
@@ -119,7 +120,7 @@ func TestCodexPageUpgradeRetiresMissingPostgresHead(t *testing.T) {
 				require.NoError(t, rebuilt.UpsertSession(ctx, sess))
 				message.SessionID = page
 				require.NoError(t, rebuilt.InsertMessages(ctx, []db.Message{message}))
-				if tc.name == "pinned" {
+				if tc.promptLink {
 					require.NoError(t, rebuilt.InsertMessages(ctx, []db.Message{{SessionID: page, Ordinal: 1, Role: "user", Content: "Review https://github.com/o/r/pull/7"}}))
 				}
 				require.NoError(t, rebuilt.SetSessionDataVersion(ctx, page, db.CurrentDataVersion()))
@@ -161,7 +162,7 @@ func TestCodexPageUpgradeRetiresMissingPostgresHead(t *testing.T) {
 			upgraded, err := New(t.Context(), pgURL, schema, rebuilt, "machine", true, storage.PusherOptions{})
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, upgraded.Close()) })
-			if tc.name == "pinned" {
+			if tc.promptLink {
 				upgraded.archiveID, err = rebuilt.GetArchiveID(ctx)
 				require.NoError(t, err)
 				marker, err := upgraded.pushMarkerID(ctx)
@@ -237,7 +238,7 @@ func TestCodexPageUpgradeRetiresMissingPostgresHead(t *testing.T) {
 			assert.Empty(t, headMessages, "the retired thread must not retain the page transcript")
 			pageMessages, err := store.GetMessages(ctx, page, 0, 10, true)
 			require.NoError(t, err)
-			if tc.name == "pinned" {
+			if tc.promptLink {
 				require.Len(t, pageMessages, 2)
 			} else {
 				require.Len(t, pageMessages, 1)

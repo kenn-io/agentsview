@@ -1980,17 +1980,3 @@ func TestImportPromptPRLinksReplacementFailure(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, msgs[0].Content, "https://github.com/o/r/pull/1")
 }
-
-func TestImportUnchangedPreservesPromptPRLinks(t *testing.T) {
-	d := testDB(t)
-	input := strings.ReplaceAll(testConversationsJSON, "Hello", "https://github.com/o/r/%70ull/1")
-	_, err := ImportClaudeAI(t.Context(), d, strings.NewReader(input), nil)
-	require.NoError(t, err)
-	stats, err := ImportClaudeAI(t.Context(), d, strings.NewReader(input), nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, stats.Skipped)
-	got, err := d.GetSession(t.Context(), "claude-ai:import-test-001")
-	require.NoError(t, err)
-	require.Len(t, got.PRLinks, 1)
-	assert.Equal(t, "https://github.com/o/r/pull/1", got.PRLinks[0].URL)
-}

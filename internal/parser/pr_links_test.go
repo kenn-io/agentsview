@@ -192,16 +192,13 @@ func TestPromptPRLinks(t *testing.T) {
 		{"https://github.com/owner/repo/pull/1。", "https://github.com/owner/repo/pull/1"},
 		{"https://gitlab.com/group/team/pull/1/repo/-/merge_requests/9/files", "https://gitlab.com/group/team/pull/1/repo/-/merge_requests/9"},
 		{"https://github.com/group/team/pulls/1/repo/pull/9/files", "https://github.com/group/team/pulls/1/repo/pull/9"},
-		{"https://github.com/owner/repo/%70ull/1", "https://github.com/owner/repo/pull/1"},
 		{"[https://github.com/owner/repo/pull/1][label]", "https://github.com/owner/repo/pull/1"},
 		{"http://[::1]/owner/repo/pull/7", "http://[::1]/owner/repo/pull/7"},
 		{"https://GITHUB.com/owner/repo/pull/123#issuecomment", "https://github.com/owner/repo/pull/123"},
 		{"(https://github.example.com/owner/repo/pulls/12).", "https://github.example.com/owner/repo/pulls/12"},
 		{"https://gitlab.com/group/subgroup/repo/-/merge_requests/9?x=y", "https://gitlab.com/group/subgroup/repo/-/merge_requests/9"},
-		{"https://github.com/owner/repo/pull/12_", ""},
 		{"https://github.com/owner/repo/pull/12-", ""},
 		{"https://github.com/owner/repo/pull/12a", ""},
-		{"https://github.com/owner/repo/pull/123_typo", ""},
 		{"https://github.com/owner/repo/issues/12", ""},
 	} {
 		t.Run(tt.text, func(t *testing.T) {

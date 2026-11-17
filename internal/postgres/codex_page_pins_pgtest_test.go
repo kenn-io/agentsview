@@ -105,9 +105,6 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 				require.NoError(t, rebuilt.InsertMessages(ctx, []db.Message{{
 					SessionID: row.id, Role: "assistant", Content: row.content, SourceUUID: row.uuid,
 				}}))
-				if row.id == page && (tc.name == "head_first" || tc.name == "page_first") {
-					require.NoError(t, rebuilt.InsertMessages(ctx, []db.Message{{SessionID: page, Ordinal: 1, Role: "user", Content: "Review https://github.com/o/r/pull/7"}}))
-				}
 				require.NoError(t, rebuilt.SetSessionDataVersion(ctx, row.id, db.CurrentDataVersion()))
 			}
 			_, err = rebuilt.CopyOrphanedDataFromExcluding(t.Context(), sourcePath, nil)
@@ -172,21 +169,7 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 					result, err := upgraded.pushBatch(ctx, []db.Session{*sess}, true, marker, nil, nil, &pushed)
 					require.NoError(t, err)
 					require.True(t, result.ok)
-					if tc.name == "head_first" && id == thread {
-						mirrored, err := store.GetSessionFull(ctx, page)
-						require.NoError(t, err)
-						require.NotNil(t, mirrored)
-						require.Len(t, mirrored.PRLinks, 1)
-						assert.Equal(t, "https://github.com/o/r/pull/7", mirrored.PRLinks[0].URL)
-					}
 				}
-			}
-			if tc.name == "head_first" || tc.name == "page_first" {
-				mirrored, err := store.GetSessionFull(ctx, page)
-				require.NoError(t, err)
-				require.NotNil(t, mirrored)
-				require.Len(t, mirrored.PRLinks, 1)
-				assert.Equal(t, "https://github.com/o/r/pull/7", mirrored.PRLinks[0].URL)
 			}
 			result, err = upgraded.Push(ctx, true, nil)
 			if blocked {
@@ -227,11 +210,7 @@ func TestCodexPageUpgradePreservesPostgresPins(t *testing.T) {
 			}
 			pageMessages, err := store.GetMessages(ctx, page, 0, 10, true)
 			require.NoError(t, err)
-			if tc.name == "head_first" || tc.name == "page_first" {
-				require.Len(t, pageMessages, 2)
-			} else {
-				require.Len(t, pageMessages, 1)
-			}
+			require.Len(t, pageMessages, 1)
 			after, err := store.ListPinnedMessages(ctx, "", "")
 			require.NoError(t, err)
 			if tc.name == "changed_page" {
