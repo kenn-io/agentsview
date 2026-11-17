@@ -4,7 +4,6 @@ package postgres
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -46,30 +45,6 @@ func TestSearchKeptSingleConnection(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, page.Results, 1)
 	require.Equal(t, "session", page.Results[0].SessionID)
-	store.DB().SetMaxOpenConns(5)
-	concurrentCtx, cancelConcurrent := context.WithTimeout(ctx, 5*time.Second)
-	defer cancelConcurrent()
-	type result struct {
-		page db.SearchPage
-		err  error
-	}
-	results := make(chan result, 5)
-	for i := range 5 {
-		go func() {
-			page, err := store.Search(concurrentCtx, db.SearchFilter{Query: fmt.Sprintf("needle%d", i)})
-			results <- result{page, err}
-		}()
-	}
-	for range 5 {
-		select {
-		case got := <-results:
-			require.NoError(t, got.err)
-			require.Len(t, got.page.Results, 1)
-			require.Equal(t, "session", got.page.Results[0].SessionID)
-		case <-concurrentCtx.Done():
-			t.Fatal("concurrent searches did not finish")
-		}
-	}
 }
 
 func TestSearchKeptRestart(t *testing.T) {

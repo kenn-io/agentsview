@@ -1435,14 +1435,10 @@ func (db *DB) PurgeExcludedSessions(ctx context.Context) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	_, err = purgeExcludedSessionsTx(ctx, tx, false)
-	if err != nil {
+	if _, err := purgeExcludedSessionsTx(ctx, tx, false); err != nil {
 		return err
 	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	return nil
+	return tx.Commit()
 }
 
 func purgeExcludedSessionsTx(ctx context.Context, tx *sql.Tx, permanentDelete bool) (int64, error) {
@@ -5762,14 +5758,10 @@ func (db *DB) DeleteSession(ctx context.Context, id string) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	_, err = deleteSessionsTx(ctx, tx, "id = ?", id)
-	if err != nil {
+	if _, err := deleteSessionsTx(ctx, tx, "id = ?", id); err != nil {
 		return err
 	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	return nil
+	return tx.Commit()
 }
 
 // deleteSessionsTx preserves the scope of legacy trash before removing its

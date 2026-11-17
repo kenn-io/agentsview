@@ -84,7 +84,10 @@ risk via documented flags and config.
   permanent-delete path. Permanent delete removes rows from the primary tables
   and the FTS5 index; it does not promise erasure of SQLite pages, the WAL,
   on-disk backups, OS file caches, or any external copy that was made via
-  `pg push` or HTTP remote sync.
+  `pg push` or HTTP remote sync. Search cache directories can contain snippets
+  from deleted sessions until the same search overwrites them or the cache is
+  trimmed. See [Configuration](docs/configuration.md#data-directory) for their
+  locations.
 
 ## Data in transit
 
