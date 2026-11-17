@@ -54,7 +54,9 @@ migrating them is separate work.
 - Providers that declare `PollMetadataScan` let a pass compare file metadata
   with the previous pass and sync only changed files through
   `SyncPathsContext`. Anything the pass cannot compare goes through
-  `ReconcileProviderRootsGrouped`, which alone may mark sources missing.
+  `ReconcileProviderRootsGrouped`. So does a root whose changed file is gone
+  before its sync, because a changed-path sync marks a missing path's source
+  missing without the coordinator's availability checks.
 - A metadata snapshot is taken before the archive work it describes and kept
   only after that work succeeds. A stale snapshot only repeats work; a snapshot
   newer than the archive would hide a change.

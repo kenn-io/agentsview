@@ -78,14 +78,15 @@ func (s *recordingProviderPollSyncer) snapshot() []providerPollCall {
 
 // groupedCountingPollSyncer records each grouped reconcile call verbatim.
 type groupedCountingPollSyncer struct {
-	mu        sync.Mutex
-	calls     [][]agentsync.ProviderRootsGroup
-	wake      chan struct{}
-	reconcile func([]agentsync.ProviderRootsGroup) error
+	mu            sync.Mutex
+	calls         [][]agentsync.ProviderRootsGroup
+	authoritative []bool
+	wake          chan struct{}
+	reconcile     func([]agentsync.ProviderRootsGroup) error
 }
 
 func (s *groupedCountingPollSyncer) PollProviderRootsGrouped(
-	_ context.Context, groups []agentsync.ProviderRootsGroup, _ bool,
+	_ context.Context, groups []agentsync.ProviderRootsGroup, authoritative bool,
 ) error {
 	copied := make([]agentsync.ProviderRootsGroup, len(groups))
 	for i, group := range groups {
@@ -96,6 +97,7 @@ func (s *groupedCountingPollSyncer) PollProviderRootsGrouped(
 	}
 	s.mu.Lock()
 	s.calls = append(s.calls, copied)
+	s.authoritative = append(s.authoritative, authoritative)
 	s.mu.Unlock()
 	select {
 	case s.wake <- struct{}{}:
@@ -309,6 +311,12 @@ func TestUnwatchedPollFolderRelease(t *testing.T) {
 					synctest.Wait()
 					assert.Equal(t, [][]agentsync.ProviderRootsGroup{want}, syncer.snapshot(),
 						"one pass must reconcile every released scope together")
+					// A release blocked by another provider's missing probe cannot
+					// finish in this pass, so the pass may compare metadata.
+					syncer.mu.Lock()
+					assert.Equal(t, []bool{!tc.missingProbe}, syncer.authoritative,
+						"a pass that can finish a release must reconcile instead of comparing metadata")
+					syncer.mu.Unlock()
 					if tc.folders > 1 {
 						assert.Empty(t, coordinator.currentPollObligations())
 						return

@@ -63,10 +63,10 @@ type pollScanState struct {
 // previous pass. Changed files go through the changed-path sync that native
 // watcher events use. A root without a previous snapshot, a root with a
 // vanished file, and any root the scan cannot fully compare go through
-// ReconcileProviderRootsGrouped. Only that provider-scoped reconciliation can
-// mark sources missing, so the caller's availability checks still decide
-// every deletion. authoritative reconciles every root, still recording
-// snapshots for the next pass.
+// ReconcileProviderRootsGrouped, as does every root while subagent linking is
+// pending. A disappeared file is left to that provider-scoped reconciliation,
+// so the caller's availability checks decide the deletion. authoritative
+// reconciles every root, still recording snapshots for the next pass.
 //
 // A snapshot is taken before the archive work it describes and kept only after
 // that work succeeds, so it never claims a change the archive has not applied.
@@ -77,6 +77,9 @@ func (e *Engine) PollProviderRootsGrouped(
 	state := &e.pollScans
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	// Failed subagent linking is retried by a reconciliation epilogue, which an
+	// unchanged pass would otherwise skip.
+	authoritative = authoritative || e.PendingSubagentLinks()
 	if !state.seeded {
 		state.seed = maphash.MakeSeed()
 		state.seeded = true
@@ -94,12 +97,13 @@ func (e *Engine) PollProviderRootsGrouped(
 	}
 
 	var (
-		reconcile    []ProviderRootsGroup
-		afterRecon   = make(map[pollScanKey][]pollScanRow)
-		afterSync    = make(map[pollScanKey][]pollScanRow)
-		changedPaths []string
+		reconcile  []ProviderRootsGroup
+		afterRecon = make(map[pollScanKey][]pollScanRow)
+		afterSync  = make(map[pollScanKey][]pollScanRow)
+		changed    = make(map[pollScanKey][]string)
 		// staged counts rows that pending snapshots add beyond the committed
-		// ones they replace, so every root in a pass shares one row budget.
+		// ones they replace, so every root in a pass shares one row budget. A
+		// shrinking snapshot frees nothing until its work succeeds.
 		staged  int
 		maxRows = cmp.Or(state.maxRows, pollScanMaxRows)
 	)
@@ -128,18 +132,33 @@ func (e *Engine) PollProviderRootsGrouped(
 				full = append(full, root)
 			case authoritative || previous == nil || result.vanished:
 				afterRecon[key] = result.rows
-				staged += len(result.rows) - len(previous)
+				staged += max(0, len(result.rows)-len(previous))
 				full = append(full, root)
 			case len(result.changed) > 0:
 				afterSync[key] = result.rows
-				staged += len(result.rows) - len(previous)
-				changedPaths = append(changedPaths, result.changed...)
+				staged += max(0, len(result.rows)-len(previous))
+				changed[key] = result.changed
 			}
 		}
 		if len(full) > 0 {
 			reconcile = append(reconcile, ProviderRootsGroup{Agent: group.Agent, Roots: full})
 		}
 	}
+
+	// A changed-path sync marks a path missing when it no longer exists.
+	// Send a root whose changed file has already gone to reconciliation, so
+	// only the caller's availability checks decide that deletion.
+	var changedPaths []string
+	for key, paths := range changed {
+		if pollScanPathsPresent(paths) {
+			changedPaths = append(changedPaths, paths...)
+			continue
+		}
+		afterRecon[key] = afterSync[key]
+		delete(afterSync, key)
+		reconcile = append(reconcile, ProviderRootsGroup{Agent: key.agent, Roots: []string{key.root}})
+	}
+	slices.Sort(changedPaths)
 
 	var errs []error
 	if len(changedPaths) > 0 {
@@ -174,11 +193,29 @@ func (s *pollScanState) keep(snapshots map[pollScanKey][]pollScanRow) {
 	}
 }
 
-func (e *Engine) syncPollScanPaths(ctx context.Context, paths []string) error {
-	for page := range slices.Chunk(paths, pollScanPageSize) {
-		if err := e.SyncPathsContext(ctx, page); err != nil {
-			return fmt.Errorf("sync changed polled paths: %w", err)
+func pollScanPathsPresent(paths []string) bool {
+	for _, path := range paths {
+		if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
+			return false
 		}
+	}
+	return true
+}
+
+// syncPollScanPaths attempts every page, so one failing source cannot keep
+// later changes out of the archive.
+func (e *Engine) syncPollScanPaths(ctx context.Context, paths []string) error {
+	var errs []error
+	for page := range slices.Chunk(paths, pollScanPageSize) {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(append(errs, err)...)
+		}
+		if err := e.SyncPathsContext(ctx, page); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if err := errors.Join(errs...); err != nil {
+		return fmt.Errorf("sync changed polled paths: %w", err)
 	}
 	return nil
 }
@@ -239,9 +276,15 @@ func scanPollRoots(
 			return fmt.Errorf("%w: read directory: %w", errPollScanIneligible, err)
 		}
 		for _, entry := range entries {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			path := filepath.Join(dir, entry.Name())
 			switch {
 			case entry.Type()&(fs.ModeSymlink|fs.ModeIrregular) != 0:
+				if pollScanLinkIgnored(path, entry.Name(), watch) {
+					continue
+				}
 				// Discovery may follow links and junctions that this scan does not.
 				return errPollScanIneligible
 			case entry.IsDir():
@@ -304,6 +347,10 @@ func scanPollRoots(
 	result.rows = slices.CompactFunc(result.rows, func(a, b pollScanRow) bool {
 		return a.path == b.path
 	})
+	// An empty root still has a snapshot, unlike a root never scanned.
+	if result.rows == nil {
+		result.rows = []pollScanRow{}
+	}
 	result.rows = slices.Clip(result.rows)
 	for _, row := range previous {
 		if _, found := findPollScanRow(result.rows, row.path); !found {
@@ -312,6 +359,20 @@ func scanPollRoots(
 		}
 	}
 	return result, nil
+}
+
+// pollScanLinkIgnored reports whether a link or junction cannot lead to a
+// watched file: its name matches no glob, and it is not a directory the scan
+// would descend into.
+func pollScanLinkIgnored(path, name string, watch parser.WatchRoot) bool {
+	if pollScanMatches(watch.IncludeGlobs, name) {
+		return false
+	}
+	if !watch.Recursive {
+		return true
+	}
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 func findPollScanRow(rows []pollScanRow, path uint64) (int, bool) {

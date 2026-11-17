@@ -284,6 +284,12 @@ func TestPollProviderRootsGroupedReleasesSnapshots(t *testing.T) {
 
 	require.NoError(t, f.engine.PollProviderRootsGrouped(t.Context(), []ProviderRootsGroup{group}, true))
 	assert.EqualValues(t, 3, f.reconciled.Load(), "an authoritative pass always reconciles")
+	f.poll(t, group)
+	assert.EqualValues(t, 3, f.reconciled.Load(), "an authoritative pass still records a snapshot")
+
+	f.engine.subagentLinkPending = true
+	f.poll(t, group)
+	assert.EqualValues(t, 4, f.reconciled.Load(), "pending subagent linking needs a reconciliation epilogue")
 }
 
 func TestScanPollRootsLimits(t *testing.T) {
@@ -336,4 +342,87 @@ func TestScanPollRootsReconcilesLargeChangeSets(t *testing.T) {
 	_, err = scanPollRoots(t.Context(), seed, plan, edited, pollScanMaxRows)
 
 	require.ErrorIs(t, err, errPollScanIneligible)
+}
+
+func TestPollProviderRootsGroupedComparesRootsWithUnrelatedLinks(t *testing.T) {
+	requirePollChangeTimes(t)
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symbolic links needs extra privileges on Windows")
+	}
+	elsewhere := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(elsewhere, "notes.md"), []byte("notes"), 0o644))
+	home := t.TempDir()
+	root := filepath.Join(home, "sessions")
+	require.NoError(t, os.MkdirAll(root, 0o755))
+	// Codex homes often link skills and instructions beside the title index.
+	require.NoError(t, os.Symlink(elsewhere, filepath.Join(home, "skills")))
+	require.NoError(t, os.Symlink(filepath.Join(elsewhere, "notes.md"), filepath.Join(home, "AGENTS.md")))
+	require.NoError(t, os.Symlink(filepath.Join(elsewhere, "notes.md"), filepath.Join(root, "notes.md")))
+	f := newPollScanFixture(t, map[parser.AgentType][]string{parser.AgentCodex: {root}})
+	group := ProviderRootsGroup{Agent: parser.AgentCodex, Roots: []string{root}}
+
+	f.poll(t, group)
+	f.poll(t, group)
+
+	assert.EqualValues(t, 1, f.reconciled.Load(), "links that cannot lead to a session do not block comparison")
+}
+
+func TestPollProviderRootsGroupedComparesEmptyRoots(t *testing.T) {
+	requirePollChangeTimes(t)
+	root := t.TempDir()
+	f := newPollScanFixture(t, map[parser.AgentType][]string{parser.AgentClaude: {root}})
+	group := ProviderRootsGroup{Agent: parser.AgentClaude, Roots: []string{root}}
+	f.poll(t, group)
+	f.poll(t, group)
+	require.EqualValues(t, 1, f.reconciled.Load(), "an empty root has a snapshot too")
+
+	writeClaudePollSession(t, filepath.Join(root, "project", "first.jsonl"), "first")
+	f.poll(t, group)
+
+	assert.EqualValues(t, 1, f.reconciled.Load())
+	assert.Equal(t, 1, f.session(t, "first").UserMessageCount)
+}
+
+func TestPollProviderRootsGroupedReconcilesUnreadableFolders(t *testing.T) {
+	requirePollChangeTimes(t)
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a folder its owner cannot read")
+	}
+	root := t.TempDir()
+	writeClaudePollSession(t, filepath.Join(root, "project", "readable.jsonl"), "readable")
+	locked := filepath.Join(root, "locked")
+	require.NoError(t, os.Mkdir(locked, 0))
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	f := newPollScanFixture(t, map[parser.AgentType][]string{parser.AgentClaude: {root}})
+	group := ProviderRootsGroup{Agent: parser.AgentClaude, Roots: []string{root}}
+
+	_ = f.engine.PollProviderRootsGrouped(t.Context(), []ProviderRootsGroup{group}, false)
+	_ = f.engine.PollProviderRootsGrouped(t.Context(), []ProviderRootsGroup{group}, false)
+
+	assert.EqualValues(t, 2, f.reconciled.Load(), "a folder the scan cannot read is left to reconciliation")
+}
+
+func TestPollProviderRootsGroupedSyncsLaterPagesPastAFailure(t *testing.T) {
+	requirePollChangeTimes(t)
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a file its owner cannot read")
+	}
+	root := t.TempDir()
+	writeClaudePollSession(t, filepath.Join(root, "project", "seed.jsonl"), "seed")
+	f := newPollScanFixture(t, map[parser.AgentType][]string{parser.AgentClaude: {root}})
+	group := ProviderRootsGroup{Agent: parser.AgentClaude, Roots: []string{root}}
+	f.poll(t, group)
+
+	const added = pollScanPageSize + 5
+	for i := range added {
+		writeClaudePollSession(t, filepath.Join(root, "project", fmt.Sprintf("added-%03d.jsonl", i)), "added")
+	}
+	// Changed paths sync in sorted order, so this file fails in the first page.
+	unreadable := filepath.Join(root, "project", "added-000.jsonl")
+	require.NoError(t, os.Chmod(unreadable, 0))
+	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o644) })
+
+	require.Error(t, f.engine.PollProviderRootsGrouped(t.Context(), []ProviderRootsGroup{group}, false))
+
+	f.session(t, fmt.Sprintf("added-%03d", added-1))
 }
