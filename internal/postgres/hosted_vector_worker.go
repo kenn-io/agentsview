@@ -107,7 +107,7 @@ func EmbedBatch(ctx context.Context, pg *sql.DB, generation storage.VectorGenera
 			accepted, rejected, err := vector.FillUnitDocuments(ctx, pending, spool, maxInputChars, concurrency, encode, batch...)
 			if err != nil {
 				if closeErr := spool.Close(); closeErr != nil {
-					return closeErr
+					return errors.Join(err, closeErr)
 				}
 				if ctx.Err() != nil {
 					return ctx.Err()

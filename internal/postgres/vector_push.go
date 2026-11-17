@@ -1210,10 +1210,8 @@ ON CONFLICT (doc_key) DO UPDATE SET
 	return nil
 }
 
-// replaceVectorChunks deletes all of the session's chunk rows for genID and
-// re-inserts the current chunk set. Sessions are small, so wholesale replace is
-// simpler and correct versus per-doc surgical deletes. It returns the number of
-// chunk rows inserted.
+// replaceVectorChunks replaces the session's chunks in bounded batches while
+// keeping covered documents intact. It returns the number of rows inserted.
 func replaceVectorChunks(
 	ctx context.Context, tx *sql.Tx, gen vectorGeneration,
 	sessionID string, docs []storage.VectorPushDoc, keep []string, loadChunks func(string) ([]storage.VectorPushChunk, error),

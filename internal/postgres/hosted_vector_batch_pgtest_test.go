@@ -415,7 +415,7 @@ func TestHostedVectorGenerationLayoutSwitch(t *testing.T) {
 	for _, match := range page.Matches {
 		snippets = append(snippets, match.Snippet)
 	}
-	assert.Contains(t, snippets, "bbbbbbbbbb")
+	assert.ElementsMatch(t, []string{"question", "bbbbbbbbbb", "stable"}, snippets)
 }
 
 func TestHostedVectorSpoolCleanupOnFailures(t *testing.T) {
