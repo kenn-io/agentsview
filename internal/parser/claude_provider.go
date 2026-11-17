@@ -521,13 +521,14 @@ type claudeLayoutSpec struct {
 	debounceScope string
 	watchGlobs    []string
 	listFiles     func(string) []DiscoveredFile
-	// sidecarSources includes persisted tool-result companions in watch
-	// coverage and source fingerprints. The Claude provider keeps this off:
-	// its stored fingerprints hash only the transcript, and switching to
-	// composite hashes would invalidate every archived Claude fingerprint and
-	// force a full reparse. Changed-path mapping resolves a companion to its
-	// owning transcripts for every spec, because both parses read companions
-	// and a remote mirror journal lists them.
+	// sidecarSources includes persisted tool-result companions in source
+	// fingerprints and maps a root session's companion to its subagent
+	// transcripts too. The Claude provider keeps this off: its stored
+	// fingerprints hash only the transcript, and switching to composite
+	// hashes would invalidate every archived Claude fingerprint and force a
+	// full reparse. Every spec maps a companion to its owning transcript,
+	// because a remote mirror journal lists companions and the local watcher
+	// delivers every file under the root.
 	sidecarSources bool
 }
 
