@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -431,31 +432,9 @@ func (s *Store) searchQuery(f db.SearchFilter, ids []string, keys bool) (string,
 		limit = fmt.Sprintf("LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
 		args = append(args, f.Limit+1, f.Cursor)
 	}
-	tail := `SELECT session_id, match_priority, match_pos, session_ended_at FROM page ORDER BY ` + outerOrderBy
+	tail := `SELECT session_id, match_priority, match_pos, session_ended_at, ordinal, kind, source_kind, call_index, event_index, image_index, processor FROM page ORDER BY ` + outerOrderBy
 	if !keys {
-		tail = fmt.Sprintf(`SELECT p.session_id, s.project, s.agent, s.machine,
-            COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
-            p.session_ended_at, p.ordinal,
-            CASE WHEN p.kind = 'name' THEN
-                CASE WHEN COALESCE(s.display_name, s.session_name) ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
-                    THEN COALESCE(s.display_name, s.session_name, '')
-                    WHEN s.first_message ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
-                    THEN COALESCE(s.first_message, '')
-                    ELSE COALESCE(s.display_name, s.session_name, s.first_message, '') END
-            ELSE CASE WHEN POSITION(LOWER($2) IN LOWER(COALESCE(m.content, it.text))) > 100
-                THEN '...' || SUBSTRING(COALESCE(m.content, it.text)
-                    FROM GREATEST(1, POSITION(LOWER($2) IN LOWER(COALESCE(m.content, it.text))) - 50) FOR 200) || '...'
-                ELSE SUBSTRING(COALESCE(m.content, it.text) FROM 1 FOR 200)
-                    || CASE WHEN LENGTH(COALESCE(m.content, it.text)) > 200 THEN '...' ELSE '' END
-            END END AS snippet, 1.0 AS rank, p.match_pos
-        FROM page p
-        JOIN sessions s ON s.id = p.session_id
-        LEFT JOIN messages m ON p.kind = 'message' AND m.session_id = p.session_id AND m.ordinal = p.ordinal
-        LEFT JOIN image_text it ON p.kind = 'image' AND it.session_id = p.session_id
-            AND it.message_ordinal = p.ordinal AND it.source_kind = p.source_kind
-            AND it.call_index = p.call_index AND it.event_index = p.event_index
-            AND it.image_index = p.image_index AND it.processor = p.processor
-        ORDER BY %s`, pageOrderBy)
+		tail = searchRowsTail(pageOrderBy)
 	}
 	query := fmt.Sprintf(`
 		WITH msg_matches AS (
@@ -543,6 +522,32 @@ func (s *Store) searchQuery(f db.SearchFilter, ids []string, keys bool) (string,
 	return query, args
 }
 
+func searchRowsTail(orderBy string) string {
+	return fmt.Sprintf(`SELECT p.session_id, s.project, s.agent, s.machine,
+            COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
+            p.session_ended_at, p.ordinal,
+            CASE WHEN p.kind = 'name' THEN
+                CASE WHEN COALESCE(s.display_name, s.session_name) ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
+                    THEN COALESCE(s.display_name, s.session_name, '')
+                    WHEN s.first_message ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
+                    THEN COALESCE(s.first_message, '')
+                    ELSE COALESCE(s.display_name, s.session_name, s.first_message, '') END
+            ELSE CASE WHEN POSITION(LOWER($2) IN LOWER(COALESCE(m.content, it.text))) > 100
+                THEN '...' || SUBSTRING(COALESCE(m.content, it.text)
+                    FROM GREATEST(1, POSITION(LOWER($2) IN LOWER(COALESCE(m.content, it.text))) - 50) FOR 200) || '...'
+                ELSE SUBSTRING(COALESCE(m.content, it.text) FROM 1 FOR 200)
+                    || CASE WHEN LENGTH(COALESCE(m.content, it.text)) > 200 THEN '...' ELSE '' END
+            END END AS snippet, 1.0 AS rank, p.match_pos
+        FROM page p
+        JOIN sessions s ON s.id = p.session_id
+        LEFT JOIN messages m ON p.kind = 'message' AND m.session_id = p.session_id AND m.ordinal = p.ordinal
+        LEFT JOIN image_text it ON p.kind = 'image' AND it.session_id = p.session_id
+            AND it.message_ordinal = p.ordinal AND it.source_kind = p.source_kind
+            AND it.call_index = p.call_index AND it.event_index = p.event_index
+            AND it.image_index = p.image_index AND it.processor = p.processor
+        ORDER BY %s`, orderBy)
+}
+
 func (s *Store) search(ctx context.Context, f db.SearchFilter) (db.SearchPage, error) {
 	return s.searchRows(ctx, f, nil)
 }
@@ -559,7 +564,10 @@ func (s *Store) searchRows(ctx context.Context, f db.SearchFilter, ids []string)
 			fmt.Errorf("searching: %w", err)
 	}
 	defer rows.Close()
+	return scanSearchRows(rows, f)
+}
 
+func scanSearchRows(rows *sql.Rows, f db.SearchFilter) (db.SearchPage, error) {
 	results := []db.SearchResult{}
 	for rows.Next() {
 		var r db.SearchResult
