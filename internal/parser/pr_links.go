@@ -121,7 +121,7 @@ func PromptPRLinks(text string) []PRLink {
 		}
 		repo, num, _, routePath, found := prLinkRoute(u.Path)
 		repository := strings.TrimPrefix(repo, "/")
-		if !found || strings.Count(repository, "/") < 1 || num == "" || strings.Trim(num, "0123456789") != "" {
+		if !found || strings.Count(repository, "/") < 1 || strings.Trim(num, "0123456789") != "" {
 			continue
 		}
 		n, err := strconv.Atoi(num)

@@ -284,5 +284,4 @@ func TestFinalizePromptPRLinks(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, prepared.Session.PRLinks, 1)
 	assert.Equal(t, "https://github.com/o/r/pull/1", prepared.Session.PRLinks[0].URL)
-
 }
