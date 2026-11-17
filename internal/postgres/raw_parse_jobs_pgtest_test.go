@@ -5,7 +5,6 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"encoding/json/v2"
 	"fmt"
 	"net/url"
 	"testing"
@@ -553,7 +552,7 @@ func claimOneRawParseJob(t *testing.T, store *RawIngestStore) rawderive.JobLease
 func TestRawParseCleanupSkipsFutureRetryBacklog(t *testing.T) {
 	t.Parallel()
 	pg, _ := newRawIngestTestStore(t)
-	var smallBuffers int
+	var smallBuffers float64
 	for _, count := range []int{100, 10000} {
 		_, err := pg.ExecContext(t.Context(), `
 			INSERT INTO raw_manifests (tenant_id, manifest_id, device_id, provider,
@@ -579,20 +578,11 @@ func TestRawParseCleanupSkipsFutureRetryBacklog(t *testing.T) {
 			ANALYZE raw_manifests; ANALYZE raw_source_heads; ANALYZE raw_ingest_jobs;
 		`)
 		require.NoError(t, err)
-		var raw []byte
-		require.NoError(t, pg.QueryRowContext(t.Context(),
-			"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "+rawParseSupersedeSQL,
-			maxRawParseSupersedeBatch).Scan(&raw))
-		var plans []struct {
-			Plan struct {
-				Hits  int `json:"Shared Hit Blocks"`
-				Reads int `json:"Shared Read Blocks"`
-			}
-		}
-		require.NoError(t, json.Unmarshal(raw, &plans))
-		require.Len(t, plans, 1)
-		buffers := plans[0].Plan.Hits + plans[0].Plan.Reads
-		t.Logf("future retry jobs=%d cleanup buffers=%d", count, buffers)
+		tx, err := pg.BeginTx(t.Context(), nil)
+		require.NoError(t, err)
+		_, buffers := explainUserBlocks(t, tx, rawParseSupersedeSQL, maxRawParseSupersedeBatch)
+		require.NoError(t, tx.Rollback())
+		t.Logf("future retry jobs=%d cleanup user blocks=%.0f", count, buffers)
 		if count == 100 {
 			smallBuffers = buffers
 		} else {
