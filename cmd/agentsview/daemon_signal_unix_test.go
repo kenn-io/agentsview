@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"os"
 	"os/exec"
 	"syscall"
@@ -17,7 +16,7 @@ import (
 	"go.kenn.io/kit/daemon"
 )
 
-func TestDaemonRestartSIGTERMStillLaunchesReplacement(t *testing.T) {
+func TestDaemonRestartSIGTERMLeavesLaunchedReplacementRunning(t *testing.T) {
 	cmd := exec.CommandContext(t.Context(),
 		os.Args[0], "-test.v",
 		"-test.run=^TestDaemonRestartSIGTERMHelperProcess$",
@@ -38,16 +37,20 @@ func TestDaemonRestartSIGTERMHelperProcess(t *testing.T) {
 	deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
 		return []daemon.RuntimeRecord{testWritableRecord(91, "/runtime/91.json")}, nil
 	}
-	deps.stopProcess = func(daemon.RuntimeRecord, time.Duration) error {
-		return syscall.Kill(os.Getpid(), syscall.SIGTERM)
-	}
 	deps.startBackground = func(ctx context.Context,
 		_ config.Config, _ []string, _ serveReplacementOptions,
 		policy backgroundLaunchPolicy,
 	) (backgroundLaunchResult, error) {
-		require.Eventually(t, func() bool {
-			return errors.Is(ctx.Err(), context.Canceled)
-		}, time.Second, time.Millisecond)
+		policy.OnLaunch(92, "/data/serve.log")
+		// Signal only after launch. During the database-lock wait, cancellation
+		// intentionally prevents a replacement from starting.
+		require.NoError(t, syscall.Kill(os.Getpid(), syscall.SIGTERM))
+		select {
+		case <-ctx.Done():
+		case <-time.After(10 * time.Second):
+			require.FailNow(t, "SIGTERM did not cancel the startup wait")
+		}
+		require.ErrorIs(t, ctx.Err(), context.Canceled)
 		t.Log("replacement launch observed canceled context")
 		return backgroundLaunchResult{
 			Started: true, childPID: 92, LogPath: "/data/serve.log",
