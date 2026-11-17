@@ -76,15 +76,22 @@ func TestSearchKeptRestart(t *testing.T) {
 		return s, trace
 	}
 	s, trace := open()
+	var retained atomic.Int32
+	s.runtimeState().search.Size = func(db.SearchPage) int64 { retained.Add(1); return 1 }
 	got, err := s.Search(ctx, filter)
 	require.NoError(t, err)
 	require.Equal(t, want, got)
 	require.Zero(t, trace.count.Load())
+	got, err = s.Search(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	require.EqualValues(t, 1, retained.Load())
 	other, err := s.Search(ctx, db.SearchFilter{Query: "unmatched-token"})
 	require.NoError(t, err)
 	require.Empty(t, other.Results)
 	require.Positive(t, trace.count.Load())
 	write("needle second")
+	// Save the updated page for the next store.
 	_, err = s.Search(ctx, filter)
 	require.NoError(t, err)
 	s, trace = open()

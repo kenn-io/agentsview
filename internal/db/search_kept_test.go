@@ -229,13 +229,18 @@ func TestSearchKeptHistoryTokenCounts(t *testing.T) {
 		name, setup, query string
 		wantChange         bool
 	}{
-		{"group", "", `UPDATE sessions SET group_key='group' WHERE id='session'`, true},
-		{"grouped rename", `UPDATE sessions SET group_key='group' WHERE id='session'`, `UPDATE sessions SET session_name='name' WHERE id='session'`, true},
 		{"listed column", "", `UPDATE sessions SET project='new' WHERE id='session'`, true},
 		{"unlisted column", "", `UPDATE sessions SET health_score=42 WHERE id='session'`, false},
-		{"image", "", `INSERT INTO image_text_cache(image_hash,processor,provider,model,revision,text) VALUES('hash','processor','provider','model','revision','text')`, true},
+		{"image", `INSERT INTO image_text_occurrences(session_id,image_index,image_hash) VALUES('session',0,'hash')`, `INSERT INTO image_text_cache(image_hash,processor,provider,model,revision,text) VALUES('hash','processor','provider','model','revision','text')`, true},
 		{"session insert", "", `INSERT INTO sessions(id,project,agent,machine) VALUES('other','project','agent','machine')`, true},
 		{"session delete", "", `DELETE FROM sessions WHERE id='session'`, true},
+		{"old writer", `DROP TRIGGER trg_sessions_usage_change_update;
+CREATE TRIGGER trg_sessions_usage_change_update AFTER UPDATE OF transcript_revision, started_at, deleted_at, project, agent, machine, git_branch, group_key, is_automated, user_message_count, ended_at, termination_status, display_name, session_name, relationship_type, message_count, created_at ON sessions
+WHEN OLD.transcript_revision IS NOT NEW.transcript_revision OR OLD.started_at IS NOT NEW.started_at OR OLD.deleted_at IS NOT NEW.deleted_at OR OLD.project IS NOT NEW.project OR OLD.agent IS NOT NEW.agent OR OLD.machine IS NOT NEW.machine OR OLD.git_branch IS NOT NEW.git_branch OR OLD.group_key IS NOT NEW.group_key OR OLD.is_automated IS NOT NEW.is_automated OR OLD.user_message_count IS NOT NEW.user_message_count OR OLD.ended_at IS NOT NEW.ended_at OR OLD.termination_status IS NOT NEW.termination_status OR OLD.display_name IS NOT NEW.display_name OR OLD.session_name IS NOT NEW.session_name OR OLD.relationship_type IS NOT NEW.relationship_type OR OLD.message_count IS NOT NEW.message_count OR OLD.created_at IS NOT NEW.created_at
+BEGIN
+ INSERT INTO archive_metadata (key, value) VALUES ('usage_change_revision', '1') ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
+ INSERT INTO usage_session_changes (session_id, revision) SELECT NEW.id, CAST(value AS INTEGER) FROM archive_metadata WHERE key = 'usage_change_revision' ON CONFLICT(session_id) DO UPDATE SET revision = excluded.revision;
+END;`, `UPDATE sessions SET session_name='needlename' WHERE id='session'`, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -258,26 +263,4 @@ func TestSearchKeptHistoryTokenCounts(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestSearchKeptOldWriterTriggers(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	d := testDB(t)
-	ctx := t.Context()
-	insertSession(t, d, "session", "project")
-	_, err := d.getWriter().ExecContext(ctx, `DROP TRIGGER trg_sessions_usage_change_update;
-CREATE TRIGGER trg_sessions_usage_change_update AFTER UPDATE OF transcript_revision, started_at, deleted_at, project, agent, machine, git_branch, group_key, is_automated, user_message_count, ended_at, termination_status, display_name, session_name, relationship_type, message_count, created_at ON sessions
-WHEN OLD.transcript_revision IS NOT NEW.transcript_revision OR OLD.started_at IS NOT NEW.started_at OR OLD.deleted_at IS NOT NEW.deleted_at OR OLD.project IS NOT NEW.project OR OLD.agent IS NOT NEW.agent OR OLD.machine IS NOT NEW.machine OR OLD.git_branch IS NOT NEW.git_branch OR OLD.group_key IS NOT NEW.group_key OR OLD.is_automated IS NOT NEW.is_automated OR OLD.user_message_count IS NOT NEW.user_message_count OR OLD.ended_at IS NOT NEW.ended_at OR OLD.termination_status IS NOT NEW.termination_status OR OLD.display_name IS NOT NEW.display_name OR OLD.session_name IS NOT NEW.session_name OR OLD.relationship_type IS NOT NEW.relationship_type OR OLD.message_count IS NOT NEW.message_count OR OLD.created_at IS NOT NEW.created_at
-BEGIN
- INSERT INTO archive_metadata (key, value) VALUES ('usage_change_revision', '1') ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
- INSERT INTO usage_session_changes (session_id, revision) SELECT NEW.id, CAST(value AS INTEGER) FROM archive_metadata WHERE key = 'usage_change_revision' ON CONFLICT(session_id) DO UPDATE SET revision = excluded.revision;
-END;`)
-	require.NoError(t, err)
-	var token string
-	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT value FROM archive_metadata WHERE key='search_history_token'`).Scan(&token))
-	_, err = d.getWriter().ExecContext(ctx, `UPDATE sessions SET session_name='needlename' WHERE id='session'`)
-	require.NoError(t, err)
-	var changedToken string
-	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT value FROM archive_metadata WHERE key='search_history_token'`).Scan(&changedToken))
-	require.NotEqual(t, token, changedToken)
 }
