@@ -2144,9 +2144,11 @@ fixtures retain this field; missing identities remain source-local.
   so they never end the shown branch (`TestParseGrokWebConversation`,
   `TestSyncGrokCapturedPages`).
 - **Pending replies:** A chat with an entry in `inflightResponses`, a
-  `partial` response on the shown branch, or an empty `partial` reply directly
-  below the end of the shown branch is written but its freshness is not
-  recorded, so the next Sync fetches it again. So is a chat with an empty
+  `partial` response that ends the shown branch, or an empty `partial` reply
+  directly below the end of the shown branch is written but its freshness is
+  not recorded, so the next Sync fetches it again. A `partial` response with
+  later turns below it on the shown branch is finished history and does not
+  count. So is a chat with an empty
   `partial` reply below an earlier response of the shown branch that is newer
   than the end of that branch, which is how a regeneration looks while Grok
   writes it. An older one is a failed regeneration the chat has moved past, and
@@ -2154,8 +2156,11 @@ fixtures retain this field; missing identities remain source-local.
   failed regeneration that stayed `partial` with no text, so a regeneration
   that fails as the newest response is refetched until the bound below. This
   applies only while the chat's list `modifyTime` is within 24 hours of the
-  current time (`TestGrokWebPending`, `TestSyncGrokRefetchesReplyInProgress`,
-  `TestSyncGrokRefetchesRegeneration`, `TestSyncGrokPendingWindow`).
+  current time. A missing or unreadable `modifyTime` counts as within that
+  window and gives freshness no list marker, so a finished chat with one is
+  fetched once (`TestGrokWebPending`, `TestSyncGrokRefetchesReplyInProgress`,
+  `TestSyncGrokRefetchesRegeneration`, `TestSyncGrokPendingWindow`,
+  `TestSyncGrokUnreadableListTime`).
 - **Sign-in:** HTTP 401 and 403 both read as an expired sign-in and end Sync
   (`TestSyncGrokStops`).
 - **Identities and history:** Each message carries its `responseId` as the
