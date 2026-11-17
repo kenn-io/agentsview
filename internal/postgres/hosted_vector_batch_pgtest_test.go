@@ -41,7 +41,7 @@ func hostedVectorBatchRecovery(t *testing.T) {
 		for i, text := range texts {
 			calls[text]++
 			if failing && strings.Contains(text, "batch-00") {
-				return nil, &embedclient.APIError{StatusCode: 503}
+				return nil, &embedclient.APIError{StatusCode: 503, Reason: embedclient.ReasonUnavailable}
 			}
 			out[i] = []float32{1, 0}
 		}
@@ -51,7 +51,7 @@ func hostedVectorBatchRecovery(t *testing.T) {
 	err = retry.EmbedBatch(t.Context(), f.runtime, gen, encode, 128, false)
 	batchErr, ok := errors.AsType[*HostedEmbeddingError](err)
 	require.True(t, ok)
-	assert.Equal(t, "embedding endpoint returned HTTP 503", batchErr.Cause)
+	assert.Equal(t, "embedding endpoint returned HTTP 503 (unavailable)", batchErr.Cause)
 	assert.Equal(t, 1, calls["batch-16"], "failure must not prevent later pages")
 	assert.Zero(t, calls["batch-17"], "automated session is outside the scope")
 	failing = false

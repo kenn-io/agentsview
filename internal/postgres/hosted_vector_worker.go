@@ -45,7 +45,10 @@ func NewHostedEmbeddingBackoff() *HostedEmbeddingBackoff {
 
 func embeddingFailureCause(err error) string {
 	if apiErr, ok := errors.AsType[*embedclient.APIError](err); ok {
-		return fmt.Sprintf("embedding endpoint returned HTTP %d", apiErr.StatusCode)
+		return fmt.Sprintf("embedding endpoint returned HTTP %d (%s)", apiErr.StatusCode, apiErr.Reason.String())
+	}
+	if vectorErr, ok := errors.AsType[*embedclient.VectorError](err); ok {
+		return fmt.Sprintf("embedding endpoint returned an invalid vector: %v", vectorErr.Err)
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "embedding request timed out"
