@@ -6966,6 +6966,10 @@ components:
               type: string
             type: array
           type: object
+        delta_appends:
+          items:
+            $ref: "#/components/schemas/RemotesyncDeltaAppend"
+          type: array
         delta_files:
           items:
             type: string
@@ -6999,6 +7003,21 @@ components:
           type: object
       required:
         - dirs
+      type: object
+    RemotesyncDeltaAppend:
+      additionalProperties: false
+      properties:
+        offset:
+          format: int64
+          type: integer
+        path:
+          type: string
+        tail_sha256:
+          type: string
+      required:
+        - path
+        - offset
+        - tail_sha256
       type: object
     RemotesyncManifest:
       additionalProperties: false
