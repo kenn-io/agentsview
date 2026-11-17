@@ -317,8 +317,8 @@ func (db *DB) backfillPromptPRLinksLocked(ctx context.Context, w *writerHandle) 
 			return err
 		}
 	}
-	if version >= fullRebuildDataVersion() && version < 184 {
-		if err := advanceDataVersion(ctx, tx, 184); err != nil {
+	if version >= fullRebuildDataVersion() && version < 185 {
+		if err := advanceDataVersion(ctx, tx, 185); err != nil {
 			return err
 		}
 	}

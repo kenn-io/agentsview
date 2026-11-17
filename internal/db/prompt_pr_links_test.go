@@ -39,9 +39,10 @@ func TestPromptPRLinksStoredMessages(t *testing.T) {
 
 func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
 	for _, tc := range []struct {
-		name            string
-		legacy, rebuild bool
-	}{{name: "backfill"}, {name: "rebuild", rebuild: true}, {name: "legacy", legacy: true}} {
+		name                       string
+		legacy, rebuild, completed bool
+		version                    int
+	}{{name: "backfill", version: 183}, {name: "reserved version", version: 184}, {name: "completed backfill", version: 184, completed: true}, {name: "rebuild", rebuild: true}, {name: "legacy", legacy: true, version: 183}} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "archive.db")
 			d, err := OpenIsolated(t.Context(), path)
@@ -61,8 +62,10 @@ func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
 			dialogue := "https://github.com/o/r/%70ull/42"
 			require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "user", Content: dialogue + " https://github.com/o/r/pull/3", DialogueText: &dialogue}}))
 			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
-				if _, err := tx.Exec(`UPDATE sessions SET pr_links=structured_pr_links WHERE id=?`, s.ID); err != nil {
-					return err
+				if !tc.completed {
+					if _, err := tx.Exec(`UPDATE sessions SET pr_links=structured_pr_links WHERE id=?`, s.ID); err != nil {
+						return err
+					}
 				}
 				if tc.legacy {
 					if _, err := tx.Exec(artifactSessionQueueTriggerDropsSQL); err != nil {
@@ -72,10 +75,12 @@ func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
 						return err
 					}
 				}
-				if _, err := tx.Exec(`DELETE FROM stats WHERE key='prompt_pr_links_backfill_v1'`); err != nil {
-					return err
+				if !tc.completed {
+					if _, err := tx.Exec(`DELETE FROM stats WHERE key='prompt_pr_links_backfill_v1'`); err != nil {
+						return err
+					}
 				}
-				version := 183
+				version := tc.version
 				if tc.rebuild {
 					version = fullRebuildDataVersion() - 1
 				}
@@ -100,7 +105,7 @@ func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
 			} else {
 				version, _, err := readUserVersion(t.Context(), d.getReader())
 				require.NoError(t, err)
-				assert.Equal(t, 184, version)
+				assert.Equal(t, 185, version)
 				assert.False(t, d.NeedsResync())
 			}
 			got, err := d.GetSession(t.Context(), s.ID)

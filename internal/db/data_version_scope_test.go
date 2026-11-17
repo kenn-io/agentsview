@@ -13,9 +13,11 @@ import (
 )
 
 func TestScopedDataVersionProviders(t *testing.T) {
-	providers := ScopedDataVersionProviders(183, 184)
-	require.NotNil(t, providers)
-	assert.Empty(t, providers)
+	for _, from := range []int{183, 184} {
+		providers := ScopedDataVersionProviders(from, 185)
+		require.NotNil(t, providers)
+		assert.Empty(t, providers)
+	}
 	t.Cleanup(InstallDataVersionScopesForTest(map[int][]parser.AgentType{
 		131: {parser.AgentHermes},
 		132: {parser.AgentAugureDesktop},
