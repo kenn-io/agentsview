@@ -30,6 +30,7 @@ function readMath(src: string): MathToken | undefined {
   if (singleDollar && /[\s$]/.test(src[left.length] ?? "")) return;
   const right = name ? `\\end{${name}}` : left === "\\(" ? "\\)" : left === "\\[" ? "\\]" : left;
   const displayMode = left !== "$" && left !== "\\(" && name !== "math";
+  const environments = name ? [name] : [];
   let braces = 0;
   for (let i = left.length; i < src.length; i++) {
     const char = src[i]!;
@@ -41,6 +42,18 @@ function readMath(src: string): MathToken | undefined {
     )
       return;
     if (singleDollar && (char === "\n" || char === "\r")) return;
+    if (name && braces === 0 && char === "\\") {
+      const command = /^\\(begin|end)\{([A-Za-z]+\*?)\}/.exec(src.slice(i));
+      if (command) {
+        if (command[1] === "begin") environments.push(command[2]!);
+        else if (environments.pop() !== command[2]) return;
+        // Only the matching outer end completes a bare math environment.
+        if (environments.length > 0) {
+          i += command[0].length - 1;
+          continue;
+        }
+      }
+    }
     if (braces === 0 && src.startsWith(right, i)) {
       // Pandoc-style dollar boundaries keep ordinary prices and escaped dollars literal.
       if (singleDollar && (/\s/.test(src[i - 1]!) || /\d/.test(src[i + 1] ?? ""))) return;

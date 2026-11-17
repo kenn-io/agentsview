@@ -49,6 +49,41 @@ describe.each([false, true])("math with preformatted XML %s", (preformatted) => 
     expect(root.textContent).toContain("After");
   });
 
+  it.each([
+    ["bare", "", ""],
+    ["dollars", "$$", "$$"],
+    ["brackets", "\\[", "\\]"],
+    ["fenced", fence + "math\n", "\n" + fence],
+  ])("renders the complete nested matrix in %s math", (_label, left, right) => {
+    const source = "\\begin{pmatrix}\\begin{pmatrix}a&b\\\\c&d\\end{pmatrix}&z\\end{pmatrix}";
+    const root = render("Before\n\n" + left + source + right + "\n\nAfter", preformatted);
+    expect(root.querySelectorAll(".katex")).toHaveLength(1);
+    expect(Array.from(root.querySelectorAll("math mi"), (cell) => cell.textContent)).toEqual([
+      "a",
+      "b",
+      "c",
+      "d",
+      "z",
+    ]);
+    expect(root.querySelector("mtable mtable")).not.toBeNull();
+    expect(root.querySelector("math")?.textContent).toContain("z");
+    root.querySelector(".katex-display")?.remove();
+    expect(root.textContent?.trim()).toBe("Before\nAfter");
+  });
+
+  it.each([
+    "\\begin{pmatrix}% \\begin{pmatrix} ignored\n\\begin{pmatrix}a\\end{pmatrix}&z\\end{pmatrix}",
+    "\\begin{pmatrix}\\begin{pmatrix}a\\end{pmatrix}% \\end{pmatrix} ignored\n&z\\end{pmatrix}",
+    "\\begin{pmatrix}a\\\\begin{pmatrix}\\\\z\\end{pmatrix}",
+    "\\begin{pmatrix}a\\\\end{pmatrix}\\\\z\\end{pmatrix}",
+  ])("ignores commented and escaped environment commands: %s", (source) => {
+    const root = render(source, preformatted);
+    expect(root.querySelectorAll(".katex-display")).toHaveLength(1);
+    expect(root.querySelector("math")?.textContent).toContain("z");
+    root.querySelector(".katex-display")?.remove();
+    expect(root.textContent?.trim()).toBe("");
+  });
+
   it("preserves the original conversation's aligned Maxwell equations", () => {
     const source =
       "$$\n\\begin{aligned}\n" +
