@@ -29,9 +29,6 @@ func ProvisionHostedVector(ctx context.Context, pg *sql.DB, schema, tenant strin
 	if err = checkHostedBinding(ctx, tx, schema, tenant); err != nil {
 		return err
 	}
-	if err = checkHostedCatalog(ctx, tx, schema, tenant); err != nil {
-		return err
-	}
 	id, err := ensureVectorGeneration(ctx, tx, generation.Fingerprint, generation.Model, generation.Dimension)
 	if err != nil {
 		return err

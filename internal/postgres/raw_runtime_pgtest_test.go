@@ -478,6 +478,13 @@ func TestHostedVectorProvisionAndPrivileges(t *testing.T) {
 	var retained int
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_documents WHERE content='new words'`).Scan(&retained))
 	assert.Equal(t, 1, retained)
+	_, err = f.admin.ExecContext(t.Context(), `CREATE TABLE vector_chunks_g999999 (doc_key text)`)
+	require.NoError(t, err)
+	badGen := storage.VectorGenerationInfo{Fingerprint: "rolled-back", Model: "fixture", Dimension: 2}
+	require.ErrorContains(t, ProvisionHostedVector(t.Context(), f.admin, f.schema, f.tenant, badGen), "hosted vector schema is unsupported")
+	_, _, ok, err = LookupVectorGeneration(t.Context(), f.runtime, badGen.Fingerprint)
+	require.NoError(t, err)
+	assert.False(t, ok)
 }
 
 func TestHostedRuntimeSettlingRechecksConcurrentVisibility(t *testing.T) {

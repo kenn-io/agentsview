@@ -1099,7 +1099,7 @@ func (s *Sync) pushVectorSession(
 		return vectorSessionOutcome{deferred: true}, nil
 	}
 
-	outcome, err := writeSessionVectors(ctx, tx, scope, sessionID, aggHash, docs)
+	outcome, err := writeSessionVectorsKeeping(ctx, tx, scope, sessionID, aggHash, docs, nil, nil)
 	if err != nil {
 		return vectorSessionOutcome{}, err
 	}
@@ -1107,10 +1107,6 @@ func (s *Sync) pushVectorSession(
 		return vectorSessionOutcome{}, fmt.Errorf("commit vector push tx: %w", err)
 	}
 	return outcome, nil
-}
-
-func writeSessionVectors(ctx context.Context, tx *sql.Tx, scope vectorPushScope, sessionID, aggHash string, docs []storage.VectorPushDoc) (vectorSessionOutcome, error) {
-	return writeSessionVectorsKeeping(ctx, tx, scope, sessionID, aggHash, docs, nil, nil)
 }
 
 func writeSessionVectorsKeeping(ctx context.Context, tx *sql.Tx, scope vectorPushScope, sessionID, aggHash string, docs, covered []storage.VectorPushDoc, loadChunks func(string) ([]storage.VectorPushChunk, error)) (vectorSessionOutcome, error) {
