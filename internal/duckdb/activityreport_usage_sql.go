@@ -18,10 +18,7 @@ import (
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
-var (
-	activityUsagePublishObserver func()
-	activityUsagePartNextHook    func() error
-)
+var activityUsagePartNextHook func() error
 
 // activityUsageModels selects the (model, provider_id) pairs usage rows can
 // carry. A pair it misses costs one more read of the rows.
@@ -121,9 +118,6 @@ func (s *Store) sumActivityUsage(
 			}
 			if err == nil {
 				readbase.SortActivityUsageGroups(groups)
-				if activityUsagePublishObserver != nil {
-					activityUsagePublishObserver()
-				}
 				if ctx.Err() == nil && version == s.keptVersion() {
 					s.activityUsageSums.Put(slot, version, []*readbase.ActivityUsageSums{{Schedule: schedule, Groups: groups, EndUS: endUS, NextUS: nextUS}})
 				}
@@ -152,9 +146,6 @@ func (s *Store) sumActivityUsage(
 		if next.Valid {
 			nextUS = next.Int64
 		}
-		if activityUsagePublishObserver != nil {
-			activityUsagePublishObserver()
-		}
 		if ctx.Err() == nil && version == s.keptVersion() {
 			s.activityUsageSums.Put(slot, version, []*readbase.ActivityUsageSums{{Schedule: schedule, Groups: groups, EndUS: endUS, NextUS: nextUS}})
 		}
@@ -179,6 +170,7 @@ func remapActivityRates(part *readbase.ActivityUsageSums, schedule readbase.Usag
 			return false
 		}
 	}
+	// A persisted invalid rate index must be treated as a cache miss.
 	for _, g := range part.Groups {
 		if g.Rate < 0 || g.Rate >= int64(len(indexes)) {
 			return false
