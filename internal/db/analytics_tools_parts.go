@@ -27,7 +27,7 @@ func SetToolsPartsReadObserver(observe func([]string)) func() {
 }
 
 func (db *DB) toolsFromParts(ctx context.Context, identity string, f AnalyticsFilter) (ToolsAnalyticsResponse, bool, error) {
-	if identity == "" || f.ActiveSince != "" || TerminationUsesTime(f.Termination) || f.Timezone == "Local" {
+	if f.ActiveSince != "" || TerminationUsesTime(f.Termination) || f.Timezone == "Local" {
 		return ToolsAnalyticsResponse{}, false, nil
 	}
 	sessions, err := db.toolSessions(ctx, f)
@@ -65,7 +65,7 @@ func (db *DB) toolsFromParts(ctx context.Context, identity string, f AnalyticsFi
 			return ToolsAnalyticsResponse{}, true, err
 		}
 		for _, id := range ids {
-			parts[id] = kept.Part[[]ToolAnalyticsRow]{ID: id, Fingerprint: versions[id], Present: true}
+			parts[id] = kept.Part[[]ToolAnalyticsRow]{ID: id, Fingerprint: versions[id]}
 		}
 		for _, row := range rows {
 			part := parts[row.SessionID]
