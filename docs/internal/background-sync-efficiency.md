@@ -21,6 +21,10 @@ lives primarily in `internal/sync/watcher.go`,
   visible, holds `sync_interval`, and `/api/v1/changes/stream` holds one
   second. The shortest hold wins. Archive push commands use `sync_interval` as
   their floor.
+- A failed batch backs off from `sync_interval`, not from the background
+  interval (`WatcherOptions.RetryInterval`). The floor still applies, so with
+  nobody watching the retry waits for the background interval, and with a
+  client connected it runs at that client's pace without a new file event.
 - An archive read flushes the pending set through `Watcher.FlushPending` before
   it is served, so a reader never waits out the background interval. It also
   runs one live-activity poll, unless one ran in the last 30 seconds, because

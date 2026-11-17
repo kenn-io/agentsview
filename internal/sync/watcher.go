@@ -116,6 +116,12 @@ type WatcherOptions struct {
 	// MinIntervalOverride, when set, can shorten the minimum interval
 	// between callbacks while the watcher runs.
 	MinIntervalOverride *IntervalOverride
+	// RetryInterval, when positive, is the first delay before a failed batch
+	// is retried, doubling per further failure. Zero uses the minimum
+	// interval. A watcher whose minimum interval is long because nobody is
+	// waiting sets this to the pace a waiting client gets, so a failure that
+	// clears is retried at that pace once a client shortens the interval.
+	RetryInterval time.Duration
 }
 
 // WatchRetryError carries the authoritative reconciliation scope selected by a
@@ -753,6 +759,7 @@ type Watcher struct {
 	batchDelay         time.Duration
 	minInterval        time.Duration
 	intervalOverride   *IntervalOverride
+	retryInterval      time.Duration
 	maxEntries         int
 	dispatchEnabled    atomic.Bool
 	dispatchMu         sync.Mutex
@@ -898,6 +905,7 @@ func newWatcherWithBackendOptions(
 		batchDelay:         batchDelay,
 		minInterval:        minInterval,
 		intervalOverride:   options.MinIntervalOverride,
+		retryInterval:      options.RetryInterval,
 		maxEntries:         maxEntries,
 		rootAgents:         make(map[string][]string),
 		rootScopes:         make(map[string][]WatchScope),
@@ -1526,8 +1534,12 @@ func (w *Watcher) loop() {
 						w.eventSink.immediatePending()
 					dueAt := time.Now()
 					if !immediatePending {
+						base := w.minInterval
+						if w.retryInterval > 0 {
+							base = w.retryInterval
+						}
 						dueAt = dueAt.Add(watcherRetryDelay(
-							max(w.batchDelay, w.minInterval), consecutiveFailures,
+							max(w.batchDelay, base), consecutiveFailures,
 						))
 					}
 					// A failing fresh batch must not postpone older retained work,

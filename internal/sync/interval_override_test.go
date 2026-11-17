@@ -120,6 +120,68 @@ func TestWatcherIntervalOverrideChangeReschedules(t *testing.T) {
 	})
 }
 
+// A watcher with a long interval for when nobody is waiting must still retry
+// a failed sync at the pace of a client that is waiting.
+func TestWatcherRetryFollowsWaitingClientPace(t *testing.T) {
+	const (
+		background = 10 * time.Minute
+		live       = 5 * time.Second
+	)
+	for _, tt := range []struct {
+		name         string
+		connectAfter time.Duration
+		want         time.Duration
+	}{
+		{name: "client connected before the failure", connectAfter: 0, want: live},
+		{name: "client connects while the retry waits", connectAfter: time.Minute, want: time.Minute},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				override := &IntervalOverride{}
+				backend := newFakeWatchBackend()
+				var calls []time.Time
+				w, err := newWatcherWithBackendOptions(
+					0, background,
+					func(context.Context, WatchBatch) error {
+						calls = append(calls, time.Now())
+						if len(calls) == 1 {
+							return retryScopedWatchError{retry: WatchBatch{
+								ReconcileRoots: []string{"/sessions"},
+							}}
+						}
+						return nil
+					},
+					backend, 8, 1_000,
+					WatcherOptions{MinIntervalOverride: override, RetryInterval: live},
+				)
+				require.NoError(t, err)
+				w.Start()
+				t.Cleanup(w.Stop)
+				if tt.connectAfter == 0 {
+					t.Cleanup(override.Hold(live))
+				}
+
+				backend.sendBackendEvent(t, backendEvent{
+					Path: "/sessions", Root: "/sessions", Op: backendOpReconcileRootChange,
+				})
+				synctest.Wait()
+				require.Len(t, calls, 1)
+				if tt.connectAfter > 0 {
+					time.Sleep(tt.connectAfter)
+					synctest.Wait()
+					require.Len(t, calls, 1, "nobody is waiting for the retry yet")
+					t.Cleanup(override.Hold(live))
+				}
+				time.Sleep(time.Minute)
+				synctest.Wait()
+
+				require.Len(t, calls, 2, "the retry needs no new file event")
+				assert.Equal(t, tt.want, calls[1].Sub(calls[0]))
+			})
+		})
+	}
+}
+
 func TestIntervalOverrideUsesShortestHold(t *testing.T) {
 	override := &IntervalOverride{}
 	require.Zero(t, override.Value())

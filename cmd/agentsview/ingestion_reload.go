@@ -291,6 +291,15 @@ func (d *daemonIngestion) readFlushDueLocked() bool {
 	return time.Since(d.lastCatchup) >= max(cfg.SyncInterval, readFlushMinGap)
 }
 
+// endPauseLocked reopens watcher delivery after an idle pause. Delivery stays
+// closed until startup has opened it.
+func (d *daemonIngestion) endPauseLocked() {
+	d.paused = false
+	if d.dispatchOpen {
+		d.watchers.openDispatch()
+	}
+}
+
 func (d *daemonIngestion) finishCatchup(done chan struct{}) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -317,6 +326,9 @@ func (d *daemonIngestion) foregroundSync(runner server.LocalSyncRunner) server.L
 			done := d.registerCatchupLocked()
 			defer d.finishCatchup(done)
 		}
+		// The runner imports attached archives, which first flushes the
+		// watcher, so delivery has to be open before it runs.
+		d.endPauseLocked()
 		d.mu.Unlock()
 		stats, err := runner(ctx, progress)
 		if err == nil {
@@ -337,19 +349,19 @@ func (d *daemonIngestion) foregroundSync(runner server.LocalSyncRunner) server.L
 // that the pause held back, unless a full pass just ran.
 func (d *daemonIngestion) catchUp(ctx context.Context, fullPassRan bool) {
 	d.mu.Lock()
-	watchers, live, wasPaused, open := d.watchers, d.live, d.paused, d.dispatchOpen
+	// pending outlives paused when a foreground sync ended the pause and then
+	// failed, so it is what says a wake still owes its catch-up.
+	watchers, live, owed, open := d.watchers, d.live, d.pending, d.dispatchOpen
 	missedScheduled, scheduled := d.missedScheduled, d.scheduled
-	d.paused, d.missedScheduled = false, false
-	if open {
-		watchers.openDispatch()
-	}
+	d.missedScheduled = false
+	d.endPauseLocked()
 	d.mu.Unlock()
 
 	var err error
 	switch {
 	case open:
 		err = watchers.flushPending(ctx)
-	case wasPaused && !d.engine.StartupReconciled():
+	case owed && !d.engine.StartupReconciled():
 		// The startup pass has not run, so no watcher batch may be delivered
 		// yet. This reader is the first to need the archive: run that pass.
 		if stats := syncAllReleasingStartupMaintenance(ctx, d.engine, nil); !stats.ProcessingComplete() {
@@ -361,7 +373,7 @@ func (d *daemonIngestion) catchUp(ctx context.Context, fullPassRan bool) {
 	if open && live != nil && !fullPassRan {
 		live.pollNow(ctx)
 	}
-	if wasPaused && !fullPassRan {
+	if owed && !fullPassRan {
 		watchers.poller.requestPoll()
 		switch {
 		case missedScheduled && scheduled != nil:
@@ -511,6 +523,9 @@ func (d *daemonIngestion) startWatchers(cfg config.Config) *ingestionWatchers {
 		cfg, cfg.BackgroundSyncFloor(), d.engine, d.syncWatchBatch,
 		agentsync.WatcherOptions{
 			MinIntervalOverride: &d.syncInterval,
+			// The background interval must not slow the retry of a failed
+			// sync for someone who is watching.
+			RetryInterval: cfg.SyncInterval,
 			OnCoverageDegraded: func(degradedRoots []string) error {
 				scopes := make([]pollingScope, 0, len(degradedRoots))
 				for _, r := range degradedRoots {
