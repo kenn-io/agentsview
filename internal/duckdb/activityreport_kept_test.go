@@ -378,8 +378,11 @@ func TestPartialActivityUsageKeptUntilPush(t *testing.T) {
 }
 
 func TestPartialActivityUsageRereadsPastNextRow(t *testing.T) {
-	for _, peer := range []bool{false, true} {
-		t.Run(strconv.FormatBool(peer), func(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		peer bool
+	}{{"own", false}, {"peer", true}} {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("CACHE_DIRECTORY", t.TempDir())
 			path := filepath.Join(t.TempDir(), "mirror.duckdb")
 			keptActivityMirror(t, path, "session-a", 500)
@@ -389,7 +392,7 @@ func TestPartialActivityUsageRereadsPastNextRow(t *testing.T) {
 				`INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id, TIMESTAMP '2026-01-01 12:30:00' AS timestamp) FROM messages WHERE id = 2`,
 			)
 			filter := db.AnalyticsFilter{Timezone: "UTC"}
-			if peer {
+			if tc.peer {
 				writeUsageMirror(t, path,
 					`UPDATE sessions SET project = 'excluded' WHERE id = 'session-b'`,
 					`UPDATE messages SET claude_message_id = 'message', claude_request_id = 'request' WHERE id IN (2, 3)`,
@@ -417,7 +420,7 @@ func TestPartialActivityUsageRereadsPastNextRow(t *testing.T) {
 			q.EffectiveEnd = q.EffectiveEnd.Add(time.Hour)
 			updated, err := store.GetActivityReport(t.Context(), filter, q)
 			require.NoError(t, err)
-			if peer {
+			if tc.peer {
 				require.Equal(t, 900, updated.Totals.OutputTokens)
 				require.ElementsMatch(t, []string{"session-a", "session-b"}, refreshed)
 			} else {
