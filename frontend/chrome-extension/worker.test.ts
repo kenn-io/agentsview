@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { platforms } from "./platforms.js";
 
 let message: (request: object) => void;
 let disconnect: () => void;
@@ -40,8 +41,13 @@ beforeEach(async () => {
   vi.stubGlobal(
     "fetch",
     vi.fn(
-      async () =>
-        new Response(readFileSync("../internal/importer/browser_requests/claude-ai.txt", "utf8")),
+      async (url: string) =>
+        new Response(
+          readFileSync(
+            `../internal/importer/browser_requests/${url.replace("chrome-extension://test/requests/", "")}`,
+            "utf8",
+          ),
+        ),
     ),
   );
   chrome.tabs.query.mockResolvedValue([{ id: 7 }]);
@@ -108,21 +114,40 @@ describe("Chrome native host worker", () => {
     },
   );
 
-  it("fetches in an existing Claude tab and replies by id", async () => {
-    expect(await request()).toEqual({ id: "a", version: 2, status: 200, body: "chats" });
-    expect(chrome.runtime.connectNative).toHaveBeenCalledExactlyOnceWith("io.kenn.agentsview");
-    expect(chrome.tabs.query).toHaveBeenCalledWith({
-      url: "https://claude.ai/*",
-      discarded: false,
-    });
-    expect(chrome.scripting.executeScript).toHaveBeenLastCalledWith({
-      target: { tabId: 7 },
-      world: "ISOLATED",
-      func: expect.any(Function),
-      args: ["pageFetch", "https://claude.ai/api/organizations"],
-    });
-    expect(chrome.tabs.remove).not.toHaveBeenCalled();
-  });
+  it.each(Object.entries(platforms))(
+    "fetches %s paths in an existing tab and replies by id",
+    async (platform, config) => {
+      const [path] = readFileSync(
+        `../internal/importer/testdata/browser_paths/${platform}.txt`,
+        "utf8",
+      ).split("\n");
+      message({ id: "a", platform, path, version: 2 });
+      await vi.waitFor(() => expect(port.postMessage).toHaveBeenCalledOnce());
+      expect(port.postMessage).toHaveBeenCalledWith({
+        id: "a",
+        version: 2,
+        status: 200,
+        body: "chats",
+      });
+      expect(chrome.runtime.connectNative).toHaveBeenCalledExactlyOnceWith("io.kenn.agentsview");
+      expect(chrome.tabs.query).toHaveBeenCalledWith({
+        url: `${config.origin}/*`,
+        discarded: false,
+      });
+      expect(chrome.scripting.executeScript).toHaveBeenNthCalledWith(1, {
+        target: { tabId: 7 },
+        files: config.scripts,
+        world: "ISOLATED",
+      });
+      expect(chrome.scripting.executeScript).toHaveBeenLastCalledWith({
+        target: { tabId: 7 },
+        world: "ISOLATED",
+        func: expect.any(Function),
+        args: [config.fetchFunction, `${config.origin}${path}`],
+      });
+      expect(chrome.tabs.remove).not.toHaveBeenCalled();
+    },
+  );
 
   it("injects pageFetch into a fresh tab and leaves it open", async () => {
     const pageFetch = vi.fn(() => ({ status: 200, body: "chats" }));

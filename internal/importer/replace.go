@@ -67,7 +67,9 @@ var (
 	claudeAIImport = conversationImport{parser.AgentClaudeAI, func(ctx context.Context, store db.Store, result parser.ParseResult, fts *lazyFTS) (importStatus, error) {
 		return upsertConversation(ctx, store, result, fts, claudeAIMessages)
 	}, claudeAIMessages}
-	chatGPTImport = conversationImport{parser.AgentChatGPT, upsertChatGPTConversation, chatGPTMessages}
+	chatGPTImport = conversationImport{parser.AgentChatGPT, func(ctx context.Context, store db.Store, result parser.ParseResult, fts *lazyFTS) (importStatus, error) {
+		return upsertChatGPTConversation(ctx, store, result, fts, false)
+	}, identityMessages}
 )
 
 // importConversation runs the default upsert and, when it refuses a session opts lists, replaces the session's messages with the export's and keeps the previous version as a trashed copy.

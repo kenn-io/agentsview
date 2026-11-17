@@ -159,6 +159,19 @@ func parseChatGPTFile(
 	return nil
 }
 
+// ParseChatGPTConversation parses one conversation returned by the web API.
+// Unlike an export import, browser sync has no local asset resolver. A
+// conversation with no importable messages yields an empty result, which
+// browser sync skips the way an export import does.
+func ParseChatGPTConversation(data []byte) (ParseResult, error) {
+	var conv chatGPTConversation
+	if err := json.Unmarshal(data, &conv); err != nil {
+		return ParseResult{}, fmt.Errorf("decoding ChatGPT conversation: %w", err)
+	}
+	result, _ := convertChatGPTConversation(conv, nil)
+	return result, nil
+}
+
 func convertChatGPTConversation(
 	conv chatGPTConversation,
 	assets AssetResolver,
@@ -284,6 +297,10 @@ func buildChatGPTMessages(
 				Content:       content,
 				Timestamp:     unixFloatToTime(msg.CreateTime),
 				ContentLength: len(content),
+				SourceUUID:    msg.ID,
+			}
+			if node.Parent != nil {
+				pm.SourceParentUUID = *node.Parent
 			}
 			msgs = append(msgs, pm)
 			lastAsstID = -1

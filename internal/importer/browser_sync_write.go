@@ -65,3 +65,81 @@ func replaceSyncedConversation(ctx context.Context, store db.Store, result parse
 	})
 	return importUpdated, err
 }
+
+// syncKeepingHistory writes a synced chat so stored rows keep their IDs and
+// pins whenever the chat only grew, and keeps the previous version in the
+// Trash whenever it did not. adjust, when set, runs on the converted rows
+// after the archived rows load.
+func syncKeepingHistory(ctx context.Context, store db.Store, result parser.ParseResult, adjust func(msgs, archived []db.Message)) (importStatus, error) {
+	id := result.Session.ID
+	msgs := identityMessages(id, result.Messages)
+	existing, err := store.GetSessionFull(ctx, id)
+	if err != nil {
+		return importNew, err
+	}
+	if existing == nil {
+		_, err := store.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+			Session: importedSession(result.Session), Messages: msgs,
+			SkipSignalUpdates: true,
+		}})
+		if errors.Is(err, db.ErrSessionExcluded) {
+			return importSkipped, nil
+		}
+		return importNew, err
+	}
+	archived, err := store.GetAllMessages(ctx, id)
+	if err != nil {
+		return importUpdated, err
+	}
+	if adjust != nil {
+		adjust(msgs, archived)
+	}
+	stored := storedFormMessages(store, msgs)
+	if sameMessages(archived, stored) {
+		// Equal rows can still be another branch: identical text, or text
+		// that usage-only storage does not keep.
+		if len(msgs) < existing.MessageCount || sourceIdentityChanged(archived, stored) {
+			return replaceSyncedConversation(ctx, store, result, msgs, true)
+		}
+		// Equal rows ignore models, so a reply that only gained its model
+		// gets it filled in place.
+		if rows := missingModelRows(archived, stored); len(rows) > 0 {
+			return importUpdated, appendChatGPTMessages(ctx, store, importedSession(result.Session), rows)
+		}
+		if storeArchiveContent(store).UsageOnly() {
+			return refreshChatGPTTimestamp(ctx, store, importedSession(result.Session))
+		}
+		return upsertConversation(ctx, store, result, nil, identityMessages)
+	}
+	// Appends and completed replies keep stored rows, their IDs, and pins. The
+	// fill indices count stored-form rows, which usage-only storage thins, so
+	// the rows written come from the same slice. A chat with fewer messages
+	// than stored is not an append even when its retained rows match.
+	if len(stored) >= len(archived) && len(msgs) >= existing.MessageCount {
+		if completed, prefix := compareChatGPTPrefix(archived, stored[:len(archived)], true); prefix {
+			rows := chatGPTFillRows(archived, stored, completed, true)
+			rows = append(rows, stored[len(archived):]...)
+			err := appendChatGPTMessages(ctx, store, importedSession(result.Session), rows)
+			if errors.Is(err, db.ErrSessionExcluded) {
+				return importSkipped, nil
+			}
+			return importUpdated, err
+		}
+	}
+	return replaceSyncedConversation(ctx, store, result, msgs, true)
+}
+
+// sourceIdentityChanged reports whether a stored row and its incoming row
+// name different source messages with the same stored content.
+func sourceIdentityChanged(archived, incoming []db.Message) bool {
+	for i, row := range incoming {
+		if i >= len(archived) {
+			break
+		}
+		a, b := archived[i].SourceUUID, row.SourceUUID
+		if a != "" && b != "" && a != b {
+			return true
+		}
+	}
+	return false
+}

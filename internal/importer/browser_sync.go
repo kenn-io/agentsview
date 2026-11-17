@@ -23,6 +23,8 @@ var (
 	ErrBrowserAuthRequired = errors.New("sign-in required")
 	// ErrBrowserResponseTooLarge marks a response over BrowserResponseLimit.
 	ErrBrowserResponseTooLarge = errors.New("response exceeds 32 MiB")
+	// ErrBrowserFormat reports a conversation shape this version cannot read.
+	ErrBrowserFormat = errors.New("returned a conversation format this version can't read. Update AgentsView and try again")
 )
 
 // BrowserResponse carries one browser response without credentials.
@@ -71,7 +73,7 @@ type BrowserPlatform struct {
 
 // BrowserPlatforms lists the platforms Sync supports, keyed by agent type.
 func BrowserPlatforms() []BrowserPlatform {
-	return []BrowserPlatform{claudeAIPlatform()}
+	return []BrowserPlatform{claudeAIPlatform(), chatGPTPlatform()}
 }
 
 // LookupBrowserPlatform finds a platform by its agent type name.
@@ -199,6 +201,10 @@ type browserSync struct {
 	cb         *ImportCallbacks
 	machine    string
 	failedLast bool
+	// formatErr keeps the last unreadable conversation format. Adapters
+	// return it after importing every readable chat, so the user learns
+	// that an update is needed.
+	formatErr error
 }
 
 func newBrowserSync(store BrowserSyncStore, platform BrowserPlatform, stats *ImportStats, opts BrowserSyncOptions, cb *ImportCallbacks) *browserSync {
@@ -276,6 +282,9 @@ func (s *browserSync) conversation(ctx context.Context, id string, chat browserC
 	var detailErr error
 	write := func() error {
 		result, err := chat.parse(detail)
+		if errors.Is(err, ErrBrowserFormat) {
+			s.formatErr = err
+		}
 		if err != nil {
 			s.stats.record(id, importSkipped, err)
 			detailErr = err

@@ -1,5 +1,6 @@
-// worker.js injects this file, then calls pageFetch from a second script.
-globalThis.pageFetch = async function pageFetch(url) {
+// worker.js injects this file, then calls pageFetch, or a platform script
+// that wraps it, from a second script. headers adds request headers.
+globalThis.pageFetch = async function pageFetch(url, headers) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 45000);
   try {
@@ -7,6 +8,7 @@ globalThis.pageFetch = async function pageFetch(url) {
       method: "GET",
       credentials: "include",
       redirect: "error",
+      headers,
       signal: controller.signal,
     });
     const limit = 32 * 1024 * 1024; // Matches importer.BrowserResponseLimit.

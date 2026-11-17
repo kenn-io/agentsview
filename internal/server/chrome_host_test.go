@@ -154,6 +154,17 @@ func TestBrowserSyncRejectsUnknownPlatform(t *testing.T) {
 	}
 }
 
+// Only Claude.ai has a client relay; other platforms sync through Chrome.
+func TestBrowserSyncRequiresChromeWithoutRelay(t *testing.T) {
+	srv := testServer(t, 5*time.Second)
+	response := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/import/chatgpt/sync", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	srv.mux.ServeHTTP(response, req)
+	assert.Equal(t, http.StatusBadRequest, response.Code)
+	assert.Contains(t, response.Body.String(), "ChatGPT Sync requires browser=chrome")
+}
+
 func TestClaudeAISyncRefusesInvalidOrganizations(t *testing.T) {
 	srv := testServer(t, 5*time.Second)
 	srv.cfg.ClaudeAI = config.ClaudeAIConfig{Err: &config.ClaudeAIConfigError{Path: "config.toml", Key: "organizations", Reason: "expected an array of organization UUIDs"}}

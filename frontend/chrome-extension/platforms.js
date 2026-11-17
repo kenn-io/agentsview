@@ -11,4 +11,11 @@ export const platforms = {
     // Patterns for each {placeholder} in the allowlist.
     params: { organization: uuid, conversation: uuid, offset: "[0-9]+" },
   },
+  chatgpt: {
+    origin: "https://chatgpt.com",
+    newTabURL: "https://chatgpt.com/",
+    scripts: ["page_fetch.js", "chatgpt_fetch.js"],
+    fetchFunction: "chatgptFetch",
+    params: { conversation: uuid, offset: "[0-9]+", archived: "(?:false|true)" },
+  },
 };

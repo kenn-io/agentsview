@@ -61,6 +61,13 @@ var browserPathBuilders = map[parser.AgentType]func() []string{
 			claudeAIRequest(claudeAIConversationRequest, browserPathOrganization, browserPathConversation, 0),
 		}
 	},
+	parser.AgentChatGPT: func() []string {
+		return []string{
+			chatGPTRequest(chatGPTListRequest, "", 0, false),
+			chatGPTRequest(chatGPTListRequest, "", 50, true),
+			chatGPTRequest(chatGPTDetailRequest, browserPathConversation, 0, false),
+		}
+	},
 }
 
 func TestBrowserPathFixtures(t *testing.T) {
