@@ -28,7 +28,7 @@ func TestHostedEmbeddingScheduleRetriesAcrossChanges(t *testing.T) {
 	assert.True(t, schedule.ready(4, now.Add(2*time.Minute)))
 }
 
-func TestHostedEmbeddingsDisabledWithoutContent(t *testing.T) {
+func TestHostedEmbeddingsDisabledOrUsageOnly(t *testing.T) {
 	for _, cfg := range []config.Config{
 		{},
 		{Vector: config.VectorConfig{Enabled: true}, ArchiveContent: config.ArchiveContentUsage},

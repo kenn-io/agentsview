@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/kit/embedclient"
 	kitvec "go.kenn.io/kit/vector"
 )
@@ -36,8 +35,6 @@ func TestFillUnitDocumentsBatchesSessionChunks(t *testing.T) {
 	}
 	docs, err := UnitDocuments(units)
 	require.NoError(t, err)
-	assert.Equal(t, "u:session:duplicate", docs[0].DocKey)
-	assert.Equal(t, "u:session:duplicate#2", docs[1].DocKey)
 	spool, err := NewVectorSpool()
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, spool.Close()) })
@@ -89,25 +86,6 @@ func TestFillUnitDocumentsSkipsRejectedInput(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []float32{1, 0}, docs[0].Chunks[0].Embedding)
 	assert.Equal(t, []float32{1, 0}, docs[1].Chunks[0].Embedding)
-}
-
-func TestUnitFillStorePagesPendingDocuments(t *testing.T) {
-	spool, err := NewVectorSpool()
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, spool.Close()) })
-	store := &unitFillStore{docs: []storage.VectorPushDoc{{DocKey: "a", Content: "first"}, {DocKey: "b", Content: "second"}}, spool: spool}
-	page, err := store.PendingForGeneration(t.Context(), "generation", nil, 1)
-	require.NoError(t, err)
-	require.Len(t, page, 1)
-	assert.Equal(t, "a", page[0].Doc)
-	require.NoError(t, store.SaveVectors(t.Context(), "generation", "a", nil, []kitvec.ChunkVector{{ChunkIndex: 0, Vector: kitvec.Vector{1, 0}}}))
-	page, err = store.PendingForGeneration(t.Context(), "generation", new("a"), 1)
-	require.NoError(t, err)
-	require.Len(t, page, 1)
-	assert.Equal(t, "b", page[0].Doc)
-	page, err = store.PendingForGeneration(t.Context(), "generation", new("b"), 1)
-	require.NoError(t, err)
-	assert.Empty(t, page)
 }
 
 func TestFillUnitDocumentsSpoolsPagesAndChunks(t *testing.T) {

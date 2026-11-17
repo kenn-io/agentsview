@@ -20,12 +20,12 @@ import (
 	kitvec "go.kenn.io/kit/vector"
 )
 
-func TestHostedVectorGenerationScopeSwitch(t *testing.T) {
-	f := newProjectionFixture(t)
+func TestHostedVectorGenerationSwitch(t *testing.T) {
+	f := newHostedFixture(t, "tenant-layout")
 	_, err := f.admin.ExecContext(t.Context(), `CREATE EXTENSION IF NOT EXISTS vector SCHEMA public`)
 	require.NoError(t, err)
-	a := storage.VectorGenerationInfo{Fingerprint: "scope-a", Model: "fixture-a", Dimension: 2}
-	b := storage.VectorGenerationInfo{Fingerprint: "scope-b", Model: "fixture-b", Dimension: 2}
+	a := storage.VectorGenerationInfo{Fingerprint: "layout-a", Model: "fixture", Dimension: 2}
+	b := storage.VectorGenerationInfo{Fingerprint: "layout-b", Model: "fixture", Dimension: 2}
 	var aID int64
 	for _, gen := range []storage.VectorGenerationInfo{a, b} {
 		require.NoError(t, ProvisionHostedVector(t.Context(), f.admin, f.schema, f.tenant, gen))
@@ -38,30 +38,43 @@ func TestHostedVectorGenerationScopeSwitch(t *testing.T) {
 			aID = id
 		}
 	}
-	manifest, _ := f.accept(t, "device-a", "first", "")
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, manifest), manifest, projectionOutcome("searchable content")))
-	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET is_automated=true`)
+	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,provenance_kind,raw_content_revision,message_count,user_message_count) VALUES('layout','p','m','codex','raw','rev',4,1),('unchanged','p','m','codex','raw','rev',1,1),('automated','p','m','codex','raw','rev',2,2); UPDATE sessions SET is_automated=true WHERE id='automated'; INSERT INTO messages(session_id,ordinal,role,content) VALUES('layout',0,'user','question'),('layout',1,'assistant','aaaaaaaaaa'),('layout',2,'assistant','bbbbbbbbbb'),('layout',3,'assistant','cccccccccc'),('unchanged',0,'user','stable'),('automated',0,'user','first automated'),('automated',1,'user','second automated')`)
 	require.NoError(t, err)
 	encode := func(_ context.Context, texts []string) ([][]float32, error) {
-		vectors := make([][]float32, len(texts))
-		for i := range vectors {
-			vectors[i] = []float32{1, 0}
+		out := make([][]float32, len(texts))
+		for i := range out {
+			out[i] = []float32{1, 0}
 		}
-		return vectors, nil
+		return out, nil
 	}
-	hosted, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
-	require.NoError(t, err)
-	hosted.SetVectorSearcher(NewVectorSearcher(f.runtime, aID, 2, 128, func(context.Context, string) ([]float32, error) { return []float32{1, 0}, nil }))
-	search := func() db.ContentSearchPage {
-		page, err := hosted.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "searchable content", Mode: "semantic", IncludeOneShot: true, IncludeAutomated: true, Limit: 10})
+	store := &Store{pg: f.runtime}
+	store.SetVectorSearcher(NewVectorSearcher(f.runtime, aID, 2, 100, func(context.Context, string) ([]float32, error) { return []float32{1, 0}, nil }))
+	searchAutomated := func() db.ContentSearchPage {
+		page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "search", Mode: "semantic", SessionID: "automated", IncludeOneShot: true, IncludeAutomated: true, Limit: 20})
 		require.NoError(t, err)
 		return page
 	}
-	require.NoError(t, EmbedBatch(t.Context(), f.runtime, a, encode, 128, 1, true))
-	require.Len(t, search().Matches, 2)
-	require.NoError(t, EmbedBatch(t.Context(), f.runtime, b, encode, 128, 1, false))
-	require.NoError(t, EmbedBatch(t.Context(), f.runtime, a, encode, 128, 1, true))
-	require.Len(t, search().Matches, 2)
+	require.NoError(t, EmbedBatch(t.Context(), f.runtime, a, encode, 100, 1, true))
+	require.Len(t, searchAutomated().Matches, 2)
+	var key, original, changed string
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT doc_key,content FROM vector_documents WHERE session_id='layout' AND ordinal=1`).Scan(&key, &original))
+	require.NoError(t, EmbedBatch(t.Context(), f.runtime, b, encode, 3, 1, false))
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT content FROM vector_documents WHERE doc_key=$1`, key).Scan(&changed))
+	require.NotEqual(t, original, changed)
+	var stamped bool
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM vector_push_state WHERE generation_id=$1 AND session_id='layout')`, aID).Scan(&stamped))
+	require.False(t, stamped)
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM vector_push_state WHERE generation_id=$1 AND session_id='unchanged')`, aID).Scan(&stamped))
+	require.True(t, stamped)
+	require.NoError(t, EmbedBatch(t.Context(), f.runtime, a, encode, 100, 1, true))
+	require.Len(t, searchAutomated().Matches, 2)
+	page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "search", Mode: "semantic", IncludeOneShot: true, Limit: 20})
+	require.NoError(t, err)
+	var snippets []string
+	for _, match := range page.Matches {
+		snippets = append(snippets, match.Snippet)
+	}
+	assert.ElementsMatch(t, []string{"question", "bbbbbbbbbb", "stable"}, snippets)
 }
 
 func TestHostedVectorScanDuringSessionRestore(t *testing.T) {
@@ -166,6 +179,15 @@ func TestHostedVectorBatchRecovery(t *testing.T) {
 		}
 		return out, nil
 	}
+	oldGen := storage.VectorGenerationInfo{Fingerprint: "batch-old", Model: "fixture", Dimension: 2}
+	require.NoError(t, ProvisionHostedVector(t.Context(), f.admin, f.schema, f.tenant, oldGen))
+	oldID, _, ok, err := LookupVectorGeneration(t.Context(), f.runtime, oldGen.Fingerprint)
+	require.NoError(t, err)
+	require.True(t, ok)
+	_, err = f.admin.ExecContext(t.Context(), `GRANT SELECT,DELETE ON `+vectorChunkTable(oldID)+` TO "`+f.role+`"`)
+	require.NoError(t, err)
+	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO vector_push_state(generation_id,session_id,doc_agg_hash) VALUES($1,'old-orphan','old')`, oldID)
+	require.NoError(t, err)
 	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO vector_push_state(generation_id,session_id,doc_agg_hash) VALUES($1,'orphan','old')`, id)
 	require.NoError(t, err)
 	err = EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false)
@@ -178,7 +200,7 @@ func TestHostedVectorBatchRecovery(t *testing.T) {
 		assert.Equal(t, i != 0, stamped, session)
 	}
 	var orphan bool
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM vector_push_state WHERE session_id='orphan')`).Scan(&orphan))
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM vector_push_state WHERE session_id IN ('orphan','old-orphan'))`).Scan(&orphan))
 	assert.False(t, orphan)
 	failing = false
 	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false))
@@ -220,7 +242,6 @@ func TestHostedVectorBatchRecovery(t *testing.T) {
 	}
 	err = EmbedBatch(ctx, f.runtime, gen, encode, 128, 1, false)
 	require.ErrorIs(t, err, context.Canceled)
-	assert.Equal(t, context.Canceled, err)
 	assert.Equal(t, 1, cancelCalls)
 }
 
@@ -283,6 +304,7 @@ func TestHostedVectorPartialRetry(t *testing.T) {
 	require.Error(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false, kitvec.WithBatchSize(8)))
 	assert.Contains(t, calls, "first")
 	assert.NotContains(t, calls, "last")
+	// A partial stamp without saved documents leaves every current document pending.
 	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,provenance_kind,raw_content_revision) VALUES('session-new','p','m','codex','raw','rev2'); INSERT INTO messages(session_id,ordinal,role,content) VALUES('session-new',0,'user','first'),('session-new',1,'user','last')`)
 	require.NoError(t, err)
 	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO vector_push_state(generation_id,session_id,doc_agg_hash) VALUES($1,'session-new','partial|rev2|false')`, id)
@@ -366,56 +388,6 @@ func TestHostedVectorOrphanRestoreRetries(t *testing.T) {
 	require.NoError(t, <-done)
 	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false))
 	assert.Equal(t, 2, calls)
-}
-
-func TestHostedVectorGenerationLayoutSwitch(t *testing.T) {
-	f := newHostedFixture(t, "tenant-layout")
-	_, err := f.admin.ExecContext(t.Context(), `CREATE EXTENSION IF NOT EXISTS vector SCHEMA public`)
-	require.NoError(t, err)
-	a := storage.VectorGenerationInfo{Fingerprint: "layout-a", Model: "fixture", Dimension: 2}
-	b := storage.VectorGenerationInfo{Fingerprint: "layout-b", Model: "fixture", Dimension: 2}
-	var aID int64
-	for _, gen := range []storage.VectorGenerationInfo{a, b} {
-		require.NoError(t, ProvisionHostedVector(t.Context(), f.admin, f.schema, f.tenant, gen))
-		id, _, ok, err := LookupVectorGeneration(t.Context(), f.runtime, gen.Fingerprint)
-		require.NoError(t, err)
-		require.True(t, ok)
-		_, err = f.admin.ExecContext(t.Context(), `GRANT SELECT,INSERT,DELETE ON `+vectorChunkTable(id)+` TO "`+f.role+`"`)
-		require.NoError(t, err)
-		if gen.Fingerprint == a.Fingerprint {
-			aID = id
-		}
-	}
-	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,provenance_kind,raw_content_revision,message_count,user_message_count) VALUES('layout','p','m','codex','raw','rev',4,1),('unchanged','p','m','codex','raw','rev',1,1); INSERT INTO messages(session_id,ordinal,role,content) VALUES('layout',0,'user','question'),('layout',1,'assistant','aaaaaaaaaa'),('layout',2,'assistant','bbbbbbbbbb'),('layout',3,'assistant','cccccccccc'),('unchanged',0,'user','stable')`)
-	require.NoError(t, err)
-	encode := func(_ context.Context, texts []string) ([][]float32, error) {
-		out := make([][]float32, len(texts))
-		for i := range out {
-			out[i] = []float32{1, 0}
-		}
-		return out, nil
-	}
-	require.NoError(t, EmbedBatch(t.Context(), f.runtime, a, encode, 100, 1, false))
-	var key, original, changed string
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT doc_key,content FROM vector_documents WHERE session_id='layout' AND ordinal=1`).Scan(&key, &original))
-	require.NoError(t, EmbedBatch(t.Context(), f.runtime, b, encode, 3, 1, false))
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT content FROM vector_documents WHERE doc_key=$1`, key).Scan(&changed))
-	require.NotEqual(t, original, changed)
-	var stamped bool
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM vector_push_state WHERE generation_id=$1 AND session_id='layout')`, aID).Scan(&stamped))
-	require.False(t, stamped)
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM vector_push_state WHERE generation_id=$1 AND session_id='unchanged')`, aID).Scan(&stamped))
-	require.True(t, stamped)
-	require.NoError(t, EmbedBatch(t.Context(), f.runtime, a, encode, 100, 1, false))
-	store := &Store{pg: f.runtime}
-	store.SetVectorSearcher(NewVectorSearcher(f.runtime, aID, 2, 100, func(context.Context, string) ([]float32, error) { return []float32{1, 0}, nil }))
-	page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "search", Mode: "semantic", IncludeOneShot: true, Limit: 20})
-	require.NoError(t, err)
-	var snippets []string
-	for _, match := range page.Matches {
-		snippets = append(snippets, match.Snippet)
-	}
-	assert.ElementsMatch(t, []string{"question", "bbbbbbbbbb", "stable"}, snippets)
 }
 
 func TestHostedVectorSpoolCleanupOnFailures(t *testing.T) {

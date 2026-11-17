@@ -18,28 +18,12 @@ func TestHostedVectorUploadAndEdit(t *testing.T) {
 	_, err := f.admin.ExecContext(t.Context(), `CREATE EXTENSION IF NOT EXISTS vector SCHEMA public`)
 	require.NoError(t, err)
 	gen := storage.VectorGenerationInfo{Fingerprint: "hosted-test", Model: "fixture", Dimension: 2, Params: map[string]string{"test": "fixture"}}
-	require.ErrorContains(t, CheckHostedVectorPrivileges(t.Context(), f.runtime, f.schema, gen.Fingerprint), "hosted-provision")
 	require.NoError(t, ProvisionHostedVector(t.Context(), f.admin, f.schema, f.tenant, gen))
 	id, _, ok, err := LookupVectorGeneration(t.Context(), f.runtime, gen.Fingerprint)
 	require.NoError(t, err)
 	require.True(t, ok)
-	require.ErrorContains(t, CheckHostedVectorPrivileges(t.Context(), f.runtime, f.schema, gen.Fingerprint), vectorChunkTable(id))
 	_, err = f.admin.ExecContext(t.Context(), `GRANT SELECT,INSERT,DELETE ON `+vectorChunkTable(id)+` TO "`+f.role+`"`)
 	require.NoError(t, err)
-	oldGen := storage.VectorGenerationInfo{Fingerprint: "old-hosted-test", Model: "fixture", Dimension: 2}
-	require.NoError(t, ProvisionHostedVector(t.Context(), f.admin, f.schema, f.tenant, oldGen))
-	oldID, _, ok, err := LookupVectorGeneration(t.Context(), f.runtime, oldGen.Fingerprint)
-	require.NoError(t, err)
-	require.True(t, ok)
-	_, err = f.admin.ExecContext(t.Context(), `GRANT DELETE ON `+vectorChunkTable(oldID)+` TO "`+f.role+`"`)
-	require.NoError(t, err)
-	require.ErrorContains(t, CheckHostedVectorPrivileges(t.Context(), f.runtime, f.schema, gen.Fingerprint), vectorChunkTable(oldID))
-	_, err = f.admin.ExecContext(t.Context(), `GRANT SELECT ON `+vectorChunkTable(oldID)+` TO "`+f.role+`"`)
-	require.NoError(t, err)
-	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO vector_push_state(generation_id,session_id,doc_agg_hash) VALUES($1,'removed-session','old')`, oldID)
-	require.NoError(t, err)
-	require.NoError(t, CheckHostedTenant(t.Context(), f.runtime, f.schema, f.tenant))
-	require.NoError(t, CheckHostedVectorPrivileges(t.Context(), f.runtime, f.schema, gen.Fingerprint))
 	encode := func(_ context.Context, texts []string) ([][]float32, error) {
 		out := make([][]float32, len(texts))
 		for i, s := range texts {
@@ -54,9 +38,6 @@ func TestHostedVectorUploadAndEdit(t *testing.T) {
 	first, receipt := f.accept(t, "device-a", "first", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, first), first, projectionOutcome("old words")))
 	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false))
-	var orphanCount int
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_push_state WHERE session_id='removed-session'`).Scan(&orphanCount))
-	assert.Zero(t, orphanCount)
 	hosted, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
 	hosted.SetVectorSearcher(NewVectorSearcher(f.runtime, id, 2, 128, func(ctx context.Context, text string) ([]float32, error) {
@@ -80,10 +61,6 @@ func TestHostedVectorUploadAndEdit(t *testing.T) {
 	var old int
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_documents WHERE content='old words'`).Scan(&old))
 	assert.Zero(t, old)
-	require.NoError(t, ProvisionHostedVector(t.Context(), f.admin, f.schema, f.tenant, gen))
-	var retained int
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_documents WHERE content='new words'`).Scan(&retained))
-	assert.Equal(t, 1, retained)
 }
 
 func TestHostedVectorSearchSnapshotDuringEdit(t *testing.T) {

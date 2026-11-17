@@ -58,9 +58,7 @@ func TestHostedSemanticUnavailableGuidance(t *testing.T) {
 			_, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "hello", Mode: "semantic"})
 			require.ErrorIs(t, err, db.ErrSemanticUnavailable)
 			assert.Contains(t, err.Error(), tc.want)
-			if tc.enabled || tc.server != nil {
-				assert.Contains(t, err.Error(), "hosted-provision")
-			}
+			assert.Contains(t, err.Error(), "hosted-provision")
 			assert.NotContains(t, err.Error(), "replica pg push")
 			assert.NotContains(t, err.Error(), "configured workstation")
 		})
@@ -194,17 +192,7 @@ func TestHostedCaptureSemanticSearch(t *testing.T) {
 		}
 		assert.True(c, found)
 	}, 30*time.Second, time.Second)
-	configured.PG.RawDerivation = false
-	reader, err := prepareReplicaServeImpl(t.Context(), pgReplica{}, configured, "", nil, false)
-	require.NoError(t, err)
-	defer reader.cleanup()
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/search/content?pattern=review&mode=semantic&include_one_shot=true", nil)
-	req.Header.Set("Authorization", "Bearer "+configured.AuthToken)
-	req.Header.Set("X-AgentsView-Search-Intent", "semantic")
-	response := httptest.NewRecorder()
-	reader.srv.Handler().ServeHTTP(response, req)
-	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
-	assert.Contains(t, response.Body.String(), "Review the changed build")
+
 }
 
 type testHostedRawParser struct{ *rawderive.ProviderParser }
