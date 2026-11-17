@@ -54,7 +54,8 @@ type pollScanState struct {
 	seed      maphash.Seed
 	seeded    bool
 	snapshots map[pollScanKey][]pollScanRow
-	rows      int
+	rows      int // Rows across committed snapshots.
+	maxRows   int // Zero means pollScanMaxRows; tests lower it.
 }
 
 // PollProviderRootsGrouped is the scheduled polling pass. For providers that
@@ -97,6 +98,10 @@ func (e *Engine) PollProviderRootsGrouped(
 		afterRecon   = make(map[pollScanKey][]pollScanRow)
 		afterSync    = make(map[pollScanKey][]pollScanRow)
 		changedPaths []string
+		// staged counts rows that pending snapshots add beyond the committed
+		// ones they replace, so every root in a pass shares one row budget.
+		staged  int
+		maxRows = cmp.Or(state.maxRows, pollScanMaxRows)
 	)
 	for _, group := range groups {
 		var full []string
@@ -109,7 +114,7 @@ func (e *Engine) PollProviderRootsGrouped(
 				continue
 			}
 			previous := state.snapshots[key]
-			budget := pollScanMaxRows - state.rows + len(previous)
+			budget := maxRows - state.rows - staged + len(previous)
 			result, err := scanPollRoots(ctx, state.seed, plan, previous, budget)
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
@@ -123,9 +128,11 @@ func (e *Engine) PollProviderRootsGrouped(
 				full = append(full, root)
 			case authoritative || previous == nil || result.vanished:
 				afterRecon[key] = result.rows
+				staged += len(result.rows) - len(previous)
 				full = append(full, root)
 			case len(result.changed) > 0:
 				afterSync[key] = result.rows
+				staged += len(result.rows) - len(previous)
 				changedPaths = append(changedPaths, result.changed...)
 			}
 		}
@@ -255,7 +262,7 @@ func scanPollRoots(
 			if err != nil {
 				return fmt.Errorf("%w: %w", errPollScanIneligible, err)
 			}
-			if len(result.rows) == maxRows {
+			if len(result.rows) >= maxRows {
 				return errPollScanIneligible
 			}
 			row := pollScanRow{

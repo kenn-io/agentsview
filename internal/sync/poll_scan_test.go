@@ -1,10 +1,13 @@
 package sync
 
 import (
+	"errors"
+	"fmt"
 	"hash/maphash"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -158,28 +161,85 @@ func TestPollProviderRootsGroupedSyncsCodexTitleIndexChange(t *testing.T) {
 	assert.EqualValues(t, 1, f.reconciled.Load(), "the index change is synced by path")
 }
 
-func TestPollProviderRootsGroupedRetriesFailedPathSync(t *testing.T) {
+func TestPollProviderRootsGroupedKeepsSnapshotsOnlyAfterArchiveWork(t *testing.T) {
 	requirePollChangeTimes(t)
-	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
-		t.Skip("needs a file its owner cannot read")
+	archiveDown := errors.New("archive unavailable")
+	t.Run("failed path sync", func(t *testing.T) {
+		root := t.TempDir()
+		path := filepath.Join(root, "project", "retried.jsonl")
+		writeClaudePollSession(t, path, "first")
+		f := newPollScanFixture(t, map[parser.AgentType][]string{parser.AgentClaude: {root}})
+		group := ProviderRootsGroup{Agent: parser.AgentClaude, Roots: []string{root}}
+		f.poll(t, group)
+
+		writeClaudePollSession(t, path, "first", "second")
+		f.engine.sourceSyncErr = archiveDown
+		require.ErrorIs(t, f.engine.PollProviderRootsGrouped(t.Context(), []ProviderRootsGroup{group}, false), archiveDown)
+		f.engine.sourceSyncErr = nil
+		f.poll(t, group)
+
+		assert.Equal(t, 2, f.session(t, "retried").UserMessageCount,
+			"the unchanged file is still compared with the snapshot before the failure")
+		assert.EqualValues(t, 1, f.reconciled.Load())
+	})
+	t.Run("failed reconciliation", func(t *testing.T) {
+		root := t.TempDir()
+		writeClaudePollSession(t, filepath.Join(root, "project", "reconciled.jsonl"), "first")
+		f := newPollScanFixture(t, map[parser.AgentType][]string{parser.AgentClaude: {root}})
+		group := ProviderRootsGroup{Agent: parser.AgentClaude, Roots: []string{root}}
+		f.engine.sourceSyncErr = archiveDown
+		require.ErrorIs(t, f.engine.PollProviderRootsGrouped(t.Context(), []ProviderRootsGroup{group}, false), archiveDown)
+		f.engine.sourceSyncErr = nil
+
+		f.poll(t, group)
+		assert.EqualValues(t, 2, f.reconciled.Load(), "a failed first pass leaves nothing to compare against")
+		assert.Equal(t, 1, f.session(t, "reconciled").UserMessageCount)
+		f.poll(t, group)
+		assert.EqualValues(t, 2, f.reconciled.Load())
+	})
+}
+
+func TestPollProviderRootsGroupedSharesRowBudget(t *testing.T) {
+	requirePollChangeTimes(t)
+	rootA, rootB := t.TempDir(), t.TempDir()
+	for _, root := range []string{rootA, rootB} {
+		for _, name := range []string{"one", "two"} {
+			writeClaudePollSession(t, filepath.Join(root, "project", filepath.Base(root)+name+".jsonl"), name)
+		}
 	}
+	f := newPollScanFixture(t, map[parser.AgentType][]string{parser.AgentClaude: {rootA, rootB}})
+	f.engine.pollScans.maxRows = 3
+	groups := []ProviderRootsGroup{
+		{Agent: parser.AgentClaude, Roots: []string{rootA}},
+		{Agent: parser.AgentClaude, Roots: []string{rootB}},
+	}
+
+	f.poll(t, groups...)
+	assert.Equal(t, 2, f.engine.pollScans.rows, "only the first root's snapshot fits")
+	f.poll(t, groups...)
+
+	assert.EqualValues(t, 3, f.reconciled.Load(),
+		"the second root does not fit beside the first and keeps reconciling")
+}
+
+func TestPollProviderRootsGroupedSyncsChangesAcrossPages(t *testing.T) {
+	requirePollChangeTimes(t)
 	root := t.TempDir()
-	path := filepath.Join(root, "project", "retried.jsonl")
-	writeClaudePollSession(t, path, "first")
+	writeClaudePollSession(t, filepath.Join(root, "project", "seed.jsonl"), "seed")
 	f := newPollScanFixture(t, map[parser.AgentType][]string{parser.AgentClaude: {root}})
 	group := ProviderRootsGroup{Agent: parser.AgentClaude, Roots: []string{root}}
 	f.poll(t, group)
 
-	writeClaudePollSession(t, path, "first", "second")
-	require.NoError(t, os.Chmod(path, 0))
-	t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
-	require.Error(t, f.engine.PollProviderRootsGrouped(t.Context(), []ProviderRootsGroup{group}, false))
-	require.NoError(t, os.Chmod(path, 0o644))
+	const added = pollScanPageSize + 5
+	for i := range added {
+		writeClaudePollSession(t, filepath.Join(root, "project", fmt.Sprintf("added-%03d.jsonl", i)), "added")
+	}
 	f.poll(t, group)
 
-	assert.Equal(t, 2, f.session(t, "retried").UserMessageCount,
-		"a failed sync must not record the change as applied")
 	assert.EqualValues(t, 1, f.reconciled.Load())
+	for _, i := range []int{0, pollScanPageSize - 1, pollScanPageSize, added - 1} {
+		f.session(t, fmt.Sprintf("added-%03d", i))
+	}
 }
 
 func TestPollProviderRootsGroupedReconcilesRootsItCannotCompare(t *testing.T) {
@@ -244,8 +304,36 @@ func TestScanPollRootsLimits(t *testing.T) {
 	_, err = scanPollRoots(t.Context(), seed, plan, nil, 2)
 	require.ErrorIs(t, err, errPollScanIneligible, "too many files to retain")
 
+	edited := slices.Clone(full.rows)
+	for i := range edited {
+		edited[i].signature++
+	}
+	changed, err := scanPollRoots(t.Context(), seed, plan, edited, 3)
+	require.NoError(t, err)
+	assert.Len(t, changed.changed, 3, "every file whose signature differs is changed")
+
 	missing, err := scanPollRoots(t.Context(), seed,
 		[]parser.WatchRoot{{Path: filepath.Join(root, "absent"), IncludeGlobs: []string{"*.jsonl"}}}, full.rows, 3)
 	require.NoError(t, err)
 	assert.True(t, missing.vanished, "a missing root vanishes every previous row")
+}
+
+func TestScanPollRootsReconcilesLargeChangeSets(t *testing.T) {
+	requirePollChangeTimes(t)
+	root := t.TempDir()
+	for i := range pollScanMaxChangedPaths + 1 {
+		require.NoError(t, os.WriteFile(filepath.Join(root, fmt.Sprintf("%04d.jsonl", i)), []byte("{}\n"), 0o644))
+	}
+	plan := []parser.WatchRoot{{Path: root, IncludeGlobs: []string{"*.jsonl"}}}
+	seed := maphash.MakeSeed()
+	first, err := scanPollRoots(t.Context(), seed, plan, nil, pollScanMaxRows)
+	require.NoError(t, err)
+	edited := slices.Clone(first.rows)
+	for i := range edited {
+		edited[i].signature++
+	}
+
+	_, err = scanPollRoots(t.Context(), seed, plan, edited, pollScanMaxRows)
+
+	require.ErrorIs(t, err, errPollScanIneligible)
 }
