@@ -88,6 +88,35 @@ func TestFillUnitDocumentsSkipsRejectedInput(t *testing.T) {
 	assert.Equal(t, []float32{1, 0}, docs[1].Chunks[0].Embedding)
 }
 
+func TestFillUnitDocumentsRejectsDocumentWithTooManyChunks(t *testing.T) {
+	content := strings.Repeat("abcdefghij", 10000)
+	units := []db.EmbeddableUnit{
+		{SessionID: "session", Kind: "user", Ordinal: 0, Content: content},
+		{SessionID: "session", Kind: "user", Ordinal: 1, Content: "later"},
+	}
+	docs, err := UnitDocuments(units)
+	require.NoError(t, err)
+	spool, err := NewVectorSpool()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, spool.Close()) })
+	var encoded []string
+	encode := func(_ context.Context, texts []string) ([][]float32, error) {
+		encoded = append(encoded, texts...)
+		vectors := make([][]float32, len(texts))
+		for i := range vectors {
+			vectors[i] = []float32{1, 0}
+		}
+		return vectors, nil
+	}
+	accepted, rejected, err := FillUnitDocuments(t.Context(), docs, spool, 20, 1, encode, kitvec.WithBatchSize(32))
+	require.NoError(t, err)
+	require.Equal(t, []string{"o:session:0"}, rejected)
+	require.Len(t, accepted, 1)
+	assert.Equal(t, "later", accepted[0].Content)
+	assert.Equal(t, []string{"later"}, encoded)
+	assert.Equal(t, content, docs[0].Content)
+}
+
 func TestFillUnitDocumentsSpoolsPagesAndChunks(t *testing.T) {
 	var units []db.EmbeddableUnit
 	for i := range 140 {
