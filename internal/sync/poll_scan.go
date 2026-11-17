@@ -151,7 +151,7 @@ func (e *Engine) PollProviderRootsGrouped(
 		var full []string
 		for _, root := range group.Roots {
 			key := pollScanKey{group.Agent, filepath.Clean(root)}
-			plan, ok := e.pollScanPlan(ctx, group.Agent, key.root)
+			plan, ok := e.pollScanPlan(ctx, group.Agent, root)
 			if !ok {
 				state.forget(key)
 				full = append(full, root)
