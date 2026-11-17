@@ -64,7 +64,7 @@ func (s *Store) searchKept(ctx context.Context, view *Store, f db.SearchFilter) 
 		entry = entries[0]
 		after = entry.revision
 	}
-	through, changed, err := view.LoadUsageChanges(ctx, after)
+	through, changed, err := view.searchUsageChanges(ctx, after)
 	if err != nil {
 		return db.SearchPage{}, err
 	}
@@ -116,6 +116,30 @@ func (s *Store) searchKept(ctx context.Context, view *Store, f db.SearchFilter) 
 		page.NextCursor = end
 	}
 	return page, nil
+}
+
+// A journal permission error aborts the snapshot until the savepoint is rolled back.
+func (s *Store) searchUsageChanges(ctx context.Context, after int64) (int64, []string, error) {
+	if s.readTx == nil {
+		return s.LoadUsageChanges(ctx, after)
+	}
+	if _, err := s.pg.ExecContext(ctx, `SAVEPOINT search_journal`); err != nil {
+		return 0, nil, err
+	}
+	revision, ids, err := s.loadUsageChanges(ctx, after)
+	if isInsufficientPrivilege(err) || isUndefinedTable(err) {
+		if _, err := s.pg.ExecContext(ctx, `ROLLBACK TO SAVEPOINT search_journal`); err != nil {
+			return 0, nil, err
+		}
+		revision, ids, err = 0, nil, nil
+	}
+	if err != nil {
+		return 0, nil, err
+	}
+	if _, err := s.pg.ExecContext(ctx, `RELEASE SAVEPOINT search_journal`); err != nil {
+		return 0, nil, err
+	}
+	return revision, ids, nil
 }
 
 func (s *Store) searchKeys(ctx context.Context, f db.SearchFilter, ids []string) ([]pgSearchKey, error) {
@@ -194,7 +218,11 @@ func (s *Store) sortSearchKeys(ctx context.Context, sort string, keys []pgSearch
 func (s *Store) hydrateSearchKeys(ctx context.Context, f db.SearchFilter, keys []pgSearchKey) (db.SearchPage, error) {
 	query := `WITH page AS (SELECT * FROM ` + searchKeyUnnest(3) + ` WITH ORDINALITY AS k(` + searchKeyColumns + `, rank_order)) ` + searchRowsTail("p.rank_order")
 	prepared := db.PrepareFTSQuery(f.Query)
-	args := append([]any{escapeLike(db.StripFTSQuotes(prepared)), db.FTSTerms(prepared)[0]}, searchKeyArgs(keys)...)
+	terms := db.FTSTerms(prepared)
+	if len(terms) == 0 {
+		return db.SearchPage{}, nil
+	}
+	args := append([]any{escapeLike(db.StripFTSQuotes(prepared)), terms[0]}, searchKeyArgs(keys)...)
 	rows, err := s.pg.QueryContext(ctx, query, args...)
 	if err != nil {
 		return db.SearchPage{}, fmt.Errorf("hydrating search: %w", err)

@@ -523,13 +523,13 @@ func (s *Store) searchQuery(f db.SearchFilter, ids []string, keys bool) (string,
 }
 
 func searchRowsTail(orderBy string) string {
-	return fmt.Sprintf(`SELECT p.session_id, s.project, s.agent, s.machine,
+	return `SELECT p.session_id, s.project, s.agent, s.machine,
 			COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
 			p.session_ended_at, p.ordinal,
 			CASE WHEN p.kind = 'name' THEN
-				CASE WHEN COALESCE(s.display_name, s.session_name) ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
+				CASE WHEN COALESCE(s.display_name, s.session_name) ILIKE '%' || $1 || '%' ESCAPE E'\\'
 					THEN COALESCE(s.display_name, s.session_name, '')
-					WHEN s.first_message ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
+					WHEN s.first_message ILIKE '%' || $1 || '%' ESCAPE E'\\'
 					THEN COALESCE(s.first_message, '')
 					ELSE COALESCE(s.display_name, s.session_name, s.first_message, '') END
 			ELSE CASE WHEN POSITION(LOWER($2) IN LOWER(COALESCE(m.content, it.text))) > 100
@@ -545,7 +545,7 @@ func searchRowsTail(orderBy string) string {
 			AND it.message_ordinal = p.ordinal AND it.source_kind = p.source_kind
 			AND it.call_index = p.call_index AND it.event_index = p.event_index
 			AND it.image_index = p.image_index AND it.processor = p.processor
-		ORDER BY %s`, orderBy)
+		ORDER BY ` + orderBy
 }
 
 func (s *Store) search(ctx context.Context, f db.SearchFilter) (db.SearchPage, error) {

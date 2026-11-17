@@ -97,6 +97,13 @@ func TestHostedTenantIsolation(t *testing.T) {
 	}
 	require.NoError(t, conn.Close())
 	require.NoError(t, CheckHostedTenant(t.Context(), a.runtime, a.schema, a.tenant))
+	// Upgrade a journal installed before the checkpoint function's grant was revoked.
+	_, syncer, _ := newUsageJournalFixture(t)
+	_, err = syncer.pg.ExecContext(t.Context(), `GRANT EXECUTE ON FUNCTION checkpoint_usage_history() TO PUBLIC`)
+	require.NoError(t, err)
+	assert.Error(t, CheckHostedTenant(t.Context(), a.runtime, a.schema, a.tenant))
+	ensureUsageChangeJournalPG(t.Context(), syncer.pg)
+	require.NoError(t, CheckHostedTenant(t.Context(), a.runtime, a.schema, a.tenant))
 	assert.Error(t, CheckHostedTenant(t.Context(), a.admin, a.schema, a.tenant))
 	assert.Error(t, CheckHostedTenant(t.Context(), a.runtime, b.schema, a.tenant))
 	// Binding metadata must not be mutable even with table DML grants.
