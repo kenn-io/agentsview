@@ -171,6 +171,6 @@ func TestFetchBrowserWithoutAuthCheck(t *testing.T) {
 		return BrowserResponse{Status: 401, Body: []byte(`{"detail":"signed out"}`)}, nil
 	}, "/api/chats")
 	require.EqualError(t, err, "Example returned HTTP 401")
-	assert.NotErrorIs(t, err, ErrBrowserAuthRequired)
+	require.NotErrorIs(t, err, ErrBrowserAuthRequired)
 	assert.Equal(t, 1, calls, "a 4xx status is not retried")
 }
