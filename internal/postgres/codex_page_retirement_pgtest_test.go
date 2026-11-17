@@ -119,6 +119,9 @@ func TestCodexPageUpgradeRetiresMissingPostgresHead(t *testing.T) {
 				require.NoError(t, rebuilt.UpsertSession(ctx, sess))
 				message.SessionID = page
 				require.NoError(t, rebuilt.InsertMessages(ctx, []db.Message{message}))
+				if tc.name == "pinned" {
+					require.NoError(t, rebuilt.InsertMessages(ctx, []db.Message{{SessionID: page, Ordinal: 1, Role: "user", Content: "Review https://github.com/o/r/pull/7"}}))
+				}
 				require.NoError(t, rebuilt.SetSessionDataVersion(ctx, page, db.CurrentDataVersion()))
 			}
 			_, err = rebuilt.CopyOrphanedDataFromExcluding(t.Context(), sourcePath, nil)
@@ -158,6 +161,18 @@ func TestCodexPageUpgradeRetiresMissingPostgresHead(t *testing.T) {
 			upgraded, err := New(t.Context(), pgURL, schema, rebuilt, "machine", true, storage.PusherOptions{})
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, upgraded.Close()) })
+			if tc.name == "pinned" {
+				upgraded.archiveID, err = rebuilt.GetArchiveID(ctx)
+				require.NoError(t, err)
+				marker, err := upgraded.pushMarkerID(ctx)
+				require.NoError(t, err)
+				require.NoError(t, upgraded.reconcilePGMissingSessions(ctx, marker, nil))
+				mirrored, err := store.GetSessionFull(ctx, page)
+				require.NoError(t, err)
+				require.NotNil(t, mirrored)
+				require.Len(t, mirrored.PRLinks, 1)
+				assert.Equal(t, "https://github.com/o/r/pull/7", mirrored.PRLinks[0].URL)
+			}
 			if tc.newerPage {
 				// A page already published by an earlier push has its own newer
 				// curation. Seed it through the normal session/message writers.
@@ -222,7 +237,11 @@ func TestCodexPageUpgradeRetiresMissingPostgresHead(t *testing.T) {
 			assert.Empty(t, headMessages, "the retired thread must not retain the page transcript")
 			pageMessages, err := store.GetMessages(ctx, page, 0, 10, true)
 			require.NoError(t, err)
-			require.Len(t, pageMessages, 1)
+			if tc.name == "pinned" {
+				require.Len(t, pageMessages, 2)
+			} else {
+				require.Len(t, pageMessages, 1)
+			}
 			assert.Equal(t, "retained page answer", pageMessages[0].Content)
 			pageRow, err := store.GetSessionFull(ctx, page)
 			require.NoError(t, err)

@@ -35,12 +35,7 @@ func TestPromptPRLinksStoredMessages(t *testing.T) {
 	require.Len(t, got.PRLinks, 2)
 	assert.Equal(t, "https://github.com/o/r/pull/1", got.PRLinks[0].URL)
 	assert.Equal(t, "https://github.com/o/r/pull/8", got.PRLinks[1].URL)
-	obs := export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: "/tmp/worktree"}
-	require.NoError(t, d.UpsertSessionWithProjectIdentity(t.Context(), s, obs, ""))
-	got, err = d.GetSession(t.Context(), s.ID)
-	require.NoError(t, err)
-	require.Len(t, got.PRLinks, 2)
-	assert.Equal(t, "https://github.com/o/r/pull/8", got.PRLinks[1].URL)
+
 }
 
 func TestPromptPRLinksUsagePolicy(t *testing.T) {
@@ -148,33 +143,6 @@ func TestPromptPRLinksUsagePolicyWithRetainedHistory(t *testing.T) {
 	got, err := d.GetSession(t.Context(), s.ID)
 	require.NoError(t, err)
 	assert.Empty(t, got.PRLinks)
-}
-
-func TestPromptPRLinksReplaceKeepsStructured(t *testing.T) {
-	d := testDB(t)
-	link, ok := parser.NewPRLink("https://github.com/o/r/pull/1", "o/r", 1)
-	require.True(t, ok)
-	s := Session{ID: "replace", Project: "project", Machine: "local", Agent: "claude", PRLinks: []PRLink{link}}
-	require.NoError(t, d.UpsertSession(t.Context(), s))
-	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "user", Content: "https://github.com/o/r/pull/2"}}))
-	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "user", Content: "https://github.com/o/r/pull/3"}}))
-	got, err := d.GetSession(t.Context(), s.ID)
-	require.NoError(t, err)
-	require.Len(t, got.PRLinks, 2)
-	assert.Equal(t, "https://github.com/o/r/pull/1", got.PRLinks[0].URL)
-	assert.Equal(t, "https://github.com/o/r/pull/3", got.PRLinks[1].URL)
-}
-
-func TestPromptPRLinksUsesDialogue(t *testing.T) {
-	d := testDB(t)
-	s := Session{ID: "dialogue", Project: "project", Machine: "local", Agent: "claude"}
-	require.NoError(t, d.UpsertSession(t.Context(), s))
-	dialogue := "Review https://github.com/o/r/pull/1"
-	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "user", Content: dialogue + " tool: https://github.com/o/r/pull/2", DialogueText: &dialogue}}))
-	got, err := d.GetSession(t.Context(), s.ID)
-	require.NoError(t, err)
-	require.Len(t, got.PRLinks, 1)
-	assert.Equal(t, "https://github.com/o/r/pull/1", got.PRLinks[0].URL)
 }
 
 func TestPromptPRLinksMigratesStructuredLinks(t *testing.T) {

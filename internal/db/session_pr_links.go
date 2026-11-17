@@ -304,24 +304,8 @@ func (db *DB) backfillPromptPRLinksLocked(ctx context.Context, w *writerHandle) 
 		return err
 	}
 	if !done {
-		rows, err := tx.QueryContext(ctx, `SELECT DISTINCT m.session_id FROM messages m WHERE m.role='user'`)
+		ids, err := sessionIDsTx(ctx, tx, "id IN (SELECT session_id FROM messages WHERE role='user')")
 		if err != nil {
-			return err
-		}
-		var ids []string
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				rows.Close()
-				return err
-			}
-			ids = append(ids, id)
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return err
-		}
-		if err := rows.Close(); err != nil {
 			return err
 		}
 		for _, id := range ids {

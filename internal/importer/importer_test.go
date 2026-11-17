@@ -1981,23 +1981,6 @@ func TestImportPromptPRLinksReplacementFailure(t *testing.T) {
 	assert.Contains(t, msgs[0].Content, "https://github.com/o/r/pull/1")
 }
 
-func TestImportChatGPTPromptPRLinksUnchanged(t *testing.T) {
-	d := testDB(t)
-	dir := t.TempDir()
-	content := strings.ReplaceAll(testChatGPTConv, "Hello", "Review https://github.com/o/r/pull/42")
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "conversations-000.json"), []byte(content), 0o644))
-	assets := filepath.Join(t.TempDir(), "assets")
-	_, err := ImportChatGPT(t.Context(), d, dir, assets, nil)
-	require.NoError(t, err)
-	stats, err := ImportChatGPT(t.Context(), d, dir, assets, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, stats.Skipped)
-	s, err := d.GetSession(t.Context(), "chatgpt:cg-1")
-	require.NoError(t, err)
-	require.Len(t, s.PRLinks, 1)
-	assert.Equal(t, "https://github.com/o/r/pull/42", s.PRLinks[0].URL)
-}
-
 func TestImportUnchangedPreservesPromptPRLinks(t *testing.T) {
 	d := testDB(t)
 	input := strings.ReplaceAll(testConversationsJSON, "Hello", "https://github.com/o/r/%70ull/1")

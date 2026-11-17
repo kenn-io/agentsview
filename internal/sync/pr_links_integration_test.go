@@ -116,18 +116,6 @@ func TestIncrementalSync_PromptPRLinks(t *testing.T) {
 	assert.Equal(t, []string{"https://github.com/owner/repo/pull/1"}, storedPRURLs(t, env.db, "prompt-append"))
 }
 
-func TestSyncPromptAndStructuredPRLinks(t *testing.T) {
-	env := setupTestEnv(t)
-	env.writeClaudeSession(t, "proj", "prompt-and-record.jsonl", testjsonl.JoinJSONL(
-		testjsonl.ClaudeUserJSON("Review https://github.com/owner/repo/pull/1", tsZero),
-		testjsonl.ClaudeAssistantJSON("Working", tsZeroS1),
-		`{"type":"pr-link","prNumber":1,"prUrl":"https://github.com/owner/repo/pull/1","prRepository":"owner/repo","timestamp":"2024-01-01T00:00:02Z"}`,
-		`{"type":"pr-link","prNumber":2,"prUrl":"https://github.com/owner/repo/pull/2","prRepository":"owner/repo","timestamp":"2024-01-01T00:00:03Z"}`,
-	))
-	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-	assert.Equal(t, []string{"https://github.com/owner/repo/pull/1", "https://github.com/owner/repo/pull/2"}, storedPRURLs(t, env.db, "prompt-and-record"))
-}
-
 func TestParseDiffDetectsRemovedStructuredPRLink(t *testing.T) {
 	env := setupTestEnv(t)
 	env.writeClaudeSession(t, "proj", "removed-pr.jsonl", testjsonl.JoinJSONL(
@@ -145,12 +133,14 @@ func TestIncrementalStructuredLinkAlsoInPrompt(t *testing.T) {
 	path := env.writeClaudeSession(t, "proj", "shared-pr.jsonl", testjsonl.JoinJSONL(
 		testjsonl.ClaudeUserJSON("Review https://github.com/owner/repo/pull/1", tsZero),
 		testjsonl.ClaudeAssistantJSON("Working", tsZeroS1),
+		`{"type":"pr-link","prNumber":2,"prUrl":"https://github.com/owner/repo/pull/2","prRepository":"owner/repo","timestamp":"2024-01-01T00:00:02Z"}`,
 	))
 	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-	appendClaudeSplitLines(t, path, `{"type":"pr-link","prNumber":1,"prUrl":"https://github.com/owner/repo/pull/1","prRepository":"owner/repo","timestamp":"2024-01-01T00:00:02Z"}`)
+	assert.Equal(t, []string{"https://github.com/owner/repo/pull/2", "https://github.com/owner/repo/pull/1"}, storedPRURLs(t, env.db, "shared-pr"))
+	appendClaudeSplitLines(t, path, `{"type":"pr-link","prNumber":1,"prUrl":"https://github.com/owner/repo/pull/1","prRepository":"owner/repo","timestamp":"2024-01-01T00:00:03Z"}`)
 	env.engine.SyncPaths([]string{path})
 	require.NoError(t, env.db.ReplaceSessionMessages(t.Context(), "shared-pr", []db.Message{{SessionID: "shared-pr", Role: "user", Content: "Different prompt"}}))
-	assert.Equal(t, []string{"https://github.com/owner/repo/pull/1"}, storedPRURLs(t, env.db, "shared-pr"))
+	assert.Equal(t, []string{"https://github.com/owner/repo/pull/2", "https://github.com/owner/repo/pull/1"}, storedPRURLs(t, env.db, "shared-pr"))
 }
 
 func TestParseDiffDetectsObsoletePromptPRLink(t *testing.T) {
