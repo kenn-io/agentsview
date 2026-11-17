@@ -10,6 +10,7 @@ import (
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/agentsview/internal/vector"
+	"go.kenn.io/kit/embedconfig"
 )
 
 type hostedEmbeddingSchedule struct {
@@ -46,7 +47,7 @@ func prepareHostedEmbeddings(ctx context.Context, app config.Config, store *post
 	}
 	gen := vectorGeneration(app.Vector.Embeddings)
 	info := storage.VectorGenerationInfo{Fingerprint: gen.Fingerprint(), Model: gen.Model, Dimension: gen.Dimensions, Params: gen.Params}
-	encode, err := newVectorDocumentEncoder(app.Vector.Embeddings, "")
+	encode, err := newVectorEncoder(app.Vector.Embeddings, "", embedconfig.RoleDocument, false)
 	if err != nil {
 		return nil, err
 	}

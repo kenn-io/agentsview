@@ -107,6 +107,60 @@ func TestHostedDeploymentEmbeddingsSearch(t *testing.T) {
 	require.EqualValues(t, 1, calls.Load())
 }
 
+func TestHostedEmbeddingsRateLimitDoesNotBlockNextSession(t *testing.T) {
+	cfg, admin := hostedRuntimeConfig(t)
+	defaults, err := config.Default()
+	require.NoError(t, err)
+	cfg.Vector = defaults.Vector
+	cfg.Vector.Enabled = true
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Input []string `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if strings.Contains(req.Input[0], "rate limited") {
+			http.Error(w, "rate limited", http.StatusTooManyRequests)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{{"index": 0, "embedding": []float32{1, 0}}}, "model": "fixture", "object": "list"})
+	}))
+	t.Cleanup(endpoint.Close)
+	cfg.Vector.Embeddings.Model = "fixture"
+	cfg.Vector.Embeddings.Dimension = 2
+	cfg.Vector.Embeddings.MaxInputChars = 128
+	cfg.Vector.Embeddings.DefaultServer = "fixture"
+	cfg.Vector.Embeddings.Servers = map[string]config.VectorEmbeddingsServerConfig{"fixture": {Endpoint: endpoint.URL, BatchSize: 1, Concurrency: 1, MaxRetries: 1, Timeout: "30s"}}
+	_, err = admin.ExecContext(t.Context(), `CREATE EXTENSION IF NOT EXISTS vector SCHEMA public`)
+	require.NoError(t, err)
+	gen := vectorGeneration(cfg.Vector.Embeddings)
+	info := storage.VectorGenerationInfo{Fingerprint: gen.Fingerprint(), Model: gen.Model, Dimension: gen.Dimensions, Params: gen.Params}
+	require.NoError(t, postgres.ProvisionHostedVector(t.Context(), admin, cfg.PG.Schema, cfg.PG.RawTenant, info))
+	id, _, ok, err := postgres.LookupVectorGeneration(t.Context(), admin, info.Fingerprint)
+	require.NoError(t, err)
+	require.True(t, ok)
+	u, err := url.Parse(cfg.PG.URL)
+	require.NoError(t, err)
+	_, err = admin.ExecContext(t.Context(), fmt.Sprintf(`GRANT SELECT,INSERT,DELETE ON vector_chunks_g%d TO %q`, id, u.User.Username()))
+	require.NoError(t, err)
+	store, err := postgres.NewHostedStore(t.Context(), cfg.PG.URL, cfg.PG.Schema, cfg.PG.RawTenant, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	_, err = store.DB().ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,provenance_kind,raw_content_revision) VALUES('a','p','m','codex','raw','rev'),('b','p','m','codex','raw','rev'); INSERT INTO messages(session_id,ordinal,role,content) VALUES('a',0,'user','rate limited'),('b',0,'user','good content')`)
+	require.NoError(t, err)
+	runtime, err := prepareHostedEmbeddings(t.Context(), cfg, store, time.Second)
+	require.NoError(t, err)
+	defer runtime.Stop()
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	runtime.batch(ctx)
+	var count int
+	require.NoError(t, store.DB().QueryRowContext(t.Context(), `SELECT count(*) FROM vector_push_state WHERE session_id='b'`).Scan(&count))
+	assert.Equal(t, 1, count, "later session must be embedded despite the rate limit")
+}
+
 func TestHostedCaptureSemanticSearch(t *testing.T) {
 	original := newHostedRawParser
 	newHostedRawParser = func(time.Duration) (hostedRawParser, error) {
