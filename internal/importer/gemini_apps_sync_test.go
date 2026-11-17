@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -302,6 +303,20 @@ func TestSyncGeminiStops(t *testing.T) {
 			geminiRequest(geminiListRequest, "", "same"): func(t *testing.T) []byte {
 				t.Helper()
 				return geminiRPCBody(t, geminiListRPC, []any{nil, "same", []any{}})
+			},
+		}, wantText: "the Gemini chat list repeated a page"},
+		{name: "list cursor cycle", pages: map[string]func(*testing.T) []byte{
+			list: func(t *testing.T) []byte {
+				t.Helper()
+				return geminiRPCBody(t, geminiListRPC, []any{nil, "a", []any{}})
+			},
+			geminiRequest(geminiListRequest, "", "a"): func(t *testing.T) []byte {
+				t.Helper()
+				return geminiRPCBody(t, geminiListRPC, []any{nil, "b", []any{}})
+			},
+			geminiRequest(geminiListRequest, "", "b"): func(t *testing.T) []byte {
+				t.Helper()
+				return geminiRPCBody(t, geminiListRPC, []any{nil, "a", []any{}})
 			},
 		}, wantText: "the Gemini chat list repeated a page"},
 		{name: "unrecognized turns", pages: map[string]func(*testing.T) []byte{
@@ -636,4 +651,25 @@ func TestSyncGeminiUsageArchiveShorterChatKeepsTrashedCopy(t *testing.T) {
 	copies := replacedCopies(t, d, id)
 	require.Len(t, copies, 1)
 	assert.Equal(t, 5, copies[0].MessageCount)
+}
+
+// TestSyncGeminiLongChatList checks that a list longer than any fixed page
+// budget still finishes and imports the chat on its last page.
+func TestSyncGeminiLongChatList(t *testing.T) {
+	const pages = 250
+	fake := &geminiFake{t: t, listAt: 1_790_000_000, pages: map[string][]byte{}}
+	fake.turns = []any{geminiSyncTurn("1", "Question", "Answer", 1_790_000_000)}
+	for page := range pages - 1 {
+		cursor := ""
+		if page > 0 {
+			cursor = "p" + strconv.Itoa(page)
+		}
+		fake.pages[geminiRequest(geminiListRequest, "", cursor)] = geminiRPCBody(t, geminiListRPC, []any{nil, "p" + strconv.Itoa(page+1), []any{}})
+	}
+	fake.pages[geminiRequest(geminiListRequest, "", "p"+strconv.Itoa(pages-1))] = geminiRPCBody(t, geminiListRPC, []any{nil, nil, []any{
+		[]any{geminiTestChat, "Trip plan", nil, nil, nil, []any{1_790_000_000, 0}},
+	}})
+	stats, err := syncGeminiApps(t.Context(), testDB(t), fake.fetch, geminiTestOptions, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Imported)
 }

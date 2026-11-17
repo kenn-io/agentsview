@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { runInNewContext } from "node:vm";
+import { runInContext, runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 const source =
@@ -23,8 +23,14 @@ function loadFetch(fetch: typeof globalThis.fetch, { html = pageData, pathname =
     location: { origin: "https://gemini.google.com", pathname },
     document: { documentElement: { innerHTML: html } },
   };
-  runInNewContext(`${source}\nglobalThis.geminiFetch = geminiFetch;`, context);
-  return context.geminiFetch as (url: string) => Promise<{ status: number; body: string }>;
+  const script = `${source}\nglobalThis.geminiFetch = geminiFetch;`;
+  runInNewContext(script, context);
+  return Object.assign(
+    context.geminiFetch as (url: string) => Promise<{ status: number; body: string }>,
+    // worker.js injects the files again before every request into the same
+    // isolated world, each time as a new script.
+    { reinject: () => runInContext(script, context) },
+  );
 }
 
 const base = "https://gemini.google.com/_/BardChatUi/data/batchexecute?rpcids=";
@@ -99,6 +105,20 @@ describe("Gemini page fetch", () => {
 
     expect(await geminiFetch(`${base}MaZiqc&cursor=`)).toMatchObject({ status: 200, body: "ok" });
     expect(sent(fetch, 2).at).toBe("fresh-token");
+  });
+
+  it("keeps working when the worker injects it again into the same tab", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementation(async () => new Response("ok"));
+    const geminiFetch = loadFetch(fetch);
+    expect(await geminiFetch(`${base}MaZiqc&cursor=`)).toMatchObject({ status: 200 });
+
+    expect(() => geminiFetch.reinject()).not.toThrow();
+    expect(await geminiFetch(`${base}hNvQHb&chat=c_0123456789abcdef&cursor=`)).toMatchObject({
+      status: 200,
+    });
+    expect(sent(fetch, 1).args).toEqual(["c_0123456789abcdef", 20, null, 1, [0], [4], null, 1]);
   });
 
   it("refuses RPCs outside the two read calls", async () => {

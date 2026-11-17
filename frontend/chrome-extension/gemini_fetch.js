@@ -1,22 +1,19 @@
 // worker.js injects page_fetch.js first. Gemini reads through batchexecute
 // POSTs, so the two allowed request shapes carry named parameters that
 // geminiFetch turns into each RPC's argument. The page's request token stays
-// in the page.
-const geminiPageSize = 20;
-const geminiArguments = {
-  MaZiqc: (query) =>
-    query.get("cursor") ? [geminiPageSize, query.get("cursor")] : [geminiPageSize],
-  hNvQHb: (query) => [
-    query.get("chat"),
-    geminiPageSize,
-    query.get("cursor") || null,
-    1,
-    [0],
-    [4],
-    null,
-    1,
-  ],
-};
+// in the page. worker.js injects this file again before every request into
+// the same isolated world, so it declares only functions: a second top-level
+// const or let would make that injection a SyntaxError.
+
+// geminiArguments returns the RPC's argument for the request's named
+// parameters, or undefined for an RPC outside the two read calls.
+function geminiArguments(rpc, query) {
+  const pageSize = 20;
+  const cursor = query.get("cursor");
+  if (rpc === "MaZiqc") return cursor ? [pageSize, cursor] : [pageSize];
+  if (rpc === "hNvQHb") return [query.get("chat"), pageSize, cursor || null, 1, [0], [4], null, 1];
+  return undefined;
+}
 
 // geminiPageValue reads one "key":"value" string from the app page's inline data.
 function geminiPageValue(html, key) {
@@ -59,8 +56,8 @@ async function geminiFetch(url) {
   try {
     const request = new URL(url);
     const rpc = request.searchParams.get("rpcids");
-    if (!Object.hasOwn(geminiArguments, rpc))
-      return { status: 0, body: "", error: "Unsupported Gemini request" };
+    const args = geminiArguments(rpc, request.searchParams);
+    if (args === undefined) return { status: 0, body: "", error: "Unsupported Gemini request" };
     const account = location.pathname.match(/^\/u\/\d+(?=\/)/)?.[0] ?? "";
     for (const refresh of [false, true]) {
       const session = await geminiSession(account, refresh);
@@ -73,12 +70,7 @@ async function geminiFetch(url) {
       if (session.bl) target.searchParams.set("bl", session.bl);
       if (session.sid) target.searchParams.set("f.sid", session.sid);
       const body = new URLSearchParams();
-      body.set(
-        "f.req",
-        JSON.stringify([
-          [[rpc, JSON.stringify(geminiArguments[rpc](request.searchParams)), null, "generic"]],
-        ]),
-      );
+      body.set("f.req", JSON.stringify([[[rpc, JSON.stringify(args), null, "generic"]]]));
       body.set("at", session.at);
       const response = await globalThis.pageFetch(
         target.toString(),

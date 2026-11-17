@@ -29,8 +29,6 @@ const (
 const (
 	geminiListRPC   = "MaZiqc"
 	geminiDetailRPC = "hNvQHb"
-	// geminiPageLimit bounds list and turn paging against a cursor loop.
-	geminiPageLimit = 200
 )
 
 // errGeminiRejected marks one conversation that Gemini refused to return.
@@ -146,11 +144,10 @@ func syncGeminiApps(ctx context.Context, store BrowserSyncStore, fetch BrowserFe
 	seen := make(map[string]struct{})
 	runner := newBrowserSync(store, platform, &stats, opts, cb)
 	runner.refused = errGeminiRejected
-	cursor := ""
-	for page := 0; ; page++ {
-		if page == geminiPageLimit {
-			return stats, errors.New("the Gemini chat list exceeded the page limit")
-		}
+	// A cursor seen before would loop forever. Paging has no count limit, so
+	// a long list still finishes.
+	cursor, cursors := "", map[string]struct{}{"": {}}
+	for {
 		raw, err := fetchBrowser(ctx, platform, fetch, geminiRequest(geminiListRequest, "", cursor))
 		if err != nil {
 			return stats, err
@@ -211,24 +208,21 @@ func syncGeminiApps(ctx context.Context, store BrowserSyncStore, fetch BrowserFe
 		if next == "" {
 			break
 		}
-		if next == cursor {
+		if _, ok := cursors[next]; ok {
 			return stats, errors.New("the Gemini chat list repeated a page")
 		}
-		cursor = next
+		cursor, cursors[next] = next, struct{}{}
 	}
 	return stats, runner.formatErr
 }
 
 // fetchGeminiConversation follows the turn cursor and assembles the pages
 // for parser.ParseGeminiAppsWebConversation. The assembled conversation has
-// the same limit as a single response.
+// the same limit as a single response, which also bounds its page count.
 func fetchGeminiConversation(ctx context.Context, platform BrowserPlatform, fetch BrowserFetch, chat geminiChat) ([]byte, error) {
 	conv := parser.GeminiAppsWebConversation{ID: chat.id, Title: chat.title, UpdatedAt: chat.updated}
-	size, cursor := 0, ""
-	for page := 0; ; page++ {
-		if page == geminiPageLimit {
-			return nil, fmt.Errorf("the Gemini conversation %s exceeded the page limit", chat.id)
-		}
+	size, cursor, cursors := 0, "", map[string]struct{}{"": {}}
+	for {
 		if err := waitBrowserGap(ctx, geminiDetailGap); err != nil {
 			return nil, err
 		}
@@ -251,10 +245,10 @@ func fetchGeminiConversation(ctx context.Context, platform BrowserPlatform, fetc
 		if next == "" {
 			break
 		}
-		if next == cursor {
+		if _, ok := cursors[next]; ok {
 			return nil, fmt.Errorf("the Gemini conversation %s repeated a page", chat.id)
 		}
-		cursor = next
+		cursor, cursors[next] = next, struct{}{}
 	}
 	return json.Marshal(conv)
 }
