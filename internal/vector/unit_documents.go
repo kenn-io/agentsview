@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storage"
@@ -118,11 +120,43 @@ func (*unitFillStore) QueryGeneration(context.Context, string, kitvec.Vector, in
 	return nil, errors.New("session fill does not support search")
 }
 
+// maxChunksPerDocument bounds one document's chunks and vectors. The session
+// spool bounds memory across documents; this bounds a single document, whose
+// chunks kit materializes together before encoding.
+const maxChunksPerDocument = 4096
+
+// rejectOversizedDocuments splits docs into those kit may fill and the keys of
+// those that would need more than maxChunksPerDocument chunks. It counts runes
+// instead of splitting, so rejecting a document allocates nothing.
+func rejectOversizedDocuments(docs []storage.VectorPushDoc, maxInputChars int) ([]storage.VectorPushDoc, []string) {
+	eligible := make([]storage.VectorPushDoc, 0, len(docs))
+	var rejected []string
+	for _, doc := range docs {
+		if documentChunkBound(utf8.RuneCountInString(doc.Content), maxInputChars) > maxChunksPerDocument {
+			log.Printf("vector fill: skipping document %s: more than %d chunks", doc.DocKey, maxChunksPerDocument)
+			rejected = append(rejected, doc.DocKey)
+			continue
+		}
+		eligible = append(eligible, doc)
+	}
+	return eligible, rejected
+}
+
+// documentChunkBound mirrors kit's windowing: chunks advance by maxInputChars
+// minus the overlap. Blank windows produce no chunk, so this is an upper bound.
+func documentChunkBound(runes, maxInputChars int) int {
+	if maxInputChars <= 0 || runes <= maxInputChars {
+		return 1
+	}
+	stride := maxInputChars - min(ChunkOverlap(maxInputChars), maxInputChars-1)
+	return (runes-maxInputChars+stride-1)/stride + 1
+}
+
 // FillUnitDocuments uses kit's fill flow and reports rejected document keys.
 func FillUnitDocuments(ctx context.Context, docs []storage.VectorPushDoc, spool *VectorSpool, maxInputChars, concurrency int, encode kitvec.EncodeFunc, batch ...kitvec.BatchOption) ([]storage.VectorPushDoc, []string, error) {
-	store := &unitFillStore{docs: slices.Clone(docs), spool: spool}
+	eligible, rejected := rejectOversizedDocuments(docs, maxInputChars)
+	store := &unitFillStore{docs: eligible, spool: spool}
 	slices.SortFunc(store.docs, func(a, b storage.VectorPushDoc) int { return strings.Compare(a.DocKey, b.DocKey) })
-	var rejected []string
 	_, err := kitvec.Fill[string, string](ctx, store, "session", encode,
 		kitvec.WithFillSplit[string](kitvec.SplitOptions{MaxRunes: maxInputChars, Overlap: ChunkOverlap(maxInputChars)}),
 		kitvec.WithFillBatch[string](batch...),
