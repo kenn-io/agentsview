@@ -185,21 +185,16 @@ func (db *DB) GetSessionPRLinkURLs(
 // transcript's system and compact-boundary exclusions.
 var promptPRLinkPredicate = commitUserPrompt + ` AND m.is_compact_boundary=0 AND ` + SystemPrefixSQL("m.content", "m.role") + ` AND (instr(m.content, '/pull')>0 OR instr(m.content, '/merge_requests/')>0)`
 
-func refreshSessionPromptPRLinksTx(tx transactionQueries, id string) error {
-	var stored string
-	if err := tx.QueryRow(`SELECT pr_links FROM sessions WHERE id=?`, id).Scan(&stored); err != nil {
-		return err
-	}
-	rows, err := tx.Query(`SELECT m.content FROM messages m WHERE m.session_id=? AND `+promptPRLinkPredicate+` ORDER BY m.ordinal`, id)
-	if err != nil {
-		return err
-	}
-	links := DecodePRLinks(stored)
-	for rows.Next() {
-		var content string
-		if err := rows.Scan(&content); err != nil {
-			rows.Close()
-			return err
+// PromptPRLinks finds links in retained user dialogue.
+func PromptPRLinks(messages []Message) []PRLink {
+	var lists [][]PRLink
+	for _, msg := range messages {
+		if msg.Role != "user" || msg.IsSystem || msg.IsCompactBoundary || msg.SourceSubtype == parser.SourceSubtypeToolResult || IsSystemPrefixed(msg.Content, msg.Role) {
+			continue
+		}
+		content := msg.Content
+		if msg.DialogueText != nil {
+			content = *msg.DialogueText
 		}
 		if remainder, stripped := stripLeadingSystemReminderBlocks(content); stripped {
 			content = remainder
@@ -208,7 +203,39 @@ func refreshSessionPromptPRLinksTx(tx transactionQueries, id string) error {
 		if strings.HasPrefix(trimmed, "<bash-stdout>") || strings.HasPrefix(trimmed, "<bash-stderr>") {
 			continue
 		}
-		links = parser.MergePRLinks(links, parser.PromptPRLinks(content))
+		lists = append(lists, parser.PromptPRLinks(content))
+	}
+	return parser.MergePRLinks(lists...)
+}
+
+func writeSessionPromptPRLinksTx(tx transactionQueries, id, stored string, links []PRLink) error {
+	encoded := EncodePRLinks(links)
+	if encoded == stored {
+		return nil
+	}
+	_, err := tx.Exec(`UPDATE sessions SET pr_links=?, local_modified_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?`, encoded, id)
+	return err
+}
+
+func refreshSessionPromptPRLinksTx(tx transactionQueries, id string) error {
+	var stored, structured string
+	if err := tx.QueryRow(`SELECT pr_links, structured_pr_links FROM sessions WHERE id=?`, id).Scan(&stored, &structured); err != nil {
+		return err
+	}
+	rows, err := tx.Query(`SELECT m.content, COALESCE(m.dialogue_text,m.content) FROM messages m WHERE m.session_id=? AND `+promptPRLinkPredicate+` ORDER BY m.ordinal`, id)
+	if err != nil {
+		return err
+	}
+	var messages []Message
+	for rows.Next() {
+		var msg Message
+		var dialogue string
+		if err := rows.Scan(&msg.Content, &dialogue); err != nil {
+			rows.Close()
+			return err
+		}
+		msg.Role, msg.DialogueText = "user", &dialogue
+		messages = append(messages, msg)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -217,12 +244,28 @@ func refreshSessionPromptPRLinksTx(tx transactionQueries, id string) error {
 	if err := rows.Close(); err != nil {
 		return err
 	}
-	encoded := EncodePRLinks(links)
-	if encoded == stored {
+	return writeSessionPromptPRLinksTx(tx, id, stored, parser.MergePRLinks(DecodePRLinks(structured), PromptPRLinks(messages)))
+}
+
+func appendSessionPromptPRLinksTx(tx transactionQueries, id string, messages []Message) error {
+	derived := PromptPRLinks(messages)
+	if len(derived) == 0 {
 		return nil
 	}
-	_, err = tx.Exec(`UPDATE sessions SET pr_links=?, local_modified_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?`, encoded, id)
-	return err
+	var stored string
+	if err := tx.QueryRow(`SELECT pr_links FROM sessions WHERE id=?`, id).Scan(&stored); err != nil {
+		return err
+	}
+	return writeSessionPromptPRLinksTx(tx, id, stored, parser.MergePRLinks(DecodePRLinks(stored), derived))
+}
+
+// GetSessionStructuredPRLinks returns parser-recorded links without prompt links.
+func (db *DB) GetSessionStructuredPRLinks(ctx context.Context, id string) ([]PRLink, error) {
+	var encoded string
+	if err := db.getReader().QueryRowContext(ctx, `SELECT structured_pr_links FROM sessions WHERE id=?`, id).Scan(&encoded); err != nil {
+		return nil, err
+	}
+	return DecodePRLinks(encoded), nil
 }
 
 func (db *DB) backfillPromptPRLinksLocked(ctx context.Context, w *writerHandle) error {

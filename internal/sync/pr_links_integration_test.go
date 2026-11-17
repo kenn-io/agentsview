@@ -127,3 +127,28 @@ func TestSyncPromptAndStructuredPRLinks(t *testing.T) {
 	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
 	assert.Equal(t, []string{"https://github.com/owner/repo/pull/1", "https://github.com/owner/repo/pull/2"}, storedPRURLs(t, env.db, "prompt-and-record"))
 }
+
+func TestParseDiffDetectsRemovedStructuredPRLink(t *testing.T) {
+	env := setupTestEnv(t)
+	env.writeClaudeSession(t, "proj", "removed-pr.jsonl", testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("Review https://github.com/owner/repo/pull/1", tsZero),
+		testjsonl.ClaudeAssistantJSON("Working", tsZeroS1),
+	))
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+	mutateDB(t, env, `UPDATE sessions SET structured_pr_links='[{"url":"https://github.com/owner/repo/pull/2","host":"github.com","repository":"owner/repo","number":2}]' WHERE id='removed-pr'`)
+	report := runParseDiff(t, env, sync.ParseDiffOptions{})
+	assert.Equal(t, 1, report.Totals.Changed)
+}
+
+func TestIncrementalStructuredLinkAlsoInPrompt(t *testing.T) {
+	env := setupTestEnv(t)
+	path := env.writeClaudeSession(t, "proj", "shared-pr.jsonl", testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("Review https://github.com/owner/repo/pull/1", tsZero),
+		testjsonl.ClaudeAssistantJSON("Working", tsZeroS1),
+	))
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+	appendClaudeSplitLines(t, path, `{"type":"pr-link","prNumber":1,"prUrl":"https://github.com/owner/repo/pull/1","prRepository":"owner/repo","timestamp":"2024-01-01T00:00:02Z"}`)
+	env.engine.SyncPaths([]string{path})
+	require.NoError(t, env.db.ReplaceSessionMessages(t.Context(), "shared-pr", []db.Message{{SessionID: "shared-pr", Role: "user", Content: "Different prompt"}}))
+	assert.Equal(t, []string{"https://github.com/owner/repo/pull/1"}, storedPRURLs(t, env.db, "shared-pr"))
+}

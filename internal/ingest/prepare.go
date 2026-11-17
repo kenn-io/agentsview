@@ -159,6 +159,11 @@ func finalize(
 	session, messages = db.ProjectSessionForStoragePolicy(
 		session, messages, options.ArchiveContent,
 	)
+	// Finalize writes hosted projections directly. FinalizeRows leaves link
+	// derivation to the local archive's message transaction.
+	if derive {
+		session.PRLinks = parser.MergePRLinks(session.PRLinks, db.PromptPRLinks(messages))
+	}
 	var signalUpdate db.SessionSignalUpdate
 	var findings []db.SecretFinding
 	if derive {

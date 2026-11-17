@@ -187,6 +187,8 @@ func TestClaudeIncrementalEscalatesOnlyForPRLinkChanges(t *testing.T) {
 func TestPromptPRLinks(t *testing.T) {
 	for _, tt := range []struct{ text, want string }{
 		{"https://github.com/owner/repo/pull/123/files", "https://github.com/owner/repo/pull/123"},
+		{"[https://github.com/owner/repo/pull/123]", "https://github.com/owner/repo/pull/123"},
+		{"http://[::1]/owner/repo/pull/7", "http://[::1]/owner/repo/pull/7"},
 		{"https://GITHUB.com/owner/repo/pull/123#issuecomment", "https://github.com/owner/repo/pull/123"},
 		{"(https://github.example.com/owner/repo/pulls/12).", "https://github.example.com/owner/repo/pulls/12"},
 		{"https://gitlab.com/group/subgroup/repo/-/merge_requests/9?x=y", "https://gitlab.com/group/subgroup/repo/-/merge_requests/9"},

@@ -257,6 +257,11 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		); err != nil {
 			return nil, fmt.Errorf("projecting orphaned data: %w", err)
 		}
+		if !oldDBHasColumn(ctx, tx, "sessions", "structured_pr_links") {
+			if _, err := tx.ExecContext(ctx, `UPDATE sessions SET structured_pr_links=pr_links WHERE id IN (SELECT id FROM _orphaned_ids)`); err != nil {
+				return nil, err
+			}
+		}
 		if !d.usageOnlyStorage() {
 			for _, id := range ids {
 				if err := refreshSessionPromptPRLinksTx(tx, id); err != nil {
@@ -2254,7 +2259,7 @@ func orphanSessionCols(ctx context.Context, tx *sql.Tx) string {
 		"missing_verification_count",
 		"duplicate_prompt_count", "no_code_context_count",
 		"runaway_tool_loop_count",
-		"cwd", "git_branch", "pr_links", "source_session_id",
+		"cwd", "git_branch", "pr_links", "structured_pr_links", "source_session_id",
 		"source_version", "group_key", "transcript_fidelity", "parser_malformed_lines",
 		"is_truncated", "last_write_incremental",
 		"termination_status", "transcript_revision",

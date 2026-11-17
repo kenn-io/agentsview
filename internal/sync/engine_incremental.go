@@ -204,12 +204,15 @@ func (e *Engine) tryProviderIncrementalAppend(
 					parser.ErrIncrementalNeedsFullParse
 			}
 			storedTailTimestamp, _ = db.ParseStoredTimestamp(tailTimestamp)
-			links, lerr := e.db.GetSessionPRLinkURLs(ctx, inc.ID)
+			links, lerr := e.db.GetSessionStructuredPRLinks(ctx, inc.ID)
 			if lerr != nil {
 				return nil, nil, nil, nil, time.Time{}, 0, nil, nil,
 					fmt.Errorf("read stored Claude pr links: %w", lerr)
 			}
-			storedPRLinks = links
+			storedPRLinks = make(map[string]struct{}, len(links))
+			for _, link := range links {
+				storedPRLinks[link.URL] = struct{}{}
+			}
 			if !e.db.ArchiveContent().UsageOnly() {
 				name, found, nerr := e.db.GetSessionName(ctx, inc.ID)
 				if nerr != nil {

@@ -1266,7 +1266,8 @@ func (db *DB) GetSessionFull(
 	return s, nil
 }
 
-// GetArtifactExportSession returns uncoalesced names and omits applied launcher parents.
+// GetArtifactExportSession returns uncoalesced names and structured PR links,
+// and omits applied launcher parents.
 func (db *DB) GetArtifactExportSession(
 	ctx context.Context, id string,
 ) (*Session, error) {
@@ -1277,8 +1278,13 @@ func (db *DB) GetArtifactExportSession(
 	parent := `CASE WHEN ` + launcherApplied + ` THEN NULL ELSE parent_session_id END`
 	relationship := `CASE WHEN ` + launcherApplied + ` THEN ` + parserRelationshipSQL + ` ELSE relationship_type END`
 	cols := sessionFullColsBeforeParent + parent + `, parser_parent_session_id, ` + relationship + sessionFullColsAfterRelationship
-	return scanSessionFullRow(db.getReader().QueryRowContext(ctx,
+	s, err := scanSessionFullRow(db.getReader().QueryRowContext(ctx,
 		"SELECT "+cols+" FROM sessions WHERE id = ?", id), id)
+	if err != nil || s == nil {
+		return s, err
+	}
+	s.PRLinks, err = db.GetSessionStructuredPRLinks(ctx, id)
+	return s, err
 }
 
 func (db *DB) getSessionFullUncoalesced(
@@ -1569,8 +1575,8 @@ const insertSessionSQL = `
 			file_path, file_size, file_mtime,
 			next_ordinal, last_entry_uuid, claude_linear_parse,
 			file_inode, file_device, file_hash,
-			pr_links, parser_relationship_type
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			pr_links, structured_pr_links, parser_relationship_type
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 // insertSessionIfAbsentSQL inserts a session only when its id does not already
 // exist, leaving an existing row untouched.
@@ -1639,7 +1645,8 @@ const upsertSessionBaseSQL = insertSessionSQL + `
 			file_inode = excluded.file_inode,
 			file_device = excluded.file_device,
 			file_hash = excluded.file_hash,
-			pr_links = excluded.pr_links`
+			pr_links = excluded.pr_links,
+			structured_pr_links = excluded.structured_pr_links`
 
 const upsertSessionSQL = upsertSessionBaseSQL + `,
 			source_missing_at = NULL`
@@ -1683,6 +1690,7 @@ func upsertSessionArgs(s Session) []any {
 		s.FilePath, s.FileSize, s.FileMtime,
 		s.NextOrdinal, s.LastEntryUUID, s.ClaudeLinearParse,
 		s.FileInode, s.FileDevice, s.FileHash,
+		EncodePRLinks(s.PRLinks),
 		EncodePRLinks(s.PRLinks),
 		s.RelationshipType,
 	}

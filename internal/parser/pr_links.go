@@ -104,9 +104,9 @@ var promptURL = regexp.MustCompile(`https?://[^\s<>"'()]+`)
 func PromptPRLinks(text string) []PRLink {
 	var links prLinkCollector
 	for _, candidate := range promptURL.FindAllString(text, -1) {
-		candidate = strings.TrimRight(candidate, ".,;:!?")
+		candidate = strings.TrimRight(candidate, ".,;:!?]")
 		u, err := url.Parse(candidate)
-		if err != nil || u.User != nil {
+		if err != nil {
 			continue
 		}
 		parts := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")

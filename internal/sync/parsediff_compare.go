@@ -58,7 +58,25 @@ func (e *Engine) compareStoredSession(
 	if err != nil {
 		return nil, err
 	}
-	diffs := compareSessionFields(stored, prepared)
+	structured, err := e.db.GetSessionStructuredPRLinks(ctx, stored.ID)
+	if err != nil {
+		return nil, fmt.Errorf("parse-diff: structured PR links for %s: %w", stored.ID, err)
+	}
+	storedFields := *stored
+	storedFields.PRLinks = structured
+	if db.EncodePRLinks(structured) == db.EncodePRLinks(prepared.PRLinks) {
+		available := make(map[string]bool, len(stored.PRLinks))
+		for _, link := range stored.PRLinks {
+			available[link.URL] = true
+		}
+		for _, link := range prepared.PRLinks {
+			if !available[link.URL] {
+				storedFields.PRLinks = stored.PRLinks
+				break
+			}
+		}
+	}
+	diffs := compareSessionFields(&storedFields, prepared)
 
 	// Tier 1: three exact ordered fingerprints over the stored
 	// messages. The token fingerprint covers per-message model and
@@ -295,16 +313,7 @@ func appendSessionMetadataDiffs(
 	diffs = appendScalarSessionDiff(
 		diffs, FieldGitBranch, agent, stored.GitBranch, prepared.GitBranch,
 	)
-	// Stored links also include retained prompt URLs.
-	storedURLs := make(map[string]bool, len(stored.PRLinks))
-	for _, link := range stored.PRLinks {
-		storedURLs[link.URL] = true
-	}
-	missingPRLink := false
-	for _, link := range prepared.PRLinks {
-		missingPRLink = missingPRLink || !storedURLs[link.URL]
-	}
-	if sv, pv := db.EncodePRLinks(stored.PRLinks), db.EncodePRLinks(prepared.PRLinks); missingPRLink {
+	if sv, pv := db.EncodePRLinks(stored.PRLinks), db.EncodePRLinks(prepared.PRLinks); sv != pv {
 		diffs = append(diffs, FieldDiff{
 			Field:  FieldPRLinks,
 			Stored: stringutil.TruncateRunes(renderNullableScalar(sv), maxRenderedValueRunes, "..."),

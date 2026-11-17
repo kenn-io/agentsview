@@ -444,12 +444,12 @@ func bumpIncrementalTranscriptRevisionTx(tx transactionQueries, sessionID string
 			return err
 		}
 	}
-	promptRefresh := update.ReplaceFromOrdinal != nil
-	for _, msg := range msgs {
-		promptRefresh = promptRefresh || (msg.Role == "user" && (strings.Contains(msg.Content, "/pull") || strings.Contains(msg.Content, "/merge_requests/")))
-	}
-	if promptRefresh && !usageOnly {
-		if err := refreshSessionPromptPRLinksTx(tx, sessionID); err != nil {
+	if !usageOnly {
+		if update.ReplaceFromOrdinal != nil {
+			if err := refreshSessionPromptPRLinksTx(tx, sessionID); err != nil {
+				return err
+			}
+		} else if err := appendSessionPromptPRLinksTx(tx, sessionID, msgs); err != nil {
 			return err
 		}
 	}
