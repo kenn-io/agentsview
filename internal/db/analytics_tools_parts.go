@@ -71,7 +71,7 @@ func (db *DB) toolsFromParts(ctx context.Context, identity string, f AnalyticsFi
 		return ToolsAnalyticsResponse{}, true, err
 	}
 	slot := "tools-parts|" + TrendsTimezoneKey(f) + "|" + string(key)
-	version := fmt.Sprintf("%s|%d", identity, toolsPartsVersion)
+	version := fmt.Sprintf("%s|%d|%d", identity, toolsPartsVersion, CurrentQualitySignalVersion)
 	parts := kept.LoadParts[[]ToolAnalyticsRow](&db.trendsDisk, slot, version)
 	changed := kept.StaleParts(parts, versions)
 	ids := make([]string, 0, len(changed))

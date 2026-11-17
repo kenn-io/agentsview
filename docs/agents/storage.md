@@ -1333,6 +1333,8 @@ SQLite retains per-session Dashboard Tools contributions on disk and uses
 `tools_generation` to refresh sessions when tool calls change. Relevant call
 writes set the token to null once; a refresh assigns a new token before reading
 the session's calls.
+Message model, timestamp, and ordinal edits invalidate saved Tools contributions
+through `usage_generation`.
 Each filter combination has its own entry. Each file is capped at 128 MiB, and
 all `sqlite-trends` entries share a 256 MiB budget. Read-only archives and
 disabled disk storage use the direct reader.

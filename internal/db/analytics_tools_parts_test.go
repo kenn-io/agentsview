@@ -20,6 +20,43 @@ func setToolsPartsReadObserver(observe func([]string)) func() {
 	return func() { toolsPartsReadObserver = nil }
 }
 
+func TestToolsPartsRejectOldQualityVersion(t *testing.T) {
+	for _, version := range []string{"2", fmt.Sprintf("%d|%d", toolsPartsVersion, CurrentQualitySignalVersion-1)} {
+		t.Run(version, func(t *testing.T) {
+			t.Setenv("CACHE_DIRECTORY", t.TempDir())
+			d := testDB(t)
+			ctx := t.Context()
+			insertSession(t, d, "a", "project", func(s *Session) { s.QualitySignalVersion = CurrentQualitySignalVersion - 1 })
+			msg := asstMsgAt("a", 0, "call", "2025-03-10T12:00:00Z")
+			msg.ToolCalls = []ToolCall{{SessionID: "a", ToolName: "Read", Category: "Read"}}
+			insertMessages(t, d, msg)
+			_, err := d.getWriter().ExecContext(ctx, `UPDATE tool_calls SET observed_outcome='empty' WHERE session_id='a'`)
+			require.NoError(t, err)
+			f := AnalyticsFilter{Timezone: "UTC"}
+			_, err = d.analyticsTools(ctx, f)
+			require.NoError(t, err)
+			sessions, err := d.toolSessions(ctx, f, true)
+			require.NoError(t, err)
+			rows, err := d.analyticsToolRows(ctx, f)
+			require.NoError(t, err)
+			require.Len(t, rows, 1)
+			rows[0].ToolEffectivenessCounts = ToolEffectivenessCounts{AnalyzedCalls: 1, KnownOutcomeCalls: 1, EmptyCalls: 1}
+			identity, err := d.GetDatabaseID(ctx)
+			require.NoError(t, err)
+			key, err := json.Marshal(f, json.Deterministic(true))
+			require.NoError(t, err)
+			slot := "tools-parts|" + TrendsTimezoneKey(f) + "|" + string(key)
+			kept.SaveParts(&d.trendsDisk, slot, identity+"|"+version, []kept.Part[[]ToolAnalyticsRow]{{ID: "a", Fingerprint: sessions["a"].fingerprint, Value: rows}}, func([]ToolAnalyticsRow) int64 { return 1 })
+			got, err := d.GetAnalyticsTools(ctx, f)
+			require.NoError(t, err)
+			require.Equal(t, 1, got.TotalCalls)
+			require.Len(t, got.ByTool, 1)
+			require.Zero(t, got.ByTool[0].KnownOutcomeCalls)
+			require.Nil(t, got.ByTool[0].EmptyRate)
+		})
+	}
+}
+
 func TestToolsPartsOmitUnusedFields(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	d := testDB(t)
@@ -44,7 +81,7 @@ func TestToolsPartsOmitUnusedFields(t *testing.T) {
 	key, err := json.Marshal(f, json.Deterministic(true))
 	require.NoError(t, err)
 	slot := "tools-parts|" + TrendsTimezoneKey(f) + "|" + string(key)
-	parts := kept.LoadParts[[]ToolAnalyticsRow](&d.trendsDisk, slot, fmt.Sprintf("%s|%d", identity, toolsPartsVersion))
+	parts := kept.LoadParts[[]ToolAnalyticsRow](&d.trendsDisk, slot, fmt.Sprintf("%s|%d|%d", identity, toolsPartsVersion, CurrentQualitySignalVersion))
 	require.Contains(t, parts, "a")
 	require.Len(t, parts["a"].Value, 1)
 	assert.Empty(t, parts["a"].Value[0].Project)
