@@ -8,6 +8,7 @@ import (
 	"hash/maphash"
 	"io/fs"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -30,6 +31,14 @@ const (
 // errPollScanIneligible means a metadata scan cannot stand in for
 // reconciliation of a root on this pass.
 var errPollScanIneligible = errors.New("poll scan cannot compare this root")
+
+// errPollScanPathMissing stops a polling page that would mark a disappeared
+// path missing. The page's root keeps its previous snapshot, so the next pass
+// sees the file vanish and leaves it to provider-scoped reconciliation.
+var errPollScanPathMissing = errors.New("a changed polled path disappeared before its sync")
+
+// pollScanSyncContextKey marks a changed-path sync started by metadata polling.
+type pollScanSyncContextKey struct{}
 
 type pollScanKey struct {
 	agent parser.AgentType
@@ -57,6 +66,22 @@ type pollScanState struct {
 	snapshots map[pollScanKey][]pollScanRow
 	rows      int // Rows across committed snapshots.
 	maxRows   int // Zero means pollScanMaxRows; tests lower it.
+	// fallbacks holds the last logged reason a root could not be compared, so
+	// a root that never can logs once instead of every pass.
+	fallbacks map[pollScanKey]string
+}
+
+// ForgetPollScans drops every polling snapshot, so the next pass reconciles
+// each polled root. Call it after archive state changes without a file
+// change, such as restoring a trashed session whose transcript changed while
+// it was in the trash.
+func (e *Engine) ForgetPollScans() {
+	state := &e.pollScans
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	for key := range state.snapshots {
+		state.forget(key)
+	}
 }
 
 // PollProviderRootsGrouped is the scheduled polling pass. For providers that
@@ -71,6 +96,7 @@ type pollScanState struct {
 //
 // A snapshot is taken before the archive work it describes and kept only after
 // that work succeeds, so it never claims a change the archive has not applied.
+// A changed-path page that finds a file gone stops without marking it missing.
 // Snapshots for roots absent from groups are released.
 func (e *Engine) PollProviderRootsGrouped(
 	ctx context.Context, groups []ProviderRootsGroup, authoritative bool,
@@ -94,6 +120,11 @@ func (e *Engine) PollProviderRootsGrouped(
 	for key := range state.snapshots {
 		if _, ok := live[key]; !ok {
 			state.forget(key)
+		}
+	}
+	for key := range state.fallbacks {
+		if _, ok := live[key]; !ok {
+			delete(state.fallbacks, key)
 		}
 	}
 
@@ -124,9 +155,9 @@ func (e *Engine) PollProviderRootsGrouped(
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
 			}
+			state.noteFallback(key, err)
 			switch {
 			case err != nil:
-				log.Printf("poll scan %s: reconciling instead: %v", group.Agent, err)
 				state.forget(key)
 				full = append(full, root)
 			case authoritative || previous == nil || result.vanished:
@@ -144,28 +175,19 @@ func (e *Engine) PollProviderRootsGrouped(
 		}
 	}
 
-	// A changed-path sync marks a path missing when it no longer exists.
-	// Send a root whose changed file has already gone to reconciliation, so
-	// only the caller's availability checks decide that deletion.
-	var changedPaths []string
-	for key, paths := range changed {
-		if pollScanPathsPresent(paths) {
-			changedPaths = append(changedPaths, paths...)
+	var errs []error
+	// Each root keeps its own snapshot, so a failing file in one root does not
+	// make another root sync its changes again.
+	syncCtx := context.WithValue(ctx, pollScanSyncContextKey{}, true)
+	for _, key := range slices.SortedFunc(maps.Keys(changed), comparePollScanKeys) {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(append(errs, err)...)
+		}
+		if err := e.syncPollScanPaths(syncCtx, changed[key]); err != nil {
+			errs = append(errs, fmt.Errorf("%s %s: %w", key.agent, key.root, err))
 			continue
 		}
-		afterRecon[key] = afterSync[key]
-		delete(afterSync, key)
-		reconcile = append(reconcile, ProviderRootsGroup{Agent: key.agent, Roots: []string{key.root}})
-	}
-	slices.Sort(changedPaths)
-
-	var errs []error
-	if len(changedPaths) > 0 {
-		if err := e.syncPollScanPaths(ctx, changedPaths); err != nil {
-			errs = append(errs, err)
-		} else {
-			state.keep(afterSync)
-		}
+		state.keep(map[pollScanKey][]pollScanRow{key: afterSync[key]})
 	}
 	if len(reconcile) > 0 {
 		if err := e.ReconcileProviderRootsGrouped(ctx, reconcile); err != nil {
@@ -192,13 +214,26 @@ func (s *pollScanState) keep(snapshots map[pollScanKey][]pollScanRow) {
 	}
 }
 
-func pollScanPathsPresent(paths []string) bool {
-	for _, path := range paths {
-		if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
-			return false
-		}
+// noteFallback logs why a root falls back to reconciliation when the reason
+// changes. err is nil when the root could be compared.
+func (s *pollScanState) noteFallback(key pollScanKey, err error) {
+	if err == nil {
+		delete(s.fallbacks, key)
+		return
 	}
-	return true
+	reason := err.Error()
+	if s.fallbacks[key] == reason {
+		return
+	}
+	if s.fallbacks == nil {
+		s.fallbacks = make(map[pollScanKey]string)
+	}
+	s.fallbacks[key] = reason
+	log.Printf("poll scan %s %s: reconciling instead: %v", key.agent, key.root, err)
+}
+
+func comparePollScanKeys(a, b pollScanKey) int {
+	return cmp.Or(cmp.Compare(a.agent, b.agent), cmp.Compare(a.root, b.root))
 }
 
 // syncPollScanPaths attempts every page, so one failing source cannot keep
@@ -333,7 +368,9 @@ func scanPollRoots(
 		return nil
 	}
 	for _, watch := range plan {
-		info, err := os.Lstat(watch.Path)
+		// A linked root is a configured location, often polled for good;
+		// links below it stay ineligible.
+		info, err := os.Stat(watch.Path)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}

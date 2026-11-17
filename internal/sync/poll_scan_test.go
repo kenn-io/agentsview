@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"hash/maphash"
@@ -284,10 +285,13 @@ func TestPollProviderRootsGroupedReleasesSnapshots(t *testing.T) {
 	f.poll(t, group)
 	assert.EqualValues(t, 2, f.reconciled.Load(), "a released root starts over with reconciliation")
 
+	writeClaudePollSession(t, filepath.Join(root, "project", "released.jsonl"), "first", "second")
 	require.NoError(t, f.engine.PollProviderRootsGrouped(t.Context(), []ProviderRootsGroup{group}, true))
 	assert.EqualValues(t, 3, f.reconciled.Load(), "an authoritative pass always reconciles")
+	synced := f.engine.LastSync()
 	f.poll(t, group)
-	assert.EqualValues(t, 3, f.reconciled.Load(), "an authoritative pass still records a snapshot")
+	assert.EqualValues(t, 3, f.reconciled.Load())
+	assert.Equal(t, synced, f.engine.LastSync(), "an authoritative pass records the snapshot it reconciled")
 
 	f.engine.subagentLinkPending = true
 	f.poll(t, group)
@@ -398,10 +402,13 @@ func TestPollProviderRootsGroupedReconcilesUnreadableFolders(t *testing.T) {
 	f := newPollScanFixture(t, map[parser.AgentType][]string{parser.AgentClaude: {root}})
 	group := ProviderRootsGroup{Agent: parser.AgentClaude, Roots: []string{root}}
 
-	_ = f.engine.PollProviderRootsGrouped(t.Context(), []ProviderRootsGroup{group}, false)
-	_ = f.engine.PollProviderRootsGrouped(t.Context(), []ProviderRootsGroup{group}, false)
+	plan := []parser.WatchRoot{{Path: root, Recursive: true, IncludeGlobs: []string{"*.jsonl"}}}
+	_, err := scanPollRoots(t.Context(), maphash.MakeSeed(), plan, nil, pollScanMaxRows)
+	require.ErrorIs(t, err, errPollScanIneligible, "a folder the scan cannot read is left to reconciliation")
 
-	assert.EqualValues(t, 2, f.reconciled.Load(), "a folder the scan cannot read is left to reconciliation")
+	_ = f.engine.PollProviderRootsGrouped(t.Context(), []ProviderRootsGroup{group}, false)
+	_ = f.engine.PollProviderRootsGrouped(t.Context(), []ProviderRootsGroup{group}, false)
+	assert.EqualValues(t, 2, f.reconciled.Load())
 }
 
 func TestPollProviderRootsGroupedSyncsLaterPagesPastAFailure(t *testing.T) {
@@ -427,4 +434,67 @@ func TestPollProviderRootsGroupedSyncsLaterPagesPastAFailure(t *testing.T) {
 	require.Error(t, f.engine.PollProviderRootsGrouped(t.Context(), []ProviderRootsGroup{group}, false))
 
 	f.session(t, fmt.Sprintf("added-%03d", added-1))
+}
+
+func TestPollProviderRootsGroupedLeavesDisappearedChangesToReconciliation(t *testing.T) {
+	requirePollChangeTimes(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "project", "gone.jsonl")
+	writeClaudePollSession(t, path, "first")
+	f := newPollScanFixture(t, map[parser.AgentType][]string{parser.AgentClaude: {root}})
+	group := ProviderRootsGroup{Agent: parser.AgentClaude, Roots: []string{root}}
+	f.poll(t, group)
+
+	// The scan saw this file change, and it disappeared before its page synced.
+	require.NoError(t, os.Remove(path))
+	syncCtx := context.WithValue(t.Context(), pollScanSyncContextKey{}, true)
+	require.ErrorIs(t, f.engine.syncPollScanPaths(syncCtx, []string{path}), errPollScanPathMissing)
+	assert.Nil(t, f.session(t, "gone").SourceMissingAt, "a polling page never marks a source missing")
+
+	f.poll(t, group)
+	assert.EqualValues(t, 2, f.reconciled.Load())
+	assert.NotNil(t, f.session(t, "gone").SourceMissingAt, "reconciliation decides the deletion")
+}
+
+func TestPollProviderRootsGroupedComparesLinkedRoots(t *testing.T) {
+	requirePollChangeTimes(t)
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symbolic links needs extra privileges on Windows")
+	}
+	target := t.TempDir()
+	writeClaudePollSession(t, filepath.Join(target, "project", "linked.jsonl"), "first")
+	root := filepath.Join(t.TempDir(), "projects")
+	require.NoError(t, os.Symlink(target, root))
+	f := newPollScanFixture(t, map[parser.AgentType][]string{parser.AgentClaude: {root}})
+	group := ProviderRootsGroup{Agent: parser.AgentClaude, Roots: []string{root}}
+	f.poll(t, group)
+
+	writeClaudePollSession(t, filepath.Join(target, "project", "linked.jsonl"), "first", "second")
+	f.poll(t, group)
+
+	assert.EqualValues(t, 1, f.reconciled.Load(), "a linked root, which stays polled, is still compared")
+	assert.Equal(t, 2, f.session(t, "linked").UserMessageCount)
+}
+
+func TestForgetPollScansRereadsRestoredSessions(t *testing.T) {
+	requirePollChangeTimes(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "project", "trashed.jsonl")
+	writeClaudePollSession(t, path, "first")
+	f := newPollScanFixture(t, map[parser.AgentType][]string{parser.AgentClaude: {root}})
+	group := ProviderRootsGroup{Agent: parser.AgentClaude, Roots: []string{root}}
+	f.poll(t, group)
+
+	_, err := f.database.SoftDeleteSessions(t.Context(), []string{"trashed"})
+	require.NoError(t, err)
+	writeClaudePollSession(t, path, "first", "second")
+	f.poll(t, group)
+	restored, err := f.database.RestoreSession(t.Context(), "trashed")
+	require.NoError(t, err)
+	require.EqualValues(t, 1, restored)
+	f.engine.ForgetPollScans()
+	f.poll(t, group)
+
+	assert.Equal(t, 2, f.session(t, "trashed").UserMessageCount,
+		"a restored session's change made in the trash is read again")
 }

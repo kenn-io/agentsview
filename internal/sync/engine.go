@@ -1645,6 +1645,9 @@ func (e *Engine) syncChangedPathsLocked(
 	prepared := e.prepareChangedPathSync(ctx, paths)
 	summary.sources = len(prepared.files)
 	defer func() { log.Print(summary.finish(e, stats)) }()
+	if len(prepared.missingPaths) > 0 && ctx.Value(pollScanSyncContextKey{}) != nil {
+		return SyncStats{}, 0, errPollScanPathMissing
+	}
 	stats, tombstoned, err = e.applyChangedPathSyncLocked(ctx, prepared)
 	// Title store events carry no session files, so this also handles them.
 	if err == nil && !stats.Aborted {
