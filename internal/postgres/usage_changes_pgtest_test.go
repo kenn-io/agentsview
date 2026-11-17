@@ -111,6 +111,28 @@ UPDATE sessions SET health_score=60 WHERE id IN ('one','two');`)
 	}
 	require.NoError(t, rows.Err())
 	require.Equal(t, map[string]int{"one": 1, "two": 1}, counts)
+	require.NoError(t, rows.Close())
+	_, err = store.pg.ExecContext(ctx, `INSERT INTO sessions(id,machine,project,agent,health_score) VALUES ('upgrade-panel','machine','project','claude',30)`)
+	require.NoError(t, err)
+	var common, tools, signals string
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT (SELECT value FROM sync_metadata WHERE key='dashboard_common'), (SELECT value FROM sync_metadata WHERE key='dashboard_tools'), (SELECT value FROM sync_metadata WHERE key='dashboard_signals')`).Scan(&common, &tools, &signals))
+	_, err = store.pg.ExecContext(ctx, `UPDATE sessions SET health_score=60 WHERE id='upgrade-panel'`)
+	require.NoError(t, err)
+	var newCommon, newTools, newSignals string
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT (SELECT value FROM sync_metadata WHERE key='dashboard_common'), (SELECT value FROM sync_metadata WHERE key='dashboard_tools'), (SELECT value FROM sync_metadata WHERE key='dashboard_signals')`).Scan(&newCommon, &newTools, &newSignals))
+	require.Equal(t, common, newCommon)
+	require.Equal(t, tools, newTools)
+	require.NotEqual(t, signals, newSignals)
+	_, err = store.pg.ExecContext(ctx, `UPDATE sessions SET health_score=health_score WHERE id='upgrade-panel'`)
+	require.NoError(t, err)
+	var unchanged string
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='dashboard_signals'`).Scan(&unchanged))
+	require.Equal(t, newSignals, unchanged)
+	_, err = store.pg.ExecContext(ctx, `DELETE FROM sessions WHERE id='upgrade-panel'`)
+	require.NoError(t, err)
+	var deleted string
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='dashboard_signals'`).Scan(&deleted))
+	require.NotEqual(t, unchanged, deleted)
 }
 
 func TestUsageChangeJournalWriteAfterImmediateStamp(t *testing.T) {
@@ -538,11 +560,9 @@ func TestUsageJournalUpgradesHistoryToken(t *testing.T) {
  SET search_path = pg_catalog, %s, pg_temp AS $journal$%s$journal$`, quotedSchema, oldStamp))
 	require.NoError(t, err)
 	require.NoError(t, EnsureSchema(ctx, syncer.pg, syncer.schema))
-	var version string
-	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='usage_change_journal_version'`).Scan(&version))
+	var version, before string
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT (SELECT value FROM sync_metadata WHERE key='usage_change_journal_version'), (SELECT value FROM sync_metadata WHERE key='usage_history_token')`).Scan(&version, &before))
 	require.Equal(t, "3", version)
-	var before string
-	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='usage_history_token'`).Scan(&before))
 	require.NotEmpty(t, before)
 	_, err = store.pg.ExecContext(ctx, `INSERT INTO sessions(id,machine,project,agent) VALUES('history-token','machine','project','codex')`)
 	require.NoError(t, err)

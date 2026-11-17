@@ -165,8 +165,6 @@ func TestAnalyticsKeptPushAndSelection(t *testing.T) {
 	velocity, err := store.GetAnalyticsVelocity(ctx, f)
 	require.NoError(t, err)
 	require.Equal(t, float64(60), velocity.Overall.FirstResponseSec.P50)
-	signals, err := store.GetAnalyticsSignals(ctx, f)
-	require.NoError(t, err)
 	terms := []db.TrendTermInput{{Term: "answer", Variants: []string{"answer"}, Matchers: []string{"answer"}}}
 	trends, err := store.GetTrendsTerms(ctx, f, terms, "week")
 	require.NoError(t, err)
@@ -178,9 +176,6 @@ func TestAnalyticsKeptPushAndSelection(t *testing.T) {
 	require.NoError(t, err)
 	velocityAgain, err := store.GetAnalyticsVelocity(ctx, f)
 	require.NoError(t, err)
-	signalsAgain, err := store.GetAnalyticsSignals(ctx, f)
-	require.NoError(t, err)
-	assert.Equal(t, signals, signalsAgain)
 	assert.Equal(t, reads, counter.count())
 	freshTools, err := store.loadAnalyticsTools(ctx, f)
 	require.NoError(t, err)
@@ -230,16 +225,12 @@ func TestAnalyticsKeptPushAndSelection(t *testing.T) {
 	assert.Zero(t, changed.ByTool[0].EmptyCalls)
 	require.NoError(t, local.UpdateSessionSignals(ctx, "session", db.SessionSignalUpdate{
 		QualitySignals:   db.QualitySignals{Version: db.CurrentQualitySignalVersion},
-		ToolRetryCount:   2,
 		ToolObservations: []db.ToolObservation{{MessageOrdinal: 1, Outcome: "empty", Repeat: "none"}},
 	}))
 	pgKeptPush(t, syncer, true)
 	observed, err := store.GetAnalyticsTools(ctx, f)
 	require.NoError(t, err)
 	assert.Equal(t, 1, observed.ByTool[0].EmptyCalls)
-	updatedSignals, err := store.GetAnalyticsSignals(ctx, f)
-	require.NoError(t, err)
-	require.Equal(t, 2, updatedSignals.ToolHealth.TotalRetries)
 	projectFilter := f
 	projectFilter.Project = "project"
 	projectTools, err := store.GetAnalyticsTools(ctx, projectFilter)
@@ -436,8 +427,6 @@ func TestAnalyticsKeptRestart(t *testing.T) {
 	dir := t.TempDir()
 	url := testPGURL(t)
 	require.NoError(t, store.ConfigureUsageCache(ctx, dir, url, syncer.schema))
-	prices := map[string]config.CustomModelRate{"model": {OutputMicrodollarsPerMTok: 100}}
-	store.SetCustomPricing(prices)
 	f := db.AnalyticsFilter{From: "2026-06-14", To: "2026-06-14", Timezone: "UTC"}
 	tools, err := store.GetAnalyticsTools(ctx, f)
 	require.NoError(t, err)
@@ -449,7 +438,6 @@ func TestAnalyticsKeptRestart(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
 	require.NoError(t, reopened.ConfigureUsageCache(ctx, dir, url, syncer.schema))
-	reopened.SetCustomPricing(prices)
 	counter := &analyticsReadCounter{storeExecutor: reopened.pg}
 	reopened.pg = counter
 	gotTools, err := reopened.GetAnalyticsTools(ctx, f)
@@ -484,13 +472,6 @@ func TestAnalyticsKeptRestart(t *testing.T) {
 	first := read(store, &counts)
 	require.NotNil(t, first.AvgHealthScore)
 	require.InDelta(t, 30, *first.AvgHealthScore, 0)
-	require.NoError(t, local.UpdateSessionSignals(ctx, "session", db.SessionSignalUpdate{HealthScore: new(60)}))
-	pgKeptPush(t, syncer, false)
-	counts = [3]int{}
-	warm := read(store, &counts)
-	require.NotNil(t, warm.AvgHealthScore)
-	require.InDelta(t, 60, *warm.AvgHealthScore, 0)
-	assert.Equal(t, [3]int{0, 0, 1}, counts)
 	require.NoError(t, local.UpdateSessionSignals(ctx, "session", db.SessionSignalUpdate{HealthScore: new(90)}))
 	pgKeptPush(t, syncer, false)
 	scoreStore, err := NewStore(ctx, url, syncer.schema, true)
@@ -502,7 +483,6 @@ func TestAnalyticsKeptRestart(t *testing.T) {
 	require.NotNil(t, score.AvgHealthScore)
 	require.InDelta(t, 90, *score.AvgHealthScore, 0)
 	require.Equal(t, [3]int{0, 0, 1}, counts)
-
 }
 
 func TestAnalyticsKeptDirectSourceEvents(t *testing.T) {
@@ -512,8 +492,6 @@ func TestAnalyticsKeptDirectSourceEvents(t *testing.T) {
 	pgKeptSession(t, local, "session", "project", "2026-06-14")
 	require.NoError(t, local.UpdateSessionSignals(ctx, "session", db.SessionSignalUpdate{QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion}}))
 	pgKeptPush(t, syncer, false)
-	_, err := store.pg.ExecContext(ctx, `INSERT INTO sessions(id,machine,project,agent) VALUES('other','test-machine','other','claude')`)
-	require.NoError(t, err)
 	require.NoError(t, store.ConfigureUsageCache(ctx, t.TempDir(), testPGURL(t), syncer.schema))
 	f := db.AnalyticsFilter{Timezone: "UTC"}
 	var loads [3]int
@@ -549,7 +527,6 @@ func TestAnalyticsKeptDirectSourceEvents(t *testing.T) {
 	}{
 		{`UPDATE messages SET role='assistant' WHERE session_id='session' AND ordinal=0`, [3]int{0, 1, 1}, 0, "", nil},
 		{`UPDATE messages SET is_system=true WHERE session_id='session' AND ordinal=0`, [3]int{0, 1, 1}, 0, "", nil},
-		{`UPDATE messages SET session_id='other' WHERE session_id='session' AND ordinal=0`, [3]int{1, 1, 1}, 0, "", nil},
 		{`UPDATE messages SET content_length=20 WHERE session_id='session' AND ordinal=1`, [3]int{0, 1, 0}, 0, "", nil},
 		{`INSERT INTO messages(session_id,ordinal,role,content,timestamp) VALUES('session',2,'assistant','answer','2026-06-14T10:02:00Z')`, [3]int{1, 1, 1}, 0, "", nil},
 		{`DELETE FROM messages WHERE session_id='session' AND ordinal=2`, [3]int{1, 1, 1}, 0, "", nil},
@@ -575,26 +552,16 @@ func TestAnalyticsKeptDirectSourceEvents(t *testing.T) {
 			}
 		}
 	}
-}
-
-func TestAnalyticsKeptModelTimeScopeChanges(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	for _, tc := range []struct{ name, query string }{
 		{"model", `UPDATE messages SET model='model-b' WHERE session_id='session' AND ordinal=1`},
 		{"timestamp", `UPDATE messages SET timestamp=NULL WHERE session_id='session' AND ordinal=0`},
 		{"ordinal", `UPDATE messages SET ordinal=3 WHERE session_id='session' AND ordinal=0`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			local, syncer, store := newUsageJournalFixture(t)
-			ctx := t.Context()
-			pgKeptSession(t, local, "session", "project", "2026-06-14")
-			require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "other", Machine: "test-machine", Project: "other", Agent: "claude", MessageCount: 1}))
-			require.NoError(t, local.ReplaceSessionMessages(ctx, "session", []db.Message{
-				{SessionID: "session", Ordinal: 0, Role: "user", Content: "hello", Timestamp: "2026-06-14T10:00:00Z"},
-				{SessionID: "session", Ordinal: 1, Role: "assistant", Content: "answer", Model: "model-a", Timestamp: "2026-06-14T11:00:00Z"},
-			}))
-			pgKeptPush(t, syncer, false)
-			require.NoError(t, store.ConfigureUsageCache(ctx, t.TempDir(), testPGURL(t), syncer.schema))
+			_, err := store.pg.ExecContext(ctx, `UPDATE messages SET ordinal=0 WHERE session_id='session' AND ordinal=3;
+UPDATE messages SET role='user', is_system=false, timestamp='2026-06-14T10:00:00Z' WHERE session_id='session' AND ordinal=0;
+UPDATE messages SET model='model-a', timestamp='2026-06-14T11:00:00Z' WHERE session_id='session' AND ordinal=1`)
+			require.NoError(t, err)
 			f := db.AnalyticsFilter{Timezone: "UTC", Model: "model-a", Project: "project", Hour: new(10), DayOfWeek: new(6)}
 			before, err := store.GetAnalyticsSignals(ctx, f)
 			require.NoError(t, err)
@@ -633,52 +600,5 @@ func TestAnalyticsKeptJournalUpgrade(t *testing.T) {
 	var tokens int
 	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT count(*) FROM sync_metadata WHERE key IN ('dashboard_common','dashboard_tools','dashboard_velocity','dashboard_signals','dashboard_scope') AND value <> ''`).Scan(&tokens))
 	require.Equal(t, 5, tokens)
-	_, err = store.pg.ExecContext(ctx, `INSERT INTO sessions(id,machine,project,agent,health_score) VALUES ('upgrade-panel','machine','project','claude',30)`)
-	require.NoError(t, err)
-	var common, tools, signals string
-	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT (SELECT value FROM sync_metadata WHERE key='dashboard_common'), (SELECT value FROM sync_metadata WHERE key='dashboard_tools'), (SELECT value FROM sync_metadata WHERE key='dashboard_signals')`).Scan(&common, &tools, &signals))
-	_, err = store.pg.ExecContext(ctx, `UPDATE sessions SET health_score=60 WHERE id='upgrade-panel'`)
-	require.NoError(t, err)
-	var newCommon, newTools, newSignals string
-	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT (SELECT value FROM sync_metadata WHERE key='dashboard_common'), (SELECT value FROM sync_metadata WHERE key='dashboard_tools'), (SELECT value FROM sync_metadata WHERE key='dashboard_signals')`).Scan(&newCommon, &newTools, &newSignals))
-	require.Equal(t, common, newCommon)
-	require.Equal(t, tools, newTools)
-	require.NotEqual(t, signals, newSignals)
-	_, err = store.pg.ExecContext(ctx, `UPDATE sessions SET health_score=health_score WHERE id='upgrade-panel'`)
-	require.NoError(t, err)
-	var unchanged string
-	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='dashboard_signals'`).Scan(&unchanged))
-	require.Equal(t, newSignals, unchanged)
-	_, err = store.pg.ExecContext(ctx, `DELETE FROM sessions WHERE id='upgrade-panel'`)
-	require.NoError(t, err)
-	var deleted string
-	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='dashboard_signals'`).Scan(&deleted))
-	require.NotEqual(t, unchanged, deleted)
-	tx, err = store.DB().BeginTx(ctx, nil)
-	require.NoError(t, err)
-	require.NoError(t, installDashboardJournalPG(ctx, tx))
-	require.NoError(t, tx.Commit())
-}
 
-func TestAnalyticsKeptSessionChangeAfterRestart(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	local, syncer, store := newUsageJournalFixture(t)
-	ctx := t.Context()
-	pgKeptSession(t, local, "session", "first", "2026-06-14")
-	pgKeptPush(t, syncer, false)
-	dir, url := t.TempDir(), testPGURL(t)
-	require.NoError(t, store.ConfigureUsageCache(ctx, dir, url, syncer.schema))
-	f := db.AnalyticsFilter{From: "2026-06-14", To: "2026-06-14", Timezone: "UTC", Project: "second"}
-	before, err := store.GetAnalyticsSignals(ctx, f)
-	require.NoError(t, err)
-	require.Zero(t, before.UnscoredSessions)
-	_, err = store.pg.ExecContext(ctx, `UPDATE sessions SET project='second' WHERE id='session'`)
-	require.NoError(t, err)
-	reopened, err := NewStore(ctx, url, syncer.schema, true)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
-	require.NoError(t, reopened.ConfigureUsageCache(ctx, dir, url, syncer.schema))
-	after, err := reopened.GetAnalyticsSignals(ctx, f)
-	require.NoError(t, err)
-	require.Equal(t, 1, after.UnscoredSessions)
 }

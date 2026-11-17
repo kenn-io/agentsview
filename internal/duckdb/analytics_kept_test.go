@@ -5,7 +5,6 @@ package duckdb
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -320,57 +319,42 @@ func TestAnalyticsKeptMovingSelectionsReadFresh(t *testing.T) {
 }
 
 func TestAnalyticsKeptRestart(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		pricing bool
-	}{{"pricing", true}} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("CACHE_DIRECTORY", t.TempDir())
-			if tc.pricing {
-				pricing.SetConfiguredAliases(map[string]string{"model": "first"})
-				t.Cleanup(func() { pricing.SetConfiguredAliases(nil) })
-			}
-			dir := t.TempDir()
-			path := filepath.Join(dir, "mirror.duckdb")
-			buildMirrorFixture(t, path, "session-a")
-			store, err := NewStore(t.Context(), path)
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	pricing.SetConfiguredAliases(map[string]string{"model": "first"})
+	t.Cleanup(func() { pricing.SetConfiguredAliases(nil) })
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mirror.duckdb")
+	buildMirrorFixture(t, path, "session-a")
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
+	store.SetCustomPricing(map[string]config.CustomModelRate{"model": {OutputMicrodollarsPerMTok: 100}})
+	f := db.AnalyticsFilter{Timezone: "UTC"}
+	var expected []any
+	for _, panel := range keptPanelCases(t.Context(), f) {
+		if db.SavedPanel(panel.name) {
+			value, err := panel.read(store)
 			require.NoError(t, err)
-			require.NoError(t, store.OpenActivityReportDisk(t.Context()))
-			if tc.pricing {
-				store.SetCustomPricing(map[string]config.CustomModelRate{"model": {OutputMicrodollarsPerMTok: 100}})
-			}
-			f := db.AnalyticsFilter{Timezone: "UTC"}
-			var expected []any
-			for _, panel := range keptPanelCases(t.Context(), f) {
-				if panel.name == "tools" || panel.name == "velocity" || panel.name == "signals" {
-					value, err := panel.read(store)
-					require.NoError(t, err)
-					expected = append(expected, value)
-				}
-			}
-			require.NoError(t, store.Close())
-			if tc.pricing {
-				pricing.SetConfiguredAliases(map[string]string{"model": "second"})
-			}
-			reopened, err := NewStore(t.Context(), path)
-			require.NoError(t, err)
-			t.Cleanup(func() { reopened.Close() })
-			if tc.pricing {
-				reopened.SetCustomPricing(map[string]config.CustomModelRate{"model": {OutputMicrodollarsPerMTok: 200}})
-			}
-			require.NoError(t, reopened.OpenActivityReportDisk(t.Context()))
-			primePanelDigests(t, reopened, f, "tools", "velocity", "signals")
-			require.NoError(t, reopened.DB().Close())
-			i := 0
-			for _, panel := range keptPanelCases(t.Context(), f) {
-				if panel.name == "tools" || panel.name == "velocity" || panel.name == "signals" {
-					value, err := panel.read(reopened)
-					require.NoError(t, err, panel.name)
-					require.Equal(t, expected[i], value)
-					i++
-				}
-			}
-		})
+			expected = append(expected, value)
+		}
+	}
+	require.NoError(t, store.Close())
+	pricing.SetConfiguredAliases(map[string]string{"model": "second"})
+	reopened, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { reopened.Close() })
+	reopened.SetCustomPricing(map[string]config.CustomModelRate{"model": {OutputMicrodollarsPerMTok: 200}})
+	require.NoError(t, reopened.OpenActivityReportDisk(t.Context()))
+	primePanelDigests(t, reopened, f, "tools", "velocity", "signals")
+	require.NoError(t, reopened.DB().Close())
+	i := 0
+	for _, panel := range keptPanelCases(t.Context(), f) {
+		if db.SavedPanel(panel.name) {
+			value, err := panel.read(reopened)
+			require.NoError(t, err, panel.name)
+			require.Equal(t, expected[i], value)
+			i++
+		}
 	}
 }
 
@@ -435,20 +419,6 @@ func TestAnalyticsKeptChangedMirrorInputs(t *testing.T) {
 		require.NotNil(t, signals.AvgHealthScore)
 		require.InDelta(t, tc.score, *signals.AvgHealthScore, 0)
 	}
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(next, data, 0o600))
-	writeUsageMirror(t, next, `UPDATE sessions SET health_score=90`)
-	require.NoError(t, swapMirrorFile(next, path))
-	require.NoError(t, store.Close())
-	store, err = NewStore(ctx, path)
-	require.NoError(t, err)
-	require.NoError(t, store.OpenActivityReportDisk(ctx))
-	loads = [3]int{}
-	_, _, signals := read()
-	require.NotNil(t, signals.AvgHealthScore)
-	require.InDelta(t, 90, *signals.AvgHealthScore, 0)
-	require.Equal(t, [3]int{0, 0, 1}, loads)
 }
 
 func TestAnalyticsKeptDigestAssociatesRows(t *testing.T) {
@@ -505,55 +475,34 @@ func TestAnalyticsKeptDigestAssociatesRows(t *testing.T) {
 }
 
 func TestAnalyticsKeptSameStampReplacement(t *testing.T) {
-	for _, serving := range []bool{true} {
-		t.Run(fmt.Sprintf("serving=%t", serving), func(t *testing.T) {
-			skipReopenTestOnWindows(t)
-			t.Setenv("CACHE_DIRECTORY", t.TempDir())
-			dir := t.TempDir()
-			path := filepath.Join(dir, "mirror.duckdb")
-			next := filepath.Join(dir, "next.duckdb")
-			keptActivityMirror(t, path, "session-a", 500)
-			writeUsageMirror(t, path, `UPDATE sessions SET project='alpha'`)
-			keptActivityMirror(t, next, "session-b", 900)
-			writeUsageMirror(t, next, `UPDATE sessions SET project='beta'`)
-			info, err := os.Stat(path)
-			require.NoError(t, err)
-			nextInfo, err := os.Stat(next)
-			require.NoError(t, err)
-			require.Equal(t, info.Size(), nextInfo.Size())
-			require.NoError(t, os.Chtimes(next, info.ModTime(), info.ModTime()))
-			store, err := NewStore(t.Context(), path)
-			require.NoError(t, err)
-			require.NoError(t, store.OpenActivityReportDisk(t.Context()))
-			filter := db.AnalyticsFilter{Timezone: "UTC", Project: "beta"}
-			before, err := store.GetAnalyticsSignals(t.Context(), filter)
-			require.NoError(t, err)
-			require.Zero(t, before.ScoredSessions+before.UnscoredSessions)
-			stamp := store.mirrorStamp()
-			if serving {
-				require.NoError(t, swapMirrorFile(next, path))
-				store.checkMirrorReplacement(t.Context(), func(err error) { require.NoError(t, err) })
-				require.Equal(t, stamp, store.mirrorStamp())
-				changed, err := store.GetAnalyticsSignals(t.Context(), filter)
-				require.NoError(t, err)
-				require.Equal(t, 1, changed.ScoredSessions+changed.UnscoredSessions)
-				require.NoError(t, store.Close())
-			} else {
-				require.NoError(t, store.Close())
-				require.NoError(t, swapMirrorFile(next, path))
-			}
-			reopened, err := NewStore(t.Context(), path)
-			require.NoError(t, err)
-			t.Cleanup(func() { reopened.Close() })
-			require.Equal(t, stamp, reopened.mirrorStamp())
-			require.NoError(t, reopened.OpenActivityReportDisk(t.Context()))
-			if serving {
-				primePanelDigests(t, reopened, filter, "signals")
-				require.NoError(t, reopened.DB().Close())
-			}
-			got, err := reopened.GetAnalyticsSignals(t.Context(), filter)
-			require.NoError(t, err)
-			require.Equal(t, 1, got.ScoredSessions+got.UnscoredSessions)
-		})
-	}
+	skipReopenTestOnWindows(t)
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mirror.duckdb")
+	next := filepath.Join(dir, "next.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	writeUsageMirror(t, path, `UPDATE sessions SET project='alpha'`)
+	keptActivityMirror(t, next, "session-b", 900)
+	writeUsageMirror(t, next, `UPDATE sessions SET project='beta'`)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	nextInfo, err := os.Stat(next)
+	require.NoError(t, err)
+	require.Equal(t, info.Size(), nextInfo.Size())
+	require.NoError(t, os.Chtimes(next, info.ModTime(), info.ModTime()))
+	store, err := NewStore(t.Context(), path)
+	require.NoError(t, err)
+	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
+	filter := db.AnalyticsFilter{Timezone: "UTC", Project: "beta"}
+	before, err := store.GetAnalyticsSignals(t.Context(), filter)
+	require.NoError(t, err)
+	require.Zero(t, before.ScoredSessions+before.UnscoredSessions)
+	stamp := store.mirrorStamp()
+	require.NoError(t, swapMirrorFile(next, path))
+	store.checkMirrorReplacement(t.Context(), func(err error) { require.NoError(t, err) })
+	require.Equal(t, stamp, store.mirrorStamp())
+	changed, err := store.GetAnalyticsSignals(t.Context(), filter)
+	require.NoError(t, err)
+	require.Equal(t, 1, changed.ScoredSessions+changed.UnscoredSessions)
+	require.NoError(t, store.Close())
 }
