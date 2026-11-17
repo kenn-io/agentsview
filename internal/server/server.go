@@ -1596,46 +1596,87 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return err
 }
 
-// FindAvailablePort finds an available port starting from the given port,
-// binding to the specified host. It returns an error instead of reusing an
-// occupied port when the candidate range is exhausted.
-func FindAvailablePort(ctx context.Context, host string, start int) (int, error) {
-	return findAvailablePort(ctx, host, start, selectEphemeralPort, listenProbesFree)
+// ListenAvailablePort binds host at the first available port from start and
+// returns the listener. Serving on that listener keeps the port the search
+// found; probing a port, releasing it, and binding it again later lets another
+// process take it in between. A start of 0 asks the system for an ephemeral
+// port. The search returns an error instead of an occupied port when the
+// candidate range is exhausted.
+func ListenAvailablePort(ctx context.Context, host string, start int) (net.Listener, error) {
+	return listenAvailablePort(ctx, host, start, selectEphemeralPort, listenProbesFree, listenTCP)
 }
 
-func findAvailablePort(ctx context.Context,
+// FindAvailablePort reports the port ListenAvailablePort would bind without
+// keeping it. Another process can take the port once this returns, so use it
+// only to check that a port is free; a server should serve the listener from
+// ListenAvailablePort.
+func FindAvailablePort(ctx context.Context, host string, start int) (int, error) {
+	ln, err := ListenAvailablePort(ctx, host, start)
+	if err != nil {
+		return 0, err
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	if err := ln.Close(); err != nil {
+		return 0, fmt.Errorf("release port %d on %s: %w", port, host, err)
+	}
+	return port, nil
+}
+
+func listenTCP(ctx context.Context, host string, port int) (net.Listener, error) {
+	return (&net.ListenConfig{}).Listen(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+}
+
+func listenAvailablePort(ctx context.Context,
 	host string,
 	start int,
 	selectEphemeral func(context.Context, string) (int, error),
 	portFree func(context.Context, []listenProbe, int) bool,
-) (int, error) {
-	if start == 0 {
-		if !isWildcardListenHost(host) {
-			return selectEphemeral(ctx, host)
+	listen func(context.Context, string, int) (net.Listener, error),
+) (net.Listener, error) {
+	if start == 0 && !isWildcardListenHost(host) {
+		ln, err := listen(ctx, host, 0)
+		if err != nil {
+			return nil, fmt.Errorf("select ephemeral port on %s: %w", host, err)
 		}
-		probes := listenProbes(ctx, host)
+		return ln, nil
+	}
+
+	probes := listenProbes(ctx, host)
+	// claim binds a port the probes found free. The bind can still fail when
+	// another listener takes the port after the probe; the search then moves
+	// on as it does for any occupied port.
+	claim := func(port int) net.Listener {
+		if !portFree(ctx, probes, port) {
+			return nil
+		}
+		ln, err := listen(ctx, host, port)
+		if err != nil {
+			return nil
+		}
+		return ln
+	}
+	if start == 0 {
 		for range 100 {
 			port, err := selectEphemeral(ctx, host)
 			if err != nil {
-				return 0, err
+				return nil, err
 			}
-			if portFree(ctx, probes, port) {
-				return port, nil
+			if ln := claim(port); ln != nil {
+				return ln, nil
 			}
 		}
-		return 0, fmt.Errorf(
+		return nil, fmt.Errorf(
 			"no available ephemeral port on %s after 100 attempts", host,
 		)
 	}
 
-	probes := listenProbes(ctx, host)
 	last := min(start+99, 65535)
 	for port := start; port <= last; port++ {
-		if portFree(ctx, probes, port) {
-			return port, nil
+		if ln := claim(port); ln != nil {
+			return ln, nil
 		}
 	}
-	return 0, fmt.Errorf(
+	return nil, fmt.Errorf(
 		"no available port on %s in range %d-%d", host, start, last,
 	)
 }
