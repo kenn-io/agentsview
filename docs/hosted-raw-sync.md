@@ -32,7 +32,7 @@ vectors from uploaded sessions and makes them available for meaning search.
 Device enrollment and revocation remain operator-managed. The operator supplies
 each laptop with a server URL, device ID and credential. There is no public
 enrollment command or HTTP endpoint. The broader delivery work remains tracked
-in [issue #1352](https://github.com/kenn-io/agentsview/issues/1352), including
+in [agentsview#1352](https://github.com/kenn-io/agentsview/issues/1352), including
 accepted-generation retention and garbage collection, and
 disaster rebuilds.
 
