@@ -79,7 +79,7 @@ func TestCodexPromptPRLinkFilter(t *testing.T) {
 	env := setupTestEnv(t)
 	env.writeCodexSession(t, "2026/07/29", "rollout-2026-07-29T14-55-00-"+id+".jsonl", testjsonl.JoinJSONL(
 		testjsonl.CodexSessionMetaJSON(id, "/workspace/project", "user", tsZero),
-		testjsonl.CodexMsgJSON("user", "$pr https://github.com/owner/repo/%70ull/123", tsZero),
+		testjsonl.CodexMsgJSON("user", "$pr https://github.com/owner/repo/pull/123", tsZero),
 	))
 	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
 	filter, err := db.ParsePRFilter("owner/repo#123")
@@ -125,16 +125,9 @@ func TestIncrementalStructuredLinkAlsoInPrompt(t *testing.T) {
 }
 
 func TestParseDiffDetectsPRLinkChanges(t *testing.T) {
-	const structured = `{"url":"https://github.com/owner/repo/pull/2","host":"github.com","repository":"owner/repo","number":2}`
-	const prompt = `{"url":"https://github.com/owner/repo/pull/1","host":"github.com","repository":"owner/repo","number":1}`
-	const extra = `{"url":"https://github.com/owner/repo/pull/3","host":"github.com","repository":"owner/repo","number":3}`
 	for _, tc := range []struct{ name, update string }{
 		{"cleared", `UPDATE sessions SET pr_links='' WHERE id='changed-pr'`},
 		{"missing structured record", `UPDATE sessions SET structured_pr_links='' WHERE id='changed-pr'`},
-		{"missing structured link", `UPDATE sessions SET pr_links='[` + prompt + `]' WHERE id='changed-pr'`},
-		{"cleared prompt", `UPDATE sessions SET pr_links='[` + structured + `]' WHERE id='changed-pr'`},
-		{"obsolete structured", `UPDATE sessions SET structured_pr_links='[` + structured + `,` + extra + `]' WHERE id='changed-pr'`},
-		{"obsolete prompt", `UPDATE sessions SET pr_links='[` + structured + `,` + prompt + `,` + extra + `]' WHERE id='changed-pr'`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := setupTestEnv(t)

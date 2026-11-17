@@ -185,48 +185,38 @@ func TestClaudeIncrementalEscalatesOnlyForPRLinkChanges(t *testing.T) {
 }
 
 func TestPromptPRLinks(t *testing.T) {
-	for _, tt := range []struct{ text, want string }{
-		{"https://GITHUB.com/o/r/%70ull/1?x=1 https://github.com/o/r/pull/1", "https://github.com/o/r/pull/1"},
-		{"https://github.com/owner/repo/pull/123/files", "https://github.com/owner/repo/pull/123"},
-		{"[https://github.com/owner/repo/pull/123]", "https://github.com/owner/repo/pull/123"},
-		{"`https://github.com/owner/repo/pull/123`", "https://github.com/owner/repo/pull/123"},
-		{"**https://github.com/owner/repo/pull/123**", "https://github.com/owner/repo/pull/123"},
-		{"https://github.com/owner/repo/pull/1。", "https://github.com/owner/repo/pull/1"},
-		{"https://gitlab.com/group/team/pull/1/repo/-/merge_requests/9/files", "https://gitlab.com/group/team/pull/1/repo/-/merge_requests/9"},
-		{"https://github.com/group/team/pulls/1/repo/pull/9/files", "https://github.com/group/team/pulls/1/repo/pull/9"},
-		{"[https://github.com/owner/repo/pull/1][label]", "https://github.com/owner/repo/pull/1"},
-		{"http://[::1]/owner/repo/pull/7", "http://[::1]/owner/repo/pull/7"},
-		{"https://GITHUB.com/owner/repo/pull/123#issuecomment", "https://github.com/owner/repo/pull/123"},
-		{"(https://github.example.com/owner/repo/pulls/12).", "https://github.example.com/owner/repo/pulls/12"},
-		{"https://gitlab.com/group/subgroup/repo/-/merge_requests/9?x=y", "https://gitlab.com/group/subgroup/repo/-/merge_requests/9"},
-		{"https://github.com/owner/repo/pull/12-", ""},
-		{"https://github.com/owner/repo/pull/12a", ""},
-		{"https://github.com/owner/repo/issues/12", ""},
+	for _, tt := range []struct {
+		text string
+		want []string
+	}{
+		{"https://GITHUB.com/o/r/%70ull/1?x=1 https://github.com/o/r/pull/1", []string{"https://github.com/o/r/pull/1"}},
+		{"https://github.com/owner/repo/pull/123/files", []string{"https://github.com/owner/repo/pull/123"}},
+		{"[https://github.com/owner/repo/pull/123]", []string{"https://github.com/owner/repo/pull/123"}},
+		{"`https://github.com/owner/repo/pull/123`", []string{"https://github.com/owner/repo/pull/123"}},
+		{"**https://github.com/owner/repo/pull/123**", []string{"https://github.com/owner/repo/pull/123"}},
+		{"https://github.com/owner/repo/pull/1。", []string{"https://github.com/owner/repo/pull/1"}},
+		{"https://gitlab.com/group/team/pull/1/repo/-/merge_requests/9/files", []string{"https://gitlab.com/group/team/pull/1/repo/-/merge_requests/9"}},
+		{"https://github.com/group/team/pulls/1/repo/pull/9/files", []string{"https://github.com/group/team/pulls/1/repo/pull/9"}},
+		{"[https://github.com/owner/repo/pull/1][label]", []string{"https://github.com/owner/repo/pull/1"}},
+		{"http://[::1]/owner/repo/pull/7", []string{"http://[::1]/owner/repo/pull/7"}},
+		{"https://GITHUB.com/owner/repo/pull/123#issuecomment", []string{"https://github.com/owner/repo/pull/123"}},
+		{"(https://github.example.com/owner/repo/pulls/12).", []string{"https://github.example.com/owner/repo/pulls/12"}},
+		{"https://gitlab.com/group/subgroup/repo/-/merge_requests/9?x=y", []string{"https://gitlab.com/group/subgroup/repo/-/merge_requests/9"}},
+		{"https://github.com/owner/repo/pull/12-", nil},
+		{"https://github.com/owner/repo/pull/12a", nil},
+		{"https://github.com/owner/repo/issues/12", nil},
+		{"https://github.com/o/r/pull/1,https://github.com/o/r/pull/2", []string{"https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"}},
+		{"https://github.com/o/r/pull/1;https://github.com/o/r/pull/2", []string{"https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"}},
+		{"https://github.com/o/r/pull/1|https://github.com/o/r/pull/2", []string{"https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"}},
+		{"https://github.com/o/r/pull/1https://github.com/o/r/pull/2", []string{"https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"}},
 	} {
 		t.Run(tt.text, func(t *testing.T) {
 			links := PromptPRLinks(tt.text)
-			if tt.want == "" {
-				assert.Empty(t, links)
-				return
+			var urls []string
+			for _, link := range links {
+				urls = append(urls, link.URL)
 			}
-			require.Len(t, links, 1)
-			assert.Equal(t, tt.want, links[0].URL)
-		})
-	}
-}
-
-func TestPromptPRLinksAdjacentURLs(t *testing.T) {
-	for _, input := range []string{
-		"https://github.com/o/r/pull/1,https://github.com/o/r/pull/2",
-		"https://github.com/o/r/pull/1;https://github.com/o/r/pull/2",
-		"https://github.com/o/r/pull/1|https://github.com/o/r/pull/2",
-		"https://github.com/o/r/pull/1https://github.com/o/r/pull/2",
-	} {
-		t.Run(input, func(t *testing.T) {
-			links := PromptPRLinks(input)
-			require.Len(t, links, 2)
-			assert.Equal(t, "https://github.com/o/r/pull/1", links[0].URL)
-			assert.Equal(t, "https://github.com/o/r/pull/2", links[1].URL)
+			assert.Equal(t, tt.want, urls)
 		})
 	}
 }

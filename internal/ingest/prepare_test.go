@@ -279,9 +279,13 @@ func TestFinalizeTranscriptsDoesNotCountDistinctCallsAsRetries(t *testing.T) {
 
 func TestFinalizePromptPRLinks(t *testing.T) {
 	dialogue := "Review https://github.com/o/r/pull/1"
-	candidate := ingest.Candidate{Session: db.Session{ID: "session"}, Messages: []db.Message{{SessionID: "session", Role: "user", Content: dialogue + " https://github.com/o/r/pull/2", DialogueText: &dialogue}}}
+	link, ok := parser.NewPRLink("https://github.com/o/r/pull/3", "o/r", 3)
+	require.True(t, ok)
+	candidate := ingest.Candidate{Session: db.Session{ID: "session", PRLinks: []db.PRLink{link}}, Messages: []db.Message{{SessionID: "session", Role: "user", Content: dialogue + " https://github.com/o/r/pull/2", DialogueText: &dialogue}}}
 	prepared, err := ingest.Finalize(t.Context(), candidate, ingest.ContentOptions{})
 	require.NoError(t, err)
-	require.Len(t, prepared.Session.PRLinks, 1)
-	assert.Equal(t, "https://github.com/o/r/pull/1", prepared.Session.PRLinks[0].URL)
+	require.NotNil(t, prepared.StructuredPRLinks)
+	assert.Equal(t, []db.PRLink{link}, prepared.StructuredPRLinks.Links)
+	require.Len(t, prepared.Session.PRLinks, 2)
+	assert.Equal(t, "https://github.com/o/r/pull/1", prepared.Session.PRLinks[1].URL)
 }

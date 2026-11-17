@@ -162,18 +162,6 @@ func TestCodexPageUpgradeRetiresMissingPostgresHead(t *testing.T) {
 			upgraded, err := New(t.Context(), pgURL, schema, rebuilt, "machine", true, storage.PusherOptions{})
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, upgraded.Close()) })
-			if tc.promptLink {
-				upgraded.archiveID, err = rebuilt.GetArchiveID(ctx)
-				require.NoError(t, err)
-				marker, err := upgraded.pushMarkerID(ctx)
-				require.NoError(t, err)
-				require.NoError(t, upgraded.reconcilePGMissingSessions(ctx, marker, nil))
-				mirrored, err := store.GetSessionFull(ctx, page)
-				require.NoError(t, err)
-				require.NotNil(t, mirrored)
-				require.Len(t, mirrored.PRLinks, 1)
-				assert.Equal(t, "https://github.com/o/r/pull/7", mirrored.PRLinks[0].URL)
-			}
 			if tc.newerPage {
 				// A page already published by an earlier push has its own newer
 				// curation. Seed it through the normal session/message writers.
@@ -247,6 +235,10 @@ func TestCodexPageUpgradeRetiresMissingPostgresHead(t *testing.T) {
 			pageRow, err := store.GetSessionFull(ctx, page)
 			require.NoError(t, err)
 			require.NotNil(t, pageRow)
+			if tc.promptLink {
+				require.Len(t, pageRow.PRLinks, 1)
+				assert.Equal(t, "https://github.com/o/r/pull/7", pageRow.PRLinks[0].URL)
+			}
 			wantTitle := "remote page title"
 			if tc.newerPage {
 				wantTitle = "newer page title"

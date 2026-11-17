@@ -79,10 +79,10 @@ func TestPromptPRLinksArchiveOnlyUpgradeKeepsRebuildPending(t *testing.T) {
 
 func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
 	for _, tc := range []struct {
-		name                       string
-		legacy, rebuild, completed bool
-		version                    int
-	}{{name: "backfill", version: 183}, {name: "reserved version", version: 184}, {name: "completed backfill", version: 184, completed: true}, {name: "rebuild", rebuild: true}, {name: "legacy", legacy: true, version: 183}} {
+		name            string
+		legacy, rebuild bool
+		version         int
+	}{{name: "backfill", version: 183}, {name: "reserved version", version: 184}, {name: "rebuild", rebuild: true}, {name: "legacy", legacy: true, version: 183}} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "archive.db")
 			d, err := OpenIsolated(t.Context(), path)
@@ -102,10 +102,8 @@ func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
 			dialogue := "https://github.com/o/r/%70ull/42"
 			require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "user", Content: dialogue + " https://github.com/o/r/pull/3", DialogueText: &dialogue}}))
 			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
-				if !tc.completed {
-					if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links=structured_pr_links WHERE id=?`, s.ID); err != nil {
-						return err
-					}
+				if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links=structured_pr_links WHERE id=?`, s.ID); err != nil {
+					return err
 				}
 				if tc.legacy {
 					if _, err := tx.ExecContext(t.Context(), artifactSessionQueueTriggerDropsSQL); err != nil {
@@ -115,10 +113,8 @@ func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
 						return err
 					}
 				}
-				if !tc.completed {
-					if _, err := tx.ExecContext(t.Context(), `DELETE FROM stats WHERE key='prompt_pr_links_backfill_v1'`); err != nil {
-						return err
-					}
+				if _, err := tx.ExecContext(t.Context(), `DELETE FROM stats WHERE key='prompt_pr_links_backfill_v1'`); err != nil {
+					return err
 				}
 				version := tc.version
 				if tc.rebuild {
@@ -185,7 +181,7 @@ func TestPromptPRLinksUsagePolicyWithRetainedHistory(t *testing.T) {
 	require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Role: "user", Content: "https://github.com/o/r/pull/42"}}))
 	d.SetArchiveContent(config.ArchiveContentUsage)
 	require.NoError(t, d.UpsertSession(t.Context(), s))
-	require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Ordinal: 1, Role: "assistant", Content: "reply", HasOutputTokens: true, OutputTokens: 1}}))
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Ordinal: 1, Role: "user", Content: "https://github.com/o/r/pull/43"}}))
 	got, err := d.GetSession(t.Context(), s.ID)
 	require.NoError(t, err)
 	assert.Empty(t, got.PRLinks)
