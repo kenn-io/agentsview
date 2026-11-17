@@ -97,11 +97,53 @@ describe("ChatGPT page fetch", () => {
       expect(fetch).toHaveBeenCalledTimes(wantFetchCalls);
     },
   );
-  it("fetches a new session after the conversation API rejects the cached token", async () => {
+  function readableToken(name: string) {
     const claims = Buffer.from(
       JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 }),
     ).toString("base64url");
-    const token = `eyJhbGciOiJub25lIn0.${claims}.synthetic`;
+    return `eyJhbGciOiJub25lIn0.${claims}.${name}`;
+  }
+
+  it("refetches the session once when the server rejects a cached token", async () => {
+    const first = readableToken("first");
+    const second = readableToken("second");
+    const sessions = [first, second];
+    let accepted = first;
+    const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/api/auth/session")) {
+        return new Response(JSON.stringify({ accessToken: sessions.shift() }));
+      }
+      const auth = (init?.headers as Record<string, string>).Authorization;
+      return new Response('{"items":[]}', { status: auth === `Bearer ${accepted}` ? 200 : 401 });
+    });
+    const chatgptFetch = loadFetch(fetch);
+    const url = "https://chatgpt.com/backend-api/conversations?offset=0&limit=50&order=updated";
+
+    await expect(chatgptFetch(url)).resolves.toMatchObject({ status: 200 });
+    // ChatGPT revokes the cached token before its expiry.
+    accepted = second;
+    await expect(chatgptFetch(url)).resolves.toEqual({
+      status: 200,
+      body: '{"items":[]}',
+      retryAfter: undefined,
+    });
+
+    expect(
+      fetch.mock.calls.map(([input, init]) => [
+        String(input),
+        (init?.headers as Record<string, string> | undefined)?.Authorization,
+      ]),
+    ).toEqual([
+      ["https://chatgpt.com/api/auth/session", undefined],
+      [url, `Bearer ${first}`],
+      [url, `Bearer ${first}`],
+      ["https://chatgpt.com/api/auth/session", undefined],
+      [url, `Bearer ${second}`],
+    ]);
+  });
+
+  it("returns 401 without retrying when the server rejects a fresh token", async () => {
+    const token = readableToken("fresh");
     let conversationStatus = 401;
     const fetch = vi
       .fn<typeof globalThis.fetch>()
@@ -114,13 +156,16 @@ describe("ChatGPT page fetch", () => {
     const url = "https://chatgpt.com/backend-api/conversations?offset=0&limit=50&order=updated";
 
     await expect(chatgptFetch(url)).resolves.toMatchObject({ status: 401 });
-    conversationStatus = 200;
-    await chatgptFetch(url);
+    expect(fetch).toHaveBeenCalledTimes(2);
 
+    // The rejected token is not reused: the next request fetches a new session.
+    conversationStatus = 200;
+    await expect(chatgptFetch(url)).resolves.toMatchObject({ status: 200 });
     const sessionCalls = fetch.mock.calls.filter(([input]) =>
       String(input).endsWith("/api/auth/session"),
     );
     expect(sessionCalls).toHaveLength(2);
+    expect(fetch).toHaveBeenCalledTimes(4);
   });
 
   it("forwards Retry-After from a rate-limited session response", async () => {
