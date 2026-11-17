@@ -106,10 +106,6 @@ func prepareHostedPGServe(ctx context.Context, app config.Config, pg config.PGCo
 		return replicaServeStartup{}, err
 	}
 	database := store.DB()
-	if database == nil {
-		_ = store.Close()
-		return replicaServeStartup{}, errors.New("hosted database is unavailable")
-	}
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	var runtime *pgRawRuntime
 	var embeddingRuntime *pgRawRuntime

@@ -31,7 +31,7 @@ vectors from uploaded sessions and makes them available for meaning search.
 The embedding worker checks stored session progress and does not read the raw
 embedding outbox. Permanently rejected messages stay unindexed until the session
 revision or embedding generation changes; other messages remain searchable.
-Transient endpoint failures trigger a retry with backoff. Rate-limited sessions
+Transient endpoint failures retry on the next worker poll. Rate-limited sessions
 do not block later sessions.
 When a session revision changes, the server reuses unchanged message vectors
 whose document keys and chunk coverage still match.

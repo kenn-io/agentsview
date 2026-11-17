@@ -157,6 +157,7 @@ func TestHostedEmbeddingsRateLimitDoesNotBlockNextSession(t *testing.T) {
 	require.NoError(t, err)
 	cfg.Vector = defaults.Vector
 	cfg.Vector.Enabled = true
+	var rateCalls atomic.Int32
 	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Input []string `json:"input"`
@@ -165,7 +166,7 @@ func TestHostedEmbeddingsRateLimitDoesNotBlockNextSession(t *testing.T) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if strings.Contains(req.Input[0], "rate limited") {
+		if strings.Contains(req.Input[0], "rate limited") && rateCalls.Add(1) == 1 {
 			http.Error(w, "rate limited", http.StatusTooManyRequests)
 			return
 		}
@@ -203,6 +204,17 @@ func TestHostedEmbeddingsRateLimitDoesNotBlockNextSession(t *testing.T) {
 	var count int
 	require.NoError(t, store.DB().QueryRowContext(t.Context(), `SELECT count(*) FROM vector_push_state WHERE session_id='b'`).Scan(&count))
 	assert.Equal(t, 1, count, "later session must be embedded despite the rate limit")
+	runtime.batch(ctx)
+	require.EqualValues(t, 2, rateCalls.Load(), "the failed session retries on the next poll")
+	require.NoError(t, store.DB().QueryRowContext(t.Context(), `SELECT count(*) FROM vector_push_state WHERE session_id='a'`).Scan(&count))
+	assert.Equal(t, 1, count)
+	runtime.batch(ctx)
+	assert.EqualValues(t, 2, rateCalls.Load(), "a completed revision is not embedded again")
+	_, err = store.DB().ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,provenance_kind,raw_content_revision) VALUES('c','p','m','codex','raw','rev'); INSERT INTO messages(session_id,ordinal,role,content) VALUES('c',0,'user','new content'); INSERT INTO raw_corpus_state(singleton,corpus_revision) VALUES(1,1) ON CONFLICT(singleton) DO UPDATE SET corpus_revision=raw_corpus_state.corpus_revision+1`)
+	require.NoError(t, err)
+	runtime.batch(ctx)
+	require.NoError(t, store.DB().QueryRowContext(t.Context(), `SELECT count(*) FROM vector_push_state WHERE session_id='c'`).Scan(&count))
+	assert.Equal(t, 1, count, "a new corpus revision starts another pass")
 }
 
 func TestHostedCaptureSemanticSearch(t *testing.T) {

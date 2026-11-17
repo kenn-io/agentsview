@@ -5,41 +5,12 @@ import (
 	"log"
 	"time"
 
-	"github.com/cenkalti/backoff/v7"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/agentsview/internal/vector"
 	"go.kenn.io/kit/embedconfig"
 )
-
-type hostedEmbeddingSchedule struct {
-	drained int64
-	retryAt time.Time
-	delay   *backoff.ExponentialBackOff
-}
-
-func newHostedEmbeddingSchedule() *hostedEmbeddingSchedule {
-	delay := backoff.NewExponentialBackOff()
-	delay.InitialInterval = 30 * time.Second
-	delay.MaxInterval = 5 * time.Minute
-	delay.Reset()
-	return &hostedEmbeddingSchedule{drained: -1, delay: delay}
-}
-
-func (s *hostedEmbeddingSchedule) ready(revision int64, now time.Time) bool {
-	return revision != s.drained && !now.Before(s.retryAt)
-}
-
-func (s *hostedEmbeddingSchedule) finish(revision int64, now time.Time, err error) {
-	if err != nil {
-		s.retryAt = now.Add(s.delay.NextBackOff())
-		return
-	}
-	s.drained = revision
-	s.retryAt = time.Time{}
-	s.delay.Reset()
-}
 
 func prepareHostedEmbeddings(ctx context.Context, app config.Config, store *postgres.HostedStore, poll time.Duration) (*pgRawRuntime, error) {
 	if !app.Vector.Enabled || app.ArchiveContent.UsageOnly() {
@@ -56,7 +27,7 @@ func prepareHostedEmbeddings(ctx context.Context, app config.Config, store *post
 		return nil, err
 	}
 	batch := (vector.BuildOptions{BatchSize: server.BatchSize, ModelContextTokens: app.Vector.Embeddings.ModelContextTokens, MaxBatchTokens: server.MaxBatchTokens}).EncodeBatchOptions()
-	schedule := newHostedEmbeddingSchedule()
+	drained := int64(-1)
 	return newPGRawRuntime(ctx, poll, func(ctx context.Context) {
 		var revision int64
 		if err := store.DB().QueryRowContext(ctx, `SELECT COALESCE((SELECT corpus_revision FROM raw_corpus_state WHERE singleton=1),0)`).Scan(&revision); err != nil {
@@ -65,17 +36,16 @@ func prepareHostedEmbeddings(ctx context.Context, app config.Config, store *post
 			}
 			return
 		}
-		if !schedule.ready(revision, time.Now()) {
+		if revision == drained {
 			return
 		}
-		started := time.Now()
 		err := postgres.EmbedBatch(ctx, store.DB(), info, encode, app.Vector.Embeddings.MaxInputChars, server.Concurrency, app.Vector.IncludeAutomated, batch...)
-		schedule.finish(revision, time.Now(), err)
 		if err != nil {
 			if ctx.Err() == nil {
-				log.Printf("hosted embeddings: pass failed elapsed=%s: %v", time.Since(started), err)
+				log.Printf("hosted embeddings: pass failed: %v", err)
 			}
 			return
 		}
+		drained = revision
 	}), nil
 }
