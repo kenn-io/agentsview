@@ -7,6 +7,7 @@ import (
 	"math"
 	"strings"
 	"time"
+	"unsafe"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -27,14 +28,22 @@ type pgSearchEntry struct {
 }
 
 func pgSearchEntryBytes(e pgSearchEntry) int64 {
-	size := int64(len(e.token) + 64)
+	size := int64(unsafe.Sizeof(e)) + int64(len(e.token)) + int64(cap(e.keys))*int64(unsafe.Sizeof(pgSearchKey{}))
 	for _, k := range e.keys {
-		size += int64(len(k.id) + len(k.kind) + 128)
+		size += int64(len(k.id) + len(k.kind))
+		if k.endedAt != nil {
+			size += int64(unsafe.Sizeof(*k.endedAt))
+		}
 		if k.sourceKind != nil {
-			size += int64(len(*k.sourceKind))
+			size += int64(unsafe.Sizeof(*k.sourceKind)) + int64(len(*k.sourceKind))
 		}
 		if k.processor != nil {
-			size += int64(len(*k.processor))
+			size += int64(unsafe.Sizeof(*k.processor)) + int64(len(*k.processor))
+		}
+		for _, p := range []*int{k.callIndex, k.eventIndex, k.imageIndex} {
+			if p != nil {
+				size += int64(unsafe.Sizeof(*p))
+			}
 		}
 	}
 	return size
@@ -51,7 +60,7 @@ func (s *Store) searchKept(ctx context.Context, view *Store, f db.SearchFilter) 
 	entries, ok := memo.Get(slot, "search")
 	var entry pgSearchEntry
 	after := int64(math.MaxInt64)
-	if ok && len(entries) != 0 {
+	if ok {
 		entry = entries[0]
 		after = entry.revision
 	}
