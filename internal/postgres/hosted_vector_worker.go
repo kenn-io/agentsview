@@ -280,16 +280,16 @@ func hostedDocumentMetadataChanged(ctx context.Context, tx *sql.Tx, sessionID st
 		return false, err
 	}
 	defer func() { _ = rows.Close() }()
-	i := 0
 	for rows.Next() {
 		var existing storage.VectorPushDoc
 		if err := rows.Scan(&existing.DocKey, &existing.SessionID, &existing.SourceUUID, &existing.Ordinal, &existing.OrdinalEnd, &existing.Subordinate, &existing.OffsetsJSON, &existing.Content, &existing.ContentHash); err != nil {
 			return false, err
 		}
-		if i == len(docs) {
+		if len(docs) == 0 {
 			return true, nil
 		}
-		doc := docs[i]
+		doc := docs[0]
+		docs = docs[1:]
 		offsets := doc.OffsetsJSON
 		if offsets == "" {
 			offsets = "[]"
@@ -297,10 +297,9 @@ func hostedDocumentMetadataChanged(ctx context.Context, tx *sql.Tx, sessionID st
 		if existing.DocKey != doc.DocKey || existing.SessionID != doc.SessionID || existing.SourceUUID != sanitizePG(doc.SourceUUID) || existing.Ordinal != doc.Ordinal || existing.OrdinalEnd != doc.OrdinalEnd || existing.Subordinate != doc.Subordinate || existing.OffsetsJSON != sanitizePG(offsets) || existing.Content != sanitizePG(doc.Content) || existing.ContentHash != doc.ContentHash {
 			return true, nil
 		}
-		i++
 	}
 	if err := rows.Err(); err != nil {
 		return false, err
 	}
-	return i != len(docs), nil
+	return len(docs) != 0, nil
 }
