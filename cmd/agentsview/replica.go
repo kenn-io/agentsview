@@ -357,6 +357,9 @@ func writeReplicaPushSummary(
 	if result.SkippedResumed > 0 {
 		fmt.Fprintf(w, "Skipped %d session(s) already pushed by the unfinished full push\n", result.SkippedResumed)
 	}
+	if result.SessionsAppended > 0 {
+		fmt.Fprintf(w, "Appended new messages to %d pushed session(s) whose earlier messages were unchanged\n", result.SessionsAppended)
+	}
 	if result.SessionRowsOnly > 0 {
 		fmt.Fprintf(w, "Rewrote only the session row of %d pushed session(s) whose messages were unchanged\n", result.SessionRowsOnly)
 	}
