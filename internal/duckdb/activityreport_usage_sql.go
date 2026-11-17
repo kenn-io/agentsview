@@ -18,8 +18,10 @@ import (
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
-var activityUsagePublishObserver func()
-var activityUsagePartNextHook func() error
+var (
+	activityUsagePublishObserver func()
+	activityUsagePartNextHook    func() error
+)
 
 // activityUsageModels selects the (model, provider_id) pairs usage rows can
 // carry. A pair it misses costs one more read of the rows.
@@ -168,7 +170,7 @@ func remapActivityRates(part *readbase.ActivityUsageSums, schedule readbase.Usag
 	for i, old := range part.Schedule.Rates {
 		indexes[i] = -1
 		for j, current := range schedule.Rates {
-			if old.Model == current.Model && old.ProviderID == current.ProviderID && old.FromUS == current.FromUS && old.UsageRate.Equal(current.UsageRate) {
+			if old.Model == current.Model && old.ProviderID == current.ProviderID && old.FromUS == current.FromUS && old.Equal(current.UsageRate) {
 				indexes[i] = int64(j)
 				break
 			}
@@ -230,12 +232,12 @@ func (s *Store) readActivityUsageParts(ctx context.Context, candidateWhere strin
 	}
 	if activityUsagePartNextHook != nil {
 		if err := activityUsagePartNextHook(); err != nil {
-			return nil, fmt.Errorf("%w: %v", errActivityUsageParts, err)
+			return nil, fmt.Errorf("%w: %w", errActivityUsageParts, err)
 		}
 	}
 	rows, err := s.queryContext(ctx, "WITH "+with+" SELECT session_id, min(ts_us) FROM activity_usage_rows WHERE ts_us >= ? GROUP BY session_id", append(slices.Clone(args), endUS)...)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", errActivityUsageParts, err)
+		return nil, fmt.Errorf("%w: %w", errActivityUsageParts, err)
 	}
 	defer rows.Close()
 	minimum := map[string]int64{}
@@ -249,7 +251,7 @@ func (s *Store) readActivityUsageParts(ctx context.Context, candidateWhere strin
 		var id string
 		var next int64
 		if err := rows.Scan(&id, &next); err != nil {
-			return nil, fmt.Errorf("%w: %v", errActivityUsageParts, err)
+			return nil, fmt.Errorf("%w: %w", errActivityUsageParts, err)
 		}
 		key := group(id)
 		if old, ok := minimum[key]; !ok || next < old {
@@ -257,7 +259,7 @@ func (s *Store) readActivityUsageParts(ctx context.Context, candidateWhere strin
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("%w: %v", errActivityUsageParts, err)
+		return nil, fmt.Errorf("%w: %w", errActivityUsageParts, err)
 	}
 	for id, part := range parts {
 		if next, ok := minimum[group(id)]; ok {
