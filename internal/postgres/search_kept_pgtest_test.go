@@ -29,7 +29,7 @@ type searchQueryTracer struct {
 }
 
 func (tr *searchQueryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	if strings.Contains(data.SQL, "SELECT substring(key from length('usage_history_checkpoint:')") {
+	if strings.Contains(data.SQL, "SELECT COALESCE((SELECT value FROM sync_metadata WHERE key = $1)") {
 		tr.checkpoints.Add(1)
 	}
 	if strings.Contains(data.SQL, "processor FROM page ORDER BY") {

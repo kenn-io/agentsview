@@ -428,7 +428,7 @@ func (s *Store) searchQuery(f db.SearchFilter, ids []string, keys bool) (string,
 		argIdx++
 	}
 	limit := ""
-	if !keys && ids == nil {
+	if !keys {
 		limit = fmt.Sprintf("LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
 		args = append(args, f.Limit+1, f.Cursor)
 	}
@@ -549,11 +549,7 @@ func searchRowsTail(orderBy string) string {
 }
 
 func (s *Store) search(ctx context.Context, f db.SearchFilter) (db.SearchPage, error) {
-	return s.searchRows(ctx, f, nil)
-}
-
-func (s *Store) searchRows(ctx context.Context, f db.SearchFilter, ids []string) (db.SearchPage, error) {
-	query, args := s.searchQuery(f, ids, false)
+	query, args := s.searchQuery(f, nil, false)
 	if query == "" {
 		return db.SearchPage{}, nil
 	}
