@@ -428,9 +428,8 @@ func deterministicRejectionBatch(
 	t.Helper()
 
 	database := testExportDB(t)
-	filesystem, err := newProtocolTestStore(t.TempDir())
+	filesystem, err := newProtocolTestStore(t, t.TempDir())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, filesystem.Close()) })
 
 	seedSession(t, database, "rejected", "alpha")
 	_, err = ExportToStore(t.Context(), database, filesystem, ExportOptions{
@@ -667,9 +666,8 @@ func TestExportTransientFailureDoesNotReject(t *testing.T) {
 	database := testExportDB(t)
 	seedSession(t, database, "rejected", "alpha")
 	seedSession(t, database, "valid", "alpha")
-	filesystem, err := newProtocolTestStore(t.TempDir())
+	filesystem, err := newProtocolTestStore(t, t.TempDir())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, filesystem.Close()) })
 	failure := errors.New("injected transient store failure")
 	store := &failingArtifactStore{
 		ArtifactStore: filesystem, failKind: Kind(KindSegments), failErr: failure,
@@ -744,9 +742,8 @@ func TestExportToStorePublishesDependenciesBeforeCheckpointAndSkipsUnchanged(t *
 
 	database := testExportDB(t)
 	seedSession(t, database, "sess-1", "alpha")
-	filesystem, err := newProtocolTestStore(t.TempDir())
+	filesystem, err := newProtocolTestStore(t, t.TempDir())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, filesystem.Close()) })
 	store := &recordingArtifactStore{ArtifactStore: filesystem}
 
 	result, err := ExportToStore(t.Context(), database, store, ExportOptions{
@@ -949,9 +946,8 @@ func TestExportToStoreFullRepairsMissingDependencyWithoutNewCheckpoint(t *testin
 
 	database := testExportDB(t)
 	seedSession(t, database, "sess-1", "alpha")
-	filesystem, err := newProtocolTestStore(t.TempDir())
+	filesystem, err := newProtocolTestStore(t, t.TempDir())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, filesystem.Close()) })
 	first, err := ExportToStore(t.Context(), database, filesystem, ExportOptions{
 		Origin: contractOrigin,
 	})
@@ -985,7 +981,7 @@ func TestExportToStoreRecreatesMissingRecordedCheckpointAfterVaultReset(t *testi
 
 	database := testExportDB(t)
 	seedSession(t, database, "sess-1", "alpha")
-	first, err := newProtocolTestStore(t.TempDir())
+	first, err := newProtocolTestStore(t, t.TempDir())
 	require.NoError(t, err)
 	_, err = ExportToStore(t.Context(), database, first, ExportOptions{
 		Origin: contractOrigin,
@@ -993,9 +989,8 @@ func TestExportToStoreRecreatesMissingRecordedCheckpointAfterVaultReset(t *testi
 	require.NoError(t, err)
 	require.NoError(t, first.Close())
 
-	replacement, err := newProtocolTestStore(t.TempDir())
+	replacement, err := newProtocolTestStore(t, t.TempDir())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, replacement.Close()) })
 	result, err := ExportToStore(t.Context(), database, replacement, ExportOptions{
 		Origin: contractOrigin,
 		Full:   true,
@@ -1019,9 +1014,8 @@ func TestExportToStoreChangedBatchDoesNotScanCheckpointHistory(t *testing.T) {
 
 	database := testExportDB(t)
 	seedSession(t, database, "sess-1", "alpha")
-	filesystem, err := newProtocolTestStore(t.TempDir())
+	filesystem, err := newProtocolTestStore(t, t.TempDir())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, filesystem.Close()) })
 	store := &checkpointReadCountingStore{ArtifactStore: filesystem}
 	_, err = ExportToStore(t.Context(), database, store, ExportOptions{
 		Origin: contractOrigin,
@@ -1050,9 +1044,8 @@ func TestExportToStoreDirtyBatchDefersRecordedFutureCheckpoint(t *testing.T) {
 
 	database := testExportDB(t)
 	seedSession(t, database, "sess-1", "alpha")
-	filesystem, err := newProtocolTestStore(t.TempDir())
+	filesystem, err := newProtocolTestStore(t, t.TempDir())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, filesystem.Close()) })
 	_, err = ExportToStore(t.Context(), database, filesystem, ExportOptions{
 		Origin: contractOrigin,
 	})
@@ -1142,9 +1135,8 @@ func TestExportToStoreRecordedCheckpointStatRecovery(t *testing.T) {
 
 	database := testExportDB(t)
 	seedSession(t, database, "sess-1", "alpha")
-	filesystem, err := newProtocolTestStore(t.TempDir())
+	filesystem, err := newProtocolTestStore(t, t.TempDir())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, filesystem.Close()) })
 	_, err = ExportToStore(t.Context(), database, filesystem, ExportOptions{
 		Origin: contractOrigin,
 	})
@@ -1171,9 +1163,8 @@ func TestExportToStoreBootstrapsMissingDatabaseHeadFromLatestCheckpoint(t *testi
 
 	database := testExportDB(t)
 	seedSession(t, database, "sess-1", "alpha")
-	filesystem, err := newProtocolTestStore(t.TempDir())
+	filesystem, err := newProtocolTestStore(t, t.TempDir())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, filesystem.Close()) })
 	_, err = ExportToStore(t.Context(), database, filesystem, ExportOptions{
 		Origin: contractOrigin,
 	})
@@ -1207,9 +1198,8 @@ func TestExportCheckpointBootstrapPropagatesOperationalOpenErrors(t *testing.T) 
 
 			database := testExportDB(t)
 			seedSession(t, database, "sess-1", "alpha")
-			filesystem, err := newProtocolTestStore(t.TempDir())
+			filesystem, err := newProtocolTestStore(t, t.TempDir())
 			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, filesystem.Close()) })
 			_, err = ExportToStore(t.Context(), database, filesystem, ExportOptions{
 				Origin: contractOrigin,
 			})
@@ -1226,9 +1216,8 @@ func TestExportCheckpointBootstrapPropagatesOperationalOpenErrors(t *testing.T) 
 func TestLatestValidCheckpointFallsBackPastSemanticCandidateAndDefersFuture(t *testing.T) {
 	t.Parallel()
 
-	filesystem, err := newProtocolTestStore(t.TempDir())
+	filesystem, err := newProtocolTestStore(t, t.TempDir())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, filesystem.Close()) })
 	for _, candidate := range []struct {
 		name string
 		body string
@@ -1323,9 +1312,8 @@ func TestExportToStorePropagatesCheckpointCloseErrorWithoutAcknowledging(t *test
 
 	database := testExportDB(t)
 	seedSession(t, database, "sess-1", "alpha")
-	filesystem, err := newProtocolTestStore(t.TempDir())
+	filesystem, err := newProtocolTestStore(t, t.TempDir())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, filesystem.Close()) })
 	_, err = ExportToStore(t.Context(), database, filesystem, ExportOptions{
 		Origin: contractOrigin,
 	})
@@ -1349,9 +1337,8 @@ func TestExportToStoreCancellationLeavesQueuePending(t *testing.T) {
 
 	database := testExportDB(t)
 	seedSession(t, database, "sess-1", "alpha")
-	filesystem, err := newProtocolTestStore(t.TempDir())
+	filesystem, err := newProtocolTestStore(t, t.TempDir())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, filesystem.Close()) })
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
@@ -1393,9 +1380,8 @@ func TestExportToStoreFailureKeepsClaimAndCheckpointLast(t *testing.T) {
 
 			database := testExportDB(t)
 			seedSession(t, database, "sess-1", "alpha")
-			filesystem, err := newProtocolTestStore(t.TempDir())
+			filesystem, err := newProtocolTestStore(t, t.TempDir())
 			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, filesystem.Close()) })
 			store := &failingArtifactStore{
 				ArtifactStore: filesystem, failKind: tt.failKind, failErr: failure,
 			}
@@ -1432,9 +1418,8 @@ func TestExportToStoreStaleGenerationDoesNotPublishOrAcknowledge(t *testing.T) {
 	database := testExportDB(t)
 	seedSession(t, database, "sess-1", "alpha")
 	stale := &staleClaimExportDB{DB: database}
-	filesystem, err := newProtocolTestStore(t.TempDir())
+	filesystem, err := newProtocolTestStore(t, t.TempDir())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, filesystem.Close()) })
 
 	_, err = ExportToStore(t.Context(), stale, filesystem, ExportOptions{
 		Origin: contractOrigin,
@@ -1457,9 +1442,8 @@ func TestExportToStoreStaleGenerationAfterCheckpointDoesNotAdvanceHead(t *testin
 
 	database := testExportDB(t)
 	seedSession(t, database, "sess-1", "alpha")
-	filesystem, err := newProtocolTestStore(t.TempDir())
+	filesystem, err := newProtocolTestStore(t, t.TempDir())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, filesystem.Close()) })
 	store := &mutateAfterCheckpointStore{ArtifactStore: filesystem, database: database}
 
 	_, err = ExportToStore(t.Context(), database, store, ExportOptions{
@@ -1502,9 +1486,8 @@ func TestExportToStorePublicationRevisionRejectsPhysicallyCreatedStaleCheckpoint
 	second, err := db.Open(t.Context(), path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, second.Close()) })
-	filesystem, err := newProtocolTestStore(t.TempDir())
+	filesystem, err := newProtocolTestStore(t, t.TempDir())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, filesystem.Close()) })
 	ctx := t.Context()
 	seedSession(t, first, "session-a", "project")
 	claimA, err := first.ArtifactExportClaims(ctx, []string{"session-a"})
@@ -1662,9 +1645,8 @@ func TestExportToStoreCardinalityIgnoresUnrelatedArchiveBodies(t *testing.T) {
 			)
 			seedSession(t, database, "dirty", "project")
 			counted := &countingCanonicalExportDB{DB: database}
-			filesystem, err := newProtocolTestStore(t.TempDir())
+			filesystem, err := newProtocolTestStore(t, t.TempDir())
 			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, filesystem.Close()) })
 
 			result, err := ExportToStore(t.Context(), counted, filesystem, ExportOptions{
 				Origin: contractOrigin,
@@ -1687,9 +1669,8 @@ func TestExportToStoreIncrementalBatchIsBoundedAndFullStreamsAllBodies(t *testin
 	for i := range total {
 		seedSession(t, database, fmt.Sprintf("session-%03d", i), "project")
 	}
-	filesystem, err := newProtocolTestStore(t.TempDir())
+	filesystem, err := newProtocolTestStore(t, t.TempDir())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, filesystem.Close()) })
 
 	result, err := ExportToStore(t.Context(), database, filesystem, ExportOptions{
 		Origin: contractOrigin,
@@ -1775,9 +1756,8 @@ func TestExportToStoreExplicitSessionIDsClaimBeyondOldestQueuePage(t *testing.T)
 	database := testExportDB(t)
 	const total = 1025
 	seedBareExportSessions(t, database, total, "session-%04d", "local")
-	filesystem, err := newProtocolTestStore(t.TempDir())
+	filesystem, err := newProtocolTestStore(t, t.TempDir())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, filesystem.Close()) })
 
 	result, err := ExportToStore(t.Context(), database, filesystem, ExportOptions{
 		Origin: contractOrigin, SessionIDs: []string{"session-1024"},
@@ -1803,9 +1783,8 @@ func TestExportToStorePublishesEmptyAndDeletionSets(t *testing.T) {
 		t.Parallel()
 
 		database := testExportDB(t)
-		filesystem, err := newProtocolTestStore(t.TempDir())
+		filesystem, err := newProtocolTestStore(t, t.TempDir())
 		require.NoError(t, err)
-		t.Cleanup(func() { require.NoError(t, filesystem.Close()) })
 
 		result, err := ExportToStore(t.Context(), database, filesystem, ExportOptions{
 			Origin: contractOrigin, Full: true,
@@ -1824,9 +1803,8 @@ func TestExportToStorePublishesEmptyAndDeletionSets(t *testing.T) {
 
 		database := testExportDB(t)
 		seedSession(t, database, "sess-1", "project")
-		filesystem, err := newProtocolTestStore(t.TempDir())
+		filesystem, err := newProtocolTestStore(t, t.TempDir())
 		require.NoError(t, err)
-		t.Cleanup(func() { require.NoError(t, filesystem.Close()) })
 		_, err = ExportToStore(t.Context(), database, filesystem, ExportOptions{
 			Origin: contractOrigin,
 		})
@@ -2059,9 +2037,8 @@ func TestExportFullDrainCapReturnsAccumulatedResultAfterUnsettledQueue(t *testin
 	const drainRounds = 3
 	database := testExportDB(t)
 	seedSession(t, database, "sess-1", "alpha")
-	filesystem, err := newProtocolTestStore(t.TempDir())
+	filesystem, err := newProtocolTestStore(t, t.TempDir())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, filesystem.Close()) })
 	store := &reEnqueueOnBoundaryStore{DB: database}
 
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
@@ -2120,9 +2097,8 @@ func TestExportFullDrainCapAppliesToWritesArrivingDuringDrain(t *testing.T) {
 	const drainRounds = 3
 	database := testExportDB(t)
 	seedSession(t, database, "sess-1", "alpha")
-	filesystem, err := newProtocolTestStore(t.TempDir())
+	filesystem, err := newProtocolTestStore(t, t.TempDir())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, filesystem.Close()) })
 	concurrent := &reEnqueueAfterAcknowledgeStore{DB: database}
 
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)

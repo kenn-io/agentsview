@@ -350,6 +350,7 @@ func archiveSourceCommandFixture(t *testing.T) config.ArchiveSource {
 	require.NoError(t, err)
 	archive, err := rawarchive.Open(t.Context(), database, seed, nil)
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, archive.Close()) })
 	repo := filepath.Join(t.TempDir(), "repository")
 	report, err := archive.Backup(t.Context(), repo, settings, "test")
 	require.NoError(t, err)
