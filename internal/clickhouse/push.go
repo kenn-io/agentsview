@@ -485,9 +485,9 @@ func (s *Sync) pushWithOptions(
 //
 // The push it skips would also refresh machine labels, model prices, usage
 // prices, retained commit links, prepared usage, and the usage rollup, clear
-// a usage-only archive's vectors, and prune rows the archive no longer owns. None of them depends on this
-// archive's sessions changing, so the next push without SkipIfUnchanged,
-// such as a watcher's interval push, does them.
+// a usage-only archive's vectors, and prune rows the archive no longer owns.
+// None of them depends on this archive's sessions changing, so the next push
+// without SkipIfUnchanged, such as a watcher's interval push, does them.
 func (s *Sync) unchangedSinceLastPush(
 	ctx context.Context, opts storage.PushOptions, meta map[string]string,
 	storedCutoff, storedScope, databaseID string, localDeletion int64,

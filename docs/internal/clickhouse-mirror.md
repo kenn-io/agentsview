@@ -358,9 +358,8 @@ The skipped push would also refresh machine labels, model and usage prices, and
 retained commit links, prune rows the archive no longer owns, check for session
 rows in an older format, refresh prepared usage and the usage rollup, and clear
 a usage-only archive's vectors. None of these depends on this archive's
-sessions changing. They run on the next push
-without the option, such as the watch's startup and interval pushes, so they lag
-by at most the watch interval.
+sessions changing. They run on the next push without the option, such as the
+watch's startup and interval pushes, so they lag by at most the watch interval.
 
 **The schema step runs once per process for each mirror.** The daemon builds a
 new pusher for every push request, so the pusher's own memo of the schema step
