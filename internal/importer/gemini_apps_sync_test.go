@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -277,6 +278,10 @@ func TestSyncGeminiRefetchesReplyInProgress(t *testing.T) {
 	assert.Equal(t, 2, fake.details)
 }
 
+// geminiInvalidEntry is a list entry Sync cannot read. It keeps a list page
+// non-empty without naming a chat to fetch.
+var geminiInvalidEntry = []any{"not a chat ID", "Broken", nil, nil, nil, []any{1_790_000_000, 0}}
+
 func TestSyncGeminiStops(t *testing.T) {
 	list := geminiRequest(geminiListRequest, "", "")
 	detail := geminiRequest(geminiDetailRequest, geminiTestChat, "")
@@ -298,25 +303,25 @@ func TestSyncGeminiStops(t *testing.T) {
 		{name: "repeated list cursor", pages: map[string]func(*testing.T) []byte{
 			list: func(t *testing.T) []byte {
 				t.Helper()
-				return geminiRPCBody(t, geminiListRPC, []any{nil, "same", []any{}})
+				return geminiRPCBody(t, geminiListRPC, []any{nil, "same", []any{geminiInvalidEntry}})
 			},
 			geminiRequest(geminiListRequest, "", "same"): func(t *testing.T) []byte {
 				t.Helper()
-				return geminiRPCBody(t, geminiListRPC, []any{nil, "same", []any{}})
+				return geminiRPCBody(t, geminiListRPC, []any{nil, "same", []any{geminiInvalidEntry}})
 			},
 		}, wantText: "the Gemini chat list repeated a page"},
 		{name: "list cursor cycle", pages: map[string]func(*testing.T) []byte{
 			list: func(t *testing.T) []byte {
 				t.Helper()
-				return geminiRPCBody(t, geminiListRPC, []any{nil, "a", []any{}})
+				return geminiRPCBody(t, geminiListRPC, []any{nil, "a", []any{geminiInvalidEntry}})
 			},
 			geminiRequest(geminiListRequest, "", "a"): func(t *testing.T) []byte {
 				t.Helper()
-				return geminiRPCBody(t, geminiListRPC, []any{nil, "b", []any{}})
+				return geminiRPCBody(t, geminiListRPC, []any{nil, "b", []any{geminiInvalidEntry}})
 			},
 			geminiRequest(geminiListRequest, "", "b"): func(t *testing.T) []byte {
 				t.Helper()
-				return geminiRPCBody(t, geminiListRPC, []any{nil, "a", []any{}})
+				return geminiRPCBody(t, geminiListRPC, []any{nil, "a", []any{geminiInvalidEntry}})
 			},
 		}, wantText: "the Gemini chat list repeated a page"},
 		{name: "unrecognized turns", pages: map[string]func(*testing.T) []byte{
@@ -657,6 +662,7 @@ func TestSyncGeminiUsageArchiveShorterChatKeepsTrashedCopy(t *testing.T) {
 // budget still finishes and imports the chat on its last page.
 func TestSyncGeminiLongChatList(t *testing.T) {
 	const pages = 250
+	const lastChat = "c_00000000000000b2"
 	fake := &geminiFake{t: t, listAt: 1_790_000_000, pages: map[string][]byte{}}
 	fake.turns = []any{geminiSyncTurn("1", "Question", "Answer", 1_790_000_000)}
 	for page := range pages - 1 {
@@ -664,12 +670,71 @@ func TestSyncGeminiLongChatList(t *testing.T) {
 		if page > 0 {
 			cursor = "p" + strconv.Itoa(page)
 		}
-		fake.pages[geminiRequest(geminiListRequest, "", cursor)] = geminiRPCBody(t, geminiListRPC, []any{nil, "p" + strconv.Itoa(page+1), []any{}})
+		fake.pages[geminiRequest(geminiListRequest, "", cursor)] = geminiRPCBody(t, geminiListRPC, []any{nil, "p" + strconv.Itoa(page+1), []any{
+			[]any{geminiTestChat, "Trip plan", nil, nil, nil, []any{1_790_000_000, 0}},
+		}})
 	}
 	fake.pages[geminiRequest(geminiListRequest, "", "p"+strconv.Itoa(pages-1))] = geminiRPCBody(t, geminiListRPC, []any{nil, nil, []any{
-		[]any{geminiTestChat, "Trip plan", nil, nil, nil, []any{1_790_000_000, 0}},
+		[]any{lastChat, "Last chat", nil, nil, nil, []any{1_790_000_000, 0}},
 	}})
-	stats, err := syncGeminiApps(t.Context(), testDB(t), fake.fetch, geminiTestOptions, nil)
+	lastTurn := geminiSyncTurn("2", "Last question", "Last answer", 1_790_000_000)
+	lastTurn[0] = []any{lastChat, "r_2"}
+	fake.pages[geminiRequest(geminiDetailRequest, lastChat, "")] = geminiRPCBody(t, geminiDetailRPC, []any{[]any{lastTurn}, nil, nil, []any{}})
+	d := testDB(t)
+	stats, err := syncGeminiApps(t.Context(), d, fake.fetch, geminiTestOptions, nil)
 	require.NoError(t, err)
-	assert.Equal(t, 1, stats.Imported)
+	assert.Equal(t, 2, stats.Imported)
+	assert.Zero(t, stats.Errors)
+	assert.Equal(t, 1, fake.details, "a chat listed on every page is fetched once")
+	messages, err := d.GetAllMessages(t.Context(), "gemini-apps:"+lastChat)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"Last question", "Last answer"}, messageContents(messages))
 }
+
+// TestSyncGeminiListStopsOnEmptyPage checks that a list page with no chats
+// ends paging even when it names a new cursor, so a list that keeps answering
+// with empty pages cannot keep Sync requesting them.
+func TestSyncGeminiListStopsOnEmptyPage(t *testing.T) {
+	var cursors []string
+	fetch := func(_ context.Context, path string) (BrowserResponse, error) {
+		query, err := url.ParseQuery(path[strings.IndexByte(path, '?')+1:])
+		require.NoError(t, err)
+		require.Equal(t, geminiListRPC, query.Get("rpcids"), "no chat should be fetched")
+		cursors = append(cursors, query.Get("cursor"))
+		if len(cursors) > 3 {
+			// Without the empty-page stop the list never ends; end it here
+			// so the test fails instead of hanging.
+			return BrowserResponse{Status: 401}, nil
+		}
+		next := "page" + strconv.Itoa(len(cursors))
+		return BrowserResponse{Status: 200, Body: geminiRPCBody(t, geminiListRPC, []any{nil, next, []any{}})}, nil
+	}
+	stats, err := syncGeminiApps(t.Context(), testDB(t), fetch, geminiTestOptions, nil)
+	require.NoError(t, err)
+	assert.Equal(t, ImportStats{}, stats)
+	assert.Equal(t, []string{""}, cursors)
+}
+
+// TestFetchGeminiConversationStopsOnEmptyPage checks that a turn page with no
+// turns ends the conversation even when it names a new cursor.
+func TestFetchGeminiConversationStopsOnEmptyPage(t *testing.T) {
+	fake := &geminiFake{t: t, pages: map[string][]byte{
+		geminiRequest(geminiDetailRequest, geminiTestChat, ""): geminiRPCBody(t, geminiDetailRPC, []any{
+			[]any{geminiSyncTurn("1", "Question", "Answer", 1_790_000_000)}, "second", nil, []any{},
+		}),
+		geminiRequest(geminiDetailRequest, geminiTestChat, "second"): geminiRPCBody(t, geminiDetailRPC, []any{
+			[]any{}, "third", nil, []any{},
+		}),
+		// Fetching "third" fails the test through geminiFake's unexpected-path check.
+	}}
+	detail, err := fetchGeminiConversation(t.Context(), geminiAppsPlatform(), fake.fetch, geminiChat{id: geminiTestChat})
+	require.NoError(t, err)
+	result, err := parser.ParseGeminiAppsWebConversation(detail)
+	require.NoError(t, err)
+	var contents []string
+	for _, message := range result.Messages {
+		contents = append(contents, message.Content)
+	}
+	assert.Equal(t, []string{"Question", "Answer"}, contents)
+}
+

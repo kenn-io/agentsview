@@ -144,8 +144,8 @@ func syncGeminiApps(ctx context.Context, store BrowserSyncStore, fetch BrowserFe
 	seen := make(map[string]struct{})
 	runner := newBrowserSync(store, platform, &stats, opts, cb)
 	runner.refused = errGeminiRejected
-	// A cursor seen before would loop forever. Paging has no count limit, so
-	// a long list still finishes.
+	// A page with no chats or a cursor seen before would loop forever. Paging
+	// has no count limit, so a long list still finishes.
 	cursor, cursors := "", map[string]struct{}{"": {}}
 	for {
 		raw, err := fetchBrowser(ctx, platform, fetch, geminiRequest(geminiListRequest, "", cursor))
@@ -205,7 +205,7 @@ func syncGeminiApps(ctx context.Context, store BrowserSyncStore, fetch BrowserFe
 				return stats, err
 			}
 		}
-		if next == "" {
+		if next == "" || len(entries) == 0 {
 			break
 		}
 		if _, ok := cursors[next]; ok {
@@ -242,7 +242,9 @@ func fetchGeminiConversation(ctx context.Context, platform BrowserPlatform, fetc
 			return nil, platform.wrap(ErrBrowserResponseTooLarge)
 		}
 		conv.Turns = append(conv.Turns, turns)
-		if next == "" {
+		// A page with no turns ends the conversation even when it names a
+		// cursor; following it could request empty pages without end.
+		if next == "" || emptyJSONArray(turns) {
 			break
 		}
 		if _, ok := cursors[next]; ok {
@@ -251,4 +253,10 @@ func fetchGeminiConversation(ctx context.Context, platform BrowserPlatform, fetc
 		cursor, cursors[next] = next, struct{}{}
 	}
 	return json.Marshal(conv)
+}
+
+// emptyJSONArray reports whether value is an array with no elements.
+func emptyJSONArray(value jsontext.Value) bool {
+	var items []jsontext.Value
+	return json.Unmarshal(value, &items) == nil && len(items) == 0
 }
