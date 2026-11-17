@@ -1,6 +1,7 @@
 package duckdb
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -67,9 +68,6 @@ func (s *Store) sumActivityUsage(
 			return readbase.AssembleActivityUsage(pricing, saved[0].Schedule, saved[0].Groups)
 		}
 	}
-	with := duckActivityUsageWith(candidateWhere, false)
-	withArgs := append([]any{lowerBound, upperBound}, candidateArgs...)
-	withArgs = append(withArgs, int64(readbase.ActivityUsageNullPricingUS))
 	keys, err := s.activityUsageRateKeys(ctx)
 	if err != nil {
 		return nil, err
@@ -128,6 +126,9 @@ func (s *Store) sumActivityUsage(
 			return nil, err
 		}
 	}
+	with := duckActivityUsageWith(candidateWhere, false)
+	withArgs := append([]any{lowerBound, upperBound}, candidateArgs...)
+	withArgs = append(withArgs, int64(readbase.ActivityUsageNullPricingUS))
 	schedule, groups, err := readbase.PriceActivityUsageGroups(pricing, keys, startUS, endUS,
 		func(schedule readbase.UsageRateSchedule) ([]readbase.ActivityUsageGroup, error) {
 			return s.readActivityUsageGroups(ctx, with, withArgs, schedule, q, startUS, endUS)
@@ -227,19 +228,13 @@ func (s *Store) readActivityUsageParts(ctx context.Context, candidateWhere strin
 	}
 	defer rows.Close()
 	minimum := map[string]int64{}
-	group := func(id string) string {
-		if peers[id] != "" {
-			return peers[id]
-		}
-		return id
-	}
 	for rows.Next() {
 		var id string
 		var next int64
 		if err := rows.Scan(&id, &next); err != nil {
 			return nil, fmt.Errorf("%w: %w", errActivityUsageParts, err)
 		}
-		key := group(id)
+		key := cmp.Or(peers[id], id)
 		if old, ok := minimum[key]; !ok || next < old {
 			minimum[key] = next
 		}
@@ -248,7 +243,7 @@ func (s *Store) readActivityUsageParts(ctx context.Context, candidateWhere strin
 		return nil, fmt.Errorf("%w: %w", errActivityUsageParts, err)
 	}
 	for id, part := range parts {
-		if next, ok := minimum[group(id)]; ok {
+		if next, ok := minimum[cmp.Or(peers[id], id)]; ok {
 			part.NextUS = next
 		}
 		indexes := map[int64]int64{}
