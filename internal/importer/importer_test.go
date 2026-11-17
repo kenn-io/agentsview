@@ -1956,3 +1956,44 @@ func TestImportClaudeAIReplace(t *testing.T) {
 		assert.Empty(t, replacedCopies(t, d, ""))
 	})
 }
+
+type failPromptReplacementStore struct{ *db.DB }
+
+func (s failPromptReplacementStore) ReplaceSessionMessages(context.Context, string, []db.Message) error {
+	return errors.New("replacement failed")
+}
+
+func TestImportPromptPRLinksReplacementFailure(t *testing.T) {
+	d := testDB(t)
+	old := strings.ReplaceAll(testConversationsJSON, "Hello", "Review https://github.com/o/r/pull/1")
+	_, err := ImportClaudeAI(t.Context(), d, strings.NewReader(old), nil)
+	require.NoError(t, err)
+	newContent := strings.ReplaceAll(testConversationsJSON, "Hello", "Review https://github.com/o/r/pull/2")
+	stats, err := ImportClaudeAI(t.Context(), failPromptReplacementStore{d}, strings.NewReader(newContent), nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Errors)
+	s, err := d.GetSession(t.Context(), "claude-ai:import-test-001")
+	require.NoError(t, err)
+	require.Len(t, s.PRLinks, 1)
+	assert.Equal(t, "https://github.com/o/r/pull/1", s.PRLinks[0].URL)
+	msgs, err := d.GetAllMessages(t.Context(), s.ID)
+	require.NoError(t, err)
+	assert.Contains(t, msgs[0].Content, "https://github.com/o/r/pull/1")
+}
+
+func TestImportChatGPTPromptPRLinksUnchanged(t *testing.T) {
+	d := testDB(t)
+	dir := t.TempDir()
+	content := strings.ReplaceAll(testChatGPTConv, "Hello", "Review https://github.com/o/r/pull/42")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "conversations-000.json"), []byte(content), 0o644))
+	assets := filepath.Join(t.TempDir(), "assets")
+	_, err := ImportChatGPT(t.Context(), d, dir, assets, nil)
+	require.NoError(t, err)
+	stats, err := ImportChatGPT(t.Context(), d, dir, assets, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Skipped)
+	s, err := d.GetSession(t.Context(), "chatgpt:cg-1")
+	require.NoError(t, err)
+	require.Len(t, s.PRLinks, 1)
+	assert.Equal(t, "https://github.com/o/r/pull/42", s.PRLinks[0].URL)
+}

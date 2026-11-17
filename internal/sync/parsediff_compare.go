@@ -295,10 +295,16 @@ func appendSessionMetadataDiffs(
 	diffs = appendScalarSessionDiff(
 		diffs, FieldGitBranch, agent, stored.GitBranch, prepared.GitBranch,
 	)
-	// Pull request links are never incremental-append history: an appended
-	// record that would change them forces a full parse, so any difference
-	// is real drift.
-	if sv, pv := db.EncodePRLinks(stored.PRLinks), db.EncodePRLinks(prepared.PRLinks); sv != pv {
+	// Stored links also include retained prompt URLs.
+	storedURLs := make(map[string]bool, len(stored.PRLinks))
+	for _, link := range stored.PRLinks {
+		storedURLs[link.URL] = true
+	}
+	missingPRLink := false
+	for _, link := range prepared.PRLinks {
+		missingPRLink = missingPRLink || !storedURLs[link.URL]
+	}
+	if sv, pv := db.EncodePRLinks(stored.PRLinks), db.EncodePRLinks(prepared.PRLinks); missingPRLink {
 		diffs = append(diffs, FieldDiff{
 			Field:  FieldPRLinks,
 			Stored: stringutil.TruncateRunes(renderNullableScalar(sv), maxRenderedValueRunes, "..."),

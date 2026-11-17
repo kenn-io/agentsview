@@ -400,8 +400,8 @@ type Session struct {
 	Cwd                         string `json:"cwd,omitempty"`
 	GitBranch                   string `json:"git_branch,omitempty"`
 	ProjectAssigned             bool   `json:"project_assigned,omitempty"`
-	// PRLinks lists the pull or merge requests the source transcript
-	// associated with the session. Parser-owned: a full reparse replaces it.
+	// PRLinks lists pull or merge requests from structured records and retained
+	// user prompts. A prompt mention does not establish active work.
 	// Always serialized, as [] when empty, so a client merging a fresh
 	// response over a cached one drops cleared values.
 	PRLinks []PRLink `json:"pr_links" required:"false"`
@@ -1745,6 +1745,11 @@ func (db *DB) upsertSession(ctx context.Context,
 	)
 	if err != nil {
 		return result, err
+	}
+	if !result.inserted && !db.usageOnlyStorage() {
+		if err := refreshSessionPromptPRLinksTx(tx, s.ID); err != nil {
+			return result, err
+		}
 	}
 	if db.usageOnlyStorage() {
 		if err := settleUsageOnlySessionTx(tx, s.ID); err != nil {

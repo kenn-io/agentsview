@@ -2,6 +2,7 @@ package parser
 
 import (
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -86,8 +87,8 @@ func (c *prLinkCollector) result() []PRLink {
 	return c.links
 }
 
-// mergePRLinks combines link lists with the collector's deduplication.
-func mergePRLinks(lists ...[]PRLink) []PRLink {
+// MergePRLinks combines link lists with the collector's deduplication.
+func MergePRLinks(lists ...[]PRLink) []PRLink {
 	var c prLinkCollector
 	for _, list := range lists {
 		for _, link := range list {
@@ -95,4 +96,49 @@ func mergePRLinks(lists ...[]PRLink) []PRLink {
 		}
 	}
 	return c.result()
+}
+
+var promptURL = regexp.MustCompile(`https?://[^\s<>"'()]+`)
+
+// PromptPRLinks extracts pull and merge request URLs from text.
+func PromptPRLinks(text string) []PRLink {
+	var links prLinkCollector
+	for _, candidate := range promptURL.FindAllString(text, -1) {
+		candidate = strings.TrimRight(candidate, ".,;:!?")
+		u, err := url.Parse(candidate)
+		if err != nil || u.User != nil {
+			continue
+		}
+		parts := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")
+		for i := 2; i+1 < len(parts); i++ {
+			route := parts[i] == "pull" || parts[i] == "pulls"
+			if parts[i] == "-" && i+2 < len(parts) && parts[i+1] == "merge_requests" {
+				i++
+				route = true
+			}
+			if !route {
+				continue
+			}
+			num := parts[i+1]
+			if num == "" || strings.Trim(num, "0123456789") != "" {
+				continue
+			}
+			n, err := strconv.Atoi(num)
+			if err != nil {
+				continue
+			}
+			end := i
+			if parts[i] == "merge_requests" {
+				end--
+			}
+			repository := strings.Join(parts[:end], "/")
+			u.Path = "/" + strings.Join(parts[:i+2], "/")
+			u.RawPath, u.RawQuery, u.Fragment = "", "", ""
+			if link, ok := NewPRLink(u.String(), repository, n); ok {
+				links.add(link)
+			}
+			break
+		}
+	}
+	return links.result()
 }

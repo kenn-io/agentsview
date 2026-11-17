@@ -257,6 +257,13 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		); err != nil {
 			return nil, fmt.Errorf("projecting orphaned data: %w", err)
 		}
+		if !d.usageOnlyStorage() {
+			for _, id := range ids {
+				if err := refreshSessionPromptPRLinksTx(tx, id); err != nil {
+					return nil, fmt.Errorf("refreshing orphaned prompt PR links: %w", err)
+				}
+			}
+		}
 		if err := clearCopiedSelfParents(ctx, tx, "_orphaned_ids"); err != nil {
 			return nil, err
 		}

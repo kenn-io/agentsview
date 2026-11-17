@@ -80,3 +80,50 @@ func TestParseDiffIgnoresLauncherParentsButDetectsMissingPRLinks(t *testing.T) {
 	assert.Equal(t, sync.ParseDiffTotals{Examined: 2, Identical: 1, Changed: 1},
 		report.Totals)
 }
+
+func TestCodexPromptPRLinkFilter(t *testing.T) {
+	const id = "019f0000-0000-7000-8000-000000000004"
+	env := setupTestEnv(t)
+	env.writeCodexSession(t, "2026/07/29", "rollout-2026-07-29T14-55-00-"+id+".jsonl", testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(id, "/workspace/project", "user", tsZero),
+		testjsonl.CodexMsgJSON("user", "$pr https://github.com/owner/repo/pull/123", tsZero),
+	))
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+	filter, err := db.ParsePRFilter("owner/repo#123")
+	require.NoError(t, err)
+	page, err := env.db.ListSessions(t.Context(), db.SessionFilter{PR: filter})
+	require.NoError(t, err)
+	require.Len(t, page.Sessions, 1)
+	assert.Equal(t, "codex:"+id, page.Sessions[0].ID)
+}
+
+func TestIncrementalSync_PromptPRLinks(t *testing.T) {
+	env := setupTestEnv(t)
+	path := env.writeClaudeSession(t, "proj", "prompt-append.jsonl", testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("Start", tsZero),
+		testjsonl.ClaudeAssistantJSON("Working", tsZeroS1),
+	))
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+	appendClaudeSplitLines(t, path, testjsonl.ClaudeUserJSON("https://github.com/owner/repo/pull/1", "2024-01-01T00:00:02Z"))
+	env.engine.SyncPaths([]string{path})
+	assert.Equal(t, []string{"https://github.com/owner/repo/pull/1"}, storedPRURLs(t, env.db, "prompt-append"))
+	appendClaudeSplitLines(t, path, testjsonl.ClaudeUserJSON("Again https://github.com/owner/repo/pull/1", "2024-01-01T00:00:03Z"))
+	env.engine.SyncPaths([]string{path})
+	sess, err := env.db.GetSessionFull(t.Context(), "prompt-append")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.True(t, sess.LastWriteIncremental)
+	assert.Equal(t, []string{"https://github.com/owner/repo/pull/1"}, storedPRURLs(t, env.db, "prompt-append"))
+}
+
+func TestSyncPromptAndStructuredPRLinks(t *testing.T) {
+	env := setupTestEnv(t)
+	env.writeClaudeSession(t, "proj", "prompt-and-record.jsonl", testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("Review https://github.com/owner/repo/pull/1", tsZero),
+		testjsonl.ClaudeAssistantJSON("Working", tsZeroS1),
+		`{"type":"pr-link","prNumber":1,"prUrl":"https://github.com/owner/repo/pull/1","prRepository":"owner/repo","timestamp":"2024-01-01T00:00:02Z"}`,
+		`{"type":"pr-link","prNumber":2,"prUrl":"https://github.com/owner/repo/pull/2","prRepository":"owner/repo","timestamp":"2024-01-01T00:00:03Z"}`,
+	))
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+	assert.Equal(t, []string{"https://github.com/owner/repo/pull/1", "https://github.com/owner/repo/pull/2"}, storedPRURLs(t, env.db, "prompt-and-record"))
+}

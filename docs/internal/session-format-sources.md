@@ -333,7 +333,8 @@ fixtures retain this field; missing identities remain source-local.
   disagrees with its repository or number. The record does not say whether the
   session opened the pull request. Undocumented upstream; evidence is
   `no-public-source`. See `claudePRLink` in `internal/parser/claude.go` and
-  `internal/parser/pr_links.go`.
+  `internal/parser/pr_links.go`. AgentsView also extracts URLs from retained
+  user prompts across providers; a mention does not establish active work.
 
 - **Continuation parsing (2026-10-01):** Rechecked the native provider with the
   synthetic two-parent fixture in

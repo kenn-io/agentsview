@@ -507,7 +507,7 @@ func (db *DB) replaceSessionContentStaged(
 			return fmt.Errorf("computing staged signals for %s: %w", sessionID, err)
 		}
 	}
-	if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
+	if err := bumpTranscriptRevisionTx(tx, sessionID, db.usageOnlyStorage()); err != nil {
 		return err
 	}
 	if err := refreshImageTextOccurrencesTx(tx, sessionID); err != nil {

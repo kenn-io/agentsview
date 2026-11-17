@@ -6068,3 +6068,15 @@ func TestSettingsProviderChangesApplyThroughIngestionReloader(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []parser.AgentType{parser.AgentGemini}, persisted.DisabledAgents)
 }
+
+func TestUploadSessionPromptPRLink(t *testing.T) {
+	te := setup(t)
+	content := testjsonl.NewSessionBuilder().AddClaudeUser(tsEarly, "Review https://github.com/owner/repo/pull/123").String()
+	w := te.upload(t, "prompt-link.jsonl", content, "project=myproj&machine=remote")
+	assertStatus(t, w, http.StatusOK)
+	sess, err := te.db.GetSessionFull(t.Context(), "prompt-link")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	require.Len(t, sess.PRLinks, 1)
+	assert.Equal(t, "https://github.com/owner/repo/pull/123", sess.PRLinks[0].URL)
+}

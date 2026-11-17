@@ -556,7 +556,8 @@ attach independently launched workers to their manager and roll up their costs.
   Add several labels to require all of them. Create labels through the
   [CLI or API](/docs/session-api/#agentsview-session-label).
 - **Pull request** — enter `owner/repo#123` and press Enter to find sessions
-  linked to that pull request by Claude Code.
+  whose retained prompts mention that pull request or whose transcript has a
+  structured link. A mention does not establish that the session worked on it.
 - **Min Prompts** — filter to sessions with at least 2, 3, 5, or 10 user
   messages
 - **Include single-turn** — toggle to include sessions with one or fewer user

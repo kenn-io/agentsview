@@ -696,7 +696,8 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (182: distinguish empty Evener compaction labels from source text. Re-parse
 // Evener sources in place; source and session identities are unchanged.)
 // (183: prefer structured Antigravity user prompts over skill expansions.)
-const dataVersion = 183
+// (184: retain prompt-derived pull request links.)
+const dataVersion = 184
 
 const archiveOnlyVersionBase = 1 << 20
 
@@ -3464,6 +3465,9 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 		return err
 	}
 	if err := db.backfillCommitLinksLocked(ctx, w); err != nil {
+		return err
+	}
+	if err := db.backfillPromptPRLinksLocked(ctx, w); err != nil {
 		return err
 	}
 	if err := ctx.Err(); err != nil {

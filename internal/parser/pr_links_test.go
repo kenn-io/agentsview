@@ -183,3 +183,25 @@ func TestClaudeIncrementalEscalatesOnlyForPRLinkChanges(t *testing.T) {
 		})
 	}
 }
+
+func TestPromptPRLinks(t *testing.T) {
+	for _, tt := range []struct{ text, want string }{
+		{"https://github.com/owner/repo/pull/123/files", "https://github.com/owner/repo/pull/123"},
+		{"https://GITHUB.com/owner/repo/pull/123#issuecomment", "https://github.com/owner/repo/pull/123"},
+		{"(https://github.example.com/owner/repo/pulls/12).", "https://github.example.com/owner/repo/pulls/12"},
+		{"https://gitlab.com/group/subgroup/repo/-/merge_requests/9?x=y", "https://gitlab.com/group/subgroup/repo/-/merge_requests/9"},
+		{"https://github.com/owner/repo/pull/12a", ""},
+		{"https://github.com/owner/repo/pull/123_typo", ""},
+		{"https://github.com/owner/repo/issues/12", ""},
+	} {
+		t.Run(tt.text, func(t *testing.T) {
+			links := PromptPRLinks(tt.text)
+			if tt.want == "" {
+				assert.Empty(t, links)
+				return
+			}
+			require.Len(t, links, 1)
+			assert.Equal(t, tt.want, links[0].URL)
+		})
+	}
+}

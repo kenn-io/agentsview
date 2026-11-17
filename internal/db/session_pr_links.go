@@ -14,9 +14,8 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-// PRLink is a pull or merge request associated with a session. Parsers
-// populate it from structured source records, so a full reparse replaces
-// the stored list.
+// PRLink is a pull or merge request named in a structured record or retained
+// user prompt.
 type PRLink = parser.PRLink
 
 // EncodePRLinks returns the stored text form of links: a JSON array, or
@@ -180,4 +179,114 @@ func (db *DB) GetSessionPRLinkURLs(
 		seen[link.URL] = struct{}{}
 	}
 	return seen, nil
+}
+
+// promptPRLinkPredicate extends the stored-message prompt rule with the
+// transcript's system and compact-boundary exclusions.
+var promptPRLinkPredicate = commitUserPrompt + ` AND m.is_compact_boundary=0 AND ` + SystemPrefixSQL("m.content", "m.role") + ` AND (instr(m.content, '/pull')>0 OR instr(m.content, '/merge_requests/')>0)`
+
+func refreshSessionPromptPRLinksTx(tx transactionQueries, id string) error {
+	var stored string
+	if err := tx.QueryRow(`SELECT pr_links FROM sessions WHERE id=?`, id).Scan(&stored); err != nil {
+		return err
+	}
+	rows, err := tx.Query(`SELECT m.content FROM messages m WHERE m.session_id=? AND `+promptPRLinkPredicate+` ORDER BY m.ordinal`, id)
+	if err != nil {
+		return err
+	}
+	links := DecodePRLinks(stored)
+	for rows.Next() {
+		var content string
+		if err := rows.Scan(&content); err != nil {
+			rows.Close()
+			return err
+		}
+		if remainder, stripped := stripLeadingSystemReminderBlocks(content); stripped {
+			content = remainder
+		}
+		trimmed := strings.TrimSpace(content)
+		if strings.HasPrefix(trimmed, "<bash-stdout>") || strings.HasPrefix(trimmed, "<bash-stderr>") {
+			continue
+		}
+		links = parser.MergePRLinks(links, parser.PromptPRLinks(content))
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	encoded := EncodePRLinks(links)
+	if encoded == stored {
+		return nil
+	}
+	_, err = tx.Exec(`UPDATE sessions SET pr_links=?, local_modified_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?`, encoded, id)
+	return err
+}
+
+func (db *DB) backfillPromptPRLinksLocked(ctx context.Context, w *writerHandle) error {
+	const key = "prompt_pr_links_backfill_v1"
+	if db.usageOnlyStorage() {
+		return nil
+	}
+	tx, err := w.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	version, _, err := readUserVersion(ctx, tx)
+	if err != nil {
+		return err
+	}
+	// Older populated archives must retain their version until their full rebuild.
+	if version < fullRebuildDataVersion() {
+		var hasSessions bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sessions)`).Scan(&hasSessions); err != nil {
+			return err
+		}
+		if hasSessions {
+			return nil
+		}
+	}
+	var done bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM stats WHERE key=? AND value!=0)`, key).Scan(&done); err != nil {
+		return err
+	}
+	if !done {
+		rows, err := tx.QueryContext(ctx, `SELECT DISTINCT m.session_id FROM messages m WHERE `+promptPRLinkPredicate)
+		if err != nil {
+			return err
+		}
+		var ids []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
+			ids = append(ids, id)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		for _, id := range ids {
+			if err := refreshSessionPromptPRLinksTx(tx, id); err != nil {
+				return fmt.Errorf("backfilling prompt PR links: %w", err)
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO stats(key,value) VALUES (?,1)`, key); err != nil {
+			return err
+		}
+	}
+	if version >= fullRebuildDataVersion() && version < 184 {
+		if err := advanceDataVersion(ctx, tx, 184); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
