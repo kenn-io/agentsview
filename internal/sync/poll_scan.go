@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	gosync "sync"
+	"sync/atomic"
 
 	"go.kenn.io/agentsview/internal/parser"
 )
@@ -69,19 +70,20 @@ type pollScanState struct {
 	// fallbacks holds the last logged reason a root could not be compared, so
 	// a root that never can logs once instead of every pass.
 	fallbacks map[pollScanKey]string
+	// forgotten counts ForgetPollScans calls; applied is the count the
+	// snapshots reflect. Callers bump it without waiting for a running pass.
+	forgotten atomic.Uint64
+	applied   uint64
 }
 
 // ForgetPollScans drops every polling snapshot, so the next pass reconciles
 // each polled root. Call it after archive state changes without a file
 // change, such as restoring a trashed session whose transcript changed while
 // it was in the trash.
+// It does not wait for a running pass; the next pass starts by dropping every
+// snapshot, including any the running pass keeps.
 func (e *Engine) ForgetPollScans() {
-	state := &e.pollScans
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	for key := range state.snapshots {
-		state.forget(key)
-	}
+	e.pollScans.forgotten.Add(1)
 }
 
 // PollProviderRootsGrouped is the scheduled polling pass. For providers that
@@ -107,6 +109,12 @@ func (e *Engine) PollProviderRootsGrouped(
 	// Failed subagent linking is retried by a reconciliation epilogue, which an
 	// unchanged pass would otherwise skip.
 	authoritative = authoritative || e.PendingSubagentLinks()
+	if generation := state.forgotten.Load(); generation != state.applied {
+		for key := range state.snapshots {
+			state.forget(key)
+		}
+		state.applied = generation
+	}
 	if !state.seeded {
 		state.seed = maphash.MakeSeed()
 		state.seeded = true
@@ -178,12 +186,11 @@ func (e *Engine) PollProviderRootsGrouped(
 	var errs []error
 	// Each root keeps its own snapshot, so a failing file in one root does not
 	// make another root sync its changes again.
-	syncCtx := context.WithValue(ctx, pollScanSyncContextKey{}, true)
 	for _, key := range slices.SortedFunc(maps.Keys(changed), comparePollScanKeys) {
 		if err := ctx.Err(); err != nil {
 			return errors.Join(append(errs, err)...)
 		}
-		if err := e.syncPollScanPaths(syncCtx, changed[key]); err != nil {
+		if err := e.syncPollScanPaths(ctx, changed[key]); err != nil {
 			errs = append(errs, fmt.Errorf("%s %s: %w", key.agent, key.root, err))
 			continue
 		}
@@ -239,6 +246,7 @@ func comparePollScanKeys(a, b pollScanKey) int {
 // syncPollScanPaths attempts every page, so one failing source cannot keep
 // later changes out of the archive.
 func (e *Engine) syncPollScanPaths(ctx context.Context, paths []string) error {
+	ctx = context.WithValue(ctx, pollScanSyncContextKey{}, true)
 	var errs []error
 	for page := range slices.Chunk(paths, pollScanPageSize) {
 		if err := ctx.Err(); err != nil {

@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"hash/maphash"
@@ -447,8 +446,7 @@ func TestPollProviderRootsGroupedLeavesDisappearedChangesToReconciliation(t *tes
 
 	// The scan saw this file change, and it disappeared before its page synced.
 	require.NoError(t, os.Remove(path))
-	syncCtx := context.WithValue(t.Context(), pollScanSyncContextKey{}, true)
-	require.ErrorIs(t, f.engine.syncPollScanPaths(syncCtx, []string{path}), errPollScanPathMissing)
+	require.ErrorIs(t, f.engine.syncPollScanPaths(t.Context(), []string{path}), errPollScanPathMissing)
 	assert.Nil(t, f.session(t, "gone").SourceMissingAt, "a polling page never marks a source missing")
 
 	f.poll(t, group)
@@ -497,4 +495,23 @@ func TestForgetPollScansRereadsRestoredSessions(t *testing.T) {
 
 	assert.Equal(t, 2, f.session(t, "trashed").UserMessageCount,
 		"a restored session's change made in the trash is read again")
+}
+
+func TestForgetPollScansDuringAPassDropsItsSnapshots(t *testing.T) {
+	requirePollChangeTimes(t)
+	root := t.TempDir()
+	writeClaudePollSession(t, filepath.Join(root, "project", "busy.jsonl"), "first")
+	f := newPollScanFixture(t, map[parser.AgentType][]string{parser.AgentClaude: {root}})
+	group := ProviderRootsGroup{Agent: parser.AgentClaude, Roots: []string{root}}
+	// A restore lands while the pass reconciles, after the pass took its scan.
+	f.engine.groupedReconcileGroupHook = func(int) {
+		f.reconciled.Add(1)
+		f.engine.ForgetPollScans()
+	}
+
+	f.poll(t, group)
+	f.engine.groupedReconcileGroupHook = func(int) { f.reconciled.Add(1) }
+	f.poll(t, group)
+
+	assert.EqualValues(t, 2, f.reconciled.Load(), "a scan taken before the restore is not kept")
 }
