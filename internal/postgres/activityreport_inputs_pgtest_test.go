@@ -372,7 +372,6 @@ func TestPGActivityReportInputTranscriptAndCounts(t *testing.T) {
 }
 
 func TestPGActivityReportInputIdentity(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	local, syncer, _ := newUsageJournalFixture(t)
 	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
 	pgKeptPush(t, syncer, false)
