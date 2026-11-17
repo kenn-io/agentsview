@@ -37,7 +37,7 @@ describe("syncClaudeAI browser relay", () => {
     );
   });
 
-  it.each(["claude_ai_auth_required"])("preserves recovery code %s", async (code) => {
+  it.each(["browser_sync_auth_required"])("preserves recovery code %s", async (code) => {
     const host = { close: vi.fn().mockResolvedValue(undefined) } as unknown as BrowserHost;
     vi.stubGlobal(
       "fetch",
@@ -64,7 +64,7 @@ describe("syncClaudeAI browser relay", () => {
     const data =
       event === "done"
         ? { imported: 1, updated: 0, skipped: 0, errors: 0 }
-        : { error: "Sign in required", code: "claude_ai_auth_required" };
+        : { error: "Sign in required", code: "browser_sync_auth_required" };
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -83,7 +83,7 @@ describe("syncClaudeAI browser relay", () => {
     } else {
       await expect(syncClaudeAI(host)).rejects.toMatchObject({
         message: "Sign in required",
-        code: "claude_ai_auth_required",
+        code: "browser_sync_auth_required",
       });
     }
     expect(host.close).toHaveBeenCalledOnce();

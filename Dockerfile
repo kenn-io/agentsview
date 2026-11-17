@@ -11,7 +11,7 @@ COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 
 COPY frontend/ ./
-COPY internal/importer/claude_ai_requests.txt /src/internal/importer/claude_ai_requests.txt
+COPY internal/importer/browser_requests/ /src/internal/importer/browser_requests/
 RUN npm run build
 
 FROM golang:1.27.4-bookworm AS build

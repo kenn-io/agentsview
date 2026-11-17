@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ImportService, type ClaudeAIChromeOutputBody, type ImporterImportStats as ImportStats } from "../../api/generated/index.js";
+  import { ImportService, type ChromeStatusOutputBody, type ImporterImportStats as ImportStats } from "../../api/generated/index.js";
   import { Button, Card, Chip, CodeBlock, Modal, Notice, Spinner } from "@kenn-io/kit-ui";
   import { LatestRead } from "../../utils/latest-read.js";
   import { m } from "../../i18n/index.js";
@@ -49,7 +49,7 @@
   const host = getBrowserHost();
   let chromeRefused = $state(false);
   const canSync = $derived(open && provider === "claude-ai" && !isRemoteConnection() && !syncState.readOnly && !chromeRefused);
-  let chromeStatus = $state<ClaudeAIChromeOutputBody | null>(null);
+  let chromeStatus = $state<ChromeStatusOutputBody | null>(null);
   let signInError = $state<string | null>(null);
   const chromeRead = new LatestRead();
   // A file import blocks the dialog; a running Sync does not.
@@ -58,10 +58,10 @@
   const shownProgress = $derived(claudeAISync.running ? claudeAISync.progress : progressStats);
   const chromeState = $derived(
     claudeAISync.running ? "connected" :
-    claudeAISync.flag === "claude_ai_chrome_host_update_required" ? "extension-update" :
+    claudeAISync.flag === "chrome_host_update_required" ? "extension-update" :
     !host && !chromeStatus ? "checking" :
     !host && !chromeStatus?.connected ? "disconnected" :
-    claudeAISync.flag === "claude_ai_auth_required" ? "signed-out" : "connected",
+    claudeAISync.flag === "browser_sync_auth_required" ? "signed-out" : "connected",
   );
   const syncDisabled = $derived(busy || ["checking", "disconnected"].includes(chromeState));
 

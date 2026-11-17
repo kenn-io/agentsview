@@ -1,12 +1,17 @@
 package importer
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 // The stored Claude.ai freshness hashes must not change, or every synced chat
@@ -37,4 +42,54 @@ func TestClaudeAIFreshnessGolden(t *testing.T) {
 			assert.Equal(t, tc.want, claudeAIFreshness(d, tc.updated, tc.leaf, tc.session))
 		})
 	}
+}
+
+// Sample values the path fixtures use. The extension tests check that its
+// allowlist accepts every fixture line, so Go and the extension agree on
+// each path Sync builds.
+const (
+	browserPathOrganization = "11111111-1111-4111-8111-111111111111"
+	browserPathConversation = "22222222-2222-4222-8222-222222222222"
+)
+
+var browserPathBuilders = map[parser.AgentType]func() []string{
+	parser.AgentClaudeAI: func() []string {
+		return []string{
+			claudeAIRequest(claudeAIOrganizationsRequest, "", "", 0),
+			claudeAIRequest(claudeAIConversationsRequest, browserPathOrganization, "", 0),
+			claudeAIRequest(claudeAIConversationsRequest, browserPathOrganization, "", 50),
+			claudeAIRequest(claudeAIConversationRequest, browserPathOrganization, browserPathConversation, 0),
+		}
+	},
+}
+
+func TestBrowserPathFixtures(t *testing.T) {
+	for _, platform := range BrowserPlatforms() {
+		t.Run(string(platform.Agent), func(t *testing.T) {
+			build := browserPathBuilders[platform.Agent]
+			require.NotNil(t, build, "every platform needs a path fixture")
+			fixture, err := os.ReadFile(filepath.Join("testdata", "browser_paths", string(platform.Agent)+".txt"))
+			require.NoError(t, err)
+			assert.Equal(t, strings.Split(strings.TrimSpace(string(fixture)), "\n"), build())
+		})
+	}
+}
+
+func TestBrowserRequestFilesMatchPlatforms(t *testing.T) {
+	entries, err := browserRequestFiles.ReadDir("browser_requests")
+	require.NoError(t, err)
+	var files []string
+	for _, entry := range entries {
+		files = append(files, strings.TrimSuffix(entry.Name(), ".txt"))
+	}
+	var names []string
+	for _, platform := range BrowserPlatforms() {
+		names = append(names, string(platform.Agent))
+		found, ok := LookupBrowserPlatform(string(platform.Agent))
+		require.True(t, ok)
+		assert.Equal(t, platform.Label, found.Label)
+	}
+	assert.ElementsMatch(t, names, files)
+	_, ok := LookupBrowserPlatform("claude")
+	assert.False(t, ok, "only browser platforms resolve")
 }

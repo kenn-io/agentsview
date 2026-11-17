@@ -19,15 +19,16 @@ import (
 	"go.kenn.io/agentsview/internal/chromehost"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/importer"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 func (s *Server) registerImportRoutes() {
 	group := huma.NewGroup(s.api, "/api/v1/import")
 	configureRouteGroup(group, "Import")
 	group.UseSimpleModifier(func(op *huma.Operation) {
-		if op.Method == http.MethodPost && op.Path == "/api/v1/import/claude-ai/sync" {
+		if op.Method == http.MethodPost && op.Path == "/api/v1/import/{platform}/sync" {
 			if response := op.Responses["409"]; response != nil {
-				response.Description = "Before streaming, code claude_ai_chrome_host_required reports a disconnected Chrome host; claude_ai_sync_running reports that Chrome Sync is already running; claude_ai_config_invalid reports an invalid [agents.claude-ai] table in config.toml."
+				response.Description = "Before streaming, code chrome_host_required reports a disconnected Chrome host; chrome_sync_running reports that a Chrome Sync is already running; claude_ai_config_invalid reports an invalid [agents.claude-ai] table in config.toml when syncing claude-ai."
 			}
 		}
 	})
@@ -41,11 +42,11 @@ func (s *Server) registerImportRoutes() {
 		}
 		next(ctx)
 	}
-	registerRoute(group, http.MethodGet, "/claude-ai/chrome", "Get Claude.ai Chrome status", s.humaClaudeAIChrome,
+	registerRoute(group, http.MethodGet, "/claude-ai/chrome", "Get Chrome Sync status", s.humaChromeStatus,
 		func(op *huma.Operation) { op.Middlewares = append(op.Middlewares, localChrome) })
-	s.stream(group, http.MethodPost, "/claude-ai/sync", "Sync Claude.ai conversations",
-		func(ctx context.Context, in *claudeAISyncInput) (*huma.StreamResponse, error) {
-			return s.humaSyncClaudeAI(ctx, in, &results)
+	s.stream(group, http.MethodPost, "/{platform}/sync", "Sync browser conversations",
+		func(ctx context.Context, in *browserSyncInput) (*huma.StreamResponse, error) {
+			return s.humaSyncBrowser(ctx, in, &results)
 		}, func(op *huma.Operation) {
 			op.Middlewares = append(op.Middlewares, func(ctx huma.Context, next func(huma.Context)) {
 				// Huma binds the first value and treats a valueless key as
@@ -56,10 +57,10 @@ func (s *Server) registerImportRoutes() {
 				}
 				next(ctx)
 			})
-			op.Responses["200"].Content["text/event-stream"].Schema.Description = "Server-sent events: fetch requests a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: claude_ai_auth_required, claude_ai_chrome_host_update_required."
+			op.Responses["200"].Content["text/event-stream"].Schema.Description = "Server-sent events: fetch asks a relay client (claude-ai without browser=chrome) for a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: browser_sync_auth_required, chrome_host_update_required."
 		})
 	registerRoute(group, http.MethodPost, "/claude-ai/sync/results/{id}", "Answer Claude.ai browser fetch",
-		func(ctx context.Context, in *claudeAISyncResultInput) (*struct{}, error) {
+		func(ctx context.Context, in *browserSyncResultInput) (*struct{}, error) {
 			value, ok := results.LoadAndDelete(in.ID)
 			if !ok {
 				return nil, apiError(http.StatusNotFound, "fetch request expired or already answered")
@@ -68,7 +69,7 @@ func (s *Server) registerImportRoutes() {
 			if in.Body.Error != "" {
 				fetchErr = errors.New(in.Body.Error)
 			}
-			value.(chan claudeAISyncResult) <- claudeAISyncResult{status: in.Body.Status, body: []byte(in.Body.Body), retryAfter: in.Body.RetryAfter, err: fetchErr}
+			value.(chan browserSyncResult) <- browserSyncResult{status: in.Body.Status, body: []byte(in.Body.Body), retryAfter: in.Body.RetryAfter, err: fetchErr}
 			return &struct{}{}, nil
 		}, maxBodyBytes(2*importer.BrowserResponseLimit+64<<10))
 
@@ -82,29 +83,30 @@ func (s *Server) registerImportRoutes() {
 	)
 }
 
-type claudeAIChromeOutput struct {
+type chromeStatusOutput struct {
 	Body struct {
 		Connected bool `json:"connected"`
 	}
 }
 
-func (s *Server) humaClaudeAIChrome(_ context.Context, _ *struct{}) (*claudeAIChromeOutput, error) {
+func (s *Server) humaChromeStatus(_ context.Context, _ *struct{}) (*chromeStatusOutput, error) {
 	if s.db.ReadOnly() {
 		return nil, apiError(http.StatusNotImplemented, "import not available in read-only mode")
 	}
 	if _, ok := s.db.(*db.DB); !ok {
 		return nil, apiError(http.StatusNotImplemented, "sync requires a local archive")
 	}
-	out := &claudeAIChromeOutput{}
+	out := &chromeStatusOutput{}
 	out.Body.Connected = s.chrome.Connected()
 	return out, nil
 }
 
-type claudeAISyncInput struct {
-	Browser string `query:"browser" enum:"chrome"`
+type browserSyncInput struct {
+	Platform string `path:"platform" doc:"Platform to sync, named by its agent type, such as claude-ai"`
+	Browser  string `query:"browser" enum:"chrome" doc:"Fetch through the Chrome extension. Required except for claude-ai, which a client can relay"`
 }
 
-type claudeAISyncResultInput struct {
+type browserSyncResultInput struct {
 	ID   string `path:"id"`
 	Body struct {
 		Status     int    `json:"status" minimum:"0" maximum:"599"`
@@ -114,14 +116,22 @@ type claudeAISyncResultInput struct {
 	}
 }
 
-type claudeAISyncResult struct {
+type browserSyncResult struct {
 	err        error
 	status     int
 	body       []byte
 	retryAfter string
 }
 
-func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, results *sync.Map) (*huma.StreamResponse, error) {
+func (s *Server) humaSyncBrowser(ctx context.Context, in *browserSyncInput, results *sync.Map) (*huma.StreamResponse, error) {
+	platform, ok := importer.LookupBrowserPlatform(in.Platform)
+	if !ok {
+		return nil, apiError(http.StatusUnprocessableEntity, "unsupported sync platform: "+in.Platform)
+	}
+	chrome := in.Browser == "chrome"
+	if !chrome && !platform.ClientRelay {
+		return nil, apiError(http.StatusBadRequest, platform.Label+" Sync requires browser=chrome")
+	}
 	if s.db.ReadOnly() {
 		return nil, apiError(http.StatusNotImplemented, "import not available in read-only mode")
 	}
@@ -135,17 +145,21 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 	if !ok {
 		return nil, apiError(http.StatusNotImplemented, "sync requires a local archive")
 	}
-	if err := s.cfg.ClaudeAI.Err; err != nil {
-		return nil, apiErrorWithCode(http.StatusConflict, "claude_ai_config_invalid", err.Error())
+	opts := importer.BrowserSyncOptions{Machine: s.cfg.InstallationID}
+	if platform.Agent == parser.AgentClaudeAI {
+		if err := s.cfg.ClaudeAI.Err; err != nil {
+			return nil, apiErrorWithCode(http.StatusConflict, "claude_ai_config_invalid", err.Error())
+		}
+		opts.ClaudeAIOrganizations = s.cfg.ClaudeAI.Organizations
 	}
-	if in.Browser == "chrome" && !s.chrome.Connected() {
-		return nil, apiErrorWithCode(http.StatusConflict, "claude_ai_chrome_host_required", "Run agentsview source chrome setup, restart AgentsView, and keep Chrome open, then Sync again")
+	if chrome && !s.chrome.Connected() {
+		return nil, apiErrorWithCode(http.StatusConflict, "chrome_host_required", "Run agentsview source chrome setup, restart AgentsView, and keep Chrome open, then Sync again")
 	}
-	if in.Browser == "chrome" && !s.chrome.syncMu.TryLock() {
-		return nil, apiErrorWithCode(http.StatusConflict, "claude_ai_sync_running", "Chrome Sync is already running")
+	if chrome && !s.chrome.syncMu.TryLock() {
+		return nil, apiErrorWithCode(http.StatusConflict, "chrome_sync_running", "Chrome Sync is already running")
 	}
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
-		if in.Browser == "chrome" {
+		if chrome {
 			defer s.chrome.syncMu.Unlock()
 		}
 		stream, ok := newHumaSSEStream(hctx)
@@ -156,19 +170,19 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 		defer cancel()
 		fetch := func(ctx context.Context, path string) (importer.BrowserResponse, error) {
 			id := rand.Text()
-			answer := make(chan claudeAISyncResult, 1)
+			answer := make(chan browserSyncResult, 1)
 			results.Store(id, answer)
 			defer results.Delete(id)
 			if !stream.SendJSON("fetch", map[string]string{"id": id, "path": path}) {
 				cancel()
 				return importer.BrowserResponse{}, ctx.Err()
 			}
-			return awaitClaudeAIResponse(ctx, answer)
+			return awaitBrowserResponse(ctx, answer)
 		}
 		var compatibilityErr error
-		if in.Browser == "chrome" {
+		if chrome {
 			fetch = func(ctx context.Context, path string) (importer.BrowserResponse, error) {
-				response, err := s.chrome.fetch(ctx, path)
+				response, err := s.chrome.fetch(ctx, string(platform.Agent), path)
 				if errors.Is(err, chromehost.ErrCompatibility) && compatibilityErr == nil {
 					compatibilityErr = err
 					cancel()
@@ -176,8 +190,6 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 				return response, err
 			}
 		}
-		platform, _ := importer.LookupBrowserPlatform("claude-ai")
-		opts := importer.BrowserSyncOptions{Machine: s.cfg.InstallationID, ClaudeAIOrganizations: s.cfg.ClaudeAI.Organizations}
 		stats, err := platform.Sync(ctx, store, fetch, opts, &importer.ImportCallbacks{
 			SerializeWrite: func(write func() error) error {
 				return s.SerializeArchiveWrite(ctx, write)
@@ -201,11 +213,11 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 		if err != nil {
 			payload := map[string]string{"error": err.Error()}
 			if errors.Is(err, importer.ErrBrowserAuthRequired) {
-				payload["error"] = "Sign in to Claude.ai, then Sync again"
-				payload["code"] = "claude_ai_auth_required"
+				payload["error"] = "Sign in to " + platform.Label + ", then Sync again"
+				payload["code"] = "browser_sync_auth_required"
 			}
 			if errors.Is(err, chromehost.ErrCompatibility) {
-				payload["code"] = "claude_ai_chrome_host_update_required"
+				payload["code"] = "chrome_host_update_required"
 			}
 			stream.SendJSON("error", payload)
 			return

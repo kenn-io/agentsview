@@ -264,7 +264,7 @@ func TestClaudeAISyncRelay(t *testing.T) {
 					require.NoError(t, result.Body.Close())
 				case "error":
 					if tt.signIn {
-						assert.JSONEq(t, `{"error":"Sign in to Claude.ai, then Sync again","code":"claude_ai_auth_required"}`, data)
+						assert.JSONEq(t, `{"error":"Sign in to Claude.ai, then Sync again","code":"browser_sync_auth_required"}`, data)
 					} else if tt.status == 0 {
 						assert.JSONEq(t, `{"error":"TypeError: Failed to fetch"}`, data)
 					} else if tt.status == 403 {
@@ -290,7 +290,7 @@ func TestClaudeAISyncRelay(t *testing.T) {
 			start := time.Now()
 			srv.mux.ServeHTTP(recorder, req)
 			assert.Equal(t, 2*time.Minute, time.Since(start))
-			assert.Contains(t, recorder.Body.String(), "claude browser fetch timed out")
+			assert.Contains(t, recorder.Body.String(), "browser fetch timed out")
 			assert.Contains(t, recorder.Body.String(), "event: error")
 			var request struct {
 				ID string `json:"id"`

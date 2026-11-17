@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "AgentsView Claude.ai Sync",
+  "name": "AgentsView Browser Sync",
   "version": "0.1.0",
   "minimum_chrome_version": "105",
   "host_permissions": ["https://claude.ai/*"],

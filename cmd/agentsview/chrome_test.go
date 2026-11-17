@@ -325,7 +325,7 @@ func TestChromeSyncResults(t *testing.T) {
 		imported              int
 	}{
 		{"done", "event: progress\ndata: {}\n\nevent: done\ndata: {\"imported\":2,\"updated\":1,\"skipped\":3,\"errors\":0}\n\n", "", 200, 2},
-		{"running", `{"code":"claude_ai_sync_running","error":"Chrome Sync is already running"}`, "Chrome Sync is already running", 409, 0},
+		{"running", `{"code":"chrome_sync_running","error":"Chrome Sync is already running"}`, "Chrome Sync is already running", 409, 0},
 		{"invalid body", "unavailable", "HTTP 503: unavailable", 503, 0},
 		{"error", "event: error\ndata: {\"error\":\"Sign in required\"}\n\n", "Sign in required", 200, 0},
 		{"partial failure", "event:progress\ndata:{\"imported\":2,\"updated\":1,\"skipped\":3,\"errors\":1}\n\nevent:error\ndata:{\"error\":\"Sign in required\"}\n\n", "Sign in required", 200, 2},
@@ -346,7 +346,10 @@ func TestChromeSyncResults(t *testing.T) {
 			api, err := apiclient.NewHTTPClient(ts.URL+"/base/", "test-token", ts.Client())
 			require.NoError(t, err)
 			browser := apiclient.Chrome
-			response, err := api.PostAPIV1ImportClaudeAiSyncStreamWithResponse(t.Context(), &apiclient.PostAPIV1ImportClaudeAiSyncRequestOptions{Query: &apiclient.PostAPIV1ImportClaudeAiSyncQuery{Browser: &browser}})
+			response, err := api.PostAPIV1ImportPlatformSyncStreamWithResponse(t.Context(), &apiclient.PostAPIV1ImportPlatformSyncRequestOptions{
+				PathParams: &apiclient.PostAPIV1ImportPlatformSyncPath{Platform: "claude-ai"},
+				Query:      &apiclient.PostAPIV1ImportPlatformSyncQuery{Browser: &browser},
+			})
 			if tt.status == http.StatusOK {
 				require.NoError(t, err)
 			} else {

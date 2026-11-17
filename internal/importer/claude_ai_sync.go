@@ -2,7 +2,6 @@ package importer
 
 import (
 	"context"
-	_ "embed"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -16,8 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-//go:embed claude_ai_requests.txt
-var claudeAIRequests string
+var claudeAIRequests = browserRequests(parser.AgentClaudeAI)
 
 const (
 	claudeAIOrganizationsRequest = iota

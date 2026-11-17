@@ -22,6 +22,7 @@ import (
 	"go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/importer"
 	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/kit/daemon"
 	"go.kenn.io/kit/stacktest"
@@ -310,7 +311,9 @@ func TestScopedConfigDirectDaemonClientsUseDeploymentAuth(t *testing.T) {
 			var err error
 			switch tt.name {
 			case "chrome":
-				err = syncClaudeAIChrome(t.Context())
+				platform, ok := importer.LookupBrowserPlatform("claude-ai")
+				require.True(t, ok)
+				err = syncChrome(t.Context(), platform)
 			case "conversation initialization":
 				cmd := parseCommand(t, []string{"export", "conversations", "changes"})
 				cmd.SetContext(t.Context())

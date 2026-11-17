@@ -2,6 +2,7 @@ package importer
 
 import (
 	"context"
+	"embed"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -22,8 +23,6 @@ var (
 	ErrBrowserAuthRequired = errors.New("sign-in required")
 	// ErrBrowserResponseTooLarge marks a response over BrowserResponseLimit.
 	ErrBrowserResponseTooLarge = errors.New("response exceeds 32 MiB")
-	// ErrBrowserFormat reports a conversation shape this version cannot read.
-	ErrBrowserFormat = errors.New("returned a conversation format this version can't read. Update AgentsView and try again")
 )
 
 // BrowserResponse carries one browser response without credentials.
@@ -60,10 +59,11 @@ type BrowserPlatform struct {
 	// Label names the service in errors and messages, such as "Claude.ai".
 	Label string
 	// ClientRelay lets a client without Chrome answer fetches itself (the
-	// desktop app); other platforms sync only through Chrome.
+	// AgentsView desktop client); other platforms sync only through Chrome.
 	ClientRelay bool
-	// StopOnRateLimit stops the run on HTTP 429 or a Retry-After over a
-	// minute instead of retrying inside the request.
+	// StopOnRateLimit ends the run when HTTP 429 outlasts the request's
+	// retries or Retry-After asks for more than a minute, instead of moving
+	// on to the next conversation.
 	StopOnRateLimit bool
 	AuthRequired    func(status int, body []byte) bool
 	Sync            func(ctx context.Context, store BrowserSyncStore, fetch BrowserFetch, opts BrowserSyncOptions, cb *ImportCallbacks) (ImportStats, error)
@@ -86,6 +86,23 @@ func LookupBrowserPlatform(name string) (BrowserPlatform, bool) {
 
 func (p BrowserPlatform) wrap(err error) error {
 	return fmt.Errorf("%s %w", p.Label, err)
+}
+
+// browserRequestFiles holds each platform's request allowlist. The Chrome
+// extension and the desktop client read the same files, so a path Sync
+// builds is a path they accept.
+//
+//go:embed browser_requests/*.txt
+var browserRequestFiles embed.FS
+
+// browserRequests returns the allowlist for agent. Every registered platform
+// has one; TestBrowserRequestFilesMatchPlatforms checks it.
+func browserRequests(agent parser.AgentType) string {
+	body, err := browserRequestFiles.ReadFile("browser_requests/" + string(agent) + ".txt")
+	if err != nil {
+		panic(err)
+	}
+	return string(body)
 }
 
 func browserRequest(shapes string, shape int, substitutions ...string) string {
@@ -182,9 +199,6 @@ type browserSync struct {
 	cb         *ImportCallbacks
 	machine    string
 	failedLast bool
-	// formatErr keeps the last unreadable conversation format so the run
-	// can report it after importing every readable chat.
-	formatErr error
 }
 
 func newBrowserSync(store BrowserSyncStore, platform BrowserPlatform, stats *ImportStats, opts BrowserSyncOptions, cb *ImportCallbacks) *browserSync {
@@ -262,9 +276,6 @@ func (s *browserSync) conversation(ctx context.Context, id string, chat browserC
 	var detailErr error
 	write := func() error {
 		result, err := chat.parse(detail)
-		if errors.Is(err, ErrBrowserFormat) {
-			s.formatErr = err
-		}
 		if err != nil {
 			s.stats.record(id, importSkipped, err)
 			detailErr = err
@@ -282,6 +293,14 @@ func (s *browserSync) conversation(ctx context.Context, id string, chat browserC
 			return nil
 		}
 		result.Session.Machine = resolvedImportMachine(result.Session.Machine, []string{s.machine})
+		// Read the title baseline inside the serialized write, so a title an
+		// archive import changed during the fetch still counts as an update.
+		before, err := s.store.GetSessionFull(ctx, id)
+		if err != nil {
+			s.stats.record(id, importSkipped, err)
+			detailErr = err
+			return nil
+		}
 		status, err := chat.write(ctx, s.store, result)
 		if errors.Is(err, db.ErrSessionTrashed) {
 			s.stats.record(id, importSkipped, nil)

@@ -1,5 +1,5 @@
-// worker.js injects this file, then calls claudeFetch from a second script.
-globalThis.claudeFetch = async function claudeFetch(url) {
+// worker.js injects this file, then calls pageFetch from a second script.
+globalThis.pageFetch = async function pageFetch(url) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 45000);
   try {
@@ -9,7 +9,7 @@ globalThis.claudeFetch = async function claudeFetch(url) {
       redirect: "error",
       signal: controller.signal,
     });
-    const limit = 32 * 1024 * 1024; // Matches importer.ClaudeAIResponseLimit.
+    const limit = 32 * 1024 * 1024; // Matches importer.BrowserResponseLimit.
     const reader = response.body?.getReader();
     const decoder = new TextDecoder();
     let size = 0;
