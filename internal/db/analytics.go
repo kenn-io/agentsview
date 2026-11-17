@@ -3143,6 +3143,7 @@ func (db *DB) analyticsTools(ctx context.Context, f AnalyticsFilter) (ToolsAnaly
 
 type toolSessionInfo struct {
 	ts, agent, project, fingerprint string
+	toolsGeneration                 *string
 }
 
 func (db *DB) analyticsToolRows(ctx context.Context, f AnalyticsFilter) ([]ToolAnalyticsRow, error) {
@@ -3167,11 +3168,12 @@ func (db *DB) toolSessions(ctx context.Context, f AnalyticsFilter, withFingerpri
 	}
 
 	// Fetch filtered session IDs and their metadata.
-	fingerprint := `''`
+	fingerprint, generation := `''`, `NULL`
 	if withFingerprint {
-		fingerprint = `json_array(COALESCE(usage_generation, ''), COALESCE(tools_generation, ''), COALESCE(quality_signal_version, ''), COALESCE(agent, ''), COALESCE(project, ''), COALESCE(started_at, ''), COALESCE(created_at, ''))`
+		fingerprint = `json_array(COALESCE(usage_generation, ''), COALESCE(quality_signal_version, ''), COALESCE(agent, ''), COALESCE(project, ''), COALESCE(started_at, ''), COALESCE(created_at, ''), tools_generation)`
+		generation = `tools_generation`
 	}
-	sessQ := `SELECT id, ` + dateCol + `, agent, project, ` + fingerprint + ` FROM sessions WHERE ` + where
+	sessQ := `SELECT id, ` + dateCol + `, agent, project, ` + fingerprint + `, ` + generation + ` FROM sessions WHERE ` + where
 
 	sessRows, err := db.getReader().QueryContext(ctx, sessQ, args...)
 	if err != nil {
@@ -3183,11 +3185,12 @@ func (db *DB) toolSessions(ctx context.Context, f AnalyticsFilter, withFingerpri
 
 	for sessRows.Next() {
 		var id, ts, agent, project, fingerprint string
-		if err := sessRows.Scan(&id, &ts, &agent, &project, &fingerprint); err != nil {
+		var generation *string
+		if err := sessRows.Scan(&id, &ts, &agent, &project, &fingerprint, &generation); err != nil {
 			return nil,
 				fmt.Errorf("scanning tool session: %w", err)
 		}
-		sessionMap[id] = toolSessionInfo{ts: ts, agent: agent, project: project, fingerprint: fingerprint}
+		sessionMap[id] = toolSessionInfo{ts: ts, agent: agent, project: project, fingerprint: fingerprint, toolsGeneration: generation}
 	}
 	if err := sessRows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating tool sessions: %w", err)

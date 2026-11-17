@@ -1510,7 +1510,7 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 		return nil, errors.Join(err, d.CloseContext(ctx))
 	}
 	d.mu.Lock()
-	_, err = d.getWriter().ExecContext(ctx, "ALTER TABLE sessions ADD COLUMN trends_generation TEXT; ALTER TABLE sessions ADD COLUMN tools_generation TEXT")
+	_, err = d.getWriter().ExecContext(ctx, "ALTER TABLE sessions ADD COLUMN tools_generation TEXT")
 	if err == nil {
 		_, err = d.getWriter().ExecContext(ctx, usageGenerationSchemaSQL)
 	}
@@ -3093,20 +3093,28 @@ END;
 `
 
 const toolsGenerationSchemaSQL = `
-CREATE TRIGGER IF NOT EXISTS tool_calls_tools_generation_insert AFTER INSERT ON tool_calls BEGIN
-    UPDATE sessions SET tools_generation=lower(hex(randomblob(16))) WHERE id=NEW.session_id;
+DROP TRIGGER IF EXISTS sessions_tools_generation_insert;
+DROP TRIGGER IF EXISTS tool_calls_tools_generation_insert;
+DROP TRIGGER IF EXISTS tool_calls_tools_generation_delete;
+DROP TRIGGER IF EXISTS tool_calls_tools_generation_update;
+CREATE TRIGGER sessions_tools_generation_insert AFTER INSERT ON sessions
+WHEN NEW.tools_generation IS NULL BEGIN
+    UPDATE sessions SET tools_generation=lower(hex(randomblob(16))) WHERE id=NEW.id AND tools_generation IS NULL;
 END;
-CREATE TRIGGER IF NOT EXISTS tool_calls_tools_generation_delete AFTER DELETE ON tool_calls BEGIN
-    UPDATE sessions SET tools_generation=lower(hex(randomblob(16))) WHERE id=OLD.session_id;
+CREATE TRIGGER tool_calls_tools_generation_insert AFTER INSERT ON tool_calls BEGIN
+    UPDATE sessions SET tools_generation=NULL WHERE id=NEW.session_id AND tools_generation IS NOT NULL;
 END;
-CREATE TRIGGER IF NOT EXISTS tool_calls_tools_generation_update
+CREATE TRIGGER tool_calls_tools_generation_delete AFTER DELETE ON tool_calls BEGIN
+    UPDATE sessions SET tools_generation=NULL WHERE id=OLD.session_id AND tools_generation IS NOT NULL;
+END;
+CREATE TRIGGER tool_calls_tools_generation_update
 AFTER UPDATE OF message_id, session_id, category, tool_name, observed_outcome, observed_repeat, sequence_ending ON tool_calls
 WHEN NEW.message_id IS NOT OLD.message_id OR NEW.session_id IS NOT OLD.session_id OR
      NEW.category IS NOT OLD.category OR NEW.tool_name IS NOT OLD.tool_name OR
      NEW.observed_outcome IS NOT OLD.observed_outcome OR NEW.observed_repeat IS NOT OLD.observed_repeat OR
      NEW.sequence_ending IS NOT OLD.sequence_ending
 BEGIN
-    UPDATE sessions SET tools_generation=lower(hex(randomblob(16))) WHERE id IN (OLD.session_id, NEW.session_id);
+    UPDATE sessions SET tools_generation=NULL WHERE id IN (OLD.session_id, NEW.session_id) AND tools_generation IS NOT NULL;
 END;
 `
 

@@ -5,14 +5,18 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 
 	"go.kenn.io/agentsview/internal/kept"
 )
 
 // Increment when the stored ToolAnalyticsRow shape or meaning changes.
-const toolsPartsVersion = 1
+const toolsPartsVersion = 2
 
 var toolsPartsReadObserver func([]string)
+var toolsPartsAfterSessionsObserver func()
+var toolsPartsBeforeValidationObserver func()
 
 func (db *DB) toolsFromParts(ctx context.Context, identity string, f AnalyticsFilter) (ToolsAnalyticsResponse, bool, error) {
 	if f.ActiveSince != "" || TerminationUsesTime(f.Termination) || f.Timezone == "Local" {
@@ -33,7 +37,27 @@ func (db *DB) toolsFromParts(ctx context.Context, identity string, f AnalyticsFi
 	}
 	sessions, err := db.toolSessions(ctx, f, true)
 	if err != nil {
-		return ToolsAnalyticsResponse{}, true, err
+		return ToolsAnalyticsResponse{}, false, nil
+	}
+	if toolsPartsAfterSessionsObserver != nil {
+		toolsPartsAfterSessionsObserver()
+	}
+	var dirty []string
+	for id, session := range sessions {
+		if session.toolsGeneration == nil {
+			dirty = append(dirty, id)
+		}
+	}
+	if len(dirty) > 0 {
+		tokens, err := db.stampToolsSessions(ctx, dirty)
+		if err != nil || len(tokens) != len(dirty) {
+			return ToolsAnalyticsResponse{}, false, nil
+		}
+		for _, id := range dirty {
+			session := sessions[id]
+			session.fingerprint = strings.TrimSuffix(session.fingerprint, "null]") + strconv.Quote(tokens[id]) + "]"
+			sessions[id] = session
+		}
 	}
 	versions := make(map[string]string, len(sessions))
 	for id, session := range sessions {
@@ -72,11 +96,14 @@ func (db *DB) toolsFromParts(ctx context.Context, identity string, f AnalyticsFi
 			parts[row.SessionID] = part
 		}
 	}
+	if toolsPartsBeforeValidationObserver != nil {
+		toolsPartsBeforeValidationObserver()
+	}
+	latest, err := readTokens()
+	if err != nil || before != latest {
+		return ToolsAnalyticsResponse{}, false, nil
+	}
 	if len(changed) > 0 {
-		latest, err := readTokens()
-		if err != nil || before != latest {
-			return ToolsAnalyticsResponse{}, false, nil
-		}
 		saved := make([]kept.Part[[]ToolAnalyticsRow], 0, len(parts))
 		for _, part := range parts {
 			saved = append(saved, part)
@@ -99,4 +126,46 @@ func (db *DB) toolsFromParts(ctx context.Context, identity string, f AnalyticsFi
 		rows = append(rows, parts[id].Value...)
 	}
 	return BuildToolsAnalytics(rows), true, nil
+}
+
+// stampToolsSessions assigns a fresh token only to selected dirty sessions.
+func (db *DB) stampToolsSessions(ctx context.Context, ids []string) (map[string]string, error) {
+	encoded, err := json.Marshal(ids)
+	if err != nil {
+		return nil, err
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	tx, err := db.getWriter().BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET tools_generation=lower(hex(randomblob(16))) WHERE id IN (SELECT value FROM json_each(?)) AND tools_generation IS NULL`, string(encoded)); err != nil {
+		return nil, err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id, tools_generation FROM sessions WHERE id IN (SELECT value FROM json_each(?)) AND tools_generation IS NOT NULL`, string(encoded))
+	if err != nil {
+		return nil, err
+	}
+	tokens := make(map[string]string, len(ids))
+	for rows.Next() {
+		var id, token string
+		if err := rows.Scan(&id, &token); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		tokens[id] = token
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return tokens, nil
 }

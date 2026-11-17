@@ -3,7 +3,10 @@
 package db
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -14,26 +17,42 @@ func setToolsPartsReadObserver(observe func([]string)) func() {
 	return func() { toolsPartsReadObserver = nil }
 }
 
-func TestToolsPartsGenerationTracksUpdatesAndDeletes(t *testing.T) {
+func TestToolsPartsDirtyOncePerRefresh(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	d := testDB(t)
 	ctx := t.Context()
 	insertSession(t, d, "a", "project")
 	msg := asstMsgAt("a", 0, "call", "2025-03-10T12:00:00Z")
 	msg.ToolCalls = []ToolCall{{SessionID: "a", ToolName: "Read", Category: "Read"}}
 	insertMessages(t, d, msg)
-	generation := func() string {
-		var v string
-		require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT COALESCE(tools_generation, '') FROM sessions WHERE id='a'`).Scan(&v))
-		return v
-	}
-	before := generation()
-	_, err := d.getWriter().ExecContext(ctx, `UPDATE tool_calls SET observed_outcome='success' WHERE session_id='a'`)
+	f := AnalyticsFilter{Timezone: "UTC"}
+	first, err := d.analyticsTools(ctx, f)
 	require.NoError(t, err)
-	after := generation()
-	require.NotEqual(t, before, after)
+	require.Equal(t, 1, first.TotalCalls)
+	_, err = d.getWriter().ExecContext(ctx, `CREATE TABLE tools_update_count(n INTEGER NOT NULL); INSERT INTO tools_update_count VALUES(0); CREATE TRIGGER count_tools_update AFTER UPDATE OF tools_generation ON sessions BEGIN UPDATE tools_update_count SET n=n+1; END`)
+	require.NoError(t, err)
+	count := func() int {
+		var n int
+		require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT n FROM tools_update_count`).Scan(&n))
+		return n
+	}
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE tool_calls SET result_content='stored' WHERE session_id='a'; UPDATE tool_calls SET result_content=NULL WHERE session_id='a'`)
+	require.NoError(t, err)
+	require.Zero(t, count())
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE tool_calls SET tool_name='Write' WHERE session_id='a'; UPDATE tool_calls SET observed_outcome='empty' WHERE session_id='a'; UPDATE tool_calls SET observed_repeat='identical' WHERE session_id='a'`)
+	require.NoError(t, err)
+	require.Equal(t, 1, count())
+	got, err := d.analyticsTools(ctx, f)
+	require.NoError(t, err)
+	require.Len(t, got.ByTool, 1)
+	require.Equal(t, "Write", got.ByTool[0].ToolName)
+	require.Equal(t, 2, count())
 	_, err = d.getWriter().ExecContext(ctx, `DELETE FROM tool_calls WHERE session_id='a'`)
 	require.NoError(t, err)
-	require.NotEqual(t, after, generation())
+	require.Equal(t, 3, count())
+	got, err = d.analyticsTools(ctx, f)
+	require.NoError(t, err)
+	require.Zero(t, got.TotalCalls)
 }
 
 func TestToolsPartsRefreshOnlyChangedSession(t *testing.T) {
@@ -321,16 +340,35 @@ func TestToolsPartsMigrationInvalidatesOldParts(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, before.ByTool, 1)
 	require.Equal(t, "Read", before.ByTool[0].ToolName)
-	_, err = d.getWriter().ExecContext(ctx, `DROP TRIGGER tool_calls_tools_generation_insert; DROP TRIGGER tool_calls_tools_generation_update; DROP TRIGGER tool_calls_tools_generation_delete; ALTER TABLE sessions DROP COLUMN tools_generation; UPDATE tool_calls SET tool_name='Write' WHERE session_id='a'`)
+	_, err = d.getWriter().ExecContext(ctx, `DROP TRIGGER sessions_tools_generation_insert; DROP TRIGGER tool_calls_tools_generation_insert; DROP TRIGGER tool_calls_tools_generation_update; DROP TRIGGER tool_calls_tools_generation_delete; ALTER TABLE sessions DROP COLUMN tools_generation; UPDATE tool_calls SET tool_name='Write' WHERE session_id='a'`)
 	require.NoError(t, err)
 	require.NoError(t, d.Close())
 	d, err = Open(ctx, path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	_, err = d.getWriter().ExecContext(ctx, `CREATE TABLE tools_update_count(n INTEGER NOT NULL); INSERT INTO tools_update_count VALUES(0); CREATE TRIGGER count_tools_update AFTER UPDATE OF tools_generation ON sessions BEGIN UPDATE tools_update_count SET n=n+1; END`)
+	require.NoError(t, err)
 	got, err := d.analyticsTools(ctx, f)
 	require.NoError(t, err)
 	require.Len(t, got.ByTool, 1)
 	require.Equal(t, "Write", got.ByTool[0].ToolName)
+	var count int
+	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT n FROM tools_update_count`).Scan(&count))
+	require.Zero(t, count)
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE tool_calls SET tool_name='Grep' WHERE session_id='a'`)
+	require.NoError(t, err)
+	require.NoError(t, d.Close())
+	d, err = Open(ctx, path)
+	require.NoError(t, err)
+	var generation *string
+	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT tools_generation FROM sessions WHERE id='a'`).Scan(&generation))
+	require.Nil(t, generation)
+	got, err = d.analyticsTools(ctx, f)
+	require.NoError(t, err)
+	require.Len(t, got.ByTool, 1)
+	require.Equal(t, "Grep", got.ByTool[0].ToolName)
+	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT n FROM tools_update_count`).Scan(&count))
+	require.Equal(t, 2, count)
 }
 
 func TestToolsPartsFallbackFilters(t *testing.T) {
@@ -392,4 +430,182 @@ func TestToolsPartsFreshMessageMetadata(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, BuildToolsAnalytics(rows), got)
 	}
+}
+
+func TestToolsPartsRestoredBackupDiverges(t *testing.T) {
+	for _, dirtyBackup := range []bool{false, true} {
+		t.Run(fmt.Sprintf("dirty=%t", dirtyBackup), func(t *testing.T) {
+			t.Setenv("CACHE_DIRECTORY", t.TempDir())
+			ctx := t.Context()
+			dir := t.TempDir()
+			path := filepath.Join(dir, "archive.db")
+			backup := filepath.Join(dir, "backup.db")
+			d, err := openCopiedTestDB(t, path)
+			require.NoError(t, err)
+			insertSession(t, d, "a", "project")
+			msg := asstMsgAt("a", 0, "call", "2025-03-10T12:00:00Z")
+			msg.ToolCalls = []ToolCall{{SessionID: "a", ToolName: "Read", Category: "Read"}}
+			insertMessages(t, d, msg)
+			f := AnalyticsFilter{Timezone: "UTC"}
+			_, err = d.analyticsTools(ctx, f)
+			require.NoError(t, err)
+			if dirtyBackup {
+				_, err = d.getWriter().ExecContext(ctx, `UPDATE tool_calls SET observed_outcome='empty' WHERE id=1`)
+				require.NoError(t, err)
+			}
+			_, err = d.getWriter().ExecContext(ctx, `VACUUM INTO ?`, backup)
+			require.NoError(t, err)
+			insert := func(name string) {
+				_, err := d.getWriter().ExecContext(ctx, `INSERT INTO tool_calls(message_id,session_id,tool_name,category) SELECT id,session_id,?,? FROM messages WHERE session_id='a'`, name, name)
+				require.NoError(t, err)
+				var id int
+				require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT MAX(id) FROM tool_calls`).Scan(&id))
+				require.Equal(t, 2, id)
+			}
+			insert("Bash")
+			first, err := d.analyticsTools(ctx, f)
+			require.NoError(t, err)
+			require.Equal(t, 2, first.TotalCalls)
+			require.NoError(t, d.Close())
+			bytes, err := os.ReadFile(backup)
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(path, bytes, 0o600))
+			d, err = Open(ctx, path)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, d.Close()) })
+			insert("Grep")
+			got, err := d.analyticsTools(ctx, f)
+			require.NoError(t, err)
+			require.Equal(t, 2, got.TotalCalls)
+			require.Len(t, got.ByTool, 2)
+			names := []string{got.ByTool[0].ToolName, got.ByTool[1].ToolName}
+			require.ElementsMatch(t, []string{"Read", "Grep"}, names)
+			rows, err := d.analyticsToolRows(ctx, f)
+			require.NoError(t, err)
+			require.Equal(t, BuildToolsAnalytics(rows), got)
+		})
+	}
+}
+
+func TestToolsPartsConcurrentFilters(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "a", "project")
+	msg := asstMsgAt("a", 0, "call", "2025-03-10T12:00:00Z")
+	msg.Model = "model-a"
+	msg.ToolCalls = []ToolCall{{SessionID: "a", ToolName: "Read", Category: "Read"}}
+	insertMessages(t, d, msg)
+	filters := []AnalyticsFilter{{Timezone: "UTC", Model: "model-a"}, {Timezone: "UTC", ToolCategory: "Read"}}
+	var wg sync.WaitGroup
+	results := make([]ToolsAnalyticsResponse, len(filters))
+	errs := make([]error, len(filters))
+	for i, f := range filters {
+		wg.Go(func() { results[i], errs[i] = d.analyticsTools(ctx, f) })
+	}
+	wg.Wait()
+	for i, f := range filters {
+		require.NoError(t, errs[i])
+		require.Equal(t, 1, results[i].TotalCalls)
+		rows, err := d.analyticsToolRows(ctx, f)
+		require.NoError(t, err)
+		require.Equal(t, BuildToolsAnalytics(rows), results[i])
+	}
+	var token *string
+	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT tools_generation FROM sessions WHERE id='a'`).Scan(&token))
+	require.NotNil(t, token)
+}
+
+func TestToolsPartsWritesBeforeStampAndDuringReuse(t *testing.T) {
+	t.Cleanup(func() {
+		toolsPartsAfterSessionsObserver = nil
+		toolsPartsBeforeValidationObserver = nil
+	})
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "a", "project")
+	msg := asstMsgAt("a", 0, "call", "2025-03-10T12:00:00Z")
+	msg.ToolCalls = []ToolCall{{SessionID: "a", ToolName: "Read", Category: "Read"}}
+	insertMessages(t, d, msg)
+	f := AnalyticsFilter{Timezone: "UTC"}
+	_, err := d.analyticsTools(ctx, f)
+	require.NoError(t, err)
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE tool_calls SET tool_name='Write' WHERE session_id='a'`)
+	require.NoError(t, err)
+	var writeErr error
+	toolsPartsAfterSessionsObserver = func() {
+		_, writeErr = d.getWriter().ExecContext(ctx, `UPDATE tool_calls SET tool_name='Grep' WHERE session_id='a'`)
+	}
+	got, err := d.analyticsTools(ctx, f)
+	toolsPartsAfterSessionsObserver = nil
+	require.NoError(t, writeErr)
+	require.NoError(t, err)
+	require.Len(t, got.ByTool, 1)
+	require.Equal(t, "Grep", got.ByTool[0].ToolName)
+	got, err = d.analyticsTools(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, "Grep", got.ByTool[0].ToolName)
+	toolsPartsBeforeValidationObserver = func() {
+		_, writeErr = d.getWriter().ExecContext(ctx, `UPDATE tool_calls SET tool_name='Read' WHERE session_id='a'`)
+	}
+	got, err = d.analyticsTools(ctx, f)
+	toolsPartsBeforeValidationObserver = nil
+	require.NoError(t, writeErr)
+	require.NoError(t, err)
+	require.Len(t, got.ByTool, 1)
+	require.Equal(t, "Read", got.ByTool[0].ToolName)
+	got, err = d.analyticsTools(ctx, f)
+	require.NoError(t, err)
+	require.Len(t, got.ByTool, 1)
+	require.Equal(t, "Read", got.ByTool[0].ToolName)
+}
+
+func TestToolsPartsRawCallMoveAndRepeatedUpdates(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	for _, id := range []string{"a", "b"} {
+		insertSession(t, d, id, "project")
+		msg := asstMsgAt(id, 0, "call", "2025-03-10T12:00:00Z")
+		msg.ToolCalls = []ToolCall{{SessionID: id, ToolName: "Read", Category: "Read"}}
+		insertMessages(t, d, msg)
+	}
+	f := AnalyticsFilter{Timezone: "UTC"}
+	_, err := d.analyticsTools(ctx, f)
+	require.NoError(t, err)
+	_, err = d.getWriter().ExecContext(ctx, `CREATE TABLE tools_update_count(n INTEGER NOT NULL); INSERT INTO tools_update_count VALUES(0); CREATE TRIGGER count_tools_update AFTER UPDATE OF tools_generation ON sessions BEGIN UPDATE tools_update_count SET n=n+1; END`)
+	require.NoError(t, err)
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE tool_calls SET session_id='b', message_id=(SELECT id FROM messages WHERE session_id='b') WHERE session_id='a'; UPDATE tool_calls SET observed_outcome='empty' WHERE session_id='b'; UPDATE tool_calls SET observed_outcome=NULL WHERE session_id='b';`)
+	require.NoError(t, err)
+	var count int
+	require.NoError(t, d.getReader().QueryRowContext(ctx, `SELECT n FROM tools_update_count`).Scan(&count))
+	require.Equal(t, 2, count)
+	got, err := d.analyticsTools(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, 2, got.TotalCalls)
+	require.Len(t, got.ByTool, 1)
+	require.Equal(t, 1, got.ByTool[0].SessionCount)
+	rows, err := d.analyticsToolRows(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, BuildToolsAnalytics(rows), got)
+}
+
+func TestToolsPartsMissingGenerationFallsBack(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "a", "project")
+	msg := asstMsgAt("a", 0, "call", "2025-03-10T12:00:00Z")
+	msg.ToolCalls = []ToolCall{{SessionID: "a", ToolName: "Read", Category: "Read"}}
+	insertMessages(t, d, msg)
+	_, err := d.getWriter().ExecContext(ctx, `DROP TRIGGER sessions_tools_generation_insert; DROP TRIGGER tool_calls_tools_generation_insert; DROP TRIGGER tool_calls_tools_generation_update; DROP TRIGGER tool_calls_tools_generation_delete; ALTER TABLE sessions DROP COLUMN tools_generation`)
+	require.NoError(t, err)
+	var reads int
+	reset := setToolsPartsReadObserver(func([]string) { reads++ })
+	defer reset()
+	got, err := d.analyticsTools(ctx, AnalyticsFilter{Timezone: "UTC"})
+	require.NoError(t, err)
+	require.Equal(t, 1, got.TotalCalls)
+	require.Zero(t, reads)
 }
