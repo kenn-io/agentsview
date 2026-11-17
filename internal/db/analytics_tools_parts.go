@@ -12,9 +12,11 @@ import (
 // Increment when the stored ToolAnalyticsRow shape or meaning changes.
 const toolsPartsVersion = 2
 
-var toolsPartsReadObserver func([]string)
-var toolsPartsAfterSessionsObserver func()
-var toolsPartsBeforeValidationObserver func()
+var (
+	toolsPartsReadObserver             func([]string)
+	toolsPartsAfterSessionsObserver    func()
+	toolsPartsBeforeValidationObserver func()
+)
 
 func (db *DB) toolsFromParts(ctx context.Context, identity string, f AnalyticsFilter) (ToolsAnalyticsResponse, bool, error) {
 	// These tokens cover session selection and Tools inputs during the fill.
@@ -27,12 +29,15 @@ func (db *DB) toolsFromParts(ctx context.Context, identity string, f AnalyticsFi
 		return tokens, err
 	}
 	before, err := readTokens()
-	if err != nil || before[0] == "" || before[1] == "" || before[2] == "" {
+	if err != nil {
+		return ToolsAnalyticsResponse{}, false, err
+	}
+	if before[0] == "" || before[1] == "" || before[2] == "" {
 		return ToolsAnalyticsResponse{}, false, nil
 	}
 	sessions, err := db.toolSessions(ctx, f, true)
 	if err != nil {
-		return ToolsAnalyticsResponse{}, false, nil
+		return ToolsAnalyticsResponse{}, false, err
 	}
 	if toolsPartsAfterSessionsObserver != nil {
 		toolsPartsAfterSessionsObserver()
@@ -45,7 +50,10 @@ func (db *DB) toolsFromParts(ctx context.Context, identity string, f AnalyticsFi
 	}
 	if len(dirty) > 0 {
 		fingerprints, err := db.stampToolsSessions(ctx, dirty)
-		if err != nil || len(fingerprints) != len(dirty) {
+		if err != nil {
+			return ToolsAnalyticsResponse{}, false, err
+		}
+		if len(fingerprints) != len(dirty) {
 			return ToolsAnalyticsResponse{}, false, nil
 		}
 		for _, id := range dirty {
@@ -95,7 +103,10 @@ func (db *DB) toolsFromParts(ctx context.Context, identity string, f AnalyticsFi
 		toolsPartsBeforeValidationObserver()
 	}
 	latest, err := readTokens()
-	if err != nil || before != latest {
+	if err != nil {
+		return ToolsAnalyticsResponse{}, false, err
+	}
+	if before != latest {
 		return ToolsAnalyticsResponse{}, false, nil
 	}
 	if len(changed) > 0 {
@@ -147,17 +158,16 @@ func (db *DB) stampToolsSessions(ctx context.Context, ids []string) (map[string]
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = rows.Close() }()
 	fingerprints := make(map[string]string, len(ids))
 	for rows.Next() {
 		var id, fingerprint string
 		if err := rows.Scan(&id, &fingerprint); err != nil {
-			_ = rows.Close()
 			return nil, err
 		}
 		fingerprints[id] = fingerprint
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
 		return nil, err
 	}
 	if err := rows.Close(); err != nil {
