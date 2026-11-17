@@ -518,3 +518,35 @@ func TestUsageJournalUpgradesHistoryToken(t *testing.T) {
 	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='usage_history_token'`).Scan(&rolledBack))
 	require.Equal(t, after, rolledBack)
 }
+
+func TestUsageHistoryCheckpoints(t *testing.T) {
+	_, syncer, _ := newUsageJournalFixture(t)
+	ctx := t.Context()
+	_, err := syncer.pg.ExecContext(ctx, `INSERT INTO sessions(id, machine, project, agent) VALUES ('checkpoint', 'device', 'project', 'claude')`)
+	require.NoError(t, err)
+	var revision int64
+	var token string
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT r.value::bigint, t.value FROM sync_metadata r, sync_metadata t WHERE r.key='usage_change_revision' AND t.key='usage_history_token'`).Scan(&revision, &token))
+	checkpoints, err := usageHistoryCheckpoints(ctx, syncer.pg, revision)
+	require.NoError(t, err)
+	require.Equal(t, token, checkpoints[revision])
+	tx, err := syncer.pg.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `UPDATE sessions SET updated_at=clock_timestamp() WHERE id='checkpoint'`)
+	require.NoError(t, err)
+	require.NoError(t, tx.Rollback())
+	checkpoints, err = usageHistoryCheckpoints(ctx, syncer.pg, revision+1)
+	require.NoError(t, err)
+	require.Empty(t, checkpoints)
+	for range 130 {
+		_, err = syncer.pg.ExecContext(ctx, `UPDATE sessions SET updated_at=clock_timestamp() WHERE id='checkpoint'`)
+		require.NoError(t, err)
+	}
+	var count int
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT count(*) FROM sync_metadata WHERE key LIKE 'usage_history_checkpoint:%'`).Scan(&count))
+	require.Equal(t, 128, count)
+	ensureUsageChangeJournalPG(ctx, syncer.pg)
+	var after int
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT count(*) FROM sync_metadata WHERE key LIKE 'usage_history_checkpoint:%'`).Scan(&after))
+	require.Equal(t, count, after)
+}

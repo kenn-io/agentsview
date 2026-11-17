@@ -40,6 +40,7 @@ type Store struct {
 // storeRuntime is shared by the owning store and its borrowed read views.
 // Views never copy locks or start detached work with their transaction.
 type storeRuntime struct {
+	searchKept         kept.Memo[pgSearchEntry]
 	activityKept       kept.Memo[pgActivityKept]
 	activityInputs     kept.Memo[pgActivityInputs]
 	frustrationMarkers db.FrustrationMarkerMemo

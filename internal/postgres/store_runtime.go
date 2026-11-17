@@ -22,6 +22,7 @@ func (s *Store) runtimeState() *storeRuntime {
 	s.runtimeOnce.Do(func() {
 		if s.runtime == nil {
 			s.runtime = &storeRuntime{
+				searchKept:     kept.Memo[pgSearchEntry]{Size: pgSearchEntryBytes},
 				activityInputs: kept.Memo[pgActivityInputs]{MaxBytes: 256 << 20, Size: pgActivityInputBytes, Shrink: pgActivityInputsWithoutPrices},
 				activityKept: kept.Memo[pgActivityKept]{
 					MaxBytes: 128 << 20,
