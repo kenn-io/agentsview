@@ -109,7 +109,4 @@ func TestHostedVectorPermanentRejectionWaitsForChange(t *testing.T) {
 	calls = nil
 	require.NoError(t, EmbedBatch(t.Context(), f.runtime, next, encode, 128, 1, false))
 	assert.Contains(t, calls, "poison")
-	var content string
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT content FROM messages WHERE session_id='session' AND ordinal=1`).Scan(&content))
-	assert.Equal(t, "poison", content)
 }

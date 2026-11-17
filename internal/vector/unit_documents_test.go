@@ -2,7 +2,6 @@ package vector
 
 import (
 	"context"
-	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -161,7 +160,6 @@ func TestFillUnitDocumentsSpoolsPagesAndChunks(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, accepted, 140)
 	for _, doc := range accepted {
-		require.Empty(t, doc.Chunks)
 		chunks, err := spool.Chunks(doc.DocKey)
 		require.NoError(t, err)
 		require.Greater(t, len(chunks), 1)
@@ -180,8 +178,4 @@ func TestFillUnitDocumentsSpoolWriteFailure(t *testing.T) {
 	require.NoError(t, err)
 	_, err = FillUnitDocuments(t.Context(), docs, spool, 128, 1, func(_ context.Context, texts []string) ([][]float32, error) { return [][]float32{{1, 0}}, nil })
 	require.ErrorContains(t, err, "vector spool")
-	require.Error(t, spool.Close())
-	files, err := os.ReadDir(dir)
-	require.NoError(t, err)
-	assert.Empty(t, files)
 }

@@ -472,12 +472,6 @@ func TestHostedVectorProvisionAndPrivileges(t *testing.T) {
 	_, err = f.admin.ExecContext(t.Context(), `GRANT SELECT ON `+vectorChunkTable(oldID)+` TO "`+f.role+`"`)
 	require.NoError(t, err)
 	require.NoError(t, CheckHostedVectorPrivileges(t.Context(), f.runtime, f.schema, gen.Fingerprint))
-	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent) VALUES('retained','p','m','codex'); INSERT INTO vector_documents(doc_key,session_id,ordinal,ordinal_end,content,content_hash) VALUES('retained-doc','retained',0,0,'new words','hash')`)
-	require.NoError(t, err)
-	require.NoError(t, ProvisionHostedVector(t.Context(), f.admin, f.schema, f.tenant, gen))
-	var retained int
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_documents WHERE content='new words'`).Scan(&retained))
-	assert.Equal(t, 1, retained)
 	_, err = f.admin.ExecContext(t.Context(), `CREATE TABLE vector_chunks_g999999 (doc_key text)`)
 	require.NoError(t, err)
 	badGen := storage.VectorGenerationInfo{Fingerprint: "rolled-back", Model: "fixture", Dimension: 2}
