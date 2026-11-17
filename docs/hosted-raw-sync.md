@@ -36,6 +36,7 @@ do not block later sessions.
 For the same session ID and embedding generation, the server reuses vectors
 when document keys, content hashes, and chunk coverage match. Ordinary raw
 edits create a new session ID, so the server embeds that session again.
+Cross-session vector reuse is deferred to kit.
 
 Device enrollment and revocation remain operator-managed. The operator supplies
 each laptop with a server URL, device ID and credential. There is no public
