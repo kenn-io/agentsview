@@ -19,9 +19,6 @@ var toolsPartsAfterSessionsObserver func()
 var toolsPartsBeforeValidationObserver func()
 
 func (db *DB) toolsFromParts(ctx context.Context, identity string, f AnalyticsFilter) (ToolsAnalyticsResponse, bool, error) {
-	if f.ActiveSince != "" || TerminationUsesTime(f.Termination) || f.Timezone == "Local" {
-		return ToolsAnalyticsResponse{}, false, nil
-	}
 	// These tokens cover session selection and Tools inputs during the fill.
 	readTokens := func() ([3]string, error) {
 		var tokens [3]string

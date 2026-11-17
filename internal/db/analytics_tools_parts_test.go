@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -397,25 +398,45 @@ func TestToolsPartsMigrationInvalidatesOldParts(t *testing.T) {
 	require.Equal(t, 2, count)
 }
 
-func TestToolsPartsFallbackFilters(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	d := testDB(t)
-	ctx := t.Context()
-	insertSession(t, d, "a", "project")
-	msg := asstMsgAt("a", 0, "call", "2025-03-10T12:00:00Z")
-	msg.ToolCalls = []ToolCall{{SessionID: "a", ToolName: "Read", Category: "Read"}}
-	insertMessages(t, d, msg)
-	var reads int
-	reset := setToolsPartsReadObserver(func([]string) { reads++ })
-	defer reset()
-	for _, f := range []AnalyticsFilter{{Timezone: "Local"}, {Timezone: "UTC", ActiveSince: "2025-03-01T00:00:00Z"}, {Timezone: "UTC", Termination: "active"}} {
-		got, err := d.analyticsTools(ctx, f)
-		require.NoError(t, err)
-		rows, err := d.analyticsToolRows(ctx, f)
-		require.NoError(t, err)
-		require.Equal(t, BuildToolsAnalytics(rows), got)
+func TestToolsPartsTimeAndLocalFilters(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		filter AnalyticsFilter
+	}{
+		{"local", AnalyticsFilter{Timezone: "Local"}},
+		{"active-since", AnalyticsFilter{Timezone: "UTC", ActiveSince: "2025-03-01T00:00:00Z"}},
+		{"termination", AnalyticsFilter{Timezone: "UTC", Termination: "active"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CACHE_DIRECTORY", t.TempDir())
+			d := testDB(t)
+			ctx := t.Context()
+			now := time.Now().UTC().Format(time.RFC3339)
+			for _, id := range []string{"a", "b", "c"} {
+				insertSession(t, d, id, "project", func(s *Session) { s.StartedAt, s.EndedAt = &now, &now })
+				msg := asstMsgAt(id, 0, "call", now)
+				msg.ToolCalls = []ToolCall{{SessionID: id, ToolName: "Read", Category: "Read"}}
+				insertMessages(t, d, msg)
+			}
+			first, err := d.GetAnalyticsTools(ctx, tc.filter)
+			require.NoError(t, err)
+			require.Equal(t, 3, first.TotalCalls)
+			_, err = d.getWriter().ExecContext(ctx, `UPDATE tool_calls SET tool_name='Write' WHERE session_id='a'`)
+			require.NoError(t, err)
+			var reads [][]string
+			reset := setToolsPartsReadObserver(func(ids []string) { reads = append(reads, append([]string(nil), ids...)) })
+			defer reset()
+			got, err := d.GetAnalyticsTools(ctx, tc.filter)
+			require.NoError(t, err)
+			require.Equal(t, 3, got.TotalCalls)
+			require.Len(t, got.ByTool, 2)
+			require.Equal(t, "Write", got.ByTool[1].ToolName)
+			require.Equal(t, [][]string{{"a"}}, reads)
+			rows, err := d.analyticsToolRows(ctx, tc.filter)
+			require.NoError(t, err)
+			require.Equal(t, BuildToolsAnalytics(rows), got)
+		})
 	}
-	require.Zero(t, reads)
 }
 
 func TestToolsPartsFreshMessageMetadata(t *testing.T) {

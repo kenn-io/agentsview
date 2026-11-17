@@ -3118,6 +3118,9 @@ func analyticsSkillsQuery(
 // GetAnalyticsTools returns tool usage analytics aggregated
 // from the tool_calls table.
 func (db *DB) GetAnalyticsTools(ctx context.Context, f AnalyticsFilter) (ToolsAnalyticsResponse, error) {
+	if TerminationUsesTime(f.Termination) {
+		return db.analyticsTools(ctx, f)
+	}
 	return keptAnalyticsWithIdentity(ctx, db, "tools", f, func(ctx context.Context, f AnalyticsFilter, identity string) (ToolsAnalyticsResponse, error) {
 		return db.analyticsToolsWithIdentity(ctx, f, &identity)
 	})
