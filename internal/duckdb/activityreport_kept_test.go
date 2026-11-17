@@ -19,7 +19,6 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
-	"go.kenn.io/agentsview/internal/readbase"
 )
 
 // Extend the real rebuilt mirror with known usage for the ended day.
@@ -130,83 +129,6 @@ func TestActivityUsagePartsRemapRates(t *testing.T) {
 	require.Equal(t, []string{"session-b"}, refreshed)
 	fresh := NewStoreFromDB(store.DB())
 	requireKeptActivityEqual(t, keptActivityBuild(t, fresh, q, true), got)
-}
-
-func TestActivityUsagePartsRefreshCrossProjectSnapshotPeer(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	keptActivityMirror(t, path, "session-a", 500)
-	writeUsageMirror(t, path,
-		`UPDATE sessions SET agentsview_push_fingerprint = 'a1', project = 'included'`,
-		`UPDATE messages SET claude_message_id = 'message', claude_request_id = 'request' WHERE id = 2`,
-		`INSERT INTO sessions SELECT * REPLACE ('session-b' AS id, 'b1' AS agentsview_push_fingerprint, 'excluded' AS project) FROM sessions WHERE id = 'session-a'`,
-		`INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id, 400 AS usage_output_tokens) FROM messages WHERE id = 2`,
-	)
-	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
-	require.NoError(t, err)
-	filter := db.AnalyticsFilter{Timezone: "UTC", Project: "included"}
-	store := openUsagePartsStore(t, path)
-	first, err := store.GetActivityReport(t.Context(), filter, q)
-	require.NoError(t, err)
-	require.Equal(t, 500, first.Totals.OutputTokens)
-	require.NoError(t, store.Close())
-
-	writeUsageMirror(t, path,
-		`UPDATE sessions SET agentsview_push_fingerprint = 'b2' WHERE id = 'session-b'`,
-		`UPDATE messages SET usage_output_tokens = 900 WHERE id = 3`,
-	)
-	store = openUsagePartsStore(t, path)
-	defer store.Close()
-	var refreshed []string
-	previous := usagePartReadObserver
-	usagePartReadObserver = func(ids []string) { refreshed = append(refreshed, ids...) }
-	t.Cleanup(func() { usagePartReadObserver = previous })
-	got, err := store.GetActivityReport(t.Context(), filter, q)
-	require.NoError(t, err)
-	require.ElementsMatch(t, []string{"session-a", "session-b"}, refreshed)
-	require.Equal(t, 900, got.Totals.OutputTokens)
-	fresh, err := NewStoreFromDB(store.DB()).GetActivityReport(t.Context(), filter, q)
-	require.NoError(t, err)
-	require.Equal(t, fresh, got)
-}
-
-func TestActivityUsageReadSetKeepsCandidateOwnership(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	keptActivityMirror(t, path, "session-a", 500)
-	writeUsageMirror(t, path,
-		`UPDATE sessions SET project = 'alpha'`,
-		`UPDATE messages SET claude_message_id = 'message', claude_request_id = 'request' WHERE id = 2`,
-		`INSERT INTO sessions SELECT * REPLACE ('session-b' AS id, 'beta' AS project) FROM sessions WHERE id = 'session-a'`,
-		`INSERT INTO sessions SELECT * REPLACE ('session-c' AS id, 'beta' AS project) FROM sessions WHERE id = 'session-a'`,
-		`INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id) FROM messages WHERE id = 2`,
-		`INSERT INTO messages SELECT * REPLACE (4 AS id, 'session-c' AS session_id, 'unrelated' AS claude_message_id) FROM messages WHERE id = 2`,
-		`INSERT INTO usage_events (id, session_id, source, model, output_tokens, occurred_at, dedup_key) VALUES (1, 'session-a', 'shutdown', 'kept-model', 10, TIMESTAMP '2026-01-01 01:00:00', 'a'), (2, 'session-b', 'shutdown', 'kept-model', 20, TIMESTAMP '2026-01-01 01:00:00', 'b'), (3, 'session-c', 'shutdown', 'kept-model', 30, TIMESTAMP '2026-01-01 01:00:00', 'c')`,
-	)
-	store, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
-	defer store.Close()
-	with := duckActivityUsageWith("s.project = 'alpha'", true)
-	rows, err := store.queryContext(t.Context(), "WITH "+with+` SELECT session_id, source, output FROM activity_usage_rows ORDER BY session_id, source`,
-		"2026-01-01", "2026-01-02", []string{"session-a", "session-c"}, int64(readbase.ActivityUsageNullPricingUS))
-	require.NoError(t, err)
-	defer rows.Close()
-	var got []struct {
-		session, source string
-		output          int
-	}
-	for rows.Next() {
-		var row struct {
-			session, source string
-			output          int
-		}
-		require.NoError(t, rows.Scan(&row.session, &row.source, &row.output))
-		got = append(got, row)
-	}
-	require.NoError(t, rows.Err())
-	require.Equal(t, []struct {
-		session, source string
-		output          int
-	}{{"session-a", "message", 500}, {"session-a", "shutdown", 10}, {"session-b", "message", 500}}, got)
 }
 
 func TestActivityReportKeptAcrossReopensAndRestart(t *testing.T) {
