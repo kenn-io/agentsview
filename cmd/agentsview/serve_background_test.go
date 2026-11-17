@@ -859,23 +859,27 @@ func TestExternalServeStartupWaitReportsContinuingWork(t *testing.T) {
 	setStartProbeTickForTest(t, 10*time.Millisecond)
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
-	writer := newStartupStateWriter(dir, time.Now)
+	// Each snapshot gets a strictly later UpdatedAt regardless of the
+	// platform's wall-clock resolution.
+	base := time.Now()
+	var ticks time.Duration
+	writer := newStartupStateWriter(dir, func() time.Time {
+		ticks += time.Millisecond
+		return base.Add(ticks)
+	})
 	writer.SetPhase("initial sync")
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		ticker := time.NewTicker(50 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case now := <-ticker.C:
-				writer.SetPhase("initial sync " + now.String())
-			}
-		}
-	}()
-	defer func() { cancel(); <-done }()
+	// The starting daemon publishes progress before every probe. Writing from
+	// the probe hook keeps the writer and the wait in lockstep: a goroutine
+	// writing on its own ticker shares this process's scheduler, so a stall
+	// longer than the inactivity limit would freeze both and end the wait
+	// even though progress never stopped.
+	var probes int
+	old := backgroundServeProbeHook
+	backgroundServeProbeHook = func() {
+		probes++
+		writer.SetPhase("initial sync " + strconv.Itoa(probes))
+	}
+	t.Cleanup(func() { backgroundServeProbeHook = old })
 	output := captureStderr(t, func() {
 		_, waited, err := waitForExternalServeStartup(ctx, dir, "", 500*time.Millisecond) //nolint:kennlint // deadlinetest: absence check; continuing startup progress must keep the inactivity deadline from ending the wait
 		assert.True(t, waited)
