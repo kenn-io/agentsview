@@ -36,8 +36,8 @@ whole cache are limited to 256 MiB. On restart, the reader refreshes sessions
 changed since the saved revision. Saving and reusing these files requires the
 same identity-function permissions as the Usage cache below. Without them,
 Activity reads directly and can still reuse inputs in memory. An abrupt exit
-leaves changes since the last graceful close unsaved. The next visit refreshes an older saved copy or
-rebuilds the inputs if none is available.
+leaves changes since the last graceful close unsaved. The next visit refreshes
+an older saved copy or rebuilds the inputs if none is available.
 
 `pg serve` keeps finished Usage results in memory, up to 64 selections and
 64 MiB per read kind, until the journal revision or custom pricing changes.
