@@ -12,7 +12,8 @@ import (
 // the same order and scope as the local embedding scan.
 func scanHostedUnits(ctx context.Context, pg interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}, sessionID string, includeAutomated bool, maxRunRunes int, fn func(db.EmbeddableUnit) error) error {
+}, sessionID string, includeAutomated bool, maxRunRunes int, fn func(db.EmbeddableUnit) error,
+) error {
 	query := `SELECT m.session_id, m.role, m.source_uuid, m.ordinal, m.content,
        m.is_sidechain, s.relationship_type, s.parent_session_id, s.ended_at::text
 FROM messages m JOIN sessions s ON s.id=m.session_id
