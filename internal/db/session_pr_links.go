@@ -285,7 +285,7 @@ func (db *DB) backfillPromptPRLinksLocked(ctx context.Context, w *writerHandle) 
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	version, _, err := readUserVersion(ctx, tx)
+	version, archiveOnly, err := readUserVersion(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -317,7 +317,10 @@ func (db *DB) backfillPromptPRLinksLocked(ctx context.Context, w *writerHandle) 
 			return err
 		}
 	}
-	if version >= fullRebuildDataVersion() && version < 185 {
+	// An archive-only upgrade with no scoped providers still needs a
+	// preservation rebuild, so its version remains the pending marker.
+	if version >= fullRebuildDataVersion() && version < 185 &&
+		(!archiveOnly || len(ScopedDataVersionProviders(version, 185)) > 0) {
 		if err := advanceDataVersion(ctx, tx, 185); err != nil {
 			return err
 		}
