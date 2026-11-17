@@ -1,6 +1,7 @@
 package importer
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -158,4 +159,18 @@ func toolUseIDs(calls []db.ToolCall) []string {
 		ids[i] = call.ToolUseID
 	}
 	return ids
+}
+
+// A platform with no sign-in check treats every non-2xx status as an HTTP
+// error rather than an expired sign-in.
+func TestFetchBrowserWithoutAuthCheck(t *testing.T) {
+	platform := BrowserPlatform{Label: "Example"}
+	calls := 0
+	_, err := fetchBrowser(t.Context(), platform, func(context.Context, string) (BrowserResponse, error) {
+		calls++
+		return BrowserResponse{Status: 401, Body: []byte(`{"detail":"signed out"}`)}, nil
+	}, "/api/chats")
+	require.EqualError(t, err, "Example returned HTTP 401")
+	assert.NotErrorIs(t, err, ErrBrowserAuthRequired)
+	assert.Equal(t, 1, calls, "a 4xx status is not retried")
 }

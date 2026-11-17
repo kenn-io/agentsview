@@ -67,8 +67,10 @@ type BrowserPlatform struct {
 	// retries or Retry-After asks for more than a minute, instead of moving
 	// on to the next conversation.
 	StopOnRateLimit bool
-	AuthRequired    func(status int, body []byte) bool
-	Sync            func(ctx context.Context, store BrowserSyncStore, fetch BrowserFetch, opts BrowserSyncOptions, cb *ImportCallbacks) (ImportStats, error)
+	// AuthRequired reports whether a non-2xx response means the sign-in
+	// expired. Nil means no response does.
+	AuthRequired func(status int, body []byte) bool
+	Sync         func(ctx context.Context, store BrowserSyncStore, fetch BrowserFetch, opts BrowserSyncOptions, cb *ImportCallbacks) (ImportStats, error)
 }
 
 // BrowserPlatforms lists the platforms Sync supports, keyed by agent type.
@@ -158,7 +160,7 @@ func fetchBrowser(ctx context.Context, platform BrowserPlatform, fetch BrowserFe
 		if status >= 200 && status < 300 {
 			return response.Body, nil
 		}
-		if platform.AuthRequired(status, response.Body) {
+		if platform.AuthRequired != nil && platform.AuthRequired(status, response.Body) {
 			return nil, backoff.Permanent(platform.wrap(ErrBrowserAuthRequired))
 		}
 		if status == 413 {
