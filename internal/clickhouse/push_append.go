@@ -13,7 +13,6 @@ import (
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/ext"
-	"github.com/ClickHouse/clickhouse-go/v2/lib/column"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -288,7 +287,7 @@ func (s *Sync) insertCarriedSnapshots(
 	names := make([]string, 0, len(spec.columns)+1)
 	values := make([]string, 0, len(spec.columns)+1)
 	for _, c := range spec.columns {
-		columns = append(columns, ext.Column(c.name, column.Type(strings.Join(strings.Fields(c.typ), " "))))
+		columns = append(columns, chExternalColumn(ext.Column, c.name, strings.Join(strings.Fields(c.typ), " ")))
 		names = append(names, c.name)
 		value := "n." + c.name
 		if c.name == "usage_messages" {
