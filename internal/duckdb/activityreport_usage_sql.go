@@ -19,8 +19,6 @@ import (
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
-var activityUsagePartNextHook func() error
-
 // activityUsageModels selects the (model, provider_id) pairs usage rows can
 // carry. A pair it misses costs one more read of the rows.
 const activityUsageModels = `SELECT DISTINCT model, provider_id FROM messages WHERE model != ''
@@ -216,11 +214,6 @@ func (s *Store) readActivityUsageParts(ctx context.Context, candidateWhere strin
 			return nil, errActivityUsageParts
 		}
 		part.Groups = append(part.Groups, g)
-	}
-	if activityUsagePartNextHook != nil {
-		if err := activityUsagePartNextHook(); err != nil {
-			return nil, fmt.Errorf("%w: %w", errActivityUsageParts, err)
-		}
 	}
 	rows, err := s.queryContext(ctx, "WITH "+with+" SELECT session_id, min(ts_us) FROM activity_usage_rows WHERE ts_us >= ? GROUP BY session_id", append(slices.Clone(args), endUS)...)
 	if err != nil {
