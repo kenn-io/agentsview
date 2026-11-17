@@ -8,7 +8,40 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/parser"
 )
+
+func TestRawTranscriptPrefixPromptLinks(t *testing.T) {
+	first, _ := parser.NewPRLink("https://github.com/o/r/pull/1", "o/r", 1)
+	second, _ := parser.NewPRLink("https://github.com/o/r/pull/2", "o/r", 2)
+	structured := []db.PRLink{first}
+	short := ingest.PreparedSession{Session: db.Session{PRLinks: []db.PRLink{first}}, StructuredPRLinks: &ingest.StructuredPRLinks{Links: structured}, Messages: []db.Message{{Role: "user", Content: "hello"}}}
+	encoded, err := encodeRawPayload(short)
+	require.NoError(t, err)
+	long, err := decodeRawPayload(encoded)
+	require.NoError(t, err)
+	long.Messages = append(long.Messages, db.Message{Role: "user", Content: second.URL})
+	long.Session.PRLinks = []db.PRLink{first, second}
+	matches, err := rawTranscriptPrefix(short, long)
+	require.NoError(t, err)
+	assert.True(t, matches)
+	long.StructuredPRLinks = &ingest.StructuredPRLinks{Links: []db.PRLink{second}}
+	matches, err = rawTranscriptPrefix(short, long)
+	require.NoError(t, err)
+	assert.False(t, matches)
+	short.StructuredPRLinks = &ingest.StructuredPRLinks{}
+	short.Session.PRLinks = nil
+	encoded, err = encodeRawPayload(short)
+	require.NoError(t, err)
+	long, err = decodeRawPayload(encoded)
+	require.NoError(t, err)
+	require.NotNil(t, long.StructuredPRLinks)
+	long.Messages = append(long.Messages, db.Message{Role: "user", Content: second.URL})
+	long.Session.PRLinks = []db.PRLink{second}
+	matches, err = rawTranscriptPrefix(short, long)
+	require.NoError(t, err)
+	assert.True(t, matches)
+}
 
 func TestRawTranscriptPrefixRequiresCompleteRowAgreement(t *testing.T) {
 	for _, tc := range []struct {

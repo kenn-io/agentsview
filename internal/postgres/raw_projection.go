@@ -216,6 +216,10 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 				return err
 			}
 			prepared = old
+			if prepared.StructuredPRLinks == nil {
+				prepared.StructuredPRLinks = &ingest.StructuredPRLinks{Links: prepared.Session.PRLinks}
+			}
+			prepared.Session.PRLinks = parser.MergePRLinks(prepared.Session.PRLinks, db.PromptPRLinks(prepared.Messages))
 			if s.options.Content.ArchiveContent.OmitsToolContent() {
 				prepared.Signals.ToolObservations = []db.ToolObservation{}
 			} else if prepared.Signals.ToolObservations == nil {

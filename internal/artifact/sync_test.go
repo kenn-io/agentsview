@@ -587,7 +587,7 @@ func TestArtifactSyncPromptPRLinkReplacement(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, repoB.Close()) })
 	structured := db.PRLink{URL: "https://github.com/o/r/pull/1", Host: "github.com", Repository: "o/r", Number: 1}
 	seedSession(t, source, "one", "alpha", func(s *db.Session) { s.PRLinks = []db.PRLink{structured} })
-	require.NoError(t, source.ReplaceSessionMessages(t.Context(), "one", []db.Message{{SessionID: "one", Ordinal: 0, Role: "user", Content: "https://github.com/o/r/pull/2", ContentLength: len("https://github.com/o/r/pull/2")}, {SessionID: "one", Ordinal: 1, Role: "assistant", Content: "reply", ContentLength: 5}}))
+	require.NoError(t, source.ReplaceSessionMessages(t.Context(), "one", []db.Message{{SessionID: "one", Ordinal: 0, Role: "user", Content: "https://github.com/o/r/pull/2 https://github.com/o/r/pull/99", DialogueText: new("https://github.com/o/r/pull/2"), ContentLength: len("https://github.com/o/r/pull/2 https://github.com/o/r/pull/99")}, {SessionID: "one", Ordinal: 1, Role: "assistant", Content: "reply", ContentLength: 5}}))
 	originA, originB := "laptop-a1b2c3", "desktop-d4e5f6"
 	_, err = SyncWithRepository(t.Context(), source, repoA, SyncOptions{Target: target, Origin: originA})
 	require.NoError(t, err)
@@ -598,6 +598,7 @@ func TestArtifactSyncPromptPRLinkReplacement(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	require.Len(t, got.PRLinks, 2)
+	assert.Equal(t, "https://github.com/o/r/pull/2", got.PRLinks[1].URL)
 	require.NoError(t, source.ReplaceSessionMessages(t.Context(), "one", []db.Message{{SessionID: "one", Ordinal: 0, Role: "user", Content: "https://github.com/o/r/pull/3", ContentLength: len("https://github.com/o/r/pull/3")}, {SessionID: "one", Ordinal: 1, Role: "assistant", Content: "reply", ContentLength: 5}}))
 	_, err = SyncWithRepository(t.Context(), source, repoA, SyncOptions{Target: target, Origin: originA})
 	require.NoError(t, err)

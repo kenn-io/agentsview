@@ -113,7 +113,7 @@ func PromptPRLinks(text string) []PRLink {
 	var links prLinkCollector
 	for _, candidate := range promptURL.FindAllString(text, -1) {
 		candidate = strings.TrimRightFunc(candidate, func(r rune) bool {
-			return strings.ContainsRune(".,;:!?]", r) || r > unicode.MaxASCII && unicode.IsPunct(r)
+			return strings.ContainsRune(".,;:!?]`*_", r) || r > unicode.MaxASCII && unicode.IsPunct(r)
 		})
 		u, err := url.Parse(candidate)
 		if err != nil {

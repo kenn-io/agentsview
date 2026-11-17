@@ -219,6 +219,7 @@ type segmentMessage struct {
 	Ordinal           int               `json:"ordinal"`
 	Role              string            `json:"role"`
 	Content           string            `json:"content"`
+	DialogueText      *string           `json:"dialogue_text,omitempty"`
 	ThinkingText      string            `json:"thinking_text,omitempty"`
 	Timestamp         string            `json:"timestamp,omitempty"`
 	HasThinking       bool              `json:"has_thinking,omitzero"`
@@ -330,6 +331,7 @@ func segmentMessageFromDB(msg db.Message) segmentMessage {
 		Ordinal:           msg.Ordinal,
 		Role:              msg.Role,
 		Content:           msg.Content,
+		DialogueText:      msg.DialogueText,
 		ThinkingText:      msg.ThinkingText,
 		Timestamp:         msg.Timestamp,
 		HasThinking:       msg.HasThinking,

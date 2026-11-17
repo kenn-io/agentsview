@@ -189,6 +189,8 @@ func TestPromptPRLinks(t *testing.T) {
 		{"https://GITHUB.com/o/r/%70ull/1?x=1 https://github.com/o/r/pull/1", "https://github.com/o/r/pull/1"},
 		{"https://github.com/owner/repo/pull/123/files", "https://github.com/owner/repo/pull/123"},
 		{"[https://github.com/owner/repo/pull/123]", "https://github.com/owner/repo/pull/123"},
+		{"`https://github.com/owner/repo/pull/123`", "https://github.com/owner/repo/pull/123"},
+		{"**https://github.com/owner/repo/pull/123**", "https://github.com/owner/repo/pull/123"},
 		{"https://github.com/owner/repo/pull/1。", "https://github.com/owner/repo/pull/1"},
 		{"https://gitlab.com/group/team/pull/1/repo/-/merge_requests/9/files", "https://gitlab.com/group/team/pull/1/repo/-/merge_requests/9"},
 		{"https://github.com/group/team/pulls/1/repo/pull/9/files", "https://github.com/group/team/pulls/1/repo/pull/9"},

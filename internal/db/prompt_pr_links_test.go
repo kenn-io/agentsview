@@ -63,20 +63,20 @@ func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
 			require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "user", Content: dialogue + " https://github.com/o/r/pull/3", DialogueText: &dialogue}}))
 			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
 				if !tc.completed {
-					if _, err := tx.Exec(`UPDATE sessions SET pr_links=structured_pr_links WHERE id=?`, s.ID); err != nil {
+					if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links=structured_pr_links WHERE id=?`, s.ID); err != nil {
 						return err
 					}
 				}
 				if tc.legacy {
-					if _, err := tx.Exec(artifactSessionQueueTriggerDropsSQL); err != nil {
+					if _, err := tx.ExecContext(t.Context(), artifactSessionQueueTriggerDropsSQL); err != nil {
 						return err
 					}
-					if _, err := tx.Exec(`ALTER TABLE sessions DROP COLUMN structured_pr_links`); err != nil {
+					if _, err := tx.ExecContext(t.Context(), `ALTER TABLE sessions DROP COLUMN structured_pr_links`); err != nil {
 						return err
 					}
 				}
 				if !tc.completed {
-					if _, err := tx.Exec(`DELETE FROM stats WHERE key='prompt_pr_links_backfill_v1'`); err != nil {
+					if _, err := tx.ExecContext(t.Context(), `DELETE FROM stats WHERE key='prompt_pr_links_backfill_v1'`); err != nil {
 						return err
 					}
 				}
@@ -165,14 +165,15 @@ func TestPromptPRLinksBatchAndStagedDialogueReplacement(t *testing.T) {
 			require.Len(t, got.PRLinks, 1)
 			assert.Equal(t, "https://github.com/o/r/pull/1", got.PRLinks[0].URL)
 			msg.DialogueText = &second
-			if method == "single" {
+			switch method {
+			case "single":
 				require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{msg}))
-			} else if method == "batch" {
+			case "batch":
 				_, err := d.WriteSessionBatchContext(t.Context(), []SessionBatchWrite{{Session: s, Messages: []Message{msg}, ReplaceMessages: true}})
 				require.NoError(t, err)
-			} else if method == "staged" {
+			case "staged":
 				require.NoError(t, d.WriteSessionBatchStaged(t.Context(), SessionBatchWrite{Session: s, Messages: []Message{msg}, ReplaceMessages: true}, newScratchStagedResults(t), nil, nil))
-			} else {
+			default:
 				require.NoError(t, d.ReplaceSessionContent(t.Context(), s.ID, []Message{msg}, SessionSignalUpdate{}, nil))
 			}
 			got, err = d.GetSession(t.Context(), s.ID)
@@ -221,13 +222,13 @@ func TestPromptPRLinksUsageOrphanCopy(t *testing.T) {
 			require.NoError(t, source.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Role: "user", Content: "https://github.com/o/r/pull/2", HasOutputTokens: true, OutputTokens: 1}}))
 			if legacy {
 				require.NoError(t, source.Update(t.Context(), func(tx *sql.Tx) error {
-					if _, err := tx.Exec(`UPDATE sessions SET pr_links=structured_pr_links`); err != nil {
+					if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links=structured_pr_links`); err != nil {
 						return err
 					}
-					if _, err := tx.Exec(artifactSessionQueueTriggerDropsSQL); err != nil {
+					if _, err := tx.ExecContext(t.Context(), artifactSessionQueueTriggerDropsSQL); err != nil {
 						return err
 					}
-					_, err := tx.Exec(`ALTER TABLE sessions DROP COLUMN structured_pr_links`)
+					_, err := tx.ExecContext(t.Context(), `ALTER TABLE sessions DROP COLUMN structured_pr_links`)
 					return err
 				}))
 			}
@@ -278,7 +279,7 @@ func TestPromptPRLinksTrashedCopyRestore(t *testing.T) {
 	require.NoError(t, source.UpsertSession(t.Context(), s))
 	require.NoError(t, source.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Role: "user", Content: "Review https://github.com/o/r/pull/2", HasOutputTokens: true, OutputTokens: 1}}))
 	require.NoError(t, source.Update(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.Exec(`UPDATE sessions SET pr_links=structured_pr_links WHERE id=?`, s.ID)
+		_, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links=structured_pr_links WHERE id=?`, s.ID)
 		return err
 	}))
 	require.NoError(t, source.SoftDeleteSession(t.Context(), s.ID))

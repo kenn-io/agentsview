@@ -231,6 +231,7 @@ func refreshSessionPromptPRLinksTx(tx transactionQueries, id string) error {
 	if err != nil {
 		return err
 	}
+	defer rows.Close()
 	var messages []Message
 	for rows.Next() {
 		var msg Message

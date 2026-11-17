@@ -25,11 +25,17 @@ type Candidate struct {
 	Parsed   parser.ParseResult
 }
 
+// StructuredPRLinks preserves the agent-recorded links separately from prompts.
+type StructuredPRLinks struct {
+	Links []db.PRLink
+}
+
 // PreparedSession is the complete normalized content graph ready for storage.
 type PreparedSession struct {
-	Session     db.Session
-	Messages    []db.Message
-	UsageEvents []db.UsageEvent
+	Session           db.Session
+	Messages          []db.Message
+	UsageEvents       []db.UsageEvent
+	StructuredPRLinks *StructuredPRLinks // nil for captures made before prompt-link derivation
 	// PlanUsage is the session's plan usage and live-capture coverage
 	// row; nil when the parser reported neither.
 	PlanUsage *db.SessionPlanUsage
@@ -161,7 +167,9 @@ func finalize(
 	)
 	// Finalize writes hosted projections directly. FinalizeRows leaves link
 	// derivation to the local archive's message transaction.
+	var structuredPRLinks *StructuredPRLinks
 	if derive {
+		structuredPRLinks = &StructuredPRLinks{Links: session.PRLinks}
 		session.PRLinks = parser.MergePRLinks(session.PRLinks, db.PromptPRLinks(messages))
 	}
 	var signalUpdate db.SessionSignalUpdate
@@ -173,7 +181,7 @@ func finalize(
 		}
 	}
 	return PreparedSession{
-		Session: session, Messages: messages, UsageEvents: usageEvents,
+		Session: session, Messages: messages, UsageEvents: usageEvents, StructuredPRLinks: structuredPRLinks,
 		PlanUsage: ConvertPlanUsage(
 			candidate.Parsed.Session.PlanUsage,
 			candidate.Parsed.Session.CaptureCoverage,
