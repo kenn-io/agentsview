@@ -156,3 +156,45 @@ func checkHostedUsageVectorPrivileges(ctx context.Context, database *sql.DB, sch
 	}
 	return nil
 }
+
+// CheckHostedEmbeddingPrivileges verifies every table the shared-document
+// cleanup path can touch, including chunks for other registered generations.
+func CheckHostedEmbeddingPrivileges(ctx context.Context, database *sql.DB, schema, fingerprint string) error {
+	id, _, ok, err := LookupVectorGeneration(ctx, database, fingerprint)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errors.New("hosted embedding generation is missing; run hosted-provision")
+	}
+	exists, err := VectorChunkTableExists(ctx, database, id)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("%s is missing; run hosted-provision", vectorChunkTable(id))
+	}
+	for _, grant := range []struct{ table, privileges string }{
+		{"vector_generations", "SELECT"},
+		{"vector_documents", "SELECT,INSERT,UPDATE,DELETE"},
+		{"vector_push_state", "SELECT,INSERT,UPDATE,DELETE"},
+	} {
+		if err = checkHostedTablePrivileges(ctx, database, schema, grant.table, grant.privileges); err != nil {
+			return err
+		}
+	}
+	tables, err := hostedVectorTables(ctx, database, schema)
+	if err != nil {
+		return err
+	}
+	for _, table := range tables {
+		privileges := "SELECT,DELETE"
+		if table.Name == vectorChunkTable(id) {
+			privileges = "SELECT,INSERT,DELETE"
+		}
+		if err = checkHostedTablePrivileges(ctx, database, schema, table.Name, privileges); err != nil {
+			return err
+		}
+	}
+	return nil
+}

@@ -83,3 +83,10 @@ func TestBackendNewPusherRejectsPushBatchSize(t *testing.T) {
 	require.EqualError(t, err,
 		"push_batch_size is a ClickHouse setting; PostgreSQL push does not accept it (got 250)")
 }
+
+func TestAsStoreUnwrapsHostedStore(t *testing.T) {
+	physical := &Store{}
+	got, err := asStore(&HostedStore{physical: physical})
+	require.NoError(t, err)
+	assert.Same(t, physical, got)
+}

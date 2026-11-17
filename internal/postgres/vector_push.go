@@ -1099,6 +1099,17 @@ func (s *Sync) pushVectorSession(
 		return vectorSessionOutcome{deferred: true}, nil
 	}
 
+	outcome, err := writeSessionVectors(ctx, tx, scope, sessionID, aggHash, docs)
+	if err != nil {
+		return vectorSessionOutcome{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return vectorSessionOutcome{}, fmt.Errorf("commit vector push tx: %w", err)
+	}
+	return outcome, nil
+}
+
+func writeSessionVectors(ctx context.Context, tx *sql.Tx, scope vectorPushScope, sessionID, aggHash string, docs []storage.VectorPushDoc) (vectorSessionOutcome, error) {
 	if err := parkSessionVectorDocs(ctx, tx, sessionID); err != nil {
 		return vectorSessionOutcome{}, err
 	}
@@ -1121,9 +1132,6 @@ DO UPDATE SET doc_agg_hash = EXCLUDED.doc_agg_hash`,
 		scope.gen.id, sessionID, aggHash); err != nil {
 		return vectorSessionOutcome{}, fmt.Errorf(
 			"upserting vector push state %s: %w", sessionID, err)
-	}
-	if err := tx.Commit(); err != nil {
-		return vectorSessionOutcome{}, fmt.Errorf("commit vector push tx: %w", err)
 	}
 	return vectorSessionOutcome{
 		pushed: true, docs: len(docs), chunks: chunks, deleted: deleted,

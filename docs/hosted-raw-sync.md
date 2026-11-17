@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-09
+last_edited: 2026-11-16
 title: Hosted Raw Sync
 description: Upload original session files to an operator-managed server and resume interrupted transfers
 ---
@@ -18,7 +18,7 @@ flowchart LR
     Client --> Checkpoint["Local upload checkpoint"]
     Storage --> Parser["Isolated server parsing"]
     Parser --> PostgreSQL["PostgreSQL projection"]
-    PostgreSQL -. "future consumer" .-> Embeddings["Server embeddings"]
+    PostgreSQL --> Embeddings["Server embeddings"]
 ```
 
 The server can now parse accepted generations directly into PostgreSQL. Enable
@@ -26,14 +26,14 @@ The server can now parse accepted generations directly into PostgreSQL. Enable
 sessions browsable. Hosted processing uses no SQLite archive intermediary;
 SQLite databases captured from providers remain valid source artifacts. Hosted
 raw sync carries no archive labels or launcher parent links. Label filters on
-hosted sessions match nothing. Embedding work is durably queued, but its
-consumer is not implemented.
+hosted sessions match nothing. With embeddings configured, the server builds
+vectors from uploaded sessions and makes them available for meaning search.
 
 Device enrollment and revocation remain operator-managed. The operator supplies
 each laptop with a server URL, device ID and credential. There is no public
 enrollment command or HTTP endpoint. The broader delivery work remains tracked
 in [issue #1352](https://github.com/kenn-io/agentsview/issues/1352), including
-embedding consumption, accepted-generation retention and garbage collection, and
+accepted-generation retention and garbage collection, and
 disaster rebuilds.
 
 ## Provision a hosted instance
@@ -88,6 +88,29 @@ existing raw rows must already belong to the chosen tenant. Unknown relations,
 unmanaged vector layouts and conflicting ownership can block adoption. Plan
 imports and schema upgrades during an operator-controlled maintenance window.
 Runtime startup never migrates or provisions the hosted schema.
+
+For meaning search, install pgvector in the database and configure `[vector]`
+and `[vector.embeddings]` on the server before provisioning. Use the same
+embedding configuration when starting the server. Provision again after changing
+the model or its recipe so the owner creates the new generation's chunk table.
+For example, with an OpenAI-compatible embedding endpoint:
+
+```toml
+[vector]
+enabled = true
+
+[vector.embeddings]
+model = "nomic-embed-text"
+dimension = 768
+max_input_chars = 4000
+default_server = "local"
+
+[vector.embeddings.servers.local]
+endpoint = "http://127.0.0.1:11434/v1"
+```
+
+See the [vector configuration reference](semantic-search.md#enabling-vector)
+for other models and endpoints.
 
 Create a separate login role with
 `NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT`,
@@ -178,6 +201,13 @@ existing `vector_chunks_g<ID>` table named by a generation. This removes any
 previously retained indexed content. It does not create or consume embeddings.
 The runtime checks the configured policy's grants before readiness and reports
 missing privileges instead of silently disabling hosted processing.
+
+When `[vector]` is enabled for stored content, also grant `SELECT, INSERT,
+UPDATE, DELETE` on `vector_documents` and `vector_push_state`, `SELECT, DELETE`
+on each existing `vector_chunks_g<ID>` table registered in
+`vector_generations`, and `INSERT` on the configured generation's chunk table.
+Repeat the chunk-table grants after provisioning a new generation. Search
+uploaded sessions with `agentsview session search --pg --semantic "your query"`.
 
 Start the effective default target:
 
@@ -358,7 +388,7 @@ rollback does not convert the schema back to a `pg push` destination.
 
 Keep PostgreSQL metadata and the immutable raw repository together in backups.
 Automated retention and garbage collection of accepted generations, disaster
-rebuilds, enrollment UX, embedding consumption and migration cutover tooling
+rebuilds, enrollment UX and migration cutover tooling
 remain outside this release.
 
 ## Backfill existing laptop sources
@@ -943,7 +973,7 @@ state another process might have opened during initialization.
 
 Raw capture still needs local provider discovery, consistent source snapshots,
 bounded spool space and durable upload checkpoints. Signing does not create a
-second ingestion pipeline or provide missing hosted embedding, quota, retention
+second ingestion pipeline or provide missing quota, retention
 or backfill features. Direct `pg push` and PostgreSQL reads use database
 protocols; HTTP signing does not protect them. HTTP reader/search/memory/MCP
 functionality is limited by the hosted server's independently available

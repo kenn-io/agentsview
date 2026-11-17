@@ -224,7 +224,7 @@ func (ix *Index) Build(
 	}
 	fillStats, fillErr := kitvec.Fill[string, string](ctx, fillStore, target, wrapped,
 		kitvec.WithFillSplit[string](ix.split),
-		kitvec.WithFillBatch[string](o.encodeBatchOptions()...),
+		kitvec.WithFillBatch[string](o.EncodeBatchOptions()...),
 		kitvec.WithFillConcurrency[string](o.Concurrency),
 		// A positive BatchSize packs chunks from several documents into one
 		// encode call, so a permanent rejection arrives without knowing which
@@ -306,7 +306,7 @@ func (ix *Index) buildInvalidRepair(
 	wrapped, finish := ix.wrapProgress(enc, total, o.Progress)
 	fill, fillErr := fillRepairQueue(ctx, store, target, wrapped, repairFillOptions{
 		Split:       ix.split,
-		Batch:       o.encodeBatchOptions(),
+		Batch:       o.EncodeBatchOptions(),
 		Concurrency: o.Concurrency,
 	})
 	finish()
@@ -334,7 +334,7 @@ func (ix *Index) buildInvalidRepair(
 	return result, nil
 }
 
-// encodeBatchOptions configures kit to treat the model context window as the
+// EncodeBatchOptions configures kit to treat the model context window as the
 // conservative upper bound for every input. Providers may truncate oversized
 // inputs to that length, so the bound keeps the request within their aggregate
 // token cap without depending on provider tokenization.
@@ -342,7 +342,7 @@ func (ix *Index) buildInvalidRepair(
 // Without a configured budget, batch_size alone bounds a request: each input
 // is charged one token against a budget of batch_size, which leaves the batch
 // size as the only limit and keeps kit's default token estimate out of it.
-func (o BuildOptions) encodeBatchOptions() []kitvec.BatchOption {
+func (o BuildOptions) EncodeBatchOptions() []kitvec.BatchOption {
 	options := []kitvec.BatchOption{
 		kitvec.WithBatchSize(o.BatchSize),
 		kitvec.WithBatchConcurrency(1),

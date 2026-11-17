@@ -1002,22 +1002,13 @@ func (db *DB) scanEmbeddableUnits(
 	}
 	defer rows.Close()
 
-	red := &unitReducer{fn: fn, maxRunRunes: maxRunRunes}
-	maxEnded, err = reduceUnitRows(rows, red)
-	if err != nil {
-		return "", err
-	}
-	if err := red.finish(); err != nil {
-		return "", err
-	}
-	return maxEnded, nil
+	return ReduceEmbeddableUnitRows(rows, maxRunRunes, fn)
 }
 
-// reduceUnitRows scans every row of an open ScanEmbeddableUnits query into
-// red, tracking the chronologically latest sessions.ended_at seen across
-// them. It does not flush red's final open run -- callers must call
-// red.finish() once scanning completes.
-func reduceUnitRows(rows *sql.Rows, red *unitReducer) (maxEnded string, err error) {
+// ReduceEmbeddableUnitRows reduces ordered message rows into embedding units.
+// Rows must have the same columns and order as the SQLite unit scan.
+func ReduceEmbeddableUnitRows(rows *sql.Rows, maxRunRunes int, fn func(EmbeddableUnit) error) (maxEnded string, err error) {
+	red := &unitReducer{fn: fn, maxRunRunes: maxRunRunes}
 	for rows.Next() {
 		var row unitRow
 		var relationshipType string
@@ -1039,6 +1030,9 @@ func reduceUnitRows(rows *sql.Rows, red *unitReducer) (maxEnded string, err erro
 	}
 	if err := rows.Err(); err != nil {
 		return "", fmt.Errorf("iterating embeddable units: %w", err)
+	}
+	if err := red.finish(); err != nil {
+		return "", err
 	}
 	return maxEnded, nil
 }

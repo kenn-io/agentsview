@@ -22,12 +22,22 @@ import (
 	"go.kenn.io/agentsview/internal/rawderive"
 	"go.kenn.io/agentsview/internal/rawsync"
 	"go.kenn.io/agentsview/internal/server"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // Friction rules are part of the version so a rules change reaches existing
 // hosted sessions through the same reparse rollout as a parser change.
 func rawProcessingVersion() string {
 	return fmt.Sprintf("parser-data-%d+%s/runtime-%d", db.CurrentDataVersion(), friction.RulesVersion, rawderive.ParserRuntimeVersion)
+}
+
+type hostedRawParser interface {
+	rawderive.SourceParser
+	Preflight(context.Context) error
+}
+
+var newHostedRawParser = func(timeout time.Duration) (hostedRawParser, error) {
+	return rawderive.NewSubprocessParser(timeout)
 }
 
 // pgRawRuntime owns one bounded sequential worker/maintenance loop. Stop joins
@@ -97,6 +107,7 @@ func prepareHostedPGServe(ctx context.Context, app config.Config, pg config.PGCo
 	}
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	var runtime *pgRawRuntime
+	var embeddingRuntime *pgRawRuntime
 	var closeUploads func() error
 	var listener net.Listener
 	custody := &pgRawSyncCustody{dataDir: app.DataDir, tenant: pg.RawTenant, limits: rawsync.DefaultManifestLimits(), version: rawProcessingVersion()}
@@ -106,6 +117,9 @@ func prepareHostedPGServe(ctx context.Context, app config.Config, pg config.PGCo
 			stop()
 			if runtime != nil {
 				runtime.Stop()
+			}
+			if embeddingRuntime != nil {
+				embeddingRuntime.Stop()
 			}
 			// The server closes the listener when it shuts down; this covers
 			// a startup that fails before serving.
@@ -153,7 +167,7 @@ func prepareHostedPGServe(ctx context.Context, app config.Config, pg config.PGCo
 	}
 	if pg.RawDerivation {
 		poll, attempt, maxAttempts := pg.RawWorkerBounds()
-		isolated, err := rawderive.NewSubprocessParser(time.Duration(attempt) * time.Second)
+		isolated, err := newHostedRawParser(time.Duration(attempt) * time.Second)
 		if err != nil {
 			return fail(err)
 		}
@@ -188,6 +202,10 @@ func prepareHostedPGServe(ctx context.Context, app config.Config, pg config.PGCo
 				log.Print("hosted raw pending-signal maintenance failed")
 			}
 		})
+		embeddingRuntime, err = prepareHostedEmbeddings(ctx, app, pg, store, time.Duration(poll)*time.Second)
+		if err != nil {
+			return fail(err)
+		}
 	}
 	rtOpts := serveRuntimeOptions{Mode: "pg-serve", BasePath: basePath, RequestedPort: app.Port}
 	app, listener, err = claimServeRuntimeConfig(ctx, app, rtOpts)
@@ -206,14 +224,19 @@ func prepareHostedPGServe(ctx context.Context, app config.Config, pg config.PGCo
 	}
 	startup := replicaServeStartup{cfg: app, ctx: ctx, rtOpts: rtOpts, srv: server.New(app, store, nil, opts...), cleanup: cleanup}
 	if runtime != nil {
-		startup.startWorker = runtime.Start
+		startup.startWorker = func() {
+			runtime.Start()
+			if embeddingRuntime != nil {
+				embeddingRuntime.Start()
+			}
+		}
 	}
 	return startup, nil
 }
 
 func newPGHostedProvisionCommand() *cobra.Command {
 	return &cobra.Command{Use: "hosted-provision [target]", Short: "Explicitly provision one hosted tenant schema using the configured owner connection", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := config.LoadMinimalFor(config.ScopePG)
+		cfg, err := config.LoadMinimalFor(config.ScopePG | config.ScopeVector)
 		if err != nil {
 			return err
 		}
@@ -236,6 +259,13 @@ func newPGHostedProvisionCommand() *cobra.Command {
 		defer database.Close()
 		if err = postgres.EnsureHostedTenant(cmd.Context(), database, pg.Schema, pg.RawTenant); err != nil {
 			return fmt.Errorf("hosted provisioning failed: %w", err)
+		}
+		if cfg.Vector.Enabled {
+			gen := vectorGeneration(cfg.Vector.Embeddings)
+			info := storage.VectorGenerationInfo{Fingerprint: gen.Fingerprint(), Model: gen.Model, Dimension: gen.Dimensions, Params: gen.Params}
+			if err = postgres.ProvisionHostedVector(cmd.Context(), database, pg.Schema, pg.RawTenant, info); err != nil {
+				return fmt.Errorf("hosted provisioning failed: %w", err)
+			}
 		}
 		fmt.Fprintln(cmd.OutOrStdout(), "Hosted tenant schema provisioned. Use a restricted tenant runtime connection to serve.")
 		return nil
