@@ -105,6 +105,11 @@ func prepareHostedPGServe(ctx context.Context, app config.Config, pg config.PGCo
 	if err != nil {
 		return replicaServeStartup{}, err
 	}
+	database := store.DB()
+	if database == nil {
+		_ = store.Close()
+		return replicaServeStartup{}, errors.New("hosted database is unavailable")
+	}
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	var runtime *pgRawRuntime
 	var embeddingRuntime *pgRawRuntime
@@ -146,18 +151,18 @@ func prepareHostedPGServe(ctx context.Context, app config.Config, pg config.PGCo
 		return fail(err)
 	}
 	store.SetCustomPricing(app.CustomModelPricing)
-	if err = postgres.CheckHostedRuntimeWritable(ctx, store.DB(), pg.Schema, app.ArchiveContent); err != nil {
+	if err = postgres.CheckHostedRuntimeWritable(ctx, database, pg.Schema, app.ArchiveContent); err != nil {
 		return fail(err)
 	}
 	if err = store.DetectInsightGenerationAvailability(ctx); err != nil {
 		return fail(err)
 	}
-	metadata, err := postgres.NewHostedRawIngestStore(store.DB(), pg.RawTenant, custody.version)
+	metadata, err := postgres.NewHostedRawIngestStore(database, pg.RawTenant, custody.version)
 	if err != nil {
 		return fail(err)
 	}
 	custody.metadata = metadata
-	authStore, err := postgres.NewTenantRawDeviceAuthStore(store.DB(), pg.RawTenant)
+	authStore, err := postgres.NewTenantRawDeviceAuthStore(database, pg.RawTenant)
 	if err != nil {
 		return fail(err)
 	}
@@ -167,7 +172,7 @@ func prepareHostedPGServe(ctx context.Context, app config.Config, pg config.PGCo
 	}
 	if app.Vector.Enabled && !app.ArchiveContent.UsageOnly() {
 		fingerprint := vectorGeneration(app.Vector.Embeddings).Fingerprint()
-		if err = postgres.CheckHostedVectorPrivileges(ctx, store.DB(), pg.Schema, fingerprint); err != nil {
+		if err = postgres.CheckHostedVectorPrivileges(ctx, database, pg.Schema, fingerprint); err != nil {
 			return fail(err)
 		}
 		if err = wireReplicaVectorSearch(ctx, app, pgReplica{}, store, "hosted pg serve"); err != nil {
@@ -184,7 +189,7 @@ func prepareHostedPGServe(ctx context.Context, app config.Config, pg config.PGCo
 			return fail(err)
 		}
 		retry := rawderive.RetryPolicy{Base: time.Second, Maximum: time.Minute, MaxAttempts: maxAttempts}
-		sink, err := postgres.NewRawProjectionStore(ctx, store.DB(), hostedRawProjectionOptions(app, pg.RawTenant, retry))
+		sink, err := postgres.NewRawProjectionStore(ctx, database, hostedRawProjectionOptions(app, pg.RawTenant, retry))
 		if err != nil {
 			return fail(err)
 		}
@@ -222,7 +227,7 @@ func prepareHostedPGServe(ctx context.Context, app config.Config, pg config.PGCo
 		return fail(err)
 	}
 	rtOpts.Listener = listener
-	uploadOption, closeUploadStore, err := preparePGRawSyncUploads(ctx, app.DataDir, store.DB(), custody)
+	uploadOption, closeUploadStore, err := preparePGRawSyncUploads(ctx, app.DataDir, database, custody)
 	if err != nil {
 		return fail(err)
 	}
