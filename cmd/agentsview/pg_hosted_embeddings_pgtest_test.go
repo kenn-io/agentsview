@@ -102,17 +102,17 @@ func TestHostedCaptureSemanticSearch(t *testing.T) {
 	search := func(text string) (db.ContentSearchPage, error) {
 		return store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: text, Mode: "semantic", IncludeOneShot: true, Limit: 10})
 	}
-	require.Eventually(t, func() bool {
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
 		page, err := search("Inspect the build")
-		if err != nil {
-			return false
+		if !assert.NoError(c, err) {
+			return
 		}
 		var original, competitor bool
 		for _, match := range page.Matches {
 			original = original || match.SessionID == rawtest.ClaudeID && strings.Contains(match.Snippet, "Inspect the build")
 			competitor = competitor || match.SessionID == competitorID && strings.Contains(match.Snippet, "Competing build")
 		}
-		return original && competitor
+		assert.True(c, original && competitor)
 	}, 30*time.Second, time.Second)
 	content, err := os.ReadFile(path)
 	require.NoError(t, err)
@@ -135,19 +135,17 @@ func TestHostedCaptureSemanticSearch(t *testing.T) {
 	var old int
 	require.NoError(t, admin.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_documents WHERE content LIKE '%Inspect the build%'`).Scan(&old))
 	assert.Zero(t, old)
-	{
-		configured.PG.RawDerivation = false
-		reader, err := prepareReplicaServeImpl(t.Context(), pgReplica{}, configured, "", nil, false)
-		require.NoError(t, err)
-		defer reader.cleanup()
-		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/search/content?pattern=review&mode=semantic&include_one_shot=true", nil)
-		req.Header.Set("Authorization", "Bearer "+configured.AuthToken)
-		req.Header.Set("X-AgentsView-Search-Intent", "semantic")
-		response := httptest.NewRecorder()
-		reader.srv.Handler().ServeHTTP(response, req)
-		require.Equal(t, http.StatusOK, response.Code, response.Body.String())
-		assert.Contains(t, response.Body.String(), "Review the changed build")
-	}
+	configured.PG.RawDerivation = false
+	reader, err := prepareReplicaServeImpl(t.Context(), pgReplica{}, configured, "", nil, false)
+	require.NoError(t, err)
+	defer reader.cleanup()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/search/content?pattern=review&mode=semantic&include_one_shot=true", nil)
+	req.Header.Set("Authorization", "Bearer "+configured.AuthToken)
+	req.Header.Set("X-AgentsView-Search-Intent", "semantic")
+	response := httptest.NewRecorder()
+	reader.srv.Handler().ServeHTTP(response, req)
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	assert.Contains(t, response.Body.String(), "Review the changed build")
 }
 
 type testHostedRawParser struct{ *rawderive.ProviderParser }
