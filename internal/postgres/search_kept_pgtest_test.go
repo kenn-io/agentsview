@@ -19,12 +19,28 @@ import (
 )
 
 type searchQueryTracer struct {
-	count      atomic.Int32
-	restricted atomic.Int32
-	ties       atomic.Int32
+	count       atomic.Int32
+	restricted  atomic.Int32
+	ties        atomic.Int32
+	keys        atomic.Int32
+	hydrate     atomic.Int32
+	hydrateIDs  atomic.Int32
+	checkpoints atomic.Int32
 }
 
 func (tr *searchQueryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	if strings.Contains(data.SQL, "SELECT substring(key from length('usage_history_checkpoint:')") {
+		tr.checkpoints.Add(1)
+	}
+	if strings.Contains(data.SQL, "SELECT session_id, match_priority, match_pos, session_ended_at FROM page") {
+		tr.keys.Add(1)
+	}
+	if strings.Contains(data.SQL, "SELECT p.session_id, s.project") {
+		tr.hydrate.Add(1)
+		if ids, ok := data.Args[len(data.Args)-1].([]string); ok {
+			tr.hydrateIDs.Store(int32(len(ids)))
+		}
+	}
 	if strings.Contains(data.SQL, "SELECT session_id FROM unnest(") {
 		tr.ties.Add(1)
 	}
@@ -121,16 +137,29 @@ func TestSearchKeptRefreshAfterWrite(t *testing.T) {
 	f := db.SearchFilter{Query: "needle", Limit: 2}
 	page, err := s.Search(ctx, f)
 	require.NoError(t, err)
+	require.EqualValues(t, 1, trace.keys.Load())
+	require.EqualValues(t, 1, trace.hydrate.Load())
+	require.EqualValues(t, 2, trace.hydrateIDs.Load())
+	require.EqualValues(t, 1, trace.checkpoints.Load())
 	require.Equal(t, []string{"one", "three"}, []string{page.Results[0].SessionID, page.Results[1].SessionID})
 	require.NoError(t, local.ReplaceSessionMessages(ctx, "two", []db.Message{{SessionID: "two", Role: "user", Content: "needle changed"}}))
 	pgKeptPush(t, syncer, false)
 	trace.count.Store(0)
 	trace.restricted.Store(0)
+	trace.keys.Store(0)
+	trace.hydrate.Store(0)
+	trace.checkpoints.Store(0)
+	trace.ties.Store(0)
 	page, err = s.Search(ctx, f)
 	require.NoError(t, err)
 	require.Equal(t, []string{"two", "one"}, []string{page.Results[0].SessionID, page.Results[1].SessionID})
 	require.EqualValues(t, 2, trace.count.Load())
 	require.EqualValues(t, 2, trace.restricted.Load())
+	require.EqualValues(t, 1, trace.keys.Load())
+	require.EqualValues(t, 1, trace.hydrate.Load())
+	require.EqualValues(t, 2, trace.hydrateIDs.Load())
+	require.EqualValues(t, 1, trace.checkpoints.Load())
+	require.EqualValues(t, 1, trace.ties.Load())
 
 	check := func(sort string, wantFirst, wantSecond []string) {
 		t.Helper()
@@ -293,4 +322,24 @@ func TestSearchKeptHistoryCheckpointMissing(t *testing.T) {
 			require.Equal(t, direct, got)
 		})
 	}
+}
+
+func TestSearchKeptWithoutJournal(t *testing.T) {
+	local, syncer, s := newUsageJournalFixture(t)
+	ctx := t.Context()
+	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "one", Project: "project", Machine: "device", Agent: "claude", MessageCount: 1}))
+	require.NoError(t, local.ReplaceSessionMessages(ctx, "one", []db.Message{{SessionID: "one", Role: "user", Content: "needle"}}))
+	pgKeptPush(t, syncer, false)
+	f := db.SearchFilter{Query: "needle", Limit: 10}
+	_, err := syncer.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
+	require.NoError(t, err)
+	revision, _, err := s.LoadUsageChanges(ctx, 0)
+	require.NoError(t, err)
+	require.Zero(t, revision)
+	got, err := s.searchKept(ctx, s, f)
+	require.NoError(t, err)
+	direct, err := s.search(ctx, f)
+	require.NoError(t, err)
+	require.Len(t, got.Results, 1)
+	require.Equal(t, direct, got)
 }
