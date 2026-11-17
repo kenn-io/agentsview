@@ -166,6 +166,8 @@ func (e *Engine) PollProviderRootsGrouped(
 			state.noteFallback(key, err)
 			switch {
 			case err != nil:
+				// Without a snapshot the next pass reconciles again, even when
+				// this pass only failed on its change-set limit.
 				state.forget(key)
 				full = append(full, root)
 			case authoritative || previous == nil || result.vanished:

@@ -523,3 +523,23 @@ func TestPollScanGlobsComparable(t *testing.T) {
 	assert.False(t, pollScanGlobsComparable([]string{`sub\\*.jsonl`}), "a Windows path glob never matches a base name")
 	assert.False(t, pollScanGlobsComparable([]string{"[*.jsonl"}), "a malformed glob matches nothing")
 }
+
+func TestPollProviderRootsGroupedReconcilesLinkedSessionFiles(t *testing.T) {
+	requirePollChangeTimes(t)
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symbolic links needs extra privileges on Windows")
+	}
+	target := filepath.Join(t.TempDir(), "kept-elsewhere.jsonl")
+	writeClaudePollSession(t, target, "first")
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "project"), 0o755))
+	require.NoError(t, os.Symlink(target, filepath.Join(root, "project", "linked.jsonl")))
+	f := newPollScanFixture(t, map[parser.AgentType][]string{parser.AgentClaude: {root}})
+	group := ProviderRootsGroup{Agent: parser.AgentClaude, Roots: []string{root}}
+
+	f.poll(t, group)
+	f.poll(t, group)
+
+	assert.EqualValues(t, 2, f.reconciled.Load(),
+		"a linked session file changes without changing the link, so the root cannot be compared")
+}
