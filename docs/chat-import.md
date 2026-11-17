@@ -275,8 +275,8 @@ When Sync stops:
 - Two failed chats in a row end Sync. Oversized chats do not count toward this.
 - A rate limit that outlasts the retries, or a requested wait longer than 60
   seconds, ends Sync early. Run Sync again later to continue.
-- A chat in a format this version cannot read counts as one failure. Sync
-  finishes the other chats, then reports that AgentsView needs an update.
+- A chat in a format this version cannot read counts as a failed chat, so two
+  in a row end Sync. Either way, Sync reports that AgentsView needs an update.
 - An expired sign-in ends Sync. Sign in to ChatGPT in Chrome and run Sync again.
 
 Chats imported before Sync stopped stay imported. ChatGPT's private API can

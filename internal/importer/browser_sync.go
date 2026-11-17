@@ -201,9 +201,9 @@ type browserSync struct {
 	cb         *ImportCallbacks
 	machine    string
 	failedLast bool
-	// formatErr keeps the last unreadable conversation format. Adapters
-	// return it after importing every readable chat, so the user learns
-	// that an update is needed.
+	// formatErr keeps the last unreadable conversation format. It counts
+	// toward the two-failures stop like any failed chat; adapters return it
+	// when the list ends, so the user learns that an update is needed.
 	formatErr error
 }
 
