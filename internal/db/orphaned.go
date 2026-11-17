@@ -434,6 +434,13 @@ func (d *DB) CopyTrashedDataFrom(ctx context.Context, sourcePath string) ([]stri
 	); err != nil {
 		return nil, fmt.Errorf("projecting trashed data: %w", err)
 	}
+	if !d.usageOnlyStorage() {
+		for _, id := range ids {
+			if err := refreshSessionPromptPRLinksTx(tx, id); err != nil {
+				return nil, fmt.Errorf("refreshing trashed prompt PR links: %w", err)
+			}
+		}
+	}
 	// Keep the archived transcript under its page ID before the upgrade loses
 	// the filename mapping. Retain an empty thread row for legacy trash scope;
 	// restoring it must never let the original rollout replace the saved page.

@@ -358,3 +358,42 @@ func TestPromptPRLinksStructuredChanges(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, got.PRLinks)
 }
+
+func TestPromptPRLinksTrashedCopyRestore(t *testing.T) {
+	for _, tc := range []struct {
+		policy        config.ArchiveContent
+		promptMatches int
+	}{{config.ArchiveContentFull, 1}, {config.ArchiveContentUsage, 0}} {
+		t.Run(string(tc.policy), func(t *testing.T) {
+			source := testDB(t)
+			link, ok := parser.NewPRLink("https://github.com/o/r/pull/1", "o/r", 1)
+			require.True(t, ok)
+			s := Session{ID: "trashed", Project: "project", Machine: "local", Agent: "claude", MessageCount: 1, PRLinks: []PRLink{link}}
+			require.NoError(t, source.UpsertSession(t.Context(), s))
+			require.NoError(t, source.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Role: "user", Content: "Review https://github.com/o/r/pull/2", HasOutputTokens: true, OutputTokens: 1}}))
+			// Model an archive from before prompt-link backfill, with no source file.
+			require.NoError(t, source.Update(t.Context(), func(tx *sql.Tx) error {
+				_, err := tx.Exec(`UPDATE sessions SET pr_links=structured_pr_links WHERE id=?`, s.ID)
+				return err
+			}))
+			require.NoError(t, source.SoftDeleteSession(t.Context(), s.ID))
+			dest := testDB(t)
+			dest.SetArchiveContent(tc.policy)
+			ids, err := dest.CopyTrashedDataFrom(t.Context(), source.Path())
+			require.NoError(t, err)
+			require.Equal(t, []string{s.ID}, ids)
+			_, err = dest.RestoreSession(t.Context(), s.ID)
+			require.NoError(t, err)
+			for _, tc := range []struct {
+				filter string
+				want   int
+			}{{"o/r#1", 1}, {"o/r#2", tc.promptMatches}} {
+				filter, err := ParsePRFilter(tc.filter)
+				require.NoError(t, err)
+				page, err := dest.ListSessions(t.Context(), SessionFilter{PR: filter})
+				require.NoError(t, err)
+				assert.Len(t, page.Sessions, tc.want)
+			}
+		})
+	}
+}
