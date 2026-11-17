@@ -15,8 +15,14 @@ var (
 	usagePartPublishObserver func()
 )
 
+type usagePartsOptions[T any] struct {
+	version    string
+	stale      func(T) bool
+	omitCursor bool
+}
+
 // refreshUsageParts retains only parts whose source sessions are unchanged.
-func refreshUsageParts[T any](ctx context.Context, s *Store, slot, priceDigest string, f db.UsageFilter, size func(T) int64, read func(context.Context, []string) (map[string]T, error)) (map[string]T, error) {
+func refreshUsageParts[T any](ctx context.Context, s *Store, slot string, opts usagePartsOptions[T], size func(T) int64, read func(context.Context, []string) (map[string]T, error)) (map[string]T, error) {
 	if !s.usageDisk.Enabled() || slot == "" {
 		return read(ctx, nil)
 	}
@@ -24,19 +30,29 @@ func refreshUsageParts[T any](ctx context.Context, s *Store, slot, priceDigest s
 	if stamp == "" {
 		return read(ctx, nil)
 	}
-	versions, err := s.usagePartVersions(ctx)
+	versions, err := s.usagePartVersions(ctx, opts.omitCursor)
 	if err != nil {
 		return nil, err
 	}
-	version := usagePartsVersion(f, priceDigest)
+	version := opts.version
 	old := kept.LoadParts[T](&s.usageDisk, slot, version)
 	changed := kept.StaleParts(old, versions)
+	if opts.stale != nil {
+		for id, part := range old {
+			if part.Present && opts.stale(part.Value) {
+				changed[id] = true
+			}
+		}
+	}
 	if len(changed) == 0 && len(old) != 0 {
 		values := make(map[string]T, len(old))
 		for id, part := range old {
 			if part.Present {
 				values[id] = part.Value
 			}
+		}
+		if stamp != s.keptVersion() {
+			return read(ctx, nil)
 		}
 		return values, nil
 	}
@@ -100,10 +116,13 @@ func refreshUsageParts[T any](ctx context.Context, s *Store, slot, priceDigest s
 	return values, nil
 }
 
-func (s *Store) usagePartVersions(ctx context.Context) (map[string]string, error) {
+func (s *Store) usagePartVersions(ctx context.Context, omitCursor bool) (map[string]string, error) {
 	versions, err := db.ScanTrendVersions(s.queryContext(ctx, `SELECT id, COALESCE(agentsview_push_fingerprint, '') FROM sessions WHERE deleted_at IS NULL`))
 	if err != nil {
 		return nil, fmt.Errorf("querying usage fingerprints: %w", err)
+	}
+	if omitCursor {
+		return versions, nil
 	}
 	var count int64
 	var hash uint64

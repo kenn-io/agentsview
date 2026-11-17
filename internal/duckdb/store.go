@@ -70,9 +70,7 @@ type Store struct {
 	retiring sync.WaitGroup
 
 	// activityRuns keeps sessions' activity runs by push fingerprint.
-	activityRuns           activityRunsMemo
-	activityUsagePendingMu sync.Mutex
-	activityUsagePending   map[string]activityUsagePending
+	activityRuns activityRunsMemo
 
 	quack          *quackClient
 	connectionKind duckDBConnectionKind
@@ -189,7 +187,6 @@ func (s *Store) Close() error {
 
 	if s.usageDisk.Enabled() {
 		s.activityRuns.save(&s.usageDisk)
-		s.saveActivityUsage()
 	}
 	s.reports.Close()
 	err := conn.Close()

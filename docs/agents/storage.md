@@ -837,10 +837,10 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
   the integer cost math. Both backends share the schedule and the assembly of
   the summed groups in `internal/readbase/activityusage.go`. DuckDB keeps
   usage totals for ranges that include today in memory and on disk, along with
-  session runs and message times. A push or pricing change refreshes the
-  affected inputs. `Store.Close` saves usage totals, runs, and message times.
-  An abrupt exit can lose changes since the last graceful shutdown; the next
-  report rebuilds them. These inputs share the `duckdb-usage` limits of 128 MiB
+  session runs and message times. A push refreshes usage for changed sessions
+  and their deduplication peers. Activity usage parts are saved when computed;
+  `Store.Close` saves runs and message times. After an abrupt exit the next
+  report rebuilds runs and message times changed since the last shutdown. These inputs share the `duckdb-usage` limits of 128 MiB
   per file and 256 MiB total. Finished reports also use memory,
   which restart clears. Eligible past-day reports can be saved to disk and
   reused after restart. DuckDB also derives session runs in SQL with

@@ -1568,7 +1568,7 @@ func (s *Store) readDailyUsage(
 	if slot != "" {
 		slot = "daily|" + slot
 	}
-	parts, err := refreshUsageParts(ctx, s, slot, block.Digest, f, duckDailyPartBytes, func(ctx context.Context, ids []string) (map[string]duckDailyPart, error) {
+	parts, err := refreshUsageParts(ctx, s, slot, usagePartsOptions[duckDailyPart]{version: usagePartsVersion(f, block.Digest)}, duckDailyPartBytes, func(ctx context.Context, ids []string) (map[string]duckDailyPart, error) {
 		// A full read can use the rollup; a refresh of a few sessions reads
 		// their rows directly.
 		if ids == nil {
@@ -2084,7 +2084,7 @@ func (s *Store) readTopSessionTotals(
 	if slot != "" {
 		slot = "top|" + slot
 	}
-	parts, err := refreshUsageParts(ctx, s, slot, block.Digest, f, db.TopSessionBytes, func(ctx context.Context, ids []string) (map[string]db.TopSessionEntry, error) {
+	parts, err := refreshUsageParts(ctx, s, slot, usagePartsOptions[db.TopSessionEntry]{version: usagePartsVersion(f, block.Digest)}, db.TopSessionBytes, func(ctx context.Context, ids []string) (map[string]db.TopSessionEntry, error) {
 		if ids == nil {
 			// See readDailyUsage: a replacement mid-read reads again live.
 			handle := s.DB()

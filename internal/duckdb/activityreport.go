@@ -786,9 +786,13 @@ func (s *Store) activityReportUsage(
 // query shape stays constant as the peer-key set grows. It applies the same
 // message and usage-event eligibility predicates as GetDailyUsage and
 // normalizes rows in SQL. Its placeholders take the lower and upper bounds,
-// the candidate predicate's arguments, then
+// the candidate predicate's arguments, the optional read set, then
 // readbase.ActivityUsageNullPricingUS.
-func duckActivityUsageWith(candidateWhere string) string {
+func duckActivityUsageWith(candidateWhere string, subset bool) string {
+	readCandidates := "SELECT id FROM candidate_sessions"
+	if subset {
+		readCandidates += " WHERE id IN (SELECT unnest(?))"
+	}
 	return fmt.Sprintf(`
 		report_bounds AS (
 			SELECT CAST(? AS TIMESTAMP) AS lower_bound,
@@ -799,6 +803,7 @@ func duckActivityUsageWith(candidateWhere string) string {
 			FROM sessions s
 			WHERE %[2]s
 		),
+		read_candidates AS (%[5]s),
 		candidate_messages AS (
 			SELECT m.session_id AS session_id, m.ordinal AS message_ordinal,
 				'message' AS source, COALESCE(m.timestamp, s.started_at) AS ts,
@@ -815,7 +820,7 @@ func duckActivityUsageWith(candidateWhere string) string {
 				CASE WHEN TRY_CAST(json_extract_string(m.token_usage, '$.recorded_cost_microdollars') AS BIGINT) >= 0 THEN 'recorded' ELSE '' END AS cost_status
 			FROM messages m
 			JOIN sessions s ON s.id = m.session_id
-			JOIN candidate_sessions candidate ON candidate.id = m.session_id
+			JOIN read_candidates candidate ON candidate.id = m.session_id
 			CROSS JOIN report_bounds bounds
 			WHERE m.token_usage != ''
 				AND m.model != ''
@@ -846,7 +851,7 @@ func duckActivityUsageWith(candidateWhere string) string {
 			ue.cost_status AS cost_status
 			FROM usage_events ue
 			JOIN sessions s ON s.id = ue.session_id
-			JOIN candidate_sessions candidate ON candidate.id = ue.session_id
+			JOIN read_candidates candidate ON candidate.id = ue.session_id
 			CROSS JOIN report_bounds bounds
 			WHERE ue.model != ''
 				AND s.deleted_at IS NULL
@@ -877,7 +882,7 @@ func duckActivityUsageWith(candidateWhere string) string {
 			JOIN peer_keys peer
 				ON peer.claude_message_id = m.claude_message_id
 				AND peer.claude_request_id = m.claude_request_id
-			LEFT JOIN candidate_sessions candidate ON candidate.id = m.session_id
+			LEFT JOIN read_candidates candidate ON candidate.id = m.session_id
 			CROSS JOIN report_bounds bounds
 			WHERE candidate.id IS NULL
 				AND m.token_usage != ''
@@ -938,7 +943,7 @@ func duckActivityUsageWith(candidateWhere string) string {
 			WHERE ts IS NOT NULL
 		)`,
 		db.MaxPlausibleTokens, candidateWhere,
-		usagefacts.CostStatusRecorded, db.CopilotReportedCostSource)
+		usagefacts.CostStatusRecorded, db.CopilotReportedCostSource, readCandidates)
 }
 
 // duckActivityReportRowStatus computes one usage row's cost and pricing state the same way

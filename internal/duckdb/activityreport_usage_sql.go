@@ -2,9 +2,8 @@ package duckdb
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -14,7 +13,6 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/kept"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/readbase"
 	"go.kenn.io/agentsview/internal/usagefacts"
@@ -69,48 +67,69 @@ func (s *Store) sumActivityUsage(
 			return readbase.AssembleActivityUsage(pricing, saved[0].Schedule, saved[0].Groups)
 		}
 	}
-	diskVersion := ""
-	if version != "" && s.usageDisk.Enabled() {
-		versions, err := db.ScanTrendVersions(s.queryContext(ctx, `SELECT id, COALESCE(agentsview_push_fingerprint, '') FROM sessions WHERE deleted_at IS NULL`))
-		if err != nil {
-			return nil, err
-		}
-		valid := true
-		for _, fingerprint := range versions {
-			if fingerprint == "" {
-				valid = false
-				break
-			}
-		}
-		if valid {
-			block, err := pricing.BuildBlock()
-			if err != nil {
-				return nil, err
-			}
-			s.handleMu.RLock()
-			price := s.pricingDigest
-			s.handleMu.RUnlock()
-			data, err := json.Marshal([]any{versions, block.Digest, price, pricingpkg.ConfiguredAliasesDigest()}, json.Deterministic(true))
-			if err != nil {
-				return nil, err
-			}
-			diskVersion = fmt.Sprintf("%x", sha256.Sum256(data))
-		}
-	}
-	if diskVersion != "" {
-		if data, ok := s.usageDisk.Get("activity-usage|"+slot, "activity-usage-1|"+diskVersion); ok {
-			if saved, ok := kept.DecodeRows[*readbase.ActivityUsageSums](data); ok && len(saved) == 1 && saved[0] != nil && saved[0].Covers(endUS) {
-				s.keepActivityUsage(slot, version, diskVersion, saved)
-				return readbase.AssembleActivityUsage(pricing, saved[0].Schedule, saved[0].Groups)
-			}
-		}
-	}
-	with := duckActivityUsageWith(candidateWhere)
+	with := duckActivityUsageWith(candidateWhere, false)
 	withArgs := append([]any{lowerBound, upperBound}, candidateArgs...)
 	withArgs = append(withArgs, int64(readbase.ActivityUsageNullPricingUS))
 	keys, err := s.activityUsageRateKeys(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if version != "" && s.usageDisk.Enabled() {
+		block, err := pricing.BuildBlock()
+		if err != nil {
+			return nil, err
+		}
+		s.handleMu.RLock()
+		price := s.pricingDigest
+		s.handleMu.RUnlock()
+		partVersion := fmt.Sprintf("activity-usage-parts-1|%s|%s|%s", block.Digest, price, pricingpkg.ConfiguredAliasesDigest())
+		schedule := readbase.BuildUsageRateSchedule(pricing, keys, startUS, endUS)
+		parts, err := refreshUsageParts(ctx, s, "activity-usage|"+slot, usagePartsOptions[*readbase.ActivityUsageSums]{
+			version: partVersion, omitCursor: true,
+			stale: func(part *readbase.ActivityUsageSums) bool {
+				if part == nil || !part.Covers(endUS) {
+					return true
+				}
+				copy := *part
+				copy.Groups = slices.Clone(part.Groups)
+				return !remapActivityRates(&copy, schedule)
+			},
+		}, func(part *readbase.ActivityUsageSums) int64 {
+			if part == nil {
+				return 0
+			}
+			return part.Bytes()
+		},
+			func(ctx context.Context, ids []string) (map[string]*readbase.ActivityUsageSums, error) {
+				return s.readActivityUsageParts(ctx, candidateWhere, candidateArgs, lowerBound, upperBound, ids, schedule, q, startUS, endUS)
+			})
+		if err == nil {
+			var groups []readbase.ActivityUsageGroup
+			nextUS := int64(math.MaxInt64)
+			for _, part := range parts {
+				if part == nil || !remapActivityRates(part, schedule) {
+					err = errActivityUsageParts
+					break
+				}
+				groups = append(groups, part.Groups...)
+				if part.NextUS < nextUS {
+					nextUS = part.NextUS
+				}
+			}
+			if err == nil {
+				readbase.SortActivityUsageGroups(groups)
+				if activityUsagePublishObserver != nil {
+					activityUsagePublishObserver()
+				}
+				if ctx.Err() == nil && version == s.keptVersion() {
+					s.activityUsageSums.Put(slot, version, []*readbase.ActivityUsageSums{{Schedule: schedule, Groups: groups, EndUS: endUS, NextUS: nextUS}})
+				}
+				return readbase.AssembleActivityUsage(pricing, schedule, groups)
+			}
+		}
+		if !errors.Is(err, errActivityUsageParts) {
+			return nil, err
+		}
 	}
 	schedule, groups, err := readbase.PriceActivityUsageGroups(pricing, keys, startUS, endUS,
 		func(schedule readbase.UsageRateSchedule) ([]readbase.ActivityUsageGroup, error) {
@@ -133,13 +152,125 @@ func (s *Store) sumActivityUsage(
 		if activityUsagePublishObserver != nil {
 			activityUsagePublishObserver()
 		}
-		saved := []*readbase.ActivityUsageSums{{Schedule: schedule, Groups: groups, EndUS: endUS, NextUS: nextUS}}
-		if ctx.Err() != nil {
-			diskVersion = ""
+		if ctx.Err() == nil && version == s.keptVersion() {
+			s.activityUsageSums.Put(slot, version, []*readbase.ActivityUsageSums{{Schedule: schedule, Groups: groups, EndUS: endUS, NextUS: nextUS}})
 		}
-		s.keepActivityUsage(slot, version, diskVersion, saved)
 	}
 	return readbase.AssembleActivityUsage(pricing, schedule, groups)
+}
+
+var errActivityUsageParts = errors.New("activity usage parts require a full read")
+
+// remapActivityRates replaces each part's local rate indexes with indexes in schedule.
+func remapActivityRates(part *readbase.ActivityUsageSums, schedule readbase.UsageRateSchedule) bool {
+	indexes := make([]int64, len(part.Schedule.Rates))
+	for i, old := range part.Schedule.Rates {
+		indexes[i] = -1
+		for j, current := range schedule.Rates {
+			if old.Model == current.Model && old.ProviderID == current.ProviderID && old.FromUS == current.FromUS && old.UsageRate.Equal(current.UsageRate) {
+				indexes[i] = int64(j)
+				break
+			}
+		}
+		if indexes[i] < 0 {
+			return false
+		}
+	}
+	for _, g := range part.Groups {
+		if g.Rate < 0 || int(g.Rate) >= len(indexes) {
+			return false
+		}
+	}
+	for i := range part.Groups {
+		part.Groups[i].Rate = indexes[part.Groups[i].Rate]
+	}
+	part.Schedule = schedule
+	return true
+}
+
+func (s *Store) readActivityUsageParts(ctx context.Context, candidateWhere string, candidateArgs []any, lower, upper string, ids []string, schedule readbase.UsageRateSchedule, q activity.Query, startUS, endUS int64) (map[string]*readbase.ActivityUsageSums, error) {
+	peers, err := s.usagePartPeers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	all := ids == nil
+	if all {
+		versions, err := s.usagePartVersions(ctx, true)
+		if err != nil {
+			return nil, err
+		}
+		for id := range versions {
+			ids = append(ids, id)
+		}
+		// A nil read means all candidates, including an empty mirror.
+		if ids == nil {
+			ids = []string{}
+		}
+	}
+	parts := make(map[string]*readbase.ActivityUsageSums, len(ids))
+	for _, id := range ids {
+		parts[id] = &readbase.ActivityUsageSums{EndUS: endUS, NextUS: math.MaxInt64}
+	}
+	with := duckActivityUsageWith(candidateWhere, !all)
+	args := append([]any{lower, upper}, candidateArgs...)
+	if !all {
+		args = append(args, ids)
+	}
+	args = append(args, int64(readbase.ActivityUsageNullPricingUS))
+	groups, err := s.readActivityUsageGroups(ctx, with, args, schedule, q, startUS, endUS)
+	if err != nil {
+		return nil, err
+	}
+	for _, g := range groups {
+		part, ok := parts[g.Session]
+		if !ok || g.Kind == readbase.UsageKindMissingRate || g.Rate < 0 || int(g.Rate) >= len(schedule.Rates) {
+			return nil, errActivityUsageParts
+		}
+		part.Groups = append(part.Groups, g)
+	}
+	rows, err := s.queryContext(ctx, "WITH "+with+" SELECT session_id, min(ts_us) FROM activity_usage_rows WHERE ts_us >= ? GROUP BY session_id", append(slices.Clone(args), endUS)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	minimum := map[string]int64{}
+	group := func(id string) string {
+		if peers[id] != "" {
+			return peers[id]
+		}
+		return id
+	}
+	for rows.Next() {
+		var id string
+		var next int64
+		if err := rows.Scan(&id, &next); err != nil {
+			return nil, err
+		}
+		key := group(id)
+		if old, ok := minimum[key]; !ok || next < old {
+			minimum[key] = next
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for id, part := range parts {
+		if next, ok := minimum[group(id)]; ok {
+			part.NextUS = next
+		}
+		indexes := map[int64]int64{}
+		for i := range part.Groups {
+			old := part.Groups[i].Rate
+			index, ok := indexes[old]
+			if !ok {
+				index = int64(len(part.Schedule.Rates))
+				indexes[old] = index
+				part.Schedule.Rates = append(part.Schedule.Rates, schedule.Rates[old])
+			}
+			part.Groups[i].Rate = index
+		}
+	}
+	return parts, nil
 }
 
 // readActivityUsageGroups runs the usage query under schedule.
@@ -420,42 +551,4 @@ func activityUsageSQL(
 	args = append(args, bandArgs...)
 	args = append(args, bucketArgs...)
 	return query, args
-}
-
-// activityUsagePending identifies a memo entry to save at shutdown.
-type activityUsagePending struct {
-	version, diskVersion string
-}
-
-func (s *Store) keepActivityUsage(slot, version, diskVersion string, rows []*readbase.ActivityUsageSums) {
-	if version != s.keptVersion() {
-		return
-	}
-	s.activityUsagePendingMu.Lock()
-	defer s.activityUsagePendingMu.Unlock()
-	s.activityUsageSums.Put(slot, version, rows)
-	for old, pending := range s.activityUsagePending {
-		if _, ok := s.activityUsageSums.Get(old, pending.version); !ok || old == slot {
-			delete(s.activityUsagePending, old)
-		}
-	}
-	if _, ok := s.activityUsageSums.Get(slot, version); ok && diskVersion != "" {
-		if s.activityUsagePending == nil {
-			s.activityUsagePending = make(map[string]activityUsagePending)
-		}
-		s.activityUsagePending[slot] = activityUsagePending{version, diskVersion}
-	}
-}
-
-func (s *Store) saveActivityUsage() {
-	version := s.keptVersion()
-	s.activityUsagePendingMu.Lock()
-	defer s.activityUsagePendingMu.Unlock()
-	for slot, pending := range s.activityUsagePending {
-		if rows, ok := s.activityUsageSums.Get(slot, version); ok {
-			if data, err := kept.EncodeRows(rows, 128<<20, func(row *readbase.ActivityUsageSums) int64 { return row.Bytes() }); err == nil {
-				s.usageDisk.Put("activity-usage|"+slot, "activity-usage-1|"+pending.diskVersion, data)
-			}
-		}
-	}
 }

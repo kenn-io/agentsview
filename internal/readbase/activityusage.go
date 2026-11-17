@@ -220,7 +220,7 @@ func PriceActivityUsageGroups(
 		}
 		missing := missingUsageRates(groups)
 		if len(missing) == 0 {
-			sortActivityUsageGroups(groups)
+			SortActivityUsageGroups(groups)
 			return schedule, groups, nil
 		}
 		if attempt == 2 {
@@ -276,9 +276,9 @@ func (g ActivityUsageGroup) usageRow() activity.UsageRow {
 	return row
 }
 
-// sortActivityUsageGroups puts groups in a fixed order. A query returns its
+// SortActivityUsageGroups puts groups in a fixed order. A query returns its
 // groups in no set order; sorting them keeps the rows of equal reads equal.
-func sortActivityUsageGroups(groups []ActivityUsageGroup) {
+func SortActivityUsageGroups(groups []ActivityUsageGroup) {
 	slices.SortFunc(groups, func(a, b ActivityUsageGroup) int {
 		return cmp.Or(
 			cmp.Compare(a.Session, b.Session), cmp.Compare(a.Bucket, b.Bucket),
