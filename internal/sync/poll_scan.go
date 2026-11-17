@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	gosync "sync"
 
 	"go.kenn.io/agentsview/internal/parser"
@@ -125,9 +126,7 @@ func (e *Engine) PollProviderRootsGrouped(
 			}
 			switch {
 			case err != nil:
-				if !errors.Is(err, errPollScanIneligible) {
-					log.Printf("poll scan %s: reconciling instead: %v", group.Agent, err)
-				}
+				log.Printf("poll scan %s: reconciling instead: %v", group.Agent, err)
 				state.forget(key)
 				full = append(full, root)
 			case authoritative || previous == nil || result.vanished:
@@ -247,6 +246,13 @@ func (e *Engine) pollScanPlan(
 			len(watch.ExtraDirectories) > 0 || watch.MaxDepth != 0 {
 			return nil, false
 		}
+		for _, glob := range watch.IncludeGlobs {
+			// The scan matches basenames; a path glob or a malformed one would
+			// match nothing and hide every change.
+			if _, err := filepath.Match(glob, ""); err != nil || strings.ContainsAny(glob, `/\`) {
+				return nil, false
+			}
+		}
 	}
 	return plan.Roots, true
 }
@@ -286,7 +292,7 @@ func scanPollRoots(
 					continue
 				}
 				// Discovery may follow links and junctions that this scan does not.
-				return errPollScanIneligible
+				return fmt.Errorf("%w: linked entry %s", errPollScanIneligible, path)
 			case entry.IsDir():
 				if watch.Recursive {
 					if err := visit(path, watch); err != nil {
@@ -306,7 +312,7 @@ func scanPollRoots(
 				return fmt.Errorf("%w: %w", errPollScanIneligible, err)
 			}
 			if len(result.rows) >= maxRows {
-				return errPollScanIneligible
+				return fmt.Errorf("%w: more files than the snapshot limit", errPollScanIneligible)
 			}
 			row := pollScanRow{
 				path:      maphash.String(seed, path),
@@ -319,7 +325,7 @@ func scanPollRoots(
 			if i, found := findPollScanRow(previous, row.path); !found ||
 				previous[i].signature != row.signature {
 				if len(result.changed) == pollScanMaxChangedPaths {
-					return errPollScanIneligible
+					return fmt.Errorf("%w: more than %d changed files", errPollScanIneligible, pollScanMaxChangedPaths)
 				}
 				result.changed = append(result.changed, path)
 			}
@@ -335,7 +341,7 @@ func scanPollRoots(
 			return pollScanResult{}, fmt.Errorf("%w: %w", errPollScanIneligible, err)
 		}
 		if !info.IsDir() {
-			return pollScanResult{}, errPollScanIneligible
+			return pollScanResult{}, fmt.Errorf("%w: %s is not a folder", errPollScanIneligible, watch.Path)
 		}
 		if err := visit(watch.Path, watch); err != nil {
 			return pollScanResult{}, err

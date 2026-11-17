@@ -3,6 +3,7 @@
 package sync
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 )
@@ -17,7 +18,7 @@ func pollScanFileSignature(path string, entry fs.DirEntry) (pollScanSignature, e
 	}
 	ctime, ok := fileChangeTime(path, info)
 	if !ok {
-		return pollScanSignature{}, errPollScanIneligible
+		return pollScanSignature{}, fmt.Errorf("%w: no change time", errPollScanIneligible)
 	}
 	inode, device := getFileIdentity(path, info)
 	return pollScanSignature{

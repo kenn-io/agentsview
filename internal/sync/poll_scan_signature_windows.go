@@ -4,6 +4,7 @@ package sync
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -45,7 +46,7 @@ func pollScanFileSignature(path string, _ fs.DirEntry) (pollScanSignature, error
 	}
 	if basic.changeTime == 0 {
 		// FAT volumes keep no change time.
-		return pollScanSignature{}, errPollScanIneligible
+		return pollScanSignature{}, fmt.Errorf("%w: no change time", errPollScanIneligible)
 	}
 	return pollScanSignature{
 		size:   int64(info.FileSizeHigh)<<32 | int64(info.FileSizeLow),

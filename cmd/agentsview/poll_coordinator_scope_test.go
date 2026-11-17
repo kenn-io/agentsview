@@ -818,3 +818,31 @@ func TestUnwatchedPollStopDuringCooldown(t *testing.T) {
 		require.FailNow(t, "Stop() did not return while in cooldown wait")
 	}
 }
+
+func TestUnwatchedPollReleasesEngineSnapshotsWhenIdle(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		root := requireExistingPollRoot(t, t.TempDir(), "claude")
+		syncer := &groupedCountingPollSyncer{wake: make(chan struct{}, 4)}
+		coordinator := newUnwatchedPollCoordinatorWithTicks(
+			t.Context(), syncer, make(chan time.Time), func() {},
+			func(run func()) { run() }, nil, time.Now, time.After,
+		)
+		t.Cleanup(coordinator.Stop)
+		require.NoError(t, coordinator.AddObligation(pollingObligation{
+			Key: "runtime", Scopes: []pollingScope{{Agent: parser.AgentClaude, Root: root}},
+		}))
+		coordinator.requestPoll()
+		synctest.Wait()
+		require.NoError(t, coordinator.RemoveObligation("runtime"))
+		for range 2 {
+			time.Sleep(unwatchedPollInterval)
+			coordinator.requestPoll()
+			synctest.Wait()
+		}
+
+		assert.Equal(t, [][]agentsync.ProviderRootsGroup{
+			{{Agent: parser.AgentClaude, Roots: []string{root}}},
+			{},
+		}, syncer.snapshot(), "the first idle pass releases snapshots once")
+	})
+}

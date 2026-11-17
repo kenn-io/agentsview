@@ -81,8 +81,10 @@ func TestPollProviderRootsGroupedSyncsChangedFilesWithoutReconciling(t *testing.
 	assert.EqualValues(t, 1, f.reconciled.Load(), "an append is synced by path")
 	assert.Equal(t, 2, f.session(t, "polled").UserMessageCount)
 
+	synced := f.engine.LastSync()
 	f.poll(t, group)
-	assert.EqualValues(t, 1, f.reconciled.Load(), "an unchanged root needs no work")
+	assert.EqualValues(t, 1, f.reconciled.Load(), "an unchanged root needs no reconciliation")
+	assert.Equal(t, synced, f.engine.LastSync(), "an unchanged root needs no path sync")
 }
 
 func TestPollProviderRootsGroupedSeesEqualSizeRewriteWithRestoredMtime(t *testing.T) {
