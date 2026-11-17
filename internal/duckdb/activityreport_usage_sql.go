@@ -84,6 +84,7 @@ func (s *Store) sumActivityUsage(
 		s.handleMu.RUnlock()
 		partVersion := fmt.Sprintf("activity-usage-parts-1|%s|%s|%s", block.Digest, price, pricingpkg.ConfiguredAliasesDigest())
 		schedule := readbase.BuildUsageRateSchedule(pricing, keys, startUS, endUS)
+		remapped := make(map[*readbase.ActivityUsageSums]*readbase.ActivityUsageSums)
 		parts, err := refreshUsageParts(ctx, s, "activity-usage|"+slot, usagePartsOptions[*readbase.ActivityUsageSums]{
 			version: partVersion, omitCursor: true,
 			stale: func(part *readbase.ActivityUsageSums) bool {
@@ -92,7 +93,11 @@ func (s *Store) sumActivityUsage(
 				}
 				probe := *part
 				probe.Groups = slices.Clone(part.Groups)
-				return !remapActivityRates(&probe, schedule)
+				if !remapActivityRates(&probe, schedule) {
+					return true
+				}
+				remapped[part] = &probe
+				return false
 			},
 		}, (*readbase.ActivityUsageSums).Bytes,
 			func(ctx context.Context, ids []string, peers map[string]string) (map[string]*readbase.ActivityUsageSums, error) {
@@ -102,7 +107,9 @@ func (s *Store) sumActivityUsage(
 			var groups []readbase.ActivityUsageGroup
 			nextUS := int64(math.MaxInt64)
 			for _, part := range parts {
-				if !remapActivityRates(part, schedule) {
+				if mapped := remapped[part]; mapped != nil {
+					part = mapped
+				} else if !remapActivityRates(part, schedule) {
 					err = errActivityUsageParts
 					break
 				}
