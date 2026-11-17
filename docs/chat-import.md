@@ -285,7 +285,8 @@ change without notice.
 ## Sync Gemini Apps chats
 
 Gemini Sync runs from the command line. The **Import conversations** dialog
-does not offer it; it still imports Gemini Takeout files.
+offers neither Gemini Sync nor Gemini Takeout imports; import Takeout files with
+the [CLI](#importing-via-the-cli).
 
 1. Set up the Chrome extension as described in
    [Sync Claude.ai chats](#sync-claudeai-chats). If you set it up before this
@@ -345,9 +346,9 @@ When Sync stops:
   to return count as failures but do not count toward this.
 - A rate limit that outlasts the retries, or a requested wait longer than 60
   seconds, ends Sync early. Run Sync again later to continue.
-- A chat in a format this version cannot read counts as one failure. Sync
-  finishes the other chats, then reports that AgentsView needs an update. A
-  chat list in an unreadable format ends Sync with the same message.
+- A chat in a format this version cannot read counts as a failed chat, so two
+  in a row end Sync. Either way, Sync reports that AgentsView needs an update.
+  A chat list in an unreadable format ends Sync with the same message.
 - An expired sign-in ends Sync. Sign in to Gemini in Chrome and run Sync again.
 
 Chats imported before Sync stopped stay imported. Gemini's request names and
