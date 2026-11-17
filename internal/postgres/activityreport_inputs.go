@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"math"
@@ -25,8 +26,9 @@ import (
 // retain the revision captured before their reads so concurrent writes remain
 // visible to the next visit.
 type pgActivityInputs struct {
-	revision int64
-	identity string
+	revision            int64
+	identity            string
+	identityUnavailable bool
 	// sessions holds each session's activity, derived at gapCap.
 	sessions   map[string]pgActivitySession
 	gapCap     float64
@@ -146,8 +148,11 @@ func (s *Store) activityReportInputs(ctx context.Context, version, lower, upper 
 	slot := lower + "|" + upper
 	previous, ok := s.runtimeState().activityInputs.Get(slot, version)
 	identity := ""
-	if (!ok || previous[0].identity == "") && s.activityDisk.Enabled() {
-		identity, _ = s.activitySourceIdentity(ctx, "")
+	identityUnavailable := ok && previous[0].identityUnavailable
+	if (!ok || previous[0].identity == "") && !identityUnavailable && s.activityDisk.Enabled() {
+		var err error
+		identity, err = s.activitySourceIdentity(ctx, "")
+		identityUnavailable = errors.Is(err, db.ErrUsageSourceUnavailable)
 		if !ok && identity != "" {
 			if loaded, found := s.loadActivityInputs(slot, version, identity); found {
 				previous, ok = []pgActivityInputs{loaded}, true
@@ -163,7 +168,7 @@ func (s *Store) activityReportInputs(ctx context.Context, version, lower, upper 
 		s.runtimeState().activityInputs.DeleteSlots(func(slot string) bool { return slot == lower+"|"+upper })
 		return nil, err
 	}
-	next := &pgActivityInputs{revision: revision, identity: identity, sessions: map[string]pgActivitySession{}, changed: changed}
+	next := &pgActivityInputs{revision: revision, identity: identity, identityUnavailable: identityUnavailable, sessions: map[string]pgActivitySession{}, changed: changed}
 	if ok && previous[0].identity != "" {
 		next.identity = previous[0].identity
 	}

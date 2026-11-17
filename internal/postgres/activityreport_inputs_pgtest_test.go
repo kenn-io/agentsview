@@ -25,14 +25,18 @@ type activityInputReadCounter struct {
 	cancel                      context.CancelFunc
 }
 
-type activityIdentityErrorOnce struct {
+type activityIdentityError struct {
 	storeExecutor
 	queries int
+	denied  bool
 }
 
-func (c *activityIdentityErrorOnce) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+func (c *activityIdentityError) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
 	if strings.Contains(query, "pg_control_system()") {
 		c.queries++
+		if c.denied {
+			return c.storeExecutor.QueryRowContext(ctx, "SELECT activity_identity_denied()")
+		}
 		if c.queries == 1 {
 			return c.storeExecutor.QueryRowContext(ctx, "SELECT 1 / 0")
 		}
@@ -382,7 +386,7 @@ func TestPGActivityReportInputIdentityRetry(t *testing.T) {
 	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
 	q.Partial, q.EffectiveEnd = true, q.RangeEnd.Add(-time.Hour)
 	first := open()
-	failOnce := &activityIdentityErrorOnce{storeExecutor: first.pg}
+	failOnce := &activityIdentityError{storeExecutor: first.pg}
 	first.pg = failOnce
 	pgKeptBuild(t, first, f, q, true)
 	q.EffectiveEnd = q.EffectiveEnd.Add(time.Nanosecond)
@@ -396,6 +400,34 @@ func TestPGActivityReportInputIdentityRetry(t *testing.T) {
 	assert.Empty(t, reads.transcriptReads)
 	assert.Empty(t, reads.usageReads)
 	assert.GreaterOrEqual(t, failOnce.queries, 2)
+}
+
+func TestPGActivityReportInputIdentityDenied(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	target, directory := testPGURL(t), t.TempDir()
+	store, err := NewStore(t.Context(), target, syncer.schema, true)
+	require.NoError(t, err)
+	defer store.Close()
+	require.NoError(t, store.ConfigureUsageCache(t.Context(), directory, target, syncer.schema))
+	_, err = store.pg.ExecContext(t.Context(), `CREATE FUNCTION activity_identity_denied() RETURNS text LANGUAGE plpgsql AS $$
+BEGIN RAISE EXCEPTION 'permission denied' USING ERRCODE = '42501'; END $$`)
+	require.NoError(t, err)
+	reads := &activityInputReadCounter{storeExecutor: store.pg}
+	denied := &activityIdentityError{storeExecutor: reads, denied: true}
+	store.pg = denied
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	q.Partial, q.EffectiveEnd = true, q.RangeEnd.Add(-time.Hour)
+	assert.Equal(t, 500, pgKeptBuild(t, store, f, q, true).Report.Totals.OutputTokens)
+	for range 2 {
+		q.EffectiveEnd = q.EffectiveEnd.Add(time.Nanosecond)
+		assert.Equal(t, 500, pgKeptBuild(t, store, f, q, true).Report.Totals.OutputTokens)
+	}
+	assert.Equal(t, 1, denied.queries)
+	assert.Len(t, reads.transcriptReads, 1)
+	assert.Len(t, reads.usageReads, 1)
 }
 
 func TestPGActivityReportInputInvalidRestart(t *testing.T) {
