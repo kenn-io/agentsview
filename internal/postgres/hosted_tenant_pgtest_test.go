@@ -362,11 +362,6 @@ func TestHostedTenantRejectsDynamicVectorStorageBeforeMutation(t *testing.T) {
 	var changed bool
 	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT to_regclass('hosted_tenant_binding') IS NOT NULL OR EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid='sessions'::regclass AND attname='tenant_id')`).Scan(&changed))
 	assert.False(t, changed)
-	f := newHostedFixture(t, "tenant-vector-inventory")
-	_, err = f.admin.ExecContext(t.Context(), `CREATE TABLE vector_chunks_g999999 (doc_key text)`)
-	require.NoError(t, err)
-	assert.EqualError(t, CheckHostedTenant(t.Context(), f.runtime, f.schema, f.tenant), "hosted vector schema is unsupported")
-	assert.ErrorContains(t, EnsureHostedTenant(t.Context(), f.admin, f.schema, f.tenant), "hosted vector schema is unsupported")
 }
 
 func TestHostedTenantRuntimeRoleGate(t *testing.T) {

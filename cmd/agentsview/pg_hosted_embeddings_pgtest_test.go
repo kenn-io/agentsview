@@ -47,14 +47,14 @@ func TestHostedSemanticUnavailableGuidance(t *testing.T) {
 		want    string
 	}{
 		{name: "disabled", want: "semantic search: configure [vector]"},
-		{name: "missing generation", vector: defaults.Vector, enabled: true, want: "generation not published"},
+		{name: "missing generation", vector: defaults.Vector, enabled: true, want: "no embedding generation matching fingerprint"},
 		{name: "missing deployment recipe", server: &config.VectorEmbeddingsServerConfig{Endpoint: "http://example.test"}, want: "semantic recipe adoption requires exactly one supported published generation"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg.Vector = tc.vector
 			cfg.Vector.Enabled = tc.enabled
 			cfg.DeploymentEmbeddings = tc.server
-			require.NoError(t, wireReplicaVectorSearch(t.Context(), cfg, &serveWatchVectorProvider{miss: true}, store, "hosted"))
+			require.NoError(t, wireReplicaVectorSearch(t.Context(), cfg, pgReplica{}, store, "hosted"))
 			_, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "hello", Mode: "semantic"})
 			require.ErrorIs(t, err, db.ErrSemanticUnavailable)
 			assert.Contains(t, err.Error(), tc.want)
@@ -183,7 +183,7 @@ func TestHostedCaptureSemanticSearch(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": data, "model": "fixture", "object": "list"})
 	}))
 	t.Cleanup(endpoint.Close)
-	var configured config.Config
+	var authToken string
 	startup, store, admin := startParityRuntimeConfigured(t, config.ArchiveContentFull, false, func(cfg *config.Config, admin *sql.DB) {
 		defaults, err := config.Default()
 		require.NoError(t, err)
@@ -206,16 +206,25 @@ func TestHostedCaptureSemanticSearch(t *testing.T) {
 		require.NoError(t, err)
 		_, err = admin.ExecContext(t.Context(), fmt.Sprintf(`GRANT SELECT,INSERT,DELETE ON vector_chunks_g%d TO %q`, id, u.User.Username()))
 		require.NoError(t, err)
-		configured = *cfg
+		authToken = cfg.AuthToken
 	})
-	require.NoError(t, wireReplicaVectorSearch(t.Context(), configured, pgReplica{}, store, "hosted test"))
 	root := t.TempDir()
 	path := rawtest.Claude(t, root)
 	client := newHostedCaptureClient(t, startup, store, parser.AgentClaude, root)
 	receipt := client.capture(t)
 	waitCaptureJob(t, admin, receipt.ManifestID, "complete", 1)
 	search := func(text string) (db.ContentSearchPage, error) {
-		return store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: text, Mode: "semantic", IncludeOneShot: true, Limit: 10})
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/search/content?pattern="+url.QueryEscape(text)+"&mode=semantic&include_one_shot=true", nil)
+		req.Header.Set("Authorization", "Bearer "+authToken)
+		req.Header.Set("X-AgentsView-Search-Intent", "semantic")
+		response := httptest.NewRecorder()
+		startup.srv.Handler().ServeHTTP(response, req)
+		if response.Code != http.StatusOK {
+			return db.ContentSearchPage{}, fmt.Errorf("search returned %d: %s", response.Code, response.Body.String())
+		}
+		var page db.ContentSearchPage
+		err := json.NewDecoder(response.Body).Decode(&page)
+		return page, err
 	}
 	require.EventuallyWithT(t, func(c *assert.CollectT) {
 		page, err := search("Inspect the build")

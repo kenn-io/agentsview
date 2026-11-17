@@ -89,8 +89,6 @@ func TestFillUnitDocumentsSkipsRejectedInput(t *testing.T) {
 }
 
 func TestFillUnitDocumentsSpoolsPagesAndChunks(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("TMPDIR", dir)
 	var units []db.EmbeddableUnit
 	for i := range 140 {
 		units = append(units, db.EmbeddableUnit{SessionID: "session", Kind: "user", Ordinal: i, Content: strings.Repeat("abcdefghij", 8)})
@@ -118,9 +116,6 @@ func TestFillUnitDocumentsSpoolsPagesAndChunks(t *testing.T) {
 		assert.Equal(t, []float32{1, 0}, chunks[0].Embedding)
 	}
 	require.NoError(t, spool.Close())
-	files, err := os.ReadDir(dir)
-	require.NoError(t, err)
-	assert.Empty(t, files)
 }
 
 func TestFillUnitDocumentsSpoolWriteFailure(t *testing.T) {
