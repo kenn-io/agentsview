@@ -143,6 +143,49 @@ func TestRemoteSyncAppendsGrowingTranscripts(t *testing.T) {
 	}
 }
 
+// A database grows at its end but also rewrites earlier bytes, such as the
+// header SQLite updates on every commit. Its old tail can survive that, so a
+// tail match must not let it skip the bytes that changed.
+func TestArchiveAppendSendsOnlyTranscriptsAsAppends(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		append bool
+	}{
+		{name: "session.jsonl", append: true},
+		{name: "state.vscdb"},
+		{name: "store.db"},
+		{name: "session.json"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), tc.name)
+			// Longer than the tail the append check compares, so a change
+			// at the start leaves that tail intact.
+			old := bytes.Repeat([]byte("page "), 2*appendTailBytes/5)
+			require.NoError(t, os.WriteFile(path, old, 0o644))
+			base, ok := mirrorAppendBase(path)
+			require.True(t, ok)
+			grown := append([]byte("HEAD!"), old[5:]...)
+			grown = append(grown, "new page"...)
+			require.NoError(t, os.WriteFile(path, grown, 0o644))
+
+			var archive bytes.Buffer
+			tw := tar.NewWriter(&archive)
+			appended, err := writeArchiveAppend(tw, path, base)
+			require.NoError(t, err)
+			require.NoError(t, tw.Close())
+
+			assert.Equal(t, tc.append, appended)
+			_, err = tar.NewReader(&archive).Next()
+			if tc.append {
+				assert.NoError(t, err, "a transcript gets an append entry")
+			} else {
+				assert.ErrorIs(t, err, io.EOF,
+					"a file sent whole is left to the caller, so no entry is written")
+			}
+		})
+	}
+}
+
 // An appended entry cut off mid-body leaves the mirror copy at its old
 // length, so the next comparison fetches the file again.
 func TestExtractTruncatedAppendRestoresMirrorCopy(t *testing.T) {

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 // Agent transcripts are append-only, so a changed file usually holds its old
@@ -85,12 +86,21 @@ func appendBasesByPath(appends []DeltaAppend) map[string]DeltaAppend {
 	return bases
 }
 
+// appendOnlyTranscript reports a file the append path may trust: a JSON Lines
+// transcript, which its agent only ever extends. Other files that grow, such
+// as SQLite databases, also rewrite bytes before their end, like the header
+// SQLite updates on every commit. Their old tail can survive such a rewrite,
+// so a tail match proves nothing about their start, and they are sent whole.
+func appendOnlyTranscript(path string) bool {
+	return strings.EqualFold(filepath.Ext(path), ".jsonl")
+}
+
 // writeArchiveAppend writes only the bytes path gained past base.Offset. It
-// reports false, having written nothing, when the file is not longer than the
-// base or its bytes before the offset differ; the caller then sends the whole
-// file.
+// reports false, having written nothing, when the file is not an append-only
+// transcript, is not longer than the base, or its bytes before the offset
+// differ; the caller then sends the whole file.
 func writeArchiveAppend(tw *tar.Writer, path string, base DeltaAppend) (bool, error) {
-	if base.Offset <= 0 {
+	if base.Offset <= 0 || !appendOnlyTranscript(path) {
 		return false, nil
 	}
 	file, err := os.Open(path)
