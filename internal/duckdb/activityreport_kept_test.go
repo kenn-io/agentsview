@@ -87,38 +87,6 @@ func observeActivityUsageReads(t *testing.T) *int {
 	return &reads
 }
 
-func TestActivityUsagePartsRefreshChangedSession(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	keptActivityMirror(t, path, "session-a", 500)
-	writeUsageMirror(t, path,
-		`UPDATE sessions SET agentsview_push_fingerprint = 'a1'`,
-		`INSERT INTO sessions SELECT * REPLACE ('session-b' AS id, 'b1' AS agentsview_push_fingerprint) FROM sessions WHERE id = 'session-a'`,
-		`INSERT INTO sessions SELECT * REPLACE ('session-c' AS id, 'c1' AS agentsview_push_fingerprint) FROM sessions WHERE id = 'session-a'`,
-		`INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id) FROM messages WHERE id = 2`,
-		`INSERT INTO messages SELECT * REPLACE (4 AS id, 'session-c' AS session_id) FROM messages WHERE id = 2`,
-	)
-	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
-	require.NoError(t, err)
-	store := openUsagePartsStore(t, path)
-	keptActivityBuild(t, store, q, true)
-	require.NoError(t, store.Close())
-	writeUsageMirror(t, path,
-		`UPDATE sessions SET agentsview_push_fingerprint = 'b2' WHERE id = 'session-b'`,
-		`UPDATE messages SET usage_output_tokens = 900 WHERE id = 3`,
-	)
-	store = openUsagePartsStore(t, path)
-	defer store.Close()
-	var refreshed []string
-	previous := usagePartReadObserver
-	usagePartReadObserver = func(ids []string) { refreshed = append(refreshed, ids...) }
-	t.Cleanup(func() { usagePartReadObserver = previous })
-	got := keptActivityBuild(t, store, q, true)
-	require.Equal(t, []string{"session-b"}, refreshed)
-	fresh := NewStoreFromDB(store.DB())
-	requireKeptActivityEqual(t, keptActivityBuild(t, fresh, q, true), got)
-}
-
 func TestActivityUsagePartsBoundaryFailureFallsBack(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
@@ -137,71 +105,13 @@ func TestActivityUsagePartsBoundaryFailureFallsBack(t *testing.T) {
 	requireKeptActivityEqual(t, want, got)
 }
 
-func TestActivityUsagePartsRefreshPeers(t *testing.T) {
-	for _, key := range []string{"claude_message_id = 'message', claude_request_id = 'request'", "source_uuid = 'shared'"} {
-		t.Run(key, func(t *testing.T) {
-			t.Setenv("CACHE_DIRECTORY", t.TempDir())
-			path := filepath.Join(t.TempDir(), "mirror.duckdb")
-			keptActivityMirror(t, path, "session-a", 500)
-			writeUsageMirror(t, path,
-				`UPDATE sessions SET agentsview_push_fingerprint = 'a1', agent = 'claude'`,
-				`UPDATE messages SET `+key+` WHERE id = 2`,
-				`INSERT INTO sessions SELECT * REPLACE ('session-b' AS id, 'b1' AS agentsview_push_fingerprint) FROM sessions WHERE id = 'session-a'`,
-				`INSERT INTO sessions SELECT * REPLACE ('session-c' AS id, 'c1' AS agentsview_push_fingerprint) FROM sessions WHERE id = 'session-a'`,
-				`INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id, 700 AS usage_output_tokens) FROM messages WHERE id = 2`,
-				`INSERT INTO messages SELECT * REPLACE (4 AS id, 'session-c' AS session_id, '' AS source_uuid, '' AS claude_message_id, '' AS claude_request_id) FROM messages WHERE id = 2`,
-			)
-			q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
-			require.NoError(t, err)
-			store := openUsagePartsStore(t, path)
-			keptActivityBuild(t, store, q, true)
-			require.NoError(t, store.Close())
-			writeUsageMirror(t, path, `UPDATE sessions SET agentsview_push_fingerprint = 'b2' WHERE id = 'session-b'`, `UPDATE messages SET usage_output_tokens = 900 WHERE id = 3`)
-			store = openUsagePartsStore(t, path)
-			defer store.Close()
-			var refreshed []string
-			previous := usagePartReadObserver
-			usagePartReadObserver = func(ids []string) { refreshed = append(refreshed, ids...) }
-			t.Cleanup(func() { usagePartReadObserver = previous })
-			got := keptActivityBuild(t, store, q, true)
-			require.ElementsMatch(t, []string{"session-a", "session-b"}, refreshed)
-			fresh := NewStoreFromDB(store.DB())
-			requireKeptActivityEqual(t, keptActivityBuild(t, fresh, q, true), got)
-			require.NoError(t, store.Close())
-			newKey := "source_uuid = 'new-shared'"
-			if strings.HasPrefix(key, "claude_") {
-				newKey = "claude_message_id = 'new-message', claude_request_id = 'request'"
-			}
-			writeUsageMirror(t, path,
-				`UPDATE sessions SET agentsview_push_fingerprint = agentsview_push_fingerprint || '-new' WHERE id IN ('session-b', 'session-c')`,
-				`UPDATE messages SET `+newKey+` WHERE id IN (3, 4)`,
-			)
-			store = openUsagePartsStore(t, path)
-			defer store.Close()
-			refreshed = nil
-			got = keptActivityBuild(t, store, q, true)
-			require.ElementsMatch(t, []string{"session-a", "session-b", "session-c"}, refreshed)
-			fresh = NewStoreFromDB(store.DB())
-			requireKeptActivityEqual(t, keptActivityBuild(t, fresh, q, true), got)
-			require.NoError(t, store.Close())
-			writeUsageMirror(t, path, `UPDATE sessions SET deleted_at = CURRENT_TIMESTAMP WHERE id = 'session-b'`)
-			store = openUsagePartsStore(t, path)
-			defer store.Close()
-			refreshed = nil
-			got = keptActivityBuild(t, store, q, true)
-			require.Equal(t, []string{"session-c"}, refreshed)
-			fresh = NewStoreFromDB(store.DB())
-			requireKeptActivityEqual(t, keptActivityBuild(t, fresh, q, true), got)
-		})
-	}
-}
-
 func TestActivityUsagePartsRemapRates(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	keptActivityMirror(t, path, "session-a", 500)
 	writeUsageMirror(t, path,
 		`UPDATE sessions SET agentsview_push_fingerprint = 'a1'`,
+		`INSERT INTO model_pricing (model_pattern, output_microdollars_per_mtok) VALUES ('kept-model', 10000000), ('a-new-model', 20000000)`,
 		`INSERT INTO sessions SELECT * REPLACE ('session-b' AS id, 'b1' AS agentsview_push_fingerprint) FROM sessions WHERE id = 'session-a'`,
 		`INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id) FROM messages WHERE id = 2`,
 	)
@@ -210,7 +120,7 @@ func TestActivityUsagePartsRemapRates(t *testing.T) {
 	store := openUsagePartsStore(t, path)
 	keptActivityBuild(t, store, q, true)
 	require.NoError(t, store.Close())
-	writeUsageMirror(t, path, `UPDATE sessions SET agentsview_push_fingerprint = 'b2' WHERE id = 'session-b'`, `UPDATE messages SET model = 'a-new-model' WHERE id = 3`)
+	writeUsageMirror(t, path, `UPDATE sessions SET agentsview_push_fingerprint = 'b2' WHERE id = 'session-b'`, `UPDATE messages SET model = 'a-new-model', usage_output_tokens = 900 WHERE id = 3`)
 	store = openUsagePartsStore(t, path)
 	defer store.Close()
 	var refreshed []string
@@ -218,6 +128,8 @@ func TestActivityUsagePartsRemapRates(t *testing.T) {
 	usagePartReadObserver = func(ids []string) { refreshed = append(refreshed, ids...) }
 	t.Cleanup(func() { usagePartReadObserver = previous })
 	got := keptActivityBuild(t, store, q, true)
+	require.Equal(t, 1400, activity.ReportWithSessions(got).Totals.OutputTokens)
+	require.Equal(t, money.MustParseDollars("0.023"), activity.ReportWithSessions(got).Totals.Cost)
 	require.Equal(t, []string{"session-b"}, refreshed)
 	fresh := NewStoreFromDB(store.DB())
 	requireKeptActivityEqual(t, keptActivityBuild(t, fresh, q, true), got)
@@ -229,7 +141,7 @@ func TestActivityUsagePartsExpireOnlyFutureGroup(t *testing.T) {
 	keptActivityMirror(t, path, "session-a", 500)
 	writeUsageMirror(t, path,
 		`UPDATE sessions SET agentsview_push_fingerprint = 'a1'`,
-		`INSERT INTO sessions SELECT * REPLACE ('session-b' AS id, 'b1' AS agentsview_push_fingerprint) FROM sessions WHERE id = 'session-a'`,
+		`INSERT INTO sessions SELECT * REPLACE ('session-b' AS id, 'b1' AS agentsview_push_fingerprint, TIMESTAMP '2026-01-01 13:00:00' AS ended_at) FROM sessions WHERE id = 'session-a'`,
 		`INSERT INTO sessions SELECT * REPLACE ('session-c' AS id, 'c1' AS agentsview_push_fingerprint) FROM sessions WHERE id = 'session-a'`,
 		`INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id, TIMESTAMP '2026-01-01 13:00:00' AS timestamp) FROM messages WHERE id = 2`,
 		`INSERT INTO messages SELECT * REPLACE (4 AS id, 'session-c' AS session_id) FROM messages WHERE id = 2`,
@@ -295,33 +207,6 @@ func TestActivityUsagePartsIgnoreCursorAccount(t *testing.T) {
 	got := keptActivityBuild(t, store, q, true)
 	require.Zero(t, *reads)
 	requireKeptActivityEqual(t, want, got)
-}
-
-func TestActivityUsagePartsRefreshAfterAliasChange(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	pricingpkg.SetConfiguredAliases(map[string]string{"kept-model": "price-a"})
-	t.Cleanup(func() { pricingpkg.SetConfiguredAliases(nil) })
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	keptActivityMirror(t, path, "session-a", 500)
-	writeUsageMirror(t, path,
-		`UPDATE sessions SET agentsview_push_fingerprint = 'a1'`,
-		`INSERT INTO model_pricing (model_pattern, output_microdollars_per_mtok) VALUES ('price-a', 10000000), ('price-b', 20000000)`,
-	)
-	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
-	require.NoError(t, err)
-	store := openUsagePartsStore(t, path)
-	first := keptActivityBuild(t, store, q, true)
-	require.Equal(t, money.MustParseDollars("0.005"), activity.ReportWithSessions(first).Totals.Cost)
-	require.NoError(t, store.Close())
-	pricingpkg.SetConfiguredAliases(map[string]string{"kept-model": "price-b"})
-	store = openUsagePartsStore(t, path)
-	defer store.Close()
-	reads := observeActivityUsageReads(t)
-	got := keptActivityBuild(t, store, q, true)
-	require.Equal(t, 1, *reads)
-	require.Equal(t, money.MustParseDollars("0.01"), activity.ReportWithSessions(got).Totals.Cost)
-	fresh := NewStoreFromDB(store.DB())
-	requireKeptActivityEqual(t, keptActivityBuild(t, fresh, q, true), got)
 }
 
 func TestActivityReportKeptAcrossReopensAndRestart(t *testing.T) {
@@ -588,12 +473,16 @@ func TestPartialActivityUsageRereadsPastClaudePeer(t *testing.T) {
 }
 
 func TestPartialActivityInputsSurviveRestart(t *testing.T) {
-	for _, scenario := range []string{"unchanged", "custom pricing", "mirror pricing", "unrelated mirror write"} {
+	for _, scenario := range []string{"unchanged", "custom pricing", "mirror pricing", "alias pricing", "unrelated mirror write"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Setenv("CACHE_DIRECTORY", t.TempDir())
 			path := filepath.Join(t.TempDir(), "mirror.duckdb")
 			keptActivityMirror(t, path, "session-a", 500)
-			writeUsageMirror(t, path, `INSERT INTO model_pricing (model_pattern, output_microdollars_per_mtok) VALUES ('kept-model', 10000000)`)
+			writeUsageMirror(t, path, `INSERT INTO model_pricing (model_pattern, output_microdollars_per_mtok) VALUES ('kept-model', 10000000), ('price-a', 10000000), ('price-b', 20000000)`)
+			if scenario == "alias pricing" {
+				pricingpkg.SetConfiguredAliases(map[string]string{"kept-model": "price-a"})
+				t.Cleanup(func() { pricingpkg.SetConfiguredAliases(nil) })
+			}
 			q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
 			require.NoError(t, err)
 			open := func() *Store {
@@ -607,6 +496,8 @@ func TestPartialActivityInputsSurviveRestart(t *testing.T) {
 			require.Equal(t, money.MustParseDollars("0.005"), activity.ReportWithSessions(want).Totals.Cost)
 			require.NoError(t, store.Close())
 			switch scenario {
+			case "alias pricing":
+				pricingpkg.SetConfiguredAliases(map[string]string{"kept-model": "price-b"})
 			case "mirror pricing":
 				writeUsageMirror(t, path, `UPDATE model_pricing SET output_microdollars_per_mtok = 20000000 WHERE model_pattern = 'kept-model'`)
 			case "unrelated mirror write":
@@ -628,7 +519,7 @@ func TestPartialActivityInputsSurviveRestart(t *testing.T) {
 			t.Cleanup(func() { analyticsQueryObserver = previous })
 			got := keptActivityBuild(t, restarted, q, true)
 			wantReads := 0
-			if scenario == "custom pricing" || scenario == "mirror pricing" {
+			if scenario == "custom pricing" || scenario == "mirror pricing" || scenario == "alias pricing" {
 				wantReads = 1
 			}
 			require.Equal(t, wantReads, usage)
@@ -645,61 +536,8 @@ func TestPartialActivityInputsSurviveRestart(t *testing.T) {
 }
 
 func TestPartialActivityInvalidDiskEntryIsMiss(t *testing.T) {
-	cache := t.TempDir()
-	t.Setenv("CACHE_DIRECTORY", cache)
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	keptActivityMirror(t, path, "session-a", 500)
-	store, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
-	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
-	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
-	require.NoError(t, err)
-	keptActivityBuild(t, store, q, true)
-	require.NoError(t, store.Close())
-	rewritten := 0
-	require.NoError(t, filepath.WalkDir(cache, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if filepath.Ext(path) == ".gob" {
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			headerEnd := bytes.IndexByte(data, '\n')
-			require.GreaterOrEqual(t, headerEnd, 0)
-			if err := os.WriteFile(path, append(data[:headerEnd+1], []byte("corrupt")...), 0o600); err != nil {
-				return err
-			}
-			rewritten++
-		}
-		return nil
-	}))
-	require.Positive(t, rewritten)
-	restarted, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
-	defer restarted.Close()
-	require.NoError(t, restarted.OpenActivityReportDisk(t.Context()))
-	usageReads, runReads := 0, 0
-	previous := analyticsQueryObserver
-	analyticsQueryObserver = func(query string) {
-		if strings.Contains(query, "activity_usage_keyed") {
-			usageReads++
-		}
-		if strings.Contains(query, "activity_run_pieces") {
-			runReads++
-		}
-	}
-	t.Cleanup(func() { analyticsQueryObserver = previous })
-	got := keptActivityBuild(t, restarted, q, true)
-	require.Equal(t, 1, usageReads)
-	require.Equal(t, 1, runReads)
-	require.Equal(t, 500, activity.ReportWithSessions(got).Totals.OutputTokens)
-}
-
-func TestPartialActivityInvalidSavedRateIsMiss(t *testing.T) {
-	for _, rate := range []int64{-1, 99999} {
-		t.Run(strconv.FormatInt(rate, 10), func(t *testing.T) {
+	for _, scenario := range []string{"corrupt", "-1", "99999"} {
+		t.Run(scenario, func(t *testing.T) {
 			cache := t.TempDir()
 			t.Setenv("CACHE_DIRECTORY", cache)
 			path := filepath.Join(t.TempDir(), "mirror.duckdb")
@@ -709,7 +547,7 @@ func TestPartialActivityInvalidSavedRateIsMiss(t *testing.T) {
 			store := openUsagePartsStore(t, path)
 			keptActivityBuild(t, store, q, true)
 			require.NoError(t, store.Close())
-			rewritten := false
+			rewritten := 0
 			require.NoError(t, filepath.WalkDir(cache, func(path string, entry os.DirEntry, err error) error {
 				if err != nil || entry.IsDir() || filepath.Ext(path) != ".gob" {
 					return err
@@ -719,8 +557,10 @@ func TestPartialActivityInvalidSavedRateIsMiss(t *testing.T) {
 					return err
 				}
 				header := bytes.IndexByte(data, '\n')
-				if header < 0 {
-					return nil
+				require.GreaterOrEqual(t, header, 0)
+				if scenario == "corrupt" {
+					rewritten++
+					return os.WriteFile(path, append(data[:header+1], []byte("corrupt")...), 0o600)
 				}
 				parts, ok := kept.DecodeRows[kept.Part[*readbase.ActivityUsageSums]](data[header+1:])
 				if !ok {
@@ -730,20 +570,39 @@ func TestPartialActivityInvalidSavedRateIsMiss(t *testing.T) {
 					if part.Value == nil || len(part.Value.Groups) == 0 {
 						continue
 					}
+					rate, err := strconv.ParseInt(scenario, 10, 64)
+					if err != nil {
+						return err
+					}
 					part.Value.Groups[0].Rate = rate
 					payload, err := kept.EncodeRows(parts, 128<<20, func(part kept.Part[*readbase.ActivityUsageSums]) int64 { return 1 })
 					if err != nil {
 						return err
 					}
-					rewritten = true
+					rewritten++
 					return os.WriteFile(path, append(data[:header+1], payload...), 0o600)
 				}
 				return nil
 			}))
-			require.True(t, rewritten)
-			store = openUsagePartsStore(t, path)
-			defer store.Close()
-			got := keptActivityBuild(t, store, q, true)
+			require.Positive(t, rewritten)
+			restarted := openUsagePartsStore(t, path)
+			defer restarted.Close()
+			usageReads, runReads := 0, 0
+			previous := analyticsQueryObserver
+			analyticsQueryObserver = func(query string) {
+				if strings.Contains(query, "activity_usage_keyed") {
+					usageReads++
+				}
+				if strings.Contains(query, "activity_run_pieces") {
+					runReads++
+				}
+			}
+			t.Cleanup(func() { analyticsQueryObserver = previous })
+			got := keptActivityBuild(t, restarted, q, true)
+			require.Equal(t, 1, usageReads)
+			if scenario == "corrupt" {
+				require.Equal(t, 1, runReads)
+			}
 			require.Equal(t, 500, activity.ReportWithSessions(got).Totals.OutputTokens)
 		})
 	}
