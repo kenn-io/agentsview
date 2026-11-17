@@ -26,6 +26,7 @@ import (
 // visible to the next visit.
 type pgActivityInputs struct {
 	revision int64
+	identity string
 	// sessions holds each session's activity, derived at gapCap.
 	sessions   map[string]pgActivitySession
 	gapCap     float64
@@ -99,7 +100,7 @@ func pgCompactActivityUsage(r pgDailyUsageScanRow, handle func(string) unique.Ha
 }
 
 func pgActivityInputBytes(e pgActivityInputs) int64 {
-	size := int64(unsafe.Sizeof(e))
+	size := int64(unsafe.Sizeof(e)) + int64(len(e.identity))
 	size += pgActivityPricedBytes(e.priced)
 	shared := map[unique.Handle[string]]struct{}{}
 	for id, session := range e.sessions {
@@ -142,7 +143,17 @@ func pgActivityPricedBytes(priced *pgActivityPriced) int64 {
 }
 
 func (s *Store) activityReportInputs(ctx context.Context, version, lower, upper string) (*pgActivityInputs, error) {
-	previous, ok := s.runtimeState().activityInputs.Get(lower+"|"+upper, version)
+	slot := lower + "|" + upper
+	previous, ok := s.runtimeState().activityInputs.Get(slot, version)
+	identity := ""
+	if !ok && s.activityDisk.Enabled() {
+		identity, _ = s.activitySourceIdentity(ctx, s.activityTarget)
+		if identity != "" {
+			if loaded, found := s.loadActivityInputs(slot, version, identity); found {
+				previous, ok = []pgActivityInputs{loaded}, true
+			}
+		}
+	}
 	after := int64(math.MaxInt64)
 	if ok {
 		after = previous[0].revision
@@ -152,7 +163,10 @@ func (s *Store) activityReportInputs(ctx context.Context, version, lower, upper 
 		s.runtimeState().activityInputs.DeleteSlots(func(slot string) bool { return slot == lower+"|"+upper })
 		return nil, err
 	}
-	next := &pgActivityInputs{revision: revision, sessions: map[string]pgActivitySession{}, changed: changed}
+	next := &pgActivityInputs{revision: revision, identity: identity, sessions: map[string]pgActivitySession{}, changed: changed}
+	if ok {
+		next.identity = previous[0].identity
+	}
 	if ok && revision >= after && len(changed) <= max(64, len(previous[0].candidates)/4) {
 		old := previous[0]
 		dirty := make(map[string]bool, len(changed))

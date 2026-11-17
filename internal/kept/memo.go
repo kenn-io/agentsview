@@ -119,3 +119,21 @@ func (m *Memo[T]) removeLocked(slot string) {
 	m.order = slices.DeleteFunc(m.order, func(s string) bool { return s == slot })
 	m.bytes -= entry.bytes
 }
+
+// MemoSnapshot is one retained slot at a point in time.
+type MemoSnapshot[T any] struct {
+	Slot, Version string
+	Rows          []T
+}
+
+// Snapshot copies the retained slots and their row slices.
+func (m *Memo[T]) Snapshot() []MemoSnapshot[T] {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	slots := make([]MemoSnapshot[T], 0, len(m.order))
+	for _, slot := range m.order {
+		entry := m.entries[slot]
+		slots = append(slots, MemoSnapshot[T]{Slot: slot, Version: entry.version, Rows: slices.Clone(entry.rows)})
+	}
+	return slots
+}
