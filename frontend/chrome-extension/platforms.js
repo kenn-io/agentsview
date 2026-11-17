@@ -18,4 +18,12 @@ export const platforms = {
     fetchFunction: "chatgptFetch",
     params: { conversation: uuid, offset: "[0-9]+", archived: "(?:false|true)" },
   },
+  "gemini-apps": {
+    origin: "https://gemini.google.com",
+    newTabURL: "https://gemini.google.com/app",
+    scripts: ["page_fetch.js", "gemini_fetch.js"],
+    fetchFunction: "geminiFetch",
+    // Values arrive query-escaped, so a cursor cannot add a parameter.
+    params: { chat: "c_[0-9A-Za-z_-]+", cursor: "[0-9A-Za-z%._~-]*" },
+  },
 };

@@ -84,7 +84,7 @@ describe("Chrome native host worker", () => {
     expect(chrome.scripting.executeScript).not.toHaveBeenCalled();
   });
 
-  it.each([undefined, "", "gemini-apps", "__proto__", "toString"])(
+  it.each([undefined, "", "codex", "__proto__", "toString"])(
     "replies unsupported for platform %s without touching tabs",
     async (platform) => {
       message({ id: "a", platform, path: "/api/organizations", version: 2 });

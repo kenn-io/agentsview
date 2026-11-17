@@ -115,3 +115,21 @@ describe("Claude.ai request allowlist", () => {
     list.replace("offset=0", "offset=1.5"),
   ])("refuses %s", async (path) => expect(await allowedPath("claude-ai", path)).toBe(false));
 });
+
+describe("Gemini request allowlist", () => {
+  const rpc = "/_/BardChatUi/data/batchexecute?rpcids=";
+  const list = (cursor = "") => `${rpc}MaZiqc&cursor=${cursor}`;
+  const detail = (chat: string, cursor = "") => `${rpc}hNvQHb&chat=${chat}&cursor=${cursor}`;
+
+  it.each([
+    "",
+    "/app",
+    `${rpc}ESY5D&cursor=`,
+    `${list()}&rpcids=ESY5D`,
+    list("a&rpcids=ESY5D"),
+    list("a/b"),
+    detail("0123456789abcdef"),
+    detail("c_../app"),
+    detail("c_0123%2F"),
+  ])("refuses %s", async (path) => expect(await allowedPath("gemini-apps", path)).toBe(false));
+});

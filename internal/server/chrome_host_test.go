@@ -141,7 +141,7 @@ func TestChromeHostAbsent(t *testing.T) {
 }
 
 func TestBrowserSyncRejectsUnknownPlatform(t *testing.T) {
-	for _, platform := range []string{"claude", "gemini-apps", "unknown"} {
+	for _, platform := range []string{"claude", "codex", "unknown"} {
 		t.Run(platform, func(t *testing.T) {
 			srv := testServer(t, 5*time.Second)
 			response := httptest.NewRecorder()

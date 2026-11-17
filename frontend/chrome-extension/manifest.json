@@ -3,7 +3,11 @@
   "name": "AgentsView Browser Sync",
   "version": "0.1.0",
   "minimum_chrome_version": "105",
-  "host_permissions": ["https://claude.ai/*", "https://chatgpt.com/*"],
+  "host_permissions": [
+    "https://claude.ai/*",
+    "https://chatgpt.com/*",
+    "https://gemini.google.com/*"
+  ],
   "permissions": ["scripting", "nativeMessaging"],
   "background": {
     "service_worker": "worker.js",
