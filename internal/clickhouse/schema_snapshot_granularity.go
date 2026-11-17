@@ -7,31 +7,53 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2"
 )
 
-// usageSnapshotRebuildTable is where rebuildUsageSnapshots copies
-// usage_session_snapshots before swapping the two. Its fixed name is also
-// the rebuild's lock: CREATE TABLE fails when the name exists, so only one
-// schema step copies at a time.
-const usageSnapshotRebuildTable = usageSessionSnapshotTable + "_rebuild"
+// A rebuild of usage_session_snapshots works in two numbered tables: the
+// rebuild table it copies the snapshots into, which after the swap holds the
+// old table, and the baseline table, the (id, revision) pairs the copy held
+// just before the swap. Each rebuild takes the next number, and CREATE TABLE
+// fails when the name exists, so a number belongs to one rebuild. Numbers
+// keep a process that saw an abandoned rebuild from dropping the tables of
+// the rebuild that replaced it: it drops only the numbers it saw.
+const (
+	usageSnapshotRebuildPrefix  = usageSessionSnapshotTable + "_rebuild_"
+	usageSnapshotBaselinePrefix = usageSessionSnapshotTable + "_baseline_"
+	usageSnapshotRebuildPattern = "^" + usageSessionSnapshotTable + "_(rebuild|baseline)_[0-9]+$"
+)
 
-// usageSnapshotRebuildStaleSQL is how old a leftover rebuild table must be
-// before a schema step treats its owner as stopped. A copy takes seconds,
-// so an hour-old table belongs to a process that was killed during one.
-const usageSnapshotRebuildStaleSQL = "INTERVAL 1 HOUR"
+// usageSnapshotRebuildStale is how old the tables of a rebuild must be
+// before a schema step treats its process as stopped. A rebuild takes
+// seconds, so hour-old tables belong to a process that was killed during
+// one.
+const usageSnapshotRebuildStale = time.Hour
 
-// usageSnapshotTableState is what rebuildUsageSnapshots needs to know about
-// the snapshot table or its rebuild table.
-type usageSnapshotTableState struct {
-	exists bool
-	// rowGranules reports index_granularity = 1, the setting releases
-	// before this one created usage_session_snapshots with.
+// usageSnapshotNoExchangeLog logs once per process that the snapshot table
+// stays slow to merge, since every schema step would otherwise repeat it.
+var usageSnapshotNoExchangeLog sync.Once
+
+func usageSnapshotRebuildName(number uint64) string {
+	return fmt.Sprintf("%s%d", usageSnapshotRebuildPrefix, number)
+}
+
+func usageSnapshotBaselineName(number uint64) string {
+	return fmt.Sprintf("%s%d", usageSnapshotBaselinePrefix, number)
+}
+
+// usageSnapshotRebuild is what a schema step sees of one numbered rebuild.
+type usageSnapshotRebuild struct {
+	number   uint64
+	rebuild  bool
+	baseline bool
+	// rowGranules reports that the rebuild table has index_granularity = 1,
+	// which makes it the old snapshot table the rebuild swapped out.
 	rowGranules bool
-	// stale reports that the table's metadata is older than
-	// usageSnapshotRebuildStaleSQL.
+	// stale reports that every table of the rebuild is older than the
+	// schema step's stale age.
 	stale bool
 }
 
@@ -52,138 +74,274 @@ type usageSnapshotTableState struct {
 //     MATERIALIZED columns.
 //  3. Apply what pushes from other processes changed during the copy: delete
 //     the copied rows the snapshot table no longer holds, then copy the rows
-//     it gained.
+//     it gained. Record the copy's (id, revision) pairs in the baseline table.
 //  4. Swap the two tables with EXCHANGE TABLES, which is atomic, so reads and
 //     pushes always find a complete table under the snapshot name. Just
 //     before, touchUsageSnapshots marks the old table as new.
-//  5. Copy the rows a push wrote to the old table between step 3 and the
-//     swap, then drop the old table.
+//  5. Measured against the baseline, apply what pushes changed in the old
+//     table between step 3 and the swap: copy the rows it gained and delete
+//     the rows it lost. Then drop the baseline and the old table.
 //
-// A push that writes in the instant between step 5's copy and the swap
-// finishing can still lose its rows, and a delete in the instant between
-// step 3 and the swap can come back. The next full push repairs either.
+// A process that stops after the swap leaves the baseline, and a later
+// schema step finishes step 5 once the tables are stale. Only a push still
+// writing at the swap, whose insert or delete lands in the old table after
+// step 5 reads it, is missed; the next full push repairs it.
 //
 // A database that cannot swap tables keeps its table: two renames would
 // leave a moment with no snapshot table, and pushes and reads would fail.
-func rebuildUsageSnapshots(ctx context.Context, conn *sql.DB) (err error) {
-	live, build, err := readUsageSnapshotTableStates(ctx, conn)
+func rebuildUsageSnapshots(ctx context.Context, conn *sql.DB) error {
+	return rebuildUsageSnapshotsAfter(ctx, conn, usageSnapshotRebuildStale)
+}
+
+// rebuildUsageSnapshotsAfter is rebuildUsageSnapshots with the age at which
+// another process's rebuild counts as stopped.
+func rebuildUsageSnapshotsAfter(ctx context.Context, conn *sql.DB, staleAfter time.Duration) (err error) {
+	rowGranules, rebuilds, err := readUsageSnapshotRebuilds(ctx, conn, staleAfter)
 	if err != nil {
 		return err
 	}
-	if !live.rowGranules {
-		// A rebuild table with one-row granules is the old snapshot table a
-		// rebuild swapped out. Its owner may still be copying its last rows,
-		// so only a stale one is dropped, without copying: rows copied that
-		// late could bring back sessions deleted since the swap.
-		if build.exists && build.rowGranules && build.stale {
-			return dropUsageSnapshotRebuild(ctx, conn)
-		}
-		return nil
+	if !rowGranules {
+		return finishUsageSnapshotRebuilds(ctx, conn, rebuilds)
 	}
-	if build.exists {
-		if !build.stale {
-			log.Printf("ClickHouse: another process is rebuilding %s; this one leaves it alone", usageSessionSnapshotTable)
+	var newest uint64
+	if len(rebuilds) > 0 {
+		last := rebuilds[len(rebuilds)-1]
+		if !last.stale {
+			log.Printf("ClickHouse: another process is rebuilding %s; skipping the rebuild here", usageSessionSnapshotTable)
 			return nil
 		}
-		log.Printf("ClickHouse: dropping %s, left by a %s rebuild that stopped", usageSnapshotRebuildTable, usageSessionSnapshotTable)
-		if _, err := conn.ExecContext(ctx, "DROP TABLE IF EXISTS "+usageSnapshotRebuildTable+" SYNC"); err != nil {
-			return fmt.Errorf("dropping stopped %s rebuild: %w", usageSessionSnapshotTable, err)
-		}
+		newest = last.number
 	}
 	exchange, err := chExchangeSupportedSinceStart(ctx, conn)
 	if err != nil {
 		return err
 	}
 	if !exchange {
-		log.Printf("ClickHouse: this database cannot swap tables (EXCHANGE TABLES), so %s keeps one row per "+
-			"granule and merging it after large pushes stays slow", usageSessionSnapshotTable)
+		usageSnapshotNoExchangeLog.Do(func() {
+			log.Printf("ClickHouse: %s keeps one row per granule, so merging it after large pushes stays slow: "+
+				"this database cannot swap tables (EXCHANGE TABLES), usually because its data directory is on NFS. "+
+				"Moving the data directory to a local disk lets the next start rebuild it.", usageSessionSnapshotTable)
+		})
 		return nil
 	}
-	_, err = conn.ExecContext(ctx, "CREATE TABLE "+usageSnapshotRebuildTable+" AS "+usageSessionSnapshotTable+
-		" ENGINE = ReplacingMergeTree(revision) ORDER BY id")
-	if ex, ok := errors.AsType[*chdriver.Exception](err); ok && ex.Code == codeTableAlreadyExists {
-		log.Printf("ClickHouse: another process is rebuilding %s; this one leaves it alone", usageSessionSnapshotTable)
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("creating %s rebuild: %w", usageSessionSnapshotTable, err)
+	number := newest + 1
+	claimed, err := claimUsageSnapshotRebuild(ctx, conn, number)
+	if err != nil || !claimed {
+		return err
 	}
 	swapped := false
 	defer func() {
 		if swapped || err == nil {
 			return
 		}
-		// The table is this process's copy, so a failed copy drops it and the
-		// next schema step can start over without waiting for it to go stale.
-		// Dropping an unshared table is quick; it runs even when ctx is done.
-		if _, dropErr := conn.ExecContext(context.WithoutCancel(ctx),
-			"DROP TABLE IF EXISTS "+usageSnapshotRebuildTable+" SYNC"); dropErr != nil {
-			err = errors.Join(err, fmt.Errorf("dropping the failed %s rebuild: %w", usageSessionSnapshotTable, dropErr))
+		// The tables are this process's, so a failed rebuild drops them and
+		// the next schema step can start over without waiting for them to go
+		// stale. Dropping them is quick; it runs even when ctx is done.
+		if dropErr := dropUsageSnapshotRebuild(context.WithoutCancel(ctx), conn, number); dropErr != nil {
+			err = errors.Join(err, dropErr)
 		}
 	}()
+	// Every rebuild seen was stale, and a newer one would have made the claim
+	// fail, so these belong to processes that stopped.
+	for _, stopped := range rebuilds {
+		if err := dropUsageSnapshotRebuild(ctx, conn, stopped.number); err != nil {
+			return err
+		}
+	}
 	start := time.Now()
-	log.Printf("ClickHouse: rebuilding %s with larger granules so merges after large pushes run faster",
-		usageSessionSnapshotTable)
+	var rows uint64
+	if err := conn.QueryRowContext(ctx, "SELECT count() FROM "+usageSessionSnapshotTable+
+		" SETTINGS final = 0").Scan(&rows); err != nil {
+		return fmt.Errorf("counting %s rows: %w", usageSessionSnapshotTable, err)
+	}
+	log.Printf("ClickHouse: rebuilding %s (%d rows) with larger granules so merges after large pushes run faster",
+		usageSessionSnapshotTable, rows)
+	rebuild := usageSnapshotRebuildName(number)
 	columns, err := storedColumns(ctx, conn, usageSessionSnapshotTable)
 	if err != nil {
 		return err
 	}
-	if err := copyMissingSnapshots(ctx, conn, usageSessionSnapshotTable, usageSnapshotRebuildTable, columns, false); err != nil {
+	if err := copySnapshots(ctx, conn, usageSessionSnapshotTable, rebuild, columns); err != nil {
 		return err
 	}
-	if err := dropRemovedSnapshots(ctx, conn); err != nil {
-		return err
-	}
-	if err := copyMissingSnapshots(ctx, conn, usageSessionSnapshotTable, usageSnapshotRebuildTable, columns, true); err != nil {
+	if err := catchUpUsageSnapshotRebuild(ctx, conn, number, columns); err != nil {
 		return err
 	}
 	if err := touchUsageSnapshots(ctx, conn); err != nil {
 		return err
 	}
+	// A process that found this rebuild stale took a newer number, or
+	// another rebuild finished; swapping now would replace its result.
+	superseded, err := usageSnapshotRebuildSuperseded(ctx, conn, number)
+	if err != nil {
+		return err
+	}
+	if superseded {
+		return dropUsageSnapshotRebuild(ctx, conn, number)
+	}
 	if _, err := conn.ExecContext(ctx,
-		"EXCHANGE TABLES "+usageSessionSnapshotTable+" AND "+usageSnapshotRebuildTable); err != nil {
+		"EXCHANGE TABLES "+usageSessionSnapshotTable+" AND "+rebuild); err != nil {
 		return fmt.Errorf("swapping in the rebuilt %s: %w", usageSessionSnapshotTable, err)
 	}
 	swapped = true
-	if err := copyMissingSnapshots(ctx, conn, usageSnapshotRebuildTable, usageSessionSnapshotTable, columns, true); err != nil {
-		return err
-	}
-	if err := dropUsageSnapshotRebuild(ctx, conn); err != nil {
+	if err := finishUsageSnapshotRebuild(ctx, conn, number); err != nil {
 		return err
 	}
 	log.Printf("ClickHouse: rebuilt %s in %s", usageSessionSnapshotTable, time.Since(start).Round(time.Millisecond))
 	return nil
 }
 
-// readUsageSnapshotTableStates reads the state of usage_session_snapshots
-// and its rebuild table.
-func readUsageSnapshotTableStates(ctx context.Context, conn *sql.DB) (live, build usageSnapshotTableState, err error) {
-	rows, err := conn.QueryContext(ctx, `SELECT name,
+// readUsageSnapshotRebuilds reports whether usage_session_snapshots has
+// one-row granules and lists the numbered rebuilds in number order.
+func readUsageSnapshotRebuilds(ctx context.Context, conn *sql.DB, staleAfter time.Duration) (
+	rowGranules bool, rebuilds []usageSnapshotRebuild, err error,
+) {
+	rows, err := conn.QueryContext(ctx, `SELECT name, `+chTableNumberSQL+` AS number,
 			extract(engine_full, 'index_granularity = ([0-9]+)') = '1',
-			metadata_modification_time <= now() - `+usageSnapshotRebuildStaleSQL+`
-		FROM system.tables WHERE database = currentDatabase() AND name IN (?, ?)`,
-		usageSessionSnapshotTable, usageSnapshotRebuildTable)
+			metadata_modification_time <= now() - toIntervalSecond(?)
+		FROM system.tables WHERE database = currentDatabase() AND (name = ? OR match(name, ?))
+		ORDER BY number`, int64(staleAfter/time.Second), usageSessionSnapshotTable, usageSnapshotRebuildPattern)
 	if err != nil {
-		return live, build, fmt.Errorf("reading %s granularity: %w", usageSessionSnapshotTable, err)
+		return false, nil, fmt.Errorf("reading %s granularity: %w", usageSessionSnapshotTable, err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var name string
-		var rowGranules, stale uint8
-		if err := rows.Scan(&name, &rowGranules, &stale); err != nil {
-			return live, build, fmt.Errorf("scanning %s granularity: %w", usageSessionSnapshotTable, err)
+		var number uint64
+		var granules, stale uint8
+		if err := rows.Scan(&name, &number, &granules, &stale); err != nil {
+			return false, nil, fmt.Errorf("scanning %s granularity: %w", usageSessionSnapshotTable, err)
 		}
-		state := usageSnapshotTableState{exists: true, rowGranules: rowGranules != 0, stale: stale != 0}
 		if name == usageSessionSnapshotTable {
-			live = state
+			rowGranules = granules != 0
+			continue
+		}
+		if len(rebuilds) == 0 || rebuilds[len(rebuilds)-1].number != number {
+			rebuilds = append(rebuilds, usageSnapshotRebuild{number: number, stale: true})
+		}
+		r := &rebuilds[len(rebuilds)-1]
+		r.stale = r.stale && stale != 0
+		if strings.HasPrefix(name, usageSnapshotRebuildPrefix) {
+			r.rebuild, r.rowGranules = true, granules != 0
 		} else {
-			build = state
+			r.baseline = true
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return live, build, fmt.Errorf("reading %s granularity: %w", usageSessionSnapshotTable, err)
+		return false, nil, fmt.Errorf("reading %s granularity: %w", usageSessionSnapshotTable, err)
 	}
-	return live, build, nil
+	return rowGranules, rebuilds, nil
+}
+
+// catchUpUsageSnapshotRebuild runs step 3 for the rebuild of number: it
+// applies to the copy what pushes changed in usage_session_snapshots while
+// the copy ran, then records the copy's rows in the baseline table.
+func catchUpUsageSnapshotRebuild(ctx context.Context, conn *sql.DB, number uint64, columns []string) error {
+	rebuild, baseline := usageSnapshotRebuildName(number), usageSnapshotBaselineName(number)
+	if err := deleteSnapshots(ctx, conn, rebuild, "(id, revision) NOT IN (SELECT id, revision FROM "+
+		usageSessionSnapshotTable+" SETTINGS final = 0)"); err != nil {
+		return err
+	}
+	if err := copySnapshots(ctx, conn, usageSessionSnapshotTable, rebuild, columns, rebuild); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, "CREATE TABLE "+baseline+" ENGINE = MergeTree ORDER BY (id, revision) "+
+		"AS SELECT id, revision FROM "+rebuild+" SETTINGS final = 0"); err != nil {
+		return fmt.Errorf("recording the %s rebuild baseline: %w", usageSessionSnapshotTable, err)
+	}
+	return nil
+}
+
+// claimUsageSnapshotRebuild creates the rebuild table of number. Of the
+// processes that read the same rebuilds, only one creates it. A process
+// that read them before a long pause can create a number whose rebuild
+// already finished, or that a newer rebuild passed; it drops the table
+// again and leaves the rebuild to the other.
+func claimUsageSnapshotRebuild(ctx context.Context, conn *sql.DB, number uint64) (bool, error) {
+	_, err := conn.ExecContext(ctx, "CREATE TABLE "+usageSnapshotRebuildName(number)+" AS "+
+		usageSessionSnapshotTable+" ENGINE = ReplacingMergeTree(revision) ORDER BY id")
+	if ex, ok := errors.AsType[*chdriver.Exception](err); ok && ex.Code == codeTableAlreadyExists {
+		log.Printf("ClickHouse: another process is rebuilding %s; skipping the rebuild here", usageSessionSnapshotTable)
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("creating %s rebuild: %w", usageSessionSnapshotTable, err)
+	}
+	superseded, err := usageSnapshotRebuildSuperseded(ctx, conn, number)
+	if err == nil && !superseded {
+		return true, nil
+	}
+	if dropErr := dropUsageSnapshotRebuild(context.WithoutCancel(ctx), conn, number); dropErr != nil {
+		err = errors.Join(err, dropErr)
+	}
+	return false, err
+}
+
+// usageSnapshotRebuildSuperseded reports whether the rebuild of number
+// must stop: usage_session_snapshots no longer has one-row granules, or a
+// process took a newer number.
+func usageSnapshotRebuildSuperseded(ctx context.Context, conn *sql.DB, number uint64) (bool, error) {
+	var superseded uint8
+	if err := conn.QueryRowContext(ctx, `SELECT countIf(match(name, ?) AND `+chTableNumberSQL+` > ?) > 0
+			OR countIf(name = ? AND extract(engine_full, 'index_granularity = ([0-9]+)') != '1') > 0
+		FROM system.tables WHERE database = currentDatabase()`,
+		usageSnapshotRebuildPattern, number, usageSessionSnapshotTable).Scan(&superseded); err != nil {
+		return false, fmt.Errorf("checking the %s rebuild: %w", usageSessionSnapshotTable, err)
+	}
+	if superseded != 0 {
+		log.Printf("ClickHouse: another process rebuilt %s or took over its rebuild; stopping the rebuild here",
+			usageSessionSnapshotTable)
+	}
+	return superseded != 0, nil
+}
+
+// finishUsageSnapshotRebuilds cleans up after the rebuilds of processes
+// that stopped, once usage_session_snapshots has default granularity. A
+// rebuild that holds the old table and its baseline stopped during step 5,
+// so it finishes step 5. Two processes can finish the same rebuild at once;
+// their copies of a row are identical, and ReplacingMergeTree keeps one.
+// Any other stale rebuild is dropped as it is: a copy made before the swap
+// is not needed, and an old table without a baseline already went through
+// step 5, so copying its rows again could bring back sessions deleted since.
+func finishUsageSnapshotRebuilds(ctx context.Context, conn *sql.DB, rebuilds []usageSnapshotRebuild) error {
+	for _, r := range rebuilds {
+		if !r.stale {
+			continue
+		}
+		if r.rebuild && r.rowGranules && r.baseline {
+			log.Printf("ClickHouse: finishing a %s rebuild that stopped after its swap", usageSessionSnapshotTable)
+			if err := finishUsageSnapshotRebuild(ctx, conn, r.number); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := dropUsageSnapshotRebuild(ctx, conn, r.number); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// finishUsageSnapshotRebuild runs step 5 for the rebuild of number, whose
+// rebuild table holds the old snapshot table. Rows the old table holds and
+// the baseline lacks were pushed between step 3 and the swap; rows the
+// baseline holds and the old table lacks were deleted then. A session
+// deleted after the swap is in both, so it stays deleted.
+func finishUsageSnapshotRebuild(ctx context.Context, conn *sql.DB, number uint64) error {
+	old, baseline := usageSnapshotRebuildName(number), usageSnapshotBaselineName(number)
+	columns, err := storedColumns(ctx, conn, old)
+	if err != nil {
+		return err
+	}
+	if err := copySnapshots(ctx, conn, old, usageSessionSnapshotTable, columns, baseline, usageSessionSnapshotTable); err != nil {
+		return err
+	}
+	if err := deleteSnapshots(ctx, conn, usageSessionSnapshotTable,
+		"(id, revision) IN (SELECT id, revision FROM "+baseline+" SETTINGS final = 0) "+
+			"AND (id, revision) NOT IN (SELECT id, revision FROM "+old+" SETTINGS final = 0)"); err != nil {
+		return err
+	}
+	return dropUsageSnapshotRebuild(ctx, conn, number)
 }
 
 // storedColumns lists the columns of table that hold data, in table order:
@@ -210,15 +368,18 @@ func storedColumns(ctx context.Context, conn *sql.DB, table string) ([]string, e
 	return columns, nil
 }
 
-// copyMissingSnapshots copies the rows of from into to, every version and
-// the stored values of MATERIALIZED columns, so the copy recomputes
-// nothing. With onlyMissing it copies only the (id, revision) pairs to
-// lacks, which a push wrote to from after an earlier copy.
-func copyMissingSnapshots(ctx context.Context, conn *sql.DB, from, to string, columns []string, onlyMissing bool) error {
+// copySnapshots copies the rows of from into to, every version and the
+// stored values of MATERIALIZED columns, so the copy recomputes nothing. It
+// skips the (id, revision) pairs any table in skip holds.
+func copySnapshots(ctx context.Context, conn *sql.DB, from, to string, columns []string, skip ...string) error {
 	list := strings.Join(columns, ", ")
+	conditions := make([]string, len(skip))
+	for i, table := range skip {
+		conditions[i] = "(id, revision) NOT IN (SELECT id, revision FROM " + table + " SETTINGS final = 0)"
+	}
 	where := ""
-	if onlyMissing {
-		where = " WHERE (id, revision) NOT IN (SELECT id, revision FROM " + to + " SETTINGS final = 0)"
+	if len(conditions) > 0 {
+		where = " WHERE " + strings.Join(conditions, " AND ")
 	}
 	if _, err := conn.ExecContext(ctx, "INSERT INTO "+to+" ("+list+") SELECT "+list+" FROM "+from+where+
 		" SETTINGS final = 0, insert_allow_materialized_columns = 1"); err != nil {
@@ -227,23 +388,19 @@ func copyMissingSnapshots(ctx context.Context, conn *sql.DB, from, to string, co
 	return nil
 }
 
-// dropRemovedSnapshots deletes from the rebuild table the copied rows that
-// usage_session_snapshots no longer holds, because a push deleted their
-// session or a merge replaced them with a newer version, which the rebuild
-// table also gets. Most rebuilds find none, so it counts before starting a
-// delete.
-func dropRemovedSnapshots(ctx context.Context, conn *sql.DB) error {
-	const removed = "(id, revision) NOT IN (SELECT id, revision FROM " + usageSessionSnapshotTable + " SETTINGS final = 0)"
+// deleteSnapshots deletes the rows of table that match condition. Most
+// rebuilds find none, so it counts before starting a delete.
+func deleteSnapshots(ctx context.Context, conn *sql.DB, table, condition string) error {
 	var count uint64
-	if err := conn.QueryRowContext(ctx, "SELECT count() FROM "+usageSnapshotRebuildTable+" WHERE "+removed+
+	if err := conn.QueryRowContext(ctx, "SELECT count() FROM "+table+" WHERE "+condition+
 		" SETTINGS final = 0").Scan(&count); err != nil {
-		return fmt.Errorf("counting %s rows removed during the rebuild: %w", usageSessionSnapshotTable, err)
+		return fmt.Errorf("counting %s rows a push removed during the rebuild: %w", table, err)
 	}
 	if count == 0 {
 		return nil
 	}
-	if _, err := conn.ExecContext(ctx, "DELETE FROM "+usageSnapshotRebuildTable+" WHERE "+removed); err != nil {
-		return fmt.Errorf("deleting %s rows removed during the rebuild: %w", usageSessionSnapshotTable, err)
+	if _, err := conn.ExecContext(ctx, "DELETE FROM "+table+" WHERE "+condition); err != nil {
+		return fmt.Errorf("deleting %s rows a push removed during the rebuild: %w", table, err)
 	}
 	return nil
 }
@@ -251,8 +408,8 @@ func dropRemovedSnapshots(ctx context.Context, conn *sql.DB) error {
 // touchUsageSnapshots rewrites the snapshot table's metadata, unchanged,
 // so the table the swap moves to the rebuild name looks as new as the swap.
 // EXCHANGE TABLES keeps each table's metadata time, and without this a
-// second process would find the swapped-out table stale at once and drop it
-// while its owner still copies the last rows from it.
+// second process would find the swapped-out table stale at once and run
+// step 5 while its owner still runs it.
 func touchUsageSnapshots(ctx context.Context, conn *sql.DB) error {
 	var comment string
 	if err := conn.QueryRowContext(ctx, `SELECT comment FROM system.tables
@@ -266,12 +423,15 @@ func touchUsageSnapshots(ctx context.Context, conn *sql.DB) error {
 	return nil
 }
 
-// dropUsageSnapshotRebuild drops the old snapshot table a rebuild swapped
-// out. It does not wait for queries still reading the table, such as a
+// dropUsageSnapshotRebuild drops the tables of the rebuild of number, the
+// baseline first: an old table left without its baseline has finished step
+// 5. It does not wait for queries still reading the tables, such as a
 // prepared usage refresh; the server removes the data once they finish.
-func dropUsageSnapshotRebuild(ctx context.Context, conn *sql.DB) error {
-	if _, err := conn.ExecContext(ctx, "DROP TABLE IF EXISTS "+usageSnapshotRebuildTable); err != nil {
-		return fmt.Errorf("dropping the old %s: %w", usageSessionSnapshotTable, err)
+func dropUsageSnapshotRebuild(ctx context.Context, conn *sql.DB, number uint64) error {
+	for _, table := range []string{usageSnapshotBaselineName(number), usageSnapshotRebuildName(number)} {
+		if _, err := conn.ExecContext(ctx, "DROP TABLE IF EXISTS "+table); err != nil {
+			return fmt.Errorf("dropping %s: %w", table, err)
+		}
 	}
 	return nil
 }

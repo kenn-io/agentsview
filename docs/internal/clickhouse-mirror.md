@@ -368,34 +368,51 @@ ClickHouse cannot change `index_granularity` on an existing table, so the
 schema step rebuilds a table it finds with one-row granules
 (`rebuildUsageSnapshots`):
 
-1. It creates `usage_session_snapshots_rebuild` with the old table's columns,
-   including the `MATERIALIZED` expressions that table was created with, and
-   the default granularity. The fixed name is the lock: `CREATE TABLE` fails
-   when it exists, so one process rebuilds at a time.
+1. It takes the next rebuild number N and creates
+   `usage_session_snapshots_rebuild_N` with the old table's columns, including
+   the `MATERIALIZED` expressions that table was created with, and the default
+   granularity. `CREATE TABLE` fails when the name exists, so one process owns
+   each number.
 2. It copies every row, older versions included, with the stored values of the
    `MATERIALIZED` columns (`insert_allow_materialized_columns`), so nothing is
    recomputed.
 3. It deletes the copied rows the old table no longer holds and copies the rows
-   it gained, which covers pushes from other processes during the copy.
+   it gained, which covers pushes from other processes during the copy. Then it
+   records the copy's `(id, revision)` pairs in
+   `usage_session_snapshots_baseline_N`.
 4. It swaps the tables with `EXCHANGE TABLES`, so reads and pushes always find
    a complete table.
-5. It copies the rows a push wrote to the old table since step 3, then drops the
-   old table.
+5. Measured against the baseline, it applies what pushes changed in the old
+   table between step 3 and the swap: it copies the rows the old table gained
+   and deletes the rows it lost. A session deleted after the swap is in both the
+   baseline and the old table, so it stays deleted. Then it drops the baseline
+   and the old table.
 
 On 140,912 production rows the copy took 1.4 s and the checks in steps 3 and 5
-under 0.5 s on the faster test machine. A write in the instant between step 5's
-copy and the swap finishing can be lost, and a delete in the instant between
-step 3 and the swap can come back; the next full push repairs either.
+under 0.5 s on the faster test machine. Only a push still writing at the swap,
+whose insert or delete lands in the old table after step 5 reads it, is missed;
+the next full push repairs it.
 
-A rebuild table under an hour old belongs to another process, before or after
-its swap, and the schema step leaves both tables alone. An older one belongs to
-a process that stopped: before the swap the schema step drops it and rebuilds;
-after the swap it only drops it, since copying its rows that late could bring
-back sessions deleted since. `EXCHANGE TABLES` keeps each table's metadata
-time, so the rebuild rewrites the old table's comment just before the swap to
-make the swapped-out table look as new as the swap. A database that cannot swap
-tables keeps one-row granules: two renames would leave a moment with no
-snapshot table.
+Rebuild tables under an hour old belong to another process, and the schema step
+leaves them alone. Older ones belong to a process that stopped:
+
+- Before the swap, the schema step drops them and rebuilds with the next
+  number. It drops only the numbers it saw, and a process that claims a number
+  after a newer one exists gives it up, so a process acting on an old view of
+  the tables never drops a newer rebuild's copy.
+- After the swap, with the baseline still there, the process stopped during
+  step 5, so the schema step finishes step 5. Without the baseline, step 5
+  already ran, and the schema step only drops the old table: copying its rows
+  again could bring back sessions deleted since.
+
+`EXCHANGE TABLES` keeps each table's metadata time, so the rebuild rewrites the
+old table's comment just before the swap to make the swapped-out table look as
+new as the swap. A database that cannot swap tables keeps one-row granules: two
+renames would leave a moment with no snapshot table.
+
+The rebuild only makes merges faster, so a failed rebuild, such as one that
+lacks a privilege or times out, logs a warning and the schema step continues.
+Push and serve start with the slow table, and a later start tries again.
 
 ## Stored usage prices
 

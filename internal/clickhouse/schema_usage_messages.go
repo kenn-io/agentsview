@@ -230,8 +230,16 @@ func ensureUsageSessionSnapshots(ctx context.Context, conn *sql.DB) error {
 			return err
 		}
 	}
+	// The rebuild only makes merges faster, so a failure, such as a missing
+	// privilege or a timeout, leaves the slow table and lets push and serve
+	// start. A failure before the swap drops the copy, and one after it
+	// leaves the rest for a later schema step.
 	if err := rebuildUsageSnapshots(ctx, conn); err != nil {
-		return err
+		if ctx.Err() != nil {
+			return err
+		}
+		log.Printf("ClickHouse: rebuilding %s failed; a later start tries again, and until then merging it "+
+			"after large pushes may stay slow: %v", usageSessionSnapshotTable, err)
 	}
 	if err := ensurePreparedUsage(ctx, conn); err != nil {
 		return err
