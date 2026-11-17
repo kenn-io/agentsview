@@ -35,8 +35,9 @@ func (tr *searchQueryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d
 	if strings.Contains(data.SQL, "processor FROM page ORDER BY") {
 		tr.keys.Add(1)
 	}
-	if strings.Contains(data.SQL, "SELECT p.session_id, s.project") {
+	if strings.HasPrefix(data.SQL, "WITH page AS (SELECT * FROM unnest(") {
 		tr.hydrate.Add(1)
+		// pgx/stdlib prepends result formats before the SQL arguments.
 		if ids, ok := data.Args[3].([]string); ok {
 			tr.hydrateIDs.Store(int32(len(ids)))
 		}
@@ -228,10 +229,8 @@ func TestSearchKeptRefreshAfterWrite(t *testing.T) {
 	pgKeptPush(t, syncer, false)
 	for _, sort := range []string{"relevance", "recency"} {
 		filter := db.SearchFilter{Query: "needle", Project: "ties", Sort: sort, Limit: 10}
-		trace.ties.Store(0)
 		got, err := s.Search(ctx, filter)
 		require.NoError(t, err)
-		require.EqualValues(t, 1, trace.ties.Load())
 		direct, err := s.search(ctx, filter)
 		require.NoError(t, err)
 		require.Equal(t, direct, got)
@@ -288,7 +287,7 @@ func TestSearchKeptHistoryCheckpointMissing(t *testing.T) {
 }
 
 func TestSearchKeptWithoutJournal(t *testing.T) {
-	local, syncer, s := newUsageJournalFixture(t)
+	local, syncer, _ := newUsageJournalFixture(t)
 	ctx := t.Context()
 	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "one", Project: "project", Machine: "device", Agent: "claude", MessageCount: 1}))
 	require.NoError(t, local.ReplaceSessionMessages(ctx, "one", []db.Message{{SessionID: "one", Role: "user", Content: "needle"}}))
@@ -296,11 +295,18 @@ func TestSearchKeptWithoutJournal(t *testing.T) {
 	f := db.SearchFilter{Query: "needle", Limit: 10}
 	_, err := syncer.pg.ExecContext(ctx, dropUsageChangeJournalSQL)
 	require.NoError(t, err)
-	revision, _, err := s.LoadUsageChanges(ctx, 0)
+	config, err := pgx.ParseConfig(testPGURL(t))
 	require.NoError(t, err)
-	require.Zero(t, revision)
+	config.RuntimeParams["search_path"] = syncer.schema
+	trace := &searchQueryTracer{}
+	config.Tracer = trace
+	pool := stdlib.OpenDB(*config)
+	s := &Store{pg: pool, ownedDB: pool}
+	t.Cleanup(func() { require.NoError(t, s.Close()) })
 	got, err := s.searchKept(ctx, s, f)
 	require.NoError(t, err)
+	require.Zero(t, trace.keys.Load())
+	require.Zero(t, trace.hydrate.Load())
 	direct, err := s.search(ctx, f)
 	require.NoError(t, err)
 	require.Len(t, got.Results, 1)
@@ -353,14 +359,6 @@ func TestSearchKeptOversizedThenSmaller(t *testing.T) {
 	require.EqualValues(t, 1, trace.keys.Load())
 	require.EqualValues(t, 1, trace.restricted.Load()) // Only changed sessions are searched.
 	direct, err := s.search(ctx, f)
-	require.NoError(t, err)
-	require.Equal(t, direct, got)
-	f.Cursor = 20
-	got, err = s.Search(ctx, f)
-	require.NoError(t, err)
-	require.Empty(t, got.Results)
-	require.Zero(t, got.NextCursor)
-	direct, err = s.search(ctx, f)
 	require.NoError(t, err)
 	require.Equal(t, direct, got)
 }

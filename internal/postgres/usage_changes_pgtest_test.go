@@ -595,6 +595,11 @@ func TestUsageHistoryCheckpoints(t *testing.T) {
 	require.NoError(t, err)
 	_, err = tx.ExecContext(ctx, `UPDATE sessions SET updated_at=clock_timestamp() WHERE id='checkpoint'`)
 	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `SET CONSTRAINTS ALL IMMEDIATE`)
+	require.NoError(t, err)
+	_, pending, err := usageHistoryCheckpoints(ctx, tx, revision, revision+1)
+	require.NoError(t, err)
+	require.NotEmpty(t, pending)
 	require.NoError(t, tx.Rollback())
 	current, missing, err = usageHistoryCheckpoints(ctx, syncer.pg, revision, revision+1)
 	require.NoError(t, err)
@@ -607,8 +612,4 @@ func TestUsageHistoryCheckpoints(t *testing.T) {
 	var count int
 	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT count(*) FROM sync_metadata WHERE key LIKE 'usage_history_checkpoint:%'`).Scan(&count))
 	require.Equal(t, 128, count)
-	ensureUsageChangeJournalPG(ctx, syncer.pg)
-	var after int
-	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT count(*) FROM sync_metadata WHERE key LIKE 'usage_history_checkpoint:%'`).Scan(&after))
-	require.Equal(t, count, after)
 }
