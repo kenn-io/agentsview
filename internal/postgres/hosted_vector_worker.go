@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storage"
@@ -54,7 +55,8 @@ func EmbedBatch(ctx context.Context, pg *sql.DB, generation storage.VectorGenera
 		return rollbackErr
 	}
 	scope := vectorPushScope{gen: vectorGeneration{id: id, halfvecType: ext + ".halfvec"}, genIDs: ids}
-	var rejectedSessions int
+	var rejectedSessions, failedSessions int
+	var failures []string
 	cursor := ""
 	for {
 		type pending struct{ id, revision string }
@@ -96,7 +98,14 @@ func EmbedBatch(ctx context.Context, pg *sql.DB, generation storage.VectorGenera
 			}
 			accepted, rejected, err := vector.FillUnitDocuments(ctx, pending, maxInputChars, concurrency, encode, batch...)
 			if err != nil {
-				return fmt.Errorf("embedding session %s: %s", item.id, embeddingFailureCause(err))
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				failedSessions++
+				if len(failures) < 3 {
+					failures = append(failures, item.id+": "+embeddingFailureCause(err))
+				}
+				continue
 			}
 			if len(rejected) > 0 {
 				rejectedSessions++
@@ -137,6 +146,9 @@ func EmbedBatch(ctx context.Context, pg *sql.DB, generation storage.VectorGenera
 				return err
 			}
 		}
+	}
+	if failedSessions > 0 {
+		return fmt.Errorf("%d hosted sessions failed embedding (%s); %d hosted sessions have rejected embedding inputs", failedSessions, strings.Join(failures, "; "), rejectedSessions)
 	}
 	if rejectedSessions > 0 {
 		return fmt.Errorf("%d hosted sessions have rejected embedding inputs", rejectedSessions)

@@ -3,7 +3,6 @@ package vector
 import (
 	"context"
 	"errors"
-	"fmt"
 	"slices"
 	"strings"
 
@@ -109,17 +108,4 @@ func FillUnitDocuments(ctx context.Context, docs []storage.VectorPushDoc, maxInp
 		accepted = append(accepted, doc)
 	}
 	return accepted, rejected, nil
-}
-
-// EncodeUnitDocuments converts one ordered session's units to replica documents.
-func EncodeUnitDocuments(ctx context.Context, units []db.EmbeddableUnit, maxInputChars int, encode kitvec.EncodeFunc, batch ...kitvec.BatchOption) ([]storage.VectorPushDoc, error) {
-	docs, err := UnitDocuments(units)
-	if err != nil {
-		return nil, err
-	}
-	accepted, _, err := FillUnitDocuments(ctx, docs, maxInputChars, 1, encode, batch...)
-	if err != nil && len(units) > 0 {
-		return nil, fmt.Errorf("encoding session %s: %w", units[0].SessionID, err)
-	}
-	return accepted, err
 }

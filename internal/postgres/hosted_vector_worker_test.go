@@ -29,7 +29,9 @@ func TestHostedEmbeddingFailureCause(t *testing.T) {
 			APIKey:     "synthetic-secret", MaxRetries: 1,
 		}, embedconfig.RoleDocument)
 		require.NoError(t, err)
-		_, err = vector.EncodeUnitDocuments(t.Context(), []db.EmbeddableUnit{{SessionID: "private-session", Kind: "user", Content: "private message"}}, 128, encode)
+		docs, err := vector.UnitDocuments([]db.EmbeddableUnit{{SessionID: "private-session", Kind: "user", Content: "private message"}})
+		require.NoError(t, err)
+		_, _, err = vector.FillUnitDocuments(t.Context(), docs, 128, 1, encode)
 		require.Error(t, err)
 		cause := embeddingFailureCause(fmt.Errorf("private message synthetic-secret: %w", err))
 		assert.Equal(t, "embedding endpoint returned an invalid vector: has 3 dimensions, expected 2", cause)

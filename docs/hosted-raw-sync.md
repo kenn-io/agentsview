@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-16
+last_edited: 2026-11-17
 title: Hosted Raw Sync
 description: Upload original session files to an operator-managed server and resume interrupted transfers
 ---
@@ -30,7 +30,9 @@ hosted sessions match nothing. With embeddings configured, the server builds
 vectors from uploaded sessions and makes them available for meaning search.
 The embedding worker checks stored session progress and does not read the raw
 embedding outbox. Rejected messages remain pending for a later retry while
-other messages in the session stay searchable.
+other messages in the session stay searchable. A session that fails to embed
+is retried with backoff while later sessions continue. An edited session gets
+a new identity, so the server embeds all its messages again.
 
 Device enrollment and revocation remain operator-managed. The operator supplies
 each laptop with a server URL, device ID and credential. There is no public

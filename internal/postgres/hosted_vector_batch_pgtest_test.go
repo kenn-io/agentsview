@@ -48,14 +48,30 @@ func hostedVectorBatchRecovery(t *testing.T) {
 		}
 		return out, nil
 	}
+	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO vector_push_state(generation_id,session_id,doc_agg_hash) VALUES($1,'orphan','old')`, id)
+	require.NoError(t, err)
 	err = EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false)
 	require.ErrorContains(t, err, "batch-00")
 	require.ErrorContains(t, err, "HTTP 503 (unavailable)")
-	assert.Zero(t, calls["batch-16"], "transient failure ends the pass")
+	for i := range 17 {
+		session := fmt.Sprintf("batch-%02d", i)
+		assert.Equal(t, 1, calls[session])
+		var stamped bool
+		require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM vector_push_state WHERE generation_id=$1 AND session_id=$2)`, id, session).Scan(&stamped))
+		assert.Equal(t, i != 0, stamped, session)
+	}
+	var orphan bool
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM vector_push_state WHERE session_id='orphan')`).Scan(&orphan))
+	assert.False(t, orphan)
 	failing = false
 	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false))
-	assert.Equal(t, 2, calls["batch-00"])
-	assert.Equal(t, 1, calls["batch-16"])
+	for i := range 17 {
+		want := 1
+		if i == 0 {
+			want = 2
+		}
+		assert.Equal(t, want, calls[fmt.Sprintf("batch-%02d", i)])
+	}
 	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, true))
 	assert.Equal(t, 1, calls["batch-17"])
 	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false))
@@ -92,6 +108,50 @@ func hostedVectorBatchRecovery(t *testing.T) {
 	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false))
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT content FROM vector_documents WHERE session_id='batch-00'`).Scan(&stamp))
 	assert.Equal(t, "restored", stamp)
+}
+
+func TestHostedVectorFailureDiagnosticsAndCancellation(t *testing.T) {
+	f := newHostedFixture(t, "tenant-failures")
+	_, err := f.admin.ExecContext(t.Context(), `CREATE EXTENSION IF NOT EXISTS vector SCHEMA public`)
+	require.NoError(t, err)
+	gen := storage.VectorGenerationInfo{Fingerprint: "failures-fixture", Model: "fixture", Dimension: 2}
+	require.NoError(t, ProvisionHostedVector(t.Context(), f.admin, f.schema, f.tenant, gen))
+	id, _, ok, err := LookupVectorGeneration(t.Context(), f.runtime, gen.Fingerprint)
+	require.NoError(t, err)
+	require.True(t, ok)
+	_, err = f.admin.ExecContext(t.Context(), `GRANT SELECT,INSERT,DELETE ON `+vectorChunkTable(id)+` TO "`+f.role+`"`)
+	require.NoError(t, err)
+	for i := range 6 {
+		session := fmt.Sprintf("fail-%02d", i)
+		_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,provenance_kind,raw_content_revision) VALUES($1,'p','m','codex','raw','r1')`, session)
+		require.NoError(t, err)
+		_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO messages(session_id,ordinal,role,content) VALUES($1,0,'user',$1)`, session)
+		require.NoError(t, err)
+	}
+	encode := func(context.Context, []string) ([][]float32, error) {
+		return nil, &embedclient.APIError{StatusCode: 503, Reason: embedclient.ReasonUnavailable}
+	}
+	err = EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false)
+	require.ErrorContains(t, err, "6 hosted sessions failed embedding")
+	for i := range 6 {
+		id := fmt.Sprintf("fail-%02d", i)
+		if i < 3 {
+			assert.ErrorContains(t, err, id+": embedding endpoint returned HTTP 503 (unavailable)")
+		} else {
+			assert.NotContains(t, err.Error(), id)
+		}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	calls := 0
+	encode = func(context.Context, []string) ([][]float32, error) {
+		calls++
+		cancel()
+		return nil, context.Canceled
+	}
+	err = EmbedBatch(ctx, f.runtime, gen, encode, 128, 1, false)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, 1, calls)
 }
 
 func TestHostedVectorPartialRetry(t *testing.T) {

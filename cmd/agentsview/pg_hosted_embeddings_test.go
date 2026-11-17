@@ -42,9 +42,11 @@ func TestHostedEmbeddingsDisabledWithoutContent(t *testing.T) {
 func TestHostedEmbeddingsStopJoinsEncoding(t *testing.T) {
 	entered := make(chan struct{})
 	exited := make(chan struct{})
+	docs, err := vector.UnitDocuments([]db.EmbeddableUnit{{SessionID: "s", Kind: "user", Content: "hello"}})
+	require.NoError(t, err)
 	runtime := newPGRawRuntime(t.Context(), time.Hour, func(ctx context.Context) {
 		defer close(exited)
-		_, _ = vector.EncodeUnitDocuments(ctx, []db.EmbeddableUnit{{SessionID: "s", Kind: "user", Content: "hello"}}, 128, func(ctx context.Context, _ []string) ([][]float32, error) {
+		_, _, _ = vector.FillUnitDocuments(ctx, docs, 128, 1, func(ctx context.Context, _ []string) ([][]float32, error) {
 			close(entered)
 			<-ctx.Done()
 			return nil, ctx.Err()

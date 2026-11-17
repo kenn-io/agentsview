@@ -13,7 +13,7 @@ import (
 	kitvec "go.kenn.io/kit/vector"
 )
 
-func TestEncodeUnitDocumentsBatchesSessionChunks(t *testing.T) {
+func TestFillUnitDocumentsBatchesSessionChunks(t *testing.T) {
 	units := []db.EmbeddableUnit{
 		{SessionID: "session", Kind: "user", Ordinal: 0, OrdinalEnd: 0, Content: "first"},
 		{SessionID: "session", Kind: "user", Ordinal: 1, OrdinalEnd: 1, Content: "second"},
@@ -32,8 +32,11 @@ func TestEncodeUnitDocumentsBatchesSessionChunks(t *testing.T) {
 		}
 		return vectors, nil
 	}
-	docs, err := EncodeUnitDocuments(t.Context(), units, 128, encode, kitvec.WithBatchSize(2))
+	docs, err := UnitDocuments(units)
 	require.NoError(t, err)
+	docs, rejected, err := FillUnitDocuments(t.Context(), docs, 128, 1, encode, kitvec.WithBatchSize(2))
+	require.NoError(t, err)
+	assert.Empty(t, rejected)
 	assert.Equal(t, [][]string{{"first", "second"}}, calls)
 	require.Len(t, docs, 2)
 	require.Len(t, docs[0].Chunks, 1)
@@ -42,7 +45,7 @@ func TestEncodeUnitDocumentsBatchesSessionChunks(t *testing.T) {
 	assert.Equal(t, []float32{0, 1}, docs[1].Chunks[0].Embedding)
 }
 
-func TestEncodeUnitDocumentsSkipsRejectedInput(t *testing.T) {
+func TestFillUnitDocumentsSkipsRejectedInput(t *testing.T) {
 	units := []db.EmbeddableUnit{
 		{SessionID: "session", Kind: "user", Ordinal: 0, Content: "first"},
 		{SessionID: "session", Kind: "user", Ordinal: 1, Content: "poison"},
@@ -58,8 +61,11 @@ func TestEncodeUnitDocumentsSkipsRejectedInput(t *testing.T) {
 		}
 		return out, nil
 	}
-	docs, err := EncodeUnitDocuments(t.Context(), units, 128, encode, kitvec.WithBatchSize(8))
+	docs, err := UnitDocuments(units)
 	require.NoError(t, err)
+	docs, rejected, err := FillUnitDocuments(t.Context(), docs, 128, 1, encode, kitvec.WithBatchSize(8))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"o:session:1"}, rejected)
 	require.Len(t, docs, 2)
 	assert.Equal(t, "first", docs[0].Content)
 	assert.Equal(t, "last", docs[1].Content)
