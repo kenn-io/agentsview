@@ -229,9 +229,9 @@ Sync ChatGPT from the **Import conversations** dialog or the command line.
    ```
 
 The ChatGPT card works like the Claude.ai card: it shows the Chrome connection,
-**Signed out** opens `chatgpt.com` in a new tab, and Sync keeps running when you
-close the dialog. The desktop app also syncs ChatGPT through Chrome; its own
-sign-in window serves Claude.ai only.
+**Sign in** appears with **Signed out** and opens `chatgpt.com` in a new tab,
+and Sync keeps running when you close the dialog. The desktop app also syncs
+ChatGPT through Chrome; its own sign-in window serves Claude.ai only.
 
 Sync reuses an open ChatGPT tab. When none is open, it opens one in the
 background and leaves it open.
