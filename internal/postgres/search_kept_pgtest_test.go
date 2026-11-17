@@ -343,3 +343,61 @@ func TestSearchKeptWithoutJournal(t *testing.T) {
 	require.Len(t, got.Results, 1)
 	require.Equal(t, direct, got)
 }
+
+func TestSearchKeptOversizedThenSmaller(t *testing.T) {
+	local, syncer, _ := newUsageJournalFixture(t)
+	ctx := t.Context()
+	url := testPGURL(t)
+	config, err := pgx.ParseConfig(url)
+	require.NoError(t, err)
+	config.RuntimeParams["search_path"] = syncer.schema
+	trace := &searchQueryTracer{}
+	config.Tracer = trace
+	pool := stdlib.OpenDB(*config)
+	s := &Store{pg: pool, ownedDB: pool}
+	t.Cleanup(func() { require.NoError(t, s.Close()) })
+	require.NoError(t, s.ConfigureUsageCache(ctx, t.TempDir(), url, syncer.schema))
+	s.runtimeState().searchKept.MaxBytes = 300
+	for _, id := range []string{"one", "two", "three"} {
+		require.NoError(t, local.UpsertSession(ctx, db.Session{ID: id, Project: "project", Machine: "device", Agent: "claude", MessageCount: 1}))
+		require.NoError(t, local.ReplaceSessionMessages(ctx, id, []db.Message{{SessionID: id, Role: "user", Content: "needle"}}))
+	}
+	pgKeptPush(t, syncer, false)
+	f := db.SearchFilter{Query: "needle", Limit: 10}
+	got, err := s.Search(ctx, f)
+	require.NoError(t, err)
+	require.Len(t, got.Results, 3)
+	// A new write invalidates the saved page, while the complete match set was too large to keep.
+	require.NoError(t, local.SoftDeleteSession(ctx, "two"))
+	require.NoError(t, local.SoftDeleteSession(ctx, "three"))
+	pgKeptPush(t, syncer, false)
+	trace.keys.Store(0)
+	trace.restricted.Store(0)
+	got, err = s.Search(ctx, f)
+	require.NoError(t, err)
+	require.Len(t, got.Results, 1)
+	require.Equal(t, "one", got.Results[0].SessionID)
+	require.EqualValues(t, 1, trace.keys.Load())
+	require.EqualValues(t, 1, trace.restricted.Load()) // Only the hydration is restricted.
+	require.NoError(t, local.ReplaceSessionMessages(ctx, "one", []db.Message{{SessionID: "one", Role: "user", Content: "needle updated"}}))
+	pgKeptPush(t, syncer, false)
+	trace.keys.Store(0)
+	trace.restricted.Store(0)
+	got, err = s.Search(ctx, f)
+	require.NoError(t, err)
+	require.Len(t, got.Results, 1)
+	require.Contains(t, got.Results[0].Snippet, "updated")
+	require.EqualValues(t, 1, trace.keys.Load())
+	require.EqualValues(t, 2, trace.restricted.Load()) // Changed keys and hydration are restricted.
+	direct, err := s.search(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, direct, got)
+	f.Cursor = 20
+	got, err = s.Search(ctx, f)
+	require.NoError(t, err)
+	require.Empty(t, got.Results)
+	require.Zero(t, got.NextCursor)
+	direct, err = s.search(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, direct, got)
+}
