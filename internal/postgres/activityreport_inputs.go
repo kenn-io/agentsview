@@ -146,9 +146,9 @@ func (s *Store) activityReportInputs(ctx context.Context, version, lower, upper 
 	slot := lower + "|" + upper
 	previous, ok := s.runtimeState().activityInputs.Get(slot, version)
 	identity := ""
-	if !ok && s.activityDisk.Enabled() {
+	if (!ok || previous[0].identity == "") && s.activityDisk.Enabled() {
 		identity, _ = s.activitySourceIdentity(ctx, "")
-		if identity != "" {
+		if !ok && identity != "" {
 			if loaded, found := s.loadActivityInputs(slot, version, identity); found {
 				previous, ok = []pgActivityInputs{loaded}, true
 			}
@@ -164,7 +164,7 @@ func (s *Store) activityReportInputs(ctx context.Context, version, lower, upper 
 		return nil, err
 	}
 	next := &pgActivityInputs{revision: revision, identity: identity, sessions: map[string]pgActivitySession{}, changed: changed}
-	if ok {
+	if ok && previous[0].identity != "" {
 		next.identity = previous[0].identity
 	}
 	if ok && revision >= after && len(changed) <= max(64, len(previous[0].candidates)/4) {

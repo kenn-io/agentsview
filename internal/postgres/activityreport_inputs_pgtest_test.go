@@ -25,6 +25,21 @@ type activityInputReadCounter struct {
 	cancel                      context.CancelFunc
 }
 
+type activityIdentityErrorOnce struct {
+	storeExecutor
+	queries int
+}
+
+func (c *activityIdentityErrorOnce) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	if strings.Contains(query, "pg_control_system()") {
+		c.queries++
+		if c.queries == 1 {
+			return c.storeExecutor.QueryRowContext(ctx, "SELECT 1 / 0")
+		}
+	}
+	return c.storeExecutor.QueryRowContext(ctx, query, args...)
+}
+
 func (c *activityInputReadCounter) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	transcript := strings.HasPrefix(query, "SELECT session_id, ordinal, role, timestamp, model")
 	usage := strings.Contains(query, "usage_events") && !strings.Contains(query, "usage_session_changes")
@@ -350,6 +365,37 @@ func TestPGActivityReportInputTranscriptAndCounts(t *testing.T) {
 	changed := pgKeptBuild(t, store, f, q, true)
 	assert.Equal(t, 2, changed.Report.Buckets[0].UserMessages)
 	assert.Equal(t, 2, changed.Report.Buckets[0].AssistantMessages)
+}
+
+func TestPGActivityReportInputIdentityRetry(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	target, directory := testPGURL(t), t.TempDir()
+	open := func() *Store {
+		store, err := NewStore(t.Context(), target, syncer.schema, true)
+		require.NoError(t, err)
+		require.NoError(t, store.ConfigureUsageCache(t.Context(), directory, target, syncer.schema))
+		return store
+	}
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	q.Partial, q.EffectiveEnd = true, q.RangeEnd.Add(-time.Hour)
+	first := open()
+	failOnce := &activityIdentityErrorOnce{storeExecutor: first.pg}
+	first.pg = failOnce
+	pgKeptBuild(t, first, f, q, true)
+	q.EffectiveEnd = q.EffectiveEnd.Add(time.Nanosecond)
+	want := pgKeptBuild(t, first, f, q, true)
+	require.NoError(t, first.Close())
+	restarted := open()
+	defer restarted.Close()
+	reads := &activityInputReadCounter{storeExecutor: restarted.pg}
+	restarted.pg = reads
+	requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, true))
+	assert.Empty(t, reads.transcriptReads)
+	assert.Empty(t, reads.usageReads)
+	assert.GreaterOrEqual(t, failOnce.queries, 2)
 }
 
 func TestPGActivityReportInputInvalidRestart(t *testing.T) {
