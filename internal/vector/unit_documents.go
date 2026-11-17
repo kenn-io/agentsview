@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"slices"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -83,10 +84,11 @@ type unitFillStore struct {
 func (s *unitFillStore) PendingForGeneration(_ context.Context, _ string, after *string, limit int) ([]kitvec.Pending[string], error) {
 	var pending []kitvec.Pending[string]
 	chunks := 0
-	for _, doc := range s.docs {
-		if after != nil && doc.DocKey <= *after {
-			continue
-		}
+	start := 0
+	if after != nil {
+		start = sort.Search(len(s.docs), func(i int) bool { return s.docs[i].DocKey > *after })
+	}
+	for _, doc := range s.docs[start:] {
 		if _, ok := s.spool.offsets[doc.DocKey]; ok {
 			continue
 		}
@@ -131,20 +133,21 @@ func (*unitFillStore) QueryGeneration(context.Context, string, kitvec.Vector, in
 // one document, which kit materializes together before encoding.
 const maxChunksPerDocument = 4096
 
-// DocumentExceedsChunkLimit reports whether a document exceeds the fill bound.
+// DocumentExceedsChunkLimit reports whether a document's estimated window count
+// exceeds the fill bound. Blank windows can make the actual chunk count lower.
 func DocumentExceedsChunkLimit(content string, maxInputChars int) bool {
 	return documentChunkBound(utf8.RuneCountInString(content), maxInputChars) > maxChunksPerDocument
 }
 
 // rejectOversizedDocuments splits docs into those kit may fill and the keys of
-// those that would need more than maxChunksPerDocument chunks. It counts runes
-// instead of splitting, so rejecting a document allocates nothing.
+// those whose estimated window count exceeds maxChunksPerDocument. It counts
+// runes instead of splitting, so rejecting a document allocates nothing.
 func rejectOversizedDocuments(docs []storage.VectorPushDoc, maxInputChars int) ([]storage.VectorPushDoc, []string) {
 	eligible := make([]storage.VectorPushDoc, 0, len(docs))
 	var rejected []string
 	for _, doc := range docs {
 		if DocumentExceedsChunkLimit(doc.Content, maxInputChars) {
-			log.Printf("vector fill: skipping document %s: more than %d chunks", doc.DocKey, maxChunksPerDocument)
+			log.Printf("vector fill: skipping document %s: estimated window count exceeds %d", doc.DocKey, maxChunksPerDocument)
 			rejected = append(rejected, doc.DocKey)
 			continue
 		}

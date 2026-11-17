@@ -138,7 +138,7 @@ func TestFillUnitDocumentsSpoolsLargeDocumentsBeforeNextPage(t *testing.T) {
 		}
 		return vectors, nil
 	}
-	accepted, rejected, err := FillUnitDocuments(t.Context(), docs, spool, 20, 1, encode, kitvec.WithBatchSize(32))
+	accepted, rejected, err := FillUnitDocuments(t.Context(), docs, spool, 20, 1, encode, kitvec.WithBatchSize(8192))
 	require.NoError(t, err)
 	assert.Empty(t, rejected)
 	assert.Len(t, accepted, 2)
