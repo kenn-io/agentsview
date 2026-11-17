@@ -362,3 +362,50 @@ func TestSearchKeptOversizedThenSmaller(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, direct, got)
 }
+
+func TestSearchKeptReaderWithoutJournalGrant(t *testing.T) {
+	local, syncer, _ := newUsageJournalFixture(t)
+	ctx := t.Context()
+	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "one", Project: "project", Machine: "device", Agent: "claude", MessageCount: 1}))
+	require.NoError(t, local.ReplaceSessionMessages(ctx, "one", []db.Message{{SessionID: "one", Role: "user", Content: "needle"}}))
+	pgKeptPush(t, syncer, false)
+	url := newUsageJournalRole(t, syncer, `GRANT SELECT ON ALL TABLES IN SCHEMA `+syncer.schema+` TO ROLE; REVOKE SELECT ON usage_session_changes FROM ROLE`)
+	reader, err := NewStore(ctx, url, syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reader.Close()) })
+	f := db.SearchFilter{Query: "needle", Limit: 10}
+	got, err := reader.Search(ctx, f)
+	require.NoError(t, err)
+	require.Len(t, got.Results, 1)
+	require.Equal(t, "one", got.Results[0].SessionID)
+	direct, err := reader.search(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, direct, got)
+}
+
+func TestSearchKeptDateFilterAfterWrite(t *testing.T) {
+	local, syncer, s := newUsageJournalFixture(t)
+	ctx := t.Context()
+	for _, session := range []struct{ id, date, content string }{
+		{"inside", "2024-06-02T12:00:00Z", "needle inside"},
+		{"outside", "2024-06-03T12:00:00Z", "ordinary"},
+	} {
+		require.NoError(t, local.UpsertSession(ctx, db.Session{ID: session.id, Project: "project", Machine: "device", Agent: "claude", MessageCount: 1, StartedAt: &session.date, EndedAt: &session.date}))
+		require.NoError(t, local.ReplaceSessionMessages(ctx, session.id, []db.Message{{SessionID: session.id, Role: "user", Content: session.content}}))
+	}
+	pgKeptPush(t, syncer, false)
+	f := db.SearchFilter{Query: "needle", DateFrom: "2024-06-02", DateTo: "2024-06-02", Limit: 10}
+	before, err := s.Search(ctx, f)
+	require.NoError(t, err)
+	require.Len(t, before.Results, 1)
+	require.Equal(t, "inside", before.Results[0].SessionID)
+	require.NoError(t, local.ReplaceSessionMessages(ctx, "outside", []db.Message{{SessionID: "outside", Role: "user", Content: "needle outside"}}))
+	pgKeptPush(t, syncer, false)
+	got, err := s.Search(ctx, f)
+	require.NoError(t, err)
+	require.Len(t, got.Results, 1)
+	require.Equal(t, "inside", got.Results[0].SessionID)
+	direct, err := s.search(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, direct, got)
+}
