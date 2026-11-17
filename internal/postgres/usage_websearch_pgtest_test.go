@@ -5,12 +5,10 @@
 package postgres
 
 import (
-	"errors"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -359,7 +357,7 @@ func TestPGPushSchemaCheckSurvivesCounterFillDeadlock(t *testing.T) {
 				_, publishErr := publisher.ExecContext(ctx,
 					`UPDATE messages SET content = content WHERE session_id = 'pg-websearch'`)
 				require.NoError(t, <-fill, "a deadlocked counter fill must not fail the push")
-				if pgErr, ok := errors.AsType[*pgconn.PgError](publishErr); ok && pgErr.Code == "40P01" {
+				if isTransactionConflict(publishErr) {
 					require.NoError(t, publisher.Rollback())
 					require.Less(t, attempt, attempts,
 						"PostgreSQL chose the publisher as the deadlock victim on every attempt")
