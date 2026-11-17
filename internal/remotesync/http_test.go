@@ -65,11 +65,56 @@ func (c *cancelAfterNextErrContext) Err() error {
 
 func newCurrentProtocolServer(t *testing.T, handler http.Handler) *httptest.Server {
 	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return httptest.NewServer(currentProtocolHandler(t, handler))
+}
+
+// currentProtocolHandler answers as a current remote-sync daemon and asserts
+// that each remote-sync request carries the protocol header. Any process on
+// the host can connect to an httptest port. In CI, agentsview's startup probe
+// from another test package lost a port race and reached one of these
+// servers. The client under test calls only remote-sync endpoints, so other
+// paths get a 404 without failing the test.
+func currentProtocolHandler(t assert.TestingT, handler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/v1/remote-sync/") {
+			http.NotFound(w, r)
+			return
+		}
 		assert.Equal(t, strconv.Itoa(ProtocolVersion), r.Header.Get(ProtocolHeader))
 		SetProtocolHeader(w.Header())
 		handler.ServeHTTP(w, r)
-	}))
+	})
+}
+
+// failureRecorder collects assertion failures so a test can check whether a
+// helper reports one.
+type failureRecorder struct {
+	failures []string
+}
+
+func (r *failureRecorder) Errorf(format string, args ...any) {
+	r.failures = append(r.failures, fmt.Sprintf(format, args...))
+}
+
+func TestCurrentProtocolHandlerChecksOnlyRemoteSyncRequests(t *testing.T) {
+	served := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	serve := func(path string) (*failureRecorder, *httptest.ResponseRecorder) {
+		failures := &failureRecorder{}
+		response := httptest.NewRecorder()
+		currentProtocolHandler(failures, served).ServeHTTP(response,
+			httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil))
+		return failures, response
+	}
+
+	foreign, response := serve("/_agentsview/startup")
+	assert.Equal(t, http.StatusNotFound, response.Code)
+	assert.Empty(t, foreign.failures, "a probe from another process must not fail the test")
+
+	unversioned, response := serve("/api/v1/remote-sync/targets")
+	assert.Equal(t, http.StatusNoContent, response.Code)
+	assert.NotEmpty(t, unversioned.failures, "a remote-sync request without the protocol header must fail the test")
 }
 
 func TestHTTPSyncRejectsRemoteWithoutProtocolHandshake(t *testing.T) {
