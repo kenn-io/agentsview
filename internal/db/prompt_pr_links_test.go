@@ -27,6 +27,7 @@ func TestPromptPRLinksStoredMessages(t *testing.T) {
 		{SessionID: s.ID, Ordinal: 4, Role: "user", Content: "<task-notification>https://github.com/o/r/pull/6</task-notification>"},
 		{SessionID: s.ID, Ordinal: 5, Role: "user", Content: "<bash-stdout>https://github.com/o/r/pull/7</bash-stdout>"},
 		{SessionID: s.ID, Ordinal: 6, Role: "user", Content: "<system-reminder>https://github.com/o/r/pull/9</system-reminder> review https://github.com/o/r/pull/8"},
+		{SessionID: s.ID, Ordinal: 7, Role: "user", Content: "ordinary <system-reminder>https://github.com/o/r/pull/10</system-reminder>"},
 	}
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, msgs))
 	got, err := d.GetSession(t.Context(), s.ID)

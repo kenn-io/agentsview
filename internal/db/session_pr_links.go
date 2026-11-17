@@ -192,8 +192,17 @@ func PromptPRLinks(messages []Message) []PRLink {
 		if msg.DialogueText != nil {
 			content = *msg.DialogueText
 		}
-		if remainder, stripped := stripLeadingSystemReminderBlocks(content); stripped {
-			content = remainder
+		for {
+			start := strings.Index(content, systemReminderOpenTag)
+			if start < 0 {
+				break
+			}
+			end := strings.Index(content[start+len(systemReminderOpenTag):], systemReminderCloseTag)
+			if end < 0 {
+				break
+			}
+			end += start + len(systemReminderOpenTag) + len(systemReminderCloseTag)
+			content = content[:start] + " " + content[end:]
 		}
 		trimmed := strings.TrimSpace(content)
 		if strings.HasPrefix(trimmed, "<bash-stdout>") || strings.HasPrefix(trimmed, "<bash-stderr>") {

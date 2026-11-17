@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // PRLink is a pull or merge request associated with a session. The shape
@@ -36,18 +37,10 @@ func NewPRLink(
 	if repository == "" || number <= 0 {
 		return PRLink{}, false
 	}
-	path := strings.TrimRight(u.Path, "/")
-	var urlRepository, rawNumber string
-	var routeFound bool
-	for _, separator := range []string{"/pull/", "/pulls/", "/-/merge_requests/"} {
-		if prefix, suffix, found := strings.CutLast(path, separator); found && (!routeFound || len(prefix) > len(urlRepository)) {
-			urlRepository, rawNumber = prefix, suffix
-			routeFound = true
-		}
-	}
+	urlRepository, rawNumber, remainder, _, routeFound := prLinkRoute(strings.TrimRight(u.Path, "/"))
 	if routeFound {
 		urlNumber, err := strconv.Atoi(rawNumber)
-		if err != nil || urlNumber != number || !strings.EqualFold(strings.TrimPrefix(urlRepository, "/"), repository) {
+		if err != nil || remainder != "" || urlNumber != number || !strings.EqualFold(strings.TrimPrefix(urlRepository, "/"), repository) {
 			return PRLink{}, false
 		}
 	}
@@ -60,6 +53,21 @@ func NewPRLink(
 		Repository: repository,
 		Number:     number,
 	}, true
+}
+
+// prLinkRoute chooses the last recognized route, including when a repository
+// path itself contains a route-shaped segment.
+func prLinkRoute(path string) (repository, number, remainder, routePath string, found bool) {
+	for _, separator := range []string{"/pull/", "/pulls/", "/-/merge_requests/"} {
+		prefix, suffix, ok := strings.CutLast(path, separator)
+		if !ok || (found && len(prefix) <= len(repository)) {
+			continue
+		}
+		repository, found = prefix, true
+		number, remainder, _ = strings.Cut(suffix, "/")
+		routePath = prefix + separator + number
+	}
+	return
 }
 
 // prLinkCollector deduplicates links by URL, keeping first-appearance
@@ -104,40 +112,26 @@ var promptURL = regexp.MustCompile(`https?://(?:\[[^\]\s]+\]|[^\s<>"'()/\[\]]+)[
 func PromptPRLinks(text string) []PRLink {
 	var links prLinkCollector
 	for _, candidate := range promptURL.FindAllString(text, -1) {
-		candidate = strings.TrimRight(candidate, ".,;:!?]")
+		candidate = strings.TrimRightFunc(candidate, func(r rune) bool {
+			return strings.ContainsRune(".,;:!?]", r) || r > unicode.MaxASCII && unicode.IsPunct(r)
+		})
 		u, err := url.Parse(candidate)
 		if err != nil {
 			continue
 		}
-		parts := strings.Split(strings.TrimPrefix(u.Path, "/"), "/")
-		for i := 2; i+1 < len(parts); i++ {
-			route := parts[i] == "pull" || parts[i] == "pulls"
-			if parts[i] == "-" && i+2 < len(parts) && parts[i+1] == "merge_requests" {
-				i++
-				route = true
-			}
-			if !route {
-				continue
-			}
-			num := parts[i+1]
-			if num == "" || strings.Trim(num, "0123456789") != "" {
-				continue
-			}
-			n, err := strconv.Atoi(num)
-			if err != nil {
-				continue
-			}
-			end := i
-			if parts[i] == "merge_requests" {
-				end--
-			}
-			repository := strings.Join(parts[:end], "/")
-			u.Path = "/" + strings.Join(parts[:i+2], "/")
-			u.RawPath, u.RawQuery, u.Fragment = "", "", ""
-			if link, ok := NewPRLink(u.String(), repository, n); ok {
-				links.add(link)
-			}
-			break
+		repo, num, _, routePath, found := prLinkRoute(u.Path)
+		repository := strings.TrimPrefix(repo, "/")
+		if !found || strings.Count(repository, "/") < 1 || num == "" || strings.Trim(num, "0123456789") != "" {
+			continue
+		}
+		n, err := strconv.Atoi(num)
+		if err != nil {
+			continue
+		}
+		u.Path = routePath
+		u.RawPath, u.RawQuery, u.Fragment = "", "", ""
+		if link, ok := NewPRLink(u.String(), repository, n); ok {
+			links.add(link)
 		}
 	}
 	return links.result()

@@ -59,7 +59,7 @@ func (e *Engine) compareStoredSession(
 		return nil, err
 	}
 	structured, err := e.db.GetSessionStructuredPRLinks(ctx, stored.ID)
-	if err != nil {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("parse-diff: structured PR links for %s: %w", stored.ID, err)
 	}
 	storedFields := *stored
