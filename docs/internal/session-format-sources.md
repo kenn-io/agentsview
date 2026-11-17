@@ -2043,6 +2043,61 @@ fixtures retain this field; missing identities remain source-local.
 - **Agentsview:** `internal/parser/gemini_apps_takeout.go` and
   `internal/importer/gemini_apps.go`; the CLI-only import path does not affect
   Gemini CLI discovery or parsing.
+- **Chrome Sync format:** gemini.google.com answers batchexecute POSTs to
+  `/_/BardChatUi/data/batchexecute` with a `)]}'` prefix, length lines, and
+  chunks whose `["wrb.fr", <rpc>, "<payload JSON>", ...]` entry carries the
+  result. `MaZiqc` lists chats: payload `[_, cursor, [entry...]]`, entry `[0]`
+  is the `c_` chat ID, `[1]` the title, and `[5]` the `[seconds, nanos]`
+  update time. `hNvQHb` returns `[turns, cursor, ...]` with turns newest
+  first; turn `[0]` is `[chat, response]`, `[2][0][0]` the prompt, `[3][0]`
+  the reply drafts (`[id, [text, ...], ...]`), `[3][3]` the shown draft's ID,
+  and the last `[seconds, nanos]` child the turn time. Turn `[1]` names the
+  previous turn, not this one. Cursors are base64 text with `+` and `/`. A
+  `wrb.fr` entry with a null payload is Gemini refusing the call; Sync counts
+  that chat as failed without counting it toward the two-failures stop
+  (`TestSyncGeminiRefusedConversationsDoNotEndRound`).
+- **Chrome Sync evidence:** `no-public-source`. A read-only probe of a signed-in
+  web app (build `boq_gemini-web-uiserver_20261020.01_p0`) on 2026-10-21
+  checked the RPC IDs `MaZiqc` and `hNvQHb`, every position above, list and
+  turn paging with real cursors, and that the list update time equals the
+  newest turn time. Sanitized captures with the real array layout are
+  `internal/importer/testdata/gemini_web/`, exercised by
+  `TestSyncGeminiCapturedPages` and `TestGeminiRPCPayload`. Gemini publishes
+  no schema; RPC names and positions can change with any web app build.
+- **Chrome Sync requests:** `internal/importer/browser_requests/gemini-apps.txt`
+  names the two RPCs with `chat` and `cursor` parameters. The server never
+  sends a request body. `frontend/chrome-extension/gemini_fetch.js` builds each
+  RPC's `f.req` argument from those parameters inside the page, adds the
+  page's `SNlM0e` request token, and posts through `pageFetch`. The token never
+  leaves the page. Signed-out pages have no token, which reads as HTTP 401.
+- **Pending replies:** A newest turn with no reply text, including a turn with
+  only an attachment, is written but its freshness is not recorded, so the next
+  Sync fetches it again. This applies only while the chat's list update time
+  is within 24 hours of the current time
+  (`TestSyncGeminiRefetchesReplyInProgress`,
+  `TestSyncGeminiRefetchesAttachmentOnlyTurn`,
+  `TestSyncGeminiPendingWindow`).
+- **Identities and history:** User rows carry the turn's response ID and reply
+  rows the shown draft ID as source identities. Appends and completed replies
+  keep message IDs and pins (`TestSyncGeminiKeepsPinsInPlace`). Another draft,
+  a regenerated reply, or a shorter chat replaces the chat and keeps the
+  previous version in Trash, also when the stored text is equal
+  (`TestSyncGeminiIncrementalAndHistory`, `TestSyncGeminiDraftSwitchKeepsHistory`,
+  `TestSyncGeminiSameTextDraftSwitchKeepsPins`). Under usage-only storage, a
+  chat with fewer messages than stored also keeps a Trash copy when its stored
+  replies still match as a prefix
+  (`TestSyncGeminiUsageArchiveShorterChatKeepsTrashedCopy`).
+- **Chrome Sync evidence limits:** The account probed had no pinned chats, so
+  whether pinned chats appear in the default list is unchecked. Attachments,
+  images, and Canvas content are not imported. Takeout and Sync sessions use
+  different IDs and are not deduplicated. Whether the list update time moves
+  when a reply completes is unverified; the 24-hour pending bound keeps a
+  reply that never completes from being fetched forever. The live probe
+  predates the 2026-11-17 move onto the shared Sync runner; the move was
+  verified with synthetic tests and the sanitized captures only.
+- **Chrome Sync code:** `internal/parser/gemini_apps_web.go`,
+  `internal/importer/gemini_apps_sync.go`, and
+  `frontend/chrome-extension/gemini_fetch.js`.
 
 ## Grok Build (`grok`)
 

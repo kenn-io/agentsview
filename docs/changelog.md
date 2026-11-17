@@ -18,6 +18,14 @@ The latest release is
   pins are not lost. The Import dialog still syncs only Claude.ai. See
   [Sync ChatGPT chats](/docs/chat-import/#sync-chatgpt-chats).
 
+- Sync Gemini Apps chats with every turn, instead of the one-prompt sessions a
+  Takeout export gives. Run `agentsview source import --type gemini-apps --sync`
+  with Chrome open and signed in to Gemini. Later runs fetch only chats that
+  changed, and a reply Gemini is still writing is fetched again on the next
+  run. Only text is imported, not attachments, images, or Canvas content. Chats
+  you also imported from Takeout appear twice. See
+  [Sync Gemini Apps chats](/docs/chat-import/#sync-gemini-apps-chats).
+
 - Keep connection secrets in private files instead of environment variables
   or `config.toml`. Set `token_file` under `[kata]`, `api_key_file` for
   Docbank, insights, embeddings servers, and recall extraction servers, or
@@ -261,7 +269,8 @@ The latest release is
 - Chrome Sync users must rerun `agentsview source chrome setup` and reload the
   extension at `chrome://extensions` once. The extension and AgentsView now
   speak a new version of their protocol, and the extension asks for access to
-  `chatgpt.com`. Until you reload it, Sync asks you to update the extension.
+  `chatgpt.com` and `gemini.google.com`. Until you reload it, Sync asks you to
+  update the extension.
 - API clients that read Chrome Sync error codes need the new names:
   `chrome_host_required`, `chrome_sync_running`, `chrome_host_update_required`,
   and `browser_sync_auth_required` replace the `claude_ai_` versions.
