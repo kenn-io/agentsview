@@ -55,7 +55,7 @@ func EmbedBatch(ctx context.Context, pg *sql.DB, generation storage.VectorGenera
 		return rollbackErr
 	}
 	scope := vectorPushScope{gen: vectorGeneration{id: id, halfvecType: ext + ".halfvec"}, genIDs: ids}
-	var rejectedSessions, failedSessions int
+	var failedSessions int
 	var failures []string
 	cursor := ""
 	for {
@@ -96,7 +96,7 @@ func EmbedBatch(ctx context.Context, pg *sql.DB, generation storage.VectorGenera
 			if err != nil {
 				return err
 			}
-			covered, pending, err := coveredHostedDocuments(ctx, pg, scope.gen.id, item.id, item.revision, includeAutomated, docs, maxInputChars)
+			covered, pending, err := coveredHostedDocuments(ctx, pg, scope.gen.id, item.id, docs, maxInputChars)
 			if err != nil {
 				return err
 			}
@@ -104,7 +104,7 @@ func EmbedBatch(ctx context.Context, pg *sql.DB, generation storage.VectorGenera
 			if err != nil {
 				return err
 			}
-			accepted, rejected, err := vector.FillUnitDocuments(ctx, pending, spool, maxInputChars, concurrency, encode, batch...)
+			accepted, _, err := vector.FillUnitDocuments(ctx, pending, spool, maxInputChars, concurrency, encode, batch...)
 			if err != nil {
 				if closeErr := spool.Close(); closeErr != nil {
 					return errors.Join(err, closeErr)
@@ -118,10 +118,7 @@ func EmbedBatch(ctx context.Context, pg *sql.DB, generation storage.VectorGenera
 				}
 				continue
 			}
-			if len(rejected) > 0 {
-				rejectedSessions++
-			}
-			err = writeHostedVectors(ctx, pg, scope, item.id, item.revision, includeAutomated, accepted, covered, len(rejected) > 0, spool.Chunks)
+			err = writeHostedVectors(ctx, pg, scope, item.id, item.revision, includeAutomated, accepted, covered, spool.Chunks)
 			if err = errors.Join(err, spool.Close()); err != nil {
 				return err
 			}
@@ -160,10 +157,7 @@ func EmbedBatch(ctx context.Context, pg *sql.DB, generation storage.VectorGenera
 		}
 	}
 	if failedSessions > 0 {
-		return fmt.Errorf("%d hosted sessions failed embedding (%s); %d hosted sessions have rejected embedding inputs", failedSessions, strings.Join(failures, "; "), rejectedSessions)
-	}
-	if rejectedSessions > 0 {
-		return fmt.Errorf("%d hosted sessions have rejected embedding inputs", rejectedSessions)
+		return fmt.Errorf("%d hosted sessions failed embedding (%s)", failedSessions, strings.Join(failures, "; "))
 	}
 	return nil
 }
@@ -181,7 +175,7 @@ func clearHostedOrphan(ctx context.Context, pg *sql.DB, sessionID string) error 
 	return tx.Commit()
 }
 
-func writeHostedVectors(ctx context.Context, pg *sql.DB, scope vectorPushScope, id, revision string, automated bool, docs, covered []storage.VectorPushDoc, partial bool, loadChunks func(string) ([]storage.VectorPushChunk, error)) error {
+func writeHostedVectors(ctx context.Context, pg *sql.DB, scope vectorPushScope, id, revision string, automated bool, docs, covered []storage.VectorPushDoc, loadChunks func(string) ([]storage.VectorPushChunk, error)) error {
 	tx, err := pg.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -213,9 +207,6 @@ func writeHostedVectors(ctx context.Context, pg *sql.DB, scope vectorPushScope, 
 		}
 	}
 	stamp := revision + "|" + strconv.FormatBool(automated)
-	if partial {
-		stamp = "partial|" + stamp
-	}
 	outcome, err := writeSessionVectorsKeeping(ctx, tx, scope, id, stamp, docs, covered, loadChunks)
 	if err != nil {
 		return err
@@ -229,17 +220,8 @@ func writeHostedVectors(ctx context.Context, pg *sql.DB, scope vectorPushScope, 
 	return tx.Commit()
 }
 
-// coveredHostedDocuments trusts partial progress only for this session, revision,
-// scope, and generation, and only when every expected chunk is present.
-func coveredHostedDocuments(ctx context.Context, pg *sql.DB, generation int64, sessionID, revision string, automated bool, docs []storage.VectorPushDoc, maxInputChars int) ([]storage.VectorPushDoc, []storage.VectorPushDoc, error) {
-	var stamp string
-	err := pg.QueryRowContext(ctx, `SELECT doc_agg_hash FROM vector_push_state WHERE generation_id=$1 AND session_id=$2`, generation, sessionID).Scan(&stamp)
-	if errors.Is(err, sql.ErrNoRows) || err == nil && stamp != "partial|"+revision+"|"+strconv.FormatBool(automated) {
-		return nil, docs, nil
-	}
-	if err != nil {
-		return nil, nil, err
-	}
+// coveredHostedDocuments reuses matching documents with every expected chunk.
+func coveredHostedDocuments(ctx context.Context, pg *sql.DB, generation int64, sessionID string, docs []storage.VectorPushDoc, maxInputChars int) ([]storage.VectorPushDoc, []storage.VectorPushDoc, error) {
 	rows, err := pg.QueryContext(ctx, fmt.Sprintf(`SELECT d.doc_key,d.content_hash,c.chunk_index FROM vector_documents d LEFT JOIN %s c ON c.doc_key=d.doc_key WHERE d.session_id=$1 AND d.ordinal>=0 ORDER BY d.doc_key,c.chunk_index`, vectorChunkTable(generation)), sessionID)
 	if err != nil {
 		return nil, nil, err

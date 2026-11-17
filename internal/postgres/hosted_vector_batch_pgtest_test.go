@@ -260,7 +260,7 @@ func TestHostedVectorBatchRecovery(t *testing.T) {
 	var count int
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_documents WHERE session_id='batch-17'`).Scan(&count))
 	assert.Zero(t, count)
-	_, err = f.runtime.ExecContext(t.Context(), `DELETE FROM vector_push_state WHERE generation_id=$1 AND session_id IN ('batch-00','batch-01','batch-02','batch-03','batch-04','batch-05')`, id)
+	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET raw_content_revision='r2' WHERE id IN ('batch-00','batch-01','batch-02','batch-03','batch-04','batch-05'); UPDATE messages SET content=content || '-edited' WHERE session_id IN ('batch-00','batch-01','batch-02','batch-03','batch-04','batch-05')`)
 	require.NoError(t, err)
 	encode = func(context.Context, []string) ([][]float32, error) {
 		return nil, &embedclient.APIError{StatusCode: 503, Reason: embedclient.ReasonUnavailable}
@@ -314,10 +314,10 @@ func TestHostedVectorPartialRetry(t *testing.T) {
 		}
 		return out, nil
 	}
-	require.ErrorContains(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false, kitvec.WithBatchSize(8)), "rejected")
+	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false, kitvec.WithBatchSize(8)))
 	var stamp string
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT doc_agg_hash FROM vector_push_state WHERE generation_id=$1 AND session_id='session'`, id).Scan(&stamp))
-	assert.Equal(t, "partial|rev|false", stamp)
+	assert.Equal(t, "rev|false", stamp)
 	var count int
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_documents WHERE session_id='session'`).Scan(&count))
 	assert.Equal(t, 2, count)
@@ -334,12 +334,14 @@ func TestHostedVectorPartialRetry(t *testing.T) {
 	}
 	assert.ElementsMatch(t, []string{"first", "last"}, search())
 	calls = nil
-	require.Error(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false, kitvec.WithBatchSize(8)))
-	assert.Equal(t, []string{"poison"}, calls)
+	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false, kitvec.WithBatchSize(8)))
+	assert.Empty(t, calls)
 	_, err = f.runtime.ExecContext(t.Context(), `DELETE FROM `+vectorChunkTable(id)+` WHERE doc_key=(SELECT doc_key FROM vector_documents WHERE session_id='session' AND content='first')`)
 	require.NoError(t, err)
+	_, err = f.runtime.ExecContext(t.Context(), `UPDATE vector_push_state SET doc_agg_hash='partial|rev|false' WHERE generation_id=$1 AND session_id='session'`, id)
+	require.NoError(t, err)
 	calls = nil
-	require.Error(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false, kitvec.WithBatchSize(8)))
+	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false, kitvec.WithBatchSize(8)))
 	assert.Contains(t, calls, "first")
 	assert.NotContains(t, calls, "last")
 	// A partial stamp without saved documents leaves every current document pending.
@@ -348,7 +350,7 @@ func TestHostedVectorPartialRetry(t *testing.T) {
 	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO vector_push_state(generation_id,session_id,doc_agg_hash) VALUES($1,'session-new','partial|rev2|false')`, id)
 	require.NoError(t, err)
 	calls = nil
-	require.Error(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false, kitvec.WithBatchSize(8)))
+	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false, kitvec.WithBatchSize(8)))
 	assert.Contains(t, calls, "first")
 	assert.Contains(t, calls, "last")
 	_, err = f.runtime.ExecContext(t.Context(), `DELETE FROM sessions WHERE id='session-new'`)
@@ -363,19 +365,20 @@ func TestHostedVectorPartialRetry(t *testing.T) {
 	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO vector_push_state(generation_id,session_id,doc_agg_hash) VALUES($1,'session','partial|rev|false')`, otherID)
 	require.NoError(t, err)
 	calls = nil
-	require.Error(t, EmbedBatch(t.Context(), f.runtime, other, encode, 128, 1, false, kitvec.WithBatchSize(8)))
+	require.NoError(t, EmbedBatch(t.Context(), f.runtime, other, encode, 128, 1, false, kitvec.WithBatchSize(8)))
 	assert.Contains(t, calls, "first")
 	assert.Contains(t, calls, "last")
 	calls = nil
-	require.Error(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, true, kitvec.WithBatchSize(8)))
-	assert.Contains(t, calls, "first")
-	assert.Contains(t, calls, "last")
+	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, true, kitvec.WithBatchSize(8)))
+	assert.Equal(t, []string{"poison"}, calls)
 	calls = nil
 	reject = false
+	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET raw_content_revision='rev2' WHERE id='session'`)
+	require.NoError(t, err)
 	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, true, kitvec.WithBatchSize(8)))
 	assert.Equal(t, []string{"poison"}, calls)
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT doc_agg_hash FROM vector_push_state WHERE generation_id=$1 AND session_id='session'`, id).Scan(&stamp))
-	assert.Equal(t, "rev|true", stamp)
+	assert.Equal(t, "rev2|true", stamp)
 	calls = nil
 	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, true, kitvec.WithBatchSize(8)))
 	assert.Empty(t, calls)
