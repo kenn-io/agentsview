@@ -12,6 +12,8 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,8 +55,14 @@ func hostedCaptureSemanticSearch(t *testing.T, manual bool) {
 			return
 		}
 		data := make([]map[string]any, len(req.Input))
-		for i := range req.Input {
-			data[i] = map[string]any{"index": i, "embedding": []float32{1, 0}}
+		for i, input := range req.Input {
+			embedding := []float32{0, 1}
+			if strings.Contains(input, "Review the changed build") {
+				embedding = []float32{1, 0}
+			} else if strings.Contains(input, "Competing build") {
+				embedding = []float32{0.6, 0.8}
+			}
+			data[i] = map[string]any{"index": i, "embedding": embedding}
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"data": data, "model": "fixture", "object": "list"})
 	}))
@@ -90,6 +98,18 @@ func hostedCaptureSemanticSearch(t *testing.T, manual bool) {
 	client := newHostedCaptureClient(t, startup, store, parser.AgentClaude, root)
 	receipt := client.capture(t)
 	waitCaptureJob(t, admin, receipt.ManifestID, "complete", 1)
+	const competitorID = "33333333-3333-4333-8333-333333333333"
+	competitorRoot := t.TempDir()
+	competitorPath := rawtest.Claude(t, competitorRoot)
+	competitorContent, err := os.ReadFile(competitorPath)
+	require.NoError(t, err)
+	competitorContent = bytes.Replace(competitorContent, []byte(`"sessionId":"`+rawtest.ClaudeID+`"`), []byte(`"sessionId":"`+competitorID+`"`), 1)
+	competitorContent = bytes.Replace(competitorContent, []byte("Inspect the build."), []byte("Competing build."), 1)
+	require.NoError(t, os.WriteFile(competitorPath, competitorContent, 0600))
+	require.NoError(t, os.Rename(competitorPath, filepath.Join(filepath.Dir(competitorPath), competitorID+".jsonl")))
+	competitor := newHostedCaptureClient(t, startup, store, parser.AgentClaude, competitorRoot)
+	competitorReceipt := competitor.capture(t)
+	waitCaptureJob(t, admin, competitorReceipt.ManifestID, "complete", 1)
 	search := func(text string) db.ContentSearchPage {
 		page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: text, Mode: "semantic", IncludeOneShot: true, Limit: 10})
 		if err != nil {
@@ -97,7 +117,7 @@ func hostedCaptureSemanticSearch(t *testing.T, manual bool) {
 		}
 		return page
 	}
-	require.Eventually(t, func() bool { return len(search("Inspect the build").Matches) > 0 }, 30*time.Second, time.Second)
+	require.Eventually(t, func() bool { return len(search("Inspect the build").Matches) >= 2 }, 30*time.Second, time.Second)
 	content, err := os.ReadFile(path)
 	require.NoError(t, err)
 	require.Contains(t, string(content), "Inspect the build.")
@@ -111,8 +131,9 @@ func hostedCaptureSemanticSearch(t *testing.T, manual bool) {
 		return err == nil && count == 1
 	}, 30*time.Second, time.Second)
 	page := search("Review the changed build")
-	require.NotEmpty(t, page.Matches)
+	require.GreaterOrEqual(t, len(page.Matches), 2)
 	assert.Equal(t, rawtest.ClaudeID, page.Matches[0].SessionID)
+	assert.Equal(t, competitorID, page.Matches[1].SessionID)
 	var old int
 	require.NoError(t, admin.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_documents WHERE content LIKE '%Inspect the build%'`).Scan(&old))
 	assert.Zero(t, old)
