@@ -3128,13 +3128,38 @@ func (db *DB) analyticsTools(ctx context.Context, f AnalyticsFilter) (ToolsAnaly
 	}
 	defer release()
 
+	db.trendsPartsDisk()
+	if db.trendsDisk.Enabled() && !db.readOnly {
+		identity, err := db.GetDatabaseID(ctx)
+		if err != nil {
+			return ToolsAnalyticsResponse{}, err
+		}
+		if result, handled, err := db.toolsFromParts(ctx, identity, f); handled {
+			return result, err
+		}
+	}
 	rows, err := db.analyticsToolRows(ctx, f)
 	return BuildToolsAnalytics(rows), err
 }
 
-func (db *DB) analyticsToolRows(
-	ctx context.Context, f AnalyticsFilter,
-) ([]ToolAnalyticsRow, error) {
+type toolSessionInfo struct {
+	ts, agent, project, fingerprint string
+}
+
+func (db *DB) analyticsToolRows(ctx context.Context, f AnalyticsFilter) ([]ToolAnalyticsRow, error) {
+	sessions, err := db.toolSessions(ctx, f)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(sessions))
+	for id := range sessions {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return db.toolRowsFor(ctx, f, sessions, ids)
+}
+
+func (db *DB) toolSessions(ctx context.Context, f AnalyticsFilter) (map[string]toolSessionInfo, error) {
 	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
 	where, args := f.buildWhereWithoutDate()
 	if pred, windowArgs := f.toolSessionWindowSQL(dateCol, "sessions.id"); pred != "" {
@@ -3143,46 +3168,43 @@ func (db *DB) analyticsToolRows(
 	}
 
 	// Fetch filtered session IDs and their metadata.
-	sessQ := `SELECT id, ` + dateCol + `, agent, project
-		FROM sessions WHERE ` + where
+	fingerprint := `COALESCE(transcript_revision, '') || '|' || COALESCE(trends_generation, '') || '|' || COALESCE(usage_generation, '') || '|' || COALESCE(tools_generation, '') || '|' || COALESCE(quality_signal_version, '') || '|' || COALESCE(agent, '') || '|' || COALESCE(project, '') || '|' || COALESCE(started_at, '') || '|' || COALESCE(created_at, '')`
+	if db.readOnly {
+		fingerprint = `''`
+	}
+	sessQ := `SELECT id, ` + dateCol + `, agent, project, ` + fingerprint + ` FROM sessions WHERE ` + where
 
 	sessRows, err := db.getReader().QueryContext(ctx, sessQ, args...)
 	if err != nil {
-		return nil,
-			fmt.Errorf("querying tool sessions: %w", err)
+		return nil, fmt.Errorf("querying tool sessions: %w", err)
 	}
 	defer sessRows.Close()
 
-	type sessInfo struct {
-		ts      string
-		agent   string
-		project string
-	}
-	sessionMap := make(map[string]sessInfo)
-	var sessionIDs []string
+	sessionMap := make(map[string]toolSessionInfo)
 
 	for sessRows.Next() {
-		var id, ts, agent, project string
-		if err := sessRows.Scan(&id, &ts, &agent, &project); err != nil {
+		var id, ts, agent, project, fingerprint string
+		if err := sessRows.Scan(&id, &ts, &agent, &project, &fingerprint); err != nil {
 			return nil,
 				fmt.Errorf("scanning tool session: %w", err)
 		}
-		sessionMap[id] = sessInfo{ts: ts, agent: agent, project: project}
-		sessionIDs = append(sessionIDs, id)
+		sessionMap[id] = toolSessionInfo{ts: ts, agent: agent, project: project, fingerprint: fingerprint}
 	}
 	if err := sessRows.Err(); err != nil {
-		return nil,
-			fmt.Errorf("iterating tool sessions: %w", err)
+		return nil, fmt.Errorf("iterating tool sessions: %w", err)
 	}
 
+	return sessionMap, nil
+}
+
+func (db *DB) toolRowsFor(ctx context.Context, f AnalyticsFilter, sessionMap map[string]toolSessionInfo, sessionIDs []string) ([]ToolAnalyticsRow, error) {
 	if len(sessionIDs) == 0 {
 		return nil, nil
 	}
-
 	// Query tool_calls for filtered sessions (chunked).
 	var toolRows []ToolAnalyticsRow
 
-	err = queryChunked(sessionIDs,
+	err := queryChunked(sessionIDs,
 		func(chunk []string) error {
 			ph, chunkArgs := InPlaceholders(chunk)
 			modelPred, modelArgs := sqliteAnalyticsCSVPredicate(

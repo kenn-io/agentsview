@@ -1329,6 +1329,9 @@ use that query-local edge set without changing parent identity or visibility.
 
 ### Dashboard metadata index
 
+SQLite retains per-session Dashboard Tools contributions on disk and uses
+`tools_generation` to refresh sessions when tool calls change.
+
 SQLite's summary and tool analytics can read model names and message timestamps
 through `idx_messages_analytics_metadata` on
 `messages(session_id, id, timestamp, model, ordinal)` without loading message
