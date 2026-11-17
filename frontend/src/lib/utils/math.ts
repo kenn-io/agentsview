@@ -1,5 +1,5 @@
 import katex from "katex";
-import type { MarkedExtension, Tokens } from "marked";
+import { Tokenizer, type MarkedExtension, type Tokens } from "marked";
 import { escapeHtml } from "@kenn-io/kit-ui";
 
 interface MathToken extends Tokens.Generic {
@@ -62,6 +62,17 @@ function readMath(src: string): MathToken | undefined {
   }
 }
 
+function readDisplayMath(src: string): MathToken | undefined {
+  const indent = /^ {0,3}/.exec(src)![0];
+  const token = readMath(src.slice(indent.length));
+  if (!token?.displayMode) return;
+  // A block consumes its line; same-line prose belongs to the inline lexer.
+  const rest = src.slice(indent.length + token.raw.length);
+  const ending = /^(?:[ \t]*\r?\n|[ \t]*$)/.exec(rest);
+  if (!ending) return;
+  return { ...token, raw: indent + token.raw + ending[0] };
+}
+
 function typeset(text: string, displayMode: boolean): string | undefined {
   try {
     return katex.renderToString(text, {
@@ -99,16 +110,7 @@ export function mathExtension(): MarkedExtension {
           const match = /(?:^|\n)(?= {0,3}(?:\$\$|\\\[|\\begin\{))/.exec(src);
           return match ? match.index + match[0].length : undefined;
         },
-        tokenizer(src) {
-          const indent = /^ {0,3}/.exec(src)![0];
-          const token = readMath(src.slice(indent.length));
-          if (!token?.displayMode) return;
-          // A block consumes its line; same-line prose belongs to the inline lexer.
-          const rest = src.slice(indent.length + token.raw.length);
-          const ending = /^(?:[ \t]*\r?\n|[ \t]*$)/.exec(rest);
-          if (!ending) return;
-          return { ...token, raw: indent + token.raw + ending[0] };
-        },
+        tokenizer: readDisplayMath,
         renderer,
       },
       {
@@ -122,6 +124,22 @@ export function mathExtension(): MarkedExtension {
         renderer,
       },
     ],
+    tokenizer: {
+      lheading(src) {
+        // Marked tries setext headings before applying extension start boundaries.
+        // Do not let an equation's standalone "=" consume the preceding prose.
+        const heading = this.rules.block.lheading.exec(src);
+        if (!heading) return false;
+        for (const match of src.matchAll(/(?:^|\n)(?= {0,3}(?:\$\$|\\\[|\\begin\{))/g)) {
+          const start = match.index + match[0].length;
+          if (start >= heading[0].length) break;
+          if (readDisplayMath(src.slice(start))) {
+            return Tokenizer.prototype.lheading.call(this, src.slice(0, start));
+          }
+        }
+        return false;
+      },
+    },
     renderer: {
       code(token) {
         if (!isMathFence(token.lang)) return false;

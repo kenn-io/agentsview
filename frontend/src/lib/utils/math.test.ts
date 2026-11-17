@@ -60,6 +60,42 @@ describe.each([false, true])("math with preformatted XML %s", (preformatted) => 
     expect(root.querySelectorAll(".mfrac").length).toBeGreaterThan(0);
   });
 
+  it.each([
+    ["\\[", "\\]"],
+    ["$$", "$$"],
+    ["\\begin{equation}", "\\end{equation}"],
+  ])("protects standalone equals lines inside %s math from heading parsing", (left, right) => {
+    const source = `The objective satisfies\n${left}\nQ(x)\n=\n\\frac{p(x)}{q(x)}\n${right}\nAfter.`;
+    const root = render(source, preformatted);
+    expect(root.querySelectorAll(".katex-display")).toHaveLength(1);
+    expect(root.querySelector(".mfrac")).not.toBeNull();
+    expect(root.querySelector("h1, h2")).toBeNull();
+    expect(root.querySelectorAll("p")[0]?.textContent).toBe("The objective satisfies");
+    expect(root.querySelectorAll("p")[1]?.textContent).toBe("After.");
+  });
+
+  it("keeps a multiline equation inside its numbered list item", () => {
+    const root = render(
+      "1. **Prepare the state.** Use\n" +
+        "   \\[\n   \\rho_x\n   =\n   \\frac{\\sqrt{\\eta}\\,\\Pi_x\\,\\sqrt{\\eta}}\n" +
+        "        {p(x)}.\n   \\]\n   Check the result.\n\n2. Continue.",
+      preformatted,
+    );
+    expect(root.querySelectorAll("ol > li")).toHaveLength(2);
+    expect(root.querySelectorAll("li:first-child .katex-display")).toHaveLength(1);
+    expect(root.querySelector("li:first-child .mfrac")).not.toBeNull();
+    expect(root.querySelector("h1, h2, pre")).toBeNull();
+    expect(root.querySelector("li:first-child")?.textContent).toContain("Check the result.");
+    expect(root.querySelector("li:last-child")?.textContent?.trim()).toBe("Continue.");
+  });
+
+  it("preserves ordinary underlined headings around display math", () => {
+    const root = render("Before\n======\n\\[\nx\n=\ny\n\\]\nAfter\n-----\n", preformatted);
+    expect(root.querySelector("h1")?.textContent).toBe("Before");
+    expect(root.querySelector("h2")?.textContent).toBe("After");
+    expect(root.querySelectorAll(".katex-display")).toHaveLength(1);
+  });
+
   it("keeps delimiters inside groups and comments within the math token", () => {
     const root = render("$$\\text{price: \\$5} % $$ ignored\n+ x$$", preformatted);
     expect(root.querySelectorAll(".katex-display")).toHaveLength(1);
