@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -191,6 +192,52 @@ func TestHostedVectorRestoreRaces(t *testing.T) {
 	assert.Equal(t, 2, calls)
 }
 
+func TestHostedVectorStopsPassOnEndpointFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"server error", &embedclient.APIError{StatusCode: 503, Reason: embedclient.ReasonUnavailable}},
+		{"HTTP timeout", &embedclient.APIError{StatusCode: 408, Reason: embedclient.ReasonUnavailable}},
+		{"request timeout", context.DeadlineExceeded},
+		{"network timeout", &net.DNSError{IsTimeout: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newHostedFixture(t, "tenant-endpoint-failure")
+			_, err := f.admin.ExecContext(t.Context(), `CREATE EXTENSION IF NOT EXISTS vector SCHEMA public`)
+			require.NoError(t, err)
+			gen := storage.VectorGenerationInfo{Fingerprint: "endpoint-failure", Model: "fixture", Dimension: 2}
+			require.NoError(t, ProvisionHostedVector(t.Context(), f.admin, f.schema, f.tenant, gen))
+			id, _, ok, err := LookupVectorGeneration(t.Context(), f.runtime, gen.Fingerprint)
+			require.NoError(t, err)
+			require.True(t, ok)
+			_, err = f.admin.ExecContext(t.Context(), `GRANT SELECT,INSERT,DELETE ON `+vectorChunkTable(id)+` TO "`+f.role+`"`)
+			require.NoError(t, err)
+			_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,provenance_kind,raw_content_revision) VALUES('a','p','m','codex','raw','rev'),('b','p','m','codex','raw','rev'); INSERT INTO messages(session_id,ordinal,role,content) VALUES('a',0,'user','first'),('b',0,'user','later')`)
+			require.NoError(t, err)
+			var calls []string
+			failing := true
+			encode := func(_ context.Context, texts []string) ([][]float32, error) {
+				calls = append(calls, texts...)
+				if failing && slices.Contains(texts, "first") {
+					return nil, tc.err
+				}
+				out := make([][]float32, len(texts))
+				for i := range out {
+					out[i] = []float32{1, 0}
+				}
+				return out, nil
+			}
+			require.Error(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false))
+			assert.Equal(t, []string{"first"}, calls)
+			calls = nil
+			failing = false
+			require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false))
+			assert.Equal(t, []string{"first", "later"}, calls)
+		})
+	}
+}
+
 func TestHostedVectorBatchRecovery(t *testing.T) {
 	f := newHostedFixture(t, "tenant-batch")
 	_, err := f.admin.ExecContext(t.Context(), `CREATE EXTENSION IF NOT EXISTS vector SCHEMA public`)
@@ -216,7 +263,7 @@ func TestHostedVectorBatchRecovery(t *testing.T) {
 		for i, text := range texts {
 			calls[text]++
 			if failing && strings.Contains(text, "batch-00") {
-				return nil, &embedclient.APIError{StatusCode: 503, Reason: embedclient.ReasonUnavailable}
+				return nil, &embedclient.APIError{StatusCode: 429, Reason: embedclient.ReasonRateLimited}
 			}
 			out[i] = []float32{1, 0}
 		}
@@ -263,7 +310,7 @@ func TestHostedVectorBatchRecovery(t *testing.T) {
 	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET raw_content_revision='r2' WHERE id IN ('batch-00','batch-01','batch-02','batch-03','batch-04','batch-05'); UPDATE messages SET content=content || '-edited' WHERE session_id IN ('batch-00','batch-01','batch-02','batch-03','batch-04','batch-05')`)
 	require.NoError(t, err)
 	encode = func(context.Context, []string) ([][]float32, error) {
-		return nil, &embedclient.APIError{StatusCode: 503, Reason: embedclient.ReasonUnavailable}
+		return nil, &embedclient.APIError{StatusCode: 429, Reason: embedclient.ReasonRateLimited}
 	}
 	err = EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false)
 	require.ErrorContains(t, err, "6 hosted sessions failed embedding")

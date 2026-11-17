@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
 	"slices"
 	"strconv"
 	"strings"
@@ -26,7 +28,23 @@ func embeddingFailureCause(err error) string {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "embedding request timed out"
 	}
+	if netErr, ok := errors.AsType[net.Error](err); ok && netErr.Timeout() {
+		return "embedding request timed out"
+	}
 	return "embedding request failed; check endpoint connectivity and configuration"
+}
+
+func embeddingEndpointUnavailable(err error) bool {
+	if apiErr, ok := errors.AsType[*embedclient.APIError](err); ok {
+		return apiErr.StatusCode == http.StatusRequestTimeout || apiErr.StatusCode >= 500 && apiErr.StatusCode <= 599
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	if netErr, ok := errors.AsType[net.Error](err); ok {
+		return netErr.Timeout()
+	}
+	return false
 }
 
 // EmbedBatch drains one pass of pending hosted sessions.
@@ -111,6 +129,9 @@ func EmbedBatch(ctx context.Context, pg *sql.DB, generation storage.VectorGenera
 				}
 				if ctx.Err() != nil {
 					return ctx.Err()
+				}
+				if embeddingEndpointUnavailable(err) {
+					return fmt.Errorf("embedding session %s: %s", item.id, embeddingFailureCause(err))
 				}
 				failedSessions++
 				if len(failures) < 3 {
