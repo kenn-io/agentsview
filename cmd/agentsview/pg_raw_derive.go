@@ -175,9 +175,9 @@ func prepareHostedPGServe(ctx context.Context, app config.Config, pg config.PGCo
 		if err = postgres.CheckHostedVectorPrivileges(ctx, database, pg.Schema, fingerprint); err != nil {
 			return fail(err)
 		}
-		if err = wireReplicaVectorSearch(ctx, app, pgReplica{}, store, "hosted pg serve"); err != nil {
-			return fail(err)
-		}
+	}
+	if err = wireReplicaVectorSearch(ctx, app, pgReplica{}, store, "hosted pg serve"); err != nil {
+		return fail(err)
 	}
 	if pg.RawDerivation {
 		poll, attempt, maxAttempts := pg.RawWorkerBounds()

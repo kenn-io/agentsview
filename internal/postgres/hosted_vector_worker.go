@@ -100,8 +100,15 @@ func EmbedBatch(ctx context.Context, pg *sql.DB, generation storage.VectorGenera
 			if err != nil {
 				return err
 			}
-			accepted, rejected, err := vector.FillUnitDocuments(ctx, pending, maxInputChars, concurrency, encode, batch...)
+			spool, err := vector.NewVectorSpool()
 			if err != nil {
+				return err
+			}
+			accepted, rejected, err := vector.FillUnitDocuments(ctx, pending, spool, maxInputChars, concurrency, encode, batch...)
+			if err != nil {
+				if closeErr := spool.Close(); closeErr != nil {
+					return closeErr
+				}
 				if ctx.Err() != nil {
 					return ctx.Err()
 				}
@@ -114,7 +121,8 @@ func EmbedBatch(ctx context.Context, pg *sql.DB, generation storage.VectorGenera
 			if len(rejected) > 0 {
 				rejectedSessions++
 			}
-			if err := writeHostedVectors(ctx, pg, scope, item.id, item.revision, includeAutomated, accepted, covered, len(rejected) > 0); err != nil {
+			err = writeHostedVectors(ctx, pg, scope, item.id, item.revision, includeAutomated, accepted, covered, len(rejected) > 0, spool.Chunks)
+			if err = errors.Join(err, spool.Close()); err != nil {
 				return err
 			}
 
@@ -173,7 +181,7 @@ func clearHostedOrphan(ctx context.Context, pg *sql.DB, sessionID string) error 
 	return tx.Commit()
 }
 
-func writeHostedVectors(ctx context.Context, pg *sql.DB, scope vectorPushScope, id, revision string, automated bool, docs, covered []storage.VectorPushDoc, partial bool) error {
+func writeHostedVectors(ctx context.Context, pg *sql.DB, scope vectorPushScope, id, revision string, automated bool, docs, covered []storage.VectorPushDoc, partial bool, loadChunks func(string) ([]storage.VectorPushChunk, error)) error {
 	tx, err := pg.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -190,15 +198,19 @@ func writeHostedVectors(ctx context.Context, pg *sql.DB, scope vectorPushScope, 
 	if current != revision {
 		return nil
 	}
+	changed, err := hostedDocumentMetadataChanged(ctx, tx, id, append(slices.Clone(docs), covered...))
+	if err != nil {
+		return err
+	}
 	stamp := revision + "|" + strconv.FormatBool(automated)
 	if partial {
 		stamp = "partial|" + stamp
 	}
-	outcome, err := writeSessionVectorsKeeping(ctx, tx, scope, id, stamp, docs, covered)
+	outcome, err := writeSessionVectorsKeeping(ctx, tx, scope, id, stamp, docs, covered, loadChunks)
 	if err != nil {
 		return err
 	}
-	if outcome.deleted > 0 {
+	if outcome.deleted > 0 || changed {
 		_, err = tx.ExecContext(ctx, `DELETE FROM vector_push_state WHERE session_id=$1 AND generation_id<>$2`, id, scope.gen.id)
 	}
 	if err != nil {
@@ -258,4 +270,37 @@ func coveredHostedDocuments(ctx context.Context, pg *sql.DB, generation int64, s
 		}
 	}
 	return covered, pending, nil
+}
+
+// Shared document metadata is read by every generation's searcher.
+func hostedDocumentMetadataChanged(ctx context.Context, tx *sql.Tx, sessionID string, docs []storage.VectorPushDoc) (bool, error) {
+	slices.SortFunc(docs, func(a, b storage.VectorPushDoc) int { return strings.Compare(a.DocKey, b.DocKey) })
+	rows, err := tx.QueryContext(ctx, `SELECT doc_key,session_id,source_uuid,ordinal,ordinal_end,subordinate,offsets,content,content_hash FROM vector_documents WHERE session_id=$1 AND ordinal>=0 ORDER BY doc_key COLLATE "C"`, sessionID)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+	i := 0
+	for rows.Next() {
+		var existing storage.VectorPushDoc
+		if err := rows.Scan(&existing.DocKey, &existing.SessionID, &existing.SourceUUID, &existing.Ordinal, &existing.OrdinalEnd, &existing.Subordinate, &existing.OffsetsJSON, &existing.Content, &existing.ContentHash); err != nil {
+			return false, err
+		}
+		if i == len(docs) {
+			return true, nil
+		}
+		doc := docs[i]
+		offsets := doc.OffsetsJSON
+		if offsets == "" {
+			offsets = "[]"
+		}
+		if existing.DocKey != doc.DocKey || existing.SessionID != doc.SessionID || existing.SourceUUID != sanitizePG(doc.SourceUUID) || existing.Ordinal != doc.Ordinal || existing.OrdinalEnd != doc.OrdinalEnd || existing.Subordinate != doc.Subordinate || existing.OffsetsJSON != sanitizePG(offsets) || existing.Content != sanitizePG(doc.Content) || existing.ContentHash != doc.ContentHash {
+			return true, nil
+		}
+		i++
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return i != len(docs), nil
 }

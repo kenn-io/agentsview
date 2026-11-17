@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -365,4 +366,93 @@ func TestHostedVectorOrphanRestoreRetries(t *testing.T) {
 	require.NoError(t, <-done)
 	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false))
 	assert.Equal(t, 2, calls)
+}
+
+func TestHostedVectorGenerationLayoutSwitch(t *testing.T) {
+	f := newHostedFixture(t, "tenant-layout")
+	_, err := f.admin.ExecContext(t.Context(), `CREATE EXTENSION IF NOT EXISTS vector SCHEMA public`)
+	require.NoError(t, err)
+	a := storage.VectorGenerationInfo{Fingerprint: "layout-a", Model: "fixture", Dimension: 2}
+	b := storage.VectorGenerationInfo{Fingerprint: "layout-b", Model: "fixture", Dimension: 2}
+	var aID int64
+	for _, gen := range []storage.VectorGenerationInfo{a, b} {
+		require.NoError(t, ProvisionHostedVector(t.Context(), f.admin, f.schema, f.tenant, gen))
+		id, _, ok, err := LookupVectorGeneration(t.Context(), f.runtime, gen.Fingerprint)
+		require.NoError(t, err)
+		require.True(t, ok)
+		_, err = f.admin.ExecContext(t.Context(), `GRANT SELECT,INSERT,DELETE ON `+vectorChunkTable(id)+` TO "`+f.role+`"`)
+		require.NoError(t, err)
+		if gen.Fingerprint == a.Fingerprint {
+			aID = id
+		}
+	}
+	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,provenance_kind,raw_content_revision,message_count,user_message_count) VALUES('layout','p','m','codex','raw','rev',4,1),('unchanged','p','m','codex','raw','rev',1,1); INSERT INTO messages(session_id,ordinal,role,content) VALUES('layout',0,'user','question'),('layout',1,'assistant','aaaaaaaaaa'),('layout',2,'assistant','bbbbbbbbbb'),('layout',3,'assistant','cccccccccc'),('unchanged',0,'user','stable')`)
+	require.NoError(t, err)
+	encode := func(_ context.Context, texts []string) ([][]float32, error) {
+		out := make([][]float32, len(texts))
+		for i := range out {
+			out[i] = []float32{1, 0}
+		}
+		return out, nil
+	}
+	require.NoError(t, EmbedBatch(t.Context(), f.runtime, a, encode, 100, 1, false))
+	var key, original, changed string
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT doc_key,content FROM vector_documents WHERE session_id='layout' AND ordinal=1`).Scan(&key, &original))
+	require.NoError(t, EmbedBatch(t.Context(), f.runtime, b, encode, 3, 1, false))
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT content FROM vector_documents WHERE doc_key=$1`, key).Scan(&changed))
+	require.NotEqual(t, original, changed)
+	var stamped bool
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM vector_push_state WHERE generation_id=$1 AND session_id='layout')`, aID).Scan(&stamped))
+	require.False(t, stamped)
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM vector_push_state WHERE generation_id=$1 AND session_id='unchanged')`, aID).Scan(&stamped))
+	require.True(t, stamped)
+	require.NoError(t, EmbedBatch(t.Context(), f.runtime, a, encode, 100, 1, false))
+	store := &Store{pg: f.runtime}
+	store.SetVectorSearcher(NewVectorSearcher(f.runtime, aID, 2, 100, func(context.Context, string) ([]float32, error) { return []float32{1, 0}, nil }))
+	page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "search", Mode: "semantic", IncludeOneShot: true, Limit: 20})
+	require.NoError(t, err)
+	var snippets []string
+	for _, match := range page.Matches {
+		snippets = append(snippets, match.Snippet)
+	}
+	assert.Contains(t, snippets, "bbbbbbbbbb")
+}
+
+func TestHostedVectorSpoolCleanupOnFailures(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("TMPDIR", dir)
+	f := newHostedFixture(t, "tenant-spool-failure")
+	_, err := f.admin.ExecContext(t.Context(), `CREATE EXTENSION IF NOT EXISTS vector SCHEMA public`)
+	require.NoError(t, err)
+	gen := storage.VectorGenerationInfo{Fingerprint: "spool-failure", Model: "fixture", Dimension: 2}
+	require.NoError(t, ProvisionHostedVector(t.Context(), f.admin, f.schema, f.tenant, gen))
+	id, _, ok, err := LookupVectorGeneration(t.Context(), f.runtime, gen.Fingerprint)
+	require.NoError(t, err)
+	require.True(t, ok)
+	_, err = f.admin.ExecContext(t.Context(), `GRANT SELECT,INSERT,DELETE ON `+vectorChunkTable(id)+` TO "`+f.role+`"`)
+	require.NoError(t, err)
+	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,provenance_kind,raw_content_revision) VALUES('session','p','m','codex','raw','rev'); INSERT INTO messages(session_id,ordinal,role,content) VALUES('session',0,'user',repeat('content ',600))`)
+	require.NoError(t, err)
+	encode := func(_ context.Context, texts []string) ([][]float32, error) {
+		out := make([][]float32, len(texts))
+		for i := range out {
+			out[i] = []float32{1, 0}
+		}
+		return out, nil
+	}
+	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 20, 1, false))
+	_, err = f.admin.ExecContext(t.Context(), `REVOKE INSERT ON `+vectorChunkTable(id)+` FROM "`+f.role+`"`)
+	require.NoError(t, err)
+	require.Error(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 20, 1, true))
+	var stamp string
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT doc_agg_hash FROM vector_push_state WHERE generation_id=$1 AND session_id='session'`, id).Scan(&stamp))
+	assert.Equal(t, "rev|false", stamp)
+	var count int
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM `+vectorChunkTable(id)).Scan(&count))
+	assert.Greater(t, count, 200)
+	files, err := filepath.Glob(filepath.Join(dir, "agentsview-vectors-*"))
+	require.NoError(t, err)
+	assert.Empty(t, files)
+	t.Setenv("TMPDIR", filepath.Join(dir, "missing"))
+	require.ErrorContains(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 20, 1, true), "create vector spool")
 }

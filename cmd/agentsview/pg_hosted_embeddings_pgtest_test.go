@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -64,6 +65,48 @@ func TestHostedSemanticUnavailableGuidance(t *testing.T) {
 			assert.NotContains(t, err.Error(), "configured workstation")
 		})
 	}
+}
+
+func TestHostedDeploymentEmbeddingsSearch(t *testing.T) {
+	cfg, admin := hostedRuntimeConfig(t)
+	defaults, err := config.Default()
+	require.NoError(t, err)
+	cfg.Vector = defaults.Vector
+	var calls atomic.Int32
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{{"index": 0, "embedding": []float32{1, 0}}}, "model": "fixture", "object": "list"})
+	}))
+	t.Cleanup(endpoint.Close)
+	cfg.Vector.Embeddings.Model = "fixture"
+	cfg.Vector.Embeddings.Dimension = 2
+	cfg.Vector.Embeddings.MaxInputChars = 128
+	cfg.Vector.Embeddings.DefaultServer = "fixture"
+	cfg.Vector.Embeddings.Servers = map[string]config.VectorEmbeddingsServerConfig{"fixture": {Endpoint: endpoint.URL, Timeout: "30s"}}
+	gen := vectorGeneration(cfg.Vector.Embeddings)
+	info := storage.VectorGenerationInfo{Fingerprint: gen.Fingerprint(), Model: gen.Model, Dimension: gen.Dimensions, Params: gen.Params}
+	_, err = admin.ExecContext(t.Context(), `CREATE EXTENSION IF NOT EXISTS vector SCHEMA public`)
+	require.NoError(t, err)
+	require.NoError(t, postgres.ProvisionHostedVector(t.Context(), admin, cfg.PG.Schema, cfg.PG.RawTenant, info))
+	id, _, ok, err := postgres.LookupVectorGeneration(t.Context(), admin, info.Fingerprint)
+	require.NoError(t, err)
+	require.True(t, ok)
+	u, err := url.Parse(cfg.PG.URL)
+	require.NoError(t, err)
+	_, err = admin.ExecContext(t.Context(), fmt.Sprintf(`GRANT SELECT ON vector_chunks_g%d TO %q`, id, u.User.Username()))
+	require.NoError(t, err)
+	cfg.DeploymentEmbeddings = &config.VectorEmbeddingsServerConfig{Endpoint: endpoint.URL, BatchSize: 32, Concurrency: 4, Timeout: "30s"}
+	cfg.Vector.Enabled = false
+	startup, err := prepareReplicaServeImpl(t.Context(), pgReplica{}, cfg, "", nil, false)
+	require.NoError(t, err)
+	defer startup.cleanup()
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/search/content?pattern=hello&mode=semantic&include_one_shot=true", nil)
+	req.Header.Set("Authorization", "Bearer "+cfg.AuthToken)
+	req.Header.Set("X-AgentsView-Search-Intent", "semantic")
+	response := httptest.NewRecorder()
+	startup.srv.Handler().ServeHTTP(response, req)
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	require.EqualValues(t, 1, calls.Load())
 }
 
 func TestHostedCaptureSemanticSearch(t *testing.T) {
@@ -137,7 +180,7 @@ func TestHostedCaptureSemanticSearch(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(content), "Inspect the build.")
 	content = bytes.Replace(content, []byte("Inspect the build."), []byte("Review the changed build."), 1)
-	require.NoError(t, os.WriteFile(path, content, 0600))
+	require.NoError(t, os.WriteFile(path, content, 0o600))
 	next := client.capture(t)
 	waitCaptureJob(t, admin, next.ManifestID, "complete", 1)
 	require.EventuallyWithT(t, func(c *assert.CollectT) {

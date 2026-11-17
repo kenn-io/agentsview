@@ -2,7 +2,11 @@ package vector
 
 import (
 	"context"
+	"encoding/gob"
 	"errors"
+	"fmt"
+	"io"
+	"os"
 	"slices"
 	"strings"
 
@@ -35,9 +39,42 @@ func UnitDocuments(units []db.EmbeddableUnit) ([]storage.VectorPushDoc, error) {
 	return docs, nil
 }
 
+// VectorSpool holds one session's encoded vectors in a private temporary file.
+type VectorSpool struct {
+	file    *os.File
+	offsets map[string]int64
+}
+
+func NewVectorSpool() (*VectorSpool, error) {
+	file, err := os.CreateTemp("", "agentsview-vectors-*")
+	if err != nil {
+		return nil, fmt.Errorf("create vector spool: %w", err)
+	}
+	return &VectorSpool{file: file, offsets: make(map[string]int64)}, nil
+}
+
+func (s *VectorSpool) Close() error {
+	return errors.Join(s.file.Close(), os.Remove(s.file.Name()))
+}
+
+func (s *VectorSpool) Chunks(key string) ([]storage.VectorPushChunk, error) {
+	offset, ok := s.offsets[key]
+	if !ok {
+		return nil, fmt.Errorf("vector spool missing document %s", key)
+	}
+	if _, err := s.file.Seek(offset, io.SeekStart); err != nil {
+		return nil, err
+	}
+	var chunks []storage.VectorPushChunk
+	if err := gob.NewDecoder(s.file).Decode(&chunks); err != nil {
+		return nil, err
+	}
+	return chunks, nil
+}
+
 type unitFillStore struct {
 	docs  []storage.VectorPushDoc
-	saved map[string][]storage.VectorPushChunk
+	spool *VectorSpool
 }
 
 func (s *unitFillStore) PendingForGeneration(_ context.Context, _ string, after *string, limit int) ([]kitvec.Pending[string], error) {
@@ -46,7 +83,7 @@ func (s *unitFillStore) PendingForGeneration(_ context.Context, _ string, after 
 		if after != nil && doc.DocKey <= *after {
 			continue
 		}
-		if _, ok := s.saved[doc.DocKey]; ok {
+		if _, ok := s.spool.offsets[doc.DocKey]; ok {
 			continue
 		}
 		pending = append(pending, kitvec.Pending[string]{Doc: doc.DocKey, Content: doc.Content})
@@ -62,7 +99,14 @@ func (s *unitFillStore) SaveVectors(_ context.Context, _ string, key string, _ a
 	for _, v := range vectors {
 		chunks = append(chunks, storage.VectorPushChunk{ChunkIndex: v.ChunkIndex, Embedding: v.Vector})
 	}
-	s.saved[key] = chunks
+	offset, err := s.spool.file.Seek(0, io.SeekEnd)
+	if err != nil {
+		return fmt.Errorf("seek vector spool: %w", err)
+	}
+	if err := gob.NewEncoder(s.spool.file).Encode(chunks); err != nil {
+		return fmt.Errorf("write vector spool: %w", err)
+	}
+	s.spool.offsets[key] = offset
 	return nil
 }
 
@@ -75,8 +119,8 @@ func (*unitFillStore) QueryGeneration(context.Context, string, kitvec.Vector, in
 }
 
 // FillUnitDocuments uses kit's fill flow and reports rejected document keys.
-func FillUnitDocuments(ctx context.Context, docs []storage.VectorPushDoc, maxInputChars, concurrency int, encode kitvec.EncodeFunc, batch ...kitvec.BatchOption) ([]storage.VectorPushDoc, []string, error) {
-	store := &unitFillStore{docs: slices.Clone(docs), saved: make(map[string][]storage.VectorPushChunk)}
+func FillUnitDocuments(ctx context.Context, docs []storage.VectorPushDoc, spool *VectorSpool, maxInputChars, concurrency int, encode kitvec.EncodeFunc, batch ...kitvec.BatchOption) ([]storage.VectorPushDoc, []string, error) {
+	store := &unitFillStore{docs: slices.Clone(docs), spool: spool}
 	slices.SortFunc(store.docs, func(a, b storage.VectorPushDoc) int { return strings.Compare(a.DocKey, b.DocKey) })
 	var rejected []string
 	_, err := kitvec.Fill[string, string](ctx, store, "session", encode,
@@ -104,7 +148,6 @@ func FillUnitDocuments(ctx context.Context, docs []storage.VectorPushDoc, maxInp
 		if rejectedSet[doc.DocKey] {
 			continue
 		}
-		doc.Chunks = store.saved[doc.DocKey]
 		accepted = append(accepted, doc)
 	}
 	return accepted, rejected, nil

@@ -1110,10 +1110,10 @@ func (s *Sync) pushVectorSession(
 }
 
 func writeSessionVectors(ctx context.Context, tx *sql.Tx, scope vectorPushScope, sessionID, aggHash string, docs []storage.VectorPushDoc) (vectorSessionOutcome, error) {
-	return writeSessionVectorsKeeping(ctx, tx, scope, sessionID, aggHash, docs, nil)
+	return writeSessionVectorsKeeping(ctx, tx, scope, sessionID, aggHash, docs, nil, nil)
 }
 
-func writeSessionVectorsKeeping(ctx context.Context, tx *sql.Tx, scope vectorPushScope, sessionID, aggHash string, docs, covered []storage.VectorPushDoc) (vectorSessionOutcome, error) {
+func writeSessionVectorsKeeping(ctx context.Context, tx *sql.Tx, scope vectorPushScope, sessionID, aggHash string, docs, covered []storage.VectorPushDoc, loadChunks func(string) ([]storage.VectorPushChunk, error)) (vectorSessionOutcome, error) {
 	if err := parkSessionVectorDocs(ctx, tx, sessionID); err != nil {
 		return vectorSessionOutcome{}, err
 	}
@@ -1127,7 +1127,7 @@ func writeSessionVectorsKeeping(ctx context.Context, tx *sql.Tx, scope vectorPus
 	for _, doc := range covered {
 		keep = append(keep, doc.DocKey)
 	}
-	chunks, err := replaceVectorChunks(ctx, tx, scope.gen, sessionID, docs, keep)
+	chunks, err := replaceVectorChunks(ctx, tx, scope.gen, sessionID, docs, keep, loadChunks)
 	if err != nil {
 		return vectorSessionOutcome{}, err
 	}
@@ -1216,7 +1216,7 @@ ON CONFLICT (doc_key) DO UPDATE SET
 // chunk rows inserted.
 func replaceVectorChunks(
 	ctx context.Context, tx *sql.Tx, gen vectorGeneration,
-	sessionID string, docs []storage.VectorPushDoc, keep []string,
+	sessionID string, docs []storage.VectorPushDoc, keep []string, loadChunks func(string) ([]storage.VectorPushChunk, error),
 ) (int, error) {
 	table := vectorChunkTable(gen.id)
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`
@@ -1231,44 +1231,56 @@ DELETE FROM %s WHERE doc_key IN (
 		chunkIndex int
 		embedding  string
 	}
-	var rows []chunkRow
-	for _, doc := range docs {
-		for _, chunk := range doc.Chunks {
-			literal, err := halfvecLiteral(chunk.Embedding)
-			if err != nil {
-				return 0, fmt.Errorf(
-					"doc %s chunk %d: %w", doc.DocKey, chunk.ChunkIndex, err)
-			}
-			rows = append(rows, chunkRow{
-				docKey:     doc.DocKey,
-				chunkIndex: chunk.ChunkIndex,
-				embedding:  literal,
-			})
+	rows := make([]chunkRow, 0, vectorChunkInsertBatch)
+	total := 0
+	flush := func() error {
+		if len(rows) == 0 {
+			return nil
 		}
-	}
-
-	for start := 0; start < len(rows); start += vectorChunkInsertBatch {
-		end := min(start+vectorChunkInsertBatch, len(rows))
-		batch := rows[start:end]
 		var values strings.Builder
-		args := make([]any, 0, len(batch)*3)
-		for i, r := range batch {
+		args := make([]any, 0, len(rows)*3)
+		for i, r := range rows {
 			if i > 0 {
 				values.WriteByte(',')
 			}
 			base := i * 3
-			fmt.Fprintf(&values, "($%d,$%d,$%d::%s)",
-				base+1, base+2, base+3, gen.halfvecType)
+			fmt.Fprintf(&values, "($%d,$%d,$%d::%s)", base+1, base+2, base+3, gen.halfvecType)
 			args = append(args, r.docKey, r.chunkIndex, r.embedding)
 		}
-		stmt := fmt.Sprintf(
-			`INSERT INTO %s (doc_key, chunk_index, embedding) VALUES %s`,
-			table, values.String())
+		stmt := fmt.Sprintf(`INSERT INTO %s (doc_key, chunk_index, embedding) VALUES %s`, table, values.String())
 		if _, err := tx.ExecContext(ctx, stmt, args...); err != nil {
-			return 0, fmt.Errorf("inserting chunks for session %s: %w", sessionID, err)
+			return fmt.Errorf("inserting chunks for session %s: %w", sessionID, err)
+		}
+		total += len(rows)
+		rows = rows[:0]
+		return nil
+	}
+	for _, doc := range docs {
+		chunks := doc.Chunks
+		if loadChunks != nil {
+			var err error
+			chunks, err = loadChunks(doc.DocKey)
+			if err != nil {
+				return 0, fmt.Errorf("loading chunks for doc %s: %w", doc.DocKey, err)
+			}
+		}
+		for _, chunk := range chunks {
+			literal, err := halfvecLiteral(chunk.Embedding)
+			if err != nil {
+				return 0, fmt.Errorf("doc %s chunk %d: %w", doc.DocKey, chunk.ChunkIndex, err)
+			}
+			rows = append(rows, chunkRow{docKey: doc.DocKey, chunkIndex: chunk.ChunkIndex, embedding: literal})
+			if len(rows) == cap(rows) {
+				if err := flush(); err != nil {
+					return 0, err
+				}
+			}
 		}
 	}
-	return len(rows), nil
+	if err := flush(); err != nil {
+		return 0, err
+	}
+	return total, nil
 }
 
 // evictVectorSessions removes each session's chunks and push state for the
