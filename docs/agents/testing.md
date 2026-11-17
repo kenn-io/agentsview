@@ -20,6 +20,13 @@ Read this file before adding or changing tests.
 - Test helpers must use testify for their own assertions.
 - Use the existing `testDB(t)` helper for database tests.
 - Use `t.TempDir()` for temporary directories.
+- Register `t.Cleanup` to close a Docbank vault, artifact repository, or raw
+  archive right after opening it, even when the test also closes it explicitly.
+  A failed `require` skips the explicit close, and `t.TempDir()` then removes
+  the directory under the open vault. Docbank keeps its upload-directory lock in
+  a per-user registry keyed by directory inode, so the next directory that
+  reuses that inode cannot open a vault in any test process until the leaked
+  vault exits.
 - Never locate files from a path returned by `runtime.Caller` or a stack trace;
   builds use `-trimpath`, so those paths are module-relative. Tests run from
   their package directory, so use paths relative to it, such as `testdata/...`

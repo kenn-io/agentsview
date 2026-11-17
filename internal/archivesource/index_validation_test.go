@@ -74,6 +74,7 @@ func invalidIndexSnapshot(t *testing.T, source config.ArchiveSource, inputs, fau
 	// Keep real content membership; only the application-owned input is altered.
 	vault, err := docbank.New(ctx, docbank.Config{Root: filepath.Join(inputs, "seed", "raw-archive", "artifacts")})
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, vault.Close()) })
 	snapshot, err := vault.CreateBackup(ctx, repository, docbank.BackupOptions{ExtraFiles: extras})
 	require.NoError(t, err)
 	require.NoError(t, vault.Close())

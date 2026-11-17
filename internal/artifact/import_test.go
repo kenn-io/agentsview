@@ -1056,7 +1056,7 @@ func TestStoreImportCoordinatorCrashWindowsConverge(t *testing.T) {
 			root := t.TempDir()
 			databasePath := filepath.Join(root, "archive.db")
 			storeRoot := filepath.Join(root, "artifacts")
-			store, err := newProtocolTestStore(storeRoot)
+			store, err := newProtocolTestStore(t, storeRoot)
 			require.NoError(t, err)
 			database, err := db.Open(t.Context(), databasePath)
 			require.NoError(t, err)
@@ -1100,7 +1100,7 @@ func TestStoreImportCoordinatorCrashWindowsConverge(t *testing.T) {
 
 			database, err = db.Open(t.Context(), databasePath)
 			require.NoError(t, err)
-			store, err = newProtocolTestStore(storeRoot)
+			store, err = newProtocolTestStore(t, storeRoot)
 			require.NoError(t, err)
 			coordinator = NewStoreImportCoordinator(
 				database, store, importLocalOrigin,
@@ -1422,7 +1422,7 @@ func TestStoreImportCoordinatorRecoversTerminalCheckpointPage(t *testing.T) {
 	root := t.TempDir()
 	databasePath := filepath.Join(root, "archive.db")
 	storeRoot := filepath.Join(root, "artifacts")
-	store, err := newProtocolTestStore(storeRoot)
+	store, err := newProtocolTestStore(t, storeRoot)
 	require.NoError(t, err)
 	destination, err := db.Open(t.Context(), databasePath)
 	require.NoError(t, err)
@@ -1470,7 +1470,7 @@ func TestStoreImportCoordinatorRecoversTerminalCheckpointPage(t *testing.T) {
 	destination, err = db.Open(t.Context(), databasePath)
 	require.NoError(t, err)
 	defer destination.Close()
-	store, err = newProtocolTestStore(storeRoot)
+	store, err = newProtocolTestStore(t, storeRoot)
 	require.NoError(t, err)
 	defer store.Close()
 	restarted := NewStoreImportCoordinator(
