@@ -3167,7 +3167,7 @@ func (db *DB) toolSessions(ctx context.Context, f AnalyticsFilter) (map[string]t
 	}
 
 	// Fetch filtered session IDs and their metadata.
-	fingerprint := `json_array(COALESCE(transcript_revision, ''), COALESCE(trends_generation, ''), COALESCE(usage_generation, ''), COALESCE(tools_generation, ''), COALESCE(quality_signal_version, ''), COALESCE(agent, ''), COALESCE(project, ''), COALESCE(started_at, ''), COALESCE(created_at, ''))`
+	fingerprint := `json_array(COALESCE(trends_generation, ''), COALESCE(usage_generation, ''), COALESCE(tools_generation, ''), COALESCE(quality_signal_version, ''), COALESCE(agent, ''), COALESCE(project, ''), COALESCE(started_at, ''), COALESCE(created_at, ''))`
 	if db.readOnly {
 		fingerprint = `''`
 	}
