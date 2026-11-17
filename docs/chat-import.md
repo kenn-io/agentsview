@@ -324,11 +324,16 @@ What Sync fetches:
 
 - Only chats whose list update time differs from the last Sync, or whose
   stored copy changed since then. The first Sync fetches every listed chat.
-- One request about every 3 seconds. A chat's turns arrive 20 at a time.
+- One turn page about every 3 seconds. Each page holds up to 20 turns, so a
+  long chat takes several requests. Chat list pages are not paced; Sync
+  requests the next one as soon as the last one is processed.
 - A chat whose newest reply has no text yet, as while Gemini is still writing
   it, is stored as it is and fetched again on the next Sync. This stops once
   the reply has text, or once the chat's list update time is more than 24 hours
   old, so a reply that never finishes is not fetched forever.
+- A chat whose list update time cannot be read is still fetched. If its newest
+  reply has no text, it is fetched again on every Sync until the reply has
+  text. Otherwise it is fetched once and then treated as unchanged.
 
 How Sync updates stored chats:
 
