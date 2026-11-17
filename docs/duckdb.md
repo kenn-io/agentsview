@@ -99,8 +99,10 @@ watching, or local sync.
 
 Local `duckdb serve` keeps usage totals for Activity ranges that include today
 in memory and on disk, along with session runs and message times. A push
-refreshes usage for changed sessions and their deduplication peers. Pricing
-changes invalidate Activity usage parts. The parts are saved when computed; a
+refreshes usage for changed sessions and their deduplication peers. The first
+visit after a push or eviction scans session fingerprints and deduplication
+peers before reusing saved usage. Pricing changes invalidate Activity usage
+parts. The parts are saved when computed; a
 graceful shutdown saves runs and message times. After an abrupt exit, the next
 report rebuilds runs and message times changed since the last graceful
 shutdown. These inputs share the `duckdb-usage` limits of 128 MiB per file and

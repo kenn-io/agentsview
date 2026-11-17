@@ -132,6 +132,44 @@ func TestActivityUsagePartsRemapRates(t *testing.T) {
 	requireKeptActivityEqual(t, keptActivityBuild(t, fresh, q, true), got)
 }
 
+func TestActivityUsagePartsRefreshCrossProjectSnapshotPeer(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	writeUsageMirror(t, path,
+		`UPDATE sessions SET agentsview_push_fingerprint = 'a1', project = 'included'`,
+		`UPDATE messages SET claude_message_id = 'message', claude_request_id = 'request' WHERE id = 2`,
+		`INSERT INTO sessions SELECT * REPLACE ('session-b' AS id, 'b1' AS agentsview_push_fingerprint, 'excluded' AS project) FROM sessions WHERE id = 'session-a'`,
+		`INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id, 400 AS usage_output_tokens) FROM messages WHERE id = 2`,
+	)
+	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	filter := db.AnalyticsFilter{Timezone: "UTC", Project: "included"}
+	store := openUsagePartsStore(t, path)
+	first, err := store.GetActivityReport(t.Context(), filter, q)
+	require.NoError(t, err)
+	require.Equal(t, 500, first.Totals.OutputTokens)
+	require.NoError(t, store.Close())
+
+	writeUsageMirror(t, path,
+		`UPDATE sessions SET agentsview_push_fingerprint = 'b2' WHERE id = 'session-b'`,
+		`UPDATE messages SET usage_output_tokens = 900 WHERE id = 3`,
+	)
+	store = openUsagePartsStore(t, path)
+	defer store.Close()
+	var refreshed []string
+	previous := usagePartReadObserver
+	usagePartReadObserver = func(ids []string) { refreshed = append(refreshed, ids...) }
+	t.Cleanup(func() { usagePartReadObserver = previous })
+	got, err := store.GetActivityReport(t.Context(), filter, q)
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{"session-a", "session-b"}, refreshed)
+	require.Equal(t, 900, got.Totals.OutputTokens)
+	fresh, err := NewStoreFromDB(store.DB()).GetActivityReport(t.Context(), filter, q)
+	require.NoError(t, err)
+	require.Equal(t, fresh, got)
+}
+
 func TestActivityUsageReadSetKeepsCandidateOwnership(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	keptActivityMirror(t, path, "session-a", 500)
