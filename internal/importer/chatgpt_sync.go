@@ -195,7 +195,7 @@ func syncChatGPTConversation(ctx context.Context, store db.Store, result parser.
 	}
 	if err == nil && status == importSkipped {
 		// Sync also refreshes the source timestamp when the messages match.
-		return refreshChatGPTTimestamp(ctx, store, importedSession(result.Session))
+		return refreshSyncedTimestamp(ctx, store, importedSession(result.Session))
 	}
 	return status, err
 }
@@ -228,20 +228,6 @@ func fillChatGPTSyncStart(ctx context.Context, store db.Store, result *parser.Pa
 		}
 	}
 	return nil
-}
-
-func refreshChatGPTTimestamp(ctx context.Context, store db.Store, session db.Session) (importStatus, error) {
-	stored, err := store.GetSessionFull(ctx, session.ID)
-	if err != nil {
-		return importSkipped, err
-	}
-	if err := appendChatGPTMessages(ctx, store, session, nil); err != nil {
-		return importSkipped, err
-	}
-	if stored != nil && session.EndedAt != nil && !ptrEqual(stored.EndedAt, session.EndedAt) {
-		return importUpdated, nil
-	}
-	return importSkipped, nil
 }
 
 func chatGPTToolsChanged(archived, incoming []db.Message) bool {

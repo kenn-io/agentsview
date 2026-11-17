@@ -104,10 +104,10 @@ func syncKeepingHistory(ctx context.Context, store db.Store, result parser.Parse
 		// Equal rows ignore models, so a reply that only gained its model
 		// gets it filled in place.
 		if rows := missingModelRows(archived, stored); len(rows) > 0 {
-			return importUpdated, appendChatGPTMessages(ctx, store, importedSession(result.Session), rows)
+			return importUpdated, appendSyncedMessages(ctx, store, importedSession(result.Session), rows)
 		}
 		if storeArchiveContent(store).UsageOnly() {
-			return refreshChatGPTTimestamp(ctx, store, importedSession(result.Session))
+			return refreshSyncedTimestamp(ctx, store, importedSession(result.Session))
 		}
 		return upsertConversation(ctx, store, result, nil, identityMessages)
 	}
@@ -116,10 +116,10 @@ func syncKeepingHistory(ctx context.Context, store db.Store, result parser.Parse
 	// the rows written come from the same slice. A chat with fewer messages
 	// than stored is not an append even when its retained rows match.
 	if stored != nil && len(stored) >= len(archived) && len(msgs) >= existing.MessageCount {
-		if completed, prefix := compareChatGPTPrefix(archived, stored[:len(archived)], true); prefix {
-			rows := chatGPTFillRows(archived, stored, completed, true)
+		if completed, prefix := compareSyncedPrefix(archived, stored[:len(archived)], true); prefix {
+			rows := syncedFillRows(archived, stored, completed, true)
 			rows = append(rows, stored[len(archived):]...)
-			err := appendChatGPTMessages(ctx, store, importedSession(result.Session), rows)
+			err := appendSyncedMessages(ctx, store, importedSession(result.Session), rows)
 			if errors.Is(err, db.ErrSessionExcluded) {
 				return importSkipped, nil
 			}
@@ -127,6 +127,22 @@ func syncKeepingHistory(ctx context.Context, store db.Store, result parser.Parse
 		}
 	}
 	return replaceSyncedConversation(ctx, store, result, msgs, true)
+}
+
+// refreshSyncedTimestamp writes a synced chat's session row when its messages
+// match the archive, so the source timestamp stays current.
+func refreshSyncedTimestamp(ctx context.Context, store db.Store, session db.Session) (importStatus, error) {
+	stored, err := store.GetSessionFull(ctx, session.ID)
+	if err != nil {
+		return importSkipped, err
+	}
+	if err := appendSyncedMessages(ctx, store, session, nil); err != nil {
+		return importSkipped, err
+	}
+	if stored != nil && session.EndedAt != nil && !ptrEqual(stored.EndedAt, session.EndedAt) {
+		return importUpdated, nil
+	}
+	return importSkipped, nil
 }
 
 // sourceIdentityChanged reports whether a stored row and its incoming row

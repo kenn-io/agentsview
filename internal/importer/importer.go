@@ -462,7 +462,7 @@ func upsertChatGPTConversation(
 			"export history diverges from the archived messages",
 		))
 	}
-	filled, ok := compareChatGPTPrefix(archived, canonical[:len(archived)], sync)
+	filled, ok := compareSyncedPrefix(archived, canonical[:len(archived)], sync)
 	if !ok {
 		return importNew, refuse(RefusalDiverged, errors.New(
 			"export history diverges from the archived messages",
@@ -497,9 +497,9 @@ func upsertChatGPTConversation(
 	// The transcript changed, so stored quality signals and secret findings
 	// describe the older history. Clear them to version zero in the same
 	// write so the signal backfill recomputes them from the new rows.
-	rows := chatGPTFillRows(archived, msgs, filled, sync)
+	rows := syncedFillRows(archived, msgs, filled, sync)
 	rows = append(rows, msgs[len(archived):]...)
-	if err := appendChatGPTMessages(
+	if err := appendSyncedMessages(
 		ctx, store, importedSession(s), rows,
 	); errors.Is(err, db.ErrSessionExcluded) {
 		return importSkipped, nil
@@ -588,7 +588,7 @@ func canonicalChatGPTMessages(
 func writeChatGPTSession(
 	ctx context.Context, store db.Store, sess db.Session, msgs []db.Message,
 ) error {
-	return writeChatGPTBatch(ctx, store, db.SessionBatchWrite{
+	return writeSessionBatch(ctx, store, db.SessionBatchWrite{
 		Session:                    sess,
 		Messages:                   msgs,
 		SkipSignalUpdates:          true,
@@ -597,14 +597,14 @@ func writeChatGPTSession(
 	})
 }
 
-// appendChatGPTMessages fills archived-empty tool results, extends truncated
+// appendSyncedMessages fills archived-empty tool results, extends truncated
 // text, fills missing models at stored ordinals, and inserts later rows, leaving
 // other stored rows untouched. Message changes clear signals for backfill;
 // metadata-only writes preserve them.
-func appendChatGPTMessages(
+func appendSyncedMessages(
 	ctx context.Context, store db.Store, sess db.Session, msgs []db.Message,
 ) error {
-	return writeChatGPTBatch(ctx, store, db.SessionBatchWrite{
+	return writeSessionBatch(ctx, store, db.SessionBatchWrite{
 		Session:            sess,
 		Messages:           msgs,
 		CompleteStoredRows: true,
@@ -626,13 +626,13 @@ func missingModelRows(archived, incoming []db.Message) []db.Message {
 			changed = append(changed, i)
 		}
 	}
-	return chatGPTFillRows(archived, incoming, changed, true)
+	return syncedFillRows(archived, incoming, changed, true)
 }
 
-// chatGPTFillRows copies rows with filled results, extended text, or missing
+// syncedFillRows copies rows with filled results, extended text, or missing
 // models, keeping only the tool results being filled. Without sync the rows
 // carry no models or source identities, so stored ones stay as they are.
-func chatGPTFillRows(
+func syncedFillRows(
 	archived, incoming []db.Message, filled []int, sync bool,
 ) []db.Message {
 	rows := make([]db.Message, 0, len(filled))
@@ -654,7 +654,7 @@ func chatGPTFillRows(
 	return rows
 }
 
-func writeChatGPTBatch(
+func writeSessionBatch(
 	ctx context.Context, store db.Store, write db.SessionBatchWrite,
 ) error {
 	result, err := store.WriteSessionBatchAtomic(
@@ -720,14 +720,14 @@ func sameMessages(existing, incoming []db.Message) bool {
 	return true
 }
 
-// compareChatGPTPrefix reports whether the export still starts with the
+// compareSyncedPrefix reports whether the export still starts with the
 // archived messages and which archived rows the export completes: a result
 // that was empty when archived and is filled now, archived text the export
 // extends (db.IsTextExtension), and with sync a missing model or missing
 // source identities. It compares turn fields, conflicting source IDs (with
 // sync), text and length, and each archived call's name, category, and
 // whether its result is empty.
-func compareChatGPTPrefix(
+func compareSyncedPrefix(
 	existing, incoming []db.Message, sync bool,
 ) (completed []int, ok bool) {
 	if len(existing) != len(incoming) {
