@@ -74,7 +74,8 @@ func TestToolsPartsFiltersAndChanges(t *testing.T) {
 	require.NoError(t, err)
 	hour, monday := 8, 0
 	filters := []AnalyticsFilter{
-		{Timezone: "UTC"}, {Timezone: "UTC", Model: "model-a"},
+		{Timezone: "UTC"},
+		{Timezone: "UTC", Model: "model-a"},
 		{Timezone: "America/New_York", Hour: &hour, DayOfWeek: &monday},
 		{Timezone: "UTC", From: "2025-03-10", To: "2025-03-10"},
 		{Timezone: "UTC", ToolCategory: "Read", ToolMetric: "tool_empty_rate"},
