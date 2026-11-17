@@ -433,8 +433,11 @@ func pollScanLinkIgnored(path, name string, watch parser.WatchRoot) bool {
 		return true
 	}
 	info, err := os.Stat(path)
-	// Discovery cannot follow a dangling link either.
-	return errors.Is(err, fs.ErrNotExist) || (err == nil && !info.IsDir())
+	if err != nil {
+		// Discovery cannot follow a dangling link either.
+		return errors.Is(err, fs.ErrNotExist)
+	}
+	return !info.IsDir()
 }
 
 func findPollScanRow(rows []pollScanRow, path uint64) (int, bool) {
