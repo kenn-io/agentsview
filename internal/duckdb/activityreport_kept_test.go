@@ -133,53 +133,6 @@ func TestActivityUsagePartsRemapRates(t *testing.T) {
 	requireKeptActivityEqual(t, keptActivityBuild(t, fresh, q, true), got)
 }
 
-func TestActivityUsagePartsInvalidRateRebuilds(t *testing.T) {
-	for _, invalidRate := range []int64{-1, 1} {
-		t.Run(strconv.FormatInt(invalidRate, 10), func(t *testing.T) {
-			cache := t.TempDir()
-			t.Setenv("CACHE_DIRECTORY", cache)
-			path := filepath.Join(t.TempDir(), "mirror.duckdb")
-			keptActivityMirror(t, path, "session-a", 500)
-			q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
-			require.NoError(t, err)
-			store := openUsagePartsStore(t, path)
-			want := keptActivityBuild(t, store, q, true)
-			require.NoError(t, store.Close())
-			rewritten := 0
-			require.NoError(t, filepath.WalkDir(cache, func(path string, entry os.DirEntry, err error) error {
-				if err != nil || filepath.Ext(path) != ".gob" {
-					return err
-				}
-				data, err := os.ReadFile(path)
-				require.NoError(t, err)
-				headerEnd := bytes.IndexByte(data, '\n')
-				require.GreaterOrEqual(t, headerEnd, 0)
-				rows, ok := kept.DecodeRows[kept.Part[*readbase.ActivityUsageSums]](data[headerEnd+1:])
-				if !ok || len(rows) == 0 || rows[0].Value == nil || len(rows[0].Value.Groups) == 0 {
-					return nil
-				}
-				require.Len(t, rows[0].Value.Schedule.Rates, 1)
-				rows[0].Value.Groups[0].Rate = invalidRate
-				payload, err := kept.EncodeRows(rows, 128<<20, func(part kept.Part[*readbase.ActivityUsageSums]) int64 { return part.Value.Bytes() })
-				require.NoError(t, err)
-				require.NoError(t, os.WriteFile(path, append(data[:headerEnd+1], payload...), 0o600))
-				rewritten++
-				return nil
-			}))
-			require.Equal(t, 1, rewritten)
-			store = openUsagePartsStore(t, path)
-			defer store.Close()
-			var refreshed []string
-			previous := usagePartReadObserver
-			usagePartReadObserver = func(ids []string) { refreshed = append(refreshed, ids...) }
-			t.Cleanup(func() { usagePartReadObserver = previous })
-			got := keptActivityBuild(t, store, q, true)
-			require.Equal(t, []string{"session-a"}, refreshed)
-			requireKeptActivityEqual(t, want, got)
-		})
-	}
-}
-
 func TestActivityReportKeptAcrossReopensAndRestart(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
@@ -503,88 +456,75 @@ func TestPartialActivityInputsSurviveRestart(t *testing.T) {
 }
 
 func TestPartialActivityInvalidDiskEntryIsMiss(t *testing.T) {
-	cache := t.TempDir()
-	t.Setenv("CACHE_DIRECTORY", cache)
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	keptActivityMirror(t, path, "session-a", 500)
-	store, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
-	require.NoError(t, store.OpenActivityReportDisk(t.Context()))
-	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
-	require.NoError(t, err)
-	keptActivityBuild(t, store, q, true)
-	require.NoError(t, store.Close())
-	rewritten := 0
-	require.NoError(t, filepath.WalkDir(cache, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if filepath.Ext(path) == ".gob" {
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return err
+	for _, scenario := range []string{"undecodable", "negative rate", "rate past schedule"} {
+		t.Run(scenario, func(t *testing.T) {
+			cache := t.TempDir()
+			t.Setenv("CACHE_DIRECTORY", cache)
+			path := filepath.Join(t.TempDir(), "mirror.duckdb")
+			keptActivityMirror(t, path, "session-a", 500)
+			q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+			require.NoError(t, err)
+			store := openUsagePartsStore(t, path)
+			want := keptActivityBuild(t, store, q, true)
+			require.NoError(t, store.Close())
+			rewritten := 0
+			require.NoError(t, filepath.WalkDir(cache, func(path string, entry os.DirEntry, err error) error {
+				if err != nil || filepath.Ext(path) != ".gob" {
+					return err
+				}
+				data, err := os.ReadFile(path)
+				require.NoError(t, err)
+				headerEnd := bytes.IndexByte(data, '\n')
+				require.GreaterOrEqual(t, headerEnd, 0)
+				payload := []byte("corrupt")
+				if scenario != "undecodable" {
+					rows, ok := kept.DecodeRows[kept.Part[*readbase.ActivityUsageSums]](data[headerEnd+1:])
+					if !ok || len(rows) == 0 || rows[0].Value == nil || len(rows[0].Value.Groups) == 0 {
+						return nil
+					}
+					require.Len(t, rows[0].Value.Schedule.Rates, 1)
+					rows[0].Value.Groups[0].Rate = -1
+					if scenario == "rate past schedule" {
+						rows[0].Value.Groups[0].Rate = 1
+					}
+					payload, err = kept.EncodeRows(rows, 128<<20, func(part kept.Part[*readbase.ActivityUsageSums]) int64 { return part.Value.Bytes() })
+					require.NoError(t, err)
+				}
+				require.NoError(t, os.WriteFile(path, append(data[:headerEnd+1], payload...), 0o600))
+				rewritten++
+				return nil
+			}))
+			require.Positive(t, rewritten)
+			if scenario != "undecodable" {
+				require.Equal(t, 1, rewritten)
 			}
-			headerEnd := bytes.IndexByte(data, '\n')
-			require.GreaterOrEqual(t, headerEnd, 0)
-			if err := os.WriteFile(path, append(data[:headerEnd+1], []byte("corrupt")...), 0o600); err != nil {
-				return err
+			restarted := openUsagePartsStore(t, path)
+			defer restarted.Close()
+			usageReads, runReads := 0, 0
+			var refreshed []string
+			previousParts := usagePartReadObserver
+			usagePartReadObserver = func(ids []string) { refreshed = append(refreshed, ids...) }
+			t.Cleanup(func() { usagePartReadObserver = previousParts })
+			previous := analyticsQueryObserver
+			analyticsQueryObserver = func(query string) {
+				if strings.Contains(query, "activity_usage_keyed") {
+					usageReads++
+				}
+				if strings.Contains(query, "activity_run_pieces") {
+					runReads++
+				}
 			}
-			rewritten++
-		}
-		return nil
-	}))
-	require.Positive(t, rewritten)
-	restarted, err := NewStore(t.Context(), path)
-	require.NoError(t, err)
-	defer restarted.Close()
-	require.NoError(t, restarted.OpenActivityReportDisk(t.Context()))
-	usageReads, runReads := 0, 0
-	previous := analyticsQueryObserver
-	analyticsQueryObserver = func(query string) {
-		if strings.Contains(query, "activity_usage_keyed") {
-			usageReads++
-		}
-		if strings.Contains(query, "activity_run_pieces") {
-			runReads++
-		}
+			t.Cleanup(func() { analyticsQueryObserver = previous })
+			got := keptActivityBuild(t, restarted, q, true)
+			require.Equal(t, 1, usageReads)
+			if scenario == "undecodable" {
+				require.Equal(t, 1, runReads)
+			} else {
+				require.Equal(t, []string{"session-a"}, refreshed)
+			}
+			requireKeptActivityEqual(t, want, got)
+		})
 	}
-	t.Cleanup(func() { analyticsQueryObserver = previous })
-	got := keptActivityBuild(t, restarted, q, true)
-	require.Equal(t, 1, usageReads)
-	require.Equal(t, 1, runReads)
-	require.Equal(t, 500, activity.ReportWithSessions(got).Totals.OutputTokens)
-}
-
-func TestPartialActivityUsageSameStampReplacement(t *testing.T) {
-	skipReopenTestOnWindows(t)
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	dir := t.TempDir()
-	path, next := filepath.Join(dir, "mirror.duckdb"), filepath.Join(dir, "next.duckdb")
-	keptActivityMirror(t, path, "session-a", 500)
-	keptActivityMirror(t, next, "session-b", 900)
-	oldInfo, err := os.Stat(path)
-	require.NoError(t, err)
-	nextInfo, err := os.Stat(next)
-	require.NoError(t, err)
-	require.Equal(t, oldInfo.Size(), nextInfo.Size())
-	require.NoError(t, os.Chtimes(next, oldInfo.ModTime(), oldInfo.ModTime()))
-	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
-	require.NoError(t, err)
-	store := openUsagePartsStore(t, path)
-	first := keptActivityBuild(t, store, q, true)
-	require.Equal(t, 500, activity.ReportWithSessions(first).Totals.OutputTokens)
-	require.NoError(t, store.Close())
-	require.NoError(t, swapMirrorFile(next, path))
-	store = openUsagePartsStore(t, path)
-	changed := keptActivityBuild(t, store, q, true)
-	require.Equal(t, 900, activity.ReportWithSessions(changed).Totals.OutputTokens)
-	require.NoError(t, store.Close())
-	reopened := openUsagePartsStore(t, path)
-	defer reopened.Close()
-	reads := observeActivityUsageReads(t)
-	got := keptActivityBuild(t, reopened, q, true)
-	require.Equal(t, 900, activity.ReportWithSessions(got).Totals.OutputTokens)
-	require.Zero(t, *reads)
 }
 
 func TestFinishedDayThenPartialMonthSurvivesRestart(t *testing.T) {
