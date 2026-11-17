@@ -290,31 +290,39 @@ func TestChromeHostIncompatibleReply(t *testing.T) {
 func TestChromeHostDisconnect(t *testing.T) {
 	for _, mode := range []string{"negative status", "status above 599", "EOF"} {
 		t.Run(mode, func(t *testing.T) {
-			srv := testServer(t, 5*time.Second)
-			_, conn := testChromeConnection(t, srv)
-			finished := make(chan error, 1)
-			go func() { _, err := srv.chrome.fetch(t.Context(), "/api/organizations"); finished <- err }()
-			_, path := readChromeRequest(t, conn)
-			require.Equal(t, "/api/organizations", path)
-			switch mode {
-			case "negative status":
-				writeChromeReply(t, conn, "ignored", -1, "[]")
-			case "status above 599":
-				writeChromeReply(t, conn, "ignored", 600, "[]")
-			case "EOF":
-				require.NoError(t, conn.Close())
-			}
-			select {
-			case err := <-finished:
-				if mode == "negative status" || mode == "status above 599" {
-					require.EqualError(t, err, "invalid Chrome reply status")
-				} else {
-					require.ErrorContains(t, err, "disconnected")
+			synctest.Test(t, func(t *testing.T) {
+				// Exercise reply handling without the Windows socket read/close race
+				// documented in Go's net.TestCloseWrite (go.dev/issue/49352).
+				serverConn, conn := net.Pipe()
+				defer serverConn.Close()
+				defer conn.Close()
+				current := &chromeConnection{Conn: serverConn, pending: make(map[string]chan claudeAISyncResult)}
+				host := &chromeHost{connection: current}
+				go host.read(current)
+				finished := make(chan error, 1)
+				go func() { _, err := host.fetch(t.Context(), "/api/organizations"); finished <- err }()
+				_, path := readChromeRequest(t, conn)
+				require.Equal(t, "/api/organizations", path)
+				switch mode {
+				case "negative status":
+					writeChromeReply(t, conn, "ignored", -1, "[]")
+				case "status above 599":
+					writeChromeReply(t, conn, "ignored", 600, "[]")
+				case "EOF":
+					require.NoError(t, conn.Close())
 				}
-			case <-time.After(5 * time.Second):
-				require.FailNow(t, "pending fetch did not fail")
-			}
-			require.Eventually(t, func() bool { return !srv.chrome.Connected() }, 5*time.Second, 10*time.Millisecond)
+				select {
+				case err := <-finished:
+					if mode == "negative status" || mode == "status above 599" {
+						require.EqualError(t, err, "invalid Chrome reply status")
+					} else {
+						require.ErrorContains(t, err, "disconnected")
+					}
+				case <-time.After(5 * time.Second):
+					require.FailNow(t, "pending fetch did not fail")
+				}
+				assert.False(t, host.Connected())
+			})
 		})
 	}
 }
