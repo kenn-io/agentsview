@@ -48,9 +48,7 @@ func (f *fakeAPI) RoundTrip(r *http.Request) (*http.Response, error) {
 	var body struct {
 		Page int `json:"page"`
 	}
-	if !assert.NoError(f.t, json.UnmarshalRead(r.Body, &body)) {
-		return nil, errors.New("undecodable request")
-	}
+	require.NoError(f.t, json.UnmarshalRead(r.Body, &body))
 	f.mu.Lock()
 	call := len(f.requests)
 	f.requests = append(f.requests, apiRequest{page: body.Page, at: time.Now()})
