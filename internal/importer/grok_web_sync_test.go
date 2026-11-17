@@ -48,6 +48,10 @@ func TestSyncGrokCapturedPages(t *testing.T) {
 		token    = "00000000-0000-4000-8000-000000000005" // list1's nextPageToken
 		branched = "00000000-0000-4000-8000-000000000001" // list1's newest chat
 	)
+	// An hour after the branched chat's list time, so its replies are still
+	// inside the pending window and the second Sync tests the pending rule
+	// rather than the window.
+	opts := BrowserSyncOptions{Now: func() time.Time { return time.Date(2026, 3, 4, 8, 13, 23, 0, time.UTC) }}
 	var lists []string
 	details := 0
 	fetch := func(_ context.Context, path string) (BrowserResponse, error) {
@@ -65,7 +69,7 @@ func TestSyncGrokCapturedPages(t *testing.T) {
 		details++
 		return BrowserResponse{Status: 200, Body: grokFixture(t, "responses-linear.json")}, nil
 	}
-	stats, err := syncGrokWeb(t.Context(), d, fetch, grokTestOptions, nil)
+	stats, err := syncGrokWeb(t.Context(), d, fetch, opts, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 10, stats.Imported)
 	assert.Zero(t, stats.Errors)
@@ -96,7 +100,7 @@ func TestSyncGrokCapturedPages(t *testing.T) {
 
 	// The cut-off reply sits on a branch the web app no longer shows, so the
 	// chat is not pending and the next Sync fetches nothing.
-	stats, err = syncGrokWeb(t.Context(), d, fetch, grokTestOptions, nil)
+	stats, err = syncGrokWeb(t.Context(), d, fetch, opts, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 10, stats.Skipped)
 	assert.Equal(t, 10, details)
