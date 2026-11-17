@@ -238,7 +238,8 @@ What Sync fetches:
 - Both the active and the archived chat lists. Coverage of Project chats and
   Business workspaces is unverified.
 - Only chats whose list `update_time` differs from the last Sync, or whose
-  stored copy changed since then. The first Sync fetches every listed chat,
+  stored copy changed since then. A chat whose list and conversation
+  timestamps differ by more than 5 seconds is fetched again on the next Sync. The first Sync fetches every listed chat,
   including chats a ZIP import already stored.
 - One chat about every 3 seconds. A 2,000-chat first Sync takes about 100
   minutes.
@@ -252,8 +253,9 @@ How Sync updates stored chats:
   visible branch. Sync keeps the previous version in Trash with its pins,
   notes, and archived images, under every archive policy. Syncing the same
   change again makes no further copy.
-- Messages now store their ChatGPT message and parent IDs. Sync fills these IDs
-  and missing models into chats imported earlier. ZIP re-imports do not.
+- Your messages now store their ChatGPT message and parent IDs; ChatGPT's
+  replies do not. Sync fills these IDs and missing models into chats imported
+  earlier. ZIP re-imports do not.
 - ChatGPT has no signal that a reply is still being written. A chat synced
   mid-reply keeps that partial reply until its `update_time` changes. Sync
   accepts a difference of up to 5 seconds between the list and conversation
@@ -262,8 +264,9 @@ How Sync updates stored chats:
 Images appear as `[image unavailable]`. Sync keeps an upload from a ZIP import
 when the user turn's position, role, timestamp, and surrounding text match, and
 when its saved message and parent IDs match if the archive has them.
-Generated images come from the browser copy, so regenerating an image drops the
-old one from the visible chat; the Trash copy keeps it.
+Images ChatGPT generated also become `[image unavailable]`, even when nothing
+changed. The first Sync of a chat with a ZIP-imported generated image therefore
+replaces the chat, and the Trash copy keeps the image.
 
 When Sync stops:
 

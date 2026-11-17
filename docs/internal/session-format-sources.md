@@ -4181,8 +4181,10 @@ schemas keep their existing ordering behavior.
   messaging sends replies through a private Unix socket to the server; Chrome
   Sync's HTTP stream contains only progress, done, and error events. Setup
   pins the extension's public-key-derived ID. Native frames are capped at 64
-  MiB; oversized serialized replies become status 413. Both peers require
-  protocol revision 2 in each message, covering encoding and request shapes.
+  MiB; oversized serialized replies become status 413. Protocol revision 2
+  covers encoding and request shapes. The server requires revision 2 on every
+  reply; the extension does not check the request revision and stamps each
+  reply with its own.
   Revision 2 (2026-11-17) adds a `platform` field to each request. An
   extension that does not know the platform replies `unsupported: true`; the
   server fails only that request with the update message and keeps the
@@ -4409,8 +4411,9 @@ schemas keep their existing ordering behavior.
   page. Sync uses the export conversation parser. List timestamps accept ISO
   strings or Unix seconds; detail timestamps use Unix seconds.
 - **Timestamps:** One supplied signed-in capture had a detail timestamp 0.68 s
-  after the list timestamp. Sync records freshness only when the two are
-  within 5 s, and fetches again when the detail is newer, checked by
+  after the list timestamp. Sync records freshness only when the two differ by
+  at most 5 s in either direction; a larger difference leaves the chat to be
+  fetched again on the next run, even if neither copy changed. Checked by
   `TestSyncChatGPTEquivalentTimestampsSkipSecondDetail` (2026-10-18). ChatGPT
   has no signal for a reply still being written, so a chat synced mid-reply
   keeps that reply until the list timestamp moves.
@@ -4430,8 +4433,10 @@ schemas keep their existing ordering behavior.
   messages records freshness and is not fetched again until the list timestamp
   changes (`TestSyncChatGPTEmptyConversationFreshness`, 2026-11-17). Before
   2026-11-17 such chats were fetched on every run.
-- **Identities and history:** The parser stores each message's ChatGPT ID and
-  parent ID as source identities, for ZIP imports and Sync alike. Sync fills
+- **Identities and history:** The parser stores each user message's ChatGPT ID
+  and parent ID as source identities, for ZIP imports and Sync alike. Assistant
+  rows merge several nodes and carry no source identity, so a regenerated reply
+  with identical text keeps pins matched by role, text, and occurrence rank. Sync fills
   missing identities and models in place; ZIP re-imports do not
   (`TestImportChatGPTReimportLegacyRows`). A turn whose stored and incoming IDs
   differ is an edit. Appends, completed tool results, and extended text keep
@@ -4451,7 +4456,10 @@ schemas keep their existing ordering behavior.
 - **Images and start time:** Browser details carry no asset identity, so images
   show as `[image unavailable]`. Sync keeps a ZIP-imported upload on a user turn
   whose position, role, timestamp, sanitized surrounding text, and saved IDs
-  (when present) match (`TestSyncChatGPTZipImageReconciliation`). When detail
+  (when present) match (`TestSyncChatGPTZipImageReconciliation`). Generated
+  images become placeholders even when unchanged, so the first Sync of a chat
+  with a ZIP-imported generated image replaces it and keeps the original in
+  Trash. When detail
   `create_time` is null or absent, Sync keeps the stored start time or uses
   the first dated message (`TestSyncChatGPTMissingCreateTime`).
 - **ChatGPT Sync errors:** Before streaming, `chrome_host_required` reports a
