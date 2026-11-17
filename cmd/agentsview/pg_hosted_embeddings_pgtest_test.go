@@ -199,6 +199,9 @@ func TestHostedEmbeddingsRateLimitDoesNotBlockNextSession(t *testing.T) {
 	defer cancel()
 	runtime.batch(ctx)
 	var count int
+	require.EqualValues(t, 1, rateCalls.Load())
+	require.NoError(t, store.DB().QueryRowContext(t.Context(), `SELECT count(*) FROM vector_push_state WHERE session_id='a'`).Scan(&count))
+	assert.Zero(t, count)
 	runtime.batch(ctx)
 	require.EqualValues(t, 2, rateCalls.Load(), "the failed session retries on the next poll")
 	require.NoError(t, store.DB().QueryRowContext(t.Context(), `SELECT count(*) FROM vector_push_state WHERE session_id='a'`).Scan(&count))
