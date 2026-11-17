@@ -269,7 +269,7 @@ func newPGHostedProvisionCommand() *cobra.Command {
 		if err = postgres.EnsureHostedTenant(cmd.Context(), database, pg.Schema, pg.RawTenant); err != nil {
 			return fmt.Errorf("hosted provisioning failed: %w", err)
 		}
-		if cfg.Vector.Enabled {
+		if cfg.Vector.Enabled && !cfg.ArchiveContent.UsageOnly() {
 			gen := vectorGeneration(cfg.Vector.Embeddings)
 			info := storage.VectorGenerationInfo{Fingerprint: gen.Fingerprint(), Model: gen.Model, Dimension: gen.Dimensions, Params: gen.Params}
 			if err = postgres.ProvisionHostedVector(cmd.Context(), database, pg.Schema, pg.RawTenant, info); err != nil {

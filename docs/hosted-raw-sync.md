@@ -215,6 +215,8 @@ on each existing `vector_chunks_g<ID>` table registered in
 Repeat the chunk-table grants after provisioning a new generation. On a machine
 configured with the hosted PostgreSQL target and query endpoint, search uploaded
 sessions with `agentsview session search --pg --semantic "your query"`.
+For stored content with `[vector]` enabled, hosted startup requires the configured
+generation and these runtime grants, even when raw derivation is disabled.
 
 Start the effective default target:
 
