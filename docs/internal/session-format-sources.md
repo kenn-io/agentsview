@@ -2146,13 +2146,13 @@ fixtures retain this field; missing identities remain source-local.
 - **Pending replies:** A chat with an entry in `inflightResponses`, a
   `partial` response that ends the shown branch, or an empty `partial` reply
   directly below the end of the shown branch is written but its freshness is
-  not recorded, so the next Sync fetches it again. A `partial` response with
-  later turns below it on the shown branch is finished history and does not
-  count. So is a chat with an empty
-  `partial` reply below an earlier response of the shown branch that is newer
-  than the end of that branch, which is how a regeneration looks while Grok
-  writes it. An older one is a failed regeneration the chat has moved past, and
-  one below a branch no longer shown does not count. The capture holds a
+  not recorded, so the next Sync fetches it again. A chat with an empty
+  `partial` reply below an earlier response of the shown branch is pending
+  too while that reply is newer than the end of the shown branch, because that
+  is how a regeneration looks while Grok writes it. An older one is a failed
+  regeneration the chat has moved past, and one below a branch no longer shown
+  does not count. A `partial` response with later turns below it on the shown
+  branch is finished history and does not count either. The capture holds a
   failed regeneration that stayed `partial` with no text, so a regeneration
   that fails as the newest response is refetched until the bound below. This
   applies only while the chat's list `modifyTime` is within 24 hours of the
