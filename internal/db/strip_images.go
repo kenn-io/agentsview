@@ -295,7 +295,7 @@ func (db *DB) rewriteStoredToolResultRows(
 			return false, fmt.Errorf("invalidating tool result coordinates: %w", err)
 		}
 	}
-	if err := bumpTranscriptRevisionTx(tx, sessionID, db.usageOnlyStorage()); err != nil {
+	if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 		return false, err
 	}
 	if err := refreshImageTextOccurrencesTx(tx, sessionID); err != nil {

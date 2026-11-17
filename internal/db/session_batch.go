@@ -641,7 +641,7 @@ func (db *DB) writeOneSessionBatchTx(
 		if !sessionExists {
 			bump = bumpInsertedTranscriptRevisionTx
 		}
-		if err := bump(queries, write.Session.ID, true); err != nil {
+		if err := bump(queries, write.Session.ID); err != nil {
 			return 0, err
 		}
 	}

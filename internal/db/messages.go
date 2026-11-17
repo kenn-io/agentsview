@@ -1608,7 +1608,7 @@ func (db *DB) insertMessages(ctx context.Context,
 	}
 	storedSessionIDs := messageSessionIDs(msgs)
 	for _, sessionID := range storedSessionIDs {
-		if err := bumpTranscriptRevisionTx(tx, sessionID, true); err != nil {
+		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 			return err
 		}
 		if !db.usageOnlyStorage() {
@@ -2175,7 +2175,7 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 		return err
 	}
 	if transcriptChanged {
-		if err := bumpTranscriptRevisionTx(tx, sessionID, db.usageOnlyStorage()); err != nil {
+		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 			return err
 		}
 	} else if !useDiff && dialogueMessagesChanged(stored, msgs) {
@@ -2183,7 +2183,7 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 			return err
 		}
 	}
-	if !db.usageOnlyStorage() && !transcriptChanged {
+	if !db.usageOnlyStorage() {
 		if err := refreshSessionPromptPRLinksTx(tx, sessionID); err != nil {
 			return err
 		}
@@ -2328,34 +2328,22 @@ func replaceSessionMessagesTx(
 // bumpTranscriptRevisionTx advances the transcript revision for a
 // mutated existing session. Touching local_modified_at fires the
 // sync_marker trigger so push targets re-select the session.
-func bumpTranscriptRevisionTx(tx transactionQueries, sessionID string, skipPromptLinks bool) error {
+func bumpTranscriptRevisionTx(tx transactionQueries, sessionID string) error {
 	if err := bumpTranscriptRevision(tx, sessionID, true); err != nil {
 		return err
 	}
-	if err := refreshSessionCommitLinksTx(tx, sessionID); err != nil {
-		return err
-	}
-	if !skipPromptLinks {
-		return refreshSessionPromptPRLinksTx(tx, sessionID)
-	}
-	return nil
+	return refreshSessionCommitLinksTx(tx, sessionID)
 }
 
 // bumpInsertedTranscriptRevisionTx advances the revision for a session
 // inserted in this same transaction. The INSERT trigger already stamped
 // sync_marker, so skipping the local_modified_at touch avoids a
 // redundant trigger recompute on every bulk-loaded session.
-func bumpInsertedTranscriptRevisionTx(tx transactionQueries, sessionID string, skipPromptLinks bool) error {
+func bumpInsertedTranscriptRevisionTx(tx transactionQueries, sessionID string) error {
 	if err := bumpTranscriptRevision(tx, sessionID, false); err != nil {
 		return err
 	}
-	if err := refreshSessionCommitLinksTx(tx, sessionID); err != nil {
-		return err
-	}
-	if !skipPromptLinks {
-		return refreshSessionPromptPRLinksTx(tx, sessionID)
-	}
-	return nil
+	return refreshSessionCommitLinksTx(tx, sessionID)
 }
 
 func bumpTranscriptRevision(
@@ -2651,7 +2639,7 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 		signals.ToolObservations = nil
 	}
 	if transcriptChanged {
-		if err := bumpTranscriptRevisionTx(tx, sessionID, db.usageOnlyStorage()); err != nil {
+		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 			return err
 		}
 	} else if !useDiff && dialogueMessagesChanged(stored, msgs) {
@@ -2659,7 +2647,7 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 			return err
 		}
 	}
-	if !db.usageOnlyStorage() && !transcriptChanged {
+	if !db.usageOnlyStorage() {
 		if err := refreshSessionPromptPRLinksTx(tx, sessionID); err != nil {
 			return err
 		}
@@ -3815,7 +3803,7 @@ func (db *DB) SetToolCallSubagentSession(ctx context.Context,
 		return err
 	}
 	if changed {
-		if err := bumpTranscriptRevisionTx(tx, sessionID, db.usageOnlyStorage()); err != nil {
+		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 			return err
 		}
 	}
