@@ -2,6 +2,8 @@ package sync
 
 import (
 	"context"
+	"slices"
+	gosync "sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -139,12 +141,23 @@ func TestWatcherRetryFollowsWaitingClientPace(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				override := &IntervalOverride{}
 				backend := newFakeWatchBackend()
+				// The callback runs on the watcher's goroutine and the test
+				// reads between syncs, so the record needs a lock.
+				var mu gosync.Mutex
 				var calls []time.Time
+				recorded := func() []time.Time {
+					mu.Lock()
+					defer mu.Unlock()
+					return slices.Clone(calls)
+				}
 				w, err := newWatcherWithBackendOptions(
 					0, background,
 					func(context.Context, WatchBatch) error {
+						mu.Lock()
 						calls = append(calls, time.Now())
-						if len(calls) == 1 {
+						first := len(calls) == 1
+						mu.Unlock()
+						if first {
 							return retryScopedWatchError{retry: WatchBatch{
 								ReconcileRoots: []string{"/sessions"},
 							}}
@@ -165,18 +178,19 @@ func TestWatcherRetryFollowsWaitingClientPace(t *testing.T) {
 					Path: "/sessions", Root: "/sessions", Op: backendOpReconcileRootChange,
 				})
 				synctest.Wait()
-				require.Len(t, calls, 1)
+				require.Len(t, recorded(), 1)
 				if tt.connectAfter > 0 {
 					time.Sleep(tt.connectAfter)
 					synctest.Wait()
-					require.Len(t, calls, 1, "nobody is waiting for the retry yet")
+					require.Len(t, recorded(), 1, "nobody is waiting for the retry yet")
 					t.Cleanup(override.Hold(live))
 				}
 				time.Sleep(time.Minute)
 				synctest.Wait()
 
-				require.Len(t, calls, 2, "the retry needs no new file event")
-				assert.Equal(t, tt.want, calls[1].Sub(calls[0]))
+				got := recorded()
+				require.Len(t, got, 2, "the retry needs no new file event")
+				assert.Equal(t, tt.want, got[1].Sub(got[0]))
 			})
 		})
 	}
