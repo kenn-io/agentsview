@@ -3173,6 +3173,8 @@ func (db *DB) analyticsToolRows(ctx context.Context, f AnalyticsFilter) ([]ToolA
 	return db.toolRowsFor(ctx, f, sessions, ids)
 }
 
+const toolsSessionFingerprintSQL = `json_array(COALESCE(usage_generation, ''), COALESCE(quality_signal_version, ''), COALESCE(agent, ''), COALESCE(started_at, ''), COALESCE(created_at, ''), tools_generation)`
+
 func (db *DB) toolSessions(ctx context.Context, f AnalyticsFilter, withFingerprint bool) (map[string]toolSessionInfo, error) {
 	dateCol := "COALESCE(NULLIF(started_at, ''), created_at)"
 	where, args := f.buildWhereWithoutDate()
@@ -3184,7 +3186,7 @@ func (db *DB) toolSessions(ctx context.Context, f AnalyticsFilter, withFingerpri
 	// Fetch filtered session IDs and their metadata.
 	fingerprint, generation := `''`, `NULL`
 	if withFingerprint {
-		fingerprint = `json_array(COALESCE(usage_generation, ''), COALESCE(quality_signal_version, ''), COALESCE(agent, ''), COALESCE(started_at, ''), COALESCE(created_at, ''), tools_generation)`
+		fingerprint = toolsSessionFingerprintSQL
 		generation = `tools_generation`
 	}
 	sessQ := `SELECT id, ` + dateCol + `, agent, project, ` + fingerprint + `, ` + generation + ` FROM sessions WHERE ` + where

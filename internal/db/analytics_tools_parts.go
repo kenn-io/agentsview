@@ -5,8 +5,6 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"sort"
-	"strconv"
-	"strings"
 
 	"go.kenn.io/agentsview/internal/kept"
 )
@@ -46,13 +44,13 @@ func (db *DB) toolsFromParts(ctx context.Context, identity string, f AnalyticsFi
 		}
 	}
 	if len(dirty) > 0 {
-		tokens, err := db.stampToolsSessions(ctx, dirty)
-		if err != nil || len(tokens) != len(dirty) {
+		fingerprints, err := db.stampToolsSessions(ctx, dirty)
+		if err != nil || len(fingerprints) != len(dirty) {
 			return ToolsAnalyticsResponse{}, false, nil
 		}
 		for _, id := range dirty {
 			session := sessions[id]
-			session.fingerprint = strings.TrimSuffix(session.fingerprint, "null]") + strconv.Quote(tokens[id]) + "]"
+			session.fingerprint = fingerprints[id]
 			sessions[id] = session
 		}
 	}
@@ -141,18 +139,18 @@ func (db *DB) stampToolsSessions(ctx context.Context, ids []string) (map[string]
 	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET tools_generation=lower(hex(randomblob(16))) WHERE id IN (SELECT value FROM json_each(?)) AND tools_generation IS NULL`, string(encoded)); err != nil {
 		return nil, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT id, tools_generation FROM sessions WHERE id IN (SELECT value FROM json_each(?)) AND tools_generation IS NOT NULL`, string(encoded))
+	rows, err := tx.QueryContext(ctx, `SELECT id, `+toolsSessionFingerprintSQL+` FROM sessions WHERE id IN (SELECT value FROM json_each(?)) AND tools_generation IS NOT NULL`, string(encoded))
 	if err != nil {
 		return nil, err
 	}
-	tokens := make(map[string]string, len(ids))
+	fingerprints := make(map[string]string, len(ids))
 	for rows.Next() {
-		var id, token string
-		if err := rows.Scan(&id, &token); err != nil {
+		var id, fingerprint string
+		if err := rows.Scan(&id, &fingerprint); err != nil {
 			_ = rows.Close()
 			return nil, err
 		}
-		tokens[id] = token
+		fingerprints[id] = fingerprint
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
@@ -164,5 +162,5 @@ func (db *DB) stampToolsSessions(ctx context.Context, ids []string) (map[string]
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	return tokens, nil
+	return fingerprints, nil
 }
