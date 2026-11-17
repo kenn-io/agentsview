@@ -154,6 +154,9 @@ func TestForegroundSyncAfterIdlePauseImportsAttachedHistory(t *testing.T) {
 
 	runner := ingestion.foregroundSync(withAttachedSources(attached,
 		func(ctx context.Context, progress func(sync.Progress)) (sync.SyncStats, error) {
+			// Changes collected during the pause would contend for the sync
+			// lock with this pass, which a manual sync reports as busy.
+			assert.False(t, ingestion.Active(), "the pause holds through the full pass")
 			return engine.SyncAll(ctx, progress), nil
 		}))
 	_, err = runner(t.Context(), nil)

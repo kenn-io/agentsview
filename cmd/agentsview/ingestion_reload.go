@@ -143,9 +143,17 @@ func (d *daemonIngestion) QueueWatchRetry(batch agentsync.WatchBatch) {
 }
 
 // FlushPending acknowledges fresh work from the current watcher generation.
+//
+// It ends an idle pause, because its caller needs the collected changes now:
+// an attached-archive import flushes first so the archive it imports into is
+// current. Ending the pause here, not before a manual sync starts, keeps the
+// collected changes from competing with that sync for the sync lock.
 func (d *daemonIngestion) FlushPending(ctx context.Context) error {
 	d.mu.Lock()
 	watchers, stopped := d.watchers, d.stopped
+	if !stopped {
+		d.endPauseLocked()
+	}
 	d.mu.Unlock()
 	if stopped {
 		return errIngestionStopped
@@ -326,9 +334,8 @@ func (d *daemonIngestion) foregroundSync(runner server.LocalSyncRunner) server.L
 			done := d.registerCatchupLocked()
 			defer d.finishCatchup(done)
 		}
-		// The runner imports attached archives, which first flushes the
-		// watcher, so delivery has to be open before it runs.
-		d.endPauseLocked()
+		// The pause holds until the runner's full pass finishes. A pass
+		// that imports attached archives ends it through FlushPending.
 		d.mu.Unlock()
 		stats, err := runner(ctx, progress)
 		if err == nil {
@@ -525,7 +532,7 @@ func (d *daemonIngestion) startWatchers(cfg config.Config) *ingestionWatchers {
 			MinIntervalOverride: &d.syncInterval,
 			// The background interval must not slow the retry of a failed
 			// sync for someone who is watching.
-			RetryInterval: cfg.SyncInterval,
+			RetryInterval: max(cfg.SyncInterval, time.Millisecond),
 			OnCoverageDegraded: func(degradedRoots []string) error {
 				scopes := make([]pollingScope, 0, len(degradedRoots))
 				for _, r := range degradedRoots {
