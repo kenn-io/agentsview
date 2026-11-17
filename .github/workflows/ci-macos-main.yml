@@ -82,7 +82,7 @@ jobs:
       - name: Run focused macOS FSEvents tests
         if: github.event_name == 'push'
         timeout-minutes: 24
-        run: CGO_ENABLED=1 go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/macos-fsevents.json --rerun-fails=2 --rerun-fails-report gotestsum/macos-fsevents-reruns.txt --packages "./internal/fsevents ./internal/sync ./internal/db ./cmd/agentsview" -- -tags "fts5" -count=1 -timeout=20m
+        run: CGO_ENABLED=1 go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/macos-fsevents.json --rerun-fails=2 --rerun-fails-report gotestsum/macos-fsevents-reruns.txt --packages "./internal/fsevents ./internal/sync ./internal/db ./cmd/agentsview" -- -tags "fts5,duckdb" -count=1 -timeout=20m
 
       # Pull requests run only the watcher tests that scripts/macos-watcher-tests.sh
       # selects. The Linux Sync job runs the whole internal/sync package, and
