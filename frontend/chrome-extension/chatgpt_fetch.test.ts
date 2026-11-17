@@ -113,7 +113,7 @@ describe("ChatGPT page fetch", () => {
       if (String(input).endsWith("/api/auth/session")) {
         return new Response(JSON.stringify({ accessToken: sessions.shift() }));
       }
-      const auth = (init?.headers as Record<string, string>).Authorization;
+      const auth = (init?.headers as Record<string, string> | undefined)?.Authorization;
       return new Response('{"items":[]}', { status: auth === `Bearer ${accepted}` ? 200 : 401 });
     });
     const chatgptFetch = loadFetch(fetch);
