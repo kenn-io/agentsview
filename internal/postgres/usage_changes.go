@@ -94,7 +94,7 @@ var dropUsageChangeJournalSQL = func() string {
 	for _, table := range usageChangeTablesPG {
 		ddl.WriteString("DROP FUNCTION IF EXISTS mark_usage_" + table.table + "() CASCADE;")
 	}
-	for _, table := range []string{"sessions", "messages", "tool_calls"} {
+	for _, table := range []string{"messages", "tool_calls"} {
 		ddl.WriteString("DROP FUNCTION IF EXISTS mark_dashboard_" + table + "() CASCADE;")
 	}
 	return ddl.String()
@@ -269,11 +269,37 @@ func installDashboardJournalPG(ctx context.Context, tx *sql.Tx) error {
 	stampBody := strings.Replace(stampUsageChangeFunctionBodyPG, `UPDATE usage_session_changes SET revision = stamped WHERE revision = 0;`, stamp.String(), 1)
 	fmt.Fprintf(&ddl, `CREATE OR REPLACE FUNCTION stamp_usage_change() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
  SET search_path = pg_catalog, %s, pg_temp AS $journal$%s$journal$;`, quoted, stampBody)
+	// Keep the existing session journal write and set panel flags in the same trigger.
+	var sessionFlags strings.Builder
+	for _, group := range []struct {
+		name    string
+		columns []string
+	}{
+		{"common", db.DashboardSessionInputs},
+		{"tools", db.DashboardToolsSessionInputs},
+		{"signals", db.DashboardSignalsSessionInputs},
+	} {
+		fmt.Fprintf(&sessionFlags, `IF TG_OP = 'INSERT' THEN
+ SELECT EXISTS (SELECT 1 FROM new_rows) INTO changed;
+ ELSIF TG_OP = 'DELETE' THEN
+ SELECT EXISTS (SELECT 1 FROM old_rows) INTO changed;
+ ELSE
+ SELECT EXISTS ((SELECT %[1]s FROM old_rows EXCEPT ALL SELECT %[1]s FROM new_rows)
+ UNION ALL (SELECT %[1]s FROM new_rows EXCEPT ALL SELECT %[1]s FROM old_rows)) INTO changed;
+ END IF;
+ IF changed THEN
+ PERFORM set_config('agentsview.dashboard_%[2]s_' || 'usage_session_changes'::regclass::oid, 'on', true);
+ END IF;
+`, strings.Join(group.columns, ", "), group.name)
+	}
+	sessionBody := fmt.Sprintf(markUsageChangeFunctionBodyPG, `"id"`, "true", "id, to_jsonb(row_data) - 'automation_audit_hash'")
+	sessionBody = strings.Replace(sessionBody, "BEGIN\n", "DECLARE changed boolean;\nBEGIN\n"+sessionFlags.String(), 1)
+	fmt.Fprintf(&ddl, `CREATE OR REPLACE FUNCTION mark_usage_sessions() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+ SET search_path = pg_catalog, %s, pg_temp AS $journal$%s$journal$;`, quoted, sessionBody)
 	tables := []struct {
 		name, sessionColumn string
 		groups              map[string][]string
 	}{
-		{"sessions", "id", map[string][]string{"common": db.DashboardSessionInputs, "tools": db.DashboardToolsSessionInputs, "signals": db.DashboardSignalsSessionInputs}},
 		{"messages", "session_id", map[string][]string{"tools": db.DashboardToolsMessageInputs, "velocity": db.DashboardVelocityMessageInputs, "signals": db.DashboardSignalsMessageInputs, "scope": db.DashboardScopeMessageInputs}},
 		{"tool_calls", "session_id", map[string][]string{"tools": append([]string{"message_ordinal"}, db.DashboardToolsCallInputs...), "velocity": append([]string{"message_ordinal"}, db.DashboardVelocityCallInputs...)}},
 	}

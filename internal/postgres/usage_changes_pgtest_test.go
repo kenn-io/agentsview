@@ -494,8 +494,7 @@ func TestUsageJournalUpgradesHistoryToken(t *testing.T) {
     END IF;`, 1)
 	quotedSchema, err := quoteIdentifier(syncer.schema)
 	require.NoError(t, err)
-	_, err = store.pg.ExecContext(ctx, fmt.Sprintf(`DROP FUNCTION mark_dashboard_sessions() CASCADE;
- DROP FUNCTION mark_dashboard_messages() CASCADE;
+	_, err = store.pg.ExecContext(ctx, fmt.Sprintf(`DROP FUNCTION mark_dashboard_messages() CASCADE;
  DROP FUNCTION mark_dashboard_tool_calls() CASCADE;
  DELETE FROM sync_metadata WHERE key IN ('dashboard_common','dashboard_tools','dashboard_velocity','dashboard_signals','dashboard_scope');
  UPDATE sync_metadata SET value='1' WHERE key='usage_change_journal_version';

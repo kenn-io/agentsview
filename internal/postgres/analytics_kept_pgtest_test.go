@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -609,11 +610,16 @@ func TestAnalyticsKeptModelTimeScopeChanges(t *testing.T) {
 
 func TestAnalyticsKeptJournalUpgrade(t *testing.T) {
 	t.Parallel()
-	_, _, store := newUsageJournalFixture(t)
+	_, syncer, store := newUsageJournalFixture(t)
 	ctx := t.Context()
-	_, err := store.pg.ExecContext(ctx, `DROP FUNCTION mark_dashboard_sessions() CASCADE; DROP FUNCTION mark_dashboard_messages() CASCADE; DROP FUNCTION mark_dashboard_tool_calls() CASCADE;
+	_, err := store.pg.ExecContext(ctx, `DROP FUNCTION mark_dashboard_messages() CASCADE; DROP FUNCTION mark_dashboard_tool_calls() CASCADE;
  DELETE FROM sync_metadata WHERE key IN ('dashboard_common','dashboard_tools','dashboard_velocity','dashboard_signals','dashboard_scope');
  UPDATE sync_metadata SET value='2' WHERE key='usage_change_journal_version'`)
+	require.NoError(t, err)
+	quoted, err := quoteIdentifier(syncer.schema)
+	require.NoError(t, err)
+	oldBody := fmt.Sprintf(markUsageChangeFunctionBodyPG, `"id"`, "true", "id, to_jsonb(row_data) - 'automation_audit_hash'")
+	_, err = store.pg.ExecContext(ctx, fmt.Sprintf(`CREATE OR REPLACE FUNCTION mark_usage_sessions() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, %s, pg_temp AS $journal$%s$journal$`, quoted, oldBody))
 	require.NoError(t, err)
 	var revision, account, history string
 	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT (SELECT value FROM sync_metadata WHERE key='usage_change_revision'), (SELECT value FROM sync_metadata WHERE key='usage_account_revision'), (SELECT value FROM sync_metadata WHERE key='usage_history_token')`).Scan(&revision, &account, &history))
@@ -627,6 +633,27 @@ func TestAnalyticsKeptJournalUpgrade(t *testing.T) {
 	var tokens int
 	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT count(*) FROM sync_metadata WHERE key IN ('dashboard_common','dashboard_tools','dashboard_velocity','dashboard_signals','dashboard_scope') AND value <> ''`).Scan(&tokens))
 	require.Equal(t, 5, tokens)
+	_, err = store.pg.ExecContext(ctx, `INSERT INTO sessions(id,machine,project,agent,health_score) VALUES ('upgrade-panel','machine','project','claude',30)`)
+	require.NoError(t, err)
+	var common, tools, signals string
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT (SELECT value FROM sync_metadata WHERE key='dashboard_common'), (SELECT value FROM sync_metadata WHERE key='dashboard_tools'), (SELECT value FROM sync_metadata WHERE key='dashboard_signals')`).Scan(&common, &tools, &signals))
+	_, err = store.pg.ExecContext(ctx, `UPDATE sessions SET health_score=60 WHERE id='upgrade-panel'`)
+	require.NoError(t, err)
+	var newCommon, newTools, newSignals string
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT (SELECT value FROM sync_metadata WHERE key='dashboard_common'), (SELECT value FROM sync_metadata WHERE key='dashboard_tools'), (SELECT value FROM sync_metadata WHERE key='dashboard_signals')`).Scan(&newCommon, &newTools, &newSignals))
+	require.Equal(t, common, newCommon)
+	require.Equal(t, tools, newTools)
+	require.NotEqual(t, signals, newSignals)
+	_, err = store.pg.ExecContext(ctx, `UPDATE sessions SET health_score=health_score WHERE id='upgrade-panel'`)
+	require.NoError(t, err)
+	var unchanged string
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='dashboard_signals'`).Scan(&unchanged))
+	require.Equal(t, newSignals, unchanged)
+	_, err = store.pg.ExecContext(ctx, `DELETE FROM sessions WHERE id='upgrade-panel'`)
+	require.NoError(t, err)
+	var deleted string
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='dashboard_signals'`).Scan(&deleted))
+	require.NotEqual(t, unchanged, deleted)
 	tx, err = store.DB().BeginTx(ctx, nil)
 	require.NoError(t, err)
 	require.NoError(t, installDashboardJournalPG(ctx, tx))
