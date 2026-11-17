@@ -138,11 +138,11 @@ func TestActivityUsageReadSetKeepsCandidateOwnership(t *testing.T) {
 	writeUsageMirror(t, path,
 		`UPDATE sessions SET project = 'alpha'`,
 		`UPDATE messages SET claude_message_id = 'message', claude_request_id = 'request' WHERE id = 2`,
-		`INSERT INTO sessions SELECT * REPLACE ('session-b' AS id) FROM sessions WHERE id = 'session-a'`,
+		`INSERT INTO sessions SELECT * REPLACE ('session-b' AS id, 'beta' AS project) FROM sessions WHERE id = 'session-a'`,
 		`INSERT INTO sessions SELECT * REPLACE ('session-c' AS id, 'beta' AS project) FROM sessions WHERE id = 'session-a'`,
 		`INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id) FROM messages WHERE id = 2`,
-		`INSERT INTO messages SELECT * REPLACE (4 AS id, 'session-c' AS session_id) FROM messages WHERE id = 2`,
-		`INSERT INTO usage_events (id, session_id, source, model, output_tokens, occurred_at, dedup_key) VALUES (1, 'session-a', 'shutdown', 'kept-model', 10, TIMESTAMP '2026-01-01 01:00:00', 'a'), (2, 'session-b', 'shutdown', 'kept-model', 20, TIMESTAMP '2026-01-01 01:00:00', 'b')`,
+		`INSERT INTO messages SELECT * REPLACE (4 AS id, 'session-c' AS session_id, 'unrelated' AS claude_message_id) FROM messages WHERE id = 2`,
+		`INSERT INTO usage_events (id, session_id, source, model, output_tokens, occurred_at, dedup_key) VALUES (1, 'session-a', 'shutdown', 'kept-model', 10, TIMESTAMP '2026-01-01 01:00:00', 'a'), (2, 'session-b', 'shutdown', 'kept-model', 20, TIMESTAMP '2026-01-01 01:00:00', 'b'), (3, 'session-c', 'shutdown', 'kept-model', 30, TIMESTAMP '2026-01-01 01:00:00', 'c')`,
 	)
 	store, err := NewStore(t.Context(), path)
 	require.NoError(t, err)
@@ -168,7 +168,7 @@ func TestActivityUsageReadSetKeepsCandidateOwnership(t *testing.T) {
 	require.Equal(t, []struct {
 		session, source string
 		output          int
-	}{{"session-a", "message", 500}, {"session-a", "shutdown", 10}, {"session-b", "message", 500}, {"session-c", "message", 500}}, got)
+	}{{"session-a", "message", 500}, {"session-a", "shutdown", 10}, {"session-b", "message", 500}}, got)
 }
 
 func TestActivityReportKeptAcrossReopensAndRestart(t *testing.T) {
