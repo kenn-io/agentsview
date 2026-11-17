@@ -85,7 +85,8 @@ func TestImportOnlyProviderContentCapabilitiesMatchParsedExports(t *testing.T) {
 			_, err := p.(GeminiAppsExportParser).ParseGeminiAppsExport(geminiPath, fn)
 			return err
 		},
-		// Grok web has no export; only Chrome Sync's parser fills its sessions.
+		// AgentsView reads no Grok web export; only Chrome Sync's parser fills
+		// its sessions.
 		AgentGrokWeb: func(_ Provider, fn func(ParseResult) error) error {
 			result, err := ParseGrokWebConversation(grokTestConversation(t, "Caps", "2026-10-21T08:00:05Z", nil,
 				grokTestResponse("r1", "", "human", "Why?", "2026-10-21T08:00:00Z"),

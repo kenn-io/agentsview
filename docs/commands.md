@@ -2019,8 +2019,8 @@ agentsview source import --type <type> --sync
 Set up the
 [Chrome host](https://agentsview.io/docs/commands/#agentsview-chrome-setup) once
 and keep Chrome open for `agentsview source import --type <type> --sync`, where
-`<type>` is `claude-ai`, `chatgpt`, `gemini-apps`, or `grok-web`. Grok web has
-no export file, so `grok-web` imports only through Sync.
+`<type>` is `claude-ai`, `chatgpt`, `gemini-apps`, or `grok-web`. AgentsView
+imports Grok web chats only through Sync, so `grok-web` needs `--sync`.
 
 The path can be a `.zip` file, a `conversations.json` file (Claude.ai only), a
 Gemini Apps `MyActivity.html` file, or a directory containing the extracted

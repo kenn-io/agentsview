@@ -6,7 +6,7 @@ description: Import Claude.ai, ChatGPT, Gemini Apps, and Grok web conversations 
 Bring Claude.ai, ChatGPT, Gemini Apps, and Grok web conversations into the same
 searchable archive as your coding sessions. [Sync Claude.ai through Chrome](#sync-claudeai-chats)
 to fetch new and changed chats, or import the services' exported files below.
-Grok web has no export, so its chats come in only through
+AgentsView imports Grok web chats only through
 [Sync](#sync-grok-web-chats).
 ChatGPT dot, Codex web, and Codex cloud task chats use the separate opt-in
 [Codex Cloud source](/docs/configuration/#codex-cloud).
@@ -365,8 +365,9 @@ response layout can change with any web app release.
 
 Grok web Sync imports your chats from grok.com and runs from the command line.
 The **Import conversations** dialog does not offer it. These sessions use the
-`grok-web` type, separate from local Grok Build sessions (`grok`). Grok has no
-export file, so Sync is the only way to import these chats.
+`grok-web` type, separate from local Grok Build sessions (`grok`). AgentsView
+imports these chats only through Sync. It does not read the data download that
+Grok offers in its settings.
 
 1. Set up the Chrome extension as described in
    [Sync Claude.ai chats](#sync-claudeai-chats). If you set it up before this
@@ -400,7 +401,8 @@ What Sync fetches:
 
 - Only chats whose list update time differs from the last Sync, or whose
   stored copy changed since then. The first Sync fetches every listed chat.
-- One request about every 3 seconds. A chat's responses arrive in one request.
+- One chat about every 3 seconds; its responses arrive in one request. Chat
+  list pages are not paced.
 - A chat with a reply Grok is still writing is stored as it is and fetched
   again on the next Sync. This stops once the reply is complete, or once the
   chat's list update time is more than 24 hours old, so a reply that never
