@@ -401,21 +401,36 @@ async function readImportResponse(
   );
 }
 
+// Platforms the Import dialog can Sync through the browser. Each name is the
+// platform segment of the Sync route.
+export type BrowserSyncPlatform = "claude-ai" | "chatgpt";
+
+// The desktop app relays only Claude.ai requests through its own browser
+// window. Every other platform syncs through Chrome, even in the desktop app.
+export function relayHost(
+  platform: BrowserSyncPlatform,
+  host: BrowserHost | undefined,
+): BrowserHost | undefined {
+  return platform === "claude-ai" ? host : undefined;
+}
+
 // The browser window is shared, so Sign in and a new Sync wait until the
 // previous run has closed it. A run takes its turn before awaiting anything,
 // so a stopped run still finishes closing before a retry starts.
-let claudeAIOwner: Promise<void> = Promise.resolve();
+let browserSyncOwner: Promise<void> = Promise.resolve();
 
 export async function connectClaudeAI(host: BrowserHost): Promise<void> {
-  await claudeAIOwner;
+  await browserSyncOwner;
   await host.connect();
 }
 
-export async function syncClaudeAI(
-  host: BrowserHost | undefined,
+export async function syncBrowser(
+  platform: BrowserSyncPlatform,
+  desktopHost: BrowserHost | undefined,
   cb?: ImportCallbacks,
   signal?: AbortSignal,
 ): Promise<ImportStats> {
+  const host = relayHost(platform, desktopHost);
   // Sync outlives the import dialog, so the selected server can change
   // mid-run. Pin every request to the server the run started on, so a late
   // browser response never relays chat contents to the new server.
@@ -424,9 +439,9 @@ export async function syncClaudeAI(
     baseUrl: getGeneratedBase(),
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   };
-  const previous = claudeAIOwner;
+  const previous = browserSyncOwner;
   let release!: () => void;
-  claudeAIOwner = new Promise((resolve) => {
+  browserSyncOwner = new Promise((resolve) => {
     release = resolve;
   });
   const controller = new AbortController();
@@ -436,7 +451,7 @@ export async function syncClaudeAI(
   try {
     await previous;
     const response = await ImportService.postApiV1ImportByPlatformSync(
-      { platform: "claude-ai" },
+      { platform },
       host ? undefined : { browser: "chrome" },
       { ...server, signal: controller.signal },
     );

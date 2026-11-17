@@ -5,7 +5,7 @@ import {
   watchEvents,
   WATCH_EVENTS_MAX_CONSECUTIVE_ERRORS,
   watchSession,
-  syncClaudeAI,
+  syncBrowser,
   connectClaudeAI,
   WATCH_SESSION_MAX_CONSECUTIVE_ERRORS,
 } from "./client.js";
@@ -17,7 +17,7 @@ import type { BrowserHost } from "./browserHost.js";
 
 vi.mock("../utils/telemetry.js", () => ({ reportTelemetry: vi.fn() }));
 
-describe("syncClaudeAI browser relay", () => {
+describe("syncBrowser", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("uses the native host query and receives only counts without posting results", async () => {
@@ -30,11 +30,37 @@ describe("syncClaudeAI browser relay", () => {
         ),
       );
     vi.stubGlobal("fetch", fetch);
-    await expect(syncClaudeAI(undefined)).resolves.toMatchObject({ imported: 1 });
+    await expect(syncBrowser("claude-ai", undefined)).resolves.toMatchObject({ imported: 1 });
     expect(fetch).toHaveBeenCalledExactlyOnceWith(
       "/api/v1/import/claude-ai/sync?browser=chrome",
       expect.objectContaining({ method: "POST" }),
     );
+  });
+
+  it("syncs ChatGPT through Chrome even when the desktop app offers its browser", async () => {
+    const host: BrowserHost = {
+      connect: vi.fn(),
+      close: vi.fn().mockResolvedValue(undefined),
+      fetch: vi.fn(),
+    };
+    const fetch = vi.fn().mockResolvedValue(
+      new Response('event: done\ndata: {"imported":2,"updated":1,"skipped":0,"errors":0}\n\n', {
+        headers: { "Content-Type": "text/event-stream" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    await expect(syncBrowser("chatgpt", host)).resolves.toEqual({
+      imported: 2,
+      updated: 1,
+      skipped: 0,
+      errors: 0,
+    });
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(
+      "/api/v1/import/chatgpt/sync?browser=chrome",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(host.fetch).not.toHaveBeenCalled();
+    expect(host.close).not.toHaveBeenCalled();
   });
 
   it.each(["browser_sync_auth_required"])("preserves recovery code %s", async (code) => {
@@ -50,7 +76,7 @@ describe("syncClaudeAI browser relay", () => {
           ),
         ),
     );
-    await expect(syncClaudeAI(host)).rejects.toMatchObject({
+    await expect(syncBrowser("claude-ai", host)).rejects.toMatchObject({
       message: "English recovery instruction",
       code,
     });
@@ -74,14 +100,14 @@ describe("syncClaudeAI browser relay", () => {
       ),
     );
     if (event === "done") {
-      await expect(syncClaudeAI(host)).resolves.toEqual({
+      await expect(syncBrowser("claude-ai", host)).resolves.toEqual({
         imported: 1,
         updated: 0,
         skipped: 0,
         errors: 0,
       });
     } else {
-      await expect(syncClaudeAI(host)).rejects.toMatchObject({
+      await expect(syncBrowser("claude-ai", host)).rejects.toMatchObject({
         message: "Sign in required",
         code: "browser_sync_auth_required",
       });
@@ -107,7 +133,7 @@ describe("syncClaudeAI browser relay", () => {
         }),
       ),
     );
-    await expect(syncClaudeAI(host)).resolves.toEqual({
+    await expect(syncBrowser("claude-ai", host)).resolves.toEqual({
       imported: 1,
       updated: 0,
       skipped: 0,
@@ -137,7 +163,7 @@ describe("syncClaudeAI browser relay", () => {
           }),
       ),
     );
-    await syncClaudeAI(host);
+    await syncBrowser("claude-ai", host);
     const connecting = connectClaudeAI(host);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(host.connect).not.toHaveBeenCalled();
@@ -163,8 +189,8 @@ describe("syncClaudeAI browser relay", () => {
         }),
     );
     vi.stubGlobal("fetch", fetch);
-    await syncClaudeAI(host);
-    const next = syncClaudeAI(host);
+    await syncBrowser("claude-ai", host);
+    const next = syncBrowser("claude-ai", host);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(fetch).toHaveBeenCalledOnce();
     close();
@@ -217,7 +243,7 @@ describe("syncClaudeAI browser relay", () => {
     });
     vi.stubGlobal("fetch", fetch);
     const progress = vi.fn();
-    expect(await syncClaudeAI(host, { onProgress: progress })).toEqual({
+    expect(await syncBrowser("claude-ai", host, { onProgress: progress })).toEqual({
       imported: 1,
       updated: 0,
       skipped: 0,
@@ -274,7 +300,7 @@ describe("syncClaudeAI browser relay", () => {
         return new Response(null, { status: 204 });
       }),
     );
-    await expect(syncClaudeAI(host)).rejects.toThrow(expected);
+    await expect(syncBrowser("claude-ai", host)).rejects.toThrow(expected);
     expect(host.fetch).toHaveBeenCalledWith("/api/organizations/org/chat_conversations_v2");
     expect(host.close).toHaveBeenCalledOnce();
   });
@@ -302,11 +328,11 @@ describe("syncClaudeAI browser relay", () => {
       }),
     );
     const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
-    await syncClaudeAI(host);
+    await syncBrowser("claude-ai", host);
     const stopped = new AbortController();
-    const canceled = syncClaudeAI(host, undefined, stopped.signal);
+    const canceled = syncBrowser("claude-ai", host, undefined, stopped.signal);
     stopped.abort();
-    const retry = syncClaudeAI(host);
+    const retry = syncBrowser("claude-ai", host);
     closes[0]!();
     await expect(canceled).rejects.toThrow();
     await settle();
@@ -353,7 +379,7 @@ describe("syncClaudeAI browser relay", () => {
     });
     vi.stubGlobal("fetch", fetch);
     try {
-      const run = syncClaudeAI(host);
+      const run = syncBrowser("claude-ai", host);
       await vi.waitFor(() => expect(host.fetch).toHaveBeenCalledWith("/chat"));
       setServerUrl("https://remote.example");
       setAuthToken("remote-token");
@@ -399,7 +425,7 @@ describe("syncClaudeAI browser relay", () => {
         })
         .mockResolvedValueOnce(new Response("expired", { status: 404 })),
     );
-    await expect(syncClaudeAI(host)).rejects.toThrow("expired");
+    await expect(syncBrowser("claude-ai", host)).rejects.toThrow("expired");
     expect(signal.aborted).toBe(true);
     expect(host.close).toHaveBeenCalledOnce();
   });
@@ -425,7 +451,9 @@ describe("syncClaudeAI browser relay", () => {
         );
       }),
     );
-    await expect(syncClaudeAI(host, undefined, controller.signal)).rejects.toThrow("Aborted");
+    await expect(syncBrowser("claude-ai", host, undefined, controller.signal)).rejects.toThrow(
+      "Aborted",
+    );
     expect(host.close).toHaveBeenCalledOnce();
   });
 });

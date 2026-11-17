@@ -213,19 +213,25 @@ reports that your sign-in expired.
 
 ## Sync ChatGPT chats
 
-ChatGPT Sync runs from the command line. The **Import conversations** dialog
-syncs only Claude.ai for now; it still imports ChatGPT ZIP exports.
+Sync ChatGPT from the **Import conversations** dialog or the command line.
 
 1. Set up the Chrome extension as described in
    [Sync Claude.ai chats](#sync-claudeai-chats). If you set it up before this
    release, rerun `agentsview source chrome setup`, reload the extension at
    `chrome://extensions`, and approve its new access to `chatgpt.com`.
 2. Sign in to ChatGPT in the Chrome profile that has the extension enabled.
-3. With AgentsView and Chrome running, run:
+3. Open **Import conversations**, select **ChatGPT**, and click **Sync** on the
+   Chrome card above the ZIP upload. Or, with AgentsView and Chrome running,
+   run:
 
    ```bash
    agentsview source import --type chatgpt --sync
    ```
+
+The ChatGPT card works like the Claude.ai card: it shows the Chrome connection,
+**Signed out** opens `chatgpt.com` in a new tab, and Sync keeps running when you
+close the dialog. The desktop app also syncs ChatGPT through Chrome; its own
+sign-in window serves Claude.ai only.
 
 Sync reuses an open ChatGPT tab. When none is open, it opens one in the
 background and leaves it open.

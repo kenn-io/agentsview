@@ -8,8 +8,13 @@
     importClaudeAI,
     importChatGPT,
     connectClaudeAI,
+    relayHost,
   } from "../../api/client.js";
-  import { claudeAISync } from "../../stores/claudeAISync.svelte.js";
+  import {
+    browserSync,
+    browserSyncPlatforms,
+    type BrowserSyncPlatform,
+  } from "../../stores/browserSync.svelte.js";
   import { getBrowserHost } from "../../api/browserHost.js";
   import { sync as syncState } from "../../stores/sync.svelte.js";
   import { ApiError, isRemoteConnection } from "../../api/runtime.js";
@@ -35,8 +40,7 @@
 
   let fileInput: HTMLInputElement | undefined = $state();
   let selectedFile = $state<File | null>(null);
-  let provider: "claude-ai" | "chatgpt" =
-    $state("claude-ai");
+  let provider = $state<BrowserSyncPlatform>("claude-ai");
   let importing = $state(false);
   let dragOver = $state(false);
   let dragCount = $state(0);
@@ -47,26 +51,29 @@
   );
   let progressStats = $state<ImportStats | null>(null);
   const host = getBrowserHost();
+  // The desktop app relays Claude.ai only; other platforms use Chrome there too.
+  const activeHost = $derived(relayHost(provider, host));
+  const platform = $derived(browserSyncPlatforms[provider]);
   let chromeRefused = $state(false);
-  const canSync = $derived(open && provider === "claude-ai" && !isRemoteConnection() && !syncState.readOnly && !chromeRefused);
+  const canSync = $derived(open && !isRemoteConnection() && !syncState.readOnly && !chromeRefused);
   let chromeStatus = $state<ChromeStatusOutputBody | null>(null);
   let signInError = $state<string | null>(null);
   const chromeRead = new LatestRead();
   // A file import blocks the dialog; a running Sync does not.
-  const busy = $derived(importing || claudeAISync.running);
-  const shownResult = $derived(result ?? claudeAISync.result);
-  const shownProgress = $derived(claudeAISync.running ? claudeAISync.progress : progressStats);
+  const busy = $derived(importing || browserSync.running);
+  const shownResult = $derived(result ?? browserSync.result);
+  const shownProgress = $derived(browserSync.running ? browserSync.progress : progressStats);
   const chromeState = $derived(
-    claudeAISync.running ? "connected" :
-    claudeAISync.flag === "chrome_host_update_required" ? "extension-update" :
-    !host && !chromeStatus ? "checking" :
-    !host && !chromeStatus?.connected ? "disconnected" :
-    claudeAISync.flag === "browser_sync_auth_required" ? "signed-out" : "connected",
+    browserSync.running ? "connected" :
+    browserSync.flag === "chrome_host_update_required" ? "extension-update" :
+    !activeHost && !chromeStatus ? "checking" :
+    !activeHost && !chromeStatus?.connected ? "disconnected" :
+    browserSync.flag === "browser_sync_auth_required" ? "signed-out" : "connected",
   );
   const syncDisabled = $derived(busy || ["checking", "disconnected"].includes(chromeState));
 
   async function refreshChrome() {
-    if (!canSync || host || claudeAISync.running || document.hidden) return;
+    if (!canSync || activeHost || browserSync.running || document.hidden) return;
     const signal = chromeRead.begin();
     try {
       const status = await ImportService.getApiV1ImportClaudeAiChrome({ signal });
@@ -83,7 +90,7 @@
   }
 
   $effect(() => {
-    if (!canSync || host || claudeAISync.running) return;
+    if (!canSync || activeHost || browserSync.running) return;
     let timer: ReturnType<typeof setInterval> | undefined;
     function resume() {
       if (timer !== undefined) clearInterval(timer);
@@ -110,15 +117,15 @@
     signInError = null;
     // Closing hides a running Sync; its outcome waits for the next open.
     untrack(() => {
-      if (!claudeAISync.running) claudeAISync.dismiss();
+      if (!browserSync.running) browserSync.dismiss();
     });
   });
 
   async function connect() {
     signInError = null;
     try {
-      if (host) await connectClaudeAI(host);
-      else window.open("https://claude.ai/login?return_url=%2Fnew", "_blank", "noopener,noreferrer");
+      if (activeHost) await connectClaudeAI(activeHost);
+      else window.open(platform.signInURL, "_blank", "noopener,noreferrer");
     } catch (e) { signInError = e instanceof Error ? e.message : String(e); }
   }
 
@@ -127,7 +134,7 @@
     error = null;
     signInError = null;
     result = null;
-    void claudeAISync.start(host, onimported);
+    void browserSync.start(provider, activeHost, onimported);
   }
 
   const fileSize = $derived(
@@ -162,6 +169,10 @@
     error = null;
     untrack(() => {
       if (fileInput) fileInput.value = "";
+      // Provider pills are disabled while Sync runs, so any outcome here
+      // belongs to the previous provider.
+      if (!browserSync.running) browserSync.dismiss();
+      signInError = null;
     });
   });
 
@@ -277,7 +288,7 @@
     result = null;
     error = null;
     signInError = null;
-    claudeAISync.dismiss();
+    browserSync.dismiss();
     if (fileInput) fileInput.value = "";
   }
 </script>
@@ -298,7 +309,7 @@
     />
   {:else}
     <Button
-      label={claudeAISync.running ? m.import_close_aria() : m.import_cancel()}
+      label={browserSync.running ? m.import_close_aria() : m.import_cancel()}
       tone="neutral"
       surface="outline"
       disabled={importing}
@@ -391,59 +402,59 @@
       </div>
 
       {#if canSync}
-        <Card class="chrome-card" level="inset" padding="sm" title={host ? m.import_claude_desktop_title() : m.import_claude_chrome_title()}>
+        <Card class="chrome-card" level="inset" padding="sm" title={activeHost ? m.import_claude_desktop_title() : m.import_sync_chrome_title()}>
           {#snippet actions()}
             {#if chromeState === "signed-out"}
-              <Chip size="xs" tone="warning">{m.import_claude_status_signed_out()}</Chip>
+              <Chip size="xs" tone="warning">{m.import_sync_status_signed_out()}</Chip>
             {:else if chromeState === "extension-update"}
-              <Chip size="xs" tone="warning">{m.import_claude_status_update()}</Chip>
+              <Chip size="xs" tone="warning">{m.import_sync_status_update()}</Chip>
             {:else if chromeState === "disconnected"}
-              <Chip size="xs" tone="muted">{m.import_claude_status_disconnected()}</Chip>
-            {:else if !host && chromeState === "connected"}
-              <Chip size="xs" tone="success">{m.import_claude_status_connected()}</Chip>
+              <Chip size="xs" tone="muted">{m.import_sync_status_disconnected()}</Chip>
+            {:else if !activeHost && chromeState === "connected"}
+              <Chip size="xs" tone="success">{m.import_sync_status_connected()}</Chip>
             {/if}
-            {#if claudeAISync.running}
-              <Button size="sm" label={m.import_claude_stop()} tone="neutral" surface="outline" onclick={() => claudeAISync.stop()} />
+            {#if browserSync.running}
+              <Button size="sm" label={m.import_sync_stop()} tone="neutral" surface="outline" onclick={() => browserSync.stop()} />
             {:else}
-              {#if host || chromeState === "signed-out"}
-                <Button size="sm" label={m.import_claude_connect()} ariaLabel={host ? undefined : m.import_claude_signed_out()} tone={chromeState === "signed-out" ? "info" : "neutral"} surface={chromeState === "signed-out" ? "soft" : "outline"} disabled={busy} onclick={connect} />
+              {#if activeHost || chromeState === "signed-out"}
+                <Button size="sm" label={m.import_sync_connect()} ariaLabel={activeHost ? undefined : m.import_sync_signed_out({ site: platform.site })} tone={chromeState === "signed-out" ? "info" : "neutral"} surface={chromeState === "signed-out" ? "soft" : "outline"} disabled={busy} onclick={connect} />
               {/if}
-              <Button size="sm" label={m.import_claude_sync()} tone={chromeState === "signed-out" ? "neutral" : "info"} surface={chromeState === "signed-out" ? "outline" : "soft"} disabled={syncDisabled} onclick={sync} />
+              <Button size="sm" label={m.import_sync()} tone={chromeState === "signed-out" ? "neutral" : "info"} surface={chromeState === "signed-out" ? "outline" : "soft"} disabled={syncDisabled} onclick={sync} />
             {/if}
           {/snippet}
           <div class="chrome-body">
-            {#if host}
+            {#if activeHost}
               <p class="hint">{m.import_claude_desktop_note()}</p>
             {:else if chromeState === "disconnected"}
-              <p class="hint">{m.import_claude_open_chrome()}</p>
+              <p class="hint">{m.import_sync_open_chrome()}</p>
             {:else if chromeState === "connected"}
-              <p class="hint">{m.import_claude_tab_note()}</p>
+              <p class="hint">{m.import_sync_tab_note({ site: platform.site })}</p>
             {:else if chromeState === "signed-out"}
-              <p class="hint">{m.import_claude_signed_out()}</p>
+              <p class="hint">{m.import_sync_signed_out({ site: platform.site })}</p>
             {:else if chromeState === "extension-update"}
-              <p class="hint">{m.import_claude_update_app()}</p>
+              <p class="hint">{m.import_sync_update_app()}</p>
             {/if}
-            {#if !host && (chromeState === "extension-update" || chromeState === "disconnected")}
-              <CodeBlock code="agentsview source chrome setup" title={m.import_claude_terminal()} wrapToggle={false} copyLabel={m.import_claude_copy_command()} copiedLabel={m.common_copied()} />
+            {#if !activeHost && (chromeState === "extension-update" || chromeState === "disconnected")}
+              <CodeBlock code="agentsview source chrome setup" title={m.import_sync_terminal()} wrapToggle={false} copyLabel={m.import_sync_copy_command()} copiedLabel={m.common_copied()} />
               <p class="hint">
-                {chromeState === "extension-update" ? m.import_claude_reload_extension({ url: "chrome://extensions" }) : m.import_claude_setup_load({ url: "chrome://extensions" })}
+                {chromeState === "extension-update" ? m.import_sync_reload_extension({ url: "chrome://extensions" }) : m.import_sync_setup_load({ url: "chrome://extensions" })}
               </p>
             {/if}
-            {#if claudeAISync.error}
-              <Notice tone="error" toneLabel={m.import_claude_sync_failed()} message={claudeAISync.error} actionLabel={m.shared_retry()} onaction={sync} />
+            {#if browserSync.error}
+              <Notice tone="error" toneLabel={m.import_sync_failed()} message={browserSync.error} actionLabel={m.shared_retry()} onaction={sync} />
             {/if}
             {#if signInError}
-              <Notice tone="error" toneLabel={m.import_claude_sign_in_failed()} message={signInError} />
+              <Notice tone="error" toneLabel={m.import_sync_sign_in_failed()} message={signInError} />
             {/if}
-            {#if !claudeAISync.running && claudeAISync.progress && (claudeAISync.error || claudeAISync.flag)}
-              {@const p = claudeAISync.progress}
+            {#if !browserSync.running && browserSync.progress && (browserSync.error || browserSync.flag)}
+              {@const p = browserSync.progress}
               <p class="hint">{m.import_processed({ count: p.imported + p.updated + p.skipped + p.errors })}</p>
             {/if}
           </div>
         </Card>
       {/if}
 
-      {#if !claudeAISync.running}
+      {#if !browserSync.running}
         <p class="hint">
           {#if provider === "claude-ai"}
             {m.import_hint_claude({ json: "conversations.json", zip: ".zip" })}
@@ -457,7 +468,7 @@
       {#if busy}
         <div class="zone zone-importing">
           <Spinner />
-          {#if !claudeAISync.running && phase === "indexing"}
+          {#if !browserSync.running && phase === "indexing"}
             <span class="importing-label">
               {m.import_rebuilding_index()}
             </span>
@@ -472,11 +483,11 @@
             </span>
           {:else}
             <span class="importing-label">
-              {claudeAISync.running ? m.import_claude_syncing() : m.import_importing()}
+              {browserSync.running ? m.import_sync_syncing() : m.import_importing()}
             </span>
           {/if}
-          {#if claudeAISync.running}
-            <span class="importing-label">{m.import_claude_sync_background()}</span>
+          {#if browserSync.running}
+            <span class="importing-label">{m.import_sync_background()}</span>
           {/if}
         </div>
       {:else if selectedFile}
