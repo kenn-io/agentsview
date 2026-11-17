@@ -227,6 +227,13 @@
     --typeahead-panel-min-width: 640px;
   }
 
+  /* The phone header is one row with no room left for another button. */
+  @media (max-width: 640px) {
+    .prompt-picker {
+      display: none;
+    }
+  }
+
   .picker-status:not(:empty) {
     padding: 2px 8px 4px;
     color: var(--text-muted);
