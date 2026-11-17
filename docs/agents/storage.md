@@ -838,16 +838,16 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
   the summed groups in `internal/readbase/activityusage.go`. DuckDB keeps
   usage totals for ranges that include today in memory and on disk, along with
   session runs and message times. A push refreshes usage for changed sessions
-  and their deduplication peers. Activity usage parts are saved when computed;
-  `Store.Close` saves runs and message times. After an abrupt exit the next
-  report rebuilds runs and message times changed since the last shutdown. These
-  inputs share the `duckdb-usage` limits of 128 MiB per file and 256 MiB total.
-  Finished reports also use memory, which restart clears. Eligible past-day
-  reports can be saved to disk and reused after restart. DuckDB also derives
-  session runs in SQL with `activitySessionRuns`. The SQLite and PostgreSQL
-  reports keep the Go rules
-  in `internal/activity`, because the SQL was slower for them on a one-year
-  archive of 30,000 sessions:
+  and their deduplication peers. Pricing changes invalidate Activity usage
+  parts, which are saved when computed. `Store.Close` saves runs and message
+  times. After an abrupt exit the next report rebuilds runs and message times
+  changed since the last shutdown. These inputs share the `duckdb-usage` limits
+  of 128 MiB per file and 256 MiB total. Finished reports also use memory,
+  which restart clears. Eligible past-day reports can be saved to disk and
+  reused after restart. DuckDB also derives session runs in SQL with
+  `activitySessionRuns`. The SQLite and PostgreSQL reports keep the Go rules in
+  `internal/activity`, because the SQL was slower for them on a one-year archive
+  of 30,000 sessions:
     - SQLite: the usage step took 6.2 s in SQL and 0.99 s in Go, 6.3x slower. One
       sort of the 600,000 usage rows already takes 1.1 s, and the rules need
       several. The runs SQL took 11.1 s against 1.9 s for the Go pairing, 5.8x
