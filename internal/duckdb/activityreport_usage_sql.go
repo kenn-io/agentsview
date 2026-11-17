@@ -94,12 +94,7 @@ func (s *Store) sumActivityUsage(
 				probe.Groups = slices.Clone(part.Groups)
 				return !remapActivityRates(&probe, schedule)
 			},
-		}, func(part *readbase.ActivityUsageSums) int64 {
-			if part == nil {
-				return 0
-			}
-			return part.Bytes()
-		},
+		}, (*readbase.ActivityUsageSums).Bytes,
 			func(ctx context.Context, ids []string, peers map[string]string) (map[string]*readbase.ActivityUsageSums, error) {
 				return s.readActivityUsageParts(ctx, candidateWhere, candidateArgs, lowerBound, upperBound, ids, peers, schedule, q, startUS, endUS)
 			})
@@ -107,7 +102,7 @@ func (s *Store) sumActivityUsage(
 			var groups []readbase.ActivityUsageGroup
 			nextUS := int64(math.MaxInt64)
 			for _, part := range parts {
-				if part == nil || !remapActivityRates(part, schedule) {
+				if !remapActivityRates(part, schedule) {
 					err = errActivityUsageParts
 					break
 				}
@@ -167,12 +162,6 @@ func remapActivityRates(part *readbase.ActivityUsageSums, schedule readbase.Usag
 			}
 		}
 		if indexes[i] < 0 {
-			return false
-		}
-	}
-	// A persisted invalid rate index must be treated as a cache miss.
-	for _, g := range part.Groups {
-		if g.Rate < 0 || g.Rate >= int64(len(indexes)) {
 			return false
 		}
 	}
