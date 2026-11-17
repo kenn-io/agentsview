@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -99,4 +100,62 @@ func TestBrowserRequestFilesMatchPlatforms(t *testing.T) {
 	assert.ElementsMatch(t, names, files)
 	_, ok := LookupBrowserPlatform("claude")
 	assert.False(t, ok, "only browser platforms resolve")
+}
+
+// A usage-only archive keeps an assistant reply's tool calls, and equal stored
+// rows ignore tool calls, so a reply that gains its model while carrying fewer
+// calls than stored must not be filled in place from the shorter row.
+func TestSyncKeepingHistoryModelFillWithFewerToolCalls(t *testing.T) {
+	d := testDB(t)
+	d.SetArchiveContent(config.ArchiveContentUsage)
+	const id = "chatgpt:33333333-3333-4333-8333-333333333333"
+	at := time.Date(2024, 2, 1, 0, 0, 0, 0, time.UTC)
+	result := func(model string, calls ...string) parser.ParseResult {
+		reply := parser.ParsedMessage{
+			Ordinal: 1, Role: parser.RoleAssistant, Content: "Answer", ContentLength: 6,
+			Timestamp: at.Add(time.Second), Model: model, HasToolUse: len(calls) > 0,
+		}
+		for _, name := range calls {
+			reply.ToolCalls = append(reply.ToolCalls, parser.ParsedToolCall{
+				ToolUseID: name, ToolName: "subagent", Category: "Task", SubagentSessionID: "agent-" + name,
+			})
+		}
+		return parser.ParseResult{
+			Session: parser.ParsedSession{
+				ID: id, Project: "chatgpt", Agent: parser.AgentChatGPT, FirstMessage: "Question",
+				StartedAt: at, EndedAt: at.Add(time.Second), MessageCount: 2, UserMessageCount: 1,
+			},
+			Messages: []parser.ParsedMessage{
+				{Ordinal: 0, Role: parser.RoleUser, Content: "Question", ContentLength: 8, Timestamp: at},
+				reply,
+			},
+		}
+	}
+
+	status, err := syncKeepingHistory(t.Context(), d, result("", "a", "b"), nil)
+	require.NoError(t, err)
+	require.Equal(t, importNew, status)
+	before, err := d.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	require.Len(t, before, 1, "usage-only storage keeps only the reply")
+	require.Empty(t, before[0].Model)
+	require.Len(t, before[0].ToolCalls, 2)
+
+	status, err = syncKeepingHistory(t.Context(), d, result("gpt-4o", "a"), nil)
+	require.NoError(t, err)
+	assert.Equal(t, importSkipped, status)
+	after, err := d.GetAllMessages(t.Context(), id)
+	require.NoError(t, err)
+	require.Len(t, after, 1)
+	assert.Equal(t, before[0].ID, after[0].ID, "the stored reply keeps its row")
+	assert.Empty(t, after[0].Model, "the shorter reply does not fill the stored row")
+	assert.Equal(t, []string{"a", "b"}, toolUseIDs(after[0].ToolCalls), "stored calls are not cut to the shorter reply")
+}
+
+func toolUseIDs(calls []db.ToolCall) []string {
+	ids := make([]string, len(calls))
+	for i, call := range calls {
+		ids[i] = call.ToolUseID
+	}
+	return ids
 }

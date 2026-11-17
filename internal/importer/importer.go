@@ -612,14 +612,17 @@ func appendChatGPTMessages(
 	})
 }
 
-// missingModelRows selects missing models from matching stored-form rows.
+// missingModelRows selects missing models from matching stored-form rows. A
+// row with fewer tool calls than stored is skipped: equal rows ignore tool
+// calls, and the fill keeps the stored calls.
 func missingModelRows(archived, incoming []db.Message) []db.Message {
 	if incoming == nil {
 		return nil
 	}
 	var changed []int
 	for i, row := range incoming {
-		if i < len(archived) && row.Model != "" && archived[i].Model == "" {
+		if i < len(archived) && row.Model != "" && archived[i].Model == "" &&
+			len(row.ToolCalls) >= len(archived[i].ToolCalls) {
 			changed = append(changed, i)
 		}
 	}
