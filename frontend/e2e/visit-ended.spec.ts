@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { SessionsPage } from "./pages/sessions-page";
 import { TOKEN, visitServer } from "./helpers/visit-server";
+import { waitForVisitPageReady } from "./helpers/visit-page";
 
 test("the daemon's disabled receipt stops all browser telemetry through a reload", async ({
   page,
@@ -67,6 +68,7 @@ for (const { remote, action } of [
         await expect(new SessionsPage(page).sessionItems.first()).toBeVisible();
       }
       await enabled;
+      await waitForVisitPageReady(page);
       server.preflights.length = 0;
       if (action === "close") {
         // Keep Chromium from killing the renderer before it dispatches pagehide.
