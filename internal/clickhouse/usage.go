@@ -3035,9 +3035,12 @@ func tableValuesFingerprint(tables []string, value func(string) string) string {
 type partsSnapshot map[string]tableParts
 
 // tableParts lists one table's active parts and a digest of their names and
-// files.
+// files. uuid names the table itself: a table swapped in under the same name
+// starts its block numbers over, so its parts can look like a merge of the
+// parts the old table had.
 type tableParts struct {
 	digest string
+	uuid   string
 	parts  []partInfo
 }
 
@@ -3045,9 +3048,11 @@ type partsSnapshotKey struct{}
 
 // readPartsSnapshot reads the active parts of every table in one query.
 func (s *Store) readPartsSnapshot(ctx context.Context) (partsSnapshot, error) {
-	rows, err := s.queryContext(ctx, `SELECT table, name, partition_id, min_block_number, max_block_number,
-		data_version, rows, hash_of_all_files
-		FROM system.parts WHERE database = currentDatabase() AND active ORDER BY table, name`)
+	rows, err := s.queryContext(ctx, `SELECT p.table, p.name, p.partition_id, p.min_block_number, p.max_block_number,
+		p.data_version, p.rows, p.hash_of_all_files, toString(t.uuid)
+		FROM system.parts AS p
+		LEFT JOIN (SELECT name, uuid FROM system.tables WHERE database = currentDatabase()) AS t ON t.name = p.table
+		WHERE p.database = currentDatabase() AND p.active ORDER BY p.table, p.name`)
 	if err != nil {
 		return nil, fmt.Errorf("reading clickhouse parts: %w", err)
 	}
@@ -3058,7 +3063,9 @@ func (s *Store) readPartsSnapshot(ctx context.Context) (partsSnapshot, error) {
 		var table string
 		var p partInfo
 		var dataVersion uint64
-		if err := rows.Scan(&table, &p.name, &p.partition, &p.minBlock, &p.maxBlock, &dataVersion, &p.rows, &p.files); err != nil {
+		var uuid string
+		if err := rows.Scan(&table, &p.name, &p.partition, &p.minBlock, &p.maxBlock, &dataVersion, &p.rows, &p.files,
+			&uuid); err != nil {
 			return nil, fmt.Errorf("scanning clickhouse parts: %w", err)
 		}
 		// A part's data version is its first block until a mutation
@@ -3067,6 +3074,7 @@ func (s *Store) readPartsSnapshot(ctx context.Context) (partsSnapshot, error) {
 			p.mutation = int64(dataVersion)
 		}
 		tp := snapshot[table]
+		tp.uuid = uuid
 		tp.parts = append(tp.parts, p)
 		snapshot[table] = tp
 		sum, ok := digests[table]
