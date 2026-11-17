@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/base64"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -14,15 +15,24 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/docbank/document/ocr"
 )
 
 type searchQueryTracer struct {
-	count atomic.Int32
+	count      atomic.Int32
+	restricted atomic.Int32
+	ties       atomic.Int32
 }
 
 func (tr *searchQueryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	if strings.Contains(data.SQL, "SELECT session_id FROM unnest(") {
+		tr.ties.Add(1)
+	}
 	if strings.Contains(data.SQL, "msg_matches AS") {
 		tr.count.Add(1)
+		if strings.Contains(data.SQL, "s.id = ANY(") {
+			tr.restricted.Add(1)
+		}
 	}
 	return ctx
 }
@@ -88,4 +98,199 @@ func TestSearchKeptRestart(t *testing.T) {
 	require.Len(t, got.Results, 1)
 	require.Contains(t, got.Results[0].Snippet, "second")
 	require.Zero(t, trace.count.Load())
+}
+
+func TestSearchKeptRefreshAfterWrite(t *testing.T) {
+	local, syncer, _ := newUsageJournalFixture(t)
+	ctx := t.Context()
+	url := testPGURL(t)
+	config, err := pgx.ParseConfig(url)
+	require.NoError(t, err)
+	config.RuntimeParams["search_path"] = syncer.schema
+	trace := &searchQueryTracer{}
+	config.Tracer = trace
+	pool := stdlib.OpenDB(*config)
+	s := &Store{pg: pool, ownedDB: pool}
+	t.Cleanup(func() { require.NoError(t, s.Close()) })
+	require.NoError(t, s.ConfigureUsageCache(ctx, t.TempDir(), url, syncer.schema))
+	for _, id := range []string{"one", "two", "three"} {
+		require.NoError(t, local.UpsertSession(ctx, db.Session{ID: id, Project: "project", Machine: "device", Agent: "claude", MessageCount: 1}))
+		require.NoError(t, local.ReplaceSessionMessages(ctx, id, []db.Message{{SessionID: id, Role: "user", Content: map[string]string{"one": "xneedle", "three": "xxneedle", "two": "xxxneedle"}[id]}}))
+	}
+	pgKeptPush(t, syncer, false)
+	f := db.SearchFilter{Query: "needle", Limit: 2}
+	page, err := s.Search(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, []string{"one", "three"}, []string{page.Results[0].SessionID, page.Results[1].SessionID})
+	require.NoError(t, local.ReplaceSessionMessages(ctx, "two", []db.Message{{SessionID: "two", Role: "user", Content: "needle changed"}}))
+	pgKeptPush(t, syncer, false)
+	trace.count.Store(0)
+	trace.restricted.Store(0)
+	page, err = s.Search(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, []string{"two", "one"}, []string{page.Results[0].SessionID, page.Results[1].SessionID})
+	require.EqualValues(t, 2, trace.count.Load())
+	require.EqualValues(t, 2, trace.restricted.Load())
+
+	check := func(sort string, wantFirst, wantSecond []string) {
+		t.Helper()
+		for i, want := range [][]string{wantFirst, wantSecond} {
+			filter := db.SearchFilter{Query: "needle", Limit: 2, Cursor: i * 2, Sort: sort}
+			got, err := s.Search(ctx, filter)
+			require.NoError(t, err)
+			ids := make([]string, 0, len(got.Results))
+			for _, result := range got.Results {
+				ids = append(ids, result.SessionID)
+			}
+			require.Equal(t, want, ids)
+			direct, err := s.search(ctx, filter)
+			require.NoError(t, err)
+			require.Equal(t, direct, got)
+		}
+	}
+	check("relevance", []string{"two", "one"}, []string{"three"})
+	check("recency", []string{"one", "three"}, []string{"two"})
+	require.NoError(t, local.SoftDeleteSession(ctx, "one"))
+	pgKeptPush(t, syncer, false)
+	check("relevance", []string{"two", "three"}, []string{})
+	check("recency", []string{"three", "two"}, []string{})
+	_, err = syncer.pg.ExecContext(ctx, `DELETE FROM sessions WHERE id = $1`, "three")
+	require.NoError(t, err)
+	for _, sort := range []string{"relevance", "recency"} {
+		check(sort, []string{"two"}, []string{})
+	}
+	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "new", Project: "project", Machine: "device", Agent: "claude", MessageCount: 1}))
+	require.NoError(t, local.ReplaceSessionMessages(ctx, "new", []db.Message{{SessionID: "new", Role: "user", Content: "needle new"}}))
+	pgKeptPush(t, syncer, false)
+	for _, sort := range []string{"relevance", "recency"} {
+		check(sort, []string{"new", "two"}, []string{})
+	}
+	image := `[{"type":"input_image","image_url":"data:image/png;base64,` + base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\nimage")) + `"}]`
+	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "shot", Project: "project", Machine: "device", Agent: "claude", MessageCount: 1}))
+	require.NoError(t, local.InsertMessages(ctx, []db.Message{{SessionID: "shot", Ordinal: 0, Role: "assistant", Content: "look", ToolCalls: []db.ToolCall{{ToolName: "Read", ToolUseID: "image", ResultContent: image}}}}))
+	pgKeptPush(t, syncer, false)
+	for _, sort := range []string{"relevance", "recency"} {
+		check(sort, []string{"new", "two"}, []string{})
+	}
+	require.NoError(t, local.BackfillImageTextOccurrences(ctx))
+	require.NoError(t, local.SaveImageText(ctx, db.RetainedToolResultImages(image)[0].SHA256, ocr.Identity{Fingerprint: "processor", Provider: "test", Model: "model", Revision: "r1"}, "needle image", false))
+	pgKeptPush(t, syncer, false)
+	check("relevance", []string{"new", "two"}, []string{"shot"})
+	check("recency", []string{"new", "shot"}, []string{"two"})
+	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "name", Project: "project", Machine: "device", Agent: "claude", MessageCount: 1, SessionName: new("other")}))
+	require.NoError(t, local.ReplaceSessionMessages(ctx, "name", []db.Message{{SessionID: "name", Role: "user", Content: "ordinary"}}))
+	pgKeptPush(t, syncer, false)
+	check("relevance", []string{"new", "two"}, []string{"shot"})
+	require.NoError(t, local.RenameSession(ctx, "name", new("needle name")))
+	pgKeptPush(t, syncer, false)
+	check("relevance", []string{"new", "two"}, []string{"name", "shot"})
+	check("recency", []string{"name", "new"}, []string{"shot", "two"})
+	var collation string
+	require.NoError(t, pool.QueryRowContext(ctx, `SELECT datcollate FROM pg_database WHERE datname = current_database()`).Scan(&collation))
+	t.Logf("database collation: %s", collation)
+	for _, id := range []string{"a-c", "ab", "B1", "a1"} {
+		require.NoError(t, local.UpsertSession(ctx, db.Session{ID: id, Project: "ties", Machine: "device", Agent: "claude", MessageCount: 1}))
+		require.NoError(t, local.ReplaceSessionMessages(ctx, id, []db.Message{{SessionID: id, Role: "user", Content: "needle"}}))
+	}
+	pgKeptPush(t, syncer, false)
+	for _, sort := range []string{"relevance", "recency"} {
+		filter := db.SearchFilter{Query: "needle", Project: "ties", Sort: sort, Limit: 10}
+		_, err := s.Search(ctx, filter)
+		require.NoError(t, err)
+	}
+	require.NoError(t, local.ReplaceSessionMessages(ctx, "a-c", []db.Message{{SessionID: "a-c", Role: "user", Content: "needle edited"}}))
+	pgKeptPush(t, syncer, false)
+	for _, sort := range []string{"relevance", "recency"} {
+		filter := db.SearchFilter{Query: "needle", Project: "ties", Sort: sort, Limit: 10}
+		trace.ties.Store(0)
+		got, err := s.Search(ctx, filter)
+		require.NoError(t, err)
+		require.EqualValues(t, 1, trace.ties.Load())
+		direct, err := s.search(ctx, filter)
+		require.NoError(t, err)
+		require.Equal(t, direct, got)
+	}
+}
+func TestSearchKeptRestoredOvertakenHistory(t *testing.T) {
+	local, syncer, s := newUsageJournalFixture(t)
+	ctx := t.Context()
+	require.NoError(t, s.ConfigureUsageCache(ctx, t.TempDir(), testPGURL(t), syncer.schema))
+	for _, id := range []string{"one", "two"} {
+		require.NoError(t, local.UpsertSession(ctx, db.Session{ID: id, Project: "project", Machine: "device", Agent: "claude", MessageCount: 1}))
+		require.NoError(t, local.ReplaceSessionMessages(ctx, id, []db.Message{{SessionID: id, Role: "user", Content: "needle"}}))
+	}
+	pgKeptPush(t, syncer, false)
+	f := db.SearchFilter{Query: "needle", Limit: 10}
+	first, err := s.Search(ctx, f)
+	require.NoError(t, err)
+	require.Len(t, first.Results, 2)
+	var revision int64
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'`).Scan(&revision))
+	// Restore an earlier history, then advance past the saved revision with a different change.
+	tx, err := syncer.pg.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `DELETE FROM sync_metadata WHERE key LIKE 'usage_history_checkpoint:%' AND substring(key from length('usage_history_checkpoint:')+1)::bigint >= $1`, revision)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `UPDATE sync_metadata SET value=($1::bigint-2)::text WHERE key='usage_change_revision'`, revision)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `UPDATE messages SET content='gone' WHERE session_id='one'`)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(ctx, `UPDATE sessions SET updated_at=now() WHERE id='one'`)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+	for range 3 {
+		_, err = syncer.pg.ExecContext(ctx, `UPDATE sessions SET updated_at=clock_timestamp() WHERE id='two'`)
+		require.NoError(t, err)
+	}
+	got, err := s.Search(ctx, f)
+	require.NoError(t, err)
+	require.Len(t, got.Results, 1)
+	require.Equal(t, "two", got.Results[0].SessionID)
+	direct, err := s.search(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, direct, got)
+}
+
+func TestSearchKeptHistoryCheckpointMissing(t *testing.T) {
+	for _, mode := range []string{"same revision", "expired", "rewound"} {
+		t.Run(mode, func(t *testing.T) {
+			local, syncer, s := newUsageJournalFixture(t)
+			ctx := t.Context()
+			require.NoError(t, s.ConfigureUsageCache(ctx, t.TempDir(), testPGURL(t), syncer.schema))
+			require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "one", Project: "project", Machine: "device", Agent: "claude", MessageCount: 1}))
+			require.NoError(t, local.ReplaceSessionMessages(ctx, "one", []db.Message{{SessionID: "one", Role: "user", Content: "needle"}}))
+			require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "two", Project: "project", Machine: "device", Agent: "claude", MessageCount: 1}))
+			require.NoError(t, local.ReplaceSessionMessages(ctx, "two", []db.Message{{SessionID: "two", Role: "user", Content: "ordinary"}}))
+			pgKeptPush(t, syncer, false)
+			f := db.SearchFilter{Query: "needle"}
+			page, err := s.Search(ctx, f)
+			require.NoError(t, err)
+			require.Len(t, page.Results, 1)
+			var revision int64
+			require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'`).Scan(&revision))
+			tx, err := syncer.pg.BeginTx(ctx, nil)
+			require.NoError(t, err)
+			_, err = tx.ExecContext(ctx, `DELETE FROM sync_metadata WHERE key='usage_history_checkpoint:' || ($1::bigint)::text`, revision)
+			require.NoError(t, err)
+			_, err = tx.ExecContext(ctx, `UPDATE messages SET content='gone' WHERE session_id='one'`)
+			require.NoError(t, err)
+			if mode != "expired" {
+				offset := 1
+				if mode == "rewound" {
+					offset = 2
+				}
+				_, err = tx.ExecContext(ctx, `UPDATE sync_metadata SET value=($1::bigint-$2)::text WHERE key='usage_change_revision'`, revision, offset)
+				require.NoError(t, err)
+			}
+			_, err = tx.ExecContext(ctx, `UPDATE sessions SET updated_at=clock_timestamp() WHERE id='two'`)
+			require.NoError(t, err)
+			require.NoError(t, tx.Commit())
+			got, err := s.Search(ctx, f)
+			require.NoError(t, err)
+			require.Empty(t, got.Results)
+			direct, err := s.search(ctx, f)
+			require.NoError(t, err)
+			require.Equal(t, direct, got)
+		})
+	}
 }

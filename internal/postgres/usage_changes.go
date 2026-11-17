@@ -86,9 +86,10 @@ var dropUsageChangeJournalSQL = func() string {
 	var ddl strings.Builder
 	ddl.WriteString(`DROP TABLE IF EXISTS usage_session_changes;
  DROP FUNCTION IF EXISTS stamp_usage_change();
+ DROP FUNCTION IF EXISTS checkpoint_usage_history() CASCADE;
  DO $cleanup$ BEGIN
  IF to_regclass('sync_metadata') IS NOT NULL THEN
-     DELETE FROM sync_metadata WHERE key IN ('usage_change_revision', 'usage_change_journal_lock', 'usage_change_journal_version', 'usage_account_revision', 'usage_history_token', 'dashboard_common', 'dashboard_tools', 'dashboard_velocity', 'dashboard_signals', 'dashboard_scope');
+     DELETE FROM sync_metadata WHERE key LIKE 'usage_history_checkpoint:%' OR key IN ('usage_change_revision', 'usage_change_journal_lock', 'usage_change_journal_version', 'usage_account_revision', 'usage_history_token', 'dashboard_common', 'dashboard_tools', 'dashboard_velocity', 'dashboard_signals', 'dashboard_scope');
  END IF;
  END $cleanup$;`)
 	for _, table := range usageChangeTablesPG {
@@ -130,6 +131,10 @@ func ensureUsageChangeJournalPG(ctx context.Context, pg *sql.DB) {
 		return
 	}
 	err = installDashboardJournalPG(ctx, tx)
+	if err != nil {
+		return
+	}
+	err = installUsageHistoryCheckpointsPG(ctx, tx)
 	if err != nil {
 		return
 	}
@@ -336,6 +341,70 @@ func installDashboardJournalPG(ctx context.Context, tx *sql.Tx) error {
 	fmt.Fprintf(&ddl, "UPDATE sync_metadata SET value='%d' WHERE key='usage_change_journal_version';", usageChangeJournalVersionPG)
 	_, err = tx.ExecContext(ctx, ddl.String())
 	return err
+}
+
+func installUsageHistoryCheckpointsPG(ctx context.Context, tx *sql.Tx) error {
+	if err := lockSyncMetadataRow(ctx, tx, "usage_change_journal_lock"); err != nil {
+		return err
+	}
+	var version string
+	var installed bool
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE((SELECT value FROM sync_metadata WHERE key='usage_change_journal_version'), ''), EXISTS (SELECT 1 FROM pg_trigger WHERE tgrelid='sync_metadata'::regclass AND tgname='trg_usage_history_checkpoint' AND NOT tgisinternal)`).Scan(&version, &installed); err != nil {
+		return err
+	}
+	if version != strconv.Itoa(usageChangeJournalVersionPG) || installed {
+		return nil
+	}
+	var schema string
+	if err := tx.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
+		return err
+	}
+	quoted, err := quoteIdentifier(schema)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, fmt.Sprintf(`
+ CREATE OR REPLACE FUNCTION checkpoint_usage_history() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+ SET search_path = pg_catalog, %s, pg_temp AS $checkpoint$
+ DECLARE revision bigint;
+ BEGIN
+   SELECT value::bigint INTO revision FROM sync_metadata WHERE key='usage_change_revision';
+   INSERT INTO sync_metadata(key,value) VALUES ('usage_history_checkpoint:' || revision, NEW.value)
+   ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value;
+   DELETE FROM sync_metadata WHERE key LIKE 'usage_history_checkpoint:%%'
+     AND substring(key from length('usage_history_checkpoint:') + 1)::bigint <= revision - 128;
+   RETURN NEW;
+ END $checkpoint$;
+ DROP TRIGGER IF EXISTS trg_usage_history_checkpoint ON sync_metadata;
+ CREATE TRIGGER trg_usage_history_checkpoint AFTER UPDATE ON sync_metadata
+ FOR EACH ROW WHEN (NEW.key = 'usage_history_token') EXECUTE FUNCTION checkpoint_usage_history();
+ INSERT INTO sync_metadata(key,value)
+ SELECT 'usage_history_checkpoint:' || revision.value, token.value FROM sync_metadata revision, sync_metadata token
+ WHERE revision.key='usage_change_revision' AND token.key='usage_history_token'
+ ON CONFLICT(key) DO NOTHING;`, quoted))
+	return err
+}
+
+func usageHistoryCheckpoints(ctx context.Context, q storeExecutor, revisions ...int64) (map[int64]string, error) {
+	keys := make([]string, len(revisions))
+	for i, revision := range revisions {
+		keys[i] = "usage_history_checkpoint:" + strconv.FormatInt(revision, 10)
+	}
+	rows, err := q.QueryContext(ctx, `SELECT substring(key from length('usage_history_checkpoint:') + 1)::bigint, value FROM sync_metadata WHERE key = ANY($1)`, keys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make(map[int64]string)
+	for rows.Next() {
+		var revision int64
+		var token string
+		if err := rows.Scan(&revision, &token); err != nil {
+			return nil, err
+		}
+		result[revision] = token
+	}
+	return result, rows.Err()
 }
 
 func installUsageChangeJournalPG(ctx context.Context, tx *sql.Tx) error {

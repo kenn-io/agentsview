@@ -325,7 +325,7 @@ func (s *Store) Search(
 
 	runtime := s.runtimeState()
 	page, handled, err := snapshotRetained(ctx, s, "search|"+f.Slot(), &runtime.search, &runtime.standbySearch, func(ctx context.Context, view *Store, version string) (db.SearchPage, error) {
-		page, _, err := kept.LoadJSON(&s.trendsDisk, "search|"+f.Slot(), version, nil, func() (db.SearchPage, error) { return view.search(ctx, f) })
+		page, _, err := kept.LoadJSON(&s.trendsDisk, "search|"+f.Slot(), version, nil, func() (db.SearchPage, error) { return s.searchKept(ctx, view, f) })
 		return page, err
 	})
 	if handled || err != nil {
@@ -334,7 +334,14 @@ func (s *Store) Search(
 	return s.search(ctx, f)
 }
 
-func (s *Store) search(ctx context.Context, f db.SearchFilter) (db.SearchPage, error) {
+func searchOrderBy(sort string) string {
+	if sort == "recency" {
+		return "session_ended_at DESC NULLS LAST, session_id ASC"
+	}
+	return "match_priority ASC, match_pos ASC, session_ended_at DESC NULLS LAST, session_id ASC"
+}
+
+func (s *Store) searchQuery(f db.SearchFilter, ids []string, keys bool) (string, []any) {
 	// plainTerm is the de-quoted query joined back into one string. It feeds
 	// the name-branch ILIKE (matching the typed text against the short session
 	// name) and centers the message snippet, mirroring SQLite's plainQuery.
@@ -347,7 +354,7 @@ func (s *Store) search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 	plainTerm := db.StripFTSQuotes(f.Query)
 	terms := db.FTSTerms(f.Query)
 	if plainTerm == "" || len(terms) == 0 {
-		return db.SearchPage{}, nil
+		return "", nil
 	}
 	// firstTerm anchors POSITION-based ordering and snippet centering.
 	firstTerm := terms[0]
@@ -365,10 +372,7 @@ func (s *Store) search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 	// Only applied in relevance mode so content matches rank above name-only
 	// fallbacks. Recency mode orders purely by time so the newest session
 	// wins regardless of match type.
-	outerOrderBy := "match_priority ASC, match_pos ASC, session_ended_at DESC NULLS LAST, session_id ASC"
-	if f.Sort == "recency" {
-		outerOrderBy = "session_ended_at DESC NULLS LAST, session_id ASC"
-	}
+	outerOrderBy := searchOrderBy(f.Sort)
 	pageOrderBy := strings.NewReplacer("match_priority", "p.match_priority", "match_pos", "p.match_pos", "session_ended_at", "p.session_ended_at", "session_id", "p.session_id").Replace(outerOrderBy)
 
 	// $1 = escaped ILIKE pattern for the name branch (full plain term)
@@ -415,6 +419,44 @@ func (s *Store) search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 	args = append(args, dateBuilder.Args()...)
 	argIdx += len(dateBuilder.Args())
 
+	if ids != nil {
+		clause := fmt.Sprintf(" AND s.id = ANY($%d)", argIdx)
+		msgProjectClause += clause
+		nameProjectClause += clause
+		args = append(args, ids)
+		argIdx++
+	}
+	limit := ""
+	if !keys && ids == nil {
+		limit = fmt.Sprintf("LIMIT $%d OFFSET $%d", argIdx, argIdx+1)
+		args = append(args, f.Limit+1, f.Cursor)
+	}
+	tail := `SELECT session_id, match_priority, match_pos, session_ended_at FROM page ORDER BY ` + outerOrderBy
+	if !keys {
+		tail = fmt.Sprintf(`SELECT p.session_id, s.project, s.agent, s.machine,
+            COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
+            p.session_ended_at, p.ordinal,
+            CASE WHEN p.kind = 'name' THEN
+                CASE WHEN COALESCE(s.display_name, s.session_name) ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
+                    THEN COALESCE(s.display_name, s.session_name, '')
+                    WHEN s.first_message ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
+                    THEN COALESCE(s.first_message, '')
+                    ELSE COALESCE(s.display_name, s.session_name, s.first_message, '') END
+            ELSE CASE WHEN POSITION(LOWER($2) IN LOWER(COALESCE(m.content, it.text))) > 100
+                THEN '...' || SUBSTRING(COALESCE(m.content, it.text)
+                    FROM GREATEST(1, POSITION(LOWER($2) IN LOWER(COALESCE(m.content, it.text))) - 50) FOR 200) || '...'
+                ELSE SUBSTRING(COALESCE(m.content, it.text) FROM 1 FOR 200)
+                    || CASE WHEN LENGTH(COALESCE(m.content, it.text)) > 200 THEN '...' ELSE '' END
+            END END AS snippet, 1.0 AS rank, p.match_pos
+        FROM page p
+        JOIN sessions s ON s.id = p.session_id
+        LEFT JOIN messages m ON p.kind = 'message' AND m.session_id = p.session_id AND m.ordinal = p.ordinal
+        LEFT JOIN image_text it ON p.kind = 'image' AND it.session_id = p.session_id
+            AND it.message_ordinal = p.ordinal AND it.source_kind = p.source_kind
+            AND it.call_index = p.call_index AND it.event_index = p.event_index
+            AND it.image_index = p.image_index AND it.processor = p.processor
+        ORDER BY %s`, pageOrderBy)
+	}
 	query := fmt.Sprintf(`
 		WITH msg_matches AS (
 			SELECT DISTINCT ON (m.session_id)
@@ -492,41 +534,24 @@ func (s *Store) search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 			SELECT *, 2 AS match_priority FROM name_matches
 		) combined
 		ORDER BY %s
-		LIMIT $%d OFFSET $%d
-		)
-		SELECT p.session_id, s.project, s.agent, s.machine,
-			COALESCE(s.display_name, s.session_name, s.first_message, '') AS name,
-			p.session_ended_at, p.ordinal,
-			CASE WHEN p.kind = 'name' THEN
-				CASE WHEN COALESCE(s.display_name, s.session_name) ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
-					THEN COALESCE(s.display_name, s.session_name, '')
-					WHEN s.first_message ILIKE '%%' || $1 || '%%' ESCAPE E'\\'
-					THEN COALESCE(s.first_message, '')
-					ELSE COALESCE(s.display_name, s.session_name, s.first_message, '') END
-			ELSE CASE WHEN POSITION(LOWER($2) IN LOWER(COALESCE(m.content, it.text))) > 100
-				THEN '...' || SUBSTRING(COALESCE(m.content, it.text)
-					FROM GREATEST(1, POSITION(LOWER($2) IN LOWER(COALESCE(m.content, it.text))) - 50) FOR 200) || '...'
-				ELSE SUBSTRING(COALESCE(m.content, it.text) FROM 1 FOR 200)
-					|| CASE WHEN LENGTH(COALESCE(m.content, it.text)) > 200 THEN '...' ELSE '' END
-			END END AS snippet, 1.0 AS rank, p.match_pos
-		FROM page p
-		JOIN sessions s ON s.id = p.session_id
-		LEFT JOIN messages m ON p.kind = 'message' AND m.session_id = p.session_id AND m.ordinal = p.ordinal
-		LEFT JOIN image_text it ON p.kind = 'image' AND it.session_id = p.session_id
-			AND it.message_ordinal = p.ordinal AND it.source_kind = p.source_kind
-			AND it.call_index = p.call_index AND it.event_index = p.event_index
-			AND it.image_index = p.image_index AND it.processor = p.processor
-		ORDER BY %s`,
-		termPredicate("m.content"),
-		msgProjectClause,
-		termPredicate("it.text"),
-		nameProjectClause,
-		nameProjectClause,
-		outerOrderBy,
-		argIdx, argIdx+1,
-		pageOrderBy,
-	)
-	args = append(args, f.Limit+1, f.Cursor)
+        %s
+        )
+        %s`,
+		termPredicate("m.content"), msgProjectClause,
+		termPredicate("it.text"), nameProjectClause, nameProjectClause,
+		outerOrderBy, limit, tail)
+	return query, args
+}
+
+func (s *Store) search(ctx context.Context, f db.SearchFilter) (db.SearchPage, error) {
+	return s.searchRows(ctx, f, nil)
+}
+
+func (s *Store) searchRows(ctx context.Context, f db.SearchFilter, ids []string) (db.SearchPage, error) {
+	query, args := s.searchQuery(f, ids, false)
+	if query == "" {
+		return db.SearchPage{}, nil
+	}
 
 	rows, err := s.pg.QueryContext(ctx, query, args...)
 	if err != nil {
