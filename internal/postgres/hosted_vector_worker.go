@@ -198,9 +198,19 @@ func writeHostedVectors(ctx context.Context, pg *sql.DB, scope vectorPushScope, 
 	if current != revision {
 		return nil
 	}
-	changed, err := hostedDocumentMetadataChanged(ctx, tx, id, append(slices.Clone(docs), covered...))
+	changed, changedKeys, err := hostedDocumentMetadataChanged(ctx, tx, id, append(slices.Clone(docs), covered...))
 	if err != nil {
 		return err
+	}
+	if len(changedKeys) > 0 {
+		for _, generationID := range scope.genIDs {
+			if generationID == scope.gen.id {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, `DELETE FROM `+vectorChunkTable(generationID)+` WHERE doc_key = ANY($1)`, changedKeys); err != nil {
+				return err
+			}
+		}
 	}
 	stamp := revision + "|" + strconv.FormatBool(automated)
 	if partial {
@@ -273,33 +283,38 @@ func coveredHostedDocuments(ctx context.Context, pg *sql.DB, generation int64, s
 }
 
 // Shared document metadata is read by every generation's searcher.
-func hostedDocumentMetadataChanged(ctx context.Context, tx *sql.Tx, sessionID string, docs []storage.VectorPushDoc) (bool, error) {
-	slices.SortFunc(docs, func(a, b storage.VectorPushDoc) int { return strings.Compare(a.DocKey, b.DocKey) })
-	rows, err := tx.QueryContext(ctx, `SELECT doc_key,session_id,source_uuid,ordinal,ordinal_end,subordinate,offsets,content,content_hash FROM vector_documents WHERE session_id=$1 AND ordinal>=0 ORDER BY doc_key COLLATE "C"`, sessionID)
+func hostedDocumentMetadataChanged(ctx context.Context, tx *sql.Tx, sessionID string, docs []storage.VectorPushDoc) (bool, []string, error) {
+	desired := make(map[string]storage.VectorPushDoc, len(docs))
+	for _, doc := range docs {
+		desired[doc.DocKey] = doc
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT doc_key,session_id,source_uuid,ordinal,ordinal_end,subordinate,offsets,content,content_hash FROM vector_documents WHERE session_id=$1 AND ordinal>=0`, sessionID)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	defer func() { _ = rows.Close() }()
+	var changedKeys []string
 	for rows.Next() {
 		var existing storage.VectorPushDoc
 		if err := rows.Scan(&existing.DocKey, &existing.SessionID, &existing.SourceUUID, &existing.Ordinal, &existing.OrdinalEnd, &existing.Subordinate, &existing.OffsetsJSON, &existing.Content, &existing.ContentHash); err != nil {
-			return false, err
+			return false, nil, err
 		}
-		if len(docs) == 0 {
-			return true, nil
+		doc, ok := desired[existing.DocKey]
+		if !ok {
+			changedKeys = append(changedKeys, existing.DocKey)
+			continue
 		}
-		doc := docs[0]
-		docs = docs[1:]
+		delete(desired, existing.DocKey)
 		offsets := doc.OffsetsJSON
 		if offsets == "" {
 			offsets = "[]"
 		}
-		if existing.DocKey != doc.DocKey || existing.SessionID != doc.SessionID || existing.SourceUUID != sanitizePG(doc.SourceUUID) || existing.Ordinal != doc.Ordinal || existing.OrdinalEnd != doc.OrdinalEnd || existing.Subordinate != doc.Subordinate || existing.OffsetsJSON != sanitizePG(offsets) || existing.Content != sanitizePG(doc.Content) || existing.ContentHash != doc.ContentHash {
-			return true, nil
+		if existing.SessionID != doc.SessionID || existing.SourceUUID != sanitizePG(doc.SourceUUID) || existing.Ordinal != doc.Ordinal || existing.OrdinalEnd != doc.OrdinalEnd || existing.Subordinate != doc.Subordinate || existing.OffsetsJSON != sanitizePG(offsets) || existing.Content != sanitizePG(doc.Content) || existing.ContentHash != doc.ContentHash {
+			changedKeys = append(changedKeys, existing.DocKey)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return false, err
+		return false, nil, err
 	}
-	return len(docs) != 0, nil
+	return len(changedKeys) > 0 || len(desired) > 0, changedKeys, nil
 }

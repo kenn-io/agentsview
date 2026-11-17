@@ -59,6 +59,13 @@ func TestHostedVectorGenerationSwitch(t *testing.T) {
 	var key, original, changed string
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT doc_key,content FROM vector_documents WHERE session_id='layout' AND ordinal=1`).Scan(&key, &original))
 	require.NoError(t, EmbedBatch(t.Context(), f.runtime, b, encode, 3, 1, false))
+	pageAfterB, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "search", Mode: "semantic", SessionID: "layout", IncludeOneShot: true, Limit: 20})
+	require.NoError(t, err)
+	var afterB []string
+	for _, match := range pageAfterB.Matches {
+		afterB = append(afterB, match.Snippet)
+	}
+	assert.ElementsMatch(t, []string{"question"}, afterB)
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT content FROM vector_documents WHERE doc_key=$1`, key).Scan(&changed))
 	require.NotEqual(t, original, changed)
 	var stamped bool
