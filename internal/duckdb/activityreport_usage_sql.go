@@ -109,22 +109,20 @@ func (s *Store) sumActivityUsage(
 			for _, part := range parts {
 				if mapped := remapped[part]; mapped != nil {
 					part = mapped
-				} else if !remapActivityRates(part, schedule) {
-					err = errActivityUsageParts
-					break
+				} else {
+					// A fresh part's rates are copied from schedule, so they always remap.
+					remapActivityRates(part, schedule)
 				}
 				groups = append(groups, part.Groups...)
 				if part.NextUS < nextUS {
 					nextUS = part.NextUS
 				}
 			}
-			if err == nil {
-				readbase.SortActivityUsageGroups(groups)
-				if ctx.Err() == nil && version == s.keptVersion() {
-					s.activityUsageSums.Put(slot, version, []*readbase.ActivityUsageSums{{Schedule: schedule, Groups: groups, EndUS: endUS, NextUS: nextUS}})
-				}
-				return readbase.AssembleActivityUsage(pricing, schedule, groups)
+			readbase.SortActivityUsageGroups(groups)
+			if ctx.Err() == nil && version == s.keptVersion() {
+				s.activityUsageSums.Put(slot, version, []*readbase.ActivityUsageSums{{Schedule: schedule, Groups: groups, EndUS: endUS, NextUS: nextUS}})
 			}
+			return readbase.AssembleActivityUsage(pricing, schedule, groups)
 		}
 		if !errors.Is(err, errActivityUsageParts) {
 			return nil, err
@@ -185,13 +183,8 @@ func remapActivityRates(part *readbase.ActivityUsageSums, schedule readbase.Usag
 }
 
 func (s *Store) readActivityUsageParts(ctx context.Context, candidateWhere string, candidateArgs []any, lower, upper string, ids []string, peers map[string]string, schedule readbase.UsageRateSchedule, q activity.Query, startUS, endUS int64) (map[string]*readbase.ActivityUsageSums, error) {
-	if peers == nil {
-		var err error
-		peers, err = s.usagePartPeers(ctx)
-		if err != nil {
-			return nil, err
-		}
-	}
+	// Peers are nil only on a read refreshUsageParts takes after a mirror
+	// replacement; the memo keeps nothing from it, so NextUS may group by session.
 	all := ids == nil
 	if all {
 		versions, err := s.usagePartVersions(ctx, true)
