@@ -576,6 +576,11 @@ func newImportCommand() *cobra.Command {
 				}
 				return cobra.NoArgs(cmd, args)
 			}
+			// Grok web chats have no file importer, so name the one way in
+			// instead of reporting an unknown type.
+			if importType == "grok-web" {
+				return errors.New("grok-web imports only through Chrome: use --type grok-web --sync")
+			}
 			return cobra.ExactArgs(1)(cmd, args)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
