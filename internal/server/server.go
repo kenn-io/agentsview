@@ -578,15 +578,9 @@ func WithSyncIntervalOverride(override *sync.IntervalOverride) Option {
 	return func(s *Server) { s.syncInterval = override }
 }
 
-// liveSyncInterval is the sync interval for someone watching the archive.
-// A sync_interval of zero means no minimum, which a hold of zero cannot
-// express, so it becomes the smallest hold that has that effect.
-func (s *Server) liveSyncInterval() time.Duration {
-	return max(s.cfg.SyncInterval, time.Millisecond)
-}
-
 // holdSyncInterval keeps watcher-triggered syncs at most d apart until the
-// returned release runs. A server without a shared override holds nothing.
+// returned release runs; sync.LiveInterval asks for each watcher's live
+// interval. A server without a shared override holds nothing.
 func (s *Server) holdSyncInterval(d time.Duration) (release func()) {
 	if s.syncInterval == nil {
 		return func() {}

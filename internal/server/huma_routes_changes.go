@@ -16,8 +16,8 @@ import (
 const changeStreamSchemaVersion = 1
 
 // changeStreamSyncInterval is the minimum interval between watcher-triggered
-// syncs while a change-stream subscriber is connected. A shorter configured
-// sync_interval still applies.
+// syncs while a change-stream subscriber is connected. A watcher whose live
+// interval is shorter keeps it.
 const changeStreamSyncInterval = time.Second
 
 func (s *Server) registerChangeStreamRoutes() {
@@ -89,7 +89,7 @@ func (s *Server) humaChangeStream(
 		streamCtx := hctx.Context()
 		sub, unsub := s.broadcaster.SubscribeWakes()
 		defer unsub()
-		releaseSync := s.holdSyncInterval(min(changeStreamSyncInterval, s.liveSyncInterval()))
+		releaseSync := s.holdSyncInterval(changeStreamSyncInterval)
 		defer releaseSync()
 		head, err := local.ReadChangeStreamHead(streamCtx)
 		if err != nil {

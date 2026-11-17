@@ -116,12 +116,13 @@ type WatcherOptions struct {
 	// MinIntervalOverride, when set, can shorten the minimum interval
 	// between callbacks while the watcher runs.
 	MinIntervalOverride *IntervalOverride
-	// RetryInterval, when positive, is the first delay before a failed batch
-	// is retried, doubling per further failure. Zero uses the minimum
-	// interval. A watcher whose minimum interval is long because nobody is
-	// waiting sets this to the pace a waiting client gets, so a failure that
-	// clears is retried at that pace once a client shortens the interval.
-	RetryInterval time.Duration
+	// LiveInterval, when positive, is the pace for a client that is waiting.
+	// While MinIntervalOverride holds anything, callbacks start at most this
+	// far apart. It is also the first delay before a failed batch is retried,
+	// doubling per further failure; zero uses the minimum interval. A watcher
+	// whose minimum interval is long because nobody is waiting sets it, so the
+	// pace a client gets comes from this watcher's settings.
+	LiveInterval time.Duration
 }
 
 // WatchRetryError carries the authoritative reconciliation scope selected by a
@@ -759,7 +760,7 @@ type Watcher struct {
 	batchDelay         time.Duration
 	minInterval        time.Duration
 	intervalOverride   *IntervalOverride
-	retryInterval      time.Duration
+	liveInterval       time.Duration
 	maxEntries         int
 	dispatchEnabled    atomic.Bool
 	dispatchMu         sync.Mutex
@@ -905,7 +906,7 @@ func newWatcherWithBackendOptions(
 		batchDelay:         batchDelay,
 		minInterval:        minInterval,
 		intervalOverride:   options.MinIntervalOverride,
-		retryInterval:      options.RetryInterval,
+		liveInterval:       options.LiveInterval,
 		maxEntries:         maxEntries,
 		rootAgents:         make(map[string][]string),
 		rootScopes:         make(map[string][]WatchScope),
@@ -1290,6 +1291,9 @@ func (w *Watcher) loop() {
 		var override time.Duration
 		override, intervalChanged = w.intervalOverride.Current()
 		minInterval = effectiveInterval(w.minInterval, override)
+		if override > 0 && w.liveInterval > 0 {
+			minInterval = min(minInterval, w.liveInterval)
+		}
 	}
 	refreshInterval()
 	var flushBatch WatchBatch
@@ -1535,8 +1539,8 @@ func (w *Watcher) loop() {
 					dueAt := time.Now()
 					if !immediatePending {
 						base := w.minInterval
-						if w.retryInterval > 0 {
-							base = w.retryInterval
+						if w.liveInterval > 0 {
+							base = w.liveInterval
 						}
 						dueAt = dueAt.Add(watcherRetryDelay(
 							max(w.batchDelay, base), consecutiveFailures,

@@ -122,6 +122,50 @@ func TestWatcherIntervalOverrideChangeReschedules(t *testing.T) {
 	})
 }
 
+// A provider reload replaces the watcher while clients keep their holds, so a
+// held live interval must come from each watcher's own settings.
+func TestWatcherResolvesHeldIntervalFromItsLiveInterval(t *testing.T) {
+	const background = 10 * time.Minute
+	for _, tt := range []struct {
+		name       string
+		hold, live time.Duration
+		want       time.Duration
+	}{
+		{name: "web UI before a reload", hold: LiveInterval, live: 5 * time.Second, want: 5 * time.Second},
+		{name: "web UI after sync_interval changes", hold: LiveInterval, live: 2 * time.Second, want: 2 * time.Second},
+		{name: "change stream caps a longer live interval", hold: time.Second, live: 5 * time.Second, want: time.Second},
+		{name: "a shorter live interval beats the change stream", hold: time.Second, live: 200 * time.Millisecond, want: 200 * time.Millisecond},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				override := &IntervalOverride{}
+				t.Cleanup(override.Hold(tt.hold))
+				backend := newFakeWatchBackend()
+				calls := make(chan time.Time, 4)
+				w, err := newWatcherWithBackendOptions(
+					0, background,
+					func(context.Context, WatchBatch) error {
+						calls <- time.Now()
+						return nil
+					},
+					backend, 8, 1_000,
+					WatcherOptions{MinIntervalOverride: override, LiveInterval: tt.live},
+				)
+				require.NoError(t, err)
+				w.Start()
+				t.Cleanup(w.Stop)
+
+				backend.sendEvent(t, "/sessions/active.jsonl")
+				first := requireReceiveWithin(t, calls, time.Minute)
+				backend.sendEvent(t, "/sessions/active.jsonl")
+				second := requireReceiveWithin(t, calls, time.Hour)
+
+				assert.Equal(t, tt.want, second.Sub(first))
+			})
+		})
+	}
+}
+
 // A watcher with a long interval for when nobody is waiting must still retry
 // a failed sync at the pace of a client that is waiting.
 func TestWatcherRetryFollowsWaitingClientPace(t *testing.T) {
@@ -165,7 +209,7 @@ func TestWatcherRetryFollowsWaitingClientPace(t *testing.T) {
 						return nil
 					},
 					backend, 8, 1_000,
-					WatcherOptions{MinIntervalOverride: override, RetryInterval: live},
+					WatcherOptions{MinIntervalOverride: override, LiveInterval: live},
 				)
 				require.NoError(t, err)
 				w.Start()

@@ -18,13 +18,17 @@ lives primarily in `internal/sync/watcher.go`,
   [`background_sync_interval`](../configuration.md#config-file)). A holder of
   `IntervalOverride` shortens it for as long as someone is watching the
   archive: `/api/v1/events`, which the web UI keeps open only while its tab is
-  visible, holds `sync_interval`, and `/api/v1/changes/stream` holds one
-  second. The shortest hold wins. Archive push commands use `sync_interval` as
-  their floor.
-- A failed batch backs off from `sync_interval`, not from the background
-  interval (`WatcherOptions.RetryInterval`). The floor still applies, so with
-  nobody watching the retry waits for the background interval, and with a
-  client connected it runs at that client's pace without a new file event.
+  visible, holds `sync.LiveInterval`, and `/api/v1/changes/stream` holds one
+  second. While anything is held, the floor is the shortest hold or the
+  watcher's `WatcherOptions.LiveInterval`, whichever is shorter. The daemon
+  sets `LiveInterval` from `sync_interval` each time it builds a watcher, so a
+  provider reload changes the pace for clients that are already connected. The
+  server never reads `sync_interval` for this. Archive push commands use
+  `sync_interval` as their floor.
+- A failed batch backs off from the live interval, not from the background
+  interval. The floor still applies, so with nobody watching the retry waits
+  for the background interval, and with a client connected it runs at that
+  client's pace without a new file event.
 - An archive read flushes the pending set through `Watcher.FlushPending` before
   it is served, so a reader never waits out the background interval. It also
   runs one live-activity poll, unless one ran in the last 30 seconds, because

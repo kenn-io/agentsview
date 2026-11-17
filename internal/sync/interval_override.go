@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"math"
 	"slices"
 	gosync "sync"
 	"time"
@@ -8,14 +9,20 @@ import (
 
 // IntervalOverride shortens the minimum time between watcher-triggered syncs
 // while something needs changes sooner, such as a connected change stream or
-// an open web UI. Watchers that share it use the smaller of their configured
-// interval and the shortest interval currently held. The zero value holds no
-// override and is ready to use.
+// an open web UI. Watchers that share it use the smallest of their configured
+// interval, the shortest interval currently held, and, while anything is
+// held, their live interval (WatcherOptions.LiveInterval). The zero value
+// holds no override and is ready to use.
 type IntervalOverride struct {
 	mu      gosync.Mutex
 	holds   []time.Duration
 	changed chan struct{}
 }
+
+// LiveInterval is the hold for a client that wants each watcher's live
+// interval and no shorter cap. Each watcher resolves it from its own options,
+// so a hold that is already open follows a watcher rebuilt with new settings.
+const LiveInterval = time.Duration(math.MaxInt64)
 
 // Hold asks for syncs at most d apart until release runs, and wakes every
 // watcher that uses the override so a pending sync is rescheduled. Zero or
@@ -52,7 +59,8 @@ func (o *IntervalOverride) valueLocked() time.Duration {
 	return slices.Min(o.holds)
 }
 
-// Value returns the shortest held interval, zero when nothing is held.
+// Value returns the shortest held interval, zero when nothing is held and
+// LiveInterval when only live holds are.
 func (o *IntervalOverride) Value() time.Duration {
 	o.mu.Lock()
 	defer o.mu.Unlock()

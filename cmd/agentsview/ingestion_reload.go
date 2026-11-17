@@ -530,9 +530,10 @@ func (d *daemonIngestion) startWatchers(cfg config.Config) *ingestionWatchers {
 		cfg, cfg.BackgroundSyncFloor(), d.engine, d.syncWatchBatch,
 		agentsync.WatcherOptions{
 			MinIntervalOverride: &d.syncInterval,
-			// The background interval must not slow the retry of a failed
-			// sync for someone who is watching.
-			RetryInterval: max(cfg.SyncInterval, time.Millisecond),
+			// A client that is watching gets sync_interval from the settings
+			// this generation was built with. A sync_interval of zero means
+			// no minimum, which a positive pace of 1 ms stands in for.
+			LiveInterval: max(cfg.SyncInterval, time.Millisecond),
 			OnCoverageDegraded: func(degradedRoots []string) error {
 				scopes := make([]pollingScope, 0, len(degradedRoots))
 				for _, r := range degradedRoots {

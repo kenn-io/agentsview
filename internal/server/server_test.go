@@ -5686,8 +5686,8 @@ func TestEvents_HoldsLiveSyncIntervalWhileConnected(t *testing.T) {
 		close(done)
 	}()
 	te.waitForSSEEvent(t, w, "events_ready", 5*time.Second)
-	assert.Equal(t, 5*time.Second, override.Value(),
-		"an open web UI keeps syncs at the live interval")
+	assert.Equal(t, sync.LiveInterval, override.Value(),
+		"an open web UI keeps syncs at each watcher's live interval")
 
 	cancel()
 	<-done
