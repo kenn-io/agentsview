@@ -1038,14 +1038,14 @@ func TestStartFileWatcherUsesSyncInterval(t *testing.T) {
 		AgentDirs:    map[parser.AgentType][]string{parser.AgentClaude: {projects}},
 	}
 	calls := make(chan time.Time, 8)
-	stop, open, unwatched, _, _ := startFileWatcher(cfg, nil,
+	watcher := startFileWatcher(cfg, cfg.SyncInterval, nil,
 		func(context.Context, agentsync.WatchBatch) error {
 			calls <- time.Now()
 			return nil
 		}, agentsync.WatcherOptions{})
-	t.Cleanup(stop)
-	require.Empty(t, unwatched)
-	open()
+	t.Cleanup(watcher.stop)
+	require.Empty(t, watcher.unwatchedDirs)
+	watcher.openDispatch()
 	path := filepath.Join(project, "active.jsonl")
 	require.NoError(t, os.WriteFile(path, []byte("first\n"), 0o600))
 	first := receiveArchiveTest(t, calls)

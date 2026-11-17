@@ -694,8 +694,9 @@ On startup, the server:
 
 1. Loads or creates `~/.agentsview/sessions.db`
 1. Runs initial sync across all discovered session directories
-1. Starts the file watcher (500ms event batching; watcher sync starts remain at
-    least five seconds apart by default; see [`sync_interval`](/docs/configuration/#config-file))
+1. Starts the file watcher (500ms event batching; while nobody is watching the
+    archive, watcher sync starts remain at least ten minutes apart by default; see
+    [`background_sync_interval`](/docs/configuration/#config-file))
 1. Starts periodic sync (every 15 minutes)
 1. Serves the Svelte SPA and REST API
 
@@ -804,7 +805,8 @@ file-watcher work prevent exit while they run, but do not keep the daemon alive
 forever by themselves.
 
 `sync_idle_after = "10m"` pauses local collection while idle; `"0"` disables the
-pause.
+pause. `background_sync_interval = "10m"` spaces out syncs while nobody is
+watching the archive; `"0s"` syncs at `sync_interval` all the time.
 
 #### CLI daemon behavior
 

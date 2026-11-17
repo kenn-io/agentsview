@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -1249,4 +1252,58 @@ func appendFile(t *testing.T, path string, content string) {
 	_, err = file.WriteString(content)
 	require.NoError(t, err)
 	require.NoError(t, file.Close())
+}
+
+func TestLiveActivityRunFollowsOwnerGap(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		provider := newLiveActivityTestProvider(filepath.Join(t.TempDir(), "history.jsonl"))
+		poller := NewLiveActivityPoller([]LiveActivityTarget{{
+			Provider: provider,
+			Hints:    provider,
+		}}, nil, nil, nil)
+		start := time.Now()
+		var polls []time.Duration
+		poller.SetRecentLookup(func(
+			context.Context, parser.AgentType, time.Time, int,
+		) ([]LiveActivityRecentSession, error) {
+			polls = append(polls, time.Since(start))
+			return nil, nil
+		})
+		var gap atomic.Int64
+		gap.Store(int64(10 * time.Minute))
+		poller.SetGap(func() time.Duration { return time.Duration(gap.Load()) })
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			poller.Run(ctx)
+		}()
+		defer func() {
+			cancel()
+			<-done
+		}()
+
+		time.Sleep(25 * time.Minute)
+		synctest.Wait()
+		assert.Equal(t, []time.Duration{0, 10 * time.Minute, 20 * time.Minute}, polls,
+			"a background gap skips the ticks in between")
+
+		gap.Store(0)
+		time.Sleep(time.Minute)
+		synctest.Wait()
+		assert.Equal(t, []time.Duration{
+			0, 10 * time.Minute, 20 * time.Minute,
+			25*time.Minute + 30*time.Second, 26 * time.Minute,
+		}, polls, "no gap polls on every tick")
+
+		gap.Store(math.MaxInt64)
+		time.Sleep(time.Hour)
+		synctest.Wait()
+		assert.Len(t, polls, 5, "a paused owner stops polling")
+
+		poller.PollNow(t.Context())
+		assert.Len(t, polls, 6, "a reader's poll does not wait for the gap")
+		poller.PollNow(t.Context())
+		assert.Len(t, polls, 6, "readers poll no more often than the ticker")
+	})
 }

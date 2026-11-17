@@ -128,7 +128,7 @@ type Server struct {
 	onDemandEngine        *sync.Engine
 	sessions              service.SessionService
 	broadcaster           *Broadcaster
-	changeStreamSync      changeStreamSyncHold
+	syncInterval          *sync.IntervalOverride
 	mux                   *http.ServeMux
 	api                   huma.API
 	httpSrv               *http.Server
@@ -571,10 +571,21 @@ func WithBroadcaster(b *Broadcaster) Option {
 	return func(s *Server) { s.broadcaster = b }
 }
 
-// WithSyncIntervalOverride lets connected change-stream subscribers shorten
-// the minimum interval between watcher-triggered syncs that share override.
+// WithSyncIntervalOverride lets connected change-stream subscribers and open
+// web UIs shorten the minimum interval between watcher-triggered syncs that
+// share override.
 func WithSyncIntervalOverride(override *sync.IntervalOverride) Option {
-	return func(s *Server) { s.changeStreamSync.override = override }
+	return func(s *Server) { s.syncInterval = override }
+}
+
+// holdSyncInterval keeps watcher-triggered syncs at most d apart until the
+// returned release runs; sync.LiveInterval asks for each watcher's live
+// interval. A server without a shared override holds nothing.
+func (s *Server) holdSyncInterval(d time.Duration) (release func()) {
+	if s.syncInterval == nil {
+		return func() {}
+	}
+	return s.syncInterval.Hold(d)
 }
 
 // WithUpdateChecker overrides the update check function,
@@ -1029,13 +1040,25 @@ func archiveFreshnessProbe(path string) bool {
 	return false
 }
 
+// archiveFreshnessExempt reports requests that do not read the archive and so
+// must not make it catch up first. Remote sync serves session files from disk
+// to another machine; syncing them into this archive first helps nobody.
+func archiveFreshnessExempt(r *http.Request) bool {
+	path := r.URL.Path
+	if strings.HasPrefix(path, "/api/v1/remote-sync/") {
+		return true
+	}
+	return r.Method == http.MethodPost &&
+		(path == "/api/v1/daemon/restart" || path == "/api/v1/resync" ||
+			(path == "/api/v1/sync" && archiveWriteRequest(r)))
+}
+
 func (s *Server) archiveStaleMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			probe := archiveFreshnessProbe(r.URL.Path)
 			pending := false
-			if !probe && s.ingestionFreshness != nil &&
-				(r.Method != http.MethodPost || (r.URL.Path != "/api/v1/daemon/restart" && r.URL.Path != "/api/v1/resync" && (r.URL.Path != "/api/v1/sync" || !archiveWriteRequest(r)))) {
+			if !probe && s.ingestionFreshness != nil && !archiveFreshnessExempt(r) {
 				pending = !s.ingestionFreshness.EnsureFresh(r.Context())
 			}
 			if !probe && (s.archiveStale() || pending) {

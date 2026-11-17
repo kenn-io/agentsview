@@ -1074,6 +1074,8 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w, "  Top-level daemon_idle_timeout applies to automatically started and serve --background daemons;")
 	fmt.Fprintln(w, "  \"0s\" keeps them alive. daemon start and daemon restart stay running until stopped.")
 	fmt.Fprintln(w, "  Top-level sync_idle_after = \"10m\" pauses local collection while idle; \"0\" disables the pause.")
+	fmt.Fprintln(w, "  Top-level background_sync_interval = \"10m\" spaces out syncs while nobody is watching the archive;")
+	fmt.Fprintln(w, "  \"0s\" syncs at sync_interval all the time.")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Data stored in ~/.agentsview/ by default.")
 }

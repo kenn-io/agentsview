@@ -37,7 +37,7 @@ The latest release is
   and the machine it originated on, and resumes after a disconnect from its
   last cursor with no gap and no repeat. While a subscriber is connected, the
   daemon syncs changed session files up to once a second instead of once per
-  `sync_interval`. See
+  `background_sync_interval`. See
   [Conversation Export](/docs/conversation-export/#follow-changes-live).
 
 - `agentsview export conversations changes --tool-summaries` lists what each
@@ -60,6 +60,15 @@ The latest release is
   [Muse Personal](/docs/configuration/#muse-personal).
 
 **Improvements**
+
+- The background daemon does far less work while nobody is looking at the
+  archive. It now syncs changed session files at most once every ten minutes
+  instead of every five seconds. An open web UI still updates within seconds, a
+  change stream within about a second, and a CLI or MCP read first syncs
+  whatever changed. After an idle pause, the first request syncs only the
+  files that changed instead of scanning every session directory. Set
+  `background_sync_interval = "0s"` to keep the old pace. See
+  [Config File](/docs/configuration/#config-file).
 
 - Search and cold Trends visits open faster with DuckDB. After upgrading, run
   `agentsview replica duckdb push` on the mirror's owning machine to rebuild

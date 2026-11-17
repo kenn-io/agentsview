@@ -5668,6 +5668,32 @@ func TestEvents_StreamsDataChangedAfterSync(t *testing.T) {
 	<-done
 }
 
+func TestEvents_HoldsLiveSyncIntervalWhileConnected(t *testing.T) {
+	override := &sync.IntervalOverride{}
+	te := setupWithServerOpts(t,
+		[]server.Option{server.WithSyncIntervalOverride(override)},
+		func(c *config.Config) { c.SyncInterval = 5 * time.Second },
+	)
+	require.Zero(t, override.Value(), "nobody is watching yet")
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/events", nil)
+	w := newFlushRecorder()
+	done := make(chan struct{})
+	go func() {
+		te.handler.ServeHTTP(w, req)
+		close(done)
+	}()
+	te.waitForSSEEvent(t, w, "events_ready", 5*time.Second)
+	assert.Equal(t, sync.LiveInterval, override.Value(),
+		"an open web UI keeps syncs at each watcher's live interval")
+
+	cancel()
+	<-done
+	assert.Zero(t, override.Value(), "the background interval returns when the UI closes")
+}
+
 func TestEvents_StreamsInLocalNoSyncMode(t *testing.T) {
 	te := setupNoSyncMode(t)
 

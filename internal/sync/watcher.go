@@ -116,6 +116,13 @@ type WatcherOptions struct {
 	// MinIntervalOverride, when set, can shorten the minimum interval
 	// between callbacks while the watcher runs.
 	MinIntervalOverride *IntervalOverride
+	// LiveInterval, when positive, is the pace for a client that is waiting.
+	// While MinIntervalOverride holds anything, callbacks start at most this
+	// far apart. It is also the first delay before a failed batch is retried,
+	// doubling per further failure; zero uses the minimum interval. A watcher
+	// whose minimum interval is long because nobody is waiting sets it, so the
+	// pace a client gets comes from this watcher's settings.
+	LiveInterval time.Duration
 }
 
 // WatchRetryError carries the authoritative reconciliation scope selected by a
@@ -753,6 +760,7 @@ type Watcher struct {
 	batchDelay         time.Duration
 	minInterval        time.Duration
 	intervalOverride   *IntervalOverride
+	liveInterval       time.Duration
 	maxEntries         int
 	dispatchEnabled    atomic.Bool
 	dispatchMu         sync.Mutex
@@ -898,6 +906,7 @@ func newWatcherWithBackendOptions(
 		batchDelay:         batchDelay,
 		minInterval:        minInterval,
 		intervalOverride:   options.MinIntervalOverride,
+		liveInterval:       options.LiveInterval,
 		maxEntries:         maxEntries,
 		rootAgents:         make(map[string][]string),
 		rootScopes:         make(map[string][]WatchScope),
@@ -1150,6 +1159,20 @@ func (w *Watcher) OpenDispatch() {
 	w.eventSink.signal()
 }
 
+// PauseDispatch returns a dispatching watcher to collecting. Changes keep
+// accumulating under the usual bounds, a callback already running finishes,
+// and nothing new is delivered until OpenDispatch. A paused watcher starts no
+// timers, so it costs nothing beyond receiving events.
+func (w *Watcher) PauseDispatch() {
+	w.lifecycleMu.Lock()
+	defer w.lifecycleMu.Unlock()
+	if w.lifecycle != watcherDispatching {
+		return
+	}
+	w.lifecycle = watcherCollecting
+	w.dispatchEnabled.Store(false)
+}
+
 // FlushPending waits for the current callback and a snapshot of fresh work,
 // including backend deliveries already ready when the request is handled.
 // The dispatch loop owns both callbacks; retained retries keep their backoff.
@@ -1268,6 +1291,9 @@ func (w *Watcher) loop() {
 		var override time.Duration
 		override, intervalChanged = w.intervalOverride.Current()
 		minInterval = effectiveInterval(w.minInterval, override)
+		if override > 0 && w.liveInterval > 0 {
+			minInterval = min(minInterval, w.liveInterval)
+		}
 	}
 	refreshInterval()
 	var flushBatch WatchBatch
@@ -1512,8 +1538,12 @@ func (w *Watcher) loop() {
 						w.eventSink.immediatePending()
 					dueAt := time.Now()
 					if !immediatePending {
+						base := w.minInterval
+						if w.liveInterval > 0 {
+							base = w.liveInterval
+						}
 						dueAt = dueAt.Add(watcherRetryDelay(
-							max(w.batchDelay, w.minInterval), consecutiveFailures,
+							max(w.batchDelay, base), consecutiveFailures,
 						))
 					}
 					// A failing fresh batch must not postpone older retained work,

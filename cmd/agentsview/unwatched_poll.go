@@ -75,6 +75,10 @@ type sharedUnwatchedPollCoordinator struct {
 	// coordinator loop; each entry keeps its probe so availability is
 	// evaluated per obligation at poll time.
 	pollObligations []pollingObligation
+	// gap, when set, is the owner's shortest allowed time between passes
+	// started by the ticker. It can exceed the tick, so background collection
+	// polls less often than the ticker fires. Guarded by pollMu.
+	gap func() time.Duration
 	// lastCompletion is the wall-clock time the most recent pass completed.
 	// Zero means no prior pass; a zero value skips the cooldown on the first wake.
 	lastCompletion time.Time
@@ -91,11 +95,16 @@ func newUnwatchedPollCoordinator(
 	ctx context.Context,
 	engine unwatchedPollSyncer,
 	idleTracker *server.IdleTracker,
+	gap func() time.Duration,
 ) *sharedUnwatchedPollCoordinator {
 	ticker := time.NewTicker(unwatchedPollInterval)
-	return newUnwatchedPollCoordinatorWithTicks(
+	coordinator := newUnwatchedPollCoordinatorWithTicks(
 		ctx, engine, ticker.C, ticker.Stop, idleTracker.Do, nil, time.Now, time.After,
 	)
+	coordinator.pollMu.Lock()
+	coordinator.gap = gap
+	coordinator.pollMu.Unlock()
+	return coordinator
 }
 
 func newUnwatchedPollCoordinatorWithTicks(
@@ -221,9 +230,23 @@ func (c *sharedUnwatchedPollCoordinator) run() {
 			}
 			close(request.done)
 		case <-c.ticks:
-			c.requestPoll()
+			if c.tickDue() {
+				c.requestPoll()
+			}
 		}
 	}
+}
+
+// tickDue reports whether a tick may start a pass under the owner's gap.
+func (c *sharedUnwatchedPollCoordinator) tickDue() bool {
+	c.pollMu.Lock()
+	gapFor, last := c.gap, c.lastCompletion
+	c.pollMu.Unlock()
+	if gapFor == nil {
+		return true
+	}
+	gap := gapFor()
+	return gap != collectionPaused && (last.IsZero() || c.now().Sub(last) >= gap)
 }
 
 func (c *sharedUnwatchedPollCoordinator) setPollObligations(
