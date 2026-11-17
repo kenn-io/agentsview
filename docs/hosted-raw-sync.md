@@ -33,8 +33,9 @@ embedding outbox. Permanently rejected messages stay unindexed until the session
 revision or embedding generation changes; other messages remain searchable.
 Transient endpoint failures retry on the next worker poll. Rate-limited sessions
 do not block later sessions.
-When a session revision changes, the server reuses unchanged message vectors
-whose document keys and chunk coverage still match.
+For the same session ID and embedding generation, the server reuses vectors
+when document keys, content hashes, and chunk coverage match. Ordinary raw
+edits create a new session ID, so the server embeds that session again.
 
 Device enrollment and revocation remain operator-managed. The operator supplies
 each laptop with a server URL, device ID and credential. There is no public
