@@ -141,7 +141,7 @@ func TestActivityUsagePartsExpireOnlyFutureGroup(t *testing.T) {
 	keptActivityMirror(t, path, "session-a", 500)
 	writeUsageMirror(t, path,
 		`UPDATE sessions SET agentsview_push_fingerprint = 'a1'`,
-		`INSERT INTO sessions SELECT * REPLACE ('session-b' AS id, 'b1' AS agentsview_push_fingerprint, TIMESTAMP '2026-01-01 13:00:00' AS ended_at) FROM sessions WHERE id = 'session-a'`,
+		`INSERT INTO sessions SELECT * REPLACE ('session-b' AS id, 'b1' AS agentsview_push_fingerprint, TIMESTAMP '2026-01-01 13:00:00' AS ended_at, 1 AS message_count, 0 AS user_message_count) FROM sessions WHERE id = 'session-a'`,
 		`INSERT INTO sessions SELECT * REPLACE ('session-c' AS id, 'c1' AS agentsview_push_fingerprint) FROM sessions WHERE id = 'session-a'`,
 		`INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id, TIMESTAMP '2026-01-01 13:00:00' AS timestamp) FROM messages WHERE id = 2`,
 		`INSERT INTO messages SELECT * REPLACE (4 AS id, 'session-c' AS session_id) FROM messages WHERE id = 2`,
