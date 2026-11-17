@@ -60,6 +60,11 @@ type Store struct {
 	pricingDigest     string
 	aliasPath         string
 	closed            bool
+
+	searchIdentityMu    sync.Mutex
+	searchIdentityKey   string
+	searchIdentity      string
+	afterSearchIdentity func()
 	// retiring tracks in-flight mirror-replacement checks, registered in
 	// beginReplacementCheck before a check opens anything and spanning
 	// swapHandle's tail cleanup (closing the replaced handle and removing
@@ -761,6 +766,26 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 }
 
 func (s *Store) searchDiskVersion(ctx context.Context) (string, bool) {
+	if s.path == "" {
+		return s.scanSearchIdentity(ctx)
+	}
+	s.searchIdentityMu.Lock()
+	defer s.searchIdentityMu.Unlock()
+	version := s.keptVersion()
+	if version != "" && version == s.searchIdentityKey && ctx.Err() == nil {
+		return s.searchIdentity, true
+	}
+	identity, ok := s.scanSearchIdentity(ctx)
+	if ok && ctx.Err() == nil && version != "" && version == s.keptVersion() {
+		s.searchIdentityKey, s.searchIdentity = version, identity
+	}
+	return identity, ok
+}
+
+func (s *Store) scanSearchIdentity(ctx context.Context) (string, bool) {
+	if s.afterSearchIdentity != nil {
+		s.afterSearchIdentity()
+	}
 	versions, err := db.ScanTrendVersions(s.queryContext(ctx, `SELECT id, COALESCE(agentsview_push_fingerprint, '') FROM sessions WHERE deleted_at IS NULL`))
 	if err != nil {
 		return "", false

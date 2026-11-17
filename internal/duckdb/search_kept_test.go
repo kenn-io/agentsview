@@ -3,9 +3,11 @@
 package duckdb
 
 import (
+	"context"
 	"encoding/base64"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -13,6 +15,42 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/docbank/document/ocr"
 )
+
+func TestSearchKeptIdentityMemoPerHandle(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	buildMirrorFixture(t, path, "session-a", "first")
+	store := openUsagePartsStore(t, path)
+	defer store.Close()
+	var identities, searches atomic.Int32
+	store.afterSearchIdentity = func() { identities.Add(1) }
+	store.afterSearchRead = func() { searches.Add(1) }
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, ok := store.searchDiskVersion(ctx)
+	require.False(t, ok)
+	errs := make(chan error, 2)
+	for _, query := range []string{"first", "missing"} {
+		go func() {
+			_, err := store.Search(t.Context(), db.SearchFilter{Query: query})
+			errs <- err
+		}()
+	}
+	for range 2 {
+		require.NoError(t, <-errs)
+	}
+	require.EqualValues(t, 2, identities.Load())
+	require.EqualValues(t, 2, searches.Load())
+	next := filepath.Join(t.TempDir(), "next.duckdb")
+	buildMirrorFixture(t, next, "session-b", "first")
+	require.NoError(t, swapMirrorFile(next, path))
+	page, err := store.Search(t.Context(), db.SearchFilter{Query: "first"})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	require.Equal(t, "session-b", page.Results[0].SessionID)
+	require.EqualValues(t, 3, identities.Load())
+}
 
 func TestSearchKeptMirrorReplacement(t *testing.T) {
 	skipReopenTestOnWindows(t)
