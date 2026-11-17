@@ -414,10 +414,20 @@ failure.
 Rebuild tables under an hour old belong to another process, and the schema step
 leaves them alone. Older ones belong to a process that stopped:
 
-- Before the swap, the schema step drops them and rebuilds with the next
-  number. It drops only the numbers it saw, and a process that claims a number
-  after a newer one exists gives it up, so a process acting on an old view of
-  the tables never drops a newer rebuild's copy.
+- Before the swap, the schema step rebuilds with a new number and drops them
+  just before its own swap. It drops only the numbers it saw, and a process
+  that claims a number after a newer one exists gives it up, so a process
+  acting on an old view of the tables never drops a newer rebuild's copy.
+  Dropping them only at the swap keeps the old table of a stopped rebuild that
+  wakes up and swaps during the copy: that swap gives the snapshot table the
+  default granularity, so the new rebuild stops, and a later start finishes
+  the woken rebuild's step 5.
+
+Processes that start together take different numbers, so before its claim
+counts and again before its swap, a rebuild stops when it finds another
+rebuild's tables under an hour old. Both may stop, and a later start rebuilds;
+this keeps two rebuilds from both swapping and running step 5 against the
+wrong table.
 - After the swap, with the baseline still there, the process stopped during
   step 5, so the schema step finishes step 5. Without the baseline, step 5
   already ran, and the schema step only drops the old table: copying its rows

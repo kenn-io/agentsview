@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -211,7 +212,7 @@ func TestRebuildClaimYieldsToNewerRebuild(t *testing.T) {
 	execAll(t, conn, "CREATE TABLE usage_session_snapshots_rebuild_3 AS usage_session_snapshots "+
 		"ENGINE = ReplacingMergeTree(revision) ORDER BY id")
 
-	claimed, err := claimUsageSnapshotRebuild(t.Context(), conn, 2)
+	claimed, err := claimUsageSnapshotRebuild(t.Context(), conn, 2, usageSnapshotRebuildStale)
 
 	require.NoError(t, err)
 	assert.False(t, claimed)
@@ -399,4 +400,77 @@ func TestSchemaResumedRebuildKeepsSessionDeleted(t *testing.T) {
 
 	assert.Empty(t, revisions(t, conn, pushed))
 	assert.Empty(t, rebuildTables(t, conn))
+}
+
+// Processes that start a rebuild together take different numbers. A claim
+// that finds another rebuild's tables under the stale age gives its number
+// up; stale tables belong to a stopped process and do not stop it.
+func TestRebuildClaimYieldsToLiveRebuild(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		staleAfter time.Duration
+		claimed    bool
+		tables     []string
+	}{
+		{"live", time.Hour, false, []string{"usage_session_snapshots_rebuild_1"}},
+		{"stale", 0, true, []string{"usage_session_snapshots_rebuild_1", "usage_session_snapshots_rebuild_2"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store, _, _ := newPushedStore(t)
+			conn := store.DB()
+			makeRowGranuleSnapshots(t, conn)
+			execAll(t, conn, "CREATE TABLE usage_session_snapshots_rebuild_1 AS usage_session_snapshots "+
+				"ENGINE = ReplacingMergeTree(revision) ORDER BY id")
+
+			claimed, err := claimUsageSnapshotRebuild(t.Context(), conn, 2, tc.staleAfter)
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.claimed, claimed)
+			assert.Equal(t, tc.tables, rebuildTables(t, conn))
+		})
+	}
+}
+
+// Just before its swap, a rebuild drops the stopped rebuilds it saw only
+// when it may still swap. When a stopped rebuild woke up and swapped during
+// the copy, the snapshot table already has the default granularity, and
+// the stopped rebuild's old table and baseline stay for step 5.
+func TestRebuildKeepsStoppedRebuildThatSwapped(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		swapped    bool
+		superseded bool
+		tables     []string
+	}{
+		{"stopped rebuild swapped", true, true, []string{
+			"usage_session_snapshots_baseline_1", "usage_session_snapshots_rebuild_1",
+			"usage_session_snapshots_rebuild_2"}},
+		{"stopped rebuild did not swap", false, false, []string{"usage_session_snapshots_rebuild_2"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store, _, _ := newPushedStore(t)
+			conn := store.DB()
+			if !tc.swapped {
+				makeRowGranuleSnapshots(t, conn)
+			}
+			execAll(t, conn,
+				"CREATE TABLE usage_session_snapshots_rebuild_1 AS usage_session_snapshots "+
+					"ENGINE = ReplacingMergeTree(revision) ORDER BY id SETTINGS index_granularity = 1",
+				"CREATE TABLE usage_session_snapshots_baseline_1 ENGINE = MergeTree ORDER BY (id, revision) "+
+					"AS SELECT id, revision FROM usage_session_snapshots SETTINGS final = 0",
+				"CREATE TABLE usage_session_snapshots_rebuild_2 AS usage_session_snapshots "+
+					"ENGINE = ReplacingMergeTree(revision) ORDER BY id")
+
+			superseded, err := dropStoppedUsageSnapshotRebuilds(t.Context(), conn, 2, 0,
+				[]usageSnapshotRebuild{{number: 1}})
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.superseded, superseded)
+			assert.Equal(t, tc.tables, rebuildTables(t, conn))
+		})
+	}
 }
