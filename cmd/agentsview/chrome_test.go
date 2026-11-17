@@ -261,13 +261,14 @@ func TestServeChromeHostRequiresSetup(t *testing.T) {
 			socket, err := chromehost.SocketPath(dir)
 			require.NoError(t, err)
 			require.Equal(t, filepath.Join(dir, "chrome", "host.sock"), socket)
-			port, err := server.FindAvailablePort(t.Context(), "127.0.0.1", 0)
+			listener, err := server.ListenAvailablePort(t.Context(), "127.0.0.1", 0)
 			require.NoError(t, err)
-			cfg := config.Config{Host: "127.0.0.1", Port: port, DataDir: dir}
+			defer listener.Close()
+			cfg := config.Config{Host: "127.0.0.1", Port: listener.Addr().(*net.TCPAddr).Port, DataDir: dir}
 			srv := server.New(cfg, dbtest.OpenTestDB(t), nil)
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			run, err := startServerWithOptionalCaddy(ctx, cfg, srv, serveRuntimeOptions{Mode: "serve"})
+			run, err := startServerWithOptionalCaddy(ctx, cfg, srv, serveRuntimeOptions{Mode: "serve", Listener: listener})
 			require.NoError(t, err)
 			defer func() {
 				require.NoError(t, srv.Shutdown(t.Context()))
@@ -299,13 +300,14 @@ func TestChromeLongDataDirSetupAndServe(t *testing.T) {
 	assets := fstest.MapFS{"chrome-extension/manifest.json": {Data: []byte(`{"key":"dGVzdA=="}`)}}
 	_, err = setupChrome(dir, t.TempDir(), chromeTestExecutable(t), assets, func(string) error { return nil })
 	require.NoError(t, err)
-	port, err := server.FindAvailablePort(t.Context(), "127.0.0.1", 0)
+	listener, err := server.ListenAvailablePort(t.Context(), "127.0.0.1", 0)
 	require.NoError(t, err)
-	cfg := config.Config{Host: "127.0.0.1", Port: port, DataDir: dir}
+	defer listener.Close()
+	cfg := config.Config{Host: "127.0.0.1", Port: listener.Addr().(*net.TCPAddr).Port, DataDir: dir}
 	srv := server.New(cfg, dbtest.OpenTestDB(t), nil)
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	run, err := startServerWithOptionalCaddy(ctx, cfg, srv, serveRuntimeOptions{Mode: "serve"})
+	run, err := startServerWithOptionalCaddy(ctx, cfg, srv, serveRuntimeOptions{Mode: "serve", Listener: listener})
 	require.NoError(t, err)
 	conn, err := (&net.Dialer{}).DialContext(t.Context(), "unix", socket)
 	require.NoError(t, err)

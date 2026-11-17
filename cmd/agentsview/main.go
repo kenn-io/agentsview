@@ -621,6 +621,9 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 	if prepErr != nil {
 		fatal("%v", prepErr)
 	}
+	// The server closes this listener when it shuts down; this covers the
+	// returns before it starts serving.
+	defer rtOpts.Listener.Close()
 	cfg = preparedCfg
 	rtOpts.BasePath = opts.BasePath
 

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net"
 	"testing"
 
@@ -40,7 +41,7 @@ func TestFindAvailablePortWildcardZeroRetriesCrossFamilyCollision(t *testing.T) 
 	}
 
 	selections := 0
-	got, err := findAvailablePort(t.Context(),
+	ln, err := listenAvailablePort(t.Context(),
 		"0.0.0.0",
 		0,
 		func(context.Context, string) (int, error) {
@@ -51,11 +52,44 @@ func TestFindAvailablePortWildcardZeroRetriesCrossFamilyCollision(t *testing.T) 
 			return second, nil
 		},
 		listenProbesFree,
+		listenTCP,
 	)
 	require.NoError(t, err)
-	require.Equal(t, second, got,
+	defer ln.Close()
+	require.Equal(t, second, ln.Addr().(*net.TCPAddr).Port,
 		"wildcard ephemeral selection must retry a cross-family collision")
 	require.Equal(t, 2, selections)
+}
+
+// A port can pass the probe and be taken before the search binds it. The
+// search must then try the next candidate instead of failing.
+func TestListenAvailablePortSkipsPortTakenAfterProbe(t *testing.T) {
+	var bound []int
+	ln, err := listenAvailablePort(t.Context(), "127.0.0.1", 49687,
+		selectEphemeralPort,
+		func(context.Context, []listenProbe, int) bool { return true },
+		func(ctx context.Context, host string, port int) (net.Listener, error) {
+			bound = append(bound, port)
+			if port == 49687 {
+				return nil, errors.New("address already in use")
+			}
+			return listenTCP(ctx, host, 0)
+		},
+	)
+	require.NoError(t, err)
+	defer ln.Close()
+	require.Equal(t, []int{49687, 49688}, bound)
+}
+
+func TestListenAvailablePortHoldsEphemeralPort(t *testing.T) {
+	ln, err := ListenAvailablePort(t.Context(), "127.0.0.1", 0)
+	require.NoError(t, err)
+	defer ln.Close()
+	port := ln.Addr().(*net.TCPAddr).Port
+	require.Positive(t, port)
+
+	_, err = listenTCP(t.Context(), "127.0.0.1", port)
+	require.Error(t, err, "the returned listener must keep the port it found")
 }
 
 func TestListenProbesRejectOccupiedPort(t *testing.T) {
@@ -104,16 +138,21 @@ func TestListenProbesWildcardRejectOccupiedPort(t *testing.T) {
 // leaving any of the 99 ports after an ephemeral listener available. Real bind
 // rejection is covered separately by the listen probe tests above.
 func TestFindAvailablePortSkipsOccupied(t *testing.T) {
-	var probed []int
-	got, err := findAvailablePort(t.Context(), "127.0.0.1", 49687,
+	var probed, bound []int
+	ln, err := listenAvailablePort(t.Context(), "127.0.0.1", 49687,
 		selectEphemeralPort,
 		func(_ context.Context, probes []listenProbe, port int) bool {
 			require.Equal(t, []listenProbe{{network: "tcp", host: "127.0.0.1"}}, probes)
 			probed = append(probed, port)
 			return port == 49689
 		},
+		func(ctx context.Context, host string, port int) (net.Listener, error) {
+			bound = append(bound, port)
+			return listenTCP(ctx, host, 0)
+		},
 	)
 	require.NoError(t, err)
-	require.Equal(t, 49689, got)
+	defer ln.Close()
 	require.Equal(t, []int{49687, 49688, 49689}, probed)
+	require.Equal(t, []int{49689}, bound)
 }

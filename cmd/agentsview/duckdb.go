@@ -352,10 +352,13 @@ func runDuckDBServe(ctx context.Context, appCfg config.Config, basePath string, 
 		BasePath:      basePath,
 		RequestedPort: appCfg.Port,
 	}
-	appCfg, err = prepareServeRuntimeConfig(ctx, appCfg, rtOpts)
+	appCfg, rtOpts.Listener, err = claimServeRuntimeConfig(ctx, appCfg, rtOpts)
 	if err != nil {
 		fatal("duckdb serve: %v", err)
 	}
+	// The server closes this listener when it shuts down; this covers a
+	// return before it starts serving.
+	defer rtOpts.Listener.Close()
 	opts := []server.Option{
 		server.WithVersion(server.VersionInfo{
 			Version:   version,

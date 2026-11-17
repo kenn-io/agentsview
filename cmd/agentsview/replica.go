@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
@@ -651,8 +652,16 @@ func prepareReplicaServeImpl(
 	}
 
 	var closeExtras func() error
+	var listener net.Listener
 	cleanup := func() {
 		stop()
+		// The server closes the listener when it shuts down; this covers a
+		// startup that fails before serving.
+		if listener != nil {
+			if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				log.Printf("warning: closing %s serve listener: %v", name, err)
+			}
+		}
 		if closeExtras != nil {
 			if err := closeExtras(); err != nil {
 				log.Printf("warning: closing %s serve extras: %v", name, err)
@@ -670,11 +679,12 @@ func prepareReplicaServeImpl(
 		BasePath:      basePath,
 		RequestedPort: appCfg.Port,
 	}
-	appCfg, err = prepareServeRuntimeConfig(ctx, appCfg, rtOpts)
+	appCfg, listener, err = claimServeRuntimeConfig(ctx, appCfg, rtOpts)
 	if err != nil {
 		cleanup()
 		return replicaServeStartup{}, fmt.Errorf("%s serve: %w", name, err)
 	}
+	rtOpts.Listener = listener
 
 	opts := []server.Option{
 		server.WithVersion(server.VersionInfo{

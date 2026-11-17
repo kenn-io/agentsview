@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
@@ -97,6 +98,7 @@ func prepareHostedPGServe(ctx context.Context, app config.Config, pg config.PGCo
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	var runtime *pgRawRuntime
 	var closeUploads func() error
+	var listener net.Listener
 	custody := &pgRawSyncCustody{dataDir: app.DataDir, tenant: pg.RawTenant, limits: rawsync.DefaultManifestLimits(), version: rawProcessingVersion()}
 	var once sync.Once
 	cleanup := func() {
@@ -104,6 +106,13 @@ func prepareHostedPGServe(ctx context.Context, app config.Config, pg config.PGCo
 			stop()
 			if runtime != nil {
 				runtime.Stop()
+			}
+			// The server closes the listener when it shuts down; this covers
+			// a startup that fails before serving.
+			if listener != nil {
+				if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+					log.Print("hosted serve listener cleanup failed")
+				}
 			}
 			if closeUploads != nil {
 				if err := closeUploads(); err != nil {
@@ -181,10 +190,11 @@ func prepareHostedPGServe(ctx context.Context, app config.Config, pg config.PGCo
 		})
 	}
 	rtOpts := serveRuntimeOptions{Mode: "pg-serve", BasePath: basePath, RequestedPort: app.Port}
-	app, err = prepareServeRuntimeConfig(ctx, app, rtOpts)
+	app, listener, err = claimServeRuntimeConfig(ctx, app, rtOpts)
 	if err != nil {
 		return fail(err)
 	}
+	rtOpts.Listener = listener
 	uploadOption, closeUploadStore, err := preparePGRawSyncUploads(ctx, app.DataDir, store.DB(), custody)
 	if err != nil {
 		return fail(err)
