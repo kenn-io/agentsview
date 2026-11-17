@@ -412,7 +412,9 @@ renames would leave a moment with no snapshot table.
 
 The rebuild only makes merges faster, so a failed rebuild, such as one that
 lacks a privilege or times out, logs a warning and the schema step continues.
-Push and serve start with the slow table, and a later start tries again.
+A failure before the swap leaves the slow table, and the next start tries
+again. A failure after the swap leaves the fast table and step 5 unfinished,
+and a start after the rebuild tables are an hour old finishes it.
 
 ## Stored usage prices
 

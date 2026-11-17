@@ -47,7 +47,6 @@ func usageSnapshotBaselineName(number uint64) string {
 // usageSnapshotRebuild is what a schema step sees of one numbered rebuild.
 type usageSnapshotRebuild struct {
 	number   uint64
-	rebuild  bool
 	baseline bool
 	// rowGranules reports that the rebuild table has index_granularity = 1,
 	// which makes it the old snapshot table the rebuild swapped out.
@@ -89,18 +88,34 @@ type usageSnapshotRebuild struct {
 //
 // A database that cannot swap tables keeps its table: two renames would
 // leave a moment with no snapshot table, and pushes and reads would fail.
-func rebuildUsageSnapshots(ctx context.Context, conn *sql.DB) error {
-	return rebuildUsageSnapshotsAfter(ctx, conn, usageSnapshotRebuildStale)
-}
-
-// rebuildUsageSnapshotsAfter is rebuildUsageSnapshots with the age at which
-// another process's rebuild counts as stopped.
-func rebuildUsageSnapshotsAfter(ctx context.Context, conn *sql.DB, staleAfter time.Duration) (err error) {
+//
+// Another process's rebuild counts as stopped once its tables are older
+// than staleAfter. The rebuild only makes merges faster, so it logs a
+// failure, such as a missing privilege or a timeout, and returns an error
+// only when ctx is done; push and serve then start with the table as it is.
+func rebuildUsageSnapshots(ctx context.Context, conn *sql.DB, staleAfter time.Duration) (err error) {
+	// swapped reports that usage_session_snapshots already has the default
+	// granularity, so a failure leaves only the cleanup of step 5.
+	swapped := false
+	defer func() {
+		if err == nil || ctx.Err() != nil {
+			return
+		}
+		if swapped {
+			log.Printf("ClickHouse: %s was rebuilt, but cleaning up after the rebuild failed; "+
+				"a start after the rebuild tables are an hour old finishes it: %v", usageSessionSnapshotTable, err)
+		} else {
+			log.Printf("ClickHouse: rebuilding %s failed, so merging it after large pushes may stay slow; "+
+				"the next start tries again: %v", usageSessionSnapshotTable, err)
+		}
+		err = nil
+	}()
 	rowGranules, rebuilds, err := readUsageSnapshotRebuilds(ctx, conn, staleAfter)
 	if err != nil {
 		return err
 	}
 	if !rowGranules {
+		swapped = true
 		return finishUsageSnapshotRebuilds(ctx, conn, rebuilds)
 	}
 	var newest uint64
@@ -129,7 +144,6 @@ func rebuildUsageSnapshotsAfter(ctx context.Context, conn *sql.DB, staleAfter ti
 	if err != nil || !claimed {
 		return err
 	}
-	swapped := false
 	defer func() {
 		if swapped || err == nil {
 			return
@@ -222,7 +236,7 @@ func readUsageSnapshotRebuilds(ctx context.Context, conn *sql.DB, staleAfter tim
 		r := &rebuilds[len(rebuilds)-1]
 		r.stale = r.stale && stale != 0
 		if strings.HasPrefix(name, usageSnapshotRebuildPrefix) {
-			r.rebuild, r.rowGranules = true, granules != 0
+			r.rowGranules = granules != 0
 		} else {
 			r.baseline = true
 		}
@@ -308,7 +322,7 @@ func finishUsageSnapshotRebuilds(ctx context.Context, conn *sql.DB, rebuilds []u
 		if !r.stale {
 			continue
 		}
-		if r.rebuild && r.rowGranules && r.baseline {
+		if r.rowGranules && r.baseline {
 			log.Printf("ClickHouse: finishing a %s rebuild that stopped after its swap", usageSessionSnapshotTable)
 			if err := finishUsageSnapshotRebuild(ctx, conn, r.number); err != nil {
 				return err

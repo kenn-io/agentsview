@@ -171,7 +171,7 @@ func TestSchemaLeavesAnotherProcessRebuild(t *testing.T) {
 			execAll(t, conn, tc.tables...)
 			tables := rebuildTables(t, conn)
 
-			require.NoError(t, rebuildUsageSnapshots(t.Context(), conn))
+			require.NoError(t, rebuildUsageSnapshots(t.Context(), conn, usageSnapshotRebuildStale))
 
 			assert.Equal(t, !tc.swapped, rowGranules(t, conn, usageSessionSnapshotTable))
 			assert.Equal(t, tables, rebuildTables(t, conn))
@@ -193,7 +193,7 @@ func TestSchemaReplacesStoppedRebuild(t *testing.T) {
 		"CREATE TABLE usage_session_snapshots_baseline_1 ENGINE = MergeTree ORDER BY (id, revision) "+
 			"AS SELECT id, revision FROM usage_session_snapshots SETTINGS final = 0")
 
-	require.NoError(t, rebuildUsageSnapshotsAfter(t.Context(), conn, 0))
+	require.NoError(t, rebuildUsageSnapshots(t.Context(), conn, 0))
 
 	assert.False(t, rowGranules(t, conn, usageSessionSnapshotTable))
 	assert.Equal(t, before, snapshotRows(t, conn, usageSessionSnapshotTable))
@@ -300,7 +300,7 @@ func TestSchemaFinishesRebuildStoppedAfterSwap(t *testing.T) {
 			require.NoError(t, conn.QueryRowContext(ctx, "SELECT toString(max(revision)) FROM "+old+
 				" WHERE id = ? SETTINGS final = 0", pushedBefore).Scan(&pushed))
 
-			require.NoError(t, rebuildUsageSnapshotsAfter(ctx, conn, 0))
+			require.NoError(t, rebuildUsageSnapshots(ctx, conn, 0))
 
 			if tc.baseline {
 				assert.Empty(t, revisions(t, conn, deletedBefore))
