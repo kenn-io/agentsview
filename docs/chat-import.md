@@ -443,8 +443,8 @@ agentsview source import --type gemini-apps ~/Downloads/takeout.zip
 
 | Flag | Description |
 |------|-------------|
-| `--type` | `claude-ai`, `chatgpt`, or `gemini-apps` (required) |
-| `--sync` | Sync through Chrome instead of importing a file. Needs a running server and the Chrome extension; takes no path or `--replace`. `grok-web` imports only this way. |
+| `--type` | `claude-ai`, `chatgpt`, or `gemini-apps`; with `--sync`, also `grok-web` (required) |
+| `--sync` | Sync through Chrome instead of importing a file. Needs a running server and the Chrome extension; takes no path or `--replace`. |
 | `--replace` | Session ID whose archived messages the import may replace when the normal import refuses them; repeat for more sessions (`claude-ai` and `chatgpt` only). See [Replacing archived history](#replacing-archived-history). |
 
 The path can be a `.zip` file, a `conversations.json` file

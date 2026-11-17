@@ -587,7 +587,7 @@ func newImportCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&syncBrowser, "sync", false, "Sync conversations through Chrome ("+browserSyncNames()+")")
-	cmd.Flags().StringVar(&importType, "type", "", "Import type: claude-ai, chatgpt, gemini-apps")
+	cmd.Flags().StringVar(&importType, "type", "", "Import type: claude-ai, chatgpt, gemini-apps; with --sync, also grok-web")
 	cmd.Flags().StringArrayVar(&replace, "replace", nil, "Session ID whose archived messages this import may replace when the default import refuses them; repeatable (claude-ai, chatgpt)")
 	_ = cmd.MarkFlagRequired("type")
 	return cmd
