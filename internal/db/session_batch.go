@@ -546,8 +546,9 @@ func (db *DB) writeOneSessionBatchTx(
 			}
 		} else {
 			// The rows keep their pins, but a caller that copies the old
-			// transcript still needs them for the copy.
-			if sourceIDsOnly && pinSnapshot != nil {
+			// transcript still needs them for the copy. That includes a
+			// usage-only replace whose retained rows are all unchanged.
+			if pinSnapshot != nil {
 				snapshot, err := savePinsTx(queries, write.Session.ID, msgs)
 				if err != nil {
 					return 0, err
@@ -572,16 +573,6 @@ func (db *DB) writeOneSessionBatchTx(
 			}
 			imageDiff = &plan
 			msgs = nil
-			// A caller that replaces the session while keeping a trashed
-			// copy still needs the pins as they are now. Snapshot only: the
-			// rows survive, so nothing is deleted or restored here.
-			if pinSnapshot != nil {
-				snapshot, err := savePinsTx(queries, write.Session.ID, write.Messages)
-				if err != nil {
-					return 0, err
-				}
-				*pinSnapshot = snapshot
-			}
 		}
 	} else {
 		maxOrd, err := maxOrdinalTx(queries, write.Session.ID)
