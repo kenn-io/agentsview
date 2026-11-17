@@ -3,6 +3,7 @@
 package db
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -224,4 +225,105 @@ func TestToolsPartsRefreshOutcomeAndDeletion(t *testing.T) {
 		require.Equal(t, []string{change.id}, reads[i])
 	}
 	require.Len(t, reads, 2)
+}
+
+func TestToolsPartsFingerprintSeparatesSessionFields(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "a", "c", func(s *Session) { s.Agent = "a|b" })
+	msg := asstMsgAt("a", 0, "call", "2025-03-10T12:00:00Z")
+	msg.ToolCalls = []ToolCall{{SessionID: "a", ToolName: "Read", Category: "Read"}}
+	insertMessages(t, d, msg)
+	f := AnalyticsFilter{Timezone: "UTC"}
+	first, err := d.analyticsTools(ctx, f)
+	require.NoError(t, err)
+	require.Len(t, first.ByAgent, 1)
+	require.Equal(t, "a|b", first.ByAgent[0].Agent)
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE sessions SET agent='a', project='b|c' WHERE id='a'`)
+	require.NoError(t, err)
+	got, err := d.analyticsTools(ctx, f)
+	require.NoError(t, err)
+	require.Len(t, got.ByAgent, 1)
+	require.Equal(t, "a", got.ByAgent[0].Agent)
+	rows, err := d.analyticsToolRows(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, BuildToolsAnalytics(rows), got)
+}
+
+func TestToolsPartsIdentityFailureUsesDirectReader(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "a", "project")
+	msg := asstMsgAt("a", 0, "call", "2025-03-10T12:00:00Z")
+	msg.ToolCalls = []ToolCall{{SessionID: "a", ToolName: "Read", Category: "Read"}}
+	insertMessages(t, d, msg)
+	_, err := d.getWriter().ExecContext(ctx, `DELETE FROM archive_metadata WHERE key='database_id'`)
+	require.NoError(t, err)
+	got, err := d.analyticsTools(ctx, AnalyticsFilter{Timezone: "UTC"})
+	require.NoError(t, err)
+	require.Equal(t, 1, got.TotalCalls)
+}
+
+func TestToolsPartsMessageMetadataChanges(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "a", "project")
+	msg := asstMsgAt("a", 0, "call", "2025-03-10T12:00:00Z")
+	msg.Model = "model-a"
+	msg.ToolCalls = []ToolCall{{SessionID: "a", ToolName: "Read", Category: "Read"}}
+	insertMessages(t, d, msg)
+	hour := 12
+	f := AnalyticsFilter{Timezone: "UTC", Model: "model-a", Hour: &hour}
+	got, err := d.analyticsTools(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, 1, got.TotalCalls)
+	for _, change := range []struct {
+		query string
+		total int
+	}{
+		{`UPDATE messages SET model='model-b' WHERE session_id='a'`, 0},
+		{`UPDATE messages SET model='model-a' WHERE session_id='a'`, 1},
+		{`UPDATE messages SET timestamp='2025-03-10T13:00:00Z' WHERE session_id='a'`, 0},
+	} {
+		_, err := d.getWriter().ExecContext(ctx, change.query)
+		require.NoError(t, err)
+		got, err := d.analyticsTools(ctx, f)
+		require.NoError(t, err)
+		require.Equal(t, change.total, got.TotalCalls)
+		rows, err := d.analyticsToolRows(ctx, f)
+		require.NoError(t, err)
+		require.Equal(t, BuildToolsAnalytics(rows), got)
+	}
+}
+
+func TestToolsPartsMigrationInvalidatesOldParts(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d, err := openCopiedTestDB(t, path)
+	require.NoError(t, err)
+	insertSession(t, d, "a", "project")
+	msg := asstMsgAt("a", 0, "call", "2025-03-10T12:00:00Z")
+	msg.ToolCalls = []ToolCall{{SessionID: "a", ToolName: "Read", Category: "Read"}}
+	insertMessages(t, d, msg)
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE sessions SET tools_generation=NULL WHERE id='a'`)
+	require.NoError(t, err)
+	f := AnalyticsFilter{Timezone: "UTC"}
+	before, err := d.analyticsTools(ctx, f)
+	require.NoError(t, err)
+	require.Len(t, before.ByTool, 1)
+	require.Equal(t, "Read", before.ByTool[0].ToolName)
+	_, err = d.getWriter().ExecContext(ctx, `DROP TRIGGER tool_calls_tools_generation_insert; DROP TRIGGER tool_calls_tools_generation_update; DROP TRIGGER tool_calls_tools_generation_delete; ALTER TABLE sessions DROP COLUMN tools_generation; UPDATE tool_calls SET tool_name='Write' WHERE session_id='a'`)
+	require.NoError(t, err)
+	require.NoError(t, d.Close())
+	d, err = Open(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	got, err := d.analyticsTools(ctx, f)
+	require.NoError(t, err)
+	require.Len(t, got.ByTool, 1)
+	require.Equal(t, "Write", got.ByTool[0].ToolName)
 }

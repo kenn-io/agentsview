@@ -3131,11 +3131,10 @@ func (db *DB) analyticsTools(ctx context.Context, f AnalyticsFilter) (ToolsAnaly
 	db.trendsPartsDisk()
 	if db.trendsDisk.Enabled() && !db.readOnly {
 		identity, err := db.GetDatabaseID(ctx)
-		if err != nil {
-			return ToolsAnalyticsResponse{}, err
-		}
-		if result, handled, err := db.toolsFromParts(ctx, identity, f); handled {
-			return result, err
+		if err == nil {
+			if result, handled, err := db.toolsFromParts(ctx, identity, f); handled {
+				return result, err
+			}
 		}
 	}
 	rows, err := db.analyticsToolRows(ctx, f)
@@ -3168,7 +3167,7 @@ func (db *DB) toolSessions(ctx context.Context, f AnalyticsFilter) (map[string]t
 	}
 
 	// Fetch filtered session IDs and their metadata.
-	fingerprint := `COALESCE(transcript_revision, '') || '|' || COALESCE(trends_generation, '') || '|' || COALESCE(usage_generation, '') || '|' || COALESCE(tools_generation, '') || '|' || COALESCE(quality_signal_version, '') || '|' || COALESCE(agent, '') || '|' || COALESCE(project, '') || '|' || COALESCE(started_at, '') || '|' || COALESCE(created_at, '')`
+	fingerprint := `json_array(COALESCE(transcript_revision, ''), COALESCE(trends_generation, ''), COALESCE(usage_generation, ''), COALESCE(tools_generation, ''), COALESCE(quality_signal_version, ''), COALESCE(agent, ''), COALESCE(project, ''), COALESCE(started_at, ''), COALESCE(created_at, ''))`
 	if db.readOnly {
 		fingerprint = `''`
 	}

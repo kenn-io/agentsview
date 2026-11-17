@@ -1330,7 +1330,11 @@ use that query-local edge set without changing parent identity or visibility.
 ### Dashboard metadata index
 
 SQLite retains per-session Dashboard Tools contributions on disk and uses
-`tools_generation` to refresh sessions when tool calls change.
+`tools_generation` to refresh sessions when tool calls change. Each filter
+combination has its own entry. Each file is capped at 128 MiB, and all
+`sqlite-trends` entries share a 256 MiB budget.
+Read-only archives, disabled disk storage, local timezones, active-since
+filters, and time-dependent termination filters use the direct reader.
 
 SQLite's summary and tool analytics can read model names and message timestamps
 through `idx_messages_analytics_metadata` on

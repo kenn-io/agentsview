@@ -27,7 +27,7 @@ func SetToolsPartsReadObserver(observe func([]string)) func() {
 }
 
 func (db *DB) toolsFromParts(ctx context.Context, identity string, f AnalyticsFilter) (ToolsAnalyticsResponse, bool, error) {
-	if !db.trendsDisk.Enabled() || db.readOnly || identity == "" || f.ActiveSince != "" || TerminationUsesTime(f.Termination) || f.Timezone == "Local" {
+	if identity == "" || f.ActiveSince != "" || TerminationUsesTime(f.Termination) || f.Timezone == "Local" {
 		return ToolsAnalyticsResponse{}, false, nil
 	}
 	sessions, err := db.toolSessions(ctx, f)
