@@ -382,6 +382,16 @@ func writeArchiveHeader(
 // escape the resolved targets, even if a future caller forgets to
 // validate.
 func WriteArchiveFiles(ctx context.Context, w io.Writer, allowed TargetSet, files []string) error {
+	return writeArchiveFiles(ctx, w, allowed, files, nil)
+}
+
+// writeArchiveFiles is WriteArchiveFiles with append bases. A file with an
+// entry in appends whose copy here extends the client's mirror copy is sent
+// as an appended entry holding only its new bytes.
+func writeArchiveFiles(
+	ctx context.Context, w io.Writer, allowed TargetSet, files []string,
+	appends map[string]DeltaAppend,
+) error {
 	tw := tar.NewWriter(ctxio.Writer{Context: ctx, Writer: w})
 	forbidden := newForbiddenRootMatcher(allowed.ForbiddenRoots)
 	allowedRoots := allowed.DeltaAllowedRoots()
@@ -413,6 +423,15 @@ func WriteArchiveFiles(ctx context.Context, w io.Writer, allowed TargetSet, file
 		}
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 			continue
+		}
+		if base, ok := appends[filepath.Clean(path)]; ok {
+			appended, err := writeArchiveAppend(tw, local, base)
+			if err != nil {
+				return err
+			}
+			if appended {
+				continue
+			}
 		}
 		if err := writeArchiveFile(tw, local, info); err != nil {
 			return err

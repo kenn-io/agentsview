@@ -167,7 +167,20 @@ func (a *downloadedArchive) extract(
 	report syncpkg.ProgressFunc,
 	label string,
 ) (err error) {
-	return a.extractWithSelection(ctx, dst, nil, report, label)
+	return a.extractWithSelection(ctx, dst, nil, nil, report, label)
+}
+
+// extractRecording extracts every entry and returns the cleaned names of the
+// regular files it wrote.
+func (a *downloadedArchive) extractRecording(
+	ctx context.Context,
+	dst string,
+	report syncpkg.ProgressFunc,
+	label string,
+) (map[string]struct{}, error) {
+	extracted := make(map[string]struct{})
+	err := a.extractWithSelection(ctx, dst, nil, extracted, report, label)
+	return extracted, err
 }
 
 func (a *downloadedArchive) extractSelected(
@@ -177,13 +190,13 @@ func (a *downloadedArchive) extractSelected(
 	report syncpkg.ProgressFunc,
 	label string,
 ) error {
-	return a.extractWithSelection(ctx, dst, selected, report, label)
+	return a.extractWithSelection(ctx, dst, selected, nil, report, label)
 }
 
 func (a *downloadedArchive) extractWithSelection(
 	ctx context.Context,
 	dst string,
-	selected map[string]struct{},
+	selected, extracted map[string]struct{},
 	report syncpkg.ProgressFunc,
 	label string,
 ) (err error) {
@@ -224,7 +237,7 @@ func (a *downloadedArchive) extractWithSelection(
 		return fmt.Errorf("unsupported archive encoding %q", a.encoding)
 	}
 	stream = ctxio.Reader{Context: ctx, Reader: stream}
-	if _, err := extractTarStream(ctx, stream, dst, selected); err != nil {
+	if _, err := extractTarStream(ctx, stream, dst, selected, extracted); err != nil {
 		return fmt.Errorf("extract archive: %w", err)
 	}
 	return nil

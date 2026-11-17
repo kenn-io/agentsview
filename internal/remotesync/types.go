@@ -270,6 +270,22 @@ func (t TargetSet) DeltaAllowedRoots() []string {
 type ArchiveRequest struct {
 	TargetSet
 	DeltaFiles []string `json:"delta_files,omitempty"`
+	// DeltaAppends offers, for delta files the mirror already holds, the
+	// mirror copy's length and a hash of its last bytes. A server whose copy
+	// grew past that length with the same bytes before it sends only the
+	// new bytes. Each path must also appear in DeltaFiles. Old servers
+	// ignore the field and send whole files.
+	DeltaAppends []DeltaAppend `json:"delta_appends,omitempty"`
+}
+
+// DeltaAppend describes the mirror copy of one delta file.
+type DeltaAppend struct {
+	Path string `json:"path"`
+	// Offset is the mirror copy's length in bytes.
+	Offset int64 `json:"offset"`
+	// TailSHA256 is the hex SHA-256 of the copy's last bytes before
+	// Offset, at most appendTailBytes of them.
+	TailSHA256 string `json:"tail_sha256"`
 }
 
 func (r ArchiveRequest) MarshalJSON() ([]byte, error) {
@@ -295,6 +311,9 @@ func (r ArchiveRequest) MarshalJSON() ([]byte, error) {
 	if r.DeltaFiles != nil {
 		out["delta_files"] = r.DeltaFiles
 	}
+	if len(r.DeltaAppends) > 0 {
+		out["delta_appends"] = r.DeltaAppends
+	}
 	return json.Marshal(out)
 }
 
@@ -307,6 +326,7 @@ func (r *ArchiveRequest) UnmarshalJSON(data []byte) error {
 		CodexIndexFiles    map[string][]string           `json:"codex_index_files"`
 		ForbiddenRoots     []string                      `json:"forbidden_roots"`
 		DeltaFiles         []string                      `json:"delta_files"`
+		DeltaAppends       []DeltaAppend                 `json:"delta_appends"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
@@ -319,6 +339,7 @@ func (r *ArchiveRequest) UnmarshalJSON(data []byte) error {
 		ForbiddenRoots:     raw.ForbiddenRoots,
 	}
 	r.DeltaFiles = raw.DeltaFiles
+	r.DeltaAppends = raw.DeltaAppends
 	if len(raw.Files) == 0 {
 		return nil
 	}
