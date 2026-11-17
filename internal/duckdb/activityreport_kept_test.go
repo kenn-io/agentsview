@@ -133,6 +133,53 @@ func TestActivityUsagePartsRemapRates(t *testing.T) {
 	requireKeptActivityEqual(t, keptActivityBuild(t, fresh, q, true), got)
 }
 
+func TestActivityUsagePartsRefreshCrossProjectPeer(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	path := filepath.Join(t.TempDir(), "mirror.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	writeUsageMirror(t, path,
+		`UPDATE sessions SET agentsview_push_fingerprint = 'a1'`,
+		`UPDATE messages SET claude_message_id = 'message', claude_request_id = 'request' WHERE id = 2`,
+		`INSERT INTO sessions SELECT * REPLACE ('session-b' AS id, 'b1' AS agentsview_push_fingerprint, 'beta' AS project) FROM sessions WHERE id = 'session-a'`,
+		`INSERT INTO messages SELECT * REPLACE (3 AS id, 'session-b' AS session_id, '' AS claude_message_id, '' AS claude_request_id, 700 AS usage_output_tokens) FROM messages WHERE id = 2`,
+		`INSERT INTO sessions SELECT * REPLACE ('session-c' AS id, 'c1' AS agentsview_push_fingerprint) FROM sessions WHERE id = 'session-a'`,
+		`INSERT INTO messages SELECT * REPLACE (4 AS id, 'session-c' AS session_id, 'other' AS claude_message_id, 'other' AS claude_request_id, 100 AS usage_output_tokens) FROM messages WHERE id = 2`,
+	)
+	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	filter := db.AnalyticsFilter{Timezone: "UTC", Project: "alpha"}
+	build := func(store *Store) activity.CandidateArtifacts {
+		result, err := store.BuildActivityReportArtifacts(t.Context(), filter, q, nil)
+		require.NoError(t, err)
+		return result
+	}
+	store := openUsagePartsStore(t, path)
+	require.Equal(t, 600, activity.ReportWithSessions(build(store)).Totals.OutputTokens)
+	require.NoError(t, store.Close())
+	var refreshed []string
+	previous := usagePartReadObserver
+	usagePartReadObserver = func(ids []string) { refreshed = append(refreshed, ids...) }
+	t.Cleanup(func() { usagePartReadObserver = previous })
+	writeUsageMirror(t, path,
+		`UPDATE sessions SET agentsview_push_fingerprint = 'b2' WHERE id = 'session-b'`,
+		`UPDATE messages SET claude_message_id = 'message', claude_request_id = 'request' WHERE id = 3`,
+	)
+	store = openUsagePartsStore(t, path)
+	got := build(store)
+	require.ElementsMatch(t, []string{"session-a", "session-b"}, refreshed)
+	require.Equal(t, 800, activity.ReportWithSessions(got).Totals.OutputTokens)
+	requireKeptActivityEqual(t, build(NewStoreFromDB(store.DB())), got)
+	require.NoError(t, store.Close())
+	writeUsageMirror(t, path, `UPDATE sessions SET deleted_at = CURRENT_TIMESTAMP WHERE id = 'session-b'`)
+	store = openUsagePartsStore(t, path)
+	defer store.Close()
+	refreshed = nil
+	got = build(store)
+	require.ElementsMatch(t, []string{"session-a"}, refreshed)
+	require.Equal(t, 600, activity.ReportWithSessions(got).Totals.OutputTokens)
+	requireKeptActivityEqual(t, build(NewStoreFromDB(store.DB())), got)
+}
+
 func TestActivityReportKeptAcrossReopensAndRestart(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
