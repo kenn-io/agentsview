@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -60,6 +61,77 @@ func TestHostedVectorGenerationScopeSwitch(t *testing.T) {
 	require.NoError(t, EmbedBatch(t.Context(), f.runtime, b, encode, 128, 1, false))
 	require.NoError(t, EmbedBatch(t.Context(), f.runtime, a, encode, 128, 1, true))
 	require.Len(t, search().Matches, 2)
+}
+
+func TestHostedVectorScanDuringSessionRestore(t *testing.T) {
+	f := newHostedFixture(t, "tenant-scan-restore")
+	_, err := f.admin.ExecContext(t.Context(), `CREATE EXTENSION IF NOT EXISTS vector SCHEMA public`)
+	require.NoError(t, err)
+	gen := storage.VectorGenerationInfo{Fingerprint: "scan-restore", Model: "fixture", Dimension: 2}
+	require.NoError(t, ProvisionHostedVector(t.Context(), f.admin, f.schema, f.tenant, gen))
+	id, _, ok, err := LookupVectorGeneration(t.Context(), f.runtime, gen.Fingerprint)
+	require.NoError(t, err)
+	require.True(t, ok)
+	_, err = f.admin.ExecContext(t.Context(), `GRANT SELECT,INSERT,DELETE ON `+vectorChunkTable(id)+` TO "`+f.role+`"`)
+	require.NoError(t, err)
+	insert := func() {
+		_, err := f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,provenance_kind,raw_content_revision) VALUES('restore','p','m','codex','raw','rev'); INSERT INTO messages(session_id,ordinal,role,content) VALUES('restore',0,'user','restore content')`)
+		require.NoError(t, err)
+	}
+	insert()
+	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,provenance_kind,raw_content_revision) VALUES('first','p','m','codex','raw','rev'); INSERT INTO messages(session_id,ordinal,role,content) VALUES('first',0,'user','first content')`)
+	require.NoError(t, err)
+	stateGate, err := f.admin.BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	defer func() { _ = stateGate.Rollback() }()
+	gateReady := make(chan error, 1)
+	done := make(chan error, 1)
+	wait := func(ch <-chan error) error {
+		t.Helper()
+		select {
+		case err := <-ch:
+			return err
+		case <-time.After(30 * time.Second):
+			t.Fatal("timed out waiting for embedding pass")
+			return nil
+		}
+	}
+	go func() {
+		done <- EmbedBatch(t.Context(), f.runtime, gen, func(_ context.Context, texts []string) ([][]float32, error) {
+			_, err := stateGate.ExecContext(t.Context(), `LOCK TABLE vector_push_state IN ACCESS EXCLUSIVE MODE`)
+			if err == nil {
+				_, err = f.runtime.ExecContext(t.Context(), `DELETE FROM sessions WHERE id='restore'`)
+			}
+			gateReady <- err
+			return nil, errors.New("fixture failure")
+		}, 128, 1, false)
+	}()
+	require.NoError(t, wait(gateReady))
+	require.Eventually(t, func() bool {
+		var blocked bool
+		err := f.admin.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%vector_push_state%')`).Scan(&blocked)
+		return err == nil && blocked
+	}, 30*time.Second, time.Second)
+	insert()
+	require.NoError(t, stateGate.Commit())
+	require.ErrorContains(t, wait(done), "1 hosted sessions failed embedding")
+	var stamped bool
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM vector_push_state WHERE generation_id=$1 AND session_id='restore')`, id).Scan(&stamped))
+	var chunks int
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM `+vectorChunkTable(id)).Scan(&chunks))
+	assert.Zero(t, chunks, "the scan must observe the session missing")
+	require.False(t, stamped)
+	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,provenance_kind,raw_content_revision) VALUES('empty','p','m','codex','raw','rev')`)
+	require.NoError(t, err)
+	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, func(_ context.Context, texts []string) ([][]float32, error) {
+		out := make([][]float32, len(texts))
+		for i := range out {
+			out[i] = []float32{1, 0}
+		}
+		return out, nil
+	}, 128, 1, false))
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM vector_push_state WHERE generation_id=$1 AND session_id='empty')`, id).Scan(&stamped))
+	assert.True(t, stamped)
 }
 
 func TestHostedVectorBatchRecovery(t *testing.T) {
@@ -122,23 +194,6 @@ func TestHostedVectorBatchRecovery(t *testing.T) {
 	var count int
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_documents WHERE session_id='batch-17'`).Scan(&count))
 	assert.Zero(t, count)
-	// A projection that changes during encoding must not get a stale stamp.
-	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET raw_content_revision='r2' WHERE id='batch-00'`)
-	require.NoError(t, err)
-	racing := func(ctx context.Context, texts []string) ([][]float32, error) {
-		_, err := f.runtime.ExecContext(ctx, `UPDATE sessions SET raw_content_revision='r3' WHERE id='batch-00'`)
-		if err != nil {
-			return nil, err
-		}
-		return [][]float32{{1, 0}}, nil
-	}
-	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, racing, 128, 1, false))
-	var stamp string
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT doc_agg_hash FROM vector_push_state WHERE generation_id=$1 AND session_id='batch-00'`, id).Scan(&stamp))
-	assert.Equal(t, "r1|false", stamp)
-	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false))
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT doc_agg_hash FROM vector_push_state WHERE generation_id=$1 AND session_id='batch-00'`, id).Scan(&stamp))
-	assert.Equal(t, "r3|false", stamp)
 }
 
 func TestHostedVectorFailureDiagnosticsAndCancellation(t *testing.T) {

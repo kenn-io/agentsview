@@ -85,8 +85,12 @@ func EmbedBatch(ctx context.Context, pg *sql.DB, generation storage.VectorGenera
 		for _, item := range page {
 			cursor = item.id
 			var units []db.EmbeddableUnit
-			if err := scanHostedUnits(ctx, pg, item.id, includeAutomated, vector.RunMaxRunes(maxInputChars), func(u db.EmbeddableUnit) error { units = append(units, u); return nil }); err != nil {
+			exists, err := scanHostedSession(ctx, pg, item.id, includeAutomated, vector.RunMaxRunes(maxInputChars), func(u db.EmbeddableUnit) error { units = append(units, u); return nil })
+			if err != nil {
 				return fmt.Errorf("scanning session %s: %w", item.id, err)
+			}
+			if !exists {
+				continue
 			}
 			docs, err := vector.UnitDocuments(units)
 			if err != nil {
