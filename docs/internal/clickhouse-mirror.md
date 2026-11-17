@@ -237,7 +237,18 @@ stored message again. That is the usual case for an active session: a push
 often runs while the last message waits on a tool result, and the result fills
 in that message's tool call row when it arrives. In a test on a real archive,
 three of five sessions that grew between two pushes had changed only that row.
-Then the push:
+
+The hash covers the rows the session row published, which can differ from the
+rows a read sees. Another archive's push of the same session can stop after
+writing its rows and before publishing its session row. Its rows carry a newer
+version, so they win over the published rows on read, and its delete can remove
+published rows. Before keeping rows, the push reads the versions and count of
+the stored rows at or below the last kept ordinal in `messages`, `tool_calls`,
+`tool_result_events`, and `image_text`. Any version below `content_version` or
+above the session row's `push_version`, or a message count other than the kept
+count, makes the push rewrite the whole session. Push versions follow start
+time, so the check misses only a push of the same session that runs at the same
+time. Then the push:
 
 1. Inserts the rows of the later messages, and the image text anchored after
    the last kept message, at the new version.

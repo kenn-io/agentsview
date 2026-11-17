@@ -5,7 +5,9 @@ package clickhouse
 import (
 	"database/sql"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -68,45 +70,66 @@ func TestPushAppendsMessagesToGrownSession(t *testing.T) {
 }
 
 // Tool calls, result events, and terminal event snapshots stay readable when
-// a push appends to a session whose earlier messages carry them.
+// pushes append to a session whose earlier messages carry them.
 func TestPushAppendKeepsToolRowsOfEarlierMessages(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	local, s, conn := changedOnlyFixture(t)
-	var lastTerminalBefore sql.NullTime
-	require.NoError(t, conn.QueryRowContext(ctx,
-		"SELECT last_terminal_at FROM terminal_event_snapshots WHERE session_id = ?", fixtureAlphaID,
-	).Scan(&lastTerminalBefore))
+	const finishedAt = "2026-01-10T00:06:00.000Z"
+	sess, err := local.GetSessionFull(ctx, fixtureAlphaID)
+	require.NoError(t, err)
+	call := db.ToolCall{
+		ToolName: "Bash", Category: "Bash", ToolUseID: "finished", InputJSON: `{"command":"make"}`,
+		ResultEvents: []db.ToolResultEvent{{
+			ToolUseID: "finished", Source: "tool_execution", Status: "completed",
+			Content: "build ok", ContentLength: len("build ok"), Timestamp: finishedAt,
+		}},
+	}
+	ran := fixtureMessage(fixtureAlphaID, 2, "assistant", "ran make", "2026-01-10T00:05:00.000Z", call)
+	sess.MessageCount, sess.EndedAt, sess.LocalModifiedAt = 3, new(finishedAt), new(finishedAt)
+	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+		Session: *sess, Messages: []db.Message{ran}, DataVersion: 1,
+	}})
+	require.NoError(t, err)
+	_, err = s.Push(ctx, false, nil)
+	require.NoError(t, err)
 	before := readPushVersions(t, conn, fixtureAlphaID)
 
-	growSession(t, local, fixtureAlphaID, "alpha third", "2026-01-10T00:10:00.000Z")
-	res, err := s.Push(ctx, false, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, res.SessionsAppended)
-	assert.Equal(t, 1, res.MessagesPushed)
+	for i, grown := range []struct{ content, ts string }{
+		{"alpha fourth", "2026-01-10T00:10:00.000Z"},
+		{"alpha fifth", "2026-01-10T00:20:00.000Z"},
+	} {
+		growSession(t, local, fixtureAlphaID, grown.content, grown.ts)
+		res, err := s.Push(ctx, false, nil)
+		require.NoError(t, err)
+		assert.Equal(t, 1, res.SessionsAppended)
+		assert.Equal(t, 1, res.MessagesPushed)
 
-	after := readPushVersions(t, conn, fixtureAlphaID)
-	assert.Equal(t, before.content, after.content)
-	assert.Equal(t, slices.Concat(before.messages, []uint64{after.published}), after.messages)
-	var toolCalls, results int
-	require.NoError(t, conn.QueryRowContext(ctx,
-		"SELECT count() FROM tool_calls WHERE session_id = ?", fixtureAlphaID).Scan(&toolCalls))
-	require.NoError(t, conn.QueryRowContext(ctx,
-		"SELECT count() FROM tool_result_events WHERE session_id = ?", fixtureAlphaID).Scan(&results))
-	assert.Equal(t, 2, toolCalls)
-	assert.Equal(t, 1, results)
+		after := readPushVersions(t, conn, fixtureAlphaID)
+		assert.Equal(t, before.content, after.content, "append %d keeps the oldest rows", i+1)
+		assert.Equal(t, slices.Concat(before.messages, []uint64{after.published}), after.messages)
+		var toolCalls, results int
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"SELECT count() FROM tool_calls WHERE session_id = ?", fixtureAlphaID).Scan(&toolCalls))
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"SELECT count() FROM tool_result_events WHERE session_id = ?", fixtureAlphaID).Scan(&results))
+		assert.Equal(t, 3, toolCalls)
+		assert.Equal(t, 2, results)
 
-	var terminalVersion uint64
-	var lastTerminalAfter sql.NullTime
-	require.NoError(t, conn.QueryRowContext(ctx,
-		"SELECT push_version, last_terminal_at FROM terminal_event_snapshots WHERE session_id = ?", fixtureAlphaID,
-	).Scan(&terminalVersion, &lastTerminalAfter))
-	assert.Equal(t, after.published, terminalVersion)
-	assert.Equal(t, lastTerminalBefore, lastTerminalAfter, "the kept result event still counts")
+		var terminalVersion uint64
+		var lastTerminal sql.NullTime
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"SELECT push_version, last_terminal_at FROM terminal_event_snapshots WHERE session_id = ?", fixtureAlphaID,
+		).Scan(&terminalVersion, &lastTerminal))
+		assert.Equal(t, after.published, terminalVersion)
+		require.True(t, lastTerminal.Valid, "append %d keeps the finished tool call's completion time", i+1)
+		assert.Equal(t, time.Date(2026, 1, 10, 0, 6, 0, 0, time.UTC), lastTerminal.Time.UTC())
 
-	store := newTestStore(t, conn, s.target)
-	_, err = store.SessionSourceBinding(ctx, fixtureAlphaID)
-	require.NoError(t, err)
+		store := newTestStore(t, conn, s.target)
+		_, err = store.SessionSourceBinding(ctx, fixtureAlphaID)
+		require.NoError(t, err)
+		before = after
+	}
 }
 
 // A change to an earlier message rewrites the whole session even when the
@@ -224,4 +247,54 @@ func TestPushAppendRewritesLastStoredMessageWhenItsToolResultArrives(t *testing.
 	again, err := s.Push(ctx, false, nil)
 	require.NoError(t, err)
 	assert.Zero(t, again.SessionsPushed)
+}
+
+// Rows another archive's push of the same session left among the rows an
+// append would keep, without publishing a session row, make the push rewrite
+// the session, so the transcript holds only this archive's messages.
+func TestPushRewritesSessionWhenKeptRowsAreUnpublished(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		setup string
+	}{
+		{
+			name: "newer row from another push",
+			setup: `INSERT INTO messages SELECT * REPLACE ('other archive' AS content, push_version + 1 AS push_version)
+				FROM (SELECT * FROM messages WHERE session_id = ? AND ordinal = 0)`,
+		},
+		{
+			name:  "kept row deleted by another push",
+			setup: "DELETE FROM messages WHERE session_id = ? AND ordinal = 0",
+		},
+		{
+			name: "older row exposed after the kept row was deleted",
+			setup: `INSERT INTO messages SELECT * REPLACE ('older push' AS content, push_version - 1 AS push_version)
+				FROM (SELECT * FROM messages WHERE session_id = ? AND ordinal = 0);
+				DELETE FROM messages WHERE session_id = ? AND ordinal = 0 AND content = 'alpha first'`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			local, s, conn := changedOnlyFixture(t)
+			for stmt := range strings.SplitSeq(tc.setup, ";") {
+				_, err := conn.ExecContext(ctx, stmt, fixtureAlphaID)
+				require.NoError(t, err)
+			}
+
+			growSession(t, local, fixtureAlphaID, "alpha third", "2026-01-10T00:10:00.000Z")
+			res, err := s.Push(ctx, false, nil)
+			require.NoError(t, err)
+			assert.Zero(t, res.SessionsAppended)
+			assert.Equal(t, 3, res.MessagesPushed)
+
+			store := newTestStore(t, conn, s.target)
+			stored, err := store.GetAllMessages(ctx, fixtureAlphaID)
+			require.NoError(t, err)
+			require.Len(t, stored, 3)
+			assert.Equal(t, "alpha first", stored[0].Content)
+			assert.Equal(t, "alpha third", stored[2].Content)
+		})
+	}
 }

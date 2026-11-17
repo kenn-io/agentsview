@@ -1064,11 +1064,13 @@ func (s *Sync) pushSessionBatch(
 	ctx context.Context, batch []db.Session, writes map[string]sessionWrite,
 	fingerprints map[string]sessionFingerprint, version uint64, loaded map[string]sessionPayload,
 ) ([]sessionWritten, error) {
-	var content []contentWrite
-	var links, published []sessionPayload
-	publications := make(map[string]sessionPublication, len(batch))
-	keptThrough := map[string]int{}
-	written := make([]sessionWritten, 0, len(batch))
+	type plannedWrite struct {
+		p             sessionPayload
+		w             sessionWrite
+		rows, leading string
+	}
+	planned := make([]plannedWrite, 0, len(batch))
+	kept := map[string]keptRows{}
 	for _, sess := range batch {
 		p, ok := loaded[sess.ID]
 		if !ok {
@@ -1111,21 +1113,47 @@ func (s *Sync) pushSessionBatch(
 				w = rewriteSession
 			}
 			if w.keepMessages > 0 {
-				keptThrough[sess.ID] = p.messages[w.keepMessages-1].Ordinal
+				kept[sess.ID] = keptRows{
+					through: p.messages[w.keepMessages-1].Ordinal, messages: w.keepMessages,
+					contentVersion: w.keptVersion,
+				}
+			}
+		}
+		planned = append(planned, plannedWrite{p: p, w: w, rows: rows, leading: leading})
+	}
+	keptPublished, err := s.keptRowsPublished(ctx, kept)
+	if err != nil {
+		return nil, err
+	}
+	var content []contentWrite
+	var links, published []sessionPayload
+	publications := make(map[string]sessionPublication, len(batch))
+	keptThrough := map[string]int{}
+	written := make([]sessionWritten, 0, len(batch))
+	for _, pw := range planned {
+		p, w := pw.p, pw.w
+		id := p.session.ID
+		if w.keepMessages > 0 {
+			if keptPublished[id] {
+				keptThrough[id] = kept[id].through
+			} else {
+				// Another push wrote or removed rows among the ones this push
+				// would keep, so they no longer hold this archive's content.
+				w = rewriteSession
 			}
 		}
 		n := 0
 		switch {
 		case w.content:
 			content = append(content, contentWrite{payload: p, keep: w.keepMessages})
-			publication := sessionPublication{contentVersion: version, messageRows: rows, leadingRows: leading}
+			publication := sessionPublication{contentVersion: version, messageRows: pw.rows, leadingRows: pw.leading}
 			if w.keepMessages > 0 {
 				publication.contentVersion = w.keptVersion
 			}
-			publications[sess.ID] = publication
+			publications[id] = publication
 			n = len(p.messages) - w.keepMessages
 		case w.row:
-			publications[sess.ID] = sessionPublication{
+			publications[id] = sessionPublication{
 				contentVersion: w.keptVersion, messageRows: w.keptMessageRows, leadingRows: w.keptLeadingRows,
 			}
 		}
@@ -1205,7 +1233,7 @@ func (s *Sync) deleteVanishedRows(
 			var bound string
 			var boundArgs []any
 			if column, ok := messageOrdinalColumn[table]; ok {
-				bound, boundArgs = keptOrdinalBound(column, batchIDs, keptThrough)
+				bound, boundArgs = keptOrdinalBound(column, ">", batchIDs, keptThrough)
 			}
 			query, err := vanishedRowsDeleteSQL(table, placeholders, bound)
 			if err != nil {

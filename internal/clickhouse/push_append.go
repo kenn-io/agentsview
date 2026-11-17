@@ -2,10 +2,12 @@ package clickhouse
 
 import (
 	"cmp"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/v2"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -123,11 +125,13 @@ func ordinalsIncrease(messages []db.Message) bool {
 	return true
 }
 
-// keptOrdinalBound renders the condition that limits a vanished-rows delete
-// on an ordinal-keyed table to rows after the last kept ordinal of each
-// appended session. Sessions not in keptThrough are bounded by nothing. It
-// returns the SQL and its arguments, or "" when no session keeps rows.
-func keptOrdinalBound(column string, ids []string, keptThrough map[string]int) (string, []any) {
+// keptOrdinalBound renders the condition that compares an ordinal-keyed
+// table's column, with op, to the last kept ordinal of each appended session:
+// ">" limits a vanished-rows delete to the rows after the kept ones, and "<="
+// selects the kept rows. Sessions not in keptThrough are compared with the
+// lowest Int64. It returns the SQL and its arguments, or "" when no session
+// keeps rows.
+func keptOrdinalBound(column, op string, ids []string, keptThrough map[string]int) (string, []any) {
 	var from []string
 	var args, to []any
 	for _, id := range ids {
@@ -141,6 +145,72 @@ func keptOrdinalBound(column string, ids []string, keptThrough map[string]int) (
 		return "", nil
 	}
 	list := strings.Join(from, ",")
-	return " AND " + column + " > transform(session_id, [" + list + "], CAST([" + list +
+	return " AND " + column + " " + op + " transform(session_id, [" + list + "], CAST([" + list +
 		"] AS Array(Int64)), toInt64(-9223372036854775808))", append(args, to...)
+}
+
+// keptRows describes the stored rows an append keeps for one session: those
+// of its messages through ordinal through, which number messages, written at
+// or after contentVersion.
+type keptRows struct {
+	through        int
+	messages       int
+	contentVersion uint64
+}
+
+// keptRowsTables are the tables whose kept rows an append checks.
+// usage_messages copies the messages rows, so checking messages covers it.
+var keptRowsTables = []string{"messages", "tool_calls", "tool_result_events", "image_text"}
+
+// keptRowsPublished reports, for each session in kept, whether the mirror
+// still holds exactly the rows the session row published for the kept
+// messages. Another archive's push of the same session that stopped before
+// publishing its session row leaves rows at a newer version, which win on
+// read over the rows an append would keep, and its delete can remove kept
+// rows. Either way the append would publish a mix of two archives' rows, so
+// the push rewrites the session instead. Pushes are versioned by start time,
+// so this misses only a push that runs at the same time as this one.
+func (s *Sync) keptRowsPublished(ctx context.Context, kept map[string]keptRows) (map[string]bool, error) {
+	out := make(map[string]bool, len(kept))
+	through := make(map[string]int, len(kept))
+	for id, k := range kept {
+		through[id] = k.through
+	}
+	for batch := range idBatches(slices.Sorted(maps.Keys(kept))) {
+		placeholders, idArgs := inArgs(batch)
+		parts := make([]string, 0, len(keptRowsTables))
+		var args []any
+		for _, table := range keptRowsTables {
+			bound, boundArgs := keptOrdinalBound(messageOrdinalColumn[table], "<=", batch, through)
+			parts = append(parts, "SELECT '"+table+"' AS t, session_id, push_version FROM "+table+
+				" WHERE session_id IN ("+placeholders+")"+bound)
+			args = slices.Concat(args, idArgs, boundArgs)
+		}
+		args = slices.Concat(args, idArgs)
+		if err := func() error {
+			rows, err := s.conn.QueryContext(ctx, `SELECT r.session_id, r.messages, r.oldest, r.newest, s.push_version
+				FROM (SELECT session_id, countIf(t = 'messages') AS messages,
+						min(push_version) AS oldest, max(push_version) AS newest
+					FROM (`+strings.Join(parts, " UNION ALL ")+`) GROUP BY session_id) AS r
+				INNER JOIN (SELECT id, push_version FROM sessions WHERE id IN (`+placeholders+`)) AS s
+				ON s.id = r.session_id`, args...)
+			if err != nil {
+				return fmt.Errorf("reading clickhouse kept message row versions: %w", err)
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var id string
+				var messages, oldest, newest, published uint64
+				if err := rows.Scan(&id, &messages, &oldest, &newest, &published); err != nil {
+					return fmt.Errorf("scanning clickhouse kept message row versions: %w", err)
+				}
+				k := kept[id]
+				out[id] = messages == uint64(k.messages) && oldest >= k.contentVersion && newest <= published
+			}
+			return rows.Err()
+		}(); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
