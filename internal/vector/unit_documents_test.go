@@ -149,6 +149,7 @@ func TestFillUnitDocumentsSpoolsPagesAndChunks(t *testing.T) {
 	require.NoError(t, err)
 	spool, err := NewVectorSpool()
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, spool.Close()) })
 	encode := func(_ context.Context, texts []string) ([][]float32, error) {
 		out := make([][]float32, len(texts))
 		for i := range out {
@@ -165,7 +166,6 @@ func TestFillUnitDocumentsSpoolsPagesAndChunks(t *testing.T) {
 		require.Greater(t, len(chunks), 1)
 		assert.Equal(t, []float32{1, 0}, chunks[0].Embedding)
 	}
-	require.NoError(t, spool.Close())
 }
 
 func TestFillUnitDocumentsSpoolWriteFailure(t *testing.T) {

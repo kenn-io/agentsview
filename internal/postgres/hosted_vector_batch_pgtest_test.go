@@ -246,37 +246,6 @@ func TestHostedVectorBatchRecovery(t *testing.T) {
 	assert.Equal(t, 1, cancelCalls)
 }
 
-func TestHostedVectorCoverageIsGenerationSpecific(t *testing.T) {
-	f := newHostedFixture(t, "tenant-partial")
-	_, err := f.admin.ExecContext(t.Context(), `CREATE EXTENSION IF NOT EXISTS vector SCHEMA public`)
-	require.NoError(t, err)
-	gen := storage.VectorGenerationInfo{Fingerprint: "partial-fixture", Model: "fixture", Dimension: 2}
-	other := storage.VectorGenerationInfo{Fingerprint: "partial-other-generation", Model: "fixture", Dimension: 2}
-	for _, g := range []storage.VectorGenerationInfo{gen, other} {
-		require.NoError(t, ProvisionHostedVector(t.Context(), f.admin, f.schema, f.tenant, g))
-		id, _, ok, err := LookupVectorGeneration(t.Context(), f.runtime, g.Fingerprint)
-		require.NoError(t, err)
-		require.True(t, ok)
-		_, err = f.admin.ExecContext(t.Context(), `GRANT SELECT,INSERT,DELETE ON `+vectorChunkTable(id)+` TO "`+f.role+`"`)
-		require.NoError(t, err)
-	}
-	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,provenance_kind,raw_content_revision) VALUES('session','p','m','codex','raw','rev'); INSERT INTO messages(session_id,ordinal,role,content) VALUES('session',0,'user','first'),('session',1,'user','last')`)
-	require.NoError(t, err)
-	var calls []string
-	encode := func(_ context.Context, texts []string) ([][]float32, error) {
-		calls = append(calls, texts...)
-		out := make([][]float32, len(texts))
-		for i := range out {
-			out[i] = []float32{1, 0}
-		}
-		return out, nil
-	}
-	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false))
-	calls = nil
-	require.NoError(t, EmbedBatch(t.Context(), f.runtime, other, encode, 128, 1, false))
-	assert.Equal(t, []string{"first", "last"}, calls)
-}
-
 func TestHostedVectorSpoolCleanupOnFailures(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("TMPDIR", dir)

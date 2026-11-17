@@ -54,6 +54,16 @@ func TestHostedVectorRevisionReusesUnchangedDocuments(t *testing.T) {
 	}
 	require.NoError(t, rows.Err())
 	assert.Equal(t, []string{"stable", "new"}, contents)
+	other := storage.VectorGenerationInfo{Fingerprint: "reuse-other", Model: "fixture", Dimension: 2}
+	require.NoError(t, ProvisionHostedVector(t.Context(), f.admin, f.schema, f.tenant, other))
+	otherID, _, ok, err := LookupVectorGeneration(t.Context(), f.runtime, other.Fingerprint)
+	require.NoError(t, err)
+	require.True(t, ok)
+	_, err = f.admin.ExecContext(t.Context(), `GRANT SELECT,INSERT,DELETE ON `+vectorChunkTable(otherID)+` TO "`+f.role+`"`)
+	require.NoError(t, err)
+	calls = nil
+	require.NoError(t, EmbedBatch(t.Context(), f.runtime, other, encode, 128, 1, false))
+	assert.Equal(t, []string{"stable", "new"}, calls)
 }
 
 func TestHostedVectorPermanentRejectionWaitsForChange(t *testing.T) {

@@ -28,7 +28,7 @@ import (
 	"go.kenn.io/agentsview/internal/rawsync"
 )
 
-func TestHostedProvisionUsageDoesNotCreateVectorGeneration(t *testing.T) {
+func TestHostedProvisionVectorGenerationFollowsArchiveContent(t *testing.T) {
 	cfg, admin := hostedRuntimeConfig(t)
 	_, err := admin.ExecContext(t.Context(), `CREATE EXTENSION IF NOT EXISTS vector SCHEMA public`)
 	require.NoError(t, err)
@@ -37,14 +37,17 @@ func TestHostedProvisionUsageDoesNotCreateVectorGeneration(t *testing.T) {
 	t.Setenv("AGENTSVIEW_PG_SCHEMA", "")
 	configText := fmt.Sprintf("archive_content = \"usage\"\n[pg.owner]\nurl = %q\nschema = %q\nraw_tenant = %q\n[vector]\nenabled = true\n", os.Getenv("TEST_PG_URL"), cfg.PG.Schema, cfg.PG.RawTenant)
 	require.NoError(t, os.WriteFile(filepath.Join(cfg.DataDir, "config.toml"), []byte(configText), 0600))
-	loaded, err := config.LoadMinimalFor(config.ScopePG | config.ScopeVector)
-	require.NoError(t, err)
-	assert.True(t, loaded.Vector.Enabled)
 	output, err := executeCommand(newPGHostedProvisionCommand(), "owner")
 	require.NoError(t, err, output)
 	var count int
 	require.NoError(t, admin.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_generations`).Scan(&count))
 	assert.Zero(t, count)
+	configText = fmt.Sprintf("archive_content = \"full\"\n[pg.owner]\nurl = %q\nschema = %q\nraw_tenant = %q\n[vector]\nenabled = true\n", os.Getenv("TEST_PG_URL"), cfg.PG.Schema, cfg.PG.RawTenant)
+	require.NoError(t, os.WriteFile(filepath.Join(cfg.DataDir, "config.toml"), []byte(configText), 0600))
+	output, err = executeCommand(newPGHostedProvisionCommand(), "owner")
+	require.NoError(t, err, output)
+	require.NoError(t, admin.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_generations`).Scan(&count))
+	assert.Equal(t, 1, count)
 }
 
 func hostedRuntimeConfig(t *testing.T) (config.Config, *sql.DB) {

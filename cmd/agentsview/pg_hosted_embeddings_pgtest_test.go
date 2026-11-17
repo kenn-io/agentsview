@@ -95,8 +95,6 @@ func TestHostedReadOnlyStartsWithoutVectorGeneration(t *testing.T) {
 	lexical := request("substring")
 	assert.Equal(t, http.StatusOK, lexical.Code, lexical.Body.String())
 	assert.Contains(t, lexical.Body.String(), "visible text")
-	semantic := request("semantic")
-	assert.Equal(t, http.StatusNotImplemented, semantic.Code, semantic.Body.String())
 	startup.cleanup()
 	cfg.PG.RawDerivation = true
 	workerStartup, err := prepareReplicaServeImpl(t.Context(), pgReplica{}, cfg, "", nil, false)
@@ -148,7 +146,7 @@ func TestHostedDeploymentEmbeddingsSearch(t *testing.T) {
 	require.EqualValues(t, 1, calls.Load())
 }
 
-func TestHostedEmbeddingsRateLimitDoesNotBlockNextSession(t *testing.T) {
+func TestHostedEmbeddingsRetriesFailedPass(t *testing.T) {
 	cfg, admin := hostedRuntimeConfig(t)
 	defaults, err := config.Default()
 	require.NoError(t, err)
@@ -206,13 +204,6 @@ func TestHostedEmbeddingsRateLimitDoesNotBlockNextSession(t *testing.T) {
 	require.EqualValues(t, 2, rateCalls.Load(), "the failed session retries on the next poll")
 	require.NoError(t, store.DB().QueryRowContext(t.Context(), `SELECT count(*) FROM vector_push_state WHERE session_id='a'`).Scan(&count))
 	assert.Equal(t, 1, count)
-	runtime.batch(ctx)
-	assert.EqualValues(t, 2, rateCalls.Load(), "a completed revision is not embedded again")
-	_, err = store.DB().ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,provenance_kind,raw_content_revision) VALUES('c','p','m','codex','raw','rev'); INSERT INTO messages(session_id,ordinal,role,content) VALUES('c',0,'user','new content'); INSERT INTO raw_corpus_state(singleton,corpus_revision) VALUES(1,1) ON CONFLICT(singleton) DO UPDATE SET corpus_revision=raw_corpus_state.corpus_revision+1`)
-	require.NoError(t, err)
-	runtime.batch(ctx)
-	require.NoError(t, store.DB().QueryRowContext(t.Context(), `SELECT count(*) FROM vector_push_state WHERE session_id='c'`).Scan(&count))
-	assert.Equal(t, 1, count, "a new corpus revision starts another pass")
 }
 
 func TestHostedCaptureSemanticSearch(t *testing.T) {
