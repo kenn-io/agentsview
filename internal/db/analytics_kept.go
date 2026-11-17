@@ -28,8 +28,7 @@ func keptAnalytics[T analyticsReport](ctx context.Context, db *DB, panel string,
 		return load(ctx, f)
 	}
 	slot := panel + "|" + string(key)
-	var version string
-	var savedVersion string
+	var version, savedVersion string
 	if SavedPanel(panel) {
 		var common, panelToken, scope string
 		err := db.getReader().QueryRowContext(ctx, `SELECT

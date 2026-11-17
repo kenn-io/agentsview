@@ -71,7 +71,7 @@ func keptAnalyticsWith[T any](ctx context.Context, s *Store, panel string, f db.
 // keptDashboardVersion names a saved Dashboard panel by the random tokens its
 // inputs rotate, so unrelated writes leave it reusable.
 func (s *Store) keptDashboardVersion(ctx context.Context, panel string, f db.AnalyticsFilter) string {
-	if !db.SavedPanel(panel) || s.readTx != nil || s.hostedRelations {
+	if !db.SavedPanel(panel) {
 		return ""
 	}
 	var common, token, scope string
@@ -79,7 +79,7 @@ func (s *Store) keptDashboardVersion(ctx context.Context, panel string, f db.Ana
  COALESCE((SELECT value FROM sync_metadata WHERE key='dashboard_common'),''),
  COALESCE((SELECT value FROM sync_metadata WHERE key=$1),''),
  COALESCE((SELECT value FROM sync_metadata WHERE key='dashboard_scope'),'')
- WHERE NOT pg_is_in_recovery() AND EXISTS (SELECT 1 FROM sync_metadata WHERE key='usage_change_journal_version' AND value=$2)`, "dashboard_"+panel, strconv.Itoa(usageChangeJournalVersionPG)).Scan(&common, &token, &scope)
+ WHERE EXISTS (SELECT 1 FROM sync_metadata WHERE key='usage_change_journal_version' AND value=$2)`, "dashboard_"+panel, strconv.Itoa(usageChangeJournalVersionPG)).Scan(&common, &token, &scope)
 	if err != nil {
 		return ""
 	}

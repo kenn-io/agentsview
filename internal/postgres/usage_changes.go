@@ -296,11 +296,11 @@ func installDashboardJournalPG(ctx context.Context, tx *sql.Tx) error {
 	fmt.Fprintf(&ddl, `CREATE OR REPLACE FUNCTION mark_usage_sessions() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
  SET search_path = pg_catalog, %s, pg_temp AS $journal$%s$journal$;`, quoted, sessionBody)
 	tables := []struct {
-		name, sessionColumn string
-		groups              map[string][]string
+		name   string
+		groups map[string][]string
 	}{
-		{"messages", "session_id", map[string][]string{"tools": db.DashboardToolsMessageInputs, "velocity": db.DashboardVelocityMessageInputs, "signals": db.DashboardSignalsMessageInputs, "scope": db.DashboardScopeMessageInputs}},
-		{"tool_calls", "session_id", map[string][]string{"tools": append([]string{"message_ordinal"}, db.DashboardToolsCallInputs...), "velocity": append([]string{"message_ordinal"}, db.DashboardVelocityCallInputs...)}},
+		{"messages", map[string][]string{"tools": db.DashboardToolsMessageInputs, "velocity": db.DashboardVelocityMessageInputs, "signals": db.DashboardSignalsMessageInputs, "scope": db.DashboardScopeMessageInputs}},
+		{"tool_calls", map[string][]string{"tools": append([]string{"message_ordinal"}, db.DashboardToolsCallInputs...), "velocity": append([]string{"message_ordinal"}, db.DashboardVelocityCallInputs...)}},
 	}
 	for _, table := range tables {
 		var body strings.Builder
@@ -312,18 +312,18 @@ func installDashboardJournalPG(ctx context.Context, tx *sql.Tx) error {
 			}
 			body.WriteString(dashboardChangeFlagPG(columns, group, "any_changed := true;"))
 		}
-		fmt.Fprintf(&body, `IF any_changed THEN
+		body.WriteString(`IF any_changed THEN
  PERFORM set_config('agentsview.uc_stamped_' || 'usage_session_changes'::regclass::oid, '', true);
  IF TG_OP = 'INSERT' THEN
- INSERT INTO usage_session_changes(session_id,revision) SELECT DISTINCT %[1]s,0 FROM new_rows ON CONFLICT(session_id) DO UPDATE SET revision=0;
+ INSERT INTO usage_session_changes(session_id,revision) SELECT DISTINCT session_id,0 FROM new_rows ON CONFLICT(session_id) DO UPDATE SET revision=0;
  ELSIF TG_OP = 'DELETE' THEN
- INSERT INTO usage_session_changes(session_id,revision) SELECT DISTINCT %[1]s,0 FROM old_rows ON CONFLICT(session_id) DO UPDATE SET revision=0;
+ INSERT INTO usage_session_changes(session_id,revision) SELECT DISTINCT session_id,0 FROM old_rows ON CONFLICT(session_id) DO UPDATE SET revision=0;
  ELSE
- INSERT INTO usage_session_changes(session_id,revision) SELECT %[1]s,0 FROM (SELECT %[1]s FROM old_rows UNION SELECT %[1]s FROM new_rows) changed_rows ON CONFLICT(session_id) DO UPDATE SET revision=0;
+ INSERT INTO usage_session_changes(session_id,revision) SELECT session_id,0 FROM (SELECT session_id FROM old_rows UNION SELECT session_id FROM new_rows) changed_rows ON CONFLICT(session_id) DO UPDATE SET revision=0;
  END IF;
  END IF;
  RETURN NULL;
- END;`, table.sessionColumn)
+ END;`)
 		function := "mark_dashboard_" + table.name
 		fmt.Fprintf(&ddl, `CREATE OR REPLACE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, %s, pg_temp AS $dashboard$%s$dashboard$;
  REVOKE ALL ON FUNCTION %s() FROM PUBLIC;`, function, quoted, body.String(), function)
