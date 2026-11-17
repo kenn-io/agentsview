@@ -12,10 +12,55 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/kit/embedclient"
 	kitvec "go.kenn.io/kit/vector"
 )
+
+func TestHostedVectorGenerationScopeSwitch(t *testing.T) {
+	f := newProjectionFixture(t)
+	_, err := f.admin.ExecContext(t.Context(), `CREATE EXTENSION IF NOT EXISTS vector SCHEMA public`)
+	require.NoError(t, err)
+	a := storage.VectorGenerationInfo{Fingerprint: "scope-a", Model: "fixture-a", Dimension: 2}
+	b := storage.VectorGenerationInfo{Fingerprint: "scope-b", Model: "fixture-b", Dimension: 2}
+	var aID int64
+	for _, gen := range []storage.VectorGenerationInfo{a, b} {
+		require.NoError(t, ProvisionHostedVector(t.Context(), f.admin, f.schema, f.tenant, gen))
+		id, _, ok, err := LookupVectorGeneration(t.Context(), f.runtime, gen.Fingerprint)
+		require.NoError(t, err)
+		require.True(t, ok)
+		_, err = f.admin.ExecContext(t.Context(), `GRANT SELECT,INSERT,DELETE ON `+vectorChunkTable(id)+` TO "`+f.role+`"`)
+		require.NoError(t, err)
+		if gen.Fingerprint == a.Fingerprint {
+			aID = id
+		}
+	}
+	manifest, _ := f.accept(t, "device-a", "first", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, manifest), manifest, projectionOutcome("searchable content")))
+	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET is_automated=true`)
+	require.NoError(t, err)
+	encode := func(_ context.Context, texts []string) ([][]float32, error) {
+		vectors := make([][]float32, len(texts))
+		for i := range vectors {
+			vectors[i] = []float32{1, 0}
+		}
+		return vectors, nil
+	}
+	hosted, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
+	require.NoError(t, err)
+	hosted.SetVectorSearcher(NewVectorSearcher(f.runtime, aID, 2, 128, func(context.Context, string) ([]float32, error) { return []float32{1, 0}, nil }))
+	search := func() db.ContentSearchPage {
+		page, err := hosted.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "searchable content", Mode: "semantic", IncludeOneShot: true, IncludeAutomated: true, Limit: 10})
+		require.NoError(t, err)
+		return page
+	}
+	require.NoError(t, EmbedBatch(t.Context(), f.runtime, a, encode, 128, 1, true))
+	require.Len(t, search().Matches, 2)
+	require.NoError(t, EmbedBatch(t.Context(), f.runtime, b, encode, 128, 1, false))
+	require.NoError(t, EmbedBatch(t.Context(), f.runtime, a, encode, 128, 1, true))
+	require.Len(t, search().Matches, 2)
+}
 
 func TestHostedVectorBatchRecovery(t *testing.T) {
 	f := newHostedFixture(t, "tenant-batch")

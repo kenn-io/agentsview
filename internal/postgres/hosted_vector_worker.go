@@ -190,7 +190,14 @@ func writeHostedVectors(ctx context.Context, pg *sql.DB, scope vectorPushScope, 
 	if partial {
 		stamp = "partial|" + stamp
 	}
-	if _, err = writeSessionVectorsKeeping(ctx, tx, scope, id, stamp, docs, covered); err != nil {
+	outcome, err := writeSessionVectorsKeeping(ctx, tx, scope, id, stamp, docs, covered)
+	if err != nil {
+		return err
+	}
+	if outcome.deleted > 0 {
+		_, err = tx.ExecContext(ctx, `DELETE FROM vector_push_state WHERE session_id=$1 AND generation_id<>$2`, id, scope.gen.id)
+	}
+	if err != nil {
 		return err
 	}
 	return tx.Commit()
