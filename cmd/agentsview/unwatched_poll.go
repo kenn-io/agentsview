@@ -20,10 +20,12 @@ import (
 var errUnwatchedPollStopped = errors.New("unwatched poll coordinator stopped")
 
 type unwatchedPollSyncer interface {
-	// ReconcileProviderRootsGrouped runs one bounded pass per provider group
-	// while sharing a single archive-sized epilogue across the batch; the
-	// coordinator issues exactly one grouped call per poll pass.
-	ReconcileProviderRootsGrouped(context.Context, []agentsync.ProviderRootsGroup) error
+	// PollProviderRootsGrouped runs one bounded pass per provider group,
+	// syncing only changed files for roots whose metadata it can compare and
+	// reconciling the rest with a single archive-sized epilogue. authoritative
+	// reconciles every root. The coordinator issues one call per poll pass,
+	// and a call with no groups releases retained metadata.
+	PollProviderRootsGrouped(context.Context, []agentsync.ProviderRootsGroup, bool) error
 }
 
 type unwatchedPollAdd struct {
@@ -86,9 +88,12 @@ type sharedUnwatchedPollCoordinator struct {
 	// at least this long, so polling occupies at most half of wall-clock time
 	// however slow a pass gets.
 	lastPassDuration time.Duration
-	stop             chan struct{}
-	done             chan struct{}
-	stopOnce         sync.Once
+	// pollRetained reports that a pass may have left metadata snapshots in
+	// the engine. Only the poll worker reads or writes it.
+	pollRetained bool
+	stop         chan struct{}
+	done         chan struct{}
+	stopOnce     sync.Once
 }
 
 func newUnwatchedPollCoordinator(
@@ -316,8 +321,14 @@ func (c *sharedUnwatchedPollCoordinator) runPollWorker() {
 			groups, pending := availableUnwatchedPollScopes(c.currentPollObligations())
 			totalRoots := countUniqueRoots(groups)
 			if totalRoots == 0 && len(pending) == 0 {
+				if c.pollRetained {
+					// No scope is polled now, so its metadata snapshots are idle.
+					c.pollRetained = false
+					c.doWork(func() { _ = c.engine.PollProviderRootsGrouped(c.workerCtx, nil, false) })
+				}
 				continue
 			}
+			c.pollRetained = true
 			if totalRoots > 0 {
 				log.Printf("polling %d unwatched root(s): %s", totalRoots, formatUnwatchedPollScopes(groups))
 			}
@@ -326,7 +337,8 @@ func (c *sharedUnwatchedPollCoordinator) runPollWorker() {
 				if c.workerCtx.Err() != nil {
 					return
 				}
-				if err := pollUnwatchedScopesOnce(c.workerCtx, c.engine, groups); err != nil {
+				// A pending release needs a full reconciliation of its scopes.
+				if err := pollUnwatchedScopesOnce(c.workerCtx, c.engine, groups, len(pending) > 0); err != nil {
 					log.Printf("polling unwatched roots failed after %s: %v",
 						c.now().Sub(startedAt).Round(time.Millisecond), err)
 					return
@@ -512,15 +524,16 @@ func unwatchedPollRoots(owned map[string]struct{}) []string {
 	return roots
 }
 
-// pollUnwatchedScopesOnce issues one grouped reconcile call covering every
-// agent group, in agent order. The engine attempts every group even when an
-// earlier one errors and shares one archive-sized epilogue (subagent linking,
-// skip-cache persistence) across the batch, so per-pass database work does not
-// multiply with the number of providers holding obligations.
+// pollUnwatchedScopesOnce issues one grouped poll call covering every agent
+// group, in agent order. The engine attempts every group even when an earlier
+// one errors and shares one archive-sized epilogue (subagent linking,
+// skip-cache persistence) across the reconciled groups, so per-pass database
+// work does not multiply with the number of providers holding obligations.
 func pollUnwatchedScopesOnce(
 	ctx context.Context,
 	engine unwatchedPollSyncer,
 	groups map[parser.AgentType][]string,
+	authoritative bool,
 ) error {
 	if len(groups) == 0 {
 		return nil
@@ -538,5 +551,5 @@ func pollUnwatchedScopesOnce(
 			Agent: agent, Roots: groups[agent],
 		})
 	}
-	return engine.ReconcileProviderRootsGrouped(ctx, grouped)
+	return engine.PollProviderRootsGrouped(ctx, grouped, authoritative)
 }

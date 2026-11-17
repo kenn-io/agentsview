@@ -501,6 +501,8 @@ type Engine struct {
 	// groupedReconcileGroupHook is a test seam called with syncMu held at the
 	// start of each ReconcileProviderRootsGrouped group; nil in production.
 	groupedReconcileGroupHook func(index int)
+	// pollScans holds the metadata snapshots polling compares between passes.
+	pollScans pollScanState
 	// claudeProjectSessionFiles is an observability seam for cardinality tests
 	// around duplicate-session discovery.
 	claudeProjectSessionFiles func(string) []parser.DiscoveredFile

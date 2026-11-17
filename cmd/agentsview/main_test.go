@@ -1010,8 +1010,8 @@ func (f *fakeUnwatchedPollSyncer) ReconcileProviderRoots(
 	return nil
 }
 
-func (f *fakeUnwatchedPollSyncer) ReconcileProviderRootsGrouped(
-	ctx context.Context, groups []agentsync.ProviderRootsGroup,
+func (f *fakeUnwatchedPollSyncer) PollProviderRootsGrouped(
+	ctx context.Context, groups []agentsync.ProviderRootsGroup, _ bool,
 ) error {
 	return reconcileGroupsSequentially(ctx, groups, f.ReconcileProviderRoots)
 }
@@ -1021,8 +1021,8 @@ func TestPollUnwatchedScopesOnceUsesScopedAuthoritativeReconciliation(t *testing
 	roots := []string{"/tmp/claude", "/tmp/codex"}
 	groups := map[parser.AgentType][]string{"": roots}
 
-	require.NoError(t, pollUnwatchedScopesOnce(t.Context(), fake, groups))
-	require.NoError(t, pollUnwatchedScopesOnce(t.Context(), fake, groups))
+	require.NoError(t, pollUnwatchedScopesOnce(t.Context(), fake, groups, false))
+	require.NoError(t, pollUnwatchedScopesOnce(t.Context(), fake, groups, false))
 
 	require.Equal(t, 2, fake.calls)
 	assert.Equal(t, roots, fake.callRoots[0])

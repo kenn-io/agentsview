@@ -76,8 +76,8 @@ func (s *cancelBlockingUnwatchedPollSyncer) ReconcileProviderRoots(
 	return ctx.Err()
 }
 
-func (s *cancelBlockingUnwatchedPollSyncer) ReconcileProviderRootsGrouped(
-	ctx context.Context, groups []agentsync.ProviderRootsGroup,
+func (s *cancelBlockingUnwatchedPollSyncer) PollProviderRootsGrouped(
+	ctx context.Context, groups []agentsync.ProviderRootsGroup, _ bool,
 ) error {
 	return reconcileGroupsSequentially(ctx, groups, s.ReconcileProviderRoots)
 }
@@ -105,8 +105,8 @@ func (s *blockingUnwatchedPollSyncer) ReconcileProviderRoots(
 	return nil
 }
 
-func (s *blockingUnwatchedPollSyncer) ReconcileProviderRootsGrouped(
-	ctx context.Context, groups []agentsync.ProviderRootsGroup,
+func (s *blockingUnwatchedPollSyncer) PollProviderRootsGrouped(
+	ctx context.Context, groups []agentsync.ProviderRootsGroup, _ bool,
 ) error {
 	return reconcileGroupsSequentially(ctx, groups, s.ReconcileProviderRoots)
 }
@@ -134,8 +134,8 @@ func (s *recordingUnwatchedPollSyncer) ReconcileProviderRoots(
 	return nil
 }
 
-func (s *recordingUnwatchedPollSyncer) ReconcileProviderRootsGrouped(
-	ctx context.Context, groups []agentsync.ProviderRootsGroup,
+func (s *recordingUnwatchedPollSyncer) PollProviderRootsGrouped(
+	ctx context.Context, groups []agentsync.ProviderRootsGroup, _ bool,
 ) error {
 	return reconcileGroupsSequentially(ctx, groups, s.ReconcileProviderRoots)
 }
@@ -567,7 +567,7 @@ func TestUnwatchedPollPreservesSessionsUnderBlockedOverlappingScope(t *testing.T
 		},
 	}
 	groups, _ := availableUnwatchedPollScopes(obligations)
-	if err := pollUnwatchedScopesOnce(t.Context(), engine, groups); err != nil {
+	if err := pollUnwatchedScopesOnce(t.Context(), engine, groups, false); err != nil {
 		t.Logf("pollUnwatchedScopesOnce: %v", err)
 	}
 	roots := availableUnwatchedPollRootsFlat(obligations)

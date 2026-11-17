@@ -1011,6 +1011,7 @@ func claudeProviderCapabilities() Capabilities {
 			VerifiedLocalStat:    CapabilitySupported,
 			MultiFileStatHash:    CapabilitySupported,
 			S3Discovery:          CapabilitySupported,
+			PollMetadataScan:     CapabilitySupported,
 		},
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,

@@ -57,8 +57,8 @@ func (s *recordingProviderPollSyncer) ReconcileProviderRoots(
 	return err
 }
 
-func (s *recordingProviderPollSyncer) ReconcileProviderRootsGrouped(
-	ctx context.Context, groups []agentsync.ProviderRootsGroup,
+func (s *recordingProviderPollSyncer) PollProviderRootsGrouped(
+	ctx context.Context, groups []agentsync.ProviderRootsGroup, _ bool,
 ) error {
 	return reconcileGroupsSequentially(ctx, groups, s.ReconcileProviderRoots)
 }
@@ -84,8 +84,8 @@ type groupedCountingPollSyncer struct {
 	reconcile func([]agentsync.ProviderRootsGroup) error
 }
 
-func (s *groupedCountingPollSyncer) ReconcileProviderRootsGrouped(
-	_ context.Context, groups []agentsync.ProviderRootsGroup,
+func (s *groupedCountingPollSyncer) PollProviderRootsGrouped(
+	_ context.Context, groups []agentsync.ProviderRootsGroup, _ bool,
 ) error {
 	copied := make([]agentsync.ProviderRootsGroup, len(groups))
 	for i, group := range groups {
@@ -626,8 +626,8 @@ func (s *manualProviderPollSyncer) ReconcileProviderRoots(
 	return s.fn(ctx, agent, roots)
 }
 
-func (s *manualProviderPollSyncer) ReconcileProviderRootsGrouped(
-	ctx context.Context, groups []agentsync.ProviderRootsGroup,
+func (s *manualProviderPollSyncer) PollProviderRootsGrouped(
+	ctx context.Context, groups []agentsync.ProviderRootsGroup, _ bool,
 ) error {
 	return reconcileGroupsSequentially(ctx, groups, s.ReconcileProviderRoots)
 }
