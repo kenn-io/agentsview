@@ -143,7 +143,11 @@ describe("Chrome native host worker", () => {
         target: { tabId: 7 },
         world: "ISOLATED",
         func: expect.any(Function),
-        args: [config.fetchFunction, `${config.origin}${path}`, config.headers ?? {}],
+        args: [
+          config.fetchFunction,
+          `${config.origin}${path}`,
+          ("headers" in config ? config.headers : undefined) ?? {},
+        ],
       });
       expect(chrome.tabs.remove).not.toHaveBeenCalled();
     },
