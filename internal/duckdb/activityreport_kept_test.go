@@ -17,8 +17,10 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/readbase"
 )
 
 // Extend the real rebuilt mirror with known usage for the ended day.
@@ -129,6 +131,53 @@ func TestActivityUsagePartsRemapRates(t *testing.T) {
 	require.Equal(t, []string{"session-b"}, refreshed)
 	fresh := NewStoreFromDB(store.DB())
 	requireKeptActivityEqual(t, keptActivityBuild(t, fresh, q, true), got)
+}
+
+func TestActivityUsagePartsInvalidRateRebuilds(t *testing.T) {
+	for _, invalidRate := range []int64{-1, 1} {
+		t.Run(strconv.FormatInt(invalidRate, 10), func(t *testing.T) {
+			cache := t.TempDir()
+			t.Setenv("CACHE_DIRECTORY", cache)
+			path := filepath.Join(t.TempDir(), "mirror.duckdb")
+			keptActivityMirror(t, path, "session-a", 500)
+			q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+			require.NoError(t, err)
+			store := openUsagePartsStore(t, path)
+			want := keptActivityBuild(t, store, q, true)
+			require.NoError(t, store.Close())
+			rewritten := 0
+			require.NoError(t, filepath.WalkDir(cache, func(path string, entry os.DirEntry, err error) error {
+				if err != nil || filepath.Ext(path) != ".gob" {
+					return err
+				}
+				data, err := os.ReadFile(path)
+				require.NoError(t, err)
+				headerEnd := bytes.IndexByte(data, '\n')
+				require.GreaterOrEqual(t, headerEnd, 0)
+				rows, ok := kept.DecodeRows[kept.Part[*readbase.ActivityUsageSums]](data[headerEnd+1:])
+				if !ok || len(rows) == 0 || rows[0].Value == nil || len(rows[0].Value.Groups) == 0 {
+					return nil
+				}
+				require.Len(t, rows[0].Value.Schedule.Rates, 1)
+				rows[0].Value.Groups[0].Rate = invalidRate
+				payload, err := kept.EncodeRows(rows, 128<<20, func(part kept.Part[*readbase.ActivityUsageSums]) int64 { return part.Value.Bytes() })
+				require.NoError(t, err)
+				require.NoError(t, os.WriteFile(path, append(data[:headerEnd+1], payload...), 0o600))
+				rewritten++
+				return nil
+			}))
+			require.Equal(t, 1, rewritten)
+			store = openUsagePartsStore(t, path)
+			defer store.Close()
+			var refreshed []string
+			previous := usagePartReadObserver
+			usagePartReadObserver = func(ids []string) { refreshed = append(refreshed, ids...) }
+			t.Cleanup(func() { usagePartReadObserver = previous })
+			got := keptActivityBuild(t, store, q, true)
+			require.Equal(t, []string{"session-a"}, refreshed)
+			requireKeptActivityEqual(t, want, got)
+		})
+	}
 }
 
 func TestActivityReportKeptAcrossReopensAndRestart(t *testing.T) {

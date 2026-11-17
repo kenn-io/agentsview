@@ -172,6 +172,11 @@ func remapActivityRates(part *readbase.ActivityUsageSums, schedule readbase.Usag
 			return false
 		}
 	}
+	for _, group := range part.Groups {
+		if group.Rate < 0 || group.Rate >= int64(len(indexes)) {
+			return false
+		}
+	}
 	for i := range part.Groups {
 		part.Groups[i].Rate = indexes[part.Groups[i].Rate]
 	}
