@@ -46,6 +46,13 @@ func TestHostedVectorUploadEditAndSearchSnapshot(t *testing.T) {
 		}
 	}()
 	hosted.SetVectorSearcher(searcher)
+	initial, err := hosted.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "old", Mode: "semantic", IncludeOneShot: true, Limit: 10})
+	require.NoError(t, err)
+	var initialSnippets []string
+	for _, match := range initial.Matches {
+		initialSnippets = append(initialSnippets, match.Snippet)
+	}
+	assert.Contains(t, initialSnippets, "old snapshot words")
 	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET deleted_at=now()`)
 	require.NoError(t, err)
 	trashed, err := hosted.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "old", Mode: "semantic", IncludeOneShot: true, Limit: 10})
