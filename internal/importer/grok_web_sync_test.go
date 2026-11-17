@@ -336,7 +336,7 @@ func TestSyncGrokStops(t *testing.T) {
 	detail := grokRequest(grokResponsesRequest, grokTestChat, "")
 	const tokenA, tokenB = "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"
 	page := func(next string) []byte {
-		return []byte(`{"conversations":[{"conversationId":"44444444-4444-4444-8444-444444444444","modifyTime":"x"}],"nextPageToken":"` + next + `"}`)
+		return []byte(`{"conversations":[{"conversationId":"not-a-chat-id","modifyTime":"2026-10-21T08:00:00Z"}],"nextPageToken":"` + next + `"}`)
 	}
 	tests := []struct {
 		name     string
@@ -383,12 +383,13 @@ func TestSyncGrokStops(t *testing.T) {
 }
 
 // TestSyncGrokSkipsUnreadableListEntries checks that a list entry without a
-// UUID or a readable update time counts as an error and Sync imports the rest.
+// valid chat ID, or one that is not a JSON object, counts as an error and
+// Sync imports the rest.
 func TestSyncGrokSkipsUnreadableListEntries(t *testing.T) {
 	fake := &grokFake{t: t, pages: map[string][]byte{
 		grokRequest(grokListRequest, "", ""): []byte(`{"conversations":[
 			{"conversationId":"../settings","modifyTime":"2026-10-21T08:00:00Z"},
-			{"conversationId":"44444444-4444-4444-8444-444444444444","modifyTime":"yesterday"},
+			"44444444-4444-4444-8444-444444444444",
 			{"conversationId":"` + grokTestChat + `","title":"Trip plan","modifyTime":"2026-10-21T08:00:00Z"}
 		]}`),
 	}}
@@ -403,6 +404,55 @@ func TestSyncGrokSkipsUnreadableListEntries(t *testing.T) {
 	assert.Equal(t, 1, fake.details)
 }
 
+// TestSyncGrokUnreadableListTime checks that a chat whose list update time
+// is missing or cannot be read is still synced. With no time, the pending
+// rule treats the chat as recently updated, so an unfinished reply is
+// fetched again on the next Sync, while a finished chat is imported once and
+// then counts as fresh.
+func TestSyncGrokUnreadableListTime(t *testing.T) {
+	question := grokSyncResponse("r1", "", "human", "Question", "2026-10-21T08:00:00Z")
+	unfinished := grokSyncResponse("r2", "r1", "assistant", "", "2026-10-21T08:00:05Z")
+	unfinished["partial"] = true
+	finished := grokSyncResponse("r2", "r1", "assistant", "Answer", "2026-10-21T08:00:05Z")
+	for _, modified := range []struct{ name, field string }{
+		{name: "missing", field: ``},
+		{name: "null", field: `,"modifyTime":null`},
+		{name: "text", field: `,"modifyTime":"yesterday"`},
+		{name: "number", field: `,"modifyTime":1790000000`},
+	} {
+		for _, tc := range []struct {
+			name         string
+			reply        map[string]any
+			wantDetails  int
+			wantMessages []string
+		}{
+			{name: "unfinished reply", reply: unfinished, wantDetails: 2, wantMessages: []string{"Question"}},
+			{name: "finished reply", reply: finished, wantDetails: 1, wantMessages: []string{"Question", "Answer"}},
+		} {
+			t.Run(modified.name+"/"+tc.name, func(t *testing.T) {
+				d := testDB(t)
+				fake := &grokFake{t: t, pages: map[string][]byte{
+					grokRequest(grokListRequest, "", ""): []byte(`{"conversations":[` +
+						`{"conversationId":"` + grokTestChat + `","title":"Trip plan"` + modified.field + `}]}`),
+				}}
+				fake.responses = []map[string]any{question, tc.reply}
+				stats, err := syncGrokWeb(t.Context(), d, fake.fetch, grokTestOptions, nil)
+				require.NoError(t, err)
+				assert.Equal(t, 1, stats.Imported)
+				assert.Zero(t, stats.Errors)
+
+				stats, err = syncGrokWeb(t.Context(), d, fake.fetch, grokTestOptions, nil)
+				require.NoError(t, err)
+				assert.Zero(t, stats.Errors)
+				assert.Equal(t, tc.wantDetails, fake.details)
+				messages, err := d.GetAllMessages(t.Context(), "grok-web:"+grokTestChat)
+				require.NoError(t, err)
+				assert.Equal(t, tc.wantMessages, messageContents(messages))
+			})
+		}
+	}
+}
+
 // TestSyncGrokLongChatList checks that a list longer than any fixed page
 // budget still finishes and imports the chat on its last page.
 func TestSyncGrokLongChatList(t *testing.T) {
@@ -410,7 +460,7 @@ func TestSyncGrokLongChatList(t *testing.T) {
 	token := func(page int) string { return fmt.Sprintf("00000000-0000-4000-8000-%012d", page) }
 	fake := &grokFake{t: t, modified: "2026-10-21T08:00:00Z", pages: map[string][]byte{}}
 	fake.responses = []map[string]any{grokSyncResponse("r1", "", "human", "Question", "2026-10-21T08:00:00Z")}
-	other := `{"conversationId":"44444444-4444-4444-8444-444444444444","modifyTime":"x"}`
+	other := `{"conversationId":"not-a-chat-id","modifyTime":"2026-10-21T08:00:00Z"}`
 	for page := range pages - 1 {
 		path := grokRequest(grokListRequest, "", "")
 		if page > 0 {

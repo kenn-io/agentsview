@@ -46,10 +46,32 @@ type grokListPage struct {
 	NextPageToken string            `json:"nextPageToken"`
 }
 
+// grokListEntry is one chat in a list page. Only the ID must be readable;
+// the title and update time are decoded separately so an unexpected value
+// there does not drop the chat.
+type grokListEntry struct {
+	ConversationID string         `json:"conversationId"`
+	Title          jsontext.Value `json:"title"`
+	ModifyTime     jsontext.Value `json:"modifyTime"`
+}
+
 type grokChat struct {
-	ConversationID string `json:"conversationId"`
-	Title          string `json:"title"`
-	ModifyTime     string `json:"modifyTime"`
+	ConversationID string
+	Title          string
+	ModifyTime     string
+}
+
+// grokListChat reads one list entry. It fails only when the entry is not
+// a JSON object or has no valid chat ID.
+func grokListChat(item jsontext.Value) (grokChat, bool) {
+	var entry grokListEntry
+	if json.Unmarshal(item, &entry) != nil || !parser.ValidGrokWebID(entry.ConversationID) {
+		return grokChat{}, false
+	}
+	chat := grokChat{ConversationID: entry.ConversationID}
+	_ = json.Unmarshal(entry.Title, &chat.Title)
+	_ = json.Unmarshal(entry.ModifyTime, &chat.ModifyTime)
+	return chat, true
 }
 
 // syncGrokWeb imports new and changed Grok web conversations.
@@ -77,23 +99,27 @@ func syncGrokWeb(ctx context.Context, store BrowserSyncStore, fetch BrowserFetch
 			if err := ctx.Err(); err != nil {
 				return stats, err
 			}
-			var chat grokChat
-			updatedAt, ok := time.Time{}, false
-			if json.Unmarshal(item, &chat) == nil && parser.ValidGrokWebID(chat.ConversationID) {
-				updatedAt, ok = parser.GrokWebTime(chat.ModifyTime)
-			}
+			chat, ok := grokListChat(item)
 			if !ok {
 				stats.Errors++
 				cb.progress(stats)
 				continue
 			}
+			// An unreadable update time leaves updatedAt zero instead of
+			// dropping the chat: freshness then cannot see list changes, and
+			// the pending rule treats the chat as recently updated.
+			updatedAt, _ := parser.GrokWebTime(chat.ModifyTime)
 			if _, ok := seen[chat.ConversationID]; ok {
 				continue
 			}
 			seen[chat.ConversationID] = struct{}{}
 			err := runner.conversation(ctx, "grok-web:"+chat.ConversationID, browserConversation{
 				freshness: func(session *db.Session) uint64 {
-					return browserFreshness(strconv.FormatInt(updatedAt.UnixNano(), 10), session)
+					marker := ""
+					if !updatedAt.IsZero() {
+						marker = strconv.FormatInt(updatedAt.UnixNano(), 10)
+					}
+					return browserFreshness(marker, session)
 				},
 				fetch: func(ctx context.Context) ([]byte, error) {
 					return fetchGrokConversation(ctx, platform, fetch, chat)

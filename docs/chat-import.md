@@ -405,6 +405,10 @@ What Sync fetches:
   again on the next Sync. This stops once the reply is complete, or once the
   chat's list update time is more than 24 hours old, so a reply that never
   finishes is not fetched forever.
+- A chat whose list update time is missing or cannot be read is still
+  fetched. If Grok is still writing its reply, it is fetched again on every
+  Sync until the reply is complete. Otherwise it is fetched once and then
+  treated as unchanged.
 
 How Sync updates stored chats:
 
