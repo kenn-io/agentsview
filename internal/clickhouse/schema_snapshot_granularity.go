@@ -141,7 +141,8 @@ func rebuildUsageSnapshots(ctx context.Context, conn *sql.DB, staleAfter time.Du
 	if len(rebuilds) > 0 {
 		last := rebuilds[len(rebuilds)-1]
 		if !last.stale {
-			log.Printf("ClickHouse: another process is rebuilding %s; skipping the rebuild here", usageSessionSnapshotTable)
+			log.Printf("ClickHouse: another process is rebuilding %s, so this start leaves it as it is; "+
+				"if that rebuild stops, a start after its tables are an hour old rebuilds the table", usageSessionSnapshotTable)
 			return nil
 		}
 		newest = last.number
@@ -279,7 +280,11 @@ func readUsageSnapshotRebuilds(ctx context.Context, conn *sql.DB, staleAfter tim
 // keeps the old table of a stopped rebuild that wakes up and swaps during
 // this rebuild's copy: its swap gives usage_session_snapshots the default
 // granularity, so this rebuild stops and leaves the tables for a later
-// schema step to finish step 5 from.
+// schema step to finish step 5 from. A stopped rebuild that swaps in the
+// moment between the check and the drop is missed: the drop removes its old
+// table with the rows pushed since its step 3. That takes a process that
+// stalled for over an hour, until its tables went stale, and woke up in
+// that moment; the next full push repairs the rows.
 func dropStoppedUsageSnapshotRebuilds(ctx context.Context, conn *sql.DB, number uint64, staleAfter time.Duration,
 	stopped []usageSnapshotRebuild,
 ) (bool, error) {
@@ -323,7 +328,8 @@ func claimUsageSnapshotRebuild(ctx context.Context, conn *sql.DB, number uint64,
 	_, err := conn.ExecContext(ctx, "CREATE TABLE "+usageSnapshotRebuildName(number)+" AS "+
 		usageSessionSnapshotTable+" ENGINE = ReplacingMergeTree(revision) ORDER BY id")
 	if ex, ok := errors.AsType[*chdriver.Exception](err); ok && ex.Code == codeTableAlreadyExists {
-		log.Printf("ClickHouse: another process is rebuilding %s; skipping the rebuild here", usageSessionSnapshotTable)
+		log.Printf("ClickHouse: another process is rebuilding %s, so this start leaves it as it is; "+
+			"if that rebuild stops, a start after its tables are an hour old rebuilds the table", usageSessionSnapshotTable)
 		return false, nil
 	}
 	if err != nil {
@@ -356,7 +362,8 @@ func usageSnapshotRebuildSuperseded(ctx context.Context, conn *sql.DB, number ui
 		return false, fmt.Errorf("checking the %s rebuild: %w", usageSessionSnapshotTable, err)
 	}
 	if superseded != 0 {
-		log.Printf("ClickHouse: another process rebuilt %s or took over its rebuild; stopping the rebuild here",
+		log.Printf("ClickHouse: another process is rebuilding %s or has rebuilt it, so this start stops its "+
+			"rebuild and leaves the table as it is; if the table still has one-row granules, a later start rebuilds it",
 			usageSessionSnapshotTable)
 	}
 	return superseded != 0, nil

@@ -421,7 +421,9 @@ leaves them alone. Older ones belong to a process that stopped:
   Dropping them only at the swap keeps the old table of a stopped rebuild that
   wakes up and swaps during the copy: that swap gives the snapshot table the
   default granularity, so the new rebuild stops, and a later start finishes
-  the woken rebuild's step 5.
+  the woken rebuild's step 5. A woken rebuild that swaps in the moment between
+  that check and the drop loses the rows pushed since its step 3; the next
+  full push repairs them.
 
 Processes that start together take different numbers, so before its claim
 counts and again before its swap, a rebuild stops when it finds another
