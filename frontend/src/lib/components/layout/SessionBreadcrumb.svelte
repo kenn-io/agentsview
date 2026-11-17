@@ -39,6 +39,7 @@
   import { ui } from "../../stores/ui.svelte.js";
   import TranscriptControls from "./TranscriptControls.svelte";
   import { m } from "../../i18n/index.js";
+  import SessionPromptPicker from "./SessionPromptPicker.svelte";
 
   interface Props {
     session: Session | undefined;
@@ -258,6 +259,7 @@
       >
         <ChartColumnIcon size="14" aria-hidden="true" />
       </button>
+      <SessionPromptPicker />
       <button
         class="insight-btn"
         title={m.insights_page_agent_analysis()}
