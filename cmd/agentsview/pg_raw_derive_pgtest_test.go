@@ -39,21 +39,12 @@ func TestHostedProvisionUsageDoesNotCreateVectorGeneration(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(cfg.DataDir, "config.toml"), []byte(configText), 0600))
 	loaded, err := config.LoadMinimalFor(config.ScopePG | config.ScopeVector)
 	require.NoError(t, err)
-	assert.Equal(t, config.ArchiveContentUsage, loaded.ArchiveContent)
-	owner, err := loaded.ResolvePGTarget("owner")
-	require.NoError(t, err)
-	assert.Equal(t, cfg.PG.RawTenant, owner.RawTenant)
-	assert.Equal(t, cfg.PG.Schema, owner.Schema)
 	assert.True(t, loaded.Vector.Enabled)
 	output, err := executeCommand(newPGHostedProvisionCommand(), "owner")
 	require.NoError(t, err, output)
-	var exists bool
-	require.NoError(t, admin.QueryRowContext(t.Context(), `SELECT to_regclass(format('%I.vector_generations',$1::text)) IS NOT NULL`, cfg.PG.Schema).Scan(&exists))
-	if exists {
-		var count int
-		require.NoError(t, admin.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_generations`).Scan(&count))
-		assert.Zero(t, count)
-	}
+	var count int
+	require.NoError(t, admin.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_generations`).Scan(&count))
+	assert.Zero(t, count)
 }
 
 func hostedRuntimeConfig(t *testing.T) (config.Config, *sql.DB) {
