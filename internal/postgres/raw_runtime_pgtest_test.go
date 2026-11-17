@@ -445,7 +445,6 @@ func TestHostedRuntimeRequiresFrictionProjectionPrivileges(t *testing.T) {
 		require.NoError(t, err)
 	}
 	require.NoError(t, CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull))
-
 }
 
 func TestHostedVectorProvisionAndPrivileges(t *testing.T) {

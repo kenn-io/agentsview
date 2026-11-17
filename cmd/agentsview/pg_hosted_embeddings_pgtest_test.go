@@ -192,7 +192,6 @@ func TestHostedCaptureSemanticSearch(t *testing.T) {
 		}
 		assert.True(c, found)
 	}, 30*time.Second, time.Second)
-
 }
 
 type testHostedRawParser struct{ *rawderive.ProviderParser }
