@@ -84,7 +84,7 @@ func TestHostedVectorGenerationSwitch(t *testing.T) {
 	assert.ElementsMatch(t, []string{"question", "bbbbbbbbbb", "stable"}, snippets)
 }
 
-func TestHostedVectorScanDuringSessionRestore(t *testing.T) {
+func TestHostedVectorRestoreRaces(t *testing.T) {
 	f := newHostedFixture(t, "tenant-scan-restore")
 	_, err := f.admin.ExecContext(t.Context(), `CREATE EXTENSION IF NOT EXISTS vector SCHEMA public`)
 	require.NoError(t, err)
@@ -153,6 +153,42 @@ func TestHostedVectorScanDuringSessionRestore(t *testing.T) {
 	}, 128, 1, false))
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM vector_push_state WHERE generation_id=$1 AND session_id='empty')`, id).Scan(&stamped))
 	assert.True(t, stamped)
+
+	// Orphan cleanup can race a restore after it observes a missing session.
+	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,provenance_kind,raw_content_revision) VALUES('orphan-restore','p','m','codex','raw','rev'); INSERT INTO messages(session_id,ordinal,role,content) VALUES('orphan-restore',0,'user','restore content')`)
+	require.NoError(t, err)
+	calls := 0
+	encode := func(_ context.Context, texts []string) ([][]float32, error) {
+		calls++
+		out := make([][]float32, len(texts))
+		for i := range out {
+			out[i] = []float32{1, 0}
+		}
+		return out, nil
+	}
+	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false))
+	_, err = f.runtime.ExecContext(t.Context(), `DELETE FROM sessions WHERE id='orphan-restore'`)
+	require.NoError(t, err)
+	gate, err := f.runtime.BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	defer func() { _ = gate.Rollback() }()
+	var stamp string
+	require.NoError(t, gate.QueryRowContext(t.Context(), `SELECT doc_agg_hash FROM vector_push_state WHERE generation_id=$1 AND session_id='orphan-restore' FOR UPDATE`, id).Scan(&stamp))
+	orphanDone := make(chan error, 1)
+	go func() { orphanDone <- clearHostedOrphan(t.Context(), f.runtime, "orphan-restore") }()
+	require.Eventually(t, func() bool {
+		var blocked bool
+		err := f.admin.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'DELETE FROM vector_push_state%')`).Scan(&blocked)
+		return err == nil && blocked
+	}, 30*time.Second, time.Second)
+	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,provenance_kind,raw_content_revision) VALUES('orphan-restore','p','m','codex','raw','rev'); INSERT INTO messages(session_id,ordinal,role,content) VALUES('orphan-restore',0,'user','restore content')`)
+	require.NoError(t, err)
+	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false))
+	assert.Equal(t, 1, calls)
+	require.NoError(t, gate.Rollback())
+	require.NoError(t, <-orphanDone)
+	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false))
+	assert.Equal(t, 2, calls)
 }
 
 func TestHostedVectorBatchRecovery(t *testing.T) {
@@ -296,11 +332,6 @@ func TestHostedVectorPartialRetry(t *testing.T) {
 		}
 		return snippets
 	}
-	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET deleted_at=now() WHERE id='session'`)
-	require.NoError(t, err)
-	assert.Empty(t, search())
-	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET deleted_at=NULL WHERE id='session'`)
-	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"first", "last"}, search())
 	calls = nil
 	require.Error(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false, kitvec.WithBatchSize(8)))
@@ -348,53 +379,6 @@ func TestHostedVectorPartialRetry(t *testing.T) {
 	calls = nil
 	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, true, kitvec.WithBatchSize(8)))
 	assert.Empty(t, calls)
-}
-
-func TestHostedVectorOrphanRestoreRetries(t *testing.T) {
-	f := newHostedFixture(t, "tenant-restore")
-	_, err := f.admin.ExecContext(t.Context(), `CREATE EXTENSION IF NOT EXISTS vector SCHEMA public`)
-	require.NoError(t, err)
-	gen := storage.VectorGenerationInfo{Fingerprint: "restore-fixture", Model: "fixture", Dimension: 2}
-	require.NoError(t, ProvisionHostedVector(t.Context(), f.admin, f.schema, f.tenant, gen))
-	id, _, ok, err := LookupVectorGeneration(t.Context(), f.runtime, gen.Fingerprint)
-	require.NoError(t, err)
-	require.True(t, ok)
-	_, err = f.admin.ExecContext(t.Context(), `GRANT SELECT,INSERT,DELETE ON `+vectorChunkTable(id)+` TO "`+f.role+`"`)
-	require.NoError(t, err)
-	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,provenance_kind,raw_content_revision) VALUES('restore','p','m','codex','raw','rev'); INSERT INTO messages(session_id,ordinal,role,content) VALUES('restore',0,'user','restore content')`)
-	require.NoError(t, err)
-	calls := 0
-	encode := func(_ context.Context, texts []string) ([][]float32, error) {
-		calls++
-		out := make([][]float32, len(texts))
-		for i := range out {
-			out[i] = []float32{1, 0}
-		}
-		return out, nil
-	}
-	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false))
-	_, err = f.runtime.ExecContext(t.Context(), `DELETE FROM sessions WHERE id='restore'`)
-	require.NoError(t, err)
-	gate, err := f.runtime.BeginTx(t.Context(), nil)
-	require.NoError(t, err)
-	defer func() { _ = gate.Rollback() }()
-	var stamp string
-	require.NoError(t, gate.QueryRowContext(t.Context(), `SELECT doc_agg_hash FROM vector_push_state WHERE generation_id=$1 AND session_id='restore' FOR UPDATE`, id).Scan(&stamp))
-	done := make(chan error, 1)
-	go func() { done <- clearHostedOrphan(t.Context(), f.runtime, "restore") }()
-	require.Eventually(t, func() bool {
-		var blocked bool
-		err := f.admin.QueryRowContext(t.Context(), `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'DELETE FROM vector_push_state%')`).Scan(&blocked)
-		return err == nil && blocked
-	}, 30*time.Second, time.Second)
-	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,provenance_kind,raw_content_revision) VALUES('restore','p','m','codex','raw','rev'); INSERT INTO messages(session_id,ordinal,role,content) VALUES('restore',0,'user','restore content')`)
-	require.NoError(t, err)
-	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false))
-	assert.Equal(t, 1, calls)
-	require.NoError(t, gate.Rollback())
-	require.NoError(t, <-done)
-	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false))
-	assert.Equal(t, 2, calls)
 }
 
 func TestHostedVectorSpoolCleanupOnFailures(t *testing.T) {

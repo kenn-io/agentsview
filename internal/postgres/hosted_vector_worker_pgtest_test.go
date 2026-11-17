@@ -4,7 +4,6 @@ package postgres
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,57 +12,7 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 )
 
-func TestHostedVectorUploadAndEdit(t *testing.T) {
-	f := newProjectionFixture(t)
-	_, err := f.admin.ExecContext(t.Context(), `CREATE EXTENSION IF NOT EXISTS vector SCHEMA public`)
-	require.NoError(t, err)
-	gen := storage.VectorGenerationInfo{Fingerprint: "hosted-test", Model: "fixture", Dimension: 2, Params: map[string]string{"test": "fixture"}}
-	require.NoError(t, ProvisionHostedVector(t.Context(), f.admin, f.schema, f.tenant, gen))
-	id, _, ok, err := LookupVectorGeneration(t.Context(), f.runtime, gen.Fingerprint)
-	require.NoError(t, err)
-	require.True(t, ok)
-	_, err = f.admin.ExecContext(t.Context(), `GRANT SELECT,INSERT,DELETE ON `+vectorChunkTable(id)+` TO "`+f.role+`"`)
-	require.NoError(t, err)
-	encode := func(_ context.Context, texts []string) ([][]float32, error) {
-		out := make([][]float32, len(texts))
-		for i, s := range texts {
-			if strings.Contains(s, "new words") {
-				out[i] = []float32{0, 1}
-			} else {
-				out[i] = []float32{1, 0}
-			}
-		}
-		return out, nil
-	}
-	first, receipt := f.accept(t, "device-a", "first", "")
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, first), first, projectionOutcome("old words")))
-	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false))
-	hosted, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
-	require.NoError(t, err)
-	hosted.SetVectorSearcher(NewVectorSearcher(f.runtime, id, 2, 128, func(ctx context.Context, text string) ([]float32, error) {
-		values, err := encode(ctx, []string{text})
-		if err != nil {
-			return nil, err
-		}
-		return values[0], nil
-	}))
-	page, err := hosted.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "old words", Mode: "semantic", IncludeOneShot: true, Limit: 10})
-	require.NoError(t, err)
-	require.NotEmpty(t, page.Matches)
-	assert.Equal(t, "codex:portable", page.Matches[0].SessionID)
-	second, _ := f.accept(t, "device-a", "second", receipt.Receipt)
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, second), second, projectionOutcome("new words")))
-	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false))
-	page, err = hosted.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "new words", Mode: "semantic", IncludeOneShot: true, Limit: 10})
-	require.NoError(t, err)
-	require.NotEmpty(t, page.Matches)
-	assert.Equal(t, "codex:portable", page.Matches[0].SessionID)
-	var old int
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_documents WHERE content='old words'`).Scan(&old))
-	assert.Zero(t, old)
-}
-
-func TestHostedVectorSearchSnapshotDuringEdit(t *testing.T) {
+func TestHostedVectorUploadEditAndSearchSnapshot(t *testing.T) {
 	f := newProjectionFixture(t)
 	_, err := f.admin.ExecContext(t.Context(), `CREATE EXTENSION IF NOT EXISTS vector SCHEMA public`)
 	require.NoError(t, err)
@@ -96,8 +45,15 @@ func TestHostedVectorSearchSnapshotDuringEdit(t *testing.T) {
 			close(resume)
 		}
 	}()
-	searcher.afterCandidates = func() { close(selected); <-resume }
 	hosted.SetVectorSearcher(searcher)
+	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET deleted_at=now()`)
+	require.NoError(t, err)
+	trashed, err := hosted.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "old", Mode: "semantic", IncludeOneShot: true, Limit: 10})
+	require.NoError(t, err)
+	assert.Empty(t, trashed.Matches)
+	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET deleted_at=NULL`)
+	require.NoError(t, err)
+	searcher.afterCandidates = func() { close(selected); <-resume }
 	type result struct {
 		page db.ContentSearchPage
 		err  error
@@ -123,4 +79,15 @@ func TestHostedVectorSearchSnapshotDuringEdit(t *testing.T) {
 		snippets = append(snippets, match.Snippet)
 	}
 	assert.Contains(t, snippets, "old snapshot words")
+	searcher.afterCandidates = nil
+	page, err := hosted.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "new", Mode: "semantic", IncludeOneShot: true, Limit: 10})
+	require.NoError(t, err)
+	snippets = nil
+	for _, match := range page.Matches {
+		snippets = append(snippets, match.Snippet)
+	}
+	assert.Contains(t, snippets, "new snapshot words")
+	var old int
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_documents WHERE content='old snapshot words'`).Scan(&old))
+	assert.Zero(t, old)
 }
