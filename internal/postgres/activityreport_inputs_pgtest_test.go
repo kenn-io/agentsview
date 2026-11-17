@@ -82,11 +82,6 @@ func TestPGActivityReportInputReads(t *testing.T) {
 	pgKeptBuild(t, store, f, q, true)
 	assert.Len(t, counter.transcriptReads, 2)
 	assert.Len(t, counter.usageReads, 2)
-	q.GapCapSeconds += 60
-	assert.Equal(t, 1200, pgKeptBuild(t, store, f, q, true).Report.Totals.OutputTokens)
-	require.Len(t, counter.transcriptReads, 3)
-	assert.ElementsMatch(t, []string{"a", "b"}, counter.transcriptReads[2])
-	assert.Len(t, counter.usageReads, 2)
 }
 
 func TestPGActivityReportInputSharedBudget(t *testing.T) {

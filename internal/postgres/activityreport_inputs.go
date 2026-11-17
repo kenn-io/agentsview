@@ -147,7 +147,7 @@ func (s *Store) activityReportInputs(ctx context.Context, version, lower, upper 
 	previous, ok := s.runtimeState().activityInputs.Get(slot, version)
 	identity := ""
 	if !ok && s.activityDisk.Enabled() {
-		identity, _ = s.activitySourceIdentity(ctx, s.activityTarget)
+		identity, _ = s.activitySourceIdentity(ctx, "")
 		if identity != "" {
 			if loaded, found := s.loadActivityInputs(slot, version, identity); found {
 				previous, ok = []pgActivityInputs{loaded}, true

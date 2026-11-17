@@ -40,7 +40,6 @@ func (s *Store) ConfigureUsageCache(ctx context.Context, directory, targetURL, s
 		log.Printf("opening activity cache: %v", err)
 	} else {
 		s.activityDisk.Sweep(time.Now())
-		s.activityTarget = fingerprint
 	}
 	if column != "xmin" {
 		return nil

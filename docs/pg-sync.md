@@ -32,12 +32,10 @@ Hosted PostgreSQL and archives without the journal rebuild every time.
 For ranges that include today, native PostgreSQL saves Activity inputs on a
 graceful close under `$CACHE_DIRECTORY/postgres-activity`, or
 `agentsview/postgres-activity` in the user cache directory. Each file and the
-whole cache are limited to 256 MiB. On restart, the reader refreshes sessions
-changed since the saved revision. Saving and reusing these files requires the
-same identity-function permissions as the Usage cache below. Without them,
-Activity reads directly and can still reuse inputs in memory. An abrupt exit
-leaves changes since the last graceful close unsaved. The next visit refreshes
-an older saved copy or rebuilds the inputs if none is available.
+whole cache are limited to 256 MiB. After restart, Activity refreshes changed
+sessions. Saving and reuse require the identity-function permissions described
+for the Usage cache below; without them, Activity reads directly and can still
+reuse inputs in memory.
 
 `pg serve` keeps finished Usage results in memory, up to 64 selections and
 64 MiB per read kind, until the journal revision or custom pricing changes.
