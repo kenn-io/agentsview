@@ -21,9 +21,6 @@ type Disk struct {
 	maxFile, maxBytes int64
 }
 
-// Change this when the search page format or search rules change.
-const jsonVersion = "json|v1|"
-
 func (d *Disk) Open(subdir, id string, maxFile, maxBytes int64) error {
 	if err := d.reports.OpenDisk(subdir, id); err != nil {
 		return err
@@ -179,7 +176,7 @@ func (d *Disk) trim() error {
 
 // LoadJSON returns a saved value or loads and saves it for this version.
 func LoadJSON[T any](d *Disk, selection, version string, current func() bool, load func() (T, error)) (T, bool, error) {
-	if data, ok := d.Get(selection, jsonVersion+version); ok {
+	if data, ok := d.Get(selection, version); ok {
 		var value T
 		if json.Unmarshal(data, &value) == nil {
 			return value, current == nil || current(), nil
@@ -192,7 +189,7 @@ func LoadJSON[T any](d *Disk, selection, version string, current func() bool, lo
 	retain := current == nil || current()
 	if retain && d.Enabled() {
 		if data, encodeErr := json.Marshal(value, json.FormatNilSliceAsNull(true)); encodeErr == nil {
-			d.Put(selection, jsonVersion+version, data)
+			d.Put(selection, version, data)
 		}
 	}
 	return value, retain, nil

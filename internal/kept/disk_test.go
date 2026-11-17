@@ -126,7 +126,7 @@ func TestLoadJSON(t *testing.T) {
 	require.Equal(t, 1, loads)
 	data, err := json.Marshal(map[string]string{"future": "snippet"})
 	require.NoError(t, err)
-	disk.Put("future", jsonVersion+"v1", data)
+	disk.Put("future", "v1", data)
 	got, retain, err := LoadJSON(&disk, "future", "v1", nil, func() ([]string, error) { return []string{"current"}, nil })
 	require.NoError(t, err)
 	require.True(t, retain)
