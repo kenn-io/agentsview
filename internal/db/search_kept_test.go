@@ -5,6 +5,7 @@ package db
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -224,7 +225,7 @@ func TestSearchKeptDiskPages(t *testing.T) {
 	require.Equal(t, 1, loads)
 }
 
-func TestSearchKeptHistoryTokenCounts(t *testing.T) {
+func TestSearchKeptHistoryToken(t *testing.T) {
 	cases := []struct {
 		name, setup, query string
 		wantChange         bool
@@ -234,19 +235,24 @@ func TestSearchKeptHistoryTokenCounts(t *testing.T) {
 		{"image", `INSERT INTO image_text_occurrences(session_id,image_index,image_hash) VALUES('session',0,'hash')`, `INSERT INTO image_text_cache(image_hash,processor,provider,model,revision,text) VALUES('hash','processor','provider','model','revision','text')`, true},
 		{"session insert", "", `INSERT INTO sessions(id,project,agent,machine) VALUES('other','project','agent','machine')`, true},
 		{"session delete", "", `DELETE FROM sessions WHERE id='session'`, true},
-		{"old writer", `DROP TRIGGER trg_sessions_usage_change_update;
-CREATE TRIGGER trg_sessions_usage_change_update AFTER UPDATE OF transcript_revision, started_at, deleted_at, project, agent, machine, git_branch, group_key, is_automated, user_message_count, ended_at, termination_status, display_name, session_name, relationship_type, message_count, created_at ON sessions
-WHEN OLD.transcript_revision IS NOT NEW.transcript_revision OR OLD.started_at IS NOT NEW.started_at OR OLD.deleted_at IS NOT NEW.deleted_at OR OLD.project IS NOT NEW.project OR OLD.agent IS NOT NEW.agent OR OLD.machine IS NOT NEW.machine OR OLD.git_branch IS NOT NEW.git_branch OR OLD.group_key IS NOT NEW.group_key OR OLD.is_automated IS NOT NEW.is_automated OR OLD.user_message_count IS NOT NEW.user_message_count OR OLD.ended_at IS NOT NEW.ended_at OR OLD.termination_status IS NOT NEW.termination_status OR OLD.display_name IS NOT NEW.display_name OR OLD.session_name IS NOT NEW.session_name OR OLD.relationship_type IS NOT NEW.relationship_type OR OLD.message_count IS NOT NEW.message_count OR OLD.created_at IS NOT NEW.created_at
-BEGIN
- INSERT INTO archive_metadata (key, value) VALUES ('usage_change_revision', '1') ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now');
- INSERT INTO usage_session_changes (session_id, revision) SELECT NEW.id, CAST(value AS INTEGER) FROM archive_metadata WHERE key = 'usage_change_revision' ON CONFLICT(session_id) DO UPDATE SET revision = excluded.revision;
-END;`, `UPDATE sessions SET session_name='needlename' WHERE id='session'`, true},
+		{"old writer", "", `UPDATE sessions SET session_name='needlename' WHERE id='session'`, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			d := testDB(t)
 			ctx := t.Context()
 			insertSession(t, d, "session", "project")
+			if tc.name == "old writer" {
+				const name = "trg_sessions_usage_change_update"
+				creates := usageChangeJournalTriggerSQL
+				start := strings.Index(creates, "CREATE TRIGGER "+name+" ")
+				require.GreaterOrEqual(t, start, 0)
+				end := strings.Index(creates[start:], "END;\n")
+				require.GreaterOrEqual(t, end, 0)
+				older := strings.ReplaceAll(creates[start:start+end+len("END;\n")], searchTokenSQL, "")
+				_, err := d.getWriter().ExecContext(ctx, "DROP TRIGGER IF EXISTS "+name+";\n"+older)
+				require.NoError(t, err)
+			}
 			if tc.setup != "" {
 				_, err := d.getWriter().ExecContext(ctx, tc.setup)
 				require.NoError(t, err)

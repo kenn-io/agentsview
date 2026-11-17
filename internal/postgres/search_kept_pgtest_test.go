@@ -28,21 +28,6 @@ func (tr *searchQueryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d
 }
 func (*searchQueryTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
-func TestSearchKeptSingleConnection(t *testing.T) {
-	local, syncer, store := newUsageJournalFixture(t)
-	ctx := t.Context()
-	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "session", Project: "project", Machine: "device", Agent: "claude", MessageCount: 1}))
-	require.NoError(t, local.ReplaceSessionMessages(ctx, "session", []db.Message{{SessionID: "session", Role: "user", Content: "needle0 needle1 needle2 needle3 needle4"}}))
-	pgKeptPush(t, syncer, false)
-	store.DB().SetMaxOpenConns(1)
-	searchCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	page, err := store.Search(searchCtx, db.SearchFilter{Query: "needle"})
-	require.NoError(t, err)
-	require.Len(t, page.Results, 1)
-	require.Equal(t, "session", page.Results[0].SessionID)
-}
-
 func TestSearchKeptRestart(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	local, syncer, first := newUsageJournalFixture(t)
@@ -73,12 +58,15 @@ func TestSearchKeptRestart(t *testing.T) {
 		s := &Store{pg: pool, ownedDB: pool}
 		t.Cleanup(func() { require.NoError(t, s.Close()) })
 		require.NoError(t, s.ConfigureUsageCache(ctx, cache, url, syncer.schema))
+		pool.SetMaxOpenConns(1)
 		return s, trace
 	}
 	s, trace := open()
 	var retained atomic.Int32
 	s.runtimeState().search.Size = func(db.SearchPage) int64 { retained.Add(1); return 1 }
-	got, err := s.Search(ctx, filter)
+	searchCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	got, err := s.Search(searchCtx, filter)
 	require.NoError(t, err)
 	require.Equal(t, want, got)
 	require.Zero(t, trace.count.Load())
