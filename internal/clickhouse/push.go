@@ -1132,6 +1132,7 @@ func (s *Sync) pushSessionBatch(
 	var links, published []sessionPayload
 	publications := make(map[string]sessionPublication, len(batch))
 	keptThrough := map[string]int{}
+	carries := map[string]snapshotCarry{}
 	written := make([]sessionWritten, 0, len(batch))
 	for _, pw := range planned {
 		p, w := pw.p, pw.w
@@ -1139,11 +1140,15 @@ func (s *Sync) pushSessionBatch(
 		if w.keepMessages > 0 {
 			if keptPublished[id] {
 				keptThrough[id] = kept[id].through
+				carries[id] = snapshotCarry{rows: w.keptMessageRows, through: keptThrough[id]}
 			} else {
 				// Another push wrote or removed rows among the ones this push
 				// would keep, so they no longer hold this archive's content.
 				w = rewriteSession
 			}
+		} else if w.row && !w.content && w.keptMessageRows != "" && len(p.messages) > 0 {
+			// The kept content includes every message.
+			carries[id] = snapshotCarry{rows: w.keptMessageRows, through: p.messages[len(p.messages)-1].Ordinal}
 		}
 		n := 0
 		switch {
@@ -1209,7 +1214,7 @@ func (s *Sync) pushSessionBatch(
 			return nil, err
 		}
 	}
-	if err := s.insertUsageSessionSnapshots(ctx, published, publications, version); err != nil {
+	if err := s.insertUsageSessionSnapshots(ctx, published, publications, carries, version); err != nil {
 		return nil, err
 	}
 	if err := s.insertSessions(ctx, published, publications, version); err != nil {
@@ -1388,6 +1393,9 @@ func insertRows(ctx context.Context, conn *sql.DB, table string, rows [][]any) e
 }
 
 func insertRowsSpec(ctx context.Context, conn *sql.DB, spec tableSpec, rows [][]any) error {
+	if len(rows) == 0 {
+		return nil
+	}
 	table := spec.name
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
