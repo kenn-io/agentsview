@@ -29,10 +29,11 @@ raw sync carries no archive labels or launcher parent links. Label filters on
 hosted sessions match nothing. With embeddings configured, the server builds
 vectors from uploaded sessions and makes them available for meaning search.
 The embedding worker checks stored session progress and does not read the raw
-embedding outbox. Rejected messages remain pending for a later retry while
-other messages in the session stay searchable. A session that fails to embed
-is retried with backoff while later sessions continue. An edited session gets
-a new identity, so the server embeds all its messages again.
+embedding outbox. Permanently rejected messages stay unindexed until the session
+revision or embedding generation changes; other messages remain searchable.
+Failed embedding requests retry with backoff while later sessions continue.
+When a session revision changes, the server reuses unchanged message vectors
+whose document keys and chunk coverage still match.
 
 Device enrollment and revocation remain operator-managed. The operator supplies
 each laptop with a server URL, device ID and credential. There is no public

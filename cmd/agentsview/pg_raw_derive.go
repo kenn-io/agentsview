@@ -170,7 +170,7 @@ func prepareHostedPGServe(ctx context.Context, app config.Config, pg config.PGCo
 	if err != nil {
 		return fail(err)
 	}
-	if app.Vector.Enabled && !app.ArchiveContent.UsageOnly() {
+	if pg.RawDerivation && app.Vector.Enabled && !app.ArchiveContent.UsageOnly() {
 		fingerprint := vectorGeneration(app.Vector.Embeddings).Fingerprint()
 		if err = postgres.CheckHostedVectorPrivileges(ctx, database, pg.Schema, fingerprint); err != nil {
 			return fail(err)

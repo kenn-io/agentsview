@@ -38,9 +38,8 @@ func TestFillUnitDocumentsBatchesSessionChunks(t *testing.T) {
 	spool, err := NewVectorSpool()
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, spool.Close()) })
-	docs, rejected, err := FillUnitDocuments(t.Context(), docs, spool, 128, 1, encode, kitvec.WithBatchSize(2))
+	docs, err = FillUnitDocuments(t.Context(), docs, spool, 128, 1, encode, kitvec.WithBatchSize(2))
 	require.NoError(t, err)
-	assert.Empty(t, rejected)
 	assert.Equal(t, [][]string{{"first", "second"}}, calls)
 	require.Len(t, docs, 2)
 	docs[0].Chunks, err = spool.Chunks(docs[0].DocKey)
@@ -74,9 +73,8 @@ func TestFillUnitDocumentsSkipsRejectedInput(t *testing.T) {
 	spool, err := NewVectorSpool()
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, spool.Close()) })
-	docs, rejected, err := FillUnitDocuments(t.Context(), docs, spool, 128, 1, encode, kitvec.WithBatchSize(8))
+	docs, err = FillUnitDocuments(t.Context(), docs, spool, 128, 1, encode, kitvec.WithBatchSize(8))
 	require.NoError(t, err)
-	assert.Equal(t, []string{"o:session:1"}, rejected)
 	require.Len(t, docs, 2)
 	assert.Equal(t, "first", docs[0].Content)
 	assert.Equal(t, "last", docs[1].Content)
@@ -108,9 +106,8 @@ func TestFillUnitDocumentsRejectsDocumentWithTooManyChunks(t *testing.T) {
 		}
 		return vectors, nil
 	}
-	accepted, rejected, err := FillUnitDocuments(t.Context(), docs, spool, 20, 1, encode, kitvec.WithBatchSize(32))
+	accepted, err := FillUnitDocuments(t.Context(), docs, spool, 20, 1, encode, kitvec.WithBatchSize(32))
 	require.NoError(t, err)
-	require.Equal(t, []string{"o:session:0"}, rejected)
 	require.Len(t, accepted, 1)
 	assert.Equal(t, "later", accepted[0].Content)
 	assert.Equal(t, []string{"later"}, encoded)
@@ -138,9 +135,8 @@ func TestFillUnitDocumentsSpoolsLargeDocumentsBeforeNextPage(t *testing.T) {
 		}
 		return vectors, nil
 	}
-	accepted, rejected, err := FillUnitDocuments(t.Context(), docs, spool, 20, 1, encode, kitvec.WithBatchSize(8192))
+	accepted, err := FillUnitDocuments(t.Context(), docs, spool, 20, 1, encode, kitvec.WithBatchSize(8192))
 	require.NoError(t, err)
-	assert.Empty(t, rejected)
 	assert.Len(t, accepted, 2)
 	assert.False(t, secondBeforeFirstSaved, "second large document encoded before the first was spooled")
 }
@@ -161,9 +157,8 @@ func TestFillUnitDocumentsSpoolsPagesAndChunks(t *testing.T) {
 		}
 		return out, nil
 	}
-	accepted, rejected, err := FillUnitDocuments(t.Context(), docs, spool, 20, 1, encode, kitvec.WithBatchSize(32))
+	accepted, err := FillUnitDocuments(t.Context(), docs, spool, 20, 1, encode, kitvec.WithBatchSize(32))
 	require.NoError(t, err)
-	require.Empty(t, rejected)
 	require.Len(t, accepted, 140)
 	for _, doc := range accepted {
 		require.Empty(t, doc.Chunks)
@@ -183,7 +178,7 @@ func TestFillUnitDocumentsSpoolWriteFailure(t *testing.T) {
 	require.NoError(t, spool.file.Close())
 	docs, err := UnitDocuments([]db.EmbeddableUnit{{SessionID: "session", Kind: "user", Content: "content"}})
 	require.NoError(t, err)
-	_, _, err = FillUnitDocuments(t.Context(), docs, spool, 128, 1, func(_ context.Context, texts []string) ([][]float32, error) { return [][]float32{{1, 0}}, nil })
+	_, err = FillUnitDocuments(t.Context(), docs, spool, 128, 1, func(_ context.Context, texts []string) ([][]float32, error) { return [][]float32{{1, 0}}, nil })
 	require.ErrorContains(t, err, "vector spool")
 	require.Error(t, spool.Close())
 	files, err := os.ReadDir(dir)

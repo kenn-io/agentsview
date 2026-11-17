@@ -65,6 +65,50 @@ func TestHostedSemanticUnavailableGuidance(t *testing.T) {
 	}
 }
 
+func TestHostedReadOnlyStartsWithoutVectorGeneration(t *testing.T) {
+	cfg, admin := hostedRuntimeConfig(t)
+	_, err := admin.ExecContext(t.Context(), `CREATE EXTENSION IF NOT EXISTS vector SCHEMA public`)
+	require.NoError(t, err)
+	database, err := postgres.OpenHosted(t.Context(), cfg.PG.URL, cfg.PG.Schema, cfg.PG.RawTenant, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	_, err = database.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,provenance_kind,raw_content_revision,message_count,user_message_count) VALUES('session','p','m','codex','raw','rev',1,1); INSERT INTO messages(session_id,ordinal,role,content) VALUES('session',0,'user','visible text')`)
+	require.NoError(t, err)
+	defaults, err := config.Default()
+	require.NoError(t, err)
+	cfg.Vector = defaults.Vector
+	cfg.Vector.Enabled = true
+	cfg.Vector.Embeddings.Model = "fixture"
+	cfg.Vector.Embeddings.Dimension = 2
+	cfg.Vector.Embeddings.DefaultServer = "fixture"
+	cfg.Vector.Embeddings.Servers = map[string]config.VectorEmbeddingsServerConfig{"fixture": {Endpoint: "http://example.test", Timeout: "30s"}}
+	startup, err := prepareReplicaServeImpl(t.Context(), pgReplica{}, cfg, "", nil, false)
+	require.NoError(t, err)
+	t.Cleanup(startup.cleanup)
+	require.Nil(t, startup.startWorker)
+	request := func(mode string) *httptest.ResponseRecorder {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/search/content?pattern=visible&mode="+mode+"&include_one_shot=true", nil)
+		req.Header.Set("Authorization", "Bearer "+cfg.AuthToken)
+		req.Header.Set("X-AgentsView-Search-Intent", "semantic")
+		response := httptest.NewRecorder()
+		startup.srv.Handler().ServeHTTP(response, req)
+		return response
+	}
+	lexical := request("substring")
+	assert.Equal(t, http.StatusOK, lexical.Code, lexical.Body.String())
+	assert.Contains(t, lexical.Body.String(), "visible text")
+	semantic := request("semantic")
+	assert.Equal(t, http.StatusNotImplemented, semantic.Code, semantic.Body.String())
+	assert.Contains(t, semantic.Body.String(), "no embedding generation matching fingerprint")
+	startup.cleanup()
+	cfg.PG.RawDerivation = true
+	workerStartup, err := prepareReplicaServeImpl(t.Context(), pgReplica{}, cfg, "", nil, false)
+	if err == nil {
+		workerStartup.cleanup()
+	}
+	require.ErrorContains(t, err, "hosted embedding generation is missing")
+}
+
 func TestHostedDeploymentEmbeddingsSearch(t *testing.T) {
 	cfg, admin := hostedRuntimeConfig(t)
 	defaults, err := config.Default()

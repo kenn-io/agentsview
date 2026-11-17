@@ -166,8 +166,8 @@ func documentChunkBound(runes, maxInputChars int) int {
 	return (runes-maxInputChars+stride-1)/stride + 1
 }
 
-// FillUnitDocuments uses kit's fill flow and reports rejected document keys.
-func FillUnitDocuments(ctx context.Context, docs []storage.VectorPushDoc, spool *VectorSpool, maxInputChars, concurrency int, encode kitvec.EncodeFunc, batch ...kitvec.BatchOption) ([]storage.VectorPushDoc, []string, error) {
+// FillUnitDocuments uses kit's fill flow and returns accepted documents.
+func FillUnitDocuments(ctx context.Context, docs []storage.VectorPushDoc, spool *VectorSpool, maxInputChars, concurrency int, encode kitvec.EncodeFunc, batch ...kitvec.BatchOption) ([]storage.VectorPushDoc, error) {
 	eligible, rejected := rejectOversizedDocuments(docs, maxInputChars)
 	store := &unitFillStore{docs: eligible, spool: spool, maxInputChars: maxInputChars}
 	slices.SortFunc(store.docs, func(a, b storage.VectorPushDoc) int { return strings.Compare(a.DocKey, b.DocKey) })
@@ -185,7 +185,7 @@ func FillUnitDocuments(ctx context.Context, docs []storage.VectorPushDoc, spool 
 		}),
 	)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	rejectedSet := make(map[string]bool, len(rejected))
 	for _, key := range rejected {
@@ -198,5 +198,5 @@ func FillUnitDocuments(ctx context.Context, docs []storage.VectorPushDoc, spool 
 		}
 		accepted = append(accepted, doc)
 	}
-	return accepted, rejected, nil
+	return accepted, nil
 }
