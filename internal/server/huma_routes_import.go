@@ -70,7 +70,7 @@ func (s *Server) registerImportRoutes() {
 			}
 			value.(chan claudeAISyncResult) <- claudeAISyncResult{status: in.Body.Status, body: []byte(in.Body.Body), retryAfter: in.Body.RetryAfter, err: fetchErr}
 			return &struct{}{}, nil
-		}, maxBodyBytes(2*importer.ClaudeAIResponseLimit+64<<10))
+		}, maxBodyBytes(2*importer.BrowserResponseLimit+64<<10))
 
 	s.stream(group, http.MethodPost, "/claude-ai",
 		"Import Claude.ai archive", s.humaImportClaudeAI,
@@ -154,20 +154,20 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 		}
 		ctx, cancel := context.WithCancel(hctx.Context())
 		defer cancel()
-		fetch := func(ctx context.Context, path string) (importer.ClaudeAIResponse, error) {
+		fetch := func(ctx context.Context, path string) (importer.BrowserResponse, error) {
 			id := rand.Text()
 			answer := make(chan claudeAISyncResult, 1)
 			results.Store(id, answer)
 			defer results.Delete(id)
 			if !stream.SendJSON("fetch", map[string]string{"id": id, "path": path}) {
 				cancel()
-				return importer.ClaudeAIResponse{}, ctx.Err()
+				return importer.BrowserResponse{}, ctx.Err()
 			}
 			return awaitClaudeAIResponse(ctx, answer)
 		}
 		var compatibilityErr error
 		if in.Browser == "chrome" {
-			fetch = func(ctx context.Context, path string) (importer.ClaudeAIResponse, error) {
+			fetch = func(ctx context.Context, path string) (importer.BrowserResponse, error) {
 				response, err := s.chrome.fetch(ctx, path)
 				if errors.Is(err, chromehost.ErrCompatibility) && compatibilityErr == nil {
 					compatibilityErr = err
@@ -176,7 +176,9 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 				return response, err
 			}
 		}
-		stats, err := importer.SyncClaudeAI(ctx, store, fetch, s.cfg.ClaudeAI.Organizations, &importer.ImportCallbacks{
+		platform, _ := importer.LookupBrowserPlatform("claude-ai")
+		opts := importer.BrowserSyncOptions{Machine: s.cfg.InstallationID, ClaudeAIOrganizations: s.cfg.ClaudeAI.Organizations}
+		stats, err := platform.Sync(ctx, store, fetch, opts, &importer.ImportCallbacks{
 			SerializeWrite: func(write func() error) error {
 				return s.SerializeArchiveWrite(ctx, write)
 			},
@@ -185,7 +187,7 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 					cancel()
 				}
 			},
-		}, s.cfg.InstallationID)
+		})
 		if compatibilityErr != nil {
 			err = compatibilityErr
 		}
@@ -198,7 +200,7 @@ func (s *Server) humaSyncClaudeAI(ctx context.Context, in *claudeAISyncInput, re
 		}
 		if err != nil {
 			payload := map[string]string{"error": err.Error()}
-			if errors.Is(err, importer.ErrClaudeAIAuthRequired) {
+			if errors.Is(err, importer.ErrBrowserAuthRequired) {
 				payload["error"] = "Sign in to Claude.ai, then Sync again"
 				payload["code"] = "claude_ai_auth_required"
 			}

@@ -330,7 +330,7 @@ func TestChromeHostDisconnect(t *testing.T) {
 func TestChromeHostFrameReply(t *testing.T) {
 	srv := testServer(t, 5*time.Second)
 	_, conn := testChromeConnection(t, srv)
-	finished := make(chan importer.ClaudeAIResponse, 1)
+	finished := make(chan importer.BrowserResponse, 1)
 	go func() { response, _ := srv.chrome.fetch(t.Context(), "/api/organizations"); finished <- response }()
 	id, _ := readChromeRequest(t, conn)
 	writeChromeReply(t, conn, "foreign-id", 200, "private")

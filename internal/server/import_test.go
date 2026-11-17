@@ -165,7 +165,7 @@ func TestClaudeAISyncRelay(t *testing.T) {
 		status int
 		body   string
 	}{
-		{"200", 200, `{"uuid":"22222222-2222-4222-8222-222222222226","current_leaf_message_uuid":"m","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","padding":"` + strings.Repeat("x", importer.ClaudeAIResponseLimit) + `","chat_messages":[{"uuid":"m","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","text":"Oversized relay message","created_at":"2026-03-01T10:00:00Z"}]}`},
+		{"200", 200, `{"uuid":"22222222-2222-4222-8222-222222222226","current_leaf_message_uuid":"m","name":"Relay","created_at":"2026-03-01T10:00:00Z","updated_at":"2026-03-01T10:05:00Z","padding":"` + strings.Repeat("x", importer.BrowserResponseLimit) + `","chat_messages":[{"uuid":"m","parent_message_uuid":"00000000-0000-4000-8000-000000000000","sender":"human","text":"Oversized relay message","created_at":"2026-03-01T10:00:00Z"}]}`},
 		{"413 empty body", 413, ""},
 	} {
 		t.Run("oversize "+oversized.name, func(t *testing.T) {
@@ -268,7 +268,7 @@ func TestClaudeAISyncRelay(t *testing.T) {
 					} else if tt.status == 0 {
 						assert.JSONEq(t, `{"error":"TypeError: Failed to fetch"}`, data)
 					} else if tt.status == 403 {
-						assert.JSONEq(t, `{"error":"claude.ai access denied (HTTP 403)"}`, data)
+						assert.JSONEq(t, `{"error":"Claude.ai access denied (HTTP 403)"}`, data)
 					} else {
 						assert.Contains(t, data, "unexpected EOF")
 					}

@@ -226,15 +226,18 @@ func (s *ImportStats) record(sessionID string, status importStatus, err error) {
 	}
 }
 
+// upsertConversation writes a conversation whose stored rows messages
+// converts, refusing exports shorter than the archive.
 func upsertConversation(
 	ctx context.Context,
 	store db.Store,
 	result parser.ParseResult,
 	fts *lazyFTS,
+	messages func(string, []parser.ParsedMessage) []db.Message,
 ) (importStatus, error) {
 	s := result.Session
 
-	msgs := claudeAIMessages(s.ID, result.Messages)
+	msgs := messages(s.ID, result.Messages)
 
 	existing, err := store.GetSession(ctx, s.ID)
 	if err != nil {
@@ -416,7 +419,7 @@ func upsertChatGPTConversation(
 	}
 	if existing == nil {
 		fts.suspend(ctx)
-		err := writeChatGPTSession(ctx, store, chatGPTSession(s), msgs)
+		err := writeChatGPTSession(ctx, store, importedSession(s), msgs)
 		if errors.Is(err, db.ErrSessionExcluded) {
 			return importSkipped, nil
 		}
@@ -445,7 +448,7 @@ func upsertChatGPTConversation(
 	// Compare against the export as it would be stored, not as parsed:
 	// the write path sanitizes and projects rows, so raw parser output
 	// can differ from an unchanged archived copy.
-	canonical := canonicalChatGPTMessages(store, chatGPTSession(s), msgs, policy)
+	canonical := canonicalChatGPTMessages(store, importedSession(s), msgs, policy)
 	if len(canonical) < len(archived) {
 		return importNew, refuse(RefusalShorterExport, fmt.Errorf(
 			"export has %d messages, archive has %d",
@@ -495,7 +498,7 @@ func upsertChatGPTConversation(
 	rows := chatGPTFillRows(archived, msgs, filled)
 	rows = append(rows, msgs[len(archived):]...)
 	if err := appendChatGPTMessages(
-		ctx, store, chatGPTSession(s), rows,
+		ctx, store, importedSession(s), rows,
 	); errors.Is(err, db.ErrSessionExcluded) {
 		return importSkipped, nil
 	} else if err != nil {
@@ -504,7 +507,7 @@ func upsertChatGPTConversation(
 	return importUpdated, nil
 }
 
-func chatGPTSession(s parser.ParsedSession) db.Session {
+func importedSession(s parser.ParsedSession) db.Session {
 	sess := db.Session{
 		ID:               s.ID,
 		Project:          s.Project,

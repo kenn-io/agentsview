@@ -390,6 +390,7 @@ func TestUpsertConversationPreservesSessionIdentity(t *testing.T) {
 			},
 		},
 		newLazyFTS(ctx, d, nil),
+		claudeAIMessages,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, importNew, status)

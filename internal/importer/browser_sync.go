@@ -1,0 +1,330 @@
+package importer
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"hash/fnv"
+	"strings"
+	"time"
+
+	"github.com/cenkalti/backoff/v7"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/httputil"
+	"go.kenn.io/agentsview/internal/parser"
+)
+
+// BrowserResponseLimit caps one browser response, from Chrome or the desktop relay.
+const BrowserResponseLimit = 32 << 20
+
+var (
+	// ErrBrowserAuthRequired reports a missing or expired browser session.
+	ErrBrowserAuthRequired = errors.New("sign-in required")
+	// ErrBrowserResponseTooLarge marks a response over BrowserResponseLimit.
+	ErrBrowserResponseTooLarge = errors.New("response exceeds 32 MiB")
+	// ErrBrowserFormat reports a conversation shape this version cannot read.
+	ErrBrowserFormat = errors.New("returned a conversation format this version can't read. Update AgentsView and try again")
+)
+
+// BrowserResponse carries one browser response without credentials.
+type BrowserResponse struct {
+	Status     int
+	Body       []byte
+	RetryAfter string
+}
+
+// BrowserFetch requests path from the platform's site in the user's browser.
+type BrowserFetch func(ctx context.Context, path string) (BrowserResponse, error)
+
+// BrowserSyncStore keeps browser freshness alongside the local archive.
+type BrowserSyncStore interface {
+	db.Store
+	IsSessionTrashed(context.Context, string) bool
+	IsSessionExcluded(context.Context, string) bool
+	GetProviderStatHash(context.Context, parser.AgentType, string) (uint64, bool, error)
+	UpsertProviderStatHash(context.Context, parser.AgentType, string, uint64) error
+}
+
+// BrowserSyncOptions carries per-run settings for a browser sync.
+type BrowserSyncOptions struct {
+	// Machine overrides the machine recorded on synced sessions when set.
+	Machine string
+	// ClaudeAIOrganizations lists lowercase organization UUIDs to import;
+	// empty imports every chat organization. Only Claude.ai reads it.
+	ClaudeAIOrganizations []string
+}
+
+// BrowserPlatform describes one site that Sync imports through the browser.
+type BrowserPlatform struct {
+	Agent parser.AgentType
+	// Label names the service in errors and messages, such as "Claude.ai".
+	Label string
+	// ClientRelay lets a client without Chrome answer fetches itself (the
+	// desktop app); other platforms sync only through Chrome.
+	ClientRelay bool
+	// StopOnRateLimit stops the run on HTTP 429 or a Retry-After over a
+	// minute instead of retrying inside the request.
+	StopOnRateLimit bool
+	AuthRequired    func(status int, body []byte) bool
+	Sync            func(ctx context.Context, store BrowserSyncStore, fetch BrowserFetch, opts BrowserSyncOptions, cb *ImportCallbacks) (ImportStats, error)
+}
+
+// BrowserPlatforms lists the platforms Sync supports, keyed by agent type.
+func BrowserPlatforms() []BrowserPlatform {
+	return []BrowserPlatform{claudeAIPlatform()}
+}
+
+// LookupBrowserPlatform finds a platform by its agent type name.
+func LookupBrowserPlatform(name string) (BrowserPlatform, bool) {
+	for _, platform := range BrowserPlatforms() {
+		if string(platform.Agent) == name {
+			return platform, true
+		}
+	}
+	return BrowserPlatform{}, false
+}
+
+func (p BrowserPlatform) wrap(err error) error {
+	return fmt.Errorf("%s %w", p.Label, err)
+}
+
+func browserRequest(shapes string, shape int, substitutions ...string) string {
+	return strings.NewReplacer(substitutions...).Replace(strings.Split(strings.TrimSpace(shapes), "\n")[shape])
+}
+
+// browserFreshness hashes a list marker with the stored session fields Sync
+// changes, so a stored hash goes stale when either side moves. A nil session
+// hashes as an empty one.
+func browserFreshness(marker string, session *db.Session) uint64 {
+	if session == nil {
+		session = &db.Session{}
+	}
+	hash := fnv.New64a()
+	fmt.Fprintf(hash, "%s\x00%d", marker, session.MessageCount)
+	for _, field := range []*string{session.TranscriptRevision, session.SessionName, session.EndedAt} {
+		fmt.Fprint(hash, "\x00")
+		if field != nil {
+			fmt.Fprint(hash, *field)
+		}
+	}
+	return hash.Sum64()
+}
+
+type browserHTTPError struct {
+	label       string
+	status      int
+	rateLimited bool
+}
+
+func (e *browserHTTPError) Error() string {
+	if e.status == 403 {
+		return fmt.Sprintf("%s access denied (HTTP 403)", e.label)
+	}
+	return fmt.Sprintf("%s returned HTTP %d", e.label, e.status)
+}
+
+// fetchBrowser applies the response limit, sign-in detection, and retries
+// shared by every platform.
+func fetchBrowser(ctx context.Context, platform BrowserPlatform, fetch BrowserFetch, path string) ([]byte, error) {
+	attempt := 0
+	body, err := backoff.Retry(ctx, func() ([]byte, error) {
+		response, err := fetch(ctx, path)
+		if err != nil {
+			return nil, backoff.Permanent(err)
+		}
+		if len(response.Body) > BrowserResponseLimit {
+			return nil, backoff.Permanent(platform.wrap(ErrBrowserResponseTooLarge))
+		}
+		status := response.Status
+		if status >= 200 && status < 300 {
+			return response.Body, nil
+		}
+		if platform.AuthRequired(status, response.Body) {
+			return nil, backoff.Permanent(platform.wrap(ErrBrowserAuthRequired))
+		}
+		if status == 413 {
+			return nil, backoff.Permanent(platform.wrap(ErrBrowserResponseTooLarge))
+		}
+		httpErr := &browserHTTPError{label: platform.Label, status: status, rateLimited: platform.StopOnRateLimit && status == 429}
+		if status != 429 && status < 500 {
+			return nil, backoff.Permanent(httpErr)
+		}
+		delay := time.Duration(1<<attempt) * time.Second
+		attempt++
+		if retryAfter := httputil.ParseRetryAfter(response.RetryAfter); retryAfter > 0 {
+			if platform.StopOnRateLimit && retryAfter > 60*time.Second {
+				httpErr.rateLimited = true
+				return nil, backoff.Permanent(httpErr)
+			}
+			delay = min(retryAfter, 60*time.Second)
+		}
+		return nil, backoff.RetryAfter(delay, httpErr)
+	}, backoff.WithMaxTries(5), backoff.WithMaxElapsedTime(0))
+	if retryErr := backoff.AsRetryError(err); retryErr != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		err = retryErr.LastErr
+	}
+	if httpErr, ok := errors.AsType[*browserHTTPError](err); ok && httpErr.rateLimited {
+		err = fmt.Errorf("%s rate limited; sync stopped early, run Sync again later: %w", platform.Label, err)
+	}
+	return body, err
+}
+
+// browserSync runs the per-conversation steps every platform shares: skip
+// trashed, excluded, and fresh chats; fetch, parse, and write the rest; record
+// freshness; and stop after two failed conversations in a row.
+type browserSync struct {
+	store      BrowserSyncStore
+	agent      parser.AgentType
+	stats      *ImportStats
+	cb         *ImportCallbacks
+	machine    string
+	failedLast bool
+	// formatErr keeps the last unreadable conversation format so the run
+	// can report it after importing every readable chat.
+	formatErr error
+}
+
+func newBrowserSync(store BrowserSyncStore, platform BrowserPlatform, stats *ImportStats, opts BrowserSyncOptions, cb *ImportCallbacks) *browserSync {
+	return &browserSync{store: store, agent: platform.Agent, stats: stats, cb: cb, machine: opts.Machine}
+}
+
+type browserConversation struct {
+	freshness func(*db.Session) uint64
+	fetch     func(context.Context) ([]byte, error)
+	parse     func([]byte) (parser.ParseResult, error) // an empty session ID means nothing to import
+	write     func(context.Context, db.Store, parser.ParseResult) (importStatus, error)
+	// matches reports whether the detail still describes the listed version;
+	// freshness is recorded only when it does.
+	matches func([]byte, parser.ParseResult) bool
+}
+
+// stops reports errors that end the run instead of one conversation.
+func stops(err error) bool {
+	httpErr, _ := errors.AsType[*browserHTTPError](err)
+	return errors.Is(err, ErrBrowserAuthRequired) || httpErr != nil && httpErr.rateLimited
+}
+
+func (s *browserSync) conversation(ctx context.Context, id string, chat browserConversation) (retErr error) {
+	defer func() {
+		s.cb.progress(*s.stats)
+		if retErr == nil && ctx.Err() != nil {
+			retErr = ctx.Err()
+		}
+	}()
+	if s.store.IsSessionTrashed(ctx, id) || s.store.IsSessionExcluded(ctx, id) {
+		s.failedLast = false
+		s.stats.record(id, importSkipped, nil)
+		return nil
+	}
+	before, err := s.store.GetSessionFull(ctx, id)
+	if err != nil {
+		return err
+	}
+	storedHash, fresh, err := s.store.GetProviderStatHash(ctx, s.agent, id)
+	if err != nil {
+		return err
+	}
+	if fresh && storedHash == chat.freshness(before) {
+		s.failedLast = false
+		s.stats.record(id, importSkipped, nil)
+		return nil
+	}
+	detail, err := chat.fetch(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if stops(err) {
+			if httpErr, ok := errors.AsType[*browserHTTPError](err); ok && httpErr.rateLimited {
+				s.stats.record(id, importSkipped, err)
+			}
+			return err
+		}
+		if httpErr, ok := errors.AsType[*browserHTTPError](err); ok && httpErr.status == 404 {
+			s.failedLast = false
+			s.stats.record(id, importSkipped, nil)
+			return nil
+		}
+		s.stats.record(id, importSkipped, err)
+		if errors.Is(err, ErrBrowserResponseTooLarge) {
+			s.failedLast = false
+			return nil
+		}
+		if s.failedLast {
+			return err
+		}
+		s.failedLast = true
+		return nil
+	}
+	var detailErr error
+	write := func() error {
+		result, err := chat.parse(detail)
+		if errors.Is(err, ErrBrowserFormat) {
+			s.formatErr = err
+		}
+		if err != nil {
+			s.stats.record(id, importSkipped, err)
+			detailErr = err
+			return nil
+		}
+		if result.Session.ID == "" {
+			// The chat has nothing to import yet. Record freshness for what is
+			// stored so it is not fetched again until the list shows a change.
+			s.stats.record(id, importSkipped, nil)
+			stored, err := s.store.GetSessionFull(ctx, id)
+			if err == nil {
+				err = s.store.UpsertProviderStatHash(ctx, s.agent, id, chat.freshness(stored))
+			}
+			detailErr = err
+			return nil
+		}
+		result.Session.Machine = resolvedImportMachine(result.Session.Machine, []string{s.machine})
+		status, err := chat.write(ctx, s.store, result)
+		if errors.Is(err, db.ErrSessionTrashed) {
+			s.stats.record(id, importSkipped, nil)
+			return nil
+		}
+		// The write has committed. Keep its count even if bookkeeping fails.
+		s.stats.record(id, status, err)
+		if err == nil {
+			stored, readErr := s.store.GetSessionFull(ctx, id)
+			err = readErr
+			if err == nil && stored != nil {
+				// Equal messages can still hide a title repair. Compare stored
+				// names so titles discarded by archive policy count as unchanged.
+				if status == importSkipped && before != nil && !ptrEqual(before.SessionName, stored.SessionName) {
+					s.stats.Skipped--
+					s.stats.Updated++
+				}
+				// The chat can change between list and detail; cache only what was imported.
+				if chat.matches(detail, result) {
+					err = s.store.UpsertProviderStatHash(ctx, s.agent, id, chat.freshness(stored))
+				}
+			}
+			if err != nil {
+				s.stats.record(id, importSkipped, err)
+			}
+		}
+		detailErr = err
+		return nil
+	}
+	if s.cb != nil && s.cb.SerializeWrite != nil {
+		err = s.cb.SerializeWrite(write)
+	} else {
+		err = write()
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if err != nil {
+		return err
+	}
+	if detailErr != nil && (stops(detailErr) || s.failedLast) {
+		return detailErr
+	}
+	s.failedLast = detailErr != nil
+	return nil
+}

@@ -190,18 +190,18 @@ func (h *chromeHost) read(conn *chromeConnection) {
 	}
 }
 
-func (h *chromeHost) fetch(ctx context.Context, path string) (importer.ClaudeAIResponse, error) {
+func (h *chromeHost) fetch(ctx context.Context, path string) (importer.BrowserResponse, error) {
 	h.mu.Lock()
 	conn := h.connection
 	h.mu.Unlock()
 	if conn == nil {
-		return importer.ClaudeAIResponse{}, errors.New("chrome host not connected")
+		return importer.BrowserResponse{}, errors.New("chrome host not connected")
 	}
 	id := rand.Text()
 	answer := make(chan claudeAISyncResult, 1)
 	body, err := json.Marshal(map[string]any{"version": chromehost.Version, "id": id, "path": path})
 	if err != nil {
-		return importer.ClaudeAIResponse{}, err
+		return importer.BrowserResponse{}, err
 	}
 	conn.mu.Lock()
 	conn.pending[id] = answer
@@ -211,20 +211,20 @@ func (h *chromeHost) fetch(ctx context.Context, path string) (importer.ClaudeAIR
 	defer func() { conn.mu.Lock(); delete(conn.pending, id); conn.mu.Unlock() }()
 	if err != nil {
 		_ = conn.Close()
-		return importer.ClaudeAIResponse{}, err
+		return importer.BrowserResponse{}, err
 	}
 	return awaitClaudeAIResponse(ctx, answer)
 }
 
-func awaitClaudeAIResponse(ctx context.Context, answer <-chan claudeAISyncResult) (importer.ClaudeAIResponse, error) {
+func awaitClaudeAIResponse(ctx context.Context, answer <-chan claudeAISyncResult) (importer.BrowserResponse, error) {
 	timer := time.NewTimer(2 * time.Minute)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
-		return importer.ClaudeAIResponse{}, ctx.Err()
+		return importer.BrowserResponse{}, ctx.Err()
 	case <-timer.C:
-		return importer.ClaudeAIResponse{}, errors.New("claude browser fetch timed out")
+		return importer.BrowserResponse{}, errors.New("claude browser fetch timed out")
 	case response := <-answer:
-		return importer.ClaudeAIResponse{Status: response.status, Body: response.body, RetryAfter: response.retryAfter}, response.err
+		return importer.BrowserResponse{Status: response.status, Body: response.body, RetryAfter: response.retryAfter}, response.err
 	}
 }
