@@ -28,6 +28,43 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 )
 
+func TestHostedSemanticUnavailableGuidance(t *testing.T) {
+	cfg, _ := hostedRuntimeConfig(t)
+	store, err := postgres.NewHostedStore(t.Context(), cfg.PG.URL, cfg.PG.Schema, cfg.PG.RawTenant, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	defaults, err := config.Default()
+	require.NoError(t, err)
+	defaults.Vector.Embeddings.Model = "fixture"
+	defaults.Vector.Embeddings.Dimension = 2
+	defaults.Vector.Embeddings.DefaultServer = "fixture"
+	defaults.Vector.Embeddings.Servers = map[string]config.VectorEmbeddingsServerConfig{"fixture": {Endpoint: "http://example.test", Timeout: "30s"}}
+	for _, tc := range []struct {
+		name   string
+		vector config.VectorConfig
+		server *config.VectorEmbeddingsServerConfig
+		want   string
+	}{
+		{name: "disabled", want: "[vector]"},
+		{name: "missing generation", vector: defaults.Vector, want: "hosted-provision"},
+		{name: "missing deployment recipe", server: &config.VectorEmbeddingsServerConfig{Endpoint: "http://example.test"}, want: "hosted-provision"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg.Vector = tc.vector
+			if tc.name == "missing generation" {
+				cfg.Vector.Enabled = true
+			}
+			cfg.DeploymentEmbeddings = tc.server
+			require.NoError(t, wireReplicaVectorSearch(t.Context(), cfg, &serveWatchVectorProvider{miss: true}, store, "hosted"))
+			_, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "hello", Mode: "semantic"})
+			require.ErrorIs(t, err, db.ErrSemanticUnavailable)
+			assert.Contains(t, err.Error(), tc.want)
+			assert.NotContains(t, err.Error(), "replica pg push")
+			assert.NotContains(t, err.Error(), "configured workstation")
+		})
+	}
+}
+
 func TestHostedCaptureSemanticSearch(t *testing.T) {
 	original := newHostedRawParser
 	newHostedRawParser = func(time.Duration) (hostedRawParser, error) {

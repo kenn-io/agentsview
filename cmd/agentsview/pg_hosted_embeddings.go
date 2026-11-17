@@ -13,9 +13,9 @@ import (
 )
 
 type hostedEmbeddingSchedule struct {
-	drained, failed int64
-	retryAt         time.Time
-	delay           *backoff.ExponentialBackOff
+	drained int64
+	retryAt time.Time
+	delay   *backoff.ExponentialBackOff
 }
 
 func newHostedEmbeddingSchedule() *hostedEmbeddingSchedule {
@@ -23,27 +23,20 @@ func newHostedEmbeddingSchedule() *hostedEmbeddingSchedule {
 	delay.InitialInterval = 30 * time.Second
 	delay.MaxInterval = 5 * time.Minute
 	delay.Reset()
-	return &hostedEmbeddingSchedule{drained: -1, failed: -1, delay: delay}
+	return &hostedEmbeddingSchedule{drained: -1, delay: delay}
 }
 
 func (s *hostedEmbeddingSchedule) ready(revision int64, now time.Time) bool {
-	if revision == s.drained || revision == s.failed && now.Before(s.retryAt) {
-		return false
-	}
-	if revision != s.failed {
-		s.delay.Reset()
-	}
-	return true
+	return revision != s.drained && !now.Before(s.retryAt)
 }
 
 func (s *hostedEmbeddingSchedule) finish(revision int64, now time.Time, err error) {
 	if err != nil {
-		s.failed = revision
 		s.retryAt = now.Add(s.delay.NextBackOff())
 		return
 	}
 	s.drained = revision
-	s.failed = -1
+	s.retryAt = time.Time{}
 	s.delay.Reset()
 }
 
