@@ -1,4 +1,4 @@
-//go:build duckdbtest && !windows
+//go:build duckdb && duckdbtest && !windows
 
 package main
 
