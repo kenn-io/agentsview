@@ -319,6 +319,12 @@ var mirrorTables = []tableSpec{
 			// rest when only that message changed, as when its tool call got
 			// its result. Rows written before the column existed hold ''.
 			col("agentsview_leading_message_rows_fingerprint", tString),
+			// rows_version is the newest push version among the session's
+			// current dependent rows. A push that rewrites only the session
+			// row keeps it, so rows another push wrote after it stay
+			// recognizable as unpublished; see keptRowsPublished. Rows
+			// written before the column existed read it from push_version.
+			colDefault("rows_version", tVersion, pushVersionCol),
 		},
 		indexes: []indexSpec{sessionIDTailIndex},
 		orderBy: []string{"id"},

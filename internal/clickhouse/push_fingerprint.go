@@ -198,6 +198,7 @@ var derivedSessionColumns = map[string]string{
 	// A push writes both with the content; they describe it.
 	"agentsview_content_fingerprint": "the content fingerprint itself",
 	"content_version":                "push bookkeeping",
+	"rows_version":                   "push bookkeeping",
 	// It hashes the rendered dependent rows, which the content
 	// fingerprint already covers.
 	"agentsview_message_rows_fingerprint":         "push bookkeeping",

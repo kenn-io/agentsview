@@ -486,10 +486,13 @@ type sessionWrite struct {
 	// commitLinks rewrites the session's commit links alone.
 	commitLinks bool
 	// keptContent is the content fingerprint that let the push keep the
-	// dependent rows, and keptVersion their content version, which the
-	// rewritten session row records as content_version.
-	keptContent string
-	keptVersion uint64
+	// dependent rows, keptVersion their content version, which the
+	// rewritten session row records as content_version, and
+	// keptRowsVersion their newest version, which it records as
+	// rows_version.
+	keptContent     string
+	keptVersion     uint64
+	keptRowsVersion uint64
 	// keptMessageRows and keptLeadingRows are the mirror's message rows
 	// fingerprints. A row-only write records them again. With content,
 	// keepMessages > 0 asks the push to keep the rows of that many leading
@@ -517,7 +520,7 @@ const currentSessionRowSQL = `stored_message_count IS NOT NULL AND dashboard_fac
 // push wrote for the session.
 type mirrorSession struct {
 	fingerprint, contentFingerprint, archiveID string
-	contentVersion                             uint64
+	contentVersion, rowsVersion                uint64
 	// messageRows is the message rows fingerprint of the storedMessages
 	// message rows the mirror holds, and leadingRows the fingerprint of all
 	// but the last of them.
@@ -553,7 +556,7 @@ func planSessionWrite(
 			return rewriteSession
 		}
 		return sessionWrite{
-			row: true, content: true, keptVersion: stored.contentVersion,
+			row: true, content: true, keptVersion: stored.contentVersion, keptRowsVersion: stored.rowsVersion,
 			keptMessageRows: stored.messageRows, keptLeadingRows: stored.leadingRows,
 			keepMessages: stored.storedMessages,
 		}
@@ -563,6 +566,7 @@ func planSessionWrite(
 	}
 	return sessionWrite{
 		row: true, keptContent: local.content, keptVersion: stored.contentVersion,
+		keptRowsVersion: stored.rowsVersion,
 		keptMessageRows: stored.messageRows, keptLeadingRows: stored.leadingRows,
 	}
 }
@@ -636,7 +640,7 @@ func (s *Sync) readMirrorSessions(ctx context.Context, ids []string) (map[string
 		placeholders, args := inArgs(batch)
 		if err := func() error {
 			rows, err := s.conn.QueryContext(ctx, `SELECT id, agentsview_push_fingerprint,
-					agentsview_content_fingerprint, source_archive_id, content_version,
+					agentsview_content_fingerprint, source_archive_id, content_version, rows_version,
 					agentsview_message_rows_fingerprint, agentsview_leading_message_rows_fingerprint,
 					ifNull(stored_message_count, 0),
 					`+currentSessionRowSQL+`
@@ -652,7 +656,7 @@ func (s *Sync) readMirrorSessions(ctx context.Context, ids []string) (map[string
 				var rowCurrent uint8
 				var storedMessages int64
 				if err := rows.Scan(&id, &m.fingerprint, &m.contentFingerprint, &m.archiveID,
-					&m.contentVersion, &m.messageRows, &m.leadingRows, &storedMessages, &rowCurrent); err != nil {
+					&m.contentVersion, &m.rowsVersion, &m.messageRows, &m.leadingRows, &storedMessages, &rowCurrent); err != nil {
 					return fmt.Errorf("scanning clickhouse session fingerprint: %w", err)
 				}
 				m.rowCurrent = rowCurrent != 0
@@ -1037,9 +1041,11 @@ func (s *Sync) loadPayload(ctx context.Context, sess db.Session) (sessionPayload
 }
 
 // sessionPublication is what a session row records about the dependent rows
-// it describes: their content version and message rows fingerprints.
+// it describes: their oldest and newest versions and message rows
+// fingerprints.
 type sessionPublication struct {
 	contentVersion uint64
+	rowsVersion    uint64
 	messageRows    string
 	leadingRows    string
 }
@@ -1113,10 +1119,7 @@ func (s *Sync) pushSessionBatch(
 				w = rewriteSession
 			}
 			if w.keepMessages > 0 {
-				kept[sess.ID] = keptRows{
-					through: p.messages[w.keepMessages-1].Ordinal, messages: w.keepMessages,
-					contentVersion: w.keptVersion,
-				}
+				kept[sess.ID] = newKeptRows(p, w.keepMessages, w.keptVersion, w.keptRowsVersion)
 			}
 		}
 		planned = append(planned, plannedWrite{p: p, w: w, rows: rows, leading: leading})
@@ -1146,7 +1149,9 @@ func (s *Sync) pushSessionBatch(
 		switch {
 		case w.content:
 			content = append(content, contentWrite{payload: p, keep: w.keepMessages})
-			publication := sessionPublication{contentVersion: version, messageRows: pw.rows, leadingRows: pw.leading}
+			publication := sessionPublication{
+				contentVersion: version, rowsVersion: version, messageRows: pw.rows, leadingRows: pw.leading,
+			}
 			if w.keepMessages > 0 {
 				publication.contentVersion = w.keptVersion
 			}
@@ -1154,7 +1159,8 @@ func (s *Sync) pushSessionBatch(
 			n = len(p.messages) - w.keepMessages
 		case w.row:
 			publications[id] = sessionPublication{
-				contentVersion: w.keptVersion, messageRows: w.keptMessageRows, leadingRows: w.keptLeadingRows,
+				contentVersion: w.keptVersion, rowsVersion: w.keptRowsVersion,
+				messageRows: w.keptMessageRows, leadingRows: w.keptLeadingRows,
 			}
 		}
 		if w.row {
@@ -1458,7 +1464,7 @@ func (s *Sync) sessionRow(p sessionPayload, publication sessionPublication, vers
 	}
 	row = append(row, computeDashboardFacts(p.messages).row()...)
 	return append(row, p.fingerprint.content, publication.contentVersion, publication.messageRows,
-		publication.leadingRows, version)
+		publication.leadingRows, publication.rowsVersion, version)
 }
 
 func lastMessageAt(msgs []db.Message) *time.Time {

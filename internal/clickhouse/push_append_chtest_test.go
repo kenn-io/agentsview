@@ -251,12 +251,15 @@ func TestPushAppendRewritesLastStoredMessageWhenItsToolResultArrives(t *testing.
 
 // Rows another archive's push of the same session left among the rows an
 // append would keep, without publishing a session row, make the push rewrite
-// the session, so the transcript holds only this archive's messages.
+// the session, so the transcript holds only this archive's messages and all
+// of its tool rows. A rename pushed in between republishes only the session
+// row and must not make those rows look published.
 func TestPushRewritesSessionWhenKeptRowsAreUnpublished(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name  string
-		setup string
+		name   string
+		setup  string
+		rename bool
 	}{
 		{
 			name: "newer row from another push",
@@ -273,6 +276,17 @@ func TestPushRewritesSessionWhenKeptRowsAreUnpublished(t *testing.T) {
 				FROM (SELECT * FROM messages WHERE session_id = ? AND ordinal = 0);
 				DELETE FROM messages WHERE session_id = ? AND ordinal = 0 AND content = 'alpha first'`,
 		},
+		{
+			name: "newer row from another push, then a rename",
+			setup: `INSERT INTO messages SELECT * REPLACE ('other archive' AS content, push_version + 1 AS push_version)
+				FROM (SELECT * FROM messages WHERE session_id = ? AND ordinal = 0)`,
+			rename: true,
+		},
+		{
+			name: "tool rows removed by another archive's interrupted session delete",
+			setup: `DELETE FROM tool_result_events WHERE session_id = ?;
+				DELETE FROM tool_calls WHERE session_id = ?`,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -281,6 +295,13 @@ func TestPushRewritesSessionWhenKeptRowsAreUnpublished(t *testing.T) {
 			for stmt := range strings.SplitSeq(tc.setup, ";") {
 				_, err := conn.ExecContext(ctx, stmt, fixtureAlphaID)
 				require.NoError(t, err)
+			}
+			if tc.rename {
+				title := "Renamed Alpha"
+				require.NoError(t, local.RenameSession(ctx, fixtureAlphaID, &title))
+				res, err := s.Push(ctx, false, nil)
+				require.NoError(t, err)
+				require.Equal(t, 1, res.SessionRowsOnly)
 			}
 
 			growSession(t, local, fixtureAlphaID, "alpha third", "2026-01-10T00:10:00.000Z")
@@ -295,6 +316,13 @@ func TestPushRewritesSessionWhenKeptRowsAreUnpublished(t *testing.T) {
 			require.Len(t, stored, 3)
 			assert.Equal(t, "alpha first", stored[0].Content)
 			assert.Equal(t, "alpha third", stored[2].Content)
+			var toolCalls, results int
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"SELECT count() FROM tool_calls WHERE session_id = ?", fixtureAlphaID).Scan(&toolCalls))
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"SELECT count() FROM tool_result_events WHERE session_id = ?", fixtureAlphaID).Scan(&results))
+			assert.Equal(t, 2, toolCalls)
+			assert.Equal(t, 1, results)
 		})
 	}
 }

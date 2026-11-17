@@ -150,26 +150,50 @@ func keptOrdinalBound(column, op string, ids []string, keptThrough map[string]in
 }
 
 // keptRows describes the stored rows an append keeps for one session: those
-// of its messages through ordinal through, which number messages, written at
-// or after contentVersion.
+// of its messages through ordinal through, written from contentVersion
+// through rowsVersion. counts holds how many rows each of keptRowsTables
+// should have for them.
 type keptRows struct {
 	through        int
-	messages       int
 	contentVersion uint64
+	rowsVersion    uint64
+	counts         [len(keptRowsTables)]uint64
 }
 
 // keptRowsTables are the tables whose kept rows an append checks.
 // usage_messages copies the messages rows, so checking messages covers it.
-var keptRowsTables = []string{"messages", "tool_calls", "tool_result_events", "image_text"}
+var keptRowsTables = [...]string{"messages", "tool_calls", "tool_result_events", "image_text"}
+
+// newKeptRows describes the rows of the first keep messages of p, which the
+// session row published from contentVersion through rowsVersion.
+func newKeptRows(p sessionPayload, keep int, contentVersion, rowsVersion uint64) keptRows {
+	k := keptRows{
+		through: p.messages[keep-1].Ordinal, contentVersion: contentVersion, rowsVersion: rowsVersion,
+	}
+	k.counts[0] = uint64(keep)
+	for _, m := range p.messages[:keep] {
+		k.counts[1] += uint64(len(m.ToolCalls))
+		for _, tc := range m.ToolCalls {
+			k.counts[2] += uint64(len(tc.ResultEvents))
+		}
+	}
+	for _, r := range p.imageText {
+		if r.MessageOrdinal <= k.through {
+			k.counts[3]++
+		}
+	}
+	return k
+}
 
 // keptRowsPublished reports, for each session in kept, whether the mirror
 // still holds exactly the rows the session row published for the kept
 // messages. Another archive's push of the same session that stopped before
-// publishing its session row leaves rows at a newer version, which win on
-// read over the rows an append would keep, and its delete can remove kept
-// rows. Either way the append would publish a mix of two archives' rows, so
-// the push rewrites the session instead. Pushes are versioned by start time,
-// so this misses only a push that runs at the same time as this one.
+// publishing its session row leaves rows at a newer version than the session
+// row's rows_version, which win on read over the rows an append would keep.
+// Its delete, or its deletion of the session, can remove kept rows. Either way
+// the append would publish a mix of two archives' rows, so the push rewrites
+// the session instead. Pushes are versioned by start time, so this misses only
+// a push that runs at the same time as this one.
 func (s *Sync) keptRowsPublished(ctx context.Context, kept map[string]keptRows) (map[string]bool, error) {
 	out := make(map[string]bool, len(kept))
 	through := make(map[string]int, len(kept))
@@ -180,32 +204,30 @@ func (s *Sync) keptRowsPublished(ctx context.Context, kept map[string]keptRows) 
 		placeholders, idArgs := inArgs(batch)
 		parts := make([]string, 0, len(keptRowsTables))
 		var args []any
-		for _, table := range keptRowsTables {
+		for i, table := range keptRowsTables {
 			bound, boundArgs := keptOrdinalBound(messageOrdinalColumn[table], "<=", batch, through)
-			parts = append(parts, "SELECT '"+table+"' AS t, session_id, push_version FROM "+table+
-				" WHERE session_id IN ("+placeholders+")"+bound)
+			parts = append(parts, fmt.Sprintf("SELECT %d AS t, session_id, push_version FROM %s WHERE session_id IN (%s)%s",
+				i, table, placeholders, bound))
 			args = slices.Concat(args, idArgs, boundArgs)
 		}
-		args = slices.Concat(args, idArgs)
 		if err := func() error {
-			rows, err := s.conn.QueryContext(ctx, `SELECT r.session_id, r.messages, r.oldest, r.newest, s.push_version
-				FROM (SELECT session_id, countIf(t = 'messages') AS messages,
-						min(push_version) AS oldest, max(push_version) AS newest
-					FROM (`+strings.Join(parts, " UNION ALL ")+`) GROUP BY session_id) AS r
-				INNER JOIN (SELECT id, push_version FROM sessions WHERE id IN (`+placeholders+`)) AS s
-				ON s.id = r.session_id`, args...)
+			rows, err := s.conn.QueryContext(ctx, `SELECT session_id,
+					countIf(t = 0), countIf(t = 1), countIf(t = 2), countIf(t = 3),
+					min(push_version), max(push_version)
+				FROM (`+strings.Join(parts, " UNION ALL ")+`) GROUP BY session_id`, args...)
 			if err != nil {
 				return fmt.Errorf("reading clickhouse kept message row versions: %w", err)
 			}
 			defer rows.Close()
 			for rows.Next() {
 				var id string
-				var messages, oldest, newest, published uint64
-				if err := rows.Scan(&id, &messages, &oldest, &newest, &published); err != nil {
+				var counts [len(keptRowsTables)]uint64
+				var oldest, newest uint64
+				if err := rows.Scan(&id, &counts[0], &counts[1], &counts[2], &counts[3], &oldest, &newest); err != nil {
 					return fmt.Errorf("scanning clickhouse kept message row versions: %w", err)
 				}
 				k := kept[id]
-				out[id] = messages == uint64(k.messages) && oldest >= k.contentVersion && newest <= published
+				out[id] = counts == k.counts && oldest >= k.contentVersion && newest <= k.rowsVersion
 			}
 			return rows.Err()
 		}(); err != nil {

@@ -241,14 +241,17 @@ three of five sessions that grew between two pushes had changed only that row.
 The hash covers the rows the session row published, which can differ from the
 rows a read sees. Another archive's push of the same session can stop after
 writing its rows and before publishing its session row. Its rows carry a newer
-version, so they win over the published rows on read, and its delete can remove
-published rows. Before keeping rows, the push reads the versions and count of
-the stored rows at or below the last kept ordinal in `messages`, `tool_calls`,
-`tool_result_events`, and `image_text`. Any version below `content_version` or
-above the session row's `push_version`, or a message count other than the kept
-count, makes the push rewrite the whole session. Push versions follow start
-time, so the check misses only a push of the same session that runs at the same
-time. Then the push:
+version, so they win over the published rows on read. Its delete, or its
+deletion of the whole session, can remove published rows. The session row
+records `rows_version`, the newest version among the rows it published. A push
+that rewrites only the session row, such as a rename, keeps that value, so the
+other archive's rows stay newer than it. Before keeping rows, the push reads the
+versions and counts of the stored rows at or below the last kept ordinal in
+`messages`, `tool_calls`, `tool_result_events`, and `image_text`. Any version
+below `content_version` or above `rows_version`, or any count other than the
+local session's, makes the push rewrite the whole session. Push versions follow
+start time, so the check misses only a push of the same session that runs at the
+same time. Then the push:
 
 1. Inserts the rows of the later messages, and the image text anchored after
    the last kept message, at the new version.
@@ -258,7 +261,8 @@ time. Then the push:
    kept ordinal under keys this push did not write, such as rows an interrupted
    push wrote before it stopped. Rows at or below that ordinal stay.
 1. Publishes the session row with the old `content_version`, the new message
-   rows fingerprints, and a new `push_version`.
+   rows fingerprints, and the push's version as both `rows_version` and
+   `push_version`.
 
 Anything else that changes a kept row changes the hash, and the push rewrites
 the whole session at the new version: an edited or renumbered earlier message, a
