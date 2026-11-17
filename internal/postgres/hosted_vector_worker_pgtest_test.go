@@ -30,8 +30,8 @@ func TestHostedVectorUploadEditAndSearchSnapshot(t *testing.T) {
 		}
 		return out, nil
 	}
-	first, receipt := f.accept(t, "device-a", "snapshot-first", "")
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, first), first, projectionOutcome("old snapshot words")))
+	upload, receipt := f.accept(t, "device-a", "upload", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, upload), upload, projectionOutcome("old words")))
 	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false))
 	hosted, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
@@ -52,7 +52,23 @@ func TestHostedVectorUploadEditAndSearchSnapshot(t *testing.T) {
 	for _, match := range initial.Matches {
 		initialSnippets = append(initialSnippets, match.Snippet)
 	}
-	assert.Contains(t, initialSnippets, "old snapshot words")
+	assert.Contains(t, initialSnippets, "old words")
+	edit, receipt := f.accept(t, "device-a", "edit", receipt.Receipt)
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, edit), edit, projectionOutcome("new words")))
+	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false))
+	edited, err := hosted.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "new", Mode: "semantic", IncludeOneShot: true, Limit: 10})
+	require.NoError(t, err)
+	var editedSnippets []string
+	for _, match := range edited.Matches {
+		editedSnippets = append(editedSnippets, match.Snippet)
+	}
+	assert.Contains(t, editedSnippets, "new words")
+	var oldUpload int
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM vector_documents WHERE content='old words'`).Scan(&oldUpload))
+	assert.Zero(t, oldUpload)
+	first, receipt := f.accept(t, "device-a", "snapshot-first", receipt.Receipt)
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, first), first, projectionOutcome("old snapshot words")))
+	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false))
 	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET deleted_at=now()`)
 	require.NoError(t, err)
 	trashed, err := hosted.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "old", Mode: "semantic", IncludeOneShot: true, Limit: 10})
