@@ -216,8 +216,17 @@ func TestPromptPRLinks(t *testing.T) {
 }
 
 func TestPromptPRLinksAdjacentURLs(t *testing.T) {
-	links := PromptPRLinks("https://github.com/o/r/pull/1,https://github.com/o/r/pull/2")
-	require.Len(t, links, 2)
-	assert.Equal(t, "https://github.com/o/r/pull/1", links[0].URL)
-	assert.Equal(t, "https://github.com/o/r/pull/2", links[1].URL)
+	for _, input := range []string{
+		"https://github.com/o/r/pull/1,https://github.com/o/r/pull/2",
+		"https://github.com/o/r/pull/1;https://github.com/o/r/pull/2",
+		"https://github.com/o/r/pull/1|https://github.com/o/r/pull/2",
+		"https://github.com/o/r/pull/1https://github.com/o/r/pull/2",
+	} {
+		t.Run(input, func(t *testing.T) {
+			links := PromptPRLinks(input)
+			require.Len(t, links, 2)
+			assert.Equal(t, "https://github.com/o/r/pull/1", links[0].URL)
+			assert.Equal(t, "https://github.com/o/r/pull/2", links[1].URL)
+		})
+	}
 }

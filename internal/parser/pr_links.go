@@ -106,14 +106,27 @@ func MergePRLinks(lists ...[]PRLink) []PRLink {
 	return c.result()
 }
 
-var promptURL = regexp.MustCompile(`https?://(?:\[[^\]\s]+\]|[^\s<>"'()/\[\]]+)[^\s<>"'()\[\]]*`)
+var (
+	promptURL      = regexp.MustCompile(`https?://(?:\[[^\]\s]+\]|[^\s<>"'()/\[\]]+)[^\s<>"'()\[\]]*`)
+	promptURLStart = regexp.MustCompile(`https?://`)
+)
 
 // PromptPRLinks extracts pull and merge request URLs from text.
 func PromptPRLinks(text string) []PRLink {
 	var links prLinkCollector
-	text = strings.ReplaceAll(text, ",https://", " https://")
-	text = strings.ReplaceAll(text, ",http://", " http://")
-	for _, candidate := range promptURL.FindAllString(text, -1) {
+	starts := promptURLStart.FindAllStringIndex(text, -1)
+	for i, start := range starts {
+		end := len(text)
+		if i+1 < len(starts) {
+			end = starts[i+1][0]
+		}
+		part := text[start[0]:end]
+		candidate := promptURL.FindString(part)
+		if i+1 < len(starts) && len(candidate) == len(part) {
+			candidate = strings.TrimRightFunc(candidate, func(r rune) bool {
+				return unicode.IsPunct(r) || unicode.IsSymbol(r)
+			})
+		}
 		candidate = strings.TrimRightFunc(candidate, func(r rune) bool {
 			return strings.ContainsRune(".,;:!?]`*_", r) || r > unicode.MaxASCII && unicode.IsPunct(r)
 		})
