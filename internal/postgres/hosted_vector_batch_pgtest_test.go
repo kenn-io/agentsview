@@ -409,7 +409,9 @@ func TestHostedVectorSpoolCleanupOnFailures(t *testing.T) {
 	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 20, 1, false))
 	_, err = f.admin.ExecContext(t.Context(), `REVOKE INSERT ON `+vectorChunkTable(id)+` FROM "`+f.role+`"`)
 	require.NoError(t, err)
-	require.Error(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 20, 1, true))
+	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET raw_content_revision='rev2' WHERE id='session'; UPDATE messages SET content=repeat('changed ',600) WHERE session_id='session' AND ordinal=0`)
+	require.NoError(t, err)
+	require.ErrorContains(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 20, 1, true), "permission denied")
 	var stamp string
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT doc_agg_hash FROM vector_push_state WHERE generation_id=$1 AND session_id='session'`, id).Scan(&stamp))
 	assert.Equal(t, "rev|false", stamp)
