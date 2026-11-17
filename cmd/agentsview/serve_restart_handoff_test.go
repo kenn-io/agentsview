@@ -45,6 +45,10 @@ func isolateServeTestHome(t *testing.T) (string, string) {
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
 	t.Setenv("AGENTSVIEW_TEST_REAL_CLI", "1")
+	// Without a token, every settings response runs the host's `gh auth
+	// token`, which can take longer than the tests' one-second client timeout
+	// on a busy Windows runner.
+	t.Setenv("AGENTSVIEW_GITHUB_TOKEN", "test-github-token")
 	return dir, dataDir
 }
 
