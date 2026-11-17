@@ -463,6 +463,118 @@ func TestAntigravityCLIDiscoverAndParseDB(t *testing.T) {
 	assert.Equal(t, "db prompt fallback", sess.FirstMessage)
 }
 
+func TestAntigravityCLIDBPreservesTypedPromptMissingFromHistory(t *testing.T) {
+	root := t.TempDir()
+	id := "33333333-4444-5555-6666-777777777777"
+	mustMkdir(t, filepath.Join(root, "conversations"))
+	dbPath := filepath.Join(root, "conversations", id+".db")
+	createAntigravityTestDB(t, dbPath)
+	db, err := sql.Open("sqlite3", dbPath)
+	require.NoError(t, err)
+	item := encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: []byte("typed prompt")}})
+	input := encodePB([]pbField{{num: 3, wire: pbWireBytes, bytes: item}})
+	payload := encodePB([]pbField{{num: 19, wire: pbWireBytes, bytes: input}})
+	mustExec(t, db, `UPDATE steps SET step_payload = ? WHERE idx = 0`, payload)
+	require.NoError(t, db.Close())
+	mustWrite(t, filepath.Join(root, "history.jsonl"),
+		[]byte(`{"display":"different history prompt","timestamp":1779000000000,`+
+			`"conversationId":"`+id+`"}`))
+
+	sess, msgs, err := parseAntigravityCLITestSession(t, dbPath, "", "test-machine")
+	require.NoError(t, err)
+	require.Len(t, msgs, 3)
+	assert.Equal(t, "typed prompt", msgs[0].Content)
+	assert.Equal(t, "different history prompt", msgs[1].Content)
+	assert.Equal(t, "typed prompt", sess.FirstMessage)
+}
+
+func TestAntigravityCLIHistoryKeepsTurnOrder(t *testing.T) {
+	type historyRow struct {
+		prompt    string
+		timestamp int64
+	}
+	for _, tc := range []struct {
+		name       string
+		prompts    []string
+		replyTimes []uint64
+		history    []historyRow
+		want       []string
+		userTimes  []int64
+	}{
+		{
+			name:       "partial history copies the last prompt timestamp",
+			prompts:    []string{"first prompt", "second prompt"},
+			replyTimes: []uint64{1779000100},
+			history:    []historyRow{{"second prompt", 1779000200000}},
+			want:       []string{"first prompt", "assistant reply content body", "second prompt"},
+			userTimes:  []int64{0, 1779000200000},
+		},
+		{
+			name:       "partial history leaves first prompt untimed",
+			prompts:    []string{"first prompt", "second prompt"},
+			replyTimes: []uint64{0},
+			history:    []historyRow{{"first prompt", 1779000000000}},
+			want:       []string{"first prompt", "assistant reply content body", "second prompt"},
+			userTimes:  []int64{0, 0},
+		},
+		{
+			name:       "complete matching history supplies prompt timestamps",
+			prompts:    []string{"first prompt", "second prompt", "third prompt"},
+			replyTimes: []uint64{1779000050, 1779000150},
+			history:    []historyRow{{"first prompt", 1779000000000}, {"second prompt", 1779000100000}, {"third prompt", 1779000200000}},
+			want:       []string{"first prompt", "assistant reply content body", "second prompt", "assistant reply content body", "third prompt"},
+			userTimes:  []int64{1779000000000, 1779000100000, 1779000200000},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			id := "33333333-4444-5555-6666-777777777777"
+			mustMkdir(t, filepath.Join(root, "conversations"))
+			dbPath := filepath.Join(root, "conversations", id+".db")
+			db, err := sql.Open("sqlite3", dbPath)
+			require.NoError(t, err)
+			createAntigravityStepTables(t, db)
+			for i, prompt := range tc.prompts {
+				item := encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: []byte(prompt)}})
+				input := encodePB([]pbField{{num: 3, wire: pbWireBytes, bytes: item}})
+				payload := encodePB([]pbField{{num: 19, wire: pbWireBytes, bytes: input}})
+				mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`, i*2, 14, payload)
+				if i < len(tc.replyTimes) {
+					fields := []pbField{{num: 17, wire: pbWireBytes, bytes: []byte("assistant reply content body")}}
+					if tc.replyTimes[i] != 0 {
+						ts := encodePB([]pbField{{num: 1, wire: pbWireVarint, varint: tc.replyTimes[i]}})
+						fields = append(fields, pbField{num: 5, wire: pbWireBytes, bytes: ts})
+					}
+					mustExec(t, db, `INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`, i*2+1, 17, encodePB(fields))
+				}
+			}
+			require.NoError(t, db.Close())
+			var history []byte
+			for _, row := range tc.history {
+				line, err := json.Marshal(map[string]any{"display": row.prompt, "timestamp": row.timestamp, "conversationId": id})
+				require.NoError(t, err)
+				history = append(history, line...)
+				history = append(history, '\n')
+			}
+			mustWrite(t, filepath.Join(root, "history.jsonl"), history)
+			sess, msgs, err := parseAntigravityCLITestSession(t, dbPath, "", "test-machine")
+			require.NoError(t, err)
+			require.Len(t, msgs, len(tc.want))
+			for i, content := range tc.want {
+				assert.Equal(t, content, msgs[i].Content)
+			}
+			for i, timestamp := range tc.userTimes {
+				if timestamp == 0 {
+					assert.True(t, msgs[i*2].Timestamp.IsZero())
+				} else {
+					assert.Equal(t, timestamp, msgs[i*2].Timestamp.UnixMilli())
+				}
+			}
+			assert.Equal(t, "first prompt", sess.FirstMessage)
+		})
+	}
+}
+
 func TestAntigravityCLIProjectFallbackPromptAndProximity(t *testing.T) {
 	root := t.TempDir()
 	id := "f0f0f0f0-f1f1-f2f2-f3f3-f4f4f4f4f4f4"
@@ -4781,4 +4893,17 @@ func TestAntigravityIDEUnreadableStepsFailsClosed(t *testing.T) {
 		assert.Empty(t, msgs)
 		assert.Empty(t, usageEvents)
 	})
+}
+
+func TestDecodeAntigravityStepStructuredUserInput(t *testing.T) {
+	expansion := []byte("A longer skill expansion with enough text to be selected")
+	for _, n := range []int{2, 1, 27} {
+		expansion = encodePB([]pbField{{num: n, wire: pbWireBytes, bytes: expansion}})
+	}
+	item := encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: []byte("比较这两个游戏 /grill-me")}, {num: 2, wire: pbWireBytes, bytes: expansion}})
+	items := []pbField{{num: 3, wire: pbWireBytes, bytes: item}}
+	payload := encodePB([]pbField{{num: 19, wire: pbWireBytes, bytes: encodePB(items)}})
+	msg, ok := decodeAntigravityStep(0, 14, payload)
+	require.True(t, ok)
+	assert.Equal(t, "比较这两个游戏 /grill-me", msg.Content)
 }

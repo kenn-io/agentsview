@@ -57,8 +57,11 @@ type processResult struct {
 	// parse-diff (forceParse) surfaces them as DiffParseError report
 	// entries so --fail-on-change cannot pass over a session the
 	// current binary failed to parse.
-	sessionErrs      []sessionParseError
-	skip             bool
+	sessionErrs []sessionParseError
+	skip        bool
+	// contentVerified marks a skip that proved the source bytes equal the
+	// stored row, so the caller may record stat trust for them.
+	contentVerified  bool
 	mtime            int64
 	err              error
 	sourceCwdChanged bool
@@ -1139,6 +1142,12 @@ func (e *Engine) processProviderFile(
 		)
 	}
 	if incOK {
+		if incRes.contentVerified {
+			if verifiedStateOK {
+				e.promoteVerifiedSource(verifiedCapture)
+			}
+			e.stampProviderStatHashForConfirmedSource(ctx, preParseStatHash)
+		}
 		incRes.mtime = fingerprint.MTimeNS
 		incRes.cacheSkip = cacheSkip
 		incRes.cacheKey = cacheKey

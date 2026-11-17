@@ -130,8 +130,8 @@ func startArchivePushWatcher(
 		stop, open, unwatched := hooks.startWatcher(cfg, engine, callback, options)
 		return stop, open, unwatched, nil
 	}
-	stop, open, unwatched, _, flush := startFileWatcher(cfg, engine, callback, options)
-	return stop, open, unwatched, flush
+	watcher := startFileWatcher(cfg, cfg.SyncInterval, engine, callback, options)
+	return watcher.stop, watcher.openDispatch, watcher.unwatchedDirs, watcher.flushPending
 }
 
 func newArchivePushLoop(

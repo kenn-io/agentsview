@@ -69,7 +69,11 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 	}
 	defer closeWriteDB(database, writeLock)
 
-	apiKey := strings.TrimSpace(appCfg.CursorAdminAPIKey)
+	apiKey, err := appCfg.ResolveCursorAdminAPIKey()
+	if err != nil {
+		return err
+	}
+	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
 		return errors.New("missing Cursor admin API key")
 	}
@@ -101,6 +105,10 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 	}
 
 	client := newCursorUsageClient(apiKey)
+	client.OnRetry = func(page int, err error, wait time.Duration) {
+		fmt.Fprintf(os.Stderr, "Cursor usage page %d: %v; retrying in %s\n",
+			page, err, wait.Round(time.Second))
+	}
 	events, err := client.FetchAllUsageEvents(ctx, cursorusage.Query{
 		StartDate: start,
 		EndDate:   end,

@@ -32,9 +32,8 @@ func TestPGRetainedCommitLinkPublicationRace(t *testing.T) {
 	t.Parallel()
 	for _, withPrompt := range []bool{true, false} {
 		t.Run(map[bool]string{false: "empty", true: "prompt"}[withPrompt], func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
-			defer cancel()
-			a, localA, pg, _ := newSessionProvenancePushSync(t, "agentsview_commit_race_test")
+			ctx := t.Context()
+			a, localA, pg, _ := newSessionProvenancePushSync(t, "agentsview")
 			localB := testDB(t)
 			dbtest.SeedCommitLinks(t, localA)
 			dbtest.SeedCommitLinks(t, localB)
@@ -53,6 +52,9 @@ func TestPGRetainedCommitLinkPublicationRace(t *testing.T) {
 			barrier := &retainedDeleteBarrier{make(chan struct{}), make(chan struct{})}
 			cfg.Tracer = barrier
 			traced := stdlib.OpenDB(*cfg)
+			// Fixture setup can wait for a shared database slot. Start the
+			// operation deadline only when both writers are ready.
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer func() { cancel(); _ = traced.Close() }()
 			a.pg = traced
 			done := make(chan error, 1)

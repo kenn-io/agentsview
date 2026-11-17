@@ -76,7 +76,11 @@ func newHostedAdapter(ctx context.Context, pg *sql.DB, tenant string) (*HostedSt
 	if err != nil {
 		return nil, err
 	}
-	h := &HostedStore{physical: &Store{pg: pg, ownedDB: pg, hostedRelations: true}, core: core, tenant: tenant, cursor: &hostedCursorState{}}
+	cockroach, encoding, err := pgEngine(ctx, pg)
+	if err != nil {
+		return nil, err
+	}
+	h := &HostedStore{physical: &Store{pg: pg, ownedDB: pg, hostedRelations: true, cockroach: cockroach, serverEncoding: encoding}, core: core, tenant: tenant, cursor: &hostedCursorState{}}
 	core.curationGuard = h.guardCurationIdentity
 	if _, err = rand.Read(h.cursor.key[:]); err != nil {
 		return nil, err
@@ -85,6 +89,8 @@ func newHostedAdapter(ctx context.Context, pg *sql.DB, tenant string) (*HostedSt
 }
 func (h *HostedStore) DB() *sql.DB  { return h.physical.DB() }
 func (h *HostedStore) Close() error { return h.physical.Close() }
+
+func (h *HostedStore) MemoryBackendName() string { return h.physical.MemoryBackendName() }
 func (h *HostedStore) SetCustomPricing(p map[string]config.CustomModelRate) {
 	h.physical.SetCustomPricing(p)
 }

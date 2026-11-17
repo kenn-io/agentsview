@@ -107,7 +107,8 @@ func duckAnalyticsMessageTimeExists(
 }
 
 func (s analyticsSQL) VisitSessionIDSets(ctx context.Context, ids []string, visit func(ctx context.Context, idSet string, args []any) error) error {
-	return readbase.VisitChunkedSessionIDs(ctx, ids, visit)
+	// DuckDB binds the full selection as a single list.
+	return visit(ctx, "(SELECT unnest(?))", []any{ids})
 }
 
 func (s analyticsSQL) ToolCountsSQL(idSet string, args []any) (string, []any) {

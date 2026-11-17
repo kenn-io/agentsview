@@ -1,0 +1,15 @@
+{
+  "name": "agentsview",
+  "description": "AgentsView plugins for Claude Code",
+  "owner": {
+    "name": "Kenn Software LLC",
+    "url": "https://agentsview.io"
+  },
+  "plugins": [
+    {
+      "name": "agentsview-memory",
+      "source": "./plugins/agentsview-memory",
+      "description": "Search and read relevant AgentsView conversation history before guessing."
+    }
+  ]
+}

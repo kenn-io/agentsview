@@ -1892,6 +1892,45 @@ func TestLoadFile_SyncInterval(t *testing.T) {
 	}
 }
 
+func TestLoadFile_BackgroundSyncInterval(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		data      map[string]any
+		want      time.Duration
+		wantFloor time.Duration
+	}{
+		{
+			name: "absent uses default", data: map[string]any{},
+			want: 10 * time.Minute, wantFloor: 10 * time.Minute,
+		},
+		{
+			name: "configured", data: map[string]any{"background_sync_interval": "30m"},
+			want: 30 * time.Minute, wantFloor: 30 * time.Minute,
+		},
+		{
+			name: "zero syncs at the live interval",
+			data: map[string]any{"background_sync_interval": "0s"},
+			want: 0, wantFloor: 5 * time.Second,
+		},
+		{
+			name: "a longer live interval is never shortened in the background",
+			data: map[string]any{"background_sync_interval": "1m", "sync_interval": "20m"},
+			want: time.Minute, wantFloor: 20 * time.Minute,
+		},
+		{
+			name: "no live minimum keeps the background interval",
+			data: map[string]any{"sync_interval": "0s"},
+			want: 10 * time.Minute, wantFloor: 10 * time.Minute,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := loadMinimalWithConfig(t, tt.data)
+			assert.Equal(t, tt.want, cfg.BackgroundSyncInterval)
+			assert.Equal(t, tt.wantFloor, cfg.BackgroundSyncFloor())
+		})
+	}
+}
+
 func TestLoadFile_PGConfig(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -3308,4 +3347,33 @@ func TestAuthFlagRetiredOnlyBySuccessfulAuthSave(t *testing.T) {
 	require.NoError(t, os.WriteFile(configPath, saved, 0o600))
 	require.NoError(t, cfg.SaveSettings(map[string]any{"require_auth": false}))
 	assert.True(t, cfg.AuthSettingsSaved)
+}
+
+func TestMusePersonalRootResolution(t *testing.T) {
+	for _, mode := range []string{"default", "env", "config"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := setupTestEnv(t)
+			home := canonicalTempDir(t)
+			setTestHome(t, home)
+			t.Setenv("MUSE_PERSONAL_AGENTS_DIR", "")
+			t.Setenv("CODEX_HOME", "")
+			t.Setenv("CLAUDE_CONFIG_DIR", "")
+			t.Setenv("PI_CODING_AGENT_DIR", "")
+			writeConfig(t, dir, map[string]any{})
+			want := filepath.Join(home, "agents")
+			if mode == "env" {
+				want = filepath.Join(home, "explicit-root")
+				t.Setenv("MUSE_PERSONAL_AGENTS_DIR", want)
+			}
+			cfg, err := LoadMinimal()
+			require.NoError(t, err)
+			if mode == "config" {
+				want = filepath.Join(home, "configured-root")
+				require.NoError(t, cfg.applyConfigTOML(
+					"[agents.muse-personal]\ndirs = ["+strconv.Quote(want)+"]\n"))
+			}
+			assert.Equal(t, []string{want}, cfg.ResolveDirs(parser.AgentMusePersonal))
+			assert.Equal(t, mode != "default", cfg.IsUserConfigured(parser.AgentMusePersonal))
+		})
+	}
 }

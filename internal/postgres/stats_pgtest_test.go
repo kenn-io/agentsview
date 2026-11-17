@@ -13,7 +13,7 @@ import (
 
 func TestStatsAllTotalsUseSameFilter(t *testing.T) {
 	t.Parallel()
-	_, d := prepareUsageSchema(t, "agentsview_stats_filters_test")
+	_, d := prepareUsageSchema(t, usageTestSchema)
 	ctx := t.Context()
 	stats, err := d.GetStats(ctx, false, false)
 	require.NoError(t, err)

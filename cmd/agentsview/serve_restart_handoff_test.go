@@ -45,6 +45,10 @@ func isolateServeTestHome(t *testing.T) (string, string) {
 	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
 	t.Setenv("AGENTSVIEW_TEST_REAL_CLI", "1")
+	// Without a token, every settings response runs the host's `gh auth
+	// token`, which can take longer than the tests' one-second client timeout
+	// on a busy Windows runner.
+	t.Setenv("AGENTSVIEW_GITHUB_TOKEN", "test-github-token")
 	return dir, dataDir
 }
 
@@ -212,11 +216,24 @@ func TestServeRestartPreservesSkipInitialSyncAfterArchiveUpgrade(t *testing.T) {
 		}
 	})
 	rt := waitForRestartRuntime(t, dataDir)
-	require.Eventually(t, func() bool {
-		needs, _, err := db.ArchiveResyncState(t.Context(), dbPath)
-		return err == nil && !needs
-	}, 30*time.Second, 100*time.Millisecond)
 	base := fmt.Sprintf("http://127.0.0.1:%d", rt.Port)
+	// Opening SQLite here can prevent the daemon from replacing the archive
+	// on Windows. Wait through HTTP until the daemon has finished the rebuild.
+	require.Eventually(t, func() bool {
+		resp, err := restartTestRequest(t, http.MethodGet, base+"/api/v1/sync/status", "", "")
+		if err != nil {
+			return false
+		}
+		defer resp.Body.Close()
+		var status struct {
+			ArchiveStale   bool `json:"archive_stale"`
+			StartupPending bool `json:"startup_pending"`
+		}
+		return resp.StatusCode == http.StatusOK && json.UnmarshalRead(resp.Body, &status) == nil && !status.ArchiveStale && !status.StartupPending
+	}, 30*time.Second, 100*time.Millisecond)
+	needsResync, _, err = db.ArchiveResyncState(t.Context(), dbPath)
+	require.NoError(t, err)
+	require.False(t, needsResync, "archive upgrade must finish before restart")
 	restartAndWait(t, dataDir, base, "")
 	contents, err := os.ReadFile(output.Name())
 	require.NoError(t, err)
@@ -522,9 +539,12 @@ func TestRestartReplacementReadsSettingsSavedDuringDrain(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(path, append([]byte("tool_result_images = \"drop\"\n"), saved...), 0o600))
 
+	// HTTP can answer before the replacement publishes its discovery record.
+	// Cleanup needs that new record to find and stop the replacement.
 	require.Eventually(t, func() bool {
 		current := restartTestInstance(t, base, "")
-		return current != "" && current != previous
+		replacement := FindDaemonRuntime(dataDir)
+		return current != "" && current != previous && replacement != nil && replacement.Record.StartedAt.After(rt.Record.StartedAt)
 	}, 30*time.Second, 100*time.Millisecond)
 	resp, err := restartTestRequest(t, http.MethodGet, base+"/api/v1/settings", "", "")
 	require.NoError(t, err)
@@ -572,7 +592,8 @@ func TestServeRestartPortChoiceWhenOccupied(t *testing.T) {
 	t.Cleanup(func() { assert.NoError(t, listener.Close()) })
 	port := listener.Addr().(*net.TCPAddr).Port
 	processCtx, cancel := context.WithCancel(context.WithoutCancel(t.Context()))
-	defer cancel()
+	// Cancel only after cleanup has stopped and waited for the server below.
+	t.Cleanup(cancel)
 	child := exec.CommandContext(processCtx, os.Args[0], "serve", "--host=127.0.0.1", "--restart-port="+strconv.Itoa(port), "--no-sync", "--no-browser", "--no-update-check")
 	require.NoError(t, child.Start())
 	done := make(chan error, 1)
@@ -635,8 +656,9 @@ func TestServeRestartPreservesAutoPortForUpdate(t *testing.T) {
 			require.Zero(t, cfg.Port)
 			port, err := cmd.Flags().GetInt("restart-port")
 			require.NoError(t, err)
-			next, _, err := prepareRunServeRuntimeConfig(t.Context(), cfg, port, nil)
+			next, nextOpts, err := prepareRunServeRuntimeConfig(t.Context(), cfg, port, nil)
 			require.NoError(t, err)
+			require.NoError(t, nextOpts.Listener.Close())
 			assert.Positive(t, next.Port)
 			assert.NotEqual(t, occupiedPort, next.Port)
 			require.NotNil(t, replacement.ExplicitPort)

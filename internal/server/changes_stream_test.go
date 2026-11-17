@@ -638,7 +638,10 @@ func TestChangeStreamWakesWithoutEventCoalescing(t *testing.T) {
 
 func TestChangeStreamShortensSyncIntervalWhileConnected(t *testing.T) {
 	override := &sync.IntervalOverride{}
-	te := setupWithServerOpts(t, []server.Option{server.WithSyncIntervalOverride(override)})
+	te := setupWithServerOpts(t,
+		[]server.Option{server.WithSyncIntervalOverride(override)},
+		func(c *config.Config) { c.SyncInterval = 5 * time.Second },
+	)
 	interval := func() time.Duration {
 		d, _ := override.Current()
 		return d

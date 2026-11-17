@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { errorTelemetry } from "../../utils/error-telemetry.js";
+  import LoadError from "../shared/LoadError.svelte";
   import { Card, Table, Typeahead, type TypeaheadOption } from "@kenn-io/kit-ui";
   import { usage } from "../../stores/usage.svelte.js";
   import { m } from "../../i18n/index.js";
@@ -318,15 +318,14 @@
   </div>
 
   {#if usage.errors.pairwise}
-    <Card level="default" padding="none" class="error-bar">
-      <span {@attach errorTelemetry("analytics")}>{usage.errors.pairwise}</span>
-      <button
-        class="retry-btn"
-        onclick={() => usage.fetchAll({ preserveTimeRange: true })}
-      >
-        {m.shared_retry()}
-      </button>
-    </Card>
+    <LoadError
+      message={usage.errors.pairwise}
+      onRetry={() => void usage.fetchAll({ preserveTimeRange: true })}
+      telemetry="analytics"
+    />
+  {/if}
+  {#if usage.errors.pairwise && rows.length === 0}
+    <!-- Nothing loaded to keep under the error. -->
   {:else if usage.loading.pairwise && rows.length === 0}
     <Card level="default" padding="none" class="pairwise-note">{m.shared_refresh()}</Card>
   {:else if !hasSelection}
@@ -483,33 +482,9 @@
     font-size: 12px;
   }
 
-  .pairwise-panel :global(.error-bar) {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 12px;
-    border-color: var(--accent-red);
-    color: var(--accent-red);
-    font-size: 12px;
-  }
 
-  .pairwise-panel :global(.error-bar > .kit-card__body) {
-    display: contents;
-  }
 
-  .retry-btn {
-    padding: 2px 8px;
-    border: 1px solid var(--accent-red);
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    color: var(--accent-red);
-    cursor: pointer;
-  }
 
-  .retry-btn:hover {
-    background: var(--accent-red);
-    color: var(--accent-red-foreground);
-  }
 
   @media (max-width: 760px) {
     .selectors,

@@ -30,7 +30,6 @@ func TestSessionDeletionCauseSchemaMigrationPreservesRows(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err)
 	defer pg.Close()
@@ -70,7 +69,6 @@ func TestSecretFindingsSchema(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
@@ -144,7 +142,6 @@ func TestEnsureSchemaCreatesMappingMirrorAndSessionProvenance(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
@@ -186,7 +183,6 @@ func TestToolCallsFilePathIndex(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
@@ -213,7 +209,6 @@ func TestEnsureSchemaMigratesLegacyMoneyColumns(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
@@ -358,7 +353,6 @@ func TestMigrateMoneyColumnsPGSerializesConcurrentUpgraders(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
@@ -448,7 +442,6 @@ func TestEnsureSchemaRejectsInvalidLegacyMoneyWithoutChangingSchema(t *testing.T
 	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
@@ -483,7 +476,6 @@ func TestPromptEvidenceMigrationPreservesSessions(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err)
 	defer pg.Close()

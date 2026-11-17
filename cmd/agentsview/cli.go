@@ -17,6 +17,7 @@ import (
 	"go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/server"
 	"golang.org/x/term"
 )
@@ -796,6 +797,14 @@ func newDuckDBCommand() *cobra.Command {
 		GroupID:      groupData,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
+		// Stop before starting a daemon or touching the mirror when this build
+		// leaves out the DuckDB driver. The bare group still prints its help.
+		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			if cmd.HasSubCommands() {
+				return nil
+			}
+			return duckdbsync.RequireDriver()
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
 		},
@@ -998,6 +1007,8 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w, "  DIRECT_API_DIR          Direct API sessions directory")
 	fmt.Fprintln(w, "  OMP_DIR                 OhMyPi sessions directory")
 	fmt.Fprintln(w, "  MUSE_SESSIONS_DIR       Muse Code sessions directory")
+	fmt.Fprintln(w, "  MUSE_PERSONAL_AGENTS_DIR")
+	fmt.Fprintln(w, "                          Muse Personal agents directory")
 	fmt.Fprintln(w, "  DEEPSEEK_TUI_SESSIONS_DIR")
 	fmt.Fprintln(w, "                          DeepSeek TUI sessions directory")
 	fmt.Fprintln(w, "  DEEPSEEK_HARNESS_SESSIONS_DIR")
@@ -1064,6 +1075,8 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w, "  Top-level daemon_idle_timeout applies to automatically started and serve --background daemons;")
 	fmt.Fprintln(w, "  \"0s\" keeps them alive. daemon start and daemon restart stay running until stopped.")
 	fmt.Fprintln(w, "  Top-level sync_idle_after = \"10m\" pauses local collection while idle; \"0\" disables the pause.")
+	fmt.Fprintln(w, "  Top-level background_sync_interval = \"10m\" spaces out syncs while nobody is watching the archive;")
+	fmt.Fprintln(w, "  \"0s\" syncs at sync_interval all the time.")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Data stored in ~/.agentsview/ by default.")
 }

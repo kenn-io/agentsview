@@ -101,7 +101,7 @@ func newRecallListCommand() *cobra.Command {
 	var currentWorktree bool
 	cmd := &cobra.Command{
 		Use:          "list",
-		Short:        "List accepted entries",
+		Short:        "List recall entries",
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -125,10 +125,22 @@ func newRecallListCommand() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			printRecallEntryTrustedOnlyHuman(out, list.TrustedOnly)
-			return printRecallResultsHuman(out, list.RecallEntries)
+			if err := printRecallResultsDetailedHumanWithOptions(out, list.RecallEntries, recallDetailedPrintOptions{
+				ShowEvidence: f.UpdatedSince != "" || f.CreatedSince != "",
+				ShowBody:     f.UpdatedSince != "" || f.CreatedSince != "",
+			}); err != nil {
+				return err
+			}
+			if list.NextCursor != "" {
+				fmt.Fprintf(out, "next_cursor: %s\n", list.NextCursor)
+			}
+			return nil
 		},
 	}
 	addRecallFilterFlags(cmd, &f)
+	cmd.Flags().StringVar(&f.UpdatedSince, "updated-since", "", "Include entries updated at or after this RFC3339 timestamp")
+	cmd.Flags().StringVar(&f.CreatedSince, "created-since", "", "Include entries created at or after this RFC3339 timestamp")
+	cmd.Flags().StringVar(&f.Cursor, "cursor", "", "Continue from a previous cursor")
 	addRecallEntryCurrentCWDFlag(cmd, &currentCWD)
 	addRecallEntryCurrentGitBranchFlag(cmd, &currentGitBranch)
 	addRecallEntryCurrentWorktreeFlag(cmd, &currentWorktree)
@@ -1385,7 +1397,10 @@ func printRecallResultsDetailedHuman(
 type recallDetailedPrintOptions struct {
 	ShowScores   bool
 	ShowEvidence bool
-	ContextMeta  *service.RecallContextMeta
+	// ShowBody adds each entry's timestamps and body, which recall list needs
+	// for reading changes and saving a checkpoint.
+	ShowBody    bool
+	ContextMeta *service.RecallContextMeta
 }
 
 func printRecallResultsDetailedHumanWithOptions(
@@ -1407,6 +1422,11 @@ func printRecallResultsDetailedHumanWithOptions(
 			fmt.Fprintf(w, "    %s %s\n",
 				sanitizeTerminal(recall.Project),
 				sanitizeTerminal(recall.Agent))
+		}
+		if options.ShowBody {
+			fmt.Fprintf(w, "    created_at=%s\n", sanitizeTerminal(recall.CreatedAt))
+			fmt.Fprintf(w, "    updated_at=%s\n", sanitizeTerminal(recall.UpdatedAt))
+			fmt.Fprintf(w, "    body: %s\n", sanitizeTerminal(recall.Body))
 		}
 		printRecallEntryReviewLine(w, recall.RecallEntry)
 		printRecallEntryLifecycleLine(w, recall.RecallEntry)

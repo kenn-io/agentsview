@@ -176,6 +176,35 @@ func (db *DB) queryTurnRows(
 	return out, rows.Err()
 }
 
+// The first started and the last finished execution event of tool call tc on
+// message m. Both are empty when the agent recorded no execution events.
+const (
+	toolExecutionStartedSQL = `(
+		    SELECT tre.timestamp
+		    FROM tool_result_events tre
+		    WHERE tre.session_id = tc.session_id
+		      AND tre.tool_call_message_ordinal = m.ordinal
+		      AND tre.call_index = tc.call_index
+		      AND tre.source = 'tool_execution'
+		      AND tre.status = 'started'
+		      AND NULLIF(tre.timestamp, '') IS NOT NULL
+		    ORDER BY tre.event_index ASC
+		    LIMIT 1
+		  )`
+	toolExecutionCompletedSQL = `(
+		    SELECT tre.timestamp
+		    FROM tool_result_events tre
+		    WHERE tre.session_id = tc.session_id
+		      AND tre.tool_call_message_ordinal = m.ordinal
+		      AND tre.call_index = tc.call_index
+		      AND tre.source = 'tool_execution'
+		      AND tre.status IN ('completed', 'errored')
+		      AND NULLIF(tre.timestamp, '') IS NOT NULL
+		    ORDER BY tre.event_index DESC
+		    LIMIT 1
+		  )`
+)
+
 func (db *DB) queryCallRows(
 	ctx context.Context, sessionID string,
 ) ([]CallRow, error) {
@@ -188,30 +217,8 @@ func (db *DB) queryCallRows(
 		  tc.skill_name,
 		  tc.subagent_session_id,
 		  tc.input_json,
-		  (
-		    SELECT tre.timestamp
-		    FROM tool_result_events tre
-		    WHERE tre.session_id = tc.session_id
-		      AND tre.tool_call_message_ordinal = m.ordinal
-		      AND tre.call_index = tc.call_index
-		      AND tre.source = 'tool_execution'
-		      AND tre.status = 'started'
-		      AND NULLIF(tre.timestamp, '') IS NOT NULL
-		    ORDER BY tre.event_index ASC
-		    LIMIT 1
-		  ) AS execution_started_at,
-		  (
-		    SELECT tre.timestamp
-		    FROM tool_result_events tre
-		    WHERE tre.session_id = tc.session_id
-		      AND tre.tool_call_message_ordinal = m.ordinal
-		      AND tre.call_index = tc.call_index
-		      AND tre.source = 'tool_execution'
-		      AND tre.status IN ('completed', 'errored')
-		      AND NULLIF(tre.timestamp, '') IS NOT NULL
-		    ORDER BY tre.event_index DESC
-		    LIMIT 1
-		  ) AS execution_completed_at
+		  `+toolExecutionStartedSQL+` AS execution_started_at,
+		  `+toolExecutionCompletedSQL+` AS execution_completed_at
 		  ,s_sub.started_at
 		  ,s_sub.ended_at
 		FROM tool_calls tc

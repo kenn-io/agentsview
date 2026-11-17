@@ -1,4 +1,4 @@
-//go:build duckdbtest && !(windows && arm64)
+//go:build duckdb && duckdbtest && !(windows && arm64)
 
 package duckdb
 
@@ -96,19 +96,24 @@ func TestQuackStoreReattachesAfterFailedReattach(t *testing.T) {
 	_, err = server.ExecContext(ctx, `CALL quack_stop(?)`, uri)
 	require.NoError(t, err, "stop quack server")
 
-	var got int
-	err = store.queryRowContext(ctx,
-		`SELECT value FROM failed_reattach_test WHERE id = ?`,
-		"seed",
-	).Scan(&got)
-	require.Error(t, err, "query while server is stopped should fail")
+	// The extension keeps an established session open after quack_stop, so
+	// a query alone need not fail here. Reattach directly: it detaches, then
+	// cannot attach to the stopped server, which strands the client with no
+	// attachment.
+	store.quack.reattachMu.Lock()
+	err = store.quack.reattachLocked(ctx)
+	store.quack.reattachMu.Unlock()
+	require.Error(t, err, "reattach while server is stopped should fail")
+	var attached int
+	require.NoError(t, store.quack.DB().QueryRowContext(ctx,
+		`SELECT count(*) FROM duckdb_databases() WHERE database_name = ?`,
+		quackAttachmentName,
+	).Scan(&attached))
+	require.Zero(t, attached, "failed reattach should leave no attachment")
 
 	_, err = server.ExecContext(ctx, `CALL quack_serve(?, token => ?)`, uri, token)
 	require.NoError(t, err, "restart quack server")
-	_, err = store.quack.DB().ExecContext(ctx, "USE memory")
-	require.NoError(t, err, "select local catalog before forced detach")
-	_, err = store.quack.DB().ExecContext(ctx, "DETACH "+quackAttachmentName)
-	require.NoError(t, err, "force stranded detached Quack attachment")
+	var got int
 	require.NoError(t,
 		store.queryRowContext(ctx,
 			`SELECT value FROM failed_reattach_test WHERE id = ?`,

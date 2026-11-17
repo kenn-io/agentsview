@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-09
+last_edited: 2026-11-16
 title: MCP Server
 description: Connect assistant clients to your AgentsView session history with MCP
 ---
@@ -90,6 +90,7 @@ client will see these tools:
 | `search_content`              | Substring, regex, terms, semantic, or hybrid search over session text    |
 | `get_usage_summary`           | Aggregate token and cost usage                                           |
 | `get_session_usage`           | Show one session's tokens and cost by model and by request               |
+| `list_recall`                 | List Recall entries changed or created since a time, with a cursor       |
 | `query_recall`                | Search extracted Recall entries when the backend supports Recall queries |
 | `get_session_file_references` | Find retained image bytes in Docbank, including prior versions and trash |
 | `get_tool_calls`              | List the tool calls one session made, with inputs and result sizes       |
@@ -154,9 +155,50 @@ complete tool list above.
 
 This profile's tool list is about 21 KB, and the same test holds it under 24 KB.
 
-Run `agentsview agent setup` to install the recall skill and focused MCP profile for installed Claude Code and Codex clients. Use `--agent claude` or `--agent codex` to select a client, and `--check` to inspect setup. Setup refuses to replace a different `agentsview` MCP entry without `--force` and preserves other entries. Use `--force` to replace the entry and overwrite edited skills.
+### Choose an installation route
 
-For a remote archive, set the hosted environment variables below for the focused profile. For skill-only or project-level installation, use `agentsview skills install`; see [the CLI reference](/docs/commands/#agentsview-skills).
+| Route                       | Clients               | What you get                                                                                             | When to use it                                                                                                                                                |
+| --------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Plugin                      | Claude Code           | Recall skill, search agent, memory-profile server, and SessionStart sync hook; updates through `/plugin` | Use the complete memory package in Claude Code.                                                                                                               |
+| `agentsview agent setup`    | Claude Code and Codex | Recall skill, Claude search agent, and memory-profile `agentsview` server; no hook                       | Set up memory for installed clients. Use `--agent claude` or `--agent codex` to select one, and `--check` to inspect setup.                                   |
+| Plain MCP entry             | MCP clients           | Full or memory-profile tools only                                                                        | Use the [Quick Start](#quick-start) entry for tools without a recall skill guiding proactive search.                                           |
+| `agentsview skills install` | Claude Code and Codex | Skill and Claude search agent only                                                                       | Install a skill with `--project` or `--server` and register a server named `agentsview` yourself. See the [CLI reference](/docs/commands/#agentsview-skills). |
+
+For the Claude Code plugin, put `agentsview` on `PATH` and run:
+
+```text
+/plugin marketplace add kenn-io/agentsview
+/plugin install agentsview-memory@agentsview
+```
+
+Restart Claude Code and open `/mcp` to confirm the server. Choose one route per
+client. The startup diagnostic reports a standalone skill beside the plugin. The
+plugin's server and a standalone `agentsview` entry are separate connections, so
+running both connects two servers. `agentsview agent setup` refuses to replace a
+different `agentsview` MCP entry without `--force` and preserves other entries.
+`--force` also overwrites edited skills.
+
+### Memory everywhere, full tools in some projects
+
+Install the plugin at user scope. In each project where you want the full tool
+list, run:
+
+```bash
+claude mcp add --scope project agentsview -- agentsview mcp
+```
+
+Approve the project's `.mcp.json`. Use `--scope local` instead of
+`--scope project` to keep the entry out of the repository. Open `/mcp` in that
+project and turn off `plugin:agentsview-memory:agentsview`. Claude Code stores
+this project setting in `~/.claude.json`; repeat the toggle on each machine.
+The plugin's skill, agent, and hook keep working, and the agent uses the project
+server. Other projects keep the plugin's memory server. For a remote archive,
+add `--server <url>` and, if needed, `--server-token-file <path>` to the full
+server command, or use `--pg` for PostgreSQL. The `AGENTSVIEW_MEMORY_*`
+environment variables target the memory profile and do not target the full server.
+
+For a remote archive, set the hosted environment variables below for the focused
+profile.
 
 The memory profile reads `AGENTSVIEW_MEMORY_SERVER`,
 `AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, or `AGENTSVIEW_MEMORY_PG`; explicit
@@ -210,15 +252,13 @@ especially when the exact wording is unknown. Hybrid combines semantic
 similarity with keyword matching. Use `context` to include surrounding messages.
 Hybrid returns its keyword matches when search by meaning is unavailable. The
 response includes `effective_mode: "hybrid_keyword"` and a `note` beside
-`coverage` explaining why. On SQLite, keyword matches rank messages holding
-every query word first, then those holding fewer of them. On other archives,
-keyword matches need the query words to appear; if there are no matches or only
-a few, try one or two short substring queries with key terms or synonyms.
+`coverage` explaining why. On SQLite, PostgreSQL, DuckDB, and ClickHouse, keyword matches rank messages holding
+every query word first, then those holding fewer of them.
 Preserve `scope`, inclusion, and current-session filters. Disclose keyword-only
 results once. Use fully quoted substring text or regex for exact errors,
 identifiers, and code fragments. The default remains substring.
 
-On SQLite, a substring search of several words lists matches of the exact text
+On SQLite, PostgreSQL, DuckDB, and ClickHouse, a substring search of several words lists matches of the exact text
 first, from every selected source, then messages holding every word, then those
 holding fewer of the words. Each match reports `matched_words`, the number of
 query words it holds, excluding unquoted stop words; other searches report `0`.

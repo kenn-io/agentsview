@@ -1162,6 +1162,9 @@ func TestClickHousePushRejectsPlaintextTargetBeforeStream(t *testing.T) {
 // A daemon push that waits for another push tells its client, so the CLI can
 // say why nothing is happening.
 func TestMirrorPushStreamsWaitingForAnotherPush(t *testing.T) {
+	if duckdb.RequireDriver() != nil {
+		t.Skip("this build does not link DuckDB; run with -tags duckdb")
+	}
 	f := newSyncRouteFixture(t)
 	f.srv.cfg.DuckDB = config.DuckDBConfig{
 		Path:        filepath.Join(t.TempDir(), "mirror.duckdb"),
@@ -1195,6 +1198,9 @@ func TestMirrorPushStreamsWaitingForAnotherPush(t *testing.T) {
 // neither, so a client whose stream drops keeps its --full request.
 func TestMirrorPushReportsArchiveRebuild(t *testing.T) {
 	t.Parallel()
+	if duckdb.RequireDriver() != nil {
+		t.Skip("this build does not link DuckDB; run with -tags duckdb")
+	}
 	for _, rebuild := range []bool{false, true} {
 		t.Run(fmt.Sprintf("rebuild=%t", rebuild), func(t *testing.T) {
 			t.Parallel()

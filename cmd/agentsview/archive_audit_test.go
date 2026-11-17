@@ -474,10 +474,7 @@ func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
 				defer restore()
 				engine := sync.NewEngine(ctx, database, workerEngineConfig(cfg))
 				defer engine.Close()
-				ingestion := &daemonIngestion{}
-				if !tc.idle {
-					ingestion.watchers = &ingestionWatchers{}
-				}
+				ingestion := &daemonIngestion{paused: tc.idle}
 				done := make(chan struct{})
 				go func() {
 					defer close(done)
@@ -492,7 +489,7 @@ func TestStartArchiveAuditSelectsFirstDelay(t *testing.T) {
 					synctest.Wait()
 					assert.Empty(t, attempts, "the due audit waits for collection to resume")
 					ingestion.mu.Lock()
-					ingestion.watchers = &ingestionWatchers{}
+					ingestion.paused = false
 					ingestion.mu.Unlock()
 					synctest.Wait()
 				}

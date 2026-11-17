@@ -2,6 +2,8 @@ package sync
 
 import (
 	"context"
+	"slices"
+	gosync "sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -34,7 +36,7 @@ func TestWatcherIntervalOverride(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				override := &IntervalOverride{}
-				override.Set(tt.shorter)
+				t.Cleanup(override.Hold(tt.shorter))
 				backend := newFakeWatchBackend()
 				var calls []time.Time
 				w, err := newWatcherWithBackendOptions(
@@ -102,12 +104,14 @@ func TestWatcherIntervalOverrideChangeReschedules(t *testing.T) {
 		synctest.Wait()
 		require.Len(t, calls, 1)
 
-		override.Set(time.Second)
+		releaseSlow := override.Hold(3 * time.Second)
+		release := override.Hold(time.Second)
 		synctest.Wait()
-		require.Len(t, calls, 2, "a shorter override must release the waiting sync")
+		require.Len(t, calls, 2, "the shortest hold must release the waiting sync")
 		assert.Equal(t, 2*time.Second, calls[1].Sub(start))
 
-		override.Set(0)
+		release()
+		releaseSlow()
 		time.Sleep(100 * time.Millisecond)
 		backend.sendEvent(t, "/sessions/active.jsonl")
 		time.Sleep(10 * time.Second)
@@ -116,4 +120,146 @@ func TestWatcherIntervalOverrideChangeReschedules(t *testing.T) {
 		assert.Equal(t, 7*time.Second, calls[2].Sub(start),
 			"removing the override must restore the configured interval")
 	})
+}
+
+// A provider reload replaces the watcher while clients keep their holds, so a
+// held live interval must come from each watcher's own settings.
+func TestWatcherResolvesHeldIntervalFromItsLiveInterval(t *testing.T) {
+	const background = 10 * time.Minute
+	for _, tt := range []struct {
+		name       string
+		hold, live time.Duration
+		want       time.Duration
+	}{
+		{name: "web UI before a reload", hold: LiveInterval, live: 5 * time.Second, want: 5 * time.Second},
+		{name: "web UI after sync_interval changes", hold: LiveInterval, live: 2 * time.Second, want: 2 * time.Second},
+		{name: "change stream caps a longer live interval", hold: time.Second, live: 5 * time.Second, want: time.Second},
+		{name: "a shorter live interval beats the change stream", hold: time.Second, live: 200 * time.Millisecond, want: 200 * time.Millisecond},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				override := &IntervalOverride{}
+				t.Cleanup(override.Hold(tt.hold))
+				backend := newFakeWatchBackend()
+				calls := make(chan time.Time, 4)
+				w, err := newWatcherWithBackendOptions(
+					0, background,
+					func(context.Context, WatchBatch) error {
+						calls <- time.Now()
+						return nil
+					},
+					backend, 8, 1_000,
+					WatcherOptions{MinIntervalOverride: override, LiveInterval: tt.live},
+				)
+				require.NoError(t, err)
+				w.Start()
+				t.Cleanup(w.Stop)
+
+				backend.sendEvent(t, "/sessions/active.jsonl")
+				first := requireReceiveWithin(t, calls, time.Minute)
+				backend.sendEvent(t, "/sessions/active.jsonl")
+				second := requireReceiveWithin(t, calls, time.Hour)
+
+				assert.Equal(t, tt.want, second.Sub(first))
+			})
+		})
+	}
+}
+
+// A watcher with a long interval for when nobody is waiting must still retry
+// a failed sync at the pace of a client that is waiting.
+func TestWatcherRetryFollowsWaitingClientPace(t *testing.T) {
+	const (
+		background = 10 * time.Minute
+		live       = 5 * time.Second
+	)
+	for _, tt := range []struct {
+		name         string
+		connectAfter time.Duration
+		want         time.Duration
+	}{
+		{name: "client connected before the failure", connectAfter: 0, want: live},
+		{name: "client connects while the retry waits", connectAfter: time.Minute, want: time.Minute},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				override := &IntervalOverride{}
+				backend := newFakeWatchBackend()
+				// The callback runs on the watcher's goroutine and the test
+				// reads between syncs, so the record needs a lock.
+				var mu gosync.Mutex
+				var calls []time.Time
+				recorded := func() []time.Time {
+					mu.Lock()
+					defer mu.Unlock()
+					return slices.Clone(calls)
+				}
+				w, err := newWatcherWithBackendOptions(
+					0, background,
+					func(context.Context, WatchBatch) error {
+						mu.Lock()
+						calls = append(calls, time.Now())
+						first := len(calls) == 1
+						mu.Unlock()
+						if first {
+							return retryScopedWatchError{retry: WatchBatch{
+								ReconcileRoots: []string{"/sessions"},
+							}}
+						}
+						return nil
+					},
+					backend, 8, 1_000,
+					WatcherOptions{MinIntervalOverride: override, LiveInterval: live},
+				)
+				require.NoError(t, err)
+				w.Start()
+				t.Cleanup(w.Stop)
+				if tt.connectAfter == 0 {
+					t.Cleanup(override.Hold(live))
+				}
+
+				backend.sendBackendEvent(t, backendEvent{
+					Path: "/sessions", Root: "/sessions", Op: backendOpReconcileRootChange,
+				})
+				synctest.Wait()
+				require.Len(t, recorded(), 1)
+				if tt.connectAfter > 0 {
+					time.Sleep(tt.connectAfter)
+					synctest.Wait()
+					require.Len(t, recorded(), 1, "nobody is waiting for the retry yet")
+					t.Cleanup(override.Hold(live))
+				}
+				time.Sleep(time.Minute)
+				synctest.Wait()
+
+				got := recorded()
+				require.Len(t, got, 2, "the retry needs no new file event")
+				assert.Equal(t, tt.want, got[1].Sub(got[0]))
+			})
+		})
+	}
+}
+
+func TestIntervalOverrideUsesShortestHold(t *testing.T) {
+	override := &IntervalOverride{}
+	require.Zero(t, override.Value())
+
+	releaseUI := override.Hold(5 * time.Second)
+	releaseStream := override.Hold(time.Second)
+	assert.Equal(t, time.Second, override.Value())
+
+	releaseStream()
+	releaseStream()
+	assert.Equal(t, 5*time.Second, override.Value(),
+		"releasing one hold twice must not release another")
+
+	releaseSecondUI := override.Hold(5 * time.Second)
+	releaseUI()
+	assert.Equal(t, 5*time.Second, override.Value(),
+		"an equal hold from another holder remains")
+
+	releaseSecondUI()
+	assert.Zero(t, override.Value())
+	assert.NotPanics(t, override.Hold(0), "a hold of zero holds nothing")
+	assert.Zero(t, override.Value())
 }

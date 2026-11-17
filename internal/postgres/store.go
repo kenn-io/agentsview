@@ -35,7 +35,28 @@ func NewStore(
 		}
 		return nil, err
 	}
-	return &Store{pg: pg, ownedDB: pg}, nil
+	cockroach, encoding, err := pgEngine(ctx, pg)
+	if err != nil {
+		pg.Close()
+		return nil, err
+	}
+	return &Store{pg: pg, ownedDB: pg, cockroach: cockroach, serverEncoding: encoding}, nil
+}
+
+// pgEngine reports whether pg is CockroachDB, else its server encoding.
+func pgEngine(ctx context.Context, pg hostedQuerier) (bool, string, error) {
+	version, err := sessionVersionColumnPG(ctx, pg)
+	if err != nil {
+		return false, "", err
+	}
+	if version == "crdb_internal_mvcc_timestamp" {
+		return true, "", nil
+	}
+	var encoding string
+	if err := pg.QueryRowContext(ctx, `SELECT current_setting('server_encoding')`).Scan(&encoding); err != nil {
+		return false, "", fmt.Errorf("reading server encoding: %w", err)
+	}
+	return false, encoding, nil
 }
 
 // NewHostedStore opens the read adapter with the same fixed tenant boundary as

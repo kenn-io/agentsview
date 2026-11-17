@@ -81,7 +81,7 @@ func (s *Store) queryTurnRows(
 	rows, err := s.queryContext(ctx, `
 		SELECT id, ordinal, timestamp, has_tool_use,
 			role, is_system,
-			CASE WHEN `+db.DuckDBSystemPrefixSQL("content", "role")+` THEN FALSE ELSE TRUE END,
+			is_system_prefixed,
 			source_subtype, content_length
 		FROM messages
 		WHERE session_id = ?

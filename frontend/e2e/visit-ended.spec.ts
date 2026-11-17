@@ -71,6 +71,22 @@ for (const { remote, action } of [
       if (action === "close") {
         // Keep Chromium from killing the renderer before it dispatches pagehide.
         await page.evaluate(() => window.addEventListener("beforeunload", () => {}));
+        // Chromium still tears a closing tab down without running pagehide when
+        // its renderer is busy finishing the page load. Close once the renderer
+        // reports a long idle period, with no task queued, so the test measures
+        // the app's delivery rather than host load. WebKit has no
+        // requestIdleCallback, and only Chromium drops pagehide this way.
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) => {
+              if (!("requestIdleCallback" in window)) return resolve();
+              const wait = () =>
+                requestIdleCallback((deadline) =>
+                  deadline.timeRemaining() >= 40 ? resolve() : wait(),
+                );
+              wait();
+            }),
+        );
         await page.close({ runBeforeUnload: true });
       } else await page.reload();
       await expect

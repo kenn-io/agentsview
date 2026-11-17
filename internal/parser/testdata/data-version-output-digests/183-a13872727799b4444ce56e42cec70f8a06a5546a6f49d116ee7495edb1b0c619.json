@@ -1,7 +1,7 @@
 {
   "version": 183,
   "bump": true,
-  "digest": "a901a971f1f519ba59810bf39031c782dd06f8958622fa1075aa86e2de0052af",
+  "digest": "a13872727799b4444ce56e42cec70f8a06a5546a6f49d116ee7495edb1b0c619",
   "providers": {
     "aider": {
       "myrepo/.aider.chat.history.md": "bd3361561a4547452dddf33ac27898f2b60e8c305f2ef07ed13ec520f1f51244"
@@ -16,6 +16,7 @@
     "antigravity-cli": {
       "conversations/aaaa1111-bbbb-cccc-dddd-eeeeeeeeeeee.db": "a8f662e398636c855f5465ead715340f65f412043314c954176e0a6be6c1b77d",
       "conversations/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.db": "c86adbd1233ec45932dd37624f4a3033ad1784af72442594807a028bf54cbc9b",
+      "conversations/bbbbbbbb-cccc-dddd-eeee-ffffffffffff.db": "c9765a2707dd1b529d638a445797c26b8687b654b9e57e85c554e7cd48eaf502",
       "implicit/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.pb": "87b78741598f2126e69571d0fb5b3983a209f7830b566b745ad9b04e538f1914"
     },
     "augure-code": {

@@ -2181,6 +2181,10 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
 			return err
 		}
+	} else if !useDiff && dialogueMessagesChanged(stored, msgs) {
+		if err := bumpSearchChangeRevisionTx(tx); err != nil {
+			return err
+		}
 	}
 	if err := refreshMessageDiffImageTextTx(tx, sessionID, plan, useDiff); err != nil {
 		return err
@@ -2311,6 +2315,9 @@ func replaceSessionMessagesTx(
 		if err := insertToolResultEventsTx(tx, events); err != nil {
 			return err
 		}
+	}
+	if err := journalConversationToolSessionTx(tx, sessionID); err != nil {
+		return err
 	}
 
 	return restorePinsTx(tx, sessionID, pins)
@@ -2634,6 +2641,10 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 	}
 	if transcriptChanged {
 		if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
+			return err
+		}
+	} else if !useDiff && dialogueMessagesChanged(stored, msgs) {
+		if err := bumpSearchChangeRevisionTx(tx); err != nil {
 			return err
 		}
 	}

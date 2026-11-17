@@ -13,7 +13,6 @@ func TestCockroachSchemaAndCodexScope(t *testing.T) {
 	pgURL := testPGURL(t)
 	const schema = "agentsview_cockroach_fresh_test"
 	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, pg.Close()) })

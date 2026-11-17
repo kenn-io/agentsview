@@ -71,6 +71,7 @@ var dataVersionScopes = map[int][]parser.AgentType{
 	usageEventMicrosDataVersion: {}, // Older binaries cannot maintain usage_events.occurred_at_us; nothing to reparse.
 	pricingMetaDataVersion:      {}, // Older binaries keep pricing metadata in model_pricing; nothing to reparse.
 	182:                         {parser.AgentEvener},
+	183:                         {parser.AgentAntigravity, parser.AgentAntigravityCLI},
 	SessionPushDataVersion:      {}, // Older binaries cannot preserve pushed receipts; nothing to reparse.
 }
 

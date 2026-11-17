@@ -76,7 +76,7 @@ type VersionInfo struct {
 // Bump it when a client-visible contract cannot be decoded safely by an older
 // CLI or daemon.
 const (
-	APIVersion = 21
+	APIVersion = 22
 	// KataAPIVersion is the first daemon API that serves /api/v1/kata/status.
 	KataAPIVersion = 14
 	// FrictionAPIVersion is the first daemon API that serves
@@ -128,7 +128,7 @@ type Server struct {
 	onDemandEngine        *sync.Engine
 	sessions              service.SessionService
 	broadcaster           *Broadcaster
-	changeStreamSync      changeStreamSyncHold
+	syncInterval          *sync.IntervalOverride
 	mux                   *http.ServeMux
 	api                   huma.API
 	httpSrv               *http.Server
@@ -572,10 +572,21 @@ func WithBroadcaster(b *Broadcaster) Option {
 	return func(s *Server) { s.broadcaster = b }
 }
 
-// WithSyncIntervalOverride lets connected change-stream subscribers shorten
-// the minimum interval between watcher-triggered syncs that share override.
+// WithSyncIntervalOverride lets connected change-stream subscribers and open
+// web UIs shorten the minimum interval between watcher-triggered syncs that
+// share override.
 func WithSyncIntervalOverride(override *sync.IntervalOverride) Option {
-	return func(s *Server) { s.changeStreamSync.override = override }
+	return func(s *Server) { s.syncInterval = override }
+}
+
+// holdSyncInterval keeps watcher-triggered syncs at most d apart until the
+// returned release runs; sync.LiveInterval asks for each watcher's live
+// interval. A server without a shared override holds nothing.
+func (s *Server) holdSyncInterval(d time.Duration) (release func()) {
+	if s.syncInterval == nil {
+		return func() {}
+	}
+	return s.syncInterval.Hold(d)
 }
 
 // WithUpdateChecker overrides the update check function,
@@ -1030,13 +1041,25 @@ func archiveFreshnessProbe(path string) bool {
 	return false
 }
 
+// archiveFreshnessExempt reports requests that do not read the archive and so
+// must not make it catch up first. Remote sync serves session files from disk
+// to another machine; syncing them into this archive first helps nobody.
+func archiveFreshnessExempt(r *http.Request) bool {
+	path := r.URL.Path
+	if strings.HasPrefix(path, "/api/v1/remote-sync/") {
+		return true
+	}
+	return r.Method == http.MethodPost &&
+		(path == "/api/v1/daemon/restart" || path == "/api/v1/resync" ||
+			(path == "/api/v1/sync" && archiveWriteRequest(r)))
+}
+
 func (s *Server) archiveStaleMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			probe := archiveFreshnessProbe(r.URL.Path)
 			pending := false
-			if !probe && s.ingestionFreshness != nil &&
-				(r.Method != http.MethodPost || (r.URL.Path != "/api/v1/daemon/restart" && r.URL.Path != "/api/v1/resync" && (r.URL.Path != "/api/v1/sync" || !archiveWriteRequest(r)))) {
+			if !probe && s.ingestionFreshness != nil && !archiveFreshnessExempt(r) {
 				pending = !s.ingestionFreshness.EnsureFresh(r.Context())
 			}
 			if !probe && (s.archiveStale() || pending) {
@@ -1597,46 +1620,87 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return err
 }
 
-// FindAvailablePort finds an available port starting from the given port,
-// binding to the specified host. It returns an error instead of reusing an
-// occupied port when the candidate range is exhausted.
-func FindAvailablePort(ctx context.Context, host string, start int) (int, error) {
-	return findAvailablePort(ctx, host, start, selectEphemeralPort, listenProbesFree)
+// ListenAvailablePort binds host at the first available port from start and
+// returns the listener. Serving on that listener keeps the port the search
+// found; probing a port, releasing it, and binding it again later lets another
+// process take it in between. A start of 0 asks the system for an ephemeral
+// port. The search returns an error instead of an occupied port when the
+// candidate range is exhausted.
+func ListenAvailablePort(ctx context.Context, host string, start int) (net.Listener, error) {
+	return listenAvailablePort(ctx, host, start, selectEphemeralPort, listenProbesFree, listenTCP)
 }
 
-func findAvailablePort(ctx context.Context,
+// FindAvailablePort reports the port ListenAvailablePort would bind without
+// keeping it. Another process can take the port once this returns, so use it
+// only to check that a port is free; a server should serve the listener from
+// ListenAvailablePort.
+func FindAvailablePort(ctx context.Context, host string, start int) (int, error) {
+	ln, err := ListenAvailablePort(ctx, host, start)
+	if err != nil {
+		return 0, err
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	if err := ln.Close(); err != nil {
+		return 0, fmt.Errorf("release port %d on %s: %w", port, host, err)
+	}
+	return port, nil
+}
+
+func listenTCP(ctx context.Context, host string, port int) (net.Listener, error) {
+	return (&net.ListenConfig{}).Listen(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+}
+
+func listenAvailablePort(ctx context.Context,
 	host string,
 	start int,
 	selectEphemeral func(context.Context, string) (int, error),
 	portFree func(context.Context, []listenProbe, int) bool,
-) (int, error) {
-	if start == 0 {
-		if !isWildcardListenHost(host) {
-			return selectEphemeral(ctx, host)
+	listen func(context.Context, string, int) (net.Listener, error),
+) (net.Listener, error) {
+	if start == 0 && !isWildcardListenHost(host) {
+		ln, err := listen(ctx, host, 0)
+		if err != nil {
+			return nil, fmt.Errorf("select ephemeral port on %s: %w", host, err)
 		}
-		probes := listenProbes(ctx, host)
+		return ln, nil
+	}
+
+	probes := listenProbes(ctx, host)
+	// claim binds a port the probes found free. The bind can still fail when
+	// another listener takes the port after the probe; the search then moves
+	// on as it does for any occupied port.
+	claim := func(port int) net.Listener {
+		if !portFree(ctx, probes, port) {
+			return nil
+		}
+		ln, err := listen(ctx, host, port)
+		if err != nil {
+			return nil
+		}
+		return ln
+	}
+	if start == 0 {
 		for range 100 {
 			port, err := selectEphemeral(ctx, host)
 			if err != nil {
-				return 0, err
+				return nil, err
 			}
-			if portFree(ctx, probes, port) {
-				return port, nil
+			if ln := claim(port); ln != nil {
+				return ln, nil
 			}
 		}
-		return 0, fmt.Errorf(
+		return nil, fmt.Errorf(
 			"no available ephemeral port on %s after 100 attempts", host,
 		)
 	}
 
-	probes := listenProbes(ctx, host)
 	last := min(start+99, 65535)
 	for port := start; port <= last; port++ {
-		if portFree(ctx, probes, port) {
-			return port, nil
+		if ln := claim(port); ln != nil {
+			return ln, nil
 		}
 	}
-	return 0, fmt.Errorf(
+	return nil, fmt.Errorf(
 		"no available port on %s in range %d-%d", host, start, last,
 	)
 }

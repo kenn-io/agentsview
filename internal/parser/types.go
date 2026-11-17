@@ -86,6 +86,7 @@ const (
 	AgentAider          AgentType = "aider"
 	AgentReasonix       AgentType = "reasonix"
 	AgentEvener         AgentType = "evener"
+	AgentMusePersonal   AgentType = "muse-personal"
 	AgentIcodemate      AgentType = "icodemate"
 	AgentRooCode        AgentType = "roocode"
 	AgentCline          AgentType = "cline"
@@ -1105,6 +1106,16 @@ var Registry = []AgentDef{
 		PeriodicReconcile: true,
 	},
 	{
+		Type:              AgentMusePersonal,
+		DisplayName:       "Muse Personal",
+		EnvVar:            "MUSE_PERSONAL_AGENTS_DIR",
+		DefaultDirs:       []string{"agents"},
+		IDPrefix:          "muse-personal:",
+		FileBased:         true,
+		PeriodicReconcile: true,
+		Usage:             UsageCapabilities{NoPerMessageTokenData: true},
+	},
+	{
 		Type:              AgentEvener,
 		DisplayName:       "Evener",
 		EnvVar:            "EVENER_DIR",
@@ -1783,7 +1794,8 @@ type ParsedMessage struct {
 	IsCompactBoundary bool
 
 	// claudeChannelOrigin limits preview unwrapping to channel entries.
-	claudeChannelOrigin bool
+	claudeChannelOrigin    bool
+	antigravityTypedPrompt bool
 
 	// StopReason is the reason the assistant stopped generating
 	// (Claude: "end_turn", "tool_use", "max_tokens", "stop_sequence";

@@ -321,7 +321,7 @@ describe("AnalyticsPage outcome window", () => {
     const retry = vi.spyOn(outcomeTotals, "retry").mockResolvedValue();
     outcomeTotals.error = "Outcome request timed out";
     await flushEffects();
-    document.querySelector<HTMLButtonElement>(".outcome-container .error button")!.click();
+    document.querySelector<HTMLButtonElement>(".outcome-container .load-error button")!.click();
     expect(retry).toHaveBeenCalledExactlyOnceWith(load.mock.calls[0]![0]);
   });
 

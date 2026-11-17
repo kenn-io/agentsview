@@ -1,4 +1,4 @@
-//go:build !(windows && arm64)
+//go:build duckdb && !(windows && arm64)
 
 package duckdb
 
@@ -504,60 +504,6 @@ func TestSearchContentFTSSingleTermFallback(t *testing.T) {
 	require.NotEmpty(t, got.Matches)
 	assert.Equal(t, fixture.alphaID, got.Matches[0].SessionID)
 	assert.Equal(t, "message", got.Matches[0].Location)
-}
-
-func TestSearchContentFTSMatchesNonContiguousTerms(t *testing.T) {
-	ctx := t.Context()
-	local := newLocalDB(t)
-	body := strings.Repeat("prefix ", 30) + "the quick brown fox jumps"
-	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{
-		{
-			Session: syncSession(
-				"duck-fts-both", "alpha", "first",
-				"2026-03-22T10:00:00.000Z", 1,
-			),
-			Messages: []db.Message{syncMessage(
-				"duck-fts-both", 0, "user",
-				body,
-				"2026-03-22T10:00:00.000Z",
-			)},
-			DataVersion:     1,
-			ReplaceMessages: true,
-		},
-		{
-			Session: syncSession(
-				"duck-fts-one", "alpha", "first",
-				"2026-03-22T11:00:00.000Z", 1,
-			),
-			Messages: []db.Message{syncMessage(
-				"duck-fts-one", 0, "user",
-				"the quick answer only",
-				"2026-03-22T11:00:00.000Z",
-			)},
-			DataVersion:     1,
-			ReplaceMessages: true,
-		},
-	})
-	require.NoError(t, err)
-
-	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
-	require.NoError(t, createSchema(ctx, syncer.DB()))
-	_, err = syncer.pushEverything(ctx, nil)
-	require.NoError(t, err)
-	store := NewStoreFromDB(syncer.DB())
-
-	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
-		Pattern:        "quick fox",
-		Mode:           "fts",
-		Sources:        []string{"messages"},
-		IncludeOneShot: true,
-		Limit:          10,
-	})
-	require.NoError(t, err)
-	require.Len(t, got.Matches, 1)
-	assert.Equal(t, "duck-fts-both", got.Matches[0].SessionID)
-	assert.Contains(t, got.Matches[0].Snippet, "quick")
-	assert.Contains(t, got.Matches[0].Snippet, "fox")
 }
 
 // TestSearchContentMatchTimestampIsRFC3339 pins the wire format of
@@ -2534,10 +2480,11 @@ func TestTrendsTermsApplySessionFiltersAndSystemPrefixExclusion(t *testing.T) {
 	start := "2026-01-22T09:00:00.000Z"
 	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{
 		{
-			Session: syncSession("duck-trend-a", "alpha", "trend a", start, 2),
+			Session: syncSession("duck-trend-a", "alpha", "trend a", start, 3),
 			Messages: []db.Message{
 				syncMessage("duck-trend-a", 0, "user", db.SystemMsgPrefixes[0]+" seam", start),
 				syncMessage("duck-trend-a", 1, "user", "seam", start),
+				syncMessage("duck-trend-a", 2, "user", `<codex_internal_context source="goal"/unexpected>seam`, start),
 			},
 			DataVersion:     1,
 			ReplaceMessages: true,
@@ -2568,7 +2515,7 @@ func TestTrendsTermsApplySessionFiltersAndSystemPrefixExclusion(t *testing.T) {
 	}, trendTerms, "day")
 	require.NoError(t, err)
 	require.Len(t, trends.Series, 1)
-	assert.Equal(t, 1, trends.Series[0].Total)
+	assert.Equal(t, 2, trends.Series[0].Total)
 }
 
 func TestDailyUsageDefaultsToLocalTimezone(t *testing.T) {

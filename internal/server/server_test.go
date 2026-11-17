@@ -2780,8 +2780,8 @@ func TestPGPushLocalNoSyncDaemonReachesConfigValidation(t *testing.T) {
 
 func TestDuckDBPushLocalNoSyncDaemonWritesConfiguredPath(t *testing.T) {
 	t.Parallel()
-	if runtime.GOOS == "windows" && runtime.GOARCH == "arm64" {
-		t.Skip("duckdb-go-bindings does not ship a windows/arm64 library")
+	if duckdb.RequireDriver() != nil {
+		t.Skip("this build does not link DuckDB; run with -tags duckdb")
 	}
 
 	te := setupNoSyncMode(t)
@@ -2813,8 +2813,8 @@ func TestDuckDBPushLocalNoSyncDaemonWritesConfiguredPath(t *testing.T) {
 // single JSON body after a silent wait.
 func TestDuckDBPushStreamsSSEDoneEvent(t *testing.T) {
 	t.Parallel()
-	if runtime.GOOS == "windows" && runtime.GOARCH == "arm64" {
-		t.Skip("duckdb-go-bindings does not ship a windows/arm64 library")
+	if duckdb.RequireDriver() != nil {
+		t.Skip("this build does not link DuckDB; run with -tags duckdb")
 	}
 
 	te := setupNoSyncMode(t)
@@ -5689,6 +5689,32 @@ func TestEvents_StreamsDataChangedAfterSync(t *testing.T) {
 	te.waitForSSEEvent(t, w, "data_changed", 5*time.Second)
 	cancel()
 	<-done
+}
+
+func TestEvents_HoldsLiveSyncIntervalWhileConnected(t *testing.T) {
+	override := &sync.IntervalOverride{}
+	te := setupWithServerOpts(t,
+		[]server.Option{server.WithSyncIntervalOverride(override)},
+		func(c *config.Config) { c.SyncInterval = 5 * time.Second },
+	)
+	require.Zero(t, override.Value(), "nobody is watching yet")
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/events", nil)
+	w := newFlushRecorder()
+	done := make(chan struct{})
+	go func() {
+		te.handler.ServeHTTP(w, req)
+		close(done)
+	}()
+	te.waitForSSEEvent(t, w, "events_ready", 5*time.Second)
+	assert.Equal(t, sync.LiveInterval, override.Value(),
+		"an open web UI keeps syncs at each watcher's live interval")
+
+	cancel()
+	<-done
+	assert.Zero(t, override.Value(), "the background interval returns when the UI closes")
 }
 
 func TestEvents_StreamsInLocalNoSyncMode(t *testing.T) {

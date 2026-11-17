@@ -238,6 +238,39 @@ describe("RecallCorpusPanel", () => {
     document.body.innerHTML = "";
   });
 
+  it("shows a failed entries load with Retry instead of an empty corpus", async () => {
+    const respond = fetchMock.getMockImplementation() as (
+      input: RequestInfo | URL,
+    ) => Promise<Response>;
+    let failed = false;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      if (!failed && requestUrl(input).includes("/recall/entries?")) {
+        failed = true;
+        return new Response(JSON.stringify({ error: "recall index unavailable" }), {
+          status: 503,
+        });
+      }
+      return respond(input);
+    });
+
+    component = mount(RecallCorpusPanel, { target: document.body });
+    const alert = await vi.waitFor(() => {
+      const el = document.querySelector('[role="alert"]');
+      expect(el).not.toBeNull();
+      return el!;
+    });
+
+    expect(alert.textContent).toContain("Failed to load");
+    expect(alert.textContent).toContain("recall index unavailable");
+    expect(document.body.textContent).not.toContain("No Recall entries match these filters.");
+
+    alert.querySelector<HTMLButtonElement>("button")!.click();
+    await vi.waitFor(() => {
+      expect(document.body.textContent).toContain("Keep extraction passes bounded");
+    });
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+  });
+
   it("shows corpus entries and extraction coverage", async () => {
     component = mount(RecallCorpusPanel, { target: document.body });
     await tick();
@@ -409,7 +442,9 @@ describe("RecallCorpusPanel", () => {
 
     document.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!.click();
     await vi.waitFor(() => {
-      expect(document.querySelector(".status-error")).not.toBeNull();
+      expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+        "extraction status unavailable",
+      );
     });
     expect(entryRequests).toBe(2);
     expect(statusRequests).toBe(2);

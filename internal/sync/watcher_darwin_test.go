@@ -357,8 +357,6 @@ func TestDarwinWatcherColdArchiveCardinalityUsesOneRecursiveStream(t *testing.T)
 		logicalRoots   int
 		shallowRoots   int
 		shallowStreams int
-		appendPaths    int
-		appendRenames  int
 	}
 	var observations []observation
 	for _, tc := range []struct {
@@ -458,12 +456,14 @@ func TestDarwinWatcherColdArchiveCardinalityUsesOneRecursiveStream(t *testing.T)
 			assert.False(t, appendBatch.FullSync)
 			assert.Empty(t, appendBatch.ReconcileRoots)
 			assert.Empty(t, appendBatch.Renames)
-			assert.Equal(t, []string{changedPath}, appendBatch.Paths)
-			got.appendPaths = len(appendBatch.Paths)
-			got.appendRenames = len(appendBatch.Renames)
+			// Seeing a marker once does not consume all its native notifications.
+			// Count every path this phase wrote, including a repeated marker,
+			// while still rejecting any unchanged file in the cold archive.
+			assert.Subset(t, []string{barrierPath, changedPath}, appendBatch.Paths)
+			assert.LessOrEqual(t, len(appendBatch.Paths), 2)
 
-			// Establish an after-close delivery barrier so any duplicate append
-			// notification cannot be mistaken for the atomic replacement below.
+			// Wait for post-close delivery before replacing the file. The marker
+			// itself may be reported again alongside the replacement.
 			closedBarrier := filepath.Join(root, ".append-closed")
 			require.NoError(t, os.WriteFile(closedBarrier, []byte("closed"), 0o600))
 			waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
@@ -491,9 +491,12 @@ func TestDarwinWatcherColdArchiveCardinalityUsesOneRecursiveStream(t *testing.T)
 			// in both Paths and Renames; their combined count depends on native
 			// coalescing, not archive size. Bound the affected paths instead.
 			allowedPaths := []string{tempPath, changedPath}
-			assert.Subset(t, allowedPaths, replacementBatch.Paths,
+			// Both delivery markers are real writes under the watched root.
+			// macOS may repeat them in a later batch, so include them in the
+			// changed-path bound without allowing unrelated cold archive paths.
+			assert.Subset(t, []string{barrierPath, closedBarrier, tempPath, changedPath}, replacementBatch.Paths,
 				"atomic replacement must not include cold archive paths")
-			assert.LessOrEqual(t, len(replacementBatch.Paths), 2)
+			assert.LessOrEqual(t, len(replacementBatch.Paths), 4)
 			assert.LessOrEqual(t, len(replacementBatch.Renames), 2)
 			for _, rename := range replacementBatch.Renames {
 				assert.Contains(t, allowedPaths, rename.Path,
@@ -523,7 +526,7 @@ func TestDarwinWatcherColdArchiveCardinalityUsesOneRecursiveStream(t *testing.T)
 	}
 	require.Len(t, observations, 2)
 	assert.Equal(t, observations[0], observations[1],
-		"recursive native state and append work must not scale with cold files or directories")
+		"recursive native state must not scale with cold files or directories")
 }
 
 func TestDarwinWatcherDirectoryRenameCarriesFullSyncMetadata(t *testing.T) {
@@ -2639,8 +2642,11 @@ func TestDarwinWatcherLifecycleFailureFallsBackToPolling(t *testing.T) {
 	root := filepath.Join(intermediate, "sessions")
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
 	require.NoError(t, err)
-	backend.retryInitial = time.Millisecond
-	backend.retryMax = 5 * time.Millisecond
+	// Open fallback schedules native recovery after retryInitial, and
+	// recovery can try the ancestor again. Keep that retry out of this
+	// test's lifetime so the attempt count below sees only the failed try.
+	backend.retryInitial = time.Hour
+	backend.retryMax = time.Hour
 	var attempts atomic.Int32
 	backend.addAncestor = func(path string) error {
 		if path == intermediate && attempts.Add(1) == 1 {

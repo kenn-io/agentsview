@@ -254,50 +254,36 @@ func activityUsageSQL(
 	webFee := wide("web_billed") + " * " + strconv.FormatInt(export.WebSearchRequestMicrodollars, 10)
 	costOverflows := "max(row_cost) > " + maxInt64SQL + " OR sum(row_cost) > " + maxInt64SQL
 
+	// The pricing steps stay separate CTEs. DuckDB substitutes an alias's
+	// expression at each reuse in the same SELECT, so folding them into one
+	// level made the query slower.
 	query := "WITH " + with + `,
-		activity_usage_eligible AS (
-			SELECT * FROM activity_usage_rows WHERE ts_us >= ? AND ts_us < ?
-		),
-		activity_usage_snapshots AS (
-			SELECT *,
-				row_number() OVER (` + activityUsageSnapshotPartition + `
-					ORDER BY output DESC, ts_us DESC, session_id DESC, ord DESC) AS snapshot_rank,
-				first_value(session_id) OVER (` + activityUsageSnapshotPartition + `
-					ORDER BY ts_us, session_id, ord) AS snapshot_session,
-				max(web) OVER (` + activityUsageSnapshotPartition + `) AS snapshot_web
-			FROM activity_usage_eligible
-		),
 		activity_usage_kept AS (
 			SELECT *,
-				CASE WHEN claude_message_id = '' THEN session_id ELSE snapshot_session END AS account_session,
-				CASE WHEN claude_message_id = '' THEN web ELSE snapshot_web END AS web_billed,
+				CASE WHEN claude_message_id = '' THEN session_id ELSE first_value(session_id) OVER (` + activityUsageSnapshotPartition + `
+					ORDER BY ts_us, session_id, ord) END AS account_session,
+				CASE WHEN claude_message_id = '' THEN web ELSE max(web) OVER (` + activityUsageSnapshotPartition + `) END AS web_billed,
 				CASE
 					WHEN claude_message_id != '' THEN 1
 					WHEN agent != '' AND source_uuid != '' THEN 2
 					WHEN usage_dedup_key != '' THEN 3
 					ELSE 0
-				END AS token_kind
-			FROM activity_usage_snapshots
-			WHERE claude_message_id = '' OR snapshot_rank = 1
-		),
-		activity_usage_allowed AS (
-			SELECT *,
+				END AS token_kind,
 				CASE token_kind WHEN 1 THEN claude_message_id WHEN 2 THEN agent
 					WHEN 3 THEN usage_dedup_key ELSE session_id END AS token_a,
 				CASE token_kind WHEN 1 THEN claude_request_id WHEN 2 THEN source_uuid
 					ELSE '' END AS token_b,
 				CASE token_kind WHEN 0 THEN ord ELSE 0 END AS token_c
-			FROM activity_usage_kept
-			WHERE account_session IN (SELECT id FROM activity_usage_candidates)
-		),
-		activity_usage_deduped AS (
-			SELECT *,
-				row_number() OVER (PARTITION BY token_kind, token_a, token_b, token_c
-					ORDER BY ` + activityUsageReportOrder + `) AS token_rank
-			FROM activity_usage_allowed
+			FROM activity_usage_rows
+			WHERE ts_us >= ? AND ts_us < ?
+			QUALIFY claude_message_id = '' OR row_number() OVER (` + activityUsageSnapshotPartition + `
+					ORDER BY output DESC, ts_us DESC, session_id DESC, ord DESC) = 1
 		),
 		activity_usage_survivors AS (
-			SELECT * FROM activity_usage_deduped WHERE token_kind = 0 OR token_rank = 1
+			SELECT * FROM activity_usage_kept
+			WHERE account_session IN (SELECT id FROM candidate_sessions)
+			QUALIFY token_kind = 0 OR row_number() OVER (
+				PARTITION BY token_kind, token_a, token_b, token_c ORDER BY ` + activityUsageReportOrder + `) = 1
 		),
 		activity_usage_rated AS (
 			SELECT s.*, r.rate_id, r.billed_ok, r.catalog_ok, r.billed_err,

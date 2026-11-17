@@ -14,6 +14,9 @@ import (
 func TestPGActivityReportTerminalLookupIndex(t *testing.T) {
 	t.Parallel()
 	const schema = "agentsview_activity_index_test"
+	// An empty database: this test checks the index EnsureSchema creates and
+	// how it restores a dropped one.
+	testPGURL(t)
 	_, store := prepareUsageSchema(t, schema)
 	for _, status := range []string{"completed", "errored", "started"} {
 		_, err := store.DB().ExecContext(t.Context(), `

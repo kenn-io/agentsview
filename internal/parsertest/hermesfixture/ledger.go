@@ -20,3 +20,15 @@ func CreateLedger(t *testing.T, conn *sql.DB) {
 		first_seen REAL DEFAULT 1778767200, last_seen REAL DEFAULT 1778767800)`)
 	require.NoError(t, err)
 }
+
+// CreateWatcherSchema adds native revision tracking and message indexes.
+func CreateWatcherSchema(t *testing.T, conn *sql.DB) {
+	t.Helper()
+	_, err := conn.ExecContext(t.Context(), `ALTER TABLE sessions ADD COLUMN transcript_revision INTEGER DEFAULT 0;
+ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id,timestamp);
+ CREATE INDEX idx_messages_session_id ON messages(session_id,id);
+ CREATE TABLE schema_version(version INTEGER); INSERT INTO schema_version VALUES (33);
+ CREATE TRIGGER messages_transcript_revision_update AFTER UPDATE OF role,content,api_content,tool_calls,tool_call_id,tool_name,reasoning,reasoning_content,reasoning_details ON messages BEGIN UPDATE sessions SET transcript_revision=transcript_revision+1 WHERE id=new.session_id; END;
+ CREATE TRIGGER messages_display_revision_update AFTER UPDATE OF codex_reasoning_items,codex_message_items,display_kind,display_metadata ON messages BEGIN UPDATE sessions SET transcript_revision=transcript_revision+1 WHERE id=new.session_id; END;`)
+	require.NoError(t, err)
+}

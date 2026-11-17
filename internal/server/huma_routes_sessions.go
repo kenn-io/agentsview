@@ -27,6 +27,7 @@ import (
 	"go.kenn.io/agentsview/internal/sessionwatch"
 	"go.kenn.io/agentsview/internal/signals"
 	"go.kenn.io/agentsview/internal/stringutil"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 func (s *Server) registerSessionRoutes() {
@@ -1451,6 +1452,9 @@ func (s *Server) humaEvents(
 		}
 		sub, unsub := s.broadcaster.Subscribe()
 		defer unsub()
+		// The web UI keeps this stream open only while it is visible, so a
+		// subscriber means someone is looking at the archive.
+		defer s.holdSyncInterval(syncpkg.LiveInterval)()
 		if !stream.SendJSON("events_ready", struct{}{}) {
 			return
 		}

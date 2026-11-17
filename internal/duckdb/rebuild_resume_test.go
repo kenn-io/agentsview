@@ -1,4 +1,4 @@
-//go:build !(windows && arm64)
+//go:build duckdb && !(windows && arm64)
 
 package duckdb
 
@@ -151,6 +151,9 @@ func TestPushDiscardsIncompatibleRebuild(t *testing.T) {
 		}},
 		{"frustration version 0", func(_ *testing.T, _ *sql.DB, run *rebuildRun) {
 			run.FrustrationMarkersVersion = 0
+		}},
+		{"system prefix rules version mismatch", func(_ *testing.T, _ *sql.DB, run *rebuildRun) {
+			run.SystemPrefixRulesVersion = "old-rules"
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -66,6 +66,7 @@ default_server = "local"          # server used for query encoding and unnamed b
 [vector.embeddings.servers.local]
 endpoint = "http://localhost:11434/v1"  # OpenAI-compatible base URL; "/embeddings" is appended
 api_key_env = "OPENAI_API_KEY"    # name of an env var holding the key; omit for anonymous access
+# api_key_file = "~/.config/agentsview/embeddings-key" # or a private file holding it
 batch_size = 32                   # inputs per HTTP call (default 32; 8 for a built-in server)
 max_batch_tokens = 120000         # optional provider cap across all inputs in one call
 concurrency = 4                   # documents embedded in parallel during a build (default 4; 1 for a built-in server)
@@ -151,7 +152,7 @@ Model identity — `model`, `dimension`, `request_dimensions`, `max_input_chars`
 in the `servers` table must serve that same model and input recipe, so vectors
 produced by any of them are interchangeable and land in the same generation.
 What varies per server is transport and capacity: `endpoint`, `local`,
-`api_key_env`, `timeout`, `max_retries`, `batch_size`, `max_batch_tokens`,
+`api_key_env` or `api_key_file`, `timeout`, `max_retries`, `batch_size`, `max_batch_tokens`,
 `concurrency`, and `ollama_cpu_fallback`.
 
 When `model_context_tokens` and a server's `max_batch_tokens` are both set,
@@ -800,10 +801,9 @@ agentsview session search "flaky test" --hybrid --project myapp
   matches both surface. When search by meaning is unavailable, CLI and MCP
   return the keyword matches with `effective_mode: hybrid_keyword` and a note
   beside `coverage`. The note gives the readiness reason (`not set up` or
-  indexing progress) and explains that keyword terms must appear. When keyword
-  results are empty or few, try short substring queries with key terms or
-  synonyms, retaining scope in MCP and HTTP requests and other supported
-  filters.
+  indexing progress) and explains that only keyword matches were returned.
+  On CockroachDB, keyword terms must all appear. If results are few, try short
+  substring queries with key terms or synonyms, keeping your filters.
 - Both modes are restricted to the `messages` source — the same restriction
   `--fts` already has — since only user/assistant message content is embedded
   (never raw tool_input/tool_result rows or system messages). Passing `--in`

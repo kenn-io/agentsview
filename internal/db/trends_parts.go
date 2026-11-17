@@ -60,6 +60,11 @@ var trendPartsObserver struct {
 	read func([]string)
 }
 
+// TrendsTimezoneKey identifies the resolved rules used to bucket messages.
+func TrendsTimezoneKey(f AnalyticsFilter) string {
+	return usageTimezoneIdentityFor(f.location(), nil).Key
+}
+
 // SetTrendPartsReadObserver installs an observer for tests and returns its reset function.
 func SetTrendPartsReadObserver(observe func([]string)) func() {
 	trendPartsObserver.Lock()
@@ -88,7 +93,7 @@ func TrendsFromParts(ctx context.Context, disk *kept.Disk, identity string, f An
 	if err != nil {
 		return TrendsTermsResponse{}, true, err
 	}
-	slot := "trends-parts|" + usageTimezoneIdentityFor(f.location(), nil).Key + "|" + TrendsKeptVariant(terms, "") + "|" + string(key)
+	slot := "trends-parts|" + TrendsTimezoneKey(f) + "|" + TrendsKeptVariant(terms, "") + "|" + string(key)
 	version := fmt.Sprintf("%s|%d|%d", identity, trendsMatchingVersion, trendsPartsVersion)
 	parts := kept.LoadParts[map[string]*trendDay](disk, slot, version)
 	changed := kept.StaleParts(parts, versions)

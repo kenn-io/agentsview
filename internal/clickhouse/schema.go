@@ -299,12 +299,32 @@ var mirrorTables = []tableSpec{
 			// the session outside the session row (see contentFingerprint).
 			// Rows written before the column existed hold ''.
 			col("agentsview_content_fingerprint", tString),
-			// content_version is the push version of the session's dependent
-			// rows. A push that finds them unchanged rewrites only the
-			// session row and keeps this value, so reads that pair dependent
-			// rows with their session compare against it. Rows written
-			// before the column existed read it from push_version.
+			// content_version is the oldest push version among the session's
+			// current dependent rows. A push that finds them unchanged
+			// rewrites only the session row and keeps this value, and a push
+			// that appends messages keeps it too, so reads that pair
+			// dependent rows with their session accept rows at or above it.
+			// Rows written before the column existed read it from
+			// push_version.
 			colDefault("content_version", tVersion, pushVersionCol),
+			// agentsview_message_rows_fingerprint hashes the message, tool
+			// call, result event, and image text rows stored for the
+			// session (see messageRowsFingerprints), so a later push can
+			// tell that those rows are a prefix of the local session and
+			// append only the rest. Rows written before the column existed
+			// hold '' and get a full rewrite when their content changes.
+			col("agentsview_message_rows_fingerprint", tString),
+			// agentsview_leading_message_rows_fingerprint hashes the same
+			// rows without the last stored message's, so a push can keep the
+			// rest when only that message changed, as when its tool call got
+			// its result. Rows written before the column existed hold ''.
+			col("agentsview_leading_message_rows_fingerprint", tString),
+			// rows_version is the newest push version among the session's
+			// current dependent rows. A push that rewrites only the session
+			// row keeps it, so rows another push wrote after it stay
+			// recognizable as unpublished; see keptRowsPublished. Rows
+			// written before the column existed read it from push_version.
+			colDefault("rows_version", tVersion, pushVersionCol),
 		},
 		indexes: []indexSpec{sessionIDTailIndex},
 		orderBy: []string{"id"},

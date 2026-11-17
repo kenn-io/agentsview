@@ -23,7 +23,6 @@ func TestEnsureSchemaCreatesRawIngestCustodyTables(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err)
 	defer pg.Close()
@@ -72,9 +71,7 @@ func TestEnsureSchemaCreatesRawIngestCustodyTables(t *testing.T) {
 
 func TestRawIngestSchemaUsesTenantScopedKeys(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
+	pgURL := testPGSchemaURL(t, schemaTestSchema)
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, pg.Close()) })
@@ -143,9 +140,7 @@ func TestRawIngestSchemaUsesTenantScopedKeys(t *testing.T) {
 
 func TestRawIngestSchemaEnforcesCaptureAndObjectCustody(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
+	pgURL := testPGSchemaURL(t, schemaTestSchema)
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err)
 	defer pg.Close()
@@ -225,7 +220,6 @@ func TestSyncEnsureSchemaCreatesRawCustodyOnLegacyFastPath(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err)
 	defer pg.Close()
@@ -364,16 +358,14 @@ func TestSyncEnsureSchemaFastPathToleratesRestrictedRole(t *testing.T) {
 }
 
 func TestCanWriteRawSyncSchemaRequiresExactRuntimePrivileges(t *testing.T) {
-	pgURL := testPGURL(t)
-	const schema = "agentsview_raw_runtime_privilege_test"
+	const schema = schemaTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	const role = "agentsview_raw_runtime"
 	const rolePassword = "agentsview_raw_runtime_pw"
 
 	admin, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open admin")
 	t.Cleanup(func() { _ = admin.Close() })
-	_, err = admin.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(t.Context(), admin, schema))
 
 	_, _ = admin.ExecContext(t.Context(), `DROP OWNED BY `+role)
@@ -381,7 +373,6 @@ func TestCanWriteRawSyncSchemaRequiresExactRuntimePrivileges(t *testing.T) {
 	_, err = admin.ExecContext(t.Context(), `CREATE ROLE `+role+` LOGIN PASSWORD '`+rolePassword+`'`)
 	require.NoError(t, err, "create runtime role")
 	t.Cleanup(func() {
-		_, _ = admin.ExecContext(context.WithoutCancel(t.Context()), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
 		_, _ = admin.ExecContext(context.WithoutCancel(t.Context()), `DROP OWNED BY `+role)
 		_, _ = admin.ExecContext(context.WithoutCancel(t.Context()), `DROP ROLE IF EXISTS `+role)
 	})
@@ -472,17 +463,12 @@ func TestCanWriteRawSyncSchemaRequiresExactRuntimePrivileges(t *testing.T) {
 
 func TestCanWriteRawSyncSchemaAcceptsSequenceFreeJobIDs(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	const schema = "agentsview_raw_sequence_free_test"
+	const schema = schemaTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 
 	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = pg.Close() })
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		_, _ = pg.ExecContext(context.WithoutCancel(t.Context()), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	})
 	require.NoError(t, EnsureSchema(t.Context(), pg, schema))
 
 	var sequenceName sql.NullString
@@ -512,7 +498,6 @@ func TestEnsureRawIngestSchemaPGSerializesConcurrentGuardInstallers(t *testing.T
 	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 
 	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err)

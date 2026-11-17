@@ -1,0 +1,5 @@
+{"type":"session_header","version":1,"session_id":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee","agent_id":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee","created_at":"2026-10-05T16:00:00.000000000+00:00"}
+{"type":"item","seq":0,"source":"scheduler.cron","created_at":"2026-10-05T16:00:00.100000000+00:00","item":{"type":"message","role":"user","text":"[cron:synthetic-daily-check] Run the synthetic daily check."}}
+{"type":"item","seq":1,"source":"runtime","created_at":"2026-10-05T16:00:01.000000000+00:00","item":{"type":"function_call","call_id":"call_00000000000000000000000000000c01","name":"exec","arguments":"{\"command\":\"echo synthetic-check-ok\"}"}}
+{"type":"item","seq":2,"source":"runtime","created_at":"2026-10-05T16:00:02.000000000+00:00","item":{"type":"function_call_output","call_id":"call_00000000000000000000000000000c01","output":"synthetic-check-ok","success":true}}
+{"type":"item","seq":3,"source":"runtime","created_at":"2026-10-05T16:00:03.000000000+00:00","item":{"type":"message","role":"assistant","text":"Synthetic daily check complete. Nothing to report."}}

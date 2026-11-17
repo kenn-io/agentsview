@@ -45,6 +45,26 @@ counts. After upgrading, run `agentsview replica duckdb push` once to rebuild
 the mirror; `agentsview replica duckdb serve` refuses to open an older mirror
 until you do.
 
+## Build with DuckDB
+
+Release binaries, installers, wheels, and the published container image do not
+include DuckDB. DuckDB 2.0's prebuilt libraries need an x86-64-v3 CPU (AVX2,
+BMI2, and FMA), and linking them stopped AgentsView from starting on older
+x86-64 CPUs, even for people who never use the mirror. Without DuckDB, the
+`replica duckdb` commands report that the build does not include it.
+
+To use the mirror, [build from source](/docs/quickstart/#build-from-source) with
+DuckDB:
+
+```bash
+make install DUCKDB=1
+```
+
+Plain `go build` needs `-tags fts5,duckdb`. For a container, build the image
+with `docker build --build-arg GO_TAGS=fts5,duckdb .`. The result runs only on
+CPUs the DuckDB libraries support: x86-64-v3 or newer on amd64, and arm64 on
+Linux and macOS. Windows on ARM has no DuckDB library.
+
 ## Quick Start
 
 ```bash
@@ -165,8 +185,9 @@ through `duckdb status` or `duckdb serve` pointed at the Quack URL.
 Safety defaults:
 
 - The Quack listener binds to loopback (`127.0.0.1`) by default.
-- A token is required from `--token`, `AGENTSVIEW_DUCKDB_TOKEN`, or
-  `[duckdb].token`; the token value is never printed.
+- A token is required from `--token`, `AGENTSVIEW_DUCKDB_TOKEN`,
+  `[duckdb].token`, or the file `[duckdb].token_file` names; the token value
+  is never printed.
 - Binding to a non-loopback address requires the explicit
   `--allow-insecure` flag. Quack speaks plain HTTP, so put it
   behind TLS, a VPN, or an SSH tunnel before exposing it beyond
@@ -205,6 +226,7 @@ projects = ["alpha", "beta"]
 | `path`             | `~/.agentsview/sessions.duckdb` | Local DuckDB mirror file                                                                    |
 | `url`              |                                 | Remote Quack endpoint for `duckdb status` and `duckdb serve` (`quack:` URI); read side only — `duckdb push` rejects it |
 | `token`            |                                 | Quack authentication token                                                                  |
+| `token_file`       |                                 | Private file holding the Quack token, instead of `token`; see [Read secrets from files](/docs/configuration/#read-secrets-from-files) |
 | `machine_name`     | Installation ID                 | Explicit machine key for legacy local-sentinel rows; new sessions retain their recorded installation ID                |
 | `allow_insecure`   | `false`                         | Allow plain-HTTP Quack beyond loopback                                                      |
 | `attach_timeout`   | `20s`                           | Bound on a remote Quack `ATTACH` (and its TCP preflight); `0` uses the default, a negative value disables the guard |

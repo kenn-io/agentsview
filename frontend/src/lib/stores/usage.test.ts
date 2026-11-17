@@ -1021,7 +1021,8 @@ describe("UsageStore session filter params", () => {
         expect(usage.loading.pairwise).toBe(false);
         expect(usage.querying.pairwise).toBe(false);
         expect(usageServiceMocks.getApiV1UsagePairwiseComparison).toHaveBeenCalledTimes(1);
-        expect(usage.errors.pairwise).toBeNull();
+        // A failed refresh keeps the earlier comparison and reports the failure.
+        expect(usage.errors.pairwise).toBe(outcome === "failure" ? "comparison failed" : null);
         expect(usage.pairwiseComparison).toEqual(usagePairwiseComparison());
         if (outcome !== "aborted first load") expect(usage.summary).not.toBeNull();
       } finally {
@@ -2999,7 +3000,7 @@ describe("UsageStore project zoom", () => {
   });
 
   it.each(["a metric change", "a same-range refresh", "a cancelled read"])(
-    "keeps zoom rows through %s",
+    "keeps zoom rows through a failed refetch after %s",
     async (event) => {
       const { usage } = await loadStore();
       usageServiceMocks.getUsageZoom.mockResolvedValueOnce([group(1)]);
@@ -3013,7 +3014,6 @@ describe("UsageStore project zoom", () => {
             reject = r;
           }),
       );
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       const refreshed =
         event === "a metric change"
           ? Promise.resolve(usage.setMode("token"))
@@ -3029,11 +3029,9 @@ describe("UsageStore project zoom", () => {
       await refreshed;
       await vi.waitFor(() => expect(usage.querying.zoom).toBe(false));
       expect(usage.zoomRows).toEqual([group(1)]);
-      expect(usage.errors.zoom).toBeNull();
-      if (event === "a cancelled read") expect(warn).not.toHaveBeenCalled();
-      else
-        expect(warn).toHaveBeenCalledWith("usage.zoom refetch failed:", new Error("zoom failed"));
-      warn.mockRestore();
+      // A failed refetch keeps the rows and reports the failure; a cancelled
+      // read reports nothing.
+      expect(usage.errors.zoom).toBe(event === "a cancelled read" ? null : "zoom failed");
       usage.cancelInFlightReads();
     },
   );
@@ -3078,14 +3076,12 @@ describe("UsageStore project zoom", () => {
 
     now.mockReturnValue(Date.parse("2026-10-08T12:05:00Z"));
     usageServiceMocks.getUsageZoom.mockRejectedValueOnce(new Error("zoom failed"));
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     await usage.fetchAll({ preserveTimeRange: true });
     expect(usageServiceMocks.getUsageZoom.mock.lastCall?.[0]).toEqual(
       expect.objectContaining({ active_since: "2026-10-07T12:05:00.000Z" }),
     );
     expect(usage.zoomRows).toEqual([group(2)]);
-    expect(usage.errors.zoom).toBeNull();
-    warn.mockRestore();
+    expect(usage.errors.zoom).toBe("zoom failed");
     now.mockRestore();
   });
 

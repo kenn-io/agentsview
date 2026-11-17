@@ -392,13 +392,13 @@ func TestVectorConfigDefaults(t *testing.T) {
 
 func TestVectorConfigAPIKeyEnv(t *testing.T) {
 	server := VectorEmbeddingsServerConfig{}
-	assert.Empty(t, server.APIKey(), "no env var configured")
+	assert.Empty(t, requireAPIKey(t, server), "no env var configured")
 
 	server.APIKeyEnv = "AGENTSVIEW_TEST_VECTOR_API_KEY"
-	assert.Empty(t, server.APIKey(), "configured env var not set in environment")
+	assert.Empty(t, requireAPIKey(t, server), "configured env var not set in environment")
 
 	t.Setenv("AGENTSVIEW_TEST_VECTOR_API_KEY", "secret-123")
-	assert.Equal(t, "secret-123", server.APIKey())
+	assert.Equal(t, "secret-123", requireAPIKey(t, server))
 }
 
 // minimalServers returns the smallest valid servers table for TOML load
@@ -962,4 +962,13 @@ func TestVectorConfigTOMLLoadUnknownKeys(t *testing.T) {
 		assert.Contains(t, err.Error(), "max_batch_tokens")
 		assert.Contains(t, err.Error(), "[vector.embeddings.servers.<name>]")
 	})
+}
+
+// requireAPIKey returns a server's API key, failing the test when it cannot
+// be read.
+func requireAPIKey(t *testing.T, server interface{ APIKey() (string, error) }) string {
+	t.Helper()
+	key, err := server.APIKey()
+	require.NoError(t, err)
+	return key
 }

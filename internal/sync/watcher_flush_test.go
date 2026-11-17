@@ -155,3 +155,41 @@ func TestWatcherFlushPendingStopAndCancellation(t *testing.T) {
 		require.Error(t, w.FlushPending(t.Context()))
 	})
 }
+
+func TestWatcherPauseDispatchHoldsChangesUntilReopened(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		calls := make(chan WatchBatch, 4)
+		backend := newFakeWatchBackend()
+		w, err := newWatcherWithBackend(500*time.Millisecond, time.Second,
+			func(_ context.Context, batch WatchBatch) error {
+				calls <- batch
+				return nil
+			}, backend, 8, 1000)
+		require.NoError(t, err)
+		w.Start()
+		defer w.Stop()
+
+		// The first change already has a batch timer running when the pause
+		// starts; the second arrives during the pause.
+		backend.sendEvent(t, "/sessions/first.jsonl")
+		w.PauseDispatch()
+		backend.sendEvent(t, "/sessions/second.jsonl")
+		time.Sleep(time.Hour)
+		synctest.Wait()
+		require.Empty(t, calls, "a paused watcher delivers nothing")
+		require.Error(t, w.FlushPending(t.Context()), "a paused watcher has no open dispatch to flush")
+
+		w.OpenDispatch()
+		require.NoError(t, w.FlushPending(t.Context()))
+		synctest.Wait()
+		require.Len(t, calls, 1, "reopening delivers the collected changes once")
+		assert.ElementsMatch(t,
+			[]string{"/sessions/first.jsonl", "/sessions/second.jsonl"}, (<-calls).Paths)
+
+		backend.sendEvent(t, "/sessions/third.jsonl")
+		time.Sleep(time.Hour)
+		synctest.Wait()
+		require.Len(t, calls, 1, "a reopened watcher dispatches on its own again")
+		assert.Equal(t, []string{"/sessions/third.jsonl"}, (<-calls).Paths)
+	})
+}

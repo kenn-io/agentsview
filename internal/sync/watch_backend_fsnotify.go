@@ -1,3 +1,10 @@
+//go:build !darwin
+
+// macOS watches every root with FSEvents (watch_backend_factory_darwin.go),
+// so this backend is built only where it ships. fsnotify's kqueue Close races
+// its own event reader and can close a descriptor twice, which breaks
+// whatever reused that descriptor number (fsnotify issue #788).
+
 package sync
 
 import (
@@ -1120,23 +1127,6 @@ func (b *fsnotifyBackend) reportError(err error) {
 	}
 }
 
-func normalizeExcludePatterns(patterns []string) []string {
-	if len(patterns) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(patterns))
-	for _, pattern := range patterns {
-		pattern = strings.TrimSpace(filepath.Clean(pattern))
-		if pattern == "" || pattern == "." {
-			continue
-		}
-		if !slices.Contains(out, pattern) {
-			out = append(out, pattern)
-		}
-	}
-	return out
-}
-
 // reinstallShallowWatches revalidates shallow-root coverage after overflow.
 // A dropped removal loses the native watch even when the directory was
 // recreated, so every shallow root is re-added; a root that cannot be
@@ -1202,15 +1192,6 @@ func (b *fsnotifyBackend) isUnderShallowRoot(path string) bool {
 	b.rootsMu.RLock()
 	defer b.rootsMu.RUnlock()
 	return slices.Contains(b.shallow, root) && !slices.Contains(b.recursive, root)
-}
-
-func pathAtOrBelow(root, path string) bool {
-	rel, err := filepath.Rel(root, path)
-	if err != nil {
-		return false
-	}
-	return rel == "." ||
-		(rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
 func (b *fsnotifyBackend) recursiveOwnersForPath(path string) []string {
@@ -1434,41 +1415,6 @@ func (b *fsnotifyBackend) shouldEnumerateCreatedSubtree(root, path string) bool 
 	defer b.rootsMu.RUnlock()
 	return slices.Contains(b.recursive, filepath.Clean(root)) &&
 		pathAtOrBelow(root, path)
-}
-
-func shouldExcludeForRoot(excludes []string, path string, root string) bool {
-	if len(excludes) == 0 {
-		return false
-	}
-	clean := filepath.Clean(path)
-	root = filepath.Clean(root)
-	rel, err := filepath.Rel(root, clean)
-	if err != nil {
-		return false
-	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return false
-	}
-	rel = filepath.Clean(rel)
-	if rel == "." {
-		return false
-	}
-	parts := strings.Split(rel, string(filepath.Separator))
-
-	for _, pattern := range excludes {
-		if strings.Contains(pattern, string(filepath.Separator)) {
-			if ok, _ := filepath.Match(pattern, rel); ok {
-				return true
-			}
-			continue
-		}
-		for _, part := range parts {
-			if ok, _ := filepath.Match(pattern, part); ok {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func (b *fsnotifyBackend) mostSpecificContainingRoot(path string) (string, bool) {

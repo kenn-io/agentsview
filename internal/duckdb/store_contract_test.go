@@ -1,4 +1,4 @@
-//go:build !(windows && arm64)
+//go:build duckdb && !(windows && arm64)
 
 package duckdb
 
@@ -190,36 +190,6 @@ func TestDuckDBStoreContract(t *testing.T) {
 			tt.run(t, store, fixture)
 		})
 	}
-}
-
-func TestDuckDBSystemPrefixSQLTerminalRemainder(t *testing.T) {
-	conn := openTestDuckDB(t)
-	rows, err := conn.QueryContext(t.Context(), `
-		WITH candidates(label, role, content) AS (VALUES
-			('empty', 'user', ''),
-			('ordinary', 'user', 'hello'),
-			('unicode-ordinary', 'user', '　hello'),
-			('bom-prefix', 'user', chr(65279) || '<task-notification>done</task-notification>'),
-			('unicode-prefix', 'user', '　<goal_context>state</goal_context>'),
-			('reminder-only', 'user', '<system-reminder>a</system-reminder><system-reminder>b</system-reminder>'),
-			('reminder-task', 'user', '<system-reminder>a</system-reminder><task-notification>done</task-notification>'),
-			('reminder-ordinary', 'user', '<system-reminder>a</system-reminder>real prompt'),
-			('reminder-malformed', 'user', '<system-reminder>a')
-		)
-		SELECT label FROM candidates
-		WHERE `+db.DuckDBSystemPrefixSQL("content", "role")+`
-		ORDER BY label`)
-	require.NoError(t, err)
-	defer rows.Close()
-
-	var got []string
-	for rows.Next() {
-		var label string
-		require.NoError(t, rows.Scan(&label))
-		got = append(got, label)
-	}
-	require.NoError(t, rows.Err())
-	assert.Equal(t, []string{"empty", "ordinary", "reminder-malformed", "reminder-ordinary", "unicode-ordinary"}, got)
 }
 
 // TestDuckDBSearchContentSemanticModesUnavailable pins that "semantic" and

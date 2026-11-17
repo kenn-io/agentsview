@@ -6,6 +6,9 @@
 services:
   postgres:
     image: pgvector/pgvector:pg16
+    # Lock memory sizes how many tests run at once; 256 allows 12
+    # (see docs/agents/storage.md).
+    command: postgres -c max_locks_per_transaction=256
     environment:
       POSTGRES_USER: agentsview_test
       POSTGRES_PASSWORD: agentsview_test_password

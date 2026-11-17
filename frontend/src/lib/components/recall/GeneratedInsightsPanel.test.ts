@@ -52,6 +52,7 @@ const state = vi.hoisted(() => {
       items: [selectedItem],
       tasks: [],
       loading: false,
+      error: null as string | null,
       selectedId: 42,
       selectedTaskId: null as string | null,
       selectedItem,
@@ -163,6 +164,29 @@ describe("GeneratedInsightsPanel", () => {
     state.store.selectedTask = failed;
     await tick();
     expect(reportErrorShown).toHaveBeenCalledTimes(4);
+  });
+
+  it("shows a failed archive read with Retry instead of the empty archive", async () => {
+    const items = state.store.items;
+    state.store.items = [];
+    state.store.selectedId = null as unknown as number;
+    state.store.error = "insights table missing";
+    try {
+      component = mount(GeneratedInsightsPanel, { target: document.body });
+      await tick();
+
+      const alert = document.querySelector('[role="alert"]')!;
+      expect(alert.textContent).toContain("insights table missing");
+      expect(document.body.textContent).not.toContain("No generated insights saved.");
+      expect(reportErrorShown).toHaveBeenCalledWith("insight");
+
+      mocks.load.mockClear();
+      alert.querySelector<HTMLButtonElement>("button")!.click();
+      expect(mocks.load).toHaveBeenCalledOnce();
+    } finally {
+      state.store.items = items;
+      state.store.error = null;
+    }
   });
 
   it("shows every input that scopes a generated report", async () => {

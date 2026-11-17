@@ -76,6 +76,38 @@ class CaptureTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "application checksum"):
                 capture.verify_application(application)
 
+    def test_build_embeds_the_abbreviated_commit_release_builds_show(self):
+        import io
+        import tarfile
+        from unittest import mock
+
+        import prepare
+
+        with tempfile.TemporaryDirectory() as temp:
+            prepared, output = Path(temp) / "prepared", Path(temp) / "output"
+            bundle = prepared / "bundle"
+            bundle.mkdir(parents=True)
+            with tarfile.open(bundle / "source.tar", "w") as archive:
+                archive.addfile(tarfile.TarInfo("README.md"), io.BytesIO())
+            (prepared / "prepared.json").write_bytes(corpus.canonical({
+                "application_revision": "0123456789" + "a" * 30, "version": "1.2.3",
+                "build_date": "2026-04-01T12:00:00+00:00", "builder_image": "sha256:" + "b" * 64,
+                "runtime_image": "sha256:" + "c" * 64, "platform": "linux/amd64",
+                "build_script_sha256": corpus.digest((prepare.ROOT / "build.sh").read_bytes()),
+                "files": prepare.inventory(bundle),
+            }))
+            environments = []
+
+            def build_container(image, source, bundle, application, mode, environment, log_path):
+                environments.append(environment)
+                (application / "agentsview").write_bytes(b"binary")
+                (application / "frontend").mkdir()
+
+            with mock.patch.object(prepare, "container", build_container):
+                prepare.build(prepared, output)
+
+        self.assertEqual("012345678", environments[0]["AV_COMMIT"])
+
     def test_config_uses_reported_providers_and_corpus_roots(self):
         import fixture
         import tomllib

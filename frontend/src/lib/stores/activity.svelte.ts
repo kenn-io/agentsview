@@ -285,15 +285,13 @@ class ActivityStore {
       if (isAbortError(e) || v !== this.loadVersion || !this.reportRead.isCurrent(signal))
         return false;
       // A temporary background failure keeps the last good report on screen so a
-      // transient blip never blanks the report-first dashboard; the growing
-      // "Updated Xm ago" label signals the staleness. With no report yet (a
-      // first load still failing, or a refresh firing before one lands) there
-      // is nothing to preserve, so fall through and surface the error rather
-      // than leave a misleading empty state. First loads and range/filter
-      // changes are always foreground and clear on error.
+      // transient blip never blanks the report-first dashboard; the error shows
+      // above the kept report until a later load succeeds. With no report yet
+      // (a first load still failing, or a refresh firing before one lands)
+      // there is nothing to preserve. First loads and range/filter changes are
+      // always foreground and clear the report on error.
       const invalidMachine = e instanceof ApiError && e.code === "invalid_machine_filter";
-      if (background && this.report !== null && !invalidMachine) return false;
-      this.report = null;
+      if (!background || this.report === null || invalidMachine) this.report = null;
       this.error = e instanceof Error ? e.message : m.activity_report_load_failed();
       return false;
     } finally {

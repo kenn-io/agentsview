@@ -694,8 +694,9 @@ On startup, the server:
 
 1. Loads or creates `~/.agentsview/sessions.db`
 1. Runs initial sync across all discovered session directories
-1. Starts the file watcher (500ms event batching; watcher sync starts remain at
-    least five seconds apart by default; see [`sync_interval`](/docs/configuration/#config-file))
+1. Starts the file watcher (500ms event batching; while nobody is watching the
+    archive, watcher sync starts remain at least ten minutes apart by default; see
+    [`background_sync_interval`](/docs/configuration/#config-file))
 1. Starts periodic sync (every 15 minutes)
 1. Serves the Svelte SPA and REST API
 
@@ -804,7 +805,8 @@ file-watcher work prevent exit while they run, but do not keep the daemon alive
 forever by themselves.
 
 `sync_idle_after = "10m"` pauses local collection while idle; `"0"` disables the
-pause.
+pause. `background_sync_interval = "10m"` spaces out syncs while nobody is
+watching the archive; `"0s"` syncs at `sync_interval` all the time.
 
 #### CLI daemon behavior
 
@@ -1482,6 +1484,17 @@ agentsview source cursor sync-usage [flags]
 | `--email`     | config        | Filter by Cursor team member email   |
 | `--user-id`   | config        | Filter by Cursor team member user ID |
 
+Cursor allows 60 requests per minute to this API for each team, shared by every
+tool that uses the team's admin keys. The command starts requests, retries
+included, at least one second apart. When Cursor answers with
+`429 Too Many Requests` or a server error, the command waits and requests the
+same page again, up to 5 attempts per page. It waits as long as Cursor's
+`Retry-After` header asks, up to 60 seconds, or backs off from about 2 seconds
+when the header is absent. Each wait is reported on stderr. Any other error,
+such as a rejected key, stops the run at once. Nothing is stored unless every
+page is fetched, so a larger `--page-size`, which needs fewer requests, makes a
+long sync less likely to fail.
+
 **Examples:**
 
 ```bash
@@ -1776,8 +1789,9 @@ ______________________________________________________________________
 ### `agentsview replica duckdb`
 
 Mirror the local SQLite archive into DuckDB and serve from it, locally or over
-the Quack remote protocol. See [DuckDB Mirror](/docs/duckdb/) for full
-documentation.
+the Quack remote protocol. Release builds leave DuckDB out; build from source
+with `make install DUCKDB=1` to use these commands. See
+[DuckDB Mirror](/docs/duckdb/) for full documentation.
 
 ```bash
 agentsview replica duckdb push          # mirror SQLite into sessions.duckdb
@@ -2149,11 +2163,15 @@ checkpoint and coverage rules.
 ```bash
 agentsview export conversations changes
 agentsview export conversations changes --checkpoint SAVED_CHECKPOINT
+agentsview export conversations changes --tool-summaries
 agentsview export conversations message SESSION_ID MESSAGE_ID \
   --database-id DATABASE_ID --revision REVISION
 ```
 
 These commands read the local archive and do not send content to another system.
+`--tool-summaries` adds each session's tool call totals and skills to the
+listing; see
+[Session tool summaries](/docs/conversation-export/#session-tool-summaries).
 `message` masks detected secrets by default and marks such bodies with
 `redacted: true`; pass `--reveal` to return the stored text unchanged. Existing
 session summary and activity exports remain content-free.
@@ -2269,15 +2287,12 @@ flags. JSON adds `hints` entries with `code`, `message`, and a full `next` comma
 Counts use a bounded search and say `more than N` when more matches exist, or
 `at least N` for semantic and hybrid searches or when filtering or candidate
 limits prevent an exact count.
-For multi-word substring queries over messages on a PostgreSQL, DuckDB, or
-ClickHouse archive, a hint offers `--fts` only when that retry finds matches.
-SQLite's default search already matches the words, so it never offers that
-hint. `excluded_combined` gives a retry with the remaining
+`excluded_combined` gives a retry with the remaining
 include flags for matches beyond the individual class hints. Failed diagnostic
 searches add no hint.
 
 `session search` supports substring (default), `--regex`, `--fts`, `--semantic`,
-and `--hybrid` modes. On SQLite, a default search of several words lists matches
+and `--hybrid` modes. On SQLite, PostgreSQL, DuckDB, and ClickHouse, a default search of several words lists matches
 of the exact text first, from every selected source. Messages holding every
 word follow, then messages holding fewer of the words; `matched_words` in JSON
 counts them, excluding unquoted stop words. Regular word forms match, so
@@ -2362,7 +2377,7 @@ scoring, and trust policy evolve. See [Recall (Experimental)](/docs/recall/) for
 its current guarantees and limitations.
 
 ```bash
-agentsview recall list
+agentsview recall list [--updated-since <timestamp>] [--created-since <timestamp>] [--cursor <cursor>]
 agentsview recall get <id>
 agentsview recall query <text>
 agentsview recall brief <task>
@@ -2375,6 +2390,13 @@ agentsview recall extract doctor
 agentsview recall extract preview --session <id>
 agentsview recall import <accepted-recall.jsonl> --dry-run
 ```
+
+`--updated-since` and `--created-since` take RFC3339 timestamps and include
+the boundary. A bounded list returns the oldest change first and includes
+archived entries. Pass the returned `next_cursor` to `--cursor` for the next
+page. If Recall changes during the walk, restart from the first page with the
+same original time bound(s). See [Recall](/docs/recall/) for following changes over
+time.
 
 Model-backed extraction requires an enabled `[recall.extract]` config section —
 see [Recall](/docs/recall/#automatic-extraction). `preview` replaces the earlier
@@ -2851,6 +2873,7 @@ agentsview help
 | `KIRO_IDE_DIR`                        | (platform-specific)                                                             | Kiro IDE sessions directory                                                                                     |
 | `MIMOCODE_DIR`                        | `~/.local/share/mimocode`                                                       | MiMoCode data directory                                                                                         |
 | `MUSE_SESSIONS_DIR`                   | `~/.local/share/muse/sessions`                                                  | Muse Code sessions directory; defaults to `$XDG_DATA_HOME/muse/sessions` when set                               |
+| `MUSE_PERSONAL_AGENTS_DIR`            | `~/agents`                                                                      | Muse Personal agents directory; scans `agent-<uuid>/sessions/` beneath it                                       |
 | `VIBE_SESSIONS_DIR`                   | `~/.vibe/logs/session`                                                          | Mistral Vibe sessions directory                                                                                 |
 | `OMP_DIR`                             | `~/.omp/agent/sessions`                                                         | OhMyPi sessions directory                                                                                       |
 | `OPENCLAW_DIR`                        | `~/.openclaw/agents` and `~/.kimi_openclaw/agents`                              | OpenClaw agents directory                                                                                       |

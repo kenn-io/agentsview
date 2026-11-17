@@ -3696,3 +3696,18 @@ func TestExtractCandidatesReturnNewestEndedFirst(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"sess-newest", "sess-middle"}, ids)
 }
+
+func TestRefreshExtractedSessionCoveragePreservesRevisionWhenUnchanged(t *testing.T) {
+	d := testDB(t)
+	session := refreshCoverageFixture(t, d)
+	_, err := d.RefreshExtractedSessionCoverage(t.Context(), refreshRequest(session))
+	require.NoError(t, err)
+	before, err := d.RecallQueryRevision(t.Context())
+	require.NoError(t, err)
+	require.NotEmpty(t, before)
+	_, err = d.RefreshExtractedSessionCoverage(t.Context(), refreshRequest(session))
+	require.NoError(t, err)
+	after, err := d.RecallQueryRevision(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, before, after)
+}

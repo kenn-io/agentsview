@@ -360,7 +360,7 @@ func TestDeploymentInlineSecretsUnchanged(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, wantPG.URL, gotPG.URL)
 			if server, ok := got.Vector.Embeddings.Servers["local"]; ok {
-				assert.Equal(t, "inline-embed-key", server.APIKey())
+				assert.Equal(t, "inline-embed-key", requireAPIKey(t, server))
 			}
 		})
 	}
@@ -391,7 +391,7 @@ func TestDeploymentEmbeddings(t *testing.T) {
 				assert.Equal(t, 4, cfg.DeploymentEmbeddings.Concurrency)
 				assert.Equal(t, "30s", cfg.DeploymentEmbeddings.Timeout)
 				assert.Equal(t, 3, cfg.DeploymentEmbeddings.MaxRetries)
-				assert.Empty(t, cfg.DeploymentEmbeddings.APIKey())
+				assert.Empty(t, requireAPIKey(t, cfg.DeploymentEmbeddings))
 				assert.False(t, cfg.Vector.Enabled, "the endpoint alone never enables [vector]")
 			})
 		}
@@ -409,7 +409,7 @@ func TestDeploymentEmbeddings(t *testing.T) {
 		cfg, err := LoadMinimal()
 		require.NoError(t, err)
 		require.NotNil(t, cfg.DeploymentEmbeddings)
-		assert.Equal(t, "embed-secret", cfg.DeploymentEmbeddings.APIKey())
+		assert.Equal(t, "embed-secret", requireAPIKey(t, cfg.DeploymentEmbeddings))
 	})
 
 	t.Run("inline key trims whitespace", func(t *testing.T) {
@@ -421,7 +421,7 @@ func TestDeploymentEmbeddings(t *testing.T) {
 		cfg, err := LoadMinimal()
 		require.NoError(t, err)
 		require.NotNil(t, cfg.DeploymentEmbeddings)
-		assert.Equal(t, "embed-secret", cfg.DeploymentEmbeddings.APIKey())
+		assert.Equal(t, "embed-secret", requireAPIKey(t, cfg.DeploymentEmbeddings))
 	})
 }
 

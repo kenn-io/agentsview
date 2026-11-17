@@ -260,19 +260,44 @@ cursor_admin_api_key = "key_xxxxx"
 daemon_idle_timeout = "20m"
 sync_idle_after = "10m"
 sync_interval = "5s"
+background_sync_interval = "10m"
 chart_palette = "agentsview"
 zoom_level = 120
 ```
 
+`background_sync_interval` defaults to `"10m"`. While nobody is watching the
+archive, local serve syncs changed session files at most this often. The first
+change after a quiet period syncs right away; later changes wait for the
+interval. Three things bring changes in sooner:
+
+- An open web UI syncs at `sync_interval` (default `"5s"`) while its tab is
+  visible.
+- An open [change stream](/docs/conversation-export/#follow-changes-live) syncs
+  up to once a second.
+- Any other archive request, such as a CLI or MCP read, first syncs the files
+  that changed since the last sync, and checks sessions that are still being
+  written. Such requests start a sync at most once per `sync_interval` and
+  share the two-second wait budget described below.
+
+A session watch stream keeps its own session current without changing the
+interval for the rest. Polling of live agent activity and of roots that cannot
+be watched follows the same rule: its usual pace while someone is watching, and
+the background interval otherwise. A read does not poll roots that cannot be
+watched, so their sessions can be one background interval behind. Set
+`background_sync_interval` to `"0s"` to sync at `sync_interval` all the time.
+Restart the server after changing it.
+
 `sync_idle_after` defaults to `"10m"`. After this long without a client request
-or an open event stream, local serve stops watching session files and pauses its
-local sync timers, remote-source sync, S3 imports, and attachment imports.
+or an open event stream, local serve pauses its local sync. It keeps watching
+session files and remembers which ones change, but syncs nothing and pauses its
+polling timers, remote-source sync, S3 imports, and attachment imports.
 Remote-host polling, Codex Cloud capture, replica push, and raw uploads keep their
 own schedules.
-The next archive request starts catch-up for files changed or added since
-collection paused. Requests share a two-second wait budget from the start of
-catch-up. After that, reads return immediately with a stale-results warning
-while catch-up continues in the
+The next archive request starts catch-up. The daemon syncs the files that
+changed during the pause without scanning every session directory, and runs
+the periodic sync if the pause skipped one. Requests share a two-second wait
+budget from the start of catch-up. After that, reads return immediately with a
+stale-results warning while catch-up continues in the
 background.
 The warning clears when catch-up finishes or fails, and failures are logged.
 Every client request except `/api/ping` counts as activity. Version and sync-status
@@ -285,6 +310,7 @@ Set it to `"0"` to keep syncing while idle. Restart the server after changing it
 | `local_machine_name`                | Optional display-name override; takes effect after a daemon restart                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `cursor_secret`                     | Auto-generated HMAC key for pagination cursor signing                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `cursor_admin_api_key`              | Cursor Admin API key used by `agentsview source cursor sync-usage`                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `cursor_admin_api_key_file`         | File holding the Cursor Admin API key, as an alternative to `cursor_admin_api_key`; see [Read secrets from files](#read-secrets-from-files) |
 | `cursor_admin_email`                | Optional default Cursor Admin usage filter by member email                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `cursor_admin_user_id`              | Optional default Cursor Admin usage filter by member user ID                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `github_token`                      | Optional saved GitHub token for Gist publishing                                                                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -299,7 +325,8 @@ Set it to `"0"` to keep syncing while idle. Restart the server after changing it
 | `public_origins`                    | Additional trusted origins for request Host/Origin checks                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `daemon_idle_timeout`               | Idle timeout for automatically started and `serve --background` writable daemons; set to `"0s"` to keep them alive                                                                                                                                                                                                                                                                                                                                                               |
 | `sync_idle_after`                   | Pause local collection after this long without client activity; defaults to `"10m"`, with `"0"` disabling the pause                                                                                                                                                                                                                                                                                                                                                              |
-| `sync_interval`                     | Minimum time between watcher-triggered session sync starts in `serve` and archive push commands. Default `"5s"`; use `"60s"` for less frequent syncs. Zero or negative durations disable the minimum interval. While a [change stream](/docs/conversation-export/#follow-changes-live) is open, `serve` uses at most `"1s"`. Applies on restart or when provider changes rebuild watchers. Raw sync, live-activity polling, and periodic catch-up keep their own timers.         |
+| `sync_interval`                     | Minimum time between watcher-triggered session sync starts while the web UI is open, and in archive push commands. Default `"5s"`; use `"60s"` for less frequent syncs. Zero or negative durations disable the minimum interval. While a [change stream](/docs/conversation-export/#follow-changes-live) is open, `serve` uses at most `"1s"`. Applies on restart or when provider changes rebuild watchers. Raw sync and periodic catch-up keep their own timers.               |
+| `background_sync_interval`          | Minimum time between watcher-triggered session sync starts in `serve` while nobody is watching the archive. Default `"10m"`. Archive requests sync pending changes first. `"0s"` uses `sync_interval` all the time, and a longer `sync_interval` takes precedence. Applies on restart.                                                                                                                                                                                           |
 | `chart_palette`                     | Server-wide categorical chart colors: `"agentsview"` (default), `"matplotlib"`, or `"colorblind"`; also configurable under **Settings > Appearance**                                                                                                                                                                                                                                                                                                                             |
 | `zoom_level`                        | Default interface zoom for clients without a local preference: `67`, `75`, `80`, `90`, `100`, `110`, `120`, `125`, `130`, `150`, `175`, or `200`. Defaults to `100` when omitted. Restart the daemon after manual edits                                                                                                                                                                                                                                                          |
 | `disabled_agents`                   | Session providers to exclude from local filesystem scanning — see [Disabling Session Providers](#disabling-session-providers)                                                                                                                                                                                                                                                                                                                                                    |
@@ -314,7 +341,7 @@ Set it to `"0"` to keep syncing while idle. Restart the server after changing it
 | `[integrations.docbank]` | Optional lookup of transcript image digests in Docbank; see [Find transcript images in Docbank](/docs/configuration/#find-transcript-images-in-docbank) |
 | `[insights]`                        | Optional generated-insights endpoint and model, plus `default_agent`, the agent CLI new reports start with; local loopback HTTP is allowed, remote plaintext requires `allow_http = true`, and endpoint failures do not retry through a CLI — see [Recall](/docs/recall/#current-surface)                                                                                                                                                                                        |
 | `[friction]`                        | Opt-in Friction Log review; set `enabled = true` to review changed sessions in the background after each sync — see [Friction Log](#friction-log)                                                                                                                                                                                                                                                                                                                                |
-| `[kata]`                            | Optional Kata issue-tracker connection; off by default; HTTPS needs `token_env` — see [Kata](/docs/kata/)                                         |
+| `[kata]`                            | Optional Kata issue-tracker connection; off by default; HTTPS needs `token_env` or `token_file` — see [Kata](/docs/kata/)                                         |
 | `[[remote_hosts]]`                  | Remote machines synced by a bare `agentsview source sync` — see [CLI Reference](/docs/commands/#agentsview-sync)                                                                                                                                                                                                                                                                                                                                                                 |
 | `[agents.claude-ai]`                | Organizations Claude.ai Sync imports — see [Choose which organizations Sync imports](/docs/chat-import/#choose-which-organizations-sync-imports) |
 | `[[session_sources]]`               | Additional filesystem session roots with per-root machine keys — see [Filesystem Session Sync](/docs/filesystem-sync/)                                                                                                                                                                                                                                                                                                                                                           |
@@ -356,6 +383,69 @@ one and saves it as `auth_token` in `config.toml`.
     Older configs may still contain `remote_access = true`. AgentsView still reads
     that legacy key for backward compatibility, but new setups should use
     `require_auth = true`.
+
+### Read secrets from files
+
+Connection secrets can come from a file instead of an environment variable or
+the config file itself. This suits a long-running server: the secret stays out
+of `config.toml` and out of whatever starts the process. Each secret has a
+`*_file` key next to its existing key:
+
+| Secret                                     | Existing key           | File key                    |
+| ------------------------------------------ | ---------------------- | --------------------------- |
+| `[kata]` bearer token                      | `token_env`            | `token_file`                |
+| `[integrations.docbank]` API key           | `api_key_env`          | `api_key_file`              |
+| `[insights]` API key                       | `api_key_env`          | `api_key_file`              |
+| `[vector.embeddings.servers.<name>]` key   | `api_key_env`          | `api_key_file`              |
+| `[recall.extract.servers.<name>]` key      | `api_key_env`          | `api_key_file`              |
+| `[duckdb]` Quack token                     | `token`                | `token_file`                |
+| Cursor Admin API key (top level)           | `cursor_admin_api_key` | `cursor_admin_api_key_file` |
+
+```toml
+[kata]
+enabled = true
+endpoint = "https://kata.example.com"
+token_file = "~/.config/agentsview/kata-token"
+```
+
+- Set one source per secret. Setting both keys for the same secret is a
+  configuration error; AgentsView never picks one for you.
+- A path that starts with `~/` is under your home directory.
+- AgentsView drops trailing line breaks (CR and LF) and keeps every other byte.
+  An empty or blank file, a file over 64 KiB, or a file containing a NUL byte
+  is an error.
+- The file must be private. On macOS and Linux, a file you own needs mode
+  `0600` or `0400`, and no directory on its path may be writable by group or
+  others. A umask of `002` creates group-writable directories, so check the
+  parent directory too. Files owned by root, such as systemd credentials and
+  Kubernetes secret mounts, work when only root can write them. On Windows,
+  only your user may have access to the file.
+- When a file is missing or fails these checks, the error names the setting,
+  the path, and the reason. Errors and logs never include the secret.
+
+When AgentsView reads the file:
+
+- `[kata]`, `[integrations.docbank]`, `[insights]`, `[vector]`, and
+  `[recall.extract]` read their files when the configuration loads, skipping
+  sections that are turned off. An unusable file is treated like any other
+  invalid setting: it stops the server and commands that use the section,
+  and other commands print a warning. The server reads the files at startup,
+  so restart it after you replace one.
+- An embeddings or recall extraction server whose section a command did not
+  load reads its file when the command starts using that server. An unusable
+  file then stops that work with an error; it never falls back to an
+  anonymous request.
+- `[duckdb] token_file` is read only when a command authenticates to Quack,
+  such as `duckdb quack serve` or `duckdb status` with a `url`. Local mirror
+  work never reads it, and `duckdb quack serve --token` takes precedence over
+  it. `cursor_admin_api_key_file` is read when `source cursor sync-usage`
+  runs.
+- `AGENTSVIEW_DUCKDB_TOKEN` and `AGENTSVIEW_CURSOR_ADMIN_API_KEY` replace the
+  config-file values, so the file is not read while they are set.
+
+The `AGENTSVIEW_*_FILE` variables of a
+[container deployment](#container-deployment) follow their own rules, described
+in that section.
 
 ### Container deployment
 
@@ -552,6 +642,10 @@ cursor_admin_email = "you@example.com" # optional
 cursor_admin_user_id = "152683922"     # optional
 ```
 
+To keep the key out of `config.toml`, set `cursor_admin_api_key_file` to a
+private file holding it instead; see
+[Read secrets from files](#read-secrets-from-files).
+
 Environment variables take precedence over the config file:
 
 ```bash
@@ -625,6 +719,7 @@ keeps its default directories.
 | MiMoCode              | `~/.local/share/mimocode/`                                                                                                                                       | SQLite DB or `storage/` JSON files                                                                                                                            |
 | Mistral Vibe          | `~/.vibe/logs/session/`                                                                                                                                          | Legacy `messages.jsonl` plus `meta.json`, or a `unified/<session-id>/` store                                                                                  |
 | Muse Code             | `~/.local/share/muse/sessions/`                                                                                                                                  | `YYYY/MM/DD/<session>/session.jsonl` event logs, subagents under `subagent/`                                                                                  |
+| Muse Personal         | `~/agents/` on your Muse's hosted machine                                                                                                                        | `agent-<uuid>/sessions/<session-uuid>.jsonl` with optional sibling `sessions.json`; override with `MUSE_PERSONAL_AGENTS_DIR`                                  |
 | OMO                   | `~/.omo/agent/sessions/`                                                                                                                                         | Pi-family JSONL per session                                                                                                                                   |
 | OhMyPi                | `~/.omp/agent/sessions/`                                                                                                                                         | JSONL per session                                                                                                                                             |
 | OpenClaw              | `~/.openclaw/agents/` and `~/.kimi_openclaw/agents/`                                                                                                             | JSONL per session or SQLite per agent (`agent/openclaw-agent.sqlite`)                                                                                        |
@@ -1194,6 +1289,7 @@ export KIRO_IDE_DIR=~/custom/kiro-ide
 export KILO_LEGACY_DIR=~/custom/kilo-legacy
 export MIMOCODE_DIR=~/custom/mimocode
 export MUSE_SESSIONS_DIR=~/custom/muse/sessions
+export MUSE_PERSONAL_AGENTS_DIR=~/custom/agents
 export VIBE_SESSIONS_DIR=~/custom/vibe/logs/session
 export OMP_DIR=~/custom/omp
 export OPENCLAW_DIR=~/custom/openclaw
@@ -1229,6 +1325,72 @@ export ZCODE_DIR=~/custom/zcode/cli
 export ZED_DIR=~/custom/zed
 export ZENCODER_DIR=~/custom/zencoder
 ```
+
+### Muse Personal
+
+Muse Personal is Meta's personal assistant, separate from Muse Code.
+
+**AgentsView does not collect Muse Personal sessions on your laptop.** Your
+Muse runs on a machine that Meta hosts for you, and it writes its transcripts
+there. The Muse desktop, web and phone apps only connect to that machine. They
+keep no transcripts on your computer, so an AgentsView installed on your laptop
+finds no Muse Personal sessions. AgentsView must run on your Muse's own machine.
+
+To collect your Muse Personal sessions:
+
+1. Ask your Muse to install the AgentsView CLI on its machine:
+
+   ```bash
+   curl -fsSL https://agentsview.io/install.sh | bash
+   ```
+
+   The installer fetches the latest release. Release 0.47.0 and earlier
+   cannot read Muse Personal sessions. Support is on `main` and ships in the
+   first release that lists it in the [changelog](/docs/changelog/). Until then
+   the installed CLI finds no Muse Personal sessions.
+
+1. Ask your Muse to run `agentsview source sync` on that machine. AgentsView
+   reads `~/agents/agent-<uuid>/sessions/<session-uuid>.jsonl` under your
+   Muse's home directory.
+
+1. To browse these sessions beside your other agents, configure `[pg]` on your
+   Muse's machine and ask your Muse to run
+   `agentsview replica pg service install`. That service keeps pushing new
+   sessions to the PostgreSQL database your other machines push to. Your
+   Muse's machine needs network access to that database. See
+   [PostgreSQL Sync](/docs/pg-sync/#multi-machine-workflow).
+
+Each transcript must have a version-1 `session_header` with a session ID
+matching its filename. The optional sibling `sessions.json` index can extend
+the session's end time; missing, stale or unknown-version indexes do not
+prevent collection.
+
+Set `MUSE_PERSONAL_AGENTS_DIR` or configure the root explicitly:
+
+```toml
+[agents.muse-personal]
+dirs = ["/example/agents"]
+```
+
+Use an explicit root when the collecting process's `HOME` differs from the
+transcript owner's. `agentsview doctor sync` shows the resolved root.
+
+AgentsView collects sessions your Muse started on a schedule as well as ones you
+started. Raw capture keeps the transcript and any regular index as original
+bytes.
+
+Items appear in stable `seq` order, with same-sequence occurrences keeping their
+file order. Tool outputs pair only with a unique preceding unmatched call;
+ambiguous or unmatched outputs remain separate tool rows. Compaction summaries
+appear as boundaries without deleting earlier history. File references are inert
+text: AgentsView never opens their recorded paths. A final line still being
+written delays publication until it is complete.
+
+Titles, parent links, public model names, token usage and costs are not inferred
+from these files. Context-window snapshots and opaque metadata remain in raw
+custody. The maintainer
+[format evidence](https://github.com/kenn-io/agentsview/blob/main/docs/internal/session-format-sources.md#muse-personal-muse-personal)
+records the projection's limits.
 
 ### CodeBuddy
 
@@ -2147,8 +2309,9 @@ mechanisms:
 
 1. **File watcher** — uses FSEvents on macOS and fsnotify elsewhere to detect
     file changes. An isolated edit is batched for 500ms; watcher-driven sync
-    start times remain at least five seconds apart by default (see
-    [`sync_interval`](#config-file)). Common dependency and build
+    start times remain at least ten minutes apart while nobody is watching the
+    archive, and five seconds apart while the web UI is open (see
+    [`background_sync_interval`](#config-file)). Common dependency and build
     folders (`node_modules`, `__pycache__`, `.git`, `vendor`, `dist`, etc.) are
     automatically skipped to reduce noise and overhead. On macOS, FSEvents
     reports a file that its producer keeps open only when the file is created
@@ -2753,19 +2916,38 @@ api_key_env = "DOCBANK_API_KEY"
 ```
 
 Set `DOCBANK_API_KEY` in the environment of each consumer, including the
-daemon, CLI, and MCP server. Both `url` and `api_key_env` are required to enable
-lookup. Omit the section to disable it. The server refuses to start with an
+daemon, CLI, and MCP server, or replace `api_key_env` with `api_key_file`
+naming a private file that holds the key; see
+[Read secrets from files](#read-secrets-from-files). Lookup needs `url` and one
+of `api_key_env` or `api_key_file`. Omit the section to disable it. The server refuses to start with an
 invalid section; other commands print a warning and leave lookup off. CLI
 commands that connect to a daemon use the daemon's integration configuration.
 
 MCP offers `get_session_file_references` when its backend enables Docbank
 lookup. Connections through a signed reader listener omit this tool.
 
-| Setting                            | Purpose                                           |
-| ---------------------------------- | ------------------------------------------------- |
-| `integrations.docbank.url`         | Docbank API base URL. HTTPS, or HTTP on loopback. |
-| `integrations.docbank.web_url`     | Optional browser base URL for version links.      |
-| `integrations.docbank.api_key_env` | Environment variable containing the API key.      |
+| Setting                            | Purpose                                                              |
+| ---------------------------------- | -------------------------------------------------------------------- |
+| `integrations.docbank.url`         | Docbank API base URL. HTTPS, or HTTP under the policy below.         |
+| `integrations.docbank.web_url`     | Optional browser base URL for version links.                         |
+| `integrations.docbank.api_key_env` | Environment variable containing the API key.                         |
+| `integrations.docbank.api_key_file` | Private file containing the API key, instead of `api_key_env`.      |
+| `integrations.docbank.allow_http`  | Allow plaintext HTTP to any host. Default: `false`.                  |
+
+HTTPS and loopback HTTP work by default. For a trusted private container
+network, opt in explicitly:
+
+```toml
+[integrations.docbank]
+url = "http://docbank:8485"
+api_key_env = "DOCBANK_API_KEY"
+allow_http = true
+```
+
+`allow_http` applies to both `url` and the optional `web_url`, matching the
+Insights transport policy. HTTP exposes the API key and requested digests in
+plaintext, so enable it only on a network you trust. API keys stay in request
+headers and redirects are refused.
 
 Lookup covers retained tool-result images, including offloaded assets, inline
 OpenCode `file.uri` payloads such as PDF and text files, and Markdown `asset://`

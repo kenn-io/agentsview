@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"encoding/json"
 	"testing"
 	"time"
 
@@ -57,15 +56,8 @@ func TestHostedRuntimeIdleAndMaintenanceQueriesStayBounded(t *testing.T) {
 					_, err = tx.ExecContext(t.Context(), `SET LOCAL enable_seqscan=off`)
 					require.NoError(t, err)
 				}
-				var encoded []byte
-				err = tx.QueryRowContext(t.Context(), `EXPLAIN (ANALYZE,BUFFERS,FORMAT JSON) `+tc.query, tc.args...).Scan(&encoded)
-				require.NoError(t, err)
+				plan, buffers := explainUserBlocks(t, tx, tc.query, tc.args...)
 				require.NoError(t, tx.Rollback())
-				var plans []struct{ Plan map[string]any }
-				require.NoError(t, json.Unmarshal(encoded, &plans))
-				require.Len(t, plans, 1)
-				plan := plans[0].Plan
-				buffers := plan["Shared Hit Blocks"].(float64) + plan["Shared Read Blocks"].(float64)
 				name := tc.name + "/" + mode
 				if size == 100 {
 					small[name] = buffers
@@ -85,7 +77,7 @@ func TestHostedRuntimeIdleAndMaintenanceQueriesStayBounded(t *testing.T) {
 					}
 				}
 				visit(plan)
-				t.Logf("size=%d %s shared buffers=%.0f", size, name, buffers)
+				t.Logf("size=%d %s user blocks=%.0f", size, name, buffers)
 			}
 		}
 		leases, err := jobs.ClaimRawParseJobs(t.Context(), "idle", 1, time.Minute)

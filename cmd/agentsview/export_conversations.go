@@ -61,6 +61,7 @@ func newConversationChangesCommand() *cobra.Command {
 	command.Flags().StringVar(&options.Checkpoint, "checkpoint", "", "Resume after a completed changes walk")
 	command.Flags().StringVar(&options.Cursor, "cursor", "", "Continue an unfinished changes walk")
 	command.Flags().IntVar(&options.Limit, "limit", db.MaxSessionLimit, "Maximum changes in this page")
+	command.Flags().BoolVar(&options.ToolSummaries, "tool-summaries", false, "Also list a tool_summary change per session: calls, errors and measured time by tool category, and skills by name")
 	return command
 }
 

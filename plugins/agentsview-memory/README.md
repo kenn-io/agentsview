@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-09-21
+last_edited: 2026-11-16
 ---
 
 # AgentsView Memory
@@ -9,9 +9,23 @@ through the focused AgentsView MCP profile. It bundles the same generated skill
 used by `agentsview skills install`, plus Claude's bounded search agent and a
 fail-open `SessionStart` hook for `startup`, `resume`, and `clear`.
 
-Install the package with the client's native plugin flow and ensure `agentsview`
-is on the client's `PATH`. The default target is the local archive owner. Select
-one hosted role through the client's local environment:
+## Install
+
+Put `agentsview` on your `PATH`, then run these commands in Claude Code:
+
+```text
+/plugin marketplace add kenn-io/agentsview
+/plugin install agentsview-memory@agentsview
+```
+
+Restart Claude Code and open `/mcp` to confirm the server is connected. Use
+`/plugin` to update the package. Codex has no marketplace here; run
+`agentsview agent setup --agent codex` instead. See the
+[installation routes](../../docs/mcp.md#choose-an-installation-route) to compare
+options.
+
+The default target is the local archive owner. Select one hosted role through
+the client's local environment:
 
 | Role                          | Environment                                                                                                            |
 | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------- |

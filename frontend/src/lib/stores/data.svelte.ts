@@ -180,11 +180,9 @@ class DataStore {
       return true;
     } catch (error) {
       if (isAbortError(error) || version !== this.#loadVersion) return false;
-      // A failed background refresh keeps the current inventory on screen so a
-      // transient blip does not blank an already-populated view. With no
-      // inventory yet (a first load still failing) there is nothing to
-      // preserve, so fall through and surface the error.
-      if (opts.background && this.inventory !== null) return false;
+      // A failed refresh keeps the current inventory on screen so a transient
+      // blip does not blank an already-populated view; the error still shows
+      // above it until a later load succeeds.
       this.error = error instanceof Error ? error.message : m.data_load_failed();
       return false;
     } finally {

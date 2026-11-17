@@ -1,4 +1,4 @@
-//go:build !(windows && arm64)
+//go:build duckdb && !(windows && arm64)
 
 package duckdb
 
@@ -15,6 +15,10 @@ import (
 	// the prebuilt DuckDB library from duckdb-go-bindings.
 	duckdbdriver "github.com/duckdb/duckdb-go/v2"
 )
+
+// RequireDriver reports an error when this build does not link the DuckDB
+// driver. This build links it.
+func RequireDriver() error { return nil }
 
 func openDuckDB(dsn string) (*sql.DB, error) {
 	return sql.Open("duckdb", dsn)

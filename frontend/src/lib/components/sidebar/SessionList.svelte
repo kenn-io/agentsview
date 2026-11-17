@@ -18,6 +18,7 @@
   import { formatCount } from "../../utils/format.js";
   import { agentColor } from "../../utils/agents.js";
   import { registerSessionList } from "../../utils/arrow-target.js";
+  import LoadError from "../shared/LoadError.svelte";
   import {
     type DisplayItem,
     type GroupMode,
@@ -486,7 +487,11 @@
 </div>
 
 {#if sessions.sidebarLoadError}
-  <div class="sidebar-load-error" role="alert">{sessions.sidebarLoadError}</div>
+  <LoadError
+    class="sidebar-load-error"
+    message={sessions.sidebarLoadError}
+    onRetry={() => void sessions.retrySidebar()}
+  />
 {/if}
 
 {#if sessions.selectMode}
@@ -696,10 +701,8 @@
     color: var(--accent-green);
   }
 
-  .sidebar-load-error {
-    padding: 4px 12px;
-    font-size: 11px;
-    color: var(--accent-red);
+  :global(.sidebar-load-error) {
+    margin: 4px 8px;
   }
 
   /* Snippet rendered inside SessionFilterControl carries this

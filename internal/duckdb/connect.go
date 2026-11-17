@@ -291,8 +291,12 @@ func isMissingDuckDBTable(err error) bool {
 // Store's unqualified read queries work for both local and remote modes.
 func NewStoreFromConfig(ctx context.Context, cfg config.DuckDBConfig) (*Store, error) {
 	if cfg.URL != "" {
+		token, err := cfg.ResolveToken()
+		if err != nil {
+			return nil, err
+		}
 		return NewQuackStore(ctx,
-			cfg.URL, cfg.Token, cfg.AllowInsecure, cfg.AttachTimeout,
+			cfg.URL, token, cfg.AllowInsecure, cfg.AttachTimeout,
 		)
 	}
 	return NewStore(ctx, cfg.Path)
@@ -340,6 +344,10 @@ func openQuackClient(ctx context.Context,
 	rawURL, token string, allowInsecure bool, attachTimeout time.Duration,
 ) (*quackClient, error) {
 	if err := ValidateQuackClientURL(rawURL, token, allowInsecure); err != nil {
+		return nil, err
+	}
+	// Report a build without DuckDB before dialing the endpoint.
+	if err := RequireDriver(); err != nil {
 		return nil, err
 	}
 	timeout := resolveAttachTimeout(attachTimeout)

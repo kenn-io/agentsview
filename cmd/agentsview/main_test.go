@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -624,18 +625,18 @@ func TestRunPGRuntimeWarningHelperProcess(t *testing.T) {
 		t, filepath.Join(os.Getenv("AGENTSVIEW_DATA_DIR"), "pg.db"),
 	)
 	ctx, cancel := context.WithCancel(t.Context())
-	port, err := server.FindAvailablePort(ctx, "127.0.0.1", 0)
+	listener, err := server.ListenAvailablePort(ctx, "127.0.0.1", 0)
 	require.NoError(t, err)
 	appCfg := config.Config{
 		Host:    "127.0.0.1",
-		Port:    port,
+		Port:    listener.Addr().(*net.TCPAddr).Port,
 		DataDir: os.Getenv("AGENTSVIEW_DATA_DIR"),
 	}
 	prepareReplicaServe = func(context.Context, storage.Replica, config.Config, string, *ReplicaPushConfig, bool) (replicaServeStartup, error) {
 		return replicaServeStartup{
 			cfg: appCfg, ctx: ctx,
 			rtOpts: serveRuntimeOptions{
-				Mode: "pg-serve", RequestedPort: appCfg.Port,
+				Mode: "pg-serve", RequestedPort: appCfg.Port, Listener: listener,
 			},
 			srv: server.New(
 				appCfg, database, nil,
@@ -1037,14 +1038,14 @@ func TestStartFileWatcherUsesSyncInterval(t *testing.T) {
 		AgentDirs:    map[parser.AgentType][]string{parser.AgentClaude: {projects}},
 	}
 	calls := make(chan time.Time, 8)
-	stop, open, unwatched, _, _ := startFileWatcher(cfg, nil,
+	watcher := startFileWatcher(cfg, cfg.SyncInterval, nil,
 		func(context.Context, agentsync.WatchBatch) error {
 			calls <- time.Now()
 			return nil
 		}, agentsync.WatcherOptions{})
-	t.Cleanup(stop)
-	require.Empty(t, unwatched)
-	open()
+	t.Cleanup(watcher.stop)
+	require.Empty(t, watcher.unwatchedDirs)
+	watcher.openDispatch()
 	path := filepath.Join(project, "active.jsonl")
 	require.NoError(t, os.WriteFile(path, []byte("first\n"), 0o600))
 	first := receiveArchiveTest(t, calls)

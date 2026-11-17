@@ -1,4 +1,4 @@
-//go:build !(windows && arm64)
+//go:build duckdb && !(windows && arm64)
 
 package duckdb
 
@@ -2052,4 +2052,83 @@ func TestDuckToolsBoundedRangeGroupsByLocalDay(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, visits, 1)
 	assert.Equal(t, 2, visits[0].Count)
+}
+
+func TestDuckAnalyticsLargeSessionSelection(t *testing.T) {
+	const timestamp = "2024-06-01T09:00:00Z"
+	var writes []db.SessionBatchWrite
+	for i := range 902 {
+		id := fmt.Sprintf("selection-%04d", i)
+		project, model, tool, skill := "included", "model-a", "Read", "skill-a"
+		switch i {
+		case 900:
+			model, tool, skill = "model-z", "Write", "skill-z"
+		case 901:
+			project, model, tool, skill = "excluded", "model-excluded", "Excluded", "skill-excluded"
+		}
+		writes = append(writes, db.SessionBatchWrite{
+			Session: syncSession(id, project, "selection", timestamp, 1),
+			Messages: []db.Message{duckModelMessage(id, 0, "assistant", "seam", timestamp, model,
+				db.ToolCall{ToolName: tool, Category: tool}, db.ToolCall{ToolName: "Skill", Category: "Skill", SkillName: skill})},
+			DataVersion: 1, ReplaceMessages: true,
+		})
+	}
+	store := newDuckAnalyticsStore(t, writes)
+
+	filter := db.AnalyticsFilter{From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", Project: "included"}
+	t.Run("summary", func(t *testing.T) {
+		summary, err := store.GetAnalyticsSummary(t.Context(), filter)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"model-a", "model-z"}, summary.Models)
+		queries := 0
+		previous := analyticsQueryObserver
+		analyticsQueryObserver = func(string) { queries++ }
+		t.Cleanup(func() { analyticsQueryObserver = previous })
+		filtered := filter
+		filtered.Model = "model-a,model-z"
+		filteredSummary, err := store.GetAnalyticsSummary(t.Context(), filtered)
+		require.NoError(t, err)
+		assert.Equal(t, 901, filteredSummary.TotalSessions)
+		assert.Equal(t, 901, filteredSummary.TotalMessages)
+		assert.LessOrEqual(t, queries, 2)
+	})
+	t.Run("tools and skills", func(t *testing.T) {
+		queries := 0
+		previous := analyticsQueryObserver
+		analyticsQueryObserver = func(string) { queries++ }
+		t.Cleanup(func() { analyticsQueryObserver = previous })
+		tools, err := store.GetAnalyticsTools(t.Context(), filter)
+		require.NoError(t, err)
+		assert.Equal(t, 1802, tools.TotalCalls)
+		counts := map[string]int{}
+		for _, tool := range tools.ByTool {
+			counts[tool.ToolName] = tool.CallCount
+		}
+		assert.Equal(t, map[string]int{"Read": 900, "Write": 1, "Skill": 901}, counts)
+		skills, err := store.GetAnalyticsSkills(t.Context(), filter, "day")
+		require.NoError(t, err)
+		assert.Equal(t, 901, skills.TotalSkillCalls)
+		skillCounts := map[string]int{}
+		for _, skill := range skills.BySkill {
+			skillCounts[skill.SkillName] = skill.CallCount
+		}
+		assert.Equal(t, map[string]int{"skill-a": 900, "skill-z": 1}, skillCounts)
+		assert.LessOrEqual(t, queries, 2)
+	})
+	t.Run("trends", func(t *testing.T) {
+		t.Setenv("CACHE_DIRECTORY", t.TempDir())
+		require.NoError(t, store.usageDisk.Open("duckdb-usage", "fixture", 128<<20, 256<<20))
+		queries := 0
+		previous := analyticsQueryObserver
+		analyticsQueryObserver = func(string) { queries++ }
+		t.Cleanup(func() { analyticsQueryObserver = previous })
+		terms, err := db.ParseTrendTerms([]string{"seam"})
+		require.NoError(t, err)
+		trends, err := store.GetTrendsTerms(t.Context(), filter, terms, "day")
+		require.NoError(t, err)
+		assert.Equal(t, 901, trends.MessageCount)
+		require.Len(t, trends.Series, 1)
+		assert.Equal(t, 901, trends.Series[0].Total)
+		assert.GreaterOrEqual(t, queries, 6)
+	})
 }

@@ -185,9 +185,8 @@ func TestAdoptOriginRemovesPublicationsThatBecameDeletedWhileOriginWasInactive(t
 	t.Parallel()
 
 	database := testDB(t)
-	store, err := newProtocolTestStore(t.TempDir())
+	store, err := newProtocolTestStore(t, t.TempDir())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
 
 	const (
 		originA = "origin-a1b2c3"
@@ -219,9 +218,8 @@ func TestOriginRejectionLifecycleRemovesRetriesAndRequeues(t *testing.T) {
 	t.Parallel()
 
 	database := testDB(t)
-	store, err := newProtocolTestStore(t.TempDir())
+	store, err := newProtocolTestStore(t, t.TempDir())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
 
 	const (
 		originA    = "origin-a1b2c3"

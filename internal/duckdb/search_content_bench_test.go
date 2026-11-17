@@ -1,4 +1,4 @@
-//go:build !(windows && arm64)
+//go:build duckdb && !(windows && arm64)
 
 package duckdb
 
@@ -52,13 +52,13 @@ func seedRunExtentsBenchArchive(b *testing.B) *Store {
 	require.NoError(b, err, "seed sessions")
 	_, err = conn.ExecContext(ctx, `
 		INSERT INTO messages (
-			session_id, ordinal, role, content, timestamp, content_length
+			session_id, ordinal, role, content, timestamp, content_length, is_system_prefixed
 		)
 		SELECT s.id, n,
 			CASE WHEN n % 10 IN (0, 3, 6) THEN 'user' ELSE 'assistant' END,
 			c.content,
 			s.started_at + to_seconds(n),
-			length(c.content)
+			length(c.content), n % 10 IN (3, 6)
 		FROM sessions s, range(?) r(n),
 			LATERAL (SELECT CASE
 				WHEN n % 10 = 0 THEN 'please continue with task ' || n

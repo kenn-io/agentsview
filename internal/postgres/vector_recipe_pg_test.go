@@ -43,8 +43,7 @@ func recipeSource(fingerprint string, params map[string]string) *fakeVectorSourc
 
 func TestVectorRecipePublishedAndBackfilled(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(t, pgURL, "agentsview_vector_recipe_test")
+	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
 	seedVectorSession(t, localDB, "A")
 
@@ -87,7 +86,7 @@ func TestVectorRecipePublishedAndBackfilled(t *testing.T) {
 	_, _, ok, err := LookupVectorGeneration(ctx, pg, "fp-recipe")
 	require.NoError(t, err)
 	assert.True(t, ok)
-	require.NoError(t, EnsureSchema(ctx, pg, "agentsview_vector_recipe_test"))
+	require.NoError(t, EnsureSchema(ctx, pg, vectorPushTestSchema))
 	_, err = ensureVectorBaseSchemaPG(ctx, pg)
 	require.NoError(t, err)
 	assert.False(t, recipeColumnExists(t, pg), "serve-side schema preparation adds no column")
@@ -250,14 +249,14 @@ func (p *preparingVectorSource) BeginExport(
 
 func TestVectorPushPreparesSourceOnlyWhenVectorsCanBeStored(t *testing.T) {
 	t.Parallel()
-	pgURL := testPGURL(t)
-	const schema = "agentsview_vector_prepare_test"
+	const schema = vectorPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	const prepareRole = "agentsview_vector_prepare_writer"
 	const prepareRolePassword = "agentsview_vector_prepare_writer_pw"
 	ctx := t.Context()
 
 	t.Run("vector tables available", func(t *testing.T) {
-		sync, localDB, _ := newVectorPushTestSync(t, pgURL, schema)
+		sync, localDB, _ := newVectorPushTestSync(t)
 		seedVectorSession(t, localDB, "A")
 		source := &preparingVectorSource{fakeVectorSource: recipeSource("fp-prepare", nil)}
 		sync.vectorSource = source
@@ -301,7 +300,7 @@ func TestVectorPushPreparesSourceOnlyWhenVectorsCanBeStored(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, localDB, admin := newVectorPushTestSync(t, pgURL, schema)
+			_, localDB, admin := newVectorPushTestSync(t)
 			seedVectorSession(t, localDB, "A")
 			unavailable, err := ensureVectorBaseSchemaPG(ctx, admin)
 			require.NoError(t, err)

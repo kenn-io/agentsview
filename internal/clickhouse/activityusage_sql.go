@@ -346,19 +346,26 @@ func clickActivityUsageSQL(source activityUsageSource, candidates chSessionSet, 
 	// shares, so only pairs with one need deduplicating by token.
 	colon := "(position(claude_message_id, ':') > 0 OR position(claude_request_id, ':') > 0)"
 	bestKey := "(output, ts_us, session_id, -ord, -tie)"
-	snapshots := func(pairs string) string {
-		return `SELECT ` + clickActivityUsageColumns + `, claude_message_id, claude_request_id, account_session, web_billed FROM (
-				SELECT ` + clickActivityUsageColumns + `, claude_message_id, claude_request_id,
-					max(` + bestKey + `) OVER pair AS best_key,
-					argMin(session_id, (ts_us, session_id, ord)) OVER pair AS account_session,
-					max(web) OVER pair AS web_billed
-				FROM activity_usage_rows WHERE token_kind = 1 AND ` + pairs + `
-				WINDOW pair AS (PARTITION BY claude_message_id, claude_request_id))
-			WHERE ` + bestKey + ` = best_key AND account_session IN (SELECT id FROM activity_usage_candidates)`
-	}
 	const maxInt64, minInt64 = "toInt128(9223372036854775807)", "toInt128(-9223372036854775808)"
 	overflows := "max(row_cost) > " + maxInt64 + " OR min(row_cost) < " + minInt64 +
 		" OR sum(row_cost) > " + maxInt64 + " OR sum(row_cost) < " + minInt64
+
+	// ClickHouse inlines a CTE at each reference, so each survivor branch
+	// reads activity_usage_rows again. One read with the windows stacked was
+	// slower and used more memory: each window then sorts every row, where a
+	// branch sorts only the rows its rule needs.
+	snapshots := func(pairs string) string {
+		return `SELECT ` + clickActivityUsageColumns + `, claude_message_id, claude_request_id,
+				argMin(session_id, (ts_us, session_id, ord)) OVER pair AS account_session,
+				max(web) OVER pair AS web_billed
+			FROM activity_usage_rows WHERE token_kind = 1 AND ` + pairs + `
+			WINDOW pair AS (PARTITION BY claude_message_id, claude_request_id)
+			QUALIFY ` + bestKey + ` = max(` + bestKey + `) OVER pair
+				AND account_session IN (SELECT id FROM activity_usage_candidates)`
+	}
+	firstInReportOrder := func(token string) string {
+		return "QUALIFY row_number() OVER (PARTITION BY " + token + " ORDER BY ts_us, session_id, ord, tie) = 1"
+	}
 
 	query := `WITH activity_usage_candidates AS (` + candidates.body + `),
 		activity_usage_source AS (` + source.sql + `),
@@ -381,20 +388,14 @@ func clickActivityUsageSQL(source activityUsageSource, candidates chSessionSet, 
 			SELECT ` + clickActivityUsageColumns + `, session_id AS account_session, web AS web_billed
 			FROM activity_usage_rows WHERE token_kind = 0
 			UNION ALL
-			SELECT ` + clickActivityUsageColumns + `, session_id AS account_session, web AS web_billed FROM (
-				SELECT *, row_number() OVER (
-					PARTITION BY token_kind, if(token_kind = 2, concat(agent, ':', source_uuid), usage_dedup_key)
-					ORDER BY ts_us, session_id, ord, tie) AS token_rank
-				FROM activity_usage_rows WHERE token_kind IN (2, 3))
-			WHERE token_rank = 1
+			SELECT ` + clickActivityUsageColumns + `, session_id AS account_session, web AS web_billed
+			FROM activity_usage_rows WHERE token_kind IN (2, 3)
+			` + firstInReportOrder("token_kind, if(token_kind = 2, concat(agent, ':', source_uuid), usage_dedup_key)") + `
 			UNION ALL
 			SELECT ` + clickActivityUsageColumns + `, account_session, web_billed FROM (` + snapshots("NOT "+colon) + `)
 			UNION ALL
-			SELECT ` + clickActivityUsageColumns + `, account_session, web_billed FROM (
-				SELECT *, row_number() OVER (PARTITION BY concat(claude_message_id, ':', claude_request_id)
-					ORDER BY ts_us, session_id, ord, tie) AS token_rank
-				FROM (` + snapshots(colon) + `))
-			WHERE token_rank = 1
+			SELECT ` + clickActivityUsageColumns + `, account_session, web_billed FROM (` + snapshots(colon) + `)
+			` + firstInReportOrder("concat(claude_message_id, ':', claude_request_id)") + `
 		),
 		activity_usage_raw_sessions AS (
 			SELECT session_id FROM activity_usage_rows WHERE ` + sessionCostRow + `
@@ -407,20 +408,10 @@ func clickActivityUsageSQL(source activityUsageSource, candidates chSessionSet, 
 		),
 		activity_usage_rated AS (
 			SELECT u.*, r.rate_found, r.rate_id, r.billed_ok, r.catalog_ok, r.billed_err,
-				r.rate_in, r.rate_out, r.rate_cw, r.rate_cw1h, r.rate_cr
-			FROM activity_usage_survivors u
-			ASOF LEFT JOIN (SELECT *, toUInt8(1) AS rate_found FROM activity_usage_rates) r
-				ON u.model = r.rate_model AND u.provider_id = r.rate_provider AND u.pricing_us >= r.from_us
-		),
-		activity_usage_classified AS (
-			SELECT *,
+				r.rate_in, r.rate_out, r.rate_cw, r.rate_cw1h, r.rate_cr,
 				if(cost IS NOT NULL AND cost_source = ` + copilot + `, cost, NULL) AS session_cost,
 				multiIf(cost IS NOT NULL AND cost_source != ` + copilot + `, cost,
-					recorded_cost > 0 AND catalog_ok = 0, recorded_cost, NULL) AS reported_cost
-			FROM activity_usage_rated
-		),
-		activity_usage_kinds AS (
-			SELECT *,
+					recorded_cost > 0 AND catalog_ok = 0, recorded_cost, NULL) AS reported_cost,
 				multiIf(
 					rate_found = 0, '` + readbase.UsageKindMissingRate + `',
 					reported_cost IS NOT NULL, '` + readbase.UsageKindReported + `',
@@ -431,40 +422,33 @@ func clickActivityUsageSQL(source activityUsageSource, candidates chSessionSet, 
 					` + requestScoped + `, '` + readbase.UsageKindRequest + `',
 					'` + readbase.UsageKindAggregate + `') AS price_kind,
 				if(price_kind = '` + readbase.UsageKindRequest + `', input + cache_create + cache_read, -1) AS band_probe
-			FROM activity_usage_classified
-		),
-		activity_usage_banded AS (
-			SELECT k.*, b.band_found, b.band_above, b.band_in, b.band_out, b.band_cw, b.band_cw1h, b.band_cr
-			FROM activity_usage_kinds k
-			ASOF LEFT JOIN (SELECT *, toUInt8(1) AS band_found FROM activity_usage_bands) b
-				ON k.rate_id = b.band_rate AND k.band_probe >= b.band_floor
+			FROM activity_usage_survivors u
+			ASOF LEFT JOIN (SELECT *, toUInt8(1) AS rate_found FROM activity_usage_rates) r
+				ON u.model = r.rate_model AND u.provider_id = r.rate_provider AND u.pricing_us >= r.from_us
 		),
 		activity_usage_priced AS (
-			SELECT *,
+			SELECT k.*, if(b.band_found = 1, b.band_above, -1) AS price_band,
 				multiIf(
 					price_kind = '` + readbase.UsageKindReported + `', ` + wide("reported_cost") + `,
 					price_kind = '` + readbase.UsageKindUnresolved + `', ` + webFee + `,
 					price_kind IN ('` + readbase.UsageKindRequest + `', '` + readbase.UsageKindAggregate + `'), ` + tokenCost + ` + ` + webFee + `,
 					` + wide("0") + `) AS row_cost,
-				if(band_found = 1, band_above, -1) AS price_band,
-				toUInt8(0) AS bucket_key,
-				account_session IN (SELECT session_id FROM activity_usage_raw_sessions) AS raw
-			FROM activity_usage_banded
-		),
-		activity_usage_bucketed AS (
-			SELECT p.*, if(w.bucket_found = 1, w.bucket, -1) AS bucket_index
-			FROM activity_usage_priced p
-			ASOF LEFT JOIN (SELECT *, toUInt8(0) AS bucket_key, toUInt8(1) AS bucket_found FROM activity_usage_buckets) w
-				ON p.bucket_key = w.bucket_key AND p.ts_us >= w.bucket_start
+				account_session IN (SELECT session_id FROM activity_usage_raw_sessions) AS raw,
+				toUInt8(0) AS bucket_key
+			FROM activity_usage_rated k
+			ASOF LEFT JOIN (SELECT *, toUInt8(1) AS band_found FROM activity_usage_bands) b
+				ON k.rate_id = b.band_rate AND k.band_probe >= b.band_floor
 		)
-		SELECT account_session, model, provider_id, bucket_index, if(rate_found = 1, rate_id, -1) AS rate,
-			price_kind, toInt64(price_band) AS band, toUInt8(raw) AS raw_group,
+		SELECT account_session, model, provider_id, if(w.bucket_found = 1, w.bucket, -1) AS bucket_index,
+			if(rate_found = 1, rate_id, -1) AS rate, price_kind, toInt64(price_band) AS band, toUInt8(raw) AS raw_group,
 			if(raw, ts_us, 0) AS raw_ts, if(raw, session_id, '') AS raw_session, if(raw, ord, 0) AS raw_ord,
 			if(raw, tie, 0) AS raw_tie,
 			toInt64(count()) AS rows, toInt64(sum(input)) AS input_sum, toInt64(sum(output)) AS output_sum,
 			toInt64(if(` + overflows + `, 0, sum(row_cost))) AS cost_sum,
 			toUInt8(` + overflows + `) AS overflow, min(ts_us) AS min_ts, max(session_cost) AS session_cost_max
-		FROM activity_usage_bucketed
+		FROM activity_usage_priced p
+		ASOF LEFT JOIN (SELECT *, toUInt8(0) AS bucket_key, toUInt8(1) AS bucket_found FROM activity_usage_buckets) w
+			ON p.bucket_key = w.bucket_key AND p.ts_us >= w.bucket_start
 		GROUP BY account_session, model, provider_id, bucket_index, rate, price_kind, band,
 			raw_group, raw_ts, raw_session, raw_ord, raw_tie`
 	if source.settings != "" {

@@ -2,6 +2,7 @@ import { SessionsService } from "../api/generated/index";
 import type { DbMessage as Message } from "../api/generated/index.js";
 import { ApiError, isAbortError, isTransient } from "../api/runtime.js";
 import { clearContentCaches } from "../utils/content-parser.js";
+import { failureMessage } from "../utils/failure.js";
 import { computeMainModelInfo, type ModelEffort } from "../utils/model.js";
 import { buildReadProgressToken, readProgress } from "./read-progress.svelte.js";
 import { sessions } from "./sessions.svelte.js";
@@ -51,6 +52,11 @@ export class MessagesStore {
   hasOlder: boolean = $state(false);
   loadingOlder: boolean = $state(false);
   historyComplete: boolean = $state(false);
+  /** Why the last transcript or history read failed; null once a read lands. */
+  loadError: string | null = $state(null);
+  /** Which read failed, so retryLoad repeats it: the transcript, an older
+   * page, or the rest of the history (a forward tail or an ordinal jump). */
+  private loadErrorKind: "load" | "older" | "history" = "load";
   /**
    * The transcript revision every row in messages came from, taken from the
    * message responses that delivered them. Null until the first page lands.
@@ -124,6 +130,7 @@ export class MessagesStore {
     this.sessionId = id;
     this.cancelledSessionId = null;
     this.loading = true;
+    this.loadError = null;
     const owner = ++this.loadingOwner;
 
     const generation = ++this.loadGeneration;
@@ -177,7 +184,9 @@ export class MessagesStore {
       }
       // A reload queued behind this load retries a transient failure with the reload's bounded backoff.
       if (this.loadGeneration === generation && isTransient(err)) void this.reload();
-      console.warn("Failed to load session messages:", err);
+      if (this.sessionId === id && this.loadGeneration === generation) {
+        this.failLoad(err, "load");
+      }
     } finally {
       if (this.sessionId === id && this.loadingOwner === owner) {
         this.loading = false;
@@ -232,6 +241,31 @@ export class MessagesStore {
     return promise;
   }
 
+  private failLoad(err: unknown, kind: "load" | "older" | "history") {
+    // An unresolved transcript failure keeps its kind, so Retry still runs
+    // the load or reload that publishes the read-progress token.
+    if (this.loadError === null || this.loadErrorKind !== "load") this.loadErrorKind = kind;
+    this.loadError = failureMessage(err);
+  }
+
+  /** A history read landed, which settles an earlier history failure. A
+   * failed transcript load stays until a load or reload lands, because that
+   * read is the one that publishes the session's read-progress token. */
+  private historyRecovered() {
+    if (this.loadErrorKind !== "load") this.loadError = null;
+  }
+
+  /** Repeat the read behind loadError. */
+  retryLoad(): Promise<void> {
+    const id = this.sessionId;
+    if (!id || this.loadError === null) return Promise.resolve();
+    const kind = this.loadErrorKind;
+    this.loadError = null;
+    if (kind === "older") return this.loadOlder();
+    if (kind === "history") return this.ensureHistoryLoaded();
+    return this.messages.length === 0 ? this.loadSession(id) : this.reload();
+  }
+
   clear() {
     this.cancelInFlight();
     this.messages = [];
@@ -253,6 +287,7 @@ export class MessagesStore {
     this.pendingReload = false;
     this.reloadFailures = 0;
     this.loadOlderPromise = null;
+    this.loadError = null;
     this.pendingSessionToken = null;
     this.hasPendingSessionToken = false;
     this.pendingSessionUnreadOrdinal = null;
@@ -548,6 +583,7 @@ export class MessagesStore {
       this.messages = [...chunk, ...this.messages];
       this.hasOlder = chunk[0]!.ordinal > 0;
       this.historyComplete = !this.hasOlder;
+      this.historyRecovered();
       this.publishPendingSessionToken(id);
     } catch (err) {
       if (isAbortError(err)) return;
@@ -555,8 +591,10 @@ export class MessagesStore {
         void this.queueReload();
         return;
       }
-      if (this.sessionId === id) this.historyComplete = false;
-      console.warn("Failed to load older messages:", err);
+      if (this.sessionId === id) {
+        this.historyComplete = false;
+        this.failLoad(err, "older");
+      }
     } finally {
       if (this.sessionId === id) {
         this.loadingOlder = false;
@@ -688,13 +726,14 @@ export class MessagesStore {
         }
         from = nextFrom;
       }
+      this.historyRecovered();
       this.publishPendingSessionToken(id);
       return "done";
     } catch (error) {
       if (isAbortError(error) || !current()) return "done";
       if (isRevisionChange(error)) return "reload";
       this.historyComplete = false;
-      console.warn("Failed to complete session history:", error);
+      this.failLoad(error, "history");
       return "done";
     } finally {
       if (current()) this.loadingOlder = false;
@@ -769,13 +808,16 @@ export class MessagesStore {
       const oldestNow = this.messages[0]?.ordinal;
       this.hasOlder = oldestNow !== undefined && oldestNow > 0;
       this.historyComplete = !this.hasOlder;
+      this.historyRecovered();
       this.publishPendingSessionToken(id);
       return "done";
     } catch (err) {
       if (isAbortError(err)) return "done";
       if (this.sessionId === id && isRevisionChange(err)) return "reload";
-      if (this.sessionId === id) this.historyComplete = false;
-      console.warn("Failed to load older messages for ordinal:", err);
+      if (this.sessionId === id) {
+        this.historyComplete = false;
+        this.failLoad(err, "history");
+      }
       return "done";
     } finally {
       if (this.sessionId === id) {
@@ -836,6 +878,7 @@ export class MessagesStore {
 
       // A reload a newer load overtook leaves that load's read-progress token in place.
       if (landed && this.sessionId === id) {
+        this.loadError = null;
         const token = this.acceptedToken(pendingToken);
         const unreadOrdinal =
           token !== previousToken ? earliestChangedOrdinal(previousMessages, this.messages) : null;
@@ -852,8 +895,10 @@ export class MessagesStore {
         }
         if (isRevisionChange(err)) return;
       }
-      if (this.sessionId === id) this.historyComplete = false;
-      console.warn("Reload failed:", err);
+      if (this.sessionId === id) {
+        this.historyComplete = false;
+        this.failLoad(err, "load");
+      }
     }
   }
 

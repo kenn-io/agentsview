@@ -69,7 +69,7 @@ esac
 printf '%s|%s\n' "$VITE_API_TARGET" "$*" > "$RECORD_DIR/npm"
 printf '%s\n' "  Local:   http://127.0.0.1:49222/"
 while :; do
-	/bin/sleep 1
+	sleep 1
 done
 `)
 
@@ -133,7 +133,9 @@ done
 	writeExecutable(t, filepath.Join(binDir, "osascript"), "#!/bin/sh\nexit 0\n")
 
 	env := append(os.Environ(),
-		"PATH="+binDir+":/usr/bin:/bin",
+		// Fakes shadow curl, open, osascript, and npm; the host PATH supplies
+		// the shell utilities, wherever this system installs them.
+		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"RECORD_DIR="+recordDir,
 		"TMPDIR="+tempDir,
 	)

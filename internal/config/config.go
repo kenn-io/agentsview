@@ -177,6 +177,9 @@ type DuckDBConfig struct {
 	Token         string `toml:"token" json:"token,omitempty"`
 	MachineName   string `toml:"machine_name" json:"machine_name"`
 	AllowInsecure bool   `toml:"allow_insecure" json:"allow_insecure"`
+	// TokenFile names a private file holding the Quack token, read by
+	// ResolveDuckDB. It is the alternative to Token.
+	TokenFile string `toml:"token_file" json:"-"`
 	// AttachTimeout bounds how long a remote Quack ATTACH (and its cheap TCP
 	// preflight) may run before the client gives up, so an unresponsive
 	// endpoint fails fast instead of hanging forever. Zero selects the
@@ -184,6 +187,16 @@ type DuckDBConfig struct {
 	AttachTimeout   time.Duration `toml:"attach_timeout" json:"attach_timeout,omitzero"`
 	Projects        []string      `toml:"projects" json:"projects,omitempty"`
 	ExcludeProjects []string      `toml:"exclude_projects" json:"exclude_projects,omitempty"`
+}
+
+// ResolveToken returns the Quack token: Token when set, else the contents
+// of the file TokenFile names, else "". Only commands that authenticate to
+// Quack call it, so an unreadable token file does not block local mirror work.
+func (c DuckDBConfig) ResolveToken() (string, error) {
+	if c.Token != "" || strings.TrimSpace(c.TokenFile) == "" {
+		return c.Token, nil
+	}
+	return readSettingSecretFile("[duckdb] token_file", c.TokenFile)
 }
 
 type duckDBConfigJSON DuckDBConfig
@@ -295,6 +308,9 @@ type VectorEmbeddingsServerConfig struct {
 	// APIKeyEnv names the environment variable holding the API key.
 	// Empty means anonymous access.
 	APIKeyEnv string `toml:"api_key_env" json:"api_key_env,omitempty"`
+	// APIKeyFile names a private file holding the API key, read when the
+	// [vector] section loads. It is the alternative to APIKeyEnv.
+	APIKeyFile string `toml:"api_key_file" json:"api_key_file,omitempty"`
 	// BatchSize is the number of inputs sent per HTTP call. Default 32, or 8
 	// for a built-in server (no endpoint).
 	BatchSize int `toml:"batch_size" json:"batch_size"`
@@ -318,9 +334,9 @@ type VectorEmbeddingsServerConfig struct {
 	// 0 means one attempt. Default 3.
 	MaxRetries int `toml:"max_retries" json:"max_retries"`
 
-	// apiKey is read from AGENTSVIEW_EMBEDDINGS_API_KEY or
-	// AGENTSVIEW_EMBEDDINGS_API_KEY_FILE for the deployment server; it takes
-	// precedence over APIKeyEnv.
+	// apiKey is read from APIKeyFile, or from AGENTSVIEW_EMBEDDINGS_API_KEY
+	// or AGENTSVIEW_EMBEDDINGS_API_KEY_FILE for the deployment server; it
+	// takes precedence over APIKeyEnv.
 	apiKey string
 }
 
@@ -533,6 +549,32 @@ func (c VectorConfig) Validate() error {
 	return nil
 }
 
+// resolveVectorSecrets validates the section and, when it is enabled, reads
+// each server's api_key_file.
+func resolveVectorSecrets(c *VectorConfig) error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	if !c.Enabled {
+		return nil
+	}
+	for _, name := range sortedServerNames(c.Embeddings.Servers) {
+		server := c.Embeddings.Servers[name]
+		if strings.TrimSpace(server.APIKeyFile) == "" {
+			continue
+		}
+		key, err := readSettingSecretFile(
+			fmt.Sprintf("[vector.embeddings.servers.%s] api_key_file", name),
+			server.APIKeyFile)
+		if err != nil {
+			return err
+		}
+		server.apiKey = key
+		c.Embeddings.Servers[name] = server
+	}
+	return nil
+}
+
 // ResolvedDBPath returns DBPath if set, else <dataDir>/vectors.db.
 func (c VectorConfig) ResolvedDBPath(dataDir string) string {
 	if c.DBPath != "" {
@@ -583,16 +625,21 @@ func (c VectorEmbeddingsServerConfig) EmbedTransport() (embedconfig.Transport, e
 	return embedconfig.Transport{Timeout: timeout}, nil
 }
 
-// APIKey returns a deployment-provided key when set. Otherwise it reads the
-// environment variable named by APIKeyEnv, returning "" when unset.
-func (c VectorEmbeddingsServerConfig) APIKey() string {
+// APIKey returns the key read when the config loaded, or a
+// deployment-provided key. Otherwise it reads APIKeyFile, which a command
+// that loaded the config without the [vector] scope has not read yet, or the
+// environment variable APIKeyEnv names. It returns "" when no key is set.
+func (c VectorEmbeddingsServerConfig) APIKey() (string, error) {
 	if c.apiKey != "" {
-		return c.apiKey
+		return c.apiKey, nil
+	}
+	if strings.TrimSpace(c.APIKeyFile) != "" {
+		return readSettingSecretFile("api_key_file", c.APIKeyFile)
 	}
 	if c.APIKeyEnv == "" {
-		return ""
+		return "", nil
 	}
-	return os.Getenv(c.APIKeyEnv)
+	return os.Getenv(c.APIKeyEnv), nil
 }
 
 // validateServers checks available servers, their default and transport
@@ -644,6 +691,10 @@ func (c VectorEmbeddingsServerConfig) validate(name string, modelContextTokens i
 	}
 	if c.Endpoint == "" && !c.Local {
 		return fmt.Errorf("%s endpoint is required", section)
+	}
+	if err := oneSecretSource(section, "api_key_env", c.APIKeyEnv,
+		"api_key_file", c.APIKeyFile); err != nil {
+		return err
 	}
 	endpoint, err := c.EmbedDeployment().Canonical()
 	if err != nil && !c.Local {
@@ -810,10 +861,16 @@ type InsightsConfig struct {
 	Endpoint  string `json:"endpoint,omitempty" toml:"endpoint"`
 	Model     string `json:"model,omitempty" toml:"model"`
 	APIKeyEnv string `json:"api_key_env,omitempty" toml:"api_key_env"`
-	AllowHTTP bool   `json:"allow_http,omitempty" toml:"allow_http"`
+	// APIKeyFile names a private file holding the API key, read when the
+	// section loads. It is the alternative to APIKeyEnv.
+	APIKeyFile string `json:"api_key_file,omitempty" toml:"api_key_file"`
+	AllowHTTP  bool   `json:"allow_http,omitempty" toml:"allow_http"`
 	// DefaultAgent selects the agent CLI insight generation uses when a
 	// request does not choose one. Empty keeps DefaultInsightAgent.
 	DefaultAgent string `json:"default_agent,omitempty" toml:"default_agent"`
+
+	// apiKey holds the key read from APIKeyFile.
+	apiKey string
 }
 
 // DefaultInsightAgent is the insight agent used when neither the request nor
@@ -850,13 +907,33 @@ func ParseInsightAgent(value string) (string, error) {
 	)
 }
 
-// APIKey reads the configured key from the environment. The key itself is
-// intentionally never part of the serialized configuration.
+// APIKey returns the key read from APIKeyFile, or else the value of the
+// environment variable APIKeyEnv names. The key itself is intentionally never
+// part of the serialized configuration.
 func (c InsightsConfig) APIKey() string {
+	if c.apiKey != "" {
+		return c.apiKey
+	}
 	if strings.TrimSpace(c.APIKeyEnv) == "" {
 		return ""
 	}
 	return os.Getenv(strings.TrimSpace(c.APIKeyEnv))
+}
+
+// resolveInsightsSecrets validates the section and reads APIKeyFile.
+func resolveInsightsSecrets(c *InsightsConfig) error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(c.APIKeyFile) == "" {
+		return nil
+	}
+	key, err := readSettingSecretFile("[insights] api_key_file", c.APIKeyFile)
+	if err != nil {
+		return err
+	}
+	c.apiKey = key
+	return nil
 }
 
 // Validate checks endpoint intent, transport safety, and the default agent.
@@ -869,9 +946,14 @@ func (c InsightsConfig) Validate() error {
 	endpoint := strings.TrimSpace(c.Endpoint)
 	model := strings.TrimSpace(c.Model)
 	configured := endpoint != "" || model != "" ||
-		strings.TrimSpace(c.APIKeyEnv) != "" || c.AllowHTTP
+		strings.TrimSpace(c.APIKeyEnv) != "" ||
+		strings.TrimSpace(c.APIKeyFile) != "" || c.AllowHTTP
 	if !configured {
 		return nil
+	}
+	if err := oneSecretSource("[insights]", "api_key_env", c.APIKeyEnv,
+		"api_key_file", c.APIKeyFile); err != nil {
+		return err
 	}
 	if endpoint == "" || model == "" {
 		return errors.New("[insights] endpoint and model are required together")
@@ -1153,6 +1235,9 @@ type Config struct {
 	InstallationCreatedAt time.Time `json:"-" toml:"-"`
 	// LocalMachineName is the display label, defaulting to the system hostname.
 	LocalMachineName string `json:"-" toml:"local_machine_name"`
+	// CursorAdminAPIKeyFile names a private file holding the Cursor admin API
+	// key, read by ResolveCursorAdminAPIKey.
+	CursorAdminAPIKeyFile string `json:"-" toml:"cursor_admin_api_key_file"`
 
 	// AgentDirs maps each AgentType to its configured
 	// directories. Single-dir agents store a one-element
@@ -1210,8 +1295,12 @@ type Config struct {
 	SyncIdleAfter     time.Duration `json:"sync_idle_after,omitzero" toml:"sync_idle_after"`
 	DaemonIdleTimeout time.Duration `json:"daemon_idle_timeout,omitzero" toml:"daemon_idle_timeout"`
 
-	// SyncInterval is the minimum time between starts of watcher-triggered syncs.
+	// SyncInterval is the minimum time between starts of watcher-triggered
+	// syncs while someone is watching the archive, and in archive push commands.
 	SyncInterval time.Duration `json:"sync_interval,omitzero" toml:"sync_interval"`
+	// BackgroundSyncInterval is the same minimum for the daemon while nobody is
+	// watching. Restart to apply changes.
+	BackgroundSyncInterval time.Duration `json:"background_sync_interval,omitzero" toml:"background_sync_interval"`
 
 	ModelAliases       map[string]string          `json:"model_aliases,omitempty" toml:"model_aliases"`
 	CustomModelPricing map[string]CustomModelRate `json:"custom_model_pricing,omitempty" toml:"custom_model_pricing"`
@@ -1266,6 +1355,13 @@ func (c *Config) UnmarshalJSONFrom(in *jsontext.Decoder) error {
 	}
 	*c = Config(decoded)
 	return nil
+}
+
+// BackgroundSyncFloor is the minimum time between watcher-triggered syncs in
+// the daemon while nobody is watching the archive: background_sync_interval,
+// or sync_interval when that is longer or the background interval is off.
+func (c Config) BackgroundSyncFloor() time.Duration {
+	return max(c.BackgroundSyncInterval, c.SyncInterval)
 }
 
 func (c Config) ResolvedChartPalette() ChartPalette {
@@ -1533,6 +1629,7 @@ func Default() (Config, error) {
 		DaemonIdleTimeout:              20 * time.Minute,
 		SyncIdleAfter:                  10 * time.Minute,
 		SyncInterval:                   5 * time.Second,
+		BackgroundSyncInterval:         10 * time.Minute,
 		Agent:                          map[string]AgentConfig{},
 		CodexCloud:                     defaultCodexCloudConfig(),
 		Vector: VectorConfig{
@@ -1970,6 +2067,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		GithubToken                    string                 `toml:"github_token"`
 		CursorSecret                   string                 `toml:"cursor_secret"`
 		CursorAdminAPIKey              string                 `toml:"cursor_admin_api_key"`
+		CursorAdminAPIKeyFile          string                 `toml:"cursor_admin_api_key_file"`
 		CursorAdminEmail               string                 `toml:"cursor_admin_email"`
 		CursorAdminUserID              string                 `toml:"cursor_admin_user_id"`
 		Host                           string                 `toml:"host"`
@@ -2010,6 +2108,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		DaemonIdleTimeout              time.Duration          `toml:"daemon_idle_timeout"`
 		SyncIdleAfter                  time.Duration          `toml:"sync_idle_after"`
 		SyncInterval                   time.Duration          `toml:"sync_interval"`
+		BackgroundSyncInterval         time.Duration          `toml:"background_sync_interval"`
 		RemoteHosts                    []RemoteHost           `toml:"remote_hosts"`
 		ArchiveSources                 []ArchiveSource        `toml:"archive_sources"`
 		SessionSources                 []sessionSourceConfig  `toml:"session_sources"`
@@ -2068,8 +2167,14 @@ func (c *Config) applyConfigTOML(data string) error {
 		}
 		c.LocalMachineName = name
 	}
-	if file.CursorAdminAPIKey != "" && c.CursorAdminAPIKey == "" {
+	if err := oneSecretSource("", "cursor_admin_api_key", file.CursorAdminAPIKey,
+		"cursor_admin_api_key_file", file.CursorAdminAPIKeyFile); err != nil {
+		return err
+	}
+	// An environment key replaces both config-file sources.
+	if c.CursorAdminAPIKey == "" {
 		c.CursorAdminAPIKey = file.CursorAdminAPIKey
+		c.CursorAdminAPIKeyFile = strings.TrimSpace(file.CursorAdminAPIKeyFile)
 	}
 	if file.CursorAdminEmail != "" && c.CursorAdminEmail == "" {
 		c.CursorAdminEmail = file.CursorAdminEmail
@@ -2234,8 +2339,14 @@ func (c *Config) applyConfigTOML(data string) error {
 	if file.DuckDB.URL != "" && c.DuckDB.URL == "" {
 		c.DuckDB.URL = file.DuckDB.URL
 	}
-	if file.DuckDB.Token != "" && c.DuckDB.Token == "" {
+	if err := oneSecretSource("[duckdb]", "token", file.DuckDB.Token,
+		"token_file", file.DuckDB.TokenFile); err != nil {
+		return err
+	}
+	// AGENTSVIEW_DUCKDB_TOKEN replaces both config-file sources.
+	if c.DuckDB.Token == "" {
 		c.DuckDB.Token = file.DuckDB.Token
+		c.DuckDB.TokenFile = strings.TrimSpace(file.DuckDB.TokenFile)
 	}
 	if file.DuckDB.MachineName != "" && c.DuckDB.MachineName == "" {
 		c.DuckDB.MachineName = file.DuckDB.MachineName
@@ -2336,6 +2447,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		c.Insights.Endpoint = strings.TrimSpace(c.Insights.Endpoint)
 		c.Insights.Model = strings.TrimSpace(c.Insights.Model)
 		c.Insights.APIKeyEnv = strings.TrimSpace(c.Insights.APIKeyEnv)
+		c.Insights.APIKeyFile = strings.TrimSpace(c.Insights.APIKeyFile)
 		c.Insights.DefaultAgent = strings.ToLower(
 			strings.TrimSpace(c.Insights.DefaultAgent),
 		)
@@ -2386,6 +2498,9 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if meta.IsDefined("sync_interval") {
 		c.SyncInterval = file.SyncInterval
+	}
+	if meta.IsDefined("background_sync_interval") {
+		c.BackgroundSyncInterval = file.BackgroundSyncInterval
 	}
 	if file.Automated.Prefixes != nil {
 		c.Automated.Prefixes = file.Automated.Prefixes
@@ -3882,8 +3997,19 @@ func (c *Config) ResolveClickHouseTargets() ([]ResolvedClickHouseTarget, error) 
 	return targets, nil
 }
 
+// ResolveCursorAdminAPIKey returns the Cursor admin API key from the
+// environment or cursor_admin_api_key, or reads the file
+// cursor_admin_api_key_file names. It returns "" when none is set.
+func (c *Config) ResolveCursorAdminAPIKey() (string, error) {
+	if c.CursorAdminAPIKey != "" || c.CursorAdminAPIKeyFile == "" {
+		return c.CursorAdminAPIKey, nil
+	}
+	return readSettingSecretFile("cursor_admin_api_key_file", c.CursorAdminAPIKeyFile)
+}
+
 // ResolveDuckDB returns a copy of DuckDB config with defaults applied
-// and environment variables expanded in path, URL, and token.
+// and environment variables expanded in path, URL, and token. It leaves
+// token_file unread; callers that authenticate use ResolveToken.
 func (c *Config) ResolveDuckDB() (DuckDBConfig, error) {
 	duck := c.DuckDB
 	if duck.Path != "" {
@@ -4380,7 +4506,7 @@ func (c *Config) vectorSetupCandidate() (map[string]any, Config, error) {
 	if err := candidate.applyConfigTOML(string(encoded)); err != nil {
 		return nil, Config{}, invalidVectorSetupError{err}
 	}
-	if err := candidate.Vector.Validate(); err != nil {
+	if err := resolveVectorSecrets(&candidate.Vector); err != nil {
 		return nil, Config{}, invalidVectorSetupError{err}
 	}
 	return existing, candidate, nil

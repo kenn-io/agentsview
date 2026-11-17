@@ -476,7 +476,9 @@ func (s *Store) activityReportCandidateSource(
 			SELECT ot.*, next_message.ordinal AS next_message_ordinal,
 				next_message.timestamp AS next_message_timestamp,
 				next_message.role AS next_message_role,
-				next_message.model AS next_message_model
+				next_message.model AS next_message_model,
+				ot.next_terminal_timestamp IS NOT NULL AND (next_message.timestamp IS NULL OR
+					ot.next_terminal_timestamp < next_message.timestamp) AS tool_closes
 			FROM ordered_terminal ot
 			LEFT JOIN LATERAL (
 				SELECT next.ordinal, next.timestamp, next.role, next.model
@@ -511,35 +513,11 @@ func (s *Store) activityReportCandidateSource(
 			WHERE te.timestamp > lm.timestamp
 		), candidates AS (
 			SELECT twm.session_id, twm.ordinal AS start_ordinal,
-				CASE
-					WHEN twm.next_terminal_timestamp IS NOT NULL AND
-						(twm.next_message_timestamp IS NULL OR
-						 twm.next_terminal_timestamp < twm.next_message_timestamp)
-					THEN twm.next_terminal_ordinal
-					ELSE twm.next_message_ordinal
-				END AS end_ordinal,
+				CASE WHEN twm.tool_closes THEN twm.next_terminal_ordinal ELSE twm.next_message_ordinal END AS end_ordinal,
 				twm.timestamp AS start_timestamp,
-				CASE
-					WHEN twm.next_terminal_timestamp IS NOT NULL AND
-						(twm.next_message_timestamp IS NULL OR
-						 twm.next_terminal_timestamp < twm.next_message_timestamp)
-					THEN twm.next_terminal_timestamp
-					ELSE twm.next_message_timestamp
-				END AS end_timestamp,
-				CASE
-					WHEN twm.next_terminal_timestamp IS NOT NULL AND
-						(twm.next_message_timestamp IS NULL OR
-						 twm.next_terminal_timestamp < twm.next_message_timestamp)
-					THEN 'tool'
-					ELSE twm.next_message_role
-				END AS closing_role,
-				CASE
-					WHEN twm.next_terminal_timestamp IS NOT NULL AND
-						(twm.next_message_timestamp IS NULL OR
-						 twm.next_terminal_timestamp < twm.next_message_timestamp)
-					THEN ''
-					ELSE twm.next_message_model
-				END AS closing_model,
+				CASE WHEN twm.tool_closes THEN twm.next_terminal_timestamp ELSE twm.next_message_timestamp END AS end_timestamp,
+				CASE WHEN twm.tool_closes THEN 'tool' ELSE twm.next_message_role END AS closing_role,
+				CASE WHEN twm.tool_closes THEN '' ELSE twm.next_message_model END AS closing_model,
 				twm.call_index, twm.event_index
 			FROM terminal_with_message twm
 
@@ -801,7 +779,7 @@ func (s *Store) activityReportUsage(
 }
 
 // duckActivityUsageWith defines the relations sumActivityUsage reads over
-// the padded time range: activity_usage_candidates, the report's candidate
+// the padded time range: candidate_sessions, the report's candidate
 // sessions, and activity_usage_rows, their usage rows normalized to the
 // columns activityUsageSQL reads. Candidate sessions, their usage rows,
 // and matching Claude snapshot peers are relations in one statement, so the
@@ -916,42 +894,6 @@ func duckActivityUsageWith(candidateWhere string) string {
 			UNION ALL
 			SELECT * FROM peer_messages
 		),
-		usage_normalized AS (
-			SELECT session_id, message_ordinal, ts, pricing_ts, source, model, provider_id, agent,
-				claude_message_id, claude_request_id, source_uuid, usage_dedup_key,
-				-- Message rows carry counters push already clamped
-				-- (duckMessageUsageCountersSQL), so the clamps below leave
-				-- them as stored.
-				CASE
-					WHEN source = 'session' THEN GREATEST(input_tokens, 0)
-					ELSE LEAST(GREATEST(input_tokens, 0), %[1]d)
-				END AS input_tokens_norm,
-				CASE
-					WHEN source = 'session' THEN GREATEST(output_tokens, 0)
-					ELSE LEAST(GREATEST(output_tokens, 0), %[1]d)
-				END AS output_tokens_norm,
-				CASE
-					WHEN source = 'session' THEN GREATEST(cache_create, 0)
-					ELSE LEAST(GREATEST(cache_create, 0), %[1]d)
-				END AS cache_create_norm,
-				-- 1h-TTL subset of cache_create_norm from the nested
-				-- Anthropic breakdown; only message rows carry it.
-				cache_create_1h AS cache_create_1h_norm,
-				CASE
-					WHEN source = 'session' THEN GREATEST(cache_read, 0)
-					ELSE LEAST(GREATEST(cache_read, 0), %[1]d)
-				END AS cache_read_norm,
-				CASE
-					WHEN source = 'session' THEN GREATEST(reasoning_tokens, 0)
-					ELSE LEAST(GREATEST(reasoning_tokens, 0), %[1]d)
-				END AS reasoning_tokens_norm,
-				web_search_requests AS web_search_requests_norm,
-				cost_microdollars, cost_source, cost_status
-			FROM usage_raw
-		),
-		activity_usage_candidates AS (
-			SELECT id FROM candidate_sessions
-		),
 		activity_usage_rows AS (
 			SELECT session_id,
 				COALESCE(message_ordinal, -1) AS ord,
@@ -960,16 +902,39 @@ func duckActivityUsageWith(candidateWhere string) string {
 				COALESCE(epoch_us(pricing_ts), CAST(? AS BIGINT)) AS pricing_us,
 				source, model, provider_id, agent,
 				claude_message_id, claude_request_id, source_uuid, usage_dedup_key,
-				input_tokens_norm AS input, output_tokens_norm AS output,
-				reasoning_tokens_norm AS reasoning,
-				cache_create_norm AS cache_create, cache_create_1h_norm AS cache_create_1h,
-				cache_read_norm AS cache_read, web_search_requests_norm AS web,
+				-- Message rows carry counters push already clamped
+				-- (duckMessageUsageCountersSQL), so the clamps below leave
+				-- them as stored.
+				CASE
+					WHEN source = 'session' THEN GREATEST(input_tokens, 0)
+					ELSE LEAST(GREATEST(input_tokens, 0), %[1]d)
+				END AS input,
+				CASE
+					WHEN source = 'session' THEN GREATEST(output_tokens, 0)
+					ELSE LEAST(GREATEST(output_tokens, 0), %[1]d)
+				END AS output,
+				CASE
+					WHEN source = 'session' THEN GREATEST(reasoning_tokens, 0)
+					ELSE LEAST(GREATEST(reasoning_tokens, 0), %[1]d)
+				END AS reasoning,
+				CASE
+					WHEN source = 'session' THEN GREATEST(cache_create, 0)
+					ELSE LEAST(GREATEST(cache_create, 0), %[1]d)
+				END AS cache_create,
+				-- 1h-TTL subset of cache_create from the nested Anthropic
+				-- breakdown; only message rows carry it.
+				cache_create_1h,
+				CASE
+					WHEN source = 'session' THEN GREATEST(cache_read, 0)
+					ELSE LEAST(GREATEST(cache_read, 0), %[1]d)
+				END AS cache_read,
+				web_search_requests AS web,
 				CASE WHEN cost_status = '%[3]s' AND cost_source != '%[4]s'
 					THEN NULL ELSE cost_microdollars END AS cost,
 				cost_source,
 				CASE WHEN cost_status = '%[3]s' AND cost_source != '%[4]s'
 					THEN cost_microdollars END AS recorded_cost
-			FROM usage_normalized
+			FROM usage_raw
 			WHERE ts IS NOT NULL
 		)`,
 		db.MaxPlausibleTokens, candidateWhere,

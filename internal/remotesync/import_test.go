@@ -474,6 +474,51 @@ func TestImporterHydratesIcodematePersistedToolResult(t *testing.T) {
 		messages[1].ToolCalls[0].ResultContent)
 }
 
+// A remote journal that lists only a changed Claude tool-result sidecar must
+// re-read the owning session, not every Claude session on the host.
+func TestPreparePendingClaudeToolResultChangeReadsOnlyOwningSession(t *testing.T) {
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "test.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	extracted := t.TempDir()
+	remoteRoot := "/remote/claude/projects"
+	for _, name := range []string{"owner", "other"} {
+		local := remappedRemotePath(extracted, remoteRoot+"/project/"+name+".jsonl")
+		require.NoError(t, os.MkdirAll(filepath.Dir(local), 0o755))
+		require.NoError(t, os.WriteFile(local, []byte(testjsonl.NewSessionBuilder().
+			AddClaudeUser("2024-01-01T00:00:00Z", name).String()), 0o644))
+	}
+	localResult := remappedRemotePath(
+		extracted, remoteRoot+"/project/owner/tool-results/output.txt",
+	)
+	require.NoError(t, os.MkdirAll(filepath.Dir(localResult), 0o755))
+	require.NoError(t, os.WriteFile(localResult, []byte("first output\n"), 0o644))
+	targets := TargetSet{Dirs: map[parser.AgentType][]string{
+		parser.AgentClaude: {remoteRoot},
+	}}
+	importer := Importer{Host: "devbox", DB: database, Root: extracted, Targets: targets}
+	seed, err := importer.ImportExtracted(t.Context(), targets, extracted)
+	require.NoError(t, err)
+	require.Equal(t, 2, seed.SessionsSynced)
+
+	require.NoError(t, os.WriteFile(localResult, []byte("second output\n"), 0o644))
+	path, err := mirrorRelativeLocalChangePath(extracted, localResult)
+	require.NoError(t, err)
+	pending, err := importer.PreparePending(t.Context(), DeltaImportRequest{
+		Journal: MirrorChangeJournal{
+			Version: mirrorJournalVersion,
+			Entries: []MirrorChangeEntry{{Path: path, InvalidateCache: true}},
+		},
+	})
+	require.NoError(t, err)
+	stats, err := pending.Execute(t.Context())
+	require.NoError(t, err)
+
+	assert.Zero(t, stats.FallbackProviders)
+	assert.Equal(t, 1, stats.ExactSources)
+	assert.Equal(t, 1, stats.FilesProcessed)
+}
+
 func TestImporterReturnsPartialStatsWhenOneSourceFails(t *testing.T) {
 	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "test.db"))
 	require.NoError(t, err)

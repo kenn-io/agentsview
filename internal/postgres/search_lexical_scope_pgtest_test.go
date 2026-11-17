@@ -11,7 +11,7 @@ import (
 
 func TestLexicalScope(t *testing.T) {
 	t.Parallel()
-	syncer, local, _, ctx := newSessionProvenancePushSync(t, "agentsview_lexical_scope_test")
+	syncer, local, _, ctx := newSessionProvenancePushSync(t, "agentsview")
 	dbtest.SeedLexicalScope(t, local)
 	_, err := syncer.Push(ctx, true, nil)
 	require.NoError(t, err)
