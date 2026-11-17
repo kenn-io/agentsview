@@ -23,7 +23,7 @@ var ensuredSchemas sync.Map
 // match.
 const pgSchemaStateSQL = `
 WITH ns AS (SELECT oid FROM pg_namespace WHERE nspname = $1)
-SELECT count(*), coalesce(md5(string_agg(item, E'\n' ORDER BY item)), '')
+SELECT coalesce(md5(string_agg(item, E'\n' ORDER BY item)), '')
 FROM (
 	SELECT format('schema %s', oid) AS item FROM ns
 	UNION ALL
@@ -51,12 +51,11 @@ FROM (
 ) items`
 
 func readSchemaState(ctx context.Context, conn *sql.DB, schema string) (string, error) {
-	var items int64
 	var hash string
-	if err := conn.QueryRowContext(ctx, pgSchemaStateSQL, schema).Scan(&items, &hash); err != nil {
+	if err := conn.QueryRowContext(ctx, pgSchemaStateSQL, schema).Scan(&hash); err != nil {
 		return "", fmt.Errorf("reading pg schema state: %w", err)
 	}
-	return fmt.Sprintf("%d:%s", items, hash), nil
+	return hash, nil
 }
 
 // schemaUnchangedSinceEnsuredLocked reports whether this process already
