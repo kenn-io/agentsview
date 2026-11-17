@@ -738,3 +738,48 @@ func TestFetchGeminiConversationStopsOnEmptyPage(t *testing.T) {
 	assert.Equal(t, []string{"Question", "Answer"}, contents)
 }
 
+// TestSyncGeminiUnreadableListTime checks that a chat whose list update time
+// cannot be read is still synced. With no time, the pending rule treats the
+// chat as recently updated, so an unfinished reply is fetched again on the
+// next Sync, while a finished chat is imported once and then counts as fresh.
+func TestSyncGeminiUnreadableListTime(t *testing.T) {
+	for _, updated := range []struct {
+		name  string
+		value any
+	}{
+		{name: "null", value: nil},
+		{name: "text", value: "yesterday"},
+	} {
+		for _, tc := range []struct {
+			name         string
+			reply        string
+			wantDetails  int
+			wantMessages []string
+		}{
+			{name: "unfinished reply", reply: "", wantDetails: 2, wantMessages: []string{"Question"}},
+			{name: "finished reply", reply: "Answer", wantDetails: 1, wantMessages: []string{"Question", "Answer"}},
+		} {
+			t.Run(updated.name+"/"+tc.name, func(t *testing.T) {
+				d := testDB(t)
+				fake := &geminiFake{t: t, pages: map[string][]byte{
+					geminiRequest(geminiListRequest, "", ""): geminiRPCBody(t, geminiListRPC, []any{nil, nil, []any{
+						[]any{geminiTestChat, "Trip plan", nil, nil, nil, updated.value},
+					}}),
+				}}
+				fake.turns = []any{geminiSyncTurn("1", "Question", tc.reply, 1_790_000_000)}
+				stats, err := syncGeminiApps(t.Context(), d, fake.fetch, geminiTestOptions, nil)
+				require.NoError(t, err)
+				assert.Equal(t, 1, stats.Imported)
+				assert.Zero(t, stats.Errors)
+
+				stats, err = syncGeminiApps(t.Context(), d, fake.fetch, geminiTestOptions, nil)
+				require.NoError(t, err)
+				assert.Zero(t, stats.Errors)
+				assert.Equal(t, tc.wantDetails, fake.details)
+				messages, err := d.GetAllMessages(t.Context(), "gemini-apps:"+geminiTestChat)
+				require.NoError(t, err)
+				assert.Equal(t, tc.wantMessages, messageContents(messages))
+			})
+		}
+	}
+}

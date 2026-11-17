@@ -130,11 +130,12 @@ func geminiListEntry(raw jsontext.Value) (geminiChat, bool) {
 		return geminiChat{}, false
 	}
 	_ = json.Unmarshal(fields[geminiChatTitle], &chat.title)
-	updatedAt, ok := parser.GeminiAppsTime(fields[geminiChatUpdated])
-	if !ok {
-		return geminiChat{}, false
+	// An unreadable update time leaves updatedAt zero instead of dropping the
+	// chat: freshness then cannot see list changes, and the pending rule
+	// treats the chat as recently updated.
+	if updatedAt, ok := parser.GeminiAppsTime(fields[geminiChatUpdated]); ok {
+		chat.updated, chat.updatedAt = fields[geminiChatUpdated], updatedAt
 	}
-	chat.updated, chat.updatedAt = fields[geminiChatUpdated], updatedAt
 	return chat, true
 }
 
@@ -180,7 +181,11 @@ func syncGeminiApps(ctx context.Context, store BrowserSyncStore, fetch BrowserFe
 			seen[chat.id] = struct{}{}
 			err := runner.conversation(ctx, "gemini-apps:"+chat.id, browserConversation{
 				freshness: func(session *db.Session) uint64 {
-					return browserFreshness(strconv.FormatInt(chat.updatedAt.UnixNano(), 10), session)
+					marker := ""
+					if !chat.updatedAt.IsZero() {
+						marker = strconv.FormatInt(chat.updatedAt.UnixNano(), 10)
+					}
+					return browserFreshness(marker, session)
 				},
 				fetch: func(ctx context.Context) ([]byte, error) {
 					return fetchGeminiConversation(ctx, platform, fetch, chat)
