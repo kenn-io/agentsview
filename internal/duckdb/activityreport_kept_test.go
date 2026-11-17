@@ -19,6 +19,7 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/readbase"
@@ -694,6 +695,58 @@ func TestPartialActivityInvalidDiskEntryIsMiss(t *testing.T) {
 	require.Equal(t, 1, usageReads)
 	require.Equal(t, 1, runReads)
 	require.Equal(t, 500, activity.ReportWithSessions(got).Totals.OutputTokens)
+}
+
+func TestPartialActivityInvalidSavedRateIsMiss(t *testing.T) {
+	for _, rate := range []int64{-1, 99999} {
+		t.Run(strconv.FormatInt(rate, 10), func(t *testing.T) {
+			cache := t.TempDir()
+			t.Setenv("CACHE_DIRECTORY", cache)
+			path := filepath.Join(t.TempDir(), "mirror.duckdb")
+			keptActivityMirror(t, path, "session-a", 500)
+			q, err := activity.ResolveQuery(activity.QueryInput{Preset: "month", Date: "2026-01-01", Timezone: "UTC"}, time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC))
+			require.NoError(t, err)
+			store := openUsagePartsStore(t, path)
+			keptActivityBuild(t, store, q, true)
+			require.NoError(t, store.Close())
+			rewritten := false
+			require.NoError(t, filepath.WalkDir(cache, func(path string, entry os.DirEntry, err error) error {
+				if err != nil || entry.IsDir() || filepath.Ext(path) != ".gob" {
+					return err
+				}
+				data, err := os.ReadFile(path)
+				if err != nil {
+					return err
+				}
+				header := bytes.IndexByte(data, '\n')
+				if header < 0 {
+					return nil
+				}
+				parts, ok := kept.DecodeRows[kept.Part[*readbase.ActivityUsageSums]](data[header+1:])
+				if !ok {
+					return nil
+				}
+				for _, part := range parts {
+					if part.Value == nil || len(part.Value.Groups) == 0 {
+						continue
+					}
+					part.Value.Groups[0].Rate = rate
+					payload, err := kept.EncodeRows(parts, 128<<20, func(part kept.Part[*readbase.ActivityUsageSums]) int64 { return 1 })
+					if err != nil {
+						return err
+					}
+					rewritten = true
+					return os.WriteFile(path, append(data[:header+1], payload...), 0o600)
+				}
+				return nil
+			}))
+			require.True(t, rewritten)
+			store = openUsagePartsStore(t, path)
+			defer store.Close()
+			got := keptActivityBuild(t, store, q, true)
+			require.Equal(t, 500, activity.ReportWithSessions(got).Totals.OutputTokens)
+		})
+	}
 }
 
 func TestPartialActivityUsageSameStampReplacement(t *testing.T) {

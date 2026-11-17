@@ -178,7 +178,7 @@ func remapActivityRates(part *readbase.ActivityUsageSums, schedule readbase.Usag
 		}
 	}
 	for _, g := range part.Groups {
-		if g.Rate < 0 || int(g.Rate) >= len(indexes) {
+		if g.Rate < 0 || g.Rate >= int64(len(indexes)) {
 			return false
 		}
 	}
@@ -206,10 +206,6 @@ func (s *Store) readActivityUsageParts(ctx context.Context, candidateWhere strin
 		for id := range versions {
 			ids = append(ids, id)
 		}
-		// A nil read means all candidates, including an empty mirror.
-		if ids == nil {
-			ids = []string{}
-		}
 	}
 	parts := make(map[string]*readbase.ActivityUsageSums, len(ids))
 	for _, id := range ids {
@@ -227,7 +223,7 @@ func (s *Store) readActivityUsageParts(ctx context.Context, candidateWhere strin
 	}
 	for _, g := range groups {
 		part, ok := parts[g.Session]
-		if !ok || g.Kind == readbase.UsageKindMissingRate || g.Rate < 0 || int(g.Rate) >= len(schedule.Rates) {
+		if !ok || g.Kind == readbase.UsageKindMissingRate {
 			return nil, errActivityUsageParts
 		}
 		part.Groups = append(part.Groups, g)

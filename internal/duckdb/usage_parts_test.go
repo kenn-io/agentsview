@@ -3,6 +3,7 @@
 package duckdb
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
@@ -431,4 +433,30 @@ func TestUsagePartsReplacementDuringRefresh(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, want, restarted)
 	require.Zero(t, reads)
+}
+
+func TestUsagePartsReplacementDuringUnchangedRead(t *testing.T) {
+	skipReopenTestOnWindows(t)
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	dir := t.TempDir()
+	path, next := filepath.Join(dir, "mirror.duckdb"), filepath.Join(dir, "next.duckdb")
+	keptActivityMirror(t, path, "session-a", 500)
+	keptActivityMirror(t, next, "session-a", 900)
+	writeUsageMirror(t, path, `UPDATE sessions SET agentsview_push_fingerprint = 'a1'`)
+	writeUsageMirror(t, next, `UPDATE sessions SET agentsview_push_fingerprint = 'a2'`)
+	store := openUsagePartsStore(t, path)
+	defer store.Close()
+	kept.SaveParts(&store.usageDisk, "replacement-test", "v1", []kept.Part[int]{{ID: "session-a", Fingerprint: "a1", Present: true, Value: 500}}, func(int) int64 { return 1 })
+	read := func(ctx context.Context, ids []string, peers map[string]string) (map[string]int, error) {
+		var output int
+		err := store.queryRowContext(ctx, `SELECT usage_output_tokens FROM messages WHERE id = 2`).Scan(&output)
+		return map[string]int{"session-a": output}, err
+	}
+	parts, err := refreshUsageParts(t.Context(), store, "replacement-test", usagePartsOptions[int]{version: "v1", omitCursor: true, stale: func(int) bool {
+		require.NoError(t, swapMirrorFile(next, path))
+		store.checkMirrorReplacement(t.Context(), func(err error) { require.NoError(t, err) })
+		return false
+	}}, func(int) int64 { return 1 }, read)
+	require.NoError(t, err)
+	require.Equal(t, 900, parts["session-a"])
 }
