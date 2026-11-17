@@ -177,3 +177,51 @@ func TestPushAppendRemovesRowsLeftAfterStoredMessages(t *testing.T) {
 	require.NoError(t, rows.Err())
 	assert.Equal(t, []string{"beta first", "beta second"}, got)
 }
+
+// A session pushed while its last message waits on a tool result keeps the
+// rows of its earlier messages when the result arrives: the push writes that
+// message again with the new ones.
+func TestPushAppendRewritesLastStoredMessageWhenItsToolResultArrives(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	local, s, conn := changedOnlyFixture(t)
+	original := readPushVersions(t, conn, fixtureBetaID)
+	sess, err := local.GetSessionFull(ctx, fixtureBetaID)
+	require.NoError(t, err)
+	const askedAt, answeredAt = "2026-01-11T00:10:00.000Z", "2026-01-11T00:11:00.000Z"
+	call := db.ToolCall{ToolName: "Bash", Category: "Bash", ToolUseID: "late-result", InputJSON: `{"command":"make"}`}
+	asked := fixtureMessage(fixtureBetaID, 1, "assistant", "running make", askedAt, call)
+	sess.MessageCount, sess.EndedAt, sess.LocalModifiedAt = 2, new(askedAt), new(askedAt)
+	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{Session: *sess, Messages: []db.Message{asked}, DataVersion: 1}})
+	require.NoError(t, err)
+	res, err := s.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, res.SessionsAppended)
+	waiting := readPushVersions(t, conn, fixtureBetaID)
+
+	call.ResultContent, call.ResultContentLength = "build ok", len("build ok")
+	answered := fixtureMessage(fixtureBetaID, 1, "assistant", "running make", askedAt, call)
+	next := fixtureMessage(fixtureBetaID, 2, "assistant", "make passed", answeredAt)
+	sess.MessageCount, sess.EndedAt, sess.LocalModifiedAt = 3, new(answeredAt), new(answeredAt)
+	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+		Session: *sess, Messages: []db.Message{answered, next}, DataVersion: 1, CompleteStoredRows: true,
+	}})
+	require.NoError(t, err)
+	res, err = s.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.SessionsAppended)
+	assert.Equal(t, 2, res.MessagesPushed, "the waiting message is written again with the new one")
+
+	after := readPushVersions(t, conn, fixtureBetaID)
+	assert.Equal(t, original.content, after.content)
+	assert.Equal(t, []uint64{waiting.messages[0], after.published, after.published}, after.messages)
+	var resultLength int
+	require.NoError(t, conn.QueryRowContext(ctx,
+		"SELECT result_content_length FROM tool_calls WHERE session_id = ? AND message_ordinal = 1",
+		fixtureBetaID).Scan(&resultLength))
+	assert.Equal(t, len("build ok"), resultLength)
+
+	again, err := s.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Zero(t, again.SessionsPushed)
+}

@@ -119,9 +119,13 @@ The latest release is
   2,000-message session that gained one message, the push uploaded 183 KB
   instead of 5.0 MB (27x less) and wrote 15 rows instead of 4,015. Pushes
   therefore take less time, leave the server fewer old row copies to merge, and
-  rarely trigger the compaction that follows a large rewrite. A session whose
-  earlier messages changed, such as a tool result that arrived later, an edit,
-  or a full re-parse, is still rewritten in full. Upgrade `clickhouse serve`
+  rarely trigger the compaction that follows a large rewrite. When only the
+  last uploaded message changed, typically because its tool call got its
+  result, the push uploads that message again with the new ones. On a copy of
+  a real archive pushed about once a minute, the pushes uploaded 1.7 MB instead
+  of 4.2 MB (2.5x less) and 78 messages instead of 1,148 (14.7x fewer). A
+  session whose earlier messages changed, such as an edit or a full re-parse,
+  is still rewritten in full. Upgrade `clickhouse serve`
   and every pushing client together: an older serve fails tool-sequence and
   file-reference requests for sessions a newer client appended to.
 

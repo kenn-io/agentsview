@@ -17,14 +17,21 @@ import (
 //
 // The mirror's session row records, in agentsview_message_rows_fingerprint,
 // a hash of the rows stored in the ordinal-keyed tables (messageOrdinalColumn)
-// for its stored_message_count messages. When the content fingerprint
-// differs, a push hashes the same rows for that many leading local messages.
-// A match proves those rows are already stored, byte for byte, so the push
-// appends the rows of the later messages and rewrites the small tables that
-// are not keyed by message ordinal. Anything else, such as an edited or
-// renumbered earlier message, a tool result that arrived for an earlier call,
-// a resync, or a parser change, changes the hash, and the push rewrites the
-// whole session.
+// for its stored_message_count messages, and in
+// agentsview_leading_message_rows_fingerprint the hash of the same rows
+// without the last message's. When the content fingerprint differs, a push
+// hashes the same rows for that many leading local messages. A match proves
+// those rows are already stored, byte for byte, so the push appends the rows
+// of the later messages and rewrites the small tables that are not keyed by
+// message ordinal.
+//
+// An active session is often pushed while its last message waits on a tool
+// result, which fills in that message's tool call row when it arrives. When
+// only the leading hash still matches, the push keeps the rows of every
+// stored message but the last, and writes that message again with the rest.
+// Anything else, such as an edited or renumbered earlier message, a resync,
+// or a parser change, changes both hashes, and the push rewrites the whole
+// session.
 //
 // An append keeps the session's content_version, the push version of the
 // oldest rows it keeps, and the appended rows carry the new push version.
@@ -43,18 +50,20 @@ var messageOrdinalColumn = map[string]string{
 }
 
 // messageRowsFingerprints hashes the rows a push stores in the ordinal-keyed
-// tables, in one pass over the messages, and returns the hash after the
-// first keep messages and the hash after all of them. Each message
+// tables, in one pass over the messages, and returns for each count in cuts
+// the hash of the rows of that many leading messages. Each message
 // contributes its message row, its tool call and result event rows, then the
 // image text rows anchored after the previous message's ordinal and at or
-// before its own; image text after the last message is not hashed. The prefix
-// hash of a grown session therefore equals the full hash a push stored before
-// the session grew. Both hashes are "" when the messages are not in strictly
+// before its own; image text after the last message is not hashed. The hash
+// of a grown session's leading messages therefore equals the hash a push
+// stored before the session grew. A count of 0 or above len(messages) gets
+// "", and every count gets "" when the messages are not in strictly
 // increasing ordinal order, since an append then cannot tell kept rows from
-// new ones. The prefix hash is "" when keep is 0.
-func messageRowsFingerprints(messages []db.Message, images []db.ImageTextRow, keep int) (prefix, full string, err error) {
+// new ones.
+func messageRowsFingerprints(messages []db.Message, images []db.ImageTextRow, cuts ...int) ([]string, error) {
+	out := make([]string, len(cuts))
 	if !ordinalsIncrease(messages) {
-		return "", "", nil
+		return out, nil
 	}
 	byOrdinal := slices.Clone(images)
 	slices.SortStableFunc(byOrdinal, func(a, b db.ImageTextRow) int {
@@ -68,35 +77,41 @@ func messageRowsFingerprints(messages []db.Message, images []db.ImageTextRow, ke
 		_, _ = h.Write([]byte{'\n'})
 		return nil
 	}
+	record := func(n int) {
+		var sum string
+		for i, cut := range cuts {
+			if cut == n && n > 0 {
+				if sum == "" {
+					sum = hex.EncodeToString(h.Sum(nil))
+				}
+				out[i] = sum
+			}
+		}
+	}
 	next := 0
 	for i, m := range messages {
-		if i == keep && keep > 0 {
-			prefix = hex.EncodeToString(h.Sum(nil))
-		}
+		record(i)
 		if err := write(messageRow(m, 0)); err != nil {
-			return "", "", err
+			return nil, err
 		}
 		for j, tc := range m.ToolCalls {
 			if err := write(toolCallRow(m, tc, j, 0)); err != nil {
-				return "", "", err
+				return nil, err
 			}
 			for _, ev := range tc.ResultEvents {
 				if err := write(toolResultEventRow(m, j, ev, 0)); err != nil {
-					return "", "", err
+					return nil, err
 				}
 			}
 		}
 		for ; next < len(byOrdinal) && byOrdinal[next].MessageOrdinal <= m.Ordinal; next++ {
 			if err := write(imageTextRow(byOrdinal[next], 0)); err != nil {
-				return "", "", err
+				return nil, err
 			}
 		}
 	}
-	full = hex.EncodeToString(h.Sum(nil))
-	if keep > 0 && keep == len(messages) {
-		prefix = full
-	}
-	return prefix, full, nil
+	record(len(messages))
+	return out, nil
 }
 
 func ordinalsIncrease(messages []db.Message) bool {

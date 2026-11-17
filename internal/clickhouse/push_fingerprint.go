@@ -200,9 +200,10 @@ var derivedSessionColumns = map[string]string{
 	"content_version":                "push bookkeeping",
 	// It hashes the rendered dependent rows, which the content
 	// fingerprint already covers.
-	"agentsview_message_rows_fingerprint": "push bookkeeping",
-	"source_archive_id":                   "push bookkeeping",
-	"stored_message_count":                "derived from the messages the fingerprint hashes",
+	"agentsview_message_rows_fingerprint":         "push bookkeeping",
+	"agentsview_leading_message_rows_fingerprint": "push bookkeeping",
+	"source_archive_id":                           "push bookkeeping",
+	"stored_message_count":                        "derived from the messages the fingerprint hashes",
 	// A push rewrites the session rows of sessions below the current
 	// dashboardFactsVersion; otherwise these change only with the messages.
 	"dashboard_facts_version":       "push bookkeeping",

@@ -490,11 +490,14 @@ type sessionWrite struct {
 	// rewritten session row records as content_version.
 	keptContent string
 	keptVersion uint64
-	// keptMessageRows is the mirror's message rows fingerprint. A row-only
-	// write records it again. With content, keepMessages > 0 asks the push
-	// to keep the rows of that many leading messages, which the batch first
-	// checks against keptMessageRows, and to append the rest.
+	// keptMessageRows and keptLeadingRows are the mirror's message rows
+	// fingerprints. A row-only write records them again. With content,
+	// keepMessages > 0 asks the push to keep the rows of that many leading
+	// messages, which the batch first checks against keptMessageRows, or of
+	// all but the last of them, checked against keptLeadingRows, and to
+	// append the rest.
 	keptMessageRows string
+	keptLeadingRows string
 	keepMessages    int
 }
 
@@ -516,8 +519,10 @@ type mirrorSession struct {
 	fingerprint, contentFingerprint, archiveID string
 	contentVersion                             uint64
 	// messageRows is the message rows fingerprint of the storedMessages
-	// message rows the mirror holds.
+	// message rows the mirror holds, and leadingRows the fingerprint of all
+	// but the last of them.
 	messageRows    string
+	leadingRows    string
 	storedMessages int
 	// rowCurrent reports a row in the current format: a stored message
 	// count, dashboard facts at dashboardFactsVersion, and a content
@@ -549,7 +554,8 @@ func planSessionWrite(
 		}
 		return sessionWrite{
 			row: true, content: true, keptVersion: stored.contentVersion,
-			keptMessageRows: stored.messageRows, keepMessages: stored.storedMessages,
+			keptMessageRows: stored.messageRows, keptLeadingRows: stored.leadingRows,
+			keepMessages: stored.storedMessages,
 		}
 	}
 	if local.full == stored.fingerprint && stored.rowCurrent && (!full || stored.archiveID == archiveID) {
@@ -557,7 +563,7 @@ func planSessionWrite(
 	}
 	return sessionWrite{
 		row: true, keptContent: local.content, keptVersion: stored.contentVersion,
-		keptMessageRows: stored.messageRows,
+		keptMessageRows: stored.messageRows, keptLeadingRows: stored.leadingRows,
 	}
 }
 
@@ -631,7 +637,8 @@ func (s *Sync) readMirrorSessions(ctx context.Context, ids []string) (map[string
 		if err := func() error {
 			rows, err := s.conn.QueryContext(ctx, `SELECT id, agentsview_push_fingerprint,
 					agentsview_content_fingerprint, source_archive_id, content_version,
-					agentsview_message_rows_fingerprint, ifNull(stored_message_count, 0),
+					agentsview_message_rows_fingerprint, agentsview_leading_message_rows_fingerprint,
+					ifNull(stored_message_count, 0),
 					`+currentSessionRowSQL+`
 				FROM sessions WHERE id IN (`+placeholders+")",
 				slices.Concat([]any{dashboardFactsVersion}, args)...)
@@ -645,7 +652,7 @@ func (s *Sync) readMirrorSessions(ctx context.Context, ids []string) (map[string
 				var rowCurrent uint8
 				var storedMessages int64
 				if err := rows.Scan(&id, &m.fingerprint, &m.contentFingerprint, &m.archiveID,
-					&m.contentVersion, &m.messageRows, &storedMessages, &rowCurrent); err != nil {
+					&m.contentVersion, &m.messageRows, &m.leadingRows, &storedMessages, &rowCurrent); err != nil {
 					return fmt.Errorf("scanning clickhouse session fingerprint: %w", err)
 				}
 				m.rowCurrent = rowCurrent != 0
@@ -1030,10 +1037,11 @@ func (s *Sync) loadPayload(ctx context.Context, sess db.Session) (sessionPayload
 }
 
 // sessionPublication is what a session row records about the dependent rows
-// it describes: their content version and message rows fingerprint.
+// it describes: their content version and message rows fingerprints.
 type sessionPublication struct {
 	contentVersion uint64
 	messageRows    string
+	leadingRows    string
 }
 
 // contentWrite is a session whose dependent rows a batch writes. keep is how
@@ -1079,36 +1087,47 @@ func (s *Sync) pushSessionBatch(
 			// next push sees the change and rewrites the session.
 			w = rewriteSession
 		}
-		var rows string
+		var rows, leading string
 		if w.content {
 			keep := min(w.keepMessages, len(p.messages))
-			prefix, full, err := messageRowsFingerprints(p.messages, p.imageText, keep)
+			hashes, err := messageRowsFingerprints(p.messages, p.imageText,
+				keep, keep-1, len(p.messages), len(p.messages)-1)
 			if err != nil {
 				return nil, err
 			}
-			rows = full
+			rows, leading = hashes[2], hashes[3]
 			// The plan only knew the counts; keep the stored rows only if
 			// they are the rows this push would write for those messages.
 			switch {
 			case w.keepMessages == 0:
-			case w.keepMessages > len(p.messages) || prefix != w.keptMessageRows:
+			case w.keepMessages > len(p.messages):
 				w = rewriteSession
+			case hashes[0] == w.keptMessageRows:
+			case hashes[1] != "" && hashes[1] == w.keptLeadingRows:
+				// Only the last stored message's rows changed, typically
+				// when its tool call got its result; write it again.
+				w.keepMessages--
 			default:
-				keptThrough[sess.ID] = p.messages[keep-1].Ordinal
+				w = rewriteSession
+			}
+			if w.keepMessages > 0 {
+				keptThrough[sess.ID] = p.messages[w.keepMessages-1].Ordinal
 			}
 		}
 		n := 0
 		switch {
 		case w.content:
 			content = append(content, contentWrite{payload: p, keep: w.keepMessages})
-			publication := sessionPublication{contentVersion: version, messageRows: rows}
+			publication := sessionPublication{contentVersion: version, messageRows: rows, leadingRows: leading}
 			if w.keepMessages > 0 {
 				publication.contentVersion = w.keptVersion
 			}
 			publications[sess.ID] = publication
 			n = len(p.messages) - w.keepMessages
 		case w.row:
-			publications[sess.ID] = sessionPublication{contentVersion: w.keptVersion, messageRows: w.keptMessageRows}
+			publications[sess.ID] = sessionPublication{
+				contentVersion: w.keptVersion, messageRows: w.keptMessageRows, leadingRows: w.keptLeadingRows,
+			}
 		}
 		if w.row {
 			published = append(published, p)
@@ -1410,7 +1429,8 @@ func (s *Sync) sessionRow(p sessionPayload, publication sessionPublication, vers
 		int64(len(p.messages)),
 	}
 	row = append(row, computeDashboardFacts(p.messages).row()...)
-	return append(row, p.fingerprint.content, publication.contentVersion, publication.messageRows, version)
+	return append(row, p.fingerprint.content, publication.contentVersion, publication.messageRows,
+		publication.leadingRows, version)
 }
 
 func lastMessageAt(msgs []db.Message) *time.Time {

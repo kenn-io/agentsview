@@ -30,32 +30,47 @@ func appendTestImages() []db.ImageTextRow {
 	}
 }
 
-// The hash a push stores for all of a session's rows equals the prefix hash
-// the next push computes for the same leading messages after the session
-// grew, which is what lets it append.
-func TestMessageRowsFingerprintsMatchStoredPrefixAfterGrowth(t *testing.T) {
+// The hash a push stores for all of a session's rows equals the hash the next
+// push computes for the same leading messages after the session grew, which
+// is what lets it append.
+func TestMessageRowsFingerprintsMatchStoredRowsAfterGrowth(t *testing.T) {
 	msgs := appendTestMessages()
 	images := appendTestImages()
-	storedPrefix, stored, err := messageRowsFingerprints(msgs[:2], images[:1], 2)
+	stored, err := messageRowsFingerprints(msgs[:2], images[:1], 2)
 	require.NoError(t, err)
-	require.NotEmpty(t, stored)
-	assert.Equal(t, stored, storedPrefix, "keeping every message hashes them all")
+	require.NotEmpty(t, stored[0])
 
-	prefix, all, err := messageRowsFingerprints(msgs, images, 2)
+	grown, err := messageRowsFingerprints(msgs, images, 2, 3)
 	require.NoError(t, err)
-	assert.Equal(t, stored, prefix, "image text after the kept messages is not part of the prefix")
-	assert.NotEqual(t, stored, all)
+	assert.Equal(t, stored[0], grown[0], "image text after the kept messages is not part of their hash")
+	assert.NotEqual(t, stored[0], grown[1])
 
 	slices.Reverse(images)
-	prefix, _, err = messageRowsFingerprints(msgs, images, 2)
+	grown, err = messageRowsFingerprints(msgs, images, 2)
 	require.NoError(t, err)
-	assert.Equal(t, stored, prefix, "image text is hashed with its message whatever order it is listed in")
+	assert.Equal(t, stored[0], grown[0], "image text is hashed with its message whatever order it is listed in")
 }
 
-// Any change a kept row would carry changes the prefix hash, so the push
-// rewrites the session instead of appending.
+// When a tool result arrives for the last stored message, the hash of the
+// messages before it still matches, so the push can write only that message
+// again and append the rest.
+func TestMessageRowsFingerprintsLeadingRowsSurviveLateToolResult(t *testing.T) {
+	msgs := appendTestMessages()[:2]
+	msgs[1].ToolCalls[0].ResultEvents = nil
+	stored, err := messageRowsFingerprints(msgs, nil, 2, 1)
+	require.NoError(t, err)
+
+	grown := appendTestMessages()
+	got, err := messageRowsFingerprints(grown, nil, 2, 1)
+	require.NoError(t, err)
+	assert.NotEqual(t, stored[0], got[0], "the result changes the last stored message's rows")
+	assert.Equal(t, stored[1], got[1])
+}
+
+// Any change a kept row would carry changes the hash of the kept messages, so
+// the push does not keep them.
 func TestMessageRowsFingerprintsTrackKeptRows(t *testing.T) {
-	stored, _, err := messageRowsFingerprints(appendTestMessages(), appendTestImages(), 2)
+	stored, err := messageRowsFingerprints(appendTestMessages(), appendTestImages(), 2)
 	require.NoError(t, err)
 	for name, change := range map[string]func(ms []db.Message, images []db.ImageTextRow){
 		"message content":   func(ms []db.Message, _ []db.ImageTextRow) { ms[0].Content = "edited" },
@@ -67,18 +82,17 @@ func TestMessageRowsFingerprintsTrackKeptRows(t *testing.T) {
 	} {
 		ms, images := appendTestMessages(), appendTestImages()
 		change(ms, images)
-		got, _, err := messageRowsFingerprints(ms, images, 2)
+		got, err := messageRowsFingerprints(ms, images, 2)
 		require.NoError(t, err, name)
-		require.NotEmpty(t, got, name)
-		assert.NotEqual(t, stored, got, name)
+		require.NotEmpty(t, got[0], name)
+		assert.NotEqual(t, stored[0], got[0], name)
 	}
 }
 
 func TestMessageRowsFingerprintsRejectUnorderedOrdinals(t *testing.T) {
 	ms := appendTestMessages()
 	ms[2].Ordinal = 1
-	prefix, full, err := messageRowsFingerprints(ms, nil, 2)
+	got, err := messageRowsFingerprints(ms, nil, 1, 2, 3)
 	require.NoError(t, err)
-	assert.Empty(t, prefix)
-	assert.Empty(t, full)
+	assert.Equal(t, []string{"", "", ""}, got)
 }

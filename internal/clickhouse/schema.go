@@ -314,6 +314,11 @@ var mirrorTables = []tableSpec{
 			// append only the rest. Rows written before the column existed
 			// hold '' and get a full rewrite when their content changes.
 			col("agentsview_message_rows_fingerprint", tString),
+			// agentsview_leading_message_rows_fingerprint hashes the same
+			// rows without the last stored message's, so a push can keep the
+			// rest when only that message changed, as when its tool call got
+			// its result. Rows written before the column existed hold ''.
+			col("agentsview_leading_message_rows_fingerprint", tString),
 		},
 		indexes: []indexSpec{sessionIDTailIndex},
 		orderBy: []string{"id"},

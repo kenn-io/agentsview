@@ -134,7 +134,7 @@ func TestPlanSessionWrite(t *testing.T) {
 	}
 	rowOnly := sessionWrite{row: true, keptContent: "content-a", keptVersion: 7}
 	grown := sessionFingerprint{full: "full-other", content: "content-b", messages: 3}
-	withRows := func(m *mirrorSession) { m.messageRows, m.storedMessages = "rows", 2 }
+	withRows := func(m *mirrorSession) { m.messageRows, m.leadingRows, m.storedMessages = "rows", "leading", 2 }
 	for _, tc := range []struct {
 		name   string
 		local  sessionFingerprint
@@ -156,7 +156,7 @@ func TestPlanSessionWrite(t *testing.T) {
 			local: grown, stored: withRows,
 			want: sessionWrite{
 				row: true, content: true, keptVersion: 7,
-				keptMessageRows: "rows", keepMessages: 2,
+				keptMessageRows: "rows", keptLeadingRows: "leading", keepMessages: 2,
 			},
 		},
 		{
@@ -175,7 +175,7 @@ func TestPlanSessionWrite(t *testing.T) {
 			name: "row-only write records the stored message rows", found: true,
 			local:  sessionFingerprint{full: "full-other", content: "content-a"},
 			stored: withRows,
-			want:   sessionWrite{row: true, keptContent: "content-a", keptVersion: 7, keptMessageRows: "rows"},
+			want:   sessionWrite{row: true, keptContent: "content-a", keptVersion: 7, keptMessageRows: "rows", keptLeadingRows: "leading"},
 		},
 		{
 			name: "session fields changed", found: true,

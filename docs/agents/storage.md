@@ -1569,9 +1569,9 @@ own metadata, which is why the docs below call the database a mirror.
   with no row at `v` or later (`vanishedRowsDeleteSQL`), then session rows. Do
   not delete older rows whose key the push rewrote; `final=1` reads already
   collapse them, and deleting them writes patch rows. A push that appends to a
-  session that only grew keeps the rows of its stored messages and limits that
-  delete, in the tables listed in `messageOrdinalColumn`, to ordinals after the
-  last kept one. A change to how a push renders a row in those tables must
+  session that only grew keeps the rows of its stored messages, or of all but
+  the last when only the last changed, and limits that delete, in the tables
+  listed in `messageOrdinalColumn`, to ordinals after the last kept one. A change to how a push renders a row in those tables must
   change `messageRowsFingerprints` with it, or appends will keep stale rows. See
   [appends](../internal/clickhouse-mirror.md#pushes-rewrite-only-what-differs).
   Store every ClickHouse push cursor and version in the mirror's

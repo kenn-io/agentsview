@@ -183,15 +183,16 @@ Pushes send sessions newest activity first (`ended_at`, then `started_at`, then
 mirrors read to decide whether the page is trashed. PostgreSQL pushes and DuckDB
 rebuilds use the same order.
 
-**Pushes rewrite only what differs.** Each session row stores three
-fingerprints. `agentsview_push_fingerprint` hashes the session fields and all of
-its content. `agentsview_content_fingerprint` hashes only the content: messages,
-dialogue, usage and tool call digests, secret findings, pins, commit links,
-image text, plan usage, and the usage total.
-`agentsview_message_rows_fingerprint` hashes the rows stored in the tables keyed
-by message ordinal (`messages`, `tool_calls`, `tool_result_events`, and
-`image_text`) for the session's `stored_message_count` messages, exactly as the
-push rendered them. `content_version` records the push version of the oldest
+**Pushes rewrite only what differs.** Each session row stores four fingerprints.
+`agentsview_push_fingerprint` hashes the session fields and all of its content.
+`agentsview_content_fingerprint` hashes only the content: messages, dialogue,
+usage and tool call digests, secret findings, pins, commit links, image text,
+plan usage, and the usage total. `agentsview_message_rows_fingerprint` hashes
+the rows stored in the tables keyed by message ordinal (`messages`,
+`tool_calls`, `tool_result_events`, and `image_text`) for the session's
+`stored_message_count` messages, exactly as the push rendered them, and
+`agentsview_leading_message_rows_fingerprint` hashes the same rows without the
+last stored message's. `content_version` records the push version of the oldest
 dependent rows the session row describes. Readers pair a session with its
 messages, image text, usage rows, and tool result events by accepting rows at or
 above it. `push_version` stays the version of the session row itself, which
@@ -199,14 +200,15 @@ caches keyed on it rely on.
 
 A push plans each session against its mirror row:
 
-| Mirror row                                           | Push writes                     |
-| ---------------------------------------------------- | ------------------------------- |
-| Missing, or content fingerprint differs              | Every table, at the new version |
-| Content differs, stored message rows still match     | New messages and small tables   |
-| Content matches, session fields differ               | Session row and usage snapshot  |
-| Fingerprint matches, row is in an older format       | Session row and usage snapshot  |
-| Fingerprint matches, another archive owns it (full)  | Session row and usage snapshot  |
-| Fingerprint matches                                  | Nothing                         |
+| Mirror row                                            | Push writes                                  |
+| ----------------------------------------------------- | -------------------------------------------- |
+| Missing, or content fingerprint differs               | Every table, at the new version              |
+| Content differs, stored message rows still match      | New messages and small tables                |
+| Content differs, only the last stored message changed | That message, new messages, and small tables |
+| Content matches, session fields differ                | Session row and usage snapshot               |
+| Fingerprint matches, row is in an older format        | Session row and usage snapshot               |
+| Fingerprint matches, another archive owns it (full)   | Session row and usage snapshot               |
+| Fingerprint matches                                   | Nothing                                      |
 
 A session row that rewrites only itself keeps the `content_version` of the
 rows it kept. If the archive changes between planning and writing, the batch
@@ -228,8 +230,14 @@ When the content fingerprint differs, the local session has at least
 `stored_message_count` messages, and the mirror row has a message rows
 fingerprint, the plan asks to keep the stored rows. The batch then hashes the
 rows it would write, one message at a time, and records the hash after that
-many leading local messages on its way to the new message rows fingerprint. A
-match proves the mirror already holds those rows, so the push:
+many leading local messages, and after one fewer, on its way to the new
+fingerprints. A match proves the mirror already holds those rows. When only the
+shorter hash matches, the push keeps one message fewer and writes the last
+stored message again. That is the usual case for an active session: a push
+often runs while the last message waits on a tool result, and the result fills
+in that message's tool call row when it arrives. In a test on a real archive,
+three of five sessions that grew between two pushes had changed only that row.
+Then the push:
 
 1. Inserts the rows of the later messages, and the image text anchored after
    the last kept message, at the new version.
@@ -239,18 +247,18 @@ match proves the mirror already holds those rows, so the push:
    kept ordinal under keys this push did not write, such as rows an interrupted
    push wrote before it stopped. Rows at or below that ordinal stay.
 1. Publishes the session row with the old `content_version`, the new message
-   rows fingerprint, and a new `push_version`.
+   rows fingerprints, and a new `push_version`.
 
 Anything else that changes a kept row changes the hash, and the push rewrites
 the whole session at the new version: an edited or renumbered earlier message, a
-tool result filled in for an earlier call, image text added for an earlier
-image, a resync, or a parser change. The archive renumbers every message when a
-sync replaces a session's transcript, so a session re-parsed in full gets a full
-rewrite even when it only grew. On the production mirror, about one in ten
-re-pushed sessions changed a tool call in an earlier message, and most Codex
-cloud sessions were re-parsed in full on every sync. Rows written before the
-message rows fingerprint existed record none, so the first push that changes
-such a session rewrites it in full and records one.
+tool result filled in for a call before the last stored message, image text
+added for an earlier image, a resync, or a parser change. The archive renumbers
+every message when a sync replaces a session's transcript, so a session
+re-parsed in full gets a full rewrite even when it only grew. On the production
+mirror, about one in ten re-pushed sessions changed a tool call in an earlier
+message, and most Codex cloud sessions were re-parsed in full on every sync.
+Rows written before the message rows fingerprints existed record none, so the
+first push that changes such a session rewrites it in full and records them.
 
 Because an append keeps `content_version`, a session's dependent rows can carry
 several versions from `content_version` through `push_version`. Reads accept
