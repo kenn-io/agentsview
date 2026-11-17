@@ -268,6 +268,10 @@ func coveredHostedDocuments(ctx context.Context, pg *sql.DB, generation int64, s
 	}
 	var covered, pending []storage.VectorPushDoc
 	for _, doc := range docs {
+		if vector.DocumentExceedsChunkLimit(doc.Content, maxInputChars) {
+			pending = append(pending, doc)
+			continue
+		}
 		var expected []int
 		for _, chunk := range kitvec.Split(doc.Content, kitvec.SplitOptions{MaxRunes: maxInputChars, Overlap: vector.ChunkOverlap(maxInputChars)}) {
 			expected = append(expected, chunk.Index)

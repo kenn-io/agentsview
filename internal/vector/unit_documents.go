@@ -75,12 +75,14 @@ func (s *VectorSpool) Chunks(key string) ([]storage.VectorPushChunk, error) {
 }
 
 type unitFillStore struct {
-	docs  []storage.VectorPushDoc
-	spool *VectorSpool
+	docs          []storage.VectorPushDoc
+	spool         *VectorSpool
+	maxInputChars int
 }
 
 func (s *unitFillStore) PendingForGeneration(_ context.Context, _ string, after *string, limit int) ([]kitvec.Pending[string], error) {
 	var pending []kitvec.Pending[string]
+	chunks := 0
 	for _, doc := range s.docs {
 		if after != nil && doc.DocKey <= *after {
 			continue
@@ -88,7 +90,12 @@ func (s *unitFillStore) PendingForGeneration(_ context.Context, _ string, after 
 		if _, ok := s.spool.offsets[doc.DocKey]; ok {
 			continue
 		}
+		count := documentChunkBound(utf8.RuneCountInString(doc.Content), s.maxInputChars)
+		if len(pending) > 0 && chunks+count > maxChunksPerDocument {
+			break
+		}
 		pending = append(pending, kitvec.Pending[string]{Doc: doc.DocKey, Content: doc.Content})
+		chunks += count
 		if len(pending) == limit {
 			break
 		}
@@ -120,10 +127,14 @@ func (*unitFillStore) QueryGeneration(context.Context, string, kitvec.Vector, in
 	return nil, errors.New("session fill does not support search")
 }
 
-// maxChunksPerDocument bounds one document's chunks and vectors. The session
-// spool bounds memory across documents; this bounds a single document, whose
-// chunks kit materializes together before encoding.
+// maxChunksPerDocument bounds chunks and vectors in a fill page as well as in
+// one document, which kit materializes together before encoding.
 const maxChunksPerDocument = 4096
+
+// DocumentExceedsChunkLimit reports whether a document exceeds the fill bound.
+func DocumentExceedsChunkLimit(content string, maxInputChars int) bool {
+	return documentChunkBound(utf8.RuneCountInString(content), maxInputChars) > maxChunksPerDocument
+}
 
 // rejectOversizedDocuments splits docs into those kit may fill and the keys of
 // those that would need more than maxChunksPerDocument chunks. It counts runes
@@ -132,7 +143,7 @@ func rejectOversizedDocuments(docs []storage.VectorPushDoc, maxInputChars int) (
 	eligible := make([]storage.VectorPushDoc, 0, len(docs))
 	var rejected []string
 	for _, doc := range docs {
-		if documentChunkBound(utf8.RuneCountInString(doc.Content), maxInputChars) > maxChunksPerDocument {
+		if DocumentExceedsChunkLimit(doc.Content, maxInputChars) {
 			log.Printf("vector fill: skipping document %s: more than %d chunks", doc.DocKey, maxChunksPerDocument)
 			rejected = append(rejected, doc.DocKey)
 			continue
@@ -155,7 +166,7 @@ func documentChunkBound(runes, maxInputChars int) int {
 // FillUnitDocuments uses kit's fill flow and reports rejected document keys.
 func FillUnitDocuments(ctx context.Context, docs []storage.VectorPushDoc, spool *VectorSpool, maxInputChars, concurrency int, encode kitvec.EncodeFunc, batch ...kitvec.BatchOption) ([]storage.VectorPushDoc, []string, error) {
 	eligible, rejected := rejectOversizedDocuments(docs, maxInputChars)
-	store := &unitFillStore{docs: eligible, spool: spool}
+	store := &unitFillStore{docs: eligible, spool: spool, maxInputChars: maxInputChars}
 	slices.SortFunc(store.docs, func(a, b storage.VectorPushDoc) int { return strings.Compare(a.DocKey, b.DocKey) })
 	_, err := kitvec.Fill[string, string](ctx, store, "session", encode,
 		kitvec.WithFillSplit[string](kitvec.SplitOptions{MaxRunes: maxInputChars, Overlap: ChunkOverlap(maxInputChars)}),

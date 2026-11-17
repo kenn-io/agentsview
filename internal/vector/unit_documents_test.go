@@ -117,6 +117,34 @@ func TestFillUnitDocumentsRejectsDocumentWithTooManyChunks(t *testing.T) {
 	assert.Equal(t, content, docs[0].Content)
 }
 
+func TestFillUnitDocumentsSpoolsLargeDocumentsBeforeNextPage(t *testing.T) {
+	docs, err := UnitDocuments([]db.EmbeddableUnit{
+		{SessionID: "session", Kind: "user", Ordinal: 0, Content: strings.Repeat("a", 50000)},
+		{SessionID: "session", Kind: "user", Ordinal: 1, Content: strings.Repeat("b", 50000)},
+	})
+	require.NoError(t, err)
+	spool, err := NewVectorSpool()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, spool.Close()) })
+	var secondBeforeFirstSaved bool
+	encode := func(_ context.Context, texts []string) ([][]float32, error) {
+		vectors := make([][]float32, len(texts))
+		for i, text := range texts {
+			if strings.HasPrefix(text, "b") {
+				info, err := spool.file.Stat()
+				secondBeforeFirstSaved = secondBeforeFirstSaved || err != nil || info.Size() == 0
+			}
+			vectors[i] = []float32{1, 0}
+		}
+		return vectors, nil
+	}
+	accepted, rejected, err := FillUnitDocuments(t.Context(), docs, spool, 20, 1, encode, kitvec.WithBatchSize(32))
+	require.NoError(t, err)
+	assert.Empty(t, rejected)
+	assert.Len(t, accepted, 2)
+	assert.False(t, secondBeforeFirstSaved, "second large document encoded before the first was spooled")
+}
+
 func TestFillUnitDocumentsSpoolsPagesAndChunks(t *testing.T) {
 	var units []db.EmbeddableUnit
 	for i := range 140 {
