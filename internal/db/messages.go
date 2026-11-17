@@ -1608,8 +1608,13 @@ func (db *DB) insertMessages(ctx context.Context,
 	}
 	storedSessionIDs := messageSessionIDs(msgs)
 	for _, sessionID := range storedSessionIDs {
-		if err := bumpTranscriptRevisionTx(tx, sessionID, db.usageOnlyStorage()); err != nil {
+		if err := bumpTranscriptRevisionTx(tx, sessionID, true); err != nil {
 			return err
+		}
+		if !db.usageOnlyStorage() {
+			if err := appendSessionPromptPRLinksTx(tx, sessionID, messagesForSession(msgs, sessionID)); err != nil {
+				return err
+			}
 		}
 		if err := refreshIncrementalImageTextOccurrencesTx(tx, sessionID, messagesForSession(msgs, sessionID), nil); err != nil {
 			return err
@@ -2178,6 +2183,11 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 			return err
 		}
 	}
+	if !db.usageOnlyStorage() && !transcriptChanged {
+		if err := refreshSessionPromptPRLinksTx(tx, sessionID); err != nil {
+			return err
+		}
+	}
 	if err := refreshMessageDiffImageTextTx(tx, sessionID, plan, useDiff); err != nil {
 		return err
 	}
@@ -2646,6 +2656,11 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 		}
 	} else if !useDiff && dialogueMessagesChanged(stored, msgs) {
 		if err := bumpSearchChangeRevisionTx(tx); err != nil {
+			return err
+		}
+	}
+	if !db.usageOnlyStorage() && !transcriptChanged {
+		if err := refreshSessionPromptPRLinksTx(tx, sessionID); err != nil {
 			return err
 		}
 	}

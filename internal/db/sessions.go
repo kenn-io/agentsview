@@ -1645,7 +1645,6 @@ const upsertSessionBaseSQL = insertSessionSQL + `
 			file_inode = excluded.file_inode,
 			file_device = excluded.file_device,
 			file_hash = excluded.file_hash,
-			pr_links = excluded.pr_links,
 			structured_pr_links = excluded.structured_pr_links`
 
 const upsertSessionSQL = upsertSessionBaseSQL + `,
@@ -1754,7 +1753,7 @@ func (db *DB) upsertSession(ctx context.Context,
 	if err != nil {
 		return result, err
 	}
-	if !result.inserted && !db.usageOnlyStorage() {
+	if result.structuredPRLinksChanged && !db.usageOnlyStorage() {
 		if err := refreshSessionPromptPRLinksTx(tx, s.ID); err != nil {
 			return result, err
 		}
@@ -1771,10 +1770,11 @@ func (db *DB) upsertSession(ctx context.Context,
 }
 
 type sessionUpsertResult struct {
-	inserted        bool
-	sourceMissing   bool
-	previousProject string
-	currentProject  string
+	inserted                 bool
+	structuredPRLinksChanged bool
+	sourceMissing            bool
+	previousProject          string
+	currentProject           string
 }
 
 func upsertSessionExec(
@@ -1805,19 +1805,20 @@ func upsertSessionExec(
 	var previousSessionName sql.NullString
 	var previousAutomated bool
 	var previousParent sql.NullString
-	var previousRelationship string
+	var previousRelationship, previousStructuredPRLinks string
 	var deletedAt, sourceMissingAt sql.NullString
 	err = queryRow(ctx,
-		"SELECT project, session_name, deleted_at, source_missing_at, is_automated, parent_session_id, relationship_type "+
+		"SELECT project, session_name, deleted_at, source_missing_at, is_automated, parent_session_id, relationship_type, structured_pr_links "+
 			"FROM sessions WHERE id = ?", s.ID,
 	).Scan(
 		&previousProject, &previousSessionName, &deletedAt, &sourceMissingAt, &previousAutomated,
-		&previousParent, &previousRelationship,
+		&previousParent, &previousRelationship, &previousStructuredPRLinks,
 	)
 	result := sessionUpsertResult{
-		inserted:        errors.Is(err, sql.ErrNoRows),
-		previousProject: previousProject,
-		currentProject:  s.Project,
+		inserted:                 errors.Is(err, sql.ErrNoRows),
+		structuredPRLinksChanged: err == nil && previousStructuredPRLinks != EncodePRLinks(s.PRLinks),
+		previousProject:          previousProject,
+		currentProject:           s.Project,
 	}
 	if err != nil && !result.inserted {
 		return sessionUpsertResult{},

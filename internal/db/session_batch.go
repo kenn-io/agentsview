@@ -641,7 +641,16 @@ func (db *DB) writeOneSessionBatchTx(
 		if !sessionExists {
 			bump = bumpInsertedTranscriptRevisionTx
 		}
-		if err := bump(queries, write.Session.ID, usageOnly); err != nil {
+		if err := bump(queries, write.Session.ID, true); err != nil {
+			return 0, err
+		}
+	}
+	if !usageOnly {
+		if replaceMessages || extended > 0 || upsertResult.structuredPRLinksChanged {
+			if err := refreshSessionPromptPRLinksTx(queries, write.Session.ID); err != nil {
+				return 0, err
+			}
+		} else if err := appendSessionPromptPRLinksTx(queries, write.Session.ID, msgs); err != nil {
 			return 0, err
 		}
 	}
@@ -901,11 +910,6 @@ func (db *DB) upsertSessionBatchTx(ctx context.Context, tx *sql.Tx, write Sessio
 	)
 	if err != nil {
 		return sessionUpsertResult{}, err
-	}
-	if !upsertResult.inserted && !db.usageOnlyStorage() {
-		if err := refreshSessionPromptPRLinksTx(tx, write.Session.ID); err != nil {
-			return upsertResult, err
-		}
 	}
 	if err := recordArchiveSessionProvenanceTx(ctx, tx, write); err != nil {
 		return sessionUpsertResult{}, err

@@ -419,6 +419,9 @@ func clearUsageOnlyTextTx(
 	); err != nil {
 		return fmt.Errorf("clearing usage-only titles for %s: %w", sessionID, err)
 	}
+	if _, err := tx.Exec(`UPDATE sessions SET pr_links=structured_pr_links, local_modified_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND pr_links IS NOT structured_pr_links`, sessionID); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(
 		`UPDATE pinned_messages SET note = NULL
 		  WHERE session_id = ? AND note IS NOT NULL`,
@@ -504,6 +507,9 @@ func applyArchiveContentToCopiedSessionsTx(
 ) error {
 	var err error
 	if policy.UsageOnly() {
+		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET pr_links=structured_pr_links WHERE id IN (SELECT id FROM `+tempIDsTable+`) AND pr_links IS NOT structured_pr_links`); err != nil {
+			return err
+		}
 		owners, err := resolveTrailerOwners(ctx, tx, "1=1")
 		if err != nil {
 			return err

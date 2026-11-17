@@ -64,19 +64,11 @@ func (e *Engine) compareStoredSession(
 	}
 	storedFields := *stored
 	storedFields.PRLinks = structured
-	if db.EncodePRLinks(structured) == db.EncodePRLinks(prepared.PRLinks) {
-		available := make(map[string]bool, len(stored.PRLinks))
-		for _, link := range stored.PRLinks {
-			available[link.URL] = true
-		}
-		for _, link := range prepared.PRLinks {
-			if !available[link.URL] {
-				storedFields.PRLinks = stored.PRLinks
-				break
-			}
-		}
-	}
 	diffs := compareSessionFields(&storedFields, prepared)
+	combined := parser.MergePRLinks(prepared.PRLinks, db.PromptPRLinks(msgs))
+	if db.EncodePRLinks(stored.PRLinks) != db.EncodePRLinks(combined) {
+		diffs = append(diffs, FieldDiff{Field: FieldPRLinks, Stored: db.EncodePRLinks(stored.PRLinks), Parsed: db.EncodePRLinks(combined)})
+	}
 
 	// Tier 1: three exact ordered fingerprints over the stored
 	// messages. The token fingerprint covers per-message model and

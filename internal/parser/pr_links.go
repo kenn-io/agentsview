@@ -98,7 +98,7 @@ func MergePRLinks(lists ...[]PRLink) []PRLink {
 	return c.result()
 }
 
-var promptURL = regexp.MustCompile(`https?://[^\s<>"'()]+`)
+var promptURL = regexp.MustCompile(`https?://(?:\[[^\]\s]+\]|[^\s<>"'()/\[\]]+)[^\s<>"'()\[\]]*`)
 
 // PromptPRLinks extracts pull and merge request URLs from text.
 func PromptPRLinks(text string) []PRLink {

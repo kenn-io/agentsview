@@ -184,10 +184,18 @@ func TestClaudeIncrementalEscalatesOnlyForPRLinkChanges(t *testing.T) {
 	}
 }
 
+func TestPromptPRLinksNormalizedDuplicates(t *testing.T) {
+	links := PromptPRLinks("https://GITHUB.com/o/r/%70ull/1?x=1 https://github.com/o/r/pull/1")
+	require.Len(t, links, 1)
+	assert.Equal(t, "https://github.com/o/r/pull/1", links[0].URL)
+}
+
 func TestPromptPRLinks(t *testing.T) {
 	for _, tt := range []struct{ text, want string }{
 		{"https://github.com/owner/repo/pull/123/files", "https://github.com/owner/repo/pull/123"},
 		{"[https://github.com/owner/repo/pull/123]", "https://github.com/owner/repo/pull/123"},
+		{"https://github.com/owner/repo/%70ull/1", "https://github.com/owner/repo/pull/1"},
+		{"[https://github.com/owner/repo/pull/1][label]", "https://github.com/owner/repo/pull/1"},
 		{"http://[::1]/owner/repo/pull/7", "http://[::1]/owner/repo/pull/7"},
 		{"https://GITHUB.com/owner/repo/pull/123#issuecomment", "https://github.com/owner/repo/pull/123"},
 		{"(https://github.example.com/owner/repo/pulls/12).", "https://github.example.com/owner/repo/pulls/12"},

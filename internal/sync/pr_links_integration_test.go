@@ -86,7 +86,7 @@ func TestCodexPromptPRLinkFilter(t *testing.T) {
 	env := setupTestEnv(t)
 	env.writeCodexSession(t, "2026/07/29", "rollout-2026-07-29T14-55-00-"+id+".jsonl", testjsonl.JoinJSONL(
 		testjsonl.CodexSessionMetaJSON(id, "/workspace/project", "user", tsZero),
-		testjsonl.CodexMsgJSON("user", "$pr https://github.com/owner/repo/pull/123", tsZero),
+		testjsonl.CodexMsgJSON("user", "$pr https://github.com/owner/repo/%70ull/123", tsZero),
 	))
 	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
 	filter, err := db.ParsePRFilter("owner/repo#123")
@@ -104,7 +104,7 @@ func TestIncrementalSync_PromptPRLinks(t *testing.T) {
 		testjsonl.ClaudeAssistantJSON("Working", tsZeroS1),
 	))
 	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-	appendClaudeSplitLines(t, path, testjsonl.ClaudeUserJSON("https://github.com/owner/repo/pull/1", "2024-01-01T00:00:02Z"))
+	appendClaudeSplitLines(t, path, testjsonl.ClaudeUserJSON("https://github.com/owner/repo/%70ull/1", "2024-01-01T00:00:02Z"))
 	env.engine.SyncPaths([]string{path})
 	assert.Equal(t, []string{"https://github.com/owner/repo/pull/1"}, storedPRURLs(t, env.db, "prompt-append"))
 	appendClaudeSplitLines(t, path, testjsonl.ClaudeUserJSON("Again https://github.com/owner/repo/pull/1", "2024-01-01T00:00:03Z"))
@@ -151,4 +151,16 @@ func TestIncrementalStructuredLinkAlsoInPrompt(t *testing.T) {
 	env.engine.SyncPaths([]string{path})
 	require.NoError(t, env.db.ReplaceSessionMessages(t.Context(), "shared-pr", []db.Message{{SessionID: "shared-pr", Role: "user", Content: "Different prompt"}}))
 	assert.Equal(t, []string{"https://github.com/owner/repo/pull/1"}, storedPRURLs(t, env.db, "shared-pr"))
+}
+
+func TestParseDiffDetectsObsoletePromptPRLink(t *testing.T) {
+	env := setupTestEnv(t)
+	env.writeClaudeSession(t, "proj", "obsolete-pr.jsonl", testjsonl.JoinJSONL(
+		testjsonl.ClaudeUserJSON("Review https://github.com/owner/repo/pull/1", tsZero),
+		testjsonl.ClaudeAssistantJSON("Working", tsZeroS1),
+	))
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+	mutateDB(t, env, `UPDATE sessions SET pr_links='[{"url":"https://github.com/owner/repo/pull/1","host":"github.com","repository":"owner/repo","number":1},{"url":"https://github.com/owner/repo/pull/2","host":"github.com","repository":"owner/repo","number":2}]' WHERE id='obsolete-pr'`)
+	report := runParseDiff(t, env, sync.ParseDiffOptions{})
+	assert.Equal(t, 1, report.Totals.Changed)
 }

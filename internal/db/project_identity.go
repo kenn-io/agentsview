@@ -853,7 +853,7 @@ func (db *DB) upsertSessionWithProjectIdentity(ctx context.Context,
 	if err != nil {
 		return sessionUpsertResult{}, err
 	}
-	if !result.inserted && !db.usageOnlyStorage() {
+	if result.structuredPRLinksChanged && !db.usageOnlyStorage() {
 		if err := refreshSessionPromptPRLinksTx(tx, s.ID); err != nil {
 			return result, err
 		}

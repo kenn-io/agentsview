@@ -1997,3 +1997,17 @@ func TestImportChatGPTPromptPRLinksUnchanged(t *testing.T) {
 	require.Len(t, s.PRLinks, 1)
 	assert.Equal(t, "https://github.com/o/r/pull/42", s.PRLinks[0].URL)
 }
+
+func TestImportUnchangedPreservesPromptPRLinks(t *testing.T) {
+	d := testDB(t)
+	input := strings.ReplaceAll(testConversationsJSON, "Hello", "https://github.com/o/r/%70ull/1")
+	_, err := ImportClaudeAI(t.Context(), d, strings.NewReader(input), nil)
+	require.NoError(t, err)
+	stats, err := ImportClaudeAI(t.Context(), d, strings.NewReader(input), nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, stats.Skipped)
+	got, err := d.GetSession(t.Context(), "claude-ai:import-test-001")
+	require.NoError(t, err)
+	require.Len(t, got.PRLinks, 1)
+	assert.Equal(t, "https://github.com/o/r/pull/1", got.PRLinks[0].URL)
+}

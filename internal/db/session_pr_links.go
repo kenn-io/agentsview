@@ -181,10 +181,6 @@ func (db *DB) GetSessionPRLinkURLs(
 	return seen, nil
 }
 
-// promptPRLinkPredicate extends the stored-message prompt rule with the
-// transcript's system and compact-boundary exclusions.
-var promptPRLinkPredicate = commitUserPrompt + ` AND m.is_compact_boundary=0 AND ` + SystemPrefixSQL("m.content", "m.role") + ` AND (instr(m.content, '/pull')>0 OR instr(m.content, '/merge_requests/')>0)`
-
 // PromptPRLinks finds links in retained user dialogue.
 func PromptPRLinks(messages []Message) []PRLink {
 	var lists [][]PRLink
@@ -222,19 +218,21 @@ func refreshSessionPromptPRLinksTx(tx transactionQueries, id string) error {
 	if err := tx.QueryRow(`SELECT pr_links, structured_pr_links FROM sessions WHERE id=?`, id).Scan(&stored, &structured); err != nil {
 		return err
 	}
-	rows, err := tx.Query(`SELECT m.content, COALESCE(m.dialogue_text,m.content) FROM messages m WHERE m.session_id=? AND `+promptPRLinkPredicate+` ORDER BY m.ordinal`, id)
+	rows, err := tx.Query(`SELECT m.role, m.is_system, m.is_compact_boundary, m.source_subtype, m.content, `+sqliteDialogueExprM+` FROM messages m WHERE m.session_id=? AND m.role='user' ORDER BY m.ordinal`, id)
 	if err != nil {
 		return err
 	}
 	var messages []Message
 	for rows.Next() {
 		var msg Message
-		var dialogue string
-		if err := rows.Scan(&msg.Content, &dialogue); err != nil {
+		var dialogue sql.NullString
+		if err := rows.Scan(&msg.Role, &msg.IsSystem, &msg.IsCompactBoundary, &msg.SourceSubtype, &msg.Content, &dialogue); err != nil {
 			rows.Close()
 			return err
 		}
-		msg.Role, msg.DialogueText = "user", &dialogue
+		if dialogue.Valid {
+			msg.DialogueText = &dialogue.String
+		}
 		messages = append(messages, msg)
 	}
 	if err := rows.Err(); err != nil {
@@ -297,7 +295,7 @@ func (db *DB) backfillPromptPRLinksLocked(ctx context.Context, w *writerHandle) 
 		return err
 	}
 	if !done {
-		rows, err := tx.QueryContext(ctx, `SELECT DISTINCT m.session_id FROM messages m WHERE `+promptPRLinkPredicate)
+		rows, err := tx.QueryContext(ctx, `SELECT DISTINCT m.session_id FROM messages m WHERE m.role='user'`)
 		if err != nil {
 			return err
 		}
