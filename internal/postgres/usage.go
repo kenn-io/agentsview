@@ -1594,7 +1594,7 @@ func (s *Store) GetDailyUsage(
 	if deferred || version == standbyUsageMarker {
 		full := f
 		full.SkipSessionCounts = false
-		result, handled, err := snapshotRetained(ctx, s, slot, &s.runtimeState().dailyUsage, &s.runtimeState().standbyDaily, func(ctx context.Context, view *Store) (db.DailyUsageResult, error) {
+		result, handled, err := snapshotRetained(ctx, s, slot, &s.runtimeState().dailyUsage, &s.runtimeState().standbyDaily, func(ctx context.Context, view *Store, _ string) (db.DailyUsageResult, error) {
 			return view.readDailyUsage(ctx, full)
 		})
 		if handled {
@@ -1649,7 +1649,7 @@ func (s *Store) readDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyU
 	if s.runtimeState().usageIdentityDenied.Load() {
 		full := f
 		full.SkipSessionCounts = false
-		result, handled, err := snapshotRetained(ctx, s, db.UsageSlot(f, true), &s.runtimeState().dailyUsage, &s.runtimeState().standbyDaily, func(ctx context.Context, view *Store) (db.DailyUsageResult, error) {
+		result, handled, err := snapshotRetained(ctx, s, db.UsageSlot(f, true), &s.runtimeState().dailyUsage, &s.runtimeState().standbyDaily, func(ctx context.Context, view *Store, _ string) (db.DailyUsageResult, error) {
 			return view.readDailyUsage(ctx, full)
 		})
 		if handled {
@@ -2276,7 +2276,7 @@ func (s *Store) GetTopSessionsByCost(
 		if slot != "" {
 			standbySlot = fmt.Sprintf("standby|%s|%s|%d|%d", slot, f.TopSessionsSort, f.TopSessionsTokenTypes, limit)
 		}
-		result, handled, err := snapshotRetained(ctx, s, standbySlot, &s.runtimeState().topUsage, &s.runtimeState().standbyTop, func(ctx context.Context, view *Store) ([]db.TopSessionEntry, error) {
+		result, handled, err := snapshotRetained(ctx, s, standbySlot, &s.runtimeState().topUsage, &s.runtimeState().standbyTop, func(ctx context.Context, view *Store, _ string) ([]db.TopSessionEntry, error) {
 			out, err := view.readTopSessions(ctx, f)
 			if err != nil {
 				return nil, err
@@ -2305,7 +2305,7 @@ func (s *Store) GetTopSessionsByCost(
 			if slot != "" {
 				snapshotSlot = fmt.Sprintf("snapshot|%s|%s|%d|%d", slot, f.TopSessionsSort, f.TopSessionsTokenTypes, limit)
 			}
-			result, handled, err := snapshotRetained(ctx, s, snapshotSlot, &s.runtimeState().topUsage, &s.runtimeState().standbyTop, func(ctx context.Context, view *Store) ([]db.TopSessionEntry, error) {
+			result, handled, err := snapshotRetained(ctx, s, snapshotSlot, &s.runtimeState().topUsage, &s.runtimeState().standbyTop, func(ctx context.Context, view *Store, _ string) ([]db.TopSessionEntry, error) {
 				out, err := view.readTopSessions(ctx, f)
 				if err != nil {
 					return nil, err
