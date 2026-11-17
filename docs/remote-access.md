@@ -397,6 +397,15 @@ host's syncable source corpus for it.
    requests a full archive instead of sending the full file list. Archive
    transfers prefer Zstandard compression; gzip remains available through HTTP
    encoding negotiation. Manifests use gzip.
+1. For a changed file the mirror already holds, the request also sends the
+   mirror copy's length and a SHA-256 hash of its last 64 KiB. When the file is
+   a JSON Lines (`.jsonl`) transcript, the remote copy is longer, and its bytes
+   before that length end the same way, the remote sends only the bytes past
+   it, and the collector appends them to the mirror copy. Agent transcripts
+   grow by appending, so a long session costs only its new lines. Any other
+   file, such as a SQLite database that rewrites earlier pages as it grows,
+   and every file from a remote that predates this check, arrives whole. An append that fails partway leaves the mirror copy at
+   its old length, so the next sync fetches the file again.
 1. The archive is extracted into the mirror with remote modification times
    preserved. AgentsView classifies the pending journal paths and imports only
    their affected sources. A provider whose exact scope cannot be proven falls

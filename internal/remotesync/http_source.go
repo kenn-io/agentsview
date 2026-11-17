@@ -179,6 +179,11 @@ func (s HTTPSource) requestArchive(
 	if request.DeltaFiles != nil {
 		body.DeltaFiles = new(request.DeltaFiles)
 	}
+	for _, base := range request.DeltaAppends {
+		body.DeltaAppends = append(body.DeltaAppends, apiclient.RemotesyncDeltaAppend{
+			Path: base.Path, Offset: base.Offset, TailSha256: base.TailSHA256,
+		})
+	}
 	return apiclient.RawRequest(s.URL, s.client(), func(api *apiclient.Client) error {
 		_, err := api.PostAPIV1RemoteSyncArchiveWithResponse(ctx, &apiclient.PostAPIV1RemoteSyncArchiveRequestOptions{Body: &body})
 		return err

@@ -469,6 +469,7 @@ export * from "./remotesyncArchiveRequestCodexIndexFiles.ts";
 export * from "./remotesyncArchiveRequestDirs.ts";
 export * from "./remotesyncArchiveRequestFiles.ts";
 export * from "./remotesyncArchiveRequestProviderExtraFiles.ts";
+export * from "./remotesyncDeltaAppend.ts";
 export * from "./remoteSyncFailure.ts";
 export * from "./remotesyncManifest.ts";
 export * from "./remotesyncManifestEntry.ts";

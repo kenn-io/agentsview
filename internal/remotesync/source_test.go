@@ -25,6 +25,9 @@ import (
 // dirSource serves one remote directory tree in-process with the same
 // package functions the remote side uses.
 type dirSource struct {
+	// ignoreAppends serves like a server that predates DeltaAppends.
+	ignoreAppends bool
+
 	targets  TargetSet
 	encoding ArchiveEncoding
 }
@@ -60,7 +63,11 @@ func (s dirSource) Archive(ctx context.Context, request ArchiveRequest) (*Archiv
 	}
 	var err error
 	if request.DeltaFiles != nil {
-		err = WriteArchiveFiles(ctx, out, s.targets, request.DeltaFiles)
+		appends := appendBasesByPath(request.DeltaAppends)
+		if s.ignoreAppends {
+			appends = nil
+		}
+		err = writeArchiveFiles(ctx, out, s.targets, request.DeltaFiles, appends)
 	} else {
 		err = WriteArchive(ctx, out, request.TargetSet)
 	}

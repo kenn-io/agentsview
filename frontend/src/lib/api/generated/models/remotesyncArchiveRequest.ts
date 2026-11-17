@@ -5,9 +5,11 @@ import type { RemotesyncArchiveRequestCodexIndexFiles } from "./remotesyncArchiv
 import type { RemotesyncArchiveRequestDirs } from "./remotesyncArchiveRequestDirs.ts";
 import type { RemotesyncArchiveRequestFiles } from "./remotesyncArchiveRequestFiles.ts";
 import type { RemotesyncArchiveRequestProviderExtraFiles } from "./remotesyncArchiveRequestProviderExtraFiles.ts";
+import type { RemotesyncDeltaAppend } from "./remotesyncDeltaAppend.ts";
 
 export interface RemotesyncArchiveRequest {
   codex_index_files?: RemotesyncArchiveRequestCodexIndexFiles;
+  delta_appends?: RemotesyncDeltaAppend[];
   delta_files?: string[];
   dirs: RemotesyncArchiveRequestDirs;
   extra_files?: string[];

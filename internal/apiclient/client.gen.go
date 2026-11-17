@@ -30959,17 +30959,25 @@ func (r RemoteSyncResponse) Validate() error {
 }
 
 type RemotesyncArchiveRequest struct {
-	CodexIndexFiles    map[string][]string `json:"codex_index_files,omitempty"`
-	DeltaFiles         *[]string           `json:"delta_files,omitempty"`
-	Dirs               map[string][]string `json:"dirs"`
-	ExtraFiles         []string            `json:"extra_files,omitempty"`
-	Files              map[string][]string `json:"files,omitempty"`
-	ForbiddenRoots     []string            `json:"forbidden_roots,omitempty"`
-	ProviderExtraFiles map[string][]string `json:"provider_extra_files,omitempty"`
+	CodexIndexFiles    map[string][]string     `json:"codex_index_files,omitempty"`
+	DeltaAppends       []RemotesyncDeltaAppend `json:"delta_appends,omitempty"`
+	DeltaFiles         *[]string               `json:"delta_files,omitempty"`
+	Dirs               map[string][]string     `json:"dirs"`
+	ExtraFiles         []string                `json:"extra_files,omitempty"`
+	Files              map[string][]string     `json:"files,omitempty"`
+	ForbiddenRoots     []string                `json:"forbidden_roots,omitempty"`
+	ProviderExtraFiles map[string][]string     `json:"provider_extra_files,omitempty"`
 }
 
 func (r RemotesyncArchiveRequest) Validate() error {
 	var errors runtime.ValidationErrors
+	for i, item := range r.DeltaAppends {
+		if v, ok := any(item).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append(fmt.Sprintf("DeltaAppends[%d]", i), err)
+			}
+		}
+	}
 	if v, ok := any(r.DeltaFiles).(runtime.Validator); ok && v != nil {
 		if err := v.Validate(); err != nil {
 			errors = errors.Append("DeltaFiles", err)
@@ -30979,6 +30987,16 @@ func (r RemotesyncArchiveRequest) Validate() error {
 		return nil
 	}
 	return errors
+}
+
+type RemotesyncDeltaAppend struct {
+	Offset     int64  `json:"offset"`
+	Path       string `json:"path" validate:"required"`
+	TailSha256 string `json:"tail_sha256" validate:"required"`
+}
+
+func (r RemotesyncDeltaAppend) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(r))
 }
 
 type RemotesyncManifest struct {
