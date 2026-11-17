@@ -230,6 +230,24 @@ func installUsageHistoryTokenPG(ctx context.Context, tx *sql.Tx) error {
 	return err
 }
 
+// dashboardChangeFlagPG returns PL/pgSQL that flags a dashboard group when the
+// projected columns differ between the statement's old and new rows.
+func dashboardChangeFlagPG(columns []string, group, extra string) string {
+	return fmt.Sprintf(`IF TG_OP = 'INSERT' THEN
+ SELECT EXISTS (SELECT 1 FROM new_rows) INTO changed;
+ ELSIF TG_OP = 'DELETE' THEN
+ SELECT EXISTS (SELECT 1 FROM old_rows) INTO changed;
+ ELSE
+ SELECT EXISTS ((SELECT %[1]s FROM old_rows EXCEPT ALL SELECT %[1]s FROM new_rows)
+ UNION ALL (SELECT %[1]s FROM new_rows EXCEPT ALL SELECT %[1]s FROM old_rows)) INTO changed;
+ END IF;
+ IF changed THEN
+ PERFORM set_config('agentsview.dashboard_%[2]s_' || 'usage_session_changes'::regclass::oid, 'on', true);
+ %[3]s
+ END IF;
+`, strings.Join(columns, ", "), group, extra)
+}
+
 func installDashboardJournalPG(ctx context.Context, tx *sql.Tx) error {
 	var version string
 	if err := tx.QueryRowContext(ctx, `SELECT value FROM sync_metadata WHERE key='usage_change_journal_version'`).Scan(&version); err != nil {
@@ -270,30 +288,11 @@ func installDashboardJournalPG(ctx context.Context, tx *sql.Tx) error {
 	fmt.Fprintf(&ddl, `CREATE OR REPLACE FUNCTION stamp_usage_change() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
  SET search_path = pg_catalog, %s, pg_temp AS $journal$%s$journal$;`, quoted, stampBody)
 	// Keep the existing session journal write and set panel flags in the same trigger.
-	var sessionFlags strings.Builder
-	for _, group := range []struct {
-		name    string
-		columns []string
-	}{
-		{"common", db.DashboardSessionInputs},
-		{"tools", db.DashboardToolsSessionInputs},
-		{"signals", db.DashboardSignalsSessionInputs},
-	} {
-		fmt.Fprintf(&sessionFlags, `IF TG_OP = 'INSERT' THEN
- SELECT EXISTS (SELECT 1 FROM new_rows) INTO changed;
- ELSIF TG_OP = 'DELETE' THEN
- SELECT EXISTS (SELECT 1 FROM old_rows) INTO changed;
- ELSE
- SELECT EXISTS ((SELECT %[1]s FROM old_rows EXCEPT ALL SELECT %[1]s FROM new_rows)
- UNION ALL (SELECT %[1]s FROM new_rows EXCEPT ALL SELECT %[1]s FROM old_rows)) INTO changed;
- END IF;
- IF changed THEN
- PERFORM set_config('agentsview.dashboard_%[2]s_' || 'usage_session_changes'::regclass::oid, 'on', true);
- END IF;
-`, strings.Join(group.columns, ", "), group.name)
-	}
+	sessionFlags := dashboardChangeFlagPG(db.DashboardSessionInputs, "common", "") +
+		dashboardChangeFlagPG(db.DashboardToolsSessionInputs, "tools", "") +
+		dashboardChangeFlagPG(db.DashboardSignalsSessionInputs, "signals", "")
 	sessionBody := fmt.Sprintf(markUsageChangeFunctionBodyPG, `"id"`, "true", "id, to_jsonb(row_data) - 'automation_audit_hash'")
-	sessionBody = strings.Replace(sessionBody, "BEGIN\n", "DECLARE changed boolean;\nBEGIN\n"+sessionFlags.String(), 1)
+	sessionBody = strings.Replace(sessionBody, "BEGIN\n", "DECLARE changed boolean;\nBEGIN\n"+sessionFlags, 1)
 	fmt.Fprintf(&ddl, `CREATE OR REPLACE FUNCTION mark_usage_sessions() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
  SET search_path = pg_catalog, %s, pg_temp AS $journal$%s$journal$;`, quoted, sessionBody)
 	tables := []struct {
@@ -311,20 +310,7 @@ func installDashboardJournalPG(ctx context.Context, tx *sql.Tx) error {
 			if !ok {
 				continue
 			}
-			projection := strings.Join(columns, ", ")
-			fmt.Fprintf(&body, `IF TG_OP = 'INSERT' THEN
- SELECT EXISTS (SELECT 1 FROM new_rows) INTO changed;
- ELSIF TG_OP = 'DELETE' THEN
- SELECT EXISTS (SELECT 1 FROM old_rows) INTO changed;
- ELSE
- SELECT EXISTS ((SELECT %[1]s FROM old_rows EXCEPT ALL SELECT %[1]s FROM new_rows)
- UNION ALL (SELECT %[1]s FROM new_rows EXCEPT ALL SELECT %[1]s FROM old_rows)) INTO changed;
- END IF;
- IF changed THEN
- PERFORM set_config('agentsview.dashboard_%[2]s_' || 'usage_session_changes'::regclass::oid, 'on', true);
- any_changed := true;
- END IF;
-`, projection, group)
+			body.WriteString(dashboardChangeFlagPG(columns, group, "any_changed := true;"))
 		}
 		fmt.Fprintf(&body, `IF any_changed THEN
  PERFORM set_config('agentsview.uc_stamped_' || 'usage_session_changes'::regclass::oid, '', true);
