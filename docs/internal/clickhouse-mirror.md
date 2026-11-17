@@ -276,11 +276,13 @@ Rows written before the message rows fingerprints existed record none, so the
 first push that changes such a session rewrites it in full and records them.
 
 Because an append keeps `content_version`, a session's dependent rows can carry
-several versions from `content_version` through `push_version`. Reads accept
+several versions from `content_version` through `rows_version`. Reads accept
 that range: usage and image text reads keep rows at or above `content_version`,
-the terminal event snapshot takes the latest event at or above it, and the
-session source binding accepts evidence rows from `content_version` through
-the session row's `push_version` while the stored message count matches. A
+the terminal event snapshot takes the latest event in the range, and the
+session source binding and the Usage carry check accept rows from
+`content_version` through `rows_version` while the counts match. A rename moves
+`push_version` past rows another archive's interrupted push left, so these
+checks use `rows_version` as the upper bound. A
 routine push that only appends writes too few messages to trigger
 [compaction](#compaction-after-a-large-rewrite).
 

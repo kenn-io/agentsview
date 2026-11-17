@@ -22,17 +22,17 @@ func (s *Store) SessionSourceChanged(err error) bool {
 
 // SessionSourceBinding names the push that published the visible session row
 // and refuses while any evidence row comes from a push outside the ones that
-// wrote the row's content, from its content_version through its own push
-// version, or while the readable messages differ in number from what those
+// wrote the row's content, from its content_version through its rows_version,
+// or while the readable messages differ in number from what those
 // pushes stored. A row with no stored count reports
 // db.ErrSessionRevisionUnavailable, since no retry can help it.
 func (s *Store) SessionSourceBinding(ctx context.Context, id string) (string, error) {
-	var published, content uint64
+	var published, content, newest uint64
 	var stored sql.NullInt64
 	// message_count can exceed the stored rows (metadata-only sessions, usage-only archives), so compare against what the push stored.
 	err := s.queryRowContext(ctx,
-		"SELECT push_version, content_version, stored_message_count FROM sessions PREWHERE id = ? WHERE deleted_at IS NULL", id,
-	).Scan(&published, &content, &stored)
+		"SELECT push_version, content_version, rows_version, stored_message_count FROM sessions PREWHERE id = ? WHERE deleted_at IS NULL", id,
+	).Scan(&published, &content, &newest, &stored)
 	if errors.Is(err, sql.ErrNoRows) {
 		// No visible row to read; the route answers not found.
 		return "", nil
@@ -61,8 +61,10 @@ func (s *Store) SessionSourceBinding(ctx context.Context, id string) (string, er
 		if err := rows.Scan(&table, &count, &low, &high); err != nil {
 			return "", fmt.Errorf("scanning clickhouse session evidence versions: %w", err)
 		}
-		// An append keeps older rows at their versions, from content_version up.
-		if count > 0 && (low < content || high > published) {
+		// An append keeps older rows at their versions, from content_version
+		// up. A push that rewrote only the session row kept rows_version, so
+		// rows another push left after it stay unpublished.
+		if count > 0 && (low < content || high > newest) {
 			return "", fmt.Errorf("%w: %s", errEvidenceUnpublished, table)
 		}
 		// A different message count means a deletion or an unpublished replacement is partway through.

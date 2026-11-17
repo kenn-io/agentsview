@@ -1601,7 +1601,9 @@ own metadata, which is why the docs below call the database a mirror.
   its row, and a push that appends messages keeps the older rows at their
   versions. `terminal_event_snapshots` rows match `sessions.push_version`
   exactly. Any read that pairs a session with its dependent rows compares them
-  with `content_version`, never `push_version`. A materialized view runs
+  with `content_version`, never `push_version`, and a check that rejects
+  unpublished rows bounds them by `sessions.rows_version`, the newest version
+  the session row published. A materialized view runs
   inside the insert and reads joined tables in full, so filter a joined table
   to the inserted block's sessions. Create and update long-lived views through
   `ensureView`, which replaces the query of a view an older release created.

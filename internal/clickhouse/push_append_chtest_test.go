@@ -326,3 +326,47 @@ func TestPushRewritesSessionWhenKeptRowsAreUnpublished(t *testing.T) {
 		})
 	}
 }
+
+// Rows another archive's interrupted push left with the same counts stay
+// unpublished after this archive renames the session: the rename moves the
+// session row's push_version past them but keeps its rows_version.
+func TestRenameDoesNotPublishRowsAnotherPushLeft(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	local, s, conn := changedOnlyFixture(t)
+	store := newTestStore(t, conn, s.target)
+	usageCarryPublished := func() bool {
+		snapshotCtx, err := store.withPartsSnapshot(ctx)
+		require.NoError(t, err)
+		return store.usageCarryPublished(snapshotCtx)
+	}
+	require.True(t, usageCarryPublished())
+	for _, stmt := range []string{
+		`INSERT INTO messages SELECT * REPLACE (push_version + 1 AS push_version)
+			FROM (SELECT * FROM messages WHERE session_id = ?)`,
+		`INSERT INTO tool_calls SELECT * REPLACE (push_version + 1 AS push_version)
+			FROM (SELECT * FROM tool_calls WHERE session_id = ?)`,
+		`INSERT INTO tool_result_events SELECT * REPLACE (
+				'tool_execution' AS source, 'completed' AS status, push_version + 1 AS push_version)
+			FROM (SELECT * FROM tool_result_events WHERE session_id = ?)`,
+	} {
+		_, err := conn.ExecContext(ctx, stmt, fixtureAlphaID)
+		require.NoError(t, err)
+	}
+
+	title := "Renamed Alpha"
+	require.NoError(t, local.RenameSession(ctx, fixtureAlphaID, &title))
+	res, err := s.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, res.SessionRowsOnly)
+
+	_, err = store.SessionSourceBinding(ctx, fixtureAlphaID)
+	require.Error(t, err)
+	assert.True(t, store.SessionSourceChanged(err), "the other push's rows are not this session row's evidence")
+	assert.False(t, usageCarryPublished(), "the other push's usage rows are not published")
+	var lastTerminal sql.NullTime
+	require.NoError(t, conn.QueryRowContext(ctx,
+		"SELECT last_terminal_at FROM terminal_event_snapshots WHERE session_id = ?", fixtureAlphaID,
+	).Scan(&lastTerminal))
+	assert.False(t, lastTerminal.Valid, "the other push's finished event does not count")
+}
