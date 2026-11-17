@@ -3138,7 +3138,7 @@ func (db *DB) analyticsToolsWithIdentity(ctx context.Context, f AnalyticsFilter,
 	defer release()
 
 	db.trendsPartsDisk()
-	if db.trendsDisk.Enabled() && !db.readOnly {
+	if db.trendsDisk.Enabled() {
 		if identity == nil {
 			id, err := db.GetDatabaseID(ctx)
 			if err == nil {
@@ -3160,7 +3160,9 @@ type toolSessionInfo struct {
 	toolsGeneration                 *string
 }
 
-func (db *DB) analyticsToolRows(ctx context.Context, f AnalyticsFilter) ([]ToolAnalyticsRow, error) {
+func (db *DB) analyticsToolRows(
+	ctx context.Context, f AnalyticsFilter,
+) ([]ToolAnalyticsRow, error) {
 	sessions, err := db.toolSessions(ctx, f, false)
 	if err != nil {
 		return nil, err
@@ -3193,7 +3195,8 @@ func (db *DB) toolSessions(ctx context.Context, f AnalyticsFilter, withFingerpri
 
 	sessRows, err := db.getReader().QueryContext(ctx, sessQ, args...)
 	if err != nil {
-		return nil, fmt.Errorf("querying tool sessions: %w", err)
+		return nil,
+			fmt.Errorf("querying tool sessions: %w", err)
 	}
 	defer sessRows.Close()
 
@@ -3209,7 +3212,8 @@ func (db *DB) toolSessions(ctx context.Context, f AnalyticsFilter, withFingerpri
 		sessionMap[id] = toolSessionInfo{ts: ts, agent: agent, project: project, fingerprint: fingerprint, toolsGeneration: generation}
 	}
 	if err := sessRows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating tool sessions: %w", err)
+		return nil,
+			fmt.Errorf("iterating tool sessions: %w", err)
 	}
 
 	return sessionMap, nil
@@ -3219,6 +3223,7 @@ func (db *DB) toolRowsFor(ctx context.Context, f AnalyticsFilter, sessionMap map
 	if len(sessionIDs) == 0 {
 		return nil, nil
 	}
+
 	// Query tool_calls for filtered sessions (chunked).
 	var toolRows []ToolAnalyticsRow
 
