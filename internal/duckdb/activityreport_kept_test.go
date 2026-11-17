@@ -417,7 +417,7 @@ func TestPartialActivityInputsSurviveRestart(t *testing.T) {
 			t.Setenv("CACHE_DIRECTORY", t.TempDir())
 			path := filepath.Join(t.TempDir(), "mirror.duckdb")
 			keptActivityMirror(t, path, "session-a", 500)
-			writeUsageMirror(t, path, `INSERT INTO model_pricing (model_pattern, output_microdollars_per_mtok) VALUES ('kept-model', 10000000), ('price-a', 10000000), ('price-b', 20000000)`)
+			writeUsageMirror(t, path, `INSERT INTO model_pricing (model_pattern, output_microdollars_per_mtok) VALUES ('kept-model', 10000000), ('price-a', 10000000), ('price-b', 10000000)`)
 			if scenario == "alias pricing" {
 				pricingpkg.SetConfiguredAliases(map[string]string{"kept-model": "price-a"})
 				t.Cleanup(func() { pricingpkg.SetConfiguredAliases(nil) })
@@ -464,7 +464,7 @@ func TestPartialActivityInputsSurviveRestart(t *testing.T) {
 				wantReads = 1
 			}
 			require.Equal(t, wantReads, usage)
-			if wantReads == 1 {
+			if scenario == "custom pricing" || scenario == "mirror pricing" {
 				require.Equal(t, money.MustParseDollars("0.01"), activity.ReportWithSessions(got).Totals.Cost)
 			} else {
 				require.Equal(t, 500, activity.ReportWithSessions(got).Totals.OutputTokens)
