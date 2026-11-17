@@ -218,6 +218,15 @@ func TestGrokWebPending(t *testing.T) {
 		}, false},
 		{"completed reply", []map[string]any{q, grokTestResponse("r2", "r1", "assistant", "Done", at)}, false},
 		{"empty reply that is not partial", []map[string]any{q, grokTestResponse("r2", "r1", "assistant", "", at)}, false},
+		{"partial reply with text at the end of the shown branch", []map[string]any{
+			q, partial("r2", "r1", "Half an answer"),
+		}, true},
+		// The chat moved on below a reply Grok never finished.
+		{"partial reply with text and later turns below it", []map[string]any{
+			q, partial("r2", "r1", "Half an answer"),
+			grokTestResponse("r3", "r2", "human", "Next", "2026-10-21T08:03:00Z"),
+			grokTestResponse("r4", "r3", "assistant", "Reply", "2026-10-21T08:04:00Z"),
+		}, false},
 		{"partial reply with text on an older branch", []map[string]any{
 			q, partial("r2", "r1", "Old"),
 			grokTestResponse("r3", "r1", "assistant", "New", "2026-10-21T08:03:00Z"),

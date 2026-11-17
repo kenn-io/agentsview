@@ -183,7 +183,7 @@ func ParseGrokWebConversation(data []byte) (ParseResult, error) {
 }
 
 // GrokWebPending reports whether Grok is still writing a reply in the
-// conversation: it lists an in-flight response, the shown branch has a
+// conversation: it lists an in-flight response, the shown branch ends at a
 // partial one, or a partial reply with no text yet hangs directly below the
 // end of the shown branch (below the root when no response has text). An
 // empty partial reply below an earlier response of the shown branch counts
@@ -201,10 +201,10 @@ func GrokWebPending(data []byte) bool {
 	}
 	responses := *body.Responses
 	path := grokWebPath(responses)
-	for _, r := range path {
-		if r.Partial {
-			return true
-		}
+	// A partial reply with later turns below it is finished history: the
+	// chat moved on, and it would otherwise keep an active chat pending.
+	if len(path) > 0 && path[len(path)-1].Partial {
+		return true
 	}
 	// grokWebPath leaves out replies without text, so a reply that is still
 	// being generated is found by its parent instead.
