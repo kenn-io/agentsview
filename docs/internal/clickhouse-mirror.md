@@ -368,11 +368,13 @@ ClickHouse cannot change `index_granularity` on an existing table, so the
 schema step rebuilds a table it finds with one-row granules
 (`rebuildUsageSnapshots`):
 
-1. It takes the next rebuild number N and creates
+1. It takes a rebuild number N above every number it saw and no lower than
+   the server clock in nanoseconds, and creates
    `usage_session_snapshots_rebuild_N` with the old table's columns, including
    the `MATERIALIZED` expressions that table was created with, and the default
    granularity. `CREATE TABLE` fails when the name exists, so one process owns
-   each number.
+   each number, and numbers only grow, so a dropped number is never taken
+   again.
 2. It copies every row, older versions included, with the stored values of the
    `MATERIALIZED` columns (`insert_allow_materialized_columns`), so nothing is
    recomputed.
@@ -383,15 +385,31 @@ schema step rebuilds a table it finds with one-row granules
 4. It swaps the tables with `EXCHANGE TABLES`, so reads and pushes always find
    a complete table.
 5. Measured against the baseline, it applies what pushes changed in the old
-   table between step 3 and the swap: it copies the rows the old table gained
-   and deletes the rows it lost. A session deleted after the swap is in both the
-   baseline and the old table, so it stays deleted. Then it drops the baseline
-   and the old table.
+   table between step 3 and the swap: it copies the rows the old table gained,
+   deletes them from the old table, and deletes the rows the old table lost. A
+   session in the baseline and deleted after the swap is in both the baseline
+   and the old table, so it stays deleted. A session copied by step 5 and
+   deleted afterwards stays deleted too, because a resumed step 5 finds nothing
+   left to copy. Then it drops the baseline and the old table.
 
 On 140,912 production rows the copy took 1.4 s and the checks in steps 3 and 5
-under 0.5 s on the faster test machine. Only a push still writing at the swap,
-whose insert or delete lands in the old table after step 5 reads it, is missed;
-the next full push repairs it.
+under 0.5 s on the faster test machine. Two cases are missed, and the next full
+push repairs both:
+
+- A push still writing at the swap, whose insert or delete lands in the old
+  table after step 5 reads it.
+- A session first pushed between step 3 and the swap and deleted while step 5
+  copies it, or after a process stopped between that copy and the delete from
+  the old table. The baseline cannot tell its rows from rows step 5 has yet to
+  copy, so step 5 brings the session back.
+
+If `EXCHANGE TABLES` returns an error, the swap may still have run on the
+server. The rebuild then reads the rebuild table's granularity. One-row
+granules show the swap ran, so it keeps the tables, and a start after they are
+an hour old finishes step 5. If the check fails, it also keeps them; a later
+start finishes step 5 if the swap ran, or drops them and rebuilds if it did
+not. Otherwise the swap did not run, and it drops them as after any other
+failure.
 
 Rebuild tables under an hour old belong to another process, and the schema step
 leaves them alone. Older ones belong to a process that stopped:

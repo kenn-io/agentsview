@@ -314,3 +314,89 @@ func TestSchemaFinishesRebuildStoppedAfterSwap(t *testing.T) {
 		})
 	}
 }
+
+// After a failed EXCHANGE TABLES, the rebuild keeps its tables when the
+// rebuild table has one-row granules: the swap ran and moved the old table
+// there. A rebuild table that still holds the copy, or none at all, shows
+// that the swap did not run.
+func TestRebuildSwapCheckFindsOldTable(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		tables  []string
+		swapped bool
+	}{
+		{"copy", []string{"CREATE TABLE usage_session_snapshots_rebuild_1 AS usage_session_snapshots " +
+			"ENGINE = ReplacingMergeTree(revision) ORDER BY id"}, false},
+		{"old table", []string{"CREATE TABLE usage_session_snapshots_rebuild_1 AS usage_session_snapshots " +
+			"ENGINE = ReplacingMergeTree(revision) ORDER BY id SETTINGS index_granularity = 1"}, true},
+		{"missing", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store, _, _ := newPushedStore(t)
+			conn := store.DB()
+			execAll(t, conn, tc.tables...)
+
+			swapped, err := usageSnapshotRebuildSwapped(t.Context(), conn, 1)
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.swapped, swapped)
+		})
+	}
+}
+
+// A rebuild number is above every number the schema step saw and no lower
+// than the server clock, so a number dropped earlier is not taken again.
+func TestRebuildNumberPassesDroppedNumbers(t *testing.T) {
+	t.Parallel()
+	store, _, _ := newPushedStore(t)
+	conn := store.DB()
+	// 2026-01-01 in nanoseconds; any clock this test runs under is later.
+	const clockFloor uint64 = 1_767_225_600_000_000_000
+
+	low, err := nextUsageSnapshotRebuildNumber(t.Context(), conn, 1)
+	require.NoError(t, err)
+	high, err := nextUsageSnapshotRebuildNumber(t.Context(), conn, 1<<63)
+	require.NoError(t, err)
+
+	assert.Greater(t, low, clockFloor)
+	assert.Equal(t, uint64(1<<63)+1, high)
+}
+
+// A step 5 that stops after copying the rows the old table gained, and that
+// a later schema step resumes, leaves a session deleted in between deleted.
+func TestSchemaResumedRebuildKeepsSessionDeleted(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store, _, _ := newPushedStore(t)
+	conn := store.DB()
+	columns, err := storedColumns(ctx, conn, usageSessionSnapshotTable)
+	require.NoError(t, err)
+	list := strings.Join(columns, ", ")
+	var pushed string
+	require.NoError(t, conn.QueryRowContext(ctx, `SELECT min(id) FROM usage_session_snapshots`).Scan(&pushed))
+
+	// The old table as the swap left it, with the baseline, and without the
+	// session: a push wrote it to the old table between step 3 and the swap.
+	old := usageSnapshotRebuildName(1)
+	execAll(t, conn,
+		"CREATE TABLE "+old+" AS usage_session_snapshots ENGINE = ReplacingMergeTree(revision) "+
+			"ORDER BY id SETTINGS index_granularity = 1",
+		"INSERT INTO "+old+" ("+list+") SELECT "+list+" FROM usage_session_snapshots "+
+			"SETTINGS final = 0, insert_allow_materialized_columns = 1",
+		"DELETE FROM usage_session_snapshots WHERE id = '"+pushed+"'",
+		"CREATE TABLE "+usageSnapshotBaselineName(1)+" ENGINE = MergeTree ORDER BY (id, revision) "+
+			"AS SELECT id, revision FROM usage_session_snapshots SETTINGS final = 0")
+
+	// Step 5 copies the session over, then its process stops.
+	require.NoError(t, copyUsageSnapshotRebuildGains(ctx, conn, 1))
+	require.Len(t, revisions(t, conn, pushed), 1)
+	// A push deletes the session before a later schema step resumes step 5.
+	execAll(t, conn, "DELETE FROM usage_session_snapshots WHERE id = '"+pushed+"'")
+
+	require.NoError(t, rebuildUsageSnapshots(ctx, conn, 0))
+
+	assert.Empty(t, revisions(t, conn, pushed))
+	assert.Empty(t, rebuildTables(t, conn))
+}
