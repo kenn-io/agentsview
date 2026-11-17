@@ -50,7 +50,7 @@ func (s *Store) saveActivityInputs() {
 		return
 	}
 	for _, slot := range s.runtimeState().activityInputs.Snapshot() {
-		if len(slot.Rows) != 1 || slot.Rows[0].identity == "" {
+		if slot.Rows[0].identity == "" {
 			continue
 		}
 		input := slot.Rows[0]
@@ -86,21 +86,15 @@ func (s *Store) saveActivityInputs() {
 }
 
 func (s *Store) loadActivityInputs(slot, version, identity string) (pgActivityInputs, bool) {
-	data, ok := s.activityDisk.Get(slot, pgActivityDiskVersion+version)
-	if !ok {
+	parts := kept.LoadParts[pgActivityDiskPart](&s.activityDisk, slot, pgActivityDiskVersion+version)
+	meta, ok := parts[""]
+	if !ok || meta.Value.Identity != identity {
 		return pgActivityInputs{}, false
 	}
-	rows, ok := kept.DecodeRows[kept.Part[pgActivityDiskPart]](data)
-	if !ok || len(rows) == 0 || rows[0].ID != "" || rows[0].Value.Identity != identity {
-		return pgActivityInputs{}, false
-	}
-	meta := rows[0].Value
-	input := pgActivityInputs{identity: identity, revision: meta.Revision, gapCap: meta.GapCap, sessions: map[string]pgActivitySession{}, candidates: map[string]bool{}}
+	delete(parts, "")
+	input := pgActivityInputs{identity: identity, revision: meta.Value.Revision, gapCap: meta.Value.GapCap, sessions: map[string]pgActivitySession{}, candidates: map[string]bool{}}
 	intern := make(stringutil.Interner)
-	for _, row := range rows[1:] {
-		if row.ID == "" {
-			return pgActivityInputs{}, false
-		}
+	for _, row := range parts {
 		part := row.Value
 		if part.Candidate {
 			input.candidates[row.ID] = true

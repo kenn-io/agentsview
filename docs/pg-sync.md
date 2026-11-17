@@ -33,11 +33,10 @@ For ranges that include today, native PostgreSQL saves Activity inputs on a
 graceful close under `$CACHE_DIRECTORY/postgres-activity`, or
 `agentsview/postgres-activity` in the user cache directory. Each file and the
 whole cache are limited to 256 MiB. On restart, the reader refreshes sessions
-changed since the saved revision. Saving and reusing these files requires
-`EXECUTE` on `pg_control_system()`, `pg_current_wal_lsn()`, and
-`pg_walfile_name(pg_lsn)`; without those permissions, Activity reads directly
-and can still reuse inputs in memory. An abrupt exit leaves changes since the
-last graceful close unsaved. The next visit refreshes an older saved copy or
+changed since the saved revision. Saving and reusing these files requires the
+same identity-function permissions as the Usage cache below. Without them,
+Activity reads directly and can still reuse inputs in memory. An abrupt exit
+leaves changes since the last graceful close unsaved. The next visit refreshes an older saved copy or
 rebuilds the inputs if none is available.
 
 `pg serve` keeps finished Usage results in memory, up to 64 selections and

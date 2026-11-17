@@ -465,42 +465,6 @@ func TestPGActivityReportInputInvalidRestart(t *testing.T) {
 	}
 }
 
-func TestPGActivityReportInputRestartClockAndGap(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	local, syncer, _ := newUsageJournalFixture(t)
-	require.NoError(t, local.UpsertSession(t.Context(), db.Session{ID: "open", Project: "project-a", Machine: "test-machine", Agent: "claude", StartedAt: new("2026-06-14T10:00:00Z"), MessageCount: 2}))
-	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "open", []db.Message{
-		{SessionID: "open", Ordinal: 0, Role: "user", Content: "question", Timestamp: "2026-06-14T10:00:00Z"},
-		{SessionID: "open", Ordinal: 1, Role: "assistant", Content: "answer", Timestamp: "2026-06-14T10:05:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":300}`)},
-	}))
-	pgKeptPush(t, syncer, false)
-	target, directory := testPGURL(t), t.TempDir()
-	open := func() *Store {
-		store, err := NewStore(t.Context(), target, syncer.schema, true)
-		require.NoError(t, err)
-		require.NoError(t, store.ConfigureUsageCache(t.Context(), directory, target, syncer.schema))
-		return store
-	}
-	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
-	q.Partial, q.EffectiveEnd = true, q.RangeStart.Add(10*time.Hour+5*time.Minute)
-	first := open()
-	assert.Zero(t, pgKeptBuild(t, first, f, q, true).Report.Totals.OutputTokens)
-	require.NoError(t, first.Close())
-	restarted := open()
-	defer restarted.Close()
-	counter := &activityInputReadCounter{storeExecutor: restarted.pg}
-	restarted.pg = counter
-	q.EffectiveEnd = q.EffectiveEnd.Add(time.Nanosecond)
-	got := pgKeptBuild(t, restarted, f, q, true)
-	assert.Equal(t, 300, got.Report.Totals.OutputTokens)
-	assert.Empty(t, counter.transcriptReads)
-	assert.Empty(t, counter.usageReads)
-	q.GapCapSeconds += 60
-	got = pgKeptBuild(t, restarted, f, q, true)
-	assert.Equal(t, 300, got.Report.Totals.OutputTokens)
-	assert.NotEmpty(t, counter.transcriptReads)
-}
-
 func TestPGActivityReportInputRestartPeerAndSessions(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	local, syncer, _ := newUsageJournalFixture(t)
@@ -518,10 +482,10 @@ func TestPGActivityReportInputRestartPeerAndSessions(t *testing.T) {
 		return s
 	}
 	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC", Project: "project-a"}
-	q.Partial, q.EffectiveEnd = true, q.RangeEnd.Add(-time.Hour)
+	q.Partial, q.EffectiveEnd = true, q.RangeStart.Add(10*time.Hour+time.Minute)
 	first := open()
 	before := pgKeptBuild(t, first, f, q, true)
-	assert.Equal(t, 1131, before.Report.Totals.OutputTokens)
+	assert.Equal(t, 5, before.Report.Totals.OutputTokens)
 	require.NoError(t, first.Close())
 	restored := open()
 	reads := &activityInputReadCounter{storeExecutor: restored.pg}
@@ -529,6 +493,13 @@ func TestPGActivityReportInputRestartPeerAndSessions(t *testing.T) {
 	requirePGKeptEqual(t, before, pgKeptBuild(t, restored, f, q, true))
 	assert.Empty(t, reads.transcriptReads)
 	assert.Empty(t, reads.usageReads)
+	q.EffectiveEnd = q.EffectiveEnd.Add(time.Nanosecond)
+	assert.Equal(t, 1131, pgKeptBuild(t, restored, f, q, true).Report.Totals.OutputTokens)
+	assert.Empty(t, reads.transcriptReads)
+	assert.Empty(t, reads.usageReads)
+	q.GapCapSeconds += 60
+	assert.Equal(t, 1131, pgKeptBuild(t, restored, f, q, true).Report.Totals.OutputTokens)
+	assert.NotEmpty(t, reads.transcriptReads)
 	require.NoError(t, restored.Close())
 	require.NoError(t, local.DeleteSession(t.Context(), "deleted"))
 	require.NoError(t, local.DeleteSession(t.Context(), "peer"))
