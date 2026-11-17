@@ -3118,10 +3118,16 @@ func analyticsSkillsQuery(
 // GetAnalyticsTools returns tool usage analytics aggregated
 // from the tool_calls table.
 func (db *DB) GetAnalyticsTools(ctx context.Context, f AnalyticsFilter) (ToolsAnalyticsResponse, error) {
-	return keptAnalytics(ctx, db, "tools", f, db.analyticsTools)
+	return keptAnalyticsWithIdentity(ctx, db, "tools", f, func(ctx context.Context, f AnalyticsFilter, identity string) (ToolsAnalyticsResponse, error) {
+		return db.analyticsToolsWithIdentity(ctx, f, &identity)
+	})
 }
 
 func (db *DB) analyticsTools(ctx context.Context, f AnalyticsFilter) (ToolsAnalyticsResponse, error) {
+	return db.analyticsToolsWithIdentity(ctx, f, nil)
+}
+
+func (db *DB) analyticsToolsWithIdentity(ctx context.Context, f AnalyticsFilter, identity *string) (ToolsAnalyticsResponse, error) {
 	release, err := db.acquireBulkRead(ctx)
 	if err != nil {
 		return ToolsAnalyticsResponse{}, err
@@ -3130,9 +3136,14 @@ func (db *DB) analyticsTools(ctx context.Context, f AnalyticsFilter) (ToolsAnaly
 
 	db.trendsPartsDisk()
 	if db.trendsDisk.Enabled() && !db.readOnly {
-		identity, err := db.GetDatabaseID(ctx)
-		if err == nil {
-			if result, handled, err := db.toolsFromParts(ctx, identity, f); handled {
+		if identity == nil {
+			id, err := db.GetDatabaseID(ctx)
+			if err == nil {
+				identity = &id
+			}
+		}
+		if identity != nil && *identity != "" {
+			if result, handled, err := db.toolsFromParts(ctx, *identity, f); handled {
 				return result, err
 			}
 		}
@@ -3170,7 +3181,7 @@ func (db *DB) toolSessions(ctx context.Context, f AnalyticsFilter, withFingerpri
 	// Fetch filtered session IDs and their metadata.
 	fingerprint, generation := `''`, `NULL`
 	if withFingerprint {
-		fingerprint = `json_array(COALESCE(usage_generation, ''), COALESCE(quality_signal_version, ''), COALESCE(agent, ''), COALESCE(project, ''), COALESCE(started_at, ''), COALESCE(created_at, ''), tools_generation)`
+		fingerprint = `json_array(COALESCE(usage_generation, ''), COALESCE(quality_signal_version, ''), COALESCE(agent, ''), COALESCE(started_at, ''), COALESCE(created_at, ''), tools_generation)`
 		generation = `tools_generation`
 	}
 	sessQ := `SELECT id, ` + dateCol + `, agent, project, ` + fingerprint + `, ` + generation + ` FROM sessions WHERE ` + where

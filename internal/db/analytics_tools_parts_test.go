@@ -194,6 +194,32 @@ func TestToolsPartsAppendAndProjectMove(t *testing.T) {
 	require.Equal(t, BuildToolsAnalytics(rows), got)
 }
 
+func TestToolsPartsProjectRenameReusesUnfilteredContribution(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	d := testDB(t)
+	ctx := t.Context()
+	insertSession(t, d, "a", "project")
+	msg := asstMsgAt("a", 0, "call", "2025-03-10T12:00:00Z")
+	msg.ToolCalls = []ToolCall{{SessionID: "a", ToolName: "Read", Category: "Read"}}
+	insertMessages(t, d, msg)
+	f := AnalyticsFilter{Timezone: "UTC"}
+	first, err := d.analyticsTools(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, 1, first.TotalCalls)
+	_, err = d.getWriter().ExecContext(ctx, `UPDATE sessions SET project='elsewhere' WHERE id='a'`)
+	require.NoError(t, err)
+	var reads [][]string
+	reset := setToolsPartsReadObserver(func(ids []string) { reads = append(reads, append([]string(nil), ids...)) })
+	defer reset()
+	got, err := d.analyticsTools(ctx, f)
+	require.NoError(t, err)
+	require.Empty(t, reads)
+	require.Equal(t, first, got)
+	rows, err := d.analyticsToolRows(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, BuildToolsAnalytics(rows), got)
+}
+
 func TestToolsPartsFreshArchive(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	d := testFreshDB(t)
