@@ -1,7 +1,12 @@
 import { expect, test } from "@playwright/test";
 import { RuntimeErrorMonitor } from "./helpers/runtime-error-monitor";
+import { seedPriorRead } from "./pages/sessions-page";
 
 test.describe("Runtime error diagnostics", () => {
+  test.beforeEach(async ({ page }) => {
+    await seedPriorRead(page);
+  });
+
   test("adds a source location to console errors", async ({ page }) => {
     const monitor = new RuntimeErrorMonitor(page);
     await page.route("**/diagnostic-console-error.js", async (route) => {

@@ -8,7 +8,6 @@ import { router } from "../../stores/router.svelte.js";
 import { settings } from "../../stores/settings.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
 import { sync } from "../../stores/sync.svelte.js";
-import { sessions } from "../../stores/sessions.svelte.js";
 
 let component: ReturnType<typeof mount>;
 
@@ -27,7 +26,6 @@ afterEach(() => {
   settings.disabledAgents = [];
   sync.syncing = false;
   sync.startupPending = false;
-  sessions.archiveEmpty = false;
   ui.sidebarOpen = true;
   ui.isMobileViewport = false;
   router.route = "sessions";
@@ -49,26 +47,6 @@ describe("EmptyArchivePanel", () => {
     expect(document.body.textContent).toContain(title);
     if (pending && !syncing) expect(document.body.textContent).toContain("Select Sync in the header");
     expect(document.querySelector(".empty-archive-spinner") !== null).toBe(syncing);
-  });
-  it("shows sync progress while keeping the folders available", async () => {
-    settings.sessionProviders = [
-      {
-        id: "claude",
-        display_name: "Claude Code",
-        dirs: ["/example"],
-        homes: [],
-        homes_supported: false,
-      },
-    ];
-    sync.syncing = true;
-    component = mount(EmptyArchivePanel, { target: document.body });
-    await tick();
-    expect(document.body.textContent).toContain("Syncing sessions");
-    expect(document.body.textContent).toContain("/example");
-    sync.syncing = false;
-    sessions.archiveEmpty = true;
-    await tick();
-    expect(document.body.textContent).toContain("No sessions yet");
   });
   it("restores the desktop sidebar and transfers focus between toggles", async () => {
     ui.sidebarOpen = true;

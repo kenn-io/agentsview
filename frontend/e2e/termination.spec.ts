@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { SessionsPage } from "./pages/sessions-page";
+import { seedPriorRead, SessionsPage } from "./pages/sessions-page";
 
 // The fixture marks `test-session-mixed-content-7` (project-beta,
 // 7 messages) with termination_status = "tool_call_pending".
@@ -30,7 +30,7 @@ test.describe("session termination status", () => {
   test("Top Sessions table renders unclean status dot", async ({ page }) => {
     // AnalyticsPage renders inside the right pane on bare "/"
     // when no session is selected.
-    await page.addInitScript(() => localStorage.setItem("agentsview-read-progress", JSON.stringify({ version: 2, sessions: { prior: { token: "revision", ordinal: 0, touched_at: 1 } } })));
+    await seedPriorRead(page);
     await page.goto("/");
     await expect(page.locator(".kit-status-dot--unclean").first()).toBeVisible();
   });

@@ -1,4 +1,5 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
+import { seedPriorRead } from "./pages/sessions-page";
 
 // Session list is ordered by ended_at DESC.
 // We select sessions by stable properties (project + message count)
@@ -109,6 +110,7 @@ async function maxVerticalGap(rows: Locator) {
 }
 
 test.beforeEach(async ({ page }) => {
+  await seedPriorRead(page);
   await page.goto("/");
   await expect(page.locator(LOC.sessionItem).first()).toBeVisible();
 });

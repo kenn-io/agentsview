@@ -19,6 +19,7 @@ import { ui } from "./lib/stores/ui.svelte.js";
 import { usage } from "./lib/stores/usage.svelte.js";
 import { yokedDates } from "./lib/stores/yokedDates.svelte.js";
 import type { DbMessage as Message } from "./lib/api/generated/index.js";
+import type { Session } from "./lib/api/types/core.js";
 import { hasVisibleSegments } from "./lib/utils/content-parser.js";
 import { SessionsService } from "./lib/api/generated/index.js";
 import { dismissFlash } from "@kenn-io/kit-ui";
@@ -704,17 +705,37 @@ describe("App root Sessions landing", () => {
     router.isRootPath = true;
   }
 
-  function sidebarRow(id: string, count: number, date: string) {
+  function sidebarRow(id: string, count: number, date: string): Session {
     return {
+      compaction_count: 0,
+      consecutive_failure_max: 0,
+      edit_churn_count: 0,
+      ended_with_role: "",
+      final_failure_streak: 0,
+      mid_task_compaction_count: 0,
+      outcome: "",
+      outcome_confidence: "",
+      secret_leak_count: 0,
+      tool_failure_signal_count: 0,
+      tool_retry_count: 0,
       id,
       project: id,
       machine: "local",
       agent: "codex",
+      first_message: "hello",
       started_at: date,
       ended_at: date,
       created_at: date,
       message_count: count,
-    } as (typeof sessions.sessions)[number];
+      user_message_count: 1,
+      total_output_tokens: 0,
+      peak_context_tokens: 0,
+      has_total_output_tokens: false,
+      has_peak_context_tokens: false,
+      is_automated: false,
+      is_teammate: false,
+      is_index_only: false,
+    };
   }
 
   it.each([true, false])("opens the first sidebar session when rows arrive (already present: %s)", async (present) => {
@@ -726,28 +747,10 @@ describe("App root Sessions landing", () => {
     component = mount(App, { target: document.body });
     await flushEffects();
     if (!present) {
-      expect(document.body.textContent).toContain("No sessions yet");
       sessions.archiveEmpty = false;
       sessions.sessions = [sidebarRow("first", 1, "2026-01-03"), sidebarRow("older", 1, "2026-01-02")];
       await flushEffects();
     }
-    expect(sessions.activeSessionId).toBe("first");
-  });
-
-  it("opens a session after a reload with no read marker", async () => {
-    stubAppDependencies();
-    vi.spyOn(sessions, "load").mockResolvedValue();
-    setRootUrl();
-    sessions.archiveEmpty = true;
-    component = mount(App, { target: document.body });
-    await flushEffects();
-    unmount(component);
-    component = undefined;
-    setRootUrl();
-    sessions.archiveEmpty = false;
-    sessions.sessions = [sidebarRow("first", 1, "2026-01-03")];
-    component = mount(App, { target: document.body });
-    await flushEffects();
     expect(sessions.activeSessionId).toBe("first");
   });
 

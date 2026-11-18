@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { SessionsPage } from "./pages/sessions-page";
+import { seedPriorRead, SessionsPage } from "./pages/sessions-page";
 import { TOKEN, visitServer } from "./helpers/visit-server";
 import { waitForVisitPageReady } from "./helpers/visit-page";
 
@@ -64,7 +64,7 @@ for (const { remote, action } of [
         );
         await new SessionsPage(page).goto();
       } else {
-        await page.addInitScript(() => localStorage.setItem("agentsview-read-progress", JSON.stringify({ version: 2, sessions: { prior: { token: "revision", ordinal: 0, touched_at: 1 } } })));
+        await seedPriorRead(page);
         await page.goto(server.url);
         await expect(new SessionsPage(page).sessionItems.first()).toBeVisible();
       }

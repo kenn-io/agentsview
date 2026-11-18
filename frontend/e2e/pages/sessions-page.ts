@@ -2,6 +2,18 @@ import { expect, type Locator, type Page } from "@playwright/test";
 
 const SESSION_READY_TIMEOUT_MS = process.env.CI === "true" ? 15_000 : 5_000;
 
+export async function seedPriorRead(page: Page) {
+  await page.addInitScript(() =>
+    localStorage.setItem(
+      "agentsview-read-progress",
+      JSON.stringify({
+        version: 2,
+        sessions: { prior: { token: "revision", ordinal: 0, touched_at: 1 } },
+      }),
+    ),
+  );
+}
+
 /**
  * Page object for the sessions view.
  * Encapsulates selectors and common navigation actions
@@ -37,7 +49,7 @@ export class SessionsPage {
   }
 
   async goto() {
-    await this.page.addInitScript(() => localStorage.setItem("agentsview-read-progress", JSON.stringify({ version: 2, sessions: { prior: { token: "revision", ordinal: 0, touched_at: 1 } } })));
+    await seedPriorRead(this.page);
     await this.page.goto("/");
     await expect(this.sessionItems.first()).toBeVisible({
       timeout: SESSION_READY_TIMEOUT_MS,

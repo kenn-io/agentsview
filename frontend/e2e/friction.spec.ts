@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 import { clickNavTab, expectActiveNavTab } from "./helpers/nav";
+import { seedPriorRead } from "./pages/sessions-page";
 
 const DATE = "2026-09-21";
 const OLDER = "2026-09-20";
@@ -241,6 +242,7 @@ test.describe("Friction Log", () => {
   });
 
   test("is reachable from the primary navigation", async ({ page }) => {
+    await seedPriorRead(page);
     await page.goto("/");
     await clickNavTab(page, "Friction Log");
     await expect(page).toHaveURL(new RegExp(`/friction\\?date=${DATE}$`));

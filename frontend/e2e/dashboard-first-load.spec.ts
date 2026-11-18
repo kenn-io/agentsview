@@ -1,13 +1,9 @@
 import { test, expect } from "@playwright/test";
+import { seedPriorRead } from "./pages/sessions-page";
 
 test.describe("Chromium dashboard evidence", () => {
   test.beforeEach(async ({ page }) => {
-    await page.addInitScript(() => {
-      localStorage.setItem("agentsview-read-progress", JSON.stringify({
-        version: 2,
-        sessions: { prior: { token: "revision", ordinal: 0, touched_at: 1 } },
-      }));
-    });
+    await seedPriorRead(page);
   });
 
   test.skip(

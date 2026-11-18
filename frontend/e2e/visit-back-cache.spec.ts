@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { SessionsPage } from "./pages/sessions-page";
+import { seedPriorRead, SessionsPage } from "./pages/sessions-page";
 import { visitServer } from "./helpers/visit-server";
 import { waitForVisitPageReady } from "./helpers/visit-page";
 
@@ -38,6 +38,7 @@ test("Back restoration starts a fresh visit", async ({ page, baseURL }) => {
         new URL(response.url()).pathname === "/api/v1/telemetry/events" &&
         response.request().postDataJSON()?.event === "screen_viewed",
     );
+    await seedPriorRead(page);
     await page.goto(server.url);
     await expect(new SessionsPage(page).sessionItems.first()).toBeVisible();
     await enabled;

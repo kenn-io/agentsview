@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { clickNavTab } from "./helpers/nav";
+import { seedPriorRead } from "./pages/sessions-page";
 
 // The fixture session created by createRecentEditsFixture in
 // cmd/testfixture/main.go. It carries an Edit tool call on
@@ -42,6 +43,7 @@ async function withRecentEdits(page: Page) {
 
 test.describe("Recent Edits feed", () => {
   test.beforeEach(async ({ page }) => {
+    await seedPriorRead(page);
     await page.goto("/");
   });
 
