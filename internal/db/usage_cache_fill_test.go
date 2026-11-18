@@ -882,6 +882,8 @@ func TestUsageSpoolRoutesCachedAndUncachedBatches(t *testing.T) {
 		var count int
 		require.NoError(t, spool.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM facts`).Scan(&count))
 		assert.Equal(t, 3002, count)
+		require.NoError(t, spool.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM facts WHERE session_id='session'`).Scan(&count))
+		assert.Equal(t, 1000, count)
 		for i := range versions {
 			versions[i] = extracted[versions[i].SessionID]
 		}
