@@ -286,6 +286,44 @@ checks use `rows_version` as the upper bound. A
 routine push that only appends writes too few messages to trigger
 [compaction](#compaction-after-a-large-rewrite).
 
+**A kept message's usage stays in the mirror's snapshot.** Each push writes
+one `usage_session_snapshots` row per published session, and that row holds the
+usage of every message the session has. Sending it whole made the snapshot most
+of what a push uploaded after appends: on a copy of a real archive, it was
+nearly 90% of the bytes a push of a few changed sessions sent. When a push keeps
+a session's stored message rows, or all of its content in a row-only write, it
+sends the snapshot's session fields, its usage events, and the usage of the
+messages after the last kept ordinal in an external table. One `INSERT ...
+SELECT` per batch builds each complete row on the server from the session's
+current snapshot, under `FINAL`, keeping that snapshot's usage messages at or
+below the last kept ordinal.
+
+The server uses a stored snapshot only when it records the message rows
+fingerprint the plan kept. A snapshot copies the session row it was written
+with, and the push builds both from one payload, so that fingerprint vouches
+for the snapshot's usage messages as it does for the message rows: every field
+of a usage message is also a field of the message row it hashes. A change to
+the usage message tuple must keep it within `messageRow`. The push then reads
+which carried sessions got a row at its version and sends the whole row for
+the rest, such as a session whose current snapshot came from an interrupted
+push. Readers still see one complete snapshot per session, so nothing reads
+the table differently.
+
+Four pushes of successive copies of a real archive (47,517 sessions), each
+sent to a mirror with and without this change, uploaded:
+
+| Push | Sessions written | Without | With | Reduction |
+| --- | --- | --- | --- | --- |
+| 1 | 118: 18 appended, 33 row-only, 67 whole | 11.05 MB | 7.18 MB | 1.5x |
+| 2 | 4 appended | 904 KB | 140 KB | 6.5x |
+| 3 | none | 36.8 KB | 36.7 KB | 1.0x |
+| 4 | 15: 2 appended, 13 row-only | 1.61 MB | 172 KB | 9.3x |
+| Total | | 13.60 MB | 7.53 MB | 1.8x |
+
+The first push followed half an hour of archive changes, so new sessions,
+which go whole either way, dominate it. Both mirrors ended up identical row for
+row, including every usage table, and returned the same Usage page results.
+
 Each full-push reason gets its own scope:
 
 - Rebuilt archive, local deletion journal reset, push scope change, and a

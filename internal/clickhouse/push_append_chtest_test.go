@@ -370,3 +370,99 @@ func TestRenameDoesNotPublishRowsAnotherPushLeft(t *testing.T) {
 	).Scan(&lastTerminal))
 	assert.False(t, lastTerminal.Valid, "the other push's finished event does not count")
 }
+
+// markSnapshotMessages sets the source_uuid of every usage message in the
+// session's stored snapshot to "from mirror", so a later snapshot shows which
+// messages it took from the mirror. stale also changes the message rows
+// fingerprint the snapshot copies from its session row.
+func markSnapshotMessages(t *testing.T, conn *sql.DB, id string, stale bool) {
+	t.Helper()
+	set := `usage_messages = CAST(arrayMap(m -> tuple(tupleElement(m, 'ordinal'), tupleElement(m, 'role'),
+		tupleElement(m, 'timestamp'), tupleElement(m, 'model'), tupleElement(m, 'provider_id'),
+		tupleElement(m, 'token_usage'), tupleElement(m, 'claude_message_id'),
+		tupleElement(m, 'claude_request_id'), 'from mirror'), usage_messages) AS ` + usageSnapshotMessageType + `)`
+	if stale {
+		set += ", agentsview_message_rows_fingerprint = 'stale'"
+	}
+	_, err := conn.ExecContext(t.Context(), "ALTER TABLE "+usageSessionSnapshotTable+" UPDATE "+set+
+		" WHERE id = ? SETTINGS mutations_sync = 2", id)
+	require.NoError(t, err)
+}
+
+// snapshotMessages reads the source_uuid of each usage message in the
+// session's current snapshot, by ordinal.
+func snapshotMessages(t *testing.T, conn *sql.DB, id string) map[int64]string {
+	t.Helper()
+	var ordinals []int64
+	var uuids []string
+	require.NoError(t, conn.QueryRowContext(t.Context(), `SELECT
+			arrayMap(m -> tupleElement(m, 'ordinal'), usage_messages),
+			arrayMap(m -> tupleElement(m, 'source_uuid'), usage_messages)
+		FROM `+usageSessionSnapshotTable+` WHERE id = ?`, id).Scan(&ordinals, &uuids))
+	require.Len(t, uuids, len(ordinals))
+	out := make(map[int64]string, len(ordinals))
+	for i, ordinal := range ordinals {
+		out[ordinal] = uuids[i]
+	}
+	return out
+}
+
+// An appended session's new snapshot takes the usage messages of its kept
+// messages from the mirror's snapshot, and the push sends only the rest. A
+// stored snapshot that no longer records the kept rows' fingerprint cannot
+// vouch for them, so the push sends the whole snapshot.
+func TestPushAppendKeepsEarlierUsageInSnapshot(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		stale bool
+		want  map[int64]string
+	}{
+		{name: "matching snapshot", want: map[int64]string{0: "from mirror", 1: ""}},
+		{name: "stale snapshot", stale: true, want: map[int64]string{0: "", 1: ""}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := t.Context()
+			local, s, conn := changedOnlyFixture(t)
+			markSnapshotMessages(t, conn, fixtureBetaID, tc.stale)
+
+			growSession(t, local, fixtureBetaID, "beta second", "2026-01-11T00:10:00.000Z")
+			res, err := s.Push(ctx, false, nil)
+			require.NoError(t, err)
+			require.Equal(t, 1, res.SessionsAppended)
+
+			assert.Equal(t, tc.want, snapshotMessages(t, conn, fixtureBetaID))
+			var revision, published uint64
+			var stored int64
+			require.NoError(t, conn.QueryRowContext(ctx, `SELECT s.push_version, s.stored_message_count, p.push_version
+				FROM `+usageSessionSnapshotTable+` s JOIN sessions p ON p.id = s.id WHERE s.id = ?`,
+				fixtureBetaID).Scan(&revision, &stored, &published))
+			assert.Equal(t, published, revision, "the snapshot belongs to the published session row")
+			assert.Equal(t, int64(2), stored)
+		})
+	}
+}
+
+// A push that rewrites only the session row keeps every usage message of the
+// stored snapshot and takes the session fields from the archive.
+func TestPushRowOnlyWriteKeepsSnapshotUsage(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	local, s, conn := changedOnlyFixture(t)
+	markSnapshotMessages(t, conn, fixtureAlphaID, false)
+
+	title := "Renamed Alpha"
+	require.NoError(t, local.RenameSession(ctx, fixtureAlphaID, &title))
+	res, err := s.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Equal(t, 1, res.SessionRowsOnly)
+
+	assert.Equal(t, map[int64]string{0: "from mirror", 1: "from mirror"}, snapshotMessages(t, conn, fixtureAlphaID))
+	var name string
+	var events int
+	require.NoError(t, conn.QueryRowContext(ctx, "SELECT display_name, length(usage_events) FROM "+
+		usageSessionSnapshotTable+" WHERE id = ?", fixtureAlphaID).Scan(&name, &events))
+	assert.Equal(t, title, name)
+	assert.Equal(t, 1, events, "the push sends the session's usage events")
+}

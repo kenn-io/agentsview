@@ -1588,7 +1588,10 @@ own metadata, which is why the docs below call the database a mirror.
   session that only grew keeps the rows of its stored messages, or of all but
   the last when only the last changed, and limits that delete, in the tables
   listed in `messageOrdinalColumn`, to ordinals after the last kept one. A change to how a push renders a row in those tables must
-  change `messageRowsFingerprints` with it, or appends will keep stale rows. See
+  change `messageRowsFingerprints` with it, or appends will keep stale rows.
+  A push also takes a kept message's usage from the mirror's snapshot
+  (`insertCarriedSnapshots`), so every field of the snapshot's usage message
+  tuple must be a field of `messageRow`. See
   [appends](../internal/clickhouse-mirror.md#pushes-rewrite-only-what-differs).
   Store every ClickHouse push cursor and version in the mirror's
   `sync_metadata`. Never store ClickHouse sync state in SQLite.

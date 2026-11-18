@@ -138,6 +138,16 @@ The latest release is
   and every pushing client together: an older serve fails tool-sequence and
   file-reference requests for sessions a newer client appended to.
 
+- ClickHouse pushes no longer upload the usage of every earlier message when a
+  session grows or only its title or other session fields change. The mirror
+  copies that usage from the session's previous usage snapshot, and the push
+  sends only the usage of the new messages. On a copy of a real archive, a push
+  of 4 grown sessions uploaded 140 KB instead of 904 KB (6.5x less), and a push
+  of 15 changed sessions 172 KB instead of 1.61 MB (9.3x less), which matters
+  most on a slow link. When the stored snapshot does not match what the push
+  kept, as after an interrupted push, the push uploads the whole snapshot as
+  before.
+
 **Bug fixes**
 
 - `agentsview source cursor sync-usage` no longer aborts when Cursor rate-limits

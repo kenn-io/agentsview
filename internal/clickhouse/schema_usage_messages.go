@@ -1518,15 +1518,22 @@ func dropTables(ctx context.Context, conn *sql.DB, condition string, args ...any
 	return nil
 }
 
+// insertUsageSessionSnapshots writes one complete snapshot per payload. A
+// session in carries gets its earlier usage messages from the mirror's
+// snapshot; see insertCarriedSnapshots.
 func (s *Sync) insertUsageSessionSnapshots(
-	ctx context.Context, payloads []sessionPayload, publications map[string]sessionPublication, version uint64,
+	ctx context.Context, payloads []sessionPayload, publications map[string]sessionPublication,
+	carries map[string]snapshotCarry, version uint64,
 ) error {
 	spec, err := usageSessionSnapshotSpec()
 	if err != nil {
 		return err
 	}
 	rows := make([][]any, 0, len(payloads))
+	var carried []carriedSnapshot
 	for _, payload := range payloads {
+		row := s.sessionRow(payload, publications[payload.session.ID], version)
+		row = row[:len(row)-1]
 		messages := make([][]any, 0, len(payload.messages))
 		for _, message := range payload.messages {
 			messages = append(messages, []any{
@@ -1539,9 +1546,29 @@ func (s *Sync) insertUsageSessionSnapshots(
 		for _, event := range payload.usage {
 			events = append(events, usageEventRow(event, version))
 		}
-		row := s.sessionRow(payload, publications[payload.session.ID], version)
-		rows = append(rows, append(row[:len(row)-1], messages, events, version))
+		full := append(slices.Clone(row), messages, events, version)
+		carry, ok := carries[payload.session.ID]
+		if !ok {
+			rows = append(rows, full)
+			continue
+		}
+		first := slices.IndexFunc(payload.messages, func(m db.Message) bool { return m.Ordinal > carry.through })
+		if first < 0 {
+			first = len(messages)
+		}
+		tail := messages[first:]
+		carried = append(carried, carriedSnapshot{
+			id: payload.session.ID, full: full,
+			tail: append(row, tail, events, version, carry.rows, int64(carry.through)),
+		})
 	}
-	s.usageWritten = s.usageWritten || len(rows) > 0
-	return insertRowsSpec(ctx, s.conn, spec, rows)
+	s.usageWritten = s.usageWritten || len(payloads) > 0
+	if err := insertRowsSpec(ctx, s.conn, spec, rows); err != nil {
+		return err
+	}
+	missing, err := s.insertCarriedSnapshots(ctx, spec, carried, version)
+	if err != nil {
+		return err
+	}
+	return insertRowsSpec(ctx, s.conn, spec, missing)
 }

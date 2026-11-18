@@ -11,6 +11,9 @@ import (
 	"slices"
 	"strings"
 
+	chdriver "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/ext"
+
 	"go.kenn.io/agentsview/internal/db"
 )
 
@@ -235,4 +238,116 @@ func (s *Sync) keptRowsPublished(ctx context.Context, kept map[string]keptRows) 
 		}
 	}
 	return out, nil
+}
+
+// A session's usage snapshot is one row holding every usage message of the
+// session, so a push that sent the row whole would resend the usage of every
+// kept message. When the push keeps a session's stored message rows, or all
+// of its content, the mirror's current snapshot already holds those
+// messages' usage: a snapshot copies its session row, including the message
+// rows fingerprint, and the push builds both from one payload. The usage
+// tuple holds message fields that the message rows fingerprint covers, so a
+// snapshot that records the kept rows' fingerprint holds their usage too.
+//
+// The push sends such a session's snapshot fields, its usage events, and the
+// usage messages after the last kept ordinal in an external table, and the
+// server builds the complete row from the stored snapshot that records the
+// fingerprint. Readers still find one complete snapshot per session. A
+// session whose stored snapshot no longer records the fingerprint, such as
+// after an interrupted push replaced it, gets its whole row sent.
+
+// snapshotCarry says which usage messages a session's new snapshot takes
+// from the mirror's snapshot: those at or below through, from the snapshot
+// whose message rows fingerprint is rows.
+type snapshotCarry struct {
+	rows    string
+	through int
+}
+
+// carriedSnapshot is a snapshot row the server completes. tail is the row
+// with only the usage messages after the carried ones, followed by the
+// carry's fingerprint and last ordinal; full is the whole row, sent when the
+// mirror has no matching snapshot.
+type carriedSnapshot struct {
+	id         string
+	tail, full []any
+}
+
+const carriedSnapshotsTable = "carried_snapshots"
+
+// insertCarriedSnapshots writes the carried snapshots the mirror can
+// complete and returns the full rows of the rest.
+func (s *Sync) insertCarriedSnapshots(
+	ctx context.Context, spec tableSpec, carried []carriedSnapshot, version uint64,
+) ([][]any, error) {
+	if len(carried) == 0 {
+		return nil, nil
+	}
+	columns := make([]func(*ext.Table) error, 0, len(spec.columns)+3)
+	names := make([]string, 0, len(spec.columns)+1)
+	values := make([]string, 0, len(spec.columns)+1)
+	for _, c := range spec.columns {
+		columns = append(columns, chExternalColumn(ext.Column, c.name, strings.Join(strings.Fields(c.typ), " ")))
+		names = append(names, c.name)
+		value := "n." + c.name
+		if c.name == "usage_messages" {
+			value = "arrayConcat(arrayFilter(m -> tupleElement(m, 'ordinal') <= n.carry_through, p.usage_messages), n.usage_messages)"
+		}
+		values = append(values, value)
+	}
+	columns = append(columns, ext.Column(pushVersionCol, "UInt64"),
+		ext.Column("carry_rows", "String"), ext.Column("carry_through", "Int64"))
+	names = append(names, pushVersionCol)
+	values = append(values, "n."+pushVersionCol)
+	table, err := ext.NewTable(carriedSnapshotsTable, columns...)
+	if err != nil {
+		return nil, fmt.Errorf("describing carried usage snapshots: %w", err)
+	}
+	ids := make([]string, len(carried))
+	for i, c := range carried {
+		ids[i] = c.id
+		if err := table.Append(c.tail...); err != nil {
+			return nil, fmt.Errorf("encoding carried usage snapshot %s: %w", c.id, err)
+		}
+	}
+	// FINAL, which the connection applies, reads the current snapshot of
+	// each session, so a newer snapshot with other rows sends the full row.
+	query := "INSERT INTO " + spec.name + " (" + strings.Join(names, ", ") + ") SELECT " +
+		strings.Join(values, ", ") + " FROM " + carriedSnapshotsTable + ` AS n
+		INNER JOIN (
+			SELECT id, agentsview_message_rows_fingerprint AS kept_rows, usage_messages FROM ` + spec.name + `
+			WHERE id IN (SELECT id FROM ` + carriedSnapshotsTable + `) LIMIT 1 BY id
+		) AS p ON p.id = n.id AND p.kept_rows = n.carry_rows`
+	if _, err := s.conn.ExecContext(chdriver.Context(ctx, chdriver.WithExternalTable(table)), query); err != nil {
+		return nil, fmt.Errorf("writing carried usage snapshots: %w", err)
+	}
+	written := make(map[string]bool, len(ids))
+	for batch := range idBatches(ids) {
+		placeholders, args := inArgs(batch)
+		if err := func() error {
+			rows, err := s.conn.QueryContext(ctx, "SELECT DISTINCT id FROM "+spec.name+" WHERE id IN ("+
+				placeholders+") AND "+pushVersionCol+" = ? SETTINGS final = 0", append(args, version)...)
+			if err != nil {
+				return fmt.Errorf("reading carried usage snapshots: %w", err)
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var id string
+				if err := rows.Scan(&id); err != nil {
+					return fmt.Errorf("scanning carried usage snapshot: %w", err)
+				}
+				written[id] = true
+			}
+			return rows.Err()
+		}(); err != nil {
+			return nil, err
+		}
+	}
+	var missing [][]any
+	for _, c := range carried {
+		if !written[c.id] {
+			missing = append(missing, c.full)
+		}
+	}
+	return missing, nil
 }
