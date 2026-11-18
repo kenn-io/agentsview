@@ -86,8 +86,7 @@ ancestor permissions satisfy their checks.
   that needs a newer CPU at startup fails CI. Check a new cgo or prebuilt
   native library against that baseline before adding it.
 - Keep the Makefile's release-only link settings out of test and e2e builds.
-- `DISTRIBUTION` sets `main.distribution` and
-  `go.kenn.io/kit/telemetry/posthog.distribution` to who ships the binary.
+- `DISTRIBUTION` identifies who ships the binary.
   Official direct downloads use `kenn` and keep self-updating, like builds
   with no value. Any other value names a package manager: those builds refuse
   `agentsview update` installs and point users at the package manager.
