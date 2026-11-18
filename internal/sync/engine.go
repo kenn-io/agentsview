@@ -501,6 +501,8 @@ type Engine struct {
 	// groupedReconcileGroupHook is a test seam called with syncMu held at the
 	// start of each ReconcileProviderRootsGrouped group; nil in production.
 	groupedReconcileGroupHook func(index int)
+	// pollScans holds the metadata snapshots polling compares between passes.
+	pollScans pollScanState
 	// claudeProjectSessionFiles is an observability seam for cardinality tests
 	// around duplicate-session discovery.
 	claudeProjectSessionFiles func(string) []parser.DiscoveredFile
@@ -1643,6 +1645,9 @@ func (e *Engine) syncChangedPathsLocked(
 	prepared := e.prepareChangedPathSync(ctx, paths)
 	summary.sources = len(prepared.files)
 	defer func() { log.Print(summary.finish(e, stats)) }()
+	if len(prepared.missingPaths) > 0 && ctx.Value(pollScanSyncContextKey{}) != nil {
+		return SyncStats{}, 0, errPollScanPathMissing
+	}
 	stats, tombstoned, err = e.applyChangedPathSyncLocked(ctx, prepared)
 	// Title store events carry no session files, so this also handles them.
 	if err == nil && !stats.Aborted {

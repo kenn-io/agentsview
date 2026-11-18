@@ -143,6 +143,7 @@ func (f *codexProviderFactory) Capabilities() Capabilities {
 	caps := codexProviderCapabilities()
 	if f.spec.agent == AgentCodex {
 		caps.Source.S3Discovery = CapabilitySupported
+		caps.Source.PollMetadataScan = CapabilitySupported
 	} else {
 		caps.RawCapture = RawCaptureCapabilities{}
 	}

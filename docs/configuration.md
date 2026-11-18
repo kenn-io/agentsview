@@ -2621,6 +2621,16 @@ Roots that fall back to polling are picked up by:
 - a 2-minute fallback sync loop that runs whenever any roots are unwatched
     (it reconciles the affected scopes)
 
+For Claude and Codex, a fallback pass first compares each root's session files
+with the previous pass by size, modification time, change time, and file
+identity. It syncs only the files that changed, the same way it syncs a native
+file event. The pass reconciles the whole root instead the first time it polls
+the root, when a file has disappeared, when more than 1,024 files changed, and
+when it cannot compare a file, such as a symlinked project folder or an
+unreadable folder. A disappeared file is always left to that reconciliation,
+which checks whether the folder is available before it marks a session's source
+missing.
+
 After a fallback pass finishes, the loop waits 2 minutes or as long as that pass
 took, whichever is longer, so polling uses at most about half of wall-clock
 time. A pass reconciles one provider at a time, and watcher syncs that are

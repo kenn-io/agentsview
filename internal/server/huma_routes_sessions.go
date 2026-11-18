@@ -1202,6 +1202,11 @@ func (s *Server) humaRestoreSession(ctx context.Context,
 	if n == 0 {
 		return nil, apiError(http.StatusNotFound, "session not found or not in trash")
 	}
+	if s.engine != nil {
+		// Restoring changes no source file, so fallback polling must reconcile
+		// to read a transcript that changed while the session was in the trash.
+		s.engine.ForgetPollScans()
+	}
 	if s.broadcaster != nil {
 		s.broadcaster.Emit("sessions")
 	}
