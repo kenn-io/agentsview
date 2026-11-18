@@ -95,17 +95,8 @@ func TestSearchKeptRestart(t *testing.T) {
 	require.Len(t, want.Results, 1)
 	open := func() (*Store, *searchQueryTracer) {
 		t.Helper()
-		config, err := pgx.ParseConfig(url)
-		require.NoError(t, err)
-		config.RuntimeParams["search_path"] = syncer.schema
-		config.RuntimeParams["TimeZone"] = "UTC"
-		trace := &searchQueryTracer{}
-		config.Tracer = trace
-		pool := stdlib.OpenDB(*config)
-		s := &Store{pg: pool, ownedDB: pool}
-		t.Cleanup(func() { require.NoError(t, s.Close()) })
-		require.NoError(t, s.ConfigureUsageCache(ctx, cache, url, syncer.schema))
-		pool.SetMaxOpenConns(1)
+		s, trace := openTracedSearchStore(t, url, syncer.schema, cache)
+		s.ownedDB.SetMaxOpenConns(1)
 		return s, trace
 	}
 	s, trace := open()
@@ -514,15 +505,7 @@ func TestSearchKeptRestartInvalidCache(t *testing.T) {
 				_, err = syncer.pg.ExecContext(ctx, `DELETE FROM sync_metadata WHERE key='usage_history_checkpoint:' || (SELECT value FROM sync_metadata WHERE key='usage_change_revision')`)
 				require.NoError(t, err)
 			}
-			config, err := pgx.ParseConfig(url)
-			require.NoError(t, err)
-			config.RuntimeParams["search_path"] = syncer.schema
-			trace := &searchQueryTracer{}
-			config.Tracer = trace
-			pool := stdlib.OpenDB(*config)
-			s := &Store{pg: pool, ownedDB: pool}
-			t.Cleanup(func() { require.NoError(t, s.Close()) })
-			require.NoError(t, s.ConfigureUsageCache(ctx, cache, url, syncer.schema))
+			s, trace := openTracedSearchStore(t, url, syncer.schema, cache)
 			require.NoError(t, local.ReplaceSessionMessages(ctx, "one", []db.Message{{SessionID: "one", Role: "user", Content: "needle updated"}}))
 			pgKeptPush(t, syncer, false)
 			got, err := s.Search(ctx, filter)
