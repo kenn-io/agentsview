@@ -1330,8 +1330,9 @@ fixtures retain this field; missing identities remain source-local.
   the log, state, and memory databases, lock files, and `installation_id`
   changing constantly with no session activity. Agentsview watches the home
   directory without recursion only for the title index, so its Codex provider
-  classifies every other direct child as non-data, except a transcript root. `history.jsonl` is non-data for the
-  watch because the live-activity poller reads it on its own schedule.
+  classifies every other direct child as non-data, except a transcript root.
+  `history.jsonl` is non-data for the watch because the live-activity poller
+  reads it on its own schedule.
   Observational evidence from one installation, not a pinned-source
   guarantee.
 
