@@ -1025,6 +1025,10 @@ func BuildGeminiProjectMap(
 	geminiDir string,
 ) map[string]string {
 	result := make(map[string]string)
+	// Deleted project paths that share an existing ancestor resolve through
+	// the same sibling scan, so one memo keeps a long, stale project list
+	// from rescanning that ancestor for every path.
+	ctx := WithProjectRootMemo(context.Background())
 
 	data, err := os.ReadFile(
 		filepath.Join(geminiDir, "projects.json"),
@@ -1032,7 +1036,7 @@ func BuildGeminiProjectMap(
 	if err == nil {
 		var pf geminiProjectsFile
 		if err := json.Unmarshal(data, &pf); err == nil {
-			addProjectPaths(result, pf.Projects)
+			addProjectPaths(ctx, result, pf.Projects)
 		}
 	}
 
@@ -1048,7 +1052,7 @@ func BuildGeminiProjectMap(
 			for _, p := range tf.TrustedFolders {
 				paths[p] = ""
 			}
-			addProjectPaths(result, paths)
+			addProjectPaths(ctx, result, paths)
 		}
 	}
 
@@ -1058,6 +1062,7 @@ func BuildGeminiProjectMap(
 // addProjectPaths adds hash and name entries for the given
 // absolute paths.
 func addProjectPaths(
+	ctx context.Context,
 	result map[string]string,
 	paths map[string]string,
 ) {
@@ -1069,7 +1074,7 @@ func addProjectPaths(
 
 	for _, absPath := range sorted {
 		name := paths[absPath]
-		project := ExtractProjectFromCwd(absPath)
+		project := ExtractProjectFromCwdWithBranchContext(ctx, absPath, "")
 		if project == "" {
 			project = "unknown"
 		}

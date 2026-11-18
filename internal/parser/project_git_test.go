@@ -1,11 +1,13 @@
 package parser
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -392,6 +394,54 @@ func TestExtractProjectFromCwd_DeletedNestedWorktree(t *testing.T) {
 
 	assert.Equal(t, "my_project", ExtractProjectFromCwd(deleted),
 		"ExtractProjectFromCwd(%q)", deleted)
+}
+
+// newWorktreeContainer builds a worktree container holding one linked
+// worktree of my-project, the layout a deleted worktree's siblings reveal.
+func newWorktreeContainer(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	mainRepo := filepath.Join(root, "my-project")
+	worktreeGitDir := filepath.Join(mainRepo, ".git", "worktrees", "other-branch")
+	mustMkdirAll(t, worktreeGitDir)
+	container := filepath.Join(root, "worktrees", "my-project")
+	sibling := filepath.Join(container, "other-branch")
+	mustMkdirAll(t, sibling)
+	mustWriteFile(t, filepath.Join(sibling, ".git"), "gitdir: "+worktreeGitDir+"\n")
+	mustWriteFile(t, filepath.Join(worktreeGitDir, "commondir"), "../..\n")
+	return container
+}
+
+// countSiblingProbes counts the entries of dir that a deleted cwd's sibling
+// scan vets before it stats their .git entries.
+func countSiblingProbes(t *testing.T, dir string) *atomic.Int64 {
+	t.Helper()
+	var probes atomic.Int64
+	orig := probeGitfileTarget
+	t.Cleanup(func() { probeGitfileTarget = orig })
+	probeGitfileTarget = func(cleaned string) bool {
+		if filepath.Base(cleaned) == ".git" &&
+			filepath.Dir(filepath.Dir(cleaned)) == dir {
+			probes.Add(1)
+		}
+		return orig(cleaned)
+	}
+	return &probes
+}
+
+// A deleted cwd under a directory far larger than any worktree container,
+// such as a busy temp directory, must not vet and stat every entry.
+func TestExtractProjectFromCwd_DeletedPathUnderCrowdedDirectory(t *testing.T) {
+	container := newWorktreeContainer(t)
+	for i := range maxSiblingScanEntries {
+		mustMkdirAll(t, filepath.Join(container, fmt.Sprintf("scratch-%04d", i)))
+	}
+	probes := countSiblingProbes(t, container)
+
+	deleted := filepath.Join(container, "tauri-packaging")
+	assert.Equal(t, "tauri_packaging", ExtractProjectFromCwd(deleted),
+		"a crowded directory is not a worktree container")
+	assert.Zero(t, probes.Load())
 }
 
 func TestExtractProjectFromCwd_DeletedNestedWorktreeNoCommondir(
