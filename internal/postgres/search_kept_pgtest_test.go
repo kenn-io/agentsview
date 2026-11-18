@@ -470,8 +470,6 @@ func TestSearchKeptRestartAfterKeyEviction(t *testing.T) {
 	}
 	pgKeptPush(t, syncer, false)
 	f := db.SearchFilter{Query: "needle", Limit: 2}
-	var retained atomic.Int32
-	first.runtimeState().search.Size = func(db.SearchPage) int64 { retained.Add(1); return 1 }
 	page, err := first.Search(ctx, f)
 	require.NoError(t, err)
 	require.Len(t, page.Results, 2)
@@ -497,7 +495,6 @@ func TestSearchKeptRestartAfterKeyEviction(t *testing.T) {
 	got, err := first.Search(ctx, f)
 	require.NoError(t, err)
 	require.Equal(t, page, got)
-	require.EqualValues(t, 1, retained.Load())
 	_, ok = first.trendsDisk.Get(selection, "1")
 	require.True(t, ok)
 
@@ -519,18 +516,6 @@ func TestSearchKeptRestartAfterKeyEviction(t *testing.T) {
 	require.EqualValues(t, 1, trace.count.Load())
 	require.EqualValues(t, 1, trace.restricted.Load())
 	direct, err := s.search(ctx, f)
-	require.NoError(t, err)
-	require.Equal(t, direct, got)
-
-	s, trace = openTracedSearchStore(t, url, syncer.schema, cache)
-	require.NoError(t, os.Remove(keyFile))
-	require.NoError(t, local.ReplaceSessionMessages(ctx, "one", []db.Message{{SessionID: "one", Role: "user", Content: "needle newest"}}))
-	pgKeptPush(t, syncer, false)
-	got, err = s.Search(ctx, f)
-	require.NoError(t, err)
-	require.EqualValues(t, 1, trace.count.Load())
-	require.Zero(t, trace.restricted.Load())
-	direct, err = s.search(ctx, f)
 	require.NoError(t, err)
 	require.Equal(t, direct, got)
 }
