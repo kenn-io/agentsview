@@ -199,6 +199,32 @@ describe("GeneratedInsightsPanel", () => {
     }
   });
 
+  it("completes the checklist after loading an empty archive", async () => {
+    state.store.items = [];
+    state.store.selectedId = null;
+    state.store.selectedItem = undefined;
+    component = mount(GeneratedInsightsPanel, { target: document.body });
+    await tick();
+    await mocks.load.mock.results[0]!.value;
+
+    expect(gettingStarted.complete).toHaveBeenCalledExactlyOnceWith("insights");
+  });
+
+  it("does not complete the checklist when the archive load fails", async () => {
+    state.store.items = [];
+    state.store.selectedId = null;
+    state.store.selectedItem = undefined;
+    mocks.load.mockImplementationOnce(async () => {
+      state.store.error = "load failed";
+    });
+    component = mount(GeneratedInsightsPanel, { target: document.body });
+    await tick();
+    await mocks.load.mock.results[0]!.value;
+
+    expect(gettingStarted.complete).not.toHaveBeenCalled();
+    state.store.error = null;
+  });
+
   it("shows every input that scopes a generated report", async () => {
     component = mount(GeneratedInsightsPanel, { target: document.body });
     await tick();
@@ -291,8 +317,6 @@ describe("GeneratedInsightsPanel", () => {
     component = mount(GeneratedInsightsPanel, { target: document.body });
     await tick();
 
-    expect(gettingStarted.complete).not.toHaveBeenCalled();
-
     const report = Array.from(
       document.querySelectorAll<HTMLButtonElement>(".generated-list button"),
     ).find((button) => button.textContent?.includes("agentsview"));
@@ -301,7 +325,6 @@ describe("GeneratedInsightsPanel", () => {
     await tick();
 
     expect(mocks.select).toHaveBeenCalledWith(42);
-    expect(gettingStarted.complete).toHaveBeenCalledExactlyOnceWith("insights");
     expect(router.params).toEqual({ tab: "generated", insight: "42" });
   });
 

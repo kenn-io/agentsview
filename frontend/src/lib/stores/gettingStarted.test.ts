@@ -46,16 +46,6 @@ describe("getting started", () => {
     expect(JSON.parse(localStorage.getItem(key)!)).toContain("search");
   });
 
-  it("updates visibility on another tab's storage event", () => {
-    const store = new GettingStartedStore(new ReadProgressStore());
-    localStorage.setItem(key, '["dismissed"]');
-    window.dispatchEvent(new StorageEvent("storage", { key, storageArea: localStorage }));
-    expect(store.visible).toBe(false);
-    localStorage.clear();
-    window.dispatchEvent(new StorageEvent("storage", { key: null, storageArea: localStorage }));
-    expect(store.visible).toBe(true);
-  });
-
   it("preserves another tab's progress and unknown members on write", () => {
     const stale = new GettingStartedStore(new ReadProgressStore());
     localStorage.setItem(key, '["session","future"]');

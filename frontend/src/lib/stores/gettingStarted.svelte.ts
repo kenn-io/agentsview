@@ -18,11 +18,6 @@ export class GettingStartedStore {
 
   constructor(progress: ReadProgressStore = readProgress) {
     if (this.done.size === 0 && progress.hasMarkers) this.done.add("dismissed");
-    if (typeof window !== "undefined") {
-      window.addEventListener("storage", (event) => {
-        if (event.key === key || event.key === null) this.done = new Set(read());
-      });
-    }
   }
 
   get visible(): boolean {

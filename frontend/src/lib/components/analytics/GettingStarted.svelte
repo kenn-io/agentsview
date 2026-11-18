@@ -73,24 +73,12 @@
 
 <style>
   .items {
-    display: grid;
-    grid-template-columns: repeat(4, max-content);
+    display: flex;
+    flex-wrap: wrap;
     gap: var(--space-4) var(--space-8);
     margin: 0;
     padding: 0;
     list-style: none;
-  }
-
-  @media (max-width: 1100px) {
-    .items {
-      grid-template-columns: repeat(2, max-content);
-    }
-  }
-
-  @media (max-width: 560px) {
-    .items {
-      grid-template-columns: max-content;
-    }
   }
 
   .item {

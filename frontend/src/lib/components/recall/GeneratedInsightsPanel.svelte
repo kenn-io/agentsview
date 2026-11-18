@@ -1,7 +1,7 @@
 <script lang="ts">
   import { formatCount } from "../../utils/format.js";
   import { errorTelemetry } from "../../utils/error-telemetry.js";
-  import { onDestroy, onMount, untrack } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { gettingStarted } from "../../stores/gettingStarted.svelte.js";
   import {
     Button,
@@ -271,16 +271,15 @@
     return "";
   }
 
+  async function loadInsights() {
+    await insights.load();
+    if (!insights.error) gettingStarted.complete("insights");
+  }
+
   onMount(() => {
     void sessions.loadProjects();
     void sessions.loadAgents();
-    void insights.load();
-  });
-
-  $effect(() => {
-    if (insights.selectedItem) {
-      untrack(() => gettingStarted.complete("insights"));
-    }
+    void loadInsights();
   });
 
   onDestroy(() => {
@@ -419,7 +418,7 @@
   </Card>
 
   {#if insights.error}
-    <LoadError message={insights.error} onRetry={() => void insights.load()} telemetry="insight" />
+    <LoadError message={insights.error} onRetry={() => void loadInsights()} telemetry="insight" />
   {/if}
   {#if insights.error && insights.items.length === 0 && insights.tasks.length === 0}
     <!-- Nothing loaded to show under the error. -->
