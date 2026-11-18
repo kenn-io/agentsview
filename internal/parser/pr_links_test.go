@@ -221,8 +221,10 @@ func TestPromptPRLinks(t *testing.T) {
 }
 
 func TestMergePRLinksDeduplicatesIdentity(t *testing.T) {
-	first := PRLink{URL: "https://github.com/Owner/Repo/pull/007", Host: "github.com", Repository: "Owner/Repo", Number: 7}
-	duplicate := PRLink{URL: "http://GITHUB.COM/owner/repo/pull/7", Host: "GITHUB.COM", Repository: "owner/repo", Number: 7}
+	first, ok := NewPRLink("https://github.com/Owner/Repo/pull/007", "Owner/Repo", 7)
+	require.True(t, ok)
+	duplicate, ok := NewPRLink("http://GITHUB.COM/owner/repo/pull/7", "owner/repo", 7)
+	require.True(t, ok)
 	otherHost := PRLink{URL: "https://forge.example/owner/repo/pull/7", Host: "forge.example", Repository: "owner/repo", Number: 7}
 	otherRepo := PRLink{URL: "https://github.com/owner/other/pull/7", Host: "github.com", Repository: "owner/other", Number: 7}
 	otherNumber := PRLink{URL: "https://github.com/owner/repo/pull/8", Host: "github.com", Repository: "owner/repo", Number: 8}

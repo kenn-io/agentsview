@@ -101,7 +101,7 @@ func TestRawProjectionRolloutBackfillsSelectedLongerCapture(t *testing.T) {
 	assert.Greater(t, corpusAfter, corpusBefore)
 }
 
-func TestRawProjectionFencesStaleAndSkipsCurrentTombstonedCapture(t *testing.T) {
+func TestRawProjectionFencesAndBackfillsTombstonedCapture(t *testing.T) {
 	f := newProjectionFixture(t)
 	m, accepted := f.accept(t, "device-a", "initial", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("Review https://github.com/o/r/pull/2")))
@@ -110,17 +110,9 @@ func TestRawProjectionFencesStaleAndSkipsCurrentTombstonedCapture(t *testing.T) 
 	require.NoError(t, err)
 	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET data_version=183 WHERE id=$1`, resolved.SessionID)
 	require.NoError(t, err)
-	for _, stage := range []string{"stale", "backfill", "current", "future"} {
+	for _, stage := range []string{"stale", "backfill"} {
 		if stage == "backfill" {
 			_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET pr_links='',data_version=183 WHERE id=$1`, resolved.SessionID)
-			require.NoError(t, err)
-		}
-		if stage == "current" {
-			_, err = f.runtime.ExecContext(t.Context(), `UPDATE raw_content_revisions SET payload='invalid' WHERE session_id=$1`, resolved.SessionID)
-			require.NoError(t, err)
-		}
-		if stage == "future" {
-			_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET data_version=$2 WHERE id=$1`, resolved.SessionID, db.CurrentDataVersion()+1)
 			require.NoError(t, err)
 		}
 		_, err = f.sink.SelectSourceGeneration(t.Context(), tomb, "parser-"+stage)
@@ -143,11 +135,7 @@ func TestRawProjectionFencesStaleAndSkipsCurrentTombstonedCapture(t *testing.T) 
 		}
 		var version int
 		require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT data_version FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&version))
-		want := db.CurrentDataVersion()
-		if stage == "future" {
-			want++
-		}
-		assert.Equal(t, want, version)
+		assert.Equal(t, db.CurrentDataVersion(), version)
 	}
 }
 

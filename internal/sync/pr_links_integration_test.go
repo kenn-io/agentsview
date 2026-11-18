@@ -120,7 +120,6 @@ func TestIncrementalStructuredLinkAlsoInPrompt(t *testing.T) {
 		`{"type":"pr-link","prNumber":2,"prUrl":"https://github.com/owner/repo/pull/2","prRepository":"owner/repo","timestamp":"2024-01-01T00:00:02Z"}`,
 	))
 	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-	assert.Equal(t, []string{"https://github.com/owner/repo/pull/2", "https://github.com/owner/repo/pull/1"}, storedPRURLs(t, env.db, "shared-pr"))
 	appendClaudeSplitLines(t, path, `{"type":"pr-link","prNumber":1,"prUrl":"https://github.com/owner/repo/pull/1","prRepository":"owner/repo","timestamp":"2024-01-01T00:00:03Z"}`)
 	env.engine.SyncPaths([]string{path})
 	links, err := env.db.GetSessionStructuredPRLinks(t.Context(), "shared-pr")

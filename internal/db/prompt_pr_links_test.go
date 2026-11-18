@@ -51,8 +51,7 @@ func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
 	require.True(t, ok)
 	s := Session{ID: "archived", Project: "project", Machine: "local", Agent: "chatgpt", PRLinks: []PRLink{link}}
 	require.NoError(t, d.UpsertSession(t.Context(), s))
-	dialogue := "https://github.com/o/r/pull/42"
-	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "user", Content: dialogue + " https://github.com/o/r/pull/3", DialogueText: &dialogue}}))
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "user", Content: "https://github.com/o/r/pull/42"}}))
 	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links=structured_pr_links WHERE id=?`, s.ID); err != nil {
 			return err
