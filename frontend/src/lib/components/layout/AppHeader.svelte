@@ -44,12 +44,15 @@
   import ProjectTypeahead from "./ProjectTypeahead.svelte";
   import TranscriptControls from "./TranscriptControls.svelte";
   import ImportModal from "../import/ImportModal.svelte";
-  import { claudeAISync } from "../../stores/claudeAISync.svelte.js";
+  import { browserSync, browserSyncPlatforms } from "../../stores/browserSync.svelte.js";
 
   const isMac = navigator.platform.toUpperCase().includes("MAC");
   const modKey = isMac ? "⌘" : "Ctrl";
 
   let showImportModal = $state(false);
+  const syncingLabel = $derived(
+    m.header_actions_import_syncing({ service: browserSyncPlatforms[browserSync.provider].service }),
+  );
 
   /** True while TopBar has collapsed the nav tabs into its dropdown —
    * side-region snippets read it to drop their labels. */
@@ -293,9 +296,9 @@
       </MenuContent>
     </Menu>
 
-    <!-- A running Claude.ai sync keeps a visible Import button so its
+    <!-- A running browser Sync keeps a visible Import button so its
          progress is never hidden in the menu. -->
-    {#if claudeAISync.running}
+    {#if browserSync.running}
     <button
         class="import-btn"
         onclick={() => {
@@ -306,12 +309,12 @@
           ? m.header_actions_import_archive_only()
           : sync.readOnly
           ? m.header_actions_import_unavailable()
-          : claudeAISync.running
-          ? m.header_actions_import_claude_syncing()
+          : browserSync.running
+          ? syncingLabel
           : m.header_actions_import_conversations()}
-        aria-label={claudeAISync.running ? m.header_actions_import_claude_syncing() : m.header_actions_import_conversations()}
+        aria-label={browserSync.running ? syncingLabel : m.header_actions_import_conversations()}
       >
-        {#if claudeAISync.running}
+        {#if browserSync.running}
           <span class="sync-spinner" aria-hidden="true"><Spinner size={12} /></span>
         {:else}
           <DownloadIcon size="12" strokeWidth="2" aria-hidden="true" />

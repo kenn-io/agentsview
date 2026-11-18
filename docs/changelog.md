@@ -15,7 +15,8 @@ The latest release is
   `agentsview source import --type chatgpt --sync` with Chrome open and signed
   in to ChatGPT. Later runs fetch only chats that changed. New turns are added
   in place; an edited or shorter chat keeps its previous version in Trash, so
-  pins are not lost. The Import dialog still syncs only Claude.ai. See
+  pins are not lost. You can also open **Import conversations**, choose
+  ChatGPT, and click **Sync**. See
   [Sync ChatGPT chats](/docs/chat-import/#sync-chatgpt-chats).
 
 - Sync Gemini Apps chats with every turn, instead of the one-prompt sessions a

@@ -1,14 +1,32 @@
 import type { ImporterImportStats as ImportStats } from "../api/generated/index.js";
 import type { BrowserHost } from "../api/browserHost.js";
-import { syncClaudeAI } from "../api/client.js";
+import { syncBrowser, type BrowserSyncPlatform } from "../api/client.js";
 import { ApiError } from "../api/runtime.js";
 import { m } from "../i18n/index.js";
 import { reportSyncFailed } from "../utils/telemetry.js";
 
-// Claude.ai Sync outlives the import dialog: closing the dialog hides it,
+export type { BrowserSyncPlatform };
+
+// How the dialog names each platform: `service` in sentences, `site` for the
+// tab Sync opens, and the page Sign in opens in Chrome.
+export const browserSyncPlatforms: Record<
+  BrowserSyncPlatform,
+  { service: string; site: string; signInURL: string }
+> = {
+  "claude-ai": {
+    service: "Claude.ai",
+    site: "claude.ai",
+    signInURL: "https://claude.ai/login?return_url=%2Fnew",
+  },
+  chatgpt: { service: "ChatGPT", site: "chatgpt.com", signInURL: "https://chatgpt.com/" },
+};
+
+// Browser Sync outlives the import dialog: closing the dialog hides it,
 // and only stop() cancels the run. The outcome stays until dismiss().
-class ClaudeAISyncStore {
+class BrowserSyncStore {
   running = $state(false);
+  // The platform of the current run, or of the outcome shown after it.
+  provider = $state<BrowserSyncPlatform>("claude-ai");
   progress = $state<ImportStats | null>(null);
   result = $state<ImportStats | null>(null);
   error = $state<string | null>(null);
@@ -16,9 +34,14 @@ class ClaudeAISyncStore {
   flag = $state<string | null>(null);
   private controller: AbortController | undefined;
 
-  async start(host: BrowserHost | undefined, onimported: () => void) {
+  async start(
+    platform: BrowserSyncPlatform,
+    host: BrowserHost | undefined,
+    onimported: () => void,
+  ) {
     if (this.running) return;
     this.dismiss();
+    this.provider = platform;
     this.running = true;
     const controller = new AbortController();
     this.controller = controller;
@@ -29,7 +52,7 @@ class ClaudeAISyncStore {
     };
     let refreshAfterSync = true;
     try {
-      const stats = await syncClaudeAI(host, callbacks, controller.signal);
+      const stats = await syncBrowser(platform, host, callbacks, controller.signal);
       if (!controller.signal.aborted) this.result = stats;
     } catch (e) {
       if (controller.signal.aborted) return;
@@ -42,7 +65,7 @@ class ClaudeAISyncStore {
       ) {
         this.flag = e.code ?? null;
       } else if (e instanceof ApiError && e.code === "chrome_sync_running") {
-        this.error = m.import_claude_sync_running();
+        this.error = m.import_sync_running();
         refreshAfterSync = false;
       } else {
         this.error = e instanceof Error ? e.message : m.import_failed();
@@ -73,4 +96,4 @@ class ClaudeAISyncStore {
   }
 }
 
-export const claudeAISync = new ClaudeAISyncStore();
+export const browserSync = new BrowserSyncStore();

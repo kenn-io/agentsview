@@ -11,13 +11,13 @@ import { m } from "../../i18n/index.js";
 import { setLocale } from "../../paraglide/runtime.js";
 import { ApiError } from "../../api/runtime.js";
 import { sync as syncState } from "../../stores/sync.svelte.js";
-import { claudeAISync } from "../../stores/claudeAISync.svelte.js";
+import { browserSync } from "../../stores/browserSync.svelte.js";
 
 const host = vi.hoisted(() => ({ connect: vi.fn(), close: vi.fn(), fetch: vi.fn() }));
 const getBrowserHost = vi.hoisted(() => vi.fn());
 const isRemoteConnection = vi.hoisted(() => vi.fn());
 const chromeStatus = vi.hoisted(() => vi.fn());
-const syncClaudeAI = vi.hoisted(() => vi.fn());
+const syncBrowser = vi.hoisted(() => vi.fn());
 vi.mock("../../api/browserHost.js", () => ({ getBrowserHost }));
 vi.mock("../../api/runtime.js", async (original) => ({
   ...(await original<typeof import("../../api/runtime.js")>()),
@@ -27,17 +27,17 @@ vi.mock("../../api/generated/index.js", async (original) => ({
   ...(await original<typeof import("../../api/generated/index.js")>()),
   ImportService: { getApiV1ImportClaudeAiChrome: chromeStatus },
 }));
-vi.mock("../../api/client.js", () => ({
+vi.mock("../../api/client.js", async (original) => ({
+  relayHost: (await original<typeof import("../../api/client.js")>()).relayHost,
   connectClaudeAI: (browser: typeof host) => browser.connect(),
-  syncClaudeAI,
+  syncBrowser,
   importClaudeAI: vi.fn(),
   importChatGPT: vi.fn(),
 }));
 const ready = { connected: true };
 const stats = { imported: 12, updated: 3, skipped: 297, errors: 0 };
 const props = () => ({ open: true, onclose: vi.fn(), onimported: vi.fn() });
-const syncButton = () =>
-  screen.getByRole("button", { name: m.import_claude_sync() }) as HTMLButtonElement;
+const syncButton = () => screen.getByRole("button", { name: m.import_sync() }) as HTMLButtonElement;
 async function clickSync() {
   await waitFor(() => expect(syncButton().disabled).toBe(false));
   await fireEvent.click(syncButton());
@@ -47,12 +47,12 @@ beforeEach(() => {
   isRemoteConnection.mockReturnValue(false);
   getBrowserHost.mockReturnValue(undefined);
   chromeStatus.mockResolvedValue(ready);
-  syncClaudeAI.mockResolvedValue(stats);
+  syncBrowser.mockResolvedValue(stats);
   void setLocale("en", { reload: false });
 });
 afterEach(() => {
-  claudeAISync.stop();
-  claudeAISync.dismiss();
+  browserSync.stop();
+  browserSync.dismiss();
   vi.useRealTimers();
   vi.resetAllMocks();
   vi.restoreAllMocks();
@@ -93,7 +93,77 @@ it("shows setup instructions when disconnected", async () => {
   expect(screen.getByText("Terminal")).toBeTruthy();
   expect(screen.getByText("agentsview source chrome setup")).toBeTruthy();
   expect(screen.getByRole("button", { name: "Copy command" })).toBeTruthy();
-  expect(screen.getByText(m.import_claude_setup_load({ url: "chrome://extensions" }))).toBeTruthy();
+  expect(screen.getByText(m.import_sync_setup_load({ url: "chrome://extensions" }))).toBeTruthy();
+});
+
+it("syncs ChatGPT through Chrome above the ZIP upload and opens ChatGPT sign-in after auth failure", async () => {
+  syncBrowser.mockRejectedValueOnce(
+    new ApiError(0, "Server auth text", "browser_sync_auth_required"),
+  );
+  const open = vi.spyOn(window, "open").mockReturnValue(null);
+  render(ImportModal, props());
+  await fireEvent.click(screen.getByRole("button", { name: "ChatGPT" }));
+  await waitFor(() => expect(screen.getByText("Connected")).toBeTruthy());
+  const tabNote = screen.getByText(
+    "Sync opens a background chatgpt.com tab if none is open. The tab stays open after Sync.",
+  );
+  const upload = screen.getByText(m.import_drop_here());
+  expect(tabNote.compareDocumentPosition(upload) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  await clickSync();
+  expect(syncBrowser).toHaveBeenCalledExactlyOnceWith(
+    "chatgpt",
+    undefined,
+    expect.objectContaining({ onProgress: expect.any(Function) }),
+    expect.any(AbortSignal),
+  );
+  await waitFor(() => expect(screen.getByText("Signed out")).toBeTruthy());
+  const signedOut =
+    "Sign in to chatgpt.com in the Chrome profile with the AgentsView extension. Enable the extension in only one Chrome profile. Sync uses the first profile that connects.";
+  expect(screen.getByText(signedOut)).toBeTruthy();
+  expect(screen.queryByText("Server auth text")).toBeNull();
+  await fireEvent.click(screen.getByRole("button", { name: signedOut }));
+  expect(open).toHaveBeenCalledExactlyOnceWith(
+    "https://chatgpt.com/",
+    "_blank",
+    "noopener,noreferrer",
+  );
+});
+
+it("uses Chrome for ChatGPT in the desktop app and polls its status", async () => {
+  getBrowserHost.mockReturnValue(host);
+  chromeStatus.mockResolvedValue({ connected: false });
+  render(ImportModal, props());
+  expect(screen.getByText("Account")).toBeTruthy();
+  expect(chromeStatus).not.toHaveBeenCalled();
+  await fireEvent.click(screen.getByRole("button", { name: "ChatGPT" }));
+  await waitFor(() => expect(screen.getByText("Not connected")).toBeTruthy());
+  expect(screen.getByText("Chrome")).toBeTruthy();
+  expect(screen.queryByText("Account")).toBeNull();
+  expect(screen.queryByText(m.import_claude_desktop_note())).toBeNull();
+  expect(screen.getByText("agentsview source chrome setup")).toBeTruthy();
+  expect(syncButton().disabled).toBe(true);
+  chromeStatus.mockResolvedValue(ready);
+  await fireEvent.focus(window);
+  await clickSync();
+  expect(syncBrowser).toHaveBeenCalledExactlyOnceWith(
+    "chatgpt",
+    undefined,
+    expect.objectContaining({ onProgress: expect.any(Function) }),
+    expect.any(AbortSignal),
+  );
+  expect(host.connect).not.toHaveBeenCalled();
+});
+
+it("clears a failed Sync when switching providers so Retry cannot cross providers", async () => {
+  syncBrowser.mockRejectedValueOnce(new Error("Claude.ai failed"));
+  render(ImportModal, props());
+  await clickSync();
+  await waitFor(() => expect(screen.getByText("Claude.ai failed")).toBeTruthy());
+  await fireEvent.click(screen.getByRole("button", { name: "ChatGPT" }));
+  expect(screen.queryByText("Claude.ai failed")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  await clickSync();
+  expect(syncBrowser.mock.calls.map((call) => call[0])).toEqual(["claude-ai", "chatgpt"]);
 });
 
 function pendingSync() {
@@ -103,7 +173,7 @@ function pendingSync() {
     resolve: (value: typeof stats) => void;
     reject: (error: Error) => void;
   };
-  syncClaudeAI.mockImplementation((_host, callbacks, signal) => {
+  syncBrowser.mockImplementation((_platform, _host, callbacks, signal) => {
     run.signal = signal;
     run.progress = callbacks.onProgress;
     return new Promise((resolve, reject) => {
@@ -120,7 +190,7 @@ it("cancels Sync with Stop and refreshes completed chats", async () => {
   render(ImportModal, p);
   await clickSync();
   expect(screen.getByText("Syncing...")).toBeTruthy();
-  expect(screen.getByText(m.import_claude_sync_background())).toBeTruthy();
+  expect(screen.getByText(m.import_sync_background())).toBeTruthy();
   expect(screen.queryByText(m.import_drop_here())).toBeNull();
   run.progress({ imported: 128, updated: 0, skipped: 0, errors: 0 });
   await tick();
@@ -204,20 +274,20 @@ it("queues a new Sync behind a stopped run and ignores the old run's progress an
   const progress: ((value: typeof stats) => void)[] = [];
   // The client starts a new run only after the stopped run settles, so the
   // queued call stays pending while the old run finishes.
-  syncClaudeAI
-    .mockImplementationOnce((_host, callbacks) => {
+  syncBrowser
+    .mockImplementationOnce((_platform, _host, callbacks) => {
       progress.push(callbacks.onProgress);
       return new Promise((_, reject) => {
         rejectOld = reject;
       });
     })
-    .mockImplementationOnce((_host, _callbacks, signal) => {
+    .mockImplementationOnce((_platform, _host, _callbacks, signal) => {
       queuedSignal = signal;
       return new Promise((_, reject) => {
         rejectQueued = reject;
       });
     })
-    .mockImplementationOnce((_host, callbacks) => {
+    .mockImplementationOnce((_platform, _host, callbacks) => {
       progress.push(callbacks.onProgress);
       return new Promise<typeof stats>((resolve) => {
         resolveRetry = resolve;
@@ -228,7 +298,7 @@ it("queues a new Sync behind a stopped run and ignores the old run's progress an
   await clickSync();
   await fireEvent.click(screen.getByRole("button", { name: "Stop" }));
   await clickSync();
-  expect(syncClaudeAI).toHaveBeenCalledTimes(2);
+  expect(syncBrowser).toHaveBeenCalledTimes(2);
   progress[0]!({ imported: 128, updated: 0, skipped: 0, errors: 0 });
   rejectOld(new Error("Stopped old run"));
   await waitFor(() => expect(p.onimported).toHaveBeenCalledOnce());
@@ -246,7 +316,7 @@ it("queues a new Sync behind a stopped run and ignores the old run's progress an
     expect.objectContaining({ code: "chrome_sync_running" }),
   );
   await fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-  expect(syncClaudeAI).toHaveBeenCalledTimes(3);
+  expect(syncBrowser).toHaveBeenCalledTimes(3);
   progress[1]!({ imported: 7, updated: 0, skipped: 0, errors: 0 });
   await tick();
   expect(screen.getByText("7 conversations processed...")).toBeTruthy();
@@ -256,7 +326,7 @@ it("queues a new Sync behind a stopped run and ignores the old run's progress an
 });
 
 it("offers browser sign-in after auth failure", async () => {
-  syncClaudeAI.mockRejectedValueOnce(
+  syncBrowser.mockRejectedValueOnce(
     new ApiError(0, "Server auth text", "browser_sync_auth_required"),
   );
   const open = vi.spyOn(window, "open").mockReturnValue(null);
@@ -284,7 +354,7 @@ it("offers browser sign-in after auth failure", async () => {
 it.each(["browser_sync_auth_required", "chrome_host_update_required"])(
   "recovers from %s without a reload",
   async (code) => {
-    syncClaudeAI.mockRejectedValueOnce(new ApiError(0, "Server error text", code));
+    syncBrowser.mockRejectedValueOnce(new ApiError(0, "Server error text", code));
     render(ImportModal, props());
     await clickSync();
     await waitFor(() =>
@@ -308,7 +378,7 @@ it.each(["browser_sync_auth_required", "chrome_host_update_required"])(
 );
 
 it("clears a Sync conflict after closing while status hangs", async () => {
-  syncClaudeAI.mockRejectedValueOnce(
+  syncBrowser.mockRejectedValueOnce(
     new ApiError(409, "Server conflict text", "chrome_sync_running"),
   );
   const p = props();
@@ -336,7 +406,7 @@ it.each([
   new Error("Network interrupted"),
   new ApiError(0, "Auth required", "browser_sync_auth_required"),
 ])("keeps processed counts after a partial Sync fails with %s", async (error) => {
-  syncClaudeAI.mockImplementationOnce(async (_host, callbacks) => {
+  syncBrowser.mockImplementationOnce(async (_platform, _host, callbacks) => {
     callbacks.onProgress({ imported: 128, updated: 3, skipped: 7, errors: 1 });
     throw error;
   });
@@ -372,7 +442,8 @@ it("uses the desktop account and email-code sign-in without polling Chrome", asy
   await fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
   expect(host.connect).toHaveBeenCalledOnce();
   await clickSync();
-  expect(syncClaudeAI).toHaveBeenCalledWith(
+  expect(syncBrowser).toHaveBeenCalledWith(
+    "claude-ai",
     host,
     expect.objectContaining({ onProgress: expect.any(Function) }),
     expect.any(AbortSignal),
@@ -382,9 +453,7 @@ it("uses the desktop account and email-code sign-in without polling Chrome", asy
 
 it("shows desktop signed-out state", async () => {
   getBrowserHost.mockReturnValue(host);
-  syncClaudeAI.mockRejectedValueOnce(
-    new ApiError(0, "Auth required", "browser_sync_auth_required"),
-  );
+  syncBrowser.mockRejectedValueOnce(new ApiError(0, "Auth required", "browser_sync_auth_required"));
   render(ImportModal, props());
   await clickSync();
   await waitFor(() => expect(screen.getByText("Signed out")).toBeTruthy());
@@ -475,7 +544,7 @@ it.each([new ApiError(503, "Temporarily unavailable"), new Error("Network interr
 
 it("localizes auth state from its code", async () => {
   void setLocale("fr", { reload: false });
-  syncClaudeAI.mockRejectedValueOnce(
+  syncBrowser.mockRejectedValueOnce(
     new ApiError(0, "English auth message", "browser_sync_auth_required"),
   );
   render(ImportModal, props());
@@ -489,7 +558,7 @@ it("localizes auth state from its code", async () => {
   expect(screen.queryByText("English auth message")).toBeNull();
 });
 
-it("polls every two seconds and pauses on hidden page, sync, tab change and close", async () => {
+it("polls every two seconds across provider tabs and pauses while hidden, syncing, or closed", async () => {
   vi.useFakeTimers();
   const p = props();
   const { rerender } = render(ImportModal, p);
@@ -509,11 +578,12 @@ it("polls every two seconds and pauses on hidden page, sync, tab change and clos
   expect(chromeStatus).toHaveBeenCalledTimes(4);
   await fireEvent.click(screen.getByRole("button", { name: "ChatGPT" }));
   await vi.advanceTimersByTimeAsync(4000);
-  expect(chromeStatus).toHaveBeenCalledTimes(4);
+  expect(chromeStatus).toHaveBeenCalledTimes(6);
   await fireEvent.click(screen.getByRole("button", { name: "Claude.ai" }));
-  expect(chromeStatus).toHaveBeenCalledTimes(5);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(chromeStatus).toHaveBeenCalledTimes(6);
   let reject!: (error: Error) => void;
-  syncClaudeAI.mockImplementation(
+  syncBrowser.mockImplementation(
     () =>
       new Promise((_, r) => {
         reject = r;
@@ -521,21 +591,21 @@ it("polls every two seconds and pauses on hidden page, sync, tab change and clos
   );
   await fireEvent.click(syncButton());
   await vi.advanceTimersByTimeAsync(4000);
-  expect(chromeStatus).toHaveBeenCalledTimes(5);
+  expect(chromeStatus).toHaveBeenCalledTimes(6);
   await fireEvent.click(screen.getByRole("button", { name: "Stop" }));
   reject(new Error("Stopped"));
   await tick();
   await vi.advanceTimersByTimeAsync(0);
-  expect(chromeStatus).toHaveBeenCalledTimes(6);
+  expect(chromeStatus).toHaveBeenCalledTimes(7);
   await rerender({ ...p, open: false });
   await vi.advanceTimersByTimeAsync(4000);
-  expect(chromeStatus).toHaveBeenCalledTimes(6);
+  expect(chromeStatus).toHaveBeenCalledTimes(7);
 });
 
 it("cancels stale reads and clears auth on close and reopen", async () => {
   const p = props();
   const { rerender } = render(ImportModal, p);
-  syncClaudeAI.mockRejectedValueOnce(new ApiError(0, "Auth", "browser_sync_auth_required"));
+  syncBrowser.mockRejectedValueOnce(new ApiError(0, "Auth", "browser_sync_auth_required"));
   await clickSync();
   await waitFor(() => expect(screen.getByText("Signed out")).toBeTruthy());
   let resolve!: (status: typeof ready) => void;
