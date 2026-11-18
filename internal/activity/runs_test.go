@@ -243,8 +243,9 @@ func TestSessionRunsGobRoundTrip(t *testing.T) {
 	start, end := time.UnixMicro(1500000).UTC(), time.UnixMicro(4500000).UTC()
 	wireRestored, err := original.Wire().Restore()
 	require.NoError(t, err)
-	require.Equal(t, restored.AppendClippedBefore(nil, "s", start, end, time.UnixMicro(2000000)), wireRestored.AppendClippedBefore(nil, "s", start, end, time.UnixMicro(2000000)))
-	require.Equal(t, []Run{{SessionID: "s", Start: time.UnixMicro(1500000).UTC(), End: time.UnixMicro(3000000).UTC(), Tail: time.UnixMicro(2000000).UTC(), Model: "model-a"}}, restored.AppendClippedBefore(nil, "s", start, end, time.UnixMicro(2000000)))
+	want := []Run{{SessionID: "s", Start: time.UnixMicro(1500000).UTC(), End: time.UnixMicro(3000000).UTC(), Tail: time.UnixMicro(2000000).UTC(), Model: "model-a"}}
+	require.Equal(t, want, wireRestored.AppendClippedBefore(nil, "s", start, end, time.UnixMicro(2000000)))
+	require.Equal(t, want, restored.AppendClippedBefore(nil, "s", start, end, time.UnixMicro(2000000)))
 	for _, invalid := range []encodedSessionRuns{
 		{Bounds: []int64{1}, Runs: []encodedSessionRun{{First: 0, Last: 2}}},
 		{Bounds: []int64{1, 2}, Runs: []encodedSessionRun{{First: 1, Last: 1}}},
