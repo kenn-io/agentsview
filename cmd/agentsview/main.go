@@ -2220,6 +2220,9 @@ func printSyncSummary(stats sync.SyncStats, t time.Time) {
 		"Sync complete: %d sessions synced",
 		stats.Synced,
 	)
+	if stats.ChangesOnly {
+		summary = "Sync complete: applied the changes the daemon's file watchers collected"
+	}
 	if isTerminalWriter(os.Stdout) {
 		summary = "\n" + summary
 	}
@@ -2537,6 +2540,8 @@ type fileWatcher struct {
 	pauseDispatch func()
 	queueRetry    func(sync.WatchBatch)
 	flushPending  func(context.Context) error
+	// flushRetry also syncs work that waits for its retry.
+	flushRetry    func(context.Context) error
 	unwatchedDirs []string
 }
 
@@ -2576,6 +2581,7 @@ func startFileWatcher(
 			stop: func() {}, openDispatch: func() {}, pauseDispatch: func() {},
 			queueRetry:    func(sync.WatchBatch) {},
 			flushPending:  func(context.Context) error { return nil },
+			flushRetry:    func(context.Context) error { return nil },
 			unwatchedDirs: []string{"all"},
 		}
 	}
@@ -2641,12 +2647,23 @@ func startFileWatcher(
 			len(unwatchedDirs), unwatchedPollInterval,
 		)
 	}
+	collecting := false
+	flushPending := startWatcherCollection(func() error {
+		err := watcher.StartCollecting()
+		collecting = err == nil
+		return err
+	}, watcher.FlushPending)
+	flushRetry := watcher.FlushPendingAndRetry
+	if !collecting {
+		flushRetry = flushPending
+	}
 	return fileWatcher{
 		stop:          watcher.Stop,
 		openDispatch:  watcher.OpenDispatch,
 		pauseDispatch: watcher.PauseDispatch,
 		queueRetry:    watcher.QueueRetryBatch,
-		flushPending:  startWatcherCollection(watcher.StartCollecting, watcher.FlushPending),
+		flushPending:  flushPending,
+		flushRetry:    flushRetry,
 		unwatchedDirs: unwatchedDirs,
 	}
 }

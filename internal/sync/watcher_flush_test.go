@@ -123,6 +123,39 @@ func TestWatcherFlushPendingKeepsRetryBackoff(t *testing.T) {
 	})
 }
 
+// A manual sync must not report success while failed work waits out its
+// backoff, so its flush takes the retained retry along with fresh work.
+func TestWatcherFlushPendingAndRetrySyncsRetainedWork(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		failed := errors.New("source unavailable")
+		calls := make(chan WatchBatch, 4)
+		fail := true
+		w, err := newWatcherWithBackend(time.Hour, time.Hour, func(_ context.Context, batch WatchBatch) error {
+			calls <- batch
+			if fail && len(batch.ReconcileRoots) > 0 {
+				return failed
+			}
+			return nil
+		}, newFakeWatchBackend(), 8, 1000)
+		require.NoError(t, err)
+		w.Start()
+		defer w.Stop()
+		w.eventSink.Add(backendEvent{Path: "/retry", Root: "/retry", Op: backendOpReconcileRootChange})
+		require.ErrorIs(t, w.FlushPending(t.Context()), failed)
+		<-calls
+		require.False(t, w.eventSink.RetryEmpty())
+
+		fail = false
+		w.eventSink.Add(backendEvent{Path: "/fresh", Op: backendOpWrite})
+		require.NoError(t, w.FlushPendingAndRetry(t.Context()))
+		require.Len(t, calls, 1)
+		batch := <-calls
+		assert.Equal(t, []string{"/fresh"}, batch.Paths)
+		assert.Equal(t, []string{"/retry"}, batch.ReconcileRoots)
+		assert.True(t, w.eventSink.RetryEmpty())
+	})
+}
+
 func TestWatcherFlushPendingStopAndCancellation(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		started := make(chan struct{})

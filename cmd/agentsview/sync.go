@@ -29,7 +29,10 @@ import (
 
 // SyncConfig holds parsed CLI options for the sync command.
 type SyncConfig struct {
-	Full   bool
+	Full bool
+	// Rescan runs a full discovery pass through a running daemon instead of
+	// syncing only the changes its file watchers collected.
+	Rescan bool
 	Host   string
 	Target string
 	// CPUProfile, MemProfile, and Trace are hidden flags that capture a
@@ -122,7 +125,8 @@ func doSync(ctx context.Context, cfg SyncConfig) (hadRemoteFailures bool) {
 				progress := newRemoteProgressPrinter(os.Stdout, time.Now)
 				failures, err := runDaemonRemoteSync(
 					ctx, tr, appCfg.AuthToken,
-					remoteHosts, cfg.Full, includeLocal, progress.Print,
+					remoteHosts, cfg.Full, includeLocal, !cfg.Rescan,
+					progress.Print,
 				)
 				progress.Finish()
 				reportRemoteFailures(failures)
@@ -157,7 +161,7 @@ func doSync(ctx context.Context, cfg SyncConfig) (hadRemoteFailures bool) {
 					onProgress = newSyncProgressPrinter(os.Stdout)
 				}
 				stats, err := runDaemonSync(
-					ctx, tr, appCfg.AuthToken, cfg.Full,
+					ctx, tr, appCfg.AuthToken, cfg.Full, !cfg.Rescan,
 					onProgress,
 				)
 				if progress != nil {
@@ -174,7 +178,7 @@ func doSync(ctx context.Context, cfg SyncConfig) (hadRemoteFailures bool) {
 					)
 					progress = newResyncProgressPrinter(os.Stdout, time.Now)
 					stats, err = runDaemonSync(
-						ctx, tr, appCfg.AuthToken, true,
+						ctx, tr, appCfg.AuthToken, true, false,
 						progress.Print,
 					)
 					progress.Finish()
@@ -984,11 +988,15 @@ func printDirectSyncResult(
 // under itself, so the CLI must retry through /api/v1/resync.
 var errDaemonResyncRequired = errors.New("daemon requires a full resync")
 
+// runDaemonSync asks the daemon to sync the local archive. A full request
+// rebuilds it. Otherwise changesOnly syncs only what the daemon's file watchers
+// collected, and the daemon falls back to a discovery pass when they cannot
+// cover the archive.
 func runDaemonSync(
 	ctx context.Context,
 	tr transport,
 	authToken string,
-	full bool,
+	full, changesOnly bool,
 	onProgress sync.ProgressFunc,
 ) (sync.SyncStats, error) {
 	api, err := apiclient.NewHTTPClient(tr.URL, authToken, &http.Client{Timeout: 0})
@@ -1005,7 +1013,11 @@ func runDaemonSync(
 		}
 		resp, body, stream = response.HTTPResponse, response.Body, response.Stream200
 	} else {
-		response, requestErr := api.PostAPIV1SyncStreamWithResponse(ctx, &apiclient.PostAPIV1SyncRequestOptions{Query: &apiclient.PostAPIV1SyncQuery{Wait: new(true)}})
+		query := &apiclient.PostAPIV1SyncQuery{Wait: new(true)}
+		if changesOnly {
+			query.ChangesOnly = new(true)
+		}
+		response, requestErr := api.PostAPIV1SyncStreamWithResponse(ctx, &apiclient.PostAPIV1SyncRequestOptions{Query: query})
 		if response == nil {
 			return sync.SyncStats{}, requestErr
 		}
@@ -1043,6 +1055,7 @@ func runDaemonRemoteSync(
 	hosts []config.RemoteHost,
 	full bool,
 	includeLocal bool,
+	localChangesOnly bool,
 	onProgress sync.ProgressFunc,
 ) ([]remoteHostFailure, error) {
 	api, err := apiclient.NewHTTPClient(tr.URL, authToken, &http.Client{Timeout: 0})
@@ -1050,6 +1063,9 @@ func runDaemonRemoteSync(
 		return nil, err
 	}
 	body := apiclient.RemoteSyncRequest{Full: full, IncludeLocal: includeLocal}
+	if includeLocal && localChangesOnly {
+		body.LocalChangesOnly = new(true)
+	}
 	for _, host := range hosts {
 		body.Hosts = append(body.Hosts, apiclient.ConfigRemoteHost{Host: host.Host, Transport: new(string(host.Transport)), URL: new(host.URL), Interval: new(int64(host.Interval))})
 	}

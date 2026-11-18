@@ -847,6 +847,15 @@ starts a detached daemon so SQLite writes stay owned by one process. That daemon
 also serves the web UI and remains running after the CLI exits, until stopped or
 its idle timeout expires. The command prints the server URL and how to stop it.
 
+When the daemon is already running, an incremental sync applies only the changes
+its file watchers collected, including changes that failed earlier and wait for
+a retry, and it retries unfinished archive imports. It does not rescan every
+session source, so it stays quick on a large archive. The daemon runs a full
+discovery pass instead before its startup sync finishes, when it was started
+with `--no-sync`, when the archive needs a rebuild, and after a Settings change
+to session sources until a full pass completes. Roots that no watcher covers
+keep the daemon's polling schedule. Pass `--rescan` to rescan every source now.
+
 An incremental local-only sync through the default daemon waits when another
 sync or maintenance pass owns it, then runs its requested pass. It prints
 waiting status; `Ctrl+C` cancels the wait without stopping the existing work.
@@ -871,26 +880,28 @@ that lock, syncs directly, and exits without leaving a server running.
 agentsview source sync [flags]
 ```
 
-| Flag       | Default | Description                                         |
-| ---------- | ------- | --------------------------------------------------- |
-| `--full`   | `false` | Force a full resync regardless of data version       |
-| `--target` |         | Exchange normalized artifacts with a trusted folder |
-| `--host`   |         | Configured remote host name                         |
+| Flag       | Default | Description                                                  |
+| ---------- | ------- | ------------------------------------------------------------ |
+| `--full`   | `false` | Force a full resync regardless of data version               |
+| `--rescan` | `false` | Rescan every session source instead of the collected changes |
+| `--target` |         | Exchange normalized artifacts with a trusted folder          |
+| `--host`   |         | Configured remote host name                                  |
 
 **Examples:**
 
 ```bash
 agentsview source sync           # incremental sync and exit
 agentsview source sync --full    # full resync and exit
+agentsview source sync --rescan  # rescan every session source and exit
 agentsview source sync --target /path/to/shared-folder
 agentsview source sync --host devbox1
 ```
 
-After syncing, a summary of session and message counts is printed to stdout.
-With `--target`, AgentsView then performs one bounded normalized-artifact
-exchange. See [Artifact Folder Sync](/docs/artifact-sync/) for the trust model,
-first-use requirements, and exclusions. `--target` cannot be combined with
-`--host`.
+After a discovery pass, a summary of session counts is printed to stdout. A sync
+that applied only the collected changes says so instead. With `--target`,
+AgentsView then performs one bounded normalized-artifact exchange. See
+[Artifact Folder Sync](/docs/artifact-sync/) for the trust model, first-use
+requirements, and exclusions. `--target` cannot be combined with `--host`.
 
 When `--host` is set, AgentsView syncs only the matching configured
 `[[remote_hosts]]` entry and fails fast on error. This also applies to offline

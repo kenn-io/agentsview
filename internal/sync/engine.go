@@ -3274,7 +3274,17 @@ const (
 // Use this as the mtime cutoff for quick incremental syncs —
 // anything modified at or after this time must be re-evaluated.
 func (e *Engine) LastSyncStartedAt(ctx context.Context) time.Time {
-	raw, err := e.db.GetSyncState(ctx, syncStateStartedAt)
+	return e.syncStateTime(ctx, syncStateStartedAt)
+}
+
+// LastSyncFinishedAt returns the finish time of the most recent full sync
+// that completed without failures. Returns zero time if none has.
+func (e *Engine) LastSyncFinishedAt(ctx context.Context) time.Time {
+	return e.syncStateTime(ctx, syncStateFinishedAt)
+}
+
+func (e *Engine) syncStateTime(ctx context.Context, key string) time.Time {
+	raw, err := e.db.GetSyncState(ctx, key)
 	if err != nil || raw == "" {
 		return time.Time{}
 	}

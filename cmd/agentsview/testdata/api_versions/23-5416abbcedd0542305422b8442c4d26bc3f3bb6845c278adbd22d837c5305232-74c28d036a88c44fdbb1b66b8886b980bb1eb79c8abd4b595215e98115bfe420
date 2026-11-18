@@ -1,0 +1,1 @@
+Manual syncs can ask a running daemon for only the changes its file watchers collected

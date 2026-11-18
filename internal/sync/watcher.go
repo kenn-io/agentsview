@@ -778,7 +778,7 @@ type Watcher struct {
 	startErr            error
 	stop                chan struct{}
 	done                chan struct{}
-	flushRequests       chan chan error
+	flushRequests       chan flushRequest
 	backendStopOnce     sync.Once
 	doneOnce            sync.Once
 }
@@ -912,7 +912,7 @@ func newWatcherWithBackendOptions(
 		rootScopes:         make(map[string][]WatchScope),
 		stop:               make(chan struct{}),
 		done:               make(chan struct{}),
-		flushRequests:      make(chan chan error),
+		flushRequests:      make(chan flushRequest),
 	}
 	if direct, ok := backend.(directEventBackend); ok {
 		direct.bindEventSink(w.eventSink)
@@ -1173,10 +1173,28 @@ func (w *Watcher) PauseDispatch() {
 	w.dispatchEnabled.Store(false)
 }
 
+// flushRequest asks the dispatch loop to sync its fresh work now. With
+// includeRetry, the retained retry goes with it instead of waiting out its
+// backoff.
+type flushRequest struct {
+	result       chan error
+	includeRetry bool
+}
+
 // FlushPending waits for the current callback and a snapshot of fresh work,
 // including backend deliveries already ready when the request is handled.
 // The dispatch loop owns both callbacks; retained retries keep their backoff.
 func (w *Watcher) FlushPending(ctx context.Context) error {
+	return w.flush(ctx, false)
+}
+
+// FlushPendingAndRetry is FlushPending for a caller that asked for a sync
+// now: work that failed and waits for its retry is synced too.
+func (w *Watcher) FlushPendingAndRetry(ctx context.Context) error {
+	return w.flush(ctx, true)
+}
+
+func (w *Watcher) flush(ctx context.Context, includeRetry bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -1189,7 +1207,7 @@ func (w *Watcher) FlushPending(ctx context.Context) error {
 		return ctx.Err()
 	case <-w.done:
 		return os.ErrClosed
-	case w.flushRequests <- result:
+	case w.flushRequests <- flushRequest{result: result, includeRetry: includeRetry}:
 	}
 	select {
 	case <-ctx.Done():
@@ -1282,6 +1300,8 @@ func (w *Watcher) loop() {
 	var retryDueAt time.Time
 	dispatchedRetry := false
 	var flush chan error
+	// flushRetry marks a flush batch that carries the retained retry.
+	flushRetry := false
 	minInterval := w.minInterval
 	var intervalChanged <-chan struct{}
 	refreshInterval := func() {
@@ -1384,7 +1404,7 @@ func (w *Watcher) loop() {
 					w.dispatchMu.Unlock()
 					return
 				}
-				callbackBusy, flushStarted, dispatchedRetry = true, true, false
+				callbackBusy, flushStarted, dispatchedRetry = true, true, flushRetry
 				batches <- flushBatch
 				w.dispatchMu.Unlock()
 			}
@@ -1404,7 +1424,8 @@ func (w *Watcher) loop() {
 		case <-w.stop:
 			return
 
-		case flush = <-requests:
+		case request := <-requests:
+			flush = request.result
 			stopTimer()
 			// A ready backend send can lose the select to this request. Include
 			// the buffered snapshot, or one waiting unbuffered sender, before
@@ -1425,7 +1446,12 @@ func (w *Watcher) loop() {
 					break drainReady
 				}
 			}
-			flushBatch, flushHasBatch = w.eventSink.TakePending(w.agentsForRoot)
+			take := w.eventSink.TakePending
+			flushRetry = request.includeRetry && !w.eventSink.RetryEmpty()
+			if flushRetry {
+				take = w.eventSink.Take
+			}
+			flushBatch, flushHasBatch = take(w.agentsForRoot)
 			firstPendingAt = time.Time{}
 			pendingDelay = w.batchDelay
 			immediatePending = false

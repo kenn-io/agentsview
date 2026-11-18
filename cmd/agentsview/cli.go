@@ -407,6 +407,9 @@ func newSyncCommandWithRunner(run func(context.Context, SyncConfig)) *cobra.Comm
 		Long: "Sync session data through the shared server, starting it in the\n" +
 			"background if needed. The server includes the web UI and continues\n" +
 			"running after this command exits. Stop it with `agentsview daemon stop`.\n\n" +
+			"A daemon that is already running applies only the changes its file\n" +
+			"watchers collected, without rescanning every session source. Pass\n" +
+			"--rescan to rescan them all.\n\n" +
 			"Incremental local-only sync waits if the default daemon is busy, with\n" +
 			"status and Ctrl+C cancellation. For a one-shot offline run,\n" +
 			"stop the daemon first, then use `AGENTSVIEW_NO_DAEMON=1 agentsview source sync`.\n\n" +
@@ -435,6 +438,11 @@ func newSyncCommandWithRunner(run func(context.Context, SyncConfig)) *cobra.Comm
 	cmd.Flags().BoolVar(
 		&cfg.Full, "full", false,
 		"Force a full resync regardless of data version",
+	)
+	cmd.Flags().BoolVar(
+		&cfg.Rescan, "rescan", false,
+		"Rescan every session source instead of syncing only the changes "+
+			"a running daemon's file watchers collected",
 	)
 	cmd.Flags().StringVar(
 		&cfg.Host, "host", "",
