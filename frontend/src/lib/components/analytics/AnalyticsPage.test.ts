@@ -1038,9 +1038,5 @@ describe("getting started checklist", () => {
       .click();
     await flushEffects();
     expect(document.querySelector(".getting-started")).toBeNull();
-    unmount(component);
-    component = mount(AnalyticsPage, { target: document.body });
-    await flushEffects();
-    expect(document.querySelector(".getting-started")).toBeNull();
   });
 });

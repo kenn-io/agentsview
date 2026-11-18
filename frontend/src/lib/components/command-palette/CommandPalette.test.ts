@@ -176,18 +176,6 @@ async function enterSearchQuery(value = "match") {
 }
 
 describe("CommandPalette", () => {
-  it("completes search when one character filters recent sessions", async () => {
-    localStorage.clear();
-    gettingStarted.done = new Set();
-    mockSessions.sessions = [{ ...makeSession("s1", "cursor"), first_message: "日本語" }];
-    const component = mount(CommandPalette, { target: document.body });
-    await tick();
-    await enterSearchQuery("日");
-    expect(mockSearchStore.search).not.toHaveBeenCalled();
-    expect(document.body.textContent).toContain("日本語");
-    expect(gettingStarted.done.has("search")).toBe(true);
-    unmount(component);
-  });
   beforeEach(() => {
     vi.clearAllMocks();
     document.body.replaceChildren();
@@ -202,6 +190,7 @@ describe("CommandPalette", () => {
     mockEmbeddingsService.getApiV1EmbeddingsStatus.mockImplementation(() => new Promise(() => {}));
     mockEmbeddingsService.postApiV1EmbeddingsBuild.mockReset();
     mockSessions.activeSessionId = null;
+    gettingStarted.done = new Set();
     mockSessions.deselectSession.mockImplementation(() => {
       mockSessions.activeSessionId = null;
     });
@@ -598,6 +587,7 @@ describe("CommandPalette", () => {
     const items = document.querySelectorAll(".palette-item");
     expect(items).toHaveLength(1);
     expect(items[0]?.textContent).toContain("消融实验的结果");
+    expect(gettingStarted.done.has("search")).toBe(true);
 
     unmount(component);
   });

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { formatCount } from "../../utils/format.js";
   import { errorTelemetry } from "../../utils/error-telemetry.js";
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, untrack } from "svelte";
   import { gettingStarted } from "../../stores/gettingStarted.svelte.js";
   import {
     Button,
@@ -272,10 +272,15 @@
   }
 
   onMount(() => {
-    gettingStarted.complete("insights");
     void sessions.loadProjects();
     void sessions.loadAgents();
     void insights.load();
+  });
+
+  $effect(() => {
+    if (insights.selectedItem) {
+      untrack(() => gettingStarted.complete("insights"));
+    }
   });
 
   onDestroy(() => {

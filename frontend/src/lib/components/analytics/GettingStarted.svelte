@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Card, IconButton } from "@kenn-io/kit-ui";
   import { CheckIcon, XIcon } from "../../icons.js";
-  import { gettingStarted, type Item } from "../../stores/gettingStarted.svelte.js";
+  import { gettingStarted, items, type Item } from "../../stores/gettingStarted.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
@@ -14,42 +14,23 @@
     if (first) router.navigateToSession(first.id);
   }
 
-  const items: {
-    key: Item;
-    label: () => string;
-    run: () => void;
-  }[] = [
-    {
-      key: "session",
-      label: m.getting_started_open_session,
-      run: openFirstSession,
-    },
-    {
-      key: "search",
-      label: m.getting_started_search,
-      run: () => (ui.activeModal = "commandPalette"),
-    },
-    {
-      key: "usage",
+  const steps: Record<Item, { label: () => string; run: () => void }> = {
+    session: { label: m.getting_started_open_session, run: openFirstSession },
+    search: { label: m.getting_started_search, run: () => (ui.activeModal = "commandPalette") },
+    usage: {
       label: m.getting_started_usage,
       run: () => router.navigate("usage", { view: "tokens" }),
     },
-    {
-      key: "insights",
+    insights: {
       label: m.getting_started_insights,
       run: () => router.navigate("recall", { tab: "generated" }),
     },
-  ];
-
-  function isDisabled(key: Item): boolean {
-    return key === "session" && sessions.sessions.length === 0;
-  }
+  };
 </script>
 
 {#if gettingStarted.visible}
-  <Card level="default" padding="none" class="getting-started">
-    <div class="header">
-      <h3 class="title" id="{uid}-title">{m.getting_started_title()}</h3>
+  <Card level="default" padding="none" class="getting-started" title={m.getting_started_title()}>
+    {#snippet actions()}
       <IconButton
         size="sm"
         ariaLabel={m.getting_started_dismiss()}
@@ -57,17 +38,17 @@
       >
         <XIcon size="14" strokeWidth="2" aria-hidden="true" />
       </IconButton>
-    </div>
-    <ul class="items" aria-labelledby="{uid}-title">
-      {#each items as item (item.key)}
-        {@const done = gettingStarted.done.has(item.key)}
+    {/snippet}
+    <ul class="items" aria-label={m.getting_started_title()}>
+      {#each items as key (key)}
+        {@const done = gettingStarted.done.has(key)}
         <li class="item" class:done>
           <span
             class="mark"
             role="checkbox"
             aria-checked={done}
             aria-readonly="true"
-            aria-labelledby="{uid}-{item.key}"
+            aria-labelledby="{uid}-{key}"
           >
             {#if done}
               <CheckIcon size="16" strokeWidth="2" aria-hidden="true" />
@@ -78,11 +59,11 @@
           <button
             type="button"
             class="label"
-            id="{uid}-{item.key}"
-            disabled={isDisabled(item.key)}
-            onclick={item.run}
+            id="{uid}-{key}"
+            disabled={key === "session" && sessions.sessions.length === 0}
+            onclick={steps[key].run}
           >
-            {item.label()}
+            {steps[key].label()}
           </button>
         </li>
       {/each}
@@ -91,31 +72,25 @@
 {/if}
 
 <style>
-  :global(.getting-started) {
-    flex-shrink: 0;
-  }
-
-  .header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    margin-bottom: 8px;
-  }
-
-  .title {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-primary);
-  }
-
   .items {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    gap: var(--space-4);
+    grid-template-columns: repeat(4, max-content);
+    gap: var(--space-4) var(--space-8);
     margin: 0;
     padding: 0;
     list-style: none;
+  }
+
+  @media (max-width: 1100px) {
+    .items {
+      grid-template-columns: repeat(2, max-content);
+    }
+  }
+
+  @media (max-width: 560px) {
+    .items {
+      grid-template-columns: max-content;
+    }
   }
 
   .item {
@@ -136,19 +111,17 @@
   }
 
   .circle {
-    width: 12px;
-    height: 12px;
+    width: 14px;
+    height: 14px;
     border: 1.5px solid var(--text-muted);
-    border-radius: 50%;
+    border-radius: 3px;
   }
 
   .label {
     min-width: 0;
     padding: 0;
     font-size: 12px;
-    color: var(--text-primary);
     text-align: left;
-    cursor: pointer;
   }
 
   .label:hover:not(:disabled) {
@@ -156,19 +129,7 @@
     text-decoration: underline;
   }
 
-  .label:focus-visible {
-    outline: 2px solid var(--accent-blue);
-    outline-offset: 2px;
-    border-radius: var(--radius-sm);
-  }
-
-  .label:disabled {
-    color: var(--text-muted);
-    cursor: default;
-  }
-
   .done .label {
     color: var(--text-muted);
   }
-
 </style>

@@ -304,6 +304,16 @@
   }
 
   $effect(() => {
+    if (
+      usage.mode === "token" &&
+      usage.summary &&
+      !usage.errors.summary
+    ) {
+      untrack(() => gettingStarted.complete("usage"));
+    }
+  });
+
+  $effect(() => {
     const route = router.route;
     const params = router.params;
     untrack(() => {
@@ -313,7 +323,6 @@
       }
       if (route !== "usage") return;
       const nextMode = usageModeFromParams(params);
-      if (nextMode === "token") gettingStarted.complete("usage");
       const modeChanged = usage.setMode(nextMode);
       const tokenTypesChanged = nextMode === "token"
         ? usage.setSelectedTokenTypes(

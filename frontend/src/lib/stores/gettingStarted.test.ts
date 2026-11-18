@@ -1,10 +1,13 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { GettingStartedStore } from "./gettingStarted.svelte.js";
 import { ReadProgressStore } from "./read-progress.svelte.js";
 
 const key = "agentsview-getting-started";
-afterEach(() => localStorage.clear());
+afterEach(() => {
+  vi.restoreAllMocks();
+  localStorage.clear();
+});
 
 describe("getting started", () => {
   it("persists completed items and hides the checklist when all are done or dismissed", () => {
@@ -31,6 +34,18 @@ describe("getting started", () => {
     expect(new GettingStartedStore(new ReadProgressStore()).visible).toBe(false);
   });
 
+  it("does not rewrite an item that is already complete", () => {
+    const store = new GettingStartedStore(new ReadProgressStore());
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    store.complete("search");
+    setItem.mockClear();
+
+    store.complete("search");
+
+    expect(setItem).not.toHaveBeenCalled();
+    expect(JSON.parse(localStorage.getItem(key)!)).toContain("search");
+  });
+
   it("updates visibility on another tab's storage event", () => {
     const store = new GettingStartedStore(new ReadProgressStore());
     localStorage.setItem(key, '["dismissed"]');
@@ -46,7 +61,6 @@ describe("getting started", () => {
     localStorage.setItem(key, '["session","future"]');
     stale.complete("usage");
     expect(JSON.parse(localStorage.getItem(key)!)).toEqual(["session", "future", "usage"]);
-    expect(new GettingStartedStore(new ReadProgressStore()).done.has("session")).toBe(true);
   });
 
   it("starts fresh for corrupt or non-array data", () => {

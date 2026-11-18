@@ -7,7 +7,7 @@ const key = "agentsview-getting-started";
 function read(): string[] {
   try {
     const value = JSON.parse(localStorage.getItem(key) ?? "[]");
-    return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+    return Array.isArray(value) ? value : [];
   } catch {
     return [];
   }
@@ -17,14 +17,7 @@ export class GettingStartedStore {
   done = $state<Set<string>>(new Set(read()));
 
   constructor(progress: ReadProgressStore = readProgress) {
-    try {
-      if (localStorage.getItem(key) === null) {
-        if (progress.hasMarkers) this.done.add("dismissed");
-        localStorage.setItem(key, JSON.stringify([...this.done]));
-      }
-    } catch {
-      // Storage is optional.
-    }
+    if (this.done.size === 0 && progress.hasMarkers) this.done.add("dismissed");
     if (typeof window !== "undefined") {
       window.addEventListener("storage", (event) => {
         if (event.key === key || event.key === null) this.done = new Set(read());
@@ -37,7 +30,13 @@ export class GettingStartedStore {
   }
 
   complete(item: Item | "dismissed") {
-    this.done = new Set([...read(), ...this.done, item]);
+    const done = new Set([...read(), ...this.done]);
+    if (done.has(item)) {
+      this.done = done;
+      return;
+    }
+    done.add(item);
+    this.done = done;
     try {
       localStorage.setItem(key, JSON.stringify([...this.done]));
     } catch {

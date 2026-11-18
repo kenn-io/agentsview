@@ -19,6 +19,8 @@ const mocks = vi.hoisted(() => ({
   selectTask: vi.fn(),
 }));
 
+const gettingStarted = vi.hoisted(() => ({ complete: vi.fn() }));
+
 const state = vi.hoisted(() => {
   const selectedItem = {
     id: 42,
@@ -53,9 +55,9 @@ const state = vi.hoisted(() => {
       tasks: [],
       loading: false,
       error: null as string | null,
-      selectedId: 42,
+      selectedId: 42 as number | null,
       selectedTaskId: null as string | null,
-      selectedItem,
+      selectedItem: selectedItem as typeof selectedItem | undefined,
       selectedTask: undefined as InsightTask | undefined,
       cancelInFlightReads: mocks.cancelInFlightReads,
       deleteItem: mocks.deleteItem,
@@ -76,11 +78,12 @@ const state = vi.hoisted(() => {
     },
   };
 });
+const savedInsight = state.store.items[0]!;
 
 vi.mock("../../stores/insights.svelte.js", async () => {
   const { SvelteMap } = await import("svelte/reactivity");
   const selected = new SvelteMap<string, unknown>();
-  for (const key of ["selectedTask", "selectedTaskId"]) {
+  for (const key of ["selectedItem", "selectedTask", "selectedTaskId"]) {
     Object.defineProperty(state.store, key, {
       get: () => selected.get(key),
       set: (value: unknown) => {
@@ -90,6 +93,8 @@ vi.mock("../../stores/insights.svelte.js", async () => {
   }
   return { insights: state.store };
 });
+
+vi.mock("../../stores/gettingStarted.svelte.js", () => ({ gettingStarted }));
 
 vi.mock("../../stores/sessions.svelte.js", () => ({
   sessions: state.sessions,
@@ -123,9 +128,14 @@ describe("GeneratedInsightsPanel", () => {
     state.serverVersion.read_only = false;
     router.route = "recall";
     router.params = { tab: "generated" };
+    state.store.items = [savedInsight];
     state.store.selectedTask = undefined;
     state.store.selectedId = 42;
     state.store.selectedItem = state.store.items[0]!;
+    mocks.select.mockImplementation((id: number) => {
+      state.store.selectedId = id;
+      state.store.selectedItem = state.store.items.find((item) => item.id === id);
+    });
     state.sessions.agents = [];
     ui.activeModal = null;
   });
@@ -276,8 +286,12 @@ describe("GeneratedInsightsPanel", () => {
   });
 
   it("writes selected reports to the Generated insights deep link", async () => {
+    state.store.selectedId = null;
+    state.store.selectedItem = undefined;
     component = mount(GeneratedInsightsPanel, { target: document.body });
     await tick();
+
+    expect(gettingStarted.complete).not.toHaveBeenCalled();
 
     const report = Array.from(
       document.querySelectorAll<HTMLButtonElement>(".generated-list button"),
@@ -287,6 +301,7 @@ describe("GeneratedInsightsPanel", () => {
     await tick();
 
     expect(mocks.select).toHaveBeenCalledWith(42);
+    expect(gettingStarted.complete).toHaveBeenCalledExactlyOnceWith("insights");
     expect(router.params).toEqual({ tab: "generated", insight: "42" });
   });
 
