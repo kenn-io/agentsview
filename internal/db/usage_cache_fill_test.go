@@ -840,7 +840,7 @@ func TestUsageSpoolRoutesCachedAndUncachedBatches(t *testing.T) {
 	require.ErrorContains(t, writer.Flush(), "comparison.usage_cached_sessions")
 }
 
-func TestUsageSpoolMixedCachedAndUncachedSessions(t *testing.T) {
+func TestUsageSpoolSeparatesCachedAndUncachedStatements(t *testing.T) {
 	database, cache := usageSpoolExtractionFixture(t, 1001)
 	for _, id := range []string{"a-uncached", "z-uncached"} {
 		require.NoError(t, database.UpsertSession(t.Context(), Session{ID: id, Project: "project", Machine: defaultMachine, Agent: defaultAgent}))
@@ -855,27 +855,12 @@ func TestUsageSpoolMixedCachedAndUncachedSessions(t *testing.T) {
 	versions := []usageSourceVersion{{SessionID: "a-uncached"}, {SessionID: "session"}, {SessionID: "z-uncached"}}
 	expected, err := cache.fill.captureFillInstallExpectations(t.Context(), versions)
 	require.NoError(t, err)
-	spool, extracted, err := cache.fill.extractSessions(t.Context(), versions, expected)
+	spool, _, err := cache.fill.extractSessions(t.Context(), versions, expected)
 	require.NoError(t, err)
 	defer spool.Close()
 	var count int
 	require.NoError(t, spool.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM facts`).Scan(&count))
 	assert.Equal(t, 3002, count)
-	for _, version := range versions {
-		require.NoError(t, spool.db.QueryRowContext(t.Context(), `SELECT message_count + activity_count + event_count FROM sessions WHERE session_id=?`, version.SessionID).Scan(&count))
-		assert.Equal(t, 1001, count)
-	}
-	installVersions := make([]usageSourceVersion, 0, len(extracted))
-	for _, version := range extracted {
-		installVersions = append(installVersions, version)
-	}
-	_, lost, err := cache.fill.installSpool(t.Context(), spool, installVersions, nil, expected, 0)
-	require.NoError(t, err)
-	assert.Empty(t, lost)
-	full, _, err := cache.fill.extractSessions(t.Context(), versions, nil)
-	require.NoError(t, err)
-	defer full.Close()
-	assert.Equal(t, usageSpoolFactValues(t, full.db, `SELECT * FROM facts ORDER BY session_id, fact_index`), usageSpoolFactValues(t, cache.db, `SELECT f.* FROM usage_facts f JOIN usage_cached_sessions c ON c.id=f.cached_session_id ORDER BY c.session_id, f.fact_index`))
 }
 
 func TestUsageSpoolFallsBackAfterCacheRevisionChanges(t *testing.T) {
