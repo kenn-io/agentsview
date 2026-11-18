@@ -7,6 +7,7 @@ import { initI18n } from "../../i18n/index.js";
 import { router } from "../../stores/router.svelte.js";
 import { settings } from "../../stores/settings.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
+import { sync } from "../../stores/sync.svelte.js";
 
 let component: ReturnType<typeof mount>;
 
@@ -23,6 +24,7 @@ afterEach(() => {
   settings.error = null;
   settings.sessionProviders = [];
   settings.disabledAgents = [];
+  sync.syncing = false;
   ui.sidebarOpen = true;
   ui.isMobileViewport = false;
   router.route = "sessions";
@@ -31,6 +33,25 @@ afterEach(() => {
 });
 
 describe("EmptyArchivePanel", () => {
+  it("shows sync progress while keeping the folders available", async () => {
+    settings.sessionProviders = [
+      {
+        id: "claude",
+        display_name: "Claude Code",
+        dirs: ["/example"],
+        homes: [],
+        homes_supported: false,
+      },
+    ];
+    sync.syncing = true;
+    component = mount(EmptyArchivePanel, { target: document.body });
+    await tick();
+    expect(document.body.textContent).toContain("Syncing sessions");
+    expect(document.body.textContent).toContain("/example");
+    sync.syncing = false;
+    await tick();
+    expect(document.body.textContent).toContain("No sessions yet");
+  });
   it("restores the desktop sidebar and transfers focus between toggles", async () => {
     ui.sidebarOpen = true;
     ui.isMobileViewport = false;

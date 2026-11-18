@@ -28,6 +28,7 @@ vi.mock("./lib/feature-flags.js", () => ({
 // @ts-ignore
 import App, { findUserPromptOrdinal } from "./App.svelte";
 import { requestUrl } from "./lib/test-support/request-url.js";
+import { readProgress } from "./lib/stores/read-progress.svelte.js";
 
 let component: ReturnType<typeof mount> | undefined;
 
@@ -92,6 +93,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
   document.body.innerHTML = "";
   localStorage.clear();
+  readProgress.reset();
+  sessions.sessions = [];
   window.history.replaceState(null, "", "/");
   router.route = "sessions";
   router.params = {};
@@ -694,6 +697,57 @@ describe("App root Sessions landing", () => {
     router.sessionId = null;
     router.isRootPath = true;
   }
+
+  function sidebarRow(id: string, count: number, date: string) {
+    return {
+      id,
+      project: id,
+      machine: "local",
+      agent: "codex",
+      started_at: date,
+      ended_at: date,
+      created_at: date,
+      message_count: count,
+    } as (typeof sessions.sessions)[number];
+  }
+
+  it("opens the first readable sidebar session once when rows arrive", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    setRootUrl();
+    sessions.sessions = [];
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    sessions.sessions = [
+      sidebarRow("empty", 0, "2026-01-03"),
+      sidebarRow("newest", 2, "2026-01-02"),
+      sidebarRow("older", 1, "2026-01-01"),
+    ];
+    await flushEffects();
+    expect(sessions.activeSessionId).toBe("newest");
+    expect(document.querySelector(".analytics-page")).toBeNull();
+    sessions.deselectSession();
+    await flushEffects();
+    expect(sessions.activeSessionId).toBeNull();
+  });
+
+  it.each(["read before", "filtered", "selected first", "left root"])(
+    "does not auto-open after %s",
+    async (scenario) => {
+      stubAppDependencies();
+      vi.spyOn(sessions, "load").mockResolvedValue();
+      setRootUrl(scenario === "filtered" ? { project: "chosen" } : {});
+      if (scenario === "read before") readProgress.baseline("prior", "revision", 0);
+      component = mount(App, { target: document.body });
+      await flushEffects();
+      if (scenario === "selected first") sessions.selectSession("chosen");
+      if (scenario === "left root") router.navigate("usage");
+      await flushEffects();
+      sessions.sessions = [sidebarRow("newest", 2, "2026-01-02")];
+      await flushEffects();
+      expect(sessions.activeSessionId).toBe(scenario === "selected first" ? "chosen" : null);
+    },
+  );
 
   it.each([true, false])("renders the landing view for archive empty %s", async (empty) => {
     stubAppDependencies();

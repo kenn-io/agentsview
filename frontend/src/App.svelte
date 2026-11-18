@@ -49,6 +49,7 @@
 <script lang="ts">
   import { FlashBanner, showFlash } from "@kenn-io/kit-ui";
   import { onMount, untrack } from "svelte";
+  import { readProgress } from "./lib/stores/read-progress.svelte.js";
   import AppHeader from "./lib/components/layout/AppHeader.svelte";
   import ThreeColumnLayout from "./lib/components/layout/ThreeColumnLayout.svelte";
   import SessionBreadcrumb from "./lib/components/layout/SessionBreadcrumb.svelte";
@@ -424,6 +425,27 @@
   let rootDetailExitDateRestorePending = $state(false);
   let previousSessionId: string | null = null;
   let previousActiveSessionId: string | null = null;
+  let firstVisitArmed = $state(false);
+
+  $effect(() => {
+    if (!firstVisitArmed) return;
+    if (
+      router.route !== "sessions" || !router.isRootPath ||
+      hasFilterParams(router.params) || sessions.activeSessionId
+    ) {
+      firstVisitArmed = false;
+      return;
+    }
+    const group = sessions.groupedSessions.find((group) =>
+      group.sessions.some((session) =>
+        session.id === group.primarySessionId && session.message_count > 0,
+      ),
+    );
+    if (group) {
+      firstVisitArmed = false;
+      sessions.selectSession(group.primarySessionId);
+    }
+  });
 
   function clearRootDetailDateRestoreSuppressed(): void {
     rootDetailDateRestoreSuppressed = false;
@@ -823,6 +845,8 @@
   });
 
   onMount(() => {
+    firstVisitArmed = readProgress.isEmpty && router.route === "sessions" &&
+      router.isRootPath && !hasFilterParams(router.params);
     globalAuthToken = getAuthToken();
     settings.load();
     starred.load();

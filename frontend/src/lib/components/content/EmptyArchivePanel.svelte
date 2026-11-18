@@ -4,6 +4,7 @@
   import { FolderIcon } from "../../icons.js";
   import { router } from "../../stores/router.svelte.js";
   import { settings } from "../../stores/settings.svelte.js";
+  import { sync } from "../../stores/sync.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
   import SidebarToggleButton from "../layout/SidebarToggleButton.svelte";
 
@@ -22,7 +23,10 @@
       <SidebarToggleButton placement="content" />
     </div>
   {/if}
-  <EmptyState title={m.empty_archive_title()} description={m.empty_archive_desc()}>
+  <EmptyState
+    title={sync.syncing ? m.empty_archive_syncing_title() : m.empty_archive_title()}
+    description={sync.syncing ? m.empty_archive_syncing_desc() : m.empty_archive_desc()}
+  >
     {#snippet icon()}
       <FolderIcon size="40" strokeWidth="1.6" aria-hidden="true" />
     {/snippet}
