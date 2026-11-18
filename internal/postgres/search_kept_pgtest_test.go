@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/json/v2"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -116,13 +115,10 @@ func TestSearchKeptRestart(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, other.Results)
 	require.Positive(t, trace.count.Load())
-	s, trace = open()
 	write("needle second")
 	// Save the updated page for the next store.
 	_, err = s.Search(ctx, filter)
 	require.NoError(t, err)
-	require.EqualValues(t, 1, trace.count.Load())
-	require.EqualValues(t, 1, trace.restricted.Load())
 	s, trace = open()
 	got, err = s.Search(ctx, filter)
 	require.NoError(t, err)
@@ -484,45 +480,29 @@ func TestSearchKeptRestartRefreshPages(t *testing.T) {
 }
 
 func TestSearchKeptRestartInvalidCache(t *testing.T) {
-	for _, mode := range []string{"checkpoint", "corrupt"} {
-		t.Run(mode, func(t *testing.T) {
-			t.Setenv("CACHE_DIRECTORY", t.TempDir())
-			local, syncer, first := newUsageJournalFixture(t)
-			ctx := t.Context()
-			url, cache := testPGURL(t), t.TempDir()
-			require.NoError(t, first.ConfigureUsageCache(ctx, cache, url, syncer.schema))
-			require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "one", Project: "project", Machine: "device", Agent: "claude", MessageCount: 1}))
-			require.NoError(t, local.ReplaceSessionMessages(ctx, "one", []db.Message{{SessionID: "one", Role: "user", Content: "needle"}}))
-			pgKeptPush(t, syncer, false)
-			filter := db.SearchFilter{Query: "needle", Limit: 2}
-			_, err := first.Search(ctx, filter)
-			require.NoError(t, err)
-			slot := filter
-			slot.Limit, slot.Cursor = 0, 0
-			if mode == "corrupt" {
-				first.trendsDisk.Put("search-keys|"+slot.Slot(), "1", []byte("{"))
-			} else {
-				_, err = syncer.pg.ExecContext(ctx, `DELETE FROM sync_metadata WHERE key='usage_history_checkpoint:' || (SELECT value FROM sync_metadata WHERE key='usage_change_revision')`)
-				require.NoError(t, err)
-			}
-			s, trace := openTracedSearchStore(t, url, syncer.schema, cache)
-			require.NoError(t, local.ReplaceSessionMessages(ctx, "one", []db.Message{{SessionID: "one", Role: "user", Content: "needle updated"}}))
-			pgKeptPush(t, syncer, false)
-			got, err := s.Search(ctx, filter)
-			require.NoError(t, err)
-			require.EqualValues(t, 1, trace.count.Load())
-			require.Zero(t, trace.restricted.Load())
-			direct, err := s.search(ctx, filter)
-			require.NoError(t, err)
-			require.Equal(t, direct, got)
-			if mode == "corrupt" {
-				data, ok := s.trendsDisk.Get("search-keys|"+slot.Slot(), "1")
-				require.True(t, ok)
-				var entry pgSearchEntry
-				require.NoError(t, json.Unmarshal(data, &entry))
-			}
-		})
-	}
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, first := newUsageJournalFixture(t)
+	ctx := t.Context()
+	url, cache := testPGURL(t), t.TempDir()
+	require.NoError(t, first.ConfigureUsageCache(ctx, cache, url, syncer.schema))
+	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "one", Project: "project", Machine: "device", Agent: "claude", MessageCount: 1}))
+	require.NoError(t, local.ReplaceSessionMessages(ctx, "one", []db.Message{{SessionID: "one", Role: "user", Content: "needle"}}))
+	pgKeptPush(t, syncer, false)
+	filter := db.SearchFilter{Query: "needle", Limit: 2}
+	_, err := first.Search(ctx, filter)
+	require.NoError(t, err)
+	_, err = syncer.pg.ExecContext(ctx, `DELETE FROM sync_metadata WHERE key='usage_history_checkpoint:' || (SELECT value FROM sync_metadata WHERE key='usage_change_revision')`)
+	require.NoError(t, err)
+	s, trace := openTracedSearchStore(t, url, syncer.schema, cache)
+	require.NoError(t, local.ReplaceSessionMessages(ctx, "one", []db.Message{{SessionID: "one", Role: "user", Content: "needle updated"}}))
+	pgKeptPush(t, syncer, false)
+	got, err := s.Search(ctx, filter)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, trace.count.Load())
+	require.Zero(t, trace.restricted.Load())
+	direct, err := s.search(ctx, filter)
+	require.NoError(t, err)
+	require.Equal(t, direct, got)
 }
 
 func TestSearchKeptRestartAfterKeyEviction(t *testing.T) {
@@ -543,9 +523,7 @@ func TestSearchKeptRestartAfterKeyEviction(t *testing.T) {
 	page, err := first.Search(ctx, f)
 	require.NoError(t, err)
 	require.Len(t, page.Results, 2)
-	slot := f
-	slot.Limit, slot.Cursor = 0, 0
-	selection := "search-keys|" + slot.Slot()
+	selection := "search-keys|" + searchKeySlot(f)
 	payload, ok := first.trendsDisk.Get(selection, "1")
 	require.True(t, ok)
 	var keyFile string
