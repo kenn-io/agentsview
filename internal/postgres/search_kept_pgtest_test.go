@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json/v2"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -105,10 +106,13 @@ func TestSearchKeptRestart(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, other.Results)
 	require.Positive(t, trace.count.Load())
+	s, trace = open()
 	write("needle second")
 	// Save the updated page for the next store.
 	_, err = s.Search(ctx, filter)
 	require.NoError(t, err)
+	require.EqualValues(t, 1, trace.count.Load())
+	require.EqualValues(t, 1, trace.restricted.Load())
 	s, trace = open()
 	got, err = s.Search(ctx, filter)
 	require.NoError(t, err)
@@ -336,7 +340,7 @@ func TestSearchKeptOversizedThenSmaller(t *testing.T) {
 	got, err := s.Search(ctx, f)
 	require.NoError(t, err)
 	require.Len(t, got.Results, 3)
-	// A new write invalidates the saved page, while the complete match set was too large to keep.
+	// A new write invalidates the saved page, while the match set remains on disk.
 	require.NoError(t, local.SoftDeleteSession(ctx, "two"))
 	require.NoError(t, local.SoftDeleteSession(ctx, "three"))
 	pgKeptPush(t, syncer, false)
@@ -347,7 +351,7 @@ func TestSearchKeptOversizedThenSmaller(t *testing.T) {
 	require.Len(t, got.Results, 1)
 	require.Equal(t, "one", got.Results[0].SessionID)
 	require.EqualValues(t, 1, trace.keys.Load())
-	require.Zero(t, trace.restricted.Load()) // The oversized set needs a full key search.
+	require.EqualValues(t, 1, trace.restricted.Load())
 	require.NoError(t, local.ReplaceSessionMessages(ctx, "one", []db.Message{{SessionID: "one", Role: "user", Content: "needle updated"}}))
 	pgKeptPush(t, syncer, false)
 	trace.keys.Store(0)
@@ -408,4 +412,126 @@ func TestSearchKeptDateFilterAfterWrite(t *testing.T) {
 	direct, err := s.search(ctx, f)
 	require.NoError(t, err)
 	require.Equal(t, direct, got)
+}
+
+func TestSearchKeptRestartRefreshPages(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, first := newUsageJournalFixture(t)
+	ctx := t.Context()
+	url, cache := testPGURL(t), t.TempDir()
+	require.NoError(t, first.ConfigureUsageCache(ctx, cache, url, syncer.schema))
+	for _, id := range []string{"one", "two", "three"} {
+		require.NoError(t, local.UpsertSession(ctx, db.Session{ID: id, Project: "project", Machine: "device", Agent: "claude", MessageCount: 1}))
+		require.NoError(t, local.ReplaceSessionMessages(ctx, id, []db.Message{{SessionID: id, Role: "user", Content: "needle " + id}}))
+	}
+	image := `[{"type":"input_image","image_url":"data:image/png;base64,` + base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\nimage")) + `"}]`
+	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "shot", Project: "project", Machine: "device", Agent: "claude", MessageCount: 1}))
+	require.NoError(t, local.InsertMessages(ctx, []db.Message{{SessionID: "shot", Ordinal: 0, Role: "assistant", Content: "look", ToolCalls: []db.ToolCall{{ToolName: "Read", ToolUseID: "image", ResultContent: image}}}}))
+	require.NoError(t, local.BackfillImageTextOccurrences(ctx))
+	require.NoError(t, local.SaveImageText(ctx, db.RetainedToolResultImages(image)[0].SHA256, ocr.Identity{Fingerprint: "processor", Provider: "test", Model: "model", Revision: "r1"}, "needle image", false))
+	pgKeptPush(t, syncer, false)
+	for _, sort := range []string{"relevance", "recency"} {
+		_, err := first.Search(ctx, db.SearchFilter{Query: "needle", Limit: 2, Sort: sort})
+		require.NoError(t, err)
+	}
+	open := func() (*Store, *searchQueryTracer) {
+		config, err := pgx.ParseConfig(url)
+		require.NoError(t, err)
+		config.RuntimeParams["search_path"] = syncer.schema
+		config.RuntimeParams["TimeZone"] = "UTC"
+		trace := &searchQueryTracer{}
+		config.Tracer = trace
+		pool := stdlib.OpenDB(*config)
+		s := &Store{pg: pool, ownedDB: pool}
+		t.Cleanup(func() { require.NoError(t, s.Close()) })
+		require.NoError(t, s.ConfigureUsageCache(ctx, cache, url, syncer.schema))
+		return s, trace
+	}
+	s, trace := open()
+	require.NoError(t, local.ReplaceSessionMessages(ctx, "two", []db.Message{{SessionID: "two", Role: "user", Content: "needle changed"}}))
+	pgKeptPush(t, syncer, false)
+	check := func(restricted bool) {
+		t.Helper()
+		for _, sort := range []string{"relevance", "recency"} {
+			seenImage := false
+			for cursor := 0; cursor < 4; cursor += 2 {
+				filter := db.SearchFilter{Query: "needle", Limit: 2, Cursor: cursor, Sort: sort}
+				trace.count.Store(0)
+				trace.restricted.Store(0)
+				got, err := s.Search(ctx, filter)
+				require.NoError(t, err)
+				if cursor == 0 && restricted {
+					require.EqualValues(t, 1, trace.count.Load())
+					require.EqualValues(t, 1, trace.restricted.Load())
+				}
+				direct, err := s.search(ctx, filter)
+				require.NoError(t, err)
+				require.Equal(t, direct, got)
+				for _, result := range got.Results {
+					if result.SessionID == "shot" {
+						seenImage = true
+						require.Contains(t, result.Snippet, "needle image")
+					}
+				}
+			}
+			require.True(t, seenImage)
+		}
+	}
+	check(true)
+	require.NoError(t, local.SoftDeleteSession(ctx, "one"))
+	pgKeptPush(t, syncer, false)
+	check(true)
+	_, err := syncer.pg.ExecContext(ctx, `DELETE FROM sessions WHERE id = $1`, "two")
+	require.NoError(t, err)
+	check(true)
+}
+
+func TestSearchKeptRestartInvalidCache(t *testing.T) {
+	for _, mode := range []string{"checkpoint", "corrupt"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("CACHE_DIRECTORY", t.TempDir())
+			local, syncer, first := newUsageJournalFixture(t)
+			ctx := t.Context()
+			url, cache := testPGURL(t), t.TempDir()
+			require.NoError(t, first.ConfigureUsageCache(ctx, cache, url, syncer.schema))
+			require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "one", Project: "project", Machine: "device", Agent: "claude", MessageCount: 1}))
+			require.NoError(t, local.ReplaceSessionMessages(ctx, "one", []db.Message{{SessionID: "one", Role: "user", Content: "needle"}}))
+			pgKeptPush(t, syncer, false)
+			filter := db.SearchFilter{Query: "needle", Limit: 2}
+			_, err := first.Search(ctx, filter)
+			require.NoError(t, err)
+			slot := filter
+			slot.Limit, slot.Cursor = 0, 0
+			if mode == "corrupt" {
+				first.trendsDisk.Put("search-keys|"+slot.Slot(), "1", []byte("{"))
+			} else {
+				_, err = syncer.pg.ExecContext(ctx, `DELETE FROM sync_metadata WHERE key='usage_history_checkpoint:' || (SELECT value FROM sync_metadata WHERE key='usage_change_revision')`)
+				require.NoError(t, err)
+			}
+			config, err := pgx.ParseConfig(url)
+			require.NoError(t, err)
+			config.RuntimeParams["search_path"] = syncer.schema
+			trace := &searchQueryTracer{}
+			config.Tracer = trace
+			pool := stdlib.OpenDB(*config)
+			s := &Store{pg: pool, ownedDB: pool}
+			t.Cleanup(func() { require.NoError(t, s.Close()) })
+			require.NoError(t, s.ConfigureUsageCache(ctx, cache, url, syncer.schema))
+			require.NoError(t, local.ReplaceSessionMessages(ctx, "one", []db.Message{{SessionID: "one", Role: "user", Content: "needle updated"}}))
+			pgKeptPush(t, syncer, false)
+			got, err := s.Search(ctx, filter)
+			require.NoError(t, err)
+			require.EqualValues(t, 1, trace.count.Load())
+			require.Zero(t, trace.restricted.Load())
+			direct, err := s.search(ctx, filter)
+			require.NoError(t, err)
+			require.Equal(t, direct, got)
+			if mode == "corrupt" {
+				data, ok := s.trendsDisk.Get("search-keys|"+slot.Slot(), "1")
+				require.True(t, ok)
+				var entry pgSearchEntry
+				require.NoError(t, json.Unmarshal(data, &entry))
+			}
+		})
+	}
 }

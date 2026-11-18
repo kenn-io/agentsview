@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json/v2"
 	"fmt"
 	"math"
 	"strings"
@@ -13,34 +14,34 @@ import (
 )
 
 type pgSearchKey struct {
-	id                                string
-	priority, pos                     int
-	endedAt                           *time.Time
-	ordinal                           int
-	kind                              string
-	sourceKind, processor             *string
-	callIndex, eventIndex, imageIndex *int
+	ID                                string
+	Priority, Pos                     int
+	EndedAt                           *time.Time
+	Ordinal                           int
+	Kind                              string
+	SourceKind, Processor             *string
+	CallIndex, EventIndex, ImageIndex *int
 }
 type pgSearchEntry struct {
-	revision int64
-	token    string
-	keys     []pgSearchKey
+	Revision int64
+	Token    string
+	Keys     []pgSearchKey
 }
 
 func pgSearchEntryBytes(e pgSearchEntry) int64 {
-	size := int64(unsafe.Sizeof(e)) + int64(len(e.token)) + int64(cap(e.keys))*int64(unsafe.Sizeof(pgSearchKey{}))
-	for _, k := range e.keys {
-		size += int64(len(k.id) + len(k.kind))
-		if k.endedAt != nil {
-			size += int64(unsafe.Sizeof(*k.endedAt))
+	size := int64(unsafe.Sizeof(e)) + int64(len(e.Token)) + int64(cap(e.Keys))*int64(unsafe.Sizeof(pgSearchKey{}))
+	for _, k := range e.Keys {
+		size += int64(len(k.ID) + len(k.Kind))
+		if k.EndedAt != nil {
+			size += int64(unsafe.Sizeof(*k.EndedAt))
 		}
-		if k.sourceKind != nil {
-			size += int64(unsafe.Sizeof(*k.sourceKind)) + int64(len(*k.sourceKind))
+		if k.SourceKind != nil {
+			size += int64(unsafe.Sizeof(*k.SourceKind)) + int64(len(*k.SourceKind))
 		}
-		if k.processor != nil {
-			size += int64(unsafe.Sizeof(*k.processor)) + int64(len(*k.processor))
+		if k.Processor != nil {
+			size += int64(unsafe.Sizeof(*k.Processor)) + int64(len(*k.Processor))
 		}
-		for _, p := range []*int{k.callIndex, k.eventIndex, k.imageIndex} {
+		for _, p := range []*int{k.CallIndex, k.EventIndex, k.ImageIndex} {
 			if p != nil {
 				size += int64(unsafe.Sizeof(*p))
 			}
@@ -62,7 +63,14 @@ func (s *Store) searchKept(ctx context.Context, view *Store, f db.SearchFilter) 
 	after := int64(math.MaxInt64)
 	if ok {
 		entry = entries[0]
-		after = entry.revision
+	} else if data, found := s.trendsDisk.Get("search-keys|"+slot, "1"); found {
+		var saved pgSearchEntry
+		if json.Unmarshal(data, &saved) == nil {
+			entry, ok = saved, true
+		}
+	}
+	if ok {
+		after = entry.Revision
 	}
 	through, changed, err := view.searchUsageChanges(ctx, after)
 	if err != nil {
@@ -71,22 +79,22 @@ func (s *Store) searchKept(ctx context.Context, view *Store, f db.SearchFilter) 
 	if through == 0 {
 		return view.search(ctx, f)
 	}
-	currentToken, previousToken, err := usageHistoryCheckpoints(ctx, view.pg, through, entry.revision)
+	currentToken, previousToken, err := usageHistoryCheckpoints(ctx, view.pg, through, entry.Revision)
 	if err != nil {
 		return db.SearchPage{}, err
 	}
-	reusable := entry.token != "" && entry.token == previousToken && through >= entry.revision
-	keys := entry.keys
+	reusable := entry.Token != "" && entry.Token == previousToken && through >= entry.Revision
+	keys := entry.Keys
 	if !reusable {
 		keys, err = view.searchKeys(ctx, f, nil)
-	} else if through > entry.revision && len(changed) > 0 {
+	} else if through > entry.Revision && len(changed) > 0 {
 		removed := make(map[string]bool, len(changed))
 		for _, id := range changed {
 			removed[id] = true
 		}
-		keys = make([]pgSearchKey, 0, len(entry.keys))
-		for _, key := range entry.keys {
-			if !removed[key.id] {
+		keys = make([]pgSearchKey, 0, len(entry.Keys))
+		for _, key := range entry.Keys {
+			if !removed[key.ID] {
 				keys = append(keys, key)
 			}
 		}
@@ -101,7 +109,13 @@ func (s *Store) searchKept(ctx context.Context, view *Store, f db.SearchFilter) 
 		return db.SearchPage{}, err
 	}
 	if currentToken != "" {
-		memo.Put(slot, "search", []pgSearchEntry{{through, currentToken, keys}})
+		updated := pgSearchEntry{through, currentToken, keys}
+		memo.Put(slot, "search", []pgSearchEntry{updated})
+		if (!reusable || through != entry.Revision) && s.trendsDisk.Enabled() {
+			if data, err := json.Marshal(updated); err == nil {
+				s.trendsDisk.Put("search-keys|"+slot, "1", data)
+			}
+		}
 	}
 	start := max(f.Cursor, 0)
 	if start >= len(keys) {
@@ -159,7 +173,7 @@ func scanSearchKeys(rows *sql.Rows) ([]pgSearchKey, error) {
 	var keys []pgSearchKey
 	for rows.Next() {
 		var k pgSearchKey
-		if err := rows.Scan(&k.id, &k.priority, &k.pos, &k.endedAt, &k.ordinal, &k.kind, &k.sourceKind, &k.callIndex, &k.eventIndex, &k.imageIndex, &k.processor); err != nil {
+		if err := rows.Scan(&k.ID, &k.Priority, &k.Pos, &k.EndedAt, &k.Ordinal, &k.Kind, &k.SourceKind, &k.CallIndex, &k.EventIndex, &k.ImageIndex, &k.Processor); err != nil {
 			return nil, err
 		}
 		keys = append(keys, k)
@@ -180,17 +194,17 @@ func searchKeyArgs(keys []pgSearchKey) []any {
 	images := make([]*int, 0, len(keys))
 	processors := make([]*string, 0, len(keys))
 	for _, k := range keys {
-		ids = append(ids, k.id)
-		priorities = append(priorities, k.priority)
-		positions = append(positions, k.pos)
-		times = append(times, k.endedAt)
-		ordinals = append(ordinals, k.ordinal)
-		kinds = append(kinds, k.kind)
-		sources = append(sources, k.sourceKind)
-		calls = append(calls, k.callIndex)
-		events = append(events, k.eventIndex)
-		images = append(images, k.imageIndex)
-		processors = append(processors, k.processor)
+		ids = append(ids, k.ID)
+		priorities = append(priorities, k.Priority)
+		positions = append(positions, k.Pos)
+		times = append(times, k.EndedAt)
+		ordinals = append(ordinals, k.Ordinal)
+		kinds = append(kinds, k.Kind)
+		sources = append(sources, k.SourceKind)
+		calls = append(calls, k.CallIndex)
+		events = append(events, k.EventIndex)
+		images = append(images, k.ImageIndex)
+		processors = append(processors, k.Processor)
 	}
 	return []any{ids, priorities, positions, times, ordinals, kinds, sources, calls, events, images, processors}
 }
