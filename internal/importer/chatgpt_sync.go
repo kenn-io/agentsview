@@ -5,7 +5,6 @@ import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
-	"math/rand/v2"
 	"net/url"
 	"regexp"
 	"slices"
@@ -48,21 +47,6 @@ func chatGPTFreshness(updatedAt time.Time, session *db.Session) uint64 {
 // chatGPTDetailGap delays each detail request by 3 s with jitter.
 // Tests set it to zero to disable pacing.
 var chatGPTDetailGap = 3 * time.Second
-
-func waitChatGPTDetailGap(ctx context.Context) error {
-	if chatGPTDetailGap <= 0 {
-		return nil
-	}
-	jitter := time.Duration(rand.Int64N(int64(800*time.Millisecond))) - 400*time.Millisecond
-	timer := time.NewTimer(chatGPTDetailGap + jitter)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
-}
 
 // syncChatGPT appends new turns and replaces edited conversation branches.
 func syncChatGPT(ctx context.Context, store BrowserSyncStore, fetch BrowserFetch, opts BrowserSyncOptions, cb *ImportCallbacks) (stats ImportStats, retErr error) {
@@ -117,7 +101,7 @@ func syncChatGPT(ctx context.Context, store BrowserSyncStore, fetch BrowserFetch
 				err := runner.conversation(ctx, id, browserConversation{
 					freshness: func(session *db.Session) uint64 { return chatGPTFreshness(updatedAt, session) },
 					fetch: func(ctx context.Context) ([]byte, error) {
-						if err := waitChatGPTDetailGap(ctx); err != nil {
+						if err := waitBrowserGap(ctx, chatGPTDetailGap); err != nil {
 							return nil, err
 						}
 						return fetchBrowser(ctx, platform, fetch, chatGPTRequest(chatGPTDetailRequest, marker.ID, 0, false))

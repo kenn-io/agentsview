@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"math/rand/v2"
 	"strings"
 	"time"
 
@@ -53,6 +54,15 @@ type BrowserSyncOptions struct {
 	// ClaudeAIOrganizations lists lowercase organization UUIDs to import;
 	// empty imports every chat organization. Only Claude.ai reads it.
 	ClaudeAIOrganizations []string
+	// Now reads the current time; nil means time.Now. Only tests set it.
+	Now func() time.Time
+}
+
+func (o BrowserSyncOptions) now() time.Time {
+	if o.Now == nil {
+		return time.Now()
+	}
+	return o.Now()
 }
 
 // BrowserPlatform describes one site that Sync imports through the browser.
@@ -75,7 +85,7 @@ type BrowserPlatform struct {
 
 // BrowserPlatforms lists the platforms Sync supports, keyed by agent type.
 func BrowserPlatforms() []BrowserPlatform {
-	return []BrowserPlatform{claudeAIPlatform(), chatGPTPlatform()}
+	return []BrowserPlatform{claudeAIPlatform(), chatGPTPlatform(), geminiAppsPlatform()}
 }
 
 // LookupBrowserPlatform finds a platform by its agent type name.
@@ -129,6 +139,33 @@ func browserFreshness(marker string, session *db.Session) uint64 {
 		}
 	}
 	return hash.Sum64()
+}
+
+// pendingWindow bounds how long a chat whose newest reply looks unfinished
+// stays stale. A reply that never completes is then cached like any other.
+const pendingWindow = 24 * time.Hour
+
+// recentlyUpdated reports whether a list update time is within pendingWindow
+// of now. A zero or future time counts as recent.
+func recentlyUpdated(updatedAt, now time.Time) bool {
+	return updatedAt.IsZero() || now.Sub(updatedAt) < pendingWindow
+}
+
+// waitBrowserGap paces detail requests: it waits gap with up to 400 ms of
+// jitter either way. A zero gap does not wait.
+func waitBrowserGap(ctx context.Context, gap time.Duration) error {
+	if gap <= 0 {
+		return nil
+	}
+	jitter := time.Duration(rand.Int64N(int64(800*time.Millisecond))) - 400*time.Millisecond
+	timer := time.NewTimer(gap + jitter)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 type browserHTTPError struct {
@@ -203,6 +240,9 @@ type browserSync struct {
 	cb         *ImportCallbacks
 	machine    string
 	failedLast bool
+	// refused marks a conversation the service declined to return. It counts
+	// as that conversation's failure and does not end the run.
+	refused error
 	// formatErr keeps the last unreadable conversation format. It counts
 	// toward the two-failures stop like any failed chat; adapters return it
 	// when the list ends, so the user learns that an update is needed.
@@ -218,9 +258,12 @@ type browserConversation struct {
 	fetch     func(context.Context) ([]byte, error)
 	parse     func([]byte) (parser.ParseResult, error) // an empty session ID means nothing to import
 	write     func(context.Context, db.Store, parser.ParseResult) (importStatus, error)
-	// matches reports whether the detail still describes the listed version;
-	// freshness is recorded only when it does.
+	// matches, when set, reports whether the detail still describes the
+	// listed version; freshness is recorded only when it does.
 	matches func([]byte, parser.ParseResult) bool
+	// pending, when set, reports a reply still being written. The result is
+	// written but freshness is not recorded, so the next Sync fetches it again.
+	pending func([]byte) bool
 }
 
 // stops reports errors that end the run instead of one conversation.
@@ -271,7 +314,10 @@ func (s *browserSync) conversation(ctx context.Context, id string, chat browserC
 			return nil
 		}
 		s.stats.record(id, importSkipped, err)
-		if errors.Is(err, ErrBrowserResponseTooLarge) {
+		if errors.Is(err, ErrBrowserFormat) {
+			s.formatErr = err
+		}
+		if errors.Is(err, ErrBrowserResponseTooLarge) || s.refused != nil && errors.Is(err, s.refused) {
 			s.failedLast = false
 			return nil
 		}
@@ -281,6 +327,7 @@ func (s *browserSync) conversation(ctx context.Context, id string, chat browserC
 		s.failedLast = true
 		return nil
 	}
+	pending := chat.pending != nil && chat.pending(detail)
 	var detailErr error
 	write := func() error {
 		result, err := chat.parse(detail)
@@ -293,9 +340,13 @@ func (s *browserSync) conversation(ctx context.Context, id string, chat browserC
 			return nil
 		}
 		if result.Session.ID == "" {
-			// The chat has nothing to import yet. Record freshness for what is
-			// stored so it is not fetched again until the list shows a change.
+			// The chat has nothing to import yet. Unless a reply is still being
+			// written, record freshness for what is stored so it is not fetched
+			// again until the list shows a change.
 			s.stats.record(id, importSkipped, nil)
+			if pending {
+				return nil
+			}
 			stored, err := s.store.GetSessionFull(ctx, id)
 			if err == nil {
 				err = s.store.UpsertProviderStatHash(ctx, s.agent, id, chat.freshness(stored))
@@ -330,7 +381,7 @@ func (s *browserSync) conversation(ctx context.Context, id string, chat browserC
 					s.stats.Updated++
 				}
 				// The chat can change between list and detail; cache only what was imported.
-				if chat.matches(detail, result) {
+				if (chat.matches == nil || chat.matches(detail, result)) && !pending {
 					err = s.store.UpsertProviderStatHash(ctx, s.agent, id, chat.freshness(stored))
 				}
 			}

@@ -52,6 +52,7 @@ func TestClaudeAIFreshnessGolden(t *testing.T) {
 const (
 	browserPathOrganization = "11111111-1111-4111-8111-111111111111"
 	browserPathConversation = "22222222-2222-4222-8222-222222222222"
+	browserPathGeminiChat   = "c_0123456789abcdef"
 )
 
 var browserPathBuilders = map[parser.AgentType]func() []string{
@@ -68,6 +69,14 @@ var browserPathBuilders = map[parser.AgentType]func() []string{
 			chatGPTRequest(chatGPTListRequest, "", 0, false),
 			chatGPTRequest(chatGPTListRequest, "", 50, true),
 			chatGPTRequest(chatGPTDetailRequest, browserPathConversation, 0, false),
+		}
+	},
+	parser.AgentGeminiApps: func() []string {
+		return []string{
+			geminiRequest(geminiListRequest, "", ""),
+			geminiRequest(geminiListRequest, "", "cursor+1/="),
+			geminiRequest(geminiDetailRequest, browserPathGeminiChat, ""),
+			geminiRequest(geminiDetailRequest, browserPathGeminiChat, "cursor+43/"),
 		}
 	},
 }

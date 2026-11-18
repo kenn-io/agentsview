@@ -1,11 +1,13 @@
 // worker.js injects this file, then calls pageFetch, or a platform script
-// that wraps it, from a second script. headers adds request headers.
-globalThis.pageFetch = async function pageFetch(url, headers) {
+// that wraps it, from a second script. headers adds request headers. A
+// request body turns the request into a POST; only gemini_fetch.js sends one.
+globalThis.pageFetch = async function pageFetch(url, headers, requestBody) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 45000);
   try {
     const response = await fetch(url, {
-      method: "GET",
+      method: requestBody === undefined ? "GET" : "POST",
+      body: requestBody,
       credentials: "include",
       redirect: "error",
       headers,
