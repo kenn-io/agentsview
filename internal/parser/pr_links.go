@@ -122,6 +122,9 @@ func PromptPRLinks(text string) []PRLink {
 		}
 		part := text[start[0]:end]
 		candidate := promptURL.FindString(part)
+		if n := strings.IndexFunc(candidate, unicode.IsSpace); n >= 0 {
+			candidate = candidate[:n]
+		}
 		if i+1 < len(starts) && len(candidate) == len(part) {
 			candidate = strings.TrimRightFunc(candidate, func(r rune) bool {
 				return unicode.IsPunct(r) || unicode.IsSymbol(r)

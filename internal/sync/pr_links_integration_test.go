@@ -75,19 +75,27 @@ func TestParseDiffIgnoresLauncherParents(t *testing.T) {
 }
 
 func TestCodexPromptPRLinkFilter(t *testing.T) {
-	const id = "019f0000-0000-7000-8000-000000000004"
 	env := setupTestEnv(t)
-	env.writeCodexSession(t, "2026/07/29", "rollout-2026-07-29T14-55-00-"+id+".jsonl", testjsonl.JoinJSONL(
-		testjsonl.CodexSessionMetaJSON(id, "/workspace/project", "user", tsZero),
-		testjsonl.CodexMsgJSON("user", "$pr https://github.com/owner/repo/pull/123", tsZero),
-	))
-	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+	for _, tc := range []struct{ id, prompt string }{
+		{"019f0000-0000-7000-8000-000000000004", "$pr https://github.com/owner/repo/pull/123"},
+		{"019f0000-0000-7000-8000-000000000005", "$pr https://github.com/owner/repo/pull/123\u00a0review"},
+		{"019f0000-0000-7000-8000-000000000006", "$pr https://github.com/owner/repo/pull/456"},
+	} {
+		env.writeCodexSession(t, "2026/07/29", "rollout-2026-07-29T14-55-00-"+tc.id+".jsonl", testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON(tc.id, "/workspace/project", "user", tsZero),
+			testjsonl.CodexMsgJSON("user", tc.prompt, tsZero),
+		))
+	}
+	require.Equal(t, 3, env.engine.SyncAll(t.Context(), nil).Synced)
 	filter, err := db.ParsePRFilter("owner/repo#123")
 	require.NoError(t, err)
 	page, err := env.db.ListSessions(t.Context(), db.SessionFilter{PR: filter})
 	require.NoError(t, err)
-	require.Len(t, page.Sessions, 1)
-	assert.Equal(t, "codex:"+id, page.Sessions[0].ID)
+	var ids []string
+	for _, session := range page.Sessions {
+		ids = append(ids, session.ID)
+	}
+	assert.ElementsMatch(t, []string{"codex:019f0000-0000-7000-8000-000000000004", "codex:019f0000-0000-7000-8000-000000000005"}, ids)
 }
 
 func TestIncrementalSync_PromptPRLinks(t *testing.T) {
