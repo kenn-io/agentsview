@@ -131,15 +131,7 @@ func TestSearchKeptRefreshAfterWrite(t *testing.T) {
 	local, syncer, _ := newUsageJournalFixture(t)
 	ctx := t.Context()
 	url := testPGURL(t)
-	config, err := pgx.ParseConfig(url)
-	require.NoError(t, err)
-	config.RuntimeParams["search_path"] = syncer.schema
-	trace := &searchQueryTracer{}
-	config.Tracer = trace
-	pool := stdlib.OpenDB(*config)
-	s := &Store{pg: pool, ownedDB: pool}
-	t.Cleanup(func() { require.NoError(t, s.Close()) })
-	require.NoError(t, s.ConfigureUsageCache(ctx, t.TempDir(), url, syncer.schema))
+	s, trace := openTracedSearchStore(t, url, syncer.schema, t.TempDir())
 	for _, id := range []string{"one", "two", "three"} {
 		require.NoError(t, local.UpsertSession(ctx, db.Session{ID: id, Project: "project", Machine: "device", Agent: "claude", MessageCount: 1}))
 		require.NoError(t, local.ReplaceSessionMessages(ctx, id, []db.Message{{SessionID: id, Role: "user", Content: map[string]string{"one": "xneedle", "three": "xxneedle", "two": "xxxneedle"}[id]}}))
