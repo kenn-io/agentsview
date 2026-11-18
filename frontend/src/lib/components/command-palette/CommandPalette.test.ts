@@ -592,6 +592,16 @@ describe("CommandPalette", () => {
     unmount(component);
   });
 
+  it("does not complete the search step for whitespace", async () => {
+    localStorage.clear();
+    const component = mount(CommandPalette, { target: document.body });
+    await tick();
+    await enterSearchQuery(" ");
+
+    expect(gettingStarted.done.has("search")).toBe(false);
+    unmount(component);
+  });
+
   it("search result click navigates to the session route", async () => {
     mockSearchStore.results = [makeSearchResult()];
 

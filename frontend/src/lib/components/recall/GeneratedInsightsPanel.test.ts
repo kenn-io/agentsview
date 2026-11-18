@@ -225,6 +225,27 @@ describe("GeneratedInsightsPanel", () => {
     state.store.error = null;
   });
 
+  it("does not complete the checklist when a pending load is canceled", async () => {
+    let finish!: () => void;
+    mocks.load.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    state.store.selectedItem = undefined;
+    component = mount(GeneratedInsightsPanel, { target: document.body });
+    await tick();
+    await unmount(component);
+    component = undefined;
+    finish();
+    await mocks.load.mock.results[0]!.value;
+    await tick();
+
+    expect(mocks.cancelInFlightReads).toHaveBeenCalledOnce();
+    expect(gettingStarted.complete).not.toHaveBeenCalled();
+  });
+
   it("shows every input that scopes a generated report", async () => {
     component = mount(GeneratedInsightsPanel, { target: document.body });
     await tick();

@@ -271,9 +271,11 @@
     return "";
   }
 
+  let mounted = true;
+
   async function loadInsights() {
     await insights.load();
-    if (!insights.error) gettingStarted.complete("insights");
+    if (mounted && !insights.error) gettingStarted.complete("insights");
   }
 
   onMount(() => {
@@ -283,6 +285,7 @@
   });
 
   onDestroy(() => {
+    mounted = false;
     insights.cancelInFlightReads();
     clearTimeout(copiedInsightLinkTimer);
   });

@@ -129,7 +129,7 @@
   function handleInput(e: Event) {
     const target = e.target as HTMLInputElement;
     inputValue = target.value;
-    if (inputValue) gettingStarted.complete("search");
+    if (inputValue.trim()) gettingStarted.complete("search");
     selectedIndex = 0;
 
     if (isServerSearchQuery(inputValue)) {
