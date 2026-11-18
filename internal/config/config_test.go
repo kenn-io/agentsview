@@ -706,25 +706,15 @@ func TestPortExplicitProvenance(t *testing.T) {
 		assert.False(t, cfg.PortExplicit)
 	})
 
-	t.Run("pg and clickhouse loaders mark explicit ports", func(t *testing.T) {
-		for _, load := range []struct {
-			name string
-			fn   func(*pflag.FlagSet) (Config, error)
-		}{
-			{name: "pg", fn: LoadRemoteServePFlags},
-			{name: "clickhouse", fn: LoadRemoteServePFlags},
-		} {
-			t.Run(load.name, func(t *testing.T) {
-				setupTestEnv(t)
-				fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
-				RegisterServePFlags(fs)
-				require.NoError(t, fs.Parse([]string{"--port", "8080"}))
-				cfg, err := load.fn(fs)
-				require.NoError(t, err)
-				assert.Equal(t, 8080, cfg.Port)
-				assert.True(t, cfg.PortExplicit)
-			})
-		}
+	t.Run("remote serve loader marks explicit ports", func(t *testing.T) {
+		setupTestEnv(t)
+		fs := pflag.NewFlagSet("test", pflag.ContinueOnError)
+		RegisterServePFlags(fs)
+		require.NoError(t, fs.Parse([]string{"--port", "8080"}))
+		cfg, err := LoadRemoteServePFlags(fs)
+		require.NoError(t, err)
+		assert.Equal(t, 8080, cfg.Port)
+		assert.True(t, cfg.PortExplicit)
 	})
 }
 

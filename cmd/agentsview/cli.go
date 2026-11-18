@@ -327,7 +327,8 @@ func newServeStopCommand() *cobra.Command {
 		Short: "Stop the server, including sync and file watchers",
 		Long: "Stop the server and its background work, including a server started\n" +
 			"by `agentsview daemon start` or automatically by a CLI command.\n\n" +
-			"This also stops read-only PostgreSQL servers for the data directory.\n" +
+			"This also stops read-only PostgreSQL and ClickHouse servers for the data\n" +
+			"directory.\n" +
 			"Use `agentsview daemon stop` to stop only the writable server.",
 		Example:      "  agentsview serve stop",
 		SilenceUsage: true,
@@ -345,7 +346,7 @@ func newServeRestartCommand(deps daemonCommandDeps) *cobra.Command {
 		Long: "Restart only the writable SQLite background daemon using settings " +
 			"from config.toml.\n\n" +
 			"Unlike `agentsview serve stop`, this command intentionally leaves " +
-			"read-only PostgreSQL servers running.",
+			"read-only PostgreSQL and ClickHouse servers running.",
 		Example:      "  agentsview serve restart",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
