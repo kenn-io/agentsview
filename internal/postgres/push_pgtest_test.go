@@ -5,9 +5,12 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"testing"
 	"time"
 
@@ -2363,6 +2366,68 @@ func TestPushMessagesSanitizesNULBytes(t *testing.T) {
 	).Scan(&ctidAfter), "reading ctid after second push")
 	assert.Equal(t, ctidBefore, ctidAfter,
 		"fast path should skip rewriting a NUL-field session")
+}
+
+// TestPushBoundaryStateKeepsOnlyWindowFingerprints verifies an incremental
+// push carries forward only fingerprints for sessions in its window, so the
+// boundary state stays bounded instead of growing with the whole archive.
+func TestPushBoundaryStateKeepsOnlyWindowFingerprints(t *testing.T) {
+	t.Parallel()
+	const schema = pgPushTestSchema
+	pg, err := Open(t.Context(), testPGSchemaURL(t, schema), schema, true)
+	require.NoError(t, err, "Open")
+	defer pg.Close()
+	ctx := t.Context()
+	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
+
+	localDB, err := db.Open(ctx, filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err, "db.Open")
+	defer localDB.Close()
+
+	sync := &Sync{
+		pg: pg, local: localDB, machine: "test-machine",
+		schema: schema, schemaDone: true,
+	}
+	session := func(id string) db.Session {
+		return db.Session{
+			ID: id, Project: "proj", Machine: "local", Agent: "claude",
+			MessageCount: 1, CreatedAt: "2026-01-01T00:00:00Z",
+		}
+	}
+	for _, id := range []string{"window-old", "window-changed"} {
+		require.NoError(t, localDB.UpsertSession(ctx, session(id)))
+		require.NoError(t, localDB.InsertMessages(ctx, []db.Message{{
+			SessionID: id, Role: "user", Content: "hi", ContentLength: 2,
+		}}))
+	}
+	boundaryIDs := func(t *testing.T) []string {
+		t.Helper()
+		raw, err := sync.effectiveSyncState().GetSyncState(
+			ctx, lastPushBoundaryStateKey,
+		)
+		require.NoError(t, err)
+		var state pushBoundaryState
+		require.NoError(t, json.Unmarshal([]byte(raw), &state))
+		return slices.Sorted(maps.Keys(state.Fingerprints))
+	}
+
+	res, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err, "first Push")
+	require.Equal(t, 2, res.SessionsPushed)
+	require.Equal(t, []string{"window-changed", "window-old"}, boundaryIDs(t))
+
+	// Only window-changed moves past the first push's cutoff, so the
+	// boundary state must drop window-old's fingerprint instead of
+	// carrying it forward.
+	changed := session("window-changed")
+	changed.MessageCount = 2
+	mtime := time.Now().UnixNano()
+	changed.FileMtime = &mtime
+	require.NoError(t, localDB.UpsertSession(ctx, changed))
+	res, err = sync.Push(ctx, false, nil)
+	require.NoError(t, err, "second Push")
+	assert.Equal(t, 1, res.SessionsPushed)
+	assert.Equal(t, []string{"window-changed"}, boundaryIDs(t))
 }
 
 // TestPushIncrementalWithOnlyForeignMachineSessions verifies reset detection
