@@ -5,8 +5,10 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/stringutil"
 )
 
@@ -51,4 +53,26 @@ func TestPGActivityDiskRowRoundTrip(t *testing.T) {
 		ordinal: 9, cacheCreate1h: 10, ordinalValid: true, costValid: true, copilotReported: true, pricingTimeAbsent: true, costRecorded: true,
 	}
 	assert.Equal(t, row, pgActivityRowToDisk(row).activityRow(stringutil.Interner{}))
+}
+
+func TestPGActivityDiskDropsPricesWhenOverLimit(t *testing.T) {
+	rows := []kept.Part[pgActivityDiskPart]{
+		{Value: pgActivityDiskPart{Identity: "source", Usage: []pgActivityDiskRow{{SessionID: "session", Model: "model"}}, Priced: &pgActivityDiskPriced{Rows: []pgActivityDiskPricedRow{{Attribution: "model", Index: 0}}}}},
+		{ID: "session", Value: pgActivityDiskPart{Bounds: []int64{1, 2}, Runs: []activity.SessionRunPiece{{Model: "model", Last: 1}}, Candidate: true}},
+	}
+	data, err := encodePGActivityDiskRows(rows, 60)
+	require.NoError(t, err)
+	decoded, ok := kept.DecodeRows[kept.Part[pgActivityDiskPart]](data)
+	require.True(t, ok)
+	require.Len(t, decoded, 2)
+	assert.Nil(t, decoded[0].Value.Priced)
+	assert.Equal(t, rows[0].Value.Usage, decoded[0].Value.Usage)
+	assert.Equal(t, rows[1], decoded[1])
+	data, err = encodePGActivityDiskRows(rows, 1000)
+	require.NoError(t, err)
+	decoded, ok = kept.DecodeRows[kept.Part[pgActivityDiskPart]](data)
+	require.True(t, ok)
+	assert.Equal(t, rows[0].Value.Priced, decoded[0].Value.Priced)
+	_, err = encodePGActivityDiskRows(rows, 1)
+	require.Error(t, err)
 }
