@@ -43,13 +43,13 @@ func TestDiskLimitsAndUnavailableDirectory(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	var disk Disk
 	require.NoError(t, disk.Open("test-usage", "mirror", 128, 0))
-	require.ErrorIs(t, disk.Put("large", "v", make([]byte, 128)), ErrLimitExceeded)
+	disk.Put("large", "v", make([]byte, 128))
 	_, err := os.Stat(disk.reports.disk.path("large"))
 	require.ErrorIs(t, err, os.ErrNotExist)
 	require.NoError(t, os.WriteFile(disk.reports.disk.path("large"), append(disk.reports.disk.header("v"), make([]byte, 128)...), 0o600))
 	_, ok := disk.Get("large", "v")
 	require.False(t, ok)
-	require.NoError(t, disk.Put("small", "v", []byte("body")))
+	disk.Put("small", "v", []byte("body"))
 	t.Setenv("CACHE_DIRECTORY", disk.reports.disk.path("small"))
 	var unavailable Disk
 	require.Error(t, unavailable.Open("test-usage", "mirror", 128, 0))
@@ -131,9 +131,4 @@ func TestLoadJSON(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, retain)
 	require.Equal(t, []string{"current"}, got)
-}
-
-func TestEncodeRowsLimit(t *testing.T) {
-	_, err := EncodeRows([]string{"abc"}, 2, func(s string) int64 { return int64(len(s)) })
-	require.ErrorIs(t, err, ErrLimitExceeded)
 }

@@ -241,6 +241,9 @@ func TestSessionRunsGobRoundTrip(t *testing.T) {
 	var restored SessionRuns
 	require.NoError(t, gob.NewDecoder(&buf).Decode(&restored))
 	start, end := time.UnixMicro(1500000).UTC(), time.UnixMicro(4500000).UTC()
+	wireRestored, err := original.Wire().Restore()
+	require.NoError(t, err)
+	require.Equal(t, restored.AppendClippedBefore(nil, "s", start, end, time.UnixMicro(2000000)), wireRestored.AppendClippedBefore(nil, "s", start, end, time.UnixMicro(2000000)))
 	require.Equal(t, []Run{{SessionID: "s", Start: time.UnixMicro(1500000).UTC(), End: time.UnixMicro(3000000).UTC(), Tail: time.UnixMicro(2000000).UTC(), Model: "model-a"}}, restored.AppendClippedBefore(nil, "s", start, end, time.UnixMicro(2000000)))
 	for _, invalid := range []encodedSessionRuns{
 		{Bounds: []int64{1}, Runs: []encodedSessionRun{{First: 0, Last: 2}}},
@@ -250,11 +253,7 @@ func TestSessionRunsGobRoundTrip(t *testing.T) {
 		buf.Reset()
 		require.NoError(t, gob.NewEncoder(&buf).Encode(invalid))
 		require.Error(t, restored.GobDecode(buf.Bytes()))
-		pieces := make([]SessionRunPiece, len(invalid.Runs))
-		for i, run := range invalid.Runs {
-			pieces[i] = SessionRunPiece(run)
-		}
-		_, err := NewSessionRuns(invalid.Bounds, invalid.Trimmed, pieces)
+		_, err := invalid.Restore()
 		require.Error(t, err)
 	}
 }

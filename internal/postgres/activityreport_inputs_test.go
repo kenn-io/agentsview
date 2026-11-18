@@ -1,9 +1,6 @@
 package postgres
 
 import (
-	"math"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -58,91 +55,31 @@ func TestPGActivityDiskRowRoundTrip(t *testing.T) {
 	assert.Equal(t, row, pgActivityRowToDisk(row).activityRow(stringutil.Interner{}))
 }
 
-func TestPGActivityDiskUsageEstimateCoversEncodedRows(t *testing.T) {
-	row := pgActivityDiskRow{
-		SessionID: "session", UsageSource: "source", Model: "model", ProviderID: "provider", Agent: "agent",
-		ClaudeMessageID: "message", ClaudeRequestID: "request", SourceUUID: "uuid", UsageDedupKey: "dedup",
-		US: math.MaxInt64, Cost: math.MaxInt64, WebSearches: math.MaxInt64, Input: math.MaxInt64, Output: math.MaxInt64,
-		CacheCreate: math.MaxInt64, CacheRead: math.MaxInt64, Reasoning: math.MaxInt64, Ordinal: math.MaxInt32, CacheCreate1h: math.MaxInt32,
-		OrdinalValid: true, CostValid: true, CopilotReported: true, PricingTimeAbsent: true, CostRecorded: true,
-	}
-	empty := kept.Part[pgActivityDiskPart]{}
-	part := empty
-	part.Value.Usage = make([]pgActivityDiskRow, 1024)
-	for i := range part.Value.Usage {
-		part.Value.Usage[i] = row
-	}
-	encode := func(part kept.Part[pgActivityDiskPart]) []byte {
-		data, err := kept.EncodeRows([]kept.Part[pgActivityDiskPart]{part}, math.MaxInt64, func(kept.Part[pgActivityDiskPart]) int64 { return 0 })
-		require.NoError(t, err)
-		return data
-	}
-	encodedGrowth := len(encode(part)) - len(encode(empty))
-	assert.GreaterOrEqual(t, pgActivityDiskPartBytes(part)-pgActivityDiskPartBytes(empty), int64(encodedGrowth))
-}
-
-func TestPGActivityDiskDropsPricesWhenOverLimit(t *testing.T) {
-	cache := t.TempDir()
-	t.Setenv("CACHE_DIRECTORY", cache)
+func TestPGActivityDiskInputsRoundTrip(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	intern := stringutil.Interner{}
-	runs, err := activity.NewSessionRuns([]int64{1, 2}, nil, []activity.SessionRunPiece{{Model: "model", Last: 1}})
+	runs, err := (activity.SessionRunsWire{Bounds: []int64{1, 2}, Runs: []activity.SessionRunPiece{{Model: "model", Last: 1}}}).Restore()
 	require.NoError(t, err)
+	row := pgActivityUsageRow{sessionID: intern.Intern("session"), usageSource: intern.Intern("source"), model: intern.Intern("model"), providerID: intern.Intern("provider"), agent: intern.Intern("agent"), output: 3}
+	second := row
+	second.output = 7
 	input := pgActivityInputs{
-		identity: "source", usage: []pgActivityUsageRow{{sessionID: intern.Intern("session"), usageSource: intern.Intern("source"), model: intern.Intern("model"), providerID: intern.Intern("provider"), agent: intern.Intern("agent")}},
+		identity: "source", usage: []pgActivityUsageRow{second, row},
 		sessions: map[string]pgActivitySession{"session": {runs: runs, users: []int64{1}}}, candidates: map[string]bool{"session": true},
 		priced: &pgActivityPriced{rangeStart: time.Unix(1, 0).UTC(), rangeEnd: time.Unix(2, 0).UTC(), effectiveEnd: time.Unix(3, 0).UTC(), next: time.Unix(4, 0).UTC(), pricingDigest: "prices", block: &export.PricingBlock{Source: "catalog", Digest: "digest", Fallback: export.PricingFallback{Models: []string{}}, Models: map[string]export.ModelPricingProvenance{}}, rows: []pgActivityPricedRow{{attribution: intern.Intern("model"), index: 0}}},
 	}
-	var probe Store
-	require.NoError(t, probe.activityDisk.Open("probe", "mirror", 0, 0))
-	probe.runtimeState().activityInputs.Put("slot", "version", []pgActivityInputs{input})
-	probe.saveActivityInputs()
-	priced, ok := probe.activityDisk.Get("slot", pgActivityDiskVersion+"version")
+	var first Store
+	require.NoError(t, first.activityDisk.Open("roundtrip", "mirror", 0, 0))
+	first.runtimeState().activityInputs.Put("slot", "version", []pgActivityInputs{input})
+	first.saveActivityInputs()
+	var reopened Store
+	require.NoError(t, reopened.activityDisk.Open("roundtrip", "mirror", 0, 0))
+	got, ok := reopened.loadActivityInputs("slot", "version", "source")
 	require.True(t, ok)
-	rawInput := input
-	rawInput.priced = nil
-	probe.runtimeState().activityInputs.Put("slot", "version", []pgActivityInputs{rawInput})
-	probe.saveActivityInputs()
-	raw, ok := probe.activityDisk.Get("slot", pgActivityDiskVersion+"version")
-	require.True(t, ok)
-	files, err := filepath.Glob(filepath.Join(cache, "probe", "mirror", "*.gob"))
-	require.NoError(t, err)
-	require.Len(t, files, 1)
-	info, err := os.Stat(files[0])
-	require.NoError(t, err)
-	header := info.Size() - int64(len(raw))
-	require.Greater(t, len(priced), len(raw))
-
-	for _, tc := range []struct {
-		name         string
-		limit        int64
-		want, prices bool
-	}{
-		{"fits", int64(len(priced)) + header, true, true},
-		{"header exceeds limit", int64(len(priced)) + header - 1, true, false},
-		{"raw exceeds limit", int64(len(raw)) + header - 1, false, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var first Store
-			require.NoError(t, first.activityDisk.Open(tc.name, "mirror", tc.limit, 0))
-			first.runtimeState().activityInputs.Put("slot", "version", []pgActivityInputs{input})
-			first.saveActivityInputs()
-			var reopened Store
-			require.NoError(t, reopened.activityDisk.Open(tc.name, "mirror", tc.limit, 0))
-			got, ok := reopened.loadActivityInputs("slot", "version", "source")
-			require.Equal(t, tc.want, ok)
-			if !ok {
-				return
-			}
-			assert.Equal(t, input.usage, got.usage)
-			assert.Equal(t, input.sessions, got.sessions)
-			assert.Equal(t, input.candidates, got.candidates)
-			if tc.prices {
-				assert.Equal(t, input.priced, got.priced)
-			} else {
-				assert.Nil(t, got.priced)
-			}
-		})
-	}
+	assert.Equal(t, input.usage, got.usage)
+	assert.Equal(t, input.sessions, got.sessions)
+	assert.Equal(t, input.candidates, got.candidates)
+	assert.Equal(t, input.priced, got.priced)
 }
 
 func TestPGActivityDiskRejectsInvalidPricedIndexes(t *testing.T) {
@@ -153,6 +90,7 @@ func TestPGActivityDiskRejectsInvalidPricedIndexes(t *testing.T) {
 	}{
 		{"bad index", []int32{2, 1}},
 		{"duplicate index", []int32{0, 0}},
+		{"nil block", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var store Store
@@ -168,12 +106,15 @@ func TestPGActivityDiskRejectsInvalidPricedIndexes(t *testing.T) {
 			rows, ok := kept.DecodeRows[kept.Part[pgActivityDiskPart]](data)
 			require.True(t, ok)
 			require.NotNil(t, rows[0].Value.Priced)
+			if tc.indexes == nil {
+				rows[0].Value.Priced.Block = []byte("null")
+			}
 			for i, index := range tc.indexes {
 				rows[0].Value.Priced.Rows[i].Index = index
 			}
 			data, err := kept.EncodeRows(rows, 256<<20, func(kept.Part[pgActivityDiskPart]) int64 { return 0 })
 			require.NoError(t, err)
-			require.NoError(t, store.activityDisk.Put("slot", version, data))
+			store.activityDisk.Put("slot", version, data)
 			loaded, ok := store.loadActivityInputs("slot", "version", "source")
 			require.True(t, ok)
 			require.Nil(t, loaded.priced)

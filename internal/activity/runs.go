@@ -82,34 +82,6 @@ type sessionRun struct {
 	first, last int32
 }
 
-// SessionRunPiece identifies a run's model and its boundary indexes.
-type SessionRunPiece struct {
-	Model       string
-	First, Last int32
-}
-
-// Pieces returns the boundaries and run indexes used to clip a session.
-func (r SessionRuns) Pieces() (bounds []int64, trimmed []uint64, runs []SessionRunPiece) {
-	for _, run := range r.runs {
-		runs = append(runs, SessionRunPiece{run.model, run.first, run.last})
-	}
-	return r.bounds, r.trimmed, runs
-}
-
-// NewSessionRuns restores runs after validating their boundary indexes.
-func NewSessionRuns(bounds []int64, trimmed []uint64, runs []SessionRunPiece) (SessionRuns, error) {
-	result := SessionRuns{bounds: bounds, trimmed: trimmed}
-	var next int32
-	for _, run := range runs {
-		if run.First < next || run.Last <= run.First || int(run.Last) >= len(bounds) {
-			return SessionRuns{}, errors.New("invalid activity run bounds")
-		}
-		result.runs = append(result.runs, sessionRun{run.Model, run.First, run.Last})
-		next = run.Last + 1
-	}
-	return result, nil
-}
-
 type encodedSessionRun struct {
 	Model       string
 	First, Last int32
@@ -121,12 +93,38 @@ type encodedSessionRuns struct {
 	Runs    []encodedSessionRun
 }
 
-// GobEncode preserves the pieces used to clip runs to a report range.
-func (r SessionRuns) GobEncode() ([]byte, error) {
+// SessionRunPiece identifies a run's model and boundary indexes.
+type SessionRunPiece = encodedSessionRun
+
+// SessionRunsWire holds the boundaries and indexes for saved runs.
+type SessionRunsWire = encodedSessionRuns
+
+// Wire returns the pieces used to clip runs to a report range.
+func (r SessionRuns) Wire() SessionRunsWire {
 	encoded := encodedSessionRuns{Bounds: r.bounds, Trimmed: r.trimmed}
 	for _, run := range r.runs {
 		encoded.Runs = append(encoded.Runs, encodedSessionRun{run.model, run.first, run.last})
 	}
+	return encoded
+}
+
+// Restore validates the boundary indexes and restores saved runs.
+func (encoded encodedSessionRuns) Restore() (SessionRuns, error) {
+	decoded := SessionRuns{bounds: encoded.Bounds, trimmed: encoded.Trimmed}
+	var next int32
+	for _, run := range encoded.Runs {
+		if run.First < next || run.Last <= run.First || int(run.Last) >= len(encoded.Bounds) {
+			return SessionRuns{}, errors.New("invalid activity run bounds")
+		}
+		decoded.runs = append(decoded.runs, sessionRun{run.Model, run.First, run.Last})
+		next = run.Last + 1
+	}
+	return decoded, nil
+}
+
+// GobEncode preserves the pieces used to clip runs to a report range.
+func (r SessionRuns) GobEncode() ([]byte, error) {
+	encoded := r.Wire()
 	var buf bytes.Buffer
 	err := gob.NewEncoder(&buf).Encode(encoded)
 	return buf.Bytes(), err
@@ -138,14 +136,9 @@ func (r *SessionRuns) GobDecode(data []byte) error {
 	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&encoded); err != nil {
 		return err
 	}
-	decoded := SessionRuns{bounds: encoded.Bounds, trimmed: encoded.Trimmed}
-	var next int32
-	for _, run := range encoded.Runs {
-		if run.First < next || run.Last <= run.First || int(run.Last) >= len(encoded.Bounds) {
-			return errors.New("invalid activity run bounds")
-		}
-		decoded.runs = append(decoded.runs, sessionRun{run.Model, run.First, run.Last})
-		next = run.Last + 1
+	decoded, err := encoded.Restore()
+	if err != nil {
+		return err
 	}
 	*r = decoded
 	return nil

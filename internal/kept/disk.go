@@ -94,7 +94,7 @@ func (d activityReportDisk) touch(selection string) error {
 func (d activityReportDisk) save(selection, key string, payload []byte, maxFile int64) error {
 	data := append(d.header(key), payload...)
 	if maxFile > 0 && int64(len(data)) > maxFile {
-		return ErrLimitExceeded
+		return nil
 	}
 	return writeFileAtomic(d.path(selection), data)
 }
@@ -123,18 +123,16 @@ func (d *Disk) Keep(selection, version string, encode func() ([]byte, error)) {
 	}
 }
 
-func (d *Disk) Put(selection, version string, payload []byte) error {
+func (d *Disk) Put(selection, version string, payload []byte) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	disk := d.reports.disk
 	if disk.dir == "" {
-		return nil
+		return
 	}
-	if err := disk.save(selection, version, payload, d.maxFile); err != nil {
-		return err
+	if disk.save(selection, version, payload, d.maxFile) == nil {
+		_ = d.trim()
 	}
-	_ = d.trim()
-	return nil
 }
 
 func (d *Disk) trim() error {

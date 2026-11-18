@@ -116,7 +116,7 @@ func (r *Reads[T]) DoSaved(ctx context.Context, disk *Disk, slot, memoryVersion,
 			return value, false, err
 		}
 		if data, err := encode(value); err == nil {
-			_ = disk.Put(slot, savedVersion, data)
+			disk.Put(slot, savedVersion, data)
 		}
 		return value, true, nil
 	})
