@@ -101,35 +101,6 @@ func TestRawProjectionRolloutBackfillsSelectedLongerCapture(t *testing.T) {
 	assert.Greater(t, corpusAfter, corpusBefore)
 }
 
-func TestRawProjectionRolloutBackfillsTombstonedSource(t *testing.T) {
-	f := newProjectionFixture(t)
-	m, accepted := f.accept(t, "device-a", "initial", "")
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("Review https://github.com/o/r/pull/2")))
-	tomb, _ := f.tombstone(t, m, "departed", accepted.Receipt)
-	before, err := f.sink.Resolve(t.Context(), "codex:portable")
-	require.NoError(t, err)
-	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET pr_links='', data_version=183 WHERE id=$1`, before.SessionID)
-	require.NoError(t, err)
-	var corpusBefore int64
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT corpus_revision FROM raw_corpus_state`).Scan(&corpusBefore))
-	rollout, err := f.sink.ScheduleCurrentHeads(t.Context(), "prompt-links", "parser-2", 10)
-	require.NoError(t, err)
-	require.Equal(t, 1, rollout.Selected)
-	leases, err := f.jobs.ClaimRawParseJobs(t.Context(), "upgrade-worker", 1, time.Minute)
-	require.NoError(t, err)
-	require.Len(t, leases, 1)
-	require.NoError(t, f.sink.Project(t.Context(), leases[0], tomb, rawderive.ParsedManifest{Tombstone: true}))
-	after, err := f.sink.Resolve(t.Context(), "codex:portable")
-	require.NoError(t, err)
-	assert.Equal(t, before.SessionID, after.SessionID)
-	var links string
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, after.SessionID).Scan(&links))
-	assert.Equal(t, []db.PRLink{{URL: "https://github.com/o/r/pull/2", Host: "github.com", Repository: "o/r", Number: 2}}, db.DecodePRLinks(links))
-	var corpusAfter int64
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT corpus_revision FROM raw_corpus_state`).Scan(&corpusAfter))
-	assert.Greater(t, corpusAfter, corpusBefore)
-}
-
 func TestRawProjectionFencesStaleAndSkipsCurrentTombstonedCapture(t *testing.T) {
 	f := newProjectionFixture(t)
 	m, accepted := f.accept(t, "device-a", "initial", "")
@@ -139,7 +110,11 @@ func TestRawProjectionFencesStaleAndSkipsCurrentTombstonedCapture(t *testing.T) 
 	require.NoError(t, err)
 	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET data_version=183 WHERE id=$1`, resolved.SessionID)
 	require.NoError(t, err)
-	for _, stage := range []string{"stale", "current", "future"} {
+	for _, stage := range []string{"stale", "backfill", "current", "future"} {
+		if stage == "backfill" {
+			_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET pr_links='',data_version=183 WHERE id=$1`, resolved.SessionID)
+			require.NoError(t, err)
+		}
 		if stage == "current" {
 			_, err = f.runtime.ExecContext(t.Context(), `UPDATE raw_content_revisions SET payload='invalid' WHERE session_id=$1`, resolved.SessionID)
 			require.NoError(t, err)
@@ -158,7 +133,14 @@ func TestRawProjectionFencesStaleAndSkipsCurrentTombstonedCapture(t *testing.T) 
 		require.NoError(t, f.sink.Project(t.Context(), leases[0], tomb, rawderive.ParsedManifest{Tombstone: true}))
 		var corpusAfter int64
 		require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT corpus_revision FROM raw_corpus_state`).Scan(&corpusAfter))
-		assert.Equal(t, corpusBefore, corpusAfter, stage)
+		if stage == "backfill" {
+			assert.Greater(t, corpusAfter, corpusBefore)
+			var links string
+			require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&links))
+			assert.Equal(t, []db.PRLink{{URL: "https://github.com/o/r/pull/2", Host: "github.com", Repository: "o/r", Number: 2}}, db.DecodePRLinks(links))
+		} else {
+			assert.Equal(t, corpusBefore, corpusAfter, stage)
+		}
 		var version int
 		require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT data_version FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&version))
 		want := db.CurrentDataVersion()

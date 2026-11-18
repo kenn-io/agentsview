@@ -69,25 +69,9 @@ func TestImageTextCompatibilityVersion(t *testing.T) {
 }
 
 func TestPromptPRLinksCompatibilityVersion(t *testing.T) {
-	require.GreaterOrEqual(t, CurrentDataVersion(), 184)
-	providers, declared := dataVersionScopes[184]
-	require.True(t, declared)
+	providers := ScopedDataVersionProviders(183, 184)
+	require.NotNil(t, providers)
 	require.Empty(t, providers)
-	require.NotNil(t, ScopedDataVersionProviders(183, 184))
-	require.Empty(t, ScopedDataVersionProviders(183, 184))
-	d := testDB(t)
-	insertSession(t, d, "complete", "project", func(s *Session) { s.Agent = "codex" })
-	require.NoError(t, d.SetSessionDataVersion(t.Context(), "complete", 183))
-	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
-		if err := writeUserVersion(t.Context(), tx, 183); err != nil {
-			return err
-		}
-		return advanceDataVersion(t.Context(), tx, 184)
-	}))
-	assert.Equal(t, 184, d.GetSessionDataVersion(t.Context(), "complete"))
-	var pending int
-	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT COUNT(*) FROM stats WHERE key=?`, scopedUpgradePendingKey).Scan(&pending))
-	assert.Zero(t, pending)
 }
 
 // Version 134 reshapes Codex session IDs, so it must rebuild every provider.

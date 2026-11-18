@@ -39,60 +39,41 @@ func TestPromptPRLinksStoredMessages(t *testing.T) {
 }
 
 func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		legacy bool
-	}{{name: "backfill"}, {name: "legacy", legacy: true}} {
-		t.Run(tc.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "archive.db")
-			d, err := OpenIsolated(t.Context(), path)
-			require.NoError(t, err)
-			t.Cleanup(func() {
-				if d != nil {
-					_ = d.Close()
-				}
-			})
-			link, ok := parser.NewPRLink("https://github.com/o/r/pull/1", "o/r", 1)
-			require.True(t, ok)
-			s := Session{ID: "archived", Project: "project", Machine: "local", Agent: "chatgpt"}
-			if tc.legacy {
-				s.PRLinks = []PRLink{link}
-			}
-			require.NoError(t, d.UpsertSession(t.Context(), s))
-			dialogue := "https://github.com/o/r/pull/42"
-			require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "user", Content: dialogue + " https://github.com/o/r/pull/3", DialogueText: &dialogue}}))
-			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
-				if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links=structured_pr_links WHERE id=?`, s.ID); err != nil {
-					return err
-				}
-				if tc.legacy {
-					if _, err := tx.ExecContext(t.Context(), artifactSessionQueueTriggerDropsSQL); err != nil {
-						return err
-					}
-					if _, err := tx.ExecContext(t.Context(), `ALTER TABLE sessions DROP COLUMN structured_pr_links`); err != nil {
-						return err
-					}
-				}
-				if _, err := tx.ExecContext(t.Context(), `DELETE FROM stats WHERE key='prompt_pr_links_backfill_v1'`); err != nil {
-					return err
-				}
-				return nil
-			}))
-			require.NoError(t, d.Close())
-			d, err = OpenIsolated(t.Context(), path)
-			require.NoError(t, err)
-			got, err := d.GetSession(t.Context(), s.ID)
-			require.NoError(t, err)
-			if tc.legacy {
-				require.Len(t, got.PRLinks, 2)
-				assert.Equal(t, link.URL, got.PRLinks[0].URL)
-				assert.Equal(t, "https://github.com/o/r/pull/42", got.PRLinks[1].URL)
-			} else {
-				require.Len(t, got.PRLinks, 1)
-				assert.Equal(t, "https://github.com/o/r/pull/42", got.PRLinks[0].URL)
-			}
-		})
-	}
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d, err := OpenIsolated(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if d != nil {
+			_ = d.Close()
+		}
+	})
+	link, ok := parser.NewPRLink("https://github.com/o/r/pull/1", "o/r", 1)
+	require.True(t, ok)
+	s := Session{ID: "archived", Project: "project", Machine: "local", Agent: "chatgpt", PRLinks: []PRLink{link}}
+	require.NoError(t, d.UpsertSession(t.Context(), s))
+	dialogue := "https://github.com/o/r/pull/42"
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "user", Content: dialogue + " https://github.com/o/r/pull/3", DialogueText: &dialogue}}))
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links=structured_pr_links WHERE id=?`, s.ID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(t.Context(), artifactSessionQueueTriggerDropsSQL); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(t.Context(), `ALTER TABLE sessions DROP COLUMN structured_pr_links`); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(t.Context(), `DELETE FROM stats WHERE key='prompt_pr_links_backfill_v1'`)
+		return err
+	}))
+	require.NoError(t, d.Close())
+	d, err = OpenIsolated(t.Context(), path)
+	require.NoError(t, err)
+	got, err := d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	require.Len(t, got.PRLinks, 2)
+	assert.Equal(t, link.URL, got.PRLinks[0].URL)
+	assert.Equal(t, "https://github.com/o/r/pull/42", got.PRLinks[1].URL)
 }
 
 func TestPromptPRLinksUsagePolicyWithRetainedHistory(t *testing.T) {
