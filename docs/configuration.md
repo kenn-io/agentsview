@@ -278,8 +278,8 @@ interval. Three things bring changes in sooner:
   request after a quiet stretch also syncs the files that changed since the
   last sync, and checks sessions that are still being written, before it
   answers. It waits up to two seconds for that, sharing the wait budget
-  described below. Later requests in the two minutes answer without waiting,
-  and can miss up to `sync_interval` of changes.
+  described below. Later requests within those two minutes answer without
+  waiting, and can miss up to `sync_interval` of changes.
 
 A session watch stream keeps its own session current without changing the
 interval for the rest. Polling of live agent activity and of roots that cannot
