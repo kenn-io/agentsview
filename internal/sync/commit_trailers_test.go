@@ -3,6 +3,7 @@ package sync
 import (
 	"database/sql"
 	"encoding/json/v2"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -380,4 +381,31 @@ func TestReconcileCommitTrailersRepositoryErrors(t *testing.T) {
 	require.True(t, ok, "failed scans must yield their turn")
 	assert.False(t, attempt.Before(before))
 	assert.False(t, attempt.After(time.Now()))
+}
+
+// A checkout whose worktree record was pruned keeps a .git file that points
+// at a missing directory. Git cannot scan it, so each pass must skip it
+// instead of running and logging a failed git log.
+func TestReconcileCommitTrailersSkipsPrunedWorktree(t *testing.T) {
+	testutil.IsolateGit(t)
+	database := openTestDB(t)
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	repo := filepath.Join(root, "repo")
+	worktree := filepath.Join(root, "feature")
+	require.NoError(t, os.Mkdir(repo, 0o700))
+	runGit(t, repo, "init", "-q", "-b", "main")
+	runGit(t, repo, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "Base")
+	runGit(t, repo, "worktree", "add", "-q", worktree)
+	require.NoError(t, os.RemoveAll(filepath.Join(repo, ".git", "worktrees", "feature")))
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "pruned", Agent: "claude", Project: "project-a", Machine: "local", Cwd: worktree}))
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local"})
+	t.Cleanup(engine.Close)
+	var logs strings.Builder
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	assert.Zero(t, engine.reconcileCommitTrailersWithBudget(t.Context(), time.Minute))
+	assert.NotContains(t, logs.String(), "commit trailers in")
 }
