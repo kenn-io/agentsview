@@ -79,7 +79,7 @@ func (c *Config) MigrateTelemetryScreenClaims() error {
 		_ = os.Remove(backup.Name())
 		return err
 	}
-	log.Printf("moved unreadable telemetry screen claims to %s", backup.Name())
+	log.Printf("moved unreadable data file to %s", backup.Name())
 	fields := strings.Fields(string(data))
 	if len(fields) >= 3 && fields[0] == c.InstallationID && isClaimDay(fields[1]) {
 		state := screenClaims{Version: 1, Days: make(map[string][]string)}

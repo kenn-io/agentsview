@@ -60,7 +60,7 @@ func TestTelemetryScreenClaimsMigrationRecovery(t *testing.T) {
 				}
 				copies++
 				assert.Equal(t, tc.stored, string(data))
-				assert.Contains(t, filepath.ToSlash(logs.String()), "moved unreadable telemetry screen claims to "+filepath.ToSlash(movedPath))
+				assert.Contains(t, filepath.ToSlash(logs.String()), "moved unreadable data file to "+filepath.ToSlash(movedPath))
 			}
 			if tc.name == "unchanged, no backup" {
 				assert.Empty(t, moved)

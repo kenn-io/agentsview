@@ -85,9 +85,7 @@ ancestor permissions satisfy their checks.
   starts it under QEMU on a Nehalem CPU model (x86-64-v2), so a dependency
   that needs a newer CPU at startup fails CI. Check a new cgo or prebuilt
   native library against that baseline before adding it.
-- The Makefile's `LDFLAGS` set the PostHog project key with
-  `-X go.kenn.io/kit/telemetry/posthog.projectKey`. Keep it out of test and
-  e2e builds.
+- Keep the Makefile's release-only link settings out of test and e2e builds.
 - `DISTRIBUTION` sets `main.distribution` and
   `go.kenn.io/kit/telemetry/posthog.distribution` to who ships the binary.
   Official direct downloads use `kenn` and keep self-updating, like builds

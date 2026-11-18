@@ -21,24 +21,32 @@ import (
 )
 
 func TestCaptureFollowsKennConsent(t *testing.T) {
-	for _, granted := range []bool{false, true} {
-		t.Run(map[bool]string{false: "unanswered", true: "granted"}[granted], func(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		granted bool
+	}{
+		{"unanswered", false},
+		{"granted", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("HOME", home)
 			t.Setenv("USERPROFILE", home)
 			t.Setenv(EnabledEnv, "")
 			t.Setenv(GenericEnabledEnv, "")
-			if granted {
+			if tc.granted {
 				require.NoError(t, kittelemetry.RecordConsent(true))
 			}
+			clearTelemetryVetoes(t)
+			assert.Equal(t, tc.granted, EnabledFromEnv())
 			endpoint, captured := captureCollector(t)
 			reporter := captureReporter(t, endpoint, Options{})
-			assert.Equal(t, granted, reporter.Enabled())
+			assert.Equal(t, tc.granted, reporter.Enabled())
 			require.NoError(t, reporter.CaptureDaemonActive(t.Context()))
 			postCapture(t, reporter.CaptureHandler(), `{"event":"app_opened"}`, http.StatusAccepted)
 			require.NoError(t, reporter.Close())
 			sent := captured()
-			if !granted {
+			if !tc.granted {
 				assert.Empty(t, sent)
 				return
 			}
@@ -267,10 +275,12 @@ func captureReporter(t *testing.T, endpoint string, opts Options) *Reporter {
 	if opts.ScreenClaimsPath == "" {
 		opts.ScreenClaimsPath = filepath.Join(t.TempDir(), "screens")
 	}
-	client, err := kittelemetry.NewReporter(kittelemetry.Options{
-		APIKey: "phc_test", Application: application, EnvPrefix: envPrefix,
-		DistinctID: "install-id", Source: "daemon", Endpoint: endpoint, Version: "v1.2.3",
-	}, allowedEventOptions(opts)...)
+	opts.InstallationID = "install-id"
+	opts.Version = "v1.2.3"
+	kitOpts := kitOptions(opts)
+	kitOpts.APIKey = "phc_test"
+	kitOpts.Endpoint = endpoint
+	client, err := kittelemetry.NewReporter(kitOpts, allowedEventOptions(opts)...)
 	require.NoError(t, err)
 	return &Reporter{client: client}
 }

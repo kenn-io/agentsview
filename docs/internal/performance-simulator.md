@@ -181,7 +181,8 @@ workload flags to retain producer files without running the in-process engine.
 The new directory contains `sources.json` with source paths, provider roots,
 workload options, and generator build provenance. Point a separately configured
 branch server at those roots and a new archive directory. Disable all other
-providers and update checks, and bind to loopback. Do not use the installed server's config or archive.
+providers and update checks, and bind to loopback. Do not use the installed
+server's config or archive.
 
 For OpenCode, keep a SQLite writer open in WAL mode, append message/part rows,
 and separately edit a part without advancing the session timestamp. Use current
