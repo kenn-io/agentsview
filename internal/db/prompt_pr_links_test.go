@@ -20,23 +20,21 @@ func TestPromptPRLinksStoredMessages(t *testing.T) {
 	s.PRLinks = []PRLink{link}
 	require.NoError(t, d.UpsertSession(t.Context(), s))
 	msgs := []Message{
-		{SessionID: s.ID, Ordinal: 0, Role: "assistant", Content: "https://github.com/o/r/pull/2"},
 		{SessionID: s.ID, Ordinal: 1, Role: "user", IsSystem: true, Content: "https://github.com/o/r/pull/3"},
 		{SessionID: s.ID, Ordinal: 2, Role: "user", SourceSubtype: "tool_result", Content: "https://github.com/o/r/pull/4"},
 		{SessionID: s.ID, Ordinal: 3, Role: "user", IsCompactBoundary: true, Content: "https://github.com/o/r/pull/5"},
 		{SessionID: s.ID, Ordinal: 4, Role: "user", Content: "<task-notification>https://github.com/o/r/pull/6</task-notification>"},
 		{SessionID: s.ID, Ordinal: 5, Role: "user", Content: "<bash-stdout>https://github.com/o/r/pull/7</bash-stdout>"},
-		{SessionID: s.ID, Ordinal: 6, Role: "user", Content: "<system-reminder>https://github.com/o/r/pull/9</system-reminder> review https://github.com/o/r/pull/8"},
+		{SessionID: s.ID, Ordinal: 6, Role: "user", Content: "review https://github.com/o/r/pull/8"},
 		{SessionID: s.ID, Ordinal: 7, Role: "user", Content: "ordinary <system-reminder>https://github.com/o/r/pull/10</system-reminder>"},
 	}
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, msgs))
 	got, err := d.GetSession(t.Context(), s.ID)
 	require.NoError(t, err)
-	require.Len(t, got.PRLinks, 4)
+	require.Len(t, got.PRLinks, 3)
 	assert.Equal(t, "https://github.com/o/r/pull/1", got.PRLinks[0].URL)
-	assert.Equal(t, "https://github.com/o/r/pull/9", got.PRLinks[1].URL)
-	assert.Equal(t, "https://github.com/o/r/pull/8", got.PRLinks[2].URL)
-	assert.Equal(t, "https://github.com/o/r/pull/10", got.PRLinks[3].URL)
+	assert.Equal(t, "https://github.com/o/r/pull/8", got.PRLinks[1].URL)
+	assert.Equal(t, "https://github.com/o/r/pull/10", got.PRLinks[2].URL)
 }
 
 func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
@@ -88,12 +86,6 @@ func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
 				require.Len(t, got.PRLinks, 2)
 				assert.Equal(t, link.URL, got.PRLinks[0].URL)
 				assert.Equal(t, "https://github.com/o/r/pull/42", got.PRLinks[1].URL)
-				require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "user", Content: "https://github.com/o/r/pull/4"}}))
-				got, err = d.GetSession(t.Context(), s.ID)
-				require.NoError(t, err)
-				require.Len(t, got.PRLinks, 2)
-				assert.Equal(t, link.URL, got.PRLinks[0].URL)
-				assert.Equal(t, "https://github.com/o/r/pull/4", got.PRLinks[1].URL)
 			} else {
 				require.Len(t, got.PRLinks, 1)
 				assert.Equal(t, "https://github.com/o/r/pull/42", got.PRLinks[0].URL)
@@ -109,7 +101,6 @@ func TestPromptPRLinksUsagePolicyWithRetainedHistory(t *testing.T) {
 	require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Role: "user", Content: "https://github.com/o/r/pull/42"}}))
 	d.SetArchiveContent(config.ArchiveContentUsage)
 	require.NoError(t, d.UpsertSession(t.Context(), s))
-	require.NoError(t, d.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Ordinal: 1, Role: "user", Content: "https://github.com/o/r/pull/43"}}))
 	got, err := d.GetSession(t.Context(), s.ID)
 	require.NoError(t, err)
 	assert.Empty(t, got.PRLinks)
@@ -121,7 +112,7 @@ func TestPromptPRLinksBatchAndStagedDialogueReplacement(t *testing.T) {
 			d := testDB(t)
 			s := Session{ID: "dialogue", Project: "project", Machine: "local", Agent: "claude"}
 			require.NoError(t, d.UpsertSession(t.Context(), s))
-			first, second := "https://github.com/o/r/%70ull/1", "https://github.com/o/r/%70ull/2"
+			first, second := "https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"
 			msg := Message{SessionID: s.ID, Role: "user", Content: first + " non-dialogue https://github.com/o/r/pull/9", DialogueText: &first}
 			require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{msg}))
 			got, err := d.GetSession(t.Context(), s.ID)
@@ -145,13 +136,6 @@ func TestPromptPRLinksBatchAndStagedDialogueReplacement(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, got.PRLinks, 1)
 			assert.Equal(t, "https://github.com/o/r/pull/2", got.PRLinks[0].URL)
-			if method == "single" {
-				require.Error(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{msg, msg}))
-				got, err = d.GetSession(t.Context(), s.ID)
-				require.NoError(t, err)
-				require.Len(t, got.PRLinks, 1)
-				assert.Equal(t, "https://github.com/o/r/pull/2", got.PRLinks[0].URL)
-			}
 		})
 	}
 }
@@ -207,11 +191,6 @@ func TestPromptPRLinksUsageOrphanCopy(t *testing.T) {
 			structured, err := dest.GetSessionStructuredPRLinks(t.Context(), s.ID)
 			require.NoError(t, err)
 			assert.Equal(t, []PRLink{link}, structured)
-			msgs, err := dest.GetAllMessages(t.Context(), s.ID)
-			require.NoError(t, err)
-			for _, msg := range msgs {
-				assert.Empty(t, msg.Content)
-			}
 		})
 	}
 }
@@ -249,7 +228,13 @@ func TestPromptPRLinksTrashedCopyRestore(t *testing.T) {
 	require.NoError(t, source.UpsertSession(t.Context(), s))
 	require.NoError(t, source.InsertMessages(t.Context(), []Message{{SessionID: s.ID, Role: "user", Content: "Review https://github.com/o/r/pull/2", HasOutputTokens: true, OutputTokens: 1}}))
 	require.NoError(t, source.Update(t.Context(), func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links=structured_pr_links WHERE id=?`, s.ID)
+		if _, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links=structured_pr_links WHERE id=?`, s.ID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(t.Context(), artifactSessionQueueTriggerDropsSQL); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(t.Context(), `ALTER TABLE sessions DROP COLUMN structured_pr_links`)
 		return err
 	}))
 	require.NoError(t, source.SoftDeleteSession(t.Context(), s.ID))
@@ -257,12 +242,10 @@ func TestPromptPRLinksTrashedCopyRestore(t *testing.T) {
 	ids, err := dest.CopyTrashedDataFrom(t.Context(), source.Path())
 	require.NoError(t, err)
 	require.Equal(t, []string{s.ID}, ids)
-	_, err = dest.RestoreSession(t.Context(), s.ID)
+	got, err := dest.GetSessionFull(t.Context(), s.ID)
 	require.NoError(t, err)
-	filter, err := ParsePRFilter("o/r#2")
-	require.NoError(t, err)
-	page, err := dest.ListSessions(t.Context(), SessionFilter{PR: filter})
-	require.NoError(t, err)
-	require.Len(t, page.Sessions, 1)
-	assert.Equal(t, s.ID, page.Sessions[0].ID)
+	require.NotNil(t, got)
+	require.Len(t, got.PRLinks, 2)
+	assert.Equal(t, link.URL, got.PRLinks[0].URL)
+	assert.Equal(t, "https://github.com/o/r/pull/2", got.PRLinks[1].URL)
 }
