@@ -17,16 +17,21 @@ two PRs, each green on its own, are likely to break together:
 - `frontend` (formatting, type checks, design-system checks, unit tests)
 - `Docs and scripts`
 - the Linux `test` suites: Sync, Other packages (including the SQLite schema and
-  data-version tests in `internal/db`), and Eval ingest
+  data-version tests in `internal/db` and `internal/parser`), and Eval ingest
 - `e2e (chromium)`
+
+Two PRs that bump a version to the same number make the same edit, so Git merges
+them without a conflict. For the SQLite data version, the merge group catches
+this: `TestParsedOutputMatchesDataVersion` fails when one version has two bump
+records, and two `dataVersionScopes` entries for one version do not compile.
 
 Merge groups skip `test-extended` (Windows, macOS, the x86-64-v2 startup check,
 and the simulator), the isolated Windows suites, the race detector, the
 PostgreSQL, CockroachDB, and ClickHouse integration suites, WebKit e2e, Node 26
-frontend tests, desktop unit tests, and the released-command check. Two PRs that
-both bump a schema or data version edit the same constant, so Git refuses to
-merge them before the queue runs anything. A break that only a skipped suite
-catches surfaces in `main` CI after the merge.
+frontend tests, desktop unit tests, and the released-command check. PostgreSQL
+and ClickHouse schema changes therefore rely on the integration suites that run
+on every PR and on `main`. A break that only a skipped suite catches surfaces in
+`main` CI after the merge.
 
 When you add a job, decide which group it belongs to. A job skips merge groups
 when its `if` includes `github.event_name != 'merge_group'`. A matrix cannot
