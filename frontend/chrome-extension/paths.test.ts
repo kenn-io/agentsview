@@ -133,3 +133,21 @@ describe("Gemini request allowlist", () => {
     detail("c_0123%2F"),
   ])("refuses %s", async (path) => expect(await allowedPath("gemini-apps", path)).toBe(false));
 });
+
+describe("Grok request allowlist", () => {
+  const conversations = "/rest/app-chat/conversations";
+  const token = "33333333-3333-4333-8333-333333333333";
+  const chat = "44444444-4444-4444-8444-444444444444";
+
+  it.each([
+    `${conversations}?pageSize=100&pageToken=`,
+    `${conversations}?pageSize=1000`,
+    `${conversations}?pageSize=100&pageToken=a%26b`,
+    `${conversations}?pageSize=100&pageToken=${token}&pageToken=${token}`,
+    `${conversations}/${chat}/response-node?includeThreads=true`,
+    `${conversations}/${chat}/load-responses`,
+    `${conversations}/../settings/responses`,
+    `${conversations}/${chat}`,
+    `${conversations}/c_0123456789abcdef/responses`,
+  ])("refuses %s", async (path) => expect(await allowedPath("grok-web", path)).toBe(false));
+});

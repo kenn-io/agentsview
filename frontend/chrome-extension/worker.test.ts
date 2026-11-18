@@ -143,7 +143,11 @@ describe("Chrome native host worker", () => {
         target: { tabId: 7 },
         world: "ISOLATED",
         func: expect.any(Function),
-        args: [config.fetchFunction, `${config.origin}${path}`],
+        args: [
+          config.fetchFunction,
+          `${config.origin}${path}`,
+          ("headers" in config ? config.headers : undefined) ?? {},
+        ],
       });
       expect(chrome.tabs.remove).not.toHaveBeenCalled();
     },
@@ -170,7 +174,39 @@ describe("Chrome native host worker", () => {
       files: ["page_fetch.js"],
       world: "ISOLATED",
     });
-    expect(pageFetch).toHaveBeenCalledExactlyOnceWith("https://claude.ai/api/organizations");
+    expect(pageFetch).toHaveBeenCalledExactlyOnceWith("https://claude.ai/api/organizations", {});
+  });
+
+  it("sends a platform's headers with the page's cookies", async () => {
+    const pageFetchSource = readFileSync("chrome-extension/page_fetch.js", "utf8");
+    const siteFetch = vi.fn(async () => new Response('{"conversations":[]}'));
+    chrome.scripting.executeScript.mockImplementation(async (options) => {
+      if (options.files) {
+        // Run the injected page_fetch.js against the page's fetch.
+        new Function("fetch", pageFetchSource)(siteFetch);
+        return [];
+      }
+      return [{ result: (await options.func(...(options.args ?? []))) ?? null }];
+    });
+    const path = "/rest/app-chat/conversations?pageSize=100";
+    message({ id: "a", platform: "grok-web", path, version: 2 });
+    await vi.waitFor(() => expect(port.postMessage).toHaveBeenCalledOnce());
+    expect(port.postMessage).toHaveBeenCalledWith({
+      id: "a",
+      version: 2,
+      status: 200,
+      body: '{"conversations":[]}',
+      retryAfter: undefined,
+    });
+    expect(siteFetch).toHaveBeenCalledExactlyOnceWith(
+      `https://grok.com${path}`,
+      expect.objectContaining({
+        method: "GET",
+        credentials: "include",
+        redirect: "error",
+        headers: { Accept: "application/json" },
+      }),
+    );
   });
 
   it("waits for the Claude tab to load before injecting the reader", async () => {

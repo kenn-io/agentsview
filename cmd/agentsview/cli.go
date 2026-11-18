@@ -576,6 +576,11 @@ func newImportCommand() *cobra.Command {
 				}
 				return cobra.NoArgs(cmd, args)
 			}
+			// Grok web chats have no file importer, so name the one way in
+			// instead of reporting an unknown type.
+			if importType == "grok-web" {
+				return errors.New("grok-web imports only through Chrome: use --type grok-web --sync")
+			}
 			return cobra.ExactArgs(1)(cmd, args)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -587,7 +592,7 @@ func newImportCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&syncBrowser, "sync", false, "Sync conversations through Chrome ("+browserSyncNames()+")")
-	cmd.Flags().StringVar(&importType, "type", "", "Import type: claude-ai, chatgpt, gemini-apps")
+	cmd.Flags().StringVar(&importType, "type", "", "Import type: claude-ai, chatgpt, gemini-apps; with --sync, also grok-web")
 	cmd.Flags().StringArrayVar(&replace, "replace", nil, "Session ID whose archived messages this import may replace when the default import refuses them; repeatable (claude-ai, chatgpt)")
 	_ = cmd.MarkFlagRequired("type")
 	return cmd

@@ -1,5 +1,7 @@
 // Each key is a platform's agent type, the name the server sends. requests/
 // holds one allowlist per key, copied from internal/importer/browser_requests.
+// headers, when set, adds request headers; worker.js passes them to
+// fetchFunction after the URL.
 const uuid = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
 
 export const platforms = {
@@ -25,5 +27,15 @@ export const platforms = {
     fetchFunction: "geminiFetch",
     // Values arrive query-escaped, so a cursor cannot add a parameter.
     params: { chat: "c_[0-9A-Za-z_-]+", cursor: "[0-9A-Za-z%._~-]*" },
+  },
+  "grok-web": {
+    origin: "https://grok.com",
+    newTabURL: "https://grok.com/",
+    scripts: ["page_fetch.js"],
+    fetchFunction: "pageFetch",
+    // grok.com reads its REST API with the page's cookies; the allowed
+    // shapes are plain GETs that ask for JSON.
+    headers: { Accept: "application/json" },
+    params: { conversation: uuid, pageToken: uuid },
   },
 };

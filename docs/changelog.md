@@ -26,6 +26,15 @@ The latest release is
   you also imported from Takeout appear twice. See
   [Sync Gemini Apps chats](/docs/chat-import/#sync-gemini-apps-chats).
 
+- Bring your grok.com chats into AgentsView. Run
+  `agentsview source import --type grok-web --sync` with Chrome open and signed
+  in to Grok. Each chat becomes one Grok Web session holding the branch Grok
+  shows, separate from local Grok Build sessions. Later runs fetch only chats
+  that changed, and a reply Grok is still writing is fetched again on the next
+  run. When you regenerate a reply or edit a prompt, the previous version stays
+  in Trash. Only text is imported, not reasoning steps, attachments, images, or
+  search results. See [Sync Grok web chats](/docs/chat-import/#sync-grok-web-chats).
+
 - Keep connection secrets in private files instead of environment variables
   or `config.toml`. Set `token_file` under `[kata]`, `api_key_file` for
   Docbank, insights, embeddings servers, and recall extraction servers, or
@@ -269,8 +278,8 @@ The latest release is
 - Chrome Sync users must rerun `agentsview source chrome setup` and reload the
   extension at `chrome://extensions` once. The extension and AgentsView now
   speak a new version of their protocol, and the extension asks for access to
-  `chatgpt.com` and `gemini.google.com`. Until you reload it, Sync asks you to
-  update the extension.
+  `chatgpt.com`, `gemini.google.com`, and `grok.com`. Until you reload it, Sync
+  asks you to update the extension.
 - API clients that read Chrome Sync error codes need the new names:
   `chrome_host_required`, `chrome_sync_running`, `chrome_host_update_required`,
   and `browser_sync_auth_required` replace the `claude_ai_` versions.

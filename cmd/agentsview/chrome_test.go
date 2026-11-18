@@ -423,6 +423,16 @@ func TestChromeSyncCommand(t *testing.T) {
 	}
 }
 
+// TestImportGrokWebNeedsSync checks that grok-web without --sync names
+// --sync, with or without a path, instead of calling the type unknown.
+func TestImportGrokWebNeedsSync(t *testing.T) {
+	for _, args := range [][]string{nil, {"grok-export.zip"}} {
+		cmd := newImportCommand()
+		require.NoError(t, cmd.ParseFlags([]string{"--type", "grok-web"}))
+		assert.EqualError(t, cmd.ValidateArgs(args), "grok-web imports only through Chrome: use --type grok-web --sync")
+	}
+}
+
 func TestChromeImportArguments(t *testing.T) {
 	for _, tt := range []struct {
 		name        string
@@ -434,6 +444,7 @@ func TestChromeImportArguments(t *testing.T) {
 		{"sync path", []string{"--type", "claude-ai", "--sync"}, []string{"conversations.json"}, false},
 		{"sync chatgpt", []string{"--type", "chatgpt", "--sync"}, nil, true},
 		{"sync gemini-apps", []string{"--type", "gemini-apps", "--sync"}, nil, true},
+		{"sync grok-web", []string{"--type", "grok-web", "--sync"}, nil, true},
 		{"sync provider", []string{"--type", "codex", "--sync"}, nil, false},
 		{"sync replace", []string{"--type", "claude-ai", "--sync", "--replace", "claude-ai:chat"}, nil, false},
 		{"missing path", []string{"--type", "claude-ai"}, nil, false},

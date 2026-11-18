@@ -1,0 +1,80 @@
+{
+ "conversations": [
+  {
+   "conversationId": "00000000-0000-4000-8000-000000000006",
+   "title": "Text 6",
+   "starred": false,
+   "createTime": "2026-02-23T22:46:33.810Z",
+   "modifyTime": "2026-02-23T22:47:12.148Z",
+   "systemPromptName": "",
+   "temporary": false,
+   "mediaTypes": [],
+   "workspaces": [],
+   "taskResult": {},
+   "latestAssetMetadata": null,
+   "kind": "CONVERSATION_KIND_UNSPECIFIED",
+   "hasUnreadCheckin": false
+  },
+  {
+   "conversationId": "00000000-0000-4000-8000-000000000007",
+   "title": "Text 7",
+   "starred": false,
+   "createTime": "2026-02-23T22:44:50.299Z",
+   "modifyTime": "2026-02-23T22:45:00.806Z",
+   "systemPromptName": "",
+   "temporary": false,
+   "mediaTypes": [],
+   "workspaces": [],
+   "taskResult": {},
+   "latestAssetMetadata": null,
+   "kind": "CONVERSATION_KIND_UNSPECIFIED",
+   "hasUnreadCheckin": false
+  },
+  {
+   "conversationId": "00000000-0000-4000-8000-000000000008",
+   "title": "Text 8",
+   "starred": false,
+   "createTime": "2026-02-20T16:32:13.044Z",
+   "modifyTime": "2026-02-20T16:32:55.781Z",
+   "systemPromptName": "",
+   "temporary": false,
+   "mediaTypes": [],
+   "workspaces": [],
+   "taskResult": {},
+   "latestAssetMetadata": null,
+   "kind": "CONVERSATION_KIND_UNSPECIFIED",
+   "hasUnreadCheckin": false
+  },
+  {
+   "conversationId": "00000000-0000-4000-8000-000000000009",
+   "title": "Text 9",
+   "starred": false,
+   "createTime": "2026-02-19T06:10:52.081Z",
+   "modifyTime": "2026-02-19T06:11:09.804Z",
+   "systemPromptName": "",
+   "temporary": false,
+   "mediaTypes": [],
+   "workspaces": [],
+   "taskResult": {},
+   "latestAssetMetadata": null,
+   "kind": "CONVERSATION_KIND_UNSPECIFIED",
+   "hasUnreadCheckin": false
+  },
+  {
+   "conversationId": "00000000-0000-4000-8000-00000000000a",
+   "title": "Text 10",
+   "starred": false,
+   "createTime": "2026-02-19T06:07:58.166Z",
+   "modifyTime": "2026-02-19T06:08:30.310Z",
+   "systemPromptName": "",
+   "temporary": false,
+   "mediaTypes": [],
+   "workspaces": [],
+   "taskResult": {},
+   "latestAssetMetadata": null,
+   "kind": "CONVERSATION_KIND_UNSPECIFIED",
+   "hasUnreadCheckin": false
+  }
+ ],
+ "textSearchMatches": []
+}

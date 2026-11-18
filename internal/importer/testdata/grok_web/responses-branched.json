@@ -1,0 +1,977 @@
+{
+ "responses": [
+  {
+   "responseId": "00000000-0000-4000-8000-00000000000b",
+   "message": "Text 11",
+   "sender": "human",
+   "createTime": "2025-06-01T00:00:36.189Z",
+   "manual": false,
+   "partial": false,
+   "shared": false,
+   "query": "",
+   "queryType": "",
+   "webSearchResults": [],
+   "xpostIds": [],
+   "xposts": [],
+   "generatedImageUrls": [],
+   "imageAttachments": [],
+   "fileAttachments": [],
+   "cardAttachmentsJson": [],
+   "fileUris": [],
+   "fileAttachmentsMetadata": [],
+   "isControl": false,
+   "steps": [],
+   "imageEditUris": [],
+   "mediaTypes": [],
+   "webpageUrls": [],
+   "metadata": {
+    "modelConfigOverride": {
+     "modelMap": {}
+    },
+    "requestModelDetails": {
+     "modelId": "Text 12"
+    }
+   },
+   "citedWebSearchResults": [],
+   "toolResponses": [],
+   "model": "grok-4",
+   "ragResults": [],
+   "citedRagResults": [],
+   "searchProductResults": [],
+   "connectorSearchResults": [],
+   "collectionSearchResults": [],
+   "streamErrors": [],
+   "citedXposts": [],
+   "citedConnectorSearchResults": [],
+   "citedCollectionSearchResults": [],
+   "inputChunks": [],
+   "outputChunks": [],
+   "fileAttachmentAssetMetadata": [],
+   "fileIds": []
+  },
+  {
+   "responseId": "00000000-0000-4000-8000-00000000000c",
+   "message": "Text 13",
+   "sender": "assistant",
+   "createTime": "2025-06-01T00:02:47.993Z",
+   "parentResponseId": "00000000-0000-4000-8000-00000000000b",
+   "manual": false,
+   "partial": false,
+   "shared": false,
+   "query": "",
+   "queryType": "",
+   "webSearchResults": [
+    {
+     "url": "Text 14",
+     "title": "Text 15",
+     "preview": "Text 16"
+    }
+   ],
+   "xpostIds": [],
+   "xposts": [],
+   "generatedImageUrls": [],
+   "imageAttachments": [],
+   "fileAttachments": [],
+   "cardAttachmentsJson": [],
+   "fileUris": [],
+   "fileAttachmentsMetadata": [],
+   "isControl": false,
+   "steps": [
+    {
+     "text": [
+      "Text 105"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-00000000000d",
+       "webSearchResults": {
+        "results": [
+         {
+          "url": "Text 14",
+          "title": "Text 15",
+          "preview": "Text 16"
+         },
+         {
+          "url": "Text 17",
+          "title": "Text 18",
+          "preview": "Text 19"
+         },
+         {
+          "url": "Text 20",
+          "title": "Text 21",
+          "preview": "Text 22"
+         },
+         {
+          "url": "Text 23",
+          "title": "Text 24",
+          "preview": "Text 25"
+         },
+         {
+          "url": "Text 26",
+          "title": "Text 27",
+          "preview": "Text 28"
+         },
+         {
+          "url": "Text 29",
+          "title": "Text 30",
+          "preview": "Text 31"
+         },
+         {
+          "url": "Text 32",
+          "title": "Text 33",
+          "preview": "Text 34"
+         },
+         {
+          "url": "Text 35",
+          "title": "Text 36",
+          "preview": "Text 37"
+         },
+         {
+          "url": "Text 38",
+          "title": "Text 39",
+          "preview": "Text 40"
+         },
+         {
+          "url": "Text 41",
+          "title": "Text 42",
+          "preview": "Text 43"
+         }
+        ]
+       }
+      }
+     ],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-00000000000d",
+       "webSearch": {
+        "args": {
+         "query": "Text 107"
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "imageEditUris": [],
+   "mediaTypes": [],
+   "webpageUrls": [],
+   "metadata": {
+    "deepsearchPreset": "",
+    "llm_info": {
+     "modelHash": "Text 123"
+    },
+    "request_metadata": {
+     "effort": "Text 124",
+     "mode": "Text 125",
+     "model": "grok-4"
+    },
+    "request_trace_id": "Text 126",
+    "ui_layout": {
+     "effort": "Text 127",
+     "reasoningUiLayout": "Text 128",
+     "willThinkLong": false
+    }
+   },
+   "uiLayout": {
+    "reasoningUiLayout": "Text 128",
+    "willThinkLong": false,
+    "effort": "Text 127",
+    "rolloutIds": []
+   },
+   "thinkingStartTime": "2025-06-01T00:00:47.902Z",
+   "thinkingEndTime": "2025-06-01T00:02:23.337Z",
+   "citedWebSearchResults": [],
+   "toolResponses": [],
+   "model": "grok-4",
+   "requestMetadata": {
+    "model": "grok-4",
+    "mode": "Text 129",
+    "effort": "Text 127"
+   },
+   "ragResults": [],
+   "citedRagResults": [],
+   "searchProductResults": [],
+   "connectorSearchResults": [],
+   "collectionSearchResults": [],
+   "streamErrors": [],
+   "citedXposts": [],
+   "citedConnectorSearchResults": [],
+   "citedCollectionSearchResults": [],
+   "inputChunks": [],
+   "outputChunks": [],
+   "fileAttachmentAssetMetadata": [],
+   "fileIds": []
+  },
+  {
+   "responseId": "00000000-0000-4000-8000-000000000015",
+   "message": "Text 130",
+   "sender": "human",
+   "createTime": "2025-06-01T00:04:43.984Z",
+   "parentResponseId": "00000000-0000-4000-8000-00000000000c",
+   "manual": false,
+   "partial": false,
+   "shared": false,
+   "query": "",
+   "queryType": "",
+   "webSearchResults": [],
+   "xpostIds": [],
+   "xposts": [],
+   "generatedImageUrls": [],
+   "imageAttachments": [],
+   "fileAttachments": [],
+   "cardAttachmentsJson": [],
+   "fileUris": [],
+   "fileAttachmentsMetadata": [],
+   "isControl": false,
+   "steps": [],
+   "imageEditUris": [],
+   "mediaTypes": [],
+   "webpageUrls": [],
+   "metadata": {
+    "is_quick_answer": true,
+    "is_think_harder": false,
+    "last_used_model": "Text 12",
+    "modelConfigOverride": {
+     "modelMap": {}
+    },
+    "requestModelDetails": {
+     "modelId": "Text 131"
+    },
+    "request_metadata": {
+     "mode": "Text 125",
+     "model": "grok-3"
+    }
+   },
+   "citedWebSearchResults": [],
+   "toolResponses": [],
+   "model": "grok-3",
+   "requestMetadata": {
+    "model": "grok-3",
+    "mode": "Text 129"
+   },
+   "ragResults": [],
+   "citedRagResults": [],
+   "searchProductResults": [],
+   "connectorSearchResults": [],
+   "collectionSearchResults": [],
+   "streamErrors": [],
+   "citedXposts": [],
+   "citedConnectorSearchResults": [],
+   "citedCollectionSearchResults": [],
+   "inputChunks": [],
+   "outputChunks": [],
+   "fileAttachmentAssetMetadata": [],
+   "fileIds": []
+  },
+  {
+   "responseId": "00000000-0000-4000-8000-000000000016",
+   "message": "Text 132",
+   "sender": "assistant",
+   "createTime": "2025-06-01T00:05:08.239Z",
+   "parentResponseId": "00000000-0000-4000-8000-000000000015",
+   "manual": false,
+   "partial": true,
+   "shared": false,
+   "query": "",
+   "queryType": "",
+   "webSearchResults": [],
+   "xpostIds": [],
+   "xposts": [],
+   "generatedImageUrls": [],
+   "imageAttachments": [],
+   "fileAttachments": [],
+   "cardAttachmentsJson": [],
+   "fileUris": [],
+   "fileAttachmentsMetadata": [],
+   "isControl": false,
+   "steps": [],
+   "imageEditUris": [],
+   "mediaTypes": [],
+   "webpageUrls": [],
+   "metadata": {
+    "deepsearchPreset": "",
+    "llm_info": {
+     "modelHash": "Text 133"
+    },
+    "request_metadata": {
+     "effort": "Text 134",
+     "mode": "Text 125",
+     "model": "grok-3"
+    },
+    "request_trace_id": "Text 135",
+    "ui_layout": {
+     "effort": "Text 136",
+     "reasoningUiLayout": "Text 128",
+     "willThinkLong": false
+    }
+   },
+   "uiLayout": {
+    "reasoningUiLayout": "Text 128",
+    "willThinkLong": false,
+    "effort": "Text 136",
+    "rolloutIds": []
+   },
+   "citedWebSearchResults": [],
+   "toolResponses": [],
+   "model": "grok-3",
+   "requestMetadata": {
+    "model": "grok-3",
+    "mode": "Text 129",
+    "effort": "Text 136"
+   },
+   "ragResults": [],
+   "citedRagResults": [],
+   "searchProductResults": [],
+   "connectorSearchResults": [],
+   "collectionSearchResults": [],
+   "streamErrors": [],
+   "citedXposts": [],
+   "citedConnectorSearchResults": [],
+   "citedCollectionSearchResults": [],
+   "inputChunks": [],
+   "outputChunks": [],
+   "fileAttachmentAssetMetadata": [],
+   "fileIds": []
+  },
+  {
+   "responseId": "00000000-0000-4000-8000-000000000017",
+   "message": "",
+   "sender": "assistant",
+   "createTime": "2025-06-01T00:05:10.751Z",
+   "parentResponseId": "00000000-0000-4000-8000-000000000015",
+   "manual": false,
+   "partial": true,
+   "shared": false,
+   "query": "",
+   "queryType": "",
+   "webSearchResults": [],
+   "xpostIds": [],
+   "xposts": [],
+   "generatedImageUrls": [],
+   "imageAttachments": [],
+   "fileAttachments": [],
+   "cardAttachmentsJson": [],
+   "fileUris": [],
+   "fileAttachmentsMetadata": [],
+   "isControl": false,
+   "steps": [
+    {
+     "text": [
+      "Text 137"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000018",
+       "webSearch": {
+        "args": {
+         "query": "Text 138"
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "imageEditUris": [],
+   "mediaTypes": [],
+   "webpageUrls": [],
+   "metadata": {
+    "deepsearchPreset": "",
+    "llm_info": {
+     "modelHash": "Text 123"
+    },
+    "request_metadata": {
+     "effort": "Text 124",
+     "mode": "Text 125",
+     "model": "grok-4"
+    },
+    "request_trace_id": "Text 144",
+    "ui_layout": {
+     "effort": "Text 127",
+     "reasoningUiLayout": "Text 128",
+     "willThinkLong": false
+    }
+   },
+   "uiLayout": {
+    "reasoningUiLayout": "Text 128",
+    "willThinkLong": false,
+    "effort": "Text 127",
+    "rolloutIds": []
+   },
+   "thinkingStartTime": "2025-06-01T00:04:59.133Z",
+   "citedWebSearchResults": [],
+   "toolResponses": [],
+   "model": "grok-4",
+   "requestMetadata": {
+    "model": "grok-4",
+    "mode": "Text 129",
+    "effort": "Text 127"
+   },
+   "ragResults": [],
+   "citedRagResults": [],
+   "searchProductResults": [],
+   "connectorSearchResults": [],
+   "collectionSearchResults": [],
+   "streamErrors": [],
+   "citedXposts": [],
+   "citedConnectorSearchResults": [],
+   "citedCollectionSearchResults": [],
+   "inputChunks": [],
+   "outputChunks": [],
+   "fileAttachmentAssetMetadata": [],
+   "fileIds": []
+  },
+  {
+   "responseId": "00000000-0000-4000-8000-00000000001b",
+   "message": "Text 130",
+   "sender": "human",
+   "createTime": "2025-06-01T00:05:10.770Z",
+   "parentResponseId": "00000000-0000-4000-8000-00000000000c",
+   "manual": false,
+   "partial": false,
+   "shared": false,
+   "query": "",
+   "queryType": "",
+   "webSearchResults": [],
+   "xpostIds": [],
+   "xposts": [],
+   "generatedImageUrls": [],
+   "imageAttachments": [],
+   "fileAttachments": [],
+   "cardAttachmentsJson": [],
+   "fileUris": [],
+   "fileAttachmentsMetadata": [],
+   "isControl": false,
+   "steps": [],
+   "imageEditUris": [],
+   "mediaTypes": [],
+   "webpageUrls": [],
+   "metadata": {
+    "modelConfigOverride": {
+     "modelMap": {}
+    },
+    "requestModelDetails": {
+     "modelId": "Text 12"
+    },
+    "request_metadata": {
+     "mode": "Text 125",
+     "model": "grok-4"
+    }
+   },
+   "citedWebSearchResults": [],
+   "toolResponses": [],
+   "model": "grok-4",
+   "requestMetadata": {
+    "model": "grok-4",
+    "mode": "Text 129"
+   },
+   "ragResults": [],
+   "citedRagResults": [],
+   "searchProductResults": [],
+   "connectorSearchResults": [],
+   "collectionSearchResults": [],
+   "streamErrors": [],
+   "citedXposts": [],
+   "citedConnectorSearchResults": [],
+   "citedCollectionSearchResults": [],
+   "inputChunks": [],
+   "outputChunks": [],
+   "fileAttachmentAssetMetadata": [],
+   "fileIds": []
+  },
+  {
+   "responseId": "00000000-0000-4000-8000-00000000001c",
+   "message": "Text 145",
+   "sender": "assistant",
+   "createTime": "2025-06-01T00:08:09.959Z",
+   "parentResponseId": "00000000-0000-4000-8000-00000000001b",
+   "manual": false,
+   "partial": false,
+   "shared": false,
+   "query": "",
+   "queryType": "",
+   "webSearchResults": [
+    {
+     "url": "Text 146",
+     "title": "Text 147",
+     "preview": "Text 148"
+    }
+   ],
+   "xpostIds": [],
+   "xposts": [],
+   "generatedImageUrls": [],
+   "imageAttachments": [],
+   "fileAttachments": [],
+   "cardAttachmentsJson": [],
+   "fileUris": [],
+   "fileAttachmentsMetadata": [],
+   "isControl": false,
+   "steps": [
+    {
+     "text": [
+      "Text 244"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-00000000001d",
+       "webSearch": {
+        "args": {
+         "query": "Text 245"
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "imageEditUris": [],
+   "mediaTypes": [],
+   "webpageUrls": [],
+   "metadata": {
+    "deepsearchPreset": "",
+    "llm_info": {
+     "modelHash": "Text 123"
+    },
+    "request_metadata": {
+     "effort": "Text 124",
+     "mode": "Text 125",
+     "model": "grok-4"
+    },
+    "request_trace_id": "Text 265",
+    "ui_layout": {
+     "effort": "Text 127",
+     "reasoningUiLayout": "Text 128",
+     "willThinkLong": false
+    }
+   },
+   "uiLayout": {
+    "reasoningUiLayout": "Text 128",
+    "willThinkLong": false,
+    "effort": "Text 127",
+    "rolloutIds": []
+   },
+   "thinkingStartTime": "2025-06-01T00:05:23.911Z",
+   "thinkingEndTime": "2025-06-01T00:07:41.020Z",
+   "citedWebSearchResults": [],
+   "toolResponses": [],
+   "model": "grok-4",
+   "requestMetadata": {
+    "model": "grok-4",
+    "mode": "Text 129",
+    "effort": "Text 127"
+   },
+   "ragResults": [],
+   "citedRagResults": [],
+   "searchProductResults": [],
+   "connectorSearchResults": [],
+   "collectionSearchResults": [],
+   "streamErrors": [],
+   "citedXposts": [],
+   "citedConnectorSearchResults": [],
+   "citedCollectionSearchResults": [],
+   "inputChunks": [],
+   "outputChunks": [],
+   "fileAttachmentAssetMetadata": [],
+   "fileIds": []
+  },
+  {
+   "responseId": "00000000-0000-4000-8000-000000000030",
+   "message": "Text 336",
+   "sender": "human",
+   "createTime": "2025-06-01T00:14:40.666Z",
+   "parentResponseId": "00000000-0000-4000-8000-00000000001c",
+   "manual": false,
+   "partial": false,
+   "shared": false,
+   "query": "",
+   "queryType": "",
+   "webSearchResults": [],
+   "xpostIds": [],
+   "xposts": [],
+   "generatedImageUrls": [],
+   "imageAttachments": [],
+   "fileAttachments": [],
+   "cardAttachmentsJson": [],
+   "fileUris": [],
+   "fileAttachmentsMetadata": [],
+   "isControl": false,
+   "steps": [],
+   "imageEditUris": [],
+   "mediaTypes": [],
+   "webpageUrls": [],
+   "metadata": {
+    "modelConfigOverride": {
+     "modelMap": {}
+    },
+    "requestModelDetails": {
+     "modelId": "Text 12"
+    },
+    "request_metadata": {
+     "mode": "Text 125",
+     "model": "grok-4"
+    }
+   },
+   "citedWebSearchResults": [],
+   "toolResponses": [],
+   "model": "grok-4",
+   "requestMetadata": {
+    "model": "grok-4",
+    "mode": "Text 129"
+   },
+   "ragResults": [],
+   "citedRagResults": [],
+   "searchProductResults": [],
+   "connectorSearchResults": [],
+   "collectionSearchResults": [],
+   "streamErrors": [],
+   "citedXposts": [],
+   "citedConnectorSearchResults": [],
+   "citedCollectionSearchResults": [],
+   "inputChunks": [],
+   "outputChunks": [],
+   "fileAttachmentAssetMetadata": [],
+   "fileIds": []
+  },
+  {
+   "responseId": "00000000-0000-4000-8000-000000000031",
+   "message": "Text 337",
+   "sender": "assistant",
+   "createTime": "2025-06-01T00:15:08.039Z",
+   "parentResponseId": "00000000-0000-4000-8000-000000000030",
+   "manual": false,
+   "partial": false,
+   "shared": false,
+   "query": "",
+   "queryType": "",
+   "webSearchResults": [
+    {
+     "url": "Text 338",
+     "title": "Text 339",
+     "preview": "Text 340"
+    }
+   ],
+   "xpostIds": [],
+   "xposts": [],
+   "generatedImageUrls": [],
+   "imageAttachments": [],
+   "fileAttachments": [],
+   "cardAttachmentsJson": [],
+   "fileUris": [],
+   "fileAttachmentsMetadata": [],
+   "isControl": false,
+   "steps": [],
+   "imageEditUris": [],
+   "mediaTypes": [],
+   "webpageUrls": [],
+   "metadata": {
+    "deepsearchPreset": "",
+    "llm_info": {
+     "modelHash": "Text 479"
+    },
+    "request_metadata": {
+     "effort": "Text 124",
+     "mode": "Text 125",
+     "model": "grok-4"
+    },
+    "request_trace_id": "Text 480",
+    "side_by_side_config": {
+     "enablePreferButtonTrigger": "Text 481",
+     "hideThinkingTrace": true,
+     "singleThinkingDifferentSummary": {
+      "kind": "KIND_SINGLE_THINKING_DIFFERENT_SUMMARY"
+     },
+     "streamFinalAnswersTogether": true,
+     "useLengthControlContainer": true
+    }
+   },
+   "thinkingStartTime": "2025-06-01T00:14:45.214Z",
+   "thinkingEndTime": "2025-06-01T00:15:02.907Z",
+   "citedWebSearchResults": [],
+   "toolResponses": [],
+   "model": "grok-4",
+   "sideBySideConfig": {
+    "singleThinkingDifferentSummary": {
+     "kind": "KIND_SINGLE_THINKING_DIFFERENT_SUMMARY"
+    },
+    "enablePreferButtonTrigger": "Text 481",
+    "streamFinalAnswersTogether": true,
+    "hideThinkingTrace": true,
+    "useLengthControlContainer": true
+   },
+   "requestMetadata": {
+    "model": "grok-4",
+    "mode": "Text 129",
+    "effort": "Text 127"
+   },
+   "ragResults": [],
+   "citedRagResults": [],
+   "searchProductResults": [],
+   "connectorSearchResults": [],
+   "collectionSearchResults": [],
+   "streamErrors": [],
+   "citedXposts": [],
+   "citedConnectorSearchResults": [],
+   "citedCollectionSearchResults": [],
+   "inputChunks": [],
+   "outputChunks": [],
+   "fileAttachmentAssetMetadata": [],
+   "fileIds": []
+  },
+  {
+   "responseId": "00000000-0000-4000-8000-000000000032",
+   "message": "Text 482",
+   "sender": "assistant",
+   "createTime": "2025-06-01T00:15:08.058Z",
+   "parentResponseId": "00000000-0000-4000-8000-000000000030",
+   "manual": false,
+   "partial": false,
+   "shared": false,
+   "query": "",
+   "queryType": "",
+   "webSearchResults": [
+    {
+     "url": "Text 431",
+     "title": "Text 432",
+     "preview": "Text 483"
+    }
+   ],
+   "xpostIds": [],
+   "xposts": [],
+   "generatedImageUrls": [],
+   "imageAttachments": [],
+   "fileAttachments": [],
+   "cardAttachmentsJson": [],
+   "fileUris": [],
+   "fileAttachmentsMetadata": [],
+   "isControl": false,
+   "steps": [],
+   "imageEditUris": [],
+   "mediaTypes": [],
+   "webpageUrls": [],
+   "metadata": {
+    "deepsearchPreset": "",
+    "llm_info": {
+     "modelHash": "Text 479"
+    },
+    "request_metadata": {
+     "effort": "Text 124",
+     "mode": "Text 125",
+     "model": "grok-4"
+    },
+    "request_trace_id": "Text 480"
+   },
+   "thinkingStartTime": "2025-06-01T00:14:45.109Z",
+   "thinkingEndTime": "2025-06-01T00:15:01.923Z",
+   "citedWebSearchResults": [],
+   "toolResponses": [],
+   "model": "grok-4",
+   "requestMetadata": {
+    "model": "grok-4",
+    "mode": "Text 129",
+    "effort": "Text 127"
+   },
+   "ragResults": [],
+   "citedRagResults": [],
+   "searchProductResults": [],
+   "connectorSearchResults": [],
+   "collectionSearchResults": [],
+   "streamErrors": [],
+   "citedXposts": [],
+   "citedConnectorSearchResults": [],
+   "citedCollectionSearchResults": [],
+   "inputChunks": [],
+   "outputChunks": [],
+   "fileAttachmentAssetMetadata": [],
+   "fileIds": []
+  },
+  {
+   "responseId": "00000000-0000-4000-8000-000000000033",
+   "message": "Text 537",
+   "sender": "human",
+   "createTime": "2025-06-01T00:18:56.465Z",
+   "parentResponseId": "00000000-0000-4000-8000-000000000032",
+   "manual": false,
+   "partial": false,
+   "shared": false,
+   "query": "",
+   "queryType": "",
+   "webSearchResults": [],
+   "xpostIds": [],
+   "xposts": [],
+   "generatedImageUrls": [],
+   "imageAttachments": [],
+   "fileAttachments": [],
+   "cardAttachmentsJson": [],
+   "fileUris": [],
+   "fileAttachmentsMetadata": [],
+   "isControl": false,
+   "steps": [],
+   "imageEditUris": [],
+   "mediaTypes": [],
+   "webpageUrls": [],
+   "metadata": {
+    "modelConfigOverride": {
+     "modelMap": {}
+    },
+    "requestModelDetails": {
+     "modelId": "Text 12"
+    },
+    "request_metadata": {
+     "mode": "Text 125",
+     "model": "grok-4"
+    }
+   },
+   "citedWebSearchResults": [],
+   "toolResponses": [],
+   "model": "grok-4",
+   "requestMetadata": {
+    "model": "grok-4",
+    "mode": "Text 129"
+   },
+   "ragResults": [],
+   "citedRagResults": [],
+   "searchProductResults": [],
+   "connectorSearchResults": [],
+   "collectionSearchResults": [],
+   "streamErrors": [],
+   "citedXposts": [],
+   "citedConnectorSearchResults": [],
+   "citedCollectionSearchResults": [],
+   "inputChunks": [],
+   "outputChunks": [],
+   "fileAttachmentAssetMetadata": [],
+   "fileIds": []
+  },
+  {
+   "responseId": "00000000-0000-4000-8000-000000000034",
+   "message": "Text 538",
+   "sender": "assistant",
+   "createTime": "2025-06-01T00:20:03.036Z",
+   "parentResponseId": "00000000-0000-4000-8000-000000000033",
+   "manual": false,
+   "partial": false,
+   "shared": false,
+   "query": "",
+   "queryType": "",
+   "webSearchResults": [
+    {
+     "url": "Text 539",
+     "title": "Text 540",
+     "preview": "Text 541"
+    }
+   ],
+   "xpostIds": [],
+   "xposts": [],
+   "generatedImageUrls": [],
+   "imageAttachments": [],
+   "fileAttachments": [],
+   "cardAttachmentsJson": [],
+   "fileUris": [],
+   "fileAttachmentsMetadata": [],
+   "isControl": false,
+   "steps": [
+    {
+     "text": [
+      "Text 544"
+     ],
+     "tags": [
+      "Text 106"
+     ],
+     "webSearchResults": [],
+     "xpostIds": [],
+     "xposts": [],
+     "toolUsageResults": [],
+     "ragResults": [],
+     "connectorSearchResults": [],
+     "collectionSearchResults": [],
+     "toolUsageCards": [
+      {
+       "toolUsageCardId": "00000000-0000-4000-8000-000000000035",
+       "mcp": {
+        "toolName": "Text 545",
+        "toolArgsJson": "Text 546"
+       }
+      }
+     ]
+    }
+   ],
+   "imageEditUris": [],
+   "mediaTypes": [],
+   "webpageUrls": [],
+   "metadata": {
+    "deepsearchPreset": "",
+    "llm_info": {
+     "modelHash": "Text 123"
+    },
+    "request_metadata": {
+     "effort": "Text 124",
+     "mode": "Text 125",
+     "model": "grok-4"
+    },
+    "request_trace_id": "Text 555",
+    "ui_layout": {
+     "effort": "Text 127",
+     "reasoningUiLayout": "Text 128",
+     "willThinkLong": false
+    }
+   },
+   "uiLayout": {
+    "reasoningUiLayout": "Text 128",
+    "willThinkLong": false,
+    "effort": "Text 127",
+    "rolloutIds": []
+   },
+   "thinkingStartTime": "2025-06-01T00:19:16.007Z",
+   "thinkingEndTime": "2025-06-01T00:19:55.991Z",
+   "citedWebSearchResults": [],
+   "toolResponses": [],
+   "model": "grok-4",
+   "requestMetadata": {
+    "model": "grok-4",
+    "mode": "Text 129",
+    "effort": "Text 127"
+   },
+   "ragResults": [],
+   "citedRagResults": [],
+   "searchProductResults": [],
+   "connectorSearchResults": [],
+   "collectionSearchResults": [],
+   "streamErrors": [],
+   "citedXposts": [],
+   "citedConnectorSearchResults": [],
+   "citedCollectionSearchResults": [],
+   "inputChunks": [],
+   "outputChunks": [],
+   "fileAttachmentAssetMetadata": [],
+   "fileIds": []
+  }
+ ],
+ "inflightResponses": []
+}

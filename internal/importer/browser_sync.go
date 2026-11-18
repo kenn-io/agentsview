@@ -85,7 +85,7 @@ type BrowserPlatform struct {
 
 // BrowserPlatforms lists the platforms Sync supports, keyed by agent type.
 func BrowserPlatforms() []BrowserPlatform {
-	return []BrowserPlatform{claudeAIPlatform(), chatGPTPlatform(), geminiAppsPlatform()}
+	return []BrowserPlatform{claudeAIPlatform(), chatGPTPlatform(), geminiAppsPlatform(), grokWebPlatform()}
 }
 
 // LookupBrowserPlatform finds a platform by its agent type name.
