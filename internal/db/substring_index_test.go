@@ -327,11 +327,7 @@ func TestRegexSearchScansWhenImportDropsIndexBeforeFirstRow(t *testing.T) {
 					if len(usedIndex) == 1 {
 						require.NoError(t, archive.DropFTS(ctx))
 					}
-					rows, err := d.regexCandidateRows(ctx, f, lit, candidates)
-					if err != nil {
-						return nil, err
-					}
-					return regexMatches(f, re, rows)
+					return d.regexSearchRows(ctx, f, re, lit, candidates)
 				})
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantIndex, usedIndex)

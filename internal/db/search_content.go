@@ -221,9 +221,15 @@ func BuildContentScopeSQL(
 // filter machinery. The Limit/Cursor on the inner filter are irrelevant
 // (no LIMIT in a SELECT id subquery), so they are left unset.
 func sessionScopeSubquery(f ContentSearchFilter) (string, []any) {
-	where, args := BuildContentScopeSQL(f, SQLiteQueryDialect())
-	where, args = AppendExcludeSessionIDs(where, args, "id", f.ExcludeSessionIDs)
+	where, args := contentScopeWhere(f)
 	return "session_id IN (SELECT id FROM sessions WHERE " + where + ")", args
+}
+
+// contentScopeWhere is the sessions-table WHERE clause, with its args, that
+// selects the sessions a substring, regex, or fts search reads.
+func contentScopeWhere(f ContentSearchFilter) (string, []any) {
+	where, args := BuildContentScopeSQL(f, SQLiteQueryDialect())
+	return AppendExcludeSessionIDs(where, args, "id", f.ExcludeSessionIDs)
 }
 
 // NormalizeExcludeSessionIDs trims, drops empty entries, and de-duplicates
@@ -390,26 +396,31 @@ func (db *DB) searchContentLiteral(ctx context.Context, f ContentSearchFilter) (
 func (db *DB) substringSearchPage(
 	ctx context.Context, f ContentSearchFilter, candidates substringCandidateFilters,
 ) (ContentSearchPage, error) {
-	union, args := substringUnion(f, candidates)
-	if union == "" {
-		return ContentSearchPage{}, nil
+	matches, err := func() ([]ContentMatch, error) {
+		// One snapshot keeps the session batches consistent with each other.
+		snapshot, err := db.BeginMessageSnapshot(ctx)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = snapshot.Close() }()
+		matches, _, err := exactContentRows(ctx, snapshot.tx, f, candidates, 0)
+		return matches, err
+	}()
+	if err != nil {
+		return ContentSearchPage{}, err
 	}
-	query := "SELECT session_id, project, agent, transcript_revision, location, role, tool_name, " +
-		"ordinal, ts, snippet, '', 0 FROM (" + union + ") ORDER BY " + substringOrder + " LIMIT ? OFFSET ?"
-	args = append(args, f.Limit+1, f.Cursor)
-
-	return db.scanContentMatches(ctx, query, args, f.Limit, f.Cursor, func(body, _ string) string {
-		return f.substringSnippet(body)
-	})
+	return db.contentMatchPage(ctx, matches, f.Limit, f.Cursor)
 }
 
 // substringOrder sorts substring matches by session recency, then position.
 const substringOrder = "julianday(sort_ts) DESC, session_id ASC, ordinal ASC, src ASC, row_id ASC, snippet ASC"
 
-// substringUnion selects matches from every chosen source, or returns an
-// empty query when no source is chosen.
-func substringUnion(f ContentSearchFilter, candidates substringCandidateFilters) (string, []any) {
-	scope, scopeArgs := sessionScopeSubquery(f)
+// substringUnion selects matches from every chosen source in the sessions
+// scope selects, or returns an empty query when no source is chosen. scope is
+// a "session_id IN (...)" condition with its args.
+func substringUnion(
+	f ContentSearchFilter, scope string, scopeArgs []any, candidates substringCandidateFilters,
+) (string, []any) {
 	eventAnchorJoin := LexicalEventAnchorJoinSQL(f.Scope)
 
 	like := "%" + escapeLike(f.Pattern) + "%"
@@ -439,12 +450,12 @@ func substringUnion(f ContentSearchFilter, candidates substringCandidateFilters)
 				0 AS src, m.id AS row_id
 			FROM messages m
 			JOIN sessions s ON s.id = m.session_id
-			WHERE %s LIKE ? ESCAPE '\'%s AND %s AND m.%s`,
-			snippetExpr("COALESCE(m.dialogue_text, m.content)"), "COALESCE(m.dialogue_text, m.content)",
-			candidates.message.sql, sysPred, scope+" AND "+LexicalAnchorScopeSQL(f, "s", "m", SQLiteQueryDialect())))
+			WHERE m.%s AND %s LIKE ? ESCAPE '\'%s AND %s`,
+			snippetExpr("COALESCE(m.dialogue_text, m.content)"), scope+" AND "+LexicalAnchorScopeSQL(f, "s", "m", SQLiteQueryDialect()),
+			"COALESCE(m.dialogue_text, m.content)", candidates.message.sql, sysPred))
+		args = append(args, scopeArgs...)
 		args = append(args, like)
 		args = append(args, candidates.message.args...)
-		args = append(args, scopeArgs...)
 	}
 	if hasSource(f, "thinking") {
 		branches = append(branches, fmt.Sprintf(`
@@ -456,11 +467,12 @@ func substringUnion(f ContentSearchFilter, candidates substringCandidateFilters)
 				COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
 				4 AS src, m.id AS row_id
 			FROM messages m JOIN sessions s ON s.id = m.session_id
-			WHERE (%t OR m.dialogue_text IS NOT NULL OR m.content NOT LIKE ? ESCAPE '\') AND m.thinking_text LIKE ? ESCAPE '\'%s AND %s AND m.%s`,
-			snippetExpr("m.thinking_text"), !hasSource(f, "messages"), candidates.thinking.sql, sysPred, scope+" AND "+LexicalAnchorScopeSQL(f, "s", "m", SQLiteQueryDialect())))
+			WHERE m.%s AND (%t OR m.dialogue_text IS NOT NULL OR m.content NOT LIKE ? ESCAPE '\') AND m.thinking_text LIKE ? ESCAPE '\'%s AND %s`,
+			snippetExpr("m.thinking_text"), scope+" AND "+LexicalAnchorScopeSQL(f, "s", "m", SQLiteQueryDialect()),
+			!hasSource(f, "messages"), candidates.thinking.sql, sysPred))
+		args = append(args, scopeArgs...)
 		args = append(args, like, like)
 		args = append(args, candidates.thinking.args...)
-		args = append(args, scopeArgs...)
 	}
 	if hasSource(f, "tool_input") {
 		branches = append(branches, fmt.Sprintf(`
@@ -714,11 +726,7 @@ func (db *DB) searchContentRegex(
 	lit := LiteralPrefix(f.Pattern)
 	out, err := searchWithSubstringCandidates(ctx, db, f, lit,
 		func(candidates substringCandidateFilters) ([]ContentMatch, error) {
-			rows, err := db.regexCandidateRows(ctx, f, lit, candidates)
-			if err != nil {
-				return nil, err
-			}
-			return regexMatches(f, re, rows)
+			return db.regexSearchRows(ctx, f, re, lit, candidates)
 		})
 	if err != nil {
 		return ContentSearchPage{}, err
@@ -730,20 +738,55 @@ func (db *DB) searchContentRegex(
 	return page, nil
 }
 
-// regexMatches reads candidate rows and keeps the RE2 matches for the page
-// at f.Cursor, plus one more for cursor detection. SQLite reads the schema
-// again on the first row, so a missing index table can surface here.
-func regexMatches(
-	f ContentSearchFilter, re *regexp.Regexp, rows *sql.Rows,
+// regexSearchRows reads candidate rows for batches of the scope's sessions,
+// newest first, and keeps the RE2 matches for the page at f.Cursor, plus one
+// more for cursor detection. It stops after the batch that fills the page.
+func (db *DB) regexSearchRows(
+	ctx context.Context, f ContentSearchFilter, re *regexp.Regexp, lit string,
+	candidates substringCandidateFilters,
 ) ([]ContentMatch, error) {
-	defer rows.Close()
-	out := make([]ContentMatch, 0)
-	var dedupe LegacyThinkingDedupe
+	// One snapshot keeps the session batches consistent with each other.
+	snapshot, err := db.BeginMessageSnapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = snapshot.Close() }()
+	page := regexPage{f: f, re: re, out: make([]ContentMatch, 0)}
+	err = walkContentSessions(ctx, snapshot.tx, f, func(scope string, scopeArgs []any) (bool, error) {
+		rows, err := regexCandidateRows(ctx, snapshot.tx, f, lit, scope, scopeArgs, candidates)
+		if err != nil {
+			return false, err
+		}
+		if err := page.read(rows); err != nil {
+			return false, err
+		}
+		return len(page.out) > f.Limit, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return page.out, nil
+}
+
+// regexPage collects the RE2 matches for the page at f.Cursor, plus one more
+// for cursor detection, across reads of candidate rows in order.
+type regexPage struct {
+	f      ContentSearchFilter
+	re     *regexp.Regexp
+	out    []ContentMatch
+	dedupe LegacyThinkingDedupe
 	// Regex paging has no SQL OFFSET: each page re-fetches and re-matches
 	// candidates from the start, discarding the first f.Cursor confirmed
 	// matches. Ordering is deterministic so paging stays correct; deep pages
 	// cost O(cursor) extra RE2 work, acceptable for interactive use.
-	seen := 0
+	seen int
+}
+
+// read consumes candidate rows until the page is full. SQLite reads the
+// schema again on the first row, so a missing index table can surface here.
+func (p *regexPage) read(rows *sql.Rows) error {
+	defer rows.Close()
+	f, re := p.f, p.re
 	for rows.Next() {
 		var m ContentMatch
 		var body string
@@ -753,7 +796,7 @@ func regexMatches(
 			&m.TranscriptRevision,
 			&m.Location, &m.Role, &m.ToolName, &m.Ordinal,
 			&m.Timestamp, &body, &rowID, &legacyThinking); err != nil {
-			return nil, fmt.Errorf("scan candidate: %w", err)
+			return fmt.Errorf("scan candidate: %w", err)
 		}
 		loc := re.FindStringIndex(body)
 		if loc == nil {
@@ -761,42 +804,42 @@ func regexMatches(
 		}
 		// Message candidates sort before thinking for the same row. Record
 		// matches before cursor filtering so later pages dedupe them too.
-		if dedupe.Suppress(m, legacyThinking) {
+		if p.dedupe.Suppress(m, legacyThinking) {
 			continue
 		}
-		if seen < f.Cursor {
-			seen++
+		if p.seen < f.Cursor {
+			p.seen++
 			continue
 		}
 		m.Snippet = f.BuildSnippet(body, loc[0], loc[1])
-		out = append(out, m)
-		if len(out) > f.Limit {
+		p.out = append(p.out, m)
+		if len(p.out) > f.Limit {
 			break
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return err
 	}
-	// Close the candidate cursor before deriving units: the loop breaks out
-	// with rows still open once Limit+1 matches are collected, and
-	// deriveLexicalUnits issues new queries that could otherwise block on a
-	// constrained connection pool while this cursor pins a connection.
+	// Close the candidate cursor before the next batch or deriving units:
+	// the loop breaks out with rows still open once Limit+1 matches are
+	// collected, and later queries could otherwise block on a constrained
+	// connection pool while this cursor pins a connection.
 	if err := rows.Close(); err != nil {
-		return nil, fmt.Errorf("closing regex candidates: %w", err)
+		return fmt.Errorf("closing regex candidates: %w", err)
 	}
-	return out, nil
+	return nil
 }
 
-// regexCandidateRows returns full-body rows for the selected sources,
-// LIKE-prefiltered by lit when non-empty, ordered for stable paging.
-// Each branch selects: session_id, project, agent, transcript_revision,
-// location, role, tool_name, ordinal, ts AS ts, body, sort_ts, src, row_id,
-// legacy_thinking. The message and thinking branches keep only the rows
-// candidates lists.
-func (db *DB) regexCandidateRows(
-	ctx context.Context, f ContentSearchFilter, lit string, candidates substringCandidateFilters,
+// regexCandidateRows returns full-body rows for the selected sources in the
+// sessions scope selects, LIKE-prefiltered by lit when non-empty, ordered for
+// stable paging. Each branch selects: session_id, project, agent,
+// transcript_revision, location, role, tool_name, ordinal, ts AS ts, body,
+// sort_ts, src, row_id, legacy_thinking. The message and thinking branches
+// keep only the rows candidates lists.
+func regexCandidateRows(
+	ctx context.Context, q messageRowsQuerier, f ContentSearchFilter, lit string,
+	scope string, scopeArgs []any, candidates substringCandidateFilters,
 ) (*sql.Rows, error) {
-	scope, scopeArgs := sessionScopeSubquery(f)
 	eventAnchorJoin := LexicalEventAnchorJoinSQL(f.Scope)
 
 	var branches []string
@@ -818,6 +861,7 @@ func (db *DB) regexCandidateRows(
 			SystemPrefixSQL("m.content", "m.role")
 	}
 	if hasSource(f, "messages") {
+		args = append(args, scopeArgs...)
 		w := prefilterClause("COALESCE(m.dialogue_text, m.content)") + candidates.message.sql
 		args = append(args, candidates.message.args...)
 		branches = append(branches, fmt.Sprintf(`
@@ -832,11 +876,11 @@ func (db *DB) regexCandidateRows(
 				0 AS src, m.id AS row_id, 0 AS legacy_thinking
 			FROM messages m
 			JOIN sessions s ON s.id = m.session_id
-			WHERE %s AND %s AND m.%s`,
-			"COALESCE(m.dialogue_text, m.content)", w, sysPred, scope+" AND "+LexicalAnchorScopeSQL(f, "s", "m", SQLiteQueryDialect())))
-		args = append(args, scopeArgs...)
+			WHERE m.%s AND %s AND %s`,
+			"COALESCE(m.dialogue_text, m.content)", scope+" AND "+LexicalAnchorScopeSQL(f, "s", "m", SQLiteQueryDialect()), w, sysPred))
 	}
 	if hasSource(f, "thinking") {
+		args = append(args, scopeArgs...)
 		w := prefilterClause("m.thinking_text") + candidates.thinking.sql
 		args = append(args, candidates.thinking.args...)
 		branches = append(branches, fmt.Sprintf(`
@@ -850,8 +894,7 @@ func (db *DB) regexCandidateRows(
 				COALESCE(s.ended_at, s.started_at, '') AS sort_ts,
 				4 AS src, m.id AS row_id, m.dialogue_text IS NULL AS legacy_thinking
 			FROM messages m JOIN sessions s ON s.id = m.session_id
-			WHERE %s AND m.thinking_text <> '' AND %s AND m.%s`, w, sysPred, scope+" AND "+LexicalAnchorScopeSQL(f, "s", "m", SQLiteQueryDialect())))
-		args = append(args, scopeArgs...)
+			WHERE m.%s AND %s AND m.thinking_text <> '' AND %s`, scope+" AND "+LexicalAnchorScopeSQL(f, "s", "m", SQLiteQueryDialect()), w, sysPred))
 	}
 	if hasSource(f, "tool_input") {
 		w := prefilterClause("tc.input_json")
@@ -916,19 +959,19 @@ func (db *DB) regexCandidateRows(
 	}
 	if len(branches) == 0 {
 		// Return an empty result set.
-		q := "SELECT '' AS session_id, '' AS project, '' AS agent, " +
+		query := "SELECT '' AS session_id, '' AS project, '' AS agent, " +
 			"'' AS transcript_revision, '' AS location, " +
 			"'' AS role, '' AS tool_name, 0 AS ordinal, '' AS ts, '' AS body, " +
 			"0 AS row_id, 0 AS legacy_thinking " +
 			"WHERE 0"
-		return db.getReader().QueryContext(ctx, q)
+		return q.QueryContext(ctx, query)
 	}
 
 	query := "SELECT session_id, project, agent, transcript_revision, location, role, tool_name, " +
 		"ordinal, ts, body, row_id, legacy_thinking FROM (" +
 		strings.Join(branches, " UNION ALL ") +
 		") ORDER BY julianday(sort_ts) DESC, session_id ASC, ordinal ASC, src ASC, row_id ASC, body ASC"
-	return db.getReader().QueryContext(ctx, query, args...)
+	return q.QueryContext(ctx, query, args...)
 }
 
 // SnippetBounds returns the byte window [lo,hi) = [start-radius, end+radius)

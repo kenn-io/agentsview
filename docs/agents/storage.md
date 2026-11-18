@@ -1350,6 +1350,19 @@ sessions keep the scan. A capped count of the listed IDs makes that choice; it
 stops as soon as the share is passed. Tool input and tool result branches are
 not indexed.
 
+Because the tool branches read every row of every session they cover,
+substring, word, and regex search read the scope's sessions in batches, newest
+first in the result order, and stop after the batch that fills the page and
+its next-page row. The first batch holds sessions totaling 16,384 messages and
+each later batch doubles that. Results sort by session recency, then session
+ID, then position, so a session's rows never split across batches and the
+batches together return the same rows in the same order as one query. A walk
+that reaches the last session counts every exact match, which word search
+needs to offset its ranked results. The message and thinking branches test the
+batch's session list before `LIKE`, because SQLite checks conditions in the
+order written and the index candidates otherwise load bodies from sessions
+outside the batch.
+
 Terms search uses `message_trigram_fts` under the same share rule per term. When
 the index lists any term, the query starts from the messages it lists for the
 first such term. It finds each message's exchange from the nearest eligible user
