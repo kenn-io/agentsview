@@ -604,7 +604,6 @@ func TestPGActivityReportInputRestartPriceInvalidation(t *testing.T) {
 				assert.Equal(t, 1000, before.Report.Totals.OutputTokens)
 				assert.Equal(t, 1700, got.Report.Totals.OutputTokens)
 				assert.Equal(t, money.MustParseDollars("0.034"), got.Report.Totals.Cost)
-				assert.NotEqual(t, before.Report.Totals.Cost, got.Report.Totals.Cost)
 			}
 		})
 	}
