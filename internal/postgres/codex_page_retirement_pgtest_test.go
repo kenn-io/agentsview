@@ -162,6 +162,24 @@ func TestCodexPageUpgradeRetiresMissingPostgresHead(t *testing.T) {
 			upgraded, err := New(t.Context(), pgURL, schema, rebuilt, "machine", true, storage.PusherOptions{})
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, upgraded.Close()) })
+			if tc.promptLink {
+				upgraded.archiveID, err = rebuilt.GetArchiveID(ctx)
+				require.NoError(t, err)
+				marker, err := upgraded.pushMarkerID(ctx)
+				require.NoError(t, err)
+				pageSession, err := rebuilt.GetArtifactExportSession(ctx, page)
+				require.NoError(t, err)
+				require.NotNil(t, pageSession)
+				tx, err := upgraded.pg.BeginTx(ctx, nil)
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = tx.Rollback() })
+				require.NoError(t, upgraded.migrateCodexPages(ctx, tx, []db.Session{*pageSession}, marker, nil))
+				require.NoError(t, tx.Commit())
+				migrated, err := store.GetSessionFull(ctx, page)
+				require.NoError(t, err)
+				require.NotNil(t, migrated)
+				assert.Equal(t, []db.PRLink{{URL: "https://github.com/o/r/pull/7", Host: "github.com", Repository: "o/r", Number: 7}}, migrated.PRLinks)
+			}
 			if tc.newerPage {
 				// A page already published by an earlier push has its own newer
 				// curation. Seed it through the normal session/message writers.
