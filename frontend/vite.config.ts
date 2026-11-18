@@ -141,10 +141,9 @@ export default defineConfig(({ command }) => {
             },
           );
           cpSync(
-            fileURLToPath(new URL("../internal/importer/claude_ai_requests.txt", import.meta.url)),
-            fileURLToPath(
-              new URL("./dist/chrome-extension/claude_ai_requests.txt", import.meta.url),
-            ),
+            fileURLToPath(new URL("../internal/importer/browser_requests/", import.meta.url)),
+            fileURLToPath(new URL("./dist/chrome-extension/requests/", import.meta.url)),
+            { recursive: true },
           );
         },
       },

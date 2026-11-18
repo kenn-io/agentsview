@@ -1,6 +1,7 @@
 package db
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -42,7 +43,7 @@ type SessionBatchWrite struct {
 	ReplaceMessages   bool
 	// KeepTrashedCopyOnlyOnPinLoss limits ReplaceSessionKeepingTrashedCopy to replacements that lose a pin or note.
 	KeepTrashedCopyOnlyOnPinLoss bool
-	// CompleteStoredRows lets an append write complete stored rows at stored ordinals: it sets results on stored calls that are still empty and replaces stored text with longer text that starts with it (IsTextExtension). Rows keep their IDs; other stored rows are untouched.
+	// CompleteStoredRows lets an append write complete stored rows at stored ordinals: it sets results on stored calls that are still empty, replaces stored text with longer text that starts with it (IsTextExtension), and fills a missing model or source identity. Rows keep their IDs; other stored rows are untouched.
 	// Results come from ToolCall.ResultContent and ResultContentLength; result events are not written.
 	CompleteStoredRows bool
 	// RejectMessageCountDecrease prevents full replacement with fewer messages.
@@ -526,7 +527,7 @@ func (db *DB) writeOneSessionBatchTx(
 
 	msgs := write.Messages
 	var pins []savedPin
-	filled, extended := 0, 0
+	filled, completed := 0, 0
 	var imageDiff *messageDiffPlan
 	if replaceMessages && sessionExists {
 		if err := reconcileConversationMessagesTx(queries, write.Session.ID, msgs, true, usageOnly); err != nil {
@@ -545,8 +546,9 @@ func (db *DB) writeOneSessionBatchTx(
 			}
 		} else {
 			// The rows keep their pins, but a caller that copies the old
-			// transcript still needs them for the copy.
-			if sourceIDsOnly && pinSnapshot != nil {
+			// transcript still needs them for the copy. That includes a
+			// usage-only replace whose retained rows are all unchanged.
+			if pinSnapshot != nil {
 				snapshot, err := savePinsTx(queries, write.Session.ID, msgs)
 				if err != nil {
 					return 0, err
@@ -584,7 +586,7 @@ func (db *DB) writeOneSessionBatchTx(
 			if err != nil {
 				return 0, err
 			}
-			extended, err = extendTruncatedTextTx(
+			completed, err = completeStoredMessagesTx(
 				queries, write.Session.ID, msgs, maxOrd,
 			)
 			if err != nil {
@@ -596,7 +598,7 @@ func (db *DB) writeOneSessionBatchTx(
 			return 0, err
 		}
 	}
-	transcriptChanged := len(msgs) > 0 || filled > 0 || extended > 0
+	transcriptChanged := len(msgs) > 0 || filled > 0 || completed > 0
 	if replaceMessages && sessionExists {
 		transcriptChanged = replacementTranscriptChanged
 	}
@@ -619,7 +621,7 @@ func (db *DB) writeOneSessionBatchTx(
 			return 0, err
 		}
 	}
-	if extended > 0 {
+	if completed > 0 {
 		active, err := conversationExportActiveTx(queries)
 		if err != nil {
 			return 0, err
@@ -655,7 +657,7 @@ func (db *DB) writeOneSessionBatchTx(
 	if err != nil {
 		return 0, err
 	}
-	if replaceMessages && sessionExists || filled > 0 || extended > 0 {
+	if replaceMessages && sessionExists || filled > 0 || completed > 0 {
 		if err := reconcileRecallEvidenceForSessionTx(
 			ctx,
 			tx,
@@ -827,50 +829,63 @@ func fillEmptyToolResultsTx(
 	return filled, nil
 }
 
-// extendTruncatedTextTx writes candidate text into stored messages at
-// ordinals up to maxOrd whose stored text the candidate extends. It updates the
-// content, length, and dialogue projection by row ID.
-func extendTruncatedTextTx(
+// completeStoredMessagesTx extends text and fills missing models and source identities at stored
+// ordinals up to maxOrd, preserving message IDs and unrelated fields.
+func completeStoredMessagesTx(
 	tx transactionQueries, sessionID string, msgs []Message, maxOrd int,
 ) (int, error) {
-	extended := 0
+	completed := 0
 	for _, m := range msgs {
 		if m.Ordinal > maxOrd {
 			continue
 		}
 		var id int64
-		var stored, thinking string
+		var stored, thinking, model, sourceUUID, sourceParentUUID string
+		var dialogue *string
+		var dialogueIsContent bool
+		var contentLength int
 		err := tx.QueryRow(
-			`SELECT id, content, thinking_text FROM messages
+			`SELECT id, content, content_length, thinking_text, model, source_uuid, source_parent_uuid,
+			        dialogue_text, dialogue_is_content
+			 FROM messages
 			 WHERE session_id = ? AND ordinal = ?`,
 			sessionID, m.Ordinal,
-		).Scan(&id, &stored, &thinking)
+		).Scan(&id, &stored, &contentLength, &thinking, &model, &sourceUUID, &sourceParentUUID,
+			&dialogue, &dialogueIsContent)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}
 		if err != nil {
 			return 0, fmt.Errorf(
-				"extending text for %s ordinal %d: %w",
+				"completing message for %s ordinal %d: %w",
 				sessionID, m.Ordinal, err,
 			)
 		}
-		if !IsTextExtension(stored, m.Content) {
+		extended := IsTextExtension(stored, m.Content)
+		filledUUID := cmp.Or(sourceUUID, m.SourceUUID)
+		filledParentUUID := cmp.Or(sourceParentUUID, m.SourceParentUUID)
+		if !extended && model == cmp.Or(model, m.Model) && sourceUUID == filledUUID && sourceParentUUID == filledParentUUID {
 			continue
 		}
-		dialogue, dialogueIsContent := StoredDialogue(m.Content, thinking, m.DialogueText)
+		if extended {
+			stored, contentLength = m.Content, m.ContentLength
+			dialogue, dialogueIsContent = StoredDialogue(m.Content, thinking, m.DialogueText)
+		}
 		if _, err := tx.Exec(
-			`UPDATE messages SET content = ?, content_length = ?, dialogue_text = ?, dialogue_is_content = ?
+			`UPDATE messages SET content = ?, content_length = ?, model = ?, source_uuid = ?, source_parent_uuid = ?,
+			        dialogue_text = ?, dialogue_is_content = ?
 			 WHERE id = ?`,
-			m.Content, m.ContentLength, dialogue, dialogueIsContent, id,
+			stored, contentLength, cmp.Or(model, m.Model), filledUUID, filledParentUUID,
+			dialogue, dialogueIsContent, id,
 		); err != nil {
 			return 0, fmt.Errorf(
-				"extending text for %s ordinal %d: %w",
+				"completing message for %s ordinal %d: %w",
 				sessionID, m.Ordinal, err,
 			)
 		}
-		extended++
+		completed++
 	}
-	return extended, nil
+	return completed, nil
 }
 
 func messagesAfterOrdinal(msgs []Message, maxOrd int) []Message {

@@ -1,7 +1,8 @@
 import { allowedPath } from "./paths.js";
+import { platforms } from "./platforms.js";
 
 // Covers message encoding and request shapes; bump both peers together.
-const version = 1;
+const version = 2;
 
 async function loadedTab(id) {
   await new Promise((resolve, reject) => {
@@ -9,9 +10,9 @@ async function loadedTab(id) {
       if (tabId === id && change.status === "complete") finish();
     };
     const removed = (tabId) => {
-      if (tabId === id) finish(new Error("Claude.ai tab closed"));
+      if (tabId === id) finish(new Error("Browser tab closed"));
     };
-    const timer = setTimeout(() => finish(new Error("Claude.ai tab did not load")), 45000);
+    const timer = setTimeout(() => finish(new Error("Browser tab did not load")), 45000);
     function finish(error) {
       clearTimeout(timer);
       chrome.tabs.onUpdated.removeListener(updated);
@@ -27,24 +28,32 @@ async function loadedTab(id) {
   });
 }
 
-async function request({ id, path }, port) {
+async function request({ id, platform, path }, port) {
   let result;
   try {
-    if (!(await allowedPath(path))) throw new Error("Unsupported Claude fetch path");
-    let [tab] = await chrome.tabs.query({ url: "https://claude.ai/*", discarded: false });
-    if (!tab) tab = await chrome.tabs.create({ url: "https://claude.ai/new", active: false });
-    await loadedTab(tab.id);
-    const target = { tabId: tab.id };
-    await chrome.scripting.executeScript({ target, files: ["claude_fetch.js"], world: "ISOLATED" });
-    const [reply] = await chrome.scripting.executeScript({
-      target,
-      world: "ISOLATED",
-      func: (url) => (typeof claudeFetch === "function" ? claudeFetch(url) : undefined),
-      args: [`https://claude.ai${path}`],
-    });
-    if (typeof reply?.result?.status !== "number")
-      throw new Error("Claude.ai page changed during Sync; try Sync again");
-    result = { ...reply.result, id, version };
+    if (!Object.hasOwn(platforms, platform)) {
+      // An older extension than the server: the server reports that the
+      // extension needs an update without dropping the connection.
+      result = { id, version, status: 0, unsupported: true };
+    } else {
+      const config = platforms[platform];
+      if (!(await allowedPath(platform, path))) throw new Error("Unsupported browser fetch path");
+      let [tab] = await chrome.tabs.query({ url: `${config.origin}/*`, discarded: false });
+      if (!tab) tab = await chrome.tabs.create({ url: config.newTabURL, active: false });
+      await loadedTab(tab.id);
+      const target = { tabId: tab.id };
+      await chrome.scripting.executeScript({ target, files: config.scripts, world: "ISOLATED" });
+      const [reply] = await chrome.scripting.executeScript({
+        target,
+        world: "ISOLATED",
+        func: (name, url) =>
+          typeof globalThis[name] === "function" ? globalThis[name](url) : undefined,
+        args: [config.fetchFunction, `${config.origin}${path}`],
+      });
+      if (typeof reply?.result?.status !== "number")
+        throw new Error("The page changed during Sync; try Sync again");
+      result = { ...reply.result, id, version };
+    }
   } catch (error) {
     result = { id, version, status: 0, error: error.message };
   }

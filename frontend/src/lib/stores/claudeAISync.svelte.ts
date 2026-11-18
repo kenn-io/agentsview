@@ -34,14 +34,14 @@ class ClaudeAISyncStore {
     } catch (e) {
       if (controller.signal.aborted) return;
       reportSyncFailed(e);
-      if (e instanceof ApiError && e.code === "claude_ai_chrome_host_required") {
+      if (e instanceof ApiError && e.code === "chrome_host_required") {
         return;
       } else if (
         e instanceof ApiError &&
-        ["claude_ai_auth_required", "claude_ai_chrome_host_update_required"].includes(e.code ?? "")
+        ["browser_sync_auth_required", "chrome_host_update_required"].includes(e.code ?? "")
       ) {
         this.flag = e.code ?? null;
-      } else if (e instanceof ApiError && e.code === "claude_ai_sync_running") {
+      } else if (e instanceof ApiError && e.code === "chrome_sync_running") {
         this.error = m.import_claude_sync_running();
         refreshAfterSync = false;
       } else {

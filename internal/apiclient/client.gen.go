@@ -1184,15 +1184,24 @@ func (o *PostAPIV1FrictionRunRequestOptions) GetHeader() (map[string]string, err
 	return nil, nil
 }
 
-// PostAPIV1ImportClaudeAiSyncRequestOptions is the options needed to make a request to PostAPIV1ImportClaudeAiSync.
-type PostAPIV1ImportClaudeAiSyncRequestOptions struct {
-	Query *PostAPIV1ImportClaudeAiSyncQuery
+// PostAPIV1ImportPlatformSyncRequestOptions is the options needed to make a request to PostAPIV1ImportPlatformSync.
+type PostAPIV1ImportPlatformSyncRequestOptions struct {
+	PathParams *PostAPIV1ImportPlatformSyncPath
+	Query      *PostAPIV1ImportPlatformSyncQuery
 }
 
 // Validate validates all the fields in the options.
 // Use it if fields validation was not run.
-func (o *PostAPIV1ImportClaudeAiSyncRequestOptions) Validate() error {
+func (o *PostAPIV1ImportPlatformSyncRequestOptions) Validate() error {
 	var errors runtime.ValidationErrors
+
+	if o.PathParams != nil {
+		if v, ok := any(o.PathParams).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("PathParams", err)
+			}
+		}
+	}
 
 	if o.Query != nil {
 		if v, ok := any(o.Query).(runtime.Validator); ok {
@@ -1209,22 +1218,22 @@ func (o *PostAPIV1ImportClaudeAiSyncRequestOptions) Validate() error {
 }
 
 // GetPathParams returns the path params as a map.
-func (o *PostAPIV1ImportClaudeAiSyncRequestOptions) GetPathParams() (map[string]any, error) {
-	return nil, nil
+func (o *PostAPIV1ImportPlatformSyncRequestOptions) GetPathParams() (map[string]any, error) {
+	return runtime.AsMap[any](o.PathParams)
 }
 
 // GetQuery returns the query params as a map.
-func (o *PostAPIV1ImportClaudeAiSyncRequestOptions) GetQuery() (map[string]any, error) {
+func (o *PostAPIV1ImportPlatformSyncRequestOptions) GetQuery() (map[string]any, error) {
 	return runtime.AsMap[any](o.Query)
 }
 
 // GetBody returns the payload in any type that can be marshalled to JSON by the client.
-func (o *PostAPIV1ImportClaudeAiSyncRequestOptions) GetBody() any {
+func (o *PostAPIV1ImportPlatformSyncRequestOptions) GetBody() any {
 	return nil
 }
 
 // GetHeader returns the headers as a map.
-func (o *PostAPIV1ImportClaudeAiSyncRequestOptions) GetHeader() (map[string]string, error) {
+func (o *PostAPIV1ImportPlatformSyncRequestOptions) GetHeader() (map[string]string, error) {
 	return nil, nil
 }
 
@@ -3491,16 +3500,16 @@ func (c *Client) GetAPIV1ActivityReportStreamWithResponse(ctx context.Context, o
 	}
 }
 
-// PostAPIV1ImportClaudeAiSyncStreamWithResponse is the envelope form: it populates
+// PostAPIV1ImportPlatformSyncStreamWithResponse is the envelope form: it populates
 // Stream200 instead of the buffered body field.
-func (c *Client) PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx context.Context, options *PostAPIV1ImportClaudeAiSyncRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1ImportClaudeAiSyncResp, error) {
+func (c *Client) PostAPIV1ImportPlatformSyncStreamWithResponse(ctx context.Context, options *PostAPIV1ImportPlatformSyncRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1ImportPlatformSyncResp, error) {
 	var err error
 
 	queryEncoding := map[string]runtime.QueryEncoding{
 		"browser": {Style: "form", Explode: &[]bool{false}[0]},
 	}
 	reqParams := runtime.RequestOptionsParameters{
-		RequestURL:    c.apiClient.GetBaseURL() + "/api/v1/import/claude-ai/sync",
+		RequestURL:    c.apiClient.GetBaseURL() + "/api/v1/import/{platform}/sync",
 		Method:        "POST",
 		Stream:        "text/event-stream",
 		Options:       options,
@@ -3512,12 +3521,12 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx context.Conte
 		return nil, fmt.Errorf("error creating request: %w", err)
 	}
 
-	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/import/claude-ai/sync")
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/import/{platform}/sync")
 	if err != nil {
 		return nil, fmt.Errorf("error executing request: %w", err)
 	}
 
-	out := &PostAPIV1ImportClaudeAiSyncResp{
+	out := &PostAPIV1ImportPlatformSyncResp{
 		HTTPResponse: resp.Raw,
 		Body:         resp.Content,
 		StatusCode:   resp.StatusCode,
@@ -3533,7 +3542,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx context.Conte
 		out.Stream200 = runtime.NewEventStream[[]byte](resp.Raw)
 		return out, nil
 	case 400:
-		out.JSON400 = new(PostAPIV1ImportClaudeAiSyncErrorResponse)
+		out.JSON400 = new(PostAPIV1ImportPlatformSyncErrorResponse)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
@@ -3541,7 +3550,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx context.Conte
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportClaudeAiSyncErrorResponse",
+					TargetType:    "PostAPIV1ImportPlatformSyncErrorResponse",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -3549,7 +3558,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx context.Conte
 		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	case 401:
-		out.JSON401 = new(PostAPIV1ImportClaudeAiSyncErrorResponseJSON)
+		out.JSON401 = new(PostAPIV1ImportPlatformSyncErrorResponseJSON)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
@@ -3557,7 +3566,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx context.Conte
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportClaudeAiSyncErrorResponseJSON",
+					TargetType:    "PostAPIV1ImportPlatformSyncErrorResponseJSON",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -3565,7 +3574,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx context.Conte
 		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	case 403:
-		out.JSON403 = new(PostAPIV1ImportClaudeAiSyncErrorResponseJSON403)
+		out.JSON403 = new(PostAPIV1ImportPlatformSyncErrorResponseJSON403)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
@@ -3573,7 +3582,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx context.Conte
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportClaudeAiSyncErrorResponseJSON403",
+					TargetType:    "PostAPIV1ImportPlatformSyncErrorResponseJSON403",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -3581,7 +3590,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx context.Conte
 		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	case 404:
-		out.JSON404 = new(PostAPIV1ImportClaudeAiSyncErrorResponseJSON404)
+		out.JSON404 = new(PostAPIV1ImportPlatformSyncErrorResponseJSON404)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
@@ -3589,7 +3598,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx context.Conte
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportClaudeAiSyncErrorResponseJSON404",
+					TargetType:    "PostAPIV1ImportPlatformSyncErrorResponseJSON404",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -3597,7 +3606,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx context.Conte
 		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	case 409:
-		out.JSON409 = new(PostAPIV1ImportClaudeAiSyncErrorResponseJSON409)
+		out.JSON409 = new(PostAPIV1ImportPlatformSyncErrorResponseJSON409)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
@@ -3605,7 +3614,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx context.Conte
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportClaudeAiSyncErrorResponseJSON409",
+					TargetType:    "PostAPIV1ImportPlatformSyncErrorResponseJSON409",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -3613,7 +3622,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx context.Conte
 		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	case 422:
-		out.JSON422 = new(PostAPIV1ImportClaudeAiSyncErrorResponseJSON422)
+		out.JSON422 = new(PostAPIV1ImportPlatformSyncErrorResponseJSON422)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON422); err != nil {
@@ -3621,7 +3630,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx context.Conte
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportClaudeAiSyncErrorResponseJSON422",
+					TargetType:    "PostAPIV1ImportPlatformSyncErrorResponseJSON422",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -3629,7 +3638,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx context.Conte
 		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	case 500:
-		out.JSON500 = new(PostAPIV1ImportClaudeAiSyncErrorResponseJSON500)
+		out.JSON500 = new(PostAPIV1ImportPlatformSyncErrorResponseJSON500)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
@@ -3637,7 +3646,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx context.Conte
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportClaudeAiSyncErrorResponseJSON500",
+					TargetType:    "PostAPIV1ImportPlatformSyncErrorResponseJSON500",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -3645,7 +3654,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx context.Conte
 		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	case 501:
-		out.JSON501 = new(PostAPIV1ImportClaudeAiSyncErrorResponseJSON501)
+		out.JSON501 = new(PostAPIV1ImportPlatformSyncErrorResponseJSON501)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
@@ -3653,7 +3662,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx context.Conte
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportClaudeAiSyncErrorResponseJSON501",
+					TargetType:    "PostAPIV1ImportPlatformSyncErrorResponseJSON501",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -3661,7 +3670,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx context.Conte
 		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	case 502:
-		out.JSON502 = new(PostAPIV1ImportClaudeAiSyncErrorResponseJSON502)
+		out.JSON502 = new(PostAPIV1ImportPlatformSyncErrorResponseJSON502)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
@@ -3669,7 +3678,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx context.Conte
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportClaudeAiSyncErrorResponseJSON502",
+					TargetType:    "PostAPIV1ImportPlatformSyncErrorResponseJSON502",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -3677,7 +3686,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx context.Conte
 		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	case 503:
-		out.JSON503 = new(PostAPIV1ImportClaudeAiSyncErrorResponseJSON503)
+		out.JSON503 = new(PostAPIV1ImportPlatformSyncErrorResponseJSON503)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
@@ -3685,7 +3694,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx context.Conte
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportClaudeAiSyncErrorResponseJSON503",
+					TargetType:    "PostAPIV1ImportPlatformSyncErrorResponseJSON503",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -3693,7 +3702,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx context.Conte
 		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	case 504:
-		out.JSON504 = new(PostAPIV1ImportClaudeAiSyncErrorResponseJSON504)
+		out.JSON504 = new(PostAPIV1ImportPlatformSyncErrorResponseJSON504)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
@@ -3701,7 +3710,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx context.Conte
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportClaudeAiSyncErrorResponseJSON504",
+					TargetType:    "PostAPIV1ImportPlatformSyncErrorResponseJSON504",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -5564,8 +5573,8 @@ type ClientInterface interface {
 	PostAPIV1FrictionPatternsFingerprintIssueWithResponse(ctx context.Context, options *PostAPIV1FrictionPatternsFingerprintIssueRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1FrictionPatternsFingerprintIssueResp, error)
 	PutAPIV1FrictionPatternsFingerprintIssueWithResponse(ctx context.Context, options *PutAPIV1FrictionPatternsFingerprintIssueRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PutAPIV1FrictionPatternsFingerprintIssueResp, error)
 	PostAPIV1FrictionRunWithResponse(ctx context.Context, options *PostAPIV1FrictionRunRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1FrictionRunResp, error)
-	PostAPIV1ImportClaudeAiSyncWithResponse(ctx context.Context, options *PostAPIV1ImportClaudeAiSyncRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1ImportClaudeAiSyncResp, error)
-	PostAPIV1ImportClaudeAiSyncStreamWithResponse(ctx context.Context, options *PostAPIV1ImportClaudeAiSyncRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1ImportClaudeAiSyncResp, error)
+	PostAPIV1ImportPlatformSyncWithResponse(ctx context.Context, options *PostAPIV1ImportPlatformSyncRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1ImportPlatformSyncResp, error)
+	PostAPIV1ImportPlatformSyncStreamWithResponse(ctx context.Context, options *PostAPIV1ImportPlatformSyncRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1ImportPlatformSyncResp, error)
 	GetAPIV1KataStatusWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1KataStatusResp, error)
 	GetAPIV1MachinesWithResponse(ctx context.Context, options *GetAPIV1MachinesRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1MachinesResp, error)
 	GetAPIV1MemoryStatusWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1MemoryStatusResp, error)
@@ -11459,11 +11468,11 @@ func (c *Client) PostAPIV1FrictionRunWithResponse(ctx context.Context, options *
 	}
 }
 
-// PostAPIV1ImportClaudeAiSync Sync Claude.ai conversations
-func (c *Client) PostAPIV1ImportClaudeAiSyncWithResponse(ctx context.Context, options *PostAPIV1ImportClaudeAiSyncRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1ImportClaudeAiSyncResp, error) {
+// PostAPIV1ImportPlatformSync Sync browser conversations
+func (c *Client) PostAPIV1ImportPlatformSyncWithResponse(ctx context.Context, options *PostAPIV1ImportPlatformSyncRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1ImportPlatformSyncResp, error) {
 	var err error
 	reqParams := runtime.RequestOptionsParameters{
-		RequestURL: c.apiClient.GetBaseURL() + "/api/v1/import/claude-ai/sync",
+		RequestURL: c.apiClient.GetBaseURL() + "/api/v1/import/{platform}/sync",
 		Method:     "POST",
 		Options:    options,
 	}
@@ -11473,12 +11482,12 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncWithResponse(ctx context.Context, op
 		return nil, fmt.Errorf("error creating request: %w", err)
 	}
 
-	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/import/claude-ai/sync")
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/import/{platform}/sync")
 	if err != nil {
 		return nil, fmt.Errorf("error executing request: %w", err)
 	}
 
-	out := &PostAPIV1ImportClaudeAiSyncResp{
+	out := &PostAPIV1ImportPlatformSyncResp{
 		HTTPResponse: resp.Raw,
 		Body:         resp.Content,
 		StatusCode:   resp.StatusCode,
@@ -11488,7 +11497,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncWithResponse(ctx context.Context, op
 	case 200:
 		return out, nil
 	case 400:
-		out.JSON400 = new(PostAPIV1ImportClaudeAiSyncErrorResponse)
+		out.JSON400 = new(PostAPIV1ImportPlatformSyncErrorResponse)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
@@ -11496,7 +11505,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncWithResponse(ctx context.Context, op
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportClaudeAiSyncErrorResponse",
+					TargetType:    "PostAPIV1ImportPlatformSyncErrorResponse",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -11504,7 +11513,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncWithResponse(ctx context.Context, op
 		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	case 401:
-		out.JSON401 = new(PostAPIV1ImportClaudeAiSyncErrorResponseJSON)
+		out.JSON401 = new(PostAPIV1ImportPlatformSyncErrorResponseJSON)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
@@ -11512,7 +11521,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncWithResponse(ctx context.Context, op
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportClaudeAiSyncErrorResponseJSON",
+					TargetType:    "PostAPIV1ImportPlatformSyncErrorResponseJSON",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -11520,7 +11529,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncWithResponse(ctx context.Context, op
 		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	case 403:
-		out.JSON403 = new(PostAPIV1ImportClaudeAiSyncErrorResponseJSON403)
+		out.JSON403 = new(PostAPIV1ImportPlatformSyncErrorResponseJSON403)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
@@ -11528,7 +11537,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncWithResponse(ctx context.Context, op
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportClaudeAiSyncErrorResponseJSON403",
+					TargetType:    "PostAPIV1ImportPlatformSyncErrorResponseJSON403",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -11536,7 +11545,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncWithResponse(ctx context.Context, op
 		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	case 404:
-		out.JSON404 = new(PostAPIV1ImportClaudeAiSyncErrorResponseJSON404)
+		out.JSON404 = new(PostAPIV1ImportPlatformSyncErrorResponseJSON404)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
@@ -11544,7 +11553,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncWithResponse(ctx context.Context, op
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportClaudeAiSyncErrorResponseJSON404",
+					TargetType:    "PostAPIV1ImportPlatformSyncErrorResponseJSON404",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -11552,7 +11561,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncWithResponse(ctx context.Context, op
 		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	case 409:
-		out.JSON409 = new(PostAPIV1ImportClaudeAiSyncErrorResponseJSON409)
+		out.JSON409 = new(PostAPIV1ImportPlatformSyncErrorResponseJSON409)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
@@ -11560,7 +11569,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncWithResponse(ctx context.Context, op
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportClaudeAiSyncErrorResponseJSON409",
+					TargetType:    "PostAPIV1ImportPlatformSyncErrorResponseJSON409",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -11568,7 +11577,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncWithResponse(ctx context.Context, op
 		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	case 422:
-		out.JSON422 = new(PostAPIV1ImportClaudeAiSyncErrorResponseJSON422)
+		out.JSON422 = new(PostAPIV1ImportPlatformSyncErrorResponseJSON422)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON422); err != nil {
@@ -11576,7 +11585,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncWithResponse(ctx context.Context, op
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportClaudeAiSyncErrorResponseJSON422",
+					TargetType:    "PostAPIV1ImportPlatformSyncErrorResponseJSON422",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -11584,7 +11593,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncWithResponse(ctx context.Context, op
 		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	case 500:
-		out.JSON500 = new(PostAPIV1ImportClaudeAiSyncErrorResponseJSON500)
+		out.JSON500 = new(PostAPIV1ImportPlatformSyncErrorResponseJSON500)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
@@ -11592,7 +11601,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncWithResponse(ctx context.Context, op
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportClaudeAiSyncErrorResponseJSON500",
+					TargetType:    "PostAPIV1ImportPlatformSyncErrorResponseJSON500",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -11600,7 +11609,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncWithResponse(ctx context.Context, op
 		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	case 501:
-		out.JSON501 = new(PostAPIV1ImportClaudeAiSyncErrorResponseJSON501)
+		out.JSON501 = new(PostAPIV1ImportPlatformSyncErrorResponseJSON501)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
@@ -11608,7 +11617,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncWithResponse(ctx context.Context, op
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportClaudeAiSyncErrorResponseJSON501",
+					TargetType:    "PostAPIV1ImportPlatformSyncErrorResponseJSON501",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -11616,7 +11625,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncWithResponse(ctx context.Context, op
 		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	case 502:
-		out.JSON502 = new(PostAPIV1ImportClaudeAiSyncErrorResponseJSON502)
+		out.JSON502 = new(PostAPIV1ImportPlatformSyncErrorResponseJSON502)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
@@ -11624,7 +11633,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncWithResponse(ctx context.Context, op
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportClaudeAiSyncErrorResponseJSON502",
+					TargetType:    "PostAPIV1ImportPlatformSyncErrorResponseJSON502",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -11632,7 +11641,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncWithResponse(ctx context.Context, op
 		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	case 503:
-		out.JSON503 = new(PostAPIV1ImportClaudeAiSyncErrorResponseJSON503)
+		out.JSON503 = new(PostAPIV1ImportPlatformSyncErrorResponseJSON503)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
@@ -11640,7 +11649,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncWithResponse(ctx context.Context, op
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportClaudeAiSyncErrorResponseJSON503",
+					TargetType:    "PostAPIV1ImportPlatformSyncErrorResponseJSON503",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -11648,7 +11657,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncWithResponse(ctx context.Context, op
 		}
 		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
 	case 504:
-		out.JSON504 = new(PostAPIV1ImportClaudeAiSyncErrorResponseJSON504)
+		out.JSON504 = new(PostAPIV1ImportPlatformSyncErrorResponseJSON504)
 		bodyBytes := resp.Content
 		if len(bodyBytes) > 0 {
 			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
@@ -11656,7 +11665,7 @@ func (c *Client) PostAPIV1ImportClaudeAiSyncWithResponse(ctx context.Context, op
 					StatusCode:    resp.StatusCode,
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1ImportClaudeAiSyncErrorResponseJSON504",
+					TargetType:    "PostAPIV1ImportPlatformSyncErrorResponseJSON504",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -22164,19 +22173,20 @@ func (g GetAPIV1AnalyticsToolsQueryAutomatedScope) Validate() error {
 	}
 }
 
-type PostAPIV1ImportClaudeAiSyncQueryBrowser string
+// PostAPIV1ImportPlatformSyncQueryBrowser Fetch through the Chrome extension. Required except for claude-ai, which a client can relay
+type PostAPIV1ImportPlatformSyncQueryBrowser string
 
 const (
-	Chrome PostAPIV1ImportClaudeAiSyncQueryBrowser = "chrome"
+	Chrome PostAPIV1ImportPlatformSyncQueryBrowser = "chrome"
 )
 
-// Validate checks if the PostAPIV1ImportClaudeAiSyncQueryBrowser value is valid
-func (p PostAPIV1ImportClaudeAiSyncQueryBrowser) Validate() error {
+// Validate checks if the PostAPIV1ImportPlatformSyncQueryBrowser value is valid
+func (p PostAPIV1ImportPlatformSyncQueryBrowser) Validate() error {
 	switch p {
 	case Chrome:
 		return nil
 	default:
-		return runtime.NewValidationErrorsFromString("Enum", fmt.Sprintf("must be a valid PostAPIV1ImportClaudeAiSyncQueryBrowser value, got: %v", p))
+		return runtime.NewValidationErrorsFromString("Enum", fmt.Sprintf("must be a valid PostAPIV1ImportPlatformSyncQueryBrowser value, got: %v", p))
 	}
 }
 
@@ -22382,6 +22392,15 @@ type PutAPIV1FrictionPatternsFingerprintIssuePath struct {
 }
 
 func (p PutAPIV1FrictionPatternsFingerprintIssuePath) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(p))
+}
+
+type PostAPIV1ImportPlatformSyncPath struct {
+	// Platform Platform to sync, named by its agent type, such as claude-ai
+	Platform string `json:"platform" validate:"required"`
+}
+
+func (p PostAPIV1ImportPlatformSyncPath) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(p))
 }
 
@@ -23052,11 +23071,12 @@ type GetAPIV1FrictionPatternsQuery struct {
 	Cursor *string `json:"cursor,omitempty"`
 }
 
-type PostAPIV1ImportClaudeAiSyncQuery struct {
-	Browser *PostAPIV1ImportClaudeAiSyncQueryBrowser `json:"browser,omitempty"`
+type PostAPIV1ImportPlatformSyncQuery struct {
+	// Browser Fetch through the Chrome extension. Required except for claude-ai, which a client can relay
+	Browser *PostAPIV1ImportPlatformSyncQueryBrowser `json:"browser,omitempty"`
 }
 
-func (p PostAPIV1ImportClaudeAiSyncQuery) Validate() error {
+func (p PostAPIV1ImportPlatformSyncQuery) Validate() error {
 	var errors runtime.ValidationErrors
 	if p.Browser != nil {
 		if v, ok := any(p.Browser).(runtime.Validator); ok {
@@ -24678,30 +24698,30 @@ type PostAPIV1FrictionRunErrorResponseJSON503 = APIErrorResponse
 
 type PostAPIV1FrictionRunErrorResponseJSON504 = APIErrorResponse
 
-// PostAPIV1ImportClaudeAiSyncResponse Server-sent events: fetch requests a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: claude_ai_auth_required, claude_ai_chrome_host_update_required.
-type PostAPIV1ImportClaudeAiSyncResponse = []byte
+// PostAPIV1ImportPlatformSyncResponse Server-sent events: fetch asks a relay client (claude-ai without browser=chrome) for a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: browser_sync_auth_required, chrome_host_update_required.
+type PostAPIV1ImportPlatformSyncResponse = []byte
 
-type PostAPIV1ImportClaudeAiSyncErrorResponse = APIErrorResponse
+type PostAPIV1ImportPlatformSyncErrorResponse = APIErrorResponse
 
-type PostAPIV1ImportClaudeAiSyncErrorResponseJSON = APIErrorResponse
+type PostAPIV1ImportPlatformSyncErrorResponseJSON = APIErrorResponse
 
-type PostAPIV1ImportClaudeAiSyncErrorResponseJSON403 = APIErrorResponse
+type PostAPIV1ImportPlatformSyncErrorResponseJSON403 = APIErrorResponse
 
-type PostAPIV1ImportClaudeAiSyncErrorResponseJSON404 = APIErrorResponse
+type PostAPIV1ImportPlatformSyncErrorResponseJSON404 = APIErrorResponse
 
-type PostAPIV1ImportClaudeAiSyncErrorResponseJSON409 = APIErrorResponse
+type PostAPIV1ImportPlatformSyncErrorResponseJSON409 = APIErrorResponse
 
-type PostAPIV1ImportClaudeAiSyncErrorResponseJSON422 = APIErrorResponse
+type PostAPIV1ImportPlatformSyncErrorResponseJSON422 = APIErrorResponse
 
-type PostAPIV1ImportClaudeAiSyncErrorResponseJSON500 = APIErrorResponse
+type PostAPIV1ImportPlatformSyncErrorResponseJSON500 = APIErrorResponse
 
-type PostAPIV1ImportClaudeAiSyncErrorResponseJSON501 = APIErrorResponse
+type PostAPIV1ImportPlatformSyncErrorResponseJSON501 = APIErrorResponse
 
-type PostAPIV1ImportClaudeAiSyncErrorResponseJSON502 = APIErrorResponse
+type PostAPIV1ImportPlatformSyncErrorResponseJSON502 = APIErrorResponse
 
-type PostAPIV1ImportClaudeAiSyncErrorResponseJSON503 = APIErrorResponse
+type PostAPIV1ImportPlatformSyncErrorResponseJSON503 = APIErrorResponse
 
-type PostAPIV1ImportClaudeAiSyncErrorResponseJSON504 = APIErrorResponse
+type PostAPIV1ImportPlatformSyncErrorResponseJSON504 = APIErrorResponse
 
 type GetAPIV1KataStatusResponse = kata.Status
 
@@ -26334,22 +26354,22 @@ type PostAPIV1FrictionRunResp struct {
 	JSON504      *PostAPIV1FrictionRunErrorResponseJSON504
 }
 
-type PostAPIV1ImportClaudeAiSyncResp struct {
+type PostAPIV1ImportPlatformSyncResp struct {
 	HTTPResponse *http.Response
 	Body         []byte
 	StatusCode   int
 	Stream200    *runtime.Stream[[]byte]
-	JSON400      *PostAPIV1ImportClaudeAiSyncErrorResponse
-	JSON401      *PostAPIV1ImportClaudeAiSyncErrorResponseJSON
-	JSON403      *PostAPIV1ImportClaudeAiSyncErrorResponseJSON403
-	JSON404      *PostAPIV1ImportClaudeAiSyncErrorResponseJSON404
-	JSON409      *PostAPIV1ImportClaudeAiSyncErrorResponseJSON409
-	JSON422      *PostAPIV1ImportClaudeAiSyncErrorResponseJSON422
-	JSON500      *PostAPIV1ImportClaudeAiSyncErrorResponseJSON500
-	JSON501      *PostAPIV1ImportClaudeAiSyncErrorResponseJSON501
-	JSON502      *PostAPIV1ImportClaudeAiSyncErrorResponseJSON502
-	JSON503      *PostAPIV1ImportClaudeAiSyncErrorResponseJSON503
-	JSON504      *PostAPIV1ImportClaudeAiSyncErrorResponseJSON504
+	JSON400      *PostAPIV1ImportPlatformSyncErrorResponse
+	JSON401      *PostAPIV1ImportPlatformSyncErrorResponseJSON
+	JSON403      *PostAPIV1ImportPlatformSyncErrorResponseJSON403
+	JSON404      *PostAPIV1ImportPlatformSyncErrorResponseJSON404
+	JSON409      *PostAPIV1ImportPlatformSyncErrorResponseJSON409
+	JSON422      *PostAPIV1ImportPlatformSyncErrorResponseJSON422
+	JSON500      *PostAPIV1ImportPlatformSyncErrorResponseJSON500
+	JSON501      *PostAPIV1ImportPlatformSyncErrorResponseJSON501
+	JSON502      *PostAPIV1ImportPlatformSyncErrorResponseJSON502
+	JSON503      *PostAPIV1ImportPlatformSyncErrorResponseJSON503
+	JSON504      *PostAPIV1ImportPlatformSyncErrorResponseJSON504
 }
 
 type GetAPIV1KataStatusResp struct {

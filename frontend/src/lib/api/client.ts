@@ -435,7 +435,8 @@ export async function syncClaudeAI(
   if (signal?.aborted) abort();
   try {
     await previous;
-    const response = await ImportService.postApiV1ImportClaudeAiSync(
+    const response = await ImportService.postApiV1ImportByPlatformSync(
+      { platform: "claude-ai" },
       host ? undefined : { browser: "chrome" },
       { ...server, signal: controller.signal },
     );

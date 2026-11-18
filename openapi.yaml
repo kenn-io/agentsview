@@ -584,6 +584,24 @@ components:
       required:
         - branches
       type: object
+    BrowserSyncResultInputBody:
+      additionalProperties: false
+      properties:
+        body:
+          type: string
+        error:
+          type: string
+        retry_after:
+          type: string
+        status:
+          format: int64
+          maximum: 599
+          minimum: 0
+          type: integer
+      required:
+        - status
+        - body
+      type: object
     BulkStarInputBody:
       additionalProperties: false
       properties:
@@ -645,31 +663,13 @@ components:
         timezone:
           type: string
       type: object
-    ClaudeAIChromeOutputBody:
+    ChromeStatusOutputBody:
       additionalProperties: false
       properties:
         connected:
           type: boolean
       required:
         - connected
-      type: object
-    ClaudeAISyncResultInputBody:
-      additionalProperties: false
-      properties:
-        body:
-          type: string
-        error:
-          type: string
-        retry_after:
-          type: string
-        status:
-          format: int64
-          maximum: 599
-          minimum: 0
-          type: integer
-      required:
-        - status
-        - body
       type: object
     CodexcloudHomeStatus:
       additionalProperties: false
@@ -15978,7 +15978,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ClaudeAIChromeOutputBody"
+                $ref: "#/components/schemas/ChromeStatusOutputBody"
           description: OK
         "400":
           content:
@@ -16040,95 +16040,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ApiErrorResponse"
           description: Gateway Timeout
-      summary: Get Claude.ai Chrome status
-      tags:
-        - Import
-  /api/v1/import/claude-ai/sync:
-    post:
-      operationId: post-api-v1-import-claude-ai-sync
-      parameters:
-        - explode: false
-          in: query
-          name: browser
-          schema:
-            enum:
-              - chrome
-            type: string
-      responses:
-        "200":
-          content:
-            text/event-stream:
-              schema:
-                description: "Server-sent events: fetch requests a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: claude_ai_auth_required, claude_ai_chrome_host_update_required."
-                type: string
-          description: OK
-        "400":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorResponse"
-          description: Bad Request
-        "401":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorResponse"
-          description: Unauthorized
-        "403":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorResponse"
-          description: Forbidden
-        "404":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorResponse"
-          description: Not Found
-        "409":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorResponse"
-          description: Before streaming, code claude_ai_chrome_host_required reports a disconnected Chrome host; claude_ai_sync_running reports that Chrome Sync is already running; claude_ai_config_invalid reports an invalid [agents.claude-ai] table in config.toml.
-        "422":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorResponse"
-          description: Unprocessable Entity
-        "500":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorResponse"
-          description: Internal Server Error
-        "501":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorResponse"
-          description: Not Implemented
-        "502":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorResponse"
-          description: Bad Gateway
-        "503":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorResponse"
-          description: Service Unavailable
-        "504":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorResponse"
-          description: Gateway Timeout
-      summary: Sync Claude.ai conversations
+      summary: Get Chrome Sync status
       tags:
         - Import
   /api/v1/import/claude-ai/sync/results/{id}:
@@ -16144,7 +16056,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/ClaudeAISyncResultInputBody"
+              $ref: "#/components/schemas/BrowserSyncResultInputBody"
         required: true
       responses:
         "204":
@@ -16216,6 +16128,103 @@ paths:
                 $ref: "#/components/schemas/ApiErrorResponse"
           description: Gateway Timeout
       summary: Answer Claude.ai browser fetch
+      tags:
+        - Import
+  /api/v1/import/{platform}/sync:
+    post:
+      operationId: post-api-v1-import-platform-sync
+      parameters:
+        - description: Platform to sync, named by its agent type, such as claude-ai
+          in: path
+          name: platform
+          required: true
+          schema:
+            description: Platform to sync, named by its agent type, such as claude-ai
+            type: string
+        - description: Fetch through the Chrome extension. Required except for claude-ai, which a client can relay
+          explode: false
+          in: query
+          name: browser
+          schema:
+            description: Fetch through the Chrome extension. Required except for claude-ai, which a client can relay
+            enum:
+              - chrome
+            type: string
+      responses:
+        "200":
+          content:
+            text/event-stream:
+              schema:
+                description: "Server-sent events: fetch asks a relay client (claude-ai without browser=chrome) for a browser response with id and path; progress reports import counts; done returns the final counts; error reports a failed sync with English error text and an optional code: browser_sync_auth_required, chrome_host_update_required."
+                type: string
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unauthorized
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Before streaming, code chrome_host_required reports a disconnected Chrome host; chrome_sync_running reports that a Chrome Sync is already running; claude_ai_config_invalid reports an invalid [agents.claude-ai] table in config.toml when syncing claude-ai.
+        "422":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Not Implemented
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Bad Gateway
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Service Unavailable
+        "504":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiErrorResponse"
+          description: Gateway Timeout
+      summary: Sync browser conversations
       tags:
         - Import
   /api/v1/insights:

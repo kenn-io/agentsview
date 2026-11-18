@@ -49,11 +49,12 @@ jobs:
               - '!{*.md,docs/*.md,docs/agents/**/*.md,docs/internal/**/*.md,docs/website/**/*.md,desktop/**}'
             node:
               - '!{cmd/**,internal/!(web)/**,testdata/**,plugins/**,support/**,*.go,*.md,docs/*.md,docs/agents/**/*.md,docs/internal/**/*.md,docs/website/**/*.md,desktop/**}'
-              - 'internal/importer/claude_ai_requests.txt'
+              - 'internal/importer/browser_requests/**'
+              - 'internal/importer/testdata/browser_paths/**'
             desktop:
               - '!{cmd/**,internal/!(web)/**,testdata/**,plugins/**,support/**,*.go,*.md,docs/*.md,docs/agents/**/*.md,docs/internal/**/*.md,docs/website/**/*.md,frontend/**}'
-              - 'frontend/chrome-extension/claude_fetch.js'
-              - 'internal/importer/claude_ai_requests.txt'
+              - 'frontend/chrome-extension/page_fetch.js'
+              - 'internal/importer/browser_requests/claude-ai.txt'
             release-commands:
               - 'README.md'
               - 'scripts/install.sh'

@@ -1,0 +1,3 @@
+/backend-api/conversations?offset=0&limit=50&order=updated&is_archived=false
+/backend-api/conversations?offset=50&limit=50&order=updated&is_archived=true
+/backend-api/conversation/22222222-2222-4222-8222-222222222222

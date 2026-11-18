@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-16
+last_edited: 2026-11-17
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -10,6 +10,13 @@ The latest release is
 ## Unreleased
 
 **New features**
+
+- Sync ChatGPT chats into AgentsView without waiting for an export email. Run
+  `agentsview source import --type chatgpt --sync` with Chrome open and signed
+  in to ChatGPT. Later runs fetch only chats that changed. New turns are added
+  in place; an edited or shorter chat keeps its previous version in Trash, so
+  pins are not lost. The Import dialog still syncs only Claude.ai. See
+  [Sync ChatGPT chats](/docs/chat-import/#sync-chatgpt-chats).
 
 - Keep connection secrets in private files instead of environment variables
   or `config.toml`. Set `token_file` under `[kata]`, `api_key_file` for
@@ -251,6 +258,15 @@ The latest release is
 
 **Upgrade notes**
 
+- Chrome Sync users must rerun `agentsview source chrome setup` and reload the
+  extension at `chrome://extensions` once. The extension and AgentsView now
+  speak a new version of their protocol, and the extension asks for access to
+  `chatgpt.com`. Until you reload it, Sync asks you to update the extension.
+- API clients that read Chrome Sync error codes need the new names:
+  `chrome_host_required`, `chrome_sync_running`, `chrome_host_update_required`,
+  and `browser_sync_auth_required` replace the `claude_ai_` versions.
+  `claude_ai_config_invalid` is unchanged. Sync now uses
+  `POST /api/v1/import/{platform}/sync`; the Claude.ai path stays the same.
 - The DuckDB mirror is removed, along with the `agentsview replica duckdb` and
   legacy `agentsview duckdb` commands. AgentsView no longer reads or writes
   `.duckdb` files, so you can delete them. A leftover `[duckdb]` section in

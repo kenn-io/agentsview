@@ -316,11 +316,11 @@ func TestPGPushEnsuresPricingAfterLocalSync(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("8"), rate.OutputPerMTok)
 }
 
-func TestSyncClaudeAIRouteIsSSEOnly(t *testing.T) {
+func TestSyncBrowserRouteIsSSEOnly(t *testing.T) {
 	t.Parallel()
 	s := testServer(t, 30*time.Second)
 	spec := readOpenAPISpec(t, s.Handler())
-	op := requireOpenAPIOperation(t, spec, "post", "/api/v1/import/claude-ai/sync")
+	op := requireOpenAPIOperation(t, spec, "post", "/api/v1/import/{platform}/sync")
 	require.Contains(t, op.Responses, "200")
 	assert.Len(t, op.Responses["200"].Content, 1)
 	assert.Contains(t, op.Responses["200"].Content, "text/event-stream")

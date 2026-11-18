@@ -325,7 +325,7 @@ func TestChromeSyncResults(t *testing.T) {
 		imported              int
 	}{
 		{"done", "event: progress\ndata: {}\n\nevent: done\ndata: {\"imported\":2,\"updated\":1,\"skipped\":3,\"errors\":0}\n\n", "", 200, 2},
-		{"running", `{"code":"claude_ai_sync_running","error":"Chrome Sync is already running"}`, "Chrome Sync is already running", 409, 0},
+		{"running", `{"code":"chrome_sync_running","error":"Chrome Sync is already running"}`, "Chrome Sync is already running", 409, 0},
 		{"invalid body", "unavailable", "HTTP 503: unavailable", 503, 0},
 		{"error", "event: error\ndata: {\"error\":\"Sign in required\"}\n\n", "Sign in required", 200, 0},
 		{"partial failure", "event:progress\ndata:{\"imported\":2,\"updated\":1,\"skipped\":3,\"errors\":1}\n\nevent:error\ndata:{\"error\":\"Sign in required\"}\n\n", "Sign in required", 200, 2},
@@ -346,7 +346,10 @@ func TestChromeSyncResults(t *testing.T) {
 			api, err := apiclient.NewHTTPClient(ts.URL+"/base/", "test-token", ts.Client())
 			require.NoError(t, err)
 			browser := apiclient.Chrome
-			response, err := api.PostAPIV1ImportClaudeAiSyncStreamWithResponse(t.Context(), &apiclient.PostAPIV1ImportClaudeAiSyncRequestOptions{Query: &apiclient.PostAPIV1ImportClaudeAiSyncQuery{Browser: &browser}})
+			response, err := api.PostAPIV1ImportPlatformSyncStreamWithResponse(t.Context(), &apiclient.PostAPIV1ImportPlatformSyncRequestOptions{
+				PathParams: &apiclient.PostAPIV1ImportPlatformSyncPath{Platform: "claude-ai"},
+				Query:      &apiclient.PostAPIV1ImportPlatformSyncQuery{Browser: &browser},
+			})
 			if tt.status == http.StatusOK {
 				require.NoError(t, err)
 			} else {
@@ -371,11 +374,12 @@ func TestChromeSyncResults(t *testing.T) {
 
 func TestChromeSyncCommand(t *testing.T) {
 	for _, tt := range []struct {
-		name, body string
-		cancel     bool
+		name, platform, body string
+		cancel               bool
 	}{
-		{"partial failure", "event: progress\ndata: {\"imported\":2,\"updated\":1,\"skipped\":3,\"errors\":1}\n\nevent: error\ndata: {\"error\":\"Sign in required\"}\n\n", false},
-		{"cancel", "", true},
+		{"partial failure", "claude-ai", "event: progress\ndata: {\"imported\":2,\"updated\":1,\"skipped\":3,\"errors\":1}\n\nevent: error\ndata: {\"error\":\"Sign in required\"}\n\n", false},
+		{"chatgpt", "chatgpt", "event: progress\ndata: {\"imported\":2,\"updated\":1,\"skipped\":3,\"errors\":1}\n\nevent: error\ndata: {\"error\":\"Sign in required\"}\n\n", false},
+		{"cancel", "claude-ai", "", true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			dataDir := testDataDir(t)
@@ -383,7 +387,7 @@ func TestChromeSyncCommand(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			ts := daemonRouteTestServer(t, map[string]http.HandlerFunc{
-				"/api/v1/import/claude-ai/sync": func(w http.ResponseWriter, r *http.Request) {
+				"/api/v1/import/" + tt.platform + "/sync": func(w http.ResponseWriter, r *http.Request) {
 					assert.Equal(t, http.MethodPost, r.Method)
 					assert.Equal(t, "chrome", r.URL.Query().Get("browser"))
 					if !assert.Equal(t, "http://"+r.Host, r.Header.Get("Origin")) {
@@ -405,7 +409,7 @@ func TestChromeSyncCommand(t *testing.T) {
 			registerTestRuntime(t, dataDir, ts.URL, false)
 			output := captureStderr(t, func() {
 				cmd := newImportCommand()
-				cmd.SetArgs([]string{"--type", "claude-ai", "--sync"})
+				cmd.SetArgs([]string{"--type", tt.platform, "--sync"})
 				err := cmd.ExecuteContext(ctx)
 				if tt.cancel {
 					require.ErrorIs(t, err, context.Canceled)
@@ -428,7 +432,8 @@ func TestChromeImportArguments(t *testing.T) {
 		{"sync", []string{"--type", "claude-ai", "--sync"}, nil, true},
 		{"file", []string{"--type", "claude-ai"}, []string{"conversations.json"}, true},
 		{"sync path", []string{"--type", "claude-ai", "--sync"}, []string{"conversations.json"}, false},
-		{"sync provider", []string{"--type", "chatgpt", "--sync"}, nil, false},
+		{"sync chatgpt", []string{"--type", "chatgpt", "--sync"}, nil, true},
+		{"sync provider", []string{"--type", "gemini-apps", "--sync"}, nil, false},
 		{"sync replace", []string{"--type", "claude-ai", "--sync", "--replace", "claude-ai:chat"}, nil, false},
 		{"missing path", []string{"--type", "claude-ai"}, nil, false},
 	} {
