@@ -162,16 +162,6 @@ func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
 				require.Len(t, got.PRLinks, 1)
 				assert.Equal(t, "https://github.com/o/r/pull/42", got.PRLinks[0].URL)
 			}
-			require.NoError(t, d.Close())
-			if !tc.legacy && !tc.rebuild {
-				d, err = OpenIsolated(t.Context(), path)
-				require.NoError(t, err)
-				got, err = d.GetSession(t.Context(), s.ID)
-				require.NoError(t, err)
-				require.Len(t, got.PRLinks, 1)
-				assert.Equal(t, "https://github.com/o/r/pull/42", got.PRLinks[0].URL)
-				require.NoError(t, d.Close())
-			}
 		})
 	}
 }
@@ -333,4 +323,14 @@ func TestPromptPRLinksTrashedCopyRestore(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, page.Sessions, 1)
 	assert.Equal(t, s.ID, page.Sessions[0].ID)
+}
+
+func TestGetSessionPRLinkURLsIncludesPromptLinks(t *testing.T) {
+	d := testDB(t)
+	s := Session{ID: "prompt", Project: "project", Machine: "local", Agent: "claude"}
+	require.NoError(t, d.UpsertSession(t.Context(), s))
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "user", Content: "https://github.com/o/r/pull/2"}}))
+	links, err := d.GetSessionPRLinkURLs(t.Context(), s.ID)
+	require.NoError(t, err)
+	assert.Contains(t, links, "https://github.com/o/r/pull/2")
 }

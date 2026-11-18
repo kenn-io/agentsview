@@ -215,29 +215,15 @@ func refreshSessionPromptPRLinksTx(tx transactionQueries, id string) error {
 	if err := tx.QueryRow(`SELECT pr_links, structured_pr_links FROM sessions WHERE id=?`, id).Scan(&stored, &structured); err != nil {
 		return err
 	}
-	rows, err := tx.Query(`SELECT m.role, m.is_system, m.is_compact_boundary, m.source_subtype, m.content, `+sqliteDialogueExprM+` FROM messages m WHERE m.session_id=? AND m.role='user' ORDER BY m.ordinal`, id)
+	rows, err := tx.Query(`SELECT `+selectMessageCols+` FROM messages WHERE session_id=? AND role='user' ORDER BY ordinal`, id)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	var messages []Message
-	for rows.Next() {
-		var msg Message
-		var dialogue sql.NullString
-		if err := rows.Scan(&msg.Role, &msg.IsSystem, &msg.IsCompactBoundary, &msg.SourceSubtype, &msg.Content, &dialogue); err != nil {
-			rows.Close()
-			return err
-		}
-		if dialogue.Valid {
-			msg.DialogueText = &dialogue.String
-		}
-		messages = append(messages, msg)
+	messages, err := scanMessages(rows)
+	if closeErr := rows.Close(); err == nil {
+		err = closeErr
 	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	if err := rows.Close(); err != nil {
+	if err != nil {
 		return err
 	}
 	return writeSessionPromptPRLinksTx(tx, id, stored, parser.MergePRLinks(DecodePRLinks(structured), PromptPRLinks(messages)))
