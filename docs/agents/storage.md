@@ -880,11 +880,15 @@ and pull request description.
 Search keeps exact pages on disk for SQLite archives, native PostgreSQL and
 ClickHouse mirrors, and local DuckDB mirrors with pushed-session fingerprints.
 It reuses a page when its filters, paging, search rules, and searchable data
-match. Searchable writes invalidate old pages; PostgreSQL keeps each session's
-best match on disk and refreshes changed sessions when the journal
-proves the retained history. PostgreSQL rebuilds the matches when the retained
-revision is 128 or more commits old. ClickHouse merges that leave rows unchanged
-keep pages valid. Deleted snippets can remain in old cache files
+match. Searchable writes invalidate old pages. PostgreSQL keeps each session's
+best match in memory and a companion file; page visits touch that file. The file
+is capped at 128 MiB within a shared 256 MiB cache budget. PostgreSQL refreshes
+changed sessions when the journal proves the retained history. When a page needs
+rebuilding and neither the memory entry nor a usable file is available, it runs
+a full search. A missing or oversized file is unusable, and a revision 128 or
+more commits old also requires a full search. ClickHouse merges that leave rows
+unchanged keep pages valid.
+Deleted snippets can remain in old cache files
 until the same search overwrites them or the cache is trimmed. Read-only SQLite
 and hosted or borrowed PostgreSQL views read directly. DuckDB Quack and borrowed
 handles read directly. Local DuckDB mirrors without fingerprints reuse pages in
