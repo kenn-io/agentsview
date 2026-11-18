@@ -512,7 +512,7 @@ func junieProviderCapabilities() Capabilities {
 	source := jsonlFileProviderSourceCapabilities()
 	source.ForceReplaceOnParse = CapabilitySupported
 	source.ChangedPathRelevance = CapabilitySupported
-	return withPollMetadataScan(Capabilities{
+	return Capabilities{
 		Source: source,
 		Sync: ProviderSyncSemantics{
 			FingerprintHashInCacheKey:           true,
@@ -525,5 +525,5 @@ func junieProviderCapabilities() Capabilities {
 			AggregateUsageEvents: CapabilitySupported,
 			MalformedLineCount:   CapabilitySupported,
 		},
-	})
+	}
 }
