@@ -4224,8 +4224,9 @@ schemas keep their existing ordering behavior.
   [Sync Claude.ai chats](https://agentsview.io/docs/chat-import/#sync-claudeai-chats)
   for failure handling. Organization responses must decode to an array; null
   and other shapes fail. Organization and list failures, cancellation, and an
-  empty page with `has_more: true` stop Sync. Null and root-sentinel list
-  leaves skip detail fetches; absent or malformed leaves count as errors.
+  empty page with `has_more: true` stop Sync. Null, absent, and
+  root-sentinel list leaves skip detail fetches; malformed leaves count as
+  errors.
 - **Observed 2026-10-07:** Authenticated Team and personal account checks found
   `current_leaf_message_uuid` on list items and byte-identical list and detail
   `updated_at` values with microseconds. Branch switches changed the leaf
@@ -4242,6 +4243,10 @@ schemas keep their existing ordering behavior.
   like zip import on main, stores text and thinking blocks only. Signed-out
   organization, list, and detail requests returned HTTP 403 with
   `error.details.error_code` equal to `account_session_invalid`.
+- **Observed 2026-11-13:** A contributor's live Sync runs found about five
+  list items per run with no `current_leaf_message_uuid` field at all. They
+  have no message tree to fetch, so Sync skips them like a null leaf. No
+  fixture captures them; the list-leaf test covers the absent case.
 - **Evidence limits:** Existing selected-path and Sync fixtures cover these
   shapes. Multiple chat organizations, web-search blocks, unanswered final
   prompts, and tree fields in official exports still need live verification.

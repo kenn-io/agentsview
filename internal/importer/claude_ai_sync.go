@@ -146,6 +146,11 @@ func SyncClaudeAI(ctx context.Context, store interface {
 					cb.progress(stats)
 					continue
 				}
+				if len(marker.CurrentLeaf) == 0 {
+					// Some list items omit the field entirely. Like a null
+					// leaf, they have no message tree to import.
+					marker.CurrentLeaf = jsontext.Value("null")
+				}
 				var leaf string
 				if err := json.Unmarshal(marker.CurrentLeaf, &leaf); err != nil || leaf == "" && string(marker.CurrentLeaf) != "null" {
 					stats.Errors++
