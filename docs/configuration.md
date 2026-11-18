@@ -2271,7 +2271,7 @@ after 60 seconds and need a retry.
   two machines hold the same history. Exact-ID ownership conflicts are refused.
 - Attachments belong in an ordinary installation, not an archive-only one. The
   receiving machine's own identity and aliases cannot be attached as foreign
-  history. Credentials and telemetry identity are never adopted from the source.
+  history. Credentials and installation identity are never adopted from the source.
 - Both storage forms use the same source identities, content policies and
   parser. Directory sources can discover additional accepted sources on a later
   pass; changing an already accepted source remains a conflict. Concurrent

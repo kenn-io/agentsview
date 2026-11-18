@@ -39,6 +39,14 @@ func TestCaptureFollowsKennConsent(t *testing.T) {
 			}
 			clearTelemetryVetoes(t)
 			assert.Equal(t, tc.granted, EnabledFromEnv())
+			productionReporter, err := NewReporter(Options{ScreenClaimsPath: filepath.Join(t.TempDir(), "screens")})
+			if tc.granted {
+				require.EqualError(t, err, "installation ID is required")
+			} else {
+				require.NoError(t, err)
+				assert.False(t, productionReporter.Enabled())
+				require.NoError(t, productionReporter.Close())
+			}
 			endpoint, captured := captureCollector(t)
 			reporter := captureReporter(t, endpoint, Options{})
 			assert.Equal(t, tc.granted, reporter.Enabled())
