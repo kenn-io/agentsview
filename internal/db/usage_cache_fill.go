@@ -818,13 +818,13 @@ type usageFactSpoolWriter struct {
 	rows [2][]usageFactSpoolRow
 
 	expected  map[string]usageFillInstallExpectation
-	fullBatch [2]struct{ stmt *sql.Stmt }
+	fullBatch [2]*sql.Stmt
 }
 
 func (w *usageFactSpoolWriter) Close() {
-	for _, batch := range w.fullBatch {
-		if batch.stmt != nil {
-			_ = batch.stmt.Close()
+	for _, stmt := range w.fullBatch {
+		if stmt != nil {
+			_ = stmt.Close()
 		}
 	}
 }
@@ -928,11 +928,11 @@ func (w *usageFactSpoolWriter) flushBatch(batch int) error {
 	if len(rows) == usageFactSpoolBatchSize {
 		// Preparing the large VALUES expression is costly. Reuse it within
 		// this extraction.
-		if w.fullBatch[batch].stmt == nil {
-			w.fullBatch[batch].stmt, err = w.tx.PrepareContext(w.ctx, query.String())
+		if w.fullBatch[batch] == nil {
+			w.fullBatch[batch], err = w.tx.PrepareContext(w.ctx, query.String()) //nolint:kennlint // sqlclosecheck: Close closes the cached statements.
 		}
 		if err == nil {
-			_, err = w.fullBatch[batch].stmt.ExecContext(w.ctx, args...)
+			_, err = w.fullBatch[batch].ExecContext(w.ctx, args...)
 		}
 	} else {
 		_, err = w.tx.ExecContext(w.ctx, query.String(), args...)

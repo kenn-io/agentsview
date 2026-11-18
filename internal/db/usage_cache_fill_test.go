@@ -876,12 +876,23 @@ func TestUsageSpoolRoutesCachedAndUncachedBatches(t *testing.T) {
 		versions := []usageSourceVersion{{SessionID: "a-uncached"}, {SessionID: "session"}, {SessionID: "z-uncached"}}
 		expected, err := cache.fill.captureFillInstallExpectations(t.Context(), versions)
 		require.NoError(t, err)
-		spool, _, err := cache.fill.extractSessions(t.Context(), versions, expected)
+		spool, extracted, err := cache.fill.extractSessions(t.Context(), versions, expected)
 		require.NoError(t, err)
 		defer spool.Close()
 		var count int
 		require.NoError(t, spool.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM facts`).Scan(&count))
 		assert.Equal(t, 3002, count)
+		for i := range versions {
+			versions[i] = extracted[versions[i].SessionID]
+		}
+		_, lost, err := cache.fill.installSpool(t.Context(), spool, versions, nil, expected, 0)
+		require.NoError(t, err)
+		require.Empty(t, lost)
+		filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
+		got := getDailyUsageRollupForTest(t, database, filter)
+		require.Len(t, got.Daily, 1)
+		assert.Equal(t, 119030, got.Daily[0].InputTokens)
+		assert.Equal(t, getDailyUsageLegacyForRollupTest(t, database, filter), got)
 	})
 }
 
