@@ -277,7 +277,7 @@ func qwenPawDescendPath(root, path string) bool {
 func qwenPawProviderCapabilities() Capabilities {
 	source := jsonlFileProviderSourceCapabilities()
 	source.ForceReplaceOnParse = CapabilitySupported
-	return Capabilities{
+	return withPollMetadataScan(Capabilities{
 		Source: source,
 		Content: ContentCapabilities{
 			FirstMessage:       CapabilitySupported,
@@ -286,5 +286,5 @@ func qwenPawProviderCapabilities() Capabilities {
 			ToolResults:        CapabilitySupported,
 			MalformedLineCount: CapabilitySupported,
 		},
-	}
+	})
 }

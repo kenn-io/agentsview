@@ -130,7 +130,7 @@ func codexCloudProviderCapabilities() Capabilities {
 	source := jsonlFileProviderSourceCapabilities()
 	source.StreamingDiscovery = CapabilitySupported
 	source.ForceReplaceOnParse = CapabilitySupported
-	return Capabilities{
+	return withPollMetadataScan(Capabilities{
 		RawCapture: RawCaptureCapabilities{
 			Support: CapabilitySupported,
 			Shape:   RawCaptureShapeFiles,
@@ -149,5 +149,5 @@ func codexCloudProviderCapabilities() Capabilities {
 			AggregateUsageEvents: CapabilitySupported,
 			Model:                CapabilitySupported,
 		},
-	}
+	})
 }

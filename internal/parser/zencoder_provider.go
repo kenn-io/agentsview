@@ -53,7 +53,7 @@ func zencoderSessionIDFromPath(root, path string) string {
 }
 
 func zencoderProviderCapabilities() Capabilities {
-	return Capabilities{
+	return withPollMetadataScan(Capabilities{
 		Source: jsonlFileProviderSourceCapabilities(),
 		Content: ContentCapabilities{
 			FirstMessage:  CapabilitySupported,
@@ -64,5 +64,5 @@ func zencoderProviderCapabilities() Capabilities {
 			ToolCalls:     CapabilitySupported,
 			ToolResults:   CapabilitySupported,
 		},
-	}
+	})
 }

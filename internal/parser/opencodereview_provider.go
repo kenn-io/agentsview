@@ -61,7 +61,7 @@ func openCodeReviewParseFile(
 func openCodeReviewProviderCapabilities() Capabilities {
 	source := jsonlFileProviderSourceCapabilities()
 	source.ForceReplaceOnParse = CapabilitySupported
-	return Capabilities{
+	return withPollMetadataScan(Capabilities{
 		Source: source,
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
@@ -79,5 +79,5 @@ func openCodeReviewProviderCapabilities() Capabilities {
 			TruncationStatus:     CapabilitySupported,
 			Model:                CapabilitySupported,
 		},
-	}
+	})
 }

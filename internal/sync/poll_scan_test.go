@@ -543,3 +543,62 @@ func TestPollProviderRootsGroupedReconcilesLinkedSessionFiles(t *testing.T) {
 	assert.EqualValues(t, 2, f.reconciled.Load(),
 		"a linked session file changes without changing the link, so the root cannot be compared")
 }
+
+// A provider that declares PollMetadataScan must give the scan a plan it can
+// compare. Otherwise every pass silently falls back to reconciliation.
+func TestPollMetadataScanProvidersHaveComparablePlans(t *testing.T) {
+	for _, factory := range parser.ProviderFactories() {
+		if factory.Capabilities().Source.PollMetadataScan != parser.CapabilitySupported {
+			continue
+		}
+		agent := factory.Definition().Type
+		t.Run(string(agent), func(t *testing.T) {
+			root := t.TempDir()
+			f := newPollScanFixture(t, map[parser.AgentType][]string{agent: {root}})
+
+			plan, ok := f.engine.pollScanPlan(t.Context(), agent, root)
+
+			require.True(t, ok, "the provider's watch plan cannot be compared")
+			assert.NotEmpty(t, plan)
+		})
+	}
+}
+
+// Junie keeps titles in a root index.jsonl that its fingerprint mixes in, so
+// an index-only edit must reach the archive without a reconciliation.
+func TestPollProviderRootsGroupedSyncsJunieIndexAndEvents(t *testing.T) {
+	requirePollChangeTimes(t)
+	root := t.TempDir()
+	events := filepath.Join(root, "session-one", "events.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(events), 0o755))
+	prompt := func(text string, ms int) string {
+		return fmt.Sprintf(`{"kind":"UserPromptEvent","requestId":"r%d","prompt":%q,"timestampMs":%d}`+"\n", ms, text, ms)
+	}
+	require.NoError(t, os.WriteFile(events, []byte(prompt("Hello", 1704067200500)), 0o600))
+	index := filepath.Join(root, "index.jsonl")
+	writeIndex := func(title string) {
+		require.NoError(t, os.WriteFile(index, []byte(
+			`{"sessionId":"session-one","projectDir":"/work/app","taskName":"`+title+`"}`+"\n",
+		), 0o600))
+	}
+	writeIndex("Before")
+	f := newPollScanFixture(t, map[parser.AgentType][]string{parser.AgentJunie: {root}})
+	group := ProviderRootsGroup{Agent: parser.AgentJunie, Roots: []string{root}}
+	f.poll(t, group)
+
+	writeIndex("After, only in the index")
+	f.poll(t, group)
+	session := f.session(t, "junie:session-one")
+	require.NotNil(t, session.SessionName)
+	assert.Equal(t, "After, only in the index", *session.SessionName)
+
+	file, err := os.OpenFile(events, os.O_APPEND|os.O_WRONLY, 0)
+	require.NoError(t, err)
+	_, err = file.WriteString(prompt("Again", 1704067201500))
+	require.NoError(t, err)
+	require.NoError(t, file.Close())
+	f.poll(t, group)
+
+	assert.Equal(t, 2, f.session(t, "junie:session-one").UserMessageCount)
+	assert.EqualValues(t, 1, f.reconciled.Load(), "both changes sync by path")
+}

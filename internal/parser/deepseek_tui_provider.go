@@ -51,7 +51,7 @@ func isDeepSeekTUISourcePath(root, path string) bool {
 }
 
 func deepSeekTUIProviderCapabilities() Capabilities {
-	return Capabilities{
+	return withPollMetadataScan(Capabilities{
 		Source: jsonlFileProviderSourceCapabilities(),
 		Content: ContentCapabilities{
 			FirstMessage: CapabilitySupported,
@@ -62,5 +62,5 @@ func deepSeekTUIProviderCapabilities() Capabilities {
 			ToolCalls:    CapabilitySupported,
 			ToolResults:  CapabilitySupported,
 		},
-	}
+	})
 }
