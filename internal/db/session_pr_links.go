@@ -242,12 +242,14 @@ func writeSessionPromptPRLinksTx(tx transactionQueries, id, stored string, links
 	return err
 }
 
+const promptPRLinkCandidateSQL = `role='user' AND (COALESCE(` + sqliteDialogueExprBare + `, content) LIKE '%http://%' OR COALESCE(` + sqliteDialogueExprBare + `, content) LIKE '%https://%')`
+
 func refreshSessionPromptPRLinksTx(tx transactionQueries, id string) error {
 	var stored, structured string
 	if err := tx.QueryRow(`SELECT pr_links, structured_pr_links FROM sessions WHERE id=?`, id).Scan(&stored, &structured); err != nil {
 		return err
 	}
-	rows, err := tx.Query(`SELECT `+selectMessageCols+` FROM messages WHERE session_id=? AND role='user' ORDER BY ordinal`, id)
+	rows, err := tx.Query(`SELECT `+selectMessageCols+` FROM messages WHERE session_id=? AND `+promptPRLinkCandidateSQL+` ORDER BY ordinal`, id)
 	if err != nil {
 		return err
 	}
@@ -298,7 +300,7 @@ func (db *DB) backfillPromptPRLinksLocked(ctx context.Context, w *writerHandle) 
 		return err
 	}
 	if !done {
-		ids, err := sessionIDsTx(ctx, tx, "id IN (SELECT session_id FROM messages WHERE role='user')")
+		ids, err := sessionIDsTx(ctx, tx, "id IN (SELECT session_id FROM messages WHERE "+promptPRLinkCandidateSQL+")")
 		if err != nil {
 			return err
 		}

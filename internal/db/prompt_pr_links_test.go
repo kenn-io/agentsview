@@ -250,3 +250,41 @@ func TestPromptPRLinksTrashedCopyRestore(t *testing.T) {
 	assert.Equal(t, link.URL, got.PRLinks[0].URL)
 	assert.Equal(t, "https://github.com/o/r/pull/2", got.PRLinks[1].URL)
 }
+
+func TestPromptPRLinksBackfillUsesDialogue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "archive.db")
+	d, err := OpenIsolated(t.Context(), path)
+	require.NoError(t, err)
+	cases := []struct {
+		id, content string
+		dialogue    *string
+		want        string
+	}{
+		{"fallback", "HTTP://github.com/o/r/%70ull/1", nil, "http://github.com/o/r/pull/1"},
+		{"same", "https://github.com/o/r/pull/2", new("https://github.com/o/r/pull/2"), "https://github.com/o/r/pull/2"},
+		{"partial", "https://github.com/o/r/pull/3 https://github.com/o/r/pull/4", new("https://github.com/o/r/pull/3"), "https://github.com/o/r/pull/3"},
+		{"empty", "https://github.com/o/r/pull/5", new(""), ""},
+	}
+	for _, tc := range cases {
+		require.NoError(t, d.UpsertSession(t.Context(), Session{ID: tc.id, Project: "project", Machine: "local", Agent: "claude"}))
+		require.NoError(t, d.ReplaceSessionMessages(t.Context(), tc.id, []Message{{SessionID: tc.id, Role: "user", Content: tc.content, DialogueText: tc.dialogue}}))
+	}
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links=''; DELETE FROM stats WHERE key='prompt_pr_links_backfill_v1'`)
+		return err
+	}))
+	require.NoError(t, d.Close())
+	d, err = OpenIsolated(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	for _, tc := range cases {
+		got, err := d.GetSession(t.Context(), tc.id)
+		require.NoError(t, err)
+		if tc.want == "" {
+			assert.Empty(t, got.PRLinks, tc.id)
+		} else {
+			require.Len(t, got.PRLinks, 1, tc.id)
+			assert.Equal(t, tc.want, got.PRLinks[0].URL, tc.id)
+		}
+	}
+}

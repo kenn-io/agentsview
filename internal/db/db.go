@@ -3351,7 +3351,6 @@ WHEN (
     OLD.data_version IS NOT NEW.data_version OR
     OLD.cwd IS NOT NEW.cwd OR
     OLD.git_branch IS NOT NEW.git_branch OR
-    OLD.pr_links IS NOT NEW.pr_links OR
     OLD.structured_pr_links IS NOT NEW.structured_pr_links OR
     OLD.source_session_id IS NOT NEW.source_session_id OR
     OLD.source_version IS NOT NEW.source_version OR

@@ -2225,3 +2225,40 @@ func TestExportRoundTripsSessionQualitySignals(t *testing.T) {
 	assert.NotContains(t, string(sessionData), `"quality_signals"`,
 		"the inner session DTO must carry no quality-signals content of its own")
 }
+
+func TestPromptLinkBackfillDoesNotQueueArtifactExport(t *testing.T) {
+	database := testExportDB(t)
+	store := newTestArtifactStore(t)
+	seedSession(t, database, "sess-1", "alpha")
+	require.NoError(t, database.ReplaceSessionMessages(t.Context(), "sess-1", []db.Message{
+		{SessionID: "sess-1", Ordinal: 0, Role: "user", Content: "Review https://github.com/o/r/pull/1", ContentLength: 36},
+		{SessionID: "sess-1", Ordinal: 1, Role: "assistant", Content: "done", ContentLength: 4},
+	}))
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links='' WHERE id='sess-1'; DELETE FROM stats WHERE key='prompt_pr_links_backfill_v1'`)
+		return err
+	}))
+	initial, err := ExportToStore(t.Context(), database, store, ExportOptions{Origin: contractOrigin})
+	require.NoError(t, err)
+	require.Equal(t, 1, initial.ExportedSessions)
+	path := database.Path()
+	require.NoError(t, database.Close())
+	database, err = db.OpenIsolated(t.Context(), path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	session, err := database.GetSession(t.Context(), "sess-1")
+	require.NoError(t, err)
+	require.Len(t, session.PRLinks, 1)
+	pending, err := database.CountPendingArtifactExports(t.Context())
+	require.NoError(t, err)
+	assert.Zero(t, pending)
+	result, err := ExportToStore(t.Context(), database, store, ExportOptions{Origin: contractOrigin})
+	require.NoError(t, err)
+	assert.Zero(t, result.ExportedSessions)
+	assert.False(t, result.CheckpointCreated)
+	session.PRLinks = []db.PRLink{{URL: "https://github.com/o/r/pull/2", Host: "github.com", Repository: "o/r", Number: 2}}
+	require.NoError(t, database.UpsertSession(t.Context(), *session))
+	pending, err = database.CountPendingArtifactExports(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 1, pending)
+}

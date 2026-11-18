@@ -70,21 +70,27 @@ func prLinkRoute(path string) (repository, number, remainder, routePath string, 
 	return
 }
 
-// prLinkCollector deduplicates links by URL, keeping first-appearance
+// prLinkCollector deduplicates links by PR identity, keeping first-appearance
 // order.
 type prLinkCollector struct {
 	links []PRLink
-	seen  map[string]struct{}
+	seen  map[prLinkIdentity]struct{}
+}
+
+type prLinkIdentity struct {
+	host, repository string
+	number           int
 }
 
 func (c *prLinkCollector) add(link PRLink) {
-	if _, ok := c.seen[link.URL]; ok {
+	key := prLinkIdentity{strings.ToLower(link.Host), strings.ToLower(link.Repository), link.Number}
+	if _, ok := c.seen[key]; ok {
 		return
 	}
 	if c.seen == nil {
-		c.seen = make(map[string]struct{})
+		c.seen = make(map[prLinkIdentity]struct{})
 	}
-	c.seen[link.URL] = struct{}{}
+	c.seen[key] = struct{}{}
 	c.links = append(c.links, link)
 }
 
