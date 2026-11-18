@@ -1220,13 +1220,8 @@ Agent total:   $2.38 for the session, including subagents
 ```
 
 The `Subagents` line appears only when the figures cover subagent transcripts.
-It is absent for a session without them and for a `--own-only` run.
-
-Lines after `Cost` appear only when they have something to say. `Agent cost`
-compares what the agent recorded with what AgentsView charged for the same
-usage. `Agent total` shows the agent's own total for the session, such as Claude
-Code's running total. See
-[Costs the Agent Records Itself](/docs/token-usage/#costs-the-agent-records-itself).
+`Agent cost` and `Agent total` appear when the agent recorded its own figures;
+see [Costs the Agent Records Itself](/docs/token-usage/#costs-the-agent-records-itself).
 
 When refresh is incomplete, human output adds `Usage refresh is incomplete. Saved totals may be out of date.`.
 
@@ -1235,8 +1230,7 @@ cost omits it. The parenthesized model list is shown only when contributing
 models exist, so a cost-only reported session does not render empty parentheses.
 When some contributing models are unpriced, the cost line reads
 `n/a (unpriced: model-x)`; when the session has no token data at all, it reads
-`n/a`. Priced Copilot-family sessions add an `AI Credits` line after the cost and
-agent lines.
+`n/a`. Priced Copilot-family sessions add an `AI Credits` line after the cost.
 
 **HTTP endpoint** — as of 0.32.0, the same data is available over REST:
 

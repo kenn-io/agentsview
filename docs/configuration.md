@@ -337,7 +337,7 @@ Set it to `"0"` to keep syncing while idle. Restart the server after changing it
 | `[vector]`                          | Opt-in semantic-search index; model settings live in `[vector.embeddings]`, named endpoints in `[vector.embeddings.servers.<name>]`, embedding schedule in `[vector.embed]` — see [Semantic Search](/docs/semantic-search/#enabling-vector) for every key                                                                                                                                                                                                                        |
 | `[recall.extract]`                  | Opt-in model-backed recall extraction; named endpoints in `[recall.extract.servers.<name>]`, prompt selection in `[recall.extract.prompts]`, request overrides in `[recall.extract.request]` — see [Recall](/docs/recall/#automatic-extraction)                                                                                                                                                                                                                                  |
 | `[integrations.docbank]` | Optional lookup of transcript image digests in Docbank; see [Find transcript images in Docbank](/docs/configuration/#find-transcript-images-in-docbank) |
-| `[image_text]` | Opt-in text extraction from retained tool-result images through a local GLM-OCR service, so search can match words inside screenshots; see [Image text](/docs/configuration/#image-text) |
+| `[image_text]` | Opt-in search of text inside tool-result images; see [Image text](/docs/configuration/#image-text) |
 | `[insights]`                        | Optional generated-insights endpoint and model, plus `default_agent`, the agent CLI new reports start with; local loopback HTTP is allowed, remote plaintext requires `allow_http = true`, and endpoint failures do not retry through a CLI — see [Recall](/docs/recall/#current-surface)                                                                                                                                                                                        |
 | `[friction]`                        | Opt-in Friction Log review; set `enabled = true` to review changed sessions in the background after each sync — see [Friction Log](#friction-log)                                                                                                                                                                                                                                                                                                                                |
 | `[kata]`                            | Optional Kata issue-tracker connection; off by default; HTTPS needs `token_env` or `token_file` — see [Kata](/docs/kata/)                                         |
@@ -413,12 +413,10 @@ token_file = "~/.config/agentsview/kata-token"
   An empty or blank file, a file over 64 KiB, or a file containing a NUL byte
   is an error.
 - The file must be private. On macOS and Linux, a file you own needs mode
-  `0600` or `0400`. Every directory on its path must belong to you or root and
-  must not be writable by group or others, unless it has the sticky bit, as
-  `/tmp` does, and the next entry belongs to you or root. A umask of `002`
-  creates group-writable directories, so check the parent directory too. Files
-  owned by root, such as systemd credentials and Kubernetes secret mounts, work
-  when only root can write them. On Windows,
+  `0600` or `0400`, and no directory on its path may be writable by group or
+  others. A umask of `002` creates group-writable directories, so check the
+  parent directory too. Files owned by root, such as systemd credentials and
+  Kubernetes secret mounts, work when only root can write them. On Windows,
   only your user may have access to the file.
 - When a file is missing or fails these checks, the error names the setting,
   the path, and the reason. Errors and logs never include the secret.
@@ -2464,8 +2462,7 @@ before acting on one.
 Use `agentsview diagnostics append` or `POST /api/v1/diagnostics` to record a
 failure outside an agent session. Friction review must be enabled on the
 archive building the digest for the events to appear. The digest groups matching sources and
-messages in a Diagnostics section, also shown on the Friction Log page with
-each group's count. These events do not create P0 alerts or
+messages in a Diagnostics section. These events do not create P0 alerts or
 recurring patterns. A delayed event rebuilds its completed day, including dates
 older than the session backfill window.
 

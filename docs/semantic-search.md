@@ -27,11 +27,8 @@ the required download through that button, shows download and indexing progress,
 and starts semantic search without a restart. Full-text search remains available
 during indexing.
 
-For CLI setup, run `agentsview index embeddings build`. Setup needs a running
-daemon that can write the archive; start one with `agentsview daemon start`.
-While search by meaning is off, `--full-rebuild`, `--backstop`,
-`--repair-invalid`, `--using`, `--include-automated`, and a `--store` other
-than `messages` fail and ask you to turn it on first. AgentsView uses a
+For CLI setup, run `agentsview index embeddings build` with a writable daemon
+running. AgentsView uses a
 running Ollama server with Nomic or Kit's shared local server. If the local
 server needs files, the CLI asks before downloading them. Search and automatic
 builds reuse installed files; they direct you to the CLI when a download needs
@@ -39,28 +36,11 @@ approval. Declining stops the download and build.
 
 ### Turned on in another app
 
-Kit's built-in server is shared by every app on the machine that uses it. When
-you turn on built-in search by meaning, in AgentsView or in another app that
-uses Kit, Kit records the choice in `~/.kenn/embeddings/search-by-meaning`.
-
-At its next launch, the AgentsView daemon reads that file. When the server's
-model files are already installed, it turns on search by meaning and starts
-indexing, with no setup in AgentsView. It does not write this to `config.toml`,
-and it does not download anything. If files are missing, choose **Turn on** to
-approve the download. Settings can show **On** while the first build is still
-queued. On battery, the build waits for power, as scheduled builds do.
-
-AgentsView keeps your own settings and skips the automatic start when any of
-these apply:
-
-- `config.toml` sets `[vector] enabled = false`. Use this to opt out.
-- The config names a model other than `nomic-embed-text`, or sets
-  `[vector.embeddings] servers` or `default_server`.
-- A deployment manages embeddings, or the archive keeps usage only.
-- A configured PostgreSQL or ClickHouse target would receive pushed vectors.
-
-Turning on Ollama or a configured provider does not record the shared choice.
-Only the built-in server does.
+Turning on built-in search by meaning in any app that uses Kit turns it on for
+all of them. When the model files are installed, AgentsView starts indexing at
+its next launch without changing `config.toml`. To keep it off, set
+`[vector] enabled = false`. A custom model or server, or a PostgreSQL or
+ClickHouse target that receives vectors, also keeps it off.
 
 The default recipe is `nomic-embed-text`, 768 dimensions, 4,000 input
 characters, 2,048 context tokens, `search_query: ` for queries, and
@@ -1271,10 +1251,8 @@ context may help, when stuck, and before guessing about something learned
 previously. The skill starts with the registered `search_content` MCP tool,
 reads the top sources with `get_messages`, follows continuation, and
 distinguishes snippets and summaries from messages read in detail. The runtime
-supplies the client-specific MCP tool prefix. To install the skill and register
-the `agentsview` MCP server in one step, run `agentsview agent setup` or install
-the Claude Code plugin; see
-[Choose an installation route](/docs/mcp/#choose-an-installation-route).
+supplies the client-specific MCP tool prefix. To also register the MCP server,
+see [Choose an installation route](/docs/mcp/#choose-an-installation-route).
 
 Claude Code also receives an `agentsview-search-conversations` agent that runs
 the bounded search and returns Summary / Sources / For Follow-Up. Its `tools`

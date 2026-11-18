@@ -2083,10 +2083,7 @@ With `--wait`, export starts or discovers the local daemon and waits for project
 identity evidence to finish. Progress goes to standard error. Cancel the command
 to stop waiting. A failed backfill or unavailable daemon reports recovery
 commands. Archive-only databases cannot run the backfill; finish it on the
-writable source and restore an archive containing the evidence. With
-`AGENTSVIEW_NO_DAEMON=1`, `--wait` does not start a daemon; start one with
-`agentsview daemon start` first. Without `--wait`, an export fails while project
-identification is pending and names the commands to run.
+writable source and restore an archive containing the evidence.
 
 By default, one-shot and automated sessions are excluded, so token and cost
 totals can be lower than the full archive unless the corresponding include flags
@@ -2328,8 +2325,7 @@ ______________________________________________________________________
 ### `agentsview index embeddings`
 
 Manage the local semantic search embedding index. `build` turns search on when
-needed, through a running daemon that can write the archive. Rebuild, repair,
-and selection flags, and the other commands, require search to be on. See
+needed. The other commands require it to be enabled. See
 [Semantic Search](/docs/semantic-search/) for configuration and search details.
 
 ```bash
@@ -2451,9 +2447,9 @@ Install the conversation search skill and focused MCP profile for installed Clau
 agentsview agent setup [--agent claude|codex]... [--check] [--force] [--print] [--format json]
 ```
 
-Setup refuses to replace a different `agentsview` MCP entry without `--force` and preserves other entries. Pass `--force` to replace the entry and overwrite edited skill files. Repeat `--agent` to name both agents. `--check` reports what is missing without changing anything, and `--print` shows the MCP commands to run by hand. The command exits non-zero while any item is not ready.
+Setup refuses to replace a different `agentsview` MCP entry without `--force` and preserves other entries. Pass `--force` to replace the entry and overwrite edited skill files. `--check` changes nothing, and `--print` shows the MCP commands to run by hand.
 
-Setup registers `agentsview mcp --profile memory` with no server or database flags. To use a remote archive, set `AGENTSVIEW_MEMORY_SERVER` and `AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, or `AGENTSVIEW_MEMORY_PG`, in the environment the agent starts the MCP server from. To make a new skill's CLI examples use the same server, set `AGENTSVIEW_SKILLS_SERVER` and, if needed, `AGENTSVIEW_SKILLS_SERVER_TOKEN_FILE` when you run setup. These variables do not change a skill that is already installed; run `agentsview skills install --server <url>` for that, as [`agentsview skills`](#agentsview-skills) describes.
+Setup registers `agentsview mcp --profile memory` with no server flags. For a remote archive, set `AGENTSVIEW_MEMORY_SERVER` or `AGENTSVIEW_MEMORY_PG` where the agent starts the MCP server, and point the skill at the same server with [`agentsview skills install --server`](#agentsview-skills).
 
 ______________________________________________________________________
 
@@ -2552,8 +2548,7 @@ archive that builds them.
 
 `POST /api/v1/diagnostics` accepts a required UUID `id`, `source`, `message`,
 and an optional RFC 3339 `occurred_at`. It requires an authenticated server or
-a localhost request. Reusing an ID with different content returns HTTP 409. A
-read-only server or an archive that keeps usage only returns HTTP 503.
+a localhost request. Reusing an ID with different content returns HTTP 409.
 
 ______________________________________________________________________
 
