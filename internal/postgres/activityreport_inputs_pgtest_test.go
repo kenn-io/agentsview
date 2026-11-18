@@ -20,6 +20,14 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 )
 
+func openPGActivityInputStore(t *testing.T, target, schema, directory string) *Store {
+	t.Helper()
+	store, err := NewStore(t.Context(), target, schema, true)
+	require.NoError(t, err)
+	require.NoError(t, store.ConfigureUsageCache(t.Context(), directory, target, schema))
+	return store
+}
+
 type activityInputReadCounter struct {
 	storeExecutor
 	mu                          sync.Mutex
@@ -384,13 +392,7 @@ func TestPGActivityReportInputIdentity(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			t.Setenv("CACHE_DIRECTORY", t.TempDir())
 			directory := t.TempDir()
-			open := func() *Store {
-				store, err := NewStore(t.Context(), target, syncer.schema, true)
-				require.NoError(t, err)
-				require.NoError(t, store.ConfigureUsageCache(t.Context(), directory, target, syncer.schema))
-				return store
-			}
-			first := open()
+			first := openPGActivityInputStore(t, target, syncer.schema, directory)
 			query := q
 			switch mode {
 			case "retry":
@@ -400,7 +402,7 @@ func TestPGActivityReportInputIdentity(t *testing.T) {
 				query.EffectiveEnd = query.EffectiveEnd.Add(time.Nanosecond)
 				want := pgKeptBuild(t, first, f, query, true)
 				require.NoError(t, first.Close())
-				restarted := open()
+				restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
 				defer restarted.Close()
 				reads := &activityInputReadCounter{storeExecutor: restarted.pg}
 				restarted.pg = reads
@@ -435,7 +437,7 @@ BEGIN RAISE EXCEPTION 'permission denied' USING ERRCODE = '42501'; END $$`)
 				data, err := kept.EncodeRows(rows, 256<<20, func(kept.Part[pgActivityDiskPart]) int64 { return 0 })
 				require.NoError(t, err)
 				first.activityDisk.Put(slot, version, data)
-				restarted := open()
+				restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
 				defer restarted.Close()
 				reads := &activityInputReadCounter{storeExecutor: restarted.pg}
 				restarted.pg = reads
@@ -457,15 +459,9 @@ func TestPGActivityReportInputRestartPeerAndSessions(t *testing.T) {
 	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "peer", []db.Message{{SessionID: "peer", Ordinal: 0, Role: "assistant", Content: "complete", Timestamp: "2026-06-14T10:01:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":631}`), ClaudeMessageID: "shared", ClaudeRequestID: "request"}}))
 	pgKeptPush(t, syncer, false)
 	target, directory := testPGURL(t), t.TempDir()
-	open := func() *Store {
-		s, err := NewStore(t.Context(), target, syncer.schema, true)
-		require.NoError(t, err)
-		require.NoError(t, s.ConfigureUsageCache(t.Context(), directory, target, syncer.schema))
-		return s
-	}
 	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC", Project: "project-a"}
 	q.Partial, q.EffectiveEnd = true, q.RangeStart.Add(10*time.Hour+time.Minute)
-	first := open()
+	first := openPGActivityInputStore(t, target, syncer.schema, directory)
 	before := pgKeptBuild(t, first, f, q, true)
 	assert.Equal(t, 5, before.Report.Totals.OutputTokens)
 	require.NoError(t, first.Close())
@@ -476,7 +472,7 @@ func TestPGActivityReportInputRestartPeerAndSessions(t *testing.T) {
 	pgKeptSession(t, local, "new-peer", "project-b", "2026-06-14")
 	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "new-peer", []db.Message{{SessionID: "new-peer", Ordinal: 0, Role: "assistant", Content: "complete", Timestamp: "2026-06-14T10:01:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":700}`), ClaudeMessageID: "shared", ClaudeRequestID: "request"}}))
 	pgKeptPush(t, syncer, true)
-	restarted := open()
+	restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
 	defer restarted.Close()
 	counter := &activityInputReadCounter{storeExecutor: restarted.pg}
 	restarted.pg = counter
@@ -503,16 +499,10 @@ func TestPGActivityReportInputRestartPrices(t *testing.T) {
 	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "peer", []db.Message{{SessionID: "peer", Ordinal: 0, Role: "assistant", Content: "complete", Timestamp: "2026-06-14T10:01:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":631}`), ClaudeMessageID: "shared", ClaudeRequestID: "request"}}))
 	pgKeptPush(t, syncer, false)
 	target, directory := testPGURL(t), t.TempDir()
-	open := func() *Store {
-		s, err := NewStore(t.Context(), target, syncer.schema, true)
-		require.NoError(t, err)
-		require.NoError(t, s.ConfigureUsageCache(t.Context(), directory, target, syncer.schema))
-		return s
-	}
 	q := pgDayQuery(t, "2026-06-14", "UTC")
 	q.Partial, q.EffectiveEnd = true, q.RangeEnd.Add(-time.Hour)
 	f := db.AnalyticsFilter{Timezone: "UTC", Project: "project-a"}
-	first := open()
+	first := openPGActivityInputStore(t, target, syncer.schema, directory)
 	pgKeptBuild(t, first, db.AnalyticsFilter{Timezone: "UTC", Project: "project-b"}, q, true)
 	want := pgKeptBuild(t, first, f, q, true)
 	slots := first.runtimeState().activityInputs.Snapshot()
@@ -520,7 +510,7 @@ func TestPGActivityReportInputRestartPrices(t *testing.T) {
 	saved := slots[0].Rows[0]
 	require.NotNil(t, saved.priced)
 	require.NoError(t, first.Close())
-	restarted := open()
+	restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
 	defer restarted.Close()
 	loaded, ok := restarted.loadActivityInputs(slots[0].Slot, slots[0].Version, saved.identity)
 	require.True(t, ok)
@@ -557,15 +547,9 @@ func TestPGActivityReportInputRestartPriceInvalidation(t *testing.T) {
 			require.NoError(t, local.ReplaceSessionMessages(t.Context(), "future", []db.Message{{SessionID: "future", Ordinal: 0, Role: "assistant", Content: "later", Timestamp: "2026-06-14T10:05:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":300}`)}}))
 			pgKeptPush(t, syncer, false)
 			target, directory := testPGURL(t), t.TempDir()
-			open := func() *Store {
-				s, err := NewStore(t.Context(), target, syncer.schema, true)
-				require.NoError(t, err)
-				require.NoError(t, s.ConfigureUsageCache(t.Context(), directory, target, syncer.schema))
-				return s
-			}
 			q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
 			q.Partial, q.EffectiveEnd = true, q.RangeStart.Add(10*time.Hour+2*time.Minute)
-			first := open()
+			first := openPGActivityInputStore(t, target, syncer.schema, directory)
 			if mode == "push" {
 				first.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}})
 			}
@@ -599,7 +583,7 @@ func TestPGActivityReportInputRestartPriceInvalidation(t *testing.T) {
 				require.False(t, slots[0].Rows[0].priced.next.IsZero())
 				q.EffectiveEnd = q.RangeEnd.Add(-time.Hour)
 			}
-			restarted := open()
+			restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
 			defer restarted.Close()
 			fresh, err := NewStore(t.Context(), target, syncer.schema, true)
 			require.NoError(t, err)
