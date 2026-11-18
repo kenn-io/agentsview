@@ -29,7 +29,15 @@ func TestSearchContentHintsBoundedCounts(t *testing.T) {
 	require.NoError(t, err)
 	hints := service.SearchContentHints(t.Context(), svc, req, res, true, nil)
 	require.Len(t, hints, 1)
+	// The page shared with automated sessions is wider than the caller's 50.
+	assert.Equal(t, "53 matches are in one-shot sessions, hidden by default", hints[0].Message)
+	req.IncludeAutomated = true
+	res, err = svc.SearchContent(t.Context(), req)
+	require.NoError(t, err)
+	hints = service.SearchContentHints(t.Context(), svc, req, res, false, nil)
+	require.Len(t, hints, 1)
 	assert.Equal(t, "more than 50 matches are in one-shot sessions, hidden by default", hints[0].Message)
+	req.IncludeAutomated = false
 	req.Mode = "semantic"
 	res, err = svc.SearchContent(t.Context(), req)
 	require.NoError(t, err)
@@ -241,11 +249,18 @@ func TestSearchContentHintsExpandedGate(t *testing.T) {
 			svc := hintProbeService{search: func(req service.ContentSearchRequest) (*service.ContentSearchResult, error) {
 				calls++
 				assert.Equal(t, "selected", req.Project)
-				assert.Equal(t, 10, req.Limit)
 				if calls == 1 {
+					// A shared lexical page is widened; a vector page and the
+					// one-class searches keep the caller's limit.
+					wantLimit := 10
+					if !tc.single && !tc.page.CandidateTruncated {
+						wantLimit = 500
+					}
+					assert.Equal(t, wantLimit, req.Limit)
 					assert.True(t, req.IncludeOneShot && req.IncludeAutomated && req.IncludeChildren)
 					return &tc.page, tc.err
 				}
+				assert.Equal(t, 10, req.Limit)
 				return &service.ContentSearchResult{Matches: []db.ContentMatch{{SessionID: "hidden"}}}, nil
 			}}
 			req := service.ContentSearchRequest{Pattern: "marker", Project: "selected", Limit: 10, IncludeChildren: true, IncludeAutomated: tc.single}
@@ -312,4 +327,56 @@ func TestSearchContentHintsFilteredResultGuards(t *testing.T) {
 			assert.Zero(t, calls)
 		})
 	}
+}
+
+// countingService records how many searches and session lookups the hints make.
+type countingService struct {
+	service.SessionService
+	searches, lists int
+}
+
+func (s *countingService) SearchContent(ctx context.Context, req service.ContentSearchRequest) (*service.ContentSearchResult, error) {
+	s.searches++
+	return s.SessionService.SearchContent(ctx, req)
+}
+
+func (s *countingService) List(ctx context.Context, f service.ListFilter) (*service.SessionList, error) {
+	s.lists++
+	return s.SessionService.List(ctx, f)
+}
+
+func TestSearchContentHintsSortOneExpandedPage(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	dbtest.SeedSession(t, d, "one", "proj", func(s *db.Session) { s.UserMessageCount = 1 })
+	dbtest.SeedSession(t, d, "auto", "proj", func(s *db.Session) { s.UserMessageCount, s.IsAutomated = 2, true })
+	dbtest.SeedSession(t, d, "parent", "proj", func(s *db.Session) { s.UserMessageCount = 2 })
+	dbtest.SeedSession(t, d, "kid", "proj", func(s *db.Session) {
+		s.ParentSessionID, s.RelationshipType, s.UserMessageCount = new("parent"), "subagent", 1
+	})
+	dbtest.SeedSession(t, d, "auto-kid", "proj", func(s *db.Session) {
+		s.ParentSessionID, s.RelationshipType, s.UserMessageCount, s.IsAutomated = new("parent"), "subagent", 1, true
+	})
+	for _, id := range []string{"one", "auto", "kid", "auto-kid"} {
+		require.NoError(t, d.InsertMessages(t.Context(), []db.Message{dbtest.UserMsg(id, 0, "marker")}))
+	}
+	svc := &countingService{SessionService: service.NewDirectBackend(d, nil)}
+	req := service.ContentSearchRequest{Pattern: "marker"}
+	res, err := svc.SearchContent(t.Context(), req)
+	require.NoError(t, err)
+	require.Empty(t, res.Matches)
+	svc.searches = 0
+	hints := service.SearchContentHints(t.Context(), svc, req, res, true, nil)
+	assert.Equal(t, 2, svc.searches, "one flat and one tree search")
+	assert.Positive(t, svc.lists)
+	assert.Equal(t, []service.ContentSearchHint{
+		{Code: "excluded_one_shot", Message: "1 match is in one-shot sessions, hidden by default", RetryWith: map[string]any{"include_one_shot": true}},
+		{Code: "excluded_automated", Message: "1 match is in automated sessions, hidden by default", RetryWith: map[string]any{"include_automated": true}},
+		{Code: "excluded_children", Message: "1 match is in child sessions, hidden by default", RetryWith: map[string]any{"include_children": true}},
+		{Code: "excluded_combined", Message: "1 match is hidden by default", RetryWith: map[string]any{"include_one_shot": true, "include_automated": true, "include_children": true}},
+	}, hints)
+
+	empty := &countingService{SessionService: service.NewDirectBackend(dbtest.OpenTestDB(t), nil)}
+	assert.Empty(t, service.SearchContentHints(t.Context(), empty, req, &service.ContentSearchResult{}, true, nil))
+	assert.Equal(t, 2, empty.searches, "a miss everywhere costs two searches")
+	assert.Zero(t, empty.lists)
 }

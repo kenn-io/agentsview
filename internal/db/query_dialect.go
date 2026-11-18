@@ -1380,3 +1380,16 @@ func sessionIDsPredicate(f SessionFilter, b *QueryBuilder, col string) string {
 	}
 	return "(" + strings.Join(parts, " OR ") + ")"
 }
+
+// IsCanonicalChildRelationship reports whether rel places a session under its
+// parent in a session tree. Every dialect shares this set.
+func IsCanonicalChildRelationship(rel string) bool {
+	return slices.Contains(SQLiteQueryDialect().canonicalChildRelationships, rel)
+}
+
+// IsSidebarChildRelationship reports whether rel hides a session from flat
+// session lists and searches unless children are included. Every dialect
+// shares this set.
+func IsSidebarChildRelationship(rel string) bool {
+	return slices.Contains(SQLiteQueryDialect().sidebarChildRelationships, rel)
+}

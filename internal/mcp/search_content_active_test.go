@@ -134,6 +134,10 @@ func TestSearchContent_ActiveFilterHTTPCompatibility(t *testing.T) {
 					assert.NoError(t, err)
 					return
 				}
+				if r.URL.Path == "/api/v1/sessions" {
+					_, _ = w.Write([]byte(`{"sessions":[{"id":"active","user_message_count":1},{"id":"idle","user_message_count":1}]}`))
+					return
+				}
 				id := strings.TrimPrefix(r.URL.Path, "/api/v1/sessions/")
 				lookups[id]++
 				activity, ok := map[string]string{
@@ -189,8 +193,8 @@ func TestSearchContent_HintsApplyLegacyActivityFilter(t *testing.T) {
 				w.Header().Set("Content-Type", "application/json")
 				if r.URL.Path == "/api/v1/search/content" {
 					assert.Equal(t, "2024-06-15T11:50:00Z", r.URL.Query().Get("exclude_active_since"))
-					assert.Equal(t, strconv.Itoa(limit), r.URL.Query().Get("limit"))
 					if r.URL.Query().Get("include_one_shot") != "true" {
+						assert.Equal(t, strconv.Itoa(limit), r.URL.Query().Get("limit"))
 						if response == "active first page" {
 							_, _ = w.Write([]byte(`{"matches":[{"session_id":"active"}]}`))
 						} else {
@@ -198,6 +202,9 @@ func TestSearchContent_HintsApplyLegacyActivityFilter(t *testing.T) {
 						}
 						return
 					}
+					// The hint search shares one page between one-shot and
+					// automated sessions, so it asks for the widest page.
+					assert.Equal(t, "500", r.URL.Query().Get("limit"))
 					switch response {
 					case "active":
 						_, _ = w.Write([]byte(`{"matches":[{"session_id":"active"}]}`))
@@ -206,6 +213,10 @@ func TestSearchContent_HintsApplyLegacyActivityFilter(t *testing.T) {
 					default:
 						_, _ = w.Write([]byte(`{"matches":[{"session_id":"active"},{"session_id":"idle"}]}`))
 					}
+					return
+				}
+				if r.URL.Path == "/api/v1/sessions" {
+					_, _ = w.Write([]byte(`{"sessions":[{"id":"active","user_message_count":1},{"id":"idle","user_message_count":1}]}`))
 					return
 				}
 				id := strings.TrimPrefix(r.URL.Path, "/api/v1/sessions/")
