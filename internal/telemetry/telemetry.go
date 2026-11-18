@@ -3,6 +3,7 @@ package telemetry
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -152,9 +153,11 @@ func newKitReporter(opts Options) (*kittelemetry.Reporter, error) {
 }
 
 // kitOptions leaves APIKey empty so kit uses the project key that release
-// builds set at link time.
+// builds set at link time, and discards SDK logs so reporting stays out of
+// the app's output.
 func kitOptions(opts Options) kittelemetry.Options {
 	return kittelemetry.Options{
+		Logger:      slog.New(slog.DiscardHandler),
 		Application: application,
 		EnvPrefix:   envPrefix,
 		DistinctID:  opts.InstallationID,
