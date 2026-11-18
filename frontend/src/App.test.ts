@@ -31,6 +31,7 @@ import { requestUrl } from "./lib/test-support/request-url.js";
 import { readProgress } from "./lib/stores/read-progress.svelte.js";
 import * as telemetry from "./lib/utils/telemetry.js";
 import { inSessionSearch } from "./lib/stores/inSessionSearch.svelte.js";
+import { ApiError } from "./lib/api/runtime.js";
 
 let component: ReturnType<typeof mount> | undefined;
 
@@ -63,7 +64,7 @@ function stubAppDependencies() {
       disconnect() {}
     },
   );
-  vi.spyOn(settings, "load").mockResolvedValue();
+  vi.spyOn(settings, "load").mockImplementation(async () => { settings.loaded = true; });
   vi.spyOn(starred, "load").mockResolvedValue();
   vi.spyOn(sync, "loadStatus").mockResolvedValue();
   vi.spyOn(sync, "loadStats").mockResolvedValue();
@@ -719,6 +720,83 @@ describe("App root Sessions landing", () => {
       message_count: count,
     } as (typeof sessions.sessions)[number];
   }
+
+  it("keeps the first visit available through authentication and reload", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.mocked(settings.load).mockImplementation(async () => {
+      settings.loaded = true;
+      settings.needsAuth = true;
+    });
+    setRootUrl();
+    sessions.sessions = [sidebarRow("readable", 1, "2026-01-02")];
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    expect(ui.firstVisitSeen).toBe(false);
+    expect(sessions.activeSessionId).toBeNull();
+    unmount(component);
+    component = undefined;
+    settings.loaded = false;
+    settings.needsAuth = false;
+    vi.mocked(settings.load).mockImplementation(async () => { settings.loaded = true; });
+    setRootUrl();
+    component = mount(App, { target: document.body });
+    await vi.waitFor(() => expect(sessions.activeSessionId).toBe("readable"));
+    expect(ui.firstVisitSeen).toBe(true);
+  });
+
+  it("waits for settings to load successfully before consuming the visit", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.mocked(settings.load).mockImplementation(async () => {
+      settings.loaded = true;
+      settings.error = "Settings unavailable";
+    });
+    setRootUrl();
+    sessions.sessions = [sidebarRow("readable", 1, "2026-01-02")];
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    expect(ui.firstVisitSeen).toBe(false);
+    expect(sessions.activeSessionId).toBeNull();
+    settings.error = null;
+    await vi.waitFor(() => expect(sessions.activeSessionId).toBe("readable"));
+    expect(ui.firstVisitSeen).toBe(true);
+  });
+
+  it("skips a transcript containing only empty placeholders", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    setRootUrl();
+    sessions.sessions = [sidebarRow("empty", 1, "2026-01-03"), sidebarRow("readable", 1, "2026-01-02")];
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    messages.sessionId = "empty";
+    messages.messages = [{ ordinal: 0, role: "user", content: "", thinking_text: "", timestamp: "" } as Message];
+    await vi.waitFor(() => expect(sessions.activeSessionId).toBe("readable"));
+    expect(router.sessionId).toBeNull();
+  });
+
+  it("moves past a deleted candidate while keeping other errors on Retry", async () => {
+    stubAppDependencies();
+    vi.mocked(messages.loadSession).mockRestore();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    setRootUrl();
+    sessions.sessions = [sidebarRow("deleted", 1, "2026-01-03"), sidebarRow("unavailable", 1, "2026-01-02"), sidebarRow("later", 1, "2026-01-01")];
+    vi.spyOn(SessionsService, "getApiV1SessionsById").mockImplementation(async ({ id }) => {
+      if (id === "deleted") throw new ApiError(404, "Session missing");
+      return sessions.sessions.find((row) => row.id === id) as never;
+    });
+    vi.spyOn(SessionsService, "getApiV1SessionsByIdMessages").mockImplementation(async ({ id }) => {
+      if (id === "deleted") throw new ApiError(404, "Session missing");
+      throw new Error("Transcript unavailable");
+    });
+    component = mount(App, { target: document.body });
+    await vi.waitFor(() => expect(sessions.activeSessionId).toBe("unavailable"));
+    await vi.waitFor(() => expect(messages.loadError).toContain("Transcript unavailable"));
+    expect(document.body.textContent).toContain("Retry");
+    expect(router.sessionId).toBeNull();
+  });
 
   it("does not open a session on a later visit after leaving an empty landing", async () => {
     stubAppDependencies();

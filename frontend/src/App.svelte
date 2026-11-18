@@ -427,10 +427,24 @@
   let previousSessionId: string | null = null;
   let previousActiveSessionId: string | null = null;
   let firstVisitArmed = $state(false);
+  let firstVisitEligible = $state(false);
   let firstVisitWaiting = $state(false);
   let candidate = $state<string | null>(null);
   let firstVisitProbing = $derived(firstVisitArmed && candidate !== null);
   const tried = new Map<string, string>();
+
+  $effect(() => {
+    if (!firstVisitEligible) return;
+    if (router.route !== "sessions" || !router.isRootPath || hasFilterParams(router.params) || sessions.activeSessionId !== null) {
+      firstVisitEligible = false;
+      return;
+    }
+    if (!settings.loaded || settings.loading || settings.needsAuth || settings.error) return;
+    firstVisitEligible = false;
+    if (ui.firstVisitSeen || !readProgress.isEmpty) return;
+    ui.firstVisitSeen = true;
+    firstVisitArmed = true;
+  });
 
   function clearRootDetailDateRestoreSuppressed(): void {
     rootDetailDateRestoreSuppressed = false;
@@ -703,17 +717,19 @@
       candidate = null;
       return;
     }
-    if (sessions.sidebarLoadError || sessions.activeSessionNotFound) return;
+    if (sessions.sidebarLoadError) return;
     if (candidate) {
-      if (messages.sessionId !== candidate || messages.loading || messages.loadingOlder || messages.loadError) return;
-      if ((inSessionSearch.scope?.items.length ?? 0) > 0) {
-        firstVisitArmed = false;
-        candidate = null;
-        return;
-      }
-      if (messages.hasOlder) {
-        void messages.loadOlder();
-        return;
+      if (!sessions.activeSessionNotFound) {
+        if (messages.sessionId !== candidate || messages.loading || messages.loadingOlder || messages.loadError) return;
+        if (inSessionSearch.scope?.items.some((item) => item.kind !== "empty-group")) {
+          firstVisitArmed = false;
+          candidate = null;
+          return;
+        }
+        if (messages.hasOlder) {
+          void messages.loadOlder();
+          return;
+        }
       }
       const row = sessions.groupedSessions.flatMap((group) => group.sessions).find((session) => session.id === candidate);
       if (row) tried.set(candidate, `${row.transcript_revision ?? ""}:${row.message_count}`);
@@ -880,9 +896,8 @@
   });
 
   onMount(() => {
-    firstVisitArmed = !ui.firstVisitSeen && readProgress.isEmpty && router.route === "sessions" &&
+    firstVisitEligible = !ui.firstVisitSeen && readProgress.isEmpty && router.route === "sessions" &&
       router.isRootPath && !hasFilterParams(router.params);
-    if (firstVisitArmed) ui.firstVisitSeen = true;
     globalAuthToken = getAuthToken();
     settings.load();
     starred.load();
