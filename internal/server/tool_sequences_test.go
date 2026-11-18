@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"testing"
 
@@ -383,8 +382,8 @@ func TestHandleToolSequences_ReadOnly(t *testing.T) {
 }
 
 func TestHandleToolSequences_DuckDBParity(t *testing.T) {
-	if runtime.GOOS == "windows" && runtime.GOARCH == "arm64" {
-		t.Skip("duckdb-go-bindings does not ship a windows/arm64 library")
+	if duckdb.RequireDriver() != nil {
+		t.Skip("this build does not link DuckDB; run with -tags duckdb")
 	}
 	te := setup(t)
 	sessionIDs := dbtest.SeedToolSequencesParity(t, te.db)

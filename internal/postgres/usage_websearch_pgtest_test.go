@@ -316,39 +316,58 @@ func TestPGPushSchemaCheckSurvivesCounterFillDeadlock(t *testing.T) {
 				require.True(t, pushSchemaCurrent(ctx, store.DB()))
 				require.NoError(t, (&Sync{pg: store.DB(), schema: tc.schema}).EnsureSchema(ctx))
 			}
-			_, err := store.DB().ExecContext(ctx, `
-				UPDATE messages
-				SET usage_output_tokens = NULL, usage_web_search_requests = NULL`)
-			require.NoError(t, err)
 
-			publisher, err := store.DB().BeginTx(ctx, nil)
-			require.NoError(t, err)
-			t.Cleanup(func() { _ = publisher.Rollback() })
-			_, err = publisher.ExecContext(ctx,
-				`UPDATE sessions SET updated_at = NOW() WHERE id = 'pg-websearch'`)
-			require.NoError(t, err)
+			// PostgreSQL checks a lock wait for deadlock once, deadlock_timeout
+			// after the wait starts, and aborts the transaction that finds the
+			// cycle. The fill waits first, so it is the victim unless the
+			// publisher starts waiting more than deadlock_timeout later, as can
+			// happen on a loaded server. That attempt proves nothing about the
+			// fill, so the scenario runs again.
+			const attempts = 5
+			var syncer *Sync
+			for attempt := 1; ; attempt++ {
+				_, err := store.DB().ExecContext(ctx, `
+					UPDATE messages
+					SET usage_output_tokens = NULL, usage_web_search_requests = NULL`)
+				require.NoError(t, err)
 
-			syncer := &Sync{pg: store.DB(), schema: tc.schema, schemaDone: tc.schemaDone}
-			fill := make(chan error, 1)
-			go func() { fill <- syncer.EnsureSchema(ctx) }()
-			// The fill now holds the session's message rows and waits for its
-			// session row, which the publisher holds.
-			require.Eventually(t, func() bool {
-				var waiting bool
-				err := store.DB().QueryRowContext(ctx, `
-					SELECT EXISTS (
-						SELECT 1 FROM pg_stat_activity
-						WHERE datname = current_database() AND pid <> pg_backend_pid()
-						  AND wait_event_type = 'Lock'
-						  AND query LIKE '%usage_output_tokens = v.output_tokens%')`,
-				).Scan(&waiting)
-				return err == nil && waiting
-			}, 10*time.Second, 10*time.Millisecond)
-			_, publishErr := publisher.ExecContext(ctx,
-				`UPDATE messages SET content = content WHERE session_id = 'pg-websearch'`)
-			require.NoError(t, <-fill, "a deadlocked counter fill must not fail the push")
-			require.NoError(t, publishErr)
-			require.NoError(t, publisher.Commit())
+				publisher, err := store.DB().BeginTx(ctx, nil)
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = publisher.Rollback() })
+				_, err = publisher.ExecContext(ctx,
+					`UPDATE sessions SET updated_at = NOW() WHERE id = 'pg-websearch'`)
+				require.NoError(t, err)
+
+				syncer = &Sync{pg: store.DB(), schema: tc.schema, schemaDone: tc.schemaDone}
+				fill := make(chan error, 1)
+				go func() { fill <- syncer.EnsureSchema(ctx) }()
+				// The fill now holds the session's message rows and waits for
+				// its session row, which the publisher holds.
+				require.Eventually(t, func() bool {
+					var waiting bool
+					err := store.DB().QueryRowContext(ctx, `
+						SELECT EXISTS (
+							SELECT 1 FROM pg_stat_activity
+							WHERE datname = current_database() AND pid <> pg_backend_pid()
+							  AND wait_event_type = 'Lock'
+							  AND query LIKE '%usage_output_tokens = v.output_tokens%')`,
+					).Scan(&waiting)
+					return err == nil && waiting
+				}, 10*time.Second, 10*time.Millisecond)
+				_, publishErr := publisher.ExecContext(ctx,
+					`UPDATE messages SET content = content WHERE session_id = 'pg-websearch'`)
+				require.NoError(t, <-fill, "a deadlocked counter fill must not fail the push")
+				if isTransactionConflict(publishErr) {
+					require.NoError(t, publisher.Rollback())
+					require.Less(t, attempt, attempts,
+						"PostgreSQL chose the publisher as the deadlock victim on every attempt")
+					t.Logf("attempt %d: PostgreSQL chose the publisher as the deadlock victim; running the scenario again", attempt)
+					continue
+				}
+				require.NoError(t, publishErr)
+				require.NoError(t, publisher.Commit())
+				break
+			}
 
 			require.NoError(t, syncer.EnsureSchema(ctx))
 			var outputTokens, webSearchRequests int64

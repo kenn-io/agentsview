@@ -103,6 +103,7 @@ func TestRestoreKeepsUsageOnlyAutomation(t *testing.T) {
 	require.NoError(t, database.EnableArchiveOnly(ctx))
 	archive, err := Open(ctx, database, data, nil)
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, archive.Close()) })
 	settings := RecoverySettings{ArchiveContent: config.ArchiveContentUsage, LocalMachineName: "source-device"}
 	repository := filepath.Join(t.TempDir(), "backup")
 	backup, err := archive.Backup(ctx, repository, settings, "test-build")

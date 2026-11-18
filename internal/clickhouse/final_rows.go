@@ -162,8 +162,9 @@ type finalRows struct {
 	// exist; noPartitionAt is the table's parts digest at which none did.
 	partition, noPartitionAt string
 	// parts are the parts the state was derived from; nil before the first
-	// read.
+	// read. uuid names the table they belonged to.
 	parts map[string]partInfo
+	uuid  string
 	count uint64
 	sum   rowHash
 	// cached holds the rows of the small parts in parts, by part name, for
@@ -189,6 +190,7 @@ type finalRowsChange struct {
 	// set and del update rows.
 	full   bool
 	parts  map[string]partInfo
+	uuid   string
 	count  uint64
 	sum    rowHash
 	cached map[string][]finalRow
@@ -238,7 +240,7 @@ func (c *finalRowsChange) settle(fresh tableParts) bool {
 }
 
 func (f *finalRows) apply(c *finalRowsChange) {
-	f.parts, f.count, f.sum = c.parts, c.count, c.sum
+	f.parts, f.uuid, f.count, f.sum = c.parts, c.uuid, c.count, c.sum
 	if c.full {
 		f.cached, f.rows = c.cached, c.rows
 		return
@@ -285,15 +287,28 @@ func (s *Store) prepareFinalRows(ctx context.Context, f *finalRows, tp tablePart
 	if err != nil {
 		return nil, err
 	}
-	if f.parts != nil && maps.EqualFunc(f.parts, cur, func(a, b partInfo) bool { return a == b }) {
+	// Block numbers relate parts only within one table. A table swapped in
+	// under the same name, such as the rebuilt snapshot table, needs a full
+	// read. A table without parts lists no uuid, and a state without parts
+	// has nothing to relate, so it reads incrementally.
+	sameTable := f.parts != nil && (len(f.parts) == 0 || f.uuid == tp.uuid)
+	if sameTable && maps.EqualFunc(f.parts, cur, func(a, b partInfo) bool { return a == b }) {
 		return nil, nil
 	}
-	if f.parts != nil {
-		if plan, ok := f.plan(cur); ok {
-			return s.readFinalRowsPlan(ctx, f, cur, plan)
+	read := func() (*finalRowsChange, error) {
+		if sameTable {
+			if plan, ok := f.plan(cur); ok {
+				return s.readFinalRowsPlan(ctx, f, cur, plan)
+			}
 		}
+		return s.readFinalRows(ctx, f, cur, true)
 	}
-	return s.readFinalRows(ctx, f, cur, true)
+	change, err := read()
+	if err != nil {
+		return nil, err
+	}
+	change.uuid = tp.uuid
+	return change, nil
 }
 
 // finalRowsParts returns the parts that can hold the tracked rows.

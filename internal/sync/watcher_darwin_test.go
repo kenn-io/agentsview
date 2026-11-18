@@ -2642,8 +2642,11 @@ func TestDarwinWatcherLifecycleFailureFallsBackToPolling(t *testing.T) {
 	root := filepath.Join(intermediate, "sessions")
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
 	require.NoError(t, err)
-	backend.retryInitial = time.Millisecond
-	backend.retryMax = 5 * time.Millisecond
+	// Open fallback schedules native recovery after retryInitial, and
+	// recovery can try the ancestor again. Keep that retry out of this
+	// test's lifetime so the attempt count below sees only the failed try.
+	backend.retryInitial = time.Hour
+	backend.retryMax = time.Hour
 	var attempts atomic.Int32
 	backend.addAncestor = func(path string) error {
 		if path == intermediate && attempts.Add(1) == 1 {

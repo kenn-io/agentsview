@@ -123,7 +123,7 @@ func TestRowBuildersMatchInsertColumns(t *testing.T) {
 	total, err := sessionUsageTotalRow("s", &db.SessionUsageTotal{Source: "x"}, 1)
 	require.NoError(t, err)
 	rows := map[string][]any{
-		"sessions":             s.sessionRow(sessionPayload{session: sess, messages: []db.Message{msg}}, 1, 1),
+		"sessions":             s.sessionRow(sessionPayload{session: sess, messages: []db.Message{msg}}, sessionPublication{contentVersion: 1}, 1),
 		"messages":             messageRow(msg, 1),
 		"tool_calls":           toolCallRow(msg, tc, 0, 1),
 		"tool_result_events":   toolResultEventRow(msg, 0, tc.ResultEvents[0], 1),

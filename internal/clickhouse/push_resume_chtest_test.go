@@ -179,10 +179,10 @@ func TestFullPushResumesVectorPhase(t *testing.T) {
 // pushTimeColumns are columns besides push_version that take their value
 // from the time of the push rather than from the archive.
 var pushTimeColumns = map[string]string{
-	"sessions":                 ", content_version",
+	"sessions":                 ", content_version, rows_version",
 	"usage_messages":           ", revision",
 	"terminal_event_snapshots": ", revision",
-	usageSessionSnapshotTable:  ", revision, usage_events, content_version",
+	usageSessionSnapshotTable:  ", revision, usage_events, content_version, rows_version",
 	"starred_sessions":         ", created_at",
 }
 

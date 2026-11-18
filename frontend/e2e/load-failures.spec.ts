@@ -6,21 +6,42 @@ import { test, expect, type Page } from "@playwright/test";
 
 const FAILURE = "injected read failure";
 
-async function failReads(page: Page, matches: (url: URL) => boolean): Promise<() => void> {
-  let failing = true;
+type RecoveryWindow = Window & { readRecoveredByRetry?: boolean };
+
+async function failReads(page: Page, matches: (url: URL) => boolean): Promise<void> {
   await page.route(
     (url) => matches(url),
     async (route) => {
-      if (failing && route.request().method() === "GET") {
+      const recovered = await page.evaluate(() => (window as RecoveryWindow).readRecoveredByRetry);
+      if (!recovered && route.request().method() === "GET") {
         await route.fulfill({ status: 500, json: { error: FAILURE } });
         return;
       }
       await route.continue();
     },
   );
-  return () => {
-    failing = false;
-  };
+}
+
+async function recoverReadsOnRetry(page: Page): Promise<void> {
+  // Transcript reads retry automatically after a 500. Keep those retries
+  // failing until the user click reaches the page, or they can remove the
+  // button while Playwright is still preparing the click. Listen on the
+  // document because a failing automatic reload can also replace the button.
+  await page.evaluate((failure) => {
+    document.addEventListener(
+      "click",
+      (event) => {
+        const button = event.target instanceof Element ? event.target.closest("button") : null;
+        if (
+          button?.textContent?.trim() === "Retry" &&
+          button.closest('[role="alert"]')?.textContent?.includes(failure)
+        ) {
+          (window as RecoveryWindow).readRecoveredByRetry = true;
+        }
+      },
+      { capture: true },
+    );
+  }, FAILURE);
 }
 
 const cases: Array<{ name: string; path: string; read: (url: URL) => boolean }> = [
@@ -64,7 +85,7 @@ const cases: Array<{ name: string; path: string; read: (url: URL) => boolean }> 
 test.describe("Failed page loads", () => {
   for (const { name, path, read } of cases) {
     test(`${name} shows the failure and recovers through Retry`, async ({ page }, testInfo) => {
-      const recover = await failReads(page, read);
+      await failReads(page, read);
       await page.goto(path);
 
       const alert = page.getByRole("alert").filter({ hasText: FAILURE }).first();
@@ -72,12 +93,13 @@ test.describe("Failed page loads", () => {
       await expect(alert).toContainText("Failed to load");
       await page.screenshot({ path: testInfo.outputPath(`${name}.png`) });
 
-      recover();
+      const retry = alert.getByRole("button", { name: "Retry" });
+      await recoverReadsOnRetry(page);
       const retried = page.waitForResponse(
         (response) =>
           read(new URL(response.url())) && response.request().method() === "GET" && response.ok(),
       );
-      await alert.getByRole("button", { name: "Retry" }).click();
+      await retry.click();
       await retried;
       await expect(page.getByRole("alert").filter({ hasText: "Failed to load" })).toHaveCount(0);
     });

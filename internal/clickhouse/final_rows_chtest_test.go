@@ -422,3 +422,42 @@ func TestFinalRowsSettleAfterMerge(t *testing.T) {
 		})
 	}
 }
+
+// A table swapped in under the same name starts its block numbers over, so
+// its merged part can cover the old table's parts exactly and look like a
+// merge of rows already counted. The tracker reads the new table in full.
+func TestFinalRowsFollowSwappedTable(t *testing.T) {
+	t.Parallel()
+	store := newFinalRowsStore(t)
+	want := func(ctx context.Context) (string, map[string]finalFields) {
+		var count uint64
+		var sum string
+		require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT count(),
+			reinterpretAsFixedString(sumWithOverflow(reinterpretAsUInt128(sipHash128Reference(tuple(*)))))
+			FROM sessions FINAL`).Scan(&count, &sum))
+		hash, err := parseRowHash(sum)
+		require.NoError(t, err)
+		return (&finalRows{count: count, sum: hash}).identity(), nil
+	}
+	insert := func(table, ids string, version int, name string) string {
+		return fmt.Sprintf(`INSERT INTO %s (id, machine, display_name, push_version)
+			SELECT arrayJoin([%s]), 'host-a', '%s', %d`, table, ids, name, version)
+	}
+	f := &finalRows{spec: sessionsFinalTable}
+	requireTrackerFollows(t, store, f, want, []finalRowsStep{
+		{name: "first rows", sql: []string{"SYSTEM STOP MERGES sessions", insert("sessions", "'a','b'", 1, "one")}},
+		{name: "second insert", sql: []string{insert("sessions", "'c'", 1, "one")}},
+		{
+			name: "swap in a table whose merged part covers the old blocks",
+			sql: []string{
+				"CREATE TABLE sessions_swap AS sessions",
+				insert("sessions_swap", "'a','b'", 1, "one"),
+				insert("sessions_swap", "'c'", 5, "changed"),
+				"OPTIMIZE TABLE sessions_swap FINAL",
+				"EXCHANGE TABLES sessions AND sessions_swap",
+				"DROP TABLE sessions_swap SYNC",
+			},
+			full: true,
+		},
+	})
+}

@@ -5,7 +5,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -123,8 +122,8 @@ func TestMachineFilterErrorsBeforeHTTPResponse(t *testing.T) {
 }
 
 func TestMachineAliasesOnDuckDB(t *testing.T) {
-	if runtime.GOOS == "windows" && runtime.GOARCH == "arm64" {
-		t.Skip("duckdb-go-bindings does not ship a windows/arm64 library")
+	if duckdb.RequireDriver() != nil {
+		t.Skip("this build does not link DuckDB; run with -tags duckdb")
 	}
 	te := setup(t)
 	te.seedSession(t, "current", "project", 5, func(s *db.Session) {

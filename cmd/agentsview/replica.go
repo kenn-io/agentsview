@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
@@ -356,6 +357,9 @@ func writeReplicaPushSummary(
 	if result.SkippedResumed > 0 {
 		fmt.Fprintf(w, "Skipped %d session(s) already pushed by the unfinished full push\n", result.SkippedResumed)
 	}
+	if result.SessionsAppended > 0 {
+		fmt.Fprintf(w, "Appended new messages to %d pushed session(s) whose earlier messages were unchanged\n", result.SessionsAppended)
+	}
 	if result.SessionRowsOnly > 0 {
 		fmt.Fprintf(w, "Rewrote only the session row of %d pushed session(s) whose messages were unchanged\n", result.SessionRowsOnly)
 	}
@@ -651,8 +655,16 @@ func prepareReplicaServeImpl(
 	}
 
 	var closeExtras func() error
+	var listener net.Listener
 	cleanup := func() {
 		stop()
+		// The server closes the listener when it shuts down; this covers a
+		// startup that fails before serving.
+		if listener != nil {
+			if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				log.Printf("warning: closing %s serve listener: %v", name, err)
+			}
+		}
 		if closeExtras != nil {
 			if err := closeExtras(); err != nil {
 				log.Printf("warning: closing %s serve extras: %v", name, err)
@@ -670,11 +682,12 @@ func prepareReplicaServeImpl(
 		BasePath:      basePath,
 		RequestedPort: appCfg.Port,
 	}
-	appCfg, err = prepareServeRuntimeConfig(ctx, appCfg, rtOpts)
+	appCfg, listener, err = claimServeRuntimeConfig(ctx, appCfg, rtOpts)
 	if err != nil {
 		cleanup()
 		return replicaServeStartup{}, fmt.Errorf("%s serve: %w", name, err)
 	}
+	rtOpts.Listener = listener
 
 	opts := []server.Option{
 		server.WithVersion(server.VersionInfo{

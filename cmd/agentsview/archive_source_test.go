@@ -136,6 +136,40 @@ func TestDaemonIngestionWakeIncludesAttachedHistory(t *testing.T) {
 	assert.Equal(t, "archived message", messages[0].Content)
 }
 
+func TestForegroundSyncAfterIdlePauseImportsAttachedHistory(t *testing.T) {
+	cfg := testConfigWithClaudeFixture(t)
+	cfg.ArchiveSources = []config.ArchiveSource{archiveSourceCommandFixture(t)}
+	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
+	engine := sync.NewEngine(t.Context(), database, localSyncEngineConfig(cfg))
+	t.Cleanup(engine.Close)
+	engine.SyncAll(t.Context(), nil)
+	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, server.NewIdleTracker(0, func() {}), nil)
+	// As in the daemon, an attached import first flushes the file watcher.
+	attached, err := archivesource.NewManager(t.Context(), cfg, database, engine, ingestion.FlushPending)
+	require.NoError(t, err)
+	t.Cleanup(attached.Close)
+	t.Cleanup(ingestion.Stop)
+	ingestion.attached = attached
+	pauseAfterStartup(t, ingestion)
+
+	runner := ingestion.foregroundSync(withAttachedSources(attached,
+		func(ctx context.Context, progress func(sync.Progress)) (sync.SyncStats, error) {
+			// Changes collected during the pause would contend for the sync
+			// lock with this pass, which a manual sync reports as busy.
+			assert.False(t, ingestion.Active(), "the pause holds through the full pass")
+			return engine.SyncAll(ctx, progress), nil
+		}))
+	_, err = runner(t.Context(), nil)
+
+	require.NoError(t, err, "a manual sync after an idle pause imports attached archives")
+	messages, err := database.GetAllMessages(t.Context(), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa~saved")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "archived message", messages[0].Content)
+	assert.True(t, ingestion.Active(), "the manual sync ends the pause")
+	assert.False(t, ingestion.Pending())
+}
+
 func TestAttachedSourcesDrainAfterRebuildWithDeferredFork(t *testing.T) {
 	source := archiveSourceCommandFixture(t)
 	cfg := testConfigWithClaudeFixture(t)
@@ -316,6 +350,7 @@ func archiveSourceCommandFixture(t *testing.T) config.ArchiveSource {
 	require.NoError(t, err)
 	archive, err := rawarchive.Open(t.Context(), database, seed, nil)
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, archive.Close()) })
 	repo := filepath.Join(t.TempDir(), "repository")
 	report, err := archive.Backup(t.Context(), repo, settings, "test")
 	require.NoError(t, err)

@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -376,8 +375,8 @@ func TestVersionReportsFrictionReadsOnArchive(t *testing.T) {
 }
 
 func TestFrictionRoutesOnMirrorWithoutFrictionTables(t *testing.T) {
-	if runtime.GOOS == "windows" && runtime.GOARCH == "arm64" {
-		t.Skip("duckdb-go-bindings does not ship a windows/arm64 library")
+	if duckdb.RequireDriver() != nil {
+		t.Skip("this build does not link DuckDB; run with -tags duckdb")
 	}
 	te := setup(t)
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")

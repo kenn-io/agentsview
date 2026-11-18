@@ -124,7 +124,8 @@ make install  # installs to ~/.local/bin
 !!! note
 
     CGO is required for the SQLite driver. The `fts5` build tag enables
-    full-text search.
+    full-text search. Add `DUCKDB=1` to `make build` or `make install` to
+    include the [DuckDB mirror](/docs/duckdb/), which release builds leave out.
 
 #### Windows on ARM
 

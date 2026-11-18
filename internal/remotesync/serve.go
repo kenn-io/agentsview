@@ -46,6 +46,7 @@ type ArchivePlan struct {
 	allowed TargetSet
 	targets TargetSet
 	files   []string
+	appends map[string]DeltaAppend
 	delta   bool
 }
 
@@ -67,6 +68,9 @@ func PlanArchive(ctx context.Context, cfg config.Config, request ArchiveRequest)
 		if !ok {
 			return ArchivePlan{}, ErrFileNotAllowed
 		}
+		// Appends apply only to files selected above, so they authorize
+		// nothing on their own.
+		plan.appends = appendBasesByPath(request.DeltaAppends)
 	}
 	return plan, nil
 }
@@ -74,7 +78,7 @@ func PlanArchive(ctx context.Context, cfg config.Config, request ArchiveRequest)
 // Write streams the planned archive to w.
 func (p ArchivePlan) Write(ctx context.Context, w io.Writer) error {
 	if p.delta {
-		return WriteArchiveFiles(ctx, w, p.allowed, p.files)
+		return writeArchiveFiles(ctx, w, p.allowed, p.files, p.appends)
 	}
 	return WriteArchive(ctx, w, p.targets)
 }

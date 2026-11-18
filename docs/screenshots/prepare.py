@@ -143,8 +143,11 @@ def build(prepared, output):
     extract(bundle, source)
     application = output / "application"
     application.mkdir()
+    # Release builds embed `git rev-parse --short HEAD`, which is nine
+    # characters in this repository. A fresh capture checkout would abbreviate
+    # differently, so use a fixed length that matches what users see.
     container(manifest["builder_image"], source, bundle, application, "build", {
-        "AV_VERSION": manifest["version"], "AV_COMMIT": manifest["application_revision"],
+        "AV_VERSION": manifest["version"], "AV_COMMIT": manifest["application_revision"][:9],
         "AV_BUILD_DATE": manifest["build_date"],
         "SOURCE_DATE_EPOCH": str(int(datetime.fromisoformat(manifest["build_date"]).timestamp())),
     }, output / "build.log")

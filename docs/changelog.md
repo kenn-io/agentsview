@@ -37,7 +37,7 @@ The latest release is
   and the machine it originated on, and resumes after a disconnect from its
   last cursor with no gap and no repeat. While a subscriber is connected, the
   daemon syncs changed session files up to once a second instead of once per
-  `sync_interval`. See
+  `background_sync_interval`. See
   [Conversation Export](/docs/conversation-export/#follow-changes-live).
 
 - `agentsview export conversations changes --tool-summaries` lists what each
@@ -60,6 +60,15 @@ The latest release is
   [Muse Personal](/docs/configuration/#muse-personal).
 
 **Improvements**
+
+- The background daemon does far less work while nobody is looking at the
+  archive. It now syncs changed session files at most once every ten minutes
+  instead of every five seconds. An open web UI still updates within seconds, a
+  change stream within about a second, and a CLI or MCP read first syncs
+  whatever changed. After an idle pause, the first request syncs only the
+  files that changed instead of scanning every session directory. Set
+  `background_sync_interval = "0s"` to keep the old pace. See
+  [Config File](/docs/configuration/#config-file).
 
 - Search and cold Trends visits open faster with DuckDB. After upgrading, run
   `agentsview replica duckdb push` on the mirror's owning machine to rebuild
@@ -114,8 +123,31 @@ The latest release is
   an older serve hides image text and Activity usage for sessions a newer
   client rewrote this way.
 
+- ClickHouse pushes upload only the new messages of a session that grew,
+  instead of every message, tool call, and tool result the session has. For a
+  2,000-message session that gained one message, the push uploaded 183 KB
+  instead of 5.0 MB (27x less) and wrote 15 rows instead of 4,015. Pushes
+  therefore take less time, leave the server fewer old row copies to merge, and
+  rarely trigger the compaction that follows a large rewrite. When only the
+  last uploaded message changed, typically because its tool call got its
+  result, the push uploads that message again with the new ones. On a copy of
+  a real archive pushed about once a minute, the pushes uploaded 1.7 MB instead
+  of 4.2 MB (2.5x less) and 78 messages instead of 1,148 (14.7x fewer). A
+  session whose earlier messages changed, such as an edit or a full re-parse,
+  is still rewritten in full. Upgrade `clickhouse serve`
+  and every pushing client together: an older serve fails tool-sequence and
+  file-reference requests for sessions a newer client appended to.
+
 **Bug fixes**
 
+- `agentsview source cursor sync-usage` no longer aborts when Cursor rate-limits
+  it. Cursor allows 60 requests per minute per team, so a sync that needed more
+  than about 60 pages, or one that ran while other tools used the same team's
+  admin keys, could fail with `429 Too Many Requests` and store nothing. The
+  command now spaces requests a second apart and retries a page that gets a 429
+  or a server error, waiting as long as Cursor's `Retry-After` asks or backing
+  off when it does not say, and reports each wait on stderr. See
+  [`source cursor sync-usage`](/docs/commands/#agentsview-source-cursor-sync-usage).
 - A growing Codex session no longer leaves a removed copy of every earlier
   message in the conversation export index each time it is fully re-read. A
   long session could add millions of such rows and many gigabytes to the
@@ -126,6 +158,11 @@ The latest release is
   all at once and shrink the database file. Change-stream and
   conversation-export readers whose position predates a removed record
   restart with a full replay.
+- AgentsView starts again on x86-64 CPUs without AVX2, BMI2, and FMA (older
+  than x86-64-v3), such as Ivy Bridge, Atom, Pentium Silver, and virtual
+  machines that hide those features. 0.47.0 crashed at startup on these CPUs
+  with an illegal instruction, even when the DuckDB mirror was never used,
+  because the DuckDB 2.0 libraries it linked require x86-64-v3.
 - Sessions from worktrees named `<repo>.<branch>` next to the main checkout,
   the default worktrunk layout, now group under the repository's project when
   the checkout is not on disk, such as on a central collector. Before, each
@@ -209,6 +246,13 @@ The latest release is
   the lost records are still missing, but the count shows that the totals may
   be low. Existing sessions pick up the count the next time their source
   changes; the upgrade does not trigger a resync.
+
+**Upgrade notes**
+
+- Release binaries, installers, wheels, and the published container image no
+  longer include the DuckDB mirror. To keep using `replica duckdb` commands,
+  build from source with `make install DUCKDB=1`. See
+  [Build with DuckDB](/docs/duckdb/#build-with-duckdb).
 
 ## 0.47.0
 

@@ -133,19 +133,13 @@ func TestPrepareHTTPSyncsCancelsPeersAndRetainsSpoolCleanup(t *testing.T) {
 			for _, host := range []string{"host-a", "host-b"} {
 				remote := newMirrorTestRemote(t)
 				remote.writeSession(t, "session.jsonl", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), "session")
-				original := remote.ts.Config.Handler
-				remote.ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					if r.URL.Path != "/api/v1/remote-sync/archive" {
-						original.ServeHTTP(w, r)
-						return
-					}
+				remote.serveArchive = func(w http.ResponseWriter, r *http.Request) {
 					_, _ = io.Copy(io.Discard, r.Body)
-					SetProtocolHeader(w.Header())
 					_, _ = w.Write([]byte("partial archive"))
 					w.(http.Flusher).Flush()
 					<-r.Context().Done()
 					archiveStopped <- struct{}{}
-				})
+				}
 				var hs RemoteSync
 				if len(syncs) == 0 {
 					_, hs = newMirrorSync(t, remote, dataDir)
@@ -226,16 +220,11 @@ func TestPrepareHTTPSyncsParentCancellationWaitsForWorkers(t *testing.T) {
 	remote := newMirrorTestRemote(t)
 	remote.writeSession(t, "session.jsonl", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), "session")
 	manifestStarted := make(chan struct{})
-	original := remote.ts.Config.Handler
-	remote.ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/remote-sync/manifest" {
-			original.ServeHTTP(w, r)
-			return
-		}
+	remote.serveManifest = func(_ http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		close(manifestStarted)
 		<-r.Context().Done()
-	})
+	}
 	_, hs := newMirrorSync(t, remote, t.TempDir())
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()

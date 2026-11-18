@@ -146,9 +146,19 @@ func TestFileReferencesLookupFailure(t *testing.T) {
 	const digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
 	require.NoError(t, env.db.InsertMessages(t.Context(), []db.Message{{SessionID: id, Ordinal: 0, Role: "user", Content: "![a](asset://" + digest + ".png) ![b](asset://" + fmt.Sprintf("%064x", 1) + ".png)"}}))
 	t.Setenv("DOCBANK_TEST_KEY", "test-key")
+	// Lookups stop starting once one fails, so the failure waits until the
+	// other lookup has reached Docbank. Otherwise a fast 503 can stop the
+	// worker for the first digest before it sends its request.
+	answered := make(chan struct{})
 	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("sha256") == digest {
 			_, _ = w.Write([]byte(`{"items":[],"total":0}`))
+			close(answered)
+			return
+		}
+		select {
+		case <-answered:
+		case <-r.Context().Done():
 			return
 		}
 		w.WriteHeader(http.StatusServiceUnavailable)

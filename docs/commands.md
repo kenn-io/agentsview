@@ -694,8 +694,9 @@ On startup, the server:
 
 1. Loads or creates `~/.agentsview/sessions.db`
 1. Runs initial sync across all discovered session directories
-1. Starts the file watcher (500ms event batching; watcher sync starts remain at
-    least five seconds apart by default; see [`sync_interval`](/docs/configuration/#config-file))
+1. Starts the file watcher (500ms event batching; while nobody is watching the
+    archive, watcher sync starts remain at least ten minutes apart by default; see
+    [`background_sync_interval`](/docs/configuration/#config-file))
 1. Starts periodic sync (every 15 minutes)
 1. Serves the Svelte SPA and REST API
 
@@ -804,7 +805,8 @@ file-watcher work prevent exit while they run, but do not keep the daemon alive
 forever by themselves.
 
 `sync_idle_after = "10m"` pauses local collection while idle; `"0"` disables the
-pause.
+pause. `background_sync_interval = "10m"` spaces out syncs while nobody is
+watching the archive; `"0s"` syncs at `sync_interval` all the time.
 
 #### CLI daemon behavior
 
@@ -1482,6 +1484,17 @@ agentsview source cursor sync-usage [flags]
 | `--email`     | config        | Filter by Cursor team member email   |
 | `--user-id`   | config        | Filter by Cursor team member user ID |
 
+Cursor allows 60 requests per minute to this API for each team, shared by every
+tool that uses the team's admin keys. The command starts requests, retries
+included, at least one second apart. When Cursor answers with
+`429 Too Many Requests` or a server error, the command waits and requests the
+same page again, up to 5 attempts per page. It waits as long as Cursor's
+`Retry-After` header asks, up to 60 seconds, or backs off from about 2 seconds
+when the header is absent. Each wait is reported on stderr. Any other error,
+such as a rejected key, stops the run at once. Nothing is stored unless every
+page is fetched, so a larger `--page-size`, which needs fewer requests, makes a
+long sync less likely to fail.
+
 **Examples:**
 
 ```bash
@@ -1755,8 +1768,9 @@ ______________________________________________________________________
 ### `agentsview replica duckdb`
 
 Mirror the local SQLite archive into DuckDB and serve from it, locally or over
-the Quack remote protocol. See [DuckDB Mirror](/docs/duckdb/) for full
-documentation.
+the Quack remote protocol. Release builds leave DuckDB out; build from source
+with `make install DUCKDB=1` to use these commands. See
+[DuckDB Mirror](/docs/duckdb/) for full documentation.
 
 ```bash
 agentsview replica duckdb push          # mirror SQLite into sessions.duckdb

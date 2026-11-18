@@ -20,9 +20,11 @@ const fingerprintProgressStride = 200
 // fingerprint, archive, and dashboard facts already match. content covers
 // everything outside the session row and is stored as
 // agentsview_content_fingerprint; a push that finds only the content
-// unchanged rewrites just the session row.
+// unchanged rewrites just the session row. messages is how many message
+// rows a push stores for the session.
 type sessionFingerprint struct {
 	full, content string
+	messages      int
 }
 
 // sessionFingerprints hashes each candidate's local content: the mirrored
@@ -108,7 +110,7 @@ func (s *Sync) snapshotFingerprint(
 	if err != nil {
 		return sessionFingerprint{}, err
 	}
-	return sessionFingerprint{full: full, content: contentHash}, nil
+	return sessionFingerprint{full: full, content: contentHash, messages: len(snapshot.Messages)}, nil
 }
 
 func hashJSON(sessionID string, value any) (string, error) {
@@ -196,8 +198,13 @@ var derivedSessionColumns = map[string]string{
 	// A push writes both with the content; they describe it.
 	"agentsview_content_fingerprint": "the content fingerprint itself",
 	"content_version":                "push bookkeeping",
-	"source_archive_id":              "push bookkeeping",
-	"stored_message_count":           "derived from the messages the fingerprint hashes",
+	"rows_version":                   "push bookkeeping",
+	// It hashes the rendered dependent rows, which the content
+	// fingerprint already covers.
+	"agentsview_message_rows_fingerprint":         "push bookkeeping",
+	"agentsview_leading_message_rows_fingerprint": "push bookkeeping",
+	"source_archive_id":                           "push bookkeeping",
+	"stored_message_count":                        "derived from the messages the fingerprint hashes",
 	// A push rewrites the session rows of sessions below the current
 	// dashboardFactsVersion; otherwise these change only with the messages.
 	"dashboard_facts_version":       "push bookkeeping",

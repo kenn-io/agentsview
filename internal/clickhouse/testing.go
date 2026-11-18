@@ -232,6 +232,25 @@ func appendMessage(t *testing.T, local *db.DB, sessionID, content, ts string) {
 	require.NoError(t, err)
 }
 
+// growSession adds one assistant message after a session's stored messages
+// the way an incremental sync does, so the earlier rows keep their IDs.
+func growSession(t *testing.T, local *db.DB, sessionID, content, ts string) {
+	t.Helper()
+	ctx := t.Context()
+	sess, err := local.GetSessionFull(ctx, sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	sess.MessageCount++
+	sess.EndedAt = &ts
+	sess.LocalModifiedAt = &ts
+	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+		Session:     *sess,
+		Messages:    []db.Message{fixtureMessage(sessionID, sess.MessageCount-1, "assistant", content, ts)},
+		DataVersion: 1,
+	}})
+	require.NoError(t, err)
+}
+
 func newPushedStore(t *testing.T) (*Store, *Sync, *db.DB) {
 	t.Helper()
 	ctx := t.Context()

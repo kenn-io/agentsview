@@ -450,6 +450,7 @@ func TestArchiveRestorePreservesCodexSharedPath(t *testing.T) {
 	require.NoError(t, err)
 	archive, err = rawarchive.Open(ctx, database, data, nil)
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, archive.Close()) })
 	dbtest.WriteTestFile(t, filepath.Join(data, "telemetry-install-id"), []byte("019eb791cf7d75c184399ed74c122e04"))
 	recovery, err := archive.Backup(ctx, backup, rawarchive.RecoverySettings{LocalMachineName: "original"}, "test")
 	require.NoError(t, err)
