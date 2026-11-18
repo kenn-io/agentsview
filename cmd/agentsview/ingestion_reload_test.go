@@ -484,3 +484,93 @@ func TestArchiveWriteRoutesHandleIdleCollection(t *testing.T) {
 		})
 	}
 }
+
+// agentsview sync asks a running daemon for the changes its watchers
+// collected. Until startup opens their delivery the watchers cannot vouch for
+// the archive, so the daemon runs a discovery pass instead.
+func TestDaemonSyncChangesOnly(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	root := filepath.Join(t.TempDir(), "gemini")
+	writeReloadGeminiSession(t, root, "first")
+	remote := httptest.NewServer(server.New(config.Config{
+		Host: "127.0.0.1", DataDir: t.TempDir(), AuthToken: "remote-token",
+	}, dbtest.OpenTestDB(t), nil).Handler())
+	t.Cleanup(remote.Close)
+	cfg := config.Config{
+		Host:      "127.0.0.1",
+		AgentDirs: map[parser.AgentType][]string{parser.AgentGemini: {root}},
+		// The collected changes wait for this interval unless a sync asks.
+		SyncInterval: time.Hour, BackgroundSyncInterval: time.Hour,
+		RemoteHosts: []config.RemoteHost{
+			{Host: "remote", Transport: config.RemoteTransportHTTP, URL: remote.URL, Token: "remote-token"},
+			// A name that cannot resolve reads as offline on every platform.
+			{Host: "offline", Transport: config.RemoteTransportHTTP, URL: "http://offline.invalid", Token: "remote-token"},
+		},
+	}
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
+		AgentDirs: cfg.AgentDirs, Machine: "test-machine",
+	})
+	t.Cleanup(engine.Close)
+	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
+	t.Cleanup(ingestion.Stop)
+	tr := transport{URL: serveIngestionArchive(t, cfg, database, engine, ingestion).URL}
+
+	stats, err := runDaemonSync(t.Context(), tr, "", false, true, nil)
+	require.NoError(t, err)
+	assert.False(t, stats.ChangesOnly, "before startup the daemon runs a discovery pass")
+	assert.True(t, sessionImported(t, database, "gemini:first"))
+
+	ingestion.OpenWatcherDispatch()
+	writeReloadGeminiSession(t, root, "second")
+	ingestion.QueueWatchRetry(agentsync.WatchBatch{Paths: []string{reloadGeminiSessionPath(root, "second")}})
+	stats, err = runDaemonSync(t.Context(), tr, "", false, true, nil)
+	require.NoError(t, err)
+	assert.True(t, stats.ChangesOnly)
+	assert.True(t, sessionImported(t, database, "gemini:second"))
+
+	writeReloadGeminiSession(t, root, "third")
+	ingestion.QueueWatchRetry(agentsync.WatchBatch{Paths: []string{reloadGeminiSessionPath(root, "third")}})
+	failures, err := runDaemonRemoteSync(t.Context(), tr, "", cfg.RemoteHosts, false, true, true, nil)
+	require.NoError(t, err)
+	assert.Empty(t, failures, "an offline host is skipped as it is after a discovery pass")
+	assert.True(t, sessionImported(t, database, "gemini:third"))
+}
+
+// A replacement watcher sees only later changes, so after Settings enables a
+// provider its existing history needs a full pass before a sync can apply
+// collected changes alone.
+func TestDaemonSyncChangesOnlyAfterSettingsChange(t *testing.T) {
+	database := dbtest.OpenTestDB(t)
+	root := filepath.Join(t.TempDir(), "gemini")
+	writeReloadGeminiSession(t, root, "existing")
+	startup := config.Config{
+		Host:           "127.0.0.1",
+		AgentDirs:      map[parser.AgentType][]string{parser.AgentGemini: {root}},
+		DisabledAgents: []parser.AgentType{parser.AgentGemini},
+		SyncInterval:   time.Hour, BackgroundSyncInterval: time.Hour,
+	}
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
+		AgentDirs: startup.AgentDirs, DisabledAgents: startup.DisabledAgents, Machine: "test-machine",
+	})
+	t.Cleanup(engine.Close)
+	engine.SyncAll(t.Context(), nil)
+	enabled := startup
+	enabled.DisabledAgents = nil
+	ingestion := newDaemonIngestion(t.Context(), startup, engine, database, nil,
+		func() (config.Config, error) { return enabled, nil })
+	t.Cleanup(ingestion.Stop)
+	ingestion.OpenWatcherDispatch()
+	tr := transport{URL: serveIngestionArchive(t, startup, database, engine, ingestion).URL}
+	_, err := ingestion.Reload(t.Context())
+	require.NoError(t, err)
+	ingestion.applying.Wait()
+
+	stats, err := runDaemonSync(t.Context(), tr, "", false, true, nil)
+	require.NoError(t, err)
+	assert.False(t, stats.ChangesOnly, "new roots need a full pass")
+	assert.True(t, sessionImported(t, database, "gemini:existing"))
+
+	stats, err = runDaemonSync(t.Context(), tr, "", false, true, nil)
+	require.NoError(t, err)
+	assert.True(t, stats.ChangesOnly, "the full pass covered the new roots")
+}

@@ -2080,6 +2080,7 @@ func TestRunDaemonSyncTrimsBaseURLTrailingSlash(t *testing.T) {
 		transport{URL: ts.URL + "/"},
 		"",
 		false,
+		false,
 		nil,
 	)
 	require.NoError(t, err)
@@ -2129,7 +2130,7 @@ func TestRunDaemonSyncWaitsForBusyEngine(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 			var waiting bool
-			stats, err := runDaemonSync(ctx, transport{URL: ts.URL}, "", false,
+			stats, err := runDaemonSync(ctx, transport{URL: ts.URL}, "", false, false,
 				func(p agentsync.Progress) {
 					waiting = true
 					assert.Contains(t, p.Detail, "Waiting")
@@ -2180,7 +2181,7 @@ func TestRunDaemonSyncDetectsResyncRequired(t *testing.T) {
 			})
 
 			_, err := runDaemonSync(
-				t.Context(), transport{URL: ts.URL}, "", tt.full, nil,
+				t.Context(), transport{URL: ts.URL}, "", tt.full, false, nil,
 			)
 			require.Error(t, err)
 			assert.Equal(t, tt.wantResync,
@@ -2329,6 +2330,7 @@ func TestRunDaemonRemoteSyncTrimsBaseURLTrailingSlash(t *testing.T) {
 		[]config.RemoteHost{{Host: "devbox"}},
 		false,
 		false,
+		false,
 		nil,
 	)
 	require.NoError(t, err)
@@ -2361,6 +2363,7 @@ func TestRunDaemonRemoteSyncReportsProgressEvents(t *testing.T) {
 		[]config.RemoteHost{{Host: "devbox"}},
 		false,
 		true,
+		false,
 		func(p agentsync.Progress) {
 			progress = append(progress, p)
 		},
@@ -2388,7 +2391,7 @@ func TestRunDaemonRemoteSyncJSONReturnsTopLevelErrorWithEarlierFailures(t *testi
 	failures, err := runDaemonRemoteSync(
 		t.Context(), transport{URL: ts.URL}, "",
 		[]config.RemoteHost{{Host: "alpha"}, {Host: "beta"}},
-		false, false, nil,
+		false, false, false, nil,
 	)
 
 	require.EqualError(t, err, blocked)
@@ -2412,7 +2415,7 @@ func TestRunDaemonRemoteSyncJSONRejectsAbortedUnifiedRebuild(t *testing.T) {
 
 	failures, err := runDaemonRemoteSync(
 		t.Context(), transport{URL: ts.URL}, "",
-		[]config.RemoteHost{{Host: "alpha"}}, true, true, nil,
+		[]config.RemoteHost{{Host: "alpha"}}, true, true, false, nil,
 	)
 
 	require.ErrorIs(t, err, agentsync.ErrUnifiedRebuildAborted)
@@ -2436,7 +2439,7 @@ func TestRunDaemonRemoteSyncSSEReturnsTopLevelErrorWithEarlierFailures(t *testin
 	failures, err := runDaemonRemoteSync(
 		t.Context(), transport{URL: ts.URL}, "",
 		[]config.RemoteHost{{Host: "alpha"}, {Host: "beta"}},
-		false, false, nil,
+		false, false, false, nil,
 	)
 
 	require.EqualError(t, err, blocked)
@@ -2461,7 +2464,7 @@ func TestRunDaemonRemoteSyncSSERejectsAbortedUnifiedRebuild(t *testing.T) {
 
 	failures, err := runDaemonRemoteSync(
 		t.Context(), transport{URL: ts.URL}, "",
-		[]config.RemoteHost{{Host: "alpha"}}, true, true, nil,
+		[]config.RemoteHost{{Host: "alpha"}}, true, true, false, nil,
 	)
 
 	require.ErrorIs(t, err, agentsync.ErrUnifiedRebuildAborted)

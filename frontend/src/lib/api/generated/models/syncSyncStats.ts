@@ -7,6 +7,7 @@ import type { SyncRebuildPhaseStats } from "./syncRebuildPhaseStats.ts";
 export interface SyncSyncStats {
   aborted?: boolean;
   anomalies?: SyncAnomalyStats;
+  changes_only?: boolean;
   cwd_updated?: number;
   failed: number;
   links_pending?: boolean;

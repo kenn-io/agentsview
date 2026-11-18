@@ -5088,6 +5088,7 @@ func (c *Client) PostAPIV1SyncStreamWithResponse(ctx context.Context, options *P
 	var err error
 
 	queryEncoding := map[string]runtime.QueryEncoding{
+		"changes_only": {Style: "form", Explode: &[]bool{false}[0]},
 		"startup_only": {Style: "form", Explode: &[]bool{false}[0]},
 		"wait":         {Style: "form", Explode: &[]bool{false}[0]},
 	}
@@ -24226,6 +24227,9 @@ type PostAPIV1SyncQuery struct {
 
 	// StartupOnly Complete deferred startup ingestion without repeating a completed startup sync
 	StartupOnly *bool `json:"startup_only,omitempty"`
+
+	// ChangesOnly Sync only the changes the daemon's file watchers collected. The daemon runs a full discovery pass instead when its watchers cannot cover the archive, such as before its startup sync.
+	ChangesOnly *bool `json:"changes_only,omitempty"`
 }
 
 type GetAPIV1UsagePairwiseComparisonQuery struct {
@@ -30655,9 +30659,10 @@ func (r RemoteSyncFailure) Validate() error {
 }
 
 type RemoteSyncRequest struct {
-	Full         bool               `json:"full"`
-	Hosts        []ConfigRemoteHost `json:"hosts" validate:"required"`
-	IncludeLocal bool               `json:"include_local"`
+	Full             bool               `json:"full"`
+	Hosts            []ConfigRemoteHost `json:"hosts" validate:"required"`
+	IncludeLocal     bool               `json:"include_local"`
+	LocalChangesOnly *bool              `json:"local_changes_only,omitempty"`
 }
 
 func (r RemoteSyncRequest) Validate() error {
@@ -31489,6 +31494,7 @@ func (s SyncStatusResponse) Validate() error {
 type SyncSyncStats struct {
 	Aborted        *bool                   `json:"aborted,omitempty"`
 	Anomalies      *SyncAnomalyStats       `json:"anomalies,omitempty"`
+	ChangesOnly    *bool                   `json:"changes_only,omitempty"`
 	CwdUpdated     *int64                  `json:"cwd_updated,omitempty"`
 	Failed         int64                   `json:"failed"`
 	LinksPending   *bool                   `json:"links_pending,omitempty"`
