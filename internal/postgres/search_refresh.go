@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -60,9 +61,13 @@ func (s *Store) keepSearchKeys(f db.SearchFilter) {
 		return
 	}
 	slot := searchKeySlot(f)
-	if entries, ok := s.runtimeState().searchKept.Get(slot, "search"); ok {
-		s.trendsDisk.Keep("search-keys|"+slot, "1", func() ([]byte, error) { return json.Marshal(entries[0]) })
-	}
+	s.trendsDisk.Keep("search-keys|"+slot, "1", func() ([]byte, error) {
+		entries, ok := s.runtimeState().searchKept.Get(slot, "search")
+		if !ok {
+			return nil, errors.New("search keys absent")
+		}
+		return json.Marshal(entries[0])
+	})
 }
 
 func (s *Store) searchKept(ctx context.Context, view *Store, f db.SearchFilter) (db.SearchPage, error) {
