@@ -262,3 +262,29 @@ func TestSearchContentWordPagesWithFilteredTiers(t *testing.T) {
 		assert.Equal(t, tc.want, wordHits(page), "cursor %d", tc.cursor)
 	}
 }
+
+func TestSearchContentWordPagesSkipFilteredMessages(t *testing.T) {
+	d := testDB(t)
+	requireFTS(t, d)
+	for i, m := range []Message{
+		{SessionID: "system", Role: "user", Content: "alpha beta gamma", IsSystem: true},
+		{SessionID: "two", Role: "assistant", Content: "alpha beta"},
+		{SessionID: "one", Role: "assistant", Content: "gamma"},
+	} {
+		ended := "2026-05-20T12:00:" + itoa(59-i) + "Z"
+		insertSession(t, d, m.SessionID, "proj", func(s *Session) {
+			s.UserMessageCount = 2
+			s.EndedAt = &ended
+		})
+		m.Timestamp = ended
+		require.NoError(t, d.ReplaceSessionMessages(t.Context(), m.SessionID, []Message{m}))
+	}
+	for _, mode := range []string{"substring", "fts", "hybrid"} {
+		page, err := d.SearchContent(t.Context(), ContentSearchFilter{
+			Pattern: "gamma beta alpha", Mode: mode, Sources: []string{"messages"},
+			ExcludeSystem: true, KeywordOnly: mode == "hybrid", Limit: 2,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, []wordHit{{"two", "message", 2}, {"one", "message", 1}}, wordHits(page), mode)
+	}
+}

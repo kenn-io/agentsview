@@ -1815,12 +1815,14 @@ func (db *DB) hybridWordHits(
 	}
 	defer func() { _ = snapshot.Close() }()
 	scope, args := semanticSessionScopeSubquery(f)
-	where := "m.role IN ('user','assistant') AND m.is_system = 0 AND " +
-		SystemPrefixSQL("m.content", "m.role") + " AND m." + scope
+	filter := contentWordFilter{
+		scope: scope, scopeArgs: args,
+		where: "m.role IN ('user','assistant') AND m.is_system = 0 AND " + SystemPrefixSQL("m.content", "m.role"),
+	}
 	// Keep the fragment unredacted until enrichment locates it in the full
 	// message. The final snippet is redacted against that full message.
 	f.RevealSecrets = true
-	matches, err := selectContentWordPage(ctx, snapshot.tx, f, q, where, args, 0, limit)
+	matches, err := selectContentWordPage(ctx, snapshot.tx, f, q, filter, 0, limit)
 	if err != nil {
 		return nil, err
 	}
