@@ -324,6 +324,9 @@ func (s *Store) Search(
 		page, _, err := kept.LoadJSON(&s.trendsDisk, "search|"+f.Slot(), version, nil, func() (db.SearchPage, error) { return s.searchKept(ctx, view, f) })
 		return page, err
 	})
+	if handled && err == nil {
+		s.keepSearchKeys(f)
+	}
 	if handled || err != nil {
 		return page, err
 	}

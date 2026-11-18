@@ -50,13 +50,26 @@ func pgSearchEntryBytes(e pgSearchEntry) int64 {
 	return size
 }
 
+func searchKeySlot(f db.SearchFilter) string {
+	f.Limit, f.Cursor = 0, 0
+	return f.Slot()
+}
+
+func (s *Store) keepSearchKeys(f db.SearchFilter) {
+	if !s.trendsDisk.Enabled() {
+		return
+	}
+	slot := searchKeySlot(f)
+	if entries, ok := s.runtimeState().searchKept.Get(slot, "search"); ok {
+		s.trendsDisk.Keep("search-keys|"+slot, "1", func() ([]byte, error) { return json.Marshal(entries[0]) })
+	}
+}
+
 func (s *Store) searchKept(ctx context.Context, view *Store, f db.SearchFilter) (db.SearchPage, error) {
 	if db.StripFTSQuotes(db.PrepareFTSQuery(f.Query)) == "" {
 		return db.SearchPage{}, nil
 	}
-	slotFilter := f
-	slotFilter.Limit, slotFilter.Cursor = 0, 0
-	slot := slotFilter.Slot()
+	slot := searchKeySlot(f)
 	memo := &s.runtimeState().searchKept
 	entries, ok := memo.Get(slot, "search")
 	var entry pgSearchEntry

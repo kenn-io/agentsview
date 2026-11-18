@@ -3,9 +3,13 @@
 package postgres
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json/v2"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -534,4 +538,71 @@ func TestSearchKeptRestartInvalidCache(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSearchKeptRestartAfterKeyEviction(t *testing.T) {
+	cacheDir := t.TempDir()
+	t.Setenv("CACHE_DIRECTORY", cacheDir)
+	local, syncer, first := newUsageJournalFixture(t)
+	ctx := t.Context()
+	url, cache := testPGURL(t), t.TempDir()
+	require.NoError(t, first.ConfigureUsageCache(ctx, cache, url, syncer.schema))
+	for _, id := range []string{"one", "two", "three"} {
+		require.NoError(t, local.UpsertSession(ctx, db.Session{ID: id, Project: "project", Machine: "device", Agent: "claude", MessageCount: 1}))
+		require.NoError(t, local.ReplaceSessionMessages(ctx, id, []db.Message{{SessionID: id, Role: "user", Content: "needle " + id}}))
+	}
+	pgKeptPush(t, syncer, false)
+	f := db.SearchFilter{Query: "needle", Limit: 2}
+	var retained atomic.Int32
+	first.runtimeState().search.Size = func(db.SearchPage) int64 { retained.Add(1); return 1 }
+	page, err := first.Search(ctx, f)
+	require.NoError(t, err)
+	require.Len(t, page.Results, 2)
+	slot := f
+	slot.Limit, slot.Cursor = 0, 0
+	selection := "search-keys|" + slot.Slot()
+	payload, ok := first.trendsDisk.Get(selection, "1")
+	require.True(t, ok)
+	var keyFile string
+	require.NoError(t, filepath.WalkDir(cacheDir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err == nil && bytes.HasSuffix(data, payload) {
+			require.Empty(t, keyFile)
+			keyFile = path
+		}
+		return err
+	}))
+	require.NotEmpty(t, keyFile)
+	require.NoError(t, os.Remove(keyFile))
+	_, ok = first.trendsDisk.Get(selection, "1")
+	require.False(t, ok)
+	got, err := first.Search(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, page, got)
+	require.EqualValues(t, 1, retained.Load())
+	_, ok = first.trendsDisk.Get(selection, "1")
+	require.True(t, ok)
+
+	config, err := pgx.ParseConfig(url)
+	require.NoError(t, err)
+	config.RuntimeParams["search_path"] = syncer.schema
+	config.RuntimeParams["TimeZone"] = "UTC"
+	trace := &searchQueryTracer{}
+	config.Tracer = trace
+	pool := stdlib.OpenDB(*config)
+	s := &Store{pg: pool, ownedDB: pool}
+	t.Cleanup(func() { require.NoError(t, s.Close()) })
+	require.NoError(t, s.ConfigureUsageCache(ctx, cache, url, syncer.schema))
+	require.NoError(t, local.ReplaceSessionMessages(ctx, "two", []db.Message{{SessionID: "two", Role: "user", Content: "needle changed"}}))
+	pgKeptPush(t, syncer, false)
+	got, err = s.Search(ctx, f)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, trace.count.Load())
+	require.EqualValues(t, 1, trace.restricted.Load())
+	direct, err := s.search(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, direct, got)
 }
