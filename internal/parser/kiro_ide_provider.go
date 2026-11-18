@@ -139,7 +139,7 @@ func kiroIDESessionIDFromPath(root, path string) string {
 }
 
 func kiroIDEProviderCapabilities() Capabilities {
-	return Capabilities{
+	return withPollMetadataScan(Capabilities{
 		Source: jsonlFileProviderSourceCapabilities(),
 		Content: ContentCapabilities{
 			FirstMessage: CapabilitySupported,
@@ -147,5 +147,5 @@ func kiroIDEProviderCapabilities() Capabilities {
 			ToolCalls:    CapabilitySupported,
 			Model:        CapabilitySupported,
 		},
-	}
+	})
 }

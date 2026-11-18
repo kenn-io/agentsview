@@ -102,8 +102,9 @@ The latest release is
   `background_sync_interval = "0s"` to keep the old pace. See
   [Config File](/docs/configuration/#config-file).
 
-- Claude and Codex folders that fall back to polling, because native file
-  watching ran out of watch slots or failed, cost far less CPU. Each fallback
+- Session folders that fall back to polling, because native file watching ran
+  out of watch slots or failed, cost far less CPU for Claude Code, Codex, and 20
+  providers that keep each session in its own file. Each fallback
   pass now syncs only the session files whose size, modification time, or change
   time moved, instead of re-reading every source under the root. A pass still
   reconciles the whole root when a file disappeared or when it cannot compare

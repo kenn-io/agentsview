@@ -543,3 +543,23 @@ func TestPollProviderRootsGroupedReconcilesLinkedSessionFiles(t *testing.T) {
 	assert.EqualValues(t, 2, f.reconciled.Load(),
 		"a linked session file changes without changing the link, so the root cannot be compared")
 }
+
+// A provider that declares PollMetadataScan must give the scan a plan it can
+// compare. Otherwise every pass silently falls back to reconciliation.
+func TestPollMetadataScanProvidersHaveComparablePlans(t *testing.T) {
+	for _, factory := range parser.ProviderFactories() {
+		if factory.Capabilities().Source.PollMetadataScan != parser.CapabilitySupported {
+			continue
+		}
+		agent := factory.Definition().Type
+		t.Run(string(agent), func(t *testing.T) {
+			root := t.TempDir()
+			f := newPollScanFixture(t, map[parser.AgentType][]string{agent: {root}})
+
+			plan, ok := f.engine.pollScanPlan(t.Context(), agent, root)
+
+			require.True(t, ok, "the provider's watch plan cannot be compared")
+			assert.NotEmpty(t, plan)
+		})
+	}
+}
