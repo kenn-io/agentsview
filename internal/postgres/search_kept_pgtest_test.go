@@ -60,6 +60,21 @@ func (tr *searchQueryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, d
 }
 func (*searchQueryTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
+func openTracedSearchStore(t *testing.T, url, schema, cache string) (*Store, *searchQueryTracer) {
+	t.Helper()
+	config, err := pgx.ParseConfig(url)
+	require.NoError(t, err)
+	config.RuntimeParams["search_path"] = schema
+	config.RuntimeParams["TimeZone"] = "UTC"
+	trace := &searchQueryTracer{}
+	config.Tracer = trace
+	pool := stdlib.OpenDB(*config)
+	s := &Store{pg: pool, ownedDB: pool}
+	t.Cleanup(func() { require.NoError(t, s.Close()) })
+	require.NoError(t, s.ConfigureUsageCache(t.Context(), cache, url, schema))
+	return s, trace
+}
+
 func TestSearchKeptRestart(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	local, syncer, first := newUsageJournalFixture(t)
@@ -438,20 +453,7 @@ func TestSearchKeptRestartRefreshPages(t *testing.T) {
 		_, err := first.Search(ctx, db.SearchFilter{Query: "needle", Limit: 2, Sort: sort})
 		require.NoError(t, err)
 	}
-	open := func() (*Store, *searchQueryTracer) {
-		config, err := pgx.ParseConfig(url)
-		require.NoError(t, err)
-		config.RuntimeParams["search_path"] = syncer.schema
-		config.RuntimeParams["TimeZone"] = "UTC"
-		trace := &searchQueryTracer{}
-		config.Tracer = trace
-		pool := stdlib.OpenDB(*config)
-		s := &Store{pg: pool, ownedDB: pool}
-		t.Cleanup(func() { require.NoError(t, s.Close()) })
-		require.NoError(t, s.ConfigureUsageCache(ctx, cache, url, syncer.schema))
-		return s, trace
-	}
-	s, trace := open()
+	s, trace := openTracedSearchStore(t, url, syncer.schema, cache)
 	require.NoError(t, local.ReplaceSessionMessages(ctx, "two", []db.Message{{SessionID: "two", Role: "user", Content: "needle changed"}}))
 	pgKeptPush(t, syncer, false)
 	check := func(restricted bool) {
@@ -586,20 +588,7 @@ func TestSearchKeptRestartAfterKeyEviction(t *testing.T) {
 	_, ok = first.trendsDisk.Get(selection, "1")
 	require.True(t, ok)
 
-	open := func() (*Store, *searchQueryTracer) {
-		config, err := pgx.ParseConfig(url)
-		require.NoError(t, err)
-		config.RuntimeParams["search_path"] = syncer.schema
-		config.RuntimeParams["TimeZone"] = "UTC"
-		trace := &searchQueryTracer{}
-		config.Tracer = trace
-		pool := stdlib.OpenDB(*config)
-		s := &Store{pg: pool, ownedDB: pool}
-		t.Cleanup(func() { require.NoError(t, s.Close()) })
-		require.NoError(t, s.ConfigureUsageCache(ctx, cache, url, syncer.schema))
-		return s, trace
-	}
-	s, trace := open()
+	s, trace := openTracedSearchStore(t, url, syncer.schema, cache)
 	old := time.Now().Add(-29 * 24 * time.Hour)
 	require.NoError(t, os.Chtimes(keyFile, old, old))
 	for range 2 {
@@ -609,7 +598,7 @@ func TestSearchKeptRestartAfterKeyEviction(t *testing.T) {
 	}
 	require.Zero(t, trace.count.Load())
 	s.trendsDisk.Sweep(time.Now().Add(48 * time.Hour))
-	s, trace = open()
+	s, trace = openTracedSearchStore(t, url, syncer.schema, cache)
 	require.NoError(t, local.ReplaceSessionMessages(ctx, "two", []db.Message{{SessionID: "two", Role: "user", Content: "needle changed"}}))
 	pgKeptPush(t, syncer, false)
 	got, err = s.Search(ctx, f)
