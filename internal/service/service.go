@@ -106,6 +106,8 @@ type SessionService interface {
 	ToolAnalytics(ctx context.Context, req AnalyticsRequest) (*db.ToolsAnalyticsResponse, error)
 	SignalAnalytics(ctx context.Context, req AnalyticsRequest) (*db.SignalsAnalyticsResponse, error)
 	SignalSessions(ctx context.Context, req SignalSessionsRequest) (*db.SignalSessionsResponse, error)
+	// TermTrends returns legacy term-frequency counts over time.
+	TermTrends(ctx context.Context, req TermTrendsRequest) (*db.TrendsTermsResponse, error)
 	ListRecallEntries(ctx context.Context, f RecallFilter) (*RecallList, error)
 	GetRecallEntry(ctx context.Context, id string) (*db.RecallEntry, error)
 	QueryRecallEntries(ctx context.Context, req RecallQuery) (*RecallQueryResult, error)

@@ -58,7 +58,6 @@ const cases: Array<{ name: string; path: string; read: (url: URL) => boolean }> 
     read: (url) => url.pathname === "/api/v1/activity/report",
   },
   { name: "usage", path: "/usage", read: (url) => url.pathname === "/api/v1/usage/summary" },
-  { name: "trends", path: "/trends", read: (url) => url.pathname === "/api/v1/trends/terms" },
   {
     name: "quality",
     path: "/quality",

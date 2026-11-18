@@ -1297,7 +1297,7 @@ func TestServer_EndToEnd(t *testing.T) {
 		ToolSearchSessions, ToolQueryRecall, ToolListRecall, ToolListSessions, ToolGetSessionOverview,
 		ToolGetMessages, ToolGetCompactionSummaries, ToolGetMemoryStatus, ToolSearchContent, ToolGetUsageSummary, ToolGetSessionUsage,
 		ToolGetToolCalls, ToolGetRecentEdits, ToolGetChildSessions, ToolCompareUsage,
-		ToolGetActivityReport, ToolGetToolUsage, ToolGetQualitySignals, ToolSearchDocs,
+		ToolGetActivityReport, ToolGetToolUsage, ToolGetQualitySignals, ToolGetTermTrends, ToolSearchDocs,
 		ToolGetFrictionDigest, ToolListFrictionPatterns,
 	}, names)
 

@@ -71,7 +71,6 @@
   import EmptyArchivePanel from "./lib/components/content/EmptyArchivePanel.svelte";
   import UsagePage from "./lib/components/usage/UsagePage.svelte";
   import ActivityPage from "./lib/components/activity/ActivityPage.svelte";
-  import TrendsPage from "./lib/components/trends/TrendsPage.svelte";
   import RecallPage from "./lib/components/recall/RecallPage.svelte";
   import QualityPage from "./lib/components/quality/QualityPage.svelte";
   import FrictionPage from "./lib/components/friction/FrictionPage.svelte";
@@ -652,7 +651,7 @@
     let page: string | null = null;
     if (route === "usage" || route === "token-usage") {
       page = "usage";
-    } else if (route === "activity" || route === "trends" || route === "quality") {
+    } else if (route === "activity" || route === "quality") {
       page = route;
     }
     untrack(() => {
@@ -901,10 +900,6 @@
 {:else if router.route === "activity"}
   <div class="page-scroll">
     <ActivityPage />
-  </div>
-{:else if router.route === "trends"}
-  <div class="page-scroll">
-    <TrendsPage />
   </div>
 {:else if router.route === "recall"}
   <div class="page-scroll">

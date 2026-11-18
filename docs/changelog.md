@@ -293,6 +293,9 @@ The latest release is
 
 **Upgrade notes**
 
+- The **Trends** page is no longer in the web UI, and old `/trends` links open
+  Sessions. Agent harnesses that read term counts can call the new
+  `get_term_trends` MCP tool, and `GET /api/v1/trends/terms` still works.
 - Chrome Sync users must rerun `agentsview source chrome setup` and reload the
   extension at `chrome://extensions` once. The extension and AgentsView now
   speak a new version of their protocol, and the extension asks for access to
