@@ -76,3 +76,41 @@ func TestRawProjectionRolloutBackfillsPromptLinks(t *testing.T) {
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, after.SessionID).Scan(&links))
 	assert.Equal(t, []db.PRLink{link, {URL: "https://github.com/o/r/pull/2", Host: "github.com", Repository: "o/r", Number: 2}}, db.DecodePRLinks(links))
 }
+
+func TestRawProjectionRolloutBackfillsSelectedLongerCapture(t *testing.T) {
+	f := newProjectionFixture(t)
+	short := projectionOutcome("start")
+	short.Outcome.Results[0].Result.Messages = short.Outcome.Results[0].Result.Messages[:1]
+	a, _ := f.accept(t, "device-a", "short", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, short))
+	long := projectionOutcome("start")
+	long.Outcome.Results[0].Result.Messages = append(long.Outcome.Results[0].Result.Messages,
+		parser.ParsedMessage{Ordinal: 2, Role: parser.RoleUser, Content: "Review https://github.com/o/r/pull/2"})
+	b, accepted := f.accept(t, "device-b", "long", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, b), b, long))
+	f.tombstone(t, b, "departed", accepted.Receipt)
+	before, err := f.sink.Resolve(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET pr_links='[]' WHERE id=$1`, before.SessionID)
+	require.NoError(t, err)
+	var corpusBefore int64
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT corpus_revision FROM raw_corpus_state`).Scan(&corpusBefore))
+	_, err = f.sink.SelectSourceGeneration(t.Context(), a, "parser-2")
+	require.NoError(t, err)
+	leases, err := f.jobs.ClaimRawParseJobs(t.Context(), "upgrade-worker", 1, time.Minute)
+	require.NoError(t, err)
+	require.Len(t, leases, 1)
+	require.NoError(t, f.sink.Project(t.Context(), leases[0], a, short))
+	after, err := f.sink.Resolve(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	assert.Equal(t, before.SessionID, after.SessionID)
+	pr, err := db.ParsePRFilter("o/r#2")
+	require.NoError(t, err)
+	page, err := f.hosted(t).ListSessions(t.Context(), db.SessionFilter{PR: pr, Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, page.Sessions, 1)
+	assert.Equal(t, "codex:portable", page.Sessions[0].ID)
+	var corpusAfter int64
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT corpus_revision FROM raw_corpus_state`).Scan(&corpusAfter))
+	assert.Greater(t, corpusAfter, corpusBefore)
+}

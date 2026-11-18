@@ -35,6 +35,47 @@ func rawGroupHasStaleFriction(
 	return stale, err
 }
 
+// syncSelectedRawPRLinks refreshes materialized revisions selected by active
+// branches, including longer retained captures whose source has departed.
+func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string) (bool, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT b.session_id FROM raw_session_branches b JOIN sessions s ON s.id=b.session_id WHERE b.group_id=$1 AND b.active AND b.session_id<>b.captured_session_id`, group)
+	if err != nil {
+		return false, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return false, err
+		}
+		ids = append(ids, id)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return false, err
+	}
+	changed := false
+	for _, id := range ids {
+		payload, err := loadRawPayload(ctx, tx, id)
+		if err != nil {
+			return false, err
+		}
+		links := db.EncodePRLinks(parser.MergePRLinks(payload.Session.PRLinks, db.PromptPRLinks(payload.Messages)))
+		result, err := tx.ExecContext(ctx, `UPDATE sessions SET pr_links=$2 WHERE id=$1 AND pr_links IS DISTINCT FROM $2`, id, links)
+		if err != nil {
+			return false, err
+		}
+		count, err := result.RowsAffected()
+		if err != nil {
+			return false, err
+		}
+		changed = changed || count > 0
+	}
+	return changed, nil
+}
+
 // rawEmbeddingChange is a physical session whose embeddings must follow a
 // materialization once that materialization has a corpus revision.
 type rawEmbeddingChange struct{ session, revision, action string }
