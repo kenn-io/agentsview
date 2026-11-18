@@ -114,7 +114,7 @@ Add to your MCP client config (e.g. Claude Desktop):
 					return fmt.Errorf("loading listener auth: %w", err)
 				}
 				// Provision a token when auth is required but none exists
-				// yet, matching serve/pg/duckdb so enabling require_auth is
+				// yet, matching serve and pg so enabling require_auth is
 				// sufficient for first-time authenticated startup.
 				if cfg.RequireAuth && cfg.AuthToken == "" {
 					if err := cfg.EnsureAuthToken(); err != nil {
@@ -302,8 +302,8 @@ func (s *mcpDaemonService) SupportsRecallQueries() bool {
 	return runtime == nil || !runtime.ReadOnly
 }
 
-// SupportsFriction asks a running read-only daemon, which may be a DuckDB or
-// ClickHouse mirror without friction tables. A writable archive daemon, or
+// SupportsFriction asks a running read-only daemon, which may be a
+// ClickHouse replica without friction tables. A writable archive daemon, or
 // the one started on demand, serves the friction reads.
 func (s *mcpDaemonService) SupportsFriction() bool {
 	s.mu.Lock()

@@ -161,17 +161,17 @@ For a manual repair, review the proposed names, stop the daemon or desktop app,
 then run the same command with `--apply`. `--project` limits the repair to that
 label, even before the automatic upgrade has run. Any pending automatic repair
 waits until the next normal writable startup. Restart AgentsView afterward.
-Subsequent imports and full resyncs retain the corrected attribution. Mirror
-pushes carry the updated session projects to PostgreSQL, DuckDB, and ClickHouse.
+Subsequent imports and full resyncs retain the corrected attribution. Replica
+pushes carry the updated session projects to PostgreSQL and ClickHouse.
 
 For sessions without recorded repository evidence, use a [folder rule](#rules).
 
 ## Read-Only Servers
 
-On a read-only server (`pg serve`, `duckdb serve`, or `clickhouse serve`),
-manage rules and session assignments from the writable SQLite archive. The rules
-table remains readable; enabled workspace builds also show the inventory and
-folder suggestions, with editing controls replaced by a notice.
+On a read-only server (`pg serve` or `clickhouse serve`), manage rules and
+session assignments from the writable SQLite archive. The rules table remains
+readable; enabled workspace builds also show the inventory and folder
+suggestions, with editing controls replaced by a notice.
 
 ## Storage maintenance
 
@@ -250,9 +250,9 @@ sessions committed before a later failure.
 
 Back up `assets/` with the database. A separate local serving host needs both.
 PostgreSQL and CockroachDB retain the references but cannot resolve local image
-assets. DuckDB and normalized Markdown session exports carry the stored content.
-Artifact exports carry references without asset files; artifact imports replace
-those references with readable descriptions. HTML export keeps its own
+assets. Normalized Markdown session exports carry the stored content. Artifact
+exports carry references without asset files; artifact imports replace those
+references with readable descriptions. HTML export keeps its own
 [export behavior](/docs/usage/#session-export). The raw
 `agentsview session export` command streams provider source bytes, including
 original inline payloads.

@@ -9,8 +9,7 @@ AgentsView stores sessions locally in SQLite.
 Keep the copy current with `push --watch` or `clickhouse service`.
 
 Each machine pushes its own sessions. SQLite stays the archive. ClickHouse is a
-remote copy, the same operator story as [PostgreSQL sync](/docs/pg-sync/), not a
-disposable local file like [DuckDB](/docs/duckdb/).
+remote copy with the same operator story as [PostgreSQL sync](/docs/pg-sync/).
 
 The UI includes the session browser, search, analytics, usage, activity, recent
 edits, and project inventory. Rename, trash, insights, stars, and pins stay on

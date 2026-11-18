@@ -11,7 +11,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-// Row is a row from either a local driver or the Quack transport.
+// Row is a row from a database driver.
 type Row interface{ Scan(...any) error }
 
 // SessionsBackend supplies every SQL operation and typed loader for session reads.

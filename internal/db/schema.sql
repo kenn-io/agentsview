@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- non-Claude). Read by the incremental parser to skip fork
     -- detection on linear-bound transcripts. Like next_ordinal and
     -- last_entry_uuid, this is machine-local parse state deliberately
-    -- not mirrored to PostgreSQL or DuckDB: parsers never run against
+    -- not pushed to PostgreSQL or ClickHouse: parsers never run against
     -- those read-side stores, and any copy that drops it degrades to
     -- the conservative NULL verdict (full parse re-derives it).
     claude_linear_parse INTEGER,
@@ -83,7 +83,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     -- last write to this row went through the incremental-append path
     -- rather than a full re-normalization. Consumed only by parse-diff
     -- to suppress benign incremental-vs-full skew; deliberately not
-    -- mirrored to PG/DuckDB.
+    -- pushed to replicas.
     last_write_incremental INTEGER NOT NULL DEFAULT 0,
     deleted_at  TEXT,
     -- Before revert pages had separate IDs, trash covered the whole thread.
@@ -1623,7 +1623,7 @@ CREATE TABLE IF NOT EXISTS artifact_imported_sessions (
 -- order. Provider call IDs are not unique, so the natural stored coordinates
 -- (message ordinal, call index) are the authoritative key. A late result
 -- update reads only this table (O(distinct agents)) instead of rescanning the
--- call's full event history. Never mirrored to PostgreSQL or DuckDB.
+-- call's full event history. Never pushed to replicas.
 CREATE TABLE IF NOT EXISTS tool_call_occurrence_agent_state (
     session_id         TEXT NOT NULL,
     message_ordinal    INTEGER NOT NULL,
@@ -1636,7 +1636,7 @@ CREATE TABLE IF NOT EXISTS tool_call_occurrence_agent_state (
 );
 
 -- Machine-local parse checkpoints. SQLite-only, never mirrored to
--- PostgreSQL or DuckDB: parsers never run against those read-side stores,
+-- replicas: parsers never run against those read-side stores,
 -- and a copy that drops this table degrades to the conservative no-checkpoint
 -- behavior (full parse / prefix rescan), never to a wrong resume.
 CREATE TABLE IF NOT EXISTS parser_checkpoints (
@@ -1666,7 +1666,7 @@ CREATE TABLE IF NOT EXISTS parser_checkpoint_blobs (
 
 -- Compact per-session signal/secret maintenance state. SQLite-only: the
 -- state is machine-local sync bookkeeping and is never mirrored to
--- PostgreSQL or DuckDB. The state row carries a verification token
+-- replicas. The state row carries a verification token
 -- (transcript revision + signal version); a row whose token disagrees with
 -- the stored session must never be folded into an incremental delta.
 CREATE TABLE IF NOT EXISTS session_signal_state (

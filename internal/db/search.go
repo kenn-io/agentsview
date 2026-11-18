@@ -72,7 +72,9 @@ func goalContextPrefixed(content, role string, attrMatch func(string) bool) bool
 	return false
 }
 
-func duckDBGoalContextPrefixed(content, role string) bool {
+// sqlGoalContextPrefixed is the goal-tag rule the SQL classifiers apply: the
+// open tag must contain source="goal" followed by whitespace, ">", or "/>".
+func sqlGoalContextPrefixed(content, role string) bool {
 	return goalContextPrefixed(content, role, func(openTag string) bool {
 		openTag = goalContextWhitespace.Replace(openTag + ">")
 		return strings.Contains(openTag, goalContextSourceAttrSQLPrefix+" ") ||
@@ -86,7 +88,6 @@ type systemPrefixSQLDialect int
 const (
 	systemPrefixSQLite systemPrefixSQLDialect = iota
 	systemPrefixPostgres
-	systemPrefixDuckDB
 )
 
 // SystemPrefixSQL returns a SQL clause that excludes user messages
@@ -112,11 +113,6 @@ func PostgresSystemPrefixSQLWithoutGuard(contentCol, roleCol string) string {
 	return systemPrefixSQL(contentCol, roleCol, systemPrefixPostgres, false)
 }
 
-// DuckDBSystemPrefixSQL is the DuckDB form of SystemPrefixSQL.
-func DuckDBSystemPrefixSQL(contentCol, roleCol string) string {
-	return systemPrefixSQL(contentCol, roleCol, systemPrefixDuckDB, false)
-}
-
 func systemPrefixSQL(
 	contentCol, roleCol string, dialect systemPrefixSQLDialect, firstCharGuard bool,
 ) string {
@@ -124,7 +120,7 @@ func systemPrefixSQL(
 	// JS .trim(), and the parser's isSystem helpers: ASCII whitespace,
 	// BOM (U+FEFF), and Unicode
 	// spaces (U+0085, U+00A0, U+1680, U+2000–U+200A, U+2028,
-	// U+2029, U+202F, U+205F, U+3000). SQLite, PostgreSQL, and DuckDB
+	// U+2029, U+202F, U+205F, U+3000). SQLite and PostgreSQL
 	// handle multi-byte UTF-8 characters in the trim set correctly.
 	trimmed := systemPrefixSQLTrimmed(contentCol)
 	parts := make([]string, 0, len(SystemMsgPrefixes)+1)
@@ -306,9 +302,10 @@ func IsSystemPrefixed(content, role string) bool {
 	return systemPrefixed(content, role, IsGoalContextPrefixed)
 }
 
-// IsDuckDBSystemPrefixed preserves the DuckDB search filter's goal-tag rules.
-func IsDuckDBSystemPrefixed(content, role string) bool {
-	return systemPrefixed(content, role, duckDBGoalContextPrefixed)
+// sqlSystemPrefixed is IsSystemPrefixed with the SQL classifiers' goal-tag
+// rule. SystemPrefixRulesVersion fingerprints it.
+func sqlSystemPrefixed(content, role string) bool {
+	return systemPrefixed(content, role, sqlGoalContextPrefixed)
 }
 
 func systemPrefixed(content, role string, goal func(string, string) bool) bool {

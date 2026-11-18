@@ -541,7 +541,7 @@ func (s *Sync) pushWithOptions(
 		log.Printf("pgsync: diagnostic events: %v", diagnosticErr)
 	}
 	// Candidate selection shares ListSessionsForMirrorWindow with the
-	// DuckDB mirror push: sync_marker >= lastPush, inclusive below and
+	// ClickHouse push: sync_marker >= lastPush, inclusive below and
 	// deliberately unbounded above. An upper bound at cutoff would let a
 	// clock-skewed future file_mtime push a session's marker past now and
 	// mask its later real changes until wall time caught up. The inclusive

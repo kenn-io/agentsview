@@ -747,36 +747,6 @@ components:
         - priorTotalCost
         - deltaPct
       type: object
-    ConfigDuckDBConfig:
-      additionalProperties: false
-      properties:
-        allow_insecure:
-          type: boolean
-        attach_timeout:
-          format: int64
-          type: integer
-        exclude_projects:
-          items:
-            type: string
-          type: array
-        machine_name:
-          type: string
-        path:
-          type: string
-        projects:
-          items:
-            type: string
-          type: array
-        token:
-          type: string
-        url:
-          type: string
-      required:
-        - path
-        - url
-        - machine_name
-        - allow_insecure
-      type: object
     ConfigRemoteHost:
       additionalProperties: false
       properties:
@@ -810,10 +780,6 @@ components:
     DaemonPushRequest:
       additionalProperties: false
       properties:
-        automatic:
-          type: boolean
-        duckdb:
-          $ref: "#/components/schemas/ConfigDuckDBConfig"
         exclude_projects:
           items:
             type: string
@@ -17511,94 +17477,6 @@ paths:
                 $ref: "#/components/schemas/ApiErrorResponse"
           description: Gateway Timeout
       summary: Push to ClickHouse
-      tags:
-        - Push
-  /api/v1/push/duckdb:
-    post:
-      operationId: post-api-v1-push-duckdb
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/DaemonPushRequest"
-        required: true
-      responses:
-        "200":
-          content:
-            application/json:
-              schema:
-                type: object
-            text/event-stream:
-              schema:
-                type: string
-          description: OK
-        "400":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorResponse"
-          description: Bad Request
-        "401":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorResponse"
-          description: Unauthorized
-        "403":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorResponse"
-          description: Forbidden
-        "404":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorResponse"
-          description: Not Found
-        "409":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorResponse"
-          description: Conflict
-        "422":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorResponse"
-          description: Unprocessable Entity
-        "500":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorResponse"
-          description: Internal Server Error
-        "501":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorResponse"
-          description: Not Implemented
-        "502":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorResponse"
-          description: Bad Gateway
-        "503":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorResponse"
-          description: Service Unavailable
-        "504":
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ApiErrorResponse"
-          description: Gateway Timeout
-      summary: Push to DuckDB
       tags:
         - Push
   /api/v1/push/pg:

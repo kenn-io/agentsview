@@ -59,6 +59,17 @@ func (b *blockedRemotePush) PushWithOptions(
 }
 func (*blockedRemotePush) Close() error { return nil }
 
+// funcRemotePush is a replica push target whose push runs fn.
+type funcRemotePush struct{ fn func(context.Context) error }
+
+func (funcRemotePush) EnsureSchema(context.Context) error { return nil }
+func (f funcRemotePush) PushWithOptions(
+	ctx context.Context, _ storage.PushOptions, _ func(storage.PushProgress),
+) (storage.PushResult, error) {
+	return storage.PushResult{}, f.fn(ctx)
+}
+func (funcRemotePush) Close() error { return nil }
+
 // A remote push that never finishes must not stop the local archive from
 // ingesting a session file written while the push runs.
 func TestLocalPushWatchIngestsWhileRemotePushBlocks(t *testing.T) {
@@ -87,28 +98,6 @@ func TestLocalPushWatchIngestsWhileRemotePushBlocks(t *testing.T) {
 				return b.ReplicaPushWatch(
 					ctx, pgReplica{}, storage.ConfiguredReplica{}, ReplicaPushConfig{},
 					nil, nil, time.Hour, time.Hour,
-				)
-			},
-		},
-		{
-			name: "duckdb",
-			run: func(
-				ctx context.Context, b *localArchiveWriteBackend, remote *blockedRemotePush,
-			) error {
-				b.watchHooks = &archivePushWatchHooks{
-					newDuckDBPusher: func(*syncpkg.Engine) *duckDBPusher {
-						return &duckDBPusher{
-							mirrorPush: func(
-								c context.Context, _ bool,
-							) (storage.MirrorPushResult, error) {
-								return storage.MirrorPushResult{}, remote.wait(c)
-							},
-						}
-					},
-				}
-				return b.DuckDBPushWatch(
-					ctx, config.DuckDBConfig{}, DuckDBPushConfig{}, nil, nil,
-					time.Hour, time.Hour,
 				)
 			},
 		},
@@ -462,36 +451,43 @@ func TestLocalPushWatchSyncsWhenStoppedDuringStartupPush(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	var pushes atomic.Int32
-	hooks.newDuckDBPusher = func(*syncpkg.Engine) *duckDBPusher {
-		return &duckDBPusher{mirrorPush: func(
-			pctx context.Context, _ bool,
-		) (storage.MirrorPushResult, error) {
-			if pushes.Add(1) > 1 {
-				assert.Fail(t, "stopping during the first push must not push again")
-				return storage.MirrorPushResult{}, nil
-			}
-			// A session changes while the first push runs, and the
-			// watcher has not handed it over when the watch stops.
-			uuid := "d4e5f6a7-4444-4555-8666-777788889999"
-			day := filepath.Join(codexRoot, "2026", "10", "17")
-			require.NoError(t, os.MkdirAll(day, 0o755))
-			require.NoError(t, os.WriteFile(
-				filepath.Join(day, "rollout-2026-10-17T09-00-00-"+uuid+".jsonl"),
-				[]byte(testjsonl.NewSessionBuilder().
-					AddCodexMeta("2026-10-17T09:00:00Z", uuid, "/home/user/code/api", "codex_cli_rs").
-					AddCodexMessage("2026-10-17T09:00:01Z", "user", "hello").
-					String()),
-				0o644,
-			))
-			cancel()
-			<-pctx.Done()
-			return storage.MirrorPushResult{}, pctx.Err()
-		}}
+	target := funcRemotePush{fn: func(pctx context.Context) error {
+		if pushes.Add(1) > 1 {
+			assert.Fail(t, "stopping during the first push must not push again")
+			return nil
+		}
+		// A session changes while the first push runs, and the
+		// watcher has not handed it over when the watch stops.
+		uuid := "d4e5f6a7-4444-4555-8666-777788889999"
+		day := filepath.Join(codexRoot, "2026", "10", "17")
+		require.NoError(t, os.MkdirAll(day, 0o755))
+		require.NoError(t, os.WriteFile(
+			filepath.Join(day, "rollout-2026-10-17T09-00-00-"+uuid+".jsonl"),
+			[]byte(testjsonl.NewSessionBuilder().
+				AddCodexMeta("2026-10-17T09:00:00Z", uuid, "/home/user/code/api", "codex_cli_rs").
+				AddCodexMessage("2026-10-17T09:00:01Z", "user", "hello").
+				String()),
+			0o644,
+		))
+		cancel()
+		<-pctx.Done()
+		return pctx.Err()
+	}}
+	hooks.newReplicaPusher = func(*syncpkg.Engine) *replicaPusher {
+		return &replicaPusher{
+			session: archivepush.ReplicaSession{
+				Connect: func(context.Context) (storage.Pusher, error) {
+					return target, nil
+				},
+			},
+			vectors: newVectorReconcile(),
+		}
 	}
 	backend.watchHooks = hooks
 
-	require.NoError(t, backend.DuckDBPushWatch(
-		ctx, config.DuckDBConfig{}, DuckDBPushConfig{}, nil, nil, time.Hour, time.Hour,
+	require.NoError(t, backend.ReplicaPushWatch(
+		ctx, pgReplica{}, storage.ConfiguredReplica{}, ReplicaPushConfig{},
+		nil, nil, time.Hour, time.Hour,
 	))
 	archived, err := backend.database.CountSessionsForMirrorScope(t.Context(), nil, nil)
 	require.NoError(t, err)

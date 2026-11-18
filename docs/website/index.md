@@ -129,8 +129,6 @@ SQLite is the archive of record. From there:
 - [ClickHouse sync](/docs/clickhouse-sync/) serves the dashboard from a remote
   copy, including semantic and hybrid search when embeddings are pushed.
   Session edits stay in SQLite.
-- [DuckDB mirror](/docs/duckdb/) serves analytical reads locally or over the
-  Quack protocol.
 - [Filesystem sync](/docs/filesystem-sync/) and
   [artifact folder sync](/docs/artifact-sync/) move sessions between machines
   without any database server.
@@ -150,9 +148,8 @@ SQLite is the archive of record. From there:
 Your agent transcripts are some of the most sensitive data on your machine.
 AgentsView starts with one local SQLite archive and a loopback-only server.
 Session content leaves the machine only when you choose a feature such as
-PostgreSQL or ClickHouse sync, remote DuckDB access, Generated Insights, GitHub
-publishing, or hosted raw sync. Each feature documents what it sends and where
-it goes.
+PostgreSQL or ClickHouse sync, Generated Insights, GitHub publishing, or hosted
+raw sync. Each feature documents what it sends and where it goes.
 
 ## Start
 

@@ -1360,50 +1360,6 @@ func (o *PostAPIV1PushClickhouseRequestOptions) GetHeader() (map[string]string, 
 	return nil, nil
 }
 
-// PostAPIV1PushDuckdbRequestOptions is the options needed to make a request to PostAPIV1PushDuckdb.
-type PostAPIV1PushDuckdbRequestOptions struct {
-	Body *PostAPIV1PushDuckdbBody
-}
-
-// Validate validates all the fields in the options.
-// Use it if fields validation was not run.
-func (o *PostAPIV1PushDuckdbRequestOptions) Validate() error {
-	var errors runtime.ValidationErrors
-
-	if o.Body != nil {
-		if v, ok := any(o.Body).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append("Body", err)
-			}
-		}
-	}
-	if len(errors) == 0 {
-		return nil
-	}
-
-	return errors
-}
-
-// GetPathParams returns the path params as a map.
-func (o *PostAPIV1PushDuckdbRequestOptions) GetPathParams() (map[string]any, error) {
-	return nil, nil
-}
-
-// GetQuery returns the query params as a map.
-func (o *PostAPIV1PushDuckdbRequestOptions) GetQuery() (map[string]any, error) {
-	return nil, nil
-}
-
-// GetBody returns the payload in any type that can be marshalled to JSON by the client.
-func (o *PostAPIV1PushDuckdbRequestOptions) GetBody() any {
-	return o.Body
-}
-
-// GetHeader returns the headers as a map.
-func (o *PostAPIV1PushDuckdbRequestOptions) GetHeader() (map[string]string, error) {
-	return nil, nil
-}
-
 // PostAPIV1PushPgRequestOptions is the options needed to make a request to PostAPIV1PushPg.
 type PostAPIV1PushPgRequestOptions struct {
 	Body *PostAPIV1PushPgBody
@@ -3983,228 +3939,6 @@ func (c *Client) PostAPIV1PushClickhouseStreamWithResponse(ctx context.Context, 
 	}
 }
 
-// PostAPIV1PushDuckdbStreamWithResponse is the envelope form: it populates
-// Stream200 instead of the buffered body field.
-func (c *Client) PostAPIV1PushDuckdbStreamWithResponse(ctx context.Context, options *PostAPIV1PushDuckdbRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1PushDuckdbResp, error) {
-	var err error
-	reqParams := runtime.RequestOptionsParameters{
-		RequestURL:  c.apiClient.GetBaseURL() + "/api/v1/push/duckdb",
-		Method:      "POST",
-		Stream:      "text/event-stream",
-		Options:     options,
-		ContentType: "application/json",
-	}
-
-	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
-	if err != nil {
-		return nil, fmt.Errorf("error creating request: %w", err)
-	}
-
-	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/push/duckdb")
-	if err != nil {
-		return nil, fmt.Errorf("error executing request: %w", err)
-	}
-
-	out := &PostAPIV1PushDuckdbResp{
-		HTTPResponse: resp.Raw,
-		Body:         resp.Content,
-		StatusCode:   resp.StatusCode,
-	}
-
-	switch resp.StatusCode {
-	case 200:
-		if !resp.Streaming {
-			return out, runtime.NewClientAPIError(
-				fmt.Errorf("expected a text/event-stream stream, got Content-Type %q", resp.Headers.Get("Content-Type")),
-				runtime.WithStatusCode(resp.StatusCode))
-		}
-		out.Stream200 = runtime.NewEventStream[[]byte](resp.Raw)
-		return out, nil
-	case 400:
-		out.JSON400 = new(PostAPIV1PushDuckdbErrorResponse)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1PushDuckdbErrorResponse",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 401:
-		out.JSON401 = new(PostAPIV1PushDuckdbErrorResponseJSON)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1PushDuckdbErrorResponseJSON",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 403:
-		out.JSON403 = new(PostAPIV1PushDuckdbErrorResponseJSON403)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1PushDuckdbErrorResponseJSON403",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 404:
-		out.JSON404 = new(PostAPIV1PushDuckdbErrorResponseJSON404)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1PushDuckdbErrorResponseJSON404",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 409:
-		out.JSON409 = new(PostAPIV1PushDuckdbErrorResponseJSON409)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1PushDuckdbErrorResponseJSON409",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 422:
-		out.JSON422 = new(PostAPIV1PushDuckdbErrorResponseJSON422)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON422); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1PushDuckdbErrorResponseJSON422",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 500:
-		out.JSON500 = new(PostAPIV1PushDuckdbErrorResponseJSON500)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1PushDuckdbErrorResponseJSON500",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 501:
-		out.JSON501 = new(PostAPIV1PushDuckdbErrorResponseJSON501)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1PushDuckdbErrorResponseJSON501",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 502:
-		out.JSON502 = new(PostAPIV1PushDuckdbErrorResponseJSON502)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1PushDuckdbErrorResponseJSON502",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 503:
-		out.JSON503 = new(PostAPIV1PushDuckdbErrorResponseJSON503)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1PushDuckdbErrorResponseJSON503",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 504:
-		out.JSON504 = new(PostAPIV1PushDuckdbErrorResponseJSON504)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1PushDuckdbErrorResponseJSON504",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	default:
-
-		if resp.Raw != nil && resp.Raw.Body != nil {
-			_ = resp.Raw.Body.Close()
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	}
-}
-
 // PostAPIV1PushPgStreamWithResponse is the envelope form: it populates
 // Stream200 instead of the buffered body field.
 func (c *Client) PostAPIV1PushPgStreamWithResponse(ctx context.Context, options *PostAPIV1PushPgRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1PushPgResp, error) {
@@ -5838,8 +5572,6 @@ type ClientInterface interface {
 	GetAPIV1ProjectsWithResponse(ctx context.Context, options *GetAPIV1ProjectsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1ProjectsResp, error)
 	PostAPIV1PushClickhouseWithResponse(ctx context.Context, options *PostAPIV1PushClickhouseRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1PushClickhouseResp, error)
 	PostAPIV1PushClickhouseStreamWithResponse(ctx context.Context, options *PostAPIV1PushClickhouseRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1PushClickhouseResp, error)
-	PostAPIV1PushDuckdbWithResponse(ctx context.Context, options *PostAPIV1PushDuckdbRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1PushDuckdbResp, error)
-	PostAPIV1PushDuckdbStreamWithResponse(ctx context.Context, options *PostAPIV1PushDuckdbRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1PushDuckdbResp, error)
 	PostAPIV1PushPgWithResponse(ctx context.Context, options *PostAPIV1PushPgRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1PushPgResp, error)
 	PostAPIV1PushPgStreamWithResponse(ctx context.Context, options *PostAPIV1PushPgRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1PushPgResp, error)
 	PostAPIV1RawSyncManifestsWithResponse(ctx context.Context, options *PostAPIV1RawSyncManifestsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1RawSyncManifestsResp, error)
@@ -13007,230 +12739,6 @@ func (c *Client) PostAPIV1PushClickhouseWithResponse(ctx context.Context, option
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
 					TargetType:    "PostAPIV1PushClickhouseErrorResponseJSON504",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	default:
-		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	}
-}
-
-// PostAPIV1PushDuckdb Push to DuckDB
-func (c *Client) PostAPIV1PushDuckdbWithResponse(ctx context.Context, options *PostAPIV1PushDuckdbRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1PushDuckdbResp, error) {
-	var err error
-	reqParams := runtime.RequestOptionsParameters{
-		RequestURL:  c.apiClient.GetBaseURL() + "/api/v1/push/duckdb",
-		Method:      "POST",
-		Options:     options,
-		ContentType: "application/json",
-	}
-
-	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
-	if err != nil {
-		return nil, fmt.Errorf("error creating request: %w", err)
-	}
-
-	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/push/duckdb")
-	if err != nil {
-		return nil, fmt.Errorf("error executing request: %w", err)
-	}
-
-	out := &PostAPIV1PushDuckdbResp{
-		HTTPResponse: resp.Raw,
-		Body:         resp.Content,
-		StatusCode:   resp.StatusCode,
-	}
-
-	switch resp.StatusCode {
-	case 200:
-		out.JSON200 = new(PostAPIV1PushDuckdbResponse)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1PushDuckdbResponse",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, nil
-	case 400:
-		out.JSON400 = new(PostAPIV1PushDuckdbErrorResponse)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1PushDuckdbErrorResponse",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 401:
-		out.JSON401 = new(PostAPIV1PushDuckdbErrorResponseJSON)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1PushDuckdbErrorResponseJSON",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 403:
-		out.JSON403 = new(PostAPIV1PushDuckdbErrorResponseJSON403)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1PushDuckdbErrorResponseJSON403",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 404:
-		out.JSON404 = new(PostAPIV1PushDuckdbErrorResponseJSON404)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1PushDuckdbErrorResponseJSON404",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 409:
-		out.JSON409 = new(PostAPIV1PushDuckdbErrorResponseJSON409)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1PushDuckdbErrorResponseJSON409",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 422:
-		out.JSON422 = new(PostAPIV1PushDuckdbErrorResponseJSON422)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON422); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1PushDuckdbErrorResponseJSON422",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 500:
-		out.JSON500 = new(PostAPIV1PushDuckdbErrorResponseJSON500)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1PushDuckdbErrorResponseJSON500",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 501:
-		out.JSON501 = new(PostAPIV1PushDuckdbErrorResponseJSON501)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1PushDuckdbErrorResponseJSON501",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 502:
-		out.JSON502 = new(PostAPIV1PushDuckdbErrorResponseJSON502)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1PushDuckdbErrorResponseJSON502",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 503:
-		out.JSON503 = new(PostAPIV1PushDuckdbErrorResponseJSON503)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1PushDuckdbErrorResponseJSON503",
-					Body:          bodyBytes,
-					Err:           err,
-				}
-			}
-		}
-		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
-	case 504:
-		out.JSON504 = new(PostAPIV1PushDuckdbErrorResponseJSON504)
-		bodyBytes := resp.Content
-		if len(bodyBytes) > 0 {
-			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
-				return out, &runtime.ResponseDecodeError{
-					StatusCode:    resp.StatusCode,
-					ContentType:   resp.Headers.Get("Content-Type"),
-					ContentLength: len(bodyBytes),
-					TargetType:    "PostAPIV1PushDuckdbErrorResponseJSON504",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -23024,8 +22532,6 @@ type PostAPIV1FrictionRunBody = FrictionRunRequest
 
 type PostAPIV1PushClickhouseBody = DaemonPushRequest
 
-type PostAPIV1PushDuckdbBody = DaemonPushRequest
-
 type PostAPIV1PushPgBody = DaemonPushRequest
 
 type PostAPIV1RawSyncManifestsBody = RawsyncManifest
@@ -25313,30 +24819,6 @@ type PostAPIV1PushClickhouseErrorResponseJSON503 = APIErrorResponse
 
 type PostAPIV1PushClickhouseErrorResponseJSON504 = APIErrorResponse
 
-type PostAPIV1PushDuckdbResponse = map[string]any
-
-type PostAPIV1PushDuckdbErrorResponse = APIErrorResponse
-
-type PostAPIV1PushDuckdbErrorResponseJSON = APIErrorResponse
-
-type PostAPIV1PushDuckdbErrorResponseJSON403 = APIErrorResponse
-
-type PostAPIV1PushDuckdbErrorResponseJSON404 = APIErrorResponse
-
-type PostAPIV1PushDuckdbErrorResponseJSON409 = APIErrorResponse
-
-type PostAPIV1PushDuckdbErrorResponseJSON422 = APIErrorResponse
-
-type PostAPIV1PushDuckdbErrorResponseJSON500 = APIErrorResponse
-
-type PostAPIV1PushDuckdbErrorResponseJSON501 = APIErrorResponse
-
-type PostAPIV1PushDuckdbErrorResponseJSON502 = APIErrorResponse
-
-type PostAPIV1PushDuckdbErrorResponseJSON503 = APIErrorResponse
-
-type PostAPIV1PushDuckdbErrorResponseJSON504 = APIErrorResponse
-
 type PostAPIV1PushPgResponse = map[string]any
 
 type PostAPIV1PushPgErrorResponse = APIErrorResponse
@@ -26959,25 +26441,6 @@ type PostAPIV1PushClickhouseResp struct {
 	JSON504      *PostAPIV1PushClickhouseErrorResponseJSON504
 }
 
-type PostAPIV1PushDuckdbResp struct {
-	HTTPResponse *http.Response
-	Body         []byte
-	StatusCode   int
-	JSON200      *PostAPIV1PushDuckdbResponse
-	Stream200    *runtime.Stream[[]byte]
-	JSON400      *PostAPIV1PushDuckdbErrorResponse
-	JSON401      *PostAPIV1PushDuckdbErrorResponseJSON
-	JSON403      *PostAPIV1PushDuckdbErrorResponseJSON403
-	JSON404      *PostAPIV1PushDuckdbErrorResponseJSON404
-	JSON409      *PostAPIV1PushDuckdbErrorResponseJSON409
-	JSON422      *PostAPIV1PushDuckdbErrorResponseJSON422
-	JSON500      *PostAPIV1PushDuckdbErrorResponseJSON500
-	JSON501      *PostAPIV1PushDuckdbErrorResponseJSON501
-	JSON502      *PostAPIV1PushDuckdbErrorResponseJSON502
-	JSON503      *PostAPIV1PushDuckdbErrorResponseJSON503
-	JSON504      *PostAPIV1PushDuckdbErrorResponseJSON504
-}
-
 type PostAPIV1PushPgResp struct {
 	HTTPResponse *http.Response
 	Body         []byte
@@ -28070,21 +27533,6 @@ func (c Comparison) Validate() error {
 	return errors
 }
 
-type ConfigDuckDBConfig struct {
-	AllowInsecure   bool     `json:"allow_insecure"`
-	AttachTimeout   *int64   `json:"attach_timeout,omitempty"`
-	ExcludeProjects []string `json:"exclude_projects,omitempty"`
-	MachineName     string   `json:"machine_name" validate:"required"`
-	Path            string   `json:"path" validate:"required"`
-	Projects        []string `json:"projects,omitempty"`
-	Token           *string  `json:"token,omitempty"`
-	URL             string   `json:"url" validate:"required"`
-}
-
-func (c ConfigDuckDBConfig) Validate() error {
-	return runtime.ConvertValidatorError(typesValidator.Struct(c))
-}
-
 type ConfigRemoteHost struct {
 	Destination *string `json:"destination,omitempty"`
 	Host        string  `json:"host" validate:"required"`
@@ -28110,8 +27558,6 @@ func (c ConversationExportInitializeResponse) Validate() error {
 }
 
 type DaemonPushRequest struct {
-	Automatic                      *bool                   `json:"automatic,omitempty"`
-	Duckdb                         *ConfigDuckDBConfig     `json:"duckdb,omitempty"`
 	ExcludeProjects                []string                `json:"exclude_projects,omitempty"`
 	Full                           bool                    `json:"full"`
 	LastReconciledVectorGeneration *int64                  `json:"last_reconciled_vector_generation,omitempty"`
@@ -28127,13 +27573,6 @@ type DaemonPushRequest struct {
 
 func (d DaemonPushRequest) Validate() error {
 	var errors runtime.ValidationErrors
-	if d.Duckdb != nil {
-		if v, ok := any(d.Duckdb).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append("Duckdb", err)
-			}
-		}
-	}
 	if d.Replica != nil {
 		if v, ok := any(d.Replica).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {

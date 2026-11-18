@@ -12,7 +12,7 @@ for a reporting hour to close.
 These commands read normalized messages from the local SQLite archive. They work
 across all supported agents and imported archives, including sessions whose
 source files are no longer available. They do not contact an agent, reparse its
-transcripts, start a server, or read the DuckDB mirror.
+transcripts, start a server, or read a replica.
 
 The first `changes` call on an archive builds the conversation change index from
 existing database records, so it takes longer than later calls; syncing never

@@ -80,7 +80,7 @@ protocol as a local `codex app-server`. Three facts shape the whole design:
                 |
    codex-cloud provider (normal sync engine)
                 |
-   SQLite archive -> PostgreSQL, ClickHouse, DuckDB mirror, hosted hub
+   SQLite archive -> PostgreSQL, ClickHouse, hosted hub
 ```
 
 | Part             | Code                                                                    |
@@ -559,10 +559,10 @@ reference. Backends never compare times to decide this. The same row carries
 live-capture coverage.
 
 The table is pushed to PostgreSQL, CockroachDB, and ClickHouse like other
-per-session data and is part of the DuckDB mirror. On a hosted hub, sessions use
-raw projection IDs, and the hosted ID mapper resolves references only through
-link edges. The raw projection therefore writes a usage-root link, so a "counted
-under" reference resolves at any depth, not just to the direct parent.
+per-session data. On a hosted hub, sessions use raw projection IDs, and the
+hosted ID mapper resolves references only through link edges. The raw projection
+therefore writes a usage-root link, so a "counted under" reference resolves at
+any depth, not just to the direct parent.
 
 ### Totals
 

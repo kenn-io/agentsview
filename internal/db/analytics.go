@@ -143,7 +143,7 @@ func (f AnalyticsFilter) TrendsSessionFilter() AnalyticsFilter {
 // RelationshipExclusionSQL returns the relationship_type predicate for
 // analytics aggregation. The default excludes subagent and fork rows
 // (matching the session list); IncludeSubagents and IncludeForks each
-// lift one exclusion. Exported so the PostgreSQL and DuckDB analytics
+// lift one exclusion. Exported so the PostgreSQL and ClickHouse analytics
 // builders apply the same rule.
 func (f AnalyticsFilter) RelationshipExclusionSQL() string {
 	return RelationshipExclusionSQL(f.IncludeSubagents, f.IncludeForks, "")
@@ -3472,7 +3472,7 @@ func (db *DB) queryVelocityMsgs(
 	// "converting NULL to string is unsupported". LocalTime treats "" as
 	// invalid, so the row is excluded from velocity stats rather than
 	// crashing the analytics endpoint. This matches the NULL-safe
-	// PostgreSQL and DuckDB velocity twins.
+	// PostgreSQL and ClickHouse velocity twins.
 	query := `SELECT session_id, ordinal, role,
 		COALESCE(timestamp, ''), content_length
 		FROM messages
@@ -4175,7 +4175,7 @@ type SignalRow struct {
 // used the model, but the totals stay session-level aggregates and are not
 // re-attributed per model -- per-model signal attribution is not well defined
 // for most signals and is intentionally not computed here. The PostgreSQL and
-// DuckDB stores mirror this.
+// ClickHouse stores mirror this.
 func (db *DB) GetAnalyticsSignals(
 	ctx context.Context, f AnalyticsFilter,
 ) (SignalsAnalyticsResponse, error) {

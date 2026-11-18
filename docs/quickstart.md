@@ -124,8 +124,7 @@ make install  # installs to ~/.local/bin
 !!! note
 
     CGO is required for the SQLite driver. The `fts5` build tag enables
-    full-text search. Add `DUCKDB=1` to `make build` or `make install` to
-    include the [DuckDB mirror](/docs/duckdb/), which release builds leave out.
+    full-text search.
 
 #### Windows on ARM
 
@@ -269,7 +268,7 @@ cannot be set in `config.toml`.
 You do not need to keep a server running for every CLI command. Read-only
 commands attach to the daemon when it is warm, otherwise they read the local
 archive directly in read-only mode. Commands that need fresh data or need to
-write, including `sync`, `usage`, `token-use`, `pg push`, and `duckdb push`,
+write, including `sync`, `usage`, `token-use`, `pg push`, and `clickhouse push`,
 auto-start the detached daemon when needed. The server remains running after
 these commands finish. For scripts or CI jobs that must leave no background
 server, stop the daemon first, then run `AGENTSVIEW_NO_DAEMON=1 agentsview source sync`.

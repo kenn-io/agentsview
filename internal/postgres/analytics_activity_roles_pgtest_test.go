@@ -4,13 +4,11 @@ package postgres
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -67,12 +65,6 @@ func TestAnalyticsActivityRoleSplitParity(t *testing.T) {
 	store, err := NewStore(t.Context(), pgURL, "agentsview", true)
 	require.NoError(t, err)
 	defer store.Close()
-	duckPath := filepath.Join(t.TempDir(), "analytics.duckdb")
-	_, err = duckdb.Push(ctx, duckPath, local, "analytics-test-machine", storage.MirrorPushOptions{}, true, nil)
-	require.NoError(t, err)
-	duckStore, err := duckdb.NewStore(ctx, duckPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, duckStore.Close()) })
 
 	want := []struct {
 		date                             string
@@ -85,7 +77,7 @@ func TestAnalyticsActivityRoleSplitParity(t *testing.T) {
 	filter := db.AnalyticsFilter{From: "2026-02-01", To: "2026-02-03", Timezone: "UTC"}
 	for name, backend := range map[string]interface {
 		GetAnalyticsActivity(context.Context, db.AnalyticsFilter, string) (db.ActivityResponse, error)
-	}{"sqlite": local, "postgres": store, "duckdb": duckStore} {
+	}{"sqlite": local, "postgres": store} {
 		t.Run(name, func(t *testing.T) {
 			report, err := backend.GetAnalyticsActivity(ctx, filter, "day")
 			require.NoError(t, err)

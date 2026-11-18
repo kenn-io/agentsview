@@ -184,7 +184,7 @@ func ConfiguredAliasesDigest() string {
 }
 
 // FixedPricingAliases returns the timestamp-independent reported-name
-// mappings, copied for caller safety. DuckDB renders these as SQL CASE
+// mappings, copied for caller safety. ClickHouse renders these as SQL CASE
 // arms so aggregate usage prices the same canonical models as SQLite.
 func FixedPricingAliases() []FixedPricingAlias {
 	return slices.Clone(fixedPricingAliases)

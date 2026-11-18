@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"path/filepath"
 	"slices"
 	"testing"
 
@@ -18,10 +17,8 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/server"
-	"go.kenn.io/agentsview/internal/storage"
 )
 
 type sessionToolSequencesResponse struct {
@@ -379,75 +376,6 @@ func TestHandleToolSequences_ReadOnly(t *testing.T) {
 	assert.Equal(t, before.HealthScore, after.HealthScore)
 	assert.Equal(t, before.HealthGrade, after.HealthGrade)
 	assert.Equal(t, before.TranscriptRevision, after.TranscriptRevision)
-}
-
-func TestHandleToolSequences_DuckDBParity(t *testing.T) {
-	if duckdb.RequireDriver() != nil {
-		t.Skip("this build does not link DuckDB; run with -tags duckdb")
-	}
-	te := setup(t)
-	sessionIDs := dbtest.SeedToolSequencesParity(t, te.db)
-	source := make(map[string]sessionToolSequencesResponse, len(sessionIDs))
-	for _, sessionID := range sessionIDs {
-		source[sessionID] = fetchSessionToolSequences(t, te, sessionID)
-	}
-	evidence := source["tool-sequences-parity-evidence"]
-	require.Len(t, evidence.Sequences, 2)
-	assert.Equal(t, "empty", evidence.Sequences[0].Calls[0].Outcome)
-	assert.Equal(t, "single-event summary", evidence.Sequences[0].Calls[1].ResultPreview)
-	assert.True(t, evidence.Sequences[1].Calls[1].ResultContentUnknown)
-	assert.Equal(t, 4096, *evidence.Sequences[1].Calls[2].ResultBytes)
-	incomplete := source["tool-sequences-parity-incomplete"]
-	require.Len(t, incomplete.Sequences, 1)
-	assert.Equal(t, "open", incomplete.Sequences[0].Ending)
-	assert.Empty(t, incomplete.Sequences[0].Calls[0].ToolUseID)
-	streamed := source["tool-sequences-parity-streamed"]
-	assert.Equal(t, 154, streamed.TotalToolCalls)
-	assert.Equal(t, 144, streamed.OmittedCalls)
-	require.Len(t, streamed.Sequences, 1)
-	require.Len(t, streamed.Sequences[0].Calls, 10)
-	assert.Equal(t, 260, streamed.Sequences[0].Calls[9].Ordinal)
-
-	for _, id := range sessionIDs {
-		session, err := te.db.GetSessionFull(t.Context(), id)
-		require.NoError(t, err)
-		messages, err := te.db.GetAllMessages(t.Context(), id)
-		require.NoError(t, err)
-		update, _ := ingest.ComputeSignalsAndSecrets(*session, messages)
-		require.NoError(t, te.db.UpdateSessionSignals(t.Context(), id, update))
-	}
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	dbtest.SeedMirrorPricing(t, te.db)
-	_, err := duckdb.Push(t.Context(), path, te.db, "test-installation", storage.MirrorPushOptions{}, true, nil)
-	require.NoError(t, err)
-	store, err := duckdb.NewStore(t.Context(), path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	filter := db.AnalyticsFilter{From: "2026-04-26", To: "2026-04-26"}
-	wantRates, err := te.db.GetAnalyticsTools(t.Context(), filter)
-	require.NoError(t, err)
-	gotRates, err := store.GetAnalyticsTools(t.Context(), filter)
-	require.NoError(t, err)
-	assert.Equal(t, wantRates, gotRates)
-	evidenceFilter := filter
-	evidenceFilter.ToolName, evidenceFilter.ToolCategory = "Grep", "Grep"
-	for _, signal := range []string{"tool_empty_rate", "tool_repeat_rate", "tool_recovery_rate"} {
-		wantEvidence, err := te.db.GetAnalyticsSignalSessions(t.Context(), evidenceFilter, signal, 10)
-		require.NoError(t, err)
-		require.NotNil(t, wantEvidence.Total)
-		if signal == "tool_empty_rate" {
-			require.Positive(t, *wantEvidence.Total)
-		}
-		gotEvidence, err := store.GetAnalyticsSignalSessions(t.Context(), evidenceFilter, signal, 10)
-		require.NoError(t, err)
-		assert.Equal(t, wantEvidence, gotEvidence, signal)
-	}
-	cfg := config.Config{Host: "127.0.0.1", InstallationID: "server-installation"}
-	te.handler = wrapTestHandler(cfg, server.New(cfg, store, nil).Handler())
-	for sessionID, sqlite := range source {
-		mirror := fetchSessionToolSequences(t, te, sessionID)
-		assert.Equal(t, sqlite, mirror, sessionID)
-	}
 }
 
 func TestHandleToolSequences_ReadErrors(t *testing.T) {

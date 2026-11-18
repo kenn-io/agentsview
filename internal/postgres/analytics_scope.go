@@ -81,7 +81,7 @@ func (s *Store) resolveAnalyticsMessageScope(
 			}
 			// Preserve subsecond precision: scan the timestamptz natively and
 			// format at full RFC3339Nano precision, matching the non-model
-			// velocity path and the SQLite/DuckDB scopes. A whole-second
+			// velocity path and the SQLite scopes. A whole-second
 			// TO_CHAR here would truncate turn-cycle/first-response gaps.
 			tsStr := ""
 			if ts != nil {

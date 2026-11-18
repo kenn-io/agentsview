@@ -41,7 +41,7 @@ func newSessionSearchCommand() *cobra.Command {
 		Short: "Search message and tool content across sessions",
 		Long: "Search archived message and tool content with redacted snippets. " +
 			"The default is substring search across available sources. " +
-			"On SQLite, PostgreSQL, DuckDB, and ClickHouse, a search of several words lists exact text first, then messages holding every word, then those holding more of the words; " +
+			"On SQLite, PostgreSQL, and ClickHouse, a search of several words lists exact text first, then messages holding every word, then those holding more of the words; " +
 			"a fully quoted search matches its text only. " +
 			"Choose at most one of --regex, --fts, --semantic, or --hybrid. " +
 			"FTS and semantic/hybrid modes search messages only. " +
@@ -137,7 +137,7 @@ func newSessionSearchCommand() *cobra.Command {
 	flags.BoolVar(&useHybrid, "hybrid", false,
 		"Hybrid semantic + full-text search (reciprocal rank fusion)")
 	flags.StringVar(&in, "in", "",
-		"Comma-separated sources: messages,thinking,tool_input,tool_result (default all; thinking: SQLite, PostgreSQL, DuckDB, and ClickHouse substring/regex only)")
+		"Comma-separated sources: messages,thinking,tool_input,tool_result (default all; thinking: SQLite, PostgreSQL, and ClickHouse substring/regex only)")
 	flags.BoolVar(&excludeSystem, "exclude-system", false,
 		"Exclude system messages (included by default)")
 	flags.BoolVar(&reveal, "reveal", false, "Show full secret values (unredacted)")

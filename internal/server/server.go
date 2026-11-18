@@ -76,7 +76,7 @@ type VersionInfo struct {
 // Bump it when a client-visible contract cannot be decoded safely by an older
 // CLI or daemon.
 const (
-	APIVersion = 23
+	APIVersion = 24
 	// KataAPIVersion is the first daemon API that serves /api/v1/kata/status.
 	KataAPIVersion = 14
 	// FrictionAPIVersion is the first daemon API that serves
@@ -210,7 +210,6 @@ type Server struct {
 	// replicas and mirror are the push backends registered by the
 	// composition root; each gets a daemon push route.
 	replicas []storage.Replica
-	mirror   storage.Mirror
 
 	// localSyncRunner, when set, backs the foreground local-sync HTTP handler
 	// with the worker-backed pass instead of running SyncThenRun in process.

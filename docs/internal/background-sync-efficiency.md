@@ -237,16 +237,16 @@ plans, and polling. The local sync engine (`internal/sync/engine.go`) omits a
 disabled provider's factory once while building its provider-factory set;
 watcher coverage and polling derive from that same selection. HTTP and SSH
 remote import, and every export path (HTTP/SSH source export, PostgreSQL,
-DuckDB, archive export), stay independent of this setting and are never passed a
-disabled-provider list, so archived sessions from a disabled provider remain
-visible, exportable, and unaffected by rebuilds. `RemoteSyncExcluded` remains
-the separate, permanent capability that keeps unsafe source trees out of remote
-export; disabling a provider does not change it.
+ClickHouse, archive export), stay independent of this setting and are never
+passed a disabled-provider list, so archived sessions from a disabled provider
+remain visible, exportable, and unaffected by rebuilds. `RemoteSyncExcluded`
+remains the separate, permanent capability that keeps unsafe source trees out of
+remote export; disabling a provider does not change it.
 
 A change saved through the Settings API applies to the running daemon's file
-watching and polling immediately. A separate `pg push --watch`,
-`clickhouse push --watch`, or `duckdb push --watch` process still needs a
-restart to pick up the new selection, because it owns its own engine instance.
+watching and polling immediately. A separate `pg push --watch` or
+`clickhouse push --watch` process still needs a restart to pick up the new
+selection, because it owns its own engine instance.
 See
 [Disabling Session Providers](../configuration.md#disabling-session-providers)
 for the user-facing contract.

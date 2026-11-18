@@ -30,7 +30,7 @@ import (
 // sessions in the first sub-second of the range. A zone-less bound is a
 // strict prefix of every stored RFC3339Nano-UTC value at that second, so
 // whole-second and fractional values both compare correctly.
-// PostgreSQL/DuckDB use ActivityReportInstantBoundsUTC for parsed instants with a zone suffix.
+// PostgreSQL uses ActivityReportInstantBoundsUTC for parsed instants with a zone suffix.
 func activityReportRangeBoundsUTC(q activity.Query) (string, string) {
 	const boundLayout = "2006-01-02T15:04:05"
 	return q.RangeStart.UTC().Format(boundLayout),

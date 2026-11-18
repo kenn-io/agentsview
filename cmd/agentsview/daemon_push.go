@@ -64,18 +64,6 @@ func replicaPushOperation(name string) (daemonPushOperation, error) {
 	return operation, nil
 }
 
-func mirrorPushOperation(
-	ctx context.Context, api *apiclient.Client, body *apiclient.DaemonPushRequest,
-) (*http.Response, []byte, *runtime.Stream[[]byte], error) {
-	response, err := api.PostAPIV1PushDuckdbStreamWithResponse(
-		ctx, &apiclient.PostAPIV1PushDuckdbRequestOptions{Body: body},
-	)
-	if response == nil {
-		return nil, nil, nil, err
-	}
-	return response.HTTPResponse, response.Body, response.Stream200, nil
-}
-
 func startupSyncOperation(
 	ctx context.Context, api *apiclient.Client, _ *apiclient.DaemonPushRequest,
 ) (*http.Response, []byte, *runtime.Stream[[]byte], error) {
@@ -173,7 +161,7 @@ func daemonRejectsWatchScope(status int, body []byte) bool {
 // by the generated client's stream. A stream that ends without a done or
 // error event counts as a push that never started, so a watch keeps its
 // --full request, unless the daemon reported that its sync rebuilt the
-// archive: every mirror pushes in full after that.
+// archive: every replica pushes in full after that.
 func consumeDaemonPushEvents[T, P any](stream *runtime.Stream[[]byte], onProgress func(P)) (T, error) {
 	var result, zero T
 	var done, rebuilt bool

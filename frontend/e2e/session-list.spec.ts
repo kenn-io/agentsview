@@ -109,7 +109,7 @@ test.describe("Session list", () => {
       .toBeVisible({ timeout: 5_000 })
       .then(() => true)
       .catch(() => false);
-    expect(hasMessages || process.env.AGENTSVIEW_E2E_BACKEND === "duckdb").toBe(true);
+    expect(hasMessages).toBe(true);
     await expect(sessionWithMessages).toHaveClass(/active/);
     await expect(sp.sessionItems).toHaveCount(TOTAL_SESSIONS);
 

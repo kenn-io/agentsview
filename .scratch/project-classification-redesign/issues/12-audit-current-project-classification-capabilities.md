@@ -9,8 +9,8 @@ Status: resolved
 What does the current system actually support before prototypes make new
 promises? Trace candidate selection, machine and path identity, normalization,
 nested-rule precedence, impact preview and apply atomicity, reversal behavior,
-read-only presentation, authentication and origin enforcement, and the SQLite,
-PostgreSQL/CockroachDB, and DuckDB boundaries. Record facts and constraints
+read-only presentation, authentication and origin enforcement, and the SQLite
+and PostgreSQL/CockroachDB boundaries. Record facts and constraints
 only; leave product choices to the dependent decision tickets.
 
 ## Answer
@@ -22,7 +22,7 @@ only; leave product choices to the dependent decision tickets.
   raw project labels that resolve to the same project identity. It considers
   every non-deleted session in the archive, without Activity filters or date
   bounds.
-- Candidate grouping is shared by SQLite, PostgreSQL/CockroachDB, and DuckDB.
+- Candidate grouping is shared by SQLite and PostgreSQL/CockroachDB.
   Groups are machine-scoped and prefer session identity snapshots, then
   compatible aggregate identity observations, then an exact stored `cwd`.
   Sessions with none of those become an unavailable group.
@@ -34,9 +34,8 @@ only; leave product choices to the dependent decision tickets.
   prefix is non-empty and is not a filesystem root; it does not check whether
   the directory currently exists or can be reached from the server.
 
-Sources: `internal/db/worktree_candidates.go`,
-`internal/postgres/worktree_candidates.go`, and
-`internal/duckdb/worktree_candidates.go`.
+Sources: `internal/db/worktree_candidates.go` and
+`internal/postgres/worktree_candidates.go`.
 
 ### Machine, path, and rule identity
 
@@ -53,7 +52,7 @@ Sources: `internal/db/worktree_candidates.go`,
   the reclassification path and is set once on a rule; later edits do not
   replace a non-empty value.
 - Numeric rule IDs are local SQLite identifiers. Replicated rule identity is
-  `(source_archive_id, machine, path_prefix)`, because PostgreSQL and DuckDB
+  `(source_archive_id, machine, path_prefix)`, because PostgreSQL
   can contain rules from several source archives and do not publish SQLite
   IDs.
 
@@ -129,13 +128,13 @@ Sources: `internal/db/worktree_mappings.go`,
 
 - SQLite is the only backend that serves rule mutations, preview, and apply.
   These routes require a writable `*db.DB` and a sync engine. PostgreSQL,
-  CockroachDB, DuckDB, and any other remote-mode store receive HTTP 501 from
+  CockroachDB, and any other remote-mode store receive HTTP 501 from
   those settings routes.
-- All three store implementations support project inventory, project-rule reads,
+- The SQLite and PostgreSQL store implementations support project inventory, project-rule reads,
   and archive-wide candidate reads. The Data UI still shows observed folders
   and rules in read-only mode, but it hides mapping fields and mutation
   actions and explains that changes must be made in the writable archive.
-- PostgreSQL/CockroachDB and DuckDB receive rule metadata through push. An
+- PostgreSQL/CockroachDB receives rule metadata through push. An
   unfiltered push publishes the full archive-scoped rule set or a tombstoned
   delta in one transaction. A filtered push republishes only explicit rules
   whose target is in scope, removes an out-of-scope `original_project`, and
@@ -145,9 +144,8 @@ Sources: `internal/db/worktree_mappings.go`,
   archive or reclassify mirrored session rows through the UI.
 
 Sources: `internal/server/huma_routes_settings.go`, `internal/db/store.go`,
-`internal/postgres/store.go`, `internal/duckdb/store.go`,
-`internal/postgres/worktree_mappings_push.go`, and
-`internal/duckdb/worktree_mappings_push.go`.
+`internal/postgres/store.go`, and
+`internal/postgres/worktree_mappings_push.go`.
 
 ### Authentication and origin enforcement
 
@@ -167,11 +165,11 @@ Sources: `internal/server/auth.go` and `internal/server/server.go`.
 ### Verification
 
 Focused Go checks passed for the SQLite classification, server route and
-middleware, and DuckDB parity behavior:
+middleware, and PostgreSQL parity behavior:
 
 ```text
-go test ./internal/db ./internal/server ./internal/duckdb \
-  -run 'Test(Worktree|ListArchiveWorktree|BuildWorktree|ResolveWorktree|ApplyWorktree|DataProject|DuckWorktree|DuckProjectRules|CORS|HostHeader|AuthRequired)' \
+go test ./internal/db ./internal/server \
+  -run 'Test(Worktree|ListArchiveWorktree|BuildWorktree|ResolveWorktree|ApplyWorktree|DataProject|CORS|HostHeader|AuthRequired)' \
   -count=1
 ```
 

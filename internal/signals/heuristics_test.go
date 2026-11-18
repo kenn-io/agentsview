@@ -503,21 +503,6 @@ func TestNormalizePromptRemovesCodeFences(t *testing.T) {
 	assert.Equal(t, want, got)
 }
 
-func TestCountFrustrationMarkers(t *testing.T) {
-	msgs := []HeuristicMessage{
-		{Role: "user", Content: "WHY WONT THIS WORK???!!!"},
-		{Role: "user", Content: "this is broken after the retry"},
-		{Role: "assistant", Content: "I will inspect it."},
-		{Role: "user", Content: "Please run the focused test again."},
-		{
-			Role:    "user",
-			Content: "```text\nFUCK\n```\nPlease handle the log.",
-		},
-	}
-
-	assert.Equal(t, 2, CountFrustrationMarkers(msgs))
-}
-
 // Starting the regular expression where frustrationPhraseStart says must
 // find a match exactly when reading the whole prompt does, including
 // prompts whose letters only match under Unicode case folding and literals

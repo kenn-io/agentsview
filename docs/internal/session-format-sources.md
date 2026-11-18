@@ -234,8 +234,7 @@ evidence; they do not establish whether a tool helped the task.
   sources in place. The upgrade preserves session and public message
   identities, pins, notes, names, stars, and retained rows whose sources are
   gone; archive-only archives retain their pending state without source sync.
-  DuckDB rebuilds the mirror when its source data version changes. The
-  messages API and DuckDB preserve the existing system/source fields and body.
+  The messages API preserves the existing system/source fields and body.
   PostgreSQL preserves source identity, the system flag, and dialogue
   projection fields. ClickHouse runtime behavior remains unverified.
 
@@ -601,11 +600,8 @@ fixtures retain this field; missing identities remain source-local.
   generic deduplication rules. These accounting semantics are exposed by
   usage, activity, and session-summary schema version 5 and reporting schema
   version 2; reporting version 1 retains its frozen first-seen, token-only
-  semantics. Reverified 2026-08-06 that DuckDB records a web-search-only flat
-  fee as computed pricing provenance, so combining it with a provider-reported
-  cost is labeled `mixed` like the SQLite archive. Reverified 2026-08-22 that
-  activity buckets carry the selected Claude input-token snapshots identically
-  across SQLite, PostgreSQL, and DuckDB.
+  semantics. Reverified 2026-08-22 that activity buckets carry the selected
+  Claude input-token snapshots identically across SQLite and PostgreSQL.
 
 - **Agentsview:** `internal/parser/claude.go` and
   `internal/parser/claude_provider.go`; local observations and fixtures are
@@ -2896,9 +2892,8 @@ schemas keep their existing ordering behavior.
   Structured text blocks retain literal markers separately from reasoning and
   tool calls. Unpaired observations retain their stored-content `message`
   search behavior and add no tool call. The `thinking` source on SQLite,
-  PostgreSQL, DuckDB, and ClickHouse searches reasoning with substring or
-  regex mode; source-less sessions and v4 imports retain their stored-content
-  fallback.
+  PostgreSQL, and ClickHouse searches reasoning with substring or regex mode;
+  source-less sessions and v4 imports retain their stored-content fallback.
 - **Format:** A CLI conversation directory containing `base_state.json` and one
   JSON file per event under `events/`; Agentsview also fingerprints optional
   legacy `TASKS.json` files.

@@ -85,8 +85,7 @@ Preserve the project's cross-cutting contracts:
   must preserve existing sessions through the migration and resync paths
   documented in `AGENTS.md`.
 - Keep SQLite and PostgreSQL behavior and query shape aligned unless the change
-  is explicitly scoped to one backend. DuckDB remains a disposable read
-  mirror.
+  is explicitly scoped to one backend.
 - Keep every frontend locale synchronized when user-facing messages change.
 - Keep background work bounded as stored session counts grow, and add
   cardinality-scaling coverage when changing watcher, polling, or sync paths.

@@ -560,7 +560,7 @@ func TestAggregate_UsageOnlySessionTiedCostPrimaryModel(t *testing.T) {
 // TestAggregate_BreakdownCostDeterministicAcrossSessionOrder pins that the
 // per-key cost rollup does not depend on the order sessions arrive in. The
 // activityReportSessions queries impose no ORDER BY, so SQLite, PostgreSQL, and
-// DuckDB can return the same sessions in different orders. addKey sums float64
+// ClickHouse can return the same sessions in different orders. addKey sums float64
 // costs across sessions and float addition is not associative -- (0.1+0.2)+0.3
 // rounds to a different last bit than (0.3+0.2)+0.1 -- so without a
 // deterministic session order the three backends produced 1-ULP-different
