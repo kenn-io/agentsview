@@ -252,3 +252,27 @@ func TestSessionRunsGobRoundTrip(t *testing.T) {
 		require.Error(t, restored.GobDecode(buf.Bytes()))
 	}
 }
+
+func TestSessionRunsPieces(t *testing.T) {
+	builder := NewSessionRunsBuilder(300)
+	builder.AddPiece("model-a", 1000000, 2000000, false)
+	builder.AddPiece("model-a", 2000000, 3000000, true)
+	builder.AddPiece("model-b", 4000000, 5000000, false)
+	original := builder.Finish()
+	bounds, trimmed, pieces := original.Pieces()
+	restored, err := NewSessionRuns(bounds, trimmed, pieces)
+	require.NoError(t, err)
+	start, end := time.UnixMicro(1500000), time.UnixMicro(4500000)
+	require.Equal(t, original.AppendClippedBefore(nil, "s", start, end, time.UnixMicro(2000000)), restored.AppendClippedBefore(nil, "s", start, end, time.UnixMicro(2000000)))
+	for _, tc := range []struct {
+		bounds []int64
+		runs   []SessionRunPiece
+	}{
+		{[]int64{1}, []SessionRunPiece{{First: 0, Last: 2}}},
+		{[]int64{1, 2}, []SessionRunPiece{{First: 1, Last: 1}}},
+		{[]int64{1, 2, 3}, []SessionRunPiece{{First: 0, Last: 1}, {First: 1, Last: 2}}},
+	} {
+		_, err := NewSessionRuns(tc.bounds, nil, tc.runs)
+		require.Error(t, err)
+	}
+}

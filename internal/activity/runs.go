@@ -82,6 +82,34 @@ type sessionRun struct {
 	first, last int32
 }
 
+// SessionRunPiece identifies a run's model and its boundary indexes.
+type SessionRunPiece struct {
+	Model       string
+	First, Last int32
+}
+
+// Pieces returns the boundaries and run indexes used to clip a session.
+func (r SessionRuns) Pieces() (bounds []int64, trimmed []uint64, runs []SessionRunPiece) {
+	for _, run := range r.runs {
+		runs = append(runs, SessionRunPiece{run.model, run.first, run.last})
+	}
+	return r.bounds, r.trimmed, runs
+}
+
+// NewSessionRuns restores runs after validating their boundary indexes.
+func NewSessionRuns(bounds []int64, trimmed []uint64, runs []SessionRunPiece) (SessionRuns, error) {
+	result := SessionRuns{bounds: bounds, trimmed: trimmed}
+	var next int32
+	for _, run := range runs {
+		if run.First < next || run.Last <= run.First || int(run.Last) >= len(bounds) {
+			return SessionRuns{}, errors.New("invalid activity run bounds")
+		}
+		result.runs = append(result.runs, sessionRun{run.Model, run.First, run.Last})
+		next = run.Last + 1
+	}
+	return result, nil
+}
+
 type encodedSessionRun struct {
 	Model       string
 	First, Last int32
