@@ -463,7 +463,7 @@
   // A failed page is left to the pagination Retry control.
   function pagingSidebar(): boolean {
     void firstVisitPaged;
-    if (!sessions.nextCursor || sessions.sidebarPageFailed) return false;
+    if (!sessions.nextCursor || sessions.sidebarLoadError) return false;
     if (!sessions.loading) void sessions.loadMore().finally(() => firstVisitPaged++);
     return true;
   }

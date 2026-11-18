@@ -878,11 +878,24 @@ describe("App root Sessions landing", () => {
       stubAppDependencies();
       vi.spyOn(sessions, "load").mockResolvedValue();
       let pageAttempts = 0;
+      const olderApiRow = {
+        agent: "codex",
+        created_at: "2026-01-02",
+        ended_at: "2026-01-02",
+        id: "older",
+        is_automated: false,
+        is_teammate: false,
+        machine: "local",
+        message_count: 1,
+        project: "older",
+        started_at: "2026-01-02",
+        user_message_count: 1,
+      };
       const sidebarIndex = vi
         .spyOn(SessionsService, "getApiV1SessionsSidebarIndex")
         .mockImplementation(async () => {
           if (failFirst && pageAttempts++ === 0) throw new Error("Sidebar page unavailable");
-          return { sessions: [sidebarRow("older", 1, "2026-01-02")], total: 2, next_cursor: null };
+          return { sessions: [olderApiRow], total: 2 };
         });
       vi.mocked(messages.loadSession).mockImplementation(async (id) => {
         messages.sessionId = id;
@@ -912,7 +925,7 @@ describe("App root Sessions landing", () => {
         retry!.click();
       }
       await vi.waitFor(() => expect(sessions.activeSessionId).toBe("older"));
-      expect(sidebarIndex.mock.calls.map(([params]) => params.cursor)).toEqual(
+      expect(sidebarIndex.mock.calls.map(([params]) => params?.cursor)).toEqual(
         failFirst ? ["older-page", "older-page"] : ["older-page"],
       );
       expect(messages.messages[0]?.content).toBe("readable history");
