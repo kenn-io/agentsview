@@ -162,14 +162,14 @@ func (c labelsColumn) Scan(src any) error {
 	return nil
 }
 
-// GetSessionPRLinkURLs returns the pull request URLs stored for a session.
+// GetSessionPRLinkURLs returns the structured pull request URLs for a session.
 // A missing session yields an empty map.
 func (db *DB) GetSessionPRLinkURLs(
 	ctx context.Context, sessionID string,
 ) (map[string]struct{}, error) {
 	var text string
 	err := db.getReader().QueryRowContext(ctx,
-		"SELECT pr_links FROM sessions WHERE id = ?", sessionID,
+		"SELECT structured_pr_links FROM sessions WHERE id = ?", sessionID,
 	).Scan(&text)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("reading pr links for %s: %w", sessionID, err)

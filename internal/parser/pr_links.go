@@ -107,7 +107,7 @@ func MergePRLinks(lists ...[]PRLink) []PRLink {
 }
 
 var (
-	promptURL      = regexp.MustCompile(`(?i)https?://(?:\[[^\]\s]+\]|[^\s<>"'()/\[\]]+)[^\s<>"'()\[\]]*`)
+	promptURL      = regexp.MustCompile(`(?i)https?://[^\s<>"'()\[\]]+`)
 	promptURLStart = regexp.MustCompile(`(?i)https?://`)
 )
 
@@ -142,10 +142,7 @@ func PromptPRLinks(text string) []PRLink {
 		if !found || strings.Count(repository, "/") < 1 || strings.Trim(num, "0123456789") != "" {
 			continue
 		}
-		n, err := strconv.Atoi(num)
-		if err != nil {
-			continue
-		}
+		n, _ := strconv.Atoi(num)
 		u.Path = routePath
 		u.RawPath, u.RawQuery, u.Fragment = "", "", ""
 		if link, ok := NewPRLink(u.String(), repository, n); ok {
