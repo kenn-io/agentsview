@@ -24,9 +24,9 @@ func genAIPricingReadsSince(t *testing.T, syncer *Sync, start time.Time) (reads,
 		SELECT count(), max(result_bytes)
 		FROM system.query_log
 		WHERE current_database = currentDatabase() AND type = 'QueryFinish'
-			AND query_kind = 'Select' AND event_time_microseconds >= ?
+			AND query_kind = 'Select' AND event_time_microseconds >= fromUnixTimestamp64Micro(?)
 			AND has(tables, currentDatabase() || '.genai_pricing')
-	`, start).Scan(&reads, &maxResultBytes))
+	`, start.UnixMicro()).Scan(&reads, &maxResultBytes))
 	return reads, maxResultBytes
 }
 
