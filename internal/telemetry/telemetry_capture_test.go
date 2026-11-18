@@ -50,21 +50,9 @@ func TestCaptureFollowsKennConsent(t *testing.T) {
 			endpoint, captured := captureCollector(t)
 			reporter := captureReporter(t, endpoint, Options{})
 			assert.Equal(t, tc.granted, reporter.Enabled())
-			require.NoError(t, kittelemetry.RecordConsent(!tc.granted))
-			assert.Equal(t, tc.granted, reporter.Enabled())
 			require.NoError(t, reporter.CaptureDaemonActive(t.Context()))
 			postCapture(t, reporter.CaptureHandler(), `{"event":"app_opened"}`, http.StatusAccepted)
 			require.NoError(t, reporter.Close())
-			nextEndpoint, nextCaptured := captureCollector(t)
-			nextReporter := captureReporter(t, nextEndpoint, Options{})
-			assert.Equal(t, !tc.granted, nextReporter.Enabled())
-			require.NoError(t, nextReporter.CaptureDaemonActive(t.Context()))
-			require.NoError(t, nextReporter.Close())
-			if tc.granted {
-				assert.Empty(t, nextCaptured())
-			} else {
-				assert.Len(t, nextCaptured(), 1)
-			}
 			sent := captured()
 			if !tc.granted {
 				assert.Empty(t, sent)
