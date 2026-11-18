@@ -1,6 +1,15 @@
 import { test, expect } from "@playwright/test";
 
 test.describe("Chromium dashboard evidence", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem("agentsview-read-progress", JSON.stringify({
+        version: 2,
+        sessions: { prior: { token: "revision", ordinal: 0, touched_at: 1 } },
+      }));
+    });
+  });
+
   test.skip(
     ({ browserName }) => browserName !== "chromium",
     "the fixture evidence is recorded on Chromium",
