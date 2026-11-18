@@ -52,8 +52,8 @@ Trends keeps per-session counts under `$CACHE_DIRECTORY/sqlite-trends`, or
 `agentsview/sqlite-trends` in the user cache directory, up to 256 MiB per
 archive. They are safe to delete; the next Trends visit counts messages again.
 Search pages can also contain session snippets. They are stored in
-`sqlite-trends`, `postgres-trends`, `duckdb-usage`, or `clickhouse-usage`
-under `$CACHE_DIRECTORY`, or under `agentsview/` in the user cache directory.
+`sqlite-trends`, `postgres-trends`, or `clickhouse-usage` under
+`$CACHE_DIRECTORY`, or under `agentsview/` in the user cache directory.
 After a session is deleted, its snippets can remain until the same search
 overwrites the page or the cache is trimmed.
 
