@@ -147,7 +147,7 @@ func (p *claudeProvider) RawCaptureSourcesForChangedPath(
 	ctx context.Context,
 	req ChangedPathRequest,
 ) ([]SourceRef, error) {
-	return p.SourcesForChangedPath(ctx, req)
+	return p.sources.RawCaptureSourcesForChangedPath(ctx, req)
 }
 
 func (p *claudeProvider) WatchPlan(ctx context.Context) (WatchPlan, error) {
@@ -522,13 +522,14 @@ type claudeLayoutSpec struct {
 	watchGlobs    []string
 	listFiles     func(string) []DiscoveredFile
 	// sidecarSources includes persisted tool-result companions in source
-	// fingerprints and maps a root session's companion to its subagent
-	// transcripts too. The Claude provider keeps this off: its stored
-	// fingerprints hash only the transcript, and switching to composite
-	// hashes would invalidate every archived Claude fingerprint and force a
-	// full reparse. Every spec maps a companion to its owning transcript,
-	// because a remote mirror journal lists companions and the local watcher
-	// delivers every file under the root.
+	// fingerprints and, for sync, maps a root session's companion to its
+	// subagent transcripts too. The Claude provider keeps this off: its
+	// stored fingerprints hash only the transcript, and switching to
+	// composite hashes would invalidate every archived Claude fingerprint and
+	// force a full reparse. Every spec maps a companion to its owning
+	// transcript, because a remote mirror journal lists companions and the
+	// local watcher delivers every file under the root. Raw capture always
+	// maps a root companion to the subagents, whose capture plans upload it.
 	sidecarSources bool
 }
 
@@ -714,6 +715,24 @@ func (s claudeSourceSet) SourcesForChangedPath(
 	ctx context.Context,
 	req ChangedPathRequest,
 ) ([]SourceRef, error) {
+	return s.sourcesForChangedPath(ctx, req, s.spec.sidecarSources)
+}
+
+// RawCaptureSourcesForChangedPath also maps a root session's tool result to
+// its subagent transcripts, because a subagent's raw capture plan uploads the
+// parent session's tool results.
+func (s claudeSourceSet) RawCaptureSourcesForChangedPath(
+	ctx context.Context,
+	req ChangedPathRequest,
+) ([]SourceRef, error) {
+	return s.sourcesForChangedPath(ctx, req, true)
+}
+
+func (s claudeSourceSet) sourcesForChangedPath(
+	ctx context.Context,
+	req ChangedPathRequest,
+	subagentResults bool,
+) ([]SourceRef, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -731,7 +750,9 @@ func (s claudeSourceSet) SourcesForChangedPath(
 		if !s.hasRoot(root) {
 			return nil, nil
 		}
-		if sources, err := s.sourcesForToolResultPath(root, req.Path); err != nil || len(sources) > 0 {
+		if sources, err := s.sourcesForToolResultPath(
+			root, req.Path, subagentResults,
+		); err != nil || len(sources) > 0 {
 			return sources, err
 		}
 		source, ok := s.sourceForChangedPath(root, req.Path, allowMissing)
@@ -741,7 +762,9 @@ func (s claudeSourceSet) SourcesForChangedPath(
 		return []SourceRef{source}, nil
 	}
 	for _, root := range s.roots {
-		if sources, err := s.sourcesForToolResultPath(root, req.Path); err != nil || len(sources) > 0 {
+		if sources, err := s.sourcesForToolResultPath(
+			root, req.Path, subagentResults,
+		); err != nil || len(sources) > 0 {
 			return sources, err
 		}
 		source, ok := s.sourceForChangedPath(root, req.Path, allowMissing)

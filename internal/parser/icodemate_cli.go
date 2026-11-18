@@ -114,13 +114,14 @@ func (s *icodemateCLISourceSet) Parse(
 }
 
 // sourcesForToolResultPath maps a changed path under a per-session
-// tool-results directory back to its owning transcript. With sidecarSources,
+// tool-results directory back to its owning transcript. With subagentResults,
 // a root session's results also map to every subagent transcript beneath it,
-// because their composite fingerprints include the parent's results. Without
-// it, fingerprints hash only the transcript, so selecting an unchanged
-// subagent would cost a hash and never cause a parse.
+// whose parses and raw capture plans read the parent's results. Sync passes
+// it only for composite fingerprints: a transcript-only fingerprint cannot
+// change with a parent's result, so selecting the subagent would cost a hash
+// and never cause a parse.
 func (s claudeSourceSet) sourcesForToolResultPath(
-	root, changedPath string,
+	root, changedPath string, subagentResults bool,
 ) ([]SourceRef, error) {
 	root = filepath.Clean(root)
 	changedPath = filepath.Clean(changedPath)
@@ -150,7 +151,7 @@ func (s claudeSourceSet) sourcesForToolResultPath(
 		sources = append(sources, source)
 	}
 	add(ownerBase + ".jsonl")
-	if !s.spec.sidecarSources || slices.Contains(parts[:toolResultsAt], "subagents") {
+	if !subagentResults || slices.Contains(parts[:toolResultsAt], "subagents") {
 		return sources, nil
 	}
 
