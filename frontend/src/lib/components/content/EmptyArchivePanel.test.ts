@@ -37,8 +37,8 @@ afterEach(() => {
 
 describe("EmptyArchivePanel", () => {
   it.each([
-    [true, false, "Importing sessions"],
-    [true, true, "Importing sessions"],
+    [true, false, "Syncing sessions"],
+    [true, true, "Syncing sessions"],
     [false, true, "Import not finished"],
     [false, false, "No sessions yet"],
   ])("shows the reason for an empty view", async (syncing, pending, title) => {
@@ -63,7 +63,7 @@ describe("EmptyArchivePanel", () => {
     sync.syncing = true;
     component = mount(EmptyArchivePanel, { target: document.body });
     await tick();
-    expect(document.body.textContent).toContain("Importing sessions");
+    expect(document.body.textContent).toContain("Syncing sessions");
     expect(document.body.textContent).toContain("/example");
     sync.syncing = false;
     sessions.archiveEmpty = true;

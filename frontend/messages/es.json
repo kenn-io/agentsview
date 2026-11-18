@@ -3294,7 +3294,7 @@
   ],
   "empty_archive_pending_title": "Importación incompleta",
   "empty_archive_pending_desc": "Selecciona Sincronizar en la barra superior para reintentar, o elige las carpetas de tus agentes.",
-  "empty_archive_syncing_title": "Importando sesiones",
+  "empty_archive_syncing_title": "Sincronizando sesiones",
   "empty_archive_syncing_desc": "Tus sesiones aparecerán a medida que se importen.",
   "empty_archive_title": "Aún no hay sesiones",
   "empty_archive_desc": "AgentsView lee las sesiones de estas carpetas. Aparecerán aquí cuando un agente escriba en alguna de ellas.",
