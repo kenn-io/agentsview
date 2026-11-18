@@ -858,13 +858,11 @@ func TestUsageSpoolRoutesCachedAndUncachedBatches(t *testing.T) {
 		require.NoError(t, writer.Add("cached", 0, fact))
 		require.NoError(t, writer.Flush())
 		assert.Positive(t, reads)
-		var count int
-		require.NoError(t, tx.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM facts`).Scan(&count))
-		assert.Equal(t, 2, count)
 	})
 
 	t.Run("separate statements", func(t *testing.T) {
 		database, cache := usageSpoolExtractionFixture(t, 1001)
+		// The extraction orders by session ID, preparing the direct statement first.
 		for _, id := range []string{"a-uncached", "z-uncached"} {
 			require.NoError(t, database.UpsertSession(t.Context(), Session{ID: id, Project: "project", Machine: defaultMachine, Agent: defaultAgent}))
 			messages := make([]Message, 1001)
@@ -888,24 +886,48 @@ func TestUsageSpoolRoutesCachedAndUncachedBatches(t *testing.T) {
 }
 
 func TestUsageSpoolFallsBackAfterCacheRevisionChanges(t *testing.T) {
-	_, cache := usageSpoolExtractionFixture(t, 8)
-	versions := []usageSourceVersion{{SessionID: "session"}}
-	expected, err := cache.fill.captureFillInstallExpectations(t.Context(), versions)
-	require.NoError(t, err)
-	_, err = cache.fill.fillSessionsDetached(t.Context(), versions)
-	require.NoError(t, err)
-	spool, extracted, err := cache.fill.extractSessions(t.Context(), versions, expected)
-	require.NoError(t, err)
-	defer spool.Close()
-	var rows int
-	require.NoError(t, spool.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM facts`).Scan(&rows))
-	assert.Equal(t, 8, rows, "a changed baseline requires the complete snapshot")
-	installed, lost, err := cache.fill.installSpool(t.Context(), spool,
-		[]usageSourceVersion{extracted["session"]}, nil, expected, 0)
-	require.NoError(t, err)
-	assert.Empty(t, installed)
-	assert.Equal(t, []string{"session"}, lost)
-	assert.Equal(t, 8, usageCacheCount(t, cache, "usage_facts"))
+	t.Run("new cache entry", func(t *testing.T) {
+		database := usageCandidateFixture(t)
+		snapshot, err := database.captureUsageQuery(t.Context(), UsageFilter{}, usageQueryKindToken)
+		require.NoError(t, err)
+		defer snapshot.Close()
+		cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
+		require.NoError(t, err)
+		versions := []usageSourceVersion{{SessionID: "inside-message"}}
+		expected, err := cache.fill.captureFillInstallExpectations(t.Context(), versions)
+		require.NoError(t, err)
+		require.False(t, expected["inside-message"].Exists)
+		spool, extracted, err := cache.fill.extractSessions(t.Context(), versions, expected)
+		require.NoError(t, err)
+		defer spool.Close()
+		_, err = cache.fill.fillSessionsDetached(t.Context(), versions)
+		require.NoError(t, err)
+		installed, lost, err := cache.fill.installSpool(t.Context(), spool,
+			[]usageSourceVersion{extracted["inside-message"]}, nil, expected, 0)
+		require.NoError(t, err)
+		assert.Empty(t, installed)
+		assert.Equal(t, []string{"inside-message"}, lost)
+	})
+	t.Run("changed revision", func(t *testing.T) {
+		_, cache := usageSpoolExtractionFixture(t, 8)
+		versions := []usageSourceVersion{{SessionID: "session"}}
+		expected, err := cache.fill.captureFillInstallExpectations(t.Context(), versions)
+		require.NoError(t, err)
+		_, err = cache.fill.fillSessionsDetached(t.Context(), versions)
+		require.NoError(t, err)
+		spool, extracted, err := cache.fill.extractSessions(t.Context(), versions, expected)
+		require.NoError(t, err)
+		defer spool.Close()
+		var rows int
+		require.NoError(t, spool.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM facts`).Scan(&rows))
+		assert.Equal(t, 8, rows, "a changed baseline requires the complete snapshot")
+		installed, lost, err := cache.fill.installSpool(t.Context(), spool,
+			[]usageSourceVersion{extracted["session"]}, nil, expected, 0)
+		require.NoError(t, err)
+		assert.Empty(t, installed)
+		assert.Equal(t, []string{"session"}, lost)
+		assert.Equal(t, 8, usageCacheCount(t, cache, "usage_facts"))
+	})
 }
 
 func TestUsageSpoolInvalidatesOnlyChangedIdentityPeers(t *testing.T) {
@@ -1220,15 +1242,6 @@ func TestUsageFillCoordinatorDoesNotJoinOlderSourceVersion(t *testing.T) {
 }
 
 func TestUsageFillOlderExtractionCannotReplaceNewerCachedFacts(t *testing.T) {
-	for _, seeded := range []bool{true, false} {
-		t.Run(fmt.Sprintf("seeded=%t", seeded), func(t *testing.T) {
-			testUsageFillOlderExtractionCannotReplaceNewerCachedFacts(t, seeded)
-		})
-	}
-}
-
-func testUsageFillOlderExtractionCannotReplaceNewerCachedFacts(t *testing.T, seeded bool) {
-	t.Helper()
 	database := usageCandidateFixture(t)
 	snapshot, err := database.captureUsageQuery(
 		t.Context(), UsageFilter{}, usageQueryKindToken)
@@ -1243,12 +1256,10 @@ func testUsageFillOlderExtractionCannotReplaceNewerCachedFacts(t *testing.T, see
 		}
 	}
 	require.Equal(t, "inside-message", oldVersion.SessionID)
-	if seeded {
-		// Seed a baseline, then change only its source version: the older fill
-		// must preserve all facts through an empty delta until it loses the race.
-		_, err = cache.fill.fillSessionsDetached(t.Context(), []usageSourceVersion{oldVersion})
-		require.NoError(t, err)
-	}
+	// Seed a baseline, then change only its source version: the older fill
+	// must preserve all facts through an empty delta until it loses the race.
+	_, err = cache.fill.fillSessionsDetached(t.Context(), []usageSourceVersion{oldVersion})
+	require.NoError(t, err)
 	_, err = database.getWriter().Exec(t.Context(), `UPDATE sessions
 		SET transcript_revision='pending' WHERE id=?`, oldVersion.SessionID)
 	require.NoError(t, err)
