@@ -908,15 +908,15 @@ and pull request description.
 
 Search keeps exact pages on disk for SQLite archives and native PostgreSQL and
 ClickHouse mirrors. It reuses a page when its filters, paging, search rules,
-and searchable data match. PostgreSQL retains each session's best match in a
-bounded in-memory set and a companion file. Visiting a saved page keeps that
-file active for cache cleanup, allowing a sync after restart to refresh changed
-matches when a checkpoint confirms the saved history. It rebuilds all matches
-when the file or checkpoint is missing or the checkpoint is 128 or more
-revisions old. ClickHouse merges that leave rows unchanged keep pages valid.
-Deleted snippets can remain in old cache files until the same search overwrites
-them or the cache is trimmed. Read-only SQLite and hosted or borrowed PostgreSQL
-views read directly.
+and searchable data match. Searchable writes invalidate old pages. PostgreSQL
+keeps each session's best match in memory and a companion file; page visits keep
+that file active for cache cleanup. The file is capped at 128 MiB within a
+shared 256 MiB cache budget. PostgreSQL refreshes changed matches when the
+journal proves the retained history. A missing, oversized, or evicted file, or
+a missing checkpoint or one 128 or more revisions old, requires a full search.
+ClickHouse merges that leave rows unchanged keep pages valid. Deleted snippets
+can remain in old cache files until the same search overwrites them or the cache
+is trimmed. Read-only SQLite and hosted or borrowed PostgreSQL views read directly.
 
 ### Usage cache divergence
 
