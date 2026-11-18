@@ -1,8 +1,11 @@
 package activity
 
 import (
+	"bytes"
 	"cmp"
 	"context"
+	"encoding/gob"
+	"errors"
 	"runtime"
 	"slices"
 	"sort"
@@ -77,6 +80,47 @@ type sessionRun struct {
 	model string
 	// first and last index the run's start and end in bounds.
 	first, last int32
+}
+
+type encodedSessionRun struct {
+	Model       string
+	First, Last int32
+}
+
+type encodedSessionRuns struct {
+	Bounds  []int64
+	Trimmed []uint64
+	Runs    []encodedSessionRun
+}
+
+// GobEncode preserves the pieces used to clip runs to a report range.
+func (r SessionRuns) GobEncode() ([]byte, error) {
+	encoded := encodedSessionRuns{Bounds: r.bounds, Trimmed: r.trimmed}
+	for _, run := range r.runs {
+		encoded.Runs = append(encoded.Runs, encodedSessionRun{run.model, run.first, run.last})
+	}
+	var buf bytes.Buffer
+	err := gob.NewEncoder(&buf).Encode(encoded)
+	return buf.Bytes(), err
+}
+
+// GobDecode rejects invalid piece indexes in a saved run.
+func (r *SessionRuns) GobDecode(data []byte) error {
+	var encoded encodedSessionRuns
+	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&encoded); err != nil {
+		return err
+	}
+	decoded := SessionRuns{bounds: encoded.Bounds, trimmed: encoded.Trimmed}
+	var next int32
+	for _, run := range encoded.Runs {
+		if run.First < next || run.Last <= run.First || int(run.Last) >= len(encoded.Bounds) {
+			return errors.New("invalid activity run bounds")
+		}
+		decoded.runs = append(decoded.runs, sessionRun{run.Model, run.First, run.Last})
+		next = run.Last + 1
+	}
+	*r = decoded
+	return nil
 }
 
 // Bytes estimates the memory the runs hold.

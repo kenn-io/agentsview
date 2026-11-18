@@ -834,8 +834,7 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
   assembly of the summed groups live in `internal/readbase/activityusage.go`.
   The SQLite and PostgreSQL reports keep the Go rules in `internal/activity`,
   because the SQL was slower for them on a one-year archive of 30,000
-  sessions. PostgreSQL saves current-range inputs at graceful close, with
-  256 MiB per file and total, and refreshes changed sessions after restart.
+  sessions:
     - SQLite: the usage step took 6.2 s in SQL and 0.99 s in Go, 6.3x slower. One
       sort of the 600,000 usage rows already takes 1.1 s, and the rules need
       several. The runs SQL took 11.1 s against 1.9 s for the Go pairing, 5.8x
@@ -843,6 +842,9 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
       `last_value(... IGNORE NULLS)`, which SQLite lacks.
     - PostgreSQL: the usage selection alone took 1.86 s at best, against about 1 s
       for the whole Go usage step, at least 1.9x slower.
+
+PostgreSQL saves current-range inputs at graceful close, with 256 MiB per file
+and total, and refreshes changed sessions after restart.
 
 ### Harness-recorded costs
 
