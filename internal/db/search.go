@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/kit/search/lexical"
 )
 
@@ -431,21 +432,38 @@ func (db *DB) Search(
 		return db.search(ctx, f, cjk)
 	}
 	key := fmt.Sprintf("%s|%t", f.Slot(), cjk)
-	id, err := db.GetDatabaseID(ctx)
-	if err != nil {
+	version := db.searchVersion(ctx, cjk)
+	if version == "" {
 		return db.search(ctx, f, cjk)
 	}
-	revision, err := db.UsageChangeRevision(ctx)
-	if err != nil {
-		return db.search(ctx, f, cjk)
-	}
-	searchRevision, err := db.archiveJournalRevision(ctx, archiveMetadataSearchChangeRevisionKey, "search change")
-	if err != nil {
-		return db.search(ctx, f, cjk)
-	}
-	return db.searchKept.Do(ctx, key, fmt.Sprintf("%s|%d|%d", id, revision, searchRevision), func(ctx context.Context) (SearchPage, error) {
-		return db.search(ctx, f, cjk)
+	db.trendsPartsDisk()
+	return db.searchKept.DoChecked(ctx, key, version, func(ctx context.Context) (SearchPage, bool, error) {
+		return kept.LoadJSON(&db.trendsDisk, "search|"+key, version, func() bool {
+			return db.searchVersion(ctx, cjk) == version
+		}, func() (SearchPage, error) {
+			if db.afterSearchRead != nil {
+				db.afterSearchRead()
+			}
+			return db.search(ctx, f, cjk)
+		})
 	})
+}
+
+func (db *DB) searchVersion(ctx context.Context, cjk bool) string {
+	var id, token string
+	err := db.getReader().QueryRowContext(ctx, `SELECT
+		(SELECT value FROM archive_metadata WHERE key = ?),
+		(SELECT value FROM archive_metadata WHERE key = 'search_history_token')`,
+		archiveMetadataDatabaseIDKey,
+	).Scan(&id, &token)
+	if err != nil || strings.TrimSpace(id) == "" || token == "" {
+		return ""
+	}
+	fingerprint := ""
+	if cjk {
+		fingerprint = simpleFTSRuntimeConfig.fingerprint
+	}
+	return fmt.Sprintf("%s|%s|%s", id, token, fingerprint)
 }
 
 func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage, error) {

@@ -56,16 +56,25 @@ func (r *Reads[T]) Put(slot, version string, value T) {
 
 // Do returns a kept value or loads it. Empty slots or versions bypass reuse.
 func (r *Reads[T]) Do(ctx context.Context, slot, version string, load func(context.Context) (T, error)) (T, error) {
+	return r.DoChecked(ctx, slot, version, func(ctx context.Context) (T, bool, error) {
+		value, err := load(ctx)
+		return value, true, err
+	})
+}
+
+// DoChecked retains a successful load only when it permits retention.
+func (r *Reads[T]) DoChecked(ctx context.Context, slot, version string, load func(context.Context) (T, bool, error)) (T, error) {
 	return r.do(ctx, slot, version, nil, load)
 }
 
-func (r *Reads[T]) do(ctx context.Context, slot, version string, keep func(T), load func(context.Context) (T, error)) (T, error) {
+func (r *Reads[T]) do(ctx context.Context, slot, version string, keep func(T), load func(context.Context) (T, bool, error)) (T, error) {
 	if err := ctx.Err(); err != nil {
 		var zero T
 		return zero, err
 	}
 	if slot == "" || version == "" {
-		return load(ctx)
+		value, _, err := load(ctx)
+		return value, err
 	}
 	r.init()
 	if values, ok := r.memo.Get(slot, version); ok {
@@ -81,8 +90,8 @@ func (r *Reads[T]) do(ctx context.Context, slot, version string, keep func(T), l
 			}
 			return values[0], nil
 		}
-		value, err := load(ctx)
-		if err == nil {
+		value, retain, err := load(ctx)
+		if err == nil && retain {
 			r.memo.Put(slot, version, []T{value})
 		}
 		return value, err
@@ -96,19 +105,20 @@ func (r *Reads[T]) DoSaved(ctx context.Context, disk *Disk, slot, memoryVersion,
 	}
 	return r.do(ctx, slot, memoryVersion, func(value T) {
 		disk.Keep(slot, savedVersion, func() ([]byte, error) { return encode(value) })
-	}, func(ctx context.Context) (T, error) {
+	}, func(ctx context.Context) (T, bool, error) {
 		if data, ok := disk.Get(slot, savedVersion); ok {
 			if value, err := decode(data); err == nil {
-				return value, nil
+				return value, true, nil
 			}
 		}
 		value, err := load(ctx)
-		if err == nil {
-			if data, err := encode(value); err == nil {
-				disk.Put(slot, savedVersion, data)
-			}
+		if err != nil {
+			return value, false, err
 		}
-		return value, err
+		if data, err := encode(value); err == nil {
+			disk.Put(slot, savedVersion, data)
+		}
+		return value, true, nil
 	})
 }
 

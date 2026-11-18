@@ -904,6 +904,15 @@ optimization, because the engine lacks the feature or the slow path does not
 exist there, the change names that backend and the reason in its commit message
 and pull request description.
 
+### Search pages
+
+Search keeps exact pages on disk for SQLite archives and native PostgreSQL and
+ClickHouse mirrors. It reuses a page when its filters, paging, search rules,
+and searchable data match. Searchable writes invalidate old pages; ClickHouse
+merges that leave rows unchanged keep them valid. Deleted snippets can remain in
+old cache files until the same search overwrites them or the cache is trimmed.
+Read-only SQLite and hosted or borrowed PostgreSQL views read directly.
+
 ### Usage cache divergence
 
 SQLite and native PostgreSQL aggregate usage APIs read persisted,
