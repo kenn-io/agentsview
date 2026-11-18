@@ -69,7 +69,7 @@ func TestClickHouseSessionUsageWithoutUsageSkipsUsageQuery(t *testing.T) {
 		readCtx := chdriver.Context(ctx, chdriver.WithSettings(chdriver.Settings{"log_comment": comment}))
 		_, err := store.GetSessionUsage(readCtx, tc.id, false)
 		require.NoError(t, err)
-		_, err = conn.ExecContext(ctx, `SYSTEM FLUSH LOGS`)
+		_, err = conn.ExecContext(ctx, `SYSTEM FLUSH LOGS query_log`)
 		require.NoError(t, err)
 		var queries uint64
 		require.NoError(t, conn.QueryRowContext(ctx, `

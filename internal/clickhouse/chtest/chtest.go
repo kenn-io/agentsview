@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -134,19 +135,41 @@ func FreshDatabase(tb testing.TB) (dsn, database string) {
 // FreshDatabase does on the shared test server.
 func FreshDatabaseOn(tb testing.TB, dsn string) (string, string) {
 	tb.Helper()
+	dsn, database, drop := CreateDatabaseOn(tb, dsn)
+	tb.Cleanup(func() { _ = drop(context.WithoutCancel(tb.Context())) })
+	return dsn, database
+}
+
+// CreateDatabaseOn creates a test database whose caller owns its cleanup.
+// Use FreshDatabase for databases owned by a single test.
+func CreateDatabaseOn(tb testing.TB, dsn string) (string, string, func(context.Context) error) {
+	tb.Helper()
+	// Each fixture writes to its own tables, so waiting 50 ms for another
+	// insert to join a batch usually just delays the test.
+	u, err := url.Parse(dsn)
+	require.NoError(tb, err)
+	settings := u.Query()
+	if !settings.Has("async_insert_busy_timeout_min_ms") {
+		settings.Set("async_insert_busy_timeout_min_ms", "1")
+		u.RawQuery = settings.Encode()
+		dsn = u.String()
+	}
 	var suffix [6]byte
-	_, err := rand.Read(suffix[:])
+	_, err = rand.Read(suffix[:])
 	require.NoError(tb, err)
 	database := "agentsview_test_" + hex.EncodeToString(suffix[:])
 	admin := open(tb, dsn)
 	ctx := tb.Context()
 	_, err = admin.ExecContext(ctx, "CREATE DATABASE "+database)
-	require.NoError(tb, err)
-	tb.Cleanup(func() {
-		_, _ = admin.ExecContext(context.WithoutCancel(tb.Context()), "DROP DATABASE IF EXISTS "+database+" SYNC")
+	if err != nil {
 		admin.Close()
-	})
-	return dsn, database
+		require.NoError(tb, err)
+	}
+	return dsn, database, func(ctx context.Context) error {
+		defer admin.Close()
+		_, err := admin.ExecContext(ctx, "DROP DATABASE IF EXISTS "+database+" SYNC")
+		return err
+	}
 }
 
 // Open connects to the given database on the test server for raw
@@ -156,7 +179,7 @@ func Open(tb testing.TB, dsn, database string) *sql.DB {
 	opt, err := clickhouse.ParseDSN(dsn)
 	require.NoError(tb, err)
 	opt.Auth.Database = database
-	opt.Settings = clickhouse.Settings{"final": 1}
+	opt.Settings["final"] = 1
 	conn := clickhouse.OpenDB(opt)
 	tb.Cleanup(func() { conn.Close() })
 	require.NoError(tb, conn.PingContext(tb.Context()))

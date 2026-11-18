@@ -23,7 +23,7 @@ import (
 func compactions(t *testing.T, conn *sql.DB) []string {
 	t.Helper()
 	ctx := t.Context()
-	_, err := conn.ExecContext(ctx, "SYSTEM FLUSH LOGS")
+	_, err := conn.ExecContext(ctx, "SYSTEM FLUSH LOGS query_log")
 	require.NoError(t, err)
 	rows, err := conn.QueryContext(ctx, `SELECT extract(query, '^OPTIMIZE TABLE (\w+) FINAL') FROM system.query_log
 		WHERE current_database = currentDatabase() AND type = 'QueryFinish' AND startsWith(query, 'OPTIMIZE TABLE ')

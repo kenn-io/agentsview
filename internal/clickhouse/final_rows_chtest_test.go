@@ -317,7 +317,7 @@ func TestUsageCoverageRetryReadsOnlyMovedParts(t *testing.T) {
 	fullReads := func() (sessions, snapshots int) {
 		t.Helper()
 		// The log shows a key lookup's keys inline, in has(...).
-		execPreparedUsage(t, store, "SYSTEM FLUSH LOGS")
+		execPreparedUsage(t, store, "SYSTEM FLUSH LOGS query_log")
 		require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT
 			countIf(query LIKE '%sipHash128Reference(tuple(*))%FROM sessions%'),
 			countIf(query LIKE '%sipHash128Reference(tuple(id, revision, push_version))%FROM usage_session_snapshots%')

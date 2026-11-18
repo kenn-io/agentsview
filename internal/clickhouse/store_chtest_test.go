@@ -42,7 +42,7 @@ func TestReadStatusHonorsProjectFilters(t *testing.T) {
 
 func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 	t.Parallel()
-	store, _, _ := newPushedStore(t)
+	store := newClonedReadStore(t)
 	ctx := t.Context()
 
 	t.Run("list_sessions_default_sort_and_cursor", func(t *testing.T) {
@@ -301,7 +301,7 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 
 func TestSearchContentExcludeActiveSince(t *testing.T) {
 	t.Parallel()
-	store, _, _ := newPushedStore(t)
+	store := newClonedReadStore(t)
 	for _, mode := range []string{"substring", "regex", "fts"} {
 		t.Run(mode, func(t *testing.T) {
 			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
@@ -415,7 +415,7 @@ func TestStoreGetSessionVersionChangesAfterPush(t *testing.T) {
 
 func TestStoreMessageWindowReportsRevisionWithRows(t *testing.T) {
 	t.Parallel()
-	store, _, _ := newPushedStore(t)
+	store := newClonedReadStore(t)
 	ctx := t.Context()
 
 	from := 0
@@ -524,7 +524,7 @@ func TestMachineSelectorLookupIncludesUnmergedIdentity(t *testing.T) {
 
 func TestStorePoolsCapQueryThreads(t *testing.T) {
 	t.Parallel()
-	store, _, _ := newPushedStore(t)
+	store := newClonedReadStore(t)
 	ctx := t.Context()
 	require.NotSame(t, store.conn, store.pages, "serve keeps page reads on their own pool")
 	for name, row := range map[string]*sql.Row{
