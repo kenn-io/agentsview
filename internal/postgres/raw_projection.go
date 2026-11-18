@@ -265,16 +265,6 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			return err
 		}
 		derivedChanged = derivedChanged || dialogueChanged
-		links := db.EncodePRLinks(parser.MergePRLinks(prepared.Session.PRLinks, db.PromptPRLinks(prepared.Messages)))
-		updated, err := tx.ExecContext(ctx, `UPDATE sessions SET pr_links=$2 WHERE id=$1 AND pr_links IS DISTINCT FROM $2`, sessionID, links)
-		if err != nil {
-			return err
-		}
-		linkRows, err := updated.RowsAffected()
-		if err != nil {
-			return err
-		}
-		derivedChanged = derivedChanged || linkRows > 0
 		visibleChange, err := publishRawRecency(ctx, tx, sessionID, prepared.Signals)
 		if err != nil {
 			return err
