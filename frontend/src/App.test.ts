@@ -872,6 +872,124 @@ describe("App root Sessions landing", () => {
     expect(sessions.activeSessionId).toBe("imported");
   });
 
+  it("retries a hidden session when its transcript revision changes", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    let readable = false;
+    vi.mocked(messages.loadSession).mockImplementation(async (id) => {
+      messages.sessionId = id;
+      messages.messages = [transcriptMessage(id, readable ? "new history" : "system context", !readable)];
+      messages.loading = false;
+      messages.loadError = null;
+    });
+    setRootUrl();
+    sessions.sessions = [{ ...sidebarRow("first", 1, "2026-01-03"), transcript_revision: "one" }];
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    await flushEffects();
+    expect(sessions.activeSessionId).toBeNull();
+
+    readable = true;
+    sessions.sessions = [{ ...sidebarRow("first", 1, "2026-01-03"), transcript_revision: "two" }];
+    await flushEffects();
+    await flushEffects();
+    expect(sessions.activeSessionId).toBe("first");
+    expect(messages.messages[0]?.content).toBe("new history");
+  });
+
+  it("retries when the transcript revision changes during a hidden load", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    let finishOld!: () => void;
+    let attempts = 0;
+    vi.mocked(messages.loadSession).mockImplementation(async (id) => {
+      messages.sessionId = id;
+      messages.loading = true;
+      if (attempts++ === 0) {
+        await new Promise<void>((resolve) => { finishOld = resolve; });
+        messages.messages = [transcriptMessage(id, "system context", true)];
+      } else {
+        messages.messages = [transcriptMessage(id, "new history", false)];
+      }
+      messages.loading = false;
+      messages.loadError = null;
+    });
+    setRootUrl();
+    sessions.sessions = [{ ...sidebarRow("first", 1, "2026-01-03"), transcript_revision: "one" }];
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    sessions.sessions = [{ ...sidebarRow("first", 1, "2026-01-03"), transcript_revision: "two" }];
+    await flushEffects();
+    finishOld();
+    await flushEffects();
+    await flushEffects();
+    expect(sessions.activeSessionId).toBe("first");
+    expect(messages.messages[0]?.content).toBe("new history");
+  });
+
+  it("keeps provisional sessions out of history and session telemetry", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    const posted: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (requestUrl(input).includes("/api/v1/telemetry/events") && typeof init?.body === "string") {
+        posted.push(JSON.parse(init.body).event);
+      }
+      return new Response('{"status":"queued"}', { status: 202, headers: { "Content-Type": "application/json" } });
+    }));
+    let finish!: () => void;
+    vi.mocked(messages.loadSession).mockImplementation(async (id) => {
+      messages.sessionId = id;
+      messages.loading = true;
+      await new Promise<void>((resolve) => { finish = resolve; });
+      messages.messages = [transcriptMessage(id, "system context", true)];
+      messages.loading = false;
+    });
+    setRootUrl();
+    sessions.sessions = [sidebarRow("first", 1, "2026-01-03")];
+    const historyLength = window.history.length;
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    await flushEffects();
+    expect(posted).not.toContain("session_viewed");
+    expect(window.history.length).toBe(historyLength);
+    finish();
+    await flushEffects();
+  });
+
+  it("loads older transcript pages until it finds readable history", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.mocked(messages.loadSession).mockRestore();
+    vi.spyOn(SessionsService, "getApiV1SessionsById").mockResolvedValue({ message_count: 3001 } as never);
+    vi.spyOn(SessionsService, "getApiV1SessionsByIdMessages").mockImplementation(async (_path, query) => {
+      const ordinal = query?.from ?? 2;
+      return { messages: [{ ...transcriptMessage("first", ordinal ? "system context" : "readable history", ordinal !== 0), ordinal }], transcript_revision: "one" } as never;
+    });
+    setRootUrl();
+    sessions.sessions = [sidebarRow("first", 3, "2026-01-03")];
+    component = mount(App, { target: document.body });
+    await vi.waitFor(() => expect(messages.messages[0]?.content).toBe("readable history"));
+    expect(sessions.activeSessionId).toBe("first");
+  });
+
+  it("retains a failed older transcript page for retry", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.mocked(messages.loadSession).mockRestore();
+    vi.spyOn(SessionsService, "getApiV1SessionsById").mockResolvedValue({ message_count: 3001 } as never);
+    vi.spyOn(SessionsService, "getApiV1SessionsByIdMessages").mockImplementation(async (_path, query) => {
+      if (query?.from !== undefined) throw new Error("Could not load older messages");
+      return { messages: [{ ...transcriptMessage("first", "system context", true), ordinal: 1 }], transcript_revision: "one" } as never;
+    });
+    setRootUrl();
+    sessions.sessions = [sidebarRow("first", 2, "2026-01-03")];
+    component = mount(App, { target: document.body });
+    await vi.waitFor(() => expect(document.body.textContent).toContain("Could not load older messages"));
+    expect(sessions.activeSessionId).toBe("first");
+    expect([...document.querySelectorAll("button")].some((button) => button.textContent?.includes("Retry"))).toBe(true);
+  });
+
   it("opens imported history after choosing folders on a first visit", async () => {
     stubAppDependencies();
     vi.spyOn(sessions, "load").mockResolvedValue();
