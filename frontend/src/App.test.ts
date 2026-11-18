@@ -872,6 +872,39 @@ describe("App root Sessions landing", () => {
     expect(sessions.activeSessionId).toBe("imported");
   });
 
+  it.each([false, true])(
+    "opens an older sidebar page after hidden sessions (first page request fails: %s)",
+    async (failFirst) => {
+      stubAppDependencies();
+      vi.spyOn(sessions, "load").mockResolvedValue();
+      let pageAttempts = 0;
+      vi.spyOn(SessionsService, "getApiV1SessionsSidebarIndex").mockImplementation(async (params) => {
+        expect(params.cursor).toBe("older-page");
+        if (failFirst && pageAttempts++ === 0) throw new Error("Sidebar page unavailable");
+        return { sessions: [sidebarRow("older", 1, "2026-01-02")], total: 2, next_cursor: null };
+      });
+      vi.mocked(messages.loadSession).mockImplementation(async (id) => {
+        messages.sessionId = id;
+        messages.messages = [transcriptMessage(id, id === "older" ? "readable history" : "system context", id !== "older")];
+        messages.loading = false;
+        messages.loadError = null;
+      });
+      setRootUrl();
+      sessions.sessions = [sidebarRow("first", 1, "2026-01-03")];
+      sessions.nextCursor = "older-page";
+      component = mount(App, { target: document.body });
+
+      if (failFirst) {
+        await vi.waitFor(() => expect(document.body.textContent).toContain("Sidebar page unavailable"));
+        const retry = [...document.querySelectorAll("button")].find((button) => button.textContent?.includes("Retry"));
+        expect(retry).toBeDefined();
+        retry!.click();
+      }
+      await vi.waitFor(() => expect(sessions.activeSessionId).toBe("older"));
+      expect(messages.messages[0]?.content).toBe("readable history");
+    },
+  );
+
   it("retries a hidden session when its transcript revision changes", async () => {
     stubAppDependencies();
     vi.spyOn(sessions, "load").mockResolvedValue();
