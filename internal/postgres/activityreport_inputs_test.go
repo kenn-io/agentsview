@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -55,6 +56,29 @@ func TestPGActivityDiskRowRoundTrip(t *testing.T) {
 		ordinal: 9, cacheCreate1h: 10, ordinalValid: true, costValid: true, copilotReported: true, pricingTimeAbsent: true, costRecorded: true,
 	}
 	assert.Equal(t, row, pgActivityRowToDisk(row).activityRow(stringutil.Interner{}))
+}
+
+func TestPGActivityDiskUsageEstimateCoversEncodedRows(t *testing.T) {
+	row := pgActivityDiskRow{
+		SessionID: "session", UsageSource: "source", Model: "model", ProviderID: "provider", Agent: "agent",
+		ClaudeMessageID: "message", ClaudeRequestID: "request", SourceUUID: "uuid", UsageDedupKey: "dedup",
+		US: math.MaxInt64, Cost: math.MaxInt64, WebSearches: math.MaxInt64, Input: math.MaxInt64, Output: math.MaxInt64,
+		CacheCreate: math.MaxInt64, CacheRead: math.MaxInt64, Reasoning: math.MaxInt64, Ordinal: math.MaxInt32, CacheCreate1h: math.MaxInt32,
+		OrdinalValid: true, CostValid: true, CopilotReported: true, PricingTimeAbsent: true, CostRecorded: true,
+	}
+	empty := kept.Part[pgActivityDiskPart]{}
+	part := empty
+	part.Value.Usage = make([]pgActivityDiskRow, 1024)
+	for i := range part.Value.Usage {
+		part.Value.Usage[i] = row
+	}
+	encode := func(part kept.Part[pgActivityDiskPart]) []byte {
+		data, err := kept.EncodeRows([]kept.Part[pgActivityDiskPart]{part}, math.MaxInt64, func(kept.Part[pgActivityDiskPart]) int64 { return 0 })
+		require.NoError(t, err)
+		return data
+	}
+	encodedGrowth := len(encode(part)) - len(encode(empty))
+	assert.GreaterOrEqual(t, pgActivityDiskPartBytes(part)-pgActivityDiskPartBytes(empty), int64(encodedGrowth))
 }
 
 func TestPGActivityDiskDropsPricesWhenOverLimit(t *testing.T) {
