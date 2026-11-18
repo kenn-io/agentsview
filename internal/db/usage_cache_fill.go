@@ -576,6 +576,7 @@ func (c *usageFillCoordinator) extractSessions(
 	activityIndexes := make(map[string]int, len(versions))
 	eventIndexes := make(map[string]int, len(versions))
 	spoolWriter := usageFactSpoolWriter{ctx: ctx, tx: spoolTx, expected: expected}
+	defer spoolWriter.Close()
 	if err := c.extractUsageAppends(ctx, tx, spoolTx, extracted, expected, messageIndexes); err != nil {
 		return nil, nil, err
 	}
@@ -654,18 +655,22 @@ func (c *usageFillCoordinator) extractUsageAppends(
 		if _, err := comparison.ExecContext(ctx, `SAVEPOINT usage_append`); err != nil {
 			return err
 		}
-		delta := usageFactSpoolWriter{ctx: ctx, tx: comparison}
 		deltaIndexes := map[string]int{id: count}
-		eligible, err := c.extractUsageMessageFacts(ctx, archive, &delta, deltaIndexes, usageMessageExtraction{
-			query: usageFillAppendFactsSQL, args: []any{id, ordinal}, appendOnly: true, tail: tail,
-		})
+		eligible, err := func() (bool, error) {
+			delta := usageFactSpoolWriter{ctx: ctx, tx: comparison}
+			defer delta.Close()
+			eligible, err := c.extractUsageMessageFacts(ctx, archive, &delta, deltaIndexes, usageMessageExtraction{
+				query: usageFillAppendFactsSQL, args: []any{id, ordinal}, appendOnly: true, tail: tail,
+			})
+			if err != nil || !eligible {
+				return eligible, err
+			}
+			return true, delta.Flush()
+		}()
 		if err != nil {
 			return err
 		}
 		if eligible {
-			if err := delta.Flush(); err != nil {
-				return err
-			}
 			indexes[id] = deltaIndexes[id]
 			if _, err := archive.ExecContext(ctx, `DELETE FROM usage_fill_sessions WHERE session_id=?`, id); err != nil {
 				return err
@@ -813,7 +818,15 @@ type usageFactSpoolWriter struct {
 	rows [2][]usageFactSpoolRow
 
 	expected  map[string]usageFillInstallExpectation
-	fullBatch [2]*sql.Stmt
+	fullBatch [2]struct{ stmt *sql.Stmt }
+}
+
+func (w *usageFactSpoolWriter) Close() {
+	for _, batch := range w.fullBatch {
+		if batch.stmt != nil {
+			_ = batch.stmt.Close()
+		}
+	}
 }
 
 func (w *usageFactSpoolWriter) Add(
@@ -914,12 +927,12 @@ func (w *usageFactSpoolWriter) flushBatch(batch int) error {
 	var err error
 	if len(rows) == usageFactSpoolBatchSize {
 		// Preparing the large VALUES expression is costly. Reuse it within
-		// this extraction; the transaction closes it.
-		if w.fullBatch[batch] == nil {
-			w.fullBatch[batch], err = w.tx.PrepareContext(w.ctx, query.String())
+		// this extraction.
+		if w.fullBatch[batch].stmt == nil {
+			w.fullBatch[batch].stmt, err = w.tx.PrepareContext(w.ctx, query.String())
 		}
 		if err == nil {
-			_, err = w.fullBatch[batch].ExecContext(w.ctx, args...)
+			_, err = w.fullBatch[batch].stmt.ExecContext(w.ctx, args...)
 		}
 	} else {
 		_, err = w.tx.ExecContext(w.ctx, query.String(), args...)
