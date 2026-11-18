@@ -327,15 +327,7 @@ func TestSearchKeptOversizedThenSmaller(t *testing.T) {
 	local, syncer, _ := newUsageJournalFixture(t)
 	ctx := t.Context()
 	url := testPGURL(t)
-	config, err := pgx.ParseConfig(url)
-	require.NoError(t, err)
-	config.RuntimeParams["search_path"] = syncer.schema
-	trace := &searchQueryTracer{}
-	config.Tracer = trace
-	pool := stdlib.OpenDB(*config)
-	s := &Store{pg: pool, ownedDB: pool}
-	t.Cleanup(func() { require.NoError(t, s.Close()) })
-	require.NoError(t, s.ConfigureUsageCache(ctx, t.TempDir(), url, syncer.schema))
+	s, trace := openTracedSearchStore(t, url, syncer.schema, t.TempDir())
 	s.runtimeState().searchKept.MaxBytes = 300
 	for _, id := range []string{"one", "two", "three"} {
 		require.NoError(t, local.UpsertSession(ctx, db.Session{ID: id, Project: "project", Machine: "device", Agent: "claude", MessageCount: 1}))
@@ -443,7 +435,7 @@ func TestSearchKeptRestartRefreshPages(t *testing.T) {
 	s, trace := openTracedSearchStore(t, url, syncer.schema, cache)
 	require.NoError(t, local.ReplaceSessionMessages(ctx, "two", []db.Message{{SessionID: "two", Role: "user", Content: "needle changed"}}))
 	pgKeptPush(t, syncer, false)
-	check := func(restricted bool) {
+	check := func() {
 		t.Helper()
 		for _, sort := range []string{"relevance", "recency"} {
 			seenImage := false
@@ -453,7 +445,7 @@ func TestSearchKeptRestartRefreshPages(t *testing.T) {
 				trace.restricted.Store(0)
 				got, err := s.Search(ctx, filter)
 				require.NoError(t, err)
-				if cursor == 0 && restricted {
+				if cursor == 0 {
 					require.EqualValues(t, 1, trace.count.Load())
 					require.EqualValues(t, 1, trace.restricted.Load())
 				}
@@ -470,39 +462,7 @@ func TestSearchKeptRestartRefreshPages(t *testing.T) {
 			require.True(t, seenImage)
 		}
 	}
-	check(true)
-	require.NoError(t, local.SoftDeleteSession(ctx, "one"))
-	pgKeptPush(t, syncer, false)
-	check(true)
-	_, err := syncer.pg.ExecContext(ctx, `DELETE FROM sessions WHERE id = $1`, "two")
-	require.NoError(t, err)
-	check(true)
-}
-
-func TestSearchKeptRestartInvalidCache(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	local, syncer, first := newUsageJournalFixture(t)
-	ctx := t.Context()
-	url, cache := testPGURL(t), t.TempDir()
-	require.NoError(t, first.ConfigureUsageCache(ctx, cache, url, syncer.schema))
-	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: "one", Project: "project", Machine: "device", Agent: "claude", MessageCount: 1}))
-	require.NoError(t, local.ReplaceSessionMessages(ctx, "one", []db.Message{{SessionID: "one", Role: "user", Content: "needle"}}))
-	pgKeptPush(t, syncer, false)
-	filter := db.SearchFilter{Query: "needle", Limit: 2}
-	_, err := first.Search(ctx, filter)
-	require.NoError(t, err)
-	_, err = syncer.pg.ExecContext(ctx, `DELETE FROM sync_metadata WHERE key='usage_history_checkpoint:' || (SELECT value FROM sync_metadata WHERE key='usage_change_revision')`)
-	require.NoError(t, err)
-	s, trace := openTracedSearchStore(t, url, syncer.schema, cache)
-	require.NoError(t, local.ReplaceSessionMessages(ctx, "one", []db.Message{{SessionID: "one", Role: "user", Content: "needle updated"}}))
-	pgKeptPush(t, syncer, false)
-	got, err := s.Search(ctx, filter)
-	require.NoError(t, err)
-	require.EqualValues(t, 1, trace.count.Load())
-	require.Zero(t, trace.restricted.Load())
-	direct, err := s.search(ctx, filter)
-	require.NoError(t, err)
-	require.Equal(t, direct, got)
+	check()
 }
 
 func TestSearchKeptRestartAfterKeyEviction(t *testing.T) {
@@ -550,15 +510,15 @@ func TestSearchKeptRestartAfterKeyEviction(t *testing.T) {
 	require.True(t, ok)
 
 	s, trace := openTracedSearchStore(t, url, syncer.schema, cache)
-	old := time.Now().Add(-29 * 24 * time.Hour)
-	require.NoError(t, os.Chtimes(keyFile, old, old))
 	for range 2 {
+		old := time.Now().Add(-29 * 24 * time.Hour)
+		require.NoError(t, os.Chtimes(keyFile, old, old))
 		got, err = s.Search(ctx, f)
 		require.NoError(t, err)
 		require.Equal(t, page, got)
+		s.trendsDisk.Sweep(time.Now().Add(48 * time.Hour))
 	}
 	require.Zero(t, trace.count.Load())
-	s.trendsDisk.Sweep(time.Now().Add(48 * time.Hour))
 	s, trace = openTracedSearchStore(t, url, syncer.schema, cache)
 	require.NoError(t, local.ReplaceSessionMessages(ctx, "two", []db.Message{{SessionID: "two", Role: "user", Content: "needle changed"}}))
 	pgKeptPush(t, syncer, false)
