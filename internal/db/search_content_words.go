@@ -286,14 +286,11 @@ func selectContentWordPage(ctx context.Context, tx *sql.Tx, f ContentSearchFilte
 		WHERE f.content MATCH ? AND m.`+filter.scope, append([]any{all, match}, filter.scopeArgs...)...); err != nil {
 		return nil, fmt.Errorf("scoping word matches: %w", err)
 	}
-	where := filter.where
+	where := filter.where + strings.Repeat(` AND agentsview_phrase_match(COALESCE(m.dialogue_text, m.content), ?)`, len(q.phrases))
 	args := append([]any(nil), filter.args...)
-	var whereSb291 strings.Builder
 	for _, phrase := range q.phrases {
-		whereSb291.WriteString(` AND agentsview_phrase_match(COALESCE(m.dialogue_text, m.content), ?)`)
 		args = append(args, phrase)
 	}
-	where += whereSb291.String()
 	sortKey := "julianday(COALESCE(s.ended_at, s.started_at, ''))"
 	if ranked {
 		sortKey = "c.rank"
