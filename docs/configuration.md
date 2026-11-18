@@ -413,8 +413,8 @@ token_file = "~/.config/agentsview/kata-token"
   An empty or blank file, a file over 64 KiB, or a file containing a NUL byte
   is an error.
 - The file must be private. On macOS and Linux, a file you own needs mode
-  `0600` or `0400`, and no directory on its path may be writable by group or
-  others. A umask of `002` creates group-writable directories, so check the
+  `0600` or `0400`, and every directory on its path must belong to you or root
+  and not be writable by group or others. A umask of `002` creates group-writable directories, so check the
   parent directory too. Files owned by root, such as systemd credentials and
   Kubernetes secret mounts, work when only root can write them. On Windows,
   only your user may have access to the file.
