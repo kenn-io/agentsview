@@ -441,15 +441,13 @@
         return;
       }
       firstVisitTried.add(id);
-      readProgress.clear(id);
     }
     const next = sessions.groupedSessions
-      .map((group) => group.primarySessionId)
+      .flatMap((group) => [group.primarySessionId, ...group.sessions.map((s) => s.id)])
       .find((sid) => sid && !firstVisitTried.has(sid));
-    if (next) {
-      firstVisitCandidate = next;
-      sessions.selectSession(next);
-    }
+    firstVisitCandidate = next ?? null;
+    if (next) sessions.selectSession(next);
+    else if (id) sessions.deselectSession();
   }
 
   function clearRootDetailDateRestoreSuppressed(): void {

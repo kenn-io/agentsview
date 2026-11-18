@@ -371,7 +371,7 @@
     const loading = messages.loading;
     const latestOrdinal =
       latestLoadedOrdinal ?? latestRawLoadedOrdinal;
-    if (!sessionId || !currentToken || loading) return;
+    if (!sessionId || !currentToken || loading || baseMessages.length === 0) return;
     readProgress.baseline(sessionId, currentToken, latestOrdinal);
   });
 

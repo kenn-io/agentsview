@@ -738,6 +738,27 @@ describe("App root Sessions landing", () => {
     };
   }
 
+  function transcriptMessage(id: string, content: string, isSystem: boolean): Message {
+    return {
+      id: 1,
+      session_id: id,
+      ordinal: 0,
+      role: "user",
+      content,
+      timestamp: "2026-01-03T00:00:00Z",
+      has_thinking: false,
+      thinking_text: "",
+      has_tool_use: false,
+      content_length: content.length,
+      model: "",
+      context_tokens: 0,
+      output_tokens: 0,
+      has_context_tokens: false,
+      has_output_tokens: false,
+      is_system: isSystem,
+    };
+  }
+
   it.each([true, false])(
     "opens the first sidebar session when rows arrive (already present: %s)",
     async (present) => {
@@ -767,37 +788,14 @@ describe("App root Sessions landing", () => {
   it("continues to a readable session when the first transcript has only hidden messages", async () => {
     stubAppDependencies();
     vi.spyOn(sessions, "load").mockResolvedValue();
-    const hidden: Message = {
-      id: 1,
-      session_id: "first",
-      ordinal: 0,
-      role: "user",
-      content: "system context",
-      timestamp: "2026-01-03T00:00:00Z",
-      has_thinking: false,
-      thinking_text: "",
-      has_tool_use: false,
-      content_length: 14,
-      model: "",
-      context_tokens: 0,
-      output_tokens: 0,
-      has_context_tokens: false,
-      has_output_tokens: false,
-      is_system: true,
-    };
-    const visible: Message = {
-      ...hidden,
-      id: 2,
-      session_id: "older",
-      content: "readable history",
-      content_length: 16,
-      is_system: false,
-    };
+    const hidden = transcriptMessage("first", "system context", true);
+    const visible = transcriptMessage("older", "readable history", false);
     vi.mocked(messages.loadSession).mockImplementation(async (sessionId) => {
       messages.sessionId = sessionId;
       messages.messages = [sessionId === "first" ? hidden : visible];
+      messages.activeSessionToken = `token:${sessionId}`;
       messages.loading = false;
-      if (sessionId === "first") readProgress.baseline("first", "hidden", 0);
+      messages.loadError = null;
     });
     setRootUrl();
     sessions.sessions = [
@@ -812,6 +810,66 @@ describe("App root Sessions landing", () => {
     expect(sessions.activeSessionId).toBe("older");
     expect(messages.sessionId).toBe("older");
     expect(readProgress.get("first")).toBeNull();
+  });
+
+  it("tries an older member when a group's primary transcript is hidden", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    const hidden = transcriptMessage("newer", "system context", true);
+    const visible = transcriptMessage("older", "readable history", false);
+    vi.mocked(messages.loadSession).mockImplementation(async (sessionId) => {
+      messages.sessionId = sessionId;
+      messages.messages = [sessionId === "newer" ? hidden : visible];
+      messages.activeSessionToken = `token:${sessionId}`;
+      messages.loading = false;
+      messages.loadError = null;
+    });
+    setRootUrl();
+    sessions.sessions = [
+      { ...sidebarRow("newer", 1, "2026-01-03"), parent_session_id: "older" },
+      sidebarRow("older", 1, "2026-01-02"),
+    ];
+    expect(sessions.groupedSessions[0]?.primarySessionId).toBe("newer");
+
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    await flushEffects();
+
+    expect(sessions.activeSessionId).toBe("older");
+    expect(messages.sessionId).toBe("older");
+  });
+
+  it("waits for readable history after every transcript is hidden", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.mocked(messages.loadSession).mockImplementation(async (sessionId) => {
+      messages.sessionId = sessionId;
+      messages.messages = [
+        sessionId === "imported"
+          ? transcriptMessage("imported", "readable history", false)
+          : transcriptMessage(sessionId, "system context", true),
+      ];
+      messages.activeSessionToken = `token:${sessionId}`;
+      messages.loading = false;
+      messages.loadError = null;
+    });
+    setRootUrl();
+    sessions.sessions = [sidebarRow("hidden", 1, "2026-01-03")];
+
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    await flushEffects();
+
+    expect(sessions.activeSessionId).toBeNull();
+    expect(readProgress.get("hidden")).toBeNull();
+
+    sessions.sessions = [
+      sidebarRow("hidden", 1, "2026-01-03"),
+      sidebarRow("imported", 1, "2026-01-04"),
+    ];
+    await flushEffects();
+
+    expect(sessions.activeSessionId).toBe("imported");
   });
 
   it("opens imported history after choosing folders on a first visit", async () => {
