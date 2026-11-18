@@ -8,7 +8,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -21,22 +20,6 @@ func TestRawProjectionPreservedHistoryFindsPromptLinks(t *testing.T) {
 	outcome.Outcome.Results[0].Result.Session.PRLinks = []parser.PRLink{structured}
 	a, receipt := f.accept(t, "device-a", "initial", "", parser.AgentRooCode)
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, outcome))
-	first, err := f.sink.Resolve(t.Context(), "codex:portable")
-	require.NoError(t, err)
-	var payload []byte
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT payload FROM raw_content_revisions WHERE session_id=$1`, first.SessionID).Scan(&payload))
-	legacy, err := decodeRawPayload(payload)
-	require.NoError(t, err)
-	legacy.Session.PRLinks = []db.PRLink{structured}
-	legacy.StructuredPRLinks = nil
-	payload, err = encodeRawPayload(legacy)
-	require.NoError(t, err)
-	_, err = f.runtime.ExecContext(t.Context(), `UPDATE raw_content_revisions SET payload=$2 WHERE session_id=$1`, first.SessionID, payload)
-	require.NoError(t, err)
-	metadata, err := encodeRawPayload(ingest.PreparedSession{Session: legacy.Session})
-	require.NoError(t, err)
-	_, err = f.runtime.ExecContext(t.Context(), `UPDATE raw_session_branches SET prior_payload=$2 WHERE captured_session_id=$1`, first.SessionID, metadata)
-	require.NoError(t, err)
 	outcome.Outcome.Results[0].Result.Messages = nil
 	a, _ = f.accept(t, "device-a", "replay", receipt.Receipt, parser.AgentRooCode)
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, outcome))

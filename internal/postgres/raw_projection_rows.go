@@ -9,6 +9,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/ingest"
+	"go.kenn.io/agentsview/internal/parser"
 )
 
 const (
@@ -267,6 +268,7 @@ func (s *RawProjectionStore) writePayload(ctx context.Context, tx *sql.Tx, id, g
 	for i := range p.Findings {
 		p.Findings[i].SessionID = id
 	}
+	p.Session.PRLinks = parser.MergePRLinks(p.Session.PRLinks, db.PromptPRLinks(p.Messages))
 	if err := writePGSession(ctx, tx, p.Session, "raw-projection:"+group, nil, pgSessionWriteOptions{Machine: "hosted", UsageOnly: s.options.Content.ArchiveContent.UsageOnly(), SkipAliases: true}); err != nil {
 		return err
 	}

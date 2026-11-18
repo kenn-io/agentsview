@@ -105,9 +105,6 @@ func rawContentRevision(p ingest.PreparedSession) (string, error) {
 	s.QualitySignalVersion = 0
 	// Labels belong to the SQLite archive owner, never to a transcript.
 	s.Labels = nil
-	if len(s.PRLinks) == 0 {
-		p.StructuredPRLinks = nil
-	}
 	// Recency-derived state is published separately from immutable content.
 	s.SignalsPendingSince, s.HealthScore, s.HealthGrade = nil, nil, nil
 	s.Outcome, s.OutcomeConfidence = "", ""
@@ -221,7 +218,6 @@ func rawCanonicalValue(v reflect.Value, field string) (any, error) {
 			// observation fields preserve the historical normalized-content-v1 representation.
 			// DialogueText is a derived search projection; reparses refresh it in place.
 			if !f.IsExported() || f.Name == "UsageAutomationProjected" || f.Name == "TrashIncludesCodexPages" ||
-				(v.Type() == reflect.TypeFor[ingest.PreparedSession]() && f.Name == "StructuredPRLinks" && v.Field(i).IsNil()) ||
 				(v.Type() == reflect.TypeFor[db.Message]() && f.Name == "DialogueText") ||
 				(v.Type() == rawSessionType && f.Name == "SourceMachines") ||
 				f.Name == "ToolObservations" || f.Name == "ObservedOutcome" || f.Name == "ObservedRepeat" || f.Name == "SequenceEnding" ||

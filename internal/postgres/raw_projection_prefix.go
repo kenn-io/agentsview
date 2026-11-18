@@ -6,7 +6,6 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/ingest"
-	"go.kenn.io/agentsview/internal/parser"
 )
 
 // Keep captured revisions intact while making a proven stale prefix a member
@@ -99,10 +98,6 @@ func rawTranscriptPrefix(short, long ingest.PreparedSession) (bool, error) {
 	long.UsageEvents = long.UsageEvents[:len(short.UsageEvents)]
 	key := func(p ingest.PreparedSession) (string, error) {
 		s := &p.Session
-		if p.StructuredPRLinks == nil {
-			p.StructuredPRLinks = &ingest.StructuredPRLinks{Links: s.PRLinks}
-		}
-		s.PRLinks = parser.MergePRLinks(p.StructuredPRLinks.Links, db.PromptPRLinks(p.Messages))
 		s.EndedAt, s.TerminationStatus = nil, nil
 		s.MessageCount, s.UserMessageCount = 0, 0
 		s.TotalOutputTokens, s.PeakContextTokens = 0, 0
