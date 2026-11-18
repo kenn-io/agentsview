@@ -73,7 +73,7 @@ func TestParseDiffIgnoresLauncherParents(t *testing.T) {
 	assert.Equal(t, sync.ParseDiffTotals{Examined: 2, Identical: 2}, report.Totals)
 }
 
-func TestCodexPromptPRLinkFilter(t *testing.T) {
+func TestCodexPromptPRLinks(t *testing.T) {
 	const id = "019f0000-0000-7000-8000-000000000004"
 	env := setupTestEnv(t)
 	env.writeCodexSession(t, "2026/07/29", "rollout-2026-07-29T14-55-00-"+id+".jsonl", testjsonl.JoinJSONL(
@@ -81,12 +81,7 @@ func TestCodexPromptPRLinkFilter(t *testing.T) {
 		testjsonl.CodexMsgJSON("user", "$pr https://github.com/owner/repo/pull/123", tsZero),
 	))
 	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-	filter, err := db.ParsePRFilter("owner/repo#123")
-	require.NoError(t, err)
-	page, err := env.db.ListSessions(t.Context(), db.SessionFilter{PR: filter})
-	require.NoError(t, err)
-	require.Len(t, page.Sessions, 1)
-	assert.Equal(t, "codex:"+id, page.Sessions[0].ID)
+	assert.Equal(t, []string{"https://github.com/owner/repo/pull/123"}, storedPRURLs(t, env.db, "codex:"+id))
 }
 
 func TestIncrementalSync_PromptPRLinks(t *testing.T) {

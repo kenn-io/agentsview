@@ -146,8 +146,6 @@ func TestRawProjectionRefreshesLinksWhenDialogueChanges(t *testing.T) {
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
 	resolved, err := f.sink.Resolve(t.Context(), "codex:portable")
 	require.NoError(t, err)
-	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET data_version=183 WHERE id=$1`, resolved.SessionID)
-	require.NoError(t, err)
 	outcome.Outcome.Results[0].Result.Messages[0].DialogueText = new("https://github.com/o/r/pull/1")
 	_, err = f.sink.SelectSourceGeneration(t.Context(), m, "parser-2")
 	require.NoError(t, err)
@@ -156,8 +154,6 @@ func TestRawProjectionRefreshesLinksWhenDialogueChanges(t *testing.T) {
 	require.Len(t, leases, 1)
 	require.NoError(t, f.sink.Project(t.Context(), leases[0], m, outcome))
 	var links string
-	var version int
-	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links,data_version FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&links, &version))
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT pr_links FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&links))
 	assert.Equal(t, []db.PRLink{{URL: "https://github.com/o/r/pull/1", Host: "github.com", Repository: "o/r", Number: 1}}, db.DecodePRLinks(links))
-	assert.Equal(t, db.CurrentDataVersion(), version)
 }

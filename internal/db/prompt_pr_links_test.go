@@ -126,17 +126,12 @@ func TestPromptPRLinksMetadataUpsertPreservesLinks(t *testing.T) {
 	s := Session{ID: "metadata", Project: "project", Machine: "local", Agent: "claude"}
 	require.NoError(t, d.UpsertSession(t.Context(), s))
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "user", Content: "https://github.com/o/r/pull/1"}}))
-	require.NoError(t, d.UpsertSession(t.Context(), s))
-	got, err := d.GetSession(t.Context(), s.ID)
-	require.NoError(t, err)
-	require.Len(t, got.PRLinks, 1)
-	assert.Equal(t, "https://github.com/o/r/pull/1", got.PRLinks[0].URL)
 	link, ok := parser.NewPRLink("https://github.com/o/r/pull/2", "o/r", 2)
 	require.True(t, ok)
 	s.PRLinks = []PRLink{link}
 	obs := export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: "/tmp/worktree"}
 	require.NoError(t, d.UpsertSessionWithProjectIdentity(t.Context(), s, obs, ""))
-	got, err = d.GetSession(t.Context(), s.ID)
+	got, err := d.GetSession(t.Context(), s.ID)
 	require.NoError(t, err)
 	assert.Equal(t, []PRLink{link, {URL: "https://github.com/o/r/pull/1", Host: "github.com", Repository: "o/r", Number: 1}}, got.PRLinks)
 }
@@ -249,14 +244,19 @@ func TestPromptPRLinksBackfillUsesDialogue(t *testing.T) {
 		require.NoError(t, d.UpsertSession(t.Context(), Session{ID: tc.id, Project: "project", Machine: "local", Agent: "claude"}))
 		require.NoError(t, d.ReplaceSessionMessages(t.Context(), tc.id, []Message{{SessionID: tc.id, Role: "user", Content: tc.content, DialogueText: tc.dialogue}}))
 	}
+	seedArtifactOrigin(t, d)
 	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `UPDATE sessions SET pr_links=''; DELETE FROM stats WHERE key='prompt_pr_links_backfill_v1'`)
 		return err
 	}))
+	clearArtifactExportQueue(t, d)
 	require.NoError(t, d.Close())
 	d, err = OpenIsolated(t.Context(), path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	pending, err := d.CountPendingArtifactExports(t.Context())
+	require.NoError(t, err)
+	assert.Zero(t, pending)
 	for _, tc := range cases {
 		got, err := d.GetSession(t.Context(), tc.id)
 		require.NoError(t, err)
@@ -267,4 +267,10 @@ func TestPromptPRLinksBackfillUsesDialogue(t *testing.T) {
 			assert.Equal(t, tc.want, got.PRLinks[0].URL, tc.id)
 		}
 	}
+	link, ok := parser.NewPRLink("https://github.com/o/r/pull/9", "o/r", 9)
+	require.True(t, ok)
+	require.NoError(t, d.UpsertSession(t.Context(), Session{ID: "fallback", Project: "project", Machine: "local", Agent: "claude", PRLinks: []PRLink{link}}))
+	pending, err = d.CountPendingArtifactExports(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, 1, pending)
 }

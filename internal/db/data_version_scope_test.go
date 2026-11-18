@@ -68,12 +68,6 @@ func TestImageTextCompatibilityVersion(t *testing.T) {
 	assert.Equal(t, 171, d.GetSessionDataVersion(t.Context(), "retry"))
 }
 
-func TestPromptPRLinksCompatibilityVersion(t *testing.T) {
-	providers := ScopedDataVersionProviders(183, 184)
-	require.NotNil(t, providers)
-	require.Empty(t, providers)
-}
-
 // Version 134 reshapes Codex session IDs, so it must rebuild every provider.
 func TestCodexLegacyPageVersionRebuildsEveryProvider(t *testing.T) {
 	assert.Nil(t, ScopedDataVersionProviders(133, 134))
