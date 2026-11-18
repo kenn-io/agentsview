@@ -42,11 +42,11 @@ func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string) (bool
 	if err != nil {
 		return false, err
 	}
+	defer rows.Close()
 	var ids []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			rows.Close()
 			return false, err
 		}
 		ids = append(ids, id)
