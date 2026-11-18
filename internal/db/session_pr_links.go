@@ -196,9 +196,41 @@ func PromptPRLinks(messages []Message) []PRLink {
 		if strings.HasPrefix(trimmed, "<bash-stdout>") || strings.HasPrefix(trimmed, "<bash-stderr>") {
 			continue
 		}
-		lists = append(lists, parser.PromptPRLinks(content))
+		lists = append(lists, parser.PromptPRLinks(withoutSystemReminders(content)))
 	}
 	return parser.MergePRLinks(lists...)
+}
+
+func withoutSystemReminders(text string) string {
+	const open = "<system-reminder"
+	const close = "</system-reminder>"
+	var result strings.Builder
+	for {
+		start := strings.Index(text, open)
+		if start < 0 {
+			break
+		}
+		endName := start + len(open)
+		if endName == len(text) || !strings.ContainsRune("> \t\r\n", rune(text[endName])) {
+			result.WriteString(text[:endName])
+			text = text[endName:]
+			continue
+		}
+		tagEnd := strings.IndexByte(text[endName:], '>')
+		if tagEnd < 0 {
+			break
+		}
+		body := endName + tagEnd + 1
+		end := strings.Index(text[body:], close)
+		if end < 0 {
+			break
+		}
+		result.WriteString(text[:start])
+		result.WriteByte(' ')
+		text = text[body+end+len(close):]
+	}
+	result.WriteString(text)
+	return result.String()
 }
 
 func writeSessionPromptPRLinksTx(tx transactionQueries, id, stored string, links []PRLink) error {

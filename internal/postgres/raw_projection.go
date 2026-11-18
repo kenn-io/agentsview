@@ -152,6 +152,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 	changed := false
 	derivedChanged := false
 	fresh := make(map[string][]byte)
+	dialogueChanges := make([]string, 0)
 	for _, group := range ordered {
 		c, ok := candidates[group]
 		if !ok {
@@ -265,6 +266,9 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 			return err
 		}
 		derivedChanged = derivedChanged || dialogueChanged
+		if dialogueChanged {
+			dialogueChanges = append(dialogueChanges, sessionID)
+		}
 		visibleChange, err := publishRawRecency(ctx, tx, sessionID, prepared.Signals)
 		if err != nil {
 			return err
@@ -325,7 +329,7 @@ func (s *RawProjectionStore) Project(ctx context.Context, lease rawderive.JobLea
 		}
 	}
 	for _, group := range ordered {
-		linksChanged, err := syncSelectedRawPRLinks(ctx, tx, group)
+		linksChanged, err := syncSelectedRawPRLinks(ctx, tx, group, dialogueChanges)
 		if err != nil {
 			return err
 		}

@@ -37,8 +37,8 @@ func rawGroupHasStaleFriction(
 
 // syncSelectedRawPRLinks refreshes materialized revisions selected by active
 // branches, including longer retained captures whose source has departed.
-func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string) (bool, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT b.session_id FROM raw_session_branches b JOIN sessions s ON s.id=b.session_id WHERE b.group_id=$1 AND b.active`, group)
+func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string, dialogueChanges []string) (bool, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT b.session_id FROM raw_session_branches b JOIN sessions s ON s.id=b.session_id WHERE b.group_id=$1 AND b.active AND (s.data_version<$2 OR b.session_id=ANY($3::text[]))`, group, db.CurrentDataVersion(), dialogueChanges)
 	if err != nil {
 		return false, err
 	}
@@ -63,7 +63,7 @@ func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string) (bool
 			return false, err
 		}
 		links := db.EncodePRLinks(parser.MergePRLinks(payload.Session.PRLinks, db.PromptPRLinks(payload.Messages)))
-		result, err := tx.ExecContext(ctx, `UPDATE sessions SET pr_links=$2 WHERE id=$1 AND pr_links IS DISTINCT FROM $2`, id, links)
+		result, err := tx.ExecContext(ctx, `UPDATE sessions SET pr_links=$2,data_version=GREATEST(data_version,$3) WHERE id=$1 AND (pr_links IS DISTINCT FROM $2 OR data_version<$3)`, id, links, db.CurrentDataVersion())
 		if err != nil {
 			return false, err
 		}

@@ -26,15 +26,16 @@ func TestPromptPRLinksStoredMessages(t *testing.T) {
 		{SessionID: s.ID, Ordinal: 4, Role: "user", Content: "<task-notification>https://github.com/o/r/pull/6</task-notification>"},
 		{SessionID: s.ID, Ordinal: 5, Role: "user", Content: "<bash-stdout>https://github.com/o/r/pull/7</bash-stdout>"},
 		{SessionID: s.ID, Ordinal: 6, Role: "user", Content: "review https://github.com/o/r/pull/8"},
-		{SessionID: s.ID, Ordinal: 7, Role: "user", Content: "ordinary <system-reminder>https://github.com/o/r/pull/10</system-reminder>"},
+		{SessionID: s.ID, Ordinal: 7, Role: "user", Content: "https://github.com/o/r/pull/11 <system-reminder>https://github.com/o/r/pull/10</system-reminder> <system-reminder source=\"workbuddy\">https://github.com/o/r/pull/12</system-reminder> https://github.com/o/r/pull/13"},
 	}
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, msgs))
 	got, err := d.GetSession(t.Context(), s.ID)
 	require.NoError(t, err)
-	require.Len(t, got.PRLinks, 3)
+	require.Len(t, got.PRLinks, 4)
 	assert.Equal(t, "https://github.com/o/r/pull/1", got.PRLinks[0].URL)
 	assert.Equal(t, "https://github.com/o/r/pull/8", got.PRLinks[1].URL)
-	assert.Equal(t, "https://github.com/o/r/pull/10", got.PRLinks[2].URL)
+	assert.Equal(t, "https://github.com/o/r/pull/11", got.PRLinks[2].URL)
+	assert.Equal(t, "https://github.com/o/r/pull/13", got.PRLinks[3].URL)
 }
 
 func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
