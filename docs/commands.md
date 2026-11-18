@@ -2327,9 +2327,9 @@ ______________________________________________________________________
 
 ### `agentsview index embeddings`
 
-Manage the local semantic search embedding index. `build` with no other flags
-turns search on when needed, through a running daemon that can write the
-archive. Build flags and the other commands require search to be on. See
+Manage the local semantic search embedding index. `build` turns search on when
+needed, through a running daemon that can write the archive. Rebuild, repair,
+and selection flags, and the other commands, require search to be on. See
 [Semantic Search](/docs/semantic-search/) for configuration and search details.
 
 ```bash
@@ -2453,7 +2453,7 @@ agentsview agent setup [--agent claude|codex]... [--check] [--force] [--print] [
 
 Setup refuses to replace a different `agentsview` MCP entry without `--force` and preserves other entries. Pass `--force` to replace the entry and overwrite edited skill files. Repeat `--agent` to name both agents. `--check` reports what is missing without changing anything, and `--print` shows the MCP commands to run by hand. The command exits non-zero while any item is not ready.
 
-Setup registers `agentsview mcp --profile memory` with no server or database flags. To use a remote archive, set `AGENTSVIEW_MEMORY_SERVER` and `AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, or `AGENTSVIEW_MEMORY_PG`, in the environment the agent starts the MCP server from. To make the installed skill's CLI examples use the same server, set `AGENTSVIEW_SKILLS_SERVER` and, if needed, `AGENTSVIEW_SKILLS_SERVER_TOKEN_FILE` when you run setup.
+Setup registers `agentsview mcp --profile memory` with no server or database flags. To use a remote archive, set `AGENTSVIEW_MEMORY_SERVER` and `AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, or `AGENTSVIEW_MEMORY_PG`, in the environment the agent starts the MCP server from. To make a new skill's CLI examples use the same server, set `AGENTSVIEW_SKILLS_SERVER` and, if needed, `AGENTSVIEW_SKILLS_SERVER_TOKEN_FILE` when you run setup. These variables do not change a skill that is already installed; run `agentsview skills install --server <url>` for that, as [`agentsview skills`](#agentsview-skills) describes.
 
 ______________________________________________________________________
 

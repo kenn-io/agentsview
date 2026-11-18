@@ -561,8 +561,8 @@ attach independently launched workers to their manager and roll up their costs.
   linked to that pull request by Claude Code.
 - **Min Prompts** — filter to sessions with at least 2, 3, 5, or 10 user
   messages
-- **Include single-turn** — toggle to include sessions with one or fewer user
-  messages (excluded by default to reduce noise)
+- **Hide single-turn** — toggle to hide sessions with one or fewer user
+  messages (shown by default)
 - **Include automated** — toggle to include sessions classified as automation
   (roborev runs, title generation, AgentsView's own internal prompts, and any
   patterns you've added to
@@ -630,7 +630,7 @@ Available URL filters:
 | `active_since`                 | `true` to limit to the last 24 hours                                                                                      |
 | `min_messages`, `max_messages` | numeric message count bounds                                                                                              |
 | `min_user_messages`            | numeric user-message threshold                                                                                            |
-| `include_one_shot`             | `false` to hide single-turn sessions (default)                                                                            |
+| `include_one_shot`             | `false` to hide single-turn sessions; when omitted, they are shown                                                        |
 | `include_automated`            | `true` to include automated sessions                                                                                      |
 | `exclude_project`              | comma-separated projects to hide (e.g. `unknown`)                                                                         |
 

@@ -27,11 +27,11 @@ the required download through that button, shows download and indexing progress,
 and starts semantic search without a restart. Full-text search remains available
 during indexing.
 
-For CLI setup, run `agentsview index embeddings build` with no other build
-flags. Setup needs a running daemon that can write the archive; start one with
-`agentsview daemon start`. While search by meaning is off, `--full-rebuild`,
-`--backstop`, `--repair-invalid`, `--using`, `--store`, and
-`--include-automated` fail and ask you to turn it on first. AgentsView uses a
+For CLI setup, run `agentsview index embeddings build`. Setup needs a running
+daemon that can write the archive; start one with `agentsview daemon start`.
+While search by meaning is off, `--full-rebuild`, `--backstop`,
+`--repair-invalid`, `--using`, `--include-automated`, and a `--store` other
+than `messages` fail and ask you to turn it on first. AgentsView uses a
 running Ollama server with Nomic or Kit's shared local server. If the local
 server needs files, the CLI asks before downloading them. Search and automatic
 builds reuse installed files; they direct you to the CLI when a download needs

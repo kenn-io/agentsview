@@ -877,10 +877,10 @@ of the line before it, and the first line after the header has a null
 tokens, so `totalTokens` is `input + output + cacheRead`. AgentsView prices the
 tokens from the catalog.
 
-These sessions hold no user message, so the Sessions list hides them with other
-single-turn sessions by default. Turn on **Include single-turn** in the
-[session filters](usage.md#session-filters) to list them. Their usage always
-counts on the Usage page.
+These sessions hold no user message, so they count as single-turn. Sessions and
+Usage include them by default. Turning on **Hide single-turn** in the
+[session filters](usage.md#session-filters) removes them from both the Sessions
+list and Usage totals.
 
 Files go in `~/.agentsview/direct-api/` by default. To read another directory,
 set `DIRECT_API_DIR`, or `dirs` under `[agents.direct-api]` in the
