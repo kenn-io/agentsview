@@ -10,10 +10,10 @@ import (
 
 func TestPGSearchEntryByteLimitCountsAllocatedKeys(t *testing.T) {
 	now := time.Now()
-	source, Processor := "source", "processor"
+	source, processor := "source", "processor"
 	call, event, image := 1, 2, 3
 	keys := make([]pgSearchKey, 1, 4)
-	keys[0] = pgSearchKey{ID: "session", Kind: "image", EndedAt: &now, SourceKind: &source, Processor: &Processor, CallIndex: &call, EventIndex: &event, ImageIndex: &image}
+	keys[0] = pgSearchKey{ID: "session", Kind: "image", EndedAt: &now, SourceKind: &source, Processor: &processor, CallIndex: &call, EventIndex: &event, ImageIndex: &image}
 	memo := kept.Memo[pgSearchEntry]{Size: pgSearchEntryBytes, MaxBytes: 500}
 	memo.Put("search", "v", []pgSearchEntry{{Token: "token", Keys: keys}})
 	_, ok := memo.Get("search", "v")
