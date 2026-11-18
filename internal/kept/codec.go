@@ -7,6 +7,9 @@ import (
 	"io"
 )
 
+// ErrLimitExceeded indicates that a selection exceeds its size limit.
+var ErrLimitExceeded = errors.New("usage selection exceeds limit")
+
 func EncodeRows[T any](rows []T, limit int64, size func(T) int64) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
@@ -17,7 +20,7 @@ func EncodeRows[T any](rows []T, limit int64, size func(T) int64) ([]byte, error
 	for _, row := range rows {
 		total += size(row)
 		if total > limit {
-			return nil, errors.New("usage selection exceeds limit")
+			return nil, ErrLimitExceeded
 		}
 		if err := enc.Encode(row); err != nil {
 			return nil, err

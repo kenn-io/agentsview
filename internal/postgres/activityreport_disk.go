@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"encoding/json/v2"
+	"errors"
 	"time"
 
 	"go.kenn.io/agentsview/internal/activity"
@@ -94,42 +95,40 @@ func (s *Store) saveActivityInputs() {
 			bounds, trimmed, runs := session.runs.Pieces()
 			rows = append(rows, kept.Part[pgActivityDiskPart]{ID: id, Value: pgActivityDiskPart{Bounds: bounds, Trimmed: trimmed, Runs: runs, Users: session.users, Assistants: session.assistants, Candidate: input.candidates[id]}})
 		}
-		data, err := encodePGActivityDiskRows(rows, 256<<20)
-		if err == nil {
-			s.activityDisk.Put(slot.Slot, pgActivityDiskVersion+slot.Version, data)
+		save := func() error {
+			data, err := encodePGActivityDiskRows(rows, 256<<20)
+			if err != nil {
+				return err
+			}
+			return s.activityDisk.Put(slot.Slot, pgActivityDiskVersion+slot.Version, data)
+		}
+		if err := save(); errors.Is(err, kept.ErrLimitExceeded) && rows[0].Value.Priced != nil {
+			rows[0].Value.Priced = nil
+			_ = save()
 		}
 	}
 }
 
 func encodePGActivityDiskRows(rows []kept.Part[pgActivityDiskPart], limit int64) ([]byte, error) {
-	encode := func(rows []kept.Part[pgActivityDiskPart]) ([]byte, error) {
-		return kept.EncodeRows(rows, limit, func(part kept.Part[pgActivityDiskPart]) int64 {
-			size := int64(len(part.ID) + len(part.Value.Identity))
-			size += int64(len(part.Value.Users)+len(part.Value.Assistants)) * 8
-			size += int64(len(part.Value.Bounds)+len(part.Value.Trimmed)) * 8
-			for _, run := range part.Value.Runs {
-				size += int64(len(run.Model) + 8)
+	return kept.EncodeRows(rows, limit, func(part kept.Part[pgActivityDiskPart]) int64 {
+		size := int64(len(part.ID) + len(part.Value.Identity))
+		size += int64(len(part.Value.Users)+len(part.Value.Assistants)) * 8
+		size += int64(len(part.Value.Bounds)+len(part.Value.Trimmed)) * 8
+		for _, run := range part.Value.Runs {
+			size += int64(len(run.Model) + 8)
+		}
+		if priced := part.Value.Priced; priced != nil {
+			size += int64(len(priced.Block) + len(priced.PricingDigest))
+			for _, row := range priced.Rows {
+				size += int64(len(row.Attribution) + 20)
 			}
-			if priced := part.Value.Priced; priced != nil {
-				size += int64(len(priced.Block) + len(priced.PricingDigest))
-				for _, row := range priced.Rows {
-					size += int64(len(row.Attribution) + 20)
-				}
-			}
-			for _, row := range part.Value.Usage {
-				size += int64(len(row.SessionID) + len(row.UsageSource) + len(row.Model) + len(row.ProviderID) + len(row.Agent) +
-					len(row.ClaudeMessageID) + len(row.ClaudeRequestID) + len(row.SourceUUID) + len(row.UsageDedupKey))
-			}
-			return size
-		})
-	}
-	data, err := encode(rows)
-	if err != nil && len(rows) > 0 && rows[0].Value.Priced != nil {
-		withoutPrices := append([]kept.Part[pgActivityDiskPart](nil), rows...)
-		withoutPrices[0].Value.Priced = nil
-		return encode(withoutPrices)
-	}
-	return data, err
+		}
+		for _, row := range part.Value.Usage {
+			size += int64(len(row.SessionID) + len(row.UsageSource) + len(row.Model) + len(row.ProviderID) + len(row.Agent) +
+				len(row.ClaudeMessageID) + len(row.ClaudeRequestID) + len(row.SourceUUID) + len(row.UsageDedupKey))
+		}
+		return size
+	})
 }
 
 func (s *Store) loadActivityInputs(slot, version, identity string) (pgActivityInputs, bool) {

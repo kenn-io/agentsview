@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json/v2"
 	"strings"
 	"sync"
 	"testing"
@@ -528,7 +529,13 @@ func TestPGActivityReportInputRestartPrices(t *testing.T) {
 	require.Equal(t, saved.priced.rows, loaded.priced.rows)
 	reads := &activityInputReadCounter{storeExecutor: restarted.pg}
 	restarted.pg = reads
-	requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, true))
+	got := pgKeptBuild(t, restarted, f, q, true)
+	requirePGKeptEqual(t, want, got)
+	wantPricing, err := json.Marshal(want.Report.Pricing)
+	require.NoError(t, err)
+	gotPricing, err := json.Marshal(got.Report.Pricing)
+	require.NoError(t, err)
+	assert.Equal(t, string(wantPricing), string(gotPricing))
 	assert.Empty(t, reads.transcriptReads)
 	assert.Empty(t, reads.usageReads)
 	other := db.AnalyticsFilter{Timezone: "UTC", Project: "project-b"}
