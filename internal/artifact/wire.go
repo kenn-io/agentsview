@@ -49,9 +49,9 @@ const (
 	manifestMinDecodeVersion = 2
 	// Segment v2 adds the optional prompt_source provenance field on
 	// message records. Segment v3 adds the optional provider_id billing
-	// field. Segment v4 adds the optional reasoning_effort field; v1 through
-	// v3 segments still decode, with the fields defaulting to empty.
-	messageSegmentFormatVersion    = 4
+	// field. Segment v4 adds reasoning_effort, and v5 adds dialogue_text.
+	// Earlier segments still decode with missing fields empty.
+	messageSegmentFormatVersion    = 5
 	messageSegmentMinDecodeVersion = 1
 	metadataEventFormatVersion     = 1
 )
@@ -219,6 +219,7 @@ type segmentMessage struct {
 	Ordinal           int               `json:"ordinal"`
 	Role              string            `json:"role"`
 	Content           string            `json:"content"`
+	DialogueText      *string           `json:"dialogue_text,omitzero"`
 	ThinkingText      string            `json:"thinking_text,omitempty"`
 	Timestamp         string            `json:"timestamp,omitempty"`
 	HasThinking       bool              `json:"has_thinking,omitzero"`
@@ -330,6 +331,7 @@ func segmentMessageFromDB(msg db.Message) segmentMessage {
 		Ordinal:           msg.Ordinal,
 		Role:              msg.Role,
 		Content:           msg.Content,
+		DialogueText:      msg.DialogueText,
 		ThinkingText:      msg.ThinkingText,
 		Timestamp:         msg.Timestamp,
 		HasThinking:       msg.HasThinking,

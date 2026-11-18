@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/rawderive"
 )
 
 func TestRawProjectionPromptLinkInAppendedDeviceCapture(t *testing.T) {
@@ -102,6 +103,38 @@ func TestRawProjectionRolloutBackfillsSelectedLongerCapture(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, leases, 1)
 	require.NoError(t, f.sink.Project(t.Context(), leases[0], a, short))
+	after, err := f.sink.Resolve(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	assert.Equal(t, before.SessionID, after.SessionID)
+	pr, err := db.ParsePRFilter("o/r#2")
+	require.NoError(t, err)
+	page, err := f.hosted(t).ListSessions(t.Context(), db.SessionFilter{PR: pr, Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, page.Sessions, 1)
+	assert.Equal(t, "codex:portable", page.Sessions[0].ID)
+	var corpusAfter int64
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT corpus_revision FROM raw_corpus_state`).Scan(&corpusAfter))
+	assert.Greater(t, corpusAfter, corpusBefore)
+}
+
+func TestRawProjectionRolloutBackfillsTombstonedSource(t *testing.T) {
+	f := newProjectionFixture(t)
+	m, accepted := f.accept(t, "device-a", "initial", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("Review https://github.com/o/r/pull/2")))
+	tomb, _ := f.tombstone(t, m, "departed", accepted.Receipt)
+	before, err := f.sink.Resolve(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET pr_links='[]' WHERE id=$1`, before.SessionID)
+	require.NoError(t, err)
+	var corpusBefore int64
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT corpus_revision FROM raw_corpus_state`).Scan(&corpusBefore))
+	rollout, err := f.sink.ScheduleCurrentHeads(t.Context(), "prompt-links", "parser-2", 10)
+	require.NoError(t, err)
+	require.Equal(t, 1, rollout.Selected)
+	leases, err := f.jobs.ClaimRawParseJobs(t.Context(), "upgrade-worker", 1, time.Minute)
+	require.NoError(t, err)
+	require.Len(t, leases, 1)
+	require.NoError(t, f.sink.Project(t.Context(), leases[0], tomb, rawderive.ParsedManifest{Tombstone: true}))
 	after, err := f.sink.Resolve(t.Context(), "codex:portable")
 	require.NoError(t, err)
 	assert.Equal(t, before.SessionID, after.SessionID)

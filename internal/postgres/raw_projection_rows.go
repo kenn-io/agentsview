@@ -38,7 +38,7 @@ func rawGroupHasStaleFriction(
 // syncSelectedRawPRLinks refreshes materialized revisions selected by active
 // branches, including longer retained captures whose source has departed.
 func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string) (bool, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT b.session_id FROM raw_session_branches b JOIN sessions s ON s.id=b.session_id WHERE b.group_id=$1 AND b.active AND b.session_id<>b.captured_session_id`, group)
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT b.session_id FROM raw_session_branches b JOIN sessions s ON s.id=b.session_id WHERE b.group_id=$1 AND b.active`, group)
 	if err != nil {
 		return false, err
 	}
