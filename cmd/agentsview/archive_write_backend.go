@@ -425,14 +425,14 @@ func startDaemonPushHeartbeatTo(w io.Writer, label string) func() {
 // progress events. A push that waits for a local sync prints a line each time
 // the daemon reports the wait. The returned finish func stops the heartbeat
 // (if no event ever arrived) and clears the in-place line.
-func daemonPushProgress[P any](
-	label string, phase func(P) string, render func(P),
-) (onProgress func(P), finish func()) {
+func daemonPushProgress(
+	label string, render func(storage.PushProgress),
+) (onProgress func(storage.PushProgress), finish func()) {
 	stop := startDaemonPushHeartbeat(label)
 	var once, waitOnce stdsync.Once
 	stopHeartbeat := func() { once.Do(stop) }
-	onProgress = func(p P) {
-		switch phase(p) {
+	onProgress = func(p storage.PushProgress) {
+		switch p.Phase {
 		case storage.PushPhaseWaiting:
 			waitOnce.Do(func() {
 				fmt.Println("Waiting for another push on the daemon to finish...")
@@ -454,9 +454,6 @@ func daemonPushProgress[P any](
 	}
 }
 
-// pushProgressPhase reads a progress report's phase for daemonPushProgress.
-func pushProgressPhase(p storage.PushProgress) string { return p.Phase }
-
 func (b daemonArchiveWriteBackend) ReplicaPush(
 	ctx context.Context,
 	backend storage.Replica,
@@ -473,7 +470,7 @@ func (b daemonArchiveWriteBackend) ReplicaPush(
 		return storage.PushResult{}, err
 	}
 	onProgress, finish := daemonPushProgress(
-		backend.DisplayName(), pushProgressPhase, newReplicaPushProgressPrinter(),
+		backend.DisplayName(), newReplicaPushProgressPrinter(),
 	)
 	defer finish()
 	return postDaemonPush[storage.PushResult](

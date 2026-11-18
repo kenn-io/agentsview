@@ -512,7 +512,7 @@ func TestSyncThenRunForPushCopiesHealthyArchiveBesideCorruptSource(t *testing.T)
 			request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/push/pg", nil)
 			request.Header.Set("Accept", accept)
 			hctx := humago.NewContext(&huma.Operation{}, request, recorder)
-			runPushStream(hctx, func(_, _ func(storage.PushProgress)) (any, error) {
+			runPushStream(hctx, func(_, _ func(storage.PushProgress)) (storage.PushResult, error) {
 				var result storage.PushResult
 				err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, false, nil, nil, nil,
 					func(forceFull bool) error {
@@ -1033,7 +1033,9 @@ func TestRunPushStreamReportsWhetherThePushStarted(t *testing.T) {
 				request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/push/pg", nil)
 				request.Header.Set("Accept", accept)
 				runPushStream(humago.NewContext(&huma.Operation{}, request, recorder),
-					func(_, _ func(storage.PushProgress)) (any, error) { return nil, tt.err })
+					func(_, _ func(storage.PushProgress)) (storage.PushResult, error) {
+						return storage.PushResult{}, tt.err
+					})
 				payload := recorder.Body.String()
 				if accept == "text/event-stream" {
 					require.Contains(t, payload, "event: error\n")

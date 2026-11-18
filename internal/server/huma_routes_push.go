@@ -96,16 +96,16 @@ func (s *Server) registerPushRoutes() {
 // daemon-side debug.log progress logger is composed by the caller. An error
 // body carries push_started, so a watch client can keep a --full request
 // that no push started.
-func runPushStream[T any](
+func runPushStream(
 	hctx huma.Context,
-	run func(progress, phase func(T)) (any, error),
+	run func(progress, phase func(storage.PushProgress)) (storage.PushResult, error),
 ) {
 	if strings.Contains(hctx.Header("Accept"), "text/event-stream") {
 		if sse, ok := newHumaSSEStream(hctx); ok {
-			send := newPushProgressStreamSender(func(p T) {
+			send := newPushProgressStreamSender(func(p storage.PushProgress) {
 				sse.SendJSON("progress", p)
 			})
-			result, err := run(send, func(p T) {
+			result, err := run(send, func(p storage.PushProgress) {
 				sse.SendJSON("progress", p)
 			})
 			if err != nil {
@@ -135,8 +135,8 @@ func runPushStream[T any](
 type pushErrorResponse struct {
 	Error string `json:"error"`
 	// PushStarted is false when the client should ask for --full again: the
-	// push failed before it recorded a full push the mirror could resume, and
-	// the request did not rebuild the archive, which makes every mirror push
+	// push failed before it recorded a full push the replica could resume, and
+	// the request did not rebuild the archive, which makes every replica push
 	// in full on its own.
 	PushStarted bool `json:"push_started"`
 }
@@ -155,8 +155,8 @@ func logPushPhase(name, phase string) {
 }
 
 // composePushProgress fans one progress report out to each non-nil callback.
-func composePushProgress[P any](fns ...func(P)) func(P) {
-	return func(p P) {
+func composePushProgress(fns ...func(storage.PushProgress)) func(storage.PushProgress) {
+	return func(p storage.PushProgress) {
 		for _, fn := range fns {
 			if fn != nil {
 				fn(p)
@@ -664,7 +664,7 @@ func (s *Server) humaReplicaPush(
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
 		runPushStream(hctx, func(
 			streamProgress, streamPhase func(storage.PushProgress),
-		) (any, error) {
+		) (storage.PushResult, error) {
 			onProgress := composePushProgress(
 				newReplicaPushProgressLogger(name), streamProgress,
 			)

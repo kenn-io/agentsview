@@ -69,7 +69,7 @@ func TestDaemonPushProgressSilencesHeartbeat(t *testing.T) {
 			t.Cleanup(func() { daemonPushHeartbeatInterval = orig })
 
 			onProgress, finish := daemonPushProgress(
-				"PostgreSQL", pushProgressPhase, newReplicaPushProgressPrinter(),
+				"PostgreSQL", newReplicaPushProgressPrinter(),
 			)
 			onProgress(storage.PushProgress{SessionsDone: 1, SessionsTotal: 2})
 			synctest.Sleep(150 * time.Millisecond)
@@ -93,7 +93,7 @@ func TestDaemonPushProgressReportsWaitingForAnotherPush(t *testing.T) {
 			t.Cleanup(func() { daemonPushHeartbeatInterval = orig })
 
 			onProgress, finish := daemonPushProgress(
-				"PostgreSQL", pushProgressPhase,
+				"PostgreSQL",
 				func(storage.PushProgress) {
 					assert.Fail(t, "a waiting report is not push progress")
 				},
@@ -114,7 +114,7 @@ func TestDaemonPushProgressReportsWaitingForAnotherPush(t *testing.T) {
 func TestDaemonPushProgressReportsWaitingForTheLocalSync(t *testing.T) {
 	out := captureStdout(t, func() {
 		onProgress, finish := daemonPushProgress(
-			"PostgreSQL", pushProgressPhase,
+			"PostgreSQL",
 			func(storage.PushProgress) {
 				assert.Fail(t, "a waiting report is not push progress")
 			},
