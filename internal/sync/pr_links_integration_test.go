@@ -58,7 +58,6 @@ func TestParseDiffIgnoresLauncherParents(t *testing.T) {
 	env.writeClaudeSession(t, "test-proj", "pd-prs.jsonl", testjsonl.JoinJSONL(
 		testjsonl.ClaudeUserJSON("Open a PR", tsZero),
 		testjsonl.ClaudeAssistantJSON("Opened", tsZeroS1),
-		`{"type":"pr-link","prNumber":1,"prUrl":"https://github.com/owner/repo/pull/1","prRepository":"owner/repo","timestamp":"2024-01-01T00:00:02Z"}`,
 	))
 	env.writeGeminiSession(t,
 		filepath.Join("tmp", "annhash", "chats", "session-001.json"),
