@@ -213,8 +213,11 @@ func TestSyncGrokIncrementalAndHistory(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"Question", "Answer", "Follow up", "Second answer"}, messageContents(saved))
 
-	// The same text under a different response ID is a branch switch too.
-	resent := grokSyncResponse("r6", "r1", "assistant", "Better answer", "2026-10-21T08:03:00Z")
+	// The same text and time under a different response ID is a branch
+	// switch too: only the response ID tells the two replies apart. The list
+	// time still moves, so Sync fetches the chat, and the replacement comes
+	// last so it wins the tie for newest reply.
+	resent := grokSyncResponse("r6", "r1", "assistant", "Better answer", "2026-10-21T08:02:00Z")
 	assert.Equal(t, 1, sync("2026-10-21T08:03:00Z", q, a, f, b, regenerated, resent).Updated)
 	assert.Len(t, replacedCopies(t, d, id), 2)
 }
