@@ -453,6 +453,21 @@
     return true;
   }
 
+  function nextFirstVisitSession(): string | undefined {
+    return sessions.groupedSessions
+      .flatMap((group) => [group.primarySessionId, ...group.sessions.map((s) => s.id)])
+      .find((sid) => sid && !firstVisitTried.has(firstVisitKey(sid)));
+  }
+
+  // Once the loaded sidebar sessions are exhausted, wait for the next page and resume searching.
+  // A failed page is left to the pagination Retry control.
+  function pagingSidebar(): boolean {
+    void firstVisitPaged;
+    if (!sessions.nextCursor || sessions.sidebarPageFailed) return false;
+    if (!sessions.loading) void sessions.loadMore().finally(() => firstVisitPaged++);
+    return true;
+  }
+
   // Keep the attempt pending until the selected transcript shows a row;
   // a loaded transcript with none is skipped for the next sidebar session.
   function advanceFirstVisit(): void {
@@ -465,9 +480,8 @@
       }
       firstVisitTried.add(firstVisitCandidateKey);
     }
-    const next = sessions.groupedSessions
-      .flatMap((group) => [group.primarySessionId, ...group.sessions.map((s) => s.id)])
-      .find((sid) => sid && !firstVisitTried.has(firstVisitKey(sid)));
+    const next = nextFirstVisitSession();
+    if (!next && pagingSidebar()) return;
     firstVisitCandidate = next ?? null;
     if (next) selectFirstVisit(next);
     else if (id) sessions.deselectSession();
