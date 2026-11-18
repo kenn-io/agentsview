@@ -27,8 +27,10 @@ The dashboard header includes:
 - **Search bar** — opens the command palette (`Cmd+K`)
 - **Sync button** — triggers a manual sync of session files
 - **Theme toggle** — switch between light and dark mode
-- **Import button** — opens the [Chat Import](/docs/chat-import/) dialog for
-  importing Claude.ai or ChatGPT conversations
+- **More actions → Import conversations** — opens the
+  [Chat Import](/docs/chat-import/) dialog to import Claude.ai or ChatGPT
+  exports, or Sync them through Chrome. An **Import** button stays
+  in the header while a Sync runs.
 - **Shortcuts button** (`?`) — shows all keyboard shortcuts
 
 The status bar at the bottom shows session count, message count, project count,
@@ -421,8 +423,7 @@ Each session item shows:
   `session_index.jsonl` for both current and archived sessions. Qwen Code,
   Gemini CLI, Kimi CLI, and OpenClaw titles, current Claude Code `/rename`
   names, and keeping titles out of the first message are included in 0.45.0.
-- **Model name** — the AI model used for the session, shown when available
-  (including Codex session models).
+  Chats synced from Gemini Apps and Grok web use their chat titles.
 - **Star button** — click the star icon or press `s` to star a session. Starred
   sessions persist in the SQLite database so they survive server restarts.
 - **Agent tag** — agent name on the right side, tinted with the agent's accent
@@ -430,7 +431,8 @@ Each session item shows:
 - **Machine label** — when using [PostgreSQL sync](/docs/pg-sync/), sessions
   from other machines show a machine name tag. Only visible in shared multi-host
   deployments.
-- **Project name** — abbreviated, right-aligned
+- **Project name** — first on the second line, shortened with an ellipsis when
+  space is tight
 - **Session time** — relative time such as "2h ago", or the date and time with the year when **Always show year** is on
 - **User prompt count** — number of user messages in the session
 
@@ -682,15 +684,15 @@ browser-local and is not synced through SQLite or PostgreSQL.
 ### Message Layouts
 
 Four layouts control how messages are rendered. Cycle between them with the `l`
-key or the layout button in the header, or pick one directly in Settings >
-Appearance:
+key, choose one under **Layout** in the session header's **View** menu, or set
+one in Settings > Appearance:
 
-| Layout  | Description                                               |
-| ------- | --------------------------------------------------------- |
-| Default | Full card layout with colored borders and spacing         |
-| Compact | Condensed view with minimal spacing                       |
-| Stream  | Continuous flow optimized for reading                     |
-| Skim    | Collapses tool calls to summary headers for fast skimming |
+| Layout  | Description                                |
+| ------- | ------------------------------------------ |
+| Default | Expanded messages                          |
+| Compact | The same content with tighter spacing      |
+| Stream  | Chat without speaker labels                |
+| Skim    | One line per message and tool call         |
 
 All four layouts share one reading column. To widen it, set **Reading width** in
 Settings > Appearance to **Wider** or **Full**.
@@ -706,8 +708,8 @@ agents still collapses to its prompts and final answers.
 
 ![Focused transcript mode](/docs/assets/generated/screenshots/focused-transcript.png)
 
-Switch between Normal and Focused mode in the **Transcript view** menu in the
-session header: under **Content**, choose **All messages and tool calls** or
+Switch between Normal and Focused mode in the **View** menu in the session
+header: under **Content**, choose **All messages and tool calls** or
 **Only your prompts and final answers**. The mode preference is saved in
 localStorage.
 
@@ -828,8 +830,8 @@ so matches can be highlighted.
 
 ### Block-Type Filtering
 
-Click the filter icon in the message viewer header to open a dropdown that
-toggles visibility of seven content categories:
+Open the **View** menu in the session header. Its **Block Visibility** group
+toggles seven content categories:
 
 | Category  | What It Controls          |
 | --------- | ------------------------- |
@@ -852,9 +854,8 @@ resume, an interrupted request, a task notification, or stop hook feedback.
 Hiding the category removes all of them; the rest of the transcript is
 unaffected.
 
-All categories are visible by default. When any are hidden, a badge on the
-filter button shows the count of hidden types. Click **Show all** to restore
-visibility.
+All categories are visible by default. When any are hidden, a dot appears on
+the **View** button. Click **Show all** in the menu to restore visibility.
 
 ### Sorting
 

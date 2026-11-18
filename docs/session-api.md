@@ -1216,11 +1216,17 @@ Output:        15230
 Peak ctx:      84000
 Subagents:     2 (included)
 Cost:          ~$2.41 (claude-opus-4-7)
+Agent total:   $2.38 for the session, including subagents
 ```
 
-The `Subagents` line appears only when the figures cover subagent transcripts,
-so a session without them (or a `--own-only` run) prints the same five lines it
-always has.
+The `Subagents` line appears only when the figures cover subagent transcripts.
+It is absent for a session without them and for a `--own-only` run.
+
+Lines after `Cost` appear only when they have something to say. `Agent cost`
+compares what the agent recorded with what AgentsView charged for the same
+usage. `Agent total` shows the agent's own total for the session, such as Claude
+Code's running total. See
+[Costs the Agent Records Itself](/docs/token-usage/#costs-the-agent-records-itself).
 
 When refresh is incomplete, human output adds `Usage refresh is incomplete. Saved totals may be out of date.`.
 
@@ -1229,7 +1235,8 @@ cost omits it. The parenthesized model list is shown only when contributing
 models exist, so a cost-only reported session does not render empty parentheses.
 When some contributing models are unpriced, the cost line reads
 `n/a (unpriced: model-x)`; when the session has no token data at all, it reads
-`n/a`. Priced Copilot-family sessions add an `AI Credits` line after the cost.
+`n/a`. Priced Copilot-family sessions add an `AI Credits` line after the cost and
+agent lines.
 
 **HTTP endpoint** — as of 0.32.0, the same data is available over REST:
 
@@ -1614,7 +1621,7 @@ against `pg serve`, with the same masking and `--reveal` constraints.
 
 ### Ingest-time image offload
 
-The normalized Markdown endpoint `/api/v1/sessions/{id}/md` carries stored tool-result content, including `agentsview_image` placeholders and `image_ref` asset references. The HTML export keeps its existing contract. A serving host needs the matching `{dataDir}/assets` directory. PostgreSQL and CockroachDB retain the reference text but cannot resolve local assets. The raw `agentsview session export` command streams provider source bytes and retains their original inline payloads.
+The normalized Markdown endpoint `/api/v1/sessions/{id}/md` carries stored tool-result content, including `agentsview_image` placeholders and `image_ref` asset references. The HTML export keeps its existing contract. A serving host needs the matching `{dataDir}/assets` directory. PostgreSQL and CockroachDB retain the reference text but cannot resolve local assets. The raw `agentsview session export` command streams provider source with detected secrets masked unless you pass `--reveal`, and keeps the original inline image payloads.
 
 ## Commit lookups
 
@@ -1675,6 +1682,8 @@ transcript links; `"usage"` archives keep neither.
 
 ### Git trailer links
 
+Run `agentsview git-hook install` in a repository to add these lines to new
+commits; see [`agentsview git-hook`](/docs/commands/#agentsview-git-hook).
 Commits containing `Agent-Session: <agent>:<session-id>` lines appear with
 `source: "trailer"`, a full SHA, Git's author time, and a repository path.
 Claude IDs omit the `claude:` prefix in the archive; other agents use their

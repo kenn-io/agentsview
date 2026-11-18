@@ -4,10 +4,10 @@ description: Import Claude.ai, ChatGPT, Gemini Apps, and Grok web conversations 
 ---
 
 Bring Claude.ai, ChatGPT, Gemini Apps, and Grok web conversations into the same
-searchable archive as your coding sessions. [Sync Claude.ai through Chrome](#sync-claudeai-chats)
-to fetch new and changed chats, or import the services' exported files below.
-AgentsView imports Grok web chats only through
-[Sync](#sync-grok-web-chats).
+searchable archive as your coding sessions. Sync Claude.ai, ChatGPT, Gemini
+Apps, and Grok web chats through Chrome to fetch new and changed chats, or
+import Claude.ai, ChatGPT, and Gemini Apps export files. Grok web chats come in
+only through [Sync](#sync-grok-web-chats).
 ChatGPT dot, Codex web, and Codex cloud task chats use the separate opt-in
 [Codex Cloud source](/docs/configuration/#codex-cloud).
 
@@ -139,7 +139,7 @@ click **Sync**. Enable the extension in only one Chrome profile. Sync uses the
 first profile that connects. **Update needed** keeps
 Sync enabled and shows the restart, setup, and reload sequence above.
 During Sync, **Stop** cancels the run and progress replaces file upload. Results
-show the imported, updated, unchanged, and failed counts. Other failures show
+show the new, updated, unchanged, and error counts. Other failures show
 **Sync failed** with **Retry**.
 
 Closing the dialog does not stop Sync. While it runs, the header's **Import**

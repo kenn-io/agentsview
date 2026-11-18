@@ -759,7 +759,9 @@ Access** section lets you:
 
 ![Settings remote access](/docs/assets/generated/screenshots/settings-remote.png)
 
-Changes that affect bind or auth behavior may require a server restart.
+Auth changes take effect as soon as you save. Select **Restart now** beside the
+notice to restart the server from this page. Changing the bind address needs a
+restart with the new [`--host`](#cli-flags-reference) flag.
 
 ## CLI Flags Reference
 

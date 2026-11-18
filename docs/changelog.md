@@ -46,7 +46,8 @@ The latest release is
 - Track token usage and cost for tools that call model APIs directly, with no
   coding agent in between. Such a tool writes body-free session files to
   `~/.agentsview/direct-api/`, and AgentsView lists them as **Direct API**
-  sessions. `DIRECT_API_DIR` or `direct_api_dirs` change the directory. See
+  sessions. `DIRECT_API_DIR` or `dirs` under `[agents.direct-api]`
+  change the directory. See
   [Direct API Sessions](/docs/token-usage/#direct-api-sessions).
 
 - A `[custom_model_pricing."<model>"]` entry can set `price_as` to price a model
@@ -119,8 +120,8 @@ The latest release is
   [Choose an installation route](/docs/mcp/#choose-an-installation-route).
 
 - Trace a commit back to the agent session that made it. After
-  `agentsview git-hook install` in a repository, commits made from an agent
-  session end with a line such as
+  `agentsview git-hook install` in a repository, commits an agent makes without
+  an editor, such as `git commit -m`, end with a line such as
   `Agent-Session: codex:12345678-1234-1234-1234-1234567890ab`. When the hook
   cannot find exactly one session, it leaves the message unchanged. An existing
   `commit-msg` hook is left alone, and the installer prints the line to add to
@@ -168,11 +169,11 @@ The latest release is
 
 - Session search finds messages that hold your words in any order. A search
   for `invoice rounding decision` lists exact matches first, then messages that
-  hold every word, such as "rounding of invoices", then messages that hold
-  fewer. Unquoted words also match their regular forms, so `invoice` finds
-  `invoices`. A single word or a fully quoted query still searches for the
-  exact text. This applies to `agentsview session search` and MCP search, and
-  each match reports `matched_words`. See
+  hold every word, such as "the decision on rounding of invoices", then
+  messages that hold fewer. Unquoted words also match their regular forms, so
+  `invoice` finds `invoices`. A single word or a fully quoted query still
+  searches for the exact text. This applies to `agentsview session search` and
+  MCP search, and each match reports `matched_words`. See
   [`session search`](/docs/session-api/#agentsview-session-search).
 
 - After you pick a result in the search palette, the next `Cmd+K` reopens the
