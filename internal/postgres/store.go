@@ -91,6 +91,7 @@ func (s *Store) DB() *sql.DB {
 // Close closes the underlying database connection.
 func (s *Store) Close() error {
 	if pool := s.DB(); pool != nil {
+		s.saveActivityInputs()
 		var cacheErr error
 		if s.usageCache != nil {
 			cacheErr = s.usageCache.Close()

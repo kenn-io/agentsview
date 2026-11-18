@@ -32,6 +32,7 @@ type Store struct {
 	readTx          *sql.Tx
 	pricingSnapshot *pricingSnapshot
 	usageCache      *db.UsageCacheReader
+	activityDisk    kept.Disk
 	trendsDisk      kept.Disk
 	trendsIdentity  string
 	trendsVersion   string

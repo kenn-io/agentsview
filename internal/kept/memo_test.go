@@ -52,3 +52,16 @@ func TestKeptMemoSlotsAndVersions(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, []int{3}, rows)
 }
+
+func TestMemoSnapshotCopiesRows(t *testing.T) {
+	var memo Memo[int]
+	memo.Put("first", "v1", []int{1, 2})
+	snapshot := memo.Snapshot()
+	require.Len(t, snapshot, 1)
+	require.Equal(t, "first", snapshot[0].Slot)
+	require.Equal(t, "v1", snapshot[0].Version)
+	snapshot[0].Rows[0] = 9
+	rows, ok := memo.Get("first", "v1")
+	require.True(t, ok)
+	require.Equal(t, []int{1, 2}, rows)
+}

@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/stringutil"
 )
 
 func TestPGActivityInputBytesIncludesPrices(t *testing.T) {
@@ -39,4 +40,15 @@ func TestPGActivityPricedCovers(t *testing.T) {
 	}
 	priced.next = time.Time{}
 	assert.True(t, priced.covers(activity.Query{RangeStart: start, RangeEnd: end, EffectiveEnd: end}, "prices"))
+}
+
+func TestPGActivityDiskRowRoundTrip(t *testing.T) {
+	intern := stringutil.Interner{}
+	row := pgActivityUsageRow{
+		sessionID: intern.Intern("session"), usageSource: intern.Intern("source"), model: intern.Intern("model"), providerID: intern.Intern("provider"), agent: intern.Intern("agent"),
+		claudeMessageID: "message", claudeRequestID: "request", sourceUUID: "uuid", usageDedupKey: "dedup",
+		us: 1, cost: 2, webSearches: 3, input: 4, output: 5, cacheCreate: 6, cacheRead: 7, reasoning: 8,
+		ordinal: 9, cacheCreate1h: 10, ordinalValid: true, costValid: true, copilotReported: true, pricingTimeAbsent: true, costRecorded: true,
+	}
+	assert.Equal(t, row, pgActivityRowToDisk(row).activityRow(stringutil.Interner{}))
 }

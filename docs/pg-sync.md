@@ -29,6 +29,13 @@ needs `INSERT` and `UPDATE`, on `session_frustration_counts`.
 On `pg serve`, ended Activity ranges are reused in memory until a push touches
 their sessions or range, pricing changes, or project identity changes.
 Hosted PostgreSQL and archives without the journal rebuild every time.
+For ranges that include today, native PostgreSQL saves Activity inputs on a
+graceful close under `$CACHE_DIRECTORY/postgres-activity`, or
+`agentsview/postgres-activity` in the user cache directory. Each file and the
+whole cache are limited to 256 MiB. After restart, Activity refreshes changed
+sessions. Saving and reuse require the identity-function permissions described
+for the Usage cache below; without them, Activity reads directly and can still
+reuse inputs in memory.
 
 `pg serve` keeps finished Usage results in memory, up to 64 selections and
 64 MiB per read kind, until the journal revision or custom pricing changes.
@@ -55,8 +62,8 @@ If a cache attempt fails while the request is active, the existing direct
 PostgreSQL read supplies its result or error. A journal installed later enables
 persistent reuse without a server restart. If the cache directory can't be
 created, the reader uses temporary storage. The cache is disposable and contains
-no source sessions. Plan usage, per-session details, and Activity retain their
-existing read paths.
+no source sessions. Plan usage and per-session details retain their existing
+read paths.
 
 Trends keeps per-session counts under `$CACHE_DIRECTORY/postgres-trends`, or
 `agentsview/postgres-trends` in the user cache directory, and after a push

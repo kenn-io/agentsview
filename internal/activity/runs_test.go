@@ -1,7 +1,9 @@
 package activity
 
 import (
+	"bytes"
 	"context"
+	"encoding/gob"
 	"fmt"
 	"math/rand/v2"
 	"slices"
@@ -225,5 +227,28 @@ func TestRunsMatchCandidatesWithMicrosecondStartBound(t *testing.T) {
 			runSlice(runs), func() ([]UsageRow, error) { return nil, nil })
 		require.NoError(t, err)
 		require.Equal(t, want, got, "trial %d", trial)
+	}
+}
+
+func TestSessionRunsGobRoundTrip(t *testing.T) {
+	builder := NewSessionRunsBuilder(300)
+	builder.AddPiece("model-a", 1000000, 2000000, false)
+	builder.AddPiece("model-a", 2000000, 3000000, true)
+	builder.AddPiece("model-b", 4000000, 5000000, false)
+	original := builder.Finish()
+	var buf bytes.Buffer
+	require.NoError(t, gob.NewEncoder(&buf).Encode(original))
+	var restored SessionRuns
+	require.NoError(t, gob.NewDecoder(&buf).Decode(&restored))
+	start, end := time.UnixMicro(1500000).UTC(), time.UnixMicro(4500000).UTC()
+	require.Equal(t, []Run{{SessionID: "s", Start: time.UnixMicro(1500000).UTC(), End: time.UnixMicro(3000000).UTC(), Tail: time.UnixMicro(2000000).UTC(), Model: "model-a"}}, restored.AppendClippedBefore(nil, "s", start, end, time.UnixMicro(2000000)))
+	for _, invalid := range []encodedSessionRuns{
+		{Bounds: []int64{1}, Runs: []encodedSessionRun{{First: 0, Last: 2}}},
+		{Bounds: []int64{1, 2}, Runs: []encodedSessionRun{{First: 1, Last: 1}}},
+		{Bounds: []int64{1, 2, 3}, Runs: []encodedSessionRun{{First: 0, Last: 1}, {First: 1, Last: 2}}},
+	} {
+		buf.Reset()
+		require.NoError(t, gob.NewEncoder(&buf).Encode(invalid))
+		require.Error(t, restored.GobDecode(buf.Bytes()))
 	}
 }

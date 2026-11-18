@@ -843,6 +843,11 @@ Keep identity-only corrections in the reporting digest. The wire contract is in
     - PostgreSQL: the usage selection alone took 1.86 s at best, against about 1 s
       for the whole Go usage step, at least 1.9x slower.
 
+PostgreSQL saves current-range inputs at graceful close, with 256 MiB per file
+and total, and refreshes changed sessions after restart. On a cache hit, reports
+clip saved session runs to their date range without pairing those sessions
+again.
+
 ### Harness-recorded costs
 
 A harness-recorded cost is a figure the agent computed from its own rates. It is
