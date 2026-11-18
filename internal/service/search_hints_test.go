@@ -405,3 +405,78 @@ func TestSearchContentHintsDeepChildChain(t *testing.T) {
 		{Code: "excluded_combined", Message: "1 match is hidden by default", RetryWith: map[string]any{"include_one_shot": true, "include_automated": true, "include_children": true}},
 	}, hints)
 }
+
+func TestSearchContentHintsFullSemanticPage(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	hits := make([]db.VectorHit, 0, 51)
+	for i := range 50 {
+		id := fmt.Sprintf("one-shot-%d", i)
+		dbtest.SeedSession(t, d, id, "proj", func(s *db.Session) { s.UserMessageCount = 1 })
+		require.NoError(t, d.InsertMessages(t.Context(), []db.Message{dbtest.UserMsg(id, 0, "marker")}))
+		hits = append(hits, db.VectorHit{SessionID: id, Ordinal: 0, OrdinalStart: 0, OrdinalEnd: 0, Score: 0.9})
+	}
+	dbtest.SeedSession(t, d, "auto", "proj", func(s *db.Session) { s.UserMessageCount, s.IsAutomated = 2, true })
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{dbtest.UserMsg("auto", 0, "marker")}))
+	hits = append(hits, db.VectorHit{SessionID: "auto", Ordinal: 0, OrdinalStart: 0, OrdinalEnd: 0, Score: 0.5})
+	d.SetVectorSearcher(&conceptVectorSearcher{hits: map[string][]db.VectorHit{"marker": hits}, ks: map[string][]int{}})
+	svc := service.NewDirectBackend(d, nil)
+	req := service.ContentSearchRequest{Pattern: "marker", Mode: "semantic"}
+	res, err := svc.SearchContent(t.Context(), req)
+	require.NoError(t, err)
+	require.Empty(t, res.Matches)
+	// One-shot matches fill the shared semantic page, so the automated
+	// session, which scores lower, needs its own search.
+	hints := service.SearchContentHints(t.Context(), svc, req, res, true, nil)
+	assert.Equal(t, []service.ContentSearchHint{
+		{Code: "excluded_one_shot", Message: "at least 50 matches are in one-shot sessions, hidden by default", RetryWith: map[string]any{"include_one_shot": true}},
+		{Code: "excluded_automated", Message: "at least 1 match is in automated sessions, hidden by default", RetryWith: map[string]any{"include_automated": true}},
+	}, hints)
+}
+
+// multiParentService answers searches with one page and session lookups
+// from a fixed set of rows, the way a hosted read lists several parents.
+type multiParentService struct {
+	service.SessionService
+	page     service.ContentSearchResult
+	rows     map[string]db.Session
+	searches int
+}
+
+func (s *multiParentService) SearchContent(_ context.Context, req service.ContentSearchRequest) (*service.ContentSearchResult, error) {
+	s.searches++
+	if !req.IncludeOneShot || !req.IncludeAutomated {
+		return &service.ContentSearchResult{}, nil
+	}
+	page := s.page
+	return &page, nil
+}
+
+func (s *multiParentService) List(_ context.Context, f service.ListFilter) (*service.SessionList, error) {
+	var list service.SessionList
+	for _, id := range f.IDs {
+		if row, ok := s.rows[id]; ok {
+			list.Sessions = append(list.Sessions, row)
+		}
+	}
+	return &list, nil
+}
+
+func TestSearchContentHintsEveryParent(t *testing.T) {
+	svc := &multiParentService{
+		page: service.ContentSearchResult{Matches: []db.ContentMatch{{SessionID: "kid"}}},
+		rows: map[string]db.Session{
+			"kid":    {ID: "kid", RelationshipType: "subagent", UserMessageCount: 1, ParentSessionIDs: []string{"lonely", "robot"}},
+			"lonely": {ID: "lonely", UserMessageCount: 1},
+			"robot":  {ID: "robot", UserMessageCount: 3, IsAutomated: true},
+		},
+	}
+	req := service.ContentSearchRequest{Pattern: "marker", IncludeChildren: true}
+	// The child reaches a one-shot root through one parent and an automated
+	// root through the other, so either retry shows it.
+	hints := service.SearchContentHints(t.Context(), svc, req, &service.ContentSearchResult{}, true, nil)
+	assert.Equal(t, []service.ContentSearchHint{
+		{Code: "excluded_one_shot", Message: "1 match is in one-shot sessions, hidden by default", RetryWith: map[string]any{"include_one_shot": true}},
+		{Code: "excluded_automated", Message: "1 match is in automated sessions, hidden by default", RetryWith: map[string]any{"include_automated": true}},
+	}, hints)
+	assert.Equal(t, 1, svc.searches)
+}

@@ -30,57 +30,67 @@ type hintProbe struct {
 	oneShot, automated, children bool
 }
 
-// shows reports whether the probe's search shows a match whose session chain
-// runs from the matched session to its tree root. It mirrors the session
-// scope SQL: automation is checked on every chain member, the one-shot gate
-// on the root only, and an automated root passes the one-shot gate when the
-// probe shows automated sessions.
-func (p hintProbe) shows(chain []db.Session, exemptChildren bool) bool {
-	if !p.automated && slices.ContainsFunc(chain, func(s db.Session) bool { return s.IsAutomated }) {
-		return false
-	}
-	root := chain[len(chain)-1]
-	return p.oneShot || root.UserMessageCount > 1 || p.automated && root.IsAutomated ||
-		exemptChildren && db.IsSidebarChildRelationship(root.RelationshipType) && hintParentID(root) != ""
+// shows reports whether the probe's search shows a match on session id, and
+// whether rows held every session needed to decide that. A tree search
+// reaches a child through any of its parents, so the match shows when some
+// path from the session to a tree root passes. It mirrors the session scope
+// SQL: automation is checked on every session along the path, the one-shot
+// gate on the root only, and an automated root passes the one-shot gate when
+// the probe shows automated sessions. A flat search checks only the
+// session's own row.
+func (p hintProbe) shows(rows map[string]db.Session, id string, tree, exemptChildren bool) (shown, known bool) {
+	return p.showsPath(rows, id, tree, exemptChildren, make(map[string]bool))
 }
 
-func hintParentID(s db.Session) string {
-	if s.ParentSessionID == nil {
-		return ""
+func (p hintProbe) showsPath(rows map[string]db.Session, id string, tree, exemptChildren bool, path map[string]bool) (shown, known bool) {
+	if path[id] {
+		// A parent loop never reaches a root.
+		return false, true
 	}
-	return *s.ParentSessionID
+	s, ok := rows[id]
+	if !ok {
+		return false, false
+	}
+	if !p.automated && s.IsAutomated {
+		return false, true
+	}
+	parents := hintParentIDs(s)
+	if !tree || hintTreeRoot(s) {
+		return p.oneShot || s.UserMessageCount > 1 || p.automated && s.IsAutomated ||
+			exemptChildren && db.IsSidebarChildRelationship(s.RelationshipType) && len(parents) > 0, true
+	}
+	path[id] = true
+	defer delete(path, id)
+	known = true
+	for _, parent := range parents {
+		shown, ok := p.showsPath(rows, parent, tree, exemptChildren, path)
+		if shown {
+			return true, true
+		}
+		known = known && ok
+	}
+	return false, known
+}
+
+// hintParentIDs returns every parent a session lists. Hosted reads fill
+// ParentSessionIDs and leave ParentSessionID nil when several parents exist.
+func hintParentIDs(s db.Session) []string {
+	if len(s.ParentSessionIDs) > 0 {
+		return s.ParentSessionIDs
+	}
+	if s.ParentSessionID != nil && *s.ParentSessionID != "" {
+		return []string{*s.ParentSessionID}
+	}
+	return nil
 }
 
 // hintTreeRoot mirrors db.BuildCanonicalRootWhere without orphans.
 func hintTreeRoot(s db.Session) bool {
-	return !db.IsCanonicalChildRelationship(s.RelationshipType) || hintParentID(s) == ""
-}
-
-// hintChain returns the session chain for id, or nil when a member is
-// unknown or the parent links loop. A flat search checks only the session's
-// own row.
-func hintChain(rows map[string]db.Session, id string, tree bool) []db.Session {
-	s, ok := rows[id]
-	if !ok {
-		return nil
-	}
-	chain := []db.Session{s}
-	seen := map[string]bool{id: true}
-	for tree && !hintTreeRoot(s) {
-		parentID := hintParentID(s)
-		parent, ok := rows[parentID]
-		if !ok || seen[parentID] {
-			return nil
-		}
-		seen[parentID] = true
-		chain = append(chain, parent)
-		s = parent
-	}
-	return chain
+	return !db.IsCanonicalChildRelationship(s.RelationshipType) || len(hintParentIDs(s)) == 0
 }
 
 // hintSessions loads the rows the classifier reads: the matched sessions
-// and, when walk is set, their ancestors up to each tree root. Each parent
+// and, when walk is set, every ancestor up to the tree roots. Each parent
 // level costs one more lookup; tried stops a parent loop.
 func hintSessions(ctx context.Context, svc SessionService, pages []*ContentSearchResult, walk bool) (map[string]db.Session, error) {
 	rows := make(map[string]db.Session)
@@ -117,7 +127,9 @@ func hintSessions(ctx context.Context, svc SessionService, pages []*ContentSearc
 		}
 		for _, id := range batch {
 			if s, ok := rows[id]; ok && !hintTreeRoot(s) {
-				add(hintParentID(s))
+				for _, parent := range hintParentIDs(s) {
+					add(parent)
+				}
 			}
 		}
 	}
@@ -223,7 +235,7 @@ func SearchContentHints(ctx context.Context, svc SessionService, req ContentSear
 	singlesOK := true
 	// measure appends a hint for the page's matches that show reports and
 	// says whether it did and whether some matches could not be sorted.
-	measure := func(probe hintProbe, page *ContentSearchResult, shared, pageTree bool, show func([]db.Session) bool) (added, unsorted bool) {
+	measure := func(probe hintProbe, page *ContentSearchResult, shared bool, show func(id string) (shown, known bool)) (added, unsorted bool) {
 		count := 0
 		lower := vector || page.CandidateTruncated
 		for _, match := range page.Matches {
@@ -232,12 +244,12 @@ func SearchContentHints(ctx context.Context, svc SessionService, req ContentSear
 				continue
 			}
 			if shared {
-				chain := hintChain(rows, match.SessionID, pageTree)
-				if chain == nil {
+				shown, known := show(match.SessionID)
+				if !known {
 					lower, unsorted = true, true
 					continue
 				}
-				if !show(chain) {
+				if !shown {
 					continue
 				}
 			}
@@ -270,6 +282,15 @@ func SearchContentHints(ctx context.Context, svc SessionService, req ContentSear
 		hints = append(hints, ContentSearchHint{Code: probe.code, Message: message, RetryWith: probe.args})
 		return true, unsorted
 	}
+	// A semantic search returns no cursor, so a page holding the full limit
+	// may have left matches out.
+	vectorLimit := req.Limit
+	if vectorLimit <= 0 || vectorLimit > db.MaxContentSearchLimit {
+		vectorLimit = db.DefaultContentSearchLimit
+	}
+	incomplete := func(page *ContentSearchResult) bool {
+		return page.NextCursor != 0 || page.CandidateTruncated || vector && len(page.Matches) >= vectorLimit
+	}
 	// classify counts one hint from its shared page. When that page failed,
 	// or showed none of the hint's matches while it was incomplete or held
 	// matches it could not sort, the hint's own search runs so one busy class
@@ -279,10 +300,10 @@ func SearchContentHints(ctx context.Context, svc SessionService, req ContentSear
 			singlesOK = false
 			return
 		}
-		show := func(chain []db.Session) bool { return probe.shows(chain, exempt) }
+		show := func(id string) (bool, bool) { return probe.shows(rows, id, pageTree, exempt) }
 		if page != nil {
-			added, unsorted := measure(probe, page, shared, pageTree, show)
-			if added || !shared || !unsorted && page.NextCursor == 0 && !page.CandidateTruncated {
+			added, unsorted := measure(probe, page, shared, show)
+			if added || !shared || !unsorted && !incomplete(page) {
 				return
 			}
 		}
@@ -293,7 +314,7 @@ func SearchContentHints(ctx context.Context, svc SessionService, req ContentSear
 			singlesOK = false
 			return
 		}
-		measure(probe, own, false, pageTree, nil)
+		measure(probe, own, false, nil)
 	}
 	for _, probe := range probes {
 		classify(probe, flatPage, flatShared, tree)
@@ -306,17 +327,26 @@ func SearchContentHints(ctx context.Context, svc SessionService, req ContentSear
 		combined = flatPage
 	}
 	if singlesOK && combined != nil && (treeShared || !children && flatShared) {
-		measure(hintProbe{code: "excluded_combined", args: args}, combined, true, children || tree, func(chain []db.Session) bool {
-			s := chain[0]
-			if singles[s.ID] {
-				return false
+		// reach shows every session the combined retry can: one that reaches
+		// a tree root through known rows.
+		reach := hintProbe{oneShot: true, automated: true, children: true}
+		measure(hintProbe{code: "excluded_combined", args: args}, combined, true, func(id string) (bool, bool) {
+			if shown, known := reach.shows(rows, id, children || tree, false); !shown || !known {
+				return false, known
+			}
+			if singles[id] {
+				return false, true
 			}
 			// The flat page may not list every session a flat retry shows; a
 			// root session's own row decides that retry directly.
+			s := rows[id]
 			if !children || !hintTreeRoot(s) || db.IsSidebarChildRelationship(s.RelationshipType) {
-				return true
+				return true, true
 			}
-			return !slices.ContainsFunc(probes, func(p hintProbe) bool { return p.shows(chain, false) })
+			return !slices.ContainsFunc(probes, func(p hintProbe) bool {
+				shown, _ := p.shows(rows, id, false, false)
+				return shown
+			}), true
 		})
 	}
 	return hints
