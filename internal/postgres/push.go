@@ -578,6 +578,16 @@ func (s *Sync) pushWithOptions(
 	for _, id := range reconciledScopeMoveIDs {
 		delete(priorFingerprints, id)
 	}
+	// Carry forward only the fingerprints of sessions in this push's
+	// window. The next window starts at this push's cutoff, which is never
+	// before lastPush, so a fingerprint for a session outside this window
+	// is never compared again. Without this, every push rewrote one
+	// fingerprint per session in the archive. Dropping a fingerprint can
+	// only cost a redundant push, never a skipped one.
+	maps.DeleteFunc(priorFingerprints, func(id, _ string) bool {
+		_, inWindow := sessionByID[id]
+		return !inWindow
+	})
 
 	if err := purgePGExcludedPushSessions(
 		ctx, s.pg, sessionByID, markerID, s.machine, legacyMarkerMachines,
