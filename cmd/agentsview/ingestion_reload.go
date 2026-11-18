@@ -360,8 +360,10 @@ func (d *daemonIngestion) foregroundSync(runner server.LocalSyncRunner) server.L
 // Sources no watcher covers are caught up by the polls and the periodic pass
 // that the pause held back, unless a full pass just ran.
 //
-// retryNow also syncs work that failed and waits for its retry, for a caller
-// that asked for a sync now. Readers leave it to its backoff.
+// retryNow serves a caller that asked for a sync now. It also syncs watcher
+// work that failed and waits for its retry, and it leaves attached archives to
+// the caller's manual drain, which skips their retry delay. Readers leave both
+// to their backoff.
 func (d *daemonIngestion) catchUp(ctx context.Context, fullPassRan, retryNow bool) error {
 	d.mu.Lock()
 	// pending outlives paused when a foreground sync ended the pause and then
@@ -395,7 +397,7 @@ func (d *daemonIngestion) catchUp(ctx context.Context, fullPassRan, retryNow boo
 		switch {
 		case missedScheduled && scheduled != nil:
 			scheduled(ctx)
-		case err == nil && d.attached != nil:
+		case err == nil && d.attached != nil && !retryNow:
 			_, err = d.attached.DrainScheduled(ctx)
 		}
 	}
@@ -416,8 +418,8 @@ func (d *daemonIngestion) catchUp(ctx context.Context, fullPassRan, retryNow boo
 
 // FlushChanges brings the archive up to date for a caller that asked for a
 // sync now, without rediscovering it. It syncs what the watchers collected,
-// including work waiting for a retry, then retries unfinished attached archive
-// imports as a manual full pass does. It reports false, having synced nothing,
+// including work waiting for a retry. Attached archives are the caller's to
+// drain, as after a full pass. It reports false, having synced nothing,
 // when the watchers cannot vouch for the archive: before the startup pass has
 // opened their delivery, after ingestion stopped, or after a settings change
 // that no full pass has covered yet. The caller then runs a full pass. Roots no
@@ -434,15 +436,7 @@ func (d *daemonIngestion) FlushChanges(ctx context.Context) (bool, error) {
 	if !ready || !d.fullPassCovers(ctx, changed) {
 		return false, nil
 	}
-	if err := d.catchUp(ctx, false, true); err != nil {
-		return true, err
-	}
-	if d.attached != nil {
-		if _, err := d.attached.Drain(ctx, nil); err != nil {
-			return true, err
-		}
-	}
-	return true, nil
+	return true, d.catchUp(ctx, false, true)
 }
 
 // fullPassCovers reports whether a full pass that started after changedAt

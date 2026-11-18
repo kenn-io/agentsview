@@ -350,7 +350,11 @@ func (s *Server) runSyncWhenReady(
 		}
 		if in.ChangesOnly {
 			if flushed, err := s.flushLocalChanges(ctx); flushed {
-				return syncpkg.SyncStats{ChangesOnly: true}, err
+				stats := syncpkg.SyncStats{ChangesOnly: true}
+				if err != nil {
+					return stats, err
+				}
+				return s.finishLocalSync(ctx, engine, stats, progress, false)
 			}
 		}
 		stats, err := s.runSyncWithResyncFallback(ctx, engine, progress)
@@ -381,7 +385,7 @@ const ResyncRequiredHeader = "X-Agentsview-Resync-Required"
 // flushLocalChanges syncs what the daemon's file watchers collected instead of
 // running a discovery pass. It reports false when the watchers cannot cover the
 // archive: no daemon ingestion runs them, or the archive needs a rebuild that
-// only a full pass performs.
+// only a full pass performs. Attached archives still need finishLocalSync.
 func (s *Server) flushLocalChanges(ctx context.Context) (bool, error) {
 	if s.ingestionFreshness == nil || s.archiveStale() {
 		return false, nil
@@ -708,11 +712,12 @@ func (s *Server) runRemoteSyncRequest(
 	failures := make([]remoteSyncFailure, 0)
 	var blocked error
 	fullLocal, skipUnavailable := req.IncludeLocal, false
+	var flushErr error
 	if req.IncludeLocal && req.LocalChangesOnly && !req.Full {
 		flushed, err := s.flushLocalChanges(ctx)
 		if flushed {
 			localStats = &syncpkg.SyncStats{ChangesOnly: true}
-			blocked = err
+			flushErr = err
 			// The remote hosts sync on their own, and an offline host is
 			// skipped as it is when they run after a local pass.
 			fullLocal, skipUnavailable = false, true
@@ -802,7 +807,7 @@ func (s *Server) runRemoteSyncRequest(
 			// The manager takes the engine lock per source, after coordination releases it.
 			*localStats, blocked = s.finishLocalSync(ctx, engine, *localStats, progress, false)
 		}
-	} else if blocked == nil {
+	} else {
 		exclusiveRun := func() (remotesync.SyncStats, error) {
 			err := engine.RunExclusive(func() error {
 				failures, remoteStats, blocked = s.runRemoteSyncHosts(
@@ -824,6 +829,16 @@ func (s *Server) runRemoteSyncRequest(
 			} else {
 				blocked = coordinatorErr
 			}
+		}
+	}
+	// As after a full local pass, the hosts sync first, then attached archives
+	// drain, so a local failure does not keep reachable hosts unsynced.
+	if localStats != nil && !fullLocal {
+		switch {
+		case flushErr != nil:
+			blocked = errors.Join(blocked, flushErr)
+		case blocked == nil:
+			*localStats, blocked = s.finishLocalSync(ctx, engine, *localStats, progress, false)
 		}
 	}
 	s.emitRemoteSyncChanged(remoteStats)

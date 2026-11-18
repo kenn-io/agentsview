@@ -171,30 +171,87 @@ func TestForegroundSyncAfterIdlePauseImportsAttachedHistory(t *testing.T) {
 }
 
 // A manual sync that applies only collected changes still imports attached
-// archives, as the full pass it replaces does.
-func TestFlushChangesImportsAttachedHistory(t *testing.T) {
+// archives, as the full pass it replaces does. It retries an import at once,
+// even one an idle daemon's scheduled passes have put on hold.
+const attachedSessionID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa~saved"
+
+type attachedDaemon struct {
+	cfg       config.Config
+	database  *db.DB
+	ingestion *daemonIngestion
+	attached  *archivesource.Manager
+	tr        transport
+}
+
+// newAttachedDaemon serves a started daemon with an attached archive whose
+// import fails while another session holds the archived ID.
+func newAttachedDaemon(t *testing.T, remoteHosts ...config.RemoteHost) attachedDaemon {
+	t.Helper()
 	cfg := testConfigWithClaudeFixture(t)
+	cfg.Host = "127.0.0.1"
 	cfg.ArchiveSources = []config.ArchiveSource{archiveSourceCommandFixture(t)}
+	cfg.RemoteHosts = remoteHosts
 	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
 	engine := sync.NewEngine(t.Context(), database, localSyncEngineConfig(cfg))
 	t.Cleanup(engine.Close)
 	engine.SyncAll(t.Context(), nil)
-	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
+	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, server.NewIdleTracker(0, func() {}), nil)
 	attached, err := archivesource.NewManager(t.Context(), cfg, database, engine, ingestion.FlushPending)
 	require.NoError(t, err)
 	t.Cleanup(attached.Close)
 	t.Cleanup(ingestion.Stop)
 	ingestion.attached = attached
 	ingestion.OpenWatcherDispatch()
+	dbtest.SeedSession(t, database, attachedSessionID, "project")
+	ts := serveIngestionArchive(t, cfg, database, engine, ingestion, server.WithArchiveSources(attached))
+	return attachedDaemon{cfg, database, ingestion, attached, transport{URL: ts.URL}}
+}
 
-	flushed, err := ingestion.FlushChanges(t.Context())
+func TestChangesOnlySyncRetriesAttachedHistory(t *testing.T) {
+	const id = attachedSessionID
+	d := newAttachedDaemon(t)
+	database, ingestion, attached, tr, cfg := d.database, d.ingestion, d.attached, d.tr, d.cfg
+	// Repeated scheduled failures put the source on hold.
+	var err error
+	for range 2 {
+		_, err = attached.DrainScheduled(t.Context())
+		require.Error(t, err)
+	}
+	_, err = attached.DrainScheduled(t.Context())
+	require.ErrorContains(t, err, "retrying after")
+	// DeleteSession would exclude the ID from later imports.
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `DELETE FROM sessions WHERE id = ?`, id)
+		return err
+	}))
+	pauseAfterStartup(t, ingestion)
+
+	stats, err := runDaemonSync(t.Context(), tr, cfg.AuthToken, false, true, nil)
 
 	require.NoError(t, err)
-	require.True(t, flushed)
-	messages, err := database.GetAllMessages(t.Context(), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa~saved")
+	assert.True(t, stats.ChangesOnly)
+	messages, err := database.GetAllMessages(t.Context(), id)
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.Equal(t, "archived message", messages[0].Content)
+}
+
+// A failed attached import must not keep reachable hosts from syncing: as
+// after a full local pass, the hosts sync first and the failure follows.
+func TestChangesOnlyRemoteSyncReachesHostsBeforeAttachedFailure(t *testing.T) {
+	remote := httptest.NewServer(server.New(config.Config{
+		Host: "127.0.0.1", DataDir: t.TempDir(), AuthToken: "remote-token", RequireAuth: true,
+	}, dbtest.OpenTestDB(t), nil).Handler())
+	t.Cleanup(remote.Close)
+	d := newAttachedDaemon(t, config.RemoteHost{
+		Host: "remote", Transport: config.RemoteTransportHTTP, URL: remote.URL, Token: "wrong-token",
+	})
+
+	failures, err := runDaemonRemoteSync(t.Context(), d.tr, d.cfg.AuthToken, d.cfg.RemoteHosts, false, true, true, nil)
+
+	require.Error(t, err, "the attached import still fails the sync")
+	require.Len(t, failures, 1, "the host was tried before the attached failure")
+	assert.Equal(t, "remote", failures[0].Host.Host)
 }
 
 func TestAttachedSourcesDrainAfterRebuildWithDeferredFork(t *testing.T) {
