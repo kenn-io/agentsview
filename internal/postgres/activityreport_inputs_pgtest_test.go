@@ -16,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/kept"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 type activityInputReadCounter struct {
@@ -558,7 +559,10 @@ func TestPGActivityReportInputRestartPriceInvalidation(t *testing.T) {
 			q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
 			q.Partial, q.EffectiveEnd = true, q.RangeStart.Add(10*time.Hour+2*time.Minute)
 			first := open()
-			pgKeptBuild(t, first, f, q, true)
+			if mode == "push" {
+				first.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}})
+			}
+			before := pgKeptBuild(t, first, f, q, true)
 			slots := first.runtimeState().activityInputs.Snapshot()
 			require.Len(t, slots, 1)
 			slot, version := slots[0].Slot, pgActivityDiskVersion+slots[0].Version
@@ -581,6 +585,7 @@ func TestPGActivityReportInputRestartPriceInvalidation(t *testing.T) {
 			}
 			if mode == "push" {
 				pgKeptSession(t, local, "c", "project-a", "2026-06-14")
+				require.NoError(t, local.ReplaceSessionMessages(t.Context(), "c", []db.Message{{SessionID: "c", Ordinal: 0, Role: "assistant", Content: "new usage", Timestamp: "2026-06-14T10:01:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":700}`)}}))
 				pgKeptPush(t, syncer, false)
 			}
 			if mode == "clock" {
@@ -592,7 +597,7 @@ func TestPGActivityReportInputRestartPriceInvalidation(t *testing.T) {
 			fresh, err := NewStore(t.Context(), target, syncer.schema, true)
 			require.NoError(t, err)
 			defer fresh.Close()
-			if mode == "pricing" {
+			if mode == "pricing" || mode == "push" {
 				rates := map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}}
 				restarted.SetCustomPricing(rates)
 				fresh.SetCustomPricing(rates)
@@ -602,7 +607,14 @@ func TestPGActivityReportInputRestartPriceInvalidation(t *testing.T) {
 				require.True(t, ok)
 				require.Nil(t, loaded.priced)
 			}
-			requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), pgKeptBuild(t, restarted, f, q, true))
+			got := pgKeptBuild(t, restarted, f, q, true)
+			requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), got)
+			if mode == "push" {
+				assert.Equal(t, 1000, before.Report.Totals.OutputTokens)
+				assert.Equal(t, 1700, got.Report.Totals.OutputTokens)
+				assert.Equal(t, money.MustParseDollars("0.034"), got.Report.Totals.Cost)
+				assert.NotEqual(t, before.Report.Totals.Cost, got.Report.Totals.Cost)
+			}
 		})
 	}
 }
