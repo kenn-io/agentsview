@@ -203,7 +203,6 @@ func PromptPRLinks(messages []Message) []PRLink {
 
 func withoutSystemReminders(text string) string {
 	const open = "<system-reminder"
-	const closeTag = "</system-reminder>"
 	var result strings.Builder
 	for {
 		start := strings.Index(text, open)
@@ -221,13 +220,13 @@ func withoutSystemReminders(text string) string {
 			break
 		}
 		body := endName + tagEnd + 1
-		end := strings.Index(text[body:], closeTag)
+		end := strings.Index(text[body:], systemReminderCloseTag)
 		if end < 0 {
 			break
 		}
 		result.WriteString(text[:start])
 		result.WriteByte(' ')
-		text = text[body+end+len(closeTag):]
+		text = text[body+end+len(systemReminderCloseTag):]
 	}
 	result.WriteString(text)
 	return result.String()

@@ -679,8 +679,8 @@ Sessions list pull requests found in retained user prompts or structured transcr
 ]
 ```
 
-AgentsView keeps one link per URL. A prompt link means the prompt mentioned the
-pull request; it does not establish that the session worked on it. Claude Code
+AgentsView keeps one link per pull request. A prompt link means the prompt
+mentioned the pull request; it does not establish that the session worked on it. Claude Code
 also records `pr-link` entries in its transcripts.
 Claude Code records these links for the whole transcript, so every session
 split from one transcript, such as a rewind's fork, carries them, like its name

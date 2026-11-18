@@ -507,9 +507,6 @@ func applyArchiveContentToCopiedSessionsTx(
 ) error {
 	var err error
 	if policy.UsageOnly() {
-		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET pr_links=structured_pr_links WHERE id IN (SELECT id FROM `+tempIDsTable+`) AND pr_links IS NOT structured_pr_links`); err != nil {
-			return err
-		}
 		owners, err := resolveTrailerOwners(ctx, tx, "1=1")
 		if err != nil {
 			return err
@@ -721,7 +718,7 @@ func compactCopiedSessionsForUsageTx(
 			UPDATE sessions
 			SET first_message = NULL, display_name = NULL,
 			    session_name = NULL, secret_leak_count = 0,
-			    secrets_rules_version = ''
+			    secrets_rules_version = '', pr_links = structured_pr_links
 			WHERE id` + inCopied},
 		{"pin notes", `
 			UPDATE pinned_messages SET note = NULL
