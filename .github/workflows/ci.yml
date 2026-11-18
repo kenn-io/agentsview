@@ -65,7 +65,7 @@ jobs:
 
   release-commands:
     needs: changes
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups), 'release-commands')) }}
+    if: ${{ github.event_name != 'merge_group' && !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups), 'release-commands')) }}
     uses: ./.github/workflows/release-commands.yml
 
   lint:
@@ -220,7 +220,7 @@ jobs:
 
   frontend-node-26:
     needs: changes
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups), 'node')) }}
+    if: ${{ github.event_name != 'merge_group' && !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups), 'node')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 11
     steps:
@@ -302,13 +302,16 @@ jobs:
           bash scripts/macos-watcher-tests_test.sh
           bash desktop/scripts/test-repair-appimage-diricon.sh
 
+  # Merge groups run these Linux suites. test-extended shares their steps and
+  # holds the suites merge groups skip; see
+  # docs/agents/build.md#merge-queue-checks.
   test:
     needs: changes
     if: *go-lane
-    name: Go ${{ matrix.testSet == 'lint' && 'Lint' || 'Test' }} (${{ matrix.name }})
+    name: &go-test-name Go ${{ matrix.testSet == 'lint' && 'Lint' || 'Test' }} (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout }}
-    env:
+    env: &go-test-env
       DOWNLOAD_RETRY: kit-retry 3 5
       MSYS2_PACKAGES: mingw-w64-x86_64-gcc ${{ matrix.testSet == 'lint' && 'make' || '' }}
     strategy:
@@ -321,16 +324,6 @@ jobs:
             suite: linux-sync
             timeout: 29
           - os: ubuntu-latest
-            name: ubuntu-latest, x86-64-v2 startup
-            testSet: startup
-            timeout: 20
-          # The simulator compares wall times and needs the runner to itself.
-          - os: ubuntu-latest
-            name: ubuntu-latest, Simulator
-            package: ./cmd/perfsim
-            suite: linux-perfsim
-            timeout: 20
-          - os: ubuntu-latest
             name: ubuntu-latest, Other packages
             testSet: other
             suite: linux-other
@@ -341,19 +334,7 @@ jobs:
             # Fixed by the Makefile's test-evalingest target.
             suite: evalingest
             timeout: 16
-          - os: windows-latest
-            name: windows-latest
-            suite: windows
-            timeout: 34
-          - os: windows-latest
-            name: windows-latest
-            testSet: lint
-            timeout: 21
-          - os: macos-latest
-            name: macos-latest
-            suite: macos
-            timeout: 29
-    steps:
+    steps: &go-test-steps
       - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
@@ -642,10 +623,47 @@ jobs:
         continue-on-error: true
         uses: $/.github/actions/go-cache-save
 
+  # Platform and specialized suites. Every PR and push to main runs them;
+  # merge groups skip them.
+  test-extended:
+    needs: changes
+    if: &go-lane-outside-queue ${{ github.event_name != 'merge_group' && !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups), 'go')) }}
+    name: *go-test-name
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.timeout }}
+    env: *go-test-env
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: ubuntu-latest, x86-64-v2 startup
+            testSet: startup
+            timeout: 20
+          # The simulator compares wall times and needs the runner to itself.
+          - os: ubuntu-latest
+            name: ubuntu-latest, Simulator
+            package: ./cmd/perfsim
+            suite: linux-perfsim
+            timeout: 20
+          - os: windows-latest
+            name: windows-latest
+            suite: windows
+            timeout: 34
+          - os: windows-latest
+            name: windows-latest
+            testSet: lint
+            timeout: 21
+          - os: macos-latest
+            name: macos-latest
+            suite: macos
+            timeout: 29
+    steps: *go-test-steps
+
   # Isolated Windows suites share setup; each matrix entry gets its own runner.
   test-isolated-packages-windows:
     needs: changes
-    if: *go-lane
+    if: *go-lane-outside-queue
     name: Go Test (windows-latest, ${{ matrix.name }})
     runs-on: windows-latest
     timeout-minutes: 30
@@ -860,7 +878,7 @@ jobs:
     env:
       DOWNLOAD_RETRY: kit-retry 3 5
     needs: changes
-    if: *go-lane
+    if: *go-lane-outside-queue
     name: Go Test (race detector, ${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 35
@@ -973,7 +991,7 @@ jobs:
   # Owns Windows Rust test coverage for PR and main-push desktop artifacts.
   desktop-windows-unit:
     needs: changes
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups), 'desktop')) }}
+    if: ${{ github.event_name != 'merge_group' && !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups), 'desktop')) }}
     name: Desktop Unit Tests (Windows)
     runs-on: windows-latest
     timeout-minutes: 10
@@ -1012,7 +1030,7 @@ jobs:
     env:
       DOWNLOAD_RETRY: kit-retry 3 5
     needs: changes
-    if: *go-lane
+    if: *go-lane-outside-queue
     name: Integration (${{ matrix.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 32
@@ -1204,18 +1222,16 @@ jobs:
     if: *frontend-lane
     name: e2e (${{ matrix.browser }})
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ matrix.timeout }}
+    timeout-minutes: ${{ matrix.browser == 'chromium' && 42 || 24 }}
     env:
       PW_TEST_CONNECT_WS_ENDPOINT: ws://127.0.0.1:3000/
       DOWNLOAD_RETRY: kit-retry 3 5
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - browser: chromium
-            timeout: 42
-          - browser: webkit
-            timeout: 24
+        # Merge groups run Chromium only. `include` cannot drop an entry, so
+        # the browser list is an expression and the timeout follows it.
+        browser: ${{ fromJSON(github.event_name == 'merge_group' && '["chromium"]' || '["chromium", "webkit"]') }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
