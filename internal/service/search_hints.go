@@ -13,10 +13,6 @@ import (
 // HTTP session list rejects larger batches.
 const MaxListSessionIDs = 100
 
-// hintParentRounds bounds the parent lookups that place a tree match under
-// its root. A deeper chain leaves its matches out of the class counts.
-const hintParentRounds = 8
-
 // ContentSearchHint describes a measured reason an empty search can hide matches.
 // RetryWith contains the arguments to change while preserving the original request.
 type ContentSearchHint struct {
@@ -26,12 +22,12 @@ type ContentSearchHint struct {
 }
 
 // hintProbe is the retry one hint suggests: the original request plus the
-// classes in args. oneShot and automated say whether the retry shows those
-// sessions.
+// classes in args. oneShot, automated, and children say whether the retry
+// shows those sessions.
 type hintProbe struct {
-	code, class        string
-	args               map[string]any
-	oneShot, automated bool
+	code, class                  string
+	args                         map[string]any
+	oneShot, automated, children bool
 }
 
 // shows reports whether the probe's search shows a match whose session chain
@@ -61,18 +57,22 @@ func hintTreeRoot(s db.Session) bool {
 }
 
 // hintChain returns the session chain for id, or nil when a member is
-// unknown. A flat search checks only the session's own row.
+// unknown or the parent links loop. A flat search checks only the session's
+// own row.
 func hintChain(rows map[string]db.Session, id string, tree bool) []db.Session {
 	s, ok := rows[id]
 	if !ok {
 		return nil
 	}
 	chain := []db.Session{s}
+	seen := map[string]bool{id: true}
 	for tree && !hintTreeRoot(s) {
-		parent, ok := rows[hintParentID(s)]
-		if !ok || len(chain) > hintParentRounds {
+		parentID := hintParentID(s)
+		parent, ok := rows[parentID]
+		if !ok || seen[parentID] {
 			return nil
 		}
+		seen[parentID] = true
 		chain = append(chain, parent)
 		s = parent
 	}
@@ -80,7 +80,8 @@ func hintChain(rows map[string]db.Session, id string, tree bool) []db.Session {
 }
 
 // hintSessions loads the rows the classifier reads: the matched sessions
-// and, when walk is set, their ancestors up to each tree root.
+// and, when walk is set, their ancestors up to each tree root. Each parent
+// level costs one more lookup; tried stops a parent loop.
 func hintSessions(ctx context.Context, svc SessionService, pages []*ContentSearchResult, walk bool) (map[string]db.Session, error) {
 	rows := make(map[string]db.Session)
 	tried := make(map[string]bool)
@@ -99,7 +100,7 @@ func hintSessions(ctx context.Context, svc SessionService, pages []*ContentSearc
 			}
 		}
 	}
-	for round := 0; len(pending) > 0 && round <= hintParentRounds; round++ {
+	for len(pending) > 0 {
 		batch := pending
 		pending = nil
 		for ids := range slices.Chunk(batch, MaxListSessionIDs) {
@@ -153,14 +154,14 @@ func SearchContentHints(ctx context.Context, svc SessionService, req ContentSear
 	var probes []hintProbe
 	args := make(map[string]any)
 	if !req.IncludeOneShot {
-		probes = append(probes, hintProbe{"excluded_one_shot", "one-shot", map[string]any{"include_one_shot": true}, true, req.IncludeAutomated})
+		probes = append(probes, hintProbe{"excluded_one_shot", "one-shot", map[string]any{"include_one_shot": true}, true, req.IncludeAutomated, req.IncludeChildren})
 		args["include_one_shot"] = true
 	}
 	if !req.IncludeAutomated {
-		probes = append(probes, hintProbe{"excluded_automated", "automated", map[string]any{"include_automated": true}, req.IncludeOneShot, true})
+		probes = append(probes, hintProbe{"excluded_automated", "automated", map[string]any{"include_automated": true}, req.IncludeOneShot, true, req.IncludeChildren})
 		args["include_automated"] = true
 	}
-	child := hintProbe{"excluded_children", "child", map[string]any{"include_children": true}, req.IncludeOneShot, req.IncludeAutomated}
+	child := hintProbe{"excluded_children", "child", map[string]any{"include_children": true}, req.IncludeOneShot, req.IncludeAutomated, true}
 	if children {
 		args["include_children"] = true
 	}
@@ -207,17 +208,13 @@ func SearchContentHints(ctx context.Context, svc SessionService, req ContentSear
 	if treeShared && treePage != nil {
 		lookup = append(lookup, treePage)
 	}
-	var rows map[string]db.Session
-	if hasMatches := slices.ContainsFunc(lookup, func(page *ContentSearchResult) bool { return len(page.Matches) > 0 }); hasMatches {
-		var err error
-		rows, err = hintSessions(ctx, svc, lookup, treeShared || tree && flatShared)
-		if err != nil {
-			if flatShared {
-				flatPage = nil
-			}
-			if treeShared {
-				treePage = nil
-			}
+	rows, err := hintSessions(ctx, svc, lookup, treeShared || tree && flatShared)
+	if err != nil {
+		if flatShared {
+			flatPage = nil
+		}
+		if treeShared {
+			treePage = nil
 		}
 	}
 
@@ -290,9 +287,7 @@ func SearchContentHints(ctx context.Context, svc SessionService, req ContentSear
 			}
 		}
 		retry := req
-		retry.IncludeOneShot = req.IncludeOneShot || probe.args["include_one_shot"] == true
-		retry.IncludeAutomated = req.IncludeAutomated || probe.args["include_automated"] == true
-		retry.IncludeChildren = req.IncludeChildren || probe.args["include_children"] == true
+		retry.IncludeOneShot, retry.IncludeAutomated, retry.IncludeChildren = probe.oneShot, probe.automated, probe.children
 		own := search(retry)
 		if own == nil {
 			singlesOK = false

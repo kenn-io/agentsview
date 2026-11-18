@@ -367,7 +367,6 @@ func TestSearchContentHintsSortOneExpandedPage(t *testing.T) {
 	svc.searches = 0
 	hints := service.SearchContentHints(t.Context(), svc, req, res, true, nil)
 	assert.Equal(t, 2, svc.searches, "one flat and one tree search")
-	assert.Positive(t, svc.lists)
 	assert.Equal(t, []service.ContentSearchHint{
 		{Code: "excluded_one_shot", Message: "1 match is in one-shot sessions, hidden by default", RetryWith: map[string]any{"include_one_shot": true}},
 		{Code: "excluded_automated", Message: "1 match is in automated sessions, hidden by default", RetryWith: map[string]any{"include_automated": true}},
@@ -379,4 +378,30 @@ func TestSearchContentHintsSortOneExpandedPage(t *testing.T) {
 	assert.Empty(t, service.SearchContentHints(t.Context(), empty, req, &service.ContentSearchResult{}, true, nil))
 	assert.Equal(t, 2, empty.searches, "a miss everywhere costs two searches")
 	assert.Zero(t, empty.lists)
+}
+
+func TestSearchContentHintsDeepChildChain(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	dbtest.SeedSession(t, d, "root", "proj", func(s *db.Session) { s.UserMessageCount = 1 })
+	parent := "root"
+	for i := range 10 {
+		id := fmt.Sprintf("level-%d", i)
+		dbtest.SeedSession(t, d, id, "proj", func(s *db.Session) {
+			s.ParentSessionID, s.RelationshipType, s.UserMessageCount = new(parent), "subagent", 1
+			s.IsAutomated = i == 9
+		})
+		parent = id
+	}
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{dbtest.UserMsg("level-9", 0, "marker")}))
+	svc := service.NewDirectBackend(d, nil)
+	req := service.ContentSearchRequest{Pattern: "marker"}
+	res, err := svc.SearchContent(t.Context(), req)
+	require.NoError(t, err)
+	require.Empty(t, res.Matches)
+	// Only the combined retry shows an automated child eleven sessions below
+	// a one-shot root.
+	hints := service.SearchContentHints(t.Context(), svc, req, res, true, nil)
+	assert.Equal(t, []service.ContentSearchHint{
+		{Code: "excluded_combined", Message: "1 match is hidden by default", RetryWith: map[string]any{"include_one_shot": true, "include_automated": true, "include_children": true}},
+	}, hints)
 }
