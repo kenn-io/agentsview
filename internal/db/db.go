@@ -1003,6 +1003,10 @@ type DB struct {
 	customPricing       map[string]config.CustomModelRate
 	effectivePricing    map[string]export.ModelRates
 	emptyCatalogPricing map[string]export.ModelRates
+	// pricingConfigGen advances whenever the in-memory pricing above
+	// changes, so usagePricing never serves rows built from older inputs.
+	pricingConfigGen atomic.Uint64
+	usagePricing     atomic.Pointer[usagePricingEntry]
 
 	checkpointMu   sync.Mutex
 	checkpointStop chan struct{}
@@ -1294,6 +1298,7 @@ func (db *DB) SetCustomPricing(p map[string]config.CustomModelRate) {
 	db.effectivePricing = nil
 	db.invalidateSessionStatsFacts()
 	db.usageKept.DeleteSlots(func(string) bool { return true })
+	db.pricingConfigGen.Add(1)
 }
 
 // SetEffectivePricing installs in-memory pricing rows with explicit provenance
@@ -1309,6 +1314,7 @@ func (db *DB) SetEffectivePricing(
 	}
 	db.invalidateSessionStatsFacts()
 	db.usageKept.DeleteSlots(func(string) bool { return true })
+	db.pricingConfigGen.Add(1)
 }
 
 // SetEmptyCatalogPricing installs in-memory rates that are used only when the
@@ -1323,6 +1329,7 @@ func (db *DB) SetEmptyCatalogPricing(
 	}
 	db.invalidateSessionStatsFacts()
 	db.usageKept.DeleteSlots(func(string) bool { return true })
+	db.pricingConfigGen.Add(1)
 }
 
 // SetCursorSecret updates the secret key used for cursor signing.
