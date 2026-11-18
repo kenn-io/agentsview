@@ -3154,5 +3154,11 @@
   "session_toc_empty_prompt": "空提示",
   "session_toc_search": "搜索提示",
   "session_toc_no_match": "没有匹配的提示",
-  "shortcuts_toggle_session_toc": "跳转到提示"
+  "shortcuts_toggle_session_toc": "跳转到提示",
+  "getting_started_title": "开始使用",
+  "getting_started_dismiss": "关闭",
+  "getting_started_open_session": "打开会话",
+  "getting_started_search": "搜索历史记录",
+  "getting_started_usage": "查看令牌用量",
+  "getting_started_insights": "阅读洞察"
 }

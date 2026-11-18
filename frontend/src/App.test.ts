@@ -1990,15 +1990,20 @@ describe("App telemetry", () => {
   });
 
   it("reports one session_viewed per visit once the session hydrates", async () => {
+    const { gettingStarted } = await import("./lib/stores/gettingStarted.svelte.js");
+    localStorage.removeItem("agentsview-getting-started");
+    gettingStarted.done = new Set();
     setup();
     sessions.sessions = [hydratedSession("session-1", "codex")];
     router.route = "sessions";
     component = mount(App, { target: document.body });
     await flushEffects();
     expect(postedFor("session_viewed")).toEqual([]);
+    expect(gettingStarted.done.has("session")).toBe(false);
 
     await open("session-1");
     await vi.waitFor(() => expect(postedFor("session_viewed")).toEqual([{ agent: "codex" }]));
+    expect(gettingStarted.done.has("session")).toBe(true);
 
     sessions.sessions = [hydratedSession("session-1", "codex", { message_count: 3 })];
     await flushEffects();

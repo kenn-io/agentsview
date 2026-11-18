@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vite-plus/test";
 import { mount, unmount, tick } from "svelte";
 import { ApiError } from "../../api/runtime.js";
 import { registerShortcuts } from "../../utils/keyboard.js";
+import { gettingStarted } from "../../stores/gettingStarted.svelte.js";
 
 const {
   mockUi,
@@ -175,6 +176,18 @@ async function enterSearchQuery(value = "match") {
 }
 
 describe("CommandPalette", () => {
+  it("completes search when one character filters recent sessions", async () => {
+    localStorage.clear();
+    gettingStarted.done = new Set();
+    mockSessions.sessions = [{ ...makeSession("s1", "cursor"), first_message: "日本語" }];
+    const component = mount(CommandPalette, { target: document.body });
+    await tick();
+    await enterSearchQuery("日");
+    expect(mockSearchStore.search).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain("日本語");
+    expect(gettingStarted.done.has("search")).toBe(true);
+    unmount(component);
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     document.body.replaceChildren();

@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { setLocale } from "../../i18n/index.js";
+import { gettingStarted } from "../../stores/gettingStarted.svelte.js";
 import { router } from "../../stores/router.svelte.js";
 import { settings } from "../../stores/settings.svelte.js";
 import { sync } from "../../stores/sync.svelte.js";
@@ -14,6 +15,8 @@ describe("RecallPage", () => {
 
   beforeEach(() => {
     setLocale("en");
+    localStorage.clear();
+    gettingStarted.done = new Set();
     router.route = "recall";
     router.params = {};
     sync.serverVersion = {
@@ -43,6 +46,8 @@ describe("RecallPage", () => {
     settings.loaded = false;
     settings.readOnly = false;
     settings.error = null;
+    localStorage.clear();
+    gettingStarted.done = new Set();
   });
 
   it("switches between URL-backed Corpus and Generated insights tabs", async () => {
@@ -50,6 +55,7 @@ describe("RecallPage", () => {
     await tick();
 
     expect(document.body.textContent).toContain("Corpus");
+    expect(gettingStarted.done.has("insights")).toBe(false);
     const generated = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
       (button) => button.textContent?.trim() === "Generated insights",
     );
@@ -60,6 +66,7 @@ describe("RecallPage", () => {
 
     expect(router.params.tab).toBe("generated");
     expect(document.querySelector(".generated-insights-panel")).not.toBeNull();
+    expect(gettingStarted.done.has("insights")).toBe(true);
   });
 
   it("treats an insight parameter as a Generated insights deep link", async () => {
@@ -68,6 +75,7 @@ describe("RecallPage", () => {
     await tick();
 
     expect(document.querySelector(".generated-insights-panel")).not.toBeNull();
+    expect(gettingStarted.done.has("insights")).toBe(true);
   });
 
   it("shows only Generated insights for a read-only backend", async () => {
@@ -89,6 +97,7 @@ describe("RecallPage", () => {
 
     expect(document.body.textContent).not.toContain("Corpus");
     expect(document.querySelector(".generated-insights-panel")).not.toBeNull();
+    expect(gettingStarted.done.has("insights")).toBe(true);
   });
 
   it("waits for backend capability before mounting either panel", async () => {
@@ -100,5 +109,6 @@ describe("RecallPage", () => {
     expect(document.querySelector(".recall-corpus-panel")).toBeNull();
     expect(document.querySelector(".generated-insights-panel")).toBeNull();
     expect(document.body.textContent).toContain("Loading Recall entries");
+    expect(gettingStarted.done.has("insights")).toBe(false);
   });
 });

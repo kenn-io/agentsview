@@ -3157,5 +3157,11 @@
   "session_toc_empty_prompt": "空白提示",
   "session_toc_search": "搜尋提示",
   "session_toc_no_match": "沒有相符的提示",
-  "shortcuts_toggle_session_toc": "跳至提示"
+  "shortcuts_toggle_session_toc": "跳至提示",
+  "getting_started_title": "開始使用",
+  "getting_started_dismiss": "關閉",
+  "getting_started_open_session": "開啟工作階段",
+  "getting_started_search": "搜尋歷史記錄",
+  "getting_started_usage": "查看權杖用量",
+  "getting_started_insights": "閱讀洞察"
 }

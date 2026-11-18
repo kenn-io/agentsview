@@ -9,6 +9,7 @@
     type RangeSelection,
   } from "../shared/rangeSelection.js";
   import SummaryCards from "./SummaryCards.svelte";
+  import GettingStarted from "./GettingStarted.svelte";
   import Heatmap from "./Heatmap.svelte";
   import ActivityTimeline from "./ActivityTimeline.svelte";
   import ProjectBreakdown from "./ProjectBreakdown.svelte";
@@ -697,6 +698,7 @@
       <div class="query-progress" aria-hidden="true"></div>
     {/if}
 
+    <GettingStarted />
     <SummaryCards />
 
     <div class="chart-grid">
@@ -830,6 +832,10 @@
     gap: 16px;
     position: relative;
     transition: opacity 0.12s;
+  }
+
+  .analytics-content :global(.getting-started) {
+    padding: 12px;
   }
 
   .analytics-content.querying {

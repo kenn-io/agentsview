@@ -3228,5 +3228,11 @@
   "session_toc_empty_prompt": "空のプロンプト",
   "session_toc_search": "プロンプトを検索",
   "session_toc_no_match": "一致するプロンプトはありません",
-  "shortcuts_toggle_session_toc": "プロンプトへ移動"
+  "shortcuts_toggle_session_toc": "プロンプトへ移動",
+  "getting_started_title": "はじめに",
+  "getting_started_dismiss": "閉じる",
+  "getting_started_open_session": "セッションを開く",
+  "getting_started_search": "履歴を検索",
+  "getting_started_usage": "トークン使用量を見る",
+  "getting_started_insights": "インサイトを読む"
 }

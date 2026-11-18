@@ -3,6 +3,7 @@ import { mount, tick, unmount } from "svelte";
 import { router } from "../../stores/router.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { usage } from "../../stores/usage.svelte.js";
+import { gettingStarted } from "../../stores/gettingStarted.svelte.js";
 import { settings } from "../../stores/settings.svelte.js";
 import { sync } from "../../stores/sync.svelte.js";
 import { events } from "../../stores/events.svelte.js";
@@ -159,6 +160,7 @@ afterEach(() => {
   sessions.projects = [];
   yokedDates.setEnabled(false);
   localStorage.clear();
+  gettingStarted.done = new Set();
 });
 
 describe("UsagePage refresh behavior", () => {
@@ -657,11 +659,13 @@ describe("UsagePage refresh behavior", () => {
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
     router.route = "usage";
     router.params = { view: "tokens", project: "demo" };
+    gettingStarted.done = new Set();
 
     component = mount(UsagePage, { target: document.body });
     await flushEffects();
 
     expect(usage.mode).toBe("token");
+    expect(gettingStarted.done.has("usage")).toBe(true);
     expect(
       document
         .querySelector(
@@ -670,6 +674,28 @@ describe("UsagePage refresh behavior", () => {
         ?.textContent?.trim(),
     ).toBe("Tokens");
     expect(fetchAll).toHaveBeenCalled();
+  });
+
+  it("does not complete the token checklist for cost mode", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(usage, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "loadAgents").mockResolvedValue();
+    router.route = "usage";
+    router.params = {};
+    gettingStarted.done = new Set();
+
+    component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+
+    expect(usage.mode).toBe("cost");
+    expect(gettingStarted.done.has("usage")).toBe(false);
   });
 
   it("hydrates and renders an Output-only token selection", async () => {

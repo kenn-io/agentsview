@@ -2,6 +2,7 @@
   import { formatCount } from "../../utils/format.js";
   import { errorTelemetry } from "../../utils/error-telemetry.js";
   import { onDestroy, onMount } from "svelte";
+  import { gettingStarted } from "../../stores/gettingStarted.svelte.js";
   import {
     Button,
     Card,
@@ -271,6 +272,7 @@
   }
 
   onMount(() => {
+    gettingStarted.complete("insights");
     void sessions.loadProjects();
     void sessions.loadAgents();
     void insights.load();

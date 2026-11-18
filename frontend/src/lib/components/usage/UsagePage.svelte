@@ -3,6 +3,7 @@
   import { Card } from "@kenn-io/kit-ui";
   import { onDestroy, onMount, tick, untrack } from "svelte";
   import { usage, type UsageMode } from "../../stores/usage.svelte.js";
+  import { gettingStarted } from "../../stores/gettingStarted.svelte.js";
   import {
     buildUsageUrlParams,
     mergeUsageAndSessionUrlParams,
@@ -312,6 +313,7 @@
       }
       if (route !== "usage") return;
       const nextMode = usageModeFromParams(params);
+      if (nextMode === "token") gettingStarted.complete("usage");
       const modeChanged = usage.setMode(nextMode);
       const tokenTypesChanged = nextMode === "token"
         ? usage.setSelectedTokenTypes(

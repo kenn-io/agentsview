@@ -1010,3 +1010,37 @@ describe("AnalyticsPage refresh behavior", () => {
     expect(showsOpenedPRs()).toBe(true);
   });
 });
+
+describe("getting started checklist", () => {
+  it("shows the checklist and hides it after dismissal", async () => {
+    const { gettingStarted } = await import("../../stores/gettingStarted.svelte.js");
+    gettingStarted.done = new Set();
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    vi.spyOn(analytics, "fetchAll").mockResolvedValue();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    component = mount(AnalyticsPage, { target: document.body });
+    await flushEffects();
+    expect(document.querySelector(".getting-started")?.textContent).toContain("Get started");
+    [...document.querySelectorAll<HTMLButtonElement>(".getting-started button")]
+      .find((button) => button.textContent?.trim() === "See your token use")!
+      .click();
+    await flushEffects();
+    expect(router.route).toBe("usage");
+    expect(router.params.view).toBe("tokens");
+    document
+      .querySelector<HTMLButtonElement>('.getting-started button[aria-label="Dismiss"]')!
+      .click();
+    await flushEffects();
+    expect(document.querySelector(".getting-started")).toBeNull();
+    unmount(component);
+    component = mount(AnalyticsPage, { target: document.body });
+    await flushEffects();
+    expect(document.querySelector(".getting-started")).toBeNull();
+  });
+});
