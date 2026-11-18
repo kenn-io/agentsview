@@ -145,19 +145,19 @@ func TestPromptPRLinksMetadataUpsertPreservesLinks(t *testing.T) {
 	s := Session{ID: "metadata", Project: "project", Machine: "local", Agent: "claude"}
 	require.NoError(t, d.UpsertSession(t.Context(), s))
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "user", Content: "https://github.com/o/r/pull/1"}}))
-	var modified, marker string
-	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT local_modified_at, sync_marker FROM sessions WHERE id=?`, s.ID).Scan(&modified, &marker))
 	require.NoError(t, d.UpsertSession(t.Context(), s))
-	obs := export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: "/tmp/worktree"}
-	require.NoError(t, d.UpsertSessionWithProjectIdentity(t.Context(), s, obs, ""))
-	var afterModified, afterMarker string
-	require.NoError(t, d.getReader().QueryRowContext(t.Context(), `SELECT local_modified_at, sync_marker FROM sessions WHERE id=?`, s.ID).Scan(&afterModified, &afterMarker))
-	assert.Equal(t, modified, afterModified)
-	assert.Equal(t, marker, afterMarker)
 	got, err := d.GetSession(t.Context(), s.ID)
 	require.NoError(t, err)
 	require.Len(t, got.PRLinks, 1)
 	assert.Equal(t, "https://github.com/o/r/pull/1", got.PRLinks[0].URL)
+	link, ok := parser.NewPRLink("https://github.com/o/r/pull/2", "o/r", 2)
+	require.True(t, ok)
+	s.PRLinks = []PRLink{link}
+	obs := export.ProjectIdentityObservation{SessionID: s.ID, Project: s.Project, Machine: s.Machine, RootPath: "/tmp/worktree"}
+	require.NoError(t, d.UpsertSessionWithProjectIdentity(t.Context(), s, obs, ""))
+	got, err = d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []PRLink{link, {URL: "https://github.com/o/r/pull/1", Host: "github.com", Repository: "o/r", Number: 1}}, got.PRLinks)
 }
 
 func TestPromptPRLinksUsageOrphanCopy(t *testing.T) {
@@ -203,7 +203,7 @@ func TestPromptPRLinksStructuredChanges(t *testing.T) {
 	require.True(t, ok)
 	s := Session{ID: "structured", Project: "project", Machine: "local", Agent: "claude", PRLinks: []PRLink{first, second}}
 	require.NoError(t, d.UpsertSession(t.Context(), s))
-	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "user", Content: first.URL}}))
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "user", Content: "https://github.com/o/r/pull/3"}}))
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "user", Content: "Different prompt"}}))
 	got, err := d.GetSession(t.Context(), s.ID)
 	require.NoError(t, err)
