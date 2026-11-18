@@ -104,6 +104,7 @@
   import { reportTelemetry, setupTelemetryReporting } from "./lib/utils/telemetry.js";
   import { registerShortcuts } from "./lib/utils/keyboard.js";
   import { shouldAutoSwitchTranscriptModeToNormal } from "./lib/utils/transcript-mode.js";
+  import { isSystemMessage } from "./lib/utils/messages.js";
   import {
     filterParamsEqual,
     hasFilterParams,
@@ -426,6 +427,30 @@
   let previousSessionId: string | null = null;
   let previousActiveSessionId: string | null = null;
   let firstVisitPending = $state(false);
+  let firstVisitCandidate: string | null = null;
+  const firstVisitTried = new Set<string>();
+
+  // Keep the attempt pending until the selected transcript shows a row;
+  // a loaded transcript with none is skipped for the next sidebar session.
+  function advanceFirstVisit(): void {
+    const id = firstVisitCandidate;
+    if (id) {
+      if (messages.sessionId !== id || messages.loading || messages.loadError) return;
+      if (messages.messages.some((m) => !isSystemMessage(m))) {
+        firstVisitPending = false;
+        return;
+      }
+      firstVisitTried.add(id);
+      readProgress.clear(id);
+    }
+    const next = sessions.groupedSessions
+      .map((group) => group.primarySessionId)
+      .find((sid) => sid && !firstVisitTried.has(sid));
+    if (next) {
+      firstVisitCandidate = next;
+      sessions.selectSession(next);
+    }
+  }
 
   function clearRootDetailDateRestoreSuppressed(): void {
     rootDetailDateRestoreSuppressed = false;
@@ -686,16 +711,12 @@
   });
 
   $effect(() => {
-    if (!firstVisitPending) return;
-    if (router.route !== "sessions" || !router.isRootPath || hasFilterParams(router.params) || sessions.activeSessionId !== null) {
+    if (!firstVisitPending || (router.route === "settings" && router.params.panel === "agent-directories")) return;
+    if (router.route !== "sessions" || (!firstVisitCandidate && router.sessionId !== null) || hasFilterParams(router.params) || sessions.activeSessionId !== firstVisitCandidate) {
       firstVisitPending = false;
       return;
     }
-    const id = sessions.groupedSessions[0]?.primarySessionId;
-    if (id) {
-      firstVisitPending = false;
-      sessions.selectSession(id);
-    }
+    advanceFirstVisit();
   });
 
   // Deep-link: apply the ?msg param. Kept separate from the

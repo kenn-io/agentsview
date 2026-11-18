@@ -764,6 +764,102 @@ describe("App root Sessions landing", () => {
     },
   );
 
+  it("continues to a readable session when the first transcript has only hidden messages", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    const hidden: Message = {
+      id: 1,
+      session_id: "first",
+      ordinal: 0,
+      role: "user",
+      content: "system context",
+      timestamp: "2026-01-03T00:00:00Z",
+      has_thinking: false,
+      thinking_text: "",
+      has_tool_use: false,
+      content_length: 14,
+      model: "",
+      context_tokens: 0,
+      output_tokens: 0,
+      has_context_tokens: false,
+      has_output_tokens: false,
+      is_system: true,
+    };
+    const visible: Message = {
+      ...hidden,
+      id: 2,
+      session_id: "older",
+      content: "readable history",
+      content_length: 16,
+      is_system: false,
+    };
+    vi.mocked(messages.loadSession).mockImplementation(async (sessionId) => {
+      messages.sessionId = sessionId;
+      messages.messages = [sessionId === "first" ? hidden : visible];
+      messages.loading = false;
+      if (sessionId === "first") readProgress.baseline("first", "hidden", 0);
+    });
+    setRootUrl();
+    sessions.sessions = [
+      sidebarRow("first", 1, "2026-01-03"),
+      sidebarRow("older", 1, "2026-01-02"),
+    ];
+
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    await flushEffects();
+
+    expect(sessions.activeSessionId).toBe("older");
+    expect(messages.sessionId).toBe("older");
+    expect(readProgress.get("first")).toBeNull();
+  });
+
+  it("opens imported history after choosing folders on a first visit", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    setRootUrl();
+    sessions.archiveEmpty = true;
+
+    component = mount(App, { target: document.body });
+    await flushEffects();
+
+    const chooseFolders = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Choose folders",
+    );
+    expect(chooseFolders).toBeDefined();
+    chooseFolders!.click();
+    await flushEffects();
+    expect(router.route).toBe("settings");
+
+    router.navigateToSessions();
+    await flushEffects();
+    sessions.archiveEmpty = false;
+    sessions.sessions = [sidebarRow("after-setup", 1, "2026-01-03")];
+    await flushEffects();
+
+    expect(sessions.activeSessionId).toBe("after-setup");
+  });
+
+  it("does not resume first-visit opening after unrelated settings", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    setRootUrl();
+    sessions.archiveEmpty = true;
+
+    component = mount(App, { target: document.body });
+    await flushEffects();
+
+    router.navigate("settings", { panel: "appearance" });
+    await flushEffects();
+    router.navigateToSessions();
+    await flushEffects();
+    sessions.archiveEmpty = false;
+    sessions.sessions = [sidebarRow("after-settings", 1, "2026-01-03")];
+    await flushEffects();
+
+    expect(sessions.activeSessionId).toBeNull();
+  });
+
   it.each(["read before", "deep link", "filtered", "manual selection", "left sessions"])(
     "does not auto-open after %s",
     async (scenario) => {

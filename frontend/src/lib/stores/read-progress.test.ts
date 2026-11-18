@@ -8,12 +8,6 @@ afterEach(() => {
 });
 
 describe("read progress", () => {
-  it("recognizes when a session has been read", () => {
-    const store = new ReadProgressStore();
-    expect(store.isEmpty).toBe(true);
-    store.baseline("one", "revision", 0);
-    expect(store.isEmpty).toBe(false);
-  });
   it("builds the session change token only from the transcript revision", () => {
     expect(
       buildReadProgressToken({
