@@ -395,24 +395,52 @@ func (db *DB) searchContentWords(
 }
 
 // exactContentRows reads up to Limit+1 substring matches after Cursor and the
-// total number of substring matches, from one scan. The statement also
-// returns the last match when the page holds none, so the total survives an
-// offset past every match.
+// number of substring matches it counted. It reads the scope's sessions in
+// batches, newest first, and stops once it holds the page and the row after
+// it. A walk that stops early leaves later matches uncounted, so the count is
+// exact only when the page has room left.
 func exactContentRows(
 	ctx context.Context, tx *sql.Tx, f ContentSearchFilter,
 	candidates substringCandidateFilters, words int,
 ) ([]ContentMatch, int, error) {
-	union, args := substringUnion(f, candidates)
-	if union == "" {
-		return nil, 0, nil
+	var out []ContentMatch
+	total := 0
+	want := f.Cursor + f.Limit + 1
+	err := walkContentSessions(ctx, tx, f, func(scope string, scopeArgs []any) (bool, error) {
+		union, args := substringUnion(f, scope, scopeArgs, candidates)
+		if union == "" {
+			return true, nil
+		}
+		rows, n, err := substringBatchRows(ctx, tx, f, union, args, words,
+			max(0, f.Cursor-total), f.Limit+1-len(out))
+		if err != nil {
+			return false, err
+		}
+		out = append(out, rows...)
+		total += n
+		return total >= want, nil
+	})
+	if err != nil {
+		return nil, 0, err
 	}
+	return out, total, nil
+}
+
+// substringBatchRows reads need matches of union after skipping skip, and
+// the number of matches union holds, from one scan. The statement also
+// returns the last match when the requested rows hold none, so the count
+// survives a skip past every match.
+func substringBatchRows(
+	ctx context.Context, tx *sql.Tx, f ContentSearchFilter, union string, args []any,
+	words, skip, need int,
+) ([]ContentMatch, int, error) {
 	query := `SELECT session_id, project, agent, transcript_revision, location, role, tool_name,
 			ordinal, ts, snippet, '', ?, total FROM (
 			SELECT u.*, row_number() OVER (ORDER BY ` + substringOrder + `) AS rn, count(*) OVER () AS total
 			FROM (` + union + `) u)
 		WHERE rn > ? AND rn <= ? OR rn = total ORDER BY rn`
 	args = append([]any{words}, args...)
-	args = append(args, f.Cursor, f.Cursor+f.Limit+1)
+	args = append(args, skip, skip+need)
 	total := 0
 	rows, err := scanContentRows(ctx, tx, query, args, func(body, _ string) string {
 		return f.substringSnippet(body)
@@ -420,7 +448,7 @@ func exactContentRows(
 	if err != nil {
 		return nil, 0, err
 	}
-	if len(rows) > 0 && (total <= f.Cursor || total > f.Cursor+f.Limit+1) {
+	if len(rows) > 0 && (total <= skip || total > skip+need) {
 		rows = rows[:len(rows)-1]
 	}
 	return rows, total, nil
