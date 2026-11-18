@@ -30,6 +30,13 @@ const (
 // alpha, and returns a Target pointing at a fresh ClickHouse database.
 func seedFixture(t *testing.T) (*db.DB, Target) {
 	t.Helper()
+	local := seedFixtureArchive(t)
+	dsn, database := chtest.FreshDatabase(t)
+	return local, Target{URL: dsn, Database: database}
+}
+
+func seedFixtureArchive(t *testing.T) *db.DB {
+	t.Helper()
 	local := dbtest.OpenTestDB(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:         "claude-test",
@@ -137,8 +144,7 @@ func seedFixture(t *testing.T) (*db.DB, Target) {
 	_, err = local.PinMessage(t.Context(), fixtureAlphaID, msgs[0].ID, &note)
 	require.NoError(t, err)
 
-	dsn, database := chtest.FreshDatabase(t)
-	return local, Target{URL: dsn, Database: database}
+	return local
 }
 
 func fixtureSession(id, project, first, ts string, messageCount int) db.Session {

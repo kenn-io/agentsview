@@ -135,6 +135,15 @@ func FreshDatabase(tb testing.TB) (dsn, database string) {
 // FreshDatabase does on the shared test server.
 func FreshDatabaseOn(tb testing.TB, dsn string) (string, string) {
 	tb.Helper()
+	dsn, database, drop := CreateDatabaseOn(tb, dsn)
+	tb.Cleanup(func() { _ = drop(context.WithoutCancel(tb.Context())) })
+	return dsn, database
+}
+
+// CreateDatabaseOn creates a test database whose caller owns its cleanup.
+// Use FreshDatabase for databases owned by a single test.
+func CreateDatabaseOn(tb testing.TB, dsn string) (string, string, func(context.Context) error) {
+	tb.Helper()
 	// Each fixture writes to its own tables, so waiting 50 ms for another
 	// insert to join a batch usually just delays the test.
 	u, err := url.Parse(dsn)
@@ -152,12 +161,15 @@ func FreshDatabaseOn(tb testing.TB, dsn string) (string, string) {
 	admin := open(tb, dsn)
 	ctx := tb.Context()
 	_, err = admin.ExecContext(ctx, "CREATE DATABASE "+database)
-	require.NoError(tb, err)
-	tb.Cleanup(func() {
-		_, _ = admin.ExecContext(context.WithoutCancel(tb.Context()), "DROP DATABASE IF EXISTS "+database+" SYNC")
+	if err != nil {
 		admin.Close()
-	})
-	return dsn, database
+		require.NoError(tb, err)
+	}
+	return dsn, database, func(ctx context.Context) error {
+		defer admin.Close()
+		_, err := admin.ExecContext(ctx, "DROP DATABASE IF EXISTS "+database+" SYNC")
+		return err
+	}
 }
 
 // Open connects to the given database on the test server for raw

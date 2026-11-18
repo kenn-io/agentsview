@@ -1616,9 +1616,24 @@ own metadata, which is why the docs below call the database a mirror.
   with 3.5x the memory while adding 24% to storage, 3x to insert time, and 5x
   to merge time. Before adding an index, measure the real query with
   `EXPLAIN indexes = 1` under `final = 1`, on more than one part.
-- Tests use the `chtest` build tag. Run `make test-clickhouse` against a
-  dedicated test server (`TEST_CLICKHOUSE_URL` or the compose service). Do not
-  point those tests at a live mirror.
+
+### ClickHouse test fixtures
+
+Run `make test-clickhouse` to use the compose service. When running tagged Go
+tests directly, set `TEST_CLICKHOUSE_URL` to reuse a dedicated test server.
+These tests use the `chtest` build tag. Never point them at a live mirror.
+
+- For reads against the standard populated mirror, use `newClonedReadStore(t)`.
+  The first caller pushes the fixture once. Each caller gets its own database
+  and store. ClickHouse hard-links the template's MergeTree data parts with
+  `CREATE TABLE ... CLONE AS`. Each test drops its clone at cleanup, and the
+  test binary drops the template at exit.
+- The clone contains the populated tables, including derived rows. Use
+  `newPushedStore(t)` for tests that need the SQLite archive, a pusher, or
+  working materialized views. This includes tests that insert source rows and
+  expect a view to update its target.
+- Use `chtest.FreshDatabase(t)` for tests of an empty mirror, schema creation,
+  or the first push.
 
 ## PostgreSQL Integration Tests
 
