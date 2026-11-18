@@ -7,6 +7,34 @@ or frontend dependencies. Use the `Makefile` as the command reference.
 
 Update the CI path filters when adding a reader of files in another lane.
 
+## Merge queue checks
+
+Every PR runs the full CI suite before it can join the merge queue, and every
+push to `main` runs it again. A merge group therefore runs only the checks that
+two PRs, each green on its own, are likely to break together:
+
+- `lint` (golangci-lint with the Huma API contract check, and NilAway)
+- `frontend` (formatting, type checks, design-system checks, unit tests)
+- `Docs and scripts`
+- the Linux `test` suites: Sync, Other packages (including the SQLite schema and
+  data-version tests in `internal/db`), and Eval ingest
+- `e2e (chromium)`
+
+Merge groups skip `test-extended` (Windows, macOS, the x86-64-v2 startup check,
+and the simulator), the isolated Windows suites, the race detector, the
+PostgreSQL, CockroachDB, and ClickHouse integration suites, WebKit e2e, Node 26
+frontend tests, desktop unit tests, and the released-command check. Two PRs that
+both bump a schema or data version edit the same constant, so Git refuses to
+merge them before the queue runs anything. A break that only a skipped suite
+catches surfaces in `main` CI after the merge.
+
+When you add a job, decide which group it belongs to. A job skips merge groups
+when its `if` includes `github.event_name != 'merge_group'`. A matrix cannot
+drop an `include` entry by event, so split queue entries into their own job (as
+`test` and `test-extended` share steps through a YAML anchor), or list the
+matrix values in an expression (as `e2e` does). Branch protection requires
+`CI gate`, not individual CI jobs, so these changes need no ruleset update.
+
 ## CI runner policy
 
 CI jobs use standard GitHub-hosted runners, including fork pull requests,
