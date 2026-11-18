@@ -3,6 +3,9 @@
 package db
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -61,27 +64,6 @@ func TestAnalyticsKeptTracksWrites(t *testing.T) {
 	signals, err = d.GetAnalyticsSignals(ctx, AnalyticsFilter{})
 	require.NoError(t, err)
 	assert.Equal(t, 3, signals.ToolHealth.TotalRetries)
-}
-
-func TestAnalyticsKeptContentLengthRepair(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	insertSession(t, d, "session", "project", func(s *Session) {
-		s.StartedAt = new("2024-06-01T09:00:00Z")
-		s.MessageCount = 2
-	})
-	insertMessages(t, d,
-		Message{SessionID: "session", Ordinal: 0, Role: "user", Content: "hello", Timestamp: "2024-06-01T09:00:00Z"},
-		Message{SessionID: "session", Ordinal: 1, Role: "assistant", Content: "1234567890", ContentLength: 10, Timestamp: "2024-06-01T09:01:00Z"},
-	)
-	before, err := d.GetAnalyticsVelocity(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.InDelta(t, 10, before.Overall.CharsPerActiveMin, 0)
-	_, err = d.getWriter().ExecContext(ctx, `UPDATE messages SET content_length = 20 WHERE session_id = 'session' AND ordinal = 1`)
-	require.NoError(t, err)
-	after, err := d.GetAnalyticsVelocity(ctx, AnalyticsFilter{})
-	require.NoError(t, err)
-	assert.InDelta(t, 20, after.Overall.CharsPerActiveMin, 0)
 }
 
 func TestAnalyticsKeptContentLengthReplacement(t *testing.T) {
@@ -206,8 +188,8 @@ func TestAnalyticsKeptTriggerUpgrade(t *testing.T) {
 	message := asstMsgAt("session", 0, "read", "2024-06-01T09:00:00Z")
 	message.ToolCalls = []ToolCall{{SessionID: "session", ToolName: "Read", Category: "Read"}}
 	insertMessages(t, d, message)
-	_, err := d.getWriter().ExecContext(ctx, `DROP TRIGGER trg_tool_calls_analytics_change_update;
-		DELETE FROM archive_metadata WHERE key = 'analytics_change_revision'`)
+	_, err := d.getWriter().ExecContext(ctx, `DROP TRIGGER trg_dashboard_tool_calls_update;
+		DELETE FROM archive_metadata WHERE key = 'dashboard_tools'`)
 	require.NoError(t, err)
 	upgraded, err := OpenIsolated(ctx, d.Path())
 	require.NoError(t, err)
@@ -295,4 +277,211 @@ func TestTrendsKeptTracksContentAndSelection(t *testing.T) {
 	session.Project = "other"
 	require.NoError(t, d.UpsertSession(ctx, *session))
 	require.Zero(t, read().MessageCount)
+}
+
+func TestAnalyticsKeptSourceEvents(t *testing.T) {
+	scope := &AnalyticsFilter{Timezone: "UTC", From: "2026-06-14", To: "2026-06-14", Model: "model-a", Project: "project", Hour: new(10), DayOfWeek: new(6)}
+	for _, tc := range []struct {
+		name, query string
+		loads       [3]int
+		tool        string
+		calls       int
+		chars       float64
+		frustration int
+		score       float64
+		filter      *AnalyticsFilter
+	}{
+		{"role", `UPDATE messages SET role='assistant' WHERE ordinal=0`, [3]int{0, 1, 1}, "Read", 1, 10, 0, 0, nil},
+		{"system", `UPDATE messages SET is_system=1 WHERE ordinal=0`, [3]int{0, 1, 1}, "Read", 1, 10, 0, 0, nil},
+		{"score", `UPDATE sessions SET health_score=60`, [3]int{0, 0, 1}, "Read", 1, 10, 0, 60, nil},
+		{"length", `UPDATE messages SET content_length=20 WHERE ordinal=1`, [3]int{0, 1, 0}, "Read", 1, 20, 0, 0, nil},
+		{"tool name", `UPDATE tool_calls SET tool_name='Grep'`, [3]int{1, 0, 0}, "Grep", 1, 10, 0, 0, nil},
+		{"prompt", `UPDATE messages SET content='this is broken' WHERE ordinal=0; UPDATE sessions SET transcript_revision=CAST(transcript_revision AS INTEGER)+1`, [3]int{0, 0, 1}, "Read", 1, 10, 1, 0, nil},
+		{"tool insert", `INSERT INTO tool_calls(message_id,session_id,tool_name,category) SELECT id,session_id,'Bash','Bash' FROM messages WHERE ordinal=1`, [3]int{1, 1, 0}, "Read", 2, 10, 0, 0, nil},
+		{"tool delete", `DELETE FROM tool_calls`, [3]int{1, 1, 0}, "", 0, 10, 0, 0, nil},
+		{"message insert", `INSERT INTO messages(session_id,ordinal,role,content,content_length,timestamp) VALUES('session',2,'assistant','answer',20,'2026-06-14T10:02:00Z')`, [3]int{1, 1, 1}, "Read", 1, 15, 0, 0, nil},
+		{"message delete", `DELETE FROM messages WHERE ordinal=0`, [3]int{1, 1, 1}, "Read", 1, 0, 0, 0, nil},
+		{"price", `INSERT INTO model_pricing(model_pattern,output_microdollars_per_mtok) VALUES('model-a',100)`, [3]int{}, "Read", 1, 10, 0, 0, nil},
+		{"model", `UPDATE messages SET model='model-b' WHERE ordinal=1`, [3]int{}, "", 0, 0, 0, 0, scope},
+		{"timestamp", `UPDATE messages SET timestamp=NULL WHERE ordinal=0`, [3]int{}, "", 0, 0, 0, 0, scope},
+		{"ordinal", `UPDATE messages SET ordinal=3 WHERE ordinal=0`, [3]int{}, "", 0, 0, 0, 0, scope},
+		{"relationship", `UPDATE sessions SET relationship_type='subagent' WHERE id='session'`, [3]int{}, "", 0, 0, 0, 0, scope},
+		{"nullable date", `UPDATE sessions SET started_at=NULL WHERE id='session'`, [3]int{}, "", 0, 0, 0, 0, scope},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			insertSession(t, d, "session", "project", func(s *Session) {
+				s.StartedAt = new("2026-06-14T10:00:00Z")
+				s.CreatedAt = "2026-06-15T10:00:00Z"
+				s.MessageCount = 2
+			})
+			assistant := asstMsgAt("session", 1, "1234567890", "2026-06-14T10:01:00Z")
+			if tc.filter != nil {
+				assistant.Timestamp = "2026-06-14T11:00:00Z"
+				assistant.Model = "model-a"
+			}
+			assistant.ContentLength = 10
+			assistant.ToolCalls = []ToolCall{{SessionID: "session", ToolName: "Read", Category: "Read"}}
+			insertMessages(t, d, Message{SessionID: "session", Ordinal: 0, Role: "user", Content: "please fix", Timestamp: "2026-06-14T10:00:00Z"}, assistant)
+			updateSignals(t, d, "session", SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}})
+			f := AnalyticsFilter{Timezone: "UTC"}
+			if tc.filter != nil {
+				before, err := d.GetAnalyticsSignals(ctx, *tc.filter)
+				require.NoError(t, err)
+				require.Equal(t, 1, before.UnscoredSessions)
+				_, err = d.getWriter().ExecContext(ctx, tc.query)
+				require.NoError(t, err)
+				after, err := d.GetAnalyticsSignals(ctx, *tc.filter)
+				require.NoError(t, err)
+				require.Zero(t, after.UnscoredSessions)
+				return
+			}
+			var loads [3]int
+			read := func() (ToolsAnalyticsResponse, VelocityResponse, SignalsAnalyticsResponse) {
+				tools, err := keptAnalytics(ctx, d, "tools", f, func(ctx context.Context, f AnalyticsFilter) (ToolsAnalyticsResponse, error) {
+					loads[0]++
+					return d.analyticsTools(ctx, f)
+				})
+				require.NoError(t, err)
+				velocity, err := keptAnalytics(ctx, d, "velocity", f, func(ctx context.Context, f AnalyticsFilter) (VelocityResponse, error) {
+					loads[1]++
+					return d.analyticsVelocity(ctx, f)
+				})
+				require.NoError(t, err)
+				signals, err := keptAnalytics(ctx, d, "signals", f, func(ctx context.Context, f AnalyticsFilter) (SignalsAnalyticsResponse, error) {
+					loads[2]++
+					return d.analyticsSignals(ctx, f)
+				})
+				require.NoError(t, err)
+				return tools, velocity, signals
+			}
+			read()
+			loads = [3]int{}
+			_, err := d.getWriter().ExecContext(ctx, tc.query)
+			require.NoError(t, err)
+			tools, velocity, signals := read()
+			require.Equal(t, tc.loads, loads)
+			require.Equal(t, tc.calls, tools.TotalCalls)
+			var names []string
+			for _, row := range tools.ByTool {
+				names = append(names, row.ToolName)
+			}
+			if tc.tool != "" {
+				require.Contains(t, names, tc.tool)
+			}
+			require.InDelta(t, tc.chars, velocity.Overall.CharsPerActiveMin, 0)
+			require.Equal(t, tc.frustration, signals.QualityHealth.Totals.FrustrationMarkerCount)
+			if tc.score != 0 {
+				require.NotNil(t, signals.AvgHealthScore)
+				require.InDelta(t, tc.score, *signals.AvgHealthScore, 0)
+			}
+		})
+	}
+}
+
+func TestAnalyticsKeptRestoreRewrite(t *testing.T) {
+	for _, tc := range []struct {
+		name, first, second           string
+		filter                        AnalyticsFilter
+		beforeTool, afterTool         string
+		beforeChars, afterChars       float64
+		beforeRetries, afterRetries   int
+		beforeUnscored, afterUnscored int
+	}{
+		{"analytics", `UPDATE sessions SET tool_retry_count=1 WHERE id='session'; UPDATE tool_calls SET tool_name='first' WHERE session_id='session'; UPDATE messages SET content_length=10 WHERE session_id='session' AND ordinal=1`, `UPDATE sessions SET tool_retry_count=2 WHERE id='session'; UPDATE tool_calls SET tool_name='second' WHERE session_id='session'; UPDATE messages SET content_length=20 WHERE session_id='session' AND ordinal=1`, AnalyticsFilter{Timezone: "UTC"}, "first", "second", 10, 20, 1, 2, 1, 1},
+		{"usage", `UPDATE sessions SET project='first' WHERE id='session'`, `UPDATE sessions SET project='second' WHERE id='session'`, AnalyticsFilter{Timezone: "UTC", Project: "second"}, "", "Read", 0, 6, 0, 0, 0, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CACHE_DIRECTORY", t.TempDir())
+			ctx := t.Context()
+			path := filepath.Join(t.TempDir(), "archive.db")
+			d := testDBAtPath(t, path, "archive")
+			insertSession(t, d, "session", "project", func(s *Session) { s.StartedAt = new("2024-06-01T09:00:00Z"); s.MessageCount = 2 })
+			message := asstMsgAt("session", 1, "answer", "2024-06-01T09:01:00Z")
+			message.ToolCalls = []ToolCall{{SessionID: "session", ToolName: "Read", Category: "Read"}}
+			insertMessages(t, d, Message{SessionID: "session", Ordinal: 0, Role: "user", Content: "hello", Timestamp: "2024-06-01T09:00:00Z"}, message)
+			updateSignals(t, d, "session", SessionSignalUpdate{QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}})
+			require.NoError(t, d.Close())
+			backup, err := os.ReadFile(path)
+			require.NoError(t, err)
+			d, err = OpenIsolated(ctx, path)
+			require.NoError(t, err)
+			_, err = d.getWriter().ExecContext(ctx, tc.first)
+			require.NoError(t, err)
+			id, err := d.GetDatabaseID(ctx)
+			require.NoError(t, err)
+			usage, err := d.UsageChangeRevision(ctx)
+			require.NoError(t, err)
+			analytics, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics")
+			require.NoError(t, err)
+			filter := tc.filter
+			beforeTools, err := d.GetAnalyticsTools(ctx, filter)
+			require.NoError(t, err)
+			beforeVelocity, err := d.GetAnalyticsVelocity(ctx, filter)
+			require.NoError(t, err)
+			beforeSignals, err := d.GetAnalyticsSignals(ctx, filter)
+			require.NoError(t, err)
+			if tc.beforeTool == "" {
+				require.Zero(t, beforeTools.TotalCalls)
+			} else {
+				require.Equal(t, tc.beforeTool, beforeTools.ByTool[0].ToolName)
+			}
+			require.InDelta(t, tc.beforeChars, beforeVelocity.Overall.CharsPerActiveMin, 0)
+			require.Equal(t, tc.beforeRetries, beforeSignals.ToolHealth.TotalRetries)
+			require.Equal(t, tc.beforeUnscored, beforeSignals.UnscoredSessions)
+			require.NoError(t, d.Close())
+			require.NoError(t, os.WriteFile(path, backup, 0o600))
+			d, err = OpenIsolated(ctx, path)
+			require.NoError(t, err)
+
+			_, err = d.getWriter().ExecContext(ctx, tc.second)
+			require.NoError(t, err)
+
+			newID, err := d.GetDatabaseID(ctx)
+			require.NoError(t, err)
+			newUsage, err := d.UsageChangeRevision(ctx)
+			require.NoError(t, err)
+			newAnalytics, err := d.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics")
+			require.NoError(t, err)
+			require.Equal(t, id, newID)
+			require.Equal(t, usage, newUsage)
+			require.Equal(t, analytics, newAnalytics)
+			calls := [3]int{}
+			read := func() (ToolsAnalyticsResponse, VelocityResponse, SignalsAnalyticsResponse) {
+				tools, err := keptAnalytics(ctx, d, "tools", filter, func(ctx context.Context, f AnalyticsFilter) (ToolsAnalyticsResponse, error) {
+					calls[0]++
+					return d.analyticsTools(ctx, f)
+				})
+				require.NoError(t, err)
+				require.Equal(t, 1, tools.TotalCalls)
+				require.Equal(t, tc.afterTool, tools.ByTool[0].ToolName)
+				velocity, err := keptAnalytics(ctx, d, "velocity", filter, func(ctx context.Context, f AnalyticsFilter) (VelocityResponse, error) {
+					calls[1]++
+					return d.analyticsVelocity(ctx, f)
+				})
+				require.NoError(t, err)
+				require.InDelta(t, tc.afterChars, velocity.Overall.CharsPerActiveMin, 0)
+				result, err := keptAnalytics(ctx, d, "signals", filter, func(ctx context.Context, f AnalyticsFilter) (SignalsAnalyticsResponse, error) {
+					calls[2]++
+					return d.analyticsSignals(ctx, f)
+				})
+				require.NoError(t, err)
+				require.Equal(t, tc.afterRetries, result.ToolHealth.TotalRetries)
+				require.Equal(t, tc.afterUnscored, result.UnscoredSessions)
+				return tools, velocity, result
+			}
+			tools, velocity, signals := read()
+			require.Equal(t, [3]int{1, 1, 1}, calls)
+			require.NoError(t, d.Close())
+			d, err = OpenIsolated(ctx, path)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, d.Close()) })
+			gotTools, gotVelocity, gotSignals := read()
+			require.Equal(t, tools, gotTools)
+			require.Equal(t, velocity, gotVelocity)
+			require.Equal(t, signals, gotSignals)
+			require.Equal(t, [3]int{1, 1, 1}, calls)
+		})
+	}
 }

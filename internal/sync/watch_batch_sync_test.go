@@ -270,7 +270,7 @@ func TestWatchBatchFixtureMatchesUpsertSession(t *testing.T) {
 				require.True(t, ok, "%s must be text", column)
 				_, err := time.Parse(time.RFC3339Nano, value)
 				require.NoError(t, err, "%s must be RFC3339Nano", column)
-			case "trends_generation":
+			case "trends_generation", "tools_generation":
 				value, ok := values[i].(string)
 				require.True(t, ok, "%s must be text", column)
 				require.NotEmpty(t, value)

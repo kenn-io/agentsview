@@ -53,6 +53,7 @@ type Store struct {
 	activityUsageSums kept.Memo[*readbase.ActivityUsageSums]
 	usageDisk         kept.Disk
 	analyticsReads    kept.Reads[[]byte]
+	analyticsDigests  kept.Reads[string]
 	searchReads       kept.Reads[db.SearchPage]
 	dailyUsage        kept.Reads[db.DailyUsageResult]
 	planUsage         kept.Reads[*db.PlanUsageCountSummary]

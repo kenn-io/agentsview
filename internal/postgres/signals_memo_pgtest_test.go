@@ -162,7 +162,8 @@ func TestFrustrationMemo(t *testing.T) {
 			store, err := NewStore(ctx, url, schema, true)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, store.Close()) })
-			initial, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+			filter := db.AnalyticsFilter{Timezone: "Local"}
+			initial, err := store.GetAnalyticsSignals(ctx, filter)
 			require.NoError(t, err)
 			require.Equal(t, 1, initial.QualityHealth.Totals.FrustrationMarkerCount)
 			versionColumn, err := sessionVersionColumnPG(ctx, store.pg)
@@ -188,7 +189,7 @@ func TestFrustrationMemo(t *testing.T) {
 				_, err = syncer.Push(ctx, false, nil)
 				require.NoError(t, err)
 			}
-			warm, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+			warm, err := store.GetAnalyticsSignals(ctx, filter)
 			require.NoError(t, err)
 			assert.Equal(t, test.want, warm.QualityHealth.Totals.FrustrationMarkerCount)
 		})

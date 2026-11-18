@@ -840,6 +840,10 @@ func TestPGUsageAccountUpgradeWaitsForOldWriter(t *testing.T) {
 	quoted, err := quoteIdentifier(schema)
 	require.NoError(t, err)
 	_, err = store.pg.ExecContext(ctx, fmt.Sprintf(`
+DROP FUNCTION mark_dashboard_messages() CASCADE;
+DROP FUNCTION mark_dashboard_tool_calls() CASCADE;
+DELETE FROM sync_metadata WHERE key IN ('dashboard_common','dashboard_tools','dashboard_velocity','dashboard_signals','dashboard_scope');
+UPDATE sync_metadata SET value='2' WHERE key='usage_change_journal_version';
 DELETE FROM sync_metadata WHERE key='usage_account_revision';
 CREATE OR REPLACE FUNCTION stamp_usage_change() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, %[1]s, pg_temp AS $journal$%[2]s$journal$;
 CREATE OR REPLACE FUNCTION mark_usage_cursor_usage_events() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, %[1]s, pg_temp AS $journal$%[3]s$journal$`, quoted, stampUsageChangeFunctionBodyPG, fmt.Sprintf(markUsageChangeFunctionBodyPG, "''", "true", "*")))

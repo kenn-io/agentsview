@@ -1169,16 +1169,22 @@ or an in-window Claude peer changes; a changed project identity map also
 invalidates it. Partial reports, read-only archives, and reports filtered by
 active, stale, or unclean termination status bypass this cache.
 
-SQLite uses `usage_change_revision` and `analytics_change_revision` to
-invalidate kept Tools, Velocity, Signals, and Trends reports. Tool-call updates
-and deletes, message content-length repairs, and signal updates advance the
-analytics counter. Message changes also advance the session transcript revision.
-PostgreSQL uses its session journal, hosted PostgreSQL uses its tenant identity,
+SQLite and native PostgreSQL track the inputs to Tools, Velocity, and Signals
+with separate change tokens. A score-only edit refreshes Signals while Tools
+and Velocity remain reusable. DuckDB uses content digests for saved results
+and recomputes them when its mirror handle changes. SQLite, native PostgreSQL,
+and DuckDB save these results per selection and timezone; hosted PostgreSQL
+reads them fresh. The entries share
+the existing 256 MiB Trends disk budget. PostgreSQL also retains finished
+Signals in memory. Active-since selections are not saved.
+
+SQLite invalidates Trends with its usage and analytics revisions. PostgreSQL
+uses its session journal, hosted PostgreSQL uses its tenant identity,
 selection, and corpus revisions, DuckDB uses its mirror stamp, and ClickHouse
-uses session and message row identities to invalidate Trends reports. Remote
-DuckDB through Quack reads Trends fresh because it has no reliable freshness
-token. Read-only archives and reports filtered by active, stale, or unclean
-termination status bypass this cache.
+uses session and message row identities.
+Remote DuckDB through Quack reads Trends fresh because it has no reliable
+freshness token. Read-only archives and reports filtered by active, stale, or
+unclean termination status bypass this cache.
 
 PostgreSQL keeps ongoing Activity reports' per-session activity and raw usage
 inputs in memory with a 256 MiB estimated-size budget. Each session keeps its
@@ -1322,6 +1328,16 @@ parent edges once per statement. Root orphan checks and recursive child joins
 use that query-local edge set without changing parent identity or visibility.
 
 ### Dashboard metadata index
+
+SQLite retains per-session Dashboard Tools contributions on disk and uses
+`tools_generation` to refresh sessions when tool calls change. Relevant call
+writes set the token to null once; a refresh assigns a new token before reading
+the session's calls.
+Message model, timestamp, and ordinal edits invalidate saved Tools contributions
+through `usage_generation`.
+Each filter combination has its own entry. Each file is capped at 128 MiB, and
+all `sqlite-trends` entries share a 256 MiB budget. Read-only archives and
+disabled disk storage use the direct reader.
 
 SQLite's summary and tool analytics can read model names and message timestamps
 through `idx_messages_analytics_metadata` on

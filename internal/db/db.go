@@ -955,6 +955,7 @@ type DB struct {
 	trendsDisk           kept.Disk
 	trendsDiskOnce       sync.Once
 	usageKept            kept.Memo[DailyUsageResult]
+	usageFlights         kept.Flights[DailyUsageResult]
 	sessionStatsFacts    *sessionStatsFactsMemo
 	frustrationMemo      FrustrationMarkerMemo
 	usageBackfillMu      sync.Mutex
@@ -1511,9 +1512,21 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 		return nil, errors.Join(err, d.CloseContext(ctx))
 	}
 	d.mu.Lock()
-	_, err = d.getWriter().ExecContext(ctx, sessionClassificationJournalTriggerSQL)
+	_, err = d.getWriter().ExecContext(ctx, "ALTER TABLE sessions ADD COLUMN tools_generation TEXT")
+	if err == nil {
+		_, err = d.getWriter().ExecContext(ctx, usageGenerationSchemaSQL)
+	}
+	if err == nil {
+		_, err = d.getWriter().ExecContext(ctx, toolsGenerationSchemaSQL)
+	}
+	if err == nil {
+		_, err = d.getWriter().ExecContext(ctx, sessionClassificationJournalTriggerSQL)
+	}
 	if err == nil {
 		_, err = d.getWriter().ExecContext(ctx, usageChangeJournalTriggerSQL)
+	}
+	if err == nil {
+		_, err = d.getWriter().ExecContext(ctx, dashboardGenerationTriggerSQL)
 	}
 	if err == nil {
 		err = ensureConversationSchemaLocked(ctx, d.getWriter())
@@ -2529,6 +2542,8 @@ func schemaColumnMigrations() []schemaColumnMigration {
 		{"sessions", "usage_generation", "ALTER TABLE sessions ADD COLUMN usage_generation TEXT;" +
 			" UPDATE sessions SET usage_generation=lower(hex(randomblob(8)))"},
 		{"sessions", "trends_generation", "ALTER TABLE sessions ADD COLUMN trends_generation TEXT"},
+		{"sessions", "tools_generation", "ALTER TABLE sessions ADD COLUMN tools_generation TEXT;" +
+			" UPDATE sessions SET tools_generation=lower(hex(randomblob(16)))"},
 		{
 			"sessions", "automation_audit",
 			"ALTER TABLE sessions ADD COLUMN automation_audit INTEGER NOT NULL DEFAULT 1",
@@ -3083,6 +3098,32 @@ WHEN OLD.transcript_revision IS NOT NEW.transcript_revision BEGIN
 END;
 `
 
+const toolsGenerationSchemaSQL = `
+DROP TRIGGER IF EXISTS sessions_tools_generation_insert;
+DROP TRIGGER IF EXISTS tool_calls_tools_generation_insert;
+DROP TRIGGER IF EXISTS tool_calls_tools_generation_delete;
+DROP TRIGGER IF EXISTS tool_calls_tools_generation_update;
+CREATE TRIGGER sessions_tools_generation_insert AFTER INSERT ON sessions
+WHEN NEW.tools_generation IS NULL BEGIN
+    UPDATE sessions SET tools_generation=lower(hex(randomblob(16))) WHERE id=NEW.id AND tools_generation IS NULL;
+END;
+CREATE TRIGGER tool_calls_tools_generation_insert AFTER INSERT ON tool_calls BEGIN
+    UPDATE sessions SET tools_generation=NULL WHERE id=NEW.session_id AND tools_generation IS NOT NULL;
+END;
+CREATE TRIGGER tool_calls_tools_generation_delete AFTER DELETE ON tool_calls BEGIN
+    UPDATE sessions SET tools_generation=NULL WHERE id=OLD.session_id AND tools_generation IS NOT NULL;
+END;
+CREATE TRIGGER tool_calls_tools_generation_update
+AFTER UPDATE OF message_id, session_id, category, tool_name, observed_outcome, observed_repeat, sequence_ending ON tool_calls
+WHEN NEW.message_id IS NOT OLD.message_id OR NEW.session_id IS NOT OLD.session_id OR
+     NEW.category IS NOT OLD.category OR NEW.tool_name IS NOT OLD.tool_name OR
+     NEW.observed_outcome IS NOT OLD.observed_outcome OR NEW.observed_repeat IS NOT OLD.observed_repeat OR
+     NEW.sequence_ending IS NOT OLD.sequence_ending
+BEGIN
+    UPDATE sessions SET tools_generation=NULL WHERE id IN (OLD.session_id, NEW.session_id) AND tools_generation IS NOT NULL;
+END;
+`
+
 // A tail append preserves the generation. Every change to an existing usage
 // input invalidates the prefix retained by incremental usage-cache fills.
 const usageGenerationSchemaSQL = `
@@ -3147,6 +3188,9 @@ func applySchemaColumnMigrations(ctx context.Context, w *writerHandle, progress 
 	if _, err := tx.ExecContext(ctx, trendsGenerationSchemaSQL); err != nil {
 		return fmt.Errorf("installing trends generation triggers: %w", err)
 	}
+	if _, err := tx.ExecContext(ctx, toolsGenerationSchemaSQL); err != nil {
+		return fmt.Errorf("installing tools generation triggers: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, usageGenerationSchemaSQL); err != nil {
 		return fmt.Errorf("installing usage generation triggers: %w", err)
 	}
@@ -3155,6 +3199,9 @@ func applySchemaColumnMigrations(ctx context.Context, w *writerHandle, progress 
 	}
 	if _, err := tx.ExecContext(ctx, usageChangeJournalTriggerSQL); err != nil {
 		return fmt.Errorf("installing usage change journal triggers: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, dashboardGenerationTriggerSQL); err != nil {
+		return fmt.Errorf("installing dashboard generation triggers: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing column migrations: %w", err)

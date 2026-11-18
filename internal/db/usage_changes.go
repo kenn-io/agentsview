@@ -138,6 +138,48 @@ func usageChangeJournalSQL() (string, string) {
 	return drops.String(), creates.String()
 }
 
+// Independent source triggers survive an older writer reinstalling its journal.
+var dashboardGenerationTriggerSQL = dashboardTriggerSQL()
+
+func dashboardTriggerSQL() string {
+	var sql strings.Builder
+	sql.WriteString("DROP TRIGGER IF EXISTS trg_dashboard_generation_insert; DROP TRIGGER IF EXISTS trg_dashboard_generation_update;\n")
+	for _, name := range []string{"common", "tools", "velocity", "signals", "scope"} {
+		fmt.Fprintf(&sql, "INSERT INTO archive_metadata(key,value) VALUES('dashboard_%s',lower(hex(randomblob(16)))) ON CONFLICT(key) DO NOTHING;\n", name)
+	}
+	tables := []struct {
+		name   string
+		groups map[string][]string
+	}{
+		{"sessions", map[string][]string{"common": DashboardSessionInputs, "tools": DashboardToolsSessionInputs, "signals": DashboardSignalsSessionInputs}},
+		{"messages", map[string][]string{"tools": append([]string{"id"}, DashboardToolsMessageInputs...), "velocity": DashboardVelocityMessageInputs, "signals": DashboardSignalsMessageInputs, "scope": DashboardScopeMessageInputs}},
+		{"tool_calls", map[string][]string{"tools": append([]string{"message_id"}, DashboardToolsCallInputs...), "velocity": append([]string{"message_id"}, DashboardVelocityCallInputs...)}},
+	}
+	for _, table := range tables {
+		for _, event := range []string{"INSERT", "UPDATE", "DELETE"} {
+			name := "trg_dashboard_" + table.name + "_" + strings.ToLower(event)
+			fmt.Fprintf(&sql, "DROP TRIGGER IF EXISTS %s; CREATE TRIGGER %s AFTER %s ON %s BEGIN\n", name, name, event, table.name)
+			for _, group := range []string{"common", "tools", "velocity", "signals", "scope"} {
+				columns, ok := table.groups[group]
+				if !ok {
+					continue
+				}
+				condition := "1"
+				if event == "UPDATE" {
+					changes := make([]string, len(columns))
+					for i, column := range columns {
+						changes[i] = "OLD." + column + " IS NOT NEW." + column
+					}
+					condition = strings.Join(changes, " OR ")
+				}
+				fmt.Fprintf(&sql, "INSERT INTO archive_metadata(key,value) SELECT 'dashboard_%s',lower(hex(randomblob(16))) WHERE %s ON CONFLICT(key) DO UPDATE SET value=excluded.value;\n", group, condition)
+			}
+			sql.WriteString("END;\n")
+		}
+	}
+	return sql.String()
+}
+
 // UsageChangeRevision returns the trigger-maintained revision for usage facts,
 // session filter dimensions, Activity session columns, and pricing catalog
 // writes. Revision 0 means no history. Readers must pair it with database_id
