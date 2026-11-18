@@ -29,7 +29,7 @@
   >
     {#snippet icon()}
       {#if sync.syncing}
-        <span class="empty-archive-spinner" aria-hidden="true"><Spinner size={40} /></span>
+        <span class="empty-archive-spinner" aria-hidden="true"><Spinner size={36} /></span>
       {:else}
         <FolderIcon size="40" strokeWidth="1.6" aria-hidden="true" />
       {/if}
@@ -73,6 +73,10 @@
 
   .empty-archive-spinner {
     display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
   }
 
   .empty-archive-folders {
