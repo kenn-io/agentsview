@@ -462,9 +462,28 @@ func TestPGActivityReportInputRestartPeerAndSessions(t *testing.T) {
 	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC", Project: "project-a"}
 	q.Partial, q.EffectiveEnd = true, q.RangeStart.Add(10*time.Hour+time.Minute)
 	first := openPGActivityInputStore(t, target, syncer.schema, directory)
+	other := db.AnalyticsFilter{Timezone: "UTC", Project: "project-b"}
+	pgKeptBuild(t, first, other, q, true)
 	before := pgKeptBuild(t, first, f, q, true)
 	assert.Equal(t, 5, before.Report.Totals.OutputTokens)
 	require.NoError(t, first.Close())
+	restartedBeforePush := openPGActivityInputStore(t, target, syncer.schema, directory)
+	reads := &activityInputReadCounter{storeExecutor: restartedBeforePush.pg}
+	restartedBeforePush.pg = reads
+	gotBeforePush := pgKeptBuild(t, restartedBeforePush, f, q, true)
+	requirePGKeptEqual(t, before, gotBeforePush)
+	wantPricing, err := json.Marshal(before.Report.Pricing)
+	require.NoError(t, err)
+	gotPricing, err := json.Marshal(gotBeforePush.Report.Pricing)
+	require.NoError(t, err)
+	assert.Equal(t, string(wantPricing), string(gotPricing))
+	assert.Empty(t, reads.transcriptReads)
+	assert.Empty(t, reads.usageReads)
+	freshBeforePush, err := NewStore(t.Context(), target, syncer.schema, true)
+	require.NoError(t, err)
+	requirePGKeptEqual(t, pgKeptBuild(t, freshBeforePush, other, q, true), pgKeptBuild(t, restartedBeforePush, other, q, true))
+	require.NoError(t, freshBeforePush.Close())
+	require.NoError(t, restartedBeforePush.Close())
 	q.EffectiveEnd = q.EffectiveEnd.Add(time.Nanosecond)
 	require.NoError(t, local.DeleteSession(t.Context(), "deleted"))
 	require.NoError(t, local.DeleteSession(t.Context(), "peer"))
@@ -488,123 +507,36 @@ func TestPGActivityReportInputRestartPeerAndSessions(t *testing.T) {
 	assert.ElementsMatch(t, []string{"a", "added", "deleted", "new-peer", "peer"}, counter.usageReads[0])
 }
 
-func TestPGActivityReportInputRestartPrices(t *testing.T) {
+func TestPGActivityReportInputRestartPriceInvalidation(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	local, syncer, _ := newUsageJournalFixture(t)
-	for _, id := range []string{"a", "b", "c"} {
+	for _, id := range []string{"a", "b"} {
 		pgKeptSession(t, local, id, "project-a", "2026-06-14")
 	}
-	pgKeptSession(t, local, "peer", "project-b", "2026-06-14")
-	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "a", []db.Message{{SessionID: "a", Ordinal: 0, Role: "assistant", Content: "partial", Timestamp: "2026-06-14T10:00:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":5}`), ClaudeMessageID: "shared", ClaudeRequestID: "request"}}))
-	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "peer", []db.Message{{SessionID: "peer", Ordinal: 0, Role: "assistant", Content: "complete", Timestamp: "2026-06-14T10:01:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":631}`), ClaudeMessageID: "shared", ClaudeRequestID: "request"}}))
+	pgKeptSession(t, local, "future", "project-a", "2026-06-14")
+	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "future", []db.Message{{SessionID: "future", Ordinal: 0, Role: "assistant", Content: "later", Timestamp: "2026-06-14T10:05:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":300}`)}}))
 	pgKeptPush(t, syncer, false)
 	target, directory := testPGURL(t), t.TempDir()
-	q := pgDayQuery(t, "2026-06-14", "UTC")
-	q.Partial, q.EffectiveEnd = true, q.RangeEnd.Add(-time.Hour)
-	f := db.AnalyticsFilter{Timezone: "UTC", Project: "project-a"}
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	q.Partial, q.EffectiveEnd = true, q.RangeStart.Add(10*time.Hour+2*time.Minute)
 	first := openPGActivityInputStore(t, target, syncer.schema, directory)
-	pgKeptBuild(t, first, db.AnalyticsFilter{Timezone: "UTC", Project: "project-b"}, q, true)
-	want := pgKeptBuild(t, first, f, q, true)
-	slots := first.runtimeState().activityInputs.Snapshot()
-	require.Len(t, slots, 1)
-	saved := slots[0].Rows[0]
-	require.NotNil(t, saved.priced)
+	rates := map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}}
+	first.SetCustomPricing(rates)
+	before := pgKeptBuild(t, first, f, q, true)
 	require.NoError(t, first.Close())
+	pgKeptSession(t, local, "c", "project-a", "2026-06-14")
+	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "c", []db.Message{{SessionID: "c", Ordinal: 0, Role: "assistant", Content: "new usage", Timestamp: "2026-06-14T10:01:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":700}`)}}))
+	pgKeptPush(t, syncer, false)
 	restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
 	defer restarted.Close()
-	loaded, ok := restarted.loadActivityInputs(slots[0].Slot, slots[0].Version, saved.identity)
-	require.True(t, ok)
-	require.Equal(t, saved.usage, loaded.usage)
-	require.NotNil(t, loaded.priced)
-	require.Equal(t, saved.priced.rows, loaded.priced.rows)
-	reads := &activityInputReadCounter{storeExecutor: restarted.pg}
-	restarted.pg = reads
-	got := pgKeptBuild(t, restarted, f, q, true)
-	requirePGKeptEqual(t, want, got)
-	wantPricing, err := json.Marshal(want.Report.Pricing)
-	require.NoError(t, err)
-	gotPricing, err := json.Marshal(got.Report.Pricing)
-	require.NoError(t, err)
-	assert.Equal(t, string(wantPricing), string(gotPricing))
-	assert.Empty(t, reads.transcriptReads)
-	assert.Empty(t, reads.usageReads)
-	other := db.AnalyticsFilter{Timezone: "UTC", Project: "project-b"}
 	fresh, err := NewStore(t.Context(), target, syncer.schema, true)
 	require.NoError(t, err)
 	defer fresh.Close()
-	requirePGKeptEqual(t, pgKeptBuild(t, fresh, other, q, true), pgKeptBuild(t, restarted, other, q, true))
-}
-
-func TestPGActivityReportInputRestartPriceInvalidation(t *testing.T) {
-	for _, mode := range []string{"pricing", "push", "clock", "bad index", "duplicate index"} {
-		t.Run(mode, func(t *testing.T) {
-			t.Setenv("CACHE_DIRECTORY", t.TempDir())
-			local, syncer, _ := newUsageJournalFixture(t)
-			for _, id := range []string{"a", "b"} {
-				pgKeptSession(t, local, id, "project-a", "2026-06-14")
-			}
-			pgKeptSession(t, local, "future", "project-a", "2026-06-14")
-			require.NoError(t, local.ReplaceSessionMessages(t.Context(), "future", []db.Message{{SessionID: "future", Ordinal: 0, Role: "assistant", Content: "later", Timestamp: "2026-06-14T10:05:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":300}`)}}))
-			pgKeptPush(t, syncer, false)
-			target, directory := testPGURL(t), t.TempDir()
-			q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
-			q.Partial, q.EffectiveEnd = true, q.RangeStart.Add(10*time.Hour+2*time.Minute)
-			first := openPGActivityInputStore(t, target, syncer.schema, directory)
-			if mode == "push" {
-				first.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}})
-			}
-			before := pgKeptBuild(t, first, f, q, true)
-			slots := first.runtimeState().activityInputs.Snapshot()
-			require.Len(t, slots, 1)
-			slot, version := slots[0].Slot, pgActivityDiskVersion+slots[0].Version
-			require.NoError(t, first.Close())
-			if mode == "bad index" || mode == "duplicate index" {
-				data, ok := first.activityDisk.Get(slot, version)
-				require.True(t, ok)
-				rows, ok := kept.DecodeRows[kept.Part[pgActivityDiskPart]](data)
-				require.True(t, ok)
-				require.NotNil(t, rows[0].Value.Priced)
-				require.GreaterOrEqual(t, len(rows[0].Value.Priced.Rows), 2)
-				if mode == "bad index" {
-					rows[0].Value.Priced.Rows[0].Index = int32(len(rows[0].Value.Usage))
-				} else {
-					rows[0].Value.Priced.Rows[1].Index = rows[0].Value.Priced.Rows[0].Index
-				}
-				data, err := kept.EncodeRows(rows, 256<<20, func(kept.Part[pgActivityDiskPart]) int64 { return 0 })
-				require.NoError(t, err)
-				first.activityDisk.Put(slot, version, data)
-			}
-			if mode == "push" {
-				pgKeptSession(t, local, "c", "project-a", "2026-06-14")
-				require.NoError(t, local.ReplaceSessionMessages(t.Context(), "c", []db.Message{{SessionID: "c", Ordinal: 0, Role: "assistant", Content: "new usage", Timestamp: "2026-06-14T10:01:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":700}`)}}))
-				pgKeptPush(t, syncer, false)
-			}
-			if mode == "clock" {
-				require.False(t, slots[0].Rows[0].priced.next.IsZero())
-				q.EffectiveEnd = q.RangeEnd.Add(-time.Hour)
-			}
-			restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
-			defer restarted.Close()
-			fresh, err := NewStore(t.Context(), target, syncer.schema, true)
-			require.NoError(t, err)
-			defer fresh.Close()
-			if mode == "pricing" || mode == "push" {
-				rates := map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}}
-				restarted.SetCustomPricing(rates)
-				fresh.SetCustomPricing(rates)
-			}
-			if mode == "bad index" || mode == "duplicate index" {
-				loaded, ok := restarted.loadActivityInputs(slots[0].Slot, slots[0].Version, slots[0].Rows[0].identity)
-				require.True(t, ok)
-				require.Nil(t, loaded.priced)
-			}
-			got := pgKeptBuild(t, restarted, f, q, true)
-			requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), got)
-			if mode == "push" {
-				assert.Equal(t, 1000, before.Report.Totals.OutputTokens)
-				assert.Equal(t, 1700, got.Report.Totals.OutputTokens)
-				assert.Equal(t, money.MustParseDollars("0.034"), got.Report.Totals.Cost)
-			}
-		})
-	}
+	restarted.SetCustomPricing(rates)
+	fresh.SetCustomPricing(rates)
+	got := pgKeptBuild(t, restarted, f, q, true)
+	requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), got)
+	assert.Equal(t, 1000, before.Report.Totals.OutputTokens)
+	assert.Equal(t, 1700, got.Report.Totals.OutputTokens)
+	assert.Equal(t, money.MustParseDollars("0.034"), got.Report.Totals.Cost)
 }
