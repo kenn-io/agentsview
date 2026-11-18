@@ -31,7 +31,7 @@ type schedulerHarness struct {
 	armed       []*harnessTimer
 }
 
-func newSchedulerHarness(interval, quiet time.Duration) *schedulerHarness {
+func newSchedulerHarness(interval time.Duration) *schedulerHarness {
 	h := &schedulerHarness{clock: time.Unix(1_700_000_000, 0)}
 	record := func(_ context.Context, id string) {
 		h.mu.Lock()
@@ -41,7 +41,7 @@ func newSchedulerHarness(interval, quiet time.Duration) *schedulerHarness {
 		}
 		h.mu.Unlock()
 	}
-	h.sched = newSignalScheduler(interval, quiet, record,
+	h.sched = newSignalScheduler(interval, record,
 		func(flush func()) {
 			h.mu.Lock()
 			h.inExclusive = true
@@ -125,7 +125,7 @@ func (h *schedulerHarness) fireTimer(t *testing.T) {
 }
 
 func TestSignalSchedulerFirstMarkRunsInline(t *testing.T) {
-	h := newSchedulerHarness(10*time.Second, 2*time.Second)
+	h := newSchedulerHarness(10 * time.Second)
 
 	h.sched.markDirty(t.Context(), "s1")
 
@@ -135,8 +135,8 @@ func TestSignalSchedulerFirstMarkRunsInline(t *testing.T) {
 		"inline run should not arm a flush timer")
 }
 
-func TestSignalSchedulerDefersWithinIntervalThenQuietFlush(t *testing.T) {
-	h := newSchedulerHarness(10*time.Second, 2*time.Second)
+func TestSignalSchedulerDefersWithinIntervalThenFlushes(t *testing.T) {
+	h := newSchedulerHarness(10 * time.Second)
 
 	h.sched.markDirty(t.Context(), "s1")
 	require.Len(t, h.runsSnapshot(), 1)
@@ -147,15 +147,15 @@ func TestSignalSchedulerDefersWithinIntervalThenQuietFlush(t *testing.T) {
 	assert.Len(t, h.runsSnapshot(), 1,
 		"mark within interval should defer, not recompute")
 
-	h.advance(1 * time.Second)
+	h.advance(8 * time.Second)
 	h.sched.tick()
 	assert.Len(t, h.runsSnapshot(), 1,
-		"tick before quiet delay elapses should not flush")
+		"tick before the interval elapses should not flush, however quiet")
 
 	h.advance(1 * time.Second)
 	h.sched.tick()
 	assert.Equal(t, []string{"s1", "s1"}, h.runsSnapshot(),
-		"tick after quiet delay should flush the deferred recompute")
+		"tick once the interval elapses should flush the deferred recompute")
 
 	h.sched.tick()
 	assert.Len(t, h.runsSnapshot(), 2,
@@ -163,7 +163,7 @@ func TestSignalSchedulerDefersWithinIntervalThenQuietFlush(t *testing.T) {
 }
 
 func TestSignalSchedulerContinuousMarksHonorInterval(t *testing.T) {
-	h := newSchedulerHarness(10*time.Second, 2*time.Second)
+	h := newSchedulerHarness(10 * time.Second)
 
 	// Simulate a streaming session touching the scheduler every
 	// 500ms for 12 seconds, ticking once per second.
@@ -178,14 +178,58 @@ func TestSignalSchedulerContinuousMarksHonorInterval(t *testing.T) {
 	assert.Len(t, h.runsSnapshot(), 2,
 		"continuous writes should recompute once per interval")
 
-	h.advance(2 * time.Second)
+	h.advance(10 * time.Second)
 	h.sched.tick()
 	assert.Len(t, h.runsSnapshot(), 3,
-		"trailing flush should run after writes go quiet")
+		"trailing flush should run once the interval elapses")
+}
+
+// A live session's appends reach the scheduler once per watcher batch, a
+// few seconds apart. Each gap is long enough to look like the end of a
+// burst, so only the interval may bound the recomputes.
+func TestSignalSchedulerBatchedMarksHonorInterval(t *testing.T) {
+	h := newSchedulerHarness(10 * time.Second)
+
+	h.sched.markDirty(t.Context(), "s1")
+	// One minute of batches every five seconds, with the flush timer
+	// checking every second.
+	for second := 1; second <= 60; second++ {
+		h.advance(time.Second)
+		if second%5 == 0 {
+			h.sched.markDirty(t.Context(), "s1")
+		}
+		h.sched.tick()
+	}
+	assert.Len(t, h.runsSnapshot(), 7,
+		"batched writes should recompute once per interval")
+}
+
+func TestSignalSchedulerReportsTimerFlushes(t *testing.T) {
+	h := newSchedulerHarness(10 * time.Second)
+	reports := 0
+	h.sched.flushed = func() { reports++ }
+
+	h.sched.markDirty(t.Context(), "s1")
+	h.advance(1 * time.Second)
+	h.sched.markDirty(t.Context(), "s1")
+	h.sched.tick()
+	assert.Zero(t, reports, "a pass that recomputes nothing reports nothing")
+
+	h.advance(10 * time.Second)
+	h.sched.tick()
+	require.Len(t, h.runsSnapshot(), 2)
+	assert.Equal(t, 1, reports, "a deferred recompute must be reported")
+
+	h.sched.markDirty(t.Context(), "s1")
+	h.advance(1 * time.Second)
+	h.sched.markDirty(t.Context(), "s1")
+	h.sched.flushAllInline(t.Context())
+	assert.Equal(t, 1, reports,
+		"an explicit flush belongs to a sync or push that reports its own changes")
 }
 
 func TestSignalSchedulerSessionsIndependent(t *testing.T) {
-	h := newSchedulerHarness(10*time.Second, 2*time.Second)
+	h := newSchedulerHarness(10 * time.Second)
 
 	h.sched.markDirty(t.Context(), "a")
 	h.sched.markDirty(t.Context(), "b")
@@ -195,7 +239,7 @@ func TestSignalSchedulerSessionsIndependent(t *testing.T) {
 }
 
 func TestSignalSchedulerFlushAllRunsEverythingPending(t *testing.T) {
-	h := newSchedulerHarness(10*time.Second, 2*time.Second)
+	h := newSchedulerHarness(10 * time.Second)
 
 	h.sched.markDirty(t.Context(), "a")
 	h.sched.markDirty(t.Context(), "b")
@@ -215,7 +259,7 @@ func TestSignalSchedulerFlushAllRunsEverythingPending(t *testing.T) {
 }
 
 func TestSignalSchedulerTimerArmsOncePerBurstAndRearms(t *testing.T) {
-	h := newSchedulerHarness(10*time.Second, 2*time.Second)
+	h := newSchedulerHarness(10 * time.Second)
 
 	h.sched.markDirty(t.Context(), "s1")
 	require.Zero(t, h.armedCount())
@@ -228,24 +272,23 @@ func TestSignalSchedulerTimerArmsOncePerBurstAndRearms(t *testing.T) {
 	require.Equal(t, 1, h.armedCount(),
 		"further deferrals must not stack timers")
 
-	// Timer fires before the quiet delay has elapsed: nothing
-	// flushes, but the timer must re-arm to cover the still-dirty
-	// session.
+	// Timer fires before the interval has elapsed: nothing flushes,
+	// but the timer must re-arm to cover the still-dirty session.
 	h.fireTimer(t)
 	assert.Len(t, h.runsSnapshot(), 1)
 	require.Equal(t, 1, h.armedCount(),
 		"early fire with dirty sessions should re-arm")
 
-	h.advance(2 * time.Second)
+	h.advance(9 * time.Second)
 	h.fireTimer(t)
 	assert.Len(t, h.runsSnapshot(), 2,
-		"fire after quiet delay should flush")
+		"fire after the interval should flush")
 	assert.Zero(t, h.armedCount(),
 		"no dirty sessions left, timer should stay disarmed")
 }
 
 func TestSignalSchedulerStopFlushesAndRunsInlineAfter(t *testing.T) {
-	h := newSchedulerHarness(10*time.Second, 2*time.Second)
+	h := newSchedulerHarness(10 * time.Second)
 
 	h.sched.markDirty(t.Context(), "s1")
 	h.advance(1 * time.Second)
@@ -280,7 +323,7 @@ func TestSignalSchedulerStopWaitsForInflightTimerRun(t *testing.T) {
 		var startedOnce sync.Once
 		var mu sync.Mutex
 		clock := time.Unix(1_700_000_000, 0)
-		sched := newSignalScheduler(10*time.Second, 2*time.Second,
+		sched := newSignalScheduler(10*time.Second,
 			func(context.Context, string) {},
 			func(flush func()) {
 				startedOnce.Do(func() { close(started) })
@@ -303,10 +346,10 @@ func TestSignalSchedulerStopWaitsForInflightTimerRun(t *testing.T) {
 		sched.markDirty(t.Context(), "s1") // defers and arms the timer
 		require.NotNil(t, timerCB, "deferral should arm the flush timer")
 
-		// The timer fires after the quiet delay and the deferred run
+		// The timer fires after the interval and the deferred run
 		// blocks, simulating a recompute in the middle of DB work.
 		mu.Lock()
-		clock = clock.Add(3 * time.Second)
+		clock = clock.Add(10 * time.Second)
 		mu.Unlock()
 		go timerCB()
 		<-started
@@ -337,7 +380,7 @@ func TestSignalSchedulerStopWaitsForInflightTimerRun(t *testing.T) {
 // must recompute pending sessions via the inline callback, never
 // the deferred (lock-taking) one, and leave the scheduler running.
 func TestSignalSchedulerFlushAllInlineUsesInlinePath(t *testing.T) {
-	h := newSchedulerHarness(10*time.Second, 2*time.Second)
+	h := newSchedulerHarness(10 * time.Second)
 
 	h.sched.markDirty(t.Context(), "s1")
 	h.advance(1 * time.Second)
@@ -362,7 +405,7 @@ func TestSignalSchedulerFlushAllInlineUsesInlinePath(t *testing.T) {
 // the sync lock only in exclusive, so misrouting either way would
 // mean recomputes racing sync writes or a self-deadlock.
 func TestSignalSchedulerRoutesDeferredRunsSeparately(t *testing.T) {
-	h := newSchedulerHarness(10*time.Second, 2*time.Second)
+	h := newSchedulerHarness(10 * time.Second)
 
 	h.sched.markDirty(t.Context(), "s1")
 	assert.Empty(t, h.deferredSnapshot(),
@@ -370,7 +413,7 @@ func TestSignalSchedulerRoutesDeferredRunsSeparately(t *testing.T) {
 
 	h.advance(1 * time.Second)
 	h.sched.markDirty(t.Context(), "s1")
-	h.advance(2 * time.Second)
+	h.advance(9 * time.Second)
 	h.sched.tick()
 	assert.Equal(t, []string{"s1"}, h.deferredSnapshot(),
 		"tick flushes must use the deferred path")
@@ -454,10 +497,10 @@ func TestLockedFlushSeesSessionClaimedByBlockedTimer(t *testing.T) {
 		"second write within interval should defer the recompute")
 	require.NotNil(t, timerCB, "deferral should arm the flush timer")
 
-	// The quiet delay has elapsed by the time the timer fires, so
-	// its takeDue pass considers the session due.
+	// The interval has elapsed by the time the timer fires, so its
+	// takeDue pass considers the session due.
 	e.signalSched.now = func() time.Time {
-		return time.Now().Add(3 * time.Second)
+		return time.Now().Add(signalRecomputeInterval)
 	}
 
 	// Observe the timer requesting the existing exclusive section.
@@ -620,6 +663,62 @@ func TestSyncThenRunFlushesSignalsBeforeWork(t *testing.T) {
 		"work must observe flushed signal fields before pushing")
 }
 
+// The daemon applies each live watcher batch without follow-up work, every
+// few seconds. Such a batch must leave a deferred recompute to the timer, or
+// each batch reloads the session's whole history, and the timer pass must
+// report the new signals because the batch already reported its change.
+func TestWatchBatchLeavesDeferredSignalsToTimer(t *testing.T) {
+	fx := newEngineFixture(t)
+	em := &fakeEmitter{}
+	fx.engineWithEmitter(t.Context(), em)
+	var timerCB func()
+	fx.engine.signalSched.afterFunc = func(_ time.Duration, f func()) func() bool {
+		timerCB = f
+		return func() bool { return false }
+	}
+	path := fx.writeClaudeSession(t, "proj", "sig-watch.jsonl", "hello")
+	fx.engine.SyncAll(t.Context(), nil)
+	sid := fx.sessionIDFor(t, path)
+	apply := func(work func() error) {
+		t.Helper()
+		_, err := fx.engine.SyncWatchBatchThenRun(t.Context(),
+			WatchBatch{Paths: []string{path}}, nil, work)
+		require.NoError(t, err)
+	}
+
+	fx.appendClaudeMessage(t, path, "key AKIA7QHWN2DKR4FYPLJM leaked")
+	apply(nil)
+	require.Equal(t, 1, secretLeakCount(t, fx, sid),
+		"the first write recomputes inline")
+	fx.appendClaudeMessage(t, path, "key AKIA9XKQV3ZTN8WMB2RC leaked")
+	apply(nil)
+	assert.Equal(t, 1, secretLeakCount(t, fx, sid),
+		"a batch without work must leave the recompute deferred")
+
+	require.NotNil(t, timerCB, "the deferral should arm the flush timer")
+	fx.engine.signalSched.now = func() time.Time {
+		return time.Now().Add(signalRecomputeInterval)
+	}
+	reported := len(em.got())
+	timerCB()
+	assert.Equal(t, 2, secretLeakCount(t, fx, sid))
+	assert.Equal(t, []string{"sessions"}, em.got()[reported:],
+		"the timer pass must report the recomputed session")
+
+	fx.engine.signalSched.now = time.Now
+	fx.appendClaudeMessage(t, path, "continue")
+	apply(nil)
+	fx.appendClaudeMessage(t, path, "key AKIA2PLVWX6QR8ZKN4TJ leaked")
+	apply(nil)
+	require.Equal(t, 2, secretLeakCount(t, fx, sid))
+	seen := 0
+	apply(func() error {
+		seen = secretLeakCount(t, fx, sid)
+		return nil
+	})
+	assert.Equal(t, 3, seen, "work must observe settled signal fields")
+}
+
 // TestRunExclusiveFlushedFlushesSignalsBeforeWork mirrors the worker-backed
 // daemon push path: the sync ran in a worker process, so the push half runs
 // through RunExclusiveFlushed and must still observe flushed signal fields.
@@ -710,13 +809,13 @@ func TestSignalSchedulerRealTimerFlushes(t *testing.T) {
 			mu.Unlock()
 		}
 		sched := newSignalScheduler(
-			50*time.Millisecond, 10*time.Millisecond, run,
+			50*time.Millisecond, run,
 			func(flush func()) { flush() },
 		)
 
 		sched.markDirty(t.Context(), "s1")
 		sched.markDirty(t.Context(), "s1")
-		synctest.Sleep(10 * time.Millisecond)
+		synctest.Sleep(50 * time.Millisecond)
 		synctest.Wait()
 		mu.Lock()
 		defer mu.Unlock()
