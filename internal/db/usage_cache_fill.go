@@ -563,12 +563,10 @@ func (c *usageFillCoordinator) extractSessions(
 		return nil, nil, err
 	}
 	defer insertSession.Close()
-	compare := make(map[string]bool, len(extracted))
 	for id := range extracted {
 		var revision any
 		if expectation := expected[id]; expectation.Exists {
 			revision = expectation.InstallRevision
-			compare[id] = true
 		}
 		if _, err := insertSession.ExecContext(ctx, id, revision); err != nil {
 			return nil, nil, err
@@ -577,7 +575,7 @@ func (c *usageFillCoordinator) extractSessions(
 	messageIndexes := make(map[string]int, len(versions))
 	activityIndexes := make(map[string]int, len(versions))
 	eventIndexes := make(map[string]int, len(versions))
-	spoolWriter := usageFactSpoolWriter{ctx: ctx, tx: spoolTx, compare: compare}
+	spoolWriter := usageFactSpoolWriter{ctx: ctx, tx: spoolTx, expected: expected}
 	if err := c.extractUsageAppends(ctx, tx, spoolTx, extracted, expected, messageIndexes); err != nil {
 		return nil, nil, err
 	}
@@ -814,7 +812,7 @@ type usageFactSpoolWriter struct {
 	tx   *sql.Tx
 	rows [2][]usageFactSpoolRow
 
-	compare   map[string]bool
+	expected  map[string]usageFillInstallExpectation
 	fullBatch [2]*sql.Stmt
 }
 
@@ -822,7 +820,7 @@ func (w *usageFactSpoolWriter) Add(
 	sessionID string, index int, fact usagefacts.Fact,
 ) error {
 	batch := 0
-	if w.compare[sessionID] {
+	if w.expected[sessionID].Exists {
 		batch = 1
 	}
 	w.rows[batch] = append(w.rows[batch], usageFactSpoolRow{

@@ -824,6 +824,22 @@ func TestUsageSpoolRetainsOnlyChangedFacts(t *testing.T) {
 	}
 }
 
+func TestUsageSpoolRoutesCachedAndUncachedBatches(t *testing.T) {
+	spool, err := newUsageFactSpool(t.Context())
+	require.NoError(t, err)
+	defer spool.Close()
+	tx, err := spool.db.BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+	// Without an attached comparison database, only direct inserts can succeed.
+	writer := usageFactSpoolWriter{ctx: t.Context(), tx: tx, expected: map[string]usageFillInstallExpectation{"cached": {Exists: true}}}
+	fact := usagefacts.Fact{Source: "message", Model: "model", InputTokens: 10}
+	require.NoError(t, writer.Add("uncached", 0, fact))
+	require.NoError(t, writer.Flush())
+	require.NoError(t, writer.Add("cached", 0, fact))
+	require.ErrorContains(t, writer.Flush(), "comparison.usage_cached_sessions")
+}
+
 func TestUsageSpoolMixedCachedAndUncachedSessions(t *testing.T) {
 	database, cache := usageSpoolExtractionFixture(t, 1001)
 	for _, id := range []string{"a-uncached", "z-uncached"} {
