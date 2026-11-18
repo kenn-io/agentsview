@@ -83,7 +83,108 @@ The latest release is
   to install and run AgentsView there. See
   [Muse Personal](/docs/configuration/#muse-personal).
 
+- Find an earlier prompt in a long session by typing a few of its words. Press
+  `t`, or click **Jump to prompt** in the session header, and pick a prompt.
+  The transcript scrolls to it, even when that part of the session has not
+  loaded yet. See [Jump to a Prompt](/docs/usage/#jump-to-a-prompt).
+
+- Find a session by text that appears only inside a screenshot a tool
+  returned. Turn on `[image_text]` with a local GLM-OCR endpoint and restart
+  the daemon. The search palette and `agentsview session search` then match
+  words in those images. Images already in the archive are read once, without
+  reparsing transcripts. See [Image text](/docs/configuration/#image-text).
+
+- Read a session's compaction summaries without paging its transcript. Run
+  `agentsview session compactions <id>`, or call `get_compaction_summaries`
+  over MCP, which the `memory` profile includes. Both also take an
+  `active_since` time to collect summaries across sessions. See
+  [`session compactions`](/docs/session-api/#agentsview-session-compactions).
+
+- List the Recall entries that changed or appeared since your last checkpoint,
+  with no search query. Run `agentsview recall list --updated-since <time>` or
+  `--created-since <time>`, pass the same bounds to
+  `GET /api/v1/recall/entries`, or call the new `list_recall` MCP tool. See
+  [Recall](/docs/recall/#current-surface).
+
+- Set up conversation search for Claude Code and Codex with one command.
+  `agentsview agent setup` installs the AgentsView skills and registers the
+  `agentsview` MCP server for each agent it finds. It replaces a different
+  existing `agentsview` entry only with `--force`. See
+  [`agentsview agent setup`](/docs/commands/#agentsview-agent-setup).
+
+- Claude Code users can install AgentsView Memory from the repository's plugin
+  marketplace. The MCP guide compares it with `agentsview agent setup`, a plain
+  MCP entry, and `agentsview skills install`, and shows how to use the full
+  tool set in only some projects. See
+  [Choose an installation route](/docs/mcp/#choose-an-installation-route).
+
+- Trace a commit back to the agent session that made it. After
+  `agentsview git-hook install` in a repository, commits made from an agent
+  session end with a line such as
+  `Agent-Session: codex:12345678-1234-1234-1234-1234567890ab`. When the hook
+  cannot find exactly one session, it leaves the message unchanged. An existing
+  `commit-msg` hook is left alone, and the installer prints the line to add to
+  it. See [`agentsview git-hook`](/docs/commands/#agentsview-git-hook).
+
+- Sessions on models the pricing catalog does not know now show the cost the
+  agent recorded for them. This covers Pi, OpenClaw, QClaw, Shelley, fx,
+  OpenCode, Kilo, and MiMo Code. The catalog price still wins for every model
+  it knows, and a recorded cost of $0 never prices a row. Usage that carries a
+  cost but no model now counts in totals. `agentsview session usage` shows the
+  agent's figure next to AgentsView's as an `Agent cost:` line. See
+  [Costs the Agent Records Itself](/docs/token-usage/#costs-the-agent-records-itself).
+
+- `agentsview session usage` shows Claude Code's own running total for a
+  session as an `Agent total:` line, and as `session_total` in JSON. A gap
+  between it and AgentsView's cost points to model calls the transcript does
+  not hold. AgentsView only compares this total; it never adds it to usage.
+
+- Turn on **Always show year** in Settings > Appearance to tell sessions from
+  different years apart. Sidebar rows, message times, the session header, and
+  search palette results then include the year. Every sidebar time also shows
+  the full date when you hover it.
+
+- Apply a changed tool-result image policy from Settings with **Restart now**,
+  instead of restarting AgentsView yourself. The page reloads once the new
+  server answers. A server that cannot restart itself shows the steps to do it
+  by hand. See
+  [Ingest-time image offload](/docs/configuration/#ingest-time-image-offload).
+
+- `agentsview index embeddings build` now turns on search by meaning when it is
+  off. It asks before downloading the local model, then starts the build, with
+  no config edit or daemon restart. It needs a daemon that can write the
+  archive. See [Enabling `[vector]`](/docs/semantic-search/#enabling-vector).
+
+- `agentsview export sessions --wait` starts the local daemon if needed, shows
+  progress, and exports once project identification finishes. See
+  [`export sessions`](/docs/commands/#agentsview-export-sessions).
+
+- Set `integrations.docbank.allow_http = true` to reach Docbank over plain HTTP
+  on a private network, such as `http://docbank:8485` between containers. HTTP
+  sends the API key unencrypted, so use it only on a network you trust. See
+  [Find transcript images in Docbank](/docs/configuration/#find-transcript-images-in-docbank).
+
 **Improvements**
+
+- Session search finds messages that hold your words in any order. A search
+  for `invoice rounding decision` lists exact matches first, then messages that
+  hold every word, such as "rounding of invoices", then messages that hold
+  fewer. Unquoted words also match their regular forms, so `invoice` finds
+  `invoices`. A single word or a fully quoted query still searches for the
+  exact text. This applies to `agentsview session search` and MCP search, and
+  each match reports `matched_words`. See
+  [`session search`](/docs/session-api/#agentsview-session-search).
+
+- After you pick a result in the search palette, the next `Cmd+K` reopens the
+  same search with your pick highlighted, so trying the next result takes one
+  arrow key. `Esc` or a click outside the palette clears it. See
+  [Command Palette](/docs/usage/#search-modes).
+
+- A calmer, denser design shows more on screen across the app, and its text
+  meets WCAG contrast in every theme. The four transcript layouts share one
+  reading column; widen it with the new **Reading width** setting in Settings >
+  Appearance. Usage, Activity, Quality, and Trends share one page layout. See
+  [Message Layouts](/docs/usage/#message-layouts).
 
 - Searches and other CLI or MCP reads through a running daemon answer without
   waiting for a sync on most requests. A read now keeps the daemon syncing
@@ -292,6 +393,14 @@ The latest release is
 
 **Upgrade notes**
 
+- AgentsView can now turn on search by meaning without a setting of its own.
+  When you have turned on built-in search by meaning in another app that uses
+  Kit, and the model files are installed, the daemon turns it on at its next
+  launch and starts indexing. It does not change `config.toml` or download
+  anything. To keep it off, set `[vector] enabled = false`. Custom models,
+  configured servers, and setups that push vectors to PostgreSQL or ClickHouse
+  are left alone. See
+  [Turned on in another app](/docs/semantic-search/#turned-on-in-another-app).
 - Chrome Sync users must rerun `agentsview source chrome setup` and reload the
   extension at `chrome://extensions` once. The extension and AgentsView now
   speak a new version of their protocol, and the extension asks for access to

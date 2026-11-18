@@ -692,6 +692,9 @@ Appearance:
 | Stream  | Continuous flow optimized for reading                     |
 | Skim    | Collapses tool calls to summary headers for fast skimming |
 
+All four layouts share one reading column. To widen it, set **Reading width** in
+Settings > Appearance to **Wider** or **Full**.
+
 ### Focused Transcript Mode
 
 Focused mode strips intermediate tool calls, thinking blocks, and partial
@@ -868,6 +871,23 @@ in the header. The arrow icon indicates the current direction.
 
 Prompt navigation follows the visible transcript, so it respects Focused mode
 and the active block-type filter.
+
+### Jump to a Prompt
+
+In a long session, find an earlier prompt by typing a few of its words. Press
+`t`, or click **Jump to prompt** in the session header, then type in **Search
+prompts**. Words match anywhere in a prompt, in any order, ignoring case. Pick a
+prompt and the transcript scrolls to it, even when that part of the session has
+not loaded yet.
+
+- The list shows the newest prompts first, with each prompt's first line, its
+  number in the session, and its time.
+- Only prompts someone typed are listed. Injected context, tool output, shell
+  output, and compaction boundaries are left out. With block-type filters on,
+  the list holds only prompts the transcript shows.
+- At most 100 rows appear at once. Type to narrow a longer list.
+- In a live session, a new prompt joins the list once the transcript loads it.
+- The button is hidden at phone width.
 
 ### In-Session Search
 
@@ -1117,6 +1137,14 @@ Results use a compact row:
 Select a result to jump to that session and scroll directly to the matching
 message.
 
+After you pick a result, the next `Cmd+K` reopens the same search: the query,
+project, date range, sort, and results, with the result you picked highlighted.
+Press `↓` to try the next result, or type to start a new search. The query is
+selected, so typing replaces it. Click **Clear search** in the search field to
+start over with the sidebar's project and the default sort and date range.
+Closing the palette any other way, with `Esc`, a click outside it, or `Cmd+K`,
+clears the search. A page reload also clears it.
+
 ### Project and date filters
 
 Once your query is long enough to search, the palette shows project and date
@@ -1124,8 +1152,9 @@ controls. Search starts with the sidebar's selected project; choose another
 project or **All Projects** without changing the sidebar.
 
 Choose a relative period, calendar period, or custom dates. The filters apply
-to Full text, Semantic, and Hybrid searches. Closing the palette clears its date
-range; the next opening starts with the sidebar's current project again.
+to Full text, Semantic, and Hybrid searches. Closing the palette without picking
+a result clears its date range; the next opening starts with the sidebar's
+current project again.
 
 ![Command palette with project and date filters](/docs/assets/generated/screenshots/search-filters.png)
 
@@ -1368,6 +1397,7 @@ Press `?` to see all shortcuts in a modal overlay.
 | `k` / `↑` | Previous message                  |
 | `Shift+J` | Next user prompt                  |
 | `Shift+K` | Previous user prompt              |
+| `t`       | Jump to a prompt                  |
 | `]`       | Next session                      |
 | `[`       | Previous session                  |
 | `o`       | Toggle sort order                 |
@@ -1394,7 +1424,7 @@ organized into sections:
 | Section            | What You Can Configure                                                                                   |
 | ------------------ | -------------------------------------------------------------------------------------------------------- |
 | Language           | Interface language (Azerbaijani, English, French, Japanese, Korean, Spanish, Simplified Chinese, or Traditional Chinese)       |
-| Appearance         | Theme (light/dark), high-contrast mode, chart colors, message colors, message layout, zoom, always show year, block visibility |
+| Appearance         | Theme (light/dark), high-contrast mode, chart colors, message colors, message layout, reading width, zoom, always show year, block visibility |
 | Date ranges        | Browser-local checkbox for linking date selections across Sessions, Usage, Activity, Trends, and Quality |
 | Session Providers  | Enable session providers, inspect their session directories, and add alternate agent homes               |
 | Tool-result images | Choose whether future imports keep, drop, or offload tool-result images; preview and remove images already stored |
@@ -1414,8 +1444,9 @@ load; a saved language preference takes precedence.
 
 ![Chart color palette setting](/docs/assets/generated/screenshots/settings-chart-colors.png)
 
-Language, theme, high contrast, message colors, message layout, zoom, block
-visibility, and Date ranges preferences use local storage in the current browser or desktop
+Language, theme, high contrast, message colors, message layout, reading width,
+zoom, always show year, block visibility, and Date ranges preferences use local
+storage in the current browser or desktop
 webview profile. Each profile keeps its own choices. The optional `zoom_level`
 setting supplies a default when no local zoom or text-size preference exists.
 
