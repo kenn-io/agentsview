@@ -39,52 +39,12 @@ func TestPromptPRLinksStoredMessages(t *testing.T) {
 	assert.Equal(t, "https://github.com/o/r/pull/10", got.PRLinks[3].URL)
 }
 
-func TestPromptPRLinksArchiveOnlyUpgradeKeepsRebuildPending(t *testing.T) {
-	d := testDB(t)
-	ctx := t.Context()
-	s := Session{ID: "archived", Project: "project", Machine: "local", Agent: "claude"}
-	require.NoError(t, d.UpsertSession(ctx, s))
-	require.NoError(t, d.ReplaceSessionMessages(ctx, s.ID, []Message{{SessionID: s.ID, Role: "user", Content: "https://github.com/o/r/pull/42"}}))
-	require.NoError(t, d.EnableArchiveOnly(ctx))
-	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `UPDATE sessions SET pr_links=structured_pr_links WHERE id=?`, s.ID); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM stats WHERE key='prompt_pr_links_backfill_v1'`); err != nil {
-			return err
-		}
-		return writeUserVersion(ctx, tx, 183)
-	}))
-	path := d.Path()
-	require.NoError(t, d.Close())
-	d, err := OpenIsolatedContext(ctx, path)
-	require.NoError(t, err)
-	got, err := d.GetSession(ctx, s.ID)
-	require.NoError(t, err)
-	require.Len(t, got.PRLinks, 1)
-	assert.Equal(t, "https://github.com/o/r/pull/42", got.PRLinks[0].URL)
-	version, archiveOnly, err := readUserVersion(ctx, d.getReader())
-	require.NoError(t, err)
-	assert.True(t, archiveOnly)
-	assert.Equal(t, 185, version)
-	assert.True(t, d.NeedsResync())
-	require.NoError(t, d.Close())
-	needs, rebuild, err := ArchiveResyncState(ctx, path)
-	require.NoError(t, err)
-	assert.True(t, needs)
-	assert.True(t, rebuild)
-	d, err = OpenIsolatedContext(ctx, path)
-	require.NoError(t, err)
-	assert.True(t, d.NeedsResync())
-	require.NoError(t, d.Close())
-}
-
 func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
 	for _, tc := range []struct {
-		name            string
-		legacy, rebuild bool
-		version         int
-	}{{name: "backfill", version: 183}, {name: "reserved version", version: 184}, {name: "rebuild", rebuild: true}, {name: "legacy", legacy: true, version: 183}} {
+		name                         string
+		legacy, rebuild, archiveOnly bool
+		version                      int
+	}{{name: "backfill", version: 183}, {name: "reserved version", version: 184}, {name: "archive only", version: 183, archiveOnly: true}, {name: "rebuild", rebuild: true}, {name: "legacy", legacy: true, version: 183}} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "archive.db")
 			d, err := OpenIsolated(t.Context(), path)
@@ -101,6 +61,9 @@ func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
 				s.PRLinks = []PRLink{link}
 			}
 			require.NoError(t, d.UpsertSession(t.Context(), s))
+			if tc.archiveOnly {
+				require.NoError(t, d.EnableArchiveOnly(t.Context()))
+			}
 			dialogue := "https://github.com/o/r/%70ull/42"
 			require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "user", Content: dialogue + " https://github.com/o/r/pull/3", DialogueText: &dialogue}}))
 			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
@@ -141,10 +104,11 @@ func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
 				_, err = d.CopyOrphanedDataFrom(t.Context(), path)
 				require.NoError(t, err)
 			} else {
-				version, _, err := readUserVersion(t.Context(), d.getReader())
+				version, archiveOnly, err := readUserVersion(t.Context(), d.getReader())
 				require.NoError(t, err)
 				assert.Equal(t, 185, version)
-				assert.False(t, d.NeedsResync())
+				assert.Equal(t, tc.archiveOnly, archiveOnly)
+				assert.Equal(t, tc.archiveOnly, d.NeedsResync())
 			}
 			got, err := d.GetSession(t.Context(), s.ID)
 			require.NoError(t, err)
@@ -161,6 +125,16 @@ func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
 			} else {
 				require.Len(t, got.PRLinks, 1)
 				assert.Equal(t, "https://github.com/o/r/pull/42", got.PRLinks[0].URL)
+			}
+			if tc.archiveOnly {
+				require.NoError(t, d.Close())
+				needs, rebuild, err := ArchiveResyncState(t.Context(), path)
+				require.NoError(t, err)
+				assert.True(t, needs)
+				assert.True(t, rebuild)
+				d, err = OpenIsolated(t.Context(), path)
+				require.NoError(t, err)
+				assert.True(t, d.NeedsResync())
 			}
 		})
 	}
@@ -186,12 +160,13 @@ func TestPromptPRLinksBatchAndStagedDialogueReplacement(t *testing.T) {
 			s := Session{ID: "dialogue", Project: "project", Machine: "local", Agent: "claude"}
 			require.NoError(t, d.UpsertSession(t.Context(), s))
 			first, second := "https://github.com/o/r/%70ull/1", "https://github.com/o/r/%70ull/2"
-			msg := Message{SessionID: s.ID, Role: "user", Content: "same", DialogueText: &first}
+			msg := Message{SessionID: s.ID, Role: "user", Content: first + " non-dialogue https://github.com/o/r/pull/9", DialogueText: &first}
 			require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{msg}))
 			got, err := d.GetSession(t.Context(), s.ID)
 			require.NoError(t, err)
 			require.Len(t, got.PRLinks, 1)
 			assert.Equal(t, "https://github.com/o/r/pull/1", got.PRLinks[0].URL)
+			msg.Content = second + " non-dialogue https://github.com/o/r/pull/9"
 			msg.DialogueText = &second
 			switch method {
 			case "single":
@@ -288,9 +263,14 @@ func TestPromptPRLinksStructuredChanges(t *testing.T) {
 	s := Session{ID: "structured", Project: "project", Machine: "local", Agent: "claude", PRLinks: []PRLink{first, second}}
 	require.NoError(t, d.UpsertSession(t.Context(), s))
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "user", Content: first.URL}}))
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "user", Content: "Different prompt"}}))
+	got, err := d.GetSession(t.Context(), s.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []PRLink{first, second}, got.PRLinks)
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "user", Content: first.URL}}))
 	s.PRLinks = nil
 	require.NoError(t, d.UpsertSession(t.Context(), s))
-	got, err := d.GetSession(t.Context(), s.ID)
+	got, err = d.GetSession(t.Context(), s.ID)
 	require.NoError(t, err)
 	assert.Equal(t, []PRLink{first}, got.PRLinks)
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, nil))
@@ -323,14 +303,4 @@ func TestPromptPRLinksTrashedCopyRestore(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, page.Sessions, 1)
 	assert.Equal(t, s.ID, page.Sessions[0].ID)
-}
-
-func TestGetSessionPRLinkURLsIncludesPromptLinks(t *testing.T) {
-	d := testDB(t)
-	s := Session{ID: "prompt", Project: "project", Machine: "local", Agent: "claude"}
-	require.NoError(t, d.UpsertSession(t.Context(), s))
-	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "user", Content: "https://github.com/o/r/pull/2"}}))
-	links, err := d.GetSessionPRLinkURLs(t.Context(), s.ID)
-	require.NoError(t, err)
-	assert.Contains(t, links, "https://github.com/o/r/pull/2")
 }

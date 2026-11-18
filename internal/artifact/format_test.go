@@ -241,32 +241,16 @@ func TestCanonicalMessageSegmentGolden(t *testing.T) {
 	assert.Equal(t, "82e4eeade6fc98954138216965f85fe628f5d037ccf4ec3b4cfb7bfc71b4921a", hashHex(data))
 }
 
-func TestSegmentMixedDialogueRequiresNewReader(t *testing.T) {
-	data, err := encodeSegment([]db.Message{{Role: "user", Content: "ordinary"}, {Ordinal: 1, Role: "user", Content: "prompt", DialogueText: new("prompt")}})
-	require.NoError(t, err)
-	messages, err := decodeSegment(data)
-	require.NoError(t, err)
-	require.Len(t, messages, 2)
-	assert.Equal(t, new("prompt"), messages[1].DialogueText)
-	assert.Contains(t, string(data), `"v":5`)
-	assert.NotContains(t, string(data), `"v":4`)
-}
-
 func TestSegmentDialogueRequiresNewReader(t *testing.T) {
 	dialogue := "https://github.com/o/r/pull/1"
-	data, err := encodeSegment([]db.Message{{Role: "user", Content: dialogue + " other", DialogueText: &dialogue}})
+	data, err := encodeSegment([]db.Message{{Role: "user", Content: "ordinary"}, {Ordinal: 1, Role: "user", Content: dialogue + " other", DialogueText: &dialogue}})
 	require.NoError(t, err)
-	// A version 4 reader has no dialogue_text field and accepts versions up to 4.
-	var legacy struct {
-		Version int    `json:"v"`
-		Content string `json:"content"`
-	}
-	require.NoError(t, json.Unmarshal(data, &legacy))
-	require.Greater(t, legacy.Version, 4, "version 4 reader accepts segment but drops prompt classification: content %q", legacy.Content)
+	assert.Contains(t, string(data), `"v":5`)
+	assert.NotContains(t, string(data), `"v":4`)
 	current, err := decodeSegment(data)
 	require.NoError(t, err)
-	require.Len(t, current, 1)
-	assert.Equal(t, &dialogue, current[0].DialogueText)
+	require.Len(t, current, 2)
+	assert.Equal(t, &dialogue, current[1].DialogueText)
 	old, err := decodeSegment([]byte("{\"v\":4,\"ordinal\":0,\"role\":\"user\",\"content\":\"legacy\"}\n"))
 	require.NoError(t, err)
 	require.Len(t, old, 1)

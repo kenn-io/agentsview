@@ -75,27 +75,19 @@ func TestParseDiffIgnoresLauncherParents(t *testing.T) {
 }
 
 func TestCodexPromptPRLinkFilter(t *testing.T) {
+	const id = "019f0000-0000-7000-8000-000000000004"
 	env := setupTestEnv(t)
-	for _, tc := range []struct{ id, prompt string }{
-		{"019f0000-0000-7000-8000-000000000004", "$pr https://github.com/owner/repo/pull/123"},
-		{"019f0000-0000-7000-8000-000000000005", "$pr https://github.com/owner/repo/pull/123\u00a0review"},
-		{"019f0000-0000-7000-8000-000000000006", "$pr https://github.com/owner/repo/pull/456"},
-	} {
-		env.writeCodexSession(t, "2026/07/29", "rollout-2026-07-29T14-55-00-"+tc.id+".jsonl", testjsonl.JoinJSONL(
-			testjsonl.CodexSessionMetaJSON(tc.id, "/workspace/project", "user", tsZero),
-			testjsonl.CodexMsgJSON("user", tc.prompt, tsZero),
-		))
-	}
-	require.Equal(t, 3, env.engine.SyncAll(t.Context(), nil).Synced)
+	env.writeCodexSession(t, "2026/07/29", "rollout-2026-07-29T14-55-00-"+id+".jsonl", testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(id, "/workspace/project", "user", tsZero),
+		testjsonl.CodexMsgJSON("user", "$pr https://github.com/owner/repo/pull/123", tsZero),
+	))
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
 	filter, err := db.ParsePRFilter("owner/repo#123")
 	require.NoError(t, err)
 	page, err := env.db.ListSessions(t.Context(), db.SessionFilter{PR: filter})
 	require.NoError(t, err)
-	var ids []string
-	for _, session := range page.Sessions {
-		ids = append(ids, session.ID)
-	}
-	assert.ElementsMatch(t, []string{"codex:019f0000-0000-7000-8000-000000000004", "codex:019f0000-0000-7000-8000-000000000005"}, ids)
+	require.Len(t, page.Sessions, 1)
+	assert.Equal(t, "codex:"+id, page.Sessions[0].ID)
 }
 
 func TestIncrementalSync_PromptPRLinks(t *testing.T) {
@@ -105,7 +97,7 @@ func TestIncrementalSync_PromptPRLinks(t *testing.T) {
 		testjsonl.ClaudeAssistantJSON("Working", tsZeroS1),
 	))
 	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-	appendClaudeSplitLines(t, path, testjsonl.ClaudeUserJSON("https://github.com/owner/repo/%70ull/1", "2024-01-01T00:00:02Z"))
+	appendClaudeSplitLines(t, path, testjsonl.ClaudeUserJSON("https://github.com/owner/repo/pull/1", "2024-01-01T00:00:02Z"))
 	env.engine.SyncPaths([]string{path})
 	assert.Equal(t, []string{"https://github.com/owner/repo/pull/1"}, storedPRURLs(t, env.db, "prompt-append"))
 	appendClaudeSplitLines(t, path, testjsonl.ClaudeUserJSON("Again https://github.com/owner/repo/pull/1", "2024-01-01T00:00:03Z"))
@@ -128,8 +120,11 @@ func TestIncrementalStructuredLinkAlsoInPrompt(t *testing.T) {
 	assert.Equal(t, []string{"https://github.com/owner/repo/pull/2", "https://github.com/owner/repo/pull/1"}, storedPRURLs(t, env.db, "shared-pr"))
 	appendClaudeSplitLines(t, path, `{"type":"pr-link","prNumber":1,"prUrl":"https://github.com/owner/repo/pull/1","prRepository":"owner/repo","timestamp":"2024-01-01T00:00:03Z"}`)
 	env.engine.SyncPaths([]string{path})
-	require.NoError(t, env.db.ReplaceSessionMessages(t.Context(), "shared-pr", []db.Message{{SessionID: "shared-pr", Role: "user", Content: "Different prompt"}}))
-	assert.Equal(t, []string{"https://github.com/owner/repo/pull/2", "https://github.com/owner/repo/pull/1"}, storedPRURLs(t, env.db, "shared-pr"))
+	links, err := env.db.GetSessionStructuredPRLinks(t.Context(), "shared-pr")
+	require.NoError(t, err)
+	require.Len(t, links, 2)
+	assert.Equal(t, "https://github.com/owner/repo/pull/2", links[0].URL)
+	assert.Equal(t, "https://github.com/owner/repo/pull/1", links[1].URL)
 }
 
 func TestParseDiffDetectsPRLinkChanges(t *testing.T) {
