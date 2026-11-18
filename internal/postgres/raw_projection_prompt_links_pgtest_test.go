@@ -153,7 +153,12 @@ func TestRawProjectionFencesStaleAndSkipsCurrentTombstonedCapture(t *testing.T) 
 		leases, err := f.jobs.ClaimRawParseJobs(t.Context(), "upgrade-worker", 1, time.Minute)
 		require.NoError(t, err)
 		require.Len(t, leases, 1)
+		var corpusBefore int64
+		require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT corpus_revision FROM raw_corpus_state`).Scan(&corpusBefore))
 		require.NoError(t, f.sink.Project(t.Context(), leases[0], tomb, rawderive.ParsedManifest{Tombstone: true}))
+		var corpusAfter int64
+		require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT corpus_revision FROM raw_corpus_state`).Scan(&corpusAfter))
+		assert.Equal(t, corpusBefore, corpusAfter, stage)
 		var version int
 		require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT data_version FROM sessions WHERE id=$1`, resolved.SessionID).Scan(&version))
 		want := db.CurrentDataVersion()

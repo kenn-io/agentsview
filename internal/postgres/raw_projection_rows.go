@@ -63,15 +63,19 @@ func syncSelectedRawPRLinks(ctx context.Context, tx *sql.Tx, group string, dialo
 			return false, err
 		}
 		links := db.EncodePRLinks(parser.MergePRLinks(payload.Session.PRLinks, db.PromptPRLinks(payload.Messages)))
-		result, err := tx.ExecContext(ctx, `UPDATE sessions SET pr_links=$2,data_version=GREATEST(data_version,$3) WHERE id=$1 AND (pr_links IS DISTINCT FROM $2 OR data_version<$3)`, id, links, db.CurrentDataVersion())
+		var linksChanged bool
+		err = tx.QueryRowContext(ctx, `WITH prior AS (
+ SELECT pr_links FROM sessions WHERE id=$1 FOR UPDATE
+), updated AS (
+ UPDATE sessions SET pr_links=$2,data_version=GREATEST(data_version,$3)
+ FROM prior WHERE id=$1 AND (sessions.pr_links IS DISTINCT FROM $2 OR data_version<$3)
+ RETURNING prior.pr_links IS DISTINCT FROM $2 AS links_changed
+)
+SELECT COALESCE((SELECT links_changed FROM updated),false)`, id, links, db.CurrentDataVersion()).Scan(&linksChanged)
 		if err != nil {
 			return false, err
 		}
-		count, err := result.RowsAffected()
-		if err != nil {
-			return false, err
-		}
-		changed = changed || count > 0
+		changed = changed || linksChanged
 	}
 	return changed, nil
 }
