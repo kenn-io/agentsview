@@ -23,9 +23,16 @@ type artifactPublicationStreamer interface {
 	StreamArtifactPublications(context.Context, string, func(db.ArtifactPublication) error) (int64, error)
 }
 
+// artifactCreator also lets an explicit single-session transfer capture only
+// its immutable dependencies, without running publication or checkpoint work.
+type artifactCreator interface {
+	Create(context.Context, Ref, Identity, string, io.Reader) (CreateResult, error)
+}
+
 type artifactExportStore interface {
 	artifactPublicationStreamer
 	ListOwnedSessionIDsForExport(context.Context) ([]string, error)
+	SessionPushReservations(context.Context, []string) (map[string]bool, error)
 	CountPendingArtifactExports(context.Context) (int, error)
 	PendingArtifactExports(context.Context, int) ([]db.ArtifactExportQueueItem, error)
 	ArtifactExportClaims(context.Context, []string) ([]db.ArtifactExportQueueItem, error)
@@ -134,6 +141,10 @@ func exportToStoreWithLimits(
 	if err != nil {
 		return ExportResult{}, err
 	}
+	reserved, err := database.SessionPushReservations(ctx, selected)
+	if err != nil {
+		return ExportResult{}, fmt.Errorf("checking pushed session reservations: %w", err)
+	}
 	changes := make([]db.ArtifactPublicationChange, 0, len(claims))
 	outcomes := make([]db.ArtifactExportOutcome, 0, len(claims))
 	result := ExportResult{}
@@ -146,7 +157,7 @@ func exportToStoreWithLimits(
 		if err != nil {
 			return result, fmt.Errorf("loading artifact export session %s: %w", sessionID, err)
 		}
-		if sess == nil || !slices.Contains(localMachines, sess.Machine) || sess.DeletedAt != nil {
+		if reserved[sessionID] || sess == nil || !slices.Contains(localMachines, sess.Machine) || sess.DeletedAt != nil {
 			if claimed {
 				changes = append(changes, db.ArtifactPublicationChange{
 					SessionID: sessionID, Generation: claim.Generation, Delete: true,
@@ -507,15 +518,16 @@ func selectArtifactExportSessionIDs(
 
 func exportLoadedSessionToStore(
 	ctx context.Context,
-	store ArtifactStore,
+	store artifactCreator,
 	origin string,
 	sess *db.Session,
 	messages []db.Message,
 	usageEvents []db.UsageEvent,
 	planUsage *db.SessionPlanUsage,
 	limits artifactLimits,
+	allowQualifiedID bool,
 ) (string, bool, error) {
-	if sess.ID == "" || strings.Contains(sess.ID, "~") {
+	if sess.ID == "" || (!allowQualifiedID && strings.Contains(sess.ID, "~")) {
 		return "", false, rejectArtifactExportf(
 			"native session ID %q is invalid: must be non-empty and exclude '~'",
 			sess.ID,
@@ -621,13 +633,13 @@ func exportClaimedSessionToStore(
 	}
 	return exportLoadedSessionToStore(
 		ctx, store, origin, sess, data.Messages, data.UsageEvents,
-		data.PlanUsage, limits,
+		data.PlanUsage, limits, false,
 	)
 }
 
 func exportMessageSegmentsToStore(
 	ctx context.Context,
-	store ArtifactStore,
+	store artifactCreator,
 	origin string,
 	sessionID string,
 	messages []db.Message,

@@ -514,6 +514,19 @@ func TestTranscriptsArchiveContentKeepsTextAndDropsToolPayloads(t *testing.T) {
 	assert.Empty(t, link.ResultEvents[0].Content)
 	assert.Equal(t, 15, link.ResultEvents[0].ContentLength)
 	assert.Equal(t, "errored", link.ResultEvents[0].Status)
+
+	origin, id := "peer-example", "peer-example~imported"
+	imported := ArtifactImportedSession{Origin: origin, GID: id, ImportedSessionID: id, ManifestHash: strings.Repeat("a", 64)}
+	write := SessionBatchWrite{Session: Session{ID: id, Machine: origin, Agent: "claude"}, Messages: []Message{{SessionID: id, Role: "assistant", ToolCalls: []ToolCall{{ToolName: "Read", ResultContent: "error: failed"}}}}, Signals: SessionSignalUpdate{ToolFailureSignalCount: 1, ToolRetryCount: 1, QualitySignals: QualitySignals{Version: CurrentQualitySignalVersion}}, ReplaceMessages: true}
+	result, err := database.ApplyArtifactImportedSession(t.Context(), imported, write)
+	require.NoError(t, err)
+	require.True(t, result.Written)
+	importedSession, err := database.GetSessionFull(t.Context(), id)
+	require.NoError(t, err)
+	require.NotNil(t, importedSession)
+	assert.Zero(t, importedSession.ToolFailureSignalCount)
+	assert.Zero(t, importedSession.ToolRetryCount)
+	assert.Zero(t, importedSession.QualitySignalVersion)
 }
 
 func TestTranscriptArchiveRedactsQuotedToolRenderingFromDialogue(t *testing.T) {

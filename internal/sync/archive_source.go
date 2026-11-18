@@ -20,52 +20,67 @@ func (e *Engine) sessionArchiveProvenance(session *db.Session, native string) (*
 	return &p, nil
 }
 
-// Check kept and excluded results before staging freshness or other session
-// writes: one conflicting DAG member must leave every existing member unchanged.
-func (e *Engine) validateSourceSessionOwnership(ctx context.Context, res processResult) error {
+// Check every unreserved member before staging freshness or session writes.
+func (e *Engine) validateSourceSessionOwnership(ctx context.Context, res processResult) (map[string]bool, error) {
+	ids := make([]string, 0, len(res.results)+len(res.excludedSessionIDs)+1)
+	for _, result := range res.results {
+		ids = append(ids, applyIDPrefixToID(e.idPrefix, result.Session.ID))
+	}
+	ids = append(ids, e.applyIDPrefixToSessionIDs(res.excludedSessionIDs)...)
+	if res.incremental != nil {
+		ids = append(ids, applyIDPrefixToID(e.idPrefix, res.incremental.sessionID))
+	}
+	reserved, err := e.db.SessionPushReservations(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
 	baseline := e.db
 	if old, ok := e.archiveStore.(*db.DB); ok {
 		baseline = old
 	}
 	for _, result := range res.results {
+		if reserved[applyIDPrefixToID(e.idPrefix, result.Session.ID)] {
+			continue
+		}
 		session, err := ingest.ConvertSessionContext(ctx, result.Session, nil)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if err := e.applyRemoteRewritesContext(ctx, &session, nil); err != nil {
-			return err
+			return nil, err
 		}
 		provenance, err := e.sessionArchiveProvenance(&session, result.Session.ID)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if baseline != e.db && provenance != nil {
 			if err := baseline.CheckExistingArchiveProvenance(ctx, session.ID, *provenance); err != nil {
-				return err
+				return nil, err
 			}
 		}
 		if err := e.db.CheckArchiveSessionProvenance(ctx, session, provenance); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if !e.sourceAllowsParserExclusions(res) {
-		return nil
+		return reserved, nil
 	}
-	excluded := e.applyIDPrefixToSessionIDs(res.excludedSessionIDs)
-	for _, id := range excluded {
-		if id == "" {
+	var excluded []string
+	for _, id := range e.applyIDPrefixToSessionIDs(res.excludedSessionIDs) {
+		if id == "" || reserved[id] {
 			continue
 		}
-		// Exclusion deletes have no ownership grant, even for an attached
-		// source. The delete transaction repeats this check.
 		if err := e.db.CheckArchiveSessionProvenance(ctx, db.Session{ID: id}, nil); err != nil {
-			return err
+			return nil, err
 		}
+		excluded = append(excluded, id)
 	}
 	if len(excluded) > 0 && e.parserExclusionPolicy != nil {
-		return e.parserExclusionPolicy(ctx, excluded)
+		if err := e.parserExclusionPolicy(ctx, excluded); err != nil {
+			return nil, err
+		}
 	}
-	return nil
+	return reserved, nil
 }
 
 func (e *Engine) writeAttachedStaged(ctx context.Context, prepared preparedSessionWrite, pw pendingWrite, provenance *db.ArchiveSessionProvenance) error {

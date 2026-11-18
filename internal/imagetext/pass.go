@@ -66,7 +66,7 @@ func (m *Manager) processImage(ctx context.Context, identity ocr.Identity, hash 
 			break
 		}
 		item := items[0]
-		body, err := db.ReadRetainedImage(item.Content, item.Index, m.DB.AssetsDir(), glmocr.MaxDocumentBytes)
+		body, err := db.ReadRetainedImage(ctx, item.Content, item.Index, m.DB.AssetsDir(), glmocr.MaxDocumentBytes)
 		if errors.Is(err, db.ErrImageTooLarge) {
 			log.Printf("image text: skipping %s: %v", hash, err)
 			return m.DB.SaveImageText(ctx, hash, identity, "", false)

@@ -27,7 +27,8 @@ const (
 	// leave ample room for unusually long sessions without letting many valid
 	// chunks amplify during aggregation. Sixteen references accommodate uneven
 	// 32 MiB chunks; the aggregate byte cap remains the final session bound.
-	maxManifestSegments    = 16
+	// MaxManifestSegments bounds segment references in a manifest.
+	MaxManifestSegments    = 16
 	maxManifestUsageEvents = 32_768
 	maxSegmentMessages     = 4_096
 	maxSessionMessages     = 32_768
@@ -79,7 +80,7 @@ type artifactLimits struct {
 
 func productionArtifactLimits() artifactLimits {
 	return artifactLimits{
-		manifestSegments:    maxManifestSegments,
+		manifestSegments:    MaxManifestSegments,
 		manifestUsageEvents: maxManifestUsageEvents,
 		planUsageGroups:     maxManifestPlanUsageGroups,
 		segmentMessages:     maxSegmentMessages,

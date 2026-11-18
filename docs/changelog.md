@@ -19,6 +19,10 @@ The latest release is
   to another source. See
   [Read secrets from files](/docs/configuration/#read-secrets-from-files).
 
+- Push one archived session to another authenticated AgentsView instance with
+  `agentsview push`. Enable `accept_session_push` on the receiving instance.
+  See [Push one archived session](/docs/remote-access/#push-one-archived-session).
+
 - Track token usage and cost for tools that call model APIs directly, with no
   coding agent in between. Such a tool writes body-free session files to
   `~/.agentsview/direct-api/`, and AgentsView lists them as **Direct API**

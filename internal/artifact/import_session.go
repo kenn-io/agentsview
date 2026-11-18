@@ -70,7 +70,7 @@ func loadImportedSession(
 			ctx, store, manifestRef, "invalid import manifest",
 		)
 	}
-	if err := validateImportedManifest(m, origin, gid, limits); err != nil {
+	if err := validateImportedManifest(m, origin, gid, limits, false); err != nil {
 		return quarantineImportDependency(
 			ctx, store, manifestRef, "invalid import manifest",
 		)
@@ -185,15 +185,12 @@ func downgradeImportedAssetContent(content string) string {
 }
 
 func validateImportedManifest(
-	m manifest, origin, gid string, limits artifactLimits,
+	m manifest, origin, gid string, limits artifactLimits, allowQualifiedID bool,
 ) error {
-	if m.Version < manifestMinDecodeVersion || m.Version > manifestFormatVersion {
-		return errors.New("manifest version is unsupported")
-	}
 	if m.Origin != origin {
 		return errors.New("manifest origin is invalid")
 	}
-	if m.NativeSessionID == "" || strings.Contains(m.NativeSessionID, "~") {
+	if m.NativeSessionID == "" || (!allowQualifiedID && strings.Contains(m.NativeSessionID, "~")) {
 		return errors.New("manifest native session ID is invalid")
 	}
 	if gid != origin+"~"+m.NativeSessionID {
@@ -205,18 +202,13 @@ func validateImportedManifest(
 	if m.Session.Machine != origin {
 		return errors.New("manifest session machine is invalid")
 	}
-	if len(m.Segments) == 0 || len(m.Segments) > limits.manifestSegments {
+	if len(m.Segments) == 0 {
 		return errors.New("manifest segment references are invalid")
 	}
-	seen := make(map[string]struct{}, len(m.Segments))
 	for _, segmentHash := range m.Segments {
 		if err := validateHashHex(segmentHash); err != nil {
 			return err
 		}
-		if _, exists := seen[segmentHash]; exists {
-			return errors.New("manifest has duplicate segment reference")
-		}
-		seen[segmentHash] = struct{}{}
 	}
 	if len(m.UsageEvents) > limits.manifestUsageEvents {
 		return errors.New("manifest usage event limit exceeded")
@@ -225,7 +217,11 @@ func validateImportedManifest(
 }
 
 func validateImportedClosure(m manifest, messages []db.Message) error {
-	if m.Session.MessageCount != len(messages) {
+	return validateImportedClosureCounts(m, messages, true)
+}
+
+func validateImportedClosureCounts(m manifest, messages []db.Message, checkCounts bool) error {
+	if checkCounts && m.Session.MessageCount != len(messages) {
 		return errors.New("manifest message count does not match segment messages")
 	}
 	if m.Session.UserMessageCount < 0 ||
@@ -243,7 +239,7 @@ func validateImportedClosure(m manifest, messages []db.Message) error {
 			userMessageCount++
 		}
 	}
-	if m.Session.UserMessageCount != userMessageCount {
+	if checkCounts && m.Session.UserMessageCount != userMessageCount {
 		return errors.New(
 			"manifest user message count does not match segment messages",
 		)
@@ -293,18 +289,11 @@ func rewriteManifestForImport(
 	m manifest, messages []db.Message,
 ) db.SessionBatchWrite {
 	importedID := m.Origin + "~" + m.NativeSessionID
-	session := m.Session.dbSession()
+	session := sessionFromManifest(m)
 	session.ID = importedID
 	session.Machine = m.Origin
-	session.SessionName = m.SessionName
 	session.DeletedAt = nil
 	session.DeletionCause = nil
-	clearImportedSessionSourceState(&session)
-	session.HasToolCalls = m.SessionHasToolCalls
-	session.HasContextData = m.SessionHasContextData
-	session.ApplyQualitySignals(m.SessionQualitySignals.dbQualitySignals())
-	session.SecretLeakCount = 0
-	session.SecretsRulesVersion = ""
 	session.SourceSessionID = prefixImportedSessionID(
 		m.Origin, session.SourceSessionID,
 	)
@@ -341,6 +330,18 @@ func rewriteManifestForImport(
 		DataVersion:     m.DataVersion,
 		ReplaceMessages: true,
 	}
+}
+
+func sessionFromManifest(m manifest) db.Session {
+	session := m.Session.dbSession()
+	clearImportedSessionSourceState(&session)
+	session.HasToolCalls = m.SessionHasToolCalls
+	session.HasContextData = m.SessionHasContextData
+	session.SessionName = m.SessionName
+	session.ApplyQualitySignals(m.SessionQualitySignals.dbQualitySignals())
+	session.SecretLeakCount = 0
+	session.SecretsRulesVersion = ""
+	return session
 }
 
 func clearImportedSessionSourceState(session *db.Session) {

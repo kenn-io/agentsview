@@ -210,6 +210,9 @@ rebuilds; ordinary archives keep their parser version unchanged. Data version
 173 requires no source reparse; it keeps older binaries from writing archives
 whose image-text index they cannot maintain.
 
+Data version 184 requires no source reparse; it keeps older binaries from
+writing archives with pushed sessions they cannot preserve.
+
 ### Artifact checkpoint landings
 
 Land artifact checkpoints only through
@@ -1587,8 +1590,9 @@ own metadata, which is why the docs below call the database a mirror.
   collapse them, and deleting them writes patch rows. A push that appends to a
   session that only grew keeps the rows of its stored messages, or of all but
   the last when only the last changed, and limits that delete, in the tables
-  listed in `messageOrdinalColumn`, to ordinals after the last kept one. A change to how a push renders a row in those tables must
-  change `messageRowsFingerprints` with it, or appends will keep stale rows. See
+  listed in `messageOrdinalColumn`, to ordinals after the last kept one. A
+  change to how a push renders a row in those tables must change
+  `messageRowsFingerprints` with it, or appends will keep stale rows. See
   [appends](../internal/clickhouse-mirror.md#pushes-rewrite-only-what-differs).
   Store every ClickHouse push cursor and version in the mirror's
   `sync_metadata`. Never store ClickHouse sync state in SQLite.
@@ -1597,9 +1601,9 @@ own metadata, which is why the docs below call the database a mirror.
   Add every new table a session push rewrites to that list. Compaction
   failures are logged and never fail the push. See
   [Compaction after a large rewrite](../internal/clickhouse-mirror.md#compaction-after-a-large-rewrite).
-- ClickHouse cannot change `index_granularity` or other read-only table
-  settings on an existing table. Changing one means rebuilding the table
-  without losing rows, as `rebuildUsageSnapshots` does; see
+- ClickHouse cannot change `index_granularity` or other read-only table settings
+  on an existing table. Changing one means rebuilding the table without losing
+  rows, as `rebuildUsageSnapshots` does; see
   [Snapshot table granularity](../internal/clickhouse-mirror.md#snapshot-table-granularity).
 - Every mirrored table is `ReplacingMergeTree(push_version)`. Every connection
   sets `final = 1` and, unless the URL sets it, `max_threads = 8`. Do not
@@ -1623,13 +1627,13 @@ own metadata, which is why the docs below call the database a mirror.
   exactly. Any read that pairs a session with its dependent rows compares them
   with `content_version`, never `push_version`, and a check that rejects
   unpublished rows bounds them by `sessions.rows_version`, the newest version
-  the session row published. A materialized view runs
-  inside the insert and reads joined tables in full, so filter a joined table
-  to the inserted block's sessions. Create and update long-lived views through
-  `ensureView`, which replaces the query of a view an older release created.
-  Views never see deletes; `deleteMirrorSessions` clears the derived tables.
-  Startup backfills record completion in `sync_metadata` only after finishing,
-  never modify source tables, and must stay safe to repeat. See the
+  the session row published. A materialized view runs inside the insert and
+  reads joined tables in full, so filter a joined table to the inserted
+  block's sessions. Create and update long-lived views through `ensureView`,
+  which replaces the query of a view an older release created. Views never see
+  deletes; `deleteMirrorSessions` clears the derived tables. Startup backfills
+  record completion in `sync_metadata` only after finishing, never modify
+  source tables, and must stay safe to repeat. See the
   [Activity report reads](../internal/clickhouse-mirror.md#activity-report-reads)
   design section.
 - Usage reads add priced sums from `usage_rollup`, built from `prepared_usage`

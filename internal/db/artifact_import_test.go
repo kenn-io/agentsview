@@ -517,6 +517,28 @@ func TestApplyArtifactImportedSessionPreservesLocalCollision(t *testing.T) {
 	assert.Equal(t, map[string]string{gid: imported.ManifestHash}, provenance)
 }
 
+func TestApplyArtifactImportedSessionPreservesDeletedPush(t *testing.T) {
+	database := testDB(t)
+	ctx := t.Context()
+	origin, gid := "peer-a1b2c3", "peer-a1b2c3~native"
+	receipt, write := sessionPushFixture(gid)
+	_, err := database.ApplySessionPush(ctx, receipt, write)
+	require.NoError(t, err)
+	write.Session.Machine = origin
+	imported := ArtifactImportedSession{Origin: origin, GID: gid, ManifestHash: strings.Repeat("b", 64), ImportedSessionID: gid}
+	_, err = database.getWriter().ExecContext(ctx, "DELETE FROM sessions WHERE id = ?", gid)
+	require.NoError(t, err)
+	result, err := database.ApplyArtifactImportedSession(ctx, imported, write)
+	require.NoError(t, err)
+	assert.True(t, result.Suppressed)
+	session, err := database.GetSession(ctx, gid)
+	require.NoError(t, err)
+	assert.Nil(t, session)
+	hashes, err := database.ArtifactImportedManifestHashes(ctx, origin, []string{gid})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{gid: imported.ManifestHash}, hashes)
+}
+
 func TestApplyArtifactImportedSessionProjectsToolResultImages(t *testing.T) {
 	database := testDB(t)
 	database.SetToolResultImages(config.ToolResultImagesOffload)

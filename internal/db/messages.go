@@ -1558,10 +1558,7 @@ func (db *DB) insertMessages(ctx context.Context,
 	if err := db.requireWritable(); err != nil {
 		return err
 	}
-	msgs, _ = db.ProjectToolResultImagesWithPolicy(msgs, policy)
-	rawMessages := msgs
-	msgs = db.messagesForStorage(msgs)
-	if len(rawMessages) == 0 {
+	if len(msgs) == 0 {
 		return nil
 	}
 	t := time.Now()
@@ -1585,6 +1582,15 @@ func (db *DB) insertMessages(ctx context.Context,
 		return fmt.Errorf("beginning tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	for _, sessionID := range messageSessionIDs(msgs) {
+		if err := checkSessionPushReservationTx(ctx, tx, sessionID); err != nil {
+			return err
+		}
+	}
+	msgs, _ = db.ProjectToolResultImagesWithPolicy(msgs, policy)
+	rawMessages := msgs
+	msgs = db.messagesForStorage(msgs)
 
 	if len(msgs) > 0 {
 		for _, sessionID := range messageSessionIDs(msgs) {
@@ -2102,14 +2108,6 @@ func (db *DB) ReplaceSessionMessagesWithToolResultImages(ctx context.Context,
 func (db *DB) replaceSessionMessages(ctx context.Context,
 	sessionID string, msgs []Message, policy config.ToolResultImages,
 ) error {
-	msgs, _ = db.ProjectToolResultImagesWithPolicy(msgs, policy)
-	msgs = append([]Message(nil), msgs...)
-	if _, err := ValidateAndSanitizeContext(ctx, nil, msgs, nil); err != nil {
-		return err
-	}
-	rawMessages := msgs
-	msgs = db.messagesForStorage(msgs)
-
 	t := time.Now()
 	var lockWait time.Duration
 	defer func() {
@@ -2126,6 +2124,21 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 	db.mu.Lock()
 	lockWait = time.Since(t)
 	defer db.mu.Unlock()
+	tx, err := db.getWriter().Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("beginning tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := checkSessionPushReservationTx(ctx, tx, sessionID); err != nil {
+		return err
+	}
+	msgs, _ = db.ProjectToolResultImagesWithPolicy(msgs, policy)
+	msgs = append([]Message(nil), msgs...)
+	if _, err := ValidateAndSanitizeContext(ctx, nil, msgs, nil); err != nil {
+		return err
+	}
+	rawMessages := msgs
+	msgs = db.messagesForStorage(msgs)
 
 	// Prefer an in-place diff (append/merge shapes from streaming
 	// syncs) so unchanged rows keep their rowids, pins, and FTS
@@ -2137,11 +2150,6 @@ func (db *DB) replaceSessionMessages(ctx context.Context,
 	transcriptChanged := !storedLoaded ||
 		!transcriptMessagesEqual(stored, msgs)
 
-	tx, err := db.getWriter().Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("beginning tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
 	if useDiff {
 		needsPinRemap, err := messageDiffNeedsPinRemapTx(ctx, tx, plan)
 		if err != nil {
@@ -2597,6 +2605,9 @@ func (db *DB) replaceSessionContent(ctx context.Context,
 		return fmt.Errorf("beginning tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := checkSessionPushReservationTx(ctx, tx, sessionID); err != nil {
+		return err
+	}
 	if useDiff {
 		needsPinRemap, err := messageDiffNeedsPinRemapTx(ctx, tx, plan)
 		if err != nil {

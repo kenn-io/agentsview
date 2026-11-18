@@ -1,0 +1,324 @@
+package artifact
+
+import (
+	"context"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
+	"errors"
+	"fmt"
+	"io"
+	"time"
+
+	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/ingest"
+)
+
+// MaxSessionPushBytes bounds the complete serialized single-session envelope.
+const MaxSessionPushBytes int64 = 64 << 20
+
+// ErrSessionPushFutureDataVersion identifies a session from a newer parser.
+var ErrSessionPushFutureDataVersion = errors.New("receiver requires a newer parser")
+
+// SessionPushTimeout allows two minutes of overhead and 64 KiB/s for the body.
+func SessionPushTimeout(size int64) time.Duration {
+	if size < 0 || size > MaxSessionPushBytes {
+		size = MaxSessionPushBytes
+	}
+	return 2*time.Minute + time.Duration(size)*time.Second/(64<<10)
+}
+
+// SessionPushEnvelope carries exactly one normalized transcript. Manifests and
+// segments use the existing artifact format; raw sources and checkpoints are
+// deliberately absent. Raw JSON defers allocation until collection preflights.
+type SessionPushEnvelope struct {
+	Version                 int            `json:"v"`
+	SessionID               string         `json:"session_id"`
+	ExternalParentSessionID *string        `json:"external_parent_session_id,omitempty"`
+	Manifest                jsontext.Value `json:"manifest"`
+	Segments                jsontext.Value `json:"segments"`
+}
+
+type sessionPushSegment struct {
+	SHA256 string `json:"sha256"`
+	NDJSON string `json:"ndjson"`
+}
+
+// These fields define version 1 of the receipt identity independently of
+// artifact versions, segment boundaries, and usage accounting.
+type sessionPushIdentityMessage struct {
+	Ordinal           int                           `json:"ordinal"`
+	Role              string                        `json:"role"`
+	Content           string                        `json:"content"`
+	ThinkingText      string                        `json:"thinking_text"`
+	Timestamp         string                        `json:"timestamp"`
+	HasThinking       bool                          `json:"has_thinking"`
+	HasToolUse        bool                          `json:"has_tool_use"`
+	IsSystem          bool                          `json:"is_system"`
+	IsSidechain       bool                          `json:"is_sidechain,omitzero"`
+	SourceSubtype     string                        `json:"source_subtype"`
+	PromptSource      string                        `json:"prompt_source"`
+	IsCompactBoundary bool                          `json:"is_compact_boundary"`
+	ToolCalls         []sessionPushIdentityToolCall `json:"tool_calls"`
+}
+
+type sessionPushIdentityToolCall struct {
+	Name     string                     `json:"name"`
+	ID       string                     `json:"id"`
+	Input    string                     `json:"input"`
+	Result   string                     `json:"result"`
+	Subagent string                     `json:"subagent"`
+	Events   []sessionPushIdentityEvent `json:"events"`
+}
+
+type sessionPushIdentityEvent struct {
+	ID        string `json:"id"`
+	Agent     string `json:"agent"`
+	Subagent  string `json:"subagent"`
+	Source    string `json:"source"`
+	Status    string `json:"status"`
+	Content   string `json:"content"`
+	Timestamp string `json:"timestamp"`
+}
+
+func sessionPushIdentity(m segmentMessage) sessionPushIdentityMessage {
+	item := sessionPushIdentityMessage{Ordinal: m.Ordinal, Role: m.Role, Content: m.Content, ThinkingText: m.ThinkingText, Timestamp: m.Timestamp, HasThinking: m.HasThinking, HasToolUse: m.HasToolUse, IsSystem: m.IsSystem, IsSidechain: m.IsSidechain, SourceSubtype: m.SourceSubtype, PromptSource: m.PromptSource, IsCompactBoundary: m.IsCompactBoundary}
+	// The offload projection requires a nonempty path; this variant writes no files.
+	projected, _ := db.ProjectToolResultImagesWithoutWriting([]db.Message{m.dbMessage()}, config.ToolResultImagesOffload, ".")
+	for i, call := range m.ToolCalls {
+		tool := sessionPushIdentityToolCall{Name: call.ToolName, ID: call.ToolUseID, Input: call.InputJSON, Result: projected[0].ToolCalls[i].ResultContent, Subagent: call.SubagentSessionID}
+		for j, event := range call.ResultEvents {
+			tool.Events = append(tool.Events, sessionPushIdentityEvent{ID: event.ToolUseID, Agent: event.AgentID, Subagent: event.SubagentSessionID, Source: event.Source, Status: event.Status, Content: projected[0].ToolCalls[i].ResultEvents[j].Content, Timestamp: event.Timestamp})
+		}
+		item.ToolCalls = append(item.ToolCalls, tool)
+	}
+	return item
+}
+
+type sessionPushCapture struct {
+	manifest []byte
+	segments []sessionPushSegment
+	bytes    int64
+}
+
+func (s *sessionPushCapture) Create(_ context.Context, ref Ref, identity Identity, _ string, r io.Reader) (CreateResult, error) {
+	data, err := io.ReadAll(io.LimitReader(r, MaxSessionPushBytes-s.bytes+1))
+	if err != nil {
+		return CreateResult{}, err
+	}
+	s.bytes += int64(len(data))
+	if s.bytes > MaxSessionPushBytes {
+		return CreateResult{}, errors.New("session push exceeds 64 MiB")
+	}
+	switch ref.Kind {
+	case KindManifests:
+		s.manifest = data
+	case KindSegments:
+		s.segments = append(s.segments, sessionPushSegment{SHA256: identity.SHA256, NDJSON: string(data)})
+	default:
+		return CreateResult{}, errors.New("unexpected session push dependency")
+	}
+	return CreateResult{Created: true}, nil
+}
+
+// EncodeSessionPush reads exactly id from one SQLite snapshot. It never syncs
+// sources, resolves partial IDs, or traverses parent/subagent references.
+func EncodeSessionPush(ctx context.Context, database *db.DB, id, expectedAgent string) ([]byte, string, error) {
+	if id == "" {
+		return nil, "", errors.New("push requires an exact archive session ID")
+	}
+	if database.ArchiveContent().UsageOnly() {
+		return nil, "", errors.New("usage-only archive cannot supply a transcript")
+	}
+	session, data, err := database.LoadSessionPushData(ctx, id, artifactExportLoadLimits(productionArtifactLimits()))
+	if err != nil {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, "", contextErr
+		}
+		return nil, "", errors.New("cannot read the selected session within transfer limits")
+	}
+	if session == nil {
+		return nil, "", errors.New("session is not in the local archive")
+	}
+	if expectedAgent != "" && session.Agent != expectedAgent {
+		return nil, "", errors.New("session agent does not match --agent")
+	}
+	archiveID, err := database.GetArchiveID(ctx)
+	if err != nil || archiveID == "" {
+		return nil, "", errors.New("source archive identity is unavailable")
+	}
+	origin := "push-" + hashHex([]byte(archiveID))[:32]
+	data.Messages, err = db.ProjectSessionPushImages(ctx, data.Messages, database.AssetsDir(), MaxSessionPushBytes)
+	if err != nil {
+		return nil, "", err
+	}
+	payload, err := encodeSessionPushData(ctx, origin, *session, data)
+	return payload, session.Agent, err
+}
+
+func encodeSessionPushData(ctx context.Context, origin string, session db.Session, data db.ArtifactExportData) ([]byte, error) {
+	// Revisions are local bookkeeping, not part of this immutable content key.
+	session.TranscriptRevision = nil
+	sink := &sessionPushCapture{}
+	_, _, err := exportLoadedSessionToStore(ctx, sink, origin, &session, canonicalMessages(data.Messages), data.UsageEvents, data.PlanUsage, productionArtifactLimits(), true)
+	if err != nil {
+		return nil, err
+	}
+	segments, err := json.Marshal(sink.segments)
+	if err != nil {
+		return nil, err
+	}
+	encoded, err := json.Marshal(SessionPushEnvelope{Version: 1, SessionID: session.ID, ExternalParentSessionID: data.ExternalParentSessionID, Manifest: sink.manifest, Segments: segments})
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(encoded)) > MaxSessionPushBytes {
+		return nil, errors.New("session push exceeds 64 MiB")
+	}
+	return encoded, nil
+}
+
+// DecodeSessionPush validates a complete bounded closure before returning any
+// write intent. The caller must atomically persist it with the receipt.
+func DecodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite, error) {
+	receipt, write, err := decodeSessionPush(data)
+	if err != nil {
+		if errors.Is(err, errFutureArtifactVersion) {
+			err = fmt.Errorf("%w: %w", ErrSessionPushFutureDataVersion, err)
+		}
+		return db.SessionPushReceipt{}, db.SessionBatchWrite{}, fmt.Errorf("invalid session push: %w", err)
+	}
+	return receipt, write, nil
+}
+
+func decodeSessionPush(data []byte) (db.SessionPushReceipt, db.SessionBatchWrite, error) {
+	var zero db.SessionPushReceipt
+	var noWrite db.SessionBatchWrite
+	var header struct {
+		Version int `json:"v"`
+	}
+	if err := json.Unmarshal(data, &header); err != nil {
+		return zero, noWrite, err
+	}
+	if header.Version > 1 {
+		return zero, noWrite, ErrSessionPushFutureDataVersion
+	}
+	var envelope SessionPushEnvelope
+	if err := json.Unmarshal(data, &envelope, json.RejectUnknownMembers(true)); err != nil {
+		return zero, noWrite, err
+	}
+	if envelope.Version != 1 || envelope.SessionID == "" || len(envelope.SessionID) > 1024 {
+		return zero, noWrite, errors.New("unsupported version or session ID")
+	}
+	if envelope.ExternalParentSessionID != nil && (*envelope.ExternalParentSessionID == "" || len(*envelope.ExternalParentSessionID) > 1024 || *envelope.ExternalParentSessionID == envelope.SessionID) {
+		return zero, noWrite, errors.New("invalid parent session ID")
+	}
+	limits := productionArtifactLimits()
+	if int64(len(envelope.Manifest)) > manifestDecodedLimit {
+		return zero, noWrite, errors.New("manifest exceeds limit")
+	}
+	m, err := decodeManifestWithLimits(envelope.Manifest, limits)
+	if err != nil {
+		return zero, noWrite, err
+	}
+	if err := validateOriginID(m.Origin); err != nil {
+		return zero, noWrite, err
+	}
+	if m.RawSource != nil || m.Session.Agent == "" || m.Session.DeletedAt != nil {
+		return zero, noWrite, errors.New("invalid selected session")
+	}
+	if m.DataVersion > db.CurrentDataVersion() {
+		return zero, noWrite, ErrSessionPushFutureDataVersion
+	}
+	if err := validateImportedManifest(m, m.Origin, m.Origin+"~"+envelope.SessionID, limits, true); err != nil {
+		return zero, noWrite, err
+	}
+	if err := preflightJSONArrayCount(envelope.Segments, "segments", limits.manifestSegments); err != nil {
+		return zero, noWrite, err
+	}
+	var segments []sessionPushSegment
+	if err := json.Unmarshal(envelope.Segments, &segments, json.RejectUnknownMembers(true)); err != nil {
+		return zero, noWrite, err
+	}
+	if len(segments) != len(m.Segments) {
+		return zero, noWrite, errors.New("segment closure mismatch")
+	}
+	var messages []db.Message
+	var identity []sessionPushIdentityMessage
+	var nested nestedCollectionCounts
+	for i, segment := range segments {
+		if segment.SHA256 != m.Segments[i] || hashHex([]byte(segment.NDJSON)) != segment.SHA256 {
+			return zero, noWrite, errors.New("segment hash mismatch")
+		}
+		preflight, err := preflightSegmentData([]byte(segment.NDJSON), limits)
+		if err != nil {
+			return zero, noWrite, err
+		}
+		if exceedsCollectionLimit(len(messages), len(preflight.records), limits.sessionMessages) || exceedsCollectionLimit(nested.toolCalls, preflight.nested.toolCalls, limits.sessionToolCalls) || exceedsCollectionLimit(nested.resultEvents, preflight.nested.resultEvents, limits.sessionResultEvents) {
+			return zero, noWrite, errors.New("session aggregate limit exceeded")
+		}
+		for _, record := range preflight.records {
+			var message segmentMessage
+			if err := json.Unmarshal(record, &message, json.RejectUnknownMembers(true)); err != nil {
+				return zero, noWrite, err
+			}
+			if message.Ordinal < 0 {
+				return zero, noWrite, errors.New("message ordinal must be nonnegative")
+			}
+			for callIndex, call := range message.ToolCalls {
+				if call.CallIndex != callIndex {
+					return zero, noWrite, errors.New("invalid tool call coordinate")
+				}
+			}
+			identity = append(identity, sessionPushIdentity(message))
+			converted := message.dbMessage()
+			// Normalize before asset checks and signal extraction. The receipt
+			// identity uses the validated wire content before these projections.
+			db.SanitizeMessage(&converted)
+			for i := range converted.ToolCalls {
+				db.SanitizeToolCall(&converted.ToolCalls[i])
+			}
+			messages = append(messages, converted)
+		}
+		nested.toolCalls += preflight.nested.toolCalls
+		nested.resultEvents += preflight.nested.resultEvents
+	}
+	// Provider-authoritative counters can include removed carriers or exclude
+	// retained ones; validate graph coordinates independently of those counts.
+	if err := validateImportedClosureCounts(m, messages, false); err != nil {
+		return zero, noWrite, err
+	}
+	for _, event := range m.UsageEvents {
+		// A filtered tool-result carrier can leave usage at an ordinal with no
+		// retained message; keep that coordinate for accounting fidelity.
+		if event.MessageOrdinal != nil && *event.MessageOrdinal < 0 {
+			return zero, noWrite, errors.New("usage has negative message ordinal")
+		}
+	}
+	// Identity follows the transcript, independent of local curation.
+	canonical, err := canonicalJSON(struct {
+		Version  int                          `json:"v"`
+		Messages []sessionPushIdentityMessage `json:"messages"`
+	}{1, identity})
+	if err != nil {
+		return zero, noWrite, err
+	}
+	receipt := db.SessionPushReceipt{SessionID: envelope.SessionID, SourceOrigin: m.Origin, PayloadHash: hashHex(canonical), ExternalParentSessionID: envelope.ExternalParentSessionID}
+	session := sessionFromManifest(m)
+	for i := range messages {
+		messages[i].SessionID = session.ID
+		for j := range messages[i].ToolCalls {
+			messages[i].ToolCalls[j].SessionID = session.ID
+		}
+	}
+	if db.HasSessionPushImageReferences(messages) {
+		return zero, noWrite, errors.New("session contains unresolved image assets")
+	}
+	signals := signalsFromImportedSession(session)
+	signals.ToolObservations = ingest.ComputeToolObservations(session, ingest.ExtractToolCallRows(messages))
+	planUsage := importedPlanUsage(m)
+	if planUsage != nil && m.PlanUsage != nil {
+		planUsage.CountedUnder = m.PlanUsage.CountedUnder
+	}
+	return receipt, db.SessionBatchWrite{Session: session, Messages: messages, UsageEvents: importedUsageEvents(m.UsageEvents, session.ID), PlanUsage: planUsage, Signals: signals, DataVersion: m.DataVersion, ReplaceMessages: true}, nil
+}

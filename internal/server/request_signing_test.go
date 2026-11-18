@@ -120,6 +120,22 @@ func TestRestrictedIngressGrantsRequireNativeAuth(t *testing.T) {
 			}
 		})
 	}
+	srv.cfg.AcceptSessionPush, srv.cfg.RequireAuth = true, true
+	mainRequest := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/sessions/ingest", strings.NewReader("{}"))
+	mainRequest.Header.Set("Authorization", "Bearer test-bearer")
+	mainRequest.Header.Set("Content-Type", "application/json")
+	mainResponse := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(mainResponse, mainRequest)
+	require.Equal(t, http.StatusBadRequest, mainResponse.Code)
+	signedRequest, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL+externalPrefix+"/api/v1/sessions/ingest", strings.NewReader("{}"))
+	require.NoError(t, err)
+	signedRequest.Header.Set("Authorization", "Bearer test-bearer")
+	signedRequest.Header.Set("Content-Type", "application/json")
+	denied, err := client.Do(signedRequest)
+	require.NoError(t, err)
+	require.NoError(t, denied.Body.Close())
+	assert.Equal(t, http.StatusForbidden, denied.StatusCode)
+	srv.cfg.AcceptSessionPush, srv.cfg.RequireAuth = false, false
 	var eventCount int
 	require.NoError(t, srv.db.(*db.DB).Reader().QueryRow(t.Context(), "SELECT count(*) FROM recall_query_events").Scan(&eventCount))
 	assert.Zero(t, eventCount, "restricted recall requests must never write the query ledger")
@@ -183,7 +199,7 @@ func TestRestrictedIngressGrantsRequireNativeAuth(t *testing.T) {
 	require.NoError(t, unsigned.Body.Close())
 	assert.Equal(t, http.StatusUnauthorized, unsigned.StatusCode)
 	assert.Empty(t, requestLog.String())
-	signedRequest, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+externalPrefix+"/api/v1/version", nil)
+	signedRequest, err = http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+externalPrefix+"/api/v1/version", nil)
 	require.NoError(t, err)
 	signedRequest.Header.Set("Authorization", "Bearer rotated-bearer")
 	signed, err := client.Do(signedRequest)

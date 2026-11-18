@@ -220,7 +220,7 @@ func TestImageTextCorruptAssetRetriesAfterRepair(t *testing.T) {
 	manager := Manager{DB: d, Client: client}
 	require.NoError(t, manager.Run(ctx))
 	require.Contains(t, logs.String(), "no readable copy")
-	require.Contains(t, logs.String(), "content hash mismatch")
+	require.Contains(t, logs.String(), "image asset digest mismatch")
 	require.Equal(t, 1, requests)
 	var failures int
 	var retryAt string
