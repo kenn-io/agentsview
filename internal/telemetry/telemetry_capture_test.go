@@ -20,6 +20,39 @@ import (
 	"go.kenn.io/agentsview/internal/server"
 )
 
+func TestCaptureFollowsKennConsent(t *testing.T) {
+	for _, granted := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unanswered", true: "granted"}[granted], func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			t.Setenv(EnabledEnv, "")
+			t.Setenv(GenericEnabledEnv, "")
+			if granted {
+				require.NoError(t, kittelemetry.RecordConsent(true))
+			}
+			endpoint, captured := captureCollector(t)
+			reporter := captureReporter(t, endpoint, Options{})
+			assert.Equal(t, granted, reporter.Enabled())
+			require.NoError(t, reporter.CaptureDaemonActive(t.Context()))
+			postCapture(t, reporter.CaptureHandler(), `{"event":"app_opened"}`, http.StatusAccepted)
+			require.NoError(t, reporter.Close())
+			sent := captured()
+			if !granted {
+				assert.Empty(t, sent)
+				return
+			}
+			require.Len(t, sent, 2)
+			assert.Equal(t, EventDaemonActive, sent[0].Event)
+			assert.Equal(t, EventAppOpened, sent[1].Event)
+			for _, event := range sent {
+				assert.Equal(t, "agentsview", event.Properties["application"])
+				assert.Equal(t, true, event.Properties["telemetry_consent"])
+			}
+		})
+	}
+}
+
 func TestCoreActionAllowlist(t *testing.T) {
 	t.Setenv(EnabledEnv, "1")
 	t.Setenv(GenericEnabledEnv, "1")

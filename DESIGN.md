@@ -107,7 +107,7 @@ App-level glue that remains local:
 - Every page and panel that loads data uses one state order, built from
   shared pieces in `frontend/src/lib/components/shared/`:
   1. Failed with nothing loaded: `LoadError`, a kit-ui error `Notice` with
-     the failure detail, Retry, and optional error telemetry. It replaces
+     the failure detail and Retry. It replaces
      the content.
   1. Loading with nothing loaded: `LoadingState`, a kit-ui `EmptyState`
      with a `Spinner`. Pages with a skeleton in the loaded layout (Activity,

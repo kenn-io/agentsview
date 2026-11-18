@@ -560,7 +560,7 @@ RooCode-derived VS Code extension that wrote per-task JSON under
 
 Local imports use a persisted installation ID, so updates and network changes do
 not split sessions across machine identities. `telemetry-install-id` stores the
-ID independently of telemetry. The display label defaults to the current
+ID. The display label defaults to the current
 hostname; set `local_machine_name` in `config.toml` for a fixed label after a
 daemon restart. Upgrades adopt historical local sessions when the archive has
 saved ownership. Older archives keep historical keys until you select the local
@@ -743,34 +743,6 @@ See [ClickHouse docs](https://agentsview.io/docs/clickhouse-sync/) for setup and
 configuration.
 
 ## Privacy
-
-agentsview sends limited anonymous telemetry to PostHog: a `daemon_active` ping
-at most once per UTC day while the server runs. The browser checks with
-`app_opened` once a day; reloads and focus don't repeat it that day, and a
-disabled reply stops reports and visit tracking. See the
-[telemetry configuration](docs/configuration.md#anonymous-daemon-telemetry) for
-scope and delivery limits. The server also sends `setup_finished` once per
-installation when the archive first has a session in the default session list,
-including orphaned sessions and excluding automated sessions and trash. Existing
-installs with such a session send it on their first start after upgrading. The
-web UI sends `visit_ended` with `surface: web` and visible visit duration in
-fixed buckets: `under_1m`, `1_to_5m`, `5_to_30m`, or `over_30m`. The web UI also
-reports searches (search mode), session views (the session's agent type), screen
-views (screen name, once per installation per UTC day on the server), exports
-(format), generated insights (insight kind), and analytics page views (page
-name), each with one value from a fixed list in the server that drops anything
-else. All events use a stable random install ID as the event `DistinctId`.
-[Feature outcomes](docs/configuration.md#anonymous-daemon-telemetry) also count
-empty searches, visible errors, and failed sync attempts. The events include
-`application=agentsview`, app version, commit, distribution (such as `homebrew`;
-empty for source builds), OS, and CPU architecture, with
-`$process_person_profile=false` and `$geoip_disable=true`. It does not include
-session, project, prompt, file path, account, or machine identity. Disable
-telemetry with `AGENTSVIEW_TELEMETRY_ENABLED=0`, `TELEMETRY_ENABLED=0`, or
-`DO_NOT_TRACK=1`. A build sends telemetry only when it has the PostHog project
-key and a release version such as `0.33.0`. Release builds and the `make` build
-targets set the key at link time. Plain `go build` and `go test` binaries have
-no key and send nothing. Telemetry also stays off in CI.
 
 All session data stays on your machine. The server binds to `127.0.0.1` by
 default. The update check is optional and can be disabled with

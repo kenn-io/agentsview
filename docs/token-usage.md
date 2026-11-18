@@ -1418,5 +1418,5 @@ in a small `model_pricing` table that's refreshed on each `usage` invocation.
 Usage data stays on your machine unless you enable a sharing feature. The usage
 command's only outbound requests are the LiteLLM and OpenRouter pricing fetches,
 which you can disable with `--offline`. See
-[Privacy and Telemetry](/docs/configuration/#privacy-and-telemetry) for the full
+[Privacy](/docs/configuration/#privacy) for the full
 picture.

@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-17
+last_edited: 2026-11-16
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -11,36 +11,12 @@ The latest release is
 
 **New features**
 
-- Sync ChatGPT chats into AgentsView without waiting for an export email. Run
-  `agentsview source import --type chatgpt --sync` with Chrome open and signed
-  in to ChatGPT. Later runs fetch only chats that changed. New turns are added
-  in place; an edited or shorter chat keeps its previous version in Trash, so
-  pins are not lost. You can also open **Import conversations**, choose
-  ChatGPT, and click **Sync**. See
-  [Sync ChatGPT chats](/docs/chat-import/#sync-chatgpt-chats).
-
-- Sync Gemini Apps chats with every turn, instead of the one-prompt sessions a
-  Takeout export gives. Run `agentsview source import --type gemini-apps --sync`
-  with Chrome open and signed in to Gemini. Later runs fetch only chats that
-  changed, and a reply Gemini is still writing is fetched again on the next
-  run. Only text is imported, not attachments, images, or Canvas content. Chats
-  you also imported from Takeout appear twice. See
-  [Sync Gemini Apps chats](/docs/chat-import/#sync-gemini-apps-chats).
-
-- Bring your grok.com chats into AgentsView. Run
-  `agentsview source import --type grok-web --sync` with Chrome open and signed
-  in to Grok. Each chat becomes one Grok Web session holding the branch Grok
-  shows, separate from local Grok Build sessions. Later runs fetch only chats
-  that changed, and a reply Grok is still writing is fetched again on the next
-  run. When you regenerate a reply or edit a prompt, the previous version stays
-  in Trash. Only text is imported, not reasoning steps, attachments, images, or
-  search results. See [Sync Grok web chats](/docs/chat-import/#sync-grok-web-chats).
-
 - Keep connection secrets in private files instead of environment variables
   or `config.toml`. Set `token_file` under `[kata]`, `api_key_file` for
-  Docbank, insights, embeddings servers, and recall extraction servers, or
-  `cursor_admin_api_key_file`. A missing or unsafe file is an error that names
-  the setting; AgentsView never falls back to another source. See
+  Docbank, insights, embeddings servers, and recall extraction servers,
+  `token_file` under `[duckdb]`, or `cursor_admin_api_key_file`. A missing or
+  unsafe file is an error that names the setting; AgentsView never falls back
+  to another source. See
   [Read secrets from files](/docs/configuration/#read-secrets-from-files).
 
 - Track token usage and cost for tools that call model APIs directly, with no
@@ -94,16 +70,23 @@ The latest release is
   `background_sync_interval = "0s"` to keep the old pace. See
   [Config File](/docs/configuration/#config-file).
 
+- Search and cold Trends visits open faster with DuckDB. After upgrading, run
+  `agentsview replica duckdb push` on the mirror's owning machine to rebuild
+  it before serving it.
+
 - Native PostgreSQL serving starts filling the Usage cache at launch.
 
-- The Usage page opens faster on ClickHouse. On a production-size archive, the
-  first one-year summary after a serve start took 0.83 seconds instead of 1.48
-  (1.8x). Push now stores priced usage sums per session and 15 minutes, and
-  Usage reads add them to the few rows they still deduplicate. A repeat request
-  took 0.09 seconds instead of 0.23 (2.4x), because Usage now records the
-  pricing of each usage group in one call. A push that refreshes prepared usage
-  now waits 3.4 to 4.1 seconds for the refresh and spends 3.4 seconds building
-  the sums.
+- The Usage page opens faster on ClickHouse and DuckDB mirrors. On a
+  production-size archive, the first one-year summary after a serve start took
+  0.83 seconds instead of 1.48 on ClickHouse (1.8x) and 0.49 seconds instead of
+  3.2 on DuckDB (6.5x). Push now stores priced usage sums per session and 15
+  minutes, and Usage reads add them to the few rows they still deduplicate. A
+  repeat ClickHouse request took 0.09 seconds instead of 0.23 (2.4x), because
+  Usage now records the pricing of each usage group in one call. A ClickHouse
+  push that refreshes prepared usage now waits 3.4 to 4.1 seconds for the
+  refresh and spends 3.4 seconds building the sums, and a full DuckDB rebuild
+  takes about 15 seconds longer. The first DuckDB push after upgrading rebuilds
+  the mirror.
 
 - Usage reuses priced work after restarting native PostgreSQL serving and after
   pushes. When that cache would first need a large rebuild, such as on first
@@ -155,16 +138,6 @@ The latest release is
   and every pushing client together: an older serve fails tool-sequence and
   file-reference requests for sessions a newer client appended to.
 
-- ClickHouse pushes no longer upload the usage of every earlier message when a
-  session grows or only its title or other session fields change. The mirror
-  copies that usage from the session's previous usage snapshot, and the push
-  sends only the usage of the new messages. On a copy of a real archive, a push
-  of 4 grown sessions uploaded 140 KB instead of 904 KB (6.5x less), and a push
-  of 15 changed sessions 172 KB instead of 1.61 MB (9.3x less), which matters
-  most on a slow link. When the stored snapshot does not match what the push
-  kept, as after an interrupted push, the push uploads the whole snapshot as
-  before.
-
 **Bug fixes**
 
 - `agentsview source cursor sync-usage` no longer aborts when Cursor rate-limits
@@ -188,8 +161,8 @@ The latest release is
 - AgentsView starts again on x86-64 CPUs without AVX2, BMI2, and FMA (older
   than x86-64-v3), such as Ivy Bridge, Atom, Pentium Silver, and virtual
   machines that hide those features. 0.47.0 crashed at startup on these CPUs
-  with an illegal instruction, because a database library it linked required
-  x86-64-v3.
+  with an illegal instruction, even when the DuckDB mirror was never used,
+  because the DuckDB 2.0 libraries it linked require x86-64-v3.
 - Sessions from worktrees named `<repo>.<branch>` next to the main checkout,
   the default worktrunk layout, now group under the repository's project when
   the checkout is not on disk, such as on a central collector. Before, each
@@ -276,22 +249,10 @@ The latest release is
 
 **Upgrade notes**
 
-- Chrome Sync users must rerun `agentsview source chrome setup` and reload the
-  extension at `chrome://extensions` once. The extension and AgentsView now
-  speak a new version of their protocol, and the extension asks for access to
-  `chatgpt.com`, `gemini.google.com`, and `grok.com`. Until you reload it, Sync
-  asks you to update the extension.
-- API clients that read Chrome Sync error codes need the new names:
-  `chrome_host_required`, `chrome_sync_running`, `chrome_host_update_required`,
-  and `browser_sync_auth_required` replace the `claude_ai_` versions.
-  `claude_ai_config_invalid` is unchanged. Sync now uses
-  `POST /api/v1/import/{platform}/sync`; the Claude.ai path stays the same.
-- The DuckDB mirror is removed, along with the `agentsview replica duckdb` and
-  legacy `agentsview duckdb` commands. AgentsView no longer reads or writes
-  `.duckdb` files, so you can delete them. A leftover `[duckdb]` section in
-  `config.toml` is ignored, and `AGENTSVIEW_DUCKDB_*` variables have no effect.
-  For a read-only copy of your archive, use the
-  [PostgreSQL](/docs/pg-sync/) or [ClickHouse](/docs/clickhouse-sync/) replica.
+- Release binaries, installers, wheels, and the published container image no
+  longer include the DuckDB mirror. To keep using `replica duckdb` commands,
+  build from source with `make install DUCKDB=1`. See
+  [Build with DuckDB](/docs/duckdb/#build-with-duckdb).
 
 ## 0.47.0
 
@@ -302,9 +263,9 @@ The latest release is
 - The first local startup builds a new search index before serving requests.
   Allow about a minute per 2 GB of message text. The index adds about a fifth of
   the message text size to the archive.
-- PostgreSQL and ClickHouse rewrite stored message text once on their next push.
-  ClickHouse also reprices its usage once during that push, so Usage reads are
-  slower until it finishes.
+- PostgreSQL and ClickHouse rewrite stored message text once on their next push,
+  and DuckDB mirrors rebuild on theirs. ClickHouse also reprices its usage once
+  during that push, so Usage reads are slower until it finishes.
 - Sessions from affected agents are reprocessed automatically. Run
   `agentsview source sync` before using offline reports, so Codex Fast sessions
   get Fast prices.
@@ -398,7 +359,8 @@ The latest release is
 **Improvements**
 
 - Usage loads faster on large archives. In separate 30,000-session benchmarks,
-  repeat visits drop from about 24 seconds to under a second on PostgreSQL.
+  repeat visits drop from about 24 seconds to under a second on PostgreSQL and
+  DuckDB.
 - Activity, Signals, Trends, and session statistics load faster through reduced
   reads and reuse of unchanged results. ClickHouse session navigation also stays
   responsive while dashboard queries run.
@@ -411,8 +373,8 @@ The latest release is
   identical. On a test archive with 1.05 million messages, the messages table
   shrank from 3.0 GiB to 2.0 GiB.
 - Imports, archive rebuilds, and live Claude and Codex updates finish sooner.
-  PostgreSQL pushes preserve unchanged transcript sections, and S3 sync reuses
-  shared Codex parent downloads.
+  PostgreSQL pushes preserve unchanged transcript sections, DuckDB rebuilds
+  write faster, and S3 sync reuses shared Codex parent downloads.
 - Usage charts refresh automatically while visible and catch up when you return.
   Hidden tabs cancel pending Usage queries instead of holding browser
   connections.
@@ -450,8 +412,8 @@ The latest release is
 
 - Usage totals include blank Claude thinking responses, unfinished Copilot CLI
   sessions, and Hermes or Augure Desktop background model calls.
-- Codex Fast-tier sessions use Fast rate estimates. ClickHouse uses the latest
-  Copilot-reported session cost.
+- Codex Fast-tier sessions use Fast rate estimates. ClickHouse and DuckDB use
+  the latest Copilot-reported session cost.
 - VS Code Copilot and Positron replies keep updating as they grow, preserve pins
   and notes through rebuilds and pushes, and render without duplicate-tool-call
   failures.
@@ -534,6 +496,7 @@ The latest release is
   allowlist.
 - [@zerone0x](https://github.com/zerone0x) for sharing S3 Codex parent
   downloads.
+- [@wxxb789](https://github.com/wxxb789) for faster DuckDB writes.
 - [@gezerui888](https://github.com/gezerui888) for preserving peer messages.
 - [@nachocab](https://github.com/nachocab) for slash commands containing `<`.
 - [@biggestbinary](https://github.com/biggestbinary) for Copilot usage receipts.
@@ -583,8 +546,8 @@ Thanks to [@azylman](https://github.com/azylman) for the Antigravity fixes in
   stale-data warning during full rebuilds; changes pause until the replacement
   is ready. Allow time for the rebuild and subsequent mirror pushes. See
   [archive upgrades](/docs/configuration/#database).
-- PostgreSQL and ClickHouse mirrors need refreshed dialogue search data.
-  Hosted deployments must apply the new runtime grants before upgrading.
+- PostgreSQL, ClickHouse, and DuckDB mirrors need refreshed dialogue search
+  data. Hosted deployments must apply the new runtime grants before upgrading.
   Follow [message search](/docs/session-api/#agentsview-session-search) and
   [hosted provisioning](/docs/hosted-raw-sync/#provision-a-hosted-instance).
 - Containers now require a bearer token. Set `auth_token` in `/data/config.toml`
@@ -596,8 +559,10 @@ Thanks to [@azylman](https://github.com/azylman) for the Antigravity fixes in
 - Session summary exports now use schema 7. Consumers must accept
   `model_usage: null` when Codex cloud token counts are unknown. Upgrade
   [artifact folder sync](/docs/artifact-sync/) importers as well.
-- Older Hermes cron sessions whose original sources are gone remain individual
-  sessions unless they already have a stored job ID.
+- Hermes cron grouping can require a one-time full mirror transfer. Run
+  `agentsview duckdb push --full` once for an existing DuckDB mirror. Older
+  cron sessions whose original sources are gone remain individual sessions
+  unless they already have a stored job ID.
 - Restart MCP content searches begun before upgrading; use the new
   continuation's `activity_cutoff` with its cursor.
 - On Windows, stop the daemon before downgrading to 0.45.x or earlier.
@@ -688,9 +653,9 @@ Thanks to [@azylman](https://github.com/azylman) for the Antigravity fixes in
 - Browse and search the existing archive while a full rebuild runs. Results
   carry a stale-data warning, and changes pause until the replacement is
   ready. Failed startup rebuilds retry automatically.
-- Keep new local sessions arriving in the archive and UI while a PostgreSQL or
-  ClickHouse push runs.
-- Resume interrupted full PostgreSQL and ClickHouse pushes.
+- Keep new local sessions arriving in the archive and UI while a PostgreSQL,
+  ClickHouse, or DuckDB push runs.
+- Resume interrupted full PostgreSQL and ClickHouse pushes and DuckDB rebuilds.
   Recent sessions transfer first, and summaries show resumed progress and why
   a full transfer runs. Passing `--full` discards unfinished progress and
   starts over.
@@ -779,9 +744,6 @@ Thanks to [@azylman](https://github.com/azylman) for the Antigravity fixes in
 - Keep Windows daemon commands from marking the entire data directory as changed
   for backup and sync tools. Stop the daemon before downgrading to 0.45.x or
   earlier.
-- Honor `DO_NOT_TRACK=1` and suppress telemetry in CI and non-release builds.
-  Browser telemetry also waits for the selected server's response before
-  sending further reports.
 - Reject compromised eMudhra/emSign certificate chains in HTTPS connections and
   desktop updates. Linux and Windows desktop builds also update their bundled
   trust roots.
@@ -790,7 +752,7 @@ Thanks to [@azylman](https://github.com/azylman) for the Antigravity fixes in
 
 - [@rodboev](https://github.com/rodboev) for Chrome Sync, fx support,
   tool-effectiveness reports and rates, model aliases, Hermes cron costs,
-  faster reports, and archive and telemetry fixes.
+  faster reports, and archive fixes.
 - [@cpcloud](https://github.com/cpcloud) for Codex cloud chats and live token
   capture, resumable mirror pushes, continued local sync during pushes, and
   ClickHouse transfer improvements.
@@ -954,9 +916,6 @@ Thanks to [@azylman](https://github.com/azylman) for the Antigravity fixes in
   or server failures prevent embedding.
 - Sync remote hosts over HTTP. SSH sync is removed; configure each remote with a
   daemon URL and token. Existing archived sessions remain available.
-- Measure app opens, screen visits, core actions, and visible visit duration
-  through the existing telemetry opt-out. Daily daemon activity counts at most
-  once per installation per UTC day.
 - Diagnose desktop startup and database delays with logs that show backend port
   selection, readiness results, stalled database checkpoints, and connection or
   write-lock waits.
@@ -1011,6 +970,8 @@ Thanks to [@azylman](https://github.com/azylman) for the Antigravity fixes in
 - Open the desktop app against an authenticated local daemon without a readiness
   timeout. The app also recovers after an observed backend outage while hidden
   and avoids stale startup errors during an in-app update.
+- Replace a served DuckDB mirror with `duckdb push` on Windows without stopping
+  `duckdb serve`.
 - Load current SQLite-backed OpenClaw sessions and discover Hermes Agent
   sessions in the default Windows location.
 - Report incomplete Git and pull-request totals in `agentsview stats`, and wait
@@ -1211,8 +1172,8 @@ Thanks to [@azylman](https://github.com/azylman) for the Antigravity fixes in
   `todo_write` results.
 - VS Code Copilot assistant messages retain the model used for each request,
   including model changes within a session.
-- Healthy archived sessions continue copying to PostgreSQL when daemon-managed
-  incremental pushes encounter a local ingestion failure.
+- Healthy archived sessions continue copying to PostgreSQL and DuckDB when
+  daemon-managed incremental pushes encounter a local ingestion failure.
 - Sync avoids repeatedly parsing unchanged malformed or missing source files
   where failure caching applies. Unrelated file events no longer bypass retry
   delays, and temporary lock-file changes no longer trigger session syncing.
@@ -1225,8 +1186,8 @@ Thanks to [@azylman](https://github.com/azylman) for the Antigravity fixes in
   fail; correct or remove the named keys, even if vector search is disabled.
 - An explicit nonzero `--port` fails when occupied instead of silently choosing
   another port. Updates preserve the explicit port choice.
-- PostgreSQL servers mounted under `--base-path` are discoverable, and API
-  requests retain the path prefix.
+- PostgreSQL and DuckDB servers mounted under `--base-path` are discoverable,
+  and API requests retain the path prefix.
 - Version-mismatch errors identify whether to restart the daemon or upgrade and
   restart a stale command or background service.
 - Clicking the macOS Dock icon or activating AgentsView through Cmd-Tab restores
@@ -1442,6 +1403,9 @@ ______________________________________________________________________
 
 **Bug fixes**
 
+- Session transcripts load again under `duckdb serve`, fixing blank transcripts
+    in 0.42.0.
+
 - Usage reports complete while live sessions continue writing. Summary,
     comparison, and top-session requests also allow longer cache preparation
     without the normal server timeout.
@@ -1598,6 +1562,8 @@ ______________________________________________________________________
     stale daemon startup locks.
 - Thanks to [@MaxFreedomPollard](https://github.com/MaxFreedomPollard) for
     correctly positioned search-result snippets.
+- Thanks to [@tlmaloney](https://github.com/tlmaloney) for restoring session
+    transcripts under DuckDB.
 
 ______________________________________________________________________
 
@@ -1877,8 +1843,8 @@ ______________________________________________________________________
 
 - Keep Kimi Work token totals complete when protocol 1.4 writes a tool result
     before its usage record. Existing affected sessions are corrected on resync.
-- Price Kimi Work's `k2d6-agent` model alias at K2.6 rates in SQLite and
-    PostgreSQL. Existing affected sessions are corrected on resync.
+- Price Kimi Work's `k2d6-agent` model alias at K2.6 rates in SQLite,
+    PostgreSQL, and DuckDB. Existing affected sessions are corrected on resync.
 - Start `agentsview pg serve` successfully on PostgreSQL minor releases whose
     text slicing could fail during the startup audit. The audit now reads
     explicit UTF-8 byte prefixes from compressed session text.
@@ -1915,7 +1881,7 @@ ______________________________________________________________________
     clients can detect corrections and replace an affected hour's report.
 - Label filesystem roots by source machine with `[[session_sources]]`. Sessions
     retain the label from their first import through local resync and PostgreSQL
-    mirroring.
+    or DuckDB mirroring.
 - Browse **Omnigent** SQLite conversations and **Kimi Work** desktop wire logs.
     Kimi Work sessions include usage metrics when the logs provide them.
 - Choose the server-wide **Agentsview** or **Matplotlib** chart palette under
@@ -1949,11 +1915,13 @@ ______________________________________________________________________
     source paths.
 - Limit reconciliation, recovery polling, and remote sync to the provider roots
     selected for that operation.
+- Preserve source-machine labels in DuckDB mirrors.
 - Group sessions launched from Git worktrees under their repositories.
 - Read Devin CLI timestamps as epoch seconds instead of milliseconds.
 - Use Copilot execution events to measure tool duration.
 - Include Mistral Vibe cache-hit tokens in usage statistics.
 - Mark terminal API failures as errored outcomes.
+- Expand a leading `~` in DuckDB mirror paths.
 - Skip blank embedding inputs without reporting them as rejected records.
 - Keep retrying active sessions when sync repeatedly finds stale source paths.
 
@@ -1968,7 +1936,7 @@ ______________________________________________________________________
     relocated sidebar toggle, path presentation, daily pricing refresh,
     request-band pricing, and blank-embedding handling.
 - Thanks to [Matthew Jacobs](https://github.com/mjacobs) for versioned reporting
-    exports.
+    exports and preserved DuckDB source-machine attribution.
 - Thanks to [Erik Krogen](https://github.com/xkrogen) for machine-labeled
     filesystem session sources.
 - Thanks to [潦草学者](https://github.com/liaocaoxuezhe) for unified usage metrics
@@ -1978,7 +1946,8 @@ ______________________________________________________________________
 - Thanks to [BoX Fan](https://github.com/coffee0127) for native language names
     and Taiwan-specific Traditional Chinese localization.
 - Thanks to [Rod Boev](https://github.com/rodboev) for scoped reconciliation,
-    degraded-coverage polling, and remote roots; and terminal error outcomes.
+    degraded-coverage polling, and remote roots; terminal error outcomes; and
+    DuckDB path expansion.
 - Thanks to [John Riviello](https://github.com/JohnRiv) for correcting Devin
     timestamps.
 - Thanks to [Grégoire](https://github.com/verdie-g) for Mistral Vibe cache-hit
@@ -1987,6 +1956,8 @@ ______________________________________________________________________
     tool timing.
 - Thanks to [nb213](https://github.com/binyangzhu000-sudo) for Recall extraction
     API-key environment variables.
+- Thanks to [cyre](https://github.com/diazMelgarejo) for keeping DuckDB
+    push-watch polling ownership scoped.
 - Thanks to [Alex Kreidler](https://github.com/alexkreidler) for bounding
     persisted Claude tool-result reads.
 
@@ -2035,6 +2006,10 @@ ______________________________________________________________________
 - Include the recorded model in generated resume commands.
 - Configure the API write timeout and get clearer details when a request times
     out.
+- Rebuild a DuckDB mirror automatically when its project filters change, so its
+    contents match the new scope. **`agentsview duckdb push` now writes only the
+    local mirror file and rejects `[duckdb].url`.** `duckdb status` and
+    `duckdb serve` can still read a remote Quack endpoint.
 
 **Bug fixes**
 
@@ -2055,15 +2030,19 @@ ______________________________________________________________________
 - Preserve detailed progress messages during a full resync.
 - Use the correct default Poolside directory on Linux.
 - Avoid discovering the same resolved Poolside target twice over SSH.
+- Fail promptly when a remote DuckDB endpoint is unavailable, with actionable
+    errors for unsupported URLs and incompatible remote schemas.
 
 **Acknowledgements**
 
 - Thanks to [Wes McKinney](https://github.com/wesm) for Recall extraction,
     retrieval, and evidence work; the portable artifact foundation; bounded
-    daemon sync and Gemini reconciliation; and release documentation.
+    daemon sync and Gemini reconciliation; DuckDB simplification; and release
+    documentation.
 - Thanks to [Matthew Jacobs](https://github.com/mjacobs) for guided semantic
     setup, the session-search age column, Poolside target deduplication, daemon
-    startup reliability, and Antigravity parent links.
+    startup reliability, Antigravity parent links, and clearer DuckDB remote
+    failures.
 - Thanks to [Tyler Gibbs](https://github.com/tylergibbs1) for keeping Claude IDE
     context out of generated session titles.
 - Thanks to [ajinkyajacob](https://github.com/ajinkyajacob) for detecting
@@ -2138,8 +2117,8 @@ ______________________________________________________________________
     the window, open logs, check for updates, and quit.
 - Manage the writable SQLite daemon with
     **`agentsview daemon start|status|restart|stop`**. The commands use the
-    effective `config.toml`, leave read-only PostgreSQL servers alone, and
-    report startup state, URL, PID, live daemon version, and uptime.
+    effective `config.toml`, leave read-only PostgreSQL and DuckDB servers
+    alone, and report startup state, URL, PID, live daemon version, and uptime.
 - Store and review provenance-linked durable knowledge with experimental
     **Recall**. Recall supports lexical query and task briefs, exact
     transcript-evidence validation, host-owned review states, supersession,
@@ -2393,7 +2372,7 @@ ______________________________________________________________________
 - Render **CLI session search results as an aligned table** for the default
     no-context human output, with terminal-width-aware truncation.
 - Reduce **push sync churn** by ignoring volatile stat fields when deciding
-    PostgreSQL push candidates.
+    PostgreSQL push candidates and by lowering DuckDB write amplification.
 - Keep **unchanged OpenCode-family container sessions** out of sync updates, so
     container rows that did not change no longer churn during sync.
 
@@ -2432,8 +2411,8 @@ ______________________________________________________________________
     session support.
 - Thanks to [Rob Schilder](https://github.com/RobSchilderr) for
     `sync_include_cwd_prefixes` ingestion filtering.
-- Thanks to [Phillip Cloud](https://github.com/cpcloud) for PostgreSQL
-    push-churn reductions, OpenCode-family sync churn fixes, and calendar
+- Thanks to [Phillip Cloud](https://github.com/cpcloud) for PostgreSQL and
+    DuckDB push-churn reductions, OpenCode-family sync churn fixes, and calendar
     range picker preservation.
 - Thanks to [Mr Koala](https://github.com/Mr-Koala) for applying configured port
     settings to the active runtime config.
@@ -2565,6 +2544,8 @@ ______________________________________________________________________
 
 **Bug fixes**
 
+- Fix **DuckDB push schema setup through Quack** so remote Quack-backed pushes
+    initialize and validate the DuckDB schema correctly.
 - Fix **Visual Studio 2026 Copilot session parsing** for the current trace
     layout while preserving the existing Visual Studio Copilot agent identity
     and discovery paths.
@@ -2596,6 +2577,8 @@ ______________________________________________________________________
     Chinese (`zh-TW`) localization.
 - Thanks to [Prateek Rungta](https://github.com/prateek) for the project-scoped
     branch filter foundation.
+- Thanks to [Phillip Cloud](https://github.com/cpcloud) for the DuckDB/Quack
+    schema setup fix.
 - Thanks to [Trent Nelson](https://github.com/tpn) for preventing OpenCode WAL
     watcher feedback loops.
 - Thanks to [Wes McKinney](https://github.com/wesm) for daemon sync CPU
@@ -2631,6 +2614,13 @@ ______________________________________________________________________
 - Add **Copilot CLI usage guidance** for records that include aggregate usage
     metadata but do not include per-message token counts.
 
+**Improvements**
+
+- Reuse the configured **DuckDB mirror path** for Quack sync so `duckdb push`,
+    `duckdb status`, `duckdb serve`, and `duckdb quack serve` stay pointed at
+    the same mirror by default.
+- Improve **DuckDB and Quack sync behavior and coverage**.
+
 **Bug fixes**
 
 - Require **daemon transport** for CLI read commands that depend on
@@ -2645,6 +2635,8 @@ ______________________________________________________________________
     support.
 - Thanks to [Matthew Jacobs](https://github.com/mjacobs) for Copilot CLI usage
     guidance when usage records do not include per-message token counts.
+- Thanks to [Phillip Cloud](https://github.com/cpcloud) for reusing the
+    configured DuckDB path for Quack sync and improving DuckDB/Quack coverage.
 - Thanks to [Marius van Niekerk](https://github.com/mariusvniekerk) for the
     daemon-transport requirement on CLI read commands.
 - Thanks to [Wes McKinney](https://github.com/wesm) for desktop backend error
@@ -2866,6 +2858,8 @@ ______________________________________________________________________
 - Make **large-session deletes safer** for full-text search cleanup.
 - Prevent **Ctrl+K command palette input** from reselecting text on every
     keystroke.
+- Avoid **DuckDB tool-call attachment failures** from invalid negative call
+    indexes.
 
 **Acknowledgements**
 
@@ -2877,6 +2871,8 @@ ______________________________________________________________________
 - Thanks to [Rod Boev](https://github.com/rodboev) for native sidebar session
     links, incremental JSONL resume reliability, safer large-session full-text
     cleanup, and the Ctrl+K palette input fix.
+- Thanks to [MirzaSamadAhmedBaig](https://github.com/Mirza-Samad-Ahmed-Baig) for
+    the DuckDB negative call-index fix.
 
 ______________________________________________________________________
 
@@ -3136,6 +3132,19 @@ ______________________________________________________________________
 
 **New features**
 
+- Add a **DuckDB mirror backend** with Quack remote support.
+    `agentsview duckdb push` mirrors the local SQLite archive into
+    `~/.agentsview/sessions.duckdb`, `agentsview duckdb serve` runs the
+    read-only web UI from that mirror, and `agentsview duckdb quack serve`
+    exposes the mirror over DuckDB's Quack remote protocol so another machine
+    can serve from it. SQLite remains the source of truth for ingestion — the
+    mirror is one-way, like [PostgreSQL sync](/docs/pg-sync/). Configuration
+    lives in a `[duckdb]` section of `config.toml`. See
+    [DuckDB Mirror](/docs/duckdb/) for the full setup, including the Quack token
+    and loopback safety defaults. The DuckDB driver is linked into every binary
+    except `windows/arm64`, where the upstream bindings ship no prebuilt library
+    — `agentsview duckdb` subcommands report a clear error there while everything
+    SQLite-backed keeps working.
 - Add **Command Code** session support. Sessions are discovered under
     `~/.commandcode/projects/` as one JSONL file per session, with an optional
     `.meta.json` sidecar for metadata; structured tool calls, tool results, and
@@ -3229,11 +3238,6 @@ ______________________________________________________________________
     EGL error and leaves a blank window, the desktop app now detects the dead
     WebView, opens the UI in your default browser, and explains what happened —
     the backend keeps running either way.
-- Add **anonymous daemon telemetry**. The server now sends a daily liveness ping
-    (version, commit, OS, architecture, and a random per-machine install ID — no
-    session data, paths, hostnames, or prompts). Disable it with
-    `AGENTSVIEW_TELEMETRY_ENABLED=0`. See
-    [Privacy and Telemetry](/docs/configuration/#privacy-and-telemetry).
 
 **Bug fixes**
 
@@ -3257,8 +3261,8 @@ ______________________________________________________________________
 **Acknowledgements**
 
 - Thanks to [Marius van Niekerk](https://github.com/mariusvniekerk) for the
-    secret gist publishing, nested workflow subagent discovery, untruncated
-    session labels, and daemon telemetry.
+    DuckDB mirror backend, secret gist publishing, nested workflow subagent
+    discovery and untruncated session labels.
 - Thanks to [Matthew Jacobs](https://github.com/mjacobs) for the Antigravity CLI
     sidecar token usage, trajectory-sidecar preference, project inference, and
     parser fuzz hardening.

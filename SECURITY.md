@@ -65,7 +65,6 @@ risk via documented flags and config.
 | Browser → HTTP server          | Host-header allowlist + CORS + CSP + X-Frame-Options enforced       | DNS-rebinding, framing, and cross-origin defenses.                     |
 | agentsview → PostgreSQL (push) | TLS required for non-loopback hosts                                 | Plaintext rejected unless `allow_insecure = true` is set explicitly.   |
 | agentsview → ClickHouse (push) | TLS required for non-loopback hosts                                 | Plaintext or unverified TLS rejected unless `allow_insecure = true`.   |
-| agentsview → PostHog telemetry | One-way outbound, opt-out                                           | Anonymous usage events. Disable with `AGENTSVIEW_TELEMETRY_ENABLED=0`. |
 | agentsview → update endpoint   | One-way outbound, opt-out                                           | Disable with `--no-update-check`.                                      |
 | agentsview → pricing catalogs  | One-way outbound, automatic                                         | Public JSON from GitHub and OpenRouter; no session data sent.          |
 | agentsview → model endpoints   | Opt-in; sends transcript content                                    | Generated insights, recall extraction, and embeddings.                 |
@@ -91,8 +90,8 @@ risk via documented flags and config.
 
 Session data stays on your machine unless you turn on a feature that sends it. A
 few requests run automatically, and none of them carries session data. This
-section lists every outbound channel: what it sends, when, and how to turn it
-off.
+section describes outbound channels, what they send, when they run, and how to
+turn them off.
 
 ### Local server
 
@@ -110,24 +109,6 @@ These run without any configuration. None of them sends session content,
 prompts, project names, file paths, or hostnames. Each one reveals your IP
 address to the host it contacts.
 
-- **Anonymous telemetry.** Release builds send usage events to PostHog's US
-  endpoint, `us.i.posthog.com`. The server sends `daemon_active` at most once
-  per installation per UTC day while it runs, and `setup_finished` once per
-  installation when the archive first shows a session. The web UI reports a
-  fixed set of events through the server: app opens, visit-length buckets,
-  screen and analytics page views, the agent type of a viewed session, and
-  which kind of search, export, insight, error, or sync failure occurred. The
-  browser never contacts PostHog, and the server drops any property value
-  outside each event's fixed list. Every event carries the random installation
-  ID stored in `telemetry-install-id` in the data directory, the app version,
-  git commit, distribution channel, operating system, CPU architecture, and
-  whole hours since installation. Person profiles and GeoIP lookup are turned
-  off. Builds without a release version or the PostHog project key send
-  nothing, and so does any process with `CI` set. To turn telemetry off, set
-  `AGENTSVIEW_TELEMETRY_ENABLED=0`, `TELEMETRY_ENABLED=0`, or
-  `DO_NOT_TRACK=1`, then restart the server. See
-  [Anonymous Daemon Telemetry](docs/configuration.md#anonymous-daemon-telemetry)
-  for each event and its allowed values.
 - **Update check.** When the web UI loads in a browser, the server requests
   `github.com/kenn-io/agentsview/releases/latest` and reads the release tag
   from the redirect. It caches the answer for one hour, or 15 minutes for
