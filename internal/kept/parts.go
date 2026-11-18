@@ -40,6 +40,6 @@ func SaveParts[T any](disk *Disk, slot, version string, rows []Part[T], size fun
 	if data, err := EncodeRows(rows, 128<<20, func(part Part[T]) int64 {
 		return int64(len(part.ID)+len(part.Fingerprint)+len(part.Group)) + size(part.Value)
 	}); err == nil {
-		disk.Put(slot, version, data)
+		_ = disk.Put(slot, version, data)
 	}
 }
