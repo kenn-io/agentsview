@@ -57,9 +57,6 @@ func searchKeySlot(f db.SearchFilter) string {
 }
 
 func (s *Store) keepSearchKeys(f db.SearchFilter) {
-	if !s.trendsDisk.Enabled() {
-		return
-	}
 	slot := searchKeySlot(f)
 	s.trendsDisk.Keep("search-keys|"+slot, "1", func() ([]byte, error) {
 		entries, ok := s.runtimeState().searchKept.Get(slot, "search")
