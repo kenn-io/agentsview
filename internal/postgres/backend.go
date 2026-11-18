@@ -329,6 +329,9 @@ func (Backend) OpenVectorSearcher(
 // never imports this package; only this backend opens them, so any other
 // type is a programming error.
 func asStore(store storage.ReplicaStore) (*Store, error) {
+	if hosted, ok := store.(*HostedStore); ok {
+		return hosted.physical, nil
+	}
 	pgStore, ok := store.(*Store)
 	if !ok {
 		return nil, fmt.Errorf("pg store is %T, not *postgres.Store", store)

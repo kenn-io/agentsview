@@ -291,13 +291,7 @@ func (ix *Index) Refresh(
 		return RefreshStats{}, err
 	}
 	visitUnit := func(u db.EmbeddableUnit) error {
-		occurrence := 1
-		if u.SourceUUID != "" {
-			occKey := u.SessionID + "\x00" + u.SourceUUID
-			occurrences[occKey]++
-			occurrence = occurrences[occKey]
-		}
-		key := DocKey(u.Kind, u.SessionID, u.SourceUUID, u.Ordinal, occurrence)
+		key := unitDocKey(u, occurrences)
 		if u.Deleted {
 			deleted, err := ix.deleteMirrorDocument(ctx, key)
 			if err != nil {

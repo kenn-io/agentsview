@@ -7,6 +7,7 @@ AgentsView can index user and assistant message content into a local vector
 store and search it by meaning instead of exact terms, alongside the existing
 substring/regex/FTS5 content search. This is an opt-in feature backed by Ollama,
 Kit's shared local server, or a configured OpenAI-compatible API.
+For uploaded sessions, see [hosted raw sync setup](/docs/hosted-raw-sync/).
 
 For the architecture behind this page — storage layout, generations,
 concurrency, and the search path — see

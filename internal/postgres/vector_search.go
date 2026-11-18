@@ -19,12 +19,14 @@ import (
 // the shared vector_documents mirror. It mirrors internal/vector's Index
 // searcher semantics (Search + hydrateHits + resolveHit) for the PG backend.
 type vectorSearcher struct {
-	pg            *sql.DB
-	genID         int64
-	dimension     int
-	maxInputChars int
-	encode        storage.VectorQueryEncoder
-	chunkTable    string
+	pg              *sql.DB
+	tx              *sql.Tx
+	genID           int64
+	dimension       int
+	maxInputChars   int
+	encode          storage.VectorQueryEncoder
+	chunkTable      string
+	afterCandidates func()
 
 	// schemaMu guards the lazily resolved, quoted pgvector extension schema.
 	// The constructor takes no context, so it is resolved on first query
@@ -33,6 +35,20 @@ type vectorSearcher struct {
 	// or they fail to resolve when pgvector lives in a schema off search_path.
 	schemaMu  sync.Mutex
 	extSchema string
+}
+
+func (v *vectorSearcher) inTx(tx *sql.Tx) *vectorSearcher {
+	return &vectorSearcher{pg: v.pg, tx: tx, genID: v.genID, dimension: v.dimension, maxInputChars: v.maxInputChars, encode: v.encode, chunkTable: v.chunkTable, afterCandidates: v.afterCandidates}
+}
+
+func (v *vectorSearcher) queryExecutor() interface {
+	storeExecutor
+	PrepareContext(context.Context, string) (*sql.Stmt, error)
+} {
+	if v.tx != nil {
+		return v.tx
+	}
+	return v.pg
 }
 
 // NewVectorSearcher builds a PG vector searcher for generation genID. The
@@ -61,7 +77,7 @@ func (v *vectorSearcher) resolveExtSchema(ctx context.Context) (string, error) {
 	if v.extSchema != "" {
 		return v.extSchema, nil
 	}
-	schema, err := vectorExtensionSchema(ctx, v.pg)
+	schema, err := vectorExtensionSchema(ctx, v.queryExecutor())
 	if err != nil {
 		return "", fmt.Errorf("resolving pgvector schema: %w", err)
 	}
@@ -97,6 +113,9 @@ func (v *vectorSearcher) PrepareSemanticSearch(
 		chunks, rowCap, err := v.knnChunks(ctx, vec, extSchema, limit)
 		if err != nil {
 			return nil, false, err
+		}
+		if v.afterCandidates != nil {
+			v.afterCandidates()
 		}
 		exhausted := knnExhausted(len(chunks), limit, rowCap)
 		docs, err := kitvec.RollupByDocument(chunks)
@@ -163,11 +182,14 @@ SELECT doc_key, chunk_index, 1 - (%s) AS score
  ORDER BY %s
  LIMIT $2`, dist, v.chunkTable, dist)
 
-	tx, err := v.pg.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return nil, 0, fmt.Errorf("begin chunk knn tx: %w", err)
+	tx := v.tx
+	if tx == nil {
+		tx, err = v.pg.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			return nil, 0, fmt.Errorf("begin chunk knn tx: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
 	}
-	defer func() { _ = tx.Rollback() }()
 	rowCap, err := tuneHNSWRecall(ctx, tx, k)
 	if err != nil {
 		return nil, 0, err
@@ -177,7 +199,6 @@ SELECT doc_key, chunk_index, 1 - (%s) AS score
 	if err != nil {
 		return nil, 0, fmt.Errorf("chunk knn query: %w", err)
 	}
-	defer rows.Close()
 	defer func() { _ = rows.Close() }()
 
 	var hits []chunkHit
@@ -311,7 +332,7 @@ func (v *vectorSearcher) lookupDocs(
 	if len(docKeys) == 0 {
 		return docs, nil
 	}
-	rows, err := v.pg.QueryContext(ctx, `
+	rows, err := v.queryExecutor().QueryContext(ctx, `
 SELECT d.doc_key, d.session_id, d.ordinal, d.ordinal_end,
        d.subordinate OR `+db.SubordinateSessionSQL("s")+`, d.offsets, d.content
   FROM vector_documents d
@@ -320,7 +341,6 @@ SELECT d.doc_key, d.session_id, d.ordinal, d.ordinal_end,
 	if err != nil {
 		return nil, fmt.Errorf("looking up search hit documents: %w", err)
 	}
-	defer rows.Close()
 	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
@@ -357,7 +377,7 @@ func (v *vectorSearcher) ResolveMessageUnits(
 	if len(refs) == 0 {
 		return out, nil
 	}
-	stmt, err := v.pg.PrepareContext(ctx, `
+	stmt, err := v.queryExecutor().PrepareContext(ctx, `
 SELECT d.doc_key, d.ordinal, d.ordinal_end,
        d.subordinate OR `+db.SubordinateSessionSQL("s")+`
   FROM vector_documents d
@@ -367,7 +387,6 @@ SELECT d.doc_key, d.ordinal, d.ordinal_end,
 	if err != nil {
 		return nil, fmt.Errorf("resolve message units: %w", err)
 	}
-	defer stmt.Close()
 	defer func() { _ = stmt.Close() }()
 
 	for i, ref := range refs {
@@ -402,7 +421,11 @@ func (s *Store) SetVectorSearcher(searcher db.VectorSearcher) {
 func (s *Store) getVectorSearcher() db.VectorSearcher {
 	s.runtimeState().vectorMu.RLock()
 	defer s.runtimeState().vectorMu.RUnlock()
-	return s.runtimeState().vectorSearcher
+	searcher := s.runtimeState().vectorSearcher
+	if v, ok := searcher.(*vectorSearcher); ok && s.readTx != nil {
+		return v.inTx(s.readTx)
+	}
+	return searcher
 }
 
 // SetSemanticUnavailableReason records a human explanation for why semantic
