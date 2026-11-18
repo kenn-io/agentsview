@@ -1324,10 +1324,12 @@ field and catch-up warning clear when the pass finishes or fails, and failures
 are logged. Archive responses carry `X-Agentsview-Archive-Stale: true` when
 a catch-up of changes held back by the background sync interval or an idle
 pause did not finish within the read's wait. A read within two minutes of
-another archive read starts no catch-up and is not marked stale. The watcher
-keeps syncing at `sync_interval` during that time, so the read can miss up to
-that interval of changes. A required parser rebuild uses the stale header
-independently.
+another archive read starts no catch-up. The watcher keeps syncing at
+`sync_interval` during that time, so the read can miss up to that interval of
+changes. If an earlier read's catch-up is still running, the read shares its
+remaining wait and is marked stale when that wait runs out. Otherwise it
+answers at once and is not marked stale. A required parser rebuild uses the
+stale header independently.
 
 HTTP `--own-only` and `--no-sync` read only the archive and return exit 2 for
 missing IDs. Direct mode still refreshes the named transcript. Combined HTTP
