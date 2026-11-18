@@ -167,7 +167,7 @@ func Open(tb testing.TB, dsn, database string) *sql.DB {
 	opt, err := clickhouse.ParseDSN(dsn)
 	require.NoError(tb, err)
 	opt.Auth.Database = database
-	opt.Settings = clickhouse.Settings{"final": 1}
+	opt.Settings["final"] = 1
 	conn := clickhouse.OpenDB(opt)
 	tb.Cleanup(func() { conn.Close() })
 	require.NoError(tb, conn.PingContext(tb.Context()))
