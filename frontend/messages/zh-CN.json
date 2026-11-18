@@ -3142,8 +3142,8 @@
     }
   ],
   "empty_archive_pending_title": "导入未完成",
-  "empty_archive_pending_desc": "选择顶部的同步会话以重试，或选择智能体文件夹。",
-  "empty_archive_syncing_title": "正在同步会话",
+  "empty_archive_pending_desc": "选择顶部的“同步”以重试，或选择智能体文件夹。",
+  "empty_archive_syncing_title": "正在导入会话",
   "empty_archive_syncing_desc": "会话导入后将显示在这里。",
   "empty_archive_title": "暂无会话",
   "empty_archive_desc": "AgentsView 从这些文件夹读取会话。代理写入其中任一文件夹后，会话就会显示在这里。",

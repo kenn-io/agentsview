@@ -37,8 +37,8 @@ afterEach(() => {
 
 describe("EmptyArchivePanel", () => {
   it.each([
-    [true, false, "Syncing sessions"],
-    [true, true, "Syncing sessions"],
+    [true, false, "Importing sessions"],
+    [true, true, "Importing sessions"],
     [false, true, "Import not finished"],
     [false, false, "No sessions yet"],
   ])("shows the reason for an empty view", async (syncing, pending, title) => {
@@ -47,7 +47,8 @@ describe("EmptyArchivePanel", () => {
     component = mount(EmptyArchivePanel, { target: document.body });
     await tick();
     expect(document.body.textContent).toContain(title);
-    if (pending && !syncing) expect(document.body.textContent).toContain("Sync sessions in the header");
+    if (pending && !syncing) expect(document.body.textContent).toContain("Select Sync in the header");
+    expect(document.querySelector(".empty-archive-spinner") !== null).toBe(syncing);
   });
   it("shows sync progress while keeping the folders available", async () => {
     settings.sessionProviders = [
@@ -62,7 +63,7 @@ describe("EmptyArchivePanel", () => {
     sync.syncing = true;
     component = mount(EmptyArchivePanel, { target: document.body });
     await tick();
-    expect(document.body.textContent).toContain("Syncing sessions");
+    expect(document.body.textContent).toContain("Importing sessions");
     expect(document.body.textContent).toContain("/example");
     sync.syncing = false;
     sessions.archiveEmpty = true;

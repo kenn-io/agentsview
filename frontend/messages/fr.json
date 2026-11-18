@@ -3293,8 +3293,8 @@
     }
   ],
   "empty_archive_pending_title": "Importation inachevée",
-  "empty_archive_pending_desc": "Sélectionnez Synchroniser les sessions dans la barre supérieure pour réessayer, ou choisissez les dossiers de vos agents.",
-  "empty_archive_syncing_title": "Synchronisation des sessions",
+  "empty_archive_pending_desc": "Sélectionnez Synchroniser dans la barre supérieure pour réessayer, ou choisissez les dossiers de vos agents.",
+  "empty_archive_syncing_title": "Importation des sessions",
   "empty_archive_syncing_desc": "Vos sessions apparaîtront au fur et à mesure de leur importation.",
   "empty_archive_title": "Aucune session pour l'instant",
   "empty_archive_desc": "AgentsView lit les sessions dans ces dossiers. Elles apparaîtront ici dès qu'un agent écrira dans l'un d'eux.",

@@ -3216,8 +3216,8 @@
     }
   ],
   "empty_archive_pending_title": "インポートが完了していません",
-  "empty_archive_pending_desc": "再試行するには上部の「セッションを同期する」を選ぶか、エージェントのフォルダーを選択してください。",
-  "empty_archive_syncing_title": "セッションを同期中",
+  "empty_archive_pending_desc": "再試行するには上部の「同期」を選ぶか、エージェントのフォルダーを選択してください。",
+  "empty_archive_syncing_title": "セッションをインポート中",
   "empty_archive_syncing_desc": "インポートされたセッションから順に表示されます。",
   "empty_archive_title": "まだセッションがありません",
   "empty_archive_desc": "AgentsView はこれらのフォルダーからセッションを読み取ります。エージェントがいずれかに書き込むと、ここに表示されます。",

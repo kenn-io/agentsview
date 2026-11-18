@@ -3148,8 +3148,8 @@
     }
   ],
   "empty_archive_pending_title": "가져오기가 완료되지 않음",
-  "empty_archive_pending_desc": "다시 시도하려면 상단에서 세션 동기화를 선택하거나 에이전트 폴더를 선택하세요.",
-  "empty_archive_syncing_title": "세션 동기화 중",
+  "empty_archive_pending_desc": "다시 시도하려면 상단에서 동기화를 선택하거나 에이전트 폴더를 선택하세요.",
+  "empty_archive_syncing_title": "세션 가져오는 중",
   "empty_archive_syncing_desc": "세션을 가져오는 대로 표시됩니다.",
   "empty_archive_title": "아직 세션이 없습니다",
   "empty_archive_desc": "AgentsView는 이 폴더에서 세션을 읽습니다. 에이전트가 이 중 한 곳에 기록하면 여기에 표시됩니다.",

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, EmptyState } from "@kenn-io/kit-ui";
+  import { Button, EmptyState, Spinner } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import { FolderIcon } from "../../icons.js";
   import { router } from "../../stores/router.svelte.js";
@@ -28,7 +28,11 @@
     description={sync.syncing ? m.empty_archive_syncing_desc() : sync.startupPending ? m.empty_archive_pending_desc() : m.empty_archive_desc()}
   >
     {#snippet icon()}
-      <FolderIcon size="40" strokeWidth="1.6" aria-hidden="true" />
+      {#if sync.syncing}
+        <span class="empty-archive-spinner" aria-hidden="true"><Spinner size={40} /></span>
+      {:else}
+        <FolderIcon size="40" strokeWidth="1.6" aria-hidden="true" />
+      {/if}
     {/snippet}
     {#if settings.loaded && !settings.error}
       {#if folders.length === 0}
@@ -65,6 +69,10 @@
     align-items: center;
     padding: 8px 16px;
     flex-shrink: 0;
+  }
+
+  .empty-archive-spinner {
+    display: flex;
   }
 
   .empty-archive-folders {

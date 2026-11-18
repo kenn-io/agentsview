@@ -3256,8 +3256,8 @@
     }
   ],
   "empty_archive_pending_title": "İdxal tamamlanmayıb",
-  "empty_archive_pending_desc": "Yenidən cəhd etmək üçün yuxarıda Sessiyaları sinxronlaşdır seçin və ya agent qovluqlarınızı seçin.",
-  "empty_archive_syncing_title": "Sessiyalar sinxronlaşdırılır",
+  "empty_archive_pending_desc": "Yenidən cəhd etmək üçün yuxarıda Sinxronlaşdır seçin və ya agent qovluqlarınızı seçin.",
+  "empty_archive_syncing_title": "Sessiyalar idxal edilir",
   "empty_archive_syncing_desc": "Sessiyalarınız idxal edildikcə burada görünəcək.",
   "empty_archive_title": "Hələ sessiya yoxdur",
   "empty_archive_desc": "AgentsView sessiyaları bu qovluqlardan oxuyur. Agent onlardan birinə yazan kimi sessiyalar burada görünəcək.",
