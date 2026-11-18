@@ -49,9 +49,9 @@ const (
 	manifestMinDecodeVersion = 2
 	// Segment v2 adds the optional prompt_source provenance field on
 	// message records. Segment v3 adds the optional provider_id billing
-	// field. Segment v4 adds reasoning_effort, and v5 adds dialogue_text.
-	// Earlier segments still decode, with missing fields defaulting to empty.
-	messageSegmentFormatVersion    = 5
+	// field. Segment v4 adds the optional reasoning_effort field; v1 through
+	// v3 segments still decode, with the fields defaulting to empty.
+	messageSegmentFormatVersion    = 4
 	messageSegmentMinDecodeVersion = 1
 	metadataEventFormatVersion     = 1
 )
@@ -219,7 +219,6 @@ type segmentMessage struct {
 	Ordinal           int               `json:"ordinal"`
 	Role              string            `json:"role"`
 	Content           string            `json:"content"`
-	DialogueText      *string           `json:"dialogue_text,omitempty"`
 	ThinkingText      string            `json:"thinking_text,omitempty"`
 	Timestamp         string            `json:"timestamp,omitempty"`
 	HasThinking       bool              `json:"has_thinking,omitzero"`
@@ -314,18 +313,9 @@ func ValidateRawSource(raw *RawSourceRef) error {
 }
 
 func encodeSegment(msgs []db.Message) ([]byte, error) {
-	version := 4
-	for _, msg := range msgs {
-		if msg.DialogueText != nil {
-			version = messageSegmentFormatVersion
-			break
-		}
-	}
 	var buf bytes.Buffer
 	for _, msg := range msgs {
-		record := segmentMessageFromDB(msg)
-		record.Version = version
-		data, err := canonicalJSON(record)
+		data, err := canonicalJSON(segmentMessageFromDB(msg))
 		if err != nil {
 			return nil, fmt.Errorf("encoding message segment: %w", err)
 		}
@@ -340,7 +330,6 @@ func segmentMessageFromDB(msg db.Message) segmentMessage {
 		Ordinal:           msg.Ordinal,
 		Role:              msg.Role,
 		Content:           msg.Content,
-		DialogueText:      msg.DialogueText,
 		ThinkingText:      msg.ThinkingText,
 		Timestamp:         msg.Timestamp,
 		HasThinking:       msg.HasThinking,

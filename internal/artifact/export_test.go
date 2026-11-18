@@ -2225,35 +2225,3 @@ func TestExportRoundTripsSessionQualitySignals(t *testing.T) {
 	assert.NotContains(t, string(sessionData), `"quality_signals"`,
 		"the inner session DTO must carry no quality-signals content of its own")
 }
-
-func TestExportMessageSegmentVersions(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		messages []db.Message
-		version  string
-	}{
-		{"plain", []db.Message{{Role: "user", Content: "ordinary"}}, `"v":4`},
-		{"mixed", []db.Message{{Role: "user", Content: "ordinary"}, {Ordinal: 1, Role: "user", Content: "prompt", DialogueText: new("prompt")}}, `"v":5`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			store := newTestArtifactStore(t)
-			hashes, err := exportMessageSegmentsToStore(t.Context(), store, contractOrigin, "session", tc.messages, productionArtifactLimits())
-			require.NoError(t, err)
-			require.Len(t, hashes, 1)
-			ref, err := NewRef(contractOrigin, KindSegments, hashes[0]+".ndjson")
-			require.NoError(t, err)
-			_, reader, err := store.Open(t.Context(), ref)
-			require.NoError(t, err)
-			data, err := io.ReadAll(reader)
-			require.NoError(t, err)
-			require.NoError(t, reader.Verify())
-			require.NoError(t, reader.Close())
-			assert.Contains(t, string(data), tc.version)
-			_, err = decodeSegment(data)
-			require.NoError(t, err)
-			expected, err := encodeSegment(tc.messages)
-			require.NoError(t, err)
-			assert.Equal(t, expected, data)
-		})
-	}
-}

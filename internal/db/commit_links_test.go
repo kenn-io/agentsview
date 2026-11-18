@@ -573,9 +573,11 @@ func TestCommitLinksBackfillArchiveOnlyVersion(t *testing.T) {
 			require.NoError(t, d.Close())
 			d, err = OpenIsolatedContext(t.Context(), path)
 			require.NoError(t, err)
-			if oldVersion == 136 {
-				var version int
-				require.NoError(t, d.getReader().QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
+			var version int
+			require.NoError(t, d.getReader().QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
+			if oldVersion >= 137 {
+				assert.Equal(t, (1<<20)+170, version)
+			} else {
 				assert.Equal(t, (1<<20)+oldVersion, version)
 			}
 			got, err := d.SessionCommitLinks(t.Context(), "s1")

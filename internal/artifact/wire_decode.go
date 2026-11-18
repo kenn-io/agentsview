@@ -352,7 +352,6 @@ func (m segmentMessage) dbMessage() db.Message {
 		Ordinal:           m.Ordinal,
 		Role:              m.Role,
 		Content:           m.Content,
-		DialogueText:      m.DialogueText,
 		ThinkingText:      m.ThinkingText,
 		Timestamp:         m.Timestamp,
 		HasThinking:       m.HasThinking,

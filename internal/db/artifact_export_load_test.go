@@ -209,17 +209,6 @@ func TestLoadArtifactExportDataCardinalityBoundaries(t *testing.T) {
 }
 
 func TestLoadArtifactExportDataRawByteBoundaries(t *testing.T) {
-	t.Run("prompt dialogue counts toward limit", func(t *testing.T) {
-		database := artifactExportLoadTestDB(t)
-		dialogue := strings.Repeat("x", 800)
-		require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []Message{{
-			SessionID: "session", Role: "user", Content: dialogue + " other", DialogueText: &dialogue,
-		}}))
-		limits := smallArtifactExportLoadLimits()
-		limits.MessageBytes = 1200
-		_, err := database.LoadArtifactExportData(t.Context(), "session", limits)
-		require.ErrorIs(t, err, ErrArtifactExportLimit)
-	})
 	t.Run("dialogue projection is omitted", func(t *testing.T) {
 		database := artifactExportLoadTestDB(t)
 		dialogue := strings.Repeat("x", 1024)

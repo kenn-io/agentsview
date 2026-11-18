@@ -41,10 +41,9 @@ func TestPromptPRLinksStoredMessages(t *testing.T) {
 
 func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
 	for _, tc := range []struct {
-		name                         string
-		legacy, rebuild, archiveOnly bool
-		version                      int
-	}{{name: "backfill", version: 183}, {name: "reserved version", version: 184}, {name: "archive only", version: 183, archiveOnly: true}, {name: "rebuild", rebuild: true}, {name: "legacy", legacy: true, version: 183}} {
+		name   string
+		legacy bool
+	}{{name: "backfill"}, {name: "legacy", legacy: true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "archive.db")
 			d, err := OpenIsolated(t.Context(), path)
@@ -61,9 +60,6 @@ func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
 				s.PRLinks = []PRLink{link}
 			}
 			require.NoError(t, d.UpsertSession(t.Context(), s))
-			if tc.archiveOnly {
-				require.NoError(t, d.EnableArchiveOnly(t.Context()))
-			}
 			dialogue := "https://github.com/o/r/%70ull/42"
 			require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, []Message{{SessionID: s.ID, Role: "user", Content: dialogue + " https://github.com/o/r/pull/3", DialogueText: &dialogue}}))
 			require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
@@ -81,35 +77,11 @@ func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
 				if _, err := tx.ExecContext(t.Context(), `DELETE FROM stats WHERE key='prompt_pr_links_backfill_v1'`); err != nil {
 					return err
 				}
-				version := tc.version
-				if tc.rebuild {
-					version = fullRebuildDataVersion() - 1
-				}
-				return writeUserVersion(t.Context(), tx, version)
+				return nil
 			}))
 			require.NoError(t, d.Close())
 			d, err = OpenIsolated(t.Context(), path)
 			require.NoError(t, err)
-			if tc.rebuild {
-				assert.True(t, d.NeedsResync())
-				version, _, err := readUserVersion(t.Context(), d.getReader())
-				require.NoError(t, err)
-				assert.Less(t, version, fullRebuildDataVersion())
-				got, err := d.GetSession(t.Context(), s.ID)
-				require.NoError(t, err)
-				assert.Empty(t, got.PRLinks)
-				require.NoError(t, d.Close())
-				d, err = OpenIsolated(t.Context(), filepath.Join(t.TempDir(), "rebuilt.db"))
-				require.NoError(t, err)
-				_, err = d.CopyOrphanedDataFrom(t.Context(), path)
-				require.NoError(t, err)
-			} else {
-				version, archiveOnly, err := readUserVersion(t.Context(), d.getReader())
-				require.NoError(t, err)
-				assert.Equal(t, 185, version)
-				assert.Equal(t, tc.archiveOnly, archiveOnly)
-				assert.Equal(t, tc.archiveOnly, d.NeedsResync())
-			}
 			got, err := d.GetSession(t.Context(), s.ID)
 			require.NoError(t, err)
 			if tc.legacy {
@@ -125,16 +97,6 @@ func TestPromptPRLinksArchiveUpgrade(t *testing.T) {
 			} else {
 				require.Len(t, got.PRLinks, 1)
 				assert.Equal(t, "https://github.com/o/r/pull/42", got.PRLinks[0].URL)
-			}
-			if tc.archiveOnly {
-				require.NoError(t, d.Close())
-				needs, rebuild, err := ArchiveResyncState(t.Context(), path)
-				require.NoError(t, err)
-				assert.True(t, needs)
-				assert.True(t, rebuild)
-				d, err = OpenIsolated(t.Context(), path)
-				require.NoError(t, err)
-				assert.True(t, d.NeedsResync())
 			}
 		})
 	}

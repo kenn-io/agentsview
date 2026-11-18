@@ -639,8 +639,6 @@ func exportMessageSegmentsToStore(
 	var spool *os.File
 	var hasher hash.Hash
 	var segmentBytes int64
-	var versionOffsets []int64
-	segmentHasDialogue := false
 	segmentMessages := 0
 	segmentNested := nestedCollectionCounts{}
 	defer func() {
@@ -660,8 +658,6 @@ func exportMessageSegmentsToStore(
 		}
 		hasher = sha256.New()
 		segmentBytes = 0
-		versionOffsets = nil
-		segmentHasDialogue = false
 		segmentMessages = 0
 		segmentNested = nestedCollectionCounts{}
 		return nil
@@ -671,20 +667,6 @@ func exportMessageSegmentsToStore(
 			return rejectArtifactExportf(
 				"manifest segment reference limit exceeded for %s: limit %d",
 				sessionID, limits.manifestSegments)
-		}
-		if segmentHasDialogue {
-			for _, offset := range versionOffsets {
-				if _, err := spool.WriteAt([]byte("5"), offset); err != nil {
-					return fmt.Errorf("setting artifact segment version: %w", err)
-				}
-			}
-			if _, err := spool.Seek(0, io.SeekStart); err != nil {
-				return fmt.Errorf("rewinding artifact segment spool: %w", err)
-			}
-			hasher.Reset()
-			if _, err := io.Copy(hasher, spool); err != nil {
-				return fmt.Errorf("hashing artifact segment spool: %w", err)
-			}
 		}
 		digest := hex.EncodeToString(hasher.Sum(nil))
 		if _, duplicate := seen[digest]; duplicate {
@@ -729,9 +711,7 @@ func exportMessageSegmentsToStore(
 		if err := validateMessageFitsSegment(message.Ordinal, messageNested, limits); err != nil {
 			return nil, err
 		}
-		record := segmentMessageFromDB(message)
-		record.Version = 4
-		data, err := canonicalJSON(record)
+		data, err := canonicalJSON(segmentMessageFromDB(message))
 		if err != nil {
 			return nil, fmt.Errorf(
 				"%w: encoding message segment at ordinal %d: %w",
@@ -762,13 +742,6 @@ func exportMessageSegmentsToStore(
 				"session decoded byte limit exceeded for %s: limit %d",
 				sessionID, limits.sessionDecodedBytes)
 		}
-		segmentHasDialogue = segmentHasDialogue || message.DialogueText != nil
-		// Canonical JSON puts the version after the other record fields.
-		index := bytes.LastIndex(data, []byte(`"v":4`))
-		if index < 0 {
-			return nil, rejectArtifactExportf("message record missing segment version")
-		}
-		versionOffsets = append(versionOffsets, segmentBytes+int64(index)+4)
 		if _, err := io.MultiWriter(spool, hasher).Write(data); err != nil {
 			return nil, fmt.Errorf("writing artifact segment spool: %w", err)
 		}

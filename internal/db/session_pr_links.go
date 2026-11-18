@@ -261,20 +261,6 @@ func (db *DB) backfillPromptPRLinksLocked(ctx context.Context, w *writerHandle) 
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	version, archiveOnly, err := readUserVersion(ctx, tx)
-	if err != nil {
-		return err
-	}
-	// Older populated archives must retain their version until their full rebuild.
-	if version < fullRebuildDataVersion() {
-		var hasSessions bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sessions)`).Scan(&hasSessions); err != nil {
-			return err
-		}
-		if hasSessions {
-			return nil
-		}
-	}
 	var done bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM stats WHERE key=? AND value!=0)`, key).Scan(&done); err != nil {
 		return err
@@ -290,19 +276,6 @@ func (db *DB) backfillPromptPRLinksLocked(ctx context.Context, w *writerHandle) 
 			}
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO stats(key,value) VALUES (?,1)`, key); err != nil {
-			return err
-		}
-	}
-	if version >= fullRebuildDataVersion() && version < 185 {
-		// Archive-only upgrades need a preservation rebuild even when no
-		// providers need reparsing. Record it before raising the version.
-		if archiveOnly && len(ScopedDataVersionProviders(version, 185)) == 0 {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO stats(key, value) VALUES (?, ?)
-				ON CONFLICT(key) DO UPDATE SET value = max(value, excluded.value)`, scopedUpgradePendingKey, 185); err != nil {
-				return fmt.Errorf("recording pending archive rebuild: %w", err)
-			}
-		}
-		if err := advanceDataVersion(ctx, tx, 185); err != nil {
 			return err
 		}
 	}
