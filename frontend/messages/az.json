@@ -3255,6 +3255,8 @@
       "match": { "countPlural=one": "mətn hissəsi", "countPlural=other": "mətn hissəsi" }
     }
   ],
+  "empty_archive_unreadable_title": "Oxuna bilən sessiya yoxdur",
+  "empty_archive_unreadable_desc": "Burada tapılan sessiyalar boşdur və ya yan panel filtrləri ilə gizlədilib. Yan paneldə Filtrləri açın və ya agent qovluqlarınızı seçin.",
   "empty_archive_syncing_title": "Sessiyalar sinxronlaşdırılır",
   "empty_archive_syncing_desc": "Sessiyalarınız idxal edildikcə burada görünəcək.",
   "empty_archive_title": "Hələ sessiya yoxdur",

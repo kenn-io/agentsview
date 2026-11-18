@@ -426,24 +426,41 @@
   let previousSessionId: string | null = null;
   let previousActiveSessionId: string | null = null;
   let firstVisitArmed = $state(false);
+  let firstVisitWaiting = $state(false);
+  let candidate = $state<string | null>(null);
+  const tried = new Set<string>();
 
   $effect(() => {
     if (!firstVisitArmed) return;
     if (
-      router.route !== "sessions" || !router.isRootPath ||
-      hasFilterParams(router.params) || sessions.activeSessionId
+      router.route !== "sessions" || hasFilterParams(router.params) ||
+      sessions.activeSessionId !== candidate
     ) {
       firstVisitArmed = false;
+      firstVisitWaiting = false;
+      candidate = null;
       return;
     }
-    const group = sessions.groupedSessions.find((group) =>
-      group.sessions.some((session) =>
-        session.id === group.primarySessionId && session.message_count > 0,
-      ),
-    );
+    if (sessions.sidebarLoadError || sessions.activeSessionNotFound) return;
+    if (candidate) {
+      if (messages.sessionId !== candidate || messages.loading || messages.loadError) return;
+      if (messages.messages.length > 0) {
+        firstVisitArmed = false;
+        return;
+      }
+      tried.add(candidate);
+      candidate = null;
+      sessions.deselectSession();
+    }
+    const group = sessions.groupedSessions.find((group) => !tried.has(group.primarySessionId));
     if (group) {
-      firstVisitArmed = false;
-      sessions.selectSession(group.primarySessionId);
+      firstVisitWaiting = false;
+      candidate = group.primarySessionId;
+      sessions.selectSession(candidate);
+    } else if (!sessions.loading && sessions.nextCursor) {
+      void sessions.loadMore();
+    } else if (!sessions.loading && !sessions.nextCursor) {
+      firstVisitWaiting = true;
     }
   });
 
@@ -845,8 +862,9 @@
   });
 
   onMount(() => {
-    firstVisitArmed = readProgress.isEmpty && router.route === "sessions" &&
+    firstVisitArmed = !ui.firstVisitSeen && readProgress.isEmpty && router.route === "sessions" &&
       router.isRootPath && !hasFilterParams(router.params);
+    if (firstVisitArmed) ui.firstVisitSeen = true;
     globalAuthToken = getAuthToken();
     settings.load();
     starred.load();
@@ -976,7 +994,7 @@
           onBack={() => sessions.deselectSession()}
         />
         <MessageList bind:this={messageListRef} />
-      {:else if sessions.archiveEmpty}
+      {:else if sessions.archiveEmpty || firstVisitWaiting}
         <EmptyArchivePanel />
       {:else}
         <AnalyticsPage

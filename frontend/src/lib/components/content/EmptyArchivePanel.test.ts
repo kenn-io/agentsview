@@ -8,6 +8,7 @@ import { router } from "../../stores/router.svelte.js";
 import { settings } from "../../stores/settings.svelte.js";
 import { ui } from "../../stores/ui.svelte.js";
 import { sync } from "../../stores/sync.svelte.js";
+import { sessions } from "../../stores/sessions.svelte.js";
 
 let component: ReturnType<typeof mount>;
 
@@ -25,6 +26,8 @@ afterEach(() => {
   settings.sessionProviders = [];
   settings.disabledAgents = [];
   sync.syncing = false;
+  sync.startupPending = false;
+  sessions.archiveEmpty = false;
   ui.sidebarOpen = true;
   ui.isMobileViewport = false;
   router.route = "sessions";
@@ -33,6 +36,19 @@ afterEach(() => {
 });
 
 describe("EmptyArchivePanel", () => {
+  it.each([
+    [true, false, false, "Syncing sessions"],
+    [false, true, false, "Syncing sessions"],
+    [false, false, true, "No sessions yet"],
+    [false, false, false, "No readable sessions"],
+  ])("shows the reason for an empty view", async (syncing, pending, empty, title) => {
+    sync.syncing = syncing;
+    sync.startupPending = pending;
+    sessions.archiveEmpty = empty;
+    component = mount(EmptyArchivePanel, { target: document.body });
+    await tick();
+    expect(document.body.textContent).toContain(title);
+  });
   it("shows sync progress while keeping the folders available", async () => {
     settings.sessionProviders = [
       {
@@ -49,6 +65,7 @@ describe("EmptyArchivePanel", () => {
     expect(document.body.textContent).toContain("Syncing sessions");
     expect(document.body.textContent).toContain("/example");
     sync.syncing = false;
+    sessions.archiveEmpty = true;
     await tick();
     expect(document.body.textContent).toContain("No sessions yet");
   });

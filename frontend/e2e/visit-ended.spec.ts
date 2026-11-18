@@ -64,6 +64,7 @@ for (const { remote, action } of [
         );
         await new SessionsPage(page).goto();
       } else {
+        await page.addInitScript(() => localStorage.setItem("agentsview-first-visit-seen", "true"));
         await page.goto(server.url);
         await expect(new SessionsPage(page).sessionItems.first()).toBeVisible();
       }

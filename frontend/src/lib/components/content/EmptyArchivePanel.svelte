@@ -5,6 +5,7 @@
   import { router } from "../../stores/router.svelte.js";
   import { settings } from "../../stores/settings.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
+  import { sessions } from "../../stores/sessions.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
   import SidebarToggleButton from "../layout/SidebarToggleButton.svelte";
 
@@ -24,8 +25,8 @@
     </div>
   {/if}
   <EmptyState
-    title={sync.syncing ? m.empty_archive_syncing_title() : m.empty_archive_title()}
-    description={sync.syncing ? m.empty_archive_syncing_desc() : m.empty_archive_desc()}
+    title={sync.syncing || sync.startupPending ? m.empty_archive_syncing_title() : sessions.archiveEmpty ? m.empty_archive_title() : m.empty_archive_unreadable_title()}
+    description={sync.syncing || sync.startupPending ? m.empty_archive_syncing_desc() : sessions.archiveEmpty ? m.empty_archive_desc() : m.empty_archive_unreadable_desc()}
   >
     {#snippet icon()}
       <FolderIcon size="40" strokeWidth="1.6" aria-hidden="true" />

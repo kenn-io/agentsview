@@ -94,6 +94,13 @@ afterEach(() => {
   document.body.innerHTML = "";
   localStorage.clear();
   readProgress.reset();
+  ui.firstVisitSeen = false;
+  messages.clear();
+  sessions.nextCursor = null;
+  sessions.loading = false;
+  sessions.sidebarLoadError = null;
+  sync.startupPending = false;
+  sync.syncing = false;
   sessions.sessions = [];
   window.history.replaceState(null, "", "/");
   router.route = "sessions";
@@ -711,6 +718,139 @@ describe("App root Sessions landing", () => {
     } as (typeof sessions.sessions)[number];
   }
 
+  it("does not open a session on a later visit after leaving an empty landing", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    setRootUrl();
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    unmount(component);
+    component = undefined;
+    sessions.sessions = [sidebarRow("newest", 2, "2026-01-02")];
+    setRootUrl();
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    expect(sessions.activeSessionId).toBeNull();
+  });
+
+  it("tries the next session when a transcript is empty", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    setRootUrl();
+    sessions.sessions = [sidebarRow("empty", 2, "2026-01-03"), sidebarRow("readable", 2, "2026-01-02")];
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    expect(sessions.activeSessionId).toBe("empty");
+    messages.sessionId = "empty";
+    messages.messages = [];
+    await flushEffects();
+    expect(sessions.activeSessionId).toBe("readable");
+    messages.sessionId = "readable";
+    messages.messages = [{ ordinal: 1, role: "user", content: "hello" } as Message];
+    await flushEffects();
+    sessions.deselectSession();
+    await flushEffects();
+    expect(sessions.activeSessionId).toBeNull();
+  });
+
+  it("explains exhausted candidates and resumes when a new row arrives", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    setRootUrl();
+    sessions.sessions = [sidebarRow("empty", 2, "2026-01-03")];
+    sync.startupPending = true;
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    messages.sessionId = "empty";
+    messages.messages = [];
+    await flushEffects();
+    expect(sessions.activeSessionId).toBeNull();
+    expect(document.body.textContent).toContain("Syncing sessions");
+    sync.startupPending = false;
+    await flushEffects();
+    expect(document.body.textContent).toContain("No readable sessions");
+    sessions.sessions = [...sessions.sessions, sidebarRow("new", 1, "2026-01-02")];
+    await flushEffects();
+    expect(sessions.activeSessionId).toBe("new");
+  });
+
+  it("keeps a failed transcript selected and cancels after Back", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    setRootUrl();
+    sessions.sessions = [sidebarRow("failed", 2, "2026-01-03"), sidebarRow("next", 2, "2026-01-02")];
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    messages.sessionId = "failed";
+    messages.loadError = "Could not load";
+    await flushEffects();
+    expect(sessions.activeSessionId).toBe("failed");
+    sessions.deselectSession();
+    await flushEffects();
+    messages.loadError = null;
+    messages.messages = [];
+    await flushEffects();
+    expect(sessions.activeSessionId).toBeNull();
+  });
+
+  it("pauses after a sidebar page fails and resumes after retry", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    const loadPage = vi.spyOn(SessionsService, "getApiV1SessionsSidebarIndex")
+      .mockRejectedValueOnce(new Error("Page unavailable"))
+      .mockResolvedValueOnce({ sessions: [{ ...sidebarRow("older", 2, "2026-01-01"), started_at: "2026-01-01", ended_at: "2026-01-01", is_automated: false, is_teammate: false, user_message_count: 1 }], total: 1 });
+    setRootUrl();
+    sessions.nextCursor = "next-page";
+    component = mount(App, { target: document.body });
+    await vi.waitFor(() => expect(sessions.sidebarLoadError).toContain("Page unavailable"));
+    expect(loadPage).toHaveBeenCalledTimes(1);
+    await flushEffects();
+    expect(loadPage).toHaveBeenCalledTimes(1);
+    await sessions.retrySidebar();
+    await flushEffects();
+    expect(sessions.activeSessionId).toBe("older");
+  });
+
+  it("checks older pages before showing the no-readable state", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    const fetchPage = vi.spyOn(SessionsService, "getApiV1SessionsSidebarIndex")
+      .mockResolvedValueOnce({ sessions: [{ ...sidebarRow("older", 1, "2026-01-01"), started_at: "2026-01-01", ended_at: "2026-01-01", is_automated: false, is_teammate: false, user_message_count: 1 }], total: 2 });
+    setRootUrl();
+    sessions.sessions = [sidebarRow("newest", 1, "2026-01-02")];
+    sessions.nextCursor = "page-two";
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    messages.sessionId = "newest";
+    messages.messages = [];
+    await vi.waitFor(() => expect(sessions.activeSessionId).toBe("older"));
+    expect(fetchPage).toHaveBeenCalledOnce();
+    messages.sessionId = "older";
+    messages.messages = [];
+    await flushEffects();
+    expect(sessions.activeSessionId).toBeNull();
+    expect(document.body.textContent).toContain("No readable sessions");
+  });
+
+  it("does not consume the first visit when opening a deep link", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.spyOn(sessions, "navigateToSession").mockResolvedValue();
+    router.route = "sessions";
+    router.sessionId = "linked";
+    router.isRootPath = false;
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    expect(ui.firstVisitSeen).toBe(false);
+    unmount(component);
+    component = undefined;
+    sessions.sessions = [sidebarRow("newest", 1, "2026-01-02")];
+    setRootUrl();
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    expect(sessions.activeSessionId).toBe("newest");
+  });
+
   it("opens the first readable sidebar session once when rows arrive", async () => {
     stubAppDependencies();
     vi.spyOn(sessions, "load").mockResolvedValue();
@@ -719,7 +859,6 @@ describe("App root Sessions landing", () => {
     component = mount(App, { target: document.body });
     await flushEffects();
     sessions.sessions = [
-      sidebarRow("empty", 0, "2026-01-03"),
       sidebarRow("newest", 2, "2026-01-02"),
       sidebarRow("older", 1, "2026-01-01"),
     ];
@@ -916,6 +1055,7 @@ describe("App root Sessions landing", () => {
 
   it("keeps root URL, yoke, and saved filters through analytics refresh", async () => {
     stubAppDependencies();
+    ui.firstVisitSeen = true;
     vi.spyOn(sessions, "load").mockResolvedValue();
     const saved = JSON.stringify({
       version: 2,
@@ -1174,6 +1314,7 @@ describe("App root Sessions landing", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-04-25T12:00:00"));
     stubAppDependencies();
+    ui.firstVisitSeen = true;
     const analyticsFetchRanges: Array<{
       from: string;
       to: string;

@@ -30,6 +30,7 @@ test.describe("session termination status", () => {
   test("Top Sessions table renders unclean status dot", async ({ page }) => {
     // AnalyticsPage renders inside the right pane on bare "/"
     // when no session is selected.
+    await page.addInitScript(() => localStorage.setItem("agentsview-first-visit-seen", "true"));
     await page.goto("/");
     await expect(page.locator(".kit-status-dot--unclean").first()).toBeVisible();
   });

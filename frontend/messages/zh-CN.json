@@ -3141,6 +3141,8 @@
       "match": { "countPlural=one": "文本片段", "countPlural=other": "文本片段" }
     }
   ],
+  "empty_archive_unreadable_title": "没有可读取的会话",
+  "empty_archive_unreadable_desc": "找到的会话为空或被侧栏筛选器隐藏。请打开侧栏中的筛选器，或选择代理文件夹。",
   "empty_archive_syncing_title": "正在同步会话",
   "empty_archive_syncing_desc": "会话导入后将显示在这里。",
   "empty_archive_title": "暂无会话",

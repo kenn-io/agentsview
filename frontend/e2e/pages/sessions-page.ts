@@ -37,6 +37,7 @@ export class SessionsPage {
   }
 
   async goto() {
+    await this.page.addInitScript(() => localStorage.setItem("agentsview-first-visit-seen", "true"));
     await this.page.goto("/");
     await expect(this.sessionItems.first()).toBeVisible({
       timeout: SESSION_READY_TIMEOUT_MS,

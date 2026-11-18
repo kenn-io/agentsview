@@ -756,6 +756,15 @@ describe("SyncStore.remoteUnreachable", () => {
     s.syncPending = false;
   });
 
+  it("reports startup pending before sync progress is available", async () => {
+    vi.mocked(api.getSyncStatus).mockResolvedValue({ last_sync: "", startup_pending: true });
+    await sync.loadStatus();
+    expect(sync.startupPending).toBe(true);
+    vi.mocked(api.getSyncStatus).mockResolvedValue({ last_sync: "", startup_pending: false });
+    await sync.loadStatus();
+    expect(sync.startupPending).toBe(false);
+  });
+
   it("flags unreachable when a remote load fails", async () => {
     vi.mocked(api.isRemoteConnection).mockReturnValue(true);
     vi.mocked(api.getSyncStatus).mockRejectedValue(new TypeError("Failed to fetch"));

@@ -3292,6 +3292,8 @@
       "match": { "countPlural=one": "sección de texto", "countPlural=other": "secciones de texto" }
     }
   ],
+  "empty_archive_unreadable_title": "No hay sesiones legibles",
+  "empty_archive_unreadable_desc": "Las sesiones encontradas están vacías o los filtros de la barra lateral las ocultan. Abre Filtros en la barra lateral o elige las carpetas de tus agentes.",
   "empty_archive_syncing_title": "Sincronizando sesiones",
   "empty_archive_syncing_desc": "Tus sesiones aparecerán a medida que se importen.",
   "empty_archive_title": "Aún no hay sesiones",

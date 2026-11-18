@@ -56,6 +56,7 @@ class SyncStore {
   syncPending: boolean = $state(false);
 
   syncing: boolean = $state(false);
+  startupPending: boolean = $state(false);
   // Message from the last sync or resync that failed, cleared when one
   // succeeds. The header Sync button has no other place to report it.
   lastSyncError: string | null = $state(null);
@@ -186,6 +187,7 @@ class SyncStore {
       this.lastSyncStats = status.stats ?? null;
       this.archiveStale = status.archive_stale === true;
       this.syncPending = status.sync_pending === true;
+      this.startupPending = status.startup_pending === true;
       const statusProgress = status.progress ?? null;
       let statusProgressCompleted = false;
       if (statusProgress) {
