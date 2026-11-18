@@ -34,7 +34,11 @@ lives primarily in `internal/sync/watcher.go`,
   runs one live-activity poll, unless one ran in the last 30 seconds, because
   an agent that keeps its session file open produces no file event on macOS as
   the file grows. Reads start this catch-up at most once per `sync_interval`,
-  only while no hold is active, and wait at most two seconds for it.
+  only while no hold is active, and wait at most two seconds for it. Each
+  read then holds `sync.LiveInterval` until two minutes after the latest read
+  (`readLiveHold`), so the watcher syncs at the live pace and later reads find
+  no catch-up due. The check for a due catch-up runs before the read takes its
+  hold.
   Remote-sync export requests read session files, not the archive, and start
   no catch-up.
 - A manual `agentsview source sync` through a running daemon asks for the

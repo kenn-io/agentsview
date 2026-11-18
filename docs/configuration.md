@@ -269,10 +269,15 @@ interval. Three things bring changes in sooner:
   visible.
 - An open [change stream](/docs/conversation-export/#follow-changes-live) syncs
   up to once a second.
-- Any other archive request, such as a CLI or MCP read, first syncs the files
-  that changed since the last sync, and checks sessions that are still being
-  written. Such requests start a sync at most once per `sync_interval` and
-  share the two-second wait budget described below.
+- Any other archive request, such as a CLI or MCP read, keeps syncing at
+  `sync_interval` for two minutes after it, as an open web UI does. The first
+  request after a quiet stretch also syncs the files that changed since the
+  last sync, and checks sessions that are still being written, before it
+  answers. It waits up to two seconds for that, sharing the wait budget
+  described below. Later requests within those two minutes start no sync of
+  their own and can miss up to `sync_interval` of changes. They answer at
+  once, unless the first request's sync is still running, in which case they
+  share its remaining wait.
 
 A session watch stream keeps its own session current without changing the
 interval for the rest. Polling of live agent activity and of roots that cannot
