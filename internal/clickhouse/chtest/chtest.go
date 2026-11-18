@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -134,8 +135,18 @@ func FreshDatabase(tb testing.TB) (dsn, database string) {
 // FreshDatabase does on the shared test server.
 func FreshDatabaseOn(tb testing.TB, dsn string) (string, string) {
 	tb.Helper()
+	// Each fixture writes to its own tables, so waiting 50 ms for another
+	// insert to join a batch usually just delays the test.
+	u, err := url.Parse(dsn)
+	require.NoError(tb, err)
+	settings := u.Query()
+	if !settings.Has("async_insert_busy_timeout_min_ms") {
+		settings.Set("async_insert_busy_timeout_min_ms", "1")
+		u.RawQuery = settings.Encode()
+		dsn = u.String()
+	}
 	var suffix [6]byte
-	_, err := rand.Read(suffix[:])
+	_, err = rand.Read(suffix[:])
 	require.NoError(tb, err)
 	database := "agentsview_test_" + hex.EncodeToString(suffix[:])
 	admin := open(tb, dsn)

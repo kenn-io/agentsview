@@ -694,7 +694,7 @@ func TestSessionPricingPassReadsOnlyTheBatchRows(t *testing.T) {
 	require.NoError(t, syncer.priceUsageBatch(ctx, pricer,
 		usagePriceScope{sessionIDs: []string{usagePriceRoundID}}))
 
-	execPreparedUsage(t, store, "SYSTEM FLUSH LOGS")
+	execPreparedUsage(t, store, "SYSTEM FLUSH LOGS query_log")
 	var passes, readRows uint64
 	require.NoError(t, store.DB().QueryRowContext(ctx, `
 		SELECT count(), argMax(read_rows, event_time_microseconds) FROM system.query_log
@@ -985,7 +985,7 @@ func TestUsageReadsPriceRecordsWithoutContextsPerRequest(t *testing.T) {
 // does while nothing reads usage.
 func cursorPricingQueries(t *testing.T, conn *sql.DB) int {
 	t.Helper()
-	_, err := conn.ExecContext(t.Context(), "SYSTEM FLUSH LOGS")
+	_, err := conn.ExecContext(t.Context(), "SYSTEM FLUSH LOGS query_log")
 	require.NoError(t, err)
 	var n int
 	require.NoError(t, conn.QueryRowContext(t.Context(), `

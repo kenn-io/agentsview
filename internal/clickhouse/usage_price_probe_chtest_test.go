@@ -27,7 +27,7 @@ func insertRetiredPrices(t *testing.T, store *Store, digests, perDigest int) {
 // probe.
 func usageIdentityProbeReadRows(t *testing.T, store *Store) uint64 {
 	t.Helper()
-	execPreparedUsage(t, store, "SYSTEM FLUSH LOGS")
+	execPreparedUsage(t, store, "SYSTEM FLUSH LOGS query_log")
 	var rows uint64
 	require.NoError(t, store.DB().QueryRowContext(t.Context(), `
 		SELECT argMax(read_rows, event_time_microseconds) FROM system.query_log

@@ -18,7 +18,7 @@ import (
 // since start and the largest result one of them returned.
 func genAIPricingReadsSince(t *testing.T, syncer *Sync, start time.Time) (reads, maxResultBytes uint64) {
 	t.Helper()
-	_, err := syncer.conn.ExecContext(t.Context(), "SYSTEM FLUSH LOGS")
+	_, err := syncer.conn.ExecContext(t.Context(), "SYSTEM FLUSH LOGS query_log")
 	require.NoError(t, err)
 	require.NoError(t, syncer.conn.QueryRowContext(t.Context(), `
 		SELECT count(), max(result_bytes)

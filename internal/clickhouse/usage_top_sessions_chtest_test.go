@@ -118,7 +118,7 @@ func TestTopSessionsGroupedMetadata(t *testing.T) {
 	assert.Equal(t, "other-machine", got[1].Machine)
 	assert.Equal(t, "other-group-project", got[2].Project)
 	assert.Equal(t, "group-metadata-4", got[3].SessionID)
-	execPreparedUsage(t, store, "SYSTEM FLUSH LOGS")
+	execPreparedUsage(t, store, "SYSTEM FLUSH LOGS query_log")
 	var metadataReads uint64
 	require.NoError(t, store.DB().QueryRowContext(t.Context(), `
 		SELECT count() FROM system.query_log
