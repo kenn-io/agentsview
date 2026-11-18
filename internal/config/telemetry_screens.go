@@ -5,7 +5,6 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -79,7 +78,6 @@ func (c *Config) MigrateTelemetryScreenClaims() error {
 		_ = os.Remove(backup.Name())
 		return err
 	}
-	log.Printf("moved unreadable telemetry screen claims to %s", backup.Name())
 	fields := strings.Fields(string(data))
 	if len(fields) >= 3 && fields[0] == c.InstallationID && isClaimDay(fields[1]) {
 		state := screenClaims{Version: 1, Days: make(map[string][]string)}
@@ -88,7 +86,6 @@ func (c *Config) MigrateTelemetryScreenClaims() error {
 		}
 		encoded, err := json.Marshal(state)
 		if err != nil {
-			log.Printf("skipping legacy telemetry screen claims: encoding claims: %v", err)
 			return nil
 		}
 		return c.writeInstallationFile(telemetryScreensFilename, string(encoded))
@@ -101,7 +98,6 @@ func addLegacyScreenClaims(days map[string][]string, fields []string) bool {
 	for _, screen := range fields[2:] {
 		key, err := json.Marshal([]string{fields[0], "screen_viewed", screen})
 		if err != nil {
-			log.Printf("skipping legacy telemetry screen claims: encoding claim key: %v", err)
 			return false
 		}
 		days[string(key)] = []string{fields[1]}

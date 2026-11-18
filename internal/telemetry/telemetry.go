@@ -3,7 +3,6 @@ package telemetry
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -80,7 +79,6 @@ func DisabledReporter() *Reporter {
 func NewReporterOrDisabled(opts Options) *Reporter {
 	reporter, err := NewReporter(opts)
 	if err != nil {
-		slog.Warn("telemetry disabled", "err", err)
 		return DisabledReporter()
 	}
 	return reporter

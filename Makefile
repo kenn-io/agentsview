@@ -4,12 +4,12 @@ VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE := $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-# Public PostHog ingest key. Builds without it send no telemetry.
+# Public PostHog ingest key.
 POSTHOG_PROJECT_KEY ?= phc_AzHd9YvuHR7M5poKzC6eW654d3SgKyBdoQPuwkWhimUf
 
 # Who ships the binary: a package manager such as "homebrew", or "kenn" for
 # official direct downloads. Package-manager builds refuse to self-update and
-# point users at the package manager. Telemetry reports the value too.
+# point users at the package manager.
 DISTRIBUTION ?=
 BINDIR ?= .
 

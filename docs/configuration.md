@@ -21,9 +21,6 @@ AgentsView stores all persistent data under a single directory, defaulting to
 ├── usage-cache-v6-<id>.db # Disposable usage-aggregate cache
 ├── usage-postgres/  # Disposable PostgreSQL usage caches
 ├── telemetry-install-id # Application installation ID
-├── telemetry-daemon-active.lock  # Serializes daily daemon reports
-├── telemetry-setup-finished.lock # Serializes the one-time setup report
-├── telemetry-screen-views.lock   # Serializes screen view claims
 ├── config.toml      # Configuration file
 ├── config.toml.lock # Serializes concurrent config writers
 ├── db.write.lock    # Per-data-dir SQLite write-owner lock
@@ -169,8 +166,7 @@ you save a changed policy, select **Restart now** in the notice to apply it.
 
 Local sessions use a random installation ID saved in `telemetry-install-id` in
 this data directory. AgentsView reuses an existing ID from that file or creates
-one, even when telemetry is disabled. PostHog consumes the same ID. Read-only
-commands leave the file unchanged.
+one. Read-only commands leave the file unchanged.
 
 The ID identifies an installation, not physical hardware. It survives updates,
 binary replacements, restarts, and network or hostname changes. A fresh data
@@ -329,7 +325,7 @@ Set it to `"0"` to keep syncing while idle. Restart the server after changing it
 | `zoom_level`                        | Default interface zoom for clients without a local preference: `67`, `75`, `80`, `90`, `100`, `110`, `120`, `125`, `130`, `150`, `175`, or `200`. Defaults to `100` when omitted. Restart the daemon after manual edits                                                                                                                                                                                                                                                          |
 | `disabled_agents`                   | Session providers to exclude from local filesystem scanning — see [Disabling Session Providers](#disabling-session-providers)                                                                                                                                                                                                                                                                                                                                                    |
 | `[proxy]`                           | Managed proxy configuration table — see [Remote Access](/docs/remote-access/)                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `disable_update_check`              | Disable the automatic update check (see [Privacy](#privacy-and-telemetry))                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `disable_update_check`              | Disable the automatic update check (see [Privacy](#privacy))                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `scan_protected_paths`              | Allow Git discovery inside macOS privacy-protected folders and volumes under `/Volumes`, accepting one consent prompt per location — see [macOS Protected Folders](#macos-protected-folders)                                                                                                                                                                                                                                                                                     |
 | `[pg]`                              | PostgreSQL sync configuration — see [PostgreSQL Sync](/docs/pg-sync/)                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `[clickhouse]`                      | ClickHouse sync configuration — see [ClickHouse Sync](/docs/clickhouse-sync/)                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -2275,7 +2271,7 @@ after 60 seconds and need a retry.
   two machines hold the same history. Exact-ID ownership conflicts are refused.
 - Attachments belong in an ordinary installation, not an archive-only one. The
   receiving machine's own identity and aliases cannot be attached as foreign
-  history. Credentials and telemetry identity are never adopted from the source.
+  history. Credentials and installation identity are never adopted from the source.
 - Both storage forms use the same source identities, content policies and
   parser. Directory sources can discover additional accepted sources on a later
   pass; changing an already accepted source remains a conflict. Concurrent
@@ -2687,7 +2683,7 @@ curl http://127.0.0.1:8080/api/v1/sync/status
 The JSON response includes `startup_pending`, `archive_stale`, and, starting
 with daemon API 15, `sync_pending` alongside sync progress.
 
-## Privacy and Telemetry
+## Privacy
 
 By default, all session data stays on your local machine in SQLite. Normal
 browsing, search, and reports do not send session content, project names,
@@ -2706,8 +2702,7 @@ Optional features that send data externally when you enable them:
     `model`, or to the selected agent CLI when neither is set.
 - [Publish to Gist](/docs/usage/#publish-to-gist) uploads a session to GitHub.
 
-The automatic outbound requests are update checks, pricing refreshes, and
-anonymous telemetry:
+The automatic outbound requests include update checks and pricing refreshes:
 
 - **CLI and web UI** — when the web UI loads, the server requests
     `github.com/kenn-io/agentsview/releases/latest` to find the newest release
@@ -2718,163 +2713,6 @@ anonymous telemetry:
 - **Pricing** — the server downloads public model-pricing catalogs from GitHub
     and OpenRouter at startup and daily; see
     [Pricing Source](/docs/token-usage/#pricing-source).
-- **Anonymous daemon telemetry** — see below.
-
-### Anonymous Daemon Telemetry
-
-As of 0.33.0, the server sends an anonymous `daemon_active` liveness ping on
-each UTC day it runs. Restarts and other servers sharing the data directory do
-not send another ping that day. When telemetry is disabled, the server skips
-hourly telemetry wake-ups. The web UI also reports an anonymous
-`app_opened` event on load or focus for each selected server and UTC day;
-reloads and focus don't repeat it that day. These claims live in browser local
-storage. The server sends it to PostHog with the same fields and opt-out as the
-ping. The browser never contacts PostHog.
-Two tabs whose initial checks overlap can each send `app_opened`, such as when
-a browser restores several tabs together.
-After a disabled receipt, the browser stops sending reports and tracking visits.
-It checks again on its first load or focus on a later UTC day. Re-enabling
-telemetry takes effect after that check.
-An unauthorized check (HTTP 401) or exhausted retries also stop visit tracking
-and discard its accumulated duration. Tracking starts fresh when a later check
-enables reporting. Outcomes that occur while reporting is unavailable are
-dropped. A fresh page retries after authentication; otherwise, the next UTC
-day's load or focus starts a new check.
-HTTP 401 makes reporting unavailable immediately. Server errors (HTTP 5xx) and
-network failures retry up to five times with increasing delays before reporting
-becomes unavailable. Other HTTP errors settle without retries and don't grant
-permission to report.
-Each browser telemetry request has a 10-second deadline, including reading its
-receipt.
-The browser retains each daily claim's 35 most recently accepted UTC dates.
-Rolling the clock back to an evicted date can count it again.
-
-The server sends `setup_finished` once per installation when the archive first
-has a session in the default session list. Sessions need messages to count;
-automated sessions and trash are excluded. Child sessions count when their
-parent is missing and the list shows them as roots. It checks at startup, after
-session changes, and every hour. After a failed attempt it waits for the hourly
-check before trying again. The `telemetry-setup-finished` file beside the
-installation identity records the claim across restarts and servers sharing the
-data directory. Captures, seeds, backups, and restores preserve the claim with
-the installation identity when the snapshot contains it. Restoring a snapshot
-from before the claim can queue `setup_finished` again for the same installation
-ID. Ordinary imports keep the receiving installation's claim. The event carries
-no session details and follows the same telemetry opt-out. Existing installs
-with such a session send it on their first start after upgrading.
-
-The claim records that the event entered the telemetry queue, not that PostHog
-received it. Delivery is best effort: if the server stops or the network fails
-before the queue flushes, the event is lost and is not sent again. Only the
-server sends `setup_finished`; the web UI's telemetry route rejects that event.
-
-The web UI reports `visit_ended` with `surface: web` and a `duration_bucket`
-of `under_1m`, `1_to_5m`, `5_to_30m`, or `over_30m`. These mean below 1 minute,
-1 to below 5 minutes, 5 to below 30 minutes, and 30 minutes or more. Visible
-time adds up across tab switches and includes idle visible time; hidden time
-adds nothing. Closing or reloading the page, or leaving it hidden for 30
-minutes, ends a visit. Switching servers discards the old visit and starts a
-new tracker immediately for the selected server in the same tab. Each visit
-can send one event, with no daily limit.
-While permission is pending, the browser holds visit events and other outcomes
-in page memory for the selected server, up to 64 events total. Additional
-events are dropped. An enabled receipt releases the held events; a disabled
-receipt discards them. A visit ending after UTC midnight also waits in page
-memory while that day's check is pending. Closing the page before an enabled
-receipt can lose those events.
-Delivery is best effort: a visit can be lost if the browser crashes, quits, or
-discards the tab before the event is sent. Long-lived tabs are the most exposed
-to this, so `over_30m` can undercount.
-
-The web UI also reports `screen_viewed` with `surface: web`. The server counts
-each screen once per installation per UTC day, across tabs and server restarts.
-The browser also deduplicates screen reports per selected server and local
-storage, so separate browsers can check the same installation independently.
-The server stores versioned JSON claims in `telemetry-screen-views` beside the
-installation identity. For each installation and screen, it retains the 35 most
-recently accepted UTC dates. A clock rollback to an evicted date can count that
-screen again. When telemetry is enabled, the server checks the file
-once in the background after it starts serving; a web UI report that arrives
-first waits for that check. The check moves older plain-text claims, malformed
-claims, or claims from a newer format to a unique
-`telemetry-screen-views.unreadable-*` file and logs the move. Earlier copies
-stay intact. Valid plain-text counts carry over for the current installation. If
-the check fails, the server logs the error and continues forwarding reports. It
-tries the check only once per process; restarting the server starts a fresh
-attempt. Forwarded reports can replace malformed or plain-text claims with a
-fresh file, losing their counts. Reports return 500 while the file cannot be
-read or written, or uses a newer format. When counts cannot carry over, kit
-starts a fresh file, which can count each screen one more time that day.
-Requests must use `application/json` with exactly one JSON value; a missing or
-unknown `screen` returns 400. The server reserves each claim before enqueueing
-its event. If reservation storage fails, the request returns 500 without
-enqueueing; a later visit retries.
-
-The web UI reports five core actions the same way. Each carries one property,
-and the server drops any value outside its fixed list. A search counts once per
-mode used during each command palette open. Typing pauses, sorting, and retries
-in the same mode do not add events. An insight counts once it finishes
-generating; opening a cached insight does not count.
-
-Downloads and Gist publishes count export attempts, including attempts that
-fail. Markdown links count after the link is copied successfully.
-
-| Event               | Property     | Allowed values                                                                                                                    |
-| ------------------- | ------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| `search_run`        | `query_type` | `text`, `semantic`, `hybrid`                                                                                                      |
-| `session_viewed`    | `agent`      | the session's agent type                                                                                                          |
-| `export_run`        | `format`     | `html`, `insight_html`, `friction_markdown`, `csv`, `markdown_link`, `gist`, `insight_gist`                                       |
-| `insight_generated` | `kind`       | `daily_activity`, `agent_analysis`, or a generated-insight template name                                                          |
-| `analytics_viewed`  | `page`       | `usage`, `activity`, `trends`, `quality`                                                                                          |
-| `screen_viewed`     | `screen`     | `sessions`, `usage`, `activity`, `trends`, `recall`, `quality`, `pinned`, `trash`, `recent-edits`, `friction`, `data`, `settings` |
-
-Feature outcomes use fixed categories; unknown strings become `other`.
-
-| Event          | Property | Allowed values                                                                            | Count unit                                                                                                                                                                                                                                                                                                                                              |
-| -------------- | -------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `search_empty` | none     | none                                                                                      | Each command palette open that closes on an accepted empty result, so typing through empty prefixes counts once at most. Compare with `search_run`, which also counts per open. Opens that close on results, a blank query, a pending search, or a failure send nothing.                                                                                                                                                                                                            |
-| `error_shown`  | `kind`   | `search`, `session`, `insight`, `analytics`, `export`, `other`                            | Each appearance of a core-action error in search, session views, generated insights including their supporting tool sequences, or exports. Analytics counts each independently requested panel on Usage, Activity, Trends, and Quality. Continuous display counts once; hiding and showing the error counts again.                                                                                |
-| `sync_failed`  | `reason` | `request`, `sign_in_required`, `browser_extension`, `already_running`, `other` | Each failed foreground attempt after its terminal result, without `error_shown`. `request` covers uncoded request or processing failures; unsupported explicit codes use `other`. Completed Claude.ai imports with item errors send nothing. Cancellation, polling, and read-only refreshes send nothing. |
-
-Each accepted failed search counts once, including a semantic search that
-shows setup guidance. Internal setup probes and build retries add no events.
-
-Hidden failures, cached warnings, the Sessions dashboard, settings, data
-management, pins, stars, and in-session find send no outcomes. Query and error
-text, paths, and identifiers stay out of outcome properties.
-
-Every event contains only:
-
-- app version and git commit
-- the distribution that built the binary, such as `homebrew` for Homebrew or
-  `kenn` for official downloads; empty for source builds
-- operating system and CPU architecture
-- the application-owned installation ID stored in
-  `~/.agentsview/telemetry-install-id`
-- whole hours since that ID was created
-- for the five UI actions, the one listed value above
-- for feature outcomes, the listed kind or reason
-- for screen views, the listed screen name and `surface: web`
-- for visits, the duration bucket and `surface: web`, without exact times
-
-It contains no session data, prompts, project names, file paths, account
-information, or hostname, and the events are sent with person-profile processing
-and GeoIP lookup disabled. The ping runs in the background and never blocks
-startup or operation.
-
-A build sends telemetry only when it has the PostHog project key and a release
-version such as `0.33.0`. Release builds and the `make` build targets set the key
-at link time. Plain `go build` and `go test` binaries have no key and send
-nothing. Telemetry also stays off in CI. Disable it with an environment
-variable, then restart the server:
-
-```bash
-export AGENTSVIEW_TELEMETRY_ENABLED=0  # or DO_NOT_TRACK=1
-```
-
-This disables outbound telemetry, not the installation identity used for local
-session attribution.
-
 ### Disabling Update Checks
 
 Disable the CLI/web UI update check with any of:

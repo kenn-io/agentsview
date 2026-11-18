@@ -779,9 +779,6 @@ Thanks to [@azylman](https://github.com/azylman) for the Antigravity fixes in
 - Keep Windows daemon commands from marking the entire data directory as changed
   for backup and sync tools. Stop the daemon before downgrading to 0.45.x or
   earlier.
-- Honor `DO_NOT_TRACK=1` and suppress telemetry in CI and non-release builds.
-  Browser telemetry also waits for the selected server's response before
-  sending further reports.
 - Reject compromised eMudhra/emSign certificate chains in HTTPS connections and
   desktop updates. Linux and Windows desktop builds also update their bundled
   trust roots.
@@ -790,7 +787,7 @@ Thanks to [@azylman](https://github.com/azylman) for the Antigravity fixes in
 
 - [@rodboev](https://github.com/rodboev) for Chrome Sync, fx support,
   tool-effectiveness reports and rates, model aliases, Hermes cron costs,
-  faster reports, and archive and telemetry fixes.
+  faster reports, and archive fixes.
 - [@cpcloud](https://github.com/cpcloud) for Codex cloud chats and live token
   capture, resumable mirror pushes, continued local sync during pushes, and
   ClickHouse transfer improvements.
@@ -954,9 +951,6 @@ Thanks to [@azylman](https://github.com/azylman) for the Antigravity fixes in
   or server failures prevent embedding.
 - Sync remote hosts over HTTP. SSH sync is removed; configure each remote with a
   daemon URL and token. Existing archived sessions remain available.
-- Measure app opens, screen visits, core actions, and visible visit duration
-  through the existing telemetry opt-out. Daily daemon activity counts at most
-  once per installation per UTC day.
 - Diagnose desktop startup and database delays with logs that show backend port
   selection, readiness results, stalled database checkpoints, and connection or
   write-lock waits.
@@ -3229,11 +3223,6 @@ ______________________________________________________________________
     EGL error and leaves a blank window, the desktop app now detects the dead
     WebView, opens the UI in your default browser, and explains what happened —
     the backend keeps running either way.
-- Add **anonymous daemon telemetry**. The server now sends a daily liveness ping
-    (version, commit, OS, architecture, and a random per-machine install ID — no
-    session data, paths, hostnames, or prompts). Disable it with
-    `AGENTSVIEW_TELEMETRY_ENABLED=0`. See
-    [Privacy and Telemetry](/docs/configuration/#privacy-and-telemetry).
 
 **Bug fixes**
 
@@ -3258,7 +3247,7 @@ ______________________________________________________________________
 
 - Thanks to [Marius van Niekerk](https://github.com/mariusvniekerk) for the
     secret gist publishing, nested workflow subagent discovery, untruncated
-    session labels, and daemon telemetry.
+    session labels.
 - Thanks to [Matthew Jacobs](https://github.com/mjacobs) for the Antigravity CLI
     sidecar token usage, trajectory-sidecar preference, project inference, and
     parser fuzz hardening.
