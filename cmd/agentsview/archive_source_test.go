@@ -170,6 +170,33 @@ func TestForegroundSyncAfterIdlePauseImportsAttachedHistory(t *testing.T) {
 	assert.False(t, ingestion.Pending())
 }
 
+// A manual sync that applies only collected changes still imports attached
+// archives, as the full pass it replaces does.
+func TestFlushChangesImportsAttachedHistory(t *testing.T) {
+	cfg := testConfigWithClaudeFixture(t)
+	cfg.ArchiveSources = []config.ArchiveSource{archiveSourceCommandFixture(t)}
+	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
+	engine := sync.NewEngine(t.Context(), database, localSyncEngineConfig(cfg))
+	t.Cleanup(engine.Close)
+	engine.SyncAll(t.Context(), nil)
+	ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, nil, nil)
+	attached, err := archivesource.NewManager(t.Context(), cfg, database, engine, ingestion.FlushPending)
+	require.NoError(t, err)
+	t.Cleanup(attached.Close)
+	t.Cleanup(ingestion.Stop)
+	ingestion.attached = attached
+	ingestion.OpenWatcherDispatch()
+
+	flushed, err := ingestion.FlushChanges(t.Context())
+
+	require.NoError(t, err)
+	require.True(t, flushed)
+	messages, err := database.GetAllMessages(t.Context(), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa~saved")
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "archived message", messages[0].Content)
+}
+
 func TestAttachedSourcesDrainAfterRebuildWithDeferredFork(t *testing.T) {
 	source := archiveSourceCommandFixture(t)
 	cfg := testConfigWithClaudeFixture(t)

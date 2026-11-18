@@ -40,11 +40,16 @@ lives primarily in `internal/sync/watcher.go`,
 - A manual `agentsview source sync` through a running daemon asks for the
   watchers' changes only: `changes_only` on `/api/v1/sync`, or
   `local_changes_only` with `include_local` on `/api/v1/sync/remotes`. The
-  daemon applies them through `daemonIngestion.FlushChanges`, as a wake does,
-  and runs no discovery pass. It runs the full pass instead before startup
-  opens watcher delivery, without daemon ingestion (`--no-sync`), and for an
-  archive that needs a rebuild, which only the full pass performs. `--rescan`
-  asks for the full pass.
+  daemon applies them through `daemonIngestion.FlushChanges` and runs no
+  discovery pass. Unlike a read's catch-up, the flush also takes the watcher's
+  retained retry (`Watcher.FlushPendingAndRetry`), and it then retries
+  unfinished attached archive imports as a manual full pass does. It runs the
+  full pass instead before startup opens watcher delivery, without daemon
+  ingestion (`--no-sync`), for an archive that needs a rebuild, and after a
+  settings reload changes the session sources until a full pass that started
+  later completes. A replacement watcher sees only later changes, so only that
+  pass reads history already under a new root. `--rescan` asks for the full
+  pass.
 - The live-activity poller and the unwatched-root poller follow the same pace
   through the daemon's collection gap: their own interval while a hold is
   active, the background interval otherwise, and no polling during an idle

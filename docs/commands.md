@@ -848,11 +848,13 @@ also serves the web UI and remains running after the CLI exits, until stopped or
 its idle timeout expires. The command prints the server URL and how to stop it.
 
 When the daemon is already running, an incremental sync applies only the changes
-its file watchers collected. It does not rescan every session source, so it
-stays quick on a large archive. The daemon runs a full discovery pass instead
-before its startup sync finishes, when it was started with `--no-sync`, or when
-the archive needs a rebuild. Roots that no watcher covers keep the daemon's
-polling schedule. Pass `--rescan` to rescan every source now.
+its file watchers collected, including changes that failed earlier and wait for
+a retry, and it retries unfinished archive imports. It does not rescan every
+session source, so it stays quick on a large archive. The daemon runs a full
+discovery pass instead before its startup sync finishes, when it was started
+with `--no-sync`, when the archive needs a rebuild, and after a Settings change
+to session sources until a full pass completes. Roots that no watcher covers
+keep the daemon's polling schedule. Pass `--rescan` to rescan every source now.
 
 An incremental local-only sync through the default daemon waits when another
 sync or maintenance pass owns it, then runs its requested pass. It prints
