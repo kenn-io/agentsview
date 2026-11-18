@@ -9,6 +9,8 @@
   import { ui } from "../../stores/ui.svelte.js";
   import SidebarToggleButton from "../layout/SidebarToggleButton.svelte";
 
+  let { onChooseFolders }: { onChooseFolders?: () => void } = $props();
+
   const folders = $derived(
     settings.sessionProviders
       .filter((provider) => !settings.disabledAgents.includes(provider.id))
@@ -46,7 +48,10 @@
     {/if}
     <Button
       class="empty-archive-choose"
-      onclick={() => router.navigate("settings", { panel: "agent-directories" })}
+      onclick={() => {
+        onChooseFolders?.();
+        router.navigate("settings", { panel: "agent-directories" });
+      }}
     >
       {m.empty_archive_choose_folders()}
     </Button>

@@ -753,6 +753,89 @@ describe("App root Sessions landing", () => {
     expect(sessions.activeSessionId).toBeNull();
   });
 
+  it("tries a readable child before moving to the next group", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    setRootUrl();
+    sessions.sessions = [
+      { ...sidebarRow("parent", 2, "2026-01-03"), project: "group" },
+      { ...sidebarRow("child", 1, "2026-01-02"), project: "group", parent_session_id: "parent" },
+      sidebarRow("other", 1, "2026-01-01"),
+    ];
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    expect(sessions.activeSessionId).toBe("parent");
+    messages.sessionId = "parent";
+    messages.messages = [];
+    await flushEffects();
+    expect(sessions.activeSessionId).toBe("child");
+    messages.sessionId = "child";
+    messages.messages = [{ ordinal: 1, role: "user", content: "hello" } as Message];
+    await flushEffects();
+    expect(sessions.activeSessionId).toBe("child");
+  });
+
+  it("continues the first visit after choosing folders", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    setRootUrl();
+    sessions.archiveEmpty = true;
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    const choose = [...document.querySelectorAll("button")].find((button) => button.textContent?.includes("Choose folders"));
+    expect(choose).toBeDefined();
+    choose!.click();
+    await flushEffects();
+    expect(router.route).toBe("settings");
+    sessions.archiveEmpty = false;
+    sessions.sessions = [sidebarRow("imported", 1, "2026-01-02")];
+    await flushEffects();
+    expect(sessions.activeSessionId).toBeNull();
+    router.navigate("sessions");
+    await flushEffects();
+    expect(sessions.activeSessionId).toBe("imported");
+  });
+
+  it("retries an empty transcript after choosing folders", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    setRootUrl();
+    sessions.sessions = [sidebarRow("existing", 1, "2026-01-02")];
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    messages.sessionId = "existing";
+    messages.messages = [];
+    await flushEffects();
+    expect(document.body.textContent).toContain("No readable sessions");
+    const choose = [...document.querySelectorAll("button")].find((button) => button.textContent?.includes("Choose folders"));
+    expect(choose).toBeDefined();
+    choose!.click();
+    await flushEffects();
+    router.navigate("sessions");
+    await flushEffects();
+    expect(sessions.activeSessionId).toBe("existing");
+  });
+
+  it("explains when every session in a group is empty", async () => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    setRootUrl();
+    sessions.sessions = [
+      { ...sidebarRow("parent", 2, "2026-01-03"), project: "group" },
+      { ...sidebarRow("child", 1, "2026-01-02"), project: "group", parent_session_id: "parent" },
+    ];
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    messages.sessionId = "parent";
+    messages.messages = [];
+    await flushEffects();
+    expect(sessions.activeSessionId).toBe("child");
+    messages.sessionId = "child";
+    await flushEffects();
+    expect(sessions.activeSessionId).toBeNull();
+    expect(document.body.textContent).toContain("No readable sessions");
+  });
+
   it("explains exhausted candidates and resumes when a new row arrives", async () => {
     stubAppDependencies();
     vi.spyOn(sessions, "load").mockResolvedValue();
