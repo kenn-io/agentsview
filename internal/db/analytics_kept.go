@@ -16,16 +16,22 @@ func SavedPanel(panel string) bool {
 }
 
 func keptAnalytics[T analyticsReport](ctx context.Context, db *DB, panel string, f AnalyticsFilter, load func(context.Context, AnalyticsFilter) (T, error)) (T, error) {
-	if db.readOnly || TerminationUsesTime(f.Termination) {
+	return keptAnalyticsWithIdentity(ctx, db, panel, f, func(ctx context.Context, f AnalyticsFilter, _ string) (T, error) {
 		return load(ctx, f)
+	})
+}
+
+func keptAnalyticsWithIdentity[T analyticsReport](ctx context.Context, db *DB, panel string, f AnalyticsFilter, load func(context.Context, AnalyticsFilter, string) (T, error)) (T, error) {
+	if db.readOnly || TerminationUsesTime(f.Termination) {
+		return load(ctx, f, "")
 	}
 	key, err := json.Marshal(f, json.Deterministic(true))
 	if err != nil {
-		return load(ctx, f)
+		return load(ctx, f, "")
 	}
 	id, err := db.GetDatabaseID(ctx)
 	if err != nil {
-		return load(ctx, f)
+		return load(ctx, f, "")
 	}
 	slot := panel + "|" + string(key)
 	var version, savedVersion string
@@ -36,7 +42,7 @@ func keptAnalytics[T analyticsReport](ctx context.Context, db *DB, panel string,
  COALESCE((SELECT value FROM archive_metadata WHERE key=?), ''),
  COALESCE((SELECT value FROM archive_metadata WHERE key='dashboard_scope'), '')`, "dashboard_"+panel).Scan(&common, &panelToken, &scope)
 		if err != nil || common == "" || panelToken == "" || (DashboardUsesMessageScope(f) && scope == "") {
-			return load(ctx, f)
+			return load(ctx, f, id)
 		}
 		version = id + "|" + common + "|" + panelToken
 		if DashboardUsesMessageScope(f) {
@@ -49,11 +55,11 @@ func keptAnalytics[T analyticsReport](ctx context.Context, db *DB, panel string,
 	} else {
 		revision, err := db.UsageChangeRevision(ctx)
 		if err != nil {
-			return load(ctx, f)
+			return load(ctx, f, id)
 		}
 		analyticsRevision, err := db.archiveJournalRevision(ctx, archiveMetadataAnalyticsChangeRevisionKey, "analytics change")
 		if err != nil {
-			return load(ctx, f)
+			return load(ctx, f, id)
 		}
 		version = fmt.Sprintf("%s|%d|%d", id, revision, analyticsRevision)
 	}
@@ -64,7 +70,7 @@ func keptAnalytics[T analyticsReport](ctx context.Context, db *DB, panel string,
 		err := json.Unmarshal(data, &value)
 		return value, err
 	}, func(ctx context.Context) (any, error) {
-		return load(ctx, f)
+		return load(ctx, f, id)
 	})
 	if err != nil {
 		var zero T

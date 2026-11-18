@@ -1329,6 +1329,16 @@ use that query-local edge set without changing parent identity or visibility.
 
 ### Dashboard metadata index
 
+SQLite retains per-session Dashboard Tools contributions on disk and uses
+`tools_generation` to refresh sessions when tool calls change. Relevant call
+writes set the token to null once; a refresh assigns a new token before reading
+the session's calls.
+Message model, timestamp, and ordinal edits invalidate saved Tools contributions
+through `usage_generation`.
+Each filter combination has its own entry. Each file is capped at 128 MiB, and
+all `sqlite-trends` entries share a 256 MiB budget. Read-only archives and
+disabled disk storage use the direct reader.
+
 SQLite's summary and tool analytics can read model names and message timestamps
 through `idx_messages_analytics_metadata` on
 `messages(session_id, id, timestamp, model, ordinal)` without loading message
