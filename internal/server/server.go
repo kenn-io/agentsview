@@ -814,7 +814,7 @@ func (s *Server) humaConfig() huma.Config {
 		"application/json": jsonFormat,
 		"json":             jsonFormat,
 	}
-	cfg.Info.Description = "HTTP API for browsing, searching, syncing, and managing local agent sessions. Responses carry X-Agentsview-Archive-Stale: true while a required archive rebuild or idle catch-up is incomplete; GET /api/v1/sync/status reports its state."
+	cfg.Info.Description = "HTTP API for browsing, searching, syncing, and managing local agent sessions. Responses carry X-Agentsview-Archive-Stale: true while a required archive rebuild is incomplete, or when a catch-up of changes held back by the background sync interval or an idle pause did not finish within the read's wait. Reads that start no catch-up, because a recent read keeps the watcher syncing at sync_interval, are not marked. GET /api/v1/sync/status reports its state."
 	cfg.OpenAPIPath = "/api/openapi"
 	cfg.DocsPath = ""
 	cfg.SchemasPath = ""

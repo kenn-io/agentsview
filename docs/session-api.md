@@ -1321,9 +1321,12 @@ are clear, it returns exit 2. Scheduled ingestion owns retries.
 Daemon API 15 adds `sync_pending`, which stays true while ingestion catches up
 after an idle period. Older local clients must upgrade to interpret it. The
 field and catch-up warning clear when the pass finishes or fails, and failures
-are logged. Archive responses carry `X-Agentsview-Archive-Stale: true` while
-catch-up is incomplete. A required parser rebuild uses the stale header
-independently.
+are logged. Archive responses carry `X-Agentsview-Archive-Stale: true` when
+a catch-up of changes held back by the background sync interval or an idle
+pause did not finish within the read's wait. A read starts no catch-up, and is
+not marked, while an archive read in the last two minutes keeps the watcher
+syncing at `sync_interval`; it can miss up to that interval of changes. A
+required parser rebuild uses the stale header independently.
 
 HTTP `--own-only` and `--no-sync` read only the archive and return exit 2 for
 missing IDs. Direct mode still refreshes the named transcript. Combined HTTP

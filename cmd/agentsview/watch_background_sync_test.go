@@ -55,18 +55,24 @@ func TestBackgroundIntervalHoldsChangesUntilNeeded(t *testing.T) {
 			engine.SyncAll(t.Context(), nil)
 			ingestion := newDaemonIngestion(t.Context(), cfg, engine, database, server.NewIdleTracker(0, func() {}), nil)
 			t.Cleanup(ingestion.Stop)
+			ingestion.mu.Lock()
+			ingestion.readHold = time.Second
+			ingestion.mu.Unlock()
 			ingestion.OpenWatcherDispatch()
 
 			// The first event after a quiet period syncs right away and later
 			// ones wait for the background interval. Which event comes first
 			// differs by platform: it can be the new session's directory, which
 			// leaves the session file itself waiting. A read brings it in
-			// either way, and from then on the interval is in force.
+			// either way, and once the live interval it holds lapses the
+			// background interval is in force.
 			writeReloadGeminiSession(t, root, "first")
 			require.Eventually(t, func() bool {
 				ingestion.EnsureFresh(t.Context())
 				return sessionImported(t, database, "gemini:first")
 			}, 20*time.Second, 100*time.Millisecond)
+			require.Eventually(t, func() bool { return ingestion.SyncIntervalOverride().Value() == 0 },
+				20*time.Second, 50*time.Millisecond, "the read's live hold lapses")
 			writeReloadGeminiSession(t, root, "held")
 			require.Never(t, func() bool { return sessionImported(t, database, "gemini:held") },
 				2*time.Second, 50*time.Millisecond, "nobody needs the change yet")

@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-17
+last_edited: 2026-11-18
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -84,6 +84,14 @@ The latest release is
   [Muse Personal](/docs/configuration/#muse-personal).
 
 **Improvements**
+
+- Searches and other CLI or MCP reads through a running daemon answer without
+  waiting for a sync on most requests. A read now keeps the daemon syncing
+  changed session files every few seconds for two minutes, as an open web UI
+  does, so later reads answer right away instead of waiting up to two seconds
+  for a catch-up. Only the first read after a quiet stretch still syncs first,
+  and "Archive results may be stale." appears only when that sync does not
+  finish in time. See [Config File](/docs/configuration/#config-file).
 
 - The background daemon does far less work while nobody is looking at the
   archive. It now syncs changed session files at most once every ten minutes
