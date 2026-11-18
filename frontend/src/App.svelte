@@ -102,6 +102,7 @@
   import { setAuthToken, getAuthToken, setServerUrl } from "./lib/api/runtime.js";
   import { setupVisibilityHealthCheck } from "./lib/utils/health.js";
   import { reportTelemetry, setupTelemetryReporting } from "./lib/utils/telemetry.js";
+  import { inSessionSearch } from "./lib/stores/inSessionSearch.svelte.js";
   import { registerShortcuts } from "./lib/utils/keyboard.js";
   import { shouldAutoSwitchTranscriptModeToNormal } from "./lib/utils/transcript-mode.js";
   import {
@@ -427,9 +428,9 @@
   let previousActiveSessionId: string | null = null;
   let firstVisitArmed = $state(false);
   let firstVisitWaiting = $state(false);
-  let firstVisitChoosingFolders = $state(false);
   let candidate = $state<string | null>(null);
-  const tried = new Set<string>();
+  let firstVisitProbing = $derived(firstVisitArmed && candidate !== null);
+  const tried = new Map<string, string>();
 
   function clearRootDetailDateRestoreSuppressed(): void {
     rootDetailDateRestoreSuppressed = false;
@@ -692,11 +693,7 @@
   // Run after route selection is cleared so returning from settings can select a session.
   $effect(() => {
     if (!firstVisitArmed) return;
-    if (firstVisitChoosingFolders) {
-      if (router.route === "settings") return;
-      firstVisitChoosingFolders = false;
-      if (router.route === "sessions") tried.clear();
-    }
+    if (router.route === "settings") return;
     if (
       router.route !== "sessions" || hasFilterParams(router.params) ||
       sessions.activeSessionId !== candidate
@@ -708,27 +705,37 @@
     }
     if (sessions.sidebarLoadError || sessions.activeSessionNotFound) return;
     if (candidate) {
-      if (messages.sessionId !== candidate || messages.loading || messages.loadError) return;
-      if (messages.messages.length > 0) {
+      if (messages.sessionId !== candidate || messages.loading || messages.loadingOlder || messages.loadError) return;
+      if ((inSessionSearch.scope?.items.length ?? 0) > 0) {
         firstVisitArmed = false;
+        candidate = null;
         return;
       }
-      tried.add(candidate);
-      candidate = null;
-      sessions.deselectSession();
+      if (messages.hasOlder) {
+        void messages.loadOlder();
+        return;
+      }
+      const row = sessions.groupedSessions.flatMap((group) => group.sessions).find((session) => session.id === candidate);
+      if (row) tried.set(candidate, `${row.transcript_revision ?? ""}:${row.message_count}`);
     }
-    const next = sessions.groupedSessions.flatMap((group) => [
-      group.primarySessionId,
-      ...group.sessions.filter((session) => session.id !== group.primarySessionId).map((session) => session.id),
-    ]).find((id) => !tried.has(id));
+    const next = sessions.groupedSessions.flatMap((group) => {
+      const primary = group.sessions.find((session) => session.id === group.primarySessionId);
+      return [...(primary ? [primary] : []), ...group.sessions.filter((session) => session.id !== group.primarySessionId)];
+    }).find((row) => tried.get(row.id) !== `${row.transcript_revision ?? ""}:${row.message_count}`);
     if (next) {
       firstVisitWaiting = false;
-      candidate = next;
+      candidate = next.id;
       sessions.selectSession(candidate);
-    } else if (!sessions.loading && sessions.nextCursor) {
-      void sessions.loadMore();
-    } else if (!sessions.loading && !sessions.nextCursor) {
-      firstVisitWaiting = true;
+    } else {
+      if (candidate) {
+        candidate = null;
+        sessions.deselectSession();
+      }
+      if (!sessions.loading && sessions.nextCursor) {
+        void sessions.loadMore();
+      } else if (!sessions.loading && !sessions.nextCursor) {
+        firstVisitWaiting = true;
+      }
     }
   });
 
@@ -774,6 +781,7 @@
 
   // Sync active session to URL.
   $effect(() => {
+    if (firstVisitProbing) return;
     const activeId = sessions.activeSessionId;
     const currentUrlSessionId = router.sessionId;
     const filterParams = sessionFilterRouteParams();
@@ -1005,7 +1013,7 @@
         />
         <MessageList bind:this={messageListRef} />
       {:else if sessions.archiveEmpty || firstVisitWaiting}
-        <EmptyArchivePanel onChooseFolders={() => { firstVisitChoosingFolders = firstVisitArmed; }} />
+        <EmptyArchivePanel />
       {:else}
         <AnalyticsPage
           suppressSessionDateRestore={rootDetailDateRestoreSuppressed}

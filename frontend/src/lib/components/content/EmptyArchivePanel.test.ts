@@ -38,7 +38,7 @@ afterEach(() => {
 describe("EmptyArchivePanel", () => {
   it.each([
     [true, false, false, "Syncing sessions"],
-    [false, true, false, "Syncing sessions"],
+    [false, true, false, "Import not finished"],
     [false, false, true, "No sessions yet"],
     [false, false, false, "No readable sessions"],
   ])("shows the reason for an empty view", async (syncing, pending, empty, title) => {
@@ -48,6 +48,8 @@ describe("EmptyArchivePanel", () => {
     component = mount(EmptyArchivePanel, { target: document.body });
     await tick();
     expect(document.body.textContent).toContain(title);
+    expect(document.querySelector(".kit-spinner") !== null).toBe(syncing);
+    if (pending && !syncing) expect(document.body.textContent).toContain("Sync sessions in the header");
   });
   it("shows sync progress while keeping the folders available", async () => {
     settings.sessionProviders = [

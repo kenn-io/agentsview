@@ -3149,6 +3149,8 @@
   ],
   "empty_archive_unreadable_title": "읽을 수 있는 세션이 없습니다",
   "empty_archive_unreadable_desc": "찾은 세션이 비어 있거나 사이드바 필터에 의해 숨겨져 있습니다. 사이드바에서 필터를 열거나 에이전트 폴더를 선택하세요.",
+  "empty_archive_pending_title": "가져오기가 완료되지 않음",
+  "empty_archive_pending_desc": "다시 시도하려면 상단에서 세션 동기화를 선택하거나 에이전트 폴더를 선택하세요.",
   "empty_archive_syncing_title": "세션 동기화 중",
   "empty_archive_syncing_desc": "세션을 가져오는 대로 표시됩니다.",
   "empty_archive_title": "아직 세션이 없습니다",

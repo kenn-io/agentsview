@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Button, EmptyState } from "@kenn-io/kit-ui";
+  import { Button, EmptyState, Spinner } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import { FolderIcon } from "../../icons.js";
   import { router } from "../../stores/router.svelte.js";
@@ -8,8 +8,6 @@
   import { sessions } from "../../stores/sessions.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
   import SidebarToggleButton from "../layout/SidebarToggleButton.svelte";
-
-  let { onChooseFolders }: { onChooseFolders?: () => void } = $props();
 
   const folders = $derived(
     settings.sessionProviders
@@ -27,11 +25,15 @@
     </div>
   {/if}
   <EmptyState
-    title={sync.syncing || sync.startupPending ? m.empty_archive_syncing_title() : sessions.archiveEmpty ? m.empty_archive_title() : m.empty_archive_unreadable_title()}
-    description={sync.syncing || sync.startupPending ? m.empty_archive_syncing_desc() : sessions.archiveEmpty ? m.empty_archive_desc() : m.empty_archive_unreadable_desc()}
+    title={sync.syncing ? m.empty_archive_syncing_title() : sync.startupPending ? m.empty_archive_pending_title() : sessions.archiveEmpty ? m.empty_archive_title() : m.empty_archive_unreadable_title()}
+    description={sync.syncing ? m.empty_archive_syncing_desc() : sync.startupPending ? m.empty_archive_pending_desc() : sessions.archiveEmpty ? m.empty_archive_desc() : m.empty_archive_unreadable_desc()}
   >
     {#snippet icon()}
-      <FolderIcon size="40" strokeWidth="1.6" aria-hidden="true" />
+      {#if sync.syncing}
+        <Spinner size={40} />
+      {:else}
+        <FolderIcon size="40" strokeWidth="1.6" aria-hidden="true" />
+      {/if}
     {/snippet}
     {#if settings.loaded && !settings.error}
       {#if folders.length === 0}
@@ -48,10 +50,7 @@
     {/if}
     <Button
       class="empty-archive-choose"
-      onclick={() => {
-        onChooseFolders?.();
-        router.navigate("settings", { panel: "agent-directories" });
-      }}
+      onclick={() => router.navigate("settings", { panel: "agent-directories" })}
     >
       {m.empty_archive_choose_folders()}
     </Button>
