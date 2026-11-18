@@ -878,7 +878,9 @@ describe("App root Sessions landing", () => {
     let readable = false;
     vi.mocked(messages.loadSession).mockImplementation(async (id) => {
       messages.sessionId = id;
-      messages.messages = [transcriptMessage(id, readable ? "new history" : "system context", !readable)];
+      messages.messages = [
+        transcriptMessage(id, readable ? "new history" : "system context", !readable),
+      ];
       messages.loading = false;
       messages.loadError = null;
     });
@@ -906,7 +908,9 @@ describe("App root Sessions landing", () => {
       messages.sessionId = id;
       messages.loading = true;
       if (attempts++ === 0) {
-        await new Promise<void>((resolve) => { finishOld = resolve; });
+        await new Promise<void>((resolve) => {
+          finishOld = resolve;
+        });
         messages.messages = [transcriptMessage(id, "system context", true)];
       } else {
         messages.messages = [transcriptMessage(id, "new history", false)];
@@ -931,17 +935,28 @@ describe("App root Sessions landing", () => {
     stubAppDependencies();
     vi.spyOn(sessions, "load").mockResolvedValue();
     const posted: string[] = [];
-    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (requestUrl(input).includes("/api/v1/telemetry/events") && typeof init?.body === "string") {
-        posted.push(JSON.parse(init.body).event);
-      }
-      return new Response('{"status":"queued"}', { status: 202, headers: { "Content-Type": "application/json" } });
-    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (
+          requestUrl(input).includes("/api/v1/telemetry/events") &&
+          typeof init?.body === "string"
+        ) {
+          posted.push(JSON.parse(init.body).event);
+        }
+        return new Response('{"status":"queued"}', {
+          status: 202,
+          headers: { "Content-Type": "application/json" },
+        });
+      }),
+    );
     let finish!: () => void;
     vi.mocked(messages.loadSession).mockImplementation(async (id) => {
       messages.sessionId = id;
       messages.loading = true;
-      await new Promise<void>((resolve) => { finish = resolve; });
+      await new Promise<void>((resolve) => {
+        finish = resolve;
+      });
       messages.messages = [transcriptMessage(id, "system context", true)];
       messages.loading = false;
     });
@@ -961,11 +976,27 @@ describe("App root Sessions landing", () => {
     stubAppDependencies();
     vi.spyOn(sessions, "load").mockResolvedValue();
     vi.mocked(messages.loadSession).mockRestore();
-    vi.spyOn(SessionsService, "getApiV1SessionsById").mockResolvedValue({ message_count: 3001 } as never);
-    vi.spyOn(SessionsService, "getApiV1SessionsByIdMessages").mockImplementation(async (_path, query) => {
-      const ordinal = query?.from ?? 2;
-      return { messages: [{ ...transcriptMessage("first", ordinal ? "system context" : "readable history", ordinal !== 0), ordinal }], transcript_revision: "one" } as never;
-    });
+    vi.spyOn(SessionsService, "getApiV1SessionsById").mockResolvedValue({
+      message_count: 3001,
+    } as never);
+    vi.spyOn(SessionsService, "getApiV1SessionsByIdMessages").mockImplementation(
+      async (_path, query) => {
+        const ordinal = query?.from ?? 2;
+        return {
+          messages: [
+            {
+              ...transcriptMessage(
+                "first",
+                ordinal ? "system context" : "readable history",
+                ordinal !== 0,
+              ),
+              ordinal,
+            },
+          ],
+          transcript_revision: "one",
+        } as never;
+      },
+    );
     setRootUrl();
     sessions.sessions = [sidebarRow("first", 3, "2026-01-03")];
     component = mount(App, { target: document.body });
@@ -977,17 +1008,30 @@ describe("App root Sessions landing", () => {
     stubAppDependencies();
     vi.spyOn(sessions, "load").mockResolvedValue();
     vi.mocked(messages.loadSession).mockRestore();
-    vi.spyOn(SessionsService, "getApiV1SessionsById").mockResolvedValue({ message_count: 3001 } as never);
-    vi.spyOn(SessionsService, "getApiV1SessionsByIdMessages").mockImplementation(async (_path, query) => {
-      if (query?.from !== undefined) throw new Error("Could not load older messages");
-      return { messages: [{ ...transcriptMessage("first", "system context", true), ordinal: 1 }], transcript_revision: "one" } as never;
-    });
+    vi.spyOn(SessionsService, "getApiV1SessionsById").mockResolvedValue({
+      message_count: 3001,
+    } as never);
+    vi.spyOn(SessionsService, "getApiV1SessionsByIdMessages").mockImplementation(
+      async (_path, query) => {
+        if (query?.from !== undefined) throw new Error("Could not load older messages");
+        return {
+          messages: [{ ...transcriptMessage("first", "system context", true), ordinal: 1 }],
+          transcript_revision: "one",
+        } as never;
+      },
+    );
     setRootUrl();
     sessions.sessions = [sidebarRow("first", 2, "2026-01-03")];
     component = mount(App, { target: document.body });
-    await vi.waitFor(() => expect(document.body.textContent).toContain("Could not load older messages"));
+    await vi.waitFor(() =>
+      expect(document.body.textContent).toContain("Could not load older messages"),
+    );
     expect(sessions.activeSessionId).toBe("first");
-    expect([...document.querySelectorAll("button")].some((button) => button.textContent?.includes("Retry"))).toBe(true);
+    expect(
+      [...document.querySelectorAll("button")].some((button) =>
+        button.textContent?.includes("Retry"),
+      ),
+    ).toBe(true);
   });
 
   it("opens imported history after choosing folders on a first visit", async () => {

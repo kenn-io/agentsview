@@ -428,25 +428,48 @@
   let previousActiveSessionId: string | null = null;
   let firstVisitPending = $state(false);
   let firstVisitCandidate: string | null = null;
+  let firstVisitCandidateKey = "";
+  let firstVisitPaged = $state(0);
   const firstVisitTried = new Set<string>();
+
+  // A session is retried when its transcript revision changes.
+  function firstVisitKey(id: string | undefined): string {
+    return `${id}:${sessions.sessions.find((s) => s.id === id)?.transcript_revision ?? ""}`;
+  }
+
+  // Record the revision being tried; a same-session retry must drop the cached transcript to refetch it.
+  function selectFirstVisit(id: string): void {
+    firstVisitCandidateKey = firstVisitKey(id);
+    if (sessions.activeSessionId !== id) return sessions.selectSession(id);
+    messages.clear();
+    void messages.loadSession(id);
+  }
+
+  // Page back through hidden-only history, so the newest page alone cannot reject a transcript.
+  function pagingHiddenHistory(): boolean {
+    void firstVisitPaged;
+    if (!messages.hasOlder || messages.messages.some((m) => !isSystemMessage(m))) return false;
+    void messages.loadOlder()?.finally(() => firstVisitPaged++);
+    return true;
+  }
 
   // Keep the attempt pending until the selected transcript shows a row;
   // a loaded transcript with none is skipped for the next sidebar session.
   function advanceFirstVisit(): void {
     const id = firstVisitCandidate;
     if (id) {
-      if (messages.sessionId !== id || messages.loading || messages.loadError) return;
+      if (messages.sessionId !== id || messages.loading || messages.loadError || pagingHiddenHistory()) return;
       if (messages.messages.some((m) => !isSystemMessage(m))) {
         firstVisitPending = false;
         return;
       }
-      firstVisitTried.add(id);
+      firstVisitTried.add(firstVisitCandidateKey);
     }
     const next = sessions.groupedSessions
       .flatMap((group) => [group.primarySessionId, ...group.sessions.map((s) => s.id)])
-      .find((sid) => sid && !firstVisitTried.has(sid));
+      .find((sid) => sid && !firstVisitTried.has(firstVisitKey(sid)));
     firstVisitCandidate = next ?? null;
-    if (next) sessions.selectSession(next);
+    if (next) selectFirstVisit(next);
     else if (id) sessions.deselectSession();
   }
 
@@ -763,11 +786,14 @@
     const currentUrlSessionId = router.sessionId;
     const filterParams = sessionFilterRouteParams();
     const filterParamsSignature = JSON.stringify(filterParams);
+    const provisional = firstVisitPending;
     untrack(() => {
       if (router.route !== "sessions") {
         lastDetailFilterParamsSignature = null;
         return;
       }
+      // A first-visit candidate is not committed to the URL until it reads.
+      if (provisional && activeId !== null && activeId === firstVisitCandidate) return;
       if (activeId) {
         const nextParams = sessionRouteParamsForFilters(
           filterParams,
