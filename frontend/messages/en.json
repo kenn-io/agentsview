@@ -3266,8 +3266,6 @@
       "match": { "countPlural=one": "text section", "countPlural=other": "text sections" }
     }
   ],
-  "empty_archive_unreadable_title": "No readable sessions",
-  "empty_archive_unreadable_desc": "Sessions found here are empty or hidden by the sidebar filters. Open Filters in the sidebar, or choose your agent folders.",
   "empty_archive_pending_title": "Import not finished",
   "empty_archive_pending_desc": "Select Sync sessions in the header to retry, or choose your agent folders.",
   "empty_archive_syncing_title": "Syncing sessions",

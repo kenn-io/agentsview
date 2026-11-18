@@ -1,11 +1,10 @@
 <script lang="ts">
-  import { Button, EmptyState, Spinner } from "@kenn-io/kit-ui";
+  import { Button, EmptyState } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
   import { FolderIcon } from "../../icons.js";
   import { router } from "../../stores/router.svelte.js";
   import { settings } from "../../stores/settings.svelte.js";
   import { sync } from "../../stores/sync.svelte.js";
-  import { sessions } from "../../stores/sessions.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
   import SidebarToggleButton from "../layout/SidebarToggleButton.svelte";
 
@@ -25,15 +24,11 @@
     </div>
   {/if}
   <EmptyState
-    title={sync.syncing ? m.empty_archive_syncing_title() : sync.startupPending ? m.empty_archive_pending_title() : sessions.archiveEmpty ? m.empty_archive_title() : m.empty_archive_unreadable_title()}
-    description={sync.syncing ? m.empty_archive_syncing_desc() : sync.startupPending ? m.empty_archive_pending_desc() : sessions.archiveEmpty ? m.empty_archive_desc() : m.empty_archive_unreadable_desc()}
+    title={sync.syncing ? m.empty_archive_syncing_title() : sync.startupPending ? m.empty_archive_pending_title() : m.empty_archive_title()}
+    description={sync.syncing ? m.empty_archive_syncing_desc() : sync.startupPending ? m.empty_archive_pending_desc() : m.empty_archive_desc()}
   >
     {#snippet icon()}
-      {#if sync.syncing}
-        <Spinner size={40} />
-      {:else}
-        <FolderIcon size="40" strokeWidth="1.6" aria-hidden="true" />
-      {/if}
+      <FolderIcon size="40" strokeWidth="1.6" aria-hidden="true" />
     {/snippet}
     {#if settings.loaded && !settings.error}
       {#if folders.length === 0}

@@ -102,7 +102,6 @@
   import { setAuthToken, getAuthToken, setServerUrl } from "./lib/api/runtime.js";
   import { setupVisibilityHealthCheck } from "./lib/utils/health.js";
   import { reportTelemetry, setupTelemetryReporting } from "./lib/utils/telemetry.js";
-  import { inSessionSearch } from "./lib/stores/inSessionSearch.svelte.js";
   import { registerShortcuts } from "./lib/utils/keyboard.js";
   import { shouldAutoSwitchTranscriptModeToNormal } from "./lib/utils/transcript-mode.js";
   import {
@@ -426,25 +425,7 @@
   let rootDetailExitDateRestorePending = $state(false);
   let previousSessionId: string | null = null;
   let previousActiveSessionId: string | null = null;
-  let firstVisitArmed = $state(false);
-  let firstVisitEligible = $state(false);
-  let firstVisitWaiting = $state(false);
-  let candidate = $state<string | null>(null);
-  let firstVisitProbing = $derived(firstVisitArmed && candidate !== null);
-  const tried = new Map<string, string>();
-
-  $effect(() => {
-    if (!firstVisitEligible) return;
-    if (router.route !== "sessions" || !router.isRootPath || hasFilterParams(router.params) || sessions.activeSessionId !== null) {
-      firstVisitEligible = false;
-      return;
-    }
-    if (!settings.loaded || settings.loading || settings.needsAuth || settings.error) return;
-    firstVisitEligible = false;
-    if (ui.firstVisitSeen || !readProgress.isEmpty) return;
-    ui.firstVisitSeen = true;
-    firstVisitArmed = true;
-  });
+  let firstVisitPending = $state(false);
 
   function clearRootDetailDateRestoreSuppressed(): void {
     rootDetailDateRestoreSuppressed = false;
@@ -704,54 +685,16 @@
     });
   });
 
-  // Run after route selection is cleared so returning from settings can select a session.
   $effect(() => {
-    if (!firstVisitArmed) return;
-    if (router.route === "settings") return;
-    if (
-      router.route !== "sessions" || hasFilterParams(router.params) ||
-      sessions.activeSessionId !== candidate
-    ) {
-      firstVisitArmed = false;
-      firstVisitWaiting = false;
-      candidate = null;
+    if (!firstVisitPending) return;
+    if (router.route !== "sessions" || !router.isRootPath || hasFilterParams(router.params) || sessions.activeSessionId !== null) {
+      firstVisitPending = false;
       return;
     }
-    if (sessions.sidebarLoadError) return;
-    if (candidate) {
-      if (!sessions.activeSessionNotFound) {
-        if (messages.sessionId !== candidate || messages.loading || messages.loadingOlder || messages.loadError) return;
-        if (inSessionSearch.scope?.items.some((item) => item.kind !== "empty-group")) {
-          firstVisitArmed = false;
-          candidate = null;
-          return;
-        }
-        if (messages.hasOlder) {
-          void messages.loadOlder();
-          return;
-        }
-      }
-      const row = sessions.groupedSessions.flatMap((group) => group.sessions).find((session) => session.id === candidate);
-      if (row) tried.set(candidate, `${row.transcript_revision ?? ""}:${row.message_count}`);
-    }
-    const next = sessions.groupedSessions.flatMap((group) => {
-      const primary = group.sessions.find((session) => session.id === group.primarySessionId);
-      return [...(primary ? [primary] : []), ...group.sessions.filter((session) => session.id !== group.primarySessionId)];
-    }).find((row) => tried.get(row.id) !== `${row.transcript_revision ?? ""}:${row.message_count}`);
-    if (next) {
-      firstVisitWaiting = false;
-      candidate = next.id;
-      sessions.selectSession(candidate);
-    } else {
-      if (candidate) {
-        candidate = null;
-        sessions.deselectSession();
-      }
-      if (!sessions.loading && sessions.nextCursor) {
-        void sessions.loadMore();
-      } else if (!sessions.loading && !sessions.nextCursor) {
-        firstVisitWaiting = true;
-      }
+    const id = sessions.groupedSessions[0]?.primarySessionId;
+    if (id) {
+      firstVisitPending = false;
+      sessions.selectSession(id);
     }
   });
 
@@ -797,7 +740,6 @@
 
   // Sync active session to URL.
   $effect(() => {
-    if (firstVisitProbing) return;
     const activeId = sessions.activeSessionId;
     const currentUrlSessionId = router.sessionId;
     const filterParams = sessionFilterRouteParams();
@@ -896,7 +838,7 @@
   });
 
   onMount(() => {
-    firstVisitEligible = !ui.firstVisitSeen && readProgress.isEmpty && router.route === "sessions" &&
+    firstVisitPending = readProgress.isEmpty && router.route === "sessions" &&
       router.isRootPath && !hasFilterParams(router.params);
     globalAuthToken = getAuthToken();
     settings.load();
@@ -1027,7 +969,7 @@
           onBack={() => sessions.deselectSession()}
         />
         <MessageList bind:this={messageListRef} />
-      {:else if sessions.archiveEmpty || firstVisitWaiting}
+      {:else if sessions.archiveEmpty}
         <EmptyArchivePanel />
       {:else}
         <AnalyticsPage

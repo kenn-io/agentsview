@@ -96,7 +96,6 @@ const VITALS_KEY = "agentsview-session-vitals";
 const VITALS_CALLS_EXPANDED_KEY = "agentsview-session-vitals-calls-expanded";
 const SIGNAL_PANEL_KEY = "agentsview-signal-panel";
 const FOLLOW_LATEST_KEY = "agentsview-follow-latest";
-const FIRST_VISIT_SEEN_KEY = "agentsview-first-visit-seen";
 
 /** Resolves the visible block types from a stored filter payload. */
 export function parseBlockFilters(raw: string | null): Set<BlockType> {
@@ -342,7 +341,6 @@ class UIStore {
   vitalsCallsExpanded: boolean = $state(readStoredBool(VITALS_CALLS_EXPANDED_KEY, true));
   signalPanelOpen: boolean = $state(readStoredBool(SIGNAL_PANEL_KEY, false));
   followLatest: boolean = $state(readStoredBool(FOLLOW_LATEST_KEY, false));
-  firstVisitSeen: boolean = $state(readStoredBool(FIRST_VISIT_SEEN_KEY, false));
   followLatestRequest: number = $state(0);
 
   /** Set of block types currently visible. */
@@ -486,14 +484,6 @@ class UIStore {
       $effect(() => {
         try {
           localStorage?.setItem(FOLLOW_LATEST_KEY, String(this.followLatest));
-        } catch {
-          // ignore
-        }
-      });
-
-      $effect(() => {
-        try {
-          localStorage?.setItem(FIRST_VISIT_SEEN_KEY, String(this.firstVisitSeen));
         } catch {
           // ignore
         }

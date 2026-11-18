@@ -64,7 +64,7 @@ for (const { remote, action } of [
         );
         await new SessionsPage(page).goto();
       } else {
-        await page.addInitScript(() => localStorage.setItem("agentsview-first-visit-seen", "true"));
+        await page.addInitScript(() => localStorage.setItem("agentsview-read-progress", JSON.stringify({ version: 2, sessions: { prior: { token: "revision", ordinal: 0, touched_at: 1 } } })));
         await page.goto(server.url);
         await expect(new SessionsPage(page).sessionItems.first()).toBeVisible();
       }

@@ -17,16 +17,6 @@ import {
 } from "./ui.svelte.js";
 
 describe("UIStore", () => {
-  it("persists the first visit and tolerates blocked storage", async () => {
-    ui.firstVisitSeen = true;
-    await tick();
-    expect(localStorage.getItem("agentsview-first-visit-seen")).toBe("true");
-    const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("blocked"); });
-    ui.firstVisitSeen = false;
-    await tick();
-    expect(ui.firstVisitSeen).toBe(false);
-    setItem.mockRestore();
-  });
   beforeEach(() => {
     ui.activeModal = null;
     ui.clearPublishTarget();

@@ -3215,8 +3215,6 @@
       "match": { "countPlural=one": "テキスト区間", "countPlural=other": "テキスト区間" }
     }
   ],
-  "empty_archive_unreadable_title": "読み取れるセッションがありません",
-  "empty_archive_unreadable_desc": "見つかったセッションは空か、サイドバーのフィルターで非表示になっています。サイドバーのフィルターを開くか、エージェントのフォルダーを選択してください。",
   "empty_archive_pending_title": "インポートが完了していません",
   "empty_archive_pending_desc": "再試行するには上部の「セッションを同期する」を選ぶか、エージェントのフォルダーを選択してください。",
   "empty_archive_syncing_title": "セッションを同期中",

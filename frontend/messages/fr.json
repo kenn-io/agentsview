@@ -3292,8 +3292,6 @@
       "match": { "countPlural=one": "section de texte", "countPlural=other": "sections de texte" }
     }
   ],
-  "empty_archive_unreadable_title": "Aucune session lisible",
-  "empty_archive_unreadable_desc": "Les sessions trouvées sont vides ou masquées par les filtres de la barre latérale. Ouvrez Filtres dans la barre latérale ou choisissez les dossiers de vos agents.",
   "empty_archive_pending_title": "Importation inachevée",
   "empty_archive_pending_desc": "Sélectionnez Synchroniser les sessions dans la barre supérieure pour réessayer, ou choisissez les dossiers de vos agents.",
   "empty_archive_syncing_title": "Synchronisation des sessions",

@@ -3144,8 +3144,6 @@
       "match": { "countPlural=one": "文字片段", "countPlural=other": "文字片段" }
     }
   ],
-  "empty_archive_unreadable_title": "沒有可讀取的工作階段",
-  "empty_archive_unreadable_desc": "找到的工作階段為空，或已被側邊欄篩選器隱藏。請開啟側邊欄的篩選器，或選擇代理資料夾。",
   "empty_archive_pending_title": "匯入尚未完成",
   "empty_archive_pending_desc": "選取頂部的同步對話以重試，或選擇代理程式資料夾。",
   "empty_archive_syncing_title": "正在同步工作階段",
