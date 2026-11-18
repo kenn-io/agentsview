@@ -824,6 +824,44 @@ func TestUsageSpoolRetainsOnlyChangedFacts(t *testing.T) {
 	}
 }
 
+func TestUsageSpoolMixedCachedAndUncachedSessions(t *testing.T) {
+	database, cache := usageSpoolExtractionFixture(t, 1001)
+	for _, id := range []string{"a-uncached", "z-uncached"} {
+		require.NoError(t, database.UpsertSession(t.Context(), Session{ID: id, Project: "project", Machine: defaultMachine, Agent: defaultAgent}))
+		messages := make([]Message, 1001)
+		for i := range messages {
+			messages[i] = Message{SessionID: id, Ordinal: i, Role: "assistant", Model: "model", Timestamp: "2026-08-10T09:00:00Z", SourceUUID: fmt.Sprintf("%s-%d", id, i), TokenUsage: json.RawMessage(`{"input_tokens":10}`)}
+		}
+		require.NoError(t, database.InsertMessages(t.Context(), messages))
+	}
+	_, err := database.getWriter().Exec(t.Context(), `UPDATE messages SET token_usage='{"input_tokens":99}' WHERE session_id='session' AND ordinal BETWEEN 1 AND 1000`)
+	require.NoError(t, err)
+	versions := []usageSourceVersion{{SessionID: "a-uncached"}, {SessionID: "session"}, {SessionID: "z-uncached"}}
+	expected, err := cache.fill.captureFillInstallExpectations(t.Context(), versions)
+	require.NoError(t, err)
+	spool, extracted, err := cache.fill.extractSessions(t.Context(), versions, expected)
+	require.NoError(t, err)
+	defer spool.Close()
+	var count int
+	require.NoError(t, spool.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM facts`).Scan(&count))
+	assert.Equal(t, 3002, count)
+	for _, version := range versions {
+		require.NoError(t, spool.db.QueryRowContext(t.Context(), `SELECT message_count + activity_count + event_count FROM sessions WHERE session_id=?`, version.SessionID).Scan(&count))
+		assert.Equal(t, 1001, count)
+	}
+	installVersions := make([]usageSourceVersion, 0, len(extracted))
+	for _, version := range extracted {
+		installVersions = append(installVersions, version)
+	}
+	_, lost, err := cache.fill.installSpool(t.Context(), spool, installVersions, nil, expected, 0)
+	require.NoError(t, err)
+	assert.Empty(t, lost)
+	full, _, err := cache.fill.extractSessions(t.Context(), versions, nil)
+	require.NoError(t, err)
+	defer full.Close()
+	assert.Equal(t, usageSpoolFactValues(t, full.db, `SELECT * FROM facts ORDER BY session_id, fact_index`), usageSpoolFactValues(t, cache.db, `SELECT f.* FROM usage_facts f JOIN usage_cached_sessions c ON c.id=f.cached_session_id ORDER BY c.session_id, f.fact_index`))
+}
+
 func TestUsageSpoolFallsBackAfterCacheRevisionChanges(t *testing.T) {
 	_, cache := usageSpoolExtractionFixture(t, 8)
 	versions := []usageSourceVersion{{SessionID: "session"}}
@@ -1157,83 +1195,88 @@ func TestUsageFillCoordinatorDoesNotJoinOlderSourceVersion(t *testing.T) {
 }
 
 func TestUsageFillOlderExtractionCannotReplaceNewerCachedFacts(t *testing.T) {
-	database := usageCandidateFixture(t)
-	snapshot, err := database.captureUsageQuery(
-		t.Context(), UsageFilter{}, usageQueryKindToken)
-	require.NoError(t, err)
-	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
-	require.NoError(t, err)
-	var oldVersion usageSourceVersion
-	for _, version := range snapshot.Versions {
-		if version.SessionID == "inside-message" {
-			oldVersion = version
-			break
-		}
-	}
-	require.Equal(t, "inside-message", oldVersion.SessionID)
-	// Seed a baseline, then change only its source version: the older fill
-	// must preserve all facts through an empty delta until it loses the race.
-	_, err = cache.fill.fillSessionsDetached(t.Context(), []usageSourceVersion{oldVersion})
-	require.NoError(t, err)
-	_, err = database.getWriter().Exec(t.Context(), `UPDATE sessions
+	for _, seeded := range []bool{true, false} {
+		t.Run(fmt.Sprintf("seeded=%t", seeded), func(t *testing.T) {
+			database := usageCandidateFixture(t)
+			snapshot, err := database.captureUsageQuery(
+				t.Context(), UsageFilter{}, usageQueryKindToken)
+			require.NoError(t, err)
+			cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
+			require.NoError(t, err)
+			var oldVersion usageSourceVersion
+			for _, version := range snapshot.Versions {
+				if version.SessionID == "inside-message" {
+					oldVersion = version
+					break
+				}
+			}
+			require.Equal(t, "inside-message", oldVersion.SessionID)
+			// A seeded baseline exercises an empty delta before the older fill loses.
+			if seeded {
+				_, err = cache.fill.fillSessionsDetached(t.Context(), []usageSourceVersion{oldVersion})
+				require.NoError(t, err)
+			}
+			_, err = database.getWriter().Exec(t.Context(), `UPDATE sessions
 		SET transcript_revision='pending' WHERE id=?`, oldVersion.SessionID)
-	require.NoError(t, err)
-	current, _, err := cache.fill.recheckSourceVersions(t.Context(), []usageSourceVersion{oldVersion})
-	require.NoError(t, err)
-	oldVersion = current[oldVersion.SessionID]
-	oldExtracted := make(chan struct{})
-	releaseOld := make(chan struct{})
-	var oldExtractions atomic.Int32
-	cache.fill.observer.afterExtract = func(versions []usageSourceVersion) {
-		if versions[0].TranscriptRevision != oldVersion.TranscriptRevision {
-			return
-		}
-		if oldExtractions.Add(1) == 1 {
-			close(oldExtracted)
-			<-releaseOld
-		}
-	}
-	type fillOutcome struct {
-		results map[string]usageFillResult
-		err     error
-	}
-	oldDone := make(chan fillOutcome, 1)
-	go func() {
-		results, fillErr := cache.fill.Ensure(
-			t.Context(), []usageSourceVersion{oldVersion}, 0)
-		oldDone <- fillOutcome{results: results, err: fillErr}
-	}()
-	<-oldExtracted
-	tx, err := database.getWriter().BeginTx(t.Context(), nil)
-	require.NoError(t, err)
-	_, err = tx.ExecContext(t.Context(), `UPDATE messages SET token_usage = '{"input_tokens":9}'
+			require.NoError(t, err)
+			current, _, err := cache.fill.recheckSourceVersions(t.Context(), []usageSourceVersion{oldVersion})
+			require.NoError(t, err)
+			oldVersion = current[oldVersion.SessionID]
+			oldExtracted := make(chan struct{})
+			releaseOld := make(chan struct{})
+			var oldExtractions atomic.Int32
+			cache.fill.observer.afterExtract = func(versions []usageSourceVersion) {
+				if versions[0].TranscriptRevision != oldVersion.TranscriptRevision {
+					return
+				}
+				if oldExtractions.Add(1) == 1 {
+					close(oldExtracted)
+					<-releaseOld
+				}
+			}
+			type fillOutcome struct {
+				results map[string]usageFillResult
+				err     error
+			}
+			oldDone := make(chan fillOutcome, 1)
+			go func() {
+				results, fillErr := cache.fill.Ensure(
+					t.Context(), []usageSourceVersion{oldVersion}, 0)
+				oldDone <- fillOutcome{results: results, err: fillErr}
+			}()
+			<-oldExtracted
+			tx, err := database.getWriter().BeginTx(t.Context(), nil)
+			require.NoError(t, err)
+			_, err = tx.ExecContext(t.Context(), `UPDATE messages SET token_usage = '{"input_tokens":9}'
 		WHERE session_id = ?`, oldVersion.SessionID)
-	require.NoError(t, err)
-	_, err = tx.ExecContext(t.Context(), `UPDATE sessions SET transcript_revision = 'newer'
+			require.NoError(t, err)
+			_, err = tx.ExecContext(t.Context(), `UPDATE sessions SET transcript_revision = 'newer'
 		WHERE id = ?`, oldVersion.SessionID)
-	require.NoError(t, err)
-	require.NoError(t, tx.Commit())
-	current, _, err = cache.fill.recheckSourceVersions(
-		t.Context(), []usageSourceVersion{{SessionID: oldVersion.SessionID}})
-	require.NoError(t, err)
-	newVersion := current[oldVersion.SessionID]
-	newResults, err := cache.fill.Ensure(
-		t.Context(), []usageSourceVersion{newVersion}, 0)
-	require.NoError(t, err)
-	close(releaseOld)
-	oldOutcome := <-oldDone
-	require.NoError(t, oldOutcome.err)
+			require.NoError(t, err)
+			require.NoError(t, tx.Commit())
+			current, _, err = cache.fill.recheckSourceVersions(
+				t.Context(), []usageSourceVersion{{SessionID: oldVersion.SessionID}})
+			require.NoError(t, err)
+			newVersion := current[oldVersion.SessionID]
+			newResults, err := cache.fill.Ensure(
+				t.Context(), []usageSourceVersion{newVersion}, 0)
+			require.NoError(t, err)
+			close(releaseOld)
+			oldOutcome := <-oldDone
+			require.NoError(t, oldOutcome.err)
 
-	assert.Equal(t, newVersion, newResults[oldVersion.SessionID].source)
-	assert.Equal(t, newVersion, oldOutcome.results[oldVersion.SessionID].source)
-	assert.Equal(t, int32(2), oldExtractions.Load(),
-		"the older fill should re-extract after losing the cache race")
-	var inputTokens int64
-	require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT f.input_tokens
+			assert.Equal(t, newVersion, newResults[oldVersion.SessionID].source)
+			assert.Equal(t, newVersion, oldOutcome.results[oldVersion.SessionID].source)
+			assert.Equal(t, int32(2), oldExtractions.Load(),
+				"the older fill should re-extract after losing the cache race")
+			var inputTokens int64
+			require.NoError(t, cache.db.QueryRowContext(t.Context(), `SELECT f.input_tokens
 		FROM usage_facts f JOIN usage_cached_sessions s
 		  ON s.id = f.cached_session_id
 		WHERE s.session_id = ?`, oldVersion.SessionID).Scan(&inputTokens))
-	assert.Equal(t, int64(9), inputTokens)
+			assert.Equal(t, int64(9), inputTokens)
+		})
+	}
 }
 
 func TestUsageFillRecheckRestoresReaderBusyTimeout(t *testing.T) {
