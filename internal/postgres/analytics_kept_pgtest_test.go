@@ -5,12 +5,14 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 )
 
@@ -413,4 +415,189 @@ func TestAnalyticsKeptCommitOrder(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, after.ByAgent, 1)
 	assert.Equal(t, 1, after.ByAgent[0].Sessions)
+}
+
+func TestAnalyticsKeptRestart(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, store := newUsageJournalFixture(t)
+	ctx := t.Context()
+	pgKeptSession(t, local, "session", "project", "2026-06-14")
+	require.NoError(t, local.UpdateSessionSignals(ctx, "session", db.SessionSignalUpdate{HealthScore: new(30)}))
+	pgKeptPush(t, syncer, false)
+	dir := t.TempDir()
+	url := testPGURL(t)
+	require.NoError(t, store.ConfigureUsageCache(ctx, dir, url, syncer.schema))
+	f := db.AnalyticsFilter{From: "2026-06-14", To: "2026-06-14", Timezone: "UTC"}
+	tools, err := store.GetAnalyticsTools(ctx, f)
+	require.NoError(t, err)
+	velocity, err := store.GetAnalyticsVelocity(ctx, f)
+	require.NoError(t, err)
+	signals, err := store.GetAnalyticsSignals(ctx, f)
+	require.NoError(t, err)
+	reopened, err := NewStore(ctx, url, syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+	require.NoError(t, reopened.ConfigureUsageCache(ctx, dir, url, syncer.schema))
+	counter := &analyticsReadCounter{storeExecutor: reopened.pg}
+	reopened.pg = counter
+	gotTools, err := reopened.GetAnalyticsTools(ctx, f)
+	require.NoError(t, err)
+	gotVelocity, err := reopened.GetAnalyticsVelocity(ctx, f)
+	require.NoError(t, err)
+	gotSignals, err := reopened.GetAnalyticsSignals(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, tools, gotTools)
+	require.Equal(t, velocity, gotVelocity)
+	require.Equal(t, signals, gotSignals)
+	require.Zero(t, counter.count())
+	read := func(s *Store, counts *[3]int) db.SignalsAnalyticsResponse {
+		_, err := keptAnalytics(ctx, s, "tools", f, func(ctx context.Context, f db.AnalyticsFilter) (db.ToolsAnalyticsResponse, error) {
+			counts[0]++
+			return s.loadAnalyticsTools(ctx, f)
+		})
+		require.NoError(t, err)
+		_, err = keptAnalytics(ctx, s, "velocity", f, func(ctx context.Context, f db.AnalyticsFilter) (db.VelocityResponse, error) {
+			counts[1]++
+			return s.loadAnalyticsVelocity(ctx, f)
+		})
+		require.NoError(t, err)
+		signals, err := keptAnalytics(ctx, s, "signals", f, func(ctx context.Context, f db.AnalyticsFilter) (db.SignalsAnalyticsResponse, error) {
+			counts[2]++
+			return s.loadAnalyticsSignals(ctx, f)
+		})
+		require.NoError(t, err)
+		return signals
+	}
+	counts := [3]int{}
+	first := read(store, &counts)
+	require.NotNil(t, first.AvgHealthScore)
+	require.InDelta(t, 30, *first.AvgHealthScore, 0)
+	require.NoError(t, local.UpdateSessionSignals(ctx, "session", db.SessionSignalUpdate{HealthScore: new(90)}))
+	pgKeptPush(t, syncer, false)
+	scoreStore, err := NewStore(ctx, url, syncer.schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, scoreStore.Close()) })
+	require.NoError(t, scoreStore.ConfigureUsageCache(ctx, dir, url, syncer.schema))
+	counts = [3]int{}
+	score := read(scoreStore, &counts)
+	require.NotNil(t, score.AvgHealthScore)
+	require.InDelta(t, 90, *score.AvgHealthScore, 0)
+	require.Equal(t, [3]int{0, 0, 1}, counts)
+}
+
+func TestAnalyticsKeptDirectSourceEvents(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, store := newUsageJournalFixture(t)
+	ctx := t.Context()
+	pgKeptSession(t, local, "session", "project", "2026-06-14")
+	require.NoError(t, local.UpdateSessionSignals(ctx, "session", db.SessionSignalUpdate{QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion}}))
+	pgKeptPush(t, syncer, false)
+	require.NoError(t, store.ConfigureUsageCache(ctx, t.TempDir(), testPGURL(t), syncer.schema))
+	f := db.AnalyticsFilter{Timezone: "UTC"}
+	var loads [3]int
+	read := func() db.ToolsAnalyticsResponse {
+		tools, err := keptAnalytics(ctx, store, "tools", f, func(ctx context.Context, f db.AnalyticsFilter) (db.ToolsAnalyticsResponse, error) {
+			loads[0]++
+			return store.loadAnalyticsTools(ctx, f)
+		})
+		require.NoError(t, err)
+		_, err = keptAnalytics(ctx, store, "velocity", f, func(ctx context.Context, f db.AnalyticsFilter) (db.VelocityResponse, error) {
+			loads[1]++
+			return store.loadAnalyticsVelocity(ctx, f)
+		})
+		require.NoError(t, err)
+		_, err = keptAnalytics(ctx, store, "signals", f, func(ctx context.Context, f db.AnalyticsFilter) (db.SignalsAnalyticsResponse, error) {
+			loads[2]++
+			return store.loadAnalyticsSignals(ctx, f)
+		})
+		require.NoError(t, err)
+		return tools
+	}
+	require.Zero(t, read().TotalCalls)
+	loads = [3]int{}
+	store.SetCustomPricing(map[string]config.CustomModelRate{"model": {OutputMicrodollarsPerMTok: 100}})
+	require.Zero(t, read().TotalCalls)
+	require.Equal(t, [3]int{}, loads)
+	scope := &db.AnalyticsFilter{Timezone: "UTC", Model: "model-a", Project: "project", Hour: new(10), DayOfWeek: new(6)}
+	for _, tc := range []struct {
+		query  string
+		loads  [3]int
+		calls  int
+		tool   string
+		check  func(*testing.T, db.ToolUsageAnalysis)
+		filter *db.AnalyticsFilter
+	}{
+		{`UPDATE messages SET role='assistant' WHERE session_id='session' AND ordinal=0`, [3]int{0, 1, 1}, 0, "", nil, nil},
+		{`UPDATE messages SET is_system=true WHERE session_id='session' AND ordinal=0`, [3]int{0, 1, 1}, 0, "", nil, nil},
+		{`UPDATE messages SET content_length=20 WHERE session_id='session' AND ordinal=1`, [3]int{0, 1, 0}, 0, "", nil, nil},
+		{`INSERT INTO messages(session_id,ordinal,role,content,timestamp) VALUES('session',2,'assistant','answer','2026-06-14T10:02:00Z')`, [3]int{1, 1, 1}, 0, "", nil, nil},
+		{`DELETE FROM messages WHERE session_id='session' AND ordinal=2`, [3]int{1, 1, 1}, 0, "", nil, nil},
+		{`INSERT INTO tool_calls(session_id,message_ordinal,tool_name,category) VALUES('session',1,'Read','Read')`, [3]int{1, 1, 0}, 1, "Read", nil, nil},
+		{`UPDATE tool_calls SET tool_name='Grep' WHERE session_id='session'`, [3]int{1, 0, 0}, 1, "Grep", nil, nil},
+		{`UPDATE tool_calls SET category='Bash' WHERE session_id='session'`, [3]int{1, 0, 0}, 1, "Grep", func(t *testing.T, row db.ToolUsageAnalysis) { require.Equal(t, "Bash", row.Category) }, nil},
+		{`UPDATE tool_calls SET observed_outcome='empty' WHERE session_id='session'`, [3]int{1, 0, 0}, 1, "Grep", func(t *testing.T, row db.ToolUsageAnalysis) { require.Equal(t, 1, row.EmptyCalls) }, nil},
+		{`UPDATE tool_calls SET observed_repeat='identical' WHERE session_id='session'`, [3]int{1, 0, 0}, 1, "Grep", func(t *testing.T, row db.ToolUsageAnalysis) { require.Equal(t, 1, row.RepeatedCalls) }, nil},
+		{`UPDATE tool_calls SET sequence_ending='recovered' WHERE session_id='session'`, [3]int{1, 0, 0}, 1, "Grep", func(t *testing.T, row db.ToolUsageAnalysis) { require.Equal(t, 1, row.RecoveredSequences) }, nil},
+		{`UPDATE tool_calls SET tool_name='Grep' WHERE session_id='session'`, [3]int{}, 1, "Grep", nil, nil},
+		{`DELETE FROM tool_calls WHERE session_id='session'`, [3]int{1, 1, 0}, 0, "", nil, nil},
+		{`UPDATE messages SET model='model-b' WHERE session_id='session' AND ordinal=1`, [3]int{}, 0, "", nil, scope},
+		{`UPDATE messages SET timestamp=NULL WHERE session_id='session' AND ordinal=0`, [3]int{}, 0, "", nil, scope},
+		{`UPDATE messages SET ordinal=3 WHERE session_id='session' AND ordinal=0`, [3]int{}, 0, "", nil, scope},
+	} {
+		if tc.filter != nil {
+			_, err := store.pg.ExecContext(ctx, `UPDATE messages SET ordinal=0 WHERE session_id='session' AND ordinal=3;
+UPDATE messages SET role='user', is_system=false, timestamp='2026-06-14T10:00:00Z' WHERE session_id='session' AND ordinal=0;
+UPDATE messages SET model='model-a', timestamp='2026-06-14T11:00:00Z' WHERE session_id='session' AND ordinal=1`)
+			require.NoError(t, err)
+			before, err := store.GetAnalyticsSignals(ctx, *tc.filter)
+			require.NoError(t, err)
+			require.Equal(t, 1, before.UnscoredSessions)
+			_, err = store.pg.ExecContext(ctx, tc.query)
+			require.NoError(t, err)
+			after, err := store.GetAnalyticsSignals(ctx, *tc.filter)
+			require.NoError(t, err)
+			require.Zero(t, after.UnscoredSessions)
+			continue
+		}
+		loads = [3]int{}
+		_, err := store.pg.ExecContext(ctx, tc.query)
+		require.NoError(t, err)
+		tools := read()
+		require.Equal(t, tc.loads, loads, tc.query)
+		require.Equal(t, tc.calls, tools.TotalCalls, tc.query)
+		if tc.tool != "" {
+			require.Equal(t, tc.tool, tools.ByTool[0].ToolName)
+			if tc.check != nil {
+				tc.check(t, tools.ByTool[0])
+			}
+		}
+	}
+}
+
+func TestAnalyticsKeptJournalUpgrade(t *testing.T) {
+	t.Parallel()
+	_, syncer, store := newUsageJournalFixture(t)
+	ctx := t.Context()
+	_, err := store.pg.ExecContext(ctx, `DROP FUNCTION mark_dashboard_messages() CASCADE; DROP FUNCTION mark_dashboard_tool_calls() CASCADE;
+ DELETE FROM sync_metadata WHERE key IN ('dashboard_common','dashboard_tools','dashboard_velocity','dashboard_signals','dashboard_scope');
+ UPDATE sync_metadata SET value='2' WHERE key='usage_change_journal_version'`)
+	require.NoError(t, err)
+	quoted, err := quoteIdentifier(syncer.schema)
+	require.NoError(t, err)
+	oldBody := fmt.Sprintf(markUsageChangeFunctionBodyPG, `"id"`, "true", "id, to_jsonb(row_data) - 'automation_audit_hash'")
+	_, err = store.pg.ExecContext(ctx, fmt.Sprintf(`CREATE OR REPLACE FUNCTION mark_usage_sessions() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, %s, pg_temp AS $journal$%s$journal$`, quoted, oldBody))
+	require.NoError(t, err)
+	var revision, account, history string
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT (SELECT value FROM sync_metadata WHERE key='usage_change_revision'), (SELECT value FROM sync_metadata WHERE key='usage_account_revision'), (SELECT value FROM sync_metadata WHERE key='usage_history_token')`).Scan(&revision, &account, &history))
+	tx, err := store.DB().BeginTx(ctx, nil)
+	require.NoError(t, err)
+	require.NoError(t, installDashboardJournalPG(ctx, tx))
+	require.NoError(t, tx.Commit())
+	var newRevision, newAccount, newHistory, version string
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT (SELECT value FROM sync_metadata WHERE key='usage_change_revision'), (SELECT value FROM sync_metadata WHERE key='usage_account_revision'), (SELECT value FROM sync_metadata WHERE key='usage_history_token'), (SELECT value FROM sync_metadata WHERE key='usage_change_journal_version')`).Scan(&newRevision, &newAccount, &newHistory, &version))
+	require.Equal(t, []string{revision, account, history, "3"}, []string{newRevision, newAccount, newHistory, version})
+	var tokens int
+	require.NoError(t, store.pg.QueryRowContext(ctx, `SELECT count(*) FROM sync_metadata WHERE key IN ('dashboard_common','dashboard_tools','dashboard_velocity','dashboard_signals','dashboard_scope') AND value <> ''`).Scan(&tokens))
+	require.Equal(t, 5, tokens)
+
 }

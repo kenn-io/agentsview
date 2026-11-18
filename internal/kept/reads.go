@@ -56,6 +56,10 @@ func (r *Reads[T]) Put(slot, version string, value T) {
 
 // Do returns a kept value or loads it. Empty slots or versions bypass reuse.
 func (r *Reads[T]) Do(ctx context.Context, slot, version string, load func(context.Context) (T, error)) (T, error) {
+	return r.do(ctx, slot, version, nil, load)
+}
+
+func (r *Reads[T]) do(ctx context.Context, slot, version string, keep func(T), load func(context.Context) (T, error)) (T, error) {
 	if err := ctx.Err(); err != nil {
 		var zero T
 		return zero, err
@@ -65,15 +69,44 @@ func (r *Reads[T]) Do(ctx context.Context, slot, version string, load func(conte
 	}
 	r.init()
 	if values, ok := r.memo.Get(slot, version); ok {
+		if keep != nil {
+			keep(values[0])
+		}
 		return values[0], nil
 	}
 	return r.flights.Do(ctx, version+"|"+slot, func(ctx context.Context) (T, error) {
 		if values, ok := r.memo.Get(slot, version); ok {
+			if keep != nil {
+				keep(values[0])
+			}
 			return values[0], nil
 		}
 		value, err := load(ctx)
 		if err == nil {
 			r.memo.Put(slot, version, []T{value})
+		}
+		return value, err
+	})
+}
+
+// DoSaved keeps finished reads on disk as well as in memory.
+func (r *Reads[T]) DoSaved(ctx context.Context, disk *Disk, slot, memoryVersion, savedVersion string, encode func(T) ([]byte, error), decode func([]byte) (T, error), load func(context.Context) (T, error)) (T, error) {
+	if disk == nil || !disk.Enabled() || slot == "" || memoryVersion == "" || savedVersion == "" {
+		return r.Do(ctx, slot, memoryVersion, load)
+	}
+	return r.do(ctx, slot, memoryVersion, func(value T) {
+		disk.Keep(slot, savedVersion, func() ([]byte, error) { return encode(value) })
+	}, func(ctx context.Context) (T, error) {
+		if data, ok := disk.Get(slot, savedVersion); ok {
+			if value, err := decode(data); err == nil {
+				return value, nil
+			}
+		}
+		value, err := load(ctx)
+		if err == nil {
+			if data, err := encode(value); err == nil {
+				disk.Put(slot, savedVersion, data)
+			}
 		}
 		return value, err
 	})

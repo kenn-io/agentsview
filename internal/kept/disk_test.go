@@ -1,6 +1,8 @@
 package kept
 
 import (
+	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -53,4 +55,57 @@ func TestDiskLimitsAndUnavailableDirectory(t *testing.T) {
 	unavailable.Put("small", "v", []byte("body"))
 	_, ok = unavailable.Get("small", "v")
 	require.False(t, ok)
+}
+
+func TestReadsDoSaved(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	var disk Disk
+	require.NoError(t, disk.Open("saved-reads", "archive", 1024, 0))
+	encode := func(s string) ([]byte, error) { return []byte(s), nil }
+	decode := func(b []byte) (string, error) {
+		if string(b) == "corrupt" {
+			return "", errors.New("corrupt")
+		}
+		return string(b), nil
+	}
+	loads := 0
+	load := func(context.Context) (string, error) { loads++; return "fresh", nil }
+	var first Reads[string]
+	got, err := first.DoSaved(t.Context(), &disk, "slot", "memory1", "saved1", encode, decode, load)
+	require.NoError(t, err)
+	require.Equal(t, "fresh", got)
+	var second Reads[string]
+	got, err = second.DoSaved(t.Context(), &disk, "slot", "memory2", "saved1", encode, decode, load)
+	require.NoError(t, err)
+	require.Equal(t, "fresh", got)
+	require.Equal(t, 1, loads)
+	path := disk.reports.disk.path("slot")
+	old := time.Now().Add(-31 * 24 * time.Hour)
+	require.NoError(t, os.Chtimes(path, old, old))
+	encodeCalls := 0
+	countEncode := func(s string) ([]byte, error) { encodeCalls++; return []byte(s), nil }
+	_, err = second.DoSaved(t.Context(), &disk, "slot", "memory2", "saved1", countEncode, decode, load)
+	require.NoError(t, err)
+	require.Zero(t, encodeCalls)
+	disk.Sweep(time.Now())
+	var third Reads[string]
+	_, err = third.DoSaved(t.Context(), &disk, "slot", "memory3", "saved1", encode, decode, load)
+	require.NoError(t, err)
+	require.Equal(t, 1, loads)
+	require.NoError(t, os.Remove(path))
+	_, err = third.DoSaved(t.Context(), &disk, "slot", "memory3", "saved1", encode, decode, load)
+	require.NoError(t, err)
+	var fourth Reads[string]
+	_, err = fourth.DoSaved(t.Context(), &disk, "slot", "memory4", "saved1", encode, decode, load)
+	require.NoError(t, err)
+	require.Equal(t, 1, loads)
+	var fifth Reads[string]
+	_, err = fifth.DoSaved(t.Context(), &disk, "slot", "memory5", "saved2", encode, decode, load)
+	require.NoError(t, err)
+	require.Equal(t, 2, loads)
+	disk.Put("slot", "saved2", []byte("corrupt"))
+	var sixth Reads[string]
+	_, err = sixth.DoSaved(t.Context(), &disk, "slot", "memory6", "saved2", encode, decode, load)
+	require.NoError(t, err)
+	require.Equal(t, 3, loads)
 }

@@ -1515,6 +1515,9 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 		_, err = d.getWriter().ExecContext(ctx, usageChangeJournalTriggerSQL)
 	}
 	if err == nil {
+		_, err = d.getWriter().ExecContext(ctx, dashboardGenerationTriggerSQL)
+	}
+	if err == nil {
 		err = ensureConversationSchemaLocked(ctx, d.getWriter())
 	}
 	if err == nil {
@@ -3150,6 +3153,9 @@ func applySchemaColumnMigrations(ctx context.Context, w *writerHandle, progress 
 	}
 	if _, err := tx.ExecContext(ctx, usageChangeJournalTriggerSQL); err != nil {
 		return fmt.Errorf("installing usage change journal triggers: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, dashboardGenerationTriggerSQL); err != nil {
+		return fmt.Errorf("installing dashboard generation triggers: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("committing column migrations: %w", err)

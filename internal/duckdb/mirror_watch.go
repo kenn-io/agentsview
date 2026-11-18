@@ -233,6 +233,7 @@ func (s *Store) swapHandle(conn *sql.DB, alias string, info os.FileInfo) {
 	s.reports.Clear()
 	s.activityUsageSums.DeleteSlots(func(string) bool { return true })
 	s.analyticsReads.Clear()
+	s.analyticsDigests.Clear()
 	s.dailyUsage.Clear()
 	s.planUsage.Clear()
 	s.topUsage.Clear()

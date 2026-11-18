@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json/v2"
 	"fmt"
+	"slices"
+	"strconv"
+	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -41,7 +44,14 @@ func keptAnalyticsWith[T any](ctx context.Context, s *Store, panel string, f db.
 	if version == "" {
 		return load(ctx, f)
 	}
-	encoded, err := s.runtimeState().analytics.Do(ctx, slot, version, func(ctx context.Context) ([]byte, error) {
+	var savedVersion string
+	if panelVersion := s.keptDashboardVersion(ctx, panel, f); panelVersion != "" {
+		version, savedVersion = panelVersion, panelVersion+"|"+db.TrendsTimezoneKey(f)
+	}
+	encoded, err := s.runtimeState().analytics.DoSaved(ctx, &s.trendsDisk, slot, version, savedVersion, func(b []byte) ([]byte, error) { return b, nil }, func(b []byte) ([]byte, error) {
+		var result T
+		return b, json.Unmarshal(b, &result)
+	}, func(ctx context.Context) ([]byte, error) {
 		result, err := load(ctx, f)
 		if err != nil {
 			return nil, err
@@ -56,4 +66,29 @@ func keptAnalyticsWith[T any](ctx context.Context, s *Store, panel string, f db.
 		return result, fmt.Errorf("decoding kept analytics: %w", err)
 	}
 	return result, nil
+}
+
+// keptDashboardVersion names a saved Dashboard panel by the random tokens its
+// inputs rotate, so unrelated writes leave it reusable.
+func (s *Store) keptDashboardVersion(ctx context.Context, panel string, f db.AnalyticsFilter) string {
+	if !db.SavedPanel(panel) {
+		return ""
+	}
+	var common, token, scope string
+	err := s.pg.QueryRowContext(ctx, `SELECT
+ COALESCE((SELECT value FROM sync_metadata WHERE key='dashboard_common'),''),
+ COALESCE((SELECT value FROM sync_metadata WHERE key=$1),''),
+ COALESCE((SELECT value FROM sync_metadata WHERE key='dashboard_scope'),'')
+ WHERE EXISTS (SELECT 1 FROM sync_metadata WHERE key='usage_change_journal_version' AND value=$2)`, "dashboard_"+panel, strconv.Itoa(usageChangeJournalVersionPG)).Scan(&common, &token, &scope)
+	if err != nil {
+		return ""
+	}
+	tokens := []string{common, token}
+	if db.DashboardUsesMessageScope(f) {
+		tokens = append(tokens, scope)
+	}
+	if slices.Contains(tokens, "") {
+		return ""
+	}
+	return strings.Join(tokens, "|")
 }
