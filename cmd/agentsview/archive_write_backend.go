@@ -258,20 +258,18 @@ func configuredWatchPathRelevanceProviders(
 				continue
 			}
 			root = absRootPath(root)
-			var provider parser.Provider
-			if relevanceSupported {
-				provider = factory.NewProvider(parser.ProviderConfig{
-					Roots: []string{root},
-				})
+			if !relevanceSupported {
+				providers = append(providers, watchPathRelevanceProvider{root: root})
+				continue
 			}
+			provider := factory.NewProvider(parser.ProviderConfig{
+				Roots: []string{root},
+			})
 			providers = append(providers, watchPathRelevanceProvider{
 				provider:           provider,
 				root:               root,
-				relevanceSupported: relevanceSupported,
+				relevanceSupported: true,
 			})
-			if !relevanceSupported {
-				continue
-			}
 			// A provider can watch directories outside its configured root,
 			// as Codex watches its home directory for the title index. Events
 			// there match the provider only through those watch roots.
