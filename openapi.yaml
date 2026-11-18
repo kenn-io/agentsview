@@ -6938,6 +6938,8 @@ components:
           type: array
         include_local:
           type: boolean
+        local_changes_only:
+          type: boolean
       required:
         - full
         - include_local
@@ -8779,6 +8781,8 @@ components:
           type: boolean
         anomalies:
           $ref: "#/components/schemas/SyncAnomalyStats"
+        changes_only:
+          type: boolean
         cwd_updated:
           format: int64
           type: integer
@@ -25573,6 +25577,14 @@ paths:
           schema:
             default: false
             description: Complete deferred startup ingestion without repeating a completed startup sync
+            type: boolean
+        - description: Sync only the changes the daemon's file watchers collected. The daemon runs a full discovery pass instead when its watchers cannot cover the archive, such as before its startup sync.
+          explode: false
+          in: query
+          name: changes_only
+          schema:
+            default: false
+            description: Sync only the changes the daemon's file watchers collected. The daemon runs a full discovery pass instead when its watchers cannot cover the archive, such as before its startup sync.
             type: boolean
       responses:
         "200":

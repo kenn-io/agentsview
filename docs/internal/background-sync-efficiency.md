@@ -37,6 +37,14 @@ lives primarily in `internal/sync/watcher.go`,
   only while no hold is active, and wait at most two seconds for it.
   Remote-sync export requests read session files, not the archive, and start
   no catch-up.
+- A manual `agentsview source sync` through a running daemon asks for the
+  watchers' changes only: `changes_only` on `/api/v1/sync`, or
+  `local_changes_only` with `include_local` on `/api/v1/sync/remotes`. The
+  daemon applies them through `daemonIngestion.FlushChanges`, as a wake does,
+  and runs no discovery pass. It runs the full pass instead before startup
+  opens watcher delivery, without daemon ingestion (`--no-sync`), and for an
+  archive that needs a rebuild, which only the full pass performs. `--rescan`
+  asks for the full pass.
 - The live-activity poller and the unwatched-root poller follow the same pace
   through the daemon's collection gap: their own interval while a hold is
   active, the background interval otherwise, and no polling during an idle

@@ -264,7 +264,7 @@ func (d *daemonIngestion) EnsureFresh(ctx context.Context) bool {
 		done, started = d.registerCatchupLocked(), true
 		d.applying.Go(func() {
 			defer finish()
-			d.catchUp(d.ctx, false)
+			_ = d.catchUp(d.ctx, false) // catchUp logs its own failure
 			d.finishCatchup(done)
 		})
 	}
@@ -343,7 +343,7 @@ func (d *daemonIngestion) foregroundSync(runner server.LocalSyncRunner) server.L
 			// periodic pass and attached sources own. The watcher's set still
 			// carries what a full pass leaves alone, such as a source deleted
 			// during the pause.
-			d.catchUp(ctx, true)
+			_ = d.catchUp(ctx, true) // catchUp logs its own failure
 		}
 		return stats, err
 	}
@@ -354,7 +354,7 @@ func (d *daemonIngestion) foregroundSync(runner server.LocalSyncRunner) server.L
 // complete, and a set too large to keep was already promoted to a full sync.
 // Sources no watcher covers are caught up by the polls and the periodic pass
 // that the pause held back, unless a full pass just ran.
-func (d *daemonIngestion) catchUp(ctx context.Context, fullPassRan bool) {
+func (d *daemonIngestion) catchUp(ctx context.Context, fullPassRan bool) error {
 	d.mu.Lock()
 	// pending outlives paused when a foreground sync ended the pause and then
 	// failed, so it is what says a wake still owes its catch-up.
@@ -401,6 +401,28 @@ func (d *daemonIngestion) catchUp(ctx context.Context, fullPassRan bool) {
 		d.watchers.openDispatch()
 	}
 	d.mu.Unlock()
+	return err
+}
+
+// FlushChanges syncs the changes the watchers collected, without rediscovering
+// the archive, for a caller that asked for a sync now. It reports false, having
+// synced nothing, when the watchers cannot vouch for the archive: before the
+// startup pass has opened their delivery, or after ingestion stopped. The
+// caller then runs a full pass. Roots no watcher covers keep their poller's
+// schedule.
+func (d *daemonIngestion) FlushChanges(ctx context.Context) (bool, error) {
+	finish, ok := d.idleTracker.BeginWork()
+	if !ok {
+		return false, nil
+	}
+	defer finish()
+	d.mu.Lock()
+	ready := !d.stopped && d.dispatchOpen
+	d.mu.Unlock()
+	if !ready {
+		return false, nil
+	}
+	return true, d.catchUp(ctx, false)
 }
 
 // Reload reads the saved configuration and applies it in the background. It

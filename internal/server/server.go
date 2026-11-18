@@ -76,7 +76,7 @@ type VersionInfo struct {
 // Bump it when a client-visible contract cannot be decoded safely by an older
 // CLI or daemon.
 const (
-	APIVersion = 22
+	APIVersion = 23
 	// KataAPIVersion is the first daemon API that serves /api/v1/kata/status.
 	KataAPIVersion = 14
 	// FrictionAPIVersion is the first daemon API that serves
@@ -669,6 +669,9 @@ func WithInsightLogDrainTimeouts(drain, stopWait time.Duration) Option {
 type IngestionFreshness interface {
 	EnsureFresh(context.Context) bool
 	Pending() bool
+	// FlushChanges syncs what the file watchers collected. It reports false
+	// when only a full discovery pass can bring the archive up to date.
+	FlushChanges(context.Context) (bool, error)
 }
 
 // WithIngestionFreshness waits for local ingestion before archive operations.

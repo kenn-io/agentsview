@@ -2220,6 +2220,9 @@ func printSyncSummary(stats sync.SyncStats, t time.Time) {
 		"Sync complete: %d sessions synced",
 		stats.Synced,
 	)
+	if stats.ChangesOnly {
+		summary = "Sync complete: applied the changes the daemon's file watchers collected"
+	}
 	if isTerminalWriter(os.Stdout) {
 		summary = "\n" + summary
 	}

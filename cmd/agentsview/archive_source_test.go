@@ -227,14 +227,18 @@ func TestArchiveSourceNoSyncDaemonManualSync(t *testing.T) {
 	}, remoteDB, nil).Handler())
 	t.Cleanup(remote.Close)
 	for _, tc := range []struct {
-		name       string
-		remote     bool
-		full       bool
-		onlyRemote bool
+		name        string
+		remote      bool
+		full        bool
+		onlyRemote  bool
+		changesOnly bool
 	}{
 		{name: "local"},
+		// A --no-sync daemon has no watchers, so it runs the full pass.
+		{name: "local changes only", changesOnly: true},
 		{name: "local full", full: true},
 		{name: "remote and local", remote: true},
+		{name: "remote and local changes only", remote: true, changesOnly: true},
 		{name: "remote and local full", remote: true, full: true},
 		{name: "remote only", remote: true, onlyRemote: true},
 	} {
@@ -285,11 +289,11 @@ func TestArchiveSourceNoSyncDaemonManualSync(t *testing.T) {
 				assert.Equal(t, 1, sessions, "startup-only requests must leave local and attached sources unread")
 			}
 			if tc.remote {
-				failures, err := runDaemonRemoteSync(t.Context(), tr, cfg.AuthToken, cfg.RemoteHosts, tc.full, !tc.onlyRemote, nil)
+				failures, err := runDaemonRemoteSync(t.Context(), tr, cfg.AuthToken, cfg.RemoteHosts, tc.full, !tc.onlyRemote, tc.changesOnly, nil)
 				require.NoError(t, err)
 				assert.Empty(t, failures)
 			} else {
-				stats, err := runDaemonSync(t.Context(), tr, cfg.AuthToken, tc.full, nil)
+				stats, err := runDaemonSync(t.Context(), tr, cfg.AuthToken, tc.full, tc.changesOnly, nil)
 				require.NoError(t, err)
 				assert.Equal(t, 4, stats.Synced)
 			}
