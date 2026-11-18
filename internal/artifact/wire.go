@@ -314,9 +314,18 @@ func ValidateRawSource(raw *RawSourceRef) error {
 }
 
 func encodeSegment(msgs []db.Message) ([]byte, error) {
+	version := 4
+	for _, msg := range msgs {
+		if msg.DialogueText != nil {
+			version = messageSegmentFormatVersion
+			break
+		}
+	}
 	var buf bytes.Buffer
 	for _, msg := range msgs {
-		data, err := canonicalJSON(segmentMessageFromDB(msg))
+		record := segmentMessageFromDB(msg)
+		record.Version = version
+		data, err := canonicalJSON(record)
 		if err != nil {
 			return nil, fmt.Errorf("encoding message segment: %w", err)
 		}

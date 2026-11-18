@@ -32,9 +32,11 @@ func TestPromptPRLinksStoredMessages(t *testing.T) {
 	require.NoError(t, d.ReplaceSessionMessages(t.Context(), s.ID, msgs))
 	got, err := d.GetSession(t.Context(), s.ID)
 	require.NoError(t, err)
-	require.Len(t, got.PRLinks, 2)
+	require.Len(t, got.PRLinks, 4)
 	assert.Equal(t, "https://github.com/o/r/pull/1", got.PRLinks[0].URL)
-	assert.Equal(t, "https://github.com/o/r/pull/8", got.PRLinks[1].URL)
+	assert.Equal(t, "https://github.com/o/r/pull/9", got.PRLinks[1].URL)
+	assert.Equal(t, "https://github.com/o/r/pull/8", got.PRLinks[2].URL)
+	assert.Equal(t, "https://github.com/o/r/pull/10", got.PRLinks[3].URL)
 }
 
 func TestPromptPRLinksArchiveOnlyUpgradeKeepsRebuildPending(t *testing.T) {

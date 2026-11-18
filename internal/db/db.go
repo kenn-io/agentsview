@@ -696,7 +696,7 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (182: distinguish empty Evener compaction labels from source text. Re-parse
 // Evener sources in place; source and session identities are unchanged.)
 // (183: prefer structured Antigravity user prompts over skill expansions.)
-// (184: reserved for pushed-session compatibility.)
+// (184: no provider reparse is needed.)
 // (185: retain prompt-derived pull request links.)
 const dataVersion = 185
 

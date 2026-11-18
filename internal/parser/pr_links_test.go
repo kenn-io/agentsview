@@ -189,6 +189,7 @@ func TestPromptPRLinks(t *testing.T) {
 		text string
 		want []string
 	}{
+		{"HTTPS://GITHUB.com/o/r/pull/1", []string{"https://github.com/o/r/pull/1"}},
 		{"https://GITHUB.com/o/r/%70ull/1?x=1 https://github.com/o/r/pull/1", []string{"https://github.com/o/r/pull/1"}},
 		{"https://github.com/owner/repo/pull/123\u00a0review", []string{"https://github.com/owner/repo/pull/123"}},
 		{"https://github.com/owner/repo/pull/123\u0085review", []string{"https://github.com/owner/repo/pull/123"}},

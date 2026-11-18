@@ -72,7 +72,7 @@ var dataVersionScopes = map[int][]parser.AgentType{
 	pricingMetaDataVersion:      {}, // Older binaries keep pricing metadata in model_pricing; nothing to reparse.
 	182:                         {parser.AgentEvener},
 	183:                         {parser.AgentAntigravity, parser.AgentAntigravityCLI},
-	184:                         {}, // Reserved for pushed-session compatibility.
+	184:                         {}, // No provider reparse is needed.
 	185:                         {}, // Older binaries cannot maintain prompt-derived PR links.
 }
 
