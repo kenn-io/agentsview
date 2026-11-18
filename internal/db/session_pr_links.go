@@ -219,6 +219,7 @@ func refreshSessionPromptPRLinksTx(tx transactionQueries, id string) error {
 	if err != nil {
 		return err
 	}
+	defer rows.Close()
 	messages, err := scanMessages(rows)
 	if closeErr := rows.Close(); err == nil {
 		err = closeErr
