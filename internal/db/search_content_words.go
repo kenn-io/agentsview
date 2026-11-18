@@ -27,33 +27,6 @@ type ContentWords struct {
 	Phrases []string
 }
 
-// ContentWordsMatch reports whether body contains every word and phrase.
-func ContentWordsMatch(body string, words ContentWords) bool {
-	for _, term := range words.Terms {
-		if !wordFormsMatch(body, term) {
-			return false
-		}
-	}
-	return !slices.ContainsFunc(words.Phrases, func(phrase string) bool { return !phraseMatch(body, phrase) })
-}
-
-func wordFormsMatch(body string, term [][]string) bool {
-	have := strings.FieldsFunc(body, isSeparator)
-	for i := 0; i+len(term) <= len(have); i++ {
-		matched := true
-		for j, forms := range term {
-			if !slices.ContainsFunc(forms, func(form string) bool { return strings.EqualFold(have[i+j], form) }) {
-				matched = false
-				break
-			}
-		}
-		if matched {
-			return true
-		}
-	}
-	return false
-}
-
 // WordSnippetRange finds the exact pattern or the first whole word matching a
 // query form, falling back to the start of body.
 func WordSnippetRange(body, pattern string, words ContentWords) (int, int) {

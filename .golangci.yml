@@ -6,10 +6,8 @@ run:
   timeout: 10m
   allow-parallel-runners: true
   go: "1.27"
-  # Lint the DuckDB driver that release builds leave out.
   build-tags:
     - fts5
-    - duckdb
 linters:
   default: none
   enable:

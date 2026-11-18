@@ -15,9 +15,8 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 )
 
-// seedPGCandidateSession inserts a minimal session with one message. Unlike
-// DuckDB, PostgreSQL's push preserves each session's own Machine field, so
-// worktree candidate fixtures can exercise real cross-machine grouping.
+// seedPGCandidateSession inserts a minimal session with one message.
+// PostgreSQL's push preserves each session's own Machine field, so worktree candidate fixtures can exercise real cross-machine grouping.
 func seedPGCandidateSession(
 	t *testing.T, localDB *db.DB, id, project, machine, cwd, started string,
 ) {

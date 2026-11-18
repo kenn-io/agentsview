@@ -165,15 +165,6 @@ Each of these is off until you configure or run it.
   `allow_insecure = true`. `skip_verify=true` is also rejected on a
   non-loopback host without `allow_insecure`. See
   [ClickHouse sync](docs/clickhouse-sync.md).
-- **DuckDB Quack.** The DuckDB mirror is a local file.
-  `agentsview replica duckdb quack serve` exposes it to DuckDB clients that
-  hold its token. It binds to loopback by default; binding beyond loopback
-  requires `--allow-insecure`, because Quack speaks plain HTTP. On the client
-  side, setting `[duckdb].url` or `AGENTSVIEW_DUCKDB_URL` makes
-  `duckdb status` and `duckdb serve` send the token and SQL queries to that
-  Quack endpoint. A non-loopback client host also requires `allow_insecure`.
-  Remove the URL to stop these requests. See
-  [Quack Remote Access](docs/duckdb.md#quack-remote-access).
 - **HTTP remote sync.** agentsview pulls session archives from configured remote
   daemons using a per-host bearer token. Archive endpoints require that token
   even when the remote daemon's other API routes do not require
@@ -352,7 +343,7 @@ its own proposal.
    an additional confirmation (e.g., a `--yes-really` flag) on first use,
    given that it disables the only protection against plaintext PG egress?
 1. **Deletion guarantees.** Should "permanent delete" grow into a stronger
-   erasure path (VACUUM, WAL checkpoint + truncate, mirror propagation to
+   erasure path (VACUUM, WAL checkpoint + truncate, replica propagation to
    PG/HTTP targets), or should the docs simply make the current limits
    clearer?
 1. **Secret detection scope.** Should the detector expand (more patterns,

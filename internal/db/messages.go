@@ -4418,7 +4418,7 @@ func resolveToolResultEvents(msgs []Message) []toolResultEventRow {
 //
 // token_usage is "TEXT NOT NULL DEFAULT ”", so nearly every row holds "".
 // Returning a NON-NIL, ZERO-LENGTH jsontext.Value for those rows is what
-// made every duckdb serve transcript blank: a zero-length value is not
+// made every transcript from a read-only replica server blank: a zero-length value is not
 // valid JSON, omitempty does not skip it, and jsontext.Value defers parsing
 // to marshal time, so the failure surfaced only when the API encoded the
 // response. internal/server installs no recover(), so it became an
@@ -4437,9 +4437,8 @@ func resolveToolResultEvents(msgs []Message) []toolResultEventRow {
 // Clearing only the unusable metadata keeps the rest of the message intact.
 //
 // Exported because every backend that serves messages needs the identical
-// guard and must not drift: pg serve and duckdb serve reach the same
-// response encoder. See internal/postgres/messages.go and
-// internal/duckdb/messages.go.
+// guard and must not drift: replica servers reach the same response
+// encoder. See internal/postgres/messages.go.
 func DecodeStoredTokenUsage(raw string) jsontext.Value {
 	if raw == "" {
 		return nil

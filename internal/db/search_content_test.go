@@ -188,7 +188,7 @@ func TestCaseInsensitiveSpanEndTracksMatchedBytes(t *testing.T) {
 
 // TestFTSSnippetRangeRuneAligned pins the same guarantee for the shared
 // snippet-centering helper every backend calls (SQLite, the PostgreSQL keyword
-// and hybrid legs, DuckDB).
+// and hybrid legs, ClickHouse).
 func TestFTSSnippetRangeRuneAligned(t *testing.T) {
 	body := "prefix a\u212Ab suffix"
 	start, end := FTSSnippetRange("k", body)

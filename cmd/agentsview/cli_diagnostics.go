@@ -16,7 +16,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"go.kenn.io/agentsview/internal/db"
-	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/servicehttp"
 )
 
@@ -262,8 +261,6 @@ func commandRecoveryHint(cmd *cobra.Command) string {
 	switch name := recoveryCommandName(cmd); {
 	case name == "pg" || cmd.Name() == "clean-uploads":
 		return "check AGENTSVIEW_PG_URL or [pg].url in config.toml (named targets use default_pg); " + hint
-	case name == "duckdb":
-		return "check AGENTSVIEW_DUCKDB_PATH / AGENTSVIEW_DUCKDB_URL or [duckdb].path / [duckdb].url in config.toml; " + hint
 	case name == "clickhouse":
 		return "check AGENTSVIEW_CLICKHOUSE_URL or [clickhouse].url in config.toml (named targets use default_clickhouse); " + hint
 	case name == "raw" || name == "raw-sync":
@@ -317,12 +314,6 @@ func applyCLIRecovery(cmd *cobra.Command, err error, d *cliDiagnosticError) {
 	if errors.Is(err, errLocalDaemonUnreachable) {
 		d.kind, d.code = "unavailable", cliUnavailableExitCode
 		d.hint = "run `agentsview daemon status`; if the local daemon is stuck, run `agentsview daemon restart`"
-		return
-	}
-	// The error already says how to get DuckDB; config settings cannot add it.
-	if errors.Is(err, duckdbsync.ErrUnavailable) {
-		d.kind, d.code = "unavailable", cliUnavailableExitCode
-		d.hint = commandHelpHint(cmd)
 		return
 	}
 	if errors.Is(err, db.ErrSemanticUnavailable) {

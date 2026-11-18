@@ -188,8 +188,8 @@ func TestPGActivityReportSecondRead(t *testing.T) {
 // TestPGGetActivityReportOpenSessionWithInRangeMessageIncluded confirms a
 // still-open session (no ended_at) that started before the range but has a
 // message inside it is not dropped. The effective-end fallback uses the
-// session's latest message timestamp, not started_at, matching SQLite and
-// DuckDB. Mirrors the SQLite
+// session's latest message timestamp, not started_at, matching SQLite.
+// Mirrors the SQLite
 // TestGetActivityReport_OpenSessionWithInRangeMessageIncluded.
 func TestPGGetActivityReportOpenSessionWithInRangeMessageIncluded(t *testing.T) {
 	t.Parallel()

@@ -267,9 +267,6 @@ func TestArchiveOnlyRefusesDaemonPushWatch(t *testing.T) {
 		name string
 		run  func(context.Context, daemonArchiveWriteBackend) error
 	}{
-		{name: "duckdb", run: func(ctx context.Context, b daemonArchiveWriteBackend) error {
-			return b.DuckDBPushWatch(ctx, config.DuckDBConfig{}, DuckDBPushConfig{}, nil, nil, time.Hour, time.Hour)
-		}},
 		{name: "replica", run: func(ctx context.Context, b daemonArchiveWriteBackend) error {
 			return b.ReplicaPushWatch(ctx, pgReplica{}, storage.ConfiguredReplica{}, ReplicaPushConfig{}, nil, nil, time.Hour, time.Hour)
 		}},

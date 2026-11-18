@@ -1,1 +1,0 @@
-Store exception rows' token counters in typed columns instead of token JSON.

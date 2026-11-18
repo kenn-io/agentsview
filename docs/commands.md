@@ -124,7 +124,7 @@ launch paths.
 | `stats`                                    | `report stats`                                                     |
 | `activity report`                          | `report activity`                                                  |
 | `usage daily` / `usage statusline`         | `report usage daily` / `report usage statusline`                   |
-| `pg ...` / `duckdb ...` / `clickhouse ...` | `replica pg ...` / `replica duckdb ...` / `replica clickhouse ...` |
+| `pg ...` / `clickhouse ...`                | `replica pg ...` / `replica clickhouse ...`                        |
 | `embeddings ...`                           | `index embeddings ...`                                             |
 | `classifier ...` (recovery only)           | `index classifier ...` (recovery only)                             |
 | `parse-diff`                               | `archive diff`                                                     |
@@ -593,7 +593,8 @@ for a one-off unauthenticated non-loopback bind; a persistent non-loopback
 These commands manage only the writable SQLite daemon for the current data
 directory, including a foreground `serve` process or a daemon auto-started by a
 CLI command. `daemon stop` stops the web UI and background sync together. They
-ignore read-only `agentsview replica pg serve` and `agentsview replica duckdb serve` processes.
+ignore read-only `agentsview replica pg serve` and
+`agentsview replica clickhouse serve` processes.
 If only read-only servers are running, `daemon status` reports that no daemon is
 running, and `daemon stop` and `daemon restart` leave those servers alive.
 
@@ -765,7 +766,7 @@ line. If the server cannot return the status, or fails while answering,
 `serve status` prints one line saying why, even when the source is not
 configured. Read-only servers, and older servers without this status, add no
 lines. `serve stop` retains its broad lifecycle scope: it gracefully terminates
-confirmed writable SQLite and read-only PostgreSQL or DuckDB server processes
+confirmed writable SQLite and read-only PostgreSQL or ClickHouse server processes
 for the data directory and cleans up their runtime records.
 
 `serve restart` is intentionally narrower and config-driven. It restarts only
@@ -819,7 +820,7 @@ starting a daemon or changing configuration.
 Commands that need fresh data or need to write auto-start the detached daemon
 when no compatible daemon is running. That includes local `sync`,
 `session sync`, `token-use`, normal `usage` refresh paths,
-`pg push`/`pg push --watch`, `duckdb push`, and `clickhouse push`. If a writable
+`pg push`/`pg push --watch`, and `clickhouse push`. If a writable
 daemon is known to own the archive but is not reachable, these commands refuse
 instead of writing directly.
 
@@ -1774,38 +1775,6 @@ agentsview replica pg vectors drop <id> [flags]
 
 ______________________________________________________________________
 
-<a id="agentsview-duckdb"></a>
-
-### `agentsview replica duckdb`
-
-Mirror the local SQLite archive into DuckDB and serve from it, locally or over
-the Quack remote protocol. Release builds leave DuckDB out; build from source
-with `make install DUCKDB=1` to use these commands. See
-[DuckDB Mirror](/docs/duckdb/) for full documentation.
-
-```bash
-agentsview replica duckdb push          # mirror SQLite into sessions.duckdb
-agentsview replica duckdb status        # show mirror sync status
-agentsview replica duckdb serve         # read-only web UI from the mirror
-agentsview replica duckdb quack serve   # expose the mirror over Quack
-```
-
-`duckdb push` accepts the same `--full` / `--projects` / `--exclude-projects` /
-`--all-projects` / `--watch` / `--debounce` / `--interval` flags as `pg push`.
-`duckdb push` always writes the local mirror file at `[duckdb].path`; it never
-targets a remote Quack endpoint. If `[duckdb].url` or `AGENTSVIEW_DUCKDB_URL` is
-configured, push fails immediately with an error to unset it and serve the
-mirror remotely with `duckdb quack serve` instead. `duckdb status` and
-`duckdb serve` do target the remote Quack endpoint when `[duckdb].url` or
-`AGENTSVIEW_DUCKDB_URL` is set, and the local mirror file otherwise. When
-`[duckdb].path` or `AGENTSVIEW_DUCKDB_PATH` is set, `duckdb quack serve` exposes
-that same mirror by default unless `--path` overrides it. `duckdb serve` accepts
-the same serve flags as `pg serve`. The DuckDB backend is unavailable on Windows
-ARM64 (the upstream bindings ship no prebuilt library for that platform); all
-other commands work normally there.
-
-______________________________________________________________________
-
 <a id="agentsview-clickhouse"></a>
 
 ### `agentsview replica clickhouse`
@@ -2282,7 +2251,7 @@ include flags for matches beyond the individual class hints. Failed diagnostic
 searches add no hint.
 
 `session search` supports substring (default), `--regex`, `--fts`, `--semantic`,
-and `--hybrid` modes. On SQLite, PostgreSQL, DuckDB, and ClickHouse, a default search of several words lists matches
+and `--hybrid` modes. On SQLite, PostgreSQL, and ClickHouse, a default search of several words lists matches
 of the exact text first, from every selected source. Messages holding every
 word follow, then messages holding fewer of the words; `matched_words` in JSON
 counts them, excluding unquoted stop words. Regular word forms match, so
@@ -2917,10 +2886,6 @@ agentsview help
 | `AGENTSVIEW_EMBEDDINGS_API_KEY`       |                                                                                 | Inline API key for `AGENTSVIEW_EMBEDDINGS_ENDPOINT`; cannot be combined with the file form                      |
 | `AGENTSVIEW_EMBEDDINGS_API_KEY_FILE`  |                                                                                 | API key file for `AGENTSVIEW_EMBEDDINGS_ENDPOINT`                                                               |
 | `AGENTSVIEW_EMBEDDINGS_BATCH_SIZE`    | `32`                                                                            | Positive number of inputs per embeddings request when adopting a published PostgreSQL recipe                    |
-| `AGENTSVIEW_DUCKDB_PATH`              | `~/.agentsview/sessions.duckdb`                                                 | DuckDB mirror file path                                                                                         |
-| `AGENTSVIEW_DUCKDB_URL`               |                                                                                 | Remote Quack endpoint URL for `duckdb status` and `duckdb serve` (read side only)                               |
-| `AGENTSVIEW_DUCKDB_TOKEN`             |                                                                                 | Quack authentication token                                                                                      |
-| `AGENTSVIEW_DUCKDB_MACHINE`           |                                                                                 | Machine name for DuckDB push                                                                                    |
 | `AGENTSVIEW_CLICKHOUSE_URL`           |                                                                                 | ClickHouse connection URL for the default target                                                                |
 | `AGENTSVIEW_CLICKHOUSE_DATABASE`      | `agentsview`                                                                    | ClickHouse database name for the default target                                                                 |
 | `AGENTSVIEW_CLICKHOUSE_MACHINE`       |                                                                                 | Machine name for ClickHouse push                                                                                |
@@ -2958,8 +2923,8 @@ the web palette or with, for example,
 `agentsview session search 'invoice 42' --in tool_result`. Substring and regex
 `tool_result` searches include image text; other `--in` sources and in-session
 find search only text shown in the transcript. Each new extraction is sent on
-the next incremental push to PostgreSQL, DuckDB, and ClickHouse, so `pg serve`
-and the other mirrors return the same matches. Removing the last retained copy of an image removes its extracted text.
-Disabling image text and restarting clears extracted text and removes mirror
+the next incremental push to PostgreSQL and ClickHouse, so `pg serve` and
+`clickhouse serve` return the same matches. Removing the last retained copy of an image removes its extracted text.
+Disabling image text and restarting clears extracted text and removes replica
 matches on the next push. Session and artifact exports carry image references or
 placeholders rather than extracted text.

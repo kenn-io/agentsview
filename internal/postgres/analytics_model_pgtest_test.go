@@ -964,7 +964,7 @@ func TestStoreGetAnalyticsTopSessionsOutputTokensUseFilteredModelTotals(
 
 // The model-scoped messages/output_tokens path drops the SQL LIMIT to re-rank
 // by filtered counts in Go, so it must reapply the top-10 cap before returning
-// like SQLite and DuckDB. Seed more than 10 model-matching sessions and assert
+// like SQLite. Seed more than 10 model-matching sessions and assert
 // both metrics still cap at 10 with the highest-count session first.
 func TestStoreGetAnalyticsTopSessionsModelFilterCapsAtTen(
 	t *testing.T,

@@ -13,7 +13,6 @@ func TestSecretFindingsSQL(t *testing.T) {
 	for _, dialect := range []struct {
 		name, dateExpr, dateParam, tieBreak string
 	}{
-		{"duckdb", "CAST(COALESCE(s.started_at, s.created_at) AS DATE)", "CAST(? AS DATE)", "sf.id"},
 		{"clickhouse", "toDate(COALESCE(s.started_at, s.created_at))", "toDate(?)", "sf.finding_index"},
 	} {
 		t.Run(dialect.name, func(t *testing.T) {
@@ -51,7 +50,6 @@ func TestSidebarSQL(t *testing.T) {
 		position string
 		count    string
 	}{
-		{"duckdb", db.DuckDBQueryDialect(), "position('<teammate-message' in COALESCE(first_message, ''))", "COUNT(*)"},
 		{"clickhouse", db.ClickHouseQueryDialect(), "position(COALESCE(first_message, ''), '<teammate-message')", "toInt64(COUNT(*))"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

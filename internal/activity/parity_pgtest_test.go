@@ -1,14 +1,14 @@
 //go:build pgtest || chtest
 
 // This parity test proves that GetActivityReport returns an identical
-// activity.Report from the storage backends (SQLite, PostgreSQL, DuckDB,
-// ClickHouse) given the same underlying data. One SQLite fixture is built,
-// then pushed through the production push paths. Backends that are not
-// configured for this run are skipped: PostgreSQL needs TEST_PG_URL,
-// ClickHouse needs TEST_CLICKHOUSE_URL. DuckDB is always compared.
+// activity.Report from the storage backends (SQLite, PostgreSQL, ClickHouse)
+// given the same underlying data. One SQLite fixture is built, then pushed
+// through the production push paths. Backends that are not configured for
+// this run are skipped: PostgreSQL needs TEST_PG_URL, ClickHouse needs
+// TEST_CLICKHOUSE_URL.
 //
 // It lives in internal/activity as an EXTERNAL test package
-// (activity_test) rather than inside any backend package: postgres, duckdb,
+// (activity_test) rather than inside any backend package: postgres,
 // clickhouse, and db all import activity, so an internal activity test that
 // imported them would form an import cycle. An external _test package is
 // compiled separately and may import all backends. The pgtest and chtest
@@ -31,7 +31,6 @@ import (
 	clickhousestore "go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/clickhouse/chtest"
 	"go.kenn.io/agentsview/internal/db"
-	duckdbstore "go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/money"
 	postgresstore "go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/storage"
@@ -130,9 +129,8 @@ func parityFixture() []parityFixtureSession {
 				// Ineligible usage row: a synthetic-model assistant message
 				// carrying real tokens. Every backend's usage union must drop
 				// model == '<synthetic>', so it contributes no cost or output
-				// tokens. If any backend (notably DuckDB, which inlines its own
-				// usage CTE) failed to exclude it, that backend's totals would
-				// diverge and the deep-compare below would fail.
+				// tokens. If any backend failed to exclude it, that backend's
+				// totals would diverge and the deep-compare below would fail.
 				{
 					role: "assistant", ts: parityDate + "T14:06:00Z",
 					model: "<synthetic>", outputTokens: 9999,
@@ -275,7 +273,7 @@ func seedParitySQLite(t *testing.T) *db.DB {
 	t.Cleanup(func() { require.NoError(t, local.Close()) })
 
 	// Explicit pricing for both models so all three backends price the same
-	// token amounts identically (the syncs copy model_pricing to PG/DuckDB).
+	// token amounts identically (the syncs copy model_pricing to each replica).
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{
 		{
 			ModelPattern: "model-x", InputPerMTok: money.MustParseDollars("3"), OutputPerMTok: money.MustParseDollars("15"),
@@ -434,28 +432,6 @@ func dropParitySchema(t *testing.T, pgURL string) {
 	_, _ = store.DB().ExecContext(ctx, "DROP SCHEMA IF EXISTS "+paritySchema+" CASCADE")
 }
 
-// pushParityDuckDB pushes the SQLite fixture to a DuckDB mirror via the
-// production Push entry point and returns a read-only DuckDB store over
-// the built mirror file.
-func pushParityDuckDB(
-	t *testing.T, ctx context.Context, local *db.DB, sessions int,
-) *duckdbstore.Store {
-	t.Helper()
-	target := filepath.Join(t.TempDir(), "parity.duckdb")
-	res, err := duckdbstore.Push(
-		ctx, target, local, "parity-machine",
-		storage.MirrorPushOptions{}, true, nil,
-	)
-	require.NoError(t, err, "pushing to duckdb")
-	require.Equal(t, sessions, res.SessionsPushed,
-		"duckdb sessions pushed")
-
-	store, err := duckdbstore.NewStore(ctx, target)
-	require.NoError(t, err, "opening duckdb store")
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	return store
-}
-
 // pushParityClickHouse pushes the SQLite fixture to a fresh ClickHouse
 // database via the production Sync and returns a read-only store. It
 // returns nil when TEST_CLICKHOUSE_URL is unset so PostgreSQL-only runs
@@ -528,8 +504,7 @@ func TestGetActivityReportParityAcrossBackends(t *testing.T) {
 	if pgStore == nil && chStore == nil {
 		t.Skip("TEST_PG_URL and TEST_CLICKHOUSE_URL are unset; skipping cross-backend parity")
 	}
-	duckStore := pushParityDuckDB(t, ctx, local, len(parityFixture()))
-	assertCandidateParity(t, ctx, local, pgStore, duckStore, chStore)
+	assertCandidateParity(t, ctx, local, pgStore, chStore)
 
 	fixedNow, err := time.Parse(time.RFC3339, "2030-01-01T00:00:00Z")
 	require.NoError(t, err, "parsing fixed now")
@@ -573,7 +548,7 @@ func TestGetActivityReportParityAcrossBackends(t *testing.T) {
 			filter := db.AnalyticsFilter{Timezone: tc.input.Timezone}
 
 			sqliteReport := assertParityForCase(t, ctx, q, filter,
-				local, pgStore, duckStore, chStore)
+				local, pgStore, chStore)
 
 			if tc.name == "day-minute" {
 				assertDayMinuteFixtureSanity(t, sqliteReport)
@@ -636,7 +611,6 @@ func TestActivityReportMessageCountsAcrossBackends(t *testing.T) {
 	}
 	stores := map[string]db.ActivityReportArtifactStore{
 		"sqlite": local,
-		"duckdb": pushParityDuckDB(t, ctx, local, len(parityFixture())),
 	}
 	if os.Getenv("TEST_PG_URL") != "" {
 		stores["postgres"] = pushParityPostgres(t, ctx, local, len(parityFixture()))
@@ -692,7 +666,6 @@ func TestGetActivityReportIncludesTerminalAfterSessionEndAcrossBackends(
 	if pgStore == nil && chStore == nil {
 		t.Skip("TEST_PG_URL and TEST_CLICKHOUSE_URL are unset; skipping cross-backend parity")
 	}
-	duckStore := pushParityDuckDB(t, ctx, local, len(parityFixture()))
 
 	q, err := activity.ResolveQuery(activity.QueryInput{
 		Preset: "day", Date: "2026-06-15", Timezone: "UTC",
@@ -702,15 +675,12 @@ func TestGetActivityReportIncludesTerminalAfterSessionEndAcrossBackends(
 
 	sqliteReport, err := local.GetActivityReport(ctx, filter, q)
 	require.NoError(t, err)
-	duckReport, err := duckStore.GetActivityReport(ctx, filter, q)
-	require.NoError(t, err)
 
 	reports := []struct {
 		name   string
 		report activity.Report
 	}{
 		{name: "sqlite", report: sqliteReport},
-		{name: "duckdb", report: duckReport},
 	}
 	if pgStore != nil {
 		pgReport, err := pgStore.GetActivityReport(ctx, filter, q)
@@ -746,8 +716,7 @@ func TestGetActivityReportIncludesTerminalAfterSessionEndAcrossBackends(
 
 func assertCandidateParity(
 	t *testing.T, ctx context.Context,
-	local *db.DB, pgStore *postgresstore.Store, duckStore *duckdbstore.Store,
-	chStore *clickhousestore.Store,
+	local *db.DB, pgStore *postgresstore.Store, chStore *clickhousestore.Store,
 ) {
 	t.Helper()
 	q, err := activity.ResolveQuery(activity.QueryInput{
@@ -827,36 +796,28 @@ func assertCandidateParity(
 	if pgStore != nil {
 		require.Equal(t, want, collect(pgStore.ActivityReportCandidateSource(ids, q)))
 	}
-	require.Equal(t, want, collect(duckStore.ActivityReportCandidateSource(ids, q)))
 	if chStore != nil {
 		require.Equal(t, want, collect(chStore.ActivityReportCandidateSource(ids, q)))
 	}
 }
 
-// assertParityForCase queries all three backends with the resolved query and
-// filter, asserts the range is complete, deep-compares the canonicalized
-// reports (SQLite==PG and SQLite==DuckDB), and returns the canonicalized SQLite
+// assertParityForCase queries every configured backend with the resolved query
+// and filter, asserts the range is complete, deep-compares the canonicalized
+// reports against SQLite, and returns the canonicalized SQLite
 // report so the caller can run case-specific fixture assertions on it.
 func assertParityForCase(
 	t *testing.T, ctx context.Context, q activity.Query,
 	filter db.AnalyticsFilter,
-	local *db.DB, pgStore *postgresstore.Store, duckStore *duckdbstore.Store,
-	chStore *clickhousestore.Store,
+	local *db.DB, pgStore *postgresstore.Store, chStore *clickhousestore.Store,
 ) activity.Report {
 	t.Helper()
 
 	sqliteReport, err := local.GetActivityReport(ctx, filter, q)
 	require.NoError(t, err, "sqlite GetActivityReport")
-	duckReport, err := duckStore.GetActivityReport(ctx, filter, q)
-	require.NoError(t, err, "duckdb GetActivityReport")
 
 	require.False(t, sqliteReport.Partial, "past range must be complete")
 
 	canonicalizeReport(&sqliteReport)
-	canonicalizeReport(&duckReport)
-
-	require.Equal(t, sqliteReport, duckReport,
-		"SQLite and DuckDB activity reports diverge")
 	if pgStore != nil {
 		pgReport, err := pgStore.GetActivityReport(ctx, filter, q)
 		require.NoError(t, err, "pg GetActivityReport")
@@ -882,7 +843,7 @@ func assertParityForCase(
 // subagent's and unique fork's tokens count, and the replaying fork's do not --
 // not merely that the backends agree on a wrong number. The deep-compare above
 // extends those guarantees, plus the zero-cost primary-model fallback, to PG
-// and DuckDB.
+// and ClickHouse.
 func assertDayMinuteFixtureSanity(t *testing.T, r activity.Report) {
 	t.Helper()
 	require.False(t, r.Partial, "fixture day must be a full day")

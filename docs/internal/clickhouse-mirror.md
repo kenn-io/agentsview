@@ -13,13 +13,12 @@ clickhouse serve <- HTTP API / UI ----+
 
 Operator steps, config keys, and commands live in
 [ClickHouse Sync](../clickhouse-sync.md). Agent rules live in
-[storage](../agents/storage.md#clickhouse-mirror).
+[storage](../agents/storage.md#clickhouse-replica).
 
 ## Problem
 
-PostgreSQL already had configure, push, watch or OS service, then serve. DuckDB
-is a local file you rebuild and swap, not a remote database. ClickHouse needed
-the PostgreSQL operator path with SQL that MergeTree can run.
+PostgreSQL already had configure, push, watch or OS service, then serve.
+ClickHouse needed the PostgreSQL operator path with SQL that MergeTree can run.
 
 ## Behavior
 
@@ -57,14 +56,14 @@ trigger another write. The marker is set after a clean full push.
 
 ## Decisions
 
-**Write model from DuckDB, operator model from PostgreSQL.** Whole-session
-replace gated by a fingerprint on the session row, cursor in the mirror. Not
-DuckDB's rebuild-and-swap file, and not PostgreSQL's local watermark plus remote
-reset blob. A missing row reads back as an empty fingerprint, so a reset mirror
-repairs on the next push.
+**Whole-session writes, operator model from PostgreSQL.** Each push replaces
+whole sessions, gated by a fingerprint on the session row, and keeps its cursor
+in the mirror. PostgreSQL's local watermark plus remote reset blob was rejected
+for ClickHouse. A missing row reads back as an empty fingerprint, so a reset
+mirror repairs on the next push.
 
 **Driver `github.com/ClickHouse/clickhouse-go/v2` through `database/sql`.**
-Stores stay in the same `Query`/`Scan` shape as DuckDB and PostgreSQL. Every
+Stores stay in the same `Query`/`Scan` shape as PostgreSQL. Every
 connection sets `final=1` so `ReplacingMergeTree` collapses duplicates without
 `FINAL` in SQL. Activity reads that return many rows are the exception: serve
 reads the pairing inputs and the Activity usage sums on a second pool that uses
@@ -180,8 +179,8 @@ earlier process may have stopped before its vector phase. A resumed run skips
 the whole-mirror usage repricing that the run's first process already did.
 Pushes send sessions newest activity first (`ended_at`, then `started_at`, then
 `created_at`). A Codex revert page goes right after its thread's session, which
-mirrors read to decide whether the page is trashed. PostgreSQL pushes and DuckDB
-rebuilds use the same order.
+mirrors read to decide whether the page is trashed. PostgreSQL pushes use the
+same order.
 
 **Pushes rewrite only what differs.** Each session row stores four fingerprints.
 `agentsview_push_fingerprint` hashes the session fields and all of its content.
@@ -316,8 +315,8 @@ reads, and a pushing client from before appends
 restores the terminal event view that matches events at exactly
 `content_version`. Upgrade serve and every pushing client together.
 
-**Shared filter builder, ClickHouse dialect.** Existing SQLite, PostgreSQL, and
-DuckDB SQL stay byte-identical. ClickHouse uses `UNION ALL` in recursive CTEs,
+**Shared filter builder, ClickHouse dialect.** Existing SQLite and PostgreSQL
+SQL stay byte-identical. ClickHouse uses `UNION ALL` in recursive CTEs,
 `IN (SELECT)` instead of correlated `EXISTS`,
 `parent_session_id IS NULL OR NOT IN (SELECT id FROM sessions)` for orphans
 (`NULL NOT IN (...)` is unknown and would hide NULL-parent rows), `ILIKE` with
@@ -342,7 +341,7 @@ PostgreSQL watcher.
 
 ## Rejected alternatives
 
-- Pasting PostgreSQL or DuckDB SQL. Correlated `EXISTS`, `date_trunc`, and
+- Pasting PostgreSQL SQL. Correlated `EXISTS`, `date_trunc`, and
   `UNION` without ALL fail or return wrong rows on 25.8.
 - Plain `MergeTree` with delete-then-insert. A crash between the two leaves a
   session with no content and a matching fingerprint, so the next push skips
@@ -1083,8 +1082,8 @@ when it is a marker, without its text. Over such text ClickHouse's RE2 and Go's
 `IsFrustrationMarker` step by step with the same pattern and thresholds, which
 `internal/signals` exports. Any other prompt, including invalid UTF-8, comes
 back with its text and Go judges it. The set is `signals.PlainPromptSymbols`,
-which DuckDB shares (see `internal/duckdb/README.md`), and a unit test checks
-every symbol in it against Go's Unicode tables. ClickHouse tests compare the counts with
+which PostgreSQL shares, and a unit test checks every symbol in it against Go's
+Unicode tables. ClickHouse tests compare the counts with
 `IsFrustrationMarker` on edge cases and on a random corpus, and require that
 only prompts outside the set come back with text.
 
@@ -1115,13 +1114,13 @@ peaks near 290 MiB, with the same per-session counts.
   those words, so on the production mirror such a filter dropped almost none of
   the 4.25 GiB of prompt text.
 
-SQLite keeps its scan in Go, which skips system rows in SQL. DuckDB and
-PostgreSQL judge plain prompts in SQL as well; see
+SQLite keeps its scan in Go, which skips system rows in SQL. PostgreSQL judges
+plain prompts in SQL as well; see
 [PostgreSQL frustration marker reads](../agents/storage.md#postgresql-frustration-marker-reads).
 
 **Go judges each prompt in a few passes.** SQLite sends prompts from sessions
-without a current stored count to `IsFrustrationMarker`. PostgreSQL, DuckDB,
-and ClickHouse send the prompts they cannot judge in SQL. SQLite stores each
+without a current stored count to `IsFrustrationMarker`. PostgreSQL and
+ClickHouse send the prompts they cannot judge in SQL. SQLite stores each
 count with its transcript key, so later visits after a restart reuse unchanged
 counts. The first visit after upgrading counts each session once. Full resync
 keeps matching counts for unchanged reparsed sessions and copied sessions

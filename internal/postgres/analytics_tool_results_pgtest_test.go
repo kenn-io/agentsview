@@ -4,14 +4,12 @@ package postgres
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -43,18 +41,12 @@ func TestAnalyticsToolResultsAreNotUserPrompts(t *testing.T) {
 	store, err := NewStore(t.Context(), pgURL, "agentsview", true)
 	require.NoError(t, err)
 	defer store.Close()
-	duckPath := filepath.Join(t.TempDir(), "analytics.duckdb")
-	_, err = duckdb.Push(ctx, duckPath, local, "analytics-test-machine", storage.MirrorPushOptions{}, true, nil)
-	require.NoError(t, err)
-	duckStore, err := duckdb.NewStore(t.Context(), duckPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, duckStore.Close()) })
 	for name, backend := range map[string]interface {
 		GetAnalyticsSignalSessions(context.Context, db.AnalyticsFilter, string, int) (db.SignalSessionsResponse, error)
 		GetSessionActivity(context.Context, string) (*db.SessionActivityResponse, error)
 		GetAnalyticsActivity(context.Context, db.AnalyticsFilter, string) (db.ActivityResponse, error)
 		GetAnalyticsSessionShape(context.Context, db.AnalyticsFilter) (db.SessionShapeResponse, error)
-	}{"sqlite": local, "postgres": store, "duckdb": duckStore} {
+	}{"sqlite": local, "postgres": store} {
 		t.Run(name, func(t *testing.T) {
 			activity, err := backend.GetSessionActivity(ctx, "tool-results")
 			require.NoError(t, err)

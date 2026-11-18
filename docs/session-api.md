@@ -743,8 +743,8 @@ not an error. The response is `{"session_id", "labels", "session_found"}`.
   as it knows the ID; the labels appear when sync imports the session.
   `session_found: false` reports that case, which also exposes a mistyped ID.
 - Labels are stored apart from the transcript, so a reparse or full resync never
-  changes them. PostgreSQL, DuckDB, and ClickHouse receive them on push and
-  serve the `label` filter, but labels are written only through the local
+  changes them. PostgreSQL and ClickHouse receive them on push and serve the
+  `label` filter, but labels are written only through the local
   archive. Read-only daemons return HTTP 501.
 - See [Filtering by label or pull request](#filtering-by-label-or-pull-request)
   for which sessions the filters return.
@@ -859,14 +859,14 @@ The content-search response includes `active_filter_applied`, which is true when
 `exclude_active_since` was applied before pagination. All current stores support
 this filter. Older servers may omit the field.
 
-On SQLite, PostgreSQL, DuckDB, and ClickHouse, the `messages` source searches dialogue from
+On SQLite, PostgreSQL, and ClickHouse, the `messages` source searches dialogue from
 structured text blocks in Pi, OMP, OMO, Prime Agent, StepCode, iFlow, Claude Code,
 Cowork, iCodeMate CLI, Qoder, Cursor JSONL, Amp, OpenClaude, OpenClaw, QClaw, Devin,
 and OpenHands.
 Those projections exclude rendered tool calls and reasoning from snippets,
 while preserving literal marker text in dialogue. These parsers store reasoning
 blocks in `thinking_text`, including Cursor JSONL and OpenHands. Substring and
-regex searches on SQLite, PostgreSQL, DuckDB, and ClickHouse include `thinking` by default;
+regex searches on SQLite, PostgreSQL, and ClickHouse include `thinking` by default;
 use `--in messages` for dialogue alone or `--in thinking` for reasoning alone.
 FTS searches messages only. Terms, semantic, and hybrid reject `thinking` as a
 source. Semantic search continues to embed full message text; hybrid's keyword
@@ -884,8 +884,7 @@ rendered text in `rendered` and `COALESCE(dialogue_text, content)` in `content`.
 Ordinary session search matches `rendered` unless the query names an FTS column;
 FTS content search and hybrid's keyword search match `content`. Session-search
 ordering may shift.
-DuckDB mirrors rebuild on their next push to fill dialogue. The first ClickHouse
-push after upgrading is a full push to fill dialogue.
+The first ClickHouse push after upgrading is a full push to fill dialogue.
 
 PostgreSQL schema setup adds the dialogue column and builds trigram indexes on
 dialogue and reasoning beside the existing `content` index. The dialogue index
@@ -917,7 +916,7 @@ child sessions from the one-shot exclusion.
 | `--hybrid`            | `mode=hybrid`          | Semantic + FTS reciprocal rank fusion; messages-only — see [Semantic Search](/docs/semantic-search/)                                                                              |
 | `--scope`             | `scope`                | `top`, `all`, or `subordinate`; CLI: semantic/hybrid only, default `all`. HTTP: substring/regex/terms/semantic/hybrid; explicit scope supersedes `include_children`                                                                     |
 | `--context`           | `context`              | int — N messages of context before/after each match (max 10)                                                                                                                      |
-| `--in`                | `in`                   | Comma-separated: `messages,thinking,tool_input,tool_result` (default all); `thinking` requires SQLite, PostgreSQL, DuckDB, or ClickHouse substring/regex                                                                                                                  |
+| `--in`                | `in`                   | Comma-separated: `messages,thinking,tool_input,tool_result` (default all); `thinking` requires SQLite, PostgreSQL, or ClickHouse substring/regex                                                                                                                          |
 | `--exclude-system`    | `exclude_system`       | Drop system messages from the scan                                                                                                                                                |
 | `--reveal`            | `reveal`               | Show full secret values (localhost-only; warning to stderr)                                                                                                                       |
 | `--project`           | `project`              | string                                                                                                                                                                            |
@@ -946,7 +945,7 @@ substring (the default) and regex modes also walk `tool_calls.input_json`,
 (`--cursor` is rejected) — see [Semantic Search](/docs/semantic-search/) for
 setup, scoring, and limitations.
 
-On SQLite, PostgreSQL, DuckDB, and ClickHouse, a default search of several words that includes `messages` returns
+On SQLite, PostgreSQL, and ClickHouse, a default search of several words that includes `messages` returns
 exact text matches first, then messages ordered by how many query words they
 hold, with that count in `matched_words`. Unquoted stop words do not count.
 Regular word forms count, and a quoted phrase inside the query requires its
@@ -1618,7 +1617,7 @@ session. `POST /api/v1/commits/sessions` accepts `{"shas": ["abc1234"]}` and
 returns `{"commits": [{"sha": "abc1234", "links": [...]}]}` in request order.
 Send 1 to 200 hexadecimal SHAs or prefixes of 7 to 64 characters. Queries ignore
 case. Unknown SHAs have empty `links`. Invalid SHAs or array lengths return
-HTTP 400. PostgreSQL, DuckDB, and ClickHouse replicas answer transcript and
+HTTP 400. PostgreSQL and ClickHouse replicas answer transcript and
 trailer link lookups after a push with a version that stores commit links.
 Hosted PostgreSQL returns HTTP 501.
 

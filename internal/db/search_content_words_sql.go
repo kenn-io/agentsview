@@ -25,23 +25,9 @@ func WordCandidateSQL(b *QueryBuilder, column string, q ContentWords, all bool) 
 
 // WordRegexSQL requires every phrase and, when all is true, every word.
 func WordRegexSQL(b *QueryBuilder, raw string, q ContentWords, all bool) string {
-	return wordRegexSQL(b, raw, q, all, false)
-}
-
-// WordASCIIRegexSQL admits Unicode boundary false positives for later validation.
-func WordASCIIRegexSQL(b *QueryBuilder, raw string, q ContentWords) string {
-	return wordRegexSQL(b, raw, q, true, true)
-}
-
-func wordRegexSQL(b *QueryBuilder, raw string, q ContentWords, all, ascii bool) string {
 	parts := []string{"1=1"}
 	add := func(pattern string) {
-		if ascii {
-			pattern = strings.ReplaceAll(pattern, `[^\p{L}\p{N}]`, `[^a-zA-Z0-9]`)
-			parts = append(parts, b.RegexPredicate(raw, pattern))
-		} else {
-			parts = append(parts, wordPredicate(b, raw, pattern))
-		}
+		parts = append(parts, wordPredicate(b, raw, pattern))
 	}
 	if all {
 		for _, term := range q.Terms {
@@ -99,7 +85,7 @@ func WordFilterSQL(b *QueryBuilder, column string, f ContentSearchFilter, q Cont
 	return "(" + exact + "(" + WordCandidateSQL(b, column, q, all) + " AND " + WordRegexSQL(b, column, q, all) + "))"
 }
 
-// WordRankedSQL orders branches, DuckDB or ClickHouse content candidates, by
+// WordRankedSQL orders branches, ClickHouse content candidates, by
 // tier, which puts the exact text first outside fts mode, then by n, the query
 // words a row holds.
 func WordRankedSQL(b *QueryBuilder, branches []string, f ContentSearchFilter, q ContentWords, all bool) string {

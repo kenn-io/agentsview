@@ -591,7 +591,7 @@ func TestClaudeAssistantAppendDebouncesSignalRecompute(t *testing.T) {
 	assert.Equal(t, 1, secretLeakCount(t, fx, sid))
 }
 
-// TestSyncThenRunFlushesSignalsBeforeWork mirrors the PG/DuckDB push
+// TestSyncThenRunFlushesSignalsBeforeWork mirrors the replica push
 // endpoints: work scans SQLite rows while syncMu is held, so any
 // deferred signal recompute must be flushed before work runs or the
 // push carries stale fields such as secret_leak_count.

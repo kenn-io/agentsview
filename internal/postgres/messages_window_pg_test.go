@@ -31,7 +31,7 @@ func mwEnsureSchema(t *testing.T, pgURL string) *sql.DB {
 }
 
 // mwSeedWindowMessages seeds a session with 12 messages (ordinals 0..11)
-// with the same user/assistant/system role layout used by the SQLite/DuckDB
+// with the same user/assistant/system role layout used by the SQLite
 // GetMessagesWindow parity tests:
 //
 //	0 user, 1 assistant, 2 user, 3 assistant, 4 system, 5 user,

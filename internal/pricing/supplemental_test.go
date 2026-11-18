@@ -233,7 +233,7 @@ func TestCanonicalModelForTimestamp(t *testing.T) {
 
 // TestFallbackPricing_IncludesSupplementals proves the supplementals
 // ride the same FallbackPricing set every seed path consumes, so the
-// aliases reach the server seed, CLI seed, postgres, duckdb, and the
+// aliases reach the server seed, CLI seed, postgres, clickhouse, and the
 // in-memory fallback rate maps consistently.
 func TestFallbackPricing_IncludesSupplementals(t *testing.T) {
 	byPattern := make(map[string]ModelPricing)

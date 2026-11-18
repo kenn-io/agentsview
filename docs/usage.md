@@ -242,8 +242,8 @@ filter selects the calls made in that window or by that model.
 The Analyzed column shows analyzed calls out of all calls. After an upgrade,
 AgentsView recomputes older sessions in the background. Until a session's
 recompute finishes, its calls count as not analyzed. Archives that store no tool
-results never analyze calls. PostgreSQL, DuckDB, and ClickHouse mirrors receive
-the results through their normal pushes.
+results never analyze calls. PostgreSQL and ClickHouse replicas receive the
+results through their normal pushes.
 
 ![Tool usage](/docs/assets/generated/screenshots/tool-usage.png)
 
@@ -1484,7 +1484,7 @@ dashboard skill trend, Trends, and Usage charts:
 
 This setting is server-wide rather than browser-local, so all clients connected to
 the same server use the same palette. You can change it even when the server
-reads from a read-only store such as PostgreSQL, ClickHouse, or DuckDB.
+reads from a read-only store such as PostgreSQL or ClickHouse.
 
 ### Message Colors
 

@@ -706,13 +706,12 @@ func TestPortExplicitProvenance(t *testing.T) {
 		assert.False(t, cfg.PortExplicit)
 	})
 
-	t.Run("pg and duckdb loaders mark explicit ports", func(t *testing.T) {
+	t.Run("pg and clickhouse loaders mark explicit ports", func(t *testing.T) {
 		for _, load := range []struct {
 			name string
 			fn   func(*pflag.FlagSet) (Config, error)
 		}{
 			{name: "pg", fn: LoadRemoteServePFlags},
-			{name: "duckdb", fn: LoadRemoteServePFlags},
 			{name: "clickhouse", fn: LoadRemoteServePFlags},
 		} {
 			t.Run(load.name, func(t *testing.T) {
@@ -2275,9 +2274,6 @@ func TestInstallationIDSurvivesHostnameChanges(t *testing.T) {
 		pg, err := cfg.ResolvePG()
 		require.NoError(t, err)
 		assert.Equal(t, id, pg.MachineName)
-		duck, err := cfg.ResolveDuckDB()
-		require.NoError(t, err)
-		assert.Equal(t, id, duck.MachineName)
 	}
 	before, err := os.ReadFile(filepath.Join(dir, configFileName))
 	require.NoError(t, err)
@@ -2439,78 +2435,6 @@ func TestResolvePG_AllowsBothFilterLists(t *testing.T) {
 	}
 	_, err := cfg.ResolvePG()
 	require.NoError(t, err, "ResolvePG should not reject filter conflicts")
-}
-
-func TestDuckDBConfig_LoadsFileAndEnv(t *testing.T) {
-	f := newConfigFixture(t)
-	f.WriteTOML(t, map[string]any{
-		"duckdb": map[string]any{
-			"path":             "/from/config/sessions.duckdb",
-			"url":              "quack:config-host",
-			"token":            "config-token",
-			"machine_name":     "config-machine",
-			"allow_insecure":   true,
-			"projects":         []string{"alpha", "beta"},
-			"exclude_projects": []string{"gamma"},
-		},
-	})
-	t.Setenv("AGENTSVIEW_DUCKDB_PATH", "/from/env/sessions.duckdb")
-	t.Setenv("AGENTSVIEW_DUCKDB_URL", "quack:env-host")
-	t.Setenv("AGENTSVIEW_DUCKDB_TOKEN", "env-token")
-	t.Setenv("AGENTSVIEW_DUCKDB_MACHINE", "env-machine")
-
-	cfg := f.LoadMinimal(t)
-
-	assert.Equal(t, "/from/env/sessions.duckdb", cfg.DuckDB.Path)
-	assert.Equal(t, "quack:env-host", cfg.DuckDB.URL)
-	assert.Equal(t, "env-token", cfg.DuckDB.Token)
-	assert.Equal(t, "env-machine", cfg.DuckDB.MachineName)
-	assert.True(t, cfg.DuckDB.AllowInsecure)
-	assert.Equal(t, []string{"alpha", "beta"}, cfg.DuckDB.Projects)
-	assert.Equal(t, []string{"gamma"}, cfg.DuckDB.ExcludeProjects)
-}
-
-func TestResolveDuckDB_Defaults(t *testing.T) {
-	dir := canonicalTempDir(t)
-	cfg := Config{DataDir: dir, InstallationID: "installation-a"}
-
-	resolved, err := cfg.ResolveDuckDB()
-	require.NoError(t, err, "ResolveDuckDB")
-
-	assert.Equal(t, filepath.Join(dir, "sessions.duckdb"), resolved.Path)
-	assert.Equal(t, "installation-a", resolved.MachineName)
-}
-
-func TestResolveDuckDB_ExpandsEnvVars(t *testing.T) {
-	t.Setenv("DUCKDB_URL", "quack:localhost")
-	t.Setenv("DUCKDB_TOKEN", "secret-token")
-	t.Setenv("DUCKDB_PATH", filepath.Join(canonicalTempDir(t), "remote.duckdb"))
-
-	cfg := Config{
-		DuckDB: DuckDBConfig{
-			Path:  "$DUCKDB_PATH",
-			URL:   "${DUCKDB_URL}",
-			Token: "${DUCKDB_TOKEN}",
-		},
-	}
-
-	resolved, err := cfg.ResolveDuckDB()
-	require.NoError(t, err, "ResolveDuckDB")
-
-	assert.Equal(t, os.Getenv("DUCKDB_PATH"), resolved.Path)
-	assert.Equal(t, "quack:localhost", resolved.URL)
-	assert.Equal(t, "secret-token", resolved.Token)
-}
-
-func TestResolveDuckDB_ErrorsOnMissingEnvVar(t *testing.T) {
-	cfg := Config{
-		DuckDB: DuckDBConfig{
-			URL: "${MISSING_DUCKDB_URL}",
-		},
-	}
-
-	_, err := cfg.ResolveDuckDB()
-	requireErrorContains(t, err, "MISSING_DUCKDB_URL")
 }
 
 func TestAutomatedConfigRoundTrip(t *testing.T) {
@@ -2872,9 +2796,6 @@ func TestLoadMinimal_ExpandsUserSuppliedLocalPaths(t *testing.T) {
 	f.WriteConfigText(t, `sync_include_cwd_prefixes = ["~/work"]
 codex_sessions_dirs = ["~/codex-sessions"]
 
-[duckdb]
-path = "~/sessions.duckdb"
-
 [vector]
 db_path = "~/vectors.db"
 
@@ -2896,7 +2817,6 @@ sandbox = "~/bin/sandbox"
 		cfg.SyncIncludeCwdPrefixes)
 	assert.Equal(t, []string{filepath.Join(home, "codex-sessions")},
 		cfg.ResolveDirs(parser.AgentCodex))
-	assert.Equal(t, filepath.Join(home, "sessions.duckdb"), cfg.DuckDB.Path)
 	assert.Equal(t, filepath.Join(home, "vectors.db"), cfg.Vector.DBPath)
 	assert.Equal(t, filepath.Join(home, "recall-prompts"),
 		cfg.Recall.Extract.Prompts.Dir)

@@ -257,7 +257,7 @@ func TestGetAnalyticsSummary(t *testing.T) {
 
 // TestRelationshipExclusionSQL covers the shared predicate helper that
 // the analytics builders and the stats pipeline both use, including the
-// column qualifier the DuckDB builder relies on.
+// column qualifier the replica builders rely on.
 func TestRelationshipExclusionSQL(t *testing.T) {
 	cases := []struct {
 		includeSubagents bool
@@ -682,7 +682,7 @@ func TestAnalyticsFilterMachineMultiSelect(t *testing.T) {
 
 // TestAnalyticsFilterAgentMultiSelectTrimsWhitespace guards backend
 // parity: a comma-separated agent filter with surrounding spaces must
-// match every listed agent, the same way the PostgreSQL and DuckDB
+// match every listed agent, the same way the PostgreSQL and ClickHouse
 // analytics paths trim CSV values. Before the fix the SQLite path split
 // on "," without trimming, so "claude, codex" matched only claude.
 func TestAnalyticsFilterAgentMultiSelectTrimsWhitespace(t *testing.T) {
@@ -3657,7 +3657,7 @@ func TestGetAnalyticsTopSessions(t *testing.T) {
 		// A reversed (ended < started) or empty-timestamp session can
 		// still accumulate positive message-gap active duration, so
 		// without an eligibility guard it would rank into the duration
-		// list. The SQL path must reject both, matching DuckDB and the Go
+		// list. The SQL path must reject both, matching the Go
 		// fallback.
 		insertSession(t, d, "elig-valid", "project-elig-sql", func(s *Session) {
 			s.StartedAt = Ptr("2024-07-01T09:00:00Z")

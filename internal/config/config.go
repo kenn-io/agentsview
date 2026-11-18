@@ -168,52 +168,6 @@ var clickHouseConfigKeys = map[string]struct{}{
 	"push_batch_size":  {},
 }
 
-// DuckDBConfig holds DuckDB mirror and Quack connection settings.
-//
-//nolint:recvcheck // Value encoding and pointer decoding intentionally implement distinct interfaces.
-type DuckDBConfig struct {
-	Path          string `toml:"path" json:"path"`
-	URL           string `toml:"url" json:"url"`
-	Token         string `toml:"token" json:"token,omitempty"`
-	MachineName   string `toml:"machine_name" json:"machine_name"`
-	AllowInsecure bool   `toml:"allow_insecure" json:"allow_insecure"`
-	// TokenFile names a private file holding the Quack token, read by
-	// ResolveDuckDB. It is the alternative to Token.
-	TokenFile string `toml:"token_file" json:"-"`
-	// AttachTimeout bounds how long a remote Quack ATTACH (and its cheap TCP
-	// preflight) may run before the client gives up, so an unresponsive
-	// endpoint fails fast instead of hanging forever. Zero selects the
-	// package default; a negative value disables the guard.
-	AttachTimeout   time.Duration `toml:"attach_timeout" json:"attach_timeout,omitzero"`
-	Projects        []string      `toml:"projects" json:"projects,omitempty"`
-	ExcludeProjects []string      `toml:"exclude_projects" json:"exclude_projects,omitempty"`
-}
-
-// ResolveToken returns the Quack token: Token when set, else the contents
-// of the file TokenFile names, else "". Only commands that authenticate to
-// Quack call it, so an unreadable token file does not block local mirror work.
-func (c DuckDBConfig) ResolveToken() (string, error) {
-	if c.Token != "" || strings.TrimSpace(c.TokenFile) == "" {
-		return c.Token, nil
-	}
-	return readSettingSecretFile("[duckdb] token_file", c.TokenFile)
-}
-
-type duckDBConfigJSON DuckDBConfig
-
-func (c DuckDBConfig) MarshalJSONTo(out *jsontext.Encoder) error {
-	return jsonutil.MarshalDurationFields(out, duckDBConfigJSON(c))
-}
-
-func (c *DuckDBConfig) UnmarshalJSONFrom(in *jsontext.Decoder) error {
-	var decoded duckDBConfigJSON
-	if err := jsonutil.UnmarshalDurationFields(in, &decoded); err != nil {
-		return err
-	}
-	*c = DuckDBConfig(decoded)
-	return nil
-}
-
 // VectorConfig holds settings for the optional local semantic-search
 // vector index (embeddings + vectors.db).
 type VectorConfig struct {
@@ -1216,7 +1170,6 @@ type Config struct {
 	ClickHouse           ClickHouseConfig            `json:"clickhouse,omitempty" toml:"clickhouse"`
 	DefaultClickHouse    string                      `json:"default_clickhouse,omitempty" toml:"default_clickhouse"`
 	ClickHouseTargets    map[string]ClickHouseConfig `json:"-" toml:"-"`
-	DuckDB               DuckDBConfig                `json:"duckdb,omitempty" toml:"duckdb"`
 	Vector               VectorConfig                `json:"vector,omitempty" toml:"vector"`
 	Recall               RecallConfig                `json:"recall,omitempty" toml:"recall"`
 	ImageText            ImageTextConfig             `json:"image_text,omitempty" toml:"image_text"`
@@ -2092,7 +2045,6 @@ func (c *Config) applyConfigTOML(data string) error {
 		PG                             PGConfig               `toml:"pg"`
 		DefaultClickHouse              string                 `toml:"default_clickhouse"`
 		ClickHouse                     ClickHouseConfig       `toml:"clickhouse"`
-		DuckDB                         DuckDBConfig           `toml:"duckdb"`
 		Vector                         VectorConfig           `toml:"vector"`
 		Recall                         RecallConfig           `toml:"recall"`
 		ImageText                      ImageTextConfig        `toml:"image_text"`
@@ -2327,38 +2279,6 @@ func (c *Config) applyConfigTOML(data string) error {
 		if legacyCH.PushBatchSize != nil {
 			c.ClickHouse.PushBatchSize = legacyCH.PushBatchSize
 		}
-	}
-	// Merge duckdb field-by-field so env vars override only
-	// the fields they set, preserving config-file settings.
-	if file.DuckDB.Path != "" && c.DuckDB.Path == "" {
-		c.DuckDB.Path = file.DuckDB.Path
-	}
-	if file.DuckDB.URL != "" && c.DuckDB.URL == "" {
-		c.DuckDB.URL = file.DuckDB.URL
-	}
-	if err := oneSecretSource("[duckdb]", "token", file.DuckDB.Token,
-		"token_file", file.DuckDB.TokenFile); err != nil {
-		return err
-	}
-	// AGENTSVIEW_DUCKDB_TOKEN replaces both config-file sources.
-	if c.DuckDB.Token == "" {
-		c.DuckDB.Token = file.DuckDB.Token
-		c.DuckDB.TokenFile = strings.TrimSpace(file.DuckDB.TokenFile)
-	}
-	if file.DuckDB.MachineName != "" && c.DuckDB.MachineName == "" {
-		c.DuckDB.MachineName = file.DuckDB.MachineName
-	}
-	if file.DuckDB.AllowInsecure {
-		c.DuckDB.AllowInsecure = true
-	}
-	if file.DuckDB.AttachTimeout != 0 && c.DuckDB.AttachTimeout == 0 {
-		c.DuckDB.AttachTimeout = file.DuckDB.AttachTimeout
-	}
-	if file.DuckDB.Projects != nil && c.DuckDB.Projects == nil {
-		c.DuckDB.Projects = file.DuckDB.Projects
-	}
-	if file.DuckDB.ExcludeProjects != nil && c.DuckDB.ExcludeProjects == nil {
-		c.DuckDB.ExcludeProjects = file.DuckDB.ExcludeProjects
 	}
 	if file.Vector.Enabled {
 		c.Vector.Enabled = true
@@ -2753,28 +2673,6 @@ func (c *Config) loadEnv() {
 		"CURSOR_ADMIN_USER_ID",
 	); v != "" {
 		c.CursorAdminUserID = v
-	}
-	if v := os.Getenv("AGENTSVIEW_DUCKDB_PATH"); v != "" {
-		c.DuckDB.Path = v
-	}
-	if v := os.Getenv("AGENTSVIEW_DUCKDB_URL"); v != "" {
-		c.DuckDB.URL = v
-	}
-	if v := os.Getenv("AGENTSVIEW_DUCKDB_TOKEN"); v != "" {
-		c.DuckDB.Token = v
-	}
-	if v := os.Getenv("AGENTSVIEW_DUCKDB_MACHINE"); v != "" {
-		c.DuckDB.MachineName = v
-	}
-	if v := os.Getenv("AGENTSVIEW_DUCKDB_ATTACH_TIMEOUT"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			c.DuckDB.AttachTimeout = d
-		} else {
-			log.Printf(
-				"warning: invalid AGENTSVIEW_DUCKDB_ATTACH_TIMEOUT %q: %v",
-				v, err,
-			)
-		}
 	}
 	if v := os.Getenv("AGENTSVIEW_DISABLE_UPDATE_CHECK"); v != "" {
 		c.DisableUpdateCheck = v == "1" || v == "true"
@@ -4002,45 +3900,6 @@ func (c *Config) ResolveCursorAdminAPIKey() (string, error) {
 		return c.CursorAdminAPIKey, nil
 	}
 	return readSettingSecretFile("cursor_admin_api_key_file", c.CursorAdminAPIKeyFile)
-}
-
-// ResolveDuckDB returns a copy of DuckDB config with defaults applied
-// and environment variables expanded in path, URL, and token. It leaves
-// token_file unread; callers that authenticate use ResolveToken.
-func (c *Config) ResolveDuckDB() (DuckDBConfig, error) {
-	duck := c.DuckDB
-	if duck.Path != "" {
-		expanded, err := expandBracedEnv(duck.Path)
-		if err != nil {
-			return duck, fmt.Errorf("expanding path: %w", err)
-		}
-		expanded, err = pathutil.ExpandHome(expanded)
-		if err != nil {
-			return duck, fmt.Errorf("expanding path: %w", err)
-		}
-		duck.Path = expanded
-	}
-	if duck.URL != "" {
-		expanded, err := expandBracedEnv(duck.URL)
-		if err != nil {
-			return duck, fmt.Errorf("expanding url: %w", err)
-		}
-		duck.URL = expanded
-	}
-	if duck.Token != "" {
-		expanded, err := expandBracedEnv(duck.Token)
-		if err != nil {
-			return duck, fmt.Errorf("expanding token: %w", err)
-		}
-		duck.Token = expanded
-	}
-	if duck.Path == "" {
-		duck.Path = filepath.Join(c.DataDir, "sessions.duckdb")
-	}
-	if duck.MachineName == "" {
-		duck.MachineName = c.InstallationID
-	}
-	return duck, nil
 }
 
 var (

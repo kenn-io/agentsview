@@ -118,7 +118,7 @@
             </a>
           </figure>
         </div>
-        <p class="hero-meta">Local-first · MIT · Single Go binary · Desktop · Web · CLI · MCP · SQLite / PostgreSQL / DuckDB / ClickHouse</p>
+        <p class="hero-meta">Local-first · MIT · Single Go binary · Desktop · Web · CLI · MCP · SQLite / PostgreSQL / ClickHouse</p>
       </section>
 
       <section class="site-section" aria-labelledby="record-title">
@@ -386,7 +386,7 @@
             <h2 id="share-title">One machine or the whole team.</h2>
             <p><a href="/docs/remote-access/#ssh-remote-sync">SSH sync</a> fetches sessions from Linux and macOS hosts without a manual AgentsView install or a remote daemon. <a href="/docs/commands/#agentsview-archive">Local archives</a> preserve a retired computer's history, annotations, and original Claude and Codex files.</p>
           </div>
-          <p>SQLite is the local archive of record. From there, push parsed sessions to PostgreSQL or ClickHouse, mirror into DuckDB, read provider files from S3, or keep original source files in hosted storage.</p>
+          <p>SQLite is the local archive of record. From there, push parsed sessions to PostgreSQL or ClickHouse, read provider files from S3, or keep original source files in hosted storage.</p>
         </div>
         <div class="proof-grid">
           <article class="proof">
@@ -395,9 +395,9 @@
             <p>An installable auto-push service mirrors each machine's archive into PostgreSQL; a read-only server presents the merged fleet. <a href="/docs/pg-sync/">PostgreSQL sync</a>.</p>
           </article>
           <article class="proof">
-            <p class="proof-tag">DuckDB / ClickHouse</p>
-            <h3>Choose a reporting backend.</h3>
-            <p>Mirror into <a href="/docs/duckdb/">DuckDB</a> for local or Quack reads, or push to <a href="/docs/clickhouse-sync/">ClickHouse</a> and serve the dashboard there, including semantic and hybrid search when embeddings are pushed. Keep session edits in SQLite.</p>
+            <p class="proof-tag">ClickHouse</p>
+            <h3>Serve the dashboard remotely.</h3>
+            <p>Push to <a href="/docs/clickhouse-sync/">ClickHouse</a> and serve the dashboard there, including semantic and hybrid search when embeddings are pushed. Keep session edits in SQLite.</p>
           </article>
           <article class="proof">
             <p class="proof-tag">Filesystem</p>
@@ -439,7 +439,7 @@
           <article class="boundary">
             <p class="proof-tag">Your choice</p>
             <h3>Share only for a clear purpose.</h3>
-            <p>Configure PostgreSQL, ClickHouse, remote DuckDB, Generated Insights, GitHub publishing, or hosted raw sync only when that outcome is worth sending data.</p>
+            <p>Configure PostgreSQL, ClickHouse, Generated Insights, GitHub publishing, or hosted raw sync only when that outcome is worth sending data.</p>
           </article>
           <article class="boundary">
             <p class="proof-tag">Visible boundaries</p>

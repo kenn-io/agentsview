@@ -411,7 +411,7 @@ func pgSessionUsageRowLess(
 // The effective-end fallback for a session with no ended_at uses its
 // latest message timestamp before started_at, so a still-open session
 // that began before the range but has messages inside it is not dropped,
-// matching SQLite and DuckDB. COALESCE short-circuits, so the correlated
+// matching SQLite. COALESCE short-circuits, so the correlated
 // MAX subquery runs only for the rare sessions missing an ended_at.
 // A terminal tool event can outlive ended_at metadata, so it independently
 // keeps the session eligible when it reaches the report range.

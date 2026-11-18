@@ -44,7 +44,7 @@ func WebSearchFee(requests int) (money.Money, error) {
 
 // AddWebSearchFee returns cost plus the fee for requests server-side web
 // searches. It is the single place every backend adds the fee, so SQLite,
-// PostgreSQL, and DuckDB cannot drift apart on the price.
+// PostgreSQL, and ClickHouse cannot drift apart on the price.
 func AddWebSearchFee(cost money.Money, requests int) (money.Money, error) {
 	if requests <= 0 {
 		return cost, nil

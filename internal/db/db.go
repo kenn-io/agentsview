@@ -279,14 +279,14 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 //
 // (59: Ingest sanitization now covers tool_calls.input_json, which v58
 // left raw. Existing live rows need re-parsing so NUL/control bytes in
-// stored inputs are stripped before they can poison PostgreSQL/DuckDB
+// stored inputs are stripped before they can poison replica
 // pushes; orphaned/trashed rows are cleaned by the copy-time input pass
 // during the same resync.)
 //
 // (58: Persisted message/result content sanitization now covers
 // tool_calls.result_content and tool_result_events.content. Existing rows
 // need re-parsing so NUL/control bytes accepted by SQLite are stripped before
-// they can poison DuckDB mirrors.)
+// they can poison replicas.)
 //
 // (57: Antigravity-CLI transcript fidelity classification. Re-parsing
 // populates transcript_fidelity ("full"/"summary") on existing
@@ -306,8 +306,8 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (53: Recent Edits tool-call file_path extraction. Re-parsing
 // populates tool_calls.file_path for edit/write calls -- including
 // Kiro raw-diff inputs the JSON-only SQL backfill cannot recover --
-// and the resync's fresh created_at re-pushes affected sessions to the
-// PostgreSQL and DuckDB mirrors.)
+// and the resync's fresh created_at re-pushes affected sessions to
+// replicas.)
 // (52: Pi source lineage reparse.)
 // (51: Gemini cumulative-to-delta token reparse.)
 // (17: Codex <skill> template filtering.)
@@ -4030,7 +4030,7 @@ END;
 // the column existed. It is the SQL twin of the trigger bodies above:
 // the max of created_at, local_modified_at, ended_at, started_at, and
 // file_mtime, normalized to ms-precision UTC text; both the PostgreSQL and
-// DuckDB pushes select their candidates against it (see
+// ClickHouse pushes select their candidates against it (see
 // ListSessionsForMirrorWindow).
 // Every field, including created_at, falls back to the empty string
 // when missing or unparseable; see syncMarkerSchemaSQL for why created_at
@@ -4084,7 +4084,7 @@ func installSyncMarkerSchemaLocked(ctx context.Context, w *writerHandle) error {
 // triggers to propagate trigger-body updates on upgrade; without a
 // transaction, another process's session delete could land in the window
 // where a trigger is absent, skipping the journal row that incremental
-// mirror consumers (PG tombstones, the DuckDB deletion delta) rely on.
+// replica consumers (PG tombstones) rely on.
 func execSchemaScriptLocked(ctx context.Context, w *writerHandle) error {
 	tx, err := w.BeginTx(ctx, nil)
 	if err != nil {
@@ -5010,7 +5010,7 @@ func (db *DB) applySessionCoverageUpdates(ctx context.Context,
 	defer func() { _ = tx.Rollback() }()
 
 	// local_modified_at is bumped so the sync_marker trigger fires and push
-	// targets (PostgreSQL and the DuckDB mirror) re-select the repaired
+	// targets (PostgreSQL and ClickHouse) re-select the repaired
 	// sessions: both has_* columns are mirrored, but neither is a
 	// sync_marker signal, so this one-time repair would otherwise leave
 	// already-pushed rows stale until an unrelated change re-selected them
@@ -6187,10 +6187,7 @@ func (db *DB) SetSyncStatesForDatabase(
 }
 
 // DeleteSyncStateByPrefix removes every pg_sync_state row whose key starts
-// with prefix. Used to clean up state left behind by superseded sync
-// designs (e.g. the pre-schema-v3 DuckDB push watermarks, now tracked in
-// the mirror's own sync_metadata table instead of local pg_sync_state).
-// prefix is escaped so LIKE metacharacters in it (%, _) match literally.
+// with prefix. prefix is escaped so LIKE metacharacters in it (%, _) match literally.
 func (db *DB) DeleteSyncStateByPrefix(ctx context.Context, prefix string) error {
 	if err := db.lockWriterCtx(ctx); err != nil {
 		return err

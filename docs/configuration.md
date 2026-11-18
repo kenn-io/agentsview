@@ -182,7 +182,7 @@ does not automatically take ownership of the old one's sessions.
 The display label defaults to the current hostname. Set `local_machine_name` in
 `config.toml` for a fixed label, then run `agentsview daemon restart`. Any
 non-empty label is allowed, including `local`. Changing the label leaves session
-keys unchanged; PostgreSQL and DuckDB receive the label on the next push.
+keys unchanged; PostgreSQL receives the label on the next push.
 Creating the identity does not rewrite `config.toml` or its comments. A missing
 cursor secret is still generated and saved.
 
@@ -217,10 +217,9 @@ with the old machine keys you own. Keys that belong to other installations need
 no action.
 
 PostgreSQL publishes the migrated sessions and metadata on the next incremental
-push. DuckDB rebuilds its mirror once when the default machine key changes. The
-SQLite archive stays intact. If two installations publish the same old hostname
-alias to PostgreSQL, the latest push determines its filter target. Use
-installation IDs to select machines unambiguously in a shared mirror.
+push. The SQLite archive stays intact. If two installations publish the same old
+hostname alias to PostgreSQL, the latest push determines its filter target. Use
+installation IDs to select machines unambiguously in a shared database.
 
 ## Config File
 
@@ -333,7 +332,6 @@ Set it to `"0"` to keep syncing while idle. Restart the server after changing it
 | `disable_update_check`              | Disable the automatic update check (see [Privacy](#privacy-and-telemetry))                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `scan_protected_paths`              | Allow Git discovery inside macOS privacy-protected folders and volumes under `/Volumes`, accepting one consent prompt per location — see [macOS Protected Folders](#macos-protected-folders)                                                                                                                                                                                                                                                                                     |
 | `[pg]`                              | PostgreSQL sync configuration — see [PostgreSQL Sync](/docs/pg-sync/)                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `[duckdb]`                          | DuckDB mirror configuration — see [DuckDB Mirror](/docs/duckdb/)                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `[clickhouse]`                      | ClickHouse sync configuration — see [ClickHouse Sync](/docs/clickhouse-sync/)                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `[vector]`                          | Opt-in semantic-search index; model settings live in `[vector.embeddings]`, named endpoints in `[vector.embeddings.servers.<name>]`, embedding schedule in `[vector.embed]` — see [Semantic Search](/docs/semantic-search/#enabling-vector) for every key                                                                                                                                                                                                                        |
 | `[recall.extract]`                  | Opt-in model-backed recall extraction; named endpoints in `[recall.extract.servers.<name>]`, prompt selection in `[recall.extract.prompts]`, request overrides in `[recall.extract.request]` — see [Recall](/docs/recall/#automatic-extraction)                                                                                                                                                                                                                                  |
@@ -397,7 +395,6 @@ of `config.toml` and out of whatever starts the process. Each secret has a
 | `[insights]` API key                       | `api_key_env`          | `api_key_file`              |
 | `[vector.embeddings.servers.<name>]` key   | `api_key_env`          | `api_key_file`              |
 | `[recall.extract.servers.<name>]` key      | `api_key_env`          | `api_key_file`              |
-| `[duckdb]` Quack token                     | `token`                | `token_file`                |
 | Cursor Admin API key (top level)           | `cursor_admin_api_key` | `cursor_admin_api_key_file` |
 
 ```toml
@@ -434,13 +431,9 @@ When AgentsView reads the file:
   load reads its file when the command starts using that server. An unusable
   file then stops that work with an error; it never falls back to an
   anonymous request.
-- `[duckdb] token_file` is read only when a command authenticates to Quack,
-  such as `duckdb quack serve` or `duckdb status` with a `url`. Local mirror
-  work never reads it, and `duckdb quack serve --token` takes precedence over
-  it. `cursor_admin_api_key_file` is read when `source cursor sync-usage`
-  runs.
-- `AGENTSVIEW_DUCKDB_TOKEN` and `AGENTSVIEW_CURSOR_ADMIN_API_KEY` replace the
-  config-file values, so the file is not read while they are set.
+- `cursor_admin_api_key_file` is read when `source cursor sync-usage` runs.
+- `AGENTSVIEW_CURSOR_ADMIN_API_KEY` replaces the config-file value, so the file
+  is not read while it is set.
 
 The `AGENTSVIEW_*_FILE` variables of a
 [container deployment](#container-deployment) follow their own rules, described
@@ -489,9 +482,8 @@ subcommand such as `pg push --watch` or `mcp` runs as given.
 Precedence, highest first: command flags, deployment variables, `config.toml`,
 built-in defaults. A host set through `AGENTSVIEW_HOST` counts as persistent
 configuration, so a non-loopback value without authentication stops `serve`;
-only the `--host` flag allows a one-off unauthenticated bind. `pg serve` and
-`duckdb serve` ignore network settings in `config.toml` but apply these
-variables.
+only the `--host` flag allows a one-off unauthenticated bind. `pg serve` ignores
+network settings in `config.toml` but applies these variables.
 
 These rules fail closed:
 
@@ -1008,7 +1000,7 @@ data directory on macOS, Linux, and Windows; set `CURSOR_IDE_DIR` or
 `agents.cursor-ide.dirs` to override it. This database also contains
 authentication and extension state, so Cursor IDE is deliberately excluded from
 remote source-file sync. Parsed sessions still stay in the local archive and can
-be shared through the normal PostgreSQL or DuckDB paths.
+be shared through the normal PostgreSQL or ClickHouse paths.
 
 **Claude Cowork default directories** follow Claude Desktop's Electron user-data
 location:
@@ -1673,7 +1665,8 @@ local filesystem ingestion for both Codebuff and Freebuff.
 
 The setting applies only to local filesystem discovery, targeted local file
 sync, file watching, and scheduled polling. It does not affect HTTP remote
-imports, and it does not restrict HTTP, PostgreSQL, DuckDB, or archive exports.
+imports, and it does not restrict HTTP, PostgreSQL, ClickHouse, or archive
+exports.
 `RemoteSyncExcluded` is the separate provider capability that keeps unsafe
 source trees out of remote exports.
 
@@ -1681,8 +1674,8 @@ A change saved on the Settings page applies to the running daemon right away:
 file watching and polling switch to the new provider set. Sessions already on
 disk for a newly enabled provider arrive with the next sync. The daemon reads
 edits made directly to `config.toml` at its next start. Restart any separate
-`pg push --watch`, `clickhouse push --watch`, or `duckdb push --watch` process
-after changing the setting. Previously archived sessions from a disabled
+`pg push --watch` or `clickhouse push --watch` process after changing the
+setting. Previously archived sessions from a disabled
 provider remain available and exportable, including during archive rebuilds.
 The setting does not disable that provider as a Recall execution backend.
 
@@ -2116,8 +2109,8 @@ mixing incompatible token streams. Pinyin expansion is disabled in the derived
 index because ASCII-only queries continue to use the Porter index.
 
 CJK full-text search is specific to SQLite message search, including the HTTP,
-CLI, and MCP search paths. PostgreSQL/CockroachDB and DuckDB do not load this
-SQLite extension and keep their existing search behavior. Substring and
+CLI, and MCP search paths. PostgreSQL/CockroachDB and ClickHouse do not load
+this SQLite extension and keep their existing search behavior. Substring and
 regular-expression searches are unchanged. Session search result snippets
 highlight the segmented matches; highlighting inside an opened transcript uses
 the original query and may miss separated Chinese words.
@@ -2210,7 +2203,7 @@ change session ownership.
 A daemon started with `--no-sync` still handles manual `agentsview source sync` and
 `agentsview source sync --full`; automatic ingestion stays disabled.
 
-Pushes to PostgreSQL, ClickHouse, and DuckDB also read pending attached history
+Pushes to PostgreSQL and ClickHouse also read pending attached history
 after successful local sync, including on a `--no-sync` daemon. A push watch
 that owns the local archive reads attachments at startup and on each periodic
 sync. Its `--full` option reparses available attachments.
@@ -2708,9 +2701,6 @@ Optional features that send data externally when you enable them:
   PostgreSQL database you configure.
 - [ClickHouse sync](/docs/clickhouse-sync/) (`clickhouse push`) sends session
   data to a ClickHouse database you configure.
-- The [DuckDB mirror](/docs/duckdb/) writes a local DuckDB file by default; data
-    only leaves the machine if you expose the mirror over a remote Quack
-    endpoint.
 - [Generated insights](/docs/recall/#current-surface) sends scoped session
     content to the configured endpoint when `[insights]` sets `endpoint` and
     `model`, or to the selected agent CLI when neither is set.

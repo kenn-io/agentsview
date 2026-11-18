@@ -158,7 +158,7 @@ func newDaemonCommandWithClientDeps(deps, clientDeps daemonCommandDeps) *cobra.C
 			"`daemon start` runs it in the background without opening a browser.\n" +
 			"Stopping it also stops the web UI and sync. These commands also manage\n" +
 			"a writable server started by `serve` or automatically by a CLI command.\n\n" +
-			"Read-only `replica pg serve` and `replica duckdb serve` processes are managed separately.",
+			"Read-only `replica pg serve` and `replica clickhouse serve` processes are managed separately.",
 		Example: "  agentsview daemon status\n" +
 			"  agentsview daemon start",
 		GroupID:      groupCore,
@@ -196,7 +196,7 @@ func newDaemonCommandWithClientDeps(deps, clientDeps daemonCommandDeps) *cobra.C
 		&cobra.Command{
 			Use: "stop", Short: "Stop the background server",
 			Long: "Stop only the writable daemon, including its web UI, source sync, and file watchers. " +
-				"Read-only PostgreSQL and DuckDB servers are left running.",
+				"Read-only PostgreSQL and ClickHouse servers are left running.",
 			Example:      "  agentsview daemon stop",
 			SilenceUsage: true, Args: cobra.NoArgs,
 			RunE: func(cmd *cobra.Command, _ []string) error {

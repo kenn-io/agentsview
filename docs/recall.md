@@ -189,12 +189,12 @@ end-user workflow. Use an isolated `AGENTSVIEW_DATA_DIR` for experiments. The
 import command refuses the default data directory unless the operator explicitly
 overrides that guard.
 
-The Corpus tab is not available through PostgreSQL or DuckDB stores, so those
-read-only servers open Recall on Generated insights instead. On the local SQLite
-UI, Session Vital Signs also includes a read-only Recall panel for the open
-session and links each evidence range back to the transcript. Corpus population,
-extraction-generation management, and ranked querying remain CLI and HTTP API
-workflows.
+The Corpus tab is not available through PostgreSQL or ClickHouse stores, so
+those read-only servers open Recall on Generated insights instead. On the local
+SQLite UI, Session Vital Signs also includes a read-only Recall panel for the
+open session and links each evidence range back to the transcript. Corpus
+population, extraction-generation management, and ranked querying remain CLI and
+HTTP API workflows.
 
 The daemon exposes the same inspection and query operations over its HTTP API.
 Ordinary queries record measurement data when the SQLite store is writable, but
@@ -474,6 +474,6 @@ delete or recreate the session archive as a Recall reset strategy.
 
 Recall remains an opt-in research feature. Automatic extraction never promotes
 entries into trusted Recall, and the session panel is inspection-only. There is
-no PostgreSQL or DuckDB Recall backend, no stable end-user import workflow, and
-no pruning policy for the measurement ledger yet. Expect corpus rebuilds as the
-schema, scoring, extraction policy, and trust model evolve.
+no PostgreSQL or ClickHouse Recall backend, no stable end-user import workflow,
+and no pruning policy for the measurement ledger yet. Expect corpus rebuilds as
+the schema, scoring, extraction policy, and trust model evolve.

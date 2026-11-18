@@ -6493,15 +6493,15 @@ func TestListStarredSessionIDsForScope(t *testing.T) {
 func TestDeleteSyncStateByPrefix(t *testing.T) {
 	d := testDB(t)
 
-	require.NoError(t, d.SetSyncState(t.Context(), "duckdb_last_push_at", "t1"))
-	require.NoError(t, d.SetSyncState(t.Context(), "duckdb_last_push_at:work", "t2"))
-	require.NoError(t, d.SetSyncState(t.Context(), "duckdb_last_push_boundary_state", "b1"))
+	require.NoError(t, d.SetSyncState(t.Context(), "legacy_last_push_at", "t1"))
+	require.NoError(t, d.SetSyncState(t.Context(), "legacy_last_push_at:work", "t2"))
+	require.NoError(t, d.SetSyncState(t.Context(), "legacy_last_push_boundary_state", "b1"))
 	require.NoError(t, d.SetSyncState(t.Context(), "last_push_at", "keep-me"))
 
-	require.NoError(t, d.DeleteSyncStateByPrefix(t.Context(), "duckdb_"))
+	require.NoError(t, d.DeleteSyncStateByPrefix(t.Context(), "legacy_"))
 
 	for _, key := range []string{
-		"duckdb_last_push_at", "duckdb_last_push_at:work", "duckdb_last_push_boundary_state",
+		"legacy_last_push_at", "legacy_last_push_at:work", "legacy_last_push_boundary_state",
 	} {
 		value, err := d.GetSyncState(t.Context(), key)
 		require.NoError(t, err, "GetSyncState %s", key)
@@ -9030,7 +9030,7 @@ func TestToolCallFingerprintIncludesFilePath(t *testing.T) {
 	fileFP, err := d.ToolCallFingerprint(t.Context(), "fp-file")
 	require.NoError(t, err, "file fingerprint")
 
-	// A file_path-only difference must change the fingerprint so the PG/DuckDB
+	// A file_path-only difference must change the fingerprint so the replica
 	// push fast paths re-push a file_path backfill instead of skipping it.
 	assert.NotEqual(t, noFileFP, fileFP)
 	assert.Contains(t, fileFP, "internal/db/messages.go")

@@ -147,8 +147,8 @@ stores the returned rows in the local archive, and deduplicates rows by a stable
 event fingerprint. It is safe to rerun the same window after new events arrive.
 
 Imported admin rows are folded into the Usage dashboard,
-`agentsview report usage daily`, DuckDB mirrors, and PostgreSQL after the usual
-push/sync path. They appear as `agent = cursor`; because Cursor Admin events are
+`agentsview report usage daily`, and PostgreSQL after the usual push/sync path.
+They appear as `agent = cursor`; because Cursor Admin events are
 account-level billing rows rather than session transcripts, project, machine,
 session-count, and top-session filters do not apply to those rows. Model and
 date filters do apply.
@@ -1224,8 +1224,8 @@ removed. Absolute paths, raw remotes, and credentials do not cross the export
 boundary. Remote-backed catalog identities omit machine-local `root_key`;
 session rows retain their own complete root, worktree, and checkout facts.
 
-SQLite catalog keys are archive-scoped. Shared PostgreSQL and DuckDB dashboard
-responses may aggregate archives, so their catalog keys are response-scoped and
+SQLite catalog keys are archive-scoped. Shared PostgreSQL and ClickHouse
+dashboard responses may aggregate archives, so their catalog keys are response-scoped and
 must not be persisted as durable selectors. The canonical `identity.key`, not
 the display label or catalog key, represents project continuity.
 

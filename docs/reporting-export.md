@@ -539,9 +539,9 @@ mask detected secrets by default.
 
 Reporting export intentionally uses the existing read-only local SQLite export
 path. It can run while the writable daemon owns the archive, and it does not
-require that daemon to be running. It does not switch to PostgreSQL or DuckDB:
-the local archive is the canonical source for the device's reporting payload,
-dedup order, pricing view, and archive-scoped project keys.
+require that daemon to be running. It does not switch to PostgreSQL or
+ClickHouse: the local archive is the canonical source for the device's reporting
+payload, dedup order, pricing view, and archive-scoped project keys.
 
 Costs use reported charges when available and catalog estimates otherwise.
 Estimates use the pricing catalog visible when the export reads the archive. The

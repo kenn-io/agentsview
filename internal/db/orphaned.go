@@ -1747,7 +1747,7 @@ func (d *DB) CopySessionMetadataFrom(
 
 	// database_id identifies the new physical generation and is never
 	// copied: every mirror push keys its incremental cursors to it, so the
-	// first push after a resync (DuckDB, PostgreSQL and ClickHouse alike)
+	// first push after a resync (PostgreSQL and ClickHouse alike)
 	// republishes everything and drops rows missing locally. That also
 	// makes journal continuity across the swap worthless, which is why the
 	// publication-revision counters are not copied either — the fresh

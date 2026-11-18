@@ -1912,14 +1912,14 @@ func daemonRestartUpgradeHint() string {
 // staleClientUpgradeHint is the counterpart of daemonRestartUpgradeHint for
 // the direction where the daemon has already been upgraded and the process
 // running this command is the one left behind, typically a `pg push
-// --watch` or `duckdb push --watch` started before the upgrade.
+// --watch` started before the upgrade.
 func staleClientUpgradeHint() string {
 	return "The running daemon is newer than this agentsview binary, so " +
 		"this command cannot use it until both run the same version. " +
 		"Restarting the daemon will not help. Upgrade this agentsview " +
 		"install and rerun the command. If this command is a " +
 		"long-running background process started before the upgrade " +
-		"(`pg push --watch`, `duckdb push --watch`, or a service " +
+		"(`pg push --watch`, `clickhouse push --watch`, or a service " +
 		"installed with `agentsview replica pg service`), restart it so it " +
 		"picks up the current binary."
 }

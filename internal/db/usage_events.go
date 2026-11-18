@@ -296,7 +296,7 @@ func replaceSessionUsageEventsTx(
 	}
 
 	// Bump local_modified_at so the sync_marker trigger fires and push
-	// targets (PostgreSQL and the DuckDB mirror) re-select this session:
+	// targets (PostgreSQL and ClickHouse) re-select this session:
 	// a usage-only rewrite (e.g. a pricing-driven recompute) touches no
 	// other marker signal, so without this the change would never become
 	// an incremental push candidate (see updateSessionSignalsTx).

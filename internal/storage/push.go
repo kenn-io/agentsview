@@ -190,7 +190,7 @@ func (e PushNotStartedError) Error() string { return e.Err.Error() }
 func (e PushNotStartedError) Unwrap() error { return e.Err }
 
 // PushPhaseRebuilt is the progress phase a daemon push reports as soon as its
-// sync has rebuilt the archive. Every mirror pushes in full after a rebuild,
+// sync has rebuilt the archive. Every replica pushes in full after a rebuild,
 // so a client whose stream ends after this report need not ask for --full
 // again. A client whose stream ends without it keeps its --full request.
 const PushPhaseRebuilt = "rebuilt"

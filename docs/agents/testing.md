@@ -57,7 +57,7 @@ what holds the wait.
 
 The check sees only the `fts5` test files each lint run compiles: Linux and
 Windows in full, and on macOS only the packages the macOS job lints. Tests
-behind `pgtest`, `chtest`, `duckdbtest`, or `s3test` go unchecked. It skips
+behind `pgtest`, `chtest`, or `s3test` go unchecked. It skips
 short positive `Never` windows, which cannot fail.
 
 ## Frontend and End-to-End Tests

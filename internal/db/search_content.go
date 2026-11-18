@@ -253,7 +253,7 @@ func NormalizeExcludeSessionIDs(ids []string) []string {
 }
 
 // AppendExcludeSessionIDs adds `<col> NOT IN (...)` to a WHERE clause using
-// `?` placeholders (SQLite and DuckDB). It is a no-op when ids is empty.
+// `?` placeholders (SQLite and ClickHouse). It is a no-op when ids is empty.
 func AppendExcludeSessionIDs(
 	where string, args []any, col string, ids []string,
 ) (string, []any) {
@@ -1410,10 +1410,8 @@ func validateSemanticSources(f ContentSearchFilter) error {
 // "semantic" and "hybrid": sources must be empty or exactly {"messages"},
 // and cursor pagination is rejected because both modes return a single
 // ranked page rather than an offset-paged result set. It is exported so the
-// PostgreSQL and DuckDB backends, which lack a VectorSearcher seam and
-// always report ErrSemanticUnavailable for these modes, can run the same
-// validation before that capability gate: an invalid request (bad cursor,
-// wrong source) must return the same 400 SearchInputError on every backend
+// replica backends can run the same validation before their own capability
+// gate: an invalid request (bad cursor, wrong source) must return the same 400 SearchInputError on every backend
 // rather than a 501 on backends that check capability first (backend parity,
 // see AGENTS.md).
 func ValidateSemanticFilter(f ContentSearchFilter) error {
