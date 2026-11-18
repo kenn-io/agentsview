@@ -738,21 +738,31 @@ describe("App root Sessions landing", () => {
     };
   }
 
-  it.each([true, false])("opens the first sidebar session when rows arrive (already present: %s)", async (present) => {
-    stubAppDependencies();
-    vi.spyOn(sessions, "load").mockResolvedValue();
-    setRootUrl();
-    sessions.archiveEmpty = !present;
-    if (present) sessions.sessions = [sidebarRow("first", 1, "2026-01-03"), sidebarRow("older", 1, "2026-01-02")];
-    component = mount(App, { target: document.body });
-    await flushEffects();
-    if (!present) {
-      sessions.archiveEmpty = false;
-      sessions.sessions = [sidebarRow("first", 1, "2026-01-03"), sidebarRow("older", 1, "2026-01-02")];
+  it.each([true, false])(
+    "opens the first sidebar session when rows arrive (already present: %s)",
+    async (present) => {
+      stubAppDependencies();
+      vi.spyOn(sessions, "load").mockResolvedValue();
+      setRootUrl();
+      sessions.archiveEmpty = !present;
+      if (present)
+        sessions.sessions = [
+          sidebarRow("first", 1, "2026-01-03"),
+          sidebarRow("older", 1, "2026-01-02"),
+        ];
+      component = mount(App, { target: document.body });
       await flushEffects();
-    }
-    expect(sessions.activeSessionId).toBe("first");
-  });
+      if (!present) {
+        sessions.archiveEmpty = false;
+        sessions.sessions = [
+          sidebarRow("first", 1, "2026-01-03"),
+          sidebarRow("older", 1, "2026-01-02"),
+        ];
+        await flushEffects();
+      }
+      expect(sessions.activeSessionId).toBe("first");
+    },
+  );
 
   it.each(["read before", "deep link", "filtered", "manual selection", "left sessions"])(
     "does not auto-open after %s",
@@ -762,7 +772,10 @@ describe("App root Sessions landing", () => {
       vi.spyOn(sessions, "navigateToSession").mockResolvedValue();
       setRootUrl(scenario === "filtered" ? { project: "chosen" } : {});
       if (scenario === "read before") readProgress.baseline("prior", "revision", 0);
-      if (scenario === "deep link") { router.sessionId = "linked"; router.isRootPath = false; }
+      if (scenario === "deep link") {
+        router.sessionId = "linked";
+        router.isRootPath = false;
+      }
       component = mount(App, { target: document.body });
       await flushEffects();
       if (scenario === "manual selection") sessions.selectSession("chosen");

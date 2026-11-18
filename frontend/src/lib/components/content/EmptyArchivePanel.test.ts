@@ -45,7 +45,8 @@ describe("EmptyArchivePanel", () => {
     component = mount(EmptyArchivePanel, { target: document.body });
     await tick();
     expect(document.body.textContent).toContain(title);
-    if (pending && !syncing) expect(document.body.textContent).toContain("Select Sync in the header");
+    if (pending && !syncing)
+      expect(document.body.textContent).toContain("Select Sync in the header");
     expect(document.querySelector(".empty-archive-spinner") !== null).toBe(syncing);
   });
   it("restores the desktop sidebar and transfers focus between toggles", async () => {
