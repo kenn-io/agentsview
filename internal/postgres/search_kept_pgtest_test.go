@@ -521,4 +521,16 @@ func TestSearchKeptRestartAfterKeyEviction(t *testing.T) {
 	direct, err := s.search(ctx, f)
 	require.NoError(t, err)
 	require.Equal(t, direct, got)
+
+	s, trace = openTracedSearchStore(t, url, syncer.schema, cache)
+	require.NoError(t, os.Remove(keyFile))
+	require.NoError(t, local.ReplaceSessionMessages(ctx, "one", []db.Message{{SessionID: "one", Role: "user", Content: "needle newest"}}))
+	pgKeptPush(t, syncer, false)
+	got, err = s.Search(ctx, f)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, trace.count.Load())
+	require.Zero(t, trace.restricted.Load())
+	direct, err = s.search(ctx, f)
+	require.NoError(t, err)
+	require.Equal(t, direct, got)
 }

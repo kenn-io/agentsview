@@ -887,10 +887,9 @@ changed sessions when the journal proves the retained history. When a page needs
 rebuilding and neither the memory entry nor a usable file is available, it runs
 a full search. A missing or oversized file is unusable, and a revision 128 or
 more commits old also requires a full search. ClickHouse merges that leave rows
-unchanged keep pages valid.
-Deleted snippets can remain in old cache files
-until the same search overwrites them or the cache is trimmed. Read-only SQLite
-and hosted or borrowed PostgreSQL views read directly. DuckDB Quack and borrowed
+unchanged keep pages valid. Deleted snippets can remain in old cache files until
+the same search overwrites them or the cache is trimmed. Read-only SQLite and
+hosted or borrowed PostgreSQL views read directly. DuckDB Quack and borrowed
 handles read directly. Local DuckDB mirrors without fingerprints reuse pages in
 memory only.
 
