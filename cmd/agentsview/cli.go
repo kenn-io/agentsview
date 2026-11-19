@@ -878,6 +878,7 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w, "  CURSOR_PROJECTS_DIR     Cursor projects directory")
 	fmt.Fprintln(w, "  IFLOW_DIR               iFlow projects directory")
 	fmt.Fprintln(w, "  FX_SESSIONS_DIR         fx sessions directory")
+	fmt.Fprintln(w, "  FACTORY_DIR             Factory Droid sessions directory")
 	fmt.Fprintln(w, "  JUNIE_DIR               Junie sessions directory")
 	fmt.Fprintln(w, "  JUNIE_HOME              Junie home (re-roots sessions directory)")
 	fmt.Fprintln(w, "  AMP_DIR                 Amp threads directory")

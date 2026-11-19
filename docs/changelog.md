@@ -43,6 +43,14 @@ The latest release is
   the setting; AgentsView never falls back to another source. See
   [Read secrets from files](/docs/configuration/#read-secrets-from-files).
 
+- Browse, search, and track usage for Factory Droid sessions. AgentsView reads
+  `~/.factory/sessions/` by default, including prompts with pasted images and
+  nested tool calls, and links subagent sessions to the session that started
+  them. Token totals come from each session's settings file, so usage appears
+  per session rather than per message. Each subagent's usage is counted once,
+  on the session that started it, including subagents that left no
+  transcript. `FACTORY_DIR` or `factory_dirs` change the directory.
+
 - Track token usage and cost for tools that call model APIs directly, with no
   coding agent in between. Such a tool writes body-free session files to
   `~/.agentsview/direct-api/`, and AgentsView lists them as **Direct API**

@@ -124,6 +124,21 @@ func init() {
 			{file: "workbuddy/session.jsonl", want: "Check which directory uses the most disk"},
 		},
 	})
+	// The settings.json sidecar stays fixed so the aggregate usage path runs
+	// against every fuzzed transcript.
+	registerProviderFuzzTarget(providerFuzzTarget{
+		agent: AgentFactory,
+		path:  "-home-user-code-app/" + claudeFamilyFuzzUUID + ".jsonl",
+		companions: map[string]string{
+			"-home-user-code-app/" + claudeFamilyFuzzUUID + factorySettingsSuffix: `{"model":"claude-fable-5","providerLock":"anthropic","tokenUsage":{"inputTokens":10,"outputTokens":5}}`,
+		},
+		seeds: []providerFuzzSeed{
+			{
+				file: "factory/-home-dev-workspace-demo-app/0f9c1c2e-6f7d-4b3a-9c2e-1a2b3c4d5e6f.jsonl",
+				want: "Add exponential backoff to fetchWithRetry",
+			},
+		},
+	})
 	// A CodeBuddy session is an index.json manifest naming one JSON file
 	// per message. The input is the first message file, the untrusted
 	// transcript content; the manifest and a reply stay fixed.
@@ -198,6 +213,8 @@ func FuzzProviderIFlow(f *testing.F) { fuzzProvider(f, AgentIflow) }
 func FuzzProviderQoder(f *testing.F) { fuzzProvider(f, AgentQoder) }
 
 func FuzzProviderWorkBuddy(f *testing.F) { fuzzProvider(f, AgentWorkBuddy) }
+
+func FuzzProviderFactory(f *testing.F) { fuzzProvider(f, AgentFactory) }
 
 func FuzzProviderCodeBuddy(f *testing.F) { fuzzProvider(f, AgentCodeBuddy) }
 
