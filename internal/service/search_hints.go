@@ -38,10 +38,10 @@ type hintProbe struct {
 //
 // A tree search reaches a child through a parent path whose root passes the
 // search's other filters, and the classifier cannot check those filters. So
-// when a child's parent paths disagree about the probe, the match is
+// when a child's parent paths disagree about the probe, or loop, the match is
 // undecided.
 func (p hintProbe) shows(rows map[string]db.Session, id string, tree, exemptChildren bool) (shown, known bool) {
-	switch p.verdict(rows, id, tree, exemptChildren, make(map[string]bool)) {
+	switch p.verdict(rows, id, tree, exemptChildren, make(map[string]bool), make(map[string]hintVerdict)) {
 	case hintShown:
 		return true, true
 	case hintUnknown:
@@ -54,17 +54,29 @@ func (p hintProbe) shows(rows map[string]db.Session, id string, tree, exemptChil
 type hintVerdict int
 
 const (
-	// hintNoRoot marks a parent loop, which never reaches a root.
-	hintNoRoot hintVerdict = iota
-	hintHidden
+	hintHidden hintVerdict = iota
 	hintShown
 	hintUnknown
 )
 
-func (p hintProbe) verdict(rows map[string]db.Session, id string, tree, exemptChildren bool, path map[string]bool) hintVerdict {
-	if path[id] {
-		return hintNoRoot
+// verdict decides one session. memo keeps each session's answer, so parents
+// that split and rejoin are visited once. A parent loop is undecided, which
+// keeps memo correct: every session on a loop reaches it from any start.
+func (p hintProbe) verdict(rows map[string]db.Session, id string, tree, exemptChildren bool, path map[string]bool, memo map[string]hintVerdict) hintVerdict {
+	if v, ok := memo[id]; ok {
+		return v
 	}
+	if path[id] {
+		return hintUnknown
+	}
+	path[id] = true
+	defer delete(path, id)
+	v := p.decide(rows, id, tree, exemptChildren, path, memo)
+	memo[id] = v
+	return v
+}
+
+func (p hintProbe) decide(rows map[string]db.Session, id string, tree, exemptChildren bool, path map[string]bool, memo map[string]hintVerdict) hintVerdict {
 	s, ok := rows[id]
 	if !ok {
 		return hintUnknown
@@ -80,16 +92,17 @@ func (p hintProbe) verdict(rows map[string]db.Session, id string, tree, exemptCh
 		}
 		return hintHidden
 	}
-	path[id] = true
-	defer delete(path, id)
-	result := hintNoRoot
-	for _, parent := range parents {
-		switch v := p.verdict(rows, parent, tree, exemptChildren, path); {
-		case v == hintNoRoot:
-		case result == hintNoRoot:
+	// A session that is not a tree root lists at least one parent.
+	var result hintVerdict
+	for i, parent := range parents {
+		switch v := p.verdict(rows, parent, tree, exemptChildren, path, memo); {
+		case i == 0:
 			result = v
-		case result != v:
-			return hintUnknown
+		case v != result:
+			result = hintUnknown
+		}
+		if result == hintUnknown {
+			break
 		}
 	}
 	return result

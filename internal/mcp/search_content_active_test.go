@@ -134,10 +134,6 @@ func TestSearchContent_ActiveFilterHTTPCompatibility(t *testing.T) {
 					assert.NoError(t, err)
 					return
 				}
-				if r.URL.Path == "/api/v1/sessions" {
-					_, _ = w.Write([]byte(`{"sessions":[{"id":"active","user_message_count":1},{"id":"idle","user_message_count":1}]}`))
-					return
-				}
 				id := strings.TrimPrefix(r.URL.Path, "/api/v1/sessions/")
 				lookups[id]++
 				activity, ok := map[string]string{

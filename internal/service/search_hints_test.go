@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -560,4 +561,35 @@ func TestSearchContentHintsShortHybridPage(t *testing.T) {
 		{Code: "excluded_automated", Message: "at least 1 match is in automated sessions, hidden by default", RetryWith: map[string]any{"include_automated": true}},
 	}, hints)
 	assert.Equal(t, 2, svc.searches)
+}
+
+func TestSearchContentHintsRejoiningParents(t *testing.T) {
+	// Each level lists both sessions of the level above, so the number of
+	// parent paths doubles per level while the session count grows by two.
+	const levels = 40
+	rows := map[string]db.Session{"root": {ID: "root", UserMessageCount: 1}}
+	above := []string{"root"}
+	for i := range levels {
+		level := []string{fmt.Sprintf("a%d", i), fmt.Sprintf("b%d", i)}
+		for _, id := range level {
+			rows[id] = db.Session{ID: id, RelationshipType: "subagent", UserMessageCount: 2, ParentSessionIDs: above}
+		}
+		above = level
+	}
+	rows["kid"] = db.Session{ID: "kid", RelationshipType: "subagent", UserMessageCount: 2, ParentSessionIDs: above}
+	page := service.ContentSearchResult{Matches: []db.ContentMatch{{SessionID: "kid"}}}
+	svc := &rowService{search: expandedOnly(page), rows: rows}
+	req := service.ContentSearchRequest{Pattern: "marker", IncludeChildren: true}
+	done := make(chan []service.ContentSearchHint, 1)
+	go func() {
+		done <- service.SearchContentHints(t.Context(), svc, req, &service.ContentSearchResult{}, true, nil)
+	}()
+	select {
+	case hints := <-done:
+		assert.Equal(t, []service.ContentSearchHint{
+			{Code: "excluded_one_shot", Message: "1 match is in one-shot sessions, hidden by default", RetryWith: map[string]any{"include_one_shot": true}},
+		}, hints)
+	case <-time.After(10 * time.Second):
+		require.FailNow(t, "classifying one match walked every parent path")
+	}
 }
