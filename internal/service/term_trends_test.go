@@ -53,9 +53,7 @@ func TestTermTrendsBothBackends(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			got, err := svc.TermTrends(t.Context(), service.TermTrendsRequest{
-				AnalyticsRequest: service.AnalyticsRequest{
-					From: "2024-06-01", To: "2024-06-09", Project: "proj-a",
-				},
+				From: "2024-06-01", To: "2024-06-09", Project: "proj-a",
 				Terms: []string{"load bearing | load-bearing", "seam"},
 			})
 			require.NoError(t, err)
@@ -74,9 +72,7 @@ func TestTermTrendsBothBackends(t *testing.T) {
 			for _, bad := range []service.TermTrendsRequest{
 				{},
 				{Terms: []string{"seam"}, Granularity: "year"},
-				{Terms: []string{"seam"}, AnalyticsRequest: service.AnalyticsRequest{
-					From: "2024-06-09", To: "2024-06-01",
-				}},
+				{Terms: []string{"seam"}, From: "2024-06-09", To: "2024-06-01"},
 			} {
 				_, err := svc.TermTrends(t.Context(), bad)
 				require.ErrorAs(t, err, &inputErr, "request %+v", bad)

@@ -127,6 +127,7 @@ func (s *stubGetService) ActivityReport(context.Context, service.ActivityReportR
 func (s *stubGetService) TermTrends(context.Context, service.TermTrendsRequest) (*db.TrendsTermsResponse, error) {
 	panic("TermTrends not expected")
 }
+
 func (s *stubGetService) ToolAnalytics(context.Context, service.AnalyticsRequest) (*db.ToolsAnalyticsResponse, error) {
 	panic("ToolAnalytics not expected")
 }

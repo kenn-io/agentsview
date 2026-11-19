@@ -3940,7 +3940,7 @@ ______________________________________________________________________
 
 **New features**
 
-- Add a [Trends page](/docs/usage/#trends) for ad-hoc term-frequency line charts
+- Add a Trends page for ad-hoc term-frequency line charts
     over your session history. Plot up to 12 terms — each with optional
     pipe-separated variants like `cat|cats` — at day, week, or month
     granularity, and optionally normalize counts by message volume. Backed by
