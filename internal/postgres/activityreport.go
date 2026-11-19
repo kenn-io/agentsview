@@ -174,7 +174,6 @@ func (s *Store) BuildActivityReportArtifacts(
 				identity, _ = s.activitySourceIdentity(ctx, "")
 				pending = false
 				if !ok && identity != "" {
-					s.activityReports.Sweep(now)
 					if entry, found := s.loadActivityReport(selection, version, identity); found {
 						memo.Put(selection, version, []pgActivityKept{entry})
 					}

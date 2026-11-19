@@ -7,6 +7,7 @@ import (
 	"math"
 	"reflect"
 	"slices"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"go.kenn.io/agentsview/internal/db"
@@ -29,6 +30,7 @@ type pgActivitySavedReport struct {
 }
 
 func (s *Store) loadActivityReport(selection, version, identity string) (pgActivityKept, bool) {
+	s.activityReports.Sweep(time.Now())
 	data, ok := s.activityReports.Get(selection, identity+"|"+version)
 	if !ok {
 		return pgActivityKept{}, false
