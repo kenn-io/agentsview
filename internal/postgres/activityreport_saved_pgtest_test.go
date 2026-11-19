@@ -82,7 +82,9 @@ func TestPGActivityReportSaved(t *testing.T) {
 			}
 			if mode == "sweep" {
 				active := files[0]
-				first.saveActivityReport("old1", "v", pgActivityKept{identity: "id", revision: 1})
+				entries := first.runtimeState().activityKept.Snapshot()
+				require.Len(t, entries, 1)
+				first.saveActivityReport("old1", "v", entries[0].Rows[0])
 				files, err = filepath.Glob(filepath.Join(cache, "postgres-activity-reports", "*", "*.gob"))
 				require.NoError(t, err)
 				require.Len(t, files, 2)
