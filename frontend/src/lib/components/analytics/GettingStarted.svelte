@@ -39,7 +39,7 @@
         <XIcon size="14" strokeWidth="2" aria-hidden="true" />
       </IconButton>
     {/snippet}
-    <ul class="items" aria-label={m.getting_started_title()}>
+    <ul class="items">
       {#each items as key (key)}
         {@const done = gettingStarted.done.has(key)}
         <li class="item" class:done>
