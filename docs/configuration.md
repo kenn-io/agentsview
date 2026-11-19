@@ -335,7 +335,7 @@ Set it to `"0"` to keep syncing while idle. Restart the server after changing it
 | `zoom_level`                        | Default interface zoom for clients without a local preference: `67`, `75`, `80`, `90`, `100`, `110`, `120`, `125`, `130`, `150`, `175`, or `200`. Defaults to `100` when omitted. Restart the daemon after manual edits                                                                                                                                                                                                                                                          |
 | `disabled_agents`                   | Session providers to exclude from local filesystem scanning — see [Disabling Session Providers](#disabling-session-providers)                                                                                                                                                                                                                                                                                                                                                    |
 | `[proxy]`                           | Managed proxy configuration table — see [Remote Access](/docs/remote-access/)                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `disable_update_check`              | Disable the automatic update check (see [Privacy](#privacy))                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `disable_update_check`              | Disable the automatic update check (see [Privacy](#privacy-and-telemetry))                                                                                                                                                                                                                                                                                                                                                                                         |
 | `scan_protected_paths`              | Allow Git discovery inside macOS privacy-protected folders and volumes under `/Volumes`, accepting one consent prompt per location — see [macOS Protected Folders](#macos-protected-folders)                                                                                                                                                                                                                                                                                     |
 | `[pg]`                              | PostgreSQL sync configuration — see [PostgreSQL Sync](/docs/pg-sync/)                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `[clickhouse]`                      | ClickHouse sync configuration — see [ClickHouse Sync](/docs/clickhouse-sync/)                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -2716,7 +2716,7 @@ with daemon API 15, `sync_pending` alongside sync progress. See the
 [session usage contract](/docs/session-api/#agentsview-session-usage) for how
 `session usage --wait` uses these states.
 
-## Privacy
+## Privacy and Telemetry
 
 By default, all session data stays on your local machine in SQLite. Normal
 browsing, search, and reports do not send session content, project names,
@@ -2746,6 +2746,17 @@ The automatic outbound requests include update checks and pricing refreshes:
 - **Pricing** — the server downloads public model-pricing catalogs from GitHub
     and OpenRouter at startup and daily; see
     [Pricing Source](/docs/token-usage/#pricing-source).
+
+### Usage Reporting
+
+AgentsView can send general, anonymous usage telemetry. Usage telemetry is off
+unless you have opted in or set `TELEMETRY_ENABLED=1`. Development builds never
+send it.
+
+Any of these turns it off, even after you opted in:
+`AGENTSVIEW_TELEMETRY_ENABLED=0`, `TELEMETRY_ENABLED=0`, `DO_NOT_TRACK=1`, or
+setting `CI` to any value. Restart the server after changing them.
+
 ### Disabling Update Checks
 
 Disable the CLI/web UI update check with any of:

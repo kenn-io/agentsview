@@ -748,6 +748,8 @@ All session data stays on your machine. The server binds to `127.0.0.1` by
 default. The update check is optional and can be disabled with
 `--no-update-check`.
 
+See [Usage Reporting](docs/configuration.md#usage-reporting) for telemetry.
+
 ## Documentation
 
 Full docs at **[agentsview.io](https://agentsview.io)**:
