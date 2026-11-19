@@ -170,10 +170,13 @@ func (s *Sync) EnsureSchema(ctx context.Context) error {
 		}
 		s.conn = conn
 	}
-	if err := recordEnsuredSchema(ctx, s.conn, s.schemaKey); err != nil {
+	recorded, err := recordEnsuredSchema(ctx, s.conn, s.schemaKey)
+	if err != nil {
 		return err
 	}
-	s.schemaDone = true
+	// A pending snapshot rebuild leaves the schema unrecorded, and this Sync
+	// checks again too, since a watcher reuses it for every push.
+	s.schemaDone = recorded
 	return nil
 }
 

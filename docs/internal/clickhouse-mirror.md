@@ -353,8 +353,8 @@ a full push and no session, deletion, project identity, worktree mapping, star,
 pin, or Cursor usage row changed since the last clean push, it runs only the
 vector phase and returns (`unchangedSinceLastPush`). A scoped vector phase with
 no changed sessions does nothing, and a usage-only archive skips it. A
-generation-wide vector phase can write, so it first checks that a newer
-AgentsView has not written the mirror, as a push with changes does.
+generation-wide vector phase with a vector source can write, so it first checks
+that a newer AgentsView has not written the mirror, as a push with changes does.
 
 The skipped push would also refresh machine labels, model and usage prices, and
 retained commit links, prune rows the archive no longer owns, check for session

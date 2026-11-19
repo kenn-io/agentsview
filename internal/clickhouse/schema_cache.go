@@ -94,18 +94,19 @@ func schemaUnchangedSinceEnsured(ctx context.Context, conn *sql.DB, key string) 
 	return ok && current.sameAs(state)
 }
 
-// recordEnsuredSchema records the mirror's current state as ensured. While
-// an interrupted snapshot rebuild is pending it records nothing, so every
-// push runs the schema step until one of them finishes the rebuild.
-func recordEnsuredSchema(ctx context.Context, conn *sql.DB, key string) error {
+// recordEnsuredSchema records the mirror's current state as ensured and
+// reports whether it did. While an interrupted snapshot rebuild is pending it
+// records nothing, so every push runs the schema step until one of them
+// finishes the rebuild.
+func recordEnsuredSchema(ctx context.Context, conn *sql.DB, key string) (bool, error) {
 	state, err := readSchemaState(ctx, conn)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if state.rebuildPending {
 		ensuredSchemas.Delete(key)
-		return nil
+		return false, nil
 	}
 	ensuredSchemas.Store(key, state)
-	return nil
+	return true, nil
 }

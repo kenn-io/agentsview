@@ -240,13 +240,14 @@ func TestPushWithSessionErrorsForgetsPreparedSchema(t *testing.T) {
 		"the session that failed is published")
 }
 
-// A skipped push can still write vectors, so it refuses a mirror that a
-// newer AgentsView wrote, as a push with changes does.
+// A skipped push with a vector source can still write vectors, so it refuses
+// a mirror that a newer AgentsView wrote, as a push with changes does. One
+// without a source writes nothing and stays a no-op.
 func TestSkippedPushRejectsNewerMirrorBeforeVectors(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	local, target := seedFixture(t)
-	s := newTestSync(t, local, target, storage.PusherOptions{})
+	s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: newFixtureVectorSource()})
 	_, err := s.Push(ctx, false, nil)
 	require.NoError(t, err)
 	conn := chtest.Open(t, target.URL, target.Database)
@@ -257,22 +258,30 @@ func TestSkippedPushRejectsNewerMirrorBeforeVectors(t *testing.T) {
 
 	_, err = s.PushWithOptions(ctx, changeTriggered, nil)
 	assert.True(t, db.IsDataVersionTooNew(err), "want a data version error, got %v", err)
+
+	plain := newTestSync(t, local, target, storage.PusherOptions{})
+	_, err = plain.PushWithOptions(ctx, changeTriggered, nil)
+	assert.NoError(t, err, "a skipped push without a vector source writes nothing")
 }
 
 // The schema step finishes an interrupted snapshot rebuild only once its
-// tables are old enough, so a state with them is never recorded and every
-// push runs the step until the rebuild is done.
+// tables are old enough, so while they exist neither the process nor the
+// Sync a watcher reuses records the schema, and every push runs the step.
 func TestSchemaWithPendingSnapshotRebuildIsNotRecorded(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	local, target := seedFixture(t)
 	s := newTestSync(t, local, target, storage.PusherOptions{})
 	conn := chtest.Open(t, target.URL, target.Database)
-	_, err := conn.ExecContext(ctx,
-		"CREATE TABLE "+usageSnapshotRebuildName(999)+" (x UInt8) ENGINE = MergeTree ORDER BY x")
+	rebuild := usageSnapshotRebuildName(999)
+	_, err := conn.ExecContext(ctx, "CREATE TABLE "+rebuild+" (x UInt8) ENGINE = MergeTree ORDER BY x")
 	require.NoError(t, err)
 
-	require.NoError(t, recordEnsuredSchema(ctx, conn, s.schemaKey))
+	s.forgetEnsuredSchema()
+	require.NoError(t, s.EnsureSchema(ctx))
+	require.Equal(t, 1, chtest.Count(t, conn, "system.tables",
+		"database = currentDatabase() AND name = ?", rebuild), "a fresh rebuild table is left for its process")
 	_, ok := ensuredSchemas.Load(s.schemaKey)
 	assert.False(t, ok, "a pending rebuild leaves the schema unrecorded")
+	assert.False(t, s.schemaDone, "a pending rebuild leaves the Sync's memo unset")
 }

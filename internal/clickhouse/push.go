@@ -136,10 +136,12 @@ func (s *Sync) pushWithOptions(
 		var vectorScope []string
 		if opts.ScopeVectorsToChangedSessions {
 			vectorScope = []string{}
-		} else if err := CheckDataVersionCompat(ctx, conn); err != nil {
-			// A generation-wide vector phase can write, so it must not
-			// write to a mirror a newer AgentsView wrote.
-			return result, err
+		} else if s.vectorSource != nil {
+			// A generation-wide vector phase with a source can write, so it
+			// must not write to a mirror a newer AgentsView wrote.
+			if err := CheckDataVersionCompat(ctx, conn); err != nil {
+				return result, err
+			}
 		}
 		result.Vectors, err = s.pushVectors(ctx, 0, nil, vectorScope, nil, onProgress)
 		if err != nil {
