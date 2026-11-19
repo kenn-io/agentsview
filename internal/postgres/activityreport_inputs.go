@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"maps"
 	"math"
@@ -153,12 +152,10 @@ func (s *Store) activityReportInputs(ctx context.Context, version, lower, upper 
 	} else {
 		ok = false
 	}
-	identity := ""
+	identity := previous.identity
 	identityUnavailable := ok && previous.identityUnavailable
-	if (!ok || previous.identity == "") && !identityUnavailable && s.activityDisk.Enabled() {
-		var err error
-		identity, err = s.activitySourceIdentity(ctx, "")
-		identityUnavailable = errors.Is(err, db.ErrUsageSourceUnavailable)
+	if s.activityDisk.Enabled() {
+		identity, identityUnavailable = s.retryActivityIdentity(ctx, identity, identityUnavailable, 0)
 		if !ok && identity != "" {
 			if loaded, found := s.loadActivityInputs(slot, version, identity); found {
 				previous, ok = loaded, true
@@ -175,9 +172,6 @@ func (s *Store) activityReportInputs(ctx context.Context, version, lower, upper 
 		return nil, err
 	}
 	next := &pgActivityInputs{revision: revision, identity: identity, identityUnavailable: identityUnavailable, sessions: map[string]pgActivitySession{}, changed: changed}
-	if ok && previous.identity != "" {
-		next.identity = previous.identity
-	}
 	if ok && revision >= after && len(changed) <= max(64, len(previous.candidates)/4) {
 		old := previous
 		dirty := make(map[string]bool, len(changed))

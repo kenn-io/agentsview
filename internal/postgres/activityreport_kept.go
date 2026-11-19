@@ -75,13 +75,32 @@ func (s *Store) keepActivityReport(selection, version string, entry pgActivityKe
 		entry.identity, entry.identityUnavailable = identity, unavailable
 		s.runtimeState().activityKept.Put(selection, version, []pgActivityKept{entry})
 	}
-	switch {
-	case identity == "":
-	case saved:
-		s.activityReports.Keep(pgActivityDiskSelection(selection, version, identity), pgActivityReportFormat, func() ([]byte, error) { return encodePGActivityReport(entry) })
-	default:
+	if identity != "" {
+		s.refreshActivityReport(selection, version, entry, saved)
+	}
+}
+
+// refreshActivityReport keeps the selected report before the sweep.
+func (s *Store) refreshActivityReport(selection, version string, entry pgActivityKept, saved bool) {
+	if saved {
+		s.activityReports.Keep(pgActivityDiskSelection(selection, version, entry.identity), pgActivityReportFormat, func() ([]byte, error) { return encodePGActivityReport(entry) })
+	} else {
 		s.saveActivityReport(selection, version, entry)
 	}
+	s.activityReports.Sweep(time.Now())
+}
+
+func (s *Store) retryActivityIdentity(ctx context.Context, identity string, unavailable bool, oid uint32) (string, bool) {
+	if identity != "" || unavailable {
+		return identity, unavailable
+	}
+	var err error
+	if oid == 0 {
+		identity, err = s.activitySourceIdentity(ctx, "")
+	} else {
+		identity, err = s.activitySourceIdentityWithOID(ctx, "", oid)
+	}
+	return identity, errors.Is(err, db.ErrUsageSourceUnavailable)
 }
 
 func (s *Store) activityReportIdentity(ctx context.Context, selection, version string, q activity.Query, oid uint32) (identity string, unavailable bool) {
@@ -97,9 +116,7 @@ func (s *Store) activityReportIdentity(ctx context.Context, selection, version s
 	if q.RangeEnd.After(time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, q.Loc)) {
 		return identity, unavailable
 	}
-	var err error
-	identity, err = s.activitySourceIdentityWithOID(ctx, "", oid)
-	unavailable = errors.Is(err, db.ErrUsageSourceUnavailable)
+	identity, unavailable = s.retryActivityIdentity(ctx, identity, unavailable, oid)
 	if !ok && identity != "" {
 		if entry, found := s.loadActivityReport(selection, version, identity); found {
 			memo.Put(selection, version, []pgActivityKept{entry})
