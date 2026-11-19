@@ -40,7 +40,7 @@ func (s *Store) loadActivityReport(selection, version, identity string) (pgActiv
 		return pgActivityKept{}, false
 	}
 	var saved pgActivitySavedReport
-	if json.Unmarshal(data, &saved) != nil || saved.Checkpoint == "" {
+	if json.Unmarshal(data, &saved) != nil {
 		return pgActivityKept{}, false
 	}
 	for key, project := range saved.Report.Artifacts.Report.Projects {
@@ -79,7 +79,6 @@ func (s *Store) keepActivityReport(selection, version string, entry pgActivityKe
 		} else {
 			s.saveActivityReport(selection, version, entry)
 		}
-		s.activityReports.Sweep(time.Now())
 	}
 }
 
@@ -135,13 +134,7 @@ func (s *Store) keptActivityReport(ctx context.Context, selection, version strin
 	if err != nil {
 		return kept.Report{}, through, false, err
 	}
-	if entry.checkpoint == "" {
-		var legacy bool
-		err = s.pg.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM sync_metadata WHERE key='usage_change_journal_version' AND value IN ('1', '2'))`).Scan(&legacy)
-		if err != nil || !legacy {
-			return kept.Report{}, through, false, err
-		}
-	} else if entry.checkpoint != previous {
+	if entry.checkpoint != "" && entry.checkpoint != previous {
 		return kept.Report{}, through, false, nil
 	}
 	if through == entry.revision {

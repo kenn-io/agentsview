@@ -1183,9 +1183,7 @@ PostgreSQL saves finished Activity reports when built for reuse after restart.
 It keeps up to eight files and 128 MiB. Reports expire after 30 days unopened,
 checked before a saved report is loaded. Restoring a report requires matching
 database identity, pricing, and history checkpoint; the usage change journal
-validates the report. A missing checkpoint rebuilds the report, including when
-128 or more revisions have passed since its last validation. Older journals
-without checkpoints can reuse reports in memory using their revision checks.
+validates the report.
 
 SQLite and native PostgreSQL track the inputs to Tools, Velocity, and Signals
 with separate change tokens. A score-only edit refreshes Signals while Tools
