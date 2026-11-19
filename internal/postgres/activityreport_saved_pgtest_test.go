@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
@@ -35,8 +36,8 @@ func TestPGActivityReportSavedPricingVariants(t *testing.T) {
 	}
 }
 
-func TestPGActivityReportSavedRestart(t *testing.T) {
-	for _, mode := range []string{"restart", "revision", "sweep", "unavailable", "memo-rejected"} {
+func TestPGActivityReportSaved(t *testing.T) {
+	for _, mode := range []string{"restart", "sweep", "unavailable", "memo-rejected"} {
 		t.Run(mode, func(t *testing.T) {
 			cache := t.TempDir()
 			t.Setenv("CACHE_DIRECTORY", cache)
@@ -72,7 +73,7 @@ func TestPGActivityReportSavedRestart(t *testing.T) {
 			if mode == "unavailable" || mode == "memo-rejected" {
 				return
 			}
-			if mode == "revision" {
+			if mode == "restart" {
 				pgKeptSession(t, local, "b", "project-b", "2026-07-14")
 				pgKeptPush(t, syncer, false)
 			}
@@ -95,9 +96,6 @@ func TestPGActivityReportSavedRestart(t *testing.T) {
 			restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
 			t.Cleanup(func() { require.NoError(t, restarted.Close()) })
 			got := pgKeptBuild(t, restarted, f, q, false)
-			if mode == "revision" {
-				requirePGKeptEqual(t, want, got)
-			}
 			if mode == "restart" {
 				requirePGKeptEqual(t, want, got)
 				pgKeptSession(t, local, "b", "project-a", "2026-06-14")
@@ -123,10 +121,13 @@ func TestPGActivityReportSavedIdentityRetry(t *testing.T) {
 	pgKeptPush(t, syncer, false)
 	restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
 	t.Cleanup(func() { require.NoError(t, restarted.Close()) })
-	restarted.pg = &activityIdentityError{storeExecutor: restarted.pg}
+	identityError := &activityIdentityError{storeExecutor: restarted.pg}
+	restarted.pg = identityError
 	updated := pgKeptBuild(t, restarted, f, q, true)
+	require.Equal(t, 1, identityError.queries)
 	require.Len(t, updated.Sessions, 2)
 	requirePGKeptEqual(t, updated, pgKeptBuild(t, restarted, f, q, false))
+	require.GreaterOrEqual(t, identityError.queries, 2)
 	again := openPGActivityInputStore(t, target, syncer.schema, directory)
 	t.Cleanup(func() { require.NoError(t, again.Close()) })
 	requirePGKeptEqual(t, updated, pgKeptBuild(t, again, f, q, false))
@@ -140,8 +141,19 @@ func TestPGActivityReportSavedMidnight(t *testing.T) {
 	pgKeptPush(t, syncer, false)
 	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, t.TempDir())
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	q := pgDayQuery(t, time.Now().UTC().Format("2006-01-02"), "UTC")
-	pgKeptBuild(t, store, db.AnalyticsFilter{Timezone: "UTC"}, q, true)
+	now := time.Now().UTC()
+	timezone := "UTC"
+	if now.Hour() < 12 {
+		timezone = "Etc/GMT-12"
+	}
+	end := now.Add(-time.Minute)
+	q, err := activity.ResolveQuery(activity.QueryInput{
+		Preset: "custom", From: end.Add(-time.Hour).Format(time.RFC3339), To: end.Format(time.RFC3339), Timezone: timezone,
+	}, now)
+	require.NoError(t, err)
+	require.False(t, q.Partial)
+	pgKeptBuild(t, store, db.AnalyticsFilter{Timezone: timezone}, q, true)
+	require.Len(t, store.runtimeState().activityKept.Snapshot(), 1)
 	files, err := filepath.Glob(filepath.Join(cache, "postgres-activity-reports", "*", "*.gob"))
 	require.NoError(t, err)
 	require.Empty(t, files)
