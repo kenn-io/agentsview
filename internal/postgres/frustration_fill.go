@@ -152,7 +152,13 @@ func (s *Store) StartFrustrationFill(ctx context.Context) func() {
 		if err != nil {
 			return err
 		}
-		current, changed, err := s.LoadUsageChanges(ctx, revision)
+		var current int64
+		var changed []string
+		if currentOID != oid {
+			current, err = s.UsageChangeRevision(ctx)
+		} else {
+			current, changed, err = s.LoadUsageChanges(ctx, revision)
+		}
 		if err != nil || current == 0 {
 			return err
 		}
