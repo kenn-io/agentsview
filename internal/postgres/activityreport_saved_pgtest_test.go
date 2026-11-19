@@ -144,3 +144,27 @@ func TestPGActivityReportSavedPricingVariants(t *testing.T) {
 	restartedOther.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 40_000_000}})
 	requirePGKeptEqual(t, priced, pgKeptBuild(t, restartedOther, f, q, false))
 }
+
+func TestPGActivityReportSavedSweepOnMemoHit(t *testing.T) {
+	cache := t.TempDir()
+	t.Setenv("CACHE_DIRECTORY", cache)
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptSession(t, local, "b", "project-a", "2026-06-15")
+	pgKeptPush(t, syncer, false)
+	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, t.TempDir())
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	f := db.AnalyticsFilter{Timezone: "UTC"}
+	pgKeptBuild(t, store, f, pgDayQuery(t, "2026-06-14", "UTC"), true)
+	files, err := filepath.Glob(filepath.Join(cache, "postgres-activity-reports", "*", "*.gob"))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	expired := files[0]
+	q := pgDayQuery(t, "2026-06-15", "UTC")
+	want := pgKeptBuild(t, store, f, q, true)
+	old := time.Now().Add(-31 * 24 * time.Hour)
+	require.NoError(t, os.Chtimes(expired, old, old))
+	requirePGKeptEqual(t, want, pgKeptBuild(t, store, f, q, false))
+	_, err = os.Stat(expired)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
