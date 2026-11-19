@@ -168,9 +168,6 @@ func (s *Store) keptActivityReport(ctx context.Context, selection, version strin
 		return kept.Report{}, through, false, nil
 	}
 	entry.revision = through
-	if entry.identity != "" {
-		s.saveActivityReport(selection, version, entry)
-	}
 	memo.Put(selection, version, []pgActivityKept{entry})
 	return entry.report, through, true, nil
 }

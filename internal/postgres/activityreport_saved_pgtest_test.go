@@ -97,16 +97,6 @@ func TestPGActivityReportSavedRestart(t *testing.T) {
 			got := pgKeptBuild(t, restarted, f, q, false)
 			if mode == "revision" {
 				requirePGKeptEqual(t, want, got)
-				slots := restarted.runtimeState().activityKept.Snapshot()
-				require.Len(t, slots, 1)
-				require.Len(t, slots[0].Rows, 1)
-				again := openPGActivityInputStore(t, target, syncer.schema, directory)
-				t.Cleanup(func() { require.NoError(t, again.Close()) })
-				entry, ok := again.loadActivityReport(slots[0].Slot, slots[0].Version, slots[0].Rows[0].identity)
-				require.True(t, ok)
-				_, changed, err := again.LoadUsageChanges(t.Context(), entry.revision)
-				require.NoError(t, err)
-				assert.Empty(t, changed)
 			}
 			if mode == "restart" {
 				requirePGKeptEqual(t, want, got)
