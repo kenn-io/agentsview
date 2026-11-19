@@ -25,7 +25,7 @@ case " $* " in
   *' up '*)
     if [ -n "${CHECK_LEASE:-}" ]; then
       [ "$2" = -p ] && [ "$3" = "$TEST_SERVICE_LEASE" ] || exit 1
-      python3 - "$HOME/.local/state/test-service-leases/$TEST_SERVICE_LEASE" <<'PROBE'
+      python3 - "$HOME/.local/state/test-service-leases/$TEST_SERVICE_LEASE" <<'PROBE' || exit 1
 import fcntl, sys
 with open(sys.argv[1]) as f:
     try: fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -36,13 +36,25 @@ PROBE
     fi
     if [ -n "${WAIT_UP:-}" ]; then touch "$WAIT_UP/started"; while [ ! -f "$WAIT_UP/release-up" ]; do sleep .1; done; fi ;;
   *' port '*) echo 127.0.0.1:49153 ;;
-  *' down '*) exit "${DOWN_STATUS:-0}" ;;
+  *' down '*)
+    if [ -n "${CHECK_CLEANUP:-}" ]; then
+      python3 - "$HOME/.local/state/test-service-leases/$TEST_SERVICE_LEASE" <<'PROBE' || exit 1
+import fcntl, sys
+with open(sys.argv[1]) as f:
+    try: fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError: sys.exit(0)
+sys.exit(1)
+PROBE
+      echo locked >> "$CHECK_CLEANUP"
+    fi
+    exit "${DOWN_STATUS:-0}" ;;
 esac
 DOCKER
 chmod +x "$tmp/bin/docker"
 ln -s "$python_bin" "$tmp/bin/python3"
 ln -s "$go_bin" "$tmp/bin/go"
 export PATH="$tmp/bin:$PATH" DOCKER_LOG="$tmp/docker.log"
+cleanup_cmd='docker compose -p "$TEST_SERVICE_LEASE" -f docker-compose.test.yml -f docker-compose.test-lease.yml down -v --remove-orphans'
 
 # Both services expose the lease label in the resolved Compose configuration.
 (cd "$root" && TEST_SERVICE_LEASE=agentsview-test-123 "$docker_bin" compose -p agentsview-test-123 -f docker-compose.test.yml -f docker-compose.test-lease.yml config --format json) | python3 -c '
@@ -75,7 +87,7 @@ func TestLease(t *testing.T) {
 }
 GO
 export READY="$tmp/ready" RELEASE="$tmp/release"
-(cd "$tmp/module" && exec "$root/scripts/test-lease.sh" agentsview go test ./...) >"$tmp/go.log" 2>&1 &
+(cd "$tmp/module" && exec "$root/scripts/test-lease.sh" agentsview "$cleanup_cmd" go test ./...) >"$tmp/go.log" 2>&1 &
 launcher=$!
 for _ in {1..600}; do [[ -f "$READY" ]] && break; sleep .1; done
 [[ -f "$READY" ]] || { cat "$tmp/go.log"; exit 1; }
@@ -100,28 +112,47 @@ touch "$RELEASE"
 for _ in {1..100}; do if probe; then break; fi; sleep .1; done
 probe
 
+# A descendant retaining the lease keeps its service alive after the command exits.
+: > "$DOCKER_LOG"
+export DESC_READY="$tmp/desc-ready" DESC_RELEASE="$tmp/desc-release" CHECK_LEASE="$tmp/desc-project"
+(cd "$root" && ./scripts/test-lease.sh agentsview "$cleanup_cmd" ./scripts/test-service-compose.sh postgres 5432 sh -c 'sh -c '\''touch "$DESC_READY"; while [ ! -f "$DESC_RELEASE" ]; do sleep 0.1; done'\'' & while [ ! -f "$DESC_READY" ]; do sleep 0.1; done')
+if grep -q ' down ' "$DOCKER_LOG"; then
+    touch "$DESC_RELEASE"
+    echo 'cleanup ran while a descendant held the lease' >&2
+    exit 1
+fi
+touch "$DESC_RELEASE"
+lease="$HOME/.local/state/test-service-leases/$(cat "$tmp/desc-project")"
+for _ in {1..100}; do if probe; then break; fi; sleep .1; done
+probe
+unset CHECK_LEASE
+
 # The compose runner preserves status, labels the project, and reports cleanup failure.
-export TEST_SERVICE_LEASE=agentsview-test-123 DOWN_STATUS=1
+export TEST_SERVICE_LEASE=agentsview-test-123 DOWN_STATUS=1 CHECK_CLEANUP="$tmp/cleanup-lock"
 set +e
-(cd "$root" && ./scripts/test-service-compose.sh postgres 5432 sh -c 'test "$TEST_PG_URL" = "postgres://agentsview_test:agentsview_test_password@127.0.0.1:49153/agentsview_test?sslmode=disable" || exit 8; exit 7') 2>"$tmp/error"
+(cd "$root" && ./scripts/test-lease.sh agentsview "$cleanup_cmd" ./scripts/test-service-compose.sh postgres 5432 sh -c 'test "$TEST_PG_URL" = "postgres://agentsview_test:agentsview_test_password@127.0.0.1:49153/agentsview_test?sslmode=disable" || exit 8; exit 7') 2>"$tmp/error"
 status=$?
 set -e
 [[ $status == 7 ]]
-grep -Fxq 'cleanup failed; retry from the repository root: docker compose -p agentsview-test-123 -f docker-compose.test.yml -f docker-compose.test-lease.yml down -v --remove-orphans' "$tmp/error"
-grep -qE -- '-p agentsview-test-123 .* up -d --wait postgres' "$DOCKER_LOG"
-grep -qE -- '-p agentsview-test-123 .* down -v --remove-orphans' "$DOCKER_LOG"
+grep -q 'cleanup failed; retry from the repository root:' "$tmp/error"
+grep -qE -- '-p agentsview-.* up -d --wait postgres' "$DOCKER_LOG"
+grep -qE -- '-p agentsview-.* down -v --remove-orphans' "$DOCKER_LOG"
 [[ -f "$lease" ]]
 
 # Cleanup failure fails a successful test.
 set +e
-(cd "$root" && ./scripts/test-service-compose.sh postgres 5432 true) 2>"$tmp/cleanup-error"
+(cd "$root" && ./scripts/test-lease.sh agentsview "$cleanup_cmd" ./scripts/test-service-compose.sh postgres 5432 true) 2>"$tmp/cleanup-error"
 status=$?
 set -e
 [[ $status == 1 ]]
-grep -Fxq 'cleanup failed; retry from the repository root: docker compose -p agentsview-test-123 -f docker-compose.test.yml -f docker-compose.test-lease.yml down -v --remove-orphans' "$tmp/cleanup-error"
+grep -q 'cleanup failed; retry from the repository root:' "$tmp/cleanup-error"
 
 # Dry runs do not start services; manual targets retain their project.
 export DOWN_STATUS=0
+: > "$DOCKER_LOG"
+: > "$CHECK_CLEANUP"
+(cd "$root" && ./scripts/test-lease.sh agentsview "$cleanup_cmd" true)
+[[ $(wc -l < "$CHECK_CLEANUP") == 1 ]]
 : > "$DOCKER_LOG"
 (cd "$root" && make -n test-postgres test-clickhouse bench-pg-usage) > "$tmp/make"
 [[ ! -s "$DOCKER_LOG" ]]
@@ -156,30 +187,31 @@ for target in test-postgres bench-pg-usage test-clickhouse; do
     grep -qE -- "-p $project .* down -v --remove-orphans" "$DOCKER_LOG"
 done
 
-# A signal while Compose is starting still runs cleanup.
-: > "$DOCKER_LOG"
-export DOWN_STATUS=0 WAIT_UP="$tmp"
-(cd "$root" && exec ./scripts/test-service-compose.sh postgres 5432 true) >"$tmp/signal.log" 2>&1 &
-launcher=$!
-for _ in {1..100}; do [[ -f "$tmp/started" ]] && break; sleep .1; done
-[[ -f "$tmp/started" ]]
-kill -TERM "$launcher"
-touch "$tmp/release-up"
-set +e
-wait "$launcher"
-status=$?
-set -e
-launcher=
-[[ $status == 143 ]]
-grep -qE -- '-p agentsview-test-123 .* down -v --remove-orphans' "$DOCKER_LOG"
+# Signals reach the command and cleanup runs after it releases the lease.
+for sig in HUP INT TERM; do
+    : > "$DOCKER_LOG"
+    ready="$tmp/signal-ready-$sig"
+    (cd "$root" && exec ./scripts/test-lease.sh agentsview "$cleanup_cmd" python3 -c 'import os, signal, sys, time; signal.signal(getattr(signal, "SIG" + sys.argv[1]), lambda *_: sys.exit(128 + getattr(signal, "SIG" + sys.argv[1]))); open(sys.argv[2], "w").close(); signal.pause()' "$sig" "$ready") >"$tmp/signal.log" 2>&1 &
+    launcher=$!
+    for _ in {1..100}; do [[ -f "$ready" ]] && break; sleep .1; done
+    [[ -f "$ready" ]]
+    kill -s "$sig" "$launcher"
+    set +e
+    wait "$launcher"
+    status=$?
+    set -e
+    launcher=
+    case "$sig" in HUP) expected=129 ;; INT) expected=130 ;; TERM) expected=143 ;; esac
+    [[ $status == "$expected" ]]
+    grep -qE -- '-p agentsview-.* down -v --remove-orphans' "$DOCKER_LOG"
+done
 
 # Two overlapping runs select different projects and clean up their own project.
-unset WAIT_UP
 export TEST_SERVICE_LEASE=agentsview-parent-123
 : > "$DOCKER_LOG"
-(cd "$root" && ./scripts/test-lease.sh agentsview ./scripts/test-service-compose.sh postgres 5432 sh -c 'sleep 1') &
+(cd "$root" && ./scripts/test-lease.sh agentsview "$cleanup_cmd" ./scripts/test-service-compose.sh postgres 5432 sh -c 'sleep 1') &
 first=$!
-(cd "$root" && ./scripts/test-lease.sh agentsview ./scripts/test-service-compose.sh postgres 5432 sh -c 'sleep 1') &
+(cd "$root" && ./scripts/test-lease.sh agentsview "$cleanup_cmd" ./scripts/test-service-compose.sh postgres 5432 sh -c 'sleep 1') &
 second=$!
 wait "$first"
 wait "$second"
