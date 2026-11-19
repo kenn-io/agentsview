@@ -133,7 +133,9 @@ func usagePricingRawSQL(scope usagePriceScope) (string, []any) {
 	return rawSQL + "\n\t\tUNION ALL\n" + cursorSQL, append(args, cursorArgs...)
 }
 
-// usagePricingCTE renders the usage CTEs over the raw usage rows of a scope.
+// usagePricingCTE renders the usage CTEs over the raw usage rows of a scope,
+// ending at usage_normalized. Pricing lists distinct price keys, and a price
+// key ignores deduplication, so the pass needs no deduplicated rows.
 func usagePricingCTE(scope usagePriceScope) (string, []any) {
 	rawSQL, args := usagePricingRawSQL(scope)
 	return chUsageCTEFromRawSource(db.UsageFilter{Timezone: "UTC"}, rawSQL, args,
