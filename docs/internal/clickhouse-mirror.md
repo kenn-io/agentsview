@@ -352,7 +352,9 @@ archive's `sync_metadata` keys and the local archive, and when nothing requires
 a full push and no session, deletion, project identity, worktree mapping, star,
 pin, or Cursor usage row changed since the last clean push, it runs only the
 vector phase and returns (`unchangedSinceLastPush`). A scoped vector phase with
-no changed sessions does nothing, and a usage-only archive skips it.
+no changed sessions does nothing, and a usage-only archive skips it. A
+generation-wide vector phase can write, so it first checks that a newer
+AgentsView has not written the mirror, as a push with changes does.
 
 The skipped push would also refresh machine labels, model and usage prices, and
 retained commit links, prune rows the archive no longer owns, check for session
@@ -379,7 +381,10 @@ keeps the state; its temporary `.tmp.` table is left out. A state that cannot be
 read counts as changed. A failed push, one that ends with session errors, or one
 whose state no longer matches the record, such as after a table was dropped
 during the push, forgets the record, so the next push runs the step. Session
-errors can come from tables that changed during the push.
+errors can come from tables that changed during the push. While leftover tables
+of an interrupted usage snapshot rebuild exist, the step records nothing, so
+each push runs it until one finishes the rebuild once those tables are an hour
+old.
 
 ## Rejected alternatives
 

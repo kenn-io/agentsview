@@ -236,9 +236,9 @@ The watcher performs one initial local sync plus ClickHouse push, then pushes
 again after session-directory changes settle for the debounce window. The
 interval acts as a floor: even if filesystem events are missed, the next
 interval push catches up. A push that starts from file changes and finds no new
-local changes skips its work. Model prices, machine labels, and removal of
-mirror sessions the archive no longer holds then wait for the next push that
-runs, at most one interval later.
+local changes skips session work; it can still bring search vectors up to date.
+Model prices, machine labels, and removal of mirror sessions the archive no
+longer holds then wait for the next push that runs, at most one interval later.
 
 Operational details:
 

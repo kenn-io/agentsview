@@ -8,7 +8,7 @@ import (
 )
 
 // ensuredSchemas maps each mirror database, keyed by schemaCacheKey, to the
-// schemaState it had after this process last ensured or pushed to it. The
+// schemaState it had after this process last ensured its schema. The
 // daemon builds a new Sync for every push request, so the Sync's own memo
 // never outlives one push there; this lets those Syncs skip the schema step
 // while nothing it depends on has changed since.
@@ -33,6 +33,11 @@ type schemaState struct {
 	server  string
 	started int64
 	probe   string
+	// rebuildPending reports leftover tables of an interrupted usage
+	// snapshot rebuild, which the schema step finishes once they are old
+	// enough. Their age is not part of the state, so a state with them is
+	// never recorded.
+	rebuildPending bool
 }
 
 // readSchemaState reads the mirror's schemaState. create_table_query
@@ -42,16 +47,19 @@ type schemaState struct {
 // does, keeps it. The refresh's temporary table is left out.
 func readSchemaState(ctx context.Context, conn *sql.DB) (schemaState, error) {
 	var state schemaState
-	var count, hash uint64
+	var count, hash, rebuilds uint64
 	if err := conn.QueryRowContext(ctx, `
 		SELECT count(), sum(cityHash64(name, create_table_query)),
-			toString(serverUUID()), toUnixTimestamp(now()) - uptime()
+			toString(serverUUID()), toUnixTimestamp(now()) - uptime(),
+			countIf(match(name, ?))
 		FROM system.tables
 		WHERE database = currentDatabase() AND NOT startsWith(name, '.tmp.')`,
-	).Scan(&count, &hash, &state.server, &state.started); err != nil {
+		usageSnapshotRebuildPattern,
+	).Scan(&count, &hash, &state.server, &state.started, &rebuilds); err != nil {
 		return schemaState{}, fmt.Errorf("reading clickhouse schema state: %w", err)
 	}
 	state.tables = fmt.Sprintf("%d:%x", count, hash)
+	state.rebuildPending = rebuilds > 0
 	stored, err := readMetadata(ctx, conn, chExchangeProbeKey)
 	if err != nil {
 		return schemaState{}, err
@@ -86,11 +94,17 @@ func schemaUnchangedSinceEnsured(ctx context.Context, conn *sql.DB, key string) 
 	return ok && current.sameAs(state)
 }
 
-// recordEnsuredSchema records the mirror's current state as ensured.
+// recordEnsuredSchema records the mirror's current state as ensured. While
+// an interrupted snapshot rebuild is pending it records nothing, so every
+// push runs the schema step until one of them finishes the rebuild.
 func recordEnsuredSchema(ctx context.Context, conn *sql.DB, key string) error {
 	state, err := readSchemaState(ctx, conn)
 	if err != nil {
 		return err
+	}
+	if state.rebuildPending {
+		ensuredSchemas.Delete(key)
+		return nil
 	}
 	ensuredSchemas.Store(key, state)
 	return nil

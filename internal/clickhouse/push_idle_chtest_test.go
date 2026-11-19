@@ -39,7 +39,8 @@ func mirrorQueriesSince(t *testing.T, conn *sql.DB, start time.Time, condition s
 var changeTriggered = storage.PushOptions{SkipIfUnchanged: true}
 
 // A change-triggered push with nothing new in the archive writes nothing to
-// the mirror and scans none of its sessions, whatever the archive keeps.
+// the mirror and reads its sessions only for the data version check, whatever
+// the archive keeps.
 func TestChangeTriggeredPushWritesNothingWhenArchiveUnchanged(t *testing.T) {
 	t.Parallel()
 	for _, content := range []config.ArchiveContent{config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
@@ -59,8 +60,9 @@ func TestChangeTriggeredPushWritesNothingWhenArchiveUnchanged(t *testing.T) {
 			assert.Zero(t, res.SessionsPushed)
 			assert.Zero(t, mirrorQueriesSince(t, conn, start, "query_kind != 'Select'"),
 				"an unchanged archive writes no rows, metadata, or schema")
-			assert.Zero(t, mirrorQueriesSince(t, conn, start, "has(tables, currentDatabase() || '.sessions')"),
-				"an unchanged archive reads no session rows")
+			assert.Zero(t, mirrorQueriesSince(t, conn, start,
+				"has(tables, currentDatabase() || '.sessions') AND query NOT ILIKE '%MAX(data_version)%'"),
+				"an unchanged archive reads no session rows beyond the data version check")
 		})
 	}
 }
@@ -236,4 +238,41 @@ func TestPushWithSessionErrorsForgetsPreparedSchema(t *testing.T) {
 		"database = currentDatabase() AND name = 'pinned_messages'"), "the dropped table is created again")
 	assert.Equal(t, 1, chtest.Count(t, conn, "sessions FINAL", "id = ?", fixtureAlphaID),
 		"the session that failed is published")
+}
+
+// A skipped push can still write vectors, so it refuses a mirror that a
+// newer AgentsView wrote, as a push with changes does.
+func TestSkippedPushRejectsNewerMirrorBeforeVectors(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	local, target := seedFixture(t)
+	s := newTestSync(t, local, target, storage.PusherOptions{})
+	_, err := s.Push(ctx, false, nil)
+	require.NoError(t, err)
+	conn := chtest.Open(t, target.URL, target.Database)
+	_, err = conn.ExecContext(ctx, `INSERT INTO sessions SELECT * REPLACE (
+		push_version + 1 AS push_version, toUInt32(?) AS data_version
+	) FROM sessions FINAL WHERE id = ?`, db.CurrentDataVersion()+1, fixtureAlphaID)
+	require.NoError(t, err)
+
+	_, err = s.PushWithOptions(ctx, changeTriggered, nil)
+	assert.True(t, db.IsDataVersionTooNew(err), "want a data version error, got %v", err)
+}
+
+// The schema step finishes an interrupted snapshot rebuild only once its
+// tables are old enough, so a state with them is never recorded and every
+// push runs the step until the rebuild is done.
+func TestSchemaWithPendingSnapshotRebuildIsNotRecorded(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	local, target := seedFixture(t)
+	s := newTestSync(t, local, target, storage.PusherOptions{})
+	conn := chtest.Open(t, target.URL, target.Database)
+	_, err := conn.ExecContext(ctx,
+		"CREATE TABLE "+usageSnapshotRebuildName(999)+" (x UInt8) ENGINE = MergeTree ORDER BY x")
+	require.NoError(t, err)
+
+	require.NoError(t, recordEnsuredSchema(ctx, conn, s.schemaKey))
+	_, ok := ensuredSchemas.Load(s.schemaKey)
+	assert.False(t, ok, "a pending rebuild leaves the schema unrecorded")
 }
