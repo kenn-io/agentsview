@@ -40,6 +40,16 @@ type activityIdentityError struct {
 	denied  bool
 }
 
+func denyActivityIdentity(t *testing.T, store *Store) *activityIdentityError {
+	t.Helper()
+	_, err := store.pg.ExecContext(t.Context(), `CREATE FUNCTION activity_identity_denied() RETURNS text LANGUAGE plpgsql AS $$
+BEGIN RAISE EXCEPTION 'permission denied' USING ERRCODE = '42501'; END $$`)
+	require.NoError(t, err)
+	denied := &activityIdentityError{storeExecutor: store.pg, denied: true}
+	store.pg = denied
+	return denied
+}
+
 func (c *activityIdentityError) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
 	if strings.Contains(query, "pg_control_system()") {
 		c.queries++
@@ -411,11 +421,7 @@ func TestPGActivityReportInputIdentity(t *testing.T) {
 				assert.GreaterOrEqual(t, failOnce.queries, 2)
 			case "denied":
 				defer first.Close()
-				_, err := first.pg.ExecContext(t.Context(), `CREATE FUNCTION activity_identity_denied() RETURNS text LANGUAGE plpgsql AS $$
-BEGIN RAISE EXCEPTION 'permission denied' USING ERRCODE = '42501'; END $$`)
-				require.NoError(t, err)
-				denied := &activityIdentityError{storeExecutor: first.pg, denied: true}
-				first.pg = denied
+				denied := denyActivityIdentity(t, first)
 				assert.Equal(t, 500, pgKeptBuild(t, first, f, query, true).Report.Totals.OutputTokens)
 				for range 2 {
 					query.EffectiveEnd = query.EffectiveEnd.Add(time.Nanosecond)
