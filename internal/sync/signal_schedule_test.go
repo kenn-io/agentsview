@@ -17,6 +17,7 @@ import (
 
 type harnessTimer struct {
 	f        func()
+	at       time.Time
 	fired    bool
 	canceled bool
 }
@@ -56,9 +57,9 @@ func newSchedulerHarness(interval time.Duration) *schedulerHarness {
 		defer h.mu.Unlock()
 		return h.clock
 	}
-	h.sched.afterFunc = func(_ time.Duration, f func()) func() bool {
+	h.sched.afterFunc = func(d time.Duration, f func()) func() bool {
 		h.mu.Lock()
-		ht := &harnessTimer{f: f}
+		ht := &harnessTimer{f: f, at: h.clock.Add(d)}
 		h.armed = append(h.armed, ht)
 		h.mu.Unlock()
 		return func() bool {
@@ -122,6 +123,32 @@ func (h *schedulerHarness) fireTimer(t *testing.T) {
 	pending.fired = true
 	h.mu.Unlock()
 	pending.f()
+}
+
+// fireNextTimer advances the clock to the earliest pending timer's
+// deadline and fires it, as a real timer would.
+func (h *schedulerHarness) fireNextTimer(t *testing.T) {
+	t.Helper()
+	h.mu.Lock()
+	var next *harnessTimer
+	for _, ht := range h.armed {
+		if !ht.fired && !ht.canceled && (next == nil || ht.at.Before(next.at)) {
+			next = ht
+		}
+	}
+	require.NotNil(t, next, "no timer armed")
+	next.fired = true
+	if next.at.After(h.clock) {
+		h.clock = next.at
+	}
+	h.mu.Unlock()
+	next.f()
+}
+
+func (h *schedulerHarness) elapsed(start time.Time) time.Duration {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.clock.Sub(start)
 }
 
 func TestSignalSchedulerFirstMarkRunsInline(t *testing.T) {
@@ -220,12 +247,66 @@ func TestSignalSchedulerReportsTimerFlushes(t *testing.T) {
 	require.Len(t, h.runsSnapshot(), 2)
 	assert.Equal(t, 1, reports, "a deferred recompute must be reported")
 
+	h.advance(10 * time.Second)
 	h.sched.markDirty(t.Context(), "s1")
 	h.advance(1 * time.Second)
 	h.sched.markDirty(t.Context(), "s1")
 	h.sched.flushAllInline(t.Context())
+	require.Len(t, h.runsSnapshot(), 4)
 	assert.Equal(t, 1, reports,
-		"an explicit flush belongs to a sync or push that reports its own changes")
+		"an explicit flush runs under the caller's lock and must not report there")
+	h.fireNextTimer(t)
+	assert.Equal(t, 2, reports,
+		"the next timer pass must report the explicit flush's recompute")
+	assert.Zero(t, h.armedCount())
+
+	h.sched.flushAllInline(t.Context())
+	assert.Zero(t, h.armedCount(), "a flush that recomputes nothing has nothing to report")
+}
+
+// Each deferred session recomputes when its own interval ends, not a
+// full interval after whichever timer happened to be pending.
+func TestSignalSchedulerFlushesEachSessionAtItsDeadline(t *testing.T) {
+	h := newSchedulerHarness(10 * time.Second)
+	start := h.sched.now()
+
+	h.sched.markDirty(t.Context(), "a") // recomputes at 0s
+	h.advance(5 * time.Second)
+	h.sched.markDirty(t.Context(), "b") // recomputes at 5s
+	h.advance(1 * time.Second)
+	h.sched.markDirty(t.Context(), "a") // deferred until 10s
+	h.advance(1 * time.Second)
+	h.sched.markDirty(t.Context(), "b") // deferred until 15s
+
+	h.fireNextTimer(t)
+	assert.Equal(t, []string{"a", "b", "a"}, h.runsSnapshot())
+	assert.Equal(t, 10*time.Second, h.elapsed(start))
+	h.fireNextTimer(t)
+	assert.Equal(t, []string{"a", "b", "a", "b"}, h.runsSnapshot())
+	assert.Equal(t, 15*time.Second, h.elapsed(start),
+		"b must recompute when its interval ends")
+	assert.Zero(t, h.armedCount())
+}
+
+func TestSignalSchedulerEarlierDeadlineMovesTimer(t *testing.T) {
+	h := newSchedulerHarness(10 * time.Second)
+	start := h.sched.now()
+
+	h.sched.markDirty(t.Context(), "b") // recomputes at 0s
+	h.advance(5 * time.Second)
+	h.sched.markDirty(t.Context(), "a") // recomputes at 5s
+	h.advance(1 * time.Second)
+	h.sched.markDirty(t.Context(), "a") // deferred until 15s
+	h.advance(1 * time.Second)
+	h.sched.markDirty(t.Context(), "b") // deferred until 10s
+	require.Equal(t, 1, h.armedCount(), "moving the timer must not stack timers")
+
+	h.fireNextTimer(t)
+	assert.Equal(t, []string{"b", "a", "b"}, h.runsSnapshot())
+	assert.Equal(t, 10*time.Second, h.elapsed(start))
+	h.fireNextTimer(t)
+	assert.Equal(t, []string{"b", "a", "b", "a"}, h.runsSnapshot())
+	assert.Equal(t, 15*time.Second, h.elapsed(start))
 }
 
 func TestSignalSchedulerSessionsIndependent(t *testing.T) {
@@ -744,6 +825,42 @@ func TestRunExclusiveFlushedFlushesSignalsBeforeWork(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, seen,
 		"work must observe flushed signal fields before pushing")
+}
+
+// A push that settles deferred signals reports nothing itself, so the
+// recomputed session must still reach live readers.
+func TestExplicitSignalFlushReportsToLiveReaders(t *testing.T) {
+	fx := newEngineFixture(t)
+	em := &fakeEmitter{}
+	fx.engineWithEmitter(t.Context(), em)
+	timers := make(chan func(), 4)
+	fx.engine.signalSched.afterFunc = func(_ time.Duration, f func()) func() bool {
+		timers <- f
+		return func() bool { return true } // no timer here fires on its own
+	}
+	path := fx.writeClaudeSession(t, "proj", "sig-flush-report.jsonl", "hello")
+	fx.engine.SyncAll(t.Context(), nil)
+	sid := fx.sessionIDFor(t, path)
+	fx.appendClaudeMessage(t, path, "key AKIA7QHWN2DKR4FYPLJM leaked")
+	fx.engine.SyncPaths([]string{path})
+	fx.appendClaudeMessage(t, path, "key AKIA9XKQV3ZTN8WMB2RC leaked")
+	fx.engine.SyncPaths([]string{path})
+	require.Equal(t, 1, secretLeakCount(t, fx, sid))
+	<-timers // the deferral's timer, which the flush replaces
+
+	reported := len(em.got())
+	require.NoError(t, fx.engine.RunExclusiveFlushed(t.Context(), func() error { return nil }))
+	require.Equal(t, 2, secretLeakCount(t, fx, sid))
+	assert.Len(t, em.got(), reported, "nothing reports while the push holds the lock")
+
+	var report func()
+	select {
+	case report = <-timers:
+	default:
+		require.Fail(t, "the flush should arm a timer to report its recompute")
+	}
+	report()
+	assert.Equal(t, []string{"sessions"}, em.got()[reported:])
 }
 
 func TestSettleForPushFlushesSignals(t *testing.T) {

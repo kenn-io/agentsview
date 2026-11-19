@@ -24,9 +24,9 @@ const signalRecomputeInterval = 10 * time.Second
 // signalScheduler coalesces per-session recompute requests. The
 // first request for a session that has not recomputed within the
 // interval runs inline immediately (leading edge), further requests
-// within the interval are deferred, and a one-shot timer flushes
-// deferred sessions once their interval elapses. No timer is armed
-// while nothing is dirty, so an idle scheduler costs nothing.
+// within the interval are deferred, and a one-shot timer flushes each
+// deferred session when its own interval ends. No timer is armed
+// while nothing is pending, so an idle scheduler costs nothing.
 type signalScheduler struct {
 	interval time.Duration
 	// run recomputes inline from markDirty, whose callers already
@@ -38,9 +38,10 @@ type signalScheduler struct {
 	// see an empty map and push stale rows.
 	run       func(ctx context.Context, sessionID string)
 	exclusive func(flush func())
-	// flushed, when set, runs after a timer pass recomputed at least
-	// one session, outside exclusive. Inline runs and explicit flushes
-	// happen inside a sync or push that reports its own changes.
+	// flushed, when set, runs outside exclusive after a timer pass
+	// that recomputed a session or followed an explicit flush that
+	// did. Inline runs happen inside a sync that reports its own
+	// changes; an explicit flush may precede work that reports none.
 	flushed func()
 
 	// now and afterFunc are injectable for deterministic tests.
@@ -54,10 +55,14 @@ type signalScheduler struct {
 	// on the timer goroutine before its owner closes the DB.
 	inflight sync.WaitGroup
 
-	mu          sync.Mutex
-	last        map[string]time.Time // sessionID -> last recompute
-	dirty       map[string]struct{}  // sessions with a deferred recompute
+	mu    sync.Mutex
+	last  map[string]time.Time // sessionID -> last recompute
+	dirty map[string]struct{}  // sessions with a deferred recompute
+	// unreported records an explicit flush that recomputed sessions
+	// but has not yet been reported through flushed.
+	unreported  bool
 	timerArmed  bool
+	timerAt     time.Time
 	timerCancel func() bool
 	stopped     bool
 }
@@ -118,7 +123,11 @@ func (s *signalScheduler) tick() {
 	ran := 0
 	// Timer passes have no caller; the scheduler's stop waits for them.
 	s.exclusive(func() { ran = s.flushDue(context.Background(), false) })
-	if ran > 0 && s.flushed != nil {
+	s.mu.Lock()
+	report := ran > 0 || s.unreported
+	s.unreported = false
+	s.mu.Unlock()
+	if report && s.flushed != nil {
 		s.flushed()
 	}
 }
@@ -133,9 +142,17 @@ func (s *signalScheduler) flushAll() {
 // flushAllInline immediately recomputes every deferred session
 // without entering exclusive. For callers already holding the
 // engine's sync lock (the context markDirty's inline runs execute
-// under), where exclusive would deadlock.
+// under), where exclusive would deadlock. Recomputed sessions are
+// reported by a timer pass, which runs once the caller releases
+// the lock, because the caller's own work may report nothing.
 func (s *signalScheduler) flushAllInline(ctx context.Context) {
-	s.flushDue(ctx, true)
+	if s.flushDue(ctx, true) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.unreported = true
+	s.armLocked()
 }
 
 func (s *signalScheduler) flushDue(ctx context.Context, all bool) int {
@@ -197,19 +214,46 @@ func (s *signalScheduler) takeDue(all bool) []string {
 	return due
 }
 
-// armLocked schedules the one-shot flush timer if it isn't already
-// pending. Caller must hold s.mu.
+// armLocked schedules the one-shot flush timer for the earliest
+// pending deadline: now for an unreported flush, otherwise the end of
+// the soonest dirty session's interval. A pending timer is moved only
+// when the new deadline is earlier. Caller must hold s.mu.
 func (s *signalScheduler) armLocked() {
-	if s.timerArmed || s.stopped {
+	if s.stopped || (len(s.dirty) == 0 && !s.unreported) {
 		return
 	}
+	now := s.now()
+	at := now
+	if !s.unreported {
+		first := true
+		for id := range s.dirty {
+			if due := s.last[id].Add(s.interval); first || due.Before(at) {
+				at, first = due, false
+			}
+		}
+	}
+	if s.timerArmed {
+		if !at.Before(s.timerAt) {
+			return
+		}
+		// A failed cancel means the callback is already starting; it
+		// re-arms for whatever is still pending when it finishes.
+		if s.timerCancel == nil || !s.timerCancel() {
+			return
+		}
+		// Add before Done so stop never sees the count touch zero.
+		s.inflight.Add(1)
+		s.inflight.Done()
+	} else {
+		s.inflight.Add(1)
+	}
 	s.timerArmed = true
-	s.inflight.Add(1)
-	s.timerCancel = s.afterFunc(s.interval, s.onTimer)
+	s.timerAt = at
+	s.timerCancel = s.afterFunc(max(at.Sub(now), 0), s.onTimer)
 }
 
 // onTimer is the flush-timer callback: flush what is due, then
-// re-arm while sessions remain dirty. The deferred Done runs after
+// re-arm while anything remains pending. The deferred Done runs after
 // any re-arm's Add, so the inflight count never dips to zero while
 // a follow-up timer is pending.
 func (s *signalScheduler) onTimer() {
@@ -222,8 +266,6 @@ func (s *signalScheduler) onTimer() {
 	s.tick()
 
 	s.mu.Lock()
-	if len(s.dirty) > 0 {
-		s.armLocked()
-	}
+	s.armLocked()
 	s.mu.Unlock()
 }
