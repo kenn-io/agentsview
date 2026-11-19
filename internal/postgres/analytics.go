@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -2851,6 +2852,24 @@ func (s *Store) signalMessages(
 	return out, err
 }
 
+// reuseFrustrationMarkers fills rows from the memo and returns the IDs it missed.
+func reuseFrustrationMarkers(
+	memo *db.FrustrationMarkerMemo,
+	generation uint64,
+	rows []db.SignalRow,
+	idx map[string]int,
+	versions map[string]string,
+	ids []string,
+) []string {
+	return slices.DeleteFunc(ids, func(id string) bool {
+		count, hit := memo.Lookup(generation, id, versions[id])
+		if hit {
+			rows[idx[id]].FrustrationMarkerCount = count
+		}
+		return hit
+	})
+}
+
 func (s *Store) populateFrustrationMarkers(
 	ctx context.Context,
 	rows []db.SignalRow,
@@ -2865,14 +2884,13 @@ func (s *Store) populateFrustrationMarkers(
 	idx := make(map[string]int, len(rows))
 	ids := make([]string, 0, len(rows))
 	for i := range rows {
-		if count, hit := memo.Lookup(generation, rows[i].ID, versions[rows[i].ID]); hit {
-			rows[i].FrustrationMarkerCount = count
-			continue
-		}
 		idx[rows[i].ID] = i
 		ids = append(ids, rows[i].ID)
 	}
-	if len(ids) == 0 {
+	reuse := func(ids []string) []string {
+		return reuseFrustrationMarkers(memo, generation, rows, idx, versions, ids)
+	}
+	if ids = reuse(ids); len(ids) == 0 {
 		return nil
 	}
 	if s.DB() != nil && !s.hostedRelations {
@@ -2893,8 +2911,8 @@ func (s *Store) populateFrustrationMarkers(
 			return remaining
 		}
 		ids = load(ids)
-		if len(ids) > 0 && s.joinFrustrationFill(ctx, ids) {
-			ids = load(ids)
+		if len(ids) > 0 && s.joinFrustrationFill(ctx, ids, generation) {
+			ids = load(reuse(ids))
 		}
 		if len(ids) == 0 {
 			return nil

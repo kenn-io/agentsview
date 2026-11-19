@@ -14,9 +14,13 @@ import (
 var frustrationFillChunkTimeout = 30 * time.Second
 
 type frustrationChunk struct {
-	ids      []string
-	done     chan struct{}
-	complete bool
+	ids       []string
+	scanned   chan struct{}
+	done      chan struct{}
+	isScanned bool
+	complete  bool
+	counts    map[string]int
+	versions  map[string]string
 }
 
 type frustrationFillState struct {
@@ -25,7 +29,34 @@ type frustrationFillState struct {
 	chunks  []*frustrationChunk
 }
 
-func (s *Store) joinFrustrationFill(ctx context.Context, ids []string) bool {
+// markScanned wakes requests waiting for the chunk's counts. Callers hold mu.
+func (c *frustrationChunk) markScanned() {
+	if !c.isScanned {
+		c.isScanned = true
+		close(c.scanned)
+	}
+}
+
+// release drops a finished chunk's session IDs and results and wakes waiters.
+func (state *frustrationFillState) release(chunk *frustrationChunk) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if chunk.complete {
+		return
+	}
+	for _, id := range chunk.ids {
+		delete(state.pending, id)
+	}
+	chunk.ids, chunk.counts, chunk.versions = nil, nil, nil
+	chunk.complete = true
+	chunk.markScanned()
+	close(chunk.done)
+}
+
+// joinFrustrationFill waits for the active chunks that hold ids. A request
+// that covers a whole chunk waits for its persistence. A filtered request
+// waits only for the scan and reuses the result through the memo.
+func (s *Store) joinFrustrationFill(ctx context.Context, ids []string, generation uint64) bool {
 	state := &s.runtimeState().frustrationFill
 	state.mu.Lock()
 	wanted := make(map[*frustrationChunk]int)
@@ -37,41 +68,75 @@ func (s *Store) joinFrustrationFill(ctx context.Context, ids []string) bool {
 		}
 		wanted[chunk]++
 	}
-	for chunk, count := range wanted {
-		if count != len(chunk.ids) {
-			state.mu.Unlock()
-			return false
-		}
-	}
-	channels := make([]<-chan struct{}, 0, len(wanted))
+	var waits []*frustrationChunk
+	filtered := make(map[*frustrationChunk]bool)
 	for _, chunk := range state.chunks {
 		if chunk.complete {
 			continue
 		}
-		if _, ok := wanted[chunk]; !ok {
+		if wanted[chunk] == 0 {
 			state.mu.Unlock()
 			return false
 		}
-		channels = append(channels, chunk.done)
-		if len(channels) == len(wanted) {
+		filtered[chunk] = wanted[chunk] < len(chunk.ids)
+		waits = append(waits, chunk)
+		if len(waits) == len(wanted) {
 			break
 		}
 	}
 	state.mu.Unlock()
-	waitCtx := ctx
-	if deadline, ok := ctx.Deadline(); ok {
-		var cancel context.CancelFunc
-		waitCtx, cancel = context.WithTimeout(ctx, time.Until(deadline)/2)
-		defer cancel()
-	}
-	for _, done := range channels {
+	waitCtx, cancel := halfDeadline(ctx)
+	defer cancel()
+	for _, chunk := range waits {
+		wait := chunk.done
+		if filtered[chunk] {
+			wait = chunk.scanned
+		}
 		select {
 		case <-waitCtx.Done():
 			return true
-		case <-done:
+		case <-wait:
+		}
+		if filtered[chunk] {
+			s.memoizeFrustrationChunk(chunk, generation)
 		}
 	}
 	return true
+}
+
+// halfDeadline leaves the rest of a request's time for its own scan.
+func halfDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
+	if deadline, ok := ctx.Deadline(); ok {
+		return context.WithTimeout(ctx, time.Until(deadline)/2)
+	}
+	return ctx, func() {}
+}
+
+// memoizeFrustrationChunk lets a filtered request reuse a chunk's scan.
+func (s *Store) memoizeFrustrationChunk(chunk *frustrationChunk, generation uint64) {
+	state := &s.runtimeState().frustrationFill
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	for id, version := range chunk.versions {
+		s.runtimeState().frustrationMarkers.Store(generation, id, version, chunk.counts[id])
+	}
+}
+
+// fillFrustrationChunk publishes a chunk's scan for filtered requests, then
+// persists it.
+func (s *Store) fillFrustrationChunk(ctx context.Context, chunk *frustrationChunk, column string) error {
+	state := &s.runtimeState().frustrationFill
+	counts, versions, err := s.scanFrustrationCounts(ctx, chunk.ids, column)
+	state.mu.Lock()
+	if err == nil {
+		chunk.counts, chunk.versions = counts, versions
+	}
+	chunk.markScanned()
+	state.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	return s.storeFrustrationCounts(ctx, versions, counts, column)
 }
 
 func (s *Store) fillFrustrationCounts(ctx context.Context, ids []string, column string) error {
@@ -82,7 +147,7 @@ func (s *Store) fillFrustrationCounts(ctx context.Context, ids []string, column 
 	}
 	state.chunks = nil
 	for ids := range slices.Chunk(ids, maxPGVars) {
-		chunk := &frustrationChunk{ids: ids, done: make(chan struct{})}
+		chunk := &frustrationChunk{ids: ids, scanned: make(chan struct{}), done: make(chan struct{})}
 		state.chunks = append(state.chunks, chunk)
 		for _, id := range ids {
 			state.pending[id] = chunk
@@ -90,32 +155,17 @@ func (s *Store) fillFrustrationCounts(ctx context.Context, ids []string, column 
 	}
 	chunks := state.chunks
 	state.mu.Unlock()
-	release := func(chunk *frustrationChunk) {
-		state.mu.Lock()
-		defer state.mu.Unlock()
-		if chunk.complete {
-			return
-		}
-		for _, id := range chunk.ids {
-			delete(state.pending, id)
-		}
-		chunk.complete = true
-		close(chunk.done)
-	}
 	defer func() {
 		for _, chunk := range chunks {
-			release(chunk)
+			state.release(chunk)
 		}
 	}()
 	var timedOut bool
 	for _, chunk := range chunks {
 		chunkCtx, cancel := context.WithTimeout(ctx, frustrationFillChunkTimeout)
-		counts, versions, err := s.scanFrustrationCounts(chunkCtx, chunk.ids, column)
-		if err == nil {
-			err = s.storeFrustrationCounts(chunkCtx, versions, counts, column)
-		}
+		err := s.fillFrustrationChunk(chunkCtx, chunk, column)
 		cancel()
-		release(chunk)
+		state.release(chunk)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()

@@ -282,6 +282,73 @@ func TestFrustrationFillLaunchAndPush(t *testing.T) {
 	require.Zero(t, result.QualityHealth.Totals.FrustrationMarkerCount)
 }
 
+func TestFrustrationFillJournalAccessRecovery(t *testing.T) {
+	f := newFrustrationFixture(t, "frustration_journal_access")
+	roleURL := newUsageJournalRole(t, f.syncer, `GRANT SELECT ON ALL TABLES IN SCHEMA `+f.schema+` TO ROLE; GRANT INSERT, UPDATE ON session_frustration_counts TO ROLE; REVOKE SELECT ON usage_session_changes FROM ROLE`)
+	store, err := NewStore(f.ctx, roleURL, f.schema, true)
+	require.NoError(t, err)
+	defer store.Close()
+	var role string
+	require.NoError(t, store.DB().QueryRowContext(f.ctx, `SELECT current_user`).Scan(&role))
+	stop := store.StartFrustrationFill(f.ctx)
+	defer stop()
+	// Let a poll run while metadata is readable but the journal is not.
+	time.Sleep(6 * time.Second)
+	var count int
+	require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT count(*) FROM session_frustration_counts`).Scan(&count))
+	assert.Zero(t, count, "fill ran without access to the change journal")
+	_, err = f.pg.ExecContext(f.ctx, `GRANT SELECT ON usage_session_changes TO `+role)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		return f.pg.QueryRowContext(f.ctx, `SELECT count(*) FROM session_frustration_counts WHERE marker_count=1`).Scan(&count) == nil && count == 2
+	}, 20*time.Second, 100*time.Millisecond)
+}
+
+func TestFrustrationFillPartialChunkUsesScan(t *testing.T) {
+	f := newFrustrationFixture(t, "frustration_partial_scan")
+	store := f.open(t)
+	_, versions, err := store.signalRows(f.ctx, db.AnalyticsFilter{}, f.versionColumn)
+	require.NoError(t, err)
+	_, err = f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id, session_version, rules_version, marker_count) VALUES ('two', 'stale', 0, 0)`)
+	require.NoError(t, err)
+	tx, err := f.pg.BeginTx(f.ctx, nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+	_, err = tx.ExecContext(f.ctx, `SELECT 1 FROM session_frustration_counts WHERE session_id='two' FOR UPDATE`)
+	require.NoError(t, err)
+	fillCtx, cancel := context.WithCancel(f.ctx)
+	fillDone := make(chan error, 1)
+	go func() { fillDone <- store.fillFrustrationCounts(fillCtx, []string{"one", "two"}, f.versionColumn) }()
+	defer func() { cancel(); <-fillDone }()
+	require.Eventually(t, func() bool {
+		var blocked bool
+		err := f.pg.QueryRowContext(f.ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%session_frustration_counts%')`).Scan(&blocked)
+		return err == nil && blocked
+	}, 10*time.Second, 10*time.Millisecond)
+	roleURL := newUsageJournalRole(t, f.syncer, `GRANT SELECT ON sessions, session_frustration_counts TO ROLE`)
+	reader, err := NewStore(f.ctx, roleURL, f.schema, true)
+	require.NoError(t, err)
+	defer reader.Close()
+	reader.runtime = store.runtimeState()
+	rows := []db.SignalRow{{ID: "one"}}
+	ctx, stop := context.WithTimeout(f.ctx, 3*time.Second)
+	defer stop()
+	require.NoError(t, reader.populateFrustrationMarkers(ctx, rows, versions, f.versionColumn), "a second prompt scan lacks messages access")
+	require.Equal(t, 1, rows[0].FrustrationMarkerCount)
+}
+
+func TestFrustrationFillReleasesCompletedChunks(t *testing.T) {
+	f := newFrustrationFixture(t, "frustration_release_chunks")
+	store := f.open(t)
+	require.NoError(t, store.fillFrustrationCounts(f.ctx, []string{"one", "two"}, f.versionColumn))
+	state := &store.runtimeState().frustrationFill
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	for _, chunk := range state.chunks {
+		assert.Empty(t, chunk.ids, "completed fill retains session IDs")
+	}
+}
+
 func TestFrustrationFillJoinsCoveredRequests(t *testing.T) {
 	t.Parallel()
 	f := newFrustrationFixture(t, "agentsview")
