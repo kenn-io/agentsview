@@ -25,8 +25,6 @@ describe("getting started", () => {
     progress.markRead("one", "revision", 1);
     const store = new GettingStartedStore(progress);
     expect(store.visible).toBe(false);
-    store.complete("session");
-    expect(new GettingStartedStore(new ReadProgressStore()).visible).toBe(false);
   });
 
   it("preserves another tab's progress and unknown members on write", () => {

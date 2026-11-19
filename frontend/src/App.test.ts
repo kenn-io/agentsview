@@ -1989,7 +1989,7 @@ describe("App telemetry", () => {
     sessions.sessions = [];
   });
 
-  it("reports session_viewed and completes the session checklist once the session hydrates", async () => {
+  it("reports one session_viewed per visit and completes the checklist when the session hydrates", async () => {
     const { gettingStarted } = await import("./lib/stores/gettingStarted.svelte.js");
     gettingStarted.done = new Set();
     setup();

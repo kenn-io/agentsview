@@ -574,7 +574,7 @@ describe("CommandPalette", () => {
     unmount(component);
   });
 
-  it("filters recent sessions locally for a single CJK character", async () => {
+  it("filters CJK queries and completes the checklist for nonblank search", async () => {
     mockSessions.sessions = [
       { ...makeSession("s1", "codex"), first_message: "消融实验的结果" },
       { ...makeSession("s2", "codex"), first_message: "unrelated" },
@@ -582,6 +582,8 @@ describe("CommandPalette", () => {
     const component = mount(CommandPalette, { target: document.body });
     await tick();
 
+    await enterSearchQuery("   ");
+    expect(gettingStarted.done.has("search")).toBe(false);
     await enterSearchQuery("消");
 
     const items = document.querySelectorAll(".palette-item");

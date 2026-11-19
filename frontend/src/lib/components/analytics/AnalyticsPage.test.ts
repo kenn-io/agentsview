@@ -1013,6 +1013,8 @@ describe("AnalyticsPage refresh behavior", () => {
 
 describe("getting started checklist", () => {
   it("shows the checklist and hides it after dismissal", async () => {
+    const { gettingStarted } = await import("../../stores/gettingStarted.svelte.js");
+    gettingStarted.done = new Set();
     vi.stubGlobal(
       "ResizeObserver",
       class {

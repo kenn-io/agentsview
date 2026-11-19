@@ -646,7 +646,7 @@ describe("UsagePage refresh behavior", () => {
     expect(usage.excludedProjects).toBe("");
   });
 
-  it("hydrates token mode from the canonical URL before fetching", async () => {
+  it("hydrates token mode from the URL and completes the checklist after the summary loads", async () => {
     vi.stubGlobal(
       "ResizeObserver",
       class {
@@ -659,12 +659,14 @@ describe("UsagePage refresh behavior", () => {
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
     router.route = "usage";
     router.params = { view: "tokens", project: "demo" };
-    usage.summary = usageSummaryWithUnsupported();
 
     component = mount(UsagePage, { target: document.body });
     await flushEffects();
 
     expect(usage.mode).toBe("token");
+    expect(gettingStarted.done.has("usage")).toBe(false);
+    usage.summary = usageSummaryWithUnsupported();
+    await flushEffects();
     expect(gettingStarted.done.has("usage")).toBe(true);
     expect(
       document

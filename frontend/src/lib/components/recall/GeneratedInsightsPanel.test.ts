@@ -193,7 +193,7 @@ describe("GeneratedInsightsPanel", () => {
     }
   });
 
-  it("completes the checklist after loading an empty archive", async () => {
+  it("completes the checklist for an empty archive or a selected report", async () => {
     state.store.items = [];
     state.store.selectedId = null;
     state.store.selectedItem = undefined;
@@ -202,13 +202,21 @@ describe("GeneratedInsightsPanel", () => {
     await mocks.load.mock.results[0]!.value;
 
     expect(gettingStarted.done.has("insights")).toBe(true);
+    await unmount(component);
+    component = undefined;
+    localStorage.removeItem("agentsview-getting-started");
+    gettingStarted.done = new Set();
+    state.store.items = [savedInsight];
+    state.store.selectedId = 42;
+    state.store.selectedItem = savedInsight;
+    component = mount(GeneratedInsightsPanel, { target: document.body });
+    await tick();
+    expect(gettingStarted.done.has("insights")).toBe(true);
   });
 
   it("shows every input that scopes a generated report", async () => {
     component = mount(GeneratedInsightsPanel, { target: document.body });
     await tick();
-    expect(gettingStarted.done.has("insights")).toBe(true);
-
     const text = document.body.textContent ?? "";
     for (const label of [
       "Date range",
