@@ -57,31 +57,3 @@ test("switching top-level tabs aborts the hidden activity read", async ({ page }
     held.release();
   }
 });
-
-test("changing grouping aborts the obsolete trends read", async ({ page }) => {
-  const held = await holdFirstRoute(page, "**/api/v1/trends/terms*");
-  try {
-    await page.goto("/trends");
-    const firstRequest = await held.started;
-    const failed = page.waitForEvent("requestfailed", (request) => request === firstRequest);
-    const replacementStarted = page.waitForRequest((request) => {
-      const url = new URL(request.url());
-      return (
-        url.pathname.endsWith("/api/v1/trends/terms") &&
-        url.searchParams.get("granularity") === "month"
-      );
-    });
-
-    await page
-      .getByRole("radiogroup", { name: "Group by" })
-      .getByRole("radio", { name: "Month" })
-      .click();
-
-    await replacementStarted;
-    expect((await failed).failure()).not.toBeNull();
-    held.release();
-    await expect(page.locator(".chart-panel")).toHaveAttribute("aria-busy", "false");
-  } finally {
-    held.release();
-  }
-});

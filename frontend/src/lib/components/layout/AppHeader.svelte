@@ -64,7 +64,6 @@
     { id: "sessions", label: m.nav_sessions() },
     { id: "usage", label: m.nav_usage() },
     { id: "activity", label: m.nav_activity() },
-    { id: "trends", label: m.nav_trends() },
     { id: "recall", label: m.nav_recall() },
     { id: "pinned", label: m.nav_pinned() },
     { id: "quality", label: m.nav_quality() },

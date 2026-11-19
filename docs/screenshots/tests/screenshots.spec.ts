@@ -2325,28 +2325,6 @@ test.describe('Session Vital Signs', () => {
   });
 });
 
-// ── Trends ──────────────────────────────────────────────
-
-test.describe('Trends', () => {
-  test.beforeEach(async ({ page }) => {
-    await page.setViewportSize(FULL);
-    await waitForApp(page);
-  });
-
-  test('trends page', async ({ page }) => {
-    await page.goto('/trends');
-    await page.waitForSelector('.trends-page', { timeout: 10_000 });
-    // The default-terms request resolves async; wait for both the
-    // chart svg lines and the term-table rows so the page is fully
-    // populated before we snap.
-    await page.waitForSelector('.term-table-wrap tbody tr', {
-      timeout: 15_000,
-    });
-    await page.waitForTimeout(1500);
-    await snap(page, 'trends');
-  });
-});
-
 // ── Session intelligence ────────────────────────────────
 
 test.describe('Session intelligence', () => {

@@ -102,6 +102,12 @@ actions:
       x-go-type-import:
         path: go.kenn.io/agentsview/internal/db
         name: db
+  - target: $.components.schemas.DbTrendsTermsResponse
+    update:
+      x-go-type: db.TrendsTermsResponse
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/db
+        name: db
   - target: $.components.schemas.ServiceContentSearchResult
     update:
       x-go-type: service.ContentSearchResult

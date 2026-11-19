@@ -65,7 +65,7 @@ created, the reader uses temporary storage. The cache is disposable and contains
 no source sessions. Plan usage and per-session details retain their existing
 read paths.
 
-Trends keeps per-session counts under `$CACHE_DIRECTORY/postgres-trends`, or
+Term trends keep per-session counts under `$CACHE_DIRECTORY/postgres-trends`, or
 `agentsview/postgres-trends` in the user cache directory, and after a push
 recounts only changed sessions. Hosted and borrowed transaction readers read
 directly. The files are disposable.

@@ -48,9 +48,9 @@ for images stored outside SQLite, `config.toml` for settings, and
 `telemetry-install-id` for installation identity. Keep the database and assets
 together when restoring or moving the archive.
 
-Trends keeps per-session counts under `$CACHE_DIRECTORY/sqlite-trends`, or
+Term trends keep per-session counts under `$CACHE_DIRECTORY/sqlite-trends`, or
 `agentsview/sqlite-trends` in the user cache directory, up to 256 MiB per
-archive. They are safe to delete; the next Trends visit counts messages again.
+archive. They are safe to delete; the next term-trends request counts messages again.
 Search pages can also contain session snippets. They are stored in
 `sqlite-trends`, `postgres-trends`, or `clickhouse-usage` under
 `$CACHE_DIRECTORY`, or under `agentsview/` in the user cache directory.

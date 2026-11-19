@@ -354,6 +354,9 @@ The latest release is
 - If you turned on built-in search by meaning in another app that uses Kit,
   AgentsView now turns it on too. Set `[vector] enabled = false` to keep it off.
   See [Turned on in another app](/docs/semantic-search/#turned-on-in-another-app).
+- The **Trends** page is no longer in the web UI, and old `/trends` links open
+  Sessions. Agent harnesses that read term counts can call the new
+  `get_term_trends` MCP tool, and `GET /api/v1/trends/terms` still works.
 - Chrome Sync users must rerun `agentsview source chrome setup` and reload the
   extension at `chrome://extensions` once. The extension and AgentsView now
   speak a new version of their protocol, and the extension asks for access to
@@ -3998,7 +4001,7 @@ ______________________________________________________________________
 
 **New features**
 
-- Add a [Trends page](/docs/usage/#trends) for ad-hoc term-frequency line charts
+- Add a Trends page for ad-hoc term-frequency line charts
     over your session history. Plot up to 12 terms — each with optional
     pipe-separated variants like `cat|cats` — at day, week, or month
     granularity, and optionally normalize counts by message volume. Backed by

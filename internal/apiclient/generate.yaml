@@ -29,6 +29,7 @@ filter:
       - get-api-v1-analytics-tools
       - get-api-v1-analytics-signals
       - get-api-v1-analytics-signal-sessions
+      - get-api-v1-trends-terms
       - post-api-v1-sessions-sync
       - get-api-v1-sessions-id-watch
       - get-api-v1-session-stats

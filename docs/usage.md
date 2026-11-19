@@ -109,7 +109,7 @@ current day. Cross-page linking is disabled by default because applying a broad
 range automatically can make some pages run substantially more expensive
 queries.
 
-To carry selections among Sessions, Usage, Activity, Trends, and Quality, enable
+To carry selections among Sessions, Usage, Activity, and Quality, enable
 **Settings > Date ranges > Link date ranges across pages**. An explicit dated
 URL always controls the target page. With linking enabled, that selection can
 then carry to date-aware pages opened later at their bare URLs.
@@ -324,61 +324,6 @@ scope, template, generator, and optional focus.
 
 See [Recall](/docs/recall/#current-surface) for generation, archive, and privacy
 details.
-
-______________________________________________________________________
-
-## Trends
-
-Open **More → Trends** in the header navigation for ad-hoc term-frequency line
-charts over your session history. Type one term per line into the textarea, hit
-**Refresh**, and AgentsView counts how often each term appears in user and
-assistant message content over the selected window.
-
-![Trends page](/docs/assets/generated/screenshots/trends.png)
-
-Use Trends to track topics or technologies as your work shifts over time — for
-example, plotting `rust`, `typescript`, and `python` to see which language
-you've been spending the most time in this quarter, or watching whether mentions
-of a problem keyword like `flaky` or `timeout` are trending up or down.
-
-The toolbar controls the window and resolution:
-
-- **From / To** — date inputs at the top of the page; defaults cover the last
-  year.
-- **Granularity** — `day`, `week`, or `month`. Pick coarser buckets for longer
-  windows.
-- **Normalize by number of messages** — toggle to chart per-term rate instead of
-  raw counts, so a busy week doesn't drown out a quiet one.
-
-Each line in the **Terms** textarea is a separate term, capped at 12 terms per
-chart. Within a line, pipe-separated variants fold into a single series.
-AgentsView also adds a simple plural form (just appending `s`) for each variant,
-and for single-word variants ending in `c` it expands the silent-`e` stem
-(`slic` matches `slice`, `slices`, `sliced`, `slicing`) — beyond those two
-cases, spell out other forms explicitly as pipe variants:
-
-```text
-rust
-type|types|typing
-docker|kubernetes|k8s
-```
-
-Matching is case-insensitive. Single-word matchers honor word boundaries — `cat`
-won't match `catalog`. Multi-word matchers match as substrings. Each line
-accepts up to 8 variants.
-
-The chart panel uses one color per term. Hover a line to highlight that term's
-series and draw point markers at each bucket; for exact per-bucket counts,
-switch granularities or read off the y-axis. The companion table below the chart
-lists each term's color swatch, expanded variants, and total — `Count` in raw
-mode or `Per 1k messages` in normalized mode.
-
-Page state lives in the URL — `from`, `to`, `granularity`, `normalized`, and
-repeated `term=` parameters — so any view is shareable and bookmarkable.
-
-The same data is available through the `GET /api/v1/trends/terms` endpoint for
-scripting, and works under both local `agentsview serve` and shared
-[`pg serve`](/docs/pg-sync/) deployments.
 
 ______________________________________________________________________
 
@@ -1397,7 +1342,7 @@ organized into sections:
 | ------------------ | -------------------------------------------------------------------------------------------------------- |
 | Language           | Interface language (Azerbaijani, English, French, Japanese, Korean, Spanish, Simplified Chinese, or Traditional Chinese)       |
 | Appearance         | Theme (light/dark), high-contrast mode, chart colors, message colors, message layout, reading width, zoom, always show year, block visibility |
-| Date ranges        | Browser-local checkbox for linking date selections across Sessions, Usage, Activity, Trends, and Quality |
+| Date ranges        | Browser-local checkbox for linking date selections across Sessions, Usage, Activity, and Quality          |
 | Session Providers  | Enable session providers, inspect their session directories, and add alternate agent homes               |
 | Tool-result images | Choose whether future imports keep, drop, or offload tool-result images; preview and remove images already stored |
 | Terminal           | Default terminal emulator for session resume                                                             |
@@ -1475,14 +1420,14 @@ Settings > Appearance also offers a **high-contrast** mode for greater
 legibility. The theme and high-contrast preferences persist across sessions.
 
 The **Chart colors** control selects the categorical palette used by the
-dashboard skill trend, Trends, and Usage charts:
+dashboard skill trend and Usage charts:
 
 - **Agentsview**: the project palette.
 - **Matplotlib**: matplotlib's categorical families without their grays.
 - **Color-blind safe**: Petroff's color sequences, chosen so series stay
   distinguishable with common forms of color blindness. Past the tenth series,
   colors repeat with a pattern: Usage bars, areas, and treemap tiles are
-  hatched, then cross-hatched, then dotted, and Trends lines are dashed.
+  hatched, then cross-hatched, then dotted.
   Legends and lists show the same pattern.
 
 This setting is server-wide rather than browser-local, so all clients connected to

@@ -354,7 +354,6 @@ describe("AppHeader export actions", () => {
       "Sessions",
       "Usage",
       "Activity",
-      "Trends",
       "Recall",
       "Pinned",
       "Quality",

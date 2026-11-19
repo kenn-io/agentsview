@@ -533,6 +533,14 @@ func (s *mcpDaemonService) SignalAnalytics(
 	})
 }
 
+func (s *mcpDaemonService) TermTrends(
+	ctx context.Context, req service.TermTrendsRequest,
+) (*db.TrendsTermsResponse, error) {
+	return mcpDaemonCall(ctx, s, func(svc service.SessionService) (*db.TrendsTermsResponse, error) {
+		return svc.TermTrends(ctx, req)
+	})
+}
+
 func (s *mcpDaemonService) SignalSessions(
 	ctx context.Context, req service.SignalSessionsRequest,
 ) (*db.SignalSessionsResponse, error) {
