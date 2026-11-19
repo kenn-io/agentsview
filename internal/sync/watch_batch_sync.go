@@ -486,9 +486,12 @@ func (e *Engine) SyncWatchBatchThenRun(
 	if stats.Deferred > 0 {
 		return stats, nil
 	}
-	e.signalSched.flushAllInline(ctx)
 	e.clearCurrentProgress()
 	if work != nil {
+		// work typically reads or pushes SQLite rows, so settle deferred
+		// signal recomputes first. Without work, a flush would only undo
+		// the debounce: a live watcher batch arrives every few seconds.
+		e.signalSched.flushAllInline(ctx)
 		if err := work(); err != nil {
 			return stats, err
 		}

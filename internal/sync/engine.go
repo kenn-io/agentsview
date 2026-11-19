@@ -887,7 +887,7 @@ func NewEngine(ctx context.Context,
 		recompute = func(context.Context, string) {}
 	}
 	e.signalSched = newSignalScheduler(
-		signalRecomputeInterval, signalRecomputeQuiet,
+		signalRecomputeInterval,
 		// Inline runs happen from markDirty inside writeIncremental,
 		// whose callers already hold syncMu.
 		recompute,
@@ -903,6 +903,9 @@ func NewEngine(ctx context.Context,
 			flush()
 		},
 	)
+	// A deferred recompute lands after the sync that wrote the session
+	// reported its change, so report the new signals for live readers.
+	e.signalSched.flushed = func() { e.emit("sessions") }
 	if e.disableSignalRecompute {
 		e.signalSched.stop()
 	}
