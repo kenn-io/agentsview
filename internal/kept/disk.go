@@ -123,16 +123,19 @@ func (d *Disk) Keep(selection, version string, encode func() ([]byte, error)) {
 	}
 }
 
-func (d *Disk) Put(selection, version string, payload []byte) {
+// Put reports whether the file was written within the per-file limit.
+func (d *Disk) Put(selection, version string, payload []byte) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	disk := d.reports.disk
-	if disk.dir == "" {
-		return
+	if disk.dir == "" || (d.maxFile > 0 && int64(len(disk.header(version)))+int64(len(payload)) > d.maxFile) {
+		return false
 	}
 	if disk.save(selection, version, payload, d.maxFile) == nil {
 		_ = d.trim()
+		return true
 	}
+	return false
 }
 
 func (d *Disk) trim() error {

@@ -91,7 +91,13 @@ func (s *Store) saveActivityInputs() {
 		for id, session := range input.sessions {
 			rows = append(rows, kept.Part[pgActivityDiskPart]{ID: id, Value: pgActivityDiskPart{Runs: session.runs.Wire(), Users: session.users, Assistants: session.assistants, Candidate: input.candidates[id]}})
 		}
-		data, err := kept.EncodeRows(rows, 256<<20, func(part kept.Part[pgActivityDiskPart]) int64 {
+		savePGActivityParts(&s.activityDisk, slot.Slot, pgActivityDiskVersion+slot.Version, rows, 256<<20)
+	}
+}
+
+func savePGActivityParts(disk *kept.Disk, slot, version string, rows []kept.Part[pgActivityDiskPart], limit int64) {
+	encode := func() ([]byte, error) {
+		return kept.EncodeRows(rows, limit, func(part kept.Part[pgActivityDiskPart]) int64 {
 			size := int64(len(part.ID) + len(part.Value.Identity))
 			size += int64(len(part.Value.Users)+len(part.Value.Assistants)) * 8
 			size += int64(len(part.Value.Runs.Bounds)+len(part.Value.Runs.Trimmed)) * 8
@@ -110,8 +116,15 @@ func (s *Store) saveActivityInputs() {
 			}
 			return size
 		})
-		if err == nil {
-			s.activityDisk.Put(slot.Slot, pgActivityDiskVersion+slot.Version, data)
+	}
+	data, err := encode()
+	if err == nil && disk.Put(slot, version, data) {
+		return
+	}
+	if len(rows) > 0 && rows[0].Value.Priced != nil {
+		rows[0].Value.Priced = nil
+		if data, err := encode(); err == nil {
+			disk.Put(slot, version, data)
 		}
 	}
 }
