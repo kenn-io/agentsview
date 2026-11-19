@@ -1223,6 +1223,24 @@ missing indexes automatically. Each first build scans `sessions` and blocks
 writes until installation commits. Restricted publishers keep writing before
 owner installation, using the existing queries until the indexes are available.
 
+### PostgreSQL schema step reuse
+
+A push starts with a schema step that checks every table, column, and index the
+push needs and runs data repairs. One `Sync` runs it once and remembers that in
+`schemaDone`. The daemon builds a new `Sync` for every push request, so
+`ensuredSchemas` also records, per push target, a summary of the target schema
+after the step: relations with their columns or index definitions, constraints,
+triggers, functions, extensions, and their object IDs. A later `Sync` in the
+same process reads the summary, and while it matches, skips the schema probes
+and DDL. It still runs the data version check (`CheckDataVersionCompat`),
+because another machine can push rows in a newer format without changing the
+schema. It also still runs the data repairs (`runSchemaDataRepairsPG`), because
+pushes since the step can leave rows they fix, such as sessions awaiting the
+automation audit. A full push, a missing push marker, or a failed push forgets
+the record, so the next push runs the whole step. A step whose optional setup
+fails, such as an index the role lacks privilege to create, records nothing,
+so the next push retries it.
+
 ### Raw session ID lookups
 
 `FindSessionIDsByRawSuffix` resolves a raw ID such as a bare Codex thread UUID

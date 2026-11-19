@@ -120,6 +120,13 @@ func (s *Sync) PushWithOptions(
 	if completed {
 		err = completedErr.err
 	}
+	if err != nil && !completed && !errors.Is(err, db.ErrDiagnosticConflict) {
+		// The failure may come from a schema changed under this process,
+		// so the next push runs the schema step again.
+		s.schemaMu.Lock()
+		s.forgetEnsuredSchemaLocked()
+		s.schemaMu.Unlock()
+	}
 	switch {
 	case err == nil || errors.Is(err, db.ErrDiagnosticConflict) || completed:
 		err = errors.Join(err, s.replaceRetainedCommitLinks(ctx))
@@ -417,7 +424,7 @@ func (s *Sync) pushWithOptions(
 		// may have been dropped since schemaDone was set.
 		// Clear the memo so EnsureSchema re-runs.
 		s.schemaMu.Lock()
-		s.schemaDone = false
+		s.forgetEnsuredSchemaLocked()
 		s.schemaMu.Unlock()
 		if err := s.normalizeSyncTimestamps(
 			ctx,
@@ -454,7 +461,7 @@ func (s *Sync) pushWithOptions(
 				legacyMarkerMachines = nil
 			}
 			s.schemaMu.Lock()
-			s.schemaDone = false
+			s.forgetEnsuredSchemaLocked()
 			s.schemaMu.Unlock()
 			if err := s.normalizeSyncTimestamps(
 				ctx,

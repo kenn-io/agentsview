@@ -15,7 +15,8 @@ func frustrationSessionVersion(column string) string {
 	return `(` + column + `::text || ':' || COALESCE(to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), ''))`
 }
 
-func ensureFrustrationCountsPG(ctx context.Context, pg *sql.DB) {
+// ensureFrustrationCountsPG reports false when setup failed.
+func ensureFrustrationCountsPG(ctx context.Context, pg *sql.DB) bool {
 	_, err := pg.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS session_frustration_counts (
         session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
         session_version TEXT NOT NULL,
@@ -25,6 +26,7 @@ func ensureFrustrationCountsPG(ctx context.Context, pg *sql.DB) {
 	if err != nil && !IsReadOnlyError(err) {
 		log.Printf("pg schema: frustration counts setup failed: %v", err)
 	}
+	return err == nil
 }
 
 func (s *Store) loadStoredFrustrationCounts(ctx context.Context, ids []string, versions map[string]string, versionColumn string) (map[string]int, error) {
