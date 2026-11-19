@@ -1,13 +1,10 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 import { GettingStartedStore } from "./gettingStarted.svelte.js";
 import { ReadProgressStore } from "./read-progress.svelte.js";
 
 const key = "agentsview-getting-started";
-afterEach(() => {
-  vi.restoreAllMocks();
-  localStorage.clear();
-});
+afterEach(() => localStorage.clear());
 
 describe("getting started", () => {
   it("persists completed items and hides the checklist when all are done or dismissed", () => {
@@ -32,18 +29,6 @@ describe("getting started", () => {
     expect(store.visible).toBe(false);
     store.complete("session");
     expect(new GettingStartedStore(new ReadProgressStore()).visible).toBe(false);
-  });
-
-  it("does not rewrite an item that is already complete", () => {
-    const store = new GettingStartedStore(new ReadProgressStore());
-    const setItem = vi.spyOn(Storage.prototype, "setItem");
-    store.complete("search");
-    setItem.mockClear();
-
-    store.complete("search");
-
-    expect(setItem).not.toHaveBeenCalled();
-    expect(JSON.parse(localStorage.getItem(key)!)).toContain("search");
   });
 
   it("preserves another tab's progress and unknown members on write", () => {

@@ -304,13 +304,7 @@
   }
 
   $effect(() => {
-    if (
-      usage.mode === "token" &&
-      usage.summary &&
-      !usage.errors.summary
-    ) {
-      untrack(() => gettingStarted.complete("usage"));
-    }
+    if (usage.mode === "token" && usage.summary) untrack(() => gettingStarted.complete("usage"));
   });
 
   $effect(() => {

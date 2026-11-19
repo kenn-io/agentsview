@@ -834,10 +834,6 @@
     transition: opacity 0.12s;
   }
 
-  .analytics-content :global(.getting-started) {
-    padding: 12px;
-  }
-
   .analytics-content.querying {
     opacity: 0.88;
   }

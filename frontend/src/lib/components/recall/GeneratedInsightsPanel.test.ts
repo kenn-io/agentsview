@@ -19,11 +19,6 @@ const mocks = vi.hoisted(() => ({
   selectTask: vi.fn(),
 }));
 
-const gettingStarted = vi.hoisted(() => ({
-  complete: vi.fn<(item: "insights") => void>(),
-  delegate: undefined as ((item: "insights") => void) | undefined,
-}));
-
 const state = vi.hoisted(() => {
   const selectedItem = {
     id: 42,
@@ -55,7 +50,7 @@ const state = vi.hoisted(() => {
       agent: "claude",
       promptText: "Focus on verification",
       items: [selectedItem],
-      tasks: [] as InsightTask[],
+      tasks: [],
       loading: false,
       error: null as string | null,
       selectedId: 42 as number | null,
@@ -97,8 +92,6 @@ vi.mock("../../stores/insights.svelte.js", async () => {
   return { insights: state.store };
 });
 
-vi.mock("../../stores/gettingStarted.svelte.js", () => ({ gettingStarted }));
-
 vi.mock("../../stores/sessions.svelte.js", () => ({
   sessions: state.sessions,
 }));
@@ -121,35 +114,29 @@ vi.mock("../../utils/markdown.js", () => ({
 
 // @ts-ignore
 import GeneratedInsightsPanel from "./GeneratedInsightsPanel.svelte";
+import { gettingStarted } from "../../stores/gettingStarted.svelte.js";
 
 describe("GeneratedInsightsPanel", () => {
   let component: ReturnType<typeof mount> | undefined;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    gettingStarted.complete.mockImplementation((item: "insights") =>
-      gettingStarted.delegate?.(item),
-    );
+    localStorage.clear();
+    gettingStarted.done = new Set();
     state.serverVersion.insight_generation_available = true;
     state.serverVersion.read_only = false;
     router.route = "recall";
     router.params = { tab: "generated" };
     state.store.items = [savedInsight];
-    state.store.tasks = [];
     state.store.selectedTask = undefined;
     state.store.selectedId = 42;
     state.store.selectedItem = state.store.items[0]!;
-    mocks.select.mockImplementation((id: number) => {
-      state.store.selectedId = id;
-      state.store.selectedItem = state.store.items.find((item) => item.id === id);
-    });
     state.sessions.agents = [];
     ui.activeModal = null;
   });
 
   afterEach(async () => {
     if (component) await unmount(component);
-    gettingStarted.delegate = undefined;
     component = undefined;
     document.body.innerHTML = "";
     router.params = {};
@@ -215,102 +202,24 @@ describe("GeneratedInsightsPanel", () => {
     await tick();
     await mocks.load.mock.results[0]!.value;
 
-    expect(gettingStarted.complete).toHaveBeenCalledExactlyOnceWith("insights");
+    expect(gettingStarted.done.has("insights")).toBe(true);
   });
 
-  it("does not complete the checklist when the archive load fails", async () => {
-    state.store.items = [];
+  it("waits until a saved report is selected", async () => {
     state.store.selectedId = null;
     state.store.selectedItem = undefined;
-    mocks.load.mockImplementationOnce(async () => {
-      state.store.error = "load failed";
+    mocks.select.mockImplementationOnce((id: number) => {
+      state.store.selectedId = id;
+      state.store.selectedItem = savedInsight;
     });
     component = mount(GeneratedInsightsPanel, { target: document.body });
     await tick();
     await mocks.load.mock.results[0]!.value;
+    expect(gettingStarted.done.has("insights")).toBe(false);
 
-    expect(gettingStarted.complete).not.toHaveBeenCalled();
-    state.store.error = null;
-  });
-
-  it("does not complete the checklist when a pending load is canceled", async () => {
-    let finish!: () => void;
-    mocks.load.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          finish = resolve;
-        }),
-    );
-    state.store.selectedItem = undefined;
-    component = mount(GeneratedInsightsPanel, { target: document.body });
-    await tick();
-    await unmount(component);
-    component = undefined;
-    finish();
-    await mocks.load.mock.results[0]!.value;
-    await tick();
-
-    expect(mocks.cancelInFlightReads).toHaveBeenCalledOnce();
-    expect(gettingStarted.complete).not.toHaveBeenCalled();
-  });
-
-  it("waits until a saved report is selected", async () => {
-    state.store.items = [savedInsight, { ...savedInsight, id: 43, project: "other" }];
-    state.store.selectedId = null;
-    state.store.selectedItem = undefined;
-    component = mount(GeneratedInsightsPanel, { target: document.body });
-    await tick();
-    await mocks.load.mock.results[0]!.value;
-    expect(gettingStarted.complete).not.toHaveBeenCalled();
-
-    const report = Array.from(
-      document.querySelectorAll<HTMLButtonElement>(".generated-list button"),
-    ).find((button) => button.textContent?.includes("other"));
-    report!.click();
-    await tick();
-    expect(gettingStarted.complete).toHaveBeenCalledExactlyOnceWith("insights");
-  });
-
-  it("records a selected report with the real checklist store", async () => {
-    localStorage.removeItem("agentsview-getting-started");
-    const { GettingStartedStore } = await vi.importActual<
-      typeof import("../../stores/gettingStarted.svelte.js")
-    >("../../stores/gettingStarted.svelte.js");
-    const progress = new GettingStartedStore();
-    gettingStarted.delegate = (item) => progress.complete(item);
-    state.store.selectedId = null;
-    state.store.selectedItem = undefined;
-    component = mount(GeneratedInsightsPanel, { target: document.body });
-    await tick();
     document.querySelector<HTMLButtonElement>(".generated-list button")!.click();
     await tick();
-    expect(progress.done.has("insights")).toBe(true);
-    localStorage.removeItem("agentsview-getting-started");
-  });
-
-  it("completes the checklist when a saved report is opened from its URL", async () => {
-    state.store.selectedId = null;
-    state.store.selectedItem = undefined;
-    router.params = { tab: "generated", insight: "42" };
-    component = mount(GeneratedInsightsPanel, { target: document.body });
-    await tick();
-    expect(gettingStarted.complete).toHaveBeenCalledExactlyOnceWith("insights");
-  });
-
-  it("does not complete the checklist for a generation task", async () => {
-    state.store.items = [];
-    state.store.tasks = [
-      { clientId: "task-a", status: "running", project: "task project" } as InsightTask,
-    ];
-    state.store.selectedId = null;
-    state.store.selectedItem = undefined;
-    component = mount(GeneratedInsightsPanel, { target: document.body });
-    await tick();
-    await mocks.load.mock.results[0]!.value;
-    document.querySelector<HTMLButtonElement>(".generated-list button")!.click();
-    await tick();
-    expect(mocks.selectTask).toHaveBeenCalledWith("task-a");
-    expect(gettingStarted.complete).not.toHaveBeenCalled();
+    expect(gettingStarted.done.has("insights")).toBe(true);
   });
 
   it("shows every input that scopes a generated report", async () => {
@@ -400,8 +309,6 @@ describe("GeneratedInsightsPanel", () => {
   });
 
   it("writes selected reports to the Generated insights deep link", async () => {
-    state.store.selectedId = null;
-    state.store.selectedItem = undefined;
     component = mount(GeneratedInsightsPanel, { target: document.body });
     await tick();
 

@@ -2,7 +2,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { setLocale } from "../../i18n/index.js";
-import { gettingStarted } from "../../stores/gettingStarted.svelte.js";
 import { router } from "../../stores/router.svelte.js";
 import { settings } from "../../stores/settings.svelte.js";
 import { sync } from "../../stores/sync.svelte.js";
@@ -15,8 +14,6 @@ describe("RecallPage", () => {
 
   beforeEach(() => {
     setLocale("en");
-    localStorage.clear();
-    gettingStarted.done = new Set();
     router.route = "recall";
     router.params = {};
     sync.serverVersion = {
@@ -46,8 +43,6 @@ describe("RecallPage", () => {
     settings.loaded = false;
     settings.readOnly = false;
     settings.error = null;
-    localStorage.clear();
-    gettingStarted.done = new Set();
   });
 
   it("switches between URL-backed Corpus and Generated insights tabs", async () => {

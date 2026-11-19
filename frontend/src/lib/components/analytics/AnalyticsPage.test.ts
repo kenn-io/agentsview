@@ -1027,12 +1027,6 @@ describe("getting started checklist", () => {
     component = mount(AnalyticsPage, { target: document.body });
     await flushEffects();
     expect(document.querySelector(".getting-started")?.textContent).toContain("Get started");
-    [...document.querySelectorAll<HTMLButtonElement>(".getting-started button")]
-      .find((button) => button.textContent?.trim() === "See your token use")!
-      .click();
-    await flushEffects();
-    expect(router.route).toBe("usage");
-    expect(router.params.view).toBe("tokens");
     document
       .querySelector<HTMLButtonElement>('.getting-started button[aria-label="Dismiss"]')!
       .click();

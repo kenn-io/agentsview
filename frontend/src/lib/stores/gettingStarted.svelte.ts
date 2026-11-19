@@ -25,13 +25,7 @@ export class GettingStartedStore {
   }
 
   complete(item: Item | "dismissed") {
-    const done = new Set([...read(), ...this.done]);
-    if (done.has(item)) {
-      this.done = done;
-      return;
-    }
-    done.add(item);
-    this.done = done;
+    this.done = new Set([...read(), ...this.done, item]);
     try {
       localStorage.setItem(key, JSON.stringify([...this.done]));
     } catch {

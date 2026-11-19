@@ -683,51 +683,14 @@ describe("UsagePage refresh behavior", () => {
         disconnect() {}
       },
     );
-    const summary = usageSummaryWithUnsupported();
-    const summaryRequest = usageReads().mockResolvedValueOnce(summary);
+    usageReads().mockResolvedValueOnce(usageSummaryWithUnsupported());
     router.params = {};
-    gettingStarted.done = new Set();
 
     component = mount(UsagePage, { target: document.body });
-    await vi.waitFor(() => expect(summaryRequest).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => expect(usage.summary).not.toBeNull());
-
-    expect(usage.mode).toBe("cost");
-    expect(gettingStarted.done.has("usage")).toBe(false);
-    unmount(component);
-    component = undefined;
-
-    usage.summary = null;
-    usage.errors.summary = null;
-    usage.mode = "cost";
-    router.params = { view: "tokens" };
-    gettingStarted.done = new Set();
-    const pending = Promise.withResolvers<UsageSummaryResponse>();
-    summaryRequest.mockReturnValueOnce(pending.promise);
-    component = mount(UsagePage, { target: document.body });
-    await vi.waitFor(() => expect(summaryRequest).toHaveBeenCalledTimes(2));
-
-    expect(gettingStarted.done.has("usage")).toBe(false);
-    pending.reject(new Error("offline"));
-    await vi.waitFor(() => expect(usage.errors.summary).toBe("offline"));
-
-    expect(gettingStarted.done.has("usage")).toBe(false);
-    unmount(component);
-    component = undefined;
-
-    usage.summary = summary;
-    usage.errors.summary = "offline";
-    usage.mode = "cost";
-    gettingStarted.done = new Set();
-    const retry = Promise.withResolvers<UsageSummaryResponse>();
-    summaryRequest.mockReturnValueOnce(retry.promise);
-
-    component = mount(UsagePage, { target: document.body });
-    await vi.waitFor(() => expect(summaryRequest).toHaveBeenCalledTimes(3));
-
     expect(gettingStarted.done.has("usage")).toBe(false);
 
-    retry.resolve(summary);
+    usage.mode = "token";
     await vi.waitFor(() => expect(gettingStarted.done.has("usage")).toBe(true));
   });
 

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Card, IconButton } from "@kenn-io/kit-ui";
-  import { CheckIcon, XIcon } from "../../icons.js";
+  import { CircleCheckIcon, CircleIcon, XIcon } from "../../icons.js";
   import { gettingStarted, items, type Item } from "../../stores/gettingStarted.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { router } from "../../stores/router.svelte.js";
@@ -29,7 +29,7 @@
 </script>
 
 {#if gettingStarted.visible}
-  <Card level="default" padding="none" class="getting-started" title={m.getting_started_title()}>
+  <Card level="default" padding="sm" class="getting-started" title={m.getting_started_title()}>
     {#snippet actions()}
       <IconButton
         size="sm"
@@ -51,9 +51,9 @@
             aria-labelledby="{uid}-{key}"
           >
             {#if done}
-              <CheckIcon size="16" strokeWidth="2" aria-hidden="true" />
+              <CircleCheckIcon size="16" strokeWidth="2" aria-hidden="true" />
             {:else}
-              <span class="circle" aria-hidden="true"></span>
+              <CircleIcon size="16" strokeWidth="1.5" aria-hidden="true" />
             {/if}
           </span>
           <button
@@ -90,19 +90,8 @@
 
   .mark {
     display: inline-flex;
-    align-items: center;
-    justify-content: center;
     flex-shrink: 0;
-    width: 16px;
-    height: 16px;
     color: var(--text-muted);
-  }
-
-  .circle {
-    width: 14px;
-    height: 14px;
-    border: 1.5px solid var(--text-muted);
-    border-radius: 3px;
   }
 
   .label {
