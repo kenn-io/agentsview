@@ -112,14 +112,11 @@ set -e
 [[ $status == 1 ]]
 grep -qE 'cleanup failed; scheduled cleanup will retry' "$tmp/cleanup-error"
 
-# The public targets invoke the lease wrapper; manual targets retain their project.
+# Dry runs do not start services; manual targets retain their project.
 export DOWN_STATUS=0
 : > "$DOCKER_LOG"
 (cd "$root" && make -n test-postgres test-clickhouse bench-pg-usage) > "$tmp/make"
 [[ ! -s "$DOCKER_LOG" ]]
-grep -qE 'test-lease.sh agentsview .* postgres 5432 .*test-postgres-run' "$tmp/make"
-grep -qE 'test-lease.sh agentsview .* clickhouse 9000 .*test-clickhouse-run' "$tmp/make"
-grep -qE 'test-lease.sh agentsview .* postgres 5432 .*bench-pg-usage-run' "$tmp/make"
 (cd "$root" && make -n postgres-up clickhouse-up) > "$tmp/manual"
 if grep -qE 'test-lease| -p ' "$tmp/manual"; then exit 1; fi
 
@@ -130,16 +127,25 @@ project=$(cat "$tmp/project")
 [[ "$project" != old ]]
 grep -Fxq "LEASE_FROM_MAKE=$project" "$tmp/make-lease"
 
-# Command-line database URLs cannot override the disposable service in nested Make.
+# Each target starts its leased service and passes its address to nested Make.
 cat > "$tmp/inspect.mk" <<'MAKE'
 $(if $(filter 1,$(MAKELEVEL)),$(info PG_FROM_MAKE=$(TEST_PG_URL))$(info CH_FROM_MAKE=$(TEST_CLICKHOUSE_URL)))
 MAKE
 for target in test-postgres bench-pg-usage test-clickhouse; do
-    (cd "$root" && MAKEFILES="$tmp/inspect.mk" make "$target" TEST_PG_URL=old-pg TEST_CLICKHOUSE_URL=old-ch MAKE='make -n') > "$tmp/make-url"
+    : > "$DOCKER_LOG"
+    (cd "$root" && CHECK_LEASE="$tmp/project" MAKEFILES="$tmp/inspect.mk" make "$target" TEST_PG_URL=old-pg TEST_CLICKHOUSE_URL=old-ch MAKE='make -n') > "$tmp/make-url"
+    project=$(cat "$tmp/project")
     case "$target" in
-        test-clickhouse) grep -Fxq 'CH_FROM_MAKE=clickhouse://127.0.0.1:49153/default' "$tmp/make-url" ;;
-        *) grep -Fxq 'PG_FROM_MAKE=postgres://agentsview_test:agentsview_test_password@127.0.0.1:49153/agentsview_test?sslmode=disable' "$tmp/make-url" ;;
+        test-clickhouse)
+            service=clickhouse port=9000
+            grep -Fxq 'CH_FROM_MAKE=clickhouse://127.0.0.1:49153/default' "$tmp/make-url" ;;
+        *)
+            service=postgres port=5432
+            grep -Fxq 'PG_FROM_MAKE=postgres://agentsview_test:agentsview_test_password@127.0.0.1:49153/agentsview_test?sslmode=disable' "$tmp/make-url" ;;
     esac
+    grep -qE -- "-p $project .* up -d --wait $service" "$DOCKER_LOG"
+    grep -qE -- "-p $project .* port $service $port" "$DOCKER_LOG"
+    grep -qE -- "-p $project .* down -v --remove-orphans" "$DOCKER_LOG"
 done
 
 # A signal while Compose is starting still runs cleanup.
