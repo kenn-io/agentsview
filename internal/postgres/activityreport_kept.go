@@ -31,13 +31,16 @@ type pgActivitySavedReport struct {
 	Report                    kept.Report
 }
 
+// Change this when the saved report format changes.
+const pgActivityReportFormat = "pg-activity-report-v1"
+
 func pgActivityDiskSelection(selection, version, identity string) string {
 	return fmt.Sprintf("%q|%q|%q", selection, version, identity)
 }
 
 func (s *Store) loadActivityReport(selection, version, identity string) (pgActivityKept, bool) {
 	s.activityReports.Sweep(time.Now())
-	data, ok := s.activityReports.Get(pgActivityDiskSelection(selection, version, identity), identity+"|"+version)
+	data, ok := s.activityReports.Get(pgActivityDiskSelection(selection, version, identity), pgActivityReportFormat)
 	if !ok {
 		return pgActivityKept{}, false
 	}
@@ -59,7 +62,7 @@ func encodePGActivityReport(entry pgActivityKept) ([]byte, error) {
 func (s *Store) saveActivityReport(selection, version string, entry pgActivityKept) {
 	data, err := encodePGActivityReport(entry)
 	if err == nil {
-		s.activityReports.Put(pgActivityDiskSelection(selection, version, entry.identity), entry.identity+"|"+version, data)
+		s.activityReports.Put(pgActivityDiskSelection(selection, version, entry.identity), pgActivityReportFormat, data)
 	}
 }
 
@@ -75,7 +78,7 @@ func (s *Store) keepActivityReport(selection, version string, entry pgActivityKe
 	switch {
 	case identity == "":
 	case saved:
-		s.activityReports.Keep(pgActivityDiskSelection(selection, version, identity), identity+"|"+version, func() ([]byte, error) { return encodePGActivityReport(entry) })
+		s.activityReports.Keep(pgActivityDiskSelection(selection, version, identity), pgActivityReportFormat, func() ([]byte, error) { return encodePGActivityReport(entry) })
 	default:
 		s.saveActivityReport(selection, version, entry)
 	}

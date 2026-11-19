@@ -17,7 +17,7 @@ import (
 )
 
 func TestPGActivityReportSavedRestart(t *testing.T) {
-	for _, mode := range []string{"restart", "identity", "pricing", "unavailable", "identity-retry", "oversize", "midnight"} {
+	for _, mode := range []string{"restart", "format", "pricing", "unavailable", "identity-retry", "oversize", "midnight"} {
 		t.Run(mode, func(t *testing.T) {
 			cache := t.TempDir()
 			t.Setenv("CACHE_DIRECTORY", cache)
@@ -89,7 +89,7 @@ BEGIN RAISE EXCEPTION 'permission denied' USING ERRCODE = '42501'; END $$`)
 				require.NoError(t, err)
 				require.Len(t, files, 1)
 			}
-			if mode == "identity" {
+			if mode == "format" {
 				f.IncludeSubagents, f.IncludeForks = true, true
 				pricing, err := first.loadPricingMap(t.Context())
 				require.NoError(t, err)
@@ -101,9 +101,9 @@ BEGIN RAISE EXCEPTION 'permission denied' USING ERRCODE = '42501'; END $$`)
 				require.NoError(t, err)
 				selection := kept.Selection(f, q)
 				diskSelection := pgActivityDiskSelection(selection, version, identity)
-				data, ok := first.activityReports.Get(diskSelection, identity+"|"+version)
+				data, ok := first.activityReports.Get(diskSelection, "pg-activity-report-v1")
 				require.True(t, ok)
-				require.True(t, first.activityReports.Put(diskSelection, "other|"+version, data))
+				require.True(t, first.activityReports.Put(diskSelection, "pg-activity-report-v0", data))
 			}
 			restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
 			t.Cleanup(func() { require.NoError(t, restarted.Close()) })
