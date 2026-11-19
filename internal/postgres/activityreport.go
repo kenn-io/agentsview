@@ -148,6 +148,7 @@ func (s *Store) BuildActivityReportArtifacts(
 	}
 
 	var selection, version, identity string
+	var unavailable bool
 	var revision int64
 	if !q.Partial && !s.hostedRelations && !db.TerminationUsesTime(f.Termination) {
 		version, err = s.activityKeptVersion(ctx, pricingDigest)
@@ -157,25 +158,7 @@ func (s *Store) BuildActivityReportArtifacts(
 		if version != "" {
 			selection = kept.Selection(f, q)
 			memo := &s.runtimeState().activityKept
-			now := time.Now()
-			eligible := false
-			if q.Loc != nil && s.activityReports.Enabled() {
-				local := now.In(q.Loc)
-				midnight := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, q.Loc)
-				eligible = !q.RangeEnd.After(midnight)
-			}
-			entries, ok := memo.Get(selection, version)
-			if ok {
-				identity = entries[0].identity
-			}
-			if eligible && identity == "" {
-				identity, _ = s.activitySourceIdentity(ctx, "")
-				if !ok && identity != "" {
-					if entry, found := s.loadActivityReport(selection, version, identity); found {
-						memo.Put(selection, version, []pgActivityKept{entry})
-					}
-				}
-			}
+			identity, unavailable = s.activityReportIdentity(ctx, selection, version, q)
 			var report kept.Report
 			var hit bool
 			report, revision, hit, err = s.keptActivityReport(ctx, selection, version, f,
@@ -187,8 +170,8 @@ func (s *Store) BuildActivityReportArtifacts(
 				entries, ok := memo.Get(selection, version)
 				if ok {
 					entry := entries[0]
-					if entry.identity != identity {
-						entry.identity = identity
+					if entry.identity != identity || entry.identityUnavailable != unavailable {
+						entry.identity, entry.identityUnavailable = identity, unavailable
 						memo.Put(selection, version, []pgActivityKept{entry})
 					}
 					if identity != "" {
@@ -265,7 +248,7 @@ func (s *Store) BuildActivityReportArtifacts(
 		memo.Put(selection, version, []pgActivityKept{{
 			report: kept.Report{Artifacts: artifacts, Done: done}, revision: revision,
 			candidates: candidates, peers: slices.Clip(slices.Sorted(maps.Keys(read))),
-			labels: activity.ProjectLabels(sessions), identity: identity,
+			labels: activity.ProjectLabels(sessions), identity: identity, identityUnavailable: unavailable,
 		}})
 		if identity != "" {
 			if entries, ok := memo.Get(selection, version); ok {

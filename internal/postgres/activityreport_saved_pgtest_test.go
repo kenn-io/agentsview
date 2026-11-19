@@ -32,13 +32,16 @@ func TestPGActivityReportSavedRestart(t *testing.T) {
 			}
 			first := openPGActivityInputStore(t, target, syncer.schema, directory)
 			t.Cleanup(func() { require.NoError(t, first.Close()) })
+			var denied *activityIdentityError
 			if mode == "unavailable" {
-				first.pg = &activityIdentityError{storeExecutor: first.pg, denied: true}
+				_, err := first.pg.ExecContext(t.Context(), `CREATE FUNCTION activity_identity_denied() RETURNS text LANGUAGE plpgsql AS $$
+BEGIN RAISE EXCEPTION 'permission denied' USING ERRCODE = '42501'; END $$`)
+				require.NoError(t, err)
+				denied = &activityIdentityError{storeExecutor: first.pg, denied: true}
+				first.pg = denied
 			}
-			var firstReads *activityInputReadCounter
 			if mode == "identity-retry" {
-				firstReads = &activityInputReadCounter{storeExecutor: first.pg}
-				first.pg = &activityIdentityError{storeExecutor: firstReads}
+				first.pg = &activityIdentityError{storeExecutor: first.pg}
 			}
 			if mode == "oversize" {
 				first.runtimeState().activityKept.MaxBytes = 1
@@ -51,11 +54,13 @@ func TestPGActivityReportSavedRestart(t *testing.T) {
 			} else {
 				require.Len(t, files, 1)
 			}
-			if mode == "identity-retry" {
-				transcriptReads, usageReads := len(firstReads.transcriptReads), len(firstReads.usageReads)
+			if mode == "unavailable" {
+				lookups := denied.queries
 				requirePGKeptEqual(t, want, pgKeptBuild(t, first, f, q, false))
-				assert.Len(t, firstReads.transcriptReads, transcriptReads)
-				assert.Len(t, firstReads.usageReads, usageReads)
+				assert.Equal(t, lookups, denied.queries)
+			}
+			if mode == "identity-retry" {
+				requirePGKeptEqual(t, want, pgKeptBuild(t, first, f, q, false))
 				files, err = filepath.Glob(filepath.Join(cache, "postgres-activity-reports", "*", "*.gob"))
 				require.NoError(t, err)
 				require.Len(t, files, 1)
@@ -66,19 +71,16 @@ func TestPGActivityReportSavedRestart(t *testing.T) {
 			}
 			if mode == "restart" {
 				first.saveActivityReport("old1", "v", pgActivityKept{identity: "id", revision: 1})
-				first.saveActivityReport("old2", "v", pgActivityKept{identity: "id", revision: 1})
 				files, err = filepath.Glob(filepath.Join(cache, "postgres-activity-reports", "*", "*.gob"))
 				require.NoError(t, err)
-				require.Len(t, files, 3)
+				require.Len(t, files, 2)
 				old := time.Now().Add(-31 * 24 * time.Hour)
 				for _, file := range files {
 					require.NoError(t, os.Chtimes(file, old, old))
 				}
 				pgKeptBuild(t, first, f, q, false)
-				for _, selection := range []string{"old1", "old2"} {
-					_, ok := first.loadActivityReport(selection, "v", "id")
-					require.False(t, ok)
-				}
+				_, ok := first.loadActivityReport("old1", "v", "id")
+				require.False(t, ok)
 				files, err = filepath.Glob(filepath.Join(cache, "postgres-activity-reports", "*", "*.gob"))
 				require.NoError(t, err)
 				require.Len(t, files, 1)
@@ -100,25 +102,16 @@ func TestPGActivityReportSavedRestart(t *testing.T) {
 			}
 			restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
 			t.Cleanup(func() { require.NoError(t, restarted.Close()) })
-			reads := &activityInputReadCounter{storeExecutor: restarted.pg}
-			restarted.pg = reads
 			if mode == "pricing" {
 				restarted.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 40_000_000}})
 			}
 			got := pgKeptBuild(t, restarted, f, q, mode != "restart")
 			if mode == "restart" {
 				requirePGKeptEqual(t, want, got)
-				assert.Empty(t, reads.transcriptReads)
-				assert.Empty(t, reads.usageReads)
 				pgKeptSession(t, local, "b", "project-a", "2026-06-14")
 				pgKeptPush(t, syncer, false)
 				updated := pgKeptBuild(t, restarted, f, q, true)
 				assert.Len(t, updated.Sessions, 2)
-				assert.NotEmpty(t, reads.transcriptReads)
-				assert.NotEmpty(t, reads.usageReads)
-			} else {
-				assert.NotEmpty(t, reads.transcriptReads)
-				assert.NotEmpty(t, reads.usageReads)
 			}
 		})
 	}

@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"math"
 	"reflect"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/kept"
@@ -17,6 +19,7 @@ import (
 
 type pgActivityKept struct {
 	identity                  string
+	identityUnavailable       bool
 	report                    kept.Report
 	revision                  int64
 	candidates, peers, labels []string
@@ -35,7 +38,7 @@ func (s *Store) loadActivityReport(selection, version, identity string) (pgActiv
 		return pgActivityKept{}, false
 	}
 	var saved pgActivitySavedReport
-	if json.Unmarshal(data, &saved) != nil || saved.Revision <= 0 {
+	if json.Unmarshal(data, &saved) != nil {
 		return pgActivityKept{}, false
 	}
 	for key, project := range saved.Report.Artifacts.Report.Projects {
@@ -54,6 +57,30 @@ func (s *Store) saveActivityReport(selection, version string, entry pgActivityKe
 	if err == nil {
 		s.activityReports.Put(selection, entry.identity+"|"+version, data)
 	}
+}
+
+func (s *Store) activityReportIdentity(ctx context.Context, selection, version string, q activity.Query) (identity string, unavailable bool) {
+	memo := &s.runtimeState().activityKept
+	entries, ok := memo.Get(selection, version)
+	if ok {
+		identity, unavailable = entries[0].identity, entries[0].identityUnavailable
+	}
+	if identity != "" || unavailable || q.Loc == nil || !s.activityReports.Enabled() {
+		return identity, unavailable
+	}
+	local := time.Now().In(q.Loc)
+	if q.RangeEnd.After(time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, q.Loc)) {
+		return identity, unavailable
+	}
+	var err error
+	identity, err = s.activitySourceIdentity(ctx, "")
+	unavailable = errors.Is(err, db.ErrUsageSourceUnavailable)
+	if !ok && identity != "" {
+		if entry, found := s.loadActivityReport(selection, version, identity); found {
+			memo.Put(selection, version, []pgActivityKept{entry})
+		}
+	}
+	return identity, unavailable
 }
 
 func (s *Store) activityKeptVersion(ctx context.Context, pricingDigest string) (string, error) {
