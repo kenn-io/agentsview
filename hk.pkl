@@ -1,0 +1,18 @@
+amends "package://github.com/jdx/hk/releases/download/v2.10.0/hk@2.10.0#/Config.pkl"
+import "package://github.com/jdx/hk/releases/download/v2.10.0/hk@2.10.0#/Builtins.pkl"
+
+// Pre-commit: ruff lints every staged Python file (owner direction 2026-11-19,
+// ar-20261119T023750Z-77e24317f10a4942). fix stays false — the hook reports;
+// autofix touched files with `ruff check --fix`. Config: ruff.toml.
+// Register the hook once per clone: hk install
+hooks {
+    ["pre-commit"] {
+        fix = false
+        steps {
+            ["ruff"] {
+                types = List("python")
+                check = "ruff check {{files}}"
+            }
+        }
+    }
+}

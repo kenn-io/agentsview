@@ -169,3 +169,13 @@ and can mirror data to PostgreSQL, DuckDB, or ClickHouse.
   Verification, or Test plan.
 - Explain what the code does now, why it changed, tradeoffs, limits, and where
   reviewers should look.
+
+## Code standards
+
+- Python is linted with **ruff** on every commit: the pre-commit hook runs
+  `ruff check` on each staged `*.py` file. Config: `ruff.toml` at the repo root;
+  full pass: `ruff check .`.
+- Register the hook once per clone: `hk install` (hk.pkl repos) or
+  `git config core.hooksPath .githooks` (.githooks repos).
+- New files must be lint-clean; legacy files are fixed on contact via justified
+  per-file-ignores in `ruff.toml`, never reformatted blindly.

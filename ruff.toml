@@ -1,0 +1,21 @@
+# Dark-family ruff baseline. The pre-commit hook lints every staged *.py file
+# with this config; `ruff check .` is the full pass. New files must be clean;
+# legacy files are fixed on contact via per-file-ignores, never reformatted blindly.
+line-length = 100
+target-version = "py312"
+force-exclude = true
+extend-exclude = [".git", ".venv", "venv", "__pycache__", ".pytest_cache", "build", "dist", "*.egg-info", "node_modules", "target"]
+
+[lint]
+select = ["E", "W", "F", "I", "N", "UP", "B", "C4", "SIM", "RET", "ARG", "PTH", "RUF"]
+ignore = ["PLR0913", "PLR2004", "N806"]
+fixable = ["ALL"]
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+[lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/**/*.py" = ["ARG001", "PLR2004"]
+
+[format]
+quote-style = "double"
+indent-style = "space"
