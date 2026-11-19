@@ -13,10 +13,11 @@ import (
 type pushReason string
 
 const (
-	reasonStartup  pushReason = "startup"
-	reasonChange   pushReason = "change"
-	reasonInterval pushReason = "interval"
-	reasonShutdown pushReason = "shutdown"
+	reasonStartup       pushReason = "startup"
+	reasonChange        pushReason = "change"
+	reasonArchiveChange pushReason = "archive_change"
+	reasonInterval      pushReason = "interval"
+	reasonShutdown      pushReason = "shutdown"
 )
 
 // defaultFlushTimeout bounds the best-effort push performed when the
@@ -93,6 +94,12 @@ func (l *pushLoop) NotifyDirty() {
 	l.enqueueUnscoped(reasonChange, nil, true)
 }
 
+// NotifyArchiveChanged requests publication without source ingestion.
+// Earlier source-sync requests take precedence when notifications coalesce.
+func (l *pushLoop) NotifyArchiveChanged() {
+	l.enqueueUnscoped(reasonArchiveChange, nil, true)
+}
+
 // NotifyBatch retains one bounded watcher batch for the next push. Adjacent
 // scoped notifications merge; work arriving after an unscoped task stays next.
 func (l *pushLoop) NotifyBatch(batch syncpkg.WatchBatch) {
@@ -147,6 +154,9 @@ func (l *pushLoop) enqueueUnscoped(
 	l.pendingMu.Lock()
 	task := queuedPushTask{reason: reason, unscoped: true}
 	for i := range l.pendingTasks {
+		if task.reason == reasonArchiveChange && l.pendingTasks[i].reason != reasonArchiveChange {
+			task.reason = l.pendingTasks[i].reason
+		}
 		task.waiters = append(task.waiters, l.pendingTasks[i].waiters...)
 	}
 	if waiter != nil {
