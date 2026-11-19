@@ -6,8 +6,10 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/parser"
@@ -20,12 +22,28 @@ type HTTPSource struct {
 	Client *http.Client
 }
 
+// httpConnectTimeout bounds connecting to a remote daemon, matching the SSH
+// transport's ConnectTimeout. An offline host often drops packets rather
+// than refusing, so without it every sync would wait the default 30 seconds.
+const httpConnectTimeout = 10 * time.Second
+
+// defaultHTTPClient is shared so connections to a remote are reused. It sets
+// no overall timeout: archive responses can stream for hours, and ctx governs
+// their lifetime.
+var defaultHTTPClient = func() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = (&net.Dialer{
+		Timeout:   httpConnectTimeout,
+		KeepAlive: 30 * time.Second,
+	}).DialContext
+	return &http.Client{Transport: transport}
+}()
+
 func (s HTTPSource) client() *http.Client {
 	if s.Client != nil {
 		return s.Client
 	}
-	// Archive responses can stream for hours; ctx governs their lifetime.
-	return &http.Client{Timeout: 0}
+	return defaultHTTPClient
 }
 
 // Archive requests an archive and returns its body once the daemon accepts.
