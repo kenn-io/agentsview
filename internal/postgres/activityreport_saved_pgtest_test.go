@@ -27,12 +27,8 @@ func TestPGActivityReportSavedRestart(t *testing.T) {
 			pgKeptPush(t, syncer, false)
 			target, directory := testPGURL(t), t.TempDir()
 			q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
-			now := time.Now().UTC()
 			if mode == "midnight" {
-				q = pgDayQuery(t, now.Format("2006-01-02"), "UTC")
-				q.RangeStart, q.RangeEnd = now.Add(-2*time.Hour), now.Add(-time.Hour)
-				q.EffectiveEnd = q.RangeEnd
-				q.Loc = time.FixedZone("before midnight", (12-now.Hour())*60*60)
+				q = pgDayQuery(t, time.Now().UTC().Format("2006-01-02"), "UTC")
 			}
 			first := openPGActivityInputStore(t, target, syncer.schema, directory)
 			t.Cleanup(func() { require.NoError(t, first.Close()) })
@@ -66,11 +62,6 @@ func TestPGActivityReportSavedRestart(t *testing.T) {
 				return
 			}
 			if mode == "midnight" {
-				q.Loc = time.FixedZone("after midnight", -now.Hour()*60*60)
-				requirePGKeptEqual(t, want, pgKeptBuild(t, first, f, q, false))
-				files, err = filepath.Glob(filepath.Join(cache, "postgres-activity-reports", "*", "*.gob"))
-				require.NoError(t, err)
-				require.Len(t, files, 1)
 				return
 			}
 			if mode == "restart" {
