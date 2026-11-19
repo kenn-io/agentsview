@@ -40,7 +40,7 @@ func (s *Store) loadActivityReport(selection, version, identity string) (pgActiv
 		return pgActivityKept{}, false
 	}
 	var saved pgActivitySavedReport
-	if json.Unmarshal(data, &saved) != nil {
+	if json.Unmarshal(data, &saved) != nil || saved.Checkpoint == "" {
 		return pgActivityKept{}, false
 	}
 	for key, project := range saved.Report.Artifacts.Report.Projects {
@@ -55,6 +55,9 @@ func encodePGActivityReport(entry pgActivityKept) ([]byte, error) {
 }
 
 func (s *Store) saveActivityReport(selection, version string, entry pgActivityKept) {
+	if entry.checkpoint == "" {
+		return
+	}
 	data, err := encodePGActivityReport(entry)
 	if err == nil {
 		s.activityReports.Put(selection+"|"+entry.identity+"|"+version, entry.identity+"|"+version, data)
@@ -70,7 +73,7 @@ func (s *Store) keepActivityReport(selection, version string, entry pgActivityKe
 		entry.identity, entry.identityUnavailable = identity, unavailable
 		s.runtimeState().activityKept.Put(selection, version, []pgActivityKept{entry})
 	}
-	if identity != "" {
+	if identity != "" && entry.checkpoint != "" {
 		if saved {
 			s.activityReports.Keep(selection+"|"+identity+"|"+version, identity+"|"+version, func() ([]byte, error) { return encodePGActivityReport(entry) })
 		} else {
@@ -132,7 +135,13 @@ func (s *Store) keptActivityReport(ctx context.Context, selection, version strin
 	if err != nil {
 		return kept.Report{}, through, false, err
 	}
-	if entry.checkpoint == "" || entry.checkpoint != previous {
+	if entry.checkpoint == "" {
+		var legacy bool
+		err = s.pg.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM sync_metadata WHERE key='usage_change_journal_version' AND value IN ('1', '2'))`).Scan(&legacy)
+		if err != nil || !legacy {
+			return kept.Report{}, through, false, err
+		}
+	} else if entry.checkpoint != previous {
 		return kept.Report{}, through, false, nil
 	}
 	if through == entry.revision {

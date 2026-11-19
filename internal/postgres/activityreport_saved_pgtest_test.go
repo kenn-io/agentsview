@@ -175,6 +175,34 @@ func TestPGActivityReportSavedHistory(t *testing.T) {
 	}
 }
 
+func TestPGActivityReportSavedLegacyJournal(t *testing.T) {
+	cache := t.TempDir()
+	t.Setenv("CACHE_DIRECTORY", cache)
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	_, err := syncer.pg.ExecContext(t.Context(), `UPDATE sync_metadata SET value='1' WHERE key='usage_change_journal_version'; DELETE FROM sync_metadata WHERE key='usage_history_token' OR key LIKE 'usage_history_checkpoint:%'`)
+	require.NoError(t, err)
+	target, directory := testPGURL(t), t.TempDir()
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	first := openPGActivityInputStore(t, target, syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, first.Close()) })
+	want := pgKeptBuild(t, first, f, q, true)
+	requirePGKeptEqual(t, want, pgKeptBuild(t, first, f, q, false))
+	files, err := filepath.Glob(filepath.Join(cache, "postgres-activity-reports", "*", "*.gob"))
+	require.NoError(t, err)
+	require.Empty(t, files)
+	entries := first.runtimeState().activityKept.Snapshot()
+	require.Len(t, entries, 1)
+	entry := entries[0].Rows[0]
+	data, err := encodePGActivityReport(entry)
+	require.NoError(t, err)
+	first.activityReports.Put(entries[0].Slot+"|"+entry.identity+"|"+entries[0].Version, entry.identity+"|"+entries[0].Version, data)
+	restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, restarted.Close()) })
+	requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, true))
+}
+
 func TestPGActivityReportSavedIdentityRetry(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	local, syncer, _ := newUsageJournalFixture(t)

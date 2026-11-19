@@ -62,17 +62,23 @@ func requirePGKeptEqual(t *testing.T, want, got activity.CandidateArtifacts) {
 	assert.Equal(t, a, b)
 }
 
-func TestPGActivityReportKeptVersion1Journal(t *testing.T) {
+func TestPGActivityReportKeptLegacyJournal(t *testing.T) {
 	t.Parallel()
-	local, syncer, store := newUsageJournalFixture(t)
-	pgKeptSession(t, local, "past", "project-a", "2026-06-14")
-	pgKeptPush(t, syncer, false)
-	_, err := syncer.pg.ExecContext(t.Context(), `UPDATE sync_metadata SET value='1' WHERE key='usage_change_journal_version'`)
-	require.NoError(t, err)
-	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
-	first := pgKeptBuild(t, store, f, q, true)
-	second := pgKeptBuild(t, store, f, q, false)
-	requirePGKeptEqual(t, first, second)
+	for _, version := range []string{"1", "2"} {
+		t.Run(version, func(t *testing.T) {
+			local, syncer, store := newUsageJournalFixture(t)
+			pgKeptSession(t, local, "past", "project-a", "2026-06-14")
+			pgKeptPush(t, syncer, false)
+			_, err := syncer.pg.ExecContext(t.Context(), `UPDATE sync_metadata SET value=$1 WHERE key='usage_change_journal_version'`, version)
+			require.NoError(t, err)
+			_, err = syncer.pg.ExecContext(t.Context(), `DELETE FROM sync_metadata WHERE key='usage_history_token' OR key LIKE 'usage_history_checkpoint:%'`)
+			require.NoError(t, err)
+			q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+			first := pgKeptBuild(t, store, f, q, true)
+			second := pgKeptBuild(t, store, f, q, false)
+			requirePGKeptEqual(t, first, second)
+		})
+	}
 }
 
 func TestPGActivityReportKeptChanges(t *testing.T) {
