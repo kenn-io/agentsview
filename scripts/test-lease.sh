@@ -28,6 +28,7 @@ name, *command = sys.argv[1:]
 lease = f"{name}-{int(time.time())}-{os.getpid()}"
 directory = os.path.join(os.environ["HOME"], ".local", "state", "test-service-leases")
 os.makedirs(directory, mode=0o700, exist_ok=True)
+os.chmod(directory, 0o700)
 fd = os.open(os.path.join(directory, lease), os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
 os.set_inheritable(fd, True)
 fcntl.flock(fd, fcntl.LOCK_EX)

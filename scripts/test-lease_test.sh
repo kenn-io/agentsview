@@ -31,6 +31,10 @@ ln -s "$python_bin" "$tmp/bin/python3"
 ln -s "$go_bin" "$tmp/bin/go"
 export PATH="$tmp/bin:$PATH" DOCKER_LOG="$tmp/docker.log"
 
+# An existing lease directory is secured before the test starts.
+mkdir -p "$HOME/.local/state/test-service-leases"
+chmod 777 "$HOME/.local/state/test-service-leases"
+
 # A real test binary retains the lease after its launcher dies.
 cat > "$tmp/module/go.mod" <<'MOD'
 module example.com/lease-test
@@ -54,6 +58,10 @@ export READY="$tmp/ready" RELEASE="$tmp/release"
 launcher=$!
 for _ in {1..600}; do [[ -f "$READY" ]] && break; sleep .1; done
 [[ -f "$READY" ]] || { cat "$tmp/go.log"; exit 1; }
+python3 - "$HOME/.local/state/test-service-leases" <<'PYMODE'
+import os, stat, sys
+assert stat.S_IMODE(os.stat(sys.argv[1]).st_mode) == 0o700
+PYMODE
 lease=$(find "$HOME/.local/state/test-service-leases" -type f -print -quit)
 kill -9 "$launcher"
 wait "$launcher" 2>/dev/null || true
