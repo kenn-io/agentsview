@@ -618,6 +618,10 @@ nilaway-golangci-build:
 # exceeded the pipe's atomic-write size. NILAWAY_JOBS must be a positive
 # integer: `xargs -P 0` means "unlimited" and would remove the memory bound
 # this whole arrangement depends on.
+#
+# The case pattern inside the package-list $(...) keeps its leading "(":
+# macOS /bin/sh is bash 3.2, which otherwise reads the pattern's ")" as the
+# end of the command substitution and fails with a syntax error.
 NILAWAY_JOBS ?= 4
 
 # Compile exports once before the workers apply their CPU and memory limits.
@@ -637,7 +641,7 @@ nilaway: pricing-snapshot ensure-embed-dir nilaway-golangci-build
 	dirs=$$(go list -export -f '{{.Dir}}' ./...); \
 	pkgs=$$(for dir in $$dirs; do \
 		case "$${dir#$$root/}" in \
-			node_modules/*|*/node_modules/*) continue ;; \
+			(node_modules/*|*/node_modules/*) continue ;; \
 		esac; \
 		if [ "$$dir" = "$$root" ]; then \
 			printf '%s\n' "."; \
