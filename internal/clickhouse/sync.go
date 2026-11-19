@@ -177,6 +177,17 @@ func (s *Sync) EnsureSchema(ctx context.Context) error {
 	return nil
 }
 
+// forgetEnsuredSchema makes the next EnsureSchema on this Sync, or on any
+// later Sync in this process, check the mirror's tables again. A watcher
+// keeps one Sync across pushes, so the shared record alone would not reach
+// it.
+func (s *Sync) forgetEnsuredSchema() {
+	ensuredSchemas.Delete(s.schemaKey)
+	s.connMu.Lock()
+	s.schemaDone = false
+	s.connMu.Unlock()
+}
+
 // Close releases the mirror connection.
 func (s *Sync) Close() error {
 	s.closeOnce.Do(func() {

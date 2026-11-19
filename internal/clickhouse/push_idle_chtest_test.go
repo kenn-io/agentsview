@@ -197,4 +197,20 @@ func TestPushWithSessionErrorsForgetsPreparedSchema(t *testing.T) {
 	require.NotZero(t, result.Errors)
 	_, ok = ensuredSchemas.Load(failing.schemaKey)
 	assert.False(t, ok, "a push with session errors forgets the prepared schema")
+
+	// A watcher pushes again on the same Sync, so its own memo must not
+	// skip the table checks either.
+	conn := chtest.Open(t, target.URL, target.Database)
+	_, err = conn.ExecContext(ctx, "DROP TABLE pinned_messages SYNC")
+	require.NoError(t, err)
+	require.Zero(t, chtest.Count(t, conn, "sessions", "id = ?", fixtureAlphaID))
+	failing.hooks = nil
+	require.NoError(t, failing.EnsureSchema(ctx))
+	result, err = failing.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Zero(t, result.Errors)
+	assert.Equal(t, 1, chtest.Count(t, conn, "system.tables",
+		"database = currentDatabase() AND name = 'pinned_messages'"), "the dropped table is created again")
+	assert.Equal(t, 1, chtest.Count(t, conn, "sessions FINAL", "id = ?", fixtureAlphaID),
+		"the session that failed is published")
 }

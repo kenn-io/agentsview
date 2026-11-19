@@ -54,7 +54,7 @@ func (s *Sync) PushWithOptions(
 	if err != nil {
 		// The failure may come from a schema changed under this process,
 		// so the next push checks the tables again.
-		ensuredSchemas.Delete(s.schemaKey)
+		s.forgetEnsuredSchema()
 	}
 	if err != nil && opts.Full && !s.fullRunRecorded {
 		// The push failed before it recorded the requested full push, so
@@ -122,7 +122,7 @@ func (s *Sync) pushWithOptions(
 		return result, err
 	}
 	if unchanged {
-		log.Printf("clickhouse push: no local changes since the last push; checking vectors only")
+		log.Printf("clickhouse push: no local changes since the last push; skipping sessions")
 		if s.local.ArchiveContent().UsageOnly() {
 			// Clearing a usage-only archive's vectors is upkeep, like
 			// repricing, that the next push without SkipIfUnchanged does.
@@ -471,7 +471,7 @@ func (s *Sync) pushWithOptions(
 	// may come from tables that changed during the push, so after them the
 	// next push checks the tables again.
 	if result.Errors > 0 {
-		ensuredSchemas.Delete(s.schemaKey)
+		s.forgetEnsuredSchema()
 	} else if err := recordEnsuredSchema(ctx, conn, s.schemaKey); err != nil {
 		return result, err
 	}
