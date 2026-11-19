@@ -695,6 +695,62 @@ func TestSearchPagedSnippetOutput(t *testing.T) {
 	}
 }
 
+func TestSearchFallbackMessageAndNamePages(t *testing.T) {
+	d := testDB(t)
+	requireFTS(t, d)
+	for _, f := range []struct {
+		id, project, date, name, content string
+		ordinal                          int
+	}{
+		{"content", "project-a", "2024-06-01T12:00:00Z", "content session", "alpha text", 2},
+		{"both", "project-a", "2024-06-02T12:00:00Z", "alpha both", "alpha text", 3},
+		{"name", "project-a", "2024-06-03T12:00:00Z", "alpha name", "other text", 0},
+		{"project", "project-b", "2024-06-04T12:00:00Z", "alpha project", "other text", 0},
+		{"date", "project-a", "2024-05-01T12:00:00Z", "alpha date", "other text", 0},
+	} {
+		insertSession(t, d, f.id, f.project, func(s *Session) {
+			s.StartedAt, s.EndedAt, s.SessionName = new(f.date), new(f.date), new(f.name)
+		})
+		insertMessages(t, d, userMsg(f.id, f.ordinal, f.content))
+	}
+	type hit struct {
+		id, snippet string
+		ordinal     int
+		rank        float64
+		next        int
+	}
+	both := hit{"both", "<mark>alpha</mark> text", 3, -0.3364722366212129, 1}
+	content := hit{"content", "<mark>alpha</mark> text", 2, -0.3364722366212129, 2}
+	name := hit{"name", "alpha name", -1, 0, 0}
+	for _, tc := range []struct {
+		name   string
+		filter SearchFilter
+		want   []hit
+	}{
+		{"relevance", SearchFilter{Query: "alpha"}, []hit{both, content, {"project", "alpha project", -1, 0, 3}, {"name", "alpha name", -1, 0, 4}, {"date", "alpha date", -1, 0, 0}}},
+		{"project", SearchFilter{Query: "alpha", Project: "project-a", DateFrom: "2024-06-01"}, []hit{both, content, name}},
+		{"date", SearchFilter{Query: "alpha", DateFrom: "2024-06-01", DateTo: "2024-06-03"}, []hit{both, content, name}},
+		{"recency", SearchFilter{Query: "alpha", Project: "project-a", DateFrom: "2024-06-01", Sort: "recency"}, []hit{{"name", "alpha name", -1, 0, 1}, {"both", "<mark>alpha</mark> text", 3, -0.3364722366212129, 2}, {"content", "<mark>alpha</mark> text", 2, -0.3364722366212129, 0}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := tc.filter
+			f.Limit = 1
+			for _, want := range tc.want {
+				page, err := d.Search(t.Context(), f)
+				require.NoError(t, err)
+				require.Len(t, page.Results, 1)
+				got := page.Results[0]
+				assert.Equal(t, want.id, got.SessionID)
+				assert.Equal(t, want.ordinal, got.Ordinal)
+				assert.InDelta(t, want.rank, got.Rank, 1e-12)
+				assert.Equal(t, want.snippet, got.Snippet)
+				assert.Equal(t, want.next, page.NextCursor)
+				f.Cursor = page.NextCursor
+			}
+		})
+	}
+}
+
 func TestPrepareFTSQuery(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
