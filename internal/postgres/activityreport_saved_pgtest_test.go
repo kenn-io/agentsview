@@ -36,7 +36,7 @@ func TestPGActivityReportSavedPricingVariants(t *testing.T) {
 }
 
 func TestPGActivityReportSavedRestart(t *testing.T) {
-	for _, mode := range []string{"restart", "revision", "sweep", "pricing", "unavailable", "memo-rejected"} {
+	for _, mode := range []string{"restart", "revision", "sweep", "unavailable", "memo-rejected"} {
 		t.Run(mode, func(t *testing.T) {
 			cache := t.TempDir()
 			t.Setenv("CACHE_DIRECTORY", cache)
@@ -94,10 +94,7 @@ func TestPGActivityReportSavedRestart(t *testing.T) {
 			}
 			restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
 			t.Cleanup(func() { require.NoError(t, restarted.Close()) })
-			if mode == "pricing" {
-				restarted.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 40_000_000}})
-			}
-			got := pgKeptBuild(t, restarted, f, q, mode == "pricing")
+			got := pgKeptBuild(t, restarted, f, q, false)
 			if mode == "revision" {
 				requirePGKeptEqual(t, want, got)
 				slots := restarted.runtimeState().activityKept.Snapshot()

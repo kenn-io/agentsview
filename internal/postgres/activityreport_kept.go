@@ -31,13 +31,9 @@ type pgActivitySavedReport struct {
 	Report                    kept.Report
 }
 
-func pgActivityReportDiskSelection(selection, version, identity string) string {
-	return fmt.Sprintf("%d:%s%d:%s%s", len(selection), selection, len(identity), identity, version)
-}
-
 func (s *Store) loadActivityReport(selection, version, identity string) (pgActivityKept, bool) {
 	s.activityReports.Sweep(time.Now())
-	data, ok := s.activityReports.Get(pgActivityReportDiskSelection(selection, version, identity), identity+"|"+version)
+	data, ok := s.activityReports.Get(selection+"|"+identity+"|"+version, identity+"|"+version)
 	if !ok {
 		return pgActivityKept{}, false
 	}
@@ -59,13 +55,13 @@ func encodePGActivityReport(entry pgActivityKept) ([]byte, error) {
 func (s *Store) saveActivityReport(selection, version string, entry pgActivityKept) {
 	data, err := encodePGActivityReport(entry)
 	if err == nil {
-		s.activityReports.Put(pgActivityReportDiskSelection(selection, version, entry.identity), entry.identity+"|"+version, data)
+		s.activityReports.Put(selection+"|"+entry.identity+"|"+version, entry.identity+"|"+version, data)
 	}
 }
 
 // keepActivityReport records the identity a memo hit just resolved. A report
-// whose identity was already saved only refreshes its open time; one whose
-// identity just became available replaces the stale file saved under it.
+// whose identity was already saved refreshes its open time; one whose
+// identity just became available is saved.
 func (s *Store) keepActivityReport(selection, version string, entry pgActivityKept, identity string, unavailable bool) {
 	saved := entry.identity == identity
 	if !saved || entry.identityUnavailable != unavailable {
@@ -74,7 +70,7 @@ func (s *Store) keepActivityReport(selection, version string, entry pgActivityKe
 	}
 	if identity != "" {
 		if saved {
-			s.activityReports.Keep(pgActivityReportDiskSelection(selection, version, identity), identity+"|"+version, func() ([]byte, error) { return encodePGActivityReport(entry) })
+			s.activityReports.Keep(selection+"|"+identity+"|"+version, identity+"|"+version, func() ([]byte, error) { return encodePGActivityReport(entry) })
 		} else {
 			s.saveActivityReport(selection, version, entry)
 		}
