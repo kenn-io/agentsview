@@ -204,7 +204,7 @@ func (s *Reports) saveActivityReport(selection, key string, entry Report) {
 	}
 	body, err := json.Marshal(entry)
 	if err == nil {
-		err = d.save(selection, key, body, 0)
+		_, err = d.save(selection, key, body, 0)
 	}
 	if err != nil {
 		log.Printf("%s: keeping an activity report on disk: %v", s.subdir, err)

@@ -44,6 +44,7 @@ func TestDiskLimitsAndUnavailableDirectory(t *testing.T) {
 	var disk Disk
 	require.NoError(t, disk.Open("test-usage", "mirror", 128, 0))
 	require.False(t, disk.Put("large", "v", make([]byte, 128)))
+	require.True(t, disk.Put("boundary", "v", make([]byte, 128-len(disk.reports.disk.header("v")))))
 	_, err := os.Stat(disk.reports.disk.path("large"))
 	require.ErrorIs(t, err, os.ErrNotExist)
 	require.NoError(t, os.WriteFile(disk.reports.disk.path("large"), append(disk.reports.disk.header("v"), make([]byte, 128)...), 0o600))
