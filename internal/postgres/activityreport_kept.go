@@ -22,11 +22,13 @@ type pgActivityKept struct {
 	identityUnavailable       bool
 	report                    kept.Report
 	revision                  int64
+	checkpoint                string
 	candidates, peers, labels []string
 }
 
 type pgActivitySavedReport struct {
 	Revision                  int64
+	Checkpoint                string
 	Candidates, Peers, Labels []string
 	Report                    kept.Report
 }
@@ -45,11 +47,11 @@ func (s *Store) loadActivityReport(selection, version, identity string) (pgActiv
 		project.ProjectKey = key
 		saved.Report.Artifacts.Report.Projects[key] = project
 	}
-	return pgActivityKept{identity: identity, revision: saved.Revision, candidates: saved.Candidates, peers: saved.Peers, labels: saved.Labels, report: saved.Report}, true
+	return pgActivityKept{identity: identity, revision: saved.Revision, checkpoint: saved.Checkpoint, candidates: saved.Candidates, peers: saved.Peers, labels: saved.Labels, report: saved.Report}, true
 }
 
 func encodePGActivityReport(entry pgActivityKept) ([]byte, error) {
-	return json.Marshal(pgActivitySavedReport{Revision: entry.revision, Candidates: entry.candidates, Peers: entry.peers, Labels: entry.labels, Report: entry.report}, json.FormatNilSliceAsNull(true))
+	return json.Marshal(pgActivitySavedReport{Revision: entry.revision, Checkpoint: entry.checkpoint, Candidates: entry.candidates, Peers: entry.peers, Labels: entry.labels, Report: entry.report}, json.FormatNilSliceAsNull(true))
 }
 
 func (s *Store) saveActivityReport(selection, version string, entry pgActivityKept) {
@@ -126,6 +128,13 @@ func (s *Store) keptActivityReport(ctx context.Context, selection, version strin
 		return kept.Report{}, through, false, err
 	}
 	entry := entries[0]
+	current, previous, err := usageHistoryCheckpoints(ctx, s.pg, through, entry.revision)
+	if err != nil {
+		return kept.Report{}, through, false, err
+	}
+	if entry.checkpoint == "" || entry.checkpoint != previous {
+		return kept.Report{}, through, false, nil
+	}
 	if through == entry.revision {
 		return entry.report, through, true, nil
 	}
@@ -168,6 +177,7 @@ func (s *Store) keptActivityReport(ctx context.Context, selection, version strin
 		return kept.Report{}, through, false, nil
 	}
 	entry.revision = through
+	entry.checkpoint = current
 	memo.Put(selection, version, []pgActivityKept{entry})
 	return entry.report, through, true, nil
 }

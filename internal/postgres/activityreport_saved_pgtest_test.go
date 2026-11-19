@@ -113,6 +113,54 @@ func TestPGActivityReportSaved(t *testing.T) {
 	}
 }
 
+func TestPGActivityReportSavedHistory(t *testing.T) {
+	for _, mode := range []string{"replaced", "unrelated", "missing"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("CACHE_DIRECTORY", t.TempDir())
+			local, syncer, _ := newUsageJournalFixture(t)
+			pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+			pgKeptPush(t, syncer, false)
+			target, directory := testPGURL(t), t.TempDir()
+			q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+			first := openPGActivityInputStore(t, target, syncer.schema, directory)
+			t.Cleanup(func() { require.NoError(t, first.Close()) })
+			before := pgKeptBuild(t, first, f, q, true)
+			ctx := t.Context()
+			var revision int64
+			require.NoError(t, first.pg.QueryRowContext(ctx, `SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'`).Scan(&revision))
+			switch mode {
+			case "replaced":
+				tx, err := first.beginTx(ctx, nil)
+				require.NoError(t, err)
+				_, err = tx.ExecContext(ctx, `UPDATE messages SET token_usage='{"output_tokens":600}' WHERE session_id='a' AND role='assistant'`)
+				require.NoError(t, err)
+				_, err = tx.ExecContext(ctx, `UPDATE sessions SET updated_at=now() WHERE id='a'`)
+				require.NoError(t, err)
+				_, err = tx.ExecContext(ctx, `UPDATE sync_metadata SET value=$1::bigint::text WHERE key='usage_change_revision'`, revision-1)
+				require.NoError(t, err)
+				require.NoError(t, tx.Commit())
+				var after int64
+				require.NoError(t, first.pg.QueryRowContext(ctx, `SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'`).Scan(&after))
+				require.Equal(t, revision, after)
+			case "unrelated":
+				pgKeptSession(t, local, "b", "project-b", "2026-07-14")
+				pgKeptPush(t, syncer, false)
+			case "missing":
+				_, err := first.pg.ExecContext(ctx, `DELETE FROM sync_metadata WHERE key='usage_history_checkpoint:' || $1::bigint::text`, revision)
+				require.NoError(t, err)
+			}
+			restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
+			t.Cleanup(func() { require.NoError(t, restarted.Close()) })
+			got := pgKeptBuild(t, restarted, f, q, mode != "unrelated")
+			if mode == "replaced" {
+				assert.Equal(t, 600, got.Report.Totals.OutputTokens)
+			} else {
+				requirePGKeptEqual(t, before, got)
+			}
+		})
+	}
+}
+
 func TestPGActivityReportSavedIdentityRetry(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	local, syncer, _ := newUsageJournalFixture(t)

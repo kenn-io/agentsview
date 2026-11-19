@@ -150,6 +150,7 @@ func (s *Store) BuildActivityReportArtifacts(
 	var selection, version, identity string
 	var unavailable bool
 	var revision int64
+	var checkpoint string
 	if !q.Partial && !s.hostedRelations && !db.TerminationUsesTime(f.Termination) {
 		version, err = s.activityKeptVersion(ctx, pricingDigest)
 		if err != nil {
@@ -175,6 +176,11 @@ func (s *Store) BuildActivityReportArtifacts(
 			}
 			if revision == 0 {
 				selection = ""
+			} else {
+				checkpoint, _, err = usageHistoryCheckpoints(ctx, s.pg, revision, revision)
+				if err != nil {
+					return activity.CandidateArtifacts{}, err
+				}
 			}
 		}
 	}
@@ -238,7 +244,7 @@ func (s *Store) BuildActivityReportArtifacts(
 		}
 		memo := &s.runtimeState().activityKept
 		memo.Put(selection, version, []pgActivityKept{{
-			report: kept.Report{Artifacts: artifacts, Done: done}, revision: revision,
+			report: kept.Report{Artifacts: artifacts, Done: done}, revision: revision, checkpoint: checkpoint,
 			candidates: candidates, peers: slices.Clip(slices.Sorted(maps.Keys(read))),
 			labels: activity.ProjectLabels(sessions), identity: identity, identityUnavailable: unavailable,
 		}})
