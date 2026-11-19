@@ -134,6 +134,29 @@ The latest release is
 - `integrations.docbank.allow_http = true` allows plain HTTP to Docbank on a
   trusted network.
 
+- Hosted raw sync servers can embed uploaded sessions themselves, so
+  `agentsview session search --pg --semantic` finds them and laptops do no
+  embedding work. Install pgvector, set `[vector]` and `[vector.embeddings]` on
+  the server, provision again, and grant the runtime role the vector tables.
+  See
+  [Provision a hosted instance](/docs/hosted-raw-sync/#provision-a-hosted-instance).
+
+- Apply a changed tool-result image policy from Settings with **Restart now**
+  instead of restarting AgentsView by hand. Servers that cannot restart
+  themselves show the manual steps. See
+  [`agentsview daemon`](/docs/commands/#agentsview-daemon).
+
+- New users see a **Get started** card on the dashboard that points to opening a
+  session, searching, token use, and insights. It goes away once every step is
+  done or you dismiss it.
+
+- The command palette reopens your last search after you pick a result, with
+  the result you picked highlighted, so trying the next one is one arrow key
+  away. Escape or the clear button starts fresh.
+
+- When a full-text search in the command palette fails, it retries once and
+  then offers **Retry**. See [Search Modes](/docs/usage/#search-modes).
+
 **Improvements**
 
 - Session search finds messages that hold your words in any order and in
@@ -239,6 +262,29 @@ The latest release is
   most on a slow link. When the stored snapshot does not match what the push
   kept, as after an interrupted push, the push uploads the whole snapshot as
   before.
+
+- Remote syncs download only the new lines of a growing transcript instead of
+  the whole file, so a host with long active sessions sends kilobytes instead of
+  hundreds of megabytes. Both ends need this release; an older remote still
+  sends whole files. See
+  [How A Sync Works](/docs/remote-access/#how-a-sync-works).
+
+- A sync gives up on an offline HTTP remote after 10 seconds instead of 30, so
+  the hosts after it start sooner. On Windows, a refused or unreachable remote
+  is now skipped as offline instead of failing the sync, as on macOS and Linux.
+
+- A remote sync started through the daemon now finishes even if the
+  `agentsview sync` that asked for it is killed or times out, so a long
+  re-parse completes once instead of restarting on every scheduled run. Ctrl-C
+  stops only the CLI; stop the daemon to stop the import.
+
+- A page or panel whose data fails to load now says so, shows the server's
+  message, and offers **Retry**, instead of looking empty. The status bar shows
+  "status unavailable" with Retry when the local server stops answering.
+
+- Broad searches through a server, from the command palette or the
+  `search_sessions` MCP tool, no longer fail with `503 request timed out` after
+  `--write-timeout`. Cancelling still stops the search.
 
 **Bug fixes**
 
@@ -355,6 +401,47 @@ The latest release is
   the lost records are still missing, but the count shows that the totals may
   be low. Existing sessions pick up the count the next time their source
   changes; the upgrade does not trigger a resync.
+- Grok sessions keep their history from before each compaction and mark each
+  compaction with a divider holding its summary. Tool calls now show in the
+  transcript. Existing Grok sessions are reread on upgrade.
+- Mistral Vibe 3.1 sessions sync again instead of failing with
+  `unsupported Vibe unified version`.
+- Cursor IDE chats in the newer `_v: 18` format appear instead of being
+  skipped.
+- Antigravity CLI sessions keep the prompt you typed when a skill expands in the
+  same step.
+- Claude.ai Sync no longer reports an error for chats with no message tree; it
+  skips them.
+- DeepSeek Harness messages keep their native IDs, so pins and conversation
+  exports keep a stable identity across rescans.
+- Commits made through Codex's older `shell` tool, such as
+  `["bash","-lc","git commit -m fix"]`, now get commit links.
+- Pi, OMO, and StepCode discovery no longer descends into `subagent-artifacts`,
+  where a dangling symlink could keep sync rescanning.
+- Usage and cost now include model calls that recorded tokens but showed no text
+  for OpenCode, Kilo, MiMo Code, iCodeMate, OpenClaw, QClaw, Forge, Cline, and
+  Gemini CLI. The next sync reparses these sessions in place.
+- PostgreSQL sync works with CockroachDB 25.4: schema setup finishes and session
+  pushes no longer fail on `starts_with()`.
+- ClickHouse global search on a large mirror returns results instead of an HTTP
+  500 from ClickHouse's per-query memory limit.
+- The AgentsView Memory plugin's search agent now starts in Claude Code,
+  instead of being refused for having no tools.
+- Daemon restarts on Windows no longer fail to open the archive while the old
+  process is still releasing its database lock or shared-memory file.
+- On macOS, folders watched one level deep, such as OpenHands conversations, use
+  FSEvents. The old watcher could rarely close an unrelated file or hang the
+  daemon.
+- AgentsView Desktop shows startup progress for large archives instead of
+  looking frozen.
+- In-session find no longer jumps back to the current match each time a live
+  session adds messages.
+- `agentsview serve` no longer prints "Using available port N" and then fails
+  with `address already in use`.
+- `capture report` says `finalization_timeout`, not `no_session`, when its wait
+  ends before it looked for the session.
+- Semantic search builds of messages and Recall that run at the same time no
+  longer fail with `database is locked`.
 
 **Upgrade notes**
 
@@ -380,6 +467,19 @@ The latest release is
   `config.toml` is ignored, and `AGENTSVIEW_DUCKDB_*` variables have no effect.
   For a read-only copy of your archive, use the
   [PostgreSQL](/docs/pg-sync/) or [ClickHouse](/docs/clickhouse-sync/) replica.
+- Hosted raw sync operators: the runtime role now needs `SELECT, INSERT` on
+  `session_usage_totals` and `INSERT, UPDATE` on `excluded_sessions`. A role
+  created from the 0.47.0 grants lacks both, and startup fails with
+  `hosted runtime projection privileges for ... are incomplete`. Grant them as
+  the owner before upgrading; see
+  [Provision a hosted instance](/docs/hosted-raw-sync/#provision-a-hosted-instance).
+- ClickHouse: after a push that rewrites at least a quarter of the mirror, such
+  as `clickhouse push --full`, the push compacts the rewritten tables. That
+  needs `GRANT OPTIMIZE ON <database>.*` and `GRANT SELECT ON system.parts` for
+  the push user. Without them the push still succeeds but logs
+  `skipped compacting the rewritten tables`, and reads stay slower until
+  ClickHouse merges the old rows. See
+  [Compaction after a large push](/docs/clickhouse-sync/#compaction-after-a-large-push).
 
 ## 0.47.0
 
