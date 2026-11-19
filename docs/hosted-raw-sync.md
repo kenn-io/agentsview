@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-17
+last_edited: 2026-11-19
 title: Hosted Raw Sync
 description: Upload original session files to an operator-managed server and resume interrupted transfers
 ---
@@ -27,23 +27,22 @@ sessions browsable. Hosted processing uses no SQLite archive intermediary;
 SQLite databases captured from providers remain valid source artifacts. Hosted
 raw sync carries no archive labels or launcher parent links. Label filters on
 hosted sessions match nothing. With embeddings configured, the server builds
-vectors from uploaded sessions and makes them available for meaning search.
-The embedding worker checks stored session progress and does not read the raw
+vectors from uploaded sessions and makes them available for meaning search. The
+embedding worker checks stored session progress and does not read the raw
 embedding outbox. Permanently rejected messages stay unindexed until the session
 revision or embedding generation changes; other messages remain searchable.
 Transient endpoint failures retry on the next worker poll. Rate-limited sessions
-do not block later sessions.
-For the same session ID and embedding generation, the server reuses vectors
-when document keys, content hashes, and chunk coverage match. Ordinary raw
-edits create a new session ID, so the server embeds that session again.
-Cross-session vector reuse is deferred to kit.
+do not block later sessions. For the same session ID and embedding generation,
+the server reuses vectors when document keys, content hashes, and chunk coverage
+match. Ordinary raw edits create a new session ID, so the server embeds that
+session again. Cross-session vector reuse is deferred to kit.
 
 Device enrollment and revocation remain operator-managed. The operator supplies
 each laptop with a server URL, device ID and credential. There is no public
 enrollment command or HTTP endpoint. The broader delivery work remains tracked
-in [agentsview#1352](https://github.com/kenn-io/agentsview/issues/1352), including
-accepted-generation retention and garbage collection, and
-disaster rebuilds.
+in [agentsview#1352](https://github.com/kenn-io/agentsview/issues/1352),
+including accepted-generation retention and garbage collection, and disaster
+rebuilds.
 
 ## Provision a hosted instance
 
@@ -102,8 +101,8 @@ For meaning search, install pgvector in the database and configure `[vector]`
 and `[vector.embeddings]` on the server before provisioning. Use the same
 embedding configuration when starting the server. Provision again after changing
 the model or its recipe so the owner creates the new generation's chunk table.
-Older generation tables remain for the operator to manage.
-For example, with an OpenAI-compatible embedding endpoint:
+Older generation tables remain for the operator to manage. For example, with an
+OpenAI-compatible embedding endpoint:
 
 ```toml
 [vector]
@@ -119,8 +118,8 @@ default_server = "local"
 endpoint = "http://127.0.0.1:11434/v1"
 ```
 
-See the [vector configuration reference](semantic-search.md#enabling-vector)
-for other models and endpoints.
+See the [vector configuration reference](semantic-search.md#enabling-vector) for
+other models and endpoints.
 
 Create a separate login role with
 `NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT`,
@@ -211,9 +210,9 @@ previously retained indexed content. It does not create or consume embeddings.
 The runtime checks the configured policy's grants before readiness and reports
 missing privileges instead of silently disabling hosted processing.
 
-When `[vector]` is enabled for stored content, also grant `SELECT, INSERT,
-UPDATE, DELETE` on `vector_documents` and `vector_push_state`, `SELECT, DELETE`
-on each existing `vector_chunks_g<ID>` table registered in
+When `[vector]` is enabled for stored content, also grant
+`SELECT, INSERT, UPDATE, DELETE` on `vector_documents` and `vector_push_state`,
+`SELECT, DELETE` on each existing `vector_chunks_g<ID>` table registered in
 `vector_generations`, and `INSERT` on the configured generation's chunk table.
 Repeat the chunk-table grants after provisioning a new generation. On a machine
 configured with the hosted PostgreSQL target and query endpoint, search uploaded
@@ -231,6 +230,19 @@ can put the same hosted keys under `[pg]`. `AGENTSVIEW_PG_URL` and
 rewrite the separate named owner target. `pg push` refuses a hosted-owned schema
 before mutation, even if the client omits its hosted configuration fields. Use a
 separate legacy schema for local pushes.
+
+The server stores uploaded files under the AgentsView data directory, so that
+directory must be writable by the server's user. The stored files are protected
+by lock files in a separate directory. By default, the server puts that
+directory under the home directory of its effective uid, which it looks up in
+`/etc/passwd`. If the server runs as a uid with no passwd entry, set
+`DOCBANK_LOCK_DIR` to an absolute, writable path. A container started with
+Kubernetes `runAsUser` or `docker --user` is the common case. The published
+image already sets `DOCBANK_LOCK_DIR=/data/docbank-locks`. If you move the data
+directory off `/data`, move this path with it. Without a lock directory, every
+upload fails with a 500 response, which the client retries as transient. The
+server log shows the cause as
+`raw sync request failed: ... resolving effective user`.
 
 ## Isolation and processing limits
 
@@ -398,8 +410,8 @@ rollback does not convert the schema back to a `pg push` destination.
 
 Keep PostgreSQL metadata and the immutable raw repository together in backups.
 Automated retention and garbage collection of accepted generations, disaster
-rebuilds, enrollment UX and migration cutover tooling
-remain outside this release.
+rebuilds, enrollment UX and migration cutover tooling remain outside this
+release.
 
 ## Backfill existing laptop sources
 
@@ -983,13 +995,13 @@ state another process might have opened during initialization.
 
 Raw capture still needs local provider discovery, consistent source snapshots,
 bounded spool space and durable upload checkpoints. Signing does not create a
-second ingestion pipeline or provide missing quota, retention
-or backfill features. Direct `pg push` and PostgreSQL reads use database
-protocols; HTTP signing does not protect them. HTTP reader/search/memory/MCP
-functionality is limited by the hosted server's independently available
-projection and indexes. Storage objects continue through the native upload
-route; this change introduces no presigned object-storage URL transport or
-forwarding of API credentials to storage origins.
+second ingestion pipeline or provide missing quota, retention or backfill
+features. Direct `pg push` and PostgreSQL reads use database protocols; HTTP
+signing does not protect them. HTTP reader/search/memory/MCP functionality is
+limited by the hosted server's independently available projection and indexes.
+Storage objects continue through the native upload route; this change introduces
+no presigned object-storage URL transport or forwarding of API credentials to
+storage origins.
 
 Before exposing any route, verify the supporting release, enroll least-privilege
 credentials, select an external prefix, verify TLS certificates and trusted
