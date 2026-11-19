@@ -8,6 +8,9 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
+// ErrSessionRefreshNotStarted means the parent refresh could not acquire the lock.
+var ErrSessionRefreshNotStarted = errors.New("session refresh did not start")
+
 var subagentTranscriptPaths = parser.ClaudeSubagentTranscriptPaths
 
 // SyncSessionWithSubagentsContext refreshes one session and the candidate
