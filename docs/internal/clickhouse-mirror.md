@@ -376,8 +376,9 @@ state again and skips the schema step while it matches. The state covers:
 
 A prepared usage refresh replaces `prepared_usage` with an identical table and
 keeps the state; its temporary `.tmp.` table is left out. A state that cannot be
-read counts as changed. A failed push forgets the record, so the next push runs
-the step.
+read counts as changed. A failed push, or one that ends with session errors,
+forgets the record, so the next push runs the step. Session errors can come from
+tables that changed during the push.
 
 ## Rejected alternatives
 

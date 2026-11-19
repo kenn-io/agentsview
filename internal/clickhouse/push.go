@@ -122,11 +122,11 @@ func (s *Sync) pushWithOptions(
 		return result, err
 	}
 	if unchanged {
-		log.Printf("clickhouse push: nothing changed locally since the last push; skipping the session phase")
+		log.Printf("clickhouse push: no local changes since the last push; checking vectors only")
 		if s.local.ArchiveContent().UsageOnly() {
 			// Clearing a usage-only archive's vectors is upkeep, like
 			// repricing, that the next push without SkipIfUnchanged does.
-			result.Vectors.Skipped, result.Vectors.SkippedReason = true, "usage-only archive keeps no vectors"
+			result.Vectors.Skipped, result.Vectors.SkippedReason = true, usageOnlyVectorsReason
 			result.Duration = time.Since(start)
 			return result, nil
 		}
@@ -467,8 +467,12 @@ func (s *Sync) pushWithOptions(
 	}
 	// A push can replace tables it maintains, such as prepared usage and
 	// the usage rollup. Record the result so the next Sync in this process
-	// does not mistake those swaps for a schema to repair.
-	if err := recordEnsuredSchema(ctx, conn, s.schemaKey); err != nil {
+	// does not mistake those swaps for a schema to repair. Session errors
+	// may come from tables that changed during the push, so after them the
+	// next push checks the tables again.
+	if result.Errors > 0 {
+		ensuredSchemas.Delete(s.schemaKey)
+	} else if err := recordEnsuredSchema(ctx, conn, s.schemaKey); err != nil {
 		return result, err
 	}
 	result.Duration = time.Since(start)
@@ -533,15 +537,9 @@ func (s *Sync) unchangedSinceLastPush(
 		return false, nil
 	}
 	if !s.isFiltered() {
-		var sinceID int64
-		if stored := meta[s.archiveKey(cursorUsageMaxIDKeyBase)]; stored != "" {
-			if sinceID, err = strconv.ParseInt(stored, 10, 64); err != nil {
-				return false, fmt.Errorf("parsing cursor usage high-water id %q: %w", stored, err)
-			}
-		}
-		events, err := s.local.GetCursorUsageEvents(ctx, sinceID)
+		events, _, err := s.pendingCursorUsageEvents(ctx, meta[s.archiveKey(cursorUsageMaxIDKeyBase)])
 		if err != nil {
-			return false, fmt.Errorf("loading local cursor usage events: %w", err)
+			return false, err
 		}
 		if len(events) > 0 {
 			return false, nil

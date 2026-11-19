@@ -235,7 +235,9 @@ agentsview replica clickhouse push --watch --interval 5m
 The watcher performs one initial local sync plus ClickHouse push, then pushes
 again after session-directory changes settle for the debounce window. The
 interval acts as a floor: even if filesystem events are missed, the next
-interval push catches up.
+interval push catches up. A push that file changes start sends only session
+changes. Model prices, machine labels, and cleanup arrive with the next startup
+or interval push, at most one interval later.
 
 Operational details:
 

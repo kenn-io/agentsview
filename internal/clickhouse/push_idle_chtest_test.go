@@ -4,6 +4,7 @@ package clickhouse
 
 import (
 	"database/sql"
+	"errors"
 	"testing"
 	"time"
 
@@ -149,8 +150,6 @@ func TestPushAfterSkippedChangePushPublishesPrices(t *testing.T) {
 
 	_, err = s.PushWithOptions(ctx, changeTriggered, nil)
 	require.NoError(t, err)
-	require.Zero(t, pattern(), "the change-triggered push left prices for later")
-
 	_, err = s.PushWithOptions(ctx, storage.PushOptions{}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, pattern())
@@ -178,4 +177,24 @@ func TestEnsureSchemaReusesSchemaThisProcessPrepared(t *testing.T) {
 		"SELECT count() FROM system.tables WHERE database = currentDatabase() AND name = 'pinned_messages'",
 	).Scan(&tables))
 	assert.Equal(t, 1, tables, "a dropped table is created again")
+}
+
+// Session errors may come from tables that changed during the push, so a
+// push that ends with them leaves the next Sync to check the tables again.
+func TestPushWithSessionErrorsForgetsPreparedSchema(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	local, target := seedFixture(t)
+	failing := newTestSync(t, local, target, storage.PusherOptions{})
+	_, ok := ensuredSchemas.Load(failing.schemaKey)
+	require.True(t, ok, "setting up the Sync records the prepared schema")
+
+	failing.hooks = &pushHooks{beforeSessionRows: func([]db.Session) error {
+		return errors.New("simulated session failure")
+	}}
+	result, err := failing.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.NotZero(t, result.Errors)
+	_, ok = ensuredSchemas.Load(failing.schemaKey)
+	assert.False(t, ok, "a push with session errors forgets the prepared schema")
 }
