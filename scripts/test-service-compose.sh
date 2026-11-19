@@ -8,7 +8,7 @@ cleanup() {
     status=$?
     trap - EXIT HUP INT TERM
     if ! docker compose -p "$TEST_SERVICE_LEASE" -f docker-compose.test.yml -f docker-compose.test-lease.yml down -v --remove-orphans; then
-        echo 'cleanup failed; scheduled cleanup will retry' >&2
+        echo "cleanup failed; retry from the repository root: docker compose -p $TEST_SERVICE_LEASE -f docker-compose.test.yml -f docker-compose.test-lease.yml down -v --remove-orphans" >&2
         if [ "$status" -eq 0 ]; then status=1; fi
     fi
     exit "$status"

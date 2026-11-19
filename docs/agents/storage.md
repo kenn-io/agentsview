@@ -1678,7 +1678,8 @@ own metadata, which is why the docs below call the database a mirror.
 
 Run `make test-clickhouse` to start a disposable compose service. The target
 removes it after the tests and reports a failure if cleanup fails. When running
-tagged Go tests directly, set
+`make clickhouse-up`, use `make clickhouse-down` to stop the standing service;
+test cleanup does not remove it. When running tagged Go tests directly, set
 `TEST_CLICKHOUSE_URL` to reuse a dedicated test server.
 These tests use the `chtest` build tag. Never point them at a live mirror.
 
@@ -1771,7 +1772,7 @@ Because each test owns a database, the tests run in parallel:
 Use `make test-postgres` to start a disposable container and run the suite.
 The target removes the container afterward and reports a failure if cleanup
 fails. Use `make postgres-up` and `make postgres-down` to manage a standing
-test container.
+test container, which test cleanup does not remove.
 
 To use an existing dedicated instance, run:
 

@@ -13,6 +13,7 @@ cleanup() {
 }
 trap cleanup EXIT
 go_bin="$(go env GOROOT)/bin/go"
+docker_bin=$(command -v docker)
 python_bin=$(command -v python3)
 if command -v mise >/dev/null 2>&1 && [[ "$python_bin" == */mise/shims/* ]]; then python_bin=$(mise which python3); fi
 export HOME="$tmp/home"
@@ -24,7 +25,6 @@ case " $* " in
   *' up '*)
     if [ -n "${CHECK_LEASE:-}" ]; then
       [ "$2" = -p ] && [ "$3" = "$TEST_SERVICE_LEASE" ] || exit 1
-      grep -Fq 'test-service.lease: "${TEST_SERVICE_LEASE}"' docker-compose.test-lease.yml || exit 1
       python3 - "$HOME/.local/state/test-service-leases/$TEST_SERVICE_LEASE" <<'PROBE'
 import fcntl, sys
 with open(sys.argv[1]) as f:
@@ -43,6 +43,14 @@ chmod +x "$tmp/bin/docker"
 ln -s "$python_bin" "$tmp/bin/python3"
 ln -s "$go_bin" "$tmp/bin/go"
 export PATH="$tmp/bin:$PATH" DOCKER_LOG="$tmp/docker.log"
+
+# Both services expose the lease label in the resolved Compose configuration.
+(cd "$root" && TEST_SERVICE_LEASE=agentsview-test-123 "$docker_bin" compose -p agentsview-test-123 -f docker-compose.test.yml -f docker-compose.test-lease.yml config --format json) | python3 -c '
+import json, sys
+services = json.load(sys.stdin)["services"]
+for name in ("postgres", "clickhouse"):
+    assert services[name]["labels"]["test-service.lease"] == "agentsview-test-123"
+'
 
 # An existing lease directory is secured before the test starts.
 mkdir -p "$HOME/.local/state/test-service-leases"
@@ -99,7 +107,7 @@ set +e
 status=$?
 set -e
 [[ $status == 7 ]]
-grep -qE 'cleanup failed; scheduled cleanup will retry' "$tmp/error"
+grep -Fxq 'cleanup failed; retry from the repository root: docker compose -p agentsview-test-123 -f docker-compose.test.yml -f docker-compose.test-lease.yml down -v --remove-orphans' "$tmp/error"
 grep -qE -- '-p agentsview-test-123 .* up -d --wait postgres' "$DOCKER_LOG"
 grep -qE -- '-p agentsview-test-123 .* down -v --remove-orphans' "$DOCKER_LOG"
 [[ -f "$lease" ]]
@@ -110,7 +118,7 @@ set +e
 status=$?
 set -e
 [[ $status == 1 ]]
-grep -qE 'cleanup failed; scheduled cleanup will retry' "$tmp/cleanup-error"
+grep -Fxq 'cleanup failed; retry from the repository root: docker compose -p agentsview-test-123 -f docker-compose.test.yml -f docker-compose.test-lease.yml down -v --remove-orphans' "$tmp/cleanup-error"
 
 # Dry runs do not start services; manual targets retain their project.
 export DOWN_STATUS=0

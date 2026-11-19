@@ -450,6 +450,7 @@ postgres-up:
 
 # Run opt-in PostgreSQL usage benchmarks against the pinned PG16 service.
 # Indirection keeps make -n from executing the service wrapper.
+.PHONY: bench-pg-usage-run test-postgres-run test-clickhouse-run
 TEST_SERVICE_MAKE = $(MAKE)
 bench-pg-usage:
 	./scripts/test-lease.sh agentsview ./scripts/test-service-compose.sh postgres 5432 $(TEST_SERVICE_MAKE) bench-pg-usage-run
