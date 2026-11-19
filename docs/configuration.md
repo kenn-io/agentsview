@@ -698,6 +698,7 @@ keeps its default directories.
 | Cursor IDE            | (platform-specific, see below)                                                                                                                                   | Shared VS Code-style `globalStorage/state.vscdb` database, one session per Composer                                                                           |
 | DeepSeek TUI          | `~/.codewhale/sessions/` and `~/.deepseek/sessions/`                                                                                                             | JSON per session                                                                                                                                              |
 | DeepSeek Harness      | `~/.dsh/sessions/` (or `$DSH_HOME/sessions/`)                                                                                                                    | Plain or multi-frame zstd JSONL per session                                                                                                                   |
+| Factory Droid         | `~/.factory/sessions/`                                                                                                                                           | JSONL per session plus a `<id>.settings.json` token-usage sidecar                                                                                             |
 | Forge                 | `~/.forge/`                                                                                                                                                      | SQLite database (`.forge.db`)                                                                                                                                 |
 | Gemini CLI            | `~/.gemini/`                                                                                                                                                     | JSONL in `tmp/` subdirectory                                                                                                                                  |
 | Goose                 | (platform-specific, see below)                                                                                                                                   | SQLite `sessions.db` with transcripts, tool activity, relationships, usage, and recorded costs                                                                |
@@ -1269,6 +1270,7 @@ export CORTEX_DIR=~/custom/cortex
 export CURSOR_PROJECTS_DIR=~/custom/cursor
 export DEEPSEEK_TUI_SESSIONS_DIR=~/custom/deepseek/sessions
 export DEEPSEEK_HARNESS_SESSIONS_DIR=~/custom/deepseek-harness/sessions
+export FACTORY_DIR=~/custom/factory/sessions
 export FORGE_DIR=~/custom/forge
 export GEMINI_DIR=~/custom/gemini
 export GOOSE_PATH_ROOT=~/custom/goose
