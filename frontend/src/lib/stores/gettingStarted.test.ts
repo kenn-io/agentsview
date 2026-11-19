@@ -15,15 +15,19 @@ describe("getting started", () => {
     store.complete("usage");
     store.complete("insights");
     expect(new GettingStartedStore(new ReadProgressStore()).visible).toBe(false);
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    store.complete("search");
+    const completedWrites = setItem.mock.calls.length;
     localStorage.clear();
     const dismissed = new GettingStartedStore(new ReadProgressStore());
     dismissed.dismiss();
     expect(new GettingStartedStore(new ReadProgressStore()).visible).toBe(false);
-    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    setItem.mockClear();
     dismissed.complete("search");
-    const writes = setItem.mock.calls.length;
+    const dismissedWrites = setItem.mock.calls.length;
     setItem.mockRestore();
-    expect(writes).toBe(0);
+    expect(completedWrites).toBe(0);
+    expect(dismissedWrites).toBe(0);
   });
 
   it("keeps the checklist hidden for existing readers", () => {

@@ -658,9 +658,16 @@ describe("UsagePage refresh behavior", () => {
     const fetchAll = vi.spyOn(usage, "fetchAll").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
     router.route = "usage";
-    router.params = { view: "tokens", project: "demo" };
+    router.params = { project: "demo" };
+    usage.summary = usageSummaryWithUnsupported();
 
     component = mount(UsagePage, { target: document.body });
+    await flushEffects();
+
+    expect(usage.mode).toBe("cost");
+    expect(gettingStarted.done.has("usage")).toBe(false);
+    usage.summary = null;
+    router.params = { view: "tokens", project: "demo" };
     await flushEffects();
 
     expect(usage.mode).toBe("token");

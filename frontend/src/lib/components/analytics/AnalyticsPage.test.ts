@@ -5,6 +5,7 @@ import { analytics } from "../../stores/analytics.svelte.js";
 import { outcomeTotals } from "../../stores/outcomeTotals.svelte.js";
 import { analyticsPageDates } from "../../stores/analyticsPageDates.js";
 import { insights } from "../../stores/insights.svelte.js";
+import { gettingStarted } from "../../stores/gettingStarted.svelte.js";
 import { router } from "../../stores/router.svelte.js";
 import { sessions } from "../../stores/sessions.svelte.js";
 import { settings } from "../../stores/settings.svelte.js";
@@ -51,6 +52,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
   document.body.innerHTML = "";
   localStorage.clear();
+  gettingStarted.done = new Set();
   window.history.replaceState(null, "", "/");
   router.route = "sessions";
   router.params = {};
