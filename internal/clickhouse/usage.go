@@ -809,12 +809,13 @@ func chPreparedUsageNormSource() chUsageNormSource {
 	}
 }
 
-// chUsageCTEFromRawSource renders the usage CTEs over rawSQL. sessionID names
-// the one session rawSQL is restricted to, or is empty for a read of many
-// sessions.
+// chUsageCTEFromRawSource renders the usage CTEs over rawSQL. localize adds
+// usage_localized after usage_normalized; without it the CTEs end at
+// usage_normalized. sessionID names the one session rawSQL is restricted to,
+// or is empty for a read of many sessions.
 func chUsageCTEFromRawSource(
 	f db.UsageFilter, rawSQL string, args []any,
-	preferCompleteClaudeSnapshots bool, norms chUsageNormSource, sessionID string,
+	localize bool, norms chUsageNormSource, sessionID string,
 ) (string, []any) {
 	localDateSQL, localDateArg := chUsageLocalDateSQL(f)
 	priceModelSQL := norms.priceModel
@@ -828,7 +829,11 @@ func chUsageCTEFromRawSource(
 		datePred += " AND local_date <= ?"
 		dateArgs = append(dateArgs, f.To)
 	}
-	dedupCTE, dedupArgs := chUsageSnapshotDedupCTE(f, preferCompleteClaudeSnapshots, sessionID)
+	var dedupCTE string
+	var dedupArgs []any
+	if localize {
+		dedupCTE, dedupArgs = chUsageSnapshotDedupCTE(f, sessionID)
+	}
 	maxTok := db.MaxPlausibleTokens
 	query := fmt.Sprintf(`
 		WITH usage_raw AS (
@@ -859,7 +864,7 @@ func chUsageCTEFromRawSource(
 				%[13]s AS price_key
 			FROM usage_raw
 			WHERE %[3]s
-		),%[6]s`, rawSQL, localDateSQL, datePred, maxTok,
+		)%[6]s`, rawSQL, localDateSQL, datePred, maxTok,
 		priceModelSQL, dedupCTE,
 		norms.input, norms.output, norms.cacheCreate, norms.cacheCreate1h,
 		norms.cacheRead, norms.reasoning,
@@ -887,12 +892,10 @@ func chUsageSessionFilterSQL(f db.UsageFilter, sessionColumn, modelColumn string
 
 // chUsageSnapshotDedupCTE renders usage_localized: the usage_normalized rows
 // that survive Claude snapshot ranking, the session and model filters, and
-// deduplication, with their session columns.
+// deduplication, with their session columns. The text starts with the comma
+// that separates it from usage_normalized.
 //
-// Without snapshot preference, rows deduplicate by dedup_group alone and keep
-// the session columns usage_raw gave them.
-//
-// With it, each Claude request keeps the row with the most output, credited
+// Each Claude request keeps the row with the most output, credited
 // to the session that saw the request first; every other row keeps the first
 // row of its dedup_group. Both rankings run as one window pass over the
 // columns they read, partitioned by the Claude request for Claude rows and by
@@ -902,32 +905,7 @@ func chUsageSessionFilterSQL(f db.UsageFilter, sessionColumn, modelColumn string
 // columns from one read of sessions. Filters apply where the old per-stage
 // form applied them: before deduplication for other rows, and to the
 // credited session after ranking for Claude rows.
-func chUsageSnapshotDedupCTE(
-	f db.UsageFilter, preferCompleteClaudeSnapshots bool, sessionID string,
-) (string, []any) {
-	if !preferCompleteClaudeSnapshots {
-		evidenceSelect := ""
-		if f.PairwiseSides {
-			evidenceSelect = `,
-				arrayFilter(value -> value != model, groupUniqArray(model) OVER (
-					PARTITION BY dedup_group ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-				)) AS inexact_models,
-				arrayFilter(value -> value != project, groupUniqArray(project) OVER (
-					PARTITION BY dedup_group ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-				)) AS inexact_projects`
-		}
-		return `
-		usage_localized AS (
-			SELECT *,
-				row_number() OVER (
-					PARTITION BY dedup_group
-					ORDER BY ts ASC, session_id ASC,
-						COALESCE(message_ordinal, -1) ASC
-				) AS dedup_rank` + evidenceSelect + `
-			FROM usage_normalized
-			QUALIFY dedup_rank = 1
-		)`, nil
-	}
+func chUsageSnapshotDedupCTE(f db.UsageFilter, sessionID string) (string, []any) {
 	var args []any
 	rowFilter, rowFilterArgs := chUsageSessionFilterSQL(f, "session_id", "model")
 	inputWhere := ""
@@ -976,7 +954,7 @@ func chUsageSnapshotDedupCTE(
 	// Claude rows rank by most output, then latest; other rows by earliest.
 	// One ORDER BY serves both: each row's sort keys for the other kind are
 	// constant within its partition.
-	return `
+	return `,
 		usage_rank_input AS (
 			SELECT session_id, ts, message_ordinal, model,
 				output_tokens_norm, web_search_requests_norm,
