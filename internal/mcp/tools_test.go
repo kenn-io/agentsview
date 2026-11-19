@@ -70,6 +70,67 @@ func seedFTSSession(t *testing.T, d *db.DB, id, project, content, endedAt string
 	}))
 }
 
+func TestSearchDefaultDateWindow(t *testing.T) {
+	ts, d := newTestToolset(t)
+	if !d.HasFTS(t.Context()) {
+		t.Skip("FTS not available")
+	}
+	for id, date := range map[string]string{"recent": "2024-06-05T10:00:00Z", "old": "2024-04-16T10:00:00Z"} {
+		dbtest.SeedSession(t, d, id, "proj", func(s *db.Session) {
+			s.MessageCount = 3
+			s.UserMessageCount = 2
+			s.StartedAt = &date
+			s.EndedAt = &date
+		})
+		require.NoError(t, d.InsertMessages(t.Context(), []db.Message{dbtest.UserMsg(id, 0, "windowneedle")}))
+	}
+
+	for _, tc := range []struct {
+		name, from, to, session string
+		want                    []string
+		note                    bool
+	}{
+		{name: "default", want: []string{"recent"}, note: true},
+		{name: "earlier from", from: "2024-01-01", want: []string{"recent", "old"}},
+		{name: "to only", to: "2024-05-01", want: []string{"old"}},
+		{name: "session only", session: "old", want: []string{"old"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, sessions, err := ts.searchSessions(t.Context(), nil, searchSessionsIn{Query: "windowneedle", DateFrom: tc.from, DateTo: tc.to, SessionID: tc.session})
+			require.NoError(t, err)
+			var ids []string
+			for _, hit := range sessions.Results {
+				ids = append(ids, hit.SessionID)
+			}
+			assert.ElementsMatch(t, tc.want, ids)
+			if tc.note {
+				assert.Contains(t, sessions.Note, "2024-05-16")
+				assert.Contains(t, sessions.Note, "earlier date_from")
+			} else {
+				assert.Empty(t, sessions.Note)
+			}
+
+			_, content, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "windowneedle", DateFrom: tc.from, DateTo: tc.to, SessionID: tc.session})
+			require.NoError(t, err)
+			ids = nil
+			for _, hit := range content.Matches {
+				ids = append(ids, hit.SessionID)
+			}
+			assert.ElementsMatch(t, tc.want, ids)
+			if tc.note {
+				assert.Contains(t, content.Note, "2024-05-16")
+				assert.Contains(t, content.Note, "earlier date_from")
+			} else {
+				assert.Empty(t, content.Note)
+			}
+		})
+	}
+	_, empty, err := ts.searchSessions(t.Context(), nil, searchSessionsIn{Query: "missingwindowneedle"})
+	require.NoError(t, err)
+	assert.Empty(t, empty.Results)
+	assert.Contains(t, empty.Note, "2024-05-16")
+}
+
 func TestSearchSessions_ReturnsHitsWithOrdinal(t *testing.T) {
 	ts, d := newTestToolset(t)
 	if !d.HasFTS(t.Context()) {
@@ -1302,7 +1363,7 @@ func TestServer_EndToEnd(t *testing.T) {
 	}, names)
 
 	res, err := ct.CallTool(ctx, callParams("search_sessions", map[string]any{
-		"query": "marker",
+		"query": "marker", "date_from": "2024-01-01",
 	}))
 	require.NoError(t, err)
 	require.False(t, res.IsError, "tool returned error")
@@ -2133,7 +2194,7 @@ func TestSearchContent_LexicalChildScope(t *testing.T) {
 	// message holding its words.
 	for _, tc := range []struct{ mode, pattern string }{{"", `"a-child first prompt"`}, {"regex", "a-child first prompt"}} {
 		result, err := ct.CallTool(t.Context(), callParams(ToolSearchContent, map[string]any{
-			"pattern": tc.pattern, "mode": tc.mode, "include_active": true,
+			"pattern": tc.pattern, "mode": tc.mode, "include_active": true, "date_from": "2020-01-01",
 		}))
 		require.NoError(t, err)
 		require.False(t, result.IsError)
@@ -2146,12 +2207,13 @@ func TestSearchContent_LexicalChildScope(t *testing.T) {
 func TestSearchContent_HybridKeywordFallbackMetadata(t *testing.T) {
 	const note = "Search by meaning is unavailable: index is building: 40% complete. Returned hybrid keyword matches only. Query words must appear. If matches are empty or few, try short substring queries with key terms or synonyms."
 	fake := &fakeContentSearchService{result: &service.ContentSearchResult{EffectiveMode: "hybrid_keyword", Note: note}}
-	ts := &toolset{svc: fake}
+	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
 	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Mode: "hybrid", IncludeActive: true})
 	require.NoError(t, err)
 	assert.True(t, fake.lastReq.KeywordFallback)
 	assert.Equal(t, "hybrid_keyword", out.EffectiveMode)
-	assert.Equal(t, note, out.Note)
+	assert.Contains(t, out.Note, note)
+	assert.Contains(t, out.Note, "2024-05-16")
 }
 
 func TestListRecallPagesWithEvidenceAndSourceSessionFilter(t *testing.T) {
