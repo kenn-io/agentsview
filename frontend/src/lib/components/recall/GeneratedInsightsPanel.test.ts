@@ -205,6 +205,28 @@ describe("GeneratedInsightsPanel", () => {
     expect(gettingStarted.done.has("insights")).toBe(true);
   });
 
+  it("does not complete the checklist when an archive load is canceled", async () => {
+    let finish!: () => void;
+    mocks.load.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    state.store.items = [];
+    state.store.selectedId = null;
+    state.store.selectedItem = undefined;
+    component = mount(GeneratedInsightsPanel, { target: document.body });
+    await tick();
+    await unmount(component);
+    component = undefined;
+    finish();
+    await mocks.load.mock.results[0]!.value;
+    await tick();
+
+    expect(gettingStarted.done.has("insights")).toBe(false);
+  });
+
   it("waits until a saved report is selected", async () => {
     state.store.selectedId = null;
     state.store.selectedItem = undefined;

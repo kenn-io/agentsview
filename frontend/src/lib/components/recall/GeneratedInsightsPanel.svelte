@@ -271,9 +271,11 @@
     return "";
   }
 
+  let mounted = true;
+
   async function loadInsights() {
     await insights.load();
-    if (!insights.error && insights.items.length === 0 && insights.tasks.length === 0) {
+    if (mounted && !insights.error && insights.items.length === 0 && insights.tasks.length === 0) {
       gettingStarted.complete("insights");
     }
   }
@@ -285,6 +287,7 @@
   });
 
   onDestroy(() => {
+    mounted = false;
     insights.cancelInFlightReads();
     clearTimeout(copiedInsightLinkTimer);
   });
