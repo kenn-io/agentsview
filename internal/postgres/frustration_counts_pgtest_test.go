@@ -111,6 +111,8 @@ func TestFrustrationCountsUnavailable(t *testing.T) {
 		reader, err := NewStore(f.ctx, roleURL, f.schema, true)
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, reader.Close()) })
+		stop := reader.StartFrustrationFill(f.ctx)
+		defer stop()
 		var output bytes.Buffer
 		previous := log.Writer()
 		log.SetOutput(&output)
@@ -125,7 +127,10 @@ func TestFrustrationCountsUnavailable(t *testing.T) {
 		owner := f.open(t)
 		tx, err := f.pg.BeginTx(f.ctx, nil)
 		require.NoError(t, err)
-		result, err := owner.readView(tx).GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
+		view := owner.readView(tx)
+		stop := view.StartFrustrationFill(f.ctx)
+		defer stop()
+		result, err := view.GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
 		require.NoError(t, err)
 		require.Equal(t, 2, result.QualityHealth.Totals.FrustrationMarkerCount)
 		require.NoError(t, tx.Rollback())
@@ -242,4 +247,89 @@ func TestFrustrationEvidenceWithLockedCount(t *testing.T) {
 		require.Equal(t, 1, example.SignalTotal)
 		require.Equal(t, "this is broken", example.Excerpt)
 	}
+}
+
+func TestFrustrationFillLaunchAndPush(t *testing.T) {
+	t.Parallel()
+	f := newFrustrationFixture(t, "agentsview")
+	f.replace(t, "two", "all good")
+	store := f.open(t)
+	stop := store.StartFrustrationFill(f.ctx)
+	defer stop()
+	require.Eventually(t, func() bool {
+		var total, sum int
+		err := f.pg.QueryRowContext(f.ctx, `SELECT count(*), COALESCE(sum(marker_count),0) FROM session_frustration_counts`).Scan(&total, &sum)
+		return err == nil && total == 2 && sum == 1
+	}, 20*time.Second, 100*time.Millisecond)
+	roleURL := newUsageJournalRole(t, f.syncer, `GRANT SELECT ON sessions, session_frustration_counts TO ROLE`)
+	reader, err := NewStore(f.ctx, roleURL, f.schema, true)
+	require.NoError(t, err)
+	defer reader.Close()
+	result, err := reader.GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
+	require.NoError(t, err)
+	require.Equal(t, 1, result.QualityHealth.Totals.FrustrationMarkerCount)
+	var before string
+	require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT xmin::text FROM session_frustration_counts WHERE session_id='two'`).Scan(&before))
+	f.replace(t, "one", "all good")
+	require.Eventually(t, func() bool {
+		var count int
+		err := f.pg.QueryRowContext(f.ctx, `SELECT marker_count FROM session_frustration_counts WHERE session_id='one'`).Scan(&count)
+		return err == nil && count == 0
+	}, 20*time.Second, 100*time.Millisecond)
+	var after string
+	require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT xmin::text FROM session_frustration_counts WHERE session_id='two'`).Scan(&after))
+	require.Equal(t, before, after)
+	result, err = f.open(t).GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
+	require.NoError(t, err)
+	require.Zero(t, result.QualityHealth.Totals.FrustrationMarkerCount)
+}
+
+func TestFrustrationFillJoinsCoveredRequests(t *testing.T) {
+	t.Parallel()
+	f := newFrustrationFixture(t, "agentsview")
+	store := f.open(t)
+	rows, versions, err := store.signalRows(f.ctx, db.AnalyticsFilter{}, f.versionColumn)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	_, err = f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id, session_version, rules_version, marker_count) SELECT id, 'stale', 0, 0 FROM sessions`)
+	require.NoError(t, err)
+	tx, err := f.pg.BeginTx(f.ctx, nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+	_, err = tx.ExecContext(f.ctx, `SELECT 1 FROM session_frustration_counts WHERE session_id='one' FOR UPDATE`)
+	require.NoError(t, err)
+	fillDone := make(chan error, 1)
+	go func() { fillDone <- store.fillFrustrationCounts(f.ctx, []string{"one"}, f.versionColumn) }()
+	require.Eventually(t, func() bool { return store.frustrationFillDone([]string{"one"}) != nil }, 10*time.Second, 10*time.Millisecond)
+	var one db.SignalRow
+	for _, row := range rows {
+		if row.ID == "one" {
+			one = row
+		}
+	}
+	coveredRows := []db.SignalRow{one}
+	coveredDone := make(chan error, 1)
+	go func() {
+		coveredDone <- store.populateFrustrationMarkers(f.ctx, coveredRows, versions, f.versionColumn)
+	}()
+	select {
+	case err := <-coveredDone:
+		t.Fatalf("covered request returned before fill: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	outsideDone := make(chan error, 1)
+	go func() { outsideDone <- store.populateFrustrationMarkers(f.ctx, rows, versions, f.versionColumn) }()
+	select {
+	case err := <-outsideDone:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("request with an uncovered session waited for the fill")
+	}
+	require.NoError(t, tx.Rollback())
+	require.NoError(t, <-fillDone)
+	require.NoError(t, <-coveredDone)
+	require.Equal(t, 1, coveredRows[0].FrustrationMarkerCount)
+	var count int
+	require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT marker_count FROM session_frustration_counts WHERE session_id='one'`).Scan(&count))
+	require.Equal(t, 1, count)
 }

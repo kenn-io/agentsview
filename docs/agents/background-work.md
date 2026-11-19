@@ -15,6 +15,8 @@ Pricing refresh and conversation tombstone pruning use the scheduler. Periodic
 session sync, vector embedding, and recall extraction still own their timing;
 migrating them is separate work.
 
+- PostgreSQL serve fills stale Dashboard frustration counts at launch and polls the change journal every five seconds when the primary, writable count table, and journal are available.
+
 ## Memory and Work Bounds
 
 - Keep passive daemon memory within a few hundred megabytes on macOS, Linux, and

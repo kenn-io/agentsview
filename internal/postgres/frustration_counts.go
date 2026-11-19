@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"time"
+
+	"go.kenn.io/agentsview/internal/signals"
 )
 
 // Bump when the Go or PostgreSQL frustration classifier changes a verdict.
@@ -82,4 +84,55 @@ func (s *Store) storeFrustrationCounts(ctx context.Context, versions map[string]
 		return fmt.Errorf("writing frustration counts: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) scanFrustrationCounts(ctx context.Context, ids []string, versionColumn string) (map[string]int, map[string]string, error) {
+	var encoding string
+	if err := s.pg.QueryRowContext(ctx, `SELECT current_setting('server_encoding')`).Scan(&encoding); err != nil {
+		return nil, nil, fmt.Errorf("reading server encoding: %w", err)
+	}
+	counts := make(map[string]int, len(ids))
+	versions := make(map[string]string, len(ids))
+	query, args := pgFrustrationQuery(encoding, frustrationSessionVersion(versionColumn), ids)
+	rows, err := s.pg.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("querying frustration markers: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, content string
+		var version *string
+		var decided bool
+		if err := rows.Scan(&id, &version, &decided, &content); err != nil {
+			return nil, nil, fmt.Errorf("scanning frustration marker: %w", err)
+		}
+		if version != nil {
+			versions[id] = *version
+			continue
+		}
+		if decided || signals.IsFrustrationMarker(content) {
+			counts[id]++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("iterating frustration markers: %w", err)
+	}
+	return counts, versions, nil
+}
+
+func (s *Store) staleFrustrationSessions(ctx context.Context, versionColumn string, ids []string) ([]string, error) {
+	rows, err := s.pg.QueryContext(ctx, `SELECT s.id FROM sessions s LEFT JOIN session_frustration_counts c ON c.session_id=s.id WHERE s.deleted_at IS NULL AND ($1::text[] IS NULL OR s.id=ANY($1)) AND (c.session_id IS NULL OR c.rules_version < $2 OR c.session_version <> `+frustrationSessionVersion("s."+versionColumn)+`) ORDER BY s.id`, ids, frustrationMarkerRulesVersion)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		result = append(result, id)
+	}
+	return result, rows.Err()
 }
