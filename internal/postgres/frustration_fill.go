@@ -2,178 +2,135 @@ package postgres
 
 import (
 	"context"
-	"math"
+	"slices"
 	"sync"
 	"time"
 
 	"go.kenn.io/agentsview/internal/poller"
 )
 
-type frustrationBatch struct {
-	ids  map[string]struct{}
-	done chan struct{}
-}
+// The fixture's 500-session chunks averaged 0.27 seconds. Five seconds leaves
+// room for slower chunks while releasing requests blocked behind a writer.
+const frustrationFillChunkTimeout = 5 * time.Second
 
 type frustrationFillState struct {
-	mu     sync.Mutex
-	active *frustrationBatch
+	mu      sync.Mutex
+	pending map[string]chan struct{}
 }
 
-func (s *Store) frustrationFillDone(ids []string) <-chan struct{} {
+func (s *Store) joinFrustrationFill(ctx context.Context, ids []string) error {
 	state := &s.runtimeState().frustrationFill
 	state.mu.Lock()
-	defer state.mu.Unlock()
-	batch := state.active
-	if batch == nil {
-		return nil
-	}
+	channels := make(map[chan struct{}]struct{})
 	for _, id := range ids {
-		if _, ok := batch.ids[id]; !ok {
+		done, ok := state.pending[id]
+		if !ok {
+			state.mu.Unlock()
 			return nil
 		}
+		channels[done] = struct{}{}
 	}
-	return batch.done
+	state.mu.Unlock()
+	for done := range channels {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-done:
+		}
+	}
+	return nil
 }
 
 func (s *Store) fillFrustrationCounts(ctx context.Context, ids []string, column string) error {
-	if len(ids) == 0 {
-		return nil
-	}
-	batch := &frustrationBatch{ids: make(map[string]struct{}, len(ids)), done: make(chan struct{})}
-	for _, id := range ids {
-		batch.ids[id] = struct{}{}
-	}
 	state := &s.runtimeState().frustrationFill
+	chunks := make([][]string, 0, (len(ids)+maxPGVars-1)/maxPGVars)
+	done := make([]chan struct{}, 0, cap(chunks))
 	state.mu.Lock()
-	state.active = batch
+	if state.pending == nil {
+		state.pending = make(map[string]chan struct{}, len(ids))
+	}
+	for chunk := range slices.Chunk(ids, maxPGVars) {
+		ch := make(chan struct{})
+		chunks = append(chunks, chunk)
+		done = append(done, ch)
+		for _, id := range chunk {
+			state.pending[id] = ch
+		}
+	}
 	state.mu.Unlock()
-	defer func() {
+	release := func(i int) {
 		state.mu.Lock()
-		state.active = nil
-		close(batch.done)
-		state.mu.Unlock()
+		defer state.mu.Unlock()
+		if len(chunks[i]) == 0 || state.pending[chunks[i][0]] != done[i] {
+			return
+		}
+		for _, id := range chunks[i] {
+			delete(state.pending, id)
+		}
+		close(done[i])
+	}
+	defer func() {
+		for i := range chunks {
+			release(i)
+		}
 	}()
-	return pgQueryChunked(ids, func(ids []string) error {
-		counts, versions, err := s.scanFrustrationCounts(ctx, ids, column)
+	for i, chunk := range chunks {
+		chunkCtx, cancel := context.WithTimeout(ctx, frustrationFillChunkTimeout)
+		counts, versions, err := s.scanFrustrationCounts(chunkCtx, chunk, column)
+		if err == nil {
+			err = s.storeFrustrationCounts(chunkCtx, versions, counts, column)
+		}
+		cancel()
+		release(i)
 		if err != nil {
 			return err
 		}
-		return s.storeFrustrationCounts(ctx, versions, counts, column)
-	})
-}
-
-func (s *Store) canFillFrustrationCounts(ctx context.Context) (bool, error) {
-	var writable bool
-	err := s.pg.QueryRowContext(ctx, `SELECT NOT pg_is_in_recovery() AND has_table_privilege(to_regclass('session_frustration_counts'), 'SELECT') AND has_table_privilege(to_regclass('session_frustration_counts'), 'INSERT') AND has_table_privilege(to_regclass('session_frustration_counts'), 'UPDATE')`).Scan(&writable)
-	return writable, err
+	}
+	return nil
 }
 
 // StartFrustrationFill prepares counts for writable replicas until stopped.
 func (s *Store) StartFrustrationFill(ctx context.Context) func() {
-	noop := func() {}
 	if s.DB() == nil || s.readTx != nil || s.hostedRelations {
-		return noop
-	}
-	writable, err := s.canFillFrustrationCounts(ctx)
-	if err != nil || !writable {
-		return noop
-	}
-	revision, _, err := s.LoadUsageChanges(ctx, math.MaxInt64)
-	if err != nil || revision == 0 {
-		return noop
-	}
-	oid, err := usageJournalOID(ctx, s.pg)
-	if err != nil {
-		return noop
-	}
-	column, err := sessionVersionColumnPG(ctx, s.pg)
-	if err != nil {
-		return noop
+		return func() {}
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	initial := true
+	var revision int64
+	var oid uint32
 	scheduler := poller.Start(ctx, poller.Job{Name: "frustration counts", Interval: 5 * time.Second, RunAtStart: true, Run: func(ctx context.Context) error {
 		writable, err := s.canFillFrustrationCounts(ctx)
-		if err != nil {
-			if IsReadOnlyError(err) || isInsufficientPrivilege(err) {
-				cancel()
-			}
+		if err != nil || !writable {
 			return err
 		}
-		if !writable {
-			cancel()
+		currentOID, err := usageJournalOID(ctx, s.pg)
+		if isUndefinedTable(err) || isInsufficientPrivilege(err) {
 			return nil
 		}
-		currentOID, err := usageJournalOID(ctx, s.pg)
 		if err != nil {
-			if isUndefinedTable(err) || isInsufficientPrivilege(err) {
-				cancel()
-			}
 			return err
 		}
 		current, changed, err := s.LoadUsageChanges(ctx, revision)
-		if err != nil {
+		if err != nil || current == 0 {
 			return err
-		}
-		if current == 0 {
-			cancel()
-			return nil
-		}
-		newOID, err := usageJournalOID(ctx, s.pg)
-		if err != nil {
-			return err
-		}
-		if newOID != currentOID {
-			initial = true
-			return nil
 		}
 		if currentOID != oid || current < revision {
-			initial = true
-			revision = current
-			oid = currentOID
+			changed = nil
+		} else if len(changed) == 0 {
+			revision, oid = current, currentOID
+			return nil
 		}
-		if initial {
-			ids, err := s.staleFrustrationSessions(ctx, column, nil)
-			if err != nil {
-				return err
-			}
-			if err := s.fillFrustrationCounts(ctx, ids, column); err != nil {
-				if IsReadOnlyError(err) || isInsufficientPrivilege(err) {
-					cancel()
-				}
-				return err
-			}
-			initial = false
-			current, changed, err = s.LoadUsageChanges(ctx, revision)
-			if err != nil {
-				return err
-			}
-			if current == 0 {
-				cancel()
-				return nil
-			}
-			newOID, err := usageJournalOID(ctx, s.pg)
-			if err != nil {
-				return err
-			}
-			if newOID != oid || current < revision {
-				initial = true
-				return nil
-			}
+		column, err := sessionVersionColumnPG(ctx, s.pg)
+		if err != nil {
+			return err
 		}
-		if len(changed) > 0 {
-			ids, err := s.staleFrustrationSessions(ctx, column, changed)
-			if err != nil {
-				return err
-			}
-			if err := s.fillFrustrationCounts(ctx, ids, column); err != nil {
-				if IsReadOnlyError(err) || isInsufficientPrivilege(err) {
-					cancel()
-				}
-				return err
-			}
+		ids, err := s.staleFrustrationSessions(ctx, column, changed)
+		if err != nil {
+			return err
 		}
-		revision = current
+		if err := s.fillFrustrationCounts(ctx, ids, column); err != nil {
+			return err
+		}
+		revision, oid = current, currentOID
 		return nil
 	}})
 	return func() { cancel(); scheduler.Wait() }

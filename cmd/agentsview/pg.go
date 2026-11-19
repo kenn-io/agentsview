@@ -42,24 +42,20 @@ func (pgReplica) serveOptions(
 	} else if err := pgStore.WarmUsageCache(ctx); err != nil && !errors.Is(err, db.ErrUsageSourceUnavailable) {
 		log.Printf("pg serve: queueing Usage cache warm: %v", err)
 	}
-	stopFrustrationFill := pgStore.StartFrustrationFill(ctx)
 	pool := pgStore.DB()
 	if pool == nil {
-		stopFrustrationFill()
 		return nil, nil, db.ErrReadOnly
 	}
 	rawSyncWritable, err := postgres.CanWriteRawSyncSchema(
 		ctx, pool, target.Schema,
 	)
 	if err != nil {
-		stopFrustrationFill()
 		return nil, nil, err
 	}
 	rawSyncOption, closeRawSync, err := preparePGRawSyncServicesIfWritable(
 		ctx, appCfg.DataDir, pool, rawSyncWritable,
 	)
 	if err != nil {
-		stopFrustrationFill()
 		return nil, nil, err
 	}
 	var opts []server.Option
@@ -72,6 +68,7 @@ func (pgReplica) serveOptions(
 		opts = append(opts, server.WithFriction(frictionRunner, frictionExcl))
 	}
 	opts = append(opts, pgKataConn(appCfg))
+	stopFrustrationFill := pgStore.StartFrustrationFill(ctx)
 	closeAll := func() error {
 		stopFrustrationFill()
 		waitFriction()
