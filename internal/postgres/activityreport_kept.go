@@ -5,6 +5,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"reflect"
 	"slices"
@@ -22,6 +23,7 @@ type pgActivityKept struct {
 	identityUnavailable       bool
 	report                    kept.Report
 	revision                  int64
+	fileRevision              int64 // revision of the saved report; zero until a memo hit advances it
 	candidates, peers, labels []string
 }
 
@@ -34,12 +36,14 @@ type pgActivitySavedReport struct {
 // Change this when the saved report format changes.
 const pgActivityReportFormat = "pg-activity-report-v1"
 
+const pgActivityRevisionFormat = "pg-activity-revision-v1"
+
 func pgActivityDiskSelection(selection, version, identity string) string {
 	return fmt.Sprintf("%q|%q|%q", selection, version, identity)
 }
 
 func (s *Store) loadActivityReport(selection, version, identity string) (pgActivityKept, bool) {
-	s.activityReports.Sweep(time.Now())
+	s.sweepActivityReports()
 	data, ok := s.activityReports.Get(pgActivityDiskSelection(selection, version, identity), pgActivityReportFormat)
 	if !ok {
 		return pgActivityKept{}, false
@@ -52,7 +56,49 @@ func (s *Store) loadActivityReport(selection, version, identity string) (pgActiv
 		project.ProjectKey = key
 		saved.Report.Artifacts.Report.Projects[key] = project
 	}
-	return pgActivityKept{identity: identity, revision: saved.Revision, candidates: saved.Candidates, peers: saved.Peers, labels: saved.Labels, report: saved.Report}, true
+	return pgActivityKept{identity: identity, revision: s.savedActivityRevision(selection, version, identity, saved.Revision), fileRevision: saved.Revision, candidates: saved.Candidates, peers: saved.Peers, labels: saved.Labels, report: saved.Report}, true
+}
+
+// openActivityReports opens the report namespace and a smaller one for the
+// revisions its reports were validated through, so a validation that finds only
+// unrelated writes survives a restart without saving the report again.
+func (s *Store) openActivityReports(id string) {
+	s.activityReports.MaxFiles, s.activityRevisions.MaxFiles = 8, 8
+	if err := s.activityReports.Open("postgres-activity-reports", id, 128<<20, 128<<20); err != nil {
+		log.Printf("opening activity reports cache: %v", err)
+	}
+	if err := s.activityRevisions.Open("postgres-activity-revisions", id, 1<<10, 8<<10); err != nil {
+		log.Printf("opening activity revisions cache: %v", err)
+	}
+	s.sweepActivityReports()
+}
+
+func (s *Store) sweepActivityReports() {
+	now := time.Now()
+	s.activityReports.Sweep(now)
+	s.activityRevisions.Sweep(now)
+}
+
+// advanceActivityRevision saves the revision a memo hit validated beside the
+// report file it validated. A rewritten file has another base and ignores it.
+func (s *Store) advanceActivityRevision(selection, version string, entry pgActivityKept, through int64) pgActivityKept {
+	if entry.identity != "" {
+		if entry.fileRevision == 0 {
+			entry.fileRevision = entry.revision
+		}
+		s.activityRevisions.Put(pgActivityDiskSelection(selection, version, entry.identity), pgActivityRevisionFormat, fmt.Appendf(nil, "%d %d", entry.fileRevision, through))
+	}
+	entry.revision = through
+	return entry
+}
+
+func (s *Store) savedActivityRevision(selection, version, identity string, saved int64) int64 {
+	data, ok := s.activityRevisions.Get(pgActivityDiskSelection(selection, version, identity), pgActivityRevisionFormat)
+	var base, through int64
+	if _, err := fmt.Sscanf(string(data), "%d %d", &base, &through); !ok || err != nil || base != saved {
+		return saved
+	}
+	return max(saved, through)
 }
 
 func encodePGActivityReport(entry pgActivityKept) ([]byte, error) {
@@ -87,7 +133,7 @@ func (s *Store) refreshActivityReport(selection, version string, entry pgActivit
 	} else {
 		s.saveActivityReport(selection, version, entry)
 	}
-	s.activityReports.Sweep(time.Now())
+	s.sweepActivityReports()
 }
 
 func (s *Store) retryActivityIdentity(ctx context.Context, identity string, unavailable bool, oid uint32) (string, bool) {
@@ -191,7 +237,7 @@ func (s *Store) keptActivityReport(ctx context.Context, selection, version strin
 	if !reflect.DeepEqual(export.ProjectMapForWire(projects), entry.report.Artifacts.Report.Projects) {
 		return kept.Report{}, through, false, nil
 	}
-	entry.revision = through
+	entry = s.advanceActivityRevision(selection, version, entry, through)
 	memo.Put(selection, version, []pgActivityKept{entry})
 	return entry.report, through, true, nil
 }
