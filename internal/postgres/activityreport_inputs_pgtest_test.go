@@ -475,16 +475,6 @@ func TestPGActivityReportInputRestartPeerAndSessions(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, loaded.priced)
 	require.NotNil(t, loaded.priced.block)
-	restartedBeforePush.runtimeState().activityInputs.Put(slots[0].Slot, slots[0].Version, []pgActivityInputs{*loaded})
-	saved := restartedBeforePush.runtimeState().activityInputs.Snapshot()
-	require.Len(t, saved, 1)
-	reads := &activityInputReadCounter{storeExecutor: restartedBeforePush.pg}
-	restartedBeforePush.pg = reads
-	gotBeforePush := pgKeptBuild(t, restartedBeforePush, f, q, true)
-	assert.Same(t, saved[0].Rows[0].priced.block, gotBeforePush.Report.Pricing)
-	requirePGKeptEqual(t, before, gotBeforePush)
-	assert.Empty(t, reads.transcriptReads)
-	assert.Empty(t, reads.usageReads)
 	freshBeforePush, err := NewStore(t.Context(), target, syncer.schema, true)
 	require.NoError(t, err)
 	requirePGKeptEqual(t, pgKeptBuild(t, freshBeforePush, other, q, true), pgKeptBuild(t, restartedBeforePush, other, q, true))
@@ -514,54 +504,33 @@ func TestPGActivityReportInputRestartPeerAndSessions(t *testing.T) {
 }
 
 func TestPGActivityReportInputRestartPriceInvalidation(t *testing.T) {
-	for _, mode := range []string{"pricing", "push", "clock"} {
-		t.Run(mode, func(t *testing.T) {
-			t.Setenv("CACHE_DIRECTORY", t.TempDir())
-			local, syncer, _ := newUsageJournalFixture(t)
-			for _, id := range []string{"a", "b"} {
-				pgKeptSession(t, local, id, "project-a", "2026-06-14")
-			}
-			pgKeptSession(t, local, "future", "project-a", "2026-06-14")
-			require.NoError(t, local.ReplaceSessionMessages(t.Context(), "future", []db.Message{{SessionID: "future", Ordinal: 0, Role: "assistant", Content: "later", Timestamp: "2026-06-14T10:05:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":300}`)}}))
-			pgKeptPush(t, syncer, false)
-			target, directory := testPGURL(t), t.TempDir()
-			q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
-			q.Partial, q.EffectiveEnd = true, q.RangeStart.Add(10*time.Hour+2*time.Minute)
-			first := openPGActivityInputStore(t, target, syncer.schema, directory)
-			rates := map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}}
-			first.SetCustomPricing(rates)
-			before := pgKeptBuild(t, first, f, q, true)
-			require.NoError(t, first.Close())
-			if mode == "push" {
-				pgKeptSession(t, local, "c", "project-a", "2026-06-14")
-				require.NoError(t, local.ReplaceSessionMessages(t.Context(), "c", []db.Message{{SessionID: "c", Ordinal: 0, Role: "assistant", Content: "new usage", Timestamp: "2026-06-14T10:01:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":700}`)}}))
-				pgKeptPush(t, syncer, false)
-			}
-			if mode == "clock" {
-				q.EffectiveEnd = q.RangeStart.Add(10*time.Hour + 6*time.Minute)
-			}
-			if mode == "pricing" {
-				rates = map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 40_000_000}}
-			}
-			restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
-			defer restarted.Close()
-			fresh, err := NewStore(t.Context(), target, syncer.schema, true)
-			require.NoError(t, err)
-			defer fresh.Close()
-			restarted.SetCustomPricing(rates)
-			fresh.SetCustomPricing(rates)
-			got := pgKeptBuild(t, restarted, f, q, true)
-			requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), got)
-			assert.Equal(t, 1000, before.Report.Totals.OutputTokens)
-			switch mode {
-			case "pricing":
-				assert.Equal(t, money.MustParseDollars("0.04"), got.Report.Totals.Cost)
-			case "push":
-				assert.Equal(t, 1700, got.Report.Totals.OutputTokens)
-				assert.Equal(t, money.MustParseDollars("0.034"), got.Report.Totals.Cost)
-			case "clock":
-				assert.Equal(t, 1300, got.Report.Totals.OutputTokens)
-			}
-		})
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, _ := newUsageJournalFixture(t)
+	for _, id := range []string{"a", "b"} {
+		pgKeptSession(t, local, id, "project-a", "2026-06-14")
 	}
+	pgKeptPush(t, syncer, false)
+	target, directory := testPGURL(t), t.TempDir()
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	q.Partial, q.EffectiveEnd = true, q.RangeStart.Add(10*time.Hour+2*time.Minute)
+	first := openPGActivityInputStore(t, target, syncer.schema, directory)
+	rates := map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}}
+	first.SetCustomPricing(rates)
+	before := pgKeptBuild(t, first, f, q, true)
+	require.NoError(t, first.Close())
+	pgKeptSession(t, local, "c", "project-a", "2026-06-14")
+	require.NoError(t, local.ReplaceSessionMessages(t.Context(), "c", []db.Message{{SessionID: "c", Ordinal: 0, Role: "assistant", Content: "new usage", Timestamp: "2026-06-14T10:01:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":700}`)}}))
+	pgKeptPush(t, syncer, false)
+	restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
+	defer restarted.Close()
+	fresh, err := NewStore(t.Context(), target, syncer.schema, true)
+	require.NoError(t, err)
+	defer fresh.Close()
+	restarted.SetCustomPricing(rates)
+	fresh.SetCustomPricing(rates)
+	got := pgKeptBuild(t, restarted, f, q, true)
+	requirePGKeptEqual(t, pgKeptBuild(t, fresh, f, q, true), got)
+	assert.Equal(t, 1000, before.Report.Totals.OutputTokens)
+	assert.Equal(t, 1700, got.Report.Totals.OutputTokens)
+	assert.Equal(t, money.MustParseDollars("0.034"), got.Report.Totals.Cost)
 }

@@ -245,30 +245,22 @@ func TestRunsMatchCandidatesWithMicrosecondStartBound(t *testing.T) {
 	}
 }
 
-func TestSessionRunsGobRoundTrip(t *testing.T) {
+func TestSessionRunsWireRestore(t *testing.T) {
 	builder := NewSessionRunsBuilder(300)
 	builder.AddPiece("model-a", 1000000, 2000000, false)
 	builder.AddPiece("model-a", 2000000, 3000000, true)
 	builder.AddPiece("model-b", 4000000, 5000000, false)
 	original := builder.Finish()
-	var buf bytes.Buffer
-	require.NoError(t, gob.NewEncoder(&buf).Encode(original))
-	var restored SessionRuns
-	require.NoError(t, gob.NewDecoder(&buf).Decode(&restored))
 	start, end := time.UnixMicro(1500000).UTC(), time.UnixMicro(4500000).UTC()
 	wireRestored, err := original.Wire().Restore()
 	require.NoError(t, err)
 	want := []Run{{SessionID: "s", Start: time.UnixMicro(1500000).UTC(), End: time.UnixMicro(3000000).UTC(), Tail: time.UnixMicro(2000000).UTC(), Model: "model-a"}}
 	require.Equal(t, want, wireRestored.AppendClippedBefore(nil, "s", start, end, time.UnixMicro(2000000)))
-	require.Equal(t, want, restored.AppendClippedBefore(nil, "s", start, end, time.UnixMicro(2000000)))
 	for _, invalid := range []encodedSessionRuns{
 		{Bounds: []int64{1}, Runs: []encodedSessionRun{{First: 0, Last: 2}}},
 		{Bounds: []int64{1, 2}, Runs: []encodedSessionRun{{First: 1, Last: 1}}},
 		{Bounds: []int64{1, 2, 3}, Runs: []encodedSessionRun{{First: 0, Last: 1}, {First: 1, Last: 2}}},
 	} {
-		buf.Reset()
-		require.NoError(t, gob.NewEncoder(&buf).Encode(invalid))
-		require.Error(t, restored.GobDecode(buf.Bytes()))
 		_, err := invalid.Restore()
 		require.Error(t, err)
 	}

@@ -65,9 +65,9 @@ func TestPGActivityDiskInputsRoundTrip(t *testing.T) {
 	second := row
 	second.output = 7
 	input := pgActivityInputs{
-		identity: "source", usage: []pgActivityUsageRow{second, row},
+		identity: "source", usage: []pgActivityUsageRow{second, row, second, row},
 		sessions: map[string]pgActivitySession{"session": {runs: runs, users: []int64{1}}}, candidates: map[string]bool{"session": true},
-		priced: &pgActivityPriced{rangeStart: time.Unix(1, 0).UTC(), rangeEnd: time.Unix(2, 0).UTC(), effectiveEnd: time.Unix(3, 0).UTC(), next: time.Unix(4, 0).UTC(), pricingDigest: "prices", block: &export.PricingBlock{Source: "catalog", Digest: "digest", Fallback: export.PricingFallback{Models: []string{}}, Models: map[string]export.ModelPricingProvenance{}}, rows: []pgActivityPricedRow{{attribution: intern.Intern("model"), index: 0}}},
+		priced: &pgActivityPriced{rangeStart: time.Unix(1, 0).UTC(), rangeEnd: time.Unix(2, 0).UTC(), effectiveEnd: time.Unix(3, 0).UTC(), next: time.Unix(4, 0).UTC(), pricingDigest: "prices", block: &export.PricingBlock{Source: "catalog", Digest: "digest", Fallback: export.PricingFallback{Models: []string{}}, Models: map[string]export.ModelPricingProvenance{}}, rows: []pgActivityPricedRow{{attribution: intern.Intern("model"), cost: 11, index: 0, webSearches: 1, reported: true}, {attribution: intern.Intern("model"), cost: 22, index: 1, webSearches: 2, priced: true}, {attribution: intern.Intern("model"), cost: 33, index: 2, webSearches: 3, contributes: true}, {attribution: intern.Intern("model"), cost: 44, index: 3, webSearches: 4, sessionCost: true}}},
 	}
 	var first Store
 	require.NoError(t, first.activityDisk.Open("roundtrip", "mirror", 0, 0))
@@ -81,42 +81,32 @@ func TestPGActivityDiskInputsRoundTrip(t *testing.T) {
 	assert.Equal(t, input.sessions, got.sessions)
 	assert.Equal(t, input.candidates, got.candidates)
 	assert.Equal(t, input.priced, got.priced)
-}
-
-func TestPGActivityDiskRejectsInvalidPricedIndexes(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	version := pgActivityDiskVersion + "version"
+	data, ok := first.activityDisk.Get("slot", version)
+	require.True(t, ok)
 	for _, tc := range []struct {
 		name    string
 		indexes []int32
 	}{
-		{"bad index", []int32{2, 1}},
+		{"bad index", []int32{4, 1}},
 		{"duplicate index", []int32{0, 0}},
 		{"nil block", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var store Store
-			require.NoError(t, store.activityDisk.Open(tc.name, "mirror", 0, 0))
-			intern := stringutil.Interner{}
-			row := pgActivityUsageRow{sessionID: intern.Intern("session"), usageSource: intern.Intern("source"), model: intern.Intern("model"), providerID: intern.Intern("provider"), agent: intern.Intern("agent")}
-			input := pgActivityInputs{identity: "source", usage: []pgActivityUsageRow{row, row}, priced: &pgActivityPriced{block: &export.PricingBlock{}, rows: []pgActivityPricedRow{{attribution: intern.Intern("model"), index: 0}, {attribution: intern.Intern("model"), index: 1}}}}
-			store.runtimeState().activityInputs.Put("slot", "version", []pgActivityInputs{input})
-			store.saveActivityInputs()
-			version := pgActivityDiskVersion + "version"
-			data, ok := store.activityDisk.Get("slot", version)
-			require.True(t, ok)
 			rows, ok := kept.DecodeRows[kept.Part[pgActivityDiskPart]](data)
 			require.True(t, ok)
 			require.NotNil(t, rows[0].Value.Priced)
 			if tc.indexes == nil {
+				// Simulate a corrupt snapshot with a null pricing block.
 				rows[0].Value.Priced.Block = []byte("null")
 			}
 			for i, index := range tc.indexes {
 				rows[0].Value.Priced.Rows[i].Index = index
 			}
-			data, err := kept.EncodeRows(rows, 256<<20, func(kept.Part[pgActivityDiskPart]) int64 { return 0 })
+			corrupt, err := kept.EncodeRows(rows, 256<<20, func(kept.Part[pgActivityDiskPart]) int64 { return 0 })
 			require.NoError(t, err)
-			store.activityDisk.Put("slot", version, data)
-			loaded, ok := store.loadActivityInputs("slot", "version", "source")
+			first.activityDisk.Put("slot", version, corrupt)
+			loaded, ok := first.loadActivityInputs("slot", "version", "source")
 			require.True(t, ok)
 			require.Nil(t, loaded.priced)
 		})
