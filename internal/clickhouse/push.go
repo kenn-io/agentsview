@@ -465,15 +465,13 @@ func (s *Sync) pushWithOptions(
 			return result, err
 		}
 	}
-	// A push can replace tables it maintains, such as prepared usage and
-	// the usage rollup. Record the result so the next Sync in this process
-	// does not mistake those swaps for a schema to repair. Session errors
-	// may come from tables that changed during the push, so after them the
-	// next push checks the tables again.
-	if result.Errors > 0 {
+	// A push replaces the tables it maintains, such as prepared usage and
+	// the usage rollup, with identical ones, so a clean push leaves the
+	// state the schema step recorded. A different state, such as a table
+	// dropped during the push, or session errors, which may come from one,
+	// leave the next push to check the tables again.
+	if result.Errors > 0 || !schemaUnchangedSinceEnsured(ctx, conn, s.schemaKey) {
 		s.forgetEnsuredSchema()
-	} else if err := recordEnsuredSchema(ctx, conn, s.schemaKey); err != nil {
-		return result, err
 	}
 	result.Duration = time.Since(start)
 	return result, nil

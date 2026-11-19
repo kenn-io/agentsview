@@ -364,9 +364,9 @@ watch's startup and interval pushes, so they lag by at most the watch interval.
 **The schema step runs once per process for each mirror.** The daemon builds a
 new pusher for every push request, so the pusher's own memo of the schema step
 never outlived one push. `Sync.EnsureSchema` now records, per server URL and
-database, the mirror's state after it prepares the tables and after every
-successful push (`ensuredSchemas`). A later pusher in the same process reads the
-state again and skips the schema step while it matches. The state covers:
+database, the mirror's state after it prepares the tables (`ensuredSchemas`). A
+later pusher in the same process reads the state again and skips the schema step
+while it matches. The state covers:
 
 - each table's name and `create_table_query`, so a dropped table or a column,
   index, projection, comment, or view query that differs runs the step again
@@ -376,9 +376,10 @@ state again and skips the schema step while it matches. The state covers:
 
 A prepared usage refresh replaces `prepared_usage` with an identical table and
 keeps the state; its temporary `.tmp.` table is left out. A state that cannot be
-read counts as changed. A failed push, or one that ends with session errors,
-forgets the record, so the next push runs the step. Session errors can come from
-tables that changed during the push.
+read counts as changed. A failed push, one that ends with session errors, or one
+whose state no longer matches the record, such as after a table was dropped
+during the push, forgets the record, so the next push runs the step. Session
+errors can come from tables that changed during the push.
 
 ## Rejected alternatives
 

@@ -179,6 +179,29 @@ func TestEnsureSchemaReusesSchemaThisProcessPrepared(t *testing.T) {
 	assert.Equal(t, 1, tables, "a dropped table is created again")
 }
 
+// A table dropped during a push that never writes to it leaves a state the
+// schema step did not prepare, so the next Sync checks the tables again.
+func TestPushThatSeesADroppedTableForgetsPreparedSchema(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	local, target := seedFixture(t)
+	s := newTestSync(t, local, target, storage.PusherOptions{})
+	conn := chtest.Open(t, target.URL, target.Database)
+	s.hooks = &pushHooks{beforeSessionRows: func([]db.Session) error {
+		_, err := conn.ExecContext(ctx, "DROP TABLE image_text SYNC")
+		return err
+	}}
+	result, err := s.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Zero(t, result.Errors)
+	_, ok := ensuredSchemas.Load(s.schemaKey)
+	assert.False(t, ok, "a push that saw a table dropped forgets the prepared schema")
+
+	newTestSync(t, local, target, storage.PusherOptions{})
+	assert.Equal(t, 1, chtest.Count(t, conn, "system.tables",
+		"database = currentDatabase() AND name = 'image_text'"), "the next Sync creates the table again")
+}
+
 // Session errors may come from tables that changed during the push, so a
 // push that ends with them leaves the next Sync to check the tables again.
 func TestPushWithSessionErrorsForgetsPreparedSchema(t *testing.T) {
