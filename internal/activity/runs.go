@@ -93,9 +93,6 @@ type encodedSessionRuns struct {
 	Runs    []encodedSessionRun
 }
 
-// SessionRunPiece identifies a run's model and boundary indexes.
-type SessionRunPiece = encodedSessionRun
-
 // SessionRunsWire holds the boundaries and indexes for saved runs.
 type SessionRunsWire = encodedSessionRuns
 

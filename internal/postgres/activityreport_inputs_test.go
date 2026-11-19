@@ -58,8 +58,9 @@ func TestPGActivityDiskRowRoundTrip(t *testing.T) {
 func TestPGActivityDiskInputsRoundTrip(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	intern := stringutil.Interner{}
-	runs, err := (activity.SessionRunsWire{Bounds: []int64{1, 2}, Runs: []activity.SessionRunPiece{{Model: "model", Last: 1}}}).Restore()
-	require.NoError(t, err)
+	builder := activity.NewSessionRunsBuilder(300)
+	builder.AddPiece("model", 1, 2, false)
+	runs := builder.Finish()
 	row := pgActivityUsageRow{sessionID: intern.Intern("session"), usageSource: intern.Intern("source"), model: intern.Intern("model"), providerID: intern.Intern("provider"), agent: intern.Intern("agent"), output: 3}
 	second := row
 	second.output = 7
