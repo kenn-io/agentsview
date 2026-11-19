@@ -33,6 +33,12 @@ type PushOptions struct {
 	// when FullVectors is set or the push runs (or is promoted to run) full, so
 	// reset recovery and backfills keep generation-wide reconciliation.
 	ScopeVectorsToChangedSessions bool
+	// SkipIfUnchanged marks a push a watcher change triggered. When the
+	// archive holds nothing new for the replica, a ClickHouse push then
+	// writes nothing and leaves upkeep that does not depend on local
+	// changes, such as repricing and machine labels, to the next push
+	// without it. PostgreSQL ignores it.
+	SkipIfUnchanged bool
 	// LastReconciledVectorGeneration is the replica generation id the
 	// caller last reconciled generation-wide. When a scoped push resolves
 	// a different active generation id, the vector phase promotes itself

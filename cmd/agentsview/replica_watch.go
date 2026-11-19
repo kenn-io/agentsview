@@ -116,6 +116,7 @@ func (v *vectorReconcile) options(reason pushReason, full bool) storage.PushOpti
 		FullVectors:                    v.fullPending,
 		FullVectorSessions:             slices.Sorted(maps.Keys(v.repairSessions)),
 		ScopeVectorsToChangedSessions:  scopedVectorPush(reason, full, v.needed || repairPending),
+		SkipIfUnchanged:                reason == reasonChange && !full,
 		LastReconciledVectorGeneration: v.lastGeneration,
 	}
 }

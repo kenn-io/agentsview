@@ -31,6 +31,8 @@ type Sync struct {
 	conn   *sql.DB
 	// schemaDone memoizes EnsureSchema for this Sync.
 	schemaDone bool
+	// schemaKey names the mirror database in ensuredSchemas.
+	schemaKey string
 
 	// archiveID caches the local archive identity stamped on every pushed
 	// session row and used to scope the mirror's push cursor.
@@ -112,7 +114,8 @@ func New(
 	if local == nil {
 		return nil, errors.New("clickhouse sync requires a local archive")
 	}
-	if _, err := target.DatabaseName(); err != nil {
+	schemaKey, err := schemaCacheKey(target)
+	if err != nil {
 		return nil, err
 	}
 	archiveID, err := local.GetArchiveID(ctx)
@@ -130,18 +133,34 @@ func New(
 		excludeProjects: append([]string(nil), opts.ExcludeProjects...),
 		vectorSource:    opts.VectorSource,
 		archiveID:       archiveID,
+		schemaKey:       schemaKey,
 	}, nil
 }
 
 // EnsureSchema creates the mirror database and tables and opens the
-// connection every later call uses.
+// connection every later call uses. When this process already ensured the
+// mirror and its tables have not changed since, it only opens the
+// connection; see ensuredSchemas.
 func (s *Sync) EnsureSchema(ctx context.Context) error {
 	s.connMu.Lock()
 	defer s.connMu.Unlock()
 	if s.schemaDone && s.conn != nil {
 		return nil
 	}
+	if _, ok := ensuredSchemas.Load(s.schemaKey); ok && s.conn == nil {
+		// The database may be gone since; creating it needs the full path.
+		if conn, err := Open(ctx, s.target); err == nil {
+			s.conn = conn
+		} else {
+			ensuredSchemas.Delete(s.schemaKey)
+		}
+	}
+	if s.conn != nil && schemaUnchangedSinceEnsured(ctx, s.conn, s.schemaKey) {
+		s.schemaDone = true
+		return nil
+	}
 	if err := EnsureSchema(ctx, s.target); err != nil {
+		ensuredSchemas.Delete(s.schemaKey)
 		return err
 	}
 	if s.conn == nil {
@@ -151,8 +170,25 @@ func (s *Sync) EnsureSchema(ctx context.Context) error {
 		}
 		s.conn = conn
 	}
-	s.schemaDone = true
+	recorded, err := recordEnsuredSchema(ctx, s.conn, s.schemaKey)
+	if err != nil {
+		return err
+	}
+	// A pending snapshot rebuild leaves the schema unrecorded, and this Sync
+	// checks again too, since a watcher reuses it for every push.
+	s.schemaDone = recorded
 	return nil
+}
+
+// forgetEnsuredSchema makes the next EnsureSchema on this Sync, or on any
+// later Sync in this process, check the mirror's tables again. A watcher
+// keeps one Sync across pushes, so the shared record alone would not reach
+// it.
+func (s *Sync) forgetEnsuredSchema() {
+	ensuredSchemas.Delete(s.schemaKey)
+	s.connMu.Lock()
+	s.schemaDone = false
+	s.connMu.Unlock()
 }
 
 // Close releases the mirror connection.
