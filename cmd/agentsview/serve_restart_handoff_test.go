@@ -101,8 +101,8 @@ func startRestartFixtureAt(t *testing.T, dataDir, mode string, args ...string) (
 	return process, done
 }
 
-// waitForBackgroundLaunchLock waits until a restarted background server has
-// released the launch lock it holds while starting.
+// waitForBackgroundLaunchLock waits for foreground or background startup to
+// release its launch lock. A runtime record can appear before this release.
 func waitForBackgroundLaunchLock(t *testing.T, dataDir string) {
 	t.Helper()
 	require.Eventually(t, func() bool {
@@ -908,6 +908,8 @@ func TestRestartDeploymentAuthSaveAuthority(t *testing.T) {
 				base := fmt.Sprintf("http://127.0.0.1:%d", rt.Port)
 				if scenario == "external restart" {
 					restartTestSend(t, http.MethodPut, base+"/api/v1/settings", `{"require_auth":true}`, token, http.StatusOK)
+					// Runtime discovery and HTTP responses can precede startup unlocking.
+					waitForBackgroundLaunchLock(t, dataDir)
 					output, err := exec.CommandContext(t.Context(), os.Args[0], "daemon", "restart").CombinedOutput()
 					require.NoError(t, err, "%s", output)
 					replacement := waitForRestartRuntime(t, dataDir, token)
@@ -930,6 +932,8 @@ func TestRestartDeploymentAuthSaveAuthority(t *testing.T) {
 			rt := waitForRestartRuntime(t, dataDir, token)
 			base := fmt.Sprintf("http://127.0.0.1:%d", rt.Port)
 			restartTestSend(t, http.MethodPut, base+"/api/v1/settings", `{"require_auth":false}`, token, http.StatusOK)
+			// Runtime discovery and HTTP responses can precede startup unlocking.
+			waitForBackgroundLaunchLock(t, dataDir)
 			output, err := exec.CommandContext(t.Context(), os.Args[0], "daemon", "restart").CombinedOutput()
 			require.NoError(t, err, "%s", output)
 			replacement := waitForRestartRuntime(t, dataDir, token)
