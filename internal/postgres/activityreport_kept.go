@@ -75,7 +75,7 @@ func (s *Store) keepActivityReport(selection, version string, entry pgActivityKe
 	}
 	if identity != "" && entry.checkpoint != "" {
 		if saved {
-			s.activityReports.Keep(selection+"|"+identity+"|"+version, identity+"|"+version, func() ([]byte, error) { return encodePGActivityReport(entry) })
+			s.activityReports.Touch(selection + "|" + identity + "|" + version)
 		} else {
 			s.saveActivityReport(selection, version, entry)
 		}

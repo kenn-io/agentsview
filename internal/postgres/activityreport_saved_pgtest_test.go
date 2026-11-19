@@ -3,6 +3,7 @@
 package postgres
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -172,5 +173,34 @@ func TestPGActivityReportSaved(t *testing.T) {
 				requirePGKeptEqual(t, want, got)
 			}
 		})
+	}
+}
+
+func TestPGActivityMemoHitDoesNotRestoreEvictedReport(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	var store Store
+	store.activityReports.MaxFiles = 8
+	require.NoError(t, store.activityReports.Open("postgres-activity-reports", "mirror", 4096, 0))
+	for i := range 9 {
+		selection := fmt.Sprintf("selection-%d|identity|version", i)
+		require.True(t, store.activityReports.Put(selection, "identity|version", []byte("report")))
+		if i == 0 {
+			files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
+			require.NoError(t, err)
+			require.Len(t, files, 1)
+			old := time.Now().Add(-time.Hour)
+			require.NoError(t, os.Chtimes(files[0], old, old))
+		}
+	}
+	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
+	require.NoError(t, err)
+	require.Len(t, files, 8)
+	entry := pgActivityKept{identity: "identity", checkpoint: "checkpoint"}
+	store.keepActivityReport("selection-0", "version", entry, "identity", false)
+	_, ok := store.activityReports.Get("selection-0|identity|version", "identity|version")
+	require.False(t, ok)
+	for _, file := range files {
+		_, err := os.Stat(file)
+		require.NoError(t, err)
 	}
 }
