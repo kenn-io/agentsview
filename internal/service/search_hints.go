@@ -41,7 +41,7 @@ type hintProbe struct {
 // when a child's parent paths disagree about the probe, or loop, the match is
 // undecided.
 func (p hintProbe) shows(rows map[string]db.Session, id string, tree, exemptChildren bool) (shown, known bool) {
-	switch p.verdict(rows, id, tree, exemptChildren, make(map[string]bool), make(map[string]hintVerdict)) {
+	switch p.verdict(rows, id, tree, exemptChildren, make(map[string]hintVerdict)) {
 	case hintShown:
 		return true, true
 	case hintUnknown:
@@ -60,23 +60,20 @@ const (
 )
 
 // verdict decides one session. memo keeps each session's answer, so parents
-// that split and rejoin are visited once. A parent loop is undecided, which
-// keeps memo correct: every session on a loop reaches it from any start.
-func (p hintProbe) verdict(rows map[string]db.Session, id string, tree, exemptChildren bool, path map[string]bool, memo map[string]hintVerdict) hintVerdict {
+// that split and rejoin are visited once. A session reached again while it is
+// still being decided is on a parent loop and reads as undecided, which keeps
+// memo correct: every session on a loop reaches it from any start.
+func (p hintProbe) verdict(rows map[string]db.Session, id string, tree, exemptChildren bool, memo map[string]hintVerdict) hintVerdict {
 	if v, ok := memo[id]; ok {
 		return v
 	}
-	if path[id] {
-		return hintUnknown
-	}
-	path[id] = true
-	defer delete(path, id)
-	v := p.decide(rows, id, tree, exemptChildren, path, memo)
+	memo[id] = hintUnknown
+	v := p.decide(rows, id, tree, exemptChildren, memo)
 	memo[id] = v
 	return v
 }
 
-func (p hintProbe) decide(rows map[string]db.Session, id string, tree, exemptChildren bool, path map[string]bool, memo map[string]hintVerdict) hintVerdict {
+func (p hintProbe) decide(rows map[string]db.Session, id string, tree, exemptChildren bool, memo map[string]hintVerdict) hintVerdict {
 	s, ok := rows[id]
 	if !ok {
 		return hintUnknown
@@ -95,7 +92,7 @@ func (p hintProbe) decide(rows map[string]db.Session, id string, tree, exemptChi
 	// A session that is not a tree root lists at least one parent.
 	var result hintVerdict
 	for i, parent := range parents {
-		switch v := p.verdict(rows, parent, tree, exemptChildren, path, memo); {
+		switch v := p.verdict(rows, parent, tree, exemptChildren, memo); {
 		case i == 0:
 			result = v
 		case v != result:
@@ -194,6 +191,7 @@ func hintSessions(ctx context.Context, svc SessionService, lookups []hintLookup)
 // that hid it. A lexical search that explains children also runs a
 // parent-tree search, because child sessions are selected through their
 // root while one-shot and automated sessions are matched on their own rows.
+// A vector search keeps one search per class.
 // Diagnostics are optional: a failed search or session lookup contributes no
 // hint. keepMatch applies caller activity filtering when the backend has not
 // applied it.
@@ -266,8 +264,13 @@ func SearchContentHints(ctx context.Context, svc SessionService, req ContentSear
 		retry.IncludeOneShot, retry.IncludeAutomated, retry.IncludeChildren = true, true, true
 		treePage = search(shareLimit(retry, treeShared))
 	}
+	// A vector retry for one class can rank a different candidate window than
+	// the shared retry, so the shared page cannot vouch for a class's own
+	// search there. Each class then runs its own search, and the shared page
+	// feeds only the combined hint, which needs no rows.
+	sortShared := !vector
 	var lookup []hintLookup
-	if flatShared && flatPage != nil {
+	if sortShared && flatShared && flatPage != nil {
 		lookup = append(lookup, hintLookup{flatPage, tree})
 	}
 	if treeShared && treePage != nil {
@@ -336,30 +339,19 @@ func SearchContentHints(ctx context.Context, svc SessionService, req ContentSear
 		hints = append(hints, ContentSearchHint{Code: probe.code, Message: message, RetryWith: probe.args})
 		return true, unsorted
 	}
-	// A semantic search returns no cursor, so a page holding the full limit
-	// may have left matches out. A hybrid page can also come up short while
-	// incomplete: its keyword leg reads at most a few batches, and matches
-	// the retry would show can use them up.
-	vectorLimit := req.Limit
-	if vectorLimit <= 0 || vectorLimit > db.MaxContentSearchLimit {
-		vectorLimit = db.DefaultContentSearchLimit
-	}
-	incomplete := func(page *ContentSearchResult) bool {
-		return page.NextCursor != 0 || page.CandidateTruncated || vector && (req.Mode == "hybrid" || len(page.Matches) >= vectorLimit)
-	}
-	// classify counts one hint from its shared page. When that page failed,
-	// or showed none of the hint's matches while it was incomplete or held
-	// matches it could not sort, the hint's own search runs so one busy class
-	// cannot hide another.
+	// classify counts one hint from its shared page. When that page failed or
+	// is a vector page, or showed none of the hint's matches while it was
+	// incomplete or held matches it could not sort, the hint's own search runs
+	// so one busy class cannot hide another.
 	classify := func(probe hintProbe, page *ContentSearchResult, shared, pageTree bool) {
 		if page == nil && !shared {
 			singlesOK = false
 			return
 		}
 		show := func(id string) (bool, bool) { return probe.shows(rows, id, pageTree, exempt) }
-		if page != nil {
+		if page != nil && (sortShared || !shared) {
 			added, unsorted := measure(probe, page, shared, show)
-			if added || !shared || !unsorted && !incomplete(page) {
+			if added || !shared || !unsorted && page.NextCursor == 0 && !page.CandidateTruncated {
 				return
 			}
 		}
@@ -385,14 +377,15 @@ func SearchContentHints(ctx context.Context, svc SessionService, req ContentSear
 	if singlesOK && combined != nil && (treeShared || !children && flatShared) {
 		// reach shows every session the combined retry can: one that reaches
 		// a tree root through known rows.
-		reach := hintProbe{oneShot: true, automated: true, children: true}
+		reach := hintProbe{oneShot: true, automated: true}
 		measure(hintProbe{code: "excluded_combined", args: args}, combined, true, func(id string) (bool, bool) {
 			if singles[id] {
 				return false, true
 			}
 			// Every match on this page is hidden by default and shown by the
-			// combined retry. One whose rows are missing counts toward a lower
-			// bound, since a single retry might also show it.
+			// combined retry. One whose rows are missing, as on every vector
+			// page, counts toward a lower bound, since a single retry might
+			// also show it.
 			shown, known := reach.shows(rows, id, children || tree, false)
 			if !known {
 				return true, false

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -425,8 +424,8 @@ func TestSearchContentHintsFullSemanticPage(t *testing.T) {
 	res, err := svc.SearchContent(t.Context(), req)
 	require.NoError(t, err)
 	require.Empty(t, res.Matches)
-	// One-shot matches fill the shared semantic page, so the automated
-	// session, which scores lower, needs its own search.
+	// One-shot matches fill the shared semantic page; the automated session,
+	// which scores lower, still gets its own search.
 	hints := service.SearchContentHints(t.Context(), svc, req, res, true, nil)
 	assert.Equal(t, []service.ContentSearchHint{
 		{Code: "excluded_one_shot", Message: "at least 50 matches are in one-shot sessions, hidden by default", RetryWith: map[string]any{"include_one_shot": true}},
@@ -537,30 +536,32 @@ func TestSearchContentHintsMissingParentRow(t *testing.T) {
 	}, hints)
 }
 
-func TestSearchContentHintsShortHybridPage(t *testing.T) {
-	one := service.ContentSearchResult{Matches: []db.ContentMatch{{SessionID: "one"}}}
+func TestSearchContentHintsVectorClassSearches(t *testing.T) {
+	shared := service.ContentSearchResult{Matches: []db.ContentMatch{{SessionID: "one"}}}
 	auto := service.ContentSearchResult{Matches: []db.ContentMatch{{SessionID: "auto"}}}
-	svc := &rowService{
-		rows: map[string]db.Session{"one": {ID: "one", UserMessageCount: 1}, "auto": {ID: "auto", UserMessageCount: 2, IsAutomated: true}},
-		search: func(req service.ContentSearchRequest) service.ContentSearchResult {
-			switch {
-			case req.IncludeOneShot && req.IncludeAutomated:
-				return one
-			case req.IncludeAutomated:
-				return auto
-			}
-			return service.ContentSearchResult{}
-		},
+	rows := map[string]db.Session{"one": {ID: "one", UserMessageCount: 1}, "auto": {ID: "auto", UserMessageCount: 2, IsAutomated: true}}
+	for _, mode := range []string{"semantic", "hybrid"} {
+		t.Run(mode, func(t *testing.T) {
+			svc := &rowService{rows: rows, search: func(req service.ContentSearchRequest) service.ContentSearchResult {
+				switch {
+				case req.IncludeOneShot && req.IncludeAutomated:
+					return shared
+				case req.IncludeAutomated:
+					return auto
+				}
+				// The one-shot retry ranks a different candidate window and
+				// misses the one-shot match the shared page found.
+				return service.ContentSearchResult{}
+			}}
+			req := service.ContentSearchRequest{Pattern: "marker", Mode: mode}
+			hints := service.SearchContentHints(t.Context(), svc, req, &service.ContentSearchResult{}, true, nil)
+			assert.Equal(t, []service.ContentSearchHint{
+				{Code: "excluded_automated", Message: "at least 1 match is in automated sessions, hidden by default", RetryWith: map[string]any{"include_automated": true}},
+				{Code: "excluded_combined", Message: "at least 1 match is hidden by default", RetryWith: map[string]any{"include_one_shot": true, "include_automated": true}},
+			}, hints)
+			assert.Equal(t, 3, svc.searches)
+		})
 	}
-	// The shared hybrid page is short but missed the automated match, as when
-	// one-shot rows used up the keyword batches.
-	req := service.ContentSearchRequest{Pattern: "marker", Mode: "hybrid"}
-	hints := service.SearchContentHints(t.Context(), svc, req, &service.ContentSearchResult{}, true, nil)
-	assert.Equal(t, []service.ContentSearchHint{
-		{Code: "excluded_one_shot", Message: "at least 1 match is in one-shot sessions, hidden by default", RetryWith: map[string]any{"include_one_shot": true}},
-		{Code: "excluded_automated", Message: "at least 1 match is in automated sessions, hidden by default", RetryWith: map[string]any{"include_automated": true}},
-	}, hints)
-	assert.Equal(t, 2, svc.searches)
 }
 
 func TestSearchContentHintsRejoiningParents(t *testing.T) {
@@ -580,16 +581,9 @@ func TestSearchContentHintsRejoiningParents(t *testing.T) {
 	page := service.ContentSearchResult{Matches: []db.ContentMatch{{SessionID: "kid"}}}
 	svc := &rowService{search: expandedOnly(page), rows: rows}
 	req := service.ContentSearchRequest{Pattern: "marker", IncludeChildren: true}
-	done := make(chan []service.ContentSearchHint, 1)
-	go func() {
-		done <- service.SearchContentHints(t.Context(), svc, req, &service.ContentSearchResult{}, true, nil)
-	}()
-	select {
-	case hints := <-done:
-		assert.Equal(t, []service.ContentSearchHint{
-			{Code: "excluded_one_shot", Message: "1 match is in one-shot sessions, hidden by default", RetryWith: map[string]any{"include_one_shot": true}},
-		}, hints)
-	case <-time.After(10 * time.Second):
-		require.FailNow(t, "classifying one match walked every parent path")
-	}
+	// Walking every parent path would take 2^40 visits and hang the test.
+	hints := service.SearchContentHints(t.Context(), svc, req, &service.ContentSearchResult{}, true, nil)
+	assert.Equal(t, []service.ContentSearchHint{
+		{Code: "excluded_one_shot", Message: "1 match is in one-shot sessions, hidden by default", RetryWith: map[string]any{"include_one_shot": true}},
+	}, hints)
 }
