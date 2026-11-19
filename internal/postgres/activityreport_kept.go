@@ -179,5 +179,8 @@ func (s *Store) keptActivityReport(ctx context.Context, selection, version strin
 	entry.revision = through
 	entry.checkpoint = current
 	memo.Put(selection, version, []pgActivityKept{entry})
+	if entry.identity != "" {
+		s.saveActivityReport(selection, version, entry)
+	}
 	return entry.report, through, true, nil
 }

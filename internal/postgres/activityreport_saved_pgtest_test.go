@@ -103,7 +103,7 @@ func TestPGActivityReportSaved(t *testing.T) {
 				requirePGKeptEqual(t, want, got)
 				after, err := os.ReadFile(files[0])
 				require.NoError(t, err)
-				assert.Equal(t, saved, after)
+				assert.NotEqual(t, saved, after)
 				pgKeptSession(t, local, "b", "project-a", "2026-06-14")
 				pgKeptPush(t, syncer, false)
 				updated := pgKeptBuild(t, restarted, f, q, true)
@@ -114,11 +114,14 @@ func TestPGActivityReportSaved(t *testing.T) {
 }
 
 func TestPGActivityReportSavedHistory(t *testing.T) {
-	for _, mode := range []string{"replaced", "unrelated", "missing"} {
+	for _, mode := range []string{"replaced", "unrelated", "missing", "repeated"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Setenv("CACHE_DIRECTORY", t.TempDir())
 			local, syncer, _ := newUsageJournalFixture(t)
 			pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+			if mode == "repeated" {
+				pgKeptSession(t, local, "b", "project-b", "2026-07-14")
+			}
 			pgKeptPush(t, syncer, false)
 			target, directory := testPGURL(t), t.TempDir()
 			q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
@@ -148,10 +151,21 @@ func TestPGActivityReportSavedHistory(t *testing.T) {
 			case "missing":
 				_, err := first.pg.ExecContext(ctx, `DELETE FROM sync_metadata WHERE key='usage_history_checkpoint:' || $1::bigint::text`, revision)
 				require.NoError(t, err)
+			case "repeated":
+				for i := range 130 {
+					_, err := first.pg.ExecContext(ctx, `UPDATE sessions SET message_count=message_count+1 WHERE id='b'`)
+					require.NoError(t, err)
+					if i%10 == 9 {
+						requirePGKeptEqual(t, before, pgKeptBuild(t, first, f, q, false))
+					}
+				}
+				var exists bool
+				require.NoError(t, first.pg.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM sync_metadata WHERE key='usage_history_checkpoint:' || $1::bigint::text)`, revision).Scan(&exists))
+				require.False(t, exists)
 			}
 			restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
 			t.Cleanup(func() { require.NoError(t, restarted.Close()) })
-			got := pgKeptBuild(t, restarted, f, q, mode != "unrelated")
+			got := pgKeptBuild(t, restarted, f, q, mode == "replaced" || mode == "missing")
 			if mode == "replaced" {
 				assert.Equal(t, 600, got.Report.Totals.OutputTokens)
 			} else {
