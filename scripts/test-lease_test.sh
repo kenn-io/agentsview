@@ -222,6 +222,17 @@ while IFS= read -r project; do
     grep -qE -- "-p $project .* down -v --remove-orphans" "$DOCKER_LOG"
 done <<< "$projects"
 
+# The lease may disappear before the supervisor can reopen it.
+for expected in 0 7; do
+    : > "$DOCKER_LOG"
+    set +e
+    (cd "$root" && ./scripts/test-lease.sh agentsview "$cleanup_cmd" sh -c 'python3 -c '\''import os; os.unlink(os.path.join(os.environ["HOME"], ".local/state/test-service-leases", os.environ["TEST_SERVICE_LEASE"]))'\''; exit "$1"' sh "$expected") >"$tmp/missing-lease.log" 2>&1
+    status=$?
+    set -e
+    [[ $status == "$expected" ]]
+    [[ ! -s "$DOCKER_LOG" ]]
+done
+
 # A missing Python interpreter stops before Docker can start anything.
 mkdir "$tmp/no-python"
 ln -s "$tmp/bin/docker" "$tmp/no-python/docker"

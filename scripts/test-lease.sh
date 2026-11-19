@@ -44,8 +44,14 @@ child = subprocess.Popen(command, pass_fds=(fd,))
 for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
     signal.signal(sig, lambda signum, frame: child.send_signal(signum) if child.poll() is None else None)
 status = child.wait()
+if status < 0:
+    status = 128 - status
 os.close(fd)
-with open(path, "r") as lock:
+try:
+    lock = open(path, "r")
+except FileNotFoundError:
+    sys.exit(status)
+with lock:
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -55,5 +61,5 @@ with open(path, "r") as lock:
             print(f"cleanup failed; retry from the repository root: {cleanup.replace('$TEST_SERVICE_LEASE', lease)}", file=sys.stderr)
             if status == 0:
                 status = 1
-sys.exit(128 - status if status < 0 else status)
+sys.exit(status)
 PY
