@@ -51,8 +51,9 @@ from.
 Time bounds cannot be combined with a text query. Search uses relevance
 ordering, while a checkpoint walk needs change ordering.
 
-The HTTP list and MCP `list_recall` accept `updated_since` and `created_since`,
-and return `next_cursor` when more entries remain. To follow changes:
+`GET /api/v1/recall/entries` and MCP `list_recall` accept `updated_since` and
+`created_since`, and return `next_cursor` when more entries remain. To follow
+changes:
 
 1. List with your saved checkpoint as `updated_since`, and pass each
    `next_cursor` back until a page returns none.
@@ -115,13 +116,13 @@ api_key_env = "OPENAI_API_KEY" # optional; the value is read at runtime
 Loopback HTTP endpoints are allowed for local models. Remote endpoints must use
 HTTPS unless `allow_http = true` explicitly opts into plaintext transport. The
 endpoint receives transcript-derived content, so review the provider's privacy
-and retention behavior. API keys stay in the environment and are sent only as a
-bearer header; they are not stored in the AgentsView configuration. Canned
-insight cache keys include the effective backend, model, and a safe endpoint
-identity, so changing `[insights]` after restarting the server selects a
-separate cached report. Changes to credentials or transport opt-ins do not
-change that identity; use force refresh when those changes should regenerate a
-report under the same endpoint and model.
+and retention behavior. API keys come from the environment variable or private
+file you name and are sent only as a bearer header; the key itself is not stored
+in `config.toml`. Canned insight cache keys include the effective backend,
+model, and a safe endpoint identity, so changing `[insights]` after restarting
+the server selects a separate cached report. Changes to credentials or
+transport opt-ins do not change that identity; use force refresh when those
+changes should regenerate a report under the same endpoint and model.
 
 Generated insights can also be listed, fetched, and generated from the CLI with
 `agentsview insight`; see the [CLI reference](/docs/commands/).

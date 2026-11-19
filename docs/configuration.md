@@ -342,6 +342,7 @@ Set it to `"0"` to keep syncing while idle. Restart the server after changing it
 | `[vector]`                          | Opt-in semantic-search index; model settings live in `[vector.embeddings]`, named endpoints in `[vector.embeddings.servers.<name>]`, embedding schedule in `[vector.embed]` — see [Semantic Search](/docs/semantic-search/#enabling-vector) for every key                                                                                                                                                                                                                        |
 | `[recall.extract]`                  | Opt-in model-backed recall extraction; named endpoints in `[recall.extract.servers.<name>]`, prompt selection in `[recall.extract.prompts]`, request overrides in `[recall.extract.request]` — see [Recall](/docs/recall/#automatic-extraction)                                                                                                                                                                                                                                  |
 | `[integrations.docbank]` | Optional lookup of transcript image digests in Docbank; see [Find transcript images in Docbank](/docs/configuration/#find-transcript-images-in-docbank) |
+| `[image_text]` | Opt-in search of text inside tool-result images; see [Image text](/docs/configuration/#image-text) |
 | `[insights]`                        | Optional generated-insights endpoint and model, plus `default_agent`, the agent CLI new reports start with; local loopback HTTP is allowed, remote plaintext requires `allow_http = true`, and endpoint failures do not retry through a CLI — see [Recall](/docs/recall/#current-surface)                                                                                                                                                                                        |
 | `[friction]`                        | Opt-in Friction Log review; set `enabled = true` to review changed sessions in the background after each sync — see [Friction Log](#friction-log)                                                                                                                                                                                                                                                                                                                                |
 | `[kata]`                            | Optional Kata issue-tracker connection; off by default; HTTPS needs `token_env` or `token_file` — see [Kata](/docs/kata/)                                         |
@@ -417,8 +418,8 @@ token_file = "~/.config/agentsview/kata-token"
   An empty or blank file, a file over 64 KiB, or a file containing a NUL byte
   is an error.
 - The file must be private. On macOS and Linux, a file you own needs mode
-  `0600` or `0400`, and no directory on its path may be writable by group or
-  others. A umask of `002` creates group-writable directories, so check the
+  `0600` or `0400`, and every directory on its path must belong to you or root
+  and not be writable by group or others. A umask of `002` creates group-writable directories, so check the
   parent directory too. Files owned by root, such as systemd credentials and
   Kubernetes secret mounts, work when only root can write them. On Windows,
   only your user may have access to the file.
@@ -2822,7 +2823,7 @@ Results refresh when the session reopens and when its transcript changes, at
 most every 15 seconds while matches are already shown. Successful Docbank
 answers are reused for one minute. No migration or resync is required.
 
-### Image text
+## Image text
 
 Enable image text extraction when a local GLM-OCR service is available:
 
@@ -2834,8 +2835,9 @@ enabled = true
 
 Restart the daemon after changing this setting. Images removed by the `drop`
 storage policy cannot be indexed. Disabling image text clears extracted text;
-enabling it again extracts images anew. The endpoint must use a loopback
-address. Image text requires an `archive_content` setting that keeps tool
+enabling it again extracts images anew. The endpoint must be an `http://` URL
+on a loopback host, with an explicit port and the path `/glmocr/parse`. Image
+text requires an `archive_content` setting that keeps tool
 results; otherwise it stays off and a warning is logged. See
 [search text in images](commands.md#search-text-in-images) for supported images
 and search modes.
