@@ -101,12 +101,14 @@ var dropUsageChangeJournalSQL = func() string {
 }()
 
 // Journal installation is optional for both push and serve schema setup.
-func ensureUsageChangeJournalPG(ctx context.Context, pg *sql.DB) {
+// It reports false when setup failed and a later attempt may succeed.
+func ensureUsageChangeJournalPG(ctx context.Context, pg *sql.DB) (ok bool) {
 	var err error
 	defer func() {
 		if err != nil {
 			log.Printf("pg schema: usage change journal setup failed: %v", err)
 		}
+		ok = err == nil
 	}()
 	column, err := sessionVersionColumnPG(ctx, pg)
 	if err != nil || column != "xmin" {
@@ -134,6 +136,7 @@ func ensureUsageChangeJournalPG(ctx context.Context, pg *sql.DB) {
 		return
 	}
 	err = tx.Commit()
+	return
 }
 
 func installUsageAccountRevisionPG(ctx context.Context, tx *sql.Tx) error {

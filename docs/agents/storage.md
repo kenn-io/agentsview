@@ -1238,10 +1238,14 @@ push needs and runs data repairs. One `Sync` runs it once and remembers that in
 after the step: relations with their columns or index definitions, constraints,
 triggers, functions, extensions, and their object IDs. A later `Sync` in the
 same process reads the summary, and while it matches, skips the schema probes
-and DDL. It still runs the data repairs (`runSchemaDataRepairsPG`), because
+and DDL. It still runs the data version check (`CheckDataVersionCompat`),
+because another machine can push rows in a newer format without changing the
+schema. It also still runs the data repairs (`runSchemaDataRepairsPG`), because
 pushes since the step can leave rows they fix, such as sessions awaiting the
 automation audit. A full push, a missing push marker, or a failed push forgets
-the record, so the next push runs the whole step.
+the record, so the next push runs the whole step. A step whose optional setup
+fails, such as an index the role lacks privilege to create, records nothing,
+so the next push retries it.
 
 ### Raw session ID lookups
 

@@ -95,3 +95,57 @@ func TestEnsureSchemaReusesSchemaThisProcessPrepared(t *testing.T) {
 	assert.NotEmpty(t, log.matching(regexp.MustCompile(`information_schema`)),
 		"a full push checks the schema again")
 }
+
+// newCacheTestSync opens a Sync for schema on a database that test owns.
+func newCacheTestSync(t *testing.T, pgURL, schema string, local *db.DB) *Sync {
+	t.Helper()
+	s, err := New(t.Context(), pgURL, schema, local, "machine-a", true, storage.PusherOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, s.pg.Close()) })
+	return s
+}
+
+// Another machine can push rows in a newer format without changing the
+// schema, so a Sync that reuses this process's prepared schema still
+// refuses them.
+func TestEnsureSchemaReuseStillRejectsNewerData(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
+	local, err := db.OpenIsolated(ctx, filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, local.Close()) })
+
+	first := newCacheTestSync(t, pgURL, schema, local)
+	require.NoError(t, first.EnsureSchema(ctx))
+	_, err = first.pg.ExecContext(ctx, `INSERT INTO sessions(id, machine, project, agent, data_version)
+		VALUES ('newer-parser', 'machine-b', 'project', 'codex', $1)`, db.CurrentDataVersion()+1)
+	require.NoError(t, err)
+
+	err = newCacheTestSync(t, pgURL, schema, local).EnsureSchema(ctx)
+	assert.True(t, db.IsDataVersionTooNew(err), "got %v", err)
+}
+
+// Optional setup that fails, as it does for a missing privilege, leaves the
+// schema unrecorded, so the next Sync tries the setup again.
+func TestEnsureSchemaFailedOptionalSetupIsNotRecorded(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
+	local, err := db.OpenIsolated(ctx, filepath.Join(t.TempDir(), "local.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, local.Close()) })
+
+	owner := newCacheTestSync(t, pgURL, schema, local)
+	// A type with the table's name makes CREATE TABLE IF NOT EXISTS fail.
+	_, err = owner.pg.ExecContext(ctx, `DROP TABLE session_frustration_counts;
+		CREATE TYPE session_frustration_counts AS ENUM ('a')`)
+	require.NoError(t, err)
+
+	s := newCacheTestSync(t, pgURL, schema, local)
+	require.NoError(t, s.EnsureSchema(ctx))
+	_, recorded := ensuredSchemas.Load(s.targetFingerprint)
+	assert.False(t, recorded, "a schema with failed optional setup is checked again")
+}

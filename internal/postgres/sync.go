@@ -493,6 +493,11 @@ func (s *Sync) EnsureSchema(ctx context.Context) error {
 
 func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
 	if !s.schemaDone && s.schemaUnchangedSinceEnsuredLocked(ctx) {
+		// Another machine may have pushed rows in a newer format without
+		// changing the schema, so the version check still runs first.
+		if err := CheckDataVersionCompat(ctx, s.pg); err != nil {
+			return err
+		}
 		// Pushes since this process prepared the schema can leave rows the
 		// repairs fix, such as sessions awaiting the automation audit, so a
 		// new Sync still runs them. Only the schema probes and DDL are
@@ -517,10 +522,14 @@ func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
 		return err
 	}
 	if pushSchemaCurrent(ctx, s.pg) {
+		// Optional setup that fails, such as for a missing privilege, leaves
+		// the schema unrecorded so a later Sync tries it again.
+		optional := true
 		if err := createMissingPreparationIndexesPG(ctx, s.pg); err != nil {
 			if !isInsufficientPrivilege(err) {
 				return err
 			}
+			optional = false
 			log.Printf("pg schema: preparation indexes unavailable, insufficient privilege: %v", err)
 		}
 		// Skip general index and column maintenance, and run correctness
@@ -530,8 +539,8 @@ func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
 		if err := runSchemaDataRepairsPG(ctx, s.pg); err != nil {
 			return err
 		}
-		ensureUsageChangeJournalPG(ctx, s.pg)
-		ensureFrustrationCountsPG(ctx, s.pg)
+		optional = ensureUsageChangeJournalPG(ctx, s.pg) && optional
+		optional = ensureFrustrationCountsPG(ctx, s.pg) && optional
 		// pushSchemaCurrent predates the vector tables, so a schema
 		// created before this feature is "current" yet lacks them; a
 		// plain post-upgrade pg push would never create them. Run the
@@ -539,6 +548,7 @@ func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
 		// (schema.go), once per Sync via the schemaDone memo. Failure
 		// leaves semantic search unavailable but must not fail the push.
 		if _, err := ensureVectorBaseSchemaPG(ctx, s.pg); err != nil {
+			optional = false
 			log.Printf("pg schema: vector schema setup failed: %v", err)
 		}
 		// A restricted push role may lack CREATE on a schema that a
@@ -549,17 +559,23 @@ func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
 			if !isInsufficientPrivilege(err) {
 				return err
 			}
+			optional = false
 			log.Printf("pg schema: raw custody schema skipped, insufficient privilege: %v", err)
 		}
 		s.schemaDone = true
-		s.recordEnsuredSchemaLocked(ctx)
+		if optional {
+			s.recordEnsuredSchemaLocked(ctx)
+		}
 		return nil
 	}
-	if err := EnsureSchema(ctx, s.pg, s.schema); err != nil {
+	optional, err := ensureSchemaPG(ctx, s.pg, s.schema)
+	if err != nil {
 		return err
 	}
 	s.schemaDone = true
-	s.recordEnsuredSchemaLocked(ctx)
+	if optional {
+		s.recordEnsuredSchemaLocked(ctx)
+	}
 	return nil
 }
 
