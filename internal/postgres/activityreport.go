@@ -148,7 +148,6 @@ func (s *Store) BuildActivityReportArtifacts(
 	}
 
 	var selection, version, identity string
-	var pending bool
 	var revision int64
 	if !q.Partial && !s.hostedRelations && !db.TerminationUsesTime(f.Termination) {
 		version, err = s.activityKeptVersion(ctx, pricingDigest)
@@ -168,18 +167,14 @@ func (s *Store) BuildActivityReportArtifacts(
 			entries, ok := memo.Get(selection, version)
 			if ok {
 				identity = entries[0].identity
-				pending = entries[0].pending
 			}
-			if eligible && (!ok || pending) {
+			if eligible && identity == "" {
 				identity, _ = s.activitySourceIdentity(ctx, "")
-				pending = false
 				if !ok && identity != "" {
 					if entry, found := s.loadActivityReport(selection, version, identity); found {
 						memo.Put(selection, version, []pgActivityKept{entry})
 					}
 				}
-			} else if !ok && q.Loc != nil && s.activityReports.Enabled() && !eligible {
-				pending = true
 			}
 			var report kept.Report
 			var hit bool
@@ -192,8 +187,8 @@ func (s *Store) BuildActivityReportArtifacts(
 				entries, ok := memo.Get(selection, version)
 				if ok {
 					entry := entries[0]
-					if entry.identity != identity || entry.pending != pending {
-						entry.identity, entry.pending = identity, pending
+					if entry.identity != identity {
+						entry.identity = identity
 						memo.Put(selection, version, []pgActivityKept{entry})
 					}
 					if identity != "" {
@@ -270,7 +265,7 @@ func (s *Store) BuildActivityReportArtifacts(
 		memo.Put(selection, version, []pgActivityKept{{
 			report: kept.Report{Artifacts: artifacts, Done: done}, revision: revision,
 			candidates: candidates, peers: slices.Clip(slices.Sorted(maps.Keys(read))),
-			labels: activity.ProjectLabels(sessions), identity: identity, pending: pending,
+			labels: activity.ProjectLabels(sessions), identity: identity,
 		}})
 		if identity != "" {
 			if entries, ok := memo.Get(selection, version); ok {

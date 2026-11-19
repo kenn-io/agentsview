@@ -17,7 +17,6 @@ import (
 
 type pgActivityKept struct {
 	identity                  string
-	pending                   bool
 	report                    kept.Report
 	revision                  int64
 	candidates, peers, labels []string

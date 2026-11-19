@@ -17,7 +17,7 @@ import (
 )
 
 func TestPGActivityReportSavedRestart(t *testing.T) {
-	for _, mode := range []string{"restart", "identity", "pricing", "unavailable", "oversize", "midnight"} {
+	for _, mode := range []string{"restart", "identity", "pricing", "unavailable", "identity-retry", "oversize", "midnight"} {
 		t.Run(mode, func(t *testing.T) {
 			cache := t.TempDir()
 			t.Setenv("CACHE_DIRECTORY", cache)
@@ -39,16 +39,31 @@ func TestPGActivityReportSavedRestart(t *testing.T) {
 			if mode == "unavailable" {
 				first.pg = &activityIdentityError{storeExecutor: first.pg, denied: true}
 			}
+			var firstReads *activityInputReadCounter
+			if mode == "identity-retry" {
+				firstReads = &activityInputReadCounter{storeExecutor: first.pg}
+				first.pg = &activityIdentityError{storeExecutor: firstReads}
+			}
 			if mode == "oversize" {
 				first.runtimeState().activityKept.MaxBytes = 1
 			}
 			want := pgKeptBuild(t, first, f, q, true)
 			files, err := filepath.Glob(filepath.Join(cache, "postgres-activity-reports", "*", "*.gob"))
 			require.NoError(t, err)
-			if mode == "unavailable" || mode == "oversize" || mode == "midnight" {
+			if mode == "unavailable" || mode == "identity-retry" || mode == "oversize" || mode == "midnight" {
 				require.Empty(t, files)
 			} else {
 				require.Len(t, files, 1)
+			}
+			if mode == "identity-retry" {
+				transcriptReads, usageReads := len(firstReads.transcriptReads), len(firstReads.usageReads)
+				requirePGKeptEqual(t, want, pgKeptBuild(t, first, f, q, false))
+				assert.Len(t, firstReads.transcriptReads, transcriptReads)
+				assert.Len(t, firstReads.usageReads, usageReads)
+				files, err = filepath.Glob(filepath.Join(cache, "postgres-activity-reports", "*", "*.gob"))
+				require.NoError(t, err)
+				require.Len(t, files, 1)
+				return
 			}
 			if mode == "midnight" {
 				q.Loc = time.FixedZone("after midnight", -now.Hour()*60*60)
