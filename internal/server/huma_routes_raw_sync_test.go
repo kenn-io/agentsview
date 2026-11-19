@@ -694,6 +694,42 @@ func TestRawSyncUnexpectedCustodyErrorIsLoggedButNotReturned(t *testing.T) {
 	assert.Contains(t, logs.String(), "raw sync request failed: "+cause)
 }
 
+// Not parallel: it swaps the process-wide log writer.
+func TestRawSyncUnexpectedAuthErrorIsLoggedButNotReturned(t *testing.T) {
+	var logs bytes.Buffer
+	original := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(original) })
+
+	cause := "authenticating raw sync access token: connection refused"
+	auth := &rawSyncAuthStub{
+		authenticateToken: func(
+			context.Context,
+			string,
+			rawsync.DeviceTokenScope,
+		) (rawsync.AuthIdentity, error) {
+			return rawsync.AuthIdentity{}, errors.New(cause)
+		},
+	}
+	srv := newRawSyncHTTPTestServer(t, auth, &rawSyncCustodyStub{})
+	body, err := json.Marshal(map[string]any{
+		"provider": parser.AgentCodex,
+		"objects": []rawsync.ObjectRef{
+			{SHA256: strings.Repeat("1", 64), Length: 10},
+		},
+	})
+	require.NoError(t, err)
+
+	recorder := serveRawSyncJSON(
+		t, srv, http.MethodPost, "/api/v1/raw-sync/objects/missing",
+		string(body), "avdt_negotiate", "",
+	)
+
+	assert.Equal(t, http.StatusInternalServerError, recorder.Code)
+	assert.NotContains(t, recorder.Body.String(), cause)
+	assert.Contains(t, logs.String(), "raw sync authentication failed: "+cause)
+}
+
 func TestRawSyncCustodyDeadlineReturnsGatewayTimeout(t *testing.T) {
 	t.Parallel()
 
