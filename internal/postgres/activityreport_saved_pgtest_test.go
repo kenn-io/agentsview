@@ -83,11 +83,11 @@ BEGIN RAISE EXCEPTION 'permission denied' USING ERRCODE = '42501'; END $$`)
 					require.NoError(t, os.Chtimes(file, old, old))
 				}
 				pgKeptBuild(t, first, f, q, false)
-				_, ok := first.loadActivityReport("old1", "v", "id")
-				require.False(t, ok)
 				files, err = filepath.Glob(filepath.Join(cache, "postgres-activity-reports", "*", "*.gob"))
 				require.NoError(t, err)
 				require.Len(t, files, 1)
+				_, ok := first.loadActivityReport("old1", "v", "id")
+				require.False(t, ok)
 			}
 			restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
 			t.Cleanup(func() { require.NoError(t, restarted.Close()) })

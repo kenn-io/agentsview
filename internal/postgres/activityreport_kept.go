@@ -74,6 +74,7 @@ func (s *Store) keepActivityReport(selection, version string, entry pgActivityKe
 		} else {
 			s.saveActivityReport(selection, version, entry)
 		}
+		s.activityReports.Sweep(time.Now())
 	}
 }
 
