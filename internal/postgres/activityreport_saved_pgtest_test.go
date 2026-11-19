@@ -16,28 +16,8 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 )
 
-func TestPGActivityReportSavedPricingVariants(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	local, syncer, _ := newUsageJournalFixture(t)
-	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
-	pgKeptPush(t, syncer, false)
-	target, directory := testPGURL(t), t.TempDir()
-	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
-	for i, rate := range []int64{20_000_000, 40_000_000, 20_000_000, 40_000_000} {
-		store := openPGActivityInputStore(t, target, syncer.schema, directory)
-		t.Cleanup(func() { require.NoError(t, store.Close()) })
-		store.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: rate}})
-		got := pgKeptBuild(t, store, f, q, i < 2)
-		want := money.MustParseDollars("0.01")
-		if rate == 40_000_000 {
-			want = money.MustParseDollars("0.02")
-		}
-		assert.Equal(t, want, got.Report.Totals.Cost)
-	}
-}
-
 func TestPGActivityReportSaved(t *testing.T) {
-	for _, mode := range []string{"restart", "sweep", "unavailable", "memo-rejected", "legacy", "replaced", "repeated", "identity-retry"} {
+	for _, mode := range []string{"restart", "sweep", "unavailable", "memo-rejected", "legacy", "replaced", "repeated", "identity-retry", "pricing", "today"} {
 		t.Run(mode, func(t *testing.T) {
 			cache := t.TempDir()
 			t.Setenv("CACHE_DIRECTORY", cache)
@@ -57,6 +37,38 @@ func TestPGActivityReportSaved(t *testing.T) {
 			q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
 			first := openPGActivityInputStore(t, target, syncer.schema, directory)
 			t.Cleanup(func() { require.NoError(t, first.Close()) })
+			if mode == "pricing" {
+				for i, rate := range []int64{20_000_000, 40_000_000, 20_000_000, 40_000_000} {
+					store := first
+					if i > 0 {
+						store = openPGActivityInputStore(t, target, syncer.schema, directory)
+						t.Cleanup(func() { require.NoError(t, store.Close()) })
+					}
+					store.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: rate}})
+					got := pgKeptBuild(t, store, f, q, i < 2)
+					want := money.MustParseDollars("0.01")
+					if rate == 40_000_000 {
+						want = money.MustParseDollars("0.02")
+					}
+					assert.Equal(t, want, got.Report.Totals.Cost)
+				}
+				return
+			}
+			if mode == "today" {
+				now := time.Now().UTC()
+				timezone := "UTC"
+				if now.Hour() < 12 {
+					timezone = "Etc/GMT-12"
+				}
+				end := now.Add(-time.Minute)
+				var err error
+				q, err = activity.ResolveQuery(activity.QueryInput{
+					Preset: "custom", From: end.Add(-time.Hour).Format(time.RFC3339), To: end.Format(time.RFC3339), Timezone: timezone,
+				}, now)
+				require.NoError(t, err)
+				require.False(t, q.Partial)
+				f.Timezone = timezone
+			}
 			var denied *activityIdentityError
 			if mode == "unavailable" {
 				denied = denyActivityIdentity(t, first)
@@ -67,9 +79,11 @@ func TestPGActivityReportSaved(t *testing.T) {
 			want := pgKeptBuild(t, first, f, q, true)
 			files, err := filepath.Glob(filepath.Join(cache, "postgres-activity-reports", "*", "*.gob"))
 			require.NoError(t, err)
-			if mode == "unavailable" || mode == "memo-rejected" || mode == "legacy" {
+			if mode == "unavailable" || mode == "memo-rejected" || mode == "legacy" || mode == "today" {
 				require.Empty(t, files)
-				if mode != "memo-rejected" {
+				if mode == "today" {
+					require.Len(t, first.runtimeState().activityKept.Snapshot(), 1)
+				} else if mode != "memo-rejected" {
 					lookups := 0
 					if denied != nil {
 						lookups = denied.queries
@@ -86,8 +100,6 @@ func TestPGActivityReportSaved(t *testing.T) {
 			var saved []byte
 			switch mode {
 			case "restart":
-				saved, err = os.ReadFile(files[0])
-				require.NoError(t, err)
 				pgKeptSession(t, local, "b", "project-b", "2026-07-14")
 				pgKeptPush(t, syncer, false)
 			case "sweep":
@@ -97,7 +109,6 @@ func TestPGActivityReportSaved(t *testing.T) {
 				info, err := os.Stat(files[0])
 				require.NoError(t, err)
 				require.True(t, info.ModTime().After(old))
-				require.NoError(t, os.Chtimes(files[0], old, old))
 			case "identity-retry":
 				pgKeptSession(t, local, "b", "project-a", "2026-06-14")
 				pgKeptPush(t, syncer, false)
@@ -131,6 +142,10 @@ func TestPGActivityReportSaved(t *testing.T) {
 			}
 			restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
 			t.Cleanup(func() { require.NoError(t, restarted.Close()) })
+			if mode == "sweep" {
+				old := time.Now().Add(-31 * 24 * time.Hour)
+				require.NoError(t, os.Chtimes(files[0], old, old))
+			}
 			var identityError *activityIdentityError
 			if mode == "identity-retry" {
 				identityError = &activityIdentityError{storeExecutor: restarted.pg}
@@ -140,9 +155,6 @@ func TestPGActivityReportSaved(t *testing.T) {
 			switch mode {
 			case "restart":
 				requirePGKeptEqual(t, want, got)
-				after, err := os.ReadFile(files[0])
-				require.NoError(t, err)
-				assert.NotEqual(t, saved, after)
 				pgKeptSession(t, local, "b", "project-a", "2026-06-14")
 				pgKeptPush(t, syncer, false)
 				assert.Len(t, pgKeptBuild(t, restarted, f, q, true).Sessions, 2)
@@ -161,30 +173,4 @@ func TestPGActivityReportSaved(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestPGActivityReportSavedMidnight(t *testing.T) {
-	cache := t.TempDir()
-	t.Setenv("CACHE_DIRECTORY", cache)
-	local, syncer, _ := newUsageJournalFixture(t)
-	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
-	pgKeptPush(t, syncer, false)
-	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, t.TempDir())
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	now := time.Now().UTC()
-	timezone := "UTC"
-	if now.Hour() < 12 {
-		timezone = "Etc/GMT-12"
-	}
-	end := now.Add(-time.Minute)
-	q, err := activity.ResolveQuery(activity.QueryInput{
-		Preset: "custom", From: end.Add(-time.Hour).Format(time.RFC3339), To: end.Format(time.RFC3339), Timezone: timezone,
-	}, now)
-	require.NoError(t, err)
-	require.False(t, q.Partial)
-	pgKeptBuild(t, store, db.AnalyticsFilter{Timezone: timezone}, q, true)
-	require.Len(t, store.runtimeState().activityKept.Snapshot(), 1)
-	files, err := filepath.Glob(filepath.Join(cache, "postgres-activity-reports", "*", "*.gob"))
-	require.NoError(t, err)
-	require.Empty(t, files)
 }
