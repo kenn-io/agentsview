@@ -1103,6 +1103,75 @@ func TestVectorPushDeltaNoop(t *testing.T) {
 	assert.Equal(t, 0, res.Vectors.DocsPushed)
 }
 
+func TestVectorPushRepairsStaleStamps(t *testing.T) {
+	for _, mode := range []string{"stale", "missing", "scoped"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			sync, localDB, pg := newVectorPushTestSync(t)
+			ctx := t.Context()
+			seedVectorSession(t, localDB, "A")
+			seedVectorSession(t, localDB, "B")
+			src := &fakeVectorSource{
+				gen: storage.VectorGenerationInfo{Fingerprint: "opaque-fingerprint", Model: "m", Dimension: 4}, hasGen: true,
+				hashes: map[string]string{"A": "ha", "B": "hb"},
+				docs: map[string][]storage.VectorPushDoc{
+					"A": {vdoc("A", "A#0", 0, "old", "old-hash", []float32{0, 0, 1, 0})},
+					"B": {vdoc("B", "B#0", 0, "other", "other-hash", []float32{0, 1, 0, 0})},
+				},
+			}
+			sync.vectorSource = src
+			_, err := sync.Push(ctx, false, nil)
+			require.NoError(t, err)
+			id, _, ok, err := LookupVectorGeneration(ctx, pg, src.gen.Fingerprint)
+			require.NoError(t, err)
+			require.True(t, ok)
+			// Adopt an index created before stamps existed.
+			_, err = pg.ExecContext(ctx, `DROP TABLE vector_stamps; ALTER TABLE vector_generations DROP COLUMN gen_key, DROP COLUMN state`)
+			require.NoError(t, err)
+			_, err = ensureVectorBaseSchemaPG(ctx, pg)
+			require.NoError(t, err)
+			// An older scoped writer updates the document and its existing state
+			// without updating the newly installed stamp.
+			_, err = pg.ExecContext(ctx, `UPDATE vector_documents SET content='new', content_hash='new-hash' WHERE doc_key='A#0'`)
+			require.NoError(t, err)
+			ext, err := vectorExtensionSchema(ctx, pg)
+			require.NoError(t, err)
+			_, err = pg.ExecContext(ctx, `UPDATE `+vectorChunkTable(id)+` SET embedding='[1,0,0,0]'::`+ext+`.halfvec WHERE doc_key='A#0'`)
+			require.NoError(t, err)
+			if mode == "missing" {
+				_, err = pg.ExecContext(ctx, `DELETE FROM vector_stamps WHERE generation_id=$1 AND doc_key='A#0'`, id)
+				require.NoError(t, err)
+			}
+			src.docs["A"] = []storage.VectorPushDoc{vdoc("A", "A#0", 0, "new", "new-hash", []float32{1, 0, 0, 0})}
+			store, err := openVectorStore(ctx, pg)
+			require.NoError(t, err)
+			hits, err := store.QueryGeneration(ctx, src.gen.Fingerprint, []float32{1, 0, 0, 0}, 10)
+			require.NoError(t, err)
+			require.Len(t, hits, 1)
+			assert.Equal(t, "B#0", hits[0].Doc)
+			src.docsCalls = nil
+			if mode == "scoped" {
+				require.NoError(t, localDB.UpsertSession(ctx, db.Session{ID: "A", Project: "proj", Machine: "test-machine", Agent: "claude", MessageCount: 2, UserMessageCount: 2, CreatedAt: "2026-01-01T00:00:00Z"}))
+				require.NoError(t, localDB.InsertMessages(ctx, []db.Message{{SessionID: "A", Ordinal: 1, Role: "user", Content: "follow-up", ContentLength: 9}}))
+				require.NoError(t, localDB.BumpLocalModifiedAt(ctx, "A"))
+				_, err = sync.PushWithOptions(ctx, storage.PushOptions{ScopeVectorsToChangedSessions: true}, nil)
+			} else {
+				_, err = sync.Push(ctx, false, nil)
+			}
+			require.NoError(t, err)
+			assert.Equal(t, 1, src.docsCalls["A"])
+			assert.Zero(t, src.docsCalls["B"])
+			hits, err = store.QueryGeneration(ctx, src.gen.Fingerprint, []float32{1, 0, 0, 0}, 10)
+			require.NoError(t, err)
+			require.Len(t, hits, 2)
+			assert.Equal(t, "A#0", hits[0].Doc)
+			var afterID int64
+			require.NoError(t, pg.QueryRowContext(ctx, `SELECT id FROM vector_generations WHERE fingerprint=$1`, src.gen.Fingerprint).Scan(&afterID))
+			assert.Equal(t, id, afterID)
+		})
+	}
+}
+
 // TestVectorPushFullRepairsSilentCorruption pins --full's repair contract for
 // the vector phase: a chunk row missing from PG while vector_push_state still
 // reports the session current is invisible to a normal delta push, but a full
@@ -2483,7 +2552,7 @@ func TestUsageOnlyPushEvictsDeletedSessionVectors(t *testing.T) {
 			_, err = sync.Push(t.Context(), full, nil)
 			require.NoError(t, err)
 			for _, generation := range generations {
-				searcher := NewVectorSearcher(pg, generation, 4, 100, fixedEncoder([]float32{1, 0, 0, 0}))
+				searcher := newVectorSearcherForTest(t, pg, generation, 4, 100, fixedEncoder([]float32{1, 0, 0, 0}))
 				hits, err := dbtest.SemanticSearch(t.Context(), searcher, "transcript", 10)
 				require.NoError(t, err)
 				require.Len(t, hits, 1)

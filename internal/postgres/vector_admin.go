@@ -205,6 +205,7 @@ func dropVectorGenerationRows(ctx context.Context, tx *sql.Tx, id int64) error {
 	}{
 		{"push state", `DELETE FROM vector_push_state WHERE generation_id = $1`},
 		{"machine rows", `DELETE FROM vector_generation_machines WHERE generation_id = $1`},
+		{"generation stamps", `DELETE FROM vector_stamps WHERE generation_id = $1`},
 		{"generation row", `DELETE FROM vector_generations WHERE id = $1`},
 	}
 	for _, s := range stmts {

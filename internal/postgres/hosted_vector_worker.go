@@ -42,7 +42,7 @@ func EmbedBatch(ctx context.Context, pg *sql.DB, generation storage.VectorGenera
 	if !ok {
 		return errors.New("hosted embedding generation is missing; run hosted-provision")
 	}
-	ext, err := vectorExtensionSchema(ctx, pg)
+	store, err := openVectorStore(ctx, pg)
 	if err != nil {
 		return fmt.Errorf("hosted embeddings require pgvector and hosted-provision: %w", err)
 	}
@@ -58,7 +58,7 @@ func EmbedBatch(ctx context.Context, pg *sql.DB, generation storage.VectorGenera
 	if rollbackErr != nil {
 		return rollbackErr
 	}
-	scope := vectorPushScope{gen: vectorGeneration{id: id, halfvecType: ext + ".halfvec"}, genIDs: ids}
+	scope := vectorPushScope{gen: vectorGeneration{id: id, fingerprint: generation.Fingerprint}, genIDs: ids, store: store}
 	var failedSessions int
 	var failures []string
 	cursor := ""
@@ -226,7 +226,7 @@ func writeHostedVectors(ctx context.Context, pg *sql.DB, scope vectorPushScope, 
 
 // coveredHostedDocuments reuses matching documents with every expected chunk.
 func coveredHostedDocuments(ctx context.Context, pg *sql.DB, generation int64, sessionID string, docs []storage.VectorPushDoc, maxInputChars int) ([]storage.VectorPushDoc, []storage.VectorPushDoc, error) {
-	rows, err := pg.QueryContext(ctx, fmt.Sprintf(`SELECT d.doc_key,d.content_hash,c.chunk_index FROM vector_documents d LEFT JOIN %s c ON c.doc_key=d.doc_key WHERE d.session_id=$1 AND d.ordinal>=0 ORDER BY d.doc_key,c.chunk_index`, vectorChunkTable(generation)), sessionID)
+	rows, err := pg.QueryContext(ctx, fmt.Sprintf(`SELECT d.doc_key,d.content_hash,c.chunk_index FROM vector_documents d JOIN vector_stamps s ON s.doc_key=d.doc_key AND s.generation_id=$2 AND s.revision=d.content_hash LEFT JOIN %s c ON c.doc_key=d.doc_key WHERE d.session_id=$1 AND d.ordinal>=0 ORDER BY d.doc_key,c.chunk_index`, vectorChunkTable(generation)), sessionID, generation)
 	if err != nil {
 		return nil, nil, err
 	}

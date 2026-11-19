@@ -33,9 +33,9 @@ embedding outbox. Permanently rejected messages stay unindexed until the session
 revision or embedding generation changes; other messages remain searchable.
 Transient endpoint failures retry on the next worker poll. Rate-limited sessions
 do not block later sessions. For the same session ID and embedding generation,
-the server reuses vectors when document keys, content hashes, and chunk coverage
-match. Ordinary raw edits create a new session ID, so the server embeds that
-session again. Cross-session vector reuse is deferred to kit.
+the server reuses vectors when document keys, indexed content hashes, and chunk
+coverage match. Ordinary raw edits create a new session ID, so the server embeds
+that session again. Cross-session vector reuse is deferred to kit.
 
 Device enrollment and revocation remain operator-managed. The operator supplies
 each laptop with a server URL, device ID and credential. There is no public
@@ -101,8 +101,9 @@ For meaning search, install pgvector in the database and configure `[vector]`
 and `[vector.embeddings]` on the server before provisioning. Use the same
 embedding configuration when starting the server. Provision again after changing
 the model or its recipe so the owner creates the new generation's chunk table.
-Older generation tables remain for the operator to manage. For example, with an
-OpenAI-compatible embedding endpoint:
+Older generation tables remain for the operator to manage. After upgrading, run
+`hosted-provision provision` again and grant access to `vector_stamps`.
+For example, with an OpenAI-compatible embedding endpoint:
 
 ```toml
 [vector]
@@ -204,15 +205,15 @@ grant. Enrollment needs an operator credential with device-write privileges; the
 runtime grants intentionally omit those privileges.
 
 `archive_content = "usage"` also requires `SELECT` on `vector_generations` and
-`SELECT, DELETE` on existing `vector_documents`, `vector_push_state` and each
+`SELECT, DELETE` on existing `vector_documents`, `vector_stamps`, `vector_push_state` and each
 existing `vector_chunks_g<ID>` table named by a generation. This removes any
 previously retained indexed content. It does not create or consume embeddings.
 The runtime checks the configured policy's grants before readiness and reports
 missing privileges instead of silently disabling hosted processing.
 
-When `[vector]` is enabled for stored content, also grant
-`SELECT, INSERT, UPDATE, DELETE` on `vector_documents` and `vector_push_state`,
-`SELECT, DELETE` on each existing `vector_chunks_g<ID>` table registered in
+When `[vector]` is enabled for stored content, also grant `SELECT, INSERT,
+UPDATE, DELETE` on `vector_documents`, `vector_stamps`, and `vector_push_state`, `SELECT, DELETE`
+on each existing `vector_chunks_g<ID>` table registered in
 `vector_generations`, and `INSERT` on the configured generation's chunk table.
 Repeat the chunk-table grants after provisioning a new generation. On a machine
 configured with the hosted PostgreSQL target and query endpoint, search uploaded

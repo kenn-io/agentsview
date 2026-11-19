@@ -1124,7 +1124,7 @@ func migrateAccountUsageCountersPG(ctx context.Context, db pgProjectIdentityExec
 func EnsureSchema(
 	ctx context.Context, db *sql.DB, schema string,
 ) error {
-	_, err := ensureSchemaPG(ctx, db, schema)
+	_, err := ensureSchemaPG(ctx, db, schema, true)
 	return err
 }
 
@@ -1132,7 +1132,7 @@ func EnsureSchema(
 // setup step succeeded. A step that failed, for example for lack of a
 // privilege, may succeed on a later push.
 func ensureSchemaPG(
-	ctx context.Context, db *sql.DB, schema string,
+	ctx context.Context, db *sql.DB, schema string, vectorSetup bool,
 ) (optional bool, err error) {
 	start := time.Now()
 	optional = true
@@ -1289,9 +1289,11 @@ func ensureSchemaPG(
 		"pg schema: content search index step completed in %s",
 		time.Since(step).Round(time.Millisecond),
 	)
-	if _, err := ensureVectorBaseSchemaPG(ctx, db); err != nil {
-		optional = false
-		log.Printf("pg schema: vector schema setup failed: %v", err)
+	if vectorSetup {
+		if _, err := ensureVectorBaseSchemaPG(ctx, db); err != nil {
+			optional = false
+			log.Printf("pg schema: vector schema setup failed: %v", err)
+		}
 	}
 	step = time.Now()
 	runRepair, err := shouldRunTokenCoverageRepair(

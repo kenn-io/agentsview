@@ -94,6 +94,10 @@ func TestListAndDropVectorGenerations(t *testing.T) {
 	assert.Equal(t, 0, countRows(t, pg,
 		`SELECT COUNT(*) FROM vector_push_state WHERE generation_id = $1`, genA))
 	assert.Equal(t, 0, countRows(t, pg,
+		`SELECT COUNT(*) FROM vector_stamps WHERE generation_id = $1`, genA))
+	assert.Equal(t, 1, countRows(t, pg,
+		`SELECT COUNT(*) FROM vector_stamps WHERE generation_id = $1`, genB))
+	assert.Equal(t, 0, countRows(t, pg,
 		`SELECT COUNT(*) FROM vector_generation_machines WHERE generation_id = $1`, genA))
 
 	assert.Equal(t, 1, countRows(t, pg,

@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -35,7 +36,7 @@ func TestHostedVectorUploadEditAndSearchSnapshot(t *testing.T) {
 	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false))
 	hosted, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
-	searcher := NewVectorSearcher(f.runtime, id, 2, 128, func(context.Context, string) ([]float32, error) { return []float32{1, 0}, nil }).(*vectorSearcher)
+	searcher := newVectorSearcherForTest(t, f.runtime, id, 2, 128, func(context.Context, string) ([]float32, error) { return []float32{1, 0}, nil }).(*vectorSearcher)
 	selected := make(chan struct{})
 	resume := make(chan struct{})
 	defer func() {
@@ -46,7 +47,11 @@ func TestHostedVectorUploadEditAndSearchSnapshot(t *testing.T) {
 		}
 	}()
 	hosted.SetVectorSearcher(searcher)
-	initial, err := hosted.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "old", Mode: "semantic", IncludeOneShot: true, Limit: 10})
+	f.runtime.SetMaxOpenConns(1)
+	searchCtx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	initial, err := hosted.SearchContent(searchCtx, db.ContentSearchFilter{Pattern: "old", Mode: "semantic", IncludeOneShot: true, Limit: 10})
+	cancel()
+	f.runtime.SetMaxOpenConns(5)
 	require.NoError(t, err)
 	var initialSnippets []string
 	for _, match := range initial.Matches {

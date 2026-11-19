@@ -1,7 +1,6 @@
 package postgres
 
 import (
-	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -9,75 +8,6 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 )
-
-func TestHalfvecLiteral(t *testing.T) {
-	t.Run("finite vector renders pgvector text form", func(t *testing.T) {
-		literal, err := halfvecLiteral([]float32{1, -0.5, 0})
-		require.NoError(t, err)
-		assert.Equal(t, "[1,-0.5,0]", literal)
-	})
-
-	t.Run("empty vector", func(t *testing.T) {
-		literal, err := halfvecLiteral(nil)
-		require.NoError(t, err)
-		assert.Equal(t, "[]", literal)
-	})
-
-	nonFinite := []struct {
-		name string
-		vec  []float32
-	}{
-		{"NaN", []float32{0, float32(math.NaN()), 1}},
-		{"+Inf", []float32{float32(math.Inf(1)), 0}},
-		{"-Inf", []float32{0, 0, float32(math.Inf(-1))}},
-	}
-	for _, tt := range nonFinite {
-		t.Run(tt.name+" is rejected", func(t *testing.T) {
-			_, err := halfvecLiteral(tt.vec)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "non-finite embedding value")
-		})
-	}
-}
-
-func TestHNSWEfSearch(t *testing.T) {
-	cases := []struct {
-		name string
-		k    int
-		want int
-	}{
-		{"below floor clamps up", 1, 40},
-		{"just below floor", 39, 40},
-		{"at floor", 40, 40},
-		{"mid range passes through", 500, 500},
-		{"at ceiling", 1000, 1000},
-		{"above ceiling clamps down", 5000, 1000},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, hnswEfSearch(tc.k))
-		})
-	}
-}
-
-func TestKNNExhausted(t *testing.T) {
-	for _, tc := range []struct {
-		name             string
-		rows, limit, cap int
-		want             bool
-	}{
-		{"short uncapped scan", 10, 200, 200, true},
-		{"full uncapped scan", 200, 200, 200, false},
-		{"capped index scan", 1000, 1600, 1000, false},
-		{"capped index scan below its cap", 640, 1600, 1000, true},
-		{"sequential scan past the cap", 1200, 1600, 1000, true},
-		{"full sequential scan past the cap", 1600, 1600, 1000, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, knnExhausted(tc.rows, tc.limit, tc.cap))
-		})
-	}
-}
 
 func TestSemanticUnavailableError(t *testing.T) {
 	s := &Store{}
@@ -97,7 +27,7 @@ func TestStoreVectorSearcherWiring(t *testing.T) {
 	s := &Store{}
 	assert.False(t, s.HasSemantic(), "no searcher wired")
 
-	s.SetVectorSearcher(NewVectorSearcher(nil, 1, 4, 100, nil))
+	s.SetVectorSearcher(&vectorSearcher{})
 	assert.True(t, s.HasSemantic(), "searcher wired")
 
 	s.SetVectorSearcher(nil)
@@ -113,7 +43,7 @@ func TestStoreSemanticReadinessReportsUnavailableReasonAndReadyWithoutCounts(t *
 	assert.Equal(t, "unavailable", status.State)
 	assert.Equal(t, "no compatible embeddings generation", status.Reason)
 
-	s.SetVectorSearcher(NewVectorSearcher(nil, 1, 4, 100, nil))
+	s.SetVectorSearcher(&vectorSearcher{})
 	status, err = s.SemanticReadiness(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, "ready", status.State)

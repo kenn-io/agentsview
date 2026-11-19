@@ -11,8 +11,8 @@ import (
 )
 
 // vectorBaseDDL creates the backend-agnostic vector tables. Chunk tables
-// are per-generation (fixed halfvec dimension) and created lazily by
-// ensureVectorChunkTable. vector_documents mirrors the local vectors.db
+// are per-generation (fixed halfvec dimension). vector_documents mirrors
+// the local vectors.db
 // mirror table (internal/vector/index.go messageMirrorDDL); vector_push_state
 // is the pusher-side delta state, written transactionally with doc/chunk
 // upserts so a PG reset wipes state and data together (self-healing).
@@ -20,6 +20,8 @@ const vectorBaseDDL = `
 CREATE TABLE IF NOT EXISTS vector_generations (
     id          BIGSERIAL PRIMARY KEY,
     fingerprint TEXT NOT NULL UNIQUE,
+    gen_key     TEXT NOT NULL UNIQUE,
+    state       TEXT NOT NULL,
     model       TEXT NOT NULL,
     dimension   INTEGER NOT NULL,
     params      JSONB,
@@ -44,12 +46,23 @@ CREATE TABLE IF NOT EXISTS vector_documents (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_vector_documents_session_ordinal
     ON vector_documents (session_id, ordinal);
+` + vectorStampsDDL + `
 CREATE TABLE IF NOT EXISTS vector_push_state (
     generation_id BIGINT NOT NULL,
     session_id    TEXT NOT NULL,
     doc_agg_hash  TEXT NOT NULL,
     PRIMARY KEY (generation_id, session_id)
 );
+`
+
+const vectorStampsDDL = `
+CREATE TABLE IF NOT EXISTS vector_stamps (
+    generation_id BIGINT NOT NULL,
+    doc_key TEXT NOT NULL REFERENCES vector_documents(doc_key) ON DELETE CASCADE,
+    revision TEXT,
+    PRIMARY KEY (generation_id, doc_key)
+);
+CREATE INDEX IF NOT EXISTS vector_stamps_by_doc ON vector_stamps (doc_key);
 `
 
 // VectorExtensionAvailable reports whether the pgvector extension is
@@ -67,10 +80,9 @@ func VectorExtensionAvailable(ctx context.Context, pg *sql.DB) (bool, error) {
 	return true, nil
 }
 
-// vectorHalfvecAvailable reports whether the installed pgvector provides the
-// halfvec type (added in pgvector 0.7.0), plus the installed extension
-// version for diagnostics. The type probe is scoped to the extension's own
-// namespace so an unrelated type named halfvec elsewhere cannot satisfy it.
+// vectorHalfvecAvailable reports whether pgvector provides halfvec and supports
+// iterative scans (0.8.0 or later), plus the installed version for diagnostics.
+// The type probe is scoped to the extension's own namespace.
 func vectorHalfvecAvailable(ctx context.Context, pg *sql.DB) (bool, string, error) {
 	var hasHalfvec bool
 	var version string
@@ -86,14 +98,18 @@ SELECT EXISTS (
 	if err != nil {
 		return false, "", fmt.Errorf("probing pgvector halfvec support: %w", err)
 	}
-	return hasHalfvec, version, nil
+	var major, minor, patch int
+	if _, err := fmt.Sscanf(version, "%d.%d.%d", &major, &minor, &patch); err != nil {
+		return false, version, nil
+	}
+	return hasHalfvec && (major > 0 || minor >= 8), version, nil
 }
 
 // ensureVectorBaseSchemaPG best-effort-installs pgvector and creates the
 // base vector tables. A non-empty reason (with nil error) means vectors are
 // unavailable on this server: like createContentSearchIndexesPG it never
 // fails schema setup — CockroachDB, a missing package, a role without CREATE
-// privilege, or a pgvector too old for halfvec leave semantic search
+// privilege, or a pgvector too old for iterative scans leave semantic search
 // unavailable with a one-line notice.
 func ensureVectorBaseSchemaPG(ctx context.Context, pg *sql.DB) (string, error) {
 	if _, err := pg.ExecContext(ctx,
@@ -125,15 +141,76 @@ func ensureVectorBaseSchemaPG(ctx context.Context, pg *sql.DB) (string, error) {
 	}
 	if !hasHalfvec {
 		reason := fmt.Sprintf(
-			"pgvector %s lacks the halfvec type; upgrade the server to pgvector 0.7.0+",
+			"pgvector 0.8.0 or later required (found %s)",
 			version)
 		log.Printf("pg schema: %s; semantic search disabled", reason)
 		return reason, nil
 	}
-	if _, err := pg.ExecContext(ctx, vectorBaseDDL); err != nil {
+	tx, err := pg.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':vector-catalog', 0))`); err != nil {
+		return "", err
+	}
+	if _, err := tx.ExecContext(ctx, vectorBaseDDL); err != nil {
 		return "", fmt.Errorf("creating vector base schema: %w", err)
 	}
-	return "", nil
+	if err := migrateVectorCatalogPG(ctx, tx); err != nil {
+		return "", err
+	}
+	return "", tx.Commit()
+}
+
+// migrateVectorCatalogPG backfills stamps once for indexes created by older writers.
+func migrateVectorCatalogPG(ctx context.Context, tx *sql.Tx) error {
+	var migrated bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='vector_generations' AND column_name='gen_key')`).Scan(&migrated); err != nil {
+		return err
+	}
+	if migrated {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE vector_generations ADD COLUMN gen_key TEXT, ADD COLUMN state TEXT;
+UPDATE vector_generations SET gen_key=fingerprint, state='active';
+ALTER TABLE vector_generations ALTER COLUMN gen_key SET NOT NULL, ALTER COLUMN state SET NOT NULL, ADD UNIQUE (gen_key)`); err != nil {
+		return fmt.Errorf("upgrading vector catalog: %w", err)
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM vector_generations ORDER BY id`)
+	if err != nil {
+		return err
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		table := vectorChunkTable(id)
+		var exists bool
+		if err := tx.QueryRowContext(ctx, `SELECT to_regclass($1) IS NOT NULL`, table).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO vector_stamps(generation_id,doc_key,revision) SELECT $1,d.doc_key,d.content_hash FROM vector_documents d WHERE EXISTS (SELECT 1 FROM `+table+` c WHERE c.doc_key=d.doc_key) ON CONFLICT (generation_id,doc_key) DO NOTHING`, id); err != nil {
+			return fmt.Errorf("backfilling vector stamps: %w", err)
+		}
+	}
+	return nil
 }
 
 // vectorChunkTable names generation genID's chunk table. Per-generation
@@ -237,8 +314,8 @@ func ensureVectorGeneration(
 	ctx context.Context, pg pgProjectIdentityExecer, fingerprint, model string, dimension int,
 ) (int64, error) {
 	if _, err := pg.ExecContext(ctx, `
-INSERT INTO vector_generations (fingerprint, model, dimension)
-VALUES ($1, $2, $3) ON CONFLICT (fingerprint) DO NOTHING`,
+INSERT INTO vector_generations (fingerprint, gen_key, state, model, dimension)
+VALUES ($1, $1, 'active', $2, $3) ON CONFLICT (fingerprint) DO NOTHING`,
 		fingerprint, model, dimension); err != nil {
 		return 0, fmt.Errorf("registering vector generation: %w", err)
 	}

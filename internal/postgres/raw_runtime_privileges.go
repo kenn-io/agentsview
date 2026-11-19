@@ -146,7 +146,7 @@ func checkHostedUsageVectorPrivileges(ctx context.Context, database *sql.DB, sch
 	if fingerprint != "" {
 		shared = "SELECT,INSERT,UPDATE,DELETE"
 	}
-	for _, grant := range []struct{ table, privileges string }{{"vector_generations", "SELECT"}, {"vector_documents", shared}, {"vector_push_state", shared}} {
+	for _, grant := range []struct{ table, privileges string }{{"vector_generations", "SELECT"}, {"vector_documents", shared}, {"vector_stamps", shared}, {"vector_push_state", shared}} {
 		if err := checkHostedTablePrivileges(ctx, database, schema, grant.table, grant.privileges); err != nil {
 			return err
 		}

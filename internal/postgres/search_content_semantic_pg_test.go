@@ -121,7 +121,7 @@ func seedSemanticFixture(t *testing.T, store *Store) (int64, string) {
 // returns the store for a semantic SearchContent call.
 func wireSemanticSearcher(t *testing.T, store *Store, genID int64) {
 	t.Helper()
-	store.SetVectorSearcher(NewVectorSearcher(
+	store.SetVectorSearcher(newVectorSearcherForTest(t,
 		store.DB(), genID, 4, searchMaxInputChars, fixedEncoder([]float32{1, 0, 0, 0})))
 }
 

@@ -555,9 +555,9 @@ observable output across backends.
 ## PostgreSQL replica
 
 `internal/postgres` implements the same `db.VectorSearcher` seam over
-[pgvector](https://github.com/pgvector/pgvector), making PostgreSQL a passive
-replica of the local `vectors.db`: embeddings are never computed server-side,
-and `pg push` copies the active generation's documents and chunks. The fusion
+[pgvector](https://github.com/pgvector/pgvector). `pg push` copies the active
+generation's documents and chunks from the local `vectors.db`; hosted servers
+also embed uploaded sessions. The fusion
 machinery — `RRFMerge`, unit fusion keys, the subordinate penalty, snippet
 construction — is exported from `internal/db` and reused rather than duplicated,
 so semantic/hybrid parity between backends holds by construction. The
@@ -584,13 +584,9 @@ covers the invariants.
   index) and halves storage. Index DDL schema-qualifies the type and operator
   (`OPERATOR(schema.<=>)`) because the session `search_path` is
   target-schema-only.
-- **`vector_documents` is deliberately shared across generations.** A newer push
-  can overwrite content an older generation's chunks hydrate against — the
-  same transient skew the local `vectors.db` has with its single shared mirror
-  table. Serve only ever targets one fingerprint-matched generation, the skew
-  self-heals on the next re-push, and generation-scoping the documents would
-  duplicate full content per generation for no read-path benefit. Do not "fix"
-  this by forking the mirror shapes.
+- `vector_documents` is shared across generations. `vector_stamps` records each
+  generation's indexed content hash. Search returns a chunk only when its stamp
+  matches the current document hash, and checks the hash again when hydrating.
 
 ### Push invariants
 
@@ -615,21 +611,9 @@ covers the invariants.
   rows another generation still references (they stay at non-negative,
   hydratable ordinals), because an evicted session may merely have left this
   pusher's project filter while its docs still exist locally.
-- **Changed documents leave older generations' chunks in place — by design.**
-  `vector_documents` is shared across generations while chunk tables are
-  per-generation, mirroring the local mirror + per-generation vec0 layout.
-  When content changes, the pusher re-embeds only its active generation, so
-  another generation's chunks for the same doc now pair an older embedding
-  with the current shared metadata. This is a deliberate staleness trade-off,
-  not a race: deleting those chunks would permanently blind readers still on
-  that generation (only a pusher running that embedding config can rebuild
-  them, and per-generation `vector_push_state` means such a pusher's next push
-  re-sends exactly the changed docs). The skew is bounded to ranking —
-  hydration always reads the current shared row, and anchor/snippet resolution
-  clamps a stale chunk index (`vector.DocAnchor`): a hit anchors to a real
-  current member and snippets that member's own text, never another member's
-  and never a panic. Vanished docs are the opposite case and DO cascade across
-  every generation, per the previous bullet.
+- **Changed documents leave older generations' chunks in place.** Their stamps
+  no longer match the shared document, so search skips them until that generation
+  is pushed again.
 - **Eviction is scoped by push ownership, not machine names.** Deletions apply
   only to sessions this pusher owns per its owner marker, because machine
   names are aliasable. Both the per-session push transaction and each eviction
@@ -666,22 +650,16 @@ covers the invariants.
 
 ### Read path
 
-- Startup wiring verifies **both** the fingerprint-matched generation row and
-  its chunk table. Registering a generation and creating its chunk table are
-  separate statements on the push side, so an interrupted push can leave the
-  row without the table; wiring a searcher against it would fail every query
-  with a missing-relation error instead of degrading to
-  `ErrSemanticUnavailable`.
+- Startup wiring checks the fingerprint-matched generation, its chunk table,
+  and the vector catalog. A missing table degrades to `ErrSemanticUnavailable`.
 - The KNN query fetches **exactly k chunks** — no over-fetch multiplier — to
   match the SQLite searcher's brute-force contract; the shared caller already
   over-fetches for metadata post-filtering.
 - HNSW's default candidate pool (`hnsw.ef_search = 40`) silently caps results
   below k for large fetches, so each search runs
   `SET LOCAL hnsw.ef_search = clamp(k, 40, 1000)` in the query transaction.
-  For k past pgvector's 1000 ceiling, `hnsw.iterative_scan = 'relaxed_order'`
-  (pgvector >= 0.8) lets the scan continue; the GUC is probed with
-  `current_setting(..., missing_ok)` first so older pgvector skips it instead
-  of aborting the transaction.
+  Kit sets `hnsw.iterative_scan = 'strict_order'` so pgvector 0.8.0 or later
+  can continue the scan and filter stale chunks.
 - The hybrid keyword leg selects ILIKE candidates in recency order over the
   embedded-universe predicates, resolves them to units through
   `ResolveMessageUnits` point lookups against `vector_documents`, and feeds

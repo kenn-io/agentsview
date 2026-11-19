@@ -199,7 +199,7 @@ func prepareServeStore(ctx context.Context, store *Store, schema string) error {
 	if err != nil {
 		return err
 	}
-	if err := EnsureSchema(ctx, pool, schema); err != nil {
+	if _, err := ensureSchemaPG(ctx, pool, schema, false); err != nil {
 		if !IsReadOnlyError(err) {
 			return fmt.Errorf("schema migration failed: %w", err)
 		}
@@ -305,7 +305,7 @@ func (Backend) OpenVectorSearcher(
 	if err != nil {
 		return nil, "", err
 	}
-	genID, dim, ok, err := LookupVectorGeneration(ctx, pool, gen.Fingerprint)
+	genID, _, ok, err := LookupVectorGeneration(ctx, pool, gen.Fingerprint)
 	if err != nil {
 		return nil, "", fmt.Errorf("looking up PG vector generation: %w", err)
 	}
@@ -321,7 +321,21 @@ func (Backend) OpenVectorSearcher(
 			"PG generation %d matches fingerprint %s but its chunk table is "+
 				"missing (interrupted push?)", genID, gen.Fingerprint), nil
 	}
-	return NewVectorSearcher(pool, genID, dim, maxInputChars, encode), "", nil
+	supported, version, err := vectorHalfvecAvailable(ctx, pool)
+	if err != nil {
+		return nil, "", err
+	}
+	if !supported {
+		return nil, fmt.Sprintf("pgvector 0.8.0 or later required (found %s)", version), nil
+	}
+	vectorStore, err := openVectorStore(ctx, pool)
+	if err != nil {
+		if isUndefinedTable(err) || isUndefinedColumn(err) {
+			return nil, "semantic search requires an upgraded vector catalog; run pg push or hosted-provision: " + err.Error(), nil
+		}
+		return nil, "", err
+	}
+	return &vectorSearcher{pg: pool, store: vectorStore, fingerprint: gen.Fingerprint, maxInputChars: maxInputChars, encode: encode}, "", nil
 }
 
 // asStore unwraps the concrete PostgreSQL store a replica-neutral caller

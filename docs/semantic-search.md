@@ -1075,7 +1075,11 @@ push_vectors = false
 
 `push_vectors` defaults to true, so a machine with `[vector]` enabled pushes its
 embeddings automatically. A machine without `[vector]` enabled has no generation
-to push and skips the phase regardless.
+to push and skips the phase regardless. The first push with this version upgrades
+the vector catalog without rebuilding embeddings. Upgrade every writing client.
+An older client's generation-wide push fails after the upgrade. Its scoped
+pushes can leave documents hidden until that client upgrades and runs an
+ordinary `agentsview replica pg push`.
 
 ### Serving semantic search
 
@@ -1150,8 +1154,8 @@ Semantic search degrades gracefully when the extension is absent or too old.
 `pg push` best-effort runs `CREATE EXTENSION IF NOT EXISTS vector`; if that
 fails — CockroachDB, which has no pgvector; a database where the extension
 package is not installed; or a role lacking `CREATE` privilege — schema setup
-logs a one-line notice and continues, and the vector phase is skipped. `halfvec`
-needs pgvector 0.7.0 or newer: `CREATE EXTENSION IF NOT EXISTS` never upgrades
+logs a one-line notice and continues, and the vector phase is skipped. Semantic
+search needs pgvector 0.8.0 or newer: `CREATE EXTENSION IF NOT EXISTS` never upgrades
 an existing extension object, so when an older version is installed `pg push`
 attempts `ALTER EXTENSION vector UPDATE` (healing servers whose pgvector package
 was upgraded in place) and otherwise skips the vector phase, reporting the
