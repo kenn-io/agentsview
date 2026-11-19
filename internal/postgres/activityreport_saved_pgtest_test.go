@@ -40,16 +40,13 @@ BEGIN RAISE EXCEPTION 'permission denied' USING ERRCODE = '42501'; END $$`)
 				denied = &activityIdentityError{storeExecutor: first.pg, denied: true}
 				first.pg = denied
 			}
-			if mode == "identity-retry" {
-				first.pg = &activityIdentityError{storeExecutor: first.pg}
-			}
 			if mode == "oversize" {
 				first.runtimeState().activityKept.MaxBytes = 1
 			}
 			want := pgKeptBuild(t, first, f, q, true)
 			files, err := filepath.Glob(filepath.Join(cache, "postgres-activity-reports", "*", "*.gob"))
 			require.NoError(t, err)
-			if mode == "unavailable" || mode == "identity-retry" || mode == "oversize" || mode == "midnight" {
+			if mode == "unavailable" || mode == "oversize" || mode == "midnight" {
 				require.Empty(t, files)
 			} else {
 				require.Len(t, files, 1)
@@ -60,10 +57,17 @@ BEGIN RAISE EXCEPTION 'permission denied' USING ERRCODE = '42501'; END $$`)
 				assert.Equal(t, lookups, denied.queries)
 			}
 			if mode == "identity-retry" {
-				requirePGKeptEqual(t, want, pgKeptBuild(t, first, f, q, false))
-				files, err = filepath.Glob(filepath.Join(cache, "postgres-activity-reports", "*", "*.gob"))
-				require.NoError(t, err)
-				require.Len(t, files, 1)
+				pgKeptSession(t, local, "b", "project-a", "2026-06-14")
+				pgKeptPush(t, syncer, false)
+				restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
+				t.Cleanup(func() { require.NoError(t, restarted.Close()) })
+				restarted.pg = &activityIdentityError{storeExecutor: restarted.pg}
+				updated := pgKeptBuild(t, restarted, f, q, true)
+				require.Len(t, updated.Sessions, 2)
+				requirePGKeptEqual(t, updated, pgKeptBuild(t, restarted, f, q, false))
+				again := openPGActivityInputStore(t, target, syncer.schema, directory)
+				t.Cleanup(func() { require.NoError(t, again.Close()) })
+				requirePGKeptEqual(t, updated, pgKeptBuild(t, again, f, q, false))
 				return
 			}
 			if mode == "midnight" {
