@@ -41,7 +41,12 @@ func (s *Store) ConfigureUsageCache(ctx context.Context, directory, targetURL, s
 	} else {
 		s.activityDisk.Sweep(time.Now())
 	}
-	s.openActivityReports(strings.ReplaceAll(fingerprint, ":", "-"))
+	s.activityReports.MaxFiles = 8
+	if err := s.activityReports.Open("postgres-activity-reports", strings.ReplaceAll(fingerprint, ":", "-"), 128<<20, 128<<20); err != nil {
+		log.Printf("opening activity reports cache: %v", err)
+	} else {
+		s.activityReports.Sweep(time.Now())
+	}
 	if column != "xmin" {
 		return nil
 	}
@@ -98,12 +103,8 @@ func (s *Store) activitySourceIdentity(ctx context.Context, target string) (stri
 	if err != nil {
 		return "", err
 	}
-	return s.activitySourceIdentityWithOID(ctx, target, oid)
-}
-
-func (s *Store) activitySourceIdentityWithOID(ctx context.Context, target string, oid uint32) (string, error) {
 	var systemID, timeline string
-	err := s.pg.QueryRowContext(ctx, `SELECT (pg_control_system()).system_identifier::text,
+	err = s.pg.QueryRowContext(ctx, `SELECT (pg_control_system()).system_identifier::text,
  substring(pg_walfile_name(pg_current_wal_lsn()), 1, 8)
  WHERE NOT pg_is_in_recovery()`).Scan(&systemID, &timeline)
 	if isInsufficientPrivilege(err) {

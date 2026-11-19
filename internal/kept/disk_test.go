@@ -1,7 +1,6 @@
 package kept
 
 import (
-	"bytes"
 	"context"
 	"encoding/json/v2"
 	"errors"
@@ -11,15 +10,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 )
-
-func TestDiskRejectsHeaderBeforeReadingPayload(t *testing.T) {
-	disk := activityReportDisk{build: "build"}
-	input := bytes.NewReader([]byte("build old\npayload"))
-	_, ok, err := disk.read(input, "new", 0)
-	require.NoError(t, err)
-	require.False(t, ok)
-	require.Equal(t, 7, input.Len())
-}
 
 func TestDiskEvictsLeastRecentlyOpened(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())

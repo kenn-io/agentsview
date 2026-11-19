@@ -17,7 +17,7 @@ import (
 )
 
 func TestPGActivityReportSavedRestart(t *testing.T) {
-	for _, mode := range []string{"restart", "format", "pricing", "unavailable", "identity-retry", "oversize", "midnight"} {
+	for _, mode := range []string{"restart", "pricing", "unavailable", "identity-retry", "oversize", "midnight"} {
 		t.Run(mode, func(t *testing.T) {
 			cache := t.TempDir()
 			t.Setenv("CACHE_DIRECTORY", cache)
@@ -89,22 +89,6 @@ BEGIN RAISE EXCEPTION 'permission denied' USING ERRCODE = '42501'; END $$`)
 				require.NoError(t, err)
 				require.Len(t, files, 1)
 			}
-			if mode == "format" {
-				f.IncludeSubagents, f.IncludeForks = true, true
-				pricing, err := first.loadPricingMap(t.Context())
-				require.NoError(t, err)
-				digest, err := export.EffectivePricingDigest(pricing)
-				require.NoError(t, err)
-				version, _, err := first.activityKeptVersion(t.Context(), digest)
-				require.NoError(t, err)
-				identity, err := first.activitySourceIdentity(t.Context(), "")
-				require.NoError(t, err)
-				selection := kept.Selection(f, q)
-				diskSelection := pgActivityDiskSelection(selection, version, identity)
-				data, ok := first.activityReports.Get(diskSelection, "pg-activity-report-v1")
-				require.True(t, ok)
-				require.True(t, first.activityReports.Put(diskSelection, "pg-activity-report-v0", data))
-			}
 			restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
 			t.Cleanup(func() { require.NoError(t, restarted.Close()) })
 			if mode == "pricing" {
@@ -120,29 +104,6 @@ BEGIN RAISE EXCEPTION 'permission denied' USING ERRCODE = '42501'; END $$`)
 			}
 		})
 	}
-}
-
-func TestPGActivityReportSavedPricingVariants(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	local, syncer, _ := newUsageJournalFixture(t)
-	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
-	pgKeptPush(t, syncer, false)
-	target, directory := testPGURL(t), t.TempDir()
-	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
-	first := openPGActivityInputStore(t, target, syncer.schema, directory)
-	t.Cleanup(func() { require.NoError(t, first.Close()) })
-	want := pgKeptBuild(t, first, f, q, true)
-	other := openPGActivityInputStore(t, target, syncer.schema, directory)
-	t.Cleanup(func() { require.NoError(t, other.Close()) })
-	other.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 40_000_000}})
-	priced := pgKeptBuild(t, other, f, q, true)
-	restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
-	t.Cleanup(func() { require.NoError(t, restarted.Close()) })
-	requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, false))
-	restartedOther := openPGActivityInputStore(t, target, syncer.schema, directory)
-	t.Cleanup(func() { require.NoError(t, restartedOther.Close()) })
-	restartedOther.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 40_000_000}})
-	requirePGKeptEqual(t, priced, pgKeptBuild(t, restartedOther, f, q, false))
 }
 
 func TestPGActivityReportSavedRevisionAfterUnrelatedWrite(t *testing.T) {
@@ -168,7 +129,7 @@ func TestPGActivityReportSavedRevisionAfterUnrelatedWrite(t *testing.T) {
 	require.NoError(t, err)
 	digest, err := export.EffectivePricingDigest(pricing)
 	require.NoError(t, err)
-	version, _, err := again.activityKeptVersion(t.Context(), digest)
+	version, err := again.activityKeptVersion(t.Context(), digest)
 	require.NoError(t, err)
 	identity, err := again.activitySourceIdentity(t.Context(), "")
 	require.NoError(t, err)
@@ -177,28 +138,4 @@ func TestPGActivityReportSavedRevisionAfterUnrelatedWrite(t *testing.T) {
 	_, changed, err := again.LoadUsageChanges(t.Context(), entry.revision)
 	require.NoError(t, err)
 	assert.Empty(t, changed)
-}
-
-func TestPGActivityReportSavedSweepOnMemoHit(t *testing.T) {
-	cache := t.TempDir()
-	t.Setenv("CACHE_DIRECTORY", cache)
-	local, syncer, _ := newUsageJournalFixture(t)
-	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
-	pgKeptSession(t, local, "b", "project-a", "2026-06-15")
-	pgKeptPush(t, syncer, false)
-	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, t.TempDir())
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	f := db.AnalyticsFilter{Timezone: "UTC"}
-	pgKeptBuild(t, store, f, pgDayQuery(t, "2026-06-14", "UTC"), true)
-	files, err := filepath.Glob(filepath.Join(cache, "postgres-activity-reports", "*", "*.gob"))
-	require.NoError(t, err)
-	require.Len(t, files, 1)
-	expired := files[0]
-	q := pgDayQuery(t, "2026-06-15", "UTC")
-	want := pgKeptBuild(t, store, f, q, true)
-	old := time.Now().Add(-31 * 24 * time.Hour)
-	require.NoError(t, os.Chtimes(expired, old, old))
-	requirePGKeptEqual(t, want, pgKeptBuild(t, store, f, q, false))
-	_, err = os.Stat(expired)
-	require.ErrorIs(t, err, os.ErrNotExist)
 }

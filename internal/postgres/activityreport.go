@@ -151,15 +151,14 @@ func (s *Store) BuildActivityReportArtifacts(
 	var unavailable bool
 	var revision int64
 	if !q.Partial && !s.hostedRelations && !db.TerminationUsesTime(f.Termination) {
-		var oid uint32
-		version, oid, err = s.activityKeptVersion(ctx, pricingDigest)
+		version, err = s.activityKeptVersion(ctx, pricingDigest)
 		if err != nil {
 			return activity.CandidateArtifacts{}, err
 		}
 		if version != "" {
 			selection = kept.Selection(f, q)
 			memo := &s.runtimeState().activityKept
-			identity, unavailable = s.activityReportIdentity(ctx, selection, version, q, oid)
+			identity, unavailable = s.activityReportIdentity(ctx, selection, version, q)
 			var report kept.Report
 			var hit bool
 			report, revision, hit, err = s.keptActivityReport(ctx, selection, version, f,
@@ -196,7 +195,7 @@ func (s *Store) BuildActivityReportArtifacts(
 	var inputs *pgActivityInputs
 	var inputVersion string
 	if q.Partial && !s.hostedRelations && s.readTx == nil {
-		inputVersion, _, err = s.activityKeptVersion(ctx, "")
+		inputVersion, err = s.activityKeptVersion(ctx, "")
 		if err != nil {
 			return activity.CandidateArtifacts{}, err
 		}

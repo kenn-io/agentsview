@@ -66,32 +66,26 @@ func (d activityReportDisk) load(selection, key string, maxFile int64) ([]byte, 
 	if err != nil {
 		return nil, false, err
 	}
-	data, ok, readErr := d.read(file, key, maxFile)
-	return data, ok, errors.Join(readErr, file.Close())
-}
-
-func (d activityReportDisk) read(file io.Reader, key string, maxFile int64) ([]byte, bool, error) {
 	var reader io.Reader = file
 	if maxFile > 0 {
 		reader = io.LimitReader(file, maxFile+1)
 	}
-	header := d.header(key)
-	actual := make([]byte, len(header))
-	_, err := io.ReadFull(reader, actual)
-	if err != nil || !bytes.Equal(actual, header) {
-		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
-			return nil, false, err
-		}
-		return nil, false, nil
-	}
 	data, err := io.ReadAll(reader)
+	closeErr := file.Close()
 	if err != nil {
 		return nil, false, err
 	}
-	if maxFile > 0 && int64(len(header)+len(data)) > maxFile {
+	if closeErr != nil {
+		return nil, false, closeErr
+	}
+	if maxFile > 0 && int64(len(data)) > maxFile {
 		return nil, false, nil
 	}
-	return data, true, nil
+	header := d.header(key)
+	if !bytes.HasPrefix(data, header) {
+		return nil, false, nil
+	}
+	return data[len(header):], true, nil
 }
 
 func (d activityReportDisk) touch(selection string) error {

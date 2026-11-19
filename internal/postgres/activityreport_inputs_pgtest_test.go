@@ -129,7 +129,7 @@ func TestPGActivityReportInputSharedBudget(t *testing.T) {
 	require.NoError(t, err)
 	month.Partial = true
 	month.EffectiveEnd = day.EffectiveEnd
-	version, _, err := store.activityKeptVersion(t.Context(), "")
+	version, err := store.activityKeptVersion(t.Context(), "")
 	require.NoError(t, err)
 
 	daySlot := db.PaddedUTCBound(day.RangeStart.UTC().Format(time.RFC3339), -14) + "|" +
@@ -196,7 +196,7 @@ func TestPGActivityReportInputClock(t *testing.T) {
 	q.EffectiveEnd = q.RangeStart.Add(10*time.Hour + time.Minute)
 	before := pgKeptBuild(t, store, f, q, true)
 	assert.Equal(t, 100, before.Report.Totals.OutputTokens)
-	version, _, err := store.activityKeptVersion(t.Context(), "")
+	version, err := store.activityKeptVersion(t.Context(), "")
 	require.NoError(t, err)
 	lower := db.PaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
 	upper := db.PaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
