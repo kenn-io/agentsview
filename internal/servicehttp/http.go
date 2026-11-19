@@ -818,6 +818,11 @@ func (b *httpBackend) Search(
 		}
 		q.DateTo = &runtime.Date{Time: parsedDateTo}
 	}
+	if req.DateFrom != "" || req.DateTo != "" {
+		if err := b.requireAPIVersion(ctx, 9, "session-search date filters"); err != nil {
+			return nil, err
+		}
+	}
 	if req.Sort != "" {
 		q.Sort = new(apiclient.GetAPIV1SearchQuerySort(req.Sort))
 	}
