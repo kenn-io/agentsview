@@ -1,12 +1,16 @@
 package postgres
 
 import (
+	"encoding/json/v2"
+	"time"
+
 	"go.kenn.io/agentsview/internal/activity"
+	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/stringutil"
 )
 
-const pgActivityDiskVersion = "pg-activity-inputs-1|"
+const pgActivityDiskVersion = "pg-activity-inputs-2|"
 
 type pgActivityDiskRow struct {
 	SessionID, UsageSource, Model, ProviderID, Agent                          string
@@ -21,10 +25,25 @@ type pgActivityDiskPart struct {
 	Identity          string
 	Revision          int64
 	GapCap            float64
-	Runs              activity.SessionRuns
+	Runs              activity.SessionRunsWire
 	Users, Assistants []int64
 	Usage             []pgActivityDiskRow
 	Candidate         bool
+	Priced            *pgActivityDiskPriced
+}
+
+type pgActivityDiskPriced struct {
+	RangeStart, RangeEnd, EffectiveEnd, Next time.Time
+	PricingDigest                            string
+	Block                                    []byte
+	Rows                                     []pgActivityDiskPricedRow
+}
+
+type pgActivityDiskPricedRow struct {
+	Attribution                                string
+	Cost                                       int64
+	Index, WebSearches                         int32
+	Reported, Priced, Contributes, SessionCost bool
 }
 
 func pgActivityRowToDisk(r pgActivityUsageRow) pgActivityDiskRow {
@@ -54,33 +73,52 @@ func (s *Store) saveActivityInputs() {
 			continue
 		}
 		input := slot.Rows[0]
-		parts := make(map[string]pgActivityDiskPart, len(input.sessions))
-		for id, session := range input.sessions {
-			parts[id] = pgActivityDiskPart{Runs: session.runs, Users: session.users, Assistants: session.assistants, Candidate: input.candidates[id]}
-		}
+		meta := pgActivityDiskPart{Identity: input.identity, Revision: input.revision, GapCap: input.gapCap}
 		for _, row := range input.usage {
-			id := row.sessionID.Value()
-			part := parts[id]
-			part.Usage = append(part.Usage, pgActivityRowToDisk(row))
-			parts[id] = part
+			meta.Usage = append(meta.Usage, pgActivityRowToDisk(row))
 		}
-		rows := make([]kept.Part[pgActivityDiskPart], 0, len(parts)+1)
-		rows = append(rows, kept.Part[pgActivityDiskPart]{Value: pgActivityDiskPart{Identity: input.identity, Revision: input.revision, GapCap: input.gapCap}})
-		for id, part := range parts {
-			rows = append(rows, kept.Part[pgActivityDiskPart]{ID: id, Value: part})
+		if p := input.priced; p != nil {
+			block, err := json.Marshal(p.block)
+			if err == nil {
+				meta.Priced = &pgActivityDiskPriced{RangeStart: p.rangeStart, RangeEnd: p.rangeEnd, EffectiveEnd: p.effectiveEnd, Next: p.next, PricingDigest: p.pricingDigest, Block: block}
+				for _, row := range p.rows {
+					meta.Priced.Rows = append(meta.Priced.Rows, pgActivityDiskPricedRow{row.attribution.Value(), row.cost, row.index, row.webSearches, row.reported, row.priced, row.contributes, row.sessionCost})
+				}
+			}
 		}
-		data, err := kept.EncodeRows(rows, 256<<20, func(part kept.Part[pgActivityDiskPart]) int64 {
+		rows := make([]kept.Part[pgActivityDiskPart], 0, len(input.sessions)+1)
+		rows = append(rows, kept.Part[pgActivityDiskPart]{Value: meta})
+		for id, session := range input.sessions {
+			rows = append(rows, kept.Part[pgActivityDiskPart]{ID: id, Value: pgActivityDiskPart{Runs: session.runs.Wire(), Users: session.users, Assistants: session.assistants, Candidate: input.candidates[id]}})
+		}
+		savePGActivityParts(&s.activityDisk, slot.Slot, pgActivityDiskVersion+slot.Version, rows)
+	}
+}
+
+func savePGActivityParts(disk *kept.Disk, slot, version string, rows []kept.Part[pgActivityDiskPart]) {
+	encode := func() ([]byte, error) {
+		return kept.EncodeRows(rows, 256<<20, func(part kept.Part[pgActivityDiskPart]) int64 {
 			size := int64(len(part.ID) + len(part.Value.Identity))
 			size += int64(len(part.Value.Users)+len(part.Value.Assistants)) * 8
-			size += part.Value.Runs.Bytes()
+			size += int64(len(part.Value.Runs.Bounds)+len(part.Value.Runs.Trimmed)) * 8
+			for _, run := range part.Value.Runs.Runs {
+				size += int64(len(run.Model) + 8)
+			}
 			for _, row := range part.Value.Usage {
 				size += int64(len(row.SessionID) + len(row.UsageSource) + len(row.Model) + len(row.ProviderID) + len(row.Agent) +
 					len(row.ClaudeMessageID) + len(row.ClaudeRequestID) + len(row.SourceUUID) + len(row.UsageDedupKey))
 			}
 			return size
 		})
-		if err == nil {
-			s.activityDisk.Put(slot.Slot, pgActivityDiskVersion+slot.Version, data)
+	}
+	data, err := encode()
+	if err != nil || disk.Put(slot, version, data) {
+		return
+	}
+	if rows[0].Value.Priced != nil {
+		rows[0].Value.Priced = nil
+		if data, err := encode(); err == nil {
+			disk.Put(slot, version, data)
 		}
 	}
 }
@@ -94,14 +132,35 @@ func (s *Store) loadActivityInputs(slot, version, identity string) (pgActivityIn
 	delete(parts, "")
 	input := pgActivityInputs{identity: identity, revision: meta.Value.Revision, gapCap: meta.Value.GapCap, sessions: map[string]pgActivitySession{}, candidates: map[string]bool{}}
 	intern := make(stringutil.Interner)
+	input.usage = make([]pgActivityUsageRow, 0, len(meta.Value.Usage))
+	for _, usage := range meta.Value.Usage {
+		input.usage = append(input.usage, usage.activityRow(intern))
+	}
 	for _, row := range parts {
 		part := row.Value
+		runs, err := part.Runs.Restore()
+		if err != nil {
+			return pgActivityInputs{}, false
+		}
 		if part.Candidate {
 			input.candidates[row.ID] = true
-			input.sessions[row.ID] = pgActivitySession{runs: part.Runs, users: part.Users, assistants: part.Assistants}
+			input.sessions[row.ID] = pgActivitySession{runs: runs, users: part.Users, assistants: part.Assistants}
 		}
-		for _, usage := range part.Usage {
-			input.usage = append(input.usage, usage.activityRow(intern))
+	}
+	if p := meta.Value.Priced; p != nil {
+		var block *export.PricingBlock
+		if json.Unmarshal(p.Block, &block) == nil && block != nil {
+			priced := &pgActivityPriced{rangeStart: p.RangeStart, rangeEnd: p.RangeEnd, effectiveEnd: p.EffectiveEnd, next: p.Next, pricingDigest: p.PricingDigest, block: block}
+			seen := make(map[int32]bool, len(p.Rows))
+			for _, row := range p.Rows {
+				if row.Index < 0 || int(row.Index) >= len(input.usage) || seen[row.Index] {
+					priced = nil
+					break
+				}
+				seen[row.Index] = true
+				priced.rows = append(priced.rows, pgActivityPricedRow{intern.Intern(row.Attribution), row.Cost, row.Index, row.WebSearches, row.Reported, row.Priced, row.Contributes, row.SessionCost})
+			}
+			input.priced = priced
 		}
 	}
 	return input, true

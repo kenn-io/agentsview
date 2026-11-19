@@ -43,17 +43,18 @@ func TestDiskLimitsAndUnavailableDirectory(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	var disk Disk
 	require.NoError(t, disk.Open("test-usage", "mirror", 128, 0))
-	disk.Put("large", "v", make([]byte, 128))
+	require.False(t, disk.Put("large", "v", make([]byte, 128)))
+	require.True(t, disk.Put("boundary", "v", make([]byte, 128-len(disk.reports.disk.header("v")))))
 	_, err := os.Stat(disk.reports.disk.path("large"))
 	require.ErrorIs(t, err, os.ErrNotExist)
 	require.NoError(t, os.WriteFile(disk.reports.disk.path("large"), append(disk.reports.disk.header("v"), make([]byte, 128)...), 0o600))
 	_, ok := disk.Get("large", "v")
 	require.False(t, ok)
-	disk.Put("small", "v", []byte("body"))
+	require.True(t, disk.Put("small", "v", []byte("body")))
 	t.Setenv("CACHE_DIRECTORY", disk.reports.disk.path("small"))
 	var unavailable Disk
 	require.Error(t, unavailable.Open("test-usage", "mirror", 128, 0))
-	unavailable.Put("small", "v", []byte("body"))
+	require.False(t, unavailable.Put("small", "v", []byte("body")))
 	_, ok = unavailable.Get("small", "v")
 	require.False(t, ok)
 }

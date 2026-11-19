@@ -93,12 +93,35 @@ type encodedSessionRuns struct {
 	Runs    []encodedSessionRun
 }
 
-// GobEncode preserves the pieces used to clip runs to a report range.
-func (r SessionRuns) GobEncode() ([]byte, error) {
+// SessionRunsWire holds the boundaries and indexes for saved runs.
+type SessionRunsWire = encodedSessionRuns
+
+// Wire returns the pieces used to clip runs to a report range.
+func (r SessionRuns) Wire() SessionRunsWire {
 	encoded := encodedSessionRuns{Bounds: r.bounds, Trimmed: r.trimmed}
 	for _, run := range r.runs {
 		encoded.Runs = append(encoded.Runs, encodedSessionRun{run.model, run.first, run.last})
 	}
+	return encoded
+}
+
+// Restore validates the boundary indexes and restores saved runs.
+func (encoded encodedSessionRuns) Restore() (SessionRuns, error) {
+	decoded := SessionRuns{bounds: encoded.Bounds, trimmed: encoded.Trimmed}
+	var next int32
+	for _, run := range encoded.Runs {
+		if run.First < next || run.Last <= run.First || int(run.Last) >= len(encoded.Bounds) {
+			return SessionRuns{}, errors.New("invalid activity run bounds")
+		}
+		decoded.runs = append(decoded.runs, sessionRun{run.Model, run.First, run.Last})
+		next = run.Last + 1
+	}
+	return decoded, nil
+}
+
+// GobEncode preserves the pieces used to clip runs to a report range.
+func (r SessionRuns) GobEncode() ([]byte, error) {
+	encoded := r.Wire()
 	var buf bytes.Buffer
 	err := gob.NewEncoder(&buf).Encode(encoded)
 	return buf.Bytes(), err
@@ -110,14 +133,9 @@ func (r *SessionRuns) GobDecode(data []byte) error {
 	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&encoded); err != nil {
 		return err
 	}
-	decoded := SessionRuns{bounds: encoded.Bounds, trimmed: encoded.Trimmed}
-	var next int32
-	for _, run := range encoded.Runs {
-		if run.First < next || run.Last <= run.First || int(run.Last) >= len(encoded.Bounds) {
-			return errors.New("invalid activity run bounds")
-		}
-		decoded.runs = append(decoded.runs, sessionRun{run.Model, run.First, run.Last})
-		next = run.Last + 1
+	decoded, err := encoded.Restore()
+	if err != nil {
+		return err
 	}
 	*r = decoded
 	return nil
