@@ -1,0 +1,3 @@
+{"type":"user","timestamp":"2024-01-01T00:00:00Z","message":{"content":"Your final response is captured verbatim into ..."}}
+{"type":"attachment","timestamp":"2024-01-01T00:00:02Z","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"<task-notification>\n<task-id>a29fa76dc1fa3212f...</task-id>\n<status>completed</status>\n</task-notification>"}}
+{"type":"attachment","timestamp":"2024-01-01T00:00:04Z","attachment":{"type":"queued_command","commandMode":"prompt","prompt":"<task-notification>\n<task-id>a5db2a604af3b5fcd...</task-id>\n<status>completed</status>\n</task-notification>"}}

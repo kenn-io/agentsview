@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -559,6 +560,138 @@ func TestSearchEmptyQueryGuard(t *testing.T) {
 		page, err := d.Search(t.Context(), SearchFilter{Query: q, Limit: 10})
 		require.NoError(t, err, "Search(%q)", q)
 		assert.Empty(t, page.Results, "Search(%q) results", q)
+	}
+}
+
+func TestSearchSnippetsAfterPaginationAndRecencyMatchPosition(t *testing.T) {
+	for _, index := range []struct {
+		name, query, content, snippet string
+	}{
+		{"standard", "alpha", "alpha message", "<mark>alpha</mark> message"},
+		{"cjk", `"アルファ"`, "アルファ message", "<mark>アルファ</mark> message"},
+	} {
+		t.Run(index.name, func(t *testing.T) {
+			if index.name == "cjk" && !simpleFTSRuntimeConfig.available() {
+				t.Skip("simple FTS5 runtime is not installed for this test process")
+			}
+			d := testDB(t)
+			requireFTS(t, d)
+			for _, id := range []string{"a", "b", "c", "d", "e", "f"} {
+				insertSession(t, d, id, "project-a")
+				insertMessages(t, d, userMsg(id, 0, index.content))
+			}
+			d.rawReader().SetMaxOpenConns(1)
+			conn, err := d.getReader().Conn(t.Context())
+			require.NoError(t, err)
+			// FTS5 loads snippet bodies through its external-content view. Instrument
+			// that boundary so this checks the actual snippet() calls and output.
+			reads := map[string]int{}
+			contentLowerCalls := 0
+			require.NoError(t, conn.Raw(func(driverConn any) error {
+				register := driverConn.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc
+				if err := register("lower", func(value string) string {
+					if value == index.content {
+						contentLowerCalls++
+					}
+					return strings.ToLower(value)
+				}, false); err != nil {
+					return err
+				}
+				return register("snippet_body", func(id, content string) string {
+					reads[id]++
+					return content
+				}, false)
+			}))
+			require.NoError(t, conn.Close())
+			_, err = d.getWriter().Exec(t.Context(), `
+		DROP VIEW message_search_content;
+		CREATE VIEW message_search_content AS
+		SELECT id, session_id, snippet_body(session_id, content) AS rendered,
+			snippet_body(session_id, COALESCE(dialogue_text, content)) AS content
+		FROM messages`)
+			require.NoError(t, err)
+			for _, sort := range []string{"relevance", "recency"} {
+				for _, tc := range []struct {
+					cursor, wantNext        int
+					wantIDs, wantSnippetIDs []string
+				}{
+					{0, 2, []string{"a", "b"}, []string{"a", "b", "c"}},
+					{4, 0, []string{"e", "f"}, []string{"e", "f"}},
+				} {
+					t.Run(fmt.Sprintf("%s/offset-%d", sort, tc.cursor), func(t *testing.T) {
+						clear(reads)
+						contentLowerCalls = 0
+						page, err := d.Search(t.Context(), SearchFilter{Query: index.query, Sort: sort, Cursor: tc.cursor, Limit: 2})
+						require.NoError(t, err)
+						if sort == "recency" {
+							assert.Zero(t, contentLowerCalls)
+						} else {
+							assert.Positive(t, contentLowerCalls)
+						}
+						for _, id := range tc.wantSnippetIDs {
+							assert.GreaterOrEqual(t, reads[id], 2)
+							delete(reads, id)
+						}
+						if index.name == "cjk" {
+							// The index availability probe may read one other row.
+							assert.LessOrEqual(t, len(reads), 1)
+						} else {
+							assert.Empty(t, reads)
+						}
+						assert.Equal(t, tc.wantNext, page.NextCursor)
+						var ids []string
+						for _, hit := range page.Results {
+							ids = append(ids, hit.SessionID)
+							assert.Equal(t, index.snippet, hit.Snippet)
+						}
+						assert.Equal(t, tc.wantIDs, ids)
+					})
+				}
+			}
+		})
+	}
+}
+
+func TestSearchPagedSnippetOutput(t *testing.T) {
+	d := testDB(t)
+	requireFTS(t, d)
+	for _, fixture := range []struct {
+		id, project, date, content string
+	}{
+		{"a", "project-a", "2024-06-01T12:00:00Z", "alpha tail"},
+		{"b", "project-b", "2024-06-02T12:00:00Z", "lead alpha"},
+		{"c", "project-a", "2024-06-03T12:00:00Z", "other text"},
+	} {
+		insertSession(t, d, fixture.id, fixture.project, func(s *Session) {
+			s.StartedAt = new(fixture.date)
+			s.EndedAt = new(fixture.date)
+			s.SessionName = new("alpha session")
+		})
+		insertMessages(t, d, userMsg(fixture.id, 0, fixture.content))
+	}
+	for _, tc := range []struct {
+		name   string
+		filter SearchFilter
+		ids    []string
+		snips  []string
+	}{
+		{"relevance", SearchFilter{Query: "alpha"}, []string{"a", "b", "c"}, []string{"<mark>alpha</mark> tail", "lead <mark>alpha</mark>", "alpha session"}},
+		{"recency", SearchFilter{Query: "alpha", Sort: "recency"}, []string{"c", "b", "a"}, []string{"alpha session", "lead <mark>alpha</mark>", "<mark>alpha</mark> tail"}},
+		{"project", SearchFilter{Query: "alpha", Project: "project-a"}, []string{"a", "c"}, []string{"<mark>alpha</mark> tail", "alpha session"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			filter := tc.filter
+			filter.Limit = 1
+			for i, id := range tc.ids {
+				page, err := d.Search(t.Context(), filter)
+				require.NoError(t, err)
+				require.Len(t, page.Results, 1)
+				hit := page.Results[0]
+				assert.Equal(t, id, hit.SessionID)
+				assert.Equal(t, tc.snips[i], hit.Snippet)
+				filter.Cursor++
+			}
+		})
 	}
 }
 

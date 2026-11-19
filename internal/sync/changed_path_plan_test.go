@@ -273,6 +273,76 @@ func TestPlanChangedPathsUnprovenPathsUseOwningProviderFallback(t *testing.T) {
 	}
 }
 
+func TestPlanChangedPathsPiArtifactBoundary(t *testing.T) {
+	for _, agent := range []parser.AgentType{parser.AgentPi, parser.AgentOMO, parser.AgentStepCode} {
+		for _, tc := range []struct {
+			name       string
+			path       string
+			rootOrder  string
+			wantSource bool
+		}{
+			{name: "artifact", path: "project/subagent-artifacts/outputs/copy.jsonl"},
+			{name: "nested artifact", path: "project/parent/run/subagent-artifacts/copy.jsonl"},
+			{name: "nested session", path: "project/parent/run/session.jsonl", wantSource: true},
+			{name: "similar directory", path: "project/subagent-artifacts-copy/session.jsonl", wantSource: true},
+			{name: "explicit root", path: "project/subagent-artifacts/session.jsonl", rootOrder: "only", wantSource: true},
+			{name: "broad root first", path: "project/subagent-artifacts/session.jsonl", rootOrder: "broad", wantSource: true},
+			{name: "explicit root first", path: "project/subagent-artifacts/session.jsonl", rootOrder: "explicit", wantSource: true},
+		} {
+			t.Run(string(agent)+"/"+tc.name, func(t *testing.T) {
+				root := t.TempDir()
+				artifactRoot := filepath.Join(root, "project", "subagent-artifacts")
+				roots := []string{root}
+				switch tc.rootOrder {
+				case "only":
+					roots = []string{artifactRoot}
+				case "broad":
+					roots = []string{root, artifactRoot}
+				case "explicit":
+					roots = []string{artifactRoot, root}
+				}
+				path := filepath.Join(root, filepath.FromSlash(tc.path))
+				for _, candidate := range []string{path, filepath.Join(root, "unrelated.jsonl")} {
+					require.NoError(t, os.MkdirAll(filepath.Dir(candidate), 0o755))
+					require.NoError(t, os.WriteFile(candidate, []byte(
+						"{\"type\":\"session\",\"id\":\"fixture\",\"cwd\":\"/work\"}\n",
+					), 0o600))
+				}
+				engine := NewEngine(t.Context(), dbtest.OpenTestDB(t), EngineConfig{
+					AgentDirs: map[parser.AgentType][]string{agent: roots},
+					Machine:   "remote",
+				})
+				t.Cleanup(engine.Close)
+
+				plan, err := engine.PlanChangedPathsContext(t.Context(), []string{path})
+				require.NoError(t, err)
+				type plannedWork struct {
+					Paths             []string
+					FallbackProviders []parser.AgentType
+				}
+				got := plannedWork{FallbackProviders: plan.FallbackProviders}
+				for _, file := range plan.Files {
+					got.Paths = append(got.Paths, file.Path)
+				}
+				want := plannedWork{}
+				if tc.wantSource {
+					want.Paths = []string{path}
+				}
+				assert.Equal(t, want, got)
+				if tc.wantSource {
+					return
+				}
+				result, err := engine.SyncChangedPathPlanContext(t.Context(), plan, nil)
+				require.NoError(t, err)
+				assert.Equal(t, ChangedPathSyncResult{
+					CachedSourceKeys:        map[string]struct{}{},
+					CachedFallbackProviders: map[parser.AgentType]int{},
+				}, result)
+			})
+		}
+	}
+}
+
 func TestPlanChangedPathsClaudeProcessesOnlyChangedSession(t *testing.T) {
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "project-a")
@@ -313,6 +383,68 @@ func TestPlanChangedPathsClaudeProcessesOnlyChangedSession(t *testing.T) {
 	require.Len(t, page.Sessions, 1,
 		"bounded processing must not import unrelated Claude sessions")
 	assert.Equal(t, "session-05", page.Sessions[0].ID)
+}
+
+// A remote mirror journal lists changed tool-result sidecars as well as
+// transcripts. The Claude parse reads those sidecars, so a changed sidecar
+// must select its owning transcript instead of re-reading every Claude
+// session on the host.
+func TestPlanChangedPathsClaudeToolResultSelectsOwningSession(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "project-a")
+	require.NoError(t, os.MkdirAll(projectDir, 0o755))
+	for i := range 12 {
+		path := filepath.Join(projectDir, fmt.Sprintf("session-%02d.jsonl", i))
+		body := testjsonl.NewSessionBuilder().AddClaudeUser(
+			"2026-08-14T10:00:00Z", fmt.Sprintf("message %d", i),
+		).String()
+		require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+	}
+	owner := filepath.Join(projectDir, "session-05.jsonl")
+	subagent := filepath.Join(projectDir, "session-05", "subagents", "agent-a1.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(subagent), 0o755))
+	require.NoError(t, os.WriteFile(subagent, []byte(testjsonl.NewSessionBuilder().
+		AddClaudeUser("2026-08-14T10:00:00Z", "subagent").String()), 0o600))
+	tests := []struct {
+		name  string
+		path  string
+		files []string
+	}{
+		{
+			// Root results are also read by the root's subagents.
+			name:  "session result",
+			path:  filepath.Join(projectDir, "session-05", "tool-results", "out.txt"),
+			files: []string{owner, subagent},
+		},
+		{
+			name: "subagent result",
+			path: filepath.Join(
+				projectDir, "session-05", "subagents", "agent-a1", "tool-results", "out.txt",
+			),
+			files: []string{subagent},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, os.MkdirAll(filepath.Dir(tc.path), 0o755))
+			require.NoError(t, os.WriteFile(tc.path, []byte("output\n"), 0o600))
+			database := dbtest.OpenTestDB(t)
+			engine := NewEngine(t.Context(), database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
+				Machine:   "remote",
+			})
+			t.Cleanup(engine.Close)
+
+			plan, err := engine.PlanChangedPathsContext(t.Context(), []string{tc.path})
+			require.NoError(t, err)
+			paths := make([]string, 0, len(plan.Files))
+			for _, file := range plan.Files {
+				paths = append(paths, file.Path)
+			}
+			assert.Equal(t, tc.files, paths)
+			assert.Empty(t, plan.FallbackProviders)
+		})
+	}
 }
 
 func TestPlanChangedPathsCodexIndexUsesStoredArchivedDuplicate(t *testing.T) {
@@ -921,4 +1053,28 @@ func TestPlanChangedPathsAntigravityTitleStoreIndex(t *testing.T) {
 	assert.Empty(t, plan.Files)
 	assert.Empty(t, plan.FallbackProviders,
 		"reading titles rewrites their WAL index without changing any session")
+}
+
+// Codex's own databases and lock files in its home directory change
+// constantly. Before Codex classified them, each event fell back to a scan
+// of every Codex transcript.
+func TestPlanChangedPathsCodexHomeFilesNeedNoSync(t *testing.T) {
+	home := t.TempDir()
+	sessions := filepath.Join(home, "sessions")
+	require.NoError(t, os.MkdirAll(sessions, 0o755))
+	paths := []string{filepath.Join(home, "logs_2.sqlite"), filepath.Join(home, "session_index.jsonl.lock")}
+	for _, path := range paths {
+		require.NoError(t, os.WriteFile(path, []byte("x"), 0o600))
+	}
+	engine := NewEngine(t.Context(), dbtest.OpenTestDB(t), EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {sessions}},
+		Machine:   "local",
+	})
+	t.Cleanup(engine.Close)
+
+	plan, err := engine.PlanChangedPathsContext(t.Context(), paths)
+
+	require.NoError(t, err)
+	assert.Empty(t, plan.Files)
+	assert.Empty(t, plan.FallbackProviders)
 }

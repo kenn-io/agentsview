@@ -194,10 +194,11 @@ test.describe("Generated insights", () => {
     const generate = page
       .getByRole("region", { name: "Generated insights" })
       .getByRole("button", { name: "Generate" });
-    await expect(generate).toHaveAttribute(
-      "title",
-      "Insight generation is unavailable for this archive",
-    );
+    // The reason sits beside the disabled button, not only in its tooltip.
+    const reason = "This archive is read-only, so new reports can't be generated here.";
+    await expect(page.locator(".generate-reason")).toHaveText(reason);
+    await expect(generate).toHaveAttribute("title", reason);
+    await expect(generate).toHaveAccessibleDescription(reason);
     await expect(generate).toBeDisabled();
   });
 

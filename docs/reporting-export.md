@@ -47,7 +47,7 @@ Each hour adds `local_machine_id` and a `machines` object. Its keys are the
 originating machine identities, and each value is a complete schema 5 hour
 without nested machine metadata. The local identity comes from the archive's
 recorded installation, not its display label. Recorded machine aliases resolve
-to their canonical identities. Run `agentsview sync` first if the archive has
+to their canonical identities. Run `agentsview source sync` first if the archive has
 not recorded its installation identity.
 
 All machine snapshots use the same read transaction, bucket resolution, project
@@ -526,13 +526,22 @@ previously saved digests when updating. Adding, renaming, or removing a field,
 changing a type or accounting rule, or changing canonicalization requires a new
 schema version.
 
+## Content boundary
+
+Hour, day, digest, and range exports contain counts, durations, token totals,
+costs, and model, agent, and project labels. They contain no message text,
+thinking text, or tool input and output, so they have no secret masking or
+`--reveal` flag. Exports that return message text, such as
+[conversation export](conversation-export.md#secrets-are-masked-by-default),
+mask detected secrets by default.
+
 ## Local SQLite scope
 
 Reporting export intentionally uses the existing read-only local SQLite export
 path. It can run while the writable daemon owns the archive, and it does not
-require that daemon to be running. It does not switch to PostgreSQL or DuckDB:
-the local archive is the canonical source for the device's reporting payload,
-dedup order, pricing view, and archive-scoped project keys.
+require that daemon to be running. It does not switch to PostgreSQL or
+ClickHouse: the local archive is the canonical source for the device's reporting
+payload, dedup order, pricing view, and archive-scoped project keys.
 
 Costs use reported charges when available and catalog estimates otherwise.
 Estimates use the pricing catalog visible when the export reads the archive. The

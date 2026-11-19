@@ -208,7 +208,7 @@ func (db *DB) GetInsight(
 
 // CopyInsightsFrom copies all insights from the database at
 // sourcePath into this database using ATTACH/DETACH.
-func (db *DB) CopyInsightsFrom(sourcePath string) error {
+func (db *DB) CopyInsightsFrom(ctx context.Context, sourcePath string) error {
 	if err := db.requireDerivedTextStorage("insights"); err != nil {
 		return err
 	}
@@ -219,7 +219,6 @@ func (db *DB) CopyInsightsFrom(sourcePath string) error {
 	// sequence. database/sql's pool doesn't guarantee the
 	// same underlying connection across separate Exec calls,
 	// and ATTACH is connection-scoped.
-	ctx := context.Background()
 	conn, err := db.getWriter().Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("acquiring connection: %w", err)
@@ -232,8 +231,8 @@ func (db *DB) CopyInsightsFrom(sourcePath string) error {
 		return fmt.Errorf("attaching source db: %w", err)
 	}
 	defer func() {
-		_, _ = conn.ExecContext(
-			ctx, "DETACH DATABASE old_db",
+		_, _ = execWithoutCancel(
+			ctx, conn, "DETACH DATABASE old_db",
 		)
 	}()
 

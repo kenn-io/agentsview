@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { Disclosure } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
+  import { ui } from "../../stores/ui.svelte.js";
   import { formatTimestamp } from "../../utils/format.js";
 
   interface Props {
@@ -16,6 +18,10 @@
     task_notification: m.system_boundary_task_notification(),
     stop_hook: m.system_boundary_stop_hook(),
     peer_message: m.system_boundary_peer_message(),
+    stop_hook_summary: m.system_boundary_stop_hook_summary(),
+    hook_cancelled: m.system_boundary_hook_cancelled(),
+    hook_success: m.system_boundary_hook_success(),
+    hook_additional_context: m.system_boundary_hook_success(),
   });
 
   let label = $derived(LABELS[subtype] ?? subtype);
@@ -36,14 +42,16 @@
   <span class="label">{label}</span>
   {#if timestamp}
     <span class="timestamp">
-      &middot; {formatTimestamp(timestamp)}
+      &middot; {formatTimestamp(timestamp, ui.alwaysShowYear)}
     </span>
   {/if}
   {#if preview}
-    <details class="details">
-      <summary>{m.system_boundary_show_content()}</summary>
+    <Disclosure variant="plain">
+      {#snippet summary()}
+        <span class="show-content">{m.system_boundary_show_content()}</span>
+      {/snippet}
       <pre>{content}</pre>
-    </details>
+    </Disclosure>
   {/if}
 </div>
 
@@ -70,19 +78,13 @@
     letter-spacing: 0.04em;
     font-size: 11px;
   }
-  .timestamp {
+  .timestamp,
+  .show-content {
     font-size: 11px;
+    font-weight: 400;
     color: var(--text-muted);
   }
-  .details {
-    margin-top: 2px;
-  }
-  .details summary {
-    cursor: pointer;
-    font-size: 11px;
-    color: var(--text-muted);
-  }
-  .details pre {
+  pre {
     white-space: pre-wrap;
     margin: 6px 0 0;
     padding: 8px 10px;

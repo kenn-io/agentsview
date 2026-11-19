@@ -242,8 +242,7 @@ func SeedIncrementalState(
 		s.RetryRunInput = calls[n-1].InputJSON
 		s.RetryRunLen = 1
 		for i := n - 2; i >= 0; i-- {
-			if calls[i].ToolName == s.RetryRunName &&
-				calls[i].InputJSON == s.RetryRunInput {
+			if sameRetryInput(calls[i], calls[i+1]) {
 				s.RetryRunLen++
 			} else {
 				break
@@ -501,9 +500,9 @@ func (s *IncrementalState) FoldToolHealth(
 	// Retry runs: only appends change name/input runs.
 	out.RetryCount = row.RetryCount
 	for _, c := range appended {
-		if next.RetryRunLen > 0 &&
-			c.ToolName == next.RetryRunName &&
-			c.InputJSON == next.RetryRunInput {
+		if next.RetryRunLen > 0 && sameRetryInput(ToolCallRow{
+			ToolName: next.RetryRunName, InputJSON: next.RetryRunInput,
+		}, c) {
 			next.RetryRunLen++
 			switch {
 			case next.RetryRunLen == 3:

@@ -21,6 +21,8 @@ export interface DbSidebarSessionIndexRow {
   project_assigned?: boolean;
   relationship_type?: string;
   session_kind?: string;
+  /** Contributing hosted device machine IDs; omitted for sessions without hosted provenance. */
+  source_machines?: string[];
   /** @nullable */
   started_at: string | null;
   termination_status?: string;

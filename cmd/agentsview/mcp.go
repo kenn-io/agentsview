@@ -41,14 +41,14 @@ func newMCPCommand() *cobra.Command {
 		Long: `Start an MCP (Model Context Protocol) server over stdio (default) or
 StreamableHTTP, exposing read-only tools for searching and reading
 recorded agent sessions: search_sessions, list_sessions,
-get_session_overview, get_messages, get_memory_status, search_content,
-get_usage_summary, get_tool_calls, get_recent_edits, get_child_sessions,
-compare_usage, get_activity_report, get_tool_usage, get_quality_signals, and
-search_docs, plus query_recall for distilled session knowledge and
-get_friction_digest/list_friction_patterns for the Friction Log.
-Use --profile memory to advertise only get_memory_status, search_content, and
-get_messages for focused conversation-memory clients. The default full profile
-is unchanged.
+get_session_overview, get_messages, get_compaction_summaries, get_memory_status,
+search_content, get_usage_summary, get_tool_calls, get_recent_edits,
+get_child_sessions, compare_usage, get_activity_report, get_tool_usage,
+get_quality_signals, and search_docs, plus query_recall for distilled session
+knowledge and get_friction_digest/list_friction_patterns for the Friction Log.
+Use --profile memory to advertise only get_memory_status, search_content,
+get_messages, and get_compaction_summaries for focused conversation-memory
+clients. The full profile is the default.
 
 The server talks to the local agentsview daemon, starting it when needed, and
 reuses the connection until the daemon restarts or a call fails. A failed call
@@ -63,6 +63,9 @@ Add to your MCP client config (e.g. Claude Desktop):
       }
     }
   }`,
+		Example: "  agentsview mcp\n" +
+			"  agentsview mcp --profile memory\n" +
+			"  agentsview mcp status",
 		GroupID:      groupData,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
@@ -111,7 +114,7 @@ Add to your MCP client config (e.g. Claude Desktop):
 					return fmt.Errorf("loading listener auth: %w", err)
 				}
 				// Provision a token when auth is required but none exists
-				// yet, matching serve/pg/duckdb so enabling require_auth is
+				// yet, matching serve and pg so enabling require_auth is
 				// sufficient for first-time authenticated startup.
 				if cfg.RequireAuth && cfg.AuthToken == "" {
 					if err := cfg.EnsureAuthToken(); err != nil {
@@ -248,7 +251,7 @@ func resolveMCPService(
 		if err := cfg.ApplyDeploymentEmbeddings(); err != nil {
 			return nil, nil, fmt.Errorf("loading deployment embeddings: %w", err)
 		}
-		return newPGReadService(cfg, pgCfg)
+		return newPGReadService(cmd.Context(), cfg, pgCfg)
 	}
 	if err := cfg.ApplyDeploymentAuth(); err != nil {
 		return nil, nil, fmt.Errorf("loading daemon auth: %w", err)
@@ -273,6 +276,24 @@ func newMCPDaemonService(cfg config.Config) service.SessionService {
 	return &mcpDaemonService{cfg: cfg}
 }
 
+func (s *mcpDaemonService) SupportsFileReferences() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return servingDocbankEnabled(s.cfg)
+}
+
+// servingDocbankEnabled answers from the daemon that serves MCP calls. Without
+// one, the daemon MCP will start reads the same config.
+func servingDocbankEnabled(cfg config.Config) bool {
+	runtime := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken)
+	if runtime == nil {
+		return cfg.Integrations.Docbank.Enabled()
+	}
+	base := urlFromDaemonRuntime(runtime)
+	capabilities, err := servicehttp.ProbeHTTPServerCapabilities(context.Background(), base, cfg.AuthToken)
+	return err == nil && service.SupportsFileReferences(servicehttp.NewHTTPBackendForServer(base, cfg.AuthToken, capabilities))
+}
+
 func (s *mcpDaemonService) SupportsRecallQueries() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -281,8 +302,8 @@ func (s *mcpDaemonService) SupportsRecallQueries() bool {
 	return runtime == nil || !runtime.ReadOnly
 }
 
-// SupportsFriction asks a running read-only daemon, which may be a DuckDB or
-// ClickHouse mirror without friction tables. A writable archive daemon, or
+// SupportsFriction asks a running read-only daemon, which may be a
+// ClickHouse replica without friction tables. A writable archive daemon, or
 // the one started on demand, serves the friction reads.
 func (s *mcpDaemonService) SupportsFriction() bool {
 	s.mu.Lock()
@@ -717,4 +738,18 @@ func normalizeMCPHTTPAddr(addr string, allowInsecure bool) (string, error) {
 				"an authenticating reverse proxy)", trimmed)
 	}
 	return trimmed, nil
+}
+
+func (s *mcpDaemonService) SessionCommits(ctx context.Context, id string) (*db.SessionCommitList, error) {
+	return mcpDaemonCall(ctx, s, func(svc service.SessionService) (*db.SessionCommitList, error) { return svc.SessionCommits(ctx, id) })
+}
+
+func (s *mcpDaemonService) CommitSessions(ctx context.Context, shas []string) (*db.CommitSessionList, error) {
+	return mcpDaemonCall(ctx, s, func(svc service.SessionService) (*db.CommitSessionList, error) { return svc.CommitSessions(ctx, shas) })
+}
+
+func (s *mcpDaemonService) FileReferences(ctx context.Context, id string) (service.FileReferencesResult, error) {
+	return mcpDaemonCall(ctx, s, func(svc service.SessionService) (service.FileReferencesResult, error) {
+		return service.FileReferences(ctx, svc, id)
+	})
 }

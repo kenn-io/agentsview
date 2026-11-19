@@ -29,21 +29,21 @@ func newClineProviderFactory(def AgentDef) ProviderFactory {
 						return clineClassifyPath(root, path, allowMissing)
 					},
 				),
-				WithFileLookup(func(root, rawID string) (singleFileMatch, bool) {
+				WithFileLookup(func(_ context.Context, root, rawID string) (singleFileMatch, bool) {
 					return clineFindFile(root, rawID)
 				}),
-				WithFileFingerprint(func(src singleFileSource) (SourceFingerprint, error) {
+				WithFileFingerprint(func(ctx context.Context, src singleFileSource) (SourceFingerprint, error) {
 					if _, ok := clineClassifyPath(src.Root, src.Path, false); !ok {
 						return SourceFingerprint{}, fmt.Errorf(
 							"cline source is outside the configured session root: %s",
 							src.Path,
 						)
 					}
-					return clineFingerprintSource(src.Path)
+					return clineFingerprintSource(ctx, src.Path)
 				}),
 				WithFileStoredSourceHintScope(clineStoredSourceHintScope),
-				WithFileParse(func(src singleFileSource, req ParseRequest) ([]ParseResult, []string, error) {
-					return clineParseFile(src, req)
+				WithFileParse(func(ctx context.Context, src singleFileSource, req ParseRequest) ([]ParseResult, []string, error) {
+					return clineParseFile(ctx, src, req)
 				}),
 			)
 		},
@@ -307,7 +307,7 @@ func clineFindFile(root, rawID string) (singleFileMatch, bool) {
 }
 
 func clineParseFile(
-	src singleFileSource, req ParseRequest,
+	ctx context.Context, src singleFileSource, req ParseRequest,
 ) ([]ParseResult, []string, error) {
 	if _, ok := clineClassifyPath(src.Root, src.Path, false); !ok {
 		return nil, nil, fmt.Errorf(
@@ -315,7 +315,7 @@ func clineParseFile(
 		)
 	}
 	results, err := parseClineSessionWithTeammates(
-		src.Path, req.Source.ProjectHint, req.Machine,
+		ctx, src.Path, req.Source.ProjectHint, req.Machine,
 	)
 	if err != nil {
 		return nil, nil, err

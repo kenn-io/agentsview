@@ -32,6 +32,45 @@ The current implementation is local and SQLite-only. The CLI provides:
   `recall extract preview` for previewing deterministic session chunks; and
 - `recall import --dry-run` for validating reviewed JSONL candidates.
 
+Use `recall list --updated-since <timestamp>` to list entries changed at or
+after an RFC3339 timestamp, or `--created-since <timestamp>` to list entries
+created at or after it. Both bounds include the boundary millisecond. The list
+filters `updated_since` by `updated_at` and `created_since` by `created_at`.
+When both are set, an entry must meet both bounds.
+
+Time-bounded lists include only entries that still exist; they don't report
+deletions. Consumers that mirror Recall should periodically reconcile their
+copy against a complete listing and remove entries that are no longer present.
+
+A bounded list returns the oldest change first and includes archived entries
+as well as accepted ones, unless you set a status filter. `trusted_only` still
+selects accepted entries. Without a bound, lists show accepted entries, newest
+first. Each entry's `source_run_id` names the extraction generation it came
+from.
+
+Time bounds cannot be combined with a text query. Search uses relevance
+ordering, while a checkpoint walk needs change ordering.
+
+`GET /api/v1/recall/entries` and MCP `list_recall` accept `updated_since` and
+`created_since`, and return `next_cursor` when more entries remain. To follow
+changes:
+
+1. List with your saved checkpoint as `updated_since`, and pass each
+   `next_cursor` back until a page returns none.
+1. After the last page, save the last entry's `updated_at` as the new
+   checkpoint. Upsert each returned entry by `id`, since a later walk may
+   return an updated version of an entry you already saved.
+1. If a write lands during the walk, the next page fails with "recall corpus
+   changed during pagination" (HTTP 409). Restart from the first page with
+   every bound from the original walk, `updated_since`, `created_since`, or
+   both, and keep the old checkpoint. Restarting from the last entry you
+   received can miss an entry written in the same millisecond. Any Recall
+   entry or evidence write can interrupt a walk, even outside its filters.
+
+An archive from before Recall tracked changes can return a bounded result that
+fits on one page. If more entries match, narrow the bounds or filters to fit
+one page.
+
 The top-level **Recall** page has two tabs:
 
 - **Corpus** is a browser and review surface for distilled entries. It shows
@@ -69,6 +108,7 @@ retry through a CLI.
 endpoint = "http://127.0.0.1:11434/v1"
 model = "llama3.1"
 api_key_env = "OPENAI_API_KEY" # optional; the value is read at runtime
+# api_key_file = "~/.config/agentsview/insights-key" # or a private file
 # allow_http = true            # required for non-loopback HTTP endpoints
 # default_agent = "codex"      # generator used when no endpoint is configured
 ```
@@ -76,13 +116,13 @@ api_key_env = "OPENAI_API_KEY" # optional; the value is read at runtime
 Loopback HTTP endpoints are allowed for local models. Remote endpoints must use
 HTTPS unless `allow_http = true` explicitly opts into plaintext transport. The
 endpoint receives transcript-derived content, so review the provider's privacy
-and retention behavior. API keys stay in the environment and are sent only as a
-bearer header; they are not stored in the AgentsView configuration. Canned
-insight cache keys include the effective backend, model, and a safe endpoint
-identity, so changing `[insights]` after restarting the server selects a
-separate cached report. Changes to credentials or transport opt-ins do not
-change that identity; use force refresh when those changes should regenerate a
-report under the same endpoint and model.
+and retention behavior. API keys come from the environment variable or private
+file you name and are sent only as a bearer header; the key itself is not stored
+in `config.toml`. Canned insight cache keys include the effective backend,
+model, and a safe endpoint identity, so changing `[insights]` after restarting
+the server selects a separate cached report. Changes to credentials or
+transport opt-ins do not change that identity; use force refresh when those
+changes should regenerate a report under the same endpoint and model.
 
 Generated insights can also be listed, fetched, and generated from the CLI with
 `agentsview insight`; see the [CLI reference](/docs/commands/).
@@ -150,12 +190,12 @@ end-user workflow. Use an isolated `AGENTSVIEW_DATA_DIR` for experiments. The
 import command refuses the default data directory unless the operator explicitly
 overrides that guard.
 
-The Corpus tab is not available through PostgreSQL or DuckDB stores, so those
-read-only servers open Recall on Generated insights instead. On the local SQLite
-UI, Session Vital Signs also includes a read-only Recall panel for the open
-session and links each evidence range back to the transcript. Corpus population,
-extraction-generation management, and ranked querying remain CLI and HTTP API
-workflows.
+The Corpus tab is not available through PostgreSQL or ClickHouse stores, so
+those read-only servers open Recall on Generated insights instead. On the local
+SQLite UI, Session Vital Signs also includes a read-only Recall panel for the
+open session and links each evidence range back to the transcript. Corpus
+population, extraction-generation management, and ranked querying remain CLI and
+HTTP API workflows.
 
 The daemon exposes the same inspection and query operations over its HTTP API.
 Ordinary queries record measurement data when the SQLite store is writable, but
@@ -197,7 +237,7 @@ Recall uses the same `[vector]` model and embeddings servers as session semantic
 search, but it has an independent index generation. Build it explicitly with:
 
 ```bash
-agentsview embeddings build --store recall
+agentsview index embeddings build --store recall
 ```
 
 Automatic Recall embedding requires separate consent because accepted entries
@@ -248,6 +288,10 @@ passes, and a periodic backstop revisits sessions whose transcripts changed
 after extraction. Entries produced this way are stored `unreviewed_auto` — they
 remain outside trusted Recall until promoted.
 
+On battery, scheduled model passes wait and resume within about a minute of AC
+power, or at the next daemon start if it exited while waiting. Retraction of
+entries from trashed, automated, or secret-bearing sessions continues on battery.
+
 ```toml
 [recall.extract]
 enabled = true
@@ -277,7 +321,9 @@ Optional keys: `deployment` (labels which serving instance produced the corpus),
 — how long a session must have been ended before extraction),
 `backstop_interval` (default `"1h"`), `failure_backoff` (default `"1h"`),
 `max_window_chars` (default 50000), `max_tokens`, `candidate_findings`
-(`"block"` default, or `"allow"` — see below), per-server `api_key_env`,
+(`"block"` default, or `"allow"` — see below), per-server `api_key_env` or
+`api_key_file` (see
+[Read secrets from files](/docs/configuration/#read-secrets-from-files)),
 per-server `concurrency` (default 1 — see below), a `[recall.extract.prompts]`
 table (`profile`, `dir`), and a `[recall.extract.request]` table (`temperature`,
 `extra_body`).
@@ -429,6 +475,6 @@ delete or recreate the session archive as a Recall reset strategy.
 
 Recall remains an opt-in research feature. Automatic extraction never promotes
 entries into trusted Recall, and the session panel is inspection-only. There is
-no PostgreSQL or DuckDB Recall backend, no stable end-user import workflow, and
-no pruning policy for the measurement ledger yet. Expect corpus rebuilds as the
-schema, scoring, extraction policy, and trust model evolve.
+no PostgreSQL or ClickHouse Recall backend, no stable end-user import workflow,
+and no pruning policy for the measurement ledger yet. Expect corpus rebuilds as
+the schema, scoring, extraction policy, and trust model evolve.

@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"time"
@@ -17,15 +16,15 @@ import (
 )
 
 func TestPushSchemaCurrentRequiresFrictionTables(t *testing.T) {
+	t.Parallel()
 	for _, drop := range []string{"TABLE friction_findings", "COLUMN friction_hash"} {
 		t.Run(drop, func(t *testing.T) {
 			pgURL := testPGURL(t)
 			cleanPGSchema(t, pgURL)
-			t.Cleanup(func() { cleanPGSchema(t, pgURL) })
-			pg, err := Open(pgURL, "agentsview", true)
+			pg, err := Open(t.Context(), pgURL, "agentsview", true)
 			require.NoError(t, err)
 			defer pg.Close()
-			ctx := context.Background()
+			ctx := t.Context()
 			require.NoError(t, EnsureSchema(ctx, pg, "agentsview"))
 			require.True(t, pushSchemaCurrent(ctx, pg))
 			stmt := "DROP " + drop
@@ -106,11 +105,10 @@ func testFrictionRows(id string) []db.FrictionFinding {
 }
 
 func TestPGPushFrictionRoundTrip(t *testing.T) {
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, "agentsview")
 	local := testDB(t)
-	ps, err := New(pgURL, "agentsview", local, "machine-friction", true, storage.PusherOptions{})
+	ps, err := New(t.Context(), pgURL, "agentsview", local, "machine-friction", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	defer ps.Close()
 	ctx := t.Context()
@@ -140,11 +138,10 @@ func TestPGPushFrictionRoundTrip(t *testing.T) {
 }
 
 func TestPGPushFrictionChangeRepushesAndUnchangedSkips(t *testing.T) {
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, "agentsview")
 	local := testDB(t)
-	ps, err := New(pgURL, "agentsview", local, "machine-friction-2", true, storage.PusherOptions{})
+	ps, err := New(t.Context(), pgURL, "agentsview", local, "machine-friction-2", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	defer ps.Close()
 	ctx := t.Context()
@@ -190,20 +187,27 @@ func TestPGPushFrictionChangeRepushesAndUnchangedSkips(t *testing.T) {
 	assert.Empty(t, pgFrictionFindings(t, ps, id))
 }
 
-func TestPGPushMetadataPreservesUnchangedFriction(t *testing.T) {
-	for _, mode := range []string{"incremental", "without preload", "full"} {
+func TestPGPushSessionWriteCountsAndFriction(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"incremental", "without preload", "full", "messages"} {
 		t.Run(mode, func(t *testing.T) {
-			pgURL := testPGURL(t)
-			cleanPGSchema(t, pgURL)
-			t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+			pgURL := testPGSchemaURL(t, "agentsview")
+			if !takeFreshSchemaCopy(t, pgURL, "agentsview") {
+				cleanPGSchema(t, pgURL)
+			}
 			local := testDB(t)
-			ps, err := New(pgURL, "agentsview", local, "machine-friction", true, storage.PusherOptions{})
+			ps, err := New(t.Context(), pgURL, "agentsview", local, "machine-friction", true, storage.PusherOptions{})
 			require.NoError(t, err)
 			t.Cleanup(func() { ps.Close() })
 			ctx := t.Context()
 			require.NoError(t, ps.EnsureSchema(ctx))
 			const id = "friction-metadata"
 			seedFrictionSession(t, local, id)
+			if mode == "messages" {
+				// Plan usage reports a change even when the transcript rewrite
+				// already published the session, so a second bump must be skipped.
+				require.NoError(t, local.ReplaceSessionPlanUsage(ctx, id, fullPlanUsage()))
+			}
 			findings := testFrictionRows(id)
 			require.NoError(t, local.UpdateSessionSignals(ctx, id, db.SessionSignalUpdate{
 				Friction: &db.SessionFrictionUpdate{
@@ -229,8 +233,10 @@ func TestPGPushMetadataPreservesUnchangedFriction(t *testing.T) {
 				CREATE TRIGGER count_session_write AFTER UPDATE ON sessions
 					FOR EACH ROW EXECUTE FUNCTION count_session_write()`)
 			require.NoError(t, err)
-			require.NoError(t, local.RefreshSessionName(ctx, id, new("Renamed session")))
-			if mode == "without preload" {
+			if mode != "messages" {
+				require.NoError(t, local.RefreshSessionName(ctx, id, new("Renamed session")))
+			}
+			if mode == "without preload" || mode == "messages" {
 				sessions, err := local.ListSessionsForMirrorWindow(ctx, "", nil, nil)
 				require.NoError(t, err)
 				require.Len(t, sessions, 1)
@@ -239,11 +245,16 @@ func TestPGPushMetadataPreservesUnchangedFriction(t *testing.T) {
 					`SELECT owner_marker FROM sessions WHERE id = $1`, id,
 				).Scan(&markerID))
 				var pushed []db.Session
-				result, err := ps.pushBatchAttempt(ctx, sessions, false, markerID, nil, nil, &pushed, false)
+				rewriteMessages := mode == "messages"
+				result, err := ps.pushBatchAttempt(ctx, sessions, rewriteMessages, markerID, nil, nil, &pushed, rewriteMessages)
 				require.NoError(t, err)
 				require.True(t, result.ok)
 				require.Equal(t, 1, result.sessions)
-				assert.Zero(t, result.messages)
+				if mode == "messages" {
+					assert.Equal(t, 1, result.messages)
+				} else {
+					assert.Zero(t, result.messages)
+				}
 			} else {
 				result, err := ps.Push(ctx, mode == "full", nil)
 				require.NoError(t, err)
@@ -254,35 +265,38 @@ func TestPGPushMetadataPreservesUnchangedFriction(t *testing.T) {
 			}
 
 			var newFindingID int64
-			var name string
 			require.NoError(t, ps.pg.QueryRowContext(ctx,
 				`SELECT min(id) FROM friction_findings WHERE session_id = $1`, id,
 			).Scan(&newFindingID))
-			require.NoError(t, ps.pg.QueryRowContext(ctx,
-				`SELECT session_name FROM sessions WHERE id = $1`, id,
-			).Scan(&name))
-			assert.Equal(t, "Renamed session", name)
+			if mode != "messages" {
+				var name string
+				require.NoError(t, ps.pg.QueryRowContext(ctx,
+					`SELECT session_name FROM sessions WHERE id = $1`, id,
+				).Scan(&name))
+				assert.Equal(t, "Renamed session", name)
+			}
 			assert.Equal(t, findings, pgFrictionFindings(t, ps, id))
-			if mode == "full" {
+			if mode == "full" || mode == "messages" {
 				assert.NotEqual(t, findingID, newFindingID, "full pushes still replace derived rows")
 			} else {
 				assert.Equal(t, findingID, newFindingID, "metadata updates leave findings untouched")
+			}
+			if mode != "full" {
 				var writes int
 				require.NoError(t, ps.pg.QueryRowContext(ctx,
 					`SELECT count(*) FROM session_write_counts WHERE session_id = $1`, id,
 				).Scan(&writes))
-				assert.Equal(t, 1, writes, "only the changed session metadata is written")
+				assert.Equal(t, 1, writes, "each batch writes the session row once")
 			}
 		})
 	}
 }
 
 func TestPushFrictionReportsChange(t *testing.T) {
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, "agentsview")
 	local := testDB(t)
-	ps, err := New(pgURL, "agentsview", local, "machine-friction-3", true, storage.PusherOptions{})
+	ps, err := New(t.Context(), pgURL, "agentsview", local, "machine-friction-3", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	defer ps.Close()
 	ctx := t.Context()
@@ -293,7 +307,7 @@ func TestPushFrictionReportsChange(t *testing.T) {
 	require.NoError(t, err)
 
 	pushOnce := func() bool {
-		tx, err := ps.pg.BeginTx(ctx, nil)
+		tx, err := ps.DB().BeginTx(ctx, nil)
 		require.NoError(t, err)
 		f, err := ps.pushFrictionFindings(ctx, tx, id)
 		require.NoError(t, err)

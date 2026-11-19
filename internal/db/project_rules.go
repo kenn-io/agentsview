@@ -11,7 +11,7 @@ import (
 // (SourceArchiveID, Machine, PathPrefix), not the embedded
 // WorktreeProjectMapping's ID/CreatedAt: those fields are local-archive-only
 // conveniences populated from the SQLite rules table. When this type is
-// served from a PostgreSQL or DuckDB mirror, the mirror tables carry neither
+// served from a PostgreSQL or ClickHouse replica, the replica tables carry neither
 // column, so ID is zero and CreatedAt is empty — mirrors are read-only, so
 // id-based mutations (enable/disable/delete) never apply there anyway.
 type ProjectRule struct {

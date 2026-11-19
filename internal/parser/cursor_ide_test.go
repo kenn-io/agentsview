@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"encoding/json/jsontext"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -1268,4 +1269,59 @@ func TestCursorIDEClassifyPathIgnoresEmptyWALEvents(t *testing.T) {
 	match, ok = cursorIDEClassifyPath(root, dbPath, true)
 	require.True(t, ok)
 	assert.Equal(t, dbPath, match.Container)
+}
+
+func TestCursorIDEHeaderChunks(t *testing.T) {
+	for _, tc := range []struct {
+		name, root, first, second       string
+		want                            []string
+		truncated, malformed, nullFirst bool
+	}{
+		{"ordered", `{"_v":18,"fullConversationHeadersOnly":[],"headerLog":{"count":2,"chunkCount":2}}`, `[{"bubbleId":"b2","type":2}]`, `[{"bubbleId":"b1","type":1}]`, []string{"b2", "b1"}, false, false, false},
+		{"lagging count and extra row", `{"headerLog":{"count":1,"chunkCount":1}}`, `[{"bubbleId":"b1","type":1},{"bubbleId":"b2","type":2}]`, `[{"bubbleId":"stale","type":1}]`, []string{"b1", "b2"}, false, false, false},
+		{"missing", `{"headerLog":{"count":1,"chunkCount":2}}`, ``, `[{"bubbleId":"b2","type":2}]`, []string{"b2"}, true, false, false},
+		{"all missing", `{"headerLog":{"count":2,"chunkCount":1}}`, ``, ``, nil, true, false, false},
+		{"null", `{"headerLog":{"count":1,"chunkCount":2}}`, ``, `[{"bubbleId":"b2","type":2}]`, []string{"b2"}, true, false, true},
+		{"empty", `{"headerLog":{"count":1,"chunkCount":2}}`, `[]`, `[{"bubbleId":"b2","type":2}]`, []string{"b2"}, true, false, false},
+		{"short", `{"headerLog":{"count":2,"chunkCount":1}}`, `[{"bubbleId":"b1","type":1}]`, ``, []string{"b1"}, true, false, false},
+		{"malformed", `{"headerLog":{"count":2,"chunkCount":2}}`, `[{"bubbleId":"b1","type":1}]`, `bad`, nil, false, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const id = "chunk-test"
+			path := createCursorIDEDB(t, []cursorIDETestComposer{{id: id, bubbles: []cursorIDETestBubble{{id: "b1", raw: []byte(`{"text":"hello"}`)}, {id: "b2", raw: []byte(`{"text":"answer"}`)}}}})
+			execCursorIDEDB(t, path, `UPDATE cursorDiskKV SET value = ? WHERE key = ?`, tc.root, "composerData:"+id)
+			for i, chunk := range []string{tc.first, tc.second} {
+				if chunk != "" {
+					execCursorIDEDB(t, path, `INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`, fmt.Sprintf("composerConvHeaders:%s:%06d", id, i), chunk)
+				}
+			}
+			if tc.nullFirst {
+				execCursorIDEDB(t, path, `INSERT INTO cursorDiskKV (key, value) VALUES (?, NULL)`, "composerConvHeaders:"+id+":000000")
+			}
+			conn, err := openCursorIDEDB(path)
+			require.NoError(t, err)
+			defer conn.Close()
+			info, err := os.Stat(path)
+			require.NoError(t, err)
+			result, err := parseCursorIDEComposer(t.Context(), conn, path, id, "test", info)
+			if tc.malformed {
+				require.ErrorContains(t, err, "decoding cursor IDE headers composerConvHeaders:chunk-test:000001")
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			assert.Equal(t, tc.truncated, result.Session.IsTruncated)
+			var ids []string
+			for _, message := range result.Messages {
+				ids = append(ids, message.SourceUUID)
+				switch message.SourceUUID {
+				case "b1":
+					assert.Equal(t, RoleUser, message.Role)
+				case "b2":
+					assert.Equal(t, RoleAssistant, message.Role)
+				}
+			}
+			assert.Equal(t, tc.want, ids)
+		})
+	}
 }

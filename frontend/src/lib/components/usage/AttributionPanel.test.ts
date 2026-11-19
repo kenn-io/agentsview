@@ -408,7 +408,7 @@ describe("AttributionPanel colors", () => {
     await tick();
 
     const value = document.querySelector(".tile-value")?.textContent?.trim();
-    expect(value).toBe("1M");
+    expect(value).toBe("1.0M");
     expect(value).not.toContain("$");
     unmount(component);
   });
@@ -462,7 +462,7 @@ describe("AttributionPanel colors", () => {
     const component = mountPanel();
     await tick();
 
-    expect(document.querySelector(".tile-value")?.textContent?.trim()).toBe("250k");
+    expect(document.querySelector(".tile-value")?.textContent?.trim()).toBe("250.0K");
     unmount(component);
   });
 
@@ -539,8 +539,8 @@ describe("AttributionPanel colors", () => {
     const railColors = Array.from(document.querySelectorAll<HTMLElement>(".rail-dot")).map(
       (dot) => dot.style.background,
     );
-    expect(tileColors).toEqual(["#1f77b4", "#ff7f0e"]);
-    expect(railColors).toEqual(["rgb(31, 119, 180)", "rgb(255, 127, 14)"]);
+    expect(tileColors).toEqual(["#3977a7", "#ef8a46"]);
+    expect(railColors).toEqual(["rgb(57, 119, 167)", "rgb(239, 138, 70)"]);
     unmount(component);
   });
 });
@@ -582,6 +582,21 @@ describe("AttributionPanel job groups", () => {
     vi.restoreAllMocks();
   });
 
+  it.each(["list", "treemap"] as const)(
+    "labels a project with no name in the %s view",
+    async (view) => {
+      usage.toggles.attribution.view = view;
+      const component = mountPanel();
+      await tick();
+      const labels = Array.from(
+        document.querySelectorAll(".list-label, .rail-label"),
+        (label) => label.textContent,
+      );
+      expect(labels).toEqual(["hermes-cron", "Unassigned project"]);
+      await unmount(component);
+    },
+  );
+
   it("reports the analytics kind for a displayed project error", async () => {
     usage.selectedProjectKey = "pl1:sha256:first";
     usageServiceMocks.getApiV1UsageTopSessions.mockRejectedValueOnce(new Error("Project failed"));
@@ -594,7 +609,7 @@ describe("AttributionPanel job groups", () => {
       await tick();
       await vi.waitFor(() => expect(usage.errors.zoom).toBe("Project failed"));
       await tick();
-      expect(document.querySelector(".empty")?.textContent).toBe("Project failed");
+      expect(document.querySelector('[role="alert"]')?.textContent).toContain("Project failed");
       expect(reportErrorShown).toHaveBeenCalledExactlyOnceWith("analytics");
     } finally {
       await unmount(component);
@@ -793,6 +808,26 @@ describe("AttributionPanel job groups", () => {
       await unmount(component);
     },
   );
+
+  it("does not call an open project empty while its refresh is failing", async () => {
+    usage.setOpenProject("pl1:sha256:first");
+    await vi.waitFor(() => expect(usage.loading.zoom).toBe(false));
+    await vi.waitFor(() => expect(usage.isQuerying).toBe(false));
+    usage.zoomRows = [];
+    usage.errors.zoom = "zoom refresh failed";
+    try {
+      const component = mountPanel();
+      await tick();
+
+      expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+        "zoom refresh failed",
+      );
+      expect(document.body.textContent).not.toContain("No data for this period");
+      unmount(component);
+    } finally {
+      usage.errors.zoom = null;
+    }
+  });
 
   it.each(["switching attribution dimensions", "the project leaving the refreshed summary"])(
     "handles zoom after %s",

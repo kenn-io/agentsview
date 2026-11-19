@@ -33,7 +33,7 @@ func (h handoffSyncState) GetSyncState(ctx context.Context, key string) (string,
 }
 
 func (h handoffSyncState) SetSyncState(ctx context.Context, key, value string) error {
-	_, err := retryAcrossHandoff(ctx, h.local, func() (struct{}, error) {
+	_, err := db.RetryAcrossHandoff(ctx, h.local, func() (struct{}, error) {
 		return struct{}{}, h.local.SetSyncState(ctx, key, value)
 	})
 	return err
@@ -42,7 +42,7 @@ func (h handoffSyncState) SetSyncState(ctx context.Context, key, value string) e
 func (h handoffSyncState) GetOrCreateSyncState(
 	ctx context.Context, key, defaultValue string,
 ) (string, error) {
-	return retryAcrossHandoff(ctx, h.local, func() (string, error) {
+	return db.RetryAcrossHandoff(ctx, h.local, func() (string, error) {
 		return h.local.GetOrCreateSyncState(ctx, key, defaultValue)
 	})
 }
@@ -56,7 +56,7 @@ type databaseSyncStateWriter interface {
 func (h handoffSyncState) SetSyncStatesForDatabase(
 	ctx context.Context, databaseID string, values map[string]string,
 ) error {
-	_, err := retryAcrossHandoff(ctx, h.local, func() (struct{}, error) {
+	_, err := db.RetryAcrossHandoff(ctx, h.local, func() (struct{}, error) {
 		return struct{}{}, h.local.SetSyncStatesForDatabase(ctx, databaseID, values)
 	})
 	return err
@@ -83,20 +83,6 @@ func (b *syncStateBatch) SetSyncState(_ context.Context, key, value string) erro
 
 func (b *syncStateBatch) GetOrCreateSyncState(context.Context, string, string) (string, error) {
 	return "", errSyncStateBatchWriteOnly
-}
-
-func retryAcrossHandoff[T any](
-	ctx context.Context, local *db.DB, write func() (T, error),
-) (T, error) {
-	for {
-		value, err := write()
-		if !errors.Is(err, db.ErrWriterClosed) {
-			return value, err
-		}
-		if err := local.WaitForWriter(ctx); err != nil {
-			return value, err
-		}
-	}
 }
 
 type scopedSyncStateStore struct {
@@ -232,6 +218,14 @@ func isUndefinedTable(err error) bool {
 	return ok && pgErr.Code == "42P01"
 }
 
+// isTransactionConflict reports a deadlock (40P01) or serialization failure
+// (40001). The database rolled the failed statement back, so running it again
+// later is safe.
+func isTransactionConflict(err error) bool {
+	pgErr, ok := errors.AsType[*pgconn.PgError](err)
+	return ok && (pgErr.Code == "40P01" || pgErr.Code == "40001")
+}
+
 // isUndefinedColumn returns true when a query references a column
 // that does not exist (PG SQLSTATE 42703).
 func isUndefinedColumn(err error) bool {
@@ -332,7 +326,7 @@ func (s *Sync) aliasBackfillSyncStateOrDefault() syncStateStore {
 // When allowInsecure is true, non-loopback connections without TLS
 // produce a warning instead of failing.
 func New(
-	pgURL, schema string, local *db.DB,
+	ctx context.Context, pgURL, schema string, local *db.DB,
 	machine string, allowInsecure bool,
 	opts storage.PusherOptions,
 ) (*Sync, error) {
@@ -359,11 +353,11 @@ func New(
 		return nil, err
 	}
 
-	pg, err := Open(pgURL, schema, allowInsecure)
+	pg, err := Open(ctx, pgURL, schema, allowInsecure)
 	if err != nil {
 		return nil, err
 	}
-	if err = RejectHostedPush(context.Background(), pg); err != nil {
+	if err = RejectHostedPush(ctx, pg); err != nil {
 		pg.Close()
 		return nil, err
 	}
@@ -499,20 +493,34 @@ func (s *Sync) EnsureSchema(ctx context.Context) error {
 
 func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
 	if s.schemaDone {
+		// An older binary can push messages without usage counters between
+		// this Sync's pushes, so the fill runs on every check, not only at
+		// schema setup. A schema dropped since setup has nothing to fill;
+		// push's marker check notices the reset and sets the schema up again.
+		if _, err := fillMessageUsageCountersPG(ctx, s.pg); err != nil && !isUndefinedTable(err) {
+			return err
+		}
 		return nil
 	}
 	if err := CheckDataVersionCompat(ctx, s.pg); err != nil {
 		return err
 	}
 	if pushSchemaCurrent(ctx, s.pg) {
-		// Schema DDL is current, so skip the index and column
-		// maintenance that can lock against concurrent pg serve
-		// reads (issue #887). Still run the row-level data repairs
-		// so is_automated and token-coverage flags stay correct on
-		// existing rows.
+		if err := createMissingPreparationIndexesPG(ctx, s.pg); err != nil {
+			if !isInsufficientPrivilege(err) {
+				return err
+			}
+			log.Printf("pg schema: preparation indexes unavailable, insufficient privilege: %v", err)
+		}
+		// Skip general index and column maintenance, and run correctness
+		// repairs so is_automated and token-coverage flags stay current.
+		// The one-time automation tracking installation still takes an
+		// exclusive sessions lock, blocking reads and writes until commit.
 		if err := runSchemaDataRepairsPG(ctx, s.pg); err != nil {
 			return err
 		}
+		ensureUsageChangeJournalPG(ctx, s.pg)
+		ensureFrustrationCountsPG(ctx, s.pg)
 		// pushSchemaCurrent predates the vector tables, so a schema
 		// created before this feature is "current" yet lacks them; a
 		// plain post-upgrade pg push would never create them. Run the
@@ -582,7 +590,7 @@ func ReadStatus(
 			machine,
 		)
 	}
-	pg, err := Open(pgURL, schema, allowInsecure)
+	pg, err := Open(ctx, pgURL, schema, allowInsecure)
 	if err != nil {
 		return SyncStatus{}, err
 	}

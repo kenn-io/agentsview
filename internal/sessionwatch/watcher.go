@@ -289,8 +289,8 @@ func (w *Watcher) checkDBForChanges(ctx context.Context,
 	if !fileMtimeChangedAt.IsZero() &&
 		time.Since(*fileMtimeChangedAt) >= syncFallbackDelay() {
 		*fileMtimeChangedAt = time.Time{}
-		if err := w.engine.SyncSingleSession(
-			sessionID,
+		if err := w.engine.SyncSingleSessionContext(
+			ctx, sessionID,
 		); err != nil {
 			log.Printf("watch sync error: %v", err)
 			return false

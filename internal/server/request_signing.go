@@ -42,7 +42,7 @@ func (s *Server) validateRestrictedPolicyAuth(policy requestsign.Policy) error {
 // RestrictedHandler mounts only signed machine operations. Its fixed external
 // URI configuration is trusted operator input, never taken from proxy headers.
 // Main Handler and browser authentication retain their existing behavior.
-func (s *Server) RestrictedHandler(policyFile string) (http.Handler, func() error, error) {
+func (s *Server) RestrictedHandler(ctx context.Context, policyFile string) (http.Handler, func() error, error) {
 	policy, _, err := requestsign.ReadPolicy(policyFile)
 	if err != nil {
 		return nil, nil, err
@@ -50,7 +50,7 @@ func (s *Server) RestrictedHandler(policyFile string) (http.Handler, func() erro
 	if err := s.validateRestrictedPolicyAuth(policy); err != nil {
 		return nil, nil, err
 	}
-	replay, err := requestsign.OpenReplay(policy.ReplayDB)
+	replay, err := requestsign.OpenReplay(ctx, policy.ReplayDB)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -110,7 +110,7 @@ func (s *Server) RestrictedHandler(policyFile string) (http.Handler, func() erro
 	})
 	// Requests are logged only after signature verification, so unsigned
 	// traffic from the public terminator cannot write log lines.
-	return s.idle.Wrap(verifier.Wrap(dispatch, authenticate, authorize)), replay.Close, nil
+	return s.idle.Wrap(verifier.Wrap(dispatch, authenticate, authorize), s.basePath), replay.Close, nil
 }
 
 func externalSigningPrefix(base string) string {
@@ -145,7 +145,7 @@ func restrictedOperation(grant, method, path string) bool {
 	case "/api/ping", "/api/v1/version",
 		"/api/v1/sessions", "/api/v1/sessions/sidebar-index", "/api/v1/session-ids/resolve",
 		"/api/v1/projects", "/api/v1/machines", "/api/v1/agents", "/api/v1/branches",
-		"/api/v1/search", "/api/v1/search/content", "/api/v1/events",
+		"/api/v1/search", "/api/v1/search/content", "/api/v1/events", "/api/v1/changes/stream",
 		"/api/v1/recall/entries", "/api/v1/memory/status", "/api/v1/recent-edits",
 		"/api/v1/usage/summary", "/api/v1/usage/pairwise-comparison",
 		"/api/v1/analytics/tools", "/api/v1/analytics/signals", "/api/v1/analytics/signal-sessions",

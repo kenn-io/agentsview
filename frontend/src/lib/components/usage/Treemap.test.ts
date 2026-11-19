@@ -2,7 +2,9 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import { setLocale } from "../../i18n/index.js";
+import { contrastRatio } from "@kenn-io/kit-ui";
 import Treemap from "./Treemap.svelte";
+import { ui } from "../../stores/ui.svelte.js";
 
 describe("Treemap", () => {
   afterEach(() => {
@@ -47,6 +49,96 @@ describe("Treemap", () => {
 
     unmount(component);
   });
+  it("gives every tile in a theme the same ink at readable contrast", async () => {
+    const startTheme = ui.theme;
+    if (ui.theme !== "light") ui.toggleTheme();
+    document.documentElement.style.setProperty("--test-series-lime", "#a3e635");
+    document.documentElement.style.setProperty("--test-series-navy", "#1f3a8a");
+    const component = mount(Treemap, {
+      target: document.body,
+      props: {
+        items: [
+          {
+            id: "lime",
+            label: "Lime",
+            value: 60,
+            style: { color: "var(--test-series-lime)", fill: "solid" as const },
+          },
+          {
+            id: "navy",
+            label: "Navy",
+            value: 40,
+            style: { color: "var(--test-series-navy)", fill: "solid" as const },
+          },
+        ],
+      },
+    });
+    await tick();
+
+    const tiles = [...document.querySelectorAll<SVGGElement>(".tile")];
+    const ink = tiles.map((tile) => tile.style.getPropertyValue("--tile-ink"));
+    const fill = tiles.map((tile) => tile.style.getPropertyValue("--tile-fill"));
+    // Light labels are all white, whatever the tile hue.
+    expect(ink).toEqual(["#ffffff", "#ffffff"]);
+    // Bright lime darkens until white reads on it; navy already does and
+    // keeps its exact series color.
+    expect(fill[0]).not.toBe("#a3e635");
+    expect(fill[1]).toBe("#1f3a8a");
+    for (const tileFill of fill) {
+      expect(contrastRatio(tileFill, "#ffffff")).toBeGreaterThanOrEqual(4.5);
+    }
+
+    unmount(component);
+    if (ui.theme !== startTheme) ui.toggleTheme();
+    document.documentElement.style.removeProperty("--test-series-lime");
+    document.documentElement.style.removeProperty("--test-series-navy");
+  });
+
+  it("repaints mounted tiles when the theme changes", async () => {
+    const root = document.documentElement.style;
+    const startTheme = ui.theme;
+    if (ui.theme !== "light") ui.toggleTheme();
+    root.setProperty("--test-series-swap", "#a3e635");
+    const component = mount(Treemap, {
+      target: document.body,
+      props: {
+        items: [
+          {
+            id: "swap",
+            label: "Swap",
+            value: 1,
+            style: { color: "var(--test-series-swap)", fill: "solid" as const },
+          },
+        ],
+      },
+    });
+    await tick();
+    const tile = () => document.querySelector<SVGGElement>(".tile")!;
+    expect(tile().style.getPropertyValue("--tile-ink")).toBe("#ffffff");
+
+    // A theme switch changes what the variable resolves to; the same mounted
+    // items must pick up the new color without being replaced. Dark labels
+    // stay white, so navy keeps its exact series color.
+    root.setProperty("--test-series-swap", "#1f3a8a");
+    ui.toggleTheme();
+    await tick();
+    expect(tile().style.getPropertyValue("--tile-ink")).toBe("#ffffff");
+    expect(tile().style.getPropertyValue("--tile-fill")).toBe("#1f3a8a");
+
+    root.setProperty("--test-series-swap", "#a3e635");
+    ui.highContrast = !ui.highContrast;
+    await tick();
+    const lime = tile().style.getPropertyValue("--tile-fill");
+    expect(lime).not.toBe("#1f3a8a");
+    expect(lime).not.toBe("#a3e635");
+    expect(contrastRatio(lime, "#ffffff")).toBeGreaterThanOrEqual(4.5);
+
+    unmount(component);
+    ui.highContrast = !ui.highContrast;
+    if (ui.theme !== startTheme) ui.toggleTheme();
+    root.removeProperty("--test-series-swap");
+  });
+
   it("selects with Enter and opens on double click", async () => {
     const onSelect = vi.fn();
     const onOpen = vi.fn();

@@ -15,6 +15,7 @@ import (
 // A day's report re-reads pairing inputs only for sessions a push changed,
 // and matches a report built without the memo.
 func TestActivityPairingMemoRereadsOnlyChangedSessions(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	store, syncer, local := newPushedStore(t)
 	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-01-10", Timezone: "UTC"},
@@ -46,7 +47,7 @@ func TestActivityPairingMemoRereadsOnlyChangedSessions(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, [3]int64{reads[0] + 1, reads[1] + 1, reads[2] + 1}, counts(),
 		"the changed session, the usage rows, and the listing are read once")
-	fresh, err := NewStoreFromDB(store.DB()).GetActivityReport(ctx, filter, q)
+	fresh, err := NewStoreFromDB(store.DB(), store.bulk).GetActivityReport(ctx, filter, q)
 	require.NoError(t, err)
 	fresh.ReportID, third.ReportID = "", ""
 	require.Equal(t, fresh, third)

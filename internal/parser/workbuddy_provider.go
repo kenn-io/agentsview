@@ -33,9 +33,9 @@ func newWorkBuddySourceSet(roots []string) JSONLSourceSet {
 }
 
 func workBuddyParseFile(
-	_ context.Context, path string, req ParseRequest,
+	ctx context.Context, path string, req ParseRequest,
 ) ([]ParseResult, []string, error) {
-	sess, msgs, err := parseWorkBuddySession(path, req.Source.ProjectHint, req.Machine)
+	sess, msgs, err := parseWorkBuddySession(ctx, path, req.Source.ProjectHint, req.Machine)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -112,7 +112,7 @@ func workBuddyPathParts(root, path string) ([]string, bool) {
 }
 
 func workBuddyProviderCapabilities() Capabilities {
-	return Capabilities{
+	return withPollMetadataScan(Capabilities{
 		Source: jsonlFileProviderSourceCapabilities(),
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
@@ -126,5 +126,5 @@ func workBuddyProviderCapabilities() Capabilities {
 			MalformedLineCount:   CapabilitySupported,
 			Model:                CapabilitySupported,
 		},
-	}
+	})
 }

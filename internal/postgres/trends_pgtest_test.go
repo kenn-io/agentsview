@@ -3,18 +3,19 @@
 package postgres
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/testutil"
 )
 
 func TestStoreGetTrendsTerms(t *testing.T) {
-	_, store := prepareUsageSchema(t, "agentsview_trends_terms_test")
-	ctx := context.Background()
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at, ended_at,
@@ -59,8 +60,9 @@ func TestStoreGetTrendsTerms(t *testing.T) {
 }
 
 func TestStoreGetTrendsTermsUsesMessageTimestampFilters(t *testing.T) {
-	_, store := prepareUsageSchema(t, "agentsview_trends_terms_message_filters_test")
-	ctx := context.Background()
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at,
@@ -100,8 +102,9 @@ func TestStoreGetTrendsTermsUsesMessageTimestampFilters(t *testing.T) {
 func TestStoreGetTrendsTermsModelFilterStaysOnMatchingMessages(
 	t *testing.T,
 ) {
-	_, store := prepareUsageSchema(t, "agentsview_trends_terms_model_messages_test")
-	ctx := context.Background()
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
 			id, machine, project, agent, started_at,
@@ -165,4 +168,41 @@ func trendPointCounts(points []db.TrendPoint) []int {
 		counts[i] = point.Count
 	}
 	return counts
+}
+
+func TestStoreGetTrendsTermsSessionWindow(t *testing.T) {
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
+	cases := testutil.TrendsSessionWindowCases()
+	for _, tc := range cases {
+		_, err := store.DB().ExecContext(ctx, `INSERT INTO sessions
+			(id, project, machine, agent, started_at, created_at, message_count)
+			VALUES ($1, $1, 'local', 'claude', NULLIF($2, '')::timestamptz, $3::timestamptz, $4)`, tc.Project, tc.Started, tc.Created, len(tc.Messages()))
+		require.NoError(t, err)
+		for ordinal, m := range tc.Messages() {
+			_, err := store.DB().ExecContext(ctx, `INSERT INTO messages
+				(session_id, ordinal, role, content, timestamp, model, content_length)
+				VALUES ($1, $2, $3, $4, NULLIF($5, '')::timestamptz, $6, $7)`, tc.Project, ordinal, m.Role, m.Content, m.Timestamp, m.Model, len(m.Content))
+			require.NoError(t, err)
+		}
+	}
+	terms, err := db.ParseTrendTerms([]string{"seam"})
+	require.NoError(t, err)
+	for _, tc := range cases {
+		t.Run(tc.Project, func(t *testing.T) {
+			for _, dayHour := range []bool{false, true} {
+				f := db.AnalyticsFilter{From: "2024-06-05", To: "2024-06-05", Project: tc.Project, Timezone: tc.Timezone, Model: tc.Model}
+				if dayHour {
+					f.DayOfWeek = new(2)
+					f.Hour = new(tc.Hour)
+				}
+				got, err := store.GetTrendsTerms(ctx, f, terms, "day")
+				require.NoError(t, err)
+				assert.Equal(t, tc.Want, got.MessageCount)
+				require.Len(t, got.Series, 1)
+				assert.Equal(t, tc.Want, got.Series[0].Total)
+			}
+		})
+	}
 }

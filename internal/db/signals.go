@@ -76,6 +76,9 @@ func settleUsageOnlySignalsTx(
 	if _, err := tx.Exec(`DELETE FROM session_signal_state WHERE session_id = ?`, sessionID); err != nil {
 		return fmt.Errorf("clearing usage-only signal state: %w", err)
 	}
+	if _, err := tx.Exec(`DELETE FROM session_frustration_markers WHERE session_id = ?`, sessionID); err != nil {
+		return fmt.Errorf("clearing usage-only frustration markers: %w", err)
+	}
 	return replaceSecretFindingsTx(tx, sessionID, nil, 0, "")
 }
 

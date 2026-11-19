@@ -23,7 +23,7 @@ import (
 type chromeConnection struct {
 	net.Conn
 	mu      sync.Mutex
-	pending map[string]chan claudeAISyncResult
+	pending map[string]chan browserSyncResult
 }
 
 type chromeHost struct {
@@ -113,7 +113,7 @@ func (s *Server) acceptChromeHost(ctx context.Context, listener net.Listener) {
 			}
 			continue
 		}
-		current := &chromeConnection{Conn: conn, pending: make(map[string]chan claudeAISyncResult)}
+		current := &chromeConnection{Conn: conn, pending: make(map[string]chan browserSyncResult)}
 		s.chrome.mu.Lock()
 		if s.chrome.closed {
 			s.chrome.mu.Unlock()
@@ -149,7 +149,7 @@ func (h *chromeHost) read(conn *chromeConnection) {
 		conn.mu.Lock()
 		defer conn.mu.Unlock()
 		for id, answer := range conn.pending {
-			answer <- claudeAISyncResult{err: disconnectErr}
+			answer <- browserSyncResult{err: disconnectErr}
 			delete(conn.pending, id)
 		}
 	}()
@@ -159,12 +159,13 @@ func (h *chromeHost) read(conn *chromeConnection) {
 			return
 		}
 		var reply struct {
-			Version    int    `json:"version"`
-			ID         string `json:"id"`
-			Status     int    `json:"status"`
-			Body       string `json:"body"`
-			RetryAfter string `json:"retryAfter"`
-			Error      string `json:"error"`
+			Version     int    `json:"version"`
+			ID          string `json:"id"`
+			Status      int    `json:"status"`
+			Body        string `json:"body"`
+			RetryAfter  string `json:"retryAfter"`
+			Error       string `json:"error"`
+			Unsupported bool   `json:"unsupported"`
 		}
 		if err := json.Unmarshal(body, &reply); err != nil {
 			return
@@ -177,9 +178,14 @@ func (h *chromeHost) read(conn *chromeConnection) {
 			disconnectErr = errors.New("invalid Chrome reply status")
 			return
 		}
-		response := claudeAISyncResult{status: reply.Status, body: []byte(reply.Body), retryAfter: reply.RetryAfter}
+		response := browserSyncResult{status: reply.Status, body: []byte(reply.Body), retryAfter: reply.RetryAfter}
 		if reply.Error != "" {
 			response.err = errors.New(reply.Error)
+		}
+		if reply.Unsupported {
+			// The extension predates this platform. Fail only this request;
+			// the connection still serves the platforms it knows.
+			response.err = chromehost.ErrCompatibility
 		}
 		conn.mu.Lock()
 		if answer := conn.pending[reply.ID]; answer != nil {
@@ -190,18 +196,18 @@ func (h *chromeHost) read(conn *chromeConnection) {
 	}
 }
 
-func (h *chromeHost) fetch(ctx context.Context, path string) (importer.ClaudeAIResponse, error) {
+func (h *chromeHost) fetch(ctx context.Context, platform, path string) (importer.BrowserResponse, error) {
 	h.mu.Lock()
 	conn := h.connection
 	h.mu.Unlock()
 	if conn == nil {
-		return importer.ClaudeAIResponse{}, errors.New("chrome host not connected")
+		return importer.BrowserResponse{}, errors.New("chrome host not connected")
 	}
 	id := rand.Text()
-	answer := make(chan claudeAISyncResult, 1)
-	body, err := json.Marshal(map[string]any{"version": chromehost.Version, "id": id, "path": path})
+	answer := make(chan browserSyncResult, 1)
+	body, err := json.Marshal(map[string]any{"version": chromehost.Version, "id": id, "platform": platform, "path": path})
 	if err != nil {
-		return importer.ClaudeAIResponse{}, err
+		return importer.BrowserResponse{}, err
 	}
 	conn.mu.Lock()
 	conn.pending[id] = answer
@@ -211,20 +217,20 @@ func (h *chromeHost) fetch(ctx context.Context, path string) (importer.ClaudeAIR
 	defer func() { conn.mu.Lock(); delete(conn.pending, id); conn.mu.Unlock() }()
 	if err != nil {
 		_ = conn.Close()
-		return importer.ClaudeAIResponse{}, err
+		return importer.BrowserResponse{}, err
 	}
-	return awaitClaudeAIResponse(ctx, answer)
+	return awaitBrowserResponse(ctx, answer)
 }
 
-func awaitClaudeAIResponse(ctx context.Context, answer <-chan claudeAISyncResult) (importer.ClaudeAIResponse, error) {
+func awaitBrowserResponse(ctx context.Context, answer <-chan browserSyncResult) (importer.BrowserResponse, error) {
 	timer := time.NewTimer(2 * time.Minute)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
-		return importer.ClaudeAIResponse{}, ctx.Err()
+		return importer.BrowserResponse{}, ctx.Err()
 	case <-timer.C:
-		return importer.ClaudeAIResponse{}, errors.New("claude browser fetch timed out")
+		return importer.BrowserResponse{}, errors.New("browser fetch timed out")
 	case response := <-answer:
-		return importer.ClaudeAIResponse{Status: response.status, Body: response.body, RetryAfter: response.retryAfter}, response.err
+		return importer.BrowserResponse{Status: response.status, Body: response.body, RetryAfter: response.retryAfter}, response.err
 	}
 }

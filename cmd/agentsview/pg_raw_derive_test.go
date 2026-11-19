@@ -94,6 +94,10 @@ func TestMain(m *testing.M) {
 	}
 	// Match the default daemon fixtures; replacement tests set their own versions.
 	version = "test"
+	if os.Getenv("AGENTSVIEW_TEST_REAL_CLI") == "1" {
+		main()
+		return
+	}
 	os.Exit(runWithTestRuntimeRoot(m))
 }
 
@@ -211,9 +215,10 @@ func TestHostedProjectionConfiguredContentPolicies(t *testing.T) {
 
 func TestHostedRawDerivationRejectsImageOffloadBeforeOpeningDatabase(t *testing.T) {
 	_, err := prepareHostedPGServe(
+		t.Context(),
 		config.Config{RequireAuth: true, ToolResultImages: config.ToolResultImagesOffload},
 		config.PGConfig{RawTenant: "tenant", Schema: "hosted", RawDerivation: true, URL: "://invalid"},
-		"",
+		"", false,
 	)
 	require.ErrorContains(t, err, "tool_result_images = offload is not supported for hosted raw derivation")
 }

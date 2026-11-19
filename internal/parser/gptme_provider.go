@@ -205,7 +205,7 @@ func (p *gptmeProvider) Parse(
 		return ParseOutcome{}, errors.New("gptme source path unavailable")
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
-	sess, msgs, events, err := p.parseSession(path, machine)
+	sess, msgs, events, err := p.parseSession(ctx, path, machine)
 	if err != nil {
 		return ParseOutcome{}, err
 	}
@@ -272,7 +272,7 @@ func newGptmeSourceSet(roots []string) JSONLSourceSet {
 }
 
 func gptmeProviderCapabilities() Capabilities {
-	return Capabilities{
+	return withPollMetadataScan(Capabilities{
 		Source: SourceCapabilities{
 			DiscoverSources:      CapabilitySupported,
 			StreamingDiscovery:   CapabilitySupported,
@@ -291,7 +291,7 @@ func gptmeProviderCapabilities() Capabilities {
 			PerMessageTokenUsage: CapabilitySupported,
 			AggregateUsageEvents: CapabilitySupported,
 		},
-	}
+	})
 }
 
 func isGptmeConversationPath(root, path string) bool {

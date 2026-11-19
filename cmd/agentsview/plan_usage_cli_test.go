@@ -325,7 +325,7 @@ func TestSessionUsageJSONIncludesPlanUsage(t *testing.T) {
 			return backend.SessionUsage(t.Context(), query)
 		},
 		"read store": func() (*sessionUsageOutput, int, error) {
-			return storeSessionUsageData("test", config.Config{}, database, query)
+			return storeSessionUsageData(t.Context(), "test", config.Config{}, database, query)
 		},
 		"daemon": func() (*sessionUsageOutput, int, error) {
 			return httpSessionUsageData(t.Context(), srvURL, "", query)

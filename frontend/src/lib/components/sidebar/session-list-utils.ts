@@ -1,8 +1,11 @@
-import type { SessionGroup, SessionGroupInput } from "../../stores/sessions.svelte.js";
-import { sessionAncestryMatches } from "../../utils/session-ancestry.js";
+import type { SessionGroup, SessionGroupInput } from "../../stores/sessionGroups.js";
+import { sessionAncestryMatcher } from "../../utils/session-ancestry.js";
 
 export const ITEM_HEIGHT = 42;
+// A row showing years carries its timestamp on a third line.
+const YEAR_ITEM_HEIGHT = 56;
 const CHILD_ITEM_HEIGHT = 34;
+const YEAR_CHILD_ITEM_HEIGHT = 50;
 const TEAM_HEADER_HEIGHT = 28;
 export const HEADER_HEIGHT = 28;
 export const OVERSCAN = 10;
@@ -114,16 +117,6 @@ function isTeammateByMessage(s: SessionGroupInput): boolean {
 }
 
 /**
- * Check if a session is a teammate, inheriting status from the
- * parent.  Continuation sessions of a teammate don't carry the
- * `<teammate-message>` tag themselves, but they belong to the
- * same teammate chain.
- */
-function isTeammate(s: SessionGroupInput, allSessions: SessionGroupInput[]): boolean {
-  return sessionAncestryMatches(s, allSessions, isTeammateByMessage);
-}
-
-/**
  * Check if a session is a subagent (has relationship_type === "subagent").
  * Continuation/fork sessions are NOT subagents.
  */
@@ -138,11 +131,10 @@ function isSubagent(s: SessionGroupInput): boolean {
  * subagent stay under the "Subagents" group header instead of
  * being miscategorised as plain continuations.
  */
-export function isSubagentDescendant(
-  s: SessionGroupInput,
+export function subagentDescendantMatcher(
   groupSessions: SessionGroupInput[],
-): boolean {
-  return sessionAncestryMatches(s, groupSessions, isSubagent);
+): (session: SessionGroupInput) => boolean {
+  return sessionAncestryMatcher(groupSessions, isSubagent);
 }
 
 /**
@@ -162,8 +154,11 @@ function emitGroupItems(
   expandedGroups: Set<string>,
   items: DisplayItem[],
   y: { value: number },
+  alwaysShowYear: boolean,
 ): void {
   const hasChildren = g.sessions.length > 1;
+  const itemHeight = alwaysShowYear ? YEAR_ITEM_HEIGHT : ITEM_HEIGHT;
+  const childHeight = alwaysShowYear ? YEAR_CHILD_ITEM_HEIGHT : CHILD_ITEM_HEIGHT;
   const isExpanded = hasChildren && expandedGroups.has(g.key);
 
   // Primary session (depth 0)
@@ -174,10 +169,10 @@ function emitGroupItems(
     count: 0,
     group: g,
     depth: 0,
-    height: ITEM_HEIGHT,
+    height: itemHeight,
     top: y.value,
   });
-  y.value += ITEM_HEIGHT;
+  y.value += itemHeight;
 
   if (!isExpanded) return;
 
@@ -186,13 +181,15 @@ function emitGroupItems(
   // filtered-out ancestors don't break the parent-chain walk.
   const children = g.sessions.filter((s) => s.id !== g.primarySessionId);
   const ancestryPool = g.allSessions ?? g.sessions;
+  const isSubagentChild = subagentDescendantMatcher(ancestryPool);
+  const isTeammateChild = sessionAncestryMatcher(ancestryPool, isTeammateByMessage);
   const subagents: SessionGroupInput[] = [];
   const teammates: SessionGroupInput[] = [];
   const continuations: SessionGroupInput[] = [];
   for (const s of children) {
-    if (isSubagentDescendant(s, ancestryPool)) {
+    if (isSubagentChild(s)) {
       subagents.push(s);
-    } else if (isTeammate(s, ancestryPool)) {
+    } else if (isTeammateChild(s)) {
       teammates.push(s);
     } else {
       continuations.push(s);
@@ -227,10 +224,10 @@ function emitGroupItems(
       isChild: true,
       depth: 1,
       isLastChild: isLast,
-      height: CHILD_ITEM_HEIGHT,
+      height: childHeight,
       top: y.value,
     });
-    y.value += CHILD_ITEM_HEIGHT;
+    y.value += childHeight;
   }
 
   // Count depth-1 group headers (subagents + team).
@@ -272,10 +269,10 @@ function emitGroupItems(
           isChild: true,
           depth: 2,
           isLastChild: i === subagents.length - 1,
-          height: CHILD_ITEM_HEIGHT,
+          height: childHeight,
           top: y.value,
         });
-        y.value += CHILD_ITEM_HEIGHT;
+        y.value += childHeight;
       }
     }
   }
@@ -312,10 +309,10 @@ function emitGroupItems(
           isChild: true,
           depth: 2,
           isLastChild: i === teammates.length - 1,
-          height: CHILD_ITEM_HEIGHT,
+          height: childHeight,
           top: y.value,
         });
-        y.value += CHILD_ITEM_HEIGHT;
+        y.value += childHeight;
       }
     }
   }
@@ -334,13 +331,14 @@ export function buildDisplayItems(
   mode: GroupMode,
   collapsed: Set<string>,
   expandedGroups: Set<string>,
+  alwaysShowYear = false,
 ): DisplayItem[] {
   const y = { value: 0 };
 
   if (mode === "none") {
     const items: DisplayItem[] = [];
     for (const g of groups) {
-      emitGroupItems(g, "", expandedGroups, items, y);
+      emitGroupItems(g, "", expandedGroups, items, y, alwaysShowYear);
     }
     return items;
   }
@@ -360,7 +358,7 @@ export function buildDisplayItems(
 
     if (!collapsed.has(section.label)) {
       for (const g of section.groups) {
-        emitGroupItems(g, section.label, expandedGroups, items, y);
+        emitGroupItems(g, section.label, expandedGroups, items, y, alwaysShowYear);
       }
     }
   }

@@ -125,4 +125,38 @@ describe("CompactBoundaryDivider", () => {
 
     unmount(c);
   });
+
+  it("shows only the label when a compaction has no summary", () => {
+    const c = mount(CompactBoundaryDivider, {
+      target: document.body,
+      props: {
+        message: {
+          has_context_tokens: false,
+          has_output_tokens: false,
+          id: 1,
+          session_id: "session-1",
+          ordinal: 1,
+          role: "assistant",
+          content: "",
+          timestamp: "2026-04-29T12:00:00Z",
+          has_thinking: false,
+          thinking_text: "",
+          has_tool_use: false,
+          content_length: 0,
+          model: "",
+          context_tokens: 0,
+          output_tokens: 0,
+          is_system: true,
+          is_compact_boundary: true,
+        },
+      },
+    });
+
+    const text = document.body.textContent ?? "";
+    expect(text.split("Context compacted")).toHaveLength(2);
+    expect(document.body.querySelector(".boundary-preview")).toBeNull();
+    expect(document.body.querySelector("details")).toBeNull();
+
+    unmount(c);
+  });
 });

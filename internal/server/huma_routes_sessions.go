@@ -22,10 +22,12 @@ import (
 	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/secrets"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/sessionwatch"
 	"go.kenn.io/agentsview/internal/signals"
 	"go.kenn.io/agentsview/internal/stringutil"
+	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
 func (s *Server) registerSessionRoutes() {
@@ -37,6 +39,8 @@ func (s *Server) registerSessionRoutes() {
 	s.get(group, "/session-ids/resolve", "Resolve session IDs", s.humaResolveSessionIDs)
 	s.get(group, "/sessions/{id}", "Get session", s.humaGetSession)
 	s.get(group, "/sessions/{id}/messages", "List session messages", s.humaGetMessages)
+	s.get(group, "/sessions/{id}/commits", "List session commits", s.humaSessionCommits)
+	s.get(group, "/sessions/{id}/file-references", "Find session images in Docbank", s.humaFileReferences)
 	s.get(group, "/sessions/{id}/tool-calls", "List session tool calls", s.humaToolCalls)
 	s.get(group, "/sessions/{id}/tool-sequences", "Get session tool sequences", s.humaToolSequences)
 	s.get(group, "/sessions/{id}/children", "List child sessions", s.humaGetChildSessions)
@@ -111,6 +115,8 @@ type SessionListFilters = sessionFilterInput
 
 // Batch selection belongs only to the session list, not sidebar discovery.
 type listSessionsInput struct {
+	Flat            bool              `query:"flat" doc:"Match child sessions individually when include_children is true"`
+	ExclusionCounts optionalBoolParam `query:"exclusion_counts" doc:"Include default-exclusion counts; true also samples hidden children, false counts only one-shot and automated sessions. First page only."`
 	SessionListFilters
 	IDs    string `query:"ids" doc:"Comma-separated list of 1 to 100 session IDs. Quote IDs containing commas or line breaks with RFC 4180 CSV quoting; IDs containing CRLF are rejected. Raw IDs include host copies; tilde-qualified IDs match exactly. Explicit filters intersect the selection; discovery exclusions do not apply."`
 	IDsSet bool
@@ -155,6 +161,7 @@ func parseSessionIDs(raw string) ([]string, error) {
 }
 
 type messageListInput struct {
+	CompactBoundary  bool             `query:"compact_boundary" doc:"Only compact boundary messages"`
 	ID               string           `path:"id" required:"true" doc:"Session ID"`
 	Limit            int              `query:"limit" minimum:"0" doc:"Maximum number of messages"`
 	Direction        messageDirection `query:"direction" enum:"asc,desc" doc:"Message ordering direction"`
@@ -295,6 +302,8 @@ func (s *Server) humaListSessions(
 	if err != nil {
 		return nil, err
 	}
+	filter.Flat = in.Flat
+	filter.ExclusionCounts = optionalBoolValue(in.ExclusionCounts)
 	if in.IDsSet {
 		filter.IDs, err = parseSessionIDs(in.IDs)
 		if err != nil {
@@ -400,6 +409,7 @@ func (s *Server) humaGetMessages(
 		ExpectedRevision: in.ExpectedRevision,
 		EvidenceSource:   in.EvidenceSource,
 	}
+	filter.CompactBoundaryOnly = in.CompactBoundary
 	if in.From.IsSet {
 		filter.From = &in.From.Value
 	}
@@ -655,19 +665,25 @@ type sessionUsageResponse struct {
 	HasCost           bool        `json:"has_cost"`
 	// CostUSD is a deprecated compatibility alias for
 	// Cost.Microdollars/1e6; see db.SessionUsage.CostUSD.
-	CostUSD             *float64                        `json:"cost_usd,omitempty"`
-	CostSource          export.CostSource               `json:"cost_source,omitempty"`
-	AICredits           float64                         `json:"ai_credits,omitzero"`
-	Models              []string                        `json:"models"`
-	UnpricedModels      []string                        `json:"unpriced_models"`
-	BreakdownCount      int                             `json:"breakdown_count"`
-	SubagentCount       int                             `json:"subagent_count,omitzero"`
-	Breakdown           []sessionUsageBreakdownResponse `json:"breakdown"`
-	ServerRunning       bool                            `json:"server_running"`
-	RollupCost          *money.Money                    `json:"rollup_cost,omitempty"`
-	RollupCostSource    export.CostSource               `json:"rollup_cost_source,omitempty"`
-	HasRollupCost       *bool                           `json:"has_rollup_cost,omitempty"`
-	RollupSubagentCount *int                            `json:"rollup_subagent_count,omitempty"`
+	CostUSD        *float64                        `json:"cost_usd,omitempty"`
+	CostSource     export.CostSource               `json:"cost_source,omitempty"`
+	AICredits      float64                         `json:"ai_credits,omitzero"`
+	Models         []string                        `json:"models"`
+	UnpricedModels []string                        `json:"unpriced_models"`
+	BreakdownCount int                             `json:"breakdown_count"`
+	SubagentCount  int                             `json:"subagent_count,omitzero"`
+	Breakdown      []sessionUsageBreakdownResponse `json:"breakdown"`
+	// RecordedCost compares cost with the cost the agent recorded; present
+	// only with breakdown=true and when a row carries a recorded cost.
+	RecordedCost *db.SessionRecordedCost `json:"recorded_cost,omitempty"`
+	// SessionTotal is the usage total the agent recorded for the session
+	// as a whole; see db.SessionUsage.SessionTotal.
+	SessionTotal        *db.SessionUsageTotal `json:"session_total,omitempty"`
+	ServerRunning       bool                  `json:"server_running"`
+	RollupCost          *money.Money          `json:"rollup_cost,omitempty"`
+	RollupCostSource    export.CostSource     `json:"rollup_cost_source,omitempty"`
+	HasRollupCost       *bool                 `json:"has_rollup_cost,omitempty"`
+	RollupSubagentCount *int                  `json:"rollup_subagent_count,omitempty"`
 	// PlanUsage carries codex-cloud plan figures. A session with only plan
 	// usage keeps has_token_data and has_cost false.
 	PlanUsage       *db.PlanUsageView       `json:"plan_usage,omitempty"`
@@ -696,6 +712,11 @@ type sessionUsageBreakdownResponse struct {
 	WebSearchRequests        int         `json:"web_search_requests,omitzero"`
 	Cost                     money.Money `json:"cost"`
 	HasCost                  bool        `json:"has_cost"`
+	// RecordedCost is the cost the agent recorded for this row, when it
+	// recorded one; RecordedCostPriced reports that it priced the row
+	// because the catalog has no rate for the model.
+	RecordedCost       *money.Money `json:"recorded_cost,omitempty"`
+	RecordedCostPriced bool         `json:"recorded_cost_priced,omitzero"`
 }
 
 type sessionUsageErrorBody struct {
@@ -739,6 +760,8 @@ func newSessionUsageHumaResponse(usage *db.SessionUsage) sessionUsageResponse {
 			WebSearchRequests:        entry.WebSearchRequests,
 			Cost:                     entry.Cost,
 			HasCost:                  entry.HasCost,
+			RecordedCost:             entry.RecordedCost,
+			RecordedCostPriced:       entry.RecordedCostPriced,
 		})
 	}
 	return sessionUsageResponse{
@@ -758,6 +781,8 @@ func newSessionUsageHumaResponse(usage *db.SessionUsage) sessionUsageResponse {
 		BreakdownCount:    usage.BreakdownCount,
 		SubagentCount:     usage.SubagentCount,
 		Breakdown:         breakdown,
+		RecordedCost:      usage.RecordedCost,
+		SessionTotal:      usage.SessionTotal,
 		ServerRunning:     true,
 		PlanUsage:         usage.PlanUsage.PlanUsageView(),
 		CaptureCoverage:   usage.PlanUsage.CaptureCoverageView(),
@@ -826,6 +851,11 @@ func (s *Server) exactSessionUsage(
 		if rollup == nil {
 			return nil, &sessionUsageError{Status: http.StatusNotFound, Body: sessionUsageErrorBody{Code: "session_not_found", Message: "session not found"}}
 		}
+		// The comparison covers the rows of this response's breakdown, which
+		// is the session's own usage; rollup_* fields carry the subagents.
+		if rollup.Usage.RecordedCost, err = db.SummarizeRecordedCost(rollup.Usage.Breakdown); err != nil {
+			return nil, sessionUsageQueryError(err)
+		}
 		body := newSessionUsageHumaResponse(rollup.Usage)
 		if rollup.HasCost {
 			body.RollupCost = &rollup.Cost
@@ -849,6 +879,11 @@ func (s *Server) exactSessionUsage(
 	}
 	if err != nil {
 		return nil, sessionUsageQueryError(err)
+	}
+	if usage != nil {
+		if usage.RecordedCost, err = db.SummarizeRecordedCost(usage.Breakdown); err != nil {
+			return nil, sessionUsageQueryError(err)
+		}
 	}
 	if usage == nil {
 		return nil, &sessionUsageError{
@@ -903,6 +938,7 @@ type openSessionResponse struct {
 type publishSessionInput struct {
 	ID     string `path:"id" required:"true" doc:"Session ID"`
 	Secret bool   `query:"secret" doc:"Create a secret gist instead of a public one"`
+	Reveal bool   `query:"reveal" doc:"Publish unredacted secret values; localhost callers only"`
 }
 
 type publishResponse struct {
@@ -990,25 +1026,60 @@ func (s *Server) humaOpenSession(
 	}, nil
 }
 
+// gistDescription names a published session by its project and the start of
+// its first prompt. Unless reveal is set, the prompt is masked. The stored
+// first prompt is a preview cut to 300 characters, so a long private key block
+// can lose its END line, and the detector needs that line to match the block.
+// The description therefore ends before any private key header that masking
+// left in place.
+func gistDescription(project string, firstMessage *string, reveal bool) string {
+	first := ""
+	if firstMessage != nil {
+		first = *firstMessage
+		if !reveal {
+			first = cutAtPrivateKeyHeader(secrets.Redact(first))
+		}
+		first = stringutil.TruncateRunes(first, 100, "...")
+	}
+	return fmt.Sprintf("Agent session: %s - %s", project, first)
+}
+
+// cutAtPrivateKeyHeader returns text up to its first "-----BEGIN ... PRIVATE
+// KEY-----" header, with trailing whitespace removed.
+func cutAtPrivateKeyHeader(text string) string {
+	const begin = "-----BEGIN "
+	for i := 0; ; {
+		j := strings.Index(text[i:], begin)
+		if j < 0 {
+			return text
+		}
+		start := i + j
+		i = start + len(begin)
+		name, _, closed := strings.Cut(text[i:], "-----")
+		if closed && strings.HasSuffix(name, "PRIVATE KEY") && !strings.Contains(name, "\n") {
+			return strings.TrimRight(text[:start], " \t\r\n")
+		}
+	}
+}
+
 func (s *Server) humaPublishSession(
 	ctx context.Context,
 	in *publishSessionInput,
 ) (*jsonOutput[publishResponse], error) {
+	if err := requireLocalReveal(ctx, in.Reveal); err != nil {
+		return nil, err
+	}
 	token := s.githubToken(ctx)
 	if token == "" {
 		return nil, apiError(http.StatusUnauthorized, "GitHub token not configured")
 	}
-	session, msgs, err := s.sessionWithMessages(ctx, in.ID)
+	session, msgs, err := s.sessionWithMessages(ctx, in.ID, in.Reveal)
 	if err != nil {
 		return nil, err
 	}
 	htmlContent := generateExportHTML(session, msgs)
 	filename := session.Project + "-" + formatDateShort(session.StartedAt) + ".html"
-	first := ""
-	if session.FirstMessage != nil {
-		first = stringutil.TruncateRunes(*session.FirstMessage, 100, "...")
-	}
-	description := fmt.Sprintf("Agent session: %s - %s", session.Project, first)
+	description := gistDescription(session.Project, session.FirstMessage, in.Reveal)
 	gist, err := createGist(ctx, token, filename, description, htmlContent, !in.Secret)
 	if err != nil {
 		return nil, apiError(http.StatusBadGateway, err.Error())
@@ -1131,6 +1202,11 @@ func (s *Server) humaRestoreSession(ctx context.Context,
 	if n == 0 {
 		return nil, apiError(http.StatusNotFound, "session not found or not in trash")
 	}
+	if s.engine != nil {
+		// Restoring changes no source file, so fallback polling must reconcile
+		// to read a transcript that changed while the session was in the trash.
+		s.engine.ForgetPollScans()
+	}
 	if s.broadcaster != nil {
 		s.broadcaster.Emit("sessions")
 	}
@@ -1200,13 +1276,23 @@ type uploadSessionResponse struct {
 }
 
 type markdownInput struct {
-	ID    string        `path:"id" required:"true" doc:"Session ID"`
-	Depth markdownDepth `query:"depth" enum:"1,all" doc:"Child session depth"`
+	ID     string        `path:"id" required:"true" doc:"Session ID"`
+	Depth  markdownDepth `query:"depth" enum:"1,all" doc:"Child session depth"`
+	Reveal bool          `query:"reveal" doc:"Export unredacted secret values; localhost callers only"`
 }
 
+type exportSessionInput struct {
+	ID     string `path:"id" required:"true" doc:"Session ID"`
+	Reveal bool   `query:"reveal" doc:"Export unredacted secret values; localhost callers only"`
+}
+
+// sessionWithMessages loads a session for HTML export or publishing. Unless
+// reveal is set, it masks detected secrets in the messages. Callers check
+// requireLocalReveal first.
 func (s *Server) sessionWithMessages(
 	ctx context.Context,
 	id string,
+	reveal bool,
 ) (*db.Session, []db.Message, error) {
 	session, err := s.db.GetSession(ctx, id)
 	if err != nil {
@@ -1219,14 +1305,39 @@ func (s *Server) sessionWithMessages(
 	if err != nil {
 		return nil, nil, apiError(http.StatusInternalServerError, err.Error())
 	}
-	return session, msgs, nil
+	return session, exportMessages(msgs, reveal), nil
+}
+
+// requireLocalReveal rejects a request to reveal secrets from a caller that
+// is not on localhost, as secret listing and search do.
+func requireLocalReveal(ctx context.Context, reveal bool) error {
+	if reveal && !isLocalhostContext(ctx) {
+		return apiError(http.StatusForbidden, "reveal is only permitted from localhost")
+	}
+	return nil
+}
+
+// exportMessages masks detected secrets in messages that leave the archive
+// through a session export, unless the caller asked to reveal them.
+func exportMessages(msgs []db.Message, reveal bool) []db.Message {
+	if reveal {
+		return msgs
+	}
+	masked := make([]db.Message, len(msgs))
+	for i, m := range msgs {
+		masked[i] = service.RedactMessageSecrets(m)
+	}
+	return masked
 }
 
 func (s *Server) humaExportSession(
 	ctx context.Context,
-	in *idPathInput,
+	in *exportSessionInput,
 ) (*bytesOutput, error) {
-	session, msgs, err := s.sessionWithMessages(ctx, in.ID)
+	if err := requireLocalReveal(ctx, in.Reveal); err != nil {
+		return nil, err
+	}
+	session, msgs, err := s.sessionWithMessages(ctx, in.ID, in.Reveal)
 	if err != nil {
 		return nil, err
 	}
@@ -1243,8 +1354,11 @@ func (s *Server) humaMarkdownSession(
 	ctx context.Context,
 	in *markdownInput,
 ) (*bytesOutput, error) {
+	if err := requireLocalReveal(ctx, in.Reveal); err != nil {
+		return nil, err
+	}
 	depth := string(in.Depth)
-	tree, err := s.loadExportSessionTree(ctx, in.ID, depth, map[string]bool{}, 0)
+	tree, err := s.loadExportSessionTree(ctx, in.ID, depth, in.Reveal, map[string]bool{}, 0)
 	if err != nil {
 		return nil, serverError(err)
 	}
@@ -1343,6 +1457,9 @@ func (s *Server) humaEvents(
 		}
 		sub, unsub := s.broadcaster.Subscribe()
 		defer unsub()
+		// The web UI keeps this stream open only while it is visible, so a
+		// subscriber means someone is looking at the archive.
+		defer s.holdSyncInterval(syncpkg.LiveInterval)()
 		if !stream.SendJSON("events_ready", struct{}{}) {
 			return
 		}
@@ -1420,7 +1537,7 @@ func (s *Server) humaUploadSession(
 			"claude provider does not support uploads")
 	}
 	results, err := uploader.ParseUploadedTranscript(
-		upload.tempPath, project, machine,
+		ctx, upload.tempPath, project, machine,
 	)
 	if err != nil {
 		return nil, apiError(http.StatusBadRequest,
@@ -1858,4 +1975,25 @@ func (s *Server) humaResumeWithOpener(ctx context.Context,
 			Cwd:      launchDir,
 		},
 	}, nil
+}
+
+func (s *Server) humaFileReferences(ctx context.Context, in *idPathInput) (*jsonOutput[service.FileReferencesResult], error) {
+	result, err := service.FileReferences(ctx, s.sessions, in.ID)
+	if err != nil {
+		return nil, fileReferencesError(err)
+	}
+	return &jsonOutput[service.FileReferencesResult]{Body: result}, nil
+}
+
+func fileReferencesError(err error) error {
+	switch {
+	case errors.Is(err, service.ErrSessionNotFound):
+		return apiError(http.StatusNotFound, "session not found")
+	case errors.Is(err, service.ErrRevisionBoundReadUnavailable):
+		return apiError(http.StatusNotImplemented, err.Error())
+	case errors.Is(err, service.ErrSourceChanged):
+		return apiErrorWithCode(http.StatusConflict, "source_changed", err.Error())
+	default:
+		return serverError(err)
+	}
 }

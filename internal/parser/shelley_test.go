@@ -451,6 +451,9 @@ func TestParseShelleyRobustContent(t *testing.T) {
 
 	// Errored-turn tokens roll up into the session totals.
 	assert.Equal(t, 40, result.Session.TotalOutputTokens, "session output total")
+	// Only the undecodable llm_data row is lost; the unknown content type
+	// in a decodable row is not.
+	assert.Equal(t, 1, result.Session.MalformedLines, "malformed llm_data row counted")
 }
 
 func TestParseShelleyUsageOnlyRows(t *testing.T) {
@@ -576,7 +579,7 @@ func TestShelleySameSecondChangeSignal(t *testing.T) {
 	assert.Equal(t, base, mtime1, "File.Mtime is the real updated_at")
 	assert.NotEmpty(t, hash1, "content fingerprint set")
 
-	metas1, err := ListShelleyConversationMetas(conn, dbPath)
+	metas1, err := ListShelleyConversationMetas(t.Context(), conn, dbPath)
 	require.NoError(t, err)
 	require.Len(t, metas1, 1)
 	assert.Equal(t, mtime1, metas1[0].FileMtime,
@@ -603,7 +606,7 @@ func TestShelleySameSecondChangeSignal(t *testing.T) {
 	assert.NotEqual(t, hash1, second.Session.File.Hash,
 		"a same-second append must change the content fingerprint")
 
-	metas2, err := ListShelleyConversationMetas(conn, dbPath)
+	metas2, err := ListShelleyConversationMetas(t.Context(), conn, dbPath)
 	require.NoError(t, err)
 	require.Len(t, metas2, 1)
 	assert.Equal(t, second.Session.File.Hash, metas2[0].Fingerprint,
@@ -646,7 +649,7 @@ func TestShelleyNumericUserInitiatedScans(t *testing.T) {
 	conn, err := OpenShelleyDB(dbPath)
 	require.NoError(t, err, "open shelley db")
 	defer conn.Close()
-	metas, err := ListShelleyConversationMetas(conn, dbPath)
+	metas, err := ListShelleyConversationMetas(t.Context(), conn, dbPath)
 	require.NoError(t, err)
 	require.Len(t, metas, 1)
 	assert.Equal(t, result.Session.File.Hash, metas[0].Fingerprint,
@@ -655,12 +658,46 @@ func TestShelleyNumericUserInitiatedScans(t *testing.T) {
 
 func TestApplyShelleyUsageTolerant(t *testing.T) {
 	var msg ParsedMessage
-	applyShelleyUsage(&msg,
+	require.NoError(t, applyShelleyUsage(&msg,
 		`{"input_tokens":"-5","cache_read_input_tokens":"100",`+
-			`"output_tokens":"42","model":""}`, "fallback-model")
+			`"output_tokens":"42","model":""}`, "fallback-model"))
 	assert.Equal(t, 100, msg.ContextTokens, "ContextTokens (negative input clamped)")
 	assert.Equal(t, 42, msg.OutputTokens, "OutputTokens")
 	assert.True(t, msg.HasContextTokens, "HasContextTokens")
 	assert.True(t, msg.HasOutputTokens, "HasOutputTokens")
 	assert.Equal(t, "fallback-model", msg.Model, "falls back to conversation model")
+}
+
+func TestParseShelleyCountsUndecodableUsageAndUserData(t *testing.T) {
+	_, dbPath, db := newShelleyTestDB(t)
+	seedShelleyConversation(
+		t, db, "cBAD1", "damaged", "/home/user/dev/app",
+		"claude-sonnet-4-6", "", true,
+		"2026-06-15T10:00:00Z", "2026-06-15T10:00:30Z",
+	)
+	seedShelleyMessage(t, db, "cBAD1", 1, 1, "user",
+		`{"Role":0,"Content":[{"Type":2,"Text":"go"}]}`,
+		"", "", "2026-06-15T10:00:00Z")
+	// Usage-only rows whose usage blob does not decode: one is cut off, the
+	// other is valid JSON with a mistyped model. Their tokens are lost.
+	seedShelleyMessage(t, db, "cBAD1", 2, 1, "agent",
+		"", "", `{"input_tokens":700,"output_tokens"`, "2026-06-15T10:00:10Z")
+	seedShelleyMessage(t, db, "cBAD1", 5, 1, "agent",
+		"", "", `{"input_tokens":700,"output_tokens":20,"model":42}`, "2026-06-15T10:00:15Z")
+	// No llm_data, so the parser falls back to user_data, which is corrupt.
+	seedShelleyMessage(t, db, "cBAD1", 3, 1, "user",
+		"", `{"text":"lost prompt`, "", "2026-06-15T10:00:20Z")
+	// A valid all-zero usage blob on a text row is not malformed.
+	seedShelleyMessage(t, db, "cBAD1", 4, 1, "agent",
+		`{"Role":1,"Content":[{"Type":2,"Text":"done"}]}`, "",
+		`{"input_tokens":0,"output_tokens":0}`, "2026-06-15T10:00:30Z")
+
+	result, err := parseShelleyConversationDirectForTest(t, dbPath, "cBAD1", "m", nil)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.Equal(t, 3, result.Session.MalformedLines)
+	require.Len(t, result.Messages, 2)
+	assert.Equal(t, "go", result.Messages[0].Content)
+	assert.Equal(t, "done", result.Messages[1].Content)
 }

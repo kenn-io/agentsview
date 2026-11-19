@@ -645,7 +645,7 @@ func openClawSQLiteParseMemberTx(
 		return nil, "", nil
 	}
 	sess, messages, err := builder.finish(
-		src.Path, "", machine, info, agentID, sessionID,
+		ctx, src.Path, "", machine, info, agentID, sessionID,
 	)
 	if err != nil {
 		return nil, "", err
@@ -791,7 +791,7 @@ func openClawSQLiteFingerprintsEachTx(
 					reason: fmt.Sprintf("event %d: %v", seq, decodeErr),
 				}
 			}
-			if err := builder.consume(eventJSON, true); err != nil {
+			if err := builder.consume(ctx, eventJSON, true); err != nil {
 				return openClawSQLiteMalformedMemberError{reason: err.Error()}
 			}
 		}

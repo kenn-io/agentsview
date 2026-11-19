@@ -27,13 +27,15 @@ type planUsagePushFixture struct {
 
 func newPlanUsagePushFixture(t *testing.T, schema string) planUsagePushFixture {
 	t.Helper()
-	pgURL := testPGURL(t)
-	pg, err := Open(pgURL, schema, true)
+	pgURL := testPGSchemaURL(t, schema)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, pg.Close()) })
-	_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err)
-	require.NoError(t, EnsureSchema(t.Context(), pg, schema))
+	if !takeFreshSchemaCopy(t, pgURL, schema) {
+		_, err = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
+		require.NoError(t, err)
+		require.NoError(t, EnsureSchema(t.Context(), pg, schema))
+	}
 
 	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
@@ -44,7 +46,7 @@ func newPlanUsagePushFixture(t *testing.T, schema string) planUsagePushFixture {
 		Agent: "codex-cloud", StartedAt: &started, CreatedAt: started,
 	}))
 
-	store, err := NewStore(pgURL, schema, true)
+	store, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, store.Close()) })
 	return planUsagePushFixture{
@@ -87,7 +89,8 @@ func fullPlanUsage() *db.SessionPlanUsage {
 }
 
 func TestPushPlanUsageRoundTrip(t *testing.T) {
-	f := newPlanUsagePushFixture(t, "agentsview_push_plan_usage_roundtrip")
+	t.Parallel()
+	f := newPlanUsagePushFixture(t, usageTestSchema)
 	require.NoError(t, f.local.ReplaceSessionPlanUsage(t.Context(), planUsageRootID, fullPlanUsage()))
 	f.push(t)
 
@@ -103,7 +106,8 @@ func TestPushPlanUsageRoundTrip(t *testing.T) {
 }
 
 func TestPushPlanUsageChangeRepushes(t *testing.T) {
-	f := newPlanUsagePushFixture(t, "agentsview_push_plan_usage_change")
+	t.Parallel()
+	f := newPlanUsagePushFixture(t, usageTestSchema)
 	require.NoError(t, f.local.ReplaceSessionPlanUsage(t.Context(), planUsageRootID, fullPlanUsage()))
 	f.push(t)
 	var updatedBefore time.Time
@@ -129,8 +133,9 @@ func TestPushPlanUsageChangeRepushes(t *testing.T) {
 }
 
 func TestPGSessionUsageIncludesPlanUsage(t *testing.T) {
+	t.Parallel()
 	t.Run("direct", func(t *testing.T) {
-		f := newPlanUsagePushFixture(t, "agentsview_push_plan_usage_session_usage")
+		f := newPlanUsagePushFixture(t, usageTestSchema)
 		require.NoError(t, f.local.ReplaceSessionPlanUsage(t.Context(), planUsageRootID, fullPlanUsage()))
 		f.push(t)
 		usage, err := f.store.GetSessionUsage(t.Context(), planUsageRootID, false)
@@ -149,7 +154,7 @@ func TestPGSessionUsageIncludesPlanUsage(t *testing.T) {
 		}
 		session.CaptureCoverage = &parser.ParsedCaptureCoverage{UncapturedTurns: 2}
 		require.NoError(t, pf.sink.Project(t.Context(), pf.lease(t, m), m, p))
-		h, err := newHostedAdapter(pf.runtime, pf.tenant)
+		h, err := newHostedAdapter(t.Context(), pf.runtime, pf.tenant)
 		require.NoError(t, err)
 		want := &db.SessionPlanUsage{
 			HasPlanUsage: true, DataAsOf: "2026-10-01T10:00:00Z", DataStatus: "partial",
@@ -166,6 +171,7 @@ func TestPGSessionUsageIncludesPlanUsage(t *testing.T) {
 }
 
 func TestHostedProjectionWritesPlanUsage(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "capture-a", "")
 	p := projectionOutcome("descendant thread")
@@ -192,7 +198,7 @@ func TestHostedProjectionWritesPlanUsage(t *testing.T) {
 
 	// No session codex:root exists, so hosted reads cannot name a public
 	// root and must not leak the source ID.
-	h, err := newHostedAdapter(f.runtime, f.tenant)
+	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
 	hosted, err := h.GetSessionPlanUsage(t.Context(), "codex:portable")
 	require.NoError(t, err)
@@ -206,6 +212,7 @@ func TestHostedProjectionWritesPlanUsage(t *testing.T) {
 }
 
 func TestHostedGrandchildUsageRootMapped(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "capture-a", "")
 	root := projectionOutcome("root")
@@ -218,7 +225,7 @@ func TestHostedGrandchildUsageRootMapped(t *testing.T) {
 	root.Outcome.Results = append(root.Outcome.Results, child.Outcome.Results[0], grandchild.Outcome.Results[0])
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, root))
 
-	h, err := newHostedAdapter(f.runtime, f.tenant)
+	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
 	got, err := h.GetSessionPlanUsage(t.Context(), "codex:grandchild")
 	require.NoError(t, err)
@@ -233,6 +240,10 @@ func TestHostedGrandchildUsageRootMapped(t *testing.T) {
 }
 
 func TestHostedReprovisionAddsPlanUsageTable(t *testing.T) {
+	t.Parallel()
+	// An empty database: this test drops a tenant table and tests how
+	// EnsureHostedTenant restores it.
+	testPGURL(t)
 	f := newHostedFixture(t, "tenant-plan-usage-upgrade")
 	_, err := f.admin.ExecContext(t.Context(), `DROP TABLE session_plan_usage`)
 	require.NoError(t, err)
@@ -244,6 +255,7 @@ func TestHostedReprovisionAddsPlanUsageTable(t *testing.T) {
 }
 
 func TestHostedRuntimeRequiresPlanUsageInsert(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	require.NoError(t, CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull))
 	_, err := f.admin.ExecContext(t.Context(), `REVOKE INSERT ON session_plan_usage FROM "`+f.role+`"`)

@@ -19,6 +19,8 @@ import (
 // eligibility.
 const extractDebounceInterval = 30 * time.Second
 
+const batteryRecheckInterval = time.Minute
+
 // extractPassManager is the subset of *extract.Manager the scheduler needs,
 // letting tests substitute a fake that records TryPass calls.
 type extractPassManager interface {
@@ -43,6 +45,8 @@ type extractScheduler struct {
 	// still leave downstream recall embeddings stale. Dropped passes do not
 	// call it because they cannot have changed the corpus.
 	onPassFinished func()
+	onBattery      func() bool
+	onBatteryMgr   extractPassManager
 
 	dirty chan struct{}
 	stop  chan struct{}
@@ -145,7 +149,7 @@ func (s *extractScheduler) Run(ctx context.Context) {
 	// happens to survive a full backstop tick. The revisit is bounded — it
 	// only reloads done sessions written to since their coverage stamp.
 	// Single-goroutine state, no locking needed.
-	pendingFull := true
+	pendingFull, recheck := true, false
 
 	for {
 		select {
@@ -154,9 +158,14 @@ func (s *extractScheduler) Run(ctx context.Context) {
 		case <-s.stop:
 			return
 		case <-s.dirty:
+			recheck = false
 			resetTimer(debounceTimer, s.debounce)
 		case <-debounceTimer.C:
-			started, ok, err := s.tryPassWithLease(ctx,
+			onBattery, mgr := s.passManager()
+			if recheck && onBattery {
+				break // Only waiting for AC; nothing new is owed.
+			}
+			started, ok, err := s.tryPassWithLease(ctx, mgr,
 				extract.PassOptions{Full: pendingFull})
 			if !ok {
 				// Draining: the daemon is shutting down, so no new pass
@@ -175,9 +184,9 @@ func (s *extractScheduler) Run(ctx context.Context) {
 			}
 			startupDone()
 			// Only clear a carried full pass once it both started and
-			// succeeded; a started-but-failed pass never completed the
-			// top-up it carried.
-			if err == nil {
+			// succeeded. A battery pass arms an AC recheck, the timer's
+			// only job until Notify or a started AC pass clears it.
+			if recheck = onBattery; !onBattery && err == nil {
 				pendingFull = false
 			}
 		case <-tickC:
@@ -186,7 +195,8 @@ func (s *extractScheduler) Run(ctx context.Context) {
 			// stay carried forever — the debounce only re-arms on sync
 			// activity, and catchup ticks alone never revisit done sessions.
 			full := tickFull || pendingFull
-			started, ok, err := s.tryPassWithLease(ctx,
+			onBattery, mgr := s.passManager()
+			started, ok, err := s.tryPassWithLease(ctx, mgr,
 				extract.PassOptions{Full: full})
 			if !ok {
 				continue
@@ -196,15 +206,28 @@ func (s *extractScheduler) Run(ctx context.Context) {
 			}
 			if started {
 				startupDone()
+				recheck = onBattery || recheck && !debounceTimer.Stop()
 			}
 			if full {
 				// A dropped incremental catchup tick needs no carry: the
 				// next tick or debounced pass covers the same ground. A full
 				// pass stays carried until one both starts and succeeds.
-				pendingFull = !started || err != nil
+				pendingFull = onBattery || !started || err != nil
 			}
 		}
+		if recheck {
+			resetTimer(debounceTimer, batteryRecheckInterval)
+		}
 	}
+}
+
+// passManager returns the battery reconciler while on battery power, and the
+// real manager otherwise.
+func (s *extractScheduler) passManager() (bool, extractPassManager) {
+	if s.onBattery != nil && s.onBattery() {
+		return true, s.onBatteryMgr
+	}
+	return false, s.mgr
 }
 
 // tryPassWithLease runs one TryPass under an idle-tracker work lease, so a
@@ -213,14 +236,14 @@ func (s *extractScheduler) Run(ctx context.Context) {
 // draining, in which case no pass was attempted: work started after the
 // idle decision would race the shutdown it triggered.
 func (s *extractScheduler) tryPassWithLease(
-	ctx context.Context, opts extract.PassOptions,
+	ctx context.Context, mgr extractPassManager, opts extract.PassOptions,
 ) (started, ok bool, err error) {
 	release, ok := s.idle.BeginWork()
 	if !ok {
 		return false, false, nil
 	}
 	defer release()
-	started, _, err = s.mgr.TryPass(ctx, opts)
+	started, _, err = mgr.TryPass(ctx, opts)
 	if started && s.onPassFinished != nil {
 		s.onPassFinished()
 	}

@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { analytics } from "../../stores/analytics.svelte.js";
+  import PanelStatus from "./PanelStatus.svelte";
   import { router } from "../../stores/router.svelte.js";
   import { m } from "../../i18n/index.js";
 
@@ -83,30 +85,32 @@
       };
     });
   });
+
+  // The comparison joins three responses, so it waits for all of them
+  // instead of reading a missing one as zeroes.
+  const sources = [
+    { panel: "summary", fetch: () => analytics.fetchSummary() },
+    { panel: "velocity", fetch: () => analytics.fetchVelocity() },
+    { panel: "tools", fetch: () => analytics.fetchTools() },
+  ] as const;
+  const failed = $derived(sources.filter((s) => analytics.errors[s.panel]));
+  const ready = $derived(sources.every((s) => analytics[s.panel] !== null));
 </script>
 
 <div class="agent-comparison">
   <h3 class="chart-title">{m.analytics_agent_comparison_title()}</h3>
 
-  {#if analytics.errors.velocity || analytics.errors.summary || analytics.errors.tools}
-    <div class="error">
-      {analytics.errors.velocity ?? analytics.errors.summary ?? analytics.errors.tools}
-      <button
-        class="retry-btn"
-        onclick={() => {
-          analytics.fetchVelocity();
-          analytics.fetchSummary();
-          analytics.fetchTools();
-        }}
-      >
-        {m.shared_retry()}
-      </button>
-    </div>
-  {:else if agents.length < 2}
+  <PanelStatus
+    hasData={ready}
+    pending={failed.some((s) => analytics.querying[s.panel])}
+    error={failed[0] ? analytics.errors[failed[0].panel] : null}
+    onRetry={() => failed.forEach((s) => s.fetch())}
+  />
+  {#if ready && agents.length < 2}
     <div class="empty">
       {m.analytics_agent_comparison_empty()}
     </div>
-  {:else}
+  {:else if ready}
     <div class="comparison-table">
       <div class="table-header">
         <span class="col-agent">{m.analytics_col_agent()}</span>
@@ -127,10 +131,10 @@
         >
           <span class="col-agent">{agent.name}</span>
           <span class="col-num">
-            {agent.sessions.toLocaleString()}
+            {formatCount(agent.sessions)}
           </span>
           <span class="col-num">
-            {agent.messages.toLocaleString()}
+            {formatCount(agent.messages)}
           </span>
           <span class="col-num">
             {formatDuration(agent.turnCycleP50)}
@@ -142,7 +146,7 @@
             {formatRate(agent.toolsPerMin)}
           </span>
           <span class="col-num">
-            {agent.totalToolCalls.toLocaleString()}
+            {formatCount(agent.totalToolCalls)}
           </span>
           <span class="col-cats">
             {agent.topCategories.join(", ") || "-"}
@@ -182,8 +186,8 @@
 
   .table-header {
     border-bottom: 1px solid var(--border-muted);
-    font-size: 9px;
-    color: var(--text-muted);
+    font-size: 11px;
+    color: var(--text-secondary);
     font-weight: 500;
   }
 
@@ -214,7 +218,7 @@
     min-width: 80px;
     text-align: left;
     color: var(--text-muted);
-    font-size: 10px;
+    font-size: 11px;
   }
 
   .empty {
@@ -222,23 +226,5 @@
     font-size: 12px;
     padding: 24px;
     text-align: center;
-  }
-
-  .error {
-    color: var(--accent-red);
-    font-size: 12px;
-    padding: 12px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .retry-btn {
-    padding: 2px 8px;
-    border: 1px solid currentColor;
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    color: inherit;
-    cursor: pointer;
   }
 </style>

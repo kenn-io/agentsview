@@ -416,6 +416,9 @@ func CodexFunctionCallWithCallIDJSON(
 	return mustMarshal(m)
 }
 
+// CodexCodeModeWaitOutput is a synthetic two-block script result.
+const CodexCodeModeWaitOutput = `[{"type":"input_text","text":"Script completed\nWall time 9.6 seconds\nOutput:\n"},{"type":"input_text","text":"script stdout\n"}]`
+
 // CodexFunctionCallOutputJSON returns a Codex
 // function_call_output response_item.
 func CodexFunctionCallOutputJSON(

@@ -46,9 +46,9 @@ func migrateLegacySource(t *testing.T, liveSourceIDs ...string) *DB {
 	for _, id := range liveSourceIDs {
 		insertSession(t, dst, id, "project", func(s *Session) { s.Agent = "codex" })
 	}
-	_, err := dst.CopyOrphanedDataFromExcluding(srcPath, nil)
+	_, err := dst.CopyOrphanedDataFromExcluding(t.Context(), srcPath, nil)
 	require.NoError(t, err)
-	require.NoError(t, dst.CopySessionMetadataFrom(srcPath))
+	require.NoError(t, dst.CopySessionMetadataFrom(t.Context(), srcPath))
 	return dst
 }
 
@@ -103,10 +103,10 @@ func TestLegacyCodexPageMigrationKeepsCurationAndRawArchiveBinding(t *testing.T)
 	t.Cleanup(func() { dst.Close() })
 	insertSession(t, dst, "codex:"+legacyThread, "project", func(s *Session) { s.Agent = "codex" })
 	insertSession(t, dst, canonical2, "project", func(s *Session) { s.Agent = "codex" })
-	require.NoError(t, dst.CopySyncStateFrom(srcPath))
-	_, err := dst.CopyOrphanedDataFromExcluding(srcPath, nil)
+	require.NoError(t, dst.CopySyncStateFrom(t.Context(), srcPath))
+	_, err := dst.CopyOrphanedDataFromExcluding(t.Context(), srcPath, nil)
 	require.NoError(t, err)
-	require.NoError(t, dst.CopySessionMetadataFrom(srcPath))
+	require.NoError(t, dst.CopySessionMetadataFrom(t.Context(), srcPath))
 
 	ctx := t.Context()
 	var count int
@@ -141,7 +141,7 @@ func TestLegacyCodexTrashedPageLinksToThreadParsedAfterCopy(t *testing.T) {
 
 	dst := testDBAtPath(t, filepath.Join(dir, "new.db"), "dst")
 	t.Cleanup(func() { dst.Close() })
-	_, err = dst.CopyTrashedDataFrom(srcPath)
+	_, err = dst.CopyTrashedDataFrom(t.Context(), srcPath)
 	require.NoError(t, err)
 	insertSession(t, dst, "codex:"+legacyThread, "project", func(s *Session) { s.Agent = "codex" })
 
@@ -183,7 +183,7 @@ func TestLegacyCodexTrashedPageDropsStaleSubagentParentKeepsLauncher(t *testing.
 
 	dst := testDBAtPath(t, filepath.Join(dir, "new.db"), "dst")
 	t.Cleanup(func() { dst.Close() })
-	_, err := dst.CopyTrashedDataFrom(srcPath)
+	_, err := dst.CopyTrashedDataFrom(t.Context(), srcPath)
 	require.NoError(t, err)
 
 	read := func(rollout string) (parent, parserParent, relationship string) {

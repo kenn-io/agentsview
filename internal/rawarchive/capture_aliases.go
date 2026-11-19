@@ -20,7 +20,7 @@ func recordRootAliases(ctx context.Context, databasePath string, roots []RootSpe
 	}
 	defer conn.Close()
 	rows, err := conn.QueryContext(ctx, `SELECT DISTINCT agent, file_path FROM sessions
-		WHERE agent IN ('claude','codex') AND coalesce(file_path,'') <> ''`)
+		WHERE agent IN ('claude','codex') AND file_path <> ''`)
 	if err != nil {
 		return err
 	}

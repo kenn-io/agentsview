@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -76,7 +77,7 @@ func serveWrappedNoContent(
 	rec := httptest.NewRecorder()
 	tracker.Wrap(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
-	})).ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
+	}), "").ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
 	return rec
 }
 
@@ -118,7 +119,7 @@ func TestIdleTrackerExternalRequestResetsIdle(t *testing.T) {
 			close(entered)
 			<-release
 			w.WriteHeader(http.StatusNoContent)
-		})).ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
+		}), "").ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
 		requestDone <- rec
 	}()
 
@@ -214,4 +215,58 @@ func TestIdleTrackerNilReceiverIsNoop(t *testing.T) {
 
 	rec := serveWrappedNoContent(t, tracker)
 	assert.Equal(t, http.StatusNoContent, rec.Code)
+}
+
+func TestIdleTrackerSyncSuspensionTracksExternalRequestsAndOutsideWork(t *testing.T) {
+	for _, name := range []string{"external request", "outside work", "base-path ping"} {
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				timeout := time.Duration(0)
+				if name == "base-path ping" {
+					timeout = time.Minute
+				}
+				tracker := NewIdleTracker(timeout, func() { assert.Fail(t, "desktop probes must keep the daemon alive") })
+				suspended := make(chan struct{}, 4)
+				tracker.SetSyncIdle(time.Minute, func() { suspended <- struct{}{} })
+				switch name {
+				case "base-path ping":
+					handler := tracker.Wrap(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), "/archive")
+					go tracker.Run(ctx)
+					for range 6 {
+						time.Sleep(30 * time.Second)
+						handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(ctx, http.MethodGet, "http://127.0.0.1:8080/archive/api/ping", nil))
+					}
+					synctest.Wait()
+					assert.Len(t, suspended, 1, "desktop probes permit local suspension")
+				case "outside work":
+					finish := requireBeginWork(t, tracker)
+					defer finish()
+					go tracker.Run(ctx)
+					time.Sleep(2 * time.Minute)
+					synctest.Wait()
+					assert.Len(t, suspended, 1, "outside work permits local suspension")
+				case "external request":
+					go tracker.Run(ctx)
+					<-suspended
+					entered, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+					go func() {
+						defer close(done)
+						tracker.Wrap(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { close(entered); <-release }), "").ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/events", nil))
+					}()
+					<-entered
+					time.Sleep(2 * time.Minute)
+					assert.Empty(t, suspended, "an in-flight request keeps local sync active")
+					close(release)
+					<-done
+					time.Sleep(59 * time.Second)
+					synctest.Wait()
+					assert.Empty(t, suspended, "request completion starts a full quiet minute")
+					time.Sleep(time.Second)
+					<-suspended
+				}
+			})
+		})
+	}
 }

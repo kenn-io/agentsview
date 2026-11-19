@@ -29,7 +29,8 @@ const lostStateReason = "the local archive lost its record of earlier pushes, as
 // A rebuild keeps this archive's push marker but drops its watermark, so
 // PostgreSQL can hold rows the rebuild dropped. The next push must be full.
 func TestPushAfterArchiveRebuildIsFull(t *testing.T) {
-	f := newResumeFixture(t, "agentsview_push_generation_test")
+	t.Parallel()
+	f := newResumeFixture(t)
 	_, err := f.sync().Push(t.Context(), false, nil)
 	require.NoError(t, err)
 	res, err := f.sync().Push(t.Context(), false, nil)
@@ -44,6 +45,7 @@ func TestPushAfterArchiveRebuildIsFull(t *testing.T) {
 }
 
 func TestPushAfterArchiveRebuildRemovesMissingSessions(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name            string
 		projects        []string
@@ -59,7 +61,7 @@ func TestPushAfterArchiveRebuildRemovesMissingSessions(t *testing.T) {
 		{name: "excluded projects", excludeProjects: []string{"outside"}, want: []string{"foreign", "legacy", "new", "outside"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newResumeFixture(t, "agentsview_push_generation_test")
+			f := newResumeFixture(t)
 			for _, id := range []string{"foreign", "legacy", "outside"} {
 				project := "proj"
 				if id == "outside" {
@@ -87,15 +89,15 @@ func TestPushAfterArchiveRebuildRemovesMissingSessions(t *testing.T) {
 			rebuilt, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "rebuilt.db"))
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, rebuilt.Close()) })
-			require.NoError(t, rebuilt.CopyArchiveIdentityFrom(f.local.Path()))
-			require.NoError(t, rebuilt.CopySyncStateFrom(f.local.Path()))
+			require.NoError(t, rebuilt.CopyArchiveIdentityFrom(t.Context(), f.local.Path()))
+			require.NoError(t, rebuilt.CopySyncStateFrom(t.Context(), f.local.Path()))
 			require.NoError(t, f.local.CloseConnections(t.Context()))
 			omitted := []string{"old", "mid", "foreign", "legacy", "outside"}
 			if tc.empty {
 				omitted = append(omitted, "new")
 			}
 			// Parser exclusions during resync omit rows without adding user deletions.
-			_, err = rebuilt.CopyOrphanedDataFromExcluding(f.local.Path(), omitted)
+			_, err = rebuilt.CopyOrphanedDataFromExcluding(t.Context(), f.local.Path(), omitted)
 			require.NoError(t, err)
 			f.local = rebuilt
 			s = f.sync()
@@ -128,7 +130,8 @@ func TestPushAfterArchiveRebuildRemovesMissingSessions(t *testing.T) {
 // archive. The first push with a new filter has saved no state of its own, so
 // it must not claim it lost any.
 func TestFirstFilteredPushDoesNotClaimLostState(t *testing.T) {
-	f := newResumeFixture(t, "agentsview_push_generation_test")
+	t.Parallel()
+	f := newResumeFixture(t)
 	_, err := f.sync().Push(t.Context(), false, nil)
 	require.NoError(t, err)
 
@@ -145,7 +148,8 @@ func TestFirstFilteredPushDoesNotClaimLostState(t *testing.T) {
 // without saving its cutoff into the replacement, and the next push must be
 // full.
 func TestPushFailsWhenTheArchiveIsRebuiltDuringIt(t *testing.T) {
-	f := newResumeFixture(t, "agentsview_push_generation_test")
+	t.Parallel()
+	f := newResumeFixture(t)
 	_, err := f.sync().Push(t.Context(), false, nil)
 	require.NoError(t, err)
 	require.NoError(t, f.local.InsertMessages(t.Context(), []db.Message{{
@@ -170,7 +174,8 @@ func TestPushFailsWhenTheArchiveIsRebuiltDuringIt(t *testing.T) {
 // A --full push that fails before it records its full push reports that it
 // never started, so a watch keeps the --full request.
 func TestFullPushFailingBeforeItsRunIsNotStarted(t *testing.T) {
-	f := newResumeFixture(t, "agentsview_push_generation_test")
+	t.Parallel()
+	f := newResumeFixture(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	for _, full := range []bool{false, true} {
@@ -185,7 +190,8 @@ func TestFullPushFailingBeforeItsRunIsNotStarted(t *testing.T) {
 // the save must still end when the archive writer never reopens, as during a
 // daemon shutdown.
 func TestFailedFullPushProgressSaveEnds(t *testing.T) {
-	f := newResumeFixture(t, "agentsview_push_generation_test")
+	t.Parallel()
+	f := newResumeFixture(t)
 	s := f.sync()
 	s.fullRunSaveTimeout = 100 * time.Millisecond
 	ctx, cancel := context.WithCancel(t.Context())

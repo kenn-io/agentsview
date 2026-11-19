@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"slices"
 	"strconv"
 )
 
@@ -170,7 +171,7 @@ func stagedSessionContentDigestTx(ctx context.Context,
 	h := sha256.New()
 	rows, err := tx.QueryContext(ctx, `
 		SELECT ordinal, role, content, thinking_text,
-		       dialogue_text IS NOT NULL, COALESCE(dialogue_text, ''), COALESCE(timestamp, ''),
+		       dialogue_text IS NOT NULL OR dialogue_is_content, COALESCE(`+sqliteDialogueExprBare+`, ''), COALESCE(timestamp, ''),
 		       has_thinking, has_tool_use, content_length, is_system, model,
 		       reasoning_effort, token_usage, context_tokens, output_tokens,
 		       has_context_tokens, has_output_tokens,
@@ -462,7 +463,7 @@ func (db *DB) replaceSessionContentStaged(
 		return err
 	}
 	if err := replaceSessionMessagesTxStaged(
-		ctx, tx, sessionID, msgs, staged, blocked,
+		ctx, tx, sessionID, msgs, staged, blocked, write,
 	); err != nil {
 		return err
 	}
@@ -507,6 +508,9 @@ func (db *DB) replaceSessionContentStaged(
 		}
 	}
 	if err := bumpTranscriptRevisionTx(tx, sessionID); err != nil {
+		return err
+	}
+	if err := refreshImageTextOccurrencesTx(tx, sessionID); err != nil {
 		return err
 	}
 	if err := reconcileRecallEvidenceForSessionTx(
@@ -601,7 +605,7 @@ func detachStagedConn(ctx context.Context, conn *sql.Conn) {
 // the fly, and the event rows come from the staged handle.
 func replaceSessionMessagesTxStaged(
 	ctx context.Context, tx *sql.Tx, sessionID string, msgs []Message,
-	staged StagedToolResults, blocked map[string]bool,
+	staged StagedToolResults, blocked map[string]bool, write *SessionBatchWrite,
 ) error {
 	pins, err := savePinsTx(tx, sessionID, msgs)
 	if err != nil {
@@ -634,7 +638,13 @@ func replaceSessionMessagesTxStaged(
 		chunkBytes = 0
 		return nil
 	}
+	var retainedMessages []Message
 	for i, m := range msgs {
+		var retainedMessage Message
+		if write != nil && write.CodexForkState != nil {
+			retainedMessage = m
+			retainedMessage.ToolCalls = slices.Clone(m.ToolCalls)
+		}
 		for callIdx := range m.ToolCalls {
 			tc := ToolCall{
 				MessageID:         ids[i],
@@ -648,27 +658,44 @@ func replaceSessionMessagesTxStaged(
 				FilePath:          m.ToolCalls[callIdx].FilePath,
 				CallIndex:         callIdx,
 			}
-			if tc.ToolUseID != "" {
-				occurrence := callOccurrences[tc.ToolUseID]
-				callOccurrences[tc.ToolUseID] = occurrence + 1
-				stageKey := StagedToolCallKey(tc.ToolUseID, occurrence)
-				positions[stageKey] = StagedToolCallPosition{
-					ToolUseID: tc.ToolUseID,
-					Ordinal:   m.Ordinal,
-					CallIndex: callIdx,
+			occurrence := callOccurrences[tc.ToolUseID]
+			callOccurrences[tc.ToolUseID] = occurrence + 1
+			stageKey := StagedToolCallKey(tc.ToolUseID, occurrence)
+			forkCall, retained := false, false
+			if write != nil && write.CodexForkState != nil {
+				originalKey, mapped := write.StagedToolKeys[stageKey]
+				forkCall, retained = mapped, !mapped
+				if mapped {
+					stageKey = originalKey
 				}
-				summary, length, err := staged.ResolveSummary(
-					ctx, stageKey,
-				)
-				if err != nil {
-					return fmt.Errorf(
-						"resolving staged summary for %s/%s: %w",
-						sessionID, tc.ToolUseID, err,
+			}
+			// Archive-only calls use occurrence keys even without a provider ID.
+			if tc.ToolUseID != "" || forkCall {
+				if !retained {
+					if retainedMessage.ToolCalls != nil {
+						retainedMessage.ToolCalls[callIdx].ResultEvents = nil
+					}
+					positions[stageKey] = StagedToolCallPosition{
+						ToolUseID: tc.ToolUseID,
+						Ordinal:   m.Ordinal,
+						CallIndex: callIdx,
+					}
+					summary, length, err := staged.ResolveSummary(
+						ctx, stageKey,
 					)
-				}
-				tc.ResultContentLength = length
-				if !blocked[tc.Category] {
-					tc.ResultContent = summary
+					if err != nil {
+						return fmt.Errorf(
+							"resolving staged summary for %s/%s: %w",
+							sessionID, tc.ToolUseID, err,
+						)
+					}
+					tc.ResultContentLength = length
+					if !blocked[tc.Category] {
+						tc.ResultContent = summary
+					}
+				} else {
+					tc.ResultContent = m.ToolCalls[callIdx].ResultContent
+					tc.ResultContentLength = m.ToolCalls[callIdx].ResultContentLength
 				}
 				chunkBytes += int64(len(tc.ResultContent))
 			}
@@ -685,6 +712,9 @@ func replaceSessionMessagesTxStaged(
 				}
 			}
 		}
+		if retainedMessage.ToolCalls != nil {
+			retainedMessages = append(retainedMessages, retainedMessage)
+		}
 	}
 	if err := flush(); err != nil {
 		return err
@@ -693,6 +723,11 @@ func replaceSessionMessagesTxStaged(
 	if err := staged.InsertEventsTx(
 		ctx, tx, sessionID, positions,
 	); err != nil {
+		return err
+	}
+	// Retained archive rows carry their complete result events in memory.
+	// Parsed rows carry placeholders and get their events from scratch above.
+	if err := insertToolResultEventsTx(tx, resolveToolResultEvents(retainedMessages)); err != nil {
 		return err
 	}
 	return restorePinsTx(tx, sessionID, pins)

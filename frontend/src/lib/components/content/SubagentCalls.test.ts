@@ -77,9 +77,9 @@ describe("SubagentCalls measured timing", () => {
       await tick();
 
       const durations = [...document.querySelectorAll(".cd")].map((el) => el.textContent?.trim());
-      expect(durations.slice(0, 2)).toEqual(["2.0s", "unknown"]);
+      expect(durations.slice(0, 2)).toEqual(["2.0s", ""]);
       if (running) expect(durations[2]).toMatch(/^running /);
-      else expect(durations[2]).toBe("unknown");
+      else expect(durations[2]).toBe("");
       expect(
         [...document.querySelectorAll<HTMLElement>(".cbar")].map((el) => el.style.width),
       ).toEqual(["50%", "0%", "0%"]);

@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -17,8 +16,9 @@ import (
 func TestStoreGetAnalyticsActivityModelFilterCountsOnlyMatchingMessages(
 	t *testing.T,
 ) {
-	_, store := prepareUsageSchema(t, "agentsview_activity_model_messages_test")
-	ctx := context.Background()
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -58,8 +58,9 @@ func TestStoreGetAnalyticsActivityModelFilterCountsOnlyMatchingMessages(
 func TestStoreGetAnalyticsActivityModelFilterKeepsNullTimestampSessionsWithoutTimeFilter(
 	t *testing.T,
 ) {
-	_, store := prepareUsageSchema(t, "agentsview_activity_model_null_ts_test")
-	ctx := context.Background()
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -99,8 +100,9 @@ func TestStoreGetAnalyticsActivityModelFilterKeepsNullTimestampSessionsWithoutTi
 func TestStoreGetAnalyticsActivityModelAndHourFilterUseSameMessage(
 	t *testing.T,
 ) {
-	_, store := prepareUsageSchema(t, "agentsview_activity_model_hour_test")
-	ctx := context.Background()
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -136,8 +138,9 @@ func TestStoreGetAnalyticsActivityModelAndHourFilterUseSameMessage(
 func TestStoreGetAnalyticsActivityModelAndHourFilterKeepsPairedUserTurn(
 	t *testing.T,
 ) {
-	_, store := prepareUsageSchema(t, "agentsview_activity_model_hour_paired_test")
-	ctx := context.Background()
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -180,8 +183,9 @@ func TestStoreGetAnalyticsActivityModelAndHourFilterKeepsPairedUserTurn(
 func TestStoreGetAnalyticsHeatmapSessionsModelAndHourFilterKeepsPairedUserTurn(
 	t *testing.T,
 ) {
-	_, store := prepareUsageSchema(t, "agentsview_heatmap_sessions_paired_test")
-	ctx := context.Background()
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -220,8 +224,9 @@ func TestStoreGetAnalyticsHeatmapSessionsModelAndHourFilterKeepsPairedUserTurn(
 func TestStoreGetAnalyticsTopSessionsDurationModelAndHourFilterKeepsPairedUserTurn(
 	t *testing.T,
 ) {
-	_, store := prepareUsageSchema(t, "agentsview_top_duration_paired_test")
-	ctx := context.Background()
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -261,8 +266,9 @@ func TestStoreGetAnalyticsTopSessionsDurationModelAndHourFilterKeepsPairedUserTu
 func TestStoreGetAnalyticsActivityModelAndHourFilterCountsOnlyMatchingHourRows(
 	t *testing.T,
 ) {
-	_, store := prepareUsageSchema(t, "agentsview_activity_model_hour_rows_test")
-	ctx := context.Background()
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -312,8 +318,9 @@ func TestStoreGetAnalyticsActivityModelAndHourFilterCountsOnlyMatchingHourRows(
 func TestStoreGetAnalyticsHourOfWeekModelFilterCountsOnlyMatchingMessages(
 	t *testing.T,
 ) {
-	_, store := prepareUsageSchema(t, "agentsview_hour_of_week_model_messages_test")
-	ctx := context.Background()
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -349,8 +356,9 @@ func TestStoreGetAnalyticsHourOfWeekModelFilterCountsOnlyMatchingMessages(
 func TestStoreGetAnalyticsHourOfWeekModelFilterIncludesPairedUserTurns(
 	t *testing.T,
 ) {
-	_, store := prepareUsageSchema(t, "agentsview_hour_of_week_model_paired_test")
-	ctx := context.Background()
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -388,8 +396,9 @@ func TestStoreGetAnalyticsHourOfWeekModelFilterIncludesPairedUserTurns(
 func TestStoreGetAnalyticsToolsModelFilterCountsOnlyMatchingToolCalls(
 	t *testing.T,
 ) {
-	_, store := prepareUsageSchema(t, "agentsview_tools_model_calls_test")
-	ctx := context.Background()
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -450,8 +459,9 @@ func TestStoreGetAnalyticsToolsModelFilterCountsOnlyMatchingToolCalls(
 func TestStoreGetAnalyticsToolsModelAndHourFilterCountsOnlyMatchingHourToolCalls(
 	t *testing.T,
 ) {
-	_, store := prepareUsageSchema(t, "agentsview_tools_model_hour_calls_test")
-	ctx := context.Background()
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -503,8 +513,9 @@ func TestStoreGetAnalyticsToolsModelAndHourFilterCountsOnlyMatchingHourToolCalls
 func TestStoreGetAnalyticsSkillsModelFilterCountsOnlyMatchingSkillCalls(
 	t *testing.T,
 ) {
-	_, store := prepareUsageSchema(t, "agentsview_skills_model_calls_test")
-	ctx := context.Background()
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -553,8 +564,9 @@ func TestStoreGetAnalyticsSkillsModelFilterCountsOnlyMatchingSkillCalls(
 func TestStoreGetAnalyticsSummaryModelFilterCountsOnlyMatchingMessages(
 	t *testing.T,
 ) {
-	_, store := prepareUsageSchema(t, "agentsview_summary_model_messages_test")
-	ctx := context.Background()
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -596,8 +608,9 @@ func TestStoreGetAnalyticsSummaryModelFilterCountsOnlyMatchingMessages(
 func TestStoreGetAnalyticsSummaryModelsUseMatchingHourRowsOnly(
 	t *testing.T,
 ) {
-	_, store := prepareUsageSchema(t, "agentsview_summary_hour_models_test")
-	ctx := context.Background()
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -634,8 +647,9 @@ func TestStoreGetAnalyticsSummaryModelsUseMatchingHourRowsOnly(
 func TestStoreGetAnalyticsSummaryModelFilterUsesFilteredOutputTokens(
 	t *testing.T,
 ) {
-	_, store := prepareUsageSchema(t, "agentsview_summary_model_output_tokens_test")
-	ctx := context.Background()
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -692,8 +706,9 @@ func TestStoreGetAnalyticsSummaryModelFilterUsesFilteredOutputTokens(
 func TestStoreGetAnalyticsProjectsModelFilterCountsOnlyMatchingMessages(
 	t *testing.T,
 ) {
-	_, store := prepareUsageSchema(t, "agentsview_projects_model_messages_test")
-	ctx := context.Background()
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -732,8 +747,9 @@ func TestStoreGetAnalyticsProjectsModelFilterCountsOnlyMatchingMessages(
 func TestStoreGetAnalyticsHeatmapModelFilterCountsOnlyMatchingMessages(
 	t *testing.T,
 ) {
-	_, store := prepareUsageSchema(t, "agentsview_heatmap_model_messages_test")
-	ctx := context.Background()
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -769,8 +785,9 @@ func TestStoreGetAnalyticsHeatmapModelFilterCountsOnlyMatchingMessages(
 func TestStoreGetAnalyticsHeatmapModelFilterUsesFilteredOutputTokens(
 	t *testing.T,
 ) {
-	_, store := prepareUsageSchema(t, "agentsview_heatmap_model_output_tokens_test")
-	ctx := context.Background()
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -824,8 +841,9 @@ func TestStoreGetAnalyticsHeatmapModelFilterUsesFilteredOutputTokens(
 func TestStoreGetAnalyticsTopSessionsMessagesUseFilteredModelCounts(
 	t *testing.T,
 ) {
-	_, store := prepareUsageSchema(t, "agentsview_top_sessions_model_messages_test")
-	ctx := context.Background()
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -877,8 +895,9 @@ func TestStoreGetAnalyticsTopSessionsMessagesUseFilteredModelCounts(
 func TestStoreGetAnalyticsTopSessionsOutputTokensUseFilteredModelTotals(
 	t *testing.T,
 ) {
-	_, store := prepareUsageSchema(t, "agentsview_top_sessions_model_output_tokens_test")
-	ctx := context.Background()
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -945,13 +964,14 @@ func TestStoreGetAnalyticsTopSessionsOutputTokensUseFilteredModelTotals(
 
 // The model-scoped messages/output_tokens path drops the SQL LIMIT to re-rank
 // by filtered counts in Go, so it must reapply the top-10 cap before returning
-// like SQLite and DuckDB. Seed more than 10 model-matching sessions and assert
+// like SQLite. Seed more than 10 model-matching sessions and assert
 // both metrics still cap at 10 with the highest-count session first.
 func TestStoreGetAnalyticsTopSessionsModelFilterCapsAtTen(
 	t *testing.T,
 ) {
-	_, store := prepareUsageSchema(t, "agentsview_top_sessions_model_cap_test")
-	ctx := context.Background()
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
 
 	const sessionCount = 12
 	var sessionRows, messageRows []string
@@ -1013,8 +1033,9 @@ func TestStoreGetAnalyticsTopSessionsModelFilterCapsAtTen(
 func TestStoreGetAnalyticsVelocityModelFilterUsesMatchingRowsOnly(
 	t *testing.T,
 ) {
-	_, store := prepareUsageSchema(t, "agentsview_velocity_model_rows_test")
-	ctx := context.Background()
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -1069,8 +1090,9 @@ func TestStoreGetAnalyticsVelocityModelFilterUsesMatchingRowsOnly(
 func TestStoreGetAnalyticsVelocityModelFilterPreservesSubsecondTimestamps(
 	t *testing.T,
 ) {
-	_, store := prepareUsageSchema(t, "agentsview_velocity_model_subsecond_test")
-	ctx := context.Background()
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -1108,8 +1130,9 @@ func TestStoreGetAnalyticsVelocityModelFilterPreservesSubsecondTimestamps(
 func TestStoreGetAnalyticsVelocityModelFilterCountsNullTimestampToolCallsWithoutTimeFilter(
 	t *testing.T,
 ) {
-	_, store := prepareUsageSchema(t, "agentsview_velocity_model_null_tool_ts_test")
-	ctx := context.Background()
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -1163,8 +1186,9 @@ func TestStoreGetAnalyticsVelocityModelFilterCountsNullTimestampToolCallsWithout
 func TestStoreGetAnalyticsSignalSessionsModelFilterKeepsParserUserEvidence(
 	t *testing.T,
 ) {
-	_, store := prepareUsageSchema(t, "agentsview_signal_model_parser_user_test")
-	ctx := context.Background()
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -1204,8 +1228,9 @@ func TestStoreGetAnalyticsSignalSessionsModelFilterKeepsParserUserEvidence(
 func TestStoreGetAnalyticsSessionShapeModelFilterUsesMatchingRowsOnly(
 	t *testing.T,
 ) {
-	_, store := prepareUsageSchema(t, "agentsview_shape_model_rows_test")
-	ctx := context.Background()
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (
@@ -1284,8 +1309,9 @@ func TestStoreGetAnalyticsSessionShapeModelFilterUsesMatchingRowsOnly(
 func TestStoreGetAnalyticsVelocityModelFilterUsesMatchingComplexityBucket(
 	t *testing.T,
 ) {
-	_, store := prepareUsageSchema(t, "agentsview_velocity_model_complexity_test")
-	ctx := context.Background()
+	t.Parallel()
+	_, store := prepareUsageSchema(t, usageTestSchema)
+	ctx := t.Context()
 
 	_, err := store.DB().ExecContext(ctx, `
 		INSERT INTO sessions (

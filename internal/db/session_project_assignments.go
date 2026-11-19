@@ -206,6 +206,12 @@ func (db *DB) ClearSessionProjectAssignment(
 		}
 		effectiveProject = update.nextProject
 	}
+	if err := applyRecordedRepositoryProjectTx(ctx, tx, sessionID); err != nil {
+		return ClearedSessionProjectAssignment{}, err
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT project FROM sessions WHERE id = ?`, sessionID).Scan(&effectiveProject); err != nil {
+		return ClearedSessionProjectAssignment{}, err
+	}
 	if assignedProject != effectiveProject {
 		if err := reconcileSessionProjectIdentityAggregatesTx(
 			ctx, tx, sessionID, []string{assignedProject, effectiveProject},

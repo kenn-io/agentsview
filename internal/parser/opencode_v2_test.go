@@ -29,10 +29,10 @@ func TestOpenCodeV2BetaWorkflow(t *testing.T) {
 	require.NoError(t, err)
 
 	const id = "ses_f78f34fafffeIugr4PB2oXkVD0"
-	metas, err := ListOpenCodeSessionMeta(path)
+	metas, err := ListOpenCodeSessionMeta(t.Context(), path)
 	require.NoError(t, err)
 	require.Len(t, metas, 3)
-	watermarks, err := ListOpenCodeSessionWatermarkMeta(path)
+	watermarks, err := ListOpenCodeSessionWatermarkMeta(t.Context(), path)
 	require.NoError(t, err)
 	require.Len(t, watermarks, 3)
 	assert.True(t, watermarks[0].WatermarkOnly)
@@ -177,7 +177,7 @@ func TestOpenCodeV2Projection(t *testing.T) {
 	assert.Equal(t, "opencode:ses_parent", sess.ParentSessionID)
 	assert.Equal(t, "Check the query", sess.FirstMessage)
 	assert.Equal(t, "/workspace/project-a", sess.Cwd)
-	before, err := ListOpenCodeSessionMeta(path)
+	before, err := ListOpenCodeSessionMeta(t.Context(), path)
 	require.NoError(t, err)
 
 	// Text.Ended, Tool.Success and Step.Ended update a projection in place.
@@ -191,7 +191,7 @@ func TestOpenCodeV2Projection(t *testing.T) {
  "state":{"status":"completed","input":{"command":"explain query"},"structured":{},"content":[{"type":"text","text":"Index scan"}]}},
  {"type":"text","id":"a","text":"Use the index"}]}' WHERE id = 'msg_a'`)
 	require.NoError(t, err)
-	after, err := ListOpenCodeSessionMeta(path)
+	after, err := ListOpenCodeSessionMeta(t.Context(), path)
 	require.NoError(t, err)
 	require.Len(t, after, 1)
 	assert.Equal(t, before[0].FileMtime, after[0].FileMtime)
@@ -208,7 +208,9 @@ func TestOpenCodeV2Projection(t *testing.T) {
 	assert.Equal(t, "[Thinking]\nInspect the plan\n[/Thinking]\nUse the index", msgs[1].Content)
 	assert.True(t, msgs[1].HasThinking)
 	assert.Equal(t, "gpt-5.4", msgs[1].Model)
-	assert.JSONEq(t, `{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":30,"cache_creation_input_tokens":0}`, string(msgs[1].TokenUsage))
+	// v2 writers store output without reasoning; stored output adds it back.
+	assert.JSONEq(t, `{"input_tokens":100,"output_tokens":25,"reasoning_tokens":5,"cache_read_input_tokens":30,"cache_creation_input_tokens":0}`, string(msgs[1].TokenUsage))
+	assert.Equal(t, 25, msgs[1].OutputTokens)
 	require.Len(t, msgs[1].ToolCalls, 1)
 	call := msgs[1].ToolCalls[0]
 	assert.Equal(t, "call_a", call.ToolUseID)
@@ -221,7 +223,7 @@ func TestOpenCodeV2Projection(t *testing.T) {
 	// Revert.Committed removes later projection rows without lowering session time.
 	_, err = writer.ExecContext(t.Context(), `DELETE FROM session_message WHERE session_id = 'ses_v2' AND seq > 10`)
 	require.NoError(t, err)
-	reverted, err := ListOpenCodeSessionMeta(path)
+	reverted, err := ListOpenCodeSessionMeta(t.Context(), path)
 	require.NoError(t, err)
 	assert.NotEqual(t, after[0].ChildDigest, reverted[0].ChildDigest)
 	_, msgs, err = parseOpenCodeDBSession(path, "ses_v2", "host-a")
@@ -450,9 +452,9 @@ func TestOpenCodeV2UpgradeCoexistence(t *testing.T) {
  ('msg_ses_b','ses_b','user',1,1000,1000,'{"text":"Migrated prompt"}'),
  ('msg_ses_c','ses_c','user',1,1000,1000,'{"text":"Beta prompt"}')`)
 	require.NoError(t, err)
-	full, err := ListOpenCodeSessionMeta(path)
+	full, err := ListOpenCodeSessionMeta(t.Context(), path)
 	require.NoError(t, err)
-	watermarks, err := ListOpenCodeSessionWatermarkMeta(path)
+	watermarks, err := ListOpenCodeSessionWatermarkMeta(t.Context(), path)
 	require.NoError(t, err)
 	require.Len(t, full, 3)
 	require.Len(t, watermarks, 3)
@@ -480,7 +482,7 @@ func TestOpenCodeV2UpgradeCoexistence(t *testing.T) {
 	// Execution completion alone must advance both passive and active freshness.
 	_, err = writer.ExecContext(t.Context(), "UPDATE session_v2 SET time_idle = 6000 WHERE id = 'ses_c'")
 	require.NoError(t, err)
-	next, err := ListOpenCodeSessionWatermarkMeta(path)
+	next, err := ListOpenCodeSessionWatermarkMeta(t.Context(), path)
 	require.NoError(t, err)
 	require.Len(t, next, 3)
 	assert.Equal(t, int64(6000_000_000), next[2].FileMtime)
@@ -493,7 +495,7 @@ func TestOpenCodeV2UpgradeCoexistence(t *testing.T) {
  INSERT INTO kv VALUES ('migration.v1-v2', '{"phase":"sessions","cursor":"ses_b"}');
  DELETE FROM session_v2 WHERE id = 'ses_b'`)
 	require.NoError(t, err)
-	full, err = ListOpenCodeSessionMeta(path)
+	full, err = ListOpenCodeSessionMeta(t.Context(), path)
 	require.NoError(t, err)
 	require.Len(t, full, 2)
 	assert.Equal(t, "ses_a", full[0].SessionID)
@@ -504,7 +506,7 @@ func TestOpenCodeV2UpgradeCoexistence(t *testing.T) {
 	assert.False(t, found)
 	_, err = writer.ExecContext(t.Context(), `UPDATE kv SET value = '{"phase":"completed"}' WHERE key = 'migration.v1-v2'`)
 	require.NoError(t, err)
-	watermarks, err = ListOpenCodeSessionWatermarkMeta(path)
+	watermarks, err = ListOpenCodeSessionWatermarkMeta(t.Context(), path)
 	require.NoError(t, err)
 	require.Len(t, watermarks, 1)
 	assert.Equal(t, "ses_c", watermarks[0].SessionID)

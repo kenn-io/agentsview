@@ -54,7 +54,7 @@ func TestRawSyncServerStatusJSON(t *testing.T) {
 	t.Setenv("AGENTSVIEW_RAW_SYNC_CREDENTIAL", "credential-value")
 
 	output, err := executeCommand(
-		newRootCommand(), "raw-sync", "server-status",
+		newRootCommand(), "source", "raw", "server-status",
 		"--server", server.URL, "--device-id", "device-a", "--allow-insecure-http",
 	)
 
@@ -153,7 +153,7 @@ func TestRawSyncServerStatusLocalIndependence(t *testing.T) {
 	server := newRawSyncStatusTestServer(t, rawsync.Status{})
 
 	output, err := executeCommand(
-		newRootCommand(), "raw-sync", "server-status", "--server", server.URL,
+		newRootCommand(), "source", "raw", "server-status", "--server", server.URL,
 		"--device-id", "device-a", "--allow-insecure-http",
 	)
 
@@ -165,7 +165,7 @@ func TestRawSyncServerStatusLocalIndependence(t *testing.T) {
 	missingDataDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", missingDataDir)
 	output, err = executeCommand(
-		newRootCommand(), "raw-sync", "server-status", "--server", server.URL,
+		newRootCommand(), "source", "raw", "server-status", "--server", server.URL,
 		"--device-id", "device-a", "--allow-insecure-http",
 	)
 	require.NoError(t, err)
@@ -199,7 +199,7 @@ func TestRawSyncServerStatusErrors(t *testing.T) {
 				t.Cleanup(server.Close)
 
 				output, err := executeCommand(
-					newRootCommand(), "raw-sync", "server-status", "--server", server.URL,
+					newRootCommand(), "source", "raw", "server-status", "--server", server.URL,
 					"--device-id", "device-a", "--allow-insecure-http",
 				)
 
@@ -233,7 +233,7 @@ func TestRawSyncServerStatusErrors(t *testing.T) {
 			t.Cleanup(server.Close)
 
 			output, err := executeCommand(
-				newRootCommand(), "raw-sync", "server-status", "--server", server.URL,
+				newRootCommand(), "source", "raw", "server-status", "--server", server.URL,
 				"--device-id", "device-a", "--allow-insecure-http",
 			)
 
@@ -249,7 +249,7 @@ func TestRawSyncServerStatusErrors(t *testing.T) {
 		server.Close()
 		t.Setenv("AGENTSVIEW_RAW_SYNC_CREDENTIAL", "credential-value")
 		output, err := executeCommand(
-			newRootCommand(), "raw-sync", "server-status", "--server", server.URL,
+			newRootCommand(), "source", "raw", "server-status", "--server", server.URL,
 			"--device-id", "device-a", "--allow-insecure-http",
 		)
 		assert.Empty(t, output)
@@ -269,7 +269,7 @@ func TestRawSyncServerStatusErrors(t *testing.T) {
 		})
 		t.Setenv("AGENTSVIEW_RAW_SYNC_CREDENTIAL", "credential-value")
 		output, err := executeCommand(
-			newRootCommand(), "raw-sync", "server-status", "--server", server.URL,
+			newRootCommand(), "source", "raw", "server-status", "--server", server.URL,
 			"--device-id", "device-a", "--allow-insecure-http",
 		)
 		assert.Empty(t, output)
@@ -293,7 +293,7 @@ func TestRawSyncServerStatusErrors(t *testing.T) {
 		t.Setenv("AGENTSVIEW_RAW_SYNC_CREDENTIAL", "credential-value")
 
 		output, err := executeCommand(
-			newRootCommand(), "raw-sync", "server-status", "--server", server.URL,
+			newRootCommand(), "source", "raw", "server-status", "--server", server.URL,
 			"--device-id", "device-a", "--allow-insecure-http",
 		)
 
@@ -320,7 +320,7 @@ func TestRawSyncServerStatusConfig(t *testing.T) {
 	t.Setenv("AGENTSVIEW_RAW_SYNC_CREDENTIAL", "credential-value")
 
 	output, err := executeCommand(
-		newRootCommand(), "raw-sync", "server-status", "--server", server.URL,
+		newRootCommand(), "source", "raw", "server-status", "--server", server.URL,
 		"--device-id", "flag-device", "--allow-insecure-http",
 	)
 	require.NoError(t, err)
@@ -331,7 +331,7 @@ func TestRawSyncServerStatusConfig(t *testing.T) {
 	t.Setenv("AGENTSVIEW_RAW_SYNC_URL", server.URL)
 	requests.Store(0)
 	output, err = executeCommand(
-		newRootCommand(), "raw-sync", "server-status", "--server", "   ",
+		newRootCommand(), "source", "raw", "server-status", "--server", "   ",
 		"--device-id", "\t", "--allow-insecure-http",
 	)
 	require.NoError(t, err)
@@ -342,14 +342,14 @@ func TestRawSyncServerStatusConfig(t *testing.T) {
 	t.Setenv("AGENTSVIEW_RAW_SYNC_URL", "")
 	t.Setenv("AGENTSVIEW_RAW_SYNC_DEVICE_ID", "")
 	requests.Store(0)
-	_, err = executeCommand(newRootCommand(), "raw-sync", "server-status")
+	_, err = executeCommand(newRootCommand(), "source", "raw", "server-status")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--server or AGENTSVIEW_RAW_SYNC_URL is required")
 	assert.Zero(t, requests.Load())
 
 	t.Setenv("AGENTSVIEW_RAW_SYNC_URL", server.URL)
 	t.Setenv("AGENTSVIEW_RAW_SYNC_DEVICE_ID", "env-device")
-	_, err = executeCommand(newRootCommand(), "raw-sync", "server-status", "extra")
+	_, err = executeCommand(newRootCommand(), "source", "raw", "server-status", "extra")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown command")
 }
@@ -361,7 +361,7 @@ func TestValidateRawSyncConnection(t *testing.T) {
 }
 
 func TestRawSyncServerStatusHelp(t *testing.T) {
-	help, err := executeCommand(newRootCommand(), "raw-sync", "server-status", "--help")
+	help, err := executeCommand(newRootCommand(), "source", "raw", "server-status", "--help")
 	require.NoError(t, err)
 	for _, want := range []string{
 		"server-status", "--server", "--device-id", "--allow-insecure-http",

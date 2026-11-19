@@ -29,7 +29,8 @@ const defaultKimiWorkModel = "daimon-kimi-code"
 func newKimiWorkProviderFactory(def AgentDef) ProviderFactory {
 	return NewSourceSetFactory(
 		def,
-		kimiProviderCapabilities(),
+		// Kimi's title companions do not apply to Kimi Work sessions.
+		withPollMetadataScan(kimiProviderCapabilities()),
 		func(cfg ProviderConfig) SourceSet {
 			return newKimiWorkSourceSet(cfg.Roots)
 		},
@@ -57,10 +58,10 @@ func newKimiWorkSourceSet(roots []string) JSONLSourceSet {
 }
 
 func kimiWorkParseFile(
-	_ context.Context, path string, req ParseRequest,
+	ctx context.Context, path string, req ParseRequest,
 ) ([]ParseResult, []string, error) {
 	sess, msgs, err := parseKimiSessionWithFallbackModel(
-		path, req.Source.ProjectHint, req.Machine, defaultKimiWorkModel,
+		ctx, path, req.Source.ProjectHint, req.Machine, defaultKimiWorkModel,
 	)
 	if err != nil {
 		return nil, nil, err

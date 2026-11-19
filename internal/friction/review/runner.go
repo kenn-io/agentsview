@@ -12,6 +12,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 	"uuid"
 
@@ -55,6 +56,23 @@ type Runner struct {
 	Now          func() time.Time
 	BackfillDays int
 	SeatPatterns []friction.SeatPattern
+
+	// afterCatchUp runs after each scheduled catch-up; see SetAfterCatchUp.
+	afterCatchUp atomic.Pointer[func(context.Context) error]
+}
+
+// SetAfterCatchUp installs work the hourly job runs after catching up, such
+// as automatic filing. The server installs it once it has the Kata
+// connection, which can be after the job's first run; that run skips it.
+func (r *Runner) SetAfterCatchUp(f func(context.Context) error) {
+	r.afterCatchUp.Store(&f)
+}
+
+func (r *Runner) runAfterCatchUp(ctx context.Context) error {
+	if f := r.afterCatchUp.Load(); f != nil && *f != nil {
+		return (*f)(ctx)
+	}
+	return nil
 }
 
 type BuildOptions struct{ Rebuild, DryRun bool }
@@ -117,7 +135,7 @@ func patternUpdates(date string, sigs []friction.Signal, skip map[string]bool) [
 	idx := map[key]int{}
 	out := []db.FrictionPatternUpdate{}
 	for _, s := range sigs {
-		if skip[s.SubjectID] {
+		if skip[s.SubjectID] || s.SubjectKind == friction.SubjectDiagnostic {
 			continue
 		}
 		k := key{s.Fingerprint(), s.SubjectID}
@@ -137,8 +155,8 @@ func patternUpdates(date string, sigs []friction.Signal, skip map[string]bool) [
 	return out
 }
 
-// diagnosticSignals returns the date's diagnostic signals ordered by
-// identity then Seq, forcing SubjectKind. On a rebuild, identities recorded
+// diagnosticSignals returns the date's diagnostic signals in occurrence order,
+// forcing SubjectKind. On a rebuild, identities recorded
 // by the earlier build are kept even if the source no longer returns them.
 // A source error fails the build (the poller retries): skipping would drop
 // those diagnostics from a date that is then never rebuilt.
@@ -168,6 +186,12 @@ func (r *Runner) diagnosticSignals(
 		out[i].SubjectKind = friction.SubjectDiagnostic
 	}
 	sort.SliceStable(out, func(i, j int) bool {
+		if !out[i].OccurredAt.Equal(out[j].OccurredAt) {
+			return out[i].OccurredAt.Before(out[j].OccurredAt)
+		}
+		if !out[i].OccurredAt.IsZero() {
+			return false
+		}
 		if out[i].SubjectID != out[j].SubjectID {
 			return out[i].SubjectID < out[j].SubjectID
 		}
@@ -284,7 +308,7 @@ func (r *Runner) buildDate(ctx context.Context, date string, opts BuildOptions) 
 		signals = append(signals, sigs...)
 	}
 
-	// Diagnostic subjects come last, ordered by identity (spec §8.3 step 1).
+	// Diagnostic subjects come last, ordered by occurrence.
 	// A rebuild keeps the diagnostic members the first build recorded.
 	var prior *Snapshot
 	if existing != nil {
@@ -299,9 +323,11 @@ func (r *Runner) buildDate(ctx context.Context, date string, opts BuildOptions) 
 		return Report{}, err
 	}
 	diagIDs := []string{}
+	seenDiagnostics := map[string]bool{}
 	for _, sig := range diagnostics {
-		if len(diagIDs) == 0 || diagIDs[len(diagIDs)-1] != sig.SubjectID {
+		if !seenDiagnostics[sig.SubjectID] {
 			diagIDs = append(diagIDs, sig.SubjectID)
+			seenDiagnostics[sig.SubjectID] = true
 		}
 	}
 	signals = append(signals, diagnostics...)
@@ -319,7 +345,7 @@ func (r *Runner) buildDate(ctx context.Context, date string, opts BuildOptions) 
 	snap := Snapshot{
 		Date: date, Signals: signals,
 		P0Alerts:        friction.DetectP0Alerts(errorSignals, func(id string) bool { return subAgent[id] }),
-		SessionsScanned: len(subjects) + len(diagIDs),
+		SessionsScanned: len(subjects),
 		Timezone:        loc.String(), RulesVersion: friction.RulesVersion,
 		Spend: fold.summary(), ArchiveSpend: archive,
 	}
@@ -408,6 +434,15 @@ func (r *Runner) catchUp(
 		return err
 	}
 	start := addDays(today, -r.backfillDays())
+	var diagnosticDates []string
+	if pending, ok := r.Diagnostics.(interface {
+		FrictionPendingDiagnosticDates(context.Context, string, *time.Location) ([]string, error)
+	}); ok {
+		diagnosticDates, err = pending.FrictionPendingDiagnosticDates(ctx, yesterday, loc)
+		if err != nil {
+			return err
+		}
+	}
 	if latest == "" {
 		// Only the initial pass needs the archive's beginning. Once a digest
 		// exists, the bounded pending-date query discovers late arrivals.
@@ -415,7 +450,7 @@ func (r *Runner) catchUp(
 		if err != nil {
 			return err
 		}
-		if earliest == "" || earliest > yesterday {
+		if (earliest == "" || earliest > yesterday) && len(diagnosticDates) == 0 {
 			return nil
 		}
 	}
@@ -443,6 +478,9 @@ func (r *Runner) catchUp(
 		}
 	}
 	for _, date := range pending {
+		dates[date] = true
+	}
+	for _, date := range diagnosticDates {
 		dates[date] = true
 	}
 	for _, date := range slices.Sorted(maps.Keys(dates)) {

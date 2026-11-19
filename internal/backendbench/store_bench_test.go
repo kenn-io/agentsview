@@ -17,7 +17,6 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/storage"
@@ -211,12 +210,10 @@ func setupBenchmarkStores(ctx context.Context, b *testing.B, fixture benchmarkFi
 	local := openSQLiteStore(b)
 	seedBenchmarkFixture(b, local, fixture)
 
-	duck := openDuckDBStore(ctx, b, local)
 	pg := openPostgresStore(ctx, b, local)
 
 	return []benchmarkStore{
 		{name: "sqlite", store: local},
-		{name: "duckdb", store: duck},
 		{name: "postgres", store: pg},
 	}
 }
@@ -234,31 +231,6 @@ func openSQLiteStore(b *testing.B) *db.DB {
 			b.Errorf("close sqlite store: %v", err)
 		}
 	})
-	return store
-}
-
-func openDuckDBStore(ctx context.Context, b *testing.B, local *db.DB) db.Store {
-	b.Helper()
-
-	path := filepath.Join(b.TempDir(), "sessions.duckdb")
-	result, err := duckdb.Push(ctx, path, local, benchmarkMachine, storage.MirrorPushOptions{}, true, nil)
-	if err != nil {
-		b.Fatalf("push duckdb fixture: %v", err)
-	}
-	if result.SessionsPushed == 0 || result.MessagesPushed == 0 {
-		b.Fatalf("duckdb fixture push wrote no rows: %+v", result)
-	}
-
-	store, err := duckdb.NewStore(ctx, path)
-	if err != nil {
-		b.Fatalf("open duckdb store: %v", err)
-	}
-	b.Cleanup(func() {
-		if err := store.Close(); err != nil {
-			b.Errorf("close duckdb store: %v", err)
-		}
-	})
-
 	return store
 }
 
@@ -297,7 +269,7 @@ func openPostgresStore(ctx context.Context, b *testing.B, local *db.DB) db.Store
 	}
 
 	syncer, err := postgres.New(
-		pgURL,
+		ctx, pgURL,
 		benchmarkSchema,
 		local,
 		benchmarkMachine,
@@ -321,7 +293,7 @@ func openPostgresStore(ctx context.Context, b *testing.B, local *db.DB) db.Store
 		b.Fatalf("postgres fixture push wrote no rows: %+v", result)
 	}
 
-	store, err := postgres.NewStore(pgURL, benchmarkSchema, true)
+	store, err := postgres.NewStore(ctx, pgURL, benchmarkSchema, true)
 	if err != nil {
 		b.Fatalf("open postgres store: %v", err)
 	}

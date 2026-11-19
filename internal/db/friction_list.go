@@ -37,6 +37,10 @@ type FrictionPattern struct {
 	SessionCount    int    `json:"session_count"`
 	LastSubjectID   string `json:"last_subject_id"`
 	LastOrdinal     *int   `json:"last_ordinal"`
+	// Issue is the linked Kata issue, or nil.
+	Issue *FrictionIssueLink `json:"issue,omitempty"`
+	// Filing is why automatic filing has not linked the pattern, or nil.
+	Filing *FrictionFilingState `json:"filing,omitempty"`
 }
 
 // FrictionFindingFilter narrows ListFrictionFindings. Date selects the
@@ -57,8 +61,12 @@ type FrictionPatternFilter struct {
 	Kind         string
 	Since        string
 	Fingerprints []string
-	Limit        int
-	Cursor       string
+	// FilingState keeps patterns in this automatic filing state.
+	FilingState string
+	// MinSessions keeps patterns seen in at least this many sessions.
+	MinSessions int
+	Limit       int
+	Cursor      string
 }
 
 // MaxFrictionFingerprints bounds one fingerprint filter, keeping SQLite and
@@ -240,18 +248,26 @@ func (db *DB) ListFrictionPatterns(
 	var preds []string
 	var args []any
 	if f.Kind != "" {
-		preds = append(preds, "kind = ?")
+		preds = append(preds, "p.kind = ?")
 		args = append(args, f.Kind)
 	}
 	if f.Since != "" {
-		preds = append(preds, "last_seen_date >= ?")
+		preds = append(preds, "p.last_seen_date >= ?")
 		args = append(args, f.Since)
+	}
+	if f.FilingState != "" {
+		preds = append(preds, "f.state = ?")
+		args = append(args, f.FilingState)
+	}
+	if f.MinSessions > 0 {
+		preds = append(preds, "p.session_count >= ?")
+		args = append(args, f.MinSessions)
 	}
 	if f.Fingerprints != nil {
 		if len(f.Fingerprints) == 0 {
 			return []FrictionPattern{}, "", nil
 		}
-		preds = append(preds, "fingerprint IN ("+strings.TrimSuffix(strings.Repeat("?,", len(f.Fingerprints)), ",")+")")
+		preds = append(preds, "p.fingerprint IN ("+strings.TrimSuffix(strings.Repeat("?,", len(f.Fingerprints)), ",")+")")
 		for _, fp := range f.Fingerprints {
 			args = append(args, fp)
 		}
@@ -262,10 +278,11 @@ func (db *DB) ListFrictionPatterns(
 	}
 	args = append(args, limit+1, offset)
 	rows, err := db.getReader().QueryContext(ctx, `
-		SELECT fingerprint, kind, title, first_seen_date, last_seen_date,
-			occurrence_count, session_count, last_subject_id, last_ordinal
-		FROM friction_patterns `+where+`
-		ORDER BY occurrence_count DESC, last_seen_date DESC, fingerprint ASC
+		SELECT p.fingerprint, p.kind, p.title, p.first_seen_date,
+			p.last_seen_date, p.occurrence_count, p.session_count,
+			p.last_subject_id, p.last_ordinal, `+frictionIssueColumns+`
+		FROM friction_patterns p `+frictionIssueJoins+` `+where+`
+		ORDER BY p.occurrence_count DESC, p.last_seen_date DESC, p.fingerprint ASC
 		LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		return nil, "", fmt.Errorf("listing friction patterns: %w", err)
@@ -276,13 +293,22 @@ func (db *DB) ListFrictionPatterns(
 		var (
 			p       FrictionPattern
 			ordinal sql.NullInt64
+			issue   frictionIssueScan
 		)
-		if err := rows.Scan(&p.Fingerprint, &p.Kind, &p.Title, &p.FirstSeenDate,
+		if err := rows.Scan(append([]any{
+			&p.Fingerprint, &p.Kind, &p.Title, &p.FirstSeenDate,
 			&p.LastSeenDate, &p.OccurrenceCount, &p.SessionCount,
-			&p.LastSubjectID, &ordinal); err != nil {
+			&p.LastSubjectID, &ordinal,
+		}, issue.targets()...)...); err != nil {
 			return nil, "", fmt.Errorf("scanning friction pattern: %w", err)
 		}
 		p.LastOrdinal = nullIntPtr(ordinal)
+		if p.Issue, err = issue.link(p.Fingerprint); err != nil {
+			return nil, "", err
+		}
+		if p.Filing, err = issue.filing(p.Fingerprint); err != nil {
+			return nil, "", err
+		}
 		out = append(out, p)
 	}
 	if err := rows.Err(); err != nil {

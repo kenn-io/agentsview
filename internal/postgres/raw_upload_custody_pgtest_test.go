@@ -15,6 +15,7 @@ import (
 )
 
 func TestRawResumableUploadEndToEnd(t *testing.T) {
+	t.Parallel()
 	pg, dataDir := newRawUploadTestDatabase(t)
 	repository, err := artifact.OpenRepository(t.Context(), dataDir)
 	require.NoError(t, err)
@@ -27,7 +28,7 @@ func TestRawResumableUploadEndToEnd(t *testing.T) {
 		objects, metadata, rawsync.DefaultManifestLimits(), "parser-data-17",
 	)
 	require.NoError(t, err)
-	sessions, err := NewRawUploadStore(pg, dataDir)
+	sessions, err := NewRawUploadStore(t.Context(), pg, dataDir)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, sessions.Close()) })
 	uploads, err := rawsync.NewUploadService(

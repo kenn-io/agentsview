@@ -6,7 +6,6 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"io"
-	"os"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -29,10 +28,10 @@ const (
 	maxHealthLimit     = db.MaxSessionLimit
 )
 
-func runHealth(cmd *cobra.Command, args []string, cfg HealthConfig) {
+func runHealth(cmd *cobra.Command, args []string, cfg HealthConfig) error {
 	svc, cleanup, err := resolveService(cmd)
 	if err != nil {
-		fatal("resolving service: %v", err)
+		return fmt.Errorf("resolving service: %w", err)
 	}
 	defer cleanup()
 
@@ -42,15 +41,15 @@ func runHealth(cmd *cobra.Command, args []string, cfg HealthConfig) {
 	}
 
 	if len(args) == 0 {
-		runHealthList(ctx, svc, cfg)
-		return
+		return runHealthList(ctx, svc, cfg, cmd.OutOrStdout())
 	}
-	runHealthDetail(ctx, svc, args[0], cfg.JSON)
+	return runHealthDetail(ctx, svc, args[0], cfg.JSON, cmd.OutOrStdout())
 }
 
 func runHealthList(
 	ctx context.Context, svc service.SessionService, cfg HealthConfig,
-) {
+	w io.Writer,
+) error {
 	limit := cfg.Limit
 	if limit <= 0 {
 		limit = defaultHealthLimit
@@ -61,49 +60,50 @@ func runHealthList(
 
 	page, err := svc.List(ctx, healthListFilter(limit))
 	if err != nil {
-		fatal("listing sessions: %v", err)
+		return fmt.Errorf("listing sessions: %w", err)
 	}
 
 	if cfg.JSON {
-		writeJSON(os.Stdout, page.Sessions)
-		return
+		return json.MarshalEncode(jsontext.NewEncoder(w, jsontext.WithIndent("  ")), page.Sessions)
 	}
 
 	if len(page.Sessions) == 0 {
-		fmt.Println("No sessions found.")
-		return
+		_, err := fmt.Fprintln(w, "No sessions found.")
+		return err
 	}
-	printHealthList(os.Stdout, page.Sessions)
+	printHealthList(w, page.Sessions)
+	return nil
 }
 
 func runHealthDetail(
 	ctx context.Context, svc service.SessionService,
-	sessionID string, asJSON bool,
-) {
+	sessionID string, asJSON bool, w io.Writer,
+) error {
 	resolved, err := resolveHealthSessionID(ctx, svc, sessionID)
 	if err != nil {
-		fatal("resolving session id: %v", err)
+		return fmt.Errorf("resolving session id: %w", err)
 	}
 	if resolved == "" {
-		fmt.Fprintf(os.Stderr,
-			"session not found: %s\n", sessionID)
-		os.Exit(1)
+		return healthSessionNotFoundError(sessionID)
 	}
 	sess, err := svc.Get(ctx, resolved)
 	if err != nil {
-		fatal("getting session: %v", err)
+		return fmt.Errorf("getting session: %w", err)
 	}
 	if sess == nil {
-		fmt.Fprintf(os.Stderr,
-			"session not found: %s\n", sessionID)
-		os.Exit(1)
+		return healthSessionNotFoundError(sessionID)
 	}
 
 	if asJSON {
-		writeJSON(os.Stdout, sess)
-		return
+		return json.MarshalEncode(jsontext.NewEncoder(w, jsontext.WithIndent("  ")), sess)
 	}
-	printHealthDetail(os.Stdout, sess.Session)
+	printHealthDetail(w, sess.Session)
+	return nil
+}
+
+func healthSessionNotFoundError(sessionID string) error {
+	return withCLIHint(fmt.Errorf("%w: %s", errSessionNotFound, sessionID),
+		"Run `agentsview session list --json` to find a session ID, then retry `agentsview health <id>`.")
 }
 
 func healthListFilter(limit int) service.ListFilter {

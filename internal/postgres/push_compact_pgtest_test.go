@@ -5,8 +5,6 @@ package postgres
 import (
 	"context"
 	"encoding/json/jsontext"
-	"fmt"
-	"math/rand/v2"
 	"net"
 	"strings"
 	"sync/atomic"
@@ -23,12 +21,11 @@ import (
 )
 
 func TestPushCompactComparisons(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	const id = "compact"
-	schema := fmt.Sprintf("agentsview_compact_%x", rand.Uint64())
-	url := testPGURL(t)
-	cleanNamedPGSchema(t, url, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
+	const schema = pgPushTestSchema
+	url := testPGSchemaURL(t, schema)
 	local := testDB(t)
 	messages := []db.Message{
 		{
@@ -72,7 +69,7 @@ func TestPushCompactComparisons(t *testing.T) {
 	}
 	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: id, Agent: "claude", Project: "sample", Machine: "machine", MessageCount: len(messages)}))
 	require.NoError(t, local.InsertMessages(ctx, messages))
-	syncer, err := New(url, schema, local, "machine", true, storage.PusherOptions{})
+	syncer, err := New(t.Context(), url, schema, local, "machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	result, err := syncer.Push(ctx, true, nil)
@@ -125,12 +122,11 @@ func TestPushCompactComparisons(t *testing.T) {
 }
 
 func TestPushCompactLegacyTextRewrittenOnce(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
-	schema := fmt.Sprintf("agentsview_compact_legacy_%x", rand.Uint64())
+	const schema = pgPushTestSchema
 	const id = "legacy"
-	url := testPGURL(t)
-	cleanNamedPGSchema(t, url, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
+	url := testPGSchemaURL(t, schema)
 	local := testDB(t)
 	require.NoError(t, local.UpsertSession(ctx, db.Session{ID: id, Agent: "claude", Project: "sample", Machine: "machine", MessageCount: 1}))
 	require.NoError(t, local.InsertMessages(ctx, []db.Message{{
@@ -145,7 +141,7 @@ func TestPushCompactLegacyTextRewrittenOnce(t *testing.T) {
 			}},
 		}},
 	}}))
-	syncer, err := New(url, schema, local, "machine", true, storage.PusherOptions{})
+	syncer, err := New(t.Context(), url, schema, local, "machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	result, err := syncer.Push(ctx, true, nil)
@@ -212,6 +208,7 @@ func (c *pushResponseConn) Read(p []byte) (int, error) {
 }
 
 func TestPushCompactResponseBytesDoNotGrowWithTranscriptBodies(t *testing.T) {
+	t.Parallel()
 	small := compactPushResponseBytes(t, 4<<10)
 	large := compactPushResponseBytes(t, 256<<10)
 	assert.LessOrEqual(t, large-small, int64(32<<10), "response traffic must not grow with transcript bodies")
@@ -220,10 +217,11 @@ func TestPushCompactResponseBytesDoNotGrowWithTranscriptBodies(t *testing.T) {
 func compactPushResponseBytes(t *testing.T, size int) int64 {
 	t.Helper()
 	ctx := t.Context()
-	schema := fmt.Sprintf("agentsview_push_response_bytes_%x", rand.Uint64())
-	url := testPGURL(t)
-	cleanNamedPGSchema(t, url, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
+	const schema = pgPushTestSchema
+	url := testPGSchemaURL(t, schema)
+	if !takeFreshSchemaCopy(t, url, schema) {
+		cleanNamedPGSchema(t, url, schema)
+	}
 	local := testDB(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{ModelPattern: "sample-model"}}))
 	require.NoError(t, local.UpsertGenAIPricing(ctx, db.GenAIPricingDocument{
@@ -241,7 +239,7 @@ func compactPushResponseBytes(t *testing.T, size int) int64 {
 	unchanged := edited[0]
 	unchanged.SessionID = "unchanged"
 	require.NoError(t, local.InsertMessages(ctx, []db.Message{unchanged}))
-	syncer, err := New(url, schema, local, "machine", true, storage.PusherOptions{})
+	syncer, err := New(t.Context(), url, schema, local, "machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	initial, err := syncer.Push(ctx, true, nil)

@@ -23,12 +23,13 @@ type RawProjectionOptions struct {
 type RawProjectionStore struct {
 	curationGuard func(context.Context, *sql.Tx, string, RawIdentity) error
 	db            *sql.DB
+	readTx        *sql.Tx
 	options       RawProjectionOptions
 }
 
 var _ rawderive.ProjectionSink = (*RawProjectionStore)(nil)
 
-func NewRawProjectionStore(database *sql.DB, options RawProjectionOptions) (*RawProjectionStore, error) {
+func NewRawProjectionStore(ctx context.Context, database *sql.DB, options RawProjectionOptions) (*RawProjectionStore, error) {
 	if options.Content.ToolResultImages == config.ToolResultImagesOffload {
 		return nil, errors.New("tool_result_images = offload is not supported for hosted raw derivation; use keep or drop")
 	}
@@ -44,7 +45,6 @@ func NewRawProjectionStore(database *sql.DB, options RawProjectionOptions) (*Raw
 	if database == nil {
 		return nil, errors.New("raw projection requires a database")
 	}
-	ctx := context.Background()
 	var schema string
 	if err := database.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
 		return nil, err
@@ -55,7 +55,7 @@ func NewRawProjectionStore(database *sql.DB, options RawProjectionOptions) (*Raw
 	if err := CheckSchemaCompat(ctx, database); err != nil {
 		return nil, fmt.Errorf("hosted schema requires owner provisioning: %w", err)
 	}
-	_, err := database.ExecContext(ctx, `SELECT s.provenance_kind,s.raw_group_id,s.raw_content_revision,j.projection_generation,j.projection_selected,c.recency_state FROM sessions s CROSS JOIN raw_ingest_jobs j CROSS JOIN raw_content_revisions c LIMIT 0`)
+	_, err := database.ExecContext(ctx, `SELECT s.provenance_kind,s.raw_group_id,s.raw_content_revision,j.projection_generation,j.projection_selected,c.recency_state,d.is_content FROM sessions s CROSS JOIN raw_ingest_jobs j CROSS JOIN raw_content_revisions c CROSS JOIN raw_message_dialogue d LIMIT 0`)
 	if err != nil {
 		return nil, fmt.Errorf("raw projection schema requires owner provisioning: %w", err)
 	}

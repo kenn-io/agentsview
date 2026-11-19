@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "id": "T-019ca26f-aaaa-bbbb-cccc-dddddddddddd",
+  "created": 1704067200000,
+  "title": "Migrate database schema",
+  "messages": [
+    {"role": "user", "content": [{"type": "text", "text": "Add a created_at column to the users table."}]},
+    {"role": "assistant", "content": [{"type": "text", "text": "I will write a migration that adds the column with a default."}]}
+  ],
+  "env": {"initial": {"trees": [{"displayName": "app", "uri": "file:///home/user/code/app"}]}},
+  "meta": {"traces": [{"name": "inference", "startTime": "2024-01-01T00:00:01Z", "endTime": "2024-01-01T00:00:02Z"}]}
+}

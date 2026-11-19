@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { Table } from "@kenn-io/kit-ui";
   import { Bar, Chart, Layer } from "layerchart";
   import { scaleBand } from "d3-scale";
@@ -41,7 +42,7 @@
       ? Math.round(score)
       : m.analytics_health_trend_no_scored_sessions()} (${m.analytics_session_shape_session_count({
         count: bucket.session_count,
-        countLabel: bucket.session_count.toLocaleString(),
+        countLabel: formatCount(bucket.session_count),
       })})`;
   }
 
@@ -110,7 +111,7 @@
                   ? Math.round(bucket.avg_health_score)
                   : m.analytics_health_trend_no_scored_sessions()}
               </td>
-              <td>{bucket.session_count.toLocaleString()}</td>
+              <td>{formatCount(bucket.session_count)}</td>
             </tr>
           {/each}
         </tbody>
@@ -149,7 +150,7 @@
     padding: 4px 8px;
     background: var(--text-primary);
     color: var(--bg-primary);
-    font-size: 10px;
+    font-size: 11px;
     border-radius: var(--radius-sm);
     white-space: nowrap;
     pointer-events: none;

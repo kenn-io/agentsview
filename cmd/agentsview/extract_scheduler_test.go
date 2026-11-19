@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -99,20 +100,20 @@ func TestExtractSchedulerNotifiesDownstreamAfterEveryStartedPass(t *testing.T) {
 	var notified int
 	s.onPassFinished = func() { notified++ }
 
-	started, ok, err := s.tryPassWithLease(t.Context(), extract.PassOptions{})
+	started, ok, err := s.tryPassWithLease(t.Context(), mgr, extract.PassOptions{})
 	assert.False(t, started)
 	assert.True(t, ok)
 	require.NoError(t, err)
 	assert.Zero(t, notified)
 
-	started, ok, err = s.tryPassWithLease(t.Context(), extract.PassOptions{})
+	started, ok, err = s.tryPassWithLease(t.Context(), mgr, extract.PassOptions{})
 	assert.True(t, started)
 	assert.True(t, ok)
 	require.EqualError(t, err, "later extraction failed")
 	assert.Equal(t, 1, notified,
 		"partial commits must refresh downstream indexes despite a later error")
 
-	started, ok, err = s.tryPassWithLease(t.Context(), extract.PassOptions{})
+	started, ok, err = s.tryPassWithLease(t.Context(), mgr, extract.PassOptions{})
 	assert.True(t, started)
 	assert.True(t, ok)
 	require.NoError(t, err)
@@ -412,4 +413,80 @@ func TestExtractSchedulerRunsStartupPass(t *testing.T) {
 			"before the backstop interval, so a completed session whose "+
 			"transcript grew between daemon lifetimes is only revisited "+
 			"here")
+}
+
+func TestExtractSchedulerReconcilesOnBatteryAndCarriesFullPass(t *testing.T) {
+	for _, tc := range []struct {
+		name                       string
+		battery, resume, notify    bool
+		backstop, catchup, after   time.Duration
+		wantPasses, wantReconciles []extract.PassOptions
+		wantNotifications          int32
+	}{
+		{name: "resume without sync", battery: true, resume: true, backstop: time.Hour, after: 81 * time.Second, wantPasses: []extract.PassOptions{{Full: true}}, wantReconciles: []extract.PassOptions{{Full: true}}, wantNotifications: 2},
+		{name: "periodic pass consumes recheck", battery: true, resume: true, backstop: 2 * time.Minute, after: 81 * time.Second, wantPasses: []extract.PassOptions{{Full: true}}, wantReconciles: []extract.PassOptions{{Full: true}}, wantNotifications: 2},
+		{name: "notify and tick on battery", battery: true, notify: true, catchup: 5 * time.Minute, after: 201 * time.Second, wantReconciles: []extract.PassOptions{{Full: true}, {Full: true}, {Full: true}}, wantNotifications: 3},
+		{name: "periodic pass preserves sync debounce", notify: true, backstop: 2 * time.Minute, after: 31 * time.Second, wantPasses: []extract.PassOptions{{Full: true}, {Full: true}, {}}, wantNotifications: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				mgr, reconciler := &fakePassManager{}, &fakePassManager{}
+				var battery atomic.Bool
+				battery.Store(tc.battery)
+				s := newExtractScheduler(mgr, 30*time.Second, tc.backstop, tc.catchup, nil)
+				s.onBattery, s.onBatteryMgr = battery.Load, reconciler
+				var notified atomic.Int32
+				s.onPassFinished = func() { notified.Add(1) }
+				go s.Run(t.Context())
+				defer s.Stop()
+				synctest.Sleep(100 * time.Second)
+				synctest.Wait()
+				if tc.battery {
+					require.Zero(t, mgr.callCount())
+					require.Equal(t, []extract.PassOptions{{Full: true}}, reconciler.callsSnapshot())
+				} else {
+					require.Equal(t, []extract.PassOptions{{Full: true}}, mgr.callsSnapshot())
+					require.Zero(t, reconciler.callCount())
+				}
+				require.EqualValues(t, 1, notified.Load())
+				if tc.resume {
+					battery.Store(false)
+				}
+				if tc.notify {
+					for range 5 {
+						s.Notify()
+					}
+					synctest.Wait()
+				}
+				synctest.Sleep(tc.after)
+				synctest.Wait()
+				assert.Equal(t, tc.wantPasses, mgr.callsSnapshot())
+				assert.Equal(t, tc.wantReconciles, reconciler.callsSnapshot())
+				assert.Equal(t, tc.wantNotifications, notified.Load())
+			})
+		})
+	}
+}
+
+func TestExtractSchedulerBatteryShortBackstopReleasesStartupLease(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		idled := make(chan struct{})
+		tracker := server.NewIdleTracker(time.Minute, func() { close(idled) })
+		go tracker.Run(ctx)
+		mgr, reconciler := &fakePassManager{}, &fakePassManager{}
+		s := newExtractScheduler(mgr, 30*time.Second, 10*time.Second, 0, tracker)
+		s.onBattery, s.onBatteryMgr = func() bool { return true }, reconciler
+		go s.Run(ctx)
+		defer s.Stop()
+		synctest.Sleep(2 * time.Minute)
+		synctest.Wait()
+		require.Positive(t, reconciler.callCount())
+		select {
+		case <-idled:
+		default:
+			assert.Fail(t, "battery reconciliation kept the startup lease")
+		}
+	})
 }

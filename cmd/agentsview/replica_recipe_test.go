@@ -96,7 +96,7 @@ func TestAdoptReplicaRecipeFailsClosed(t *testing.T) {
 		want    string
 	}{
 		{name: "zero", mutate: func([]storage.VectorGenerationInfo) []storage.VectorGenerationInfo { return nil }, want: "generation (found 0); push the first generation from a configured workstation; 'pg serve' adopts it on restart and 'pg push --watch --embed' on a later push"},
-		{name: "two", mutate: func(g []storage.VectorGenerationInfo) []storage.VectorGenerationInfo { return append(g, other()) }, want: "generation (found 2); remove obsolete generations with 'agentsview pg vectors drop <id>'"},
+		{name: "two", mutate: func(g []storage.VectorGenerationInfo) []storage.VectorGenerationInfo { return append(g, other()) }, want: "generation (found 2); remove obsolete generations with 'agentsview replica pg vectors drop <id>'"},
 		{name: "legacy null params", mutate: func(g []storage.VectorGenerationInfo) []storage.VectorGenerationInfo {
 			g[0].Params = nil
 			return g

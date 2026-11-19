@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,8 +16,12 @@ import (
 // SchemaVersion is recorded in sync_metadata after EnsureSchema. Columns
 // added later ship as ADD COLUMN IF NOT EXISTS entries in the table specs,
 // so an older mirror upgrades in place; the version tells operators and
-// status output which shape a mirror has.
-const SchemaVersion = 3
+// status output which shape a mirror has. Version 11 converts string columns
+// with few distinct values to LowCardinality (see convertToLowCardinality).
+// Version 12 moves pricing metadata out of model_pricing (see
+// movePricingMeta) and stores pricing times as timestamps (see
+// typePricingTimes).
+const SchemaVersion = 12
 
 // Metadata keys shared by every archive that pushes into the mirror.
 const (
@@ -35,6 +41,7 @@ const (
 	curationFingerprintKeyBase  = "agentsview_curation_fingerprint"
 	cursorUsageMaxIDKeyBase     = "agentsview_cursor_usage_max_id"
 	usageSnapshotReadyKeyBase   = "agentsview_usage_snapshot_ready"
+	commitLinksReadyKeyBase     = "agentsview_commit_links_ready_v2"
 	messageDialogueReadyKeyBase = "agentsview_message_dialogue_ready"
 	storedCountRepairKeyBase    = "agentsview_stored_message_count_repair"
 	databaseIDKeyBase           = "agentsview_source_database_id"
@@ -60,6 +67,8 @@ const (
 	tNullTime      = "Nullable(DateTime64(6, 'UTC'))"
 	tVersion       = "UInt64"
 	tFloatArray    = "Array(Float32)"
+	tFloat64Array  = "Array(Float64)"
+	tLowString     = "LowCardinality(String)"
 	tStringArray   = "Array(String)"
 	pushVersionCol = "push_version"
 )
@@ -78,10 +87,25 @@ func (c columnSpec) ddl() string {
 	return c.name + " " + c.typ + " DEFAULT " + c.def
 }
 
+// indexSpec is a data skipping index.
+type indexSpec struct {
+	name string
+	expr string
+	typ  string
+}
+
+// definition is the index clause after the INDEX keyword.
+func (i indexSpec) definition() string {
+	return i.name + " " + i.expr + " TYPE " + i.typ + " GRANULARITY 1"
+}
+
 type tableSpec struct {
 	name    string
 	columns []columnSpec
+	indexes []indexSpec
 	orderBy []string
+	// partitionBy is the partition key expression, empty for none.
+	partitionBy string
 }
 
 func (t tableSpec) createSQL() string {
@@ -90,13 +114,32 @@ func (t tableSpec) createSQL() string {
 		cols = append(cols, c.ddl())
 	}
 	cols = append(cols, pushVersionCol+" "+tVersion)
+	for _, i := range t.indexes {
+		cols = append(cols, "INDEX "+i.definition())
+	}
 	return "CREATE TABLE IF NOT EXISTS " + t.name + " (\n\t" +
 		strings.Join(cols, ",\n\t") + "\n) ENGINE = ReplacingMergeTree(" +
-		pushVersionCol + ") ORDER BY (" + strings.Join(t.orderBy, ", ") + ")"
+		pushVersionCol + ")" + t.partitionSQL() + " ORDER BY (" + strings.Join(t.orderBy, ", ") + ")"
+}
+
+func (t tableSpec) partitionSQL() string {
+	if t.partitionBy == "" {
+		return ""
+	}
+	return " PARTITION BY " + t.partitionBy
 }
 
 func (t tableSpec) addColumnSQL(c columnSpec) string {
 	return "ALTER TABLE " + t.name + " ADD COLUMN IF NOT EXISTS " + c.ddl()
+}
+
+// sessionIDTailIndex lets FindSessionIDsByRawSuffix read only the granules
+// whose IDs share the requested tail. Tails are near-unique, so a bloom
+// filter per granule rejects almost every other granule.
+var sessionIDTailIndex = indexSpec{
+	name: "id_tail",
+	expr: chSessionIDTailExpr,
+	typ:  "bloom_filter(0.01)",
 }
 
 func col(name, typ string) columnSpec { return columnSpec{name: name, typ: typ} }
@@ -111,7 +154,7 @@ var pricingRateColumns = []columnSpec{
 	col("cache_creation_microdollars_per_mtok", tInt),
 	col("cache_creation_1h_microdollars_per_mtok", tInt),
 	col("cache_read_microdollars_per_mtok", tInt),
-	col("updated_at", tString),
+	col("updated_at", tNullTime),
 }
 
 var projectIdentityColumns = []columnSpec{
@@ -161,11 +204,11 @@ var mirrorTables = []tableSpec{
 			col("id", tString),
 			col("project", tString),
 			col("project_assigned", tBool),
-			colDefault("machine", tString, "'local'"),
-			colDefault("agent", tString, "'claude'"),
+			colDefault("machine", tLowString, "'local'"),
+			colDefault("agent", tLowString, "'claude'"),
 			col("agent_label", tString),
-			col("entrypoint", tString),
-			col("session_kind", tString),
+			col("entrypoint", tLowString),
+			col("session_kind", tLowString),
 			col("first_message", tNullString),
 			col("display_name", tNullString),
 			col("session_name", tNullString),
@@ -182,7 +225,7 @@ var mirrorTables = []tableSpec{
 			col("local_modified_at", tNullTime),
 			colDefault("transcript_revision", tString, "'0'"),
 			col("parent_session_id", tNullString),
-			col("relationship_type", tString),
+			col("relationship_type", tLowString),
 			col("total_output_tokens", tInt),
 			col("peak_context_tokens", tInt),
 			col("has_total_output_tokens", tBool),
@@ -192,9 +235,9 @@ var mirrorTables = []tableSpec{
 			col("tool_retry_count", tInt),
 			col("edit_churn_count", tInt),
 			col("consecutive_failure_max", tInt),
-			colDefault("outcome", tString, "'unknown'"),
-			colDefault("outcome_confidence", tString, "'low'"),
-			col("ended_with_role", tString),
+			colDefault("outcome", tLowString, "'unknown'"),
+			colDefault("outcome_confidence", tLowString, "'low'"),
+			col("ended_with_role", tLowString),
 			col("final_failure_streak", tInt),
 			col("signals_pending_since", tNullString),
 			col("compaction_count", tInt),
@@ -218,7 +261,7 @@ var mirrorTables = []tableSpec{
 			col("source_session_id", tString),
 			col("source_version", tString),
 			col("group_key", tString),
-			col("transcript_fidelity", tString),
+			col("transcript_fidelity", tLowString),
 			col("parser_malformed_lines", tInt),
 			col("is_truncated", tBool),
 			col("deleted_at", tNullTime),
@@ -234,9 +277,56 @@ var mirrorTables = []tableSpec{
 			col("labels", tStringArray),
 			col("last_message_at", tNullTime),
 			col("agentsview_push_fingerprint", tString),
-			col("source_archive_id", tString),
+			col("source_archive_id", tLowString),
 			col("stored_message_count", tNullInt),
+			// Dashboard facts: per-session counts push derives from the
+			// messages it writes, valid only on rows whose
+			// dashboard_facts_version is dashboardFactsVersion. See
+			// dashboard_facts.go.
+			col("dashboard_facts_version", tInt),
+			col("fact_user_messages", tInt),
+			col("fact_assistant_messages", tInt),
+			col("fact_thinking_messages", tInt),
+			col("fact_tool_use_messages", tInt),
+			col("fact_tool_calls", tInt),
+			col("fact_frustration_markers", tInt),
+			col("fact_velocity_messages", tInt),
+			col("fact_velocity_turn_cycles", tFloat64Array),
+			col("fact_velocity_first_response", tNullFloat),
+			col("fact_velocity_active_seconds", tFloat),
+			col("fact_velocity_assistant_chars", tInt),
+			// agentsview_content_fingerprint hashes what a push writes for
+			// the session outside the session row (see contentFingerprint).
+			// Rows written before the column existed hold ''.
+			col("agentsview_content_fingerprint", tString),
+			// content_version is the oldest push version among the session's
+			// current dependent rows. A push that finds them unchanged
+			// rewrites only the session row and keeps this value, and a push
+			// that appends messages keeps it too, so reads that pair
+			// dependent rows with their session accept rows at or above it.
+			// Rows written before the column existed read it from
+			// push_version.
+			colDefault("content_version", tVersion, pushVersionCol),
+			// agentsview_message_rows_fingerprint hashes the message, tool
+			// call, result event, and image text rows stored for the
+			// session (see messageRowsFingerprints), so a later push can
+			// tell that those rows are a prefix of the local session and
+			// append only the rest. Rows written before the column existed
+			// hold '' and get a full rewrite when their content changes.
+			col("agentsview_message_rows_fingerprint", tString),
+			// agentsview_leading_message_rows_fingerprint hashes the same
+			// rows without the last stored message's, so a push can keep the
+			// rest when only that message changed, as when its tool call got
+			// its result. Rows written before the column existed hold ''.
+			col("agentsview_leading_message_rows_fingerprint", tString),
+			// rows_version is the newest push version among the session's
+			// current dependent rows. A push that rewrites only the session
+			// row keeps it, so rows another push wrote after it stay
+			// recognizable as unpublished; see keptRowsPublished. Rows
+			// written before the column existed read it from push_version.
+			colDefault("rows_version", tVersion, pushVersionCol),
 		},
+		indexes: []indexSpec{sessionIDTailIndex},
 		orderBy: []string{"id"},
 	},
 	{
@@ -245,7 +335,7 @@ var mirrorTables = []tableSpec{
 			col("id", tInt),
 			col("session_id", tString),
 			col("ordinal", tInt),
-			col("role", tString),
+			col("role", tLowString),
 			col("content", tString),
 			col("thinking_text", tString),
 			col("dialogue_text", tNullString),
@@ -254,19 +344,19 @@ var mirrorTables = []tableSpec{
 			col("has_tool_use", tBool),
 			col("content_length", tInt),
 			col("is_system", tBool),
-			col("model", tString),
-			col("reasoning_effort", tString),
+			col("model", tLowString),
+			col("reasoning_effort", tLowString),
 			col("token_usage", tString),
 			col("context_tokens", tInt),
 			col("output_tokens", tInt),
-			col("provider_id", tString),
+			col("provider_id", tLowString),
 			col("has_context_tokens", tBool),
 			col("has_output_tokens", tBool),
 			col("claude_message_id", tString),
 			col("claude_request_id", tString),
-			col("source_type", tString),
-			col("source_subtype", tString),
-			col("prompt_source", tString),
+			col("source_type", tLowString),
+			col("source_subtype", tLowString),
+			col("prompt_source", tLowString),
 			col("source_uuid", tString),
 			col("source_parent_uuid", tString),
 			col("is_sidechain", tBool),
@@ -280,17 +370,17 @@ var mirrorTables = []tableSpec{
 			col("id", tInt),
 			col("session_id", tString),
 			col("message_ordinal", tNullInt),
-			col("source", tString),
-			col("model", tString),
-			col("provider_id", tString),
+			col("source", tLowString),
+			col("model", tLowString),
+			col("provider_id", tLowString),
 			col("input_tokens", tInt),
 			col("output_tokens", tInt),
 			col("cache_creation_input_tokens", tInt),
 			col("cache_read_input_tokens", tInt),
 			col("reasoning_tokens", tInt),
 			col("cost_microdollars", tNullInt),
-			col("cost_status", tString),
-			col("cost_source", tString),
+			col("cost_status", tLowString),
+			col("cost_source", tLowString),
 			col("occurred_at", tNullTime),
 			col("dedup_key", tString),
 		},
@@ -321,9 +411,25 @@ var mirrorTables = []tableSpec{
 		orderBy: []string{"session_id"},
 	},
 	{
+		// One row per session, the latest push winning: the usage total
+		// the agent recorded for the whole session. Usage reads never
+		// include it; models stay the archive's JSON text.
+		name: "session_usage_totals",
+		columns: []columnSpec{
+			col("session_id", tString),
+			col("source", tString),
+			col("subagent_scope", tString),
+			col("cost_microdollars", tNullInt),
+			col("incomplete", tBool),
+			colDefault("models_json", tString, "'[]'"),
+		},
+		orderBy: []string{"session_id"},
+	},
+	{
 		name: "cursor_usage_events",
 		columns: []columnSpec{
 			col("id", tInt),
+			colDefault("agent", tString, "'cursor'"),
 			col("occurred_at", tNullTime),
 			col("model", tString),
 			col("kind", tString),
@@ -361,15 +467,21 @@ var mirrorTables = []tableSpec{
 			col("source_ref", tString),
 			col("source", tString),
 			col("data_json", tString),
-			col("updated_at", tString),
+			col("updated_at", tNullTime),
 		},
 		orderBy: []string{"singleton"},
 	},
 	{
+		name:    "pricing_meta",
+		columns: []columnSpec{col("key", tString), col("value", tString)},
+		orderBy: []string{"key"},
+	},
+	{
 		// usage_event_prices holds what Go priced for one distinct set of
-		// normalized usage inputs under one catalog digest. price_key is
+		// normalized usage inputs under one pricing digest. price_key is
 		// computed by chUsagePriceKeySQL, never in Go, so the usage reader's
-		// join matches by construction.
+		// join matches by construction. Each digest is its own partition,
+		// so a push drops a digest no one uses without rewriting the rest.
 		name: "usage_event_prices",
 		columns: []columnSpec{
 			col("pricing_digest", tString),
@@ -383,7 +495,8 @@ var mirrorTables = []tableSpec{
 			col("price_error", tString),
 			col("priced", tInt),
 		},
-		orderBy: []string{"pricing_digest", "price_key"},
+		orderBy:     []string{"pricing_digest", "price_key"},
+		partitionBy: "pricing_digest",
 	},
 	{
 		name: "usage_price_contexts",
@@ -392,7 +505,23 @@ var mirrorTables = []tableSpec{
 			col("context_id", tString),
 			col("context_json", tString),
 		},
-		orderBy: []string{"pricing_digest", "context_id"},
+		orderBy:     []string{"pricing_digest", "context_id"},
+		partitionBy: "pricing_digest",
+	},
+	{
+		// usage_price_models lists the model identities the pricing digest
+		// covers. A push registers a model only after pricing the whole
+		// mirror under the digest that includes it. Until then the model
+		// is pending, which tells the next push to adopt it if this one
+		// stops first.
+		name: "usage_price_models",
+		columns: []columnSpec{
+			col("provider_id", tString),
+			col("model", tString),
+			col("price_model", tString),
+			col("pending", tBool),
+		},
+		orderBy: []string{"provider_id", "model", "price_model"},
 	},
 	{
 		name: "source_project_identity_observations",
@@ -434,20 +563,27 @@ var mirrorTables = []tableSpec{
 			col("message_id", tInt),
 			col("message_ordinal", tInt),
 			col("session_id", tString),
-			col("tool_name", tString),
+			col("tool_name", tLowString),
 			col("observed_outcome", tNullString),
 			col("observed_repeat", tNullString),
 			col("sequence_ending", tNullString),
 
-			col("category", tString),
+			col("category", tLowString),
 			col("call_index", tInt),
 			col("tool_use_id", tString),
 			col("input_json", tString),
-			col("skill_name", tString),
+			col("skill_name", tLowString),
 			col("result_content_length", tInt),
 			col("result_content", tString),
 			col("subagent_session_id", tString),
 			col("file_path", tString),
+			// The parent message's timestamp and model, copied at push so
+			// tool analytics need not join messages. message_facts marks
+			// rows that carry them; older rows read the message instead.
+			col("message_timestamp", tNullTime),
+			// A mirror holds a few dozen model names across millions of calls.
+			col("message_model", tLowString),
+			col("message_facts", tBool),
 		},
 		orderBy: []string{"session_id", "message_ordinal", "call_index"},
 	},
@@ -460,14 +596,50 @@ var mirrorTables = []tableSpec{
 			col("tool_use_id", tString),
 			col("agent_id", tString),
 			col("subagent_session_id", tString),
-			col("source", tString),
-			col("status", tString),
+			col("source", tLowString),
+			col("status", tLowString),
 			col("content", tString),
 			col("content_length", tInt),
 			col("timestamp", tNullTime),
 			col("event_index", tInt),
 		},
 		orderBy: []string{"session_id", "tool_call_message_ordinal", "call_index", "event_index"},
+	},
+	// SHA leads the sparse primary index; the pair identifies one session link.
+	{
+		name: "commit_links",
+		columns: []columnSpec{
+			col("session_id", tString), col("sha", tString),
+			col("branch", tString), col("subject", tString), col("repository", tString),
+			col("message_ordinal", tInt), col("call_index", tInt), col("tool_use_id", tString),
+			col("committed_at", tString), col("turn_ordinal", tNullInt), col("turn_text", tString),
+			col("project", tString), col("retained", tBool),
+		},
+		orderBy: []string{"sha", "session_id"},
+	},
+	// image_text holds each successful image extraction at its portable
+	// source location; a processor change replaces the row under a new key.
+	{
+		name: "image_text",
+		columns: []columnSpec{
+			col("session_id", tString), col("source_kind", tLowString),
+			col("message_ordinal", tInt), col("call_index", tInt),
+			col("event_index", tInt), col("image_index", tInt),
+			col("image_hash", tString), col("processor", tString),
+			col("provider", tString), col("model", tString),
+			col("revision", tString), col("text", tString),
+		},
+		orderBy: []string{"session_id", "source_kind", "message_ordinal", "call_index", "event_index", "image_index", "processor"},
+	},
+	{
+		name: "retained_commit_links",
+		columns: []columnSpec{
+			col("source_archive_id", tString), col("session_id", tString), col("sha", tString),
+			col("branch", tString), col("subject", tString), col("repository", tString),
+			col("message_ordinal", tInt), col("call_index", tInt), col("tool_use_id", tString),
+			col("committed_at", tString),
+		},
+		orderBy: []string{"source_archive_id", "sha", "session_id"},
 	},
 	{
 		name: "secret_findings",
@@ -600,7 +772,14 @@ func EnsureSchema(ctx context.Context, t Target) error {
 // EnsureSchemaOn creates missing tables and columns on an open mirror
 // connection and records SchemaVersion.
 func EnsureSchemaOn(ctx context.Context, conn *sql.DB) error {
+	if err := repartitionCacheTables(ctx, conn); err != nil {
+		return err
+	}
 	existing, err := readColumns(ctx, conn)
+	if err != nil {
+		return err
+	}
+	existingIndexes, err := readSkipIndexes(ctx, conn)
 	if err != nil {
 		return err
 	}
@@ -620,14 +799,42 @@ func EnsureSchemaOn(ctx context.Context, conn *sql.DB) error {
 				return fmt.Errorf("adding clickhouse column %s.%s: %w", t.name, c.name, err)
 			}
 		}
+		if err := convertToLowCardinality(ctx, conn, t.name, cols, t.columns); err != nil {
+			return err
+		}
+		for _, i := range t.indexes {
+			if _, has := existingIndexes[t.name][i.name]; has {
+				continue
+			}
+			if err := addSkipIndex(ctx, conn, t.name, i); err != nil {
+				return err
+			}
+		}
 	}
-	if err := ensureUsageMessages(ctx, conn); err != nil {
+	if err := ensureUsageMessages(ctx, conn, existing["usage_messages"]); err != nil {
 		return err
+	}
+	if err := movePricingMeta(ctx, conn); err != nil {
+		return err
+	}
+	if err := typePricingTimes(ctx, conn); err != nil {
+		return err
+	}
+	for _, i := range retiredSkipIndexes {
+		if _, has := existingIndexes[i.table][i.name]; !has {
+			continue
+		}
+		if err := dropSkipIndex(ctx, conn, i.table, i.name); err != nil {
+			return err
+		}
 	}
 	if err := ensureTerminalEventSnapshots(ctx, conn); err != nil {
 		return err
 	}
 	if err := ensureUsageSessionSnapshots(ctx, conn); err != nil {
+		return err
+	}
+	if err := dedupeStoredDialogue(ctx, conn); err != nil {
 		return err
 	}
 	return writeMetadata(ctx, conn, map[string]string{
@@ -636,20 +843,180 @@ func EnsureSchemaOn(ctx context.Context, conn *sql.DB) error {
 	})
 }
 
-// readColumns maps table name to the set of column names in the current
-// database.
-func readColumns(ctx context.Context, conn *sql.DB) (map[string]map[string]struct{}, error) {
-	rows, err := conn.QueryContext(ctx,
-		`SELECT table, name FROM system.columns WHERE database = currentDatabase()`)
+// movePricingMeta moves pricing metadata out of model_pricing. Mirrors
+// before schema version 12 kept the OpenRouter ownership list as a
+// model_pricing row whose pattern starts with "_", with the list in
+// updated_at. Each moved row keeps its push_version, so a value a newer
+// push already wrote to pricing_meta still wins.
+func movePricingMeta(ctx context.Context, conn *sql.DB) error {
+	var rows uint64
+	if err := conn.QueryRowContext(ctx, `
+		SELECT count() FROM model_pricing
+		WHERE startsWith(model_pattern, '_')`).Scan(&rows); err != nil {
+		return fmt.Errorf("counting clickhouse pricing metadata rows: %w", err)
+	}
+	if rows == 0 {
+		return nil
+	}
+	if _, err := conn.ExecContext(ctx, `
+		INSERT INTO pricing_meta (key, value, push_version)
+		SELECT model_pattern, argMax(updated_at, push_version), max(push_version)
+		FROM model_pricing
+		WHERE startsWith(model_pattern, '_')
+		GROUP BY model_pattern`); err != nil {
+		return fmt.Errorf("copying clickhouse pricing metadata to pricing_meta: %w", err)
+	}
+	for _, table := range []string{"model_pricing_bands", "model_pricing"} {
+		if _, err := conn.ExecContext(ctx,
+			"DELETE FROM "+table+" WHERE startsWith(model_pattern, '_')",
+		); err != nil {
+			return fmt.Errorf("deleting clickhouse pricing metadata from %s: %w", table, err)
+		}
+	}
+	return nil
+}
+
+// typePricingTimes converts the pricing tables' updated_at columns from
+// String to Nullable(DateTime64). Mirrors before schema version 12 kept
+// them as strings because pricing metadata shared model_pricing (see
+// movePricingMeta). The old column is renamed aside, the column loop in
+// EnsureSchemaOn or this function adds the typed one, a mutation fills it,
+// and the old column is dropped. A time that does not parse, such as an
+// empty one, becomes NULL. Every step can be repeated, so a run that stops
+// partway finishes on the next start.
+func typePricingTimes(ctx context.Context, conn *sql.DB) error {
+	existing, err := readColumns(ctx, conn)
 	if err != nil {
-		return nil, fmt.Errorf("reading clickhouse columns: %w", err)
+		return err
+	}
+	for _, table := range []string{"model_pricing", "model_pricing_bands", "genai_pricing"} {
+		columns := existing[table]
+		var statements []string
+		if columns["updated_at"] == tString {
+			statements = append(statements,
+				"ALTER TABLE "+table+" RENAME COLUMN updated_at TO updated_at_text")
+		} else if _, ok := columns["updated_at_text"]; !ok {
+			continue
+		}
+		statements = append(statements,
+			"ALTER TABLE "+table+" ADD COLUMN IF NOT EXISTS updated_at "+tNullTime,
+			"ALTER TABLE "+table+" UPDATE updated_at = "+
+				"parseDateTime64BestEffortOrNull(updated_at_text, 6, 'UTC') "+
+				"WHERE true SETTINGS mutations_sync = 2",
+			"ALTER TABLE "+table+" DROP COLUMN updated_at_text",
+		)
+		for _, statement := range statements {
+			if _, err := conn.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("typing clickhouse %s.updated_at: %w", table, err)
+			}
+		}
+	}
+	return nil
+}
+
+// repartitionCacheTables drops a partitioned table that an older version
+// created without its partition key, so the loop that follows creates it
+// again. Only the price record tables are partitioned, and they hold
+// nothing a push cannot derive again. Clearing the digest the mirror was
+// priced under makes the next push price the whole mirror.
+func repartitionCacheTables(ctx context.Context, conn *sql.DB) error {
+	keys, err := readPartitionKeys(ctx, conn)
+	if err != nil {
+		return err
+	}
+	dropped := false
+	for _, t := range mirrorTables {
+		key, ok := keys[t.name]
+		if t.partitionBy == "" || !ok || key == t.partitionBy {
+			continue
+		}
+		if _, err := conn.ExecContext(ctx, "DROP TABLE IF EXISTS "+t.name); err != nil {
+			return fmt.Errorf("dropping clickhouse table %s to partition it: %w", t.name, err)
+		}
+		log.Printf("clickhouse schema: recreating %s partitioned by %s", t.name, t.partitionBy)
+		dropped = true
+	}
+	if !dropped {
+		return nil
+	}
+	return writeMetadata(ctx, conn, map[string]string{usagePricedDigestKey: ""})
+}
+
+// readPartitionKeys maps table name to its partition key expression in the
+// current database.
+func readPartitionKeys(ctx context.Context, conn *sql.DB) (map[string]string, error) {
+	rows, err := conn.QueryContext(ctx,
+		`SELECT name, partition_key FROM system.tables WHERE database = currentDatabase()`)
+	if err != nil {
+		return nil, fmt.Errorf("reading clickhouse partition keys: %w", err)
+	}
+	defer rows.Close()
+	keys := map[string]string{}
+	for rows.Next() {
+		var name, key string
+		if err := rows.Scan(&name, &key); err != nil {
+			return nil, fmt.Errorf("scanning clickhouse partition key: %w", err)
+		}
+		keys[name] = key
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating clickhouse partition keys: %w", err)
+	}
+	return keys, nil
+}
+
+// addSkipIndex adds a skipping index to an existing table and builds it for
+// the parts already written. New parts get the index on insert. The build
+// runs as a background mutation, so schema setup does not wait for it;
+// until it finishes, reads scan the parts that lack the index, which only
+// costs time.
+func addSkipIndex(ctx context.Context, conn *sql.DB, table string, i indexSpec) error {
+	if _, err := conn.ExecContext(ctx,
+		"ALTER TABLE "+table+" ADD INDEX IF NOT EXISTS "+i.definition()); err != nil {
+		return fmt.Errorf("adding clickhouse index %s.%s: %w", table, i.name, err)
+	}
+	if _, err := conn.ExecContext(ctx,
+		"ALTER TABLE "+table+" MATERIALIZE INDEX "+i.name); err != nil {
+		return fmt.Errorf("building clickhouse index %s.%s: %w", table, i.name, err)
+	}
+	return nil
+}
+
+// retiredSkipIndexes lists skipping indexes that an older release created
+// and schema setup now removes.
+var retiredSkipIndexes = []struct{ table, name string }{
+	// A minmax on usage_messages.timestamp. Under final = 1 the exact-mode
+	// expansion re-selected almost every granule it skipped, so the
+	// Activity report's usage read ran 1.2x to 3.4x slower with it.
+	{"usage_messages", "usage_time"},
+}
+
+// dropSkipIndex removes a skipping index. Callers check that the index
+// exists first: ClickHouse queues a mutation for DROP INDEX IF EXISTS even
+// when there is nothing to drop. IF EXISTS still covers two schema setups
+// racing to drop it.
+func dropSkipIndex(ctx context.Context, conn *sql.DB, table, name string) error {
+	if _, err := conn.ExecContext(ctx,
+		"ALTER TABLE "+table+" DROP INDEX IF EXISTS "+name); err != nil {
+		return fmt.Errorf("dropping clickhouse index %s.%s: %w", table, name, err)
+	}
+	return nil
+}
+
+// readSkipIndexes maps table name to the set of skipping index names in the
+// current database.
+func readSkipIndexes(ctx context.Context, conn *sql.DB) (map[string]map[string]struct{}, error) {
+	rows, err := conn.QueryContext(ctx,
+		`SELECT table, name FROM system.data_skipping_indices WHERE database = currentDatabase()`)
+	if err != nil {
+		return nil, fmt.Errorf("reading clickhouse skipping indexes: %w", err)
 	}
 	defer rows.Close()
 	out := map[string]map[string]struct{}{}
 	for rows.Next() {
 		var table, name string
 		if err := rows.Scan(&table, &name); err != nil {
-			return nil, fmt.Errorf("scanning clickhouse columns: %w", err)
+			return nil, fmt.Errorf("scanning clickhouse skipping index: %w", err)
 		}
 		if out[table] == nil {
 			out[table] = map[string]struct{}{}
@@ -657,6 +1024,56 @@ func readColumns(ctx context.Context, conn *sql.DB) (map[string]map[string]struc
 		out[table][name] = struct{}{}
 	}
 	return out, rows.Err()
+}
+
+// readColumns maps table name to column name to column type in the current
+// database.
+func readColumns(ctx context.Context, conn *sql.DB) (map[string]map[string]string, error) {
+	rows, err := conn.QueryContext(ctx,
+		`SELECT table, name, type FROM system.columns WHERE database = currentDatabase()`)
+	if err != nil {
+		return nil, fmt.Errorf("reading clickhouse columns: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]map[string]string{}
+	for rows.Next() {
+		var table, name, typ string
+		if err := rows.Scan(&table, &name, &typ); err != nil {
+			return nil, fmt.Errorf("scanning clickhouse columns: %w", err)
+		}
+		if out[table] == nil {
+			out[table] = map[string]string{}
+		}
+		out[table][name] = typ
+	}
+	return out, rows.Err()
+}
+
+// convertToLowCardinality changes columns that a mirror created as plain
+// strings to the LowCardinality type their spec now declares. Repeated
+// values such as roles, models, and agents then take less space and filter
+// and group faster. Only that change is made: wrapping a type in
+// LowCardinality keeps every value, while other type differences could lose
+// data and stay for an operator to resolve. The ALTER returns once the table
+// metadata changes; ClickHouse rewrites existing parts in a background
+// mutation. Older binaries keep pushing, because a LowCardinality column
+// accepts plain strings.
+func convertToLowCardinality(
+	ctx context.Context, conn *sql.DB, table string,
+	current map[string]string, columns []columnSpec,
+) error {
+	for _, c := range columns {
+		have, ok := current[c.name]
+		if !ok || c.typ != "LowCardinality("+have+")" {
+			continue
+		}
+		if _, err := conn.ExecContext(ctx,
+			"ALTER TABLE "+table+" MODIFY COLUMN "+c.ddl()); err != nil {
+			return fmt.Errorf("converting clickhouse column %s.%s to %s: %w",
+				table, c.name, c.typ, err)
+		}
+	}
+	return nil
 }
 
 // CheckSchemaCompat verifies every mirror table and column exists. It names
@@ -674,7 +1091,7 @@ func CheckSchemaCompat(ctx context.Context, conn *sql.DB) error {
 			missing = append(missing, t.name)
 			continue
 		}
-		for _, c := range append(t.columns, col(pushVersionCol, tVersion)) {
+		for _, c := range append(slices.Clip(t.columns), col(pushVersionCol, tVersion)) {
 			if _, has := cols[c.name]; !has {
 				missing = append(missing, t.name+"."+c.name)
 			}
@@ -683,7 +1100,8 @@ func CheckSchemaCompat(ctx context.Context, conn *sql.DB) error {
 	if snapshot, err := usageSessionSnapshotSpec(); err != nil {
 		return err
 	} else if cols, ok := existing[snapshot.name]; ok {
-		for _, c := range snapshot.columns {
+		for _, c := range append(slices.Clip(snapshot.columns), col(chSnapshotPreparesUsage, "Bool"),
+			col(usageRecordedCostsColumn, "Array(Nullable(Int64))")) {
 			if _, has := cols[c.name]; !has {
 				missing = append(missing, snapshot.name+"."+c.name)
 			}
@@ -694,6 +1112,19 @@ func CheckSchemaCompat(ctx context.Context, conn *sql.DB) error {
 			missing = append(missing, table)
 		}
 	}
+	if cols, ok := existing["usage_messages"]; ok {
+		if _, has := cols[usageRecordedCostColumn]; !has {
+			missing = append(missing, "usage_messages."+usageRecordedCostColumn)
+		}
+	}
+	for _, table := range []string{"model_pricing", "model_pricing_bands", "genai_pricing"} {
+		if existing[table]["updated_at"] == tString {
+			return fmt.Errorf(
+				"clickhouse %s comes from an older agentsview version; "+
+					"run `agentsview replica clickhouse push` to upgrade it",
+				table)
+		}
+	}
 	if len(missing) == 0 {
 		metadata, err := readMetadata(ctx, conn, "usage_messages_backfill", "terminal_event_snapshots_backfill")
 		if err != nil {
@@ -701,14 +1132,14 @@ func CheckSchemaCompat(ctx context.Context, conn *sql.DB) error {
 		}
 		for _, fill := range [][2]string{{"usage_messages_backfill", "usage"}, {"terminal_event_snapshots_backfill", "terminal event"}} {
 			if metadata[fill[0]] != "1" {
-				return fmt.Errorf("clickhouse %s backfill is incomplete; run `agentsview clickhouse push` with a role that can finish it", fill[1])
+				return fmt.Errorf("clickhouse %s backfill is incomplete; run `agentsview replica clickhouse push` with a role that can finish it", fill[1])
 			}
 		}
 		return nil
 	}
 	sort.Strings(missing)
 	return fmt.Errorf(
-		"clickhouse mirror schema is missing %s; run `agentsview clickhouse push` with a role that can create tables",
+		"clickhouse mirror schema is missing %s; run `agentsview replica clickhouse push` with a role that can create tables",
 		strings.Join(missing, ", "),
 	)
 }
@@ -720,7 +1151,7 @@ func CheckSchemaCompat(ctx context.Context, conn *sql.DB) error {
 func CheckDataVersionCompat(ctx context.Context, conn *sql.DB) error {
 	var maxVersion int
 	err := conn.QueryRowContext(ctx,
-		`SELECT COALESCE(MAX(data_version), 0) FROM sessions`).Scan(&maxVersion)
+		`SELECT MAX(data_version) FROM sessions`).Scan(&maxVersion)
 	if err != nil {
 		if isMissingTableError(err) {
 			return nil

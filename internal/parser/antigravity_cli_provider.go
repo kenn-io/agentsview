@@ -142,7 +142,7 @@ func (p *antigravityCLIProvider) Parse(
 			SkipReason:        SkipNoSession,
 		}, nil
 	}
-	if req.Fingerprint.Hash != "" {
+	if antigravityHashCoversSummary(req.Fingerprint.Hash, status.summaryDigest) {
 		sess.File.Hash = req.Fingerprint.Hash
 	}
 	result := ParseResultOutcome{
@@ -179,17 +179,36 @@ type antigravityCLISourceSet struct {
 }
 
 func newAntigravityCLISourceSet(cfg ProviderConfig) antigravityCLISourceSet {
-	s := antigravityCLISourceSet{
+	return antigravityCLISourceSet{
 		roots:       cleanJSONLRoots(cfg.Roots),
 		remote:      cfg.PathRewriter != nil,
-		remoteRoots: make(map[string]bool),
+		remoteRoots: antigravityRemoteRoots(cfg),
 	}
+}
+
+// antigravityRemoteRoots returns the configured roots that hold another
+// machine's sessions.
+func antigravityRemoteRoots(cfg ProviderConfig) map[string]bool {
+	roots := make(map[string]bool)
 	for root, machine := range cfg.SourceMachines {
 		if machine != "" && machine != cfg.Machine {
-			s.remoteRoots[filepath.Clean(root)] = true
+			roots[filepath.Clean(root)] = true
 		}
 	}
-	return s
+	return roots
+}
+
+func antigravityRemoteRoot(remoteRoots map[string]bool, root string) bool {
+	clean := filepath.Clean(root)
+	if remoteRoots[clean] {
+		return true
+	}
+	for configured := range remoteRoots {
+		if samePath(configured, clean) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s antigravityCLISourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
@@ -233,6 +252,16 @@ func (s antigravityCLISourceSet) DiscoverEach(ctx context.Context, yield func(So
 			filepath.Join(root, "cache", "last_conversations.json"),
 		) {
 			if err := projects.put(ctx, id, workspace, true); err != nil {
+				return errors.Join(err, projects.close())
+			}
+		}
+		// Matches buildAntigravityCLIProjectMap: the summary store only
+		// fills conversations the history and cache leave unmapped.
+		for id, summary := range loadAntigravitySummaries(ctx, root).byID {
+			if summary.workspace == "" {
+				continue
+			}
+			if err := projects.put(ctx, id, summary.workspace, false); err != nil {
 				return errors.Join(err, projects.close())
 			}
 		}
@@ -491,7 +520,7 @@ func (s antigravityCLISourceSet) Fingerprint(
 		}
 		return SourceFingerprint{}, err
 	}
-	hash, err := antigravityCLICompositeHash(src.Path, src.ID, src.Workspace)
+	hash, err := antigravityCLICompositeHash(ctx, src.Path, src.ID, src.Workspace)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
@@ -663,12 +692,16 @@ func (s antigravityCLISourceSet) newSourceRef(
 ) SourceRef {
 	cwd := normalizeAntigravityCLIWorkspace(workspace)
 	resolution := SourceCwdResolution{}
-	if s.remote || s.remoteRoot(root) {
+	if s.remote || antigravityRemoteRoot(s.remoteRoots, root) {
 		resolution.State = SourceCwdRemote
 	} else if workspace != "" && cwd == "" {
 		resolution.State = SourceCwdAmbiguous
 	} else if cwd != "" {
 		resolution = SourceCwdResolution{State: SourceCwdResolved, Path: cwd}
+	} else if loadAntigravitySummaries(context.Background(), root).err != nil {
+		// The summary store may hold the only workspace for this
+		// conversation, so an unreadable store must not clear a stored one.
+		resolution.State = SourceCwdUnavailable
 	}
 	return SourceRef{
 		Provider:       AgentAntigravityCLI,
@@ -685,19 +718,6 @@ func (s antigravityCLISourceSet) newSourceRef(
 			Workspace: workspace,
 		},
 	}
-}
-
-func (s antigravityCLISourceSet) remoteRoot(root string) bool {
-	clean := filepath.Clean(root)
-	if s.remoteRoots[clean] {
-		return true
-	}
-	for configured := range s.remoteRoots {
-		if samePath(configured, clean) {
-			return true
-		}
-	}
-	return false
 }
 
 func (s antigravityCLISourceSet) projectForID(root, id string) string {
@@ -816,12 +836,19 @@ func antigravityCLIProviderCapabilities() Capabilities {
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
 			Cwd:                  CapabilitySupported,
+			Relationships:        CapabilitySupported,
 			Thinking:             CapabilitySupported,
 			ToolCalls:            CapabilitySupported,
 			ToolResults:          CapabilitySupported,
 			PerMessageTokenUsage: CapabilitySupported,
 			AggregateUsageEvents: CapabilitySupported,
 			Model:                CapabilitySupported,
+		},
+		// The fingerprint covers the summary store's workspace and parent,
+		// which change without touching the conversation's own files.
+		Sync: ProviderSyncSemantics{
+			FingerprintHashInCacheKey:           true,
+			FingerprintHashRequiredForFreshness: true,
 		},
 	}
 }

@@ -16,7 +16,7 @@ func withAttachedSources(manager *archivesource.Manager, local server.LocalSyncR
 	}
 	return func(ctx context.Context, progress func(sync.Progress)) (sync.SyncStats, error) {
 		stats, err := local(ctx, progress)
-		if err == nil && stats.ProcessingComplete() {
+		if err == nil && stats.ProcessingCompleteOrRetrying() {
 			var archiveStats sync.SyncStats
 			archiveStats, err = manager.Drain(ctx, progress)
 			stats.Merge(archiveStats)

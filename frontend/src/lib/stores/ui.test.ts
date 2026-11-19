@@ -575,16 +575,17 @@ describe("UIStore", () => {
 
       expect(visible.has("system")).toBe(false);
       expect(visible.has("user")).toBe(true);
+      expect(visible.has("hook")).toBe(true);
     });
 
     it("restores the same hidden set it stored", () => {
       const chosen = new Set<BlockType>(ALL_BLOCK_TYPES);
-      chosen.delete("system");
+      chosen.delete("hook");
       chosen.delete("tool");
 
       const restored = parseBlockFilters(serializeBlockFilters(chosen));
 
-      expect([...restored].sort()).toEqual(["assistant", "code", "thinking", "user"]);
+      expect([...restored].sort()).toEqual(["assistant", "code", "system", "thinking", "user"]);
     });
 
     it("shows every block when the stored payload is missing or unreadable", () => {
@@ -672,6 +673,97 @@ describe("UIStore", () => {
 
       ui.cycleLayout();
       expect(ui.messageLayout).toBe("default");
+    });
+  });
+
+  describe("alwaysShowYear", () => {
+    const original = globalThis.localStorage;
+    afterEach(() => {
+      Object.defineProperty(globalThis, "localStorage", {
+        value: original,
+        writable: true,
+        configurable: true,
+      });
+    });
+
+    it.each([
+      [null, false],
+      ["true", true],
+    ])("restores %s as %s and persists a toggle", async (stored, expected) => {
+      const setItem = vi.fn();
+      Object.defineProperty(globalThis, "localStorage", {
+        value: {
+          getItem: (key: string) => (key === "agentsview-always-show-year" ? stored : null),
+          setItem,
+        },
+        writable: true,
+        configurable: true,
+      });
+      const mod = await import(/* @vite-ignore */ `./ui.svelte.js?year-${stored}`);
+      expect(mod.ui.alwaysShowYear).toBe(expected);
+      mod.ui.toggleAlwaysShowYear();
+      await tick();
+      expect(setItem).toHaveBeenCalledWith("agentsview-always-show-year", String(!expected));
+    });
+  });
+
+  describe("readingWidth", () => {
+    async function freshStore(stored: string | null, tag: string) {
+      const setItem = vi.fn();
+      Object.defineProperty(globalThis, "localStorage", {
+        value: {
+          getItem: vi.fn((key: string) => (key === "agentsview-reading-width" ? stored : null)),
+          setItem,
+        },
+        writable: true,
+        configurable: true,
+      });
+      const mod = await import(/* @vite-ignore */ `./ui.svelte.js?readingWidth-${tag}`);
+      await tick();
+      return { ui: mod.ui as typeof ui, setItem };
+    }
+
+    const original = globalThis.localStorage;
+    afterEach(() => {
+      Object.defineProperty(globalThis, "localStorage", {
+        value: original,
+        writable: true,
+        configurable: true,
+      });
+      delete document.documentElement.dataset.readingWidth;
+    });
+
+    it("defaults to the shared column with no root override", async () => {
+      const { ui: store } = await freshStore(null, "default");
+      expect(store.readingWidth).toBe("default");
+      expect(document.documentElement.dataset.readingWidth).toBeUndefined();
+    });
+
+    it("restores a saved width and applies it to the root", async () => {
+      const { ui: store } = await freshStore("full", "restore");
+      expect(store.readingWidth).toBe("full");
+      expect(document.documentElement.dataset.readingWidth).toBe("full");
+    });
+
+    it("falls back to the default for an unknown saved width", async () => {
+      const { ui: store } = await freshStore("huge", "invalid");
+      expect(store.readingWidth).toBe("default");
+      expect(document.documentElement.dataset.readingWidth).toBeUndefined();
+    });
+
+    it("saves a chosen width and updates the root", async () => {
+      const { ui: store, setItem } = await freshStore(null, "persist");
+      setItem.mockClear();
+
+      store.setReadingWidth("wider");
+      await tick();
+      expect(setItem).toHaveBeenLastCalledWith("agentsview-reading-width", "wider");
+      expect(document.documentElement.dataset.readingWidth).toBe("wider");
+
+      store.setReadingWidth("default");
+      await tick();
+      expect(setItem).toHaveBeenLastCalledWith("agentsview-reading-width", "default");
+      expect(document.documentElement.dataset.readingWidth).toBeUndefined();
     });
   });
 

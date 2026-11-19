@@ -43,7 +43,7 @@ type RawUploadStore struct {
 }
 
 // NewRawUploadStore opens the private spool below one agentsview data directory.
-func NewRawUploadStore(database *sql.DB, dataDir string) (*RawUploadStore, error) {
+func NewRawUploadStore(ctx context.Context, database *sql.DB, dataDir string) (*RawUploadStore, error) {
 	if database == nil {
 		return nil, fmt.Errorf("%w: PostgreSQL connection is required", rawsync.ErrInvalid)
 	}
@@ -56,16 +56,15 @@ func NewRawUploadStore(database *sql.DB, dataDir string) (*RawUploadStore, error
 	}
 	store := &RawUploadStore{db: database, root: root}
 	store.syncDirectory = store.syncSpoolDirectory
-	startupCtx, cancelStartup := context.WithTimeout(
-		context.Background(), rawUploadCleanupTimeout,
-	)
+	startupCtx, cancelStartup := context.WithTimeout(ctx, rawUploadCleanupTimeout)
 	err = store.cleanupExpiredAndOrphaned(startupCtx, time.Now().UTC())
 	cancelStartup()
 	if err != nil {
 		_ = root.Close()
 		return nil, fmt.Errorf("cleaning raw upload spool at startup: %w", err)
 	}
-	cleanupCtx, cancelCleanup := context.WithCancel(context.Background())
+	// The cleanup loop belongs to the store and runs until Close.
+	cleanupCtx, cancelCleanup := context.WithCancel(context.WithoutCancel(ctx))
 	store.cleanupCancel = cancelCleanup
 	store.cleanupWG.Go(func() {
 		ticker := time.NewTicker(rawUploadCleanupInterval)

@@ -1,0 +1,11 @@
+{"type":"user","uuid":"root","parentUuid":null,"timestamp":"2026-11-04T12:00:00Z","message":{"role":"user","content":"start"}}
+{"type":"user","uuid":"peer-0","parentUuid":"root","timestamp":"2026-11-04T12:00:01Z","message":{"role":"user","content":"Another Claude session sent a message: PING"},"isMeta":false,"origin":{"kind":"peer"}}
+{"type":"assistant","uuid":"reply-0","parentUuid":"peer-0","timestamp":"2026-11-04T12:00:02Z","message":{"role":"assistant","content":"answer 0"}}
+{"type":"user","uuid":"peer-1","parentUuid":"reply-0","timestamp":"2026-11-04T12:00:03Z","message":{"role":"user","content":"Another Claude session sent a message: PING"},"isMeta":false,"origin":{"kind":"peer"}}
+{"type":"assistant","uuid":"reply-1","parentUuid":"peer-1","timestamp":"2026-11-04T12:00:04Z","message":{"role":"assistant","content":"answer 1"}}
+{"type":"user","uuid":"peer-2","parentUuid":"reply-1","timestamp":"2026-11-04T12:00:05Z","message":{"role":"user","content":"Another Claude session sent a message: PING"},"isMeta":false,"origin":{"kind":"peer"}}
+{"type":"assistant","uuid":"reply-2","parentUuid":"peer-2","timestamp":"2026-11-04T12:00:06Z","message":{"role":"assistant","content":"answer 2"}}
+{"type":"user","uuid":"peer-3","parentUuid":"reply-2","timestamp":"2026-11-04T12:00:07Z","message":{"role":"user","content":"Another Claude session sent a message: PING"},"isMeta":false,"origin":{"kind":"peer"}}
+{"type":"assistant","uuid":"reply-3","parentUuid":"peer-3","timestamp":"2026-11-04T12:00:08Z","message":{"role":"assistant","content":"answer 3"}}
+{"type":"user","uuid":"retry","parentUuid":"root","timestamp":"2026-11-04T12:00:09Z","message":{"role":"user","content":"try again"}}
+{"type":"assistant","uuid":"retry-reply","parentUuid":"retry","timestamp":"2026-11-04T12:00:10Z","message":{"role":"assistant","content":"retry answer"}}

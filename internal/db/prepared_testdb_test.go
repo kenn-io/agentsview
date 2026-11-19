@@ -24,9 +24,13 @@ func OpenPreparedTestDB(path string) (*DB, error) {
 		return nil, fmt.Errorf("configuring prepared test CJK FTS: %w", err)
 	}
 
-	db := &DB{path: path, usageCache: newUsageCacheManager(path)}
-	reader := sql.OpenDB(&archiveReaderConnector{dsn: makeDSN(path, true), reads: &db.reads})
-	reader.SetMaxOpenConns(4)
+	db := &DB{
+		path: path, usageCache: newUsageCacheManager(path),
+		usageKept:         newDailyUsageMemo(),
+		activityKept:      newActivityKeptMemo(),
+		sessionStatsFacts: newSessionStatsFactsMemo(),
+	}
+	reader := db.openReader(path)
 	db.usageCache.attachArchive(db)
 	db.writer.Store(writer)
 	db.reader.Store(reader)

@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
@@ -576,4 +577,117 @@ func TestHandleSessionUsage_RawIDIdentity(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
 	assert.Len(t, got.Error.Candidates, 5)
+}
+
+func TestHandleSessionUsage_ReportsAgentRecordedCost(t *testing.T) {
+	te := setup(t)
+	seedSessionUsagePricing(t, te.db)
+	te.seedSession(t, "pi:usage-recorded", "my-project", 2,
+		func(s *db.Session) { s.Agent = "pi" })
+	te.seedMessages(t, "pi:usage-recorded", 2,
+		func(i int, m *db.Message) {
+			if i != 1 {
+				return
+			}
+			m.Role = "assistant"
+			m.Model = controlledSessionUsageModel
+			m.TokenUsage = jsontext.Value(
+				`{"input_tokens":1000,"output_tokens":500,` +
+					`"cache_creation_input_tokens":200,` +
+					`"cache_read_input_tokens":300,"recorded_cost_microdollars":20000}`,
+			)
+		})
+
+	w := te.get(t, "/api/v1/sessions/pi:usage-recorded/usage?breakdown=true")
+	assertStatus(t, w, http.StatusOK)
+	var got struct {
+		Cost         map[string]float64 `json:"cost"`
+		RecordedCost map[string]any     `json:"recorded_cost"`
+		Breakdown    []map[string]any   `json:"breakdown"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	// The catalog prices the model, so its cost stands and the agent's
+	// figure is reported beside it.
+	assert.InDelta(t, float64(11340), got.Cost["microdollars"], 0)
+	assert.Equal(t, map[string]any{
+		"recorded":      map[string]any{"microdollars": float64(20000)},
+		"computed":      map[string]any{"microdollars": float64(11340)},
+		"difference":    map[string]any{"microdollars": float64(-8660)},
+		"rows":          float64(1),
+		"fallback_rows": float64(0),
+		"unpriced_rows": float64(0),
+	}, got.RecordedCost)
+	require.Len(t, got.Breakdown, 1)
+	assert.Equal(t, map[string]any{"microdollars": float64(20000)},
+		got.Breakdown[0]["recorded_cost"])
+	assert.NotContains(t, got.Breakdown[0], "recorded_cost_priced")
+
+	// A rollup request compares the same own-session breakdown.
+	w = te.get(t, "/api/v1/sessions/pi:usage-recorded/usage?rollup=true&breakdown=true")
+	assertStatus(t, w, http.StatusOK)
+	var rollup map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &rollup))
+	assert.Equal(t, got.RecordedCost, rollup["recorded_cost"])
+
+	// Without a breakdown there is nothing to compare.
+	w = te.get(t, "/api/v1/sessions/pi:usage-recorded/usage?rollup=true")
+	assertStatus(t, w, http.StatusOK)
+	var rollupPlain map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &rollupPlain))
+	assert.NotContains(t, rollupPlain, "recorded_cost")
+	w = te.get(t, "/api/v1/sessions/pi:usage-recorded/usage")
+	assertStatus(t, w, http.StatusOK)
+	var plain map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &plain))
+	assert.NotContains(t, plain, "recorded_cost")
+}
+
+func TestHandleSessionUsage_ReportsAgentSessionTotal(t *testing.T) {
+	te := setup(t)
+	dbtest.SeedSessionUsageTotal(t, te.db)
+	w := te.get(t, "/api/v1/sessions/"+dbtest.SessionTotalSessionID+"/usage")
+	assertStatus(t, w, http.StatusOK)
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, map[string]any{"microdollars": float64(2000)}, got["cost"],
+		"the session total is not added to cost")
+	total, ok := got["session_total"].(map[string]any)
+	require.True(t, ok, "session_total present: %v", got["session_total"])
+	assert.Equal(t, "claude-cost-state", total["source"])
+	assert.Equal(t, "included", total["subagent_scope"])
+	assert.Equal(t, map[string]any{"microdollars": float64(750000)}, total["cost"])
+	assert.Equal(t, true, total["incomplete"])
+	models, ok := total["models"].([]any)
+	require.True(t, ok)
+	assert.Len(t, models, 2)
+}
+
+func TestUploadReplacesAgentSessionTotal(t *testing.T) {
+	te := setup(t)
+	costState := func(usd string) string {
+		return `{"type":"cost-state","sessionId":"upload-total","totalCostUSD":` + usd +
+			`,"modelUsage":{"claude-sonnet-4-20250514":{"inputTokens":10,"outputTokens":5,` +
+			`"thinkingTokens":0,"cacheReadInputTokens":0,"cacheCreationInputTokens":0,` +
+			`"webSearchRequests":0,"costUSD":` + usd + `}},"hasUnknownModelCost":false}`
+	}
+	transcript := testjsonl.NewSessionBuilder().
+		AddClaudeUser(tsEarly, "Hello upload").
+		AddClaudeAssistant(tsEarlyS5, "Hi!").
+		String()
+	total := func() *db.SessionUsageTotal {
+		t.Helper()
+		got, err := te.db.GetSessionUsageTotal(t.Context(), "upload-total")
+		require.NoError(t, err)
+		return got
+	}
+
+	assertStatus(t, te.upload(t, "upload-total.jsonl", transcript+costState("0.5")+"\n",
+		"project=myproj&machine=remote"), http.StatusOK)
+	require.NotNil(t, total())
+	assert.Equal(t, int64(500_000), total().Cost.Microdollars)
+
+	assertStatus(t, te.upload(t, "upload-total.jsonl", transcript+costState("0.75")+"\n",
+		"project=myproj&machine=remote"), http.StatusOK)
+	require.NotNil(t, total())
+	assert.Equal(t, int64(750_000), total().Cost.Microdollars, "a newer upload replaces the total")
 }

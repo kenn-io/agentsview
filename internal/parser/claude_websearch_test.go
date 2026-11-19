@@ -207,6 +207,65 @@ func TestClaudeWebSearchRequestsPerMessage(t *testing.T) {
 			},
 			want: map[string]int{"a1": 1, "a2": 0},
 		},
+		{
+			// A tool result can split one response across records, which
+			// usage reporting counts once, so each record carries the
+			// response's total.
+			name: "a response split by a tool result reports its total",
+			lines: []string{
+				userLine,
+				`{"type":"assistant","timestamp":"2026-07-30T10:00:01Z",` +
+					`"uuid":"a1","parentUuid":"u1","message":{"id":"msg_1",` +
+					`"model":"claude-sonnet-4-5","content":[{"type":"tool_use",` +
+					`"id":"toolu_s1","name":"WebSearch","input":{"query":"a"}}],` +
+					`"usage":{"input_tokens":10,"output_tokens":5,` +
+					`"server_tool_use":{"web_search_requests":0}}}}`,
+				`{"type":"user","timestamp":"2026-07-30T10:00:04Z","uuid":"u2",` +
+					`"parentUuid":"a1","message":{"content":[{"type":` +
+					`"tool_result","tool_use_id":"toolu_s1","content":"hits"}]},` +
+					`"toolUseResult":{"query":"a","searchCount":2}}`,
+				`{"type":"assistant","timestamp":"2026-07-30T10:00:05Z",` +
+					`"uuid":"a2","parentUuid":"u2","message":{"id":"msg_1",` +
+					`"model":"claude-sonnet-4-5","content":[{"type":"tool_use",` +
+					`"id":"toolu_s2","name":"WebSearch","input":{"query":"b"}}],` +
+					`"usage":{"input_tokens":10,"output_tokens":5,` +
+					`"server_tool_use":{"web_search_requests":0}}}}`,
+				`{"type":"user","timestamp":"2026-07-30T10:00:08Z","uuid":"u3",` +
+					`"parentUuid":"a2","message":{"content":[{"type":` +
+					`"tool_result","tool_use_id":"toolu_s2","content":"hits"}]},` +
+					`"toolUseResult":{"query":"b","searchCount":3}}`,
+			},
+			want: map[string]int{"a1": 5, "a2": 5},
+		},
+		{
+			name: "a search repeated in a split response counts once",
+			lines: []string{
+				userLine,
+				`{"type":"assistant","timestamp":"2026-07-30T10:00:01Z",` +
+					`"uuid":"a1","parentUuid":"u1","message":{"id":"msg_1",` +
+					`"model":"claude-sonnet-4-5","content":[{"type":"tool_use",` +
+					`"id":"toolu_s1","name":"WebSearch","input":{"query":"a"}}],` +
+					`"usage":{"input_tokens":10,"output_tokens":5,` +
+					`"server_tool_use":{"web_search_requests":0}}}}`,
+				`{"type":"user","timestamp":"2026-07-30T10:00:04Z","uuid":"u2",` +
+					`"parentUuid":"a1","message":{"content":[{"type":` +
+					`"tool_result","tool_use_id":"toolu_s1","content":"hits"}]},` +
+					`"toolUseResult":{"query":"a","searchCount":2}}`,
+				`{"type":"assistant","timestamp":"2026-07-30T10:00:05Z",` +
+					`"uuid":"a2","parentUuid":"u2","message":{"id":"msg_1",` +
+					`"model":"claude-sonnet-4-5","content":[{"type":"tool_use",` +
+					`"id":"toolu_s1","name":"WebSearch","input":{"query":"a"}},` +
+					`{"type":"tool_use","id":"toolu_s2","name":"WebSearch",` +
+					`"input":{"query":"b"}}],"usage":{"input_tokens":10,` +
+					`"output_tokens":5,"server_tool_use":` +
+					`{"web_search_requests":0}}}}`,
+				`{"type":"user","timestamp":"2026-07-30T10:00:08Z","uuid":"u3",` +
+					`"parentUuid":"a2","message":{"content":[{"type":` +
+					`"tool_result","tool_use_id":"toolu_s2","content":"hits"}]},` +
+					`"toolUseResult":{"query":"b","searchCount":3}}`,
+			},
+			want: map[string]int{"a1": 5, "a2": 5},
+		},
 	}
 
 	for _, tt := range tests {

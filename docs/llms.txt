@@ -17,20 +17,20 @@ The Markdown pages are canonical for machine readers; the HTML routes drop the
 - [Quick Start](https://agentsview.io/docs/quickstart.md): Get AgentsView running in under a minute.
 - [Configuration](https://agentsview.io/docs/configuration.md): Config file, default paths, and runtime settings.
 - [Usage Guide](https://agentsview.io/docs/usage.md): Browse and resume sessions, filter by label or linked pull request, search transcripts, and inspect tool-rate evidence.
-- [CLI Reference](https://agentsview.io/docs/commands.md): All AgentsView commands, flags, and environment variables.
+- [CLI Reference](https://agentsview.io/docs/commands.md): Commands, flags, environment variables, recovery hints, JSON stderr diagnostics, and command-specific exit codes.
 
 ## Monitor and Account
 
 - [Activity](https://agentsview.io/docs/activity.md): Activity, concurrency, and session-time reporting.
 - [Token Usage & Costs](https://agentsview.io/docs/token-usage.md): Token and cost reports, model aliases, selectable cost breakdowns, Hermes cron jobs, and cloud plan usage.
 - [One-shot CI Capture](https://agentsview.io/docs/one-shot-capture.md): Capture exact usage from one supported non-interactive agent execution.
-- [Stats](https://agentsview.io/docs/stats.md): Experimental workspace analytics via agentsview stats.
+- [Stats](https://agentsview.io/docs/stats.md): Experimental workspace analytics via agentsview report stats.
 - [Reporting Export](https://agentsview.io/docs/reporting-export.md): Canonical hourly activity and usage exports for reporting integrations.
 
 ## Understand
 
 - [Session Intelligence](https://agentsview.io/docs/session-intelligence.md): Health scores, outcomes, and session-quality analytics.
-- [Quality](https://agentsview.io/docs/quality.md): Deterministic quality signals and recommendations computed from session data.
+- [Quality](https://agentsview.io/docs/quality.md): Deterministic quality signals and recommendations computed from session data, plus the daily Friction Log.
 - [Semantic Search](https://agentsview.io/docs/semantic-search.md): Vector search over session messages, plus hybrid search and cursor-based context retrieval.
 - [Semantic Search Internals](https://agentsview.io/docs/semantic-search-internals.md): Architecture and invariants behind the vector index.
 - [Recall](https://agentsview.io/docs/recall.md): Experimental durable knowledge, generated insights, and session tool-effectiveness reports with cited calls.
@@ -40,15 +40,15 @@ The Markdown pages are canonical for machine readers; the HTML routes drop the
 ## Automate and Integrate
 
 - [MCP Server](https://agentsview.io/docs/mcp.md): Connect assistant clients to your session history with MCP.
+- [Kata](https://agentsview.io/docs/kata.md): Connect to a Kata issue tracker and file Friction Log patterns as issues, by hand or automatically.
 - [Session API](https://agentsview.io/docs/session-api.md): Programmatic access to session data via the CLI and REST endpoints.
 - [Session Export](https://agentsview.io/docs/session-export.md): Content-free session summary exports for scripting and analytics.
 - [Conversation Export](https://agentsview.io/docs/conversation-export.md): Visible user and assistant prose with incremental changes and revision-pinned reads.
-- [Chat Import](https://agentsview.io/docs/chat-import.md): Sync Claude.ai through Chrome or import Claude.ai, ChatGPT, and Gemini Apps exports.
+- [Chat Import](https://agentsview.io/docs/chat-import.md): Sync Claude.ai, ChatGPT, Gemini Apps, and Grok web chats through Chrome, or import Claude.ai, ChatGPT, and Gemini Apps exports.
 
 ## Sync and Share
 
 - [PostgreSQL Sync](https://agentsview.io/docs/pg-sync.md): Push sync, an auto-push service, and a read-only server for teams.
-- [DuckDB Mirror](https://agentsview.io/docs/duckdb.md): Mirror the SQLite archive into DuckDB, locally or over the Quack remote protocol.
 - [ClickHouse Sync](https://agentsview.io/docs/clickhouse-sync.md): Push the SQLite archive into ClickHouse and serve a read-only web UI from it.
 - [Filesystem Session Sync](https://agentsview.io/docs/filesystem-sync.md): View sessions from multiple machines by transporting native session directories.
 - [Artifact Folder Sync](https://agentsview.io/docs/artifact-sync.md): Exchange normalized sessions between archives through a trusted folder.

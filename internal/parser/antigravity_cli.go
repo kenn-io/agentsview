@@ -76,6 +76,8 @@ type AntigravityCLIParseStatus struct {
 	// messages instead. Sync can store the fallback while leaving
 	// data_version stale so the next pass retries.
 	NeedsRetry bool
+	// summaryDigest condenses the summary values the parse read.
+	summaryDigest string
 }
 
 // parseSessionWithStatus parses one CLI session into the canonical
@@ -416,6 +418,13 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 			Mtime: mtime,
 		},
 	}
+	summaries := loadAntigravitySummaries(ctx, root)
+	status.summaryDigest = summaries.fingerprintDigest(id)
+	if parentCascadeID == "" {
+		// Without the reader sidecar, the summary store still names the
+		// conversation that started a sub-agent conversation.
+		parentCascadeID = summaries.parent(id)
+	}
 	if parentCascadeID != "" && !strings.EqualFold(parentCascadeID, id) {
 		sess.ParentSessionID = antigravityCLIIDPrefix + parentCascadeID
 		sess.RelationshipType = RelSubagent
@@ -595,12 +604,17 @@ func mergeAntigravityDBHistoryMessages(
 		return dbMessages
 	}
 	userCount := 0
+	unmatchedTypedPrompt := false
 	for _, msg := range dbMessages {
 		if msg.Role == RoleUser {
+			if msg.antigravityTypedPrompt && userCount < len(history) && normalizedAntigravityPrompt(msg.Content) != normalizedAntigravityPrompt(history[userCount].Content) {
+				unmatchedTypedPrompt = true
+			}
 			userCount++
 		}
 	}
-	if userCount != len(history) {
+	// Positional overwrite would replace a typed prompt missing from history.
+	if userCount != len(history) || unmatchedTypedPrompt {
 		return appendMissingAntigravityHistoryMessages(
 			dbMessages, history,
 		)
@@ -615,8 +629,10 @@ func mergeAntigravityDBHistoryMessages(
 				dbMessages, history,
 			)
 		}
-		dbMessages[i].Content = history[historyIdx].Content
-		dbMessages[i].ContentLength = len(history[historyIdx].Content)
+		if !dbMessages[i].antigravityTypedPrompt {
+			dbMessages[i].Content = history[historyIdx].Content
+			dbMessages[i].ContentLength = len(history[historyIdx].Content)
+		}
 		if !history[historyIdx].Timestamp.IsZero() {
 			dbMessages[i].Timestamp = history[historyIdx].Timestamp
 		}
@@ -636,16 +652,14 @@ func appendMissingAntigravityHistoryMessages(
 		key  string
 		ts   time.Time
 		used bool
+		idx  int
 	}
 	var existing []existingUserTurn
-	for _, msg := range dbMessages {
-		if msg.Role != RoleUser {
-			continue
-		}
-		if key := normalizedAntigravityPrompt(msg.Content); key != "" {
-			existing = append(existing, existingUserTurn{
-				key: key, ts: msg.Timestamp,
-			})
+	for idx, msg := range dbMessages {
+		if msg.Role == RoleUser {
+			if key := normalizedAntigravityPrompt(msg.Content); key != "" {
+				existing = append(existing, existingUserTurn{key: key, ts: msg.Timestamp, idx: idx})
+			}
 		}
 	}
 	matchers := []func(existing, want time.Time) bool{
@@ -674,18 +688,20 @@ func appendMissingAntigravityHistoryMessages(
 					sameTurn(existing[i].ts, msg.Timestamp) {
 					existing[i].used = true
 					matched[hIdx] = true
+					if dbMessages[existing[i].idx].Timestamp.IsZero() && !slices.ContainsFunc(dbMessages[existing[i].idx+1:], func(m ParsedMessage) bool { return m.Timestamp.IsZero() }) {
+						dbMessages[existing[i].idx].Timestamp = msg.Timestamp
+					}
 					break
 				}
 			}
 		}
 	}
-	out := dbMessages
 	for hIdx, msg := range history {
 		if !matched[hIdx] {
-			out = append(out, msg)
+			dbMessages = append(dbMessages, msg)
 		}
 	}
-	return out
+	return dbMessages
 }
 
 func normalizedAntigravityPrompt(s string) string {
@@ -764,6 +780,14 @@ func buildAntigravityCLIProjectMap(root string) map[string]string {
 	maps.Copy(out, antigravityProjectMapFromLastConversations(
 		filepath.Join(root, "cache", "last_conversations.json"),
 	))
+	// The cache keeps only each folder's latest conversation and current
+	// history rows carry no conversation ID, so the summary store fills the
+	// conversations they leave unmapped.
+	for id, summary := range loadAntigravitySummaries(context.Background(), root).byID {
+		if _, ok := out[id]; !ok && summary.workspace != "" {
+			out[id] = summary.workspace
+		}
+	}
 	return out
 }
 
@@ -1205,8 +1229,8 @@ func antigravityCompositeHashWithExtra(
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func antigravityCLICompositeHash(path, id, workspace string) (string, error) {
-	return antigravityCompositeHashWithExtra(
+func antigravityCLICompositeHash(ctx context.Context, path, id, workspace string) (string, error) {
+	hash, err := antigravityCompositeHashWithExtra(
 		path,
 		antigravityCLIProviderCompanionPaths(path),
 		func(h interface{ Write([]byte) (int, error) }) error {
@@ -1230,6 +1254,11 @@ func antigravityCLICompositeHash(path, id, workspace string) (string, error) {
 			return err
 		},
 	)
+	if err != nil {
+		return "", err
+	}
+	summaries := loadAntigravitySummaries(ctx, filepath.Dir(filepath.Dir(path)))
+	return antigravityHashWithSummary(hash, summaries.fingerprintDigest(strings.TrimPrefix(id, antigravityImplicitTag))), nil
 }
 
 func antigravityCLIProviderCompanionPaths(path string) []string {
@@ -1765,7 +1794,7 @@ func parseAntigravityCLITrajectory(
 		}
 		// NOTE: We emit a synthetic User message with empty content containing these tool results.
 		// This relies on the sync engine's internal contract (specifically pairToolResults and
-		// pairAndFilter in engine.go) which matches tool results to tool calls by ToolUseID,
+		// pairAndFilter in engine_session_convert.go) which matches tool results to tool calls by ToolUseID,
 		// and then filters out empty-content synthetic User messages from final display.
 		// Future maintainers: do not "clean up" this empty message behavior as it is critical
 		// for correct UI rendering.

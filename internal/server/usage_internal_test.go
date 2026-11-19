@@ -259,6 +259,8 @@ func TestUsageComparisonScansPriorPeriodOnly(t *testing.T) {
 	assertRecorderStatus(t, w, http.StatusOK)
 
 	assertUsageQueryCalls(t, spy, 1, 0, 0)
+	require.Len(t, spy.filters, 1)
+	assert.True(t, spy.filters[0].SkipSessionCounts, "prior-period comparison only consumes total cost")
 
 	var out Comparison
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &out))

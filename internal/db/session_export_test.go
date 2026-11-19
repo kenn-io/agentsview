@@ -24,8 +24,8 @@ import (
 )
 
 func TestAllSessionExportKeepsTerminationCutoffAcrossPages(t *testing.T) {
-	d := testSessionExportDB(t)
 	synctest.Test(t, func(t *testing.T) {
+		d := testSessionExportDB(t)
 		// Keep the older activity timestamps within the valid 2000..2100 range.
 		time.Sleep(time.Hour)
 		for _, id := range []string{"active-a", "active-b"} {
@@ -552,11 +552,11 @@ func TestSessionSummaryExportIdentitySurvivesRebuild(t *testing.T) {
 
 	rebuilt := testDB(t)
 	require.NoError(t, rebuilt.SetDatabaseIDForTest(ctx, "generation-two"))
-	require.NoError(t, rebuilt.CopyArchiveIdentityFrom(source.Path()))
-	count, err := rebuilt.CopyOrphanedDataFrom(source.Path())
+	require.NoError(t, rebuilt.CopyArchiveIdentityFrom(t.Context(), source.Path()))
+	count, err := rebuilt.CopyOrphanedDataFrom(t.Context(), source.Path())
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
-	require.NoError(t, rebuilt.CopySessionMetadataFrom(source.Path()))
+	require.NoError(t, rebuilt.CopySessionMetadataFrom(t.Context(), source.Path()))
 	after, err := rebuilt.ExportSessionSummaries(ctx, SessionExportOptions{})
 	require.NoError(t, err)
 	require.Len(t, after.Rows, 1)
@@ -1711,7 +1711,6 @@ func TestSessionExportClaudeSnapshotPeersUsesSnapshotIndex(t *testing.T) {
 
 	for i, captured := range capture.queries {
 		assert.Contains(t, captured.query, "m.claude_message_id != ''")
-		assert.Contains(t, captured.query, "m.claude_request_id != ''")
 		assert.Contains(t, captured.query,
 			"(m.claude_message_id, m.claude_request_id) IN (VALUES")
 

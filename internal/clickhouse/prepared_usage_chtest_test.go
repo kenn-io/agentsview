@@ -27,10 +27,11 @@ import (
 // Between a push and its refresh, reads use the raw rows rather than the
 // previous push's prepared usage.
 func TestPreparedUsagePublicationAndPricing(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedUsagePriceFixture(t)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
-	store := NewStoreFromDB(syncer.conn)
+	store := newTestStore(t, syncer.conn, syncer.target)
 	// A stopped view remembers the refresh each push requests and runs it
 	// once resumed, so the test controls when prepared usage catches up.
 	_, err := store.DB().ExecContext(ctx, "ALTER TABLE prepare_usage MODIFY REFRESH EVERY 1 DAY")
@@ -177,6 +178,7 @@ func TestPreparedUsagePublicationAndPricing(t *testing.T) {
 // An archive with an existing push cursor must republish unchanged sessions
 // once when the new complete-snapshot tables are introduced.
 func TestPreparedUsageBackfillsExistingPushCursor(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	store, syncer, _ := newPushedStore(t)
 	_, err := store.DB().ExecContext(ctx, "TRUNCATE TABLE usage_session_snapshots")
@@ -204,10 +206,11 @@ func TestPreparedUsageBackfillsExistingPushCursor(t *testing.T) {
 // Range usage reads must return the same result from prepared usage as
 // from the raw messages and usage events they replace.
 func TestPreparedUsageServesRangeUsageReads(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedUsagePriceFixture(t)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
-	store := NewStoreFromDB(syncer.conn)
+	store := newTestStore(t, syncer.conn, syncer.target)
 	// The stopped view holds the push's refresh until the raw rows are read.
 	_, err := store.DB().ExecContext(ctx, "SYSTEM STOP VIEW prepare_usage")
 	require.NoError(t, err)
@@ -286,6 +289,7 @@ func TestPreparedUsageServesRangeUsageReads(t *testing.T) {
 // A rebuild that stopped after dropping the view but before the table must
 // complete on the next start instead of failing to stop the missing view.
 func TestEnsurePreparedUsageRecoversFromInterruptedRebuild(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	store, _, _ := newPushedStore(t)
 	conn := store.DB()
@@ -312,11 +316,12 @@ func TestEnsurePreparedUsageRecoversFromInterruptedRebuild(t *testing.T) {
 // here one sorted by the nullable timestamp expression that ClickHouse
 // cannot prune through, must be rebuilt for the current query.
 func TestEnsurePreparedUsageRebuildsOutdatedTable(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	store, _, _ := newPushedStore(t)
 	conn := store.DB()
 	selection := clickUsageNormalizedQueryFrom("", chUsageStoredMessageEligibility, chUsageEventEligibility,
-		"usage_session_snapshots s ARRAY JOIN s.usage_facts AS m",
+		chSnapshotMessageFrom, chSnapshotMessageRecordedCost,
 		"usage_session_snapshots s ARRAY JOIN s.usage_events AS ue", "1", "")
 	for _, query := range []string{
 		"SYSTEM STOP VIEW prepare_usage",
@@ -362,6 +367,7 @@ func TestEnsurePreparedUsageRebuildsOutdatedTable(t *testing.T) {
 // table must still find the schema in place: every refresh replaces the
 // table, so a schema step that alters it can meet the old table.
 func TestEnsureSchemaDuringPreparedUsageRefresh(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	store, syncer, _ := newPushedStore(t)
 	for range 20 {
@@ -374,6 +380,7 @@ func TestEnsureSchemaDuringPreparedUsageRefresh(t *testing.T) {
 // A projection step that fails after it stopped the refresh must start the
 // refresh again. Otherwise prepared usage stays stale, and a later start that
 // finds the projections present never restarts it.
+// No t.Parallel: changes chPreparedUsageProjections, which every EnsureSchema reads.
 func TestEnsurePreparedUsageProjectionsRestartsRefreshAfterFailure(t *testing.T) {
 	ctx := t.Context()
 	store, _, _ := newPushedStore(t)
@@ -394,27 +401,9 @@ func TestEnsurePreparedUsageProjectionsRestartsRefreshAfterFailure(t *testing.T)
 // prepare the pushed sessions' rows themselves, so they match both the
 // refresh that follows and the raw rows.
 func TestPreparedUsageServesReadsBetweenRefreshes(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
-	local, target := seedUsagePriceFixture(t)
-	syncer := newTestSync(t, local, target, storage.PusherOptions{})
-	store := NewStoreFromDB(syncer.conn)
-	exec := func(stmts ...string) {
-		t.Helper()
-		for _, stmt := range stmts {
-			_, err := store.DB().ExecContext(ctx, stmt)
-			require.NoError(t, err, stmt)
-		}
-	}
-	push := func() {
-		t.Helper()
-		result, err := syncer.Push(ctx, false, nil)
-		require.NoError(t, err)
-		require.Zero(t, result.Errors)
-	}
-	exec("SYSTEM STOP VIEW prepare_usage")
-	push()
-	exec("SYSTEM START VIEW prepare_usage", "SYSTEM REFRESH VIEW prepare_usage",
-		"SYSTEM WAIT VIEW prepare_usage", "SYSTEM STOP VIEW prepare_usage")
+	local, syncer, store := newPreparedUsageStore(t)
 	filters := []db.UsageFilter{
 		{Timezone: "UTC", From: "2026-01-12", To: "2026-01-12", Breakdowns: true},
 		{Timezone: "UTC", From: "2026-01-01", To: "2026-01-31", Agent: "claude", ExcludeOneShot: true},
@@ -430,15 +419,10 @@ func TestPreparedUsageServesReadsBetweenRefreshes(t *testing.T) {
 		t.Helper()
 		var out reads
 		for _, f := range filters {
-			daily, err := store.GetDailyUsage(ctx, f)
-			require.NoError(t, err)
-			out.daily = append(out.daily, daily)
-			top, err := store.GetTopSessionsByCost(ctx, f, 10)
-			require.NoError(t, err)
-			out.top = append(out.top, top)
-			counts, err := store.GetUsageSessionCounts(ctx, f)
-			require.NoError(t, err)
-			out.counts = append(out.counts, counts)
+			rows := readPreparedUsage(t, store, f)
+			out.daily = append(out.daily, rows.daily)
+			out.top = append(out.top, rows.top)
+			out.counts = append(out.counts, rows.counts)
 		}
 		return out
 	}
@@ -468,7 +452,7 @@ func TestPreparedUsageServesReadsBetweenRefreshes(t *testing.T) {
 	deleted, err := local.DeleteSessionIfTrashed(ctx, usagePriceSnapBID)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, deleted)
-	push()
+	pushPreparedUsage(t, syncer)
 	state, err = store.preparedUsageState(ctx)
 	require.NoError(t, err)
 	require.True(t, state.ready)
@@ -477,8 +461,7 @@ func TestPreparedUsageServesReadsBetweenRefreshes(t *testing.T) {
 	between := read()
 	require.NotEqual(t, prepared, between, "reads must serve the pushed sessions")
 
-	exec("SYSTEM START VIEW prepare_usage", "SYSTEM REFRESH VIEW prepare_usage",
-		"SYSTEM WAIT VIEW prepare_usage", "SYSTEM STOP VIEW prepare_usage")
+	runPreparedUsageRefresh(t, store)
 	state, err = store.preparedUsageState(ctx)
 	require.NoError(t, err)
 	require.True(t, state.ready)
@@ -486,7 +469,7 @@ func TestPreparedUsageServesReadsBetweenRefreshes(t *testing.T) {
 	require.Empty(t, state.stale)
 	require.Equal(t, between, read(), "rows prepared at read time must match the refresh")
 	// An empty table is not ready, so the same reads use the raw rows.
-	exec("TRUNCATE TABLE prepared_usage")
+	execPreparedUsage(t, store, "TRUNCATE TABLE prepared_usage")
 	ready, err := store.preparedUsageReady(ctx)
 	require.NoError(t, err)
 	require.False(t, ready)
@@ -497,10 +480,11 @@ func TestPreparedUsageServesReadsBetweenRefreshes(t *testing.T) {
 // counts a new session once: the refresh already holds the rows the
 // state's delta supplies.
 func TestPreparedUsageReadAcrossRefreshCountsNewSessionOnce(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedUsagePriceFixture(t)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
-	store := NewStoreFromDB(syncer.conn)
+	store := newTestStore(t, syncer.conn, syncer.target)
 	exec := func(stmts ...string) {
 		t.Helper()
 		for _, stmt := range stmts {
@@ -552,10 +536,11 @@ func TestPreparedUsageReadAcrossRefreshCountsNewSessionOnce(t *testing.T) {
 // them or writes the snapshot and session rows, must not leave that
 // session's usage read from before the push.
 func TestSessionUsageReadsMessagesOfInterruptedPush(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedUsagePriceFixture(t)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
-	store := NewStoreFromDB(syncer.conn)
+	store := newTestStore(t, syncer.conn, syncer.target)
 	result, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)
@@ -575,7 +560,7 @@ func TestSessionUsageReadsMessagesOfInterruptedPush(t *testing.T) {
 
 	after, err := store.GetSessionUsage(ctx, usagePriceRoundID, true)
 	require.NoError(t, err)
-	fresh, err := NewStoreFromDB(store.DB()).GetSessionUsage(ctx, usagePriceRoundID, true)
+	fresh, err := NewStoreFromDB(store.DB(), store.bulk).GetSessionUsage(ctx, usagePriceRoundID, true)
 	require.NoError(t, err)
 	require.NotEqual(t, before, fresh, "the interrupted push must have changed the raw rows")
 	require.Equal(t, fresh, after)
@@ -584,6 +569,7 @@ func TestSessionUsageReadsMessagesOfInterruptedPush(t *testing.T) {
 // Session ids reach the changed-session query as an Array(String) query
 // parameter; ClickHouse must parse back exactly the ids that were sent.
 func TestChangedSessionParameterKeepsIDs(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	store, _, _ := newPushedStore(t)
 	ids := []string{"plain", `quote'd`, `back\slash`, `both\'`, "tab\tnewline\n"}
@@ -597,10 +583,11 @@ func TestChangedSessionParameterKeepsIDs(t *testing.T) {
 // A delta that reuses the kept rows of an earlier changed snapshot and
 // reads a newly changed one serves what a store that kept nothing does.
 func TestUsageDeltaReusesKeptSnapshotRows(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedUsagePriceFixture(t)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
-	store := NewStoreFromDB(syncer.conn)
+	store := newTestStore(t, syncer.conn, syncer.target)
 	push := func() {
 		t.Helper()
 		result, err := syncer.Push(ctx, false, nil)
@@ -635,7 +622,7 @@ func TestUsageDeltaReusesKeptSnapshotRows(t *testing.T) {
 		t.Helper()
 		got, err := store.GetDailyUsage(ctx, f)
 		require.NoError(t, err)
-		fresh, err := NewStoreFromDB(store.DB()).GetDailyUsage(ctx, f)
+		fresh, err := NewStoreFromDB(store.DB(), store.bulk).GetDailyUsage(ctx, f)
 		require.NoError(t, err)
 		require.Equal(t, fresh, got)
 	}
@@ -648,6 +635,61 @@ func TestUsageDeltaReusesKeptSnapshotRows(t *testing.T) {
 	requireFresh()
 }
 
+// A snapshot whose usage the refresh drops entirely has no prepared rows to
+// fall behind, so after a refresh it is current. Such snapshots are messages
+// that name a model but report no tokens, Claude's synthetic messages, and
+// trashed sessions. Counting them as pushed since the refresh made every read
+// prepare them again and send their ids to the server. A mirror created before
+// the snapshots recorded this gains it on the next schema step.
+func TestPreparedUsageCoversSnapshotsWithoutPreparedRows(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	local, syncer, store := newPreparedUsageStore(t)
+	const unreportedID, syntheticID = "ch-usage-unreported", "ch-usage-synthetic"
+	const ts = "2026-01-12T05:00:00.000Z"
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{
+		{Session: fixtureSession(unreportedID, "delta", "no tokens", ts, 1), Messages: []db.Message{
+			usagePriceMessage(unreportedID, 0, ts, "round-test", "")}, ReplaceMessages: true, DataVersion: 1},
+		{Session: fixtureSession(syntheticID, "delta", "synthetic", ts, 1), Messages: []db.Message{
+			usagePriceMessage(syntheticID, 0, ts, "<synthetic>", `{"input_tokens":10}`)}, ReplaceMessages: true, DataVersion: 1},
+	})
+	require.NoError(t, err)
+	require.NoError(t, local.SoftDeleteSession(ctx, usagePriceTierID))
+	pushPreparedUsage(t, syncer)
+	var withUsage uint64
+	require.NoError(t, store.DB().QueryRowContext(ctx, `SELECT count() FROM usage_session_snapshots
+		WHERE id IN (?, ?, ?) AND usage_messages.size0 != 0`, unreportedID, syntheticID, usagePriceTierID).Scan(&withUsage))
+	require.EqualValues(t, 3, withUsage, "each snapshot must carry usage messages the refresh drops")
+	runPreparedUsageRefresh(t, store)
+
+	requireChanged := func(store *Store, want []string) {
+		t.Helper()
+		state, err := store.preparedUsageState(ctx)
+		require.NoError(t, err)
+		require.True(t, state.ready)
+		require.Equal(t, want, state.changed)
+		require.Empty(t, state.stale)
+	}
+	requireChanged(store, nil)
+
+	// A snapshot with tokens pushed after the refresh still needs its rows
+	// prepared at read time.
+	const reportedID = "ch-usage-reported"
+	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{
+		{Session: fixtureSession(reportedID, "delta", "tokens", ts, 1), Messages: []db.Message{
+			usagePriceMessage(reportedID, 0, ts, "round-test", `{"input_tokens":10}`)}, ReplaceMessages: true, DataVersion: 1},
+	})
+	require.NoError(t, err)
+	pushPreparedUsage(t, syncer)
+	requireChanged(store, []string{reportedID})
+
+	execPreparedUsage(t, store, "ALTER TABLE usage_session_snapshots DROP COLUMN prepares_usage SETTINGS mutations_sync=2")
+	require.ErrorContains(t, CheckSchemaCompat(ctx, store.DB()), "usage_session_snapshots.prepares_usage")
+	require.NoError(t, EnsureSchemaOn(ctx, store.DB()))
+	require.NoError(t, CheckSchemaCompat(ctx, store.DB()))
+	requireChanged(NewStoreFromDB(store.DB(), store.bulk), []string{reportedID})
+}
+
 // A server that cannot exchange tables, such as one whose data directory is
 // on NFS, fails every refresh of a refreshable view that replaces its
 // target. There, each push must leave prepared usage filled from the
@@ -655,6 +697,7 @@ func TestUsageDeltaReusesKeptSnapshotRows(t *testing.T) {
 // replace. A mirror an earlier version set up with such a view recovers on
 // the next push.
 func TestPreparedUsageWithoutTableExchange(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, _ := seedUsagePriceFixture(t)
 	dsn, database := chtest.FreshDatabaseOn(t, chtest.NoExchangeServerURL(t))
@@ -666,7 +709,7 @@ func TestPreparedUsageWithoutTableExchange(t *testing.T) {
 	require.NoError(t, err)
 
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
-	store := NewStoreFromDB(syncer.conn)
+	store := newTestStore(t, syncer.conn, syncer.target)
 	ids := []string{usagePriceRoundID, usagePriceTierID, usagePriceSnapAID, usagePriceSnapBID, usagePriceMixedID, usagePriceCopilotID}
 	q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: "2026-01-12", Timezone: "UTC"},
 		time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
@@ -691,32 +734,17 @@ func TestPreparedUsageWithoutTableExchange(t *testing.T) {
 		require.Empty(t, state.changed)
 		require.Empty(t, state.stale)
 	}
-	parts := func() []string {
-		t.Helper()
-		var names []string
-		rows, err := store.DB().QueryContext(ctx, `SELECT name FROM system.parts
-			WHERE database = currentDatabase() AND table = 'prepared_usage' AND active ORDER BY name`)
-		require.NoError(t, err)
-		defer rows.Close()
-		for rows.Next() {
-			var name string
-			require.NoError(t, rows.Scan(&name))
-			names = append(names, name)
-		}
-		require.NoError(t, rows.Err())
-		return names
-	}
 	locks := func() []string {
 		t.Helper()
 		return preparedUsageTables(t, store.DB(), "prepared_usage_rebuild_lock")
 	}
 	push()
-	built := parts()
+	built := preparedUsageParts(t, store)
 	require.NotEmpty(t, built)
 	result, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)
-	require.Equal(t, built, parts(), "a push that changed nothing must keep the prepared rows")
+	require.Equal(t, built, preparedUsageParts(t, store), "a push that changed nothing must keep the prepared rows")
 	require.Equal(t, []string{"prepared_usage_rebuild_lock_2 released"}, locks(),
 		"a push that changed nothing must not take the rebuild lock")
 
@@ -737,12 +765,13 @@ func TestPreparedUsageWithoutTableExchange(t *testing.T) {
 	result, err = syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)
-	require.Equal(t, built, parts(), "a push must not rebuild while another holds the lock")
+	require.Equal(t, built, preparedUsageParts(t, store), "a push must not rebuild while another holds the lock")
 	state, err := store.preparedUsageState(ctx)
 	require.NoError(t, err)
 	require.Equal(t, []string{usagePriceRoundID}, state.changed)
 	// A lock not renewed for more than an hour belongs to a stopped push.
-	// The next push takes over, and one released lock table remains. The
+	// The next push that writes usage takes over, and one released lock
+	// table remains. The
 	// holder that overran may have passed its ownership check with its build
 	// filled; after the takeover it can no longer publish the older rows. A
 	// build of a newer lock belongs to a successor and stays.
@@ -755,6 +784,7 @@ func TestPreparedUsageWithoutTableExchange(t *testing.T) {
 		_, err = store.DB().ExecContext(ctx, stmt)
 		require.NoError(t, err, stmt)
 	}
+	republishRoundSession(t, local, 150)
 	push()
 	_, err = store.DB().ExecContext(ctx, "ALTER TABLE prepared_usage REPLACE PARTITION tuple() FROM prepared_usage_build_100")
 	require.True(t, isMissingTableError(err), "the overran holder must not publish after a takeover: %v", err)
@@ -769,7 +799,7 @@ func TestPreparedUsageWithoutTableExchange(t *testing.T) {
 		}
 	}
 	require.Len(t, roundRows, 1)
-	require.Equal(t, 100, roundRows[0].InputTokens)
+	require.Equal(t, 150, roundRows[0].InputTokens)
 
 	_, err = store.DB().ExecContext(ctx, "TRUNCATE TABLE prepared_usage")
 	require.NoError(t, err)
@@ -786,6 +816,7 @@ func TestPreparedUsageWithoutTableExchange(t *testing.T) {
 // lock: a rebuild that paused through the switch discards its build, and a
 // push that paused before taking the lock skips its rebuild.
 func TestEnsurePreparedUsageRetiresRebuildsWithTableExchange(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedFixture(t)
 	conn := chtest.Open(t, target.URL, target.Database)
@@ -829,6 +860,7 @@ func TestEnsurePreparedUsageRetiresRebuildsWithTableExchange(t *testing.T) {
 // One that finds the newest lock retired but no view finishes the switch to
 // the view that a schema step left halfway.
 func TestRefreshPreparedUsageWithoutViewFollowsRebuildLock(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedFixture(t)
 	conn := chtest.Open(t, target.URL, target.Database)
@@ -838,19 +870,22 @@ func TestRefreshPreparedUsageWithoutViewFollowsRebuildLock(t *testing.T) {
 		return preparedUsageTables(t, conn, "prepare")
 	}
 	require.NoError(t, dropPreparedUsageView(ctx, conn))
-	require.NoError(t, refreshPreparedUsage(ctx, conn))
+	_, err := refreshPreparedUsage(ctx, conn, true)
+	require.NoError(t, err)
 	require.Empty(t, tables(), "a push must not rebuild or take a lock without one")
 
 	require.NoError(t, createRebuildLock(ctx, conn, 3, rebuildLockState{Status: rebuildLockRetired}))
-	_, err := conn.ExecContext(ctx, "CREATE TABLE prepared_usage_build_2 AS prepared_usage")
+	_, err = conn.ExecContext(ctx, "CREATE TABLE prepared_usage_build_2 AS prepared_usage")
 	require.NoError(t, err)
-	require.NoError(t, refreshPreparedUsage(ctx, conn))
+	_, err = refreshPreparedUsage(ctx, conn, true)
+	require.NoError(t, err)
 	require.Equal(t, []string{"prepare_usage ", "prepared_usage_rebuild_lock_3 retired"}, tables())
 }
 
 // A lock comment that a manual edit left unreadable stops rebuilds with an
 // error that names the lock and the statement that repairs it.
 func TestRebuildLockRejectsUnreadableComment(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dsn, database := chtest.FreshDatabase(t)
 	conn := chtest.Open(t, dsn, database)
@@ -876,6 +911,7 @@ func TestRebuildLockRejectsUnreadableComment(t *testing.T) {
 // server restart can change the answer, so later schema steps and pushes on
 // the same server reuse it. An answer recorded before the server started, or
 // by another server and copied in by a restore, is probed again.
+// No t.Parallel: reads the server-wide UNSUPPORTED_METHOD count that other tests raise.
 func TestTableExchangeProbedOncePerServerStart(t *testing.T) {
 	ctx := t.Context()
 	local, _ := seedUsagePriceFixture(t)
@@ -928,6 +964,7 @@ func TestTableExchangeProbedOncePerServerStart(t *testing.T) {
 // A database that loses the ability to exchange tables again lets pushes
 // take the rebuild lock that an earlier switch to the view retired.
 func TestEnsurePreparedUsageReopensRetiredLockWithoutTableExchange(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, _ := seedUsagePriceFixture(t)
 	dsn, database := chtest.FreshDatabaseOn(t, chtest.NoExchangeServerURL(t))
@@ -944,7 +981,7 @@ func TestEnsurePreparedUsageReopensRetiredLockWithoutTableExchange(t *testing.T)
 	result, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)
-	ready, err := NewStoreFromDB(syncer.conn).preparedUsageReady(ctx)
+	ready, err := newTestStore(t, syncer.conn, syncer.target).preparedUsageReady(ctx)
 	require.NoError(t, err)
 	require.True(t, ready, "the push must rebuild prepared usage")
 	require.Equal(t, []string{"prepared_usage_rebuild_lock_6 released"},
@@ -956,6 +993,7 @@ func TestEnsurePreparedUsageReopensRetiredLockWithoutTableExchange(t *testing.T)
 // retired and no view. In a database that cannot swap tables, the push must
 // rebuild rather than create a view whose every refresh fails.
 func TestRefreshPreparedUsageWithRetiredLockWithoutTableExchange(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, _ := seedUsagePriceFixture(t)
 	dsn, database := chtest.FreshDatabaseOn(t, chtest.NoExchangeServerURL(t))
@@ -967,7 +1005,7 @@ func TestRefreshPreparedUsageWithRetiredLockWithoutTableExchange(t *testing.T) {
 	result, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	require.Zero(t, result.Errors)
-	ready, err := NewStoreFromDB(syncer.conn).preparedUsageReady(ctx)
+	ready, err := newTestStore(t, syncer.conn, syncer.target).preparedUsageReady(ctx)
 	require.NoError(t, err)
 	require.True(t, ready, "the push must rebuild prepared usage")
 	require.Equal(t, []string{"prepared_usage_rebuild_lock_3 released"}, preparedUsageTables(t, conn, "prepare"),
@@ -979,6 +1017,7 @@ func TestRefreshPreparedUsageWithRetiredLockWithoutTableExchange(t *testing.T) {
 // renewing or releasing a lock a successor already dropped changes nothing,
 // and a push that paused before taking a lock cannot take a retired one.
 func TestPreparedUsageRebuildLockFencesSupersededHolder(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dsn, database := chtest.FreshDatabase(t)
 	conn := chtest.Open(t, dsn, database)
@@ -1033,6 +1072,23 @@ func TestPreparedUsageRebuildLockFencesSupersededHolder(t *testing.T) {
 	require.False(t, acquired, "the successor's lock is still held")
 }
 
+// preparedUsageParts lists the active parts of prepared_usage by name.
+func preparedUsageParts(t *testing.T, store *Store) []string {
+	t.Helper()
+	rows, err := store.DB().QueryContext(t.Context(), `SELECT name FROM system.parts
+		WHERE database = currentDatabase() AND table = 'prepared_usage' AND active ORDER BY name`)
+	require.NoError(t, err)
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var name string
+		require.NoError(t, rows.Scan(&name))
+		names = append(names, name)
+	}
+	require.NoError(t, rows.Err())
+	return names
+}
+
 // preparedUsageTables lists the tables other than prepared_usage whose names
 // start with prefix, each with the status in its rebuild lock comment, which
 // is empty for tables that are not locks.
@@ -1051,4 +1107,377 @@ func preparedUsageTables(t *testing.T, conn *sql.DB, prefix string) []string {
 	}
 	require.NoError(t, rows.Err())
 	return names
+}
+
+func execPreparedUsage(t *testing.T, store *Store, stmts ...string) {
+	t.Helper()
+	for _, stmt := range stmts {
+		_, err := store.DB().ExecContext(t.Context(), stmt)
+		require.NoError(t, err, stmt)
+	}
+}
+
+// newPreparedUsageStore pushes the price fixture and refreshes its prepared
+// rows once, leaving the refresh stopped.
+func newPreparedUsageStore(t *testing.T) (*db.DB, *Sync, *Store) {
+	t.Helper()
+	local, target := seedUsagePriceFixture(t)
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	store := newTestStore(t, syncer.conn, syncer.target)
+	execPreparedUsage(t, store, "SYSTEM STOP VIEW prepare_usage")
+	pushPreparedUsage(t, syncer)
+	runPreparedUsageRefresh(t, store)
+	return local, syncer, store
+}
+
+func runPreparedUsageRefresh(t *testing.T, store *Store) {
+	t.Helper()
+	execPreparedUsage(t, store, "SYSTEM START VIEW prepare_usage", "SYSTEM REFRESH VIEW prepare_usage",
+		"SYSTEM WAIT VIEW prepare_usage", "SYSTEM STOP VIEW prepare_usage")
+}
+
+func pushPreparedUsage(t *testing.T, syncer *Sync) {
+	t.Helper()
+	result, err := syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	require.Zero(t, result.Errors)
+}
+
+type preparedUsageRead struct {
+	daily  db.DailyUsageResult
+	top    []db.TopSessionEntry
+	counts db.UsageSessionCounts
+}
+
+func readPreparedUsage(t *testing.T, store *Store, f db.UsageFilter) preparedUsageRead {
+	t.Helper()
+	daily, err := store.GetDailyUsage(t.Context(), f)
+	require.NoError(t, err)
+	top, err := store.GetTopSessionsByCost(t.Context(), f, 10)
+	require.NoError(t, err)
+	counts, err := store.GetUsageSessionCounts(t.Context(), f)
+	require.NoError(t, err)
+	return preparedUsageRead{daily, top, counts}
+}
+
+// preparedUsageLongID names a session whose 300 usage rows make the fixture
+// large enough that republishing one small session stays below the rebuild
+// limit, one fiftieth of the stored rows, and republishing it passes it.
+const preparedUsageLongID = "ch-price-long"
+
+// writeLongUsageSession writes preparedUsageLongID with 300 usage messages,
+// each with input tokens of base plus its ordinal.
+func writeLongUsageSession(t *testing.T, local *db.DB, base int) {
+	t.Helper()
+	messages := make([]db.Message, 0, 300)
+	for i := range 300 {
+		ts := fmt.Sprintf("2026-01-13T%02d:%02d:00.000Z", i/60, i%60)
+		messages = append(messages, usagePriceMessage(preparedUsageLongID, i, ts, "claude-test",
+			fmt.Sprintf(`{"input_tokens":%d,"output_tokens":1}`, base+i)))
+	}
+	_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
+		Session:  fixtureSession(preparedUsageLongID, "delta", "long first", "2026-01-13T00:00:00.000Z", len(messages)),
+		Messages: messages, ReplaceMessages: true, DataVersion: 1,
+	}})
+	require.NoError(t, err)
+}
+
+// republishRoundSession changes the usage of the one-row-per-message round
+// session, a change far below the rebuild limit.
+func republishRoundSession(t *testing.T, local *db.DB, inputTokens int) {
+	t.Helper()
+	session, err := local.GetSessionFull(t.Context(), usagePriceRoundID)
+	require.NoError(t, err)
+	messages, err := local.GetAllMessages(t.Context(), usagePriceRoundID)
+	require.NoError(t, err)
+	messages[0].TokenUsage = fmt.Appendf(nil, `{"input_tokens":%d}`, inputTokens)
+	_, err = local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
+		Session: *session, Messages: messages[:1], ReplaceMessages: true, DataVersion: 1,
+	}})
+	require.NoError(t, err)
+}
+
+// Without a table exchange, a push rebuilds prepared usage only once the
+// rows reads prepare themselves reach the limit or prices change. A smaller
+// push writes no prepared rows, and reads cover its sessions from the delta.
+func TestPreparedUsageRebuildWaitsForEnoughChange(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	local, _ := seedUsagePriceFixture(t)
+	writeLongUsageSession(t, local, 1)
+	dsn, database := chtest.FreshDatabaseOn(t, chtest.NoExchangeServerURL(t))
+	syncer := newTestSync(t, local, Target{URL: dsn, Database: database}, storage.PusherOptions{})
+	store := newTestStore(t, syncer.conn, syncer.target)
+	changed := func() []string {
+		t.Helper()
+		state, err := store.preparedUsageState(ctx)
+		require.NoError(t, err)
+		require.True(t, state.ready)
+		return state.changed
+	}
+	pushPreparedUsage(t, syncer)
+	require.Empty(t, changed())
+	built := preparedUsageParts(t, store)
+	require.NotEmpty(t, built)
+
+	republishRoundSession(t, local, 100)
+	pushPreparedUsage(t, syncer)
+	require.Equal(t, built, preparedUsageParts(t, store), "a push below the limit must not rewrite prepared usage")
+	require.Equal(t, []string{usagePriceRoundID}, changed())
+
+	writeLongUsageSession(t, local, 1000)
+	pushPreparedUsage(t, syncer)
+	rebuilt := preparedUsageParts(t, store)
+	require.NotEqual(t, built, rebuilt, "a push past the limit must rebuild prepared usage")
+	require.Empty(t, changed())
+
+	// Leave a delta below the limit pending, so the price rebuild must clear
+	// it as well.
+	republishRoundSession(t, local, 200)
+	pushPreparedUsage(t, syncer)
+	require.Equal(t, rebuilt, preparedUsageParts(t, store))
+	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern: "claude-test", InputPerMTok: money.MustParseDollars("4"), OutputPerMTok: money.MustParseDollars("16"),
+	}}))
+	pushPreparedUsage(t, syncer)
+	require.NotEqual(t, rebuilt, preparedUsageParts(t, store), "a price change must rebuild prepared usage")
+	require.Empty(t, changed())
+}
+
+// Where the view refreshes prepared usage, a push starts a refresh only
+// under the same limit; the stopped view runs a refresh a push requested
+// once it starts again.
+func TestPreparedUsageViewRefreshWaitsForEnoughChange(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	local, target := seedUsagePriceFixture(t)
+	writeLongUsageSession(t, local, 1)
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
+	store := newTestStore(t, syncer.conn, syncer.target)
+	execPreparedUsage(t, store, "ALTER TABLE prepare_usage MODIFY REFRESH EVERY 1 DAY", "SYSTEM STOP VIEW prepare_usage")
+	pushPreparedUsage(t, syncer)
+	runPreparedUsageRefresh(t, store)
+	resume := func() []string {
+		t.Helper()
+		execPreparedUsage(t, store, "SYSTEM START VIEW prepare_usage", "SYSTEM WAIT VIEW prepare_usage",
+			"SYSTEM STOP VIEW prepare_usage")
+		state, err := store.preparedUsageState(ctx)
+		require.NoError(t, err)
+		require.True(t, state.ready)
+		return state.changed
+	}
+	require.Empty(t, resume())
+
+	republishRoundSession(t, local, 100)
+	pushPreparedUsage(t, syncer)
+	require.Equal(t, []string{usagePriceRoundID}, resume(), "a push below the limit must not request a refresh")
+
+	writeLongUsageSession(t, local, 1000)
+	pushPreparedUsage(t, syncer)
+	require.Empty(t, resume(), "a push past the limit must request a refresh")
+}
+
+// The rows-behind count a push compares with the rebuild limit must equal
+// the rows reads prepare from the delta: messages and events that pass
+// eligibility, in snapshots no stored row was derived from, skipping trashed
+// sessions.
+func TestPreparedUsageBehindCountMatchesDeltaRows(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	const mixedID, trashedID = "ch-behind-mixed", "ch-behind-trashed"
+	local, syncer, store := newPreparedUsageStore(t)
+	ts := "2026-01-14T00:00:00.000Z"
+	event := func(model, dedupKey string) db.UsageEvent {
+		return db.UsageEvent{Source: "hermes", Model: model, InputTokens: 10, OccurredAt: ts, DedupKey: dedupKey}
+	}
+	withoutUsage := usagePriceMessage(mixedID, 3, ts, "claude-test", "")
+	withoutUsage.TokenUsage = nil
+	writes := []db.SessionBatchWrite{
+		{
+			Session: fixtureSession(mixedID, "delta", "mixed", ts, 4),
+			Messages: []db.Message{
+				usagePriceMessage(mixedID, 0, ts, "claude-test", `{"input_tokens":1}`),
+				usagePriceMessage(mixedID, 1, ts, "", `{"input_tokens":2}`),
+				usagePriceMessage(mixedID, 2, ts, "<synthetic>", `{"input_tokens":3}`),
+				withoutUsage,
+			},
+			UsageEvents: []db.UsageEvent{event("claude-test", "behind-priced"), event("", "behind-no-model")},
+		},
+		{
+			Session:     fixtureSession(trashedID, "delta", "trashed", ts, 1),
+			Messages:    []db.Message{usagePriceMessage(trashedID, 0, ts, "claude-test", `{"input_tokens":4}`)},
+			UsageEvents: []db.UsageEvent{event("claude-test", "behind-trashed")},
+		},
+	}
+	for i := range writes {
+		writes[i].DataVersion = 1
+		writes[i].ReplaceMessages = true
+	}
+	_, err := local.WriteSessionBatchAtomic(ctx, writes)
+	require.NoError(t, err)
+	require.NoError(t, local.SoftDeleteSession(ctx, trashedID))
+	republishRoundSession(t, local, 9)
+	pushPreparedUsage(t, syncer)
+
+	// The snapshots hold the rows eligibility excludes, so the counts below
+	// exercise the filters.
+	type snapshot struct {
+		messages, events uint64
+		trashed          bool
+	}
+	snapshots := map[string]snapshot{}
+	rows, err := store.DB().QueryContext(ctx, `SELECT id, length(usage_facts), length(usage_events),
+		deleted_at IS NOT NULL FROM usage_session_snapshots WHERE id IN (?, ?)`, mixedID, trashedID)
+	require.NoError(t, err)
+	for rows.Next() {
+		var id string
+		var s snapshot
+		require.NoError(t, rows.Scan(&id, &s.messages, &s.events, &s.trashed))
+		snapshots[id] = s
+	}
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+	require.Equal(t, map[string]snapshot{
+		mixedID:   {messages: 4, events: 2},
+		trashedID: {messages: 1, events: 1, trashed: true},
+	}, snapshots)
+
+	var behind, delta uint64
+	require.NoError(t, store.DB().QueryRowContext(ctx, chPreparedUsageBehindSQL()).Scan(&behind))
+	require.NoError(t, store.DB().QueryRowContext(chdriver.Context(ctx, chdriver.WithParameters(chdriver.Parameters{
+		"usage_changed_sessions": chStringArrayLiteral([]string{mixedID, trashedID, usagePriceRoundID}),
+	})), `SELECT count() FROM (`+chPreparedUsageDeltaRowsSQL()+`)`).Scan(&delta))
+	// One message and one event of the mixed session, and the one message
+	// the round session was republished with.
+	require.EqualValues(t, 3, delta)
+	require.Equal(t, delta, behind)
+}
+
+// The rows-behind count reads the snapshot FINAL keeps for each session:
+// the one with the highest revision, and of rows with equal revisions the
+// later insert. Rows of older revisions and earlier inserts count for
+// nothing, as do trashed and covered snapshots.
+func TestPreparedUsageBehindCountReadsFinalSnapshot(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	const id = "ch-behind-final"
+	_, _, store := newPreparedUsageStore(t)
+	behind := func() uint64 {
+		t.Helper()
+		var n uint64
+		require.NoError(t, store.DB().QueryRowContext(ctx, chPreparedUsageBehindSQL()).Scan(&n))
+		return n
+	}
+	// usable messages count; the user message and the synthetic one never do.
+	insert := func(pushVersion uint64, trashed bool, usable int) {
+		t.Helper()
+		messages := []string{
+			`(0, 'user', NULL, '', '', '', '', '', '')`,
+			`(1, 'assistant', NULL, '<synthetic>', '', '{"input_tokens":1}', '', '', '')`,
+		}
+		for i := range usable {
+			messages = append(messages, fmt.Sprintf(
+				`(%d, 'assistant', NULL, 'claude-test', '', '{"input_tokens":1}', '', '', '')`, i+2))
+		}
+		deletedAt := "NULL"
+		if trashed {
+			deletedAt = "now64(6)"
+		}
+		execPreparedUsage(t, store, fmt.Sprintf(`INSERT INTO usage_session_snapshots
+			(id, push_version, deleted_at, usage_messages) VALUES ('%s', %d, %s, [%s])`,
+			id, pushVersion, deletedAt, strings.Join(messages, ",")))
+	}
+	execPreparedUsage(t, store, "SYSTEM STOP MERGES usage_session_snapshots")
+	require.Zero(t, behind())
+
+	insert(10, false, 2)
+	require.EqualValues(t, 2, behind())
+	insert(10, false, 0)
+	require.Zero(t, behind(), "the later insert of an equal revision replaces the earlier one")
+	insert(10, false, 3)
+	require.EqualValues(t, 3, behind(), "the later insert of an equal revision replaces the earlier one")
+	insert(9, false, 5)
+	require.EqualValues(t, 3, behind(), "an older revision stays replaced")
+	insert(11, true, 4)
+	require.Zero(t, behind(), "a trashed snapshot prepares nothing")
+
+	insert(12, false, 6)
+	require.EqualValues(t, 6, behind())
+	execPreparedUsage(t, store, fmt.Sprintf(`INSERT INTO prepared_usage (session_id, snapshot_revision)
+		VALUES ('%s', toUInt128(12) * 2 + 1)`, id))
+	require.Zero(t, behind(), "prepared rows cover the snapshot")
+	insert(13, false, 1)
+	require.EqualValues(t, 1, behind(), "a newer snapshot is not covered by the rows of an older one")
+}
+
+// The stamp a push reads without FINAL must equal the one the refresh
+// stored with FINAL while superseded snapshot revisions are still unmerged,
+// and a clearing of the price records must still make a rebuild due.
+func TestPreparedUsageLiveStampMatchesRefresh(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	local, syncer, store := newPreparedUsageStore(t)
+	conn := syncer.conn
+	execPreparedUsage(t, store, "SYSTEM STOP MERGES "+usageSessionSnapshotTable)
+	republishRoundSession(t, local, 100)
+	pushPreparedUsage(t, syncer)
+	runPreparedUsageRefresh(t, store)
+
+	var stored, final uint64
+	require.NoError(t, conn.QueryRowContext(ctx, `SELECT count() FROM `+usageSessionSnapshotTable+
+		` SETTINGS final = 0`).Scan(&stored))
+	require.NoError(t, conn.QueryRowContext(ctx, `SELECT count() FROM `+usageSessionSnapshotTable).Scan(&final))
+	require.Greater(t, stored, final, "the republished session must keep its superseded revision unmerged")
+
+	var want, got usageStamp
+	require.NoError(t, conn.QueryRowContext(ctx, `SELECT snapshot_count, snapshot_hash, pricing_digest, price_count
+		FROM prepared_usage LIMIT 1 SETTINGS final = 0`).Scan(
+		&want.snapshotCount, &want.snapshotHash, &want.pricingDigest, &want.priceCount))
+	require.NoError(t, conn.QueryRowContext(ctx, chLiveUsageStampSQL).Scan(
+		&got.snapshotCount, &got.snapshotHash, &got.pricingDigest, &got.priceCount))
+	require.Equal(t, want, got)
+	due, _, err := preparedUsageRebuildDue(ctx, conn, true)
+	require.NoError(t, err)
+	require.False(t, due, "an unchanged mirror must not rebuild")
+
+	_, err = conn.ExecContext(ctx, "ALTER TABLE "+chUsagePriceTable+" DROP PARTITION ?", want.pricingDigest)
+	require.NoError(t, err)
+	due, reason, err := preparedUsageRebuildDue(ctx, conn, true)
+	require.NoError(t, err)
+	require.True(t, due)
+	require.Equal(t, "prices changed", reason)
+}
+
+// A push that writes no usage inputs skips the stamp check, so a change
+// another writer left unchecked waits for the next push that writes. It
+// still rebuilds an empty table.
+func TestPreparedUsageCheckSkippedWhenPushWritesNothing(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	local, _ := seedUsagePriceFixture(t)
+	dsn, database := chtest.FreshDatabaseOn(t, chtest.NoExchangeServerURL(t))
+	syncer := newTestSync(t, local, Target{URL: dsn, Database: database}, storage.PusherOptions{})
+	store := newTestStore(t, syncer.conn, syncer.target)
+	pushPreparedUsage(t, syncer)
+	built := preparedUsageParts(t, store)
+	require.NotEmpty(t, built)
+
+	// Another writer's new snapshot revision, left unchecked, makes a
+	// rebuild due.
+	_, err := syncer.conn.ExecContext(ctx, "INSERT INTO "+usageSessionSnapshotTable+
+		" SELECT * REPLACE (revision + 1 AS revision) FROM "+usageSessionSnapshotTable+" WHERE id = ?", usagePriceRoundID)
+	require.NoError(t, err)
+	due, _, err := preparedUsageRebuildDue(ctx, syncer.conn, true)
+	require.NoError(t, err)
+	require.True(t, due)
+	pushPreparedUsage(t, syncer)
+	require.Equal(t, built, preparedUsageParts(t, store), "a push that wrote nothing must not check the stamp")
+
+	republishRoundSession(t, local, 100)
+	pushPreparedUsage(t, syncer)
+	require.NotEqual(t, built, preparedUsageParts(t, store), "a push that wrote usage must rebuild")
+
+	execPreparedUsage(t, store, "TRUNCATE TABLE prepared_usage")
+	pushPreparedUsage(t, syncer)
+	require.NotEmpty(t, preparedUsageParts(t, store), "a push that wrote nothing must still fill an empty table")
 }

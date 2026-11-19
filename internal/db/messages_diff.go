@@ -18,9 +18,11 @@ const diffDeleteChunkSize = 500
 // declaration order. insertMessagesTx and the diff UPDATE share it
 // so the persisted tuple has exactly one definition.
 func messageInsertArgs(m Message) []any {
+	dialogue, dialogueIsContent := StoredDialogue(m.Content, m.ThinkingText, m.DialogueText)
+	usageOutputTokens, usageWebSearchRequests := storedMessageUsageCounters(string(m.TokenUsage))
 	return []any{
 		m.SessionID, m.Ordinal, m.Role, m.Content,
-		m.ThinkingText, m.DialogueText,
+		m.ThinkingText, dialogue, dialogueIsContent,
 		m.Timestamp, m.HasThinking, m.HasToolUse,
 		m.ContentLength, m.IsSystem,
 		m.Model, m.ReasoningEffort, string(m.TokenUsage),
@@ -29,6 +31,7 @@ func messageInsertArgs(m Message) []any {
 		m.ClaudeMessageID, m.ClaudeRequestID,
 		m.SourceType, m.SourceSubtype, m.PromptSource, m.SourceUUID,
 		m.SourceParentUUID, m.IsSidechain, m.IsCompactBoundary,
+		usageOutputTokens, usageWebSearchRequests,
 	}
 }
 
@@ -134,16 +137,66 @@ type messageDiffPlan struct {
 	unsafePinUpdateIDs []int64
 }
 
+// firstWrittenOrdinal returns the lowest ordinal the plan updates or
+// inserts. ok is false when the plan writes nothing.
+func (p messageDiffPlan) firstWrittenOrdinal() (int, bool) {
+	from, ok := 0, false
+	for _, u := range p.updates {
+		if !ok || u.msg.Ordinal < from {
+			from, ok = u.msg.Ordinal, true
+		}
+	}
+	for _, m := range p.inserts {
+		if !ok || m.Ordinal < from {
+			from, ok = m.Ordinal, true
+		}
+	}
+	return from, ok
+}
+
+// reconcileReplacedConversationTx reconciles the conversation index for a
+// whole-session replacement. When the diff plan applies, rows below its first
+// written ordinal persist unchanged, so only the rest of the session is
+// reconciled and the unchanged rows keep their message IDs. Without that
+// floor, a session that grew fails the unchanged-projection check and every
+// row without a native source ID gets a new ID and a tombstone. Full
+// replacements (truncations, reorders, rewrites) reconcile the whole session,
+// as do sessions recovering from usage-only storage: their policy-gap rows can
+// project messages the table no longer holds, or the session may have no
+// projected rows at all, and the gap must be cleared by a complete projection.
+func reconcileReplacedConversationTx(
+	tx transactionQueries, sessionID string, msgs []Message,
+	plan messageDiffPlan, useDiff, usageOnly bool,
+) error {
+	from, ok := plan.firstWrittenOrdinal()
+	if useDiff && ok && !usageOnly {
+		if err := tx.QueryRow(`SELECT NOT EXISTS(SELECT 1 FROM conversation_messages
+		 WHERE session_id=? AND removed=0 AND gap='archive_content_excluded')
+		 AND NOT EXISTS(SELECT 1 FROM conversation_session_changes
+		 WHERE session_id=? AND gap='archive_content_excluded')`, sessionID, sessionID).Scan(&ok); err != nil {
+			return err
+		}
+	}
+	if useDiff && ok {
+		tail := make([]Message, 0, len(msgs))
+		for _, m := range msgs {
+			if m.Ordinal >= from {
+				tail = append(tail, m)
+			}
+		}
+		return reconcileConversationRangeTx(tx, sessionID, tail, true, usageOnly, from)
+	}
+	return reconcileConversationMessagesTx(tx, sessionID, msgs, true, usageOnly)
+}
+
 // planStoredMessageDiff loads the session's stored messages and
 // plans an in-place diff against msgs. ok=false means the caller
 // must use the full replace path; a load failure also degrades to
 // full replace rather than failing the write.
 func (db *DB) planStoredMessageDiff(
-	sessionID string, msgs []Message,
+	ctx context.Context, sessionID string, msgs []Message,
 ) (messageDiffPlan, []Message, bool, bool) {
-	stored, err := db.GetAllMessages(
-		context.Background(), sessionID,
-	)
+	stored, err := db.GetAllMessages(ctx, sessionID)
 	if err != nil {
 		return messageDiffPlan{}, nil, false, false
 	}
@@ -174,6 +227,60 @@ func transcriptMessagesEqual(stored, incoming []Message) bool {
 		}
 	}
 	return true
+}
+
+func dialogueMessagesChanged(stored, incoming []Message) bool {
+	byOrdinal := make(map[int]*string, len(stored))
+	for _, msg := range stored {
+		byOrdinal[msg.Ordinal] = msg.DialogueText
+	}
+	for _, msg := range incoming {
+		old := byOrdinal[msg.Ordinal]
+		if old != msg.DialogueText &&
+			(old == nil || msg.DialogueText == nil || *old != *msg.DialogueText) {
+			return true
+		}
+	}
+	return false
+}
+
+// transcriptMessagesGainSourceIDs reports whether incoming repeats stored
+// except that rows stored without a source ID now carry one, and each such ID
+// occurs once in incoming. These are the same messages after a parser starts
+// keeping native IDs, so a caller can update them in place and keep their
+// row IDs, pins, and notes.
+func transcriptMessagesGainSourceIDs(stored, incoming []Message) bool {
+	if len(stored) != len(incoming) {
+		return false
+	}
+	byOrdinal := make(map[int]Message, len(stored))
+	for _, msg := range stored {
+		if _, exists := byOrdinal[msg.Ordinal]; exists {
+			return false
+		}
+		byOrdinal[msg.Ordinal] = msg
+	}
+	counts := messageSourceUUIDCounts(incoming)
+	seen := make(map[int]bool, len(incoming))
+	gained := false
+	for _, msg := range incoming {
+		old, exists := byOrdinal[msg.Ordinal]
+		if !exists || seen[msg.Ordinal] {
+			return false
+		}
+		seen[msg.Ordinal] = true
+		if old.SourceUUID == "" && msg.SourceUUID != "" {
+			if counts[msg.SourceUUID] != 1 {
+				return false
+			}
+			old.SourceUUID = msg.SourceUUID
+			gained = true
+		}
+		if !transcriptMessageEqual(old, msg) {
+			return false
+		}
+	}
+	return gained
 }
 
 func transcriptMessageEqual(a, b Message) bool {
@@ -211,10 +318,13 @@ func transcriptMessageEqual(a, b Message) bool {
 //   - duplicate ordinals on either side;
 //   - a changed row's source_uuid differs from the stored row's
 //     (the ordinal now holds a different message, so pins must be
-//     re-matched by source_uuid — full replace's job);
+//     re-matched by source_uuid — full replace's job), unless the
+//     stored row had none and gains one used once in incoming while
+//     staying unchanged or completing its text;
 //   - more than half the stored rows changed (an ordinal-shifting
 //     rewrite, where full replace's source_uuid pin re-matching and
-//     bulk FTS handling are the right tool).
+//     bulk FTS handling are the right tool). Rows that only gain a
+//     source_uuid do not count: they cannot shift.
 func planSessionMessageDiff(
 	stored, incoming []Message,
 ) (messageDiffPlan, bool) {
@@ -232,6 +342,7 @@ func planSessionMessageDiff(
 	incomingUUIDCounts := messageSourceUUIDCounts(incoming)
 
 	var plan messageDiffPlan
+	shifting := 0
 	seen := make(map[int]bool, len(incoming))
 	for _, m := range incoming {
 		if seen[m.Ordinal] {
@@ -243,8 +354,22 @@ func planSessionMessageDiff(
 		case !exists:
 			plan.inserts = append(plan.inserts, m)
 		case !messageRowEqual(old, m):
-			if old.SourceUUID != m.SourceUUID {
+			gainsSourceUUID := old.SourceUUID == "" && m.SourceUUID != "" &&
+				incomingUUIDCounts[m.SourceUUID] == 1
+			if old.SourceUUID != m.SourceUUID && !gainsSourceUUID {
 				return messageDiffPlan{}, false
+			}
+			withSourceUUID := old
+			withSourceUUID.SourceUUID = m.SourceUUID
+			onlyGainsSourceUUID := gainsSourceUUID && messageRowEqual(withSourceUUID, m)
+			// A gained ID proves nothing about which message moved where,
+			// so the row must be unchanged or the same reply completed.
+			if gainsSourceUUID && !onlyGainsSourceUUID &&
+				(old.Role != m.Role || !IsTextExtension(old.Content, m.Content)) {
+				return messageDiffPlan{}, false
+			}
+			if !onlyGainsSourceUUID {
+				shifting++
 			}
 			plan.updates = append(plan.updates, messageDiffUpdate{
 				id:  old.ID,
@@ -264,7 +389,7 @@ func planSessionMessageDiff(
 			return messageDiffPlan{}, false
 		}
 	}
-	if 2*len(plan.updates) > len(stored) {
+	if 2*shifting > len(stored) {
 		return messageDiffPlan{}, false
 	}
 	return plan, true
@@ -378,6 +503,9 @@ func applySessionMessageDiffTx(ctx context.Context,
 		if err := insertToolResultEventsTx(
 			tx, resolveToolResultEvents(msgs),
 		); err != nil {
+			return err
+		}
+		if err := journalConversationToolSessionTx(tx, sessionID); err != nil {
 			return err
 		}
 	}

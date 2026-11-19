@@ -49,6 +49,7 @@ func pushedStoreWithPlanUsage(t *testing.T, p *db.SessionPlanUsage) (*Store, *Sy
 }
 
 func TestClickHousePlanUsageRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	store, s, local, _ := pushedStoreWithPlanUsage(t, chPlanUsage(12.5))
 
@@ -75,6 +76,7 @@ func TestClickHousePlanUsageRoundTrip(t *testing.T) {
 }
 
 func TestClickHouseDeleteClearsPlanUsage(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	_, s, local, target := pushedStoreWithPlanUsage(t, chPlanUsage(12.5))
 	conn := chtest.Open(t, target.URL, target.Database)
@@ -91,6 +93,7 @@ func TestClickHouseDeleteClearsPlanUsage(t *testing.T) {
 }
 
 func TestClickHouseSessionUsageIncludesPlanUsage(t *testing.T) {
+	t.Parallel()
 	store, _, _, _ := pushedStoreWithPlanUsage(t, chPlanUsage(12.5))
 	usage, err := store.GetSessionUsage(t.Context(), fixtureAlphaID, false)
 	require.NoError(t, err)
@@ -104,6 +107,7 @@ func TestClickHouseSessionUsageIncludesPlanUsage(t *testing.T) {
 // The mirror has no owner check: the latest push replaces the session and
 // its plan usage, and an archive with no local change does not push again.
 func TestClickHouseSameSessionFromTwoMachines(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	const id = "codex-cloud:shared-thread"
 	dsn, database := chtest.FreshDatabase(t)

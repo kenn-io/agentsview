@@ -78,7 +78,7 @@ func ConvertMessagesContext(
 		if err != nil {
 			return nil, err
 		}
-		if IsCodexFormatAgent(agent) {
+		if parser.IsCodexFormatAgent(agent) {
 			for j := range toolCalls {
 				for k := range toolCalls[j].ResultEvents {
 					db.PrepareToolResultEvent(&toolCalls[j].ResultEvents[k])
@@ -137,6 +137,33 @@ func ConvertUsageEventsContext(
 	}
 	stats, err := db.ValidateAndSanitizeContext(ctx, nil, nil, events)
 	return events, stats, err
+}
+
+// ConvertSessionTotal converts the usage total the agent recorded for a
+// whole session into its storage row, or nil when the parser reported none.
+func ConvertSessionTotal(total *parser.ParsedSessionTotal) *db.SessionUsageTotal {
+	if total == nil {
+		return nil
+	}
+	row := &db.SessionUsageTotal{
+		Source:        db.SanitizeUTF8(total.Source),
+		SubagentScope: db.SanitizeUTF8(total.SubagentScope),
+		Cost:          total.Cost,
+		Incomplete:    total.Incomplete,
+	}
+	for _, model := range total.Models {
+		row.Models = append(row.Models, db.SessionUsageTotalModel{
+			Model:                    db.SanitizeUTF8(model.Model),
+			InputTokens:              model.InputTokens,
+			OutputTokens:             model.OutputTokens,
+			ReasoningTokens:          model.ReasoningTokens,
+			CacheCreationInputTokens: model.CacheCreationInputTokens,
+			CacheReadInputTokens:     model.CacheReadInputTokens,
+			WebSearchRequests:        model.WebSearchRequests,
+			Cost:                     model.Cost,
+		})
+	}
+	return row
 }
 
 // ConvertPlanUsage converts a session's plan usage and live-capture
@@ -273,11 +300,6 @@ func ConvertToolResultsContext(
 	return results, ctx.Err()
 }
 
-// IsCodexFormatAgent reports agents using Codex rollout result identity rules.
-func IsCodexFormatAgent(agent parser.AgentType) bool {
-	return agent == parser.AgentCodex || agent == parser.AgentTraeX || agent == parser.AgentAugureCode
-}
-
 // NextParsedOrdinal returns the resume ordinal after the final parsed row.
 func NextParsedOrdinal(current int, messages []parser.ParsedMessage) int {
 	if len(messages) == 0 {
@@ -287,10 +309,18 @@ func NextParsedOrdinal(current int, messages []parser.ParsedMessage) int {
 }
 
 // LastParsedSourceUUID returns the last available source UUID for resumption.
+//
+// A deferred hook record keeps its native source UUID on the
+// stored message, but that identity is not part of the ordinary entry chain,
+// so it never becomes the resume cursor. A batch without another source UUID
+// keeps the current cursor.
 func LastParsedSourceUUID(
 	current string, messages []parser.ParsedMessage,
 ) string {
 	for _, message := range slices.Backward(messages) {
+		if parser.IsClaudeHookSubtype(message.SourceSubtype) {
+			continue
+		}
 		if message.SourceUUID != "" {
 			return message.SourceUUID
 		}

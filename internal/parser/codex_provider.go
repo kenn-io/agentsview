@@ -20,6 +20,7 @@ import (
 var (
 	_ Provider                          = (*codexProvider)(nil)
 	_ ActivityHintProvider              = (*codexProvider)(nil)
+	_ ChangedPathRelevanceProvider      = (*codexProvider)(nil)
 	_ S3Provider                        = (*codexProvider)(nil)
 	_ RawCaptureProvider                = (*codexProvider)(nil)
 	_ RawCaptureSourceProvider          = (*codexProvider)(nil)
@@ -28,7 +29,7 @@ var (
 )
 
 // codexProviderSpec parameterizes the one shared Codex-format provider
-// implementation for Codex and its TraeX fork. Both reuse the same
+// implementation for Codex and its forks. All of them reuse the same
 // discovery, source-lookup, fingerprinting, and parsing code; they differ
 // only in the agent label and ID prefix applied via relabel. TraeX parses
 // through the Codex rollout reader and then relabels the result onto its
@@ -55,6 +56,11 @@ func codexProviderSpecForAgent(agent AgentType) codexProviderSpec {
 		return codexProviderSpec{
 			agent:   AgentAugureCode,
 			relabel: relabelCodexResultAsAugureCode,
+		}
+	case AgentInterpreter:
+		return codexProviderSpec{
+			agent:   AgentInterpreter,
+			relabel: relabelCodexResultAsOpenInterpreter,
 		}
 	default:
 		return codexProviderSpec{agent: AgentCodex}
@@ -101,6 +107,35 @@ func newAugureCodeProviderFactory(def AgentDef) ProviderFactory {
 	}
 }
 
+// newOpenInterpreterProviderFactory serves Open Interpreter's rollout archive
+// with the Codex provider, relabeling every parsed session onto the
+// open-interpreter: ID prefix.
+func newOpenInterpreterProviderFactory(def AgentDef) ProviderFactory {
+	return &codexProviderFactory{
+		def:             cloneAgentDef(def),
+		spec:            codexProviderSpecForAgent(AgentInterpreter),
+		cursorCache:     newProductionCodexCursorCache(),
+		parentTurnCache: newCodexProductionParentTurnCache(),
+	}
+}
+
+// codexFormatAgents lists the agents whose sessions are Codex rollout JSONL
+// served by the shared Codex provider: Codex itself and the forks that
+// relabel its results onto their own ID prefix.
+var codexFormatAgents = []AgentType{
+	AgentCodex, AgentTraeX, AgentAugureCode, AgentInterpreter,
+}
+
+// CodexFormatAgents returns the agents whose sessions are Codex rollout
+// JSONL, Codex first.
+func CodexFormatAgents() []AgentType { return slices.Clone(codexFormatAgents) }
+
+// IsCodexFormatAgent reports whether an agent's sessions are Codex rollout
+// JSONL served by the shared Codex provider.
+func IsCodexFormatAgent(agent AgentType) bool {
+	return slices.Contains(codexFormatAgents, agent)
+}
+
 func (f *codexProviderFactory) Definition() AgentDef {
 	return cloneAgentDef(f.def)
 }
@@ -109,6 +144,9 @@ func (f *codexProviderFactory) Capabilities() Capabilities {
 	caps := codexProviderCapabilities()
 	if f.spec.agent == AgentCodex {
 		caps.Source.S3Discovery = CapabilitySupported
+		caps.Source.PollMetadataScan = CapabilitySupported
+		// Only Codex watches its home directory; see ChangedPathRelevance.
+		caps.Source.ChangedPathRelevance = CapabilitySupported
 	} else {
 		caps.RawCapture = RawCaptureCapabilities{}
 	}
@@ -336,6 +374,13 @@ func (p *codexProvider) SourcesForChangedPath(
 	return p.sources.SourcesForChangedPath(ctx, req)
 }
 
+func (p *codexProvider) ChangedPathRelevance(
+	ctx context.Context,
+	req ChangedPathRequest,
+) (ChangedPathRelevance, error) {
+	return p.sources.ChangedPathRelevance(ctx, req)
+}
+
 func (p *codexProvider) FindSource(
 	ctx context.Context,
 	req FindSourceRequest,
@@ -412,6 +457,7 @@ func (p *codexProvider) PlanRawCapture(
 	if err := ctx.Err(); err != nil {
 		return RawCapturePlan{}, err
 	}
+	ctx = p.parentInventoryContext(ctx)
 	if p.spec.agent != AgentCodex {
 		return RawCapturePlan{}, invalidRawCapturePlan("provider does not own Codex raw companions")
 	}
@@ -1164,6 +1210,56 @@ func (s codexSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 		}
 	}
 	return WatchPlan{Roots: roots}, nil
+}
+
+// ChangedPathRelevance classifies the direct children of Codex's home
+// directory, which the watch observes without recursion for the title
+// index. Codex also keeps its own SQLite databases, logs, lock files, and
+// caches there and changes them constantly; none of them holds session data.
+// Activity hints in history.jsonl are polled separately and do not need the
+// watch. The title index is data. A transcript root, or a directory that
+// holds one, stays unclassified, as does everything under the transcript
+// roots, for SourcesForChangedPath to map.
+func (s codexSourceSet) ChangedPathRelevance(
+	ctx context.Context,
+	req ChangedPathRequest,
+) (ChangedPathRelevance, error) {
+	if err := ctx.Err(); err != nil {
+		return ChangedPathUnclassified, err
+	}
+	if !s.ownsCodexSidecars() || req.WatchRoot == "" {
+		return ChangedPathUnclassified, nil
+	}
+	home := filepath.Clean(req.WatchRoot)
+	path := filepath.Clean(req.Path)
+	if filepath.Dir(path) != home || !s.isMetadataDir(home) {
+		return ChangedPathUnclassified, nil
+	}
+	if filepath.Base(path) == CodexSessionIndexFilename {
+		return ChangedPathDataBearing, nil
+	}
+	for _, root := range s.roots {
+		if !isS3URI(root) && isWithinRoot(path, root) {
+			return ChangedPathUnclassified, nil
+		}
+	}
+	return ChangedPathNonData, nil
+}
+
+// isMetadataDir reports whether dir is the metadata directory of a local
+// transcript root, which the watch plan observes for the title index.
+func (s codexSourceSet) isMetadataDir(dir string) bool {
+	for _, root := range s.roots {
+		if isS3URI(root) {
+			continue
+		}
+		for _, candidate := range s.metadata.dirs(root) {
+			if filepath.Clean(candidate) == dir {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s codexSourceSet) SourcesForChangedPath(

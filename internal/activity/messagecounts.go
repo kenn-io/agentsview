@@ -59,3 +59,48 @@ func (a *MessageAccumulator) Add(sessionID, role string, timestamp time.Time) {
 	}
 	bits.add(index)
 }
+
+// AddSorted counts one session's messages of one role, given as ascending
+// Unix microsecond timestamps, as Add counts each of them.
+func (a *MessageAccumulator) AddSorted(sessionID, role string, micros []int64) {
+	switch role {
+	case "user":
+		if !a.interactive[sessionID] {
+			return
+		}
+	case "assistant":
+	default:
+		return
+	}
+	var bits BucketMembership
+	window := 0
+	for _, us := range micros {
+		timestamp := time.UnixMicro(us)
+		if !timestamp.Before(a.effectiveEnd) {
+			return
+		}
+		for window < len(a.windows) && !timestamp.Before(a.windows[window].End) {
+			window++
+		}
+		if window == len(a.windows) {
+			return
+		}
+		if timestamp.Before(a.windows[window].Start) {
+			continue
+		}
+		bucket := &a.artifacts.Report.Buckets[window]
+		if role == "user" {
+			bucket.UserMessages++
+		} else {
+			bucket.AssistantMessages++
+		}
+		if bits == nil {
+			bits = a.artifacts.Membership[sessionID]
+			if bits == nil {
+				bits = make(BucketMembership, (len(a.windows)+63)/64)
+				a.artifacts.Membership[sessionID] = bits
+			}
+		}
+		bits.add(window)
+	}
+}

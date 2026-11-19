@@ -65,9 +65,9 @@ func qwenStoredPathRoot(storedPath string) (string, bool) {
 }
 
 func qwenParseFile(
-	_ context.Context, path string, req ParseRequest,
+	ctx context.Context, path string, req ParseRequest,
 ) ([]ParseResult, []string, error) {
-	sess, msgs, err := parseQwenSession(path, req.Source.ProjectHint, req.Machine)
+	sess, msgs, err := parseQwenSession(ctx, path, req.Source.ProjectHint, req.Machine)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -113,7 +113,7 @@ func qwenSessionIDFromPath(root, path string) string {
 }
 
 func qwenProviderCapabilities() Capabilities {
-	return Capabilities{
+	return withPollMetadataScan(Capabilities{
 		Source: jsonlFileProviderSourceCapabilities(),
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
@@ -125,5 +125,5 @@ func qwenProviderCapabilities() Capabilities {
 			PerMessageTokenUsage: CapabilitySupported,
 			Model:                CapabilitySupported,
 		},
-	}
+	})
 }

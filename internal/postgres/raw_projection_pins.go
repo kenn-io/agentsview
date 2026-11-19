@@ -172,7 +172,6 @@ func rawEffectivePins(ctx context.Context, tx *sql.Tx, group, id string, members
 	}
 	defer rows.Close()
 	overlays := map[string]map[string]RawPinReference{}
-	keys := map[string]bool{}
 	for rows.Next() {
 		var branch string
 		var p RawPinReference
@@ -184,12 +183,21 @@ func rawEffectivePins(ctx context.Context, tx *sql.Tx, group, id string, members
 			overlays[branch] = map[string]RawPinReference{}
 		}
 		overlays[branch][p.MessageKey] = p
-		keys[p.MessageKey] = true
 	}
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
 		return nil, err
+	}
+	// Empty or overridden pin sets need no transcript; other references need
+	// complete message identities only at their saved ordinals.
+	refs := selectRawEffectivePins(overlays, nil, members)
+	if len(refs) == 0 {
+		return refs, nil
+	}
+	wanted := make(map[int]bool, len(refs))
+	for _, ref := range refs {
+		wanted[ref.Ordinal] = true
 	}
 	payload, err := loadRawPayload(ctx, tx, id)
 	if err != nil {
@@ -197,13 +205,20 @@ func rawEffectivePins(ctx context.Context, tx *sql.Tx, group, id string, members
 	}
 	current := map[string]int{}
 	for _, m := range payload.Messages {
+		if !wanted[m.Ordinal] {
+			continue
+		}
 		key, err := rawMessageKey(m)
 		if err != nil {
 			return nil, err
 		}
 		current[key] = m.Ordinal
 	}
-	return selectRawEffectivePins(overlays, current, members), nil
+	for i := range refs {
+		ordinal, ok := current[refs[i].MessageKey]
+		refs[i].Resolved = ok && ordinal == refs[i].Ordinal
+	}
+	return refs, nil
 }
 
 func selectRawEffectivePins(overlays map[string]map[string]RawPinReference, current map[string]int, members []rawBranch) []RawPinReference {

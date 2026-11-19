@@ -3,8 +3,12 @@ package vector
 import (
 	"context"
 	"encoding/json/v2"
+	"math/rand"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
+	"testing/quick"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -318,7 +322,7 @@ func TestRefreshTrailingAppendKeepsRunDocKeyAndReembedsOnlyIt(t *testing.T) {
 	assert.NotEqual(t, before.contentHash, after.contentHash,
 		"appended content must invalidate the hash so the run is re-embedded")
 
-	pending, err := ix.store.PendingForGeneration(ctx, fingerprint, 100)
+	pending, err := ix.store.PendingForGeneration(ctx, fingerprint, nil, 100)
 	require.NoError(t, err)
 	var pendingDocs []string
 	for _, p := range pending {
@@ -481,7 +485,7 @@ func TestRefreshOrdinalShiftOnUUIDRowKeepsHashStampSurvives(t *testing.T) {
 	assert.Equal(t, 3, after.ordinal)
 	assert.Equal(t, row.contentHash, after.contentHash)
 
-	pending, err := ix.store.PendingForGeneration(ctx, fingerprint, 100)
+	pending, err := ix.store.PendingForGeneration(ctx, fingerprint, nil, 100)
 	require.NoError(t, err)
 	for _, p := range pending {
 		assert.NotEqual(t, "u:s1:u1", p.Doc, "shifted doc should not be pending re-embed")
@@ -739,7 +743,7 @@ func TestRefreshDuplicateSourceUUIDGetsStableOccurrenceKeys(t *testing.T) {
 	assert.Equal(t, RefreshStats{Upserted: 0, Deleted: 0, Unchanged: 2}, stats,
 		"stable keys across refreshes mean no churn")
 
-	pending, err := ix.store.PendingForGeneration(ctx, fingerprint, 100)
+	pending, err := ix.store.PendingForGeneration(ctx, fingerprint, nil, 100)
 	require.NoError(t, err)
 	for _, p := range pending {
 		assert.NotEqual(t, "u:s1:dup", p.Doc, "stamped doc should not be pending re-embed")
@@ -830,18 +834,11 @@ func TestRefreshCascadingOrdinalShiftReinsertsEvictedKeysWithoutLosingCoverage(t
 	assert.Zero(t, stats.Deleted, "cascaded rows are reinserted in-scan, not genuinely removed")
 
 	for _, key := range keys {
-		row, ok := readMirrorRow(t, ix, key)
+		_, ok := readMirrorRow(t, ix, key)
 		require.True(t, ok, "%s must still be in the mirror", key)
-
-		var stampCount int
-		require.NoError(t, ix.db.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM message_vectors_stamps WHERE doc_key = ? AND revision = ?`,
-			key, row.contentHash,
-		).Scan(&stampCount))
-		assert.Equal(t, 1, stampCount, "%s's stamp must survive the cascading shift", key)
 	}
 
-	pending, err := ix.store.PendingForGeneration(ctx, fingerprint, 100)
+	pending, err := ix.store.PendingForGeneration(ctx, fingerprint, nil, 100)
 	require.NoError(t, err)
 	assert.Empty(t, pending, "no document should need re-embedding after the cascading shift")
 }
@@ -1008,4 +1005,50 @@ func TestRefreshParkedLeftoverFromInterruptedRunDoesNotCollide(t *testing.T) {
 	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM vector_messages WHERE ordinal < 0`).Scan(&parked))
 	assert.Zero(t, parked, "no parked rows survive a completed full refresh")
+}
+
+// TestDocKeySessionPrefixesMatchOnlyTheirSession pins what lets a store
+// sorted by doc key narrow a session's reads to its key prefixes: every key
+// DocKey builds for a session starts with exactly one of that session's
+// prefixes, and with none of another session's. Components come from a
+// small alphabet heavy in delimiters and escape sequences, so sessions that
+// share a prefix, contain ':' or '%', or equal each other all occur.
+func TestDocKeySessionPrefixesMatchOnlyTheirSession(t *testing.T) {
+	alphabet := []string{"a", "b", ":", "#", "%", "%3A", "o", "r"}
+	component := func(rng *rand.Rand) string {
+		var b strings.Builder
+		for range rng.Intn(4) {
+			b.WriteString(alphabet[rng.Intn(len(alphabet))])
+		}
+		return b.String()
+	}
+	config := &quick.Config{
+		MaxCount: 2000,
+		Rand:     rand.New(rand.NewSource(1)),
+		Values: func(args []reflect.Value, rng *rand.Rand) {
+			args[0] = reflect.ValueOf([]string{"user", "run"}[rng.Intn(2)])
+			args[1] = reflect.ValueOf(component(rng))
+			args[2] = reflect.ValueOf(component(rng))
+			args[3] = reflect.ValueOf(component(rng))
+			args[4] = reflect.ValueOf(rng.Intn(3))
+			args[5] = reflect.ValueOf(1 + rng.Intn(3))
+		},
+	}
+	matches := func(key, sessionID string) int {
+		n := 0
+		for _, p := range DocKeySessionPrefixes(sessionID) {
+			if strings.HasPrefix(key, p) {
+				n++
+			}
+		}
+		return n
+	}
+	assert.NoError(t, quick.Check(func(kind, session, other, uuid string, ordinal, occurrence int) bool {
+		key := DocKey(kind, session, uuid, ordinal, occurrence)
+		ok := assert.Equal(t, 1, matches(key, session), "key %q of session %q", key, session)
+		if other != session {
+			ok = assert.Zero(t, matches(key, other), "key %q of session %q vs %q", key, session, other) && ok
+		}
+		return ok
+	}, config))
 }

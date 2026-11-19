@@ -2,7 +2,15 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -803,4 +811,236 @@ func TestPrintContentMatchesHumanAgeToken(t *testing.T) {
 	require.GreaterOrEqual(t, projIdx, 0)
 	assert.Greater(t, ageIdx, scoreIdx, "age token comes after the score marker")
 	assert.Less(t, ageIdx, projIdx, "age token comes before the project")
+}
+
+func TestSessionSearchHiddenHints(t *testing.T) {
+	for _, class := range []string{"one-shot", "child"} {
+		t.Run(class, func(t *testing.T) {
+			dataDir := newAgentDataDir(t)
+			seedSessionsWithOpts(t, dataDir, sessionSeed{id: "parent", project: "p"}, sessionSeed{id: "hidden", project: "p", mut: func(s *db.Session) {
+				if class == "child" {
+					s.ParentSessionID = new("parent")
+					s.RelationshipType = "subagent"
+				}
+				s.UserMessageCount = 1
+			}})
+			seedSearchMessage(t, dataDir, "hidden", "needle with 'quotes' and $symbols")
+			root := newRootCommand()
+			var stdout, stderr bytes.Buffer
+			root.SetOut(&stdout)
+			root.SetErr(&stderr)
+			root.SetArgs([]string{"session", "search", "needle with 'quotes'", "--project", "p"})
+			_, err := root.ExecuteC()
+			require.NoError(t, err)
+			assert.Equal(t, "(no matches)\n", stdout.String())
+			assert.Contains(t, stderr.String(), "Hint: 1 match is")
+
+			out, err := executeCommand(newRootCommand(), "session", "search", "needle with 'quotes'", "--project", "p", "--json", "--exclude-session", "missing-a", "--exclude-session", "missing-b")
+			require.NoError(t, err)
+			got := decodeCLIJSON[struct {
+				Hints []contentSearchCLIHint `json:"hints"`
+			}](t, out)
+			require.Len(t, got.Hints, 1)
+			assert.Contains(t, got.Hints[0].Next, "--exclude-session=missing-a")
+			assert.Contains(t, got.Hints[0].Next, "--exclude-session=missing-b")
+			if runtime.GOOS == "windows" {
+				return
+			}
+			// Let the shell decode the emitted command; printf never runs the binary.
+			shell, err := exec.LookPath("sh")
+			if err != nil {
+				t.Skip("retry execution requires a POSIX shell")
+			}
+			decode := exec.CommandContext(t.Context(), shell, "-c", "set -- "+got.Hints[0].Next+"; printf '%s\\000' \"$@\"")
+			words, err := decode.Output()
+			require.NoError(t, err)
+			args := strings.Split(strings.TrimSuffix(string(words), "\x00"), "\x00")
+			out, err = executeCommand(newRootCommand(), args[1:]...)
+			require.NoError(t, err)
+			matches := decodeCLIJSON[service.ContentSearchResult](t, out)
+			require.Len(t, matches.Matches, 1)
+			assert.Equal(t, "hidden", matches.Matches[0].SessionID)
+		})
+	}
+}
+
+func TestSessionSearchSQLiteQuotedPatternOmitsFTSHint(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	seedSessionWithOpts(t, dataDir, "visible", "p", nil)
+	seedSearchMessage(t, dataDir, "visible", "decode failure error notes")
+	out, err := executeCommand(newRootCommand(), "session", "search", `"decoding failure"`, "--in", "messages", "--json")
+	require.NoError(t, err)
+	got := decodeCLIJSON[struct {
+		Matches []db.ContentMatch      `json:"matches"`
+		Hints   []contentSearchCLIHint `json:"hints"`
+	}](t, out)
+	assert.Empty(t, got.Matches)
+	assert.Empty(t, got.Hints)
+	fts, err := executeCommand(newRootCommand(), "session", "search", `"decoding failure"`, "--fts", "--json")
+	require.NoError(t, err)
+	require.Len(t, decodeCLIJSON[service.ContentSearchResult](t, fts).Matches, 1)
+}
+
+func TestSessionSearchRemoteFTSHints(t *testing.T) {
+	newAgentDataDir(t)
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	require.NoError(t, os.WriteFile(tokenFile, []byte("search-token"), 0o600))
+	ftsCalls, backend := 0, ""
+	ftsHasMatches := true
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "Bearer search-token", r.Header.Get("Authorization"))
+		if r.URL.Path == "/api/v1/memory/status" {
+			if backend == "" {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"status":"ready","observed_at":"2026-01-01T00:00:00Z","archive":{"backend":"` + backend + `","read_only":true},"lexical":{"status":"ready"},"semantic":{"status":"ready"},"sources":{"status":"ready"}}`))
+			return
+		}
+		if r.URL.Query().Get("mode") == "fts" {
+			ftsCalls++
+			w.Header().Set("Content-Type", "application/json")
+			if ftsHasMatches {
+				_, _ = w.Write([]byte(`{"matches":[{"session_id":"visible"}]}`))
+			} else {
+				_, _ = w.Write([]byte(`{"matches":[]}`))
+			}
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("include_one_shot") == "true" {
+			_, _ = w.Write([]byte(`{"matches":[{"session_id":"hidden"}]}`))
+		} else {
+			_, _ = w.Write([]byte(`{"matches":[]}`))
+		}
+	}))
+	defer ts.Close()
+	for _, tc := range []struct {
+		backend, pattern, source string
+		regex, hint              bool
+	}{
+		{"cockroach", "decode error notes", "", false, true},
+		{"cockroach", "decode error notes", "messages", false, true},
+		{"cockroach", "decode error notes", "tool_result", false, false},
+		{"cockroach", "decoding", "messages", false, false},
+		{"cockroach", "decode error notes", "messages", true, false},
+		{"", "decode error notes", "messages", false, true},
+		{"sqlite", "decode error notes", "messages", false, false},
+	} {
+		name := tc.backend
+		if name == "" {
+			name = "status endpoint missing"
+		}
+		t.Run(name, func(t *testing.T) {
+			before := ftsCalls
+			backend = tc.backend
+			out, err := executeCommand(newRootCommand(), "session", "--server", ts.URL, "--server-token-file", tokenFile, "search", tc.pattern, "--in", tc.source, "--json", "--regex="+strconv.FormatBool(tc.regex))
+			require.NoError(t, err)
+			got := decodeCLIJSON[struct {
+				Hints []contentSearchCLIHint `json:"hints"`
+			}](t, out)
+			var ftsHints []contentSearchCLIHint
+			for _, hint := range got.Hints {
+				if hint.Code == "try_fts" {
+					ftsHints = append(ftsHints, hint)
+				}
+			}
+			if tc.hint {
+				require.Len(t, ftsHints, 1)
+				assert.Equal(t, before+1, ftsCalls)
+				assert.Contains(t, ftsHints[0].Next, "--server="+ts.URL)
+				assert.Contains(t, ftsHints[0].Next, "--server-token-file="+tokenFile)
+			} else {
+				assert.Empty(t, ftsHints)
+				assert.Equal(t, before, ftsCalls)
+			}
+		})
+	}
+	ftsHasMatches = false
+	backend = "cockroach"
+	before := ftsCalls
+	out, err := executeCommand(newRootCommand(), "session", "--server", ts.URL, "--server-token-file", tokenFile, "search", "missing words", "--in", "messages", "--json")
+	require.NoError(t, err)
+	got := decodeCLIJSON[struct {
+		Hints []contentSearchCLIHint `json:"hints"`
+	}](t, out)
+	for _, hint := range got.Hints {
+		assert.NotEqual(t, "try_fts", hint.Code)
+	}
+	assert.Equal(t, before+1, ftsCalls)
+}
+
+type unavailableStatusSearch struct{ service.SessionService }
+
+func (unavailableStatusSearch) MemoryStatus(context.Context) (service.MemoryStatus, error) {
+	return service.MemoryStatus{}, errors.New("status unavailable")
+}
+
+func (unavailableStatusSearch) SearchContent(_ context.Context, req service.ContentSearchRequest) (*service.ContentSearchResult, error) {
+	if req.Mode == "fts" {
+		return &service.ContentSearchResult{Matches: []db.ContentMatch{{SessionID: "visible"}}}, nil
+	}
+	return &service.ContentSearchResult{}, nil
+}
+
+func TestSessionSearchUnavailableStatusKeepsFTSHint(t *testing.T) {
+	cmd := newSessionSearchCommand()
+	req := service.ContentSearchRequest{Pattern: "missing words", Mode: "substring", IncludeOneShot: true, IncludeAutomated: true, IncludeChildren: true}
+	hints := contentSearchHints(t.Context(), cmd, unavailableStatusSearch{}, req, &service.ContentSearchResult{})
+	require.Len(t, hints, 1)
+	assert.Equal(t, "try_fts", hints[0].Code)
+}
+
+func TestSessionSearchRetryQuotesForPlatform(t *testing.T) {
+	root := newRootCommand()
+	cmd, _, err := root.Find([]string{"session", "search"})
+	require.NoError(t, err)
+	// zsh -f skips startup files, which can disable the default EQUALS option.
+	for _, tc := range []struct {
+		shell   string
+		flags   string
+		pattern string
+	}{
+		{"sh", "-c", "~/needle"},
+		{"zsh", "-fc", "~/needle"},
+		{"zsh", "-fc", "=="},
+	} {
+		t.Run(tc.shell+" "+tc.pattern, func(t *testing.T) {
+			shell, err := exec.LookPath(tc.shell)
+			if err != nil {
+				t.Skipf("%s not installed", tc.shell)
+			}
+			retry := contentSearchRetry(cmd, tc.pattern, map[string]any{"include_one_shot": true}, "linux")
+			output, err := exec.CommandContext(t.Context(), shell, tc.flags, "set -- "+retry+`; for arg do :; done; printf '%s' "$arg"`).CombinedOutput()
+			require.NoError(t, err, string(output))
+			assert.Equal(t, tc.pattern, string(output))
+		})
+	}
+	windowsRetry := contentSearchRetry(cmd, "can't decode", map[string]any{"include_one_shot": true}, "windows")
+	assert.Equal(t, "& 'agentsview' 'session' 'search' '--include-one-shot=true' '--' 'can''t decode'", windowsRetry)
+	if powershell, err := exec.LookPath("pwsh"); err == nil {
+		output, err := exec.CommandContext(t.Context(), powershell, "-NoProfile", "-NonInteractive", "-Command", "function agentsview { $args[-1] }; "+windowsRetry).CombinedOutput()
+		require.NoError(t, err, string(output))
+		assert.Equal(t, "can't decode", strings.TrimSpace(string(output)))
+	}
+}
+
+func TestSessionSearchHybridKeywordFallback(t *testing.T) {
+	newAgentDataDir(t)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "true", r.URL.Query().Get("allow_keyword_fallback"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"matches":[],"effective_mode":"hybrid_keyword","note":"Search by meaning is unavailable: not set up. Returned hybrid keyword matches only."}`))
+	}))
+	defer ts.Close()
+	cmd := newRootCommand()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"session", "--server", ts.URL, "search", "UnicodeDecodeError", "--hybrid", "--json"})
+	require.NoError(t, cmd.Execute())
+	got := decodeCLIJSON[service.ContentSearchResult](t, stdout.String())
+	require.NotEmpty(t, got.Note)
+	assert.Equal(t, got.Note+"\n", stderr.String())
 }

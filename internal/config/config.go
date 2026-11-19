@@ -35,6 +35,7 @@ import (
 	"go.kenn.io/agentsview/internal/pathutil"
 	"go.kenn.io/kit/atomicfile"
 	"go.kenn.io/kit/embedconfig"
+	"go.kenn.io/kit/embedlocal"
 )
 
 // TerminalConfig holds terminal launch preferences.
@@ -167,39 +168,6 @@ var clickHouseConfigKeys = map[string]struct{}{
 	"push_batch_size":  {},
 }
 
-// DuckDBConfig holds DuckDB mirror and Quack connection settings.
-//
-//nolint:recvcheck // Value encoding and pointer decoding intentionally implement distinct interfaces.
-type DuckDBConfig struct {
-	Path          string `toml:"path" json:"path"`
-	URL           string `toml:"url" json:"url"`
-	Token         string `toml:"token" json:"token,omitempty"`
-	MachineName   string `toml:"machine_name" json:"machine_name"`
-	AllowInsecure bool   `toml:"allow_insecure" json:"allow_insecure"`
-	// AttachTimeout bounds how long a remote Quack ATTACH (and its cheap TCP
-	// preflight) may run before the client gives up, so an unresponsive
-	// endpoint fails fast instead of hanging forever. Zero selects the
-	// package default; a negative value disables the guard.
-	AttachTimeout   time.Duration `toml:"attach_timeout" json:"attach_timeout,omitzero"`
-	Projects        []string      `toml:"projects" json:"projects,omitempty"`
-	ExcludeProjects []string      `toml:"exclude_projects" json:"exclude_projects,omitempty"`
-}
-
-type duckDBConfigJSON DuckDBConfig
-
-func (c DuckDBConfig) MarshalJSONTo(out *jsontext.Encoder) error {
-	return jsonutil.MarshalDurationFields(out, duckDBConfigJSON(c))
-}
-
-func (c *DuckDBConfig) UnmarshalJSONFrom(in *jsontext.Decoder) error {
-	var decoded duckDBConfigJSON
-	if err := jsonutil.UnmarshalDurationFields(in, &decoded); err != nil {
-		return err
-	}
-	*c = DuckDBConfig(decoded)
-	return nil
-}
-
 // VectorConfig holds settings for the optional local semantic-search
 // vector index (embeddings + vectors.db).
 type VectorConfig struct {
@@ -294,7 +262,11 @@ type VectorEmbeddingsServerConfig struct {
 	// APIKeyEnv names the environment variable holding the API key.
 	// Empty means anonymous access.
 	APIKeyEnv string `toml:"api_key_env" json:"api_key_env,omitempty"`
-	// BatchSize is the number of inputs sent per HTTP call. Default 32.
+	// APIKeyFile names a private file holding the API key, read when the
+	// [vector] section loads. It is the alternative to APIKeyEnv.
+	APIKeyFile string `toml:"api_key_file" json:"api_key_file,omitempty"`
+	// BatchSize is the number of inputs sent per HTTP call. Default 32, or 8
+	// for a built-in server (no endpoint).
 	BatchSize int `toml:"batch_size" json:"batch_size"`
 	// MaxBatchTokens is the provider's maximum total input tokens per HTTP
 	// call. When set with ModelContextTokens, builds reduce BatchSize so the
@@ -304,9 +276,10 @@ type VectorEmbeddingsServerConfig struct {
 	// build against this server. Sequential requests leave a build
 	// round-trip-bound against remote endpoints, so the default is 4;
 	// servers that process one request at a time simply queue the extras.
+	// A built-in server runs on the CPU, so its default is 1.
 	Concurrency int `toml:"concurrency" json:"concurrency"`
 	// Timeout is a parseable duration string applied to each HTTP
-	// call. Default "30s".
+	// call. Default "30s", or "5m" for a built-in server (no endpoint).
 	Timeout string `toml:"timeout" json:"timeout"`
 	// MaxRetries is the maximum total attempts on retryable errors other than
 	// document-build 429 rate limits, which retry until success or
@@ -315,9 +288,9 @@ type VectorEmbeddingsServerConfig struct {
 	// 0 means one attempt. Default 3.
 	MaxRetries int `toml:"max_retries" json:"max_retries"`
 
-	// apiKey is read from AGENTSVIEW_EMBEDDINGS_API_KEY or
-	// AGENTSVIEW_EMBEDDINGS_API_KEY_FILE for the deployment server; it takes
-	// precedence over APIKeyEnv.
+	// apiKey is read from APIKeyFile, or from AGENTSVIEW_EMBEDDINGS_API_KEY
+	// or AGENTSVIEW_EMBEDDINGS_API_KEY_FILE for the deployment server; it
+	// takes precedence over APIKeyEnv.
 	apiKey string
 }
 
@@ -368,25 +341,53 @@ func (c VectorEmbeddingsConfig) Server(name string) (string, VectorEmbeddingsSer
 	return name, s, nil
 }
 
+// Transport defaults for a server with an endpoint, which is usually a
+// remote API or a GPU-backed local server.
+const (
+	defaultEmbeddingsBatchSize   = 32
+	defaultEmbeddingsConcurrency = 4
+	defaultEmbeddingsTimeout     = "30s"
+)
+
+// Transport defaults for a built-in server (no endpoint: automatic discovery
+// or local = true). Kit's shared local server runs the model on the CPU,
+// where one full-context input can take seconds, so a request carries fewer
+// inputs, builds send one request at a time, and each request may run longer.
+const (
+	defaultBuiltinEmbeddingsBatchSize   = embedlocal.BatchItems
+	defaultBuiltinEmbeddingsConcurrency = 1
+	defaultBuiltinEmbeddingsTimeout     = embedlocal.RequestTimeout
+)
+
 // normalizedEmbeddingsServers fills each named server's unset transport
-// fields with their defaults (batch_size 32, concurrency 4, timeout "30s",
-// max_retries 3). meta.IsDefined distinguishes "unset" (apply the default)
-// from an explicit zero — an explicit max_retries = 0 disables retries, and
-// an explicit zero batch_size/concurrency stays zero so validation rejects
-// it instead of silently substituting the default.
+// fields with their defaults: batch_size 32, concurrency 4, and timeout
+// "30s" for a server with an endpoint; batch_size 8, concurrency 1, and
+// timeout "5m" for a built-in server; max_retries 3 for both.
+// meta.IsDefined distinguishes "unset" (apply the default) from an explicit
+// zero — an explicit max_retries = 0 disables retries, and an explicit zero
+// batch_size/concurrency stays zero so validation rejects it instead of
+// silently substituting the default.
 func normalizedEmbeddingsServers(
 	servers map[string]VectorEmbeddingsServerConfig, meta toml.MetaData,
 ) map[string]VectorEmbeddingsServerConfig {
 	out := make(map[string]VectorEmbeddingsServerConfig, len(servers))
 	for name, s := range servers {
+		batchSize := defaultEmbeddingsBatchSize
+		concurrency := defaultEmbeddingsConcurrency
+		timeout := defaultEmbeddingsTimeout
+		if s.Endpoint == "" {
+			batchSize = defaultBuiltinEmbeddingsBatchSize
+			concurrency = defaultBuiltinEmbeddingsConcurrency
+			timeout = defaultBuiltinEmbeddingsTimeout.String()
+		}
 		if !meta.IsDefined("vector", "embeddings", "servers", name, "batch_size") {
-			s.BatchSize = 32
+			s.BatchSize = batchSize
 		}
 		if !meta.IsDefined("vector", "embeddings", "servers", name, "concurrency") {
-			s.Concurrency = 4
+			s.Concurrency = concurrency
 		}
 		if s.Timeout == "" {
-			s.Timeout = "30s"
+			s.Timeout = timeout
 		}
 		if !meta.IsDefined("vector", "embeddings", "servers", name, "max_retries") {
 			s.MaxRetries = 3
@@ -502,6 +503,32 @@ func (c VectorConfig) Validate() error {
 	return nil
 }
 
+// resolveVectorSecrets validates the section and, when it is enabled, reads
+// each server's api_key_file.
+func resolveVectorSecrets(c *VectorConfig) error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	if !c.Enabled {
+		return nil
+	}
+	for _, name := range sortedServerNames(c.Embeddings.Servers) {
+		server := c.Embeddings.Servers[name]
+		if strings.TrimSpace(server.APIKeyFile) == "" {
+			continue
+		}
+		key, err := readSettingSecretFile(
+			fmt.Sprintf("[vector.embeddings.servers.%s] api_key_file", name),
+			server.APIKeyFile)
+		if err != nil {
+			return err
+		}
+		server.apiKey = key
+		c.Embeddings.Servers[name] = server
+	}
+	return nil
+}
+
 // ResolvedDBPath returns DBPath if set, else <dataDir>/vectors.db.
 func (c VectorConfig) ResolvedDBPath(dataDir string) string {
 	if c.DBPath != "" {
@@ -552,16 +579,21 @@ func (c VectorEmbeddingsServerConfig) EmbedTransport() (embedconfig.Transport, e
 	return embedconfig.Transport{Timeout: timeout}, nil
 }
 
-// APIKey returns a deployment-provided key when set. Otherwise it reads the
-// environment variable named by APIKeyEnv, returning "" when unset.
-func (c VectorEmbeddingsServerConfig) APIKey() string {
+// APIKey returns the key read when the config loaded, or a
+// deployment-provided key. Otherwise it reads APIKeyFile, which a command
+// that loaded the config without the [vector] scope has not read yet, or the
+// environment variable APIKeyEnv names. It returns "" when no key is set.
+func (c VectorEmbeddingsServerConfig) APIKey() (string, error) {
 	if c.apiKey != "" {
-		return c.apiKey
+		return c.apiKey, nil
+	}
+	if strings.TrimSpace(c.APIKeyFile) != "" {
+		return readSettingSecretFile("api_key_file", c.APIKeyFile)
 	}
 	if c.APIKeyEnv == "" {
-		return ""
+		return "", nil
 	}
-	return os.Getenv(c.APIKeyEnv)
+	return os.Getenv(c.APIKeyEnv), nil
 }
 
 // validateServers checks available servers, their default and transport
@@ -614,18 +646,17 @@ func (c VectorEmbeddingsServerConfig) validate(name string, modelContextTokens i
 	if c.Endpoint == "" && !c.Local {
 		return fmt.Errorf("%s endpoint is required", section)
 	}
-	if c.OllamaCPUFallback {
-		u, err := url.Parse(c.Endpoint)
-		if err != nil || u.Scheme == "" || u.Host == "" ||
-			(u.Scheme != "http" && u.Scheme != "https") {
-			return fmt.Errorf(
-				"%s ollama_cpu_fallback requires an absolute HTTP(S) endpoint", section)
-		}
-		endpointPath := strings.TrimSuffix(u.Path, "/")
-		if !strings.HasSuffix(endpointPath, "/v1") {
-			return fmt.Errorf(
-				"%s ollama_cpu_fallback requires an endpoint ending in /v1", section)
-		}
+	if err := oneSecretSource(section, "api_key_env", c.APIKeyEnv,
+		"api_key_file", c.APIKeyFile); err != nil {
+		return err
+	}
+	endpoint, err := c.EmbedDeployment().Canonical()
+	if err != nil && !c.Local {
+		return fmt.Errorf("%s %w", section, err)
+	}
+	if c.OllamaCPUFallback && !strings.HasSuffix(endpoint, "/v1") {
+		return fmt.Errorf(
+			"%s ollama_cpu_fallback requires an endpoint ending in /v1", section)
 	}
 	if c.BatchSize <= 0 {
 		return fmt.Errorf("%s batch_size must be greater than 0, got %d", section, c.BatchSize)
@@ -692,6 +723,46 @@ type FrictionConfig struct {
 	BackfillDays int `json:"backfill_days" toml:"backfill_days"`
 	// SeatPatterns are globs over session file paths with one {seat} capture.
 	SeatPatterns []string `json:"seat_patterns,omitempty" toml:"seat_patterns"`
+	// Kata is the hub's automatic filing policy.
+	Kata FrictionKataConfig `json:"kata,omitzero" toml:"kata"`
+}
+
+// FrictionKataConfig controls automatic filing of Friction Log patterns to
+// Kata. Only the filing hub with [kata] enabled acts on it.
+type FrictionKataConfig struct {
+	// AutoFile files recent unlinked patterns every hour.
+	AutoFile bool `json:"auto_file,omitempty" toml:"auto_file"`
+	// Kinds limits automatic filing to these kinds; empty means every kind
+	// that can be filed.
+	Kinds []string `json:"kinds,omitempty" toml:"kinds"`
+	// MinSessions is how many sessions a pattern must appear in before it
+	// is filed automatically; 0 means DefaultFrictionAutoFileMinSessions.
+	MinSessions int `json:"min_sessions,omitempty" toml:"min_sessions"`
+}
+
+// DefaultFrictionAutoFileMinSessions files only patterns that recur across
+// sessions. Correction, pattern and deferral fingerprints include the
+// session, so at this default they are filed only by hand.
+const DefaultFrictionAutoFileMinSessions = 2
+
+// FileMinSessions returns the session count automatic filing requires.
+func (c FrictionKataConfig) FileMinSessions() int {
+	if c.MinSessions == 0 {
+		return DefaultFrictionAutoFileMinSessions
+	}
+	return c.MinSessions
+}
+
+// FileKinds returns the kinds automatic filing considers.
+func (c FrictionKataConfig) FileKinds() []friction.Kind {
+	if len(c.Kinds) == 0 {
+		return friction.FileableKinds
+	}
+	out := make([]friction.Kind, 0, len(c.Kinds))
+	for _, k := range c.Kinds {
+		out = append(out, friction.Kind(k))
+	}
+	return out
 }
 
 // Validate checks the zone name, backfill bound, and seat patterns.
@@ -715,6 +786,19 @@ func (c FrictionConfig) Validate() error {
 	if _, err := friction.CompileSeatPatterns(c.SeatPatterns); err != nil {
 		return fmt.Errorf("[friction] seat_patterns: %w", err)
 	}
+	seen := make(map[string]bool, len(c.Kata.Kinds))
+	for _, k := range c.Kata.Kinds {
+		if !friction.Fileable(friction.Kind(k)) {
+			return fmt.Errorf("[friction.kata] kinds entry %q cannot be filed; use correction, error, workaround, deferral or pattern", k)
+		}
+		if seen[k] {
+			return fmt.Errorf("[friction.kata] kinds entry %q repeats", k)
+		}
+		seen[k] = true
+	}
+	if c.Kata.MinSessions < 0 {
+		return fmt.Errorf("[friction.kata] min_sessions must be at least 1, got %d", c.Kata.MinSessions)
+	}
 	return nil
 }
 
@@ -731,10 +815,16 @@ type InsightsConfig struct {
 	Endpoint  string `json:"endpoint,omitempty" toml:"endpoint"`
 	Model     string `json:"model,omitempty" toml:"model"`
 	APIKeyEnv string `json:"api_key_env,omitempty" toml:"api_key_env"`
-	AllowHTTP bool   `json:"allow_http,omitempty" toml:"allow_http"`
+	// APIKeyFile names a private file holding the API key, read when the
+	// section loads. It is the alternative to APIKeyEnv.
+	APIKeyFile string `json:"api_key_file,omitempty" toml:"api_key_file"`
+	AllowHTTP  bool   `json:"allow_http,omitempty" toml:"allow_http"`
 	// DefaultAgent selects the agent CLI insight generation uses when a
 	// request does not choose one. Empty keeps DefaultInsightAgent.
 	DefaultAgent string `json:"default_agent,omitempty" toml:"default_agent"`
+
+	// apiKey holds the key read from APIKeyFile.
+	apiKey string
 }
 
 // DefaultInsightAgent is the insight agent used when neither the request nor
@@ -771,13 +861,33 @@ func ParseInsightAgent(value string) (string, error) {
 	)
 }
 
-// APIKey reads the configured key from the environment. The key itself is
-// intentionally never part of the serialized configuration.
+// APIKey returns the key read from APIKeyFile, or else the value of the
+// environment variable APIKeyEnv names. The key itself is intentionally never
+// part of the serialized configuration.
 func (c InsightsConfig) APIKey() string {
+	if c.apiKey != "" {
+		return c.apiKey
+	}
 	if strings.TrimSpace(c.APIKeyEnv) == "" {
 		return ""
 	}
 	return os.Getenv(strings.TrimSpace(c.APIKeyEnv))
+}
+
+// resolveInsightsSecrets validates the section and reads APIKeyFile.
+func resolveInsightsSecrets(c *InsightsConfig) error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(c.APIKeyFile) == "" {
+		return nil
+	}
+	key, err := readSettingSecretFile("[insights] api_key_file", c.APIKeyFile)
+	if err != nil {
+		return err
+	}
+	c.apiKey = key
+	return nil
 }
 
 // Validate checks endpoint intent, transport safety, and the default agent.
@@ -790,9 +900,14 @@ func (c InsightsConfig) Validate() error {
 	endpoint := strings.TrimSpace(c.Endpoint)
 	model := strings.TrimSpace(c.Model)
 	configured := endpoint != "" || model != "" ||
-		strings.TrimSpace(c.APIKeyEnv) != "" || c.AllowHTTP
+		strings.TrimSpace(c.APIKeyEnv) != "" ||
+		strings.TrimSpace(c.APIKeyFile) != "" || c.AllowHTTP
 	if !configured {
 		return nil
+	}
+	if err := oneSecretSource("[insights]", "api_key_env", c.APIKeyEnv,
+		"api_key_file", c.APIKeyFile); err != nil {
+		return err
 	}
 	if endpoint == "" || model == "" {
 		return errors.New("[insights] endpoint and model are required together")
@@ -818,6 +933,29 @@ type CustomModelRate struct {
 	// cache_creation_microdollars_per_mtok.
 	CacheCreation1hMicrodollarsPerMTok int64 `json:"cache_creation_1h_microdollars_per_mtok,omitempty" toml:"cache_creation_1h_microdollars_per_mtok"`
 	CacheReadMicrodollarsPerMTok       int64 `json:"cache_read_microdollars_per_mtok,omitempty" toml:"cache_read_microdollars_per_mtok"`
+	// PriceAs prices the model exactly like this catalog model, including
+	// its long-context tiers and later catalog updates. It excludes the
+	// rate fields.
+	PriceAs string `json:"price_as,omitempty" toml:"price_as,omitempty"`
+}
+
+var customModelRateFields = []string{
+	"input_microdollars_per_mtok", "output_microdollars_per_mtok",
+	"cache_creation_microdollars_per_mtok",
+	"cache_creation_1h_microdollars_per_mtok",
+	"cache_read_microdollars_per_mtok",
+}
+
+// PricingAliases returns the price_as mappings in custom, keyed by the
+// reported model name.
+func PricingAliases(custom map[string]CustomModelRate) map[string]string {
+	out := make(map[string]string)
+	for model, rate := range custom {
+		if rate.PriceAs != "" {
+			out[model] = rate.PriceAs
+		}
+	}
+	return out
 }
 
 func decodeCustomModelPricing(data string) (map[string]CustomModelRate, error) {
@@ -833,18 +971,32 @@ func decodeCustomModelPricing(data string) (map[string]CustomModelRate, error) {
 			continue
 		}
 		return nil, fmt.Errorf(
-			"%s: unsupported pricing field; use input_microdollars_per_mtok, output_microdollars_per_mtok, cache_creation_microdollars_per_mtok, cache_creation_1h_microdollars_per_mtok, or cache_read_microdollars_per_mtok",
+			"%s: unsupported pricing field; use price_as, input_microdollars_per_mtok, output_microdollars_per_mtok, cache_creation_microdollars_per_mtok, cache_creation_1h_microdollars_per_mtok, or cache_read_microdollars_per_mtok",
 			key.String(),
 		)
 	}
 	for model, rate := range decoded.CustomModelPricing {
-		if rate.InputMicrodollarsPerMTok < 0 ||
-			rate.OutputMicrodollarsPerMTok < 0 ||
-			rate.CacheCreationMicrodollarsPerMTok < 0 ||
-			rate.CacheCreation1hMicrodollarsPerMTok < 0 ||
-			rate.CacheReadMicrodollarsPerMTok < 0 {
+		hasRates := slices.ContainsFunc(customModelRateFields, func(field string) bool {
+			return metadata.IsDefined("custom_model_pricing", model, field)
+		})
+		if !metadata.IsDefined("custom_model_pricing", model, "price_as") {
+			if rate.InputMicrodollarsPerMTok < 0 ||
+				rate.OutputMicrodollarsPerMTok < 0 ||
+				rate.CacheCreationMicrodollarsPerMTok < 0 ||
+				rate.CacheCreation1hMicrodollarsPerMTok < 0 ||
+				rate.CacheReadMicrodollarsPerMTok < 0 {
+				return nil, fmt.Errorf(
+					"custom_model_pricing.%s: rates must not be negative", model)
+			}
+			continue
+		}
+		target := rate.PriceAs
+		switch {
+		case hasRates:
 			return nil, fmt.Errorf(
-				"custom_model_pricing.%s: rates must not be negative", model)
+				"custom_model_pricing.%q: price_as cannot be combined with rate fields", model)
+		case target == "":
+			return nil, fmt.Errorf("custom_model_pricing.%q: price_as must not be empty", model)
 		}
 	}
 	return decoded.CustomModelPricing, nil
@@ -983,7 +1135,10 @@ type sessionSourceConfig struct {
 type Config struct {
 	// CodexCloud is the [agents.codex-cloud] table, read from config.toml
 	// only.
-	CodexCloud           CodexCloudConfig            `json:"-" toml:"-"`
+	CodexCloud CodexCloudConfig `json:"-" toml:"-"`
+	// ClaudeAI is the organizations setting of [agents.claude-ai], read
+	// from config.toml only.
+	ClaudeAI             ClaudeAIConfig              `json:"-" toml:"-"`
 	Host                 string                      `json:"host" toml:"host"`
 	Port                 int                         `json:"port" toml:"port"`
 	ChartPalette         ChartPalette                `json:"chart_palette" toml:"chart_palette"`
@@ -1005,6 +1160,7 @@ type Config struct {
 	RequireAuth          bool                        `json:"require_auth" toml:"require_auth"`
 	NoBrowser            bool                        `json:"no_browser" toml:"no_browser"`
 	DisableUpdateCheck   bool                        `json:"disable_update_check" toml:"disable_update_check"`
+	PersistentDaemon     bool                        `json:"-" toml:"-"`
 	NoSync               bool                        `json:"-" toml:"-"`
 	SkipInitialSync      bool                        `json:"-" toml:"-"`
 	ArchiveContent       ArchiveContent              `json:"archive_content" toml:"archive_content"`
@@ -1014,10 +1170,12 @@ type Config struct {
 	ClickHouse           ClickHouseConfig            `json:"clickhouse,omitempty" toml:"clickhouse"`
 	DefaultClickHouse    string                      `json:"default_clickhouse,omitempty" toml:"default_clickhouse"`
 	ClickHouseTargets    map[string]ClickHouseConfig `json:"-" toml:"-"`
-	DuckDB               DuckDBConfig                `json:"duckdb,omitempty" toml:"duckdb"`
 	Vector               VectorConfig                `json:"vector,omitempty" toml:"vector"`
 	Recall               RecallConfig                `json:"recall,omitempty" toml:"recall"`
+	ImageText            ImageTextConfig             `json:"image_text,omitempty" toml:"image_text"`
+	Integrations         IntegrationsConfig          `json:"integrations,omitempty" toml:"integrations"`
 	Insights             InsightsConfig              `json:"insights,omitempty" toml:"insights"`
+	Kata                 KataConfig                  `json:"-" toml:"kata"`
 	Friction             FrictionConfig              `json:"friction,omitempty" toml:"friction"`
 	Automated            AutomatedConfig             `json:"automated,omitempty" toml:"automated"`
 	Agent                map[string]AgentConfig      `json:"agent,omitempty" toml:"agent"`
@@ -1029,6 +1187,9 @@ type Config struct {
 	InstallationCreatedAt time.Time `json:"-" toml:"-"`
 	// LocalMachineName is the display label, defaulting to the system hostname.
 	LocalMachineName string `json:"-" toml:"local_machine_name"`
+	// CursorAdminAPIKeyFile names a private file holding the Cursor admin API
+	// key, read by ResolveCursorAdminAPIKey.
+	CursorAdminAPIKeyFile string `json:"-" toml:"cursor_admin_api_key_file"`
 
 	// AgentDirs maps each AgentType to its configured
 	// directories. Single-dir agents store a one-element
@@ -1082,7 +1243,16 @@ type Config struct {
 	// work during bursts of sync activity. Zero disables coalescing.
 	EventsCoalesceInterval time.Duration `json:"events_coalesce_interval,omitzero" toml:"events_coalesce_interval"`
 
+	// SyncIdleAfter pauses local ingestion after client inactivity. Restart to apply changes.
+	SyncIdleAfter     time.Duration `json:"sync_idle_after,omitzero" toml:"sync_idle_after"`
 	DaemonIdleTimeout time.Duration `json:"daemon_idle_timeout,omitzero" toml:"daemon_idle_timeout"`
+
+	// SyncInterval is the minimum time between starts of watcher-triggered
+	// syncs while someone is watching the archive, and in archive push commands.
+	SyncInterval time.Duration `json:"sync_interval,omitzero" toml:"sync_interval"`
+	// BackgroundSyncInterval is the same minimum for the daemon while nobody is
+	// watching. Restart to apply changes.
+	BackgroundSyncInterval time.Duration `json:"background_sync_interval,omitzero" toml:"background_sync_interval"`
 
 	ModelAliases       map[string]string          `json:"model_aliases,omitempty" toml:"model_aliases"`
 	CustomModelPricing map[string]CustomModelRate `json:"custom_model_pricing,omitempty" toml:"custom_model_pricing"`
@@ -1101,6 +1271,8 @@ type Config struct {
 	HostExplicit bool `json:"-" toml:"-"`
 	// PortExplicit is true when the user passed --port on the CLI.
 	PortExplicit bool `json:"-" toml:"-"`
+	// AuthSettingsSaved records that Settings owns authentication for this lifetime.
+	AuthSettingsSaved bool `json:"-" toml:"-"`
 
 	// DeploymentEmbeddings is the embedding transport from deployment env,
 	// set only without a [vector] section.
@@ -1135,6 +1307,13 @@ func (c *Config) UnmarshalJSONFrom(in *jsontext.Decoder) error {
 	}
 	*c = Config(decoded)
 	return nil
+}
+
+// BackgroundSyncFloor is the minimum time between watcher-triggered syncs in
+// the daemon while nobody is watching the archive: background_sync_interval,
+// or sync_interval when that is longer or the background interval is off.
+func (c Config) BackgroundSyncFloor() time.Duration {
+	return max(c.BackgroundSyncInterval, c.SyncInterval)
 }
 
 func (c Config) ResolvedChartPalette() ChartPalette {
@@ -1400,6 +1579,9 @@ func Default() (Config, error) {
 		ResultContentBlockedCategories: []string{"Read", "Glob"},
 		EventsCoalesceInterval:         10 * time.Second,
 		DaemonIdleTimeout:              20 * time.Minute,
+		SyncIdleAfter:                  10 * time.Minute,
+		SyncInterval:                   5 * time.Second,
+		BackgroundSyncInterval:         10 * time.Minute,
 		Agent:                          map[string]AgentConfig{},
 		CodexCloud:                     defaultCodexCloudConfig(),
 		Vector: VectorConfig{
@@ -1420,6 +1602,7 @@ func Default() (Config, error) {
 			},
 		},
 		Friction: FrictionConfig{BackfillDays: DefaultFrictionBackfillDays},
+		Kata:     defaultKataConfig(),
 	}, nil
 }
 
@@ -1485,6 +1668,22 @@ func Load(fs *flag.FlagSet) (Config, error) {
 // LoadPFlags builds a Config from a parsed Cobra/pflag FlagSet.
 func LoadPFlags(fs *pflag.FlagSet) (Config, error) {
 	return LoadPFlagsFor(fs, 0)
+}
+
+// LoadSettingsRestartConfig keeps a successful Settings auth save authoritative
+// across Settings restarts while reading later edits to the saved config.
+func LoadSettingsRestartConfig(current Config, fs *pflag.FlagSet) (Config, error) {
+	cfg, err := LoadPFlags(fs)
+	if err != nil || !current.AuthSettingsSaved {
+		return cfg, err
+	}
+	saved, err := loadReadOnlyFor(ScopeLocal, current.DataDir)
+	if err != nil {
+		return cfg, err
+	}
+	cfg.RequireAuth = saved.RequireAuth
+	cfg.AuthSettingsSaved = true
+	return cfg, nil
 }
 
 // LoadPFlagsFor loads a command's config, warning about invalid unused sections.
@@ -1820,6 +2019,7 @@ func (c *Config) applyConfigTOML(data string) error {
 		GithubToken                    string                 `toml:"github_token"`
 		CursorSecret                   string                 `toml:"cursor_secret"`
 		CursorAdminAPIKey              string                 `toml:"cursor_admin_api_key"`
+		CursorAdminAPIKeyFile          string                 `toml:"cursor_admin_api_key_file"`
 		CursorAdminEmail               string                 `toml:"cursor_admin_email"`
 		CursorAdminUserID              string                 `toml:"cursor_admin_user_id"`
 		Host                           string                 `toml:"host"`
@@ -1845,15 +2045,20 @@ func (c *Config) applyConfigTOML(data string) error {
 		PG                             PGConfig               `toml:"pg"`
 		DefaultClickHouse              string                 `toml:"default_clickhouse"`
 		ClickHouse                     ClickHouseConfig       `toml:"clickhouse"`
-		DuckDB                         DuckDBConfig           `toml:"duckdb"`
 		Vector                         VectorConfig           `toml:"vector"`
 		Recall                         RecallConfig           `toml:"recall"`
+		ImageText                      ImageTextConfig        `toml:"image_text"`
+		Integrations                   IntegrationsConfig     `toml:"integrations"`
 		Insights                       InsightsConfig         `toml:"insights"`
+		Kata                           KataConfig             `toml:"kata"`
 		Friction                       FrictionConfig         `toml:"friction"`
 		Automated                      AutomatedConfig        `toml:"automated"`
 		Agent                          map[string]AgentConfig `toml:"agent"`
 		EventsCoalesceInterval         time.Duration          `toml:"events_coalesce_interval"`
 		DaemonIdleTimeout              time.Duration          `toml:"daemon_idle_timeout"`
+		SyncIdleAfter                  time.Duration          `toml:"sync_idle_after"`
+		SyncInterval                   time.Duration          `toml:"sync_interval"`
+		BackgroundSyncInterval         time.Duration          `toml:"background_sync_interval"`
 		RemoteHosts                    []RemoteHost           `toml:"remote_hosts"`
 		ArchiveSources                 []ArchiveSource        `toml:"archive_sources"`
 		SessionSources                 []sessionSourceConfig  `toml:"session_sources"`
@@ -1912,8 +2117,14 @@ func (c *Config) applyConfigTOML(data string) error {
 		}
 		c.LocalMachineName = name
 	}
-	if file.CursorAdminAPIKey != "" && c.CursorAdminAPIKey == "" {
+	if err := oneSecretSource("", "cursor_admin_api_key", file.CursorAdminAPIKey,
+		"cursor_admin_api_key_file", file.CursorAdminAPIKeyFile); err != nil {
+		return err
+	}
+	// An environment key replaces both config-file sources.
+	if c.CursorAdminAPIKey == "" {
 		c.CursorAdminAPIKey = file.CursorAdminAPIKey
+		c.CursorAdminAPIKeyFile = strings.TrimSpace(file.CursorAdminAPIKeyFile)
 	}
 	if file.CursorAdminEmail != "" && c.CursorAdminEmail == "" {
 		c.CursorAdminEmail = file.CursorAdminEmail
@@ -2069,32 +2280,6 @@ func (c *Config) applyConfigTOML(data string) error {
 			c.ClickHouse.PushBatchSize = legacyCH.PushBatchSize
 		}
 	}
-	// Merge duckdb field-by-field so env vars override only
-	// the fields they set, preserving config-file settings.
-	if file.DuckDB.Path != "" && c.DuckDB.Path == "" {
-		c.DuckDB.Path = file.DuckDB.Path
-	}
-	if file.DuckDB.URL != "" && c.DuckDB.URL == "" {
-		c.DuckDB.URL = file.DuckDB.URL
-	}
-	if file.DuckDB.Token != "" && c.DuckDB.Token == "" {
-		c.DuckDB.Token = file.DuckDB.Token
-	}
-	if file.DuckDB.MachineName != "" && c.DuckDB.MachineName == "" {
-		c.DuckDB.MachineName = file.DuckDB.MachineName
-	}
-	if file.DuckDB.AllowInsecure {
-		c.DuckDB.AllowInsecure = true
-	}
-	if file.DuckDB.AttachTimeout != 0 && c.DuckDB.AttachTimeout == 0 {
-		c.DuckDB.AttachTimeout = file.DuckDB.AttachTimeout
-	}
-	if file.DuckDB.Projects != nil && c.DuckDB.Projects == nil {
-		c.DuckDB.Projects = file.DuckDB.Projects
-	}
-	if file.DuckDB.ExcludeProjects != nil && c.DuckDB.ExcludeProjects == nil {
-		c.DuckDB.ExcludeProjects = file.DuckDB.ExcludeProjects
-	}
 	if file.Vector.Enabled {
 		c.Vector.Enabled = true
 	}
@@ -2168,14 +2353,24 @@ func (c *Config) applyConfigTOML(data string) error {
 		c.Vector.Embed.BackstopInterval = file.Vector.Embed.BackstopInterval
 	}
 	c.mergeRecallExtractTOML(file.Recall, meta)
+	if meta.IsDefined("image_text") {
+		c.ImageText = file.ImageText
+	}
+	if meta.IsDefined("integrations") {
+		c.Integrations = file.Integrations
+	}
 	if meta.IsDefined("insights") {
 		c.Insights = file.Insights
 		c.Insights.Endpoint = strings.TrimSpace(c.Insights.Endpoint)
 		c.Insights.Model = strings.TrimSpace(c.Insights.Model)
 		c.Insights.APIKeyEnv = strings.TrimSpace(c.Insights.APIKeyEnv)
+		c.Insights.APIKeyFile = strings.TrimSpace(c.Insights.APIKeyFile)
 		c.Insights.DefaultAgent = strings.ToLower(
 			strings.TrimSpace(c.Insights.DefaultAgent),
 		)
+	}
+	if meta.IsDefined("kata") {
+		mergeKataTOML(&c.Kata, file.Kata, meta)
 	}
 	if meta.IsDefined("friction", "enabled") {
 		c.Friction.Enabled = file.Friction.Enabled
@@ -2185,6 +2380,18 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 	if meta.IsDefined("friction", "backfill_days") {
 		c.Friction.BackfillDays = file.Friction.BackfillDays
+	}
+	if meta.IsDefined("friction", "kata", "auto_file") {
+		c.Friction.Kata.AutoFile = file.Friction.Kata.AutoFile
+	}
+	if meta.IsDefined("friction", "kata", "min_sessions") {
+		c.Friction.Kata.MinSessions = file.Friction.Kata.MinSessions
+	}
+	if meta.IsDefined("friction", "kata", "kinds") {
+		c.Friction.Kata.Kinds = make([]string, 0, len(file.Friction.Kata.Kinds))
+		for _, k := range file.Friction.Kata.Kinds {
+			c.Friction.Kata.Kinds = append(c.Friction.Kata.Kinds, strings.TrimSpace(k))
+		}
 	}
 	if meta.IsDefined("friction", "seat_patterns") {
 		c.Friction.SeatPatterns = make([]string, 0, len(file.Friction.SeatPatterns))
@@ -2200,8 +2407,17 @@ func (c *Config) applyConfigTOML(data string) error {
 	if meta.IsDefined("events_coalesce_interval") {
 		c.EventsCoalesceInterval = file.EventsCoalesceInterval
 	}
+	if meta.IsDefined("sync_idle_after") {
+		c.SyncIdleAfter = file.SyncIdleAfter
+	}
 	if meta.IsDefined("daemon_idle_timeout") {
 		c.DaemonIdleTimeout = file.DaemonIdleTimeout
+	}
+	if meta.IsDefined("sync_interval") {
+		c.SyncInterval = file.SyncInterval
+	}
+	if meta.IsDefined("background_sync_interval") {
+		c.BackgroundSyncInterval = file.BackgroundSyncInterval
 	}
 	if file.Automated.Prefixes != nil {
 		c.Automated.Prefixes = file.Automated.Prefixes
@@ -2250,6 +2466,7 @@ func (c *Config) applyConfigTOML(data string) error {
 	}
 
 	c.CodexCloud = parseCodexCloudTable(c.configPath(), raw["agents"])
+	c.ClaudeAI = parseClaudeAITable(c.configPath(), raw["agents"])
 	if err := c.applyAgentDirectories(raw["agents"]); err != nil {
 		return err
 	}
@@ -2457,28 +2674,6 @@ func (c *Config) loadEnv() {
 	); v != "" {
 		c.CursorAdminUserID = v
 	}
-	if v := os.Getenv("AGENTSVIEW_DUCKDB_PATH"); v != "" {
-		c.DuckDB.Path = v
-	}
-	if v := os.Getenv("AGENTSVIEW_DUCKDB_URL"); v != "" {
-		c.DuckDB.URL = v
-	}
-	if v := os.Getenv("AGENTSVIEW_DUCKDB_TOKEN"); v != "" {
-		c.DuckDB.Token = v
-	}
-	if v := os.Getenv("AGENTSVIEW_DUCKDB_MACHINE"); v != "" {
-		c.DuckDB.MachineName = v
-	}
-	if v := os.Getenv("AGENTSVIEW_DUCKDB_ATTACH_TIMEOUT"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			c.DuckDB.AttachTimeout = d
-		} else {
-			log.Printf(
-				"warning: invalid AGENTSVIEW_DUCKDB_ATTACH_TIMEOUT %q: %v",
-				v, err,
-			)
-		}
-	}
 	if v := os.Getenv("AGENTSVIEW_DISABLE_UPDATE_CHECK"); v != "" {
 		c.DisableUpdateCheck = v == "1" || v == "true"
 	}
@@ -2588,7 +2783,7 @@ func RegisterServeFlags(fs *flag.FlagSet) {
 	)
 	fs.Duration(
 		"write-timeout", 30*time.Second,
-		"Max time to write an API response before a 503 request-timed-out; raise for slow aggregates over large datasets (0 disables)",
+		"Max API response time before a 503 (0 disables); some long-running routes are exempt",
 	)
 }
 
@@ -2656,7 +2851,7 @@ func RegisterServePFlags(fs *pflag.FlagSet) {
 	)
 	fs.Duration(
 		"write-timeout", 30*time.Second,
-		"Max time to write an API response before a 503 request-timed-out; raise for slow aggregates over large datasets (0 disables)",
+		"Max API response time before a 503 (0 disables); some long-running routes are exempt",
 	)
 }
 
@@ -3697,42 +3892,14 @@ func (c *Config) ResolveClickHouseTargets() ([]ResolvedClickHouseTarget, error) 
 	return targets, nil
 }
 
-// ResolveDuckDB returns a copy of DuckDB config with defaults applied
-// and environment variables expanded in path, URL, and token.
-func (c *Config) ResolveDuckDB() (DuckDBConfig, error) {
-	duck := c.DuckDB
-	if duck.Path != "" {
-		expanded, err := expandBracedEnv(duck.Path)
-		if err != nil {
-			return duck, fmt.Errorf("expanding path: %w", err)
-		}
-		expanded, err = pathutil.ExpandHome(expanded)
-		if err != nil {
-			return duck, fmt.Errorf("expanding path: %w", err)
-		}
-		duck.Path = expanded
+// ResolveCursorAdminAPIKey returns the Cursor admin API key from the
+// environment or cursor_admin_api_key, or reads the file
+// cursor_admin_api_key_file names. It returns "" when none is set.
+func (c *Config) ResolveCursorAdminAPIKey() (string, error) {
+	if c.CursorAdminAPIKey != "" || c.CursorAdminAPIKeyFile == "" {
+		return c.CursorAdminAPIKey, nil
 	}
-	if duck.URL != "" {
-		expanded, err := expandBracedEnv(duck.URL)
-		if err != nil {
-			return duck, fmt.Errorf("expanding url: %w", err)
-		}
-		duck.URL = expanded
-	}
-	if duck.Token != "" {
-		expanded, err := expandBracedEnv(duck.Token)
-		if err != nil {
-			return duck, fmt.Errorf("expanding token: %w", err)
-		}
-		duck.Token = expanded
-	}
-	if duck.Path == "" {
-		duck.Path = filepath.Join(c.DataDir, "sessions.duckdb")
-	}
-	if duck.MachineName == "" {
-		duck.MachineName = c.InstallationID
-	}
-	return duck, nil
+	return readSettingSecretFile("cursor_admin_api_key_file", c.CursorAdminAPIKeyFile)
 }
 
 var (
@@ -3949,6 +4116,7 @@ func (c *Config) SaveSettings(patch map[string]any) error {
 		if v, ok := patch["require_auth"]; ok {
 			if b, ok := v.(bool); ok {
 				c.RequireAuth = b
+				c.AuthSettingsSaved = true
 			}
 		}
 		if v, ok := patch["chart_palette"]; ok {
@@ -4056,4 +4224,146 @@ func (c *Config) SaveGithubToken(token string) error {
 		c.GithubToken = token
 		return nil
 	})
+}
+
+// ErrInvalidVectorSetup marks settings a vector setup would reject, as
+// opposed to failures reading or locking the config file.
+var ErrInvalidVectorSetup = errors.New("invalid vector setup")
+
+type invalidVectorSetupError struct{ error }
+
+func (e invalidVectorSetupError) Unwrap() error { return e.error }
+
+func (invalidVectorSetupError) Is(target error) bool { return target == ErrInvalidVectorSetup }
+
+// VectorSetupEmbeddings returns the validated embeddings recipe SaveVectorSetup
+// would save now, so status and activation select the same provider.
+func (c *Config) VectorSetupEmbeddings() (VectorEmbeddingsConfig, error) {
+	var embeddings VectorEmbeddingsConfig
+	err := c.withConfigLock(func() error {
+		_, candidate, err := c.vectorSetupCandidate()
+		if err == nil {
+			embeddings = candidate.Vector.Embeddings
+		}
+		return err
+	})
+	return embeddings, err
+}
+
+// VectorExplicitlyDisabled reports a saved opt-out.
+func (c *Config) VectorExplicitlyDisabled() (bool, error) {
+	existing, err := c.readConfigMap()
+	if err != nil {
+		return false, err
+	}
+	section, _ := existing["vector"].(map[string]any)
+	enabled, ok := section["enabled"].(bool)
+	return ok && !enabled, nil
+}
+
+// SharedVectorSetup returns an in-memory setup when the current settings permit it.
+func (c *Config) SharedVectorSetup() (Config, bool, error) {
+	var candidate Config
+	eligible := false
+	err := c.withConfigLock(func() error {
+		existing, err := c.readConfigMap()
+		if err != nil {
+			return err
+		}
+		if c.Vector.Embeddings.Servers != nil || c.Vector.Embeddings.DefaultServer != "" || (c.Vector.Embeddings.Model != "" && c.Vector.Embeddings.Model != defaultNomicModel) {
+			return nil
+		}
+		section, _ := existing["vector"].(map[string]any)
+		if enabled, ok := section["enabled"].(bool); ok && !enabled {
+			return nil
+		}
+		embeddings, _ := section["embeddings"].(map[string]any)
+		if model, _ := embeddings["model"].(string); model != "" && model != defaultNomicModel {
+			return nil
+		}
+		if _, ok := embeddings["servers"]; ok {
+			return nil
+		}
+		if _, ok := embeddings["default_server"]; ok {
+			return nil
+		}
+		pg, err := c.ResolvePGTargets()
+		if err != nil {
+			return err
+		}
+		for _, target := range pg {
+			if target.Config.URL != "" && target.Config.PushVectorsEnabled() {
+				return nil
+			}
+		}
+		ch, err := c.ResolveClickHouseTargets()
+		if err != nil {
+			return err
+		}
+		for _, target := range ch {
+			if target.Config.URL != "" && target.Config.PushVectorsEnabled() {
+				return nil
+			}
+		}
+		_, candidate, err = c.vectorSetupCandidate()
+		if err != nil {
+			return err
+		}
+		candidate.Vector.DBPath = c.Vector.DBPath
+		name, server, err := candidate.Vector.Embeddings.Server("")
+		if err != nil {
+			return err
+		}
+		server.Local = true
+		candidate.Vector.Embeddings.Servers = map[string]VectorEmbeddingsServerConfig{name: server}
+		eligible = true
+		return nil
+	})
+	return candidate, eligible, err
+}
+
+// SaveVectorSetup records the selected action while keeping omitted defaults omitted.
+func (c *Config) SaveVectorSetup() error {
+	return c.withConfigLock(func() error {
+		existing, _, err := c.vectorSetupCandidate()
+		if err != nil {
+			return err
+		}
+		return c.writeConfigMap(existing)
+	})
+}
+
+func (c *Config) vectorSetupCandidate() (map[string]any, Config, error) {
+	existing, err := c.readConfigMap()
+	if err != nil {
+		if _, ok := errors.AsType[toml.ParseError](err); ok {
+			err = invalidVectorSetupError{err}
+		}
+		return nil, Config{}, err
+	}
+	section, ok := existing["vector"].(map[string]any)
+	if !ok && existing["vector"] != nil {
+		return nil, Config{}, invalidVectorSetupError{errors.New("vector must be a table")}
+	}
+	if section == nil {
+		section = make(map[string]any)
+	}
+	section["enabled"] = true
+	existing["vector"] = section
+	encoded, err := toml.Marshal(existing)
+	if err != nil {
+		return nil, Config{}, err
+	}
+	candidate, err := Default()
+	if err != nil {
+		return nil, Config{}, err
+	}
+	candidate.DataDir = c.DataDir
+	if err := candidate.applyConfigTOML(string(encoded)); err != nil {
+		return nil, Config{}, invalidVectorSetupError{err}
+	}
+	if err := resolveVectorSecrets(&candidate.Vector); err != nil {
+		return nil, Config{}, invalidVectorSetupError{err}
+	}
+	return existing, candidate, nil
 }

@@ -33,12 +33,19 @@ const (
 	fseventFlagItemIsDir       fsevents.EventFlags = 0x00020000
 )
 
-const darwinRootSignalLoss uint32 = 1
+const (
+	darwinRootSignalLoss uint32 = 1 << iota
+	// darwinRootSignalDrop marks a root whose stream reported dropped or
+	// must-rescan events. The lifecycle worker revalidates the root and
+	// reconciles it; the native callback does no filesystem work.
+	darwinRootSignalDrop
+)
 
 const (
 	darwinRetryInitial       = 100 * time.Millisecond
 	darwinRetryMax           = 5 * time.Second
 	darwinFallbackPollingKey = "watcher-fallback"
+	darwinDropLogInterval    = time.Minute
 )
 
 // darwinFallbackPollPlan preserves one physical watch plan's path-to-scope
@@ -130,6 +137,12 @@ type darwinLogicalRoot struct {
 	lossRequested     bool
 	retryAt           time.Time
 	retryDelay        time.Duration
+	// identity is the root directory's stat when its stream was opened, so a
+	// drop that hid the root's replacement can still be detected.
+	identity os.FileInfo
+	// dropLoggedAt is the time of the last logged native drop, so a drop
+	// storm logs at most once per darwinDropLogInterval per root.
+	dropLoggedAt time.Time
 }
 
 type darwinRootPhase uint8
@@ -160,7 +173,7 @@ const (
 	darwinFallbackStreamStart
 	darwinFallbackNativeDrop
 	darwinFallbackLifecycle
-	darwinFallbackKqueueStart
+	darwinFallbackShallowStart
 )
 
 type darwinReconcileRequest struct {
@@ -183,10 +196,10 @@ func (s *darwinLogicalRoot) isOpen(generation uint64) bool {
 }
 
 type darwinWatchBackend struct {
-	kqueue   *fsnotifyBackend
-	queue    *fsevents.Queue
-	latency  time.Duration
-	excludes []string
+	shallowWatcher *darwinShallowWatcher
+	queue          *fsevents.Queue
+	latency        time.Duration
+	excludes       []string
 
 	events        chan backendEvent
 	errors        chan error
@@ -199,6 +212,7 @@ type darwinWatchBackend struct {
 	onCoverageDegraded func([]string) error
 	onPollingRequired  func(PollingObligation) error
 	onPollingReleased  func(string) error
+	onNativeEventsLost func()
 
 	mu        sync.Mutex
 	lifecycle darwinBackendLifecycle
@@ -217,7 +231,7 @@ type darwinWatchBackend struct {
 	addAncestor            func(string) error
 	removeAncestor         func(string) error
 	vnode                  *vnodeObserver
-	startKqueue            func() error
+	startShallow           func() error
 	transitions            sync.WaitGroup
 	workerStarted          bool
 	forwardStarted         bool
@@ -250,7 +264,7 @@ type darwinWatchBackend struct {
 }
 
 // The created-subtree contract enables bounded discovery for directory-create
-// events forwarded by the kqueue fallback. Native FSEvents deliveries bypass
+// events forwarded from shallow roots. Recursive FSEvents deliveries bypass
 // Watcher.loop through the direct sink, so this method never puts filesystem
 // work on the FSEvents callback queue.
 func (b *darwinWatchBackend) includeCreatedSubtreePath(
@@ -273,31 +287,32 @@ func newDarwinWatchBackend(
 	excludes []string,
 	latency time.Duration,
 ) (*darwinWatchBackend, error) {
-	kqueue, err := newFSNotifyBackend(excludes)
-	if err != nil {
-		return nil, err
-	}
 	queue, err := fsevents.NewQueue()
 	if err != nil {
-		kqueue.Stop()
 		return nil, err
 	}
+	shallowWatcher := newDarwinShallowWatcher(
+		normalizeExcludePatterns(excludes),
+		func(root string, sink func([]fsevents.Event)) (darwinStream, error) {
+			return fsevents.NewStream(queue, root, latency, sink)
+		},
+	)
 	backend := &darwinWatchBackend{
-		kqueue:        kqueue,
-		queue:         queue,
-		latency:       latency,
-		excludes:      normalizeExcludePatterns(excludes),
-		events:        make(chan backendEvent),
-		errors:        make(chan error),
-		stop:          make(chan struct{}),
-		done:          make(chan struct{}),
-		lifecycleWake: make(chan struct{}, 1),
-		lifecycleDone: make(chan struct{}),
-		streams:       make(map[string]darwinStream),
-		logical:       make(map[string]*darwinLogicalRoot),
-		shallow:       make(map[string]int),
-		retryInitial:  darwinRetryInitial,
-		retryMax:      darwinRetryMax,
+		shallowWatcher: shallowWatcher,
+		queue:          queue,
+		latency:        latency,
+		excludes:       normalizeExcludePatterns(excludes),
+		events:         make(chan backendEvent),
+		errors:         make(chan error),
+		stop:           make(chan struct{}),
+		done:           make(chan struct{}),
+		lifecycleWake:  make(chan struct{}, 1),
+		lifecycleDone:  make(chan struct{}),
+		streams:        make(map[string]darwinStream),
+		logical:        make(map[string]*darwinLogicalRoot),
+		shallow:        make(map[string]int),
+		retryInitial:   darwinRetryInitial,
+		retryMax:       darwinRetryMax,
 	}
 	backend.newStream = func(root string, sink func([]fsevents.Event)) (darwinStream, error) {
 		return fsevents.NewStream(backend.queue, root, backend.latency, sink)
@@ -305,12 +320,12 @@ func newDarwinWatchBackend(
 	backend.lstat = os.Lstat
 	backend.stat = os.Stat
 	backend.pathIsDirectory = pathIsDirectory
-	backend.addShallow = backend.kqueue.AddShallow
-	backend.removeShallow = backend.kqueue.Remove
+	backend.addShallow = shallowWatcher.AddShallow
+	backend.removeShallow = shallowWatcher.Remove
 	backend.ancestors = make(map[string]int)
 	backend.addAncestor = backend.observeAncestor
 	backend.removeAncestor = backend.unobserveAncestor
-	backend.startKqueue = backend.kqueue.Start
+	backend.startShallow = shallowWatcher.Start
 	backend.fallbackEvents = make(map[backendEvent]struct{})
 	backend.nativeOpen.Store(true)
 	backend.roots.Store(&darwinRootSnapshot{})
@@ -340,6 +355,12 @@ func (b *darwinWatchBackend) bindPollingOwnership(
 	defer b.mu.Unlock()
 	b.onPollingRequired = required
 	b.onPollingReleased = released
+}
+
+func (b *darwinWatchBackend) bindNativeEventsLost(callback func()) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.onNativeEventsLost = callback
 }
 
 func (b *darwinWatchBackend) fallbackPhaseValue() darwinFallbackPhase {
@@ -536,10 +557,10 @@ func (b *darwinWatchBackend) Start() error {
 	b.lifecycle = darwinBackendRunning
 	b.workerStarted = true
 	go b.lifecycleLoop()
-	kqueueErr := b.startKqueue()
-	if kqueueErr == nil {
+	shallowErr := b.startShallow()
+	if shallowErr == nil {
 		b.forwardStarted = true
-		go b.forwardKqueue()
+		go b.forwardShallow()
 	} else {
 		if b.fallbackPrepared {
 			for _, state := range b.logical {
@@ -549,7 +570,7 @@ func (b *darwinWatchBackend) Start() error {
 			}
 		}
 		previous := darwinFallbackReason(b.fallbackReason.Swap(
-			uint32(darwinFallbackKqueueStart),
+			uint32(darwinFallbackShallowStart),
 		))
 		if previous == darwinFallbackReasonNone {
 			b.fallbackActivations.Inc()
@@ -588,7 +609,7 @@ func (b *darwinWatchBackend) Stop() {
 		for _, stream := range streams {
 			_ = stream.Close()
 		}
-		b.kqueue.Stop()
+		b.shallowWatcher.Stop()
 		if b.vnode != nil {
 			_ = b.vnode.Close()
 		}
@@ -603,7 +624,7 @@ func (b *darwinWatchBackend) Stop() {
 	<-b.done
 }
 
-func (b *darwinWatchBackend) Name() string { return "fsevents+kqueue" }
+func (b *darwinWatchBackend) Name() string { return "fsevents" }
 
 func (b *darwinWatchBackend) consumeFSEvents(
 	registration darwinWatchRoot,
@@ -611,6 +632,9 @@ func (b *darwinWatchBackend) consumeFSEvents(
 ) {
 	if nativeDeliveryRequestsFallback(events) {
 		b.nativeDrops.Inc()
+		if b.signalRootDrop(registration) {
+			return
+		}
 		b.requestFallback(darwinFallbackNativeDrop)
 		return
 	}
@@ -673,6 +697,82 @@ func (b *darwinWatchBackend) consumeFSEvents(
 	})
 }
 
+// signalRootDrop handles a dropped or must-rescan delivery from one root's
+// stream by handing the root to the lifecycle worker, which revalidates it and
+// reconciles only that root's scopes (see processLifecycle). Each recursive
+// root has its own FSEvents stream, and a drop loses notifications on that
+// stream alone, so the stream stays open and keeps delivering. Other roots
+// keep native coverage and nothing moves to the unwatched poll.
+//
+// It returns false, leaving the backend-wide fallback in charge, when the
+// stream has no logical root (no scopes to reconcile) or the backend is
+// already in fallback or recovery, whose own authoritative pass owns
+// coverage.
+func (b *darwinWatchBackend) signalRootDrop(registration darwinWatchRoot) bool {
+	state := registration.state
+	if state == nil || len(appendWatchScopeRoots(nil, state.plan.Scopes)) == 0 ||
+		b.fallbackPhaseValue() != darwinFallbackInactive ||
+		darwinFallbackReason(b.fallbackReason.Load()) != darwinFallbackReasonNone {
+		return false
+	}
+	state.signal.Or(darwinRootSignalDrop)
+	b.signalLifecycle()
+	return true
+}
+
+// handleRootDropLocked turns a root's drop signal into work. A drop can hide
+// the root's own removal or replacement, because the FSEvents bridge collapses
+// a batch with a drop flag into one pathless must-rescan event and discards a
+// RootChanged flag in the same batch. A root that no longer names the
+// directory its stream opened on is therefore treated as lost and goes through
+// root-local loss recovery. Otherwise the root keeps its stream and gets one
+// ordinary reconciliation of its scopes. Dropped notifications do not change
+// file stats, so the stat-based freshness checks in that reconciliation find
+// what the stream missed; the caller revokes the event-dependent trust that
+// stats cannot cover first. It does not clear archive-wide skip state the way
+// lost-events recovery does.
+func (b *darwinWatchBackend) handleRootDropLocked(
+	state *darwinLogicalRoot, now time.Time,
+) (lost bool, request darwinReconcileRequest) {
+	if now.Sub(state.dropLoggedAt) >= darwinDropLogInterval {
+		state.dropLoggedAt = now
+		log.Printf(
+			"watcher: backend=%s native-drop root=%s reconcile=root native_drops=%d",
+			b.Name(), state.plan.Path, b.nativeDrops.Load(),
+		)
+	}
+	if state.active && state.plan.Recursive && b.rootReplacedLocked(state) {
+		return true, darwinReconcileRequest{}
+	}
+	request = darwinReconcileRequest{scopes: state.plan.Scopes}
+	// A root still waiting for its activation reconciliation keeps that gate:
+	// the token makes this reconciliation acknowledge it.
+	if state.active && !state.isOpen(state.generation) {
+		request.token = backendLifecycleToken{gate: state, generation: state.generation}
+	}
+	return false, request
+}
+
+// rootReplacedLocked reports whether an active recursive root no longer names
+// the directory its stream was opened on: it is missing, no longer a
+// directory, or a different directory now sits at its path. An identity that
+// could not be recorded counts as replaced, so the root is rearmed rather
+// than trusted.
+func (b *darwinWatchBackend) rootReplacedLocked(state *darwinLogicalRoot) bool {
+	info, err := b.statPath(state.plan.Path)
+	if err != nil || !info.IsDir() || state.identity == nil {
+		return true
+	}
+	return !os.SameFile(state.identity, info)
+}
+
+func (b *darwinWatchBackend) statPath(path string) (os.FileInfo, error) {
+	if b.stat != nil {
+		return b.stat(path)
+	}
+	return os.Stat(path)
+}
+
 func nativeDeliveryRequestsFallback(events []fsevents.Event) bool {
 	for _, event := range events {
 		if event.Flags&(fseventFlagMustScanSubDirs|
@@ -730,7 +830,7 @@ func translateFSEvent(root string, event fsevents.Event) (backendEvent, bool) {
 	}, true
 }
 
-func (b *darwinWatchBackend) forwardKqueue() {
+func (b *darwinWatchBackend) forwardShallow() {
 	// The lifecycle goroutine also produces on b.errors, so the shared output
 	// channels must not close until it has exited. Start always launches the
 	// lifecycle goroutine before this one, and Stop closes b.stop, so the join
@@ -739,34 +839,22 @@ func (b *darwinWatchBackend) forwardKqueue() {
 		<-b.lifecycleDone
 		b.finish()
 	}()
-	events := b.kqueue.Events()
-	errorsCh := b.kqueue.Errors()
-	for events != nil || errorsCh != nil {
+	events := b.shallowWatcher.Events()
+	for {
 		select {
 		case <-b.stop:
 			return
 		case event, ok := <-events:
 			if !ok {
-				events = nil
-				continue
+				return
 			}
-			event, dispatch := b.handleKqueueEvent(event)
+			event, dispatch := b.handleShallowEvent(event)
 			if dispatch {
 				select {
 				case b.events <- event:
 				case <-b.stop:
 					return
 				}
-			}
-		case err, ok := <-errorsCh:
-			if !ok {
-				errorsCh = nil
-				continue
-			}
-			select {
-			case b.errors <- err:
-			case <-b.stop:
-				return
 			}
 		}
 	}
@@ -871,8 +959,21 @@ func (b *darwinWatchBackend) processLifecycle(checkPending bool) {
 		b.mu.Unlock()
 		return
 	}
+	nativeEventsLost := false
 	for _, state := range b.logical {
-		lossSignaled := state.signal.Swap(0)&darwinRootSignalLoss != 0
+		signals := state.signal.Swap(0)
+		lossSignaled := signals&darwinRootSignalLoss != 0
+		if signals&darwinRootSignalDrop != 0 {
+			nativeEventsLost = true
+			if !lossSignaled {
+				lost, request := b.handleRootDropLocked(state, now)
+				if lost {
+					lossSignaled = true
+				} else {
+					requests = append(requests, request)
+				}
+			}
+		}
 		if lossSignaled && state.active {
 			state.lossRequested = true
 		}
@@ -1027,7 +1128,14 @@ func (b *darwinWatchBackend) processLifecycle(checkPending bool) {
 		}
 	}
 	releaseCallback := b.onPollingReleased
+	eventsLostCallback := b.onNativeEventsLost
 	b.mu.Unlock()
+	// Revoke event-dependent trust before any reconciliation for the dropped
+	// roots is queued, so that reconciliation cannot skip a change the lost
+	// events would have reported.
+	if nativeEventsLost && eventsLostCallback != nil {
+		eventsLostCallback()
+	}
 	if releaseCallback != nil {
 		for _, key := range releasedPolling {
 			if err := releaseCallback(key); err != nil {
@@ -1203,9 +1311,10 @@ func (b *darwinWatchBackend) beginFallbackReconciliation() {
 }
 
 func (b *darwinWatchBackend) openFallbackDispatch() {
-	// Kqueue startup can fail after an earlier stream failure selected fallback.
-	// Refresh the reason so that unrecoverable kqueue failure dominates the
-	// retry policy even if the lifecycle worker observed the earlier reason.
+	// Shallow startup can fail after an earlier stream failure selected
+	// fallback. Refresh the reason so that unrecoverable shallow failure
+	// dominates the retry policy even if the lifecycle worker observed the
+	// earlier reason.
 	reason := darwinFallbackReason(b.fallbackReason.Load())
 	b.fallbackEventsMu.Lock()
 	sink := b.sink
@@ -1231,7 +1340,7 @@ func (b *darwinWatchBackend) openFallbackDispatch() {
 	b.rootTransitions.Inc()
 
 	b.mu.Lock()
-	if reason == darwinFallbackKqueueStart {
+	if reason == darwinFallbackShallowStart {
 		b.fallbackRetryAt = time.Time{}
 		b.fallbackRetryDelay = 0
 	} else {
@@ -1301,6 +1410,7 @@ type darwinRecoveryStream struct {
 	registration darwinWatchRoot
 	stream       darwinStream
 	started      bool
+	identity     os.FileInfo
 }
 
 func (b *darwinWatchBackend) processNativeRecoveryRetry() {
@@ -1326,7 +1436,7 @@ func (b *darwinWatchBackend) beginNativeRecovery(now time.Time) error {
 		b.mu.Unlock()
 		return nil
 	}
-	if darwinFallbackReason(b.fallbackReason.Load()) == darwinFallbackKqueueStart {
+	if darwinFallbackReason(b.fallbackReason.Load()) == darwinFallbackShallowStart {
 		b.fallbackRetryAt = time.Time{}
 		b.fallbackRetryDelay = 0
 		b.mu.Unlock()
@@ -1385,6 +1495,7 @@ func (b *darwinWatchBackend) beginNativeRecovery(now time.Time) error {
 		}
 		recovering = append(recovering, darwinRecoveryStream{
 			state: state, registration: registration, stream: stream,
+			identity: info,
 		})
 	}
 	for _, state := range skipped {
@@ -1452,6 +1563,9 @@ func (b *darwinWatchBackend) beginNativeRecovery(now time.Time) error {
 		state.active = true
 		state.ancestor = ""
 		state.stream = candidate.stream
+		if candidate.identity != nil {
+			state.identity = candidate.identity
+		}
 		state.open.Store(true)
 		b.streams[state.plan.Path] = candidate.stream
 		b.storeRootLocked(candidate.registration)
@@ -1629,8 +1743,8 @@ func fallbackReasonLabel(reason darwinFallbackReason) string {
 		return "native-drop"
 	case darwinFallbackLifecycle:
 		return "lifecycle"
-	case darwinFallbackKqueueStart:
-		return "kqueue-start"
+	case darwinFallbackShallowStart:
+		return "shallow-start"
 	default:
 		return "unknown"
 	}
@@ -1691,10 +1805,10 @@ func (b *darwinWatchBackend) resetRetryLocked(state *darwinLogicalRoot) {
 	state.retryDelay = 0
 }
 
-// handleKqueueEvent advances pending roots before the native event can reach
+// handleShallowEvent advances pending roots before the native event can reach
 // the watcher. The resulting scope reconciliation is authoritative, so the
 // component-creation event itself does not need a second dispatch.
-func (b *darwinWatchBackend) handleKqueueEvent(
+func (b *darwinWatchBackend) handleShallowEvent(
 	event backendEvent,
 ) (backendEvent, bool) {
 	snapshot := b.roots.Load()
@@ -1703,10 +1817,10 @@ func (b *darwinWatchBackend) handleKqueueEvent(
 		event.Root = owner.logicalPath
 	}
 	// A lost-events full sync carries no path, so it never matches a root.
-	// It stands in for kqueue events that were dropped and must reach the
-	// consumer regardless of root ownership. The dropped events can include
-	// a shallow root's own removal, which normally signals loss here, so
-	// every active kqueue-backed root is marked lost and revalidated by
+	// It stands in for shallow-root events that were dropped and must reach
+	// the consumer regardless of root ownership. The dropped events can
+	// include a shallow root's own removal, which normally signals loss here,
+	// so every active shallow root is marked lost and revalidated by
 	// lifecycle recovery. The marking runs before fallback collection:
 	// buffered events replay without passing through here again, so
 	// deferring it would lose the signal.
@@ -1800,6 +1914,15 @@ func (b *darwinWatchBackend) activateRootLocked(state *darwinLogicalRoot) error 
 		b.storeRootLocked(registration)
 		return nil
 	}
+	// Record the directory before its stream exists. If it is replaced after
+	// this point the stream may watch the newer directory, and the mismatch
+	// only makes a later drop rearm the root, which is the safe direction. A
+	// failed stat leaves the identity unknown, which a drop also treats as
+	// replaced.
+	var identity os.FileInfo
+	if info, err := b.statPath(root); err == nil {
+		identity = info
+	}
 	stream, err := b.newStream(root, func(events []fsevents.Event) {
 		b.consumeFSEvents(registration, events)
 	})
@@ -1823,6 +1946,7 @@ func (b *darwinWatchBackend) activateRootLocked(state *darwinLogicalRoot) error 
 	state.active = true
 	state.ancestor = ""
 	state.stream = stream
+	state.identity = identity
 	return nil
 }
 
@@ -2017,7 +2141,7 @@ func (s *darwinRootSnapshot) mostSpecificRoot(path string) (darwinWatchRoot, boo
 }
 
 // mostSpecificRecursiveRoot selects ownership among native recursive streams.
-// Shallow kqueue registrations can be nested within a recursive root, but they
+// Shallow registrations can be nested within a recursive root, but they
 // cover only their direct directory and must not shadow descendant FSEvents.
 func (s *darwinRootSnapshot) mostSpecificRecursiveRoot(path string) (darwinWatchRoot, bool) {
 	if s == nil {

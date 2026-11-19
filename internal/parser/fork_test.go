@@ -24,6 +24,25 @@ func formatTime(ts time.Time) string {
 	return ts.Format(time.RFC3339)
 }
 
+func TestForkDetection_RepeatedUUIDKeepsSmallGapRetry(t *testing.T) {
+	// Each c record reaches d, so b has three user turns. Repeated visits
+	// to d must not inflate that count past the small-gap retry threshold.
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUserWithUUID("2024-01-01T10:00:00Z", "start", "r", "").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:01Z", "reply", "b", "r").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:02Z", "part one", "c", "b").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:03Z", "part two", "c", "b").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:04Z", "part three", "c", "b").
+		AddClaudeUserWithUUID("2024-01-01T10:00:05Z", "follow-up", "d", "c").
+		AddClaudeUserWithUUID("2024-01-01T10:01:00Z", "retry", "z", "r").
+		String()
+
+	results := parseTestContent(t, "repeated-uuid-retry.jsonl", content, 1)
+	require.Len(t, results[0].Messages, 2)
+	assertMessage(t, results[0].Messages[0], RoleUser, "start")
+	assertMessage(t, results[0].Messages[1], RoleUser, "retry")
+}
+
 func TestForkDetection_LinearSession(t *testing.T) {
 	// Linear chain: a -> b -> c -> d, all with uuid/parentUuid.
 	// Should return 1 result with 4 messages.
@@ -38,6 +57,36 @@ func TestForkDetection_LinearSession(t *testing.T) {
 
 	assertSessionMeta(t, &results[0].Session, "linear", "proj", AgentClaude)
 	assertMessageCount(t, len(results[0].Messages), 4)
+}
+
+func TestForkDetection_SequentialForksCountOverlappingSubtrees(t *testing.T) {
+	// Each fork's first child continues through the later fork points.
+	path := buildForkyClaudeFile(t, 20, 3)
+	results, err := parseClaudeSession(path, "proj", "local")
+	require.NoError(t, err)
+	require.Len(t, results, 4)
+	assert.Equal(t, 20, results[0].Session.UserMessageCount)
+	assert.Equal(t, 4, results[1].Session.UserMessageCount)
+}
+
+func TestForkDetection_ParentAfterDescendants(t *testing.T) {
+	content := testjsonl.NewSessionBuilder().
+		AddClaudeUserWithUUID("2024-01-01T10:00:00Z", "start", "a", "").
+		AddClaudeUserWithUUID("2024-01-01T10:00:01Z", "main1", "b", "a").
+		AddClaudeUserWithUUID("2024-01-01T10:00:03Z", "main2", "d", "c").
+		AddClaudeUserWithUUID("2024-01-01T10:00:04Z", "main3", "e", "d").
+		AddClaudeUserWithUUID("2024-01-01T10:00:05Z", "main4", "f", "e").
+		AddClaudeUserWithUUID("2024-01-01T10:00:06Z", "retry", "z", "a").
+		AddClaudeAssistantWithUUID("2024-01-01T10:00:02Z", "reply", "c", "b").
+		String()
+
+	results := parseTestContent(t, "unordered.jsonl", content, 2)
+	assert.Equal(t, 5, results[0].Session.UserMessageCount)
+	require.Len(t, results[0].Messages, 6)
+	assert.Equal(t, "main4", results[0].Messages[5].Content)
+	assert.Equal(t, "unordered-z", results[1].Session.ID)
+	assert.Equal(t, "unordered", results[1].Session.ParentSessionID)
+	assert.Equal(t, 1, results[1].Session.UserMessageCount)
 }
 
 func TestForkDetection_LargeGapForkPropagatesPRLinks(t *testing.T) {
@@ -367,7 +416,7 @@ func TestSessionBoundsStartedAtFromLeadingEvent(t *testing.T) {
 func TestForkDetection_NestedForkCountsFullSubtree(t *testing.T) {
 	// Regression test: when the first child at a fork point
 	// itself contains nested forks early in its chain, the
-	// old first-child-only countUserTurns would see only 1
+	// old first-child-only user-turn count would see only 1
 	// user turn (following first children that dead-end
 	// quickly) and treat the entire large branch as a small
 	// retry, discarding it.
@@ -393,9 +442,9 @@ func TestForkDetection_NestedForkCountsFullSubtree(t *testing.T) {
 	//                        i(asst) -> j(user) -> k(asst)
 	//   Second child: z(user, 1 msg)
 	//
-	// Old countUserTurns for c: c(user,1) -> d(asst) ->
+	// Old first-child-only user-turn count for c: c(user,1) -> d(asst) ->
 	//   e(asst, no children) = 1 user turn <= 3 -> retry!
-	// New countUserTurns for c: 1+0+1+0+1+0+1+0 = 4 > 3
+	// Full subtree user-turn count for c: 1+0+1+0+1+0+1+0 = 4 > 3
 	content := testjsonl.NewSessionBuilder().
 		AddClaudeUserWithUUID("2024-01-01T10:00:00Z", "start", "a", "").
 		AddClaudeAssistantWithUUID("2024-01-01T10:00:01Z", "ok", "b", "a").

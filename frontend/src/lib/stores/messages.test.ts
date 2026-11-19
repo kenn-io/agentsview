@@ -5,7 +5,7 @@ import { parseContent } from "../utils/content-parser.js";
 import type { Session } from "../api/types.js";
 import type { DbMessage as Message } from "../api/generated/index.js";
 import type { ServiceMessageList as MessagesResponse } from "../api/generated/index.js";
-import { ApiError } from "../api/runtime.js";
+import { ApiError, TransportError } from "../api/runtime.js";
 
 const api = vi.hoisted(() => ({
   getMessages: vi.fn(),
@@ -16,15 +16,8 @@ const runtimeMocks = vi.hoisted(() => ({
   signals: [] as AbortSignal[],
 }));
 
-vi.mock("../api/runtime.js", () => ({
-  ApiError: class ApiError extends Error {
-    constructor(
-      public readonly status: number,
-      message: string,
-    ) {
-      super(message);
-    }
-  },
+vi.mock("../api/runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../api/runtime.js")>()),
   isAbortError: (err: unknown) => {
     if (err instanceof DOMException && err.name === "AbortError") {
       return true;
@@ -50,7 +43,7 @@ vi.mock("./sessions.svelte.js", () => ({
 
 vi.mock("../api/generated/index", () => ({
   SessionsService: {
-    getApiV1SessionsById: vi.fn(({ id }) => api.getSession(id)),
+    getApiV1SessionsById: vi.fn(({ id }, options) => api.getSession(id, options)),
     getApiV1SessionsByIdMessages: vi.fn((path, params, options) =>
       api.getMessages(
         path.id,
@@ -159,6 +152,328 @@ describe("MessagesStore", () => {
     runtimeMocks.signals.length = 0;
   });
 
+  it("reports a failed transcript load and recovers through retryLoad", async () => {
+    vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 2));
+    vi.mocked(api.getMessages).mockRejectedValueOnce(new Error("database is locked"));
+    await messages.loadSession("s1");
+
+    expect(messages.messages).toEqual([]);
+    expect(messages.loadError).toBe("database is locked");
+
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse([makeMessage(0), makeMessage(1)]),
+    );
+    await messages.retryLoad();
+
+    expect(messages.messages.map((m) => m.ordinal)).toEqual([0, 1]);
+    expect(messages.loadError).toBeNull();
+  });
+
+  it("reports a failed older page and retries that page", async () => {
+    vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 3_001));
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse(Array.from({ length: 100 }, (_, i) => makeMessage(3_000 - i))),
+    );
+    await messages.loadSession("s1");
+    expect(messages.loadError).toBeNull();
+
+    vi.mocked(api.getMessages).mockRejectedValueOnce(new Error("older page failed"));
+    await messages.loadOlder();
+    expect(messages.loadError).toBe("older page failed");
+    expect(messages.messages).toHaveLength(100);
+
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse(Array.from({ length: 100 }, (_, i) => makeMessage(2_900 - i))),
+    );
+    await messages.retryLoad();
+
+    expect(messages.loadError).toBeNull();
+    expect(messages.messages).toHaveLength(200);
+    expect(messages.messages[0]!.ordinal).toBe(2_801);
+  });
+
+  it("publishes the read-progress token when Retry completes a partial first load", async () => {
+    const all = Array.from({ length: 1500 }, (_, ordinal) => makeMessage(ordinal));
+    let failPageTwo = true;
+    vi.mocked(api.getSession).mockResolvedValue({
+      ...makeSession("s1", 1500),
+      transcript_revision: "rev-1",
+    } as Session);
+    vi.mocked(api.getMessages).mockImplementation(
+      async (_id: string, params: { from?: number; limit?: number; direction?: string }) => {
+        const limit = params.limit ?? 1000;
+        const direction = params.direction ?? "asc";
+        const from = params.from ?? (direction === "desc" ? all.length - 1 : 0);
+        if (failPageTwo && direction === "asc" && from === 1000) {
+          throw new Error("page two failed");
+        }
+        const rows =
+          direction === "desc"
+            ? all.slice(Math.max(0, from - limit + 1), from + 1).reverse()
+            : all.slice(from, from + limit);
+        return makeMessagesResponse(rows);
+      },
+    );
+    await messages.loadSession("s1");
+    expect(messages.loadError).toBe("page two failed");
+    expect(messages.activeSessionToken).toBeNull();
+
+    failPageTwo = false;
+    await messages.retryLoad();
+
+    expect(messages.messages).toHaveLength(1500);
+    expect(messages.loadError).toBeNull();
+    expect(messages.activeSessionToken).toBe("rev-1");
+  });
+
+  it("keeps a partial first-load failure through session search until Retry reloads", async () => {
+    const all = Array.from({ length: 1500 }, (_, ordinal) => makeMessage(ordinal));
+    let failPageTwo = true;
+    vi.mocked(api.getSession).mockResolvedValue({
+      ...makeSession("s1", 1500),
+      transcript_revision: "rev-1",
+    } as Session);
+    vi.mocked(api.getMessages).mockImplementation(
+      async (_id: string, params: { from?: number; limit?: number; direction?: string }) => {
+        const limit = params.limit ?? 1000;
+        const from = params.from ?? 0;
+        if (failPageTwo && from === 1000) throw new Error("page two failed");
+        return makeMessagesResponse(all.slice(from, from + limit));
+      },
+    );
+    await messages.loadSession("s1");
+    expect(messages.loadError).toBe("page two failed");
+    expect(messages.activeSessionToken).toBeNull();
+
+    failPageTwo = false;
+    await messages.ensureHistoryLoaded();
+
+    expect(messages.messages).toHaveLength(1500);
+    expect(messages.loadError).toBe("page two failed");
+    expect(messages.activeSessionToken).toBeNull();
+
+    await messages.retryLoad();
+
+    expect(messages.loadError).toBeNull();
+    expect(messages.activeSessionToken).toBe("rev-1");
+  });
+
+  it("keeps a transcript failure through a failed search read until Retry reloads", async () => {
+    const all = Array.from({ length: 1500 }, (_, ordinal) => makeMessage(ordinal));
+    let failPageTwo = true;
+    vi.mocked(api.getSession).mockResolvedValue({
+      ...makeSession("s1", 1500),
+      transcript_revision: "rev-1",
+    } as Session);
+    vi.mocked(api.getMessages).mockImplementation(
+      async (_id: string, params: { from?: number; limit?: number }) => {
+        const limit = params.limit ?? 1000;
+        const from = params.from ?? 0;
+        if (failPageTwo && from === 1000) throw new Error("page two failed");
+        return makeMessagesResponse(all.slice(from, from + limit));
+      },
+    );
+    await messages.loadSession("s1");
+    await messages.ensureHistoryLoaded();
+    expect(messages.loadError).toBe("page two failed");
+
+    failPageTwo = false;
+    await messages.retryLoad();
+
+    expect(messages.loadError).toBeNull();
+    expect(messages.activeSessionToken).toBe("rev-1");
+  });
+
+  it("keeps a failed first page through session search until Retry reloads", async () => {
+    const all = Array.from({ length: 1500 }, (_, ordinal) => makeMessage(ordinal));
+    let failFirstPage = true;
+    vi.mocked(api.getSession).mockResolvedValue({
+      ...makeSession("s1", 1500),
+      transcript_revision: "rev-1",
+    } as Session);
+    vi.mocked(api.getMessages).mockImplementation(
+      async (_id: string, params: { from?: number; limit?: number }) => {
+        const limit = params.limit ?? 1000;
+        const from = params.from ?? 0;
+        if (failFirstPage) throw new Error("first page failed");
+        return makeMessagesResponse(all.slice(from, from + limit));
+      },
+    );
+    await messages.loadSession("s1");
+    expect(messages.messages).toEqual([]);
+    expect(messages.loadError).toBe("first page failed");
+    expect(messages.activeSessionToken).toBeNull();
+
+    failFirstPage = false;
+    await messages.ensureHistoryLoaded();
+
+    expect(messages.messages).toHaveLength(1500);
+    expect(messages.loadError).toBe("first page failed");
+    expect(messages.activeSessionToken).toBeNull();
+
+    await messages.retryLoad();
+
+    expect(messages.loadError).toBeNull();
+    expect(messages.activeSessionToken).toBe("rev-1");
+  });
+
+  it("clears an older-page failure once a later older page loads", async () => {
+    vi.mocked(api.getSession).mockResolvedValue(makeSession("s1", 3_001));
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse(Array.from({ length: 100 }, (_, i) => makeMessage(3_000 - i))),
+    );
+    await messages.loadSession("s1");
+    vi.mocked(api.getMessages).mockRejectedValueOnce(new Error("older page failed"));
+    await messages.loadOlder();
+    expect(messages.loadError).toBe("older page failed");
+
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse(Array.from({ length: 100 }, (_, i) => makeMessage(2_900 - i))),
+    );
+    await messages.loadOlder();
+
+    expect(messages.loadError).toBeNull();
+  });
+
+  it("fetches metadata immediately, then gates multi-page reads and folds ready reloads", async () => {
+    for (const [count, metadataPending] of [
+      [1001, false],
+      [1001, true],
+      [20, false],
+      [1000, false],
+    ] as const) {
+      messages.clear();
+      vi.clearAllMocks();
+      const ready = createDeferred<void>();
+      const metadata = createDeferred<Session>();
+      const rows = Array.from({ length: count === 1001 && !metadataPending ? 1001 : 1 }, (_, i) =>
+        makeMessage(i),
+      );
+      api.getSession.mockResolvedValue(makeSession("s1", count));
+      if (metadataPending) api.getSession.mockReturnValueOnce(metadata.promise);
+      api.getMessages.mockImplementation(async (_id, params) =>
+        makeMessagesResponse(rows.slice(params.from, params.from + params.limit)),
+      );
+      const load = messages.loadSession("s1", ready.promise);
+      expect(api.getSession).toHaveBeenCalledTimes(1);
+      if (!metadataPending) await new Promise((resolve) => setTimeout(resolve, 0));
+      const reload = rows.length === 1001 ? messages.reload() : undefined;
+      expect(api.getMessages).not.toHaveBeenCalled();
+      ready.resolve();
+      const readyReload = rows.length === 1001 ? undefined : messages.reload();
+      expect(api.getMessages).not.toHaveBeenCalled();
+      metadata.resolve(makeSession("s1", count));
+      await Promise.all([load, reload, readyReload]);
+      expect(api.getMessages).toHaveBeenCalledTimes(rows.length === 1001 ? 2 : 1);
+      expect(messages.messages).toEqual(rows);
+
+      if (rows.length === 1001) {
+        await messages.reload();
+        expect(api.getMessages).toHaveBeenCalledTimes(4);
+      }
+    }
+  });
+
+  it.each([1, 3])(
+    "uses the completed transcript count when metadata reports %i messages",
+    async (count) => {
+      api.getSession.mockResolvedValue(makeSession("s1", count));
+      api.getMessages.mockResolvedValue(makeMessagesResponse([makeMessage(0), makeMessage(1)]));
+
+      await messages.loadSession("s1");
+
+      expect(messages.messages.map((row) => row.content)).toEqual(["msg 0", "msg 1"]);
+      expect(messages.historyComplete).toBe(true);
+      expect(messages.messageCount).toBe(2);
+    },
+  );
+
+  it("recovers from a transient first read after the watch becomes ready", async () => {
+    const ready = createDeferred<void>();
+    api.getSession.mockResolvedValue(makeSession("s1", 1001));
+    api.getMessages
+      .mockRejectedValueOnce(new ApiError(503, "unavailable"))
+      .mockResolvedValue(makeMessagesResponse([makeMessage(0)]));
+
+    const load = messages.loadSession("s1", ready.promise);
+    expect(api.getMessages).not.toHaveBeenCalled();
+    // The watch settles readiness and invokes its reload callback in the same turn.
+    ready.resolve();
+    const reload = messages.reload();
+    await Promise.all([load, reload]);
+
+    await vi.waitFor(() => {
+      expect(messages.messages.map((row) => row.content)).toEqual(["msg 0"]);
+    });
+  });
+
+  it("recovers all rows after a transient second-page failure with an unchanged revision", async () => {
+    const rows = Array.from({ length: 1500 }, (_, i) => makeMessage(i));
+    api.getSession.mockResolvedValue(makeSession("s1", 1500));
+    api.getMessages
+      .mockResolvedValueOnce({
+        ...makeMessagesResponse(rows.slice(0, 1000)),
+        transcript_revision: "r1",
+      })
+      .mockRejectedValueOnce(new ApiError(503, "unavailable"))
+      .mockImplementation(async (_id, params) => ({
+        ...makeMessagesResponse(rows.slice(params.from, params.from + params.limit)),
+        transcript_revision: "r1",
+      }));
+
+    await messages.loadSession("s1", Promise.resolve());
+    await messages.reload();
+
+    expect(api.getMessages.mock.calls[1]).toEqual([
+      "s1",
+      { from: 1000, limit: 1000, direction: "asc", expected_revision: "r1" },
+      expect.anything(),
+    ]);
+    expect(messages.messages).toHaveLength(1500);
+    expect(messages.messages).toEqual(rows);
+    expect(messages.messageCount).toBe(1500);
+    expect(messages.historyComplete).toBe(true);
+    expect(messages.hasOlder).toBe(false);
+  });
+
+  it("keeps catch-up reloads once the initial read starts", async () => {
+    const firstRead = createDeferred<MessagesResponse>();
+    const started = createDeferred<void>();
+    api.getSession.mockResolvedValue(makeSession("s1", 1));
+    api.getMessages
+      .mockImplementationOnce(() => {
+        started.resolve();
+        return firstRead.promise;
+      })
+      .mockResolvedValue(makeMessagesResponse([makeMessage(0)]));
+    const load = messages.loadSession("s1", Promise.resolve());
+    await started.promise;
+    const reload = messages.reload();
+    firstRead.resolve(makeMessagesResponse([makeMessage(0)]));
+    await Promise.all([load, reload]);
+    expect(api.getMessages).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps reloads for a newer selection while an old watch is pending", async () => {
+    const ready = createDeferred<void>();
+    api.getSession.mockResolvedValueOnce(makeSession("s1", 1001));
+    const oldLoad = messages.loadSession("s1", ready.promise);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    api.getSession.mockResolvedValue(makeSession("s2", 1));
+    api.getMessages.mockResolvedValue(
+      makeMessagesResponse([{ ...makeMessage(0), session_id: "s2" }]),
+    );
+    const newLoad = messages.loadSession("s2");
+    const reload = messages.reload();
+    await Promise.all([newLoad, reload]);
+    expect(api.getMessages).toHaveBeenCalledTimes(2);
+    expect(api.getMessages.mock.calls.every(([id]) => id === "s2")).toBe(true);
+    api.getMessages.mockRejectedValueOnce(generatedCancelError());
+    ready.resolve();
+    await oldLoad;
+    expect(messages.sessionId).toBe("s2");
+  });
+
   it.each(["recover", "exhaust", "switch", "permanent", "bug"])(
     "reload retry %s",
     async (outcome) => {
@@ -176,7 +491,7 @@ describe("MessagesStore", () => {
             .mockRejectedValueOnce(new ApiError(503, "unavailable"))
             .mockResolvedValue(makeSession("s1", 2));
           vi.mocked(api.getMessages)
-            .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+            .mockRejectedValueOnce(new TransportError(new TypeError("Failed to fetch")))
             .mockResolvedValue(makeMessagesResponse([makeMessage(0), makeMessage(1)]));
         }
         const reload = messages.reload();
@@ -315,6 +630,19 @@ describe("MessagesStore", () => {
     resolveReload(makeSession("s1", 10));
     resolveS2(makeSession("s2", 5));
     await Promise.all([p1, p2]);
+  });
+
+  it("updates mainModel when older messages supply the model", async () => {
+    const tail = Array.from({ length: 1_000 }, (_, i) => makeMessage(3_999 - i));
+    await setupSession("s1", 4_000, tail);
+    expect(messages.mainModel).toBe("");
+
+    vi.mocked(api.getMessages).mockResolvedValueOnce(
+      makeMessagesResponse([{ ...makeMessage(2_999), model: "claude-3-opus" }, makeMessage(2_998)]),
+    );
+    await messages.loadOlder();
+
+    expect(messages.mainModel).toBe("claude-3-opus");
   });
 
   it("should retain mainModel during reload", async () => {
@@ -739,7 +1067,11 @@ describe("MessagesStore", () => {
     // The pending reload should trigger automatically and
     // update state with the new count (6).
     vi.mocked(api.getSession).mockResolvedValue(makeSession("s2", 6));
-    vi.mocked(api.getMessages).mockResolvedValue(makeMessagesResponse([]));
+    vi.mocked(api.getMessages).mockResolvedValue(
+      makeMessagesResponse(
+        Array.from({ length: 6 }, (_, i) => ({ ...makeMessage(i), session_id: "s2" })),
+      ),
+    );
     const callsBeforeP2 = vi.mocked(api.getSession).mock.calls.length;
     resolveP2(makeSession("s2", 5));
 

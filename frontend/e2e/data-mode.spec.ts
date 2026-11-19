@@ -1,6 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const isDuckDBBackend = process.env.AGENTSVIEW_E2E_BACKEND === "duckdb";
 const mappingWorkspaceE2EEnabled = process.env.PROJECT_MAPPING_WORKSPACE_E2E_ENABLED === "true";
 const wrongProject = "wrong_branch_label";
 const targetProject = "sample_service";
@@ -13,15 +12,12 @@ function workspace(page: Page) {
 }
 
 function waitForApiResponse(page: Page, method: string, pathname: string) {
-  return page
-    .waitForResponse((response) => {
-      const url = new URL(response.url());
-      return response.request().method() === method && url.pathname === pathname && response.ok();
-    })
-    .then(async (response) => {
-      await response.finished();
-      return response;
-    });
+  // A live refresh can cancel this response after its headers arrive.
+  // The assertions after each action wait for the rendered result.
+  return page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return response.request().method() === method && url.pathname === pathname && response.ok();
+  });
 }
 
 test.describe("Data mode project reclassification", () => {
@@ -36,7 +32,7 @@ test.describe("Data mode project reclassification", () => {
   );
 
   test.afterEach(async ({ request, baseURL, browserName }) => {
-    if (!mappingWorkspaceE2EEnabled || isDuckDBBackend || browserName !== "chromium") return;
+    if (!mappingWorkspaceE2EEnabled || browserName !== "chromium") return;
 
     // Restore the shared fixture even when an assertion fails after Save.
     // Deleting the rule alone does not undo the session reclassification.
@@ -68,7 +64,6 @@ test.describe("Data mode project reclassification", () => {
   test("keeps the bulk destination and Save visible while observed folders scroll", async ({
     page,
   }) => {
-    test.skip(isDuckDBBackend, "requires correction controls");
     const project = {
       project_key: "layout-fixture",
       label: "project-a",
@@ -187,8 +182,6 @@ test.describe("Data mode project reclassification", () => {
   test("reclassifies a worktree from Activity through Data and persists a rule", async ({
     page,
   }) => {
-    test.skip(isDuckDBBackend, "requires the writable SQLite archive");
-
     let reclassifyMutations = 0;
     const legacyCandidateRequests: string[] = [];
     page.on("request", (request) => {
@@ -300,58 +293,60 @@ test.describe("Data mode project reclassification", () => {
 
     expect(legacyCandidateRequests).toEqual([]);
   });
+});
 
-  test("stops at the editor read-only notice without offering mutations", async ({ page }) => {
-    test.skip(!isDuckDBBackend, "runs only against duckdb serve");
-
-    const mutationRequests: string[] = [];
-    page.on("request", (request) => {
-      const pathname = new URL(request.url()).pathname;
-      if (request.method() !== "GET" && pathname.startsWith("/api/v1/settings/worktree-mappings")) {
-        mutationRequests.push(`${request.method()} ${pathname}`);
-      }
-    });
-
-    // Wait for version hydration: DataPage also renders read-only while
-    // sync.serverVersion is still null, so the assertions below must run
-    // against the backend's real read_only flag, not the pre-hydration state.
-    const versionPromise = page.waitForResponse(
-      (response) => new URL(response.url()).pathname === "/api/v1/version" && response.ok(),
-    );
-    await page.goto("/data");
-    const versionResponse = await versionPromise;
-    expect(await versionResponse.json()).toMatchObject({ read_only: true });
-    await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
-    const row = page.getByRole("row", { name: wrongProject });
-    await expect(row).toBeVisible();
-    await row.click();
-
-    const ws = workspace(page);
-    await expect(ws.getByRole("button", { name: "Folder suggestions" })).toBeVisible();
-    await expect(ws.getByRole("button", { name: worktreeRoot })).toBeVisible();
-    await expect(ws.getByRole("note")).toContainText("Changes are unavailable here.");
-    await expect(ws.getByRole("textbox", { name: "Path prefix" })).toHaveCount(0);
-    await expect(ws.getByRole("button", { name: "Project", exact: true })).toHaveCount(0);
-    await expect(ws.getByRole("button", { name: "Save correction" })).toHaveCount(0);
-
-    expect(mutationRequests).toEqual([]);
-  });
-
-  test("rules view is read-only without actions or the mapping form", async ({ page }) => {
-    test.skip(!isDuckDBBackend, "runs only against duckdb serve");
-
-    // Same version-hydration gate as above: the read-only notice must come
-    // from the backend's read_only flag, not the null pre-hydration state.
-    const versionPromise = page.waitForResponse(
-      (response) => new URL(response.url()).pathname === "/api/v1/version" && response.ok(),
-    );
-    await page.goto("/data?view=rules");
-    const versionResponse = await versionPromise;
-    expect(await versionResponse.json()).toMatchObject({ read_only: true });
-    await expect(page.getByRole("heading", { name: "Worktree mappings" })).toBeVisible();
-    await expect(page.getByRole("note")).toContainText("This store is read-only.");
-    await expect(page.getByRole("button", { name: "Add mapping" })).toHaveCount(0);
-    await expect(page.getByRole("columnheader", { name: "Actions" })).toHaveCount(0);
-    await expect(page.getByText("No worktree mappings configured.")).toBeVisible();
-  });
+test("rules actions stay reachable with a long mapping list", async ({ page }) => {
+  const rules = Array.from({ length: 30 }, (_, i) => ({
+    id: i + 1,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    enabled: true,
+    layout: "explicit",
+    machine: "fixture-machine",
+    original_project: `original-${i}`,
+    path_prefix: `/home/user/src/worktrees/project-${i}`,
+    project: `project-${i}`,
+    governed_sessions: i,
+  }));
+  await page.route("**/api/v1/data/project-rules*", (route) =>
+    route.fulfill({
+      json: {
+        local_machine: "fixture-machine",
+        machine: "fixture-machine",
+        machines: ["fixture-machine"],
+        rules,
+      },
+    }),
+  );
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto("/data?view=rules");
+  await expect(page.locator("tr.rule-row")).toHaveCount(30);
+  // Scroll the way a person would: the wheel over the rules description.
+  // (scrollIntoView would also scroll overflow-hidden boxes a person cannot.)
+  const description = page.locator(".rules-view .description");
+  const start = (await description.boundingBox())!;
+  await page.mouse.move(start.x + 20, start.y + 5);
+  // Apply mappings sits with the machine picker above the list, so it is
+  // in reach before scrolling; the form's Add mapping is under the list.
+  for (const [name, wheel] of [
+    ["Apply mappings", 0],
+    ["Add mapping", 400],
+  ] as const) {
+    const action = page.getByRole("button", { name, exact: true });
+    await expect(action).toBeAttached();
+    // Wheel scrolling is asynchronous and a busy page can drop events, so
+    // keep wheeling until the scroll settles with the action in reach.
+    await expect(async () => {
+      for (let i = 0; i < 6 && wheel > 0; i++) await page.mouse.wheel(0, wheel);
+      const box = (await action.boundingBox())!;
+      expect(box.y, `${name} above the window`).toBeGreaterThanOrEqual(0);
+      expect(box.y + box.height, `${name} below the window`).toBeLessThanOrEqual(768);
+      const reachable = await action.evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return !!hit && el.contains(hit);
+      });
+      expect(reachable, `${name} is covered or clipped`).toBe(true);
+    }).toPass();
+  }
 });

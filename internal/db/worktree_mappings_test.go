@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +13,65 @@ import (
 
 	"go.kenn.io/agentsview/internal/export"
 )
+
+func TestWorktreeMappingSessionScopeQueryIgnoresStats(t *testing.T) {
+	for _, stats := range []string{"missing", "stale"} {
+		t.Run(stats, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			insertSession(t, d, "target", "project", func(s *Session) {
+				s.FilePath = new("shared.jsonl")
+			})
+			if stats == "stale" {
+				_, err := d.getWriter().Exec(ctx, `ANALYZE sessions`)
+				require.NoError(t, err)
+			}
+			for _, session := range []struct{ id, path string }{
+				{id: "sibling", path: "shared.jsonl"},
+				{id: "other", path: "other.jsonl"},
+			} {
+				insertSession(t, d, session.id, "project", func(s *Session) {
+					s.FilePath = new(session.path)
+				})
+			}
+			_, err := d.getWriter().Exec(ctx, `
+				WITH RECURSIVE n(i) AS (
+					VALUES(1) UNION ALL SELECT i + 1 FROM n WHERE i < 10
+				)
+				INSERT INTO sessions (id, project, machine, agent, file_path)
+				SELECT 'unrelated-' || i, 'project', ?, 'claude', 'file-' || i || '.jsonl'
+				FROM n`, defaultMachine)
+			require.NoError(t, err)
+			if stats == "missing" {
+				_, err := d.getWriter().Exec(ctx, `DELETE FROM sqlite_stat1; ANALYZE sqlite_schema`)
+				require.NoError(t, err)
+			}
+
+			query := worktreeMappingSessionScopeQuery
+			args := []any{"target", defaultMachine, "target", defaultMachine}
+			rows, err := d.getWriter().Query(ctx, "EXPLAIN QUERY PLAN "+query, args...)
+			require.NoError(t, err)
+			defer rows.Close()
+			details := strings.Join(explainQueryPlanDetails(t, rows), "\n")
+			assert.NotContains(t, details, "SCAN sessions")
+			assert.NotContains(t, details, "idx_sessions_machine")
+
+			rows, err = d.getWriter().Query(ctx, query, args...)
+			require.NoError(t, err)
+			defer rows.Close()
+			var ids []string
+			for rows.Next() {
+				var id, project string
+				var cwd, filePath sql.NullString
+				var assigned bool
+				require.NoError(t, rows.Scan(&id, &project, &cwd, &filePath, &assigned))
+				ids = append(ids, id)
+			}
+			require.NoError(t, rows.Err())
+			assert.Equal(t, []string{"sibling", "target"}, ids)
+		})
+	}
+}
 
 func TestWorktreeProjectMappingsCRUDNormalizesAndScopesByMachine(t *testing.T) {
 	d := testDB(t)
@@ -1274,7 +1334,7 @@ func TestWorktreeProjectMappingsFinalMetadataCopyRefreshesStalePrecopy(
 	defer dstDB.Close()
 
 	require.NoError(t,
-		dstDB.CopyWorktreeProjectMappingsFrom(srcPath),
+		dstDB.CopyWorktreeProjectMappingsFrom(t.Context(), srcPath),
 		"CopyWorktreeProjectMappingsFrom",
 	)
 	preCopied, err := dstDB.ListWorktreeProjectMappings(ctx, "laptop")
@@ -1307,7 +1367,7 @@ func TestWorktreeProjectMappingsFinalMetadataCopyRefreshesStalePrecopy(
 	require.NoError(t, err, "force dst updated_at ahead")
 
 	require.NoError(t,
-		dstDB.CopySessionMetadataFrom(srcPath),
+		dstDB.CopySessionMetadataFrom(t.Context(), srcPath),
 		"CopySessionMetadataFrom",
 	)
 
@@ -1386,7 +1446,7 @@ func TestCopySessionMetadataFromPreservesExistingMappingOriginalProject(
 			require.NoError(t, err, "create destination mapping")
 
 			require.NoError(t,
-				dst.CopySessionMetadataFrom(srcPath),
+				dst.CopySessionMetadataFrom(t.Context(), srcPath),
 				"copy source metadata",
 			)
 
@@ -1433,7 +1493,7 @@ func TestWorktreeProjectMappingsFinalMetadataCopyRemovesDeletedPrecopy(
 	defer dstDB.Close()
 
 	require.NoError(t,
-		dstDB.CopyWorktreeProjectMappingsFrom(srcPath),
+		dstDB.CopyWorktreeProjectMappingsFrom(t.Context(), srcPath),
 		"CopyWorktreeProjectMappingsFrom",
 	)
 
@@ -1446,7 +1506,7 @@ func TestWorktreeProjectMappingsFinalMetadataCopyRemovesDeletedPrecopy(
 	require.NoError(t, srcDB.CloseConnections(ctx), "CloseConnections src")
 
 	require.NoError(t,
-		dstDB.CopySessionMetadataFrom(srcPath),
+		dstDB.CopySessionMetadataFrom(t.Context(), srcPath),
 		"CopySessionMetadataFrom",
 	)
 
@@ -1468,7 +1528,7 @@ func TestCopyWorktreeProjectMappingsFromOldSchemaDefaultsLayout(t *testing.T) {
 	defer dstDB.Close()
 
 	require.NoError(t,
-		dstDB.CopyWorktreeProjectMappingsFrom(srcPath),
+		dstDB.CopyWorktreeProjectMappingsFrom(t.Context(), srcPath),
 		"CopyWorktreeProjectMappingsFrom",
 	)
 
@@ -1537,7 +1597,7 @@ func TestCopyWorktreeProjectMappingsFromFillsOnlyEmptyOriginalProject(
 			require.NoError(t, err, "create destination mapping")
 
 			require.NoError(t,
-				destination.CopyWorktreeProjectMappingsFrom(sourcePath),
+				destination.CopyWorktreeProjectMappingsFrom(t.Context(), sourcePath),
 				"copy source mappings",
 			)
 
@@ -1572,7 +1632,7 @@ func TestCopySessionMetadataFromOldWorktreeMappingSchemaDefaultsLayout(t *testin
 	defer dstDB.Close()
 
 	require.NoError(t,
-		dstDB.CopySessionMetadataFrom(srcPath),
+		dstDB.CopySessionMetadataFrom(t.Context(), srcPath),
 		"CopySessionMetadataFrom",
 	)
 
@@ -1601,13 +1661,13 @@ func TestCopyWorktreeMappingFromSchemaWithoutOriginalProjectDefaultsEmpty(
 		{
 			name: "resync pre-copy",
 			copy: func(dst *DB, source string) error {
-				return dst.CopyWorktreeProjectMappingsFrom(source)
+				return dst.CopyWorktreeProjectMappingsFrom(t.Context(), source)
 			},
 		},
 		{
 			name: "final metadata reconciliation",
 			copy: func(dst *DB, source string) error {
-				return dst.CopySessionMetadataFrom(source)
+				return dst.CopySessionMetadataFrom(t.Context(), source)
 			},
 		},
 	}

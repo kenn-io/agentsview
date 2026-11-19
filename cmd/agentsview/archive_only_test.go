@@ -157,10 +157,15 @@ func TestArchiveOnlyConfigOnlyBackgroundStart(t *testing.T) {
 		t.Setenv("AGENTSVIEW_STALE_SERVE_SOURCES", childCfg.AgentDirs[parser.AgentClaude][0])
 		return startServeBackgroundProcess(ctx, childCfg, []string{"-test.run=^TestServeStaleArchiveHelperProcess$"})
 	}
-	result, err := startServeBackground(t.Context(), cfg, []string{"serve"}, serveReplacementOptions{}, backgroundLaunchPolicy{ConfigOnly: true, Context: t.Context()})
+	result, err := startServeBackground(t.Context(), cfg, []string{"serve"}, serveReplacementOptions{}, backgroundLaunchPolicy{ConfigOnly: true})
 	require.NoError(t, err)
 	require.NotNil(t, result.Runtime)
-	t.Cleanup(func() { _ = stopDaemonProcess(result.Runtime.Record, 5*time.Second) })
+	// Windows reports the killed daemon's exit before it releases the data
+	// directory's files, and the temp directory cannot be removed until then.
+	t.Cleanup(func() {
+		_ = stopDaemonProcess(result.Runtime.Record, 5*time.Second)
+		assert.NoError(t, waitForStoppedDaemonWriter(context.WithoutCancel(t.Context()), cfg))
+	})
 	client := &http.Client{Timeout: 5 * time.Second}
 	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, urlFromDaemonRuntime(result.Runtime)+"/api/v1/sessions", nil)
 	require.NoError(t, err)
@@ -243,7 +248,7 @@ func TestArchiveOnlyRefusesOrdinaryImports(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(preserved, "assets", "existing.png"), []byte("existing"), 0o600))
 			beforeSessions, beforeAssets := archiveImportState(t, preserved)
 
-			err = importSessions(ImportConfig{Type: importType, Path: inputs[importType]})
+			err = importSessions(t.Context(), ImportConfig{Type: importType, Path: inputs[importType]})
 			require.ErrorIs(t, err, db.ErrArchiveOnly)
 			afterSessions, afterAssets := archiveImportState(t, preserved)
 			assert.Equal(t, beforeSessions, afterSessions, "a preserved archive does not gain or change sessions")
@@ -262,9 +267,6 @@ func TestArchiveOnlyRefusesDaemonPushWatch(t *testing.T) {
 		name string
 		run  func(context.Context, daemonArchiveWriteBackend) error
 	}{
-		{name: "duckdb", run: func(ctx context.Context, b daemonArchiveWriteBackend) error {
-			return b.DuckDBPushWatch(ctx, config.DuckDBConfig{}, DuckDBPushConfig{}, nil, nil, time.Hour, time.Hour)
-		}},
 		{name: "replica", run: func(ctx context.Context, b daemonArchiveWriteBackend) error {
 			return b.ReplicaPushWatch(ctx, pgReplica{}, storage.ConfiguredReplica{}, ReplicaPushConfig{}, nil, nil, time.Hour, time.Hour)
 		}},

@@ -15,7 +15,8 @@ const LAST_INDEX = DEEP_SESSIONS - 1;
 const DEEP_SCROLL_HEIGHT = DEEP_SESSIONS * ITEM_HEIGHT;
 
 /** Expected header text after all deep sessions load (en-US). */
-const DEEP_COUNT_TEXT = `${DEEP_SESSIONS.toLocaleString("en-US")} sessions`;
+// The header shows counts from 1,000 in compact form with one decimal.
+const DEEP_COUNT_TEXT = "2.0K sessions";
 
 const sessions = createMockSessions(TOTAL_SESSIONS, "session", (i) =>
   i % 2 === 0 ? "project-alpha" : "project-beta",

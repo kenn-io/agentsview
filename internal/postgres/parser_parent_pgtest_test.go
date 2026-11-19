@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"database/sql"
 	"path/filepath"
 	"testing"
@@ -15,13 +14,12 @@ import (
 )
 
 func TestPGParserParentProvenanceRoundTripsAndRepushes(t *testing.T) {
-	pgURL := testPGURL(t)
-	const schema = "agentsview_parser_parent_test"
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	t.Parallel()
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 
-	ctx := context.Background()
-	pg, err := Open(pgURL, schema, true)
+	ctx := t.Context()
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	defer pg.Close()
 	require.NoError(t, EnsureSchema(ctx, pg, schema))
@@ -80,13 +78,12 @@ func TestPGParserParentProvenanceRoundTripsAndRepushes(t *testing.T) {
 }
 
 func TestPGParserParentBackfillIgnoresLegacyProvenanceMarker(t *testing.T) {
-	pgURL := testPGURL(t)
-	const schema = "agentsview_parser_parent_backfill_test"
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	t.Parallel()
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 
 	ctx := t.Context()
-	pg, err := Open(pgURL, schema, true)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	defer pg.Close()
 	require.NoError(t, EnsureSchema(ctx, pg, schema))

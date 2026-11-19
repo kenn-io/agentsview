@@ -75,10 +75,10 @@ func TestRootHelpShowsKeySectionsAndCommands(t *testing.T) {
 		"Usage Commands:",
 		"Other Commands:",
 		"serve                  Start the web UI and sync server",
-		"duckdb status          Show DuckDB sync status",
-		"pg push                Push local data to PostgreSQL",
-		"duckdb quack           Quack remote protocol commands",
-		"usage daily            Daily cost summary",
+		"replica                Sync and serve database replicas",
+		"source                 Discover and ingest session sources",
+		"report                 Report activity, usage, and workspace statistics",
+		"index                  Build and manage derived search indexes",
 		"completion             Generate the autocompletion script for the specified shell",
 		"Flags:",
 		"--version",
@@ -378,4 +378,28 @@ func TestExecuteCLIWithLegacyFlagCompatWarnsOnce(t *testing.T) {
 		"version output = %q", stdout.String())
 	want := "warning: deprecated single-dash long flags detected; use GNU-style long flags instead: -version -> --version\n"
 	assert.Equal(t, want, stderr.String())
+}
+
+// Deployments pass --pprof to whichever serve command they run, so every
+// command that serves the web UI must accept it, or the service fails to start
+// on an unknown flag. The deprecated top-level aliases are separate command
+// instances and are covered too.
+func TestServeCommandsAcceptHiddenPprofFlag(t *testing.T) {
+	for _, path := range []string{
+		"serve",
+		"replica clickhouse serve", "clickhouse serve",
+		"replica pg serve", "pg serve",
+	} {
+		t.Run(path, func(t *testing.T) {
+			cmd, rest, err := newRootCommand().Find(strings.Fields(path))
+			require.NoError(t, err)
+			require.Empty(t, rest)
+			require.NoError(t, cmd.ParseFlags([]string{"--pprof"}))
+			enabled, err := cmd.Flags().GetBool("pprof")
+			require.NoError(t, err)
+			assert.True(t, enabled)
+			assert.True(t, cmd.Flags().Lookup("pprof").Hidden,
+				"--pprof is a developer flag and stays out of help")
+		})
+	}
 }

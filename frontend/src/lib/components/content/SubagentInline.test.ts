@@ -5,6 +5,9 @@ import { SessionsService } from "../../api/generated/index";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 import type { Session } from "../../api/types.js";
+import { ui } from "../../stores/ui.svelte.js";
+import { msg } from "../../utils/test-messages.js";
+import { fileReferences } from "../../stores/file-references.svelte.js";
 import { setLocale } from "../../i18n/index.js";
 // @ts-ignore
 import SubagentInline from "./SubagentInline.svelte";
@@ -79,6 +82,8 @@ function makeSession(overrides: Partial<Session> = {}): Session {
 }
 
 afterEach(() => {
+  fileReferences.enabled = false;
+  fileReferences.reset();
   setLocale("en");
   childSessions.clear();
   getMessages.mockReset();
@@ -88,6 +93,68 @@ afterEach(() => {
 });
 
 describe("SubagentInline", () => {
+  it("routes child hooks to cards only when Hooks is visible", async () => {
+    const original = new Set(ui.visibleBlocks);
+    getMessages.mockResolvedValue({
+      messages: [
+        msg({
+          is_system: true,
+          source_type: "attachment",
+          source_subtype: "hook_additional_context",
+          content: "Content:\nchild hook context",
+        }),
+      ],
+      count: 1,
+    });
+    getSession.mockResolvedValue(makeSession());
+    try {
+      for (const visible of [true, false]) {
+        ui.setBlockVisible("hook", visible);
+        const component = mount(SubagentInline, {
+          target: document.body,
+          props: { sessionId: "subagent-session-id" },
+        });
+        try {
+          await tick();
+          document.querySelector<HTMLButtonElement>(".subagent-toggle")!.click();
+          await vi.waitUntil(
+            () =>
+              document.querySelector(".subagent-messages") &&
+              !document.querySelector(".subagent-status"),
+          );
+          expect(!!document.querySelector(".system-boundary")).toBe(visible);
+        } finally {
+          await unmount(component);
+        }
+      }
+    } finally {
+      ui.visibleBlocks = original;
+    }
+  });
+
+  it.each([true, false])(
+    "explains file matches when expanded with Docbank enabled=%s",
+    async (enabled) => {
+      fileReferences.enabled = enabled;
+      getMessages.mockResolvedValueOnce({ messages: [], count: 0 });
+      getSession.mockResolvedValueOnce(makeSession());
+      const component = mount(SubagentInline, {
+        target: document.body,
+        props: { sessionId: "subagent-session-id" },
+      });
+      await tick();
+      expect(document.body.textContent).not.toContain(
+        "File matches appear when opened as a session.",
+      );
+      document.querySelector<HTMLButtonElement>(".subagent-toggle")!.click();
+      await vi.waitFor(() => expect(document.body.textContent).toContain("No messages"));
+      expect(
+        document.body.textContent?.includes("File matches appear when opened as a session."),
+      ).toBe(enabled);
+      await unmount(component);
+    },
+  );
+
   it("reports the session kind when expanded messages fail", async () => {
     getMessages.mockRejectedValueOnce(new Error("Messages failed"));
     getSession.mockResolvedValueOnce(makeSession());
@@ -187,7 +254,7 @@ describe("SubagentInline", () => {
 
     document.querySelector<HTMLButtonElement>(".subagent-toggle")?.click();
     await vi.waitFor(() => {
-      expect(document.querySelector(".toggle-tokens")?.textContent).toContain("2.4k ctx / 180 out");
+      expect(document.querySelector(".toggle-tokens")?.textContent).toContain("2.4K ctx / 180 out");
     });
 
     unmount(component);

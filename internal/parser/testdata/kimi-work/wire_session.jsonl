@@ -1,0 +1,6 @@
+{"type":"metadata","protocol_version":"1.3"}
+{"timestamp":1767225600.0,"message":{"type":"TurnBegin","payload":{"user_input":[{"type":"text","text":"Summarize the meeting notes file"}]}}}
+{"timestamp":1767225601.0,"message":{"type":"ToolCall","payload":{"type":"function","id":"tool_a","function":{"name":"ReadFile","arguments":"{\"path\": \"notes.md\"}"},"extras":null}}}
+{"timestamp":1767225602.0,"message":{"type":"ToolResult","payload":{"tool_call_id":"tool_a","return_value":{"is_error":false,"output":"Ship v2 on Friday. Owner: release team."}}}}
+{"timestamp":1767225603.0,"message":{"type":"ContentPart","payload":{"type":"text","text":"The team plans to ship v2 on Friday."}}}
+{"timestamp":1767225604.0,"message":{"type":"TurnEnd","payload":{}}}

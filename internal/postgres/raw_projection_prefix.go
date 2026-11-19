@@ -81,7 +81,17 @@ func reconcileRawPrefixes(ctx context.Context, tx *sql.Tx, group string) error {
 // just rendered text. Metadata disagreements remain conflicts; only aggregate
 // and signal fields that naturally change on append are excluded.
 func rawTranscriptPrefix(short, long ingest.PreparedSession) (bool, error) {
-	if len(short.Messages) == 0 || len(short.Messages) >= len(long.Messages) || len(short.UsageEvents) > len(long.UsageEvents) {
+	if len(short.Messages) == 0 || len(short.UsageEvents) > len(long.UsageEvents) {
+		return false, nil
+	}
+	// A capture with the same transcript extends another only when the agent's
+	// cumulative session total grew, as when Claude Code appends cost-state on
+	// exit without a new message. A strict order keeps two equal copies from
+	// extending each other.
+	if len(short.Messages) > len(long.Messages) ||
+		(len(short.Messages) == len(long.Messages) &&
+			(len(short.UsageEvents) != len(long.UsageEvents) ||
+				!rawSessionTotalGrew(short.SessionTotal, long.SessionTotal))) {
 		return false, nil
 	}
 	long.Messages = long.Messages[:len(short.Messages)]
@@ -96,9 +106,10 @@ func rawTranscriptPrefix(short, long ingest.PreparedSession) (bool, error) {
 		s.QualitySignals = nil
 		p.Signals = db.SessionSignalUpdate{}
 		p.Findings = nil
-		// Plan usage is a later report about the whole thread, so it
-		// changes as the thread grows.
+		// Plan usage and the agent's session total are later reports about
+		// the whole thread, so they change as the thread grows.
 		p.PlanUsage = nil
+		p.SessionTotal = nil
 		return rawContentRevision(p)
 	}
 	a, err := key(short)
@@ -107,4 +118,36 @@ func rawTranscriptPrefix(short, long ingest.PreparedSession) (bool, error) {
 	}
 	b, err := key(long)
 	return a == b, err
+}
+
+// rawSessionTotalGrew reports whether next is a later cumulative snapshot of
+// the agent's session total than prev: it records more cost, or the same cost
+// over more tokens.
+func rawSessionTotalGrew(prev, next *db.SessionUsageTotal) bool {
+	if next == nil {
+		return false
+	}
+	if prev == nil {
+		return true
+	}
+	if prevCost, nextCost := rawSessionTotalCost(prev), rawSessionTotalCost(next); nextCost != prevCost {
+		return nextCost > prevCost
+	}
+	return rawSessionTotalTokens(next) > rawSessionTotalTokens(prev)
+}
+
+func rawSessionTotalCost(t *db.SessionUsageTotal) int64 {
+	if t.Cost == nil {
+		return -1
+	}
+	return t.Cost.Microdollars
+}
+
+func rawSessionTotalTokens(t *db.SessionUsageTotal) int64 {
+	var total int64
+	for _, model := range t.Models {
+		total += model.InputTokens + model.OutputTokens +
+			model.CacheCreationInputTokens + model.CacheReadInputTokens
+	}
+	return total
 }

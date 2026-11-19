@@ -2,7 +2,6 @@ package remotesync
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,7 +21,7 @@ import (
 // its entire mirror subtree and re-transfer everything once the error
 // clears. Failing closed matches how manifest walks already treat
 // read errors under dir-scoped roots.
-func ResolveTargets(cfg config.Config) (TargetSet, error) {
+func ResolveTargets(ctx context.Context, cfg config.Config) (TargetSet, error) {
 	dirs := make(map[parser.AgentType][]string)
 	files := make(map[parser.AgentType][]string)
 	providerExtraFiles := make(map[parser.AgentType][]string)
@@ -67,7 +66,7 @@ func ResolveTargets(cfg config.Config) (TargetSet, error) {
 				continue
 			}
 			if def.Type == parser.AgentAider {
-				targets, err := resolveAiderTargets(dir)
+				targets, err := resolveAiderTargets(ctx, dir)
 				if err != nil {
 					return TargetSet{}, err
 				}
@@ -85,7 +84,7 @@ func ResolveTargets(cfg config.Config) (TargetSet, error) {
 				continue
 			}
 			if def.Type == parser.AgentRooCode {
-				root, targetFiles, err := resolveRooCodeTarget(dir)
+				root, targetFiles, err := resolveRooCodeTarget(ctx, dir)
 				if err != nil {
 					return TargetSet{}, err
 				}
@@ -96,7 +95,7 @@ func ResolveTargets(cfg config.Config) (TargetSet, error) {
 				continue
 			}
 			if def.Type == parser.AgentCline {
-				root, targetFiles, err := resolveClineTarget(dir)
+				root, targetFiles, err := resolveClineTarget(ctx, dir)
 				if err != nil {
 					return TargetSet{}, err
 				}
@@ -110,7 +109,7 @@ func ResolveTargets(cfg config.Config) (TargetSet, error) {
 				continue
 			}
 			if def.Type == parser.AgentKiloLegacy {
-				root, targetFiles, err := resolveKiloLegacyTarget(dir)
+				root, targetFiles, err := resolveKiloLegacyTarget(ctx, dir)
 				if err != nil {
 					return TargetSet{}, err
 				}
@@ -128,7 +127,7 @@ func ResolveTargets(cfg config.Config) (TargetSet, error) {
 				continue
 			}
 			if emptyFileScopeAgent(def.Type) {
-				root, targetFiles, err := resolveFileScopedTarget(def.Type, dir)
+				root, targetFiles, err := resolveFileScopedTarget(ctx, def.Type, dir)
 				if err != nil {
 					return TargetSet{}, err
 				}
@@ -185,7 +184,7 @@ func ResolveTargets(cfg config.Config) (TargetSet, error) {
 // resolveFileScopedTarget asks the provider for the exact session files it
 // consumes. Provider-owned companions travel with each source; editor workspace
 // manifests preserve project attribution. The root is the authorization boundary.
-func resolveFileScopedTarget(agent parser.AgentType, root string) (string, []string, error) {
+func resolveFileScopedTarget(ctx context.Context, agent parser.AgentType, root string) (string, []string, error) {
 	root = filepath.Clean(root)
 	ok, err := curatedRoot(root)
 	if err != nil || !ok {
@@ -195,7 +194,7 @@ func resolveFileScopedTarget(agent parser.AgentType, root string) (string, []str
 	if !ok {
 		return "", nil, nil
 	}
-	sources, err := discoverProviderSources(provider)
+	sources, err := discoverProviderSources(ctx, provider)
 	if err != nil {
 		return "", nil, fmt.Errorf("discover %s remote sync targets under %q: %w",
 			agent, root, err)
@@ -203,13 +202,13 @@ func resolveFileScopedTarget(agent parser.AgentType, root string) (string, []str
 	seen := make(map[string]struct{})
 	var files []string
 	for _, source := range sources {
-		if agent == parser.AgentEvener {
-			plan, supported, err := parser.ResolveRawCapturePlan(context.Background(), provider, source)
+		if agent == parser.AgentEvener || agent == parser.AgentMusePersonal {
+			plan, supported, err := parser.ResolveRawCapturePlan(ctx, provider, source)
 			if err != nil {
 				return "", nil, err
 			}
 			if !supported {
-				return "", nil, errors.New("evener provider does not declare source companions")
+				return "", nil, fmt.Errorf("%s provider does not declare source companions", agent)
 			}
 			for _, entry := range plan.Entries {
 				// Capture validation canonicalizes paths; retain the configured
@@ -280,13 +279,13 @@ func resolveFileScopedTarget(agent parser.AgentType, root string) (string, []str
 // convert traversal failures into an authoritative empty enumeration,
 // DiscoverEach propagates them, so an unreadable root cannot resolve
 // to an empty curated target and evict the client's mirror.
-func discoverProviderSources(provider parser.Provider) ([]parser.SourceRef, error) {
+func discoverProviderSources(ctx context.Context, provider parser.Provider) ([]parser.SourceRef, error) {
 	streamer, ok := provider.(parser.StreamingDiscoverer)
 	if !ok {
-		return provider.Discover(context.Background())
+		return provider.Discover(ctx)
 	}
 	var sources []parser.SourceRef
-	err := streamer.DiscoverEach(context.Background(), func(source parser.SourceRef) error {
+	err := streamer.DiscoverEach(ctx, func(source parser.SourceRef) error {
 		sources = append(sources, source)
 		return nil
 	})
@@ -518,7 +517,7 @@ func resolveAgentHasOnDiskSource(def parser.AgentDef) bool {
 	}
 }
 
-func resolveAiderTargets(root string) ([]string, error) {
+func resolveAiderTargets(ctx context.Context, root string) ([]string, error) {
 	if isAiderUnsafeRoot(root) {
 		return nil, nil
 	}
@@ -531,7 +530,7 @@ func resolveAiderTargets(root string) ([]string, error) {
 	// Aider stays on batch Discover: its streaming enumeration yields
 	// different source references than the batch path this resolver's
 	// history-file filter matches.
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("discover aider remote sync targets under %q: %w",
 			root, err)
@@ -566,7 +565,7 @@ func resolveWindsurfTarget(root string) (string, []string) {
 // caches, and checkpoints — none of which may be archived. Only the
 // discovered tasks/<id>/history_item.json files and their
 // ui_messages.json siblings are exported.
-func resolveRooCodeTarget(root string) (string, []string, error) {
+func resolveRooCodeTarget(ctx context.Context, root string) (string, []string, error) {
 	targetRoot := filepath.Clean(root)
 	ok, err := statCuratedDir(targetRoot)
 	if err != nil || !ok {
@@ -578,7 +577,7 @@ func resolveRooCodeTarget(root string) (string, []string, error) {
 	if !ok {
 		return "", nil, nil
 	}
-	sources, err := discoverProviderSources(provider)
+	sources, err := discoverProviderSources(ctx, provider)
 	if err != nil {
 		return "", nil, fmt.Errorf("discover roocode remote sync targets under %q: %w",
 			targetRoot, err)
@@ -614,7 +613,7 @@ func resolveRooCodeTarget(root string) (string, []string, error) {
 
 // resolveClineTarget resolves a Cline root directory to only the per-session
 // metadata and transcript files (<id>.json, <id>.messages.json).
-func resolveClineTarget(root string) (string, []string, error) {
+func resolveClineTarget(ctx context.Context, root string) (string, []string, error) {
 	targetRoot := filepath.Clean(root)
 	ok, err := curatedRoot(targetRoot)
 	if err != nil || !ok {
@@ -639,7 +638,7 @@ func resolveClineTarget(root string) (string, []string, error) {
 	if !ok {
 		return "", nil, nil
 	}
-	sources, err := discoverProviderSources(provider)
+	sources, err := discoverProviderSources(ctx, provider)
 	if err != nil {
 		return "", nil, fmt.Errorf("discover cline remote sync targets under %q: %w",
 			targetRoot, err)
@@ -700,7 +699,7 @@ func resolveClineTarget(root string) (string, []string, error) {
 // api_conversation_history.json). This avoids recursively transferring
 // the entire globalStorage directory, which can contain MCP settings,
 // API credentials, caches, and other unrelated data.
-func resolveKiloLegacyTarget(root string) (string, []string, error) {
+func resolveKiloLegacyTarget(ctx context.Context, root string) (string, []string, error) {
 	targetRoot := filepath.Clean(root)
 	ok, err := statCuratedDir(targetRoot)
 	if err != nil || !ok {
@@ -712,7 +711,7 @@ func resolveKiloLegacyTarget(root string) (string, []string, error) {
 	if !ok {
 		return "", nil, nil
 	}
-	sources, err := discoverProviderSources(provider)
+	sources, err := discoverProviderSources(ctx, provider)
 	if err != nil {
 		return "", nil, fmt.Errorf("discover kilo legacy remote sync targets under %q: %w",
 			targetRoot, err)
@@ -1195,6 +1194,16 @@ func authorizedStaleCuratedFile(
 			vscodeWorkspaceChatVanished(allowed, forbidden, dir, rel, requestedFiles) {
 			return true
 		}
+		if agent == parser.AgentMusePersonal && filepath.Base(file) == "sessions.json" {
+			// The index is a companion only while a discovered transcript shares its
+			// sessions directory. A removed last transcript leaves no exportable index.
+			for _, candidate := range allowed.Files[agent] {
+				if filepath.Dir(candidate) == filepath.Dir(file) && strings.HasSuffix(candidate, ".jsonl") {
+					return false
+				}
+			}
+			return true
+		}
 		if agent == parser.AgentEvener && strings.HasSuffix(file, ".meta.json") {
 			// Metadata left behind by a deleted transcript is no longer a source companion.
 			_, err := os.Lstat(strings.TrimSuffix(file, ".meta.json") + ".transcript.jsonl")
@@ -1267,6 +1276,8 @@ func vscodeWorkspaceChatVanished(
 // for the given agent type.
 func sessionFileShape(agent parser.AgentType, root, rel string) bool {
 	switch agent {
+	case parser.AgentMusePersonal:
+		return parser.MusePersonalSessionFileShape(rel)
 	case parser.AgentEvener:
 		parts := strings.Split(rel, "/")
 		validLayout := len(parts) == 4 && parts[0] == "projects" && parts[2] == "sessions" ||

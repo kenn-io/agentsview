@@ -156,23 +156,35 @@ func (c *pushAliasRoutingConn) QueryContext(
 ) (driver.Rows, error) {
 	normalized := strings.ToLower(query)
 	switch {
-	case strings.Contains(normalized, "agentsview_json_integer"):
+	case strings.Contains(normalized, "select version()"):
 		return &pushAliasRoutingRows{
-			columns: []string{
-				"output", "web_search", "malformed",
-				"malformed_scoped_output", "malformed_scoped_web_search",
-			},
-			values: [][]driver.Value{{"42", "2", "7", "42", "2"}},
+			columns: []string{"version"},
+			values:  [][]driver.Value{{"PostgreSQL 18"}},
 		}, nil
 	case strings.Contains(normalized, "select coalesce(max(data_version), 0) from sessions"):
 		return &pushAliasRoutingRows{
 			columns: []string{"coalesce"},
 			values:  [][]driver.Value{{0}},
 		}, nil
+	case strings.Contains(normalized, "select exists(select 1 from sync_metadata"),
+		strings.Contains(normalized, "select exists (select 1 from sync_metadata"):
+		return &pushAliasRoutingRows{
+			columns: []string{"exists"},
+			values:  [][]driver.Value{{false}},
+		}, nil
 	case strings.Contains(normalized, "from information_schema.tables"):
 		return &pushAliasRoutingRows{
 			columns: []string{"exists"},
 			values:  [][]driver.Value{{1}},
+		}, nil
+	case strings.Contains(normalized, "select table_name, column_name, data_type"):
+		return &pushAliasRoutingRows{
+			columns: []string{"table_name", "column_name", "data_type"},
+		}, nil
+	case strings.Contains(normalized, "from information_schema.columns"):
+		return &pushAliasRoutingRows{
+			columns: []string{"wide"},
+			values:  [][]driver.Value{{true}},
 		}, nil
 	case strings.Contains(normalized, "from pg_indexes"):
 		return &pushAliasRoutingRows{

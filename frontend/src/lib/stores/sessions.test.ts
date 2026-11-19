@@ -1,24 +1,28 @@
+import { flushSync } from "svelte";
+import { toStore } from "svelte/store";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
+import { createSessionsStore } from "./sessions.svelte.js";
+import { buildSessionGroups } from "./sessionGroups.js";
+import { getSessionStatus } from "./sessionStatus.svelte.js";
 import {
-  createSessionsStore,
-  buildSessionGroups,
-  getSessionStatus,
   parseFiltersFromParams,
   filtersToParams,
   splitExcludeProjectParam,
-} from "./sessions.svelte.js";
-import { SessionsService, type DbSession } from "../api/generated/index";
+} from "./sessionFilters.js";
+import { SessionsService, SettingsService, type DbSession } from "../api/generated/index";
 import { starred } from "./starred.svelte.js";
 import { yokedDates } from "./yokedDates.svelte.js";
-import type { Filters } from "./sessions.svelte.js";
+import type { Filters } from "./sessionFilters.js";
 import type { Session } from "../api/types.js";
 import { router } from "./router.svelte.js";
+import { events } from "./events.svelte.js";
 import { ApiError } from "../api/runtime.js";
 import { rollingRange } from "../utils/dates.js";
 
 const api = vi.hoisted(() => ({
   listSessions: vi.fn(),
   getSidebarSessionIndex: vi.fn(),
+  getDataProjects: vi.fn().mockResolvedValue({ total_sessions: 0 }),
   getSession: vi.fn(),
   getProjects: vi.fn(),
   getAgents: vi.fn(),
@@ -34,7 +38,7 @@ const api = vi.hoisted(() => ({
     machine_count: 0,
     earliest_session: null,
   }),
-  watchEvents: vi.fn(() => ({ close: () => {} })),
+  watchEvents: vi.fn((_onEvent: (event: { scope: string }) => void) => ({ close: () => {} })),
 }));
 
 type SidebarIndexParams = Parameters<typeof api.getSidebarSessionIndex>[0];
@@ -71,6 +75,7 @@ vi.mock("../api/runtime.js", async (importOriginal) => ({
 }));
 
 vi.mock("../api/generated/index", () => ({
+  DataService: { getApiV1DataProjects: api.getDataProjects },
   SessionsService: {
     getApiV1SessionIdsResolve: vi.fn(),
     getApiV1Sessions: vi.fn((params) => api.listSessions(params)),
@@ -81,6 +86,10 @@ vi.mock("../api/generated/index", () => ({
     postApiV1SessionsByIdRestore: vi.fn(({ id }) => api.restoreSession(id)),
     patchApiV1SessionsByIdRename: vi.fn(({ id }, body) => api.renameSession(id, body.display_name)),
     getApiV1SessionsByIdChildren: vi.fn().mockResolvedValue([]),
+  },
+  SettingsService: {
+    putApiV1SettingsSessionProjectAssignmentsBySessionId: vi.fn(),
+    deleteApiV1SettingsSessionProjectAssignmentsBySessionId: vi.fn(),
   },
   MetadataService: {
     getApiV1Projects: vi.fn((params) => api.getProjects(params)),
@@ -119,6 +128,7 @@ type SkinnySessionRow = {
   project: string;
   project_assigned?: boolean;
   machine: string;
+  source_machines?: string[];
   agent: string;
   agent_label?: string | null;
   entrypoint?: string | null;
@@ -199,6 +209,10 @@ function generatedParams(params: Partial<Record<string, unknown>>): Record<strin
   );
 }
 
+beforeEach(() => {
+  events.setAvailable(false);
+});
+
 describe("SessionsStore", () => {
   let sessions: ReturnType<typeof createSessionsStore>;
 
@@ -214,6 +228,7 @@ describe("SessionsStore", () => {
     storageData.clear();
     mockSidebarPage();
     mockSidebarIndex();
+    api.getDataProjects.mockResolvedValue({ total_sessions: 0 });
     vi.mocked(SessionsService.getApiV1SessionsSidebarIndex).mockImplementation((params) =>
       api.getSidebarSessionIndex(params),
     );
@@ -224,6 +239,65 @@ describe("SessionsStore", () => {
     starred.ids = new Set();
     yokedDates.setEnabled(false);
     sessions = createSessionsStore();
+  });
+
+  describe("archive emptiness", () => {
+    it.each([false, true])(
+      "clears the panel after an import, hidden by filter %s",
+      async (hidden) => {
+        vi.useFakeTimers();
+        let notify!: (event: { scope: string }) => void;
+        const subscribe = vi.spyOn(events, "subscribe").mockImplementation((fn) => {
+          notify = fn as (event: { scope: string }) => void;
+          return () => {};
+        });
+        sessions.filters.date = hidden ? "2024-01-01" : "";
+        const detach = sessions.attachSidebar();
+        try {
+          await sessions.load();
+          await vi.waitFor(() => expect(sessions.archiveEmpty).toBe(true));
+          if (!hidden) mockSidebarIndex([makeSkinnyRow({ id: "imported" })]);
+          api.getDataProjects.mockResolvedValue({ total_sessions: 1 });
+          notify({ scope: "sessions" });
+          await vi.advanceTimersByTimeAsync(300);
+          await vi.waitFor(() => expect(sessions.archiveEmpty).toBe(false));
+        } finally {
+          detach();
+          subscribe.mockRestore();
+          vi.useRealTimers();
+        }
+      },
+    );
+
+    it.each([
+      [3, false, false],
+      [0, false, true],
+      [3, true, false],
+    ] as const)("checks archive emptiness for fixture %#", async (total, visible, empty) => {
+      sessions.filters.date = "2024-01-01";
+      sessions.archiveEmpty = !empty;
+      if (visible) mockSidebarIndex([makeSkinnyRow({ id: "present" })]);
+      api.getDataProjects.mockResolvedValue({ total_sessions: total });
+      await sessions.load();
+      await vi.waitFor(() => expect(sessions.archiveEmpty).toBe(empty));
+      if (visible) expect(api.getDataProjects).not.toHaveBeenCalled();
+      else expect(api.getDataProjects).toHaveBeenCalledExactlyOnceWith();
+    });
+
+    it("discards inventory after a newer sidebar load", async () => {
+      let resolveOlder!: (value: { total_sessions: number }) => void;
+      api.getDataProjects.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveOlder = resolve;
+        }),
+      );
+      await sessions.load();
+      await sessions.load();
+      expect(sessions.archiveEmpty).toBe(true);
+      resolveOlder({ total_sessions: 3 });
+      await Promise.resolve();
+      expect(sessions.archiveEmpty).toBe(true);
+    });
   });
 
   it("preserves explicit automated exclusion for annotation requests", async () => {
@@ -534,6 +608,358 @@ describe("SessionsStore", () => {
   });
 
   describe("sidebar loading", () => {
+    it("updates index facts when selecting an indexed session", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "parent" }), makeSkinnyRow({ id: "child" })]);
+      await sessions.load();
+      api.getSession.mockResolvedValueOnce(
+        makeSession({
+          id: "child",
+          message_count: 12,
+          user_message_count: 4,
+          ended_at: "2026-01-01T12:00:00Z",
+          termination_status: "awaiting_user",
+          transcript_revision: "rev-2",
+          parent_session_id: "parent",
+          parent_session_ids: ["parent"],
+          relationship_type: "subagent",
+        }),
+      );
+
+      await sessions.navigateToSession("child");
+
+      expect(sessions.activeSession).toMatchObject({
+        message_count: 12,
+        user_message_count: 4,
+        ended_at: "2026-01-01T12:00:00Z",
+        termination_status: "awaiting_user",
+        transcript_revision: "rev-2",
+        parent_session_id: "parent",
+        parent_session_ids: ["parent"],
+        relationship_type: "subagent",
+      });
+      expect(sessions.groupedSessions).toHaveLength(1);
+      expect(sessions.groupedSessions[0]?.totalMessages).toBe(13);
+    });
+
+    it("keeps index facts when hydrating a visible title", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "row", message_count: 1 })]);
+      await sessions.load();
+      api.getSession.mockResolvedValueOnce(
+        makeSession({
+          id: "row",
+          first_message: "Title",
+          message_count: 12,
+        }),
+      );
+
+      await sessions.hydrateVisibleSessions(["row"]);
+
+      expect(sessions.view(sessions.sessions[0]!)).toMatchObject({
+        first_message: "Title",
+        message_count: 1,
+      });
+    });
+
+    it("keeps a rename made after title hydration when selecting the session", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "row", display_name: "Old name" })]);
+      await sessions.load();
+      api.getSession.mockResolvedValueOnce(
+        makeSession({ id: "row", display_name: "Old name", first_message: "Title" }),
+      );
+      await sessions.hydrateVisibleSessions(["row"]);
+      vi.mocked(api.renameSession).mockResolvedValueOnce(
+        makeSession({ id: "row", display_name: "New name", first_message: "Title" }),
+      );
+      await sessions.renameSession("row", "New name");
+
+      await sessions.navigateToSession("row");
+
+      expect(sessions.activeSession?.display_name).toBe("New name");
+      expect(sessions.activeSession?.first_message).toBe("Title");
+      expect(api.getSession).toHaveBeenCalledTimes(1);
+    });
+
+    it("ignores pending hydration after an index rejects a filter", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "row" })]);
+      await sessions.load();
+      const old = Promise.withResolvers<Session>();
+      api.getSession.mockReturnValueOnce(old.promise);
+      const hydration = sessions.hydrateVisibleSessions(["row"]);
+      api.getSidebarSessionIndex.mockRejectedValueOnce(new ApiError(400, "invalid filter"));
+      await sessions.load();
+      old.resolve(makeSession({ id: "row", first_message: "Obsolete title" }));
+      await hydration;
+
+      await sessions.load();
+      api.getSession.mockResolvedValueOnce(
+        makeSession({ id: "row", first_message: "Current title" }),
+      );
+      await sessions.navigateToSession("row");
+
+      expect(sessions.activeSession?.first_message).toBe("Current title");
+      expect(api.getSession).toHaveBeenCalledTimes(2);
+    });
+
+    it("hydrates the selected session after signal detail arrives first", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "row" })]);
+      await sessions.load();
+      api.getSession
+        .mockResolvedValueOnce(makeSession({ id: "row", health_score_basis: ["signal"] }))
+        .mockResolvedValueOnce(makeSession({ id: "row", first_message: "Loaded title" }));
+
+      await sessions.fetchSignalDetail("row");
+      await sessions.navigateToSession("row");
+
+      expect(sessions.activeSession?.first_message).toBe("Loaded title");
+      expect(sessions.activeSession?.health_score_basis).toEqual(["signal"]);
+      expect(api.getSession).toHaveBeenCalledTimes(2);
+    });
+
+    it("discards old details when the index rejects a filter", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "row" })]);
+      api.getSession.mockResolvedValueOnce(makeSession({ id: "row", first_message: "Old title" }));
+      await sessions.load();
+      await sessions.navigateToSession("row");
+      api.getSidebarSessionIndex.mockRejectedValueOnce(new ApiError(400, "invalid filter"));
+      await sessions.load();
+      expect(sessions.sessions).toHaveLength(0);
+
+      await sessions.load();
+      expect(sessions.activeSession).toBeUndefined();
+      api.getSession.mockResolvedValueOnce(makeSession({ id: "row", first_message: "New title" }));
+      await sessions.hydrateVisibleSessions(["row"]);
+      expect(sessions.activeSession?.first_message).toBe("New title");
+    });
+
+    it("keeps project edits when an older hydration completes", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "row" })]);
+      await sessions.load();
+      const request = Promise.withResolvers<Session>();
+      api.getSession.mockReturnValueOnce(request.promise);
+      const navigation = sessions.navigateToSession("row");
+      vi.mocked(
+        SettingsService.putApiV1SettingsSessionProjectAssignmentsBySessionId,
+      ).mockResolvedValue({
+        session_id: "row",
+        project: "assigned",
+        original_project: "proj",
+        created_at: "2024-01-01T00:00:00Z",
+        updated_at: "2024-01-01T00:00:00Z",
+      });
+      vi.mocked(
+        SettingsService.deleteApiV1SettingsSessionProjectAssignmentsBySessionId,
+      ).mockResolvedValue({ session_id: "row", project: "restored" });
+      api.getSidebarSessionIndex.mockRejectedValue(new Error("network error"));
+      await sessions.assignSessionProject("row", "assigned");
+      expect(sessions.groupedSessions[0]?.project).toBe("assigned");
+      await sessions.clearSessionProjectAssignment("row");
+      request.resolve(
+        makeSession({ id: "row", project: "old", first_message: "Title", message_count: 12 }),
+      );
+      await navigation;
+      expect(sessions.activeSession).toMatchObject({
+        project: "restored",
+        project_assigned: false,
+        first_message: "Title",
+        message_count: 12,
+      });
+      expect(
+        SettingsService.putApiV1SettingsSessionProjectAssignmentsBySessionId,
+      ).toHaveBeenCalledWith({ sessionId: "row" }, { project: "assigned" });
+      expect(
+        SettingsService.deleteApiV1SettingsSessionProjectAssignmentsBySessionId,
+      ).toHaveBeenCalledWith({ sessionId: "row" });
+    });
+
+    it("regroups real ancestry, teammate, and project changes from the index", async () => {
+      const root = makeSkinnyRow({ id: "root" });
+      const child = makeSkinnyRow({ id: "child" });
+      mockSidebarIndex([root, child]);
+      await sessions.load();
+      expect(sessions.groupedSessions).toHaveLength(2);
+      mockSidebarIndex([root, { ...child, parent_session_id: "root" }]);
+      await sessions.load();
+      expect(sessions.groupedSessions.map((g) => g.sessions.map((s) => s.id))).toEqual([
+        ["root", "child"],
+      ]);
+      mockSidebarIndex([root, { ...child, is_teammate: true }]);
+      await sessions.load();
+      expect(sessions.groupedSessions).toHaveLength(1);
+      expect(sessions.sessions[1]).toMatchObject({
+        parent_session_id: undefined,
+        is_teammate: true,
+      });
+      mockSidebarIndex([root, { ...child, is_teammate: true, project: "other" }]);
+      await sessions.load();
+      expect(sessions.groupedSessions.map((g) => g.project)).toEqual(["proj", "other"]);
+    });
+
+    it("avoids row scans for empty and repeated selections", () => {
+      let reads = 0;
+      sessions.sessions = new Proxy([makeSession({ id: "row" })], {
+        get(target, key, receiver) {
+          if (key === "0") reads++;
+          return Reflect.get(target, key, receiver);
+        },
+      });
+      expect(sessions.activeSession).toBeUndefined();
+      expect(reads).toBe(0);
+      sessions.activeSessionId = "row";
+      expect(sessions.activeSession?.id).toBe("row");
+      const initial = reads;
+      for (let i = 0; i < 10; i++) expect(sessions.activeSession?.id).toBe("row");
+      expect(reads).toBe(initial);
+    });
+
+    it("keeps unchanged index rows and grouping across reloads", async () => {
+      const rows = [
+        { ...makeSkinnyRow({ id: "first", source_machines: ["host-a"] }), parent_session_ids: [] },
+        makeSkinnyRow({ id: "second" }),
+      ];
+      mockSidebarIndex(rows);
+      await sessions.load();
+      vi.mocked(api.getSession).mockResolvedValue(
+        makeSession({ id: "second", first_message: "Title", health_score_basis: ["retained"] }),
+      );
+      await sessions.hydrateVisibleSessions(["second"]);
+      const original = sessions.sessions;
+      const grouped = sessions.groupedSessions;
+      mockSidebarIndex(JSON.parse(JSON.stringify(rows)));
+      await sessions.load();
+      expect(sessions.sessions).toBe(original);
+      expect(sessions.groupedSessions).toBe(grouped);
+      api.getSession.mockResolvedValueOnce(
+        makeSession({ id: "second", first_message: "New title" }),
+      );
+      await sessions.hydrateVisibleSessions(["second"]);
+      expect(sessions.view(sessions.byId.get("second")!)).toMatchObject({
+        first_message: "New title",
+        health_score_basis: ["retained"],
+      });
+
+      mockSidebarIndex([rows[0]!, { ...rows[1]!, ended_at: "2026-01-02T00:00:00Z" }]);
+      await sessions.load();
+      expect(sessions.sessions).not.toBe(original);
+      expect(sessions.sessions[0]).toBe(original[0]);
+      expect(sessions.sessions[1]).not.toBe(original[1]);
+      expect(sessions.view(sessions.sessions[1]!)).toMatchObject({
+        ended_at: "2026-01-02T00:00:00Z",
+        first_message: "New title",
+      });
+
+      const previous = sessions.sessions;
+      mockSidebarIndex([
+        { ...rows[0]!, source_machines: ["host-b"] },
+        { ...rows[1]!, ended_at: "2026-01-02T00:00:00Z" },
+      ]);
+      await sessions.load();
+      expect(sessions.sessions[0]).not.toBe(previous[0]);
+      expect(sessions.sessions[0]?.source_machines).toEqual(["host-b"]);
+      expect(sessions.sessions[1]).toBe(previous[1]);
+    });
+
+    it("publishes each staggered title without rebuilding groups", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "fast" }), makeSkinnyRow({ id: "slow" })]);
+      await sessions.load();
+      const fast = Promise.withResolvers<Session>();
+      const slow = Promise.withResolvers<Session>();
+      api.getSession.mockImplementation((id) => (id === "fast" ? fast.promise : slow.promise));
+      const grouped = sessions.groupedSessions;
+      let publications = 0;
+      const cleanup = toStore(() => sessions.groupedSessions).subscribe(() => publications++);
+      try {
+        const hydrate = sessions.hydrateVisibleSessions(["fast", "slow"]);
+        fast.resolve(makeSession({ id: "fast", first_message: "First title" }));
+        await vi.waitFor(() =>
+          expect(sessions.view(sessions.byId.get("fast")!).first_message).toBe("First title"),
+        );
+        expect(sessions.view(sessions.byId.get("slow")!).first_message).toBeNull();
+        expect(sessions.groupedSessions).toBe(grouped);
+        slow.resolve(makeSession({ id: "slow", first_message: "Second title" }));
+        await hydrate;
+        flushSync();
+        expect(sessions.view(sessions.byId.get("slow")!).first_message).toBe("Second title");
+        expect(sessions.groupedSessions).toBe(grouped);
+        expect(publications).toBe(1);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it.each(["Renamed", null])("keeps a rename to %s while titles are in flight", async (name) => {
+      mockSidebarIndex([makeSkinnyRow({ id: "row", display_name: "Original" })]);
+      await sessions.load();
+      const request = Promise.withResolvers<Session>();
+      vi.mocked(api.getSession).mockReturnValueOnce(request.promise);
+      const hydrate = sessions.navigateToSession("row");
+      expect(api.getSession).toHaveBeenCalledWith("row");
+      vi.mocked(api.renameSession).mockResolvedValue(
+        makeSession({ id: "row", display_name: name ?? undefined }),
+      );
+      await sessions.renameSession("row", name);
+      request.resolve(
+        makeSession({ id: "row", display_name: "Original", first_message: "Loaded title" }),
+      );
+      await hydrate;
+      expect(sessions.view(sessions.byId.get("row")!).display_name).toBe(name ?? undefined);
+      expect(sessions.activeSession).toMatchObject({
+        display_name: name ?? undefined,
+        first_message: "Loaded title",
+        is_index_only: false,
+      });
+    });
+
+    it("selects an index-only row before a larger batch finishes", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "active" }), makeSkinnyRow({ id: "slow" })]);
+      await sessions.load();
+      const slow = Promise.withResolvers<Session>();
+      vi.mocked(api.getSession).mockImplementation((id: string) =>
+        id === "slow"
+          ? slow.promise
+          : Promise.resolve(makeSession({ id, first_message: "Active title" })),
+      );
+      const hydrate = sessions.hydrateVisibleSessions(["active", "slow"]);
+      await sessions.navigateToSession("active");
+      expect(sessions.activeSession?.first_message).toBe("Active title");
+      slow.resolve(makeSession({ id: "slow" }));
+      await hydrate;
+      expect(sessions.activeSession?.first_message).toBe("Active title");
+
+      await sessions.load();
+      const slowAgain = Promise.withResolvers<Session>();
+      vi.mocked(api.getSession).mockImplementation((id: string) =>
+        id === "slow"
+          ? slowAgain.promise
+          : Promise.resolve(makeSession({ id, first_message: "Active title" })),
+      );
+      const pending = sessions.hydrateVisibleSessions(["active", "slow"]);
+      await sessions.hydrateVisibleSessions(["active"]);
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({ id: "active", first_message: "New title" }),
+      );
+      await sessions.refreshActiveSession();
+      expect(sessions.activeSession?.first_message).toBe("New title");
+      slowAgain.resolve(makeSession({ id: "slow" }));
+      await pending;
+      expect(sessions.activeSession?.first_message).toBe("New title");
+
+      await sessions.load();
+      const slowCanceled = Promise.withResolvers<Session>();
+      vi.mocked(api.getSession).mockImplementation((id: string) =>
+        id === "slow"
+          ? slowCanceled.promise
+          : Promise.resolve(makeSession({ id, first_message: "Title" })),
+      );
+      const canceled = sessions.hydrateVisibleSessions(["active", "slow"]);
+      await sessions.hydrateVisibleSessions(["active"]);
+      sessions.cancelRouteReads();
+      slowCanceled.resolve(makeSession({ id: "slow" }));
+      await canceled;
+      expect(sessions.view(sessions.byId.get("active")!).first_message).toBe("Title");
+      await sessions.navigateToSession("active");
+      expect(sessions.activeSession?.first_message).toBe("Title");
+    });
+
     it("does not load sessions when no sidebar consumer is mounted", async () => {
       sessions.refreshSidebarIfAttached();
 
@@ -572,6 +998,7 @@ describe("SessionsStore", () => {
             id: "team",
             project_assigned: true,
             is_teammate: true,
+            source_machines: ["raw-device:61", "raw-device:62"],
           }),
         ],
         total: 1,
@@ -588,8 +1015,9 @@ describe("SessionsStore", () => {
         project_assigned: true,
         is_teammate: true,
         is_index_only: true,
+        source_machines: ["raw-device:61", "raw-device:62"],
       });
-      expect(sessions.sessions[0]!.first_message).toBeNull();
+      expect(sessions.view(sessions.sessions[0]!).first_message).toBeNull();
     });
 
     it("coalesces duplicate sidebar loads for the same filter signature", async () => {
@@ -607,12 +1035,13 @@ describe("SessionsStore", () => {
       const detach = sessions.attachSidebar();
       const first = sessions.load();
       const second = sessions.load();
-      await Promise.resolve();
-
-      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => {
+        expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
+      });
 
       resolvePage({ sessions: [], total: 0, next_cursor: null });
       await Promise.all([first, second]);
+      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
       detach();
     });
 
@@ -627,10 +1056,12 @@ describe("SessionsStore", () => {
 
       const detach = sessions.attachSidebar();
       void sessions.load();
-      await Promise.resolve();
-      expect(
-        vi.mocked(SessionsService.getApiV1SessionsSidebarIndex).mock.calls[0]?.[1]?.signal?.aborted,
-      ).toBe(false);
+      await vi.waitFor(() => {
+        expect(
+          vi.mocked(SessionsService.getApiV1SessionsSidebarIndex).mock.calls[0]?.[1]?.signal
+            ?.aborted,
+        ).toBe(false);
+      });
 
       sessions.filters.project = "changed";
       await sessions.load();
@@ -709,7 +1140,7 @@ describe("SessionsStore", () => {
       await sessions.load();
 
       expect(sessions.sessions[0]!.display_name).toBe("Renamed sidebar title");
-      expect(sessions.sessions[0]!.first_message).toBeNull();
+      expect(sessions.view(sessions.sessions[0]!).first_message).toBeNull();
     });
 
     it("marks skinny sidebar rows as index-only until hydrated", async () => {
@@ -717,7 +1148,7 @@ describe("SessionsStore", () => {
 
       await sessions.load();
 
-      expect(sessions.sessions[0]!.is_index_only).toBe(true);
+      expect(sessions.view(sessions.sessions[0]!).is_index_only).toBe(true);
     });
 
     it("preserves hydrated active rows when reloading the index", async () => {
@@ -740,7 +1171,7 @@ describe("SessionsStore", () => {
       await sessions.load();
 
       expect(sessions.sessions).toHaveLength(1);
-      expect(sessions.sessions[0]!.is_index_only).toBe(false);
+      expect(sessions.view(sessions.sessions[0]!).is_index_only).toBe(false);
       expect(sessions.sessions[0]!.message_count).toBe(9);
       expect(sessions.activeSession?.first_message).toBe("hydrated active detail");
     });
@@ -762,6 +1193,49 @@ describe("SessionsStore", () => {
 
       expect(sessions.sessions.map((s) => s.id)).toEqual(["listed", "offpage"]);
       expect(sessions.activeSession?.first_message).toBe("hydrated offpage detail");
+      sessions.deselectSession();
+      await sessions.navigateToSession("offpage");
+      expect(sessions.activeSession?.first_message).toBe("hydrated offpage detail");
+      expect(api.getSession).toHaveBeenCalledTimes(1);
+
+      const failedIndex = Promise.withResolvers<never>();
+      api.getSidebarSessionIndex.mockReturnValueOnce(failedIndex.promise);
+      const reload = sessions.load();
+      await sessions.hydrateVisibleSessions(["offpage"]);
+      failedIndex.reject(new Error("network error"));
+      await reload;
+      await sessions.navigateToSession("offpage");
+      expect(sessions.activeSession?.first_message).toBe("hydrated offpage detail");
+
+      vi.mocked(api.getSession).mockResolvedValueOnce(
+        makeSession({
+          id: "offpage",
+          message_count: 12,
+          user_message_count: 4,
+          ended_at: "2026-01-01T12:00:00Z",
+          termination_status: "awaiting_user",
+          transcript_revision: "rev-2",
+          parent_session_id: "listed",
+          parent_session_ids: ["listed"],
+          relationship_type: "subagent",
+        }),
+      );
+      await sessions.refreshActiveSession();
+      expect(sessions.activeSession).toMatchObject({
+        message_count: 12,
+        user_message_count: 4,
+        ended_at: "2026-01-01T12:00:00Z",
+        termination_status: "awaiting_user",
+        transcript_revision: "rev-2",
+        parent_session_id: "listed",
+        parent_session_ids: ["listed"],
+        relationship_type: "subagent",
+      });
+      expect(sessions.groupedSessions).toHaveLength(1);
+      expect(sessions.groupedSessions[0]?.totalMessages).toBe(13);
+      await sessions.load();
+      expect(sessions.activeSession?.message_count).toBe(12);
+      expect(sessions.groupedSessions[0]?.totalMessages).toBe(13);
     });
 
     it("moves the appended active row into place when pagination reaches it", async () => {
@@ -802,12 +1276,13 @@ describe("SessionsStore", () => {
       expect(sessions.activeSession?.first_message).toBe("hydrated offpage detail");
     });
 
-    it("refreshes hydrated agent identity fields from the sidebar index", async () => {
+    it("refreshes hydrated agent and source identity fields from the sidebar index", async () => {
       mockSidebarIndex([
         makeSkinnyRow({
           id: "active",
           agent_label: "old-label",
           entrypoint: "old-entrypoint",
+          source_machines: ["raw-device:61"],
         }),
       ]);
       vi.mocked(api.getSession).mockResolvedValue(
@@ -816,6 +1291,7 @@ describe("SessionsStore", () => {
           agent_label: "old-label",
           entrypoint: "old-entrypoint",
           first_message: "hydrated active detail",
+          source_machines: ["raw-device:61"],
         }),
       );
 
@@ -827,14 +1303,16 @@ describe("SessionsStore", () => {
           id: "active",
           agent_label: "triage",
           entrypoint: "sdk-cli",
+          source_machines: ["raw-device:61", "raw-device:62"],
         }),
       ]);
       await sessions.load();
 
-      expect(sessions.sessions[0]!.is_index_only).toBe(false);
-      expect(sessions.sessions[0]!.first_message).toBe("hydrated active detail");
+      expect(sessions.view(sessions.sessions[0]!).is_index_only).toBe(false);
+      expect(sessions.view(sessions.sessions[0]!).first_message).toBe("hydrated active detail");
       expect(sessions.sessions[0]!.agent_label).toBe("triage");
       expect(sessions.sessions[0]!.entrypoint).toBe("sdk-cli");
+      expect(sessions.sessions[0]!.source_machines).toEqual(["raw-device:61", "raw-device:62"]);
     });
 
     it("clears stale display names from hydrated rows when the index has none", async () => {
@@ -865,8 +1343,8 @@ describe("SessionsStore", () => {
       await sessions.load();
 
       expect(sessions.sessions[0]!.display_name).toBeUndefined();
-      expect(sessions.sessions[0]!.first_message).toBe("hydrated detail");
-      expect(sessions.sessions[0]!.is_index_only).toBe(false);
+      expect(sessions.view(sessions.sessions[0]!).first_message).toBe("hydrated detail");
+      expect(sessions.view(sessions.sessions[0]!).is_index_only).toBe(false);
     });
 
     it("merges hydrated full rows without changing index order", async () => {
@@ -879,8 +1357,8 @@ describe("SessionsStore", () => {
       await (sessions as any).hydrateVisibleSessions(["first"]);
 
       expect(sessions.sessions.map((s) => s.id)).toEqual(["second", "first"]);
-      expect(sessions.sessions[1]!.first_message).toBe("full detail");
-      expect(sessions.sessions[1]!.is_index_only).toBe(false);
+      expect(sessions.view(sessions.sessions[1]!).first_message).toBe("full detail");
+      expect(sessions.view(sessions.sessions[1]!).is_index_only).toBe(false);
     });
 
     it("drops stale-version hydration results", async () => {
@@ -896,7 +1374,7 @@ describe("SessionsStore", () => {
       );
       const hydratePromise = (sessions as any).hydrateVisibleSessions(["stale"], staleVersion);
 
-      mockSidebarIndex([makeSkinnyRow({ id: "fresh" })]);
+      mockSidebarIndex([makeSkinnyRow({ id: "stale" })]);
       await sessions.load();
       resolveDetail!(
         makeSession({
@@ -906,8 +1384,8 @@ describe("SessionsStore", () => {
       );
       await hydratePromise;
 
-      expect(sessions.sessions.map((s) => s.id)).toEqual(["fresh"]);
-      expect(sessions.sessions[0]!.first_message).toBeNull();
+      expect(sessions.sessions.map((s) => s.id)).toEqual(["stale"]);
+      expect(sessions.view(sessions.sessions[0]!).first_message).toBeNull();
     });
 
     it("prunes hydration caches from stale index versions", async () => {
@@ -955,7 +1433,7 @@ describe("SessionsStore", () => {
       resolveDetail(makeSession({ id: "same", first_message: "detail" }));
       await Promise.all([first, second]);
 
-      expect(sessions.sessions[0]!.first_message).toBe("detail");
+      expect(sessions.view(sessions.sessions[0]!).first_message).toBe("detail");
     });
 
     it("bounds visible hydration concurrency", async () => {
@@ -1002,9 +1480,9 @@ describe("SessionsStore", () => {
 
       await sessions.refreshActiveSession();
 
-      expect(sessions.sessions[0]!.first_message).toBe("full detail");
+      expect(sessions.view(sessions.sessions[0]!).first_message).toBe("full detail");
       expect(sessions.sessions[0]!.is_teammate).toBe(true);
-      expect(sessions.sessions[0]!.is_index_only).toBe(false);
+      expect(sessions.view(sessions.sessions[0]!).is_index_only).toBe(false);
     });
 
     it("selecting an index-only session hydrates it", async () => {
@@ -1020,9 +1498,9 @@ describe("SessionsStore", () => {
       sessions.selectSession("select-me");
 
       await vi.waitFor(() => {
-        expect(sessions.sessions[0]!.first_message).toBe("hydrated on select");
+        expect(sessions.view(sessions.sessions[0]!).first_message).toBe("hydrated on select");
       });
-      expect(sessions.sessions[0]!.is_index_only).toBe(false);
+      expect(sessions.view(sessions.sessions[0]!).is_index_only).toBe(false);
     });
 
     it("does not expose index-only rows through activeSession", async () => {
@@ -1683,15 +2161,40 @@ describe("SessionsStore", () => {
       expect(sessions.nextCursor).toBe("current");
     });
 
-    it("preserves unrelated pagination failures", async () => {
-      sessions.nextCursor = "valid";
-      const error = new ApiError(400, "invalid timezone");
-      api.getSidebarSessionIndex.mockRejectedValueOnce(error);
+    it("reports a failed later page and retries that page", async () => {
+      api.getSidebarSessionIndex.mockResolvedValueOnce({
+        sessions: [makeSkinnyRow({ id: "listed" })],
+        total: 2,
+        next_cursor: "page-2",
+      });
+      await sessions.load();
+      api.getSidebarSessionIndex.mockRejectedValueOnce(new ApiError(503, "archive is rebuilding"));
 
-      await expect(sessions.loadMore()).rejects.toBe(error);
+      await sessions.loadMore();
 
-      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
-      expect(sessions.nextCursor).toBe("valid");
+      expect(sessions.sidebarLoadError).toBe("archive is rebuilding");
+      expect(sessions.sessions.map((s) => s.id)).toEqual(["listed"]);
+      expect(sessions.nextCursor).toBe("page-2");
+      expect(sessions.loading).toBe(false);
+
+      // Scrolling near the bottom asks again; it waits for Retry instead.
+      await sessions.loadMore();
+      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
+
+      api.getSidebarSessionIndex.mockResolvedValueOnce({
+        sessions: [makeSkinnyRow({ id: "second" })],
+        total: 2,
+        next_cursor: null,
+      });
+      await sessions.retrySidebar();
+
+      expect(api.getSidebarSessionIndex.mock.calls.map(([params]) => params.cursor)).toEqual([
+        undefined,
+        "page-2",
+        "page-2",
+      ]);
+      expect(sessions.sessions.map((s) => s.id)).toEqual(["listed", "second"]);
+      expect(sessions.sidebarLoadError).toBeNull();
     });
 
     it("should pass the browser timezone in loadMore", async () => {
@@ -2177,7 +2680,7 @@ describe("SessionsStore", () => {
 
       expect(sessions.selectedMachines).toEqual(["host-b"]);
       expect(sessions.isMachineSelected("host-b")).toBe(true);
-      expectSidebarIndexCalledWith({ machine: "host-b" });
+      await vi.waitFor(() => expectSidebarIndexCalledWith({ machine: "host-b" }));
     });
   });
 
@@ -2243,6 +2746,23 @@ describe("SessionsStore", () => {
         expect(sessions.sidebarLoadError).toBeNull();
       });
       expect(sessions.sessions.map((s) => s.id)).toEqual(["after-fix"]);
+    });
+
+    it("keeps the listed rows and reports a failed refresh until one succeeds", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "listed" })]);
+      await sessions.load();
+
+      vi.mocked(api.getSidebarSessionIndex).mockRejectedValueOnce(
+        new ApiError(503, "archive is rebuilding"),
+      );
+      await sessions.load({ force: true });
+
+      expect(sessions.sidebarLoadError).toBe("archive is rebuilding");
+      expect(sessions.sessions.map((s) => s.id)).toEqual(["listed"]);
+
+      mockSidebarIndex([makeSkinnyRow({ id: "listed" })]);
+      await sessions.load({ force: true });
+      expect(sessions.sidebarLoadError).toBeNull();
     });
 
     it("passes label and pull request filters to later pages", async () => {
@@ -2434,11 +2954,104 @@ describe("SessionsStore", () => {
         expect(sessions.activeSession?.first_message).toBe("hydrated from navigation");
       });
       expect(api.getSession).toHaveBeenCalledWith("skinny");
-      expect(sessions.sessions[1]!.is_index_only).toBe(false);
+      expect(sessions.view(sessions.sessions[1]!).is_index_only).toBe(false);
     });
   });
 
   describe("renameSession", () => {
+    it("keeps omitted sidebar fields and ancestry when renaming a child", async () => {
+      mockSidebarIndex([
+        makeSkinnyRow({ id: "parent" }),
+        makeSkinnyRow({
+          id: "child",
+          parent_session_id: "parent",
+          relationship_type: "subagent",
+          source_machines: ["host-a"],
+          entrypoint: "cli",
+        }),
+      ]);
+      await sessions.load();
+      api.renameSession.mockResolvedValueOnce(
+        makeSession({ id: "child", display_name: "Renamed" }),
+      );
+
+      await sessions.renameSession("child", "Renamed");
+
+      expect(sessions.byId.get("child")).toMatchObject({
+        display_name: "Renamed",
+        parent_session_id: "parent",
+        relationship_type: "subagent",
+        source_machines: ["host-a"],
+        entrypoint: "cli",
+      });
+      expect(sessions.groupedSessions).toHaveLength(1);
+      expect(sessions.groupedSessions[0]?.sessions.map((session) => session.id)).toEqual([
+        "parent",
+        "child",
+      ]);
+    });
+
+    it("updates the selected session's token totals from the rename response", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "row" })]);
+      api.getSession.mockResolvedValueOnce(
+        makeSession({ id: "row", total_output_tokens: 10, peak_context_tokens: 20 }),
+      );
+      await sessions.load();
+      await sessions.navigateToSession("row");
+      api.renameSession.mockResolvedValueOnce(
+        makeSession({
+          id: "row",
+          display_name: "Renamed",
+          total_output_tokens: 100,
+          peak_context_tokens: 200,
+          has_total_output_tokens: true,
+          has_peak_context_tokens: true,
+        }),
+      );
+
+      await sessions.renameSession("row", "Renamed");
+
+      expect(sessions.activeSession).toMatchObject({
+        display_name: "Renamed",
+        total_output_tokens: 100,
+        peak_context_tokens: 200,
+        has_total_output_tokens: true,
+        has_peak_context_tokens: true,
+      });
+    });
+
+    it("keeps an indexed teammate in its group when the rename response omits classification", async () => {
+      mockSidebarIndex([
+        makeSkinnyRow({ id: "main" }),
+        makeSkinnyRow({ id: "teammate", is_teammate: true }),
+      ]);
+      await sessions.load();
+      expect(sessions.groupedSessions[0]?.sessions.map((s) => s.id)).toEqual(["main", "teammate"]);
+      api.renameSession.mockResolvedValue(makeSession({ id: "teammate", display_name: "Renamed" }));
+
+      await sessions.renameSession("teammate", "Renamed");
+
+      expect(sessions.groupedSessions).toHaveLength(1);
+      expect(sessions.groupedSessions[0]?.sessions.map((s) => s.id)).toEqual(["main", "teammate"]);
+    });
+
+    it("groups an off-page teammate from its first message through a rename", async () => {
+      mockSidebarIndex([makeSkinnyRow({ id: "main" })]);
+      api.getSession.mockResolvedValue(
+        makeSession({ id: "teammate", first_message: "<teammate-message>Task</teammate-message>" }),
+      );
+      api.renameSession.mockResolvedValue(makeSession({ id: "teammate", display_name: "Renamed" }));
+      await sessions.load();
+
+      await sessions.navigateToSession("teammate");
+
+      expect(sessions.groupedSessions).toHaveLength(1);
+      expect(sessions.groupedSessions[0]?.sessions.map((s) => s.id)).toEqual(["main", "teammate"]);
+      await sessions.renameSession("teammate", "Renamed");
+      expect(sessions.groupedSessions).toHaveLength(1);
+      expect(sessions.groupedSessions[0]?.sessions.map((s) => s.id)).toEqual(["main", "teammate"]);
+    });
+
     it("clears display_name in store when rename is cleared and response omits the field", async () => {
       // Session starts with a custom user rename.
       mockSidebarIndex([makeSkinnyRow({ id: "s1", display_name: "custom-name" })]);
@@ -2642,7 +3255,7 @@ describe("SessionsStore", () => {
       expect(api.getMachines.mock.calls.filter(([p]) => p.machine)).toHaveLength(2);
       sessions.toggleMachineFilter("id-b");
       expect(sessions.filters.machine).toBe("id-b");
-      expectSidebarIndexCalledWith({ machine: "id-b" });
+      await vi.waitFor(() => expectSidebarIndexCalledWith({ machine: "id-b" }));
     });
 
     it("preserves a stale saved selector until the user clears it", async () => {
@@ -2703,6 +3316,38 @@ describe("SessionsStore", () => {
     expect(sessions.nextCursor).toBeNull();
     expect(sessions.total).toBe(0);
     expect(sessions.sidebarLoadError).toBe("ambiguous machine");
+  });
+
+  it("discards stored and pending titles when pagination rejects the machine filter", async () => {
+    const rows = [makeSkinnyRow({ id: "stored" }), makeSkinnyRow({ id: "pending" })];
+    api.getSidebarSessionIndex.mockResolvedValueOnce({
+      sessions: rows,
+      total: 3,
+      next_cursor: "page-2",
+    });
+    await sessions.load();
+    const pending = Promise.withResolvers<Session>();
+    api.getSession
+      .mockResolvedValueOnce(makeSession({ id: "stored", first_message: "Old stored title" }))
+      .mockReturnValueOnce(pending.promise);
+    await sessions.hydrateVisibleSessions(["stored"]);
+    const hydration = sessions.hydrateVisibleSessions(["pending"]);
+    api.getSidebarSessionIndex.mockRejectedValueOnce(
+      new ApiError(400, "ambiguous machine", "invalid_machine_filter"),
+    );
+    await sessions.loadMore();
+    pending.resolve(makeSession({ id: "pending", first_message: "Old pending title" }));
+    await hydration;
+
+    mockSidebarIndex(rows);
+    await sessions.load();
+    api.getSession
+      .mockResolvedValueOnce(makeSession({ id: "stored", first_message: "Fresh stored title" }))
+      .mockResolvedValueOnce(makeSession({ id: "pending", first_message: "Fresh pending title" }));
+    await sessions.navigateToSession("stored");
+    expect(sessions.activeSession?.first_message).toBe("Fresh stored title");
+    await sessions.navigateToSession("pending");
+    expect(sessions.activeSession?.first_message).toBe("Fresh pending title");
   });
 
   describe("loadProjects dedup", () => {
@@ -2767,6 +3412,18 @@ describe("SessionsStore", () => {
       expect(sessions.sessions).toHaveLength(1);
       expect(sessions.sessions[0]!.id).toBe("s1");
       expect(sessions.total).toBe(1);
+
+      mockSidebarIndex([makeSkinnyRow({ id: "row" })]);
+      await sessions.load();
+      const failedIndex = Promise.withResolvers<never>();
+      api.getSidebarSessionIndex.mockReturnValueOnce(failedIndex.promise);
+      const reload = sessions.load();
+      api.getSession.mockResolvedValue(makeSession({ id: "row", first_message: "Loaded title" }));
+      await sessions.hydrateVisibleSessions(["row"]);
+      failedIndex.reject(new Error("network error"));
+      await reload;
+      await sessions.navigateToSession("row");
+      expect(sessions.activeSession?.first_message).toBe("Loaded title");
     });
 
     it("initFromParams + load preserves sessions on failure", async () => {
@@ -3091,7 +3748,7 @@ describe("SessionsStore", () => {
 
       expect(sessions.activeSessionNotFound).toBe(false);
       expect(sessions.activeSessionLoadVersion).toBe(loadVersion + 1);
-      expect(sessions.sessions[0]!.first_message).toBe("restored");
+      expect(sessions.view(sessions.sessions[0]!).first_message).toBe("restored");
     });
 
     it("retryActiveSession rehydrates an index-only row and recovers", async () => {
@@ -3114,7 +3771,7 @@ describe("SessionsStore", () => {
 
       expect(sessions.activeSessionNotFound).toBe(false);
       expect(sessions.activeSessionLoadVersion).toBe(loadVersion + 1);
-      expect(sessions.sessions[0]!.is_index_only).toBe(false);
+      expect(sessions.view(sessions.sessions[0]!).is_index_only).toBe(false);
     });
 
     it("does not bump the load version on a first successful load", async () => {
@@ -3165,7 +3822,7 @@ describe("SessionsStore", () => {
 
       expect(sessions.activeSessionId).toBe("stale");
       expect(sessions.activeSessionNotFound).toBe(true);
-      expect(sessions.sessions[0]!.is_index_only).toBe(true);
+      expect(sessions.view(sessions.sessions[0]!).is_index_only).toBe(true);
     });
 
     it("does not flag not-found when index-only hydration fails without a 404", async () => {
@@ -3219,8 +3876,8 @@ describe("SessionsStore", () => {
 
       expect(api.getSession).toHaveBeenCalledWith("existing");
       expect(sessions.activeSessionId).toBe("existing");
-      expect(sessions.sessions[0]!.first_message).toBe("hydrated navigation");
-      expect(sessions.sessions[0]!.is_index_only).toBe(false);
+      expect(sessions.view(sessions.sessions[0]!).first_message).toBe("hydrated navigation");
+      expect(sessions.view(sessions.sessions[0]!).is_index_only).toBe(false);
     });
 
     it("merges a navigation fetch if the index row arrives while fetching", async () => {
@@ -3243,14 +3900,18 @@ describe("SessionsStore", () => {
         makeSession({
           id: "racy",
           first_message: "fetched during navigation",
+          message_count: 7,
+          parent_session_id: "parent",
         }),
       );
       await promise;
 
       expect(sessions.sessions).toHaveLength(1);
-      expect(sessions.sessions[0]!.first_message).toBe("fetched during navigation");
-      expect(sessions.sessions[0]!.is_index_only).toBe(false);
+      expect(sessions.view(sessions.sessions[0]!).first_message).toBe("fetched during navigation");
+      expect(sessions.view(sessions.sessions[0]!).is_index_only).toBe(false);
       expect(sessions.activeSession?.first_message).toBe("fetched during navigation");
+      expect(sessions.activeSession?.message_count).toBe(7);
+      expect(sessions.sessions[0]?.parent_session_id).toBe("parent");
     });
   });
 
@@ -3561,7 +4222,6 @@ describe("buildSessionGroups", () => {
     expect(g.totalMessages).toBe(15);
     expect(g.startedAt).toBe("2024-01-01T00:00:00Z");
     expect(g.endedAt).toBe("2024-01-01T04:00:00Z");
-    expect(g.firstMessage).toBe("first session msg");
     expect(g.primarySessionId).toBe("s2");
   });
 
@@ -3859,7 +4519,7 @@ describe("SessionsStore live refresh", () => {
 
       expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
       expect(api.getSession).toHaveBeenCalledTimes(2);
-      expect(sessions.sessions[0]!.first_message).toBe("second hydrate");
+      expect(sessions.view(sessions.sessions[0]!).first_message).toBe("second hydrate");
 
       detach();
       spy.mockRestore();
@@ -3948,7 +4608,7 @@ describe("SessionsStore live refresh", () => {
     }
   });
 
-  it("sessions events refresh active session labels", async () => {
+  it("sessions events refresh active labels and ancestry", async () => {
     const { events } = await import("./events.svelte.js");
     let registered: ((e: { scope: string }) => void) | null = null;
     const spy = vi.spyOn(events, "subscribe").mockImplementation((fn) => {
@@ -4017,25 +4677,27 @@ describe("SessionsStore live refresh", () => {
     spy.mockRestore();
   });
 
-  it("refetches on the 5-minute safety-net interval", async () => {
+  it("refetches on the safety-net interval after becoming visible", async () => {
     vi.useFakeTimers();
     const { events } = await import("./events.svelte.js");
-    const spy = vi.spyOn(events, "subscribe").mockReturnValue(() => {});
-
+    const subscription = vi.spyOn(events, "subscribe").mockReturnValue(() => {});
+    const visibility = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
     const sessions = createSessionsStore();
     const detach = sessions.attachSidebar();
-    await sessions.load();
-    expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
-
-    // Advance exactly one interval — avoids the runAllTimers infinite
-    // loop that recurring setInterval plus a promise-resolving
-    // listSessions mock would produce.
-    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
-    expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
-
-    detach();
-    spy.mockRestore();
-    vi.useRealTimers();
+    try {
+      await sessions.load();
+      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
+      visibility.mockReturnValue(false);
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+      expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
+    } finally {
+      detach();
+      visibility.mockRestore();
+      subscription.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it("refreshes active child sessions on the 5-minute safety-net interval", async () => {
@@ -4102,4 +4764,78 @@ describe("SessionsStore live refresh", () => {
     spy.mockRestore();
     vi.useRealTimers();
   });
+});
+
+it("keeps grouping on equal status ticks and reorders when a tier changes", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-01-01T12:00:00Z"));
+  vi.resetModules();
+  try {
+    const { createSessionsStore: create } = await import("./sessions.svelte.js");
+    const store = create();
+    store.sessions = [
+      makeSession({ id: "working", ended_at: "2026-01-01T11:59:50Z" }),
+      makeSession({
+        id: "waiting",
+        ended_at: "2026-01-01T11:58:00Z",
+        termination_status: "awaiting_user",
+      }),
+    ];
+    const grouped = store.groupedSessions;
+    expect(grouped.map((group) => group.key)).toEqual(["working", "waiting"]);
+    vi.advanceTimersByTime(30_000);
+    expect(store.groupedSessions).toBe(grouped);
+    vi.advanceTimersByTime(30_000);
+    expect(store.groupedSessions.map((group) => group.key)).toEqual(["waiting", "working"]);
+    store.dispose();
+  } finally {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  }
+});
+
+it("waits for events_ready before reading once, then catches changes during that read", async () => {
+  vi.useFakeTimers();
+  vi.resetModules();
+  const { events } = await import("./events.svelte.js");
+  const { createSessionsStore } = await import("./sessions.svelte.js");
+  class FakeEventSource extends EventTarget {
+    readyState = 1;
+    close() {
+      this.readyState = 2;
+    }
+  }
+  const stream = new FakeEventSource();
+  api.watchEvents.mockImplementationOnce((onEvent) => {
+    stream.addEventListener("data_changed", () => onEvent({ scope: "sessions" }));
+    return stream;
+  });
+  api.getSidebarSessionIndex.mockClear();
+  const response = Promise.withResolvers<{ sessions: SkinnySessionRow[]; total: number }>();
+  api.getSidebarSessionIndex.mockReturnValueOnce(response.promise);
+  mockSidebarIndex([makeSkinnyRow({ id: "saved-during-read" })]);
+  const sessions = createSessionsStore();
+  const detach = sessions.attachSidebar();
+  try {
+    const first = sessions.load();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.getSidebarSessionIndex).not.toHaveBeenCalled();
+    events.setAvailable(true);
+    stream.dispatchEvent(new Event("events_ready"));
+    expect(api.getSidebarSessionIndex).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(400);
+    expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
+    stream.dispatchEvent(new Event("data_changed"));
+    await vi.advanceTimersByTimeAsync(400);
+    expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(1);
+    response.resolve({ sessions: [], total: 0 });
+    await first;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.getSidebarSessionIndex).toHaveBeenCalledTimes(2);
+    expect(sessions.sessions.map((session) => session.id)).toEqual(["saved-during-read"]);
+  } finally {
+    detach();
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  }
 });

@@ -8,9 +8,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
-	"net/url"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -34,6 +32,8 @@ func (s *Server) registerFrictionRoutes() {
 	s.get(group, "/friction/findings", "List friction findings", s.humaListFrictionFindings)
 	s.get(group, "/friction/patterns", "List friction patterns", s.humaListFrictionPatterns)
 	s.postLong(group, "/friction/run", "Run friction review", s.humaRunFrictionReview)
+	s.post(group, "/diagnostics", "Append a diagnostic", s.humaAppendDiagnostic)
+	s.registerFrictionIssueRoutes(group)
 }
 
 // --- inputs ---
@@ -100,6 +100,9 @@ type frictionDigestResponse struct {
 	Summary         frictionSummary   `json:"summary"`
 	Signals         []frictionSignal  `json:"signals"`
 	P0Alerts        []frictionP0Alert `json:"p0_alerts"`
+	// Diagnostics groups the diagnostic signals by source and message in
+	// first-seen order, as the Markdown renders them.
+	Diagnostics []friction.DiagnosticGroup `json:"diagnostics"`
 	// Patterns are the recurrence rows for this digest's findings.
 	Patterns []frictionPatternItem `json:"patterns"`
 	// Sessions describes each archived session the digest names, keyed by
@@ -131,6 +134,7 @@ type frictionSummary struct {
 	Patterns        int                 `json:"patterns"`
 	Frustrations    int                 `json:"frustrations"`
 	Interruptions   int                 `json:"interruptions"`
+	Diagnostics     int                 `json:"diagnostics,omitzero"`
 	P0Alerts        map[string][]string `json:"p0_alerts"`
 }
 
@@ -198,6 +202,10 @@ type frictionPatternItem struct {
 	SessionCount    int    `json:"session_count"`
 	LastSubjectID   string `json:"last_subject_id"`
 	LastOrdinal     *int   `json:"last_ordinal"`
+	// Issue is the Kata issue filed or linked for this pattern.
+	Issue *frictionIssueItem `json:"issue,omitempty"`
+	// Filing is set while automatic filing has not linked the pattern.
+	Filing *frictionFilingItem `json:"filing,omitempty"`
 }
 
 type frictionRunResponse struct {
@@ -275,24 +283,6 @@ func (s *Server) frictionRunAllowed(ctx context.Context) bool {
 	return s.frictionRequireAuth() || isLocalhostContext(ctx)
 }
 
-// frictionSessionURL mirrors the browser router: agent prefix and opaque id
-// are separate path segments (servicehttp.sessionWebURL uses the same split).
-func frictionSessionURL(base, sessionID string, ordinal *int) string {
-	if base == "" || sessionID == "" {
-		return ""
-	}
-	prefix, rest, found := strings.Cut(sessionID, ":")
-	path := url.PathEscape(prefix)
-	if found {
-		path += "/" + url.PathEscape(rest)
-	}
-	u := base + "/sessions/" + path
-	if ordinal != nil {
-		u += "?msg=" + strconv.Itoa(*ordinal)
-	}
-	return u
-}
-
 func frictionSignalItems(sigs []friction.Signal, base string) []frictionSignal {
 	out := make([]frictionSignal, 0, len(sigs))
 	for _, sig := range sigs {
@@ -307,7 +297,7 @@ func frictionSignalItems(sigs []friction.Signal, base string) []frictionSignal {
 		}
 		if item.SubjectKind == friction.SubjectSession {
 			// Diagnostic identities are not sessions; they get no link.
-			item.SessionURL = frictionSessionURL(base, sig.SubjectID, sig.Ordinal)
+			item.SessionURL = friction.SessionURL(base, sig.SubjectID, sig.Ordinal)
 		}
 		if !sig.OccurredAt.IsZero() {
 			item.OccurredAt = new(sig.OccurredAt.UTC())
@@ -398,6 +388,7 @@ func frictionPatternItems(rows []db.FrictionPattern) []frictionPatternItem {
 			FirstSeenDate: p.FirstSeenDate, LastSeenDate: p.LastSeenDate,
 			OccurrenceCount: p.OccurrenceCount, SessionCount: p.SessionCount,
 			LastSubjectID: p.LastSubjectID, LastOrdinal: p.LastOrdinal,
+			Issue: frictionIssueItemFrom(p.Issue), Filing: frictionFilingItemFrom(p.Filing),
 		})
 	}
 	return out
@@ -482,16 +473,17 @@ func (s *Server) humaGetFrictionDigest(
 		Date: d.Date, Timezone: d.Timezone, RulesVersion: d.RulesVersion,
 		BuiltAt: d.BuiltAt.UTC(), Revision: d.Revision, SessionsScanned: d.SessionsScanned,
 		MarkdownSHA256: d.MarkdownSHA256, Summary: summary,
-		Signals:  frictionSignalItems(snap.Signals, s.frictionPublicURL()),
-		P0Alerts: frictionP0AlertItems(snap.P0Alerts),
-		Patterns: frictionPatternItems(patterns),
+		Signals:     frictionSignalItems(snap.Signals, s.frictionPublicURL()),
+		P0Alerts:    frictionP0AlertItems(snap.P0Alerts),
+		Patterns:    frictionPatternItems(patterns),
+		Diagnostics: friction.GroupDiagnostics(snap.Signals),
 	}
 	resp.Sessions, err = s.frictionSessions(ctx, snap.Signals, snap.P0Alerts)
 	if err != nil {
 		return nil, frictionStoreError("friction digest sessions", err)
 	}
 	if base := s.frictionPublicURL(); base != "" {
-		resp.WebURL = base + "/friction?date=" + url.QueryEscape(d.Date)
+		resp.WebURL = friction.DigestURL(base, d.Date)
 	}
 	return &jsonOutput[frictionDigestResponse]{Body: resp}, nil
 }

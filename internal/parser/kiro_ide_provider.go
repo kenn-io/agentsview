@@ -36,9 +36,9 @@ func newKiroIDESourceSet(roots []string) JSONLSourceSet {
 }
 
 func kiroIDEParseFile(
-	_ context.Context, path string, req ParseRequest,
+	ctx context.Context, path string, req ParseRequest,
 ) ([]ParseResult, []string, error) {
-	sess, msgs, err := parseKiroIDESession(path, req.Machine)
+	sess, msgs, err := parseKiroIDESession(ctx, path, req.Machine)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -139,7 +139,7 @@ func kiroIDESessionIDFromPath(root, path string) string {
 }
 
 func kiroIDEProviderCapabilities() Capabilities {
-	return Capabilities{
+	return withPollMetadataScan(Capabilities{
 		Source: jsonlFileProviderSourceCapabilities(),
 		Content: ContentCapabilities{
 			FirstMessage: CapabilitySupported,
@@ -147,5 +147,5 @@ func kiroIDEProviderCapabilities() Capabilities {
 			ToolCalls:    CapabilitySupported,
 			Model:        CapabilitySupported,
 		},
-	}
+	})
 }

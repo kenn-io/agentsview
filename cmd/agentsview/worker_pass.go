@@ -424,16 +424,21 @@ func launchSyncWorkerProcess(
 		return result, fmt.Errorf("%s worker: %w", mode, parseErr)
 	}
 	if result.Status != "ok" || !result.DiscoveryComplete {
-		detail := result.Status
-		if result.Error != "" {
-			detail = fmt.Sprintf("%s (%s)", result.Status, result.Error)
-		}
-		return result, fmt.Errorf("%s worker pass reported %s", mode, detail)
+		return result, fmt.Errorf("%s worker pass reported %s", mode, workerResultDetail(result))
 	}
 	if waitErr != nil {
 		return result, fmt.Errorf("%s worker process: %w", mode, waitErr)
 	}
 	return result, nil
+}
+
+// workerResultDetail renders a terminal status with the cause the worker
+// reported for it.
+func workerResultDetail(result workerResult) string {
+	if result.Error == "" {
+		return result.Status
+	}
+	return fmt.Sprintf("%s (%s)", result.Status, result.Error)
 }
 
 // collectWorkerResult parses the worker's NDJSON stdout to completion, then

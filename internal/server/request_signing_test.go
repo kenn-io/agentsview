@@ -42,13 +42,13 @@ func TestRestrictedIngressGrantsRequireNativeAuth(t *testing.T) {
 	keyFile := filepath.Join(dir, "key")
 	require.NoError(t, os.WriteFile(keyFile, []byte(base64.StdEncoding.EncodeToString(key)), 0o600))
 	replayPath := filepath.Join(dir, "replay.db")
-	require.NoError(t, requestsign.InitReplay(replayPath))
+	require.NoError(t, requestsign.InitReplay(t.Context(), replayPath))
 	policyPath := filepath.Join(dir, "policy.json")
 	policy := requestsign.Policy{ExternalURL: ts.URL + externalPrefix, ReplayDB: replayPath, Keys: []requestsign.PolicyKey{{ID: "reader-key", File: keyFile, Grant: "reader"}}}
 	data, err := json.Marshal(policy)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(policyPath, data, 0o600))
-	handler, closeState, err := srv.RestrictedHandler(policyPath)
+	handler, closeState, err := srv.RestrictedHandler(t.Context(), policyPath)
 	require.NoError(t, err)
 	defer closeState()
 	signer, err := requestsign.NewSigner(ts.URL+externalPrefix, requestsign.Key{ID: "reader-key", Secret: key})
@@ -212,7 +212,7 @@ func TestContributorGrantWithoutAuthTokenForbidsReaderRequest(t *testing.T) {
 	key, err := requestsign.ReadSecret(keyFile)
 	require.NoError(t, err)
 	replayPath := filepath.Join(dir, "replay.db")
-	require.NoError(t, requestsign.InitReplay(replayPath))
+	require.NoError(t, requestsign.InitReplay(t.Context(), replayPath))
 	policyPath := filepath.Join(dir, "policy.json")
 	policy := requestsign.Policy{
 		ExternalURL: ts.URL + externalPrefix,
@@ -224,7 +224,7 @@ func TestContributorGrantWithoutAuthTokenForbidsReaderRequest(t *testing.T) {
 	require.NoError(t, os.WriteFile(policyPath, data, 0o600))
 
 	var closeState func() error
-	handler, closeState, err = srv.RestrictedHandler(policyPath)
+	handler, closeState, err = srv.RestrictedHandler(t.Context(), policyPath)
 	require.NoError(t, err)
 	defer closeState()
 	signer, err := requestsign.NewSigner(ts.URL+externalPrefix, requestsign.Key{ID: "contributor-key", Secret: key})

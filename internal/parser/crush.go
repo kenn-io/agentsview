@@ -86,7 +86,7 @@ func crushProjectDir(dbPath string, projectMapping map[string]string) string {
 	return filepath.Clean(filepath.Dir(dataDir))
 }
 
-func openCrushDB(dbPath string, stableSnapshot bool) (*sql.DB, error) {
+func openCrushDB(ctx context.Context, dbPath string, stableSnapshot bool) (*sql.DB, error) {
 	// Immutable mode is used only for explicit stable snapshots. Live
 	// reads must not fall back to it: a WAL-backed store opened with
 	// immutable=1 ignores the WAL and can return stale session contents.
@@ -99,7 +99,7 @@ func openCrushDB(dbPath string, stableSnapshot bool) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening crush sessions database %s: %w", dbPath, err)
 	}
-	if err := db.PingContext(context.Background()); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("opening crush sessions database %s: %w (WAL corruption is a possible cause; Crush must repair the store)", dbPath, err)
 	}
@@ -220,7 +220,7 @@ func forEachCrushSessionMeta(
 	if !IsRegularFile(dbPath) {
 		return nil
 	}
-	db, err := openCrushDB(dbPath, stableSnapshot)
+	db, err := openCrushDB(ctx, dbPath, stableSnapshot)
 	if err != nil {
 		return err
 	}
@@ -259,7 +259,7 @@ func crushSessionMeta(
 	if !IsRegularFile(dbPath) {
 		return dbBackedSessionMeta{}, false, nil
 	}
-	db, err := openCrushDB(dbPath, stableSnapshot)
+	db, err := openCrushDB(ctx, dbPath, stableSnapshot)
 	if err != nil {
 		return dbBackedSessionMeta{}, false, err
 	}
@@ -302,7 +302,7 @@ func parseCrushSession(
 	ctx context.Context, dbPath, sessionID, machine string,
 	stableSnapshot bool, projectMapping map[string]string,
 ) (*ParsedSession, []ParsedMessage, error) {
-	db, err := openCrushDB(dbPath, stableSnapshot)
+	db, err := openCrushDB(ctx, dbPath, stableSnapshot)
 	if err != nil {
 		return nil, nil, err
 	}

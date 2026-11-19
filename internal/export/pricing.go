@@ -5,8 +5,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"hash"
+	"maps"
 	"math/big"
 	"slices"
 	"sort"
@@ -195,6 +197,18 @@ func NewPricingResolverWithDigest(rows []EffectivePricingRow, digest string) *Pr
 	return resolver
 }
 
+// Copy returns a resolver over the same rows and digest with empty lookup
+// caches. A resolver caches lookups without locking, so each goroutine that
+// resolves prices needs its own copy.
+func (r *PricingResolver) Copy() *PricingResolver {
+	return &PricingResolver{
+		rows: r.rows, digest: r.digest, byModel: r.byModel,
+		genAI: r.genAI, genAISource: r.genAISource, genAIUpdatedAt: r.genAIUpdatedAt,
+		lookupCache: make(map[string]PricingLookup),
+		recorded:    make(map[string]map[pricingRecordKey]*pricingRecord),
+	}
+}
+
 func NewPricingResolver(rows []EffectivePricingRow) *PricingResolver {
 	copied := make([]EffectivePricingRow, len(rows))
 	byModel := make(map[string]ModelRates, len(rows))
@@ -377,6 +391,7 @@ func (r *PricingResolver) ResolveAt(
 	if r == nil {
 		return reportedModel, PricingLookup{}
 	}
+	reportedModel, canonicalModel = r.aliasPricingInputs(reportedModel, canonicalModel, timestamp)
 	pricedModel, lookup := r.resolveAt(reportedModel, canonicalModel, timestamp)
 	if lookup.OK && !isPlaceholderOllamaCloudRate(lookup) {
 		return pricedModel, lookup
@@ -394,6 +409,21 @@ func (r *PricingResolver) ResolveAt(
 		return pricedModel, baseLookup
 	}
 	return pricedModel, lookup
+}
+
+// aliasPricingInputs selects the target before applying its built-in aliases.
+func (r *PricingResolver) aliasPricingInputs(reported, canonical string, at time.Time) (string, string) {
+	if rates, ok := r.byModel[reported]; ok && rates.Source == PricingRowSourceCustom {
+		return reported, canonical
+	}
+	if target := pricingpkg.ConfiguredAliasTarget(reported); target != "" {
+		canonical = pricingpkg.CanonicalModelForDate(target, at)
+		if canonical == "" {
+			canonical = target
+		}
+		return target, canonical
+	}
+	return reported, canonical
 }
 
 // DependencyFingerprint hashes what ResolveAt/ResolveBilledAt can return at any timestamp, minus UpdatedAt.
@@ -446,6 +476,11 @@ func (r *PricingResolver) DependencyFingerprint(
 			writeField(fingerprint)
 		}
 		return flat, custom, matched
+	}
+	selectedReported, earlierCanonical := r.aliasPricingInputs(reportedModel, canonicalModel, pricingpkg.KimiModelEraCutoff.Add(-time.Nanosecond))
+	reportedModel, canonicalModel = r.aliasPricingInputs(reportedModel, canonicalModel, time.Time{})
+	if earlierCanonical != canonicalModel {
+		writeLadder(selectedReported, earlierCanonical)
 	}
 	mainFlat, mainCustom, mainGenAI := writeLadder(reportedModel, canonicalModel)
 	// ResolveAt tries Ollama bases only when the main ladder can come back unusable.
@@ -528,6 +563,7 @@ func (r *PricingResolver) resolveFlat(
 ) (string, PricingLookup, bool) {
 	if rates, ok := r.byModel[reportedModel]; ok &&
 		rates.Source == PricingRowSourceCustom {
+		rates.Bands = slices.Clone(rates.Bands)
 		return reportedModel, PricingLookup{
 			Rates:   rates,
 			Pattern: reportedModel,
@@ -696,27 +732,19 @@ func (r *PricingResolver) RecordResolvedComputedRequest(
 	lookup PricingLookup,
 	inputTokens, cacheWriteTokens, cacheReadTokens int,
 ) {
-	if r == nil || reportedModel == "" || pricedModel == "" {
-		return
+	var threshold *int
+	if band, ok := lookup.Rates.RequestBand(inputTokens, cacheWriteTokens, cacheReadTokens); ok {
+		threshold = &band
 	}
-	rec := r.record(reportedModel, pricedModel, lookup)
-	rec.computed = true
-	if !lookup.OK {
-		return
-	}
-	band, ok := lookup.Rates.pricingBandForTokens(
-		inputTokens,
-		cacheWriteTokens,
-		cacheReadTokens,
-	)
-	if !ok {
-		rec.baseRequestCount++
-		return
-	}
-	if rec.bandRequestCounts == nil {
-		rec.bandRequestCounts = make(map[int]int)
-	}
-	rec.bandRequestCounts[band.AboveInputTokens]++
+	r.accumulateResolved(reportedModel, pricedModel, lookup, false, true, 1, 0, threshold)
+}
+
+// RequestBand returns the input threshold of the band that prices a request
+// with these input-side tokens, or false when the base rates price it.
+// RecordResolvedCounts takes it to record many such requests at once.
+func (r ModelRates) RequestBand(inputTokens, cacheWriteTokens, cacheReadTokens int) (int, bool) {
+	band, ok := r.pricingBandForTokens(inputTokens, cacheWriteTokens, cacheReadTokens)
+	return band.AboveInputTokens, ok
 }
 
 func (r *PricingResolver) RecordComputedAggregate(model string, lookup PricingLookup) {
@@ -726,15 +754,7 @@ func (r *PricingResolver) RecordComputedAggregate(model string, lookup PricingLo
 func (r *PricingResolver) RecordResolvedComputedAggregate(
 	reportedModel, pricedModel string, lookup PricingLookup,
 ) {
-	if r == nil || reportedModel == "" || pricedModel == "" {
-		return
-	}
-	rec := r.record(reportedModel, pricedModel, lookup)
-	rec.computed = true
-	if !lookup.OK {
-		return
-	}
-	rec.aggregateRowCount++
+	r.accumulateResolved(reportedModel, pricedModel, lookup, false, true, 0, 1, nil)
 }
 
 func (r *PricingResolver) RecordReported(model string, lookup PricingLookup) {
@@ -744,21 +764,42 @@ func (r *PricingResolver) RecordReported(model string, lookup PricingLookup) {
 func (r *PricingResolver) RecordResolvedComputed(
 	reportedModel, pricedModel string, lookup PricingLookup,
 ) {
-	if r == nil || reportedModel == "" || pricedModel == "" {
-		return
-	}
-	rec := r.record(reportedModel, pricedModel, lookup)
-	rec.computed = true
+	r.accumulateResolved(reportedModel, pricedModel, lookup, false, true, 0, 0, nil)
 }
 
 func (r *PricingResolver) RecordResolvedReported(
 	reportedModel, pricedModel string, lookup PricingLookup,
 ) {
+	r.accumulateResolved(reportedModel, pricedModel, lookup, true, false, 0, 0, nil)
+}
+
+// RecordResolvedCounts records provenance for pre-aggregated usage rows.
+func (r *PricingResolver) RecordResolvedCounts(reportedModel, pricedModel string, lookup PricingLookup, reported, requests, aggregates int, band *int) {
+	if reported+requests+aggregates == 0 {
+		return
+	}
+	r.accumulateResolved(reportedModel, pricedModel, lookup, reported > 0, requests+aggregates > 0, requests, aggregates, band)
+}
+
+func (r *PricingResolver) accumulateResolved(reportedModel, pricedModel string, lookup PricingLookup, reported, computed bool, requests, aggregates int, band *int) {
 	if r == nil || reportedModel == "" || pricedModel == "" {
 		return
 	}
 	rec := r.record(reportedModel, pricedModel, lookup)
-	rec.reported = true
+	rec.reported = rec.reported || reported
+	rec.computed = rec.computed || computed
+	if !lookup.OK {
+		return
+	}
+	rec.aggregateRowCount += aggregates
+	if band == nil {
+		rec.baseRequestCount += requests
+	} else if requests > 0 {
+		if rec.bandRequestCounts == nil {
+			rec.bandRequestCounts = make(map[int]int)
+		}
+		rec.bandRequestCounts[*band] += requests
+	}
 }
 
 // RecordUnattributedReported records an authoritative aggregate cost that
@@ -1210,4 +1251,93 @@ func latestPricingRowUpdate(rows []EffectivePricingRow) *time.Time {
 		}
 	}
 	return latest
+}
+
+// UsageRate is how usage reported under one model and provider prices at
+// one instant: the catalog resolution that decides whether a recorded cost
+// is a price, and the billed resolution that prices tokens.
+type UsageRate struct {
+	CatalogModel string
+	Catalog      PricingLookup
+	BilledModel  string
+	Billed       PricingLookup
+	BilledErr    error
+}
+
+// UsageRateAt resolves the rates of usage reported under model through
+// providerID at timestamp, canonicalizing date-aliased models at that
+// instant. A zero timestamp resolves as usage without one.
+func (r *PricingResolver) UsageRateAt(providerID, model string, timestamp time.Time) UsageRate {
+	canonical := pricingpkg.CanonicalModelForDate(model, timestamp)
+	if canonical == "" {
+		canonical = model
+	}
+	var rate UsageRate
+	rate.CatalogModel, rate.Catalog = r.ResolveAt(model, canonical, timestamp)
+	rate.BilledModel, rate.Billed, rate.BilledErr = r.ResolveBilledAt(providerID, model, canonical, timestamp)
+	return rate
+}
+
+// Equal reports whether two rates price every usage row alike and record
+// the same resolutions.
+func (u UsageRate) Equal(o UsageRate) bool {
+	// Two failures that are not the same error do not merge, which costs
+	// only one more segment.
+	if !errors.Is(u.BilledErr, o.BilledErr) {
+		return false
+	}
+	return u.CatalogModel == o.CatalogModel && u.BilledModel == o.BilledModel &&
+		pricingLookupEqual(u.Catalog, o.Catalog) && pricingLookupEqual(u.Billed, o.Billed)
+}
+
+// PriceChanges returns, in order, every instant strictly between from and to
+// at which UsageRateAt can return a different rate for some model. The
+// resolver returns the same rate for every timestamp between two adjacent
+// instants.
+func (r *PricingResolver) PriceChanges(from, to time.Time) []time.Time {
+	var out []time.Time
+	if r != nil {
+		out = r.genAI.PriceChanges(from, to)
+	}
+	if cutoff := pricingpkg.KimiModelEraCutoff; cutoff.After(from) && cutoff.Before(to) {
+		out = append(out, cutoff)
+		slices.SortFunc(out, time.Time.Compare)
+		out = slices.CompactFunc(out, time.Time.Equal)
+	}
+	return out
+}
+
+// PricingRecord retains the provenance accumulated for a group of usage rows.
+type PricingRecord struct {
+	ReportedModel, PricedModel  string
+	Lookup                      PricingLookup
+	Computed, Reported          bool
+	BaseRequests, AggregateRows int
+	BandRequests                map[int]int
+}
+
+// RecordedCounts returns the provenance recorded by this resolver.
+func (r *PricingResolver) RecordedCounts() ([]PricingRecord, bool) {
+	var records []PricingRecord
+	for model, resolutions := range r.recorded {
+		for key, rec := range resolutions {
+			bands := make(map[int]int, len(rec.bandRequestCounts))
+			maps.Copy(bands, rec.bandRequestCounts)
+			records = append(records, PricingRecord{model, key.pricedModel, clonePricingLookup(rec.lookup), rec.computed, rec.reported, rec.baseRequestCount, rec.aggregateRowCount, bands})
+		}
+	}
+	return records, r.unattributedReported
+}
+
+// ReplayRecordedCounts combines retained provenance into this resolver.
+func (r *PricingResolver) ReplayRecordedCounts(records []PricingRecord, unattributed bool) {
+	if unattributed {
+		r.RecordUnattributedReported()
+	}
+	for _, rec := range records {
+		r.accumulateResolved(rec.ReportedModel, rec.PricedModel, rec.Lookup, rec.Reported, rec.Computed, rec.BaseRequests, rec.AggregateRows, nil)
+		for band, count := range rec.BandRequests {
+			r.RecordResolvedCounts(rec.ReportedModel, rec.PricedModel, rec.Lookup, 0, count, 0, &band)
+		}
+	}
 }

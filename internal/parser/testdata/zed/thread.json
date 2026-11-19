@@ -1,0 +1,14 @@
+{
+  "model": {"model": "claude-opus-4", "provider": "anthropic"},
+  "request_token_usage": {
+    "req-1": {"input_tokens": 1000, "output_tokens": 200}
+  },
+  "messages": [
+    {"User": {"content": [{"Text": "Generate the record scaffold"}]}},
+    {"Agent": {"content": [
+      {"Thinking": {"text": "Plan the files first."}},
+      {"Text": "Scaffold generated."},
+      {"ToolUse": {"id": "call_1", "name": "terminal", "input": {"command": "make test"}}}
+    ], "tool_results": {"call_1": {"content": [{"Text": "ok"}]}}}}
+  ]
+}

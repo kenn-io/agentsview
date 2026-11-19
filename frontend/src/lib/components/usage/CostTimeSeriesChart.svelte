@@ -8,15 +8,13 @@
   import { seriesSwatchBackground, type SeriesStyle } from "@kenn-io/kit-ui/utils/palette";
   import { scaleLinear } from "d3-scale";
   import { curveLinear, curveMonotoneX } from "d3-shape";
-  import {
-    usage,
-    type GroupBy,
-    type TimeSeriesView,
-  } from "../../stores/usage.svelte.js";
+  import { usage } from "../../stores/usage.svelte.js";
+  import type { GroupBy, TimeSeriesView } from "../../stores/usagePreferences.js";
   import { formatDateTime, m } from "../../i18n/index.js";
   import { formatMoney, moneyFromMicrodollars } from "../../money.js";
   import { sumSelectedTokens } from "../../stores/usageTokenTypes.js";
   import { addDays } from "../../utils/dates.js";
+  import { formatCount } from "../../utils/format.js";
   import { seriesPaint } from "../../utils/seriesPaint.js";
   import SeriesPatternDefs from "../shared/SeriesPatternDefs.svelte";
   import type {
@@ -45,6 +43,7 @@
   const SVG_H = PLOT_BOTTOM + X_LABEL_H;
   const DAY_MS = 86_400_000;
   const MAX_SERIES = 10;
+  const MIN_SERIES_SHARE = 0.005;
 
   interface Point {
     date: string;
@@ -188,13 +187,16 @@
       return { points, keys: ["total"], maxY: maxY || 1, labels };
     }
 
-    // Pick top N by total value, group the rest as "Other".
+    // Keep visible shares up to the series limit, then group the remainder.
     const ranked = [...totals.entries()]
       .sort((a, b) => b[1] - a[1]);
-    const topKeys = new Set(
-      ranked.slice(0, MAX_SERIES).map(([k]) => k),
-    );
-    const hasOther = ranked.length > MAX_SERIES;
+    // Shares use the visible total in this summary.
+    const windowTotal = ranked.reduce((sum, [, value]) => sum + value, 0);
+    const retained = ranked
+      .filter(([, value]) => value > 0 && value >= windowTotal * MIN_SERIES_SHARE)
+      .slice(0, MAX_SERIES);
+    const topKeys = new Set(retained.map(([key]) => key));
+    const hasOther = ranked.some(([key, value]) => !topKeys.has(key) && value > 0);
 
     const points: Point[] = [];
     for (const day of daily) {
@@ -237,9 +239,7 @@
 
     // Build ordered key list: top N by value desc, then
     // __other__ (displayed as "Other" in legend/labels).
-    const keys = ranked
-      .slice(0, MAX_SERIES)
-      .map(([k]) => k);
+    const keys = retained.map(([key]) => key);
     if (hasOther) keys.push("__other__");
 
     let maxY = 0;
@@ -259,7 +259,7 @@
   const legendData = $derived(
     usage.colorSummary === usage.timeSeriesSummary ? seriesData : buildSeries(usage.colorSummary),
   );
-  // Plotted series outside the unselected top ten follow it, then Other once.
+  // Series qualifying within the selected summary follow the reference names, then Other once.
   const legendKeys = $derived.by(() => {
     const named = [...new Set([...legendData.keys, ...seriesData.keys])].filter((key) => key !== "__other__");
     return legendData.keys.includes("__other__") || seriesData.keys.includes("__other__") ? [...named, "__other__"] : named;
@@ -362,8 +362,12 @@
     marker: "circle",
   };
 
+  // The folded tail recedes as a quiet grey in both themes; the named
+  // series carry the chart.
+  const OTHER_STYLE: SeriesStyle = { ...MUTED_STYLE, color: "var(--usage-series-other)" };
+
   function seriesStyle(key: string): SeriesStyle {
-    return key === "__other__" ? MUTED_STYLE : styleMap.get(key) ?? MUTED_STYLE;
+    return key === "__other__" ? OTHER_STYLE : styleMap.get(key) ?? MUTED_STYLE;
   }
 
   function seriesFill(key: string): string {
@@ -464,17 +468,12 @@
     return formatMoney(moneyFromMicrodollars(v));
   }
 
-  function fmtTokenYLabel(v: number): string {
-    if (v >= 1_000_000_000) return `${(v / 1_000_000_000).toFixed(1)}B`;
-    if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
-    if (v >= 1_000) return `${(v / 1_000).toFixed(1)}K`;
-    return String(Math.round(v));
-  }
-
   function fmtYLabel(v: number): string {
-    return isTokenMode ? fmtTokenYLabel(v) : fmtCostYLabel(v);
+    return isTokenMode ? formatCount(v) : fmtCostYLabel(v);
   }
 
+  // Series with nothing on this day are left out: a column of $0.00 rows
+  // says nothing. Tiny non-zero values still show (as "<$0.01").
   function tooltipRows(point: Point) {
     return seriesData.keys
       .map((key) => ({
@@ -484,6 +483,7 @@
         swatch: seriesSwatch(key),
         patterned: seriesStyle(key).fill !== "solid",
       }))
+      .filter((row) => row.value > 0)
       .sort((a, b) => b.value - a.value);
   }
 
@@ -693,7 +693,10 @@
   </div>
 
   {#if seriesData.points.length === 0}
-    <div class="empty">{m.shared_no_data_for_period()}</div>
+    <!-- Without a current summary, the summary error or refresh status says why. -->
+    {#if usage.timeSeriesSummary !== null && !usage.errors.summary}
+      <div class="empty">{m.shared_no_data_for_period()}</div>
+    {/if}
   {:else}
     {#if legendKeys.length > 1}
       <div class="legend">
@@ -775,6 +778,7 @@
                 y1="y1"
                 fill={layer.fill}
                 curve={areaCurve}
+                class="cost-area"
               />
             {/each}
           {/if}
@@ -848,10 +852,12 @@
                 </dt>
                 <dd>
                   {isTokenMode
-                    ? fmtTokenYLabel(row.value)
+                    ? formatCount(row.value)
                     : formatMoney(moneyFromMicrodollars(row.value))}
                 </dd>
               </div>
+            {:else}
+              <div class="tooltip-empty">{m.usage_tooltip_no_usage()}</div>
             {/each}
           </dl>
         </div>
@@ -893,7 +899,7 @@
     height: 22px;
     min-height: 22px;
     padding: 0 8px;
-    font-size: 10px;
+    font-size: 11px;
   }
 
   .legend {
@@ -907,9 +913,9 @@
   .legend-item {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    font-size: 10px;
-    color: var(--text-muted);
+    gap: var(--space-3);
+    font-size: 12px;
+    color: var(--text-secondary);
   }
 
   .legend-item.dimmed {
@@ -949,7 +955,7 @@
 
   .chart-container :global(.y-label),
   .chart-container :global(.x-label) {
-    font-size: 9px;
+    font-size: 11px;
     fill: var(--text-muted);
     font-family: var(--font-mono);
   }
@@ -959,6 +965,12 @@
     /* Surface-colored seam so stacked segments read as separate parts. */
     stroke: var(--bg-surface);
     stroke-width: 1;
+  }
+
+  /* Near-solid fills in both themes, so each layer matches its legend
+     swatch; the surface seam keeps the layers apart. */
+  .chart-container :global(.cost-area) {
+    fill-opacity: 1;
   }
 
   .chart-container :global(.cost-seg.selected) {
@@ -1013,6 +1025,13 @@
     display: grid;
     gap: 4px;
     margin: 6px 0 0;
+  }
+
+  /* The tooltip inverts the theme, so page tokens like --text-muted lose
+     contrast here; quiet the inherited ink the way series names do. */
+  .tooltip-empty {
+    font-size: 12px;
+    opacity: 0.7;
   }
 
   .tooltip-row {

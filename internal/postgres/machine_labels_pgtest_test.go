@@ -11,15 +11,14 @@ import (
 )
 
 func TestPushMachineMetadataWithoutSessionChanges(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
-	pgURL := testPGURL(t)
-	const schema = "agentsview_machine_labels_test"
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	local := testDB(t)
 	require.NoError(t, local.SetSyncState(t.Context(), "machine_label:installation-a", "Laptop"))
 	require.NoError(t, local.SetSyncState(t.Context(), "machine_alias:old-owner", "installation-a"))
-	syncer, err := New(pgURL, schema, local, "installation-a", true, storage.PusherOptions{})
+	syncer, err := New(t.Context(), pgURL, schema, local, "installation-a", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	require.NoError(t, syncer.EnsureSchema(ctx))
@@ -49,7 +48,7 @@ func TestPushMachineMetadataWithoutSessionChanges(t *testing.T) {
 	other := testDB(t)
 	require.NoError(t, other.SetSyncState(t.Context(), "machine_alias:old-owner", "installation-b"))
 	require.NoError(t, other.SetSyncState(t.Context(), "machine_label:installation-b", "Desktop"))
-	otherSync, err := New(pgURL, schema, other, "installation-b", true, storage.PusherOptions{})
+	otherSync, err := New(t.Context(), pgURL, schema, other, "installation-b", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, otherSync.Close()) })
 	_, err = otherSync.Push(ctx, false, nil)

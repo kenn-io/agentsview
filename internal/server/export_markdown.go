@@ -54,6 +54,7 @@ func (s *Server) loadExportSessionTree(
 	ctx context.Context,
 	sessionID string,
 	depth string,
+	reveal bool,
 	visited map[string]bool,
 	level int,
 ) (*exportSessionTree, error) {
@@ -75,7 +76,7 @@ func (s *Server) loadExportSessionTree(
 	}
 	tree := &exportSessionTree{
 		Session:          sess,
-		Messages:         msgs,
+		Messages:         exportMessages(msgs, reveal),
 		AnchoredChildren: map[string]*exportSessionTree{},
 	}
 	if !shouldLoadMarkdownChildren(depth, level) {
@@ -87,7 +88,7 @@ func (s *Server) loadExportSessionTree(
 	}
 	anchored := markdownAnchoredChildIDs(msgs)
 	for _, child := range children {
-		childTree, err := s.loadExportSessionTree(ctx, child.ID, depth, visited, level+1)
+		childTree, err := s.loadExportSessionTree(ctx, child.ID, depth, reveal, visited, level+1)
 		if err != nil {
 			return nil, err
 		}
@@ -277,6 +278,9 @@ func renderMarkdownMessage(
 	}
 	if msg.IsSystem {
 		attrs["is_system"] = "true"
+	}
+	if label := exportHookLabel(*msg); label != "" {
+		attrs["label"] = label
 	}
 	if msg.HasThinking {
 		attrs["has_thinking"] = "true"
@@ -640,6 +644,9 @@ func markdownAgentDisplay(agent string) string {
 }
 
 func parseMarkdownSegments(msg db.Message) []markdownSegment {
+	if exportHookLabel(msg) != "" {
+		return []markdownSegment{{Type: markdownSegmentText, Content: msg.Content}}
+	}
 	matches := extractMarkdownMatches(msg.Content, msg.HasToolUse)
 	segments := buildMarkdownSegments(msg.Content, matches)
 	segments = mergeThinkingSegments(segments)

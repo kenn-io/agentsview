@@ -19,6 +19,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/remotesync"
+	"go.kenn.io/agentsview/internal/shellquote"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
@@ -28,7 +29,7 @@ const sourceTestHost = "devbox"
 const sourceTestDestination = "user@devbox.example.test"
 
 // sourceEnv is a fake remote reached through the fake ssh, whose remote
-// agentsview is this test binary.
+// agentsview is a shell wrapper that execs this test binary.
 type sourceEnv struct {
 	ssh         fakeSSH
 	build       LocalBuild
@@ -48,9 +49,11 @@ func newSourceEnv(t *testing.T) sourceEnv {
 	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "archive.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	executable := writeExecutable(t, t.TempDir(), "agentsview",
+		"#!/bin/sh\nexec "+shellquote.POSIX(os.Args[0])+" \"$@\"\n")
 	return sourceEnv{
 		ssh:         ssh,
-		build:       LocalBuild{Version: "dev", Executable: os.Args[0]},
+		build:       LocalBuild{Version: "dev", Executable: executable},
 		sessionPath: sessionPath,
 		database:    database,
 		dataDir:     t.TempDir(),
@@ -132,7 +135,7 @@ func (e sourceEnv) mirroredSessionFiles(t *testing.T) []string {
 	return found
 }
 
-// installTestBinary places the test binary in the fake remote's cache as
+// installTestBinary places the shell wrapper in the fake remote's cache as
 // build, so Ensure finds it without an upload.
 func installTestBinary(t *testing.T, home string, build LocalBuild) {
 	t.Helper()

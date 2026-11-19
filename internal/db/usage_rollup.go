@@ -15,10 +15,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/parser"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 )
 
@@ -42,6 +44,20 @@ type usageRollupMetrics struct {
 	DailyRows, ExceptionGroups, ExceptionRows int64
 	BuildDuration, InstallDuration            time.Duration
 }
+
+func (m usageRollupMetrics) plus(other usageRollupMetrics) usageRollupMetrics {
+	return usageRollupMetrics{
+		DailyRows:       m.DailyRows + other.DailyRows,
+		ExceptionGroups: m.ExceptionGroups + other.ExceptionGroups,
+		ExceptionRows:   m.ExceptionRows + other.ExceptionRows,
+		BuildDuration:   m.BuildDuration + other.BuildDuration,
+		InstallDuration: m.InstallDuration + other.InstallDuration,
+	}
+}
+
+// usageRollupBuilders bounds the batches one rollup window builds at once.
+// Each holds a cache connection, so warm reads keep the rest of the pool.
+const usageRollupBuilders = 2
 
 var usageTimezoneIdentityCache sync.Map
 
@@ -117,12 +133,13 @@ func usageLocationName(location *time.Location) string {
 }
 
 func usageRateHash(
-	model, pricedModel, pattern string, ok bool, rates export.ModelRates,
+	model, pricedModel, pattern, adjustment string, ok bool, rates export.ModelRates,
 ) string {
 	digest := sha256.New()
 	writeUsageHashString(digest, model)
 	writeUsageHashString(digest, pricedModel)
 	writeUsageHashString(digest, pattern)
+	writeUsageHashString(digest, adjustment)
 	writeUsageHashBool(digest, ok)
 	writeUsageRatesHash(digest, rates)
 	return hex.EncodeToString(digest.Sum(nil))
@@ -133,7 +150,15 @@ func usagePricingIdentity(rows []export.EffectivePricingRow) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return digest + "\x00" + pricingpkg.BillingPolicyVersion(), nil
+	return usagePricingIdentityWithDigest(digest), nil
+}
+
+func usagePricingIdentityWithDigest(digest string) string {
+	identity := digest + "\x00" + pricingpkg.BillingPolicyVersion() + "\x00" + usageSessionPricingIdentityVersion
+	if aliases := pricingpkg.ConfiguredAliasesDigest(); aliases != "" {
+		identity += "\x00" + aliases
+	}
+	return identity
 }
 
 func writeUsageRatesHash(digest hash.Hash, rates export.ModelRates) {
@@ -196,15 +221,17 @@ func validateNonnegativeUsageRates(rates export.ModelRates) error {
 
 type usageRollupCall struct {
 	done     chan struct{}
+	waiters  int // guarded by usageRollupCoordinator.mu
 	installs map[string]usageRollupInstall
 	metrics  usageRollupMetrics
 	err      error
 }
 
 type usageRollupObserver struct {
-	beforeEnsure  func()
-	beforeAttempt func(map[string]usageFillResult)
-	beforeInstall func([]usageRollupBuild)
+	beforeEnsure       func()
+	beforeAttempt      func(map[string]usageFillResult)
+	beforeInstall      func([]usageRollupBuild)
+	beforeAccountBuild func()
 }
 
 // usageRollupCoordinator aggregates committed per-session facts out of the
@@ -215,6 +242,7 @@ type usageRollupCoordinator struct {
 	ctx      context.Context
 	mu       sync.Mutex
 	calls    map[string]*usageRollupCall
+	zones    map[string]*sync.Mutex
 	observer usageRollupObserver
 }
 
@@ -224,6 +252,7 @@ func newUsageRollupCoordinator(
 	return &usageRollupCoordinator{
 		cache: cache, ctx: ctx,
 		calls: make(map[string]*usageRollupCall),
+		zones: make(map[string]*sync.Mutex),
 	}
 }
 
@@ -234,25 +263,86 @@ func (c *usageRollupCoordinator) Ensure(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	// The catalog digest only keys single-flight; staleness is per session.
-	catalogHash, err := usagePricingIdentity(snapshot.PricingRows)
+	identity := usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals)
+	conn, err := c.cache.db.Conn(ctx)
 	if err != nil {
-		return nil, usageRollupMetrics{}, fmt.Errorf("hashing usage pricing: %w", err)
+		return nil, usageRollupMetrics{}, err
 	}
+	installs, stale, err := readUsageRollupInstalls(
+		ctx, conn, identity, snapshot, fills, newUsagePricingIdentities(resolver))
+	err = errors.Join(err, conn.Close())
+	if err != nil {
+		return nil, usageRollupMetrics{}, err
+	}
+	cursorCurrent := installs[usageRollupCursorSessionID].FactRevision >= snapshot.CursorHighWater
+	if len(stale) == 0 && cursorCurrent {
+		return installs, usageRollupMetrics{}, nil
+	}
+	snapshot.deferAccountBuild = usageWorkDeferred(ctx) && snapshot.exactAccountRevision
+	// The catalog digest only keys single-flight; staleness is per session.
+	catalogHash := snapshot.PricingIdentity
+	batch := snapshot
+	batch.Sessions = make([]usageQuerySession, 0, len(stale))
+	batch.Versions = make([]usageSourceVersion, 0, len(stale))
+	for i, session := range snapshot.Sessions {
+		if stale[session.ID] {
+			batch.Sessions = append(batch.Sessions, session)
+			batch.Versions = append(batch.Versions, snapshot.Versions[i])
+		}
+	}
+	windowFills := make(map[string]usageFillResult, len(batch.Sessions))
+	for _, session := range batch.Sessions {
+		windowFills[session.ID] = fills[session.ID]
+	}
+	built, metrics, err := c.ensureWindow(ctx, batch, windowFills, resolver, catalogHash)
+	if err != nil {
+		return nil, metrics, err
+	}
+	maps.Copy(installs, built)
+	return installs, metrics, nil
+}
+
+func (c *usageRollupCoordinator) ensureWindow(
+	ctx context.Context, snapshot usageQuerySnapshot,
+	fills map[string]usageFillResult, resolver *export.PricingResolver,
+	catalogHash string,
+) (map[string]usageRollupInstall, usageRollupMetrics, error) {
 	key := usageRollupCallKey(snapshot, fills, catalogHash)
 	c.mu.Lock()
 	call := c.calls[key]
 	if call == nil {
+		zoneKey := usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals).Key
+		zone := c.zones[zoneKey]
+		if zone == nil {
+			zone = &sync.Mutex{}
+			c.zones[zoneKey] = zone
+		}
 		call = &usageRollupCall{done: make(chan struct{})}
 		c.calls[key] = call
 		if !c.cache.startDetachedWork(func() {
 			if c.observer.beforeEnsure != nil {
 				c.observer.beforeEnsure()
 			}
-			call.installs, call.metrics, call.err = c.ensureNow(
-				c.ctx, snapshot, fills, resolver)
+			// Wait before acquiring a pooled connection. Once a batch starts,
+			// it finishes for reuse even if all its callers leave.
+			zone.Lock()
 			c.mu.Lock()
-			delete(c.calls, key)
+			if call.waiters == 0 {
+				call.err = context.Canceled
+				delete(c.calls, key)
+				close(call.done)
+				c.mu.Unlock()
+				zone.Unlock()
+				return
+			}
+			c.mu.Unlock()
+			call.installs, call.metrics, call.err = c.ensureBatches(
+				call, key, snapshot, fills, resolver, catalogHash)
+			zone.Unlock()
+			c.mu.Lock()
+			if c.calls[key] == call {
+				delete(c.calls, key)
+			}
 			close(call.done)
 			c.mu.Unlock()
 		}) {
@@ -263,13 +353,127 @@ func (c *usageRollupCoordinator) Ensure(
 			)
 		}
 	}
+	call.waiters++
 	c.mu.Unlock()
 	select {
 	case <-ctx.Done():
+		c.mu.Lock()
+		call.waiters--
+		c.mu.Unlock()
 		return nil, usageRollupMetrics{}, ctx.Err()
 	case <-call.done:
 		return call.installs, call.metrics, call.err
 	}
+}
+
+// ensureBatches builds a window's rollups in batches of
+// usageFillInstallBatchSize sessions. Up to usageRollupBuilders batches build
+// at once, each on its own connection and pricing resolver, and they install
+// one at a time in batch order, so each install holds the write lock for one
+// batch. Once every caller has left, batches that have not started to install
+// are dropped; the next request rebuilds them.
+//
+// Batches also take their connections in batch order. A batch holds its
+// connection while it waits for the earlier batch to install, so the earliest
+// unfinished batch of every window always holds one and can finish. If a later
+// batch could take a connection first, concurrent windows could fill the pool
+// with batches that all wait on earlier batches that have none.
+func (c *usageRollupCoordinator) ensureBatches(
+	call *usageRollupCall, key string, snapshot usageQuerySnapshot,
+	fills map[string]usageFillResult, resolver *export.PricingResolver,
+	catalogHash string,
+) (map[string]usageRollupInstall, usageRollupMetrics, error) {
+	var batches []usageQuerySnapshot
+	var batchFills []map[string]usageFillResult
+	// The first batch runs even when empty so a stale Cursor build lands.
+	for first := true; first || len(snapshot.Sessions) > 0; first = false {
+		size := min(len(snapshot.Sessions), usageFillInstallBatchSize)
+		batch := snapshot
+		batch.Sessions = snapshot.Sessions[:size]
+		batch.Versions = snapshot.Versions[:size]
+		batches = append(batches, batch)
+		batchFill := make(map[string]usageFillResult, size)
+		for _, session := range batch.Sessions {
+			batchFill[session.ID] = fills[session.ID]
+		}
+		batchFills = append(batchFills, batchFill)
+		snapshot.Sessions = snapshot.Sessions[size:]
+		snapshot.Versions = snapshot.Versions[size:]
+		snapshot.CursorHighWater = 0
+	}
+	turns := make([]chan struct{}, len(batches)+1)
+	acquired := make([]chan struct{}, len(batches)+1)
+	for i := range turns {
+		turns[i] = make(chan struct{})
+		acquired[i] = make(chan struct{})
+	}
+	close(turns[0])
+	close(acquired[0])
+	installs := make(map[string]usageRollupInstall)
+	var metrics usageRollupMetrics
+	var errs error
+	var mu sync.Mutex
+	var next atomic.Int64
+	var wait sync.WaitGroup
+	for builder := range min(usageRollupBuilders, len(batches)) {
+		builderResolver := resolver
+		if builder > 0 {
+			builderResolver = resolver.Copy()
+		}
+		wait.Go(func() {
+			// A batch proceeds while callers wait and no earlier batch failed.
+			proceed := func() bool {
+				mu.Lock()
+				failed := errs != nil
+				mu.Unlock()
+				return !failed && c.keepCall(call, key)
+			}
+			for i := int(next.Add(1) - 1); i < len(batches); i = int(next.Add(1) - 1) {
+				<-acquired[i]
+				if !proceed() {
+					close(acquired[i+1])
+					close(turns[i+1])
+					continue
+				}
+				conn, err := c.cache.db.Conn(c.ctx)
+				close(acquired[i+1])
+				var built map[string]usageRollupInstall
+				var measured usageRollupMetrics
+				if err == nil {
+					canInstall := func() bool {
+						<-turns[i]
+						return proceed()
+					}
+					built, measured, err = c.ensureNow(
+						c.ctx, conn, batches[i], batchFills[i], builderResolver, catalogHash, canInstall)
+					err = errors.Join(err, conn.Close())
+				}
+				close(turns[i+1])
+				mu.Lock()
+				maps.Copy(installs, built)
+				metrics = metrics.plus(measured)
+				errs = errors.Join(errs, err)
+				mu.Unlock()
+			}
+		})
+	}
+	wait.Wait()
+	return installs, metrics, errs
+}
+
+// keepCall reports whether call still has waiters. An abandoned call leaves
+// the coordinator, so a later request starts its own call instead of joining
+// one that drops batches.
+func (c *usageRollupCoordinator) keepCall(call *usageRollupCall, key string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if call.waiters > 0 {
+		return true
+	}
+	if c.calls[key] == call {
+		delete(c.calls, key)
+	}
+	return false
 }
 
 // ensureNow aggregates committed per-session facts out of the usage cache. It
@@ -277,16 +481,13 @@ func (c *usageRollupCoordinator) Ensure(
 // it: that session's own notification fill installs new facts, which makes its
 // rollup install stale and rebuilds it on a later aggregation.
 func (c *usageRollupCoordinator) ensureNow(
-	ctx context.Context, snapshot usageQuerySnapshot,
-	fills map[string]usageFillResult, resolver *export.PricingResolver,
+	ctx context.Context, conn *sql.Conn, snapshot usageQuerySnapshot,
+	fills map[string]usageFillResult, resolver *export.PricingResolver, catalogHash string,
+	canInstall func() bool,
 ) (map[string]usageRollupInstall, usageRollupMetrics, error) {
 	identity := usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals)
 	pricing := newUsagePricingIdentities(resolver)
-	conn, err := c.cache.db.Conn(ctx)
-	if err != nil {
-		return nil, usageRollupMetrics{}, err
-	}
-	defer conn.Close()
+	var err error
 	var metrics usageRollupMetrics
 	currentFills := maps.Clone(fills)
 	// A concurrent fill can replace a session's facts or add a sibling to a
@@ -295,12 +496,8 @@ func (c *usageRollupCoordinator) ensureNow(
 	// failing the caller.
 	for attempt := 1; ; attempt++ {
 		installs, done, attemptMetrics, attemptErr := c.ensureAttempt(
-			ctx, conn, identity, snapshot, currentFills, pricing)
-		metrics.DailyRows += attemptMetrics.DailyRows
-		metrics.ExceptionRows += attemptMetrics.ExceptionRows
-		metrics.ExceptionGroups += attemptMetrics.ExceptionGroups
-		metrics.BuildDuration += attemptMetrics.BuildDuration
-		metrics.InstallDuration += attemptMetrics.InstallDuration
+			ctx, conn, identity, snapshot, currentFills, pricing, catalogHash, canInstall)
+		metrics = metrics.plus(attemptMetrics)
 		if attemptErr != nil {
 			return nil, metrics, attemptErr
 		}
@@ -323,7 +520,7 @@ func (c *usageRollupCoordinator) ensureNow(
 func (c *usageRollupCoordinator) ensureAttempt(
 	ctx context.Context, conn *sql.Conn, identity usageTimezoneIdentity,
 	snapshot usageQuerySnapshot, fills map[string]usageFillResult,
-	pricing *usagePricingIdentities,
+	pricing *usagePricingIdentities, catalogHash string, canInstall func() bool,
 ) (map[string]usageRollupInstall, bool, usageRollupMetrics, error) {
 	if c.observer.beforeAttempt != nil {
 		c.observer.beforeAttempt(fills)
@@ -370,13 +567,21 @@ func (c *usageRollupCoordinator) ensureAttempt(
 	if err != nil {
 		return nil, false, usageRollupMetrics{}, err
 	}
-	if installs[usageRollupCursorSessionID].FactRevision < snapshot.CursorHighWater {
+	if !snapshot.deferAccountBuild && installs[usageRollupCursorSessionID].FactRevision < snapshot.CursorHighWater {
+		if c.observer.beforeAccountBuild != nil {
+			c.observer.beforeAccountBuild()
+		}
 		cursorBuild, cursorErr := loadCursorUsageRollupBuild(
-			ctx, conn, snapshot.CursorHighWater, snapshot.location, pricing)
+			ctx, conn, installs[usageRollupCursorSessionID].FactRevision,
+			snapshot, pricing)
 		if cursorErr != nil {
 			return nil, false, usageRollupMetrics{}, cursorErr
 		}
 		builds = append(builds, cursorBuild)
+	}
+	for i := range builds {
+		builds[i].SourcePricing = catalogHash
+		builds[i].ChangeRevision = snapshot.ChangeRevision
 	}
 	metrics := usageRollupMetrics{BuildDuration: time.Since(started)}
 	for _, build := range builds {
@@ -388,15 +593,27 @@ func (c *usageRollupCoordinator) ensureAttempt(
 		}
 		metrics.ExceptionGroups += int64(len(groups))
 	}
+	if !canInstall() {
+		return nil, true, metrics, nil
+	}
 	installStarted := time.Now()
 	if c.observer.beforeInstall != nil {
 		c.observer.beforeInstall(slices.Clone(builds))
 	}
 	err = installUsageRollupBuilds(
-		ctx, conn, identity, snapshot.location, builds, cross)
+		ctx, conn, identity, snapshot.location, builds, cross, snapshot.resetEpoch)
 	metrics.InstallDuration = time.Since(installStarted)
 	if err != nil {
-		if errors.Is(err, errUsageCacheSourceChanged) {
+		if snapshot.deferAccountBuild && errors.Is(err, errUsageCacheSourceChanged) {
+			current, _, readErr := readUsageRollupInstalls(ctx, conn, identity, snapshot, fills, pricing)
+			if readErr != nil {
+				return nil, false, metrics, readErr
+			}
+			if current[usageRollupCursorSessionID].FactRevision < snapshot.CursorHighWater {
+				return nil, false, metrics, ErrUsageCacheWarming
+			}
+		}
+		if errors.Is(err, errUsageCacheSourceChanged) && !snapshot.exactAccountRevision {
 			return nil, false, metrics, nil
 		}
 		return nil, false, metrics, err
@@ -408,6 +625,12 @@ func (c *usageRollupCoordinator) ensureAttempt(
 	}
 	if len(stale) != 0 ||
 		installs[usageRollupCursorSessionID].FactRevision < snapshot.CursorHighWater {
+		if snapshot.deferAccountBuild && installs[usageRollupCursorSessionID].FactRevision < snapshot.CursorHighWater {
+			return nil, false, metrics, ErrUsageCacheWarming
+		}
+		if snapshot.exactAccountRevision {
+			return nil, false, metrics, errUsageCacheSourceChanged
+		}
 		// Another builder installed a different generation of one of these
 		// sessions while this one was building. Its facts are committed, so
 		// the next attempt sees them.
@@ -439,7 +662,7 @@ func readUsageRollupInstalls(
 	query := `SELECT i.id, i.session_id,
 		i.fact_install_revision, i.install_revision, i.cached_at,
 		i.source_sync_marker, i.source_transcript_rev, i.usage_event_fingerprint,
-		i.baked_agent, i.baked_started_at, i.pricing_inputs, i.pricing_hash
+		i.baked_agent, i.baked_started_at, i.project, i.machine, i.git_branch, i.is_automated, i.user_message_count, i.group_key, i.group_label, i.pricing_inputs, i.pricing_hash
 		FROM usage_rollup_timezones tz JOIN usage_rollup_installs i
 		  ON i.timezone_id = tz.id WHERE tz.timezone_key = ?`
 	args := []any{identity.Key}
@@ -466,26 +689,38 @@ func readUsageRollupInstalls(
 	defer rows.Close()
 	installs := make(map[string]usageRollupInstall)
 	sources := make(map[string]usageSourceVersion)
-	baked := make(map[string][2]string)
+	baked := make(map[string]usageBakedSession)
 	pricingInputs := make(map[string]string)
 	for rows.Next() {
 		var item usageRollupInstall
 		var source usageSourceVersion
-		var agent, startedAt, installedInputs string
+		var installed usageBakedSession
+		var installedInputs string
 		if err := rows.Scan(&item.ID, &item.SessionID, &item.FactRevision,
 			&item.InstallRevision, &item.CachedAt, &source.SyncMarker,
 			&source.TranscriptRevision, &source.UsageEventFingerprint,
-			&agent, &startedAt, &installedInputs, &item.PricingHash); err != nil {
+			&installed.Agent, &installed.StartedAt, &installed.Project, &installed.Machine, &installed.GitBranch, &installed.IsAutomated, &installed.UserMessageCount, &installed.GroupKey, &installed.GroupLabel, &installedInputs, &item.PricingHash); err != nil {
 			_ = rows.Close()
 			return nil, nil, err
 		}
 		source.SessionID = item.SessionID
 		installs[item.SessionID], sources[item.SessionID] = item, source
-		baked[item.SessionID] = [2]string{agent, startedAt}
+		baked[item.SessionID] = installed
 		pricingInputs[item.SessionID] = installedInputs
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return nil, nil, err
+	}
+	if cursor, ok := installs[usageRollupCursorSessionID]; ok && snapshot.exactAccountRevision {
+		// A full account generation prices its totals at build time, so a
+		// changed lookup rebuilds it like a session.
+		expected, err := pricing.forEncoded(pricingInputs[usageRollupCursorSessionID])
+		if err != nil {
+			return nil, nil, err
+		}
+		if cursor.PricingHash != expected {
+			delete(installs, usageRollupCursorSessionID)
+		}
 	}
 	sessions := make(map[string]usageQuerySession, len(snapshot.Sessions))
 	for _, session := range snapshot.Sessions {
@@ -504,7 +739,7 @@ func readUsageRollupInstalls(
 		}
 		if !ok || item.FactRevision != fill.InstallRevision ||
 			!sources[version.SessionID].Equal(fill.source) ||
-			baked[version.SessionID] != [2]string{session.Agent, session.StartedAt} {
+			baked[version.SessionID] != bakedUsageSession(session) {
 			stale[version.SessionID] = true
 			continue
 		}
@@ -523,7 +758,7 @@ func readUsageRollupInstalls(
 func installUsageRollupBuilds(
 	ctx context.Context, conn *sql.Conn, identity usageTimezoneIdentity,
 	location *time.Location, builds []usageRollupBuild,
-	buildCross usageDedupIdentitySet,
+	buildCross usageDedupIdentitySet, epoch int64,
 ) error {
 	// Take the cache write lock up front. A deferred transaction that
 	// reads before its first write fails with SQLITE_BUSY_SNAPSHOT
@@ -536,9 +771,13 @@ func installUsageRollupBuilds(
 	committed := false
 	defer func() {
 		if !committed {
-			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+			// Roll back even after cancellation so the pooled connection is clean.
+			_, _ = conn.ExecContext(context.WithoutCancel(ctx), `ROLLBACK`)
 		}
 	}()
+	if err := verifyUsageResetEpoch(ctx, conn, epoch); err != nil {
+		return err
+	}
 	// A fill committing between classification and this install can add a
 	// sibling for an identity that was finalized into a daily row. Abort on
 	// new crossness; crossness that disappeared keeps the conservative
@@ -577,12 +816,7 @@ func installUsageRollupBuilds(
 	// Background rebuilds install here too, so only a new zone takes the
 	// install time; recordUsageTimezoneRequest owns later recency stamps.
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := conn.ExecContext(ctx, `INSERT INTO usage_rollup_timezones(
-		timezone_key, timezone_name, interval_fingerprint, last_requested_at
-	) VALUES (?, ?, ?, ?) ON CONFLICT(timezone_key) DO UPDATE SET
-		timezone_name=excluded.timezone_name,
-		interval_fingerprint=excluded.interval_fingerprint`,
-		identity.Key, identity.Name, identity.IntervalFingerprint, now); err != nil {
+	if err := insertUsageTimezone(ctx, conn, identity, time.Now()); err != nil {
 		return err
 	}
 	var timezoneID int64
@@ -599,52 +833,77 @@ func installUsageRollupBuilds(
 	if err != nil {
 		return err
 	}
+	stmts := newUsageStatementCache(conn)
+	defer func() { _ = stmts.Close() }()
 	dates := make(map[string]bool)
 	for _, build := range builds {
+		if build.ExactAccountRevision {
+			if err := verifyUsageAccountRevision(ctx, conn, build.FactRevision); err != nil {
+				return err
+			}
+			if err := verifyUsageAccountCollisions(ctx, conn, build.AccountCollisions); err != nil {
+				return err
+			}
+		}
 		var installID int64
 		var installedFactRevision int64
-		err := conn.QueryRowContext(ctx, `SELECT id, fact_install_revision
+		err := stmts.QueryRowContext(ctx, `SELECT id, fact_install_revision
 			FROM usage_rollup_installs
 			WHERE timezone_id = ? AND session_id = ?`, timezoneID, build.SessionID).
 			Scan(&installID, &installedFactRevision)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		if err == nil && build.SessionID == usageRollupCursorSessionID &&
-			installedFactRevision > build.FactRevision {
+		// A delayed build can replace a newer install, or one a dedup
+		// invalidation removed. Replay journal changes from its snapshot on
+		// the next read, even when the zone already claimed those changes.
+		if _, err := stmts.ExecContext(ctx, `UPDATE usage_rollup_timezones
+			SET change_revision=MIN(change_revision, ?) WHERE id=?`, build.ChangeRevision, timezoneID); err != nil {
+			return err
+		}
+		// A full account generation replaces its rows, as a session does.
+		appendOnly := build.SessionID == usageRollupCursorSessionID &&
+			!build.ExactAccountRevision
+		if appendOnly && installedFactRevision != build.CursorAfter {
 			return fmt.Errorf(
-				"%w: Cursor usage advanced during rollup build",
+				"%w: Cursor usage base changed during rollup build",
 				errUsageCacheSourceChanged)
 		}
 		if err == nil {
-			for _, table := range []string{
-				"usage_daily_rollups", "usage_activity_rollups", "usage_rollup_exceptions",
-			} {
-				if _, err := conn.ExecContext(ctx, `DELETE FROM `+table+
-					` WHERE rollup_install_id = ?`, installID); err != nil {
+			if !appendOnly {
+				if _, err := stmts.ExecContext(ctx, `DELETE FROM usage_daily_rollups WHERE rollup_install_id = ?`, installID); err != nil {
 					return err
 				}
+				for _, table := range []string{
+					"usage_activity_rollups", "usage_rollup_exceptions",
+					"usage_rollup_account_totals",
+				} {
+					if _, err := stmts.ExecContext(ctx, `DELETE FROM `+table+
+						` WHERE rollup_install_id = ?`, installID); err != nil {
+						return err
+					}
+				}
 			}
-			_, err = conn.ExecContext(ctx, `UPDATE usage_rollup_installs SET
+			_, err = stmts.ExecContext(ctx, `UPDATE usage_rollup_installs SET
 				source_sync_marker=?, source_transcript_rev=?, usage_event_fingerprint=?,
-				fact_install_revision=?, baked_agent=?, baked_started_at=?,
-				pricing_inputs=?, pricing_hash=?, install_revision=?, cached_at=?
+				fact_install_revision=?, baked_agent=?, baked_started_at=?, project=?, machine=?, git_branch=?, is_automated=?, user_message_count=?, group_key=?, group_label=?, has_authoritative=?,
+				pricing_inputs=?, pricing_hash=?, install_revision=?, cached_at=?, source_change_revision=?, source_pricing=?
 				WHERE id=?`,
 				build.Source.SyncMarker, build.Source.TranscriptRevision,
 				build.Source.UsageEventFingerprint, build.FactRevision,
-				build.Agent, build.StartedAt, build.PricingInputs, build.PricingHash,
-				nextRevision, now, installID)
+				build.Agent, build.StartedAt, build.Project, build.Machine, build.GitBranch, build.IsAutomated, build.UserMessageCount, build.GroupKey, build.GroupLabel, build.HasAuthoritative, build.PricingInputs, build.PricingHash,
+				nextRevision, now, build.ChangeRevision, build.SourcePricing, installID)
 		} else {
-			result, insertErr := conn.ExecContext(ctx, `INSERT INTO usage_rollup_installs(
+			result, insertErr := stmts.ExecContext(ctx, `INSERT INTO usage_rollup_installs(
 				timezone_id, session_id, source_sync_marker, source_transcript_rev,
 				usage_event_fingerprint, fact_install_revision, baked_agent,
-				baked_started_at, pricing_inputs, pricing_hash, install_revision,
-				cached_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, timezoneID, build.SessionID,
+				baked_started_at, project, machine, git_branch, is_automated, user_message_count, group_key, group_label, has_authoritative, pricing_inputs, pricing_hash, install_revision,
+				cached_at, source_change_revision, source_pricing
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, timezoneID, build.SessionID,
 				build.Source.SyncMarker, build.Source.TranscriptRevision,
 				build.Source.UsageEventFingerprint, build.FactRevision,
-				build.Agent, build.StartedAt, build.PricingInputs, build.PricingHash,
-				nextRevision, now)
+				build.Agent, build.StartedAt, build.Project, build.Machine, build.GitBranch, build.IsAutomated, build.UserMessageCount, build.GroupKey, build.GroupLabel, build.HasAuthoritative, build.PricingInputs, build.PricingHash,
+				nextRevision, now, build.ChangeRevision, build.SourcePricing)
 			if insertErr != nil {
 				return insertErr
 			}
@@ -653,17 +912,20 @@ func installUsageRollupBuilds(
 		if err != nil {
 			return err
 		}
-		if err := installUsageRollupRows(ctx, conn, installID, build, dates); err != nil {
+		if err := installUsageRollupRows(ctx, stmts, installID, build, dates); err != nil {
+			return err
+		}
+		if _, err := stmts.ExecContext(ctx, `DELETE FROM usage_rollup_invalidations WHERE timezone_id=? AND session_id=?`, timezoneID, build.SessionID); err != nil {
 			return err
 		}
 		nextRevision++
 	}
-	if _, err := conn.ExecContext(ctx, `UPDATE usage_cache_metadata SET value=?
+	if _, err := stmts.ExecContext(ctx, `UPDATE usage_cache_metadata SET value=?
 		WHERE key=?`, strconv.FormatInt(nextRevision, 10),
 		usageCacheMetadataNextRollupRevision); err != nil {
 		return err
 	}
-	if err := installUsageRollupDays(ctx, conn, timezoneID, location, dates); err != nil {
+	if err := installUsageRollupDays(ctx, stmts, timezoneID, location, dates); err != nil {
 		return err
 	}
 	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
@@ -674,7 +936,7 @@ func installUsageRollupBuilds(
 }
 
 func installUsageRollupRows(
-	ctx context.Context, conn *sql.Conn, installID int64,
+	ctx context.Context, conn *usageStatementCache, installID int64,
 	build usageRollupBuild, dates map[string]bool,
 ) error {
 	for _, row := range build.Daily {
@@ -698,6 +960,26 @@ func installUsageRollupRows(
 		}
 		dates[row.LocalDate] = true
 	}
+	for _, row := range build.AccountTotals {
+		band := -1
+		if row.BandThreshold != nil {
+			band = *row.BandThreshold
+		}
+		_, err := conn.ExecContext(ctx, `INSERT INTO usage_rollup_account_totals VALUES(
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			installID, row.LocalDate, row.Agent, boolInt(row.IsHeadless),
+			row.ReportedModel, row.ProviderID, row.PricedModel, row.MatchedPattern,
+			boolInt(row.RateOK), row.RateHash, band, row.PricingKey,
+			row.PricingTimestamp, row.InputTokens, row.OutputTokens,
+			row.ReasoningTokens, row.CacheCreationTokens, row.CacheReadTokens,
+			row.CostMicrodollars, row.SavingsMicrodollars,
+			row.ComputedRequestCount, row.ComputedAggregateCount,
+			row.ReportedCount, row.BaseRequestCount)
+		if err != nil {
+			return err
+		}
+		dates[row.LocalDate] = true
+	}
 	for _, row := range build.Activity {
 		if _, err := conn.ExecContext(ctx, `INSERT INTO usage_activity_rollups VALUES(?, ?, ?, ?)`,
 			installID, row.LocalDate, row.Model, row.UserMessageCount); err != nil {
@@ -707,8 +989,17 @@ func installUsageRollupRows(
 	}
 	for _, row := range build.Exceptions {
 		fact := row.Fact
-		_, err := conn.ExecContext(ctx, `INSERT INTO usage_rollup_exceptions VALUES(
-			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		_, err := conn.ExecContext(ctx, `INSERT INTO usage_rollup_exceptions (
+			rollup_install_id, group_kind, group_key, cached_session_id, fact_index,
+			source_session_id, local_date, source, message_ordinal, timestamp_ms,
+			timestamp_ns, raw_timestamp, uses_session_start, model, provider_id,
+			input_tokens, output_tokens, reasoning_tokens, cache_creation_tokens,
+			cache_creation_1h_tokens, cache_read_tokens, web_search_requests,
+			reported_cost_microdollars, cost_source, cost_status, request_scoped,
+			is_headless, claude_message_id, claude_request_id, source_uuid,
+			usage_dedup_key, ranking_output_tokens
+		) VALUES (
+			?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			installID, row.GroupKind, row.GroupKey, fact.CachedSessionID,
 			fact.FactIndex, fact.SourceSessionID, fact.LocalDate, fact.Fact.Source,
 			fact.Fact.MessageOrdinal, fact.Fact.TimestampMillis, fact.Fact.TimestampNanos,
@@ -718,9 +1009,10 @@ func installUsageRollupRows(
 			fact.Fact.CacheCreationTokens, fact.Fact.CacheCreation1hTokens,
 			fact.Fact.CacheReadTokens,
 			fact.Fact.WebSearchRequests, fact.Fact.ReportedCostMicrodollars,
-			fact.Fact.CostSource, boolInt(fact.Fact.RequestScoped), boolInt(fact.IsHeadless),
+			fact.Fact.CostSource, fact.Fact.CostStatus,
+			boolInt(fact.Fact.RequestScoped), boolInt(fact.IsHeadless),
 			fact.Fact.ClaudeMessageID, fact.Fact.ClaudeRequestID,
-			fact.Fact.SourceUUID, fact.Fact.UsageDedupKey)
+			fact.Fact.SourceUUID, fact.Fact.UsageDedupKey, fact.Fact.RankingOutputTokens)
 		if err != nil {
 			return err
 		}
@@ -729,8 +1021,27 @@ func installUsageRollupRows(
 	return nil
 }
 
+// verifyUsageAccountCollisions rejects an account build when a key it
+// priced into totals now collides, because a fill installed a session that
+// reports the same key after the build read the collisions.
+func verifyUsageAccountCollisions(
+	ctx context.Context, conn *sql.Conn, built map[string]bool,
+) error {
+	current, err := loadCursorUsageCollisions(ctx, conn)
+	if err != nil {
+		return err
+	}
+	for key := range current {
+		if !built[key] {
+			return fmt.Errorf("%w: account usage key gained a duplicate during rollup build",
+				errUsageCacheSourceChanged)
+		}
+	}
+	return nil
+}
+
 func installUsageRollupDays(
-	ctx context.Context, conn *sql.Conn, timezoneID int64,
+	ctx context.Context, conn *usageStatementCache, timezoneID int64,
 	location *time.Location, dates map[string]bool,
 ) error {
 	if location == nil {
@@ -760,7 +1071,9 @@ func usageRollupCallKey(
 	writeUsageHashString(digest,
 		usageTimezoneIdentityFor(snapshot.location, snapshot.Intervals).Key)
 	writeUsageHashString(digest, catalogHash)
+	writeUsageHashBool(digest, snapshot.deferAccountBuild)
 	writeUsageHashInt64(digest, snapshot.CursorHighWater)
+	writeUsageHashInt64(digest, snapshot.ChangeRevision)
 	sessions := make(map[string]usageQuerySession, len(snapshot.Sessions))
 	for _, session := range snapshot.Sessions {
 		sessions[session.ID] = session
@@ -777,6 +1090,13 @@ func usageRollupCallKey(
 		session := sessions[version.SessionID]
 		writeUsageHashString(digest, session.Agent)
 		writeUsageHashString(digest, session.StartedAt)
+		writeUsageHashString(digest, session.Project)
+		writeUsageHashString(digest, session.Machine)
+		writeUsageHashString(digest, session.GitBranch)
+		writeUsageHashString(digest, session.GroupKey)
+		writeUsageHashString(digest, bakedUsageSession(session).GroupLabel)
+		writeUsageHashBool(digest, session.IsAutomated)
+		writeUsageHashInt64(digest, int64(session.UserMessageCount))
 	}
 	return hex.EncodeToString(digest.Sum(nil))
 }
@@ -798,4 +1118,20 @@ func writeUsageHashBool(digest hash.Hash, value bool) {
 	} else {
 		writeUsageHashInt64(digest, 0)
 	}
+}
+
+// usageBakedSession is the archive metadata that determines installed rows and totals.
+type usageBakedSession struct {
+	Agent, StartedAt, Project, Machine, GitBranch string
+	GroupKey, GroupLabel                          string
+	IsAutomated                                   bool
+	UserMessageCount                              int
+}
+
+func bakedUsageSession(session usageQuerySession) usageBakedSession {
+	groupLabel := ""
+	if session.GroupKey != "" {
+		groupLabel = parser.HermesCronJobName(session.GroupKey, session.SessionName)
+	}
+	return usageBakedSession{session.Agent, session.StartedAt, session.Project, session.Machine, session.GitBranch, session.GroupKey, groupLabel, session.IsAutomated, session.UserMessageCount}
 }

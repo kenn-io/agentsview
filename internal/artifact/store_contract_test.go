@@ -221,10 +221,12 @@ func TestArtifactStoreIteratorContractDocbank(t *testing.T) {
 // runArtifactStoreContract exercises only the logical API. Backends register
 // this helper from their own top-level tests and may not expose physical paths
 // or implementation handles to it.
+// Every case runs in parallel, so each factory call must return an isolated store.
 func runArtifactStoreContract(t *testing.T, factory artifactStoreFactory) {
 	t.Helper()
 
 	t.Run("missing reads", func(t *testing.T) {
+		t.Parallel()
 		store := newContractStore(t, factory)
 		ref := requireContractRef(t, contractOrigin, KindCheckpoints, "cp-0000000001.json")
 
@@ -236,6 +238,7 @@ func runArtifactStoreContract(t *testing.T, factory artifactStoreFactory) {
 	})
 
 	t.Run("identical retry is immutable and idempotent", func(t *testing.T) {
+		t.Parallel()
 		store := newContractStore(t, factory)
 		ref := requireContractRef(t, contractOrigin, KindCheckpoints, "cp-0000000001.json")
 		body := []byte(`{"origin":"contract-a1b2c3","sequence":1}`)
@@ -256,6 +259,7 @@ func runArtifactStoreContract(t *testing.T, factory artifactStoreFactory) {
 	})
 
 	t.Run("different expected identity conflicts without mutation", func(t *testing.T) {
+		t.Parallel()
 		store := newContractStore(t, factory)
 		ref := requireContractRef(t, contractOrigin, KindCheckpoints, "cp-0000000001.json")
 		original := []byte("original checkpoint")
@@ -269,6 +273,7 @@ func runArtifactStoreContract(t *testing.T, factory artifactStoreFactory) {
 	})
 
 	t.Run("duplicate path rejects stream mismatching expected identity", func(t *testing.T) {
+		t.Parallel()
 		store := newContractStore(t, factory)
 		ref := requireContractRef(t, contractOrigin, KindCheckpoints, "cp-0000000001.json")
 		original := []byte("original checkpoint")
@@ -285,6 +290,7 @@ func runArtifactStoreContract(t *testing.T, factory artifactStoreFactory) {
 	})
 
 	t.Run("duplicate path rejects media type mismatch", func(t *testing.T) {
+		t.Parallel()
 		store := newContractStore(t, factory)
 		ref := requireContractRef(t, contractOrigin, KindCheckpoints, "cp-0000000001.json")
 		body := []byte("original checkpoint")
@@ -305,6 +311,7 @@ func runArtifactStoreContract(t *testing.T, factory artifactStoreFactory) {
 	})
 
 	t.Run("new artifact rejects noncanonical media type", func(t *testing.T) {
+		t.Parallel()
 		store := newContractStore(t, factory)
 		ref := requireContractRef(t, contractOrigin, KindCheckpoints, "cp-0000000001.json")
 		body := []byte("original checkpoint")
@@ -317,6 +324,7 @@ func runArtifactStoreContract(t *testing.T, factory artifactStoreFactory) {
 	})
 
 	t.Run("expected identity mismatch creates nothing", func(t *testing.T) {
+		t.Parallel()
 		tests := []struct {
 			name     string
 			identity func(t *testing.T, body []byte) Identity
@@ -346,6 +354,7 @@ func runArtifactStoreContract(t *testing.T, factory artifactStoreFactory) {
 		}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
 				store := newContractStore(t, factory)
 				ref := requireContractRef(t, contractOrigin, KindCheckpoints, "cp-0000000001.json")
 				body := []byte("canonical checkpoint")
@@ -359,6 +368,7 @@ func runArtifactStoreContract(t *testing.T, factory artifactStoreFactory) {
 		}
 
 		t.Run("hash-bearing reference", func(t *testing.T) {
+			t.Parallel()
 			body := []byte("canonical artifact content")
 			identity := identityForBytes(t, body)
 			other := identityForBytes(t, []byte("different artifact content"))
@@ -378,6 +388,7 @@ func runArtifactStoreContract(t *testing.T, factory artifactStoreFactory) {
 			}
 			for _, tt := range tests {
 				t.Run(tt.name, func(t *testing.T) {
+					t.Parallel()
 					store := newContractStore(t, factory)
 					ref := requireContractRef(t, contractOrigin, tt.kind, tt.refName)
 
@@ -392,6 +403,7 @@ func runArtifactStoreContract(t *testing.T, factory artifactStoreFactory) {
 	})
 
 	t.Run("open verifies a streamed read", func(t *testing.T) {
+		t.Parallel()
 		store := newContractStore(t, factory)
 		ref := requireContractRef(t, contractOrigin, KindCheckpoints, "cp-0000000001.json")
 		body := []byte("streamed checkpoint content")
@@ -419,6 +431,7 @@ func runArtifactStoreContract(t *testing.T, factory artifactStoreFactory) {
 	})
 
 	t.Run("early close does not drain or damage content", func(t *testing.T) {
+		t.Parallel()
 		store := newContractStore(t, factory)
 		ref := requireContractRef(t, contractOrigin, KindCheckpoints, "cp-0000000001.json")
 		body := []byte("content that must be explicitly verified")
@@ -434,6 +447,7 @@ func runArtifactStoreContract(t *testing.T, factory artifactStoreFactory) {
 	})
 
 	t.Run("quarantine excludes content and permits recreation", func(t *testing.T) {
+		t.Parallel()
 		store := newContractStore(t, factory)
 		ref := requireContractRef(t, contractOrigin, KindCheckpoints, "cp-0000000001.json")
 		createContractArtifact(t, store, ref, []byte("invalid current-format checkpoint"))
@@ -451,6 +465,7 @@ func runArtifactStoreContract(t *testing.T, factory artifactStoreFactory) {
 	})
 
 	t.Run("trash removes content from live reads and enumeration", func(t *testing.T) {
+		t.Parallel()
 		store := newContractStore(t, factory)
 		ref := requireContractRef(t, contractOrigin, KindCheckpoints, "cp-0000000001.json")
 		createContractArtifact(t, store, ref, []byte("unreachable checkpoint"))
@@ -466,6 +481,7 @@ func runArtifactStoreContract(t *testing.T, factory artifactStoreFactory) {
 	})
 
 	t.Run("operations preserve cancellation", func(t *testing.T) {
+		t.Parallel()
 		store := newContractStore(t, factory)
 		existing := requireContractRef(t, contractOrigin, KindCheckpoints, "cp-0000000001.json")
 		quarantineRef := requireContractRef(t, contractOrigin, KindCheckpoints, "cp-0000000002.json")
@@ -502,6 +518,7 @@ func runArtifactStoreContract(t *testing.T, factory artifactStoreFactory) {
 	})
 
 	t.Run("concurrent identical creates converge", func(t *testing.T) {
+		t.Parallel()
 		store := newContractStore(t, factory)
 		ref := requireContractRef(t, contractOrigin, KindCheckpoints, "cp-0000000001.json")
 		body := []byte("one immutable concurrent value")
@@ -537,6 +554,7 @@ func runArtifactStoreContract(t *testing.T, factory artifactStoreFactory) {
 	})
 
 	t.Run("concurrent distinct creates preserve one winner", func(t *testing.T) {
+		t.Parallel()
 		store := newContractStore(t, factory)
 		ref := requireContractRef(t, contractOrigin, KindCheckpoints, "cp-0000000001.json")
 		bodies := [2][]byte{

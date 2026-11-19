@@ -19,6 +19,7 @@ import (
 )
 
 func TestRawJobHealthOrphans(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -99,6 +100,7 @@ func TestRawJobHealthOrphans(t *testing.T) {
 }
 
 func TestRawJobHealthExpiredLeases(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -168,6 +170,7 @@ func TestRawJobHealthExpiredLeases(t *testing.T) {
 }
 
 func TestRawJobHealthFailureClasses(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -211,6 +214,7 @@ func TestRawJobHealthFailureClasses(t *testing.T) {
 }
 
 func TestRawJobHealthClearsAfterHeadAdvances(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -239,6 +243,7 @@ func TestRawJobHealthClearsAfterHeadAdvances(t *testing.T) {
 }
 
 func TestRawJobHealthIgnoresReplacedProcessingVersion(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	setRawHealthAcceptedAt(t, f.admin, time.Now().Add(-24*time.Hour))
 	manifest, _ := f.accept(t, "device-a", "capture-a", "")
@@ -260,6 +265,7 @@ func TestRawJobHealthIgnoresReplacedProcessingVersion(t *testing.T) {
 }
 
 func TestRawJobHealthIgnoresLegacyJobAfterHostedSelection(t *testing.T) {
+	t.Parallel()
 	for _, state := range []string{"failed", "complete"} {
 		t.Run(state, func(t *testing.T) {
 			f := newProjectionFixture(t)
@@ -281,6 +287,7 @@ func TestRawJobHealthIgnoresLegacyJobAfterHostedSelection(t *testing.T) {
 }
 
 func TestRawJobHealthTimestampsUTC(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	pg.SetMaxOpenConns(1)
 	setRawHealthAcceptedAt(t, pg, time.Date(2026, 8, 19, 1, 35, 6, 0, time.UTC))
@@ -322,6 +329,7 @@ func TestRawJobHealthTimestampsUTC(t *testing.T) {
 }
 
 func TestRawJobHealthRetryThreshold(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -368,6 +376,7 @@ func TestRawJobHealthRetryThreshold(t *testing.T) {
 }
 
 func TestRawJobHealthParseLag(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -404,6 +413,7 @@ func TestRawJobHealthParseLag(t *testing.T) {
 }
 
 func TestRawJobHealthIsolation(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identityA := rawIngestIdentity(t, "tenant-a")
 	identityB, err := rawsync.NewAuthIdentity("tenant-b", "device-b")
@@ -501,6 +511,7 @@ func TestRawJobHealthIsolation(t *testing.T) {
 }
 
 func TestRawJobHealthReadOnly(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -540,13 +551,13 @@ func TestRawJobHealthReadOnly(t *testing.T) {
 	pgURL := testPGURL(t)
 	const role = "agentsview_health_reader"
 	const password = "agentsview_health_reader_pw"
-	_, _ = pg.Exec("DROP OWNED BY " + role)
-	_, _ = pg.Exec("DROP ROLE IF EXISTS " + role)
-	_, err = pg.Exec("CREATE ROLE " + role + " LOGIN PASSWORD '" + password + "'")
+	_, _ = pg.ExecContext(t.Context(), "DROP OWNED BY "+role)
+	_, _ = pg.ExecContext(t.Context(), "DROP ROLE IF EXISTS "+role)
+	_, err = pg.ExecContext(t.Context(), "CREATE ROLE "+role+" LOGIN PASSWORD '"+password+"'")
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		_, _ = pg.Exec("DROP OWNED BY " + role)
-		_, _ = pg.Exec("DROP ROLE IF EXISTS " + role)
+		_, _ = pg.ExecContext(context.WithoutCancel(t.Context()), "DROP OWNED BY "+role)
+		_, _ = pg.ExecContext(context.WithoutCancel(t.Context()), "DROP ROLE IF EXISTS "+role)
 	})
 	for _, grant := range []string{
 		"GRANT USAGE ON SCHEMA " + schemaTestSchema + " TO " + role,
@@ -554,13 +565,13 @@ func TestRawJobHealthReadOnly(t *testing.T) {
 		"GRANT SELECT ON " + schemaTestSchema + ".raw_source_heads TO " + role,
 		"GRANT SELECT ON " + schemaTestSchema + ".raw_ingest_jobs TO " + role,
 	} {
-		_, err = pg.Exec(grant)
+		_, err = pg.ExecContext(t.Context(), grant)
 		require.NoError(t, err, grant)
 	}
 	readerURL, err := url.Parse(pgURL)
 	require.NoError(t, err)
 	readerURL.User = url.UserPassword(role, password)
-	readerDB, err := Open(readerURL.String(), schemaTestSchema, true)
+	readerDB, err := Open(t.Context(), readerURL.String(), schemaTestSchema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, readerDB.Close()) })
 	reader, err := NewRawIngestStore(readerDB)
@@ -573,6 +584,7 @@ func TestRawJobHealthReadOnly(t *testing.T) {
 }
 
 func TestRawJobHealthValidation(t *testing.T) {
+	t.Parallel()
 	_, store := newRawIngestTestStore(t)
 	validIdentity := rawIngestIdentity(t, "tenant-a")
 	for _, identity := range []rawsync.AuthIdentity{
@@ -614,6 +626,7 @@ func TestRawJobHealthValidation(t *testing.T) {
 }
 
 func TestRawJobHealthCaps(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -658,7 +671,7 @@ func TestRawJobHealthCaps(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	query := rawsync.JobHealthQuery{MaxAttempts: 5, StaleAfterSeconds: 1}
+	query := rawsync.JobHealthQuery{MaxAttempts: 5, StaleAfterSeconds: 1800}
 	first := rawHealthReport(t, store, identity, query.MaxAttempts, query.StaleAfterSeconds)
 	second := rawHealthReport(t, store, identity, query.MaxAttempts, query.StaleAfterSeconds)
 	assert.Equal(t, int64(51), first.OrphanedManifestCount)

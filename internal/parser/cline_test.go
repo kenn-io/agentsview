@@ -224,7 +224,7 @@ func TestParseClineSession_Full(t *testing.T) {
 	messagesPath := filepath.Join(taskDir, sessionID+".messages.json")
 	require.NoError(t, os.WriteFile(messagesPath, []byte(messagesJSON), 0o644))
 
-	sess, msgs, err := parseClineSession(metaPath, "astro-spectrometer", "local")
+	sess, msgs, err := parseClineSession(t.Context(), metaPath, "astro-spectrometer", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -351,7 +351,7 @@ func TestParseClineSession_FallbackUsageEvent(t *testing.T) {
 	require.NoError(t, os.WriteFile(metaPath, []byte(metaJSON), 0o644))
 
 	// No messages file exists; parser should emit fallback aggregate usage event.
-	sess, msgs, err := parseClineSession(metaPath, "test-proj", "local")
+	sess, msgs, err := parseClineSession(t.Context(), metaPath, "test-proj", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Empty(t, msgs)
@@ -425,7 +425,7 @@ func TestParseClineSession_CommandError(t *testing.T) {
 	}`
 	require.NoError(t, os.WriteFile(filepath.Join(taskDir, sessionID+".messages.json"), []byte(messagesJSON), 0o644))
 
-	sess, msgs, err := parseClineSession(filepath.Join(taskDir, sessionID+".json"), "", "local")
+	sess, msgs, err := parseClineSession(t.Context(), filepath.Join(taskDir, sessionID+".json"), "", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -479,7 +479,7 @@ func TestParseClineSession_OrphanedToolCall(t *testing.T) {
 	}`
 	require.NoError(t, os.WriteFile(filepath.Join(taskDir, sessionID+".messages.json"), []byte(messagesJSON), 0o644))
 
-	sess, _, err := parseClineSession(filepath.Join(taskDir, sessionID+".json"), "", "local")
+	sess, _, err := parseClineSession(t.Context(), filepath.Join(taskDir, sessionID+".json"), "", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -529,7 +529,7 @@ func TestParseClineSession_AttemptCompletionEnding(t *testing.T) {
 	}`
 	require.NoError(t, os.WriteFile(filepath.Join(taskDir, sessionID+".messages.json"), []byte(messagesJSON), 0o644))
 
-	sess, _, err := parseClineSession(filepath.Join(taskDir, sessionID+".json"), "", "local")
+	sess, _, err := parseClineSession(t.Context(), filepath.Join(taskDir, sessionID+".json"), "", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -580,7 +580,7 @@ func TestParseClineSession_AttemptCompletionWithUnresolvedPrecedingToolCall(t *t
 	}`
 	require.NoError(t, os.WriteFile(filepath.Join(taskDir, sessionID+".messages.json"), []byte(messagesJSON), 0o644))
 
-	sess, _, err := parseClineSession(filepath.Join(taskDir, sessionID+".json"), "", "local")
+	sess, _, err := parseClineSession(t.Context(), filepath.Join(taskDir, sessionID+".json"), "", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -651,7 +651,7 @@ func TestParseClineSession_AttemptCompletionWithResolvedPrecedingToolCall(t *tes
 	}`
 	require.NoError(t, os.WriteFile(filepath.Join(taskDir, sessionID+".messages.json"), []byte(messagesJSON), 0o644))
 
-	sess, _, err := parseClineSession(filepath.Join(taskDir, sessionID+".json"), "", "local")
+	sess, _, err := parseClineSession(t.Context(), filepath.Join(taskDir, sessionID+".json"), "", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -699,7 +699,7 @@ func TestParseClineSession_ThinkingContentInlining(t *testing.T) {
 	}`
 	require.NoError(t, os.WriteFile(filepath.Join(taskDir, sessionID+".messages.json"), []byte(messagesJSON), 0o644))
 
-	sess, messages, err := parseClineSession(filepath.Join(taskDir, sessionID+".json"), "", "local")
+	sess, messages, err := parseClineSession(t.Context(), filepath.Join(taskDir, sessionID+".json"), "", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	require.Len(t, messages, 2)
@@ -746,7 +746,7 @@ func TestParseClineSession_ThinkingOnlyEnding(t *testing.T) {
 	}`
 	require.NoError(t, os.WriteFile(filepath.Join(taskDir, sessionID+".messages.json"), []byte(messagesJSON), 0o644))
 
-	sess, messages, err := parseClineSession(filepath.Join(taskDir, sessionID+".json"), "", "local")
+	sess, messages, err := parseClineSession(t.Context(), filepath.Join(taskDir, sessionID+".json"), "", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -799,7 +799,7 @@ func TestParseClineSession_ThinkingAndToolSeparated(t *testing.T) {
 	}`
 	require.NoError(t, os.WriteFile(filepath.Join(taskDir, sessionID+".messages.json"), []byte(messagesJSON), 0o644))
 
-	sess, messages, err := parseClineSession(filepath.Join(taskDir, sessionID+".json"), "", "local")
+	sess, messages, err := parseClineSession(t.Context(), filepath.Join(taskDir, sessionID+".json"), "", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -864,7 +864,7 @@ func TestParseClineRawMessagesToolResultSurvivesMessageSliceGrowth(t *testing.T)
 		},
 	}
 
-	messages, _, _ := parseClineRawMessages(raw, "", "")
+	messages, _, _ := parseClineRawMessages(t.Context(), raw, "", "")
 	require.Len(t, messages, 6)
 	require.Len(t, messages[1].ToolCalls, 1)
 	assert.Equal(t, "call-1", messages[1].ToolCalls[0].ToolUseID)
@@ -888,7 +888,7 @@ func TestParseClineSession_EmptyTranscript(t *testing.T) {
 	metaPath := filepath.Join(taskDir, sessionID+".json")
 	require.NoError(t, os.WriteFile(metaPath, []byte(metaJSON), 0o644))
 
-	sess, msgs, err := parseClineSession(metaPath, "test-proj", "local")
+	sess, msgs, err := parseClineSession(t.Context(), metaPath, "test-proj", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Empty(t, msgs)
@@ -920,7 +920,7 @@ func TestParseClineSession_ZeroCostAuthoritative(t *testing.T) {
 	metaPath := filepath.Join(taskDir, sessionID+".json")
 	require.NoError(t, os.WriteFile(metaPath, data, 0o644))
 
-	sess, _, err := parseClineSession(metaPath, "", "")
+	sess, _, err := parseClineSession(t.Context(), metaPath, "", "")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	require.Len(t, sess.UsageEvents, 1)
@@ -975,7 +975,7 @@ func TestParseClineSession_MessageMetricsZeroCostAuthoritative(t *testing.T) {
 	messagesPath := filepath.Join(taskDir, sessionID+".messages.json")
 	require.NoError(t, os.WriteFile(messagesPath, []byte(messagesJSON), 0o644))
 
-	sess, msgs, err := parseClineSession(metaPath, "test-proj", "local")
+	sess, msgs, err := parseClineSession(t.Context(), metaPath, "test-proj", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	require.Len(t, msgs, 2)
@@ -1047,7 +1047,7 @@ func TestParseClineSession_ContentBlockToolResults(t *testing.T) {
 	messagesPath := filepath.Join(taskDir, sessionID+".messages.json")
 	require.NoError(t, os.WriteFile(messagesPath, []byte(messagesJSON), 0o644))
 
-	sess, msgs, err := parseClineSession(metaPath, "test-proj", "local")
+	sess, msgs, err := parseClineSession(t.Context(), metaPath, "test-proj", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	require.Len(t, msgs, 3)
@@ -1123,7 +1123,7 @@ func TestParseClineSession_ProviderPropagation(t *testing.T) {
 	messagesPath := filepath.Join(taskDir, sessionID+".messages.json")
 	require.NoError(t, os.WriteFile(messagesPath, []byte(messagesJSON), 0o644))
 
-	sess, msgs, err := parseClineSession(metaPath, "test-proj", "local")
+	sess, msgs, err := parseClineSession(t.Context(), metaPath, "test-proj", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	require.Len(t, msgs, 3)
@@ -1153,7 +1153,7 @@ func TestParseClineSession_CanonicalSessionIDValidation(t *testing.T) {
 	require.NoError(t, os.MkdirAll(sess1Dir, 0o755))
 	meta1 := filepath.Join(sess1Dir, "sess-canonical-1.json")
 	require.NoError(t, os.WriteFile(meta1, []byte(`{"session_id":"sess-canonical-1"}`), 0o644))
-	sess1, _, err := parseClineSession(meta1, "proj", "local")
+	sess1, _, err := parseClineSession(t.Context(), meta1, "proj", "local")
 	require.NoError(t, err)
 	assert.Equal(t, "cline:sess-canonical-1", sess1.ID)
 
@@ -1162,7 +1162,7 @@ func TestParseClineSession_CanonicalSessionIDValidation(t *testing.T) {
 	require.NoError(t, os.MkdirAll(sess2Dir, 0o755))
 	meta2 := filepath.Join(sess2Dir, "sess-canonical-2.json")
 	require.NoError(t, os.WriteFile(meta2, []byte(`{}`), 0o644))
-	sess2, _, err := parseClineSession(meta2, "proj", "local")
+	sess2, _, err := parseClineSession(t.Context(), meta2, "proj", "local")
 	require.NoError(t, err)
 	assert.Equal(t, "cline:sess-canonical-2", sess2.ID)
 
@@ -1171,7 +1171,7 @@ func TestParseClineSession_CanonicalSessionIDValidation(t *testing.T) {
 	require.NoError(t, os.MkdirAll(sess3Dir, 0o755))
 	meta3 := filepath.Join(sess3Dir, "sess-canonical-3.json")
 	require.NoError(t, os.WriteFile(meta3, []byte(`{"session_id":"stale-or-evil-id"}`), 0o644))
-	_, _, err = parseClineSession(meta3, "proj", "local")
+	_, _, err = parseClineSession(t.Context(), meta3, "proj", "local")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "does not match canonical id")
 
@@ -1180,7 +1180,7 @@ func TestParseClineSession_CanonicalSessionIDValidation(t *testing.T) {
 	require.NoError(t, os.MkdirAll(sess4Dir, 0o755))
 	meta4 := filepath.Join(sess4Dir, "wrong-name.json")
 	require.NoError(t, os.WriteFile(meta4, []byte(`{"session_id":"sess-canonical-4"}`), 0o644))
-	_, _, err = parseClineSession(meta4, "proj", "local")
+	_, _, err = parseClineSession(t.Context(), meta4, "proj", "local")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "does not match directory")
 
@@ -1189,7 +1189,7 @@ func TestParseClineSession_CanonicalSessionIDValidation(t *testing.T) {
 	require.NoError(t, os.MkdirAll(sess5Dir, 0o755))
 	meta5 := filepath.Join(sess5Dir, "_invalid_sess.json")
 	require.NoError(t, os.WriteFile(meta5, []byte(`{"session_id":"_invalid_sess"}`), 0o644))
-	_, _, err = parseClineSession(meta5, "proj", "local")
+	_, _, err = parseClineSession(t.Context(), meta5, "proj", "local")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid cline session directory name")
 }
@@ -1382,7 +1382,7 @@ func TestParseClineSession_TeammateSubagents(t *testing.T) {
 	metaPath := filepath.Join(sessDir, "sess-parent.json")
 
 	// 1. Test parseClineSessionWithTeammates directly
-	results, err := parseClineSessionWithTeammates(metaPath, "teamproject", "local")
+	results, err := parseClineSessionWithTeammates(t.Context(), metaPath, "teamproject", "local")
 	require.NoError(t, err)
 	require.Len(t, results, 2)
 
@@ -1435,7 +1435,7 @@ func TestParseClineSession_TeammateSubagents(t *testing.T) {
 	assert.Equal(t, "Bash", child.Messages[2].ToolCalls[0].Category)
 
 	// 2. Verify parseClineSession (backwards compatibility) returns parent with annotated tool calls
-	sess, msgs, err := parseClineSession(metaPath, "teamproject", "local")
+	sess, msgs, err := parseClineSession(t.Context(), metaPath, "teamproject", "local")
 	require.NoError(t, err)
 	assert.Equal(t, "cline:sess-parent", sess.ID)
 	assert.Empty(t, msgs[1].ToolCalls[0].SubagentSessionID)
@@ -1475,7 +1475,7 @@ func TestParseClineSession_AmbiguousTeammateRunsRemainUnlinked(t *testing.T) {
 		))
 	}
 
-	results, err := parseClineSessionWithTeammates(
+	results, err := parseClineSessionWithTeammates(t.Context(),
 		filepath.Join(sessDir, sessionID+".json"), "", "local",
 	)
 	require.NoError(t, err)
@@ -1524,7 +1524,7 @@ func TestParseClineTeammates_SafetyValidationAndSymlinks(t *testing.T) {
 		defer os.Remove(symlinkPath)
 	}
 
-	results, err := parseClineSessionWithTeammates(filepath.Join(sessDir, "sess-safe.json"), "proj", "local")
+	results, err := parseClineSessionWithTeammates(t.Context(), filepath.Join(sessDir, "sess-safe.json"), "proj", "local")
 	require.NoError(t, err)
 
 	// Only parent + the one valid subagent should be returned. All invalid names and symlinks skipped.
@@ -1608,7 +1608,7 @@ func TestParseClineSession_MultiTurnUserInputCleaning(t *testing.T) {
 	}`
 	require.NoError(t, os.WriteFile(filepath.Join(taskDir, sessionID+".messages.json"), []byte(messagesJSON), 0o644))
 
-	sess, msgs, err := parseClineSession(filepath.Join(taskDir, sessionID+".json"), "test-proj", "local")
+	sess, msgs, err := parseClineSession(t.Context(), filepath.Join(taskDir, sessionID+".json"), "test-proj", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -1681,7 +1681,7 @@ func TestParseClineTeammates_OneSessionPerFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(sessDir, "worker__bbb222.messages.json"), []byte(second), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(sessDir, "scout__ccc333.messages.json"), []byte(foreign), 0o644))
 
-	results, err := parseClineSessionWithTeammates(filepath.Join(sessDir, "sess-runs.json"), "", "local")
+	results, err := parseClineSessionWithTeammates(t.Context(), filepath.Join(sessDir, "sess-runs.json"), "", "local")
 	require.NoError(t, err)
 	require.Len(t, results, 4, "parent plus one session per teammate file")
 

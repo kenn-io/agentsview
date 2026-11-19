@@ -109,9 +109,9 @@ func sandboxKernelHelper(args []string) int {
 			_ = os.Chmod("/source/input", 0o600)
 			checks["source_write"] = os.WriteFile("/source/input", []byte("bad"), 0o600) != nil
 			checks["jail_write"] = os.WriteFile("/escape", []byte("bad"), 0o600) != nil
-			_, err = unix.Mmap(-1, 0, 3<<30, unix.PROT_NONE, unix.MAP_PRIVATE|unix.MAP_ANON)
+			_, err = unix.Mmap(-1, 0, int(parserAddressSpaceLimit)+(1<<20), unix.PROT_NONE, unix.MAP_PRIVATE|unix.MAP_ANON)
 			checks["address_limit"] = errors.Is(err, unix.ENOMEM)
-			_, err = unix.Mmap(-1, 0, 600<<20, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_PRIVATE|unix.MAP_ANON)
+			_, err = unix.Mmap(-1, 0, int(parserDataLimit)+(1<<20), unix.PROT_READ|unix.PROT_WRITE, unix.MAP_PRIVATE|unix.MAP_ANON)
 			checks["data_limit"] = errors.Is(err, unix.ENOMEM)
 		}
 
@@ -147,7 +147,7 @@ func sandboxKernelHelper(args []string) int {
 		checks["fork"] = errno == unix.EPERM
 		checks["unshare"] = unix.Unshare(unix.CLONE_NEWNET) == unix.EPERM
 		checks["mount"] = unix.Mount("", "/", "", unix.MS_REMOUNT, "") == unix.EPERM
-		checks["raise_limit"] = unix.Setrlimit(unix.RLIMIT_AS, &unix.Rlimit{Cur: 3 << 30, Max: 3 << 30}) == unix.EPERM
+		checks["raise_limit"] = unix.Setrlimit(unix.RLIMIT_AS, &unix.Rlimit{Cur: parserAddressSpaceLimit + 1, Max: parserAddressSpaceLimit + 1}) == unix.EPERM
 		checks["environment"] = os.Getenv("RAW_SANDBOX_SECRET") == ""
 		checks["foreign_signal"] = unix.Kill(1, 0) == unix.EPERM
 		if err := json.NewEncoder(os.Stdout).Encode(checks); err != nil {
@@ -226,12 +226,15 @@ func TestSandboxClosesDeliberatelyInheritedDescriptor(t *testing.T) {
 func TestSandboxSeccompSynchronizesThreads(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, os.Args[0], "--sandbox-kernel-test", "seccomp", "unused", "unused", "unused")
+	childCtx, stopChild := context.WithCancel(ctx)
+	defer stopChild()
+	cmd := exec.CommandContext(childCtx, os.Args[0], "--sandbox-kernel-test", "seccomp", "unused", "unused", "unused")
 	cmd.Env = []string{"GOMAXPROCS=2", "AGENTSVIEW_RAW_PARSER_CHILD=1"}
-	out, err := runParserProcess(ctx, cancel, cmd, nil, 4096, parserErrorLimit)
-	require.NoError(t, err)
 	var checks map[string]bool
-	require.NoError(t, json.Unmarshal(out, &checks))
+	err := runParserProcess(ctx, stopChild, cmd, nil, 4096, parserErrorLimit, func(src io.Reader) error {
+		return json.NewDecoder(src).Decode(&checks)
+	})
+	require.NoError(t, err)
 	require.GreaterOrEqual(t, len(checks), 10)
 	for name, value := range checks {
 		assert.True(t, value, name)

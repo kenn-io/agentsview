@@ -48,6 +48,7 @@ beforeEach(() => {
   settings.saveError = null;
   settings.readOnly = false;
   settings.saving = false;
+  router.params = {};
   dismissFlash();
 });
 
@@ -57,6 +58,87 @@ afterEach(() => {
 });
 
 describe("SettingsPage", () => {
+  it("writes the selected panel while preserving other parameters", async () => {
+    router.route = "settings";
+    router.params = { source: "example" };
+    settingsService.getApiV1Settings.mockResolvedValue({
+      agent_dirs: {},
+      chart_palette: "agentsview",
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" },
+    });
+    const component = mount(SettingsPage, { target: document.body });
+    try {
+      await tick();
+      await tick();
+      const nav = document.querySelector(".kit-settings__nav")!;
+      const button = [...nav.querySelectorAll("button")].find((item) =>
+        item.textContent?.includes("Tool-result images"),
+      )!;
+      button.click();
+      await tick();
+      expect(router.params).toMatchObject({ panel: "tool-result-images", source: "example" });
+    } finally {
+      unmount(component);
+    }
+  });
+
+  it("follows browser navigation between settings panels", async () => {
+    window.history.replaceState(null, "", "/settings?panel=appearance");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    settingsService.getApiV1Settings.mockResolvedValue({
+      agent_dirs: {},
+      chart_palette: "agentsview",
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" },
+    });
+    const component = mount(SettingsPage, { target: document.body });
+    try {
+      await tick();
+      await tick();
+      window.history.pushState(null, "", "/settings?panel=tool-result-images");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+      await tick();
+      expect(document.querySelector(".settings-panel:not([hidden])")?.textContent).toContain(
+        "Tool-result images",
+      );
+    } finally {
+      unmount(component);
+    }
+  });
+
+  it("opens Session Providers from the requested panel", async () => {
+    router.params = { panel: "agent-directories" };
+    settingsService.getApiV1Settings.mockResolvedValue({
+      agent_dirs: {},
+      chart_palette: "agentsview",
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" },
+    });
+    const component = mount(SettingsPage, { target: document.body });
+    try {
+      await tick();
+      await tick();
+      expect(document.querySelector(".settings-panel:not([hidden])")?.textContent).toContain(
+        "Session providers",
+      );
+    } finally {
+      unmount(component);
+    }
+  });
+
   it("hides full resync for an archive-only database", async () => {
     settingsService.getApiV1Settings.mockResolvedValue({
       agent_dirs: {},
@@ -82,15 +164,13 @@ describe("SettingsPage", () => {
     }
   });
 
-  it("renders browser-local settings with the Data-mode worktree pointer", async () => {
+  it("renders browser-local settings without a worktree mappings panel", async () => {
     let resolveSettings!: (value: unknown) => void;
     settingsService.getApiV1Settings.mockReturnValue(
       new Promise((resolve) => {
         resolveSettings = resolve;
       }),
     );
-    const navigate = vi.spyOn(router, "navigate").mockReturnValue(true);
-
     const component = mount(SettingsPage, {
       target: document.body,
     });
@@ -114,21 +194,16 @@ describe("SettingsPage", () => {
 
     expect(document.body.textContent).toContain("Date ranges");
     expect(document.body.textContent).toContain("Link date ranges across pages");
-    // The mapping manager moved to Data; Settings keeps only a pointer.
-    expect(document.body.textContent).toContain("Worktree mappings");
-    expect(document.body.textContent).toContain("Project classification rules have moved to Data.");
+    // Classification rules live on the Data page; Settings has no panel for them.
+    const navLabels = Array.from(document.body.querySelectorAll(".kit-settings__nav button")).map(
+      (button) => button.textContent ?? "",
+    );
+    expect(navLabels.some((label) => label.includes("Date ranges"))).toBe(true);
+    expect(navLabels.some((label) => label.includes("Worktree mappings"))).toBe(false);
+    expect(document.body.textContent).not.toContain("Open Data › Rules");
     expect(document.body.textContent).not.toContain("available in local mode only");
 
-    const pointer = Array.from(document.body.querySelectorAll("button")).find((b) =>
-      b.textContent?.includes("Open Data › Rules"),
-    );
-    expect(pointer).toBeTruthy();
-    pointer!.click();
-    await tick();
-    expect(navigate).toHaveBeenCalledWith("data", { view: "rules" });
-
     unmount(component);
-    navigate.mockRestore();
   });
 
   it("persists the selected interface language for reload", async () => {
@@ -199,8 +274,18 @@ describe("SettingsPage", () => {
     expect(nav!.textContent).toContain("Preferences");
     expect(nav!.textContent).toContain("Data");
     expect(nav!.textContent).toContain("Connections");
-    expect(nav!.textContent).toContain("Session Providers");
+    expect(nav!.textContent).toContain("Session providers");
     expect(nav!.textContent).not.toContain("Agent Directories");
+
+    // Every destination carries an icon so the list scans by shape.
+    const navItems = Array.from(nav!.querySelectorAll<HTMLElement>(".kit-settings__nav-item"));
+    expect(navItems).toHaveLength(9);
+    for (const item of navItems) {
+      expect(
+        item.querySelector(".kit-settings__nav-icon svg"),
+        item.textContent ?? "",
+      ).not.toBeNull();
+    }
 
     const visiblePanel = () =>
       document.body.querySelector<HTMLElement>(".settings-panel:not([hidden])");
@@ -222,6 +307,44 @@ describe("SettingsPage", () => {
 
     unmount(component);
   });
+
+  it.each(["Reading width", "message layout"])(
+    "finds Appearance by the %s label it shows",
+    async (query) => {
+      settingsService.getApiV1Settings.mockResolvedValue({
+        agent_dirs: {},
+        chart_palette: "agentsview",
+        github_configured: false,
+        host: "127.0.0.1",
+        port: 8080,
+        read_only: false,
+        require_auth: false,
+        terminal: { mode: "auto" },
+      });
+      const component = mount(SettingsPage, { target: document.body });
+      await tick();
+      await tick();
+
+      const search = document.body.querySelector<HTMLInputElement>(
+        'input[type="search"][aria-label="Search settings"]',
+      )!;
+      search.value = query;
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+      await tick();
+
+      const nav = document.body.querySelector('nav[aria-label="Settings"]')!;
+      // With no match the nav still shows the active panel (Appearance by
+      // default), so the no-results state is what tells a miss apart.
+      expect(
+        document.body.querySelector(".settings-page")?.classList.contains("settings-no-results"),
+      ).toBe(false);
+      const found = nav.querySelectorAll("button");
+      expect(found).toHaveLength(1);
+      expect(found[0]?.textContent).toContain("Appearance");
+
+      unmount(component);
+    },
+  );
 
   it("filters settings by keywords and restores the selected panel", async () => {
     settingsService.getApiV1Settings.mockResolvedValue({
@@ -287,11 +410,62 @@ describe("SettingsPage", () => {
     restoredSearch.dispatchEvent(new Event("input", { bubbles: true }));
     await tick();
 
-    expect(restoredNav.querySelectorAll("button")).toHaveLength(11);
+    expect(restoredNav.querySelectorAll("button")).toHaveLength(9);
     expect(
       document.body.querySelector(".settings-page")?.classList.contains("settings-no-results"),
     ).toBe(false);
     expect(restoredNav.querySelector('[aria-current="true"]')?.textContent).toContain("Terminal");
+
+    unmount(component);
+  });
+
+  it("keeps the image ingest policy and the image cleanup in one section", async () => {
+    settingsService.getApiV1Settings.mockResolvedValue({
+      agent_dirs: {},
+      chart_palette: "agentsview",
+      github_configured: false,
+      host: "127.0.0.1",
+      port: 8080,
+      read_only: false,
+      require_auth: false,
+      terminal: { mode: "auto" },
+      tool_result_images: "keep",
+    });
+    const component = mount(SettingsPage, { target: document.body });
+    await tick();
+    await tick();
+
+    const nav = document.body.querySelector('nav[aria-label="Settings"]')!;
+    expect(nav.textContent).not.toContain("Archive content");
+
+    // The words that used to find the Archive content section find this one.
+    const search = document.body.querySelector<HTMLInputElement>(
+      'input[type="search"][aria-label="Search settings"]',
+    )!;
+    for (const word of ["archive", "retention", "storage", "placeholders"]) {
+      search.value = word;
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+      await tick();
+      const labels = Array.from(nav.querySelectorAll("button")).map((b) => b.textContent ?? "");
+      expect(
+        labels.some((label) => label.includes("Tool-result images")),
+        word,
+      ).toBe(true);
+    }
+
+    search.value = "";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await tick();
+    Array.from(nav.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.includes("Tool-result images"))!
+      .click();
+    await tick();
+
+    const panel = document.body.querySelector<HTMLElement>(".settings-panel:not([hidden])")!;
+    expect(
+      panel.querySelector('[role="radiogroup"][aria-label="Tool-result images"]'),
+    ).not.toBeNull();
+    expect(panel.querySelector(".tool-image-cleanup")).not.toBeNull();
 
     unmount(component);
   });

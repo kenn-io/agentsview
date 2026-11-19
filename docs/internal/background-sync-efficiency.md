@@ -4,15 +4,66 @@ This document records the runtime and cost-model contracts that keep active
 session writers from turning into unbounded background work. The implementation
 lives primarily in `internal/sync/watcher.go`,
 `internal/parser/codex_cursor.go`, and the provider incremental path in
-`internal/sync/engine.go`.
+`internal/sync/engine_incremental.go`.
 
 ## Watcher runtime contract
 
 - Production watcher events use a 500 ms first-event batching window. Later
   events join the pending set without postponing its deadline.
-- Watcher callback start times are at least five seconds apart. One worker runs
-  callbacks serially while the fsnotify loop continues draining events and
-  errors, so a long sync cannot block event intake or overlap another sync.
+- Watcher callback start times are at least one dispatch floor apart. One worker
+  runs callbacks serially while the fsnotify loop continues draining events
+  and errors, so a long sync cannot block event intake or overlap another
+  sync.
+- The daemon's floor is the background interval, ten minutes by default (see
+  [`background_sync_interval`](../configuration.md#config-file)). A holder of
+  `IntervalOverride` shortens it for as long as someone is watching the
+  archive: `/api/v1/events`, which the web UI keeps open only while its tab is
+  visible, holds `sync.LiveInterval`, and `/api/v1/changes/stream` holds one
+  second. While anything is held, the floor is the shortest hold or the
+  watcher's `WatcherOptions.LiveInterval`, whichever is shorter. The daemon
+  sets `LiveInterval` from `sync_interval` each time it builds a watcher, so a
+  provider reload changes the pace for clients that are already connected. The
+  server never reads `sync_interval` for this. Archive push commands use
+  `sync_interval` as their floor.
+- A failed batch backs off from the live interval, not from the background
+  interval. The floor still applies, so with nobody watching the retry waits
+  for the background interval, and with a client connected it runs at that
+  client's pace without a new file event.
+- An archive read flushes the pending set through `Watcher.FlushPending` before
+  it is served, so a reader never waits out the background interval. It also
+  runs one live-activity poll, unless one ran in the last 30 seconds, because
+  an agent that keeps its session file open produces no file event on macOS as
+  the file grows. Reads start this catch-up at most once per `sync_interval`,
+  only while no hold is active, and wait at most two seconds for it. Each
+  read then holds `sync.LiveInterval` until two minutes after the latest read
+  (`readLiveHold`), so the watcher syncs at the live pace and later reads find
+  no catch-up due. The check for a due catch-up runs before the read takes its
+  hold.
+  Remote-sync export requests read session files, not the archive, and start
+  no catch-up.
+- A manual `agentsview source sync` through a running daemon asks for the
+  watchers' changes only: `changes_only` on `/api/v1/sync`, or
+  `local_changes_only` with `include_local` on `/api/v1/sync/remotes`. The
+  daemon applies them through `daemonIngestion.FlushChanges` and runs no
+  discovery pass. Unlike a read's catch-up, the flush also takes the watcher's
+  retained retry (`Watcher.FlushPendingAndRetry`) and skips the scheduled
+  attached-archive drain. The server then drains attached archives through
+  `finishLocalSync`, after any remote hosts, as it does after a manual full
+  pass, so their retry delay does not apply. It runs the full pass instead
+  before startup opens watcher delivery, without daemon ingestion
+  (`--no-sync`), for an archive that needs a rebuild, and after a settings
+  reload changes the session sources until a full pass that started later
+  completes. A replacement watcher sees only later changes, so only that pass
+  reads history already under a new root. `--rescan` asks for the full pass.
+- The live-activity poller and the unwatched-root poller follow the same pace
+  through the daemon's collection gap: their own interval while a hold is
+  active, the background interval otherwise, and no polling during an idle
+  pause.
+- The idle pause (`sync_idle_after`) pauses dispatch with
+  `Watcher.PauseDispatch` and leaves the watcher attached. The pending set
+  keeps growing under its usual bounds. The next archive request reopens
+  dispatch and flushes that set, so a wake costs the changed files and not a
+  discovery pass. It also runs the periodic pass if the pause skipped one.
 - An idle watcher has no running timer or ticker. The first relevant event
   creates the next one-shot timer.
 - Each pending or in-flight batch retains at most 8,192 unique paths and 2 MiB
@@ -190,16 +241,16 @@ plans, and polling. The local sync engine (`internal/sync/engine.go`) omits a
 disabled provider's factory once while building its provider-factory set;
 watcher coverage and polling derive from that same selection. HTTP and SSH
 remote import, and every export path (HTTP/SSH source export, PostgreSQL,
-DuckDB, archive export), stay independent of this setting and are never passed a
-disabled-provider list, so archived sessions from a disabled provider remain
-visible, exportable, and unaffected by rebuilds. `RemoteSyncExcluded` remains
-the separate, permanent capability that keeps unsafe source trees out of remote
-export; disabling a provider does not change it.
+ClickHouse, archive export), stay independent of this setting and are never
+passed a disabled-provider list, so archived sessions from a disabled provider
+remain visible, exportable, and unaffected by rebuilds. `RemoteSyncExcluded`
+remains the separate, permanent capability that keeps unsafe source trees out of
+remote export; disabling a provider does not change it.
 
 A change saved through the Settings API applies to the running daemon's file
-watching and polling immediately. A separate `pg push --watch`,
-`clickhouse push --watch`, or `duckdb push --watch` process still needs a
-restart to pick up the new selection, because it owns its own engine instance.
+watching and polling immediately. A separate `pg push --watch` or
+`clickhouse push --watch` process still needs a restart to pick up the new
+selection, because it owns its own engine instance.
 See
 [Disabling Session Providers](../configuration.md#disabling-session-providers)
 for the user-facing contract.

@@ -2040,10 +2040,10 @@ func rebindExtractedSessionEvidenceTx(
 		}
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE recall_evidence
-			SET content_digest = ?,
-			    message_start_source_uuid = ?,
-			    message_end_source_uuid = ?
-			WHERE id = ?`,
+			SET content_digest = ?1, message_start_source_uuid = ?2,
+			    message_end_source_uuid = ?3
+			WHERE id = ?4 AND (content_digest, message_start_source_uuid,
+			    message_end_source_uuid) IS NOT (?1, ?2, ?3)`,
 			metadata.ContentDigest,
 			metadata.MessageStartSourceUUID,
 			metadata.MessageEndSourceUUID,
@@ -2221,7 +2221,7 @@ func (db *DB) ExtractProgressStats(
 	}
 	rows, err := db.getReader().QueryContext(ctx, `
 		SELECT state, COUNT(*),
-			COALESCE(SUM(unit_cursor), 0), COALESCE(SUM(units_total), 0)
+			SUM(unit_cursor), SUM(units_total)
 		FROM recall_extract_progress
 		WHERE generation_fingerprint = ?
 		GROUP BY state`, fingerprint)

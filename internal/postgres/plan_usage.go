@@ -82,12 +82,41 @@ func (s *Store) GetSessionPlanUsage(
 func (s *Store) GetPlanUsageSessionCounts(
 	ctx context.Context, f db.UsageFilter,
 ) (db.PlanUsageSessionCounts, error) {
+	slot := db.UsageSlot(f, false)
+	var version string
+	deferred := s.deferUsage(ctx, f)
+	if deferred {
+		defer s.usageCache.HoldWarm()()
+	} else {
+		version = s.keptUsageVersion(ctx, slot)
+	}
+	if deferred || version == standbyUsageMarker || (version == "" && s.runtimeState().usageIdentityDenied.Load()) {
+		raw := f
+		raw.ModelAliases = nil
+		tally, handled, err := snapshotRetained(ctx, s, slot, &s.runtimeState().planUsage, &s.runtimeState().standbyPlan, func(ctx context.Context, view *Store, _ string) (*db.PlanUsageCountSummary, error) {
+			return view.readPlanUsageSessionCounts(ctx, raw)
+		})
+		if handled {
+			if err != nil {
+				return db.PlanUsageSessionCounts{}, err
+			}
+			return tally.CountsFor(f.ModelAliases), nil
+		}
+		version = ""
+	}
+	if deferred {
+		version = s.directUsageVersion(ctx, slot)
+	}
+	return db.PlanUsageCounts(ctx, &s.runtimeState().planUsage, slot, version, f, s.readPlanUsageSessionCounts)
+}
+
+func (s *Store) readPlanUsageSessionCounts(ctx context.Context, f db.UsageFilter) (*db.PlanUsageCountSummary, error) {
 	pb := &paramBuilder{}
 	b := pgUsageBoundsForFilter(pb, f)
 
 	messageWhere := appendPGUsageBranchFilterClauses(pgUsageMatchingMessageEligibility+`
 	AND NOT EXISTS (SELECT 1 FROM usage_events ue WHERE ue.session_id = s.id)`,
-		pb, f, "m.model")
+		pb, f, "m.model", s.sessionDialect())
 	messageWhere = appendPGUsageColumnBounds(
 		messageWhere, "COALESCE(m.timestamp, s.started_at)", b)
 	query := `
@@ -104,7 +133,7 @@ WHERE ` + messageWhere
 	AND NOT EXISTS (
 		SELECT 1 FROM messages m
 		WHERE m.session_id = s.id AND `+pgUsageMatchingMessageSourceEligibility+`
-	)`, pb, f)
+	)`, pb, f, s.sessionDialect())
 		sessionWhere = appendPGUsageColumnBounds(sessionWhere, "s.started_at", b)
 		query += `
 UNION ALL
@@ -115,7 +144,7 @@ WHERE ` + sessionWhere
 	}
 
 	eventWhere := appendPGUsageBranchFilterClauses(pgUsageEventEligibility+`
-	AND p.uncaptured_turns > 0`, pb, f, "ue.model")
+	AND p.uncaptured_turns > 0`, pb, f, "ue.model", s.sessionDialect())
 	eventWhere = appendPGUsageColumnBounds(
 		eventWhere, "COALESCE(ue.occurred_at, s.started_at)", b)
 	query += `
@@ -129,7 +158,7 @@ WHERE ` + eventWhere
 
 	rows, err := s.pg.QueryContext(ctx, query, pb.args...)
 	if err != nil {
-		return db.PlanUsageSessionCounts{}, fmt.Errorf("querying pg plan usage session counts: %w", err)
+		return nil, fmt.Errorf("querying pg plan usage session counts: %w", err)
 	}
 	defer rows.Close()
 	tally := db.NewPlanUsageCountTally(f)
@@ -138,14 +167,14 @@ WHERE ` + eventWhere
 		var kind, sessionID, model string
 		var ts sql.NullTime
 		if err := rows.Scan(&kind, &sessionID, &model, &ts); err != nil {
-			return db.PlanUsageSessionCounts{}, fmt.Errorf("scanning pg plan usage session count: %w", err)
+			return nil, fmt.Errorf("scanning pg plan usage session count: %w", err)
 		}
 		if err := tally.Add(kind, sessionID, model, usageDate(ts, loc)); err != nil {
-			return db.PlanUsageSessionCounts{}, err
+			return nil, err
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return db.PlanUsageSessionCounts{}, fmt.Errorf("iterating pg plan usage session counts: %w", err)
+		return nil, fmt.Errorf("iterating pg plan usage session counts: %w", err)
 	}
-	return tally.Counts(), nil
+	return tally.Compact(), nil
 }

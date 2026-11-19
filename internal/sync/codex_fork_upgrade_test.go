@@ -2,6 +2,7 @@ package sync
 
 import (
 	"database/sql"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,6 +11,39 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
+
+func TestCodexForkRebuildBeforeProvenanceSchema(t *testing.T) {
+	e, database, cp, pp, meta := forkReviewEngine(t, 1<<30, parser.AgentCodex)
+	require.NoError(t, os.WriteFile(cp, []byte(meta+testjsonl.JoinJSONL(
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", forkReviewTime),
+		testjsonl.CodexMsgJSON("assistant", "fork answer", forkReviewTime),
+		testjsonl.CodexTokenCountJSON(forkReviewTime, 20, 5, 0),
+	)), 0o600))
+	id := "codex:" + forkReviewChild
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: id, Agent: "codex", Machine: "local", Project: "project", FilePath: &cp}))
+	require.NoError(t, database.ReplaceSessionMessages(t.Context(), id, []db.Message{{SessionID: id, Role: "assistant", Content: "fork answer", Timestamp: forkReviewTime, OutputTokens: 5, HasOutputTokens: true}}))
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "codex:orphan", Agent: "codex", Machine: "local", Project: "project"}))
+	require.NoError(t, database.ReplaceSessionMessages(t.Context(), "codex:orphan", []db.Message{{SessionID: "codex:orphan", Role: "assistant", Content: "archived answer"}}))
+	// Archives from before fork provenance have no state table. A rebuild
+	// reads them without migrations before constructing the replacement.
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), "DROP TABLE codex_fork_state")
+		return err
+	}))
+	stats := e.ResyncAll(t.Context(), nil)
+	require.True(t, stats.ArchiveRebuilt)
+	require.Zero(t, stats.Failed)
+	assert.Equal(t, 1, stats.Deferred)
+	assert.Equal(t, []string{"fork answer"}, messageContents(t, database, id))
+	assert.Equal(t, []string{"archived answer"}, messageContents(t, database, "codex:orphan"))
+	require.NoError(t, os.WriteFile(pp, []byte(testjsonl.JoinJSONL(testjsonl.CodexSessionMetaJSON(forkReviewParent, "/work/project", "user", forkReviewTime))), 0o600))
+	require.Zero(t, e.SyncAll(t.Context(), nil).Deferred)
+	usage, err := database.GetSessionUsage(t.Context(), id, true)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.Equal(t, 5, usage.TotalOutputTokens)
+	assert.Equal(t, []string{"archived answer"}, messageContents(t, database, "codex:orphan"))
+}
 
 func TestCodexForkUpgradeDoesNotRestoreReparsedParentIdentity(t *testing.T) {
 	const (

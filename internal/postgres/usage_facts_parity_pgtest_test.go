@@ -84,24 +84,23 @@ type usageParityAgentBreakdown struct {
 }
 
 func TestSQLiteFactsAndPostgresLiveUsageParity(t *testing.T) {
-	const schema = "agentsview_usage_facts_parity_test"
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	t.Parallel()
+	const schema = usageTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 
 	local := testDB(t)
 	seedUsageParityFixture(t, local)
 	seedUsageParity1hCacheFixture(t, local)
 
 	syncer, err := New(
-		pgURL, schema, local, "parity-machine", true, storage.PusherOptions{},
+		t.Context(), pgURL, schema, local, "parity-machine", true, storage.PusherOptions{},
 	)
 	require.NoError(t, err, "create PostgreSQL sync")
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	_, err = syncer.Push(t.Context(), false, nil)
 	require.NoError(t, err, "push parity fixture")
 
-	remote, err := NewStore(pgURL, schema, true)
+	remote, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "open PostgreSQL store")
 	t.Cleanup(func() { require.NoError(t, remote.Close()) })
 
@@ -178,18 +177,17 @@ func TestSQLiteFactsAndPostgresLiveUsageParity(t *testing.T) {
 }
 
 func TestUsageCSVFiltersParity(t *testing.T) {
-	const schema = "agentsview_usage_csv_test"
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	t.Parallel()
+	const schema = usageTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	local := testDB(t)
 	seedUsageParityFixture(t, local)
-	syncer, err := New(pgURL, schema, local, "host-a", true, storage.PusherOptions{})
+	syncer, err := New(t.Context(), pgURL, schema, local, "host-a", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	_, err = syncer.Push(t.Context(), false, nil)
 	require.NoError(t, err)
-	remote, err := NewStore(pgURL, schema, true)
+	remote, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, remote.Close()) })
 
@@ -221,10 +219,9 @@ func TestUsageCSVFiltersParity(t *testing.T) {
 }
 
 func TestPGUsageFractionalMicrodollarRoundingParity(t *testing.T) {
-	const schema = "agentsview_usage_fractional_rounding_test"
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	t.Parallel()
+	const schema = usageTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 
 	local := testDB(t)
 	seedUsageParityFixture(t, local)
@@ -253,12 +250,12 @@ func TestPGUsageFractionalMicrodollarRoundingParity(t *testing.T) {
 		},
 	}))
 
-	syncer, err := New(pgURL, schema, local, "parity-machine", true, storage.PusherOptions{})
+	syncer, err := New(t.Context(), pgURL, schema, local, "parity-machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	_, err = syncer.Push(t.Context(), false, nil)
 	require.NoError(t, err)
-	remote, err := NewStore(pgURL, schema, true)
+	remote, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, remote.Close()) })
 
@@ -294,11 +291,11 @@ func requireCompleteUsageParity(
 	t testing.TB, local, remote db.Store, filter db.UsageFilter,
 ) {
 	t.Helper()
-	require.NoError(t, completeUsageParity(t.Context(), local, remote, filter))
+	require.NoError(t, completeUsageParity(t.Context(), local, remote, filter, "snapshot-winner", true))
 }
 
 func completeUsageParity(
-	ctx context.Context, local, remote db.Store, filter db.UsageFilter,
+	ctx context.Context, local, remote usageAggregateReader, filter db.UsageFilter, sessionID string, crossBackend bool,
 ) error {
 	localDaily, err := local.GetDailyUsage(ctx, filter)
 	if err != nil {
@@ -308,16 +305,27 @@ func completeUsageParity(
 	if err != nil {
 		return fmt.Errorf("remote GetDailyUsage: %w", err)
 	}
+	// Pairwise ranking metadata is private to each backend; compare its public
+	// result through the service instead.
+	localDaily.Pairwise, remoteDaily.Pairwise = nil, nil
 	if !reflect.DeepEqual(localDaily, remoteDaily) {
 		return fmt.Errorf("complete daily result differs")
 	}
-	localTop, err := local.GetTopSessionsByCost(ctx, filter, 10)
+	limit := 20
+	if crossBackend {
+		limit = 10
+	}
+	localTop, err := local.GetTopSessionsByCost(ctx, filter, limit)
 	if err != nil {
 		return fmt.Errorf("local GetTopSessionsByCost: %w", err)
 	}
-	remoteTop, err := remote.GetTopSessionsByCost(ctx, filter, 10)
+	remoteTop, err := remote.GetTopSessionsByCost(ctx, filter, limit)
 	if err != nil {
 		return fmt.Errorf("remote GetTopSessionsByCost: %w", err)
+	}
+	if !crossBackend {
+		normalizeUsageTopTimes(localTop)
+		normalizeUsageTopTimes(remoteTop)
 	}
 	if !reflect.DeepEqual(localTop, remoteTop) {
 		return fmt.Errorf("complete top-session result differs")
@@ -344,11 +352,14 @@ func completeUsageParity(
 	if localMatching != remoteMatching {
 		return fmt.Errorf("complete matching-session-count result differs")
 	}
-	localSession, err := local.GetSessionUsage(ctx, "snapshot-winner", filter.Breakdowns)
+	if sessionID == "" {
+		return nil
+	}
+	localSession, err := local.(db.Store).GetSessionUsage(ctx, sessionID, filter.Breakdowns)
 	if err != nil {
 		return fmt.Errorf("local GetSessionUsage: %w", err)
 	}
-	remoteSession, err := remote.GetSessionUsage(ctx, "snapshot-winner", filter.Breakdowns)
+	remoteSession, err := remote.(db.Store).GetSessionUsage(ctx, sessionID, filter.Breakdowns)
 	if err != nil {
 		return fmt.Errorf("remote GetSessionUsage: %w", err)
 	}
@@ -468,7 +479,7 @@ func captureUsageParitySnapshot(
 	t *testing.T, store db.Store, filter db.UsageFilter,
 ) usageParitySnapshot {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	daily, err := store.GetDailyUsage(ctx, filter)
 	require.NoError(t, err, "daily usage")
 	top, err := store.GetTopSessionsByCost(ctx, filter, 10)
@@ -532,7 +543,7 @@ func captureUsageParitySession(
 ) usageParitySession {
 	t.Helper()
 	session, err := store.GetSessionUsage(
-		context.Background(), "snapshot-winner", includeBreakdown)
+		t.Context(), "snapshot-winner", includeBreakdown)
 	require.NoError(t, err, "session usage")
 	require.NotNil(t, session, "session usage result")
 
@@ -555,4 +566,95 @@ func captureUsageParitySession(
 		})
 	}
 	return out
+}
+
+// A bounded matching-session count keeps the sessions with a usage row on a
+// local day of the window, in the filter's timezone, for timestamped
+// messages, messages that fall back to the session start, and usage events.
+// A day before a skipped local midnight keeps its last hour.
+func TestUsageMatchingSessionCountLocalDayParity(t *testing.T) {
+	t.Parallel()
+	const schema = usageTestSchema
+	pgURL := testPGSchemaURL(t, schema)
+
+	local := testDB(t)
+	message := func(sessionID, ts string) db.Message {
+		return db.Message{
+			SessionID: sessionID, Ordinal: 0, Role: "assistant", Timestamp: ts,
+			Model: "model-priced", TokenUsage: json.RawMessage(`{"input_tokens":1}`),
+		}
+	}
+	// Each session's comment gives its usage day in UTC, then in New York.
+	sessions := []struct {
+		session db.Session
+		message *db.Message
+	}{
+		// 12th, 11th.
+		{usageParitySessionFixture("before-midnight", "p", "claude", "2026-08-12T03:00:00Z", 1, 1),
+			new(message("before-midnight", "2026-08-12T03:30:00Z"))},
+		// 12th, 11th, from the session start.
+		{usageParitySessionFixture("start-fallback", "p", "claude", "2026-08-12T02:00:00Z", 1, 1),
+			new(message("start-fallback", ""))},
+		// 12th, 12th.
+		{usageParitySessionFixture("midday", "p", "claude", "2026-08-12T12:00:00Z", 1, 1),
+			new(message("midday", "2026-08-12T12:00:00Z"))},
+		// 13th, 12th.
+		{usageParitySessionFixture("evening", "p", "claude", "2026-08-13T01:00:00Z", 1, 1),
+			new(message("evening", "2026-08-13T01:00:00Z"))},
+		// 13th, 12th.
+		{usageParitySessionFixture("late", "p", "claude", "2026-08-13T03:00:00Z", 1, 1),
+			new(message("late", "2026-08-13T03:30:00Z"))},
+		// 13th, 12th, from a usage event.
+		{usageParitySessionFixture("late-event", "p", "hermes", "2026-08-13T03:58:00Z", 1, 1), nil},
+		// 13th, 13th.
+		{usageParitySessionFixture("after-midnight", "p", "claude", "2026-08-13T05:00:00Z", 1, 1),
+			new(message("after-midnight", "2026-08-13T05:00:00Z"))},
+		// 23:30 on September 5 in Santiago, whose next midnight is skipped.
+		{usageParitySessionFixture("before-skipped-midnight", "p", "claude", "2026-09-06T03:00:00Z", 1, 1),
+			new(message("before-skipped-midnight", "2026-09-06T03:30:00Z"))},
+	}
+	var messages []db.Message
+	for _, s := range sessions {
+		require.NoError(t, local.UpsertSession(t.Context(), s.session))
+		if s.message != nil {
+			messages = append(messages, *s.message)
+		}
+	}
+	require.NoError(t, local.InsertMessages(t.Context(), messages))
+	require.NoError(t, local.ReplaceSessionUsageEvents(t.Context(), "late-event", []db.UsageEvent{{
+		SessionID: "late-event", Source: "provider", Model: "model-priced",
+		InputTokens: 1, OccurredAt: "2026-08-13T03:59:00Z", DedupKey: "late-event-usage",
+	}}))
+
+	syncer, err := New(t.Context(), pgURL, schema, local, "parity-machine", true, storage.PusherOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
+	_, err = syncer.Push(t.Context(), false, nil)
+	require.NoError(t, err)
+	remote, err := NewStore(t.Context(), pgURL, schema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, remote.Close()) })
+
+	const newYork = "America/New_York"
+	for _, tc := range []struct {
+		name   string
+		filter db.UsageFilter
+		want   int
+	}{
+		{"new york day", db.UsageFilter{From: "2026-08-12", To: "2026-08-12", Timezone: newYork}, 4},
+		{"utc day", db.UsageFilter{From: "2026-08-12", To: "2026-08-12", Timezone: "UTC"}, 3},
+		{"new york previous day", db.UsageFilter{From: "2026-08-11", To: "2026-08-11", Timezone: newYork}, 2},
+		{"new york from only", db.UsageFilter{From: "2026-08-12", Timezone: newYork}, 6},
+		{"new york to only", db.UsageFilter{To: "2026-08-11", Timezone: newYork}, 2},
+		{"day before skipped midnight", db.UsageFilter{
+			From: "2026-09-05", To: "2026-09-05", Timezone: "America/Santiago"}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for name, store := range map[string]db.Store{"sqlite": local, "postgres": remote} {
+				got, err := store.GetUsageMatchingSessionCount(t.Context(), tc.filter)
+				require.NoError(t, err, name)
+				require.Equal(t, tc.want, got, name)
+			}
+		})
+	}
 }

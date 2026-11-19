@@ -150,7 +150,7 @@ func TestWriteArchiveSkipsDirectoryValuedExtraFile(t *testing.T) {
 func TestArchivesSnapshotWALCommitBeforeCheckpoint(t *testing.T) {
 	tests := []struct {
 		name        string
-		antigravity bool
+		antigravity parser.AgentType
 		write       func(io.Writer, string) error
 	}{
 		{
@@ -177,25 +177,37 @@ func TestArchivesSnapshotWALCommitBeforeCheckpoint(t *testing.T) {
 				return WriteArchiveFiles(t.Context(), w, allowed, []string{stateDB, wal})
 			},
 		},
-		{
-			name: "Antigravity full archive", antigravity: true,
-			write: func(w io.Writer, stateDB string) error {
-				return WriteArchive(t.Context(), w, TargetSet{Dirs: map[parser.AgentType][]string{parser.AgentAntigravity: {filepath.Dir(stateDB)}}})
+	}
+	for _, agent := range []parser.AgentType{parser.AgentAntigravity, parser.AgentAntigravityCLI} {
+		tests = append(tests,
+			struct {
+				name        string
+				antigravity parser.AgentType
+				write       func(io.Writer, string) error
+			}{
+				name: string(agent) + " full archive", antigravity: agent,
+				write: func(w io.Writer, stateDB string) error {
+					return WriteArchive(t.Context(), w, TargetSet{Dirs: map[parser.AgentType][]string{agent: {filepath.Dir(stateDB)}}})
+				},
 			},
-		},
-		{
-			name: "Antigravity WAL-only delta", antigravity: true,
-			write: func(w io.Writer, stateDB string) error {
-				return WriteArchiveFiles(t.Context(), w, TargetSet{Dirs: map[parser.AgentType][]string{parser.AgentAntigravity: {filepath.Dir(stateDB)}}}, []string{stateDB + "-wal"})
+			struct {
+				name        string
+				antigravity parser.AgentType
+				write       func(io.Writer, string) error
+			}{
+				name: string(agent) + " WAL-only delta", antigravity: agent,
+				write: func(w io.Writer, stateDB string) error {
+					return WriteArchiveFiles(t.Context(), w, TargetSet{Dirs: map[parser.AgentType][]string{agent: {filepath.Dir(stateDB)}}}, []string{stateDB + "-wal"})
+				},
 			},
-		},
+		)
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			stateDB := filepath.Join(t.TempDir(), "profile", "state.db")
 			require.NoError(t, os.MkdirAll(filepath.Dir(stateDB), 0o755))
 			table, idColumn, id := "sessions", "id", "database-only"
-			if tt.antigravity {
+			if tt.antigravity != "" {
 				stateDB = dbtest.SetAntigravityTitle(t, filepath.Dir(stateDB), "First")
 				table, idColumn, id = "conversation_summaries", "conversation_id", dbtest.AntigravityTitleID
 			} else {

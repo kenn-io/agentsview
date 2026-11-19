@@ -52,6 +52,7 @@ const state = vi.hoisted(() => {
       items: [selectedItem],
       tasks: [],
       loading: false,
+      error: null as string | null,
       selectedId: 42,
       selectedTaskId: null as string | null,
       selectedItem,
@@ -119,6 +120,7 @@ describe("GeneratedInsightsPanel", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     state.serverVersion.insight_generation_available = true;
+    state.serverVersion.read_only = false;
     router.route = "recall";
     router.params = { tab: "generated" };
     state.store.selectedTask = undefined;
@@ -164,6 +166,29 @@ describe("GeneratedInsightsPanel", () => {
     expect(reportErrorShown).toHaveBeenCalledTimes(4);
   });
 
+  it("shows a failed archive read with Retry instead of the empty archive", async () => {
+    const items = state.store.items;
+    state.store.items = [];
+    state.store.selectedId = null as unknown as number;
+    state.store.error = "insights table missing";
+    try {
+      component = mount(GeneratedInsightsPanel, { target: document.body });
+      await tick();
+
+      const alert = document.querySelector('[role="alert"]')!;
+      expect(alert.textContent).toContain("insights table missing");
+      expect(document.body.textContent).not.toContain("No generated insights saved.");
+      expect(reportErrorShown).toHaveBeenCalledWith("insight");
+
+      mocks.load.mockClear();
+      alert.querySelector<HTMLButtonElement>("button")!.click();
+      expect(mocks.load).toHaveBeenCalledOnce();
+    } finally {
+      state.store.items = items;
+      state.store.error = null;
+    }
+  });
+
   it("shows every input that scopes a generated report", async () => {
     component = mount(GeneratedInsightsPanel, { target: document.body });
     await tick();
@@ -205,6 +230,35 @@ describe("GeneratedInsightsPanel", () => {
     expect(generate!.disabled).toBe(true);
     generate!.click();
     expect(mocks.generate).not.toHaveBeenCalled();
+    // The reason sits beside the button and describes it.
+    const reason = document.getElementById(generate!.getAttribute("aria-describedby")!);
+    expect(reason?.textContent?.trim()).toBe("Insight generation is unavailable for this archive");
+  });
+
+  it("explains a read-only archive beside the disabled Generate button", async () => {
+    state.serverVersion.insight_generation_available = false;
+    state.serverVersion.read_only = true;
+    component = mount(GeneratedInsightsPanel, { target: document.body });
+    await tick();
+    const generate = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Generate",
+    );
+    expect(generate!.disabled).toBe(true);
+    const reason = document.getElementById(generate!.getAttribute("aria-describedby")!);
+    expect(reason?.textContent?.trim()).toBe(
+      "This archive is read-only, so new reports can't be generated here.",
+    );
+  });
+
+  it("shows no unavailable reason while generation is available", async () => {
+    component = mount(GeneratedInsightsPanel, { target: document.body });
+    await tick();
+    const generate = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Generate",
+    );
+    expect(generate!.disabled).toBe(false);
+    expect(generate!.hasAttribute("aria-describedby")).toBe(false);
+    expect(document.querySelector(".generate-reason")).toBeNull();
   });
 
   it("generates from the scope retained in the insights store", async () => {
@@ -306,7 +360,7 @@ describe("GeneratedInsightsPanel", () => {
     const chips = [...document.querySelectorAll(".generated-meta-chip")].map((c) =>
       c.textContent?.trim(),
     );
-    expect(chips).toContain("1,234 calls judged");
+    expect(chips).toContain("1.2K calls judged");
   });
 
   it("cancels archive reads without canceling generation tasks", async () => {

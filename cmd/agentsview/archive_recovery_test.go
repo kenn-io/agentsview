@@ -23,7 +23,7 @@ import (
 
 func TestArchiveModeRecoversInterruptedCompaction(t *testing.T) {
 	if os.Getenv("AGENTSVIEW_COMPACT_SYNC_HELPER") == "1" {
-		doSync(SyncConfig{Host: "host-a.example", Full: true})
+		doSync(t.Context(), SyncConfig{Host: "host-a.example", Full: true})
 		return
 	}
 	for _, entry := range []string{"serve", "archive", "watch", "backfill", "sync"} {

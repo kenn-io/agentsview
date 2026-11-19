@@ -11,7 +11,7 @@
   import { codexCloudStatusLine } from "../../utils/codexCloudStatus.js";
   import { ActivityIcon } from "../../icons.js";
   import {
-    formatNumber,
+    formatCount,
     formatRelativeTime,
     formatTimestamp,
   } from "../../utils/format.js";
@@ -80,7 +80,9 @@
     const interval = window.setInterval(() => {
       relativeTimeTick = Date.now();
     }, RELATIVE_TIME_REFRESH_MS);
-    const loadCodexCloudStatus = () => void codexCloudStatus.load();
+    const loadCodexCloudStatus = () => {
+      if (!document.hidden) void codexCloudStatus.load();
+    };
     loadCodexCloudStatus();
     const codexCloudInterval = window.setInterval(
       loadCodexCloudStatus,
@@ -103,17 +105,17 @@
       <span class="counts">
         <span>{m.status_bar_sessions({
           count: sync.stats.session_count,
-          countLabel: formatNumber(sync.stats.session_count),
+          countLabel: formatCount(sync.stats.session_count),
         })}</span>
         <span class="sep">&middot;</span>
         <span>{m.status_bar_messages({
           count: sync.stats.message_count,
-          countLabel: formatNumber(sync.stats.message_count),
+          countLabel: formatCount(sync.stats.message_count),
         })}</span>
         <span class="sep">&middot;</span>
         <span>{m.status_bar_projects({
           count: sync.stats.project_count,
-          countLabel: formatNumber(sync.stats.project_count),
+          countLabel: formatCount(sync.stats.project_count),
         })}</span>
       </span>
     {/if}
@@ -138,6 +140,16 @@
         title={m.status_bar_remote_unreachable_title()}
       >
         {m.status_bar_remote_unreachable()}
+      </button>
+      <span class="sep">&middot;</span>
+    {/if}
+    {#if sync.statusError}
+      <button
+        class="backend-warn"
+        onclick={() => void sync.retryStatus()}
+        title={sync.statusError}
+      >
+        {m.status_bar_status_unavailable()}
       </button>
       <span class="sep">&middot;</span>
     {/if}
@@ -216,11 +228,11 @@
         {m.status_bar_version_mismatch()}
       </button>
     {/if}
-    {#if sync.archiveStale}
+    {#if sync.archiveStale || sync.syncPending}
       {#if sync.versionMismatch}<span class="sep">&middot;</span>{/if}
-      {#if sync.syncing && sync.progress?.resync}
+      {#if sync.archiveStale && sync.syncing && sync.progress?.resync}
         <span class="archive-warn" role="status">{m.status_bar_archive_rebuilding()}</span>
-      {:else if canRebuildArchive}
+      {:else if sync.archiveStale && canRebuildArchive}
         <button class="archive-warn archive-rebuild" onclick={() => sync.triggerSync()}>
           {m.status_bar_archive_stale_rebuild()}
         </button>
@@ -229,24 +241,24 @@
       {/if}
     {/if}
     {#if showSyncError}
-      {#if sync.versionMismatch || sync.archiveStale}<span class="sep">&middot;</span>{/if}
+      {#if sync.versionMismatch || sync.archiveStale || sync.syncPending}<span class="sep">&middot;</span>{/if}
       <span class="sync-error" role="alert" title={sync.lastSyncError ?? undefined}>
         {m.status_bar_sync_failed()}
       </span>
     {/if}
     {#if progressText}
-      {#if sync.versionMismatch || sync.archiveStale || showSyncError}<span class="sep">&middot;</span>{/if}
+      {#if sync.versionMismatch || sync.archiveStale || sync.syncPending || showSyncError}<span class="sep">&middot;</span>{/if}
       <span class="sync-progress" title={progressTitle ?? undefined}>
         {progressText}
       </span>
     {:else if lastSyncText}
-      {#if sync.versionMismatch || sync.archiveStale || showSyncError}<span class="sep">&middot;</span>{/if}
+      {#if sync.versionMismatch || sync.archiveStale || sync.syncPending || showSyncError}<span class="sep">&middot;</span>{/if}
       <span title={lastSyncTimestamp ?? undefined}>
         {m.status_bar_synced_ago({ time: lastSyncText })}
       </span>
     {/if}
     {#if sync.serverVersion}
-      {#if sync.versionMismatch || sync.archiveStale || showSyncError || progressText || sync.lastSync}
+      {#if sync.versionMismatch || sync.archiveStale || sync.syncPending || showSyncError || progressText || sync.lastSync}
         <span class="sep">&middot;</span>
       {/if}
       <button

@@ -4,8 +4,6 @@ import (
 	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -13,14 +11,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/friction/review"
 	"go.kenn.io/agentsview/internal/server"
-	"go.kenn.io/agentsview/internal/storage"
 )
 
 // Wire mirrors used only to decode responses in tests.
@@ -43,8 +38,9 @@ type testFrictionDigest struct {
 		Corrections   int                 `json:"corrections"`
 		P0Alerts      map[string][]string `json:"p0_alerts"`
 	} `json:"summary"`
-	Signals  []testFrictionSignal `json:"signals"`
-	P0Alerts []struct {
+	Signals     []testFrictionSignal       `json:"signals"`
+	Diagnostics []friction.DiagnosticGroup `json:"diagnostics"`
+	P0Alerts    []struct {
 		Tool       string   `json:"tool"`
 		SubjectIDs []string `json:"subject_ids"`
 	} `json:"p0_alerts"`
@@ -128,6 +124,8 @@ func TestFrictionDigestRoutes(t *testing.T) {
 		w := te.get(t, "/base/api/v1/friction/digests/2026-09-14")
 		assertStatus(t, w, http.StatusOK)
 		got := decode[testFrictionDigest](t, w)
+		assert.NotNil(t, got.Diagnostics)
+		assert.Empty(t, got.Diagnostics)
 		assert.Equal(t, "https://av.example.test/base/friction?date=2026-09-14", got.WebURL)
 		assert.Equal(t, friction.SummarySchemaVersion, got.Summary.SchemaVersion)
 		assert.Equal(t, 1, got.Summary.Corrections)
@@ -147,6 +145,25 @@ func TestFrictionDigestRoutes(t *testing.T) {
 		}
 		assert.ElementsMatch(t, []string{got.Signals[0].Fingerprint, got.Signals[1].Fingerprint}, fingerprints,
 			"only this digest's patterns")
+	})
+	t.Run("grouped_diagnostics", func(t *testing.T) {
+		date := "2026-09-13"
+		snap := review.Snapshot{Date: date, Signals: []friction.Signal{
+			{Kind: friction.KindDiagnostic, SubjectID: "diagnostic:1", SubjectKind: friction.SubjectDiagnostic, Label: "worker", Text: "launch failed"},
+			{Kind: friction.KindDiagnostic, SubjectID: "diagnostic:2", SubjectKind: friction.SubjectDiagnostic, Label: "worker", Text: "launch failed"},
+		}}
+		raw, err := review.EncodeSnapshot(snap)
+		require.NoError(t, err)
+		require.NoError(t, te.db.SaveFrictionDigest(t.Context(), db.FrictionDigest{
+			Date: date, Timezone: "UTC", RulesVersion: friction.RulesVersion,
+			BuiltAt: time.Now().UTC(), Revision: 1, SnapshotJSON: raw,
+			SummaryJSON: friction.RenderSummaryJSON(snap.DigestSnapshot), Markdown: friction.RenderMarkdown(snap.DigestSnapshot),
+			MarkdownSHA256: "sha", RunID: "run",
+		}, nil, nil))
+		w := te.get(t, "/base/api/v1/friction/digests/2026-09-13")
+		assertStatus(t, w, http.StatusOK)
+		got := decode[testFrictionDigest](t, w)
+		assert.Equal(t, []friction.DiagnosticGroup{{Source: "worker", Message: "launch failed", Count: 2}}, got.Diagnostics)
 	})
 	t.Run("names_archived_sessions", func(t *testing.T) {
 		dbtest.SeedSession(t, te.db, "claude:s1", "project-a", func(s *db.Session) {
@@ -351,34 +368,4 @@ func TestVersionReportsFrictionReadsOnArchive(t *testing.T) {
 	w := te.get(t, "/api/v1/version")
 	assertStatus(t, w, http.StatusOK)
 	assert.True(t, decode[server.VersionInfo](t, w).FrictionReadable)
-}
-
-func TestFrictionRoutesOnMirrorWithoutFrictionTables(t *testing.T) {
-	if runtime.GOOS == "windows" && runtime.GOARCH == "arm64" {
-		t.Skip("duckdb-go-bindings does not ship a windows/arm64 library")
-	}
-	te := setup(t)
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	_, err := duckdb.Push(t.Context(), path, te.db, "installation-a", storage.MirrorPushOptions{}, true, nil)
-	require.NoError(t, err)
-	store, err := duckdb.NewStore(t.Context(), path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	cfg := config.Config{Host: "127.0.0.1"}
-	te.handler = wrapTestHandler(cfg, server.New(cfg, store, nil).Handler())
-	w := te.get(t, "/api/v1/version")
-	assertStatus(t, w, http.StatusOK)
-	assert.False(t, decode[server.VersionInfo](t, w).FrictionReadable)
-	for _, path := range []string{
-		"/api/v1/friction/digests",
-		"/api/v1/friction/digests/2026-09-14",
-		"/api/v1/friction/findings",
-		"/api/v1/friction/patterns",
-	} {
-		t.Run(path, func(t *testing.T) {
-			w := te.get(t, path)
-			assertStatus(t, w, http.StatusNotImplemented)
-			assertBodyContains(t, w, "not available from this backend")
-		})
-	}
 }

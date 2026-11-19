@@ -255,10 +255,7 @@ func buildForgeSession(
 						display += "\n" + body
 					}
 				}
-				if display == "" && len(toolCalls) == 0 {
-					return true
-				}
-				messages = append(messages, ParsedMessage{
+				msg := ParsedMessage{
 					Ordinal:            ordinal,
 					Role:               RoleAssistant,
 					Content:            display,
@@ -275,7 +272,14 @@ func buildForgeSession(
 					HasContextTokens:   hasCtx,
 					HasOutputTokens:    hasOut,
 					tokenPresenceKnown: hasCtx || hasOut,
-				})
+				}
+				if display == "" && len(toolCalls) == 0 {
+					var ok bool
+					if msg, ok = usageOnlyMessage(msg); !ok {
+						return true
+					}
+				}
+				messages = append(messages, msg)
 				ordinal++
 			}
 			return true
@@ -340,6 +344,12 @@ func buildForgeSession(
 		MessageCount:     len(messages),
 		UserMessageCount: realUserCount,
 		File:             fileInfo,
+	}
+	// gjson reads a damaged context up to the damage, so a session built
+	// from it can be missing its later messages. Report the row as malformed
+	// rather than letting the partial transcript look complete.
+	if !gjson.Valid(c.context) {
+		sess.MalformedLines = 1
 	}
 	applyForgeMetrics(sess, c.metrics)
 	if !sess.aggregateTokenPresenceKnown {

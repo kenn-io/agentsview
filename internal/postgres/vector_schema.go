@@ -152,7 +152,7 @@ func vectorChunkTable(genID int64) string {
 // halfvec_cosine_ops must be schema-qualified with it, or every schema
 // besides the one that happened to install the extension fails to resolve
 // them.
-func vectorExtensionSchema(ctx context.Context, pg *sql.DB) (string, error) {
+func vectorExtensionSchema(ctx context.Context, pg pgProjectIdentityExecer) (string, error) {
 	var extSchema string
 	if err := pg.QueryRowContext(ctx,
 		`SELECT n.nspname FROM pg_extension e
@@ -172,7 +172,7 @@ func vectorExtensionSchema(ctx context.Context, pg *sql.DB) (string, error) {
 // cosine index. halfvec stays under HNSW's dimension limits (covers
 // 2560-dim models plain vector cannot index) and halves storage.
 func ensureVectorChunkTable(
-	ctx context.Context, pg *sql.DB, genID int64, dimension int,
+	ctx context.Context, pg pgProjectIdentityExecer, genID int64, dimension int,
 ) error {
 	extSchema, err := vectorExtensionSchema(ctx, pg)
 	if err != nil {
@@ -216,7 +216,7 @@ func ensureVectorRecipeColumn(ctx context.Context, pg *sql.DB) error {
 // row has none. Stored params are never overwritten: a fingerprint names
 // one immutable recipe.
 func publishVectorRecipe(
-	ctx context.Context, pg *sql.DB, fingerprint string, params map[string]string,
+	ctx context.Context, pg pgProjectIdentityExecer, fingerprint string, params map[string]string,
 ) error {
 	encoded, err := json.Marshal(params, json.Deterministic(true))
 	if err != nil {
@@ -234,7 +234,7 @@ WHERE fingerprint = $1 AND params IS NULL`,
 // ensureVectorGeneration registers fingerprint's generation, returning its
 // id. Machines with matching embedding configs share one generation.
 func ensureVectorGeneration(
-	ctx context.Context, pg *sql.DB, fingerprint, model string, dimension int,
+	ctx context.Context, pg pgProjectIdentityExecer, fingerprint, model string, dimension int,
 ) (int64, error) {
 	if _, err := pg.ExecContext(ctx, `
 INSERT INTO vector_generations (fingerprint, model, dimension)
@@ -258,7 +258,7 @@ VALUES ($1, $2, $3) ON CONFLICT (fingerprint) DO NOTHING`,
 // treated as a clean not-found, not an error, so pg serve degrades to a
 // plain "semantic search unavailable" notice instead of failing startup.
 func LookupVectorGeneration(
-	ctx context.Context, pg *sql.DB, fingerprint string,
+	ctx context.Context, pg pgProjectIdentityExecer, fingerprint string,
 ) (int64, int, bool, error) {
 	var id int64
 	var dim int

@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { SessionsPage } from "./pages/sessions-page";
 import { visitServer } from "./helpers/visit-server";
+import { waitForVisitPageReady } from "./helpers/visit-page";
 
 test.skip(
   ({ browserName }) => browserName !== "chromium",
@@ -30,15 +31,17 @@ test("Back restoration starts a fresh visit", async ({ page, baseURL }) => {
         Object.assign(window, { restored: event.persisted }),
       );
     });
+    // The screen request starts after the app has consumed the enabled open receipt.
     const enabled = page.waitForResponse(
       (response) =>
         response.request().method() === "POST" &&
         new URL(response.url()).pathname === "/api/v1/telemetry/events" &&
-        response.request().postDataJSON()?.event === "app_opened",
+        response.request().postDataJSON()?.event === "screen_viewed",
     );
     await page.goto(server.url);
     await expect(new SessionsPage(page).sessionItems.first()).toBeVisible();
     await enabled;
+    await waitForVisitPageReady(page);
     await page.evaluate(() =>
       (window as unknown as { advanceVisit(ms: number): void }).advanceVisit(120_000),
     );
@@ -51,7 +54,10 @@ test("Back restoration starts a fresh visit", async ({ page, baseURL }) => {
     await page.evaluate(() =>
       (window as unknown as { advanceVisit(ms: number): void }).advanceVisit(30_000),
     );
-    await page.close();
+    await waitForVisitPageReady(page);
+    // Keep Chromium from killing the renderer before it dispatches pagehide.
+    await page.evaluate(() => window.addEventListener("beforeunload", () => {}));
+    await page.close({ runBeforeUnload: true });
     await expect
       .poll(() => server.visits.map((visit) => visit.payload))
       .toEqual([

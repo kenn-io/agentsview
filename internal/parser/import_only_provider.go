@@ -18,8 +18,8 @@ func (f importOnlyProviderFactory) Capabilities() Capabilities {
 	return Capabilities{Content: importOnlyContentCapabilities(f.def.Type)}
 }
 
-// importOnlyContentCapabilities declares what each export parser extracts.
-// Chat app exports have no working directory or git branch.
+// importOnlyContentCapabilities declares what each export or Sync parser
+// extracts. Chat apps have no working directory or git branch.
 func importOnlyContentCapabilities(agent AgentType) ContentCapabilities {
 	caps := ContentCapabilities{
 		FirstMessage: CapabilitySupported,
@@ -35,6 +35,8 @@ func importOnlyContentCapabilities(agent AgentType) ContentCapabilities {
 		caps.Model = CapabilitySupported
 	case AgentClaudeAI:
 		caps.Thinking = CapabilitySupported
+	case AgentGrokWeb:
+		caps.Model = CapabilitySupported
 	default:
 		// Gemini Apps activity records hold only the prompt.
 	}

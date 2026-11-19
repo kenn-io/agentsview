@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"database/sql"
 	"testing"
 
@@ -17,9 +16,12 @@ const mwTestSchema = "agentsview_messages_window_test"
 
 func mwEnsureSchema(t *testing.T, pgURL string) *sql.DB {
 	t.Helper()
-	pg, err := Open(pgURL, mwTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, mwTestSchema, true)
 	require.NoError(t, err, "Open")
-	ctx := context.Background()
+	if takeFreshSchemaCopy(t, pgURL, mwTestSchema) {
+		return pg
+	}
+	ctx := t.Context()
 	_, err = pg.ExecContext(ctx,
 		`DROP SCHEMA IF EXISTS `+mwTestSchema+` CASCADE`,
 	)
@@ -29,14 +31,14 @@ func mwEnsureSchema(t *testing.T, pgURL string) *sql.DB {
 }
 
 // mwSeedWindowMessages seeds a session with 12 messages (ordinals 0..11)
-// with the same user/assistant/system role layout used by the SQLite/DuckDB
+// with the same user/assistant/system role layout used by the SQLite
 // GetMessagesWindow parity tests:
 //
 //	0 user, 1 assistant, 2 user, 3 assistant, 4 system, 5 user,
 //	6 assistant, 7 user, 8 assistant, 9 system, 10 user, 11 assistant
 func mwSeedWindowMessages(t *testing.T, pg *sql.DB, sessionID string) {
 	t.Helper()
-	_, err := pg.Exec(`
+	_, err := pg.ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent,
 			 message_count, user_message_count)
@@ -49,7 +51,7 @@ func mwSeedWindowMessages(t *testing.T, pg *sql.DB, sessionID string) {
 		"assistant", "user", "assistant", "system", "user", "assistant",
 	}
 	for ordinal, role := range roles {
-		_, err := pg.Exec(`
+		_, err := pg.ExecContext(t.Context(), `
 			INSERT INTO messages
 				(session_id, ordinal, role, content,
 				 content_length, is_system)
@@ -61,7 +63,7 @@ func mwSeedWindowMessages(t *testing.T, pg *sql.DB, sessionID string) {
 
 func mwNewStore(t *testing.T, pgURL string) *Store {
 	t.Helper()
-	store, err := NewStore(pgURL, mwTestSchema, true)
+	store, err := NewStore(t.Context(), pgURL, mwTestSchema, true)
 	require.NoError(t, err, "NewStore")
 	return store
 }
@@ -77,13 +79,14 @@ func mwOrdinalsOf(msgs []db.Message) []int {
 // TestPGGetMessagesWindow_AroundMidSession mirrors
 // TestGetMessagesWindow_AroundMidSession.
 func TestPGGetMessagesWindow_AroundMidSession(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, mwTestSchema)
 	pg := mwEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
-		_, _ = pg.Exec(`DROP SCHEMA IF EXISTS ` + mwTestSchema + ` CASCADE`)
+		_, _ = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+mwTestSchema+` CASCADE`)
 	}()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mwSeedWindowMessages(t, pg, "sMid")
 	store := mwNewStore(t, pgURL)
@@ -101,13 +104,14 @@ func TestPGGetMessagesWindow_AroundMidSession(t *testing.T) {
 // TestPGGetMessagesWindow_RoleFilterCountsFilteredMessages mirrors
 // TestGetMessagesWindow_RoleFilterCountsFilteredMessages.
 func TestPGGetMessagesWindow_RoleFilterCountsFilteredMessages(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, mwTestSchema)
 	pg := mwEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
-		_, _ = pg.Exec(`DROP SCHEMA IF EXISTS ` + mwTestSchema + ` CASCADE`)
+		_, _ = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+mwTestSchema+` CASCADE`)
 	}()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mwSeedWindowMessages(t, pg, "sRoleCount")
 	store := mwNewStore(t, pgURL)
@@ -126,13 +130,14 @@ func TestPGGetMessagesWindow_RoleFilterCountsFilteredMessages(t *testing.T) {
 // TestPGGetMessagesWindow_AnchorIncludedEvenWhenRoleFiltered mirrors
 // TestGetMessagesWindow_AnchorIncludedEvenWhenRoleFiltered.
 func TestPGGetMessagesWindow_AnchorIncludedEvenWhenRoleFiltered(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, mwTestSchema)
 	pg := mwEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
-		_, _ = pg.Exec(`DROP SCHEMA IF EXISTS ` + mwTestSchema + ` CASCADE`)
+		_, _ = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+mwTestSchema+` CASCADE`)
 	}()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mwSeedWindowMessages(t, pg, "sAnchorFiltered")
 	store := mwNewStore(t, pgURL)
@@ -152,13 +157,14 @@ func TestPGGetMessagesWindow_AnchorIncludedEvenWhenRoleFiltered(t *testing.T) {
 // TestPGGetMessagesWindow_AroundOrdinalZeroHasNoBefore mirrors
 // TestGetMessagesWindow_AroundOrdinalZeroHasNoBefore.
 func TestPGGetMessagesWindow_AroundOrdinalZeroHasNoBefore(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, mwTestSchema)
 	pg := mwEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
-		_, _ = pg.Exec(`DROP SCHEMA IF EXISTS ` + mwTestSchema + ` CASCADE`)
+		_, _ = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+mwTestSchema+` CASCADE`)
 	}()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mwSeedWindowMessages(t, pg, "sFirst")
 	store := mwNewStore(t, pgURL)
@@ -176,13 +182,14 @@ func TestPGGetMessagesWindow_AroundOrdinalZeroHasNoBefore(t *testing.T) {
 // TestPGGetMessagesWindow_AroundLastOrdinalHasNoAfter mirrors
 // TestGetMessagesWindow_AroundLastOrdinalHasNoAfter.
 func TestPGGetMessagesWindow_AroundLastOrdinalHasNoAfter(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, mwTestSchema)
 	pg := mwEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
-		_, _ = pg.Exec(`DROP SCHEMA IF EXISTS ` + mwTestSchema + ` CASCADE`)
+		_, _ = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+mwTestSchema+` CASCADE`)
 	}()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mwSeedWindowMessages(t, pg, "sLast")
 	store := mwNewStore(t, pgURL)
@@ -200,13 +207,14 @@ func TestPGGetMessagesWindow_AroundLastOrdinalHasNoAfter(t *testing.T) {
 // TestPGGetMessagesWindow_LinearModeWithRoles mirrors
 // TestGetMessagesWindow_LinearModeWithRoles.
 func TestPGGetMessagesWindow_LinearModeWithRoles(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, mwTestSchema)
 	pg := mwEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
-		_, _ = pg.Exec(`DROP SCHEMA IF EXISTS ` + mwTestSchema + ` CASCADE`)
+		_, _ = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+mwTestSchema+` CASCADE`)
 	}()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mwSeedWindowMessages(t, pg, "sLinearRoles")
 	store := mwNewStore(t, pgURL)
@@ -223,13 +231,14 @@ func TestPGGetMessagesWindow_LinearModeWithRoles(t *testing.T) {
 // TestPGGetMessagesWindow_EmptyRolesEquivalentToGetMessages mirrors
 // TestGetMessagesWindow_EmptyRolesEquivalentToGetMessages.
 func TestPGGetMessagesWindow_EmptyRolesEquivalentToGetMessages(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, mwTestSchema)
 	pg := mwEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
-		_, _ = pg.Exec(`DROP SCHEMA IF EXISTS ` + mwTestSchema + ` CASCADE`)
+		_, _ = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+mwTestSchema+` CASCADE`)
 	}()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mwSeedWindowMessages(t, pg, "sEquiv")
 	store := mwNewStore(t, pgURL)
@@ -250,16 +259,17 @@ func TestPGGetMessagesWindow_EmptyRolesEquivalentToGetMessages(t *testing.T) {
 // TestPGGetMessagesWindow_ReportsRevisionWithRows covers the revision the
 // window statements select alongside their rows.
 func TestPGGetMessagesWindow_ReportsRevisionWithRows(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, mwTestSchema)
 	pg := mwEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
-		_, _ = pg.Exec(`DROP SCHEMA IF EXISTS ` + mwTestSchema + ` CASCADE`)
+		_, _ = pg.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+mwTestSchema+` CASCADE`)
 	}()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	mwSeedWindowMessages(t, pg, "sRev")
-	_, err := pg.Exec(`UPDATE sessions SET transcript_revision = 'rev-7' WHERE id = $1`, "sRev")
+	_, err := pg.ExecContext(t.Context(), `UPDATE sessions SET transcript_revision = 'rev-7' WHERE id = $1`, "sRev")
 	require.NoError(t, err)
 	store := mwNewStore(t, pgURL)
 	defer store.Close()
@@ -295,4 +305,19 @@ func TestPGGetMessagesWindow_ReportsRevisionWithRows(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, msgs)
 	assert.Empty(t, revision, "no rows means no revision to describe them")
+}
+
+func TestPGGetMessagesWindow_CompactBoundary(t *testing.T) {
+	t.Parallel()
+	pgURL := testPGURL(t)
+	pg := mwEnsureSchema(t, pgURL)
+	defer pg.Close()
+	mwSeedWindowMessages(t, pg, "boundary")
+	_, err := pg.ExecContext(t.Context(), `UPDATE messages SET is_compact_boundary = TRUE, is_system = TRUE WHERE session_id = $1 AND ordinal IN (3, 8)`, "boundary")
+	require.NoError(t, err)
+	store := mwNewStore(t, pgURL)
+	defer store.Close()
+	msgs, err := store.GetMessagesWindow(t.Context(), "boundary", db.MessageWindow{Limit: 100, Asc: true, CompactBoundaryOnly: true})
+	require.NoError(t, err)
+	assert.Equal(t, []int{3, 8}, mwOrdinalsOf(msgs))
 }

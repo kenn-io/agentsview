@@ -97,7 +97,7 @@ func newEmbeddingsTestServer(t *testing.T, m EmbeddingsManager) *Server {
 	t.Helper()
 	var opts []Option
 	if m != nil {
-		opts = append(opts, WithEmbeddingsManager(m))
+		opts = append(opts, WithEmbeddingsRuntime(fakeEmbeddingsRuntime{messages: m}))
 	}
 	return testServer(t, 0, opts...)
 }
@@ -166,7 +166,7 @@ func TestEmbeddingsBuildHoldsIdleLeaseUntilManagerCompletes(t *testing.T) {
 		tracker := NewIdleTracker(20*time.Millisecond, func() { idled <- struct{}{} })
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
-		s := testServer(t, 0, WithEmbeddingsManager(fake), WithIdleTracker(tracker))
+		s := testServer(t, 0, WithEmbeddingsRuntime(fakeEmbeddingsRuntime{messages: fake}), WithIdleTracker(tracker))
 		tracker.Touch()
 		go tracker.Run(ctx)
 
@@ -192,8 +192,7 @@ func TestEmbeddingsRoutesSelectRecallStoreManager(t *testing.T) {
 	messages := &fakeEmbeddingsManager{status: vector.BuildStatus{Done: 1}}
 	recall := &fakeEmbeddingsManager{status: vector.BuildStatus{Done: 2}}
 	s := testServer(t, 0,
-		WithEmbeddingsManager(messages),
-		WithEmbeddingsStoreManager(vector.RecallIndexSpec().Name, recall),
+		WithEmbeddingsRuntime(fakeEmbeddingsRuntime{messages: messages, recall: recall}),
 	)
 
 	w := serveJSON(t, s.mux, http.MethodPost, "/api/v1/embeddings/build",
@@ -241,8 +240,7 @@ func TestEmbeddingsBuildIncludeAutomatedDefaulting(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			fake := &fakeEmbeddingsManager{}
 			s := testServer(t, 0,
-				WithEmbeddingsManager(fake),
-				WithEmbeddingsIncludeAutomatedDefault(tt.configured),
+				WithEmbeddingsRuntime(fakeEmbeddingsRuntime{messages: fake, includeAutomated: tt.configured}),
 			)
 
 			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/embeddings/build",
@@ -320,7 +318,9 @@ func TestEmbeddingsStatusReturnsCurrentStatus(t *testing.T) {
 
 	var status vector.BuildStatus
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &status))
-	assert.Equal(t, fake.status, status)
+	want := fake.status
+	want.Setup = &EmbeddingsSetupStatus{Enabled: true}
+	assert.Equal(t, want, status)
 	assert.Contains(t, w.Body.String(), `"eta_milliseconds":0`,
 		"a ready zero-second ETA must remain distinguishable from a missing estimate")
 }
@@ -440,4 +440,43 @@ func TestEmbeddingsRetireUnknownGenerationReturnsNotFound(t *testing.T) {
 		map[string]bool{"force": false})
 	assertRecorderStatus(t, w, http.StatusNotFound)
 	assert.Contains(t, w.Body.String(), "999")
+}
+
+type fakeEmbeddingsRuntime struct {
+	messages, recall EmbeddingsManager
+	includeAutomated bool
+	busy             bool
+}
+
+func (r fakeEmbeddingsRuntime) Manager(store string) EmbeddingsManager {
+	switch store {
+	case "", vector.MessageIndexSpec().Name:
+		return r.messages
+	case vector.RecallIndexSpec().Name:
+		return r.recall
+	default:
+		return nil
+	}
+}
+func (r fakeEmbeddingsRuntime) IncludeAutomated() bool { return r.includeAutomated }
+func (r fakeEmbeddingsRuntime) SetupStatus(context.Context) (EmbeddingsSetupStatus, error) {
+	return EmbeddingsSetupStatus{Enabled: true, Busy: r.busy}, nil
+}
+func (fakeEmbeddingsRuntime) Setup(int64) error { return nil }
+
+func TestEmbeddingsStatusPreservesBuildDuringSetup(t *testing.T) {
+	manager := &fakeEmbeddingsManager{status: vector.BuildStatus{
+		Running:    true,
+		LastResult: &vector.BuildResult{Activated: true},
+	}}
+	s := testServer(t, 0, WithEmbeddingsRuntime(fakeEmbeddingsRuntime{messages: manager, busy: true}))
+	w := serveJSON(t, s.mux, http.MethodGet, "/api/v1/embeddings/status", nil)
+	assertRecorderStatus(t, w, http.StatusOK)
+	var status vector.BuildStatus
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &status))
+	assert.True(t, status.Running, "CLI polling must keep following the build during installation")
+	require.NotNil(t, status.LastResult)
+	assert.True(t, status.LastResult.Activated)
+	require.NotNil(t, status.Setup)
+	assert.True(t, status.Setup.Busy)
 }

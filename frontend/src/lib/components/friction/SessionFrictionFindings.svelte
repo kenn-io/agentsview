@@ -26,6 +26,7 @@
     pattern: m.friction_kind_pattern,
     frustration: m.friction_kind_frustration,
     interruption: m.friction_kind_interruption,
+    diagnostic: m.friction_kind_diagnostic,
   };
 
   function kindLabel(kind: string): string {
@@ -136,7 +137,6 @@
   .findings-state {
     margin: 0;
     color: var(--text-muted);
-    font-style: italic;
   }
   .findings-list {
     max-height: 240px;

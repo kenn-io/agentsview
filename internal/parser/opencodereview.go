@@ -140,6 +140,7 @@ func parseOpenCodeReviewFile(
 		state.truncated = true
 		state.malformed--
 	}
+	state.malformed += reader.SkippedLines()
 	if !state.started {
 		return nil, nil
 	}
@@ -163,7 +164,10 @@ func parseOpenCodeReviewFile(
 	} else {
 		status = classifyOpenCodeReviewTermination(state.messages)
 	}
-	firstMessage, userCount := firstMessageAndUserCount(state.messages)
+	firstMessage, userCount, err := firstMessageAndUserCountContext(ctx, state.messages)
+	if err != nil {
+		return nil, err
+	}
 
 	sessionID := state.sessionID
 	parentID := state.resumedFrom

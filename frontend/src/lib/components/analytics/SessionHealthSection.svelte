@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { Card, TableHeaderCell, TableSort } from "@kenn-io/kit-ui";
   import { analytics } from "../../stores/analytics.svelte.js";
   import { scoreToGrade } from "../../utils/grade.js";
@@ -7,6 +8,7 @@
   import OutcomeDistribution
     from "./OutcomeDistribution.svelte";
   import HealthTrend from "./HealthTrend.svelte";
+  import PanelStatus from "./PanelStatus.svelte";
   import { m } from "../../i18n/index.js";
 
   import type { DbSignalsAgentRow, DbSignalsProjectRow } from "../../api/generated/index.js";
@@ -29,10 +31,19 @@
   function formatSessionCount(count: number): string {
     return m.analytics_session_shape_session_count({
       count,
-      countLabel: count.toLocaleString(),
+      countLabel: formatCount(count),
     });
   }
 </script>
+
+{#snippet status()}
+  <PanelStatus
+    hasData
+    pending={analytics.querying.signals}
+    error={analytics.errors.signals}
+    onRetry={() => analytics.fetchSignals()}
+  />
+{/snippet}
 
 {#if visible && signals}
   <div class="health-section">
@@ -40,14 +51,15 @@
       <h3 class="section-title">{m.analytics_session_health_title()}</h3>
       <span class="section-subtitle">
         {m.analytics_session_health_scored({
-          countLabel: signals.scored_sessions.toLocaleString(),
+          countLabel: formatCount(signals.scored_sessions),
         })}
         &middot;
         {m.analytics_session_health_unscored({
-          countLabel: signals.unscored_sessions.toLocaleString(),
+          countLabel: formatCount(signals.unscored_sessions),
         })}
       </span>
     </div>
+    {@render status()}
 
     <div class="health-summary-cards">
       <Card level="default" padding="none" class="card">
@@ -121,11 +133,11 @@
             ? "var(--accent-red)"
             : "var(--accent-amber)"}
         >
-          {signals.context_health.sessions_with_compaction}
+          {formatCount(signals.context_health.sessions_with_compaction)}
         </span>
         <span class="card-sub">
           {#if signals.context_health.sessions_with_mid_task_compaction > 0}
-            {signals.context_health.sessions_with_mid_task_compaction}
+            {formatCount(signals.context_health.sessions_with_mid_task_compaction)}
             {m.analytics_session_health_mid_task()} &middot;
           {/if}
           {m.analytics_session_health_avg_per_session({
@@ -166,7 +178,7 @@
               {#each agentSort.sort([...signals.by_agent].sort((a, b) => b.session_count - a.session_count)) as row}
                 <tr>
                   <td>{row.agent}</td>
-                  <td class="num">{row.session_count}</td>
+                  <td class="num">{formatCount(row.session_count)}</td>
                   <td class="num">
                     {row.avg_health_score != null
                       ? Math.round(row.avg_health_score)
@@ -199,7 +211,7 @@
               {#each projectSort.sort([...signals.by_project].sort((a, b) => b.session_count - a.session_count)) as row}
                 <tr>
                   <td>{row.project}</td>
-                  <td class="num">{row.session_count}</td>
+                  <td class="num">{formatCount(row.session_count)}</td>
                   <td class="num">
                     {row.avg_health_score != null
                       ? Math.round(row.avg_health_score)
@@ -217,6 +229,16 @@
       </Card>
     </div>
   </div>
+{:else if analytics.errors.signals}
+  <!-- Hidden while loading, since an empty result hides the section. -->
+  <div class="health-section">
+    <div class="section-header">
+      <h3 class="section-title">{m.analytics_session_health_title()}</h3>
+    </div>
+    <Card level="default" padding="none">
+      {@render status()}
+    </Card>
+  </div>
 {/if}
 
 <style>
@@ -227,7 +249,7 @@
     margin-bottom: 12px;
   }
   .section-title {
-    font-size: 15px;
+    font-size: 16px;
     font-weight: 700;
     color: var(--text-primary);
     margin: 0 0 2px;
@@ -245,10 +267,11 @@
   .health-summary-cards :global(.card) {
     padding: 12px;
   }
+  /* Label one step above the sublabel, the same ladder as StatCard. */
   .card-label {
     display: block;
     font-size: 11px;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     text-transform: uppercase;
     letter-spacing: 0.5px;
     margin-bottom: 4px;
@@ -262,7 +285,7 @@
   .card-sub {
     display: block;
     font-size: 12px;
-    color: var(--text-secondary);
+    color: var(--text-muted);
   }
   .chart-grid {
     display: grid;

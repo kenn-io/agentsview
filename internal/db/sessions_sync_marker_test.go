@@ -233,7 +233,7 @@ func TestSyncMarkerMaintainedByTriggers(t *testing.T) {
 // TestReplaceSessionUsageEventsAdvancesSyncMarker pins the push-visibility
 // contract for usage-only rewrites: ReplaceSessionUsageEvents must bump
 // local_modified_at so the sync_marker trigger fires and both push targets
-// (PostgreSQL and the DuckDB mirror) re-select the session, even when no
+// (PostgreSQL and ClickHouse) re-select the session, even when no
 // session file changed (e.g. a pricing-driven recompute).
 func TestReplaceSessionUsageEventsAdvancesSyncMarker(t *testing.T) {
 	database := testDB(t)
@@ -278,7 +278,7 @@ func TestReplaceSessionUsageEventsAdvancesSyncMarker(t *testing.T) {
 // parent_session_id and relationship_type — both mirrored columns, neither
 // a sync_marker signal — so it must bump local_modified_at, or linking an
 // older session after a push target's cutoff would never re-push it
-// (PostgreSQL and the DuckDB mirror alike).
+// (PostgreSQL and ClickHouse alike).
 func TestLinkSubagentSessionsAdvancesSyncMarker(t *testing.T) {
 	database := testDB(t)
 	ctx := t.Context()
@@ -653,6 +653,74 @@ func TestWaitForWriterReportsALongWait(t *testing.T) {
 	})
 }
 
+func TestRetryAcrossHandoffWaitsForRepeatedHandoffs(t *testing.T) {
+	for _, cancelWrite := range []bool{false, true} {
+		name := "reopen twice"
+		if cancelWrite {
+			name = "cancel during second wait"
+		}
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				database := testDB(t)
+				insertSession(t, database, "worker", "proj")
+				require.NoError(t, database.CloseWriter())
+				ctx, cancel := context.WithCancel(t.Context())
+				done := make(chan error, 1)
+				finished := make(chan struct{})
+				attempts := 0
+				go func() {
+					defer close(finished)
+					_, err := RetryAcrossHandoff(ctx, database, func() (SessionLabels, error) {
+						attempts++
+						// A second handoff starts just as the first retry reaches the writer.
+						if attempts == 2 {
+							if err := database.CloseWriter(); err != nil {
+								return SessionLabels{}, err
+							}
+						}
+						return database.UpdateSessionLabels(ctx, "worker", []string{"queued"}, nil)
+					})
+					done <- err
+				}()
+				t.Cleanup(func() {
+					cancel()
+					<-finished
+				})
+				synctest.Wait()
+				require.NoError(t, database.ReopenWriter())
+				// Let the retry encounter the second handoff and block on its writer.
+				time.Sleep(time.Second)
+				synctest.Wait()
+				select {
+				case err := <-done:
+					require.FailNow(t, "write returned during the second handoff", "error: %v", err)
+				default:
+				}
+				if cancelWrite {
+					cancel()
+					require.ErrorIs(t, <-done, context.Canceled)
+					require.NoError(t, database.ReopenWriter())
+				} else {
+					require.NoError(t, database.ReopenWriter())
+					require.NoError(t, <-done)
+				}
+				if cancelWrite {
+					var labels int
+					require.NoError(t, database.getReader().QueryRow(t.Context(),
+						`SELECT COUNT(*) FROM session_labels WHERE session_id = 'worker'`,
+					).Scan(&labels))
+					assert.Zero(t, labels, "canceled edits must stay unwritten after reopen")
+				} else {
+					session, err := database.GetSession(t.Context(), "worker")
+					require.NoError(t, err)
+					require.NotNil(t, session)
+					assert.Equal(t, []string{"queued"}, session.Labels)
+				}
+			})
+		})
+	}
+}
+
 // A push that runs out of time while a local sync holds the writer says it gave
 // up waiting, so the reader knows the push timed out.
 func TestWaitForWriterSaysItGaveUpOnATimeout(t *testing.T) {
@@ -726,7 +794,7 @@ func TestPushStateWritesStopWaitingBehindALongWrite(t *testing.T) {
 			return d.Update(ctx, func(*sql.Tx) error { return nil })
 		},
 		"DeleteSyncStateByPrefix": func(ctx context.Context, d *DB) error {
-			return d.DeleteSyncStateByPrefix(ctx, "duckdb_")
+			return d.DeleteSyncStateByPrefix(ctx, "legacy_")
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

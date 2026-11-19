@@ -47,7 +47,7 @@ func AggregateCandidatesWithJointActivity(
 				}
 			}
 			return nil
-		}, usage, false, joint)
+		}, func() ([]UsageRow, error) { return usage, nil }, false, joint)
 	if err != nil {
 		return Report{}, err
 	}

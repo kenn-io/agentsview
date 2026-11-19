@@ -108,7 +108,7 @@ func TestCopySessionMetadataPreservesRecordedMachineAttribution(
 		},
 	))
 
-	require.NoError(t, destination.CopySessionMetadataFrom(sourcePath))
+	require.NoError(t, destination.CopySessionMetadataFrom(t.Context(), sourcePath))
 
 	session, err := destination.GetSessionFull(
 		t.Context(), "resynced-session",
@@ -300,7 +300,7 @@ func TestCopyArchiveIdentityFromPreservesLogicalArchiveAndNewGeneration(
 	require.NoError(t, target.SetArchiveIdentityForTest(
 		ctx, "temporary-archive", strings.Repeat("b", 64),
 	))
-	require.NoError(t, target.CopyArchiveIdentityFrom(sourcePath))
+	require.NoError(t, target.CopyArchiveIdentityFrom(t.Context(), sourcePath))
 
 	archiveID, err := target.GetArchiveID(ctx)
 	require.NoError(t, err)
@@ -349,7 +349,7 @@ func TestCopyArchiveIdentityFromRejectsCorruptSalt(t *testing.T) {
 	require.NoError(t, source.Close())
 
 	target := testDB(t)
-	err = target.CopyArchiveIdentityFrom(sourcePath)
+	err = target.CopyArchiveIdentityFrom(t.Context(), sourcePath)
 	require.ErrorIs(t, err, ErrArchiveSaltInvalid)
 }
 
@@ -1103,10 +1103,10 @@ func TestResyncKeepsMappedProjectForTrashedSession(t *testing.T) {
 	require.NoError(t, source.Close())
 
 	destination := testDB(t)
-	copied, err := destination.CopyTrashedDataFrom(sourcePath)
+	copied, err := destination.CopyTrashedDataFrom(t.Context(), sourcePath)
 	require.NoError(t, err)
 	require.Len(t, copied, 1)
-	require.NoError(t, destination.CopySessionMetadataFrom(sourcePath))
+	require.NoError(t, destination.CopySessionMetadataFrom(t.Context(), sourcePath))
 
 	restoredProjects, err := destination.RestoreSessionProjectsFromIdentitySnapshots(ctx)
 	require.NoError(t, err)
@@ -1709,4 +1709,32 @@ func projectObservationRowCount(t *testing.T, d *DB) int {
 func projectIdentitySHA(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func TestCopySessionMetadataKeepsFreshIdentityOverEmptyPlaceholder(t *testing.T) {
+	dir := t.TempDir()
+	ctx := t.Context()
+	oldPath := filepath.Join(dir, "old.db")
+	oldDB, err := Open(ctx, oldPath)
+	require.NoError(t, err)
+	// The insert trigger leaves a keyless placeholder with no root.
+	require.NoError(t, oldDB.UpsertSession(ctx, Session{
+		ID: "session-a", Project: "app", Machine: "host", Agent: "antigravity",
+	}))
+	require.NoError(t, oldDB.Close())
+
+	fresh := testDB(t)
+	root := filepath.Join(dir, "workspace")
+	require.NoError(t, fresh.UpsertSession(ctx, Session{
+		ID: "session-a", Project: "app", Machine: "host", Agent: "antigravity", Cwd: root,
+	}))
+	require.NoError(t, fresh.UpsertProjectIdentityObservation(ctx, export.ProjectIdentityObservation{
+		SessionID: "session-a", Project: "app", Machine: "host", RootPath: root,
+	}))
+
+	require.NoError(t, fresh.CopySessionMetadataFrom(ctx, oldPath))
+	publishable, err := fresh.ListPublishableSessionProjectIdentitySnapshots(ctx, []string{"session-a"}, nil, nil)
+	require.NoError(t, err)
+	require.Len(t, publishable, 1, "an evidence-free placeholder must not replace the fresh identity")
+	assert.Equal(t, root, publishable[0].RootPath)
 }

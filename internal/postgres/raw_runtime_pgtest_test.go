@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
 	"time"
 
@@ -15,9 +16,11 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/rawderive"
 	"go.kenn.io/agentsview/internal/rawsync"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func TestHostedRuntimeAcceptanceSelectsAtomically(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	jobs, err := NewHostedRawIngestStore(f.runtime, f.tenant, "parser-1")
 	require.NoError(t, err)
@@ -41,6 +44,7 @@ func TestHostedRuntimeAcceptanceSelectsAtomically(t *testing.T) {
 }
 
 func TestHostedRuntimeClaimsOnlyConfiguredSelection(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "capture-a", "")
 	jobs, err := NewHostedRawIngestStore(f.runtime, f.tenant, "parser-2")
@@ -63,6 +67,7 @@ func TestHostedRuntimeClaimsOnlyConfiguredSelection(t *testing.T) {
 }
 
 func TestHostedRuntimeSettlesWithoutUpload(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	ended := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)
 	now := ended.Add(time.Minute)
@@ -78,7 +83,7 @@ func TestHostedRuntimeSettlesWithoutUpload(t *testing.T) {
 	before, err := f.sink.Resolve(t.Context(), "codex:portable")
 	require.NoError(t, err)
 	var outbox int
-	require.NoError(t, f.runtime.QueryRow(`SELECT count(*) FROM raw_embedding_outbox`).Scan(&outbox))
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM raw_embedding_outbox`).Scan(&outbox))
 	n, err := f.sink.SettlePendingSignals(t.Context(), 1)
 	require.NoError(t, err)
 	assert.Zero(t, n)
@@ -96,10 +101,10 @@ func TestHostedRuntimeSettlesWithoutUpload(t *testing.T) {
 	var pending *string
 	var starred bool
 	var count int
-	require.NoError(t, f.runtime.QueryRow(`SELECT signals_pending_since,EXISTS(SELECT 1 FROM starred_sessions WHERE session_id=$1) FROM sessions WHERE id=$1`, after.SessionID).Scan(&pending, &starred))
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT signals_pending_since,EXISTS(SELECT 1 FROM starred_sessions WHERE session_id=$1) FROM sessions WHERE id=$1`, after.SessionID).Scan(&pending, &starred))
 	assert.Nil(t, pending)
 	assert.True(t, starred)
-	require.NoError(t, f.runtime.QueryRow(`SELECT count(*) FROM raw_embedding_outbox`).Scan(&count))
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM raw_embedding_outbox`).Scan(&count))
 	assert.Equal(t, outbox, count)
 	for ordinal, want := range []sql.NullString{{Valid: true}, {String: "assistant dialogue", Valid: true}, {}} {
 		var got sql.NullString
@@ -119,34 +124,61 @@ func TestHostedRuntimeSettlesWithoutUpload(t *testing.T) {
 }
 
 func TestHostedRuntimeRolloutResumesAndDoesNotResurrect(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	a, _ := f.accept(t, "device-a", "a", "")
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, projectionOutcome("retained")))
+	// Only the execution runtime changes; provider and friction versions stay
+	// fixed. A failed replacement must leave the published transcript intact.
+	const previous = "parser-data-153+friction-v1/runtime-0"
+	next := fmt.Sprintf("parser-data-153+friction-v1/runtime-%d", rawderive.ParserRuntimeVersion)
+	_, err := f.sink.SelectSourceGeneration(t.Context(), a, previous)
+	require.NoError(t, err)
+	oldLeases, err := f.jobs.ClaimRawParseJobs(t.Context(), "old-runtime", 1, time.Minute)
+	require.NoError(t, err)
+	require.Len(t, oldLeases, 1)
+	failed := oldLeases[0]
+	assert.Equal(t, previous, failed.ProcessingVersion)
+	require.NoError(t, f.jobs.FailRawParseJob(t.Context(), failed, "parse", "parse:size_limit"))
+	resolved, err := f.sink.Resolve(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	retained, err := (&Store{pg: f.runtime}).GetMessages(t.Context(), resolved.SessionID, 0, 10, true)
+	require.NoError(t, err)
+	require.Len(t, retained, 2)
+	assert.Equal(t, "retained", retained[0].Content)
 	f.accept(t, "device-b", "b", "")
-	first, err := f.sink.ScheduleCurrentHeads(t.Context(), "rollout", "parser-2", 1)
+	first, err := f.sink.ScheduleCurrentHeads(t.Context(), "rollout", next, 1)
 	require.NoError(t, err)
 	assert.Equal(t, 1, first.Selected)
-	second, err := f.sink.ScheduleCurrentHeads(t.Context(), "rollout", "parser-2", 1)
+	second, err := f.sink.ScheduleCurrentHeads(t.Context(), "rollout", next, 1)
 	require.NoError(t, err)
 	assert.Equal(t, 1, second.Selected)
-	end, err := f.sink.ScheduleCurrentHeads(t.Context(), "rollout", "parser-2", 1)
+	end, err := f.sink.ScheduleCurrentHeads(t.Context(), "rollout", next, 1)
 	require.NoError(t, err)
 	assert.True(t, end.Done)
 	assert.Zero(t, end.Selected)
-	jobs, err := NewHostedRawIngestStore(f.runtime, f.tenant, "parser-2")
+	jobs, err := NewHostedRawIngestStore(f.runtime, f.tenant, next)
 	require.NoError(t, err)
 	leases, err := jobs.ClaimRawParseJobs(t.Context(), "runtime", 1, time.Minute)
 	require.NoError(t, err)
 	require.Len(t, leases, 1)
 	require.Equal(t, a.ManifestID, leases[0].ManifestID)
+	assert.Equal(t, 1, leases[0].Attempt)
+	assert.Greater(t, leases[0].ProjectionGeneration, failed.ProjectionGeneration)
+	assert.Equal(t, next, leases[0].ProcessingVersion)
 	require.NoError(t, f.sink.Project(t.Context(), leases[0], a, projectionOutcome("hello")))
-	_, err = f.sink.ScheduleCurrentHeads(t.Context(), "repeat", "parser-2", 10)
+	_, err = f.sink.ScheduleCurrentHeads(t.Context(), "repeat", next, 10)
 	require.NoError(t, err)
 	var state string
-	require.NoError(t, f.runtime.QueryRow(`SELECT state FROM raw_ingest_jobs WHERE id=$1`, leases[0].ID).Scan(&state))
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT state FROM raw_ingest_jobs WHERE id=$1`, leases[0].ID).Scan(&state))
 	assert.Equal(t, "complete", state)
+	var attempts int
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT attempt_count FROM raw_ingest_jobs WHERE id=$1`, leases[0].ID).Scan(&attempts))
+	assert.Equal(t, 1, attempts, "same-version replay does not reset a completed job")
 }
 
 func TestHostedRuntimeRepairWaitsForHeadLock(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name           string
 		selectionMoved bool
@@ -228,6 +260,7 @@ func TestHostedRuntimeRepairWaitsForHeadLock(t *testing.T) {
 }
 
 func TestHostedRuntimeRepairReachesNextFailureAfterUploadAdvancesHead(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	a, receipt := f.accept(t, "device-a", "failed-a", "")
 	aLease := f.lease(t, a)
@@ -282,6 +315,7 @@ func TestHostedRuntimeRepairReachesNextFailureAfterUploadAdvancesHead(t *testing
 }
 
 func TestHostedRuntimeRepairFailedJobs(t *testing.T) {
+	t.Parallel()
 	t.Run("field_reset_and_healthy_job", func(t *testing.T) {
 		f := newProjectionFixture(t)
 		f.sink.options.RetryPolicy = rawderive.RetryPolicy{Base: time.Second, Maximum: time.Minute, MaxAttempts: 1}
@@ -350,13 +384,14 @@ func TestHostedRuntimeRepairFailedJobs(t *testing.T) {
 }
 
 func TestHostedRuntimeSelectionFailureRollsBackAcceptance(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	jobs, err := NewHostedRawIngestStore(f.runtime, f.tenant, "parser-1")
 	require.NoError(t, err)
 	f.custody, err = rawsync.NewService(f.objects, jobs, rawsync.DefaultManifestLimits(), "parser-1")
 	require.NoError(t, err)
 	m, r := f.accept(t, "device-a", "first", "")
-	_, err = f.admin.Exec(`CREATE FUNCTION reject_selection() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic selection dependency unavailable'; END $$; CREATE TRIGGER reject_selection BEFORE INSERT ON raw_projection_generations FOR EACH ROW EXECUTE FUNCTION reject_selection()`)
+	_, err = f.admin.ExecContext(t.Context(), `CREATE FUNCTION reject_selection() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic selection dependency unavailable'; END $$; CREATE TRIGGER reject_selection BEFORE INSERT ON raw_projection_generations FOR EACH ROW EXECUTE FUNCTION reject_selection()`)
 	require.NoError(t, err)
 	next := m.Manifest
 	next.CaptureID = "second"
@@ -365,52 +400,89 @@ func TestHostedRuntimeSelectionFailureRollsBackAcceptance(t *testing.T) {
 	require.Error(t, err)
 	for _, table := range []string{"raw_manifests", "raw_ingest_jobs", "raw_projection_generations"} {
 		var count int
-		require.NoError(t, f.runtime.QueryRow(`SELECT count(*) FROM `+table).Scan(&count))
+		require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM `+table).Scan(&count))
 		assert.Equal(t, 1, count, table)
 	}
 	var head string
 	var generation int
-	require.NoError(t, f.runtime.QueryRow(`SELECT manifest_id,generation FROM raw_source_heads`).Scan(&head, &generation))
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT manifest_id,generation FROM raw_source_heads`).Scan(&head, &generation))
 	assert.Equal(t, m.ManifestID, head)
 	assert.Equal(t, 1, generation)
 }
 
 func TestHostedRuntimeRefusesLegacyReaderAndPush(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	require.ErrorContains(t, RejectHostedPush(t.Context(), f.runtime), "hosted-owned")
-	_, err := NewStore(f.dsn, f.schema, false)
+	_, err := NewStore(t.Context(), f.dsn, f.schema, false)
 	require.ErrorContains(t, err, "raw_tenant")
 	require.NoError(t, CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull))
-	_, err = f.admin.Exec(`REVOKE UPDATE ON raw_content_revisions FROM "` + f.role + `"`)
+	_, err = f.admin.ExecContext(t.Context(), `REVOKE UPDATE ON raw_content_revisions FROM "`+f.role+`"`)
 	require.NoError(t, err)
 	require.ErrorContains(t, CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull), "privileges")
 }
 
 func TestHostedRuntimeRequiresFrictionProjectionPrivileges(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	for _, table := range []string{"friction_findings"} {
-		_, err := f.admin.Exec(`REVOKE DELETE ON "` + table + `" FROM "` + f.role + `"`)
+		_, err := f.admin.ExecContext(t.Context(), `REVOKE DELETE ON "`+table+`" FROM "`+f.role+`"`)
 		require.NoError(t, err)
 		require.ErrorContains(t,
 			CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull),
 			table,
 		)
-		_, err = f.admin.Exec(`GRANT DELETE ON "` + table + `" TO "` + f.role + `"`)
+		_, err = f.admin.ExecContext(t.Context(), `GRANT DELETE ON "`+table+`" TO "`+f.role+`"`)
 		require.NoError(t, err)
 
-		_, err = f.admin.Exec(`REVOKE SELECT,INSERT ON "` + table + `" FROM "` + f.role + `"`)
+		_, err = f.admin.ExecContext(t.Context(), `REVOKE SELECT,INSERT ON "`+table+`" FROM "`+f.role+`"`)
 		require.NoError(t, err)
 		require.ErrorContains(t,
 			CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull),
 			table,
 		)
-		_, err = f.admin.Exec(`GRANT SELECT,INSERT ON "` + table + `" TO "` + f.role + `"`)
+		_, err = f.admin.ExecContext(t.Context(), `GRANT SELECT,INSERT ON "`+table+`" TO "`+f.role+`"`)
 		require.NoError(t, err)
 	}
 	require.NoError(t, CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull))
 }
 
+func TestHostedVectorProvisionAndPrivileges(t *testing.T) {
+	t.Parallel()
+	f := newProjectionFixture(t)
+	_, err := f.admin.ExecContext(t.Context(), `CREATE EXTENSION IF NOT EXISTS vector SCHEMA public`)
+	require.NoError(t, err)
+	gen := storage.VectorGenerationInfo{Fingerprint: "hosted-test", Model: "fixture", Dimension: 2}
+	require.ErrorContains(t, CheckHostedVectorPrivileges(t.Context(), f.runtime, f.schema, gen.Fingerprint), "hosted-provision")
+	require.NoError(t, ProvisionHostedVector(t.Context(), f.admin, f.schema, f.tenant, gen))
+	id, _, ok, err := LookupVectorGeneration(t.Context(), f.runtime, gen.Fingerprint)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.ErrorContains(t, CheckHostedVectorPrivileges(t.Context(), f.runtime, f.schema, gen.Fingerprint), vectorChunkTable(id))
+	_, err = f.admin.ExecContext(t.Context(), `GRANT SELECT,INSERT,DELETE ON `+vectorChunkTable(id)+` TO "`+f.role+`"`)
+	require.NoError(t, err)
+	oldGen := storage.VectorGenerationInfo{Fingerprint: "old-hosted-test", Model: "fixture", Dimension: 2}
+	require.NoError(t, ProvisionHostedVector(t.Context(), f.admin, f.schema, f.tenant, oldGen))
+	oldID, _, ok, err := LookupVectorGeneration(t.Context(), f.runtime, oldGen.Fingerprint)
+	require.NoError(t, err)
+	require.True(t, ok)
+	_, err = f.admin.ExecContext(t.Context(), `GRANT DELETE ON `+vectorChunkTable(oldID)+` TO "`+f.role+`"`)
+	require.NoError(t, err)
+	require.ErrorContains(t, CheckHostedVectorPrivileges(t.Context(), f.runtime, f.schema, gen.Fingerprint), vectorChunkTable(oldID))
+	_, err = f.admin.ExecContext(t.Context(), `GRANT SELECT ON `+vectorChunkTable(oldID)+` TO "`+f.role+`"`)
+	require.NoError(t, err)
+	require.NoError(t, CheckHostedVectorPrivileges(t.Context(), f.runtime, f.schema, gen.Fingerprint))
+	_, err = f.admin.ExecContext(t.Context(), `CREATE TABLE vector_chunks_g999999 (doc_key text)`)
+	require.NoError(t, err)
+	badGen := storage.VectorGenerationInfo{Fingerprint: "rolled-back", Model: "fixture", Dimension: 2}
+	require.ErrorContains(t, ProvisionHostedVector(t.Context(), f.admin, f.schema, f.tenant, badGen), "hosted vector schema is unsupported")
+	_, _, ok, err = LookupVectorGeneration(t.Context(), f.runtime, badGen.Fingerprint)
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
 func TestHostedRuntimeSettlingRechecksConcurrentVisibility(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"removal", "exclusion", "replacement", "curation"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newProjectionFixture(t)
@@ -446,12 +518,12 @@ func TestHostedRuntimeSettlingRechecksConcurrentVisibility(t *testing.T) {
 			gate, err := f.runtime.BeginTx(t.Context(), nil)
 			require.NoError(t, err)
 			defer gate.Rollback()
-			_, err = gate.Exec(`SELECT group_id FROM raw_session_groups WHERE group_id=$1 FOR UPDATE`, old.GroupID)
+			_, err = gate.ExecContext(t.Context(), `SELECT group_id FROM raw_session_groups WHERE group_id=$1 FOR UPDATE`, old.GroupID)
 			require.NoError(t, err)
 			waitForLocks := func(n int) {
 				require.Eventually(t, func() bool {
 					var count int
-					err := f.admin.QueryRow(`SELECT count(*) FROM pg_stat_activity WHERE usename=$1 AND wait_event_type='Lock'`, f.role).Scan(&count)
+					err := f.admin.QueryRowContext(t.Context(), `SELECT count(*) FROM pg_stat_activity WHERE usename=$1 AND wait_event_type='Lock'`, f.role).Scan(&count)
 					return err == nil && count >= n
 				}, 3*time.Second, 10*time.Millisecond)
 			}
@@ -477,7 +549,7 @@ func TestHostedRuntimeSettlingRechecksConcurrentVisibility(t *testing.T) {
 			} else {
 				assert.Zero(t, got.n)
 				var count int
-				require.NoError(t, f.runtime.QueryRow(`SELECT count(*) FROM sessions WHERE id=$1`, old.SessionID).Scan(&count))
+				require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM sessions WHERE id=$1`, old.SessionID).Scan(&count))
 				assert.Zero(t, count)
 			}
 		})
@@ -485,6 +557,7 @@ func TestHostedRuntimeSettlingRechecksConcurrentVisibility(t *testing.T) {
 }
 
 func TestHostedRuntimeSubprocessTombstoneRetainsPublicSession(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	jobs, err := NewHostedRawIngestStore(f.runtime, f.tenant, "parser-1")
 	require.NoError(t, err)
@@ -493,7 +566,7 @@ func TestHostedRuntimeSubprocessTombstoneRetainsPublicSession(t *testing.T) {
 	require.NoError(t, err)
 	m, receipt := f.accept(t, "device-a", "initial", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("published")))
-	public, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
+	public, err := NewHostedStore(t.Context(), f.dsn, f.schema, f.tenant, false)
 	require.NoError(t, err)
 	defer public.Close()
 	before, err := public.ListSessions(t.Context(), db.SessionFilter{Limit: 10})
@@ -517,9 +590,9 @@ func TestHostedRuntimeSubprocessTombstoneRetainsPublicSession(t *testing.T) {
 	assert.Equal(t, 1, result.Succeeded)
 	assert.Zero(t, result.Retried)
 	var active, proof int
-	require.NoError(t, f.runtime.QueryRow(`SELECT count(*) FROM raw_session_branches WHERE active`).Scan(&active))
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM raw_session_branches WHERE active`).Scan(&active))
 	assert.Equal(t, 1, active)
-	require.NoError(t, f.runtime.QueryRow(`SELECT count(*) FROM session_sources`).Scan(&proof))
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM session_sources`).Scan(&proof))
 	assert.Equal(t, 1, proof)
 	after, err := public.ListSessions(t.Context(), db.SessionFilter{Limit: 10})
 	require.NoError(t, err)
@@ -528,35 +601,36 @@ func TestHostedRuntimeSubprocessTombstoneRetainsPublicSession(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, retained)
 	var state string
-	require.NoError(t, f.runtime.QueryRow(`SELECT state FROM raw_ingest_jobs WHERE manifest_id=$1`, canonical.ManifestID).Scan(&state))
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT state FROM raw_ingest_jobs WHERE manifest_id=$1`, canonical.ManifestID).Scan(&state))
 	assert.Equal(t, "complete", state)
 }
 
 func TestHostedRuntimeAcceptsOnlyRequiredProjectionMutations(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	// Friction rows are replaced on a rule-version refresh. Other child removal
 	// follows the sessions FK, so those immutable tables need no DELETE grant.
 	for _, table := range []string{"raw_projection_generations", "raw_source_contributions", "raw_session_public_aliases", "raw_embedding_outbox", "messages", "tool_calls", "tool_result_events", "usage_events", "secret_findings"} {
-		_, err := f.admin.Exec(`REVOKE UPDATE,DELETE ON "` + table + `" FROM "` + f.role + `"`)
+		_, err := f.admin.ExecContext(t.Context(), `REVOKE UPDATE,DELETE ON "`+table+`" FROM "`+f.role+`"`)
 		require.NoError(t, err)
 	}
-	_, err := f.admin.Exec(`GRANT UPDATE(observed_outcome,observed_repeat) ON tool_calls TO "` + f.role + `"`)
+	_, err := f.admin.ExecContext(t.Context(), `GRANT UPDATE(observed_outcome,observed_repeat) ON tool_calls TO "`+f.role+`"`)
 	require.NoError(t, err)
 	require.ErrorContains(t, CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull), "owner provisioning required")
-	_, err = f.admin.Exec(`GRANT UPDATE(sequence_ending) ON tool_calls TO "` + f.role + `"`)
+	_, err = f.admin.ExecContext(t.Context(), `GRANT UPDATE(sequence_ending) ON tool_calls TO "`+f.role+`"`)
 	require.NoError(t, err)
 	for _, table := range []string{"friction_findings"} {
-		_, err := f.admin.Exec(`REVOKE UPDATE ON "` + table + `" FROM "` + f.role + `"`)
+		_, err := f.admin.ExecContext(t.Context(), `REVOKE UPDATE ON "`+table+`" FROM "`+f.role+`"`)
 		require.NoError(t, err)
 	}
 	for _, table := range []string{"tool_calls", "tool_result_events", "usage_events", "pinned_messages"} {
-		_, err := f.admin.Exec(`REVOKE USAGE ON SEQUENCE "` + table + `_id_seq" FROM "` + f.role + `"; GRANT UPDATE ON SEQUENCE "` + table + `_id_seq" TO "` + f.role + `"`)
+		_, err := f.admin.ExecContext(t.Context(), `REVOKE USAGE ON SEQUENCE "`+table+`_id_seq" FROM "`+f.role+`"; GRANT UPDATE ON SEQUENCE "`+table+`_id_seq" TO "`+f.role+`"`)
 		require.NoError(t, err)
 	}
-	_, err = f.admin.Exec(`REVOKE USAGE ON SEQUENCE secret_findings_id_seq FROM "` + f.role + `"`)
+	_, err = f.admin.ExecContext(t.Context(), `REVOKE USAGE ON SEQUENCE secret_findings_id_seq FROM "`+f.role+`"`)
 	require.NoError(t, err)
 	require.ErrorContains(t, CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull), "messages.dialogue_text")
-	_, err = f.admin.Exec(`GRANT UPDATE(dialogue_text) ON messages TO "` + f.role + `"`)
+	_, err = f.admin.ExecContext(t.Context(), `GRANT UPDATE(dialogue_text) ON messages TO "`+f.role+`"`)
 	require.NoError(t, err)
 	require.NoError(t, CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull))
 	m, receipt := f.accept(t, "device-a", "first", "")
@@ -566,20 +640,20 @@ func TestHostedRuntimeAcceptsOnlyRequiredProjectionMutations(t *testing.T) {
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, out))
 	for _, table := range []string{"tool_result_events", "usage_events", "secret_findings", "friction_findings"} {
 		var count int
-		require.NoError(t, f.runtime.QueryRow(`SELECT count(*) FROM `+table).Scan(&count))
+		require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM `+table).Scan(&count))
 		assert.Positive(t, count, table)
 	}
 	// Drop both the stored observations and their cached snapshot, so the
 	// replay must write them back with only the column UPDATE grants.
-	_, err = f.admin.Exec(`UPDATE tool_calls SET observed_outcome=NULL,observed_repeat=NULL,sequence_ending=NULL`)
+	_, err = f.admin.ExecContext(t.Context(), `UPDATE tool_calls SET observed_outcome=NULL,observed_repeat=NULL,sequence_ending=NULL`)
 	require.NoError(t, err)
-	_, err = f.admin.Exec(`UPDATE raw_content_revisions SET recency_state = recency_state - 'ToolObservations'`)
+	_, err = f.admin.ExecContext(t.Context(), `UPDATE raw_content_revisions SET recency_state = recency_state - 'ToolObservations'`)
 	require.NoError(t, err)
 	replay, replayReceipt := f.accept(t, "device-a", "observation-refresh", receipt.Receipt)
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, replay), replay, out))
 	receipt = replayReceipt
 	var restored int
-	require.NoError(t, f.runtime.QueryRow(`SELECT count(*) FROM tool_calls WHERE observed_outcome IS NOT NULL AND observed_repeat IS NOT NULL`).Scan(&restored))
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM tool_calls WHERE observed_outcome IS NOT NULL AND observed_repeat IS NOT NULL`).Scan(&restored))
 	assert.Positive(t, restored)
 	require.NoError(t, f.sink.SetCuration(t.Context(), "codex:portable", "starred", true))
 	require.NoError(t, f.sink.SetPin(t.Context(), "codex:portable", 0, true, "note"))
@@ -590,32 +664,34 @@ func TestHostedRuntimeAcceptsOnlyRequiredProjectionMutations(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, removed)
 	var count int
-	require.NoError(t, f.runtime.QueryRow(`SELECT count(*) FROM sessions`).Scan(&count))
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM sessions`).Scan(&count))
 	assert.Zero(t, count)
 }
 
 func TestHostedRuntimeUsagePolicyRequiresVectorRemovalPrivileges(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
-	_, err := f.admin.Exec(`REVOKE DELETE ON vector_documents FROM "` + f.role + `"`)
+	_, err := f.admin.ExecContext(t.Context(), `REVOKE DELETE ON vector_documents FROM "`+f.role+`"`)
 	require.NoError(t, err)
 	require.NoError(t, CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull))
 	require.ErrorContains(t, CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentUsage), "vector_documents")
-	_, err = f.admin.Exec(`GRANT DELETE ON vector_documents TO "` + f.role + `"`)
+	_, err = f.admin.ExecContext(t.Context(), `GRANT DELETE ON vector_documents TO "`+f.role+`"`)
 	require.NoError(t, err)
 	require.NoError(t, CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentUsage))
 	f.sink.options.Content.ArchiveContent = config.ArchiveContentUsage
 	m, _ := f.accept(t, "device-a", "usage", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("discarded transcript")))
 	var content string
-	require.NoError(t, f.runtime.QueryRow(`SELECT content FROM messages ORDER BY ordinal LIMIT 1`).Scan(&content))
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT content FROM messages ORDER BY ordinal LIMIT 1`).Scan(&content))
 	assert.Empty(t, content)
 }
 
 func TestHostedRuntimeRequiresProvisionedObservationColumns(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	require.NoError(t, CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull))
 	// A schema that owner provisioning has not upgraded lacks the columns.
-	_, err := f.admin.Exec(`ALTER TABLE tool_calls DROP COLUMN sequence_ending`)
+	_, err := f.admin.ExecContext(t.Context(), `ALTER TABLE tool_calls DROP COLUMN sequence_ending`)
 	require.NoError(t, err)
 	err = CheckHostedRuntimeWritable(t.Context(), f.runtime, f.schema, config.ArchiveContentFull)
 	require.ErrorContains(t, err, "owner provisioning required")

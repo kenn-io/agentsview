@@ -139,7 +139,7 @@ func (s *Store) FindSessionIDsByPartial(ctx context.Context, partial string, lim
 	if limit <= 0 {
 		limit = 5
 	}
-	rows, err := s.queryContext(ctx,
+	rows, err := s.pageQueryContext(ctx,
 		`SELECT id FROM sessions
 		 WHERE position(id, ?) > 0 AND deleted_at IS NULL
 		 ORDER BY `+sessionActivityExpr+` DESC
@@ -151,8 +151,21 @@ func (s *Store) FindSessionIDsByPartial(ctx context.Context, partial string, lim
 	return scanIDs(rows)
 }
 
+// chSessionIDTailExpr computes db.SessionIDTail(id). The id_tail skipping
+// index uses this exact expression, and a query must repeat it verbatim for
+// ClickHouse to apply the index.
+const chSessionIDTailExpr = `extract(id, '[^:~]*$')`
+
 // FindSessionIDsByRawSuffix returns IDs that equal raw or end with a literal
-// colon/tilde delimiter followed by raw.
+// colon/tilde delimiter followed by raw, exact match first, then most recent.
+//
+// The inner query finds candidate IDs through the id_tail index. It reads
+// without FINAL because the connection's final=1 makes ClickHouse widen each
+// matching granule to every overlapping key range in other parts, which
+// reads about half the table. Older row versions keep their id, so the
+// unmerged read returns the same IDs. The outer query then reads those IDs
+// by primary key with FINAL, so deleted_at and the activity order come from
+// the current version.
 func (s *Store) FindSessionIDsByRawSuffix(ctx context.Context, raw string, limit int) ([]string, error) {
 	if raw == "" {
 		return nil, nil
@@ -160,12 +173,16 @@ func (s *Store) FindSessionIDsByRawSuffix(ctx context.Context, raw string, limit
 	if limit <= 0 {
 		limit = 5
 	}
-	rows, err := s.queryContext(ctx,
+	rows, err := s.pageQueryContext(ctx,
 		`SELECT id FROM sessions
-		 WHERE (id = ? OR endsWith(id, ?) OR endsWith(id, ?))
+		 WHERE id IN (
+		     SELECT id FROM sessions
+		     WHERE `+chSessionIDTailExpr+` = ?
+		       AND (id = ? OR endsWith(id, ?) OR endsWith(id, ?))
+		     SETTINGS final = 0)
 		   AND deleted_at IS NULL
 		 ORDER BY (id = ?) DESC, `+sessionActivityExpr+` DESC
-		 LIMIT ?`, raw, ":"+raw, "~"+raw, raw, limit)
+		 LIMIT ?`, db.SessionIDTail(raw), raw, ":"+raw, "~"+raw, raw, limit)
 	if err != nil {
 		return nil, fmt.Errorf("finding clickhouse sessions by raw suffix %q: %w", raw, err)
 	}
@@ -193,31 +210,37 @@ func scanIDs(rows *sql.Rows) ([]string, error) {
 }
 
 func (s *Store) GetStats(ctx context.Context, excludeOneShot, excludeAutomated bool) (db.Stats, error) {
+	count, args := db.StatsRootCountSQL(db.ClickHouseQueryDialect(), excludeOneShot, excludeAutomated)
 	query := `
 		SELECT
-			toInt64(COUNT(*)),
-			toInt64(COALESCE(SUM(message_count), 0)),
+			` + count + `,
+			SUM(message_count),
 			toInt64(COUNT(DISTINCT project)),
 			toInt64(COUNT(DISTINCT machine)),
-			MIN(COALESCE(started_at, created_at))
+			MIN(COALESCE(started_at, created_at)),
+			(SELECT MIN(occurred_at) FROM cursor_usage_events)
 		FROM sessions
 		WHERE ` + rootSessionWhere(excludeOneShot, excludeAutomated)
 	var stats db.Stats
 	var earliest any
-	if err := s.queryRowContext(ctx, query).Scan(
+	var earliestAccount any
+	if err := s.pageQueryRowContext(ctx, query, args...).Scan(
 		&stats.SessionCount, &stats.MessageCount,
-		&stats.ProjectCount, &stats.MachineCount, &earliest,
+		&stats.ProjectCount, &stats.MachineCount, &earliest, &earliestAccount,
 	); err != nil {
 		return db.Stats{}, fmt.Errorf("fetching clickhouse stats: %w", err)
 	}
 	if v := formatDBTime(earliest); v != "" {
 		stats.EarliestSession = &v
 	}
+	if v := formatDBTime(earliestAccount); v != "" {
+		stats.EarliestAccountUsage = &v
+	}
 	return stats, nil
 }
 
 func (s *Store) GetProjects(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]db.ProjectInfo, error) {
-	rows, err := s.queryContext(ctx,
+	rows, err := s.pageQueryContext(ctx,
 		`SELECT project, toInt64(COUNT(*)) FROM sessions WHERE `+
 			rootSessionWhere(excludeOneShot, excludeAutomated)+
 			` GROUP BY project ORDER BY project`)
@@ -237,7 +260,7 @@ func (s *Store) GetProjects(ctx context.Context, excludeOneShot, excludeAutomate
 }
 
 func (s *Store) GetActiveProjectLabels(ctx context.Context) ([]string, error) {
-	rows, err := s.queryContext(ctx,
+	rows, err := s.pageQueryContext(ctx,
 		`SELECT DISTINCT project FROM sessions WHERE deleted_at IS NULL ORDER BY project`)
 	if err != nil {
 		return nil, fmt.Errorf("querying active project labels: %w", err)
@@ -247,7 +270,7 @@ func (s *Store) GetActiveProjectLabels(ctx context.Context) ([]string, error) {
 }
 
 func (s *Store) GetAgents(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]db.AgentInfo, error) {
-	rows, err := s.queryContext(ctx,
+	rows, err := s.pageQueryContext(ctx,
 		`SELECT agent, toInt64(COUNT(*)) FROM sessions WHERE agent <> '' AND `+
 			rootSessionWhere(excludeOneShot, excludeAutomated)+
 			` GROUP BY agent ORDER BY agent`)
@@ -267,7 +290,7 @@ func (s *Store) GetAgents(ctx context.Context, excludeOneShot, excludeAutomated 
 }
 
 func (s *Store) GetMachines(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]string, error) {
-	rows, err := s.queryContext(ctx,
+	rows, err := s.pageQueryContext(ctx,
 		`SELECT DISTINCT machine FROM sessions WHERE `+
 			rootSessionWhere(excludeOneShot, excludeAutomated)+
 			` ORDER BY machine`)
@@ -279,7 +302,7 @@ func (s *Store) GetMachines(ctx context.Context, excludeOneShot, excludeAutomate
 }
 
 func (s *Store) GetBranches(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]db.BranchInfo, error) {
-	rows, err := s.queryContext(ctx,
+	rows, err := s.pageQueryContext(ctx,
 		`SELECT DISTINCT project, git_branch FROM sessions WHERE `+
 			rootSessionWhere(excludeOneShot, excludeAutomated)+
 			` ORDER BY project, git_branch`)

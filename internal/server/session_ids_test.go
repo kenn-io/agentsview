@@ -30,13 +30,15 @@ func TestListSessionsIDsHTTP(t *testing.T) {
 	cases := []struct {
 		name, query string
 		want        []string
+		counts      *db.SessionExclusionCounts
 	}{
-		{"raw", "ids=codex:shared", []string{"codex:shared", "node-a~codex:shared", "node-b~codex:shared"}},
-		{"qualified", "ids=node-a~codex:shared", []string{"node-a~codex:shared"}},
-		{"unknown", "ids=missing", []string{}},
-		{"intersection", "ids=codex:shared&project=app", []string{"codex:shared", "node-a~codex:shared"}},
-		{"duplicates whitespace", "ids=" + url.QueryEscape(" codex:shared , node-a~codex:shared,missing,codex:shared"), []string{"codex:shared", "node-a~codex:shared", "node-b~codex:shared"}},
-		{"quoted comma and quote", "ids=" + url.QueryEscape(`"openclaw:main:part,""quoted"""`), []string{`openclaw:main:part,"quoted"`}},
+		{"raw", "ids=codex:shared", []string{"codex:shared", "node-a~codex:shared", "node-b~codex:shared"}, nil},
+		{"qualified", "ids=node-a~codex:shared", []string{"node-a~codex:shared"}, nil},
+		{"child with exclusion counts", "ids=node-b~codex:shared&exclusion_counts=true", []string{"node-b~codex:shared"}, &db.SessionExclusionCounts{}},
+		{"unknown", "ids=missing", []string{}, nil},
+		{"intersection", "ids=codex:shared&project=app", []string{"codex:shared", "node-a~codex:shared"}, nil},
+		{"duplicates whitespace", "ids=" + url.QueryEscape(" codex:shared , node-a~codex:shared,missing,codex:shared"), []string{"codex:shared", "node-a~codex:shared", "node-b~codex:shared"}, nil},
+		{"quoted comma and quote", "ids=" + url.QueryEscape(`"openclaw:main:part,""quoted"""`), []string{`openclaw:main:part,"quoted"`}, nil},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
@@ -49,6 +51,7 @@ func TestListSessionsIDsHTTP(t *testing.T) {
 				ids = append(ids, s.ID)
 			}
 			assert.ElementsMatch(t, tt.want, ids)
+			assert.Equal(t, tt.counts, page.ExclusionCounts)
 		})
 	}
 	for _, ids := range []string{"", ",", "codex:shared,", ",codex:shared", "codex:shared, ,missing", "openclaw:main:bad\r\nid", strings.Repeat("x,", 100) + "x"} {

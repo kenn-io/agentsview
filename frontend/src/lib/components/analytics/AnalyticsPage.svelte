@@ -33,10 +33,8 @@
   import { outcomeTotals } from "../../stores/outcomeTotals.svelte.js";
   import { settings } from "../../stores/settings.svelte.js";
   import { analyticsPageDates } from "../../stores/analyticsPageDates.js";
-  import {
-    sessions,
-    filtersToParams,
-  } from "../../stores/sessions.svelte.js";
+  import { sessions } from "../../stores/sessions.svelte.js";
+  import { filtersToParams } from "../../stores/sessionFilters.js";
   import { events } from "../../stores/events.svelte.js";
   import { starred } from "../../stores/starred.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
@@ -768,6 +766,9 @@
           onIncludePullRequests={() => {
             if (outcomeWindow) void outcomeTotals.loadWithPullRequests(outcomeWindow);
           }}
+          onRetry={() => {
+            if (outcomeWindow) void outcomeTotals.retry(outcomeWindow);
+          }}
         />
       </Card>
     </div>
@@ -900,7 +901,7 @@
   .tz-label {
     font-weight: 400;
     color: var(--text-muted);
-    font-size: 10px;
+    font-size: 11px;
     margin-left: 4px;
   }
 

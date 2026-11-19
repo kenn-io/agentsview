@@ -1,6 +1,7 @@
 name: MSYS2 Update Check
 
 env:
+  API_VERSION_BASE: HEAD^1
   GOTRACEBACK: all
   # "|" falls back to direct on any proxy error (e.g. HTTP/2 INTERNAL_ERROR), not just 404/410.
   GOPROXY: "https://proxy.golang.org|direct"
@@ -40,9 +41,6 @@ jobs:
           - name: Capture, Database, Parser
             timeout: 38
             package: ./internal/capture ./internal/db ./internal/parser
-          - name: DuckDB
-            timeout: 27
-            package: ./internal/duckdb
           # Match normal Windows CI; complementary filters cover every sync test.
           - name: Sync A-R
             timeout: 27
@@ -73,7 +71,7 @@ jobs:
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.53.2
 
       - name: Restore pricing snapshot
         shell: bash
@@ -119,7 +117,6 @@ jobs:
               'go.kenn.io/agentsview/cmd/agentsview'
               'go.kenn.io/agentsview/internal/capture'
               'go.kenn.io/agentsview/internal/db'
-              'go.kenn.io/agentsview/internal/duckdb'
               'go.kenn.io/agentsview/internal/parser'
               'go.kenn.io/agentsview/internal/sync'
             )

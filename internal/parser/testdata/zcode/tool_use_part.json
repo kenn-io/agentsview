@@ -1,0 +1,1 @@
+{"type":"tool_use","id":"call-read","name":"Read","input":{"file_path":"internal/auth/session.go"}}

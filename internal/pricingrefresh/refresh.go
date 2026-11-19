@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -125,21 +124,22 @@ func SeedFallbackContext(ctx context.Context, database *db.DB) error {
 
 // RefreshIfStale refreshes when the last attempt is older than cooldown.
 // It can refresh and return an error at once: a fetch that degraded to a
-// LiteLLM-only snapshot (see pricing.FetchCatalog) still stores rows and
+// LiteLLM-only snapshot (see pricing.FetchCatalogContext) still stores rows and
 // reports true, and the error describes the degradation.
 func RefreshIfStale(
+	ctx context.Context,
 	database *db.DB,
-	fetch func() (pricing.Catalog, error),
+	fetch func(context.Context) (pricing.Catalog, error),
 	cooldown time.Duration,
 	now time.Time,
 ) (bool, error) {
-	return refreshIfStale(context.Background(), database, fetch, cooldown, now)
+	return refreshIfStale(ctx, database, fetch, cooldown, now)
 }
 
 func refreshIfStale(
 	ctx context.Context,
 	database *db.DB,
-	fetch func() (pricing.Catalog, error),
+	fetch func(context.Context) (pricing.Catalog, error),
 	cooldown time.Duration,
 	now time.Time,
 ) (bool, error) {
@@ -156,12 +156,19 @@ func refreshIfStale(
 	return refreshAt(ctx, database, fetch, now)
 }
 
+// refreshAt records the attempt time before fetching, so a failed fetch
+// waits out the cooldown. A canceled refresh puts the previous time back:
+// the fetch did not fail, so the next refresh should retry at once.
 func refreshAt(
 	ctx context.Context,
 	database *db.DB,
-	fetch func() (pricing.Catalog, error),
+	fetch func(context.Context) (pricing.Catalog, error),
 	now time.Time,
 ) (bool, error) {
+	previousAttempt, err := database.GetPricingMetaContext(ctx, refreshAttemptMetaKey)
+	if err != nil {
+		return false, fmt.Errorf("reading pricing refresh meta: %w", err)
+	}
 	if err := database.SetPricingMetaContext(
 		ctx, refreshAttemptMetaKey, now.UTC().Format(time.RFC3339),
 	); err != nil {
@@ -169,7 +176,28 @@ func refreshAt(
 			"recording pricing refresh attempt: %w", err,
 		)
 	}
-	catalog, fetchErr := fetch()
+	refreshed, err := fetchAndStore(ctx, database, fetch)
+	if err == nil || ctx.Err() == nil {
+		return refreshed, err
+	}
+	// The restore is one small write, so it runs after cancellation.
+	if restoreErr := database.SetPricingMetaContext(
+		context.WithoutCancel(ctx), refreshAttemptMetaKey, previousAttempt,
+	); restoreErr != nil {
+		return refreshed, fmt.Errorf(
+			"restoring pricing refresh attempt after cancellation: %w: %w",
+			restoreErr, err,
+		)
+	}
+	return refreshed, err
+}
+
+func fetchAndStore(
+	ctx context.Context,
+	database *db.DB,
+	fetch func(context.Context) (pricing.Catalog, error),
+) (bool, error) {
+	catalog, fetchErr := fetch(ctx)
 	if fetchErr != nil && catalog.GenAI == nil && len(catalog.LiteLLM) == 0 {
 		return false, fetchErr
 	}
@@ -181,19 +209,20 @@ func refreshAt(
 
 // Ensure seeds fallback pricing and refreshes online catalogs when due.
 func Ensure(
+	ctx context.Context,
 	database *db.DB,
 	offline bool,
-	fetch func() (pricing.Catalog, error),
+	fetch func(context.Context) (pricing.Catalog, error),
 	now time.Time,
 ) (bool, error) {
-	return ensure(context.Background(), database, offline, fetch, now)
+	return ensure(ctx, database, offline, fetch, now)
 }
 
 func ensure(
 	ctx context.Context,
 	database *db.DB,
 	offline bool,
-	fetch func() (pricing.Catalog, error),
+	fetch func(context.Context) (pricing.Catalog, error),
 	now time.Time,
 ) (bool, error) {
 	if offline {
@@ -269,47 +298,23 @@ func runCurrent(
 		releaseRefreshGateReference(database, gate)
 	}()
 
-	previousAttempt, err := database.GetPricingMetaContext(ctx, refreshAttemptMetaKey)
-	if err != nil {
-		return fmt.Errorf("reading pricing refresh meta: %w", err)
-	}
-	fetchCurrent := func() (pricing.Catalog, error) {
-		return fetch(ctx)
-	}
 	if force {
-		if err = SeedFallbackContext(ctx, database); err == nil {
-			_, err = refreshAt(ctx, database, fetchCurrent, now)
+		if err := SeedFallbackContext(ctx, database); err != nil {
+			return err
 		}
-	} else {
-		_, err = ensure(ctx, database, false, fetchCurrent, now)
-	}
-	if err == nil || ctx.Err() == nil {
+		_, err := refreshAt(ctx, database, fetch, now)
 		return err
 	}
-	// Put back the previous attempt time so the next refresh can retry. Skip
-	// the write when this refresh never recorded an attempt: it can wait
-	// behind a long archive write, and a canceled push should not.
-	current, readErr := database.GetPricingMeta(refreshAttemptMetaKey)
-	if readErr == nil && current == previousAttempt {
-		return err
-	}
-	if restoreErr := database.SetPricingMeta(
-		refreshAttemptMetaKey, previousAttempt,
-	); restoreErr != nil {
-		return fmt.Errorf(
-			"restoring pricing refresh attempt after cancellation: %w: %w",
-			restoreErr, err,
-		)
-	}
+	_, err := ensure(ctx, database, false, fetch, now)
 	return err
 }
 
 // storeCatalog reconciles a fetched catalog with the stored table (see
 // pricing.Catalog.Reconcile) and writes rows, retirements, and the
-// OpenRouter ownership sentinel in one transaction, so a crash or a
+// OpenRouter ownership list in one transaction, so a crash or a
 // concurrent push never sees rows without the metadata that retires them.
 //
-// The sentinel and stored patterns are read before that transaction, and
+// The ownership list and stored patterns are read before that transaction, and
 // the in-process refresh gate does not cover a second process on the
 // same archive (server loop beside a CLI refresh), so racing refreshes
 // can commit a plan built from a one-snapshot-stale read. The next
@@ -343,11 +348,9 @@ func storeCatalog(ctx context.Context, database *db.DB, catalog pricing.Catalog)
 	if err != nil {
 		return fmt.Errorf("listing stored pricing: %w", err)
 	}
-	stored := make([]string, 0, len(existing))
-	for _, row := range existing {
-		if !strings.HasPrefix(row.ModelPattern, "_") {
-			stored = append(stored, row.ModelPattern)
-		}
+	stored := make([]string, len(existing))
+	for i, row := range existing {
+		stored[i] = row.ModelPattern
 	}
 	prices, owned, retired := catalog.Reconcile(stored, previous)
 	return database.ReconcileModelPricingContext(
@@ -372,8 +375,8 @@ func seedEmbeddedGenAI(ctx context.Context, database *db.DB) error {
 // rows it covers under another spelling are retired and rows it lists
 // exactly pass to its ownership, in the same transaction, so a reseed
 // never leaves an OpenRouter row beside or under an embedded one while
-// the sentinel still claims it. Databases that never stored the sentinel
-// keep none.
+// the ownership list still claims it. Databases that never stored the
+// list keep none.
 func storeFallbackContext(ctx context.Context, database *db.DB) error {
 	value, err := database.GetPricingMetaContext(
 		ctx, pricing.OpenRouterModelsMetaKey,

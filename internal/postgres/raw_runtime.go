@@ -60,7 +60,7 @@ func (s *RawProjectionStore) SettlePendingSignals(ctx context.Context, limit int
 	changed := 0
 	for _, c := range candidates {
 		var eligible bool
-		err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sessions s WHERE s.id=$1 AND s.raw_group_id=$2 AND s.provenance_kind='raw' AND s.signals_pending_since IS NOT NULL AND s.ended_at<=$3 AND EXISTS(SELECT 1 FROM raw_session_branches b WHERE b.group_id=$2 AND b.session_id=s.id AND b.active AND NOT COALESCE((SELECT value='true'::jsonb FROM raw_curation c WHERE c.group_id=b.group_id AND c.branch_id=b.branch_id AND c.field='excluded'),(SELECT value='true'::jsonb FROM raw_curation c WHERE c.group_id=b.group_id AND c.branch_id='' AND c.field='excluded'),false)))`, c.id, c.group, now.Add(-signals.RecencyWindow)).Scan(&eligible)
+		err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sessions s WHERE s.id=$1 AND s.raw_group_id=$2 AND s.provenance_kind='raw' AND s.signals_pending_since IS NOT NULL AND s.ended_at<=$3 AND EXISTS(SELECT 1 FROM raw_session_branches b WHERE b.group_id=$2 AND b.session_id=s.id AND b.active AND NOT COALESCE((SELECT value='true' FROM raw_curation c WHERE c.group_id=b.group_id AND c.branch_id=b.branch_id AND c.field='excluded'),(SELECT value='true' FROM raw_curation c WHERE c.group_id=b.group_id AND c.branch_id='' AND c.field='excluded'),false)))`, c.id, c.group, now.Add(-signals.RecencyWindow)).Scan(&eligible)
 		if err != nil {
 			return 0, err
 		}

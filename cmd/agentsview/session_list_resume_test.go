@@ -24,7 +24,7 @@ func activitySeed(id string, ago time.Duration) sessionSeed {
 
 func TestSessionList_ResumeFixture(t *testing.T) {
 	dataDir := testDataDir(t)
-	seedSessionsWithOpts(t, dataDir,
+	serverURL := seedSessionsWithOpts(t, dataDir,
 		activitySeed("fresh", 2*time.Minute),
 		activitySeed("stale", 2*time.Hour),
 	)
@@ -33,7 +33,7 @@ func TestSessionList_ResumeFixture(t *testing.T) {
 		for _, flag := range []string{"--resume", "--active"} {
 			t.Run(flag, func(t *testing.T) {
 				out, err := executeCommand(newRootCommand(),
-					"session", "list", flag, "--format", "json")
+					"session", "list", "--server", serverURL, flag, "--format", "json")
 				require.NoError(t, err)
 
 				// Only the session inside the 15m window survives,
@@ -46,7 +46,7 @@ func TestSessionList_ResumeFixture(t *testing.T) {
 
 	t.Run("no resume shows all", func(t *testing.T) {
 		out, err := executeCommand(newRootCommand(),
-			"session", "list", "--format", "json")
+			"session", "list", "--server", serverURL, "--format", "json")
 		require.NoError(t, err)
 
 		// Without --resume both sessions are listed (recency order).
@@ -57,7 +57,7 @@ func TestSessionList_ResumeFixture(t *testing.T) {
 	t.Run("respects explicit active since", func(t *testing.T) {
 		wide := time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339)
 		out, err := executeCommand(newRootCommand(),
-			"session", "list", "--resume", "--active-since", wide,
+			"session", "list", "--server", serverURL, "--resume", "--active-since", wide,
 			"--format", "json")
 		require.NoError(t, err)
 		assert.Equal(t, []string{"fresh", "stale"}, sessionListIDs(t, out))
@@ -65,7 +65,7 @@ func TestSessionList_ResumeFixture(t *testing.T) {
 
 	t.Run("human output", func(t *testing.T) {
 		out, err := executeCommand(newRootCommand(), "session", "list",
-			"--resume")
+			"--server", serverURL, "--resume")
 		require.NoError(t, err)
 		// Enriched human header is present and the in-flight marker is shown
 		// for the recently-active row. The ID column keeps a copyable handle

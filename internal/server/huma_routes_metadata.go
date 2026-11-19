@@ -11,6 +11,7 @@ import (
 	"go.kenn.io/agentsview/internal/update"
 
 	"github.com/danielgtaylor/huma/v2"
+	"golang.org/x/sync/errgroup"
 )
 
 func (s *Server) registerMetadataRoutes() {
@@ -45,6 +46,7 @@ type sessionStatsInput struct {
 	IncludeProjects       []string `query:"include_project" doc:"Restrict to these projects"`
 	ExcludeProjects       []string `query:"exclude_project" doc:"Exclude these projects"`
 	Timezone              string   `query:"timezone" doc:"IANA timezone name"`
+	OutcomesOnly          bool     `query:"outcomes_only" doc:"Compute only outcome_stats; other sections are zero-valued"`
 	IncludeGitOutcomes    bool     `query:"include_git_outcomes" doc:"Include git-derived outcome stats"`
 	IncludeGitHubOutcomes bool     `query:"include_github_outcomes" doc:"Include GitHub PR outcome stats"`
 }
@@ -109,6 +111,7 @@ func (s *Server) humaGetSessionStats(
 		IncludeProjects:        in.IncludeProjects,
 		ExcludeProjects:        in.ExcludeProjects,
 		Timezone:               in.Timezone,
+		OutcomesOnly:           in.OutcomesOnly,
 		IncludeGitOutcomes:     in.IncludeGitOutcomes,
 		IncludeGitHubOutcomes:  in.IncludeGitHubOutcomes,
 		GHToken:                githubToken,
@@ -143,16 +146,26 @@ func (s *Server) humaListMachines(
 	ctx context.Context,
 	in *machinesInput,
 ) (*jsonOutput[machinesResponse], error) {
-	labels, err := s.db.GetMachineLabels(ctx)
-	if err != nil {
-		return nil, serverError(err)
-	}
-	aliases, err := s.machineAliases(ctx)
-	if err != nil {
-		return nil, serverError(err)
-	}
-	machines, err := s.db.GetMachines(ctx, !in.IncludeOneShot, !in.IncludeAutomated)
-	if err != nil {
+	// The labels, aliases, and machine list are independent reads.
+	var labels, aliases map[string]string
+	var machines []string
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.Go(func() error {
+		var err error
+		labels, err = s.db.GetMachineLabels(groupCtx)
+		return err
+	})
+	group.Go(func() error {
+		var err error
+		aliases, err = s.machineAliases(groupCtx)
+		return err
+	})
+	group.Go(func() error {
+		var err error
+		machines, err = s.db.GetMachines(groupCtx, !in.IncludeOneShot, !in.IncludeAutomated)
+		return err
+	})
+	if err := group.Wait(); err != nil {
 		return nil, serverError(err)
 	}
 	var resolved []string
@@ -193,6 +206,7 @@ func (s *Server) humaGetVersion(
 	_ *emptyInput,
 ) (*jsonOutput[VersionInfo], error) {
 	version := s.version
+	version.DocbankEnabled = s.cfg.Integrations.Docbank.Enabled()
 	if database, ok := s.db.(*db.DB); ok {
 		var err error
 		version.ArchiveOnly, err = database.IsArchiveOnly(ctx)
@@ -213,6 +227,9 @@ func (s *Server) humaGetVersion(
 		version.FrictionAvailable = false
 		version.FrictionReadable = false
 		version.FrictionBuildAllowed = false
+	} else {
+		version.KataAvailable = s.kataConn().LastReady()
+		version.FrictionAutoFile = s.frictionAutoFileOn()
 	}
 	return &jsonOutput[VersionInfo]{Body: version}, nil
 }

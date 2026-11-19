@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -750,6 +751,37 @@ func TestBuildGeminiProjectMap(t *testing.T) {
 	hash := geminiPathHash("/Users/alice/code/my-app")
 	assert.Equal(t, "my_app", m[hash], "project for hash")
 	assert.Equal(t, "my_app", m["my-app"], "project for name")
+}
+
+// Gemini keeps project paths long after their worktrees are deleted, so the
+// map must resolve deleted paths that share a container with one scan.
+func TestBuildGeminiProjectMapScansSharedContainerOnce(t *testing.T) {
+	container := newWorktreeContainer(t)
+	deleted := []string{
+		filepath.Join(container, "feature-a"),
+		filepath.Join(container, "feature-b"),
+		filepath.Join(container, "feature-c"),
+	}
+	projects := map[string]map[string]string{"projects": {}}
+	for _, p := range deleted {
+		projects["projects"][p] = filepath.Base(p)
+	}
+	data, err := json.Marshal(projects)
+	require.NoError(t, err)
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "projects.json"), data, 0o644))
+	probes := countSiblingProbes(t, container)
+	require.Equal(t, "my_project", ExtractProjectFromCwd(deleted[0]))
+	oneScan := probes.Swap(0)
+	require.Positive(t, oneScan)
+
+	m := BuildGeminiProjectMap(dir)
+
+	for _, p := range deleted {
+		assert.Equal(t, "my_project", m[geminiPathHash(p)], p)
+	}
+	assert.Equal(t, oneScan, probes.Load(),
+		"three deleted paths in one container need one scan")
 }
 
 func TestBuildGeminiProjectMapMissingFile(t *testing.T) {

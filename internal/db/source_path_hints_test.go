@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1010,6 +1011,47 @@ func listBaselineOwnership(
 	}
 	require.NoError(t, rows.Err())
 	return ownership
+}
+
+func TestBaselineActiveSessionSourcePathsSeeksAdmittedPaths(t *testing.T) {
+	for _, stats := range []string{"missing", "stale", "fresh"} {
+		t.Run(stats, func(t *testing.T) {
+			var d *DB
+			if stats == "fresh" {
+				path := filepath.Join(t.TempDir(), "fresh.db")
+				require.NoError(t, os.WriteFile(path, nil, 0o600))
+				var err error
+				d, err = OpenFreshIsolatedContext(t.Context(), path)
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, d.Close()) })
+			} else {
+				d = testDB(t)
+			}
+			insertSessionWithSourcePath(t, d, "target", "claude", "target.jsonl")
+			if stats == "stale" {
+				_, err := d.getWriter().Exec(t.Context(), "ANALYZE sessions")
+				require.NoError(t, err)
+			}
+			_, err := d.getWriter().Exec(t.Context(), `
+				WITH RECURSIVE n(i) AS (
+					VALUES(1) UNION ALL SELECT i + 1 FROM n WHERE i < 1000
+				)
+				INSERT INTO sessions (id, project, machine, agent, file_path)
+				SELECT 'unrelated-' || i, 'project', ?, 'claude', 'file-' || i || '.jsonl'
+				FROM n`, defaultMachine)
+			require.NoError(t, err)
+			sources := []SessionSourcePath{{Agent: "claude", FilePath: "target.jsonl"}, {Agent: "codex", FilePath: "absent.jsonl"}}
+			filter, args, ok := buildSourcePairFilter(sources)
+			require.True(t, ok)
+			rows, err := d.getWriter().Query(t.Context(), "EXPLAIN QUERY PLAN "+baselineActiveSessionSourcePathsQuery(filter), append([]any{defaultMachine}, args...)...)
+			require.NoError(t, err)
+			defer rows.Close()
+			plan := strings.Join(explainQueryPlanDetails(t, rows), "\n")
+			assert.Contains(t, plan, "idx_sessions_file_path (file_path=?)", plan)
+			require.NoError(t, d.BaselineActiveSessionSourcePaths(t.Context(), defaultMachine, sources))
+			assert.Equal(t, map[string]SessionSourcePath{"target": sources[0]}, listBaselineOwnership(t, d, defaultMachine))
+		})
+	}
 }
 
 // TestReplaceActiveSessionSourceBaselinesWarmPassWritesBounded pins the

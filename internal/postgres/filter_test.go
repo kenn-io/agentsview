@@ -18,10 +18,10 @@ func TestPGFilterWrappersPreserveParameterOffset(t *testing.T) {
 		{"usage", func(pb *paramBuilder) string {
 			return appendPGUsageSessionFilterClauses("WHERE true", pb, db.UsageFilter{
 				ProjectLabels: []string{"team,core"}, ExcludeProjectLabels: []string{"other,group"},
-			})
+			}, db.PostgresQueryDialect())
 		}, []any{"seed", "team,core", "other,group"}},
 		{"analytics dates", func(pb *paramBuilder) string {
-			return buildAnalyticsWhereWithDate(filter, pgDateColS, pb, true, "s.id")
+			return buildAnalyticsWhereWithDate(filter, pgDateColS, pb, true, "s.id", db.PostgresQueryDialect())
 		}, []any{"seed", from, to}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

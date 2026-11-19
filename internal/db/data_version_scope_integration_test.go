@@ -1,6 +1,8 @@
 package db_test
 
 import (
+	"bufio"
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"encoding/json/jsontext"
@@ -13,14 +15,75 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/codexcloud/mirror"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
+
+func TestImageTextCompatibilityUpgradeKeepsStrippedImagesRemoved(t *testing.T) {
+	ctx := t.Context()
+	version := db.ImageTextDataVersion
+	// Isolate the image-text version: a later version that reparses Codex
+	// rebuilds results from the source, which this test is not about.
+	scopes := map[int][]parser.AgentType{}
+	for v := version; v <= db.CurrentDataVersion(); v++ {
+		scopes[v] = []parser.AgentType{}
+	}
+	t.Cleanup(db.InstallDataVersionScopesForTest(scopes))
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	const id = "019eb791-cf7d-75c1-8439-9ed74c122b06"
+	const image = `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
+	body := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(id, root, "user", "2024-01-01T10:00:00Z"),
+		testjsonl.CodexMsgJSON("user", "show image", "2024-01-01T10:00:01Z"),
+		testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", "call", `{}`, "2024-01-01T10:00:02Z"),
+		testjsonl.CodexFunctionCallOutputJSON("call", json.RawMessage(image), "2024-01-01T10:00:03Z"),
+	)
+	dbtest.WriteTestFile(t, filepath.Join(root, "rollout-2024-01-01T10-00-00-"+id+".jsonl"), []byte(body))
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}, ToolResultImages: config.ToolResultImagesKeep, DisableFilesystemProjectDiscovery: true}
+	engine := sync.NewEngine(ctx, database, cfg)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	engine.Close()
+	_, err := database.StripToolImages(ctx, db.StripImagesFilter{})
+	require.NoError(t, err)
+	require.NoError(t, database.SetSessionDataVersion(ctx, "codex:"+id, version-1))
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", version-1))
+		return err
+	}))
+	path := database.Path()
+	require.NoError(t, database.Close())
+	_, full, err := db.ArchiveResyncState(ctx, path)
+	require.NoError(t, err)
+	require.False(t, full)
+	database, err = db.OpenIsolated(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine = sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	engine.SyncAll(ctx, nil)
+	messages, err := database.GetAllMessages(ctx, "codex:"+id)
+	require.NoError(t, err)
+	calls := 0
+	for _, message := range messages {
+		for _, call := range message.ToolCalls {
+			calls++
+			assert.Contains(t, call.ResultContent, "agentsview_image")
+			assert.NotContains(t, call.ResultContent, "data:image")
+			for _, event := range call.ResultEvents {
+				assert.NotContains(t, event.Content, "data:image")
+			}
+		}
+	}
+	require.Equal(t, 1, calls)
+}
 
 func TestLegacyUpgradePreservesIncompleteRetry(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
@@ -146,6 +209,132 @@ func TestClaudeFormatPRLinkUpgradePreservesSessionIdentity(t *testing.T) {
 			assert.Equal(t, source, database.GetSessionFilePath(t.Context(), id))
 			require.Len(t, session.PRLinks, 1)
 			assert.Equal(t, 7, session.PRLinks[0].Number)
+			var count int
+			require.NoError(t, database.Reader().QueryRow(t.Context(), "SELECT count(*) FROM sessions").Scan(&count))
+			assert.Equal(t, 1, count)
+		})
+	}
+}
+
+func TestClaudeFormatCommandArgsUpgradeReparsesInPlace(t *testing.T) {
+	providers := []parser.AgentType{parser.AgentClaude, parser.AgentCowork, parser.AgentQoder, parser.AgentIcodemate}
+	scope := db.ScopedDataVersionProviders(164, 165)
+	assert.ElementsMatch(t, append(providers, parser.AgentGrok, parser.AgentIflow), scope)
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
+	const envelope = "<command-message>explain</command-message>\n<command-name>/explain</command-name>\n<command-args>how app.<zone> gets its cert</command-args>"
+	for _, provider := range providers {
+		t.Run(string(provider), func(t *testing.T) {
+			database := dbtest.OpenTestDB(t)
+			root := t.TempDir()
+			sessionID := "c0000000-0000-4000-8000-000000000165"
+			source := filepath.Join(root, "project", sessionID+".jsonl")
+			if provider == parser.AgentCowork {
+				workspace := filepath.Join(root, "org", "workspace")
+				localID := "local_50000000-0000-4000-8000-000000000165"
+				dbtest.WriteTestFile(t, filepath.Join(workspace, localID+".json"), []byte(`{"sessionId":"`+localID+`","cliSessionId":"`+sessionID+`"}`))
+				source = filepath.Join(workspace, localID, ".claude", "projects", "project", sessionID+".jsonl")
+			}
+			body := testjsonl.NewSessionBuilder().
+				AddClaudeUserWithSessionID("2026-11-04T12:00:00Z", envelope, sessionID).
+				AddClaudeAssistant("2026-11-04T12:00:05Z", "It is DNS-validated.").
+				String()
+			dbtest.WriteTestFile(t, source, []byte(body))
+			cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{provider: {root}}}
+			engine := sync.NewEngine(t.Context(), database, cfg)
+			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+			engine.Close()
+			var id string
+			require.NoError(t, database.Reader().QueryRow(t.Context(), "SELECT id FROM sessions").Scan(&id))
+			// Model the archive the previous parser wrote: the envelope stored raw.
+			require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+				if _, err := tx.ExecContext(t.Context(), "UPDATE messages SET content = ? WHERE session_id = ? AND ordinal = 0", envelope, id); err != nil {
+					return err
+				}
+				_, err := tx.ExecContext(t.Context(), fmt.Sprintf("UPDATE sessions SET data_version=%d; PRAGMA user_version=%d", version-1, version-1))
+				return err
+			}))
+			path := database.Path()
+			require.NoError(t, database.Close())
+			database, err := db.OpenIsolated(t.Context(), path)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			assert.False(t, database.NeedsResync(), "Claude upgrade must reparse in place")
+			engine = sync.NewEngine(t.Context(), database, cfg)
+			t.Cleanup(engine.Close)
+			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+			assert.Equal(t, source, database.GetSessionFilePath(t.Context(), id))
+			var content string
+			require.NoError(t, database.Reader().QueryRow(t.Context(), "SELECT content FROM messages WHERE session_id = ? AND ordinal = 0", id).Scan(&content))
+			assert.Equal(t, "/explain how app.<zone> gets its cert", content)
+			var count int
+			require.NoError(t, database.Reader().QueryRow(t.Context(), "SELECT count(*) FROM sessions").Scan(&count))
+			assert.Equal(t, 1, count)
+		})
+	}
+}
+
+func TestClaudePeerMessageUpgradeReparsesInPlace(t *testing.T) {
+	providers := []parser.AgentType{parser.AgentClaude, parser.AgentCowork, parser.AgentQoder, parser.AgentIcodemate}
+	scope := db.ScopedDataVersionProviders(165, 166)
+	assert.ElementsMatch(t, providers, scope)
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
+	const peerText = "Another Claude session sent a message: PING"
+	for _, provider := range providers {
+		t.Run(string(provider), func(t *testing.T) {
+			database := dbtest.OpenTestDB(t)
+			root := t.TempDir()
+			sessionID := "c0000000-0000-4000-8000-000000000166"
+			source := filepath.Join(root, "project", sessionID+".jsonl")
+			if provider == parser.AgentCowork {
+				workspace := filepath.Join(root, "org", "workspace")
+				localID := "local_50000000-0000-4000-8000-000000000166"
+				dbtest.WriteTestFile(t, filepath.Join(workspace, localID+".json"), []byte(`{"sessionId":"`+localID+`","cliSessionId":"`+sessionID+`"}`))
+				source = filepath.Join(workspace, localID, ".claude", "projects", "project", sessionID+".jsonl")
+			}
+			body := testjsonl.NewSessionBuilder().
+				AddClaudeUserWithSessionID("2026-11-04T12:00:00Z", "hello", sessionID).
+				AddClaudeAssistant("2026-11-04T12:00:05Z", "It is DNS-validated.").
+				String() + "\n" + fmt.Sprintf(`{"type":"user","uuid":"peer","isMeta":true,"origin":{"kind":"peer"},"message":{"content":%q}}`, peerText) + "\n"
+			dbtest.WriteTestFile(t, source, []byte(body))
+			cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{provider: {root}}}
+			engine := sync.NewEngine(t.Context(), database, cfg)
+			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+			engine.Close()
+			var id string
+			require.NoError(t, database.Reader().QueryRow(t.Context(), "SELECT id FROM sessions").Scan(&id))
+			// Model the previous parser output without changing the source fingerprint.
+			require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+				if _, err := tx.ExecContext(t.Context(), "DELETE FROM messages WHERE session_id = ? AND source_uuid = ?", id, "peer"); err != nil {
+					return err
+				}
+				_, err := tx.ExecContext(t.Context(), fmt.Sprintf("UPDATE sessions SET data_version=%d; PRAGMA user_version=%d", version-1, version-1))
+				return err
+			}))
+			path := database.Path()
+			require.NoError(t, database.Close())
+			database, err := db.OpenIsolated(t.Context(), path)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			assert.False(t, database.NeedsResync(), "Claude upgrade must reparse in place")
+			engine = sync.NewEngine(t.Context(), database, cfg)
+			t.Cleanup(engine.Close)
+			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+			assert.Equal(t, source, database.GetSessionFilePath(t.Context(), id))
+			messages, err := database.GetAllMessages(t.Context(), id)
+			require.NoError(t, err)
+			require.Len(t, messages, 3)
+			assert.Equal(t, peerText, messages[2].Content)
+			assert.True(t, messages[2].IsSystem)
+			assert.Equal(t, "peer_message", messages[2].SourceSubtype)
+			session, err := database.GetSessionFull(t.Context(), id)
+			require.NoError(t, err)
+			require.NotNil(t, session)
+			require.NotNil(t, session.FirstMessage)
+			assert.Equal(t, "hello", *session.FirstMessage)
+			assert.Equal(t, 1, session.UserMessageCount)
+			assert.Equal(t, version, database.GetSessionDataVersion(t.Context(), id))
 			var count int
 			require.NoError(t, database.Reader().QueryRow(t.Context(), "SELECT count(*) FROM sessions").Scan(&count))
 			assert.Equal(t, 1, count)
@@ -333,6 +522,109 @@ func TestCodexGitBranchUpgradeReparsesCodexInPlace(t *testing.T) {
 	assert.Equal(t, 2, sessions, "the reparse must keep the existing session identities")
 }
 
+func TestCodexParentInventoryUpgradeRepairsUnchangedForks(t *testing.T) {
+	version := db.CurrentDataVersion()
+	oldVersion := version - 1
+	agents := []parser.AgentType{parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode}
+	require.ElementsMatch(t, agents, db.ScopedDataVersionProviders(161, 162))
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: agents}))
+	for _, agent := range agents {
+		t.Run(string(agent), func(t *testing.T) {
+			ctx := t.Context()
+			database := dbtest.OpenTestDB(t)
+			root := t.TempDir()
+			const parent = "11111111-1111-4111-8111-111111111111"
+			const child = "22222222-2222-4222-8222-222222222222"
+			const page = "44444444-4444-4444-8444-444444444444"
+			const stamp = "2026-09-01T10:00:00Z"
+			source := filepath.Join(root, "rollout-2026-09-01T11-00-00-"+child+".jsonl")
+			body := testjsonl.JoinJSONL(
+				testjsonl.CodexForkedSessionMetaJSON(child, parent, "/work/project", "user", stamp),
+				testjsonl.CodexTurnContextWithIDJSON("gpt-5", "page-turn", stamp),
+				testjsonl.CodexMsgJSON("assistant", "copied page", stamp),
+				testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", stamp),
+				testjsonl.CodexMsgJSON("assistant", "new answer", stamp),
+			)
+			dbtest.WriteTestFile(t, source, []byte(body))
+			dbtest.WriteTestFile(t, filepath.Join(root, "rollout-2026-09-01T10-00-00-"+parent+".jsonl"), []byte(testjsonl.JoinJSONL(
+				testjsonl.CodexSessionMetaJSON(parent, "/work/project", "user", stamp),
+				testjsonl.CodexTurnContextWithIDJSON("gpt-5", "head-turn", stamp),
+			)))
+			cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{agent: {root}}}
+			engine := sync.NewEngine(ctx, database, cfg)
+			t.Cleanup(engine.Close)
+			require.Zero(t, engine.SyncAll(ctx, nil).Failed)
+			engine.Close()
+			id := string(agent) + ":" + child
+			messages, err := database.GetAllMessages(ctx, id)
+			require.NoError(t, err)
+			require.Len(t, messages, 2)
+			require.Equal(t, "new answer", messages[1].Content)
+			note := "Keep the child answer"
+			_, err = database.PinMessage(ctx, id, messages[1].ID, &note)
+			require.NoError(t, err)
+			before, err := database.GetSessionFull(ctx, id)
+			require.NoError(t, err)
+			require.NotNil(t, before)
+			digest, found, err := database.GetProviderStatHash(ctx, agent, source)
+			require.NoError(t, err)
+			require.True(t, found, "the persisted stat gate must be populated")
+
+			// Reproduce an old archive that missed this page while retaining
+			// its fork's current version, unchanged bytes and freshness digest.
+			dbtest.WriteTestFile(t, filepath.Join(root, "rollout-2026-09-01T12-00-00-"+parent+"_"+page+".jsonl"), []byte(testjsonl.JoinJSONL(
+				testjsonl.CodexTurnContextWithIDJSON("gpt-5", "page-turn", stamp),
+			)))
+			require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+				if _, err := tx.ExecContext(ctx, "UPDATE sessions SET data_version=?", oldVersion); err != nil {
+					return err
+				}
+				_, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", oldVersion))
+				return err
+			}))
+			path := database.Path()
+			require.NoError(t, database.Close())
+			database, err = db.OpenIsolated(ctx, path)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			needsSync, fullRebuild, err := db.ArchiveResyncState(ctx, path)
+			require.NoError(t, err)
+			require.True(t, needsSync)
+			require.False(t, fullRebuild)
+			require.Equal(t, oldVersion, database.GetSessionDataVersion(ctx, id))
+			afterDigest, found, err := database.GetProviderStatHash(ctx, agent, source)
+			require.NoError(t, err)
+			require.True(t, found)
+			assert.Equal(t, digest, afterDigest, "repair must bypass an unchanged persisted digest")
+			engine = sync.NewEngine(ctx, database, cfg)
+			t.Cleanup(engine.Close)
+			stats := engine.SyncAll(ctx, nil)
+			require.Zero(t, stats.Failed)
+			after, err := database.GetSessionFull(ctx, id)
+			require.NoError(t, err)
+			require.NotNil(t, after)
+			assert.Equal(t, before.ID, after.ID)
+			assert.Equal(t, before.SourceSessionID, after.SourceSessionID)
+			assert.Equal(t, before.FilePath, after.FilePath)
+			assert.Equal(t, before.FileHash, after.FileHash)
+			assert.Equal(t, db.CurrentDataVersion(), after.DataVersion)
+			messages, err = database.GetAllMessages(ctx, id)
+			require.NoError(t, err)
+			require.Len(t, messages, 1)
+			assert.Equal(t, "new answer", messages[0].Content)
+			pins, err := database.ListPinnedMessages(ctx, "", "")
+			require.NoError(t, err)
+			require.Len(t, pins, 1)
+			assert.Equal(t, messages[0].ID, pins[0].MessageID)
+			assert.Equal(t, &note, pins[0].Note)
+			assert.Equal(t, &messages[0].Content, pins[0].Content)
+			needsSync, _, err = db.ArchiveResyncState(ctx, path)
+			require.NoError(t, err)
+			assert.False(t, needsSync)
+		})
+	}
+}
+
 func TestCodexServiceTierUpgradeReparsesCodexInPlace(t *testing.T) {
 	version := db.CurrentDataVersion()
 	scope := db.ScopedDataVersionProviders(154, 155)
@@ -392,6 +684,138 @@ func TestCodexServiceTierUpgradeReparsesCodexInPlace(t *testing.T) {
 	needsSync, _, err = db.ArchiveResyncState(ctx, path)
 	require.NoError(t, err)
 	assert.False(t, needsSync)
+}
+
+func TestCodexCodeModeWaitOutputUpgradeReparsesInPlace(t *testing.T) {
+	scope := db.ScopedDataVersionProviders(163, 164)
+	assert.ElementsMatch(t,
+		[]parser.AgentType{parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode},
+		scope)
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
+	ctx := t.Context()
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	const id = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+	const output = testjsonl.CodexCodeModeWaitOutput
+	sessionID := "codex:" + id
+	source := filepath.Join(root, "rollout-"+id+".jsonl")
+	body := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(id, root, "codex_cli_rs", "2026-10-08T12:00:00Z"),
+		testjsonl.CodexMsgJSON("user", "wait for the script", "2026-10-08T12:00:01Z"),
+		testjsonl.CodexFunctionCallWithCallIDJSON("wait", "call_wait", map[string]any{
+			"cell_id": "6", "yield_time_ms": 30000, "max_tokens": 5000,
+		}, "2026-10-08T12:00:02Z"),
+		testjsonl.CodexFunctionCallOutputJSON("call_wait", jsontext.Value(output), "2026-10-08T12:00:03Z"),
+	)
+	dbtest.WriteTestFile(t, source, []byte(body))
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}}
+	engine := sync.NewEngine(ctx, database, cfg)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	engine.Close()
+
+	// Simulate the previous parser, which dropped code-mode wait results.
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, fmt.Sprintf(
+			"DELETE FROM tool_result_events; UPDATE tool_calls SET result_content='', result_content_length=0; UPDATE sessions SET data_version=%d; PRAGMA user_version=%d",
+			version-1, version-1,
+		))
+		return err
+	}))
+	path := database.Path()
+	require.NoError(t, database.Close())
+	database, err := db.OpenIsolated(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine = sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+
+	messages, err := database.GetAllMessages(ctx, sessionID)
+	require.NoError(t, err)
+	var resultContent string
+	for _, message := range messages {
+		for _, call := range message.ToolCalls {
+			if call.ToolUseID == "call_wait" {
+				resultContent = call.ResultContent
+			}
+		}
+	}
+	assert.Equal(t, output, resultContent)
+}
+
+func TestCodexTranscriptFidelityUpgradeReparsesInPlace(t *testing.T) {
+	scope := db.ScopedDataVersionProviders(173, 174)
+	assert.ElementsMatch(t,
+		[]parser.AgentType{parser.AgentCodex, parser.AgentTraeX, parser.AgentAugureCode, parser.AgentInterpreter, parser.AgentCodexCloud},
+		scope)
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
+	ctx := t.Context()
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	const id = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+	sessionID := "codex:" + id
+	tokenCount := func(ts string, call int) string {
+		return fmt.Sprintf(`{"type":"event_msg","timestamp":%q,"payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1000,"cached_input_tokens":400,"output_tokens":50,"total_tokens":1050},"total_token_usage":{"input_tokens":%d,"cached_input_tokens":%d,"output_tokens":%d,"total_tokens":%d}}}}`,
+			ts, 1000*call, 400*call, 50*call, 1050*call)
+	}
+	body := testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(id, root, "codex_cli_rs", "2026-11-01T12:00:00Z"),
+		testjsonl.CodexTurnContextJSON("gpt-5.4", "2026-11-01T12:00:01Z"),
+		testjsonl.CodexMsgJSON("user", "keep going", "2026-11-01T12:00:01Z"),
+		`{"type":"response_item","timestamp":"2026-11-01T12:00:02Z","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"Reading the parser."}],"encrypted_content":"gAAAAopaque"}}`,
+		testjsonl.CodexFunctionCallJSON("exec_command", "ls", "2026-11-01T12:00:02Z"),
+		tokenCount("2026-11-01T12:00:02Z", 1),
+		testjsonl.CodexMsgJSON("assistant", "listed", "2026-11-01T12:00:03Z"),
+		tokenCount("2026-11-01T12:00:03Z", 2),
+		`{"type":"compacted","timestamp":"2026-11-01T12:00:04Z","payload":{"message":"Summary of earlier work.","replacement_history":[]}}`,
+	)
+	dbtest.WriteTestFile(t, filepath.Join(root, "rollout-"+id+".jsonl"), []byte(body))
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}}}
+	engine := sync.NewEngine(ctx, database, cfg)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	engine.Close()
+
+	// Simulate the previous parser: no reasoning or compaction rows, and the
+	// second call's equal per-call counts collapsed into the first.
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, fmt.Sprintf(
+			"DELETE FROM messages WHERE has_thinking = 1 OR is_compact_boundary = 1; UPDATE messages SET token_usage = '', output_tokens = 0, has_output_tokens = 0 WHERE content = 'listed'; UPDATE sessions SET data_version=%d; PRAGMA user_version=%d",
+			version-1, version-1,
+		))
+		return err
+	}))
+	path := database.Path()
+	require.NoError(t, database.Close())
+	database, err := db.OpenIsolated(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	engine = sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+
+	sessions, err := database.ListSessions(ctx, db.SessionFilter{Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, sessions.Sessions, 1)
+	assert.Equal(t, sessionID, sessions.Sessions[0].ID)
+	messages, err := database.GetAllMessages(ctx, sessionID)
+	require.NoError(t, err)
+	var thinking, boundary string
+	outputs := 0
+	for _, message := range messages {
+		if message.HasThinking {
+			thinking = message.ThinkingText
+		}
+		if message.IsCompactBoundary {
+			boundary = message.Content
+		}
+		outputs += message.OutputTokens
+	}
+	assert.Equal(t, "Reading the parser.", thinking)
+	assert.Equal(t, "Summary of earlier work.", boundary)
+	assert.Equal(t, 100, outputs)
+	assert.Equal(t, version, database.GetSessionDataVersion(ctx, sessionID))
 }
 
 func TestCodexRepositoryUpgradeRepairsExistingIdentity(t *testing.T) {
@@ -915,4 +1339,437 @@ func TestOMPParentLinkUpgradePreservesSessionIdentityAndCuration(t *testing.T) {
 	var count int
 	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM sessions").Scan(&count))
 	assert.Equal(t, 5, count, "the upgrade must not replace or duplicate session identities")
+}
+
+func TestCopilotUsageRecordUpgradeReparsesInPlace(t *testing.T) {
+	ctx := t.Context()
+	scope := db.ScopedDataVersionProviders(162, 163)
+	require.Contains(t, scope, parser.AgentCopilot)
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	source := filepath.Join(root, "session-state", "receipt-upgrade", "events.jsonl")
+	dbtest.WriteTestFile(t, source, []byte(`{"type":"session.start","timestamp":"2026-09-01T12:00:00Z","data":{"sessionId":"receipt-upgrade"}}
+{"type":"user.message","timestamp":"2026-09-01T12:00:01Z","data":{"content":"Synthetic task"}}
+{"type":"session.usage_record","timestamp":"2026-09-01T12:00:02Z","data":{"usage":{"model":"gpt-5.4","inputTokens":100,"outputTokens":7}}}
+`))
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentCopilot: {root}}}
+	engine := sync.NewEngine(ctx, database, cfg)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	engine.Close()
+	const id = "copilot:receipt-upgrade"
+	// Reproduce the archive left by the parser that ignored receipts.
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `DELETE FROM usage_events WHERE session_id=?`, id)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE sessions SET total_output_tokens=0, has_total_output_tokens=0, peak_context_tokens=0, has_peak_context_tokens=0, data_version=? WHERE id=?`, version-1, id)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", version-1))
+		return err
+	}))
+	path := database.Path()
+	require.NoError(t, database.Close())
+	database, err := db.OpenIsolated(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	assert.False(t, database.NeedsResync())
+	assert.Equal(t, version-1, database.GetSessionDataVersion(ctx, id))
+	engine = sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	after, err := database.GetSessionFull(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, 7, after.TotalOutputTokens)
+	assert.Equal(t, version, database.GetSessionDataVersion(ctx, id))
+	var count int
+	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM usage_events WHERE session_id=? AND source='usage-record'", id).Scan(&count))
+	assert.Equal(t, 1, count)
+}
+
+func TestClaudePeerRewindUpgradePreservesBranchOwnership(t *testing.T) {
+	ctx := t.Context()
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{
+		version: db.ScopedDataVersionProviders(165, 166),
+	}))
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	const id = "c0000000-0000-4000-8000-000000000166"
+	const forkID = id + "-retry"
+	source := filepath.Join(root, "project", id+".jsonl")
+	body, err := os.ReadFile(filepath.Join("..", "parser", "testdata", "claude", "peer_nonmeta_rewind.jsonl"))
+	require.NoError(t, err)
+	dbtest.WriteTestFile(t, source, body)
+	info, err := os.Stat(source)
+	require.NoError(t, err)
+
+	// Seed the version-165 archive layout independently of the current parser.
+	// The first nine records belonged to the main session; the retry was a fork.
+	var rows []db.Message
+	scanner := bufio.NewScanner(bytes.NewReader(body))
+	for scanner.Scan() {
+		var entry struct {
+			Type       string                   `json:"type"`
+			UUID       string                   `json:"uuid"`
+			ParentUUID string                   `json:"parentUuid"`
+			Timestamp  string                   `json:"timestamp"`
+			Message    struct{ Content string } `json:"message"`
+		}
+		require.NoError(t, json.Unmarshal(scanner.Bytes(), &entry))
+		rows = append(rows, db.Message{
+			Role: entry.Type, SourceUUID: entry.UUID, SourceParentUUID: entry.ParentUUID,
+			Content: entry.Message.Content, ContentLength: len(entry.Message.Content), Timestamp: entry.Timestamp,
+		})
+	}
+	require.NoError(t, scanner.Err())
+	require.Len(t, rows, 11)
+	for _, old := range []struct {
+		id, first string
+		rows      []db.Message
+		users     int
+	}{
+		{id, "start", rows[:9], 5},
+		{forkID, "try again", rows[9:], 1},
+	} {
+		session := db.Session{
+			ID: old.id, Project: "project", Machine: "local", Agent: "claude",
+			FirstMessage: &old.first, MessageCount: len(old.rows), UserMessageCount: old.users,
+			FilePath: &source, FileSize: dbtest.Ptr(info.Size()), FileMtime: dbtest.Ptr(info.ModTime().UnixNano()),
+			ClaudeLinearParse: dbtest.Ptr(false),
+		}
+		if old.id == forkID {
+			session.ParentSessionID = dbtest.Ptr(id)
+			session.ParserParentSessionID = dbtest.Ptr(id)
+			session.RelationshipType = "fork"
+		}
+		require.NoError(t, database.UpsertSession(ctx, session))
+		for ordinal := range old.rows {
+			old.rows[ordinal].SessionID = old.id
+			old.rows[ordinal].Ordinal = ordinal
+		}
+		dbtest.SeedMessages(t, database, old.rows...)
+	}
+	displayName := "Saved retry"
+	require.NoError(t, database.RenameSession(ctx, forkID, &displayName))
+	forkRows, err := database.GetAllMessages(ctx, forkID)
+	require.NoError(t, err)
+	require.Len(t, forkRows, 2)
+	_, err = database.PinMessage(ctx, forkID, forkRows[0].ID, dbtest.Ptr("Keep this retry"))
+	require.NoError(t, err)
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, fmt.Sprintf("UPDATE sessions SET data_version=%d; PRAGMA user_version=%d", version-1, version-1))
+		return err
+	}))
+	path := database.Path()
+	require.NoError(t, database.Close())
+	database, err = db.OpenIsolated(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	require.False(t, database.NeedsResync(), "the scoped upgrade must preserve the archive")
+	needsSync, fullRebuild, err := db.ArchiveResyncState(ctx, path)
+	require.NoError(t, err)
+	assert.True(t, needsSync)
+	assert.False(t, fullRebuild)
+	engine := sync.NewEngine(ctx, database, sync.EngineConfig{
+		Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
+	})
+	t.Cleanup(engine.Close)
+	stats := engine.SyncAll(ctx, nil)
+	require.Zero(t, stats.Failed)
+	require.Equal(t, 2, stats.Synced)
+	for _, want := range []struct {
+		id, first, last string
+		uuids           []string
+	}{
+		{id, "start", "answer 3", []string{"root", "peer-0", "reply-0", "peer-1", "reply-1", "peer-2", "reply-2", "peer-3", "reply-3"}},
+		{forkID, "try again", "retry answer", []string{"retry", "retry-reply"}},
+	} {
+		session, err := database.GetSessionFull(ctx, want.id)
+		require.NoError(t, err)
+		require.NotNil(t, session)
+		assert.Equal(t, &source, session.FilePath)
+		assert.Equal(t, &want.first, session.FirstMessage)
+		assert.Equal(t, 1, session.UserMessageCount)
+		assert.Equal(t, version, session.DataVersion)
+		assert.Nil(t, session.DeletedAt)
+		messages, err := database.GetAllMessages(ctx, want.id)
+		require.NoError(t, err)
+		require.Len(t, messages, len(want.uuids))
+		for i, uuid := range want.uuids {
+			assert.Equal(t, uuid, messages[i].SourceUUID)
+		}
+		assert.Equal(t, want.last, messages[len(messages)-1].Content)
+		if want.id == id {
+			assert.Nil(t, session.ParentSessionID)
+			for _, ordinal := range []int{1, 3, 5, 7} {
+				assert.True(t, messages[ordinal].IsSystem)
+				assert.Equal(t, "peer_message", messages[ordinal].SourceSubtype)
+			}
+		} else {
+			assert.Equal(t, dbtest.Ptr(id), session.ParentSessionID)
+			assert.Equal(t, "fork", session.RelationshipType)
+			assert.Equal(t, &displayName, session.DisplayName)
+		}
+	}
+	pins, err := database.ListPinnedMessages(ctx, "", "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1)
+	assert.Equal(t, forkID, pins[0].SessionID)
+	assert.Equal(t, dbtest.Ptr("try again"), pins[0].Content)
+	var count int
+	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM sessions").Scan(&count))
+	assert.Equal(t, 2, count)
+	after, err := os.Stat(source)
+	require.NoError(t, err)
+	assert.Equal(t, info.ModTime(), after.ModTime())
+	afterBody, err := os.ReadFile(source)
+	require.NoError(t, err)
+	assert.Equal(t, body, afterBody)
+}
+
+func TestRecordedCostUpgradeReparsesInPlace(t *testing.T) {
+	scope := db.ScopedDataVersionProviders(175, 176)
+	assert.ElementsMatch(t, []parser.AgentType{
+		parser.AgentPi, parser.AgentOMP, parser.AgentOMO, parser.AgentPrimeAgent,
+		parser.AgentStepCode, parser.AgentOpenClaw, parser.AgentQClaw,
+		parser.AgentShelley, parser.AgentFx, parser.AgentOpenCode, parser.AgentKilo,
+		parser.AgentMiMoCode, parser.AgentIcodemate,
+	}, scope)
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
+	ctx := t.Context()
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "encoded-cwd", "2026-10-09T10-00-00-000Z_cost-uuid.jsonl")
+	// A custom model the catalog cannot price, with Pi's recorded cost.
+	dbtest.WriteTestFile(t, sourcePath, []byte(
+		`{"type":"session","version":3,"id":"cost-uuid","timestamp":"2026-10-09T10:00:00Z","cwd":"/work/project"}`+"\n"+
+			`{"type":"message","id":"u1","timestamp":"2026-10-09T10:00:01Z","message":{"role":"user","content":"hello"}}`+"\n"+
+			`{"type":"message","id":"a1","timestamp":"2026-10-09T10:00:02Z","message":{"role":"assistant","content":"hi","model":"rc-custom-model","usage":{"input":100,"output":20,"cost":{"total":0.0125}}}}`+"\n"))
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentPi: {root}}}
+	engine := sync.NewEngine(ctx, database, cfg)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	engine.Close()
+	const id = "pi:cost-uuid"
+	usage, err := database.GetSessionUsage(ctx, id, true)
+	require.NoError(t, err)
+	assert.True(t, usage.HasCost, "the recorded cost prices the unpriceable model")
+	assert.Equal(t, int64(12_500), usage.Cost.Microdollars)
+
+	// Reproduce the previous parser, which dropped the recorded cost.
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, fmt.Sprintf(
+			`UPDATE messages SET token_usage='{"input_tokens":100,"output_tokens":20}' WHERE session_id=? AND role='assistant';
+			UPDATE sessions SET data_version=%d; PRAGMA user_version=%d`, version-1, version-1), id)
+		return err
+	}))
+	usage, err = database.GetSessionUsage(ctx, id, true)
+	require.NoError(t, err)
+	assert.False(t, usage.HasCost, "without the recorded cost the model is unpriced")
+	path := database.Path()
+	require.NoError(t, database.Close())
+	database, err = db.OpenIsolated(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	_, fullRebuild, err := db.ArchiveResyncState(ctx, path)
+	require.NoError(t, err)
+	assert.False(t, fullRebuild, "the recorded-cost upgrade must reparse in place")
+
+	engine = sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	usage, err = database.GetSessionUsage(ctx, id, true)
+	require.NoError(t, err)
+	assert.True(t, usage.HasCost)
+	assert.Equal(t, int64(12_500), usage.Cost.Microdollars)
+	assert.Equal(t, sourcePath, database.GetSessionFilePath(ctx, id), "source path is unchanged")
+	var sessions int
+	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM sessions").Scan(&sessions))
+	assert.Equal(t, 1, sessions)
+}
+
+func TestClaudeCostStateUpgradeKeepsSessionTotalApart(t *testing.T) {
+	providers := []parser.AgentType{parser.AgentClaude, parser.AgentCowork, parser.AgentQoder, parser.AgentIcodemate}
+	scope := db.ScopedDataVersionProviders(176, 177)
+	assert.ElementsMatch(t, providers, scope)
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
+	ctx := t.Context()
+	database := dbtest.OpenTestDB(t)
+	require.NoError(t, database.UpsertModelPricing([]db.ModelPricing{{
+		ModelPattern:  "rc-claude-model",
+		InputPerMTok:  money.Money{Microdollars: 1_000_000},
+		OutputPerMTok: money.Money{Microdollars: 2_000_000},
+	}}))
+	root := t.TempDir()
+	sessionID := "c0000000-0000-4000-8000-000000000174"
+	source := filepath.Join(root, "project", sessionID+".jsonl")
+	body := testjsonl.NewSessionBuilder().AddClaudeUserWithSessionID("2026-10-08T12:00:00Z", "hello", sessionID).String() + "\n" +
+		`{"type":"assistant","timestamp":"2026-10-08T12:00:01Z","sessionId":"` + sessionID + `","uuid":"a1","requestId":"req_1",` +
+		`"message":{"id":"msg_1","role":"assistant","model":"rc-claude-model","content":[{"type":"text","text":"hi"}],` +
+		`"usage":{"input_tokens":1000,"output_tokens":500}}}` + "\n" +
+		`{"type":"cost-state","sessionId":"` + sessionID + `","totalCostUSD":0.75,"startTime":1,` +
+		`"modelUsage":{"rc-claude-model":{"inputTokens":1500,"outputTokens":530,"thinkingTokens":0,` +
+		`"cacheReadInputTokens":0,"cacheCreationInputTokens":0,"webSearchRequests":0,"costUSD":0.75}},"hasUnknownModelCost":false}` + "\n"
+	dbtest.WriteTestFile(t, source, []byte(body))
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}}
+	engine := sync.NewEngine(ctx, database, cfg)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	engine.Close()
+	var id string
+	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT id FROM sessions").Scan(&id))
+
+	requireTotal := func(database *db.DB) {
+		t.Helper()
+		usage, err := database.GetSessionUsage(ctx, id, true)
+		require.NoError(t, err)
+		require.NotNil(t, usage)
+		// The catalog prices the transcript's own call; the agent's total
+		// sits beside it and is never added.
+		assert.Equal(t, int64(2_000), usage.Cost.Microdollars)
+		require.NotNil(t, usage.SessionTotal)
+		assert.Equal(t, parser.ClaudeCostStateSource, usage.SessionTotal.Source)
+		assert.Equal(t, parser.SubagentScopeIncluded, usage.SessionTotal.SubagentScope)
+		require.NotNil(t, usage.SessionTotal.Cost)
+		assert.Equal(t, int64(750_000), usage.SessionTotal.Cost.Microdollars)
+		require.Len(t, usage.SessionTotal.Models, 1)
+		assert.Equal(t, int64(530), usage.SessionTotal.Models[0].OutputTokens)
+		daily, err := database.GetDailyUsage(ctx, db.UsageFilter{From: "2026-10-08", To: "2026-10-08", Timezone: "UTC"})
+		require.NoError(t, err)
+		assert.Equal(t, int64(2_000), daily.Totals.TotalCost.Microdollars, "usage totals exclude the session total")
+		assert.Equal(t, 500, daily.Totals.OutputTokens)
+	}
+	requireTotal(database)
+
+	// Reproduce the previous parser, which dropped cost-state.
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, fmt.Sprintf(
+			"DELETE FROM session_usage_totals; UPDATE sessions SET data_version=%d; PRAGMA user_version=%d",
+			version-1, version-1))
+		return err
+	}))
+	path := database.Path()
+	require.NoError(t, database.Close())
+	database, err := db.OpenIsolated(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	assert.False(t, database.NeedsResync(), "the cost-state upgrade must reparse in place")
+	engine = sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	requireTotal(database)
+	assert.Equal(t, source, database.GetSessionFilePath(ctx, id))
+}
+
+func TestGrokCompactionUpgradeReparsesInPlace(t *testing.T) {
+	scope := db.ScopedDataVersionProviders(177, 178)
+	assert.ElementsMatch(t, []parser.AgentType{parser.AgentGrok}, scope)
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
+	ctx := t.Context()
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	require.NoError(t, os.CopyFS(root, os.DirFS(filepath.Join("..", "parser", "testdata", "grok-build", "compacted"))))
+	const id = "grok:019f6000-0000-7000-8000-000000000020"
+	source := filepath.Join(root, "%2Fworkspace%2Ffetchkit", "019f6000-0000-7000-8000-000000000020", "summary.json")
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentGrok: {root}}}
+	engine := sync.NewEngine(ctx, database, cfg)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	engine.Close()
+
+	// Reproduce the previous parser, which kept only the rows after the last
+	// compaction and never marked a boundary.
+	var lastBoundary int
+	require.NoError(t, database.Reader().QueryRow(ctx,
+		"SELECT max(ordinal) FROM messages WHERE session_id=? AND is_compact_boundary=1", id).Scan(&lastBoundary))
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx,
+			"DELETE FROM tool_calls WHERE session_id=? AND message_id IN (SELECT id FROM messages WHERE session_id=? AND ordinal<=?)",
+			id, id, lastBoundary); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
+			"DELETE FROM messages WHERE session_id=? AND ordinal<=?", id, lastBoundary); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, fmt.Sprintf(
+			"UPDATE sessions SET compaction_count=0, data_version=%d; PRAGMA user_version=%d", version-1, version-1))
+		return err
+	}))
+	path := database.Path()
+	require.NoError(t, database.Close())
+	database, err := db.OpenIsolated(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	_, fullRebuild, err := db.ArchiveResyncState(ctx, path)
+	require.NoError(t, err)
+	assert.False(t, fullRebuild, "the Grok compaction upgrade must reparse in place")
+
+	engine = sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	session, err := database.GetSession(ctx, id)
+	require.NoError(t, err)
+	require.NotNil(t, session)
+	assert.Equal(t, 2, session.CompactionCount)
+	assert.Equal(t, source, database.GetSessionFilePath(ctx, id), "source path is unchanged")
+	var first string
+	require.NoError(t, database.Reader().QueryRow(ctx,
+		"SELECT content FROM messages WHERE session_id=? AND ordinal=0", id).Scan(&first))
+	assert.Equal(t, "Add a retry with backoff to the fetch helper and run the tests.", first)
+	var sessions int
+	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM sessions").Scan(&sessions))
+	assert.Equal(t, 1, sessions)
+}
+
+func TestEvenerCompactionUpgradeReparsesStoredLabels(t *testing.T) {
+	scope := db.ScopedDataVersionProviders(181, 182)
+	assert.ElementsMatch(t, []parser.AgentType{parser.AgentEvener}, scope)
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
+	ctx := t.Context()
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	sessions := filepath.Join(root, "sessions")
+	require.NoError(t, os.MkdirAll(sessions, 0o755))
+	data, err := os.ReadFile(filepath.Join("..", "parser", "testdata", "data-version-corpus", "evener", "sessions", "compaction.transcript.jsonl"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(sessions, "compaction.transcript.jsonl"), data, 0o600))
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentEvener: {root}}, DisableFilesystemProjectDiscovery: true}
+	engine := sync.NewEngine(ctx, database, cfg)
+	stats := engine.SyncAll(ctx, nil)
+	require.Zero(t, stats.Failed)
+	require.Equal(t, 1, stats.Synced)
+	engine.Close()
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE messages SET source_type = 'entry' WHERE session_id = 'evener:compaction'`)
+		return err
+	}))
+	require.NoError(t, database.SetSessionDataVersion(ctx, "evener:compaction", version-1))
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", version-1))
+		return err
+	}))
+	path := database.Path()
+	require.NoError(t, database.Close())
+	database, err = db.OpenIsolated(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	_, fullRebuild, err := db.ArchiveResyncState(ctx, path)
+	require.NoError(t, err)
+	assert.False(t, fullRebuild)
+	engine = sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	stats = engine.SyncAll(ctx, nil)
+	require.Zero(t, stats.Failed)
+	require.Equal(t, 1, stats.Synced)
+	messages, err := database.GetAllMessages(ctx, "evener:compaction")
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	assert.Equal(t, parser.EvenerLiteralCompactionSourceType, messages[1].SourceType)
 }

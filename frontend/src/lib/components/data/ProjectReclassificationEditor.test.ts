@@ -99,7 +99,7 @@ describe("ProjectReclassificationEditor", () => {
 
   async function chooseTarget() {
     await fireEvent.click(screen.getByTitle("Project"));
-    await fireEvent.mouseDown(screen.getByRole("option", { name: "target-project (12)" }));
+    await fireEvent.mouseDown(screen.getByRole("option", { name: "target-project 12" }));
     await vi.advanceTimersByTimeAsync(300);
     await flush();
   }
@@ -184,7 +184,7 @@ describe("ProjectReclassificationEditor", () => {
     render();
     await flush();
     await fireEvent.click(screen.getByTitle("Project"));
-    await fireEvent.mouseDown(screen.getByRole("option", { name: "target-project (12)" }));
+    await fireEvent.mouseDown(screen.getByRole("option", { name: "target-project 12" }));
     const prefix = screen.getByLabelText("Path prefix");
     await fireEvent.input(prefix, { target: { value: "/srv/first" } });
     await vi.advanceTimersByTimeAsync(200);
@@ -297,7 +297,7 @@ describe("ProjectReclassificationEditor", () => {
     render();
     await flush();
     await fireEvent.click(screen.getByTitle("Project"));
-    await fireEvent.mouseDown(screen.getByRole("option", { name: "target-project (12)" }));
+    await fireEvent.mouseDown(screen.getByRole("option", { name: "target-project 12" }));
     await vi.advanceTimersByTimeAsync(300);
     await flush();
     expect(screen.getByText(/Calculating full-archive impact/)).toBeTruthy();

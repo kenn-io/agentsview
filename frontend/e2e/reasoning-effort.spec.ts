@@ -35,18 +35,29 @@ test("renders recorded reasoning effort beside the main model", async ({ page },
       timeout: 5_000,
     });
     await expect(page.locator(".actions-wrapper")).toBeVisible();
-    const badgeBox = await badge.boundingBox();
-    const effortBox = await effort.boundingBox();
-    const actionsBox = await page.locator(".actions-wrapper").boundingBox();
-    expect(badgeBox).not.toBeNull();
-    expect(actionsBox).not.toBeNull();
-    expect(effortBox).not.toBeNull();
-    if (badgeBox && effortBox && actionsBox) {
-      expect(effortBox.x).toBeGreaterThanOrEqual(badgeBox.x);
-      expect(effortBox.x + effortBox.width).toBeLessThanOrEqual(badgeBox.x + badgeBox.width);
-      expect(badgeBox.x + badgeBox.width).toBeLessThanOrEqual(width);
-      expect(actionsBox.x + actionsBox.width).toBeLessThanOrEqual(width);
-    }
+    // The header rewraps as late session data arrives, so read every box
+    // from one layout and retry until the header settles.
+    await expect(async () => {
+      const boxes = await page.evaluate(() => {
+        const rect = (selector: string) => {
+          const found = document.querySelector(selector)?.getBoundingClientRect();
+          return found ? { left: found.left, right: found.right } : null;
+        };
+        return {
+          badge: rect(".model-badge"),
+          effort: rect(".model-badge__effort"),
+          actions: rect(".actions-wrapper"),
+        };
+      });
+      expect(boxes.badge).not.toBeNull();
+      expect(boxes.effort).not.toBeNull();
+      expect(boxes.actions).not.toBeNull();
+      const { badge: badgeBox, effort: effortBox, actions: actionsBox } = boxes;
+      expect(effortBox!.left).toBeGreaterThanOrEqual(badgeBox!.left);
+      expect(effortBox!.right).toBeLessThanOrEqual(badgeBox!.right);
+      expect(badgeBox!.right).toBeLessThanOrEqual(width);
+      expect(actionsBox!.right).toBeLessThanOrEqual(width);
+    }).toPass({ timeout: 5_000 });
     await page.screenshot({
       path: testInfo.outputPath(`reasoning-effort-after-${width}.png`),
       fullPage: false,

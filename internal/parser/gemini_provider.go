@@ -495,7 +495,7 @@ func (s geminiSourceSet) Fingerprint(
 		MTimeNS: info.ModTime().UnixNano(),
 	}
 	h := sha256.New()
-	if err := addGeminiFingerprintPart(h, "session", path, info); err != nil {
+	if err := addGeminiFingerprintPart(ctx, h, "session", path, info); err != nil {
 		return SourceFingerprint{}, err
 	}
 	if _, err := fmt.Fprintf(
@@ -667,6 +667,7 @@ func geminiProjectMetadataPath(root, path string) bool {
 }
 
 func addGeminiFingerprintPart(
+	ctx context.Context,
 	h hash.Hash,
 	label string,
 	path string,
@@ -687,7 +688,9 @@ func addGeminiFingerprintPart(
 		return fmt.Errorf("open %s: %w", path, err)
 	}
 	defer f.Close()
-	if _, err := io.Copy(h, f); err != nil {
+	n, err := io.Copy(h, f)
+	recordContentRead(ctx, n)
+	if err != nil {
 		return fmt.Errorf("hash %s: %w", path, err)
 	}
 	return nil

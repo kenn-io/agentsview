@@ -15,9 +15,10 @@
     UsersRoundIcon,
   } from "../../icons.js";
   import { TrashIcon, CheckIcon } from "../../icons.js";
-  import { formatNumber } from "../../utils/format.js";
+  import { formatCount } from "../../utils/format.js";
   import { agentColor } from "../../utils/agents.js";
   import { registerSessionList } from "../../utils/arrow-target.js";
+  import LoadError from "../shared/LoadError.svelte";
   import {
     type DisplayItem,
     type GroupMode,
@@ -30,7 +31,7 @@
     buildDisplayItems,
     computeTotalSize,
     findStart,
-    isSubagentDescendant,
+    subagentDescendantMatcher,
     selectPrimaryId,
   } from "./session-list-utils.js";
 
@@ -38,10 +39,6 @@
   let scrollTop = $state(0);
   let viewportHeight = $state(0);
   let scrollRaf: number | null = $state(null);
-  let initialHydratedVersion: number | null = $state(null);
-  let initialHydratingVersion: number | null = $state(null);
-  let paintedDisplayItems: DisplayItem[] = $state([]);
-  let paintedTotalSize = $state(0);
 
   let groupMode: GroupMode = $state(getInitialGroupMode());
   let manualExpanded: Set<string> = $state(new Set());
@@ -53,7 +50,7 @@
 
   function navigateVisibleSession(delta: number) {
     const id = adjacentVisibleSessionId(
-      renderDisplayItems,
+      displayItems,
       sessions.activeSessionId,
       delta,
     );
@@ -121,7 +118,7 @@
 
   // Build flat display items for virtual scrolling.
   let displayItems = $derived.by(() =>
-    buildDisplayItems(groups, groupSections, groupMode, collapsed, expandedGroups),
+    buildDisplayItems(groups, groupSections, groupMode, collapsed, expandedGroups, ui.alwaysShowYear),
   );
 
   // When include_children is enabled the API total includes
@@ -133,24 +130,13 @@
       : sessions.total,
   );
   let totalSize = $derived(computeTotalSize(displayItems));
-  let renderDisplayItems = $derived(
-    initialHydratedVersion === sessions.sidebarIndexVersion
-      ? displayItems
-      : paintedDisplayItems,
-  );
-  let renderTotalSize = $derived(
-    initialHydratedVersion === sessions.sidebarIndexVersion
-      ? totalSize
-      : paintedTotalSize,
-  );
-
   let visibleItems = $derived.by(() => {
-    if (renderDisplayItems.length === 0) return [];
-    const start = findStart(renderDisplayItems, scrollTop);
+    if (displayItems.length === 0) return [];
+    const start = findStart(displayItems, scrollTop);
     const end = scrollTop + viewportHeight + OVERSCAN * ITEM_HEIGHT;
-    const result: typeof renderDisplayItems = [];
-    for (let i = start; i < renderDisplayItems.length; i++) {
-      const item = renderDisplayItems[i]!;
+    const result: typeof displayItems = [];
+    for (let i = start; i < displayItems.length; i++) {
+      const item = displayItems[i]!;
       if (item.top > end) break;
       result.push(item);
     }
@@ -206,13 +192,6 @@
     expandedGroups = next;
   }
 
-  function effectiveViewportHeight(): number {
-    // ResizeObserver/clientHeight normally reports before hydration starts.
-    // If jsdom or a hidden container reports 0, use a fixed conservative
-    // viewport so hydration remains deliberate instead of accidental.
-    return viewportHeight > 0 ? viewportHeight : ITEM_HEIGHT * 8;
-  }
-
   function sessionForItem(item: DisplayItem) {
     if (item.type !== "session") return undefined;
     if (item.isChild) return item.session;
@@ -223,7 +202,7 @@
 
   function needsVisibleHydration(item: DisplayItem): boolean {
     const session = sessionForItem(item);
-    if (!session?.is_index_only) return false;
+    if (!session?.is_index_only || sessions.details.has(session.id)) return false;
     return !session.display_name;
   }
 
@@ -238,15 +217,6 @@
       ids.push(id);
     }
     return ids;
-  }
-
-  function initialHydrationIds(items: DisplayItem[]): string[] {
-    const target =
-      Math.ceil(effectiveViewportHeight() / ITEM_HEIGHT) + OVERSCAN;
-    const sessionItems = items
-      .filter((item) => item.type === "session")
-      .slice(0, target);
-    return hydrationIdsForItems(sessionItems);
   }
 
   function requestHydration(ids: string[], version: number) {
@@ -267,36 +237,6 @@
 
   $effect(() => {
     const version = sessions.sidebarIndexVersion;
-    const ids = initialHydrationIds(displayItems);
-
-    if (initialHydratedVersion === version) {
-      paintedDisplayItems = displayItems;
-      paintedTotalSize = totalSize;
-      return;
-    }
-    if (initialHydratingVersion === version) return;
-
-    if (ids.length === 0) {
-      initialHydratedVersion = version;
-      paintedDisplayItems = displayItems;
-      paintedTotalSize = totalSize;
-      return;
-    }
-
-    initialHydratingVersion = version;
-    void (async () => {
-      await sessions.hydrateVisibleSessions(ids, version);
-      if (sessions.sidebarIndexVersion !== version) return;
-      initialHydratedVersion = version;
-      initialHydratingVersion = null;
-      paintedDisplayItems = displayItems;
-      paintedTotalSize = totalSize;
-    })();
-  });
-
-  $effect(() => {
-    const version = sessions.sidebarIndexVersion;
-    if (initialHydratedVersion !== version) return;
     requestHydration(hydrationIdsForItems(visibleItems), version);
   });
 
@@ -307,11 +247,11 @@
       sessions.loading ||
       scrollTop <= 0 ||
       viewportHeight <= 0 ||
-      renderTotalSize <= viewportHeight
+      totalSize <= viewportHeight
     ) {
       return;
     }
-    const distanceToBottom = renderTotalSize - (scrollTop + viewportHeight);
+    const distanceToBottom = totalSize - (scrollTop + viewportHeight);
     if (distanceToBottom < ITEM_HEIGHT * 30) {
       void sessions.loadMore();
     }
@@ -322,7 +262,7 @@
     if (!containerRef) return;
     const maxTop = Math.max(
       0,
-      renderTotalSize - containerRef.clientHeight,
+      totalSize - containerRef.clientHeight,
     );
     if (scrollTop > maxTop) {
       scrollTop = maxTop;
@@ -335,7 +275,7 @@
   let allVisibleSessionIds = $derived.by(() => {
     const ids: string[] = [];
     const seen = new Set<string>();
-    for (const item of renderDisplayItems) {
+    for (const item of displayItems) {
       const session = sessionForItem(item);
       if (!session || seen.has(session.id)) continue;
       seen.add(session.id);
@@ -400,7 +340,7 @@
     if (!containerRef) return;
     // Read displayItems inside the effect so Svelte tracks
     // it — needed to re-run after a group expansion.
-    const items = renderDisplayItems;
+    const items = displayItems;
     // Try to find the exact child row first (when expanded).
     let item = items.find(
       (it) =>
@@ -442,10 +382,7 @@
         const match = g.sessions.find((s) => s.id === activeId);
         if (!match) continue;
         if (match.id === g.primarySessionId) break; // already primary
-        // Auto-expand the group and its sub-groups. Assign only when a
-        // key is new: while the sidebar still paints its pre-hydration
-        // snapshot the child row cannot appear yet, and replacing the
-        // set with an equal one would re-run this effect forever.
+        // Expand the group and sub-groups only when a key is new.
         const keys = [g.key, `subagent:${g.key}`, `team:${g.key}`];
         if (keys.some((key) => !expandedGroups.has(key))) {
           expandedGroups = new Set([...expandedGroups, ...keys]);
@@ -487,7 +424,7 @@
   <span class="session-count">
     {m.sidebar_session_count({
       count: totalCount,
-      countLabel: formatNumber(totalCount),
+      countLabel: formatCount(totalCount),
     })}
   </span>
   <div class="header-actions">
@@ -550,7 +487,11 @@
 </div>
 
 {#if sessions.sidebarLoadError}
-  <div class="sidebar-load-error" role="alert">{sessions.sidebarLoadError}</div>
+  <LoadError
+    class="sidebar-load-error"
+    message={sessions.sidebarLoadError}
+    onRetry={() => void sessions.retrySidebar()}
+  />
 {/if}
 
 {#if sessions.selectMode}
@@ -564,7 +505,7 @@
     </button>
     <span class="batch-count">
       {m.sidebar_selected_count({
-        countLabel: formatNumber(visibleSelectedSessionIds.length),
+        countLabel: formatCount(visibleSelectedSessionIds.length),
       })}
     </span>
     <button
@@ -592,7 +533,7 @@
   onscroll={handleScroll}
 >
   <div
-    style="height: {renderTotalSize}px; width: 100%; position: relative;"
+    style="height: {totalSize}px; width: 100%; position: relative;"
   >
     {#each visibleItems as item (item.id)}
       <div
@@ -619,7 +560,7 @@
               <FolderIcon class="project-icon" size="11" strokeWidth="1.8" aria-hidden="true" />
             {/if}
             <span class="group-name">{item.label}</span>
-            <span class="group-count">{item.count}</span>
+            <span class="group-count">{formatCount(item.count)}</span>
           </button>
         {:else if item.type === "subagent-group" && item.group}
           {@const subKey = `subagent:${item.group.key}`}
@@ -638,7 +579,7 @@
             {/if}
             <UserRoundIcon class="sub-group-icon" size="10" strokeWidth="2" aria-hidden="true" />
             <span class="sub-group-label">{m.sidebar_subagents()}</span>
-            <span class="sub-group-count">({item.count})</span>
+            <span class="sub-group-count">({formatCount(item.count)})</span>
           </button>
         {:else if item.type === "team-group" && item.group}
           {@const teamKey = `team:${item.group.key}`}
@@ -657,7 +598,7 @@
             {/if}
             <UsersRoundIcon class="sub-group-icon" size="12" strokeWidth="2" aria-hidden="true" />
             <span class="sub-group-label">{m.sidebar_team()}</span>
-            <span class="sub-group-count">({item.count})</span>
+            <span class="sub-group-count">({formatCount(item.count)})</span>
           </button>
         {:else if item.isChild && item.session}
           <SessionItem
@@ -676,8 +617,8 @@
             (s) => s.id === item.group!.primarySessionId,
           ) ?? item.group.sessions[0]}
           {@const children = item.group.sessions.filter((s) => s.id !== item.group!.primarySessionId)}
-          {@const groupHasSubagents = children.some((s) => isSubagentDescendant(s, item.group!.sessions))}
-          {@const groupHasTeammates = children.some((s) => s.is_teammate ?? s.first_message?.includes("<teammate-message") ?? false)}
+          {@const groupHasSubagents = children.some(subagentDescendantMatcher(item.group!.sessions))}
+          {@const groupHasTeammates = children.some((s) => s.is_teammate ?? sessions.view(s).first_message?.includes("<teammate-message") ?? false)}
           {#if primary}
             <SessionItem
               session={primary}
@@ -719,6 +660,31 @@
     flex-shrink: 0;
     letter-spacing: 0.02em;
     text-transform: uppercase;
+    position: relative;
+  }
+
+  /* The filter popover spans the sidebar at any width, inset 8px from
+     both edges, so no clipped row text shows beside it. */
+  .session-list-header :global(.filter-dropdown) {
+    top: 100%;
+    left: 8px;
+    right: 8px;
+    width: auto;
+  }
+
+  /* While the popover is open, the rows under it fade back, so the row its
+     bottom edge lands on reads as background instead of a sliced row. The
+     veil ignores the pointer and the sidebar clips it. */
+  .session-list-header:has(:global(.filter-dropdown))::after {
+    content: "";
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    height: 100vh;
+    background: color-mix(in srgb, var(--bg-primary) 62%, transparent);
+    pointer-events: none;
+    z-index: calc(var(--z-popover) - 1);
   }
 
   .session-count {
@@ -729,17 +695,14 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    position: relative;
   }
 
   .loading-indicator {
     color: var(--accent-green);
   }
 
-  .sidebar-load-error {
-    padding: 4px 12px;
-    font-size: 11px;
-    color: var(--accent-red);
+  :global(.sidebar-load-error) {
+    margin: 4px 8px;
   }
 
   /* Snippet rendered inside SessionFilterControl carries this

@@ -2,6 +2,7 @@ package artifact
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -1055,7 +1056,7 @@ func TestStoreImportCoordinatorCrashWindowsConverge(t *testing.T) {
 			root := t.TempDir()
 			databasePath := filepath.Join(root, "archive.db")
 			storeRoot := filepath.Join(root, "artifacts")
-			store, err := newProtocolTestStore(storeRoot)
+			store, err := newProtocolTestStore(t, storeRoot)
 			require.NoError(t, err)
 			database, err := db.Open(t.Context(), databasePath)
 			require.NoError(t, err)
@@ -1099,7 +1100,7 @@ func TestStoreImportCoordinatorCrashWindowsConverge(t *testing.T) {
 
 			database, err = db.Open(t.Context(), databasePath)
 			require.NoError(t, err)
-			store, err = newProtocolTestStore(storeRoot)
+			store, err = newProtocolTestStore(t, storeRoot)
 			require.NoError(t, err)
 			coordinator = NewStoreImportCoordinator(
 				database, store, importLocalOrigin,
@@ -1154,20 +1155,27 @@ func TestStoreImportCoordinatorBoundsUnchangedCheckpointWork(t *testing.T) {
 	}})
 	sessionMap := make(map[string]string, unchangedSessions+1)
 	destination := testDB(t)
-	for i := range unchangedSessions {
-		gid := fmt.Sprintf("%s~unchanged-%05d", contractOrigin, i)
-		hash := fmt.Sprintf("%064x", i+1)
-		sessionMap[gid] = hash
-		require.NoError(t, destination.RecordArtifactImportedSession(
-			t.Context(),
-			db.ArtifactImportedSession{
-				Origin:            contractOrigin,
-				GID:               gid,
-				ManifestHash:      hash,
-				ImportedSessionID: gid,
-			},
-		))
-	}
+	// No checkpoint stages exist yet, so there is nothing to mark satisfied.
+	// imported_at uses its column default.
+	require.NoError(t, destination.Update(t.Context(), func(tx *sql.Tx) error {
+		stmt, err := tx.PrepareContext(t.Context(), `INSERT INTO artifact_imported_sessions
+			(origin, gid, manifest_hash, imported_session_id) VALUES (?, ?, ?, ?)`)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = stmt.Close() }()
+		for i := range unchangedSessions {
+			gid := fmt.Sprintf("%s~unchanged-%05d", contractOrigin, i)
+			hash := fmt.Sprintf("%064x", i+1)
+			sessionMap[gid] = hash
+			if _, err := stmt.ExecContext(
+				t.Context(), contractOrigin, gid, hash, gid,
+			); err != nil {
+				return err
+			}
+		}
+		return nil
+	}))
 	sessionMap[contractOrigin+"~changed"] = changedHash
 	checkpointEntry := createImportTestCheckpoint(
 		t, base, contractOrigin, 1, sessionMap,
@@ -1414,7 +1422,7 @@ func TestStoreImportCoordinatorRecoversTerminalCheckpointPage(t *testing.T) {
 	root := t.TempDir()
 	databasePath := filepath.Join(root, "archive.db")
 	storeRoot := filepath.Join(root, "artifacts")
-	store, err := newProtocolTestStore(storeRoot)
+	store, err := newProtocolTestStore(t, storeRoot)
 	require.NoError(t, err)
 	destination, err := db.Open(t.Context(), databasePath)
 	require.NoError(t, err)
@@ -1462,7 +1470,7 @@ func TestStoreImportCoordinatorRecoversTerminalCheckpointPage(t *testing.T) {
 	destination, err = db.Open(t.Context(), databasePath)
 	require.NoError(t, err)
 	defer destination.Close()
-	store, err = newProtocolTestStore(storeRoot)
+	store, err = newProtocolTestStore(t, storeRoot)
 	require.NoError(t, err)
 	defer store.Close()
 	restarted := NewStoreImportCoordinator(

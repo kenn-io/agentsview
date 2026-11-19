@@ -220,7 +220,7 @@ describe("CallGroup", () => {
     expect(document.querySelector(".cg-header")?.textContent?.trim()).toBe("parallel · 3 calls");
     expect([...document.querySelectorAll(".cd")].map((el) => el.textContent?.trim())).toEqual([
       "1.2s",
-      "unknown",
+      "",
       "running 4.0s+",
     ]);
     expect(

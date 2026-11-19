@@ -681,7 +681,7 @@ func (s openClawSourceSet) Parse(
 		return ParseOutcome{}, fmt.Errorf("%s source path unavailable", AgentOpenClaw)
 	}
 	sess, msgs, err := parseOpenClawSessionWithMachine(
-		path, "", req.Machine,
+		ctx, path, "", req.Machine,
 	)
 	outcome, err := clawParseOutcome(req, sess, msgs, err)
 	if err == nil && len(outcome.Results) > 0 {
@@ -691,10 +691,10 @@ func (s openClawSourceSet) Parse(
 }
 
 func parseOpenClawSessionWithMachine(
-	path, project, machine string,
+	ctx context.Context, path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	provider := &openClawProvider{}
-	return provider.parseSession(path, project, machine)
+	return provider.parseSession(ctx, path, project, machine)
 }
 
 func openClawSQLiteSource(source SourceRef) bool {
@@ -908,7 +908,7 @@ func (p *qClawProvider) Parse(
 		return ParseOutcome{}, fmt.Errorf("%s source path unavailable", p.Def.Type)
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
-	sess, msgs, err := p.parseSession(path, "", machine)
+	sess, msgs, err := p.parseSession(ctx, path, "", machine)
 	return clawParseOutcome(req, sess, msgs, err)
 }
 
@@ -1086,7 +1086,7 @@ func (s clawSourceSet) Fingerprint(
 	// Legacy processOpenClaw/processQClaw persisted a full-file content hash
 	// (file_hash). Without it here the parse outcome leaves Session.File.Hash
 	// empty and a resync clears the stored hash to NULL.
-	hash, err := hashJSONLSourceFile(path)
+	hash, err := hashJSONLSourceFileContext(ctx, path)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}

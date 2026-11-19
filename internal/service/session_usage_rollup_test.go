@@ -3,7 +3,9 @@ package service_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
+	"testing/synctest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -386,4 +388,109 @@ func TestGetSessionUsageRollupOmitsCostForSubagentWithoutUsageRows(t *testing.T)
 	require.Equal(t, 1, got.SubagentCount)
 	require.False(t, got.HasCost)
 	require.Zero(t, got.Cost)
+}
+
+// overlapRollupStore holds each read until the reads that should run beside it
+// have started. A rollup that issued them one at a time would block forever,
+// which synctest reports as a deadlock.
+type overlapRollupStore struct {
+	*rollupStore
+	rootWalkStarted chan struct{}
+	siblingsStarted sync.WaitGroup
+}
+
+func (s *overlapRollupStore) GetSessionUsage(
+	ctx context.Context, id string, breakdown bool,
+) (*db.SessionUsage, error) {
+	if id == "root" {
+		<-s.rootWalkStarted
+	}
+	return s.rollupStore.GetSessionUsage(ctx, id, breakdown)
+}
+
+func (s *overlapRollupStore) GetChildSessions(
+	ctx context.Context, id string,
+) ([]db.Session, error) {
+	switch id {
+	case "root":
+		close(s.rootWalkStarted)
+	case "a", "b":
+		s.siblingsStarted.Done()
+		s.siblingsStarted.Wait()
+	}
+	return s.rollupStore.GetChildSessions(ctx, id)
+}
+
+func TestGetSessionUsageRollupReadsIndependentSessionsConcurrently(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store := &overlapRollupStore{
+			rollupStore: &rollupStore{
+				usages: map[string]*db.SessionUsage{
+					"root": {SessionID: "root", BreakdownCount: 1},
+				},
+				children: map[string][]db.Session{
+					"root": {
+						{ID: "a", RelationshipType: "subagent"},
+						{ID: "b", RelationshipType: "subagent"},
+					},
+					"a": {{ID: "a1", RelationshipType: "subagent"}},
+					"b": {{ID: "b1", RelationshipType: "subagent"}},
+				},
+			},
+			rootWalkStarted: make(chan struct{}),
+		}
+		store.siblingsStarted.Add(2)
+
+		descendants, err := service.DelegatedUsageSessions(t.Context(), store, "root")
+		require.NoError(t, err)
+		ids := make([]string, 0, len(descendants))
+		for _, d := range descendants {
+			ids = append(ids, d.ID)
+		}
+		assert.Equal(t, []string{"a", "b", "a1", "b1"}, ids,
+			"descendants keep breadth-first discovery order")
+
+		store.rootWalkStarted = make(chan struct{})
+		store.siblingsStarted.Add(2)
+		got, err := service.GetSessionUsageRollup(t.Context(), store, "root", false)
+		require.NoError(t, err)
+		assert.Equal(t, 4, got.SubagentCount)
+	})
+}
+
+// blockingWalkStore holds every child read until its context ends. The root
+// usage read waits until a child read has started, so the rollup must cancel
+// a read that is already in progress.
+type blockingWalkStore struct {
+	*rollupStore
+	childReadStarted chan struct{}
+}
+
+func (s blockingWalkStore) GetSessionUsage(
+	ctx context.Context, id string, breakdown bool,
+) (*db.SessionUsage, error) {
+	<-s.childReadStarted
+	return s.rollupStore.GetSessionUsage(ctx, id, breakdown)
+}
+
+func (s blockingWalkStore) GetChildSessions(
+	ctx context.Context, _ string,
+) ([]db.Session, error) {
+	close(s.childReadStarted)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestGetSessionUsageRollupMissingRootStopsDescendantWalk(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store := blockingWalkStore{
+			rollupStore:      &rollupStore{},
+			childReadStarted: make(chan struct{}),
+		}
+
+		got, err := service.GetSessionUsageRollup(t.Context(), store, "deleted", false)
+
+		require.NoError(t, err)
+		assert.Nil(t, got)
+	})
 }

@@ -37,11 +37,11 @@ func newSessionLabelCommand() *cobra.Command {
 			id, labels := args[0], args[1:]
 			switch {
 			case clearAll && (replace || len(labels) > 0 || len(remove) > 0):
-				return errors.New("--clear cannot be combined with labels, --replace, or --remove")
+				return cliUsageError(errors.New("--clear cannot be combined with labels, --replace, or --remove"), commandHelpHint(cmd))
 			case replace && len(remove) > 0:
-				return errors.New("--replace cannot be combined with --remove")
+				return cliUsageError(errors.New("--replace cannot be combined with --remove"), commandHelpHint(cmd))
 			case !clearAll && !replace && len(labels) == 0 && len(remove) == 0:
-				return errors.New("give labels to add, --remove, --replace, or --clear")
+				return cliUsageError(errors.New("give labels to add, --remove, --replace, or --clear"), commandHelpHint(cmd))
 			}
 			annotator, cleanup, err := resolveSessionAnnotator(cmd)
 			if err != nil {
@@ -93,7 +93,7 @@ func newSessionParentCommand() *cobra.Command {
 				parentID = strings.TrimSpace(args[1])
 			}
 			if clearAll == (parentID != "") {
-				return errors.New("give either a parent session id or --clear")
+				return cliUsageError(errors.New("give either a parent session id or --clear"), commandHelpHint(cmd))
 			}
 			annotator, cleanup, err := resolveSessionAnnotator(cmd)
 			if err != nil {

@@ -4,17 +4,24 @@ package parser
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/minio/minio-go/v7"
-	"github.com/minio/minio-go/v7/pkg/credentials"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 )
 
 // S3Object carries the durable source metadata needed for sync skip checks.
@@ -26,9 +33,10 @@ type S3Object struct {
 }
 
 var (
-	listS3Objects = listS3
-	fetchS3Object = fetchS3ObjectDefault
-	statS3Object  = statS3ObjectDefault
+	listS3Objects    = listS3
+	fetchS3Object    = fetchS3ObjectDefault
+	statS3Object     = statS3ObjectDefault
+	s3EndpointRegion = regexp.MustCompile(`^s3(?:-fips)?(?:\.dualstack)?[.-]([a-z]+(?:-[a-z]+)+-[0-9]+)\.amazonaws\.com(?:\.cn)?$`)
 )
 
 // s3Client builds an S3-compatible client from standard env vars:
@@ -41,16 +49,82 @@ var (
 //
 // Returning an error here means an s3:// source simply yields nothing,
 // so a misconfigured store never aborts the local sync.
-func s3Client() (*minio.Client, error) {
+func s3Client(ctx context.Context, bucket string) (*s3.Client, error) {
 	endpoint, secure, err := s3EndpointConfig(os.Getenv("AWS_S3_ENDPOINT"))
 	if err != nil {
 		return nil, err
 	}
-	return minio.New(endpoint, &minio.Options{
-		Creds:  s3Credentials(),
-		Secure: secure,
-		Region: os.Getenv("AWS_REGION"),
+	scheme := "https://"
+	if !secure {
+		scheme = "http://"
+	}
+	u, err := url.Parse(scheme + endpoint)
+	if err != nil || u.Hostname() == "" || u.User != nil ||
+		(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return nil, fmt.Errorf("invalid S3 endpoint: %q", endpoint)
+	}
+	region := os.Getenv("AWS_REGION")
+	if region == "" {
+		if match := s3EndpointRegion.FindStringSubmatch(u.Hostname()); match != nil {
+			region = match[1]
+		}
+	}
+	discoverRegion := region == ""
+	if region == "" {
+		region = "us-east-1"
+	}
+	// Keep credentials explicit and leave checksum-mode defaults unset.
+	cl := s3.NewFromConfig(aws.Config{
+		Region: region, Credentials: s3Credentials(),
+	}, func(opts *s3.Options) {
+		// AWS, Google, and Aliyun use virtual-hosted buckets. Other custom
+		// stores keep path-style addressing.
+		if endpoint != "s3.amazonaws.com" {
+			opts.BaseEndpoint = new(scheme + endpoint)
+			opts.UsePathStyle = !strings.HasSuffix(u.Hostname(), ".amazonaws.com") &&
+				!strings.HasSuffix(u.Hostname(), ".amazonaws.com.cn") &&
+				!strings.HasSuffix(u.Hostname(), ".aliyuncs.com") &&
+				u.Hostname() != "storage.googleapis.com"
+		}
 	})
+	if discoverRegion {
+		// Keep bucket-region discovery for operators who omit AWS_REGION.
+		location, err := cl.GetBucketLocation(ctx, &s3.GetBucketLocationInput{Bucket: new(bucket)})
+		if err != nil {
+			apiErr, hasAPI := errors.AsType[smithy.APIError](err)
+			resp, hasResponse := errors.AsType[*awshttp.ResponseError](err)
+			if !hasAPI || !hasResponse {
+				return nil, err
+			}
+			switch apiErr.ErrorCode() {
+			case "AccessDenied", "AuthorizationHeaderMalformed", "InvalidRegion":
+				region = resp.Response.Header.Get("X-Amz-Bucket-Region")
+			case "NotImplemented":
+				switch resp.Response.Header.Get("Server") {
+				case "cloudflare":
+					region = "us-east-1"
+				case "AmazonSnowball":
+					region = "snowball"
+				default:
+					return nil, err
+				}
+			default:
+				return nil, err
+			}
+		} else {
+			region = strings.TrimSpace(string(location.LocationConstraint))
+		}
+		switch region {
+		case "":
+			region = "us-east-1"
+		case "EU":
+			region = "eu-west-1"
+		}
+		opts := cl.Options()
+		opts.Region = region
+		cl = s3.New(opts)
+	}
+	return cl, nil
 }
 
 func s3EndpointConfig(raw string) (endpoint string, secure bool, err error) {
@@ -106,8 +180,12 @@ func isLoopbackS3Endpoint(endpoint string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func s3Credentials() *credentials.Credentials {
-	return credentials.NewStaticV4(
+func s3Credentials() aws.CredentialsProvider {
+	// Incomplete explicit credentials previously selected anonymous reads.
+	if os.Getenv("AWS_ACCESS_KEY_ID") == "" || os.Getenv("AWS_SECRET_ACCESS_KEY") == "" {
+		return aws.AnonymousCredentials{}
+	}
+	return credentials.NewStaticCredentialsProvider(
 		os.Getenv("AWS_ACCESS_KEY_ID"),
 		os.Getenv("AWS_SECRET_ACCESS_KEY"),
 		os.Getenv("AWS_SESSION_TOKEN"),
@@ -126,46 +204,66 @@ func parseS3URI(uri string) (bucket, key string) {
 // listS3 lists every object under an s3://bucket/prefix, returning each
 // object's full s3:// URI plus source metadata.
 func listS3(uri string) ([]S3Object, error) {
-	cl, err := s3Client()
+	bucket, prefix := parseS3URI(uri)
+	cl, err := s3Client(context.Background(), bucket)
 	if err != nil {
 		return nil, err
 	}
-	bucket, prefix := parseS3URI(uri)
 	if prefix != "" {
 		prefix = strings.TrimSuffix(prefix, "/") + "/"
 	}
 	var out []S3Object
-	for o := range cl.ListObjects(context.Background(), bucket, minio.ListObjectsOptions{
-		Prefix:    prefix,
-		Recursive: true,
-	}) {
-		if o.Err != nil {
-			return nil, o.Err
+	pages := s3.NewListObjectsV2Paginator(cl, &s3.ListObjectsV2Input{
+		Bucket: new(bucket), Prefix: new(prefix), EncodingType: types.EncodingTypeUrl,
+	})
+	for pages.HasMorePages() {
+		page, err := pages.NextPage(context.Background())
+		if err != nil {
+			return nil, err
 		}
-		out = append(out, S3Object{
-			URI:          "s3://" + bucket + "/" + o.Key,
-			Size:         o.Size,
-			LastModified: o.LastModified,
-			Fingerprint:  s3ObjectFingerprint("s3://"+bucket+"/"+o.Key, o),
-		})
+		if aws.ToBool(page.IsTruncated) && aws.ToString(page.NextContinuationToken) == "" {
+			return nil, errors.New("truncated S3 listing has no continuation token")
+		}
+		for _, o := range page.Contents {
+			key := aws.ToString(o.Key)
+			if page.EncodingType == types.EncodingTypeUrl {
+				key, err = url.QueryUnescape(key)
+				if err != nil {
+					return nil, err
+				}
+			}
+			uri := "s3://" + bucket + "/" + key
+			out = append(out, S3Object{
+				URI:          uri,
+				Size:         aws.ToInt64(o.Size),
+				LastModified: aws.ToTime(o.LastModified).Truncate(time.Millisecond),
+				Fingerprint:  s3ObjectFingerprint(uri, &s3.HeadObjectOutput{ETag: o.ETag}),
+			})
+		}
 	}
 	return out, nil
 }
 
 // FetchS3Object opens one s3://bucket/key object for streaming reads. The
-// caller owns the returned reader and must close it. minio fetches lazily,
-// so transport errors surface on the first Read rather than here.
+// caller owns the returned reader and must close it. Initial request errors
+// return here; errors while streaming the response surface on Read.
 func FetchS3Object(uri string) (io.ReadCloser, error) {
 	return fetchS3Object(uri)
 }
 
 func fetchS3ObjectDefault(uri string) (io.ReadCloser, error) {
-	cl, err := s3Client()
+	bucket, key := parseS3URI(uri)
+	cl, err := s3Client(context.Background(), bucket)
 	if err != nil {
 		return nil, err
 	}
-	bucket, key := parseS3URI(uri)
-	return cl.GetObject(context.Background(), bucket, key, minio.GetObjectOptions{})
+	obj, err := cl.GetObject(context.Background(), &s3.GetObjectInput{
+		Bucket: new(bucket), Key: new(key),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return obj.Body, nil
 }
 
 // StatS3Object returns durable object metadata for an s3:// URI.
@@ -174,21 +272,21 @@ func StatS3Object(uri string) (S3Object, error) {
 }
 
 func statS3ObjectDefault(uri string) (S3Object, error) {
-	cl, err := s3Client()
+	bucket, key := parseS3URI(uri)
+	cl, err := s3Client(context.Background(), bucket)
 	if err != nil {
 		return S3Object{}, err
 	}
-	bucket, key := parseS3URI(uri)
-	info, err := cl.StatObject(
-		context.Background(), bucket, key, minio.StatObjectOptions{},
-	)
+	info, err := cl.HeadObject(context.Background(), &s3.HeadObjectInput{
+		Bucket: new(bucket), Key: new(key),
+	})
 	if err != nil {
 		return S3Object{}, err
 	}
 	return S3Object{
 		URI:          uri,
-		Size:         info.Size,
-		LastModified: info.LastModified,
+		Size:         aws.ToInt64(info.ContentLength),
+		LastModified: aws.ToTime(info.LastModified),
 		Fingerprint:  s3ObjectFingerprint(uri, info),
 	}, nil
 }
@@ -236,20 +334,20 @@ func foldS3ObjectMetadata(obj, extra S3Object) S3Object {
 	return obj
 }
 
-func s3ObjectFingerprint(uri string, info minio.ObjectInfo) string {
+func s3ObjectFingerprint(uri string, info *s3.HeadObjectOutput) string {
 	parts := []string{
-		"etag=" + strings.Trim(info.ETag, `"`),
-		"version=" + info.VersionID,
-		"crc32=" + info.ChecksumCRC32,
-		"crc32c=" + info.ChecksumCRC32C,
-		"sha1=" + info.ChecksumSHA1,
-		"sha256=" + info.ChecksumSHA256,
-		"crc64nvme=" + info.ChecksumCRC64NVME,
-		"md5=" + info.ChecksumMD5,
-		"sha512=" + info.ChecksumSHA512,
-		"xxhash64=" + info.ChecksumXXHash64,
-		"xxhash3=" + info.ChecksumXXHash3,
-		"xxhash128=" + info.ChecksumXXHash128,
+		"etag=" + strings.Trim(aws.ToString(info.ETag), `"`),
+		"version=" + aws.ToString(info.VersionId),
+		"crc32=" + aws.ToString(info.ChecksumCRC32),
+		"crc32c=" + aws.ToString(info.ChecksumCRC32C),
+		"sha1=" + aws.ToString(info.ChecksumSHA1),
+		"sha256=" + aws.ToString(info.ChecksumSHA256),
+		"crc64nvme=" + aws.ToString(info.ChecksumCRC64NVME),
+		"md5=" + aws.ToString(info.ChecksumMD5),
+		"sha512=" + aws.ToString(info.ChecksumSHA512),
+		"xxhash64=" + aws.ToString(info.ChecksumXXHASH64),
+		"xxhash3=" + aws.ToString(info.ChecksumXXHASH3),
+		"xxhash128=" + aws.ToString(info.ChecksumXXHASH128),
 	}
 	nonEmpty := parts[:0]
 	for _, part := range parts {

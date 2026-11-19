@@ -12,6 +12,7 @@ import (
 )
 
 func TestHostedCursorsSurviveUnpublishedGenerationSelection(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, accepted := f.accept(t, "device-a", "capture-a", "")
 	parsed := projectionOutcome("older session")
@@ -21,7 +22,7 @@ func TestHostedCursorsSurviveUnpublishedGenerationSelection(t *testing.T) {
 	recent.Result.Session.StartedAt = recent.Result.Session.StartedAt.Add(time.Hour)
 	parsed.Outcome.Results = append(parsed.Outcome.Results, recent)
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, parsed))
-	h, err := newHostedAdapter(f.runtime, f.tenant)
+	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
 	h.SetCursorSecret([]byte("synthetic cursor secret"))
 	page, err := h.ListSessions(t.Context(), db.SessionFilter{Limit: 1})

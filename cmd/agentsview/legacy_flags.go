@@ -16,6 +16,9 @@ func executeCLIWithLegacyFlagCompat(args []string, stdout, stderr io.Writer) err
 	cmd := newRootCommand()
 	cmd.SetOut(stdout)
 	cmd.SetErr(stderr)
+	cmd.InitDefaultHelpCmd()
+	cmd.InitDefaultCompletionCmd()
+	installCLIDiagnostics(cmd)
 
 	normalized, rewrites := normalizeLegacyLongFlags(args, collectLongFlags(cmd))
 	if len(rewrites) > 0 {
@@ -23,13 +26,17 @@ func executeCLIWithLegacyFlagCompat(args []string, stdout, stderr io.Writer) err
 	}
 	normalized, err := deploymentArgs(normalized)
 	if err != nil {
-		return err
+		return contextualizeCLIError(cmd, err, false)
 	}
 	cmd.SetArgs(normalized)
 	ctx, _ := apiclient.TrackArchiveFreshness(context.Background(), func() {
 		fmt.Fprintln(stderr, apiclient.ArchiveStaleWarning)
 	})
-	return cmd.ExecuteContext(ctx)
+	executed, err := cmd.ExecuteContextC(ctx)
+	if executed == nil {
+		executed = cmd
+	}
+	return contextualizeCLIError(executed, err, requestedErrorJSON(executed, normalized))
 }
 
 func collectLongFlags(root *cobra.Command) map[string]struct{} {

@@ -163,7 +163,8 @@ func truncateInventoryRows(rows []db.ProjectInventoryRow) []db.ProjectInventoryR
 // result. It exercises the real replicated shape (push, not hand-inserted
 // mirror rows) so provenance columns and mapping mirroring are covered too.
 func TestPGProjectInventoryMatchesSQLite(t *testing.T) {
-	const schema = "agentsview_project_inventory_test"
+	t.Parallel()
+	const schema = pgPushTestSchema
 	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 
 	buildInventoryFixture(t, localDB, ctx)
@@ -214,7 +215,8 @@ func TestPGProjectInventoryMatchesSQLite(t *testing.T) {
 }
 
 func TestPGProjectInventoryCrossArchiveIsolation(t *testing.T) {
-	syncer, local, pg, ctx := newSessionProvenancePushSync(t, "agentsview_inventory_isolation_test")
+	t.Parallel()
+	syncer, local, pg, ctx := newSessionProvenancePushSync(t, pgPushTestSchema)
 	seedInventorySession(t, local, "a-session", "proj-a", func(s *db.Session) { s.Machine = "host.example"; s.Cwd = "/repos/shared" })
 	_, err := local.CreateWorktreeProjectMapping(ctx, db.WorktreeProjectMapping{Machine: "host.example", PathPrefix: "/repos/decoy", Layout: db.WorktreeMappingLayoutExplicit, Project: "proj-a-unused", Enabled: true})
 	require.NoError(t, err)

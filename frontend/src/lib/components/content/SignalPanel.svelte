@@ -31,6 +31,14 @@
   const hasPenalties = $derived(
     penalties != null && Object.keys(penalties).length > 0,
   );
+  // JSON key order is not stable across loads, so list the largest
+  // deduction first and break ties by key.
+  const sortedPenalties = $derived(
+    Object.entries(penalties ?? {}).sort(
+      ([aKey, aValue], [bKey, bValue]) =>
+        bValue - aValue || (aKey < bKey ? -1 : aKey > bKey ? 1 : 0),
+    ),
+  );
   const compactions = $derived(session.compaction_count ?? 0);
   const midTaskCompactions = $derived(
     session.mid_task_compaction_count ?? 0,
@@ -55,6 +63,7 @@
 </script>
 
 <div class="signal-panel">
+  <div class="signal-panel-label">{m.analytics_session_health_title()}</div>
   {#if !hasUsefulData}
     <div class="no-signal-note">
       {m.signal_panel_not_enough_activity()}
@@ -127,10 +136,10 @@
       {/if}
     </div>
 
-    {#if hasPenalties && penalties}
+    {#if hasPenalties}
       <div class="penalties-row">
         <span class="penalties-heading">{m.signal_panel_penalties()}</span>
-        {#each Object.entries(penalties) as [key, value]}
+        {#each sortedPenalties as [key, value] (key)}
           <div
             class="penalty"
             title={m.signal_panel_penalty_title({ label: getPenaltyLabel(key), value })}
@@ -148,11 +157,33 @@
 </div>
 
 <style>
+  /* The panel sits on the transcript's shared reading column (see
+     MessageList .virtual-row): its fill and bottom rule span the column,
+     not the pane. ToolSequencesPanel continues the same block below. The
+     top gap matches the space Default leaves above the first message
+     (list 4px + row 5px), so the band does not butt against the header
+     rule. */
   .signal-panel {
+    margin-inline: max(12px, calc((100% - var(--reading-column)) / 2));
+    margin-top: 9px;
     padding: 10px 12px;
     background: var(--bg-inset);
     border-bottom: 1px solid var(--border-muted);
     font-size: 12px;
+  }
+
+  /* Dark inset sits within a step of the page, so the panel would melt into
+     the transcript; one step above the card surface keeps it a distinct
+     band, as the inset fill does in light. */
+  :global(:root.dark) .signal-panel {
+    background: color-mix(in srgb, var(--text-primary) 4%, var(--bg-surface));
+  }
+  /* A small section label names the band, in the same voice as its
+     Friction findings subsection header. */
+  .signal-panel-label {
+    margin-bottom: 4px;
+    color: var(--text-secondary);
+    font-weight: 600;
   }
   .signal-row {
     display: flex;
@@ -162,14 +193,18 @@
   }
   .no-signal-note {
     color: var(--text-muted);
-    font-style: italic;
   }
   .grade-large {
     font-size: 20px;
     font-weight: 800;
   }
+  /* The numeric score is the grade's partner; the basis chips and
+     penalties stay subordinate. */
   .score-text {
-    color: var(--text-secondary);
+    color: var(--text-primary);
+    font-size: 14px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
   }
   .outcome {
     display: inline-flex;
@@ -190,12 +225,12 @@
     font-weight: 600;
     margin-right: 2px;
   }
+  /* Neutral, so the factors read as labels rather than links. */
   .basis-tag {
-    padding: 1px 6px;
-    background: color-mix(
-      in srgb, var(--accent-blue) 15%, transparent
-    );
-    color: var(--accent-blue);
+    padding: 0 6px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    color: var(--text-secondary);
     border-radius: 3px;
     font-size: 11px;
     cursor: help;
@@ -217,7 +252,6 @@
   }
   .no-penalties {
     color: var(--text-muted);
-    font-style: italic;
   }
   .penalties-row {
     display: flex;

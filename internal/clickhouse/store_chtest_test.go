@@ -13,11 +13,14 @@ import (
 
 	"go.kenn.io/agentsview/internal/clickhouse/chtest"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/readbase"
+	"go.kenn.io/agentsview/internal/readbase/readbasetest"
 )
 
 func TestReadStatusHonorsProjectFilters(t *testing.T) {
+	t.Parallel()
 	_, syncer, local := newPushedStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	archiveID, err := local.GetArchiveID(ctx)
 	require.NoError(t, err)
 
@@ -38,8 +41,9 @@ func TestReadStatusHonorsProjectFilters(t *testing.T) {
 }
 
 func TestStoreSessionsMessagesAndSearch(t *testing.T) {
-	store, _, _ := newPushedStore(t)
-	ctx := context.Background()
+	t.Parallel()
+	store := newClonedReadStore(t)
+	ctx := t.Context()
 
 	t.Run("list_sessions_default_sort_and_cursor", func(t *testing.T) {
 		page, err := store.ListSessions(ctx, db.SessionFilter{Limit: 1})
@@ -58,7 +62,7 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 		assert.Equal(t, 2, next.Total)
 	})
 
-	t.Run("orphan_subagent_with_null_parent_is_sidebar_root", func(t *testing.T) {
+	t.Run("stats_counts_orphans_without_parented_continuation", func(t *testing.T) {
 		store, syncer, local := newPushedStore(t)
 		orphanID := "ch-orphan-child"
 		orphan := fixtureSession(orphanID, "alpha", "orphan first", "2026-01-10T00:06:00.000Z", 1)
@@ -73,11 +77,31 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 			ReplaceMessages: true,
 		}})
 		require.NoError(t, err)
+
+		for _, row := range []struct{ id, relationship, parent string }{
+			{"ch-missing-parent", "subagent", "missing-parent"},
+			{"ch-continuation", "continuation", fixtureAlphaID},
+		} {
+			session := fixtureSession(row.id, "alpha", "child first", "2026-01-10T00:07:00.000Z", 1)
+			session.RelationshipType = row.relationship
+			session.ParentSessionID = &row.parent
+			_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+				Session:     session,
+				Messages:    []db.Message{fixtureMessage(row.id, 0, "user", "child first", "2026-01-10T00:07:00.000Z")},
+				DataVersion: 1, ReplaceMessages: true,
+			}})
+			require.NoError(t, err)
+		}
 		_, err = syncer.Push(ctx, false, nil)
 		require.NoError(t, err)
-
-		index, err := store.GetSidebarSessionIndex(ctx, db.SessionFilter{Project: "alpha"})
+		stats, err := store.GetStats(ctx, false, false)
 		require.NoError(t, err)
+		assert.Equal(t, 4, stats.SessionCount)
+		assert.Equal(t, 4, stats.MessageCount)
+		assert.Equal(t, 2, stats.ProjectCount)
+		index, err := store.GetSidebarSessionIndex(ctx, db.SessionFilter{})
+		require.NoError(t, err)
+		assert.Equal(t, index.Total, stats.SessionCount)
 		ids := make([]string, len(index.Sessions))
 		for i, row := range index.Sessions {
 			ids[i] = row.ID
@@ -134,6 +158,20 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 		require.NoError(t, err)
 		require.NotEmpty(t, window)
 		assert.Equal(t, 1, window[len(window)-1].Ordinal)
+
+		recorder := &readbasetest.RecordingSessions{SessionsBackend: sessionsSQL{store}, T: t}
+		reader := readbase.NewSessions(recorder)
+		for _, tc := range []struct {
+			ordinal      int
+			toolOrdinals [][]int
+		}{{0, [][]int{{}, {}}}, {1, [][]int{{1, 1}, {1}}}} {
+			recorder.ToolOrdinals = nil
+			window, err := reader.GetMessagesWindow(ctx, fixtureAlphaID, db.MessageWindow{From: &tc.ordinal, Limit: 1, Asc: true})
+			require.NoError(t, err)
+			require.Len(t, window, 1)
+			assert.Equal(t, tc.ordinal, window[0].Ordinal)
+			assert.Equal(t, tc.toolOrdinals, recorder.ToolOrdinals)
+		}
 
 		counts, err := store.GetResumeModelCounts(ctx, fixtureAlphaID)
 		require.NoError(t, err)
@@ -262,7 +300,8 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 }
 
 func TestSearchContentExcludeActiveSince(t *testing.T) {
-	store, _, _ := newPushedStore(t)
+	t.Parallel()
+	store := newClonedReadStore(t)
 	for _, mode := range []string{"substring", "regex", "fts"} {
 		t.Run(mode, func(t *testing.T) {
 			page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
@@ -294,8 +333,9 @@ func TestSearchContentExcludeActiveSince(t *testing.T) {
 }
 
 func TestSearchTreatsUnderscoreAsLiteral(t *testing.T) {
+	t.Parallel()
 	store, syncer, local := newPushedStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	appendMessage(t, local, fixtureAlphaID, "hello_world unique token", "2026-01-10T00:04:00.000Z")
 	appendMessage(t, local, fixtureBetaID, "helloXworld unique token", "2026-01-11T00:04:00.000Z")
 	_, err := syncer.Push(ctx, false, nil)
@@ -309,8 +349,9 @@ func TestSearchTreatsUnderscoreAsLiteral(t *testing.T) {
 }
 
 func TestGetSessionFullReturnsFilePath(t *testing.T) {
+	t.Parallel()
 	store, _, local := newPushedStore(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	want, err := local.GetSessionFull(ctx, fixtureAlphaID)
 	require.NoError(t, err)
 	require.NotNil(t, want)
@@ -331,7 +372,8 @@ func TestGetSessionFullReturnsFilePath(t *testing.T) {
 }
 
 func TestStoreGetSessionHidesTrash(t *testing.T) {
-	ctx := context.Background()
+	t.Parallel()
+	ctx := t.Context()
 	store, syncer, local := newPushedStore(t)
 	require.NoError(t, local.SoftDeleteSession(t.Context(), fixtureBetaID))
 	_, err := syncer.Push(ctx, false, nil)
@@ -354,7 +396,8 @@ func TestStoreGetSessionHidesTrash(t *testing.T) {
 }
 
 func TestStoreGetSessionVersionChangesAfterPush(t *testing.T) {
-	ctx := context.Background()
+	t.Parallel()
+	ctx := t.Context()
 	store, syncer, local := newPushedStore(t)
 	count, version, ok := store.GetSessionVersion(t.Context(), fixtureAlphaID)
 	require.True(t, ok)
@@ -371,8 +414,9 @@ func TestStoreGetSessionVersionChangesAfterPush(t *testing.T) {
 }
 
 func TestStoreMessageWindowReportsRevisionWithRows(t *testing.T) {
-	store, _, _ := newPushedStore(t)
-	ctx := context.Background()
+	t.Parallel()
+	store := newClonedReadStore(t)
+	ctx := t.Context()
 
 	from := 0
 	revision := ""
@@ -422,6 +466,7 @@ func (s *activityVectorSearcher) ResolveMessageUnits(_ context.Context, refs []d
 }
 
 func TestStoreSessionVersionTracksPushedAnnotations(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	store, syncer, local := newPushedStore(t)
 	for _, tt := range []struct {
@@ -453,6 +498,7 @@ func TestStoreSessionVersionTracksPushedAnnotations(t *testing.T) {
 }
 
 func TestMachineSelectorLookupIncludesUnmergedIdentity(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dsn, database := chtest.FreshDatabase(t)
 	conn := chtest.Open(t, dsn, database)
@@ -468,10 +514,47 @@ func TestMachineSelectorLookupIncludesUnmergedIdentity(t *testing.T) {
 	// Only the newest version owns the session identity.
 	_, err := conn.ExecContext(ctx, `INSERT INTO sessions (id, machine, push_version) VALUES ('updated', 'current-host', 2)`)
 	require.NoError(t, err)
-	ids, err := NewStoreFromDB(conn).GetMatchingMachineIDs(ctx, []string{"retired-host"})
+	ids, err := newTestStore(t, conn, Target{URL: dsn, Database: database}).GetMatchingMachineIDs(ctx, []string{"retired-host"})
 	require.NoError(t, err)
 	assert.Empty(t, ids)
-	ids, err = NewStoreFromDB(conn).GetMatchingMachineIDs(ctx, []string{"current-host"})
+	ids, err = newTestStore(t, conn, Target{URL: dsn, Database: database}).GetMatchingMachineIDs(ctx, []string{"current-host"})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"current-host"}, ids)
+}
+
+func TestStorePoolsCapQueryThreads(t *testing.T) {
+	t.Parallel()
+	store := newClonedReadStore(t)
+	ctx := t.Context()
+	require.NotSame(t, store.conn, store.pages, "serve keeps page reads on their own pool")
+	for name, row := range map[string]*sql.Row{
+		"scans": store.queryRowContext(ctx, `SELECT getSetting('max_threads')`),
+		"pages": store.pageQueryRowContext(ctx, `SELECT getSetting('max_threads')`),
+	} {
+		var threads uint64
+		require.NoError(t, row.Scan(&threads), name)
+		assert.Equal(t, uint64(8), threads, name)
+	}
+	assert.Equal(t, 4, store.pages.Stats().MaxOpenConnections)
+	assert.Equal(t, 12, store.conn.Stats().MaxOpenConnections)
+}
+
+func TestStoreMessageWindowCompactBoundary(t *testing.T) {
+	t.Parallel()
+	store, syncer, local := newPushedStore(t)
+	ctx := t.Context()
+	session, err := local.GetSessionFull(ctx, fixtureAlphaID)
+	require.NoError(t, err)
+	messages, err := local.GetAllMessages(ctx, fixtureAlphaID)
+	require.NoError(t, err)
+	messages = append(messages, db.Message{SessionID: fixtureAlphaID, Ordinal: 2, Role: "assistant", IsSystem: true, IsCompactBoundary: true, Content: "summary"})
+	session.MessageCount = len(messages)
+	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{Session: *session, Messages: messages, DataVersion: 1, ReplaceMessages: true}})
+	require.NoError(t, err)
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	got, err := store.GetMessagesWindow(ctx, fixtureAlphaID, db.MessageWindow{Limit: 10, Asc: true, CompactBoundaryOnly: true})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, 2, got[0].Ordinal)
 }

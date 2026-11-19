@@ -31,6 +31,7 @@ func (s *Server) registerCodexCloudRoutes() {
 func (s *Server) humaCodexCloudStatus(
 	context.Context, *struct{},
 ) (*jsonOutput[[]codexcloud.HomeStatus], error) {
+	// CLI direct-read wake relies on this route staying outside archive freshness probes.
 	rows := []codexcloud.HomeStatus{}
 	if s.codexCloudStatus != nil {
 		rows = s.codexCloudStatus.Snapshot()

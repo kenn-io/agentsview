@@ -79,6 +79,7 @@ func newJunieSourceSetWithCache(
 ) junieSourceSet {
 	return junieSourceSet{
 		JSONLSourceSet: NewDirectoryJSONLSourceSet(AgentJunie, roots,
+			WithPrepareDiscovery(indexCache.prepareDiscovery),
 			WithIncludePath(func(_, path string) bool {
 				return filepath.Base(path) == "events.jsonl"
 			}),
@@ -92,23 +93,12 @@ func newJunieSourceSetWithCache(
 	}
 }
 
-func (s junieSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
-	return collectDiscoveredSources(ctx, s.DiscoverEach)
-}
-
-func (s junieSourceSet) DiscoverEach(
-	ctx context.Context, yield func(SourceRef) error,
-) error {
-	if err := s.refreshJunieIndexes(ctx); err != nil {
-		return err
-	}
-	return s.JSONLSourceSet.DiscoverEach(ctx, yield)
-}
-
 func (s junieSourceSet) FindSource(
 	ctx context.Context, req FindSourceRequest,
 ) (SourceRef, bool, error) {
-	source, found, err := s.JSONLSourceSet.FindSource(ctx, req)
+	lookup := s.JSONLSourceSet
+	lookup.options.PrepareDiscovery = nil
+	source, found, err := lookup.FindSource(ctx, req)
 	if err != nil || !found {
 		return source, found, err
 	}
@@ -260,7 +250,9 @@ func (s junieSourceSet) Fingerprint(
 	}
 	inode, device := sourceFileIdentity(info)
 	h := sha256.New()
-	if _, err := io.Copy(h, ctxio.Reader{Context: ctx, Reader: f}); err != nil {
+	n, err := io.Copy(h, ctxio.Reader{Context: ctx, Reader: f})
+	recordContentRead(ctx, n)
+	if err != nil {
 		return SourceFingerprint{}, fmt.Errorf("hash %s: %w", src.Path, err)
 	}
 	fingerprint := SourceFingerprint{
@@ -314,30 +306,29 @@ func changedJunieSummaryIDs(
 	return changed
 }
 
-func (s junieSourceSet) refreshJunieIndexes(ctx context.Context) error {
-	for _, root := range s.roots {
-		indexPath := filepath.Join(root, "index.jsonl")
-		snapshot, present, err := loadJunieIndexSnapshot(
-			ctx, indexPath, openJunieRoot,
-		)
-		if err != nil {
-			if !errors.Is(err, errInvalidJunieIndex) {
-				return err
-			}
-			// Keep the last complete snapshot. A root without one will fail
-			// its own fingerprint reads without blocking healthy roots.
-			log.Printf("Junie index refresh: %v", err)
-			continue
+func (c *junieIndexCache) prepareDiscovery(ctx context.Context, preparation JSONLDiscoveryPreparation) error {
+	root := preparation.Root
+	indexPath := filepath.Join(root, "index.jsonl")
+	snapshot, present, err := loadJunieIndexSnapshot(ctx, indexPath, openJunieRoot)
+	if err != nil {
+		if !errors.Is(err, errInvalidJunieIndex) {
+			return err
 		}
-		s.indexCache.mu.Lock()
-		state := s.indexCache.stateLocked(root)
-		if !present {
-			snapshot = map[string]junieIndexSummary{}
-		}
-		state.watchSummaries = snapshot
-		state.activeSummaries = snapshot
-		s.indexCache.mu.Unlock()
+		// Keep the last complete snapshot. A root without one will fail
+		// its own fingerprint reads without blocking healthy roots.
+		log.Printf("Junie index refresh: %v", err)
+		return nil
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	state := c.stateLocked(root)
+	if !present {
+		snapshot = map[string]junieIndexSummary{}
+	}
+	if preparation.FullRoot {
+		state.watchSummaries = snapshot
+	}
+	state.activeSummaries = snapshot
 	return nil
 }
 
@@ -462,7 +453,7 @@ func loadJunieIndexSnapshot(
 	if err := lr.Err(); err != nil {
 		return nil, false, fmt.Errorf("reading Junie index %s: %w", path, err)
 	}
-	if lr.skippedOversized {
+	if lr.SkippedLines() > 0 {
 		return nil, false, fmt.Errorf("%w %s: record exceeds %d bytes", errInvalidJunieIndex, path, maxLineSize)
 	}
 	return summaries, true, nil

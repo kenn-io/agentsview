@@ -32,6 +32,7 @@ func TestUsageSessionCoveringIndexColumns(t *testing.T) {
 	want := []string{
 		"session_id", "ordinal", "timestamp", "role", "model",
 		"provider_id", "claude_message_id", "claude_request_id", "token_usage", "source_uuid",
+		"usage_output_tokens", "usage_web_search_requests",
 	}
 	assert.Equal(t, want, got)
 }
@@ -141,6 +142,7 @@ func TestUsageIndexesMigration(t *testing.T) {
 	require.Equal(t, []string{
 		"session_id", "ordinal", "timestamp", "role", "model",
 		"provider_id", "claude_message_id", "claude_request_id", "token_usage", "source_uuid",
+		"usage_output_tokens", "usage_web_search_requests",
 	}, columns)
 	assertUsageIndexColumns(t, d, "idx_messages_activity_timestamp",
 		[]string{"timestamp", "session_id", "ordinal", "model"})
@@ -240,4 +242,47 @@ func requireIndexPresence(t *testing.T, path, name string, want int) {
 	).Scan(&got)
 	requireNoError(t, err, "query sqlite_master")
 	require.Equal(t, want, got, "index %s presence", name)
+}
+
+// Archives created before request IDs became optional carry a Claude snapshot
+// index that excludes rows without one. Reopening must replace it so lookups
+// by message ID alone can use the index.
+func TestClaudeSnapshotIndexMigratesFromRequestIDPredicate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	d, err := Open(t.Context(), path)
+	require.NoError(t, err)
+	d.Close()
+
+	conn, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `DROP INDEX idx_messages_claude_snapshot`)
+	require.NoError(t, err)
+	_, err = conn.ExecContext(t.Context(), `CREATE INDEX idx_messages_claude_snapshot
+		ON messages(claude_message_id, claude_request_id,
+		            timestamp, session_id, ordinal)
+		WHERE token_usage != '' AND model != '' AND model != '<synthetic>'
+		  AND claude_message_id != '' AND claude_request_id != ''`)
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	d, err = Open(t.Context(), path)
+	require.NoError(t, err)
+	defer d.Close()
+	insertSession(t, d, "s1", "proj", func(s *Session) { s.Agent = "claude" })
+	insertMessages(t, d, Message{
+		SessionID: "s1", Ordinal: 0, Role: "assistant", Content: "x",
+		Timestamp: "2026-06-16T10:30:00Z", Model: "claude-sonnet-4-20250514",
+		TokenUsage:      json.RawMessage(`{"input_tokens":1,"output_tokens":2}`),
+		ClaudeMessageID: "msg-without-request",
+	})
+
+	var indexed int
+	require.NoError(t, d.getReader().QueryRow(t.Context(),
+		`SELECT count(*) FROM messages
+		 INDEXED BY idx_messages_claude_snapshot
+		 WHERE claude_message_id = 'msg-without-request'
+		   AND claude_message_id != ''
+		   AND token_usage != '' AND model != '' AND model != '<synthetic>'`,
+	).Scan(&indexed))
+	assert.Equal(t, 1, indexed)
 }

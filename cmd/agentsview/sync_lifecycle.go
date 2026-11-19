@@ -47,6 +47,9 @@ func completeWorkerStartupReconciliation(
 		// Hand the failed gap reconciliation to the watcher's retry queue before
 		// dispatch opens, as the original inline startup path did.
 		queueRetry(gapReconciliationRetryBatch(gapErr))
+		if deferred, ok := gapErr.(interface{ ReconciliationRetryDeferOnly() bool }); ok && deferred.ReconciliationRetryDeferOnly() {
+			gapErr = nil
+		}
 	}
 	record(workerStats, gapErr)
 

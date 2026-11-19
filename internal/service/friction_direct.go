@@ -159,7 +159,30 @@ func (b *directBackend) FrictionPatterns(
 			FirstSeenDate: p.FirstSeenDate, LastSeenDate: p.LastSeenDate,
 			OccurrenceCount: p.OccurrenceCount, SessionCount: p.SessionCount,
 			LastSubjectID: p.LastSubjectID, LastOrdinal: p.LastOrdinal,
+			Issue: frictionIssueView(p.Issue), Filing: frictionFilingView(p.Filing),
 		})
 	}
 	return page, nil
+}
+
+func frictionIssueView(l *db.FrictionIssueLink) *FrictionIssueView {
+	if l == nil {
+		return nil
+	}
+	return &FrictionIssueView{
+		QualifiedID: l.QualifiedID, WebURL: l.WebURL, IssueUID: l.IssueUID,
+		Source: l.Source, LinkedAt: l.LinkedAt.UTC(),
+	}
+}
+
+func frictionFilingView(st *db.FrictionFilingState) *FrictionFilingView {
+	if st == nil {
+		return nil
+	}
+	v := &FrictionFilingView{State: st.State, Attempts: st.Attempts, LastError: st.LastError}
+	if st.NextAttemptAt != nil {
+		next := st.NextAttemptAt.UTC()
+		v.NextAttemptAt = &next
+	}
+	return v
 }

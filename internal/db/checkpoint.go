@@ -167,6 +167,34 @@ func (db *DB) UpsertParserCheckpoint(ctx context.Context,
 	return tx.Commit()
 }
 
+// RecordSourceTouch stores a new modified time for a session whose source
+// bytes are proven unchanged, so later passes skip it by stat alone. The
+// checkpoint, when one exists, moves with the session row: the checkpoint gate
+// rejects a checkpoint whose modified time differs from the row's.
+func (db *DB) RecordSourceTouch(ctx context.Context,
+	sessionID string, mtime, changeTime int64,
+) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	tx, err := db.getWriter().Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("beginning source touch tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE sessions SET file_mtime = ? WHERE id = ?`, mtime, sessionID,
+	); err != nil {
+		return fmt.Errorf("recording source touch %s: %w", sessionID, err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE parser_checkpoints SET file_mtime = ?, file_change_time = ?
+		 WHERE session_id = ?`, mtime, changeTime, sessionID,
+	); err != nil {
+		return fmt.Errorf("recording checkpoint touch %s: %w", sessionID, err)
+	}
+	return tx.Commit()
+}
+
 func upsertParserCheckpointTx(
 	tx *sql.Tx, cp ParserCheckpoint, blobs ParserCheckpointBlobs,
 ) error {

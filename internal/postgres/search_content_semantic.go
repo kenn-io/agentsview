@@ -104,7 +104,7 @@ func (s *Store) semanticAllowedSessionIDsPG(
 	}
 	sessionFilter := db.SemanticContentSessionFilter(f)
 	sessionFilter.ExcludeActiveSince = time.Time{}
-	where, args := buildPGSessionBaseFilter(sessionFilter)
+	where, args := buildPGSessionBaseFilter(sessionFilter, s.sessionDialect())
 	where, args = appendExcludeSessionIDsPG(where, args, "id", f.ExcludeSessionIDs)
 	b := db.NewQueryBuilder(db.PostgresQueryDialect(), len(args))
 	activity := "TRUE"
@@ -179,8 +179,8 @@ func (s *Store) enrichSemanticHitsPG(
 	const query = `
 SELECT m.session_id, s.project, s.agent, s.machine, COALESCE(s.display_name, s.session_name), m.role, m.ordinal,
        m.timestamp, m.content, COALESCE(m.dialogue_text, m.content),
-       COALESCE(s.transcript_revision, ''),
-       COALESCE(s.relationship_type, ''), COALESCE(s.parent_session_id, ''),
+       s.transcript_revision,
+       s.relationship_type, COALESCE(s.parent_session_id, ''),
        m.is_sidechain
   FROM (SELECT unnest($1::text[]) AS session_id,
                unnest($2::int[]) AS ordinal) h

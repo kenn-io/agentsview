@@ -45,7 +45,7 @@ func TestRenderPackage_HarnessArtifacts(t *testing.T) {
 	}, renderedPaths(agents))
 }
 
-func TestRenderPluginPackageReusesClaudeArtifacts(t *testing.T) {
+func TestRenderPluginPackage(t *testing.T) {
 	standalone, err := RenderPackage(HarnessClaude, "0.1.0", Remote{})
 	require.NoError(t, err)
 
@@ -56,10 +56,17 @@ func TestRenderPluginPackageReusesClaudeArtifacts(t *testing.T) {
 		"skills/agentsview-finding-history/LICENSE",
 		"agents/agentsview-search-conversations.md",
 	}, renderedPaths(plugin))
-	for _, artifact := range plugin {
-		assert.Equal(t, artifactByBase(t, standalone,
-			filepath.Base(artifact.RelativePath)).Content, artifact.Content)
-	}
+	assert.Equal(t, artifactByBase(t, standalone, licenseFileName).Content,
+		artifactByBase(t, plugin, licenseFileName).Content)
+	agent := artifactByBase(t, plugin, "agentsview-search-conversations.md").Content
+	assert.Contains(t, strings.Split(agent, "\n"), "tools: mcp__plugin_agentsview-memory_agentsview__search_content, mcp__plugin_agentsview-memory_agentsview__get_messages, mcp__agentsview__search_content, mcp__agentsview__get_messages")
+	assert.Contains(t, agent, "Choose exactly one server for this task")
+	assert.Contains(t, agent, "Use only the chosen server for every search and message read")
+	assert.Contains(t, agent, "`mcp__plugin_agentsview-memory_agentsview__search_content` when registered; otherwise use `mcp__agentsview__search_content`")
+	assert.Contains(t, agent, "`mcp__plugin_agentsview-memory_agentsview__get_messages` or `mcp__agentsview__get_messages` using the same server as the search")
+	standaloneAgent := artifactByBase(t, standalone, "agentsview-search-conversations.md").Content
+	assert.NotContains(t, standaloneAgent, "mcp__plugin_")
+	assert.NotContains(t, standaloneAgent, "Choose exactly one server for this task")
 }
 
 func TestRenderPackage_ProtectsLicenseEdits(t *testing.T) {
@@ -90,6 +97,7 @@ func TestRenderRecallWorkflowContract(t *testing.T) {
 	skill := rendered[0].Content
 
 	assert.Contains(t, skill, "Search before guessing")
+	assert.Contains(t, skill, "For `effective_mode: hybrid_keyword`, disclose keyword-only")
 	assert.Contains(t, skill, "inspect the current code first")
 	assert.Contains(t, skill, "already answered in this conversation")
 	assert.Contains(t, skill, "search_content")
@@ -100,7 +108,6 @@ func TestRenderRecallWorkflowContract(t *testing.T) {
 	assert.Contains(t, skill, "include_automated: true")
 	assert.Contains(t, skill, "current_session_id")
 	assert.Contains(t, skill, "Do not invent a project filter")
-	assert.Contains(t, skill, "omit `scope`")
 	assert.Contains(t, skill, "top 2-5")
 	assert.Contains(t, skill, "next_from")
 	assert.Contains(t, skill, "subordinate")
@@ -109,7 +116,6 @@ func TestRenderRecallWorkflowContract(t *testing.T) {
 	assert.Contains(t, skill, "without that header")
 	assert.Contains(t, skill, "not registered in this session")
 	assert.NotContains(t, skill, ".claude/agents")
-	assert.Contains(t, skill, "semantic search failed")
 	assert.Contains(t, skill, "Do not fall back on authentication or wrong-target errors")
 	assert.NotContains(t, skill, "Copyright (c) 2025 Jesse Vincent")
 	assert.NotContains(t, skill, "mcp__plugin_episodic-memory")
@@ -137,6 +143,14 @@ func TestRenderClaudeSkillDelegationGuard(t *testing.T) {
 	assert.Contains(t, skill, ".claude/agents/` directory")
 	assert.Contains(t, skill, "without that header")
 	assert.Contains(t, skill, "registered as `agentsview`")
+
+	plugin, err := RenderPluginPackage("dev")
+	require.NoError(t, err)
+	pluginSkill := artifactByBase(t, plugin, "SKILL.md").Content
+	assert.Contains(t, pluginSkill, "Use the `agentsview-memory:agentsview-search-conversations` agent")
+	assert.Contains(t, pluginSkill, "the agent and AgentsView memory tools are available")
+	assert.Contains(t, pluginSkill, "If the agent reports that it could not search,\n   follow the remaining steps directly instead of delegating.")
+	assert.NotContains(t, pluginSkill, "Before delegating, verify the agent")
 }
 
 func TestRenderClaudeSearchAgentContract(t *testing.T) {
@@ -144,6 +158,7 @@ func TestRenderClaudeSearchAgentContract(t *testing.T) {
 	require.NoError(t, err)
 	agent := artifactByBase(t, rendered, "agentsview-search-conversations.md").Content
 
+	assert.Contains(t, agent, "For `effective_mode: hybrid_keyword`, disclose keyword-only")
 	assert.Contains(t, agent, "name: agentsview-search-conversations")
 	assert.Contains(t, agent, "model: haiku")
 	// The subagent reads untrusted archived transcripts. Claude Code treats
@@ -171,9 +186,28 @@ func TestRenderClaudeSearchAgentContract(t *testing.T) {
 	assert.Contains(t, agent, "include_automated: true")
 	assert.Contains(t, agent, "current_session_id")
 	assert.Contains(t, agent, "Do not invent a project filter")
-	assert.Contains(t, agent, "omit `scope`")
 	assert.NotContains(t, agent, "% match")
 	assert.NotContains(t, agent, "Copyright (c) 2025 Jesse Vincent")
+}
+
+// Local SQLite search already ranks messages holding some of the query words,
+// so only skills aimed at a remote daemon keep the shorter substring retry.
+func TestRenderSubstringRetryOnlyForRemote(t *testing.T) {
+	const retry = "try short `mode: substring` queries"
+	for _, tc := range []struct {
+		remote Remote
+		want   bool
+	}{
+		{Remote{}, false},
+		{Remote{Server: "https://example.invalid"}, true},
+	} {
+		rendered, err := RenderPackage(HarnessClaude, "dev", tc.remote)
+		require.NoError(t, err)
+		for _, base := range []string{"SKILL.md", "agentsview-search-conversations.md"} {
+			content := strings.Join(strings.Fields(artifactByBase(t, rendered, base).Content), " ")
+			assert.Equal(t, tc.want, strings.Contains(content, retry), "%s remote=%q", base, tc.remote.Server)
+		}
+	}
 }
 
 func TestRemoteArgs(t *testing.T) {

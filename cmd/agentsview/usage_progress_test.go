@@ -54,9 +54,9 @@ func TestUsageCommandsDeferStartupSyncExceptStatusline(t *testing.T) {
 			captureStdout(t, func() {
 				switch command {
 				case "daily":
-					runUsageDaily(UsageDailyConfig{JSON: true, Timezone: "UTC"})
+					runUsageDaily(t.Context(), UsageDailyConfig{JSON: true, Timezone: "UTC"})
 				case "statusline":
-					runUsageStatusline(UsageStatuslineConfig{JSON: true})
+					runUsageStatusline(t.Context(), UsageStatuslineConfig{JSON: true})
 				case "session usage":
 					cmd := sessionUsageCommand(t, "session", "usage", "codex:session-a")
 					_, _, err := sessionUsageDataForCommand(cmd, "codex:session-a")

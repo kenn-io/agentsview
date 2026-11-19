@@ -28,7 +28,7 @@ states, and acceptance criteria.
   resolved UX decision proves that a backend change is necessary.
 - Preserve observable behavior across SQLite and PostgreSQL/CockroachDB where
   the workflow is supported. Record explicit read-only behavior for PostgreSQL
-  and DuckDB views instead of assuming SQLite mutation APIs exist there.
+  views instead of assuming SQLite mutation APIs exist there.
 - Suggestions may reduce path entry, but Agents View must never apply a project
   mapping rule without an explicit user action.
 - Consult `mattpocock-skills:grilling` and `mattpocock-skills:domain-modeling`

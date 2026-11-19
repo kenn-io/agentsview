@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -136,7 +137,7 @@ func TestReconciliationSpoolFallsBackForOversizedSourceState(t *testing.T) {
 	assert.Empty(t, page[0].SourceState.Payload)
 }
 
-func TestReconciliationSpoolDSNEscapesPortablePaths(t *testing.T) {
+func TestSQLiteScratchDSNEscapesPortablePaths(t *testing.T) {
 	tests := []struct {
 		name string
 		path string
@@ -145,23 +146,23 @@ func TestReconciliationSpoolDSNEscapesPortablePaths(t *testing.T) {
 		{
 			name: "posix special characters",
 			path: "/tmp/archive #?%/reconcile.db",
-			want: "file:/tmp/archive%20%23%3F%25/reconcile.db",
+			want: "file:/tmp/archive%20%23%3F%25/reconcile.db?_stmt_cache_size=64",
 		},
 		{
 			name: "windows drive",
 			path: `C:\Data\archive #?%\reconcile.db`,
-			want: "file:/C:/Data/archive%20%23%3F%25/reconcile.db",
+			want: "file:/C:/Data/archive%20%23%3F%25/reconcile.db?_stmt_cache_size=64",
 		},
 		{
 			name: "windows UNC",
 			path: `\\server\share\archive #%\reconcile.db`,
-			want: `\\server\share\archive #%\reconcile.db`,
+			want: `\\server\share\archive #%\reconcile.db?_stmt_cache_size=64`,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, reconciliationSpoolDSN(tc.path))
+			assert.Equal(t, tc.want, sqliteScratchDSN(tc.path))
 		})
 	}
 }
@@ -246,6 +247,75 @@ func TestReconciliationSpoolNonAuthoritativeScopesStayPageBounded(t *testing.T) 
 	assert.Equal(t, reconciliationPageSize,
 		spool.Metrics().MaxNonAuthoritativeScopeRows,
 		"disk-backed cardinality may grow, but one retained write batch must stay page-bounded")
+}
+
+func TestReconciliationSpoolProtectsOnlyBlockedDescendants(t *testing.T) {
+	root := t.TempDir()
+	spool, err := newReconciliationSpool(t.Context(), filepath.Join(root, "sessions.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, spool.CloseAndRemove(t.Context())) })
+	const agent parser.AgentType = "filesystem"
+	blocked := filepath.Join(root, "blocked")
+	leaf := filepath.Join(root, "source.jsonl")
+	require.NoError(t, spool.AddNonAuthoritativeScopes(t.Context(), []reconciliationSourceScope{
+		{Provider: agent, Path: blocked, Subtree: true},
+		{Provider: agent, Path: leaf},
+	}))
+	require.NoError(t, spool.AddNonAuthoritativeScopes(t.Context(), []reconciliationSourceScope{
+		{Provider: agent, Path: blocked},
+	}))
+	for _, tc := range []struct {
+		path string
+		want bool
+	}{
+		{blocked, true},
+		{filepath.Join(blocked, "child", "session.jsonl"), true},
+		{blocked + "-sibling", false},
+		{blocked + "#sibling.jsonl", false},
+		{filepath.Join(blocked+"#sibling", "session.jsonl"), false},
+		{leaf, true},
+		{leaf + "#sibling", false},
+		{filepath.Join(leaf, "child.jsonl"), false},
+		{filepath.Join(root, "healthy.jsonl"), false},
+	} {
+		got, err := spool.ContainsNonAuthoritativeScope(t.Context(), agent, tc.path)
+		require.NoError(t, err)
+		assert.Equal(t, tc.want, got, tc.path)
+	}
+}
+
+func TestReconciliationSpoolRelativeSubtreeExclusions(t *testing.T) {
+	cwd, err := os.Getwd()
+	require.NoError(t, err)
+	windows := runtime.GOOS == "windows"
+	for _, tc := range []struct {
+		name, root, path string
+		want             bool
+	}{
+		{"native relative", filepath.Join("sessions", "blocked"), filepath.Join("sessions", "blocked", "session.jsonl"), true},
+		{"relative scope absolute source", filepath.Join("sessions", "blocked"), filepath.Join(cwd, "sessions", "blocked", "session.jsonl"), true},
+		{"Windows separators", `sessions\blocked`, `sessions\blocked\session.jsonl`, windows},
+		{"mixed separators", `sessions\blocked`, "sessions/blocked/session.jsonl", windows},
+		{"Windows case variants", `Sessions\Blocked`, "SESSIONS/blocked/session.jsonl", windows},
+		{"literal backslash component", `sessions\blocked`, filepath.Join(`sessions\blocked`, "session.jsonl"), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spool, err := newReconciliationSpool(t.Context(), filepath.Join(t.TempDir(), "sessions.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, spool.CloseAndRemove(t.Context())) })
+			const agent parser.AgentType = "filesystem"
+			require.NoError(t, spool.AddNonAuthoritativeScopes(t.Context(), []reconciliationSourceScope{{
+				Provider: agent, Path: tc.root, Subtree: true,
+			}}))
+			var protected []bool
+			for _, path := range []string{tc.root, tc.path} {
+				got, err := spool.ContainsNonAuthoritativeScope(t.Context(), agent, path)
+				require.NoError(t, err)
+				protected = append(protected, got)
+			}
+			assert.Equal(t, []bool{true, tc.want}, protected)
+		})
+	}
 }
 
 func TestReconciliationSpoolCancellationAndClosedErrors(t *testing.T) {

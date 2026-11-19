@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -391,6 +392,77 @@ type pairwiseErrorStore struct {
 	err          error
 }
 
+type pairwiseCountingStore struct {
+	db.Store
+	reads    atomic.Int32
+	filtered atomic.Int32
+}
+
+func (s *pairwiseCountingStore) GetDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyUsageResult, error) {
+	s.reads.Add(1)
+	if len(f.ProjectFilterLabels()) > 0 {
+		s.filtered.Add(1)
+	}
+	return s.Store.GetDailyUsage(ctx, f)
+}
+
+func TestDirectBackend_UsagePairwiseComparison_UsesRankingSides(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	seedPairwiseUsageFixture(t, d)
+	var prepares atomic.Int32
+	d.SetUsageWindowPrepareForTest(func(context.Context) { prepares.Add(1) })
+	store := &pairwiseCountingStore{Store: d}
+	backend := service.NewReadOnlyBackend(store)
+	_, err := backend.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
+		From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, store.reads.Load())
+	assert.EqualValues(t, 1, prepares.Load())
+}
+
+func TestDirectBackend_UsagePairwiseComparison_ReadsInexactSide(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	for _, row := range []struct{ id, project, model, at string }{
+		{"first", "alpha", "model-a", "2024-06-01T09:00:00Z"},
+		{"second", "beta", "model-b", "2024-06-01T10:00:00Z"},
+	} {
+		dbtest.SeedSessionWithMessages(t, d, row.id, row.project, []db.Message{{
+			SessionID: row.id, Ordinal: 0, Role: "assistant", Timestamp: row.at,
+			Model: row.model, SourceUUID: "shared", TokenUsage: []byte(`{"input_tokens":100}`),
+		}}, func(s *db.Session) { s.Agent = "codex"; s.StartedAt = &row.at })
+	}
+	started := "2024-06-01T11:00:00Z"
+	dbtest.SeedSessionWithMessages(t, d, "third", "beta", []db.Message{{
+		SessionID: "third", Ordinal: 0, Role: "assistant", Timestamp: started,
+		Model: "model-c", TokenUsage: []byte(`{"input_tokens":50}`),
+	}}, func(s *db.Session) { s.Agent = "codex"; s.StartedAt = &started })
+	ranking, err := d.GetDailyUsage(t.Context(), db.UsageFilter{From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", Breakdowns: true, PairwiseSides: true})
+	require.NoError(t, err)
+	require.NotNil(t, ranking.Pairwise)
+	_, exact := ranking.Pairwise.Side("project", []string{"beta"})
+	require.False(t, exact, "%+v", ranking.Pairwise)
+	var betaKey string
+	for _, project := range ranking.Daily[0].ProjectBreakdowns {
+		if project.Project == "beta" {
+			betaKey = project.ProjectKey
+		}
+	}
+	require.NotEmpty(t, betaKey)
+	store := &pairwiseCountingStore{Store: d}
+	backend := service.NewReadOnlyBackend(store)
+	for i := range 2 {
+		result, err := backend.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
+			From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", IncludeOneShot: true, IncludeAutomated: true,
+			LeftDimension: "model", LeftValue: "model-a", RightDimension: "project", RightValue: betaKey, FallbackToDefault: true,
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 150, result.Right.TotalTokens)
+		assert.EqualValues(t, 2*(i+1), store.reads.Load())
+		assert.EqualValues(t, i+1, store.filtered.Load())
+	}
+}
+
 func (s *pairwiseErrorStore) GetDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyUsageResult, error) {
 	if f.Model == "claude-sonnet-4-20250514" {
 		close(s.leftStarted)
@@ -424,6 +496,28 @@ func TestDirectBackend_UsagePairwiseComparison_ParallelReadsCancelOnError(t *tes
 	require.ErrorIs(t, err, readErr)
 	assert.Nil(t, res)
 	assert.ErrorIs(t, <-store.canceled, context.Canceled)
+}
+
+func TestDirectBackend_UsagePairwiseComparison_PreparesOnce(t *testing.T) {
+	for _, selection := range []string{"explicit"} {
+		t.Run(selection, func(t *testing.T) {
+			d := dbtest.OpenTestDB(t)
+			seedPairwiseUsageFixture(t, d)
+			var prepares atomic.Int32
+			d.SetUsageWindowPrepareForTest(func(context.Context) { prepares.Add(1) })
+			be := service.NewDirectBackend(d, nil)
+			req := service.UsagePairwiseComparisonRequest{
+				From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", IncludeOneShot: true,
+			}
+			if selection == "explicit" {
+				req.LeftDimension, req.LeftValue = "model", "claude-sonnet-4-20250514"
+				req.RightDimension, req.RightValue = "model", "gpt-4o"
+			}
+			_, err := be.UsagePairwiseComparison(t.Context(), req)
+			require.NoError(t, err)
+			assert.Equal(t, int32(1), prepares.Load())
+		})
+	}
 }
 
 func TestDirectBackend_UsagePairwiseComparison_ModelVsModel(t *testing.T) {
@@ -926,6 +1020,8 @@ func TestDirectBackend_UsagePairwiseComparison_ProjectDefault(t *testing.T) {
 			From: "2024-06-01", To: "2024-06-01", Timezone: "UTC", Breakdowns: true,
 		})
 		require.NoError(t, err)
+		// Oversized rankings omit side evidence and require filtered reads.
+		ranking.Pairwise = nil
 		store := &pairwiseRankingStore{Store: d, filters: make(chan db.UsageFilter, 3), ranking: ranking}
 		res, err := service.NewReadOnlyBackend(store).UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{
 			Timezone: "UTC", Breakdowns: new(false), IncludeOneShot: true,

@@ -13,7 +13,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-var findCodexS3ParentSessionURIs = parser.FindCodexS3ParentSessionURIs
+var findCodexS3ParentSessionObjects = parser.FindCodexS3ParentSessionObjects
 
 func s3SessionIDPrefix(machine string) string {
 	if machine == "" {
@@ -135,8 +135,10 @@ func localCodexSessionIndexPath(sessionPath string) string {
 // thread's own rollout and its revert pages) next to the child, so the parser
 // can recognize replayed turns. A partial set would end the replay early, so
 // any failed download removes the files already written and leaves the parent
-// unresolved.
+// unresolved. When ctx carries a pass-scoped parent cache, children of the same
+// parent reuse one download.
 func hydrateS3CodexParent(
+	ctx context.Context,
 	tempDir, childPath, configuredRoot, childURI string,
 	p parser.S3Provider,
 ) bool {
@@ -144,14 +146,17 @@ func hydrateS3CodexParent(
 	if !resolutionNeeded {
 		return false
 	}
+	cache := s3CodexParentCacheFor(ctx)
 	var written []string
-	for _, parentURI := range findCodexS3ParentSessionURIs(
+	for _, parent := range findCodexS3ParentSessionObjects(
 		configuredRoot, childURI, parentID,
 	) {
-		if parentURI == childURI {
+		if parent.URI == childURI {
 			continue
 		}
-		parentPath, ok := hydrateS3CodexParentObject(tempDir, parentURI, p)
+		parentPath, ok := hydrateS3CodexParentObject(
+			ctx, cache, tempDir, parent, p,
+		)
 		if !ok {
 			for _, path := range written {
 				_ = os.Remove(path)
@@ -164,32 +169,21 @@ func hydrateS3CodexParent(
 }
 
 func hydrateS3CodexParentObject(
-	tempDir, parentURI string, p parser.S3Provider,
+	ctx context.Context, cache *s3CodexParentCache,
+	tempDir string, parent parser.S3Object, p parser.S3Provider,
 ) (string, bool) {
 	relPath, err := safeS3TempRelPath(parser.DiscoveredFile{
 		Agent: parser.AgentCodex,
-		Path:  parentURI,
+		Path:  parent.URI,
 	}, p)
 	if err != nil {
 		return "", false
 	}
-	rc, err := fetchS3Object(parentURI)
-	if err != nil {
-		return "", false
-	}
-	defer rc.Close()
 	parentPath := filepath.Join(tempDir, filepath.Base(relPath))
 	if err := os.MkdirAll(filepath.Dir(parentPath), 0o755); err != nil {
 		return "", false
 	}
-	out, err := os.Create(parentPath)
-	if err != nil {
-		return "", false
-	}
-	_, copyErr := io.Copy(out, rc)
-	closeErr := out.Close()
-	if copyErr != nil || closeErr != nil {
-		_ = os.Remove(parentPath)
+	if err := cache.materialize(ctx, parent, parentPath); err != nil {
 		return "", false
 	}
 	return parentPath, true
@@ -272,7 +266,7 @@ func (e *Engine) processS3Session(
 					sess.Project != "" &&
 					!parser.NeedsProjectReparse(sess.Project) {
 					var indexErr error
-					indexNameChanged, indexErr = e.s3CodexIndexSessionNameChanged(file, uuid)
+					indexNameChanged, indexErr = e.s3CodexIndexSessionNameChanged(ctx, file, uuid)
 					if indexErr != nil {
 						return processResult{
 							err:         indexErr,
@@ -360,7 +354,7 @@ func (e *Engine) processS3Session(
 		if file.ProviderSource != nil {
 			configuredRoot = file.ProviderSource.ConfiguredRoot
 		}
-		hydrateS3CodexParent(dir, tmp, configuredRoot, file.Path, p)
+		hydrateS3CodexParent(ctx, dir, tmp, configuredRoot, file.Path, p)
 		indexPath, err := hydrateS3CodexSessionIndex(tmp, file.Path)
 		if err != nil {
 			return processResult{err: err, noCacheSkip: true, retentionLease: lease}
@@ -550,9 +544,15 @@ func (e *Engine) parseMaterializedS3Source(
 	providerFailureCount := providerWideFailureCount
 	retrySessionIDs := make(map[string]bool)
 	deferredCount := 0
+	var retryCauses []retryCause
 	for _, result := range outcome.Results {
 		if result.DataVersion == parser.DataVersionNeedsRetry {
 			retrySessionIDs[result.Result.Session.ID] = true
+			retryCauses = append(retryCauses, retryCause{
+				sessionID: result.Result.Session.ID,
+				path:      file.Path,
+				reason:    result.RetryReason,
+			})
 			if isCodexFormatAgent(file.Agent) {
 				deferredCount++
 			} else {
@@ -577,6 +577,7 @@ func (e *Engine) parseMaterializedS3Source(
 		providerWideFailureCount: providerWideFailureCount,
 		noCacheSkip:              !providerOutcomeAllowsCleanSkipCache(outcome),
 		deferredCount:            deferredCount,
+		retryCauses:              retryCauses,
 	}
 	for i := range res.results {
 		res.results[i].Session.File.Path = file.Path

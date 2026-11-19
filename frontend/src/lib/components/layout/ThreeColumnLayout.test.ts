@@ -192,6 +192,7 @@ describe("ThreeColumnLayout", () => {
       friction_available: false,
       friction_build_allowed: false,
       insight_generation_available: false,
+      kata_available: false,
       version: "dev",
       commit: "unknown",
       build_date: "",
@@ -222,6 +223,7 @@ describe("ThreeColumnLayout", () => {
       friction_available: false,
       friction_build_allowed: false,
       insight_generation_available: false,
+      kata_available: false,
       version: "dev",
       commit: "unknown",
       build_date: "",
@@ -279,6 +281,7 @@ describe("ThreeColumnLayout", () => {
       friction_build_allowed: true,
       friction_readable: true,
       session_stats_available: false,
+      kata_available: false,
       version: "dev",
       commit: "unknown",
       build_date: "",
@@ -388,7 +391,7 @@ describe("ThreeColumnLayout", () => {
   });
 
   it("dragging clamps to the computed minimum/max using mocked layout width", async () => {
-    const layoutWidth = 760;
+    const layoutWidth = 800;
 
     setViewportWidth(1280);
     ui.setSidebarWidth(SIDEBAR_WIDTH_DEFAULT);

@@ -28,6 +28,7 @@ func linkChildOutcome() rawderive.ParsedManifest {
 // The fallback is bounded to the immutable capture scope, and counts content
 // cohorts rather than duplicate proofs. Public reads must not choose a variant.
 func TestHostedCrossSourceRelationshipScope(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"unique", "equal_cohort", "ambiguous", "other_device", "other_root", "other_provider"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newProjectionFixture(t)
@@ -60,7 +61,7 @@ func TestHostedCrossSourceRelationshipScope(t *testing.T) {
 				}
 				require.NoError(t, f.sink.Project(t.Context(), f.lease(t, second), second, projectionOutcome(text)))
 			}
-			h, err := newHostedAdapter(f.runtime, f.tenant)
+			h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 			require.NoError(t, err)
 			got, err := h.GetSessionFull(t.Context(), "codex:child")
 			require.NoError(t, err)
@@ -95,11 +96,20 @@ func TestHostedCrossSourceRelationshipScope(t *testing.T) {
 				assert.Nil(t, got.ParentSessionID)
 				assert.Empty(t, got.ParentSessionIDs)
 			}
+			h.SetCursorSecret([]byte("synthetic scoped sidebar cursor"))
+			roots := 2
+			if mode == "unique" || mode == "equal_cohort" {
+				roots = 1
+			} else if mode == "ambiguous" {
+				roots = 3
+			}
+			checkHostedSidebarPages(t, h, db.SessionFilter{}, roots, nil)
 		})
 	}
 }
 
 func TestHostedCrossSourceHistoricalExactAuthority(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"removed", "excluded"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newProjectionFixture(t)
@@ -124,7 +134,7 @@ func TestHostedCrossSourceHistoricalExactAuthority(t *testing.T) {
 			p.Outcome.Results[0].Result.Session.SourceSessionID = "alternate-key"
 			p.Outcome.Results[0].Result.Session.StartedAt = time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC)
 			require.NoError(t, f.sink.Project(t.Context(), f.lease(t, alternate), alternate, p))
-			h, err := newHostedAdapter(f.runtime, f.tenant)
+			h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 			require.NoError(t, err)
 			got, err := h.GetSessionFull(t.Context(), "codex:child")
 			require.NoError(t, err)
@@ -136,6 +146,7 @@ func TestHostedCrossSourceHistoricalExactAuthority(t *testing.T) {
 }
 
 func TestHostedCrossSourceAliasAnchorLimitsHistoricalAuthority(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	own, accepted := f.acceptScoped(t, "device-a", "own", "", parser.AgentCodex, "root-a", "own.jsonl")
 	combined := projectionOutcome("historical parent")
@@ -148,7 +159,7 @@ func TestHostedCrossSourceAliasAnchorLimitsHistoricalAuthority(t *testing.T) {
 	child.Outcome.Results[0].Result.Session.ParentSessionID = anchor
 	next, _ := f.acceptScoped(t, "device-a", "removed", accepted.Receipt, parser.AgentCodex, "root-a", "own.jsonl")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, next), next, child))
-	h, err := newHostedAdapter(f.runtime, f.tenant)
+	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
 	got, err := h.GetSessionFull(t.Context(), "codex:child")
 	require.NoError(t, err)
@@ -161,6 +172,7 @@ func TestHostedCrossSourceAliasAnchorLimitsHistoricalAuthority(t *testing.T) {
 }
 
 func TestHostedCrossSourceLinkLookupsStayBounded(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	child, _ := f.acceptScoped(t, "device-a", "child", "", parser.AgentCodex, "root-a", "child.jsonl")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, child), child, linkChildOutcome()))
@@ -205,6 +217,7 @@ func TestHostedCrossSourceLinkLookupsStayBounded(t *testing.T) {
 }
 
 func TestHostedCrossSourcePluralOwnersRemainContextual(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	for _, device := range []string{"device-a", "device-b"} {
 		child, _ := f.acceptScoped(t, device, "child", "", parser.AgentCodex, "root-a", "child.jsonl")
@@ -212,7 +225,7 @@ func TestHostedCrossSourcePluralOwnersRemainContextual(t *testing.T) {
 		parent, _ := f.acceptScoped(t, device, "parent", "", parser.AgentCodex, "root-a", "parent.jsonl")
 		require.NoError(t, f.sink.Project(t.Context(), f.lease(t, parent), parent, projectionOutcome(device)))
 	}
-	h, err := newHostedAdapter(f.runtime, f.tenant)
+	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
 	_, err = h.GetSessionFull(t.Context(), "codex:portable")
 	var conflict *db.SessionIdentityError
@@ -235,13 +248,14 @@ func TestHostedCrossSourcePluralOwnersRemainContextual(t *testing.T) {
 // The owner is published once. Only its separately captured target changes,
 // including a target revision between physical reads and public edge mapping.
 func TestHostedCrossSourceTargetLifecycleAndReadRevision(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	own, _ := f.acceptScoped(t, "device-a", "owner", "", parser.AgentCodex, "root-a", "child.jsonl")
 	child := linkChildOutcome()
 	child.Outcome.Results[0].Result.Messages[1].HasToolUse = true
 	child.Outcome.Results[0].Result.Messages[1].ToolCalls[0].SubagentSessionID = "codex:portable"
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, own), own, child))
-	h, err := newHostedAdapter(f.runtime, f.tenant)
+	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
 	ownerIdentity, err := f.sink.Resolve(t.Context(), "codex:child")
 	require.NoError(t, err)
@@ -322,7 +336,7 @@ func TestHostedCrossSourceTargetLifecycleAndReadRevision(t *testing.T) {
 		duration int64
 	}
 	reads := 0
-	result, err := hostedRead(t.Context(), h, func(_ hostedRevision) (snapshot, error) {
+	result, err := hostedRead(t.Context(), h, func(h *HostedStore, _ hostedRevision) (snapshot, error) {
 		reads++
 		physical, err := h.physical.GetSessionFull(t.Context(), ownerIdentity.SessionID)
 		if err != nil {
@@ -344,8 +358,8 @@ func TestHostedCrossSourceTargetLifecycleAndReadRevision(t *testing.T) {
 		return snapshot{physical, duration}, err
 	})
 	require.NoError(t, err)
-	assert.Equal(t, 2, reads)
-	assert.Equal(t, int64(13000), result.duration)
+	assert.Equal(t, 1, reads)
+	assert.Equal(t, int64(7000), result.duration)
 	require.NotNil(t, result.session.ParentSessionID)
 	assert.Equal(t, "codex:portable", *result.session.ParentSessionID)
 	check(true, 13)
@@ -354,6 +368,7 @@ func TestHostedCrossSourceTargetLifecycleAndReadRevision(t *testing.T) {
 // A hosted raw child links to its parent through raw_session_links, so the
 // PR filter must walk that relation to keep the parent's tree.
 func TestHostedSidebarPRFilterKeepsRawChildTree(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	child, _ := f.acceptScoped(t, "device-a", "child", "", parser.AgentCodex, "root-a", "child.jsonl")
 	childOutcome := linkChildOutcome()
@@ -369,7 +384,7 @@ func TestHostedSidebarPRFilterKeepsRawChildTree(t *testing.T) {
 	call.ResultEvents = []parser.ParsedToolResultEvent{{ToolUseID: "call-1", SubagentSessionID: "codex:child", Source: "tool_result", Status: "completed", Content: "child complete"}}
 	p.Outcome.Results[0].Result.Messages[1].HasToolUse = true
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, parent), parent, p))
-	h, err := newHostedAdapter(f.runtime, f.tenant)
+	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
 
 	pr, err := db.ParsePRFilter("acme/widgets#42")

@@ -38,12 +38,12 @@ DOCS_PAGES = [
     "semantic-search",
     "semantic-search-internals",
     "recall",
+    "kata",
     "remote-access",
     "artifact-sync",
     "filesystem-sync",
     "pg-sync",
     "hosted-raw-sync",
-    "duckdb",
     "clickhouse-sync",
 ]
 

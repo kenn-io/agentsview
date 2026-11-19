@@ -176,7 +176,7 @@ func (s *Store) enrichSemanticHitChunk(
 		WITH refs AS (`+strings.Join(parts, " UNION ALL ")+`)
 		SELECT m.session_id, s.project, s.agent, s.machine, COALESCE(s.display_name, s.session_name), m.role, m.ordinal,
 			m.timestamp, m.content,
-			COALESCE(s.relationship_type, ''), COALESCE(s.parent_session_id, ''),
+			s.relationship_type, COALESCE(s.parent_session_id, ''),
 			m.is_sidechain
 		FROM refs r
 		JOIN messages m ON m.session_id = r.session_id AND m.ordinal = r.ordinal

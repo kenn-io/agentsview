@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -39,6 +38,7 @@ func classifySearchErr(t *testing.T, err error) string {
 // calls use setupContentSearch, so this parity proof executes against the
 // actual backend whenever TEST_PG_URL is available.
 func TestSearchContentSemanticErrorParity(t *testing.T) {
+	t.Parallel()
 	sqlite, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "parity.db"))
 	require.NoError(t, err, "open sqlite")
 	t.Cleanup(func() { sqlite.Close() })
@@ -62,7 +62,7 @@ func TestSearchContentSemanticErrorParity(t *testing.T) {
 		{name: "valid semantic messages-only hits capability gate", filter: db.ContentSearchFilter{Pattern: "x", Mode: "semantic", Sources: []string{"messages"}}, want: "unavailable"},
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, sqliteErr := sqlite.SearchContent(ctx, tc.filter)

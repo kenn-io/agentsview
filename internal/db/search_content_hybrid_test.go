@@ -144,6 +144,25 @@ func TestSearchContentHybridFTSSnippetUsesDialogue(t *testing.T) {
 	assert.Equal(t, "answerneedle", page.Matches[0].Snippet)
 }
 
+func TestSearchContentHybridWordSnippetWithSecret(t *testing.T) {
+	d := testDB(t)
+	if !d.HasFTS(t.Context()) {
+		t.Skip("fts5 not available")
+	}
+	secret := "AKIA7QHWN2DKR4FYPLJM"
+	content := strings.Repeat("filler ", 100) + "connecting with key " + secret
+	seedSearchSession(t, d, "s1", "proj", [][2]string{{"user", content}})
+	d.SetVectorSearcher(&fakeVectorSearcher{})
+
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
+		Pattern: "connection unrelated", Mode: "hybrid", Limit: 50,
+	})
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 1)
+	assert.Contains(t, page.Matches[0].Snippet, "connecting")
+	assert.NotContains(t, page.Matches[0].Snippet, secret)
+}
+
 // TestSearchContentHybridScoresStrictlyDescending pins that fused RRF scores
 // order the page strictly descending, with no inversions or unexpected ties
 // across a mix of a double-leg hit and single-leg (vector-only) hits.
@@ -671,13 +690,17 @@ func TestSearchContentHybridFTSLegScopeExcludedRowsRefill(t *testing.T) {
 		},
 	}})
 
-	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
-		Pattern: "zebra", Mode: "hybrid", Scope: "subordinate", Limit: 10,
-	})
-	require.NoError(t, err, "SearchContent hybrid")
-	require.Len(t, page.Matches, 1,
-		"the subordinate match past the excluded top-level rows must be fetched")
-	assert.Equal(t, "sub", page.Matches[0].SessionID)
+	for _, pattern := range []string{"zebra", `"zebra" OR "absent"`} {
+		t.Run(pattern, func(t *testing.T) {
+			page, err := d.SearchContent(t.Context(), ContentSearchFilter{
+				Pattern: pattern, Mode: "hybrid", Scope: "subordinate", Limit: 10,
+			})
+			require.NoError(t, err, "SearchContent hybrid")
+			require.Len(t, page.Matches, 1,
+				"the subordinate match past the excluded top-level rows must be fetched")
+			assert.Equal(t, "sub", page.Matches[0].SessionID)
+		})
+	}
 }
 
 // TestSearchContentHybridVectorOnlyMatchCarriesUnitRange pins the
@@ -709,4 +732,30 @@ func TestSearchContentHybridVectorOnlyMatchCarriesUnitRange(t *testing.T) {
 	assert.Equal(t, 2, m.Ordinal, "vector leg keeps its chunk anchor")
 	assert.Equal(t, [2]int{1, 2}, m.OrdinalRange)
 	assert.False(t, m.Subordinate)
+}
+
+func TestSearchContentHybridKeywordOnlyIgnoresMirrorScope(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "run", "project", func(s *Session) {
+		s.MessageCount, s.UserMessageCount = 4, 1
+	})
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "run", []Message{
+		{SessionID: "run", Ordinal: 0, Role: "user", Content: "question"},
+		{SessionID: "run", Ordinal: 1, Role: "assistant", Content: "needle haystack first"},
+		{SessionID: "run", Ordinal: 2, Role: "assistant", Content: "needle haystack second"},
+		{SessionID: "run", Ordinal: 3, Role: "assistant", Content: "needle haystack side", IsSidechain: true},
+	}))
+	// The mirror predates the sidechain flag and has narrower capped units.
+	searcher := &fakeVectorSearcher{units: []UnitRef{
+		{DocKey: "piece1", SessionID: "run", OrdinalStart: 1, OrdinalEnd: 1},
+		{DocKey: "piece2", SessionID: "run", OrdinalStart: 2, OrdinalEnd: 2},
+		{DocKey: "piece3", SessionID: "run", OrdinalStart: 3, OrdinalEnd: 3},
+	}}
+	d.SetVectorSearcher(searcher)
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{Pattern: "needle", Mode: "hybrid", KeywordOnly: true, IncludeOneShot: true, Scope: "top"})
+	require.NoError(t, err)
+	require.Len(t, page.Matches, 2)
+	for _, match := range page.Matches {
+		assert.Equal(t, [2]int{1, 2}, match.OrdinalRange)
+	}
 }

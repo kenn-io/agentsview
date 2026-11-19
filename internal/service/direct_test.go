@@ -221,6 +221,7 @@ func TestDirectBackend_Stats_CursorAttribution(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotNil(t, stats)
+	assert.Equal(t, 1, stats.Totals.SessionsAll)
 	source := requireCursorAttributionSource(t, stats)
 	assert.Equal(t, "available", source.Status)
 	assert.Equal(t, "machine_local", source.Scope)
@@ -233,6 +234,13 @@ func TestDirectBackend_Stats_CursorAttribution(t *testing.T) {
 		"claude-3.5-sonnet",
 		source.Metrics.ConversationCounts[0].Model,
 	)
+
+	outcomes, err := svc.Stats(t.Context(), service.StatsFilter{
+		Since: "28d", Agent: "cursor", OutcomesOnly: true,
+	})
+	require.NoError(t, err)
+	assert.Zero(t, outcomes.Totals)
+	assert.Nil(t, outcomes.CodeAttribution)
 }
 
 func TestDirectBackend_Stats_CursorAttributionIgnoredForNonCursorFilter(
@@ -1296,6 +1304,8 @@ func TestDirectBackend_Messages_AroundMutuallyExclusiveWithFrom(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "around is mutually exclusive with from/direction")
+	_, err = svc.Messages(t.Context(), sid, service.MessageFilter{Around: &around, CompactBoundaryOnly: true})
+	assert.ErrorIs(t, err, service.ErrAroundMutuallyExclusive)
 }
 
 // TestDirectBackend_Messages_AroundMutuallyExclusiveWithDirection is the

@@ -268,7 +268,8 @@ func (v *Verifier) longLivedStream(r *http.Request) bool {
 	if r.Method != http.MethodGet {
 		return false
 	}
-	return r.URL.Path == "/api/v1/events" || strings.HasSuffix(r.URL.Path, "/watch")
+	return r.URL.Path == "/api/v1/events" || r.URL.Path == "/api/v1/changes/stream" ||
+		strings.HasSuffix(r.URL.Path, "/watch")
 }
 
 // Public errors carry no key IDs, content, credentials or signature material.

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	corerecall "go.kenn.io/agentsview/internal/recall"
 )
@@ -99,6 +100,8 @@ type RecallQuery struct {
 	SourceRunID         string
 	SupersedesEntryID   string
 	SupersededByEntryID string
+	UpdatedSince        string
+	CreatedSince        string
 	CursorUpdatedAt     string
 	CursorID            string
 	ProbeNext           bool
@@ -211,7 +214,7 @@ func (db *DB) InsertRecallEntry(ctx context.Context, m RecallEntry) (string, err
 // copied earlier in the resync (re-synced or orphan-copied), so this normally
 // covers every entry; parser-excluded sessions are the exception. Any skipped
 // entries are logged.
-func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
+func (db *DB) CopyRecallEntriesFrom(ctx context.Context, sourcePath string) error {
 	if err := db.requireDerivedTextStorage("recall entries"); err != nil {
 		return err
 	}
@@ -220,7 +223,6 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 
 	// Pin one connection for the ATTACH/INSERT/DETACH sequence; ATTACH is
 	// connection-scoped and the pool may otherwise switch connections.
-	ctx := context.Background()
 	conn, err := db.getWriter().Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("acquiring connection: %w", err)
@@ -233,13 +235,13 @@ func (db *DB) CopyRecallEntriesFrom(sourcePath string) error {
 		return fmt.Errorf("attaching source db: %w", err)
 	}
 	defer func() {
-		_, _ = conn.ExecContext(ctx, "DETACH DATABASE old_db")
+		_, _ = execWithoutCancel(ctx, conn, "DETACH DATABASE old_db")
 	}()
 
 	if _, err := prepareCodexSessionIDMap(ctx, conn, false); err != nil {
 		return err
 	}
-	defer func() { _, _ = conn.ExecContext(ctx, dropCodexSessionIDMapSQL) }()
+	defer func() { _, _ = execWithoutCancel(ctx, conn, dropCodexSessionIDMapSQL) }()
 
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
@@ -720,13 +722,16 @@ func (db *DB) ListRecallEntries(
 	}
 	q = NormalizeRecallQuery(q)
 	where, args := buildRecallEntryWhere(q, false)
-	limit := recallLimit(q.Limit)
+	limit := RecallLimit(q.Limit)
 	if q.ProbeNext {
 		limit++
 	}
+	order := " ORDER BY updated_at DESC, id ASC LIMIT ?"
+	if q.TimeBounded() {
+		order = " ORDER BY updated_at ASC, id DESC LIMIT ?"
+	}
 	query := "SELECT " + recallBaseCols +
-		" FROM recall_entries WHERE " + where +
-		" ORDER BY updated_at DESC, id ASC LIMIT ?"
+		" FROM recall_entries WHERE " + where + order
 	args = append(args, limit)
 
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
@@ -846,7 +851,7 @@ func (db *DB) listRecallFTSCandidates(
 	ctx context.Context, q RecallQuery, terms []string,
 ) ([]RecallEntry, error) {
 	where, args := buildRecallEntryWhere(q, false)
-	limit := recallLimit(q.Limit)
+	limit := RecallLimit(q.Limit)
 	query := "SELECT " + recallBaseColsQualified +
 		" FROM recall_entries_fts" +
 		" JOIN recall_entries ON recall_entries.rowid = recall_entries_fts.rowid" +
@@ -875,7 +880,7 @@ func (db *DB) listRecallEntryLikeCandidates(
 ) ([]RecallEntry, error) {
 	where, args := buildRecallEntryWhere(q, false)
 	textWhere, textArgs := buildRecallEntryTextWhere(terms)
-	limit := recallLimit(q.Limit)
+	limit := RecallLimit(q.Limit)
 	query := "SELECT " + recallBaseCols +
 		" FROM recall_entries WHERE " + where +
 		" AND (" + textWhere + ")" +
@@ -961,7 +966,7 @@ func (db *DB) listRecallEvidenceFTSCandidates(
 ) ([]RecallEntry, error) {
 	where, args := buildRecallEntryWhere(q, false)
 	scoreExpr, scoreArgs := buildRecallEvidenceMatchScoreExpr(terms)
-	limit := recallLimit(q.Limit)
+	limit := RecallLimit(q.Limit)
 	query := "SELECT " + recallBaseColsQualified +
 		" FROM recall_evidence_fts" +
 		" JOIN recall_evidence" +
@@ -991,7 +996,7 @@ func (db *DB) listRecallEvidenceLikeCandidates(
 	where, args := buildRecallEntryWhere(q, false)
 	textWhere, textArgs := buildRecallEvidenceTextWhere(terms)
 	scoreExpr, scoreArgs := buildRecallEvidenceMatchScoreExpr(terms)
-	limit := recallLimit(q.Limit)
+	limit := RecallLimit(q.Limit)
 	query := "SELECT " + recallBaseColsQualified +
 		" FROM recall_entries" +
 		" JOIN recall_evidence ON recall_evidence.entry_id = recall_entries.id" +
@@ -1083,7 +1088,7 @@ func (db *DB) queryRecallEntriesLexical(
 		byID[m.ID] = m
 	}
 	sortRecallResultsByStableSource(results, byID)
-	results = diversifyRecallResults(results, byID, recallLimit(q.Limit))
+	results = diversifyRecallResults(results, byID, RecallLimit(q.Limit))
 	page := RecallPage{RecallEntries: make([]RecallResult, 0, len(results))}
 	for _, result := range results {
 		m := byID[result.Entry.ID]
@@ -1104,13 +1109,13 @@ func (db *DB) queryRecallEntriesVector(
 	searcher := db.getRecallVectorSearcher()
 	if searcher == nil {
 		return RecallPage{}, NewSemanticUnavailableError(
-			"recall index is not available; run 'agentsview embeddings build --store recall'",
+			"recall index is not available; run 'agentsview index embeddings build --store recall'",
 		)
 	}
-	limit := recallLimit(q.Limit)
+	limit := RecallLimit(q.Limit)
 	ceiling := searcher.MaxRecallSearchCandidates()
 	k := clampRecallVectorCandidates(
-		max(recallLimit(q.Limit)*4, SemanticOverfetchMin), ceiling,
+		max(RecallLimit(q.Limit)*4, SemanticOverfetchMin), ceiling,
 	)
 	for {
 		hits, exhausted, snapshot, err := searcher.SearchRecall(ctx, q.Text, k)
@@ -1196,7 +1201,7 @@ func (db *DB) recallPageFromVectorHits(
 func (db *DB) queryRecallEntriesHybrid(
 	ctx context.Context, q RecallQuery,
 ) (RecallPage, error) {
-	limit := recallLimit(q.Limit)
+	limit := RecallLimit(q.Limit)
 	candidateQuery := q
 	candidateQuery.Limit = MaxRecallEntryLimit
 	// The vector leg waits on query encoding, so the lexical leg reads after
@@ -1333,6 +1338,8 @@ func NormalizeRecallQuery(q RecallQuery) RecallQuery {
 	q.SourceRunID = strings.TrimSpace(q.SourceRunID)
 	q.SupersedesEntryID = strings.TrimSpace(q.SupersedesEntryID)
 	q.SupersededByEntryID = strings.TrimSpace(q.SupersededByEntryID)
+	q.UpdatedSince = strings.TrimSpace(q.UpdatedSince)
+	q.CreatedSince = strings.TrimSpace(q.CreatedSince)
 	q.CursorUpdatedAt = strings.TrimSpace(q.CursorUpdatedAt)
 	q.CursorID = strings.TrimSpace(q.CursorID)
 	return q
@@ -1342,6 +1349,16 @@ func NormalizeRecallQuery(q RecallQuery) RecallQuery {
 // meaningful result. Trusted queries always target accepted entries; asking
 // for another explicit status is therefore a caller error, not an empty page.
 func ValidateRecallQuery(q RecallQuery) error {
+	for _, bound := range []string{q.UpdatedSince, q.CreatedSince} {
+		trimmed := strings.TrimSpace(bound)
+		if bound != "" && trimmed == "" {
+			return fmt.Errorf(
+				"%w: invalid timestamp %q", ErrInvalidRecallQuery, bound)
+		}
+		if _, err := recallBound(trimmed); err != nil {
+			return err
+		}
+	}
 	q = NormalizeRecallQuery(q)
 	switch q.Mode {
 	case RecallQueryModeLexical, RecallQueryModeVector, RecallQueryModeHybrid:
@@ -1510,11 +1527,13 @@ func buildRecallEntryWhere(q RecallQuery, includeText bool) (string, []any) {
 	preds := []string{"1=1"}
 	var args []any
 	status := q.Status
-	if status == "" {
+	if status == "" && (q.TrustedOnly || !q.TimeBounded()) {
 		status = corerecall.StatusAccepted
 	}
-	preds = append(preds, "status = ?")
-	args = append(args, status)
+	if status != "" {
+		preds = append(preds, "status = ?")
+		args = append(args, status)
+	}
 	if q.Project != "" {
 		preds = append(preds, "project = ?")
 		args = append(args, q.Project)
@@ -1567,9 +1586,24 @@ func buildRecallEntryWhere(q RecallQuery, includeText bool) (string, []any) {
 		preds = append(preds, "superseded_by_entry_id = ?")
 		args = append(args, q.SupersededByEntryID)
 	}
+	if bound, _ := recallBound(q.UpdatedSince); bound != "" {
+		preds = append(preds, "updated_at >= ?")
+		args = append(args, bound)
+	}
+	if bound, _ := recallBound(q.CreatedSince); bound != "" {
+		preds = append(preds, "created_at >= ?")
+		args = append(args, bound)
+	}
 	if q.CursorUpdatedAt != "" {
-		preds = append(preds,
-			"(updated_at < ? OR (updated_at = ? AND id > ?))")
+		// Bounded lists page oldest change first, so an entry changed
+		// mid-walk moves to the end of the walk and is still returned.
+		if q.TimeBounded() {
+			preds = append(preds,
+				"(updated_at > ? OR (updated_at = ? AND id < ?))")
+		} else {
+			preds = append(preds,
+				"(updated_at < ? OR (updated_at = ? AND id > ?))")
+		}
 		args = append(args,
 			q.CursorUpdatedAt, q.CursorUpdatedAt, q.CursorID)
 	}
@@ -1693,7 +1727,27 @@ func recallQueryTerms(text string) []string {
 	return corerecall.ScoringQueryTerms(text)
 }
 
-func recallLimit(limit int) int {
+// TimeBounded reports whether q has an updated_since or created_since bound.
+func (q RecallQuery) TimeBounded() bool {
+	return q.UpdatedSince != "" || q.CreatedSince != ""
+}
+
+// recallBound parses an RFC3339 bound into the stored timestamp layout,
+// flooring to the millisecond so a bound taken from a returned updated_at
+// still includes that entry.
+func recallBound(s string) (string, error) {
+	if s == "" {
+		return "", nil
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return "", fmt.Errorf("%w: invalid timestamp %q", ErrInvalidRecallQuery, s)
+	}
+	return t.UTC().Truncate(time.Millisecond).Format(extractTimeLayout), nil
+}
+
+// RecallLimit returns the effective page size for a Recall list.
+func RecallLimit(limit int) int {
 	if limit <= 0 {
 		return DefaultRecallEntryLimit
 	}

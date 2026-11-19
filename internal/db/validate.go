@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/stringutil"
+	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
 // This file is the single centralized validation and sanitization pass
@@ -31,7 +32,8 @@ import (
 //     terminal escape through intact.
 //   - Model: clamped to MaxModelLen bytes. Real model ids are well under
 //     that; a verified repro pushed a multi-megabyte printable string
-//     through as a model id.
+//     through as a model id. A usage event with a cost but no model is
+//     labeled usagefacts.UnknownModel so usage reads keep it.
 //   - Token counts: clamped to maxPlausibleTokens. Implausible values
 //     (e.g. a nanosecond-latency counter misread as a token field) are
 //     bounded rather than stored verbatim.
@@ -200,9 +202,9 @@ func SanitizeMessage(m *Message) ValidationStats {
 			m.ContentLength -= removed
 		}
 	}
-	// Preserve the parser's classification even when dialogue equals Content.
-	// NULL also represents older or unclassified messages; collapsing an equal
-	// projection would make a dialogue-only reader unable to tell them apart.
+	// Keep the parser's classification even when dialogue equals Content.
+	// NULL also represents older or unclassified messages, so storage drops
+	// an equal copy only with a marker (see StoredDialogue).
 	sanitizeStringField(&m.ClaudeMessageID, &stats)
 	sanitizeStringField(&m.ClaudeRequestID, &stats)
 	sanitizeStringField(&m.SourceType, &stats)
@@ -239,7 +241,7 @@ func sanitizeToolCallContent(
 	tc *ToolCall, stats *ValidationStats,
 ) {
 	// InputJSON is raw model output and can carry NUL/control bytes
-	// just like result content; unsanitized rows break DuckDB pushes
+	// just like result content; unsanitized rows break replica pushes
 	// and force the resync copy path to re-scan them (#945).
 	sanitizeStringField(&tc.InputJSON, stats)
 	// The recorded rendering must keep matching the message content byte
@@ -278,6 +280,12 @@ func SanitizeUsageEvent(ev *UsageEvent) ValidationStats {
 	sanitizeStringField(&ev.Model, &stats)
 	if ClampModel(&ev.Model) {
 		stats.ModelClamped++
+	}
+	// Usage reads require a model. A costed event that names none goes to
+	// the unknown-model bucket so its tokens and cost still count; it has no
+	// catalog rate, so only its own cost prices it.
+	if ev.Model == "" && ev.Cost != nil {
+		ev.Model = usagefacts.UnknownModel
 	}
 
 	if clampUsageEventTokens(ev.Source, &ev.InputTokens) {

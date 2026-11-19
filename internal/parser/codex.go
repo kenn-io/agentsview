@@ -31,6 +31,7 @@ const (
 	codexTypeEventMsg         = "event_msg"
 	codexTypeHistoryMutation  = "history_mutation"
 	codexTypeTokenUsageRecord = "token_usage_record"
+	codexTypeCompacted        = "compacted"
 	codexOriginatorExec       = "codex_exec"
 )
 
@@ -63,6 +64,12 @@ type codexSessionIndexEntry struct {
 // codexSessionBuilder accumulates state while scanning a Codex
 // JSONL session file line by line.
 type codexSessionBuilder struct {
+	sourceLine         int
+	sourceTurnID       string
+	sourceInTurn       bool
+	sourceTurnContexts []string
+	// sourceTimestamp is the envelope timestamp of the line being processed.
+	sourceTimestamp time.Time
 	codexCursorState
 	agent       AgentType
 	incremental bool
@@ -70,7 +77,6 @@ type codexSessionBuilder struct {
 	// implementation keeps the slice-based behavior, the streaming one
 	// batches into a scratch store.
 	sink                        CodexSessionSink
-	projectContext              context.Context
 	resolveParentTurns          codexParentTurnResolver
 	parentTurnIDs               map[string]struct{}
 	firstMessage                string
@@ -140,7 +146,7 @@ func (g *codexForkGate) retryReason() string {
 	if g.resolvedOnce {
 		return ""
 	}
-	return "codex parent turns unresolved for " + g.parentSessionID
+	return "could not read the Codex session it was forked from (" + g.parentSessionID + ")"
 }
 
 type codexParentTurnResolver func(string) (map[string]struct{}, bool)
@@ -225,6 +231,7 @@ type codexToolCallRef struct {
 }
 
 type codexPendingEvent struct {
+	origin    CodexMessageOrigin
 	agentID   string
 	source    string
 	status    string
@@ -234,7 +241,6 @@ type codexPendingEvent struct {
 }
 
 func newCodexSessionBuilder(
-	ctx context.Context,
 	agent AgentType,
 	_ bool,
 	resolveParentTurns codexParentTurnResolver,
@@ -243,7 +249,6 @@ func newCodexSessionBuilder(
 	return &codexSessionBuilder{
 		agent:              agent,
 		sink:               sink,
-		projectContext:     ctx,
 		resolveParentTurns: resolveParentTurns,
 		project:            "unknown",
 		callNames:          make(map[string]string),
@@ -378,8 +383,15 @@ func (b *codexSessionBuilder) refreshPendingCallPositions() {
 func (b *codexSessionBuilder) processLine(ctx context.Context,
 	line string,
 ) (skip bool, err error) {
+	b.sourceLine++
+	if gjson.Get(line, "type").Str == codexTypeTurnContext {
+		b.sourceTurnID = strings.Clone(gjson.Get(line, "payload.turn_id").Str)
+		b.sourceTurnContexts = append(b.sourceTurnContexts, b.sourceTurnID)
+		b.sourceInTurn = true
+	}
 	tsStr := gjson.Get(line, "timestamp").Str
 	ts := parseTimestamp(tsStr)
+	b.sourceTimestamp = ts
 	if ts.IsZero() {
 		if tsStr != "" {
 			logParseError(tsStr)
@@ -400,7 +412,7 @@ func (b *codexSessionBuilder) processLine(ctx context.Context,
 			// too — the fork's own meta came first and wins.
 			return false, nil
 		}
-		return b.handleSessionMeta(payload, ts), nil
+		return b.handleSessionMeta(ctx, payload, ts), nil
 	case codexTypeTurnContext:
 		if b.suppresses(codexTypeTurnContext, payload) {
 			return false, nil
@@ -428,8 +440,37 @@ func (b *codexSessionBuilder) processLine(ctx context.Context,
 			return false, nil
 		}
 		b.handleTokenUsageRecord(payload)
+	case codexTypeCompacted:
+		if b.suppresses(codexTypeCompacted, payload) {
+			return false, nil
+		}
+		b.handleCompacted(payload, ts)
 	}
 	return false, nil
+}
+
+// handleCompacted records a compaction as a system boundary carrying the
+// summary Codex keeps in place of the earlier history. Remote compaction
+// writes no summary; its boundary stays empty, because the divider already
+// labels every compaction. The record's
+// replacement_history repeats messages already in the transcript and is not
+// replayed. The boundary is never a usage target: the compaction call's usage
+// belongs to the response that produced it.
+func (b *codexSessionBuilder) handleCompacted(payload gjson.Result, ts time.Time) {
+	// A copy keeps the stored row from holding the whole line, which carries
+	// replacement_history, in memory.
+	content := strings.Clone(strings.TrimSpace(payload.Get("message").Str))
+	b.sink.AppendMessage(ParsedMessage{
+		CodexOrigin:       CodexMessageOrigin{Line: b.sourceLine, TurnID: b.sourceTurnID, InTurn: b.sourceInTurn, TurnContext: len(b.sourceTurnContexts)},
+		Role:              RoleAssistant,
+		Content:           content,
+		Timestamp:         ts,
+		IsSystem:          true,
+		ContentLength:     len(content),
+		SourceType:        "system",
+		SourceSubtype:     "compact_boundary",
+		IsCompactBoundary: true,
+	})
 }
 
 // codexAcceptSessionMetaID keeps the first nonempty ID as the file's owner.
@@ -443,7 +484,7 @@ func codexAcceptSessionMetaID(sessionID *string, id string) bool {
 }
 
 func (b *codexSessionBuilder) handleSessionMeta(
-	payload gjson.Result, envelopeTS time.Time,
+	ctx context.Context, payload gjson.Result, envelopeTS time.Time,
 ) (skip bool) {
 	// Legacy forks copy foreign metadata without explicit lineage fields.
 	if !codexAcceptSessionMetaID(&b.sessionID, payload.Get("id").Str) {
@@ -486,7 +527,7 @@ func (b *codexSessionBuilder) handleSessionMeta(
 			b.gitRemote = export.SanitizeGitRemoteForStorage(git.Get("repository_url").Str)
 		}
 		if proj := ExtractProjectFromCwdWithBranchContext(
-			b.projectContext, cwd, branch,
+			ctx, cwd, branch,
 		); proj != "" {
 			b.project = proj
 		} else {
@@ -504,7 +545,7 @@ func (b *codexSessionBuilder) handleResponseItem(ctx context.Context,
 ) {
 	switch payload.Get("type").Str {
 	case "function_call", "custom_tool_call":
-		b.handleFunctionCall(payload, ts)
+		b.handleFunctionCall(ctx, payload, ts)
 		return
 	case "function_call_output", "custom_tool_call_output":
 		b.handleFunctionCallOutput(ctx, payload, ts)
@@ -514,6 +555,9 @@ func (b *codexSessionBuilder) handleResponseItem(ctx context.Context,
 		return
 	case "image_generation_call":
 		b.handleImageGenerationCall(ctx, payload, ts)
+		return
+	case "reasoning":
+		b.handleReasoning(payload, ts)
 		return
 	}
 
@@ -557,6 +601,7 @@ func (b *codexSessionBuilder) handleResponseItem(ctx context.Context,
 	}
 
 	msg := ParsedMessage{
+		CodexOrigin:   CodexMessageOrigin{Line: b.sourceLine, TurnID: b.sourceTurnID, InTurn: b.sourceInTurn, TurnContext: len(b.sourceTurnContexts)},
 		Role:          RoleType(role),
 		Content:       content,
 		DialogueText:  new(content),
@@ -590,6 +635,7 @@ func (b *codexSessionBuilder) handleAgentMessage(
 	b.committedUsageTarget = nil
 	b.committedUsageBlockedByUser = true
 	b.sink.AppendMessage(ParsedMessage{
+		CodexOrigin:   CodexMessageOrigin{Line: b.sourceLine, TurnID: b.sourceTurnID, InTurn: b.sourceInTurn, TurnContext: len(b.sourceTurnContexts)},
 		Role:          RoleUser,
 		Content:       content,
 		DialogueText:  new(content),
@@ -597,6 +643,48 @@ func (b *codexSessionBuilder) handleAgentMessage(
 		ContentLength: len(content),
 		Model:         b.model,
 	})
+}
+
+// handleReasoning keeps a reasoning item's readable text as a thinking row.
+// Codex writes the summary under summary[].text and, for models that expose
+// it, raw reasoning under content[].text; the summary wins, as in Codex Cloud.
+// Encrypted reasoning with no readable text adds no row.
+func (b *codexSessionBuilder) handleReasoning(payload gjson.Result, ts time.Time) {
+	thinking := codexReasoningText(payload.Get("summary"))
+	if thinking == "" {
+		thinking = codexReasoningText(payload.Get("content"))
+	}
+	if thinking == "" {
+		return
+	}
+	content := "[Thinking]\n" + thinking + "\n[/Thinking]"
+	b.sink.AppendMessage(ParsedMessage{
+		CodexOrigin:     CodexMessageOrigin{Line: b.sourceLine, TurnID: b.sourceTurnID, InTurn: b.sourceInTurn, TurnContext: len(b.sourceTurnContexts)},
+		Role:            RoleAssistant,
+		Content:         content,
+		DialogueText:    new(""),
+		ThinkingText:    thinking,
+		HasThinking:     true,
+		Timestamp:       ts,
+		ContentLength:   len(content),
+		Model:           b.model,
+		ReasoningEffort: b.reasoningEffort,
+		ProviderID:      b.serviceTierProviderID,
+	})
+}
+
+// codexReasoningText joins the nonblank text parts of a reasoning summary or
+// content array with blank lines, the thinking-block boundary used elsewhere.
+func codexReasoningText(parts gjson.Result) string {
+	var texts []string
+	for _, part := range parts.Array() {
+		if text := strings.TrimSpace(part.Get("text").Str); text != "" {
+			texts = append(texts, text)
+		}
+	}
+	// Join returns a lone part as is; the copy keeps the row from holding
+	// the whole line, encrypted reasoning included, in memory.
+	return strings.Clone(strings.Join(texts, "\n\n"))
 }
 
 func (b *codexSessionBuilder) applyThreadSettings(payload gjson.Result) {
@@ -661,7 +749,7 @@ func (b *codexSessionBuilder) handleTokenUsageRecord(
 	}
 	for _, counter := range []string{"input_tokens", "cached_input_tokens", "output_tokens", "cache_write_input_tokens"} {
 		if usage.Get(counter).Type == gjson.Number {
-			b.applyTokenUsage(usage.Raw, payload.Get("response_id").Str)
+			b.applyTokenUsage(usage.Raw, usage.Raw, payload.Get("response_id").Str)
 			return
 		}
 	}
@@ -674,15 +762,21 @@ func (b *codexSessionBuilder) markFirstUserReplayPossible() {
 func (b *codexSessionBuilder) handleTokenCountEvent(
 	payload gjson.Result,
 ) {
-	raw := payload.Get("info.last_token_usage").Raw
+	info := payload.Get("info")
+	raw := info.Get("last_token_usage").Raw
 	if raw == "" {
 		return
 	}
-	b.applyTokenUsage(raw, "")
+	// A repeated token_count carries the same cumulative total_token_usage;
+	// a new call with equal per-call counts raises it. Keying on the whole
+	// info object therefore drops only true repeats.
+	b.applyTokenUsage(raw, info.Raw, "")
 }
 
-func (b *codexSessionBuilder) applyTokenUsage(raw, responseID string) {
-	if b.observeTokenUsage(raw, responseID) {
+// applyTokenUsage attaches one call's usage, raw, unless dedupKey and
+// responseID repeat the previous observation.
+func (b *codexSessionBuilder) applyTokenUsage(raw, dedupKey, responseID string) {
+	if b.observeTokenUsage(dedupKey, responseID) {
 		return
 	}
 
@@ -692,11 +786,17 @@ func (b *codexSessionBuilder) applyTokenUsage(raw, responseID string) {
 	if b.sink.ApplyTokenUsageToLastAssistant(raw) {
 		return
 	}
-	if b.committedUsageBlockedByUser {
-		return
-	}
 	if b.committedUsageTarget == nil {
-		b.unattachedTokenUsage = true
+		if b.incremental && !b.committedUsageBlockedByUser {
+			// The target may precede the resume offset; a full parse
+			// decides whether one exists.
+			b.unattachedTokenUsage = true
+			return
+		}
+		// No row in this turn can take the usage, for example after
+		// encrypted-only reasoning or a compaction request. Keep it as a
+		// hidden usage-only row instead of dropping it.
+		b.appendUsageOnlyMessage(raw)
 		return
 	}
 	msg := ParsedMessage{}
@@ -713,6 +813,22 @@ func (b *codexSessionBuilder) applyTokenUsage(raw, responseID string) {
 		},
 	)
 	b.committedUsageTarget = nil
+}
+
+// appendUsageOnlyMessage appends the hidden row that carries token usage no
+// assistant message in the current turn can take.
+func (b *codexSessionBuilder) appendUsageOnlyMessage(raw string) {
+	msg := ParsedMessage{
+		CodexOrigin:     CodexMessageOrigin{Line: b.sourceLine, TurnID: b.sourceTurnID, InTurn: b.sourceInTurn, TurnContext: len(b.sourceTurnContexts)},
+		Timestamp:       b.sourceTimestamp,
+		Model:           b.model,
+		ReasoningEffort: b.reasoningEffort,
+		ProviderID:      b.serviceTierProviderID,
+	}
+	applyCodexTokenUsage(&msg, raw)
+	if msg, ok := usageOnlyMessage(msg); ok {
+		b.sink.AppendMessage(msg)
+	}
 }
 
 func (b *codexSessionBuilder) handleCollabAgentSpawnEnd(
@@ -749,24 +865,30 @@ func (b *codexSessionBuilder) handleSubagentActivity(
 }
 
 func (b *codexSessionBuilder) handleFunctionCall(
-	payload gjson.Result, ts time.Time,
+	ctx context.Context, payload gjson.Result, ts time.Time,
 ) {
 	name := payload.Get("name").Str
 	if name == "" {
 		return
 	}
 	callID := payload.Get("call_id").Str
-	if callID != "" {
-		b.callNames[callID] = name
-	}
 
 	content := formatCodexFunctionCall(name, payload)
 	inputJSON := extractCodexInputJSON(payload)
-	skillName := inferCodexSkillNameWithBase(b.projectContext, name, inputJSON, b.cwd)
+	skillName := inferCodexSkillNameWithBase(ctx, name, inputJSON, b.cwd)
 	waitAgentIDs := []string(nil)
+	outputName := name
 	if isCodexWaitAgentCall(name) && callID != "" {
 		args, _ := parseCodexFunctionArgs(payload)
 		waitAgentIDs = codexWaitAgentIDs(args)
+		if name == "wait" && strings.TrimSpace(args.Get("cell_id").Str) != "" &&
+			!args.Get("ids").Exists() && !args.Get("targets").Exists() {
+			// Keep the display name, but route code-mode polls as ordinary results.
+			outputName = "code_mode_wait"
+		}
+	}
+	if callID != "" {
+		b.callNames[callID] = outputName
 	}
 
 	call := ParsedToolCall{
@@ -792,6 +914,7 @@ func (b *codexSessionBuilder) handleFunctionCall(
 	}
 
 	messageOrdinal := b.sink.AppendMessage(ParsedMessage{
+		CodexOrigin:     CodexMessageOrigin{Line: b.sourceLine, TurnID: b.sourceTurnID, InTurn: b.sourceInTurn, TurnContext: len(b.sourceTurnContexts)},
 		Role:            RoleAssistant,
 		Content:         content,
 		DialogueText:    new(""),
@@ -808,7 +931,7 @@ func (b *codexSessionBuilder) handleFunctionCall(
 			MessageOrdinal: messageOrdinal,
 			CallIndex:      0,
 		}
-		if !b.rememberToolCall(callID, name, position) {
+		if !b.rememberToolCall(callID, outputName, position) {
 			b.checkpointUnsafe = true
 		}
 	}
@@ -816,7 +939,9 @@ func (b *codexSessionBuilder) handleFunctionCall(
 	if isCodexWaitAgentCall(name) && callID != "" {
 		for _, agentID := range waitAgentIDs {
 			b.agentWaitCalls[agentID] = callID
-			b.claimPendingAgentEvents(callID, agentID)
+			// Its only error is cancellation, which processLine's caller
+			// observes on the next line or flush.
+			_ = b.claimPendingAgentEventsContext(ctx, callID, agentID)
 		}
 	}
 }
@@ -844,6 +969,7 @@ func (b *codexSessionBuilder) handleImageGenerationCall(ctx context.Context,
 	// The viewer hides tool markers, so the call shows once, as its block.
 	content := formatToolHeader("Tool", generatedImageCallName)
 	messageOrdinal := b.sink.AppendMessage(ParsedMessage{
+		CodexOrigin:     CodexMessageOrigin{Line: b.sourceLine, TurnID: b.sourceTurnID, InTurn: b.sourceInTurn, TurnContext: len(b.sourceTurnContexts)},
 		Role:            RoleAssistant,
 		Content:         content,
 		DialogueText:    new(""),
@@ -988,6 +1114,7 @@ func (b *codexSessionBuilder) handleSubagentNotification(ctx context.Context,
 
 	b.pendingAgentEvents[agentID] = append(
 		b.pendingAgentEvents[agentID], codexPendingEvent{
+			origin:    CodexMessageOrigin{Line: b.sourceLine, TurnID: b.sourceTurnID, InTurn: b.sourceInTurn, TurnContext: len(b.sourceTurnContexts)},
 			agentID:   agentID,
 			source:    "subagent_notification",
 			status:    statusName,
@@ -997,14 +1124,6 @@ func (b *codexSessionBuilder) handleSubagentNotification(ctx context.Context,
 		},
 	)
 	return true
-}
-
-func (b *codexSessionBuilder) claimPendingAgentEvents(
-	callID, agentID string,
-) {
-	_ = b.claimPendingAgentEventsContext(
-		context.Background(), callID, agentID,
-	)
 }
 
 func (b *codexSessionBuilder) claimPendingAgentEventsContext(
@@ -1029,10 +1148,6 @@ func (b *codexSessionBuilder) claimPendingAgentEventsContext(
 	}
 	delete(b.pendingAgentEvents, agentID)
 	return ctx.Err()
-}
-
-func (b *codexSessionBuilder) flushPendingAgentResults() {
-	_ = b.flushPendingAgentResultsContext(context.Background())
 }
 
 func (b *codexSessionBuilder) flushPendingAgentResultsContext(
@@ -1074,6 +1189,7 @@ func (b *codexSessionBuilder) flushPendingAgentResultsContext(
 				}
 				key := agentID + "\x00" + ev.status + "\x00" + ev.text
 				b.sink.InsertOrphanMessage(key, ParsedMessage{
+					CodexOrigin:   ev.origin,
 					Ordinal:       ev.ordinal,
 					Role:          RoleUser,
 					Content:       ev.text,
@@ -1575,6 +1691,12 @@ func isCodexWaitAgentCall(name string) bool {
 	return name == "wait" || name == "wait_agent"
 }
 
+// Code-mode wait resumes an exec cell and binds no agents.
+func isCodexExecCellWait(name string, args gjson.Result) bool {
+	return name == "wait" && args.Get("cell_id").Str != "" &&
+		len(codexWaitAgentIDs(args)) == 0
+}
+
 func parseCodexSubagentNotification(
 	content string,
 ) (agentID, statusName, text string) {
@@ -1828,6 +1950,7 @@ func (p *codexProvider) parseSessionWithCursor(
 func (p *codexProvider) parentTurnResolver(
 	ctx context.Context, childPath string,
 ) codexParentTurnResolver {
+	ctx = p.parentInventoryContext(ctx)
 	return func(parentID string) (map[string]struct{}, bool) {
 		var paths []string
 		hasOriginal := false
@@ -1885,6 +2008,13 @@ func (p *codexProvider) parentTurnResolver(
 		p.parentTurnCache.Put(files, turnIDs)
 		return turnIDs, true
 	}
+}
+
+func (p *codexProvider) parentInventoryContext(ctx context.Context) context.Context {
+	if !p.Config.StableSourceSnapshots {
+		return ctx
+	}
+	return context.WithValue(ctx, codexThreadInventoryContextKey{}, &codexThreadInventoryBatch{stable: true})
 }
 
 // CodexReplayParentID returns the explicit parent only when the rollout has a
@@ -2062,7 +2192,7 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 	lr := newLineReaderContext(ctx, tee, maxLineSize)
 	defer releaseLineReader(lr)
 	b := newCodexSessionBuilder(
-		ctx, p.spec.agent, includeExec, p.parentTurnResolver(ctx, path), sink,
+		p.spec.agent, includeExec, p.parentTurnResolver(ctx, path), sink,
 	)
 	malformedLines := 0
 
@@ -2191,7 +2321,7 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 		FirstMessage:       b.firstMessage,
 		SessionName:        sessionName,
 		SessionNamePresent: sessionNamePresent,
-		MalformedLines:     malformedLines,
+		MalformedLines:     malformedLines + lr.SkippedLines(),
 		StartedAt:          b.startedAt,
 		EndedAt:            b.endedAt,
 		MessageCount:       len(msgs),
@@ -2207,6 +2337,9 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 		},
 	}
 
+	if b.forkGate.lineagePositive {
+		sess.CodexFork = &CodexForkInfo{ParentID: b.forkGate.parentSessionID, Resolved: b.forkGate.resolvedOnce, ParentTurns: b.parentTurnIDs, TurnContexts: b.sourceTurnContexts}
+	}
 	if err := accumulateMessageTokenUsageContext(ctx, sess, msgs); err != nil {
 		return nil, nil, codexCursorState{}, false, nil, "", "", err
 	}
@@ -2487,9 +2620,9 @@ func seedCodexIncrementalStateFromReader(ctx context.Context, agent AgentType,
 ) (codexIncrementalSeed, error) {
 	sink := newCodexSeedSink()
 	b := newCodexSessionBuilder(
-		ctx, agent, false, resolveParentTurns, sink,
+		agent, false, resolveParentTurns, sink,
 	)
-	lr := newLineReader(r, maxLineSize)
+	lr := newLineReaderContext(ctx, r, maxLineSize)
 	defer releaseLineReader(lr)
 	for {
 		line, ok := lr.next()
@@ -2506,7 +2639,9 @@ func seedCodexIncrementalStateFromReader(ctx context.Context, agent AgentType,
 	if err := lr.Err(); err != nil {
 		return codexIncrementalSeed{}, err
 	}
-	b.flushPendingAgentResults()
+	if err := b.flushPendingAgentResultsContext(ctx); err != nil {
+		return codexIncrementalSeed{}, err
+	}
 	if b.checkpointUnsafe {
 		return codexIncrementalSeed{}, errCodexIncrementalNeedsFullParse
 	}
@@ -2582,20 +2717,9 @@ func readCodexJSONLFromContext(
 	return readCodexJSONLSectionContext(ctx, snapshot.File, offset, snapshot.Source.Size(), fn)
 }
 
-// readCodexJSONLSection applies the conservative Codex JSONL rules to the
-// exact byte range [offset, limit). A SectionReader makes the captured limit a
-// real EOF even if the underlying descriptor has since grown.
-func readCodexJSONLSection(
-	f *os.File,
-	offset int64,
-	limit int64,
-	fn func(line string),
-) (consumed int64, err error) {
-	return readCodexJSONLSectionContext(
-		context.Background(), f, offset, limit, fn,
-	)
-}
-
+// readCodexJSONLSectionContext applies the conservative Codex JSONL rules to
+// the exact byte range [offset, limit). A SectionReader makes the captured
+// limit a real EOF even if the underlying descriptor has since grown.
 func readCodexJSONLSectionContext(
 	ctx context.Context,
 	f *os.File,
@@ -2737,7 +2861,7 @@ func (p *codexProvider) parseSessionFromSnapshot(ctx context.Context,
 		includeExec,
 		info,
 		func(fn func(string)) (int64, error) {
-			return readCodexJSONLSection(f, offset, limit, fn)
+			return readCodexJSONLSectionContext(ctx, f, offset, limit, fn)
 		},
 		func() (codexIncrementalSeed, error) {
 			return seedCodexIncrementalStateFromReader(ctx, p.spec.agent,
@@ -2770,7 +2894,7 @@ func (p *codexProvider) parseSessionFromCheckpoint(ctx context.Context,
 		includeExec,
 		info,
 		func(fn func(string)) (int64, error) {
-			return readCodexJSONLSection(f, offset, limit, fn)
+			return readCodexJSONLSectionContext(ctx, f, offset, limit, fn)
 		},
 		func() (codexIncrementalSeed, error) {
 			return codexIncrementalSeed{codexCursorState: seed}, nil
@@ -2851,7 +2975,7 @@ func (p *codexProvider) parseSessionFromWithSources(ctx context.Context,
 	}
 
 	b := newCodexSessionBuilder(
-		ctx, p.spec.agent, includeExec,
+		p.spec.agent, includeExec,
 		p.parentTurnResolver(ctx, path),
 		NewCodexCollectingSink(startOrdinal),
 	)
@@ -2901,7 +3025,9 @@ func (p *codexProvider) parseSessionFromWithSources(ctx context.Context,
 		return codexIncrementalParseResult{}, fallbackErr
 	}
 
-	b.flushPendingAgentResults()
+	if err := b.flushPendingAgentResultsContext(ctx); err != nil {
+		return codexIncrementalParseResult{}, err
+	}
 	if b.checkpointUnsafe {
 		return codexIncrementalParseResult{}, errCodexIncrementalNeedsFullParse
 	}
@@ -2939,7 +3065,9 @@ func (p *codexProvider) parseSessionFrom(ctx context.Context,
 		offset,
 		startOrdinal,
 		includeExec,
-		readJSONLFrom,
+		func(path string, offset int64, fn func(string)) (int64, error) {
+			return readJSONLFrom(ctx, path, offset, fn)
+		},
 	)
 	if err != nil {
 		return nil, time.Time{}, 0, err
@@ -3057,7 +3185,7 @@ func isCodexSubagentNotification(content string) bool {
 
 func codexIncrementalNeedsFullParse(line string) bool {
 	b := newCodexSessionBuilder(
-		context.Background(), AgentCodex, false, nil,
+		AgentCodex, false, nil,
 		NewCodexCollectingSink(0),
 	)
 	return b.codexIncrementalNeedsFullParse(line)
@@ -3088,7 +3216,12 @@ func (b *codexSessionBuilder) codexIncrementalNeedsFullParse(
 func (b *codexSessionBuilder) codexResponseItemNeedsFullParse(payload gjson.Result) bool {
 	switch payload.Get("type").Str {
 	case "function_call", "custom_tool_call":
-		return isCodexWaitAgentCall(payload.Get("name").Str)
+		name := payload.Get("name").Str
+		if !isCodexWaitAgentCall(name) {
+			return false
+		}
+		args, _ := parseCodexFunctionArgs(payload)
+		return !isCodexExecCellWait(name, args)
 	case "function_call_output", "custom_tool_call_output":
 		output, raw := parseCodexFunctionOutput(payload, b.agent)
 		if isCodexSubagentFunctionOutput(output) {
@@ -3099,7 +3232,7 @@ func (b *codexSessionBuilder) codexResponseItemNeedsFullParse(payload gjson.Resu
 		}
 		name := b.toolCallNameForOutput(payload.Get("call_id").Str)
 		return name == "" || name == "spawn_agent" ||
-			isCodexWaitAgentCall(name)
+			(isCodexWaitAgentCall(name) && output.Get("status").IsObject())
 	default:
 		role := payload.Get("role").Str
 		if role != "user" {

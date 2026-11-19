@@ -43,11 +43,15 @@ func newSessionUsageCommand() *cobra.Command {
 			"otherwise they return exit 2. " +
 			"--no-sync and HTTP --own-only read only the archive; missing IDs return exit 2. " +
 			"If refresh is refused or fails, the command shows archived usage with a warning; " +
-			"JSON sets refresh_incomplete. Direct mode keeps its targeted source lookup.",
+			"JSON sets refresh_incomplete. Direct mode keeps its targeted source lookup.\n\n" +
+			"Exit 0 means token data, cost, or plan figures are present. " +
+			"A report without any of those figures is printed before a silent exit 3.",
+		Example: "  agentsview session usage <id> --json\n" +
+			"  agentsview session usage <id> --own-only --no-sync --json",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
-		Run: func(cmd *cobra.Command, args []string) {
-			runSessionUsage(cmd, args[0], outputFormat(cmd))
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runSessionUsage(cmd, args[0], outputFormat(cmd))
 		},
 	}
 	cmd.Flags().Bool("no-sync", false,
@@ -58,30 +62,41 @@ func newSessionUsageCommand() *cobra.Command {
 }
 
 // runSessionUsage computes usage for one session and renders it,
-// exiting with the shared usage exit code (0 = token data or cost,
-// 2 = not found, 3 = neither). Uses Run + os.Exit (not RunE) so the
-// 2/3 codes survive — cobra RunE errors collapse to exit 1.
-func runSessionUsage(cmd *cobra.Command, sessionID, format string) {
+// returning the shared usage exit code (0 = token data or cost,
+// 2 = not found, 3 = neither) through the CLI error boundary.
+func runSessionUsage(cmd *cobra.Command, sessionID, format string) error {
 	out, code, err := sessionUsageDataForCommand(cmd, sessionID)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(tokenUseExitErr)
+		return withExitCode(err, tokenUseExitErr)
 	}
 	if out != nil {
 		if format == "json" {
-			enc := jsontext.NewEncoder(os.Stdout, jsontext.WithIndent("  "))
+			enc := jsontext.NewEncoder(cmd.OutOrStdout(), jsontext.WithIndent("  "))
 			if encErr := json.MarshalEncode(enc, out); encErr != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", encErr)
-				os.Exit(tokenUseExitErr)
+				return withExitCode(encErr, tokenUseExitErr)
 			}
 		} else if rerr := renderSessionUsageHuman(
-			os.Stdout, out,
+			cmd.OutOrStdout(), out,
 		); rerr != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", rerr)
-			os.Exit(tokenUseExitErr)
+			return withExitCode(rerr, tokenUseExitErr)
 		}
 	}
-	os.Exit(code)
+	return sessionUsageExitError(sessionID, code)
+}
+
+func sessionUsageExitError(sessionID string, code int) error {
+	switch code {
+	case tokenUseExitOK:
+		return nil
+	case tokenUseExitNotFound:
+		return withCLIHint(withExitCode(
+			fmt.Errorf("%w: %s", errSessionNotFound, sessionID), code,
+		), "Run `agentsview session list --json` to find a session ID, then retry `agentsview session usage <id>`.")
+	default:
+		// A successfully rendered report carries no error diagnostic, even when
+		// it contains no token, cost, or plan figures.
+		return withSilentExitCode(errors.New("session has no usage data"), code)
+	}
 }
 
 func sessionUsageDataForCommand(
@@ -92,24 +107,35 @@ func sessionUsageDataForCommand(
 		return nil, tokenUseExitErr, err
 	}
 	defer closeArchiveQueryBackend(cleanup)
-	out, code, err := read(sessionID)
-	if err == nil && code == tokenUseExitNotFound {
-		fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
-	}
-	return out, code, err
+	return read(sessionID)
 }
 
 // resolveSessionUsageReader selects and opens one backend for all requested IDs.
 func resolveSessionUsageReader(cmd *cobra.Command) (
 	func(string) (*sessionUsageOutput, int, error), func(), error,
 ) {
+	noSync, _ := cmd.Flags().GetBool("no-sync")
+	backend, err := resolveSessionUsageBackend(cmd, noSync)
+	if err != nil {
+		return nil, nil, err
+	}
+	return backend.read, backend.cleanup, nil
+}
+
+type sessionUsageBackend struct {
+	read    func(string) (*sessionUsageOutput, int, error)
+	service service.SessionService
+	cleanup func()
+}
+
+// resolveSessionUsageBackend shares transport selection with archive diagnostics.
+func resolveSessionUsageBackend(cmd *cobra.Command, noSync bool) (*sessionUsageBackend, error) {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
 	ownOnly, _ := cmd.Flags().GetBool("own-only")
-	noSync, _ := cmd.Flags().GetBool("no-sync")
 	query := sessionUsageQuery{
 		OwnOnly: ownOnly, NoSync: noSync,
 	}
@@ -117,42 +143,48 @@ func resolveSessionUsageReader(cmd *cobra.Command) (
 	remote, _ := cmd.Flags().GetString("server")
 	if remote != "" {
 		if pgReadRequested(cmd) {
-			return nil, nil, errors.New("--server and --pg are mutually exclusive")
+			return nil, errors.New("--server and --pg are mutually exclusive")
 		}
 		token, err := explicitServerToken(cmd)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		if !query.OwnOnly {
 			if err := requireRemoteSubagentUsageSupport(
 				ctx, remote, token, !query.NoSync,
 			); err != nil {
-				return nil, nil, err
+				return nil, err
 			}
 		}
-		return func(id string) (*sessionUsageOutput, int, error) {
-			query.SessionID = id
-			return httpSessionUsageData(ctx, remote, token, query)
-		}, nil, nil
+		return &sessionUsageBackend{
+			service: servicehttp.NewHTTPBackend(remote, token, false, ""),
+			read: func(id string) (*sessionUsageOutput, int, error) {
+				query.SessionID = id
+				return httpSessionUsageData(ctx, remote, token, query)
+			},
+		}, nil
 	}
 	cfg, err := config.LoadPFlagsFor(cmd.Flags(), config.ScopeLocal)
 	if err != nil {
-		return nil, nil, fmt.Errorf("loading config: %w", err)
+		return nil, fmt.Errorf("loading config: %w", err)
 	}
 	if pgReadRequested(cmd) {
 		pgCfg, _, err := resolvePGReadConfig(cmd, cfg)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
-		store, cleanup, err := openPGReadStore(cfg, pgCfg)
+		store, cleanup, err := openPGReadStore(ctx, cfg, pgCfg)
 		if err != nil {
 			closeArchiveQueryBackend(cleanup)
-			return nil, nil, fmt.Errorf("opening pg store: %w", err)
+			return nil, fmt.Errorf("opening pg store: %w", err)
 		}
-		return func(id string) (*sessionUsageOutput, int, error) {
-			query.SessionID = id
-			return storeSessionUsageData("pg", cfg, store, query)
-		}, cleanup, nil
+		return &sessionUsageBackend{
+			service: service.NewReadOnlyBackend(store), cleanup: cleanup,
+			read: func(id string) (*sessionUsageOutput, int, error) {
+				query.SessionID = id
+				return storeSessionUsageData(ctx, "pg", cfg, store, query)
+			},
+		}, nil
 	}
 	backend, cleanup, err := resolveArchiveQueryBackendWithConfig(
 		ctx,
@@ -166,12 +198,22 @@ func resolveSessionUsageReader(cmd *cobra.Command) (
 		},
 	)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return func(id string) (*sessionUsageOutput, int, error) {
-		query.SessionID = id
-		return backend.SessionUsage(ctx, query)
-	}, cleanup, nil
+	var svc service.SessionService
+	switch b := backend.(type) {
+	case daemonArchiveQueryBackend:
+		svc = servicehttp.NewHTTPBackend(b.tr.URL, b.authToken, b.tr.ReadOnly, b.tr.BrowserURL)
+	case localArchiveQueryBackend:
+		svc = service.NewReadOnlyBackend(b.database)
+	}
+	return &sessionUsageBackend{
+		service: svc, cleanup: cleanup,
+		read: func(id string) (*sessionUsageOutput, int, error) {
+			query.SessionID = id
+			return backend.SessionUsage(ctx, query)
+		},
+	}, nil
 }
 
 func requireRemoteSubagentUsageSupport(
@@ -228,7 +270,7 @@ func httpSessionUsageData(
 		if query.OwnOnly || query.NoSync {
 			return nil, tokenUseExitNotFound, nil
 		}
-		startupPending, archiveStale, statusErr := httpSessionSyncStatus(
+		startupPending, archiveStale, syncPending, statusErr := httpSessionSyncStatus(
 			ctx, baseURL, token,
 		)
 		if statusErr != nil {
@@ -236,10 +278,10 @@ func httpSessionUsageData(
 				"checking sync status: %w", statusErr,
 			)
 		}
-		if startupPending || archiveStale {
+		if startupPending || archiveStale || syncPending {
 			return nil, tokenUseExitErr, errors.New(
-				"session usage is not yet available; retry after startup ingestion " +
-					"or the archive rebuild finishes",
+				"session usage is not ready; wait for syncing or rebuilding " +
+					"to finish, then retry",
 			)
 		}
 		// Startup or rebuild work can finish after the first lookup but before
@@ -261,7 +303,7 @@ func httpSessionUsageData(
 			if !errors.Is(syncErr, db.ErrReadOnly) {
 				refreshIncomplete = true
 				fmt.Fprintf(os.Stderr,
-					"warning: usage refresh incomplete; showing usage currently stored in the archive: %v\n", syncErr)
+					"warning: couldn't refresh usage; saved totals may be out of date: %v\n", syncErr)
 			}
 		}
 	}
@@ -292,27 +334,28 @@ func httpSessionUsageData(
 
 func httpSessionSyncStatus(
 	ctx context.Context, baseURL, token string,
-) (startupPending, archiveStale bool, err error) {
+) (startupPending, archiveStale, syncPending bool, err error) {
 	api, err := apiclient.NewHTTPClient(baseURL, token, sessionUsageHTTPClient)
 	if err != nil {
-		return false, false, err
+		return false, false, false, err
 	}
 	response, err := api.GetAPIV1SyncStatusWithResponse(ctx)
 	if err != nil {
-		return false, false, err
+		return false, false, false, err
 	}
 	if response == nil {
-		return false, false, io.ErrUnexpectedEOF
+		return false, false, false, io.ErrUnexpectedEOF
 	}
 	if response.JSON200 == nil {
-		return false, false, fmt.Errorf(
+		return false, false, false, fmt.Errorf(
 			"sync status: HTTP %d: %s", response.StatusCode, response.Body,
 		)
 	}
-	return response.JSON200.StartupPending, response.JSON200.ArchiveStale, nil
+	return response.JSON200.StartupPending, response.JSON200.ArchiveStale, response.JSON200.SyncPending, nil
 }
 
 func storeSessionUsageData(
+	ctx context.Context,
 	storeName string,
 	cfg config.Config,
 	store db.Store,
@@ -324,7 +367,6 @@ func storeSessionUsageData(
 		}
 	}
 
-	ctx := context.Background()
 	sessionID := query.SessionID
 	resolvedID, err := resolveStoreSessionID(ctx, store, sessionID)
 	if err != nil {
@@ -428,11 +470,17 @@ func renderSessionUsageHuman(w io.Writer, out *sessionUsageOutput) error {
 	default:
 		fmt.Fprintf(w, "%s n/a\n", label("Cost"))
 	}
+	if line := recordedCostLine(out.RecordedCost); line != "" {
+		fmt.Fprintf(w, "%s %s\n", label("Agent cost"), line)
+	}
+	if line := sessionTotalLine(out.SessionTotal); line != "" {
+		fmt.Fprintf(w, "%s %s\n", label("Agent total"), sanitizeTerminal(line))
+	}
 	if out.AICredits > 0 {
 		fmt.Fprintf(w, "%s %.0f\n", label("AI Credits"), out.AICredits)
 	}
 	if out.RefreshIncomplete {
-		fmt.Fprintln(w, "Usage refresh: incomplete; showing archived totals")
+		fmt.Fprintln(w, "Usage refresh is incomplete. Saved totals may be out of date.")
 	}
 	if line := planUsageLine(out.Agent, out.Plan); line != "" {
 		fmt.Fprintf(w, "%s %s\n", label("Plan usage"), sanitizeTerminal(line))
@@ -441,6 +489,49 @@ func renderSessionUsageHuman(w io.Writer, out *sessionUsageOutput) error {
 		fmt.Fprintf(w, "%s %s\n", label("Captured"), sanitizeTerminal(line))
 	}
 	return nil
+}
+
+// recordedCostLine compares the cost the agent recorded with AgentsView's
+// cost for the same rows, "" when no row carries a recorded cost.
+func recordedCostLine(rc *db.SessionRecordedCost) string {
+	if rc == nil {
+		return ""
+	}
+	line := fmt.Sprintf("the agent recorded %s; AgentsView charged %s for the same usage",
+		money.FormatUSD(rc.Recorded, money.DisplayCents),
+		money.FormatUSD(rc.Computed, money.DisplayCents))
+	var notes []string
+	if rc.FallbackRows > 0 {
+		notes = append(notes, fmt.Sprintf("%d priced from the agent's figure because no catalog rate exists", rc.FallbackRows))
+	}
+	if rc.UnpricedRows > 0 {
+		notes = append(notes, fmt.Sprintf("%d with no price from either", rc.UnpricedRows))
+	}
+	if len(notes) > 0 {
+		line += " (" + strings.Join(notes, "; ") + ")"
+	}
+	return line
+}
+
+// sessionTotalLine describes the total the agent recorded for the whole
+// session, "" when it recorded none. The scope note says which AgentsView
+// figure it compares with: one that includes subagents, or the session's
+// own usage.
+func sessionTotalLine(total *db.SessionUsageTotal) string {
+	if total == nil || total.Cost == nil {
+		return ""
+	}
+	line := money.FormatUSD(*total.Cost, money.DisplayCents) + " for the session"
+	switch total.SubagentScope {
+	case parser.SubagentScopeIncluded:
+		line += ", including subagents"
+	case parser.SubagentScopeExcluded:
+		line += ", excluding subagents"
+	}
+	if total.Incomplete {
+		line += "; the agent could not price every model"
+	}
+	return line
 }
 
 // planUsageLine describes a session's plan usage in one line, "" for a

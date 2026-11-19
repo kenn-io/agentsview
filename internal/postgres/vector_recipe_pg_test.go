@@ -19,7 +19,7 @@ import (
 func recipeColumnExists(t *testing.T, pg *sql.DB) bool {
 	t.Helper()
 	var present bool
-	require.NoError(t, pg.QueryRow(`
+	require.NoError(t, pg.QueryRowContext(t.Context(), `
 SELECT EXISTS (
     SELECT 1 FROM information_schema.columns
     WHERE table_schema = current_schema()
@@ -42,9 +42,9 @@ func recipeSource(fingerprint string, params map[string]string) *fakeVectorSourc
 }
 
 func TestVectorRecipePublishedAndBackfilled(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(t, pgURL, "agentsview_vector_recipe_test")
-	ctx := context.Background()
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
+	ctx := t.Context()
 	seedVectorSession(t, localDB, "A")
 
 	// A generation registered before recipe publication has NULL params.
@@ -77,7 +77,7 @@ func TestVectorRecipePublishedAndBackfilled(t *testing.T) {
 	assert.Equal(t, published, gens[0].Params, "existing params are never overwritten")
 
 	// A pre-column schema reads as unpublished, and read paths add nothing.
-	_, err = pg.Exec(`ALTER TABLE vector_generations DROP COLUMN params`)
+	_, err = pg.ExecContext(t.Context(), `ALTER TABLE vector_generations DROP COLUMN params`)
 	require.NoError(t, err)
 	gens, err = ListVectorGenerationInfo(ctx, pg)
 	require.NoError(t, err)
@@ -86,7 +86,7 @@ func TestVectorRecipePublishedAndBackfilled(t *testing.T) {
 	_, _, ok, err := LookupVectorGeneration(ctx, pg, "fp-recipe")
 	require.NoError(t, err)
 	assert.True(t, ok)
-	require.NoError(t, EnsureSchema(ctx, pg, "agentsview_vector_recipe_test"))
+	require.NoError(t, EnsureSchema(ctx, pg, vectorPushTestSchema))
 	_, err = ensureVectorBaseSchemaPG(ctx, pg)
 	require.NoError(t, err)
 	assert.False(t, recipeColumnExists(t, pg), "serve-side schema preparation adds no column")
@@ -112,11 +112,12 @@ func TestVectorRecipePublishedAndBackfilled(t *testing.T) {
 }
 
 func TestVectorRecipeWriterWithoutOwnershipKeepsPushingVectors(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	const schema = "agentsview_vector_recipe_role_test"
 	const role = "agentsview_vector_recipe_writer"
 	const rolePassword = "agentsview_vector_recipe_writer_pw"
-	ctx := context.Background()
+	ctx := t.Context()
 
 	for _, tc := range []struct {
 		name string
@@ -129,10 +130,10 @@ func TestVectorRecipeWriterWithoutOwnershipKeepsPushingVectors(t *testing.T) {
 		{name: "cannot update the row", revokeUpdate: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			admin, err := Open(pgURL, schema, true)
+			admin, err := Open(t.Context(), pgURL, schema, true)
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = admin.Close() })
-			_, err = admin.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+			_, err = admin.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
 			require.NoError(t, err)
 			require.NoError(t, EnsureSchema(ctx, admin, schema))
 			unavailable, err := ensureVectorBaseSchemaPG(ctx, admin)
@@ -144,18 +145,18 @@ func TestVectorRecipeWriterWithoutOwnershipKeepsPushingVectors(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, ensureVectorChunkTable(ctx, admin, genID, 4))
 			if tc.dropColumn {
-				_, err = admin.Exec(`ALTER TABLE vector_generations DROP COLUMN params`)
+				_, err = admin.ExecContext(t.Context(), `ALTER TABLE vector_generations DROP COLUMN params`)
 				require.NoError(t, err)
 			}
 
-			_, _ = admin.Exec(`DROP OWNED BY ` + role)
-			_, _ = admin.Exec(`DROP ROLE IF EXISTS ` + role)
-			_, err = admin.Exec(`CREATE ROLE ` + role + ` LOGIN PASSWORD '` + rolePassword + `'`)
+			_, _ = admin.ExecContext(t.Context(), `DROP OWNED BY `+role)
+			_, _ = admin.ExecContext(t.Context(), `DROP ROLE IF EXISTS `+role)
+			_, err = admin.ExecContext(t.Context(), `CREATE ROLE `+role+` LOGIN PASSWORD '`+rolePassword+`'`)
 			require.NoError(t, err)
 			t.Cleanup(func() {
-				_, _ = admin.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
-				_, _ = admin.Exec(`DROP OWNED BY ` + role)
-				_, _ = admin.Exec(`DROP ROLE IF EXISTS ` + role)
+				_, _ = admin.ExecContext(context.WithoutCancel(t.Context()), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
+				_, _ = admin.ExecContext(context.WithoutCancel(t.Context()), `DROP OWNED BY `+role)
+				_, _ = admin.ExecContext(context.WithoutCancel(t.Context()), `DROP ROLE IF EXISTS `+role)
 			})
 			grants := []string{
 				`GRANT USAGE, CREATE ON SCHEMA ` + schema + ` TO ` + role,
@@ -181,14 +182,14 @@ func TestVectorRecipeWriterWithoutOwnershipKeepsPushingVectors(t *testing.T) {
 				grants = append(grants, `REVOKE UPDATE ON vector_generations FROM `+role)
 			}
 			for _, grant := range grants {
-				_, err = admin.Exec(grant)
+				_, err = admin.ExecContext(t.Context(), grant)
 				require.NoError(t, err, grant)
 			}
 
 			restrictedURL, err := url.Parse(pgURL)
 			require.NoError(t, err)
 			restrictedURL.User = url.UserPassword(role, rolePassword)
-			restricted, err := Open(restrictedURL.String(), schema, true)
+			restricted, err := Open(t.Context(), restrictedURL.String(), schema, true)
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = restricted.Close() })
 
@@ -247,14 +248,15 @@ func (p *preparingVectorSource) BeginExport(
 }
 
 func TestVectorPushPreparesSourceOnlyWhenVectorsCanBeStored(t *testing.T) {
-	pgURL := testPGURL(t)
-	const schema = "agentsview_vector_prepare_test"
+	t.Parallel()
+	const schema = vectorPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	const prepareRole = "agentsview_vector_prepare_writer"
 	const prepareRolePassword = "agentsview_vector_prepare_writer_pw"
-	ctx := context.Background()
+	ctx := t.Context()
 
 	t.Run("vector tables available", func(t *testing.T) {
-		sync, localDB, _ := newVectorPushTestSync(t, pgURL, schema)
+		sync, localDB, _ := newVectorPushTestSync(t)
 		seedVectorSession(t, localDB, "A")
 		source := &preparingVectorSource{fakeVectorSource: recipeSource("fp-prepare", nil)}
 		sync.vectorSource = source
@@ -298,31 +300,31 @@ func TestVectorPushPreparesSourceOnlyWhenVectorsCanBeStored(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, localDB, admin := newVectorPushTestSync(t, pgURL, schema)
+			_, localDB, admin := newVectorPushTestSync(t)
 			seedVectorSession(t, localDB, "A")
 			unavailable, err := ensureVectorBaseSchemaPG(ctx, admin)
 			require.NoError(t, err)
 			require.Empty(t, unavailable)
 			extSchema, err := vectorExtensionSchema(ctx, admin)
 			require.NoError(t, err)
-			_, _ = admin.Exec(`DROP OWNED BY ` + prepareRole)
-			_, _ = admin.Exec(`DROP ROLE IF EXISTS ` + prepareRole)
-			_, err = admin.Exec(`CREATE ROLE ` + prepareRole +
-				` LOGIN PASSWORD '` + prepareRolePassword + `'`)
+			_, _ = admin.ExecContext(t.Context(), `DROP OWNED BY `+prepareRole)
+			_, _ = admin.ExecContext(t.Context(), `DROP ROLE IF EXISTS `+prepareRole)
+			_, err = admin.ExecContext(t.Context(), `CREATE ROLE `+prepareRole+
+				` LOGIN PASSWORD '`+prepareRolePassword+`'`)
 			require.NoError(t, err)
 			t.Cleanup(func() {
-				_, _ = admin.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
-				_, _ = admin.Exec(`DROP OWNED BY ` + prepareRole)
-				_, _ = admin.Exec(`DROP ROLE IF EXISTS ` + prepareRole)
+				_, _ = admin.ExecContext(context.WithoutCancel(t.Context()), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
+				_, _ = admin.ExecContext(context.WithoutCancel(t.Context()), `DROP OWNED BY `+prepareRole)
+				_, _ = admin.ExecContext(context.WithoutCancel(t.Context()), `DROP ROLE IF EXISTS `+prepareRole)
 			})
 			for _, grant := range tc.grants(extSchema) {
-				_, err = admin.Exec(grant)
+				_, err = admin.ExecContext(t.Context(), grant)
 				require.NoError(t, err, grant)
 			}
 			restrictedURL, err := url.Parse(pgURL)
 			require.NoError(t, err)
 			restrictedURL.User = url.UserPassword(prepareRole, prepareRolePassword)
-			restricted, err := Open(restrictedURL.String(), schema, true)
+			restricted, err := Open(t.Context(), restrictedURL.String(), schema, true)
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = restricted.Close() })
 			source := &preparingVectorSource{fakeVectorSource: recipeSource("fp-prepare", nil)}

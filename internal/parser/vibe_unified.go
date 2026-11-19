@@ -2,6 +2,7 @@ package parser
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/jsontext"
@@ -192,7 +193,11 @@ func loadVibeUnifiedGeneration(sessionDir string) (vibeUnifiedGeneration, error)
 	if err := json.Unmarshal(raw, &current); err != nil {
 		return vibeUnifiedGeneration{}, fmt.Errorf("parsing Vibe unified CURRENT: %w", err)
 	}
-	if current.StoreFormat != vibeUnifiedStoreFormat || current.StoreFormatMinor < 1 || current.StoreFormatMinor > 8 {
+	// The producer bumps the store minor for any change an older writer must
+	// not attempt, mostly in runtime and checkpoint state. Agentsview only
+	// reads, and the documents it interprets carry their own versions, so a
+	// newer minor is accepted.
+	if current.StoreFormat != vibeUnifiedStoreFormat || current.StoreFormatMinor < 1 {
 		return vibeUnifiedGeneration{}, fmt.Errorf("%w: store %s minor %d", errVibeUnsupportedVersion, current.StoreFormat, current.StoreFormatMinor)
 	}
 	if !isSafeSinglePathComponent(current.Generation) {
@@ -242,38 +247,47 @@ func (g vibeUnifiedGeneration) journalPath() (string, error) {
 	return filepath.Join(g.sessionDir, filepath.FromSlash(path)), nil
 }
 
-// snapshot returns the generation's projection advanced by its journal.
-func (g vibeUnifiedGeneration) snapshot() (vibeUnifiedSnapshot, error) {
+// vibeUnifiedReplay is the state a journal replay advances: the public
+// projection and the working directory of the latest session_relocated
+// record, which supersedes the generation's runtime-state.json.
+type vibeUnifiedReplay struct {
+	snapshot     vibeUnifiedSnapshot
+	relocatedCwd string
+}
+
+// replay returns the generation's projection advanced by its journal.
+func (g vibeUnifiedGeneration) replay() (vibeUnifiedReplay, error) {
 	var projection vibeUnifiedProjectionState
 	if err := readVibeUnifiedDoc(g.dir, "projection-state.json", &projection); err != nil {
-		return vibeUnifiedSnapshot{}, err
+		return vibeUnifiedReplay{}, err
 	}
-	snapshot := projection.Snapshot
+	state := vibeUnifiedReplay{snapshot: projection.Snapshot}
+	snapshot := &state.snapshot
 	// A null chunk list keeps the transcript inline, as before chunk pooling.
 	if g.manifest.ProjectionState.Chunks != nil {
 		paths, err := g.chunkPaths()
 		if err != nil {
-			return vibeUnifiedSnapshot{}, err
+			return vibeUnifiedReplay{}, err
 		}
 		snapshot.History.Entries = nil
 		for _, path := range paths {
 			raw, err := os.ReadFile(path)
 			if err != nil {
-				return vibeUnifiedSnapshot{}, fmt.Errorf("reading Vibe unified chunk: %w", err)
+				return vibeUnifiedReplay{}, fmt.Errorf("reading Vibe unified chunk: %w", err)
 			}
 			var entries []vibeUnifiedEntry
 			if err := json.Unmarshal(raw, &entries); err != nil {
-				return vibeUnifiedSnapshot{}, fmt.Errorf("parsing Vibe unified chunk %s: %w", filepath.Base(path), err)
+				return vibeUnifiedReplay{}, fmt.Errorf("parsing Vibe unified chunk %s: %w", filepath.Base(path), err)
 			}
 			snapshot.History.Entries = append(snapshot.History.Entries, entries...)
 		}
 	}
 	journal, err := g.journalPath()
 	if err != nil || journal == "" {
-		return snapshot, err
+		return state, err
 	}
-	err = replayVibeUnifiedJournal(journal, g.manifest.RecoveryJournalSegment.FirstSequence, &snapshot)
-	return snapshot, err
+	err = replayVibeUnifiedJournal(journal, g.manifest.RecoveryJournalSegment.FirstSequence, &state)
+	return state, err
 }
 
 // VibeUnifiedJournalPath returns the journal segment that extends the
@@ -309,10 +323,11 @@ type vibeUnifiedProjectionOp struct {
 
 var vibeUnifiedRecordDigestField = []byte(`,"record_sha256":"`)
 
-// replayVibeUnifiedJournal applies a journal segment's projection records to
-// snapshot. Records chain by digest from the segment's first sequence, and a
-// final record without its newline is an append still in progress.
-func replayVibeUnifiedJournal(path string, sequence int64, snapshot *vibeUnifiedSnapshot) error {
+// replayVibeUnifiedJournal applies a journal segment's projection and
+// relocation records to state. Records chain by digest from the segment's
+// first sequence, and a final record without its newline is an append still
+// in progress.
+func replayVibeUnifiedJournal(path string, sequence int64, state *vibeUnifiedReplay) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("reading Vibe unified journal: %w", err)
@@ -337,7 +352,7 @@ func replayVibeUnifiedJournal(path string, sequence int64, snapshot *vibeUnified
 			vibeUnifiedRecordDigest(line) != record.Digest {
 			return fmt.Errorf("vibe unified journal record %d breaks the digest chain", sequence)
 		}
-		if err := applyVibeUnifiedJournalRecord(record, snapshot); err != nil {
+		if err := applyVibeUnifiedJournalRecord(record, state); err != nil {
 			return fmt.Errorf("applying Vibe unified journal record %d: %w", sequence, err)
 		}
 		previous = record.Digest
@@ -359,9 +374,13 @@ func vibeUnifiedRecordDigest(line []byte) string {
 	return hex.EncodeToString(hash.Sum(nil))
 }
 
-// applyVibeUnifiedJournalRecord folds one projection record into snapshot.
-// Records for runtime state do not touch the transcript.
-func applyVibeUnifiedJournalRecord(record vibeUnifiedJournalRecord, snapshot *vibeUnifiedSnapshot) error {
+// applyVibeUnifiedJournalRecord folds one journal record into state, as the
+// producer's _apply_journal does. A session_relocated record (store minor 9)
+// moves the session and applies its projection delta. The producer copies
+// every other metadata field, including active_model, from the stored runtime
+// state (_runtime.py relocate_session), so only the cwd is taken from it.
+// Records for other runtime state do not touch the transcript.
+func applyVibeUnifiedJournalRecord(record vibeUnifiedJournalRecord, state *vibeUnifiedReplay) error {
 	switch record.Type {
 	case "projection_advanced":
 		var payload struct {
@@ -370,16 +389,22 @@ func applyVibeUnifiedJournalRecord(record vibeUnifiedJournalRecord, snapshot *vi
 		if err := json.Unmarshal(record.Payload, &payload); err != nil {
 			return err
 		}
-		*snapshot = payload.Snapshot
-	case "projection_delta":
+		state.snapshot = payload.Snapshot
+	case "projection_delta", "session_relocated":
 		var payload struct {
-			Delta []vibeUnifiedProjectionOp `json:"delta"`
+			Delta    []vibeUnifiedProjectionOp `json:"delta"`
+			Metadata struct {
+				Cwd string `json:"cwd"`
+			} `json:"metadata"`
 		}
 		if err := json.Unmarshal(record.Payload, &payload); err != nil {
 			return err
 		}
+		if record.Type == "session_relocated" && payload.Metadata.Cwd != "" {
+			state.relocatedCwd = payload.Metadata.Cwd
+		}
 		for _, op := range payload.Delta {
-			if err := op.apply(snapshot); err != nil {
+			if err := op.apply(&state.snapshot); err != nil {
 				return err
 			}
 		}
@@ -417,7 +442,7 @@ func (op vibeUnifiedProjectionOp) apply(snapshot *vibeUnifiedSnapshot) error {
 
 // parseVibeUnifiedResultFile parses a unified harness session directory,
 // anchored on its CURRENT pointer, into a ParseResult.
-func parseVibeUnifiedResultFile(anchorPath string, fileInfo FileInfo) (ParseResult, error) {
+func parseVibeUnifiedResultFile(ctx context.Context, anchorPath string, fileInfo FileInfo) (ParseResult, error) {
 	sessionDir := filepath.Dir(anchorPath)
 	dirName := filepath.Base(sessionDir)
 
@@ -436,13 +461,14 @@ func parseVibeUnifiedResultFile(anchorPath string, fileInfo FileInfo) (ParseResu
 	if err != nil {
 		return result, err
 	}
-	snapshot, err := gen.snapshot()
+	replay, err := gen.replay()
 	if err != nil {
 		return result, err
 	}
+	snapshot := replay.snapshot
 	projSession := snapshot.Session
 
-	_, _, _, err = applyVibeMetadata(&result, sessionDir)
+	_, _, _, err = applyVibeMetadata(ctx, &result, sessionDir)
 	if err != nil {
 		return result, err
 	}
@@ -454,9 +480,14 @@ func parseVibeUnifiedResultFile(anchorPath string, fileInfo FileInfo) (ParseResu
 	if err := readVibeUnifiedDoc(gen.dir, "runtime-state.json", &runtimeMeta); err != nil {
 		return result, err
 	}
-	if result.Session.Cwd == "" {
+	// A journaled relocation moves the session after meta.json recorded its
+	// working directory, so the relocated cwd wins over the sidecar.
+	if replay.relocatedCwd != "" {
+		runtimeMeta.SessionMetadata.Cwd = replay.relocatedCwd
+	}
+	if result.Session.Cwd == "" || replay.relocatedCwd != "" {
 		result.Session.Cwd = runtimeMeta.SessionMetadata.Cwd
-		if project := ExtractProjectFromCwdWithBranch(result.Session.Cwd, result.Session.GitBranch); project != "" {
+		if project := ExtractProjectFromCwdWithBranchContext(ctx, result.Session.Cwd, result.Session.GitBranch); project != "" {
 			result.Session.Project = project
 		}
 	}
@@ -713,16 +744,19 @@ func readVibeUnifiedDoc(genDir, name string, v any) error {
 	return decodeVibeUnifiedDoc(name, raw, v)
 }
 
+// decodeVibeUnifiedDoc rejects manifest and projection versions other than
+// v1, whose structure the transcript depends on. runtime-state.json is not
+// version-checked: Agentsview reads only identity and session metadata from
+// it and leaves fields it cannot find empty.
 func decodeVibeUnifiedDoc(name string, raw []byte, v any) error {
 	versions := struct {
 		Manifest   int `json:"manifest_version"`
 		Projection int `json:"projection_state_version"`
-		Runtime    int `json:"runtime_state_version"`
 	}{Manifest: 1, Projection: 1}
 	if err := json.Unmarshal(raw, &versions); err != nil {
 		return fmt.Errorf("parsing Vibe unified %s: %w", name, err)
 	}
-	if (name == "manifest.json" && versions.Manifest != 1) || (name == "projection-state.json" && versions.Projection != 1) || (name == "runtime-state.json" && versions.Runtime != 3) {
+	if (name == "manifest.json" && versions.Manifest != 1) || (name == "projection-state.json" && versions.Projection != 1) {
 		return fmt.Errorf("%w: %s", errVibeUnsupportedVersion, name)
 	}
 	if err := json.Unmarshal(raw, v); err != nil {
@@ -855,7 +889,7 @@ func vibeUnifiedParseInputs(sessionDir string) ([]string, error) {
 // pins the generation documents by digest, meta.json is rewritten, and the
 // journal segment grows by appends. The journal can reach tens of megabytes,
 // so it contributes its size and mtime rather than a content hash.
-func vibeUnifiedFingerprint(sessionDir string) (SourceFingerprint, error) {
+func vibeUnifiedFingerprint(ctx context.Context, sessionDir string) (SourceFingerprint, error) {
 	var size, mtime int64
 	hash := sha256.New()
 	for _, path := range []string{
@@ -871,7 +905,7 @@ func vibeUnifiedFingerprint(sessionDir string) (SourceFingerprint, error) {
 		}
 		size += info.Size()
 		mtime = max(mtime, info.ModTime().UnixNano())
-		if err := addSiblingMetadataFingerprintPart(hash, filepath.Base(path), path, info); err != nil {
+		if err := addSiblingMetadataFingerprintPart(ctx, hash, filepath.Base(path), path, info); err != nil {
 			return SourceFingerprint{}, err
 		}
 	}

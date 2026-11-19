@@ -1,6 +1,7 @@
 package clickhouse
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -8,9 +9,11 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -80,7 +83,7 @@ func decodeUsagePriceError(data string) error {
 // is never computed in Go.
 const chUsagePriceKeySQL = `hex(sipHash128(
 				model, price_model, provider_id,
-				ifNull(toUnixTimestamp64Micro(pricing_ts), toInt64(0)),
+				ifNull(toUnixTimestamp64Micro(pricing_ts), 0),
 				pricing_ts IS NULL,
 				source, message_ordinal IS NOT NULL,
 				input_tokens_norm, output_tokens_norm, reasoning_tokens_norm,
@@ -93,13 +96,13 @@ const chUsagePriceKeySQL = `hex(sipHash128(
 // under. zero is the value a row without a record carries, matching a LEFT
 // JOIN without join_use_nulls.
 var chUsageStoredPriceColumns = []struct{ source, joined, stored, zero string }{
-	{"priced", "p_priced", "stored_priced", "toInt64(0)"},
-	{"token_cost_microdollars", "p_token_cost", "stored_token_cost", "toInt64(0)"},
-	{"cache_savings_microdollars", "p_savings", "stored_savings", "toInt64(0)"},
+	{"priced", "p_priced", "stored_priced", "0"},
+	{"token_cost_microdollars", "p_token_cost", "stored_token_cost", "0"},
+	{"cache_savings_microdollars", "p_savings", "stored_savings", "0"},
 	{"billed_context_id", "p_billed_context_id", "stored_billed_context_id", "''"},
 	{"unbilled_context_id", "p_unbilled_context_id", "stored_unbilled_context_id", "''"},
 	{"request_scoped", "p_request_scoped", "stored_request_scoped", "false"},
-	{"band_above_input_tokens", "p_band", "stored_band", "toInt64(0)"},
+	{"band_above_input_tokens", "p_band", "stored_band", "0"},
 	{"price_error", "p_price_error", "stored_price_error", "''"},
 }
 
@@ -121,13 +124,25 @@ const (
 )
 
 // chPricingCatalog is the mirrored catalog a request or push prices with.
-// digest identifies the catalog alone, without reader custom rates, so
-// every reader and exporter of one mirror agrees on it.
+// digest names the price records valid under the catalog. It covers only
+// how the registered models resolve, without reader custom rates, so every
+// reader and exporter of one mirror agrees on it, and a catalog change to a
+// model no usage row names leaves it, and the records, as they are.
 type chPricingCatalog struct {
 	rows   []export.EffectivePricingRow
 	digest string
+	models []chUsagePriceModel
 }
 
+// chUsagePriceModel is one model identity price records were computed
+// for: the inputs the resolver takes, as chPriceUsageInput passes them.
+type chUsagePriceModel struct {
+	providerID string
+	model      string
+	priceModel string
+}
+
+// chLoadPricingCatalog loads the mirror's catalog, GenAI document included.
 func chLoadPricingCatalog(
 	ctx context.Context, conn *sql.DB,
 	customPricing map[string]config.CustomModelRate,
@@ -136,58 +151,120 @@ func chLoadPricingCatalog(
 	if err != nil {
 		return chPricingCatalog{}, err
 	}
-	document, err := loadGenAIPricing(ctx, conn)
+	genAI, err := loadGenAIPricingRow(ctx, conn)
 	if err != nil {
 		return chPricingCatalog{}, err
 	}
-	genAI, err := genAIEffectivePricingRow(document)
+	return chBuildPricingCatalog(ctx, conn, customPricing, pricing, genAI)
+}
+
+// chLoadPricingCatalogWithGenAI loads the mirror's catalog, without reader
+// custom rates, with genAI, the parsed row of the GenAI document the mirror
+// holds.
+func chLoadPricingCatalogWithGenAI(
+	ctx context.Context, conn *sql.DB, genAI export.EffectivePricingRow,
+) (chPricingCatalog, error) {
+	pricing, err := chLoadPricing(ctx, conn, nil)
+	if err != nil {
+		return chPricingCatalog{}, err
+	}
+	return chBuildPricingCatalog(ctx, conn, nil, pricing, genAI)
+}
+
+func chBuildPricingCatalog(
+	ctx context.Context, conn *sql.DB,
+	customPricing map[string]config.CustomModelRate,
+	pricing map[string]export.ModelRates, genAI export.EffectivePricingRow,
+) (chPricingCatalog, error) {
+	models, err := loadUsagePriceModels(ctx, conn, false)
 	if err != nil {
 		return chPricingCatalog{}, err
 	}
 	shared := append(db.MirrorPricingRows(pricing), genAI)
-	digest, err := chUsagePricingDigest(shared, document)
+	digest, err := chUsagePricingDigest(export.NewPricingResolver(shared), models)
 	if err != nil {
 		return chPricingCatalog{}, err
 	}
 	if len(customPricing) == 0 {
-		return chPricingCatalog{rows: shared, digest: digest}, nil
+		return chPricingCatalog{rows: shared, digest: digest, models: models}, nil
 	}
 	chApplyCustomPricing(pricing, customPricing)
-	return chPricingCatalog{rows: append(db.MirrorPricingRows(pricing), genAI), digest: digest}, nil
+	return chPricingCatalog{
+		rows:   append(db.MirrorPricingRows(pricing), genAI),
+		digest: digest,
+		models: models,
+	}, nil
 }
 
-// chUsagePricingDigest changes when any rate, band, source classification,
-// GenAI document content, or provider billing policy changes. Row timestamps
-// are excluded: a catalog refresh that republishes the same rates must not
-// reprice the mirror.
-func chUsagePricingDigest(
-	rows []export.EffectivePricingRow, document *db.GenAIPricingDocument,
-) (string, error) {
-	stripped := make([]export.EffectivePricingRow, len(rows))
-	for i, row := range rows {
-		row.GenAIUpdatedAt = nil
-		row.Rates.UpdatedAt = nil
-		row.Rates.Bands = append([]export.PricingBand(nil), row.Rates.Bands...)
-		for j := range row.Rates.Bands {
-			row.Rates.Bands[j].UpdatedAt = nil
-		}
-		stripped[i] = row
-	}
-	catalog, err := export.EffectivePricingDigest(stripped)
+// loadUsagePriceModels reads the model identities the pricing digest
+// covers, or, when pending is set, the ones pushes found but have not
+// priced under a digest that covers them yet.
+func loadUsagePriceModels(
+	ctx context.Context, conn *sql.DB, pending bool,
+) ([]chUsagePriceModel, error) {
+	rows, err := conn.QueryContext(ctx,
+		`SELECT provider_id, model, price_model FROM usage_price_models WHERE pending = ?`, pending)
 	if err != nil {
-		return "", fmt.Errorf("digesting clickhouse usage pricing: %w", err)
+		return nil, fmt.Errorf("listing clickhouse usage price models: %w", err)
 	}
+	defer rows.Close()
+	var out []chUsagePriceModel
+	for rows.Next() {
+		var m chUsagePriceModel
+		if err := rows.Scan(&m.providerID, &m.model, &m.priceModel); err != nil {
+			return nil, fmt.Errorf("scanning clickhouse usage price model: %w", err)
+		}
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating clickhouse usage price models: %w", err)
+	}
+	return out, nil
+}
+
+// chUsagePricingDigest changes when the record format, a provider billing
+// policy, the set of registered models, or anything one of those models can
+// resolve to at any time changes. Catalog rows no registered model resolves
+// to, and row timestamps, are excluded: the mirror's catalog merges every
+// exporter's fetches, so unrelated rows change on most pushes, and records
+// priced under them would be identical.
+func chUsagePricingDigest(
+	resolver *export.PricingResolver, models []chUsagePriceModel,
+) (string, error) {
+	sorted := slices.Clone(models)
+	slices.SortFunc(sorted, func(a, b chUsagePriceModel) int {
+		return cmp.Or(
+			cmp.Compare(a.providerID, b.providerID),
+			cmp.Compare(a.model, b.model),
+			cmp.Compare(a.priceModel, b.priceModel))
+	})
+	sorted = slices.Compact(sorted)
 	h := sha256.New()
-	h.Write([]byte("agentsview-clickhouse-usage-prices/"))
-	h.Write([]byte(strconv.Itoa(chUsagePriceFormatVersion)))
-	h.Write([]byte{0})
-	h.Write([]byte(pricingpkg.BillingPolicyVersion()))
-	h.Write([]byte{0})
-	h.Write([]byte(catalog))
-	h.Write([]byte{0})
-	if document != nil {
-		data := sha256.Sum256(document.Data)
-		h.Write(data[:])
+	writeField := func(value string) {
+		_, _ = fmt.Fprintf(h, "%d:%s", len(value), value)
+	}
+	writeField("agentsview-clickhouse-usage-prices")
+	writeField(strconv.Itoa(chUsagePriceFormatVersion))
+	writeField(pricingpkg.BillingPolicyVersion())
+	for _, m := range sorted {
+		writeField(m.providerID)
+		writeField(m.model)
+		writeField(m.priceModel)
+		fingerprint, err := resolver.DependencyFingerprint(m.providerID, m.model, m.priceModel)
+		if err == nil {
+			writeField(fingerprint)
+			continue
+		}
+		// A provider adjustment that overflows is that model's price error,
+		// which its records carry. Its unadjusted resolution, which the
+		// error and the records' contexts follow, stands in for the
+		// fingerprint, so the model cannot block every push and read.
+		unadjusted, unadjustedErr := resolver.DependencyFingerprint("", m.model, m.priceModel)
+		if unadjustedErr != nil {
+			return "", fmt.Errorf("digesting clickhouse usage pricing for model %q: %w", m.model, unadjustedErr)
+		}
+		writeField("billing error: " + err.Error())
+		writeField(unadjusted)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
@@ -290,8 +367,10 @@ func (c chUsagePriceContext) lookup() export.PricingLookup {
 	}
 }
 
-// record replays events priced under this context into the pricing block,
-// one call per event so the application counts match per-event pricing.
+// record replays events priced under this context into the pricing block.
+// The application counts match pricing every event on its own; a group's
+// events are recorded in one call because a one-year read replays hundreds
+// of thousands of them.
 func (c chUsagePriceContext) record(
 	pricing *export.PricingResolver, kind string, bandAbove int64, events int,
 ) error {
@@ -302,10 +381,8 @@ func (c chUsagePriceContext) record(
 	case chUsagePriceKindZero:
 		pricing.RecordResolvedComputed(c.ReportedModel, c.PricedModel, lookup)
 	case chUsagePriceKindAggregate:
-		for range events {
-			pricing.RecordResolvedComputedAggregate(
-				c.ReportedModel, c.PricedModel, lookup)
-		}
+		pricing.RecordResolvedCounts(
+			c.ReportedModel, c.PricedModel, lookup, 0, 0, events, nil)
 	case chUsagePriceKindRequest:
 		// One token above the threshold selects exactly that band; zero
 		// tokens select the base rates.
@@ -313,10 +390,12 @@ func (c chUsagePriceContext) record(
 		if bandAbove >= 0 {
 			bandTokens = int(bandAbove) + 1
 		}
-		for range events {
-			pricing.RecordResolvedComputedRequest(
-				c.ReportedModel, c.PricedModel, lookup, bandTokens, 0, 0)
+		var band *int
+		if threshold, ok := lookup.Rates.RequestBand(bandTokens, 0, 0); ok {
+			band = &threshold
 		}
+		pricing.RecordResolvedCounts(
+			c.ReportedModel, c.PricedModel, lookup, 0, events, 0, band)
 	default:
 		return fmt.Errorf("unknown clickhouse usage price kind %q", kind)
 	}
@@ -328,6 +407,14 @@ func (c chUsagePriceContext) record(
 // ladder: a false positive only sends events through request-time pricing,
 // while a false negative would serve a shared price the reader overrode.
 func (c chUsagePriceContext) customPriced(pricing *export.PricingResolver) bool {
+	if pricingpkg.ConfiguredAliasTarget(c.ReportedModel) != "" {
+		for _, at := range []time.Time{{}, pricingpkg.KimiModelEraCutoff.Add(-time.Nanosecond)} {
+			_, lookup := pricing.ResolveAt(c.ReportedModel, c.CanonicalModel, at)
+			if lookup.Rates.Source == export.PricingRowSourceCustom {
+				return true
+			}
+		}
+	}
 	priced := c.CanonicalModel
 	if priced == "" {
 		priced = c.ReportedModel
@@ -456,20 +543,71 @@ func decodeUsagePriceContext(data string) (chUsagePriceContext, error) {
 	return c, err
 }
 
-// loadUsagePriceContexts reads every context persisted under digest.
-func loadUsagePriceContexts(
-	ctx context.Context, conn *sql.DB, digest string,
+// usagePriceContextCache keeps the decoded price contexts of one pricing
+// digest. A context ID is a hash of the context's JSON, so a decoded context
+// stays valid for as long as its ID exists.
+type usagePriceContextCache struct {
+	mu       sync.Mutex
+	digest   string
+	contexts map[string]chUsagePriceContext
+}
+
+// usagePriceContexts returns every context persisted under digest. Each call
+// reads the digest's full context ID list in one query, so a context a push
+// adds mid-read shows up on the next call, but the query returns JSON only
+// for IDs not decoded yet. After the first read that is rare: contexts change
+// only when pricing or the registered models change.
+func (s *Store) usagePriceContexts(
+	ctx context.Context, digest string,
 ) (map[string]chUsagePriceContext, error) {
+	cache := &s.priceContexts
+	cache.mu.Lock()
+	known := cache.contexts
+	if cache.digest != digest {
+		known = nil
+	}
+	cache.mu.Unlock()
+	out, err := queryUsagePriceContexts(ctx, s.conn, digest, known)
+	if err != nil {
+		return nil, err
+	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	// Callers only read the map, so the cache and every caller share it.
+	cache.digest, cache.contexts = digest, out
+	return out, nil
+}
+
+// maxKnownPriceContextIDs caps how many decoded context IDs a read names in
+// its query. clickhouse-go inlines bound arguments into the statement, and
+// the server rejects a statement over max_query_size (256 KiB by default).
+// 2,048 IDs of 32 hex digits take about 74 KB. An ID past the cap only
+// returns its JSON again; the read still reuses its decoded context.
+const maxKnownPriceContextIDs = 2048
+
+// queryUsagePriceContexts reads digest's contexts. It reuses each context
+// already in known and decodes the JSON of the rest.
+func queryUsagePriceContexts(
+	ctx context.Context, conn *sql.DB, digest string,
+	known map[string]chUsagePriceContext,
+) (map[string]chUsagePriceContext, error) {
+	knownIDs := make([]string, 0, min(len(known), maxKnownPriceContextIDs))
+	for id := range known {
+		if len(knownIDs) == maxKnownPriceContextIDs {
+			break
+		}
+		knownIDs = append(knownIDs, id)
+	}
 	rows, err := conn.QueryContext(ctx, `
-		SELECT context_id, context_json
+		SELECT context_id, if(has(?, context_id), '', context_json)
 		FROM usage_price_contexts
-		WHERE pricing_digest = ?`, digest)
+		WHERE pricing_digest = ?`, knownIDs, digest)
 	if isMissingTableError(err) {
 		// The reader may hold SELECT-only credentials, so only push upgrades
 		// the schema.
 		return nil, fmt.Errorf(
 			"clickhouse mirror predates schema version %d; run "+
-				"`agentsview clickhouse push` to upgrade it: %w", SchemaVersion, err)
+				"`agentsview replica clickhouse push` to upgrade it: %w", SchemaVersion, err)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("querying clickhouse usage price contexts: %w", err)
@@ -480,6 +618,10 @@ func loadUsagePriceContexts(
 		var id, data string
 		if err := rows.Scan(&id, &data); err != nil {
 			return nil, fmt.Errorf("scanning clickhouse usage price context: %w", err)
+		}
+		if c, ok := known[id]; ok {
+			out[id] = c
+			continue
 		}
 		c, err := decodeUsagePriceContext(data)
 		if err != nil {
@@ -515,7 +657,7 @@ type pricingCache struct {
 // insert or merge on a pricing table changes the fingerprint, so a stale
 // snapshot is never served; a merge only costs one reload.
 func (s *Store) pricingSnapshot(ctx context.Context) (*pricingSnapshot, error) {
-	fingerprint, err := s.tablePartsFingerprint(ctx, []string{"model_pricing", "model_pricing_bands", "genai_pricing"})
+	fingerprint, err := s.tablePartsFingerprint(ctx, []string{"model_pricing", "model_pricing_bands", "genai_pricing", "usage_price_models"})
 	if err != nil {
 		return nil, err
 	}

@@ -70,9 +70,12 @@ func ParseCodexCloudFile(ctx context.Context, path, machine string) (ParseResult
 	}
 
 	messages := thread.messages(meta)
-	firstMessage, userCount := firstMessageAndUserCount(messages)
+	firstMessage, userCount, err := firstMessageAndUserCountContext(ctx, messages)
+	if err != nil {
+		return ParseResult{}, false, err
+	}
 	cwd := thread.cwd()
-	project := ExtractProjectFromCwd(cwd)
+	project := ExtractProjectFromCwdWithBranchContext(ctx, cwd, "")
 	if project == "" {
 		project = "codex_cloud"
 	}

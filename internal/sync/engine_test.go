@@ -6058,6 +6058,49 @@ func TestProjectIdentitySnapshotsDoNotCacheCheckoutHead(t *testing.T) {
 	assert.Equal(t, "branch-b", branches["app-b"])
 }
 
+func TestProjectIdentityBackfillFailureRecovers(t *testing.T) {
+	for _, tc := range []struct{ name, trigger string }{
+		{"queue", `CREATE TRIGGER block_backfill BEFORE INSERT ON background_migrations WHEN NEW.state = 'pending' BEGIN SELECT RAISE(FAIL, 'backfill blocked'); END`},
+		{"start", `CREATE TRIGGER block_backfill BEFORE UPDATE ON background_migrations WHEN NEW.state = 'running' BEGIN SELECT RAISE(FAIL, 'backfill blocked'); END`},
+		{"completion", `CREATE TRIGGER block_backfill BEFORE UPDATE ON background_migrations WHEN NEW.state = 'completed' BEGIN SELECT RAISE(FAIL, 'backfill blocked'); END`},
+		{"source", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "sessions.db")
+			database := dbtest.OpenTestDBAt(t, path)
+			require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "legacy", Project: "project", Machine: "local", Agent: "codex"}))
+			raw, err := sql.Open("sqlite3", path)
+			require.NoError(t, err)
+			defer raw.Close()
+			_, err = raw.ExecContext(t.Context(), `DELETE FROM session_project_identity_snapshots`)
+			require.NoError(t, err)
+			if tc.trigger != "" {
+				_, err = raw.ExecContext(t.Context(), tc.trigger)
+				require.NoError(t, err)
+			}
+			engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local"})
+			defer engine.Close()
+			if tc.name == "source" {
+				engine.sourceSyncErr = errors.New("backfill blocked")
+			}
+			require.ErrorContains(t, engine.BackfillProjectIdentitySnapshots(t.Context()), "backfill blocked")
+			status, err := database.ProjectIdentityBackfillStatus(t.Context())
+			require.NoError(t, err)
+			assert.Equal(t, "failed", status.State)
+			assert.Contains(t, status.LastError, "backfill blocked")
+			if tc.trigger != "" {
+				_, err = raw.ExecContext(t.Context(), `DROP TRIGGER block_backfill`)
+				require.NoError(t, err)
+			}
+			engine.sourceSyncErr = nil
+			require.NoError(t, engine.BackfillProjectIdentitySnapshots(t.Context()))
+			status, err = database.ProjectIdentityBackfillStatus(t.Context())
+			require.NoError(t, err)
+			assert.Equal(t, "completed", status.State)
+		})
+	}
+}
+
 func TestProjectIdentityBackfillPreservesEvidenceAcrossSchemaUpgrade(
 	t *testing.T,
 ) {
@@ -6977,7 +7020,7 @@ func TestProjectIdentityIncrementalStatePreservesExplicitSourceProject(
 						Ordinal: inc.NextOrdinal,
 					}}, nil, nil, nil, appendedInfo.ModTime(), int64(len(appended)), nil, nil, nil
 				},
-				nil, "", nil,
+				nil, "", nil, "",
 			)
 			require.True(t, ok)
 			require.NotNil(t, result.incremental)
@@ -7077,7 +7120,7 @@ func TestProjectIdentityLegacyMappedSnapshotReparsesBeforeIncrementalAppend(
 			parseCalled = true
 			return nil, nil, nil, nil, time.Time{}, 0, nil, nil, nil
 		},
-		nil, "", nil,
+		nil, "", nil, "",
 	)
 	assert.False(t, ok,
 		"legacy snapshots must fall through to a source-aware full parse")
@@ -11852,7 +11895,7 @@ func TestCodexIndexSessionNameChangedDetectsTitleRenameBelowStoredMtime(t *testi
 	f := seedCodexRenameCase(t, database)
 
 	// Control: nothing changed -> no rename reported, so the caller may skip.
-	assert.False(t, f.e.codexIndexSessionNameChanged(f.path),
+	assert.False(t, f.e.codexIndexSessionNameChanged(t.Context(), f.path),
 		"unchanged title must not report a change")
 
 	// Title-only rename whose index mtime lands at or below the stored
@@ -11867,7 +11910,7 @@ func TestCodexIndexSessionNameChangedDetectsTitleRenameBelowStoredMtime(t *testi
 		parser.LookupCodexThreadName(f.path, f.uuid),
 		"live index must report the renamed title")
 
-	assert.True(t, f.e.codexIndexSessionNameChanged(f.path),
+	assert.True(t, f.e.codexIndexSessionNameChanged(t.Context(), f.path),
 		"title-only rename at or below stored watermark must report a change")
 }
 
@@ -11885,7 +11928,7 @@ func TestCodexIndexSessionNameChangedIgnoresAbsentIndexEntry(t *testing.T) {
 		idxPath := filepath.Join(f.root, parser.CodexSessionIndexFilename)
 		require.NoError(t, os.Remove(idxPath))
 
-		assert.False(t, f.e.codexIndexSessionNameChanged(f.path),
+		assert.False(t, f.e.codexIndexSessionNameChanged(t.Context(), f.path),
 			"a missing index must not report a stored title as renamed")
 	})
 
@@ -11896,7 +11939,7 @@ func TestCodexIndexSessionNameChangedIgnoresAbsentIndexEntry(t *testing.T) {
 			"99999999-8888-7777-6666-555555555555", "Other Session",
 			time.Unix(0, f.effectiveMtime))
 
-		assert.False(t, f.e.codexIndexSessionNameChanged(f.path),
+		assert.False(t, f.e.codexIndexSessionNameChanged(t.Context(), f.path),
 			"an index without this session's entry must not report a rename")
 	})
 }
@@ -11944,7 +11987,7 @@ func TestCodexStoredNameDiffersPreservesMissingSemantics(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, e.codexStoredNameDiffersBySessionID(
-				tt.sessionID, tt.indexTitle, tt.missingDiffers,
+				t.Context(), tt.sessionID, tt.indexTitle, tt.missingDiffers,
 			))
 		})
 	}
@@ -12197,11 +12240,16 @@ func TestProviderStoredFreshnessDecision(t *testing.T) {
 			unchanged := e.providerSourceUnchangedInDB(t.Context(), parser.SourceRef{Provider: tc.agent, DisplayPath: path}, fp,
 				parser.ProviderSyncSemantics{FingerprintHashRequiredForFreshness: tc.required}, nil)
 			assert.Equal(t, tc.want, unchanged)
-			assert.Equal(t, tc.wantReads, reads.Load())
+			assert.Equal(t, tc.wantReads > 0, reads.Load() > 0,
+				"whether the freshness check reads the stored hash")
 		})
 	}
 }
 
+// countSessionFileHashReads counts statement compilations that read
+// sessions.file_hash. Serving readers cache prepared statements, so repeated
+// executions of the same SQL count once: use it to tell whether a path reads
+// the hash at all, not how many times it runs a query.
 func countSessionFileHashReads(t *testing.T, archive *db.DB) *atomic.Int32 {
 	t.Helper()
 	reads := &atomic.Int32{}

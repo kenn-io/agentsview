@@ -17,12 +17,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/parsertest"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
 func TestPaddedUTCBoundClampsBeforeYearOne(t *testing.T) {
@@ -464,7 +466,8 @@ func TestUsageRowQueryPushesDateBoundsIntoUnion(t *testing.T) {
 	assert.NotContains(t, normalized, " or ")
 	assert.NotContains(t, normalized, "display_name")
 	assert.NotContains(t, normalized, "first_message")
-	assert.NotContains(t, normalized, "cost_status")
+	// Cost status decides whether a harness-recorded cost prices the row.
+	assert.Contains(t, normalized, "u.cost_status")
 	assert.Contains(t, normalized, "u.cost_source")
 	assert.NotContains(t, normalized, "user_message_count")
 	assert.NotContains(t, normalized, "session_activity_at")
@@ -485,15 +488,16 @@ func TestUsageRowQueryPushesDateBoundsIntoUnion(t *testing.T) {
 	assert.Contains(t, normalized, "m.timestamp <= ?")
 	assert.Contains(t, normalized, "ue.occurred_at <= ?")
 	assert.Contains(t, normalized, "s.started_at <= ?")
-	require.Len(t, args, 8)
-	assert.Equal(t, "2024-05-31T10:00:00Z", args[0])
-	assert.Equal(t, "2024-07-01T13:59:59Z", args[1])
-	assert.Equal(t, "2024-05-31T10:00:00Z", args[2])
-	assert.Equal(t, "2024-07-01T13:59:59Z", args[3])
-	assert.Equal(t, "2024-05-31T10:00:00Z", args[4])
-	assert.Equal(t, "2024-07-01T13:59:59Z", args[5])
-	assert.Equal(t, "2024-05-31T10:00:00Z", args[6])
-	assert.Equal(t, "2024-07-01T13:59:59Z", args[7])
+	assert.Contains(t, normalized, "ue.occurred_at_us >= ?")
+	assert.Contains(t, normalized, "ue.occurred_at_us <= ?")
+	padded := []any{"2024-05-31T10:00:00Z", "2024-07-01T13:59:59Z"}
+	var want []any
+	want = append(want, padded...) // m.timestamp
+	want = append(want, int64(1717149600000000), int64(1719842399000000))
+	want = append(want, padded...) // unparsed ue.occurred_at
+	want = append(want, padded...) // message s.started_at
+	want = append(want, padded...) // event s.started_at
+	assert.Equal(t, want, args)
 }
 
 func TestTopSessionsUsageRowQueryUsesNarrowScan(t *testing.T) {
@@ -506,7 +510,8 @@ func TestTopSessionsUsageRowQueryUsesNarrowScan(t *testing.T) {
 	normalized := strings.ToLower(query)
 	assert.NotContains(t, normalized, "display_name")
 	assert.NotContains(t, normalized, "first_message")
-	assert.NotContains(t, normalized, "cost_status")
+	// Cost status decides whether a harness-recorded cost prices the row.
+	assert.Contains(t, normalized, "u.cost_status")
 	assert.Contains(t, normalized, "u.cost_source")
 	assert.NotContains(t, normalized, "user_message_count")
 	assert.NotContains(t, normalized, "session_activity_at")
@@ -519,6 +524,7 @@ func TestTopSessionsUsageRowQueryUsesNarrowScan(t *testing.T) {
 	assert.Contains(t, normalized, "ue.occurred_at is null")
 	assert.Contains(t, normalized, "m.timestamp >= ?")
 	assert.Contains(t, normalized, "ue.occurred_at >= ?")
+	assert.Contains(t, normalized, "ue.occurred_at_us >= ?")
 	assert.Contains(t, normalized,
 		"nullif(m.timestamp, '') is null\n\tand s.started_at >= ?")
 	assert.Contains(t, normalized,
@@ -528,19 +534,22 @@ func TestTopSessionsUsageRowQueryUsesNarrowScan(t *testing.T) {
 	assert.Contains(t, normalized, "julianday(u.ts) >= julianday(?)")
 	assert.Contains(t, normalized, "julianday(u.ts) < julianday(?)")
 	padded := []any{"2024-05-31T10:00:00Z", "2024-07-01T13:59:59Z"}
+	paddedMicros := []any{int64(1717149600000000), int64(1719842399000000)}
 	window := []any{
 		"2024-06-01T04:00:00Z", "2024-06-01",
 		"2024-07-01T04:00:00Z", "2024-06-30",
 	}
 	var want []any
-	want = append(want, padded...) // duplicate-request pass
-	want = append(want, padded...) // ranked rows: m.timestamp
-	want = append(want, padded...) // ranked rows: s.started_at
-	want = append(want, window...) // ranked rows: exact window
-	for range 4 {                  // row source branches
-		want = append(want, padded...)
-	}
-	want = append(want, window...) // survivors: exact window
+	want = append(want, padded...)       // duplicate-request pass
+	want = append(want, padded...)       // ranked rows: m.timestamp
+	want = append(want, padded...)       // ranked rows: s.started_at
+	want = append(want, window...)       // ranked rows: exact window
+	want = append(want, padded...)       // row source: m.timestamp
+	want = append(want, paddedMicros...) // row source: ue.occurred_at_us
+	want = append(want, padded...)       // row source: unparsed ue.occurred_at
+	want = append(want, padded...)       // row source: message s.started_at
+	want = append(want, padded...)       // row source: event s.started_at
+	want = append(want, window...)       // survivors: exact window
 	assert.Equal(t, want, args)
 }
 
@@ -595,7 +604,7 @@ func TestUsageEventsReplaceAndList(t *testing.T) {
 	require.NotNil(t, got[0].Cost, "Cost want %v", cost)
 	require.Equal(t, cost, *got[0].Cost, "Cost")
 	require.Equal(t, "session:hermes:event", got[0].DedupKey, "DedupKey")
-	fps, err := d.UsageEventFingerprints([]string{"hermes:event", "missing"})
+	fps, err := d.UsageEventFingerprints(t.Context(), []string{"hermes:event", "missing"})
 	require.NoError(t, err, "UsageEventFingerprints")
 	require.NotEmpty(t, fps["hermes:event"],
 		"expected non-empty usage event fingerprint")
@@ -1697,11 +1706,11 @@ func TestParseUsageTokenCounters(t *testing.T) {
 	assert.Equal(t, 20, cacheCreate)
 	assert.Equal(t, 300, cacheRead)
 
-	in, out, cacheCreate, cacheRead, reasoning := parseUsageTokenCountersWithReasoning(
-		`{"input_tokens":100,"output_tokens":50,` +
+	in, out, cacheCreate, cacheRead, reasoning := parsedUsageTokenCountersWithReasoning(
+		usagefacts.ParseTokenUsage(`{"input_tokens":100,"output_tokens":50,` +
 			`"cache_creation_input_tokens":20,` +
 			`"cache_read_input_tokens":300,` +
-			`"reasoning_tokens":75}`,
+			`"reasoning_tokens":75}`),
 	)
 	assert.Equal(t, 100, in)
 	assert.Equal(t, 50, out)
@@ -2144,15 +2153,15 @@ func TestSnapshotRankedDailyUsageRowsRanksOnlyDuplicatedRequests(t *testing.T) {
 }
 
 func TestDailyTopSessionsAndSessionCountsDedupClaudeKeyVariants(t *testing.T) {
-	for _, tc := range []struct{ name, requestID string }{
-		{"complete Claude pair", "req_dup"},
-		{"source UUID with incomplete pair", ""},
+	for _, tc := range []struct{ name, requestID, sourceUUID string }{
+		{"complete Claude pair", "req_dup", ""},
+		{"message ID and source UUID without request ID", "", "source-1"},
+		{"message ID without request ID", "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			sourceUUID := ""
+			sourceUUID := tc.sourceUUID
 			uniqueSourceUUID := ""
-			if tc.requestID == "" {
-				sourceUUID = "source-1"
+			if sourceUUID != "" {
 				uniqueSourceUUID = "source-unique"
 			}
 			d := testDB(t)
@@ -4168,7 +4177,7 @@ func BenchmarkUsageRollup(b *testing.B) {
 				ctx, conn, timezoneID, snapshot, window.filter)
 			require.NoError(b, readErr)
 			groups, aggregateErr := aggregateUsageRollupExceptions(
-				exceptions, snapshot, window.filter, resolver)
+				exceptions, nil, snapshot, window.filter, resolver, &usageFactsResult{})
 			require.NoError(b, aggregateErr)
 			exceptionRows := len(exceptions)
 			exceptionGroups := len(groups)
@@ -4184,7 +4193,7 @@ func BenchmarkUsageRollup(b *testing.B) {
 					require.NoError(b, readErr)
 				}
 				groups, aggregateErr = aggregateUsageRollupExceptions(
-					exceptions, snapshot, window.filter, resolver)
+					exceptions, nil, snapshot, window.filter, resolver, &usageFactsResult{})
 				if aggregateErr != nil {
 					require.NoError(b, aggregateErr)
 				}
@@ -4505,6 +4514,47 @@ func seedLongLivedUsageBenchmark(tb testing.TB, database *DB) {
 func benchClaudeID(kind string, session, ordinal int) string {
 	return kind + "-bench-" + strconv.Itoa(session) + "-" +
 		strconv.Itoa(ordinal)
+}
+
+func TestGetDailyUsage_OverlappingPricingAliases(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte(`
+[custom_model_pricing.deployment]
+price_as = "model-b"
+[custom_model_pricing.model-b]
+price_as = "model-c"
+[custom_model_pricing.zero-model]
+`), 0o600))
+	cfg, err := config.LoadReadOnlyAt(dir)
+	require.NoError(t, err)
+	pricingpkg.SetConfiguredAliases(config.PricingAliases(cfg.CustomModelPricing))
+	t.Cleanup(func() { pricingpkg.SetConfiguredAliases(nil) })
+	d := testDB(t)
+	d.SetCustomPricing(cfg.CustomModelPricing)
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{
+		{ModelPattern: "model-b", InputPerMTok: money.MustParseDollars("2")},
+		{ModelPattern: "model-c", InputPerMTok: money.MustParseDollars("3")},
+		{ModelPattern: "zero-model", InputPerMTok: money.MustParseDollars("4")},
+	}))
+	for _, model := range []string{"deployment", "model-b", "zero-model"} {
+		insertSession(t, d, model, "project")
+		require.NoError(t, d.InsertMessages(t.Context(), []Message{{
+			SessionID: model, Role: "assistant", Model: model, Timestamp: "2026-08-10T12:00:00Z",
+			TokenUsage: []byte(`{"input_tokens":1000000}`),
+		}}))
+	}
+	got, err := d.GetDailyUsage(t.Context(), UsageFilter{Timezone: "UTC"})
+	require.NoError(t, err)
+	require.Len(t, got.Daily, 1)
+	costs := make(map[string]money.Money)
+	for _, model := range got.Daily[0].ModelBreakdowns {
+		costs[model.ModelName] = model.Cost
+	}
+	assert.Equal(t, map[string]money.Money{
+		"deployment": money.MustParseDollars("2"),
+		"model-b":    money.MustParseDollars("3"),
+		"zero-model": {},
+	}, costs)
 }
 
 func TestGetDailyUsage_PricingPrecedence(t *testing.T) {
@@ -5214,7 +5264,7 @@ func TestAICreditsFromCost(t *testing.T) {
 // TestCostUSDFromCost pins the deprecated cost_usd compatibility
 // conversion (see SessionUsage.CostUSD): present and equal to
 // microdollars/1e6 exactly when hasCost is true, nil otherwise. Every
-// backend (SQLite, PostgreSQL, DuckDB) and the subagent combiner call
+// backend (SQLite, PostgreSQL, ClickHouse) and the subagent combiner call
 // this single function, so this is the one place the arithmetic is
 // pinned.
 func TestCostUSDFromCost(t *testing.T) {
@@ -5312,7 +5362,10 @@ func TestGetDailyUsage_CodebuffCostOnly(t *testing.T) {
 // UTC cutoff and K3 rates at and after it. The explicit k2d6-agent alias stays
 // on K2.6, while static k3/k3-agent rows price flat at K3.
 func TestGetDailyUsage_KimiAliasPricing(t *testing.T) {
+	pricingpkg.SetConfiguredAliases(map[string]string{"gateway-kimi": "kimi-for-coding"})
+	t.Cleanup(func() { pricingpkg.SetConfiguredAliases(nil) })
 	d := testDB(t)
+	d.SetCustomPricing(map[string]config.CustomModelRate{"gateway-kimi": {PriceAs: "kimi-for-coding"}})
 	ctx := t.Context()
 
 	// K2.6 era rates (matching the moonshot/kimi-k2.6 snapshot row) and
@@ -5360,6 +5413,12 @@ func TestGetDailyUsage_KimiAliasPricing(t *testing.T) {
 		wantCost       money.Money
 		wantPriceModel string // key expected in the pricing block
 	}{
+		{
+			name: "gateway before cutoff", model: "gateway-kimi", ts: "2026-07-18T23:59:58Z", wantCost: k26Cost, wantPriceModel: "moonshot/kimi-k2.6",
+		},
+		{
+			name: "gateway at cutoff", model: "gateway-kimi", ts: "2026-07-19T00:00:00Z", wantCost: k3Cost, wantPriceModel: "kimi-k3",
+		},
 		{
 			name:           "kimi-for-coding one second before cutoff",
 			model:          "kimi-for-coding",
@@ -5441,7 +5500,11 @@ func TestGetDailyUsage_KimiAliasPricing(t *testing.T) {
 
 	for i, tt := range tests {
 		sessionID := "kimi-dates-" + strconv.Itoa(i)
-		insertSession(t, d, sessionID, "proj", func(s *Session) {
+		project := "proj"
+		if tt.model == "gateway-kimi" {
+			project = "gateway-project"
+		}
+		insertSession(t, d, sessionID, project, func(s *Session) {
 			s.Agent = "kimi"
 			s.StartedAt = new(tt.ts)
 		})
@@ -5479,6 +5542,16 @@ func TestGetDailyUsage_KimiAliasPricing(t *testing.T) {
 					tt.wantPriceModel)
 			}
 		})
+	}
+	for i, tc := range tests[:2] {
+		session, err := d.GetSessionUsage(ctx, "kimi-dates-"+strconv.Itoa(i), true)
+		require.NoError(t, err)
+		assert.Equal(t, tc.wantCost, session.Cost)
+		q, err := activity.ResolveQuery(activity.QueryInput{Preset: "day", Date: tc.ts[:10], Timezone: "UTC"}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
+		require.NoError(t, err)
+		report, err := d.GetActivityReport(ctx, AnalyticsFilter{Project: "gateway-project", Timezone: "UTC"}, q)
+		require.NoError(t, err)
+		assert.Equal(t, tc.wantCost, report.Totals.Cost)
 	}
 }
 
@@ -5958,7 +6031,7 @@ func TestSortedUsageEventFingerprints(t *testing.T) {
 				id: tt.wantSorted, "missing": "",
 			}, sorted)
 
-			raw, err := database.UsageEventFingerprints(ids)
+			raw, err := database.UsageEventFingerprints(t.Context(), ids)
 			require.NoError(t, err)
 			assert.Equal(t, map[string]string{
 				id: tt.wantRaw, "missing": "",

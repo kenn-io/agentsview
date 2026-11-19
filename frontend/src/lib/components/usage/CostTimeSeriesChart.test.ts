@@ -124,18 +124,20 @@ function usageSummary(
 
 function modelDailyEntry(
   index: number,
-  models: Array<{ modelName: string; cost: Money }>,
+  models: Array<{ modelName: string; cost: Money; inputTokens?: number; outputTokens?: number }>,
 ): DbDailyUsageEntry {
   const entry = dailyEntry(index);
   entry.projectBreakdowns = [];
-  entry.modelBreakdowns = models.map(({ modelName, cost }) => ({
-    modelName,
-    inputTokens: 60,
-    outputTokens: 30,
-    cacheCreationTokens: 0,
-    cacheReadTokens: 0,
-    cost,
-  }));
+  entry.modelBreakdowns = models.map(
+    ({ modelName, cost, inputTokens = 60, outputTokens = 30 }) => ({
+      modelName,
+      inputTokens,
+      outputTokens,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      cost,
+    }),
+  );
   return entry;
 }
 
@@ -248,7 +250,8 @@ describe("CostTimeSeriesChart", () => {
     await tick();
     const tooltip = document.querySelector(".tooltip")!;
     expect(tooltip.querySelector(".tooltip-date")?.textContent).toContain("Jun 5, 2026");
-    expect(tooltip.querySelector(".tooltip-row")?.textContent).toContain("$0.00");
+    expect(tooltip.querySelector(".tooltip-row")).toBeNull();
+    expect(tooltip.querySelector(".tooltip-empty")?.textContent).toBe("No usage");
 
     unmount(component);
   });
@@ -346,6 +349,20 @@ describe("CostTimeSeriesChart", () => {
     expect(document.querySelector(".chart-svg")).toBeNull();
 
     unmount(component);
+  });
+
+  it("leaves the empty state to a loaded summary when the summary read failed", async () => {
+    usage.summary = null;
+    usage.errors.summary = "summary failed";
+    try {
+      const component = mountChart();
+      await tick();
+
+      expect(document.body.textContent).not.toContain("No data for this period");
+      unmount(component);
+    } finally {
+      usage.errors.summary = null;
+    }
   });
 
   it("marks a selected range and exposes a clear-selection action", async () => {
@@ -539,7 +556,7 @@ describe("CostTimeSeriesChart", () => {
 
   const names = (by: string, from: number, to: number) =>
     Array.from({ length: to - from }, (_, index) => `${by}-${from + index}`);
-  const seriesSummary = (by: "model" | "agent", ids: string[]) => {
+  const seriesSummary = (by: "model" | "agent", ids: string[], costs?: Record<string, number>) => {
     const entry = dailyEntry(0);
     entry.projectBreakdowns = [];
     const rows = ids.map((id) => ({
@@ -547,7 +564,7 @@ describe("CostTimeSeriesChart", () => {
       outputTokens: 30,
       cacheCreationTokens: 0,
       cacheReadTokens: 0,
-      cost: testMoney(12 - Number(id.split("-")[1])),
+      cost: testMoney(costs?.[id] ?? 12 - Number(id.split("-")[1])),
     }));
     if (by === "model")
       entry.modelBreakdowns = rows.map((row, index) => ({ ...row, modelName: ids[index]! }));
@@ -560,11 +577,22 @@ describe("CostTimeSeriesChart", () => {
     by: "model" | "agent";
     selected: string;
     reference?: string[];
+    costs?: Record<string, number>;
     brushed?: string[];
     plotted: string[];
     legend: string[];
     lit: string[];
   }>([
+    {
+      name: "cuts tiny reference series while keeping a selected series that grows in share",
+      by: "model",
+      selected: "tiny",
+      reference: ["large", "tiny", "smallest"],
+      costs: { large: 999, tiny: 1, smallest: 1 },
+      plotted: ["tiny"],
+      legend: ["large", "tiny", "Other"],
+      lit: ["tiny"],
+    },
     {
       name: "keeps the unselected entries of a single selected series and dims them",
       by: "model",
@@ -601,14 +629,14 @@ describe("CostTimeSeriesChart", () => {
       legend: [...names("model", 0, 10), "Other"],
       lit: [...names("model", 0, 10), "Other"],
     },
-  ])("$name", async ({ by, selected, reference, brushed, plotted, legend, lit }) => {
+  ])("$name", async ({ by, selected, reference, costs, brushed, plotted, legend, lit }) => {
     usage.toggles.timeSeries.groupBy = by;
     usage.toggles.attribution.groupBy = by;
     if (by === "model") usage.selectedModel = selected;
     else sessions.filters.agent = selected;
-    usage.referenceSummary = reference ? seriesSummary(by, reference) : null;
+    usage.referenceSummary = reference ? seriesSummary(by, reference, costs) : null;
     usage.attributionSummary = brushed ? seriesSummary(by, brushed) : null;
-    usage.summary = seriesSummary(by, plotted);
+    usage.summary = seriesSummary(by, plotted, costs);
 
     const component = mountChart();
     await tick();
@@ -620,6 +648,100 @@ describe("CostTimeSeriesChart", () => {
         .filter((item) => !item.classList.contains("dimmed"))
         .map((item) => item.textContent?.trim()),
     ).toEqual(lit);
+    unmount(component);
+  });
+
+  it.each(["cost", "token"] as const)(
+    "folds tiny %s series into Other while preserving daily stack heights",
+    async (mode) => {
+      usage.mode = mode;
+      usage.setSelectedTokenTypes(["output"]);
+      usage.toggles.timeSeries.groupBy = "model";
+      usage.toggles.timeSeries.view = "bars";
+      const modelNames = ["large", "boundary", "tiny", "smallest"];
+      usage.summary = usageSummary(
+        [
+          [993, 5, 2, 0],
+          [987, 5, 6, 2],
+        ].map((values, day) => {
+          const entry = modelDailyEntry(
+            day,
+            values.map((value, index) => ({
+              modelName: modelNames[index]!,
+              cost: testMoney(value),
+              inputTokens: 100_000,
+              outputTokens: value,
+            })),
+          );
+          entry.totalCost = testMoney(1000);
+          entry.inputTokens = 400_000;
+          entry.outputTokens = 1000;
+          return entry;
+        }),
+      );
+      const component = mountChart();
+      await tick();
+
+      const labels = Array.from(document.querySelectorAll(".legend-item"), (item) =>
+        item.textContent?.trim(),
+      );
+      expect(labels).toEqual(["large", "boundary", "Other"]);
+      const bars = document.querySelectorAll("g[data-cost-bar]");
+      expect(bars).toHaveLength(2);
+      for (const bar of bars) {
+        const segments = Array.from(bar.querySelectorAll("rect.cost-seg"));
+        expect(
+          segments.reduce((sum, segment) => sum + Number(segment.getAttribute("height")), 0),
+        ).toBeCloseTo(160);
+      }
+      for (const [day, value] of [2, 8].entries()) {
+        document
+          .querySelectorAll(".slot-hit")
+          [day]!.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+        await tick();
+        const other = Array.from(document.querySelectorAll(".tooltip-row")).find((row) =>
+          row.textContent?.includes("Other"),
+        );
+        expect(other?.querySelector("dd")?.textContent?.trim()).toBe(
+          mode === "cost" ? `$${value}.00` : String(value),
+        );
+      }
+      usage.excludedModels = "large";
+      await tick();
+      expect(
+        Array.from(document.querySelectorAll(".legend-item"), (item) => item.textContent?.trim()),
+      ).toEqual(["boundary", "tiny", "smallest"]);
+      unmount(component);
+    },
+  );
+
+  it("omits zero-cost series and empty Other while keeping day slots", async () => {
+    usage.toggles.timeSeries.groupBy = "model";
+    const entry = modelDailyEntry(0, [
+      { modelName: "zero-a", cost: testMoney(0) },
+      { modelName: "zero-b", cost: testMoney(0) },
+    ]);
+    entry.totalCost = testMoney(0);
+    entry.inputTokens = 120;
+    entry.outputTokens = 60;
+    usage.summary = usageSummary([entry]);
+    const component = mountChart();
+    await tick();
+    expect(document.querySelectorAll(".slot-hit")).toHaveLength(1);
+    expect(document.querySelector(".legend")).toBeNull();
+    const visibleEntry = modelDailyEntry(0, [
+      { modelName: "visible-a", cost: testMoney(9) },
+      { modelName: "visible-b", cost: testMoney(1) },
+      { modelName: "zero", cost: testMoney(0) },
+    ]);
+    visibleEntry.totalCost = testMoney(10);
+    visibleEntry.inputTokens = 180;
+    visibleEntry.outputTokens = 90;
+    usage.summary = usageSummary([visibleEntry]);
+    await tick();
+    expect(
+      Array.from(document.querySelectorAll(".legend-item"), (item) => item.textContent?.trim()),
+    ).toEqual(["visible-a", "visible-b"]);
     unmount(component);
   });
 
@@ -638,8 +760,8 @@ describe("CostTimeSeriesChart", () => {
     const dots = Array.from(document.querySelectorAll<HTMLElement>(".legend-dot"));
     expect(marks).toHaveLength(11);
     expect(dots).toHaveLength(11);
-    expect(marks.at(-1)!.getAttribute("fill")).toBe("var(--text-muted)");
-    expect(dots.at(-1)!.style.background).toBe("var(--text-muted)");
+    expect(marks.at(-1)!.getAttribute("fill")).toBe("var(--usage-series-other)");
+    expect(dots.at(-1)!.style.background).toBe("var(--usage-series-other)");
     unmount(component);
   });
 
@@ -674,6 +796,61 @@ describe("CostTimeSeriesChart", () => {
     expect(rows[0]!.textContent).toContain("$9.00");
     expect(rows[1]!.textContent).toContain("medium");
     expect(rows[2]!.textContent).toContain("small");
+
+    unmount(component);
+  });
+
+  it("hides series with no usage on the hovered day", async () => {
+    usage.toggles.timeSeries.groupBy = "model";
+    const models = Array.from({ length: 11 }, (_, index) => ({
+      modelName: `model-${index}`,
+      cost: testMoney(11 - index),
+    }));
+    const first = modelDailyEntry(0, models);
+    const second = modelDailyEntry(1, models.slice(0, 10));
+    usage.summary = usageSummary([first, second]);
+
+    const component = mountChart();
+    await tick();
+    const hits = document.querySelectorAll(".slot-hit");
+    hits[0]!.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+    await tick();
+    expect(
+      Array.from(document.querySelectorAll(".tooltip-name"), (row) => row.textContent),
+    ).toContain("Other");
+
+    hits[1]!.dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+    await tick();
+    expect(
+      Array.from(document.querySelectorAll(".tooltip-name"), (row) => row.textContent),
+    ).toEqual(names("model", 0, 10));
+
+    unmount(component);
+  });
+
+  it("leaves series with nothing on the hovered day out of the tooltip", async () => {
+    usage.toggles.timeSeries.groupBy = "model";
+    usage.summary = usageSummary([
+      modelDailyEntry(0, [
+        { modelName: "busy", cost: testMoney(5) },
+        { modelName: "idle", cost: testMoney(0) },
+      ]),
+      modelDailyEntry(1, [
+        { modelName: "busy", cost: testMoney(1) },
+        { modelName: "idle", cost: testMoney(2) },
+      ]),
+    ]);
+
+    const component = mountChart();
+    await tick();
+    document
+      .querySelector(".slot-hit")!
+      .dispatchEvent(new MouseEvent("mouseenter", { bubbles: true }));
+    await tick();
+
+    const rows = Array.from(document.querySelectorAll(".tooltip .tooltip-row"));
+    expect(rows.map((row) => row.querySelector(".tooltip-name")?.textContent)).toEqual(["busy"]);
+    expect(document.querySelector(".tooltip .tooltip-empty")).toBeNull();
 
     unmount(component);
   });
@@ -763,8 +940,8 @@ describe("CostTimeSeriesChart", () => {
     const dots = Array.from(document.querySelectorAll<HTMLElement>(".legend-dot")).map(
       (dot) => dot.style.background,
     );
-    expect(paths).toEqual(["#1f77b4", "#ff7f0e"]);
-    expect(dots).toEqual(["rgb(31, 119, 180)", "rgb(255, 127, 14)"]);
+    expect(paths).toEqual(["#3977a7", "#ef8a46"]);
+    expect(dots).toEqual(["rgb(57, 119, 167)", "rgb(239, 138, 70)"]);
     unmount(component);
   });
 });

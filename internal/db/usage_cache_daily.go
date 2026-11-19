@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
+	"strings"
 
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/kept"
 	"go.kenn.io/agentsview/internal/money"
 )
 
@@ -26,8 +29,18 @@ type usageDailyFactsSessionCost struct {
 func (db *DB) GetDailyUsage(
 	ctx context.Context, filter UsageFilter,
 ) (DailyUsageResult, error) {
+	return db.keptDailyUsage(ctx, filter)
+}
+
+func (db *DB) getDailyUsageUncached(
+	ctx context.Context, filter UsageFilter,
+) (DailyUsageResult, error) {
+	kind := usageQueryKindToken
+	if filter.ActiveSince == "" && filter.Termination == "" {
+		kind = usageQueryKindDayTotals
+	}
 	_, facts, resolver, err := db.queryUsageRollups(
-		ctx, filter, usageQueryKindToken, true)
+		ctx, filter, kind, true, 0)
 	if err != nil {
 		return DailyUsageResult{}, err
 	}
@@ -48,9 +61,9 @@ func (snapshot *usageQuerySnapshot) dropDeleted(
 	}
 	versions := snapshot.Versions[:0]
 	for _, version := range snapshot.Versions {
-		if !results[version.SessionID].Deleted {
+		if len(versions) < len(sessions) && sessions[len(versions)].ID == version.SessionID {
 			versions = append(versions, version)
-		} else {
+		} else if results[version.SessionID].Deleted {
 			delete(results, version.SessionID)
 		}
 	}
@@ -152,9 +165,9 @@ func (db *DB) assembleDailyUsageFacts(
 
 	var sessionCounts UsageSessionCounts
 	if !filter.SkipSessionCounts {
-		sessionCounts = NewUsageSessionCounts(facts.MatchingSessions)
+		sessionCounts = usageSessionCounts(facts)
 	}
-	projects, err := db.BuildProjectIdentityMap(ctx, SortedKeys(projectLabels))
+	projects, err := db.usageProjectIdentityMap(ctx, SortedKeys(projectLabels))
 	if err != nil {
 		return DailyUsageResult{}, err
 	}
@@ -164,14 +177,42 @@ func (db *DB) assembleDailyUsageFacts(
 	if err != nil {
 		return DailyUsageResult{}, fmt.Errorf("building pricing block: %w", err)
 	}
-	return DailyUsageResult{
+	result := DailyUsageResult{
 		SchemaVersion: export.UsageDailySchemaVersion,
 		Pricing:       &pricingBlock,
 		Projects:      export.ProjectMapForWire(projects),
 		Daily:         projectRows.Daily,
 		Totals:        totals,
 		SessionCounts: projectRows.SessionCounts,
-	}, nil
+	}
+	if filter.PairwiseSides {
+		sides := facts.PairwiseEvidence
+		if sides == nil {
+			sides = NewUsagePairwiseSides()
+		}
+		for key, bucket := range accum {
+			t := UsageTotals{InputTokens: bucket.input, OutputTokens: bucket.output, CacheCreationTokens: bucket.cacheWrite, CacheReadTokens: bucket.cacheRead}
+			t.TotalCost = bucket.cost
+			sides.AddBucket(key.model, key.project, t)
+		}
+		for _, id := range sessionIDs {
+			for key, cost := range sessionCosts[id].estimated {
+				sides.AddEstimate(key.model, cost)
+				if id != usageDayTotalsSessionID && id != usageRollupCursorSessionID {
+					facts.SideMemberships = append(facts.SideMemberships, usageSideMembership{id, key.model, key.project})
+				}
+			}
+		}
+		slices.SortFunc(facts.SideMemberships, func(a, b usageSideMembership) int { return strings.Compare(a.SessionID, b.SessionID) })
+		for _, member := range facts.SideMemberships {
+			sides.AddMembership(member.Model, member.Project, member.SessionID)
+		}
+		result.Pairwise = sides
+		if result.Bytes() > kept.DefaultMaxBytes {
+			result.Pairwise = nil
+		}
+	}
+	return result, nil
 }
 
 func recordUsageFactsPricing(
@@ -182,9 +223,7 @@ func recordUsageFactsPricing(
 		group.Model, group.PricedModel,
 		timestamp,
 	)
-	for range group.ReportedCount {
-		resolver.RecordResolvedReported(group.Model, group.PricedModel, baseLookup)
-	}
+	resolver.RecordResolvedCounts(group.Model, group.PricedModel, baseLookup, group.ReportedCount, 0, 0, nil)
 	requestCount := group.ComputedRequestCount
 	if group.BandThreshold == nil {
 		requestCount = group.BaseRequestCount
@@ -197,18 +236,7 @@ func recordUsageFactsPricing(
 	if err != nil {
 		return fmt.Errorf("resolving billed pricing for model %q: %w", group.Model, err)
 	}
-	for range group.ComputedAggregateCount {
-		resolver.RecordResolvedComputedAggregate(
-			group.Model, group.PricedModel, computedLookup)
-	}
-	inputTokens := 0
-	if group.BandThreshold != nil {
-		inputTokens = *group.BandThreshold + 1
-	}
-	for range requestCount {
-		resolver.RecordResolvedComputedRequest(
-			group.Model, group.PricedModel, computedLookup, inputTokens, 0, 0)
-	}
+	resolver.RecordResolvedCounts(group.Model, group.PricedModel, computedLookup, 0, requestCount, group.ComputedAggregateCount, group.BandThreshold)
 	return nil
 }
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { onDestroy, untrack } from "svelte";
   import { Button, Tooltip } from "@kenn-io/kit-ui";
   import { AnalyticsService, type DbToolUsageAnalysis as ToolUsageAnalysis, type DbSignalSessionExample as SignalSessionExample } from "../../api/generated/index.js";
@@ -8,6 +9,7 @@
   import { router } from "../../stores/router.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { analytics } from "../../stores/analytics.svelte.js";
+  import PanelStatus from "./PanelStatus.svelte";
   import type { DbToolCategoryCount as ToolCategoryCount } from "../../api/generated/index.js";
   import { getLocale, m } from "../../i18n/index.js";
 
@@ -116,10 +118,6 @@
     event.preventDefault();
     router.navigateToSession(example.session_id, evidenceParamsFor(example));
     if (example.message_ordinal != null) ui.scrollToOrdinal(example.message_ordinal, example.session_id);
-  }
-
-  function formatCount(value: number): string {
-    return value.toLocaleString(getLocale());
   }
 
   // A nonzero rate below 0.05% keeps one significant digit so it never reads as zero.
@@ -238,19 +236,14 @@
     {/if}
   </div>
 
-  {#if analytics.errors.tools}
-    <div class="error">
-      {analytics.errors.tools}
-      <button
-        class="retry-btn"
-        onclick={() => analytics.fetchTools()}
-      >
-        {m.shared_retry()}
-      </button>
-    </div>
-  {:else if analytics.loading.tools}
-    <div class="empty">{m.analytics_tool_usage_loading()}</div>
-  {:else if categories.length > 0}
+  <PanelStatus
+    hasData={analytics.tools !== null}
+    pending={analytics.querying.tools}
+    error={analytics.errors.tools}
+    onRetry={() => analytics.fetchTools()}
+    loadingLabel={m.analytics_tool_usage_loading()}
+  />
+  {#if categories.length > 0}
     <div class="sections">
       {#if toolRows.length > 0}
         <div class="section">
@@ -390,7 +383,7 @@
         <span>{tooltip.text}</span>
       </div>
     {/if}
-  {:else}
+  {:else if analytics.tools}
     <div class="empty">{m.analytics_tool_usage_empty()}</div>
   {/if}
 </div>
@@ -415,7 +408,7 @@
   }
 
   .count {
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
   }
 
@@ -426,7 +419,7 @@
   }
 
   .section-title {
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
     color: var(--text-muted);
     text-transform: uppercase;
@@ -463,7 +456,7 @@
     border-radius: 50%;
   }
 
-  .tool-kind { display: block; font-size: 10px; color: var(--text-muted); }
+  .tool-kind { display: block; font-size: 11px; color: var(--text-muted); }
 
   .tool-name {
     min-width: 0;
@@ -490,8 +483,8 @@
     color: var(--text-muted);
   }
 
-  .tool-labels { font-size: 10px; color: var(--text-muted); }
-  .tool-rate { text-align: right; font-family: var(--font-mono); font-size: 10px; }
+  .tool-labels { font-size: 11px; color: var(--text-muted); }
+  .tool-rate { text-align: right; font-family: var(--font-mono); font-size: 11px; }
   .rate-note { font-size: 11px; color: var(--text-muted); margin-top: 8px; }
   .tool-evidence { margin-top: 12px; }
   .evidence-list { display: grid; gap: 2px; margin: 6px 0 8px; }
@@ -570,7 +563,7 @@
     flex-shrink: 0;
     width: 48px;
     text-align: right;
-    font-size: 10px;
+    font-size: 11px;
     font-family: var(--font-mono);
     color: var(--text-muted);
   }
@@ -579,7 +572,7 @@
     flex-shrink: 0;
     width: 36px;
     text-align: right;
-    font-size: 10px;
+    font-size: 11px;
     font-family: var(--font-mono);
     color: var(--text-muted);
   }
@@ -615,8 +608,8 @@
   }
 
   .trend-label {
-    font-size: 8px;
-    color: var(--text-muted);
+    font-size: 11px;
+    color: var(--text-secondary);
     margin-top: 2px;
     white-space: nowrap;
   }
@@ -627,7 +620,7 @@
     padding: 4px 8px;
     background: var(--text-primary);
     color: var(--bg-primary);
-    font-size: 10px;
+    font-size: 11px;
     border-radius: var(--radius-sm);
     white-space: nowrap;
     pointer-events: none;
@@ -650,14 +643,6 @@
     gap: 8px;
   }
 
-  .retry-btn {
-    padding: 2px 8px;
-    border: 1px solid currentColor;
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    color: inherit;
-    cursor: pointer;
-  }
   @media (max-width: 640px) {
     .evidence-row { grid-template-columns: minmax(0, 1fr); gap: 2px; }
     .evidence-count { text-align: left; }
@@ -668,7 +653,7 @@
     .tool-name { grid-column: 1 / 3; }
     .tool-category { text-align: right; }
     .tool-rate { grid-column: auto; display: flex; flex-direction: column; gap: 4px; font-family: inherit; align-items: center; }
-    .tool-rate::before { content: attr(data-label); font-size: 10px; }
+    .tool-rate::before { content: attr(data-label); font-size: 11px; }
     .tool-row > .tool-rate:nth-of-type(7) { grid-column: 1; }
     .tool-rate { min-width: 0; }
   }

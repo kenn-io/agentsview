@@ -1,14 +1,28 @@
 import { getApiV1SessionsByIdTiming as fetchSessionTiming } from "../api/generated/sessions/sessions.js";
-import type { DbSessionTiming as SessionTiming } from "../api/generated/index.js";
+import type {
+  DbCallTiming as CallTiming,
+  DbSessionTiming as SessionTiming,
+  DbTurnTiming as TurnTiming,
+} from "../api/generated/index.js";
 import { LatestRead } from "../utils/latest-read.js";
 
 /** Per-session timing snapshot fetched from
  *  GET /api/v1/sessions/{id}/timing and refreshed live by the
  *  session.timing SSE event on the watch stream. */
 class SessionTimingStore {
-  timing: SessionTiming | null = $state(null);
+  timing: SessionTiming | null = $state.raw(null);
   loading: boolean = $state(false);
   error: string | null = $state(null);
+
+  index = $derived.by(() => {
+    const turnByMessage = new Map<number, TurnTiming>();
+    const callByToolUseID = new Map<string, CallTiming>();
+    for (const turn of this.timing?.turns ?? []) {
+      turnByMessage.set(turn.message_id, turn);
+      for (const call of turn.calls) callByToolUseID.set(call.tool_use_id, call);
+    }
+    return { turnByMessage, callByToolUseID };
+  });
 
   private currentSessionId: string | null = null;
   private loadVersion = 0;
@@ -21,8 +35,7 @@ class SessionTimingStore {
 
   /** Fetch the timing snapshot for sessionId. Cached per session;
    *  calling load() again for the same session is a no-op once a
-   *  snapshot is in memory. SSE events update the cached snapshot
-   *  in place. */
+   *  snapshot is in memory. SSE events replace the cached snapshot. */
   async load(sessionId: string): Promise<void> {
     if (this.currentSessionId === sessionId && this.timing !== null) {
       return;

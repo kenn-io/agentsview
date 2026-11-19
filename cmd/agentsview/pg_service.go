@@ -17,11 +17,21 @@ import (
 )
 
 func newPGServiceCommand() *cobra.Command {
-	return newServiceCommands(pgServiceKind)
+	cmd := newServiceCommands(pgServiceKind)
+	cmd.Long = "Install and manage the optional background service that continuously pushes local archive changes to PostgreSQL. " +
+		"Service installation changes the host's service manager."
+	cmd.Example = "  agentsview replica pg service status\n" +
+		"  agentsview replica pg service install --help"
+	return cmd
 }
 
 func newClickHouseServiceCommand() *cobra.Command {
-	return newServiceCommands(clickHouseServiceKind)
+	cmd := newServiceCommands(clickHouseServiceKind)
+	cmd.Long = "Install and manage the optional background service that pushes archive changes to ClickHouse. " +
+		"Installation and removal change the host's service manager."
+	cmd.Example = "  agentsview replica clickhouse service status\n" +
+		"  agentsview replica clickhouse service install --help"
+	return cmd
 }
 
 func newServiceCommands(kind serviceKind) *cobra.Command {
@@ -51,7 +61,7 @@ func newServiceInstallCommand(kind serviceKind) *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runServiceInstall(kind, noStartDaemon)
+			runServiceInstall(cmd.Context(), kind, noStartDaemon)
 		},
 	}
 	cmd.Flags().BoolVar(&noStartDaemon, "no-start-daemon", false, "Require a running writable daemon; the service manager retries if unavailable")
@@ -65,7 +75,7 @@ func newServiceUninstallCommand(kind serviceKind) *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runServiceSimple(kind, "uninstall")
+			runServiceSimple(cmd.Context(), kind, "uninstall")
 		},
 	}
 }
@@ -77,7 +87,7 @@ func newServiceStatusCommand(kind serviceKind) *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runServiceStatus(kind)
+			runServiceStatus(cmd.Context(), kind)
 		},
 	}
 }
@@ -89,7 +99,7 @@ func newServiceStartCommand(kind serviceKind) *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runServiceSimple(kind, "start")
+			runServiceSimple(cmd.Context(), kind, "start")
 		},
 	}
 }
@@ -101,7 +111,7 @@ func newServiceStopCommand(kind serviceKind) *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runServiceSimple(kind, "stop")
+			runServiceSimple(cmd.Context(), kind, "stop")
 		},
 	}
 }
@@ -138,7 +148,7 @@ func withNoStartDaemon(kind serviceKind) serviceKind {
 	return kind
 }
 
-func runServiceInstall(kind serviceKind, noStartDaemon bool) {
+func runServiceInstall(ctx context.Context, kind serviceKind, noStartDaemon bool) {
 	appCfg := loadServiceConfig(kind)
 	if noStartDaemon {
 		kind = withNoStartDaemon(kind)
@@ -154,8 +164,6 @@ func runServiceInstall(kind serviceKind, noStartDaemon bool) {
 	if err != nil {
 		fatal("%s service install: %v", kind.Name, err)
 	}
-	ctx := context.Background()
-
 	if err := mgr.install(ctx, spec); err != nil {
 		fatal("%s service install: %v", kind.Name, err)
 	}
@@ -185,15 +193,14 @@ func runServiceInstall(kind serviceKind, noStartDaemon bool) {
 
 	fmt.Println()
 	fmt.Println("Service installed and started.")
-	fmt.Printf("View logs with: agentsview %s service logs -f\n", kind.Name)
+	fmt.Printf("View logs with: agentsview replica %s service logs -f\n", kind.Name)
 }
 
-func runServiceStatus(kind serviceKind) {
+func runServiceStatus(ctx context.Context, kind serviceKind) {
 	mgr, err := newServiceManager(kind)
 	if err != nil {
 		fatal("%s service status: %v", kind.Name, err)
 	}
-	ctx := context.Background()
 	out, _ := mgr.status(ctx)
 	// Show the last successful push time from local sync state.
 	appCfg := loadServiceConfig(kind)
@@ -245,12 +252,11 @@ func readServiceLastPush(ctx context.Context,
 	)
 }
 
-func runServiceSimple(kind serviceKind, action string) {
+func runServiceSimple(ctx context.Context, kind serviceKind, action string) {
 	mgr, err := newServiceManager(kind)
 	if err != nil {
 		fatal("%s service %s: %v", kind.Name, action, err)
 	}
-	ctx := context.Background()
 	switch action {
 	case "uninstall":
 		if err := mgr.uninstall(ctx); err != nil {

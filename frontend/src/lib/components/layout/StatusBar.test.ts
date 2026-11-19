@@ -22,6 +22,7 @@ describe("StatusBar", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-08T05:00:00Z"));
     sync.archiveStale = false;
+    sync.syncPending = false;
     sync.syncing = false;
     sync.progress = null;
     sync.lastSync = "2026-04-08T05:00:00Z";
@@ -46,14 +47,44 @@ describe("StatusBar", () => {
     sync.progress = null;
     sync.syncing = false;
     sync.archiveStale = false;
+    sync.syncPending = false;
     sync.lastSyncError = null;
   });
 
-  it("shows stale results guidance until the archive is current", async () => {
+  it("pauses Codex Cloud polling while hidden and resumes when visible", async () => {
+    const visibility = vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+    const component = mount(StatusBar, { target: document.body });
+    try {
+      await tick();
+      await vi.advanceTimersByTimeAsync(20 * 60 * 1000);
+      expect(getCodexCloudStatus).not.toHaveBeenCalled();
+      visibility.mockReturnValue(false);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(getCodexCloudStatus).toHaveBeenCalledOnce();
+    } finally {
+      visibility.mockRestore();
+      await unmount(component);
+    }
+  });
+
+  it("shows catch-up guidance until the archive is current", async () => {
+    sync.syncPending = true;
+    const component = mount(StatusBar, { target: document.body });
+    await tick();
+    expect(document.body.textContent).toContain("Some session results may be out of date.");
+    expect(document.body.textContent).not.toContain("Changes are paused");
+    expect(document.querySelector(".archive-rebuild")).toBeNull();
+    sync.syncPending = false;
+    await tick();
+    expect(document.body.textContent).not.toContain("Some session results may be out of date.");
+    await unmount(component);
+  });
+
+  it("shows rebuild guidance until the archive is current", async () => {
     sync.archiveStale = true;
     const component = mount(StatusBar, { target: document.body });
     await tick();
-    expect(document.body.textContent).toContain("Archive results may be stale.");
+    expect(document.body.textContent).toContain("Some session results may be out of date.");
     expect(document.body.textContent).not.toContain("Changes are paused");
     sync.syncing = true;
     sync.progress = {
@@ -67,16 +98,16 @@ describe("StatusBar", () => {
     };
     await tick();
     expect(document.body.textContent).toContain(
-      "Archive results may be stale. Changes are paused until the rebuild finishes.",
+      "Some session results may be out of date. Changes are paused until rebuilding finishes.",
     );
     sync.syncing = false;
     sync.progress = null;
     await tick();
-    expect(document.body.textContent).toContain("Archive results may be stale.");
+    expect(document.body.textContent).toContain("Some session results may be out of date.");
     expect(document.body.textContent).not.toContain("Changes are paused");
     sync.archiveStale = false;
     await tick();
-    expect(document.body.textContent).not.toContain("Archive results may be stale.");
+    expect(document.body.textContent).not.toContain("Some session results may be out of date.");
     await unmount(component);
   });
 
@@ -107,11 +138,12 @@ describe("StatusBar", () => {
       friction_available: false,
       friction_build_allowed: false,
       session_stats_available: false,
+      kata_available: false,
       read_only: true,
     };
     const component = mount(StatusBar, { target: document.body });
     await tick();
-    expect(document.body.textContent).toContain("Archive results may be stale.");
+    expect(document.body.textContent).toContain("Some session results may be out of date.");
     expect(document.body.textContent).not.toContain("Click to rebuild.");
     await unmount(component);
   });
@@ -169,18 +201,20 @@ describe("StatusBar", () => {
 
   it("shows a sync-not-ready indicator when backend is degraded", async () => {
     sync.backendDegraded = true;
-    sync.backendDegradedMessage = "sync not ready";
+    sync.backendDegradedMessage = "Session data unavailable. Click to retry.";
     const component = mount(StatusBar, {
       target: document.body,
     });
     await tick();
 
-    expect(document.body.textContent).toContain("sync not ready");
-    expect(document.querySelector(".backend-warn")?.getAttribute("title")).toBe("sync not ready");
+    expect(document.body.textContent).toContain("Session data unavailable. Click to retry.");
+    expect(document.querySelector(".backend-warn")?.getAttribute("title")).toBe(
+      "Session data unavailable. Click to retry.",
+    );
 
     sync.backendDegraded = false;
     await tick();
-    expect(document.body.textContent).not.toContain("sync not ready");
+    expect(document.body.textContent).not.toContain("Session data unavailable. Click to retry.");
 
     void unmount(component);
   });

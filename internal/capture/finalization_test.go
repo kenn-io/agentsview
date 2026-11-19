@@ -14,28 +14,42 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-type deadlineOnSecondErrContext struct {
+// deadlineAfterChecksContext reports DeadlineExceeded from its Nth Err call,
+// so a test can place the deadline at an exact point in the lookup loop.
+type deadlineAfterChecksContext struct {
 	context.Context
-	checks int
+	deadlineAt int
+	checks     int
 }
 
-func (c *deadlineOnSecondErrContext) Err() error {
+func (c *deadlineAfterChecksContext) Err() error {
 	c.checks++
-	if c.checks >= 2 {
+	if c.checks >= c.deadlineAt {
 		return context.DeadlineExceeded
 	}
 	return nil
 }
 
 func TestAwaitQuiescentSourcesClassifiesDeadlineDuringLookup(t *testing.T) {
+	// Each pass of the lookup loop checks Err at the top of the loop and
+	// again inside locateRoot. A deadline on check 2 interrupts the first
+	// lookup; a deadline on check 3 follows one completed lookup.
 	tests := []struct {
 		name           string
 		sourceObserved bool
+		deadlineAt     int
 		wantReason     ReasonCode
 	}{
-		{name: "no source", wantReason: ReasonNoSession},
 		{
-			name: "source observed", sourceObserved: true,
+			name: "deadline before any lookup completes", deadlineAt: 2,
+			wantReason: ReasonFinalizationTimeout,
+		},
+		{
+			name: "no source after a completed lookup", deadlineAt: 3,
+			wantReason: ReasonNoSession,
+		},
+		{
+			name: "source observed", sourceObserved: true, deadlineAt: 2,
 			wantReason: ReasonFinalizationTimeout,
 		},
 	}
@@ -49,7 +63,9 @@ func TestAwaitQuiescentSourcesClassifiesDeadlineDuringLookup(t *testing.T) {
 				SourceObserved:    test.sourceObserved,
 				Limits:            testLimits(),
 			}}
-			ctx := &deadlineOnSecondErrContext{Context: t.Context()}
+			ctx := &deadlineAfterChecksContext{
+				Context: t.Context(), deadlineAt: test.deadlineAt,
+			}
 
 			_, err := awaitQuiescentSources(
 				ctx, state, time.Now().Add(time.Minute))
@@ -61,6 +77,27 @@ func TestAwaitQuiescentSourcesClassifiesDeadlineDuringLookup(t *testing.T) {
 			)
 		})
 	}
+}
+
+func TestFinalizeClassifiesDeadlineBeforeSourceLookup(t *testing.T) {
+	completedAt := time.Now()
+	state := &captureState{dir: t.TempDir(), manifest: manifest{
+		OccurrenceID:      "early-deadline",
+		Provider:          string(ProviderClaude),
+		ProviderRoot:      t.TempDir(),
+		ProviderWorkDir:   t.TempDir(),
+		ProviderSessionID: "11111111-1111-4111-8111-111111111111",
+		Execution:         ExecutionOutcome{CompletedAt: &completedAt},
+		Limits:            testLimits(),
+	}}
+	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	result, err := finalize(ctx, state, nil, "test")
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Equal(t, ReportingFailed, result.Reporting.Outcome)
+	assert.Equal(t, ReasonFinalizationTimeout, result.Reporting.Reason)
 }
 
 func TestOversizedResultWritesBoundedFailureAndKeepsPriorFailure(t *testing.T) {

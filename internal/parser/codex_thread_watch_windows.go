@@ -20,6 +20,10 @@ type codexThreadWatch struct {
 	cleanup runtime.Cleanup
 }
 
+type codexThreadWatchCache struct{}
+
+func (*codexThreadWatchCache) prepare() error { return nil }
+
 // A watch keeps one asynchronous directory read pending. When the read
 // completes, Windows queues it to a shared completion port, which any thread
 // can drain. A change notification handle would stay unsignaled until the
@@ -46,7 +50,7 @@ var codexThreadWatches struct {
 
 // Directory timestamps can stay unchanged after entries move on Windows.
 // Watch each cached directory so a changed day does not rescan other days.
-func (d *codexThreadDirectory) refreshWatch(info os.FileInfo) error {
+func (d *codexThreadDirectory) refreshWatch(info os.FileInfo, _ *codexThreadWatchCache) error {
 	defer runtime.KeepAlive(d)
 	if d.watch.state != nil && !os.SameFile(info, d.watch.info) {
 		d.closeWatches()

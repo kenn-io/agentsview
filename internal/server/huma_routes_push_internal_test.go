@@ -20,15 +20,16 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/archivesource"
 	"go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/storage"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
+	"go.kenn.io/agentsview/internal/testjsonl"
 )
 
 // stubVectorPushSource is a no-op storage.VectorPushSource: the gating test
@@ -64,6 +65,7 @@ func (stubVectorPushSource) BeginExport(
 // TestPGPushProgressLoggerThrottlesAndReportsPhases pins the daemon-side
 // push heartbeat: reports inside the throttle window log nothing, and the
 // vector phase logs its own counters instead of the session line.
+// Serial: replaces the push log interval and process-wide log output.
 func TestPGPushProgressLoggerThrottlesAndReportsPhases(t *testing.T) {
 	origInterval := pushProgressLogInterval
 	pushProgressLogInterval = time.Hour
@@ -164,7 +166,6 @@ func testServerWithConfig(cfg config.Config) *Server {
 	return &Server{
 		cfg:      cfg,
 		replicas: []storage.Replica{postgres.Backend{}, clickhouse.Backend{}},
-		mirror:   duckdb.Mirror{},
 	}
 }
 
@@ -315,156 +316,18 @@ func TestPGPushEnsuresPricingAfterLocalSync(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("8"), rate.OutputPerMTok)
 }
 
-func TestDuckDBPushRejectsIncludeAndExcludeProjects(t *testing.T) {
-	s := testServerWithConfig(config.Config{})
-
-	_, err := s.humaMirrorPush(t.Context(), &daemonPushInput{
-		Body: daemonPushRequest{
-			Projects:        []string{"alpha"},
-			ExcludeProjects: []string{"beta"},
-		},
-	})
-	require.Error(t, err)
-
-	var statusErr interface{ GetStatus() int }
-	require.ErrorAs(t, err, &statusErr)
-	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus())
-	assert.Contains(t, err.Error(),
-		"projects and exclude_projects are mutually exclusive")
-}
-
-// TestDuckDBPushRejectsRemoteURLAsBadRequest verifies the daemon-side push
-// route rejects a remote Quack URL as bad request: push writes the local
-// mirror only, so a configured [duckdb].url is never a valid push target.
-func TestDuckDBPushRejectsRemoteURLAsBadRequest(t *testing.T) {
-	s := testServer(t, 30*time.Second)
-
-	_, err := s.humaMirrorPush(t.Context(), &daemonPushInput{
-		Body: daemonPushRequest{
-			DuckDB: &config.DuckDBConfig{
-				URL:         "quack:https://duck.example.test",
-				MachineName: "workstation",
-			},
-		},
-	})
-	require.Error(t, err)
-
-	var statusErr interface{ GetStatus() int }
-	require.ErrorAs(t, err, &statusErr)
-	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus())
-	assert.Contains(t, err.Error(), "duckdb push writes the local mirror")
-}
-
-// TestDuckDBPushConfigPinsServerMirrorPath pins the daemon-side path
-// guard: the mirror path a push writes is always the server's own resolved
-// configuration. A request-supplied config may still carry non-path fields
-// (machine name), but a request naming a DIFFERENT path is rejected — an
-// authenticated API caller must not be able to aim the rebuild's atomic
-// file replacement at an arbitrary daemon-writable file such as the
-// primary sessions.db.
-func TestDuckDBPushConfigPinsServerMirrorPath(t *testing.T) {
-	serverPath := filepath.Join(t.TempDir(), "server.duckdb")
-	s := testServerWithConfig(config.Config{
-		DuckDB: config.DuckDBConfig{Path: serverPath, MachineName: "daemon"},
-	})
-
-	tests := []struct {
-		name        string
-		req         *config.DuckDBConfig
-		wantMachine string
-		wantErrHas  string
-	}{
-		{
-			name:        "nil request config uses server config",
-			req:         nil,
-			wantMachine: "daemon",
-		},
-		{
-			name:        "empty request path defers to server path",
-			req:         &config.DuckDBConfig{MachineName: "workstation"},
-			wantMachine: "workstation",
-		},
-		{
-			name: "equal path in unclean form is accepted",
-			req: &config.DuckDBConfig{
-				Path: filepath.Join(
-					filepath.Dir(serverPath), ".", filepath.Base(serverPath),
-				),
-				MachineName: "workstation",
-			},
-			wantMachine: "workstation",
-		},
-		{
-			name: "different path is rejected",
-			req: &config.DuckDBConfig{
-				Path:        filepath.Join(t.TempDir(), "sessions.db"),
-				MachineName: "workstation",
-			},
-			wantErrHas: "server-configured mirror path",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := s.mirrorPushConfig(daemonPushRequest{DuckDB: tt.req})
-			if tt.wantErrHas != "" {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.wantErrHas)
-				return
-			}
-			require.NoError(t, err)
-			assert.Equal(t, serverPath, got.Path,
-				"pushes must always write the server-resolved mirror path")
-			assert.Equal(t, tt.wantMachine, got.MachineName)
-		})
-	}
-}
-
-// TestDuckDBPushRejectsMismatchedMirrorPathAsBadRequest is the handler-level
-// twin of TestDuckDBPushConfigPinsServerMirrorPath: the route surfaces the
-// path mismatch as a 400 instead of writing anywhere.
-func TestDuckDBPushRejectsMismatchedMirrorPathAsBadRequest(t *testing.T) {
-	s := testServer(t, 30*time.Second)
-	s.cfg.DuckDB = config.DuckDBConfig{
-		Path:        filepath.Join(t.TempDir(), "server.duckdb"),
-		MachineName: "daemon",
-	}
-
-	_, err := s.humaMirrorPush(t.Context(), &daemonPushInput{
-		Body: daemonPushRequest{
-			DuckDB: &config.DuckDBConfig{
-				Path:        filepath.Join(t.TempDir(), "sessions.db"),
-				MachineName: "workstation",
-			},
-		},
-	})
-	require.Error(t, err)
-
-	var statusErr interface{ GetStatus() int }
-	require.ErrorAs(t, err, &statusErr)
-	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus())
-	assert.Contains(t, err.Error(), "server-configured mirror path")
-}
-
-func TestDuckDBPushSyncOptionsPassesThroughProjectFilters(t *testing.T) {
-	got := mirrorPushOptions(daemonPushRequest{
-		Projects:        []string{"alpha"},
-		ExcludeProjects: []string{"beta"},
-	})
-
-	assert.Equal(t, []string{"alpha"}, got.Projects)
-	assert.Equal(t, []string{"beta"}, got.ExcludeProjects)
-}
-
-func TestSyncClaudeAIRouteIsSSEOnly(t *testing.T) {
+func TestSyncBrowserRouteIsSSEOnly(t *testing.T) {
+	t.Parallel()
 	s := testServer(t, 30*time.Second)
 	spec := readOpenAPISpec(t, s.Handler())
-	op := requireOpenAPIOperation(t, spec, "post", "/api/v1/import/claude-ai/sync")
+	op := requireOpenAPIOperation(t, spec, "post", "/api/v1/import/{platform}/sync")
 	require.Contains(t, op.Responses, "200")
 	assert.Len(t, op.Responses["200"].Content, 1)
 	assert.Contains(t, op.Responses["200"].Content, "text/event-stream")
 }
 
 func TestSyncRemotesRouteIsStreaming(t *testing.T) {
+	t.Parallel()
 	s := testServer(t, 30*time.Second)
 	spec := readOpenAPISpec(t, s.Handler())
 	op := requireOpenAPIOperation(t, spec, "post", "/api/v1/sync/remotes")
@@ -476,9 +339,10 @@ func TestSyncRemotesRouteIsStreaming(t *testing.T) {
 // CLI's daemon-delegated push renders the streamed progress) while still
 // declaring a plain JSON response for non-streaming clients.
 func TestPushRoutesAreStreaming(t *testing.T) {
+	t.Parallel()
 	s := testServer(t, 30*time.Second)
 	spec := readOpenAPISpec(t, s.Handler())
-	for _, path := range []string{"/api/v1/push/pg", "/api/v1/push/duckdb"} {
+	for _, path := range []string{"/api/v1/push/pg", "/api/v1/push/clickhouse"} {
 		op := requireOpenAPIOperation(t, spec, "post", path)
 		require.Contains(t, op.Responses, "200", path)
 		assertStreamingResponseContent(t, op.Responses["200"].Content)
@@ -495,7 +359,7 @@ func TestPushRoutesReturn503WhileWriterClosedForSSE(t *testing.T) {
 	require.NoError(t, database.CloseWriter())
 	defer func() { assert.NoError(t, database.ReopenWriter()) }()
 
-	for _, path := range []string{"/api/v1/push/pg", "/api/v1/push/duckdb"} {
+	for _, path := range []string{"/api/v1/push/pg", "/api/v1/push/clickhouse"} {
 		req := httptest.NewRequestWithContext(t.Context(),
 			http.MethodPost, path, strings.NewReader(`{"full":false}`),
 		)
@@ -522,6 +386,7 @@ func TestPushRoutesReturn503WhileWriterClosedForSSE(t *testing.T) {
 // full push forced. Per-batch pushes and runner-less servers keep the
 // in-process SyncThenRun path, whose sync does land the session.
 func TestSyncThenRunForPushWorkerRunnerRouting(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name          string
 		stale         bool
@@ -562,6 +427,7 @@ func TestSyncThenRunForPushWorkerRunnerRouting(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			runnerCalls := 0
 			workCalls := 0
 			var opts []syncRouteFixtureOption
@@ -646,7 +512,7 @@ func TestSyncThenRunForPushCopiesHealthyArchiveBesideCorruptSource(t *testing.T)
 			request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/push/pg", nil)
 			request.Header.Set("Accept", accept)
 			hctx := humago.NewContext(&huma.Operation{}, request, recorder)
-			runPushStream(hctx, func(_, _ func(storage.PushProgress)) (any, error) {
+			runPushStream(hctx, func(_, _ func(storage.PushProgress)) (storage.PushResult, error) {
 				var result storage.PushResult
 				err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, false, nil, nil, nil,
 					func(forceFull bool) error {
@@ -1046,6 +912,7 @@ func TestPGPushFullRoutesResyncThroughWorkerRunner(t *testing.T) {
 // TestNewPushProgressStreamSenderThrottles pins the SSE fan-out throttle: the
 // session loop reports per session, and forwarding every report would emit
 // one SSE event per row.
+// Serial: replaces the push stream interval every server reads.
 func TestNewPushProgressStreamSenderThrottles(t *testing.T) {
 	origInterval := pushProgressStreamInterval
 	pushProgressStreamInterval = time.Hour
@@ -1150,122 +1017,6 @@ func TestClickHousePushRejectsPlaintextTargetBeforeStream(t *testing.T) {
 	assert.Contains(t, err.Error(), "allow_insecure")
 }
 
-// A daemon push that waits for another push tells its client, so the CLI can
-// say why nothing is happening.
-func TestMirrorPushStreamsWaitingForAnotherPush(t *testing.T) {
-	f := newSyncRouteFixture(t)
-	f.srv.cfg.DuckDB = config.DuckDBConfig{
-		Path:        filepath.Join(t.TempDir(), "mirror.duckdb"),
-		MachineName: "daemon",
-	}
-	endTurn, err := f.srv.pushTurn.take(t.Context(), nil)
-	require.NoError(t, err)
-	t.Cleanup(endTurn)
-
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	stream, err := f.srv.humaMirrorPush(ctx, &daemonPushInput{})
-	require.NoError(t, err)
-	writer := newSignalingRecorder(`"Phase":"waiting"`)
-	request := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/v1/push/duckdb", nil)
-	request.Header.Set("Accept", "text/event-stream")
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		stream.Body(humago.NewContext(&huma.Operation{}, request, writer))
-	}()
-
-	<-writer.matched
-	cancel()
-	<-done
-	assert.Contains(t, writer.String(), "event: progress\n")
-}
-
-// A daemon push whose sync rebuilt the archive reports it in the stream before
-// the result and marks the mirror result. A push that rebuilt nothing reports
-// neither, so a client whose stream drops keeps its --full request.
-func TestMirrorPushReportsArchiveRebuild(t *testing.T) {
-	for _, rebuild := range []bool{false, true} {
-		t.Run(fmt.Sprintf("rebuild=%t", rebuild), func(t *testing.T) {
-			var f *syncRouteFixture
-			f = newSyncRouteFixture(t, withLocalResyncRunner(func(
-				ctx context.Context, _ func(syncpkg.Progress),
-			) (syncpkg.SyncStats, error) {
-				return syncpkg.SyncStats{}, f.db.SetDatabaseIDForTest(ctx, "rebuilt")
-			}))
-			f.srv.cfg.DuckDB = config.DuckDBConfig{
-				Path:        filepath.Join(t.TempDir(), "mirror.duckdb"),
-				MachineName: "daemon",
-			}
-			// Only a full push routes its sync through the rebuilding runner.
-			stream, err := f.srv.humaMirrorPush(t.Context(),
-				&daemonPushInput{Body: daemonPushRequest{Full: rebuild}})
-			require.NoError(t, err)
-			recorder := httptest.NewRecorder()
-			request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/push/duckdb", nil)
-			request.Header.Set("Accept", "text/event-stream")
-			stream.Body(humago.NewContext(&huma.Operation{}, request, recorder))
-
-			body := recorder.Body.String()
-			reported := strings.Index(body, `"Phase":"rebuilt"`)
-			finished := strings.Index(body, "event: done\n")
-			require.NotEqual(t, -1, finished, "push did not finish: %s", body)
-			var result storage.MirrorPushResult
-			require.NoError(t, json.Unmarshal(
-				[]byte(strings.TrimSpace(strings.TrimPrefix(body[finished:], "event: done\ndata: "))),
-				&result,
-			))
-			assert.Equal(t, rebuild, result.ArchiveRebuilt)
-			if !rebuild {
-				assert.Equal(t, -1, reported, "stream reports a rebuild: %s", body)
-				return
-			}
-			require.NotEqual(t, -1, reported, "stream has no rebuild report: %s", body)
-			assert.Less(t, reported, finished)
-		})
-	}
-}
-
-// signalingRecorder is a goroutine-safe flushing ResponseWriter that closes
-// matched once its body contains want.
-type signalingRecorder struct {
-	*httptest.ResponseRecorder
-	mu      sync.Mutex
-	want    string
-	matched chan struct{}
-	once    sync.Once
-}
-
-func newSignalingRecorder(want string) *signalingRecorder {
-	return &signalingRecorder{
-		ResponseRecorder: httptest.NewRecorder(),
-		want:             want,
-		matched:          make(chan struct{}),
-	}
-}
-
-func (r *signalingRecorder) Write(p []byte) (int, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	n, err := r.ResponseRecorder.Write(p)
-	if strings.Contains(r.Body.String(), r.want) {
-		r.once.Do(func() { close(r.matched) })
-	}
-	return n, err
-}
-
-func (r *signalingRecorder) Flush() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.ResponseRecorder.Flush()
-}
-
-func (r *signalingRecorder) String() string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.Body.String()
-}
-
 // A push error tells the client whether the copy started, in both response
 // shapes, so a watch can keep a --full request that no push started.
 func TestRunPushStreamReportsWhetherThePushStarted(t *testing.T) {
@@ -1282,7 +1033,9 @@ func TestRunPushStreamReportsWhetherThePushStarted(t *testing.T) {
 				request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/push/pg", nil)
 				request.Header.Set("Accept", accept)
 				runPushStream(humago.NewContext(&huma.Operation{}, request, recorder),
-					func(_, _ func(storage.PushProgress)) (any, error) { return nil, tt.err })
+					func(_, _ func(storage.PushProgress)) (storage.PushResult, error) {
+						return storage.PushResult{}, tt.err
+					})
 				payload := recorder.Body.String()
 				if accept == "text/event-stream" {
 					require.Contains(t, payload, "event: error\n")
@@ -1322,6 +1075,7 @@ func (failingPusher) Close() error { return nil }
 // The replica route reports whether the copy started: a failed connect
 // started nothing, and a failed copy may have recorded a full push the mirror
 // resumes.
+// Serial: subtests push through one shared server.
 func TestReplicaPushReportsWhetherTheCopyStarted(t *testing.T) {
 	f := newSyncRouteFixture(t)
 	for _, tt := range []struct {
@@ -1361,6 +1115,7 @@ func TestReplicaPushReportsWhetherTheCopyStarted(t *testing.T) {
 // as started. Every mirror pushes in full after a rebuild, and a client that
 // kept --full would make the daemon rebuild the archive on every retry.
 func TestSyncThenRunForPushCountsARebuildAsStarted(t *testing.T) {
+	t.Parallel()
 	var f *syncRouteFixture
 	f = newSyncRouteFixture(t, withLocalResyncRunner(func(
 		ctx context.Context, _ func(syncpkg.Progress),
@@ -1378,4 +1133,72 @@ func TestSyncThenRunForPushCountsARebuildAsStarted(t *testing.T) {
 		assert.Equal(t, full, pushErrorBody(err.Error(), err).PushStarted,
 			"full=%t: only a push that rebuilt the archive counts as started", full)
 	}
+}
+
+// A rebuild can install while a fork stays deferred. A /resync request accepts
+// that, but a push must not publish the unresolved fork or its copied usage.
+func TestSyncThenRunForPushRejectsDeferredRebuild(t *testing.T) {
+	const parent = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	const child = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	for _, worker := range []bool{true, false} {
+		t.Run(fmt.Sprintf("worker=%v", worker), func(t *testing.T) {
+			root := t.TempDir()
+			const timestamp = "2026-09-01T10:00:00Z"
+			require.NoError(t, os.WriteFile(
+				filepath.Join(root, "rollout-2026-09-01T11-00-00-"+child+".jsonl"),
+				[]byte(testjsonl.JoinJSONL(
+					testjsonl.CodexForkedSessionMetaJSON(child, parent, "/work/project", "user", timestamp),
+					testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", timestamp),
+					testjsonl.CodexMsgJSON("assistant", "child answer", timestamp),
+				)), 0o600))
+			opts := []syncRouteFixtureOption{
+				withDisabledAgents(nil, map[parser.AgentType][]string{parser.AgentCodex: {root}}),
+			}
+			if worker {
+				opts = append(opts, withLocalResyncRunner(func(
+					context.Context, func(syncpkg.Progress),
+				) (syncpkg.SyncStats, error) {
+					return syncpkg.SyncStats{ArchiveRebuilt: true, Deferred: 1}, nil
+				}))
+			}
+			f := newSyncRouteFixture(t, opts...)
+			engine := f.srv.syncEngineForLocal(t.Context(), f.db)
+			t.Cleanup(engine.Close)
+
+			err := f.srv.syncThenRunForPush(
+				t.Context(), engine, f.db, true, nil, nil, nil,
+				func(bool) error {
+					require.FailNow(t, "push work must not run while a fork is deferred")
+					return nil
+				},
+			)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "local sync processing incomplete")
+		})
+	}
+}
+
+// An offline attachment can fail the drain after a rebuild that kept a
+// deferred fork. Suppressing that attachment error must not let the push run.
+func TestSyncThenRunForPushRejectsDeferredRebuildWithAttachmentFailure(t *testing.T) {
+	f := newSyncRouteFixture(t, withLocalResyncRunner(func(
+		context.Context, func(syncpkg.Progress),
+	) (syncpkg.SyncStats, error) {
+		return syncpkg.SyncStats{ArchiveRebuilt: true, Deferred: 1},
+			archivesource.DrainError{Err: errors.New("attachment offline")}
+	}))
+	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
+	t.Cleanup(engine.Close)
+
+	err := f.srv.syncThenRunForPush(
+		t.Context(), engine, f.db, true, nil, nil, nil,
+		func(bool) error {
+			require.FailNow(t, "push work must not run while a fork is deferred")
+			return nil
+		},
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "local sync processing incomplete")
 }

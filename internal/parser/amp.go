@@ -14,7 +14,7 @@ import (
 )
 
 func parseAmpSession(
-	path, machine string,
+	ctx context.Context, path, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -97,7 +97,7 @@ func parseAmpSession(
 			role = RoleAssistant
 		}
 
-		content, thinkingText, dialogueText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(context.Background(), msg.Get("content"))
+		content, thinkingText, dialogueText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(ctx, msg.Get("content"))
 		trs = append(trs, extractAmpToolResults(msg.Get("content"))...)
 		usage := msg.Get("usage")
 		if strings.TrimSpace(content) == "" && len(trs) == 0 &&

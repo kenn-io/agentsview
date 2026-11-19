@@ -203,6 +203,7 @@ main() {
     echo "Get started:"
     echo "  agentsview serve    # Start the server and open browser"
     echo "  agentsview update   # Check for and install updates"
+    echo "  To enable search by meaning, choose Settings -> Embeddings -> Turn on."
 }
 
 # Guard: only run main when executed directly, not when sourced.

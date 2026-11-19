@@ -2,9 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
 
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/friction/filing"
+	"go.kenn.io/agentsview/internal/kata"
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/storage"
@@ -32,14 +37,23 @@ func (pgReplica) serveOptions(
 			"pg serve store is %T, not *postgres.Store", store,
 		)
 	}
+	if err := pgStore.ConfigureUsageCache(ctx, appCfg.DataDir, target.URL, target.Schema); err != nil {
+		log.Printf("pg serve: Usage cache unavailable, using direct reads: %v", err)
+	} else if err := pgStore.WarmUsageCache(ctx); err != nil && !errors.Is(err, db.ErrUsageSourceUnavailable) {
+		log.Printf("pg serve: queueing Usage cache warm: %v", err)
+	}
+	pool := pgStore.DB()
+	if pool == nil {
+		return nil, nil, db.ErrReadOnly
+	}
 	rawSyncWritable, err := postgres.CanWriteRawSyncSchema(
-		ctx, pgStore.DB(), target.Schema,
+		ctx, pool, target.Schema,
 	)
 	if err != nil {
 		return nil, nil, err
 	}
 	rawSyncOption, closeRawSync, err := preparePGRawSyncServicesIfWritable(
-		ctx, appCfg.DataDir, pgStore.DB(), rawSyncWritable,
+		ctx, appCfg.DataDir, pool, rawSyncWritable,
 	)
 	if err != nil {
 		return nil, nil, err
@@ -53,6 +67,7 @@ func (pgReplica) serveOptions(
 	if frictionRunner != nil {
 		opts = append(opts, server.WithFriction(frictionRunner, frictionExcl))
 	}
+	opts = append(opts, pgKataConn(appCfg))
 	closeAll := func() error {
 		waitFriction()
 		if closeRawSync != nil {
@@ -61,4 +76,12 @@ func (pgReplica) serveOptions(
 		return nil
 	}
 	return opts, closeAll, nil
+}
+
+// pgKataConn connects pg serve to Kata. A PostgreSQL hub holds the combined
+// archive, so it is the host eligible to file.
+func pgKataConn(appCfg config.Config) server.Option {
+	return server.WithKataConn(kata.NewConn(kata.ConfigFrom(
+		appCfg.Kata, filing.EligibleHost(true, false),
+	)))
 }

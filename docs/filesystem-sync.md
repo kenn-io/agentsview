@@ -146,7 +146,8 @@ machine = "fedcba9876543210fedcba9876543210" # Laptop installation ID
 
 Shared mounts remove the copy step, but freshness and watcher behavior depend on
 the filesystem. Some network filesystems do not deliver local filesystem events
-reliably; the daily archive audit remains the backstop.
+reliably; the daily archive audit remains the backstop. On battery, the routine
+audit waits for AC power; required archive rebuilds still run.
 
 ## Identity, Filtering, and Freshness
 
@@ -155,7 +156,7 @@ reliably; the daily archive audit remains the backstop.
 - A session keeps the machine key it received when it was first ingested.
   Editing a source's `machine` value affects newly discovered sessions but
   does not retroactively relabel existing ones, even when their source files
-  later change. `agentsview sync --full` also preserves the stored key. The
+  later change. `agentsview source sync --full` also preserves the stored key. The
   [installation upgrade](/docs/configuration/#upgrading-historical-machine-keys)
   adopts recorded local keys; use
   [`db adopt-machine`](/docs/commands/#agentsview-db-adopt-machine) to select

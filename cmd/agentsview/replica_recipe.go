@@ -41,7 +41,7 @@ func adoptReplicaVectorConfig(
 			"'pg serve' adopts it on restart and 'pg push --watch --embed' " +
 			"on a later push"
 		if len(recipes) > 1 {
-			hint = "remove obsolete generations with 'agentsview pg vectors drop <id>'"
+			hint = "remove obsolete generations with 'agentsview replica pg vectors drop <id>'"
 		}
 		return cfg, fmt.Errorf(
 			"semantic recipe adoption requires exactly one supported published "+

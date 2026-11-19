@@ -25,8 +25,7 @@ func (s *Sync) migrateCodexPages(
 ) error {
 	threads := make(map[string]db.Session)
 	for _, sess := range batch {
-		switch sess.Agent {
-		case "codex", "traex", "augure-code":
+		if parser.IsCodexFormatAgent(parser.AgentType(sess.Agent)) {
 			prefixEnd := strings.LastIndex(sess.ID, ":") + 1
 			if prefixEnd > 0 {
 				id := sess.ID[:prefixEnd] + parser.CodexThreadIDFromSessionKey(sess.ID[prefixEnd:])
@@ -53,7 +52,8 @@ func (s *Sync) migrateCodexPages(
 	// Purge inventories pages under the thread lock. Keep that same lock
 	// through publication, including after the thread's migration or retirement.
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, COALESCE(file_path, ''), agent, machine, owner_marker, source_archive_id, data_version
+		SELECT id, COALESCE(file_path, ''), agent, machine, owner_marker, source_archive_id, data_version,
+		EXISTS (SELECT 1 FROM image_text it WHERE it.session_id = sessions.id)
 		FROM sessions
 		WHERE id = ANY($1) AND provenance_kind = 'legacy'
 		ORDER BY id FOR UPDATE`, mapKeys(threads))
@@ -64,11 +64,12 @@ func (s *Sync) migrateCodexPages(
 	type legacyPage struct {
 		id, path, agent, machine, owner, archive string
 		dataVersion                              int
+		imageText                                bool
 	}
 	var pages []legacyPage
 	for rows.Next() {
 		var page legacyPage
-		if err := rows.Scan(&page.id, &page.path, &page.agent, &page.machine, &page.owner, &page.archive, &page.dataVersion); err != nil {
+		if err := rows.Scan(&page.id, &page.path, &page.agent, &page.machine, &page.owner, &page.archive, &page.dataVersion, &page.imageText); err != nil {
 			return fmt.Errorf("reading legacy Codex pages: %w", err)
 		}
 		pages = append(pages, page)
@@ -85,10 +86,16 @@ func (s *Sync) migrateCodexPages(
 		key := parser.CodexSessionUUIDFromPath(old.path)
 		oldKey := old.id[prefixEnd:]
 		keyThread := parser.CodexThreadIDFromSessionKey(key)
-		threadShape := old.dataVersion < 131 && keyThread == oldKey
-		rolloutShape := old.dataVersion < 134 && keyThread != key && key == keyThread+"_"+oldKey
+		version := old.dataVersion
+		// A row raised for its image text hides its parser version.
+		stamped := old.imageText && version == db.ImageTextDataVersion
+		if stamped {
+			version = 0
+		}
+		threadShape := version < 131 && keyThread == oldKey
+		rolloutShape := version < 134 && keyThread != key && key == keyThread+"_"+oldKey
 		migratePage := old.path != "" && key != "" && key != oldKey && (threadShape || rolloutShape)
-		if migratePage && rolloutShape && !threadShape {
+		if migratePage && (stamped || rolloutShape && !threadShape) {
 			// The filename alone cannot tell a legacy page from one the parser
 			// rejected (header session_id differs from the filename thread). The
 			// local archive agrees with the fresh parse: only a legacy page has
@@ -165,11 +172,11 @@ func (s *Sync) migrateCodexPages(
 		// Apply a selected empty anchor's current trash scope before the page
 		// can inherit it. Its messages remain available for pin matching.
 		if head != nil && !hasHead && slices.ContainsFunc(batch, func(sess db.Session) bool { return sess.ID == old.id }) {
-			if err := s.pushSession(ctx, tx, *head, markerID, legacyMarkerMachines); err != nil {
+			if err := s.pushSessionWithImageText(ctx, tx, *head, markerID, legacyMarkerMachines); err != nil {
 				return fmt.Errorf("publishing Codex trash anchor metadata: %w", err)
 			}
 		}
-		if err := s.pushSession(ctx, tx, *page, markerID, legacyMarkerMachines); err != nil {
+		if err := s.pushSessionWithImageText(ctx, tx, *page, markerID, legacyMarkerMachines); err != nil {
 			return fmt.Errorf("publishing retained Codex page: %w", err)
 		}
 		if _, _, err := s.pushMessages(ctx, tx, pageID, true, nil, nil); err != nil {
@@ -228,7 +235,9 @@ func retireCodexPageThread(ctx context.Context, tx *sql.Tx, threadID, pageID str
 	// thread-wide scope still needs an empty anchor for returning pages and
 	// restore/purge; retain its ownership and source/remote trash baselines.
 	_, err := tx.ExecContext(ctx, `
-		WITH retired AS (DELETE FROM sessions WHERE id = $1 RETURNING *)
+		WITH retired AS (DELETE FROM sessions WHERE id = $1 RETURNING *),
+		links AS (DELETE FROM commit_links WHERE NOT retained AND session_id IN (SELECT id FROM retired)
+			AND NOT EXISTS (SELECT 1 FROM retired WHERE trash_includes_codex_pages AND deleted_at IS NOT NULL))
 		INSERT INTO sessions (
 			id, machine, owner_marker, project, agent, created_at,
 			deleted_at, source_deleted_at, deletion_cause,

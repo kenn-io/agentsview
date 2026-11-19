@@ -131,6 +131,7 @@ func TestProviderResultAdmissionKeepsIdentityOfDroppedMembers(t *testing.T) {
 
 		require.NoError(t, admission.admit(parser.ParseResultOutcome{
 			Result: result, DataVersion: parser.DataVersionNeedsRetry,
+			RetryReason: "parent turns unresolved",
 		}))
 
 		assert.Empty(t, admission.kept, "an unchanged member must not be held for writing")
@@ -138,7 +139,9 @@ func TestProviderResultAdmissionKeepsIdentityOfDroppedMembers(t *testing.T) {
 		assert.Equal(t, parser.ParseResult{Session: parser.ParsedSession{
 			ID: "semantic:member", File: parser.FileInfo{Path: path},
 		}}, admission.emitted[0])
-		assert.Equal(t, []string{"semantic:member"}, admission.retryIDs)
+		assert.Equal(t, []retryCause{{
+			sessionID: "semantic:member", path: path, reason: "parent turns unresolved",
+		}}, admission.retries)
 		assert.Equal(t, storedHash, admission.firstHash)
 		assert.NoError(t, admission.validationErr)
 	})

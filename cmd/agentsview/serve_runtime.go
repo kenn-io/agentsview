@@ -24,6 +24,9 @@ type serveRuntimeOptions struct {
 	BasePath       string
 	RequestedPort  int
 	OnCaddyStarted func(int)
+	// Listener holds the serve port from claimServeRuntimeConfig. When it is
+	// nil the server binds cfg.Host and cfg.Port itself.
+	Listener net.Listener
 }
 
 type serveRuntime struct {
@@ -45,28 +48,49 @@ func prepareRunServeRuntimeConfig(ctx context.Context,
 		RequestedPort:  requestedPort,
 		OnCaddyStarted: onCaddyStarted,
 	}
-	prepared, err := prepareServeRuntimeConfig(ctx, cfg, opts)
+	prepared, listener, err := claimServeRuntimeConfig(ctx, cfg, opts)
+	opts.Listener = listener
 	return prepared, opts, err
 }
 
+// prepareServeRuntimeConfig applies the port policy without keeping the port,
+// for callers that only check whether serve could start. A server must use
+// claimServeRuntimeConfig so it keeps the port it was given.
 func prepareServeRuntimeConfig(ctx context.Context,
 	cfg config.Config,
 	opts serveRuntimeOptions,
 ) (config.Config, error) {
-	requestedPort := opts.RequestedPort
-	if requestedPort == 0 {
-		requestedPort = cfg.Port
-	}
-
-	port, err := server.FindAvailablePort(ctx, cfg.Host, cfg.Port)
+	prepared, listener, err := claimServeRuntimeConfig(ctx, cfg, opts)
 	if err != nil {
-		return cfg, err
+		return prepared, err
 	}
+	if err := listener.Close(); err != nil {
+		return prepared, fmt.Errorf("release port %d on %s: %w", prepared.Port, prepared.Host, err)
+	}
+	return prepared, nil
+}
+
+// claimServeRuntimeConfig picks the serve port and returns the listener that
+// holds it. The caller serves that listener through
+// serveRuntimeOptions.Listener and closes it if serve never starts. Holding
+// the port from the moment it is chosen keeps another process from binding it
+// while startup work runs before the server begins accepting connections.
+func claimServeRuntimeConfig(ctx context.Context,
+	cfg config.Config,
+	opts serveRuntimeOptions,
+) (config.Config, net.Listener, error) {
+	requestedPort := opts.RequestedPort
+
+	listener, err := server.ListenAvailablePort(ctx, cfg.Host, cfg.Port)
+	if err != nil {
+		return cfg, nil, err
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
 	if cfg.PortExplicit && cfg.Port != 0 && port != cfg.Port {
-		return cfg, fmt.Errorf(
+		return cfg, nil, errors.Join(fmt.Errorf(
 			"requested port %d on %s is unavailable; choose another --port or use --port 0",
 			cfg.Port, cfg.Host,
-		)
+		), listener.Close())
 	}
 	if port != cfg.Port {
 		if cfg.Port == 0 {
@@ -85,7 +109,7 @@ func prepareServeRuntimeConfig(ctx context.Context,
 			cfg.Port,
 		)
 		if err != nil {
-			return cfg, fmt.Errorf("invalid public url: %w", err)
+			return cfg, nil, errors.Join(fmt.Errorf("invalid public url: %w", err), listener.Close())
 		}
 		if changed {
 			cfg.PublicURL = updatedURL
@@ -93,7 +117,7 @@ func prepareServeRuntimeConfig(ctx context.Context,
 		}
 	}
 
-	return cfg, nil
+	return cfg, listener, nil
 }
 
 // startChromeHost listens for the Chrome native host only after
@@ -131,14 +155,20 @@ func startServerWithOptionalCaddy(
 	}
 	serveErrCh := make(chan error, 1)
 	go func() {
+		if opts.Listener != nil {
+			serveErrCh <- srv.Serve(opts.Listener)
+			return
+		}
 		serveErrCh <- srv.ListenAndServe()
 	}()
 
 	if err := waitForBackendReady(
 		ctx, cfg, srv, opts.BasePath, 5*time.Second, serveErrCh,
 	); err != nil {
+		// Shutdown runs after ctx may be canceled, so keep its values but not
+		// its cancellation.
 		shutdownCtx, cancel := context.WithTimeout(
-			context.Background(), 5*time.Second,
+			context.WithoutCancel(ctx), 5*time.Second,
 		)
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
@@ -155,8 +185,10 @@ func startServerWithOptionalCaddy(
 			ctx, cfg, opts.Mode, opts.OnCaddyStarted,
 		)
 		if err != nil {
+			// Shutdown runs after ctx may be canceled, so keep its values but not
+			// its cancellation.
 			shutdownCtx, cancel := context.WithTimeout(
-				context.Background(), 5*time.Second,
+				context.WithoutCancel(ctx), 5*time.Second,
 			)
 			defer cancel()
 			_ = srv.Shutdown(shutdownCtx)
@@ -165,8 +197,10 @@ func startServerWithOptionalCaddy(
 
 		publicPort, err := publicURLPort(cfg.PublicURL)
 		if err != nil {
+			// Shutdown runs after ctx may be canceled, so keep its values but not
+			// its cancellation.
 			shutdownCtx, cancel := context.WithTimeout(
-				context.Background(), 5*time.Second,
+				context.WithoutCancel(ctx), 5*time.Second,
 			)
 			defer cancel()
 			caddy.Stop()
@@ -180,8 +214,10 @@ func startServerWithOptionalCaddy(
 			5*time.Second,
 			caddy.Err(),
 		); err != nil {
+			// Shutdown runs after ctx may be canceled, so keep its values but not
+			// its cancellation.
 			shutdownCtx, cancel := context.WithTimeout(
-				context.Background(), 5*time.Second,
+				context.WithoutCancel(ctx), 5*time.Second,
 			)
 			defer cancel()
 			caddy.Stop()
@@ -315,8 +351,10 @@ func waitForServerRuntime(
 		}
 		return nil
 	case err := <-caddyErrCh:
+		// Shutdown runs after ctx may be canceled, so keep its values but not
+		// its cancellation.
 		shutdownCtx, cancel := context.WithTimeout(
-			context.Background(), 5*time.Second,
+			context.WithoutCancel(ctx), 5*time.Second,
 		)
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
@@ -332,8 +370,10 @@ func waitForServerRuntime(
 		}
 		return errors.New("managed caddy exited unexpectedly")
 	case <-ctx.Done():
+		// Shutdown runs after ctx may be canceled, so keep its values but not
+		// its cancellation.
 		shutdownCtx, cancel := context.WithTimeout(
-			context.Background(), 5*time.Second,
+			context.WithoutCancel(ctx), 5*time.Second,
 		)
 		defer cancel()
 		if rt.Caddy != nil {

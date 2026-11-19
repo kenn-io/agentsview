@@ -169,6 +169,9 @@ func TestPrepareRunServeRuntimeConfigRestartPreservesConfiguredURLRewrite(t *tes
 		PublicOrigins: []string{publicURL},
 	}, runtimePort, nil)
 	require.NoError(t, err)
+	defer rtOpts.Listener.Close()
+	assert.Equal(t, got.Port, rtOpts.Listener.Addr().(*net.TCPAddr).Port,
+		"serve must keep the port it reports")
 	assert.NotEqual(t, runtimePort, got.Port)
 	assert.False(t, got.PortExplicit)
 	assert.Equal(t, configuredPort, rtOpts.RequestedPort)
@@ -177,6 +180,19 @@ func TestPrepareRunServeRuntimeConfigRestartPreservesConfiguredURLRewrite(t *tes
 	), got.PublicURL)
 	assert.Equal(t, []string{got.PublicURL}, got.PublicOrigins)
 	assert.Equal(t, got.PublicURL, strings.TrimRight(browserURL(got), "/"))
+
+	t.Run("explicit zero with a preferred port", func(t *testing.T) {
+		url := "https://viewer.example.test:0"
+		got, opts, err := prepareRunServeRuntimeConfig(t.Context(), config.Config{
+			Host: "127.0.0.1", Port: 0, PortExplicit: true,
+			PublicURL: url, PublicOrigins: []string{url},
+		}, runtimePort, nil)
+		require.NoError(t, err)
+		require.NoError(t, opts.Listener.Close())
+		assert.NotEqual(t, runtimePort, got.Port)
+		assert.Equal(t, fmt.Sprintf("https://viewer.example.test:%d", got.Port), got.PublicURL)
+		assert.Equal(t, []string{got.PublicURL}, got.PublicOrigins)
+	})
 }
 
 func TestWaitForBackendReadyRejectsUnrelatedHTTPListener(t *testing.T) {
@@ -264,9 +280,55 @@ func TestWaitForBackendReadyAcceptsAuthenticatedServerStartupProof(t *testing.T)
 		"the temporary startup proof endpoint must be disabled after readiness")
 }
 
-func TestStartServerWithOptionalCaddyWaitsForBasePathBackend(t *testing.T) {
-	port, err := server.FindAvailablePort(t.Context(), "127.0.0.1", 0)
+func TestStartServerServesThePortClaimedAtPrepare(t *testing.T) {
+	var (
+		cfg      config.Config
+		listener net.Listener
+		err      error
+	)
+	output := captureStdout(t, func() {
+		cfg, listener, err = claimServeRuntimeConfig(t.Context(),
+			config.Config{Host: "127.0.0.1", Port: 0}, serveRuntimeOptions{})
+	})
 	require.NoError(t, err)
+	defer listener.Close()
+	require.Contains(t, output, fmt.Sprintf("Using available port %d", cfg.Port))
+
+	// Startup work runs between choosing the port and serving it. Another
+	// process binding the chosen port in that window must not take it.
+	address := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
+	competitor, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", address)
+	if err == nil {
+		require.NoError(t, competitor.Close())
+	}
+	require.Error(t, err, "the chosen port must stay held until serve starts")
+
+	srv := server.New(cfg, nil, nil)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	runtime, err := startServerWithOptionalCaddy(
+		ctx, cfg, srv, serveRuntimeOptions{Mode: "test", Listener: listener},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "http://"+address, runtime.LocalURL)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, runtime.LocalURL+"/api/ping", nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(t.Context(), time.Second)
+	defer shutdownCancel()
+	require.NoError(t, srv.Shutdown(shutdownCtx))
+	require.ErrorIs(t, <-runtime.ServeErrCh, http.ErrServerClosed)
+}
+
+func TestStartServerWithOptionalCaddyWaitsForBasePathBackend(t *testing.T) {
+	listener, err := server.ListenAvailablePort(t.Context(), "127.0.0.1", 0)
+	require.NoError(t, err)
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
 	cfg := config.Config{
 		Host: "127.0.0.1",
 		Port: port,
@@ -276,7 +338,7 @@ func TestStartServerWithOptionalCaddyWaitsForBasePathBackend(t *testing.T) {
 	defer cancel()
 
 	runtime, err := startServerWithOptionalCaddy(
-		ctx, cfg, srv, serveRuntimeOptions{Mode: "test", BasePath: "/viewer/"},
+		ctx, cfg, srv, serveRuntimeOptions{Mode: "test", BasePath: "/viewer/", Listener: listener},
 	)
 	require.NoError(t, err,
 		"a server mounted below a base path must satisfy backend readiness")

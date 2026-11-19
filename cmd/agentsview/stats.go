@@ -30,12 +30,18 @@ func newStatsCommand() *cobra.Command {
 		includeGitOutcomes, includeGHOutcomes bool
 	)
 	cmd := &cobra.Command{
-		Use:          "stats",
-		Short:        "Window-scoped workspace analytics (v1 schema)",
+		Use:   "stats",
+		Short: "Window-scoped workspace analytics (v1 schema)",
+		Long: "Summarize sessions, activity, and outcomes within a bounded time window. " +
+			"--since and --until accept Nd, Nh, YYYY-MM-DD, or RFC3339. " +
+			"GitHub outcome enrichment is opt-in and may contact GitHub.",
 		GroupID:      groupData,
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateStatsCLIWindow(since, until, timezone); err != nil {
+				return err
+			}
 			svc, cleanup, err := openStatsService(cmd)
 			if err != nil {
 				return err
@@ -156,7 +162,7 @@ func openStatsService(
 	if err != nil {
 		return nil, nil, fmt.Errorf("loading config: %w", err)
 	}
-	tr, err := ensureTransport(&cfg, transportIntentRead, 0)
+	tr, err := ensureTransportContext(cmd.Context(), &cfg, transportIntentRead, 0)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -646,4 +652,24 @@ func sortedInt64Map(m map[string]int64) []kvInt64 {
 		return out[i].key < out[j].key
 	})
 	return out
+}
+
+// Validate existing window syntax before resolving or starting the daemon.
+// Stats deliberately has a narrower duration grammar than session --since.
+func validateStatsCLIWindow(since, until, timezone string) error {
+	now := time.Now()
+	for _, point := range []struct{ name, value string }{{"since", since}, {"until", until}} {
+		if point.value == "" {
+			continue
+		}
+		if _, err := db.ParseWindowPoint(point.value, now); err != nil {
+			return cliValidationError(fmt.Errorf("invalid --%s: %w", point.name, err), "use --"+point.name+" with Nd, Nh, YYYY-MM-DD, or RFC3339")
+		}
+	}
+	if timezone != "" {
+		if _, err := time.LoadLocation(timezone); err != nil {
+			return cliValidationError(fmt.Errorf("invalid --timezone: %w", err), "use an IANA timezone such as America/New_York or UTC")
+		}
+	}
+	return nil
 }

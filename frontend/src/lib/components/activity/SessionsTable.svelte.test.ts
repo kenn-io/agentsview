@@ -9,6 +9,7 @@ import { router } from "../../stores/router.svelte.js";
 import type { Report } from "../../api/types.js";
 import type { ActivitySessionRow } from "../../api/generated/index";
 import { testMoney } from "../../test/money.js";
+import type { ActivitySessionSort } from "../../api/activity-report.js";
 
 function makeRow(overrides: Partial<ActivitySessionRow> = {}): ActivitySessionRow {
   return {
@@ -164,6 +165,44 @@ describe("SessionsTable", () => {
 
     expect(onSort).toHaveBeenCalledWith(key, direction);
     expect(rowOrder()).toEqual(["high-min", "low-min", "untimed"]);
+
+    await unmount(c);
+  });
+
+  it("keeps sorting across columns and directions as the applied sort changes", async () => {
+    const requested: [string, string][] = [];
+    const props = $state({
+      report: makeReport(fixtureRows()),
+      sortKey: "agent_minutes" as ActivitySessionSort,
+      sortDir: "desc" as "asc" | "desc",
+      onSort: (key: ActivitySessionSort, direction: "asc" | "desc") => {
+        requested.push([key, direction]);
+        props.sortKey = key;
+        props.sortDir = direction;
+      },
+    });
+    const c = mount(SessionsTable, { target: document.body, props });
+    await tick();
+
+    const sortedHeaders = () =>
+      [...document.querySelectorAll("th[aria-sort]")].map(
+        (th) => `${th.textContent?.trim()} ${th.getAttribute("aria-sort")}`,
+      );
+    for (const key of ["session", "session", "model", "cost", "cost", "first_active", "session"]) {
+      (document.querySelector(`th.sort-${key} button`) as HTMLElement).click();
+      await tick();
+    }
+
+    expect(requested).toEqual([
+      ["session", "asc"],
+      ["session", "desc"],
+      ["model", "asc"],
+      ["cost", "desc"],
+      ["cost", "asc"],
+      ["first_active", "desc"],
+      ["session", "asc"],
+    ]);
+    expect(sortedHeaders()).toEqual([`${m.activity_session()} ascending`]);
 
     await unmount(c);
   });

@@ -7,6 +7,7 @@ export interface FrictionSummary {
   corrections: number;
   date: string;
   deferrals: number;
+  diagnostics?: number;
   errors: number;
   frustrations: number;
   interruptions: number;

@@ -21,6 +21,7 @@ import (
 )
 
 func TestHostedServiceAndHTTPPublicBoundary(t *testing.T) {
+	t.Parallel()
 	store, split, pin := postgres.HostedPublicFixture(t)
 	backend := service.NewReadOnlyBackend(store)
 	session, err := backend.Get(t.Context(), "codex:portable")
@@ -32,7 +33,7 @@ func TestHostedServiceAndHTTPPublicBoundary(t *testing.T) {
 	cfg.DataDir = t.TempDir()
 	app := server.New(cfg, store, nil)
 	request := func(path string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil)
 		req.Host = "localhost:8080"
 		w := httptest.NewRecorder()
 		app.Handler().ServeHTTP(w, req)

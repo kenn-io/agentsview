@@ -6,7 +6,6 @@ import (
 	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"slices"
 	"testing"
 
@@ -17,13 +16,13 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/ingest"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
 func TestToolSequencesHTTPParity(t *testing.T) {
+	t.Parallel()
 	local := dbtest.OpenTestDB(t)
 	sessionIDs := dbtest.SeedToolSequencesParity(t, local)
 	const boundaryID = "tool-sequences-parity-boundary"
@@ -87,19 +86,11 @@ func TestToolSequencesHTTPParity(t *testing.T) {
 		assert.Equal(t, wantEvidence, gotEvidence, signal)
 	}
 	remoteHandler := server.New(config.Config{Host: "127.0.0.1", InstallationID: "remote"}, store, nil).Handler()
-	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	_, err = duckdb.Push(t.Context(), path, local, "tool-sequences-boundary", storage.MirrorPushOptions{}, true, nil)
-	require.NoError(t, err)
-	mirror, err := duckdb.NewStore(t.Context(), path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, mirror.Close()) })
-	mirrorHandler := server.New(config.Config{Host: "127.0.0.1", InstallationID: "mirror"}, mirror, nil).Handler()
 	for _, sessionID := range sessionIDs {
 		localJSON := getToolSequencesDocument(t, localHandler, sessionID)
 		remoteJSON := getToolSequencesDocument(t, remoteHandler, sessionID)
 		assert.Equal(t, localJSON, remoteJSON, sessionID)
 		if sessionID == boundaryID {
-			assert.Equal(t, localJSON, getToolSequencesDocument(t, mirrorHandler, sessionID))
 			assert.Equal(t, float64(4), localJSON["total_tool_calls"])
 			assert.Equal(t, float64(4), localJSON["total_sequence_calls"])
 			assert.Equal(t, float64(1), localJSON["total_sequences"])
@@ -120,14 +111,14 @@ func TestToolSequencesHTTPParity(t *testing.T) {
 				}
 			}
 			assert.Equal(t, true, calls[3].(map[string]any)["tool_changed"])
-			t.Log("boundary sequence ordinals=[99 100 101 102], repeats=2, switch/recovery=true, calls=4, omissions=0; SQLite/DuckDB/ClickHouse HTTP responses equal")
+			t.Log("boundary sequence ordinals=[99 100 101 102], repeats=2, switch/recovery=true, calls=4, omissions=0; SQLite/ClickHouse HTTP responses equal")
 		}
 	}
 }
 
 func getToolSequencesDocument(t *testing.T, handler http.Handler, sessionID string) map[string]any {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:0/api/v1/sessions/"+sessionID+"/tool-sequences", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0/api/v1/sessions/"+sessionID+"/tool-sequences", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
 	resp := httptest.NewRecorder()
 	handler.ServeHTTP(resp, req)
@@ -137,9 +128,12 @@ func getToolSequencesDocument(t *testing.T, handler http.Handler, sessionID stri
 	return document
 }
 
-// A push that fails after deleting a shortened transcript's messages can leave
-// their tool calls behind. Evidence links only to messages that still exist.
+// A push from an older writer that failed after deleting a shortened
+// transcript's messages can leave their tool calls behind, without the
+// message fields newer pushes copy onto each call. Evidence links only to
+// messages that still exist.
 func TestToolEvidenceIgnoresOrdinalOfMissingMessage(t *testing.T) {
+	t.Parallel()
 	local := dbtest.OpenTestDB(t)
 	const sessionID = "tool-evidence-missing-message"
 	dbtest.SeedToolSequencesExample(t, local, sessionID)
@@ -172,6 +166,9 @@ func TestToolEvidenceIgnoresOrdinalOfMissingMessage(t *testing.T) {
 	require.Equal(t, 2, before.Sessions[0].SignalTotal)
 
 	conn := chtest.Open(t, dsn, database)
+	_, err = conn.ExecContext(t.Context(),
+		`ALTER TABLE tool_calls UPDATE message_facts = false WHERE session_id = ? SETTINGS mutations_sync = 2`, sessionID)
+	require.NoError(t, err)
 	deleteMessage := func(ordinal int) {
 		t.Helper()
 		_, err := conn.ExecContext(t.Context(), `DELETE FROM messages WHERE session_id = ? AND ordinal = ?`, sessionID, ordinal)

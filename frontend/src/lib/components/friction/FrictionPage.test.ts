@@ -55,6 +55,7 @@ function makeDigest(signals: FrictionSignal[]): FrictionDigestResponse {
     revision: 2,
     sessions_scanned: 3,
     markdown_sha256: "0".repeat(64),
+    diagnostics: [],
     summary: {
       date: DATE,
       schema_version: 1,
@@ -304,6 +305,54 @@ describe("FrictionPage", () => {
     expect(document.querySelector(".summary-strip")).toBeNull();
   });
 
+  it("shows a single diagnostic group without a duplicate row count", async () => {
+    const event = sig({
+      kind: "diagnostic",
+      subject_kind: "diagnostic",
+      label: "worker",
+      text: "launch failed",
+    });
+    friction.digest = {
+      ...makeDigest([event, { ...event, subject_id: "diagnostic:2" }]),
+      diagnostics: [{ source: "worker", message: "launch failed", count: 2 }],
+      p0_alerts: [],
+      patterns: [],
+    };
+    await render();
+    const diagnostics = section("diagnostic");
+    expect(diagnostics.textContent).toContain("worker");
+    expect(diagnostics.textContent).toContain("launch failed");
+    expect(diagnostics.querySelectorAll("li .count")).toHaveLength(0);
+    expect(diagnostics.querySelector("a")).toBeNull();
+  });
+
+  it("shows row counts when diagnostics have multiple groups", async () => {
+    const worker = sig({
+      kind: "diagnostic",
+      subject_kind: "diagnostic",
+      label: "worker",
+      text: "launch failed",
+    });
+    const scheduler = sig({
+      kind: "diagnostic",
+      subject_kind: "diagnostic",
+      subject_id: "diagnostic:2",
+      label: "scheduler",
+      text: "job delayed",
+    });
+    friction.digest = {
+      ...makeDigest([worker, scheduler]),
+      diagnostics: [
+        { source: "worker", message: "launch failed", count: 1 },
+        { source: "scheduler", message: "job delayed", count: 1 },
+      ],
+      p0_alerts: [],
+      patterns: [],
+    };
+    await render();
+    expect(section("diagnostic").querySelectorAll("li .count")).toHaveLength(2);
+  });
+
   it("names a finding's session by its opening message and project", async () => {
     await render();
     const row = section("correction").querySelector("li")!;
@@ -386,6 +435,123 @@ describe("FrictionPage", () => {
     expect(recurring.querySelector("a.session-link")?.getAttribute("href")).toBe(
       "/sessions/test-session-medium-8?msg=5",
     );
+  });
+
+  describe("Kata issues", () => {
+    const issue = {
+      qualified_id: "agentsview#f001",
+      web_url: "https://kata.example.test/issues/f001",
+      issue_uid: "01J0ABCDEF0000000000000001",
+      source: "created",
+      linked_at: "2026-09-22T08:00:00Z",
+    };
+
+    function headlineRow(text: string): HTMLElement {
+      const row = Array.from(
+        document.querySelectorAll<HTMLElement>(".friction-headline .headline-row"),
+      ).find((r) => r.textContent?.includes(text));
+      expect(row, text).toBeDefined();
+      return row!;
+    }
+
+    function buttons(row: HTMLElement): string[] {
+      return Array.from(row.querySelectorAll("button")).map((b) => b.textContent?.trim() ?? "");
+    }
+
+    it("files a pattern once Kata is ready and this page may write", async () => {
+      vi.spyOn(friction, "checkKata").mockImplementation(async () => {
+        friction.kataReady = true;
+      });
+      const file = vi.spyOn(friction, "fileIssue").mockResolvedValue();
+      await render();
+      await tick();
+      const row = headlineRow("command not found");
+      expect(buttons(row)).toEqual(["File to Kata", "Link issue"]);
+      Array.from(row.querySelectorAll("button"))
+        .find((b) => b.textContent?.includes("File to Kata"))!
+        .click();
+      expect(file).toHaveBeenCalledWith(toolError.fingerprint);
+    });
+
+    it("links any pattern but files only kinds whose text may leave the machine", async () => {
+      vi.spyOn(friction, "checkKata").mockImplementation(async () => {
+        friction.kataReady = true;
+      });
+      friction.digest!.patterns = [
+        ...friction.digest!.patterns!,
+        {
+          fingerprint: frustrationSignal.fingerprint,
+          kind: "frustration",
+          title: "[friction/frustration] test-session-medium-8: frustrated",
+          first_seen_date: DATE,
+          last_seen_date: DATE,
+          occurrence_count: 1,
+          session_count: 1,
+          last_subject_id: "test-session-medium-8",
+          last_ordinal: 9,
+        },
+      ];
+      await render();
+      await tick();
+      expect(buttons(headlineRow("this is still broken"))).toEqual(["Link issue"]);
+      expect(buttons(headlineRow("command not found"))).toEqual(["File to Kata", "Link issue"]);
+    });
+
+    it("offers no actions when Kata is not ready", async () => {
+      vi.spyOn(friction, "checkKata").mockImplementation(async () => {
+        friction.kataReady = false;
+      });
+      await render();
+      await tick();
+      expect(buttons(headlineRow("command not found"))).toEqual([]);
+    });
+
+    it("shows a linked issue on its pattern and findings without actions for a read-only page", async () => {
+      sync.serverVersion = version({ friction_build_allowed: false });
+      const check = vi.spyOn(friction, "checkKata");
+      friction.digest!.patterns = friction.digest!.patterns!.map((p) =>
+        p.fingerprint === toolError.fingerprint ? { ...p, issue } : p,
+      );
+      await render();
+      const row = headlineRow("command not found");
+      const link = row.querySelector<HTMLAnchorElement>("a.issue-link")!;
+      expect(link.textContent?.trim()).toBe("agentsview#f001");
+      expect(link.getAttribute("href")).toBe(issue.web_url);
+      expect(buttons(row)).toEqual([]);
+      expect(check, "a page that cannot write never asks Kata").not.toHaveBeenCalled();
+      const finding = Array.from(section("error").querySelectorAll("li")).find((li) =>
+        li.textContent?.includes("command not found"),
+      )!;
+      expect(finding.querySelector(".row-issue")?.textContent?.trim()).toBe("agentsview#f001");
+    });
+
+    it.each([
+      ["automatic filing on", true, "Auto-filing paused"],
+      ["automatic filing off", false, undefined],
+    ])("shows a pause only where it matters: %s", async (_name, autoFile, want) => {
+      sync.serverVersion = version({ friction_build_allowed: false, friction_auto_file: autoFile });
+      friction.digest!.patterns = friction.digest!.patterns!.map((p) =>
+        p.fingerprint === toolError.fingerprint
+          ? { ...p, filing: { state: "paused", attempts: 0 } }
+          : p,
+      );
+      await render();
+      const note = headlineRow("command not found").querySelector<HTMLElement>(".filing-note");
+      expect(note?.textContent?.trim()).toBe(want);
+    });
+
+    it("says why automatic filing has not linked a pattern", async () => {
+      sync.serverVersion = version({ friction_build_allowed: false });
+      friction.digest!.patterns = friction.digest!.patterns!.map((p) =>
+        p.fingerprint === toolError.fingerprint
+          ? { ...p, filing: { state: "needs_person", attempts: 1, last_error: "kata: HTTP 422" } }
+          : p,
+      );
+      await render();
+      const note = headlineRow("command not found").querySelector<HTMLElement>(".filing-note");
+      expect(note?.textContent?.trim()).toBe("Filing stopped");
+      expect(note?.title).toBe("kata: HTTP 422");
+    });
   });
 
   it("renders hostile transcript text as text", async () => {
@@ -477,7 +643,7 @@ describe("FrictionPage", () => {
     friction.digest = null;
     await render();
     const text = document.body.textContent ?? "";
-    expect(text).toContain("built automatically");
+    expect(text).toContain("fills in missed days automatically");
     expect(text).toContain("require_auth");
     expect(text).not.toContain("Build now");
   });
@@ -512,6 +678,24 @@ describe("FrictionPage", () => {
     )!;
     // The date kept from an earlier visit must not replace the latest digest.
     expect(router.params["date"]).toBeUndefined();
+    retry.click();
+    expect(loadCalls).toEqual([null, null]);
+  });
+
+  it("shows a neutral notice when the backend cannot read the Friction Log", async () => {
+    sync.serverVersion = version({ friction_available: false, friction_readable: false });
+    friction.dates = [];
+    friction.selectedDate = null;
+    friction.digest = null;
+    friction.errors.dates = "the Friction Log is not available from this backend";
+    await render();
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    const notice = document.querySelector('[role="status"]')!;
+    expect(notice.textContent).toContain("Could not load the Friction Log");
+    expect(notice.textContent).toContain("not available from this backend");
+    const retry = Array.from(notice.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === "Retry",
+    )!;
     retry.click();
     expect(loadCalls).toEqual([null, null]);
   });

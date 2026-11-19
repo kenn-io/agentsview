@@ -1,10 +1,14 @@
 package db
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -13,8 +17,73 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/assets"
 	"go.kenn.io/agentsview/internal/config"
 )
+
+func TestReadRetainedImageLimit(t *testing.T) {
+	t.Run("inline", func(t *testing.T) {
+		body := bytes.Repeat([]byte("x"), 1024*1024)
+		uri := "data:image/png;base64," + base64.StdEncoding.EncodeToString(body)
+		raw, err := json.Marshal(uri)
+		require.NoError(t, err)
+		content := fmt.Sprintf(`[{"type":"input_image","image_url":%s}]`, raw)
+		_, err = ReadRetainedImage(content, 0, "", 32)
+		require.ErrorContains(t, err, "exceeds 32 bytes")
+		require.ErrorIs(t, err, ErrImageTooLarge)
+		got, err := ReadRetainedImage(content, 0, "", int64(len(body)))
+		require.NoError(t, err)
+		require.Equal(t, body, got)
+		encoded := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("x"), 8<<20))
+		invalid := `[{"type":"input_image","image_url":"data:image/png;base64,` + encoded[:len(encoded)-4] + `%%%"},{"type":"input_image","image_url":"data:image/png;base64,AQID"}]`
+		got, err = ReadRetainedImage(invalid, 0, "", 32)
+		require.NoError(t, err)
+		require.Equal(t, []byte{1, 2, 3}, got)
+	})
+	t.Run("asset", func(t *testing.T) {
+		body := bytes.Repeat([]byte("x"), 1024*1024)
+		dir := t.TempDir()
+		ref, _, err := assets.Put(dir, "image/png", body)
+		require.NoError(t, err)
+		asset := fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":%q,"media_type":"image/png","byte_size":%d}]`, ref, len(body))
+		_, err = ReadRetainedImage(asset, 0, dir, 32)
+		require.ErrorContains(t, err, "exceeds 32 bytes")
+		require.ErrorIs(t, err, ErrImageTooLarge)
+		smallRef, _, err := assets.Put(dir, "image/png", []byte("x"))
+		require.NoError(t, err)
+		corrupt := fmt.Sprintf(`[{"type":"agentsview_image","version":1,"image_ref":%q,"media_type":"image/png","byte_size":1}]`, smallRef)
+		require.NoError(t, os.Truncate(filepath.Join(dir, strings.TrimPrefix(smallRef, "asset://")), int64(len(body))))
+		_, err = ReadRetainedImage(corrupt, 0, dir, 32)
+		require.ErrorContains(t, err, "exceeds 32 bytes")
+		require.NotErrorIs(t, err, ErrImageTooLarge)
+	})
+	t.Run("oversized_buffer", func(t *testing.T) {
+		if os.Getenv("AGENTSVIEW_TEST_IMAGE_BUFFER") != "1" {
+			cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestReadRetainedImageLimit/oversized_buffer$")
+			cmd.Env = append(os.Environ(), "AGENTSVIEW_TEST_IMAGE_BUFFER=1")
+			output, err := cmd.CombinedOutput()
+			require.NoError(t, err, "%s", output)
+			return
+		}
+		encoded := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte("x"), 8<<20))
+		content := fmt.Sprintf(`[{"type":"input_image","image_url":"data:image/png;base64,%s"},{"type":"input_image","image_url":"data:image/png;base64,%%%%%%"},{"type":"input_image","image_url":"data:image/png;base64,AQID"}]`, encoded)
+		allocated := func(index int) (uint64, []byte, error) {
+			t.Helper()
+			runtime.GC()
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			body, err := ReadRetainedImage(content, index, "", 32)
+			runtime.ReadMemStats(&after)
+			return after.TotalAlloc - before.TotalAlloc, body, err
+		}
+		baseline, body, err := allocated(1)
+		require.NoError(t, err)
+		require.Equal(t, []byte{1, 2, 3}, body)
+		oversized, _, err := allocated(0)
+		require.ErrorContains(t, err, "exceeds 32 bytes")
+		require.LessOrEqual(t, oversized, baseline+(1<<20), "the oversized body must not be buffered")
+	})
+}
 
 func testInlineImageContent() string {
 	return `[{"type":"text","text":"before"},{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"type":"text","text":"after"}]`
@@ -776,4 +845,67 @@ func TestToolImageDelimiterVariantsRemovePayload(t *testing.T) {
 	stripped, stats := DowngradeOffloadedToolResultImages(content)
 	assert.Equal(t, int64(1), stats.Payloads)
 	assert.NotContains(t, stripped, "asset://")
+}
+
+func TestRetainedToolResultImages(t *testing.T) {
+	const digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+	inline := `[{"type":"input_image","image_url":"data:image/png;base64,YWJj"}]`
+	offloaded := `[{"type":"agentsview_image","version":1,"image_ref":"asset://` + digest + `.png","media_type":"image/png","byte_size":3}]`
+	images := RetainedToolResultImages("agent-a:\n" + inline + "\n\nagent-b:\n" + offloaded)
+	require.Len(t, images, 2)
+	for i, image := range images {
+		assert.Equal(t, i, image.Index)
+		assert.Equal(t, digest, image.SHA256)
+		require.NotNil(t, image.Size)
+		assert.Equal(t, int64(3), *image.Size)
+		assert.Equal(t, "image/png", image.MediaType)
+	}
+	for _, content := range []string{
+		strings.Replace(offloaded, `"version":1`, `"version":2`, 1),
+		strings.Replace(offloaded, `"version":1`, `"version":0`, 1),
+		`[{"type":"agentsview_image","version":2,"media_type":"image/png","byte_size":3}]`,
+		`[{"type":"input_image","image_url":"data:text/plain;base64,YWJj"}]`,
+		`[{"type":"input_image","image_url":"data:image/png;base64,!!"}]`,
+		`[{"type":"agentsview_image","image_ref":"asset://bad.png","media_type":"image/png","byte_size":3}]`,
+		`[{`,
+	} {
+		assert.Empty(t, RetainedToolResultImages(content))
+	}
+}
+
+func TestMarkdownAssetImages(t *testing.T) {
+	const ref = "asset://ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad.png"
+	images := MarkdownAssetImages("![pasted](" + ref + ") [link](" + ref + ") ![remote](https://example.com/image.png) `![code](" + ref + ")`")
+	require.Len(t, images, 1)
+	assert.Equal(t, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", images[0].SHA256)
+	assert.Nil(t, images[0].Size)
+	assert.Equal(t, "image/png", images[0].MediaType)
+}
+
+func TestRetainedToolResultFilesProducerFixture(t *testing.T) {
+	data, err := os.ReadFile("../parser/testdata/opencode_v2/tool_files.json")
+	require.NoError(t, err)
+	var fixture struct {
+		Content []struct {
+			ID    string `json:"id"`
+			State struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"state"`
+		} `json:"content"`
+	}
+	require.NoError(t, json.Unmarshal(data, &fixture))
+	var content json.RawMessage
+	for _, tool := range fixture.Content {
+		if tool.ID == "call_files" {
+			content = tool.State.Content
+		}
+	}
+	require.NotEmpty(t, content)
+	files := RetainedToolResultImages(string(content))
+	require.Len(t, files, 2)
+	assert.Equal(t, "application/pdf", files[0].MediaType)
+	assert.Equal(t, new(int64(327)), files[0].Size)
+	assert.Equal(t, "text/plain", files[1].MediaType)
+	assert.Equal(t, new(int64(6)), files[1].Size)
+	assert.Equal(t, "b6a98d9ce9a2d9149288fa3df42d377c3e42737afdcdaf714e33c0a100b51060", files[1].SHA256)
 }

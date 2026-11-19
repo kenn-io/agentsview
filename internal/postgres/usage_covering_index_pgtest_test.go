@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"database/sql"
 	"testing"
 
@@ -13,12 +12,13 @@ import (
 const usageIdxTestSchema = "agentsview_usage_idx_test"
 
 func TestEnsureSchemaMigratesUsageCoveringIndex(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
-	pg, err := Open(pgURL, usageIdxTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, usageIdxTestSchema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err = pg.ExecContext(ctx,
 		`DROP SCHEMA IF EXISTS `+usageIdxTestSchema+` CASCADE`)
 	require.NoError(t, err, "drop schema")
@@ -52,7 +52,7 @@ func requirePGIndexPresence(
 ) {
 	t.Helper()
 	var got bool
-	err := pg.QueryRowContext(context.Background(), `
+	err := pg.QueryRowContext(t.Context(), `
 		SELECT EXISTS (
 			SELECT 1
 			FROM pg_indexes

@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/archivepush"
+	"go.kenn.io/agentsview/internal/archivesource"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
@@ -68,7 +69,7 @@ func TestDaemonPushProgressSilencesHeartbeat(t *testing.T) {
 			t.Cleanup(func() { daemonPushHeartbeatInterval = orig })
 
 			onProgress, finish := daemonPushProgress(
-				"PostgreSQL", pushProgressPhase, newReplicaPushProgressPrinter(),
+				"PostgreSQL", newReplicaPushProgressPrinter(),
 			)
 			onProgress(storage.PushProgress{SessionsDone: 1, SessionsTotal: 2})
 			synctest.Sleep(150 * time.Millisecond)
@@ -92,20 +93,20 @@ func TestDaemonPushProgressReportsWaitingForAnotherPush(t *testing.T) {
 			t.Cleanup(func() { daemonPushHeartbeatInterval = orig })
 
 			onProgress, finish := daemonPushProgress(
-				"DuckDB", mirrorPushProgressPhase,
-				func(storage.MirrorPushProgress) {
+				"PostgreSQL",
+				func(storage.PushProgress) {
 					assert.Fail(t, "a waiting report is not push progress")
 				},
 			)
-			onProgress(storage.MirrorPushProgress{Phase: storage.PushPhaseWaiting})
-			onProgress(storage.MirrorPushProgress{Phase: storage.PushPhaseWaiting})
+			onProgress(storage.PushProgress{Phase: storage.PushPhaseWaiting})
+			onProgress(storage.PushProgress{Phase: storage.PushPhaseWaiting})
 			synctest.Sleep(75 * time.Millisecond)
 			finish()
 		})
 	})
 
 	assert.Equal(t, 1, strings.Count(out, "Waiting for another push on the daemon to finish"))
-	assert.Contains(t, out, "still pushing to DuckDB via the daemon")
+	assert.Contains(t, out, "still pushing to PostgreSQL via the daemon")
 }
 
 // A push that waits on a local sync says so each time the daemon reports the
@@ -113,12 +114,12 @@ func TestDaemonPushProgressReportsWaitingForAnotherPush(t *testing.T) {
 func TestDaemonPushProgressReportsWaitingForTheLocalSync(t *testing.T) {
 	out := captureStdout(t, func() {
 		onProgress, finish := daemonPushProgress(
-			"DuckDB", mirrorPushProgressPhase,
-			func(storage.MirrorPushProgress) {
+			"PostgreSQL",
+			func(storage.PushProgress) {
 				assert.Fail(t, "a waiting report is not push progress")
 			},
 		)
-		onProgress(storage.MirrorPushProgress{Phase: storage.PushPhaseWaitingForSync})
+		onProgress(storage.PushProgress{Phase: storage.PushPhaseWaitingForSync})
 		finish()
 	})
 
@@ -199,95 +200,6 @@ func TestLocalPGWatchPusherUsesBackendPricingEnsure(t *testing.T) {
 	assert.Equal(t, 1, target.pushes)
 }
 
-func TestLocalArchiveWriteBackendDuckDBPushStopsAfterCanceledLocalSync(t *testing.T) {
-	testLocalArchivePushStopsAfterCanceledSync(t,
-		func(backend *localArchiveWriteBackend, ctx context.Context) error {
-			_, err := backend.DuckDBPush(
-				ctx, config.DuckDBConfig{}, DuckDBPushConfig{}, nil, nil,
-			)
-			return err
-		})
-}
-
-// TestLocalArchiveWriteBackendDuckDBPushUsesConfiguredRemoteURL verifies that
-// a configured remote Quack URL now fails the push outright: push writes the
-// local mirror only, so a remote target is rejected rather than attempted.
-func TestLocalArchiveWriteBackendDuckDBPushUsesConfiguredRemoteURL(t *testing.T) {
-	backend := testLocalArchiveWriteBackend(t)
-
-	captureStdout(t, func() {
-		_, err := backend.DuckDBPush(
-			t.Context(),
-			config.DuckDBConfig{
-				URL:         "quack:https://duck.example.test",
-				MachineName: "workstation",
-			},
-			DuckDBPushConfig{},
-			nil,
-			nil,
-		)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "duckdb push writes the local mirror")
-		assert.Contains(t, err.Error(), "quack serve")
-	})
-}
-
-func TestLocalArchiveWriteBackendDuckDBPushValidatesRemoteBeforeLocalSync(t *testing.T) {
-	backend := testLocalArchiveWriteBackend(t)
-
-	var err error
-	out := captureStdout(t, func() {
-		_, err = backend.DuckDBPush(
-			t.Context(),
-			config.DuckDBConfig{
-				URL:         "quack:https://duck.example.test",
-				MachineName: "workstation",
-			},
-			DuckDBPushConfig{Full: true},
-			nil,
-			nil,
-		)
-	})
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "duckdb push writes the local mirror")
-	assert.NotContains(t, out, "Database:")
-	assert.NotContains(t, out, "Opening DuckDB mirror")
-}
-
-func TestLocalArchiveWriteBackendDuckDBPushRejectsIncompleteDiscovery(t *testing.T) {
-	backend := testLocalArchiveWriteBackend(t)
-	original := coordinateLocalSyncRunner
-	coordinateLocalSyncRunner = func(
-		context.Context,
-		config.Config,
-		*db.DB,
-		bool,
-		syncpkg.ProgressFunc,
-		bool,
-		func() (syncpkg.RebuildOptions, syncpkg.RebuildCleanup, error),
-		func(bool, bool) error,
-	) (bool, syncpkg.SyncStats, error) {
-		return false, syncpkg.SyncStats{Aborted: true}, nil
-	}
-	t.Cleanup(func() { coordinateLocalSyncRunner = original })
-	mirrorPath := filepath.Join(t.TempDir(), "mirror.duckdb")
-
-	var err error
-	out := captureStdout(t, func() {
-		_, err = backend.DuckDBPush(
-			t.Context(),
-			config.DuckDBConfig{Path: mirrorPath, MachineName: "local"},
-			DuckDBPushConfig{}, nil, nil,
-		)
-	})
-
-	require.Error(t, err)
-	require.ErrorContains(t, err, "local sync discovery incomplete")
-	assert.NotContains(t, out, "Opening DuckDB mirror",
-		"an incomplete local archive must stop before mirror push")
-}
-
 func TestLocalArchiveWriteBackendPGPushRejectsDeferredProcessing(t *testing.T) {
 	backend := testLocalArchiveWriteBackend(t)
 	original := coordinateLocalSyncRunner
@@ -316,6 +228,39 @@ func TestLocalArchiveWriteBackendPGPushRejectsDeferredProcessing(t *testing.T) {
 
 	require.Error(t, err)
 	require.ErrorContains(t, err, "local sync processing incomplete")
+	assert.NotContains(t, out, "Connecting to PostgreSQL")
+}
+
+// A rebuild can install while a fork stays deferred. An offline attachment
+// must not let that deferred archive reach an authoritative push.
+func TestLocalArchiveWriteBackendPGPushRejectsDeferredRebuildWithOfflineAttachment(t *testing.T) {
+	backend := testLocalArchiveWriteBackend(t)
+	original := coordinateLocalSyncRunner
+	coordinateLocalSyncRunner = func(
+		context.Context,
+		config.Config,
+		*db.DB,
+		bool,
+		syncpkg.ProgressFunc,
+		bool,
+		func() (syncpkg.RebuildOptions, syncpkg.RebuildCleanup, error),
+		func(bool, bool) error,
+	) (bool, syncpkg.SyncStats, error) {
+		return true, syncpkg.SyncStats{ArchiveRebuilt: true, Deferred: 1},
+			archivesource.DrainError{Err: errors.New("attachment offline")}
+	}
+	t.Cleanup(func() { coordinateLocalSyncRunner = original })
+
+	var err error
+	out := captureStdout(t, func() {
+		_, err = backend.ReplicaPush(
+			t.Context(), pgReplica{},
+			storage.ConfiguredReplica{Target: storage.ReplicaTarget{URL: unreachablePGURL}},
+			ReplicaPushConfig{}, nil, nil,
+		)
+	})
+
+	require.Error(t, err)
 	assert.NotContains(t, out, "Connecting to PostgreSQL")
 }
 
@@ -423,18 +368,8 @@ func pushWatchOwnerCases(t *testing.T) []pushWatchOwnerCase {
 	t.Helper()
 	// Keep SQLite setup outside the timed owner goroutines so channel deadlines
 	// measure watch coordination rather than fixture creation on slow runners.
-	localDuckDB := testLocalArchiveWriteBackend(t)
 	localPostgreSQL := testLocalArchiveWriteBackend(t)
 	return []pushWatchOwnerCase{
-		{
-			name: "daemon DuckDB",
-			run: func(ctx context.Context, hooks *archivePushWatchHooks) error {
-				return (daemonArchiveWriteBackend{watchHooks: hooks}).DuckDBPushWatch(
-					ctx, config.DuckDBConfig{}, DuckDBPushConfig{}, nil, nil,
-					time.Hour, time.Hour,
-				)
-			},
-		},
 		{
 			name: "daemon PostgreSQL",
 			run: func(ctx context.Context, hooks *archivePushWatchHooks) error {
@@ -444,23 +379,7 @@ func pushWatchOwnerCases(t *testing.T) []pushWatchOwnerCase {
 				)
 			},
 		},
-		localDuckDBCase(localDuckDB),
 		localPostgreSQLCase(localPostgreSQL),
-	}
-}
-
-func localDuckDBCase(backend *localArchiveWriteBackend) pushWatchOwnerCase {
-	run := func(full bool) func(context.Context, *archivePushWatchHooks) error {
-		return func(ctx context.Context, hooks *archivePushWatchHooks) error {
-			backend.watchHooks = hooks
-			return backend.DuckDBPushWatch(
-				ctx, config.DuckDBConfig{}, DuckDBPushConfig{Full: full}, nil, nil,
-				localPushWatchTestDebounce, time.Hour,
-			)
-		}
-	}
-	return pushWatchOwnerCase{
-		name: "local DuckDB", run: run(false), runFull: run(true), database: backend.database,
 	}
 }
 
@@ -650,15 +569,6 @@ func (h *pushWatchOwnerHarness) hooks() *archivePushWatchHooks {
 			}
 			return h.loop, func() {}
 		},
-		duckDBPush: func(
-			_ context.Context, reason pushReason, _ bool,
-		) (storage.MirrorPushResult, error) {
-			attempt, partial := h.nextAttempt(reason)
-			if partial {
-				return storage.MirrorPushResult{Errors: 1}, nil
-			}
-			return storage.MirrorPushResult{SessionsPushed: attempt}, nil
-		},
 		replicaPush: func(
 			_ context.Context, reason pushReason, cfg ReplicaPushConfig,
 		) (storage.PushResult, error) {
@@ -685,19 +595,6 @@ func (h *pushWatchOwnerHarness) hooks() *archivePushWatchHooks {
 				},
 			}
 		},
-		newDuckDBPusher: func(*syncpkg.Engine) *duckDBPusher {
-			return &duckDBPusher{
-				mirrorPush: func(
-					_ context.Context, full bool,
-				) (storage.MirrorPushResult, error) {
-					attempt, partial := h.nextLocalAttempt(full)
-					if partial {
-						return storage.MirrorPushResult{Errors: 1}, nil
-					}
-					return storage.MirrorPushResult{SessionsPushed: attempt}, nil
-				},
-			}
-		},
 	}
 }
 
@@ -705,12 +602,6 @@ func (h *pushWatchOwnerHarness) record(event string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.events = append(h.events, event)
-}
-
-func (h *pushWatchOwnerHarness) nextAttempt(reason pushReason) (int, bool) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.nextAttemptLocked(reason)
 }
 
 // nextLocalAttempt records a push from a local owner's pusher, which sees the
@@ -729,12 +620,6 @@ func (h *pushWatchOwnerHarness) nextPGWatchAttempt(
 	return h.nextAttemptWithScopeLocked(
 		reason, false, cfg.WatchBatch, cfg.WatchRecovery,
 	)
-}
-
-func (h *pushWatchOwnerHarness) nextAttemptLocked(
-	reason pushReason,
-) (int, bool) {
-	return h.nextAttemptWithScopeLocked(reason, false, nil, nil)
 }
 
 func (h *pushWatchOwnerHarness) nextAttemptWithScopeLocked(
@@ -803,7 +688,7 @@ func (t *pushWatchPGTarget) PushWithOptions(
 func (*pushWatchPGTarget) Close() error { return nil }
 
 func isLocalEnginePushWatchOwner(name string) bool {
-	return name == "local PostgreSQL" || name == "local DuckDB"
+	return name == "local PostgreSQL"
 }
 
 // daemonPushWatchOwnerCases returns the owners that delegate sync to the
@@ -1109,18 +994,6 @@ func TestDaemonPushWatchOwnersSuppressOpenCodeSHMOnlyBatches(t *testing.T) {
 	}
 	owners := []pushWatchOwnerCase{
 		{
-			name: "daemon DuckDB",
-			run: func(ctx context.Context, hooks *archivePushWatchHooks) error {
-				backend := daemonArchiveWriteBackend{
-					appCfg: cfg, watchHooks: hooks,
-				}
-				return backend.DuckDBPushWatch(
-					ctx, config.DuckDBConfig{}, DuckDBPushConfig{}, nil, nil,
-					time.Hour, time.Hour,
-				)
-			},
-		},
-		{
 			name: "daemon PostgreSQL",
 			run: func(ctx context.Context, hooks *archivePushWatchHooks) error {
 				backend := daemonArchiveWriteBackend{
@@ -1394,7 +1267,7 @@ func TestPushWatchRelevancePreservesAuthoritativeBatches(t *testing.T) {
 func TestResolveArchiveWriteBackendCopiesNoSyncRuntime(t *testing.T) {
 	dataDir := t.TempDir()
 	host, port := testPingServer(t)
-	_, err := WriteDaemonRuntimeWithAuthAndNoSync(
+	_, err := WriteDaemonRuntimeWithAuthAndNoSync(nil,
 		dataDir, host, port, "test", "", false, false, true, nil,
 	)
 	require.NoError(t, err)
@@ -1570,121 +1443,6 @@ func TestLocalPGPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 	}
 }
 
-func TestLocalDuckDBPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
-	dataDir := t.TempDir()
-	dbPath := filepath.Join(dataDir, "sessions.db")
-	database := dbtest.OpenTestDBAt(t, dbPath)
-	target := t.TempDir()
-	codexRoot := filepath.Join(t.TempDir(), "sessions")
-	require.NoError(t, os.Symlink(target, codexRoot))
-
-	backend := &localArchiveWriteBackend{
-		appCfg: config.Config{
-			DataDir:        dataDir,
-			DBPath:         dbPath,
-			InstallationID: "local",
-			AgentDirs: map[parser.AgentType][]string{
-				parser.AgentCodex: {codexRoot},
-			},
-		},
-		database: database,
-	}
-
-	ticks := make(chan time.Time, 1)
-	owned := make(chan []string, 8)
-	fire := make(chan time.Time)
-	floor := make(chan time.Time)
-	backend.watchHooks = &archivePushWatchHooks{
-		newLoop: func(
-			label string, _, _ time.Duration,
-			push func(context.Context, pushReason, *syncpkg.WatchBatch) error,
-		) (*pushLoop, func()) {
-			return &pushLoop{
-				debounce: time.Hour,
-				dirty:    make(chan struct{}, 1),
-				floor:    floor,
-				after:    func(time.Duration) <-chan time.Time { return fire },
-				push:     push,
-				label:    label,
-			}, func() {}
-		},
-		startupSync: func(context.Context, *syncpkg.Engine, bool) (bool, error) {
-			return false, nil
-		},
-		newDuckDBPusher: func(*syncpkg.Engine) *duckDBPusher {
-			return &duckDBPusher{
-				mirrorPush: func(context.Context, bool) (storage.MirrorPushResult, error) {
-					return storage.MirrorPushResult{}, nil
-				},
-			}
-		},
-		newUnwatchedPoller: func(
-			ctx context.Context, engine unwatchedPollSyncer,
-		) unwatchedRootPoller {
-			return newUnwatchedPollCoordinatorWithTicks(
-				ctx, engine, ticks, func() {}, func(work func()) { work() },
-				func(roots []string) {
-					owned <- append([]string(nil), roots...)
-				},
-				time.Now, time.After,
-			)
-		},
-	}
-
-	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(cancel)
-	done := make(chan error, 1)
-	go func() {
-		done <- backend.DuckDBPushWatch(
-			ctx, config.DuckDBConfig{}, DuckDBPushConfig{}, nil, nil,
-			time.Hour, time.Hour,
-		)
-	}()
-
-	select {
-	case roots := <-owned:
-		assert.Contains(t, roots, codexRoot,
-			"the unwatchable root's polling obligation must reach the duckdb watch poller")
-	case err := <-done:
-		require.FailNowf(t, "duckdb watch exited before registering obligations", "%v", err)
-	case <-time.After(10 * time.Second):
-		require.FailNow(t, "no polling obligation was registered for the unwatchable root")
-	}
-
-	uuid := "e5f6a7b8-5555-4666-8777-888899990000"
-	day := filepath.Join(codexRoot, "2026", "05", "04")
-	require.NoError(t, os.MkdirAll(day, 0o755))
-	content := testjsonl.NewSessionBuilder().
-		AddCodexMeta(
-			"2026-05-04T14:00:00Z", uuid, "/home/user/code/api",
-			"codex_cli_rs",
-		).
-		AddCodexMessage("2026-05-04T14:00:01Z", "user", "hello").
-		String()
-	require.NoError(t, os.WriteFile(
-		filepath.Join(day, "rollout-2026-05-04T14-31-58-"+uuid+".jsonl"),
-		[]byte(content), 0o644,
-	))
-
-	require.Eventually(t, func() bool {
-		select {
-		case ticks <- time.Now():
-		default:
-		}
-		session, err := database.GetSession(t.Context(), "codex:"+uuid)
-		return err == nil && session != nil
-	}, 10*time.Second, 20*time.Millisecond,
-		"the returned root must be reconciled by the poller without watcher events or floor pushes")
-
-	cancel()
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(30 * time.Second):
-		require.FailNow(t, "duckdb watch did not shut down")
-	}
-}
-
 func testLocalArchiveWriteBackend(t *testing.T) *localArchiveWriteBackend {
 	t.Helper()
 	dataDir := t.TempDir()
@@ -1698,35 +1456,6 @@ func testLocalArchiveWriteBackend(t *testing.T) *localArchiveWriteBackend {
 		},
 		database: database,
 	}
-}
-
-// A deferred DuckDB push wrote nothing, so a --full watch keeps its request
-// for the retry. After a daemon rebuilt the archive it stops asking: the
-// mirror pushes in full anyway, and asking again would make the daemon
-// rebuild the archive on every retry while the mirror stays locked.
-func TestDeferredDuckDBWatchPushKeepsFullUntilARebuild(t *testing.T) {
-	lane := &archiveSyncLane{label: "test watch", openDispatch: func() {}}
-	lane.fullPending.Store(true)
-	var deferred storage.MirrorPushResult
-	deferred.Diagnostics.Deferred = true
-	deferred.Diagnostics.DeferredReason = "another push is rebuilding the mirror"
-	rebuilt := deferred
-	rebuilt.ArchiveRebuilt = true
-	var fullArgs []bool
-	var notStarted []bool
-	for _, res := range []storage.MirrorPushResult{deferred, deferred, rebuilt, deferred} {
-		err := lane.push(t.Context(), reasonChange, nil, func(
-			_ context.Context, reason pushReason, full bool, _ *syncpkg.WatchBatch,
-		) error {
-			fullArgs = append(fullArgs, full)
-			return completeDuckDBWatchPush(res, reason, full)
-		})
-		_, keep := errors.AsType[storage.PushNotStartedError](err)
-		require.True(t, err == nil || keep, "err: %v", err)
-		notStarted = append(notStarted, keep)
-	}
-	assert.Equal(t, []bool{true, true, true, false}, fullArgs)
-	assert.Equal(t, []bool{true, true, false, false}, notStarted)
 }
 
 func TestResolveArchiveWriteBackendRequiresDaemon(t *testing.T) {
@@ -1766,5 +1495,32 @@ func TestResolveArchiveWriteBackendRequiresDaemon(t *testing.T) {
 			assert.Zero(t, starts)
 			assert.NoFileExists(t, cfg.DBPath)
 		})
+	}
+}
+
+// Codex keeps its own databases, logs, and lock files next to the title index
+// in its home directory, which the watch observes. Only the index may start a
+// push.
+func TestDaemonPushWatchIgnoresCodexHomeFiles(t *testing.T) {
+	home := t.TempDir()
+	cfg := config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {filepath.Join(home, "sessions")},
+		},
+	}
+	for _, tc := range []struct {
+		paths []string
+		push  bool
+	}{
+		{[]string{filepath.Join(home, "logs_2.sqlite"), filepath.Join(home, "state_5.sqlite-wal")}, false},
+		{[]string{filepath.Join(home, parser.CodexSessionIndexFilename)}, true},
+		{[]string{filepath.Join(home, "logs_2.sqlite"), filepath.Join(home, parser.CodexSessionIndexFilename)}, true},
+	} {
+		loop, _, _ := newTestLoop(func(context.Context, pushReason) error { return nil })
+		require.NoError(t, notifyPushForWatchBatchWithConfig(
+			t.Context(), loop, cfg, syncpkg.WatchBatch{Paths: tc.paths},
+		))
+		pending, _ := pushLoopPendingState(loop)
+		assert.Equal(t, tc.push, pending, "paths %v", tc.paths)
 	}
 }

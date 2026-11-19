@@ -4,6 +4,7 @@ import type {
   DbSignalsTrendBucket as SignalsTrendBucket,
 } from "../../api/generated/index.js";
 import { m } from "../../i18n/index.js";
+import { formatCount } from "../../utils/format.js";
 
 export type QualityPatternSeverity = "clear" | "watch" | "warning" | "critical" | "unavailable";
 
@@ -133,8 +134,9 @@ export function buildRuleBasedRecommendations(
       rationale:
         pattern.affectedSessions > 0
           ? m.insights_pattern_recommendation_rationale({
-              affected: pattern.affectedSessions,
+              affectedLabel: formatCount(pattern.affectedSessions),
               total: pattern.totalSessions,
+              totalLabel: formatCount(pattern.totalSessions),
             })
           : m.insights_pattern_recommendation_fallback(),
     }));
@@ -450,6 +452,7 @@ function topProjectExamples(signals: SignalsAnalyticsResponse): QualityPatternEx
       label: row.project || m.insights_pattern_unassigned_project(),
       detail: m.insights_pattern_example_detail({
         count: row.session_count,
+        countLabel: formatCount(row.session_count),
         completedRate: Math.round(row.completed_rate),
         failureSignals: row.avg_failure_signals.toFixed(1),
       }),
@@ -469,6 +472,7 @@ function topAgentExamples(signals: SignalsAnalyticsResponse): QualityPatternExam
       label: row.agent,
       detail: m.insights_pattern_example_detail({
         count: row.session_count,
+        countLabel: formatCount(row.session_count),
         completedRate: Math.round(row.completed_rate),
         failureSignals: row.avg_failure_signals.toFixed(1),
       }),
@@ -480,4 +484,13 @@ function gradeRank(grade: string): number {
   const order = ["A", "B", "C", "D", "F"];
   const idx = order.indexOf(grade);
   return idx === -1 ? order.length : idx;
+}
+
+/** A day on the Quality page, such as "Mar 4", in the browser's locale. */
+export function formatQualityDate(date: string): string {
+  const d = new Date(date + "T00:00:00");
+  return d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
 }

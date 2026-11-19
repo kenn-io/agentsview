@@ -39,7 +39,11 @@ func (s Sessions) GetMessagesWindow(ctx context.Context, sessionID string, w db.
 			return nil, err
 		}
 	}
-	if err := s.attachToolCalls(ctx, msgs); err != nil {
+	ordinals := make([]any, len(msgs))
+	for i, msg := range msgs {
+		ordinals[i] = msg.Ordinal
+	}
+	if err := s.attachToolCalls(ctx, msgs, ordinals); err != nil {
 		return nil, err
 	}
 	return msgs, nil
@@ -55,22 +59,22 @@ func (s Sessions) GetAllMessages(ctx context.Context, sessionID string) ([]db.Me
 	if err != nil {
 		return nil, s.backend.ReadError(ScanAllMessages, err)
 	}
-	if err := s.attachToolCalls(ctx, msgs); err != nil {
+	if err := s.attachToolCalls(ctx, msgs, nil); err != nil {
 		return nil, err
 	}
 	return msgs, nil
 }
 
-func (s Sessions) attachToolCalls(ctx context.Context, msgs []db.Message) error {
+func (s Sessions) attachToolCalls(ctx context.Context, msgs []db.Message, ordinals []any) error {
 	if len(msgs) == 0 {
 		return nil
 	}
 	index := make(map[int]int, len(msgs))
-	sessionID := msgs[0].SessionID
+	args := append([]any{msgs[0].SessionID}, ordinals...)
 	for i, msg := range msgs {
 		index[msg.Ordinal] = i
 	}
-	rows, err := s.backend.QueryContext(ctx, s.backend.ToolCallsSQL(), sessionID)
+	rows, err := s.backend.QueryContext(ctx, s.backend.ToolCallsSQL(len(ordinals)), args...)
 	if err != nil {
 		return s.backend.ReadError(QueryToolCalls, err)
 	}
@@ -95,7 +99,7 @@ func (s Sessions) attachToolCalls(ctx context.Context, msgs []db.Message) error 
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	if err := s.attachToolResultEvents(ctx, msgs, index, sessionID); err != nil {
+	if err := s.attachToolResultEvents(ctx, msgs, index, args, len(ordinals)); err != nil {
 		return err
 	}
 	// Restore summaries omitted when one result event already carries the content.
@@ -104,9 +108,9 @@ func (s Sessions) attachToolCalls(ctx context.Context, msgs []db.Message) error 
 }
 
 func (s Sessions) attachToolResultEvents(
-	ctx context.Context, msgs []db.Message, index map[int]int, sessionID string,
+	ctx context.Context, msgs []db.Message, index map[int]int, args []any, ordinalCount int,
 ) error {
-	rows, err := s.backend.QueryContext(ctx, s.backend.ToolResultEventsSQL(), sessionID)
+	rows, err := s.backend.QueryContext(ctx, s.backend.ToolResultEventsSQL(ordinalCount), args...)
 	if err != nil {
 		return s.backend.ReadError(QueryToolResultEvents, err)
 	}
@@ -129,18 +133,42 @@ func (s Sessions) attachToolResultEvents(
 	return rows.Err()
 }
 
+// sessionActivitySQL reads only the fields activity buckets use. Content is
+// needed only for the injected-prompt check, which applies to user rows.
+const sessionActivitySQL = `SELECT ordinal, role, is_system, timestamp, source_subtype,
+	CASE WHEN role = 'user' THEN content ELSE '' END
+	FROM messages WHERE session_id = ?`
+
+type activityMessage struct {
+	ordinal       int
+	role          string
+	sourceSubtype string
+	timestamp     time.Time
+}
+
 func (s Sessions) GetSessionActivity(ctx context.Context, sessionID string) (*db.SessionActivityResponse, error) {
-	msgs, err := s.GetAllMessages(ctx, sessionID)
+	rows, err := s.backend.QueryContext(ctx, sessionActivitySQL, sessionID)
 	if err != nil {
-		return nil, err
+		return nil, s.backend.ReadError(QueryAllMessages, err)
 	}
-	visible := make([]db.Message, 0, len(msgs))
+	defer rows.Close()
+	var total int
+	var visible []activityMessage
 	var minTime, maxTime time.Time
-	for _, msg := range msgs {
-		if msg.IsSystem || db.IsSystemPrefixed(msg.Content, msg.Role) || msg.Timestamp == "" {
+	for rows.Next() {
+		var msg activityMessage
+		var isSystem bool
+		var ts any
+		var content string
+		if err := rows.Scan(&msg.ordinal, &msg.role, &isSystem, &ts, &msg.sourceSubtype, &content); err != nil {
+			return nil, s.backend.ReadError(ScanAllMessages, err)
+		}
+		total++
+		timestamp := s.backend.FormatTime(ts)
+		if isSystem || db.IsSystemPrefixed(content, msg.role) || timestamp == "" {
 			continue
 		}
-		t, ok := s.backend.ParseTime(msg.Timestamp)
+		t, ok := s.backend.ParseTime(timestamp)
 		if !ok {
 			continue
 		}
@@ -150,12 +178,16 @@ func (s Sessions) GetSessionActivity(ctx context.Context, sessionID string) (*db
 		if len(visible) == 0 || t.After(maxTime) {
 			maxTime = t
 		}
+		msg.timestamp = t
 		visible = append(visible, msg)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, s.backend.ReadError(ScanAllMessages, err)
 	}
 	if len(visible) == 0 {
 		return &db.SessionActivityResponse{
 			Buckets:       []db.SessionActivityBucket{},
-			TotalMessages: len(msgs),
+			TotalMessages: total,
 		}, nil
 	}
 
@@ -169,19 +201,18 @@ func (s Sessions) GetSessionActivity(ctx context.Context, sessionID string) (*db
 	populated := map[int]bucketRow{}
 	maxIdx := 0
 	for _, msg := range visible {
-		t, _ := s.backend.ParseTime(msg.Timestamp)
-		idx := int((t.Unix() - anchor) / interval)
+		idx := int((msg.timestamp.Unix() - anchor) / interval)
 		row := populated[idx]
-		switch msg.Role {
+		switch msg.role {
 		case "user":
-			if msg.SourceSubtype != "tool_result" {
+			if msg.sourceSubtype != "tool_result" {
 				row.userCount++
 			}
 		case "assistant":
 			row.asstCount++
 		}
-		if row.firstOrdinal == nil || msg.Ordinal < *row.firstOrdinal {
-			ord := msg.Ordinal
+		if row.firstOrdinal == nil || msg.ordinal < *row.firstOrdinal {
+			ord := msg.ordinal
 			row.firstOrdinal = &ord
 		}
 		populated[idx] = row
@@ -203,7 +234,7 @@ func (s Sessions) GetSessionActivity(ctx context.Context, sessionID string) (*db
 	return &db.SessionActivityResponse{
 		Buckets:         buckets,
 		IntervalSeconds: interval,
-		TotalMessages:   len(msgs),
+		TotalMessages:   total,
 	}, nil
 }
 
@@ -255,6 +286,9 @@ func MessageWindowSQL(columns, revision string, revisionArgs []any, sessionID st
     WHERE session_id = ? AND ordinal > ?` + roleClause + ` ORDER BY ordinal ASC LIMIT ?) AS after_rows
   ) AS w ORDER BY w.ordinal`, args, revision != ""
 	}
+	if w.CompactBoundaryOnly {
+		roleClause += " AND is_compact_boundary = TRUE"
+	}
 	from := 0
 	if w.From != nil {
 		from = *w.From
@@ -271,4 +305,12 @@ func MessageWindowSQL(columns, revision string, revisionArgs []any, sessionID st
 		projection = revision + ", " + projection
 	}
 	return "SELECT " + projection + " FROM messages WHERE session_id = ? AND ordinal " + op + " ?" + roleClause + " ORDER BY ordinal " + dir + " LIMIT ?", args, revision != ""
+}
+
+// OrdinalFilterSQL restricts a tool query to loaded messages. Zero selects the whole session.
+func OrdinalFilterSQL(column string, ordinals int) string {
+	if ordinals == 0 {
+		return ""
+	}
+	return " AND " + column + " IN (" + strings.TrimSuffix(strings.Repeat("?,", ordinals), ",") + ")"
 }

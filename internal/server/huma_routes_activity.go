@@ -15,6 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/kept"
 )
 
 const (
@@ -160,6 +161,7 @@ func (s *Server) buildActivityReport(
 	}
 	return s.prepareActivityReport(
 		selection, inputs.tokenStore, artifacts, inputs.probe,
+		activity.SessionPageOptions{},
 	)
 }
 
@@ -231,17 +233,24 @@ func (s *Server) buildActivityArtifacts(
 		return activity.CandidateArtifacts{}, err
 	}
 	if s.activityReportFlights == nil {
-		s.activityReportFlights = newActivityReportBuildGroup()
+		s.activityReportFlights = &kept.Flights[activity.CandidateArtifacts]{}
 	}
-	return s.activityReportFlights.do(ctx, string(keyPayload), build)
+	return s.activityReportFlights.Do(ctx, string(keyPayload), build)
 }
 
+// prepareActivityReport signs a report over artifacts and fills its first
+// session page in the order sessionPage asks for.
 func (s *Server) prepareActivityReport(
 	selection resolvedActivitySelection,
 	tokenStore db.ActivityReportTokenStore,
 	artifacts activity.CandidateArtifacts,
 	probe activity.SourceProbe,
+	sessionPage activity.SessionPageOptions,
 ) (activity.Report, error) {
+	sessionPage, err := activity.NormalizeSessionPageOptions(sessionPage)
+	if err != nil {
+		return activity.Report{}, err
+	}
 	digest, err := activity.ArtifactDigest(artifacts)
 	if err != nil {
 		return activity.Report{}, err
@@ -253,7 +262,7 @@ func (s *Server) prepareActivityReport(
 		return activity.Report{}, err
 	}
 	page, err := activity.PageSessions(
-		artifacts.Sessions, artifacts.Membership, activity.SessionPageOptions{},
+		artifacts.Sessions, artifacts.Membership, sessionPage,
 	)
 	if err != nil {
 		return activity.Report{}, err
@@ -263,7 +272,8 @@ func (s *Server) prepareActivityReport(
 			Version: activitySessionCursorVersion,
 			Schema:  export.ActivityReportSchemaVersion,
 			Digest:  digest, Offset: page.Next,
-			Sort: activity.SessionSortAgentMinutes, Direction: "desc",
+			Sort: sessionPage.Sort, Direction: sessionPage.Direction,
+			BucketRange: sessionPage.BucketRange,
 		})
 		if err != nil {
 			return activity.Report{}, err

@@ -32,8 +32,12 @@ type UsageCursorConfig struct {
 func newUsageCursorCommand() *cobra.Command {
 	var cfg UsageCursorConfig
 	cmd := &cobra.Command{
-		Use:          "cursor",
-		Short:        "Ingest Cursor admin usage events",
+		Use:   "cursor",
+		Short: "Ingest Cursor admin usage events",
+		Long: "Fetch Cursor organization usage through the configured admin API and store it in the local archive. " +
+			"It requires a Cursor admin API key. " +
+			"Explicit --email or --user-id overrides the configured member selection.",
+		Example:      "  agentsview source cursor sync-usage --since 2026-10-01 --until 2026-10-07",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -57,7 +61,7 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 		return err
 	}
 	database, writeLock, err := openWriteDB(
-		context.Background(),
+		ctx,
 		appCfg,
 	)
 	if err != nil {
@@ -65,7 +69,11 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 	}
 	defer closeWriteDB(database, writeLock)
 
-	apiKey := strings.TrimSpace(appCfg.CursorAdminAPIKey)
+	apiKey, err := appCfg.ResolveCursorAdminAPIKey()
+	if err != nil {
+		return err
+	}
+	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
 		return errors.New("missing Cursor admin API key")
 	}
@@ -97,7 +105,11 @@ func runUsageCursor(ctx context.Context, cfg UsageCursorConfig) error {
 	}
 
 	client := newCursorUsageClient(apiKey)
-	events, err := client.FetchAllUsageEvents(context.Background(), cursorusage.Query{
+	client.OnRetry = func(page int, err error, wait time.Duration) {
+		fmt.Fprintf(os.Stderr, "Cursor usage page %d: %v; retrying in %s\n",
+			page, err, wait.Round(time.Second))
+	}
+	events, err := client.FetchAllUsageEvents(ctx, cursorusage.Query{
 		StartDate: start,
 		EndDate:   end,
 		PageSize:  pageSize,

@@ -1,10 +1,9 @@
 //go:build pgtest || chtest
 
-// The plan usage parity test proves that SQLite, PostgreSQL, ClickHouse, and
-// the DuckDB mirror return the same plan-only and partly-captured counts,
-// token totals, and plan usage rows for the same archive. Backends that are
-// not configured are skipped: PostgreSQL needs TEST_PG_URL, ClickHouse needs
-// TEST_CLICKHOUSE_URL. DuckDB is always compared.
+// The plan usage parity test proves that SQLite, PostgreSQL, and ClickHouse
+// return the same plan-only and partly-captured counts, token totals, and plan
+// usage rows for the same archive. Backends that are not configured are
+// skipped: PostgreSQL needs TEST_PG_URL, ClickHouse needs TEST_CLICKHOUSE_URL.
 package service_test
 
 import (
@@ -19,7 +18,6 @@ import (
 	clickhousestore "go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/clickhouse/chtest"
 	"go.kenn.io/agentsview/internal/db"
-	duckdbstore "go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/money"
 	postgresstore "go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/service"
@@ -158,27 +156,19 @@ func TestPlanUsageCountsParity(t *testing.T) {
 	const sessions = 5
 	stores := map[string]db.Store{}
 
-	duckTarget := filepath.Join(t.TempDir(), "parity.duckdb")
-	duckRes, err := duckdbstore.Push(ctx, duckTarget, local, "parity-machine",
-		storage.MirrorPushOptions{}, true, nil)
-	require.NoError(t, err)
-	require.Equal(t, sessions, duckRes.SessionsPushed)
-	duck, err := duckdbstore.NewStore(ctx, duckTarget)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, duck.Close()) })
-	stores["duckdb"] = duck
-
 	if pgURL := os.Getenv("TEST_PG_URL"); pgURL != "" {
 		dropSchema := func() {
-			store, err := postgresstore.NewStore(pgURL, planUsageParitySchema, true)
+			// Also runs from t.Cleanup, where t.Context() is already canceled.
+			dropCtx := context.WithoutCancel(ctx)
+			store, err := postgresstore.NewStore(dropCtx, pgURL, planUsageParitySchema, true)
 			require.NoError(t, err)
 			defer func() { require.NoError(t, store.Close()) }()
-			_, err = store.DB().ExecContext(context.WithoutCancel(ctx), "DROP SCHEMA IF EXISTS "+planUsageParitySchema+" CASCADE")
+			_, err = store.DB().ExecContext(dropCtx, "DROP SCHEMA IF EXISTS "+planUsageParitySchema+" CASCADE")
 			require.NoError(t, err)
 		}
 		dropSchema()
 		t.Cleanup(dropSchema)
-		syncer, err := postgresstore.New(pgURL, planUsageParitySchema, local,
+		syncer, err := postgresstore.New(t.Context(), pgURL, planUsageParitySchema, local,
 			"parity-machine", true, storage.PusherOptions{})
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, syncer.Close()) })
@@ -186,7 +176,7 @@ func TestPlanUsageCountsParity(t *testing.T) {
 		res, err := syncer.Push(ctx, false, nil)
 		require.NoError(t, err)
 		require.Equal(t, sessions, res.SessionsPushed)
-		pg, err := postgresstore.NewStore(pgURL, planUsageParitySchema, true)
+		pg, err := postgresstore.NewStore(t.Context(), pgURL, planUsageParitySchema, true)
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, pg.Close()) })
 		stores["postgres"] = pg
@@ -206,6 +196,9 @@ func TestPlanUsageCountsParity(t *testing.T) {
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, ch.Close()) })
 		stores["clickhouse"] = ch
+	}
+	if len(stores) == 0 {
+		t.Skip("set TEST_PG_URL or TEST_CLICKHOUSE_URL to compare a replica")
 	}
 
 	for _, tc := range []struct {

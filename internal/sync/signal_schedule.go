@@ -3,6 +3,7 @@
 package sync
 
 import (
+	"context"
 	"slices"
 	"sync"
 	"time"
@@ -35,7 +36,7 @@ type signalScheduler struct {
 	// pass, so sessions are never claimed out of the dirty map by a
 	// goroutine that then blocks — a concurrent locked flush would
 	// see an empty map and push stale rows.
-	run       func(sessionID string)
+	run       func(ctx context.Context, sessionID string)
 	exclusive func(flush func())
 
 	// now and afterFunc are injectable for deterministic tests.
@@ -59,7 +60,7 @@ type signalScheduler struct {
 
 func newSignalScheduler(
 	interval, quiet time.Duration,
-	run func(sessionID string),
+	run func(ctx context.Context, sessionID string),
 	exclusive func(flush func()),
 ) *signalScheduler {
 	return &signalScheduler{
@@ -80,14 +81,14 @@ func newSignalScheduler(
 // inline when the session hasn't recomputed within the interval
 // (or the scheduler is stopped); otherwise it defers the recompute
 // and arms the flush timer.
-func (s *signalScheduler) markDirty(sessionID string) {
+func (s *signalScheduler) markDirty(ctx context.Context, sessionID string) {
 	s.mu.Lock()
 	now := s.now()
 	if s.stopped || now.Sub(s.last[sessionID]) >= s.interval {
 		s.last[sessionID] = now
 		delete(s.dirty, sessionID)
 		s.mu.Unlock()
-		s.run(sessionID)
+		s.run(ctx, sessionID)
 		return
 	}
 	s.dirty[sessionID] = now
@@ -112,26 +113,28 @@ func (s *signalScheduler) deferRetry(sessionID string) {
 // engine's sync lock: the pass runs inside exclusive, which takes
 // it before claiming anything.
 func (s *signalScheduler) tick() {
-	s.exclusive(func() { s.flushDue(false) })
+	// Timer passes have no caller; the scheduler's stop waits for them.
+	s.exclusive(func() { s.flushDue(context.Background(), false) })
 }
 
 // flushAll immediately recomputes every deferred session. Callers
 // must not hold the engine's sync lock (see tick).
 func (s *signalScheduler) flushAll() {
-	s.exclusive(func() { s.flushDue(true) })
+	// stop's final flush runs at shutdown, after callers' contexts end.
+	s.exclusive(func() { s.flushDue(context.Background(), true) })
 }
 
 // flushAllInline immediately recomputes every deferred session
 // without entering exclusive. For callers already holding the
 // engine's sync lock (the context markDirty's inline runs execute
 // under), where exclusive would deadlock.
-func (s *signalScheduler) flushAllInline() {
-	s.flushDue(true)
+func (s *signalScheduler) flushAllInline(ctx context.Context) {
+	s.flushDue(ctx, true)
 }
 
-func (s *signalScheduler) flushDue(all bool) {
+func (s *signalScheduler) flushDue(ctx context.Context, all bool) {
 	for _, id := range s.takeDue(all) {
-		s.run(id)
+		s.run(ctx, id)
 	}
 }
 

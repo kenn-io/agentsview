@@ -22,6 +22,7 @@ describe("setupVisibilityHealthCheck", () => {
     setAuthToken("");
     setServerUrl("");
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   function fireVisible() {
@@ -56,6 +57,29 @@ describe("setupVisibilityHealthCheck", () => {
     await new Promise((r) => setTimeout(r, 50));
     expect(reloadSpy).not.toHaveBeenCalled();
     cleanup();
+  });
+
+  it("keeps the page when the health check times out", async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | undefined;
+    const fetch = vi
+      .fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>()
+      .mockImplementationOnce((_input, init) => {
+        signal = init?.signal ?? undefined;
+        return new Promise<Response>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(signal?.reason), { once: true });
+        });
+      });
+    globalThis.fetch = fetch;
+    const cleanup = setupVisibilityHealthCheck();
+    try {
+      fireVisible();
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(signal?.aborted).toBe(true);
+      expect(reloadSpy).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+    }
   });
 
   it("skips check when document is hidden", async () => {

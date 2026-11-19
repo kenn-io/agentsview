@@ -72,8 +72,10 @@ test("changing grouping aborts the obsolete trends read", async ({ page }) => {
       );
     });
 
-    await page.locator(".group-trigger").click();
-    await page.getByRole("menuitemradio", { name: "month" }).click();
+    await page
+      .getByRole("radiogroup", { name: "Group by" })
+      .getByRole("radio", { name: "Month" })
+      .click();
 
     await replacementStarted;
     expect((await failed).failure()).not.toBeNull();

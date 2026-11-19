@@ -1,0 +1,30 @@
+name: Released commands
+
+on:
+  workflow_call:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Released commands
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.event_name == 'release' && 'main' || github.sha }}
+          persist-credentials: false
+
+      - uses: kenn-io/actions/release-commands@main
+        with:
+          repository: kenn-io/agentsview
+          binaries: agentsview
+          asset: 'agentsview_*[0-9]_linux_amd64.tar.gz'
+          files: |
+            README.md
+            scripts/install.sh
+            scripts/install.ps1

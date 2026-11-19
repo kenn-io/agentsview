@@ -9,10 +9,12 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -64,14 +66,14 @@ func setupGoldenStatsDataDir(t *testing.T) string {
 	return dataDir
 }
 
-// runDefaultStatsJSON runs the `stats --format json` CLI path over the
+// runDefaultStatsJSON runs the `report stats --format json` CLI path over the
 // golden fixture window and returns the raw JSON output. Callers
 // unmarshal into whichever shape they need.
 func runDefaultStatsJSON(t *testing.T) string {
 	t.Helper()
 	registerSQLiteDaemonRuntime(t, os.Getenv("AGENTSVIEW_DATA_DIR"))
 	out, err := executeCommand(newRootCommand(),
-		"stats",
+		"report", "stats",
 		"--format", "json",
 		"--since", "2026-04-01",
 		"--until", "2026-04-15",
@@ -357,7 +359,7 @@ func TestStatsCommandUsesDiscoveredDaemon(t *testing.T) {
 	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
 
 	out, err := executeCommand(newRootCommand(),
-		"stats",
+		"report", "stats",
 		"--format", "json",
 		"--since", "2026-04-01",
 		"--until", "2026-04-15",
@@ -376,29 +378,26 @@ func TestStatsCommandUsesDiscoveredDaemon(t *testing.T) {
 	assert.Equal(t, 5, got.Totals.SessionsAll)
 }
 
-func TestStatsCommandReportsDaemonValidationError(t *testing.T) {
+func TestStatsCommandValidatesTimezoneBeforeTransport(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 
-	var called bool
-	ts := daemonRouteTestServer(t, map[string]http.HandlerFunc{
-		"/api/v1/session-stats": func(w http.ResponseWriter, r *http.Request) {
-			called = true
-			w.WriteHeader(http.StatusBadRequest)
-			writeJSONResponse(w, `{"error":"invalid timezone: Fake/Zone"}`)
-		},
-	})
-	registerSyncRouteTestRuntime(t, dataDir, ts.URL)
+	var requests atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(ts.Close)
+	registerTestRuntime(t, dataDir, ts.URL, false)
 
 	out, err := executeCommand(newRootCommand(),
-		"stats",
+		"report", "stats",
 		"--format", "json",
 		"--timezone", "Fake/Zone",
 	)
 
 	require.Error(t, err, "stats output:\n%s", out)
-	assert.True(t, called, "stats should use the discovered daemon")
-	assert.Contains(t, err.Error(), "HTTP 400")
-	assert.Contains(t, err.Error(), "invalid timezone: Fake/Zone")
+	assert.Contains(t, err.Error(), "invalid --timezone")
+	assert.Zero(t, requests.Load(), "invalid timezone must be rejected before transport, including /api/ping")
 }
 
 func TestStatsCommandUsesReadOnlyDaemon(t *testing.T) {
@@ -414,7 +413,7 @@ func TestStatsCommandUsesReadOnlyDaemon(t *testing.T) {
 	registerTestRuntime(t, dataDir, ts.URL, true)
 
 	out, err := executeCommand(newRootCommand(),
-		"stats",
+		"report", "stats",
 		"--format", "json",
 		"--since", "2026-04-01",
 		"--until", "2026-04-15",

@@ -17,7 +17,7 @@ func HostedPublicFixture(t *testing.T) (db.Store, func(), func()) {
 	f := newProjectionFixture(t)
 	a, _ := f.accept(t, "device-a", "capture-a", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, projectionOutcome("readable transcript")))
-	h, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
+	h, err := NewHostedStore(t.Context(), f.dsn, f.schema, f.tenant, false)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, h.Close()) })
 	split := func() {
@@ -45,7 +45,7 @@ func HostedClaudeUsageFixture(t *testing.T, rawID string, branches int) db.Store
 		session.Agent = parser.AgentClaude
 		require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
 	}
-	h, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
+	h, err := NewHostedStore(t.Context(), f.dsn, f.schema, f.tenant, false)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, h.Close()) })
 	return h

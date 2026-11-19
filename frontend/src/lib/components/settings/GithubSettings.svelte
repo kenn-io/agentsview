@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { TextInput } from "@kenn-io/kit-ui";
+  import { Button, TextInput } from "@kenn-io/kit-ui";
   import { m } from "../../i18n/index.js";
+  import { CircleCheckIcon, InfoIcon } from "../../icons.js";
   import { settings } from "../../stores/settings.svelte.js";
   import { ConfigService } from "../../api/generated/index";
 
@@ -29,98 +30,103 @@
   }
 </script>
 
-<div class="github-settings">
-  <div class="status-row">
-    <span class="status-label">{m.settings_github_status()}</span>
+<!-- One setting, so the row is compact: the label fits its text and the
+     status, token field, and messages share the control cell beside it. -->
+<div class="setting-row compact github-settings">
+  <span class="setting-label">{m.settings_github_status()}</span>
+  <div class="control-stack">
     <span class="status-value" class:configured={settings.githubConfigured}>
+      {#if settings.githubConfigured}
+        <CircleCheckIcon size="14" aria-hidden="true" />
+      {:else}
+        <InfoIcon size="14" aria-hidden="true" />
+      {/if}
       {settings.githubConfigured ? m.settings_github_configured() : m.settings_github_not_configured()}
     </span>
-  </div>
 
-  <div class="token-row">
-    <TextInput
-      class="setting-input"
-      size="md"
-      type="password"
-      placeholder="ghp_..."
-      bind:value={tokenInput}
-    />
-    <button
-      class="save-btn"
-      disabled={saving || settings.saving || !tokenInput.trim()}
-      onclick={handleSave}
-    >
-      {saving ? m.settings_github_saving() : m.settings_github_save_token()}
-    </button>
-  </div>
+    <div class="token-row">
+      <TextInput
+        class="setting-input"
+        size="md"
+        type="password"
+        placeholder="ghp_..."
+        bind:value={tokenInput}
+      />
+      <Button
+        tone="info"
+        surface="solid"
+        disabled={saving || settings.saving || !tokenInput.trim()}
+        onclick={handleSave}
+      >
+        {saving ? m.settings_github_saving() : m.settings_github_save_token()}
+      </Button>
+    </div>
 
-  {#if error}
-    <p class="msg error">{error}</p>
-  {/if}
-  {#if success}
-    <p class="msg success">{success}</p>
-  {/if}
+    {#if error}
+      <p class="msg error">{error}</p>
+    {/if}
+    {#if success}
+      <p class="msg success">{success}</p>
+    {/if}
+  </div>
 </div>
 
 <style>
-  .github-settings {
+  /* The row uses the shared settings grid from SettingsPage. The label
+     sits level with the status line, not centred on the whole stack. */
+  .setting-label,
+  .control-stack {
+    align-self: baseline;
+  }
+
+  .control-stack {
     display: flex;
     flex-direction: column;
     gap: var(--space-5);
+    width: 100%;
+    min-width: 0;
   }
 
-  .status-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .status-label {
+  .setting-label {
     font-size: 12px;
     font-weight: 500;
     color: var(--text-secondary);
   }
 
+  /* A status glyph leads the word: the neutral info circle used for
+     unavailable states when nothing is set up, a green check circle once
+     a token is saved. */
   .status-value {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .status-value :global(svg) {
     color: var(--text-muted);
   }
 
-  .status-value.configured {
+  .status-value.configured,
+  .status-value.configured :global(svg) {
     color: var(--accent-green);
   }
 
+  /* The button moves under the field when a long translated label
+     leaves the field too little room beside it. */
   .token-row {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
   }
 
-  :global(.setting-input.kit-text-input) {
-    flex: 1;
+  /* Scoped to this row: a global flex: 1 collapsed the stacked inputs
+     in Remote access to 18px. */
+  .token-row :global(.setting-input.kit-text-input) {
+    flex: 1 1 180px;
+    min-width: 0;
     font-family: var(--font-mono, monospace);
-  }
-
-  .save-btn {
-    height: 30px;
-    padding: 0 14px;
-    border-radius: var(--radius-sm);
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--accent-blue-foreground);
-    background: var(--accent-blue);
-    border: none;
-    cursor: pointer;
-    white-space: nowrap;
-    transition: opacity 0.12s;
-  }
-
-  .save-btn:hover:not(:disabled) {
-    opacity: 0.9;
-  }
-
-  .save-btn:disabled {
-    opacity: var(--opacity-disabled);
-    cursor: default;
   }
 
   .msg {

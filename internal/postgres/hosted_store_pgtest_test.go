@@ -15,6 +15,7 @@ import (
 )
 
 func TestDiscardedPromptClearsGroupLabelOnUpsert(t *testing.T) {
+	t.Parallel()
 	f := newHostedFixture(t, "tenant-group-label")
 	sess := db.Session{
 		ID: "group-label-discard", Machine: "device-a", Agent: "hermes", Project: "scheduled",
@@ -40,7 +41,7 @@ func TestDiscardedPromptClearsGroupLabelOnUpsert(t *testing.T) {
 	options.UsageOnly = true
 	write()
 	read(sql.NullString{})
-	store, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
+	store, err := NewHostedStore(t.Context(), f.dsn, f.schema, f.tenant, false)
 	require.NoError(t, err)
 	defer store.Close()
 	stored, err := store.physical.GetSession(t.Context(), sess.ID)
@@ -65,12 +66,13 @@ func TestDiscardedPromptClearsGroupLabelOnUpsert(t *testing.T) {
 // A physical Store passed through the hosted constructor cannot resolve the
 // provider alias and leaks storage identities in its list and transcript.
 func TestHostedPublicReadBoundary(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "capture-a", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("public transcript")))
 	raw, err := f.sink.Resolve(t.Context(), "codex:portable")
 	require.NoError(t, err)
-	store, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
+	store, err := NewHostedStore(t.Context(), f.dsn, f.schema, f.tenant, false)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	session, err := store.GetSession(t.Context(), "codex:portable")
@@ -115,10 +117,11 @@ func TestHostedPublicReadBoundary(t *testing.T) {
 }
 
 func TestHostedPublicConflictCurationAndCursor(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	a, accepted := f.accept(t, "device-a", "capture-a", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, projectionOutcome("first transcript")))
-	h, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
+	h, err := NewHostedStore(t.Context(), f.dsn, f.schema, f.tenant, false)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, h.Close()) })
 	h.SetCursorSecret([]byte("synthetic test cursor secret"))
@@ -177,43 +180,8 @@ func TestHostedPublicConflictCurationAndCursor(t *testing.T) {
 	assert.Empty(t, pins)
 }
 
-func TestHostedLegacyCollisionRevisions(t *testing.T) {
-	f := newProjectionFixture(t)
-	m, _ := f.accept(t, "device-a", "capture-a", "")
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("raw transcript")))
-	h, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, h.Close()) })
-	before, err := h.revision(t.Context())
-	require.NoError(t, err)
-	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,message_count,user_message_count) VALUES('codex:portable','legacy','archive','codex',2,1)`)
-	require.NoError(t, err)
-	after, err := h.revision(t.Context())
-	require.NoError(t, err)
-	assert.Greater(t, after.Identity, before.Identity)
-	_, err = h.GetSession(t.Context(), "codex:portable")
-	var conflict *db.SessionIdentityError
-	require.ErrorAs(t, err, &conflict)
-	require.Len(t, conflict.Variants, 2)
-	page, err := h.ListSessions(t.Context(), db.SessionFilter{Limit: 10})
-	require.NoError(t, err)
-	require.Len(t, page.Sessions, 2)
-	for _, s := range page.Sessions {
-		assert.NotEqual(t, "codex:portable", s.ID)
-		full, e := h.GetSessionFull(t.Context(), s.ID)
-		require.NoError(t, e)
-		require.NotNil(t, full)
-		assert.Equal(t, s.ID, full.ID)
-	}
-	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET display_name='archive title' WHERE id='codex:portable'`)
-	require.NoError(t, err)
-	content, err := h.revision(t.Context())
-	require.NoError(t, err)
-	assert.Equal(t, after.Identity, content.Identity)
-	assert.Greater(t, content.Corpus, after.Corpus)
-}
-
 func TestHostedSharedChildTraversesBothParentVariants(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	outcome := func(parentText string) rawderive.ParsedManifest {
 		p := projectionOutcome(parentText)
@@ -232,7 +200,7 @@ func TestHostedSharedChildTraversesBothParentVariants(t *testing.T) {
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, outcome("parent one")))
 	b, acceptedB := f.accept(t, "device-b", "capture-b", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, b), b, outcome("parent two")))
-	h, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
+	h, err := NewHostedStore(t.Context(), f.dsn, f.schema, f.tenant, false)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, h.Close()) })
 	_, err = h.GetSession(t.Context(), "codex:portable")
@@ -286,14 +254,15 @@ func TestHostedSharedChildTraversesBothParentVariants(t *testing.T) {
 
 }
 
-func TestHostedReadRetriesTheWholeIdentitySnapshot(t *testing.T) {
+func TestHostedReadKeepsOneIdentitySnapshot(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, accepted := f.accept(t, "device-a", "capture-a", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("before")))
-	h, err := newHostedAdapter(f.runtime, f.tenant)
+	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
 	reads := 0
-	value, err := hostedRead(t.Context(), h, func(_ hostedRevision) (string, error) {
+	value, err := hostedRead(t.Context(), h, func(h *HostedStore, _ hostedRevision) (string, error) {
 		reads++
 		target, e := h.resolve(t.Context(), "codex:portable")
 		if e != nil {
@@ -310,16 +279,76 @@ func TestHostedReadRetriesTheWholeIdentitySnapshot(t *testing.T) {
 		return messages[0].Content, nil
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "after", value)
-	assert.Equal(t, 2, reads)
-	_, err = hostedRead(t.Context(), h, func(_ hostedRevision) (string, error) {
-		_, e := f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent) VALUES('revision-probe','synthetic','archive','codex') ON CONFLICT(id) DO UPDATE SET display_name='still changing'`)
-		return "discard", e
+	assert.Equal(t, "before", value)
+	assert.Equal(t, 1, reads)
+	t.Run("corpus", func(t *testing.T) {
+		reads = 0
+		before, err := h.revision(t.Context())
+		require.NoError(t, err)
+		got, err := hostedRead(t.Context(), h, func(h *HostedStore, rev hostedRevision) (hostedRevision, error) {
+			reads++
+			if reads == 1 {
+				_, err := f.runtime.ExecContext(t.Context(), `UPDATE raw_corpus_state SET corpus_revision=corpus_revision+1 WHERE singleton=1`)
+				require.NoError(t, err)
+			}
+			return rev, nil
+		})
+		require.NoError(t, err)
+		assert.Equal(t, before, got)
+		assert.Equal(t, 1, reads)
 	})
-	assert.ErrorIs(t, err, ErrHostedIdentityChanged)
+	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent) VALUES('revision-probe','synthetic','archive','codex')`)
+	require.NoError(t, err)
+	before, err := h.revision(t.Context())
+	require.NoError(t, err)
+	reads = 0
+	_, err = hostedRead(t.Context(), h, func(h *HostedStore, _ hostedRevision) (string, error) {
+		reads++
+		_, err := f.runtime.ExecContext(t.Context(), `UPDATE sessions SET display_name='still changing' WHERE id='revision-probe'`)
+		require.NoError(t, err)
+		return "", sql.ErrNoRows
+	})
+	assert.ErrorIs(t, err, sql.ErrNoRows)
+	assert.Equal(t, 1, reads)
+	after, err := h.revision(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, before.Identity, after.Identity)
+	assert.Equal(t, before.Selection, after.Selection)
+	assert.Equal(t, before.Corpus+1, after.Corpus)
+	_, err = f.runtime.ExecContext(t.Context(), `DELETE FROM sessions WHERE id='revision-probe'`)
+	require.NoError(t, err)
+	// A legacy collision changes public identity while preserving both variants.
+	before, err = h.revision(t.Context())
+	require.NoError(t, err)
+	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,message_count,user_message_count) VALUES('codex:portable','legacy','archive','codex',2,1)`)
+	require.NoError(t, err)
+	after, err = h.revision(t.Context())
+	require.NoError(t, err)
+	assert.Greater(t, after.Identity, before.Identity)
+	_, err = h.GetSession(t.Context(), "codex:portable")
+	var conflict *db.SessionIdentityError
+	require.ErrorAs(t, err, &conflict)
+	require.Len(t, conflict.Variants, 2)
+	page, err := h.ListSessions(t.Context(), db.SessionFilter{Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, page.Sessions, 2)
+	for _, s := range page.Sessions {
+		assert.NotEqual(t, "codex:portable", s.ID)
+		full, e := h.GetSessionFull(t.Context(), s.ID)
+		require.NoError(t, e)
+		require.NotNil(t, full)
+		assert.Equal(t, s.ID, full.ID)
+	}
+	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET display_name='archive title' WHERE id='codex:portable'`)
+	require.NoError(t, err)
+	content, err := h.revision(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, after.Identity, content.Identity)
+	assert.Greater(t, content.Corpus, after.Corpus)
 }
 
 func TestHostedUsageAndActivityReferences(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "capture-a", "")
 	p := projectionOutcome("usage transcript")
@@ -329,7 +358,7 @@ func TestHostedUsageAndActivityReferences(t *testing.T) {
 	r.Messages[0].Timestamp = start
 	r.Messages[1].Timestamp = start.Add(time.Minute)
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, p))
-	h, err := newHostedAdapter(f.runtime, f.tenant)
+	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
 	rows, err := h.GetSessionUsageRows(t.Context(), []string{"codex:portable"})
 	require.NoError(t, err)
@@ -360,10 +389,11 @@ func TestHostedUsageAndActivityReferences(t *testing.T) {
 }
 
 func TestHostedCurationGuardChecksCollisionInsideTransaction(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "capture-a", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("raw transcript")))
-	h, err := newHostedAdapter(f.runtime, f.tenant)
+	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
 	_, err = f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent) VALUES('codex:portable','legacy','archive','codex')`)
 	require.NoError(t, err)
@@ -379,10 +409,11 @@ func TestHostedCurationGuardChecksCollisionInsideTransaction(t *testing.T) {
 }
 
 func TestHostedBulkCurationResolvesEntireBatchBeforeWriting(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "capture-a", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("visible")))
-	h, err := newHostedAdapter(f.runtime, f.tenant)
+	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
 	var gone *db.SessionIdentityError
 	err = h.BulkStarSessions(t.Context(), []string{"codex:portable", "missing"})
@@ -399,14 +430,16 @@ func TestHostedBulkCurationResolvesEntireBatchBeforeWriting(t *testing.T) {
 }
 
 func TestHostedConstructorRejectsMissingRevisionProtection(t *testing.T) {
+	t.Parallel()
 	f := newHostedFixture(t, "tenant-projection")
 	_, err := f.admin.ExecContext(t.Context(), `DROP TRIGGER hosted_legacy_revision ON sessions`)
 	require.NoError(t, err)
-	_, err = NewHostedStore(f.dsn, f.schema, f.tenant, false)
+	_, err = NewHostedStore(t.Context(), f.dsn, f.schema, f.tenant, false)
 	require.ErrorContains(t, err, "owner must reprovision")
 }
 
 func TestHostedConstructorRejectsWeakenedRevisionProtection(t *testing.T) {
+	t.Parallel()
 	for _, alteration := range []string{
 		`DROP TRIGGER hosted_legacy_revision ON sessions; CREATE TRIGGER hosted_legacy_revision AFTER INSERT OR UPDATE OR DELETE ON sessions FOR EACH ROW WHEN (false) EXECUTE FUNCTION hosted_legacy_revision()`,
 		`CREATE FUNCTION noop_revision() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END $$; DROP TRIGGER hosted_legacy_revision ON sessions; CREATE TRIGGER hosted_legacy_revision AFTER INSERT OR UPDATE OR DELETE ON sessions FOR EACH ROW EXECUTE FUNCTION noop_revision()`,
@@ -416,17 +449,18 @@ func TestHostedConstructorRejectsWeakenedRevisionProtection(t *testing.T) {
 			f := newHostedFixture(t, "tenant-projection")
 			_, err := f.admin.ExecContext(t.Context(), alteration)
 			require.NoError(t, err)
-			_, err = NewHostedStore(f.dsn, f.schema, f.tenant, false)
+			_, err = NewHostedStore(t.Context(), f.dsn, f.schema, f.tenant, false)
 			require.ErrorContains(t, err, "owner must reprovision")
 		})
 	}
 }
 
 func TestHostedUnresolvedPinRetainsCreationTime(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, accepted := f.accept(t, "device-a", "pin-time-a", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("original pinned message")))
-	h, err := newHostedAdapter(f.runtime, f.tenant)
+	h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
 	_, err = h.PinMessage(t.Context(), "codex:portable", 0, new("retained note"))
 	require.NoError(t, err)
@@ -441,4 +475,50 @@ func TestHostedUnresolvedPinRetainsCreationTime(t *testing.T) {
 	assert.True(t, after[0].Unresolved)
 	assert.Equal(t, before[0].CreatedAt, after[0].CreatedAt)
 	assert.NotEmpty(t, after[0].CreatedAt)
+}
+
+func TestHostedTrendsKeptPublication(t *testing.T) {
+	t.Parallel()
+	f := newProjectionFixture(t)
+	ctx := t.Context()
+	m, accepted := f.accept(t, "device-a", "capture-a", "")
+	require.NoError(t, f.sink.Project(ctx, f.lease(t, m), m, projectionOutcome("alpha")))
+	h, err := newHostedAdapter(ctx, f.runtime, f.tenant)
+	require.NoError(t, err)
+	counter := &analyticsReadCounter{storeExecutor: h.physical.pg}
+	h.physical.pg = counter
+	filter := db.AnalyticsFilter{From: "2026-01-01", To: "2026-01-02", Timezone: "UTC"}
+	terms := []db.TrendTermInput{{Term: "alpha", Variants: []string{"alpha"}, Matchers: []string{"alpha"}}}
+	read := func(f db.AnalyticsFilter) db.TrendsTermsResponse {
+		result, err := h.GetTrendsTerms(ctx, f, terms, "day")
+		require.NoError(t, err)
+		return result
+	}
+	first := read(filter)
+	require.Equal(t, 1, first.Series[0].Total)
+	count := counter.count()
+	require.Equal(t, first, read(filter))
+	require.Equal(t, count, counter.count())
+	next, _ := f.accept(t, "device-a", "capture-b", accepted.Receipt)
+	require.NoError(t, f.sink.Project(ctx, f.lease(t, next), next, projectionOutcome("bravo")))
+	require.Zero(t, read(filter).Series[0].Total)
+
+	local := testDB(t)
+	session := db.Session{ID: "legacy-session", Project: "legacy", Machine: "device-b", Agent: "claude", StartedAt: new("2026-01-01T01:00:00Z"), MessageCount: 1}
+	messages := []db.Message{{SessionID: session.ID, Ordinal: 0, Role: "user", Content: "alpha", ContentLength: 5, Timestamp: "2026-01-01T01:00:00Z"}}
+	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{Session: session, Messages: messages, DataVersion: 1, ReplaceMessages: true}})
+	require.NoError(t, err)
+	syncer := &Sync{pg: f.runtime, local: local, machine: "device-b", schema: f.schema, schemaDone: true}
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	legacy := filter
+	legacy.Project = "legacy"
+	require.Equal(t, 1, read(legacy).Series[0].Total)
+
+	session.Project = "other"
+	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{Session: session, Messages: messages, DataVersion: 1, ReplaceMessages: false}})
+	require.NoError(t, err)
+	_, err = syncer.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Zero(t, read(legacy).Series[0].Total)
 }

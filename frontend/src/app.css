@@ -14,6 +14,7 @@
 .kit-filter-dropdown__panel,
 .kit-date-range-picker__panel,
 .kit-mention__menu,
+.kit-menu__content,
 .context-menu,
 .tooltip {
   zoom: var(--agentsview-zoom-compensation, 1);
@@ -39,6 +40,15 @@
      which would collide with --accent-cyan below. agentsview uses teal and
      cyan as distinct agent-identity hues, so keep the greener teal. */
   --accent-teal: #0d9488; /* kit-ui-check-ignore: app token definition */
+  /* Usage charts calm their series colors, which leaves teal and green
+     hard to tell apart in light theme; Usage paints teal a step lighter
+     and bluer (oklch 0.68 0.11 200). */
+  --usage-series-teal: #20acb3; /* kit-ui-check-ignore: app token definition */
+  /* Light amber (#d97706) is within a few degrees of hue of orange, and the
+     treemap deepens both to the same brown; Usage paints amber as a darker
+     mustard gold (oklch 0.64 0.13 96), apart from orange in hue and
+     lightness, so neighbouring tiles and areas stay distinct. */
+  --usage-series-amber: #a48b08; /* kit-ui-check-ignore: app token definition */
   /* Extra identity accents beyond kit-ui's core set */
   --accent-rose: #e11d48; /* kit-ui-check-ignore: app token definition */
   --accent-coral: #f34e3f; /* kit-ui-check-ignore: app token definition */
@@ -71,6 +81,29 @@
   --accent-lime-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
   --accent-cyan-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
   --accent-violet-foreground: #ffffff; /* kit-ui-check-ignore: app token definition */
+  /* Agent-name inks: the shade an agent's name is written in (agentInk()
+     in utils/agents.ts). Names mix 82% ink into the text color and sit on
+     surfaces down to the selected sidebar row, a blue tint over the hover
+     fill. Several light accents fall to about 2.7:1 there, so each of those
+     keeps its OKLCH hue and chroma and lowers its lightness until the name
+     reaches 4.6:1 on that row. Accents that already clear it are their own
+     ink. Dark theme names use the accents unchanged (see :root.dark). */
+  --accent-blue-ink: var(--accent-blue);
+  --accent-purple-ink: var(--accent-purple);
+  --accent-red-ink: var(--accent-red);
+  --accent-rose-ink: var(--accent-rose);
+  --accent-black-ink: var(--accent-black);
+  --accent-violet-ink: var(--accent-violet);
+  --accent-amber-ink: #b05f00; /* kit-ui-check-ignore: app token definition */
+  --accent-green-ink: #02845c; /* kit-ui-check-ignore: app token definition */
+  --accent-teal-ink: #028277; /* kit-ui-check-ignore: app token definition */
+  --accent-coral-ink: #db3529; /* kit-ui-check-ignore: app token definition */
+  --accent-indigo-ink: #5f62ec; /* kit-ui-check-ignore: app token definition */
+  --accent-orange-ink: #aa6203; /* kit-ui-check-ignore: app token definition */
+  --accent-sky-ink: #027ab8; /* kit-ui-check-ignore: app token definition */
+  --accent-pink-ink: #d42f85; /* kit-ui-check-ignore: app token definition */
+  --accent-lime-ink: #4e8103; /* kit-ui-check-ignore: app token definition */
+  --accent-cyan-ink: #017e9b; /* kit-ui-check-ignore: app token definition */
   /* Tool-category color map (see internal/parser/taxonomy.go for normalized values) */
   --cat-read: #4a7ba8; /* Read, Grep, Glob */ /* kit-ui-check-ignore: app token definition */
   --cat-edit: #5a8b3a; /* Edit, Write */ /* kit-ui-check-ignore: app token definition */
@@ -90,6 +123,9 @@
   --chart-series-5: #4a3aa7; /* kit-ui-check-ignore: app token definition */
   --chart-series-6: #e34948; /* kit-ui-check-ignore: app token definition */
   --chart-series-other: #898781; /* kit-ui-check-ignore: app token definition */
+  /* The folded "Other" tail in Usage's stacked cost chart: a quiet light
+     grey that recedes behind the named series in both themes. */
+  --usage-series-other: color-mix(in srgb, var(--text-muted) 32%, var(--bg-surface));
   /* Duration UX state colors */
   --slow-fg: #f29070; /* kit-ui-check-ignore: app token definition */
   --slow-bg: rgba(242, 144, 112, 0.12); /* kit-ui-check-ignore: app token definition */
@@ -97,10 +133,17 @@
   --running-fg: #6ad0a8; /* kit-ui-check-ignore: app token definition */
   --running-bg: rgba(106, 208, 168, 0.12); /* kit-ui-check-ignore: app token definition */
   --running-ring: rgba(106, 208, 168, 0.22); /* kit-ui-check-ignore: app token definition */
-  --user-bg: #eef2ff; /* kit-ui-check-ignore: app token definition */
-  --assistant-bg: #faf9ff; /* kit-ui-check-ignore: app token definition */
-  --thinking-bg: #f5f3ff; /* kit-ui-check-ignore: app token definition */
-  --tool-bg: #fffbf0; /* kit-ui-check-ignore: app token definition */
+  /* Role surfaces stay near-neutral so transcript prose carries the
+     hierarchy: the user turn gets a calm blue wash, assistant turns sit on
+     the plain surface, and tool runs read as a quiet inset. Light needs a
+     little more blue than dark: at 5% the wash matched the grey page and the
+     prompt read weaker than the white assistant cards. */
+  --user-bg: color-mix(in srgb, var(--accent-blue) 9%, var(--bg-surface));
+  --assistant-bg: var(--bg-surface);
+  --thinking-bg: color-mix(in srgb, var(--accent-purple) 4%, var(--bg-surface));
+  /* Light tool runs are a neutral inset just under the page tone, so they
+     weigh less than prose; the amber stays on the rail, icon, and names. */
+  --tool-bg: color-mix(in srgb, var(--text-primary) 3.5%, var(--bg-surface));
   --code-bg: #1e1e2e; /* kit-ui-check-ignore: app token definition */
   --code-text: #cdd6f4; /* kit-ui-check-ignore: app token definition */
   --viewport-indicator: rgba(0, 0, 0, 0.08); /* kit-ui-check-ignore: app token definition */
@@ -112,6 +155,8 @@
 /* Dark theme — app-specific tokens */
 :root.dark {
   --accent-teal: #2dd4bf; /* kit-ui-check-ignore: app token definition */
+  --usage-series-teal: var(--accent-teal); /* kit-ui-check-ignore: app token definition */
+  --usage-series-amber: var(--accent-amber); /* kit-ui-check-ignore: app token definition */
   --accent-rose: #fb7185; /* kit-ui-check-ignore: app token definition */
   --accent-coral: #f34e3f; /* kit-ui-check-ignore: app token definition */
   --accent-black: #b0b0b0; /* kit-ui-check-ignore: app token definition */
@@ -138,6 +183,16 @@
   --accent-lime-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
   --accent-cyan-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
   --accent-violet-foreground: #07111f; /* kit-ui-check-ignore: app token definition */
+  --accent-amber-ink: var(--accent-amber);
+  --accent-green-ink: var(--accent-green);
+  --accent-teal-ink: var(--accent-teal);
+  --accent-coral-ink: var(--accent-coral);
+  --accent-indigo-ink: var(--accent-indigo);
+  --accent-orange-ink: var(--accent-orange);
+  --accent-sky-ink: var(--accent-sky);
+  --accent-pink-ink: var(--accent-pink);
+  --accent-lime-ink: var(--accent-lime);
+  --accent-cyan-ink: var(--accent-cyan);
   /* Same series hues stepped for the dark surface, not an automatic flip;
      validated as a set against the dark surface. */
   --chart-series-1: #3987e5; /* kit-ui-check-ignore: app token definition */
@@ -147,14 +202,23 @@
   --chart-series-5: #9085e9; /* kit-ui-check-ignore: app token definition */
   --chart-series-6: #e66767; /* kit-ui-check-ignore: app token definition */
   --chart-series-other: #898781; /* kit-ui-check-ignore: app token definition */
-  --user-bg: #111827; /* kit-ui-check-ignore: app token definition */
-  --assistant-bg: #141220; /* kit-ui-check-ignore: app token definition */
-  --thinking-bg: #1a1530; /* kit-ui-check-ignore: app token definition */
-  --tool-bg: #1a1508; /* kit-ui-check-ignore: app token definition */
+  --usage-series-other: color-mix(in srgb, var(--text-muted) 42%, var(--bg-surface));
+  --user-bg: color-mix(in srgb, var(--accent-blue) 7%, var(--bg-primary));
+  --assistant-bg: color-mix(in srgb, var(--text-primary) 2%, var(--bg-primary));
+  /* Dark tool groups sit a step above the page, so thinking needs a larger
+     violet share than light to read as the same faint band. */
+  --thinking-bg: color-mix(in srgb, var(--accent-purple) 12%, var(--bg-primary));
+  --tool-bg: color-mix(in srgb, var(--text-primary) 3.5%, var(--bg-primary));
   --code-bg: #0d0d14; /* kit-ui-check-ignore: app token definition */
   --code-text: #cdd6f4; /* kit-ui-check-ignore: app token definition */
   --viewport-indicator: rgba(255, 255, 255, 0.08); /* kit-ui-check-ignore: app token definition */
   --message-role-tint: 14%;
+}
+
+/* High contrast: the folded "Other" tail stays quieter than the named
+   series but still reads as a 3:1 mark against the surface. */
+:root.high-contrast {
+  --usage-series-other: var(--text-muted);
 }
 
 /*
@@ -165,24 +229,34 @@
  * background token (--user-bg and so on) on the root element.
  */
 :root {
+  /* The transcript reading column. Cards, prose, tool rows, the find bar,
+     and the session panels share both of its edges. Prose fills the card,
+     so this width also sets the line length (about 110 characters). */
+  --reading-column: 880px;
+  /* Analytics filter chips ("Project: All"), both the multi-select
+     FilterDropdown and single-choice Typeahead (shared/FilterChip). */
+  --filter-chip-height: 26px;
   --role-user-accent: var(--accent-blue);
   --role-user-accent-foreground: var(--accent-blue-foreground);
-  --role-user-ink: var(--role-user-accent);
+  /* Labels mix the role color toward the text color, the same recipe
+     custom role colors use, so the role reads without shouting. */
+  --role-user-ink: color-mix(in srgb, var(--role-user-accent) 72%, var(--text-primary));
   --role-assistant-accent: var(--accent-purple);
   --role-assistant-accent-foreground: var(--accent-purple-foreground);
-  --role-assistant-ink: var(--role-assistant-accent);
+  --role-assistant-ink: color-mix(in srgb, var(--role-assistant-accent) 72%, var(--text-primary));
   --role-thinking-accent: var(--accent-purple);
-  --role-thinking-ink: var(--role-thinking-accent);
+  --role-thinking-ink: color-mix(in srgb, var(--role-thinking-accent) 72%, var(--text-primary));
   --role-tool-accent: var(--accent-amber);
-  --role-tool-ink: var(--role-tool-accent);
+  /* Tool names stay mostly neutral; the rail carries the tool color. */
+  --role-tool-ink: color-mix(in srgb, var(--role-tool-accent) 45%, var(--text-secondary));
   --role-code-accent: var(--code-bg);
   --role-code-frame-width: 0px;
   /* Bar line styles and widths. Pattern mode gives every role its own line
      so the roles differ by shape as well as color. */
   --role-user-bar-style: solid;
-  --role-user-bar-width: 4px;
+  --role-user-bar-width: 2px;
   --role-assistant-bar-style: solid;
-  --role-assistant-bar-width: 4px;
+  --role-assistant-bar-width: 2px;
   --role-thinking-bar-style: solid;
   --role-thinking-bar-width: 2px;
   --role-tool-bar-style: solid;
@@ -193,7 +267,19 @@
   --role-code-frame-style: solid;
 }
 
+/* Settings > Appearance > Reading width widens the shared column. Full uses
+   100%, which each consumer resolves against its own box, so the column
+   fills the pane up to that consumer's normal gutters. */
+:root[data-reading-width="wider"] {
+  --reading-column: 1120px;
+}
+
+:root[data-reading-width="full"] {
+  --reading-column: 100%;
+}
+
 :root[data-message-role-patterns] {
+  --role-user-bar-width: 4px;
   --role-assistant-bar-style: double;
   --role-assistant-bar-width: 6px;
   --role-thinking-bar-style: dotted;
@@ -202,6 +288,14 @@
   --role-tool-bar-width: 3px;
   --role-tool-group-rail: var(--role-tool-accent);
   --role-code-frame-style: dashed;
+}
+
+/* kit-ui paints an unclean StatusDot in --accent-orange. The app's light
+   orange is an agent identity hue, too pale for a 3:1 status mark on white
+   (about 2.6:1), so in light theme the dot steps toward primary ink,
+   keeping the hue. */
+:root:not(.dark) .kit-status-dot.kit-status-dot--unclean {
+  background: color-mix(in srgb, var(--accent-orange) 72%, var(--text-primary));
 }
 
 html,

@@ -167,7 +167,7 @@ func TestOrphanCopyPreservesSecretFindings(t *testing.T) {
 	require.NoError(t, err, "Open dst")
 	defer dstDB.Close()
 
-	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
+	count, err := dstDB.CopyOrphanedDataFrom(t.Context(), srcPath)
 	require.NoError(t, err, "CopyOrphanedDataFrom")
 	require.Equal(t, 1, count, "expected 1 orphaned session")
 
@@ -505,7 +505,7 @@ func TestOrphanCopyPreservesToolCallIndex(t *testing.T) {
 	require.NoError(t, err, "Open dst")
 	defer dstDB.Close()
 
-	count, err := dstDB.CopyOrphanedDataFrom(srcPath)
+	count, err := dstDB.CopyOrphanedDataFrom(t.Context(), srcPath)
 	require.NoError(t, err, "CopyOrphanedDataFrom")
 	require.Equal(t, 1, count, "expected 1 orphaned session")
 

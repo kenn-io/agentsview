@@ -18,6 +18,8 @@ import {
 
 type Theme = "light" | "dark";
 export type MessageLayout = "default" | "compact" | "stream" | "skim";
+/** How wide the transcript reading column is; see --reading-column in app.css. */
+export type ReadingWidth = "default" | "wider" | "full";
 export type TranscriptMode = "normal" | "focused";
 export type PublishTarget =
   | { kind: "session"; id: string }
@@ -74,7 +76,7 @@ export function parseScrollCall(
 }
 
 /** Block types that can be toggled visible/hidden. */
-export type BlockType = "user" | "assistant" | "thinking" | "tool" | "code" | "system";
+export type BlockType = "user" | "assistant" | "thinking" | "tool" | "code" | "system" | "hook";
 
 export const ALL_BLOCK_TYPES: BlockType[] = [
   "user",
@@ -83,10 +85,12 @@ export const ALL_BLOCK_TYPES: BlockType[] = [
   "tool",
   "code",
   "system",
+  "hook",
 ];
 
 const BLOCK_FILTER_KEY = "agentsview-block-filters";
 const TRANSCRIPT_MODE_KEY = "agentsview-transcript-mode";
+const ALWAYS_SHOW_YEAR_KEY = "agentsview-always-show-year";
 const UNKNOWN_XML_PREFORMATTED_KEY = "agentsview-unknown-xml-preformatted";
 const VITALS_KEY = "agentsview-session-vitals";
 const VITALS_CALLS_EXPANDED_KEY = "agentsview-session-vitals-calls-expanded";
@@ -132,6 +136,7 @@ function readBlockFilters(): Set<BlockType> {
 }
 
 const LAYOUT_KEY = "agentsview-message-layout";
+const READING_WIDTH_KEY = "agentsview-reading-width";
 const ZOOM_KEY = "agentsview-zoom-level";
 const VALID_TRANSCRIPT_MODES: TranscriptMode[] = ["normal", "focused"];
 
@@ -199,6 +204,7 @@ function readStoredZoom(): ZoomLevel | undefined {
 }
 
 const VALID_LAYOUTS: MessageLayout[] = ["default", "compact", "stream", "skim"];
+export const READING_WIDTHS: ReadingWidth[] = ["default", "wider", "full"];
 // Theme state lives in kit-ui's theme store (mode/high-contrast persistence,
 // root class management, and OS-preference tracking in "system" mode). Reuse
 // the app's historical "theme" storage key — its stored "light"/"dark" values
@@ -230,6 +236,18 @@ function readStoredLayout(): MessageLayout {
     const raw = localStorage?.getItem(LAYOUT_KEY);
     if (raw && VALID_LAYOUTS.includes(raw as MessageLayout)) {
       return raw as MessageLayout;
+    }
+  } catch {
+    // ignore
+  }
+  return "default";
+}
+
+function readStoredReadingWidth(): ReadingWidth {
+  try {
+    const raw = localStorage?.getItem(READING_WIDTH_KEY);
+    if (raw && READING_WIDTHS.includes(raw as ReadingWidth)) {
+      return raw as ReadingWidth;
     }
   } catch {
     // ignore
@@ -296,6 +314,7 @@ class UIStore {
 
   sortNewestFirst: boolean = $state(false);
   messageLayout: MessageLayout = $state(readStoredLayout());
+  readingWidth: ReadingWidth = $state(readStoredReadingWidth());
   transcriptMode: TranscriptMode = $state(readStoredTranscriptMode());
   sidebarWidth: number = $state(readStoredSidebarWidth());
   vitalsWidth: number = $state(readStoredVitalsWidth());
@@ -311,6 +330,7 @@ class UIStore {
 
   private localZoomLevel = readStoredZoom();
   zoomLevel: ZoomLevel = $state(this.localZoomLevel ?? ZOOM_DEFAULT);
+  alwaysShowYear: boolean = $state(readStoredBool(ALWAYS_SHOW_YEAR_KEY, false));
   renderUnknownXmlBlocksAsPreformatted: boolean = $state(
     readStoredBool(UNKNOWN_XML_PREFORMATTED_KEY, false),
   );
@@ -334,6 +354,22 @@ class UIStore {
       $effect(() => {
         try {
           localStorage?.setItem(LAYOUT_KEY, this.messageLayout);
+        } catch {
+          // ignore
+        }
+      });
+
+      // The root attribute selects the --reading-column width in app.css, so
+      // the transcript, session header, find bar, and panels follow it.
+      $effect(() => {
+        const width = this.readingWidth;
+        if (width === "default") {
+          delete document.documentElement.dataset.readingWidth;
+        } else {
+          document.documentElement.dataset.readingWidth = width;
+        }
+        try {
+          localStorage?.setItem(READING_WIDTH_KEY, width);
         } catch {
           // ignore
         }
@@ -399,6 +435,14 @@ class UIStore {
           );
         } else {
           setCssZoom(factor);
+        }
+      });
+
+      $effect(() => {
+        try {
+          localStorage?.setItem(ALWAYS_SHOW_YEAR_KEY, String(this.alwaysShowYear));
+        } catch {
+          // ignore
         }
       });
 
@@ -548,8 +592,16 @@ class UIStore {
     this.messageLayout = layout;
   }
 
+  setReadingWidth(width: ReadingWidth) {
+    this.readingWidth = width;
+  }
+
   setTranscriptMode(mode: TranscriptMode) {
     this.transcriptMode = mode;
+  }
+
+  toggleAlwaysShowYear() {
+    this.alwaysShowYear = !this.alwaysShowYear;
   }
 
   toggleUnknownXmlBlocksAsPreformatted() {

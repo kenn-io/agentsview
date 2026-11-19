@@ -27,6 +27,7 @@ func suffixPrefixVersions(t *testing.T, syncer *Sync, boundary int) []string {
 }
 
 func TestPushSuffixPublication(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name      string
 		boundary  int
@@ -66,10 +67,11 @@ func TestPushSuffixPublication(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			const id = "suffix"
-			const schema = "agentsview_suffix_test"
-			url := testPGURL(t)
-			cleanNamedPGSchema(t, url, schema)
-			t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
+			const schema = pgPushTestSchema
+			url := testPGSchemaURL(t, schema)
+			if !takeFreshSchemaCopy(t, url, schema) {
+				cleanNamedPGSchema(t, url, schema)
+			}
 			local := testDB(t)
 			session := db.Session{ID: id, Agent: "claude", Project: "sample", Machine: "machine", MessageCount: 5}
 			require.NoError(t, local.UpsertSession(t.Context(), session))
@@ -87,7 +89,7 @@ func TestPushSuffixPublication(t *testing.T) {
 			messages[0].ToolCalls = append(messages[0].ToolCalls, db.ToolCall{ToolName: "Bash", Category: "shell", ToolUseID: "second-call", ResultEvents: []db.ToolResultEvent{{EventIndex: 0, ToolUseID: "second-call", Source: "tool_result", Status: "empty"}}})
 			require.NoError(t, local.InsertMessages(t.Context(), messages))
 			require.NoError(t, local.ReplaceSessionUsageEvents(t.Context(), id, []db.UsageEvent{{SessionID: id, Source: "provider", Model: "sample", InputTokens: 22, DedupKey: "usage"}}))
-			syncer, err := New(url, schema, local, "machine", true, storage.PusherOptions{})
+			syncer, err := New(t.Context(), url, schema, local, "machine", true, storage.PusherOptions{})
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 			result, err := syncer.Push(t.Context(), true, nil)
@@ -167,12 +169,14 @@ func TestPushSuffixPublication(t *testing.T) {
 }
 
 func TestPushLegacyVSCodeReplyPin(t *testing.T) {
+	t.Parallel()
 	for _, agent := range []string{"vscode-copilot", "positron"} {
 		t.Run(agent, func(t *testing.T) {
-			const schema = "agentsview_legacy_reply_pin_test"
-			url := testPGURL(t)
-			cleanNamedPGSchema(t, url, schema)
-			t.Cleanup(func() { cleanNamedPGSchema(t, url, schema) })
+			const schema = pgPushTestSchema
+			url := testPGSchemaURL(t, schema)
+			if !takeFreshSchemaCopy(t, url, schema) {
+				cleanNamedPGSchema(t, url, schema)
+			}
 			local := testDB(t)
 			require.NoError(t, local.UpsertSession(t.Context(), db.Session{ID: "s1", Agent: agent, Project: "project", Machine: "machine", MessageCount: 2}))
 			messages := []db.Message{
@@ -180,7 +184,7 @@ func TestPushLegacyVSCodeReplyPin(t *testing.T) {
 				{SessionID: "s1", Ordinal: 1, Role: "assistant", Content: "Let me check.", Timestamp: "2026-08-06T05:51:31.425Z"},
 			}
 			require.NoError(t, local.InsertMessages(t.Context(), messages))
-			syncer, err := New(url, schema, local, "machine", true, storage.PusherOptions{})
+			syncer, err := New(t.Context(), url, schema, local, "machine", true, storage.PusherOptions{})
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 			result, err := syncer.Push(t.Context(), true, nil)

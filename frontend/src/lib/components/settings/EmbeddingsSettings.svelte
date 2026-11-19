@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { Chip, type ChipTone } from "@kenn-io/kit-ui";
   import { onMount } from "svelte";
   import { getLocale, m } from "../../i18n/index.js";
@@ -9,6 +10,9 @@
     isAbortError,
   } from "../../api/runtime.js";
   import { LatestRead } from "../../utils/latest-read.js";
+  import { InfoIcon } from "../../icons.js";
+
+  import SearchByMeaningControl from "../shared/SearchByMeaningControl.svelte";
 
   // Poll fast only while a build is actually running; when idle the section
   // only needs to notice an externally started build (CLI, scheduler)
@@ -33,24 +37,11 @@
   const generationsRead = new LatestRead();
 
   const numberFormat = $derived(new Intl.NumberFormat(getLocale()));
-  const percentFormat = $derived(
-    new Intl.NumberFormat(getLocale(), {
-      style: "percent",
-      maximumFractionDigits: 0,
-    }),
-  );
-
   const running = $derived(status?.running ?? false);
+  const settingUp = $derived(status?.setup?.busy || status?.setup?.installing);
   const phase = $derived(status?.phase ?? "");
   const estimateReady = $derived(status?.estimate_ready ?? false);
   const ratePerSecond = $derived(status?.rate_per_second ?? null);
-  const etaMs = $derived(status?.eta_milliseconds ?? null);
-  const progressFraction = $derived(
-    status && status.running && status.total > 0
-      ? Math.min(1, status.done / status.total)
-      : null,
-  );
-
   function clearTimer(): void {
     if (timer !== null) {
       clearTimeout(timer);
@@ -61,7 +52,7 @@
   function schedule(): void {
     clearTimer();
     if (disposed || unavailableReason !== null || document.hidden) return;
-    const interval = running ? ACTIVE_POLL_MS : IDLE_POLL_MS;
+    const interval = running || settingUp ? ACTIVE_POLL_MS : IDLE_POLL_MS;
     timer = setTimeout(() => void poll(), interval);
   }
 
@@ -86,7 +77,7 @@
       unavailableReason = null;
       loadError = null;
       updateElapsed(next);
-      if (withGenerations || (wasRunning && !next.running)) {
+      if (next.setup?.enabled !== false && next.setup?.action !== "turn-on" && (withGenerations || (wasRunning && !next.running))) {
         activePollsSinceGenerations = 0;
         await refreshGenerations();
       }
@@ -174,12 +165,6 @@
     return m.settings_embeddings_duration_seconds({ seconds });
   }
 
-  function phaseLabel(): string {
-    if (phase === "scanning") return m.settings_embeddings_status_scanning();
-    if (phase === "embedding") return m.settings_embeddings_status_embedding();
-    return m.settings_embeddings_status_running();
-  }
-
   function stateLabel(state: string): string {
     if (state === "active") return m.settings_embeddings_state_active();
     if (state === "building") return m.settings_embeddings_state_building();
@@ -196,68 +181,26 @@
 </script>
 
 <div class="embeddings-settings">
+  <SearchByMeaningControl {status} onchange={() => void refresh(true).then(schedule)} />
   {#if !loaded}
     <p class="muted">{m.settings_embeddings_loading()}</p>
   {:else if unavailableReason !== null}
-    <p class="muted">{m.settings_embeddings_unavailable()}</p>
+    <p class="state">
+      <InfoIcon class="status-mark" size="14" aria-hidden="true" />
+      {m.settings_embeddings_unavailable()}
+    </p>
     <p class="muted detail">{unavailableReason}</p>
   {:else if loadError !== null}
     <p class="msg error" role="alert">{loadError}</p>
-  {:else if status}
-    <div class="status-grid">
-      {#if status.model}
-        <span class="row-label">{m.settings_embeddings_model_label()}</span>
-        <span class="row-value mono">{status.model}</span>
-      {/if}
-      {#if status.dimension}
-        <span class="row-label">{m.settings_embeddings_dimension_label()}</span>
-        <span class="row-value">{numberFormat.format(status.dimension)}</span>
-      {/if}
-      <span class="row-label">{m.settings_embeddings_status_label()}</span>
-      <span class="row-value">
-        {#if running}
-          <Chip size="xs" tone="warning">{phaseLabel()}</Chip>
-        {:else if status.last_error}
-          <Chip size="xs" tone="danger">
-            {m.settings_embeddings_last_build_failed()}
-          </Chip>
-        {:else}
-          {m.settings_embeddings_status_idle()}
-        {/if}
-      </span>
-    </div>
-
+  {:else if status && status.setup?.enabled !== false && status.setup?.action !== "turn-on" && !status.setup?.busy}
     {#if running}
       {#if phase === "scanning" || status.total <= 0}
-        <p class="muted" aria-live="polite">
+        <p class="muted scanning-hint" aria-live="polite">
           {m.settings_embeddings_scanning_hint()}
         </p>
-      {:else}
+      {:else if (estimateReady && ratePerSecond !== null) || elapsedMs !== null}
         <div class="progress-block" aria-live="polite">
-          <div
-            class="progress-track"
-            role="progressbar"
-            aria-label={m.settings_embeddings_progress_aria()}
-            aria-valuemin={0}
-            aria-valuemax={status.total}
-            aria-valuenow={status.done}
-          >
-            <div
-              class="progress-fill"
-              style:width={`${(progressFraction ?? 0) * 100}%`}
-            ></div>
-          </div>
           <div class="progress-stats">
-            <span>
-              {m.settings_embeddings_progress_chunks({
-                count: status.total,
-                doneLabel: numberFormat.format(status.done),
-                totalLabel: numberFormat.format(status.total),
-              })}
-            </span>
-            {#if progressFraction !== null}
-              <span>{percentFormat.format(progressFraction)}</span>
-            {/if}
             {#if estimateReady && ratePerSecond !== null}
               <span>
                 {m.settings_embeddings_rate({
@@ -273,23 +216,27 @@
                 })}
               </span>
             {/if}
-            {#if estimateReady && etaMs !== null}
-              <span class="eta">
-                {m.settings_embeddings_eta({
-                  duration: formatDurationLocalized(etaMs),
-                })}
-              </span>
-            {:else}
-              <span class="eta muted"
-                >{m.settings_embeddings_eta_estimating()}</span
-              >
-            {/if}
           </div>
         </div>
       {/if}
-    {:else if status.last_error}
+    {/if}
+
+    {#if status.model || status.dimension}
+      <div class="status-grid">
+        {#if status.model}
+          <span class="row-label">{m.settings_embeddings_model_label()}</span>
+          <span class="row-value mono">{status.model}</span>
+        {/if}
+        {#if status.dimension}
+          <span class="row-label">{m.settings_embeddings_dimension_label()}</span>
+          <span class="row-value">{numberFormat.format(status.dimension)}</span>
+        {/if}
+      </div>
+    {/if}
+
+    {#if !running && status.last_error}
       <p class="msg error" role="alert">{status.last_error}</p>
-    {:else if status.last_result}
+    {:else if !running && status.last_result}
       <div class="status-grid">
         <span class="row-label">{m.settings_embeddings_last_build_label()}</span
         >
@@ -303,12 +250,12 @@
           >{m.settings_embeddings_last_build_documents()}</span
         >
         <span class="row-value"
-          >{numberFormat.format(status.last_result.Fill.Documents)}</span
+          >{formatCount(status.last_result.Fill.Documents)}</span
         >
         <span class="row-label">{m.settings_embeddings_last_build_chunks()}</span
         >
         <span class="row-value"
-          >{numberFormat.format(status.last_result.Fill.Chunks)}</span
+          >{formatCount(status.last_result.Fill.Chunks)}</span
         >
       </div>
     {/if}
@@ -329,8 +276,8 @@
               <span class="gen-model mono">{gen.model} · {numberFormat.format(gen.dimension)}d</span>
               <span class="gen-coverage">
                 {m.settings_embeddings_coverage({
-                  embeddedLabel: numberFormat.format(gen.embedded),
-                  missingLabel: numberFormat.format(gen.missing),
+                  embeddedLabel: formatCount(gen.embedded),
+                  missingLabel: formatCount(gen.missing),
                 })}
               </span>
             </li>
@@ -354,9 +301,33 @@
     margin: 0;
   }
 
+  /* The readable unavailable state leads as regular body text, marked by
+     the status ring rather than weight, so it never reads as a heading;
+     the raw diagnostic below it stays muted monospace. */
+  .state {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--text-secondary);
+  }
+
+  /* The hollow status ring GitHub uses for "Not configured": the
+     feature is off here, not failing. */
+  /* Unavailable uses the same neutral info glyph as the other
+     unavailable notices (Recall, Friction). */
+  .state :global(.status-mark) {
+    color: var(--text-muted);
+  }
+
+  /* The diagnostic hangs under the sentence, past the glyph (14px icon
+     plus the 8px gap). */
   .muted.detail {
     font-family: var(--font-mono, monospace);
     font-size: 11px;
+    padding-left: 22px;
   }
 
   .msg {
@@ -370,8 +341,9 @@
 
   .status-grid {
     display: grid;
-    grid-template-columns: auto 1fr;
-    column-gap: 16px;
+    /* Same label column as the other settings rows. */
+    grid-template-columns: var(--setting-label-width, 222px) minmax(0, 1fr);
+    column-gap: 12px;
     row-gap: 6px;
     align-items: center;
   }
@@ -383,8 +355,23 @@
   }
 
   .row-value {
+    min-width: 0;
     font-size: 12px;
     color: var(--text-primary);
+    overflow-wrap: anywhere;
+  }
+
+  /* Phones: like the other settings rows, each label sits above its
+     value, so long model ids keep the full width. */
+  @media (max-width: 640px) {
+    .status-grid {
+      grid-template-columns: minmax(0, 1fr);
+      row-gap: 2px;
+    }
+
+    .status-grid .row-value + .row-label {
+      margin-top: 6px;
+    }
   }
 
   .mono {
@@ -397,18 +384,9 @@
     gap: 6px;
   }
 
-  .progress-track {
-    height: 6px;
-    border-radius: 3px;
-    background: var(--bg-inset);
-    border: 1px solid var(--border-muted);
-    overflow: hidden;
-  }
-
-  .progress-fill {
-    height: 100%;
-    background: var(--accent-blue);
-    transition: width 0.4s ease;
+  .progress-block:not(:first-child),
+  .scanning-hint:not(:first-child) {
+    margin-top: calc(var(--space-3) - var(--space-5));
   }
 
   .progress-stats {
@@ -419,15 +397,8 @@
     color: var(--text-secondary);
   }
 
-  .progress-stats .eta {
-    color: var(--text-primary);
-  }
-
-  .progress-stats .eta.muted {
-    color: var(--text-muted);
-  }
-
   .subsection {
+    margin-top: var(--space-3);
     display: flex;
     flex-direction: column;
     gap: 6px;

@@ -60,7 +60,7 @@ func TestParseRooCodeSessionMistakeLimitPairing(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// user task + execute_command tool call = 2
@@ -125,7 +125,7 @@ func TestParseRooCodeSessionAPIReqFailedPairing(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// user task + MCP tool call = 2
@@ -211,7 +211,7 @@ func TestParseRooCodeSessionErrorNotPairedToCompletedRead(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// user task + readFile + standalone error message = 3.
@@ -283,7 +283,7 @@ func TestParseRooCodeSessionErrorNotPairedAcrossNormalTurn(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
+	sess, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// task + appliedDiff + assistant text + standalone error = 4.
@@ -352,7 +352,7 @@ func TestParseRooCodeSessionErrorPairsMostRecentTool(t *testing.T) {
 		messagesJSON, 0o644,
 	))
 
-	_, msgs, err := parseRooCodeSession(taskDir, "", "")
+	_, msgs, err := parseRooCodeSession(t.Context(), taskDir, "", "")
 	require.NoError(t, err)
 
 	// The pending command stays unresolved.

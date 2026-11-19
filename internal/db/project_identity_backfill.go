@@ -37,6 +37,10 @@ func ensureProjectIdentityBackfillQueuedTx(
 		SELECT state FROM background_migrations WHERE name = ?`,
 		ProjectIdentityBackfillName,
 	).Scan(&state)
+	// Only daemon startup may retry a recorded failure.
+	if state == "failed" {
+		return nil
+	}
 	if err == nil && state == "completed" {
 		var verified string
 		verifyErr := tx.QueryRowContext(ctx,
@@ -130,6 +134,15 @@ func (db *DB) EnsureProjectIdentityBackfillQueued(ctx context.Context) error {
 func (db *DB) ProjectIdentityBackfillStatus(
 	ctx context.Context,
 ) (BackgroundMigrationStatus, error) {
+	return db.projectIdentityBackfillStatus(ctx, true)
+}
+
+// ProjectIdentityBackfillProgress avoids recounting an unstarted queued job.
+func (db *DB) ProjectIdentityBackfillProgress(ctx context.Context) (BackgroundMigrationStatus, error) {
+	return db.projectIdentityBackfillStatus(ctx, false)
+}
+
+func (db *DB) projectIdentityBackfillStatus(ctx context.Context, countPending bool) (BackgroundMigrationStatus, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -169,7 +182,7 @@ func (db *DB) ProjectIdentityBackfillStatus(
 			}
 			return status, nil
 		}
-		if status.State == "pending" && status.TotalItems == 0 {
+		if countPending && status.State == "pending" && status.TotalItems == 0 {
 			missing, countErr := db.countMissingProjectIdentitySnapshots(ctx)
 			if countErr != nil {
 				return status, countErr
@@ -302,7 +315,7 @@ func (db *DB) ApplyProjectIdentityBackfillBatch(
 			}
 			continue
 		}
-		if err := upsertProjectIdentityObservationTx(tx, observation); err != nil {
+		if err := upsertProjectIdentityObservationTxContext(ctx, tx, observation); err != nil {
 			return fmt.Errorf("applying project identity backfill batch: %w", err)
 		}
 	}
@@ -367,17 +380,28 @@ func (db *DB) AdvanceProjectIdentityBackfill(ctx context.Context) error {
 }
 
 func (db *DB) FailProjectIdentityBackfill(ctx context.Context, cause error) error {
+	if err := db.requireWritable(); err != nil {
+		return err
+	}
+	status, err := db.ProjectIdentityBackfillStatus(ctx)
+	if err != nil {
+		return err
+	}
+	if status.State == "not_needed" || status.State == "completed" {
+		return nil
+	}
 	message := ""
 	if cause != nil {
 		message = cause.Error()
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	_, err := db.getWriter().ExecContext(ctx, `
-		UPDATE background_migrations SET
-			state = 'failed', last_error = ?,
-			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		WHERE name = ?`, message, ProjectIdentityBackfillName)
+	_, err = db.getWriter().ExecContext(ctx, `
+		INSERT INTO background_migrations (name, state, last_error)
+		VALUES (?, 'failed', ?)
+		ON CONFLICT(name) DO UPDATE SET
+			state = 'failed', last_error = excluded.last_error,
+			updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`, ProjectIdentityBackfillName, message)
 	if err != nil {
 		return fmt.Errorf("recording project identity backfill failure: %w", err)
 	}

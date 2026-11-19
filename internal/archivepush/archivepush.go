@@ -1,5 +1,5 @@
-// Package archivepush runs one push from the SQLite archive to a replica or
-// mirror. The process that owns the archive calls it: the daemon's push routes
+// Package archivepush runs one push from the SQLite archive to a replica.
+// The process that owns the archive calls it: the daemon's push routes
 // and a CLI push that opened the archive itself. Both run the same steps, so a
 // push behaves the same whichever process runs it.
 //
@@ -14,8 +14,6 @@ import (
 	"fmt"
 	"log"
 
-	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storage"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
@@ -122,25 +120,4 @@ func (s *ReplicaSession) stage(stage Stage) func() {
 		}
 	}
 	return func() {}
-}
-
-// MirrorPush pushes the archive to a local mirror such as DuckDB.
-type MirrorPush struct {
-	Mirror  storage.Mirror
-	Config  config.DuckDBConfig
-	Archive *db.DB
-	Options storage.MirrorPushOptions
-	// EnsurePricing refreshes model pricing before each push. Optional.
-	EnsurePricing func(context.Context) error
-}
-
-// Push refreshes pricing and pushes. full rewrites the whole mirror.
-func (m MirrorPush) Push(
-	ctx context.Context, full bool,
-	onProgress func(storage.MirrorPushProgress),
-) (storage.MirrorPushResult, error) {
-	if err := RefreshPricing(ctx, m.EnsurePricing); err != nil {
-		return storage.MirrorPushResult{}, err
-	}
-	return m.Mirror.Push(ctx, m.Config, m.Archive, m.Options, full, onProgress)
 }

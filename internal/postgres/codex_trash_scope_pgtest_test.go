@@ -20,6 +20,7 @@ const (
 )
 
 func TestPreSplitPGTrashKeepsPagesHidden(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, prefix, agent string
 	}{
@@ -34,8 +35,7 @@ func TestPreSplitPGTrashKeepsPagesHidden(t *testing.T) {
 			const schema = "agentsview_presplit_pgtrash_test"
 			pgURL := testPGURL(t)
 			cleanNamedPGSchema(t, pgURL, schema)
-			t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
-			pg, err := Open(pgURL, schema, true)
+			pg, err := Open(t.Context(), pgURL, schema, true)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, pg.Close()) })
 			require.NoError(t, EnsureSchema(ctx, pg, schema))
@@ -133,14 +133,14 @@ func newCodexTrashMirror(t *testing.T) (*db.DB, *Sync, *Store) {
 	local, err := db.OpenIsolated(ctx, filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, local.Close()) })
-	require.NoError(t, local.CopyArchiveIdentityFrom(sourcePath))
-	_, err = local.CopyTrashedDataFrom(sourcePath)
+	require.NoError(t, local.CopyArchiveIdentityFrom(t.Context(), sourcePath))
+	_, err = local.CopyTrashedDataFrom(t.Context(), sourcePath)
 	require.NoError(t, err)
 	for _, id := range []string{codexTrashPage, codexTrashSibling} {
 		require.NoError(t, local.UpsertSession(ctx, db.Session{ID: id, Agent: "codex", Project: "sample", Machine: "machine", ParentSessionID: new(codexTrashThread), RelationshipType: "continuation"}))
 		require.NoError(t, local.InsertMessages(ctx, []db.Message{{SessionID: id, Role: "user", Content: "Saved page", SourceUUID: id}}))
 	}
-	require.NoError(t, local.CopySessionMetadataFrom(sourcePath))
+	require.NoError(t, local.CopySessionMetadataFrom(t.Context(), sourcePath))
 	// Start outside the next incremental push window. A page restore must
 	// advance its anchor's marker and fingerprint even though the anchor's
 	// other mirrored metadata stays unchanged.
@@ -149,14 +149,18 @@ func newCodexTrashMirror(t *testing.T) (*db.DB, *Sync, *Store) {
 	_, err = raw.ExecContext(ctx, `UPDATE sessions SET created_at='2020-01-01T00:00:00.000Z', local_modified_at='2020-01-01T00:00:00.000Z'`)
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
-	const schema = "agentsview_codex_trash_test"
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
-	pg, err := Open(pgURL, schema, true)
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
+	fresh := takeFreshSchemaCopy(t, pgURL, schema)
+	if !fresh {
+		cleanNamedPGSchema(t, pgURL, schema)
+	}
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, pg.Close()) })
-	require.NoError(t, EnsureSchema(ctx, pg, schema))
+	if !fresh {
+		require.NoError(t, EnsureSchema(ctx, pg, schema))
+	}
 	syncer := &Sync{pg: pg, local: local, machine: "machine", schema: schema, schemaDone: true}
 	_, err = syncer.Push(ctx, true, nil)
 	require.NoError(t, err)
@@ -164,6 +168,7 @@ func newCodexTrashMirror(t *testing.T) (*db.DB, *Sync, *Store) {
 }
 
 func TestCodexLegacyTrashPurgeMirror(t *testing.T) {
+	t.Parallel()
 	for _, empty := range []bool{false, true} {
 		name := "thread"
 		if empty {
@@ -186,6 +191,28 @@ func TestCodexLegacyTrashPurgeMirror(t *testing.T) {
 				require.NoError(t, err)
 				assert.Nil(t, session, "purging the thread must remove its saved pages")
 			}
+			if !empty {
+				// Exercise scoped cleanup against both the excluded archive and a
+				// different owner that happens to have a page under the same thread.
+				_, err := syncer.pg.ExecContext(ctx, `INSERT INTO sessions(id,project,agent,machine,owner_marker)
+					SELECT $1,'sample','codex',machine,owner_marker FROM excluded_sessions WHERE id=$3
+					UNION ALL SELECT $2,'sample','codex','other','other-owner'`, codexTrashPage, codexTrashSibling, codexTrashThread)
+				require.NoError(t, err)
+				for _, id := range []string{codexTrashPage, codexTrashSibling} {
+					_, err = syncer.pg.ExecContext(ctx, `INSERT INTO commit_links (session_id,sha,branch,subject,repository,message_ordinal,call_index,tool_use_id,committed_at,turn_ordinal,turn_text,project,retained) VALUES ($1,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','','','',0,0,'','',0,'prompt','',false),($1,'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','','','',0,0,'','',NULL,'','',true)`, id)
+					require.NoError(t, err)
+				}
+				tx, err := syncer.pg.BeginTx(ctx, nil)
+				require.NoError(t, err)
+				require.NoError(t, deletePGScopedExcludedSessionRows(ctx, tx, []string{codexTrashPage, codexTrashSibling}))
+				require.NoError(t, tx.Commit())
+				for id, want := range map[string]int{codexTrashPage: 0, codexTrashSibling: 1} {
+					var live, retained int
+					require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE NOT retained), count(*) FILTER (WHERE retained) FROM commit_links WHERE session_id=$1`, id).Scan(&live, &retained))
+					assert.Equal(t, want, live)
+					assert.Equal(t, 1, retained)
+				}
+			}
 			// A later source restore and a newly discovered file cannot undo the
 			// permanent whole-thread exclusion chosen in PostgreSQL.
 			_, err := local.RestoreSession(ctx, codexTrashThread)
@@ -199,7 +226,7 @@ func TestCodexLegacyTrashPurgeMirror(t *testing.T) {
 				require.NotNil(t, returning)
 				marker, err := syncer.pushMarkerID(ctx)
 				require.NoError(t, err)
-				tx, err := store.pg.BeginTx(ctx, nil)
+				tx, err := store.DB().BeginTx(ctx, nil)
 				require.NoError(t, err)
 				err = syncer.pushSession(ctx, tx, *returning, marker, nil)
 				assert.ErrorIs(t, err, errSessionExcluded)
@@ -218,6 +245,7 @@ func TestCodexLegacyTrashPurgeMirror(t *testing.T) {
 }
 
 func TestCodexLegacyTrashRestoreMirror(t *testing.T) {
+	t.Parallel()
 	for _, localRestore := range []bool{false, true} {
 		for _, id := range []string{codexTrashThread, codexTrashPage} {
 			name := "remote/" + id
@@ -270,6 +298,7 @@ func TestCodexLegacyTrashRestoreMirror(t *testing.T) {
 }
 
 func TestCodexLegacyTrashPagePurgeStaysPerFile(t *testing.T) {
+	t.Parallel()
 	local, syncer, store := newCodexTrashMirror(t)
 	ctx := t.Context()
 	removed, err := store.DeleteSessionIfTrashed(ctx, codexTrashPage)
@@ -292,6 +321,7 @@ func TestCodexLegacyTrashPagePurgeStaysPerFile(t *testing.T) {
 }
 
 func TestCodexTrashScopeSchemaMigrationKeepsArchive(t *testing.T) {
+	t.Parallel()
 	_, syncer, store := newCodexTrashMirror(t)
 	ctx := t.Context()
 	_, err := store.pg.ExecContext(ctx, `ALTER TABLE sessions DROP COLUMN trash_includes_codex_pages, DROP COLUMN source_trash_includes_codex_pages;
@@ -299,7 +329,7 @@ func TestCodexTrashScopeSchemaMigrationKeepsArchive(t *testing.T) {
  INSERT INTO excluded_sessions(id) VALUES('ordinary-exclusion')`)
 	require.NoError(t, err)
 	for range 2 {
-		require.NoError(t, EnsureSchema(ctx, store.pg, syncer.schema))
+		require.NoError(t, EnsureSchema(ctx, store.DB(), syncer.schema))
 	}
 	trash, err := store.ListTrashedSessions(ctx)
 	require.NoError(t, err)
@@ -319,6 +349,7 @@ func TestCodexTrashScopeSchemaMigrationKeepsArchive(t *testing.T) {
 }
 
 func TestHostedLegacyCodexTrashScope(t *testing.T) {
+	t.Parallel()
 	for _, action := range []string{"purge", "empty", "restore_page", "restore_thread"} {
 		t.Run(action, func(t *testing.T) {
 			f := newHostedFixture(t, "tenant-codex-trash")
@@ -333,7 +364,7 @@ func TestHostedLegacyCodexTrashScope(t *testing.T) {
 			require.NoError(t, err)
 			_, err = f.runtime.ExecContext(ctx, `INSERT INTO excluded_sessions(id) VALUES($1)`, codexTrashThread)
 			require.NoError(t, err)
-			h, err := newHostedAdapter(f.runtime, f.tenant)
+			h, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 			require.NoError(t, err)
 			wantRemoved := 3
 			restoredID := ""
@@ -372,6 +403,7 @@ func TestHostedLegacyCodexTrashScope(t *testing.T) {
 }
 
 func TestCodexTrashScopeUpgradePreservesLaterPerFileDeletion(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name                                         string
 		missingBaseline, currentColumns, remoteTrash bool
@@ -386,8 +418,7 @@ func TestCodexTrashScopeUpgradePreservesLaterPerFileDeletion(t *testing.T) {
 			const schema = "agentsview_codex_scope_upgrade_test"
 			pgURL := testPGURL(t)
 			cleanNamedPGSchema(t, pgURL, schema)
-			t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
-			pg, err := Open(pgURL, schema, true)
+			pg, err := Open(t.Context(), pgURL, schema, true)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, pg.Close()) })
 			require.NoError(t, EnsureSchema(ctx, pg, schema))
@@ -434,13 +465,13 @@ func TestCodexTrashScopeUpgradePreservesLaterPerFileDeletion(t *testing.T) {
 			local, err := db.OpenIsolated(ctx, filepath.Join(t.TempDir(), "rebuilt.db"))
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, local.Close()) })
-			require.NoError(t, local.CopyArchiveIdentityFrom(sourcePath))
-			require.NoError(t, local.CopySyncStateFrom(sourcePath))
-			_, err = local.CopyTrashedDataFrom(sourcePath)
+			require.NoError(t, local.CopyArchiveIdentityFrom(t.Context(), sourcePath))
+			require.NoError(t, local.CopySyncStateFrom(t.Context(), sourcePath))
+			_, err = local.CopyTrashedDataFrom(t.Context(), sourcePath)
 			require.NoError(t, err)
 			require.NoError(t, local.UpsertSession(ctx, db.Session{ID: codexTrashPage, Agent: "codex", Project: "sample", Machine: "machine", DataVersion: db.CurrentDataVersion(), ParentSessionID: new(codexTrashThread), RelationshipType: "continuation", MessageCount: 1, UserMessageCount: 1}))
 			require.NoError(t, local.InsertMessages(ctx, []db.Message{{SessionID: codexTrashPage, Role: "user", Content: "Retained sibling page", SourceUUID: "page-message"}}))
-			require.NoError(t, local.CopySessionMetadataFrom(sourcePath))
+			require.NoError(t, local.CopySessionMetadataFrom(t.Context(), sourcePath))
 			for _, id := range []string{codexTrashThread, codexTrashPage} {
 				sess, err := local.GetSessionFull(ctx, id)
 				require.NoError(t, err)

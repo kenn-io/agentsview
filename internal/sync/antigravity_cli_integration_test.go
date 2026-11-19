@@ -527,11 +527,12 @@ func TestSyncEngineAntigravityCLI_DBFallbackRetries(t *testing.T) {
 
 	require.NoError(t, env.db.SetSessionDataVersion(t.Context(), filteredSessionID, db.CurrentDataVersion()))
 	require.NoError(t, env.db.ResetAllMtimes(t.Context()), "force fallback rewrite")
-	runSyncAndAssert(t, env.engine, wantStats)
+	wantPreserved := sync.SyncStats{TotalSessions: 2, Failed: 2}
+	runSyncAndAssert(t, env.engine, wantPreserved)
 	assert.Less(t, env.db.GetSessionDataVersion(t.Context(), filteredSessionID), db.CurrentDataVersion(),
 		"DB fallback after dropping all raw steps should demote previously current rows")
 
-	runSyncAndAssert(t, env.engine, wantStats)
+	runSyncAndAssert(t, env.engine, wantPreserved)
 	assert.Less(t, env.db.GetSessionDataVersion(t.Context(), filteredSessionID), db.CurrentDataVersion(),
 		"unchanged DB fallback after dropping all raw steps should keep retrying")
 }
@@ -574,6 +575,52 @@ func TestSyncEngineAntigravityCLI_UnreadableDBKeepsArchivedMessages(t *testing.T
 
 	assert.Equal(t, archived, antigravityCLIMessageContents(fetchMessages(t, env.db, sessionID)),
 		"an unreadable DB must not replace the archived reply with history prompts")
+}
+
+func TestRebuildAntigravityCLIDeferredKeepsArchivedHistory(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentAntigravityCLI)
+	const uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	const healthy = "11111111-2222-4333-8444-555555555555"
+	const sessionID = "antigravity-cli:" + uuid
+	convDir := filepath.Join(env.antigravityCLIDir, "conversations")
+	require.NoError(t, os.MkdirAll(convDir, 0o755))
+	history := `{"conversationId":"` + uuid + `","workspace":"/work/project","timestamp":1716244800000,"display":"History Prompt"}` + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(env.antigravityCLIDir, "history.jsonl"), []byte(history), 0o600))
+	path := filepath.Join(convDir, uuid+".db")
+	createAntigravityCLIDisplayStepDB(t, path, "Initial database prompt text")
+	conn := openAntigravityCLITestDB(t, path)
+	insertAntigravityCLIStep(t, conn, 1, 17, "Initial assistant response text")
+	require.NoError(t, conn.Close())
+	initial := env.engine.SyncAll(t.Context(), nil)
+	require.Zero(t, initial.Deferred)
+	archived := antigravityCLIMessageContents(fetchMessages(t, env.db, sessionID))
+	require.Contains(t, archived, "Initial assistant response text")
+	conn = openAntigravityCLITestDB(t, path)
+	_, err := conn.ExecContext(t.Context(), "DELETE FROM steps")
+	require.NoError(t, err)
+	insertAntigravityCLIStep(t, conn, 0, 14, "MODEL_PLACEHOLDER_0")
+	require.NoError(t, conn.Close())
+	healthyPath := filepath.Join(convDir, healthy+".db")
+	createAntigravityCLIDisplayStepDB(t, healthyPath, "healthy database prompt text")
+	stats := env.engine.ResyncAll(t.Context(), nil)
+	require.Positive(t, stats.Failed)
+	require.True(t, stats.ArchiveRebuilt)
+	assert.Equal(t, archived, antigravityCLIMessageContents(fetchMessages(t, env.db, sessionID)))
+	assert.Contains(t, antigravityCLIMessageContents(fetchMessages(t, env.db, "antigravity-cli:"+healthy)), "healthy database prompt text")
+	assert.Less(t, env.db.GetSessionDataVersion(t.Context(), sessionID), db.CurrentDataVersion())
+	env.engine.SyncAll(t.Context(), nil)
+	assert.Equal(t, archived, antigravityCLIMessageContents(fetchMessages(t, env.db, sessionID)))
+	require.NoError(t, env.engine.SyncSingleSession(sessionID))
+	assert.Equal(t, archived, antigravityCLIMessageContents(fetchMessages(t, env.db, sessionID)))
+	conn = openAntigravityCLITestDB(t, path)
+	_, err = conn.ExecContext(t.Context(), "DELETE FROM steps")
+	require.NoError(t, err)
+	insertAntigravityCLIStep(t, conn, 0, 14, "Recovered database prompt text")
+	insertAntigravityCLIStep(t, conn, 1, 17, "Recovered assistant response text")
+	require.NoError(t, conn.Close())
+	env.engine.SyncAll(t.Context(), nil)
+	assert.Contains(t, antigravityCLIMessageContents(fetchMessages(t, env.db, sessionID)), "Recovered assistant response text")
+	assert.Equal(t, db.CurrentDataVersion(), env.db.GetSessionDataVersion(t.Context(), sessionID))
 }
 
 func TestSyncSingleSessionAntigravityCLI_UnreadableDBKeepsArchivedMessages(t *testing.T) {
@@ -928,4 +975,36 @@ func insertAntigravityCLIStep(
 func antigravityCLIStringPayload(s string) []byte {
 	content := []byte(s)
 	return append([]byte{0x8a, 0x01, byte(len(content))}, content...)
+}
+
+// A rebuild whose only work is a preserved low-fidelity fallback must still
+// install, or a required data-version rebuild could never finish.
+func TestAntigravityCLIRebuildInstallsWhenOnlyFallbackIsPreserved(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentAntigravityCLI)
+	const uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	const sessionID = "antigravity-cli:" + uuid
+	convDir := filepath.Join(env.antigravityCLIDir, "conversations")
+	require.NoError(t, os.MkdirAll(convDir, 0o755))
+	history := `{"conversationId":"` + uuid + `","workspace":"/work/project","timestamp":1716244800000,"display":"History Prompt"}` + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(env.antigravityCLIDir, "history.jsonl"), []byte(history), 0o600))
+	path := filepath.Join(convDir, uuid+".db")
+	createAntigravityCLIDisplayStepDB(t, path, "Initial database prompt text")
+	conn := openAntigravityCLITestDB(t, path)
+	insertAntigravityCLIStep(t, conn, 1, 17, "Initial assistant response text")
+	require.NoError(t, conn.Close())
+	require.Zero(t, env.engine.SyncAll(t.Context(), nil).Failed)
+	archived := antigravityCLIMessageContents(fetchMessages(t, env.db, sessionID))
+	require.Contains(t, archived, "Initial assistant response text")
+
+	conn = openAntigravityCLITestDB(t, path)
+	_, err := conn.ExecContext(t.Context(), "DELETE FROM steps")
+	require.NoError(t, err)
+	insertAntigravityCLIStep(t, conn, 0, 14, "MODEL_PLACEHOLDER_0")
+	require.NoError(t, conn.Close())
+	stats := env.engine.ResyncAll(t.Context(), nil)
+	assert.False(t, stats.Aborted)
+	assert.True(t, stats.ArchiveRebuilt)
+	assert.Equal(t, archived, antigravityCLIMessageContents(fetchMessages(t, env.db, sessionID)))
+	assert.Less(t, env.db.GetSessionDataVersion(t.Context(), sessionID), db.CurrentDataVersion(),
+		"the preserved session must stay marked for retry")
 }

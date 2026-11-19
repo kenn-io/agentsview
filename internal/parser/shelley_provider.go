@@ -25,7 +25,7 @@ func newShelleyProviderFactory(def AgentDef) ProviderFactory {
 				WithWatchRoots(shelleyWatchRoots),
 				WithChangedPathClassifier(shelleyClassifyPath),
 				WithMemberLookup(shelleyFindMember),
-				WithFingerprint(shelleyFingerprintSource),
+				WithContextFingerprint(shelleyFingerprintSource),
 				WithContextContainerParse(shelleyParseContainer),
 				WithContextMemberParse(shelleyParseMember),
 				// Special case: confirm a stored conversation still exists for
@@ -108,7 +108,7 @@ func shelleyFindMember(ctx context.Context, root, rawID string) (multiSessionMat
 	}, true
 }
 
-func shelleyFingerprintSource(src multiSessionSource) (SourceFingerprint, error) {
+func shelleyFingerprintSource(ctx context.Context, src multiSessionSource) (SourceFingerprint, error) {
 	info, err := os.Stat(src.Container)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -126,7 +126,7 @@ func shelleyFingerprintSource(src multiSessionSource) (SourceFingerprint, error)
 		); err == nil {
 			fingerprint.MTimeNS = compositeMtime
 		}
-		fingerprint.Hash, err = hashJSONLSourceFile(src.Container)
+		fingerprint.Hash, err = hashJSONLSourceFileContext(ctx, src.Container)
 		if err != nil {
 			return SourceFingerprint{}, err
 		}
@@ -139,7 +139,7 @@ func shelleyFingerprintSource(src multiSessionSource) (SourceFingerprint, error)
 	}
 	defer conn.Close()
 	meta, found, err := ShelleyConversationMetaByID(
-		context.Background(), conn, src.Container, src.MemberID,
+		ctx, conn, src.Container, src.MemberID,
 	)
 	if err != nil {
 		return SourceFingerprint{}, err
@@ -203,7 +203,7 @@ func shelleyParseContainer(ctx context.Context,
 		return nil, err
 	}
 	defer conn.Close()
-	metas, err := ListShelleyConversationMetas(conn, src.Container)
+	metas, err := ListShelleyConversationMetas(ctx, conn, src.Container)
 	if err != nil {
 		return nil, err
 	}

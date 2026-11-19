@@ -20,7 +20,7 @@ var (
 // the remote's own target resolution allows. Resolution and build errors are
 // returned unwrapped so HTTP 500 bodies keep their existing text.
 func ServeManifest(ctx context.Context, cfg config.Config, requested TargetSet) (Manifest, error) {
-	allowed, err := ResolveTargets(cfg)
+	allowed, err := ResolveTargets(ctx, cfg)
 	if err != nil {
 		return Manifest{}, err
 	}
@@ -46,14 +46,15 @@ type ArchivePlan struct {
 	allowed TargetSet
 	targets TargetSet
 	files   []string
+	appends map[string]DeltaAppend
 	delta   bool
 }
 
 // PlanArchive authorizes request against the remote's own resolution. A
 // non-nil DeltaFiles selects delta mode even when empty: an explicit empty
 // delta yields an empty tar, not the full corpus.
-func PlanArchive(cfg config.Config, request ArchiveRequest) (ArchivePlan, error) {
-	allowed, err := ResolveTargets(cfg)
+func PlanArchive(ctx context.Context, cfg config.Config, request ArchiveRequest) (ArchivePlan, error) {
+	allowed, err := ResolveTargets(ctx, cfg)
 	if err != nil {
 		return ArchivePlan{}, err
 	}
@@ -67,6 +68,9 @@ func PlanArchive(cfg config.Config, request ArchiveRequest) (ArchivePlan, error)
 		if !ok {
 			return ArchivePlan{}, ErrFileNotAllowed
 		}
+		// Appends apply only to files selected above, so they authorize
+		// nothing on their own.
+		plan.appends = appendBasesByPath(request.DeltaAppends)
 	}
 	return plan, nil
 }
@@ -74,7 +78,7 @@ func PlanArchive(cfg config.Config, request ArchiveRequest) (ArchivePlan, error)
 // Write streams the planned archive to w.
 func (p ArchivePlan) Write(ctx context.Context, w io.Writer) error {
 	if p.delta {
-		return WriteArchiveFiles(ctx, w, p.allowed, p.files)
+		return writeArchiveFiles(ctx, w, p.allowed, p.files, p.appends)
 	}
 	return WriteArchive(ctx, w, p.targets)
 }

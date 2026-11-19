@@ -70,17 +70,22 @@ func newEmbeddingsStubServer(t *testing.T, dimension int) *httptest.Server {
 		}
 		assert.NoError(t, json.UnmarshalRead(r.Body, &req))
 
-		data := make([]map[string]any, len(req.Input))
-		for i := range req.Input {
-			vec := make([]float32, dimension)
-			for j := range vec {
-				vec[j] = float32(i + 1)
-			}
-			data[i] = map[string]any{"index": i, "embedding": vec}
-		}
-		w.Header().Set("Content-Type", "application/json")
-		assert.NoError(t, json.MarshalWrite(w, map[string]any{"data": data}))
+		writeEmbeddingsResponse(t, w, len(req.Input), dimension)
 	}))
+}
+
+func writeEmbeddingsResponse(t *testing.T, w http.ResponseWriter, count, dimension int) {
+	t.Helper()
+	data := make([]map[string]any, count)
+	for i := range data {
+		values := make([]float32, dimension)
+		for j := range values {
+			values[j] = float32(i + 1)
+		}
+		data[i] = map[string]any{"index": i, "embedding": values}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	assert.NoError(t, json.MarshalWrite(w, map[string]any{"data": data}))
 }
 
 // seedEmbeddableArchive creates sessions.db at cfg's default path with one
@@ -305,16 +310,14 @@ func TestVectorStoreSpecIncludesRecall(t *testing.T) {
 	assert.Equal(t, vector.RecallIndexSpec(), spec)
 }
 
-// TestEmbeddingsDisabledReturnsError asserts every subcommand refuses with
-// the exact "vector search is not enabled" message when [vector] is off
-// (the default), before attempting any daemon detection or I/O.
+// TestEmbeddingsDisabledReturnsError checks the management commands when
+// vector search is disabled.
 func TestEmbeddingsDisabledReturnsError(t *testing.T) {
 	tests := []struct {
 		name   string
 		newCmd func() *cobra.Command
 		args   []string
 	}{
-		{"build", newEmbeddingsBuildCommand, nil},
 		{"list", newEmbeddingsListCommand, nil},
 		{"activate", newEmbeddingsActivateCommand, []string{"1"}},
 		{"retire", newEmbeddingsRetireCommand, []string{"1"}},
@@ -331,7 +334,7 @@ func TestEmbeddingsDisabledReturnsError(t *testing.T) {
 			err := cmd.Execute()
 			require.Error(t, err)
 			assert.Equal(t,
-				"vector search is not enabled: set [vector] enabled = true in config.toml",
+				"vector search is not enabled: run 'agentsview index embeddings build' or turn it on in Settings → Embeddings → Turn on",
 				err.Error())
 		})
 	}
@@ -544,7 +547,7 @@ func TestImportedOnlyRecallEmbeddingsBuildAndVectorQueryEndToEnd(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	cfg, err := config.LoadMinimal()
 	require.NoError(t, err)
-	closeVector := installDirectVectorSearcher(cfg, database)
+	closeVector := installDirectVectorSearcher(t.Context(), cfg, database)
 	require.NotNil(t, closeVector)
 	t.Cleanup(func() { require.NoError(t, closeVector()) })
 
@@ -601,7 +604,7 @@ func TestRoleAwarePrefixesReachBuildAndSearch(t *testing.T) {
 		t.Context(), &buildOut, cfg, vector.BuildRequest{}))
 
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
-	closeVector := installDirectVectorSearcher(cfg, database)
+	closeVector := installDirectVectorSearcher(t.Context(), cfg, database)
 	require.NotNil(t, closeVector)
 	t.Cleanup(func() { require.NoError(t, closeVector()) })
 
@@ -641,7 +644,7 @@ func TestRoleAwarePrefixesReachBuildAndSearch(t *testing.T) {
 		t.Run("stale "+change.name, func(t *testing.T) {
 			changed := cfg
 			change.apply(&changed.Vector.Embeddings)
-			closeChanged := installDirectVectorSearcher(changed, database)
+			closeChanged := installDirectVectorSearcher(t.Context(), changed, database)
 			require.NotNil(t, closeChanged)
 			t.Cleanup(func() { require.NoError(t, closeChanged()) })
 			before := capturedCount()

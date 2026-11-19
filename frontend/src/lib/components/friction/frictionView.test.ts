@@ -72,13 +72,24 @@ describe("groupSignals", () => {
       "frustration",
       "interruption",
     ]);
-    expect(sections.map((s) => s.kind)).toEqual([...FRICTION_KINDS]);
+    expect(sections.map((s) => s.kind)).toEqual(
+      FRICTION_KINDS.filter((kind) => kind !== "diagnostic"),
+    );
     expect(sections[0]!.signals.map((s) => s.subject_id)).toEqual(["c2", "c1"]);
     expect(sections[1]!.signals.map((s) => s.subject_id)).toEqual(["e1"]);
     expect(sections[2]!.signals).toEqual([]);
     expect(sections[4]!.signals.map((s) => s.subject_id)).toEqual(["p1"]);
     expect(sections[5]!.signals.map((s) => s.subject_id)).toEqual(["f1"]);
     expect(sections[6]!.signals.map((s) => s.subject_id)).toEqual(["i1"]);
+    const diagnostics = groupSignals([
+      sig({
+        kind: "diagnostic",
+        subject_kind: "diagnostic",
+        label: "worker",
+        text: "launch failed",
+      }),
+    ]);
+    expect(diagnostics.at(-1)?.kind).toBe("diagnostic");
   });
 
   it("drops kinds the page does not know instead of throwing", () => {

@@ -17,14 +17,11 @@ import (
 )
 
 func TestCodexTrashConcurrentRestoreAndPurge(t *testing.T) {
+	t.Parallel()
 	for _, hosted := range []bool{false, true} {
 		for _, empty := range []bool{false, true} {
 			for _, first := range []string{"purge", "restore"} {
 				t.Run(fmt.Sprintf("hosted=%v/empty=%v/first=%s", hosted, empty, first), func(t *testing.T) {
-					ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
-					var workers sync.WaitGroup
-					defer workers.Wait()
-					defer cancel()
 					var observer, writer *sql.DB
 					var schema, dsn, tenant string
 					wantTotal := int64(3)
@@ -33,31 +30,31 @@ func TestCodexTrashConcurrentRestoreAndPurge(t *testing.T) {
 						observer, writer, schema, dsn, tenant = f.admin, f.runtime, f.schema, f.dsn, f.tenant
 						// Keep the real hosted revision trigger active, including its identity
 						// fences on DELETE. These rows are the legacy upgrade's resulting state.
-						_, err := writer.ExecContext(ctx, `INSERT INTO sessions(id,project,machine,agent,deleted_at,trash_includes_codex_pages,source_trash_includes_codex_pages) VALUES($1,'sample','machine','codex',NOW(),true,true),($2,'sample','machine','codex',NOW(),false,false)`, codexTrashThread, codexTrashPage)
+						_, err := writer.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,deleted_at,trash_includes_codex_pages,source_trash_includes_codex_pages) VALUES($1,'sample','machine','codex',NOW(),true,true),($2,'sample','machine','codex',NOW(),false,false)`, codexTrashThread, codexTrashPage)
 						require.NoError(t, err)
 						wantTotal = 2
 						var shared int
-						require.NoError(t, observer.QueryRowContext(ctx, `SELECT count(*) FROM (SELECT DISTINCT hashtextextended(a,0)&255 AS b FROM unnest($1::text[]) a INTERSECT SELECT DISTINCT hashtextextended(a,0)&255 AS b FROM unnest($2::text[]) a) overlap`, []string{codexTrashThread, legacyPublicVariant(codexTrashThread)}, []string{codexTrashPage, legacyPublicVariant(codexTrashPage)}).Scan(&shared))
+						require.NoError(t, observer.QueryRowContext(t.Context(), `SELECT count(*) FROM (SELECT DISTINCT hashtextextended(a,0)&255 AS b FROM unnest($1::text[]) a INTERSECT SELECT DISTINCT hashtextextended(a,0)&255 AS b FROM unnest($2::text[]) a) overlap`, []string{codexTrashThread, legacyPublicVariant(codexTrashThread)}, []string{codexTrashPage, legacyPublicVariant(codexTrashPage)}).Scan(&shared))
 						require.Zero(t, shared, "fixture aliases must not serialize the requests before row locks")
 					} else {
 						_, _, store := newCodexTrashMirror(t)
-						observer, writer = store.pg, store.pg
-						require.NoError(t, observer.QueryRowContext(ctx, `SELECT current_schema()`).Scan(&schema))
+						observer, writer = store.DB(), store.DB()
+						require.NoError(t, observer.QueryRowContext(t.Context(), `SELECT current_schema()`).Scan(&schema))
 						dsn = testPGURL(t)
 					}
 					type result struct {
 						n   int64
 						err error
 					}
-					operations := make(map[string]func() (int64, error))
+					operations := make(map[string]func(context.Context) (int64, error))
 					for _, op := range []string{"restore", "purge"} {
 						opDSN, err := appendConnParams(dsn, map[string]string{"application_name": "codex_curation_" + op})
 						require.NoError(t, err)
 						var pg *sql.DB
 						if hosted {
-							pg, err = OpenHosted(opDSN, schema, tenant, false)
+							pg, err = OpenHosted(t.Context(), opDSN, schema, tenant, false)
 						} else {
-							pg, err = Open(opDSN, schema, true)
+							pg, err = Open(t.Context(), opDSN, schema, true)
 						}
 						require.NoError(t, err)
 						t.Cleanup(func() { require.NoError(t, pg.Close()) })
@@ -67,19 +64,27 @@ func TestCodexTrashConcurrentRestoreAndPurge(t *testing.T) {
 							EmptyTrash(context.Context) (int, error)
 						}
 						if hosted {
-							endpoint, err = newHostedAdapter(pg, tenant)
+							endpoint, err = newHostedAdapter(t.Context(), pg, tenant)
 							require.NoError(t, err)
 						} else {
 							endpoint = &Store{pg: pg}
 						}
 						if op == "restore" {
-							operations[op] = func() (int64, error) { return endpoint.RestoreSession(ctx, codexTrashPage) }
+							operations[op] = func(ctx context.Context) (int64, error) { return endpoint.RestoreSession(ctx, codexTrashPage) }
 						} else if empty {
-							operations[op] = func() (int64, error) { n, err := endpoint.EmptyTrash(ctx); return int64(n), err }
+							operations[op] = func(ctx context.Context) (int64, error) { n, err := endpoint.EmptyTrash(ctx); return int64(n), err }
 						} else {
-							operations[op] = func() (int64, error) { return endpoint.DeleteSessionIfTrashed(ctx, codexTrashThread) }
+							operations[op] = func(ctx context.Context) (int64, error) {
+								return endpoint.DeleteSessionIfTrashed(ctx, codexTrashThread)
+							}
 						}
 					}
+					// Fixture creation and connection setup can outlast the operation budget.
+					// Start it only when the competing requests are ready to run.
+					ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+					var workers sync.WaitGroup
+					defer workers.Wait()
+					defer cancel()
 					// Queue both production APIs at the thread row. Committing the fixture
 					// gate leaves only the API transactions contending with one another.
 					gate, err := writer.BeginTx(ctx, nil)
@@ -95,7 +100,7 @@ func TestCodexTrashConcurrentRestoreAndPurge(t *testing.T) {
 					for _, op := range []string{first, second} {
 						done := make(chan result, 1)
 						results[op] = done
-						workers.Go(func() { n, err := operations[op](); done <- result{n, err} })
+						workers.Go(func() { n, err := operations[op](ctx); done <- result{n, err} })
 						require.Eventually(t, func() bool {
 							var blocked bool
 							err := observer.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock' AND cardinality(pg_blocking_pids(pid))>0)`, "codex_curation_"+op).Scan(&blocked)
@@ -137,6 +142,7 @@ func TestCodexTrashConcurrentRestoreAndPurge(t *testing.T) {
 }
 
 func TestHostedCodexPurgeRetriesBusyPageIdentity(t *testing.T) {
+	t.Parallel()
 	for _, empty := range []bool{false, true} {
 		t.Run(fmt.Sprintf("empty=%v", empty), func(t *testing.T) {
 			f := newHostedFixture(t, "tenant-busy-trash-page")
@@ -148,10 +154,10 @@ func TestHostedCodexPurgeRetriesBusyPageIdentity(t *testing.T) {
 			require.NoError(t, err)
 			dsn, err := appendConnParams(f.dsn, map[string]string{"application_name": "codex_identity_purge"})
 			require.NoError(t, err)
-			pg, err := OpenHosted(dsn, f.schema, f.tenant, false)
+			pg, err := OpenHosted(t.Context(), dsn, f.schema, f.tenant, false)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, pg.Close()) })
-			h, err := newHostedAdapter(pg, f.tenant)
+			h, err := newHostedAdapter(t.Context(), pg, f.tenant)
 			require.NoError(t, err)
 			gate, err := f.runtime.BeginTx(ctx, nil)
 			require.NoError(t, err)

@@ -39,6 +39,22 @@ async function expectSessionLoaded(page: Page, sessionId: string, expectedRows?:
 test.describe("Mixed content rendering", () => {
   test.describe.configure({ timeout: COLD_WEBKIT_TEST_TIMEOUT_MS });
 
+  test("Bash commands get colored spans from the highlighting worker", async ({ page }) => {
+    const workerReady = page.waitForEvent("worker", {
+      predicate: (worker) => /syntax-highlight\.worker/.test(worker.url()),
+    });
+    const sessionId = "test-session-duration-showcase";
+    await page.goto(`/sessions/${sessionId}`);
+    await expectSessionLoaded(page, sessionId);
+
+    const bash = page.locator(".tool-block").filter({ hasText: "go test ./... -count=10" });
+    await bash.locator(".tool-header").click();
+    await expect(bash.locator('.tool-command span[style*="color"]').first()).toBeVisible();
+
+    const worker = await workerReady;
+    expect(await worker.evaluate(() => typeof self.onmessage)).toBe("function");
+  });
+
   test("tool group renders for consecutive tool-only messages", async ({ page }) => {
     const sid = await selectSession(page);
     await expectSessionLoaded(page, sid, MIXED_CONTENT_DISPLAY_ROWS);
@@ -196,8 +212,8 @@ test.describe("Mixed content rendering", () => {
     await expectSessionLoaded(page, sid, MIXED_CONTENT_DISPLAY_ROWS);
 
     // Open block filter dropdown and toggle thinking off
-    await page.locator('button[aria-label="Filter block types"]').click();
-    await page.locator(".block-filter-item").filter({ hasText: "Thinking blocks" }).click();
+    await page.locator(".view-trigger").click();
+    await page.getByRole("menuitemcheckbox", { name: "Thinking blocks", exact: true }).click();
 
     // Thinking blocks should be hidden
     const thinkingBlocks = page.locator(".thinking-block");

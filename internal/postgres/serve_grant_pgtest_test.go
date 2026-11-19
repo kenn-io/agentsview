@@ -16,17 +16,20 @@ import (
 // Serve must still ask for the grant: the rebuild advice would discard the
 // pushed data.
 func TestServeWithoutSchemaUsageAsksForTheGrant(t *testing.T) {
-	pgURL := testPGURL(t)
-	const schema = "agentsview_serve_usage_test"
+	t.Parallel()
+	const schema = usageTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	const role = "agentsview_serve_no_usage"
 	const rolePassword = "agentsview_serve_no_usage_pw"
 
-	admin, err := Open(pgURL, schema, true)
+	admin, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open admin")
 	t.Cleanup(func() { _ = admin.Close() })
-	_, err = admin.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
-	require.NoError(t, EnsureSchema(t.Context(), admin, schema))
+	if !takeFreshSchemaCopy(t, pgURL, schema) {
+		_, err = admin.ExecContext(t.Context(), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
+		require.NoError(t, err, "drop schema")
+		require.NoError(t, EnsureSchema(t.Context(), admin, schema))
+	}
 
 	_, _ = admin.ExecContext(t.Context(), `DROP OWNED BY `+role)
 	_, _ = admin.ExecContext(t.Context(), `DROP ROLE IF EXISTS `+role)
@@ -42,13 +45,13 @@ func TestServeWithoutSchemaUsageAsksForTheGrant(t *testing.T) {
 	serveURL, err := url.Parse(pgURL)
 	require.NoError(t, err)
 	serveURL.User = url.UserPassword(role, rolePassword)
-	store, err := NewStore(serveURL.String(), schema, true)
+	store, err := NewStore(t.Context(), serveURL.String(), schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 
 	err = prepareServeStore(t.Context(), store, schema)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), `GRANT USAGE ON SCHEMA "agentsview_serve_usage_test" TO <serve role>;`)
+	assert.Contains(t, err.Error(), `GRANT USAGE ON SCHEMA "`+schema+`" TO <serve role>;`)
 	assert.NotContains(t, err.Error(), "Drop and recreate")
 }

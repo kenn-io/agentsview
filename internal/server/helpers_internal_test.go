@@ -18,7 +18,6 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/service"
@@ -51,7 +50,7 @@ func testServer(
 		Machine: "test",
 	})
 	opts = append([]Option{
-		WithReplicas(postgres.Backend{}, clickhouse.Backend{}), WithMirror(duckdb.Mirror{}),
+		WithReplicas(postgres.Backend{}, clickhouse.Backend{}),
 	}, opts...)
 	return New(cfg, database, engine, opts...)
 }

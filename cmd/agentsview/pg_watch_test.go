@@ -870,3 +870,33 @@ func TestPGPusherFullVectorRepairNarrowsToDeferredSessions(t *testing.T) {
 		{scoped: true},
 	}, got)
 }
+
+// TestPusherKeepsRewriteRequestUntilAFullPushStarts pins how a --full
+// watch asks for every session to be rewritten: incremental pushes do not
+// carry the request, a full push that never started keeps it, and once a
+// full push starts, later full pushes rewrite only what changed.
+func TestPusherKeepsRewriteRequestUntilAFullPushStarts(t *testing.T) {
+	steps := []struct {
+		full bool
+		err  error
+	}{
+		{full: false},
+		{full: true, err: storage.PushNotStartedError{Err: errors.New("mirror unreachable")}},
+		{full: true, err: errors.New("session failed")},
+		{full: true},
+	}
+	// A failed push drops its connection; every reconnect gets the same target.
+	target := &fakeTarget{}
+	pusher, _ := newTestReplicaPusher(target, target, target, target)
+	pusher.vectors.rewritePending = true
+	for _, step := range steps {
+		target.pushErr = step.err
+		_ = pusher.push(t.Context(), reasonChange, step.full)
+	}
+	require.Len(t, target.pushOpts, len(steps))
+	var rewrite []bool
+	for _, opts := range target.pushOpts {
+		rewrite = append(rewrite, opts.RewriteUnchanged)
+	}
+	assert.Equal(t, []bool{false, true, true, false}, rewrite)
+}

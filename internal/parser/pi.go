@@ -16,14 +16,15 @@ import (
 )
 
 func (p *piProvider) parseSession(
-	path, project, machine string,
+	ctx context.Context, path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	return parsePiLikeSession(
-		path, project, machine, p.Def.Type, p.Def.IDPrefix,
+		ctx, path, project, machine, p.Def.Type, p.Def.IDPrefix,
 	)
 }
 
 func parsePiLikeSession(
+	ctx context.Context,
 	path, project, machine string,
 	agent AgentType,
 	idPrefix string,
@@ -39,7 +40,7 @@ func parsePiLikeSession(
 	}
 	defer f.Close()
 
-	lr := newLineReader(f, maxLineSize)
+	lr := newLineReaderContext(ctx, f, maxLineSize)
 	defer releaseLineReader(lr)
 
 	// --- Parse session header (first non-whitespace line) ---
@@ -86,7 +87,7 @@ func parsePiLikeSession(
 
 	// If project was not passed in, derive from cwd.
 	if project == "" && cwd != "" {
-		project = ExtractProjectFromCwd(cwd)
+		project = ExtractProjectFromCwdWithBranchContext(ctx, cwd, "")
 	}
 
 	// OMP's directory layout identifies subagents independently of whether
@@ -209,7 +210,7 @@ func parsePiLikeSession(
 			case "assistant":
 				sourceParentUUID := resolveVisibleAncestor(parentID)
 				msg := parsePiAssistantMessage(
-					line, ordinal, currentModel, currentEffort,
+					ctx, line, ordinal, currentModel, currentEffort,
 					entryID, sourceParentUUID, cwd,
 				)
 				if msg == nil {
@@ -359,6 +360,7 @@ func parsePiLikeSession(
 	}
 
 	sess := &ParsedSession{
+		MalformedLines:   lr.SkippedLines(),
 		ID:               idPrefix + sessionID,
 		Project:          project,
 		Machine:          machine,
@@ -472,6 +474,7 @@ func parsePiUserMessage(
 // fallbackEffort is the most recent thinking_level_change value, used
 // when this message has no inline thinkingLevel.
 func parsePiAssistantMessage(
+	ctx context.Context,
 	line string, ordinal int, fallbackModel, fallbackEffort, sourceUUID,
 	sourceParentUUID, sessionCwd string,
 ) *ParsedMessage {
@@ -523,7 +526,7 @@ func parsePiAssistantMessage(
 					Category:  NormalizeToolCategory(name),
 					InputJSON: argsRaw,
 					SkillName: inferPiSkillName(
-						name, argsRaw, sessionCwd,
+						ctx, name, argsRaw, sessionCwd,
 					),
 					Rendering: rendering,
 				})
@@ -566,7 +569,7 @@ func parsePiAssistantMessage(
 // inflate the Read tool count and leave the Skills dimension empty.
 // Relative SKILL.md paths resolve against the session working directory
 // (sessionCwd).
-func inferPiSkillName(toolName, inputJSON, sessionCwd string) string {
+func inferPiSkillName(ctx context.Context, toolName, inputJSON, sessionCwd string) string {
 	if isCursorSkillReadTool(toolName) {
 		// Pi's read input carries no cwd/workdir key, so
 		// inferSkillNameFromJSONPaths can't resolve relative SKILL.md
@@ -578,14 +581,14 @@ func inferPiSkillName(toolName, inputJSON, sessionCwd string) string {
 				return skill
 			}
 			if fp != "" && sessionCwd != "" {
-				if name := skillNameFromPath(context.Background(), fp, sessionCwd); name != "" {
+				if name := skillNameFromPath(ctx, fp, sessionCwd); name != "" {
 					return name
 				}
 			}
 		}
-		return inferSkillNameFromJSONPaths(context.Background(), inputJSON)
+		return inferSkillNameFromJSONPaths(ctx, inputJSON)
 	}
-	return inferCodexSkillNameWithBase(context.Background(), toolName, inputJSON, sessionCwd)
+	return inferCodexSkillNameWithBase(ctx, toolName, inputJSON, sessionCwd)
 }
 
 // piSkillURISkillName extracts the decoded skill name from the
@@ -694,6 +697,11 @@ func applyPiUsage(pm *ParsedMessage, usage gjson.Result) {
 	pm.ContextTokens = input + cacheRead + cacheCreate
 	pm.HasContextTokens = inputField.Exists() ||
 		cacheReadField.Exists() || cacheWriteField.Exists()
+	// Pi computes usage.cost.total from its model registry; custom models
+	// have zero rates and record $0.
+	if cost, ok := recordedCostDollars(usage.Get("cost.total")); ok {
+		pm.SetRecordedCost(cost)
+	}
 }
 
 // parsePiToolResultMessage parses a message entry with role="toolResult".

@@ -38,7 +38,7 @@ func TestUsageOnlyImportSkipsUnchangedTitledCodexThread(t *testing.T) {
 			}
 			require.NoError(t, os.WriteFile(filepath.Join(home, parser.CodexSessionIndexFilename),
 				[]byte(`{"id":"`+id+`","thread_name":"Thread title"}`+"\n"), 0o600))
-			targets, err := ResolveTargets(config.Config{
+			targets, err := ResolveTargets(t.Context(), config.Config{
 				AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
 			})
 			require.NoError(t, err)

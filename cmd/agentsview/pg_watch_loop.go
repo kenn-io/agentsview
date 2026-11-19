@@ -205,7 +205,7 @@ func (l *pushLoop) run(ctx context.Context, wake <-chan struct{}) {
 		case <-ctx.Done():
 			// Final best-effort flush with a fresh context so the
 			// push is not immediately cancelled.
-			flushCtx, cancel := l.flushContext()
+			flushCtx, cancel := l.flushContext(ctx)
 			defer cancel()
 			l.enqueueShutdownTask()
 			l.runNextTask(flushCtx, true)
@@ -357,11 +357,13 @@ func completePushWaiters(waiters []chan error, err error) {
 	}
 }
 
-// flushContext returns the context for work after shutdown starts: fresh, so
-// it is not already cancelled, and bounded by flushTimeout when set.
-func (l *pushLoop) flushContext() (context.Context, context.CancelFunc) {
+// flushContext returns the context for work after shutdown starts: detached
+// from ctx's cancellation so it is not already cancelled, keeping ctx's
+// values, and bounded by flushTimeout when set.
+func (l *pushLoop) flushContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	detached := context.WithoutCancel(ctx)
 	if l.flushTimeout > 0 {
-		return context.WithTimeout(context.Background(), l.flushTimeout)
+		return context.WithTimeout(detached, l.flushTimeout)
 	}
-	return context.WithCancel(context.Background())
+	return context.WithCancel(detached)
 }

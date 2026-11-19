@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -28,19 +29,19 @@ func newShapeOnlyTestSingleFileSourceSet(root, livePath string) singleFileSource
 				return singleFileMatch{Path: path}, true
 			},
 		),
-		WithFileLookup(func(_, rawID string) (singleFileMatch, bool) {
+		WithFileLookup(func(_ context.Context, _, rawID string) (singleFileMatch, bool) {
 			if rawID != "" && IsRegularFile(livePath) {
 				return singleFileMatch{Path: livePath}, true
 			}
 			return singleFileMatch{}, false
 		}),
 		WithFileFingerprint(
-			func(singleFileSource) (SourceFingerprint, error) {
+			func(context.Context, singleFileSource) (SourceFingerprint, error) {
 				return SourceFingerprint{}, nil
 			},
 		),
 		WithFileParse(
-			func(singleFileSource, ParseRequest) ([]ParseResult, []string, error) {
+			func(context.Context, singleFileSource, ParseRequest) ([]ParseResult, []string, error) {
 				return nil, nil, nil
 			},
 		),
@@ -105,13 +106,13 @@ func TestSingleFileWatchRootsDropsParserOnlyGlobs(t *testing.T) {
 				return singleFileMatch{}, false
 			},
 		),
-		WithFileLookup(func(string, string) (singleFileMatch, bool) {
+		WithFileLookup(func(context.Context, string, string) (singleFileMatch, bool) {
 			return singleFileMatch{}, false
 		}),
-		WithFileFingerprint(func(singleFileSource) (SourceFingerprint, error) {
+		WithFileFingerprint(func(context.Context, singleFileSource) (SourceFingerprint, error) {
 			return SourceFingerprint{}, nil
 		}),
-		WithFileParse(func(singleFileSource, ParseRequest) ([]ParseResult, []string, error) {
+		WithFileParse(func(context.Context, singleFileSource, ParseRequest) ([]ParseResult, []string, error) {
 			return nil, nil, nil
 		}),
 	)

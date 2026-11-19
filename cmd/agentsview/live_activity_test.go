@@ -141,7 +141,7 @@ func TestStartLiveActivityRunTracksSyncAndWaitsForStop(t *testing.T) {
 			trackedSync,
 			nil,
 		)
-		stop := startLiveActivityRun(runCtx, runCancel, poller)
+		stop := startLiveActivityRun(runCtx, runCancel, poller.Run)
 		defer func() {
 			close(release)
 			stop()

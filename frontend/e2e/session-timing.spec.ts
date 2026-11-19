@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 
-// The served fixture includes measured Bash and closed-child Task execution plus unknown Read calls.
+// The served fixture includes measured Bash and closed-child Task execution plus untimed Read calls.
 
 const SHOWCASE = "test-session-duration-showcase";
 const SHOWCASE_WORKTREE =
@@ -51,7 +51,7 @@ test.describe("Session Vital Signs", () => {
     await expect(page.locator(".v-section .v-h", { hasText: "Calls" })).toBeVisible();
   });
 
-  test("shows measured execution and unknown calls with horizontal activity tracks", async ({
+  test("shows measured execution and untimed calls with horizontal activity tracks", async ({
     page,
   }, testInfo) => {
     await gotoShowcase(page);
@@ -88,7 +88,8 @@ test.describe("Session Vital Signs", () => {
     const read = page
       .locator(".calls .call")
       .filter({ has: page.locator(".cn", { hasText: "Read" }) });
-    await expect(read.locator(".cd")).toHaveText(["unknown", "unknown", "unknown"]);
+    // Untimed calls leave the duration cell empty rather than "unknown".
+    await expect(read.locator(".cd")).toHaveText(["", "", ""]);
     const task = page
       .locator(".calls .call")
       .filter({ has: page.locator(".cn", { hasText: "Task" }) });
@@ -325,6 +326,19 @@ test.describe("Session Vital Signs", () => {
     await expect(page.locator(".filter-chip")).toHaveCount(0);
     await expect(taskRow).not.toHaveClass(/\bdimmed\b/);
     await expect(bashRow).not.toHaveClass(/\bactive\b/);
+  });
+
+  test("Time spent lists only categories with timing", async ({ page }) => {
+    await gotoShowcase(page);
+
+    // Read has only untimed calls in the showcase: it gets no Time spent
+    // row and no "Not measured" note.
+    const timeSpent = page.locator(".v-section").filter({
+      has: page.locator(".v-h", { hasText: "Time spent" }),
+    });
+    // Rows run longest first: Task measured 2m, Bash 20s.
+    await expect(timeSpent.locator(".agg-name")).toHaveText(["Task", "Bash"]);
+    await expect(timeSpent).not.toContainText("Not measured");
   });
 
   test("clicking a slow call scrolls the conversation", async ({ page }) => {

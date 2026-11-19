@@ -9,8 +9,8 @@ import (
 // distinct agent with the kilo: ID prefix. The OpenCode-format provider
 // owns parsing and relabels results through relabelOpenCodeSessionAsKilo.
 
-func ListKiloSessionMeta(dbPath string) ([]OpenCodeSessionMeta, error) {
-	metas, err := ListOpenCodeSessionMeta(dbPath)
+func ListKiloSessionMeta(ctx context.Context, dbPath string) ([]OpenCodeSessionMeta, error) {
+	metas, err := ListOpenCodeSessionMeta(ctx, dbPath)
 	if err != nil {
 		return nil, err
 	}

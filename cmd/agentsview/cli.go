@@ -12,10 +12,12 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/importer"
 	"go.kenn.io/agentsview/internal/server"
 	"golang.org/x/term"
 )
@@ -26,8 +28,6 @@ const (
 	groupUsage = "usage"
 	groupMeta  = "meta"
 )
-
-const dataVersionTooNewExitCode = 3
 
 type cliExitError struct {
 	code   int
@@ -60,6 +60,9 @@ func withSilentExitCode(err error, code int) error {
 func exitCodeFromError(err error) int {
 	if exitErr, ok := errors.AsType[*cliExitError](err); ok {
 		return exitErr.code
+	}
+	if diagnostic, ok := errors.AsType[*cliDiagnosticError](err); ok && diagnostic.code != 0 {
+		return diagnostic.code
 	}
 	return 1
 }
@@ -109,6 +112,7 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newServeCommand())
 	root.AddCommand(newDaemonCommand())
 	root.AddCommand(newSyncCommand())
+	root.AddCommand(newWhyCommand())
 	root.AddCommand(newSyncWorkerCommand())
 	root.AddCommand(newPruneCommand())
 	root.AddCommand(newDBCommand())
@@ -125,7 +129,6 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newPGCommand())
 	root.AddCommand(newRawSyncCommand())
 	root.AddCommand(newArchiveCommand())
-	root.AddCommand(newDuckDBCommand())
 	root.AddCommand(newClickHouseCommand())
 	root.AddCommand(newEmbeddingsCommand())
 	root.AddCommand(newSessionCommand())
@@ -133,12 +136,15 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newMCPCommand())
 	root.AddCommand(newRecallCommand())
 	root.AddCommand(newInsightCommand())
+	root.AddCommand(newKataCommand())
 	root.AddCommand(newFrictionCommand())
+	root.AddCommand(newDiagnosticsCommand())
 	root.AddCommand(newStatsCommand())
 	root.AddCommand(newParseDiffCommand())
 	root.AddCommand(newClassifierCommand())
 	root.AddCommand(newSecretsCommand())
 	root.AddCommand(newSkillsCommand())
+	root.AddCommand(newAgentCommand())
 	root.AddCommand(newMemoryCommand())
 	root.AddCommand(newSigningCommand())
 	root.AddCommand(newDoctorCommand())
@@ -146,6 +152,9 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newAgentsCommand())
 	root.AddCommand(newOpenAPICommand())
 	root.AddCommand(newRemoteSyncCommand())
+	root.AddCommand(newGitHookCommand())
+	groupCommands(root)
+	root.AddCommand(newCLISearchCommand(root))
 
 	defaultHelp := root.HelpFunc()
 	root.SetHelpFunc(func(cmd *cobra.Command, args []string) {
@@ -180,6 +189,8 @@ func newServeCommandWithDaemonDeps(deps daemonCommandDeps) *cobra.Command {
 			"If a compatible server is already running, serve reports its URL and exits\n" +
 			"with status 1 so a service manager retries; --background exits with status 0.\n" +
 			"Stopping the server also stops its background sync and file watchers.",
+		Example: "  agentsview serve --no-browser\n" +
+			"  agentsview serve --background",
 		GroupID:      groupCore,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
@@ -200,17 +211,17 @@ func newServeCommandWithDaemonDeps(deps daemonCommandDeps) *cobra.Command {
 				)
 				return nil
 			}
-			runServe(cmd.Context(), mustLoadConfig(cmd), serveOptions{
+			return runServeLoop(cmd.Context(), mustLoadConfig(cmd), serveOptions{
 				ReplaceDaemon:   replace,
 				NoSyncExplicit:  cmd.Flags().Changed("no-sync"),
 				SkipInitialSync: skipInitialSync,
 				BasePath:        basePath,
 				Pprof:           pprofEnabled,
+				RestartArgs:     serveRestartArgs(cmd.Flags()),
 				ReloadConfig: func() (config.Config, error) {
 					return config.LoadPFlags(cmd.Flags())
 				},
-			}, restartPort)
-			return nil
+			}, restartPort, runServe)
 		},
 	}
 	cmd.Flags().BoolVar(
@@ -245,13 +256,7 @@ func newServeCommandWithDaemonDeps(deps daemonCommandDeps) *cobra.Command {
 		"Start serving before the initial sync",
 	)
 	_ = cmd.Flags().MarkHidden("skip-initial-sync")
-	cmd.Flags().BoolVar(
-		&pprofEnabled,
-		"pprof",
-		false,
-		"Serve net/http/pprof under /debug/pprof (developer use)",
-	)
-	_ = cmd.Flags().MarkHidden("pprof")
+	addPprofFlag(cmd, &pprofEnabled)
 	cmd.Flags().IntVar(
 		&restartPort,
 		"restart-port",
@@ -264,6 +269,24 @@ func newServeCommandWithDaemonDeps(deps daemonCommandDeps) *cobra.Command {
 	cmd.AddCommand(newServeStopCommand())
 	cmd.AddCommand(newServeRestartCommand(deps))
 	return cmd
+}
+
+func serveRestartArgs(flags *pflag.FlagSet) []string {
+	var args []string
+	flags.Visit(func(flag *pflag.Flag) {
+		switch flag.Name {
+		case "background", "replace", "check-data-version", "port", "restart-port":
+			return
+		}
+		args = append(args, "--"+flag.Name+"="+flag.Value.String())
+	})
+	return args
+}
+
+func serveReplacementArgs(args []string, current config.Config) []string {
+	return slices.DeleteFunc(slices.Clone(args), func(arg string) bool {
+		return current.AuthSettingsSaved && strings.HasPrefix(arg, "--require-auth=")
+	})
 }
 
 func applyServeRestartPort(cfg config.Config, port int) (config.Config, int) {
@@ -285,12 +308,15 @@ func runServeDataVersionCheck(ctx context.Context, cfg config.Config) error {
 
 func newServeStatusCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:          "status",
-		Short:        "Show whether a server is running and where to reach it",
+		Use:   "status",
+		Short: "Show whether a server is running and where to reach it",
+		Long: "Show whether a server for this data directory is running and print its URL. " +
+			"The result is human text, including when no server is running; there is no JSON status flag.",
+		Example:      "  agentsview serve status",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runServeStatus(mustLoadConfig(cmd))
+			runServeStatus(cmd.Context(), mustLoadConfig(cmd))
 		},
 	}
 }
@@ -301,8 +327,10 @@ func newServeStopCommand() *cobra.Command {
 		Short: "Stop the server, including sync and file watchers",
 		Long: "Stop the server and its background work, including a server started\n" +
 			"by `agentsview daemon start` or automatically by a CLI command.\n\n" +
-			"This also stops read-only PostgreSQL and DuckDB servers for the data\n" +
-			"directory. Use `agentsview daemon stop` to stop only the writable server.",
+			"This also stops read-only PostgreSQL and ClickHouse servers for the data\n" +
+			"directory.\n" +
+			"Use `agentsview daemon stop` to stop only the writable server.",
+		Example:      "  agentsview serve stop",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
@@ -318,11 +346,12 @@ func newServeRestartCommand(deps daemonCommandDeps) *cobra.Command {
 		Long: "Restart only the writable SQLite background daemon using settings " +
 			"from config.toml.\n\n" +
 			"Unlike `agentsview serve stop`, this command intentionally leaves " +
-			"read-only PostgreSQL and DuckDB servers running.",
+			"read-only PostgreSQL and ClickHouse servers running.",
+		Example:      "  agentsview serve restart",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runDaemonRestart(cmd.OutOrStdout(), deps)
+			return runDaemonRestart(cmd.Context(), cmd.OutOrStdout(), deps)
 		},
 	}
 }
@@ -330,8 +359,12 @@ func newServeRestartCommand(deps daemonCommandDeps) *cobra.Command {
 func newOpenAPICommand() *cobra.Command {
 	var yamlOutput bool
 	cmd := &cobra.Command{
-		Use:          "openapi",
-		Short:        "Print OpenAPI 3.1 schema",
+		Use:   "openapi",
+		Short: "Print OpenAPI 3.1 schema",
+		Long: "Print the HTTP API's OpenAPI 3.1 schema from this binary without contacting a running server. " +
+			"JSON is the default.",
+		Example: "  agentsview openapi > openapi.json\n" +
+			"  agentsview openapi --yaml > openapi.yaml",
 		GroupID:      groupMeta,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
@@ -366,7 +399,7 @@ func newSyncCommand() *cobra.Command {
 	return newSyncCommandWithRunner(runSync)
 }
 
-func newSyncCommandWithRunner(run func(SyncConfig)) *cobra.Command {
+func newSyncCommandWithRunner(run func(context.Context, SyncConfig)) *cobra.Command {
 	var cfg SyncConfig
 	cmd := &cobra.Command{
 		Use:   "sync",
@@ -374,9 +407,12 @@ func newSyncCommandWithRunner(run func(SyncConfig)) *cobra.Command {
 		Long: "Sync session data through the shared server, starting it in the\n" +
 			"background if needed. The server includes the web UI and continues\n" +
 			"running after this command exits. Stop it with `agentsview daemon stop`.\n\n" +
+			"A daemon that is already running applies only the changes its file\n" +
+			"watchers collected, without rescanning every session source. Pass\n" +
+			"--rescan to rescan them all.\n\n" +
 			"Incremental local-only sync waits if the default daemon is busy, with\n" +
 			"status and Ctrl+C cancellation. For a one-shot offline run,\n" +
-			"stop the daemon first, then use `AGENTSVIEW_NO_DAEMON=1 agentsview sync`.\n\n" +
+			"stop the daemon first, then use `AGENTSVIEW_NO_DAEMON=1 agentsview source sync`.\n\n" +
 			"With no --host, sync runs the local sync and then fans out to\n" +
 			"every host listed in the [[remote_hosts]] array in config.toml,\n" +
 			"syncing each over its transport, HTTP or SSH. A failure on one\n" +
@@ -396,12 +432,17 @@ func newSyncCommandWithRunner(run func(SyncConfig)) *cobra.Command {
 			return nil
 		},
 		Run: func(cmd *cobra.Command, args []string) {
-			run(cfg)
+			run(cmd.Context(), cfg)
 		},
 	}
 	cmd.Flags().BoolVar(
 		&cfg.Full, "full", false,
 		"Force a full resync regardless of data version",
+	)
+	cmd.Flags().BoolVar(
+		&cfg.Rescan, "rescan", false,
+		"Rescan every session source instead of syncing only the changes "+
+			"a running daemon's file watchers collected",
 	)
 	cmd.Flags().StringVar(
 		&cfg.Host, "host", "",
@@ -469,7 +510,7 @@ func newPruneCommandWithRunner(run func(context.Context, PruneConfig)) *cobra.Co
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&agent, "agent", "", "Exact agent name; includes matching trash and parents unless needed by surviving descendants")
+	cmd.Flags().StringVar(&agent, "agent", "", "Exact agent name; includes matching trash")
 	cmd.Flags().StringVar(&project, "project", "", "Sessions whose project contains this substring")
 	cmd.Flags().IntVar(&maxMessages, "max-messages", -1, "Sessions with at most N user messages")
 	cmd.Flags().StringVar(&before, "before", "", "Sessions that ended before this date (YYYY-MM-DD)")
@@ -482,8 +523,12 @@ func newPruneCommandWithRunner(run func(context.Context, PruneConfig)) *cobra.Co
 func newUpdateCommand() *cobra.Command {
 	var cfg UpdateConfig
 	cmd := &cobra.Command{
-		Use:          "update",
-		Short:        "Check for and install updates",
+		Use:   "update",
+		Short: "Check for and install updates",
+		Long: "Check for a newer release and, for supported direct installations, install it after confirmation. " +
+			"Package-managed installations must be upgraded through their package manager.",
+		Example: "  agentsview update --check\n" +
+			"  agentsview update",
 		GroupID:      groupMeta,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
@@ -508,8 +553,8 @@ func newTokenUseCommand() *cobra.Command {
 		GroupID:      groupData,
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
-		Run: func(cmd *cobra.Command, args []string) {
-			runTokenUse(cmd.Context(), args)
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runTokenUse(cmd, args)
 		},
 	}
 }
@@ -519,28 +564,36 @@ func newImportCommand() *cobra.Command {
 	var replace []string
 	var syncBrowser bool
 	cmd := &cobra.Command{
-		Use:          "import --type <type> <path> | import --type claude-ai --sync",
-		Short:        "Import conversations",
+		Use:   "import --type <type> <path> | import --type <platform> --sync",
+		Short: "Import conversations",
+		Long: "Import an exported conversation file into the local archive using an explicit --type. " +
+			"Supported platforms (" + browserSyncNames() + ") can instead use --type <platform> --sync with the configured Chrome integration.",
 		GroupID:      groupData,
 		SilenceUsage: true,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if syncBrowser {
-				if importType != "claude-ai" || len(replace) > 0 {
-					return errors.New("--sync requires --type claude-ai and cannot use --replace")
+				if _, ok := importer.LookupBrowserPlatform(importType); !ok || len(replace) > 0 {
+					return fmt.Errorf("--sync requires --type %s and cannot use --replace", browserSyncNames())
 				}
 				return cobra.NoArgs(cmd, args)
+			}
+			// Grok web chats have no file importer, so name the one way in
+			// instead of reporting an unknown type.
+			if importType == "grok-web" {
+				return errors.New("grok-web imports only through Chrome: use --type grok-web --sync")
 			}
 			return cobra.ExactArgs(1)(cmd, args)
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if syncBrowser {
-				return syncClaudeAIChrome(cmd.Context())
+				platform, _ := importer.LookupBrowserPlatform(importType)
+				return syncChrome(cmd.Context(), platform)
 			}
-			return importSessions(ImportConfig{Type: importType, Path: args[0], Replace: replace})
+			return importSessions(cmd.Context(), ImportConfig{Type: importType, Path: args[0], Replace: replace})
 		},
 	}
-	cmd.Flags().BoolVar(&syncBrowser, "sync", false, "Sync Claude.ai through Chrome")
-	cmd.Flags().StringVar(&importType, "type", "", "Import type: claude-ai, chatgpt, gemini-apps")
+	cmd.Flags().BoolVar(&syncBrowser, "sync", false, "Sync conversations through Chrome ("+browserSyncNames()+")")
+	cmd.Flags().StringVar(&importType, "type", "", "Import type: claude-ai, chatgpt, gemini-apps; with --sync, also grok-web")
 	cmd.Flags().StringArrayVar(&replace, "replace", nil, "Session ID whose archived messages this import may replace when the default import refuses them; repeatable (claude-ai, chatgpt)")
 	_ = cmd.MarkFlagRequired("type")
 	return cmd
@@ -548,8 +601,10 @@ func newImportCommand() *cobra.Command {
 
 func newProjectsCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:          "projects",
-		Short:        "List projects with session counts",
+		Use:   "projects",
+		Short: "List projects with session counts",
+		Long: "List archived projects and their session counts. " +
+			"Use a returned project name with session list --project or analytics filters to narrow later queries.",
 		GroupID:      groupCore,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
@@ -569,13 +624,15 @@ func newHealthCommand() *cobra.Command {
 		Long: "Without arguments, lists the most recent " +
 			"sessions with grade and outcome columns. " +
 			"With a session ID, prints detailed signal " +
-			"counts for that session.",
+			"counts for that session.\n\n" +
+			"The list includes one-shot and automated sessions. " +
+			"Use a full ID from session list when a displayed short ID is ambiguous.",
 		GroupID:      groupCore,
 		SilenceUsage: true,
 		Args:         cobra.MaximumNArgs(1),
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg.JSON = outputFormat(cmd) == "json"
-			runHealth(cmd, args, cfg)
+			return runHealth(cmd, args, cfg)
 		},
 	}
 	registerFormatFlags(cmd.Flags())
@@ -599,20 +656,28 @@ func newUsageCommand() *cobra.Command {
 	cmd.AddCommand(newUsageDailyCommand())
 	cmd.AddCommand(newUsageStatuslineCommand())
 	cmd.AddCommand(newUsageCursorCommand())
+	cmd.AddCommand(newUsageGrokCommand())
 	return cmd
 }
 
 func newUsageDailyCommand() *cobra.Command {
 	var cfg UsageDailyConfig
 	cmd := &cobra.Command{
-		Use:          "daily",
-		Short:        "Daily cost summary",
+		Use:   "daily",
+		Short: "Daily cost summary",
+		Long: "Summarize daily token usage and cost, optionally broken down by model. " +
+			"--since and --until accept Nd, Nh, YYYY-MM-DD, or RFC3339; a relative --since is measured back from --until when supplied. " +
+			"--offline reads the local archive with fallback pricing. " +
+			"Plan-only sessions and partly captured sessions may be reported separately from priced token totals.",
+		Example: "  agentsview report usage daily --since 28d --breakdown --json\n" +
+			"  agentsview report usage daily --since 2026-10-01 --until 2026-10-07 --timezone UTC --offline --json",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg.JSON = outputFormat(cmd) == "json"
-			cfg.ctx = cmd.Context()
-			runUsageDaily(cfg)
+			cfg.OutputWriter = cmd.OutOrStdout()
+			cfg.ErrorWriter = cmd.ErrOrStderr()
+			return runUsageDaily(cmd.Context(), cfg)
 		},
 	}
 	registerFormatFlags(cmd.Flags())
@@ -630,14 +695,20 @@ func newUsageDailyCommand() *cobra.Command {
 func newUsageStatuslineCommand() *cobra.Command {
 	var cfg UsageStatuslineConfig
 	cmd := &cobra.Command{
-		Use:          "statusline",
-		Short:        "One-line cost summary for today",
+		Use:   "statusline",
+		Short: "One-line cost summary for today",
+		Long: "Print today's cost in one short line, or a JSON document with the date and exact microdollar amount. " +
+			"Today follows the local system timezone. " +
+			"--offline reads the local archive with fallback pricing.",
+		Example: "  agentsview report usage statusline\n" +
+			"  agentsview report usage statusline --agent codex --json",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg.JSON = outputFormat(cmd) == "json"
-			cfg.ctx = cmd.Context()
-			runUsageStatusline(cfg)
+			cfg.OutputWriter = cmd.OutOrStdout()
+			cfg.ErrorWriter = cmd.ErrOrStderr()
+			return runUsageStatusline(cmd.Context(), cfg)
 		},
 	}
 	registerFormatFlags(cmd.Flags())
@@ -665,14 +736,20 @@ func newActivityCommand() *cobra.Command {
 func newActivityReportCommand() *cobra.Command {
 	var cfg ActivityReportConfig
 	cmd := &cobra.Command{
-		Use:          "report",
-		Short:        "Activity report over a date range",
+		Use:   "report",
+		Short: "Activity report over a date range",
+		Long: "Report activity totals, peak concurrency, breakdowns, and a page of sessions. " +
+			"Use --preset day, week, or month with an optional --date YYYY-MM-DD; custom ranges require --preset custom and RFC3339 --from/--to bounds. " +
+			"JSON includes the detailed bucket timeline and session continuation values. " +
+			"For daemon paging, keep the returned report ID and cursor together so subsequent pages use the same report generation. " +
+			"--offline reads local archived data with fallback pricing.",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg.JSON = outputFormat(cmd) == "json"
-			cfg.ctx = cmd.Context()
-			runActivityReport(cfg)
+			cfg.OutputWriter = cmd.OutOrStdout()
+			cfg.ErrorWriter = cmd.ErrOrStderr()
+			return runActivityReport(cmd.Context(), cfg)
 		},
 	}
 	cmd.Flags().StringVar(&cfg.Preset, "preset", "", "Range preset: day, week, month, custom")
@@ -706,129 +783,33 @@ func newActivityReportCommand() *cobra.Command {
 }
 
 func newPGCommand() *cobra.Command {
-	return newReplicaCommand(
+	cmd := newReplicaCommand(
 		pgReplica{}, newPGVectorsCommand(), newPGServiceCommand(),
 		newPGHostedProvisionCommand(), newPGRawReparseCommand(),
 	)
+	cmd.Long = "Mirror archived SQLite data to PostgreSQL and serve the mirror through a read-only API. " +
+		"Configure a PostgreSQL target before pushing or inspecting status. " +
+		"Mirror reads do not ingest local provider sources."
+	return cmd
 }
 
 func newClickHouseCommand() *cobra.Command {
-	return newReplicaCommand(clickhouse.Backend{}, newClickHouseServiceCommand())
-}
-
-func newDuckDBCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:          "duckdb",
-		Short:        "DuckDB sync and serve commands",
-		GroupID:      groupData,
-		SilenceUsage: true,
-		Args:         cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmd.Help()
-		},
-	}
-	cmd.AddCommand(newDuckDBPushCommand())
-	cmd.AddCommand(newDuckDBStatusCommand())
-	cmd.AddCommand(newDuckDBServeCommand())
-	cmd.AddCommand(newDuckDBQuackCommand())
+	cmd := newReplicaCommand(clickhouse.Backend{}, newClickHouseServiceCommand())
+	cmd.Long = "Mirror local archived data to ClickHouse and serve read-only queries against that mirror. " +
+		"Configure a ClickHouse target before push, status, or serving."
 	return cmd
 }
 
-func newDuckDBPushCommand() *cobra.Command {
-	var cfg DuckDBPushConfig
-	cmd := &cobra.Command{
-		Use:          "push",
-		Short:        "Push local data to DuckDB",
-		SilenceUsage: true,
-		Args:         cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
-			runDuckDBPush(cfg)
-		},
-	}
-	cmd.Flags().BoolVar(&cfg.Full, "full", false, "Force full local resync and DuckDB push")
-	cmd.Flags().StringVar(&cfg.ProjectsFlag, "projects", "", "Comma-separated list of projects to push (inclusive)")
-	cmd.Flags().StringVar(&cfg.ExcludeProjects, "exclude-projects", "", "Comma-separated list of projects to exclude from push")
-	cmd.Flags().BoolVar(&cfg.AllProjects, "all-projects", false, "Ignore configured project filters for this run")
-	cmd.Flags().BoolVar(&cfg.Watch, "watch", false, "Continue watching local files and pushing changes")
-	cmd.Flags().DurationVar(&cfg.Debounce, "debounce", defaultWatchDebounce, "Coalesce window after a change before pushing (--watch only)")
-	cmd.Flags().DurationVar(&cfg.Interval, "interval", defaultWatchInterval, "Periodic floor push interval (--watch only)")
-	return cmd
-}
-
-func newDuckDBStatusCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:          "status",
-		Short:        "Show DuckDB sync status",
-		SilenceUsage: true,
-		Args:         cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
-			runDuckDBStatus()
-		},
-	}
-}
-
-func newDuckDBServeCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:          "serve",
-		Short:        "Serve from DuckDB (read-only)",
-		SilenceUsage: true,
-		Args:         cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			appCfg, basePath, err := loadDuckDBServeConfig(cmd)
-			if err != nil {
-				fatal("%v", err)
-			}
-			runDuckDBServe(appCfg, basePath)
-			return nil
-		},
-	}
-	cmd.Flags().String(
-		"base-path",
-		"",
-		"URL prefix for reverse-proxy subpath (e.g. /agentsview)",
+// addPprofFlag registers the hidden --pprof flag shared by every command
+// that serves the web UI and API.
+func addPprofFlag(cmd *cobra.Command, enabled *bool) {
+	cmd.Flags().BoolVar(
+		enabled,
+		"pprof",
+		false,
+		"Serve net/http/pprof under /debug/pprof (developer use)",
 	)
-	config.RegisterServePFlags(cmd.Flags())
-	return cmd
-}
-
-func newDuckDBQuackCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:          "quack",
-		Short:        "Quack remote protocol commands",
-		SilenceUsage: true,
-		Args:         cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmd.Help()
-		},
-	}
-	var serveCfg DuckDBQuackServeConfig
-	serveCmd := &cobra.Command{
-		Use:          "serve",
-		Short:        "Expose local DuckDB over Quack",
-		SilenceUsage: true,
-		Args:         cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
-			runDuckDBQuackServe(serveCfg)
-		},
-	}
-	serveCmd.Flags().StringVar(
-		&serveCfg.Bind, "bind", "quack:127.0.0.1:9494",
-		"Quack bind URI",
-	)
-	serveCmd.Flags().StringVar(
-		&serveCfg.Path, "path", "",
-		"DuckDB mirror path (defaults to [duckdb].path)",
-	)
-	serveCmd.Flags().StringVar(
-		&serveCfg.Token, "token", "",
-		"Quack authentication token (required unless configured)",
-	)
-	serveCmd.Flags().BoolVar(
-		&serveCfg.AllowInsecure, "allow-insecure", false,
-		"Allow non-loopback Quack binding",
-	)
-	cmd.AddCommand(serveCmd)
-	return cmd
+	_ = cmd.Flags().MarkHidden("pprof")
 }
 
 func newVersionCommand() *cobra.Command {
@@ -875,12 +856,14 @@ func printVersion(w io.Writer) {
 }
 
 func writeRootHelp(w io.Writer, root *cobra.Command) {
+	fmt.Fprintln(w, `Agents: find the right command with: agentsview cli search "<what you want to do>"`)
 	fmt.Fprintf(w, "agentsview %s - local web viewer for AI agent sessions\n\n", version)
 	fmt.Fprintln(w, "Syncs session data from supported AI coding agents into SQLite,")
 	fmt.Fprintln(w, "serves analytics, and exposes a session browser via local web UI.")
 	fmt.Fprintln(w)
 	renderRootUsage(w, root)
 	fmt.Fprintln(w)
+	fmt.Fprintln(w, rootAgentGuide)
 	renderRootCommands(w, root)
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Flags:")
@@ -903,8 +886,11 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w, "  QWENPAW_DIR             QwenPaw workspaces directory")
 	fmt.Fprintln(w, "  OMO_DIR                 OMO sessions directory")
 	fmt.Fprintln(w, "  STEPCODE_DIR            StepCode sessions directory")
+	fmt.Fprintln(w, "  DIRECT_API_DIR          Direct API sessions directory")
 	fmt.Fprintln(w, "  OMP_DIR                 OhMyPi sessions directory")
 	fmt.Fprintln(w, "  MUSE_SESSIONS_DIR       Muse Code sessions directory")
+	fmt.Fprintln(w, "  MUSE_PERSONAL_AGENTS_DIR")
+	fmt.Fprintln(w, "                          Muse Personal agents directory")
 	fmt.Fprintln(w, "  DEEPSEEK_TUI_SESSIONS_DIR")
 	fmt.Fprintln(w, "                          DeepSeek TUI sessions directory")
 	fmt.Fprintln(w, "  DEEPSEEK_HARNESS_SESSIONS_DIR")
@@ -915,14 +901,15 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w, "  CODEBUDDY_DIR           CodeBuddy data directory")
 	fmt.Fprintln(w, "  PIEBALD_DIR             Piebald data directory")
 	fmt.Fprintln(w, "  AGENTSVIEW_DATA_DIR     Data directory (database, config)")
+	fmt.Fprintln(w, "  AGENTSVIEW_AUTH_TOKEN   Bearer token for the local daemon and its clients")
+	fmt.Fprintln(w, "  AGENTSVIEW_MODE         Deployment default: serve or pg-serve")
+	fmt.Fprintln(w, "  AGENTSVIEW_AUTH_TOKEN_FILE")
+	fmt.Fprintln(w, "                          Daemon token file in deployment mode")
+	fmt.Fprintln(w, "  AGENTSVIEW_HOST, AGENTSVIEW_REQUIRE_AUTH, AGENTSVIEW_NO_BROWSER")
+	fmt.Fprintln(w, "                          Listener defaults when AGENTSVIEW_MODE is set")
 	fmt.Fprintln(w, "  AGENTSVIEW_PG_URL       PostgreSQL connection URL for sync")
 	fmt.Fprintln(w, "  AGENTSVIEW_PG_MACHINE   Machine name for PG sync")
 	fmt.Fprintln(w, "  AGENTSVIEW_PG_SCHEMA    PG schema name (default \"agentsview\")")
-	fmt.Fprintln(w, "  AGENTSVIEW_DUCKDB_PATH  DuckDB mirror database path")
-	fmt.Fprintln(w, "  AGENTSVIEW_DUCKDB_URL   Quack connection URL for DuckDB serve")
-	fmt.Fprintln(w, "  AGENTSVIEW_DUCKDB_TOKEN Quack authentication token")
-	fmt.Fprintln(w, "  AGENTSVIEW_DUCKDB_MACHINE")
-	fmt.Fprintln(w, "                          Machine name for DuckDB sync")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Watcher excludes:")
 	fmt.Fprintln(w, "  Add \"watch_exclude_patterns\" to ~/.agentsview/config.toml")
@@ -948,7 +935,7 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Remote hosts:")
 	fmt.Fprintln(w, "  Add a [[remote_hosts]] array to ~/.agentsview/config.toml so that")
-	fmt.Fprintln(w, "  \"agentsview sync\" (no --host) also syncs each configured host:")
+	fmt.Fprintln(w, "  \"agentsview source sync\" (no --host) also syncs each configured host:")
 	fmt.Fprintln(w, "  For daemon-backed HTTP sync over a private network such as Tailscale:")
 	fmt.Fprintln(w, "  [[remote_hosts]]")
 	fmt.Fprintln(w, "  host = \"devbox1\"")
@@ -962,7 +949,11 @@ func writeRootHelp(w io.Writer, root *cobra.Command) {
 	fmt.Fprintln(w, "  destination = \"user@devbox.example.com\" # optional; defaults to host")
 	fmt.Fprintln(w, "  Each host must be unique.")
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "  Top-level daemon_idle_timeout = \"0s\" keeps serve --background nodes alive.")
+	fmt.Fprintln(w, "  Top-level daemon_idle_timeout applies to automatically started and serve --background daemons;")
+	fmt.Fprintln(w, "  \"0s\" keeps them alive. daemon start and daemon restart stay running until stopped.")
+	fmt.Fprintln(w, "  Top-level sync_idle_after = \"10m\" pauses local collection while idle; \"0\" disables the pause.")
+	fmt.Fprintln(w, "  Top-level background_sync_interval = \"10m\" spaces out syncs while nobody is watching the archive;")
+	fmt.Fprintln(w, "  \"0s\" syncs at sync_interval all the time.")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Data stored in ~/.agentsview/ by default.")
 }
@@ -1016,24 +1007,11 @@ func groupedRootCommands(root *cobra.Command, groupID string) []*cobra.Command {
 			continue
 		}
 		grouped = append(grouped, cmd)
-		if !shouldListRootChildren(cmd) {
-			continue
-		}
-		for _, child := range cmd.Commands() {
-			if !child.IsAvailableCommand() || child.Hidden {
-				continue
-			}
-			grouped = append(grouped, child)
-		}
 	}
 	slices.SortStableFunc(grouped, func(a, b *cobra.Command) int {
 		return strings.Compare(commandPath(root, a), commandPath(root, b))
 	})
 	return grouped
-}
-
-func shouldListRootChildren(cmd *cobra.Command) bool {
-	return cmd.Name() != "completion"
 }
 
 func commandPath(root, cmd *cobra.Command) string {

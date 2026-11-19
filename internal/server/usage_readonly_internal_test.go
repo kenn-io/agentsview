@@ -22,6 +22,12 @@ func (readOnlyUsageSpy) GetDailyUsage(
 	return db.DailyUsageResult{}, db.ErrReadOnly
 }
 
+func (readOnlyUsageSpy) GetPlanUsageSessionCounts(
+	_ context.Context, _ db.UsageFilter,
+) (db.PlanUsageSessionCounts, error) {
+	return db.PlanUsageSessionCounts{}, db.ErrReadOnly
+}
+
 func (readOnlyUsageSpy) GetTopSessionsByCost(
 	_ context.Context, _ db.UsageFilter, _ int,
 ) ([]db.TopSessionEntry, error) {

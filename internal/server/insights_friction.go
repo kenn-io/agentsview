@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"slices"
 
+	"go.kenn.io/agentsview/internal/friction"
 	"go.kenn.io/agentsview/internal/friction/review"
 	"go.kenn.io/agentsview/internal/insight"
 )
@@ -109,6 +110,9 @@ func (s *Server) buildFrictionReviewPayload(
 	}
 	occurrences := make([]insight.CannedFrictionOccurrence, 0, len(snap.Signals))
 	for _, sig := range snap.Signals {
+		if sig.Kind == friction.KindDiagnostic {
+			continue
+		}
 		occurrences = append(occurrences, insight.CannedFrictionOccurrence{
 			SubjectID: sig.SubjectID, Kind: string(sig.Kind),
 			Title: sig.Title(), Fingerprint: sig.Fingerprint(),
@@ -134,6 +138,9 @@ func (s *Server) buildFrictionReviewPayload(
 			date, occurrences, firstSeen, insight.MaxCannedFrictionPatterns,
 		),
 		P0Alerts: insight.CannedFrictionP0Alerts(p0.P0Alerts),
+	}
+	if diagnostics := friction.GroupDiagnostics(snap.Signals); len(diagnostics) > 0 {
+		input.Diagnostics = diagnostics[:min(len(diagnostics), insight.MaxCannedFrictionDiagnostics)]
 	}
 	filters := insight.CannedSessionFilters{
 		Timezone:       digest.Timezone,

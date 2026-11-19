@@ -83,7 +83,8 @@ func newDiscoveryDiskMap(ctx context.Context) (*discoveryDiskMap, error) {
 		_ = os.Remove(path)
 		return nil, err
 	}
-	database, err := sql.Open("sqlite3", "file:"+sqliteURIPath(path)+"?_journal_mode=OFF&_synchronous=OFF")
+	// Discovery lookups and reconciliation writes reuse a small set of SQL shapes.
+	database, err := sql.Open("sqlite3", "file:"+sqliteURIPath(path)+"?_journal_mode=OFF&_synchronous=OFF&_stmt_cache_size=64")
 	if err != nil {
 		_ = os.Remove(path)
 		return nil, err
@@ -300,7 +301,7 @@ func (m *discoveryDiskMap) forEach(
 func (m *discoveryDiskMap) addGeminiPath(
 	ctx context.Context, absolutePath, name string, replace bool,
 ) error {
-	project := ExtractProjectFromCwd(absolutePath)
+	project := ExtractProjectFromCwdWithBranchContext(ctx, absolutePath, "")
 	if project == "" {
 		project = "unknown"
 	}

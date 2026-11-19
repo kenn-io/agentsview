@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -20,20 +19,19 @@ import (
 // confirm the aggregated response matches what the SQLite
 // implementation would have produced over the same data.
 func TestStoreGetAnalyticsSignals(t *testing.T) {
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 	ps, err := New(
-		pgURL, "agentsview", local,
+		t.Context(), pgURL, "agentsview", local,
 		"signals-test-machine", true,
 		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, ps.EnsureSchema(ctx), "ensure schema")
 
 	score := 90
@@ -76,7 +74,7 @@ func TestStoreGetAnalyticsSignals(t *testing.T) {
 	_, err = ps.Push(ctx, false, nil)
 	require.NoError(t, err, "push")
 
-	store, err := NewStore(pgURL, "agentsview", true)
+	store, err := NewStore(t.Context(), pgURL, "agentsview", true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
@@ -106,20 +104,19 @@ func TestStoreGetAnalyticsSignals(t *testing.T) {
 func TestStoreGetAnalyticsSignalSessionsModelFilterUsesMatchingMessages(
 	t *testing.T,
 ) {
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 	ps, err := New(
-		pgURL, "agentsview", local,
+		t.Context(), pgURL, "agentsview", local,
 		"signals-model-filter-machine", true,
 		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, ps.EnsureSchema(ctx), "ensure schema")
 
 	started := "2024-06-01T09:00:00Z"
@@ -157,7 +154,7 @@ func TestStoreGetAnalyticsSignalSessionsModelFilterUsesMatchingMessages(
 	_, err = ps.Push(ctx, false, nil)
 	require.NoError(t, err, "push")
 
-	store, err := NewStore(pgURL, "agentsview", true)
+	store, err := NewStore(t.Context(), pgURL, "agentsview", true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 

@@ -1,7 +1,10 @@
 package db
 
 import (
+	"fmt"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -34,10 +37,11 @@ func TestListVirtualContainerMemberFreshnessPagePagesCompleteFolds(
 ) {
 	d := testDB(t)
 	const container = "/data/opencode.db"
-	// Member "a" is stored twice: the newer row carries the hash the fold
-	// must surface and the lower data version the fold must keep.
+	// Member "a" has three rows. The first newest row supplies the hash,
+	// and the lower data version survives the fold.
 	seedVirtualMemberRow(t, d, "a-old", container+"#a", 100, 5, "old-hash")
-	seedVirtualMemberRow(t, d, "a-new", container+"#a", 200, 2, "new-hash")
+	seedVirtualMemberRow(t, d, "a-new", container+"#a", 200, 5, "new-hash")
+	seedVirtualMemberRow(t, d, "a-tie", container+"#a", 200, 2, "tie-hash")
 	seedVirtualMemberRow(t, d, "b", container+"#b", 150, 5, "")
 	seedVirtualMemberRow(t, d, "c", container+"#c", 300, 5, "")
 	seedVirtualMemberRow(t, d, "outside", "/data/other.db#x", 400, 5, "")
@@ -60,7 +64,7 @@ func TestListVirtualContainerMemberFreshnessPagePagesCompleteFolds(
 	assert.Equal(t, "opencode", page[0].Agent)
 	assert.Equal(t, "proj", page[0].Project)
 	assert.Equal(t, "new-hash", page[0].Hash,
-		"the hash rides the newest-mtime row")
+		"the first rowid wins when newest mtimes tie")
 	assert.Equal(t, 2, page[0].DataVersion,
 		"the minimum stored data version survives the fold")
 
@@ -89,6 +93,71 @@ func TestListVirtualContainerMemberFreshnessPagePagesCompleteFolds(
 		"one call over a large limit folds the whole membership")
 	assert.Equal(t, container+"#a", page[0].Path)
 	assert.Equal(t, container+"#c", page[1].Path)
+}
+
+func TestVirtualContainerMemberFreshnessStreamingPlan(t *testing.T) {
+	d := testDB(t)
+	for _, op := range []string{">=", ">"} {
+		t.Run(op, func(t *testing.T) {
+			plan := queryPlanOf(t, d, fmt.Sprintf(virtualContainerMemberFreshnessQuery, op), "/data/opencode.db#", "/data/opencode.db")
+			assert.NotContains(t, plan, "TEMP B-TREE", "pages must stream without sorting the container")
+		})
+	}
+}
+
+func TestVirtualContainerMemberFreshnessGrowth(t *testing.T) {
+	if testing.Short() {
+		t.Skip("measures full container scans")
+	}
+	d := testDB(t)
+	const container = "/data/opencode.db"
+	const members = 50000
+	_, err := d.getWriter().Exec(t.Context(), `
+		WITH RECURSIVE members(n) AS (
+			SELECT 1 UNION ALL SELECT n + 1 FROM members WHERE n < ?
+		)
+		INSERT INTO sessions (id, project, agent, file_path, file_mtime, data_version, file_hash)
+		SELECT printf('member-%05d', n), 'proj', 'opencode',
+			? || printf('#%05d', n), 100, 5, 'hash' FROM members`, members, container)
+	require.NoError(t, err)
+	listAll := func(limit int) time.Duration {
+		start := time.Now()
+		after, total := "", 0
+		for {
+			page, done, err := d.ListVirtualContainerMemberFreshnessPage(t.Context(), container, "opencode:", after, limit)
+			require.NoError(t, err)
+			total += len(page)
+			if done {
+				break
+			}
+			require.NotEmpty(t, page)
+			after = page[len(page)-1].Path
+		}
+		duration := time.Since(start)
+		require.Equal(t, members, total)
+		return duration
+	}
+	// Compare paging with one unpaged pass over the same rows. Both read the
+	// same pages, so their ratio does not depend on whether the container
+	// fits in SQLite's page cache, which makes absolute timings at two sizes
+	// grow faster than the row count on some machines.
+	var paged, unpaged []time.Duration
+	for pass := range 8 {
+		pagedPass, unpagedPass := listAll(256), listAll(members+1)
+		if pass > 0 {
+			paged = append(paged, pagedPass)
+			unpaged = append(unpaged, unpagedPass)
+		}
+	}
+	slices.Sort(paged)
+	slices.Sort(unpaged)
+	pagedMedian, unpagedMedian := paged[len(paged)/2], unpaged[len(unpaged)/2]
+	ratio := float64(pagedMedian) / float64(unpagedMedian)
+	t.Logf("%d members: paged %s; unpaged %s; ratio: %.2fx", members, pagedMedian, unpagedMedian, ratio)
+	// Paging that resumes from the previous page costs about one unpaged
+	// pass. Rescanning the rest of the container on every page reads about
+	// members/(2*256), roughly 100, times as many rows.
+	assert.LessOrEqual(t, ratio, 10.0, "paging must not rescan the container on each page")
 }
 
 // TestListVirtualContainerMemberFreshnessPageMarksTrashedAndExcluded pins the

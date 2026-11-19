@@ -14,19 +14,19 @@ func AnalyticsSummaryAgentsSQL(where string, args []any, dialect db.QueryDialect
 			FROM sessions s
 			WHERE ` + where + `
 		)
-		SELECT agent, ` + dialect.SignedAggregate("COUNT(*)") + `, ` + dialect.SignedAggregate("COALESCE(SUM(message_count), 0)") + `
+		SELECT agent, ` + dialect.SignedAggregate("COUNT(*)") + `, ` + dialect.SignedAggregate("SUM(message_count)") + `
 		FROM filtered
 		GROUP BY agent`, args
 }
 
 func AnalyticsHeatmapSQL(where string, args []any, localDate string, localDateArgs []any, metric string, dialect db.QueryDialect) (string, []any) {
-	valueExpr := "COALESCE(SUM(s.message_count), 0)"
+	valueExpr := "SUM(s.message_count)"
 	switch metric {
 	case "sessions":
 		valueExpr = "COUNT(*)"
 	case "output_tokens":
 		where += " AND s.has_total_output_tokens = " + dialect.TrueLiteral()
-		valueExpr = "COALESCE(SUM(s.total_output_tokens), 0)"
+		valueExpr = "SUM(s.total_output_tokens)"
 	}
 	queryArgs := append([]any{}, localDateArgs...)
 	queryArgs = append(queryArgs, args...)
@@ -56,29 +56,26 @@ func AnalyticsActivityAgentsSQL(where string, args []any, localDate string, loca
 		ORDER BY bucket, fs.agent`, queryArgs
 }
 
-func analyticsModelsSQL(ids []string) (string, []any) {
-	ph, args := db.InPlaceholders(ids)
+func analyticsModelsSQL(idSet string) string {
 	return `
 			SELECT DISTINCT model
 			FROM messages
-			WHERE session_id IN ` + ph + `
-				AND COALESCE(model, '') <> ''
-			ORDER BY model`, args
+			WHERE session_id IN ` + idSet + `
+				AND model <> ''`
 }
 
-func analyticsModelTimesSQL(ids []string) (string, []any) {
-	ph, args := db.InPlaceholders(ids)
+func analyticsModelTimesSQL(idSet string) string {
 	return `
 			SELECT model, timestamp
 			FROM messages
-			WHERE session_id IN ` + ph + `
-				AND COALESCE(model, '') <> ''`, args
+			WHERE session_id IN ` + idSet + `
+				AND model <> ''`
 }
 
 func analyticsSignalMessagesSQL(ids []string) (string, []any) {
 	ph, args := db.InPlaceholders(ids)
 	return `SELECT session_id, ordinal, role, content,
-			timestamp, is_system, has_tool_use, COALESCE(source_subtype, '')
+			timestamp, is_system, has_tool_use, source_subtype
 		FROM messages
 		WHERE session_id IN ` + ph + `
 		ORDER BY session_id, ordinal`, args
@@ -138,10 +135,10 @@ func AnalyticsMessageWindowPred(col, from, to, timestampParam string) (string, [
 func analyticsCandidateMessagesSQL(ph string, includeContent bool) string {
 	contentExpr := "''"
 	if includeContent {
-		contentExpr = "COALESCE(content, '')"
+		contentExpr = "content"
 	}
 	return `
-			SELECT session_id, ordinal, role, COALESCE(source_subtype, ''), is_system, COALESCE(model, ''),
+			SELECT session_id, ordinal, role, source_subtype, is_system, model,
 				has_thinking, has_tool_use, timestamp,
 				output_tokens, has_output_tokens, content_length, ` + contentExpr + `
 			FROM messages
@@ -149,18 +146,56 @@ func analyticsCandidateMessagesSQL(ph string, includeContent bool) string {
 			ORDER BY session_id, ordinal`
 }
 
-func AnalyticsTrendsSQL(systemPrefix string, dialect db.QueryDialect) string {
+// AnalyticsTrendsSQL selects trend candidate messages from the sessions
+// sessionPred selects. ordered keeps rows grouped by session in ordinal
+// order, which the scope reducer needs when a model filter is set.
+// wholeSession prefixes each row with its session ID.
+func AnalyticsTrendsSQL(
+	f db.AnalyticsFilter, windowPred func(string, string, string) (string, []any),
+	systemPrefix string, dialect db.QueryDialect,
+	sessionPred string, sessionPredArgs []any, ordered, wholeSession bool,
+) (string, []any) {
+	content := "m.content"
+	where := "s.deleted_at IS NULL AND " + sessionPred
+	var args []any
+	from, to := AnalyticsWindowBounds(f)
+	inWindow, windowArgs := windowPred("COALESCE(m.timestamp, s.started_at, s.created_at)", from, to)
+	if inWindow != "" && len(f.MessageScopeFilter().Models) > 0 {
+		content = "CASE WHEN " + inWindow + " THEN m.content ELSE '' END"
+		args = append(args, windowArgs...)
+	}
+	args = append(args, sessionPredArgs...)
+	sessionWindow, sessionArgs := TrendSessionWindowSQL(f, windowPred, "", nil)
+	where += sessionWindow
+	args = append(args, sessionArgs...)
+	if inWindow != "" {
+		rowWindow := inWindow
+		if len(f.MessageScopeFilter().Models) > 0 {
+			rowWindow = "(" + inWindow + " OR m.role = 'assistant')"
+		}
+		where += " AND " + rowWindow
+		args = append(args, windowArgs...)
+	}
+	tail := ""
+	if ordered {
+		tail = `
+		ORDER BY m.session_id, m.ordinal`
+	}
+	columns := `m.content, COALESCE(m.timestamp, s.started_at, s.created_at)`
+	if wholeSession {
+		columns = `m.session_id, m.content, COALESCE(m.timestamp, s.started_at, s.created_at)`
+	} else if len(f.MessageScopeFilter().Models) > 0 {
+		columns = `m.session_id, m.ordinal, m.role, m.is_system,
+			m.model, ` + content + `, m.timestamp, s.started_at, s.created_at`
+	}
 	return `
-		SELECT m.session_id, m.ordinal, m.role, m.is_system,
-			COALESCE(m.model, ''), m.content, m.timestamp,
-			s.started_at, s.created_at
+		SELECT ` + columns + `
 		FROM messages m
 		JOIN sessions s ON s.id = m.session_id
-		WHERE s.deleted_at IS NULL
+		WHERE ` + where + `
 			AND m.role IN ('user', 'assistant')
 			AND m.is_system = ` + dialect.FalseLiteral() + `
-			AND ` + systemPrefix + `
-		ORDER BY m.session_id, m.ordinal`
+			AND ` + systemPrefix + tail, args
 }
 
 const AnalyticsSessionColumns = `id, project, machine, agent, first_message,
@@ -196,4 +231,20 @@ func AnalyticsAndClause(pred string) string {
 		return ""
 	}
 	return " AND " + pred
+}
+
+// TrendSessionWindowSQL selects sessions that start or have a message in the
+// padded window. A non-empty set limits the message scan to those sessions.
+func TrendSessionWindowSQL(f db.AnalyticsFilter, windowPred func(string, string, string) (string, []any), set string, setArgs []any) (string, []any) {
+	from, to := AnalyticsWindowBounds(f)
+	window, args := windowPred("COALESCE(s.started_at, s.created_at)", from, to)
+	if window == "" {
+		return "", nil
+	}
+	message, messageArgs := windowPred("wm.timestamp", from, to)
+	if set != "" {
+		message = "wm.session_id IN " + set + " AND " + message
+		args = append(args, setArgs...)
+	}
+	return " AND (" + window + " OR s.id IN (SELECT wm.session_id FROM messages wm WHERE wm.timestamp IS NOT NULL AND " + message + "))", append(args, messageArgs...)
 }

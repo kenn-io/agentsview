@@ -28,6 +28,7 @@ var pushedTables = []string{
 // earlier processes finished, so the push converges, and the result must
 // match an uninterrupted push.
 func TestFullPushResumesAcrossRestarts(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedFixture(t)
 	conn := chtest.Open(t, target.URL, target.Database)
@@ -89,6 +90,7 @@ func TestFullPushResumesAcrossRestarts(t *testing.T) {
 // A run recorded against an earlier archive generation is abandoned: rows it
 // left may predate the rebuild, so every session is pushed again.
 func TestFullPushRestartsWhenArchiveChangedSinceInterruption(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedFixture(t)
 	s := newTestSync(t, local, target, storage.PusherOptions{})
@@ -129,6 +131,7 @@ func TestFullPushRestartsWhenArchiveChangedSinceInterruption(t *testing.T) {
 // A full push killed during its vector phase resumes there: the sessions and
 // the vectors it already pushed are not sent again.
 func TestFullPushResumesVectorPhase(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedFixture(t)
 	source := newFixtureVectorSource()
@@ -167,14 +170,19 @@ func TestFullPushResumesVectorPhase(t *testing.T) {
 	assert.Equal(t, 1, res.Vectors.SessionsUnchanged)
 	assert.Len(t, exported, 1)
 	assert.NotContains(t, exported, interrupted)
+	// The interrupted run rewrote every message before it stopped, so the
+	// resumed push compacts even though it wrote none itself.
+	conn := chtest.Open(t, target.URL, target.Database)
+	assert.Contains(t, compactions(t, conn), "messages")
 }
 
 // pushTimeColumns are columns besides push_version that take their value
 // from the time of the push rather than from the archive.
 var pushTimeColumns = map[string]string{
+	"sessions":                 ", content_version, rows_version",
 	"usage_messages":           ", revision",
 	"terminal_event_snapshots": ", revision",
-	usageSessionSnapshotTable:  ", revision, usage_events",
+	usageSessionSnapshotTable:  ", revision, usage_events, content_version, rows_version",
 	"starred_sessions":         ", created_at",
 }
 
@@ -224,6 +232,7 @@ func killSecondSessionBatch(t *testing.T, s *Sync, full bool) {
 // sessions this push changed: the interrupted process never reached its
 // vector phase.
 func TestResumedFullPushWritesVectorsForEarlierSessions(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedFixture(t)
 	opts := storage.PusherOptions{VectorSource: newFixtureVectorSource()}
@@ -247,6 +256,7 @@ func TestResumedFullPushWritesVectorsForEarlierSessions(t *testing.T) {
 // CLI resyncs the archive before a --full push, giving it a new generation
 // the run cannot resume against; the discard is reported then too.
 func TestRequestedFullPushDiscardsUnfinishedRun(t *testing.T) {
+	t.Parallel()
 	for _, tt := range []struct {
 		name     string
 		resynced bool
@@ -279,6 +289,7 @@ func TestRequestedFullPushDiscardsUnfinishedRun(t *testing.T) {
 // A full push that ended with session errors does not keep later pushes
 // full once nothing else requires one; they go back to incremental.
 func TestErroredFullPushRunDroppedWhenNoFullPushRequired(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedFixture(t)
 	first, err := newTestSync(t, local, target, storage.PusherOptions{}).Push(ctx, false, nil)
@@ -320,6 +331,7 @@ func TestErroredFullPushRunDroppedWhenNoFullPushRequired(t *testing.T) {
 // errored run belongs to the filtered scope, so it cannot resume and keeps
 // the push full.
 func TestErroredFilteredFullPushKeepsNextScopeFull(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedFixture(t)
 	conn := chtest.Open(t, target.URL, target.Database)
@@ -327,6 +339,8 @@ func TestErroredFilteredFullPushKeepsNextScopeFull(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, first.Errors)
 
+	// A full push writes only changed sessions, so change the one it fails.
+	appendMessage(t, local, fixtureAlphaID, "alpha third", "2026-01-10T00:10:00.000Z")
 	filtered := newTestSync(t, local, target, storage.PusherOptions{Projects: []string{"alpha"}})
 	filtered.hooks = &pushHooks{beforeSessionRows: func(batch []db.Session) error {
 		for _, sess := range batch {
@@ -358,6 +372,7 @@ func TestErroredFilteredFullPushKeepsNextScopeFull(t *testing.T) {
 // matches the wider scope, but it must not be dropped: the session is older
 // than the stored cutoff, so only a full push brings it back.
 func TestFailedScopeRecoveryKeepsNextPushFull(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedFixture(t)
 	conn := chtest.Open(t, target.URL, target.Database)
@@ -375,6 +390,8 @@ func TestFailedScopeRecoveryKeepsNextPushFull(t *testing.T) {
 			return nil
 		}}
 	}
+	// A full push writes only changed sessions, so change the one it fails.
+	appendMessage(t, local, fixtureAlphaID, "alpha third", "2026-01-10T00:10:00.000Z")
 	filtered := newTestSync(t, local, target, storage.PusherOptions{Projects: []string{"alpha"}})
 	failSession(filtered, fixtureAlphaID)
 	errored, err := filtered.Push(ctx, false, nil)

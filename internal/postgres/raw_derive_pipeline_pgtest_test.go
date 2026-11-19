@@ -22,6 +22,7 @@ import (
 )
 
 func TestRawCapturedSourcesReachHostedWorker(t *testing.T) {
+	t.Parallel()
 	for _, agent := range []parser.AgentType{parser.AgentClaude, parser.AgentZCode, parser.AgentCodex} {
 		t.Run(string(agent), func(t *testing.T) {
 			f := newHostedFixture(t, "tenant-capture")
@@ -29,7 +30,7 @@ func TestRawCapturedSourcesReachHostedWorker(t *testing.T) {
 			metadata, err := NewHostedRawIngestStore(pg, f.tenant, "parser-data-17")
 			require.NoError(t, err)
 			identity := rawIngestIdentity(t, f.tenant)
-			_, err = pg.Exec(`INSERT INTO raw_devices(device_id,display_name,credential_sha256,created_at) VALUES($1,'synthetic device',$2,clock_timestamp())`, identity.DeviceID, make([]byte, 32))
+			_, err = pg.ExecContext(t.Context(), `INSERT INTO raw_devices(device_id,display_name,credential_sha256,created_at) VALUES($1,'synthetic device',$2,clock_timestamp())`, identity.DeviceID, make([]byte, 32))
 			require.NoError(t, err)
 			root := t.TempDir()
 			ids := []string{rawtest.ClaudeID}
@@ -73,7 +74,7 @@ func TestRawCapturedSourcesReachHostedWorker(t *testing.T) {
 			dispatch, err := rawderive.NewProviderParser(parser.ProviderFactories(), "hosted-worker")
 			require.NoError(t, err)
 			materializationDir := t.TempDir()
-			sink, err := NewRawProjectionStore(pg, RawProjectionOptions{Tenant: f.tenant})
+			sink, err := NewRawProjectionStore(t.Context(), pg, RawProjectionOptions{Tenant: f.tenant})
 			require.NoError(t, err)
 			worker, err := rawderive.NewWorker(rawderive.WorkerConfig{
 				Queue: metadata, Manifests: rawderive.ManifestLoader{Store: objects, Limits: limits},
@@ -121,7 +122,7 @@ func TestRawCapturedSourcesReachHostedWorker(t *testing.T) {
 				assert.Equal(t, "complete", state)
 			}
 
-			store, err := newHostedAdapter(pg, f.tenant)
+			store, err := newHostedAdapter(t.Context(), pg, f.tenant)
 			require.NoError(t, err)
 			rawtest.EqualStored(t, t.Context(), oracle, store, ids...)
 			for _, id := range ids {
@@ -151,6 +152,7 @@ func TestRawCapturedSourcesReachHostedWorker(t *testing.T) {
 
 // Source-app deletion must not hide sessions already captured in the hosted archive.
 func TestRawProjectionCrushRetainsSessionsDeletedFromSource(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	root := t.TempDir()
 	sourceDB, err := sql.Open("sqlite3", filepath.Join(root, parser.CrushDBName))
@@ -194,7 +196,7 @@ func TestRawProjectionCrushRetainsSessionsDeletedFromSource(t *testing.T) {
 	dispatch, err := rawderive.NewProviderParser(parser.ProviderFactories(), "hosted-worker")
 	require.NoError(t, err)
 
-	store, err := newHostedAdapter(f.runtime, f.tenant)
+	store, err := newHostedAdapter(t.Context(), f.runtime, f.tenant)
 	require.NoError(t, err)
 
 	// Replay deletion of one member and then the last member of the SQLite source.

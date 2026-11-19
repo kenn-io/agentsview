@@ -16,7 +16,7 @@ func parseWorkBuddyTestSession(
 	path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	tb.Helper()
-	return parseWorkBuddySession(path, project, machine)
+	return parseWorkBuddySession(tb.Context(), path, project, machine)
 }
 
 func discoverWorkBuddyTestSessions(tb testing.TB, root string) []DiscoveredFile {
@@ -403,6 +403,47 @@ func TestParseWorkBuddySessionFallsBackToDiscoveredProjectWhenCwdHasNoProject(t 
 	sess, _, err := parseWorkBuddyTestSession(t, path, "discovered-proj", "local")
 	require.NoError(t, err)
 	assert.Equal(t, "discovered-proj", sess.Project)
+}
+
+func TestWorkBuddyProviderParseHonorsFilesystemProjectDiscoveryPolicy(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repository")
+	cwd := filepath.Join(repo, "nested")
+	// A plain .git directory exercises the filesystem walker without invoking Git.
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".git"), 0o755))
+	require.NoError(t, os.MkdirAll(cwd, 0o755))
+	sessions := filepath.Join(root, "sessions")
+	path := filepath.Join(sessions, "proj", "55555555-5555-4555-8555-555555555555.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	content := fmt.Sprintf(`{"timestamp":1778749186168,"type":"message","role":"user","content":[{"text":"hi"}],"sessionId":"55555555-5555-4555-8555-555555555555","cwd":%q}
+`, cwd)
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+
+	for _, tc := range []struct {
+		name    string
+		remote  bool
+		project string
+	}{
+		{"local", false, "repository"},
+		{"remote", true, "nested"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider, ok := NewProvider(AgentWorkBuddy, ProviderConfig{Roots: []string{sessions}})
+			require.True(t, ok)
+			sources, err := provider.Discover(t.Context())
+			require.NoError(t, err)
+			require.Len(t, sources, 1)
+
+			ctx := t.Context()
+			if tc.remote {
+				ctx = WithoutFilesystemProjectDiscovery(ctx)
+			}
+			out, err := provider.Parse(ctx, ParseRequest{Source: sources[0]})
+			require.NoError(t, err)
+			require.Len(t, out.Results, 1)
+			assert.Equal(t, tc.project, out.Results[0].Result.Session.Project)
+		})
+	}
 }
 
 func TestParseWorkBuddySessionOmitsAbsentTokenUsageKeys(t *testing.T) {

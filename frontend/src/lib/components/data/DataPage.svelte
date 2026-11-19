@@ -10,8 +10,14 @@
   import ProjectWorkspace from "./ProjectWorkspace.svelte";
   import WorktreeMappingRules from "./WorktreeMappingRules.svelte";
   import RangePicker from "../shared/RangePicker.svelte";
+  import LibraryPageHeader from "../shared/LibraryPageHeader.svelte";
+  import StateNotice from "../shared/StateNotice.svelte";
+  import LoadError from "../shared/LoadError.svelte";
+  import LoadingState from "../shared/LoadingState.svelte";
+  import { DatabaseIcon } from "../../icons.js";
   import type { RangeSelection } from "../shared/rangeSelection.js";
   import {
+    EmptyState,
     FlashBanner,
     SegmentedControl,
     showFlash,
@@ -156,6 +162,7 @@
 
 <div class="data-page">
   <FlashBanner toneLabels={{ success: m.data_flash_success_label() }} />
+  <LibraryPageHeader title={m.nav_data()} />
   {#if projectWorkspaceEnabled}
     <div class="data-header">
       <div class="header-summary">
@@ -183,7 +190,7 @@
   {/if}
 
   {#if projectWorkspaceEnabled && data.view === "inventory" && data.dateFiltered}
-    <p class="notice">{m.data_date_filter_scope()}</p>
+    <StateNotice description={m.data_date_filter_scope()} />
   {/if}
 
   {#if !projectWorkspaceEnabled || data.view === "rules"}
@@ -206,12 +213,19 @@
     <!-- Inventory-first ordering: once inventory has loaded once it keeps
          rendering through background reloads; loading/error below only
          apply before that first successful load. -->
+    {#if data.error}
+      <LoadError message={data.error} onRetry={() => data.load()} />
+    {/if}
     {#if data.unknownProjectKey}
-      <div class="notice" role="status">{m.data_unknown_project_key()}</div>
+      <StateNotice role="status" description={m.data_unknown_project_key()} />
     {/if}
 
     {#if data.inventory.total_projects === 0}
-      <div class="status">{m.data_empty()}</div>
+      <EmptyState align="top" title={m.data_empty()}>
+        {#snippet icon()}
+          <DatabaseIcon size="24" strokeWidth="1.75" />
+        {/snippet}
+      </EmptyState>
     {:else}
       <div class="split" class:has-selection={selectedRows.length > 0}>
         <div class="pane-table">
@@ -253,13 +267,10 @@
         {/if}
       </div>
     {/if}
-  {:else if data.loading}
-    <div class="status">{m.data_loading()}</div>
   {:else if data.error}
-    <div class="status error">
-      <span>{data.error}</span>
-      <button class="retry-btn" onclick={() => data.load()}>{m.shared_retry()}</button>
-    </div>
+    <LoadError message={data.error} onRetry={() => data.load()} />
+  {:else if data.loading}
+    <LoadingState label={m.data_loading()} />
   {/if}
 </div>
 
@@ -269,7 +280,11 @@
     flex: 1;
     flex-direction: column;
     gap: 12px;
-    padding: 12px;
+    /* Shared library page frame: a 1040px content column. */
+    width: 100%;
+    max-width: 1088px;
+    margin: 0 auto;
+    padding: 28px 24px 12px;
     min-height: 0;
     overflow: hidden;
   }
@@ -289,9 +304,26 @@
     gap: 8px 16px;
   }
 
+  /* The page clips its overflow so the inventory panes can fill it; the
+     rules view scrolls inside it instead, so a long mapping list never
+     pushes the form and Apply mappings out of reach. */
+  .data-page > :global(.rules-view) {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  /* The page gap already separates the header from the content. */
+  .data-page :global(.library-header) {
+    margin-bottom: 4px;
+  }
+
+  /* Section heading under the page title. */
   h2 {
     margin: 0;
+    color: var(--text-primary);
     font-size: 14px;
+    font-weight: 600;
   }
 
   .summary-strip {
@@ -339,41 +371,7 @@
     }
   }
 
-  .notice {
-    padding: 8px 12px;
-    border: 1px solid var(--border-muted);
-    border-radius: var(--radius-sm);
-    background: var(--bg-surface);
-    color: var(--text-secondary);
-    font-size: 11px;
-  }
 
-  .status {
-    color: var(--text-muted);
-    font-size: 12px;
-    padding: 24px;
-    text-align: center;
-  }
 
-  .status.error {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    color: var(--accent-red);
-  }
 
-  .retry-btn {
-    padding: 2px 8px;
-    border: 1px solid var(--accent-red);
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    color: var(--accent-red);
-    cursor: pointer;
-  }
-
-  .retry-btn:hover {
-    background: var(--accent-red);
-    color: var(--accent-red-foreground);
-  }
 </style>

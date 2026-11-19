@@ -2518,7 +2518,7 @@ func TestCopyRecallEntriesFrom(t *testing.T) {
 		s.Agent = "codex"
 	})
 
-	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath), "CopyRecallEntriesFrom")
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(t.Context(), srcPath), "CopyRecallEntriesFrom")
 
 	ctx := t.Context()
 	destinationRevision, err := dstDB.RecallCorpusRevision(ctx)
@@ -2600,7 +2600,7 @@ func TestCopyRecallEntriesFromAdvancesQueryRevisionWhenAllEntriesSkipped(
 	require.NoError(t, err)
 	defer dstDB.Close()
 
-	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath))
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(t.Context(), srcPath))
 
 	entries, err := dstDB.ListRecallEntries(ctx, RecallQuery{})
 	require.NoError(t, err)
@@ -2655,7 +2655,7 @@ func TestCopyRecallEntriesFromPreservesPendingArchivedEmbeddingChange(
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = dstDB.Close() })
 	insertSession(t, dstDB, "s1", "agentsview")
-	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath))
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(t.Context(), srcPath))
 
 	var changes []EmbeddableUnit
 	nextWatermark, err := dstDB.ScanRecallEmbeddingUnits(
@@ -2693,7 +2693,7 @@ func TestCopyRecallEntriesFromReconcilesShiftedEvidence(t *testing.T) {
 	insertSession(t, dstDB, "s1", "agentsview")
 	insertMessages(t, dstDB, shifted...)
 
-	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath))
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(t.Context(), srcPath))
 
 	got := requireRecallEntry(t, dstDB, "m1")
 	assert.True(t, got.ProvenanceOK)
@@ -2741,7 +2741,7 @@ func TestCopyRecallEntriesFromRevokesIDEEnvelopeSplitEvidence(t *testing.T) {
 	hidden.IsSystem = true
 	insertMessages(t, dstDB, append([]Message{hidden}, oldMessages...)...)
 
-	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath))
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(t.Context(), srcPath))
 
 	got := requireRecallEntry(t, dstDB, "m1")
 	assert.False(t, got.ProvenanceOK,
@@ -2771,7 +2771,7 @@ func TestCopyRecallEntriesFromRevokesChangedEvidence(t *testing.T) {
 	insertSession(t, dstDB, "s1", "agentsview")
 	insertMessages(t, dstDB, shifted...)
 
-	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath))
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(t.Context(), srcPath))
 
 	got := requireRecallEntry(t, dstDB, "m1")
 	assert.False(t, got.ProvenanceOK)
@@ -2830,7 +2830,7 @@ func TestCopyRecallEntriesFromRevokesDroppedEvidenceSession(t *testing.T) {
 	insertSession(t, dstDB, "entry-session", "agentsview")
 	logs := captureRecallEvidenceLog(t)
 
-	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath))
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(t.Context(), srcPath))
 
 	for _, entryID := range []string{"a-entry", "z-entry"} {
 		got := requireRecallEntry(t, dstDB, entryID)
@@ -2881,7 +2881,7 @@ func TestCopyRecallEntriesFromRevokesEvidenceWithoutFingerprint(t *testing.T) {
 	insertSession(t, dstDB, "s1", "agentsview")
 	insertMessages(t, dstDB, messages...)
 
-	require.NoError(t, dstDB.CopyRecallEntriesFrom(srcPath))
+	require.NoError(t, dstDB.CopyRecallEntriesFrom(t.Context(), srcPath))
 
 	got := requireRecallEntry(t, dstDB, "m1")
 	assert.False(t, got.ProvenanceOK)
@@ -3058,4 +3058,88 @@ func TestRecallEntryLifecycleBucket(t *testing.T) {
 			assert.Equal(t, tt.want, m.LifecycleBucket())
 		})
 	}
+}
+
+func TestRecallListTimeBounds(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "time-session", "project")
+	for _, row := range []struct{ id, status, created, updated string }{
+		{"before", "accepted", "2026-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z"},
+		{"boundary", "accepted", "2026-01-01T00:00:00.001Z", "2026-01-01T00:00:00.001Z"},
+		{"archived", "archived", "2026-01-01T00:00:00.001Z", "2026-01-01T00:00:00.001Z"},
+		{"old", "accepted", "2026-11-12T00:00:00.000Z", "2026-11-12T00:00:00.000Z"},
+		{"changed", "accepted", "2026-11-12T00:00:00.000Z", "2026-11-13T03:00:00.000Z"},
+		{"new", "accepted", "2026-11-13T03:00:00.000Z", "2026-11-13T03:00:00.000Z"},
+	} {
+		_, err := d.InsertRecallEntry(t.Context(), RecallEntry{ID: row.id, Type: "fact", Scope: "project", Status: row.status, ReviewState: corerecall.ReviewStateHumanReviewed, Transferable: true, ProvenanceOK: true, Title: row.id, Body: row.id, SourceSessionID: "time-session"})
+		require.NoError(t, err)
+		_, err = d.getWriter().Exec(t.Context(), "UPDATE recall_entries SET created_at = ?, updated_at = ? WHERE id = ?", row.created, row.updated, row.id)
+		require.NoError(t, err)
+	}
+	for _, tc := range []struct {
+		name    string
+		q       RecallQuery
+		want    []string
+		invalid bool
+	}{
+		{"default status", RecallQuery{}, []string{"before", "boundary", "old", "changed", "new"}, false},
+		{"inclusive fractional update", RecallQuery{UpdatedSince: "2026-01-01T00:00:00.000001Z"}, []string{"before", "boundary", "archived", "old", "changed", "new"}, false},
+		{"explicit status", RecallQuery{UpdatedSince: "2026-01-01T00:00:00.000001Z", Status: "archived"}, []string{"archived"}, false},
+		{"trusted", RecallQuery{UpdatedSince: "2026-01-01T00:00:00.000001Z", TrustedOnly: true}, []string{"before", "boundary", "old", "changed", "new"}, false},
+		{"updated with offset", RecallQuery{UpdatedSince: "2026-11-12T22:00:00-05:00"}, []string{"changed", "new"}, false},
+		{"created with offset", RecallQuery{CreatedSince: "2026-11-12T22:00:00-05:00"}, []string{"new"}, false},
+		{"updated with padding", RecallQuery{UpdatedSince: " 2026-11-12T22:00:00-05:00 "}, []string{"changed", "new"}, false},
+		{"created with padding", RecallQuery{CreatedSince: " 2026-11-12T22:00:00-05:00 "}, []string{"new"}, false},
+		{"bad updated", RecallQuery{UpdatedSince: "yesterday"}, nil, true},
+		{"bad created", RecallQuery{CreatedSince: "yesterday"}, nil, true},
+		{"whitespace updated", RecallQuery{UpdatedSince: "  "}, nil, true},
+		{"whitespace created", RecallQuery{CreatedSince: " \t "}, nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			entries, err := d.ListRecallEntries(t.Context(), tc.q)
+			if tc.invalid {
+				require.ErrorIs(t, err, ErrInvalidRecallQuery)
+				return
+			}
+			require.NoError(t, err)
+			var ids []string
+			for _, entry := range entries {
+				ids = append(ids, entry.ID)
+			}
+			assert.ElementsMatch(t, tc.want, ids)
+		})
+	}
+}
+
+func TestRecallTimeBoundedPagesOldestFirst(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "walk-session", "project")
+	for _, row := range []struct{ id, updated string }{
+		{"a", "2026-02-01T00:00:00.000Z"},
+		{"b", "2026-02-01T00:00:00.000Z"},
+		{"c", "2026-02-01T00:00:00.000Z"},
+		{"d", "2026-02-02T00:00:00.000Z"},
+	} {
+		_, err := d.InsertRecallEntry(t.Context(), RecallEntry{ID: row.id, Type: "fact", Scope: "project", Status: "accepted", Title: row.id, Body: row.id, SourceSessionID: "walk-session"})
+		require.NoError(t, err)
+		_, err = d.getWriter().Exec(t.Context(), "UPDATE recall_entries SET updated_at = ? WHERE id = ?", row.updated, row.id)
+		require.NoError(t, err)
+	}
+	q := RecallQuery{UpdatedSince: "2026-01-01T00:00:00Z", Limit: 2}
+
+	first, err := d.ListRecallEntries(t.Context(), q)
+	require.NoError(t, err)
+	require.Len(t, first, 2)
+	assert.Equal(t, "c", first[0].ID)
+	assert.Equal(t, "b", first[1].ID)
+
+	// "a" is unseen; a change moves it behind the cursor's remaining tail.
+	_, err = d.getWriter().Exec(t.Context(), "UPDATE recall_entries SET updated_at = ? WHERE id = ?", "2026-02-03T00:00:00.000Z", "a")
+	require.NoError(t, err)
+	q.CursorUpdatedAt, q.CursorID = first[1].UpdatedAt, first[1].ID
+	second, err := d.ListRecallEntries(t.Context(), q)
+	require.NoError(t, err)
+	require.Len(t, second, 2)
+	assert.Equal(t, "d", second[0].ID)
+	assert.Equal(t, "a", second[1].ID)
 }

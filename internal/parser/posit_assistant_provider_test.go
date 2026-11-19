@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -898,4 +899,104 @@ func TestPositAssistantProviderFingerprintTracksUsageEventsSidecar(t *testing.T)
 	require.NoError(t, err)
 	assert.Equal(t, future.UnixNano(), touched.MTimeNS,
 		"sidecar mtime must drive the composite fingerprint MTimeNS")
+}
+
+func TestPositAssistantProviderReasoningEffort(t *testing.T) {
+	const convID = "99999999-9999-4999-8999-999999999999"
+	assistant := func(id int, extra string) string {
+		return fmt.Sprintf(
+			`{"id":%d,"message":{"role":"assistant","content":[{"type":"text","text":"a%d"}],"providerOptions":{"providerMetadata":{"positai":{"timestamp":%d,"modelId":"claude-sonnet-4-6"%s}}}}}`,
+			id, id, 1735689600000+int64(id)*1000, extra,
+		) + "\n"
+	}
+	user := `{"id":0,"message":{"role":"user","content":"hi","providerOptions":{"providerMetadata":{"positai":{"timestamp":1735689600000,"thinkingEffort":"high"}}}}}` + "\n"
+
+	tests := []struct {
+		name string
+		lm   string
+		want []string // effort of each assistant message, in order
+	}{
+		{
+			name: "inline value",
+			lm:   user + assistant(1, `,"thinkingEffort":"medium"`),
+			want: []string{"medium"},
+		},
+		{
+			name: "stored verbatim without normalization",
+			lm: user +
+				assistant(1, `,"thinkingEffort":"off"`) +
+				assistant(2, `,"thinkingEffort":"xhigh"`) +
+				assistant(3, `,"thinkingEffort":"adaptive"`),
+			want: []string{"off", "xhigh", "adaptive"},
+		},
+		{
+			name: "mid-session change",
+			lm: user +
+				assistant(1, `,"thinkingEffort":"low"`) +
+				assistant(2, `,"thinkingEffort":"max"`) +
+				assistant(3, `,"thinkingEffort":"low"`),
+			want: []string{"low", "max", "low"},
+		},
+		{
+			name: "absent field stays empty",
+			lm:   user + assistant(1, ""),
+			want: []string{""},
+		},
+		{
+			name: "no carry over from earlier message",
+			lm: user +
+				assistant(1, `,"thinkingEffort":"high"`) +
+				assistant(2, ""),
+			want: []string{"high", ""},
+		},
+		{
+			name: "non-string value ignored",
+			lm: user +
+				assistant(1, `,"thinkingEffort":null`) +
+				assistant(2, `,"thinkingEffort":3`),
+			want: []string{"", ""},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			convDir := filepath.Join(root, "ws1", convID)
+			writeSourceFile(t, filepath.Join(convDir, "conversation.json"),
+				fmt.Sprintf(`{
+				"schemaVersion": "3",
+				"root": {"id": %q, "timestamp": 1735689600000,
+					"metadata": {"kind": "main"}},
+				"messages": [
+					{"id": "n1", "parentId": %q, "isActive": true,
+						"lmMessageIds": [0,1,2,3], "timestamp": 1735689600000}
+				],
+				"files": []
+			}`, convID, convID))
+			writeSourceFile(t, filepath.Join(convDir, "lm-messages.jsonl"), tt.lm)
+
+			provider, ok := NewProvider(AgentPositAssistant, ProviderConfig{
+				Roots: []string{root},
+			})
+			require.True(t, ok)
+			discovered, err := provider.Discover(t.Context())
+			require.NoError(t, err)
+			require.Len(t, discovered, 1)
+			outcome, err := provider.Parse(t.Context(), ParseRequest{
+				Source: discovered[0],
+			})
+			require.NoError(t, err)
+			require.Len(t, outcome.Results, 1)
+
+			var got []string
+			for _, m := range outcome.Results[0].Result.Messages {
+				if m.Role == RoleAssistant {
+					got = append(got, m.ReasoningEffort)
+					continue
+				}
+				assert.Empty(t, m.ReasoningEffort,
+					"only assistant messages carry effort")
+			}
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }

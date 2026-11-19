@@ -261,6 +261,48 @@ func (t *toolset) queryRecall(
 	}, nil
 }
 
+type listRecallIn struct {
+	UpdatedSince    string `json:"updated_since,omitempty" jsonschema:"Include entries updated at or after this RFC3339 timestamp."`
+	CreatedSince    string `json:"created_since,omitempty" jsonschema:"Include entries created at or after this RFC3339 timestamp."`
+	Project         string `json:"project,omitempty"`
+	CWD             string `json:"cwd,omitempty"`
+	GitBranch       string `json:"git_branch,omitempty"`
+	Agent           string `json:"agent,omitempty"`
+	Type            string `json:"type,omitempty"`
+	Scope           string `json:"scope,omitempty"`
+	Status          string `json:"status,omitempty"`
+	ExtractorMethod string `json:"extractor_method,omitempty"`
+	SourceSessionID string `json:"source_session_id,omitempty"`
+	SourceRunID     string `json:"source_run_id,omitempty"`
+	TrustedOnly     bool   `json:"trusted_only,omitempty"`
+	Cursor          string `json:"cursor,omitempty" jsonschema:"Cursor from a previous next_cursor."`
+	Limit           int    `json:"limit,omitempty" jsonschema:"Max results, default 20, max 100."`
+}
+
+type listRecallOut struct {
+	Entries     []db.RecallEntry `json:"entries"`
+	TrustedOnly bool             `json:"trusted_only"`
+	NextCursor  string           `json:"next_cursor,omitempty"`
+}
+
+func (t *toolset) listRecall(ctx context.Context, _ *mcp.CallToolRequest, in listRecallIn) (*mcp.CallToolResult, listRecallOut, error) {
+	result, err := t.svc.ListRecallEntries(ctx, service.RecallFilter{
+		UpdatedSince: in.UpdatedSince, CreatedSince: in.CreatedSince, Project: in.Project,
+		CWD: in.CWD, GitBranch: in.GitBranch, Agent: in.Agent, Type: in.Type,
+		Scope: in.Scope, Status: in.Status, ExtractorMethod: in.ExtractorMethod,
+		SourceSessionID: in.SourceSessionID, SourceRunID: in.SourceRunID, TrustedOnly: in.TrustedOnly, Cursor: in.Cursor,
+		Limit: clampLimit(in.Limit, defaultListLimit, maxListLimit),
+	})
+	if err != nil {
+		return nil, listRecallOut{}, err
+	}
+	entries := make([]db.RecallEntry, 0, len(result.RecallEntries))
+	for _, entry := range result.RecallEntries {
+		entries = append(entries, entry.RecallEntry)
+	}
+	return nil, listRecallOut{Entries: entries, TrustedOnly: result.TrustedOnly, NextCursor: result.NextCursor}, nil
+}
+
 // --- list_sessions ---
 
 type listSessionsIn struct {
@@ -732,23 +774,24 @@ func (t *toolset) getMessageBodyContinuation(
 // --- search_content ---
 
 type searchContentIn struct {
-	Pattern          string `json:"pattern" jsonschema:"Natural-language query for semantic/hybrid, whitespace-separated literals for terms, or exact substring/regex for lexical search across message text, thinking, and tool inputs/results."`
-	Mode             string `json:"mode,omitempty" jsonschema:"substring (default), regex, terms, semantic, or hybrid. Prefer hybrid or semantic for contextual questions when a vector search index is configured."`
-	Scope            string `json:"scope,omitempty" jsonschema:"Semantic/hybrid/terms result scope: top, all, or subordinate (default all)."`
-	Project          string `json:"project,omitempty" jsonschema:"Restrict to one project."`
-	Agent            string `json:"agent,omitempty" jsonschema:"Restrict to one agent."`
-	SessionID        string `json:"session_id,omitempty" jsonschema:"Restrict to one exact full stored session ID."`
-	GitBranch        string `json:"git_branch,omitempty" jsonschema:"Restrict to one exact git branch."`
-	CurrentSessionID string `json:"current_session_id,omitempty" jsonschema:"Exclude this exact full stored session ID instead of applying the recent-activity heuristic."`
-	DateFrom         string `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
-	DateTo           string `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
-	Limit            int    `json:"limit,omitempty" jsonschema:"Max matches, default 10, max 50."`
-	Cursor           int    `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor; also pass activity_cutoff when the recent-activity heuristic applies."`
-	ActivityCutoff   string `json:"activity_cutoff,omitempty" jsonschema:"RFC3339 cutoff returned by the previous page. Required with a positive cursor when the recent-activity heuristic applies."`
-	IncludeActive    bool   `json:"include_active,omitempty" jsonschema:"Include matches from sessions active in the last 10 minutes. Default false: the conversation you are in right now is also recorded, so without this exclusion you would find yourself."`
-	IncludeOneShot   bool   `json:"include_one_shot,omitempty" jsonschema:"Include one-shot sessions. Default false."`
-	IncludeAutomated bool   `json:"include_automated,omitempty" jsonschema:"Include automated sessions. Default false."`
-	Context          int    `json:"context,omitempty" jsonschema:"Messages of context before/after each match (max 10)."`
+	Pattern          string   `json:"pattern,omitempty" jsonschema:"Natural-language query for semantic/hybrid, whitespace-separated literals for terms, or substring/regex for lexical search across message text, thinking, and tool inputs/results. A fully quoted substring pattern matches only its text. Mutually exclusive with concepts."`
+	Concepts         []string `json:"concepts,omitempty" jsonschema:"Two to five semantic concepts that must all have evidence in the same session, even in different messages. Implies mode semantic, does not page, and is mutually exclusive with pattern."`
+	Mode             string   `json:"mode,omitempty" jsonschema:"substring (default), regex, terms, semantic, or hybrid. Prefer hybrid for contextual questions. Hybrid returns keyword matches with a note when search by meaning is unavailable; semantic requires a ready index."`
+	Scope            string   `json:"scope,omitempty" jsonschema:"Substring/regex/terms/semantic/hybrid result scope: top, all (default), or subordinate."`
+	Project          string   `json:"project,omitempty" jsonschema:"Restrict to one project."`
+	Agent            string   `json:"agent,omitempty" jsonschema:"Restrict to one agent."`
+	SessionID        string   `json:"session_id,omitempty" jsonschema:"Restrict to one exact full stored session ID."`
+	GitBranch        string   `json:"git_branch,omitempty" jsonschema:"Restrict to one exact git branch."`
+	CurrentSessionID string   `json:"current_session_id,omitempty" jsonschema:"Exclude this exact full stored session ID instead of applying the recent-activity heuristic."`
+	DateFrom         string   `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
+	DateTo           string   `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
+	Limit            int      `json:"limit,omitempty" jsonschema:"Max matches, default 10, max 50."`
+	Cursor           int      `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor; also pass activity_cutoff when the recent-activity heuristic applies."`
+	ActivityCutoff   string   `json:"activity_cutoff,omitempty" jsonschema:"RFC3339 cutoff returned by the previous page. Required with a positive cursor when the recent-activity heuristic applies."`
+	IncludeActive    bool     `json:"include_active,omitempty" jsonschema:"Include matches from sessions active in the last 10 minutes. Default false: the conversation you are in right now is also recorded, so without this exclusion you would find yourself."`
+	IncludeOneShot   bool     `json:"include_one_shot,omitempty" jsonschema:"Include one-shot sessions. Default false."`
+	IncludeAutomated bool     `json:"include_automated,omitempty" jsonschema:"Include automated sessions. Default false."`
+	Context          int      `json:"context,omitempty" jsonschema:"Messages of context before/after each match (max 10)."`
 }
 
 // contextMessage is a truncated view of a service-level db.Message, used
@@ -783,6 +826,7 @@ type contentMatch struct {
 	Ordinal         int      `json:"ordinal"`
 	Timestamp       string   `json:"timestamp"`
 	Snippet         string   `json:"snippet"`
+	MatchedWords    int      `json:"matched_words" jsonschema:"Number of retained query words the match holds in ranked word search; unquoted stop words are dropped. Zero for other searches."`
 	Score           *float64 `json:"score,omitempty" jsonschema:"Relevance score for semantic/hybrid modes; omitted for substring/regex/fts."`
 	OrdinalRange    [2]int   `json:"ordinal_range" jsonschema:"[start, end] ordinals of the conversation unit containing this match; equal to the match ordinal for single-message units."`
 	Subordinate     bool     `json:"subordinate,omitzero" jsonschema:"True when this match belongs to a subordinate unit: a sidechain run, or a subagent/fork session."`
@@ -792,23 +836,27 @@ type contentMatch struct {
 	// ContextBefore/ContextAfter are populated when Context > 0: the N
 	// messages immediately before/after this match, content truncated to
 	// 500 characters.
-	ContextBefore      []contextMessage `json:"context_before,omitempty"`
-	ContextAfter       []contextMessage `json:"context_after,omitempty"`
-	TranscriptRevision string           `json:"transcript_revision,omitempty" jsonschema:"Transcript revision observed with this evidence; pass it as expected_revision to get_messages."`
+	ContextBefore      []contextMessage     `json:"context_before,omitempty"`
+	ContextAfter       []contextMessage     `json:"context_after,omitempty"`
+	TranscriptRevision string               `json:"transcript_revision,omitempty" jsonschema:"Transcript revision observed with this evidence; pass it as expected_revision to get_messages."`
+	ConceptEvidence    []db.ConceptEvidence `json:"concept_evidence,omitempty" jsonschema:"With concepts: each concept's strongest match in this session, in request order. score is then the mean of these scores."`
 }
 
 type searchContentOut struct {
-	Matches        []contentMatch `json:"matches"`
-	NextCursor     *int           `json:"next_cursor,omitempty"`
-	ActivityCutoff string         `json:"activity_cutoff,omitempty" jsonschema:"Effective RFC3339 activity cutoff; pass it unchanged with next_cursor as cursor to continue."`
-	ExcludedActive int            `json:"excluded_active,omitempty"`
+	Note           string                      `json:"note,omitempty"`
+	Hints          []service.ContentSearchHint `json:"hints,omitempty"`
+	Matches        []contentMatch              `json:"matches"`
+	NextCursor     *int                        `json:"next_cursor,omitempty"`
+	ActivityCutoff string                      `json:"activity_cutoff,omitempty" jsonschema:"Effective RFC3339 activity cutoff; pass it unchanged with next_cursor as cursor to continue."`
+	ExcludedActive int                         `json:"excluded_active,omitempty"`
 	// EffectiveMode and EffectiveScope report the defaults the search
 	// resolved, which the caller cannot see in its own request.
-	EffectiveMode  string                  `json:"effective_mode"`
-	EffectiveScope string                  `json:"effective_scope,omitempty"`
-	Exclusions     searchContentExclusions `json:"exclusions"`
-	RevisionBound  bool                    `json:"revision_bound" jsonschema:"True when every returned match was captured with a transcript revision and can be opened with a revision-bound get_messages call."`
-	Coverage       service.MemoryCoverage  `json:"coverage" jsonschema:"Current lexical and semantic memory coverage from the same readiness provider as get_memory_status."`
+	EffectiveMode      string                  `json:"effective_mode"`
+	EffectiveScope     string                  `json:"effective_scope,omitempty"`
+	Exclusions         searchContentExclusions `json:"exclusions"`
+	RevisionBound      bool                    `json:"revision_bound" jsonschema:"True when every returned match was captured with a transcript revision and can be opened with a revision-bound get_messages call."`
+	Coverage           service.MemoryCoverage  `json:"coverage" jsonschema:"Current lexical and semantic memory coverage from the same readiness provider as get_memory_status."`
+	CandidateTruncated bool                    `json:"candidate_truncated,omitempty" jsonschema:"With concepts: true when a concept's candidate window filled or more sessions matched than limit, so some sessions may be missing."`
 }
 
 type memoryStatusIn struct{}
@@ -833,6 +881,7 @@ type searchContentExclusions struct {
 	RecentActive     bool   `json:"recent_active"`
 	OneShot          bool   `json:"one_shot"`
 	Automated        bool   `json:"automated"`
+	Children         bool   `json:"children"`
 }
 
 func validateSearchDates(from, to string) error {
@@ -853,7 +902,23 @@ func validateSearchDates(from, to string) error {
 func (t *toolset) searchContent(
 	ctx context.Context, _ *mcp.CallToolRequest, in searchContentIn,
 ) (*mcp.CallToolResult, searchContentOut, error) {
-	if in.Scope != "" && !db.ContentSearchModeSupportsScope(in.Mode) {
+	if strings.TrimSpace(in.Pattern) == "" && len(in.Concepts) == 0 {
+		return nil, searchContentOut{}, errors.New("pattern or concepts required")
+	}
+	limit := clampLimit(in.Limit, defaultSearchLimit, maxContentSearchLimit)
+	normalized, err := service.NormalizeContentSearchRequest(service.ContentSearchRequest{
+		Pattern: in.Pattern, Concepts: in.Concepts, Mode: in.Mode,
+		Limit: limit, Cursor: in.Cursor,
+	})
+	if err != nil {
+		return nil, searchContentOut{}, err
+	}
+	mode := normalized.Mode
+	scope := in.Scope
+	if scope == "" && db.ContentSearchModeSupportsScope(mode) {
+		scope = "all"
+	}
+	if in.Scope != "" && !db.ContentSearchModeSupportsScope(mode) {
 		return nil, searchContentOut{}, errors.New(db.ContentSearchScopeUnsupportedMsg)
 	}
 	if err := validateSearchDates(in.DateFrom, in.DateTo); err != nil {
@@ -861,7 +926,6 @@ func (t *toolset) searchContent(
 	}
 	var cutoffTime time.Time
 	if in.ActivityCutoff != "" {
-		var err error
 		cutoffTime, err = time.Parse(time.RFC3339, in.ActivityCutoff)
 		if err != nil {
 			return nil, searchContentOut{}, errors.New("invalid activity_cutoff: use RFC3339")
@@ -884,15 +948,17 @@ func (t *toolset) searchContent(
 	}
 	req := service.ContentSearchRequest{
 		Pattern:            in.Pattern,
+		Concepts:           in.Concepts,
 		Mode:               in.Mode,
-		Scope:              in.Scope,
+		KeywordFallback:    mode == "hybrid",
+		Scope:              scope,
 		Project:            in.Project,
 		Agent:              in.Agent,
 		SessionID:          in.SessionID,
 		GitBranchExact:     in.GitBranch,
 		DateFrom:           in.DateFrom,
 		DateTo:             in.DateTo,
-		Limit:              clampLimit(in.Limit, defaultSearchLimit, maxContentSearchLimit),
+		Limit:              limit,
 		Cursor:             in.Cursor,
 		Context:            in.Context,
 		IncludeOneShot:     in.IncludeOneShot,
@@ -908,46 +974,56 @@ func (t *toolset) searchContent(
 	out := searchContentOut{
 		Matches:        make([]contentMatch, 0, len(res.Matches)),
 		ActivityCutoff: cutoff,
-		EffectiveMode:  cmp.Or(in.Mode, "substring"),
+		EffectiveMode:  cmp.Or(res.EffectiveMode, mode, "substring"),
+		Note:           res.Note,
 		Exclusions: searchContentExclusions{
 			CurrentSessionID: currentSession,
 			RecentActive:     currentSession == "" && !in.IncludeActive,
 			OneShot:          !in.IncludeOneShot, Automated: !in.IncludeAutomated,
+			Children: scope == "top" || mode == "fts" && in.SessionID == "",
 		},
-		RevisionBound: res.RevisionBound,
-		Coverage:      service.NormalizeMemoryCoverage(res.Coverage),
+		RevisionBound:      res.RevisionBound,
+		Coverage:           service.NormalizeMemoryCoverage(res.Coverage),
+		CandidateTruncated: res.CandidateTruncated,
 	}
-	if db.ContentSearchModeSupportsScope(in.Mode) {
-		out.EffectiveScope = cmp.Or(in.Scope, "all")
+	if db.ContentSearchModeSupportsScope(mode) {
+		out.EffectiveScope = scope
 	}
 	activity := make(map[string]string)
-	for _, m := range res.Matches {
-		if legacy {
+	var keepMatch func(db.ContentMatch) bool
+	if cutoff != "" {
+		keepMatch = func(m db.ContentMatch) bool {
 			ts, ok := t.lookupActivity(ctx, m.SessionID, activity)
 			if !ok {
 				ts = m.Timestamp
 			}
-			if isActiveSince(ts, cutoffTime.Add(activeExclusionWindow)) {
-				out.ExcludedActive++
-				continue
-			}
+			return !isActiveSince(ts, cutoffTime.Add(activeExclusionWindow))
+		}
+	}
+	for _, m := range res.Matches {
+		if legacy && !keepMatch(m) {
+			out.ExcludedActive++
+			continue
 		}
 		out.Matches = append(out.Matches, contentMatch{
 			WebURL: m.WebURL, SessionID: m.SessionID, Project: m.Project, Agent: m.Agent,
 			Location: m.Location, Role: m.Role, Ordinal: m.Ordinal,
 			Timestamp: m.Timestamp, Snippet: m.Snippet, Score: m.Score,
+			MatchedWords: m.MatchedWords,
 			OrdinalRange: m.OrdinalRange, Subordinate: m.Subordinate,
 			Relationship: m.Relationship, ParentSessionID: m.ParentSessionID,
 			Sidechain:          m.Sidechain,
 			ContextBefore:      toContextMessages(m.ContextBefore),
 			ContextAfter:       toContextMessages(m.ContextAfter),
 			TranscriptRevision: m.TranscriptRevision,
+			ConceptEvidence:    m.ConceptEvidence,
 		})
 	}
 	if res.NextCursor > 0 && len(res.Matches) > 0 {
 		nc := res.NextCursor
 		out.NextCursor = &nc
 	}
+	out.Hints = service.SearchContentHints(ctx, t.svc, req, res, false, keepMatch)
 	return nil, out, nil
 }
 
@@ -979,4 +1055,32 @@ func (t *toolset) usageSummary(
 		return nil, nil, err
 	}
 	return nil, res, nil
+}
+
+type fileReferencesIn struct {
+	SessionID string `json:"session_id" jsonschema:"The session whose files and images to find in Docbank."`
+}
+
+func (t *toolset) fileReferences(ctx context.Context, _ *mcp.CallToolRequest, in fileReferencesIn) (*mcp.CallToolResult, service.FileReferencesResult, error) {
+	result, err := service.FileReferences(ctx, t.svc, in.SessionID)
+	return nil, result, err
+}
+
+type compactionSummariesIn struct {
+	SessionID   string `json:"session_id,omitempty" jsonschema:"Session ID."`
+	ActiveSince string `json:"active_since,omitempty" jsonschema:"RFC3339 timestamp."`
+	Cursor      string `json:"cursor,omitempty" jsonschema:"Session cursor; resume with the same active_since."`
+	Limit       uint   `json:"limit,omitempty" jsonschema:"Sessions per page; 0 uses the default 20, max 100."`
+}
+
+func (t *toolset) compactionSummaries(ctx context.Context, _ *mcp.CallToolRequest, in compactionSummariesIn) (*mcp.CallToolResult, service.CompactionSummariesResult, error) {
+	if in.SessionID != "" && in.ActiveSince == "" {
+		detail, err := t.resolveSession(ctx, in.SessionID)
+		if err != nil {
+			return nil, service.CompactionSummariesResult{}, err
+		}
+		in.SessionID = detail.ID
+	}
+	out, err := service.CompactionSummaries(ctx, t.svc, service.CompactionSummariesRequest{SessionID: in.SessionID, ActiveSince: in.ActiveSince, Cursor: in.Cursor, Limit: int(min(in.Limit, service.MaxCompactionSessionLimit))})
+	return nil, out, err
 }

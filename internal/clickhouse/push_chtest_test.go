@@ -18,7 +18,8 @@ import (
 )
 
 func TestEnsureSchemaCreatesMissingDatabase(t *testing.T) {
-	ctx := context.Background()
+	t.Parallel()
+	ctx := t.Context()
 	dsn := chtest.ServerURL(t)
 	database := "agentsview_boot_" + strings.ReplaceAll(t.Name(), "/", "_")
 	parsed, err := url.Parse(dsn)
@@ -31,7 +32,7 @@ func TestEnsureSchemaCreatesMissingDatabase(t *testing.T) {
 	assert.True(t, status.SchemaMissing)
 	require.NoError(t, EnsureSchema(ctx, Target{URL: missingDSN}))
 	t.Cleanup(func() {
-		_, _ = admin.ExecContext(context.Background(),
+		_, _ = admin.ExecContext(context.WithoutCancel(t.Context()),
 			"DROP DATABASE IF EXISTS "+database+" SYNC")
 	})
 	conn := chtest.Open(t, missingDSN, database)
@@ -39,7 +40,8 @@ func TestEnsureSchemaCreatesMissingDatabase(t *testing.T) {
 }
 
 func TestPushMirrorsEveryTableAndSkipsUnchanged(t *testing.T) {
-	ctx := context.Background()
+	t.Parallel()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	s := newTestSync(t, local, target, storage.PusherOptions{})
 
@@ -97,7 +99,8 @@ func TestPushMirrorsEveryTableAndSkipsUnchanged(t *testing.T) {
 }
 
 func TestPushReplacesChangedSessionsWithoutLeavingOldRows(t *testing.T) {
-	ctx := context.Background()
+	t.Parallel()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	s := newTestSync(t, local, target, storage.PusherOptions{})
 	_, err := s.Push(ctx, false, nil)
@@ -136,6 +139,7 @@ func TestPushReplacesChangedSessionsWithoutLeavingOldRows(t *testing.T) {
 }
 
 func TestPushRemovesUsageForReplacedMessages(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedFixture(t)
 	s := newTestSync(t, local, target, storage.PusherOptions{})
@@ -176,8 +180,59 @@ func TestPushRemovesUsageForReplacedMessages(t *testing.T) {
 	}
 }
 
+func TestPushDeletesOnlyRowsWhoseKeysVanished(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	local, target := seedFixture(t)
+	s := newTestSync(t, local, target, storage.PusherOptions{})
+	first, err := s.Push(ctx, false, nil)
+	require.NoError(t, err)
+	require.Zero(t, first.Errors)
+	conn := chtest.Open(t, target.URL, target.Database)
+	require.Equal(t, 2, chtest.Count(t, conn, "tool_calls", "session_id = ?", fixtureAlphaID))
+
+	// Keep both messages but drop the second tool call of message 1, so one
+	// tool_calls key vanishes while every message key is rewritten.
+	session, err := local.GetSessionFull(ctx, fixtureAlphaID)
+	require.NoError(t, err)
+	messages, err := local.GetAllMessages(ctx, fixtureAlphaID)
+	require.NoError(t, err)
+	require.Len(t, messages[1].ToolCalls, 2)
+	messages[1].ToolCalls = messages[1].ToolCalls[:1]
+	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+		Session: *session, Messages: messages, DataVersion: 1, ReplaceMessages: true,
+	}})
+	require.NoError(t, err)
+	result, err := s.Push(ctx, true, nil)
+	require.NoError(t, err)
+	require.Zero(t, result.Errors)
+
+	var tools []string
+	rows, err := conn.QueryContext(ctx,
+		"SELECT tool_name FROM tool_calls WHERE session_id = ? ORDER BY message_ordinal, call_index", fixtureAlphaID)
+	require.NoError(t, err)
+	for rows.Next() {
+		var name string
+		require.NoError(t, rows.Scan(&name))
+		tools = append(tools, name)
+	}
+	require.NoError(t, rows.Err())
+	require.NoError(t, rows.Close())
+	assert.Equal(t, []string{"search"}, tools, "the dropped tool call is deleted")
+	assert.Equal(t, 2, chtest.Count(t, conn, "messages", "session_id = ?", fixtureAlphaID))
+
+	// Rows whose key the push rewrote are left for ReplacingMergeTree to
+	// collapse, so the push marks none of them deleted.
+	var marked int
+	require.NoError(t, conn.QueryRowContext(ctx,
+		`SELECT countIf(NOT _row_exists) FROM messages WHERE session_id = ?
+		 SETTINGS final = 0, apply_deleted_mask = 0`, fixtureAlphaID).Scan(&marked))
+	assert.Zero(t, marked)
+}
+
 func TestPushRemovesHardDeletedSessions(t *testing.T) {
-	ctx := context.Background()
+	t.Parallel()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	s := newTestSync(t, local, target, storage.PusherOptions{})
 	_, err := s.Push(ctx, false, nil)
@@ -208,6 +263,7 @@ func TestPushRemovesHardDeletedSessions(t *testing.T) {
 }
 
 func TestPushRemovesUnownedSessionsMissingLocally(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedFixture(t)
 	_, err := newTestSync(t, local, target, storage.PusherOptions{}).Push(ctx, false, nil)
@@ -242,6 +298,7 @@ func TestPushRemovesUnownedSessionsMissingLocally(t *testing.T) {
 // without journaling a deletion. The next push, even an incremental one, must
 // take the full path that removes mirror rows missing locally.
 func TestPushAfterArchiveRebuildRemovesRetiredSessions(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedFixture(t)
 	s := newTestSync(t, local, target, storage.PusherOptions{})
@@ -272,7 +329,8 @@ func TestPushAfterArchiveRebuildRemovesRetiredSessions(t *testing.T) {
 }
 
 func TestPushRecoversFromFailureBeforeSessionRows(t *testing.T) {
-	ctx := context.Background()
+	t.Parallel()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	s := newTestSync(t, local, target, storage.PusherOptions{})
 	_, err := s.Push(ctx, false, nil)
@@ -312,7 +370,8 @@ func TestPushRecoversFromFailureBeforeSessionRows(t *testing.T) {
 }
 
 func TestPushHonorsProjectScopeAndRemovesMovedSessions(t *testing.T) {
-	ctx := context.Background()
+	t.Parallel()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	s := newTestSync(t, local, target, storage.PusherOptions{Projects: []string{"alpha"}})
 	res, err := s.Push(ctx, false, nil)
@@ -353,7 +412,8 @@ func TestPushHonorsProjectScopeAndRemovesMovedSessions(t *testing.T) {
 }
 
 func TestPushRefreshesCurationWithoutContentChange(t *testing.T) {
-	ctx := context.Background()
+	t.Parallel()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	s := newTestSync(t, local, target, storage.PusherOptions{})
 	_, err := s.Push(ctx, false, nil)
@@ -375,7 +435,8 @@ func TestPushRefreshesCurationWithoutContentChange(t *testing.T) {
 }
 
 func TestEnsureSchemaUpgradesOlderMirrorInPlace(t *testing.T) {
-	ctx := context.Background()
+	t.Parallel()
+	ctx := t.Context()
 	dsn, database := chtest.FreshDatabase(t)
 	target := Target{URL: dsn, Database: database}
 	require.NoError(t, EnsureSchema(ctx, target))
@@ -391,6 +452,7 @@ func TestEnsureSchemaUpgradesOlderMirrorInPlace(t *testing.T) {
 }
 
 func TestPushHonorsTargetPushBatchSize(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedFixture(t)
 	tests := []struct {

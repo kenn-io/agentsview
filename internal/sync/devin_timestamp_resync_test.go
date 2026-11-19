@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/parser"
 )
 
@@ -125,11 +126,7 @@ const staleStartedAt = "1970-01-20T16:13:20Z"
 // or a current archive that a version bump never reached.
 func staleUserVersion(demandResync bool) int {
 	if demandResync {
-		version := db.CurrentDataVersion() - 1
-		for len(db.ScopedDataVersionProviders(version, db.CurrentDataVersion())) > 0 {
-			version--
-		}
-		return version
+		return dbtest.FullRebuildVersion()
 	}
 	return db.CurrentDataVersion()
 }

@@ -1,5 +1,6 @@
 // Package zstdframe inspects and writes append-only files made of
-// independent zstd frames, each carrying a content checksum.
+// independent zstd frames. Frames this package writes carry a content
+// checksum; frames it inspects may omit one.
 //
 // Writers append one complete frame at a time. A crash can leave a torn
 // frame at the end of the file; Inspect reports where the last complete
@@ -42,13 +43,10 @@ func (l Layout) End(from int64) int64 {
 	return l.FrameEnds[len(l.FrameEnds)-1]
 }
 
-// FormatError reports bytes that cannot be a supported zstd frame.
+// FormatError reports bytes that cannot be a zstd frame.
 type FormatError struct {
 	Offset int64
 	Reason string
-	// Unsupported marks a valid frame this package refuses, such as one
-	// without a content checksum.
-	Unsupported bool
 }
 
 func (e *FormatError) Error() string {
@@ -61,7 +59,6 @@ func (e *FormatError) Error() string {
 func Inspect(r io.ReaderAt, size, from int64) (Layout, error) {
 	layout := Layout{Size: size}
 	for offset := from; offset < size; {
-		start := offset
 		magic, complete, err := readUintAt(r, size, offset, 4)
 		if err != nil {
 			return Layout{}, err
@@ -86,11 +83,6 @@ func Inspect(r io.ReaderAt, size, from int64) (Layout, error) {
 		if descriptor&0x18 != 0 {
 			return Layout{}, &FormatError{Offset: offset - 1, Reason: "reserved frame-header bit"}
 		}
-		if descriptor&0x04 == 0 {
-			return Layout{}, &FormatError{
-				Offset: start, Reason: "frame without checksum", Unsupported: true,
-			}
-		}
 		offset += frameHeaderRest(descriptor)
 		if offset > size {
 			layout.Torn = true
@@ -100,11 +92,15 @@ func Inspect(r io.ReaderAt, size, from int64) (Layout, error) {
 		if err != nil {
 			return Layout{}, err
 		}
-		if !complete || 4 > size-end {
+		checksumBytes := int64(0)
+		if descriptor&0x04 != 0 {
+			checksumBytes = 4
+		}
+		if !complete || checksumBytes > size-end {
 			layout.Torn = true
 			break
 		}
-		offset = end + 4
+		offset = end + checksumBytes
 		layout.CompleteFrames++
 		layout.FrameEnds = append(layout.FrameEnds, offset)
 	}

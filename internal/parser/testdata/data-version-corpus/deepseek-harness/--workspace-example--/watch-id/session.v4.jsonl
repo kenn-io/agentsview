@@ -1,0 +1,23 @@
+{"id":"watch-id","createdAt":1700000000000,"cwd":"/workspace/example","isSeeded":false,"delegationDepth":0,"agentPreset":"minimal","type":"session","version":4}
+{"type":"model/selection","seq":0,"time":1700000000001,"data":{"provider":"deepseek-official","model":"deepseek-v4-flash","reasoningEffort":"high"}}
+{"time":1700000000002,"data":{"turn":1},"type":"turn/start","seq":1}
+{"type":"step/start","seq":2,"time":1700000000003,"data":{"turn":1,"step":1}}
+{"type":"system/message","seq":3,"time":1700000000004,"data":{"message":{"id":"sys-1","role":"system","source":{"kind":"system-prompt"},"content":[{"text":"You are a helpful software engineer assistant.","type":"text"}]},"turn":1,"step":1},"surfaceOp":"append"}
+{"surfaceOp":"append","type":"user/message","seq":4,"time":1700000000005,"data":{"id":"u1","role":"user","source":{"kind":"user"},"content":[{"type":"text","text":"hello"},{"type":"file","attachment":{"id":"file-1"}}]}}
+{"type":"request/header","seq":5,"time":1700000000006,"data":{"reason":"initial","header":{"config":{"provider":"deepseek-official","model":"deepseek-v4-flash"},"tools":[{"name":"read","description":"Read a file","parameters":{"type":"object"}}]}}}
+{"type":"assistant/attempt","seq":6,"time":1700000000007,"data":{"step":1,"stream":[{"type":"chunk","time":1700000000007,"chunk":{"reason":{"failure":{"message":"transient","code":"TRANSPORT"},"kind":"error"},"type":"finish"}}],"turn":1}}
+{"type":"assistant/message","seq":7,"time":1700000000008,"data":{"turn":1,"step":1,"message":{"id":"a1","role":"assistant","source":{"model":"deepseek-v4-flash","kind":"model","provider":"deepseek-official"},"content":[{"type":"reasoning","text":"think"},{"type":"text","text":"answer"}]},"stream":[{"type":"chunk","time":1700000000008,"chunk":{"type":"usage","usage":{"reasoningTokens":1,"inputTokens":10,"outputTokens":5,"cacheReadTokens":2,"cacheWriteTokens":0}}},{"type":"chunk","time":1700000000009,"chunk":{"reason":{"kind":"stop"},"type":"finish"}}]},"surfaceOp":"append"}
+{"type":"tool/call","seq":8,"time":1700000000009,"data":{"callId":"call-1","name":"bash","arguments":"{}","turn":1,"step":1}}
+{"type":"tool/ptc-dispatch-start","seq":9,"time":1700000000010,"data":{"subCallId":"call-1:code:1","name":"glob","arguments":{"pattern":"*"},"rootCallId":"call-1","parentCallId":"call-1"}}
+{"type":"tool/ptc-dispatch","seq":10,"time":1700000000011,"data":{"rootCallId":"call-1","parentCallId":"call-1","subCallId":"call-1:code:1","name":"glob","arguments":{"pattern":"*"},"isError":false,"content":[{"type":"text","text":"ok"}]}}
+{"type":"deliverables/presented","seq":11,"time":1700000000012,"data":{"turn":1,"callId":"call-1","files":[{"path":"/tmp/out.txt","description":"out"}]}}
+{"data":{"step":1,"message":{"id":"tr1","role":"tool","source":{"kind":"tool","callId":"call-1"},"content":[{"type":"text","text":"output"}],"toolCallId":"call-1","isError":false},"meta":{"durationMs":3},"turn":1},"surfaceOp":"append","type":"tool/result","seq":12,"time":1700000000013}
+{"type":"developer/message","seq":13,"time":1700000000014,"data":{"turn":1,"step":1,"headerSeq":5,"message":{"id":"dev-1","role":"developer","source":{"kind":"tool-registry"},"content":[{"type":"text","text":"Use the read-only connection"},{"type":"tool-addition","toolName":"read"},{"type":"tool-removal","toolName":"write"}]}},"surfaceOp":"append"}
+{"sourceEventSeqs":[3],"type":"system/message","seq":14,"time":1700000000015,"data":{"turn":1,"step":1,"message":{"role":"system","source":{"kind":"system-prompt"},"content":[{"type":"text","text":"replacement prompt"}],"id":"sys-2"}},"surfaceOp":{"op":"replace","startSeq":3,"endSeq":3}}
+{"type":"step/end","seq":15,"time":1700000000016,"data":{"turn":1,"step":1}}
+{"type":"turn/end","seq":16,"time":1700000000017,"data":{"turn":1,"reason":{"kind":"completed"}}}
+{"type":"session/title","seq":17,"time":1700000000018,"data":{"title":"V3 title","messageSeqs":[4],"source":{"kind":"fallback"}}}
+{"type":"subagent/catalog","seq":18,"time":1700000000019,"data":{"mode":"continuable","label":"child","version":0,"childId":"child-1","childCreatedAt":1700000000000}}
+{"type":"workspace/changes","seq":19,"time":1700000000020,"data":{}}
+{"type":"image/offload","seq":20,"time":1700000000021,"data":{}}
+{"data":{},"type":"working-directory/change","seq":21,"time":1700000000022}

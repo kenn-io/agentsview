@@ -24,6 +24,25 @@ const (
 type PriorSession struct {
 	Session  db.Session
 	Messages []db.Message
+	// LoadMessages optionally supplies retained rows only when a history policy
+	// needs them. It takes precedence over Messages; callers own read errors
+	// and any caching needed across reconciliation and later preservation.
+	LoadMessages func(context.Context) ([]db.Message, error)
+}
+
+func (p *PriorSession) loadMessages(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if p.LoadMessages == nil {
+		return nil
+	}
+	messages, err := p.LoadMessages(ctx)
+	if err != nil {
+		return err
+	}
+	p.Messages = messages
+	return nil
 }
 
 // HistoryResult contains the effective rows and the decision a storage caller
@@ -36,8 +55,8 @@ type HistoryResult struct {
 }
 
 // ReconcileProviderHistory applies provider-specific archive preservation to
-// explicitly supplied current and same-source prior rows. It performs no
-// storage or filesystem reads.
+// explicitly supplied current and same-source prior rows. Only policies that
+// inspect retained content invoke the caller's optional message loader.
 func ReconcileProviderHistory(
 	ctx context.Context,
 	candidate Candidate,
@@ -48,6 +67,9 @@ func ReconcileProviderHistory(
 	if err := ctx.Err(); err != nil || prior == nil {
 		return result, err
 	}
+	// Loading rows must not change the caller's history input.
+	previous := *prior
+	prior = &previous
 	// Apply source-owned write intent before finalization and content hashing.
 	// Immutable projection rows cannot inherit these fields through an upsert.
 	if candidate.Session.PreserveSessionName {
@@ -74,9 +96,13 @@ func ReconcileProviderHistory(
 		)
 	}
 	if IsOpenCodeFormatStorageAgent(agent) {
-		if shouldPreserveOpenCodeFormatArchive(
-			agent, candidate, *prior, options,
-		) {
+		preserve, err := shouldPreserveOpenCodeFormatArchive(
+			ctx, agent, candidate, prior, options,
+		)
+		if err != nil {
+			return HistoryResult{}, err
+		}
+		if preserve {
 			result.Candidate.Session = prior.Session
 			result.Candidate.Messages = prior.Messages
 			result.Action = HistoryPreserve
@@ -87,7 +113,13 @@ func ReconcileProviderHistory(
 
 	switch agent {
 	case parser.AgentRooCode, parser.AgentKiloLegacy, parser.AgentCline:
-		if len(candidate.Messages) == 0 && len(prior.Messages) > 0 {
+		if len(candidate.Messages) != 0 {
+			return result, ctx.Err()
+		}
+		if err := prior.loadMessages(ctx); err != nil {
+			return HistoryResult{}, err
+		}
+		if len(prior.Messages) > 0 {
 			result.Candidate.Session = prior.Session
 			result.Candidate.Messages = prior.Messages
 			result.Action = HistoryPreserve
@@ -95,6 +127,9 @@ func ReconcileProviderHistory(
 		}
 		return result, ctx.Err()
 	case parser.AgentVSCopilot:
+		if err := prior.loadMessages(ctx); err != nil {
+			return HistoryResult{}, err
+		}
 		decision := visualStudioCopilotArchiveDecision(
 			candidate.Messages, prior.Messages,
 		)
@@ -159,6 +194,9 @@ func reconcileClaudePersistedToolResults(
 	flagged := flaggedPersistedToolResultIdentities(candidate.Parsed.Messages)
 	if len(flagged) == 0 {
 		return result, ctx.Err()
+	}
+	if err := prior.loadMessages(ctx); err != nil {
+		return HistoryResult{}, err
 	}
 	archived := archivedToolResultEventsByIdentity(prior.Messages)
 	currentCounts := currentToolResultIdentityCounts(candidate.Messages)

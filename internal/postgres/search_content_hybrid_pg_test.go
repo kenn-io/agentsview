@@ -5,7 +5,6 @@ package postgres
 import (
 	"context"
 	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -91,6 +90,7 @@ const (
 // result whose anchor ordinal is the keyword-matched message (overriding the
 // vector leg's chunk anchor) and whose snippet centers on the keyword text.
 func TestPGHybridBothLegsFuseKeywordAnchor(t *testing.T) {
+	t.Parallel()
 	f := &hybridFakeSearcher{hits: []db.VectorHit{
 		{
 			SessionID: "s1", Ordinal: 1, OrdinalStart: 1, OrdinalEnd: 2,
@@ -103,7 +103,7 @@ func TestPGHybridBothLegsFuseKeywordAnchor(t *testing.T) {
 	insertCSUnitMessage(t, store, "s1", 1, "assistant", "first step of the answer", false, false)
 	insertCSUnitMessage(t, store, "s1", 2, "assistant", "second step mentions zebra", false, false)
 
-	page, err := store.SearchContent(context.Background(), db.ContentSearchFilter{
+	page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
 		Pattern: "zebra", Mode: "hybrid", Limit: 50,
 	})
 	require.NoError(t, err, "SearchContent hybrid")
@@ -124,6 +124,7 @@ func TestPGHybridBothLegsFuseKeywordAnchor(t *testing.T) {
 // hit found only by the vector leg and a hit found only by the keyword leg
 // both survive fusion, not just the leg-overlapping ones.
 func TestPGHybridVectorOnlyAndKeywordOnlyBothAppear(t *testing.T) {
+	t.Parallel()
 	f := &hybridFakeSearcher{hits: []db.VectorHit{
 		{SessionID: "vec-only", Ordinal: 0, Score: 0.9, Snippet: "totally unrelated content"},
 	}}
@@ -133,7 +134,7 @@ func TestPGHybridVectorOnlyAndKeywordOnlyBothAppear(t *testing.T) {
 	insertCSSession(t, store, "vec-only", "proj", "claude", hybridStart, hybridEnd)
 	insertCSUnitMessage(t, store, "vec-only", 0, "user", "totally unrelated content", false, false)
 
-	page, err := store.SearchContent(context.Background(), db.ContentSearchFilter{
+	page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
 		Pattern: "needle", Mode: "hybrid", Limit: 50,
 	})
 	require.NoError(t, err, "SearchContent hybrid")
@@ -152,6 +153,7 @@ func TestPGHybridVectorOnlyAndKeywordOnlyBothAppear(t *testing.T) {
 // ordinal, carrying a structurally derived unit range (the uncovered hit sits
 // in a two-message assistant run) rather than a self-range.
 func TestPGHybridKeywordHitOutsideUniverseKeepsMessageGranularity(t *testing.T) {
+	t.Parallel()
 	f := &hybridFakeSearcher{hits: []db.VectorHit{
 		{SessionID: "covered", Ordinal: 0, Score: 0.9, Snippet: "unrelated content"},
 	}}
@@ -163,7 +165,7 @@ func TestPGHybridKeywordHitOutsideUniverseKeepsMessageGranularity(t *testing.T) 
 	insertCSSession(t, store, "covered", "proj", "claude", hybridStart, hybridEnd)
 	insertCSUnitMessage(t, store, "covered", 0, "user", "unrelated content", false, false)
 
-	page, err := store.SearchContent(context.Background(), db.ContentSearchFilter{
+	page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
 		Pattern: "zebra", Mode: "hybrid", Limit: 50,
 	})
 	require.NoError(t, err, "SearchContent hybrid")
@@ -188,6 +190,7 @@ func TestPGHybridKeywordHitOutsideUniverseKeepsMessageGranularity(t *testing.T) 
 // subordinate hit, while scope=subordinate keeps only them. The keyword-leg
 // subordinate flag comes from the resolved unit.
 func TestPGHybridScopeFiltersBothLegs(t *testing.T) {
+	t.Parallel()
 	f := &hybridFakeSearcher{
 		hits: []db.VectorHit{
 			{SessionID: "topvec", Ordinal: 0, Score: 0.9, Snippet: "topvec body"},
@@ -209,7 +212,7 @@ func TestPGHybridScopeFiltersBothLegs(t *testing.T) {
 	insertCSChildSession(t, store, "subkw", "proj", "claude", "topkw", hybridStart, hybridEnd)
 	insertCSUnitMessage(t, store, "subkw", 0, "assistant", "zebra subordinate", false, false)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	top, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "zebra", Mode: "hybrid", Scope: "top", Limit: 50,
 	})
@@ -235,6 +238,7 @@ func TestPGHybridScopeFiltersBothLegs(t *testing.T) {
 // tie between the two single-leg units breaks by ascending fusion key (the
 // message key sorts before the unit key), independent of session recency.
 func TestPGHybridRRFOrderParity(t *testing.T) {
+	t.Parallel()
 	f := &hybridFakeSearcher{hits: []db.VectorHit{
 		{SessionID: "both", Ordinal: 0, Score: 0.9, Snippet: "needle here"},
 		{SessionID: "vec", Ordinal: 0, Score: 0.8, Snippet: "no match here"},
@@ -247,7 +251,7 @@ func TestPGHybridRRFOrderParity(t *testing.T) {
 	insertCSSession(t, store, "kw", "proj", "claude", hybridStart, hybridEnd)
 	insertCSUnitMessage(t, store, "kw", 0, "user", "needle appears", false, false)
 
-	page, err := store.SearchContent(context.Background(), db.ContentSearchFilter{
+	page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
 		Pattern: "needle", Mode: "hybrid", Limit: 50,
 	})
 	require.NoError(t, err, "SearchContent hybrid")
@@ -275,31 +279,6 @@ func TestPGHybridRRFOrderParity(t *testing.T) {
 		"page order must match db.RRFMerge over the two legs")
 }
 
-// TestPGHybridKeywordSnippetCentersOnTerm pins the term-aware keyword snippet:
-// a two-term query whose terms are non-adjacent in the message (so the raw
-// pattern is not a literal substring) centers the snippet on a matched term, not
-// the message start. The first matched term sits far past the start window, so
-// under the old raw-pattern centering the snippet would not contain it.
-func TestPGHybridKeywordSnippetCentersOnTerm(t *testing.T) {
-	f := &hybridFakeSearcher{}
-	store := wireHybrid(t, f)
-
-	// "alpha" lands at byte 160, past the ~60-char start snippet window; "omega"
-	// follows later. The raw pattern "alpha omega" is not a substring.
-	lead := strings.Repeat("x ", 80)
-	content := lead + "alpha then a stretch of filler words before omega ends it"
-	insertCSSession(t, store, "s1", "proj", "claude", hybridStart, hybridEnd)
-	insertCSUnitMessage(t, store, "s1", 0, "user", content, false, false)
-
-	page, err := store.SearchContent(context.Background(), db.ContentSearchFilter{
-		Pattern: "alpha omega", Mode: "hybrid", Limit: 50,
-	})
-	require.NoError(t, err, "SearchContent hybrid")
-	require.Len(t, page.Matches, 1, "the two-term keyword hit survives")
-	assert.Contains(t, page.Matches[0].Snippet, "alpha",
-		"snippet centers on a matched term, not the message start")
-}
-
 // hybridSessionIDs projects a page's matches to session IDs in order.
 func hybridSessionIDs(page db.ContentSearchPage) []string {
 	out := make([]string, len(page.Matches))
@@ -310,6 +289,7 @@ func hybridSessionIDs(page db.ContentSearchPage) []string {
 }
 
 func TestPGHybridSnippetUsesDialogue(t *testing.T) {
+	t.Parallel()
 	for _, leg := range []string{"keyword", "fused", "vector"} {
 		t.Run(leg, func(t *testing.T) {
 			f := &hybridFakeSearcher{}

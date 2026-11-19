@@ -55,7 +55,7 @@ func TestClaudeLateToolResultPreservesFailureMetadata(t *testing.T) {
 	require.True(t, ok)
 	uploader, ok := provider.(parser.ClaudeUploadParser)
 	require.True(t, ok)
-	parsed, err := uploader.ParseUploadedTranscript(path, "project-a", "local")
+	parsed, err := uploader.ParseUploadedTranscript(t.Context(), path, "project-a", "local")
 	require.NoError(t, err)
 	require.Len(t, parsed, 1)
 	candidate, err := ingest.PrepareCandidate(t.Context(), parsed[0], ingest.ContentOptions{})

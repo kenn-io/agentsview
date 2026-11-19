@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
@@ -21,12 +22,22 @@ import (
 	"go.kenn.io/agentsview/internal/rawderive"
 	"go.kenn.io/agentsview/internal/rawsync"
 	"go.kenn.io/agentsview/internal/server"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // Friction rules are part of the version so a rules change reaches existing
 // hosted sessions through the same reparse rollout as a parser change.
 func rawProcessingVersion() string {
-	return fmt.Sprintf("parser-data-%d+%s", db.CurrentDataVersion(), friction.RulesVersion)
+	return fmt.Sprintf("parser-data-%d+%s/runtime-%d", db.CurrentDataVersion(), friction.RulesVersion, rawderive.ParserRuntimeVersion)
+}
+
+type hostedRawParser interface {
+	rawderive.SourceParser
+	Preflight(context.Context) error
+}
+
+var newHostedRawParser = func(timeout time.Duration) (hostedRawParser, error) {
+	return rawderive.NewSubprocessParser(timeout)
 }
 
 // pgRawRuntime owns one bounded sequential worker/maintenance loop. Stop joins
@@ -82,7 +93,7 @@ func (r *pgRawRuntime) Stop() {
 	}
 }
 
-func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string) (replicaServeStartup, error) {
+func prepareHostedPGServe(ctx context.Context, app config.Config, pg config.PGConfig, basePath string, pprof bool) (replicaServeStartup, error) {
 	if err := pg.ValidateRawDerivation(app.RequireAuth); err != nil {
 		return replicaServeStartup{}, err
 	}
@@ -90,13 +101,20 @@ func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string
 		return replicaServeStartup{}, errors.New("tool_result_images = offload is not supported for hosted raw derivation; use keep or drop")
 	}
 	applyClassifierConfig(app)
-	store, err := postgres.NewHostedStore(pg.URL, pg.Schema, pg.RawTenant, pg.AllowInsecure)
+	store, err := postgres.NewHostedStore(ctx, pg.URL, pg.Schema, pg.RawTenant, pg.AllowInsecure)
 	if err != nil {
 		return replicaServeStartup{}, err
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	database := store.DB()
+	if database == nil {
+		_ = store.Close()
+		return replicaServeStartup{}, errors.New("hosted store has no database")
+	}
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	var runtime *pgRawRuntime
+	var embeddingRuntime *pgRawRuntime
 	var closeUploads func() error
+	var listener net.Listener
 	custody := &pgRawSyncCustody{dataDir: app.DataDir, tenant: pg.RawTenant, limits: rawsync.DefaultManifestLimits(), version: rawProcessingVersion()}
 	var once sync.Once
 	cleanup := func() {
@@ -104,6 +122,16 @@ func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string
 			stop()
 			if runtime != nil {
 				runtime.Stop()
+			}
+			if embeddingRuntime != nil {
+				embeddingRuntime.Stop()
+			}
+			// The server closes the listener when it shuts down; this covers
+			// a startup that fails before serving.
+			if listener != nil {
+				if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+					log.Print("hosted serve listener cleanup failed")
+				}
 			}
 			if closeUploads != nil {
 				if err := closeUploads(); err != nil {
@@ -123,18 +151,18 @@ func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string
 		return fail(err)
 	}
 	store.SetCustomPricing(app.CustomModelPricing)
-	if err = postgres.CheckHostedRuntimeWritable(ctx, store.DB(), pg.Schema, app.ArchiveContent); err != nil {
+	if err = postgres.CheckHostedRuntimeWritable(ctx, database, pg.Schema, app.ArchiveContent); err != nil {
 		return fail(err)
 	}
 	if err = store.DetectInsightGenerationAvailability(ctx); err != nil {
 		return fail(err)
 	}
-	metadata, err := postgres.NewHostedRawIngestStore(store.DB(), pg.RawTenant, custody.version)
+	metadata, err := postgres.NewHostedRawIngestStore(database, pg.RawTenant, custody.version)
 	if err != nil {
 		return fail(err)
 	}
 	custody.metadata = metadata
-	authStore, err := postgres.NewTenantRawDeviceAuthStore(store.DB(), pg.RawTenant)
+	authStore, err := postgres.NewTenantRawDeviceAuthStore(database, pg.RawTenant)
 	if err != nil {
 		return fail(err)
 	}
@@ -142,9 +170,18 @@ func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string
 	if err != nil {
 		return fail(err)
 	}
+	if pg.RawDerivation && app.Vector.Enabled && !app.ArchiveContent.UsageOnly() {
+		fingerprint := vectorGeneration(app.Vector.Embeddings).Fingerprint()
+		if err = postgres.CheckHostedVectorPrivileges(ctx, database, pg.Schema, fingerprint); err != nil {
+			return fail(err)
+		}
+	}
+	if err = wireReplicaVectorSearch(ctx, app, pgReplica{}, store, "hosted pg serve"); err != nil {
+		return fail(err)
+	}
 	if pg.RawDerivation {
 		poll, attempt, maxAttempts := pg.RawWorkerBounds()
-		isolated, err := rawderive.NewSubprocessParser(time.Duration(attempt) * time.Second)
+		isolated, err := newHostedRawParser(time.Duration(attempt) * time.Second)
 		if err != nil {
 			return fail(err)
 		}
@@ -152,13 +189,13 @@ func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string
 			return fail(err)
 		}
 		retry := rawderive.RetryPolicy{Base: time.Second, Maximum: time.Minute, MaxAttempts: maxAttempts}
-		sink, err := postgres.NewRawProjectionStore(store.DB(), hostedRawProjectionOptions(app, pg.RawTenant, retry))
+		sink, err := postgres.NewRawProjectionStore(ctx, database, hostedRawProjectionOptions(app, pg.RawTenant, retry))
 		if err != nil {
 			return fail(err)
 		}
 		worker, err := rawderive.NewWorker(rawderive.WorkerConfig{
 			Queue: metadata, Manifests: rawderive.ManifestLoader{Store: custody, Limits: custody.limits},
-			Materializer: rawderive.Materializer{Store: custody, BaseDir: os.TempDir(), MaxTotalBytes: 512 << 20}, Parser: isolated, Projection: sink,
+			Materializer: rawderive.Materializer{Store: custody, BaseDir: os.TempDir(), MaxTotalBytes: rawderive.MaxMaterializedBytes}, Parser: isolated, Projection: sink,
 			Owner: fmt.Sprintf("hosted-%d", os.Getpid()), BatchSize: 1, LeaseDuration: time.Minute, HeartbeatInterval: 10 * time.Second, AttemptTimeout: time.Duration(attempt) * time.Second,
 			RetryBase: retry.Base, RetryMax: retry.Maximum, MaxAttempts: retry.MaxAttempts,
 		})
@@ -179,31 +216,41 @@ func prepareHostedPGServe(app config.Config, pg config.PGConfig, basePath string
 				log.Print("hosted raw pending-signal maintenance failed")
 			}
 		})
+		embeddingRuntime, err = prepareHostedEmbeddings(ctx, app, store, time.Duration(poll)*time.Second)
+		if err != nil {
+			return fail(err)
+		}
 	}
 	rtOpts := serveRuntimeOptions{Mode: "pg-serve", BasePath: basePath, RequestedPort: app.Port}
-	app, err = prepareServeRuntimeConfig(ctx, app, rtOpts)
+	app, listener, err = claimServeRuntimeConfig(ctx, app, rtOpts)
 	if err != nil {
 		return fail(err)
 	}
-	uploadOption, closeUploadStore, err := preparePGRawSyncUploads(app.DataDir, store.DB(), custody)
+	rtOpts.Listener = listener
+	uploadOption, closeUploadStore, err := preparePGRawSyncUploads(ctx, app.DataDir, database, custody)
 	if err != nil {
 		return fail(err)
 	}
 	closeUploads = closeUploadStore
-	opts := []server.Option{server.WithVersion(server.VersionInfo{Version: version, Commit: commit, BuildDate: buildDate, ReadOnly: true, InsightGenerationAvailable: store.InsightGenerationAvailable()}), server.WithDataDir(app.DataDir), server.WithBaseContext(ctx), server.WithRawSyncServices(auth, custody), server.WithRawSyncStatus(metadata), server.WithRawSyncJobHealth(metadata), server.WithRawSyncTenant(pg.RawTenant), uploadOption}
+	opts := []server.Option{server.WithVersion(server.VersionInfo{Version: version, Commit: commit, BuildDate: buildDate, ReadOnly: true, InsightGenerationAvailable: store.InsightGenerationAvailable()}), server.WithDataDir(app.DataDir), server.WithBaseContext(ctx), server.WithPprof(pprof), server.WithRawSyncServices(auth, custody), server.WithRawSyncStatus(metadata), server.WithRawSyncJobHealth(metadata), server.WithRawSyncTenant(pg.RawTenant), uploadOption, pgKataConn(app)}
 	if basePath != "" {
 		opts = append(opts, server.WithBasePath(basePath))
 	}
 	startup := replicaServeStartup{cfg: app, ctx: ctx, rtOpts: rtOpts, srv: server.New(app, store, nil, opts...), cleanup: cleanup}
 	if runtime != nil {
-		startup.startWorker = runtime.Start
+		startup.startWorker = func() {
+			runtime.Start()
+			if embeddingRuntime != nil {
+				embeddingRuntime.Start()
+			}
+		}
 	}
 	return startup, nil
 }
 
 func newPGHostedProvisionCommand() *cobra.Command {
 	return &cobra.Command{Use: "hosted-provision [target]", Short: "Explicitly provision one hosted tenant schema using the configured owner connection", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, err := config.LoadMinimalFor(config.ScopePG)
+		cfg, err := config.LoadMinimalFor(config.ScopePG | config.ScopeVector)
 		if err != nil {
 			return err
 		}
@@ -219,13 +266,20 @@ func newPGHostedProvisionCommand() *cobra.Command {
 			return errors.New("hosted-provision requires raw_tenant in the selected PG target")
 		}
 		applyClassifierConfig(cfg)
-		database, err := postgres.Open(pg.URL, pg.Schema, pg.AllowInsecure)
+		database, err := postgres.Open(cmd.Context(), pg.URL, pg.Schema, pg.AllowInsecure)
 		if err != nil {
 			return errors.New("opening hosted owner connection failed")
 		}
 		defer database.Close()
 		if err = postgres.EnsureHostedTenant(cmd.Context(), database, pg.Schema, pg.RawTenant); err != nil {
 			return fmt.Errorf("hosted provisioning failed: %w", err)
+		}
+		if cfg.Vector.Enabled && !cfg.ArchiveContent.UsageOnly() {
+			gen := vectorGeneration(cfg.Vector.Embeddings)
+			info := storage.VectorGenerationInfo{Fingerprint: gen.Fingerprint(), Model: gen.Model, Dimension: gen.Dimensions, Params: gen.Params}
+			if err = postgres.ProvisionHostedVector(cmd.Context(), database, pg.Schema, pg.RawTenant, info); err != nil {
+				return fmt.Errorf("hosted provisioning failed: %w", err)
+			}
 		}
 		fmt.Fprintln(cmd.OutOrStdout(), "Hosted tenant schema provisioned. Use a restricted tenant runtime connection to serve.")
 		return nil
@@ -258,12 +312,12 @@ func newPGRawReparseCommand() *cobra.Command {
 		if pg.RawTenant == "" {
 			return errors.New("raw-reparse requires raw_tenant")
 		}
-		store, err := postgres.NewHostedStore(pg.URL, pg.Schema, pg.RawTenant, pg.AllowInsecure)
+		store, err := postgres.NewHostedStore(cmd.Context(), pg.URL, pg.Schema, pg.RawTenant, pg.AllowInsecure)
 		if err != nil {
 			return err
 		}
 		defer store.Close()
-		sink, err := postgres.NewRawProjectionStore(store.DB(), postgres.RawProjectionOptions{Tenant: pg.RawTenant})
+		sink, err := postgres.NewRawProjectionStore(cmd.Context(), store.DB(), postgres.RawProjectionOptions{Tenant: pg.RawTenant})
 		if err != nil {
 			return err
 		}

@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"encoding/json/jsontext"
 	"testing"
 
@@ -15,14 +14,15 @@ import (
 )
 
 func TestStoreSessionAndMessageTokenUsage(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	pg, err := Open(pgURL, testSchema, false)
+	pg, err := Open(t.Context(), pgURL, testSchema, false)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO sessions (
 			id, machine, project, agent,
 			message_count, user_message_count,
@@ -39,7 +39,7 @@ func TestStoreSessionAndMessageTokenUsage(t *testing.T) {
 			has_peak_context_tokens = EXCLUDED.has_peak_context_tokens
 	`)
 	require.NoError(t, err, "insert session")
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO messages (
 			session_id, ordinal, role, content,
 			content_length, model, token_usage,
@@ -58,11 +58,11 @@ func TestStoreSessionAndMessageTokenUsage(t *testing.T) {
 	`)
 	require.NoError(t, err, "insert message")
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	sess, err := store.GetSession(ctx, "token-store-001")
 	require.NoError(t, err, "GetSession")
 	require.NotNil(t, sess)
@@ -79,16 +79,15 @@ func TestStoreSessionAndMessageTokenUsage(t *testing.T) {
 }
 
 func TestPushTokenUsageToPostgres(t *testing.T) {
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
-	ps, err := New(pgURL, "agentsview", local, "test-machine", true, storage.PusherOptions{})
+	ps, err := New(t.Context(), pgURL, "agentsview", local, "test-machine", true, storage.PusherOptions{})
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, ps.EnsureSchema(ctx), "EnsureSchema")
 
 	sess := db.Session{
@@ -121,7 +120,7 @@ func TestPushTokenUsageToPostgres(t *testing.T) {
 	_, err = ps.Push(ctx, false, nil)
 	require.NoError(t, err, "Push")
 
-	store, err := NewStore(pgURL, "agentsview", true)
+	store, err := NewStore(t.Context(), pgURL, "agentsview", true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
@@ -141,18 +140,18 @@ func TestPushTokenUsageToPostgres(t *testing.T) {
 }
 
 func TestEnsureSchemaBackfillsTokenCoverageFlags(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 
-	pg, err := Open(pgURL, "agentsview", false)
+	pg, err := Open(t.Context(), pgURL, "agentsview", false)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, "agentsview"), "EnsureSchema initial")
 
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO sessions (
 			id, machine, project, agent, message_count,
 			total_output_tokens, peak_context_tokens,
@@ -164,7 +163,7 @@ func TestEnsureSchemaBackfillsTokenCoverageFlags(t *testing.T) {
 			 0, 0, FALSE, FALSE)
 	`)
 	require.NoError(t, err, "insert legacy sessions")
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO messages (
 			session_id, ordinal, role, content, content_length,
 			model, token_usage, context_tokens, output_tokens,
@@ -178,7 +177,7 @@ func TestEnsureSchemaBackfillsTokenCoverageFlags(t *testing.T) {
 
 	require.NoError(t, EnsureSchema(ctx, pg, "agentsview"), "EnsureSchema backfill")
 
-	store, err := NewStore(pgURL, "agentsview", true)
+	store, err := NewStore(t.Context(), pgURL, "agentsview", true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 

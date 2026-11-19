@@ -452,11 +452,10 @@ func (db *DB) ListActiveWorktreeProjectMappings(
 // source DB into this DB. Omit id so source primary keys cannot shadow
 // destination rows. UNIQUE(machine, path_prefix) conflicts preserve the
 // destination mapping while filling its set-once original project context.
-func (db *DB) CopyWorktreeProjectMappingsFrom(sourcePath string) error {
+func (db *DB) CopyWorktreeProjectMappingsFrom(ctx context.Context, sourcePath string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	ctx := context.Background()
 	conn, err := db.getWriter().Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("acquiring connection: %w", err)
@@ -469,7 +468,7 @@ func (db *DB) CopyWorktreeProjectMappingsFrom(sourcePath string) error {
 		return fmt.Errorf("attaching source db: %w", err)
 	}
 	defer func() {
-		_, _ = conn.ExecContext(ctx, "DETACH DATABASE old_db")
+		_, _ = execWithoutCancel(ctx, conn, "DETACH DATABASE old_db")
 	}()
 
 	tx, err := conn.BeginTx(ctx, nil)

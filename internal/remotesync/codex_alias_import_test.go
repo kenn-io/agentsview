@@ -43,7 +43,7 @@ func TestRemoteCodexAliasTitleSurvivesArchiveImport(t *testing.T) {
 	), 0o600))
 	require.NoError(t, os.Chtimes(otherIndex, time.Now().Add(time.Hour), time.Now().Add(time.Hour)))
 
-	targets, err := ResolveTargets(config.Config{
+	targets, err := ResolveTargets(t.Context(), config.Config{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {primary, archiveRoot}},
 		ProviderMetadata: map[parser.AgentType]map[string][]string{
 			parser.AgentCodex: {primary: {filepath.Dir(alias)}, archiveRoot: {filepath.Dir(primary)}},
@@ -94,7 +94,7 @@ func TestRemoteCodexAliasTitleSurvivesArchiveImport(t *testing.T) {
 	assert.Equal(t, "Renamed in alternate home", name, "import cannot replace another provider's configuration")
 	// Even an empty association must not revive the physical parent's index.
 	require.NoError(t, os.Remove(index))
-	emptyTargets, err := ResolveTargets(config.Config{
+	emptyTargets, err := ResolveTargets(t.Context(), config.Config{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {primary, archiveRoot}},
 		ProviderMetadata: map[parser.AgentType]map[string][]string{
 			parser.AgentCodex: {primary: {filepath.Dir(alias)}, archiveRoot: {filepath.Dir(primary)}},
@@ -144,7 +144,7 @@ func TestHTTPMirrorCodexIndexRemoval(t *testing.T) {
 					ProviderMetadata: map[parser.AgentType]map[string][]string{parser.AgentCodex: {root: {primary, alternate}}},
 				}
 				var err error
-				remote.targets, err = ResolveTargets(cfg)
+				remote.targets, err = ResolveTargets(t.Context(), cfg)
 				require.NoError(t, err)
 				database, hs := newMirrorSync(t, remote, t.TempDir())
 				_, err = hs.Run(t.Context())
@@ -171,7 +171,7 @@ func TestHTTPMirrorCodexIndexRemoval(t *testing.T) {
 				case "remove-home":
 					cfg.ProviderMetadata[parser.AgentCodex][root] = []string{primary}
 				}
-				remote.targets, err = ResolveTargets(cfg)
+				remote.targets, err = ResolveTargets(t.Context(), cfg)
 				require.NoError(t, err)
 				// Leave the mirrored change pending, then replay it after the old
 				// index contents are gone from disk.
@@ -193,7 +193,7 @@ func TestHTTPMirrorCodexIndexRemoval(t *testing.T) {
 
 				require.NoError(t, os.Remove(primaryIndex))
 				cfg.ProviderMetadata[parser.AgentCodex][root] = []string{primary}
-				remote.targets, err = ResolveTargets(cfg)
+				remote.targets, err = ResolveTargets(t.Context(), cfg)
 				require.NoError(t, err)
 				_, err = hs.Run(t.Context())
 				require.NoError(t, err)
@@ -233,7 +233,7 @@ func TestHTTPMirrorCodexIndexRemovalRenamesRevertPages(t *testing.T) {
 	require.NoError(t, os.Chtimes(primaryIndex, stamp, stamp))
 	require.NoError(t, os.Chtimes(alternateIndex, stamp.Add(time.Hour), stamp.Add(time.Hour)))
 	var err error
-	remote.targets, err = ResolveTargets(config.Config{
+	remote.targets, err = ResolveTargets(t.Context(), config.Config{
 		AgentDirs:        map[parser.AgentType][]string{parser.AgentCodex: {root}},
 		ProviderMetadata: map[parser.AgentType]map[string][]string{parser.AgentCodex: {root: {primary, alternate}}},
 	})

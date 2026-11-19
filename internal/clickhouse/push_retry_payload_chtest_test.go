@@ -13,6 +13,7 @@ import (
 )
 
 func TestPushRetainsPayloadAcrossRetry(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	local, target := seedFixture(t)
 	s := newTestSync(t, local, target, storage.PusherOptions{})

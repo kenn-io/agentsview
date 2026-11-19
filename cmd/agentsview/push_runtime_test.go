@@ -11,8 +11,8 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 )
 
-// projectResolutionCase is a shared table-test row for the PG and DuckDB push
-// project resolvers, which apply identical include/exclude precedence rules.
+// projectResolutionCase is a table-test row for the replica push project
+// resolver's include/exclude precedence rules.
 type projectResolutionCase[C any] struct {
 	name        string
 	projects    []string
@@ -25,7 +25,7 @@ type projectResolutionCase[C any] struct {
 
 // runProjectResolutionCases drives the shared project-resolution table against
 // resolve, which adapts the configured projects/exclude lists and push config
-// into the backend-specific resolver so PG and DuckDB stay in sync.
+// into the backend-specific resolver.
 func runProjectResolutionCases[C any](
 	t *testing.T,
 	tests []projectResolutionCase[C],

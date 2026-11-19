@@ -51,6 +51,7 @@ function digest(date: string, signals: Record<string, unknown>[]) {
     revision: 1,
     sessions_scanned: 2,
     markdown_sha256: "0".repeat(64),
+    diagnostics: [],
     summary: {
       date,
       schema_version: 1,
@@ -171,6 +172,36 @@ test.describe("Friction Log", () => {
     await mockFriction(page);
   });
 
+  test("does not repeat the total for a single diagnostic group", async ({ page }) => {
+    const diagnostic = signal({
+      kind: "diagnostic",
+      detector: "diagnostic",
+      subject_id: "diagnostic:worker",
+      subject_kind: "diagnostic",
+      label: "worker",
+      text: "launch failed",
+    });
+    await page.route(`**/api/v1/friction/digests/${DATE}`, (route) =>
+      route.fulfill({
+        json: {
+          ...LATEST_DIGEST,
+          signals: [diagnostic, { ...diagnostic, subject_id: "diagnostic:worker:2" }],
+          diagnostics: [{ source: "worker", message: "launch failed", count: 2 }],
+        },
+      }),
+    );
+    await page.goto(`/friction?date=${DATE}`);
+
+    const section = page.locator("#friction-section-diagnostic");
+    await expect(section).toContainText("worker");
+    await expect(section).toContainText("launch failed");
+    const total = section.locator("h2 .count");
+    await expect(total).toBeVisible();
+    await expect(total).toHaveText("2");
+    expect((await total.boundingBox())?.width).toBeGreaterThan(0);
+    await expect(section.locator("li .count")).toHaveCount(0);
+  });
+
   test("opens the latest digest and follows a finding to its message", async ({ page }) => {
     // Keep this link test focused on the target session. Hydrating every
     // unrelated fixture row can trigger the session sidebar's known Svelte
@@ -254,8 +285,96 @@ test.describe("Friction Log", () => {
     await expect(page.locator("pre.markdown-source")).toContainText(`# Friction Log — ${DATE}`);
   });
 
+  test("files a recurring pattern to Kata and shows the issue", async ({ page }) => {
+    const fingerprint = `fl1:${"b".repeat(64)}`;
+    const issue = {
+      qualified_id: "agentsview#f001",
+      web_url: "https://kata.example.test/issues/f001",
+      issue_uid: "01J0ABCDEF0000000000000001",
+      source: "created",
+      linked_at: `${DATE}T08:00:00Z`,
+    };
+    await page.route("**/api/v1/kata/status", (route: Route) =>
+      route.fulfill({ json: { state: "ready", project: "agentsview" } }),
+    );
+    await page.route(`**/api/v1/friction/digests/${DATE}`, (route: Route) =>
+      route.fulfill({
+        json: {
+          ...LATEST_DIGEST,
+          patterns: [
+            {
+              fingerprint,
+              kind: "error",
+              title: "[friction/error] bash: command not found",
+              first_seen_date: "2026-09-01",
+              last_seen_date: DATE,
+              occurrence_count: 3,
+              session_count: 2,
+              last_subject_id: SESSION_ID,
+              last_ordinal: 5,
+            },
+          ],
+        },
+      }),
+    );
+    let filed = "";
+    await page.route("**/api/v1/friction/patterns/*/issue", async (route: Route) => {
+      filed = decodeURIComponent(new URL(route.request().url()).pathname.split("/")[5] ?? "");
+      await route.fulfill({ json: { issue, created: true } });
+    });
+
+    await page.goto("/friction");
+    const row = page
+      .locator(".friction-headline .headline-row")
+      .filter({ hasText: "command not found" });
+    await row.getByRole("button", { name: "File to Kata" }).click();
+
+    await expect(row.locator("a.issue-link")).toHaveText("agentsview#f001");
+    await expect(row.getByRole("button", { name: "File to Kata" })).toHaveCount(0);
+    expect(filed).toBe(fingerprint);
+    await expect(
+      page
+        .locator("section#friction-section-error li")
+        .filter({ hasText: "command not found" })
+        .locator(".row-issue"),
+    ).toHaveText("agentsview#f001");
+  });
+
   test("falls back to the latest digest for an unknown date", async ({ page }) => {
     await page.goto("/friction?date=2020-01-01");
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(`Friction Log — ${DATE}`);
+  });
+});
+
+test.describe("Friction Log missing states", () => {
+  test("puts the off state where Pinned puts its empty state", async ({ page }) => {
+    await page.setViewportSize({ width: 1600, height: 1000 });
+    await page.route("**/api/v1/pins**", (route: Route) => route.fulfill({ json: { pins: [] } }));
+    await page.goto("/pinned");
+    const pinned = page.locator(".kit-empty-state");
+    await expect(pinned).toContainText("No pinned messages");
+    const pinnedIcon = (await pinned.locator(".kit-empty-state__icon").boundingBox())!;
+
+    await page.route("**/api/v1/version", async (route: Route) => {
+      const response = await route.fetch();
+      await route.fulfill({
+        response,
+        json: { ...(await response.json()), friction_available: false, friction_readable: true },
+      });
+    });
+    await page.route("**/api/v1/friction/digests", (route: Route) =>
+      route.fulfill({ json: { digests: [] } }),
+    );
+    await page.goto("/friction");
+    const off = page.locator(".kit-empty-state");
+    await expect(off).toContainText("Friction Log is off on this server");
+    const offIcon = (await off.locator(".kit-empty-state__icon").boundingBox())!;
+
+    // Same column and nearly the same height: the two pages' headers
+    // differ by a few pixels, not by a layout.
+    expect(
+      Math.abs(offIcon.x + offIcon.width / 2 - (pinnedIcon.x + pinnedIcon.width / 2)),
+    ).toBeLessThanOrEqual(2);
+    expect(Math.abs(offIcon.y - pinnedIcon.y)).toBeLessThanOrEqual(12);
   });
 });

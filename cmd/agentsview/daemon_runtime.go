@@ -3,11 +3,13 @@
 package main
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -40,6 +42,8 @@ const (
 	runtimePort            = "port"
 	runtimeExplicitPort    = "explicit_port"
 	runtimeRequireAuth     = "require_auth"
+	runtimePersistent      = "persistent"
+	runtimeIdleTimeout     = "idle_timeout"
 	runtimeNoSync          = "no_sync"
 	runtimeAPIVersion      = "api_version"
 	runtimeDataVersion     = "data_version"
@@ -61,6 +65,7 @@ func startProbeTick() time.Duration {
 // DaemonRuntime is the agentsview-specific view of a kit daemon runtime record.
 type DaemonRuntime struct {
 	Record           daemon.RuntimeRecord
+	BackfillError    string
 	Host             string
 	BrowserURL       string
 	BasePath         string
@@ -69,6 +74,8 @@ type DaemonRuntime struct {
 	ReadOnly         bool
 	RequireAuth      bool
 	RequireAuthKnown bool
+	Persistent       bool
+	IdleTimeout      *time.Duration
 	NoSync           bool
 	API              int
 	Data             int
@@ -156,14 +163,19 @@ func WriteDaemonRuntimeWithAuth(
 	dataDir string, host string, port int, version, browserURL string,
 	readOnly bool, requireAuth bool, caddyPID ...int,
 ) (string, error) {
-	return WriteDaemonRuntimeWithAuthAndNoSync(
+	return WriteDaemonRuntimeWithAuthAndNoSync(nil,
 		dataDir, host, port, version, browserURL, readOnly, requireAuth, false,
 		nil, caddyPID...,
 	)
 }
 
+type daemonLifetime struct {
+	Persistent  bool
+	IdleTimeout time.Duration
+}
+
 func WriteDaemonRuntimeWithAuthAndNoSync(
-	dataDir string, host string, port int, version, browserURL string,
+	lifetime *daemonLifetime, dataDir string, host string, port int, version, browserURL string,
 	readOnly bool, requireAuth bool, noSync bool, explicitPort *int, caddyPID ...int,
 ) (string, error) {
 	ep := daemon.Endpoint{
@@ -180,6 +192,10 @@ func WriteDaemonRuntimeWithAuthAndNoSync(
 		runtimeNoSync:      strconv.FormatBool(noSync),
 		runtimeAPIVersion:  strconv.Itoa(daemonAPIVersion),
 		runtimeDataVersion: strconv.Itoa(db.CurrentDataVersion()),
+	}
+	if !readOnly && lifetime != nil {
+		rec.Metadata[runtimePersistent] = strconv.FormatBool(lifetime.Persistent)
+		rec.Metadata[runtimeIdleTimeout] = lifetime.IdleTimeout.String()
 	}
 	if explicitPort != nil {
 		rec.Metadata[runtimeExplicitPort] = strconv.Itoa(*explicitPort)
@@ -203,9 +219,7 @@ func WriteDaemonRuntimeWithAuthAndNoSync(
 	path, err := runtimeStore(dataDir).Write(rec)
 	if err != nil {
 		if !readOnly {
-			publishStartupStateFallback(
-				dataDir, host, port, browserURL, requireAuth, noSync, explicitPort, caddy, err,
-			)
+			publishStartupStateFallback(dataDir, host, port, browserURL, requireAuth, noSync, explicitPort, caddy, err)
 		}
 		return "", err
 	}
@@ -327,6 +341,7 @@ func FindDaemonRuntime(dataDir string, authToken ...string) *DaemonRuntime {
 			continue
 		}
 		rt := daemonRuntimeFromRecord(rec)
+		rt.BackfillError = info.BackfillError
 		if daemonRuntimeCompatibilityError(rt) != nil {
 			continue
 		}
@@ -435,6 +450,10 @@ func findStartupStateFallback(dataDir, authToken string) *DaemonRuntime {
 	if st.RequireAuthKnown {
 		rec.Metadata[runtimeRequireAuth] = strconv.FormatBool(st.RequireAuth)
 	}
+	rec.Metadata[runtimePersistent] = strconv.FormatBool(st.Persistent)
+	if st.IdleTimeout != "" {
+		rec.Metadata[runtimeIdleTimeout] = st.IdleTimeout
+	}
 	if st.NoSyncKnown {
 		rec.Metadata[runtimeNoSync] = strconv.FormatBool(st.NoSync)
 	}
@@ -451,6 +470,7 @@ func findStartupStateFallback(dataDir, authToken string) *DaemonRuntime {
 	}
 	rec.Version = info.Version
 	rt := daemonRuntimeFromRecord(rec)
+	rt.BackfillError = info.BackfillError
 	rt.RuntimeFallback = true
 	rt.RuntimeError = st.RuntimeError
 	return rt
@@ -542,53 +562,68 @@ func firstAuthToken(tokens []string) string {
 	return tokens[0]
 }
 
+type runtimePing struct {
+	daemon.PingInfo
+	BackfillError string
+}
+
 func probeRuntime(
 	ctx context.Context,
 	rec daemon.RuntimeRecord,
 	authToken string,
 	opts daemon.ProbeOptions,
-) (daemon.PingInfo, error) {
+) (runtimePing, error) {
 	ep := rec.Endpoint()
 	if opts.Path == "" {
 		opts.Path = daemon.DefaultPingPath
 	}
 	opts.Path = daemonRuntimeFromRecord(rec).BasePath + opts.Path
-	if authToken == "" {
-		return daemon.Probe(ctx, ep, opts)
-	}
 	timeout := opts.Timeout
 	if timeout == 0 {
 		timeout = time.Second
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
 	client := ep.HTTPClient(daemon.HTTPClientOptions{
 		Timeout:           timeout,
 		DisableKeepAlives: true,
 	})
-	client.Transport = bearerAuthTransport{
-		token: authToken,
-		base:  client.Transport,
+	var body bytes.Buffer
+	client.Transport = runtimeProbeTransport{base: client.Transport, token: authToken, body: &body}
+	info, err := daemon.ProbeHTTP(ctx, client, ep.BaseURL(), opts)
+	if err != nil {
+		return runtimePing{}, err
 	}
-	return daemon.ProbeHTTP(ctx, client, ep.BaseURL(), opts)
+	var details struct {
+		BackfillError string `json:"project_identity_backfill_error"`
+	}
+	if err := json.Unmarshal(body.Bytes(), &details); err != nil {
+		return runtimePing{}, fmt.Errorf("decode daemon ping: %w", err)
+	}
+	return runtimePing{PingInfo: info, BackfillError: details.BackfillError}, nil
 }
 
-type bearerAuthTransport struct {
-	token string
+type runtimeProbeTransport struct {
 	base  http.RoundTripper
+	token string
+	body  *bytes.Buffer
 }
 
-func (t bearerAuthTransport) RoundTrip(
-	req *http.Request,
-) (*http.Response, error) {
-	clone := req.Clone(req.Context())
-	clone.Header.Set("Authorization", "Bearer "+t.token)
+func (t runtimeProbeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.token != "" {
+		req = req.Clone(req.Context())
+		req.Header.Set("Authorization", "Bearer "+t.token)
+	}
 	base := t.base
 	if base == nil {
 		base = http.DefaultTransport
 	}
-	return base.RoundTrip(clone)
+	resp, err := base.RoundTrip(req)
+	if err == nil {
+		resp.Body = struct {
+			io.Reader
+			io.Closer
+		}{io.TeeReader(resp.Body, t.body), resp.Body}
+	}
+	return resp, err
 }
 
 func daemonRuntimeFromRecord(rec daemon.RuntimeRecord) *DaemonRuntime {
@@ -630,7 +665,13 @@ func daemonRuntimeFromRecord(rec daemon.RuntimeRecord) *DaemonRuntime {
 		apiVersion, _ = strconv.Atoi(rec.Metadata[runtimeAPIVersion])
 		dataVersion, _ = strconv.Atoi(rec.Metadata[runtimeDataVersion])
 	}
+	var idleTimeout *time.Duration
+	if parsed, err := time.ParseDuration(rec.Metadata[runtimeIdleTimeout]); err == nil {
+		idleTimeout = &parsed
+	}
+	persistent, _ := strconv.ParseBool(rec.Metadata[runtimePersistent])
 	return &DaemonRuntime{
+		Persistent: persistent, IdleTimeout: idleTimeout,
 		Record:           rec,
 		Port:             port,
 		ExplicitPort:     explicitPort,
@@ -1112,16 +1153,8 @@ func IsLocalDaemonActive(dataDir string, authToken ...string) bool {
 		IsDaemonStarting(dataDir)
 }
 
-// WaitForDaemonStartup polls until the daemon start lock clears or a running daemon is
-// detected, up to the given timeout.
-func WaitForDaemonStartup(
-	dataDir string, timeout time.Duration, authToken ...string,
-) bool {
-	return WaitForDaemonStartupContext(
-		context.Background(), dataDir, timeout, authToken...,
-	)
-}
-
+// WaitForDaemonStartupContext polls until the daemon start lock clears or a
+// running daemon is detected, up to the given timeout or until ctx ends.
 func WaitForDaemonStartupContext(
 	ctx context.Context,
 	dataDir string,
@@ -1130,7 +1163,7 @@ func WaitForDaemonStartupContext(
 ) bool {
 	started := time.Now()
 	deadline := started.Add(timeout)
-	progress := daemonLaunchProgressWriter{w: os.Stderr}
+	progress := daemonLaunchProgressWriter{w: daemonProgressWriter(ctx)}
 	var lastUpdate time.Time
 	for time.Now().Before(deadline) {
 		if FindDaemonRuntime(dataDir, authToken...) != nil {
@@ -1168,4 +1201,28 @@ func probeHostForDial(host string) string {
 	default:
 		return host
 	}
+}
+
+func publishPersistentDaemon(dataDir string) error {
+	store := runtimeStore(dataDir)
+	path, err := store.Path(os.Getpid())
+	if err != nil {
+		return err
+	}
+	rec, err := store.Read(path)
+	if err != nil {
+		st := readStartupState(dataDir)
+		if st == nil || st.PID != os.Getpid() || st.RuntimeError == "" {
+			return err
+		}
+		st.Persistent, st.IdleTimeout = true, "0s"
+		data, err := json.Marshal(st)
+		if err != nil {
+			return err
+		}
+		return writeStartupState(dataDir, data)
+	}
+	rec.Metadata[runtimePersistent], rec.Metadata[runtimeIdleTimeout] = "true", "0s"
+	_, err = store.Write(rec)
+	return err
 }

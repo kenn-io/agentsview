@@ -3,6 +3,7 @@ package scripts
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -183,12 +184,47 @@ func TestCheckDocsRejectsCorruptedMarkdownSyntax(t *testing.T) {
 	assert.Contains(t, string(output), "activity.md")
 }
 
-func TestCheckDocsRequiresRipgrepForMediaReferenceChecks(t *testing.T) {
-	tempDir := t.TempDir()
-	repo := filepath.Join(tempDir, "repo")
+func TestCheckDocsRejectsRootRelativeMediaInUntrackedPage(t *testing.T) {
+	repo, checkScript := checkDocsMediaFixture(t)
+	git(t, repo, "init", "--quiet")
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repo, "docs", "guide.md"),
+		[]byte(docsPage("Guide", "![Sessions](/screenshots/sessions.png)")),
+		0o644,
+	))
+
+	pythonPath := requireRunnablePython3(t)
+	env := append(envWithout("PYTHON"), "PYTHON="+pythonPath)
+	output, err := runBash(t, repo, env, checkScript)
+
+	require.Error(t, err, string(output))
+	assert.Contains(t, string(output), "docs media references must use /assets/static or /assets/generated")
+	assert.Contains(t, string(output), "docs/guide.md:")
+}
+
+func TestCheckDocsFailsWhenMediaSearchFails(t *testing.T) {
+	repo, checkScript := checkDocsMediaFixture(t)
+
+	pythonPath := requireRunnablePython3(t)
+	env := append(
+		envWithout("PYTHON", "GIT_DIR", "GIT_WORK_TREE"),
+		"PYTHON="+pythonPath,
+		"GIT_CEILING_DIRECTORIES="+filepath.Dir(repo),
+	)
+	output, err := runBash(t, repo, env, checkScript)
+
+	require.Error(t, err, string(output))
+	assert.Contains(t, string(output), "cannot validate docs media references")
+}
+
+// checkDocsMediaFixture installs check-docs.sh with a valid docs page and a
+// no-op asset hydrator, so a run reaches the media reference checks.
+func checkDocsMediaFixture(t *testing.T) (repo, checkScript string) {
+	t.Helper()
+	repo = filepath.Join(t.TempDir(), "repo")
 	require.NoError(t, os.MkdirAll(repo, 0o755))
 
-	checkScript := installScript(t, repo, filepath.Join("scripts", "check-docs.sh"))
+	checkScript = installScript(t, repo, filepath.Join("scripts", "check-docs.sh"))
 	installScript(t, repo, filepath.Join("docs", "scripts", "check_markdown_sources.py"))
 	require.NoError(t, os.MkdirAll(filepath.Join(repo, "docs", "assets"), 0o755))
 	require.NoError(t, os.WriteFile(
@@ -198,26 +234,22 @@ func TestCheckDocsRequiresRipgrepForMediaReferenceChecks(t *testing.T) {
 	))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(repo, "docs", "activity.md"),
-		[]byte(strings.Join([]string{
-			"---",
-			"title: Activity",
-			"description: Activity docs",
-			"---",
-			"",
-			"Valid docs page.",
-			"",
-		}, "\n")),
+		[]byte(docsPage("Activity", "Valid docs page.")),
 		0o644,
 	))
+	return repo, checkScript
+}
 
-	pythonPath := requireRunnablePython3(t)
-	emptyBin := filepath.Join(tempDir, "empty-bin")
-	require.NoError(t, os.MkdirAll(emptyBin, 0o755))
-	env := append(envWithout("PATH", "PYTHON"), "PYTHON="+pythonPath, "PATH="+emptyBin)
-	output, err := runBash(t, repo, env, checkScript)
-
-	require.Error(t, err, string(output))
-	assert.Contains(t, string(output), "rg not found")
+func docsPage(title, body string) string {
+	return strings.Join([]string{
+		"---",
+		"title: " + title,
+		"description: " + title + " docs",
+		"---",
+		"",
+		body,
+		"",
+	}, "\n")
 }
 
 func TestBuiltSiteCheckRequiresMarkdownCompanions(t *testing.T) {
@@ -295,6 +327,15 @@ func TestZensicalDocsBuildExcludesScreenshotToolchain(t *testing.T) {
 
 	scriptPath := installScript(t, repo,
 		filepath.Join("docs", "zensical-docs.sh"))
+	installScript(t, repo, filepath.Join("docs", "scripts", "first_paint.py"))
+	installScript(t, repo, filepath.Join("docs", "scripts", "hold-first-paint.js"))
+	pythonPath := requireRunnablePython3(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(docsDir, "stylesheets"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(docsDir, "stylesheets", "extra.css"),
+		[]byte(`@font-face { font-family: Inter; src: url("/fonts/Inter-Regular.woff2"); }`),
+		0o644,
+	))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(docsDir, "zensical.toml"),
 		[]byte("[project]\ndocs_dir = \"docs\"\nsite_dir = \"site\"\n"),
@@ -333,6 +374,32 @@ func TestZensicalDocsBuildExcludesScreenshotToolchain(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		agentGuide, []byte("contributor-only instructions\n"), 0o644,
 	))
+	// Names that are excluded at the top level only must survive when
+	// they appear deeper; bsdtar and GNU tar must agree.
+	nestedFiles := map[string]string{
+		filepath.Join("guide", "README.md"):           "guide readme\n",
+		filepath.Join("guide", "internal", "page.md"): "nested internal page\n",
+		filepath.Join(
+			"assets", "generated", "screenshots", "nested", "detail.png",
+		): "nested screenshot\n",
+		// Names that stay excluded wherever they appear.
+		filepath.Join("assets", "x.sh"):        "#!/bin/sh\n",
+		filepath.Join("assets", "sub", "y.sh"): "#!/bin/sh\n",
+		// An assets directory below the top is not the excluded one.
+		filepath.Join("guide", "assets", "z.sh"):       "#!/bin/sh\necho z\n",
+		filepath.Join("guide", "tool.go"):              "package guide\n",
+		filepath.Join("assets", "tools.sh", "run.txt"): "dropped with its directory\n",
+		"embed.go":  "package docs\n",
+		"README.md": "contributor readme\n",
+	}
+	for rel, content := range nestedFiles {
+		path := filepath.Join(docsDir, rel)
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	}
+	// A symlink named *.sh under the top-level assets/ is dropped as a file
+	// is; the old GNU tar exclude dropped any member type.
+	require.NoError(t, os.Symlink("x.sh", filepath.Join(docsDir, "assets", "link.sh")))
 	writeWebsiteTierFixture(t, docsDir)
 
 	fakeZensical := filepath.Join(docsDir, ".venv", "bin", "zensical")
@@ -345,7 +412,8 @@ cp -R "$public_docs"/. site/docs/
 printf '<urlset></urlset>\n' > site/docs/sitemap.xml
 `), 0o755))
 
-	output, err := runBash(t, docsDir, nil, scriptPath, "build")
+	output, err := runBash(t, docsDir,
+		append(envWithout("PYTHON"), "PYTHON="+pythonPath), scriptPath, "build")
 	require.NoError(t, err, string(output))
 	assert.FileExists(t, filepath.Join(docsDir, "site", "docs", "index.md"))
 	assert.FileExists(t, filepath.Join(
@@ -367,6 +435,36 @@ printf '<urlset></urlset>\n' > site/docs/sitemap.xml
 	assert.NoFileExists(t, filepath.Join(
 		docsDir, "site", "docs", "screenshots", "test-results", "trace.zip",
 	))
+
+	siteDocs := filepath.Join(docsDir, "site", "docs")
+	for _, rel := range []string{
+		filepath.Join("guide", "README.md"),
+		filepath.Join("guide", "internal", "page.md"),
+		filepath.Join("guide", "assets", "z.sh"),
+		filepath.Join("assets", "generated", "screenshots", "dashboard.png"),
+		filepath.Join(
+			"assets", "generated", "screenshots", "nested", "detail.png",
+		),
+	} {
+		want, err := os.ReadFile(filepath.Join(docsDir, rel))
+		require.NoError(t, err)
+		got, err := os.ReadFile(filepath.Join(siteDocs, rel))
+		require.NoError(t, err, rel)
+		assert.Equal(t, string(want), string(got), rel)
+	}
+	for _, rel := range []string{
+		"README.md",
+		filepath.Join("assets", "x.sh"),
+		filepath.Join("assets", "sub", "y.sh"),
+		filepath.Join("guide", "tool.go"),
+		"embed.go",
+	} {
+		assert.NoFileExists(t, filepath.Join(siteDocs, rel), rel)
+	}
+	assert.NoDirExists(t, filepath.Join(siteDocs, "assets", "tools.sh"),
+		"a directory named *.sh under assets/ is dropped with its contents")
+	_, err = os.Lstat(filepath.Join(siteDocs, "assets", "link.sh"))
+	assert.ErrorIs(t, err, fs.ErrNotExist, "the assets/ symlink named *.sh is dropped")
 }
 
 func writeWebsiteTierFixture(t *testing.T, docsDir string) {
@@ -374,13 +472,13 @@ func writeWebsiteTierFixture(t *testing.T, docsDir string) {
 
 	websiteDir := filepath.Join(docsDir, "website")
 	files := map[string]string{
-		"index.html":                         "<!doctype html>\n",
+		"index.html":                         "<!doctype html><meta charset=\"utf-8\">\n",
 		"index.md":                           "# Home\n",
-		filepath.Join("guide", "index.html"): "<!doctype html>\n",
+		filepath.Join("guide", "index.html"): "<!doctype html><meta charset=\"utf-8\">\n",
 		"guide.md":                           "# Guide\n",
-		"404.html":                           "<!doctype html>\n",
+		"404.html":                           "<!doctype html><meta charset=\"utf-8\">\n",
 		"favicon.svg":                        "<svg xmlns=\"http://www.w3.org/2000/svg\"/>\n",
-		filepath.Join("styles", "site.css"):  "body {}\n",
+		filepath.Join("styles", "site.css"):  `@font-face { font-family: Inter; src: url("/fonts/Inter-Regular.woff2"); }`,
 		filepath.Join("scripts", "site.js"):  "// site\n",
 		filepath.Join("fonts", "Inter-Regular.woff2"): "font\n",
 	}
@@ -469,6 +567,7 @@ var builtDocsRoutes = func() []string {
 		"chat-import",
 		"quality",
 		"commands",
+		"kata",
 		"session-export",
 		"conversation-export",
 		"reporting-export",
@@ -482,7 +581,6 @@ var builtDocsRoutes = func() []string {
 		"filesystem-sync",
 		"pg-sync",
 		"hosted-raw-sync",
-		"duckdb",
 		"clickhouse-sync",
 	}
 	routes := []string{"/", "/guide/", "/docs/"}
@@ -606,6 +704,7 @@ func writeGeneratedAssets(t *testing.T, dir, content string) {
 	t.Helper()
 	files := []string{
 		"screenshots/about-dialog.png",
+		"screenshots/friction-log.png",
 		"screenshots/import-claude-sync.png",
 		"screenshots/session-label-filters.png",
 		"screenshots/tool-rate-evidence.png",

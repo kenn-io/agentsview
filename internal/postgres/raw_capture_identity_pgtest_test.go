@@ -17,6 +17,7 @@ import (
 // A filename alias does not replace a missing provider identity. Identical
 // real-provider results must coalesce only when that native key is present.
 func TestRawClaudeProviderIdentityControlsDeviceCoalescing(t *testing.T) {
+	t.Parallel()
 	for _, known := range []bool{false, true} {
 		name := "missing_identity"
 		if known {
@@ -52,7 +53,7 @@ func TestRawClaudeProviderIdentityControlsDeviceCoalescing(t *testing.T) {
 			identity, err := f.sink.Resolve(t.Context(), rawtest.ClaudeID)
 			require.NoError(t, err)
 			var revisions, groups int
-			require.NoError(t, f.runtime.QueryRow(`SELECT count(DISTINCT content_revision),count(DISTINCT group_id) FROM raw_content_revisions`).Scan(&revisions, &groups))
+			require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(DISTINCT content_revision),count(DISTINCT group_id) FROM raw_content_revisions`).Scan(&revisions, &groups))
 			assert.Equal(t, 1, revisions, "content hash remains deterministic across devices")
 			if known {
 				assert.Equal(t, RawIdentityUnique, identity.State)

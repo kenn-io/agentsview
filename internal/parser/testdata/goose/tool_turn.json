@@ -1,0 +1,6 @@
+[
+  {"type":"thinking","thinking":"I should read auth.go first.","signature":"opaque"},
+  {"type":"text","text":"Checking the auth package."},
+  {"type":"toolRequest","id":"call-read","toolCall":{"status":"success","value":{"name":"Read","arguments":{"file_path":"auth.go"}}}},
+  {"type":"toolResponse","id":"call-read","toolResult":{"status":"success","value":{"content":[{"type":"text","text":"package auth"}]}}}
+]

@@ -19,7 +19,7 @@ import (
 // OpenClaw stores messages in a JSONL format with a session header
 // line, message entries, compaction summaries, and metadata events.
 func (p *openClawProvider) parseSession(
-	path, project, machine string,
+	ctx context.Context, path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -32,7 +32,7 @@ func (p *openClawProvider) parseSession(
 	}
 	defer f.Close()
 
-	lr := newLineReader(f, maxLineSize)
+	lr := newLineReaderContext(ctx, f, maxLineSize)
 	defer releaseLineReader(lr)
 	builder := newOpenClawRecordBuilder()
 
@@ -41,7 +41,7 @@ func (p *openClawProvider) parseSession(
 		if !ok {
 			break
 		}
-		if err := builder.consume(line, false); err != nil {
+		if err := builder.consume(ctx, line, false); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -50,11 +50,15 @@ func (p *openClawProvider) parseSession(
 		return nil, nil, fmt.Errorf("reading %s: %w", path, err)
 	}
 
-	return builder.finish(
-		path, project, machine, info,
+	sess, messages, err := builder.finish(
+		ctx, path, project, machine, info,
 		openClawAgentIDFromPath(path),
 		OpenClawSessionID(filepath.Base(path)),
 	)
+	if sess != nil {
+		sess.MalformedLines += lr.SkippedLines()
+	}
+	return sess, messages, err
 }
 
 // openClawRecordBuilder contains the format decoder shared by JSONL files and
@@ -77,7 +81,7 @@ func newOpenClawRecordBuilder() *openClawRecordBuilder {
 	return &openClawRecordBuilder{}
 }
 
-func (b *openClawRecordBuilder) consume(line string, rejectInvalid bool) error {
+func (b *openClawRecordBuilder) consume(ctx context.Context, line string, rejectInvalid bool) error {
 	if !gjson.Valid(line) {
 		if rejectInvalid {
 			return errors.New("invalid OpenClaw event JSON")
@@ -124,7 +128,7 @@ func (b *openClawRecordBuilder) consume(line string, rejectInvalid bool) error {
 	switch role {
 	case "user":
 		content := msg.Get("content")
-		text, thinkingText, dialogueText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(context.Background(), content)
+		text, thinkingText, dialogueText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(ctx, content)
 		text = strings.TrimSpace(text)
 		if text == "" && len(tcs) == 0 && len(trs) == 0 {
 			return nil
@@ -151,11 +155,8 @@ func (b *openClawRecordBuilder) consume(line string, rejectInvalid bool) error {
 
 	case "assistant":
 		content := msg.Get("content")
-		text, thinkingText, dialogueText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(context.Background(), content)
+		text, thinkingText, dialogueText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(ctx, content)
 		text = strings.TrimSpace(text)
-		if text == "" && len(tcs) == 0 && len(trs) == 0 {
-			return nil
-		}
 		pm := ParsedMessage{
 			Ordinal:            b.ordinal,
 			Role:               RoleAssistant,
@@ -171,6 +172,12 @@ func (b *openClawRecordBuilder) consume(line string, rejectInvalid bool) error {
 			tokenPresenceKnown: true,
 		}
 		applyOpenClawAssistantUsage(&pm, msg)
+		if text == "" && len(tcs) == 0 && len(trs) == 0 {
+			var ok bool
+			if pm, ok = usageOnlyMessage(pm); !ok {
+				return nil
+			}
+		}
 		b.messages = append(b.messages, pm)
 		b.ordinal++
 
@@ -200,7 +207,7 @@ func (b *openClawRecordBuilder) consume(line string, rejectInvalid bool) error {
 }
 
 func (b *openClawRecordBuilder) finish(
-	path, project, machine string, info os.FileInfo,
+	ctx context.Context, path, project, machine string, info os.FileInfo,
 	agentID, fallbackSessionID string,
 ) (*ParsedSession, []ParsedMessage, error) {
 	if len(b.messages) == 0 {
@@ -214,7 +221,7 @@ func (b *openClawRecordBuilder) finish(
 		agentID = "unknown"
 	}
 	if project == "" && b.cwd != "" {
-		project = ExtractProjectFromCwd(b.cwd)
+		project = ExtractProjectFromCwdWithBranchContext(ctx, b.cwd, "")
 	}
 	if project == "" {
 		project = "openclaw"
@@ -253,11 +260,11 @@ func (b *openClawRecordBuilder) finish(
 // cache_creation_input_tokens/cache_read_input_tokens keys that
 // internal/db/usage.go reads.
 //
-// Cost (message.usage.cost.total) is intentionally not propagated:
-// agentsview re-prices via the model_pricing table (loaded from
-// LiteLLM), so trusting the gateway's at-request cost would skew
-// totals against the canonical pricing source. The model name is
-// the load-bearing field for accurate pricing lookup.
+// The recorded cost (message.usage.cost.total) is kept as a recorded
+// cost: it prices the row only when the catalog has no rate for the
+// model, so catalog pricing stays the source for known models. OpenClaw
+// estimates it from its model rates, or stores the provider's charge and
+// marks it with cost.totalOrigin "provider-billed".
 //
 // Defensive about missing fields — older sessions may carry a model
 // without a usage block, or a usage block without cost; either is
@@ -321,6 +328,9 @@ func applyOpenClawAssistantUsage(
 	pm.HasOutputTokens = hasOutput
 	pm.ContextTokens = input + cacheRead + cacheWrite
 	pm.HasContextTokens = hasInput || hasCacheRead || hasCacheWrite
+	if cost, ok := recordedCostDollars(usage.Get("cost.total")); ok {
+		pm.SetRecordedCost(cost)
+	}
 }
 
 // extractToolResultText extracts plain text from an OpenClaw

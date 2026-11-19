@@ -35,6 +35,8 @@
     }), matches));
   });
 
+  const TRACK_WIDTH = 6;
+  let trackX = $derived(Math.max(0, (width - TRACK_WIDTH) / 2));
   let ticks = $derived(overviewTicks(locations, totalSize, height));
   let currentLocation = $derived(locations.find(({ match }) =>
     match.blockKey === inSessionSearch.resolvedCurrent?.blockKey &&
@@ -78,12 +80,16 @@
 <svg class="find-overview-rail" bind:this={rail}
   role="button" tabindex="0" aria-label={m.session_find_rail_label({ count: inSessionSearch.total })}
   onclick={selectAt} onkeydown={navigate}>
+  <!-- A faint full-height track makes the ticks read as a map of the
+       transcript's scroll extent; ticks use the in-text match amber. -->
+  <rect class="track" x={trackX} y="0" width={TRACK_WIDTH} height={Math.max(0, height)} rx={TRACK_WIDTH / 2} />
   {#each ticks as mark}
-    <rect x="2" y={mark.y} width={Math.max(1, width - 4)} height={mark.height} fill="var(--accent-amber)" />
+    <rect class="tick" x={trackX} y={mark.y} width={TRACK_WIDTH} height={mark.height} />
   {/each}
   {#if currentLocation && height > 0}
-    <rect x="0" y={Math.max(0, Math.min(height - 4, overviewY(currentLocation.offset, totalSize, height) - 2))}
-      {width} height={Math.min(4, height)} fill="currentColor" />
+    <rect class="tick current" x={trackX - 1}
+      y={Math.max(0, Math.min(height - 3, Math.round(overviewY(currentLocation.offset, totalSize, height) - 1.5)))}
+      width={TRACK_WIDTH + 2} height={Math.min(3, height)} rx="1" />
   {/if}
 </svg>
 
@@ -91,10 +97,23 @@
   .find-overview-rail {
     position: absolute;
     inset-block: 0;
-    inset-inline-end: 0;
+    /* On wide panes the rail sits in the gutter 10px past the reading
+       column's edge, next to the content it indexes, without moving the
+       column; on narrow panes it falls back to the space reserved at the
+       pane edge (SessionFindView .has-find). */
+    inset-inline-end: max(0px, calc((100% - var(--reading-column)) / 2 - 22px));
     width: 12px;
     height: 100%;
-    color: var(--accent-blue);
     cursor: pointer;
   }
+  .track { fill: color-mix(in srgb, var(--text-primary) 7%, transparent); }
+  /* Ticks match the in-text highlight: other matches in a softer amber,
+     the current match in solid amber, a pixel wider and taller, as its
+     in-text frame is the stronger mark. */
+  .tick { fill: color-mix(in srgb, var(--accent-amber) 72%, transparent); }
+  .tick.current { fill: var(--accent-amber); }
+  /* Light amber is too pale for a 3:1 mark on the track; light ticks step
+     the same hue toward primary ink, the current match furthest. */
+  :global(:root:not(.dark)) .tick { fill: color-mix(in srgb, var(--accent-amber) 75%, var(--text-primary)); }
+  :global(:root:not(.dark)) .tick.current { fill: color-mix(in srgb, var(--accent-amber) 60%, var(--text-primary)); }
 </style>

@@ -50,4 +50,4 @@ the latest edits.
 The same data backs the `GET /api/v1/recent-edits` endpoint, which accepts
 `limit`, `offset`, and `project` query parameters and returns the grouped files
 with their inlined edits. It is served identically by the local SQLite store and
-by the PostgreSQL and DuckDB read backends.
+by the PostgreSQL and ClickHouse read backends.

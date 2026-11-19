@@ -32,6 +32,9 @@ func goldenDigestFixture() DigestSnapshot {
 		{Kind: KindInterruption, SubjectID: "s-2", Dims: Dims{Agent: "claude"}},
 		{Kind: KindInterruption, SubjectID: "s-1"},
 		{Kind: KindInterruption, SubjectID: "s-2", Dims: Dims{Agent: "later"}},
+		{Kind: KindDiagnostic, SubjectID: "diagnostic:1", Label: "worker", Text: "launch failed"},
+		{Kind: KindDiagnostic, SubjectID: "diagnostic:2", Label: "worker", Text: "launch failed"},
+		{Kind: KindDiagnostic, SubjectID: "diagnostic:3", Label: "worker", Text: "launch failed"},
 	}
 	return DigestSnapshot{
 		Date: "2026-09-16", Signals: sigs,

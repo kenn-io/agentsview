@@ -31,9 +31,9 @@ func newAmpSourceSet(roots []string) JSONLSourceSet {
 }
 
 func ampParseFile(
-	_ context.Context, path string, req ParseRequest,
+	ctx context.Context, path string, req ParseRequest,
 ) ([]ParseResult, []string, error) {
-	sess, msgs, err := parseAmpSession(path, req.Machine)
+	sess, msgs, err := parseAmpSession(ctx, path, req.Machine)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -51,7 +51,7 @@ func isAmpSourcePath(root, path string) bool {
 }
 
 func ampProviderCapabilities() Capabilities {
-	return Capabilities{
+	return withPollMetadataScan(Capabilities{
 		Source: jsonlFileProviderSourceCapabilities(),
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
@@ -62,5 +62,5 @@ func ampProviderCapabilities() Capabilities {
 			PerMessageTokenUsage: CapabilitySupported,
 			Model:                CapabilitySupported,
 		},
-	}
+	})
 }

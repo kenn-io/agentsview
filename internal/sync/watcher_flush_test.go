@@ -123,6 +123,39 @@ func TestWatcherFlushPendingKeepsRetryBackoff(t *testing.T) {
 	})
 }
 
+// A manual sync must not report success while failed work waits out its
+// backoff, so its flush takes the retained retry along with fresh work.
+func TestWatcherFlushPendingAndRetrySyncsRetainedWork(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		failed := errors.New("source unavailable")
+		calls := make(chan WatchBatch, 4)
+		fail := true
+		w, err := newWatcherWithBackend(time.Hour, time.Hour, func(_ context.Context, batch WatchBatch) error {
+			calls <- batch
+			if fail && len(batch.ReconcileRoots) > 0 {
+				return failed
+			}
+			return nil
+		}, newFakeWatchBackend(), 8, 1000)
+		require.NoError(t, err)
+		w.Start()
+		defer w.Stop()
+		w.eventSink.Add(backendEvent{Path: "/retry", Root: "/retry", Op: backendOpReconcileRootChange})
+		require.ErrorIs(t, w.FlushPending(t.Context()), failed)
+		<-calls
+		require.False(t, w.eventSink.RetryEmpty())
+
+		fail = false
+		w.eventSink.Add(backendEvent{Path: "/fresh", Op: backendOpWrite})
+		require.NoError(t, w.FlushPendingAndRetry(t.Context()))
+		require.Len(t, calls, 1)
+		batch := <-calls
+		assert.Equal(t, []string{"/fresh"}, batch.Paths)
+		assert.Equal(t, []string{"/retry"}, batch.ReconcileRoots)
+		assert.True(t, w.eventSink.RetryEmpty())
+	})
+}
+
 func TestWatcherFlushPendingStopAndCancellation(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		started := make(chan struct{})
@@ -132,6 +165,13 @@ func TestWatcherFlushPendingStopAndCancellation(t *testing.T) {
 			return ctx.Err()
 		}, newFakeWatchBackend(), 8, 1000)
 		require.NoError(t, err)
+		cancelCallback := w.callbackCancel
+		w.callbackCancel = func() {
+			cancelCallback()
+			// Allow the worker and queued flush to run as soon as the callback
+			// is canceled, before Stop continues with its remaining cleanup.
+			synctest.Wait()
+		}
 		w.Start()
 		w.eventSink.Add(backendEvent{Path: "/file", Op: backendOpWrite})
 		ctx, cancel := context.WithCancel(t.Context())
@@ -146,5 +186,43 @@ func TestWatcherFlushPendingStopAndCancellation(t *testing.T) {
 		w.Stop()
 		require.Error(t, <-stopped)
 		require.Error(t, w.FlushPending(t.Context()))
+	})
+}
+
+func TestWatcherPauseDispatchHoldsChangesUntilReopened(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		calls := make(chan WatchBatch, 4)
+		backend := newFakeWatchBackend()
+		w, err := newWatcherWithBackend(500*time.Millisecond, time.Second,
+			func(_ context.Context, batch WatchBatch) error {
+				calls <- batch
+				return nil
+			}, backend, 8, 1000)
+		require.NoError(t, err)
+		w.Start()
+		defer w.Stop()
+
+		// The first change already has a batch timer running when the pause
+		// starts; the second arrives during the pause.
+		backend.sendEvent(t, "/sessions/first.jsonl")
+		w.PauseDispatch()
+		backend.sendEvent(t, "/sessions/second.jsonl")
+		time.Sleep(time.Hour)
+		synctest.Wait()
+		require.Empty(t, calls, "a paused watcher delivers nothing")
+		require.Error(t, w.FlushPending(t.Context()), "a paused watcher has no open dispatch to flush")
+
+		w.OpenDispatch()
+		require.NoError(t, w.FlushPending(t.Context()))
+		synctest.Wait()
+		require.Len(t, calls, 1, "reopening delivers the collected changes once")
+		assert.ElementsMatch(t,
+			[]string{"/sessions/first.jsonl", "/sessions/second.jsonl"}, (<-calls).Paths)
+
+		backend.sendEvent(t, "/sessions/third.jsonl")
+		time.Sleep(time.Hour)
+		synctest.Wait()
+		require.Len(t, calls, 1, "a reopened watcher dispatches on its own again")
+		assert.Equal(t, []string{"/sessions/third.jsonl"}, (<-calls).Paths)
 	})
 }

@@ -1,12 +1,16 @@
 package db
 
 import (
+	"bytes"
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -18,6 +22,27 @@ type TrendTermInput struct {
 	Term     string   `json:"term"`
 	Variants []string `json:"variants"`
 	Matchers []string `json:"-"`
+}
+
+// trendsMatchingVersion changes when term matching or variant expansion changes.
+const trendsMatchingVersion = 1
+
+// TrendsKeptVariant identifies the ordered terms and their matching rules.
+func TrendsKeptVariant(terms []TrendTermInput, granularity string) string {
+	type term struct {
+		Term               string
+		Variants, Matchers []string
+	}
+	values := make([]term, len(terms))
+	for i, t := range terms {
+		values[i] = term(t)
+	}
+	key, _ := json.Marshal(struct {
+		Version     int
+		Granularity string
+		Terms       []term
+	}{trendsMatchingVersion, granularity, values})
+	return string(key)
 }
 
 type TrendBucket struct {
@@ -52,6 +77,12 @@ func (db *DB) GetTrendsTerms(
 	terms []TrendTermInput,
 	granularity string,
 ) (TrendsTermsResponse, error) {
+	return keptAnalytics(ctx, db, "trends|"+TrendsKeptVariant(terms, granularity), f, func(ctx context.Context, f AnalyticsFilter) (TrendsTermsResponse, error) {
+		return db.trendsTerms(ctx, f, terms, granularity)
+	})
+}
+
+func (db *DB) trendsTerms(ctx context.Context, f AnalyticsFilter, terms []TrendTermInput, granularity string) (TrendsTermsResponse, error) {
 	release, err := db.acquireBulkRead(ctx)
 	if err != nil {
 		return TrendsTermsResponse{}, err
@@ -60,20 +91,52 @@ func (db *DB) GetTrendsTerms(
 	if granularity == "" {
 		granularity = "week"
 	}
-	acc := NewTrendAccumulator(f.From, f.To, granularity, terms)
+	db.trendsPartsDisk()
+	if db.trendsDisk.Enabled() {
+		identity, err := db.GetDatabaseID(ctx)
+		if err != nil {
+			return TrendsTermsResponse{}, err
+		}
+		if result, handled, err := TrendsFromParts(ctx, &db.trendsDisk, identity, f, terms, granularity, db); handled {
+			return result, err
+		}
+	}
+	acc := NewTrendWorkers(ctx, f.From, f.To, granularity, terms)
+	defer func() {
+		if acc != nil {
+			_, _ = acc.Finish()
+		}
+	}()
 	loc := f.location()
-	sessionFilter := f
-	sessionFilter.From = ""
-	sessionFilter.To = ""
-	sessionFilter.DayOfWeek = nil
-	sessionFilter.Hour = nil
-	sessionFilter.Model = ""
-	where, args := sessionFilter.buildWhereWithDate("", false, "s.id")
+	where, args := f.TrendsSessionFilter().buildWhereWithDate("", false, "s.id")
+	from, to := f.messageWindowBoundsUTC()
+	if sessionWindow, wargs := sqliteTrendSessionWindow(f); sessionWindow != "" {
+		// Filter sessions before walking their messages.
+		where += " AND s.id IN (SELECT sessions.id FROM sessions WHERE " + sessionWindow + ")"
+		args = append(args, wargs...)
+	}
 	flt := f.MessageScopeFilter()
 	modelFiltering := len(flt.Models) > 0
-	query := `SELECT m.session_id, m.ordinal, m.role, m.is_system,
-			COALESCE(m.model, ''), m.content, COALESCE(m.timestamp, ''),
-			COALESCE(s.started_at, ''), s.created_at
+	content := "m.content"
+	var selectArgs []any
+	effectiveTime := "COALESCE(NULLIF(m.timestamp, ''), NULLIF(s.started_at, ''), s.created_at)"
+	if inWindow, wargs := sqliteTrendWindowPred(effectiveTime, from, to); inWindow != "" {
+		rowWindow := inWindow
+		if modelFiltering {
+			content = "CASE WHEN " + inWindow + " THEN m.content ELSE '' END"
+			selectArgs = append(selectArgs, wargs...)
+			rowWindow = "(" + inWindow + " OR m.role = 'assistant')"
+		}
+		where += " AND " + rowWindow
+		args = append(args, wargs...)
+	}
+	args = append(selectArgs, args...)
+	columns := `m.content, agentsview_trend_timestamp(COALESCE(m.timestamp, ''), COALESCE(s.started_at, ''), COALESCE(s.created_at, ''))`
+	if modelFiltering {
+		columns = `m.session_id, m.ordinal, m.role, m.is_system,
+			m.model, ` + content + `, COALESCE(m.timestamp, ''), COALESCE(s.started_at, ''), s.created_at`
+	}
+	query := `SELECT ` + columns + `
 		FROM sessions s
 		JOIN messages m ON m.session_id = s.id
 		WHERE ` + where + `
@@ -98,31 +161,27 @@ func (db *DB) GetTrendsTerms(
 		startedAt string
 		createdAt string
 	}
-	processRow := func(row trendRow) {
-		msgTime, ok := trendMessageLocalTime(row.msgTS, row.startedAt, row.createdAt, loc)
-		if !ok {
-			return
-		}
-		acc.Add(row.content, msgTime)
-	}
-	rowStartedAt := make(map[string]string)
-	rowCreatedAt := make(map[string]string)
 	emit := func(m ScopedMessage) {
-		processRow(trendRow{
-			sessionID: m.SessionID,
-			role:      m.Role,
-			isSystem:  m.IsSystem,
-			content:   m.Content,
-			msgTS:     m.Timestamp,
-			startedAt: rowStartedAt[m.SessionID],
-			createdAt: rowCreatedAt[m.SessionID],
-		})
+		if m.HasLocalTime {
+			acc.Add(m.Content, m.LocalTime)
+		}
 	}
 	reducer := NewScopeReducer(flt, emit)
 
 	for rows.Next() {
 		var row trendRow
 		var ordinal int
+		if !modelFiltering {
+			var timestamp string
+			if err := rows.Scan(&row.content, &timestamp); err != nil {
+				return TrendsTermsResponse{}, fmt.Errorf("scanning trends term row: %w", err)
+			}
+			local, ok := LocalTime(timestamp, loc)
+			if ok && flt.MatchesDayHour(local, true) {
+				acc.Add(row.content, local)
+			}
+			continue
+		}
 		if err := rows.Scan(
 			&row.sessionID, &ordinal, &row.role, &row.isSystem,
 			&row.model, &row.content, &row.msgTS, &row.startedAt,
@@ -130,15 +189,7 @@ func (db *DB) GetTrendsTerms(
 		); err != nil {
 			return TrendsTermsResponse{}, fmt.Errorf("scanning trends term row: %w", err)
 		}
-		if !modelFiltering {
-			msgTime, ok := trendMessageLocalTime(row.msgTS, row.startedAt, row.createdAt, loc)
-			if ok && flt.MatchesDayHour(msgTime, true) {
-				processRow(row)
-			}
-			continue
-		}
-		rowStartedAt[row.sessionID] = row.startedAt
-		rowCreatedAt[row.sessionID] = row.createdAt
+
 		msgTime, has := trendMessageLocalTime(row.msgTS, row.startedAt, row.createdAt, loc)
 		if err := reducer.Push(MessageInput{
 			SessionID:    row.sessionID,
@@ -158,7 +209,9 @@ func (db *DB) GetTrendsTerms(
 		return TrendsTermsResponse{}, fmt.Errorf("iterating trends term rows: %w", err)
 	}
 
-	return acc.Response(), nil
+	response, err := acc.Finish()
+	acc = nil
+	return response, err
 }
 
 // TrendAccumulator counts term occurrences per trend bucket. Backends feed it
@@ -170,6 +223,9 @@ type TrendAccumulator struct {
 	index                 map[string]int
 	counts                [][]int
 	messageCounts         []int
+	lower                 []byte
+	matchers              [][]trendMatcher
+	parts                 map[trendPartKey]*trendDay
 }
 
 // NewTrendAccumulator returns an accumulator for the buckets spanning
@@ -182,7 +238,12 @@ func NewTrendAccumulator(
 	for i := range counts {
 		counts[i] = make([]int, len(buckets))
 	}
+	matchers := make([][]trendMatcher, len(terms))
+	for i, term := range terms {
+		matchers[i] = prepareTrendMatchers(term)
+	}
 	return &TrendAccumulator{
+		matchers:      matchers,
 		from:          from,
 		to:            to,
 		granularity:   granularity,
@@ -197,16 +258,18 @@ func NewTrendAccumulator(
 // Add counts content in the bucket holding local's calendar date. Messages
 // whose local date falls outside [from, to] are ignored.
 func (a *TrendAccumulator) Add(content string, local time.Time) {
-	if !InDateRange(local.Format("2006-01-02"), a.from, a.to) {
-		return
-	}
-	bucket, ok := a.index[TrendBucketDate(local, local.Location(), a.granularity)]
+	bucket, ok := a.bucket(local)
 	if !ok {
 		return
 	}
 	a.messageCounts[bucket]++
-	for i, term := range a.terms {
-		a.counts[i][bucket] += CountTrendOccurrences(content, term)
+	a.countMessage(content, func(i, count int) { a.counts[i][bucket] += count })
+}
+
+func (a *TrendAccumulator) countMessage(content string, add func(int, int)) {
+	a.lower = appendTrendLower(a.lower, content)
+	for i, matchers := range a.matchers {
+		add(i, countTrendOccurrences(a.lower, matchers))
 	}
 }
 
@@ -318,28 +381,58 @@ type matchSpan struct {
 	end   int
 }
 
-func CountTrendOccurrences(text string, term TrendTermInput) int {
-	spans := make([]matchSpan, 0)
+type trendMatcher struct {
+	needle      []byte
+	wordBounded bool
+}
+
+func prepareTrendMatchers(term TrendTermInput) []trendMatcher {
+	var matchers []trendMatcher
 	for _, matcher := range term.Matchers {
 		matcher = strings.TrimSpace(matcher)
-		if matcher == "" {
-			continue
+		if matcher != "" {
+			matchers = append(matchers, trendMatcher{[]byte(strings.ToLower(matcher)), isSingleWordMatcher(matcher)})
 		}
-		wordBounded := isSingleWordMatcher(matcher)
-		spans = append(spans, collectTrendSpans(text, matcher, wordBounded)...)
+	}
+	return matchers
+}
+
+func appendTrendLower(dst []byte, text string) []byte {
+	dst = append(dst[:0], text...)
+	for i, c := range dst {
+		if c >= utf8.RuneSelf {
+			dst = dst[:0]
+			for _, r := range text {
+				dst = utf8.AppendRune(dst, unicode.ToLower(r))
+			}
+			return dst
+		}
+		if 'A' <= c && c <= 'Z' {
+			dst[i] = c + ('a' - 'A')
+		}
+	}
+	return dst
+}
+
+func CountTrendOccurrences(text string, term TrendTermInput) int {
+	return countTrendOccurrences(appendTrendLower(nil, text), prepareTrendMatchers(term))
+}
+
+func countTrendOccurrences(haystack []byte, matchers []trendMatcher) int {
+	var spans []matchSpan
+	for _, matcher := range matchers {
+		spans = append(spans, collectTrendSpans(haystack, matcher.needle, matcher.wordBounded)...)
 	}
 	return mergeCountSpans(spans)
 }
 
-func collectTrendSpans(text string, matcher string, wordBounded bool) []matchSpan {
-	needle := strings.ToLower(matcher)
-	haystack := strings.ToLower(text)
-	if needle == "" || haystack == "" {
+func collectTrendSpans(haystack, needle []byte, wordBounded bool) []matchSpan {
+	if len(needle) == 0 || len(haystack) == 0 {
 		return nil
 	}
-	spans := make([]matchSpan, 0)
+	var spans []matchSpan
 	for offset := 0; offset < len(haystack); {
-		idx := strings.Index(haystack[offset:], needle)
+		idx := bytes.Index(haystack[offset:], needle)
 		if idx < 0 {
 			break
 		}
@@ -365,7 +458,7 @@ func isSingleWordMatcher(matcher string) bool {
 	return true
 }
 
-func hasWordBoundaries(text string, start, end int) bool {
+func hasWordBoundaries(text []byte, start, end int) bool {
 	if start > 0 && isWordByte(text[start-1]) {
 		return false
 	}

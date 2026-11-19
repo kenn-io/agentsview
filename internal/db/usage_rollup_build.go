@@ -42,7 +42,7 @@ type usagePriceResult struct {
 // persistence compute it on demand; provenance-only callers skip it.
 func (p usagePriceResult) rateHash() string {
 	return usageRateHash(
-		p.model, p.PricedModel, p.MatchedPattern, p.RateOK, p.lookup.Rates)
+		p.model, p.PricedModel, p.MatchedPattern, p.lookup.Adjustment, p.RateOK, p.lookup.Rates)
 }
 
 type usageRollupFact struct {
@@ -91,13 +91,27 @@ type usageExceptionRow struct {
 
 type usageRollupBuild struct {
 	SessionID, Agent, StartedAt string
+	Project, Machine, GitBranch string
+	GroupKey, GroupLabel        string
+	IsAutomated                 bool
+	UserMessageCount            int
+	HasAuthoritative            bool
 	// PricingInputs encodes the lookups Daily used; PricingHash is their identity.
 	PricingInputs, PricingHash string
 	Source                     usageSourceVersion
 	FactRevision               int64
-	Daily                      []usageDailyContribution
-	Activity                   []usageActivityContribution
-	Exceptions                 []usageExceptionRow
+	CursorAfter                int64 // Installed Cursor fact revision, or zero for a full build.
+	ExactAccountRevision       bool
+	// AccountTotals hold priced account rows of a full external generation.
+	// AccountCollisions are the keys kept as exceptions; an install aborts
+	// when another key collides before it commits.
+	AccountTotals     []usageAccountTotal
+	AccountCollisions map[string]bool
+	ChangeRevision    int64
+	SourcePricing     string
+	Daily             []usageDailyContribution
+	Activity          []usageActivityContribution
+	Exceptions        []usageExceptionRow
 }
 
 func priceUsageFact(
@@ -110,11 +124,23 @@ func priceUsageFact(
 	canonicalModel := usageLookupModel(model, input.Timestamp)
 	timestamp := usagePricingTimestamp(input.Timestamp)
 	reported := input.Fact.ReportedCostMicrodollars
+	copilot := input.Fact.CostSource == CopilotReportedCostSource
+	// useReported is whether the row's own cost is its price. A
+	// harness-recorded cost the catalog can beat is kept out of the charge.
+	useReported := reported != nil && !copilot
+	if useReported {
+		useReported = ReportedCostForPricing(
+			sql.NullInt64{Int64: *reported, Valid: true}, input.Fact.CostStatus,
+			func() bool {
+				_, plain := resolver.ResolveAt(model, canonicalModel, timestamp)
+				return plain.OK
+			}).Valid
+	}
 	// Reported rows keep the unadjusted lookup; computed rows are charged at
 	// billed rates. Resolve only the one each row uses.
 	var pricedModel string
 	var lookup export.PricingLookup
-	if reported != nil && input.Fact.CostSource != CopilotReportedCostSource {
+	if useReported {
 		pricedModel, lookup = resolver.ResolveAt(model, canonicalModel, timestamp)
 	} else {
 		var err error
@@ -138,7 +164,7 @@ func priceUsageFact(
 			lookup.Rates, input.Fact)
 	}
 	savingsRates := selectedRates
-	if reported != nil && input.Fact.CostSource != CopilotReportedCostSource &&
+	if useReported &&
 		(input.Fact.CacheReadTokens != 0 || input.Fact.CacheCreationTokens != 0) {
 		_, savingsLookup, err := resolver.ResolveBilledAt(
 			input.ProviderID, model, canonicalModel, timestamp)
@@ -157,7 +183,7 @@ func priceUsageFact(
 		}
 	}
 	var err error
-	if reported != nil && input.Fact.CostSource != CopilotReportedCostSource {
+	if useReported {
 		result.Cost = money.Money{Microdollars: *reported}
 		result.Reported = 1
 	} else {
@@ -173,15 +199,19 @@ func priceUsageFact(
 		if err != nil {
 			return usagePriceResult{}, fmt.Errorf("pricing usage row for model %q: %w", model, err)
 		}
-		if input.Fact.RequestScoped {
+		switch {
+		case reported != nil && !copilot && usageFactHasNoBillableUsage(input.Fact):
+			// A cost-only evidence row the catalog price beat charges nothing
+			// and is not a priced request.
+		case input.Fact.RequestScoped:
 			result.ComputedRequest = 1
 			if result.BandThreshold == nil {
 				result.BaseRequest = 1
 			}
-		} else {
+		default:
 			result.ComputedAggregate = 1
 		}
-		if reported != nil {
+		if reported != nil && copilot {
 			value := money.Money{Microdollars: *reported}
 			result.AuthoritativeCost = &value
 		}
@@ -210,6 +240,14 @@ func priceUsageFact(
 		return usagePriceResult{}, fmt.Errorf("pricing cache savings for model %q: %w", model, err)
 	}
 	return result, nil
+}
+
+// usageFactHasNoBillableUsage reports whether a fact carries no token or
+// web-search usage the catalog could charge.
+func usageFactHasNoBillableUsage(fact usagefacts.Fact) bool {
+	return fact.InputTokens == 0 && fact.OutputTokens == 0 &&
+		fact.ReasoningTokens == 0 && fact.CacheCreationTokens == 0 &&
+		fact.CacheReadTokens == 0 && fact.WebSearchRequests == 0
 }
 
 func usageRatesAndBandForFact(
@@ -369,8 +407,8 @@ func loadUsageRollupFacts(
 		f.output_tokens, f.reasoning_tokens, f.cache_creation_tokens,
 		f.cache_creation_1h_tokens,
 		f.cache_read_tokens, f.web_search_requests, f.reported_cost_microdollars,
-		f.cost_source, f.request_scoped, f.claude_message_id, f.claude_request_id,
-		f.source_uuid, f.usage_dedup_key, f.token_eligible, f.activity_eligible
+		f.cost_source, f.cost_status, f.request_scoped, f.claude_message_id, f.claude_request_id,
+		f.source_uuid, f.usage_dedup_key, f.token_eligible, f.activity_eligible, f.ranking_output_tokens
 		FROM usage_rollup_build_sessions selected
 		CROSS JOIN usage_cached_sessions cs ON cs.session_id = selected.session_id
 		CROSS JOIN usage_facts f ON f.cached_session_id = cs.id
@@ -392,9 +430,10 @@ func loadUsageRollupFacts(
 			&item.Fact.CacheCreationTokens, &item.Fact.CacheCreation1hTokens,
 			&item.Fact.CacheReadTokens,
 			&item.Fact.WebSearchRequests, &reported, &item.Fact.CostSource,
+			&item.Fact.CostStatus,
 			&requestScoped, &item.Fact.ClaudeMessageID, &item.Fact.ClaudeRequestID,
 			&item.Fact.SourceUUID, &item.Fact.UsageDedupKey,
-			&tokenEligible, &activityEligible); err != nil {
+			&tokenEligible, &activityEligible, &item.Fact.RankingOutputTokens); err != nil {
 			return nil, err
 		}
 		if ordinal.Valid {
@@ -432,9 +471,14 @@ func loadUsageRollupFacts(
 }
 
 func loadCursorUsageRollupBuild(
-	ctx context.Context, conn *sql.Conn, highWater int64,
-	location *time.Location, pricing *usagePricingIdentities,
+	ctx context.Context, conn *sql.Conn, after int64,
+	snapshot usageQuerySnapshot, pricing *usagePricingIdentities,
 ) (usageRollupBuild, error) {
+	// External accounts replace a whole generation; their IDs do not bound it.
+	where, args := "source_id > ? AND source_id <= ?", []any{after, snapshot.CursorHighWater}
+	if snapshot.exactAccountRevision {
+		after, where, args = 0, "1", nil
+	}
 	// Cursor rows price at read time, so only the policy identity applies.
 	inputs, pricingHash, err := pricing.forInputs(nil)
 	if err != nil {
@@ -445,16 +489,31 @@ func loadCursorUsageRollupBuild(
 		PricingInputs: inputs, PricingHash: pricingHash,
 		Source: usageSourceVersion{
 			SessionID:  usageRollupCursorSessionID,
-			SyncMarker: strconv.FormatInt(highWater, 10),
+			SyncMarker: strconv.FormatInt(snapshot.CursorHighWater, 10),
 		},
-		FactRevision: highWater,
+		FactRevision:         snapshot.CursorHighWater,
+		ExactAccountRevision: snapshot.exactAccountRevision,
+		CursorAfter:          after,
 	}
-	rows, err := conn.QueryContext(ctx, `SELECT source_id, timestamp_ms,
+	// A full external generation prices every row that no other usage row can
+	// replace, as it streams in, so the build holds only the colliding rows
+	// and the daily totals. Requests then read a few rows per day instead of
+	// resolving every account row. Rows sharing a key keep the exception tier,
+	// where request-time deduplication picks the survivor. Collisions load
+	// first because the connection serves one statement at a time.
+	var accounts *usageAccountTotalsBuilder
+	if snapshot.exactAccountRevision {
+		collisions, err := loadCursorUsageCollisions(ctx, conn)
+		if err != nil {
+			return build, err
+		}
+		accounts = newUsageAccountTotalsBuilder(collisions, pricing.resolver)
+	}
+	rows, err := conn.QueryContext(ctx, `SELECT source_id, agent, timestamp_ms,
 		raw_timestamp, model, input_tokens, output_tokens,
 		cache_creation_tokens, cache_read_tokens, charged_microdollars,
 		is_headless, dedup_key
-		FROM cursor_usage_facts WHERE source_id <= ? ORDER BY source_id`,
-		highWater)
+		FROM cursor_usage_facts WHERE `+where+` ORDER BY source_id`, args...)
 	if err != nil {
 		return build, err
 	}
@@ -466,7 +525,7 @@ func loadCursorUsageRollupBuild(
 		var millis sql.NullInt64
 		var charged int64
 		var isHeadless int
-		if err := rows.Scan(&sourceID, &millis, &fact.Fact.RawTimestamp,
+		if err := rows.Scan(&sourceID, &fact.Agent, &millis, &fact.Fact.RawTimestamp,
 			&fact.Model, &fact.Fact.InputTokens, &fact.Fact.OutputTokens,
 			&fact.Fact.CacheCreationTokens, &fact.Fact.CacheReadTokens, &charged,
 			&isHeadless, &fact.Fact.UsageDedupKey); err != nil {
@@ -474,10 +533,10 @@ func loadCursorUsageRollupBuild(
 		}
 		fact.IsHeadless = isHeadless != 0
 		fact.FactIndex = int(sourceID)
-		fact.Fact.Source = "cursor"
+		fact.Fact.Source = fact.Agent
 		fact.Fact.Model = fact.Model
-		fact.Fact.CostSource = "cursor-reported"
-		fact.Fact.RequestScoped = true
+		fact.Fact.CostSource = fact.Agent + "-reported"
+		// Account totals do not establish a single request's context size.
 		fact.Fact.TokenEligible = true
 		fact.Fact.ReportedCostMicrodollars = &charged
 		if millis.Valid {
@@ -485,23 +544,150 @@ func loadCursorUsageRollupBuild(
 			fact.Fact.TimestampMillis, fact.EffectiveMillis = &value, &value
 		}
 		fact.DedupTimestamp = fact.Fact.RawTimestamp
-		fact.LocalDate = usageRollupLocalDate(fact, location)
-		facts = append(facts, fact)
-	}
-	if err := rows.Err(); err != nil {
-		return build, err
-	}
-	// Cursor rows stay on the exception tier: their keys may collide with
-	// session usage keys and their filters depend on per-row headless state,
-	// so pricing remains deferred to the request-time group resolution.
-	for _, fact := range facts {
+		fact.LocalDate = usageRollupLocalDate(fact, snapshot.location)
 		if usageRollupGeneralKey(fact) == "" {
 			return build, fmt.Errorf(
 				"Cursor usage fact %d has no dedup identity", fact.FactIndex)
 		}
+		if accounts == nil {
+			facts = append(facts, fact)
+		} else if err := accounts.add(fact); err != nil {
+			return build, err
+		}
 	}
-	build.Exceptions = usageRollupExceptionRows(facts)
+	if err := rows.Err(); err != nil {
+		return build, err
+	}
+	if accounts == nil {
+		// Incremental builds append rows by source_id, so existing exception
+		// rows remain valid. Request-time grouping prices them.
+		build.Exceptions = usageRollupExceptionRows(facts)
+		return build, nil
+	}
+	build.PricingInputs, build.PricingHash, err = pricing.forInputs(accounts.pricingInputs())
+	if err != nil {
+		return build, err
+	}
+	build.AccountTotals, build.AccountCollisions = accounts.result(), accounts.collisions
+	build.Exceptions = usageRollupExceptionRows(accounts.exceptions)
 	return build, nil
+}
+
+// usageAccountCollisionSQL finds account keys a cached session also reports.
+// The empty-key predicate lets SQLite probe the partial usage key index.
+const usageAccountCollisionSQL = `SELECT c.dedup_key FROM cursor_usage_facts c
+	WHERE EXISTS (SELECT 1 FROM usage_facts f
+		WHERE f.usage_dedup_key = c.dedup_key AND f.usage_dedup_key != '')`
+
+func loadCursorUsageCollisions(
+	ctx context.Context, runner usageCacheStatementRunner,
+) (map[string]bool, error) {
+	collisions := make(map[string]bool)
+	err := scanUsageIdentityColumn(ctx, runner, usageAccountCollisionSQL,
+		func(key string) { collisions[key] = true })
+	if err != nil {
+		return nil, fmt.Errorf("loading colliding account usage keys: %w", err)
+	}
+	return collisions, nil
+}
+
+type usageAccountTotal struct {
+	usageDailyContribution
+	Agent      string
+	IsHeadless bool
+	// PricingKey is the dedup key of the fact that set PricingTimestamp.
+	// Request-time grouping takes the timestamp of the lowest key, so a
+	// group that also holds exception rows can pick the same one.
+	PricingKey string
+}
+
+type usageAccountTotalKey struct {
+	date, agent, model, providerID, rateHash string
+	headless                                 bool
+	band                                     int
+}
+
+// usageAccountTotalsBuilder prices account rows one at a time and sums the
+// rows no other usage can replace.
+type usageAccountTotalsBuilder struct {
+	collisions map[string]bool
+	resolver   *export.PricingResolver
+	totals     map[usageAccountTotalKey]*usageAccountTotal
+	inputs     map[usagePricingInput]bool
+	exceptions []usageRollupFact
+}
+
+func newUsageAccountTotalsBuilder(
+	collisions map[string]bool, resolver *export.PricingResolver,
+) *usageAccountTotalsBuilder {
+	return &usageAccountTotalsBuilder{
+		collisions: collisions, resolver: resolver,
+		totals: make(map[usageAccountTotalKey]*usageAccountTotal),
+		inputs: make(map[usagePricingInput]bool),
+	}
+}
+
+func (b *usageAccountTotalsBuilder) add(fact usageRollupFact) error {
+	if b.collisions[fact.Fact.UsageDedupKey] {
+		b.exceptions = append(b.exceptions, fact)
+		return nil
+	}
+	priced, err := priceUsageFact(usagePriceInput{
+		Fact: fact.Fact, Timestamp: fact.Fact.RawTimestamp,
+		ReportedModel: fact.Model, ProviderID: fact.Fact.ProviderID,
+	}, b.resolver)
+	if err != nil {
+		return err
+	}
+	if priced.AuthoritativeCost != nil {
+		// Authoritative cost picks one row per owner at request time.
+		b.exceptions = append(b.exceptions, fact)
+		return nil
+	}
+	b.inputs[usagePricingInput{
+		ProviderID: fact.Fact.ProviderID, ReportedModel: priced.model,
+		CanonicalModel: priced.canonical,
+	}] = true
+	band := -1
+	if priced.BandThreshold != nil {
+		band = *priced.BandThreshold
+	}
+	rateHash := priced.rateHash()
+	key := usageAccountTotalKey{
+		date: fact.LocalDate, agent: fact.Agent, model: fact.Model,
+		providerID: fact.Fact.ProviderID, rateHash: rateHash,
+		headless: fact.IsHeadless, band: band,
+	}
+	total := b.totals[key]
+	if total == nil {
+		total = &usageAccountTotal{
+			LocalDate: fact.LocalDate, ReportedModel: fact.Model,
+			ProviderID:  fact.Fact.ProviderID,
+			PricedModel: priced.PricedModel, MatchedPattern: priced.MatchedPattern,
+			RateOK: priced.RateOK, RateHash: rateHash,
+			BandThreshold: priced.BandThreshold,
+			Agent:         fact.Agent, IsHeadless: fact.IsHeadless,
+		}
+		b.totals[key] = total
+	}
+	dedupKey := usageRollupGeneralKey(fact)
+	if fact.Fact.RawTimestamp != "" &&
+		(total.PricingTimestamp == "" || dedupKey < total.PricingKey) {
+		total.PricingTimestamp, total.PricingKey = fact.Fact.RawTimestamp, dedupKey
+	}
+	return addUsageFactToDailyContribution(&total.usageDailyContribution, fact, priced)
+}
+
+func (b *usageAccountTotalsBuilder) pricingInputs() []usagePricingInput {
+	return slices.Collect(maps.Keys(b.inputs))
+}
+
+func (b *usageAccountTotalsBuilder) result() []usageAccountTotal {
+	result := make([]usageAccountTotal, 0, len(b.totals))
+	for _, total := range b.totals {
+		result = append(result, *total)
+	}
+	return result
 }
 
 func buildUsageRollupSessions(
@@ -538,9 +724,18 @@ func buildUsageRollupSessions(
 		if err != nil {
 			return nil, err
 		}
+		hasAuthoritative := false
+		for _, fact := range sessionFacts {
+			if usageFactHasAuthoritativeCost(fact) {
+				hasAuthoritative = true
+			}
+		}
 		builds = append(builds, usageRollupBuild{
 			SessionID: id, Agent: sessions[id].Agent, StartedAt: sessions[id].StartedAt,
-			PricingInputs: pricingInputs, PricingHash: pricingHash,
+			Project: sessions[id].Project, Machine: sessions[id].Machine, GitBranch: sessions[id].GitBranch, GroupKey: sessions[id].GroupKey, GroupLabel: bakedUsageSession(sessions[id]).GroupLabel,
+			IsAutomated: sessions[id].IsAutomated, UserMessageCount: sessions[id].UserMessageCount,
+			HasAuthoritative: hasAuthoritative,
+			PricingInputs:    pricingInputs, PricingHash: pricingHash,
 			Source: versions[id], FactRevision: fills[id].InstallRevision,
 			Daily: daily, Activity: usageRollupActivityContributions(id, sessionFacts),
 			Exceptions: usageRollupExceptionRows(exceptions),
@@ -550,7 +745,7 @@ func buildUsageRollupSessions(
 }
 
 func usageRollupSnapshotKey(fact usageRollupFact) string {
-	if fact.Fact.ClaudeMessageID == "" || fact.Fact.ClaudeRequestID == "" {
+	if fact.Fact.ClaudeMessageID == "" {
 		return ""
 	}
 	return fmt.Sprintf("%d:%s%s", len(fact.Fact.ClaudeMessageID),

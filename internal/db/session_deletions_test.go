@@ -11,6 +11,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func testFreshDB(tb testing.TB) *DB {
+	tb.Helper()
+	path := filepath.Join(tb.TempDir(), "fresh.db")
+	require.NoError(tb, os.WriteFile(path, nil, 0o600))
+	d, err := OpenFreshIsolatedContext(tb.Context(), path)
+	require.NoError(tb, err)
+	tb.Cleanup(func() { require.NoError(tb, d.Close()) })
+	return d
+}
+
 func TestSessionDeletionJournalRecordsHardDeletes(t *testing.T) {
 	database := testDB(t)
 	ctx := t.Context()
@@ -99,15 +109,7 @@ func TestClassificationJournalCommitsChangesAndIgnoresNoOps(t *testing.T) {
 		open func(testing.TB) *DB
 	}{
 		{"normal", testDB},
-		{"fresh", func(tb testing.TB) *DB {
-			tb.Helper()
-			path := filepath.Join(tb.TempDir(), "fresh.db")
-			require.NoError(tb, os.WriteFile(path, nil, 0o600))
-			d, err := OpenFreshIsolatedContext(tb.Context(), path)
-			require.NoError(tb, err)
-			tb.Cleanup(func() { require.NoError(tb, d.Close()) })
-			return d
-		}},
+		{"fresh", testFreshDB},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d := tc.open(t)

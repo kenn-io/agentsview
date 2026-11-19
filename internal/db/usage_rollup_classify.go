@@ -34,7 +34,7 @@ func newUsageDedupIdentitySet() usageDedupIdentitySet {
 func (set usageDedupIdentitySet) add(
 	messageID, requestID, sourceUUID, usageKey string,
 ) {
-	if messageID != "" && requestID != "" {
+	if messageID != "" {
 		set.snapshot[[2]string{messageID, requestID}] = true
 	}
 	if sourceUUID != "" {
@@ -291,11 +291,11 @@ const usageRollupCrossSnapshotSQL = `SELECT DISTINCT
 	FROM usage_rollup_build_sessions selected
 	CROSS JOIN usage_cached_sessions cs ON cs.session_id = selected.session_id
 	CROSS JOIN usage_facts f ON f.cached_session_id = cs.id
-	WHERE f.claude_message_id != '' AND f.claude_request_id != ''
+	WHERE f.claude_message_id != ''
 	  AND EXISTS (SELECT 1 FROM usage_facts other
 		WHERE other.claude_message_id = f.claude_message_id
 		  AND other.claude_request_id = f.claude_request_id
-		  AND other.claude_message_id != '' AND other.claude_request_id != ''
+		  AND other.claude_message_id != ''
 		  AND other.cached_session_id != f.cached_session_id)`
 
 const usageRollupCrossSourceUUIDSQL = `SELECT DISTINCT f.source_uuid
@@ -407,25 +407,6 @@ func usageFactIdentitiesForSessions(
 	return set, nil
 }
 
-// usageSpoolIdentitiesForSessions returns the distinct dedup identities the
-// attached fill spool carries for the given source sessions.
-func usageSpoolIdentitiesForSessions(
-	ctx context.Context, runner usageCacheStatementRunner, sessionIDs []string,
-) (usageDedupIdentitySet, error) {
-	set := newUsageDedupIdentitySet()
-	err := queryChunked(sessionIDs, func(chunk []string) error {
-		placeholders, args := InPlaceholders(chunk)
-		return scanUsageIdentityFactRows(ctx, runner, `SELECT DISTINCT
-			claude_message_id, claude_request_id, source_uuid, usage_dedup_key
-			FROM usage_fill_spool.facts
-			WHERE session_id IN `+placeholders, args, set)
-	})
-	if err != nil {
-		return set, fmt.Errorf("collecting spooled usage identities: %w", err)
-	}
-	return set, nil
-}
-
 func scanUsageIdentityFactRows(
 	ctx context.Context, runner usageCacheStatementRunner, query string,
 	args []any, set usageDedupIdentitySet,
@@ -444,6 +425,16 @@ func scanUsageIdentityFactRows(
 	}
 	return rows.Err()
 }
+
+// usageAccountInvalidationSQL deletes the account install when a changed
+// session usage key matches an account key. The empty-key predicate lets
+// SQLite probe the partial usage key index.
+const usageAccountInvalidationSQL = `DELETE FROM usage_rollup_installs
+	WHERE session_id = ? AND EXISTS (
+		SELECT 1 FROM usage_changed_identities c
+		JOIN cursor_usage_facts cf ON c.kind = 2 AND cf.dedup_key = c.first
+		WHERE EXISTS (SELECT 1 FROM usage_facts f
+			WHERE f.usage_dedup_key = c.first AND f.usage_dedup_key != ''))`
 
 // invalidateUsageDedupSharers deletes every timezone rollup install of the
 // sessions, other than the excluded ones, that store a fact matching one of
@@ -489,12 +480,16 @@ func invalidateUsageDedupSharers(
 			return nil, fmt.Errorf("recording changed usage identities: %w", err)
 		}
 	}
+	return invalidatePreparedUsageDedupSharers(ctx, runner, excluded)
+}
+
+func invalidatePreparedUsageDedupSharers(ctx context.Context, runner usageCacheStatementRunner, excluded map[string]bool) ([]string, error) {
 	sharerRows, err := runner.QueryContext(ctx, `
 		SELECT DISTINCT cs.session_id
 		FROM usage_changed_identities c
 		JOIN usage_facts f ON c.kind = 0
 			AND f.claude_message_id = c.first AND f.claude_request_id = c.second
-			AND f.claude_message_id != '' AND f.claude_request_id != ''
+			AND f.claude_message_id != ''
 		JOIN usage_cached_sessions cs ON cs.id = f.cached_session_id
 		UNION
 		SELECT DISTINCT cs.session_id
@@ -528,6 +523,13 @@ func invalidateUsageDedupSharers(
 	}
 	if err := sharerRows.Err(); err != nil {
 		return nil, err
+	}
+	// Account totals price only keys no session reports. A session key that
+	// now matches an account key moves that account row back to the
+	// exception tier, so the account install rebuilds.
+	if _, err := runner.ExecContext(ctx, usageAccountInvalidationSQL,
+		usageRollupCursorSessionID); err != nil {
+		return nil, fmt.Errorf("invalidating account usage totals: %w", err)
 	}
 	err = queryChunked(sharers, func(chunk []string) error {
 		placeholders, args := InPlaceholders(chunk)

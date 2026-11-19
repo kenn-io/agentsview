@@ -3,6 +3,9 @@ title: Quick Start
 description: Get AgentsView running in under a minute
 ---
 
+CLI examples use the commands from 0.47.0 and later. For older releases, use
+the legacy names in the [command migration](commands.md#command-migration).
+
 ## Install
 
 ### Desktop App
@@ -109,7 +112,7 @@ standalone install directory first in `PATH` to select it.
 
 ### Build from source
 
-Requires Go 1.27.3+ with CGO and Node.js 24.22.1+:
+Requires Go 1.27.4+ with CGO and Node.js 24.22.1+:
 
 ```bash
 git clone https://github.com/kenn-io/agentsview.git
@@ -211,9 +214,9 @@ container 40 seconds to finish its final push.
 
 The desktop app handles startup automatically: it attaches to an existing local
 daemon or starts one in the background, then opens the discovered URL. The
-daemon is shared with CLI commands and may outlive the desktop window, but it
-self-exits after an idle period when no client request or daemon-owned job is
-active.
+daemon is shared with CLI commands and may outlive the desktop window.
+Automatically started daemons self-exit after an idle period when no client
+request or daemon-owned job is active.
 
 CLI users can start the web UI explicitly:
 
@@ -265,12 +268,20 @@ cannot be set in `config.toml`.
 You do not need to keep a server running for every CLI command. Read-only
 commands attach to the daemon when it is warm, otherwise they read the local
 archive directly in read-only mode. Commands that need fresh data or need to
-write, including `sync`, `usage`, `token-use`, `pg push`, and `duckdb push`,
+write, including `sync`, `usage`, `token-use`, `pg push`, and `clickhouse push`,
 auto-start the detached daemon when needed. The server remains running after
 these commands finish. For scripts or CI jobs that must leave no background
-server, stop the daemon first, then run `AGENTSVIEW_NO_DAEMON=1 agentsview sync`.
+server, stop the daemon first, then run `AGENTSVIEW_NO_DAEMON=1 agentsview source sync`.
 That setting disables auto-start; it does not stop a running daemon or bypass
 its archive lock.
+
+### Search by meaning
+
+Choose **Settings → Embeddings → Turn on** or run `agentsview index embeddings build`
+and approve the download. Embeddings run locally by default; agents use keyword
+search until indexing is ready. Use `agentsview session search --semantic` or
+`--hybrid` to search by meaning. See [Semantic Search](/docs/semantic-search/#enabling-vector)
+to configure other providers.
 
 ## Customize
 
@@ -390,8 +401,3 @@ Once running, the web UI provides:
 Use the [Usage Guide](/docs/usage/) for navigation and resume controls. To
 correct project assignments, see the [Data page](/docs/data/) and its opt-in
 project workspace.
-
-Beyond full-text search, opt-in semantic search lets
-`agentsview session search --semantic` (or `--hybrid`) match session content by
-meaning, backed by a local or hosted embeddings endpoint. See
-[Semantic Search](/docs/semantic-search/) for setup.

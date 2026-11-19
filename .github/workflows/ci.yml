@@ -1,6 +1,7 @@
 name: CI
 
 env:
+  API_VERSION_BASE: HEAD^1
   GOTRACEBACK: all
   # "|" falls back to direct on any proxy error (e.g. HTTP/2 INTERNAL_ERROR), not just 404/410.
   GOPROXY: "https://proxy.golang.org|direct"
@@ -28,7 +29,7 @@ permissions:
 jobs:
   changes:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-linux-1cpu
     timeout-minutes: 5
     permissions:
       pull-requests: read
@@ -48,11 +49,24 @@ jobs:
               - '!{*.md,docs/*.md,docs/agents/**/*.md,docs/internal/**/*.md,docs/website/**/*.md,desktop/**}'
             node:
               - '!{cmd/**,internal/!(web)/**,testdata/**,plugins/**,support/**,*.go,*.md,docs/*.md,docs/agents/**/*.md,docs/internal/**/*.md,docs/website/**/*.md,desktop/**}'
-              - 'internal/importer/claude_ai_requests.txt'
+              - 'internal/importer/browser_requests/**'
+              - 'internal/importer/testdata/browser_paths/**'
             desktop:
               - '!{cmd/**,internal/!(web)/**,testdata/**,plugins/**,support/**,*.go,*.md,docs/*.md,docs/agents/**/*.md,docs/internal/**/*.md,docs/website/**/*.md,frontend/**}'
-              - 'frontend/chrome-extension/claude_fetch.js'
-              - 'internal/importer/claude_ai_requests.txt'
+              - 'frontend/chrome-extension/page_fetch.js'
+              - 'internal/importer/browser_requests/claude-ai.txt'
+            release-commands:
+              - 'README.md'
+              - 'scripts/install.sh'
+              - 'scripts/install.ps1'
+              - '.github/workflows/release-commands.yml'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/actions.lock'
+
+  release-commands:
+    needs: changes
+    if: ${{ github.event_name != 'merge_group' && !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups), 'release-commands')) }}
+    uses: ./.github/workflows/release-commands.yml
 
   lint:
     env:
@@ -83,9 +97,10 @@ jobs:
         uses: $/.github/actions/go-cache-restore
         with:
           group: lint-${{ matrix.linter }}
+          owner: "true"
           extra-path: ~/.cache/golangci-lint
 
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.53.2
 
       - name: Prepare SQLite header
         if: runner.os == 'Linux'
@@ -112,7 +127,7 @@ jobs:
 
       - name: Fetch Go checkers
         if: matrix.linter == 'golangci'
-        run: GOFLAGS="${GOFLAGS:+$GOFLAGS }-n" kit-retry 3 5 make lint-workflow-retries lint-config-check lint-sql
+        run: GOFLAGS="${GOFLAGS:+$GOFLAGS }-n" kit-retry 3 5 make lint-workflow-retries lint-config-check lint-sql lint-huma
 
       - name: Run Go linters
         if: matrix.linter == 'golangci'
@@ -124,10 +139,7 @@ jobs:
 
       - name: Check Huma API contract
         if: matrix.linter == 'golangci'
-        run: |
-          huma=go.kenn.io/kit/cmd/huma-check@e9840a327158da2559458186b253b0c15a5e2c2b
-          kit-retry 3 5 go run -n "$huma"
-          go run "$huma" -fix=false ./...
+        run: make lint-huma
 
       - name: Save Go caches
         uses: $/.github/actions/go-cache-save
@@ -160,7 +172,7 @@ jobs:
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.53.2
 
       - name: Prepare SQLite header
         if: runner.os == 'Linux'
@@ -194,12 +206,21 @@ jobs:
         working-directory: frontend
 
       - name: Run frontend tests
-        run: npm test
+        run: npm test -- --retry=2 --reporter=default --reporter=github-actions --reporter=json --outputFile.json=test-results/vitest/frontend.json
         working-directory: frontend
+
+      - name: Upload Vitest frontend report
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: vitest-frontend-attempt-${{ github.run_attempt }}
+          path: frontend/test-results/vitest/frontend.json
+          retention-days: 14
+          if-no-files-found: ignore
 
   frontend-node-26:
     needs: changes
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups), 'node')) }}
+    if: ${{ github.event_name != 'merge_group' && !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups), 'node')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 11
     steps:
@@ -213,15 +234,24 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.53.2
 
       - name: Install frontend dependencies
         run: kit-retry 3 5 npm ci
         working-directory: frontend
 
       - name: Run frontend tests
-        run: npm test
+        run: npm test -- --retry=2 --reporter=default --reporter=github-actions --reporter=json --outputFile.json=test-results/vitest/frontend-node-26.json
         working-directory: frontend
+
+      - name: Upload Vitest frontend-node-26 report
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: vitest-frontend-node-26-attempt-${{ github.run_attempt }}
+          path: frontend/test-results/vitest/frontend-node-26.json
+          retention-days: 14
+          if-no-files-found: ignore
 
   docs:
     name: Docs and scripts
@@ -239,17 +269,9 @@ jobs:
           python-version: "3.15"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v10.3.2
+        uses: astral-sh/setup-uv@v10.3.3
 
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
-
-      - name: Install docs check tools
-        run: |
-          sudo find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) -exec sed -i -E \
-            -e 's|https?://(azure\.)?archive\.ubuntu\.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' \
-            -e 's|http://security\.ubuntu\.com/ubuntu|https://security.ubuntu.com/ubuntu|g' {} +
-          kit-retry 3 5 sudo apt-get -o APT::Update::Error-Mode=any update
-          kit-retry 3 5 sudo apt-get install -y ripgrep
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.53.2
 
       - name: Install documentation dependencies
         run: kit-retry 3 5 uv sync --project docs --frozen
@@ -257,19 +279,39 @@ jobs:
       - name: Run docs check
         run: make docs-check
 
+      - name: Check that docs pages paint with their stylesheets and fonts
+        uses: kenn-io/actions/first-paint@33ced853fa88b70eb178ecd40ec74ef64420479d  # main
+        with:
+          dist: docs/site
+
+      - name: Collect the static app pages for the first-paint check
+        run: |
+          mkdir -p "$RUNNER_TEMP/app-pages"
+          cp -R desktop/ui "$RUNNER_TEMP/app-pages/desktop"
+          cp -R internal/web/fallback "$RUNNER_TEMP/app-pages/fallback"
+
+      - name: Check that static app pages paint with their stylesheets and fonts
+        uses: kenn-io/actions/first-paint@33ced853fa88b70eb178ecd40ec74ef64420479d  # main
+        with:
+          dist: ${{ runner.temp }}/app-pages
+
       - name: Run shell script tests
         run: |
           bash scripts/install_test.sh
           bash scripts/e2e-server_test.sh
+          bash scripts/macos-watcher-tests_test.sh
           bash desktop/scripts/test-repair-appimage-diricon.sh
 
+  # Merge groups run these Linux suites. test-extended shares their steps and
+  # holds the suites merge groups skip; see
+  # docs/agents/build.md#merge-queue-checks.
   test:
     needs: changes
     if: *go-lane
-    name: Go ${{ matrix.testSet == 'lint' && 'Lint' || 'Test' }} (${{ matrix.name }})
+    name: &go-test-name Go ${{ matrix.testSet == 'lint' && 'Lint' || 'Test' }} (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout }}
-    env:
+    env: &go-test-env
       DOWNLOAD_RETRY: kit-retry 3 5
       MSYS2_PACKAGES: mingw-w64-x86_64-gcc ${{ matrix.testSet == 'lint' && 'make' || '' }}
     strategy:
@@ -279,30 +321,20 @@ jobs:
           - os: ubuntu-latest
             name: ubuntu-latest, Sync
             package: ./internal/sync
+            suite: linux-sync
             timeout: 29
-          - os: ubuntu-latest
-            name: ubuntu-latest, DuckDB
-            package: ./internal/duckdb
-            timeout: 28
           - os: ubuntu-latest
             name: ubuntu-latest, Other packages
             testSet: other
+            suite: linux-other
             timeout: 32
           - os: ubuntu-latest
             name: ubuntu-latest, Eval ingest
             testSet: evalingest
+            # Fixed by the Makefile's test-evalingest target.
+            suite: evalingest
             timeout: 16
-          - os: windows-latest
-            name: windows-latest
-            timeout: 34
-          - os: windows-latest
-            name: windows-latest
-            testSet: lint
-            timeout: 21
-          - os: macos-latest
-            name: macos-latest
-            timeout: 29
-    steps:
+    steps: &go-test-steps
       - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
@@ -322,8 +354,9 @@ jobs:
         uses: $/.github/actions/go-cache-restore
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
+          owner: &test-cache-owner ${{ matrix.testSet != 'lint' && (runner.os != 'Linux' || matrix.testSet == 'other') }}
 
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.53.2
 
       - name: Prepare SQLite header
         if: runner.os == 'Linux'
@@ -346,6 +379,7 @@ jobs:
         if: runner.os == 'Windows' && steps.setup_mingw.outcome == 'failure'
         uses: msys2/setup-msys2@v2.33.0
         with:
+          release: false
           msystem: MINGW64
           update: false
           install: ${{ env.MSYS2_PACKAGES }}
@@ -357,15 +391,74 @@ jobs:
 
       - name: Run Go tests (Linux, single package)
         if: runner.os == 'Linux' && matrix.package != ''
-        run: go test -tags "fts5" ${{ matrix.package }} -v -count=1 -timeout=20m
+        run: go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "${{ matrix.package }}" -- -tags "fts5" -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
-      # Sync and DuckDB run in separate normal Linux jobs.
+      # Start the release-style build on a CPU without AVX2, BMI2, or FMA, so
+      # code that needs x86-64-v3 at startup fails here before it ships.
+      - name: Start the default build on an x86-64-v2 CPU (Linux)
+        if: matrix.testSet == 'startup'
+        timeout-minutes: 15
+        run: |
+          kit-retry 3 5 sudo apt-get update
+          kit-retry 3 5 sudo apt-get install -y --no-install-recommends qemu-user
+          # The container build below runs with GOPROXY=off.
+          kit-retry 3 5 go mod download
+          # The runner installs Ubuntu's amd64v3 package builds. Its C
+          # toolchain marks every cgo binary it links as needing x86-64-v3,
+          # and its loader and libc need x86-64-v3 themselves. Build in, and
+          # load libraries from, the plain amd64 Ubuntu image of the same
+          # release instead, as a user on an older CPU would have.
+          image="ubuntu:$(. /etc/os-release && echo "$VERSION_ID")"
+          kit-retry 3 5 docker pull "$image"
+          goroot=$(go env GOROOT)
+          # Go identifies a released C compiler only by its version line, and
+          # the amd64v3 and plain GCC builds report the same one. A fresh build
+          # cache keeps the runner's x86-64-v3 C objects out of this build.
+          gocache="$RUNNER_TEMP/plain-amd64-gocache"
+          mkdir -p "$gocache"
+          gomodcache=$(go env GOMODCACHE)
+          docker run --rm -i \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" -w "$GITHUB_WORKSPACE" -v "$RUNNER_TEMP:$RUNNER_TEMP" \
+            -v "$goroot:$goroot:ro" -v "$gomodcache:$gomodcache" \
+            -e GOROOT="$goroot" -e GOCACHE="$gocache" -e GOMODCACHE="$gomodcache" -e GOFLAGS -e GOTOOLCHAIN -e CGO_CFLAGS \
+            -e CGO_ENABLED=1 -e GOPROXY=off -e HOME=/tmp -e DEBIAN_FRONTEND=noninteractive \
+            -e OUT="$RUNNER_TEMP/agentsview" -e IDS="$(id -u):$(id -g)" \
+            "$image" bash -euo pipefail <<'EOF'
+          for attempt in 1 2 3; do
+            if apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev; then break; fi
+            [ "$attempt" -lt 3 ] || exit 1
+            sleep 5
+          done
+          # Build as the runner user so the shared module cache stays writable.
+          setpriv --reuid="${IDS%:*}" --regid="${IDS#*:}" --clear-groups \
+            "$GOROOT/bin/go" build -buildvcs=false -tags fts5 -o "$OUT" ./cmd/agentsview
+          EOF
+          sysroot="$RUNNER_TEMP/x86-64-sysroot"
+          mkdir -p "$sysroot"
+          cid=$(docker create "$image")
+          docker export "$cid" | tar -x -C "$sysroot"
+          docker rm "$cid"
+          export HOME="$RUNNER_TEMP/nehalem-home" AGENTSVIEW_DATA_DIR="$RUNNER_TEMP/nehalem-data"
+          mkdir -p "$HOME" "$AGENTSVIEW_DATA_DIR"
+          qemu-x86_64 -cpu Nehalem -L "$sysroot" "$RUNNER_TEMP/agentsview" version
+          qemu-x86_64 -cpu Nehalem -L "$sysroot" "$RUNNER_TEMP/agentsview" serve --no-browser --host 127.0.0.1 --port 18493 > "$RUNNER_TEMP/nehalem-serve.log" 2>&1 &
+          pid=$!
+          # workflowretry: allow Local readiness probe; the loop retries while the emulated server starts.
+          until curl -sf http://127.0.0.1:18493/api/v1/version > /dev/null; do
+            kill -0 "$pid" 2> /dev/null || { cat "$RUNNER_TEMP/nehalem-serve.log"; exit 1; }
+            sleep 1
+          done
+          kill "$pid"
+
+      # Sync runs in a separate normal Linux job.
       - name: Run other Go tests (Linux)
         if: runner.os == 'Linux' && matrix.testSet == 'other'
         shell: bash
-        run: go list -tags fts5 ./... | grep -vE '/internal/(duckdb|sync)$' | xargs go test -tags "fts5" -v -count=1 -timeout=20m
+        run: |
+          packages="$(go list -tags fts5 ./... | grep -vE '/(cmd/perfsim|internal/sync)$')"
+          go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "$packages" -- -tags "fts5" -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
@@ -381,23 +474,23 @@ jobs:
           }
           $isolatedPackages = @(
             'go.kenn.io/agentsview/cmd/agentsview'
+            'go.kenn.io/agentsview/cmd/perfsim'
             'go.kenn.io/agentsview/internal/capture'
             'go.kenn.io/agentsview/internal/db'
-            'go.kenn.io/agentsview/internal/duckdb'
             'go.kenn.io/agentsview/internal/parser'
             'go.kenn.io/agentsview/internal/sync'
           )
           $packages = $packages | Where-Object { $_ -notin $isolatedPackages }
-          go test -tags "fts5" $packages -count=1 -timeout=20m
+          go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages ($packages -join ' ') -- -tags "fts5" -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
-      - name: Resolve Windows linter version
-        id: windows_linter_version
-        if: runner.os == 'Windows' && matrix.testSet == 'lint'
+      - name: Resolve linter version
+        id: linter_version
+        if: runner.os == 'macOS' || (runner.os == 'Windows' && matrix.testSet == 'lint')
         shell: bash
         run: |
-          version="$(sed -nE "s/^[[:space:]]*GOLANGCI_LINT_VERSION[[:space:]]*[?:]?[[:space:]]*=[[:space:]]*//; T; s/#.*//; s/^[[:space:]\"']+//; s/[[:space:]\"']+$//; p; q" Makefile)"
+          version="$(sed -nE "/^[[:space:]]*GOLANGCI_LINT_VERSION[[:space:]]*[?:]?[[:space:]]*=/ { s/^[^=]*=//; s/#.*//; s/^[[:space:]\"']+//; s/[[:space:]\"']+$//; p; q; }" Makefile)"
           if [ -z "$version" ]; then
             echo "Makefile GOLANGCI_LINT_VERSION must be nonempty" >&2
             exit 1
@@ -407,9 +500,10 @@ jobs:
       - name: Restore Windows linter cache
         if: runner.os == 'Windows' && matrix.testSet == 'lint'
         uses: $/.github/actions/go-cache-restore
-        with:
-          group: lint-${{ runner.os }}-${{ runner.arch }}-${{ steps.windows_linter_version.outputs.version }}-${{ hashFiles('.custom-gcl.yml') }}-${{ steps.setup_go.outputs.go-version }}
+        with: &linter-cache
+          group: lint-${{ runner.os }}-${{ runner.arch }}-${{ steps.linter_version.outputs.version }}-${{ hashFiles('.custom-gcl.yml') }}-${{ steps.setup_go.outputs.go-version }}
           include-go-cache: "false"
+          owner: "true"
           extra-path: ${{ runner.temp }}/golangci-lint
 
       - name: Prepare Go linters (Windows)
@@ -449,16 +543,13 @@ jobs:
 
       - name: Run archive, CLI, signing, and volume identity tests (macOS)
         if: runner.os == 'macOS'
-        run: go test -tags "fts5" ./internal/db ./internal/rawcapture ./internal/requestsign ./cmd/agentsview ./internal/volumeid -count=1 -timeout=10m
+        run: go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "./internal/db ./internal/rawcapture ./internal/requestsign ./cmd/agentsview ./internal/volumeid" -- -tags "fts5" -count=1 -timeout=10m
         env:
           CGO_ENABLED: "1"
 
-      - name: Run file identity and signing race tests and linters (macOS)
+      - name: Run file identity and signing race tests (macOS)
         if: runner.os == 'macOS'
-        run: |
-          go test -race -tags fts5 ./internal/volumeid ./internal/rawcapture ./internal/requestsign -count=1 -timeout=10m
-          kit-retry 3 5 make lint-tools nilaway-golangci-build
-          ./custom-gcl run ./internal/volumeid ./internal/rawcapture ./internal/requestsign
+        run: go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/macos-race.json --rerun-fails=2 --rerun-fails-report gotestsum/macos-race-reruns.txt --packages "./internal/volumeid ./internal/rawcapture ./internal/requestsign" -- -race -tags fts5 -count=1 -timeout=10m
         env:
           CGO_ENABLED: "1"
 
@@ -466,14 +557,113 @@ jobs:
         if: matrix.testSet == 'evalingest'
         run: make test-evalingest
 
+      - name: Upload gotestsum results
+        if: always() && matrix.suite != ''
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gotestsum-${{ matrix.suite }}-attempt-${{ github.run_attempt }}
+          path: gotestsum/${{ matrix.suite }}.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload gotestsum macos-race results
+        if: always() && runner.os == 'macOS'
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gotestsum-macos-race-attempt-${{ github.run_attempt }}
+          path: gotestsum/macos-race.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - &print-slowest-tests
+        name: Print slowest tests
+        if: always()
+        shell: bash
+        run: |
+          for f in gotestsum/*.json; do
+            [ -f "$f" ] || continue
+            go tool gotestsum tool slowest --jsonfile "$f" --num 10 || true
+          done
+
       - name: Save Go caches
-        if: matrix.testSet != 'lint' && (runner.os != 'Linux' || matrix.testSet == 'other')
+        if: *test-cache-owner
         uses: $/.github/actions/go-cache-save
+
+      # Save the test group before the linter restore replaces GO_CACHE_*.
+      - name: Restore macOS linter cache
+        if: runner.os == 'macOS'
+        uses: $/.github/actions/go-cache-restore
+        with: *linter-cache
+
+      - name: Prepare Go linters (macOS)
+        id: prepare_macos_linter
+        if: runner.os == 'macOS'
+        run: |
+          export PATH="$GOBIN:$PATH"
+          # The cache key validates the binary without checkout timestamps.
+          if [ ! -x "$GOBIN/custom-gcl" ]; then
+            mkdir -p "$GOBIN"
+            kit-retry 3 5 make lint-tools nilaway-golangci-build
+            mv custom-gcl "$GOBIN/custom-gcl"
+          fi
+        env:
+          CGO_ENABLED: "1"
+          GOBIN: ${{ runner.temp }}/golangci-lint/bin
+
+      - name: Run Go linters (macOS)
+        if: runner.os == 'macOS'
+        run: '"$GOBIN/custom-gcl" run ./internal/volumeid ./internal/rawcapture ./internal/requestsign'
+        env:
+          CGO_ENABLED: "1"
+          GOBIN: ${{ runner.temp }}/golangci-lint/bin
+          GOLANGCI_LINT_CACHE: ${{ runner.temp }}/golangci-lint
+
+      - name: Save macOS linter cache
+        if: ${{ !cancelled() && runner.os == 'macOS' && steps.prepare_macos_linter.outcome == 'success' }}
+        continue-on-error: true
+        uses: $/.github/actions/go-cache-save
+
+  # Platform and specialized suites. Every PR and push to main runs them;
+  # merge groups skip them.
+  test-extended:
+    needs: changes
+    if: &go-lane-outside-queue ${{ github.event_name != 'merge_group' && !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups), 'go')) }}
+    name: *go-test-name
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.timeout }}
+    env: *go-test-env
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: ubuntu-latest, x86-64-v2 startup
+            testSet: startup
+            timeout: 20
+          # The simulator compares wall times and needs the runner to itself.
+          - os: ubuntu-latest
+            name: ubuntu-latest, Simulator
+            package: ./cmd/perfsim
+            suite: linux-perfsim
+            timeout: 20
+          - os: windows-latest
+            name: windows-latest
+            suite: windows
+            timeout: 34
+          - os: windows-latest
+            name: windows-latest
+            testSet: lint
+            timeout: 21
+          - os: macos-latest
+            name: macos-latest
+            suite: macos
+            timeout: 29
+    steps: *go-test-steps
 
   # Isolated Windows suites share setup; each matrix entry gets its own runner.
   test-isolated-packages-windows:
     needs: changes
-    if: *go-lane
+    if: *go-lane-outside-queue
     name: Go Test (windows-latest, ${{ matrix.name }})
     runs-on: windows-latest
     timeout-minutes: 30
@@ -482,20 +672,29 @@ jobs:
       matrix:
         include:
           - name: CLI A-P
+            suite: windows-cli-a-p
             package: ./cmd/agentsview
             run: &cli-test-prefix '^Test[A-P]'
           - name: CLI remaining
+            suite: windows-cli-rest
             package: ./cmd/agentsview
             skip: *cli-test-prefix
           - name: Capture
+            suite: windows-capture
             package: ./internal/capture
+          - name: Simulator
+            suite: windows-perfsim
+            package: ./cmd/perfsim
           - name: Database, Parser
+            suite: windows-db-parser
             package: ./internal/db ./internal/parser
           # Complementary filters keep every sync test in exactly one job.
           - name: Sync A-R
+            suite: windows-sync-a-r
             package: ./internal/sync
             run: &sync-test-prefix '^Test[A-R]'
           - name: Sync remaining
+            suite: windows-sync-rest
             package: ./internal/sync
             skip: *sync-test-prefix
     steps:
@@ -531,12 +730,13 @@ jobs:
         if: steps.setup_mingw.outcome == 'failure'
         uses: msys2/setup-msys2@v2.33.0
         with:
+          release: false
           msystem: MINGW64
           update: false
           install: mingw-w64-x86_64-gcc
           path-type: inherit
 
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.53.2
 
       - name: Restore pricing snapshot
         shell: bash
@@ -560,9 +760,7 @@ jobs:
       - name: Run ${{ matrix.name }} tests
         shell: pwsh
         run: |
-          go test -json -tags "fts5" ${{ matrix.package }} -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -count=1 -timeout=20m 2>&1 |
-            Tee-Object -FilePath go-test-events.jsonl
-          exit $LASTEXITCODE
+          go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "${{ matrix.package }}" -- -tags "fts5" -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
@@ -571,21 +769,25 @@ jobs:
         shell: pwsh
         run: Remove-Item -LiteralPath $env:AGENTSVIEW_CI_TEMP -Recurse -Force
 
-      - name: Upload ${{ matrix.name }} test events
-        if: failure()
+      - name: Upload gotestsum results
+        if: always() && matrix.suite != ''
         uses: actions/upload-artifact@v7.0.2
         with:
-          name: go-test-events-windows-${{ matrix.name }}-attempt-${{ github.run_attempt }}
-          path: go-test-events.jsonl
-          if-no-files-found: warn
-          retention-days: 7
+          name: gotestsum-${{ matrix.suite }}-attempt-${{ github.run_attempt }}
+          path: gotestsum/${{ matrix.suite }}.json
+          retention-days: 14
+          if-no-files-found: ignore
 
+      # Diagnostics only: the test step decides the job result. The runner
+      # turns a timed-out step into a success when continue-on-error is set,
+      # so a stalled summary cannot fail a job whose tests passed.
       - name: Summarize ${{ matrix.name }} test timing
         if: always()
+        continue-on-error: true
         timeout-minutes: 2
         shell: pwsh
         run: |
-          $eventsPath = "go-test-events.jsonl"
+          $eventsPath = "gotestsum/${{ matrix.suite }}.json"
           if (-not (Test-Path $eventsPath)) {
             Write-Warning "Go test event log was not created"
             exit 0
@@ -672,67 +874,11 @@ jobs:
           $summary | Write-Output
           $summary | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
-  # Keep the derived-mirror suite concurrent with the main Windows package set.
-  test-duckdb-windows:
-    needs: changes
-    if: *go-lane
-    name: Go Test (windows-latest, DuckDB)
-    runs-on: windows-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Prepare Windows Go paths
-        uses: $/.github/actions/windows-go-paths
-
-      - uses: actions/setup-go@v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: false
-
-      - name: Restore Go caches
-        uses: $/.github/actions/go-cache-restore
-        with:
-          group: test-${{ runner.os }}-${{ runner.arch }}
-
-      - name: Setup MinGW
-        id: setup_mingw
-        continue-on-error: true
-        uses: msys2/setup-msys2@v2.33.0
-        with:
-          msystem: MINGW64
-          update: false
-          install: mingw-w64-x86_64-gcc
-          path-type: inherit
-
-      - name: Setup MinGW (retry on transient failure)
-        if: steps.setup_mingw.outcome == 'failure'
-        uses: msys2/setup-msys2@v2.33.0
-        with:
-          msystem: MINGW64
-          update: false
-          install: mingw-w64-x86_64-gcc
-          path-type: inherit
-
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
-
-      - name: Restore pricing snapshot
-        shell: bash
-        run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
-
-      - name: Run DuckDB tests
-        run: go test -tags "fts5" ./internal/duckdb -count=1 -timeout=20m
-        env:
-          CGO_ENABLED: "1"
-
   test-race:
     env:
       DOWNLOAD_RETRY: kit-retry 3 5
     needs: changes
-    if: *go-lane
+    if: *go-lane-outside-queue
     name: Go Test (race detector, ${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 35
@@ -741,25 +887,35 @@ jobs:
       matrix:
         include:
           - name: Sync A-R
+            suite: race-sync-a-r
             runner: ubuntu-latest
             package: ./internal/sync
             run: *sync-test-prefix
           - name: Sync remaining
+            suite: race-sync-rest
             runner: ubuntu-latest
             package: ./internal/sync
             skip: *sync-test-prefix
           - name: CLI A-P
+            suite: race-cli-a-p
             runner: ubuntu-latest
             package: ./cmd/agentsview
             run: *cli-test-prefix
           - name: CLI remaining
+            suite: race-cli-rest
             runner: ubuntu-latest
             package: ./cmd/agentsview
             skip: *cli-test-prefix
           - name: Database and Server
+            suite: race-db-server
             runner: ubuntu-latest
             package: ./internal/db ./internal/server
+          - name: Simulator
+            suite: race-perfsim
+            runner: ubuntu-latest
+            package: ./cmd/perfsim
           - name: Other packages
+            suite: race-other
             runner: ubuntu-latest
             testSet: other
     steps:
@@ -777,8 +933,9 @@ jobs:
         uses: $/.github/actions/go-cache-restore
         with:
           group: race-linux
+          owner: &race-cache-owner ${{ matrix.testSet == 'other' }}
 
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.53.2
 
       - name: Prepare SQLite header
         if: runner.os == 'Linux'
@@ -790,19 +947,33 @@ jobs:
         run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       # Keep exclusions aligned with the explicit race matrix packages.
-      # DuckDB runs without -race in its Linux shard. Limit package fan-out
-      # because highly parallel race runs can exhaust deadlines.
+      # Limit package fan-out because highly parallel race runs can exhaust
+      # deadlines.
       - name: Run Go tests (race detector)
         if: matrix.testSet == 'other'
-        run: go list ./... | grep -vE '/(cmd/agentsview|internal/(db|server|duckdb|sync))$' | xargs go test -p 4 -tags "fts5" -race -count=1 -timeout=20m
+        shell: bash
+        run: |
+          packages="$(go list ./... | grep -vE '/(cmd/(agentsview|perfsim)|internal/(db|server|sync))$')"
+          go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "$packages" -- -p 4 -tags "fts5" -race -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
 
       - name: Run ${{ matrix.name }} tests (race detector)
         if: matrix.package != ''
-        run: go test -tags "fts5" -race ${{ matrix.package }} -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -count=1 -timeout=20m
+        run: go tool gotestsum --format pkgname-and-test-fails --format-icons text --jsonfile gotestsum/${{ matrix.suite }}.json --rerun-fails=2 --rerun-fails-report gotestsum/${{ matrix.suite }}-reruns.txt --packages "${{ matrix.package }}" -- -tags "fts5" -race -run '${{ matrix.run || '.' }}' -skip '${{ matrix.skip || '^$' }}' -count=1 -timeout=20m
         env:
           CGO_ENABLED: "1"
+
+      - name: Upload gotestsum results
+        if: always() && matrix.suite != ''
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gotestsum-${{ matrix.suite }}-attempt-${{ github.run_attempt }}
+          path: gotestsum/${{ matrix.suite }}.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - *print-slowest-tests
 
       # This job owns the shared cache, including tests run by the other shards.
       - name: Warm moved race test builds for the next run
@@ -814,13 +985,13 @@ jobs:
           CGO_ENABLED: "1"
 
       - name: Save Go caches
-        if: matrix.testSet == 'other'
+        if: *race-cache-owner
         uses: $/.github/actions/go-cache-save
 
   # Owns Windows Rust test coverage for PR and main-push desktop artifacts.
   desktop-windows-unit:
     needs: changes
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups), 'desktop')) }}
+    if: ${{ github.event_name != 'merge_group' && !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.all == 'true' || contains(fromJSON(needs.changes.outputs.groups), 'desktop')) }}
     name: Desktop Unit Tests (Windows)
     runs-on: windows-latest
     timeout-minutes: 10
@@ -846,7 +1017,7 @@ jobs:
           New-Item -ItemType Directory -Force desktop/src-tauri/binaries | Out-Null
           New-Item -ItemType File -Force "desktop/src-tauri/binaries/agentsview-$hostTriple.exe" | Out-Null
 
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.53.2
 
       - name: Fetch Windows desktop Rust dependencies
         shell: bash
@@ -859,7 +1030,7 @@ jobs:
     env:
       DOWNLOAD_RETRY: kit-retry 3 5
     needs: changes
-    if: *go-lane
+    if: *go-lane-outside-queue
     name: Integration (${{ matrix.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 32
@@ -869,6 +1040,7 @@ jobs:
         include:
           - name: PostgreSQL core
             postgres-target: test-postgres-core-fast-ci
+            cockroach: true
           - name: PostgreSQL raw-sync and ClickHouse
             postgres-target: test-postgres-raw-sync-ci test-postgres-core-heavy-ci
             clickhouse: true
@@ -879,6 +1051,9 @@ jobs:
           POSTGRES_USER: agentsview_test
           POSTGRES_PASSWORD: agentsview_test_password
           POSTGRES_DB: agentsview_test
+          # Lock memory sizes how many tests run at once; 256 allows 12
+          # (see docs/agents/storage.md).
+          POSTGRES_INITDB_ARGS: -c max_locks_per_transaction=256
         ports:
           - 5433:5432
         # PG18 keeps its data under /var/lib/postgresql/18/docker. The suite
@@ -919,7 +1094,7 @@ jobs:
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.53.2
 
       - name: Restore pricing snapshot
         run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
@@ -930,6 +1105,51 @@ jobs:
           CGO_ENABLED: "1"
           TEST_PG_URL: postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable
 
+      - name: Start PostgreSQL standby
+        if: matrix.name == 'PostgreSQL core'
+        run: |
+          docker exec -u postgres ${{ job.services.postgres.id }} sh -c \
+            'printf "host replication agentsview_test 0.0.0.0/0 scram-sha-256\n" >> "$PGDATA/pg_hba.conf"; pg_ctl -D "$PGDATA" reload'
+          image=$(docker inspect --format '{{.Config.Image}}' ${{ job.services.postgres.id }})
+          docker run -d --network host --name usage-test-standby --user postgres \
+            -e PGPASSWORD=agentsview_test_password --entrypoint bash "$image" \
+            -ec 'pg_basebackup -h 127.0.0.1 -p 5433 -U agentsview_test -D /tmp/standby -R -X stream -c fast -v; exec postgres -D /tmp/standby -p 5434'
+          for attempt in {1..180}; do
+            if docker exec usage-test-standby pg_isready -h 127.0.0.1 -p 5434 -U agentsview_test >/dev/null 2>&1; then exit 0; fi
+            if [ "$(docker inspect -f '{{.State.Running}}' usage-test-standby)" != true ]; then break; fi
+            sleep 1
+          done
+          docker logs usage-test-standby
+          exit 1
+
+      - name: Run PostgreSQL standby test
+        if: matrix.name == 'PostgreSQL core'
+        run: make test-postgres-standby-ci
+        env:
+          TEST_PG_URL: postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable
+          TEST_PG_STANDBY_URL: postgres://agentsview_test:agentsview_test_password@localhost:5434/agentsview_test?sslmode=disable
+
+      - name: Stop PostgreSQL standby
+        if: always() && matrix.name == 'PostgreSQL core'
+        run: |
+          docker stop usage-test-standby || true
+          docker rm usage-test-standby || true
+
+      - name: Run CockroachDB integration tests
+        if: matrix.cockroach
+        run: |
+          docker run -d --name cockroach-schema -p 127.0.0.1:26257:26257 --entrypoint /cockroach/cockroach cockroachdb/cockroach:v25.4.6 start-single-node --insecure --listen-addr=0.0.0.0:26257 --store=type=mem,size=4GiB
+          for i in {1..60}; do
+            if docker exec cockroach-schema /cockroach/cockroach sql --insecure --host=127.0.0.1:26257 -e 'SELECT 1'; then break; fi
+            sleep 1
+          done
+          make test-postgres-core-heavy-ci POSTGRES_CORE_HEAVY_TEST=TestCockroachSchemaAndCodexScope
+          mv gotestsum/postgres-core-heavy.json gotestsum/cockroach-schema.json
+          if [ -f gotestsum/postgres-core-heavy-reruns.txt ]; then mv gotestsum/postgres-core-heavy-reruns.txt gotestsum/cockroach-schema-reruns.txt; fi
+          make test-postgres-core-heavy-ci POSTGRES_CORE_HEAVY_TEST=TestPushSessionWithCodexScope
+        env:
+          TEST_PG_URL: postgres://root@127.0.0.1:26257/defaultdb?sslmode=disable
+
       - name: Run ClickHouse integration tests
         if: matrix.clickhouse
         run: make test-clickhouse-ci
@@ -937,23 +1157,81 @@ jobs:
           CGO_ENABLED: "1"
           TEST_CLICKHOUSE_URL: clickhouse://localhost:19000/default
 
+      # Suite names are fixed by the Makefile CI targets. Each leg uploads
+      # only the suites it ran.
+      - name: Upload gotestsum postgres-core-fast results
+        if: failure() || github.run_attempt > 1 || hashFiles('gotestsum/postgres-core-fast-reruns.txt', 'gotestsum/postgres-core-fast-activity-reruns.txt') != ''
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gotestsum-postgres-core-fast-attempt-${{ github.run_attempt }}
+          path: |
+            gotestsum/postgres-core-fast.json
+            gotestsum/postgres-core-fast-activity.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload gotestsum postgres-core-fast-service results
+        if: failure() || github.run_attempt > 1 || hashFiles('gotestsum/postgres-core-fast-service-reruns.txt') != ''
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gotestsum-postgres-core-fast-service-attempt-${{ github.run_attempt }}
+          path: gotestsum/postgres-core-fast-service.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload gotestsum postgres-raw-sync results
+        if: failure() || github.run_attempt > 1 || hashFiles('gotestsum/postgres-raw-sync-reruns.txt') != ''
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gotestsum-postgres-raw-sync-attempt-${{ github.run_attempt }}
+          path: gotestsum/postgres-raw-sync.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload gotestsum postgres-core-heavy results
+        if: failure() || github.run_attempt > 1 || hashFiles('gotestsum/postgres-core-heavy-reruns.txt', 'gotestsum/cockroach-schema-reruns.txt') != ''
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gotestsum-postgres-core-heavy-${{ matrix.name }}-attempt-${{ github.run_attempt }}
+          path: |
+            gotestsum/postgres-core-heavy.json
+            gotestsum/cockroach-schema.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload gotestsum clickhouse results
+        if: failure() || github.run_attempt > 1 || hashFiles('gotestsum/clickhouse-reruns.txt') != ''
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gotestsum-clickhouse-attempt-${{ github.run_attempt }}
+          path: gotestsum/clickhouse.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload gotestsum clickhouse-service results
+        if: failure() || github.run_attempt > 1 || hashFiles('gotestsum/clickhouse-service-reruns.txt') != ''
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gotestsum-clickhouse-service-attempt-${{ github.run_attempt }}
+          path: gotestsum/clickhouse-service.json
+          retention-days: 14
+          if-no-files-found: ignore
+
   e2e:
     needs: changes
     if: *frontend-lane
     name: e2e (${{ matrix.browser }})
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ matrix.timeout }}
+    timeout-minutes: ${{ matrix.browser == 'chromium' && 42 || 24 }}
     env:
       PW_TEST_CONNECT_WS_ENDPOINT: ws://127.0.0.1:3000/
       DOWNLOAD_RETRY: kit-retry 3 5
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - browser: chromium
-            timeout: 42
-          - browser: webkit
-            timeout: 24
+        # Merge groups run Chromium only. `include` cannot drop an entry, so
+        # the browser list is an expression and the timeout follows it.
+        browser: ${{ fromJSON(github.event_name == 'merge_group' && '["chromium"]' || '["chromium", "webkit"]') }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -970,7 +1248,7 @@ jobs:
         with:
           group: test-${{ runner.os }}-${{ runner.arch }}
 
-      - uses: kenn-io/kit/.github/actions/kit-retry@v0.47.3
+      - uses: kenn-io/kit/.github/actions/kit-retry@v0.53.2
 
       - name: Prepare SQLite header
         if: runner.os == 'Linux'
@@ -1011,6 +1289,39 @@ jobs:
         env:
           CGO_ENABLED: "1"
 
+      # The first-paint check reads the pages the binary serves from its
+      # embedded build: the root and a client route, which takes the SPA
+      # fallback.
+      - name: Start the server for the first-paint check
+        if: matrix.browser == 'chromium'
+        timeout-minutes: 2
+        run: |
+          AGENTSVIEW_E2E_PORT=8095 bash scripts/e2e-server.sh > "$RUNNER_TEMP/first-paint-server.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/first-paint-server.pid"
+          # workflowretry: allow Local readiness probe; the loop retries while the server starts.
+          until curl -sf http://127.0.0.1:8095/ > /dev/null; do
+            kill -0 "$!" 2> /dev/null || { cat "$RUNNER_TEMP/first-paint-server.log"; exit 1; }
+            sleep 1
+          done
+        env:
+          E2E_PREBUILT_FIXTURE: /tmp/testfixture
+          E2E_PREBUILT_SERVER: /tmp/agentsview
+
+      - name: Check that pages paint with their stylesheets and fonts
+        if: matrix.browser == 'chromium'
+        uses: kenn-io/actions/first-paint@33ced853fa88b70eb178ecd40ec74ef64420479d  # main
+        with:
+          urls: |
+            http://127.0.0.1:8095/
+            http://127.0.0.1:8095/sessions/test-session-large-1500
+
+      - name: Stop the first-paint server
+        if: always() && matrix.browser == 'chromium'
+        run: |
+          if [ -f "$RUNNER_TEMP/first-paint-server.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/first-paint-server.pid")" || true
+          fi
+
       - name: Start Playwright browser server
         id: browser_server
         timeout-minutes: 10
@@ -1033,21 +1344,25 @@ jobs:
           done
         working-directory: frontend
 
+      # Upload each JSON report before the next Playwright run clears
+      # test-results/.
       - name: Run E2E tests
-        run: npx playwright test --reporter=list --project=${{ matrix.browser }}
+        run: npx playwright test --reporter=list,json --project=${{ matrix.browser }}
         working-directory: frontend
         env:
           E2E_PREBUILT_FIXTURE: /tmp/testfixture
           E2E_PREBUILT_SERVER: /tmp/agentsview
+          PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/playwright/e2e-${{ matrix.browser }}.json
           PROJECT_MAPPING_WORKSPACE_E2E_ENABLED: "true"
 
-      - name: Run DuckDB E2E tests
-        if: matrix.browser == 'chromium'
-        run: make e2e-duckdb
-        env:
-          E2E_PREBUILT_FIXTURE: /tmp/testfixture
-          E2E_PREBUILT_SERVER: /tmp/agentsview
-          PROJECT_MAPPING_WORKSPACE_E2E_ENABLED: "true"
+      - name: Upload Playwright E2E report
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: playwright-e2e-${{ matrix.browser }}-attempt-${{ github.run_attempt }}
+          path: frontend/test-results/playwright/e2e-${{ matrix.browser }}.json
+          retention-days: 14
+          if-no-files-found: ignore
 
       - name: Print Playwright browser server logs on failure
         if: failure() && steps.browser_server.outcome == 'success'

@@ -38,7 +38,7 @@ const (
 )
 
 // SessionSort describes one orderable column for `session list`. It is exported
-// so the PostgreSQL and DuckDB stores render ordering and keyset pagination from
+// so the PostgreSQL and ClickHouse stores render ordering and keyset pagination from
 // this single source of truth rather than duplicating ORDER BY strings.
 type SessionSort struct {
 	key               string

@@ -1,6 +1,10 @@
 package sync
 
-import "slices"
+import (
+	"path/filepath"
+	"slices"
+	"strings"
+)
 
 // WatchScope identifies one configured provider root whose changes are covered
 // by a logical watcher root. A physical root may cover multiple configured
@@ -220,6 +224,13 @@ type createdSubtreePathFilter interface {
 	includeCreatedSubtreePath(root, path string, isDir bool) bool
 }
 
+// nativeEventLossBackend reports that a native stream lost events for one
+// root, so event-dependent freshness trust can be revoked before that root is
+// reconciled without the archive-wide reset of lost-events recovery.
+type nativeEventLossBackend interface {
+	bindNativeEventsLost(func())
+}
+
 // pollingOwnershipBackend reports independently keyed polling obligations so
 // overlapping configured roots cannot release one another's coverage.
 type pollingOwnershipBackend interface {
@@ -227,4 +238,65 @@ type pollingOwnershipBackend interface {
 		func(PollingObligation) error,
 		func(string) error,
 	)
+}
+
+func normalizeExcludePatterns(patterns []string) []string {
+	if len(patterns) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(patterns))
+	for _, pattern := range patterns {
+		pattern = strings.TrimSpace(filepath.Clean(pattern))
+		if pattern == "" || pattern == "." {
+			continue
+		}
+		if !slices.Contains(out, pattern) {
+			out = append(out, pattern)
+		}
+	}
+	return out
+}
+
+func pathAtOrBelow(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel == "." ||
+		(rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+func shouldExcludeForRoot(excludes []string, path string, root string) bool {
+	if len(excludes) == 0 {
+		return false
+	}
+	clean := filepath.Clean(path)
+	root = filepath.Clean(root)
+	rel, err := filepath.Rel(root, clean)
+	if err != nil {
+		return false
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	rel = filepath.Clean(rel)
+	if rel == "." {
+		return false
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+
+	for _, pattern := range excludes {
+		if strings.Contains(pattern, string(filepath.Separator)) {
+			if ok, _ := filepath.Match(pattern, rel); ok {
+				return true
+			}
+			continue
+		}
+		for _, part := range parts {
+			if ok, _ := filepath.Match(pattern, part); ok {
+				return true
+			}
+		}
+	}
+	return false
 }

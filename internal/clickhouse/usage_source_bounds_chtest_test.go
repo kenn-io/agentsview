@@ -14,6 +14,7 @@ import (
 // Filtering before the session join must retain fallback timestamps and the
 // full local day, and must not resurrect a replaced timestamp.
 func TestDailyUsageSourceBounds(t *testing.T) {
+	t.Parallel()
 	store, _, _ := newPushedStore(t)
 	ctx := t.Context()
 	_, err := store.DB().ExecContext(ctx, "SYSTEM STOP MERGES messages")

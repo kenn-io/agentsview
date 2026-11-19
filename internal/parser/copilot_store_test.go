@@ -31,30 +31,38 @@ func createCopilotUsageStore(t *testing.T, root string) *sql.DB {
 func TestCopilotStoreGapRetainsOnlyAggregateOutputRemainder(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
+		source        string
 		firstModel    string
-		storeOutput   int
+		requestOutput int
 		wantTotal     int
 		wantRemainder int
 	}{
-		{"missing first call", "gpt-5.4", 7, 10, 3},
-		{"all calls stored", "gpt-5.4", 10, 10, 0},
-		{"store has extra calls", "gpt-5.4", 20, 20, 0},
-		{"missing other model", "gpt-5.5", 20, 23, 3},
-		{"unknown model overlaps store", "", 10, 10, 0},
-		{"unknown model excess", "", 7, 10, 0},
+		{"missing first call/session-store", "session-store", "gpt-5.4", 7, 10, 3},
+		{"missing first call/receipts", "usage-record", "gpt-5.4", 7, 10, 3},
+		{"all calls stored", "session-store", "gpt-5.4", 10, 10, 0},
+		{"store has extra calls", "session-store", "gpt-5.4", 20, 20, 0},
+		{"missing other model", "session-store", "gpt-5.5", 20, 23, 3},
+		{"unknown model overlaps store", "session-store", "", 10, 10, 0},
+		{"unknown model excess", "session-store", "", 7, 10, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
-			store := createCopilotUsageStore(t, root)
-			_, err := store.ExecContext(t.Context(), `INSERT INTO sessions VALUES ('gap');
+			if tc.source == "session-store" {
+				store := createCopilotUsageStore(t, root)
+				_, err := store.ExecContext(t.Context(), `INSERT INTO sessions VALUES ('gap');
 INSERT INTO assistant_usage_events(session_id,model,input_tokens,output_tokens,created_at)
-VALUES ('gap','gpt-5.4',100,?,'2026-09-08T12:00:03Z')`, tc.storeOutput)
-			require.NoError(t, err)
-			path := writeCopilotJSONL(t,
+VALUES ('gap','gpt-5.4',100,?,'2026-09-08T12:00:03Z')`, tc.requestOutput)
+				require.NoError(t, err)
+			}
+			lines := []string{
 				`{"type":"session.start","timestamp":"2026-09-08T12:00:00Z","data":{"sessionId":"gap"}}`,
 				fmt.Sprintf(`{"type":"assistant.message","timestamp":"2026-09-08T12:00:01Z","data":{"content":"First","model":%q,"outputTokens":3}}`, tc.firstModel),
 				`{"type":"assistant.message","timestamp":"2026-09-08T12:00:02Z","data":{"content":"Later","model":"gpt-5.4","outputTokens":7}}`,
-			)
+			}
+			if tc.source == "usage-record" {
+				lines = append(lines, fmt.Sprintf(`{"type":"session.usage_record","timestamp":"2026-09-08T12:00:03Z","data":{"usage":{"model":"gpt-5.4","outputTokens":%d}}}`, tc.requestOutput))
+			}
+			path := writeCopilotJSONL(t, lines...)
 			sess, msgs, events, err := newCopilotTestProvider(t).parseSessionWithStore(t.Context(), path, "local", filepath.Join(root, "session-store.db"))
 			require.NoError(t, err)
 			require.NotNil(t, sess)
@@ -63,7 +71,8 @@ VALUES ('gap','gpt-5.4',100,?,'2026-09-08T12:00:03Z')`, tc.storeOutput)
 				assert.Empty(t, msg.TokenUsage, "no invented request-to-response correlation")
 			}
 			require.NotEmpty(t, events)
-			assert.Equal(t, tc.storeOutput, events[0].OutputTokens)
+			assert.Equal(t, tc.source, events[0].Source)
+			assert.Equal(t, tc.requestOutput, events[0].OutputTokens)
 			if tc.wantRemainder == 0 {
 				require.Len(t, events, 1)
 			} else {
@@ -99,6 +108,7 @@ func TestParseCopilotSession_StoreUsageSupersedesShutdown(t *testing.T) {
 		`{"type":"user.message","data":{"content":"Hello"},"timestamp":"2026-09-04T17:00:01Z"}`,
 		`{"type":"assistant.message","data":{"content":"Hi.","model":"gpt-5.6-sol","outputTokens":3},"timestamp":"2026-09-04T17:00:02Z"}`,
 		`{"type":"session.shutdown","data":{"totalNanoAiu":100000000,"modelMetrics":{"gpt-5.6-sol":{"usage":{"inputTokens":10,"outputTokens":3}}}},"timestamp":"2026-09-04T17:00:03Z"}`,
+		`{"type":"session.usage_record","timestamp":"2026-09-04T17:00:04Z","data":{"usage":{"model":"gpt-5.6-sol","inputTokens":20,"outputTokens":9}}}`,
 	)
 
 	sess, _, usage, err := newCopilotTestProvider(t).parseSessionWithStore(t.Context(),

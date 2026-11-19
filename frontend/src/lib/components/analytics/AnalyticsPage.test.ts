@@ -160,6 +160,7 @@ describe("AnalyticsPage outcome window", () => {
             friction_available: false,
             friction_build_allowed: false,
             session_stats_available: backendAvailable,
+            kata_available: false,
           };
     router.route = "sessions";
     router.isRootPath = false;
@@ -197,6 +198,7 @@ describe("AnalyticsPage outcome window", () => {
         friction_available: false,
         friction_build_allowed: false,
         session_stats_available: true,
+        kata_available: false,
         read_only: true,
       };
       await flushEffects();
@@ -313,6 +315,15 @@ describe("AnalyticsPage outcome window", () => {
       expect(document.querySelector(".outcome-load-prs")).not.toBeNull();
     },
   );
+
+  it("passes the current outcome window to Retry", async () => {
+    const load = await start();
+    const retry = vi.spyOn(outcomeTotals, "retry").mockResolvedValue();
+    outcomeTotals.error = "Outcome request timed out";
+    await flushEffects();
+    document.querySelector<HTMLButtonElement>(".outcome-container .load-error button")!.click();
+    expect(retry).toHaveBeenCalledExactlyOnceWith(load.mock.calls[0]![0]);
+  });
 
   it("uses local days for the range and follows selected days and activity ranges", async () => {
     vi.stubEnv("TZ", "America/New_York");
@@ -949,6 +960,7 @@ describe("AnalyticsPage refresh behavior", () => {
       friction_available: false,
       friction_build_allowed: false,
       session_stats_available: true,
+      kata_available: false,
     };
     router.params = { date_from: "2026-03-01", date_to: "2026-03-31" };
     analytics.from = "2026-03-01";

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/tidwall/gjson"
+	"go.kenn.io/agentsview/internal/money"
 )
 
 const openCodeStorageFingerprintPrefix = "opencode-storage:v1:"
@@ -92,11 +93,11 @@ func OpenCodeSQLiteSessionExists(ctx context.Context, dbPath, sessionID string) 
 // all sessions without parsing messages or parts. Used by
 // the sync engine to detect which sessions have changed.
 func ListOpenCodeSessionMeta(
-	dbPath string,
+	ctx context.Context, dbPath string,
 ) ([]OpenCodeSessionMeta, error) {
 	var metas []OpenCodeSessionMeta
 	err := ForEachOpenCodeSessionMeta(
-		context.Background(), dbPath,
+		ctx, dbPath,
 		func(meta OpenCodeSessionMeta) error {
 			metas = append(metas, meta)
 			return nil
@@ -130,11 +131,11 @@ func OpenCodeSessionChildLookups() int64 {
 // ListOpenCodeSessionWatermarkMeta is the materialized form of
 // ForEachOpenCodeSessionWatermarkMeta.
 func ListOpenCodeSessionWatermarkMeta(
-	dbPath string,
+	ctx context.Context, dbPath string,
 ) ([]OpenCodeSessionMeta, error) {
 	var metas []OpenCodeSessionMeta
 	err := ForEachOpenCodeSessionWatermarkMeta(
-		context.Background(), dbPath,
+		ctx, dbPath,
 		func(meta OpenCodeSessionMeta) error {
 			metas = append(metas, meta)
 			return nil
@@ -1299,6 +1300,7 @@ func buildOpenCodeSessionContext(
 	var msgs []openCodeMessageRow
 	var parts map[string][]openCodePartRow
 	parsed := projected
+	malformed := 0
 	if table == "session" {
 		msgs, err = loadOpenCodeMessages(ctx, db, s.id, v2 != openCodeProjectionAbsent)
 		if err != nil {
@@ -1308,10 +1310,8 @@ func buildOpenCodeSessionContext(
 		if err != nil {
 			return nil, nil, fmt.Errorf("loading parts for %s: %w", s.id, err)
 		}
-		_, legacy, err := buildOpenCodeParsedSessionContext(ctx, s, cwd, projectWorktree, dbPath+"#"+s.id, fileMtime*1_000_000, machine, msgs, parts)
-		if err != nil {
-			return nil, nil, err
-		}
+		var legacy []ParsedMessage
+		legacy, _, malformed = decodeOpenCodeMessageRowsContext(ctx, cwd, msgs, parts)
 		// Cross-path reuse in 1.18.25 appends projections without converting old
 		// messages. Keep v2 seq order and insert unmatched v1 rows by creation time.
 		parsed = make([]ParsedMessage, 0, len(legacy)+len(projected))
@@ -1331,6 +1331,7 @@ func buildOpenCodeSessionContext(
 	if err != nil || sess == nil {
 		return sess, parsed, err
 	}
+	sess.MalformedLines = malformed
 	metadata := buildOpenCodeSessionFingerprint(s, cwd, projectWorktree, msgs, parts)
 	sess.File.Hash = metadata
 	if v2 != openCodeProjectionAbsent {
@@ -1348,15 +1349,32 @@ func buildOpenCodeParsedSessionContext(
 	msgs []openCodeMessageRow,
 	parts map[string][]openCodePartRow,
 ) (*ParsedSession, []ParsedMessage, error) {
-	var (
-		parsed       []ParsedMessage
-		hasUserOrAst bool
-		ordinal      int
-	)
+	parsed, hasUserOrAst, malformed := decodeOpenCodeMessageRowsContext(ctx, cwd, msgs, parts)
+	if !hasUserOrAst || len(parsed) == 0 {
+		return nil, nil, nil
+	}
 
+	sess, parsed, err := finishOpenCodeSessionContext(ctx, s, cwd, projectWorktree, filePath, fileMtime, machine, parsed)
+	if sess != nil {
+		sess.MalformedLines = malformed
+	}
+	return sess, parsed, err
+}
+
+// decodeOpenCodeMessageRowsContext turns legacy message rows into parsed
+// messages. It reports whether any row had a user or assistant role, and how
+// many message and part rows were skipped because their data did not decode.
+func decodeOpenCodeMessageRowsContext(
+	ctx context.Context,
+	cwd string,
+	msgs []openCodeMessageRow,
+	parts map[string][]openCodePartRow,
+) (parsed []ParsedMessage, hasUserOrAst bool, malformed int) {
+	ordinal := 0
 	for _, m := range msgs {
 		var md openCodeMessageData
 		if json.Unmarshal([]byte(m.data), &md) != nil {
+			malformed++
 			continue
 		}
 		role := normalizeOpenCodeRole(md.Role)
@@ -1374,25 +1392,30 @@ func buildOpenCodeParsedSessionContext(
 			return msgParts[a].timeCreated <
 				msgParts[b].timeCreated
 		})
+		// buildOpenCodeMessage drops a part whose data is not a JSON object.
+		for _, p := range msgParts {
+			if !gjson.Valid(p.data) || !gjson.Parse(p.data).IsObject() {
+				malformed++
+			}
+		}
 
 		pm := buildOpenCodeMessage(
-			ordinal, m.id, role, m.timeCreated, msgParts, cwd,
+			ctx, ordinal, m.id, role, m.timeCreated, msgParts, cwd,
 		)
-		applyOpenCodeTokenUsage(&pm, md, m.data, msgParts)
+		applyOpenCodeTokenUsage(&pm, md, m.data, msgParts, false)
+		applyOpenCodeRecordedCost(&pm, msgParts)
 		if strings.TrimSpace(pm.Content) == "" &&
 			!pm.HasToolUse {
-			continue
+			var ok bool
+			if pm, ok = usageOnlyMessage(pm); !ok {
+				continue
+			}
 		}
 
 		parsed = append(parsed, pm)
 		ordinal++
 	}
-
-	if !hasUserOrAst || len(parsed) == 0 {
-		return nil, nil, nil
-	}
-
-	return finishOpenCodeSessionContext(ctx, s, cwd, projectWorktree, filePath, fileMtime, machine, parsed)
+	return parsed, hasUserOrAst, malformed
 }
 
 func finishOpenCodeSessionContext(
@@ -1476,11 +1499,18 @@ func finishOpenCodeSessionContext(
 // sets its coverage flag, while a tokens object with no
 // recognized fields (empty `{}` or a foreign schema) leaves
 // TokenUsage empty so the usage query filter skips the row.
+//
+// Stored output_tokens includes reasoning and reasoning_tokens is the
+// subset, the convention pricing bills from. OpenCode-family writers
+// changed how they store tokens.output, so openCodeOutputExcludesReasoning
+// decides per record whether reasoning must be added back. projection marks
+// a v2 session_message row.
 func applyOpenCodeTokenUsage(
 	pm *ParsedMessage,
 	md openCodeMessageData,
 	dataRaw string,
 	parts []openCodePartRow,
+	projection bool,
 ) {
 	if md.ModelID != "" {
 		pm.Model = md.ModelID
@@ -1498,34 +1528,99 @@ func applyOpenCodeTokenUsage(
 		return
 	}
 
+	output := fields.output
+	if openCodeOutputExcludesReasoning(fields, projection) {
+		output += fields.reasoning
+	}
 	normalized := map[string]int{
 		"input_tokens":                fields.input,
-		"output_tokens":               fields.output,
+		"output_tokens":               output,
 		"cache_read_input_tokens":     fields.cacheRead,
 		"cache_creation_input_tokens": fields.cacheCreate,
+	}
+	if fields.reasoning > 0 {
+		normalized["reasoning_tokens"] = fields.reasoning
 	}
 	j, err := json.Marshal(normalized, json.Deterministic(true))
 	if err != nil {
 		return
 	}
 	pm.TokenUsage = j
-	pm.OutputTokens = fields.output
-	pm.HasOutputTokens = fields.hasOutput
+	pm.OutputTokens = output
+	pm.HasOutputTokens = fields.hasOutput || fields.reasoning > 0
 	pm.ContextTokens = fields.input +
 		fields.cacheRead + fields.cacheCreate
 	pm.HasContextTokens = fields.hasInput ||
 		fields.hasCacheRead || fields.hasCacheCreate
 }
 
+// applyOpenCodeRecordedCost keeps the cost OpenCode, Kilo, and MiMo Code
+// record for each model request on its step-finish part, summed over the
+// message. The message's own cost is not used: Kilo adds child subagent
+// costs into the parent message, and MiMo Code adds max-mode candidate costs,
+// so it covers more than this message's requests. The step cost is usually
+// the harness's estimate from models.dev rates, 0 for a model it cannot
+// price; for some providers it is the provider's reported charge.
+func applyOpenCodeRecordedCost(pm *ParsedMessage, parts []openCodePartRow) {
+	var total money.Money
+	found := false
+	for _, part := range parts {
+		if extractOpenCodePartType(part.data) != "step-finish" {
+			continue
+		}
+		cost, ok := recordedCostDollars(gjson.Get(part.data, "cost"))
+		if !ok {
+			continue
+		}
+		sum, err := money.Add(total, cost)
+		if err != nil {
+			return
+		}
+		total, found = sum, true
+	}
+	if found {
+		pm.SetRecordedCost(total)
+	}
+}
+
 type openCodeTokenFields struct {
 	input          int
 	output         int
+	reasoning      int
 	cacheRead      int
 	cacheCreate    int
+	total          int
 	hasInput       bool
 	hasOutput      bool
 	hasCacheRead   bool
 	hasCacheCreate bool
+	hasTotal       bool
+}
+
+// openCodeOutputExcludesReasoning reports whether a record's tokens.output
+// omits its tokens.reasoning, so the stored output must add it back.
+//
+// OpenCode before v1.3.16 and Kilo before v7.2.6 stored the SDK's output
+// count, which already includes reasoning. Later builds, every MiMo Code
+// release, and every v2 session_message writer store output minus reasoning
+// and bill reasoning separately. The v1 writers in both eras persist
+// tokens.total, the SDK's input-plus-output total, so the record shows which
+// convention wrote it: a total that counts reasoning on top of output means
+// output excludes it. A v1 record with no total or a total that matches
+// neither sum keeps its stored output, which never bills reasoning twice.
+// v2 projections carry no total; all of their writers postdate the change.
+func openCodeOutputExcludesReasoning(fields openCodeTokenFields, projection bool) bool {
+	if fields.reasoning <= 0 {
+		return false
+	}
+	if projection {
+		return true
+	}
+	if !fields.hasTotal {
+		return false
+	}
+	base := fields.input + fields.cacheRead + fields.cacheCreate + fields.output
+	return fields.total == base+fields.reasoning
 }
 
 func collectOpenCodeTokenFields(
@@ -1550,6 +1645,13 @@ func collectOpenCodeTokenFields(
 			fields.output = int(field.Int())
 			fields.hasOutput = true
 			value = true
+		}
+		if field := tokens.Get("reasoning"); field.Exists() {
+			fields.reasoning = max(int(field.Int()), 0)
+		}
+		if field := tokens.Get("total"); field.Exists() && field.Type == gjson.Number {
+			fields.total = int(field.Int())
+			fields.hasTotal = true
 		}
 		if field := tokens.Get("cache.read"); field.Exists() {
 			fields.cacheRead = int(field.Int())
@@ -1590,6 +1692,7 @@ func normalizeOpenCodeRole(role string) RoleType {
 }
 
 func buildOpenCodeMessage(
+	ctx context.Context,
 	ordinal int,
 	messageID string,
 	role RoleType,
@@ -1614,7 +1717,7 @@ func buildOpenCodeMessage(
 			}
 		case "tool":
 			hasToolUse = true
-			tc := extractOpenCodeToolCall(p.data, cwd)
+			tc := extractOpenCodeToolCall(ctx, p.data, cwd)
 			if tc.ToolName != "" {
 				toolCalls = append(toolCalls, tc)
 			}
@@ -1700,7 +1803,7 @@ type openCodeToolMetadata struct {
 	Interrupted bool `json:"interrupted"`
 }
 
-func extractOpenCodeToolCall(data, cwd string) ParsedToolCall {
+func extractOpenCodeToolCall(ctx context.Context, data, cwd string) ParsedToolCall {
 	var d openCodeToolData
 	if err := json.Unmarshal([]byte(data), &d); err != nil {
 		return ParsedToolCall{}
@@ -1743,7 +1846,7 @@ func extractOpenCodeToolCall(data, cwd string) ParsedToolCall {
 			skillName = gjson.Get(inputJSON, "name").Str
 		}
 	default:
-		skillName = inferOpenCodeSkillName(d.ToolName, inputJSON, cwd)
+		skillName = inferOpenCodeSkillName(ctx, d.ToolName, inputJSON, cwd)
 	}
 
 	tc := ParsedToolCall{
@@ -1797,20 +1900,20 @@ func extractOpenCodeToolCall(data, cwd string) ParsedToolCall {
 	return tc
 }
 
-func inferOpenCodeSkillName(toolName, inputJSON, cwd string) string {
+func inferOpenCodeSkillName(ctx context.Context, toolName, inputJSON, cwd string) string {
 	if isCursorSkillReadTool(toolName) {
 		// OpenCode's read-tool input carries no cwd/workdir key, so
 		// inferSkillNameFromJSONPaths can't resolve relative SKILL.md
 		// paths and falls back to the parent directory name. Try the
 		// file_path directly against the session worktree first.
 		if fp := gjson.Get(inputJSON, "file_path").Str; fp != "" && cwd != "" {
-			if name := skillNameFromPath(context.Background(), fp, cwd); name != "" {
+			if name := skillNameFromPath(ctx, fp, cwd); name != "" {
 				return name
 			}
 		}
-		return inferSkillNameFromJSONPaths(context.Background(), inputJSON)
+		return inferSkillNameFromJSONPaths(ctx, inputJSON)
 	}
-	return inferCodexSkillNameWithBase(context.Background(), toolName, inputJSON, cwd)
+	return inferCodexSkillNameWithBase(ctx, toolName, inputJSON, cwd)
 }
 
 type openCodeStorageTime struct {

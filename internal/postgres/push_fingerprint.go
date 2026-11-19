@@ -52,7 +52,13 @@ type pushLocalMessageFingerprint struct {
 	// db.PlanUsageFingerprints renders it. It is omitted when empty so
 	// sessions without plan usage keep their stored fingerprints.
 	PlanUsageFP string `json:",omitzero"`
-	DialogueFP  string `json:",omitzero"`
+	// SessionTotalFP is the archive's session_usage_totals row as
+	// db.SessionUsageTotalFingerprints renders it, omitted when empty for
+	// the same reason.
+	SessionTotalFP string             `json:",omitzero"`
+	DialogueFP     string             `json:",omitzero"`
+	CommitLinks    []db.CommitLinkRow `json:",omitzero"`
+	ImageText      []db.ImageTextRow  `json:",omitzero"`
 }
 
 func localSessionDependencyPushFingerprint(
@@ -125,6 +131,9 @@ type localPushDependencyState struct {
 	secretFindings map[string][]db.SecretFinding
 	pins           map[string][]db.PinnedMessage
 	planUsageFP    map[string]string
+	sessionTotalFP map[string]string
+	commitLinks    map[string][]db.CommitLinkRow
+	imageText      map[string][]db.ImageTextRow
 }
 
 func readLocalPushDependencyState(
@@ -185,8 +194,17 @@ func readLocalPushDependencyState(
 	if st.planUsageFP, err = local.PlanUsageFingerprints(ctx, sessionIDs); err != nil {
 		return nil, fmt.Errorf("computing local plan usage fingerprints: %w", err)
 	}
+	if st.sessionTotalFP, err = local.SessionUsageTotalFingerprints(ctx, sessionIDs); err != nil {
+		return nil, fmt.Errorf("computing local session total fingerprints: %w", err)
+	}
 	if st.dialogueFP, err = local.MessageDialogueFingerprints(ctx, sessionIDs); err != nil {
 		return nil, fmt.Errorf("computing local dialogue fingerprints: %w", err)
+	}
+	if st.commitLinks, err = local.SessionCommitLinkRowsBySession(ctx, sessionIDs); err != nil {
+		return nil, err
+	}
+	if st.imageText, err = local.SessionImageTextRowsBySession(ctx, sessionIDs); err != nil {
+		return nil, fmt.Errorf("reading local image text: %w", err)
 	}
 	return st, nil
 }
@@ -204,20 +222,23 @@ func (st *localPushDependencyState) dependencyFingerprint(
 ) (string, error) {
 	agg := st.contentAgg[sessionID]
 	msgFP := pushLocalMessageFingerprint{
-		Sum:           agg.Sum,
-		Max:           agg.Max,
-		Min:           agg.Min,
-		ContentHashFP: st.contentHashFP[sessionID],
-		RoleTimeFP:    st.roleTimeFP[sessionID],
-		FlagsFP:       st.flagsFP[sessionID],
-		SystemFP:      st.systemFP[sessionID],
-		ToolCallCount: st.toolCallCount[sessionID],
-		ToolCallSum:   st.toolCallSum[sessionID],
-		ToolCallFP:    st.toolCallFP[sessionID],
-		ToolResultFP:  st.toolResultFP[sessionID],
-		TokenFP:       st.tokenFP[sessionID],
-		PlanUsageFP:   st.planUsageFP[sessionID],
-		DialogueFP:    st.dialogueFP[sessionID],
+		Sum:            agg.Sum,
+		Max:            agg.Max,
+		Min:            agg.Min,
+		ContentHashFP:  st.contentHashFP[sessionID],
+		RoleTimeFP:     st.roleTimeFP[sessionID],
+		FlagsFP:        st.flagsFP[sessionID],
+		SystemFP:       st.systemFP[sessionID],
+		ToolCallCount:  st.toolCallCount[sessionID],
+		ToolCallSum:    st.toolCallSum[sessionID],
+		ToolCallFP:     st.toolCallFP[sessionID],
+		ToolResultFP:   st.toolResultFP[sessionID],
+		TokenFP:        st.tokenFP[sessionID],
+		PlanUsageFP:    st.planUsageFP[sessionID],
+		SessionTotalFP: st.sessionTotalFP[sessionID],
+		DialogueFP:     st.dialogueFP[sessionID],
+		CommitLinks:    st.commitLinks[sessionID],
+		ImageText:      st.imageText[sessionID],
 	}
 	if usageKnown {
 		msgFP.UsageEventFP = usageEventFingerprint
@@ -242,7 +263,14 @@ func localPushMessageFingerprint(ctx context.Context,
 	usageKnown bool,
 ) (pushLocalMessageFingerprint, error) {
 	fp := pushLocalMessageFingerprint{}
-	var err error
+	links, err := local.SessionCommitLinkRows(ctx, sessionID)
+	if err != nil {
+		return fp, err
+	}
+	fp.CommitLinks = links
+	if fp.ImageText, err = local.SessionImageTextRows(ctx, sessionID); err != nil {
+		return fp, fmt.Errorf("reading local image text: %w", err)
+	}
 	fp.Sum, fp.Max, fp.Min, err = local.MessageContentFingerprint(ctx, sessionID)
 	if err != nil {
 		return fp, fmt.Errorf("computing local content fingerprint: %w", err)
@@ -291,8 +319,13 @@ func localPushMessageFingerprint(ctx context.Context,
 	if err != nil {
 		return fp, fmt.Errorf("computing local dialogue fingerprint: %w", err)
 	}
+	sessionTotalFP, err := local.SessionUsageTotalFingerprints(ctx, []string{sessionID})
+	if err != nil {
+		return fp, fmt.Errorf("computing local session total fingerprint: %w", err)
+	}
 	fp.DialogueFP = dialogueFP[sessionID]
 	fp.PlanUsageFP = planUsageFP[sessionID]
+	fp.SessionTotalFP = sessionTotalFP[sessionID]
 	if usageKnown {
 		fp.UsageEventFP = usageEventFingerprint
 		return fp, nil
@@ -431,7 +464,7 @@ func loadPushMessageContentHashFingerprints(
 	out map[string]string,
 ) error {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT session_id, ordinal, sha256(convert_to(COALESCE(content, ''), 'UTF8')),
+		SELECT session_id, ordinal, sha256(convert_to(content, 'UTF8')),
 			content_length
 		FROM messages
 		WHERE session_id = ANY($1)
@@ -525,7 +558,7 @@ func loadPushMessageFlagFingerprints(
 ) error {
 	rows, err := tx.QueryContext(ctx, `
 		SELECT session_id, ordinal, is_system, has_thinking, has_tool_use,
-			sha256(convert_to(COALESCE(thinking_text, ''), 'UTF8'))
+			sha256(convert_to(thinking_text, 'UTF8'))
 		 FROM messages
 		WHERE session_id = ANY($1)
 		ORDER BY session_id, ordinal ASC
@@ -796,7 +829,7 @@ func loadPushToolResultEventFingerprints(
 		SELECT session_id, tool_call_message_ordinal, call_index, event_index,
 			COALESCE(tool_use_id, ''), COALESCE(agent_id, ''),
 			COALESCE(subagent_session_id, ''), source, status,
-			sha256(convert_to(COALESCE(content, ''), 'UTF8')), content_length, timestamp
+			sha256(convert_to(content, 'UTF8')), content_length, timestamp
 		 FROM tool_result_events
 		WHERE session_id = ANY($1)
 		ORDER BY session_id, tool_call_message_ordinal ASC, call_index ASC, event_index ASC

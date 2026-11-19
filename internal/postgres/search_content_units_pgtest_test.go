@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
@@ -22,7 +21,7 @@ func insertCSUnitMessage(
 ) {
 	t.Helper()
 	ts := fmt.Sprintf("2026-05-01T10:00:%02dZ", ordinal)
-	_, err := store.DB().Exec(`
+	_, err := store.DB().ExecContext(t.Context(), `
 		INSERT INTO messages
 			(session_id, ordinal, role, content, timestamp,
 			 content_length, is_system, is_sidechain)
@@ -54,6 +53,7 @@ func csMatchesByOrdinal(
 // a non-member system row), an embeddable user row and a system row are their
 // own units, and ExcludeSystem changes nothing but which rows match.
 func TestPGSearchContentSubstringDerivedRunRange(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "cs-unit-run", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -70,7 +70,7 @@ func TestPGSearchContentSubstringDerivedRunRange(t *testing.T) {
 	insertCSUnitMessage(t, store, "cs-unit-run", 5, "user",
 		"next question", false, false)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "RUNHIT", Mode: "substring",
 		Sources: []string{"messages"}, Limit: 50,
@@ -111,6 +111,7 @@ func TestPGSearchContentSubstringDerivedRunRange(t *testing.T) {
 // a sidechain run's members are Subordinate + Sidechain, and the sidechain
 // flip bounds both the sidechain run and the following top-level run.
 func TestPGSearchContentSidechainRunSubordinate(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "cs-unit-side", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -123,7 +124,7 @@ func TestPGSearchContentSidechainRunSubordinate(t *testing.T) {
 	insertCSUnitMessage(t, store, "cs-unit-side", 3, "assistant",
 		"main MAINHIT answer", false, false)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	side, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "SIDEHIT", Mode: "substring",
 		Sources: []string{"messages"}, Limit: 50,
@@ -154,6 +155,7 @@ func TestPGSearchContentSidechainRunSubordinate(t *testing.T) {
 // rows: a match inside a subagent session is Subordinate with Relationship
 // and ParentSessionID populated from the sessions join.
 func TestPGSearchContentSubagentLineage(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "cs-unit-parent", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -164,7 +166,7 @@ func TestPGSearchContentSubagentLineage(t *testing.T) {
 	insertCSUnitMessage(t, store, "cs-unit-child", 1, "assistant",
 		"SUBHIT answer", false, false)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "SUBHIT", Mode: "substring",
 		Sources: []string{"messages"}, IncludeChildren: true, Limit: 50,
@@ -184,6 +186,7 @@ func TestPGSearchContentSubagentLineage(t *testing.T) {
 // both locations carry the enclosing run's range while the wire Role stays
 // the hard-coded "assistant".
 func TestPGSearchContentToolDerivedRunRange(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "cs-unit-tool", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -198,7 +201,7 @@ func TestPGSearchContentToolDerivedRunRange(t *testing.T) {
 	insertCSToolCall(t, store, "cs-unit-tool", 1, 0,
 		"Bash", "tu1", `{"command":"TOOLHIT"}`, "output RESHIT data")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	in, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "TOOLHIT", Mode: "substring",
 		Sources: []string{"tool_input"}, Limit: 50,
@@ -226,6 +229,7 @@ func TestPGSearchContentToolDerivedRunRange(t *testing.T) {
 // lineage, while an event whose message row sits inside a run gets the run's
 // range via the post-scan anchor lookup.
 func TestPGSearchContentToolResultEventsDerived(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "cs-ev-boss", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -248,7 +252,7 @@ func TestPGSearchContentToolResultEventsDerived(t *testing.T) {
 	insertCSToolResultEvent(t, store, "cs-ev-run", 1, 0, 0,
 		"tu1", "EVHIT streamed output")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	orph, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "ORPHHIT", Mode: "substring",
 		Sources: []string{"tool_result"}, IncludeChildren: true, Limit: 50,
@@ -279,6 +283,7 @@ func TestPGSearchContentToolResultEventsDerived(t *testing.T) {
 // TestPGSearchContentRegexDerivedRange spot-checks that regex mode routes
 // through the shared derivation pass.
 func TestPGSearchContentRegexDerivedRange(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "cs-unit-rx", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -289,7 +294,7 @@ func TestPGSearchContentRegexDerivedRange(t *testing.T) {
 	insertCSUnitMessage(t, store, "cs-unit-rx", 2, "assistant",
 		"RXHIT beta", false, false)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: `RXHIT [a-z]+`, Mode: "regex",
 		Sources: []string{"messages"}, Limit: 50,
@@ -304,6 +309,7 @@ func TestPGSearchContentRegexDerivedRange(t *testing.T) {
 // TestPGSearchContentFTSDerivedRange spot-checks that PG's fts fallback
 // (ILIKE terms over messages) routes through the shared derivation pass.
 func TestPGSearchContentFTSDerivedRange(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "cs-unit-fts", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -314,7 +320,7 @@ func TestPGSearchContentFTSDerivedRange(t *testing.T) {
 	insertCSUnitMessage(t, store, "cs-unit-fts", 2, "assistant",
 		"ftshit beta step", false, false)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "ftshit", Mode: "fts",
 		Sources: []string{"messages"}, Limit: 50,
@@ -336,6 +342,7 @@ func TestPGSearchContentFTSDerivedRange(t *testing.T) {
 // changes. The structure packs a main run, a sidechain run, and a
 // flip-bounded main run, and every match must carry its run's exact range.
 func TestPGSearchContentDenseFlowDerivedRanges(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "cs-unit-dense", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -370,7 +377,7 @@ func TestPGSearchContentDenseFlowDerivedRanges(t *testing.T) {
 	require.GreaterOrEqual(t, anchorCount, db.UnitBoundsFlowFactor,
 		"single-session page must clear the dense-flow gate")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "DFHIT", Mode: "substring",
 		Sources: []string{"messages"}, Limit: anchorCount + 10,
@@ -399,6 +406,7 @@ func TestPGSearchContentDenseFlowDerivedRanges(t *testing.T) {
 // runs, a sidechain run between them, and an interior system row that must
 // not close the run it sits inside.
 func TestPGSearchContentMultiRunReducerParity(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	insertCSSession(t, store, "cs-unit-multi", "proj", "claude",
 		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
@@ -421,7 +429,7 @@ func TestPGSearchContentMultiRunReducerParity(t *testing.T) {
 	insertCSUnitMessage(t, store, "cs-unit-multi", 8, "user",
 		"PARHIT q2", false, false)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	got, err := store.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "PARHIT", Mode: "substring",
 		Sources: []string{"messages"}, Limit: 50,

@@ -33,7 +33,7 @@ func seedPGToolsBenchArchive(
 	b.Helper()
 	schema := "agentsview_tools_bench_" + archive.name
 	pgURL := testPGURL(b)
-	pg, err := Open(pgURL, schema, true)
+	pg, err := Open(b.Context(), pgURL, schema, true)
 	require.NoError(b, err)
 	b.Cleanup(func() { _ = pg.Close() })
 	ctx := b.Context()
@@ -86,13 +86,13 @@ func seedPGToolsBenchArchive(
 	_, err = pg.ExecContext(ctx, `ANALYZE sessions, messages, tool_calls`)
 	require.NoError(b, err)
 
-	store, err := NewStore(pgURL, schema, true)
+	store, err := NewStore(b.Context(), pgURL, schema, true)
 	require.NoError(b, err)
 	b.Cleanup(func() { _ = store.Close() })
 	return store
 }
 
-// BenchmarkPGAnalyticsToolsSkills measures the tools and skills panels
+// BenchmarkPGAnalyticsToolsSkills measures fresh tools and skills reads
 // over a year-long New York window, the same window narrowed to one of
 // fifty projects, and the full archive history.
 func BenchmarkPGAnalyticsToolsSkills(b *testing.B) {
@@ -120,7 +120,7 @@ func BenchmarkPGAnalyticsToolsSkills(b *testing.B) {
 				b.Run("panel=tools/filter="+fc.name, func(b *testing.B) {
 					b.ReportAllocs()
 					for b.Loop() {
-						resp, err := store.GetAnalyticsTools(b.Context(), fc.filter)
+						resp, err := store.loadAnalyticsTools(b.Context(), fc.filter)
 						require.NoError(b, err)
 						require.Positive(b, resp.TotalCalls)
 					}

@@ -14,6 +14,7 @@ import (
 // The next message is selected by ordinal among timestamps after the event.
 // Choosing the closest timestamp instead silently changes tool intervals.
 func TestActivityPairingWithReversedMessageTimes(t *testing.T) {
+	t.Parallel()
 	store, _, _ := newPushedStore(t)
 	ctx := t.Context()
 	for _, query := range []string{

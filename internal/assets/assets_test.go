@@ -3,6 +3,7 @@ package assets_test
 import (
 	"crypto/sha256"
 	"fmt"
+	"mime"
 	"os"
 	"path/filepath"
 	"strings"
@@ -186,4 +187,12 @@ func TestCopyAssetContract(t *testing.T) {
 	_, err = assets.CopyAsset(filepath.Join(t.TempDir(), "payload.svg"), assetsDir)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported asset type")
+}
+
+func TestMediaTypeForExtIgnoresHostMIMETypes(t *testing.T) {
+	require.NoError(t, mime.AddExtensionType(".png", "application/x-host-override"))
+	t.Cleanup(func() { _ = mime.AddExtensionType(".png", "image/png") })
+	mediaType, ok := assets.MediaTypeForExt(".png")
+	assert.True(t, ok)
+	assert.Equal(t, "image/png", mediaType)
 }

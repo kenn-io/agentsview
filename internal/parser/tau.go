@@ -195,7 +195,10 @@ func parseTauSession(
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
-	firstMessage, userCount := firstMessageAndUserCount(messages)
+	firstMessage, userCount, err := firstMessageAndUserCountContext(ctx, messages)
+	if err != nil {
+		return nil, nil, err
+	}
 	session.FirstMessage = firstMessage
 	session.UserMessageCount = userCount
 	session.MessageCount = len(messages)

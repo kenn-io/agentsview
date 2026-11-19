@@ -55,7 +55,7 @@ func auditAutomatedFull(ctx context.Context,
 				FROM messages m
 				WHERE m.session_id = s.id
 				  AND m.role = 'user'
-				  AND COALESCE(m.source_subtype, '') <> 'tool_result'
+				  AND m.source_subtype <> 'tool_result'
 				  AND m.is_system = 0
 				  AND TRIM(m.content) <> ''
 				ORDER BY m.ordinal
@@ -77,12 +77,7 @@ func auditAutomatedFull(ctx context.Context,
 	return setIDs, clearIDs, err
 }
 
-func auditAutomatedMatchingHash(ctx context.Context,
-	w *writerHandle,
-	patterns automationPatternSnapshot,
-) (setIDs, clearIDs []string, err error) {
-	rows, err := w.Query(ctx,
-		`SELECT
+const auditAutomatedMatchingHashSQL = `SELECT
 			s.id,
 			s.session_kind,
 			s.user_message_count,
@@ -107,12 +102,20 @@ func auditAutomatedMatchingHash(ctx context.Context,
 				FROM messages m
 				WHERE m.session_id = s.id
 				  AND m.role = 'user'
-				  AND COALESCE(m.source_subtype, '') <> 'tool_result'
+				  AND m.source_subtype <> 'tool_result'
 				  AND m.is_system = 0
 				  AND TRIM(m.content) <> ''
 				ORDER BY m.ordinal
 				LIMIT 1
-			) END`,
+			) END
+		 WHERE s.automation_audit = 1`
+
+func auditAutomatedMatchingHash(ctx context.Context,
+	w *writerHandle,
+	patterns automationPatternSnapshot,
+) (setIDs, clearIDs []string, err error) {
+	rows, err := w.Query(ctx,
+		auditAutomatedMatchingHashSQL,
 		automationAuditPrefixBytes,
 		automationAuditPrefixBytes,
 	)
@@ -188,7 +191,7 @@ func auditAutomatedMatchingHash(ctx context.Context,
 					FROM messages m
 					WHERE m.session_id = s.id
 					  AND m.role = 'user'
-					  AND COALESCE(m.source_subtype, '') <> 'tool_result'
+					  AND m.source_subtype <> 'tool_result'
 					  AND m.is_system = 0
 					  AND TRIM(m.content) <> ''
 					ORDER BY m.ordinal

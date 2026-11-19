@@ -295,13 +295,7 @@ describe("local in-session search", () => {
 
   it("counts a replaced tool result without depending on message count", async () => {
     const original = message(1, "", {
-      tool_calls: [
-        {
-          category: "",
-          tool_name: "Read",
-          result_content: "needle",
-        },
-      ],
+      tool_calls: [{ call_index: 0, category: "", tool_name: "Read", result_content: "needle" }],
     });
     const { store, source } = setup([original]);
     await search(store);
@@ -310,11 +304,7 @@ describe("local in-session search", () => {
       {
         ...original,
         tool_calls: [
-          {
-            category: "",
-            tool_name: "Read",
-            result_content: "needle needle",
-          },
+          { call_index: 0, category: "", tool_name: "Read", result_content: "needle needle" },
         ],
       },
     ];

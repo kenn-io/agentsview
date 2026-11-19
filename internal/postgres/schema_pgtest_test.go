@@ -16,42 +16,44 @@ const schemaTestSchema = "agentsview_schema_test"
 
 func cleanSchemaTestPG(t *testing.T, pgURL string) {
 	t.Helper()
+	// Also called from t.Cleanup, where t.Context() is already canceled.
+	ctx := context.WithoutCancel(t.Context())
 	pg, err := sql.Open("pgx", pgURL)
 	require.NoError(t, err, "connecting to pg")
 	defer pg.Close()
-	_, _ = pg.Exec(
-		"DROP SCHEMA IF EXISTS " + schemaTestSchema + " CASCADE",
+	_, _ = pg.ExecContext(ctx,
+		"DROP SCHEMA IF EXISTS "+schemaTestSchema+" CASCADE",
 	)
 }
 
 func TestSessionDeletionCauseSchemaMigrationPreservesRows(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
-	pg, err := Open(pgURL, schemaTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err)
 	defer pg.Close()
 	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
 
 	var exists bool
-	require.NoError(t, pg.QueryRow(`
+	require.NoError(t, pg.QueryRowContext(t.Context(), `
 		SELECT EXISTS (
 			SELECT 1 FROM information_schema.columns
 			WHERE table_schema = $1 AND table_name = 'sessions'
 			  AND column_name = 'deletion_cause'
 		)`, schemaTestSchema).Scan(&exists))
 	require.True(t, exists, "fresh schema must include sessions.deletion_cause")
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO sessions (id, machine, project, agent, deleted_at)
 		VALUES ('preserved-trash', 'machine', 'project', 'claude', NOW())`)
 	require.NoError(t, err)
-	_, err = pg.Exec(`ALTER TABLE sessions DROP COLUMN deletion_cause`)
+	_, err = pg.ExecContext(t.Context(), `ALTER TABLE sessions DROP COLUMN deletion_cause`)
 	require.NoError(t, err)
 
 	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
 	var deleted bool
 	var cause sql.NullString
-	require.NoError(t, pg.QueryRow(`
+	require.NoError(t, pg.QueryRowContext(t.Context(), `
 		SELECT deleted_at IS NOT NULL, deletion_cause
 		FROM sessions WHERE id = 'preserved-trash'`,
 	).Scan(&deleted, &cause))
@@ -64,15 +66,15 @@ func TestSessionDeletionCauseSchemaMigrationPreservesRows(t *testing.T) {
 // sessions table has the secret_leak_count and
 // secrets_rules_version columns. Also asserts idempotency.
 func TestSecretFindingsSchema(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 
-	pg, err := Open(pgURL, schemaTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
 	defer pg.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Run EnsureSchema twice to verify idempotency.
 	require.NoError(t, EnsureSchema(ctx, pg, schemaTestSchema),
@@ -137,15 +139,15 @@ func TestSecretFindingsSchema(t *testing.T) {
 // source_archive_id and file_path provenance columns. Also asserts
 // idempotency across two EnsureSchema runs.
 func TestEnsureSchemaCreatesMappingMirrorAndSessionProvenance(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 
-	pg, err := Open(pgURL, schemaTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
 	defer pg.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Run EnsureSchema twice to verify idempotency.
 	require.NoError(t, EnsureSchema(ctx, pg, schemaTestSchema),
@@ -178,15 +180,15 @@ func TestEnsureSchemaCreatesMappingMirrorAndSessionProvenance(t *testing.T) {
 // idx_tool_calls_file_path index that backs the cross-session Recent Edits
 // feed, mirroring SQLite's index so the query surface has parity on PG.
 func TestToolCallsFilePathIndex(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 
-	pg, err := Open(pgURL, schemaTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
 	defer pg.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	// Twice to confirm CREATE INDEX IF NOT EXISTS stays idempotent.
 	require.NoError(t, EnsureSchema(ctx, pg, schemaTestSchema), "EnsureSchema (first)")
 	require.NoError(t, EnsureSchema(ctx, pg, schemaTestSchema), "EnsureSchema (second)")
@@ -204,15 +206,15 @@ func TestToolCallsFilePathIndex(t *testing.T) {
 }
 
 func TestEnsureSchemaMigratesLegacyMoneyColumns(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 
-	pg, err := Open(pgURL, schemaTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
 	defer pg.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, schemaTestSchema),
 		"create current schema")
 	_, err = pg.ExecContext(ctx, `
@@ -236,7 +238,7 @@ func TestEnsureSchemaMigratesLegacyMoneyColumns(t *testing.T) {
 			output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok,
 			cache_read_microdollars_per_mtok, updated_at
-		) VALUES ('legacy-rate', 1250000, 9876543, 2500000, 125000, 'seed');
+		) VALUES ('legacy-rate', 1250000, 9876543, 2500000, 125000, '2026-01-01T00:00:00Z');
 
 		ALTER TABLE usage_events
 			ALTER COLUMN cost_microdollars TYPE DOUBLE PRECISION
@@ -348,11 +350,11 @@ func TestEnsureSchemaMigratesLegacyMoneyColumns(t *testing.T) {
 }
 
 func TestMigrateMoneyColumnsPGSerializesConcurrentUpgraders(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 
-	pg, err := Open(pgURL, schemaTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
 	defer pg.Close()
 	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
@@ -385,10 +387,10 @@ func TestMigrateMoneyColumnsPGSerializesConcurrentUpgraders(t *testing.T) {
 		"application_name": "money-migration-b",
 	})
 	require.NoError(t, err)
-	migratorA, err := Open(dsnA, schemaTestSchema, true)
+	migratorA, err := Open(t.Context(), dsnA, schemaTestSchema, true)
 	require.NoError(t, err)
 	defer migratorA.Close()
-	migratorB, err := Open(dsnB, schemaTestSchema, true)
+	migratorB, err := Open(t.Context(), dsnB, schemaTestSchema, true)
 	require.NoError(t, err)
 	defer migratorB.Close()
 
@@ -437,14 +439,14 @@ func TestMigrateMoneyColumnsPGSerializesConcurrentUpgraders(t *testing.T) {
 }
 
 func TestEnsureSchemaRejectsInvalidLegacyMoneyWithoutChangingSchema(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
 
-	pg, err := Open(pgURL, schemaTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
 	defer pg.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, schemaTestSchema))
 	_, err = pg.ExecContext(ctx, `
 		INSERT INTO sessions (id, machine, project, agent)
@@ -471,23 +473,25 @@ func TestEnsureSchemaRejectsInvalidLegacyMoneyWithoutChangingSchema(t *testing.T
 }
 
 func TestPromptEvidenceMigrationPreservesSessions(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
-	pg, err := Open(pgURL, schemaTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err)
 	defer pg.Close()
 	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))
 	// Reproduce the previously shipped schema, which has no policy marker.
-	_, err = pg.Exec(`ALTER TABLE sessions DROP COLUMN prompt_evidence_discarded`)
+	_, err = pg.ExecContext(t.Context(), `DROP TRIGGER trg_sessions_automation_audit ON sessions;
+ DROP INDEX idx_sessions_automation_audit; ALTER TABLE sessions DROP COLUMN automation_audit_hash;
+ ALTER TABLE sessions DROP COLUMN prompt_evidence_discarded`)
 	require.NoError(t, err)
-	_, err = pg.Exec(`INSERT INTO sessions (id, machine, project, agent, first_message) VALUES ('full-session', 'machine', 'project', 'claude', 'Explain this code')`)
+	_, err = pg.ExecContext(t.Context(), `INSERT INTO sessions (id, machine, project, agent, first_message) VALUES ('full-session', 'machine', 'project', 'claude', 'Explain this code')`)
 	require.NoError(t, err)
 	sync := &Sync{pg: pg, schema: schemaTestSchema}
 	require.NoError(t, sync.EnsureSchema(t.Context()))
 	var prompt string
 	var discarded bool
-	require.NoError(t, pg.QueryRow(`SELECT first_message, prompt_evidence_discarded FROM sessions WHERE id = 'full-session'`).Scan(&prompt, &discarded))
+	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT first_message, prompt_evidence_discarded FROM sessions WHERE id = 'full-session'`).Scan(&prompt, &discarded))
 	assert.Equal(t, "Explain this code", prompt)
 	assert.False(t, discarded)
 }

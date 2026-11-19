@@ -37,6 +37,8 @@ func vectorDSN(path string, readOnly bool) string {
 	if readOnly {
 		params.Set("mode", "ro")
 	} else {
+		// Match the cgo driver's reservation before read-then-write transactions.
+		params.Set("_txlock", "immediate")
 		params.Add("_pragma", "journal_mode(WAL)")
 		params.Add("_pragma", "synchronous(NORMAL)")
 	}

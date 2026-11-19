@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -789,8 +790,8 @@ func scanSiblingRepoCandidates(dir string) siblingScanResult {
 		result.selfIsRepo = true
 		return result
 	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
+	entries, ok := readSiblingScanEntries(dir)
+	if !ok {
 		return result
 	}
 	worktreeMarker := string(filepath.Separator) + ".git" +
@@ -886,6 +887,29 @@ func scanSiblingRepoCandidates(dir string) siblingScanResult {
 	}
 	result.agreedRoot = found
 	return result
+}
+
+// maxSiblingScanEntries bounds the directories a deleted cwd's sibling scan
+// will read. Worktree containers hold a few hundred checkouts at most. A
+// deleted cwd whose nearest existing ancestor is a temp directory with tens of
+// thousands of entries would otherwise vet and stat every entry, which took
+// seconds on each pass that resolved the stale path.
+const maxSiblingScanEntries = 1024
+
+// readSiblingScanEntries lists dir for the sibling scan. It reports false when
+// dir cannot be read or holds more than maxSiblingScanEntries entries, which
+// rules dir out as a worktree container.
+func readSiblingScanEntries(dir string) ([]os.DirEntry, bool) {
+	f, err := os.Open(dir)
+	if err != nil {
+		return nil, false
+	}
+	defer f.Close()
+	entries, err := f.ReadDir(maxSiblingScanEntries + 1)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, false
+	}
+	return entries, len(entries) <= maxSiblingScanEntries
 }
 
 // deletedChildIsWorktree checks whether the first missing
@@ -1090,14 +1114,15 @@ func trimBranchSuffix(name, gitBranch string) string {
 		return name
 	}
 
-	for _, sep := range []string{"-", "_"} {
+	// "." covers worktrunk's default sibling layout, "<repo>.<branch>".
+	for _, sep := range []string{"-", "_", "."} {
 		suffix := sep + branchToken
 		if strings.HasSuffix(
 			strings.ToLower(name),
 			strings.ToLower(suffix),
 		) {
 			base := strings.TrimRight(
-				name[:len(name)-len(suffix)], "-_",
+				name[:len(name)-len(suffix)], "-_.",
 			)
 			if base != "" {
 				return base

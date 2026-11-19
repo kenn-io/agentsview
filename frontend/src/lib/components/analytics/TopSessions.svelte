@@ -1,11 +1,10 @@
 <script lang="ts">
   import { analytics } from "../../stores/analytics.svelte.js";
-  import {
-    sessions,
-    getSessionStatus,
-  } from "../../stores/sessions.svelte.js";
+  import PanelStatus from "./PanelStatus.svelte";
+  import { sessions } from "../../stores/sessions.svelte.js";
+  import { getSessionStatus } from "../../stores/sessionStatus.svelte.js";
   import { router } from "../../stores/router.svelte.js";
-  import { formatTokenCount } from "../../utils/format.js";
+  import { formatCount } from "../../utils/format.js";
   import { normalizeMessagePreview } from "../../utils/messages.js";
   import { StatusDot } from "@kenn-io/kit-ui";
   import { sessionStatusLabel } from "../../utils/sessionStatus.js";
@@ -77,11 +76,6 @@
     router.navigateToSession(id);
   }
 
-  const supportsOutputTokens = $derived(
-    analytics.summary?.total_output_tokens !== undefined &&
-      analytics.summary?.token_reporting_sessions !== undefined,
-  );
-
   const uncleanCount = $derived(
     (analytics.topSessions?.sessions ?? []).filter(
       (s) => getSessionStatus(s) === "unclean",
@@ -99,8 +93,15 @@
           onclick={() => sessions.setTerminationFilter("unclean")}
           title={m.analytics_top_sessions_filter_unclean()}
         >
+          <!-- The same dot the unclean rows carry, so the pill is
+               also their legend. -->
+          <StatusDot
+            status="unclean"
+            label={sessionStatusLabel("unclean")}
+            size={7}
+          />
           {m.analytics_top_sessions_unclean_count({
-            countLabel: uncleanCount.toLocaleString(),
+            countLabel: formatCount(uncleanCount),
           })}
         </button>
       {/if}
@@ -119,30 +120,24 @@
         >
           {m.analytics_top_sessions_by_duration()}
         </button>
-        {#if supportsOutputTokens}
-          <button
-            class="toggle-btn"
-            class:active={analytics.topMetric === "output_tokens"}
-            onclick={() => analytics.setTopMetric("output_tokens")}
-          >
-            {m.analytics_top_sessions_by_output_tokens()}
-          </button>
-        {/if}
+        <button
+          class="toggle-btn"
+          class:active={analytics.topMetric === "output_tokens"}
+          onclick={() => analytics.setTopMetric("output_tokens")}
+        >
+          {m.analytics_top_sessions_by_output_tokens()}
+        </button>
       </div>
     </div>
   </div>
 
-  {#if analytics.errors.topSessions}
-    <div class="error">
-      {analytics.errors.topSessions}
-      <button
-        class="retry-btn"
-        onclick={() => analytics.fetchTopSessions()}
-      >
-        {m.shared_retry()}
-      </button>
-    </div>
-  {:else if analytics.topSessions && analytics.topSessions.sessions.length > 0}
+  <PanelStatus
+    hasData={analytics.topSessions !== null}
+    pending={analytics.querying.topSessions}
+    error={analytics.errors.topSessions}
+    onRetry={() => analytics.fetchTopSessions()}
+  />
+  {#if analytics.topSessions && analytics.topSessions.sessions.length > 0}
     <div class="session-list">
       {#each analytics.topSessions.sessions as session, i}
         {@const label = sessionLabel(session)}
@@ -175,15 +170,15 @@
                 )}
               </span>
             {:else if analytics.topMetric === "output_tokens"}
-              {formatTokenCount(session.output_tokens)}
+              {formatCount(session.output_tokens)}
             {:else}
-              {session.message_count}
+              {formatCount(session.message_count)}
             {/if}
           </span>
         </div>
       {/each}
     </div>
-  {:else}
+  {:else if analytics.topSessions}
     <div class="empty">{m.shared_no_sessions_in_range()}</div>
   {/if}
 </div>
@@ -214,65 +209,72 @@
     gap: 8px;
   }
 
+  /* Red like the unclean row dots and the sidebar's unclean pill;
+     the leading dot ties the count to the rows it counts. */
   .status-count-pill {
-    padding: 2px 8px;
-    font-size: 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 2px 8px 2px 6px;
+    font-size: 11px;
     font-weight: 500;
+    font-variant-numeric: tabular-nums;
     border-radius: 999px;
-    color: var(--accent-amber);
-    background: color-mix(
-      in srgb,
-      var(--accent-amber) 10%,
-      transparent
-    );
-    border: 1px solid color-mix(
-      in srgb,
-      var(--accent-amber) 35%,
-      transparent
-    );
+    /* Unclean endings are a warning, not an error: the warning tone the
+       unclean dots carry, so the pill does not overstate them. */
+    color: color-mix(in srgb, var(--accent-orange) 70%, var(--text-primary));
+    background: color-mix(in srgb, var(--accent-orange) 9%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-orange) 38%, transparent);
     cursor: pointer;
     transition: background 0.1s;
   }
 
   .status-count-pill:hover {
-    background: color-mix(
-      in srgb,
-      var(--accent-amber) 18%,
-      transparent
-    );
+    background: color-mix(in srgb, var(--accent-orange) 16%, transparent);
+  }
+
+  /* Light orange needs a larger primary share for the 11px count to stay
+     above 4.5:1 on the tinted pill, resting and hovered. */
+  :global(:root:not(.dark)) .status-count-pill {
+    color: color-mix(in srgb, var(--accent-orange) 55%, var(--text-primary));
   }
 
   .metric-toggle {
     display: flex;
     gap: 2px;
+    padding: 2px;
+    border-radius: var(--radius-md);
     background: var(--bg-inset);
-    border-radius: var(--radius-sm);
-    padding: 1px;
   }
 
   .toggle-btn {
     padding: 2px 8px;
-    font-size: 10px;
+    font-size: 11px;
+    font-weight: 500;
     border-radius: var(--radius-sm);
     color: var(--text-muted);
     cursor: pointer;
     transition: background 0.1s, color 0.1s;
   }
 
+  /* Shared selected-segment idiom (app.css): raised pill, medium weight. */
   .toggle-btn.active {
-    background: var(--bg-surface);
+    background: var(--selected-strong-bg);
+    box-shadow: var(--selected-strong-edge);
     color: var(--text-primary);
-    font-weight: 500;
+    font-weight: var(--selected-strong-weight);
   }
 
   .toggle-btn:hover:not(.active) {
     color: var(--text-secondary);
   }
 
+  /* Rows stay compact (no list gap, 3px padding, flush title and
+     project lines) so all ten fit above the status bar at 1440x900. */
   .session-list {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 0;
     overflow-y: auto;
     flex: 1;
   }
@@ -281,7 +283,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 4px 6px;
+    padding: 3px 6px;
     border-radius: var(--radius-sm);
     cursor: pointer;
     transition: background 0.1s;
@@ -295,10 +297,10 @@
     flex-shrink: 0;
     width: 18px;
     text-align: right;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
     color: var(--text-muted);
-    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
   }
 
   .session-status {
@@ -316,19 +318,21 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 1px;
+    gap: 0;
   }
 
+  /* The title leads; the project line is supporting metadata. */
   .session-label {
-    font-size: 11px;
-    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-primary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
   .session-project {
-    font-size: 9px;
+    font-size: 11px;
     color: var(--text-muted);
     white-space: nowrap;
     overflow: hidden;
@@ -337,10 +341,12 @@
 
   .session-metric {
     flex-shrink: 0;
-    font-size: 11px;
+    /* Values use the UI sans with tabular figures, like the other
+       analytics values. */
+    font-size: 12px;
     font-weight: 500;
-    font-family: var(--font-mono);
-    color: var(--accent-blue);
+    font-variant-numeric: tabular-nums;
+    color: var(--text-primary);
     min-width: 86px;
     text-align: right;
   }
@@ -354,23 +360,5 @@
     font-size: 12px;
     padding: 24px;
     text-align: center;
-  }
-
-  .error {
-    color: var(--accent-red);
-    font-size: 12px;
-    padding: 12px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .retry-btn {
-    padding: 2px 8px;
-    border: 1px solid currentColor;
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    color: inherit;
-    cursor: pointer;
   }
 </style>

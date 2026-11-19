@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -74,11 +76,11 @@ func trackLiveActivitySync(
 func startLiveActivityRun(
 	ctx context.Context,
 	cancel context.CancelFunc,
-	poller *agentsync.LiveActivityPoller,
+	run func(context.Context),
 ) func() {
 	var workers sync.WaitGroup
 	workers.Go(func() {
-		poller.Run(ctx)
+		run(ctx)
 	})
 	var once sync.Once
 	return func() {
@@ -89,28 +91,51 @@ func startLiveActivityRun(
 	}
 }
 
+// liveActivity holds the controls of the running live-activity poller.
+type liveActivity struct {
+	stop func()
+	// pollNow runs one poll and waits for it. Before target discovery
+	// finishes there is no poller to ask, and its first poll follows
+	// discovery anyway.
+	pollNow func(context.Context)
+}
+
 func startLiveActivityPoller(
 	ctx context.Context,
 	cfg config.Config,
 	database *db.DB,
 	engine *agentsync.Engine,
 	idleTracker *server.IdleTracker,
-) func() {
+	gap func() time.Duration,
+) *liveActivity {
 	runCtx, cancel := context.WithCancel(ctx)
-	targets, err := collectLiveActivityTargets(runCtx, cfg)
-	if err != nil {
-		log.Printf("live activity target discovery: %v", err)
+	var running atomic.Pointer[agentsync.LiveActivityPoller]
+	stop := startLiveActivityRun(runCtx, cancel, func(ctx context.Context) {
+		targets, err := collectLiveActivityTargets(ctx, cfg)
+		if err != nil {
+			log.Printf("live activity target discovery: %v", err)
+		}
+		poller := agentsync.NewLiveActivityPoller(
+			targets,
+			agentsync.DBLiveActivityLookup(database),
+			trackLiveActivitySync(idleTracker, engine.SyncPathsContext),
+			log.Printf,
+		)
+		poller.SetRecentLookup(
+			agentsync.DBRecentSessionLookup(
+				database, cfg.InstallationID, cfg.SourceMachines,
+			),
+		)
+		poller.SetGap(gap)
+		running.Store(poller)
+		poller.Run(ctx)
+	})
+	return &liveActivity{
+		stop: stop,
+		pollNow: func(ctx context.Context) {
+			if poller := running.Load(); poller != nil {
+				poller.PollNow(ctx)
+			}
+		},
 	}
-	poller := agentsync.NewLiveActivityPoller(
-		targets,
-		agentsync.DBLiveActivityLookup(database),
-		trackLiveActivitySync(idleTracker, engine.SyncPathsContext),
-		log.Printf,
-	)
-	poller.SetRecentLookup(
-		agentsync.DBRecentSessionLookup(
-			database, cfg.InstallationID, cfg.SourceMachines,
-		),
-	)
-	return startLiveActivityRun(runCtx, cancel, poller)
 }

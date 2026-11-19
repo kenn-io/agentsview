@@ -3,6 +3,11 @@ package main
 
 import (
 	"bytes"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"path/filepath"
 	"testing"
 	"time"
@@ -10,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/service"
 )
 
 func TestSessionListIncludeSource(t *testing.T) {
@@ -123,10 +129,12 @@ func TestSessionListIncludeSource(t *testing.T) {
 	})
 }
 
-func TestSessionListAnnotationsPreserveExplicitOneShotExclusion(t *testing.T) {
+func TestSessionListLabelsSkipChildCountsWithExplicitExclusions(t *testing.T) {
 	for _, toggle := range []string{"--include-one-shot=false", "--include-automated=false"} {
 		dataDir := newAgentDataDir(t)
-		seedSessionsWithOpts(t, dataDir, sessionSeed{id: "worker", project: "proj", mut: func(s *db.Session) {
+		seedSessionsWithOpts(t, dataDir, sessionSeed{id: "parent", project: "proj"}, sessionSeed{id: "worker", project: "proj", mut: func(s *db.Session) {
+			s.ParentSessionID = new("parent")
+			s.RelationshipType = "subagent"
 			s.UserMessageCount = 1
 			s.IsAutomated = toggle == "--include-automated=false"
 			if s.IsAutomated {
@@ -145,6 +153,7 @@ func TestSessionListAnnotationsPreserveExplicitOneShotExclusion(t *testing.T) {
 		require.NoError(t, cmd.Execute())
 		list := decodeCLIJSON[cliSessionList](t, stdout.String())
 		assert.Empty(t, list.Sessions)
+		assert.NotContains(t, stderr.String(), "child")
 	}
 }
 
@@ -224,8 +233,12 @@ func TestSessionListResumeRespectsExplicitSince(t *testing.T) {
 
 func TestSessionListReportsDefaultExclusionsOnStderr(t *testing.T) {
 	dataDir := newAgentDataDir(t)
-	seedSessionsWithOpts(t, dataDir,
+	daemonURL := seedSessionsWithOpts(t, dataDir,
 		sessionSeed{id: "included", project: "proj"},
+		sessionSeed{id: "child", project: "proj", mut: func(s *db.Session) {
+			s.ParentSessionID = new("included")
+			s.RelationshipType = "subagent"
+		}},
 		sessionSeed{
 			id:      "one-shot",
 			project: "proj",
@@ -244,23 +257,35 @@ func TestSessionListReportsDefaultExclusionsOnStderr(t *testing.T) {
 		},
 	)
 
+	target, err := url.Parse(daemonURL)
+	require.NoError(t, err)
+	upstream := httputil.NewSingleHostReverseProxy(target)
+	calls := 0
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/sessions" {
+			calls++
+		}
+		r.Host = target.Host
+		upstream.ServeHTTP(w, r)
+	}))
+	t.Cleanup(proxy.Close)
+	registerSyncRouteTestRuntime(t, dataDir, proxy.URL)
+
 	root := newRootCommand()
 	var stdout, stderr bytes.Buffer
 	root.SetOut(&stdout)
 	root.SetErr(&stderr)
 	root.SetArgs([]string{"session", "list", "--format", "json"})
 
-	_, err := root.ExecuteC()
+	_, err = root.ExecuteC()
 	require.NoError(t, err)
+	assert.Equal(t, 1, calls)
+	assert.NotContains(t, stdout.String(), "exclusion_counts")
 	got := decodeCLIJSON[cliSessionList](t, stdout.String())
 	require.Equal(t, 1, got.Total)
 	require.Len(t, got.Sessions, 1)
 	assert.Equal(t, "included", got.Sessions[0]["id"])
-	assert.Contains(t, stderr.String(), "Excluded 2 sessions by default")
-	assert.Contains(t, stderr.String(), "1 one-shot")
-	assert.Contains(t, stderr.String(), "1 automated")
-	assert.Contains(t, stderr.String(), "--include-one-shot")
-	assert.Contains(t, stderr.String(), "--include-automated")
+	assert.Equal(t, "Excluded 3 sessions by default: 1 one-shot, 1 automated, 1 child. For one-shot or automated sessions, use --include-one-shot and/or --include-automated. For child sessions, use --include-one-shot --include-automated --include-children.\n", stderr.String())
 }
 
 // TestResolveSinceFlag_ResolvesRelativeWindow is a fast unit test of the
@@ -295,4 +320,151 @@ func TestResolveSinceFlag_RejectsBothSet(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(),
 		"--since and --active-since are mutually exclusive")
+}
+
+func TestSessionListReportsCombinedDefaultExclusions(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	seedSessionsWithOpts(t, dataDir,
+		sessionSeed{id: "parent", project: "proj", mut: func(s *db.Session) { s.UserMessageCount = 1 }},
+		sessionSeed{id: "child", project: "proj", mut: func(s *db.Session) {
+			s.ParentSessionID = new("parent")
+			s.RelationshipType = "subagent"
+			s.UserMessageCount = 1
+			s.FirstMessage = new("You are a code reviewer. Review this change.")
+		}},
+	)
+	root := newRootCommand()
+	var stdout, stderr bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.SetArgs([]string{"session", "list", "--json", "--include-children"})
+	require.NoError(t, root.Execute())
+	assert.Equal(t, "Excluded 2 sessions by default: 1 one-shot, 1 child. Use --include-one-shot --include-automated to include them.\n", stderr.String())
+	visible := decodeCLIJSON[cliSessionList](t, stdout.String())
+	assert.Empty(t, visible.Sessions)
+	out, err := executeCommand(newRootCommand(), "session", "list", "--json", "--include-one-shot", "--include-automated", "--include-children")
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"parent", "child"}, sessionListIDs(t, out))
+}
+
+func TestSessionListChildMembershipWithContinuations(t *testing.T) {
+	for _, tc := range []struct {
+		relationship string
+		date         bool
+	}{
+		{"continuation", false},
+		{"subagent", true},
+	} {
+		t.Run(fmt.Sprintf("%s/date=%v", tc.relationship, tc.date), func(t *testing.T) {
+			dataDir := newAgentDataDir(t)
+			seedSessionsWithOpts(t, dataDir,
+				sessionSeed{id: "parent", project: "selected", mut: func(s *db.Session) {
+					s.StartedAt = new("2024-06-15T10:00:00Z")
+					s.EndedAt = s.StartedAt
+				}},
+				sessionSeed{id: "other-parent", project: "other", mut: func(s *db.Session) {
+					s.StartedAt = new("2020-01-01T10:00:00Z")
+					s.EndedAt = s.StartedAt
+				}},
+				sessionSeed{id: "child", project: "selected", mut: func(s *db.Session) {
+					s.ParentSessionID = new("parent")
+					s.RelationshipType = tc.relationship
+					s.StartedAt = new("2024-06-15T10:00:00Z")
+					s.EndedAt = s.StartedAt
+					if tc.relationship == "continuation" {
+						s.Project = "other"
+					}
+				}},
+			)
+			if tc.relationship != "continuation" {
+				seedSessionsWithOpts(t, dataDir, sessionSeed{id: "continuation", project: "selected", mut: func(s *db.Session) {
+					s.ParentSessionID = new("other-parent")
+					s.RelationshipType = "continuation"
+					s.StartedAt = new("2024-06-15T10:00:00Z")
+					s.EndedAt = s.StartedAt
+				}})
+			}
+			args := []string{"session", "list", "--json", "--project", "selected", "--include-one-shot", "--include-automated"}
+			if tc.date {
+				args = []string{"session", "list", "--json", "--date-from", "2024-01-01", "--include-one-shot", "--include-automated"}
+			}
+			out, err := executeCommand(newRootCommand(), append(args, "--include-children")...)
+			require.NoError(t, err)
+			assert.ElementsMatch(t, []string{"parent", "child"}, sessionListIDs(t, out))
+		})
+	}
+}
+
+func TestSessionListDefaultExclusionNotice(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		filter service.ListFilter
+		counts db.SessionExclusionCounts
+		want   string
+	}{
+		{"child lower bound", service.ListFilter{ExclusionCounts: new(true), IncludeOneShot: true, IncludeAutomated: true}, db.SessionExclusionCounts{Children: 2, ChildrenLowerBound: true}, "Excluded at least 2 child sessions by default. Use --include-children to include them."},
+		{"one-shot and child guidance", service.ListFilter{ExclusionCounts: new(true)}, db.SessionExclusionCounts{OneShot: 1, Children: 1}, "Excluded 2 sessions by default: 1 one-shot, 1 child. For one-shot sessions, use --include-one-shot. For child sessions, use --include-one-shot --include-automated --include-children."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, sessionListDefaultExclusionNotice(tc.filter, &tc.counts))
+		})
+	}
+}
+
+func TestSessionListOneShotContinuationWithProjectFilter(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	seedSessionsWithOpts(t, dataDir,
+		sessionSeed{id: "parent", project: "selected"},
+		sessionSeed{id: "other-parent", project: "other"},
+		sessionSeed{id: "continuation", project: "selected", mut: func(s *db.Session) {
+			s.ParentSessionID = new("other-parent")
+			s.RelationshipType = "continuation"
+			s.UserMessageCount = 1
+		}},
+		sessionSeed{id: "child", project: "selected", mut: func(s *db.Session) {
+			s.ParentSessionID = new("parent")
+			s.RelationshipType = "subagent"
+		}},
+	)
+	args := []string{"session", "list", "--json", "--project", "selected"}
+	root := newRootCommand()
+	var stdout, stderr bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.SetArgs(args)
+	require.NoError(t, root.Execute())
+	assert.Equal(t, []string{"parent"}, sessionListIDs(t, stdout.String()))
+	stdout.Reset()
+	root = newRootCommand()
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.SetArgs(append(args, "--include-one-shot"))
+	require.NoError(t, root.Execute())
+	assert.ElementsMatch(t, []string{"parent", "continuation"}, sessionListIDs(t, stdout.String()))
+	tree, err := executeCommand(newRootCommand(), append(args, "--include-one-shot", "--include-automated", "--include-children")...)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"parent", "child"}, sessionListIDs(t, tree))
+}
+
+func TestSessionListCountsWithEmptyAnnotations(t *testing.T) {
+	dataDir := newAgentDataDir(t)
+	seedSessionsWithOpts(t, dataDir,
+		sessionSeed{id: "visible", project: "proj"},
+		sessionSeed{id: "one-shot", project: "proj", mut: func(s *db.Session) { s.UserMessageCount = 1 }},
+		sessionSeed{id: "child", project: "proj", mut: func(s *db.Session) { s.ParentSessionID = new("visible"); s.RelationshipType = "subagent" }},
+	)
+	for _, flag := range []string{"--label", "--pr"} {
+		value := " "
+		t.Run(fmt.Sprintf("%s/%q", flag, value), func(t *testing.T) {
+			root := newRootCommand()
+			var stdout, stderr bytes.Buffer
+			root.SetOut(&stdout)
+			root.SetErr(&stderr)
+			root.SetArgs([]string{"session", "list", "--json", flag, value})
+			require.NoError(t, root.Execute())
+			assert.Equal(t, []string{"visible"}, sessionListIDs(t, stdout.String()))
+			want := "Excluded 1 session by default: 1 one-shot. Use --include-one-shot to include them.\n"
+			assert.Equal(t, want, stderr.String())
+		})
+	}
 }

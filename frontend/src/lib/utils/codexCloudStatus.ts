@@ -1,6 +1,6 @@
 import type { CodexcloudHomeStatus } from "../api/generated/index.js";
-import { getLocale, m } from "../i18n/index.js";
-import { formatTimestamp } from "./format.js";
+import { m } from "../i18n/index.js";
+import { formatTimestamp, formatCount } from "./format.js";
 
 // States that need the user's attention; the status bar shows the first
 // such row and colors it as a warning.
@@ -17,13 +17,13 @@ function stateSummary(row: CodexcloudHomeStatus): string {
     case "importing":
       if (row.total) {
         return m.status_bar_codex_cloud_importing_progress({
-          imported: (row.imported ?? 0).toLocaleString(getLocale()),
-          total: row.total.toLocaleString(getLocale()),
+          imported: formatCount(row.imported ?? 0),
+          total: formatCount(row.total),
         });
       }
       return m.status_bar_codex_cloud_importing_found({
         count: row.found ?? 0,
-        countLabel: (row.found ?? 0).toLocaleString(getLocale()),
+        countLabel: formatCount(row.found ?? 0),
       });
     case "up_to_date":
       return m.status_bar_codex_cloud_up_to_date({
@@ -32,7 +32,7 @@ function stateSummary(row: CodexcloudHomeStatus): string {
     case "retrying":
       return m.status_bar_codex_cloud_retrying({
         count: row.retry_count ?? 0,
-        countLabel: (row.retry_count ?? 0).toLocaleString(getLocale()),
+        countLabel: formatCount(row.retry_count ?? 0),
       });
     case "error":
       return m.status_bar_codex_cloud_error();

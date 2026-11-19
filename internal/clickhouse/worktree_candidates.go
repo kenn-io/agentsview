@@ -33,9 +33,9 @@ func (s *Store) loadWorktreeCandidateSessions(
 				WHERE source_session_id IN (` + placeholders + `)
 			)
 			SELECT s.id, s.project, s.machine, s.cwd,
-				COALESCE(snap.source_session_id, ''), COALESCE(snap.project, ''),
-				COALESCE(snap.machine, ''), COALESCE(snap.root_path, ''),
-				COALESCE(snap.worktree_root_path, ''), COALESCE(snap.key_source, '')
+				snap.source_session_id, snap.project,
+				snap.machine, snap.root_path,
+				snap.worktree_root_path, snap.key_source
 			FROM sessions s
 			LEFT JOIN ranked_snapshots snap
 			  ON snap.source_archive_id = s.source_archive_id

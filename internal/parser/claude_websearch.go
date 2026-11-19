@@ -20,7 +20,7 @@ const claudeWebSearchToolName = "WebSearch"
 // server-side web searches a response billed.
 const usageWebSearchRequestsPath = "server_tool_use.web_search_requests"
 
-// annotateClaudeWebSearchRequests makes every assistant message's stored
+// annotateClaudeWebSearchRequestsContext makes every assistant message's stored
 // usage blob report the number of web searches it was billed for.
 //
 // Anthropic charges a flat fee per server-side web search on top of tokens,
@@ -35,32 +35,30 @@ const usageWebSearchRequestsPath = "server_tool_use.web_search_requests"
 // The two sources are never combined: a message that already reports a
 // nonzero counter is authoritative, so a search can only ever be counted
 // once.
-func annotateClaudeWebSearchRequests(
-	messages []ParsedMessage, counts map[string]int,
-) {
-	_ = annotateClaudeWebSearchRequestsContext(
-		context.Background(), messages, counts,
-	)
-}
-
+//
+// A tool result can split one response across several messages that share
+// its message ID. Usage reporting keeps one snapshot per response and the
+// largest search count among them, so every message of the response carries
+// the response's total.
 func annotateClaudeWebSearchRequestsContext(
 	ctx context.Context, messages []ParsedMessage, counts map[string]int,
 ) error {
 	if len(counts) == 0 {
 		return ctx.Err()
 	}
+	// Count each search once per response, even when a later record of the
+	// response repeats an earlier tool call. A message without a message ID
+	// is its own response.
+	responseKeys := make([]string, len(messages))
+	responseTotals := make(map[string]int)
+	responseSearches := make(map[[2]string]struct{})
 	for i := range messages {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
 		msg := &messages[i]
-		if len(msg.TokenUsage) == 0 || len(msg.ToolCalls) == 0 {
-			continue
+		key := msg.ClaudeMessageID
+		if key == "" {
+			key = "\x00" + strconv.Itoa(i)
 		}
-		if usageWebSearchRequests(string(msg.TokenUsage)) > 0 {
-			continue
-		}
-		total := 0
+		responseKeys[i] = key
 		for _, tc := range msg.ToolCalls {
 			if err := ctx.Err(); err != nil {
 				return err
@@ -69,8 +67,26 @@ func annotateClaudeWebSearchRequestsContext(
 				tc.ToolUseID == "" {
 				continue
 			}
-			total += counts[tc.ToolUseID]
+			search := [2]string{key, tc.ToolUseID}
+			if _, seen := responseSearches[search]; seen {
+				continue
+			}
+			responseSearches[search] = struct{}{}
+			responseTotals[key] += counts[tc.ToolUseID]
 		}
+	}
+	for i := range messages {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		msg := &messages[i]
+		if len(msg.TokenUsage) == 0 {
+			continue
+		}
+		if usageWebSearchRequests(string(msg.TokenUsage)) > 0 {
+			continue
+		}
+		total := responseTotals[responseKeys[i]]
 		if total <= 0 {
 			continue
 		}
@@ -84,17 +100,10 @@ func annotateClaudeWebSearchRequestsContext(
 	return ctx.Err()
 }
 
-// collectClaudeWebSearchCounts maps a WebSearch tool_use id to the number of
+// collectClaudeWebSearchCountsContext maps a WebSearch tool_use id to the number of
 // searches its result reported. Records whose tool result cannot be
 // identified unambiguously are skipped rather than guessed at, and the first
 // count seen for an id wins so a redelivered line cannot inflate it.
-func collectClaudeWebSearchCounts(entries []dagEntry) map[string]int {
-	counts, _ := collectClaudeWebSearchCountsContext(
-		context.Background(), entries,
-	)
-	return counts
-}
-
 func collectClaudeWebSearchCountsContext(
 	ctx context.Context, entries []dagEntry,
 ) (map[string]int, error) {
@@ -132,22 +141,19 @@ func collectClaudeWebSearchCountsContext(
 	return counts, ctx.Err()
 }
 
-// needsClaudeFullParseForWebSearchCounts reports whether an appended search
-// result belongs to a tool call outside the appended batch. In that case the
-// stored assistant row must be replaced so its usage can receive the billed
-// search count.
-func needsClaudeFullParseForWebSearchCounts(entries []dagEntry) bool {
-	counts := collectClaudeWebSearchCounts(entries)
-	if len(counts) == 0 {
-		return false
+// needsClaudeFullParseForWebSearchCounts reports whether an appended batch
+// carries a billed search result. Its tool call may be stored already, and a
+// tool result can split one response so that earlier records of the response,
+// with their own searches, are stored too. Only a full parse sees the whole
+// response, so its stored rows can receive the response's search total.
+func needsClaudeFullParseForWebSearchCounts(
+	ctx context.Context, entries []dagEntry,
+) (bool, error) {
+	counts, err := collectClaudeWebSearchCountsContext(ctx, entries)
+	if err != nil {
+		return false, err
 	}
-	appendedToolUseIDs := claudeAppendedToolUseIDs(entries)
-	for toolUseID := range counts {
-		if _, ok := appendedToolUseIDs[toolUseID]; !ok {
-			return true
-		}
-	}
-	return false
+	return len(counts) > 0, nil
 }
 
 // singleClaudeToolResultIDContext returns the tool_use_id of a record's only

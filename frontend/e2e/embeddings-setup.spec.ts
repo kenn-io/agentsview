@@ -1,0 +1,40 @@
+import { expect, test } from "@playwright/test";
+
+test("separates the build error from generations by at least 16px", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 850 });
+  const setup = () => ({
+    enabled: true,
+    action: "",
+    provider: "built-in",
+    missing_bytes: 0,
+    installing: false,
+    busy: false,
+    downloaded_bytes: 0,
+    total_bytes: 0,
+  });
+  await page.route("**/api/v1/embeddings/status*", (route) =>
+    route.fulfill({
+      json: {
+        running: false,
+        done: 0,
+        total: 0,
+        setup: setup(),
+        last_error: "encoder unavailable",
+      },
+    }),
+  );
+  await page.route("**/api/v1/embeddings/generations*", (route) =>
+    route.fulfill({ json: { generations: [] } }),
+  );
+  const openEmbeddings = async () => {
+    await page.goto("/settings");
+    await page
+      .getByRole("navigation", { name: "Settings" })
+      .getByRole("button", { name: /^Embeddings/ })
+      .click();
+  };
+  await openEmbeddings();
+  const errorBox = (await page.getByRole("alert").boundingBox())!;
+  const generationsBox = (await page.locator(".embeddings-settings .subsection").boundingBox())!;
+  expect(generationsBox.y - errorBox.y - errorBox.height).toBeGreaterThanOrEqual(16);
+});

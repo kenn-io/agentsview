@@ -6,10 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -23,6 +21,7 @@ type UpdateConfig struct {
 }
 
 type updateDaemonStopResult struct {
+	Persistent       bool
 	Stopped          bool
 	Host             string
 	Port             int
@@ -35,14 +34,14 @@ type updateDaemonStopResult struct {
 func runUpdate(ctx context.Context, cfg UpdateConfig, out io.Writer) {
 	dataDir, err := config.ResolveDataDir()
 	if err != nil {
-		log.Fatalf("resolving data dir: %v", err)
+		fatal("resolving data dir: %v", err)
 	}
 
 	info, err := update.CheckForUpdate(ctx,
 		version, cfg.Force, dataDir,
 	)
 	if err != nil {
-		log.Fatalf("checking for updates: %v", err)
+		fatal("checking for updates: %v", err)
 	}
 
 	if info == nil {
@@ -68,7 +67,7 @@ func runUpdate(ctx context.Context, cfg UpdateConfig, out io.Writer) {
 				version, true, dataDir,
 			)
 			if err != nil {
-				log.Fatalf("checking for updates: %v", err)
+				fatal("checking for updates: %v", err)
 			}
 			if info == nil {
 				fmt.Fprintln(out, "Up to date.")
@@ -124,7 +123,7 @@ func runUpdate(ctx context.Context, cfg UpdateConfig, out io.Writer) {
 		restartDaemonAfterUpdate,
 	); err != nil {
 		fmt.Fprintln(out)
-		log.Fatal(err)
+		fatal("%v", err)
 	}
 }
 
@@ -230,6 +229,9 @@ func restartDaemonAfterUpdate(ctx context.Context,
 	}
 	cmd := exec.CommandContext(ctx, exe, restartDaemonAfterUpdateArgs(cfg, stopResult)...)
 	cmd.Env = append(os.Environ(), "AGENTSVIEW_DATA_DIR="+cfg.DataDir)
+	if stopResult.Persistent {
+		cmd.Env = append(cmd.Env, updateRestartPersistentEnvVar+"=true")
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("serve --background: %w: %s", err, strings.TrimSpace(string(out)))
@@ -246,11 +248,7 @@ func restartDaemonAfterUpdateArgs(
 	} else if shouldForceLoopbackUpdateRestartHost(cfg, stopResult) {
 		args = append(args, "--host", "127.0.0.1")
 	}
-	if stopResult.ExplicitPort != nil {
-		args = append(args, "--port", strconv.Itoa(*stopResult.ExplicitPort))
-	} else if stopResult.Port > 0 {
-		args = append(args, "--restart-port", strconv.Itoa(stopResult.Port))
-	}
+	args = append(args, serveHandoffPortArgs(stopResult.Port, stopResult.ExplicitPort)...)
 	if stopResult.RequireAuth ||
 		(!stopResult.RequireAuthKnown && cfg.RequireAuth) {
 		args = append(args, "--require-auth")

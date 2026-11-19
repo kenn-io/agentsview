@@ -14,6 +14,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   import { generatedErrorMessage, isRemoteConnection } from "../../api/runtime.js";
   import { SessionsService, type ResumeRequest, type ResumeResponse } from "../../api/generated/index";
   import ThinkingBlock from "./ThinkingBlock.svelte";
+  import DocbankMatches from "./DocbankMatches.svelte";
   import ToolBlock from "./ToolBlock.svelte";
   import ParallelGroup from "./ParallelGroup.svelte";
   import CodeBlock from "./CodeBlock.svelte";
@@ -73,7 +74,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     if (!s) return "user";
     const all = sessions.sessions;
     if (sessionAncestryMatches(s, all, (ancestor) => ancestor.relationship_type === "subagent")) return "subagent";
-    if (sessionAncestryMatches(s, all, (ancestor) => (ancestor.first_message ?? "").includes("<teammate-message"))) return "teammate";
+    if (sessionAncestryMatches(s, all, (ancestor) => (sessions.view(ancestor).first_message ?? "").includes("<teammate-message"))) return "teammate";
     return "user";
   });
   let roleLabel = $derived.by(() => {
@@ -117,22 +118,13 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   let accentForeground = $derived(isUser ? "var(--role-user-accent-foreground)" : "var(--role-assistant-accent-foreground)");
   let roleInk = $derived(isUser ? "var(--role-user-ink)" : "var(--role-assistant-ink)");
   let roleBg = $derived(isUser ? "var(--user-bg)" : "var(--assistant-bg)");
+  // Every layout draws the role rail at full strength, so the user/assistant
+  // distinction reads the same in Default, Compact, Stream, and Skim.
+  let railColor = $derived(isUser ? "var(--role-user-accent)" : "var(--role-assistant-accent)");
   let pinned = $derived(pins.isPinned(message.id));
   let pinFeedback = $state("");
   let pinFailed = $state(false);
   let forkFeedback = $state("");
-  let turnByMessage = $derived.by(() => {
-    const map = new Map<number, TurnTiming>();
-    for (const turn of sessionTiming.timing?.turns ?? []) map.set(turn.message_id, turn);
-    return map;
-  });
-  let callByToolUseID = $derived.by(() => {
-    const map = new Map<string, CallTiming>();
-    for (const turn of sessionTiming.timing?.turns ?? []) {
-      for (const call of turn.calls) map.set(call.tool_use_id, call);
-    }
-    return map;
-  });
   function soloDurationLabel(
     ct: CallTiming | undefined,
     turn: TurnTiming | undefined,
@@ -148,13 +140,13 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   }
   function isRunningTurn(msg: Message): boolean {
     if (!sessionTiming.timing?.running) return false;
-    const turn = turnByMessage.get(msg.id);
+    const turn = sessionTiming.index.turnByMessage.get(msg.id);
     return turn != null && turn.duration_ms == null;
   }
   let turnSummary = $derived.by(() => {
     if (isUser || !message.has_tool_use) return null;
     const calls = message.tool_calls?.length ?? 0;
-    const turn = turnByMessage.get(message.id);
+    const turn = sessionTiming.index.turnByMessage.get(message.id);
     if (turn?.duration_ms != null) {
       return { text: m.message_content_turn_summary({ duration: formatDuration(turn.duration_ms), count: calls }), slow: false, running: false };
     }
@@ -220,7 +212,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   }
 </script>
 
-<div class="message" class:is-user={isUser} class:compact style:border-left-color={accentColor} style:background={roleBg}>
+<div class="message" class:is-user={isUser} class:compact style:border-left-color={railColor} style:background={roleBg}>
   <div class="message-header">
     <span class="role-icon" style:background={accentColor} style:color={accentForeground}>{roleIcon}</span>
     <span class="role-label" style:color={roleInk}>{roleLabel}</span>
@@ -244,7 +236,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     <div class="header-meta">
       {#if tokenSummary}<span class="message-tokens">{tokenSummary}</span>{/if}
       {#if turnSummary}<span class="turn-summary" class:slow={turnSummary.slow} class:running={turnSummary.running}>{turnSummary.text}</span>{/if}
-      <span class="timestamp">{formatTimestamp(message.timestamp)}</span>
+      <span class="timestamp">{formatTimestamp(message.timestamp, ui.alwaysShowYear)}</span>
       {#if offMainModel}<span class="message-model" title={offMainModel}>{offMainModel}</span>{/if}
     </div>
   </div>
@@ -311,25 +303,26 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
         {/if}
       {/if}
     {/each}
+    <DocbankMatches sessionId={message.session_id} ordinal={message.ordinal} />
     {#if ui.isBlockVisible("tool")}
-      {@const turn = turnByMessage.get(message.id)}
+      {@const turn = sessionTiming.index.turnByMessage.get(message.id)}
       {@const structuredCalls = message.tool_calls ?? []}
       {#if structuredCalls.length === 1}
         {@const soloCall = structuredCalls[0]!}
-        <ToolBlock toolCall={soloCall} content="" label={displayToolName(soloCall)}
+        <ToolBlock sessionId={message.session_id} ordinal={message.ordinal} toolCall={soloCall} content="" label={displayToolName(soloCall)}
           durationLabel={soloDurationLabel(
-            callByToolUseID.get(soloCall.tool_use_id ?? ""),
+            sessionTiming.index.callByToolUseID.get(soloCall.tool_use_id ?? ""),
             turn,
             message,
           )}
           isRunning={isRunningTurn(message)}
           searchScope={activeSearchOrdinal === undefined ? undefined : { ordinal: activeSearchOrdinal, callIdx: 0 }} />
       {:else if structuredCalls.length >= 2}
-        <ParallelGroup toolCalls={structuredCalls} callTimingByID={callByToolUseID}
+        <ParallelGroup sessionId={message.session_id} ordinal={message.ordinal} toolCalls={structuredCalls} callTimingByID={sessionTiming.index.callByToolUseID}
           isRunning={isRunningTurn(message)} searchOrdinal={activeSearchOrdinal} />
       {:else}
         {#each segments.filter((s) => s.type === "tool") as seg, segIdx (`${message.id}-${segIdx}`)}
-          <ToolBlock content={seg.content} label={seg.label} toolCall={seg.toolCall}
+          <ToolBlock sessionId={message.session_id} ordinal={message.ordinal} content={seg.content} label={seg.label} toolCall={seg.toolCall}
             searchScope={activeSearchOrdinal === undefined ? undefined : { ordinal: activeSearchOrdinal, callIdx: `seg${segIdx}` }} />
         {/each}
       {/if}
@@ -340,30 +333,41 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
 <style>
   .message {
     border-left: var(--role-assistant-bar-width) var(--role-assistant-bar-style);
-    padding: 14px 20px; border-radius: 0 var(--radius-md) var(--radius-md) 0;
+    padding: 10px 16px 12px; border-radius: 0 var(--radius-md) var(--radius-md) 0;
   }
   .message.is-user { border-left: var(--role-user-bar-width) var(--role-user-bar-style); }
-  .message-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
-  .role-icon {
-    width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center;
-    justify-content: center; font-size: 11px; font-weight: 700; color: white; flex-shrink: 0; line-height: 1;
+  /* One rail per block: the card's role rail already marks this message,
+     so a tool row inside it drops its own amber rule and reads as a quiet
+     inset. Pattern mode keeps the dashed tool rail, which tells roles
+     apart by line shape. */
+  :global(:root:not([data-message-role-patterns])) .message :global(.tool-block:not(.in-group)) {
+    border-left: none;
   }
-  .role-label { font-size: 13px; font-weight: 600; letter-spacing: 0.01em; }
-  .timestamp { font-size: 12px; color: var(--text-muted); }
-  .header-meta { margin-left: auto; display: flex; align-items: center; gap: 8px; min-width: 0; }
-  .message-tokens { font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); white-space: nowrap; }
+  .message-header { display: flex; align-items: center; gap: 8px; min-height: 22px; margin-bottom: 6px; }
+  .role-icon {
+    width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center;
+    justify-content: center; font-size: 10px; font-weight: 700; color: white; flex-shrink: 0; line-height: 1;
+  }
+  .role-label { font-size: 12px; font-weight: 600; letter-spacing: 0; }
+  .timestamp { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .header-meta { margin-left: auto; display: flex; align-items: center; gap: 16px; min-width: 0; }
+  .message-tokens { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--text-secondary); white-space: nowrap; }
   .message-model {
     font-size: 10px; color: var(--text-muted); padding: 1px 4px; border-radius: 3px;
     background: var(--bg-tertiary); white-space: nowrap; flex-shrink: 0; opacity: 0.8;
   }
   .turn-summary {
-    font-family: var(--font-mono); font-size: 10px; color: var(--text-muted);
-    background: color-mix(in srgb, var(--text-primary) 4%, transparent); padding: 2px 8px;
-    border-radius: var(--radius-sm); border: 1px solid color-mix(in srgb, var(--text-primary) 4%, transparent);
+    font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums;
+    /* Plain metadata like the token count beside it: the header's 16px gap
+       separates the runs, so no outline makes it look like a button. Only
+       slow and running turns get a fill. */
+    padding: 0; border-radius: var(--radius-sm);
+    border: 1px solid transparent;
+    background: transparent; line-height: 18px;
     white-space: nowrap; flex-shrink: 0;
   }
-  .turn-summary.slow { color: var(--slow-fg); background: var(--slow-bg); border-color: var(--slow-ring); }
-  .turn-summary.running { color: var(--running-fg); background: var(--running-bg); border-color: var(--running-ring); animation: duration-pulse 1.6s ease-in-out infinite; }
+  .turn-summary.slow { color: var(--slow-fg); background: var(--slow-bg); border-color: var(--slow-ring); padding: 1px 6px; }
+  .turn-summary.running { color: var(--running-fg); background: var(--running-bg); border-color: var(--running-ring); padding: 1px 6px; animation: duration-pulse 1.6s ease-in-out infinite; }
   .message:hover :global(.kit-copy-btn) { opacity: 1; }
   .pin-btn {
     display: flex; align-items: center; justify-content: center; width: 26px; height: 26px;
@@ -380,6 +384,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   .pin-feedback[role="alert"] { animation: none; }
   @keyframes fade-in-out { 0% { opacity: 0; } 15% { opacity: 1; } 75% { opacity: 1; } 100% { opacity: 0; } }
   .text-content { font-size: 14px; line-height: 1.7; color: var(--text-primary); word-wrap: break-word; }
+  /* Prose fills its card; the transcript column sets the line length. */
   .code-fence-block {
     display: flex;
     flex-direction: column;
@@ -425,6 +430,9 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   .compact .message-header { gap: 6px; margin-bottom: 6px; }
   .compact .role-icon { width: 18px; height: 18px; font-size: 10px; }
   .compact .role-label { font-size: 11px; }
-  .compact .timestamp { font-size: 10px; }
+  .compact .timestamp,
+  .compact .message-tokens,
+  .compact .turn-summary { font-size: 11px; }
   .compact .text-content { font-size: 12px; line-height: 1.55; }
+
 </style>

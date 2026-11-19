@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"os"
@@ -40,7 +41,7 @@ func callParseClaudeSessionFrom(
 func callParseClaudeSessionFromWithLinks(
 	path string, offset int64, startOrdinal int, lastEntryUUID string,
 ) ([]ParsedMessage, []ClaudeSubagentLink, time.Time, int64, error) {
-	return claudeParseSessionFrom(path, offset, claudeIncrementalScan{
+	return claudeParseSessionFrom(context.Background(), path, offset, claudeIncrementalScan{
 		startOrdinal:  startOrdinal,
 		lastEntryUUID: lastEntryUUID,
 	})
@@ -239,7 +240,7 @@ func TestParseClaudeSession_SkippedMessages(t *testing.T) {
 		assert.Equal(t, 1, sess.MessageCount)
 		assert.Equal(t, "real question", sess.FirstMessage)
 		path := createTestFile(t, "meta.jsonl", content)
-		appended, _, _, _, err := claudeParseSessionFrom(path, 0, claudeIncrementalScan{})
+		appended, _, _, _, err := claudeParseSessionFrom(t.Context(), path, 0, claudeIncrementalScan{})
 		require.NoError(t, err)
 		require.Len(t, appended, 1)
 		assert.Equal(t, "real question", appended[0].Content)
@@ -1580,7 +1581,7 @@ func TestParseClaudeSessionFrom_LinearBoundSessionAcceptsChainBreaks(
 			require.NoError(t, err)
 			require.NoError(t, f.Close())
 
-			newMsgs, _, _, _, perr := claudeParseSessionFrom(
+			newMsgs, _, _, _, perr := claudeParseSessionFrom(t.Context(),
 				path, offset, claudeIncrementalScan{
 					startOrdinal:      1,
 					lastEntryUUID:     "stored-tip",
@@ -1824,7 +1825,7 @@ func mustJSONString(t *testing.T, value string) string {
 
 // Two appended assistant entries with the same message.id form a
 // streaming run. The incremental path merges the run exactly as the
-// full parser does (mergeClaudeAssistantMessageChunks) and stays
+// full parser does (mergeClaudeAssistantMessageChunksContext) and stays
 // incremental, producing one merged message. Runs that straddle a
 // sync boundary are caught by the engine's LastClaudeMessageID check
 // instead.
@@ -1924,7 +1925,7 @@ func TestParseClaudeSessionFrom_QueuedCommandBeforeContinuationFallsBack(
 		require.NoError(t, err)
 		require.NoError(t, f.Close())
 
-		msgs, _, _, _, perr := claudeParseSessionFrom(
+		msgs, _, _, _, perr := claudeParseSessionFrom(t.Context(),
 			path, offset, claudeIncrementalScan{
 				startOrdinal:              2,
 				lastEntryUUID:             "a1",
@@ -2085,7 +2086,7 @@ func TestParseClaudeSessionFrom_LinearBoundNewRootFallsBack(
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	_, _, _, _, perr := claudeParseSessionFrom(
+	_, _, _, _, perr := claudeParseSessionFrom(t.Context(),
 		path, offset, claudeIncrementalScan{
 			startOrdinal:      1,
 			lastEntryUUID:     "stored-tip",
@@ -2137,7 +2138,7 @@ func TestParseClaudeSessionFrom_UUIDLessAppendFallsBackForDAGSessions(
 			require.NoError(t, err)
 			require.NoError(t, f.Close())
 
-			msgs, _, _, _, perr := claudeParseSessionFrom(
+			msgs, _, _, _, perr := claudeParseSessionFrom(t.Context(),
 				path, offset, claudeIncrementalScan{
 					startOrdinal:      1,
 					lastEntryUUID:     "stored-tip",
@@ -2197,7 +2198,7 @@ func TestParseClaudeSessionFrom_RewindOntoFilteredEntryFallsBack(
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	_, _, _, _, perr := claudeParseSessionFrom(
+	_, _, _, _, perr := claudeParseSessionFrom(t.Context(),
 		path, offset, claudeIncrementalScan{
 			startOrdinal:      4,
 			lastEntryUUID:     "a2",
@@ -3284,4 +3285,25 @@ func TestParseClaudeSession_BlankThinkingKeepsUsage(t *testing.T) {
 		require.Len(t, msgs, 1)
 		assert.Equal(t, RoleUser, msgs[0].Role)
 	})
+}
+
+func TestParseClaudeSession_CountsOversizedAndInvalidLines(t *testing.T) {
+	if testing.Short() {
+		t.Skip("allocates a line larger than maxLineSize")
+	}
+	// The oversized record is valid JSON, so it would become a message if the
+	// reader returned it. It must instead be counted with the invalid line.
+	oversized := testjsonl.ClaudeUserJSON(strings.Repeat("x", maxLineSize+1), tsZeroS1)
+	content := testjsonl.ClaudeUserJSON("hello", tsZero) + "\n" +
+		oversized + "\n" +
+		"not valid json\n" +
+		testjsonl.ClaudeAssistantJSON("reply", "2024-01-01T00:00:02Z") + "\n"
+
+	sess, msgs := runClaudeParserTest(t, "", content)
+
+	assert.Equal(t, 2, sess.MalformedLines)
+	assert.False(t, sess.IsTruncated)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "hello", msgs[0].Content)
+	assert.Equal(t, "reply", msgs[1].Content)
 }

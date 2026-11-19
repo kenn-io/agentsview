@@ -1,8 +1,11 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { Chart, Layer, Rect, Text } from "layerchart";
   import { analytics } from "../../stores/analytics.svelte.js";
+  import PanelStatus from "./PanelStatus.svelte";
   import type { HeatmapMetric } from "../../stores/analytics.svelte.js";
   import { formatDateTime, getLocale, m } from "../../i18n/index.js";
+  import { heatmapLevelColor } from "./heatmapRamp.js";
 
   const MAX_CELL_SIZE = 16;
   const MAX_CELL_GAP = 2;
@@ -11,35 +14,11 @@
   const HEADER_HEIGHT = 16;
   const DAY_LABELS = ["", "Mon", "", "Wed", "", "Fri", ""];
 
-  const LEVEL_COLORS_LIGHT = [
-    "var(--bg-inset)",
-    "#9be9a8",
-    "#40c463",
-    "#30a14e",
-    "#216e39",
-  ];
-
-  const LEVEL_COLORS_DARK = [
-    "var(--bg-inset)",
-    "#0e4429",
-    "#006d32",
-    "#26a641",
-    "#39d353",
-  ];
-
   interface DayCell {
     date: string;
     value: number;
     level: number;
     dayOfWeek: number;
-  }
-
-  function levelColor(level: number): string {
-    const isDark = document.documentElement.classList.contains(
-      "dark",
-    );
-    const colors = isDark ? LEVEL_COLORS_DARK : LEVEL_COLORS_LIGHT;
-    return colors[level] ?? colors[0]!;
   }
 
   function metricLabel(metric: HeatmapMetric): string {
@@ -75,7 +54,7 @@
     tooltip = {
       x: rect.left + rect.width / 2,
       y: rect.top - 4,
-      text: `${label}: ${cell.value.toLocaleString(getLocale())} ${metricLabel(analytics.metric)}`,
+      text: `${label}: ${formatCount(cell.value)} ${metricLabel(analytics.metric)}`,
     };
   }
 
@@ -151,10 +130,6 @@
   const svgHeight = $derived(
     7 * cellStep + HEADER_HEIGHT + 4,
   );
-  const supportsOutputTokens = $derived(
-    analytics.summary?.total_output_tokens !== undefined &&
-      analytics.summary?.token_reporting_sessions !== undefined,
-  );
 </script>
 
 <div class="heatmap-container">
@@ -175,29 +150,23 @@
       >
         {m.analytics_metric_sessions()}
       </button>
-      {#if supportsOutputTokens}
-        <button
-          class="toggle-btn"
-          class:active={analytics.metric === "output_tokens"}
-          onclick={() => analytics.setMetric("output_tokens")}
-        >
-          {m.analytics_metric_output_tokens()}
-        </button>
-      {/if}
+      <button
+        class="toggle-btn"
+        class:active={analytics.metric === "output_tokens"}
+        onclick={() => analytics.setMetric("output_tokens")}
+      >
+        {m.analytics_metric_output_tokens()}
+      </button>
     </div>
   </div>
 
-  {#if analytics.errors.heatmap}
-    <div class="error">
-      {analytics.errors.heatmap}
-      <button
-        class="retry-btn"
-        onclick={() => analytics.fetchHeatmap()}
-      >
-        {m.shared_retry()}
-      </button>
-    </div>
-  {:else if grid.cols.length > 0}
+  <PanelStatus
+    hasData={analytics.heatmap !== null}
+    pending={analytics.querying.heatmap}
+    error={analytics.errors.heatmap}
+    onRetry={() => analytics.fetchHeatmap()}
+  />
+  {#if grid.cols.length > 0}
     {#if analytics.heatmap?.entries_from && analytics.heatmap.entries_from > analytics.from}
       <div class="clamp-note">{m.analytics_heatmap_showing_recent_year()}</div>
     {/if}
@@ -237,7 +206,7 @@
                 width={cellSize}
                 height={cellSize}
                 rx={2}
-                fill={levelColor(cell.level)}
+                fill={heatmapLevelColor(cell.level)}
                 class={`heatmap-cell${cell.value > 0 || analytics.selectedDate === cell.date ? " clickable" : ""}${analytics.selectedDate === cell.date ? " selected" : ""}`}
                 role="button"
                 tabindex={-1}
@@ -266,7 +235,7 @@
         <span>{tooltip.text}</span>
       </div>
     {/if}
-  {:else}
+  {:else if analytics.heatmap}
     <div class="empty">{m.shared_no_data_for_period()}</div>
   {/if}
 </div>
@@ -293,13 +262,16 @@
   .metric-toggle {
     display: flex;
     gap: 2px;
+    padding: 2px;
+    border-radius: var(--radius-md);
+    background: var(--bg-inset);
   }
 
   .toggle-btn {
     height: 22px;
     padding: 0 8px;
     border-radius: var(--radius-sm);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 500;
     color: var(--text-muted);
     cursor: pointer;
@@ -311,9 +283,12 @@
     color: var(--text-secondary);
   }
 
+  /* Shared selected-segment idiom (app.css): raised pill, medium weight. */
   .toggle-btn.active {
-    background: var(--bg-inset);
+    background: var(--selected-strong-bg);
+    box-shadow: var(--selected-strong-edge);
     color: var(--text-primary);
+    font-weight: var(--selected-strong-weight);
   }
 
   .heatmap-scroll {
@@ -329,8 +304,8 @@
 
   .heatmap-container :global(.day-label),
   .heatmap-container :global(.month-label) {
-    font-size: 9px;
-    fill: var(--text-muted);
+    font-size: 11px;
+    fill: var(--text-secondary);
     font-family: var(--font-sans);
   }
 
@@ -359,7 +334,7 @@
     padding: 4px 8px;
     background: var(--text-primary);
     color: var(--bg-primary);
-    font-size: 10px;
+    font-size: 11px;
     border-radius: var(--radius-sm);
     white-space: nowrap;
     pointer-events: none;
@@ -368,7 +343,7 @@
 
   .clamp-note {
     color: var(--text-muted);
-    font-size: 10px;
+    font-size: 11px;
     margin-bottom: 4px;
   }
 
@@ -377,23 +352,5 @@
     font-size: 12px;
     padding: 24px;
     text-align: center;
-  }
-
-  .error {
-    color: var(--accent-red);
-    font-size: 12px;
-    padding: 12px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .retry-btn {
-    padding: 2px 8px;
-    border: 1px solid currentColor;
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    color: inherit;
-    cursor: pointer;
   }
 </style>

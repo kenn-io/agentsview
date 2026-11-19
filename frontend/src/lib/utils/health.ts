@@ -1,5 +1,5 @@
 import { MetadataService } from "../api/generated/index.js";
-import { ApiError, isRemoteConnection } from "../api/runtime.js";
+import { ApiError, isAbortError, isRemoteConnection } from "../api/runtime.js";
 
 const DEBOUNCE_MS = 5_000;
 const TIMEOUT_MS = 3_000;
@@ -10,8 +10,8 @@ interface VisibilityHealthCheckOptions {
 
 /**
  * Set up a visibilitychange listener that pings the backend when the
- * page becomes visible. If the backend is unreachable (network error or
- * timeout), the page reloads automatically.
+ * page becomes visible. Network failures reload the page. Timeout aborts
+ * leave the page loaded because the backend's health is still unknown.
  *
  * 4xx responses (401/403) are treated as proof the backend is alive
  * and do not trigger a reload — auth recovery is handled elsewhere. The same
@@ -48,6 +48,7 @@ export function setupVisibilityHealthCheck(opts: VisibilityHealthCheckOptions = 
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
     MetadataService.getApiV1Version({ signal: controller.signal })
       .catch((error: unknown) => {
+        if (isAbortError(error)) return;
         if (error instanceof ApiError) {
           if (error.status >= 500) opts.onBackendDegraded?.(error.status);
           return;

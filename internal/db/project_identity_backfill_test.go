@@ -1,15 +1,102 @@
 package db
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/export"
 )
+
+func TestProjectIdentityBackfillFailureRecording(t *testing.T) {
+	for _, state := range []string{"pending", "not_needed", "completed"} {
+		t.Run(state, func(t *testing.T) {
+			d := testDB(t)
+			ctx := t.Context()
+			if state == "pending" {
+				require.NoError(t, d.UpsertSession(ctx, Session{ID: "missing", Project: "app", Machine: "local", Agent: "codex"}))
+				_, err := d.getWriter().ExecContext(ctx, `DELETE FROM session_project_identity_snapshots WHERE session_id = 'missing'`)
+				require.NoError(t, err)
+			}
+			if state == "completed" {
+				_, err := d.getWriter().ExecContext(ctx, `INSERT INTO background_migrations (name, state) VALUES (?, 'completed')`, ProjectIdentityBackfillName)
+				require.NoError(t, err)
+			}
+			require.NoError(t, d.FailProjectIdentityBackfill(ctx, errors.New("write failed")))
+			status, err := d.ProjectIdentityBackfillStatus(ctx)
+			require.NoError(t, err)
+			if state == "pending" {
+				assert.Equal(t, "failed", status.State)
+				assert.Equal(t, "write failed", status.LastError)
+			} else {
+				assert.Equal(t, state, status.State)
+			}
+		})
+	}
+	t.Run("read-only", func(t *testing.T) {
+		d := testDB(t)
+		reader, err := OpenReadOnly(t.Context(), d.Path())
+		require.NoError(t, err)
+		defer reader.Close()
+		require.ErrorIs(t, reader.FailProjectIdentityBackfill(t.Context(), errors.New("write failed")), ErrReadOnly)
+	})
+}
+
+func TestWritableOpenPreservesFailedProjectIdentityBackfill(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	require.NoError(t, d.UpsertSession(ctx, Session{ID: "complete", Project: "app", Machine: "local", Agent: "codex"}))
+	_, err := d.getWriter().ExecContext(ctx, `DELETE FROM session_project_identity_snapshots WHERE session_id = 'complete'`)
+	require.NoError(t, err)
+	_, err = d.getWriter().ExecContext(ctx, `INSERT INTO background_migrations (name, state, last_error) VALUES (?, 'failed', 'completion failed')`, ProjectIdentityBackfillName)
+	require.NoError(t, err)
+	path := d.Path()
+	require.NoError(t, d.Close())
+	d, err = Open(ctx, path)
+	require.NoError(t, err)
+	defer d.Close()
+	status, err := d.ProjectIdentityBackfillStatus(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "failed", status.State)
+	assert.Equal(t, "completion failed", status.LastError)
+}
+
+func TestPendingProjectIdentityStatusAndProgress(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	require.NoError(t, d.UpsertSession(ctx, Session{ID: "missing", Project: "app", Machine: "local", Agent: "codex"}))
+	_, err := d.getWriter().ExecContext(ctx, `DELETE FROM session_project_identity_snapshots WHERE session_id = 'missing'`)
+	require.NoError(t, err)
+	_, err = d.getWriter().ExecContext(ctx, `INSERT INTO background_migrations (name, state) VALUES (?, 'pending')`, ProjectIdentityBackfillName)
+	require.NoError(t, err)
+	status, err := d.ProjectIdentityBackfillStatus(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "pending", status.State)
+	assert.Equal(t, 1, status.TotalItems)
+	d.rawReader().SetMaxOpenConns(1)
+	conn, err := d.getReader().Conn(ctx)
+	require.NoError(t, err)
+	require.NoError(t, conn.Raw(func(raw any) error {
+		raw.(interface {
+			RegisterAuthorizer(func(int, string, string, string) int)
+		}).RegisterAuthorizer(func(op int, table, _, _ string) int {
+			if op == sqlite3.SQLITE_READ && table == "sessions" {
+				return sqlite3.SQLITE_DENY
+			}
+			return sqlite3.SQLITE_OK
+		})
+		return nil
+	}))
+	require.NoError(t, conn.Close())
+	status, err = d.ProjectIdentityBackfillProgress(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "pending", status.State)
+}
 
 func TestEnsureProjectIdentityBackfillRequeuesUnverifiedCompletedGap(
 	t *testing.T,
@@ -127,10 +214,10 @@ func TestResyncOrphanCopyLeavesLegacySnapshotGapEligibleForBackfill(
 		Cwd: "/fresh/app",
 	}))
 
-	copied, err := destination.CopyOrphanedDataFrom(sourcePath)
+	copied, err := destination.CopyOrphanedDataFrom(t.Context(), sourcePath)
 	require.NoError(t, err)
 	assert.Equal(t, 2, copied)
-	require.NoError(t, destination.CopySessionMetadataFrom(sourcePath))
+	require.NoError(t, destination.CopySessionMetadataFrom(t.Context(), sourcePath))
 
 	snapshots, err := destination.listSessionProjectIdentitySnapshots(
 		ctx, []string{"known-orphan", "legacy-orphan", "live"},
@@ -193,10 +280,10 @@ func TestVersion76ResyncRejectsLegacyProjectIdentitySnapshots(t *testing.T) {
 			ObservedAt: time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC),
 		}))
 
-	copied, err := destination.CopyOrphanedDataFrom(sourcePath)
+	copied, err := destination.CopyOrphanedDataFrom(t.Context(), sourcePath)
 	require.NoError(t, err)
 	assert.Equal(t, 1, copied)
-	require.NoError(t, destination.CopySessionMetadataFrom(sourcePath))
+	require.NoError(t, destination.CopySessionMetadataFrom(t.Context(), sourcePath))
 
 	snapshots, err := destination.listSessionProjectIdentitySnapshots(
 		ctx, []string{"live", "orphan"},
@@ -233,10 +320,10 @@ func TestResyncTrashedCopyLeavesLegacySnapshotGapEligibleForBackfill(
 	require.NoError(t, source.Close())
 
 	destination := testDB(t)
-	copied, err := destination.CopyTrashedDataFrom(sourcePath)
+	copied, err := destination.CopyTrashedDataFrom(t.Context(), sourcePath)
 	require.NoError(t, err)
 	assert.Len(t, copied, 1)
-	require.NoError(t, destination.CopySessionMetadataFrom(sourcePath))
+	require.NoError(t, destination.CopySessionMetadataFrom(t.Context(), sourcePath))
 
 	snapshots, err := destination.listSessionProjectIdentitySnapshots(
 		ctx, []string{"legacy-trashed"},

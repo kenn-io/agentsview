@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vite-plus/test";
 import type { Session } from "../../api/types.js";
-import { buildSessionGroups, type SessionGroup } from "../../stores/sessions.svelte.js";
+import { buildSessionGroups, type SessionGroup } from "../../stores/sessionGroups.js";
 import {
   ITEM_HEIGHT,
   HEADER_HEIGHT,
@@ -10,7 +10,7 @@ import {
   buildDisplayItems,
   computeTotalSize,
   findStart,
-  isSubagentDescendant,
+  subagentDescendantMatcher,
   selectPrimaryId,
 } from "./session-list-utils.js";
 import type { DisplayItem } from "./session-list-utils.js";
@@ -68,7 +68,6 @@ function makeGroup(agent: string, sessionCount = 1, idPrefix?: string): SessionG
     sessions,
     primarySessionId: sessions[0]!.id,
     totalMessages: sessions.reduce((s, x) => s + x.message_count, 0),
-    firstMessage: sessions[0]!.first_message,
     startedAt: sessions[0]!.started_at,
     endedAt: sessions[sessions.length - 1]!.ended_at,
   };
@@ -126,7 +125,6 @@ describe("buildGroupSections", () => {
       sessions: [session],
       primarySessionId: "primary-1",
       totalMessages: 10,
-      firstMessage: "hi",
       startedAt: "2025-01-01T00:00:00Z",
       endedAt: "2025-01-01T01:00:00Z",
     };
@@ -143,7 +141,6 @@ describe("buildGroupSections", () => {
       sessions: [],
       primarySessionId: "nonexistent",
       totalMessages: 0,
-      firstMessage: null,
       startedAt: null,
       endedAt: null,
     };
@@ -189,6 +186,17 @@ describe("buildDisplayItems (ungrouped)", () => {
       expect(items[i]!.top).toBe(i * ITEM_HEIGHT);
       expect(items[i]!.height).toBe(ITEM_HEIGHT);
     }
+  });
+
+  it("reserves room for timestamps when years are shown", () => {
+    const groups = [makeGroup("claude", 2, "a"), makeGroup("gpt", 1, "b")];
+    const expanded = new Set(["a-session-0"]);
+    const items = buildDisplayItems(groups, [], "none", new Set(), expanded, true);
+    expect(items.map((item) => [item.top, item.height])).toEqual([
+      [0, 56],
+      [56, 50],
+      [106, 56],
+    ]);
   });
 
   it("attaches correct group reference", () => {
@@ -354,7 +362,6 @@ describe("adjacentVisibleSessionId", () => {
       sessions: [root, child],
       primarySessionId: root.id,
       totalMessages: root.message_count + child.message_count,
-      firstMessage: root.first_message,
       startedAt: root.started_at,
       endedAt: child.ended_at,
     };
@@ -394,7 +401,6 @@ describe("adjacentVisibleSessionId", () => {
       sessions: [root, continuation, hidden],
       primarySessionId: root.id,
       totalMessages: 30,
-      firstMessage: root.first_message,
       startedAt: root.started_at,
       endedAt: hidden.ended_at,
     };
@@ -612,7 +618,6 @@ describe("starred-only session count", () => {
       allSessions: fullSessions, // full list for ancestry
       primarySessionId: "root",
       totalMessages: 30,
-      firstMessage: "hi",
       startedAt: "2025-01-01T00:00:00Z",
       endedAt: "2025-01-01T01:00:00Z",
     };
@@ -631,6 +636,64 @@ describe("starred-only session count", () => {
     const contItem = items.find((i) => i.session?.id === "cont");
     expect(contItem).toBeDefined();
     expect(contItem!.depth).toBe(2);
+  });
+});
+
+describe("ancestry classification across a group", () => {
+  it("keeps continuations, subagent descendants, and teammate descendants in their sections", () => {
+    const chain = Array.from({ length: 100 }, (_, i) =>
+      makeSession({
+        id: `session-${i}`,
+        parent_session_id: i ? `session-${i - 1}` : undefined,
+        relationship_type: i === 50 ? "subagent" : i ? "continuation" : undefined,
+      }),
+    );
+    const teammate = makeSession({
+      id: "teammate",
+      parent_session_id: "session-0",
+      first_message: "<teammate-message>hello</teammate-message>",
+    });
+    const continuation = makeSession({
+      id: "team-continuation",
+      parent_session_id: "teammate",
+      relationship_type: "continuation",
+    });
+    const groups = buildSessionGroups([...chain, teammate, continuation]);
+    const items = buildDisplayItems(groups, [], "none", new Set(), new Set(["session-0"]));
+    expect(items.filter((item) => item.isChild).map((item) => item.session?.id)).toEqual(
+      chain.slice(1, 50).map((session) => session.id),
+    );
+    expect(items.filter((item) => item.isChild).every((item) => item.depth === 1)).toBe(true);
+    expect(items.find((item) => item.type === "subagent-group")?.memberSessionIds).toEqual(
+      chain.slice(50).map((session) => session.id),
+    );
+    expect(items.find((item) => item.type === "team-group")?.memberSessionIds).toEqual([
+      "teammate",
+      "team-continuation",
+    ]);
+  });
+
+  it("classifies a shared child using each group's own ancestry pool", () => {
+    const a = makeSession({ id: "a", relationship_type: "subagent" });
+    const b = makeSession({ id: "b" });
+    const child = makeSession({ id: "shared", parent_session_ids: ["a", "b"] });
+    const groups = [a, b].map((root) => ({
+      ...makeGroup("claude"),
+      key: root.id,
+      primarySessionId: root.id,
+      sessions: [root, child],
+    }));
+    const items = buildDisplayItems(groups, [], "none", new Set(), new Set(["a", "b"]));
+    expect(
+      items
+        .filter((item) => item.type === "subagent-group")
+        .map((item) => [item.group?.key, item.memberSessionIds]),
+    ).toEqual([["a", ["shared"]]]);
+    expect(
+      items
+        .filter((item) => item.isChild)
+        .map((item) => [item.group?.key, item.session?.id, item.depth]),
+    ).toEqual([["b", "shared", 1]]);
   });
 });
 
@@ -693,7 +756,6 @@ describe("child classification precedence", () => {
       sessions: [root, teammate, subagent],
       primarySessionId: "root",
       totalMessages: 30,
-      firstMessage: "hi",
       startedAt: "2025-01-01T00:00:00Z",
       endedAt: "2025-01-01T01:00:00Z",
     };
@@ -752,7 +814,6 @@ describe("child classification precedence", () => {
       sessions: [root, sub1, sub2, sub3],
       primarySessionId: "root",
       totalMessages: 40,
-      firstMessage: "hi",
       startedAt: "2025-01-01T00:00:00Z",
       endedAt: "2025-01-03T01:00:00Z",
     };
@@ -768,7 +829,7 @@ describe("child classification precedence", () => {
     expect(childItems[2]!.session!.id).toBe("sub-old");
   });
 
-  it("isSubagentDescendant returns true for child of subagent", () => {
+  it("subagentDescendantMatcher returns true for child of subagent", () => {
     const subagent = makeSession({
       id: "sub",
       relationship_type: "subagent",
@@ -777,7 +838,7 @@ describe("child classification precedence", () => {
       id: "child",
       parent_session_id: "sub",
     });
-    expect(isSubagentDescendant(child, [subagent, child])).toBe(true);
+    expect(subagentDescendantMatcher([subagent, child])(child)).toBe(true);
   });
 });
 

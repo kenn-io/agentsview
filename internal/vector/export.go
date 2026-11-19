@@ -73,7 +73,7 @@ func (ix *Index) BeginExport(ctx context.Context, scope []string) (*Export, bool
 	if found && value == gen.Fingerprint {
 		return nil, false, fmt.Errorf("%w: active generation %q is being rebuilt in place", ErrExportNotReady, gen.Fingerprint)
 	}
-	snap, err := ix.store.Snapshot(ctx, gen.Fingerprint)
+	snap, err := ix.readStore.Snapshot(ctx, gen.Fingerprint)
 	if err != nil {
 		return nil, false, fmt.Errorf("begin export snapshot: %w", err)
 	}

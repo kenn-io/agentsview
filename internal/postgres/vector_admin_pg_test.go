@@ -18,7 +18,7 @@ func pushAdminGeneration(
 	t *testing.T, sync *Sync, fake *fakeVectorSource, fingerprint string,
 ) int64 {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := sync.Push(ctx, false, nil)
 	require.NoError(t, err, "push "+fingerprint)
 	id, _, ok, err := LookupVectorGeneration(ctx, sync.pg, fingerprint)
@@ -34,10 +34,9 @@ func pushAdminGeneration(
 // generation rows, keeps the shared doc (genB still references it), prunes the
 // genA-only doc, and that dropping a nonexistent id errors clearly.
 func TestListAndDropVectorGenerations(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_admin_test")
-	ctx := context.Background()
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "X")
 	seedVectorSession(t, localDB, "Y")
@@ -130,19 +129,20 @@ func TestListAndDropVectorGenerations(t *testing.T) {
 // where the vector_generations table never existed (pgvector never installed,
 // SQLSTATE 42P01): the list is empty and no error surfaces.
 func TestListVectorGenerationsMissingTable(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	schema := "agentsview_vector_admin_missing_test"
-	pg, err := Open(pgURL, schema, true)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	t.Cleanup(func() { _ = pg.Close() })
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err = pg.ExecContext(ctx, `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
 	require.NoError(t, err, "drop schema")
 	_, err = pg.ExecContext(ctx, `CREATE SCHEMA `+schema)
 	require.NoError(t, err, "create schema")
 	t.Cleanup(func() {
-		_, _ = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
+		_, _ = pg.ExecContext(context.WithoutCancel(t.Context()), `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
 	})
 
 	gens, err := ListVectorGenerations(ctx, pg)
@@ -156,10 +156,9 @@ func TestListVectorGenerationsMissingTable(t *testing.T) {
 // different generation. deleteOrphanVectorDocs must reference only chunk tables
 // that still exist.
 func TestVectorPushToleratesMissingChunkTable(t *testing.T) {
-	pgURL := testPGURL(t)
-	sync, localDB, pg := newVectorPushTestSync(
-		t, pgURL, "agentsview_vector_admin_dangling_test")
-	ctx := context.Background()
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
+	ctx := t.Context()
 
 	seedVectorSession(t, localDB, "S")
 

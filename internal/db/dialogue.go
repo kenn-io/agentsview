@@ -21,8 +21,20 @@ func refreshDialogueFTS(ctx context.Context, w *writerHandle, progress OpenProgr
 	if err == nil {
 		stored, parseErr := strconv.Atoi(version)
 		current, _ := strconv.Atoi(searchCorpusVersion)
-		if parseErr == nil && stored >= current {
+		if parseErr == nil && stored > current {
 			return nil
+		}
+		if parseErr == nil && stored == current {
+			// Upgrade trigger behavior without rebuilding an already-current index.
+			tx, err := w.BeginTx(ctx, nil)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = tx.Rollback() }()
+			if _, err := tx.ExecContext(ctx, "DROP TRIGGER IF EXISTS messages_au; DROP VIEW IF EXISTS message_search_content;"+schemaFTS); err != nil {
+				return fmt.Errorf("refreshing message update FTS trigger: %w", err)
+			}
+			return tx.Commit()
 		}
 	}
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -40,6 +52,7 @@ func rebuildMessageFTS(ctx context.Context, w *writerHandle, progress OpenProgre
 	progress.report("Updating full-text search")
 	for _, query := range []string{
 		"DROP TRIGGER IF EXISTS messages_ai", "DROP TRIGGER IF EXISTS messages_ad", "DROP TRIGGER IF EXISTS messages_au",
+		"DROP TRIGGER IF EXISTS image_text_ai", "DROP TRIGGER IF EXISTS image_text_ad", "DROP TRIGGER IF EXISTS image_text_au",
 		"DROP TABLE IF EXISTS messages_fts", "DROP VIEW IF EXISTS message_search_content", schemaFTS,
 		"INSERT INTO messages_fts(messages_fts) VALUES('rebuild')",
 	} {

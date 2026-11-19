@@ -17,11 +17,13 @@ const vectorSchemaTestSchema = "agentsview_vector_schema_test"
 
 func cleanVectorSchemaTestPG(t *testing.T, pgURL string) {
 	t.Helper()
+	// Also called from t.Cleanup, where t.Context() is already canceled.
+	ctx := context.WithoutCancel(t.Context())
 	pg, err := sql.Open("pgx", pgURL)
 	require.NoError(t, err, "connecting to pg")
 	defer pg.Close()
-	_, _ = pg.Exec(
-		"DROP SCHEMA IF EXISTS " + vectorSchemaTestSchema + " CASCADE",
+	_, _ = pg.ExecContext(ctx,
+		"DROP SCHEMA IF EXISTS "+vectorSchemaTestSchema+" CASCADE",
 	)
 }
 
@@ -31,15 +33,15 @@ func cleanVectorSchemaTestPG(t *testing.T, pgURL string) {
 // ensureVectorGeneration, ensureVectorChunkTable, and
 // LookupVectorGeneration.
 func TestEnsureVectorBaseSchema(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanVectorSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanVectorSchemaTestPG(t, pgURL) })
 
-	pg, err := Open(pgURL, vectorSchemaTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, vectorSchemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
 	defer pg.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// EnsureSchema creates the schema itself (Open only sets search_path;
 	// it does not create the target schema), and also exercises the
@@ -82,15 +84,14 @@ func TestEnsureVectorBaseSchema(t *testing.T) {
 // reports the table absent, so serve degrades to unavailable instead of
 // wiring a searcher that fails every query with a missing-relation error.
 func TestVectorChunkTableExists(t *testing.T) {
-	pgURL := testPGURL(t)
-	cleanVectorSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanVectorSchemaTestPG(t, pgURL) })
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, vectorSchemaTestSchema)
 
-	pg, err := Open(pgURL, vectorSchemaTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, vectorSchemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
 	defer pg.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, vectorSchemaTestSchema))
 	unavailable, err := ensureVectorBaseSchemaPG(ctx, pg)
 	require.NoError(t, err)
@@ -117,15 +118,15 @@ func TestVectorChunkTableExists(t *testing.T) {
 // ListVectorGenerationInfo returns empty, both without error, so pg
 // serve records a "semantic unavailable" reason instead of aborting startup.
 func TestVectorGenerationLookupTolerateMissingTable(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanVectorSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanVectorSchemaTestPG(t, pgURL) })
 
-	pg, err := Open(pgURL, vectorSchemaTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, vectorSchemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
 	defer pg.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	// Create the schema but deliberately do not install the vector tables,
 	// so vector_generations does not exist (SQLSTATE 42P01 on query).
 	_, err = pg.ExecContext(ctx,
@@ -147,15 +148,14 @@ func TestVectorGenerationLookupTolerateMissingTable(t *testing.T) {
 // (oldest generation first), the order the serve startup notice lists the
 // generations PG already has, with their model and dimension.
 func TestListVectorGenerationInfo(t *testing.T) {
-	pgURL := testPGURL(t)
-	cleanVectorSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanVectorSchemaTestPG(t, pgURL) })
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, vectorSchemaTestSchema)
 
-	pg, err := Open(pgURL, vectorSchemaTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, vectorSchemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
 	defer pg.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, vectorSchemaTestSchema))
 	unavailable, err := ensureVectorBaseSchemaPG(ctx, pg)
 	require.NoError(t, err)
@@ -181,7 +181,7 @@ func TestListVectorGenerationInfo(t *testing.T) {
 func tableExistsPG(t *testing.T, pg *sql.DB, table string) bool {
 	t.Helper()
 	var one int
-	err := pg.QueryRow(
+	err := pg.QueryRowContext(t.Context(),
 		`SELECT 1 FROM information_schema.tables
 		 WHERE table_schema = current_schema() AND table_name = $1`, table,
 	).Scan(&one)
@@ -198,15 +198,15 @@ func tableExistsPG(t *testing.T, pg *sql.DB, table string) bool {
 // post-upgrade pg push must still create them via the fast path's best-effort
 // vector setup, otherwise semantic search never becomes available.
 func TestEnsureSchemaFastPathCreatesVectorTables(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanVectorSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanVectorSchemaTestPG(t, pgURL) })
 
-	pg, err := Open(pgURL, vectorSchemaTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, vectorSchemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
 	defer pg.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, vectorSchemaTestSchema))
 
 	if available, err := VectorExtensionAvailable(ctx, pg); err != nil {
@@ -248,15 +248,15 @@ func TestEnsureSchemaFastPathCreatesVectorTables(t *testing.T) {
 // pgvector the gate degrades to a reason instead of an error, which is what
 // keeps an old or missing extension from hard-failing `pg push`.
 func TestVectorHalfvecGate(t *testing.T) {
+	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanVectorSchemaTestPG(t, pgURL)
-	t.Cleanup(func() { cleanVectorSchemaTestPG(t, pgURL) })
 
-	pg, err := Open(pgURL, vectorSchemaTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, vectorSchemaTestSchema, true)
 	require.NoError(t, err, "connecting to pg")
 	defer pg.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, vectorSchemaTestSchema))
 
 	unavailable, err := ensureVectorBaseSchemaPG(ctx, pg)

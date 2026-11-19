@@ -46,9 +46,8 @@ func (s *Analytics) models(ctx context.Context, ids []string) ([]string, error) 
 		return []string{}, nil
 	}
 	models := map[string]bool{}
-	err := db.QueryChunkedSize(ids, MaxSQLVars, func(chunk []string) error {
-		query, args := analyticsModelsSQL(chunk)
-		rows, err := s.backend.QueryContext(ctx, query, args...)
+	err := s.backend.VisitSessionIDSets(ctx, ids, func(ctx context.Context, idSet string, args []any) error {
+		rows, err := s.backend.QueryContext(ctx, analyticsModelsSQL(idSet), args...)
 		if err != nil {
 			return fmt.Errorf("querying %s analytics models: %w", s.name, err)
 		}
@@ -86,9 +85,8 @@ func (s *Analytics) filteredModels(ctx context.Context, ids []string, f db.Analy
 			models[model] = true
 		}
 	}
-	err := db.QueryChunkedSize(unique, MaxSQLVars, func(chunk []string) error {
-		query, args := analyticsModelTimesSQL(chunk)
-		rows, err := s.backend.QueryContext(ctx, query, args...)
+	err := s.backend.VisitSessionIDSets(ctx, unique, func(ctx context.Context, idSet string, args []any) error {
+		rows, err := s.backend.QueryContext(ctx, analyticsModelTimesSQL(idSet), args...)
 		if err != nil {
 			return fmt.Errorf("querying %s filtered analytics models: %w", s.name, err)
 		}
@@ -116,8 +114,8 @@ func (s *Analytics) filteredToolCounts(ctx context.Context, ids []string, f db.A
 			counts[id] += count
 		}
 	}
-	err := db.QueryChunkedSize(ids, MaxSQLVars, func(chunk []string) error {
-		query, args := s.backend.ToolCountsSQL(chunk)
+	err := s.backend.VisitSessionIDSets(ctx, ids, func(ctx context.Context, idSet string, args []any) error {
+		query, args := s.backend.ToolCountsSQL(idSet, args)
 		rows, err := s.backend.QueryContext(ctx, query, args...)
 		if err != nil {
 			return fmt.Errorf("querying %s filtered analytics tool calls: %w", s.name, err)

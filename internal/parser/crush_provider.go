@@ -532,7 +532,7 @@ func crushSessionFingerprint(
 	ctx context.Context, dbPath, sessionID string, stableSnapshot bool,
 	childCache *crushChildRelationshipsCache,
 ) (string, bool, error) {
-	db, err := openCrushDB(dbPath, stableSnapshot)
+	db, err := openCrushDB(ctx, dbPath, stableSnapshot)
 	if err != nil {
 		return "", false, err
 	}
@@ -712,9 +712,9 @@ func crushCursorSchema(
 		return 0, nil, fmt.Errorf("inspecting crush messages columns: %w", err)
 	}
 	messageIdentity := "session_id || char(31) || COALESCE(role, '') || char(31) || " +
-		"CAST(COALESCE(created_at, 0) AS TEXT)"
+		"COALESCE(created_at, 0)"
 	if columns["finished_at"] {
-		messageIdentity += " || char(31) || COALESCE(CAST(finished_at AS TEXT), '')"
+		messageIdentity += " || char(31) || COALESCE(finished_at, '')"
 	}
 	return version, []sqliteCursorTable{
 		{

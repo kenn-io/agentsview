@@ -123,6 +123,13 @@ async function flush() {
   await tick();
 }
 
+// Fake only the editors' preview debounce. jsdom drives animation frames and
+// focus fixup from one shared setInterval; faking setInterval strands that loop
+// on the fake clock, and every later requestAnimationFrame in the file hangs.
+function useFakeDebounceTimers() {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((done) => {
@@ -185,7 +192,7 @@ describe("DataPage", () => {
 
     const inventory = makeInventory([makeRow({ project_key: "k1" })]);
     api.getApiV1DataProjects.mockResolvedValueOnce(inventory);
-    const retryBtn = document.querySelector<HTMLButtonElement>(".retry-btn");
+    const retryBtn = document.querySelector<HTMLButtonElement>('[role="alert"] button');
     expect(retryBtn).not.toBeNull();
     retryBtn?.click();
     await tick();
@@ -320,7 +327,7 @@ describe("DataPage", () => {
   };
 
   async function applyReclassification() {
-    vi.useFakeTimers();
+    useFakeDebounceTimers();
     const inventory = makeInventory([
       makeRow({ project_key: "k1", label: "wrong-project", sessions: 3 }),
       makeRow({ project_key: "k2", label: "target-project", sessions: 12 }),
@@ -337,7 +344,7 @@ describe("DataPage", () => {
     await flush();
 
     await fireEvent.click(screen.getByTitle("Project"));
-    await fireEvent.mouseDown(screen.getByRole("option", { name: "target-project (12)" }));
+    await fireEvent.mouseDown(screen.getByRole("option", { name: "target-project 12" }));
     await vi.advanceTimersByTimeAsync(300);
     await flush();
     await fireEvent.click(screen.getByRole("button", { name: "Save correction" }));
@@ -363,7 +370,7 @@ describe("DataPage", () => {
   });
 
   it("keeps a mid-apply dismissal dismissed when the deferred apply refresh lands", async () => {
-    vi.useFakeTimers();
+    useFakeDebounceTimers();
     const before = makeInventory([
       makeRow({ project_key: "k1", label: "wrong-project", sessions: 3 }),
       makeRow({ project_key: "k2", label: "target-project", sessions: 12 }),
@@ -383,7 +390,7 @@ describe("DataPage", () => {
     await flush();
 
     await fireEvent.click(screen.getByTitle("Project"));
-    await fireEvent.mouseDown(screen.getByRole("option", { name: "target-project (12)" }));
+    await fireEvent.mouseDown(screen.getByRole("option", { name: "target-project 12" }));
     await vi.advanceTimersByTimeAsync(300);
     await flush();
     await fireEvent.click(screen.getByRole("button", { name: "Save correction" }));

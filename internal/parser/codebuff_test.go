@@ -80,7 +80,7 @@ func TestParseCodebuffSession_BasicUserAndAIMessages(t *testing.T) {
 	chatMeta := `{"messageCount": 2, "firstPrompt": "Fix the login bug", "messagesSize": 1024}`
 
 	dir := codebuffTestSession(t, chatMessages, runState, chatMeta)
-	sess, msgs, _, err := parseCodebuffSession(dir, "myproject", "local")
+	sess, msgs, _, err := parseCodebuffSession(t.Context(), dir, "myproject", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -121,7 +121,7 @@ func TestParseCodebuffSession_FreebuffClassification(t *testing.T) {
 	}`
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
-	sess, _, _, err := parseCodebuffSession(dir, "testproject", "local")
+	sess, _, _, err := parseCodebuffSession(t.Context(), dir, "testproject", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -156,7 +156,7 @@ func TestParseCodebuffSession_Timestamps(t *testing.T) {
 	}`
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
-	sess, _, _, err := parseCodebuffSession(dir, "p", "local")
+	sess, _, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -192,7 +192,7 @@ func TestParseCodebuffSession_ToolCalls(t *testing.T) {
 	}`
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
-	_, msgs, _, err := parseCodebuffSession(dir, "p", "local")
+	_, msgs, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 	require.NoError(t, err)
 
 	// AI message with tool call + tool result = 2 messages.
@@ -243,7 +243,7 @@ func TestParseCodebuffSession_SubagentToolCall(t *testing.T) {
 	}`
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
-	_, msgs, _, err := parseCodebuffSession(dir, "p", "local")
+	_, msgs, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 	require.NoError(t, err)
 
 	var toolCallMsg *ParsedMessage
@@ -312,7 +312,7 @@ func TestParseCodebuffSession_SubagentToolCallDefaultStatus(t *testing.T) {
 	}`
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
-	_, msgs, _, err := parseCodebuffSession(dir, "p", "local")
+	_, msgs, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 	require.NoError(t, err)
 
 	var toolCallMsg *ParsedMessage
@@ -365,7 +365,7 @@ func TestParseCodebuffSession_ThinkingBlocks(t *testing.T) {
 	}`
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
-	_, msgs, _, err := parseCodebuffSession(dir, "p", "local")
+	_, msgs, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 	require.NoError(t, err)
 
 	var thinkingMsg *ParsedMessage
@@ -411,7 +411,7 @@ func TestParseCodebuffSession_ModeDivider(t *testing.T) {
 	}`
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
-	_, msgs, _, err := parseCodebuffSession(dir, "p", "local")
+	_, msgs, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 	require.NoError(t, err)
 
 	var sysMsg *ParsedMessage
@@ -437,7 +437,7 @@ func TestParseCodebuffSession_EmptyMessages(t *testing.T) {
 	}`
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
-	sess, msgs, _, err := parseCodebuffSession(dir, "p", "local")
+	sess, msgs, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -456,7 +456,7 @@ func TestParseCodebuffSession_MissingRunState(t *testing.T) {
 	]`
 
 	dir := codebuffTestSession(t, chatMessages, "", "")
-	sess, _, _, err := parseCodebuffSession(dir, "p", "local")
+	sess, _, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -481,7 +481,7 @@ func TestParseCodebuffSessionFromChatMeta(t *testing.T) {
 	}`
 
 	dir := codebuffTestSession(t, chatMessages, runState, chatMeta)
-	sess, _, _, err := parseCodebuffSession(dir, "p", "local")
+	sess, _, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -518,7 +518,7 @@ func TestParseCodebuffSessionFromTranscriptLeavesCountsNonAuthoritative(
 	}`
 
 	dir := codebuffTestSession(t, chatMessages, runState, `{}`)
-	sess, _, _, err := parseCodebuffSession(dir, "p", "local")
+	sess, _, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -547,7 +547,7 @@ func TestParseCodebuffSessionEmptyChatMetaLeavesCountsNonAuthoritative(
 	}`
 
 	dir := codebuffTestSession(t, chatMessages, runState, `{}`)
-	sess, _, _, err := parseCodebuffSession(dir, "p", "local")
+	sess, _, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -575,7 +575,7 @@ func TestParseCodebuffSessionGitBranch(t *testing.T) {
 			}
 		}`
 		dir := codebuffTestSession(t, chatMessages, runState, "")
-		sess, _, _, err := parseCodebuffSession(dir, "proj", "local")
+		sess, _, _, err := parseCodebuffSession(t.Context(), dir, "proj", "local")
 		require.NoError(t, err)
 		require.NotNil(t, sess)
 		assert.Equal(t, "feat/agent-view", sess.GitBranch)
@@ -588,7 +588,7 @@ func TestParseCodebuffSessionGitBranch(t *testing.T) {
 			}
 		}`
 		dir := codebuffTestSession(t, chatMessages, runState, "")
-		sess, _, _, err := parseCodebuffSession(dir, "proj", "local")
+		sess, _, _, err := parseCodebuffSession(t.Context(), dir, "proj", "local")
 		require.NoError(t, err)
 		require.NotNil(t, sess)
 		assert.Empty(t, sess.GitBranch)
@@ -620,7 +620,7 @@ func TestParseCodebuffSessionTerminationStatus(t *testing.T) {
 			}
 		]`
 		dir := codebuffTestSession(t, chatMessages, runState, "")
-		sess, _, _, err := parseCodebuffSession(dir, "p", "local")
+		sess, _, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 		require.NoError(t, err)
 		require.NotNil(t, sess)
 		assert.Equal(t, TerminationToolCallPending, sess.TerminationStatus)
@@ -634,7 +634,7 @@ func TestParseCodebuffSessionTerminationStatus(t *testing.T) {
 			}
 		]`
 		dir := codebuffTestSession(t, chatMessages, runState, "")
-		sess, _, _, err := parseCodebuffSession(dir, "p", "local")
+		sess, _, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 		require.NoError(t, err)
 		require.NotNil(t, sess)
 		assert.Equal(t, TerminationClean, sess.TerminationStatus)
@@ -642,7 +642,7 @@ func TestParseCodebuffSessionTerminationStatus(t *testing.T) {
 
 	t.Run("empty transcript is unknown", func(t *testing.T) {
 		dir := codebuffTestSession(t, `[]`, runState, "")
-		sess, _, _, err := parseCodebuffSession(dir, "p", "local")
+		sess, _, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 		require.NoError(t, err)
 		require.NotNil(t, sess)
 		assert.Empty(t, sess.TerminationStatus,
@@ -671,7 +671,7 @@ func TestParseCodebuffSession_ProjectFromCwd(t *testing.T) {
 	}`
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
-	sess, _, _, err := parseCodebuffSession(dir, "fallback", "local")
+	sess, _, _, err := parseCodebuffSession(t.Context(), dir, "fallback", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -697,7 +697,7 @@ func TestParseCodebuffSession_FileInfo(t *testing.T) {
 	}`
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
-	sess, _, _, err := parseCodebuffSession(dir, "p", "local")
+	sess, _, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -736,7 +736,7 @@ func TestParseCodebuffSession_JoinedTextContent(t *testing.T) {
 	}`
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
-	_, msgs, _, err := parseCodebuffSession(dir, "p", "local")
+	_, msgs, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 	require.NoError(t, err)
 
 	require.Len(t, msgs, 1)
@@ -855,7 +855,7 @@ func TestParseCodebuffToolCall_UnknownName(t *testing.T) {
 		}
 	}`
 	dir := codebuffTestSession(t, chatMessages, runState, "")
-	_, msgs, _, err := parseCodebuffSession(dir, "p", "local")
+	_, msgs, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 	require.NoError(t, err)
 
 	// Empty toolName -> no tool call produced, so no HasToolUse message.
@@ -925,7 +925,7 @@ func TestCodebuffSessionName_Truncation(t *testing.T) {
 	}`
 
 	dir := codebuffTestSession(t, string(chatMessages), runState, "")
-	sess, _, _, err := parseCodebuffSession(dir, "p", "local")
+	sess, _, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -945,7 +945,7 @@ func TestCodebuffSessionName_FallbackToProjectHint(t *testing.T) {
 	}`
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
-	sess, _, _, err := parseCodebuffSession(dir, "my-hint", "local")
+	sess, _, _, err := parseCodebuffSession(t.Context(), dir, "my-hint", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -1031,7 +1031,7 @@ func TestCodebuffAttachSkillNames_FromInput(t *testing.T) {
 	}`
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
-	_, msgs, _, err := parseCodebuffSession(dir, "p", "local")
+	_, msgs, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 	require.NoError(t, err)
 
 	var toolMsg *ParsedMessage
@@ -1077,7 +1077,7 @@ func TestCodebuffAttachSkillNames_ExplicitSkillTool(t *testing.T) {
 	}`
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
-	_, msgs, _, err := parseCodebuffSession(dir, "p", "local")
+	_, msgs, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 	require.NoError(t, err)
 
 	var toolMsg *ParsedMessage
@@ -1129,7 +1129,7 @@ func TestCodebuffAttachSkillNames_NoFalsePositiveSubstring(t *testing.T) {
 	}`
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
-	_, msgs, _, err := parseCodebuffSession(dir, "p", "local")
+	_, msgs, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 	require.NoError(t, err)
 
 	var toolMsg *ParsedMessage
@@ -1179,7 +1179,7 @@ func TestCodebuffAttachSkillNames_WordBoundaryMatch(t *testing.T) {
 	}`
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
-	_, msgs, _, err := parseCodebuffSession(dir, "p", "local")
+	_, msgs, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 	require.NoError(t, err)
 
 	var toolMsg *ParsedMessage
@@ -1251,7 +1251,7 @@ func TestParseCodebuffSession_ErrorVariant(t *testing.T) {
 	}`
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
-	_, msgs, _, err := parseCodebuffSession(dir, "p", "local")
+	_, msgs, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 	require.NoError(t, err)
 
 	// Should have user message + error system message.
@@ -1352,7 +1352,7 @@ func TestParseCodebuffSessionTurnCostTable(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := codebuffTestSession(t, tc.transcript, tc.runState, "")
-			sess, _, _, err := parseCodebuffSession(dir, "p", "local")
+			sess, _, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 			require.NoError(t, err)
 
 			var micros []int64
@@ -1450,7 +1450,7 @@ func TestParseCodebuffSessionTurnModelResolution(t *testing.T) {
 				transcript = "[" + fmt.Sprintf(billedTurn, meta) + "]"
 			}
 			dir := codebuffTestSession(t, transcript, tc.fileState, "")
-			sess, _, _, err := parseCodebuffSession(dir, "p", "local")
+			sess, _, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 			require.NoError(t, err)
 			require.Len(t, sess.UsageEvents, 1)
 			assert.Equal(t, tc.want, sess.UsageEvents[0].Model)
@@ -1487,7 +1487,7 @@ func TestParseCodebuffSession_PlanBlock(t *testing.T) {
 	}`
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
-	_, msgs, _, err := parseCodebuffSession(dir, "p", "local")
+	_, msgs, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 	require.NoError(t, err)
 
 	// Should have a system message with the plan content.
@@ -1528,7 +1528,7 @@ func TestParseCodebuffSession_ImageBlock(t *testing.T) {
 	}`
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
-	_, msgs, _, err := parseCodebuffSession(dir, "p", "local")
+	_, msgs, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 	require.NoError(t, err)
 
 	// User message should contain the image filename note.
@@ -1561,7 +1561,7 @@ func TestParseCodebuffSession_ImageBlockNoFilename(t *testing.T) {
 	}`
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
-	_, msgs, _, err := parseCodebuffSession(dir, "p", "local")
+	_, msgs, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 	require.NoError(t, err)
 
 	require.Len(t, msgs, 1)
@@ -1747,7 +1747,7 @@ func TestParseCodebuffSession_SessionNameRuneSafeTruncation(t *testing.T) {
 	}`
 
 	dir := codebuffTestSession(t, chatMessages, runState, "")
-	sess, _, _, err := parseCodebuffSession(dir, "p", "local")
+	sess, _, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -1765,7 +1765,7 @@ func TestParseCodebuffSessionAgentVariant(t *testing.T) {
 		dir := codebuffTestSession(t,
 			`[{"id":"ag-1","variant":"agent","content":"subagent finished the task","timestamp":"03:04 PM"}]`,
 			runState, "")
-		sess, msgs, _, err := parseCodebuffSession(dir, "p", "local")
+		sess, msgs, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 		require.NoError(t, err)
 		require.Len(t, msgs, 1)
 		assert.Equal(t, RoleAssistant, msgs[0].Role)
@@ -1778,7 +1778,7 @@ func TestParseCodebuffSessionAgentVariant(t *testing.T) {
 		dir := codebuffTestSession(t,
 			`[{"id":"ag-1","variant":"agent","content":"","timestamp":"03:04 PM"}]`,
 			runState, "")
-		_, msgs, _, err := parseCodebuffSession(dir, "p", "local")
+		_, msgs, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 		require.NoError(t, err)
 		assert.Empty(t, msgs)
 	})
@@ -1787,7 +1787,7 @@ func TestParseCodebuffSessionAgentVariant(t *testing.T) {
 		dir := codebuffTestSession(t,
 			`[{"id":"x-1","variant":"workflow-step","content":"from a future build","timestamp":"03:04 PM"}]`,
 			runState, "")
-		_, msgs, _, err := parseCodebuffSession(dir, "p", "local")
+		_, msgs, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 		require.NoError(t, err)
 		require.Len(t, msgs, 1)
 		assert.Equal(t, RoleAssistant, msgs[0].Role)
@@ -1805,7 +1805,7 @@ func TestParseCodebuffSessionUserErrorEnvelope(t *testing.T) {
 		 "userError":"connection dropped mid-run"}
 	]`
 	dir := codebuffTestSession(t, transcript, runState, "")
-	sess, msgs, _, err := parseCodebuffSession(dir, "p", "local")
+	sess, msgs, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 	require.NoError(t, err)
 	require.Len(t, msgs, 2)
 	assert.Equal(t, RoleUser, msgs[0].Role)
@@ -1829,7 +1829,7 @@ func TestParseCodebuffSessionValidationErrors(t *testing.T) {
 		 ]}
 	]`
 	dir := codebuffTestSession(t, transcript, runState, "")
-	_, msgs, _, err := parseCodebuffSession(dir, "p", "local")
+	_, msgs, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 	require.NoError(t, err)
 	require.Len(t, msgs, 3)
 	assert.Equal(t, "[Validation error] first failure", msgs[1].Content)
@@ -1849,7 +1849,7 @@ func TestParseCodebuffSessionAttachmentEnvelope(t *testing.T) {
 			 "attachments":[{"filename":"shot.png","path":"/home/x/Pictures/shot.png"},{"path":"/tmp/no-name.png"}]}
 		]`
 		dir := codebuffTestSession(t, transcript, runState, "")
-		_, msgs, _, err := parseCodebuffSession(dir, "p", "local")
+		_, msgs, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 		require.NoError(t, err)
 		require.Len(t, msgs, 1)
 		assert.Contains(t, msgs[0].Content, "[Image: shot.png]")
@@ -1870,7 +1870,7 @@ func TestParseCodebuffSessionAttachmentEnvelope(t *testing.T) {
 			contentJSON, previewJSON,
 		)
 		dir := codebuffTestSession(t, transcript, runState, "")
-		_, msgs, _, err := parseCodebuffSession(dir, "p", "local")
+		_, msgs, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 		require.NoError(t, err)
 		require.Len(t, msgs, 1)
 		lines := strings.Split(msgs[0].Content, "\n")
@@ -1889,7 +1889,7 @@ func TestParseCodebuffSessionAttachmentEnvelope(t *testing.T) {
 			 ]}
 		]`
 		dir := codebuffTestSession(t, transcript, runState, "")
-		_, msgs, _, err := parseCodebuffSession(dir, "p", "local")
+		_, msgs, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 		require.NoError(t, err)
 		require.Len(t, msgs, 1)
 		assert.Contains(t, msgs[0].Content, "[File: report.pdf]")
@@ -1904,7 +1904,7 @@ func TestParseCodebuffSessionAttachmentEnvelope(t *testing.T) {
 			 "attachments":[{"filename":"only.png"}]}
 		]`
 		dir := codebuffTestSession(t, transcript, runState, "")
-		sess, msgs, _, err := parseCodebuffSession(dir, "p", "local")
+		sess, msgs, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 		require.NoError(t, err)
 		require.Len(t, msgs, 1)
 		assert.Equal(t, RoleUser, msgs[0].Role)
@@ -1955,7 +1955,7 @@ func TestParseCodebuffSessionAskUser(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			transcript := `[{"id":"ai-1","variant":"ai","timestamp":"03:04 PM","blocks":[` + tc.block + `]}]`
 			dir := codebuffTestSession(t, transcript, "", "")
-			_, msgs, _, err := parseCodebuffSession(dir, "p", "local")
+			_, msgs, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 			require.NoError(t, err)
 			require.Len(t, msgs, 1)
 			assert.Equal(t, RoleSystem, msgs[0].Role)
@@ -1983,7 +1983,7 @@ func TestParseCodebuffSessionSponsoredAndAgentList(t *testing.T) {
 			 }]}]
 		`
 		dir := codebuffTestSession(t, transcript, runState, "")
-		_, msgs, _, err := parseCodebuffSession(dir, "p", "local")
+		_, msgs, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 		require.NoError(t, err)
 		require.Len(t, msgs, 1)
 		assert.Equal(t, RoleSystem, msgs[0].Role,
@@ -2010,7 +2010,7 @@ func TestParseCodebuffSessionSponsoredAndAgentList(t *testing.T) {
 			 }]}]
 		`
 		dir := codebuffTestSession(t, transcript, runState, "")
-		_, msgs, _, err := parseCodebuffSession(dir, "p", "local")
+		_, msgs, _, err := parseCodebuffSession(t.Context(), dir, "p", "local")
 		require.NoError(t, err)
 		require.Len(t, msgs, 1)
 		assert.Equal(t, RoleSystem, msgs[0].Role,

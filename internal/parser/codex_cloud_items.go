@@ -95,9 +95,10 @@ func codexCloudItemMessages(
 		}
 		return []ParsedMessage{assistant(ParsedMessage{ThinkingText: thinking, HasThinking: true})}
 	case "contextCompaction":
+		// The item carries no summary, and the divider already labels every
+		// compaction, so the boundary holds no text of its own.
 		return []ParsedMessage{{
-			Role: RoleAssistant, Content: "Context compacted", Timestamp: ts,
-			IsSystem: true, ContentLength: len("Context compacted"),
+			Role: RoleAssistant, Timestamp: ts, IsSystem: true,
 			SourceType: "system", SourceSubtype: "compact_boundary",
 			IsCompactBoundary: true,
 		}}

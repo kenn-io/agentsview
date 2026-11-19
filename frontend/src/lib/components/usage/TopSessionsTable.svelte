@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { errorTelemetry } from "../../utils/error-telemetry.js";
+  import LoadError from "../shared/LoadError.svelte";
   import { usage } from "../../stores/usage.svelte.js";
   import { router } from "../../stores/router.svelte.js";
-  import { formatTokenCount } from "../../utils/format.js";
+  import { formatCount } from "../../utils/format.js";
   import { formatAgentName, truncate } from "../../utils/format.js";
   import { m } from "../../i18n/index.js";
   import { formatMoney } from "../../money.js";
@@ -49,15 +49,11 @@
   </h3>
 
   {#if usage.errors.topSessions}
-    <div class="error" {@attach errorTelemetry("analytics")}>
-      {usage.errors.topSessions}
-      <button
-        class="retry-btn"
-        onclick={() => usage.fetchTopSessions()}
-      >
-        {m.shared_retry()}
-      </button>
-    </div>
+    <LoadError
+      message={usage.errors.topSessions}
+      onRetry={() => void usage.fetchTopSessions()}
+      telemetry="analytics"
+    />
   {:else if sessions.length > 0}
     <div class="session-list">
       {#each sessions as row, i (row.sessionId)}
@@ -80,7 +76,7 @@
             </span>
           </div>
           <span class="session-tokens">
-            {formatTokenCount(
+            {formatCount(
               isTokenMode
                 ? sumSelectedTokens(row, usage.selectedTokenTypes)
                 : row.totalTokens,
@@ -94,7 +90,7 @@
         </div>
       {/each}
     </div>
-  {:else}
+  {:else if usage.topSessions !== null}
     <div class="empty">{m.shared_no_sessions_in_range()}</div>
   {/if}
 </div>
@@ -139,7 +135,7 @@
     flex-shrink: 0;
     width: 18px;
     text-align: right;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
     color: var(--text-muted);
     font-family: var(--font-mono);
@@ -166,7 +162,7 @@
 
   .agent-pill {
     flex-shrink: 0;
-    font-size: 9px;
+    font-size: 11px;
     font-weight: 500;
     padding: 1px 5px;
     border-radius: 8px;
@@ -175,8 +171,8 @@
   }
 
   .session-project {
-    font-size: 9px;
-    color: var(--text-muted);
+    font-size: 11px;
+    color: var(--text-secondary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -184,7 +180,7 @@
 
   .session-tokens {
     flex-shrink: 0;
-    font-size: 10px;
+    font-size: 11px;
     font-family: var(--font-mono);
     color: var(--text-muted);
     min-width: 36px;
@@ -196,7 +192,7 @@
     font-size: 11px;
     font-weight: 500;
     font-family: var(--font-mono);
-    color: var(--accent-blue);
+    color: var(--text-primary);
     min-width: 48px;
     text-align: right;
   }
@@ -208,21 +204,5 @@
     text-align: center;
   }
 
-  .error {
-    color: var(--accent-red);
-    font-size: 12px;
-    padding: 12px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
 
-  .retry-btn {
-    padding: 2px 8px;
-    border: 1px solid currentColor;
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    color: inherit;
-    cursor: pointer;
-  }
 </style>

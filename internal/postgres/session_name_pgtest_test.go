@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"database/sql"
 	"path/filepath"
 	"testing"
@@ -20,16 +19,14 @@ import (
 // SessionName (agent-provided title, no user rename) surfaces its name through
 // all PG read paths.
 func TestPGSessionNameVisibleInReadPaths(t *testing.T) {
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_session_name_test"
-	pg, err := Open(pgURL, schema, true)
+	t.Parallel()
+	const schema = "agentsview"
+	pgURL := testPGSchemaURL(t, schema)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
-	ctx := context.Background()
-	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
-	require.NoError(t, err, "drop schema")
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	// Local SQLite DB used by the Sync push path.
@@ -85,7 +82,7 @@ func TestPGSessionNameVisibleInReadPaths(t *testing.T) {
 		"COALESCE(display_name, session_name) should return session_name")
 
 	// Verify GetSidebarSessionIndex surfaces the agent title.
-	store, err := NewStore(pgURL, schema, true)
+	store, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
@@ -119,14 +116,13 @@ func TestPGSessionNameVisibleInReadPaths(t *testing.T) {
 func strPtr(s string) *string { return &s }
 
 func TestPGPushUsageOnlyClearsRenamedTitle(t *testing.T) {
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, "agentsview")
 	local := testDB(t)
-	ps, err := New(pgURL, "agentsview", local, "test-machine", true, storage.PusherOptions{})
+	ps, err := New(t.Context(), pgURL, "agentsview", local, "test-machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ps.Close() })
-	ctx := context.Background()
+	ctx := t.Context()
 	session := db.Session{
 		ID: "title-policy", Agent: "claude", Project: "proj", Machine: "test-machine",
 		FirstMessage: strPtr("original prompt"), DisplayName: strPtr("source title"),

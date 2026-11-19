@@ -1,0 +1,2 @@
+{"type":"user","uuid":"su1","parentUuid":null,"sessionId":"c0000000-0000-4000-8000-000000000001","cwd":"/sessions/test","timestamp":"2026-03-01T10:01:00.000Z","message":{"role":"user","content":"sub task"}}
+{"type":"assistant","uuid":"sa1","parentUuid":"su1","sessionId":"c0000000-0000-4000-8000-000000000001","timestamp":"2026-03-01T10:01:05.000Z","message":{"role":"assistant","id":"m2","model":"claude-sonnet-4-6","stop_reason":"end_turn","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":3,"output_tokens":2}}}

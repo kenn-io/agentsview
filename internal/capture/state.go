@@ -524,6 +524,8 @@ func (s *captureState) seal(data []byte) error {
 	return s.saveManifestContext(ctx)
 }
 
+// finalizationContext bounds sealing by the finalization deadline only. The
+// sealed result must persist after the run's context ends.
 func (s *captureState) finalizationContext() (context.Context, context.CancelFunc) {
 	if s.finalizationDeadline.IsZero() {
 		return context.WithCancel(context.Background())

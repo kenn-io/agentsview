@@ -61,6 +61,10 @@ func resolveExtractDistillation(
 		return dist, fmt.Errorf(
 			"parsing [recall.extract.servers.%s] timeout: %w", serverName, err)
 	}
+	apiKey, err := server.APIKey()
+	if err != nil {
+		return dist, fmt.Errorf("[recall.extract.servers.%s] %w", serverName, err)
+	}
 	profile, err := extract.ResolveProfile(cfg.Prompts.Profile, cfg.Model)
 	if err != nil {
 		return dist, err
@@ -101,7 +105,7 @@ func resolveExtractDistillation(
 	return extractDistillation{
 		Client: &extract.Client{
 			BaseURL:    server.Endpoint,
-			APIKey:     server.APIKey(),
+			APIKey:     apiKey,
 			Model:      cfg.Model,
 			HTTPClient: httpClient,
 			Request:    request,
@@ -147,12 +151,12 @@ func buildExtractManager(
 // section is disabled it returns a reconcile-only scheduler if a generation
 // exists, and nil when none does.
 func setupRecallExtraction(
-	cfg config.Config, database *db.DB, idle *server.IdleTracker,
+	ctx context.Context, cfg config.Config, database *db.DB, idle *server.IdleTracker,
 ) (*extractScheduler, error) {
 	if !cfg.Recall.Extract.Enabled {
 		database.SetExtractCandidateFindingsAllowed(
 			cfg.Recall.Extract.AllowCandidateFindings())
-		return setupExtractReconcileOnly(database, idle)
+		return setupExtractReconcileOnly(ctx, database, idle)
 	}
 	dist, err := resolveExtractDistillation(cfg.Recall.Extract)
 	if err != nil {
@@ -181,9 +185,9 @@ func setupRecallExtraction(
 // extraction was never run, so there is nothing to retract and a
 // default-disabled daemon starts no scheduler.
 func setupExtractReconcileOnly(
-	database *db.DB, idle *server.IdleTracker,
+	ctx context.Context, database *db.DB, idle *server.IdleTracker,
 ) (*extractScheduler, error) {
-	generations, err := database.ExtractGenerations(context.Background())
+	generations, err := database.ExtractGenerations(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("checking for extraction generations: %w", err)
 	}
@@ -256,8 +260,12 @@ func newRecallExtractCommand() *cobra.Command {
 	var dryRun bool
 	var chunkMaxChars int
 	cmd := &cobra.Command{
-		Use:          "extract",
-		Short:        "Extract recall entries from session transcripts",
+		Use:   "extract",
+		Short: "Extract recall entries from session transcripts",
+		Long: "Manage extraction recipes that propose recalled knowledge from session content. " +
+			"Inspect status and preview candidates before choosing an active recipe or running extraction; accepted recall records remain a separate reviewed layer.",
+		Example: "  agentsview recall extract status\n" +
+			"  agentsview recall extract preview --session <id>",
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -367,7 +375,7 @@ type extractRunResult struct {
 func newRecallExtractStatusCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "status",
-		Short:        "Show extraction coverage for the configured generation",
+		Short:        "Show Recall processing progress for the current settings",
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {

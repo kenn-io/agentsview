@@ -3,19 +3,23 @@
 package main
 
 import (
+	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/mattn/go-runewidth"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/shellquote"
 	"golang.org/x/term"
 )
 
@@ -33,8 +37,19 @@ func newSessionSearchCommand() *cobra.Command {
 		limit, cursor, contextN                  int
 	)
 	cmd := &cobra.Command{
-		Use:          "search <pattern>",
-		Short:        "Search message and tool content across sessions",
+		Use:   "search <pattern>",
+		Short: "Search message and tool content across sessions",
+		Long: "Search archived message and tool content with redacted snippets. " +
+			"The default is substring search across available sources. " +
+			"On SQLite, PostgreSQL, and ClickHouse, a search of several words lists exact text first, then messages holding every word, then those holding more of the words; " +
+			"a fully quoted search matches its text only. " +
+			"Choose at most one of --regex, --fts, --semantic, or --hybrid. " +
+			"FTS and semantic/hybrid modes search messages only. " +
+			"--semantic needs an embedding index; without one, --hybrid returns keyword matches with a note on stderr. " +
+			"JSON returns a numeric next_cursor for further matches; repeat the query, search mode, backend, and filters when continuing.",
+		Example: "  agentsview session search 'connection reset' --since 14d --in messages,tool_result --json\n" +
+			"  agentsview session search '\"connection\" OR \"reset\"' --fts --json\n" +
+			"  agentsview session search 'why the build failed' --hybrid --scope top --json",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -62,9 +77,10 @@ func newSessionSearchCommand() *cobra.Command {
 			}
 			defer cleanup()
 
-			res, err := svc.SearchContent(cmd.Context(), service.ContentSearchRequest{
+			req := service.ContentSearchRequest{
 				Pattern:           args[0],
 				Mode:              mode,
+				KeywordFallback:   mode == "hybrid",
 				Sources:           sources,
 				ExcludeSystem:     excludeSystem,
 				Reveal:            reveal,
@@ -84,9 +100,14 @@ func newSessionSearchCommand() *cobra.Command {
 				Limit:             limit,
 				Cursor:            cursor,
 				Context:           contextN,
-			})
+			}
+			res, err := svc.SearchContent(cmd.Context(), req)
 			if err != nil {
 				return err
+			}
+			cliHints := contentSearchHints(cmd.Context(), cmd, svc, req, res)
+			if res.Note != "" {
+				fmt.Fprintln(cmd.ErrOrStderr(), sanitizeTerminal(res.Note))
 			}
 			if reveal {
 				fmt.Fprintln(cmd.ErrOrStderr(),
@@ -94,9 +115,18 @@ func newSessionSearchCommand() *cobra.Command {
 						"this terminal/session may itself be recorded.")
 			}
 			if outputFormat(cmd) == "json" {
-				return json.MarshalEncode(jsontext.NewEncoder(cmd.OutOrStdout()), res)
+				return json.MarshalEncode(jsontext.NewEncoder(cmd.OutOrStdout()), struct {
+					*service.ContentSearchResult
+					Hints []contentSearchCLIHint `json:"hints,omitempty"`
+				}{res, cliHints})
 			}
-			return printContentSearchResult(cmd.OutOrStdout(), res, contextN)
+			if err := printContentSearchResult(cmd.OutOrStdout(), res, contextN); err != nil {
+				return err
+			}
+			for _, hint := range cliHints {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Hint: %s; run %s\n", hint.Message, hint.Next)
+			}
+			return nil
 		},
 	}
 	flags := cmd.Flags()
@@ -107,7 +137,7 @@ func newSessionSearchCommand() *cobra.Command {
 	flags.BoolVar(&useHybrid, "hybrid", false,
 		"Hybrid semantic + full-text search (reciprocal rank fusion)")
 	flags.StringVar(&in, "in", "",
-		"Comma-separated sources: messages,thinking,tool_input,tool_result (default all; thinking: SQLite, PostgreSQL, DuckDB, and ClickHouse substring/regex only)")
+		"Comma-separated sources: messages,thinking,tool_input,tool_result (default all; thinking: SQLite, PostgreSQL, and ClickHouse substring/regex only)")
 	flags.BoolVar(&excludeSystem, "exclude-system", false,
 		"Exclude system messages (included by default)")
 	flags.BoolVar(&reveal, "reveal", false, "Show full secret values (unredacted)")
@@ -142,13 +172,13 @@ func validateScopeFlag(scope string, useSemantic, useHybrid bool) error {
 		return nil
 	}
 	if !useSemantic && !useHybrid {
-		return errors.New("--scope requires --semantic or --hybrid")
+		return cliUsageError(errors.New("--scope requires --semantic or --hybrid"), "choose one search mode and check --in / --scope with `agentsview session search --help`")
 	}
 	switch scope {
 	case "top", "all", "subordinate":
 		return nil
 	}
-	return fmt.Errorf("--scope must be top, all, or subordinate (got %q)", scope)
+	return cliValidationError(fmt.Errorf("--scope must be top, all, or subordinate (got %q)", scope), "use --scope top, all, or subordinate with --semantic or --hybrid")
 }
 
 // resolveContentSearchMode picks the search mode from the mutually exclusive
@@ -165,7 +195,7 @@ func resolveContentSearchMode(
 		}
 	}
 	if modes > 1 {
-		return "", errors.New("--regex, --fts, --semantic and --hybrid are mutually exclusive")
+		return "", cliUsageError(errors.New("--regex, --fts, --semantic and --hybrid are mutually exclusive"), "choose one search mode and check --in / --scope with `agentsview session search --help`")
 	}
 	mode := "substring"
 	switch {
@@ -181,15 +211,15 @@ func resolveContentSearchMode(
 	if useFTS {
 		for _, s := range sources {
 			if s != "messages" {
-				return "", errors.New("--fts searches messages only; drop --in or --fts")
+				return "", cliUsageError(errors.New("--fts searches messages only; drop --in or --fts"), "choose one search mode and check --in / --scope with `agentsview session search --help`")
 			}
 		}
 	}
 	if useSemantic || useHybrid {
 		for _, s := range sources {
 			if s != "messages" {
-				return "", fmt.Errorf(
-					"--%s searches messages only; drop --in", mode)
+				return "", cliUsageError(fmt.Errorf(
+					"--%s searches messages only; drop --in", mode), "omit --in or use --in messages with --semantic / --hybrid")
 			}
 		}
 	}
@@ -474,4 +504,84 @@ func printContentContextLine(w io.Writer, m db.Message) {
 	}
 	fmt.Fprintf(w, "  %s: %s\n",
 		sanitizeTerminal(m.Role), sanitizeTerminal(content))
+}
+
+type contentSearchCLIHint struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Next    string `json:"next"`
+}
+
+func contentSearchRetry(cmd *cobra.Command, pattern string, changes map[string]any, platform string) string {
+	parts := strings.Fields(cmd.CommandPath())
+	remaining := make(map[string]any, len(changes))
+	for name, value := range changes {
+		remaining[strings.ReplaceAll(name, "_", "-")] = value
+	}
+	cmd.Flags().Visit(func(flag *pflag.Flag) {
+		value, replaced := remaining[flag.Name]
+		if replaced {
+			parts = append(parts, "--"+flag.Name+"="+fmt.Sprint(value))
+			delete(remaining, flag.Name)
+			return
+		}
+		if values, ok := flag.Value.(pflag.SliceValue); ok {
+			for _, item := range values.GetSlice() {
+				parts = append(parts, "--"+flag.Name+"="+item)
+			}
+		} else {
+			parts = append(parts, "--"+flag.Name+"="+flag.Value.String())
+		}
+	})
+	for _, name := range []string{"include-one-shot", "include-automated", "include-children", "fts"} {
+		if value, ok := remaining[name]; ok {
+			parts = append(parts, "--"+name+"="+fmt.Sprint(value))
+		}
+	}
+	parts = append(parts, "--", pattern)
+	for i, part := range parts {
+		if platform == "windows" {
+			parts[i] = shellquote.PowerShell(part)
+		} else if i == len(parts)-1 && (strings.HasPrefix(part, "~") || strings.HasPrefix(part, "=")) {
+			// A leading ~ expands to a home path, and zsh expands a leading = to a command path.
+			parts[i] = shellquote.POSIXLiteral(part)
+		} else {
+			parts[i] = shellquote.POSIX(part)
+		}
+	}
+	if platform == "windows" {
+		return "& " + strings.Join(parts, " ")
+	}
+	return strings.Join(parts, " ")
+}
+
+// wordArchive reports whether svc searches an archive whose default
+// search already matches query words anywhere in a message.
+func wordArchive(ctx context.Context, svc service.SessionService, remote bool) bool {
+	status, err := service.GetMemoryStatus(ctx, svc)
+	if err != nil || status.Lexical.Reason == "unsupported" {
+		return false
+	}
+	if remote {
+		return status.Archive.Backend == "sqlite" && status.Lexical.Status == service.MemoryReady
+	}
+	return status.Archive.Backend != "cockroach"
+}
+
+func contentSearchHints(ctx context.Context, cmd *cobra.Command, svc service.SessionService, req service.ContentSearchRequest, res *service.ContentSearchResult) []contentSearchCLIHint {
+	hints := service.SearchContentHints(ctx, svc, req, res, true, nil)
+	remote, _ := cmd.Flags().GetString("server")
+	messagesOnly := len(req.Sources) == 0 || len(req.Sources) == 1 && req.Sources[0] == "messages"
+	if len(res.Matches) == 0 && req.Cursor == 0 && res.NextCursor == 0 && !res.CandidateTruncated && req.Mode == "substring" && len(strings.Fields(req.Pattern)) > 1 && messagesOnly && !wordArchive(ctx, svc, strings.TrimSpace(remote) != "") {
+		retry := req
+		retry.Mode = "fts"
+		if page, err := svc.SearchContent(ctx, retry); err == nil && len(page.Matches) > 0 {
+			hints = append(hints, service.ContentSearchHint{Code: "try_fts", Message: fmt.Sprintf("substring search looks for the exact text %q; --fts matches the words anywhere in a message", req.Pattern), RetryWith: map[string]any{"fts": true}})
+		}
+	}
+	cliHints := make([]contentSearchCLIHint, 0, len(hints))
+	for _, hint := range hints {
+		cliHints = append(cliHints, contentSearchCLIHint{Code: hint.Code, Message: hint.Message, Next: contentSearchRetry(cmd, req.Pattern, hint.RetryWith, runtime.GOOS)})
+	}
+	return cliHints
 }

@@ -28,11 +28,15 @@ const (
 func ExtractTarStream(
 	ctx context.Context, r io.Reader, dst string,
 ) (int, error) {
-	return extractTarStream(ctx, r, dst, nil)
+	return extractTarStream(ctx, r, dst, nil, nil)
 }
 
+// extractTarStream extracts the entries in selected, or every entry when
+// selected is nil. When extracted is non-nil, it records the cleaned name of
+// every regular file it wrote.
 func extractTarStream(
-	ctx context.Context, r io.Reader, dst string, selected map[string]struct{},
+	ctx context.Context, r io.Reader, dst string,
+	selected, extracted map[string]struct{},
 ) (int, error) {
 	endMarkerReader := &tarEndMarkerReader{r: r}
 	tr := tar.NewReader(endMarkerReader)
@@ -68,6 +72,9 @@ func extractTarStream(
 		selfLink, err := extractEntry(tr, dst, hdr)
 		if err != nil {
 			return skipped, err
+		}
+		if extracted != nil && hdr.Typeflag == tar.TypeReg {
+			extracted[filepath.ToSlash(filepath.Clean(hdr.Name))] = struct{}{}
 		}
 		if selfLink {
 			skipped++
@@ -120,6 +127,9 @@ func extractEntry(
 	case tar.TypeDir:
 		return false, mkdirAll(target, hdr.Name)
 	case tar.TypeReg:
+		if offset, ok := hdr.PAXRecords[appendOffsetPAXKey]; ok {
+			return false, writeAppended(target, tr, hdr, offset)
+		}
 		return false, writeRegular(target, tr, hdr)
 	case tar.TypeSymlink:
 		// Symlinks are not session data, and a symlink restored from

@@ -66,6 +66,7 @@ func currentRemoteSyncHandler(next http.Handler) http.Handler {
 }
 
 func TestIssue1492AuthenticatedHTTPMirrorImportUsesCuratedTargets(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	serverDBPath := filepath.Join(dir, "server.db")
 	serverDB := dbtest.OpenTestDBAt(t, serverDBPath)
@@ -129,6 +130,7 @@ func TestIssue1492AuthenticatedHTTPMirrorImportUsesCuratedTargets(t *testing.T) 
 }
 
 func TestIssue1492AuthenticatedAllCuratedFilesVanishedLifecycle(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "server.db")
 	database := dbtest.OpenTestDBAt(t, dbPath)
@@ -169,6 +171,7 @@ func TestIssue1492AuthenticatedAllCuratedFilesVanishedLifecycle(t *testing.T) {
 }
 
 func TestIssue1492AuthenticatedVSCodeWorkspacePresentChatMissingEvictsMirror(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "server.db")
 	database := dbtest.OpenTestDBAt(t, dbPath)
@@ -264,6 +267,7 @@ func TestIssue1492AuthenticatedVSCodeWorkspacePresentChatMissingEvictsMirror(t *
 }
 
 func TestIssue1492AuthenticatedEmptyCuratedCredentialDecoys(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "server.db")
 	database := dbtest.OpenTestDBAt(t, dbPath)
@@ -342,6 +346,7 @@ func TestIssue1492AuthenticatedEmptyCuratedCredentialDecoys(t *testing.T) {
 }
 
 func TestRemoteSyncTargetsRequiresBearerAndBypassesHostCheck(t *testing.T) {
+	t.Parallel()
 	_, handler, _ := newRemoteSyncServer(t)
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/remote-sync/targets", nil)
 	req.Host = "devbox.tailnet.ts.net:8080"
@@ -356,6 +361,7 @@ func TestRemoteSyncTargetsRequiresBearerAndBypassesHostCheck(t *testing.T) {
 }
 
 func TestRemoteSyncRoutesRejectMissingProtocolHandshake(t *testing.T) {
+	t.Parallel()
 	srv, _, _ := newRemoteSyncServer(t)
 	for _, test := range []struct {
 		method string
@@ -366,6 +372,7 @@ func TestRemoteSyncRoutesRejectMissingProtocolHandshake(t *testing.T) {
 		{method: http.MethodPost, path: "/api/v1/remote-sync/archive"},
 	} {
 		t.Run(test.path, func(t *testing.T) {
+			t.Parallel()
 			req := httptest.NewRequestWithContext(t.Context(), test.method, test.path, strings.NewReader(`{}`))
 			req.Header.Set("Authorization", "Bearer remote-token")
 			w := httptest.NewRecorder()
@@ -388,6 +395,7 @@ func TestRemoteSyncTargetsRejectsMismatchedProtocol(t *testing.T) {
 }
 
 func TestRemoteSyncArchiveRejectsUnresolvedPath(t *testing.T) {
+	t.Parallel()
 	_, handler, _ := newRemoteSyncServer(t)
 	body := bytes.NewBufferString(`{"dirs":{"claude":["/etc"]}}`)
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/remote-sync/archive", body)
@@ -447,6 +455,7 @@ func TestRemoteSyncRoutesExportLocallyDisabledProvider(t *testing.T) {
 }
 
 func TestRemoteSyncArchiveStreamsTar(t *testing.T) {
+	t.Parallel()
 	_, handler, sessionPath := newRemoteSyncServer(t)
 	targets := map[string]any{
 		"dirs": map[string][]string{
@@ -478,6 +487,7 @@ func TestRemoteSyncArchiveStreamsTar(t *testing.T) {
 }
 
 func TestRemoteSyncHermesSessionlessProfileCannotExposeCredentials(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dir, "test.db"))
 	profileRoot := filepath.Join(dir, ".hermes", "profiles", "empty")
@@ -528,6 +538,7 @@ func TestRemoteSyncHermesSessionlessProfileCannotExposeCredentials(t *testing.T)
 }
 
 func TestRemoteSyncHermesFlatCustomRootStreamsTranscripts(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
 	database := dbtest.OpenTestDBAt(t, dbPath)
@@ -572,6 +583,7 @@ func TestRemoteSyncHermesFlatCustomRootStreamsTranscripts(t *testing.T) {
 }
 
 func TestRemoteSyncHermesSidecarRemovalRaces(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		run  func(*testing.T, http.Handler, remotesync.TargetSet, string, func())
@@ -643,6 +655,7 @@ func TestRemoteSyncHermesSidecarRemovalRaces(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			handler, targets, wal, removeWAL := newHermesRemoteSyncServer(t)
 			assert.Contains(t, targets.AllExtraFiles(), wal)
 			tt.run(t, handler, targets, wal, removeWAL)
@@ -760,6 +773,7 @@ func newWindsurfRemoteSyncServer(t *testing.T) (http.Handler, remotesync.TargetS
 }
 
 func TestRemoteSyncManifestRefusesFileScopedAgents(t *testing.T) {
+	t.Parallel()
 	handler, targets, _ := newWindsurfRemoteSyncServer(t)
 	payload, err := json.Marshal(targets)
 	require.NoError(t, err)
@@ -776,6 +790,7 @@ func TestRemoteSyncManifestRefusesFileScopedAgents(t *testing.T) {
 }
 
 func TestRemoteSyncArchiveRejectsDeltaForFileScopedAgent(t *testing.T) {
+	t.Parallel()
 	handler, targets, stateDB := newWindsurfRemoteSyncServer(t)
 	// A malicious client that skips the manifest and requests the raw,
 	// unsanitized state.vscdb as a delta must be refused.
@@ -797,6 +812,7 @@ func TestRemoteSyncArchiveRejectsDeltaForFileScopedAgent(t *testing.T) {
 }
 
 func TestRemoteSyncArchiveRejectsUnauthorizedVSCodeWorkspaceInFullArchive(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
 	database := dbtest.OpenTestDBAt(t, dbPath)
@@ -845,6 +861,7 @@ func TestRemoteSyncArchiveRejectsUnauthorizedVSCodeWorkspaceInFullArchive(t *tes
 }
 
 func TestRemoteSyncArchiveWindsurfStreamsSanitizedStateDB(t *testing.T) {
+	t.Parallel()
 	handler, targets, _ := newWindsurfRemoteSyncServer(t)
 	payload, err := json.Marshal(targets)
 	require.NoError(t, err)
@@ -1010,6 +1027,7 @@ func (w *errorOnFirstWriteRecorder) Write(p []byte) (int, error) {
 }
 
 func TestRemoteSyncManifestListsFiles(t *testing.T) {
+	t.Parallel()
 	_, handler, sessionPath := newRemoteSyncServer(t)
 	payload, err := json.Marshal(map[string]any{
 		"dirs": map[string][]string{"claude": {filepath.Dir(sessionPath)}},
@@ -1037,6 +1055,7 @@ func TestRemoteSyncManifestListsFiles(t *testing.T) {
 }
 
 func TestRemoteSyncManifestRejectsUnresolvedPath(t *testing.T) {
+	t.Parallel()
 	_, handler, _ := newRemoteSyncServer(t)
 	body := bytes.NewBufferString(`{"dirs":{"claude":["/etc"]}}`)
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/remote-sync/manifest", body)
@@ -1048,6 +1067,7 @@ func TestRemoteSyncManifestRejectsUnresolvedPath(t *testing.T) {
 }
 
 func TestRemoteSyncArchiveDeltaStreamsOnlyRequestedFiles(t *testing.T) {
+	t.Parallel()
 	_, handler, sessionPath := newRemoteSyncServer(t)
 	other := filepath.Join(filepath.Dir(sessionPath), "other.jsonl")
 	require.NoError(t, os.WriteFile(other, []byte("{}\n"), 0o644))
@@ -1078,6 +1098,7 @@ func TestRemoteSyncArchiveDeltaStreamsOnlyRequestedFiles(t *testing.T) {
 }
 
 func TestRemoteSyncArchiveDeltaRejectsFileOutsideAllowedDirs(t *testing.T) {
+	t.Parallel()
 	_, handler, sessionPath := newRemoteSyncServer(t)
 	payload, err := json.Marshal(map[string]any{
 		"dirs":  map[string][]string{"claude": {filepath.Dir(sessionPath)}},
@@ -1093,31 +1114,8 @@ func TestRemoteSyncArchiveDeltaRejectsFileOutsideAllowedDirs(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, w.Code)
 }
 
-func TestRemoteSyncArchiveGzipsWhenAdvertised(t *testing.T) {
-	_, handler, sessionPath := newRemoteSyncServer(t)
-	payload, err := json.Marshal(map[string]any{
-		"dirs": map[string][]string{"claude": {filepath.Dir(sessionPath)}},
-	})
-	require.NoError(t, err)
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/remote-sync/archive",
-		bytes.NewReader(payload))
-	req.Header.Set("Authorization", "Bearer remote-token")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept-Encoding", "gzip")
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	require.Equal(t, http.StatusOK, w.Code)
-	require.Equal(t, "gzip", w.Header().Get("Content-Encoding"))
-	gz, err := gzip.NewReader(bytes.NewReader(w.Body.Bytes()))
-	require.NoError(t, err)
-	tr := tar.NewReader(gz)
-	hdr, err := tr.Next()
-	require.NoError(t, err)
-	assert.NotEmpty(t, hdr.Name)
-}
-
 func TestRemoteSyncArchiveExplicitEmptyDeltaReturnsEmptyTar(t *testing.T) {
+	t.Parallel()
 	_, handler, sessionPath := newRemoteSyncServer(t)
 	payload, err := json.Marshal(map[string]any{
 		"dirs":  map[string][]string{"claude": {filepath.Dir(sessionPath)}},
@@ -1137,10 +1135,12 @@ func TestRemoteSyncArchiveExplicitEmptyDeltaReturnsEmptyTar(t *testing.T) {
 }
 
 func TestRemoteSyncTransfersRejectUnsupportedMethods(t *testing.T) {
+	t.Parallel()
 	_, handler, _ := newRemoteSyncServer(t)
 	for _, path := range []string{"/api/v1/remote-sync/manifest", "/api/v1/remote-sync/archive"} {
 		for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPut} {
 			t.Run(method+path, func(t *testing.T) {
+				t.Parallel()
 				req := httptest.NewRequestWithContext(t.Context(), method, path, nil)
 				req.Header.Set("Origin", "http://127.0.0.1:8080")
 				req.Header.Set("Authorization", "Bearer remote-token")

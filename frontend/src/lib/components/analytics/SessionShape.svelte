@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { analytics } from "../../stores/analytics.svelte.js";
+  import PanelStatus from "./PanelStatus.svelte";
   import { router } from "../../stores/router.svelte.js";
   import type { DbDistributionBucket as DistributionBucket } from "../../api/generated/index.js";
   import { m } from "../../i18n/index.js";
@@ -81,17 +83,13 @@
     </div>
   </div>
 
-  {#if analytics.errors.sessionShape}
-    <div class="error">
-      {analytics.errors.sessionShape}
-      <button
-        class="retry-btn"
-        onclick={() => analytics.fetchSessionShape()}
-      >
-        {m.shared_retry()}
-      </button>
-    </div>
-  {:else if activeBuckets.length > 0}
+  <PanelStatus
+    hasData={analytics.sessionShape !== null}
+    pending={analytics.querying.sessionShape}
+    error={analytics.errors.sessionShape}
+    onRetry={() => analytics.fetchSessionShape()}
+  />
+  {#if activeBuckets.length > 0}
     <div class="bar-chart">
       {#each activeBuckets as bucket}
         <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -108,7 +106,7 @@
               style="width: {barWidth(bucket)}"
             ></div>
           </div>
-          <span class="bar-count">{bucket.count}</span>
+          <span class="bar-count">{formatCount(bucket.count)}</span>
         </div>
       {/each}
     </div>
@@ -116,11 +114,11 @@
       <div class="shape-footer">
         {m.analytics_session_shape_session_count({
           count: analytics.sessionShape.count,
-          countLabel: analytics.sessionShape.count.toLocaleString(),
+          countLabel: formatCount(analytics.sessionShape.count),
         })}
       </div>
     {/if}
-  {:else}
+  {:else if analytics.sessionShape}
     <div class="empty">{m.shared_no_data_for_period()}</div>
   {/if}
 </div>
@@ -147,13 +145,16 @@
   .view-toggle {
     display: flex;
     gap: 2px;
+    padding: 2px;
+    border-radius: var(--radius-md);
+    background: var(--bg-inset);
   }
 
   .toggle-btn {
     height: 22px;
     padding: 0 8px;
     border-radius: var(--radius-sm);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 500;
     color: var(--text-muted);
     cursor: pointer;
@@ -165,9 +166,12 @@
     color: var(--text-secondary);
   }
 
+  /* Shared selected-segment idiom (app.css): raised pill, medium weight. */
   .toggle-btn.active {
-    background: var(--bg-inset);
+    background: var(--selected-strong-bg);
+    box-shadow: var(--selected-strong-edge);
     color: var(--text-primary);
+    font-weight: var(--selected-strong-weight);
   }
 
   .bar-chart {
@@ -195,7 +199,7 @@
 
   .bar-label {
     width: 48px;
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
     text-align: right;
     flex-shrink: 0;
@@ -218,7 +222,7 @@
 
   .bar-count {
     width: 32px;
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-secondary);
     text-align: right;
     flex-shrink: 0;
@@ -226,7 +230,7 @@
 
   .shape-footer {
     margin-top: 8px;
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
     text-align: right;
   }
@@ -236,23 +240,5 @@
     font-size: 12px;
     padding: 24px;
     text-align: center;
-  }
-
-  .error {
-    color: var(--accent-red);
-    font-size: 12px;
-    padding: 12px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .retry-btn {
-    padding: 2px 8px;
-    border: 1px solid currentColor;
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    color: inherit;
-    cursor: pointer;
   }
 </style>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import {
     Button,
     Card,
@@ -25,12 +26,15 @@
   } from "../../api/types/recall.js";
   import { ApiError, isAbortError, responseTimingOf, type ResponseTiming } from "../../api/runtime.js";
   import { formatDateTime, m } from "../../i18n/index.js";
-  import { ChevronDownIcon, ChevronRightIcon } from "../../icons.js";
+  import { ChevronDownIcon, ChevronRightIcon, SearchIcon } from "../../icons.js";
   import { router } from "../../stores/router.svelte.js";
   import { sessions } from "../../stores/sessions.svelte.js";
   import { ui } from "../../stores/ui.svelte.js";
   import { LatestRead } from "../../utils/latest-read.js";
   import RefreshControl from "../shared/RefreshControl.svelte";
+  import LoadError from "../shared/LoadError.svelte";
+  import LoadingState from "../shared/LoadingState.svelte";
+  import { failureMessage } from "../../utils/failure.js";
   import { LiveQuery } from "../../utils/liveQuery.svelte.js";
   import { queryStepFrom, type QueryStep } from "../../utils/refresh.js";
 
@@ -61,9 +65,9 @@
   let resultCap = $state(0);
   let status = $state<RecallExtractionStatus | null>(null);
   let entriesLoading = $state(true);
-  let entriesFailed = $state(false);
+  let entriesError: string | null = $state(null);
   let statusLoading = $state(true);
-  let statusFailed = $state(false);
+  let statusError: string | null = $state(null);
   let entriesUpdatedAt = $state<number | null>(null);
   let statusUpdatedAt = $state<number | null>(null);
   // Wall-clock ms of the most recent query, request start to data applied:
@@ -90,7 +94,7 @@
   let progressState = $state<"" | RecallExtractProgressState>("");
   let progressNextCursor = $state("");
   let progressLoading = $state(false);
-  let progressFailed = $state(false);
+  let progressError: string | null = $state(null);
   let generationAction = $state<GenerationAction | null>(null);
   let generationActionLoading = $state(false);
   let generationActionError = $state("");
@@ -192,7 +196,7 @@
     const signal = entriesRead.begin();
     const appending = cursor !== "";
     entriesLoading = true;
-    entriesFailed = false;
+    entriesError = null;
     const live = publishTiming ? liveQuery.begin(startedAt) : null;
     const liveStep = live === null ? 0 : liveQuery.start("entries", startedAt);
     let load: LoadTiming | null = null;
@@ -227,12 +231,14 @@
         // reported its own step to the live query.
         return await loadEntries("", publishTiming);
       }
+      // A failed next page keeps the rows already shown; Retry asks for
+      // that page again.
       if (!appending) {
         entries = [];
         nextCursor = "";
         resultCap = 0;
-        entriesFailed = true;
       }
+      entriesError = failureMessage(error);
       return null;
     } finally {
       if (live !== null) {
@@ -248,7 +254,7 @@
     const startedAt = performance.now();
     const signal = statusRead.begin();
     statusLoading = true;
-    statusFailed = false;
+    statusError = null;
     try {
       const next = await RecallService.getApiV1RecallExtractionStatus({ signal });
       if (!statusRead.isCurrent(signal)) return null;
@@ -258,7 +264,7 @@
     } catch (error) {
       if (isAbortError(error) || !statusRead.isCurrent(signal)) return null;
       status = null;
-      statusFailed = true;
+      statusError = failureMessage(error);
       return null;
     } finally {
       if (statusRead.finish(signal)) statusLoading = false;
@@ -269,7 +275,7 @@
     const signal = progressRead.begin();
     const appending = cursor !== "";
     progressLoading = true;
-    progressFailed = false;
+    progressError = null;
     try {
       const page = await RecallService.getApiV1RecallExtractionProgress({
         limit: 50,
@@ -287,8 +293,8 @@
       if (!appending) {
         progress = [];
         progressNextCursor = "";
-        progressFailed = true;
       }
+      progressError = failureMessage(error);
     } finally {
       if (progressRead.finish(signal)) progressLoading = false;
     }
@@ -525,8 +531,8 @@
       />
       <Button
         label={generationAction.kind === "activate"
-          ? m.recall_page_generation_activate_title()
-          : m.recall_page_generation_retire_title()}
+          ? m.recall_page_generation_activate()
+          : m.recall_page_generation_retire()}
         tone={generationAction.kind === "activate" ? "info" : "danger"}
         surface="solid"
         disabled={generationActionLoading}
@@ -562,14 +568,13 @@
   <div class="recall-corpus-heading">
     <PageHeader
       title={m.recall_page_title()}
-      description={m.recall_page_subtitle()}
       level={2}
     >
       {#snippet actions()}
-        {#if !entriesLoading && !entriesFailed}
+        {#if !entriesLoading && entriesError === null}
           <span class="entry-count">
             {m.recall_page_entries_shown({
-              countLabel: entries.length.toLocaleString(),
+              countLabel: formatCount(entries.length),
             })}
           </span>
         {/if}
@@ -598,7 +603,7 @@
               )?.state ?? status.generations[0]?.state}
             </span>
           {/if}
-          {#if !statusLoading && !statusFailed && status?.progress_available}
+          {#if !statusLoading && statusError === null && status?.progress_available}
             <Button
               size="sm"
               tone="neutral"
@@ -613,10 +618,8 @@
       </div>
       {#if statusLoading}
         <p class="status-state">{m.recall_page_loading()}</p>
-      {:else if statusFailed}
-        <p class="status-state status-error">
-          {m.recall_page_extraction_error()}
-        </p>
+      {:else if statusError}
+        <LoadError class="status-load-error" message={statusError} onRetry={() => void loadStatus()} />
       {:else if !status?.configured}
         <p class="status-state">
           {m.recall_page_extraction_unconfigured()}
@@ -624,26 +627,26 @@
       {:else if status.stats}
         <div class="status-metrics">
           <span>{m.recall_page_status_done({
-            countLabel: status.stats.done.toLocaleString(),
+            countLabel: formatCount(status.stats.done),
           })}</span>
           <span>{m.recall_page_status_failed({
-            countLabel: status.stats.failed.toLocaleString(),
+            countLabel: formatCount(status.stats.failed),
           })}</span>
           <span>{m.recall_page_status_eligible({
-            countLabel: (status.eligible_backlog ?? 0).toLocaleString(),
+            countLabel: formatCount(status.eligible_backlog ?? 0),
           })}</span>
           <span>{m.recall_page_status_pending({
-            countLabel: status.stats.pending.toLocaleString(),
+            countLabel: formatCount(status.stats.pending),
           })}</span>
           <span>{m.recall_page_status_partial({
-            countLabel: status.stats.partial.toLocaleString(),
+            countLabel: formatCount(status.stats.partial),
           })}</span>
           <span>{m.recall_page_status_units({
-            doneLabel: status.stats.units_done.toLocaleString(),
-            totalLabel: status.stats.units_total.toLocaleString(),
+            doneLabel: formatCount(status.stats.units_done),
+            totalLabel: formatCount(status.stats.units_total),
           })}</span>
           <span>{m.recall_page_status_entries({
-            countLabel: status.stats.entries.toLocaleString(),
+            countLabel: formatCount(status.stats.entries),
           })}</span>
         </div>
       {/if}
@@ -701,10 +704,8 @@
           />
           {#if progressLoading && progress.length === 0}
             <p class="progress-state">{m.recall_page_loading()}</p>
-          {:else if progressFailed}
-            <p class="progress-state status-error">
-              {m.recall_page_progress_error()}
-            </p>
+          {:else if progressError && progress.length === 0}
+            <LoadError message={progressError} onRetry={() => void loadProgress()} />
           {:else if progress.length === 0}
             <p class="progress-state">{m.recall_page_progress_empty()}</p>
           {:else}
@@ -770,8 +771,8 @@
                         {/if}
                       </td>
                       <td class="progress-units">
-                        {item.unit_cursor.toLocaleString()} /
-                        {item.units_total.toLocaleString()}
+                        {formatCount(item.unit_cursor)} /
+                        {formatCount(item.units_total)}
                       </td>
                       <td class="progress-updated">
                         {progressTimestamp(item.updated_at)}
@@ -781,7 +782,9 @@
                 {/snippet}
               </Table>
             </div>
-            {#if progressNextCursor}
+            {#if progressError}
+              <LoadError class="next-page-error" message={progressError} onRetry={() => void loadProgress(progressNextCursor)} />
+            {:else if progressNextCursor}
               <div class="progress-load-more">
                 <Button
                   size="sm"
@@ -905,17 +908,21 @@
   {#if resultCap > 0}
     <p class="result-cap">
       {m.recall_page_ranked_result_cap({
-        countLabel: resultCap.toLocaleString(),
+        countLabel: formatCount(resultCap),
       })}
     </p>
   {/if}
 
-  {#if entriesLoading && entries.length === 0}
-    <p class="entries-state">{m.recall_page_loading()}</p>
-  {:else if entriesFailed}
-    <p class="entries-state status-error">{m.recall_page_error()}</p>
+  {#if entriesError && entries.length === 0}
+    <LoadError message={entriesError} onRetry={() => void loadEntries()} />
+  {:else if entriesLoading && entries.length === 0}
+    <LoadingState label={m.recall_page_loading()} />
   {:else if entries.length === 0}
-    <EmptyState title={m.recall_page_empty()} />
+    <EmptyState align="top" title={m.recall_page_empty()}>
+      {#snippet icon()}
+        <SearchIcon size="24" strokeWidth="1.75" />
+      {/snippet}
+    </EmptyState>
   {:else}
     <div class="recall-table-shell">
       <Table unsorted
@@ -1064,7 +1071,9 @@
         {/snippet}
       </Table>
     </div>
-    {#if nextCursor}
+    {#if entriesError}
+      <LoadError class="next-page-error" message={entriesError} onRetry={() => void loadEntries(nextCursor)} />
+    {:else if nextCursor}
       <div class="load-more">
         <Button
           size="sm"
@@ -1134,8 +1143,7 @@
     text-transform: uppercase;
   }
 
-  .status-state,
-  .entries-state {
+  .status-state {
     padding: var(--space-6) 0;
     color: var(--text-muted);
     font-size: 12px;
@@ -1147,7 +1155,6 @@
     text-align: left;
   }
 
-  .status-error,
   .provenance-revoked {
     color: var(--slow-fg);
   }
@@ -1487,6 +1494,11 @@
 
   .entry-review-error {
     color: var(--slow-fg);
+  }
+
+  .recall-corpus-panel :global(.next-page-error),
+  .recall-corpus-panel :global(.status-load-error) {
+    margin-top: var(--space-4);
   }
 
   .load-more {

@@ -15,6 +15,7 @@ export const FRICTION_KINDS = [
   "pattern",
   "frustration",
   "interruption",
+  "diagnostic",
 ] as const;
 export type FrictionKind = (typeof FRICTION_KINDS)[number];
 
@@ -22,6 +23,12 @@ function byteCompare(a: string, b: string): number {
   if (a < b) return -1;
   if (a > b) return 1;
   return 0;
+}
+
+// fileableKind mirrors the server: frustration quotes the user and
+// interruptions carry no text, so neither is filed to Kata.
+export function fileableKind(kind: string): boolean {
+  return ["correction", "error", "workaround", "deferral", "pattern"].includes(kind);
 }
 
 // Diagnostic subjects carry a producer-chosen identity, not a
@@ -40,7 +47,11 @@ export function groupSignals(signals: readonly FrictionSignal[]): SignalSection[
   for (const signal of signals) {
     byKind.get(signal.kind)?.push(signal);
   }
-  return FRICTION_KINDS.map((kind) => ({ kind, signals: byKind.get(kind)! }));
+  // Diagnostics come from outside producers, so their section shows only on
+  // days that have some, as in the Markdown.
+  return FRICTION_KINDS.filter((kind) => kind !== "diagnostic" || byKind.get(kind)!.length > 0).map(
+    (kind) => ({ kind, signals: byKind.get(kind)! }),
+  );
 }
 
 export interface InterruptionRow {

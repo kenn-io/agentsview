@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
@@ -17,16 +16,14 @@ import (
 // transcript_fidelity column is pushed to PostgreSQL, read back correctly,
 // and that a change triggers a re-push via the IS DISTINCT FROM guard.
 func TestPGTranscriptFidelityRoundTripsAndRepushes(t *testing.T) {
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_transcript_fidelity_test"
-	pg, err := Open(pgURL, schema, true)
+	t.Parallel()
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
-	ctx := context.Background()
-	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
-	require.NoError(t, err, "drop schema")
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -56,7 +53,7 @@ func TestPGTranscriptFidelityRoundTripsAndRepushes(t *testing.T) {
 	_, err = sync.Push(ctx, false, nil)
 	require.NoError(t, err, "Push (summary)")
 
-	store, err := NewStore(pgURL, schema, true)
+	store, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 

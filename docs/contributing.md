@@ -85,8 +85,7 @@ Preserve the project's cross-cutting contracts:
   must preserve existing sessions through the migration and resync paths
   documented in `AGENTS.md`.
 - Keep SQLite and PostgreSQL behavior and query shape aligned unless the change
-  is explicitly scoped to one backend. DuckDB remains a disposable read
-  mirror.
+  is explicitly scoped to one backend.
 - Keep every frontend locale synchronized when user-facing messages change.
 - Keep background work bounded as stored session counts grow, and add
   cardinality-scaling coverage when changing watcher, polling, or sync paths.
@@ -203,6 +202,18 @@ Local roborev use is a strong recommendation, not a requirement for opening a
 pull request and not a contributor-side merge gate. Automated findings also
 require judgment: fix legitimate issues and do not make speculative changes
 solely to satisfy an inapplicable finding.
+
+## AI-assisted contributions
+
+AI-assisted work is welcome and meets the same standard as any other.
+
+- End the pull request description with `Model used:` and the model, such as
+  `Model used: Opus 5.5` or `Model used: GPT-6.1 Sol`.
+- Add a `Co-authored-by:` trailer for the tool to each commit it wrote, and to
+  the end of the pull request description. Squash-merge keeps only the
+  description, so a trailer left on a single commit is lost.
+- You are responsible for the change. Be ready to explain any line of it in
+  review.
 
 ## Open a reviewable pull request
 

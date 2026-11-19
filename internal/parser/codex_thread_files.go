@@ -18,6 +18,7 @@ type codexThreadFileCache struct {
 	mu     sync.Mutex
 	roots  map[string]*list.Element
 	recent list.List
+	watch  codexThreadWatchCache
 }
 
 type codexThreadDirectory struct {
@@ -37,6 +38,7 @@ type codexThreadInventoryBatch struct {
 	mu     sync.Mutex
 	closed atomic.Bool
 	roots  map[codexParentInventoryRoot]map[string]*codexParentInventoryDependency
+	stable bool
 }
 
 type codexParentInventoryRoot struct {
@@ -98,7 +100,7 @@ func (c *codexThreadFileCache) find(ctx context.Context, root, threadID string) 
 	batch := codexParentInventoryBatch(ctx)
 	if batch == nil || directory.batch != batch {
 		directory.batch = nil
-		if err := directory.refresh(0, directory.inventory); err != nil {
+		if err := c.refresh(directory, batch != nil && batch.stable); err != nil {
 			return nil, err
 		}
 		directory.batch = batch
@@ -106,9 +108,21 @@ func (c *codexThreadFileCache) find(ctx context.Context, root, threadID string) 
 	return slices.Clone(directory.inventory[threadID]), nil
 }
 
+func (c *codexThreadFileCache) refresh(directory *codexThreadDirectory, stable bool) error {
+	if stable {
+		// Stable snapshots cannot change during this parse, but another parse
+		// may reuse their paths. Enumerate once per parse, without watches.
+		return directory.refresh(0, directory.inventory, nil)
+	}
+	if err := c.watch.prepare(); err != nil {
+		return err
+	}
+	return directory.refresh(0, directory.inventory, &c.watch)
+}
+
 func (c *codexThreadFileCache) recordParent(ctx context.Context, root, threadID string, paths []string, source CodexParentInventorySource) {
 	batch := codexParentInventoryBatch(ctx)
-	if batch == nil {
+	if batch == nil || batch.stable {
 		return
 	}
 	batch.mu.Lock()
@@ -152,7 +166,7 @@ func ValidateCodexParentInventoryBatch(ctx context.Context) ([]CodexParentInvent
 		root.cache.mu.Lock()
 		directory := root.cache.directory(root.path)
 		directory.batch = nil
-		err := directory.refresh(0, directory.inventory)
+		err := root.cache.refresh(directory, false)
 		validationErr = errors.Join(validationErr, err)
 		for id, parent := range parents {
 			if err != nil || parent.changed || !slices.Equal(parent.paths, directory.inventory[id]) {
@@ -191,7 +205,7 @@ func (d *codexThreadDirectory) closeWatches() {
 	}
 }
 
-func (d *codexThreadDirectory) refresh(depth int, inventory map[string][]string) error {
+func (d *codexThreadDirectory) refresh(depth int, inventory map[string][]string, watch *codexThreadWatchCache) error {
 	info, changeTime, err := statCodexThreadDirectory(d.path)
 	if err != nil || !info.IsDir() {
 		d.removeInventory(inventory)
@@ -202,8 +216,12 @@ func (d *codexThreadDirectory) refresh(depth int, inventory map[string][]string)
 		}
 		return err
 	}
-	if err := d.refreshWatch(info); err != nil {
-		return err
+	if watch == nil {
+		d.info = nil
+	} else {
+		if err := d.refreshWatch(info, watch); err != nil {
+			return err
+		}
 	}
 	if d.info == nil || !os.SameFile(info, d.info) || !info.ModTime().Equal(d.info.ModTime()) || changeTime != d.changeTime {
 		entries, err := os.ReadDir(d.path)
@@ -266,7 +284,7 @@ func (d *codexThreadDirectory) refresh(depth int, inventory map[string][]string)
 		d.changeTime = changeTime
 	}
 	for _, child := range d.children {
-		if err := child.refresh(depth+1, inventory); err != nil {
+		if err := child.refresh(depth+1, inventory, watch); err != nil {
 			return err
 		}
 	}

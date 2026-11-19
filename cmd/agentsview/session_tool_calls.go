@@ -16,8 +16,11 @@ import (
 
 func newSessionToolCallsCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:          "tool-calls <id>",
-		Short:        "List tool calls made during a session",
+		Use:   "tool-calls <id>",
+		Short: "List tool calls made during a session",
+		Long: "List the tool calls recorded in one session with their transcript ordinal, timestamp, tool name, and category. " +
+			"Use messages at the corresponding ordinal to inspect the surrounding conversation.",
+		Example:      "  agentsview session tool-calls <id> --json",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {

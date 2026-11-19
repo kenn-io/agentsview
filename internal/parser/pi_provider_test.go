@@ -54,6 +54,47 @@ func TestOMOProviderKeepsPiLineageAndOMOIdentity(t *testing.T) {
 	assert.True(t, foundTool)
 }
 
+func TestDirectAPIProviderParsesUsageOnlySessions(t *testing.T) {
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "tools", "run-1.jsonl")
+	writeSourceFile(t, sourcePath, strings.Join([]string{
+		`{"type":"session","version":3,"id":"run-1","timestamp":"2026-01-01T10:00:00Z","cwd":"/work/example-project"}`,
+		`{"type":"session_info","id":"aaaaaaaa","parentId":null,"timestamp":"2026-01-01T10:00:00Z","name":"example intake"}`,
+		`{"type":"message","id":"bbbbbbbb","parentId":"aaaaaaaa","timestamp":"2026-01-01T10:00:01Z","message":{"role":"assistant","provider":"example","model":"model-a","content":[],"usage":{"input":800,"output":50,"cacheRead":200,"cacheWrite":0,"totalTokens":1050},"timestamp":1767261601000}}`,
+		`{"type":"message","id":"cccccccc","parentId":"bbbbbbbb","timestamp":"2026-01-01T10:00:02Z","message":{"role":"assistant","provider":"example","model":"model-b","content":[],"usage":{"input":10,"output":5,"cacheRead":0,"cacheWrite":0,"totalTokens":15},"timestamp":1767261602000}}`,
+	}, "\n"))
+
+	provider, ok := NewProvider(AgentDirectAPI, ProviderConfig{
+		Roots:   []string{root},
+		Machine: "devbox",
+	})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	require.Len(t, discovered, 1)
+	assert.Equal(t, AgentDirectAPI, discovered[0].Provider)
+
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: discovered[0]})
+	require.NoError(t, err)
+	require.Len(t, outcome.Results, 1)
+	result := outcome.Results[0].Result
+	sess := result.Session
+	assert.Equal(t, "direct-api:run-1", sess.ID)
+	assert.Equal(t, AgentDirectAPI, sess.Agent)
+	assert.Equal(t, "example_project", sess.Project)
+	assert.Equal(t, "example intake", sess.SessionName)
+	assert.Empty(t, sess.ParentSessionID)
+	assert.Empty(t, sess.RelationshipType)
+	assert.Equal(t, 55, sess.TotalOutputTokens)
+
+	require.Len(t, result.Messages, 2)
+	assert.Equal(t, "model-a", result.Messages[0].Model)
+	assert.Equal(t, 50, result.Messages[0].OutputTokens)
+	assert.Equal(t, "model-b", result.Messages[1].Model)
+	assert.Equal(t, 5, result.Messages[1].OutputTokens)
+}
+
 func TestOMPProviderSourceMethods(t *testing.T) {
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "encoded-cwd", "session-123.jsonl")
@@ -393,6 +434,118 @@ func TestPiProviderDiscoversSymlinkedCWDDirectory(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, sourcePath, found.DisplayPath)
+}
+
+func TestPiProviderSkipsSubagentArtifacts(t *testing.T) {
+	for _, agent := range []AgentType{AgentPi, AgentOMO, AgentStepCode} {
+		t.Run(string(agent), func(t *testing.T) {
+			root := t.TempDir()
+			project := filepath.Join(root, "encoded-cwd")
+			childDir := filepath.Join(project, "parent", "run-abc", "run-0")
+			wantPaths := []string{
+				filepath.Join(root, "root-session.jsonl"),
+				filepath.Join(project, "parent.jsonl"),
+				filepath.Join(childDir, "session.jsonl"),
+				filepath.Join(project, "subagent-artifacts-copy", "session.jsonl"),
+			}
+			for _, path := range wantPaths {
+				writeSourceFile(t, path, piProviderFixture(filepath.Base(path)))
+			}
+
+			artifactDirs := []string{
+				filepath.Join(root, "subagent-artifacts"),
+				filepath.Join(project, "subagent-artifacts"),
+				filepath.Join(childDir, "subagent-artifacts"),
+			}
+			for _, dir := range artifactDirs {
+				writeSourceFile(t, filepath.Join(dir, "copied.jsonl"), piProviderFixture("artifact-copy"))
+			}
+			cacheLink := filepath.Join(artifactDirs[1], "outputs", "pnpm-store", "v11", "projects", "cache-link")
+			require.NoError(t, os.MkdirAll(filepath.Dir(cacheLink), 0o755))
+			if err := os.Symlink(filepath.Join(t.TempDir(), "removed-package"), cacheLink); err != nil {
+				t.Skipf("symlink not supported: %v", err)
+			}
+
+			provider, ok := NewProvider(agent, ProviderConfig{Roots: []string{root}})
+			require.True(t, ok)
+			discovered, err := provider.Discover(t.Context())
+			require.NoError(t, err)
+			var paths []string
+			for _, source := range discovered {
+				paths = append(paths, source.DisplayPath)
+			}
+			assert.ElementsMatch(t, wantPaths, paths)
+
+			streamer, ok := provider.(StreamingDiscoverer)
+			require.True(t, ok)
+			var streamed []string
+			err = streamer.DiscoverEach(t.Context(), func(source SourceRef) error {
+				streamed = append(streamed, source.DisplayPath)
+				return nil
+			})
+			require.NoError(t, err)
+			assert.ElementsMatch(t, wantPaths, streamed)
+
+			for _, dir := range artifactDirs {
+				artifactPath := filepath.Join(dir, "copied.jsonl")
+				for _, req := range []FindSourceRequest{
+					{StoredFilePath: artifactPath},
+					{FingerprintKey: artifactPath},
+					{RawSessionID: "artifact-copy"},
+				} {
+					_, found, err := provider.FindSource(t.Context(), req)
+					require.NoError(t, err)
+					assert.False(t, found)
+				}
+				for _, event := range []string{"write", "remove"} {
+					if event == "remove" {
+						require.NoError(t, os.Remove(artifactPath))
+					}
+					req := ChangedPathRequest{Path: artifactPath, EventKind: event, WatchRoot: root}
+					relevance, err := ResolveChangedPathRelevance(t.Context(), provider, req)
+					require.NoError(t, err)
+					assert.Equal(t, ChangedPathNonData, relevance)
+					changed, err := provider.SourcesForChangedPath(t.Context(), req)
+					require.NoError(t, err)
+					assert.Empty(t, changed)
+				}
+			}
+		})
+	}
+}
+
+func TestPiProviderKeepsExplicitArtifactNamedSessionRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "subagent-artifacts")
+	path := filepath.Join(root, "session.jsonl")
+	writeSourceFile(t, path, piProviderFixture("explicit-session"))
+	provider, ok := NewProvider(AgentPi, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(t, err)
+	var paths []string
+	for _, source := range discovered {
+		paths = append(paths, source.DisplayPath)
+	}
+	assert.Equal(t, []string{path}, paths)
+}
+
+func TestPiProviderKeepsIncompleteSessionDiscovery(t *testing.T) {
+	root := t.TempDir()
+	writeSourceFile(t, filepath.Join(root, "session.jsonl"), piProviderFixture("session"))
+	if err := os.Symlink(filepath.Join(t.TempDir(), "missing-sessions"), filepath.Join(root, "linked-sessions")); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	provider, ok := NewProvider(AgentPi, ProviderConfig{Roots: []string{root}})
+	require.True(t, ok)
+
+	_, err := provider.Discover(t.Context())
+	var incomplete DiscoveryIncompleteError
+	require.ErrorAs(t, err, &incomplete)
+	streamer, ok := provider.(StreamingDiscoverer)
+	require.True(t, ok)
+	err = streamer.DiscoverEach(t.Context(), func(SourceRef) error { return nil })
+	require.ErrorAs(t, err, &incomplete)
 }
 
 func TestPiProviderParse(t *testing.T) {
@@ -906,12 +1059,12 @@ func TestPiProviderMarksHeaderParentedSubagentRunsAsSubagents(t *testing.T) {
 			writeSourceFile(t, childPath, piChildFixture(t, "child-uuid", parentPath))
 			writeSourceFile(t, deepPath, piChildFixture(t, "grandchild-uuid", childPath))
 
-			child, _, err := parsePiLikeSession(childPath, "proj", "local", agent, prefix)
+			child, _, err := parsePiLikeSession(t.Context(), childPath, "proj", "local", agent, prefix)
 			require.NoError(t, err)
 			assert.Equal(t, prefix+"parent-uuid", child.ParentSessionID)
 			assert.Equal(t, RelSubagent, child.RelationshipType)
 
-			grandchild, _, err := parsePiLikeSession(deepPath, "proj", "local", agent, prefix)
+			grandchild, _, err := parsePiLikeSession(t.Context(), deepPath, "proj", "local", agent, prefix)
 			require.NoError(t, err)
 			assert.Equal(t, prefix+"child-uuid", grandchild.ParentSessionID)
 			assert.Equal(t, RelSubagent, grandchild.RelationshipType)
@@ -935,7 +1088,7 @@ func TestPiProviderKeepsHeaderParentOutsideSubagentRunsAsFork(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			writeSourceFile(t, path, piChildFixture(t, "fork-uuid", parentPath))
 
-			child, _, err := parsePiLikeSession(path, "proj", "local", AgentPi, "pi:")
+			child, _, err := parsePiLikeSession(t.Context(), path, "proj", "local", AgentPi, "pi:")
 			require.NoError(t, err)
 			assert.Equal(t, "pi:parent-uuid", child.ParentSessionID)
 			assert.Equal(t, RelFork, child.RelationshipType)

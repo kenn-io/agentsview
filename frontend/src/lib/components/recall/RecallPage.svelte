@@ -9,6 +9,9 @@
   import { sync } from "../../stores/sync.svelte.js";
   import GeneratedInsightsPanel from "./GeneratedInsightsPanel.svelte";
   import RecallCorpusPanel from "./RecallCorpusPanel.svelte";
+  import LibraryPageHeader from "../shared/LibraryPageHeader.svelte";
+  import LoadError from "../shared/LoadError.svelte";
+  import LoadingState from "../shared/LoadingState.svelte";
 
   type RecallTab = "corpus" | "generated";
 
@@ -47,23 +50,30 @@
 </script>
 
 <div class="recall-page">
-  <header class="recall-workspace-header">
-    <div>
-      <h1>{m.recall_page_title()}</h1>
-      <p>{m.recall_page_workspace_subtitle()}</p>
-    </div>
-    {#if tabOptions.length > 1}
-      <SegmentedControl
-        options={tabOptions}
-        value={selectedTab}
-        ariaLabel={m.recall_page_tabs_label()}
-        onchange={selectTab}
-      />
-    {/if}
-  </header>
+  <div class="recall-workspace-header">
+    <LibraryPageHeader
+      title={m.recall_page_title()}
+      description={m.recall_page_workspace_subtitle()}
+    >
+      {#snippet actions()}
+        {#if tabOptions.length > 1}
+          <SegmentedControl
+            options={tabOptions}
+            value={selectedTab}
+            ariaLabel={m.recall_page_tabs_label()}
+            onchange={selectTab}
+          />
+        {/if}
+      {/snippet}
+    </LibraryPageHeader>
+  </div>
 
-  {#if !backendKnown}
-    <p class="workspace-loading">{m.recall_page_loading()}</p>
+  {#if !backendKnown && settings.error}
+    <div class="workspace-state">
+      <LoadError message={settings.error} onRetry={() => void settings.load()} />
+    </div>
+  {:else if !backendKnown}
+    <LoadingState label={m.recall_page_loading()} />
   {:else if selectedTab === "corpus"}
     <RecallCorpusPanel />
   {:else}
@@ -72,41 +82,23 @@
 </div>
 
 <style>
+  /* Shared library page frame: a 1040px content column. */
   .recall-page {
     min-height: 100%;
+    max-width: 1088px;
+    margin: 0 auto;
   }
 
   .recall-workspace-header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 1rem;
-    padding: 1.25rem 1.5rem 0;
+    padding: 28px 24px 0;
   }
 
-  .recall-workspace-header h1 {
-    margin: 0;
-    color: var(--text-primary);
-    font-size: 1.25rem;
-  }
-
-  .recall-workspace-header p {
-    margin: 0.25rem 0 0;
-    color: var(--text-secondary);
-    font-size: 0.82rem;
-  }
-
-  .workspace-loading {
-    margin: 0;
-    padding: 1.5rem;
-    color: var(--text-secondary);
-    font-size: 0.82rem;
+  .workspace-state {
+    padding: 16px 24px 0;
   }
 
   @media (max-width: 760px) {
     .recall-workspace-header {
-      align-items: stretch;
-      flex-direction: column;
       padding: 1rem 1rem 0;
     }
   }

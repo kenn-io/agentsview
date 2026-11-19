@@ -186,7 +186,7 @@ func TestNewRejectsIncludeAndExcludeProjects(t *testing.T) {
 	local := testDB(t)
 
 	_, err := New(
-		"postgres://user:pass@127.0.0.1:1/db?sslmode=disable",
+		t.Context(), "postgres://user:pass@127.0.0.1:1/db?sslmode=disable",
 		"agentsview",
 		local,
 		"test-machine",

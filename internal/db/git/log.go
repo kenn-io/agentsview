@@ -137,10 +137,10 @@ func aggregateCommits(commits map[string]LogResult, seen map[string]struct{}) Lo
 	return total
 }
 
-// isSHALine reports whether s is a 40-character lowercase hex SHA, as emitted
-// by `--format=%H`.
+// isSHALine reports whether s is a full lowercase hex SHA-1 or SHA-256 hash,
+// as emitted by `--format=%H`.
 func isSHALine(s string) bool {
-	if len(s) != 40 {
+	if len(s) != 40 && len(s) != 64 {
 		return false
 	}
 	for i := range len(s) {

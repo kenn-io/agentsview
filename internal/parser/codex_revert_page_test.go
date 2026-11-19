@@ -365,7 +365,7 @@ func TestCodexForkOfRevertedThreadDropsReplayedPageTurns(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, outcome.Results, 1)
 			assert.Equal(t, DataVersionNeedsRetry, outcome.Results[0].DataVersion)
-			assert.Contains(t, outcome.Results[0].RetryReason, "parent turns")
+			assert.Contains(t, outcome.Results[0].RetryReason, "forked from")
 			assert.Len(t, outcome.Results[0].Result.Messages, 5, "keep copied history until every parent directory is readable")
 			_, _, err = ResolveRawCapturePlan(t.Context(), provider, source)
 			require.ErrorIs(t, err, ErrInvalidRawCapturePlan, "raw capture must not silently omit parent pages")
@@ -414,7 +414,7 @@ func TestCodexForkWithOnlyParentPageNeedsRetry(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	assert.Equal(t, DataVersionNeedsRetry, outcome.Results[0].DataVersion)
-	assert.Contains(t, outcome.Results[0].RetryReason, "parent turns")
+	assert.Contains(t, outcome.Results[0].RetryReason, "forked from")
 	assert.Len(t, outcome.Results[0].Result.Messages, 3, "keep the history until its parent can be resolved")
 
 	writeRevertRollout(t, root, revertThread,

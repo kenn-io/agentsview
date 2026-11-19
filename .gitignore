@@ -88,3 +88,6 @@ graphify-out/
 # roborev snapshots
 /.roborev/
 .env*
+
+# gotestsum JSON events and rerun reports written by CI test targets
+/gotestsum/

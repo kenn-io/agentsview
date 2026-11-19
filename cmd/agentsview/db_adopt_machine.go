@@ -56,7 +56,7 @@ func newDBAdoptMachineCommand() *cobra.Command {
 				if err != nil {
 					return nil, err
 				}
-				if err := database.AdoptMachineIdentity(cmd.Context(), cfg.InstallationID, machines); err != nil {
+				if err := database.AdoptMachineIdentity(ctx, cfg.InstallationID, machines); err != nil {
 					database.Close()
 					return nil, err
 				}

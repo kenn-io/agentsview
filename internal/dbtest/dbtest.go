@@ -23,6 +23,15 @@ import (
 // Ptr returns a pointer to v.
 func Ptr[T any](v T) *T { return new(v) }
 
+// FullRebuildVersion returns a version that requires a full archive rebuild.
+func FullRebuildVersion() int {
+	version := db.CurrentDataVersion() - 1
+	for db.ScopedDataVersionProviders(version, db.CurrentDataVersion()) != nil {
+		version--
+	}
+	return version
+}
+
 // WriteTestFile creates a file at path with the given content,
 // creating parent directories as needed. Fails the test on
 // any error.

@@ -1417,9 +1417,10 @@ func TestOpenCodeDigestListingForm(t *testing.T) {
 			e.digestVerifiedAt[container] = now.Add(-openCodeContainerDigestVerifyInterval)
 			e.containerPass.fullDigestListed[container] = true
 		}
-		pages := countSessionFileHashReads(t, archive)
+		pages := archive.VirtualContainerMemberFreshnessPages()
 		assert.Empty(t, e.filterQuickSyncFiles(t.Context(), files, now))
-		assert.Equal(t, int32(4), pages.Load(), "each container/agent group reads two pages once")
+		assert.Equal(t, int64(4), archive.VirtualContainerMemberFreshnessPages()-pages,
+			"each container/agent group reads two pages once")
 
 		canceled, cancel := context.WithCancel(t.Context())
 		cancel()

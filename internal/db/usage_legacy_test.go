@@ -44,18 +44,29 @@ func TestDailyUsageFactsMatchesLegacy(t *testing.T) {
 			From: "2025-01-01", To: "2025-01-07", Timezone: "UTC",
 		}},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			database := openDailyUsageFixtureDB(t)
-			legacy, err := database.getDailyUsageLegacy(
-				t.Context(), test.filter,
-			)
-			require.NoError(t, err)
-			facts, err := database.GetDailyUsage(
-				t.Context(), test.filter,
-			)
-			require.NoError(t, err)
-			assert.Equal(t, legacy, facts)
-		})
+	for _, journaled := range []bool{false, true} {
+		for _, test := range tests {
+			name := test.name
+			if journaled {
+				name += "/journaled"
+			}
+			t.Run(name, func(t *testing.T) {
+				database := openDailyUsageFixtureDB(t)
+				if journaled {
+					warmJournaledUsage(t, database, test.filter)
+				}
+				legacy, err := database.getDailyUsageLegacy(
+					t.Context(), test.filter,
+				)
+				require.NoError(t, err)
+				facts, err := database.GetDailyUsage(
+					t.Context(), test.filter,
+				)
+				require.NoError(t, err)
+				// The legacy reader has no internal Pairwise evidence.
+				facts.Pairwise = nil
+				assert.Equal(t, legacy, facts)
+			})
+		}
 	}
 }

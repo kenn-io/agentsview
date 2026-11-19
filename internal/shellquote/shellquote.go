@@ -19,6 +19,11 @@ func POSIX(s string) string {
 	if s != "" && strings.IndexFunc(s, func(c rune) bool { return !posixSafe(c) }) < 0 {
 		return s
 	}
+	return POSIXLiteral(s)
+}
+
+// POSIXLiteral always quotes s as one literal POSIX shell word.
+func POSIXLiteral(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 

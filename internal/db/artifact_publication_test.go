@@ -362,7 +362,7 @@ func TestArtifactRequeueLifecycleClearsRejection(t *testing.T) {
 		target, err := Open(t.Context(), filepath.Join(dir, "target.db"))
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, target.Close()) })
-		require.NoError(t, target.CopySyncStateFrom(sourcePath))
+		require.NoError(t, target.CopySyncStateFrom(t.Context(), sourcePath))
 		pending, err := target.PendingArtifactExports(t.Context(), 10)
 		require.NoError(t, err)
 		require.Len(t, pending, 1)
@@ -1491,7 +1491,7 @@ func TestArtifactPublicationStateSurvivesFullResyncCopy(t *testing.T) {
 	target, err := Open(ctx, filepath.Join(dir, "target.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, target.Close()) })
-	require.NoError(t, target.CopySyncStateFrom(sourcePath))
+	require.NoError(t, target.CopySyncStateFrom(t.Context(), sourcePath))
 
 	// A resync re-verifies every copied session, so the acknowledged
 	// "published" row is re-dirtied alongside the still-pending "queued" row.
@@ -1583,7 +1583,7 @@ func TestCopySyncStateForcesPendingOnFreshCopiedQueueRows(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, emptyBefore, "no origin key: queue triggers stay gated during resync")
 
-	require.NoError(t, target.CopySyncStateFrom(sourcePath))
+	require.NoError(t, target.CopySyncStateFrom(t.Context(), sourcePath))
 
 	pending, err := target.PendingArtifactExports(ctx, 10)
 	require.NoError(t, err)
@@ -1626,7 +1626,7 @@ func TestCopySyncStateQueuesSessionsDiscoveredDuringRebuild(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, before, "the rebuild has no origin until sync state is restored")
 
-	require.NoError(t, target.CopySyncStateFrom(sourcePath))
+	require.NoError(t, target.CopySyncStateFrom(t.Context(), sourcePath))
 
 	pending, err := target.PendingArtifactExports(ctx, 10)
 	require.NoError(t, err)
@@ -1687,7 +1687,7 @@ func TestCopySyncStateMergesQueueRowsAsPending(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, acked, "both queue rows are acknowledged before the merge")
 
-	require.NoError(t, target.CopySyncStateFrom(sourcePath))
+	require.NoError(t, target.CopySyncStateFrom(t.Context(), sourcePath))
 
 	pending, err := target.PendingArtifactExports(ctx, 10)
 	require.NoError(t, err)
@@ -1717,7 +1717,7 @@ func TestArtifactPublicationStateCopyAcceptsPreRevisionCheckpointHead(t *testing
 	require.NoError(t, legacy.Close())
 
 	target := testDB(t)
-	require.NoError(t, target.CopySyncStateFrom(sourcePath))
+	require.NoError(t, target.CopySyncStateFrom(t.Context(), sourcePath))
 	head, ok, err := target.GetArtifactCheckpointHead(t.Context(), "desktop-a1b2c3")
 	require.NoError(t, err)
 	require.True(t, ok)

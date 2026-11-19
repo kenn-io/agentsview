@@ -130,6 +130,9 @@ func seedFrictionReviewDigest(t *testing.T, te *testEnv) {
 	te.seedSession(t, "fr-1", "my-app", 4)
 	te.seedSession(t, "fr-2", "my-app", 4)
 	sigs := frictionTestSignals()
+	for _, id := range []string{"event-a", "event-b"} {
+		sigs = append(sigs, friction.Signal{Kind: friction.KindDiagnostic, SubjectID: "diagnostic:" + id, SubjectKind: friction.SubjectDiagnostic, Label: "worker", Text: "launch failed"})
+	}
 	require.NoError(t, replaceTestSessionFriction(ctx, te.db, "fr-1", frictionTestFindings("fr-1", sigs), "hash-fr-1"))
 	require.NoError(t, replaceTestSessionFriction(ctx, te.db, "fr-2", frictionTestFindings("fr-2", sigs), "hash-fr-2"))
 
@@ -233,10 +236,12 @@ func TestGenerateFrictionReviewInsight_SavesAndCaches(t *testing.T) {
 		frictionIntTitle,
 		"- friction:pattern:01",
 		"- friction:p0_alerts",
+		`"diagnostics":[{"source":"worker","message":"launch failed","count":2}]`,
+		"- friction:diagnostics",
 	} {
 		assert.Contains(t, prompt, want)
 	}
-	for _, notWant := range []string{frictionReviewTextMark, frictionReviewEvidMark, frictionFrustMark, `"signals"`, `"fr-3"`} {
+	for _, notWant := range []string{frictionReviewTextMark, frictionReviewEvidMark, frictionFrustMark, `"signals"`, `"fr-3"`, "diagnostic:event-a", `"kind":"diagnostic"`} {
 		assert.NotContains(t, prompt, notWant)
 	}
 

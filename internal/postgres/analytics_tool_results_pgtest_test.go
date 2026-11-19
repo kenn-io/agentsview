@@ -4,21 +4,18 @@ package postgres
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
 func TestAnalyticsToolResultsAreNotUserPrompts(t *testing.T) {
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, "agentsview")
 	local := testDB(t)
 	ctx := t.Context()
 	started := time.Now().UTC().Add(-time.Hour).Truncate(time.Hour).Format(time.RFC3339)
@@ -35,27 +32,21 @@ func TestAnalyticsToolResultsAreNotUserPrompts(t *testing.T) {
 		{SessionID: "tool-results", Ordinal: 5, Role: "assistant", Model: "model-a", HasToolUse: true, Timestamp: started},
 	}))
 	require.NoError(t, local.UpdateSessionSignals(t.Context(), "tool-results", db.SessionSignalUpdate{QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion, ShortPromptCount: 1}}))
-	ps, err := New(pgURL, "agentsview", local, "analytics-test-machine", true, storage.PusherOptions{})
+	ps, err := New(t.Context(), pgURL, "agentsview", local, "analytics-test-machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	defer ps.Close()
 	require.NoError(t, ps.EnsureSchema(ctx))
 	_, err = ps.Push(ctx, false, nil)
 	require.NoError(t, err)
-	store, err := NewStore(pgURL, "agentsview", true)
+	store, err := NewStore(t.Context(), pgURL, "agentsview", true)
 	require.NoError(t, err)
 	defer store.Close()
-	duckPath := filepath.Join(t.TempDir(), "analytics.duckdb")
-	_, err = duckdb.Push(ctx, duckPath, local, "analytics-test-machine", storage.MirrorPushOptions{}, true, nil)
-	require.NoError(t, err)
-	duckStore, err := duckdb.NewStore(t.Context(), duckPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, duckStore.Close()) })
 	for name, backend := range map[string]interface {
 		GetAnalyticsSignalSessions(context.Context, db.AnalyticsFilter, string, int) (db.SignalSessionsResponse, error)
 		GetSessionActivity(context.Context, string) (*db.SessionActivityResponse, error)
 		GetAnalyticsActivity(context.Context, db.AnalyticsFilter, string) (db.ActivityResponse, error)
 		GetAnalyticsSessionShape(context.Context, db.AnalyticsFilter) (db.SessionShapeResponse, error)
-	}{"sqlite": local, "postgres": store, "duckdb": duckStore} {
+	}{"sqlite": local, "postgres": store} {
 		t.Run(name, func(t *testing.T) {
 			activity, err := backend.GetSessionActivity(ctx, "tool-results")
 			require.NoError(t, err)

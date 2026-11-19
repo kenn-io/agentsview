@@ -118,7 +118,7 @@
             </a>
           </figure>
         </div>
-        <p class="hero-meta">Local-first · MIT · Single Go binary · Desktop · Web · CLI · MCP · SQLite / PostgreSQL / DuckDB / ClickHouse</p>
+        <p class="hero-meta">Local-first · MIT · Single Go binary · Desktop · Web · CLI · MCP · SQLite / PostgreSQL / ClickHouse</p>
       </section>
 
       <section class="site-section" aria-labelledby="record-title">
@@ -306,12 +306,13 @@
             <figcaption class="caption">Daily spend by agent, model, and project. <a href="/docs/token-usage/">Token usage reference</a>.</figcaption>
           </figure>
           <figure class="terminal">
-            <code><span class="prompt">$</span> agentsview usage daily
+            <code><span class="prompt">$</span> agentsview report usage daily
 <span class="out">last 30 days by agent, model, and project</span>
-<span class="prompt">$</span> agentsview usage statusline
+<span class="prompt">$</span> agentsview report usage statusline
 <span class="hi">$9.61 today</span>
 <span class="prompt">$</span> agentsview capture run -- claude -p "fix the tests"
 <span class="out">exact usage for one non-interactive run</span></code>
+            <figcaption class="caption">Older command names still work. See the <a href="/docs/commands/#command-migration">command migration</a>.</figcaption>
           </figure>
         </div>
       </section>
@@ -322,7 +323,7 @@
             <p class="section-index">04 / Understand</p>
             <h2 id="understand-title">Search and score every transcript.</h2>
           </div>
-          <p>Find a conversation by project and date in the command palette, or open it by ID with Ctrl/Cmd+G. Full-text search matches words; opt-in semantic and hybrid search match by meaning. Health scores and quality signals link back to the transcript so you can check the evidence. Tool sequences follow errors, retries, switches, and recovery through the recorded calls without running a model. Tool Usage rates link to sessions with empty results, repeated calls, and recovery. For an assessment of one session, <a href="/docs/recall/#tool-effectiveness-reports">Analyze tool effectiveness</a> generates a report with citations to the calls it judged.</p>
+          <p>Find a conversation by project and date in the command palette, or open it by ID with Ctrl/Cmd+G. Full-text search matches words; search by meaning finds related ideas, and you can turn it on from the palette. Health scores and quality signals link back to the transcript so you can check the evidence. Tool sequences follow errors, retries, switches, and recovery through the recorded calls without running a model. Tool Usage rates link to sessions with empty results, repeated calls, and recovery. For an assessment of one session, <a href="/docs/recall/#tool-effectiveness-reports">Analyze tool effectiveness</a> generates a report with citations to the calls it judged. The optional <a href="/docs/quality/#friction-log">Friction Log</a> reviews each day's corrections, tool errors, and recurring problems, and can file them as Kata issues.</p>
         </div>
         <figure class="capture">
           <a href="/docs/assets/generated/screenshots/search-filters.png" data-lightbox>
@@ -353,7 +354,7 @@
           <div>
             <p class="section-index">06 / Feed back</p>
             <h2 id="feedback-title">Your agents can read it too.</h2>
-            <p class="lede">The same archive is available to your agents through a CLI, a REST API, and an MCP server. An agent can check what a previous session already tried, quote its own history, or watch its spend mid-run. Eight new read-only MCP tools expose file edits, tool calls, child sessions, Activity reports, tool usage, cost comparisons, and offline guide search. Native conversation-memory plugins bundle recall instructions and session-start refresh for Claude Code and Codex. See <a href="/docs/mcp/#focused-memory-profile">memory setup</a>.</p>
+            <p class="lede">The same archive is available to your agents through a CLI, a REST API, and an MCP server. An agent can check what a previous session already tried, quote its own history, or watch its spend mid-run. Read-only MCP tools expose file edits, tool calls, child sessions, Activity reports, tool usage, cost comparisons, and offline guide search. Native conversation-memory plugins bundle recall instructions and session-start refresh for Claude Code and Codex. See <a href="/docs/mcp/#focused-memory-profile">memory setup</a>. Run <a href="/docs/commands/#agentsview-why"><code>agentsview why</code></a> to find the session and prompt behind a line of code.</p>
             <ul class="interface-list">
               <li><strong>CLI</strong><span>Scriptable reports and session queries.</span></li>
               <li><strong>REST</strong><span>Programmatic session and usage access.</span></li>
@@ -385,7 +386,7 @@
             <h2 id="share-title">One machine or the whole team.</h2>
             <p><a href="/docs/remote-access/#ssh-remote-sync">SSH sync</a> fetches sessions from Linux and macOS hosts without a manual AgentsView install or a remote daemon. <a href="/docs/commands/#agentsview-archive">Local archives</a> preserve a retired computer's history, annotations, and original Claude and Codex files.</p>
           </div>
-          <p>SQLite is the local archive of record. From there, push parsed sessions to PostgreSQL or ClickHouse, mirror into DuckDB, read provider files from S3, or keep original source files in hosted storage.</p>
+          <p>SQLite is the local archive of record. From there, push parsed sessions to PostgreSQL or ClickHouse, read provider files from S3, or keep original source files in hosted storage.</p>
         </div>
         <div class="proof-grid">
           <article class="proof">
@@ -394,9 +395,9 @@
             <p>An installable auto-push service mirrors each machine's archive into PostgreSQL; a read-only server presents the merged fleet. <a href="/docs/pg-sync/">PostgreSQL sync</a>.</p>
           </article>
           <article class="proof">
-            <p class="proof-tag">DuckDB / ClickHouse</p>
-            <h3>Choose a reporting backend.</h3>
-            <p>Mirror into <a href="/docs/duckdb/">DuckDB</a> for local or Quack reads, or push to <a href="/docs/clickhouse-sync/">ClickHouse</a> and serve the dashboard there, including semantic and hybrid search when embeddings are pushed. Keep session edits in SQLite.</p>
+            <p class="proof-tag">ClickHouse</p>
+            <h3>Serve the dashboard remotely.</h3>
+            <p>Push to <a href="/docs/clickhouse-sync/">ClickHouse</a> and serve the dashboard there, including semantic and hybrid search when embeddings are pushed. Keep session edits in SQLite.</p>
           </article>
           <article class="proof">
             <p class="proof-tag">Filesystem</p>
@@ -438,7 +439,7 @@
           <article class="boundary">
             <p class="proof-tag">Your choice</p>
             <h3>Share only for a clear purpose.</h3>
-            <p>Configure PostgreSQL, ClickHouse, remote DuckDB, Generated Insights, GitHub publishing, or hosted raw sync only when that outcome is worth sending data.</p>
+            <p>Configure PostgreSQL, ClickHouse, Generated Insights, GitHub publishing, or hosted raw sync only when that outcome is worth sending data.</p>
           </article>
           <article class="boundary">
             <p class="proof-tag">Visible boundaries</p>

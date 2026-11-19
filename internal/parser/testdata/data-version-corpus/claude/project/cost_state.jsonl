@@ -1,0 +1,3 @@
+{"type":"user","timestamp":"2026-10-01T10:00:00Z","message":{"content":"hello"}}
+{"type":"assistant","timestamp":"2026-10-01T10:00:01Z","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"hi"}]}}
+{"type":"cost-state","sessionId":"cost-sess","totalCostUSD":0.578755,"totalAPIDuration":1000,"totalDuration":2000,"startTime":1794009864110,"modelUsage":{"claude-opus-5-5":{"inputTokens":1243,"outputTokens":8616,"thinkingTokens":400,"cacheReadInputTokens":510115,"cacheCreationInputTokens":59688,"webSearchRequests":1,"costUSD":0.577755},"claude-haiku-5-5":{"inputTokens":900,"outputTokens":30,"costUSD":0.001}},"hasUnknownModelCost":true}

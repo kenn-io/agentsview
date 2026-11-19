@@ -207,6 +207,57 @@ func TestWorkerMovesTerminalAttemptToDurableFailure(t *testing.T) {
 	assert.Equal(t, "parse:internal", queue.failures[0].message)
 }
 
+func TestWorkerFailsDeterministicSizeLimitsOnFirstAttempt(t *testing.T) {
+	for _, stage := range []string{"materialize", "parse"} {
+		t.Run(stage, func(t *testing.T) {
+			manifest := workerTestManifest(t, rawsync.ManifestSnapshot)
+			lease := workerTestLease()
+			lease.ManifestID = manifest.ManifestID
+			queue := &workerQueueFixture{leases: []JobLease{lease}}
+			base := t.TempDir()
+			object := manifest.Manifest.Entries[0].Objects[0]
+			store := &materializerStore{objects: map[rawsync.ObjectRef][]byte{object: []byte("session")}}
+			limit := int64(1024)
+			if stage == "materialize" {
+				limit = 6
+			}
+			parsed := false
+			projected := false
+			worker := newWorkerForTest(t, queue,
+				manifestSourceFunc(func(context.Context, JobLease) (rawsync.CanonicalManifest, error) { return manifest, nil }),
+				Materializer{Store: store, BaseDir: base, MaxTotalBytes: limit},
+				sourceParserFunc(func(context.Context, rawsync.CanonicalManifest, *Materialization) (ParsedManifest, error) {
+					parsed = true
+					return ParsedManifest{}, errors.Join(errParserProtocol, ErrSizeLimit, errors.New("private source text"))
+				}),
+				projectionSinkFunc(func(context.Context, JobLease, rawsync.CanonicalManifest, ParsedManifest) error {
+					projected = true
+					return nil
+				}),
+			)
+
+			result, err := worker.RunBatch(t.Context())
+			require.Error(t, err)
+			assert.NotContains(t, err.Error(), "private source")
+			assert.Contains(t, err.Error(), stage+":size_limit")
+			assert.Equal(t, BatchResult{Claimed: 1, Failed: 1}, result)
+			assert.Empty(t, queue.retries)
+			require.Len(t, queue.failures, 1)
+			assert.Equal(t, lease, queue.failures[0].lease)
+			assert.Equal(t, stage, queue.failures[0].class)
+			assert.Equal(t, stage+":size_limit", queue.failures[0].message)
+			assert.Equal(t, stage == "parse", parsed)
+			assert.False(t, projected)
+			entries, err := os.ReadDir(base)
+			require.NoError(t, err)
+			assert.Empty(t, entries, "rejected work must leave no materialized source")
+			if stage == "materialize" {
+				assert.Empty(t, store.opened)
+			}
+		})
+	}
+}
+
 func TestWorkerCancelsWorkAndDoesNotRetryAfterLeaseLoss(t *testing.T) {
 	t.Parallel()
 	lease := workerTestLease()

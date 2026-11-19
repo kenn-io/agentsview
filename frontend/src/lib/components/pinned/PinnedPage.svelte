@@ -1,6 +1,9 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
   import { CopyButton, EmptyState } from "@kenn-io/kit-ui";
+  import LibraryPageHeader from "../shared/LibraryPageHeader.svelte";
+  import LoadError from "../shared/LoadError.svelte";
+  import LoadingState from "../shared/LoadingState.svelte";
   import { m } from "../../i18n/index.js";
   import {
     ExternalLinkIcon,
@@ -20,6 +23,10 @@
   $effect(() => {
     pins.loadAll(sessions.filters.project || undefined);
   });
+
+  function retryLoad() {
+    void pins.loadAll(sessions.filters.project || undefined);
+  }
 
   onDestroy(() => pins.cancelAllPinsRead());
 
@@ -67,7 +74,8 @@
           ),
       };
     }
-    const s = sessions.sessions.find((s) => s.id === pin.session_id);
+    const row = sessions.byId.get(pin.session_id);
+    const s = row ? sessions.view(row) : undefined;
     return s
       ? {
           project: s.project,
@@ -107,28 +115,38 @@
 </script>
 
 <div class="pinned-page">
-  <div class="pinned-header">
-    <PinIcon size="18" strokeWidth="2" class="pin-icon" aria-hidden="true" />
-    <h2>{m.pinned_title()}</h2>
-    {#if pins.pins.length > 0}
-      <span class="pin-count">{pins.pins.length}</span>
-    {/if}
-  </div>
+  <LibraryPageHeader title={m.pinned_title()}>
+    {#snippet trailing()}
+      {#if pins.pins.length > 0}
+        <span class="pin-count">{pins.pins.length}</span>
+      {/if}
+    {/snippet}
+  </LibraryPageHeader>
 
-  {#if pins.loading}
-    <div class="loading-state">{m.pinned_loading()}</div>
+  {#if pins.error && pins.pins.length === 0}
+    <LoadError message={pins.error} onRetry={retryLoad} />
+  {:else if pins.loading && pins.pins.length === 0}
+    <LoadingState label={m.pinned_loading()} />
   {:else if pins.pins.length === 0 && sessions.filters.project}
     <EmptyState
+      align="top"
       title={m.pinned_none_for_project()}
       description={m.pinned_none_for_project_hint()}
-    />
-  {:else if pins.pins.length === 0}
-    <EmptyState title={m.pinned_none()} description={m.pinned_none_hint()}>
+    >
       {#snippet icon()}
-        <PinIcon size="40" strokeWidth="1.6" aria-hidden="true" />
+        <PinIcon size="24" strokeWidth="1.75" />
+      {/snippet}
+    </EmptyState>
+  {:else if pins.pins.length === 0}
+    <EmptyState align="top" title={m.pinned_none()} description={m.pinned_none_hint()}>
+      {#snippet icon()}
+        <PinIcon size="24" strokeWidth="1.75" />
       {/snippet}
     </EmptyState>
   {:else}
+    {#if pins.error}
+      <LoadError message={pins.error} onRetry={retryLoad} />
+    {/if}
     <div class="pin-list">
       {#each pins.pins as pin (`${pin.session_id}:${pin.message_key ?? pin.id}`)}
         {@const info = getSessionInfo(pin)}
@@ -215,45 +233,19 @@
 </div>
 
 <style>
+  /* Shared library page frame: a 1040px content column. */
   .pinned-page {
-    max-width: 1100px;
+    max-width: 1088px;
     margin: 0 auto;
-    padding: 40px 24px;
-  }
-
-  .pinned-header {
-    display: flex;
-    align-items: center;
-    gap: var(--space-4);
-    margin-bottom: 28px;
-  }
-
-  :global(.pin-icon) {
-    color: var(--accent-blue);
-  }
-
-  .pinned-header h2 {
-    font-size: 20px;
-    font-weight: 600;
-    color: var(--text-primary);
-    margin: 0;
+    padding: 28px 24px;
   }
 
   .pin-count {
-    background: var(--accent-blue);
-    color: var(--accent-blue-foreground);
-    font-size: 11px;
-    font-weight: 600;
-    padding: 1px 7px;
-    border-radius: 10px;
+    color: var(--text-muted);
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
   }
 
-  .loading-state {
-    text-align: center;
-    color: var(--text-muted);
-    padding: 40px 0;
-    font-size: 13px;
-  }
 
   .pin-list {
     display: grid;

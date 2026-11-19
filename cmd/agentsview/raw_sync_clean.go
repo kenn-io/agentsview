@@ -20,7 +20,7 @@ func newRawSyncCleanUploadsCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if err := runRawSyncCleanUploads(); err != nil {
+			if err := runRawSyncCleanUploads(cmd.Context()); err != nil {
 				return fmt.Errorf("raw-sync clean-uploads: %w", err)
 			}
 			_, err := fmt.Fprintln(cmd.OutOrStdout(), rawSyncCleanUploadsCompletion)
@@ -29,7 +29,7 @@ func newRawSyncCleanUploadsCommand() *cobra.Command {
 	}
 }
 
-func runRawSyncCleanUploads() (err error) {
+func runRawSyncCleanUploads(ctx context.Context) (err error) {
 	appCfg, err := config.LoadMinimalFor(config.ScopeLocal)
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -39,19 +39,19 @@ func runRawSyncCleanUploads() (err error) {
 		return fmt.Errorf("resolving PostgreSQL config: %w", err)
 	}
 	applyClassifierConfig(appCfg)
-	database, err := postgres.Open(pgCfg.URL, pgCfg.Schema, pgCfg.AllowInsecure)
+	database, err := postgres.Open(ctx, pgCfg.URL, pgCfg.Schema, pgCfg.AllowInsecure)
 	if err != nil {
 		return fmt.Errorf("opening PostgreSQL: %w", err)
 	}
 	defer func() { err = errors.Join(err, database.Close()) }()
 	err = postgres.CheckRawSyncWritePrivileges(
-		context.Background(), database, pgCfg.Schema,
+		ctx, database, pgCfg.Schema,
 	)
 	if err != nil {
 		return fmt.Errorf("checking raw-sync schema: %w", err)
 	}
 
-	store, err := postgres.NewRawUploadStore(database, appCfg.DataDir)
+	store, err := postgres.NewRawUploadStore(ctx, database, appCfg.DataDir)
 	if err != nil {
 		return fmt.Errorf("opening raw upload store: %w", err)
 	}

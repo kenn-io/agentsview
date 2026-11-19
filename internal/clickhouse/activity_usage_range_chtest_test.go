@@ -13,11 +13,14 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-// A range still in progress keeps every session's usage rows. After a push
-// its report re-reads only the pushed session, whether the pushed rows are
-// still in the read-time delta or already refreshed, and still matches the
-// local archive, including the Claude peers of a filtered report.
-func TestPartialActivityUsageRereadsOnlyPushedSessions(t *testing.T) {
+// A range still in progress keeps its usage sums until a push: a later
+// report, even one whose effective end has moved past rows no session
+// holds, reads no usage again. After a push its report reads again and
+// still matches the local archive, whether the pushed rows are still in the
+// read-time delta or already refreshed, including the Claude peers of a
+// filtered report.
+func TestPartialActivityUsageKeptUntilPush(t *testing.T) {
+	t.Parallel()
 	store, syncer, local := newPushedStore(t)
 	ctx := t.Context()
 	const peerID = "range-peer"
@@ -77,7 +80,7 @@ func TestPartialActivityUsageRereadsOnlyPushedSessions(t *testing.T) {
 	require.True(t, q.Partial)
 	filtered := db.AnalyticsFilter{Timezone: "UTC", Project: "range"}
 	everything := db.AnalyticsFilter{Timezone: "UTC"}
-	requireParity := func(label string) {
+	requireParity := func(label string, q activity.Query) {
 		t.Helper()
 		for _, f := range []db.AnalyticsFilter{filtered, everything} {
 			want, err := local.GetActivityReport(ctx, f, q)
@@ -89,9 +92,13 @@ func TestPartialActivityUsageRereadsOnlyPushedSessions(t *testing.T) {
 			require.Equal(t, want.Totals.Sessions, got.Totals.Sessions, "%s, project %q", label, f.Project)
 		}
 	}
-	requireParity("first read")
-	first := store.activityUsageRowsRead.Load()
-	require.Positive(t, first)
+	requireParity("first read", q)
+	reads := store.activityUsageQueries.Load()
+	require.Positive(t, reads)
+	later := q
+	later.EffectiveEnd = later.EffectiveEnd.Add(time.Minute)
+	requireParity("later end", later)
+	require.Equal(t, reads, store.activityUsageQueries.Load(), "the kept sums answer without a push")
 
 	// With the refresh stopped, the pushed peer's rows come from the delta
 	// prepared at read time.
@@ -100,21 +107,17 @@ func TestPartialActivityUsageRereadsOnlyPushedSessions(t *testing.T) {
 	writePeer(4)
 	_, err = syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
-	requireParity("delta")
-	reread := store.activityUsageRowsRead.Load() - first
-	require.Equal(t, int64(len(peerMessages(4))), reread, "only the pushed peer's rows are read again")
+	requireParity("delta", q)
+	require.Greater(t, store.activityUsageQueries.Load(), reads, "a push reads the usage again")
 
-	// The refresh stores the same rows the delta supplied, so nothing is
-	// read again.
+	// The refresh stores the rows the delta supplied.
 	_, err = store.DB().ExecContext(ctx, "SYSTEM START VIEW prepare_usage")
 	require.NoError(t, err)
 	_, err = store.DB().ExecContext(ctx, "SYSTEM REFRESH VIEW prepare_usage")
 	require.NoError(t, err)
 	_, err = store.DB().ExecContext(ctx, "SYSTEM WAIT VIEW prepare_usage")
 	require.NoError(t, err)
-	before := store.activityUsageRowsRead.Load()
-	requireParity("refreshed")
-	require.Equal(t, before, store.activityUsageRowsRead.Load(), "a refresh alone reads no rows")
+	requireParity("refreshed", q)
 }
 
 // A host that has not published usage snapshots is read raw while every
@@ -122,6 +125,7 @@ func TestPartialActivityUsageRereadsOnlyPushedSessions(t *testing.T) {
 // reads of the whole mirror give, for the Activity report, a range still
 // in progress, and daily usage.
 func TestHostWithoutSnapshotsIsReadRaw(t *testing.T) {
+	t.Parallel()
 	store, _, _ := newPushedStore(t)
 	ctx := t.Context()
 	// The revision is left to its default, so the copy is a new snapshot.
@@ -137,13 +141,13 @@ func TestHostWithoutSnapshotsIsReadRaw(t *testing.T) {
 	for _, query := range []string{
 		`INSERT INTO usage_session_snapshots (` + snapshotColumns + `) SELECT * EXCEPT (revision) REPLACE ('older-snapshot' AS id, 'host-b' AS machine, toUInt64(1) AS push_version)
 		 FROM (SELECT * FROM usage_session_snapshots FINAL WHERE id = '` + fixtureAlphaID + `')`,
-		`INSERT INTO sessions SELECT * REPLACE ('older-snapshot' AS id, 'host-b' AS machine, toUInt64(1) AS push_version)
+		`INSERT INTO sessions SELECT * REPLACE ('older-snapshot' AS id, 'host-b' AS machine, toUInt64(1) AS push_version, toUInt64(1) AS content_version)
 		 FROM (SELECT * FROM sessions FINAL WHERE id = '` + fixtureAlphaID + `')`,
 		"SYSTEM REFRESH VIEW prepare_usage",
 		"SYSTEM WAIT VIEW prepare_usage",
 		`INSERT INTO messages (session_id,ordinal,timestamp,model,token_usage,claude_message_id,claude_request_id,push_version) VALUES
 		 ('older-snapshot',0,'2026-01-10 13:00:00','claude-test','{"input_tokens":1,"output_tokens":40}','older-m0','older-r0',2)`,
-		`INSERT INTO sessions SELECT * REPLACE ('older-snapshot' AS id, 'host-b' AS machine, toUInt64(2) AS push_version, 1 AS message_count)
+		`INSERT INTO sessions SELECT * REPLACE ('older-snapshot' AS id, 'host-b' AS machine, toUInt64(2) AS push_version, toUInt64(2) AS content_version, 1 AS message_count)
 		 FROM (SELECT * FROM sessions FINAL WHERE id = '` + fixtureAlphaID + `')`,
 	} {
 		_, err := store.DB().ExecContext(ctx, query)
@@ -162,7 +166,7 @@ func TestHostWithoutSnapshotsIsReadRaw(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	state, err := NewStoreFromDB(store.DB()).preparedUsageState(ctx)
+	state, err := NewStoreFromDB(store.DB(), store.bulk).preparedUsageState(ctx)
 	require.NoError(t, err)
 	require.True(t, state.ready, "the host with snapshots keeps prepared reads")
 	require.Equal(t, []string{"older-snapshot", "other-host"}, state.raw)
@@ -183,7 +187,7 @@ func TestHostWithoutSnapshotsIsReadRaw(t *testing.T) {
 	}
 	read := func() reads {
 		t.Helper()
-		fresh := NewStoreFromDB(store.DB())
+		fresh := NewStoreFromDB(store.DB(), store.bulk)
 		var r reads
 		r.day, err = fresh.GetActivityReport(ctx, filter, day)
 		require.NoError(t, err)
@@ -197,7 +201,7 @@ func TestHostWithoutSnapshotsIsReadRaw(t *testing.T) {
 	mixed := read()
 	snapshotHost := filter
 	snapshotHost.Machine = "test-machine"
-	withSnapshots, err := NewStoreFromDB(store.DB()).GetActivityReport(ctx, snapshotHost, day)
+	withSnapshots, err := NewStoreFromDB(store.DB(), store.bulk).GetActivityReport(ctx, snapshotHost, day)
 	require.NoError(t, err)
 	require.Equal(t, 22+40, mixed.day.Totals.OutputTokens-withSnapshots.Totals.OutputTokens,
 		"the raw host's current tokens are counted, and its stale prepared rows are not")
@@ -205,7 +209,7 @@ func TestHostWithoutSnapshotsIsReadRaw(t *testing.T) {
 	// With the snapshot readiness keys gone, every read is raw.
 	_, err = store.DB().ExecContext(ctx, "DELETE FROM sync_metadata WHERE startsWith(key, ?)", usageSnapshotReadyKeyBase+":")
 	require.NoError(t, err)
-	state, err = NewStoreFromDB(store.DB()).preparedUsageState(ctx)
+	state, err = NewStoreFromDB(store.DB(), store.bulk).preparedUsageState(ctx)
 	require.NoError(t, err)
 	require.False(t, state.ready)
 	raw := read()

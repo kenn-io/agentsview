@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/testutil"
 )
 
 // itoa is a thin alias for strconv.Itoa kept short so seedModelMessages'
@@ -77,7 +78,7 @@ func Test_loadSessionsInWindow_isAutomated(t *testing.T) {
 	ctx := t.Context()
 	from := time.Now().Add(-24 * time.Hour)
 	to := time.Now().Add(1 * time.Hour)
-	rows, err := d.loadSessionsInWindow(ctx, StatsFilter{}, from, to, false)
+	rows, err := loadSessionsInWindow(ctx, d.getReader(), StatsFilter{}, from, to, false)
 	require.NoError(t, err, "loadSessionsInWindow")
 	byID := map[string]bool{}
 	for _, r := range rows {
@@ -85,6 +86,54 @@ func Test_loadSessionsInWindow_isAutomated(t *testing.T) {
 	}
 	require.True(t, byID["auto"], "auto.isAutomated")
 	require.False(t, byID["human"], "human.isAutomated")
+}
+
+func Test_loadSessionsInWindow_DateIndexWindow(t *testing.T) {
+	d := testDB(t)
+	insertSessionFixture(t, d, sessionFixture{
+		id: "old", userMsgs: 5, startedAt: "2023-01-01T12:00:00Z",
+	})
+
+	// Observe date evaluations on the actual loader query. An indexed empty
+	// window skips the old row; a scan evaluates its date predicate.
+	d.rawReader().SetMaxOpenConns(1)
+	conn, err := d.getReader().Conn(t.Context())
+	require.NoError(t, err)
+	var evaluations int
+	require.NoError(t, conn.Raw(func(driverConn any) error {
+		return driverConn.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("nullif", func(value, other string) any {
+			evaluations++
+			if value == other {
+				return nil
+			}
+			return value
+		}, true)
+	}))
+	require.NoError(t, conn.Close())
+
+	from := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name    string
+		days    int
+		indexed bool
+	}{
+		{"2-day", 2, true},
+		{"90-day", 90, true},
+		{"91-day", 91, false},
+		{"year", 365, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			evaluations = 0
+			rows, err := loadSessionsInWindow(t.Context(), d.getReader(), StatsFilter{}, from, from.AddDate(0, 0, tc.days), false)
+			require.NoError(t, err)
+			assert.Empty(t, rows)
+			if tc.indexed {
+				assert.Zero(t, evaluations, "short windows should seek the date index")
+			} else {
+				assert.Positive(t, evaluations, "wide windows should keep the scan plan")
+			}
+		})
+	}
 }
 
 // insertSessionFixture inserts a sessionFixture via the standard
@@ -420,17 +469,21 @@ func TestGetSessionStats_SubagentTotals(t *testing.T) {
 		id: "root", agent: "claude", userMsgs: 10, messageCount: 20,
 		startedAt: hoursAgo(5), durationMin: 100,
 		totalOutputTok: 1000, hasTotalOutputToks: true,
+		assistantTurns: 1, totalToolCalls: 2,
 	})
 	insertSessionFixture(t, d, sessionFixture{
 		id: "agent-x", agent: "claude", userMsgs: 1, messageCount: 5,
 		startedAt: hoursAgo(5), durationMin: 8,
 		totalOutputTok: 400, hasTotalOutputToks: true,
 		relationshipType: "subagent",
+		assistantTurns:   1, totalToolCalls: 3,
 	})
 
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
 	require.NoError(t, err, "GetSessionStats")
 
+	assert.Equal(t, 5, stats.ToolMix.TotalCalls)
+	assert.InDelta(t, 2.0, stats.Distributions.ToolsPerTurn.ScopeAll.Mean, 1e-9)
 	// Additive totals include the subagent.
 	assert.Equal(t, 2, stats.Totals.SessionsAll, "sessions_all")
 	assert.Equal(t, 25, stats.Totals.MessagesTotal, "messages_total")
@@ -1662,6 +1715,18 @@ func TestGetSessionStats_CacheEconomics(t *testing.T) {
 		"DollarsSavedVsUncached")
 }
 
+func TestGetSessionStats_CacheEconomicsOneHour(t *testing.T) {
+	d := testDB(t)
+	insertSessionFixture(t, d, sessionFixture{id: "session", agent: "claude", startedAt: "2026-06-16T10:00:00Z", userMsgs: 2})
+	require.NoError(t, d.InsertMessages(t.Context(), statsFactMessages("session", 30)))
+	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{ModelPattern: "test-model", InputPerMTok: money.MustParseDollars("1"), OutputPerMTok: money.MustParseDollars("2"), CacheCreationPerMTok: money.MustParseDollars("1.25"), CacheCreation1hPerMTok: money.MustParseDollars("2"), CacheReadPerMTok: money.MustParseDollars(".1")}}))
+	got, err := d.GetSessionStats(t.Context(), factsFilter)
+	require.NoError(t, err)
+	require.NotNil(t, got.CacheEconomics)
+	assert.Equal(t, int64(206), got.CacheEconomics.DollarsSpent.Microdollars)
+	assert.Equal(t, int64(54), got.CacheEconomics.DollarsSavedVsUncached.Microdollars)
+}
+
 func TestGetSessionStats_CacheEconomicsUsesHistoricalRates(t *testing.T) {
 	d := testDB(t)
 	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
@@ -1888,11 +1953,9 @@ func TestPickPrimaryAgent(t *testing.T) {
 	}
 }
 
-// hoursAgoAt returns an RFC3339 timestamp for (now - hours, shifted to
-// the given minute and second of that hour). Used by temporal tests
-// that need to place messages inside a specific UTC hour boundary.
-func hoursAgoAt(hours, minute, second int) string {
-	t := time.Now().UTC().
+// hoursAgoAt places a timestamp within a UTC hour relative to one test anchor.
+func hoursAgoAt(now time.Time, hours, minute, second int) string {
+	t := now.UTC().
 		Add(-time.Duration(hours) * time.Hour).
 		Truncate(time.Hour).
 		Add(time.Duration(minute) * time.Minute).
@@ -1900,10 +1963,9 @@ func hoursAgoAt(hours, minute, second int) string {
 	return t.Format(time.RFC3339)
 }
 
-// utcHourBoundary returns the UTC-hour-boundary TS string (what
-// Temporal.HourlyUTC entries use) for (now - hours).
-func utcHourBoundary(hours int) string {
-	t := time.Now().UTC().
+// utcHourBoundary returns the UTC hour relative to the same test anchor.
+func utcHourBoundary(now time.Time, hours int) string {
+	t := now.UTC().
 		Add(-time.Duration(hours) * time.Hour).
 		Truncate(time.Hour)
 	return t.Format("2006-01-02T15:00:00Z")
@@ -1925,6 +1987,7 @@ func findHourlyUTC(
 func TestGetSessionStats_Temporal_HourlyGrouping(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
+	now := time.Now()
 
 	// Three hours of activity: H-5 (2 user msgs in one session),
 	// H-4 (1 user msg in a different session), H-3 (2 user msgs
@@ -1942,12 +2005,12 @@ func TestGetSessionStats_Temporal_HourlyGrouping(t *testing.T) {
 		id: "s4", userMsgs: 1, startedAt: hoursAgo(4),
 	})
 	insertMessages(t, d,
-		userMsgAt("s1", 0, "a", hoursAgoAt(5, 5, 0)),
-		userMsgAt("s1", 1, "b", hoursAgoAt(5, 45, 0)),
-		asstMsgAt("s1", 2, "ignored", hoursAgoAt(5, 50, 0)),
-		userMsgAt("s2", 0, "c", hoursAgoAt(4, 10, 0)),
-		userMsgAt("s3", 0, "d", hoursAgoAt(3, 30, 0)),
-		userMsgAt("s4", 0, "e", hoursAgoAt(3, 45, 0)),
+		userMsgAt("s1", 0, "a", hoursAgoAt(now, 5, 5, 0)),
+		userMsgAt("s1", 1, "b", hoursAgoAt(now, 5, 45, 0)),
+		asstMsgAt("s1", 2, "ignored", hoursAgoAt(now, 5, 50, 0)),
+		userMsgAt("s2", 0, "c", hoursAgoAt(now, 4, 10, 0)),
+		userMsgAt("s3", 0, "d", hoursAgoAt(now, 3, 30, 0)),
+		userMsgAt("s4", 0, "e", hoursAgoAt(now, 3, 45, 0)),
 	)
 
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
@@ -1963,20 +2026,20 @@ func TestGetSessionStats_Temporal_HourlyGrouping(t *testing.T) {
 	}
 
 	// H-5: 2 user messages, 1 distinct session.
-	if e := findHourlyUTC(hours, utcHourBoundary(5)); assert.NotNilf(t, e,
-		"missing hour entry %q", utcHourBoundary(5)) {
+	if e := findHourlyUTC(hours, utcHourBoundary(now, 5)); assert.NotNilf(t, e,
+		"missing hour entry %q", utcHourBoundary(now, 5)) {
 		assert.Equal(t, 2, e.UserMessages, "H-5 user_messages")
 		assert.Equal(t, 1, e.Sessions, "H-5 sessions: got")
 	}
 	// H-4: 1 user message, 1 session.
-	if e := findHourlyUTC(hours, utcHourBoundary(4)); assert.NotNilf(t, e,
-		"missing hour entry %q", utcHourBoundary(4)) {
+	if e := findHourlyUTC(hours, utcHourBoundary(now, 4)); assert.NotNilf(t, e,
+		"missing hour entry %q", utcHourBoundary(now, 4)) {
 		assert.Equal(t, 1, e.UserMessages, "H-4 user_messages")
 		assert.Equal(t, 1, e.Sessions, "H-4 sessions: got")
 	}
 	// H-3: 2 user messages from 2 distinct sessions.
-	if e := findHourlyUTC(hours, utcHourBoundary(3)); assert.NotNilf(t, e,
-		"missing hour entry %q", utcHourBoundary(3)) {
+	if e := findHourlyUTC(hours, utcHourBoundary(now, 3)); assert.NotNilf(t, e,
+		"missing hour entry %q", utcHourBoundary(now, 3)) {
 		assert.Equal(t, 2, e.UserMessages, "H-3 user_messages")
 		assert.Equal(t, 2, e.Sessions, "H-3 sessions: got")
 	}
@@ -2027,6 +2090,7 @@ func TestGetSessionStats_Temporal_MidnightBoundary(t *testing.T) {
 func TestGetSessionStats_Temporal_OutOfWindowExcluded(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
+	now := time.Now()
 
 	// One session inside the window, one outside. With Since=2d, the
 	// out-of-window session should not contribute sessionIDs, so its
@@ -2042,9 +2106,9 @@ func TestGetSessionStats_Temporal_OutOfWindowExcluded(t *testing.T) {
 			Add(-40 * 24 * time.Hour).Format(time.RFC3339),
 	})
 	insertMessages(t, d,
-		userMsgAt("in", 0, "ok", hoursAgoAt(10, 0, 0)),
+		userMsgAt("in", 0, "ok", hoursAgoAt(now, 10, 0, 0)),
 		userMsgAt("out", 0, "nope",
-			hoursAgoAt(10, 30, 0)), // same hour as "in"
+			hoursAgoAt(now, 10, 30, 0)), // same hour as "in"
 	)
 
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "2d"})
@@ -2060,6 +2124,7 @@ func TestGetSessionStats_Temporal_OutOfWindowExcluded(t *testing.T) {
 func TestGetSessionStats_Temporal_SessionsDistinctPerHour(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
+	now := time.Now()
 
 	// Same session sends 3 user messages in H-6 (counts as 1 session,
 	// 3 user_messages) and 1 user message in H-5 (counts as 1 session,
@@ -2068,23 +2133,23 @@ func TestGetSessionStats_Temporal_SessionsDistinctPerHour(t *testing.T) {
 		id: "s1", userMsgs: 4, startedAt: hoursAgo(7),
 	})
 	insertMessages(t, d,
-		userMsgAt("s1", 0, "a", hoursAgoAt(6, 5, 0)),
-		userMsgAt("s1", 1, "b", hoursAgoAt(6, 25, 0)),
-		userMsgAt("s1", 2, "c", hoursAgoAt(6, 55, 0)),
-		userMsgAt("s1", 3, "d", hoursAgoAt(5, 15, 0)),
+		userMsgAt("s1", 0, "a", hoursAgoAt(now, 6, 5, 0)),
+		userMsgAt("s1", 1, "b", hoursAgoAt(now, 6, 25, 0)),
+		userMsgAt("s1", 2, "c", hoursAgoAt(now, 6, 55, 0)),
+		userMsgAt("s1", 3, "d", hoursAgoAt(now, 5, 15, 0)),
 	)
 
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
 	require.NoError(t, err, "GetSessionStats")
 	if e := findHourlyUTC(
-		stats.Temporal.HourlyUTC, utcHourBoundary(6),
+		stats.Temporal.HourlyUTC, utcHourBoundary(now, 6),
 	); assert.NotNil(t, e, "missing H-6 entry") {
 		assert.Equal(t, 3, e.UserMessages, "H-6 user_messages")
 		assert.Equal(t, 1, e.Sessions,
 			"H-6 sessions (same session 3 msgs)")
 	}
 	if e := findHourlyUTC(
-		stats.Temporal.HourlyUTC, utcHourBoundary(5),
+		stats.Temporal.HourlyUTC, utcHourBoundary(now, 5),
 	); assert.NotNil(t, e, "missing H-5 entry") {
 		assert.Equal(t, 1, e.UserMessages, "H-5 user_messages")
 		assert.Equal(t, 1, e.Sessions, "H-5 sessions: got")
@@ -2217,6 +2282,7 @@ func TestGetSessionStatsReportsPlatformTimezone(t *testing.T) {
 func TestGetSessionStats_Temporal_FilterByAgentFlowsThrough(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
+	now := time.Now()
 
 	// Two sessions, same hour, different agents. Filter=claude must
 	// leave the codex session's messages out of hourly_utc.
@@ -2229,8 +2295,8 @@ func TestGetSessionStats_Temporal_FilterByAgentFlowsThrough(t *testing.T) {
 		startedAt: hoursAgo(4),
 	})
 	insertMessages(t, d,
-		userMsgAt("c1", 0, "hi", hoursAgoAt(3, 10, 0)),
-		userMsgAt("x1", 0, "hi", hoursAgoAt(3, 20, 0)),
+		userMsgAt("c1", 0, "hi", hoursAgoAt(now, 3, 10, 0)),
+		userMsgAt("x1", 0, "hi", hoursAgoAt(now, 3, 20, 0)),
 	)
 
 	stats, err := d.GetSessionStats(ctx, StatsFilter{
@@ -2238,7 +2304,7 @@ func TestGetSessionStats_Temporal_FilterByAgentFlowsThrough(t *testing.T) {
 	})
 	require.NoError(t, err, "GetSessionStats")
 	if e := findHourlyUTC(
-		stats.Temporal.HourlyUTC, utcHourBoundary(3),
+		stats.Temporal.HourlyUTC, utcHourBoundary(now, 3),
 	); assert.NotNil(t, e, "missing H-3 entry") {
 		assert.Equal(t, 1, e.UserMessages,
 			"filter=claude user_messages")
@@ -2249,6 +2315,7 @@ func TestGetSessionStats_Temporal_FilterByAgentFlowsThrough(t *testing.T) {
 func TestGetSessionStats_Temporal_IgnoresAssistantMessages(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
+	now := time.Now()
 
 	// Only assistant messages in a session — hourly_utc must be empty.
 	insertSessionFixture(t, d, sessionFixture{
@@ -2256,8 +2323,8 @@ func TestGetSessionStats_Temporal_IgnoresAssistantMessages(t *testing.T) {
 		startedAt: hoursAgo(3),
 	})
 	insertMessages(t, d,
-		asstMsgAt("only-asst", 0, "a", hoursAgoAt(2, 5, 0)),
-		asstMsgAt("only-asst", 1, "b", hoursAgoAt(2, 10, 0)),
+		asstMsgAt("only-asst", 0, "a", hoursAgoAt(now, 2, 5, 0)),
+		asstMsgAt("only-asst", 1, "b", hoursAgoAt(now, 2, 10, 0)),
 	)
 
 	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
@@ -2266,9 +2333,50 @@ func TestGetSessionStats_Temporal_IgnoresAssistantMessages(t *testing.T) {
 		"hourly_utc should be empty when only assistant msgs")
 }
 
+// Hooks don't create an hour of their own.
+// Ordinary queued prompts still count as user activity.
+func TestGetSessionStats_Temporal_HookRowsExcluded(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	now := time.Now()
+
+	insertSessionFixture(t, d, sessionFixture{
+		id: "s1", userMsgs: 2, startedAt: hoursAgo(6),
+	})
+
+	realPrompt := userMsgAt("s1", 0, "real prompt", hoursAgoAt(now, 5, 5, 0))
+	queued := userMsgAt("s1", 1, "queued prompt", hoursAgoAt(now, 5, 45, 0))
+	queued.SourceType = "user"
+	queued.SourceSubtype = "queued_command"
+	queued.IsSystem = false
+
+	hookOtherHour := userMsgAt("s1", 2, "hook context", hoursAgoAt(now, 4, 10, 0))
+	hookOtherHour.SourceType = "attachment"
+	hookOtherHour.SourceSubtype = "hook_additional_context"
+	hookOtherHour.IsSystem = true
+	notification := userMsgAt("s1", 3, "task finished", hoursAgoAt(now, 5, 50, 0))
+	notification.SourceSubtype = "task_notification"
+	notification.IsSystem = true
+
+	insertMessages(t, d,
+		realPrompt, queued, hookOtherHour, notification,
+	)
+
+	stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d"})
+	require.NoError(t, err, "GetSessionStats")
+	require.Len(t, stats.Temporal.HourlyUTC, 1,
+		"hourly_utc want 1 entry: %+v", stats.Temporal.HourlyUTC)
+	got := stats.Temporal.HourlyUTC[0]
+	assert.Equal(t, utcHourBoundary(now, 5), got.TS, "hourly_utc TS")
+	assert.Equal(t, 3, got.UserMessages,
+		"real prompt, queued command, and non-hook system row still count")
+	assert.Equal(t, 1, got.Sessions, "sessions want 1")
+}
+
 func TestGetSessionStats_Temporal_SkipsEmptyTimestamps(t *testing.T) {
 	d := testDB(t)
 	ctx := t.Context()
+	now := time.Now()
 
 	// User message with empty timestamp must not bucket to epoch or
 	// anywhere else — strftime returns NULL for empty strings and we
@@ -2277,7 +2385,7 @@ func TestGetSessionStats_Temporal_SkipsEmptyTimestamps(t *testing.T) {
 		id: "s1", userMsgs: 2, startedAt: hoursAgo(3),
 	})
 	insertMessages(t, d,
-		userMsgAt("s1", 0, "good", hoursAgoAt(2, 15, 0)),
+		userMsgAt("s1", 0, "good", hoursAgoAt(now, 2, 15, 0)),
 		userMsgAt("s1", 1, "blank", ""),
 	)
 
@@ -2609,21 +2717,7 @@ func TestGetSessionStats_Adoption_NoClaude(t *testing.T) {
 // require the binary.
 func skipIfNoGit(t *testing.T) {
 	t.Helper()
-	// Keep Git fixture commands and production reads inside test-owned state.
-	for _, entry := range os.Environ() {
-		key, _, _ := strings.Cut(entry, "=")
-		if strings.HasPrefix(key, "GIT_") {
-			t.Setenv(key, "")
-			require.NoError(t, os.Unsetenv(key))
-		}
-	}
-	globalConfig := filepath.Join(t.TempDir(), "gitconfig")
-	require.NoError(t, os.WriteFile(globalConfig, nil, 0o600))
-	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
-	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skipf("git not available on PATH: %v", err)
-	}
+	testutil.IsolateGit(t)
 }
 
 // statsRunGit executes a git subcommand inside repo and fails the test
@@ -2720,45 +2814,91 @@ func statsOutcomeRepo(t *testing.T) string {
 }
 
 func TestGetSessionStatsReleasesBulkLaneBeforeOutcomeLookups(t *testing.T) {
-	skipIfNoGit(t)
-	statsIsolateGit(t)
-	d := testDB(t)
-	insertSessionFixture(t, d, sessionFixture{
-		id: "outcome-lane", agent: "claude", userMsgs: 5,
-		startedAt: hoursAgo(5), cwd: statsOutcomeRepo(t),
-	})
-	writer := d.rawWriter()
-	conn, err := writer.Conn(t.Context())
-	require.NoError(t, err)
-	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
-	result := make(chan error, 1)
-	done := make(chan struct{})
-	t.Cleanup(func() {
-		cancel()
-		_ = conn.Close()
-		<-done
-	})
-	waits := writer.Stats().WaitCount
-	go func() {
-		defer close(done)
-		stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d", IncludeGitOutcomes: true})
-		if err == nil {
-			assert.NotNil(t, stats.OutcomeStats)
-		}
-		result <- err
-	}()
-	// WaitCount signals outcome lookup only while the git cache uses the writer.
-	require.Eventually(t, func() bool {
-		return writer.Stats().WaitCount > waits
-	}, 10*time.Second, 10*time.Millisecond)
-	assert.Zero(t, d.rawReader().Stats().InUse)
-	for range bulkReadSlots {
-		release, err := d.acquireBulkRead(ctx)
-		require.NoError(t, err)
-		defer release()
+	for _, outcomesOnly := range []bool{false, true} {
+		t.Run(fmt.Sprintf("outcomesOnly=%t", outcomesOnly), func(t *testing.T) {
+			skipIfNoGit(t)
+			statsIsolateGit(t)
+			d := testDB(t)
+			insertSessionFixture(t, d, sessionFixture{
+				id: "outcome-lane", agent: "claude", userMsgs: 5,
+				startedAt: hoursAgo(5), cwd: statsOutcomeRepo(t),
+			})
+			writer := d.rawWriter()
+			conn, err := writer.Conn(t.Context())
+			require.NoError(t, err)
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			result := make(chan error, 1)
+			done := make(chan struct{})
+			t.Cleanup(func() {
+				cancel()
+				_ = conn.Close()
+				<-done
+			})
+			waits := writer.Stats().WaitCount
+			go func() {
+				defer close(done)
+				stats, err := d.GetSessionStats(ctx, StatsFilter{Since: "28d", IncludeGitOutcomes: true, OutcomesOnly: outcomesOnly})
+				if err == nil {
+					assert.NotNil(t, stats.OutcomeStats)
+				}
+				result <- err
+			}()
+			// WaitCount signals outcome lookup only while the git cache uses the writer.
+			require.Eventually(t, func() bool {
+				return writer.Stats().WaitCount > waits
+			}, 10*time.Second, 10*time.Millisecond)
+			assert.Zero(t, d.rawReader().Stats().InUse)
+			for range bulkReadSlots {
+				release, err := d.acquireBulkRead(ctx)
+				require.NoError(t, err)
+				defer release()
+			}
+			require.NoError(t, conn.Close())
+			require.NoError(t, <-result)
+		})
 	}
-	require.NoError(t, conn.Close())
-	require.NoError(t, <-result)
+}
+
+func TestGetSessionStats_OutcomesOnly(t *testing.T) {
+	skipIfNoGit(t)
+	d := testDB(t)
+	repo := statsOutcomeRepo(t)
+	excluded := t.TempDir()
+	statsInitRepoAt(t, excluded)
+	statsCommitFile(t, excluded, "file.txt", "excluded\n", "excluded")
+	for _, fixture := range []sessionFixture{
+		{id: "root", userMsgs: 5, cwd: repo},
+		{id: "child", userMsgs: 5, cwd: excluded, relationshipType: "subagent"},
+		{id: "fork", userMsgs: 5, cwd: excluded, relationshipType: "fork"},
+		{id: "one-shot", userMsgs: 1, cwd: excluded},
+		{id: "automated", userMsgs: 5, cwd: excluded, isAutomated: true},
+	} {
+		fixture.startedAt = hoursAgo(1)
+		insertSessionFixture(t, d, fixture)
+	}
+	now := time.Now().UTC()
+	filter := StatsFilter{
+		Since:                  now.AddDate(0, 0, -28).Format(time.RFC3339),
+		Until:                  now.AddDate(0, 0, 1).Format(time.RFC3339),
+		ApplyDefaultVisibility: true, IncludeGitOutcomes: true,
+	}
+	full, err := d.GetSessionStats(t.Context(), filter)
+	require.NoError(t, err)
+	require.NotNil(t, full.OutcomeStats)
+	assert.Equal(t, 3, full.OutcomeStats.Commits)
+	filter.OutcomesOnly = true
+	outcomes, err := d.GetSessionStats(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, full.OutcomeStats, outcomes.OutcomeStats)
+	assert.Equal(t, full.Window, outcomes.Window)
+	assert.Equal(t, full.Filters, outcomes.Filters)
+	assert.Equal(t, 2, outcomes.SchemaVersion)
+	outcomes.Window = StatsWindow{}
+	outcomes.Filters = StatsFilters{}
+	outcomes.GeneratedAt = ""
+	outcomes.SchemaVersion = 0
+	outcomes.OutcomeStats = nil
+	assert.Equal(t, &SessionStats{}, outcomes)
 }
 
 func TestGetSessionStats_OutcomeStats_ExclusiveEnd(t *testing.T) {

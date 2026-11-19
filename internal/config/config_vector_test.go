@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/kit/embedlocal"
 )
 
 // validVectorConfig returns a VectorConfig with every field enabled
@@ -390,13 +392,13 @@ func TestVectorConfigDefaults(t *testing.T) {
 
 func TestVectorConfigAPIKeyEnv(t *testing.T) {
 	server := VectorEmbeddingsServerConfig{}
-	assert.Empty(t, server.APIKey(), "no env var configured")
+	assert.Empty(t, requireAPIKey(t, server), "no env var configured")
 
 	server.APIKeyEnv = "AGENTSVIEW_TEST_VECTOR_API_KEY"
-	assert.Empty(t, server.APIKey(), "configured env var not set in environment")
+	assert.Empty(t, requireAPIKey(t, server), "configured env var not set in environment")
 
 	t.Setenv("AGENTSVIEW_TEST_VECTOR_API_KEY", "secret-123")
-	assert.Equal(t, "secret-123", server.APIKey())
+	assert.Equal(t, "secret-123", requireAPIKey(t, server))
 }
 
 // minimalServers returns the smallest valid servers table for TOML load
@@ -614,6 +616,63 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 		assert.True(t, cfg.Vector.Embed.Recall)
 	})
 
+	t.Run("built-in servers default to CPU-sized transport", func(t *testing.T) {
+		tests := []struct {
+			name            string
+			embeddings      map[string]any
+			server          string
+			wantBatchSize   int
+			wantConcurrency int
+			wantTimeout     string
+		}{
+			{
+				name:       "automatic discovery",
+				embeddings: map[string]any{"model": "nomic-embed-text", "dimension": 768},
+				server:     "automatic", wantBatchSize: 8, wantConcurrency: 1, wantTimeout: embedlocal.RequestTimeout.String(),
+			},
+			{
+				name: "local server",
+				embeddings: map[string]any{
+					"model": "nomic-embed-text", "dimension": 768,
+					"servers": map[string]any{"shared": map[string]any{"local": true}},
+				},
+				server: "shared", wantBatchSize: 8, wantConcurrency: 1, wantTimeout: embedlocal.RequestTimeout.String(),
+			},
+			{
+				name: "local server keeps explicit transport",
+				embeddings: map[string]any{
+					"model": "nomic-embed-text", "dimension": 768,
+					"servers": map[string]any{"shared": map[string]any{
+						"local": true, "batch_size": 2, "concurrency": 3, "timeout": "90s",
+					}},
+				},
+				server: "shared", wantBatchSize: 2, wantConcurrency: 3, wantTimeout: "90s",
+			},
+			{
+				name: "endpoint server",
+				embeddings: map[string]any{
+					"model": "nomic-embed-text", "dimension": 768,
+					"servers": map[string]any{"remote": map[string]any{"endpoint": "http://localhost:11434/v1"}},
+				},
+				server: "remote", wantBatchSize: 32, wantConcurrency: 4, wantTimeout: "30s",
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				cfg := loadMinimalWithConfig(t, map[string]any{"vector": map[string]any{
+					"enabled": true, "embeddings": tt.embeddings,
+				}})
+				name, server, err := cfg.Vector.Embeddings.Server("")
+				require.NoError(t, err)
+				assert.Equal(t, tt.server, name)
+				assert.Equal(t, tt.wantBatchSize, server.BatchSize)
+				assert.Equal(t, tt.wantConcurrency, server.Concurrency)
+				assert.Equal(t, tt.wantTimeout, server.Timeout)
+				assert.Equal(t, 3, server.MaxRetries)
+			})
+		}
+	})
+
 	t.Run("automatic untagged Nomic preserves its recipe", func(t *testing.T) {
 		cfg := loadMinimalWithConfig(t, map[string]any{"vector": map[string]any{
 			"enabled": true, "embeddings": map[string]any{"model": "nomic-embed-text", "dimension": 768},
@@ -714,12 +773,11 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 				wantErr: "ollama_cpu_fallback requires an endpoint ending in /v1",
 			},
 			{
-				name: "Ollama CPU fallback with relative endpoint",
+				name: "relative endpoint",
 				server: map[string]any{
-					"endpoint":            "/v1",
-					"ollama_cpu_fallback": true,
+					"endpoint": "/v1",
 				},
-				wantErr: "ollama_cpu_fallback requires an absolute HTTP(S) endpoint",
+				wantErr: "[vector.embeddings.servers.local] embed endpoint must use http or https",
 			},
 			{
 				name:    "explicit zero backstop_interval",
@@ -904,4 +962,13 @@ func TestVectorConfigTOMLLoadUnknownKeys(t *testing.T) {
 		assert.Contains(t, err.Error(), "max_batch_tokens")
 		assert.Contains(t, err.Error(), "[vector.embeddings.servers.<name>]")
 	})
+}
+
+// requireAPIKey returns a server's API key, failing the test when it cannot
+// be read.
+func requireAPIKey(t *testing.T, server interface{ APIKey() (string, error) }) string {
+	t.Helper()
+	key, err := server.APIKey()
+	require.NoError(t, err)
+	return key
 }

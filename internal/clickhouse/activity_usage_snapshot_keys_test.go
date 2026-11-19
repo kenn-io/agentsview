@@ -19,6 +19,7 @@ import (
 // connection turns exact skip-index mode off so the usage query's own setting
 // is what keeps the superseded row out.
 func TestActivityUsageIgnoresObsoleteSnapshotKeys(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	dsn, database := chtest.FreshDatabase(t)
 	opt, err := chdriver.ParseDSN(dsn)
@@ -28,7 +29,12 @@ func TestActivityUsageIgnoresObsoleteSnapshotKeys(t *testing.T) {
 	conn := chdriver.OpenDB(opt)
 	t.Cleanup(func() { require.NoError(t, conn.Close()) })
 	require.NoError(t, EnsureSchemaOn(ctx, conn))
-	store := NewStoreFromDB(conn)
+	// The usage rows are read on the native connection, so it carries the
+	// same settings.
+	bulk, err := chdriver.Open(opt)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, bulk.Close()) })
+	store := NewStoreFromDB(conn, bulk)
 	// Each insert lands in its own usage_messages part. The candidate session
 	// stays published at version 1 while its version 2 rows arrive, as a push
 	// that has written messages but not yet the session row would leave it.

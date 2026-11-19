@@ -259,7 +259,7 @@ func parseGeminiMessage(
 		role = RoleAssistant
 	}
 	content, hasThinking, hasToolUse, tcs, trs := extractGeminiContent(msg)
-	if strings.TrimSpace(content) == "" {
+	if strings.TrimSpace(content) == "" && role != RoleAssistant {
 		return ParsedMessage{}, false
 	}
 
@@ -269,7 +269,7 @@ func parseGeminiMessage(
 	if tokResult.Exists() {
 		tokenUsage = normalizedGeminiTokenUsage(tok)
 	}
-	return ParsedMessage{
+	parsed := ParsedMessage{
 		Ordinal:       ordinal,
 		Role:          role,
 		Content:       content,
@@ -288,7 +288,11 @@ func parseGeminiMessage(
 		HasOutputTokens: tokResult.Get("output").Exists() ||
 			tokResult.Get("thoughts").Exists(),
 		tokenPresenceKnown: true,
-	}, true
+	}
+	if strings.TrimSpace(content) == "" {
+		return usageOnlyMessage(parsed)
+	}
+	return parsed, true
 }
 
 func applyGeminiCumulativeDeltas(messages []ParsedMessage) {

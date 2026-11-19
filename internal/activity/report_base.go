@@ -11,10 +11,21 @@ import (
 
 // ReportBackend supplies every backend operation needed to assemble a report.
 type ReportBackend interface {
+	// ActivityReportUsage returns the usage survivors of the candidate
+	// sessions. The report only sums survivors, after it apportions a
+	// session total (SessionCost) over its session's rows by their costs.
+	// So a session without one may hand back its survivors summed per
+	// model and bucket window, each sum stamped with one of its rows'
+	// timestamps.
 	ActivityReportUsage(context.Context, []string, Query) ([]UsageRow, *export.PricingBlock, error)
 	ActivityReportCandidateSource([]string, Query) CandidateSource
 	ActivityReportMessageCounts(context.Context, []string, Query, *CandidateArtifacts) error
 	BuildProjectIdentityMap(context.Context, []string) (map[string]export.ProjectMapEntry, error)
+}
+
+// ConcurrentUsageBackend reserves a second read for usage while candidates stream.
+type ConcurrentUsageBackend interface {
+	ActivityReportSecondRead() (release func(), ok bool)
 }
 
 // BuildReportArtifacts assembles a report and returns the emitted completion event.
@@ -22,14 +33,41 @@ func BuildReportArtifacts(
 	ctx context.Context, backend ReportBackend, sessions []SessionMeta,
 	ids []string, q Query, onProgress ProgressFunc, aggregationLabel string,
 ) (CandidateArtifacts, Progress, error) {
-	usage, pricing, err := backend.ActivityReportUsage(ctx, ids, q)
-	if err != nil {
-		return CandidateArtifacts{}, Progress{}, err
+	var usage []UsageRow
+	var pricing *export.PricingBlock
+	var usageErr error
+	readCtx := ctx
+	loadUsage := func() ([]UsageRow, error) { return usage, nil }
+	var ready chan struct{}
+	var cancel context.CancelCauseFunc
+	if concurrent, ok := backend.(ConcurrentUsageBackend); ok {
+		if release, ok := concurrent.ActivityReportSecondRead(); ok {
+			readCtx, cancel = context.WithCancelCause(ctx)
+			defer cancel(nil)
+			ready = make(chan struct{})
+			go func() {
+				defer close(ready)
+				defer release()
+				usage, pricing, usageErr = backend.ActivityReportUsage(readCtx, ids, q)
+				if usageErr != nil {
+					cancel(usageErr)
+				}
+			}()
+			loadUsage = func() ([]UsageRow, error) {
+				<-ready
+				return usage, usageErr
+			}
+		}
+	}
+	if ready == nil {
+		usage, pricing, usageErr = backend.ActivityReportUsage(ctx, ids, q)
+		if usageErr != nil {
+			return CandidateArtifacts{}, Progress{}, usageErr
+		}
 	}
 
 	rowsProcessed := int64(0)
-	source := backend.ActivityReportCandidateSource(ids, q)
-	artifacts, err := BuildCandidateArtifactsFromSourceWithSurvivorUsage(ctx, Params{
+	params := Params{
 		RangeStart:    q.RangeStart,
 		RangeEnd:      q.RangeEnd,
 		Loc:           q.Loc,
@@ -37,22 +75,51 @@ func BuildReportArtifacts(
 		Partial:       q.Partial,
 		GapCapSeconds: q.GapCapSeconds,
 		Bucket:        q.Bucket,
-	}, sessions, func(
-		ctx context.Context, yield func(IntervalCandidate) error,
-	) error {
+	}
+	scanning := func() {
 		ReportProgress(onProgress, Progress{
 			Phase: ProgressScanningActivity, SessionsTotal: len(sessions),
 		})
-		return source(ctx, func(candidate IntervalCandidate) error {
-			rowsProcessed++
-			ReportProgress(onProgress, Progress{
-				Phase:         ProgressScanningActivity,
-				SessionsTotal: len(sessions), RowsProcessed: rowsProcessed,
-			})
-			return yield(candidate)
+	}
+	processed := func() {
+		rowsProcessed++
+		ReportProgress(onProgress, Progress{
+			Phase:         ProgressScanningActivity,
+			SessionsTotal: len(sessions), RowsProcessed: rowsProcessed,
 		})
-	}, usage)
+	}
+	var artifacts CandidateArtifacts
+	var err error
+	if runs, ok := backend.(RunSourceBackend); ok {
+		source := runs.ActivityReportRunSource(ids, q)
+		artifacts, err = BuildRunArtifactsWithSurvivorUsage(readCtx, params, sessions, func(
+			ctx context.Context, yield func(Run) error,
+		) error {
+			scanning()
+			return source(ctx, func(run Run) error {
+				processed()
+				return yield(run)
+			})
+		}, loadUsage)
+	} else {
+		source := backend.ActivityReportCandidateSource(ids, q)
+		artifacts, err = BuildCandidateArtifactsFromSourceWithSurvivorUsage(readCtx, params, sessions, func(
+			ctx context.Context, yield func(IntervalCandidate) error,
+		) error {
+			scanning()
+			return source(ctx, func(candidate IntervalCandidate) error {
+				processed()
+				return yield(candidate)
+			})
+		}, loadUsage)
+	}
 	if err != nil {
+		if ready != nil {
+			cancel(err)
+			<-ready
+			// Keep the initiating stage's error, before its peer observes cancellation.
+			err = context.Cause(readCtx)
+		}
 		return CandidateArtifacts{}, Progress{}, fmt.Errorf("%s: %w", aggregationLabel, err)
 	}
 	if err := backend.ActivityReportMessageCounts(ctx, ids, q, &artifacts); err != nil {

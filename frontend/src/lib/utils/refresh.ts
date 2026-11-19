@@ -13,6 +13,11 @@ const DAY_MS = 24 * HOUR_MS;
  */
 export const DEFAULT_REFRESH_INTERVAL_MS = 5 * MINUTE_MS;
 
+// active_since follows the clock, so only whether it is set changes the scope.
+export function refreshScopeKey(params: { active_since?: string }): string {
+  return JSON.stringify({ ...params, active_since: params.active_since !== undefined });
+}
+
 export function formatRefreshAge(updatedAt: number | null | undefined, now = Date.now()): string {
   if (updatedAt == null) return m.shared_refresh_not_updated();
 

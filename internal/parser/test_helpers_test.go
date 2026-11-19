@@ -2,6 +2,7 @@ package parser
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"errors"
 	"io"
@@ -423,5 +424,5 @@ func parseClaudeSession(
 	if !ok {
 		return nil, errors.New("claude provider does not support upload parsing")
 	}
-	return uploader.ParseUploadedTranscript(path, project, machine)
+	return uploader.ParseUploadedTranscript(context.Background(), path, project, machine)
 }

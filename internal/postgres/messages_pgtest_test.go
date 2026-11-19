@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,14 +12,15 @@ import (
 )
 
 func TestStoreSearchILIKE(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	page, err := store.Search(ctx, db.SearchFilter{
 		Query: "hello",
 		Limit: 10,
@@ -34,16 +34,17 @@ func TestStoreSearchILIKE(t *testing.T) {
 }
 
 func TestPGSearchDeduplication(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	// store-test-001 has 2 messages; searching "hello" only matches ordinal 0.
 	// With session grouping, should return exactly 1 result.
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	page, err := store.Search(ctx, db.SearchFilter{
 		Query: "hello",
 		Limit: 10,
@@ -52,17 +53,48 @@ func TestPGSearchDeduplication(t *testing.T) {
 	assert.Len(t, page.Results, 1, "deduplicated to session")
 }
 
+func TestPGSearchSnippetUsesWinningMessage(t *testing.T) {
+	t.Parallel()
+	pgURL := testPGStoreURL(t)
+	ensureStoreSchema(t, pgURL)
+	pg, err := Open(t.Context(), pgURL, testSchema, false)
+	require.NoError(t, err)
+	defer pg.Close()
+	_, err = pg.ExecContext(t.Context(), `
+		INSERT INTO sessions (id, machine, project, agent, first_message)
+		VALUES ('snippet-winner', 'test-machine', 'test-project', 'claude', 'unrelated')
+		ON CONFLICT (id) DO NOTHING
+	`)
+	require.NoError(t, err)
+	_, err = pg.ExecContext(t.Context(), `
+		INSERT INTO messages (session_id, ordinal, role, content, content_length)
+		VALUES ('snippet-winner', 0, 'assistant', 'prefix uniquepreview losing', 27),
+		       ('snippet-winner', 1, 'assistant', 'uniquepreview winning', 21)
+		ON CONFLICT (session_id, ordinal) DO NOTHING
+	`)
+	require.NoError(t, err)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
+	require.NoError(t, err)
+	defer store.Close()
+	page, err := store.Search(t.Context(), db.SearchFilter{Query: "uniquepreview", Limit: 1})
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	assert.Equal(t, 1, page.Results[0].Ordinal)
+	assert.Equal(t, "uniquepreview winning", page.Results[0].Snippet)
+}
+
 func TestPGSearchRecencySort(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
 	// Open a write connection to insert additional test data.
-	pg, err := Open(pgURL, testSchema, false)
+	pg, err := Open(t.Context(), pgURL, testSchema, false)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	// Insert a newer session that also matches "hello".
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent, first_message,
 			 started_at, ended_at, message_count,
@@ -77,7 +109,7 @@ func TestPGSearchRecencySort(t *testing.T) {
 		ON CONFLICT (id) DO NOTHING
 	`)
 	require.NoError(t, err, "inserting newer session")
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO messages
 			(session_id, ordinal, role, content,
 			 timestamp, content_length)
@@ -89,11 +121,11 @@ func TestPGSearchRecencySort(t *testing.T) {
 	`)
 	require.NoError(t, err, "inserting newer message")
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	page, err := store.Search(ctx, db.SearchFilter{
 		Query: "hello",
 		Limit: 10,
@@ -106,17 +138,18 @@ func TestPGSearchRecencySort(t *testing.T) {
 }
 
 func TestPGSearchRelevanceSort(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	pg, err := Open(pgURL, testSchema, false)
+	pg, err := Open(t.Context(), pgURL, testSchema, false)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	// Insert two sessions:
 	// - relevance-early: match appears at position 1 (start of content)
 	// - relevance-late: match appears after 50 chars of prefix
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent, first_message,
 			 started_at, ended_at, message_count,
@@ -137,7 +170,7 @@ func TestPGSearchRelevanceSort(t *testing.T) {
 		ON CONFLICT (id) DO NOTHING
 	`)
 	require.NoError(t, err, "inserting sessions")
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO messages
 			(session_id, ordinal, role, content, timestamp, content_length)
 		VALUES
@@ -151,11 +184,11 @@ func TestPGSearchRelevanceSort(t *testing.T) {
 	`)
 	require.NoError(t, err, "inserting messages")
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	page, err := store.Search(ctx, db.SearchFilter{
 		Query: "needleunique",
 		Limit: 10,
@@ -169,15 +202,16 @@ func TestPGSearchRelevanceSort(t *testing.T) {
 }
 
 func TestPGSearchNullTimestampSorting(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	pg, err := Open(pgURL, testSchema, false)
+	pg, err := Open(t.Context(), pgURL, testSchema, false)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	// Insert a session with NULL ended_at and started_at.
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent, first_message,
 			 message_count, user_message_count)
@@ -189,7 +223,7 @@ func TestPGSearchNullTimestampSorting(t *testing.T) {
 		ON CONFLICT (id) DO NOTHING
 	`)
 	require.NoError(t, err, "inserting null-ts session")
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO messages
 			(session_id, ordinal, role, content,
 			 timestamp, content_length)
@@ -202,7 +236,7 @@ func TestPGSearchNullTimestampSorting(t *testing.T) {
 	require.NoError(t, err, "inserting null-ts message")
 
 	// Insert a session with real timestamps.
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent, first_message,
 			 started_at, ended_at,
@@ -217,7 +251,7 @@ func TestPGSearchNullTimestampSorting(t *testing.T) {
 		ON CONFLICT (id) DO NOTHING
 	`)
 	require.NoError(t, err, "inserting real-ts session")
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO messages
 			(session_id, ordinal, role, content,
 			 timestamp, content_length)
@@ -229,11 +263,11 @@ func TestPGSearchNullTimestampSorting(t *testing.T) {
 	`)
 	require.NoError(t, err, "inserting real-ts message")
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Test recency sort: NULL-timestamp session must not be first.
 	page, err := store.Search(ctx, db.SearchFilter{
@@ -260,17 +294,18 @@ func TestPGSearchNullTimestampSorting(t *testing.T) {
 }
 
 func TestPGSearchSystemMessageExcluded(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	pg, err := Open(pgURL, testSchema, false)
+	pg, err := Open(t.Context(), pgURL, testSchema, false)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	// Insert a session whose only matching message is a system message.
 	// first_message intentionally does NOT contain the search term so the
 	// name branch does not accidentally surface this session.
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent, first_message,
 			 started_at, ended_at, message_count,
@@ -285,7 +320,7 @@ func TestPGSearchSystemMessageExcluded(t *testing.T) {
 		ON CONFLICT (id) DO NOTHING
 	`)
 	require.NoError(t, err, "inserting session")
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO messages
 			(session_id, ordinal, role, content,
 			 timestamp, content_length, is_system)
@@ -297,11 +332,11 @@ func TestPGSearchSystemMessageExcluded(t *testing.T) {
 	`)
 	require.NoError(t, err, "inserting system message")
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	page, err := store.Search(ctx, db.SearchFilter{
 		Query: "sysonly unique",
 		Limit: 10,
@@ -316,15 +351,16 @@ func TestPGSearchSystemMessageExcluded(t *testing.T) {
 // does not appear in global search results when all its messages are
 // system messages (the EXISTS guard in the name branch).
 func TestPGSearchNameBranchExcludesSystemOnlySessions(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	pg, err := Open(pgURL, testSchema, false)
+	pg, err := Open(t.Context(), pgURL, testSchema, false)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	// Session with only display_name matching, system messages only.
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent, first_message,
 			 display_name, started_at, ended_at,
@@ -340,7 +376,7 @@ func TestPGSearchNameBranchExcludesSystemOnlySessions(t *testing.T) {
 		ON CONFLICT (id) DO NOTHING
 	`)
 	require.NoError(t, err, "inserting dn session")
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO messages
 			(session_id, ordinal, role, content,
 			 timestamp, content_length, is_system)
@@ -353,7 +389,7 @@ func TestPGSearchNameBranchExcludesSystemOnlySessions(t *testing.T) {
 	require.NoError(t, err, "inserting dn system message")
 
 	// Session with only first_message matching, system messages only.
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent,
 			 first_message, started_at, ended_at,
@@ -368,7 +404,7 @@ func TestPGSearchNameBranchExcludesSystemOnlySessions(t *testing.T) {
 		ON CONFLICT (id) DO NOTHING
 	`)
 	require.NoError(t, err, "inserting fm session")
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO messages
 			(session_id, ordinal, role, content,
 			 timestamp, content_length, is_system)
@@ -380,11 +416,11 @@ func TestPGSearchNameBranchExcludesSystemOnlySessions(t *testing.T) {
 	`)
 	require.NoError(t, err, "inserting fm system message")
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	t.Run("display_name path", func(t *testing.T) {
 		page, err := store.Search(ctx, db.SearchFilter{
@@ -411,16 +447,17 @@ func TestPGSearchNameBranchExcludesSystemOnlySessions(t *testing.T) {
 // (the in-session Cmd+F find-bar) excludes system messages since the
 // frontend hides them and matching would produce phantom highlights.
 func TestPGSearchSessionExcludesSystemMessages(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	pg, err := Open(pgURL, testSchema, false)
+	pg, err := Open(t.Context(), pgURL, testSchema, false)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	// Insert a session with one regular and one system message, both
 	// containing the search term "syssearch".
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent, first_message,
 			 started_at, message_count, user_message_count)
@@ -432,7 +469,7 @@ func TestPGSearchSessionExcludesSystemMessages(t *testing.T) {
 		ON CONFLICT (id) DO NOTHING
 	`)
 	require.NoError(t, err, "inserting session")
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO messages
 			(session_id, ordinal, role, content,
 			 timestamp, content_length, is_system)
@@ -447,11 +484,11 @@ func TestPGSearchSessionExcludesSystemMessages(t *testing.T) {
 	`)
 	require.NoError(t, err, "inserting messages")
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	ordinals, err := store.SearchSession(ctx, "sess-syssearch", "syssearch")
 	require.NoError(t, err, "SearchSession")
 	require.Len(t, ordinals, 1,
@@ -460,16 +497,17 @@ func TestPGSearchSessionExcludesSystemMessages(t *testing.T) {
 }
 
 func TestPGSearchSessionNameMatch(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	pg, err := Open(pgURL, testSchema, false)
+	pg, err := Open(t.Context(), pgURL, testSchema, false)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	// Insert session with display_name containing unique search term,
 	// no messages match.
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent, first_message, display_name,
 			 started_at, message_count, user_message_count)
@@ -479,7 +517,7 @@ func TestPGSearchSessionNameMatch(t *testing.T) {
 			 '2026-03-15T10:00:00Z'::timestamptz, 1, 1)
 		ON CONFLICT (id) DO NOTHING`)
 	require.NoError(t, err, "insert session")
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO messages
 			(session_id, ordinal, role, content, timestamp, content_length)
 		VALUES
@@ -488,11 +526,11 @@ func TestPGSearchSessionNameMatch(t *testing.T) {
 		ON CONFLICT DO NOTHING`)
 	require.NoError(t, err, "insert message")
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	page, err := store.Search(context.Background(), db.SearchFilter{
+	page, err := store.Search(t.Context(), db.SearchFilter{
 		Query: "uniquedisplayterm", Limit: 10,
 	})
 	require.NoError(t, err, "Search")
@@ -504,16 +542,17 @@ func TestPGSearchSessionNameMatch(t *testing.T) {
 }
 
 func TestPGSearchRecencyNameOnlyBeatsOlderContent(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	pg, err := Open(pgURL, testSchema, false)
+	pg, err := Open(t.Context(), pgURL, testSchema, false)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	// older-content-001: message matches "recencytestterm", older timestamp
 	// newer-name-001: display_name matches "recencytestterm", newer timestamp
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent, first_message,
 			 started_at, message_count, user_message_count)
@@ -524,11 +563,11 @@ func TestPGSearchRecencyNameOnlyBeatsOlderContent(t *testing.T) {
 			 'first msg', '2026-01-02T10:00:00Z'::timestamptz, 1, 1)
 		ON CONFLICT (id) DO NOTHING`)
 	require.NoError(t, err, "insert sessions")
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		UPDATE sessions SET display_name = 'recencytestterm session'
 		WHERE id = 'newer-name-recency'`)
 	require.NoError(t, err, "set display_name")
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO messages
 			(session_id, ordinal, role, content, timestamp, content_length)
 		VALUES
@@ -539,11 +578,11 @@ func TestPGSearchRecencyNameOnlyBeatsOlderContent(t *testing.T) {
 		ON CONFLICT DO NOTHING`)
 	require.NoError(t, err, "insert messages")
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	page, err := store.Search(context.Background(), db.SearchFilter{
+	page, err := store.Search(t.Context(), db.SearchFilter{
 		Query: "recencytestterm", Limit: 10, Sort: "recency",
 	})
 	require.NoError(t, err, "Search")
@@ -558,16 +597,17 @@ func TestPGSearchRecencyNameOnlyBeatsOlderContent(t *testing.T) {
 // snippet returned is the first_message (the matching field), not the
 // display_name.
 func TestPGSearchSnippetMatchingField(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	pg, err := Open(pgURL, testSchema, false)
+	pg, err := Open(t.Context(), pgURL, testSchema, false)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
 	// Session: display_name is set to something unrelated; only first_message
 	// contains the search term.
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent, first_message, display_name,
 			 started_at, message_count, user_message_count)
@@ -578,7 +618,7 @@ func TestPGSearchSnippetMatchingField(t *testing.T) {
 		ON CONFLICT (id) DO NOTHING`)
 	require.NoError(t, err, "insert session")
 	// Message that does NOT contain the search term.
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO messages
 			(session_id, ordinal, role, content, timestamp, content_length)
 		VALUES
@@ -587,11 +627,11 @@ func TestPGSearchSnippetMatchingField(t *testing.T) {
 		ON CONFLICT DO NOTHING`)
 	require.NoError(t, err, "insert message")
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	page, err := store.Search(context.Background(), db.SearchFilter{
+	page, err := store.Search(t.Context(), db.SearchFilter{
 		Query: "snippetfieldterm", Limit: 10,
 	})
 	require.NoError(t, err, "Search")
@@ -603,22 +643,23 @@ func TestPGSearchSnippetMatchingField(t *testing.T) {
 	assert.Equal(t, "snippetfieldterm in first message", r.Snippet)
 }
 
+// messagesTestSchema is the schema the GetMessages tests read through.
+const messagesTestSchema = "agentsview_messages_test"
+
 // TestGetMessagesIsSystemField verifies that GetMessages and GetAllMessages
 // correctly populate db.Message.IsSystem from the is_system column.
 func TestGetMessagesIsSystemField(t *testing.T) {
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_is_system_test"
-	pg, err := Open(pgURL, schema, true)
+	t.Parallel()
+	const schema = messagesTestSchema
+	pgURL := testPGSchemaURL(t, schema)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
-	ctx := context.Background()
-	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
-	require.NoError(t, err, "drop schema")
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent, first_message,
 			 started_at, message_count, user_message_count)
@@ -627,7 +668,7 @@ func TestGetMessagesIsSystemField(t *testing.T) {
 			 'hello', '2026-03-16T10:00:00Z'::timestamptz, 2, 1)
 		ON CONFLICT (id) DO NOTHING`)
 	require.NoError(t, err, "insert session")
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO messages
 			(session_id, ordinal, role, content, timestamp, content_length, is_system)
 		VALUES
@@ -638,7 +679,7 @@ func TestGetMessagesIsSystemField(t *testing.T) {
 		ON CONFLICT DO NOTHING`)
 	require.NoError(t, err, "insert messages")
 
-	store, err := NewStore(pgURL, schema, true)
+	store, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
@@ -662,19 +703,17 @@ func TestGetMessagesIsSystemField(t *testing.T) {
 // round-trip coverage (db.TestResolveToolCallsDerivesPositionalCallIndex) so
 // GetMessages/GetAllMessages consumers see these fields at parity.
 func TestGetMessagesToolCallFilePathAndCallIndex(t *testing.T) {
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_toolcall_fields_test"
-	pg, err := Open(pgURL, schema, true)
+	t.Parallel()
+	const schema = messagesTestSchema
+	pgURL := testPGSchemaURL(t, schema)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
-	ctx := context.Background()
-	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
-	require.NoError(t, err, "drop schema")
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent, first_message,
 			 started_at, message_count, user_message_count)
@@ -682,7 +721,7 @@ func TestGetMessagesToolCallFilePathAndCallIndex(t *testing.T) {
 			('tc-fields-001', 'test-machine', 'test-project', 'claude',
 			 'tools', '2026-03-16T10:00:00Z'::timestamptz, 1, 0)`)
 	require.NoError(t, err, "insert session")
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO messages
 			(session_id, ordinal, role, content,
 			 timestamp, content_length, has_tool_use)
@@ -691,7 +730,7 @@ func TestGetMessagesToolCallFilePathAndCallIndex(t *testing.T) {
 			 '2026-03-16T10:00:00Z'::timestamptz, 5, TRUE)`)
 	require.NoError(t, err, "insert message")
 	// Three tool calls on one message, call_index 0/1/2, distinct file_path.
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO tool_calls
 			(session_id, tool_name, category, call_index,
 			 message_ordinal, file_path)
@@ -701,7 +740,7 @@ func TestGetMessagesToolCallFilePathAndCallIndex(t *testing.T) {
 			('tc-fields-001', 'Write', 'Write', 2, 0, 'c.go')`)
 	require.NoError(t, err, "insert tool_calls")
 
-	store, err := NewStore(pgURL, schema, true)
+	store, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
@@ -728,19 +767,17 @@ func TestGetMessagesToolCallFilePathAndCallIndex(t *testing.T) {
 // ID matches the existing convention used by TurnRow.MessageID
 // and CallRow.MessageID in session_timing.go.
 func TestGetMessagesIDPopulated(t *testing.T) {
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_msg_id_test"
-	pg, err := Open(pgURL, schema, true)
+	t.Parallel()
+	const schema = messagesTestSchema
+	pgURL := testPGSchemaURL(t, schema)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
-	ctx := context.Background()
-	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
-	require.NoError(t, err, "drop schema")
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent, first_message,
 			 started_at, message_count, user_message_count)
@@ -748,7 +785,7 @@ func TestGetMessagesIDPopulated(t *testing.T) {
 			('msg-id-001', 'test-machine', 'test-project', 'claude',
 			 'hello', '2026-03-16T10:00:00Z'::timestamptz, 4, 2)`)
 	require.NoError(t, err, "insert session")
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO messages
 			(session_id, ordinal, role, content,
 			 timestamp, content_length, has_tool_use)
@@ -763,7 +800,7 @@ func TestGetMessagesIDPopulated(t *testing.T) {
 			 '2026-03-16T10:00:03Z'::timestamptz, 6, TRUE)`)
 	require.NoError(t, err, "insert messages")
 
-	store, err := NewStore(pgURL, schema, true)
+	store, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
@@ -818,14 +855,15 @@ func TestGetMessagesIDPopulated(t *testing.T) {
 // (hyphen, colon, embedded quote), whether raw or explicitly quoted, must match
 // content and not error. ILIKE has no FTS-operator hazard, but this pins parity.
 func TestPGSearchOperatorTokenNoError(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	pg, err := Open(pgURL, testSchema, false)
+	pg, err := Open(t.Context(), pgURL, testSchema, false)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent, first_message,
 			 started_at, message_count, user_message_count)
@@ -835,7 +873,7 @@ func TestPGSearchOperatorTokenNoError(t *testing.T) {
 			 '2026-03-20T10:00:00Z'::timestamptz, 2, 2)
 		ON CONFLICT (id) DO NOTHING`)
 	require.NoError(t, err, "insert session")
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO messages
 			(session_id, ordinal, role, content, timestamp, content_length)
 		VALUES
@@ -846,12 +884,12 @@ func TestPGSearchOperatorTokenNoError(t *testing.T) {
 		ON CONFLICT DO NOTHING`)
 	require.NoError(t, err, "insert messages")
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
 	for _, raw := range []string{"error-401", "status:500", `say"hi`, `"say""hi"`} {
-		page, err := store.Search(context.Background(), db.SearchFilter{
+		page, err := store.Search(t.Context(), db.SearchFilter{
 			Query: raw, Limit: 10,
 		})
 		require.NoError(t, err, "Search(%q)", raw)
@@ -864,14 +902,15 @@ func TestPGSearchOperatorTokenNoError(t *testing.T) {
 // only when every term appears in its content (AND), matching SQLite FTS5's
 // implicit AND so the same user query behaves identically across backends.
 func TestPGSearchMultiTermAND(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGStoreURL(t)
 	ensureStoreSchema(t, pgURL)
 
-	pg, err := Open(pgURL, testSchema, false)
+	pg, err := Open(t.Context(), pgURL, testSchema, false)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent, first_message,
 			 started_at, message_count, user_message_count)
@@ -884,7 +923,7 @@ func TestPGSearchMultiTermAND(t *testing.T) {
 			 '2026-03-21T11:00:00Z'::timestamptz, 2, 2)
 		ON CONFLICT (id) DO NOTHING`)
 	require.NoError(t, err, "insert sessions")
-	_, err = pg.Exec(`
+	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO messages
 			(session_id, ordinal, role, content, timestamp, content_length)
 		VALUES
@@ -895,11 +934,11 @@ func TestPGSearchMultiTermAND(t *testing.T) {
 		ON CONFLICT DO NOTHING`)
 	require.NoError(t, err, "insert messages")
 
-	store, err := NewStore(pgURL, testSchema, true)
+	store, err := NewStore(t.Context(), pgURL, testSchema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
-	page, err := store.Search(context.Background(), db.SearchFilter{
+	page, err := store.Search(t.Context(), db.SearchFilter{
 		Query: db.PrepareFTSQuery("pgquickterm pgfoxterm"), Limit: 10,
 	})
 	require.NoError(t, err, "Search")

@@ -39,7 +39,7 @@ func migrateRecallReviewStateConstraintLocked(
 			SELECT EXISTS (
 				SELECT 1 FROM sqlite_master WHERE type = 'table'
 				AND name IN ('recall_entries_fts', 'recall_evidence_fts')
-				AND lower(sql) LIKE '%using fts4%'
+				AND sql LIKE '%using fts4%'
 			)
 		`).Scan(&hasFTS4); err != nil {
 			return fmt.Errorf("probing legacy recall search indexes: %w", err)

@@ -69,7 +69,7 @@ func (s *Store) scanPGUserBoundaryOrdinals(
 		WHERE %s`,
 		strings.Join(values, ", "), pgEmbeddableUserSQL("m"))
 
-	rows, err := s.pg.QueryContext(ctx, query, pb.args...)
+	rows, err := s.pg.QueryContext(ctx, s.latin1SearchSQL(query), pb.args...)
 	if err != nil {
 		return fmt.Errorf("querying nearest user boundaries: %w", err)
 	}
@@ -148,7 +148,7 @@ func (s *Store) lookupPGRunExtentChunk(
 	query := "WITH probes(idx, session_id, o, lo, hi, sc) AS (VALUES " +
 		strings.Join(values, ", ") + ")" + pgRunExtentSelectSQL()
 
-	rows, err := s.pg.QueryContext(ctx, query, pb.args...)
+	rows, err := s.pg.QueryContext(ctx, s.latin1SearchSQL(query), pb.args...)
 	if err != nil {
 		return fmt.Errorf("querying run extents: %w", err)
 	}
@@ -282,7 +282,7 @@ func (s *Store) lookupAnchorMetaChunkPG(
 	query := "WITH refs(session_id, ordinal) AS (VALUES " +
 		strings.Join(values, ", ") + ") " +
 		"SELECT r.session_id, r.ordinal, " +
-		"COALESCE(s.relationship_type,''), COALESCE(s.parent_session_id,''), s.machine, COALESCE(s.display_name, s.session_name), " +
+		"s.relationship_type, COALESCE(s.parent_session_id,''), s.machine, COALESCE(s.display_name, s.session_name), " +
 		"m.role, m.is_sidechain, " +
 		"CASE WHEN m.is_system = FALSE AND " +
 		db.PostgresSystemPrefixSQL("m.content", "m.role") +
@@ -291,7 +291,7 @@ func (s *Store) lookupAnchorMetaChunkPG(
 		"JOIN sessions s ON s.id = r.session_id " +
 		"LEFT JOIN messages m ON m.session_id = r.session_id AND m.ordinal = r.ordinal"
 
-	rows, err := s.pg.QueryContext(ctx, query, pb.args...)
+	rows, err := s.pg.QueryContext(ctx, s.latin1SearchSQL(query), pb.args...)
 	if err != nil {
 		return fmt.Errorf("looking up match anchors: %w", err)
 	}

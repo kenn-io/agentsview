@@ -1,12 +1,46 @@
 package db
 
 import (
+	"fmt"
+	"runtime"
+	"strings"
 	"testing"
 	"testing/synctest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// Every branch must start with plan usage so an empty plan table avoids
+// scanning the archive's sessions, messages, and usage events.
+func TestPlanUsageCountQueryStartsFromPlanUsage(t *testing.T) {
+	d := testDB(t)
+	for _, tc := range []struct {
+		name     string
+		filter   UsageFilter
+		branches int
+	}{
+		{name: "unfiltered", branches: 3},
+		{name: "date window", filter: UsageFilter{From: "2026-09-10", To: "2026-09-12", Timezone: "UTC"}, branches: 3},
+		{name: "model", filter: UsageFilter{Model: "gpt-5-codex"}, branches: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			query, args := planUsageCountSQL(tc.filter)
+			plan := explainQueryPlan(t, d, query, args...)
+			var starts []string
+			for i, detail := range plan {
+				if detail == "LEFT-MOST SUBQUERY" || detail == "UNION ALL" {
+					require.Less(t, i+1, len(plan))
+					starts = append(starts, plan[i+1])
+				}
+			}
+			require.Len(t, starts, tc.branches, strings.Join(plan, "\n"))
+			for _, start := range starts {
+				assert.Regexp(t, `^(SCAN|SEARCH) p\b`, start, strings.Join(plan, "\n"))
+			}
+		})
+	}
+}
 
 // seedPlanUsageCountSessions writes sessions that cover each plan usage
 // count rule:
@@ -262,8 +296,8 @@ func TestExportPlanOnlyEmptyCost(t *testing.T) {
 // The plan usage count scans message and usage rows for every report, so it
 // waits for a bulk-read slot and leaves a reader for quick reads.
 func TestPlanUsageCountsWaitForBulkReadSlot(t *testing.T) {
-	d := testDB(t)
 	synctest.Test(t, func(t *testing.T) {
+		d := testDB(t)
 		var releases []func()
 		for range bulkReadSlots {
 			release, err := d.acquireBulkRead(t.Context())
@@ -290,4 +324,77 @@ func TestPlanUsageCountsWaitForBulkReadSlot(t *testing.T) {
 		releases = releases[1:]
 		require.NoError(t, <-done)
 	})
+}
+
+func TestPlanUsageCountTallyCountsFor(t *testing.T) {
+	aliases := map[string]string{"model-a": "group", "model-b": "group"}
+	tally := NewPlanUsageCountTally(UsageFilter{ModelAliases: aliases})
+	for _, row := range [][3]string{
+		{PlanUsageCountKindPlanOnly, "session-a", "model-a"},
+		{PlanUsageCountKindPlanOnly, "session-a", "model-b"},
+		{PlanUsageCountKindPlanOnly, "session-a", "model-a"},
+		{PlanUsageCountKindPlanOnly, "session-b", "model-b"},
+		{PlanUsageCountKindPartlyCaptured, "session-c", "model-a"},
+	} {
+		require.NoError(t, tally.Add(row[0], row[1], row[2], "2026-01-01"))
+	}
+	require.Equal(t, PlanUsageSessionCounts{PlanOnly: 2, PlanOnlyByModel: map[string]int{"group": 2}, PartlyCaptured: 1}, tally.CountsFor(aliases))
+	require.Equal(t, tally.CountsFor(aliases), tally.Counts())
+	require.Equal(t, PlanUsageSessionCounts{PlanOnly: 2, PlanOnlyByModel: map[string]int{"model-a": 1, "model-b": 2}, PartlyCaptured: 1}, tally.CountsFor(nil))
+	compact := tally.Compact()
+	require.Equal(t, tally.Counts(), compact.CountsFor(aliases))
+	require.Equal(t, tally.CountsFor(nil), compact.CountsFor(nil))
+}
+
+func TestPlanUsageCountSummaryModelSets(t *testing.T) {
+	tally := NewPlanUsageCountTally(UsageFilter{From: "2026-01-01", To: "2026-01-01"})
+	for _, row := range [][4]string{
+		{PlanUsageCountKindPlanOnly, "a", "model-a", "2026-01-01"},
+		{PlanUsageCountKindPlanOnly, "a", "model-b", "2026-01-01"},
+		{PlanUsageCountKindPlanOnly, "b", "model-b", "2026-01-01"},
+		{PlanUsageCountKindPlanOnly, "b", "model-a", "2026-01-01"},
+		{PlanUsageCountKindPlanOnly, "b", "model-a", "2026-01-01"},
+		{PlanUsageCountKindPlanOnly, "empty", "", "2026-01-01"},
+		{PlanUsageCountKindPlanOnly, "outside", "model-c", "2026-01-02"},
+		{PlanUsageCountKindPartlyCaptured, "partial", "model-a", "2026-01-01"},
+		{PlanUsageCountKindPartlyCaptured, "partial", "model-b", "2026-01-01"},
+	} {
+		require.NoError(t, tally.Add(row[0], row[1], row[2], row[3]))
+	}
+	compact := tally.Compact()
+	for _, tc := range []struct {
+		name    string
+		aliases map[string]string
+		want    map[string]int
+	}{
+		{"raw", nil, map[string]int{"model-a": 2, "model-b": 2}},
+		{"merged", map[string]string{"model-a": "group", "model-b": "group"}, map[string]int{"group": 2}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			want := PlanUsageSessionCounts{PlanOnly: 3, PartlyCaptured: 1, PlanOnlyByModel: tc.want}
+			require.Equal(t, want, tally.CountsFor(tc.aliases))
+			require.Equal(t, want, compact.CountsFor(tc.aliases))
+		})
+	}
+}
+
+func TestPlanUsageCountSummaryRetainedMemory(t *testing.T) {
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	compact := func() *PlanUsageCountSummary {
+		tally := NewPlanUsageCountTally(UsageFilter{})
+		model := ("model-a" + strings.Repeat("x", 8<<20))[:len("model-a")]
+		for i := range 350_000 {
+			require.NoError(t, tally.Add(PlanUsageCountKindPlanOnly, fmt.Sprintf("session-%036d", i), model, ""))
+		}
+		return tally.Compact()
+	}()
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	runtime.KeepAlive(compact)
+	// Repeated model sets must release the per-session maps, IDs, and model backing buffer.
+	require.Less(t, int64(after.HeapAlloc)-int64(before.HeapAlloc), int64(1<<20))
+	require.Less(t, compact.Bytes(), int64(1024))
+	require.Equal(t, PlanUsageSessionCounts{PlanOnly: 350_000, PlanOnlyByModel: map[string]int{"model-a": 350_000}}, compact.CountsFor(nil))
 }

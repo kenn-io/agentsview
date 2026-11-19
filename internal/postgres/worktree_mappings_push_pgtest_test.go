@@ -15,7 +15,8 @@ import (
 // worktree mapping to the PG mirror, even when there are no sessions to
 // push (the mapping-only publication path).
 func TestPushReplicatesWorktreeMappings(t *testing.T) {
-	const schema = "agentsview_push_mapping_test"
+	t.Parallel()
+	const schema = pgPushTestSchema
 	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 
 	_, err := localDB.CreateWorktreeProjectMapping(ctx,
@@ -45,7 +46,8 @@ func TestPushReplicatesWorktreeMappings(t *testing.T) {
 // TestPushMappingDeleteTombstones verifies that deleting a local mapping and
 // pushing again removes the corresponding mirror row.
 func TestPushMappingDeleteTombstones(t *testing.T) {
-	const schema = "agentsview_push_mapping_delete_test"
+	t.Parallel()
+	const schema = pgPushTestSchema
 	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 
 	created, err := localDB.CreateWorktreeProjectMapping(ctx,
@@ -74,7 +76,8 @@ func TestPushMappingDeleteTombstones(t *testing.T) {
 // publication (this archive's first push) does not touch rows published by
 // another archive under the same (machine, path_prefix) natural key.
 func TestMappingReplicationIsArchiveScoped(t *testing.T) {
-	const schema = "agentsview_push_mapping_scope_test"
+	t.Parallel()
+	const schema = pgPushTestSchema
 	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 
 	// A foreign archive already published an identical (machine,
@@ -119,7 +122,8 @@ func TestMappingReplicationIsArchiveScoped(t *testing.T) {
 }
 
 func TestFilteredMappingPublicationOmitsOutOfScopeMetadata(t *testing.T) {
-	const schema = "agentsview_push_mapping_filter_test"
+	t.Parallel()
+	const schema = pgPushTestSchema
 	_, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 
 	inScope, err := localDB.CreateWorktreeProjectMapping(
@@ -199,7 +203,8 @@ func TestFilteredMappingPublicationOmitsOutOfScopeMetadata(t *testing.T) {
 }
 
 func TestFilteredMappingPublicationPreservesUnfilteredMappings(t *testing.T) {
-	const schema = "agentsview_push_mapping_unfiltered_owner_test"
+	t.Parallel()
+	const schema = pgPushTestSchema
 	unfiltered, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 
 	for _, project := range []string{"alpha", "beta"} {
@@ -261,7 +266,8 @@ func TestFilteredMappingPublicationPreservesUnfilteredMappings(t *testing.T) {
 // unset, so the next push retries a full publication instead of silently
 // skipping the mapping that failed to mirror.
 func TestMappingCursorNotAdvancedOnFailure(t *testing.T) {
-	const schema = "agentsview_push_mapping_fail_test"
+	t.Parallel()
+	const schema = pgPushTestSchema
 	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 
 	_, err := localDB.CreateWorktreeProjectMapping(ctx,
@@ -274,7 +280,7 @@ func TestMappingCursorNotAdvancedOnFailure(t *testing.T) {
 
 	// Sabotage the mirror table so the mapping publication insert fails
 	// after the other push finalization steps have already succeeded.
-	_, err = pg.Exec(
+	_, err = pg.ExecContext(t.Context(),
 		`ALTER TABLE source_worktree_project_mappings DROP COLUMN project`)
 	require.NoError(t, err, "drop project column")
 

@@ -24,23 +24,24 @@ func reconcilePinnedMessages(
 	return restorePinnedMessages(ctx, tx, sessionID, pins)
 }
 
-func TestStoreStarsAndPins(t *testing.T) {
-	pgURL := testPGURL(t)
+// curationTestSchema is the schema the curation store tests read through.
+const curationTestSchema = "agentsview_curation_test"
 
-	const schema = "agentsview_curation_test"
-	pg, err := Open(pgURL, schema, true)
+func TestStoreStarsAndPins(t *testing.T) {
+	t.Parallel()
+	const schema = curationTestSchema
+	pgURL := testPGSchemaURL(t, schema)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 	defer func() {
 		_, _ = pg.ExecContext(
-			context.Background(),
+			t.Context(),
 			`DROP SCHEMA IF EXISTS `+schema+` CASCADE`,
 		)
 	}()
 
-	ctx := context.Background()
-	_, err = pg.ExecContext(ctx, `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	_, err = pg.ExecContext(ctx, `
@@ -71,7 +72,7 @@ func TestStoreStarsAndPins(t *testing.T) {
 			 'uuid-answer')`)
 	require.NoError(t, err, "insert messages")
 
-	store, err := NewStore(pgURL, schema, true)
+	store, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
@@ -138,20 +139,19 @@ func TestStoreStarsAndPins(t *testing.T) {
 }
 
 func TestPushPreservesMultiplePGPinsBySourceUUID(t *testing.T) {
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 	ps, err := New(
-		pgURL, "agentsview", local,
+		t.Context(), pgURL, "agentsview", local,
 		"curation-machine", true,
 		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "New sync")
 	defer ps.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, ps.EnsureSchema(ctx), "EnsureSchema")
 
 	sess := db.Session{
@@ -189,7 +189,7 @@ func TestPushPreservesMultiplePGPinsBySourceUUID(t *testing.T) {
 	_, err = ps.Push(ctx, false, nil)
 	require.NoError(t, err, "Push first")
 
-	store, err := NewStore(pgURL, "agentsview", true)
+	store, err := NewStore(t.Context(), pgURL, "agentsview", true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
@@ -265,20 +265,19 @@ func TestPushPreservesMultiplePGPinsBySourceUUID(t *testing.T) {
 // local SQLite archive and the next PostgreSQL push drop the pin —
 // the stores stay consistent instead of diverging on heuristics.
 func TestPushDropsEditedLegacyPinInBothStores(t *testing.T) {
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 	ps, err := New(
-		pgURL, "agentsview", local,
+		t.Context(), pgURL, "agentsview", local,
 		"curation-machine", true,
 		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "New sync")
 	defer ps.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, ps.EnsureSchema(ctx), "EnsureSchema")
 
 	seed := func(sessionID string) db.Session {
@@ -309,7 +308,7 @@ func TestPushDropsEditedLegacyPinInBothStores(t *testing.T) {
 	_, err = ps.Push(ctx, false, nil)
 	require.NoError(t, err, "Push first")
 
-	store, err := NewStore(pgURL, "agentsview", true)
+	store, err := NewStore(t.Context(), pgURL, "agentsview", true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
@@ -374,7 +373,8 @@ func TestPushDropsEditedLegacyPinInBothStores(t *testing.T) {
 }
 
 func TestPushReconcilesPGPinsByPriorMessageIdentity(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	tests := []struct {
 		name        string
@@ -458,18 +458,19 @@ func TestPushReconcilesPGPinsByPriorMessageIdentity(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cleanPGSchema(t, pgURL)
-			t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+			if !takeFreshSchemaCopy(t, pgURL, "agentsview") {
+				cleanPGSchema(t, pgURL)
+			}
 
 			local := testDB(t)
 			ps, err := New(
-				pgURL, "agentsview", local,
+				t.Context(), pgURL, "agentsview", local,
 				"curation-machine", true, storage.PusherOptions{},
 			)
 			require.NoError(t, err, "New sync")
 			defer ps.Close()
 
-			ctx := context.Background()
+			ctx := t.Context()
 			require.NoError(t, ps.EnsureSchema(ctx), "EnsureSchema")
 
 			const sessionID = "pg-pin-prior-identity"
@@ -489,7 +490,7 @@ func TestPushReconcilesPGPinsByPriorMessageIdentity(t *testing.T) {
 			_, err = ps.Push(ctx, false, nil)
 			require.NoError(t, err, "Push old")
 
-			store, err := NewStore(pgURL, "agentsview", true)
+			store, err := NewStore(t.Context(), pgURL, "agentsview", true)
 			require.NoError(t, err, "NewStore")
 			defer store.Close()
 			_, err = store.PinMessage(t.Context(), sessionID, 0, nil)
@@ -521,22 +522,20 @@ func TestPushReconcilesPGPinsByPriorMessageIdentity(t *testing.T) {
 }
 
 func TestRestorePinnedMessagesPreservesPinCreatedAfterSnapshot(t *testing.T) {
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_pin_snapshot_race_test"
-	pg, err := Open(pgURL, schema, true)
+	t.Parallel()
+	const schema = curationTestSchema
+	pgURL := testPGSchemaURL(t, schema)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 	defer func() {
 		_, _ = pg.ExecContext(
-			context.Background(),
+			t.Context(),
 			`DROP SCHEMA IF EXISTS `+schema+` CASCADE`,
 		)
 	}()
 
-	ctx := context.Background()
-	_, err = pg.ExecContext(ctx, `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	_, err = pg.ExecContext(ctx, `
@@ -585,7 +584,7 @@ func TestRestorePinnedMessagesPreservesPinCreatedAfterSnapshot(t *testing.T) {
 	}
 	require.NoError(t, tx.Commit(), "commit tx")
 
-	store, err := NewStore(pgURL, schema, true)
+	store, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 	got, err := store.ListPinnedMessages(ctx, "pg-pin-snapshot-race", "")
@@ -600,22 +599,20 @@ func TestRestorePinnedMessagesPreservesPinCreatedAfterSnapshot(t *testing.T) {
 }
 
 func TestPinMessageSerializesWithSessionReplacement(t *testing.T) {
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_pin_session_lock_test"
-	pg, err := Open(pgURL, schema, true)
+	t.Parallel()
+	const schema = curationTestSchema
+	pgURL := testPGSchemaURL(t, schema)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 	defer func() {
 		_, _ = pg.ExecContext(
-			context.Background(),
+			t.Context(),
 			`DROP SCHEMA IF EXISTS `+schema+` CASCADE`,
 		)
 	}()
 
-	ctx := context.Background()
-	_, err = pg.ExecContext(ctx, `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 	_, err = pg.ExecContext(ctx, `
 		INSERT INTO sessions
@@ -633,10 +630,10 @@ func TestPinMessageSerializesWithSessionReplacement(t *testing.T) {
 			 '2026-05-01T00:00:00Z'::timestamptz, 7, 'uuid-message')`)
 	require.NoError(t, err, "seed session")
 
-	store, err := NewStore(pgURL, schema, true)
+	store, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
-	store.pg.SetMaxOpenConns(1)
+	store.DB().SetMaxOpenConns(1)
 	_, err = store.pg.ExecContext(ctx, `SET lock_timeout = '50ms'`)
 	require.NoError(t, err, "set lock timeout")
 
@@ -660,22 +657,20 @@ func TestPinMessageSerializesWithSessionReplacement(t *testing.T) {
 }
 
 func TestReconcilePinnedMessagesPrefersCurrentTargetPin(t *testing.T) {
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_pin_duplicate_test"
-	pg, err := Open(pgURL, schema, true)
+	t.Parallel()
+	const schema = curationTestSchema
+	pgURL := testPGSchemaURL(t, schema)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 	defer func() {
 		_, _ = pg.ExecContext(
-			context.Background(),
+			t.Context(),
 			`DROP SCHEMA IF EXISTS `+schema+` CASCADE`,
 		)
 	}()
 
-	ctx := context.Background()
-	_, err = pg.ExecContext(ctx, `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	_, err = pg.ExecContext(ctx, `
@@ -725,7 +720,7 @@ func TestReconcilePinnedMessagesPrefersCurrentTargetPin(t *testing.T) {
 	}
 	require.NoError(t, tx.Commit(), "commit tx")
 
-	store, err := NewStore(pgURL, schema, true)
+	store, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
@@ -739,22 +734,20 @@ func TestReconcilePinnedMessagesPrefersCurrentTargetPin(t *testing.T) {
 }
 
 func TestReconcilePinnedMessagesFollowsStoredUniqueSourceUUID(t *testing.T) {
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_pin_shifted_uuid_test"
-	pg, err := Open(pgURL, schema, true)
+	t.Parallel()
+	const schema = curationTestSchema
+	pgURL := testPGSchemaURL(t, schema)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 	defer func() {
 		_, _ = pg.ExecContext(
-			context.Background(),
+			t.Context(),
 			`DROP SCHEMA IF EXISTS `+schema+` CASCADE`,
 		)
 	}()
 
-	ctx := context.Background()
-	_, err = pg.ExecContext(ctx, `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	_, err = pg.ExecContext(ctx, `
@@ -794,7 +787,7 @@ func TestReconcilePinnedMessagesFollowsStoredUniqueSourceUUID(t *testing.T) {
 	}
 	require.NoError(t, tx.Commit(), "commit tx")
 
-	store, err := NewStore(pgURL, schema, true)
+	store, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
@@ -808,22 +801,20 @@ func TestReconcilePinnedMessagesFollowsStoredUniqueSourceUUID(t *testing.T) {
 }
 
 func TestRestorePinnedMessagesUsesResolvedAnchorOrdinalForNewDuplicateUUID(t *testing.T) {
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_pin_shifted_duplicate_test"
-	pg, err := Open(pgURL, schema, true)
+	t.Parallel()
+	const schema = curationTestSchema
+	pgURL := testPGSchemaURL(t, schema)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 	defer func() {
 		_, _ = pg.ExecContext(
-			context.Background(),
+			t.Context(),
 			`DROP SCHEMA IF EXISTS `+schema+` CASCADE`,
 		)
 	}()
 
-	ctx := context.Background()
-	_, err = pg.ExecContext(ctx, `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	_, err = pg.ExecContext(ctx, `
@@ -887,7 +878,7 @@ func TestRestorePinnedMessagesUsesResolvedAnchorOrdinalForNewDuplicateUUID(t *te
 	}
 	require.NoError(t, tx.Commit(), "commit tx")
 
-	store, err := NewStore(pgURL, schema, true)
+	store, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
@@ -907,24 +898,23 @@ func TestRestorePinnedMessagesUsesResolvedAnchorOrdinalForNewDuplicateUUID(t *te
 // snapshot/restore cycle a push performs, and returns the surviving
 // pins.
 func restoreIdenticalDuplicatePins(
-	t *testing.T, schema, sessionID, replacementValues string,
+	t *testing.T, sessionID, replacementValues string,
 ) []db.PinnedMessage {
 	t.Helper()
-	pgURL := testPGURL(t)
+	const schema = curationTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 
-	pg, err := Open(pgURL, schema, true)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 	defer func() {
 		_, _ = pg.ExecContext(
-			context.Background(),
+			t.Context(),
 			`DROP SCHEMA IF EXISTS `+schema+` CASCADE`,
 		)
 	}()
 
-	ctx := context.Background()
-	_, err = pg.ExecContext(ctx, `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	_, err = pg.ExecContext(ctx, `
@@ -975,7 +965,7 @@ func restoreIdenticalDuplicatePins(
 	}
 	require.NoError(t, tx.Commit(), "commit tx")
 
-	store, err := NewStore(pgURL, schema, true)
+	store, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
@@ -987,8 +977,8 @@ func restoreIdenticalDuplicatePins(
 func TestRestorePinnedMessagesKeepsPinOnUnchangedIdenticalDuplicates(
 	t *testing.T,
 ) {
+	t.Parallel()
 	got := restoreIdenticalDuplicatePins(t,
-		"agentsview_pin_identical_dup_keep_test",
 		"pg-pin-identical-dup-keep", `
 		('pg-pin-identical-dup-keep', 0, 'user', 'same',
 		 '2026-05-01T00:00:00Z'::timestamptz, 4, 'dup'),
@@ -1004,8 +994,8 @@ func TestRestorePinnedMessagesKeepsPinOnUnchangedIdenticalDuplicates(
 func TestRestorePinnedMessagesDropsPinOnChangedDuplicateMultiplicity(
 	t *testing.T,
 ) {
+	t.Parallel()
 	got := restoreIdenticalDuplicatePins(t,
-		"agentsview_pin_identical_dup_change_test",
 		"pg-pin-identical-dup-change", `
 		('pg-pin-identical-dup-change', 0, 'user', 'same',
 		 '2026-05-01T00:00:00Z'::timestamptz, 4, 'dup'),
@@ -1020,12 +1010,12 @@ func TestRestorePinnedMessagesDropsPinOnChangedDuplicateMultiplicity(
 func TestRestorePinnedMessagesFollowsShiftedIdenticalDuplicates(
 	t *testing.T,
 ) {
+	t.Parallel()
 	// A context row inserted before the duplicates shifts both while
 	// their multiplicity stays equal: the pin must follow its
 	// occurrence rank instead of staying on the saved ordinal where
 	// the first duplicate now sits.
 	got := restoreIdenticalDuplicatePins(t,
-		"agentsview_pin_identical_dup_shift_test",
 		"pg-pin-identical-dup-shift", `
 		('pg-pin-identical-dup-shift', 0, 'user', 'context',
 		 '2026-05-01T00:00:00Z'::timestamptz, 7, 'ctx'),
@@ -1042,23 +1032,21 @@ func TestRestorePinnedMessagesFollowsShiftedIdenticalDuplicates(
 func TestRestorePinnedMessagesFollowsShiftedEqualLegacyMessages(
 	t *testing.T,
 ) {
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_pin_legacy_shift_test"
+	t.Parallel()
+	const schema = curationTestSchema
+	pgURL := testPGSchemaURL(t, schema)
 	const sessionID = "pg-pin-legacy-shift"
-	pg, err := Open(pgURL, schema, true)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 	defer func() {
 		_, _ = pg.ExecContext(
-			context.Background(),
+			t.Context(),
 			`DROP SCHEMA IF EXISTS `+schema+` CASCADE`,
 		)
 	}()
 
-	ctx := context.Background()
-	_, err = pg.ExecContext(ctx, `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	_, err = pg.ExecContext(ctx, `
@@ -1122,7 +1110,7 @@ func TestRestorePinnedMessagesFollowsShiftedEqualLegacyMessages(
 	}
 	require.NoError(t, tx.Commit(), "commit tx")
 
-	store, err := NewStore(pgURL, schema, true)
+	store, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
@@ -1142,22 +1130,20 @@ func TestRestorePinnedMessagesFollowsShiftedEqualLegacyMessages(
 // pin's original ordinal. The pin must be deleted: otherwise it
 // would silently re-anchor on an unrelated message.
 func TestReconcilePinnedMessagesPrunesPinWhenSourceUUIDGone(t *testing.T) {
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_pin_source_gone_test"
-	pg, err := Open(pgURL, schema, true)
+	t.Parallel()
+	const schema = curationTestSchema
+	pgURL := testPGSchemaURL(t, schema)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 	defer func() {
 		_, _ = pg.ExecContext(
-			context.Background(),
+			t.Context(),
 			`DROP SCHEMA IF EXISTS `+schema+` CASCADE`,
 		)
 	}()
 
-	ctx := context.Background()
-	_, err = pg.ExecContext(ctx, `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	_, err = pg.ExecContext(ctx, `
@@ -1201,7 +1187,7 @@ func TestReconcilePinnedMessagesPrunesPinWhenSourceUUIDGone(t *testing.T) {
 	}
 	require.NoError(t, tx.Commit(), "commit tx")
 
-	store, err := NewStore(pgURL, schema, true)
+	store, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
@@ -1217,22 +1203,20 @@ func TestReconcilePinnedMessagesPrunesPinWhenSourceUUIDGone(t *testing.T) {
 // the later duplicate. Reconciliation must keep the pin where it is
 // rather than relocating it to the lowest-ordinal duplicate.
 func TestReconcilePinnedMessagesKeepsPinOnLaterDuplicateSourceUUID(t *testing.T) {
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_pin_dup_uuid_test"
-	pg, err := Open(pgURL, schema, true)
+	t.Parallel()
+	const schema = curationTestSchema
+	pgURL := testPGSchemaURL(t, schema)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 	defer func() {
 		_, _ = pg.ExecContext(
-			context.Background(),
+			t.Context(),
 			`DROP SCHEMA IF EXISTS `+schema+` CASCADE`,
 		)
 	}()
 
-	ctx := context.Background()
-	_, err = pg.ExecContext(ctx, `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	_, err = pg.ExecContext(ctx, `
@@ -1279,7 +1263,7 @@ func TestReconcilePinnedMessagesKeepsPinOnLaterDuplicateSourceUUID(t *testing.T)
 	}
 	require.NoError(t, tx.Commit(), "commit tx")
 
-	store, err := NewStore(pgURL, schema, true)
+	store, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
@@ -1297,22 +1281,20 @@ func TestReconcilePinnedMessagesKeepsPinOnLaterDuplicateSourceUUID(t *testing.T)
 // message currently at message_id; otherwise the next reconciliation
 // would follow the stale uuid away from where the user just pinned.
 func TestPinMessageRepinRefreshesSourceUUID(t *testing.T) {
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_pin_repin_test"
-	pg, err := Open(pgURL, schema, true)
+	t.Parallel()
+	const schema = curationTestSchema
+	pgURL := testPGSchemaURL(t, schema)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 	defer func() {
 		_, _ = pg.ExecContext(
-			context.Background(),
+			t.Context(),
 			`DROP SCHEMA IF EXISTS `+schema+` CASCADE`,
 		)
 	}()
 
-	ctx := context.Background()
-	_, err = pg.ExecContext(ctx, `DROP SCHEMA IF EXISTS `+schema+` CASCADE`)
-	require.NoError(t, err, "drop schema")
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	_, err = pg.ExecContext(ctx, `
@@ -1337,7 +1319,7 @@ func TestPinMessageRepinRefreshesSourceUUID(t *testing.T) {
 			 'uuid-original')`)
 	require.NoError(t, err, "insert messages")
 
-	store, err := NewStore(pgURL, schema, true)
+	store, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
@@ -1393,7 +1375,8 @@ func TestPinMessageRepinRefreshesSourceUUID(t *testing.T) {
 // session gets no translation, so its pin on a bare uuid drops when the
 // replacement rows no longer carry it.
 func TestPushRestoresDevinPinAcrossSourceUUIDRescope(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	tests := []struct {
 		name      string
@@ -1406,18 +1389,19 @@ func TestPushRestoresDevinPinAcrossSourceUUIDRescope(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cleanPGSchema(t, pgURL)
-			t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+			if !takeFreshSchemaCopy(t, pgURL, "agentsview") {
+				cleanPGSchema(t, pgURL)
+			}
 
 			local := testDB(t)
 			ps, err := New(
-				pgURL, "agentsview", local,
+				t.Context(), pgURL, "agentsview", local,
 				"curation-machine", true, storage.PusherOptions{},
 			)
 			require.NoError(t, err, "New sync")
 			defer ps.Close()
 
-			ctx := context.Background()
+			ctx := t.Context()
 			require.NoError(t, ps.EnsureSchema(ctx), "EnsureSchema")
 
 			sess := db.Session{
@@ -1444,7 +1428,7 @@ func TestPushRestoresDevinPinAcrossSourceUUIDRescope(t *testing.T) {
 			_, err = ps.Push(ctx, false, nil)
 			require.NoError(t, err, "Push old")
 
-			store, err := NewStore(pgURL, "agentsview", true)
+			store, err := NewStore(t.Context(), pgURL, "agentsview", true)
 			require.NoError(t, err, "NewStore")
 			defer store.Close()
 			_, err = store.PinMessage(t.Context(), tt.sessionID, 1, nil)
@@ -1492,19 +1476,18 @@ func TestPushRestoresDevinPinAcrossSourceUUIDRescope(t *testing.T) {
 // form, each row would look unique and the pin would attach to whichever
 // row the scan returned first.
 func TestPushDropsDevinPinWhenBareAndScopedUUIDsCoexist(t *testing.T) {
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 	ps, err := New(
-		pgURL, "agentsview", local,
+		t.Context(), pgURL, "agentsview", local,
 		"curation-machine", true, storage.PusherOptions{},
 	)
 	require.NoError(t, err, "New sync")
 	defer ps.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, ps.EnsureSchema(ctx), "EnsureSchema")
 
 	const sessionID = "devin:pg-pin-coexist"
@@ -1532,7 +1515,7 @@ func TestPushDropsDevinPinWhenBareAndScopedUUIDsCoexist(t *testing.T) {
 	_, err = ps.Push(ctx, false, nil)
 	require.NoError(t, err, "Push old")
 
-	store, err := NewStore(pgURL, "agentsview", true)
+	store, err := NewStore(t.Context(), pgURL, "agentsview", true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 	_, err = store.PinMessage(t.Context(), sessionID, 1, nil)

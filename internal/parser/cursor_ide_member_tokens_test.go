@@ -78,7 +78,8 @@ func TestListCursorIDEComposerTokens(t *testing.T) {
 		('composerData:e-null', NULL),
 		('composerData:f-bad', '{not json'),
 		('composerData:g bad!', ?),
-		('composerData:h-last', ?)`,
+		('composerData:h-last', ?),
+		('composerData:i-chunk', '{"headerLog":{"count":2,"chunkCount":1}}')`,
 		textDoc, textDoc, lastDoc,
 	)
 	blobRaw := readCursorIDEValue(t, dbPath, "composerData:a-blob")
@@ -89,6 +90,7 @@ func TestListCursorIDEComposerTokens(t *testing.T) {
 		{id: "a-blob", token: fnv64aHex(blobRaw)},
 		{id: "c-text", token: fnv64aHex([]byte(textDoc))},
 		{id: "h-last", token: fnv64aHex([]byte(lastDoc))},
+		{id: "i-chunk", token: fnv64aHex([]byte(`{"headerLog":{"count":2,"chunkCount":1}}`))},
 	}, listed)
 	assert.Equal(t, parses, CursorIDEComposerParses())
 	assert.Equal(t, digests, CursorIDEComposerDigests())

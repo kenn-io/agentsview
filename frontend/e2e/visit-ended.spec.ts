@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { SessionsPage } from "./pages/sessions-page";
 import { TOKEN, visitServer } from "./helpers/visit-server";
+import { waitForVisitPageReady } from "./helpers/visit-page";
 
 test("the daemon's disabled receipt stops all browser telemetry through a reload", async ({
   page,
@@ -46,11 +47,12 @@ for (const { remote, action } of [
   }) => {
     const server = await visitServer(baseURL!, remote);
     try {
+      // The screen request starts after the app has consumed the enabled open receipt.
       const enabled = page.waitForResponse(
         (response) =>
           response.request().method() === "POST" &&
           new URL(response.url()).pathname === "/api/v1/telemetry/events" &&
-          response.request().postDataJSON()?.event === "app_opened",
+          response.request().postDataJSON()?.event === "screen_viewed",
       );
       if (remote) {
         await page.addInitScript(
@@ -66,9 +68,29 @@ for (const { remote, action } of [
         await expect(new SessionsPage(page).sessionItems.first()).toBeVisible();
       }
       await enabled;
+      await waitForVisitPageReady(page);
       server.preflights.length = 0;
-      if (action === "close") await page.close();
-      else await page.reload();
+      if (action === "close") {
+        // Keep Chromium from killing the renderer before it dispatches pagehide.
+        await page.evaluate(() => window.addEventListener("beforeunload", () => {}));
+        // Chromium still tears a closing tab down without running pagehide when
+        // its renderer is busy finishing the page load. Close once the renderer
+        // reports a long idle period, with no task queued, so the test measures
+        // the app's delivery rather than host load. WebKit has no
+        // requestIdleCallback, and only Chromium drops pagehide this way.
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) => {
+              if (!("requestIdleCallback" in window)) return resolve();
+              const wait = () =>
+                requestIdleCallback((deadline) =>
+                  deadline.timeRemaining() >= 40 ? resolve() : wait(),
+                );
+              wait();
+            }),
+        );
+        await page.close({ runBeforeUnload: true });
+      } else await page.reload();
       await expect
         .poll(() => server.visits.map(({ payload }) => payload))
         .toEqual([

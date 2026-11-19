@@ -221,7 +221,7 @@ func TestBestEffortLocalTimezone(t *testing.T) {
 		{
 			name:  "invalid local name is blank",
 			envTZ: "",
-			loc:   time.FixedZone("DuckLocal", 0),
+			loc:   time.FixedZone("NotAZone", 0),
 			want:  "",
 		},
 		{

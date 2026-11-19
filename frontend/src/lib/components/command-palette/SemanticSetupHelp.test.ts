@@ -23,6 +23,7 @@ vi.mock("../../api/generated/index.js", async (importOriginal) => {
     EmbeddingsService: {
       getApiV1EmbeddingsStatus: vi.fn(),
       postApiV1EmbeddingsBuild: vi.fn(),
+      postApiV1EmbeddingsSetup: vi.fn(),
     },
   };
 });
@@ -37,11 +38,22 @@ import SemanticSetupHelp, { __resetResolvedBuildIds } from "./SemanticSetupHelp.
 const embeddingsService = EmbeddingsService as unknown as {
   getApiV1EmbeddingsStatus: ReturnType<typeof vi.fn>;
   postApiV1EmbeddingsBuild: ReturnType<typeof vi.fn>;
+  postApiV1EmbeddingsSetup: ReturnType<typeof vi.fn>;
 };
 
 function idleStatus(overrides: Partial<VectorBuildStatus> = {}): VectorBuildStatus {
   return {
     running: false,
+    setup: {
+      enabled: true,
+      action: "",
+      provider: "built-in",
+      busy: false,
+      installing: false,
+      missing_bytes: 0,
+      downloaded_bytes: 0,
+      total_bytes: 0,
+    },
     done: 0,
     total: 0,
     eta_milliseconds: 0,
@@ -56,6 +68,16 @@ function runningStatus(
 ): VectorBuildStatus {
   return {
     running: true,
+    setup: {
+      enabled: true,
+      action: "",
+      provider: "built-in",
+      busy: false,
+      installing: false,
+      missing_bytes: 0,
+      downloaded_bytes: 0,
+      total_bytes: 0,
+    },
     phase: "embedding",
     done,
     total,
@@ -89,6 +111,7 @@ describe("SemanticSetupHelp", () => {
     __resetResolvedBuildIds();
     embeddingsService.getApiV1EmbeddingsStatus.mockReset();
     embeddingsService.postApiV1EmbeddingsBuild.mockReset();
+    embeddingsService.postApiV1EmbeddingsSetup.mockReset();
     mockCopyToClipboard.mockReset();
     mockCopyToClipboard.mockResolvedValue(true);
   });
@@ -116,6 +139,28 @@ describe("SemanticSetupHelp", () => {
     return { component, onResolved };
   }
 
+  it("keeps build polling quiet while hidden and resumes when visible", async () => {
+    const visibility = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(runningStatus(1, 10));
+    const { component } = mountHelp();
+    try {
+      await settle();
+      expect(embeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledOnce();
+      visibility.mockReturnValue(true);
+      await settle(15 * 60_000);
+      expect(embeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledOnce();
+      visibility.mockReturnValue(false);
+      await settle(2000);
+      expect(embeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(2);
+    } finally {
+      unmount(component);
+      visibility.mockRestore();
+    }
+    await settle(4000);
+    expect(embeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("shows the config walkthrough when the daemon has no embeddings manager", async () => {
     embeddingsService.getApiV1EmbeddingsStatus.mockRejectedValue(
       new ApiError(501, "embeddings manager not available"),
@@ -127,7 +172,7 @@ describe("SemanticSetupHelp", () => {
     expect(text()).toContain("Semantic search isn't set up");
     expect(text()).toContain("[vector]");
     expect(text()).toContain("enabled = true");
-    expect(text()).toContain("agentsview embeddings build");
+    expect(text()).toContain("agentsview index embeddings build");
     expect(text()).toContain(
       "Already using Nomic with Ollama? Follow the full recipe to keep your index when switching to the shared local server.",
     );
@@ -143,8 +188,33 @@ describe("SemanticSetupHelp", () => {
     expect(mockCopyToClipboard).toHaveBeenCalledWith("[vector]\nenabled = true");
     (copyButtons[1] as HTMLButtonElement).click();
     await settle();
-    expect(mockCopyToClipboard).toHaveBeenCalledWith("agentsview embeddings build");
+    expect(mockCopyToClipboard).toHaveBeenCalledWith("agentsview index embeddings build");
 
+    unmount(component);
+  });
+
+  it("refreshes setup after turning on the built-in server", async () => {
+    const setup = {
+      enabled: false,
+      action: "turn-on",
+      provider: "built-in",
+      missing_bytes: 295000000,
+      busy: false,
+      installing: false,
+      downloaded_bytes: 0,
+      total_bytes: 0,
+    };
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(idleStatus({ setup }));
+    embeddingsService.postApiV1EmbeddingsSetup.mockResolvedValue({ started: true });
+    const { component } = mountHelp();
+    await settle();
+    expect(text()).toContain("Downloads 295 MB");
+    [...document.body.querySelectorAll("button")]
+      .find((b) => b.textContent?.trim() === "Turn on")!
+      .click();
+    await settle();
+    expect(embeddingsService.postApiV1EmbeddingsSetup).toHaveBeenCalledTimes(1);
+    expect(embeddingsService.getApiV1EmbeddingsStatus).toHaveBeenCalledTimes(2);
     unmount(component);
   });
 
@@ -169,14 +239,14 @@ describe("SemanticSetupHelp", () => {
       "no matching generation",
       "semantic search not available: semantic search: PG has no embedding " +
         "generation matching fingerprint abc123 (present: def456); run " +
-        "'agentsview pg push' from a machine with a matching " +
+        "'agentsview replica pg push' from a machine with a matching " +
         "[vector.embeddings] config",
     ],
     [
       "missing generation chunk table",
       "semantic search not available: semantic search: PG generation 7 " +
         "matches fingerprint abc123 but its chunk table is missing " +
-        "(interrupted push?); re-run 'agentsview pg push' from a machine " +
+        "(interrupted push?); re-run 'agentsview replica pg push' from a machine " +
         "with a matching [vector.embeddings] config",
     ],
   ])(
@@ -192,7 +262,7 @@ describe("SemanticSetupHelp", () => {
       expect(text()).toContain("Semantic search is disabled");
       expect(text()).toContain(reason);
       expect(text()).not.toContain("enabled = true");
-      expect(text()).not.toContain("agentsview embeddings build");
+      expect(text()).not.toContain("agentsview index embeddings build");
 
       unmount(component);
     },
@@ -217,10 +287,8 @@ describe("SemanticSetupHelp", () => {
     build!.click();
     await settle();
     expect(embeddingsService.postApiV1EmbeddingsBuild).toHaveBeenCalledWith({});
-    expect(text()).toContain("Building embeddings index...");
 
     await settle(2000);
-    expect(text()).toContain("50%");
 
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(
       idleStatus({ last_result: undefined }),
@@ -234,7 +302,7 @@ describe("SemanticSetupHelp", () => {
   it("shows a specific search 501 reason verbatim in the ready state", async () => {
     const stale =
       "semantic search not available: index is stale (embedding config " +
-      "changed): run 'agentsview embeddings build --full-rebuild'";
+      "changed): run 'agentsview index embeddings build --full-rebuild'";
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(idleStatus());
 
     const { component } = mountHelp(vi.fn(), stale);
@@ -251,8 +319,7 @@ describe("SemanticSetupHelp", () => {
 
   it("replaces the generic search 501 message with localized ready copy", async () => {
     const generic =
-      "semantic search not available: enable [vector] in config.toml and " +
-      "run 'agentsview embeddings build'";
+      "semantic search not available: run 'agentsview index embeddings build' or turn it on in Settings → Embeddings → Turn on";
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(idleStatus());
 
     const { component } = mountHelp(vi.fn(), generic);
@@ -261,7 +328,7 @@ describe("SemanticSetupHelp", () => {
     expect(text()).toContain(
       "Semantic search is configured, but the embeddings index hasn't been built",
     );
-    expect(text()).not.toContain("enable [vector] in config.toml");
+    expect(text()).not.toContain(generic);
 
     unmount(component);
   });
@@ -327,7 +394,6 @@ describe("SemanticSetupHelp", () => {
     );
     build!.click();
     await settle();
-    expect(text()).toContain("Building embeddings index...");
 
     await settle(2000);
     expect(onResolved).toHaveBeenCalledOnce();
@@ -336,13 +402,14 @@ describe("SemanticSetupHelp", () => {
   });
 
   it("jumps straight to progress when a build is already running at mount", async () => {
-    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(runningStatus(250, 1000));
+    embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValue(runningStatus(250, 1000));
 
     const { component } = mountHelp();
     await settle();
 
-    expect(text()).toContain("Building embeddings index...");
-    expect(text()).toContain("25%");
+    expect(document.body.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe(
+      "250",
+    );
 
     unmount(component);
   });
@@ -354,7 +421,6 @@ describe("SemanticSetupHelp", () => {
 
     const { component, onResolved } = mountHelp();
     await settle();
-    expect(text()).toContain("Scanning the archive...");
 
     embeddingsService.getApiV1EmbeddingsStatus.mockResolvedValueOnce(
       idleStatus({ last_error: "embeddings endpoint refused the connection" }),
@@ -475,7 +541,6 @@ describe("SemanticSetupHelp", () => {
     // Retry starts a build even though the daemon still reports the old
     // last_error; re-probing alone could never clear it.
     expect(embeddingsService.postApiV1EmbeddingsBuild).toHaveBeenCalledWith({});
-    expect(text()).toContain("Building embeddings index...");
 
     // The new build finishes cleanly (a later build_id, no last_error), which
     // resolves despite the stale last_error that first put us in "failed".

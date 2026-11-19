@@ -237,7 +237,8 @@ func scanSessionRowWithSource(rs rowScanner, includeSource bool) (Session, error
 }
 
 // Version 6 stores per-call tool observations for effectiveness rates.
-const CurrentQualitySignalVersion = 6
+// Version 7 stops calls without retained input from counting as retries.
+const CurrentQualitySignalVersion = 7
 
 // QualitySignals groups persisted deterministic quality-signal
 // columns for API callers while keeping the database representation
@@ -334,10 +335,12 @@ func (s *Session) UnmarshalJSON(data []byte) error {
 //nolint:recvcheck // Value encoding and pointer decoding intentionally implement distinct interfaces.
 type Session struct {
 	// WebURL is a client-derived browser link, never persisted.
-	WebURL                string   `json:"web_url,omitempty"`
-	ID                    string   `json:"id"`
-	Project               string   `json:"project"`
-	Machine               string   `json:"machine"`
+	WebURL  string `json:"web_url,omitempty"`
+	ID      string `json:"id"`
+	Project string `json:"project"`
+	Machine string `json:"machine"`
+	// SourceMachines lists contributing hosted device identities, derived on read.
+	SourceMachines        []string `json:"source_machines,omitempty" doc:"Contributing hosted device machine IDs; omitted for sessions without hosted provenance."`
 	Agent                 string   `json:"agent"`
 	AgentLabel            string   `json:"agent_label,omitempty"`
 	Entrypoint            string   `json:"entrypoint,omitempty"`
@@ -427,7 +430,7 @@ type Session struct {
 	// Claude full parser fell back to linear processing for this file
 	// (nil = unknown/legacy or non-Claude). Linearity is monotonic
 	// across appends, so the incremental parser skips fork detection
-	// for linear-bound transcripts. Not mirrored to PG/DuckDB.
+	// for linear-bound transcripts. Not pushed to replicas.
 	ClaudeLinearParse *bool `json:"-"`
 	// LastWriteIncremental is SQLite-only sync bookkeeping (like
 	// NextOrdinal): true when the last write to this row went through
@@ -435,7 +438,7 @@ type Session struct {
 	// of a full re-normalization (upsertSessionArgs, which always resets
 	// it to false). It is consumed only by parse-diff to classify benign
 	// incremental-vs-full skew and is json:"-" so it never leaks through
-	// the HTTP session API. Deliberately not mirrored to PG/DuckDB: their
+	// the HTTP session API. Deliberately not pushed to replicas: their
 	// push column lists omit the whole sync-bookkeeping cluster.
 	LastWriteIncremental bool    `json:"-"`
 	FileInode            *int64  `json:"file_inode,omitempty"`
@@ -570,6 +573,7 @@ func (db *DB) DecodeCursor(s string) (SessionCursor, error) {
 
 // SessionFilter specifies how to query sessions.
 type SessionFilter struct {
+	ExclusionCounts *bool // nil omits the summary; true includes child counts
 	// IDs selects rows directly. Nil preserves discovery defaults; an empty
 	// non-nil slice matches nothing. Raw IDs expand over literal tilde suffixes.
 	IDs []string
@@ -615,6 +619,7 @@ type SessionFilter struct {
 	ExcludeAutomated   bool     // exclude sessions where is_automated = 1
 	AutomatedScope     string   // "", "human", "all", or "automated"
 	IncludeChildren    bool     // include subagent sessions (for sidebar grouping)
+	Flat               bool     // match child sessions individually
 	IncludeEmpty       bool     // include zero-message sessions for project mapping
 	IncludeOrphans     bool     // promote orphan child rows to sidebar roots
 	IncludeSource      bool     // include the session source file path in list rows
@@ -699,9 +704,10 @@ func buildCanonicalRootWhere(includeOrphans bool) string {
 
 // SessionPage is a page of session results.
 type SessionPage struct {
-	Sessions   []Session `json:"sessions"`
-	NextCursor string    `json:"next_cursor,omitempty"`
-	Total      int       `json:"total"`
+	ExclusionCounts *SessionExclusionCounts `json:"exclusion_counts,omitempty"`
+	Sessions        []Session               `json:"sessions"`
+	NextCursor      string                  `json:"next_cursor,omitempty"`
+	Total           int                     `json:"total"`
 }
 
 type SidebarSessionIndexRow struct {
@@ -712,6 +718,7 @@ type SidebarSessionIndexRow struct {
 	Project            string   `json:"project"`
 	ProjectAssigned    bool     `json:"project_assigned,omitempty"`
 	Machine            string   `json:"machine"`
+	SourceMachines     []string `json:"source_machines,omitempty" doc:"Contributing hosted device machine IDs; omitted for sessions without hosted provenance."`
 	Agent              string   `json:"agent"`
 	AgentLabel         string   `json:"agent_label,omitempty"`
 	Entrypoint         string   `json:"entrypoint,omitempty"`
@@ -766,7 +773,14 @@ func (db *DB) ListSessions(
 	// Total count applies filters but not cursor. To avoid
 	// re-counting on every pagination request, newer cursors carry
 	// the first-page total and we reuse it here.
-	if total <= 0 {
+	var exclusions *SessionExclusionCounts
+	if f.WantsExclusionCounts() {
+		var err error
+		total, exclusions, err = CountSessionExclusions(ctx, db.getReader(), f, dialect)
+		if err != nil {
+			return SessionPage{}, fmt.Errorf("counting session exclusions: %w", err)
+		}
+	} else if total <= 0 {
 		countQuery := "SELECT COUNT(*) FROM sessions WHERE " + where
 		if err := db.getReader().QueryRowContext(
 			ctx, countQuery, args...,
@@ -812,7 +826,10 @@ func (db *DB) ListSessions(
 		return SessionPage{}, err
 	}
 
-	return BuildSessionPage(sessions, total, f, rs, db.EncodeCursor), nil
+	exclusions.LoadChildren(ctx, db.getReader(), f, dialect, total)
+	page := BuildSessionPage(sessions, total, f, rs, db.EncodeCursor)
+	page.ExclusionCounts = exclusions
+	return page, nil
 }
 
 // HasVisibleSession reports whether the default sidebar has a session to show.
@@ -975,8 +992,8 @@ func sidebarRootPageQuery(f SessionFilter, cur SessionCursor, predicates sidebar
 			SELECT id, id FROM root_candidates
 			UNION
 			SELECT t.root_id, s.id
-			FROM sessions s
-			JOIN tree t ON s.parent_session_id = t.id
+			FROM tree t
+			CROSS JOIN sessions s ON s.parent_session_id = t.id
 			WHERE ` + predicates.treeMemberWhere + `
 		)
 		` + sidebarStarredRootCTE(f.Starred) + `,
@@ -995,6 +1012,80 @@ func sidebarRootPageQuery(f SessionFilter, cur SessionCursor, predicates sidebar
 	args := append([]any{}, predicates.rootArgs...)
 	args = append(args, pageBuilder.Args()...)
 	return query, args
+}
+
+func sidebarStarredRootCountQuery(predicates sidebarPredicates) string {
+	return `
+		WITH RECURSIVE root_candidates(id) AS (
+			SELECT id
+			FROM sessions
+			WHERE ` + predicates.rootWhere + `
+			  AND ` + predicates.canonicalRootWhere + `
+		),
+		tree(root_id, id) AS (
+			SELECT id, id FROM root_candidates
+			UNION
+			SELECT t.root_id, s.id
+			FROM tree t
+			CROSS JOIN sessions s ON s.parent_session_id = t.id
+			WHERE ` + predicates.treeMemberWhere + `
+		),
+		eligible_roots(id) AS (
+			SELECT DISTINCT t.root_id
+			FROM tree t
+			JOIN starred_sessions ss ON ss.session_id = t.id
+		)
+		SELECT COUNT(*) FROM eligible_roots`
+}
+
+func sidebarTreePageQuery(predicates sidebarPredicates, cteParts []string) string {
+	return `
+		WITH RECURSIVE root_page(id, ord) AS (
+			` + strings.Join(cteParts, "\n") + `
+		),
+		tree(id, ord) AS (
+			SELECT id, ord FROM root_page
+			UNION
+			SELECT s.id, t.ord
+			FROM tree t
+			CROSS JOIN sessions s ON s.parent_session_id = t.id
+			WHERE ` + predicates.treeMemberWhere + `
+		),
+		ranked_tree(id, ord) AS (
+			SELECT id, MIN(ord) AS ord
+			FROM tree
+			GROUP BY id
+		)
+		SELECT
+			s.id,
+			s.parent_session_id,
+			s.relationship_type,
+			s.project,
+			EXISTS (
+				SELECT 1 FROM session_project_assignments spa
+				WHERE spa.session_id = s.id
+			) AS project_assigned,
+			s.machine,
+			s.agent,
+			s.agent_label,
+			s.entrypoint,
+			s.session_kind,
+			COALESCE(s.display_name, s.session_name) AS display_name,
+			s.started_at,
+			s.ended_at,
+			s.created_at,
+			s.termination_status,
+			s.message_count,
+			s.user_message_count,
+			s.transcript_revision,
+			s.is_automated,
+			INSTR(COALESCE(s.first_message, ''), '<teammate-message') > 0
+		FROM sessions s
+		JOIN ranked_tree t ON s.id = t.id
+		ORDER BY
+			t.ord ASC,
+			` + sidebarActivityExprSQLiteS + ` DESC,
+			s.id DESC`
 }
 
 func (db *DB) getSidebarSessionIndexPage(
@@ -1016,27 +1107,7 @@ func (db *DB) getSidebarSessionIndexPage(
 	}
 	if total <= 0 {
 		if f.Starred {
-			countQuery := `
-				WITH RECURSIVE root_candidates(id) AS (
-					SELECT id
-					FROM sessions
-					WHERE ` + predicates.rootWhere + `
-					  AND ` + predicates.canonicalRootWhere + `
-				),
-				tree(root_id, id) AS (
-					SELECT id, id FROM root_candidates
-					UNION
-					SELECT t.root_id, s.id
-					FROM sessions s
-					JOIN tree t ON s.parent_session_id = t.id
-					WHERE ` + predicates.treeMemberWhere + `
-				),
-				eligible_roots(id) AS (
-					SELECT DISTINCT t.root_id
-					FROM tree t
-					JOIN starred_sessions ss ON ss.session_id = t.id
-				)
-				SELECT COUNT(*) FROM eligible_roots`
+			countQuery := sidebarStarredRootCountQuery(predicates)
 			if err := db.getReader().QueryRowContext(
 				ctx, countQuery, predicates.rootArgs...,
 			).Scan(&total); err != nil {
@@ -1109,53 +1180,7 @@ func (db *DB) getSidebarSessionIndexPage(
 		treeArgs = append(treeArgs, root.id, i)
 	}
 
-	treeQuery := `
-		WITH RECURSIVE root_page(id, ord) AS (
-			` + strings.Join(cteParts, "\n") + `
-		),
-		tree(id, ord) AS (
-			SELECT id, ord FROM root_page
-			UNION
-			SELECT s.id, t.ord
-			FROM sessions s
-			JOIN tree t ON s.parent_session_id = t.id
-			WHERE ` + predicates.treeMemberWhere + `
-		),
-		ranked_tree(id, ord) AS (
-			SELECT id, MIN(ord) AS ord
-			FROM tree
-			GROUP BY id
-		)
-		SELECT
-			s.id,
-			s.parent_session_id,
-			s.relationship_type,
-			s.project,
-			EXISTS (
-				SELECT 1 FROM session_project_assignments spa
-				WHERE spa.session_id = s.id
-			) AS project_assigned,
-			s.machine,
-			s.agent,
-			s.agent_label,
-			s.entrypoint,
-			s.session_kind,
-			COALESCE(s.display_name, s.session_name) AS display_name,
-			s.started_at,
-			s.ended_at,
-			s.created_at,
-			s.termination_status,
-			s.message_count,
-			s.user_message_count,
-			s.transcript_revision,
-			s.is_automated,
-			INSTR(COALESCE(s.first_message, ''), '<teammate-message') > 0
-		FROM sessions s
-		JOIN ranked_tree t ON s.id = t.id
-		ORDER BY
-			t.ord ASC,
-			` + sidebarActivityExprSQLiteS + ` DESC,
-			s.id DESC`
+	treeQuery := sidebarTreePageQuery(predicates, cteParts)
 
 	rows, err = db.getReader().QueryContext(ctx, treeQuery, treeArgs...)
 	if err != nil {
@@ -1231,7 +1256,7 @@ func (db *DB) GetSessionFull(
 		return s, err
 	}
 	// Expose the visible name (user rename, else agent session name)
-	// like the PG and DuckDB GetSessionFull and the sqlite base reads.
+	// like the replica GetSessionFull and the sqlite base reads.
 	// The coalesce happens post-scan because sessionFullCols is shared
 	// with ListSessionsModifiedBetween, whose push consumers must see
 	// display_name and session_name unmerged.
@@ -1410,13 +1435,13 @@ func (db *DB) PurgeExcludedSessions(ctx context.Context) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := purgeExcludedSessionsTx(ctx, tx); err != nil {
+	if _, err := purgeExcludedSessionsTx(ctx, tx, false); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-func purgeExcludedSessionsTx(ctx context.Context, tx *sql.Tx) (int64, error) {
+func purgeExcludedSessionsTx(ctx context.Context, tx *sql.Tx, permanentDelete bool) (int64, error) {
 	const excluded = `EXISTS (
 		SELECT 1 FROM excluded_sessions excluded
 		WHERE excluded.id = sessions.id OR (
@@ -1431,6 +1456,9 @@ func purgeExcludedSessionsTx(ctx context.Context, tx *sql.Tx) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if err := retainTrailerProjectsTx(ctx, tx, ids); err != nil {
+		return 0, fmt.Errorf("retaining excluded trailer projects: %w", err)
+	}
 	children, err := sessionIDsTx(ctx, tx, `id IN (
 		SELECT tc.subagent_session_id FROM tool_calls tc
 		WHERE tc.session_id IN (SELECT id FROM sessions WHERE `+excluded+`)
@@ -1441,6 +1469,12 @@ func purgeExcludedSessionsTx(ctx context.Context, tx *sql.Tx) (int64, error) {
 	for _, id := range ids {
 		if err := deleteSessionMessagesTx(tx, id); err != nil {
 			return 0, fmt.Errorf("pre-deleting excluded session %s messages: %w", id, err)
+		}
+		if permanentDelete {
+			// Preserve page links only when the user permanently deletes the thread.
+			if err := excludeSessionIDTx(ctx, tx, id, sql.NullString{}); err != nil {
+				return 0, fmt.Errorf("recording excluded session deletion: %w", err)
+			}
 		}
 	}
 	if err := deleteSessionAnnotationsTx(ctx, tx, excluded); err != nil {
@@ -1493,6 +1527,10 @@ func (db *DB) DeleteParserExcludedSessions(ctx context.Context, ids []string) (i
 				id, err,
 			)
 		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM commit_links WHERE session_id=?", id); err != nil {
+			return 0, fmt.Errorf("deleting parser-excluded commit links: %w", err)
+		}
+
 		res, err := tx.ExecContext(ctx,
 			"DELETE FROM sessions WHERE id = ?", id,
 		)
@@ -1733,7 +1771,9 @@ func upsertSessionExec(
 	s Session,
 	reviveSourceMissing bool,
 ) (sessionUpsertResult, error) {
-	_ = ValidateAndSanitize(&s, nil, nil)
+	if _, err := ValidateAndSanitizeContext(ctx, &s, nil, nil); err != nil {
+		return sessionUpsertResult{}, err
+	}
 
 	// Check exclusion/trash state under the write lock to avoid a race with
 	// concurrent DeleteSession/EmptyTrash/RestoreSession.
@@ -2059,7 +2099,7 @@ func (db *DB) LinkSubagentSessionsContext(ctx context.Context) (int, error) {
 	}
 
 	// local_modified_at is bumped so the sync_marker trigger fires and
-	// push targets (PostgreSQL and the DuckDB mirror) re-select the linked
+	// push targets (PostgreSQL and ClickHouse) re-select the linked
 	// session: parent_session_id and relationship_type are mirrored
 	// columns, but neither is a sync_marker signal, so linking an older
 	// session after a mirror's cutoff would otherwise never re-push it
@@ -2791,6 +2831,39 @@ func (db *DB) FindSessionIDsByPartial(
 	return ids, rows.Err()
 }
 
+// SessionIDTail returns the part of a session ID after its last ':' or '~'
+// delimiter, or the whole ID when it has neither. Every ID that
+// FindSessionIDsByRawSuffix matches for raw has the same tail as raw, so
+// backends index the tail and seek on it before checking the exact
+// suffix forms.
+func SessionIDTail(id string) string {
+	return id[strings.LastIndexAny(id, ":~")+1:]
+}
+
+// sqliteSessionIDTailExpr computes SessionIDTail(id) with SQLite core
+// functions, which have no reverse search. It maps '~' to ':', trims every
+// character after the last ':' to find the prefix ending at that delimiter,
+// and removes that prefix. The prefix ends in ':' and the tail has none, so
+// the replace removes only the leading copy. replace() returns its input
+// unchanged for an empty pattern, so an ID with no delimiter is its own
+// tail. idx_sessions_id_tail indexes this exact expression.
+const sqliteSessionIDTailExpr = `replace(replace(id, '~', ':'),
+	rtrim(replace(id, '~', ':'), replace(replace(id, '~', ''), ':', '')), '')`
+
+// rawSuffixLookupSQL binds ?1 raw, ?2 limit, and ?3 SessionIDTail(raw).
+const rawSuffixLookupSQL = `SELECT id FROM sessions
+	WHERE ` + sqliteSessionIDTailExpr + ` = ?3
+	  AND (id = ?1
+	       OR SUBSTR(id, -(LENGTH(?1) + 1)) IN (':' || ?1, '~' || ?1))
+	  AND deleted_at IS NULL
+	ORDER BY (id = ?1) DESC,
+	         COALESCE(
+	             NULLIF(ended_at, ''),
+	             NULLIF(started_at, ''),
+	             created_at
+	         ) DESC
+	LIMIT ?2`
+
 // FindSessionIDsByRawSuffix returns up to limit session IDs whose
 // stored id is either the exact raw input or the raw input
 // preceded by an agent or host prefix (e.g. "codex:<uuid>" or
@@ -2798,7 +2871,8 @@ func (db *DB) FindSessionIDsByPartial(
 // comparison uses SUBSTR rather than LIKE so that SQL wildcard
 // characters ('_' and '%') present in session IDs (which permit
 // underscores) are compared literally instead of matching any
-// character. Results are sorted by most recently active first.
+// character. The tail predicate lets SQLite seek idx_sessions_id_tail.
+// Results are sorted by most recently active first.
 // Excludes soft-deleted sessions.
 func (db *DB) FindSessionIDsByRawSuffix(
 	ctx context.Context, raw string, limit int,
@@ -2810,18 +2884,7 @@ func (db *DB) FindSessionIDsByRawSuffix(
 		limit = 5
 	}
 	rows, err := db.getReader().QueryContext(ctx,
-		`SELECT id FROM sessions
-		 WHERE (id = ?1
-		        OR SUBSTR(id, -(LENGTH(?1) + 1)) IN (':' || ?1, '~' || ?1))
-		   AND deleted_at IS NULL
-		 ORDER BY (id = ?1) DESC,
-		          COALESCE(
-		              NULLIF(ended_at, ''),
-		              NULLIF(started_at, ''),
-		              created_at
-		          ) DESC
-		 LIMIT ?2`,
-		raw, limit,
+		rawSuffixLookupSQL, raw, limit, SessionIDTail(raw),
 	)
 	if err != nil {
 		return nil, fmt.Errorf(
@@ -2935,10 +2998,10 @@ func (db *DB) SetSessionDataVersionsContext(
 
 // SetExistingSessionDataVersions atomically stamps every listed session that
 // already exists, ignoring IDs that have not been inserted yet.
-func (db *DB) SetExistingSessionDataVersions(ids []string, version int) error {
-	return db.setSessionDataVersions(
-		context.Background(), ids, version, false,
-	)
+func (db *DB) SetExistingSessionDataVersions(
+	ctx context.Context, ids []string, version int,
+) error {
+	return db.setSessionDataVersions(ctx, ids, version, false)
 }
 
 func (db *DB) setSessionDataVersions(
@@ -3041,7 +3104,7 @@ func (db *DB) GetSessionVersion(ctx context.Context,
 		"SELECT message_count, COALESCE(file_mtime, 0),"+
 			" COALESCE(file_hash, ''), COALESCE(local_modified_at, ''), COALESCE(sync_marker, '')"+
 			", (SELECT json_group_array(label) FROM (SELECT label FROM session_labels WHERE session_id = sessions.id ORDER BY label)),"+
-			" COALESCE(parent_session_id, ''), COALESCE(relationship_type, ''),"+
+			" COALESCE(parent_session_id, ''), relationship_type,"+
 			" COALESCE((SELECT ep.parent_session_id FROM session_external_parents ep WHERE ep.session_id = sessions.id), '') FROM sessions WHERE id = ?",
 		id,
 	).Scan(&count, &fileMtime, &fileHash, &localModifiedAt, &syncMarker, &labels, &parent, &relationship, &launcherParent)
@@ -3092,7 +3155,11 @@ type IncrementalInfo struct {
 	// PendingUsageOrdinal identifies the last committed assistant message in
 	// the current turn whose token usage has not yet been persisted. Codex
 	// incremental tails use it to apply the token_count that follows a late
-	// tool result without reparsing the committed prefix.
+	// tool result without reparsing the committed prefix. System rows are
+	// never targets. Codex reasoning rows (thinking without tool use) are a
+	// target only while newest, a state an appended row can end, so any
+	// reasoning row after a candidate leaves this nil and an unattached tail
+	// falls back to a full parse, which applies the parser's rule.
 	PendingUsageOrdinal *int
 }
 
@@ -3209,7 +3276,18 @@ func (db *DB) GetSessionForIncremental(ctx context.Context,
 			 FROM messages m
 			 WHERE m.session_id = s.id
 			   AND m.role = 'assistant'
+			   AND m.is_system = 0
+			   AND NOT (m.has_thinking = 1 AND m.has_tool_use = 0)
 			   AND (m.token_usage IS NULL OR length(m.token_usage) = 0)
+			   AND NOT EXISTS (
+			       SELECT 1
+			       FROM messages r
+			       WHERE r.session_id = s.id
+			         AND r.role = 'assistant'
+			         AND r.is_system = 0
+			         AND r.has_thinking = 1 AND r.has_tool_use = 0
+			         AND r.ordinal > m.ordinal
+			   )
 			   AND m.ordinal > COALESCE((
 			       SELECT MAX(u.ordinal)
 			       FROM messages u
@@ -3391,7 +3469,7 @@ func messageRangeTotalsTx(ctx context.Context,
 	err := tx.QueryRowContext(ctx, `
 		SELECT COUNT(*),
 			COALESCE(SUM(role = 'user' AND is_system = 0
-				AND COALESCE(source_subtype, '') <> 'tool_result'), 0),
+				AND source_subtype <> 'tool_result'), 0),
 			COALESCE(SUM(CASE WHEN has_output_tokens != 0
 				THEN output_tokens ELSE 0 END), 0),
 			COALESCE(MAX(has_output_tokens != 0), 0),
@@ -3835,6 +3913,17 @@ type VirtualContainerMemberFreshnessRow struct {
 	VirtualContainerMemberFreshness
 }
 
+const virtualContainerMemberFreshnessQuery = `SELECT file_path, file_mtime, data_version, file_hash,
+ deleted_at IS NOT NULL, agent, project FROM sessions INDEXED BY idx_sessions_file_path
+ WHERE file_path %s ? AND file_path < ? || '$' AND source_missing_at IS NULL
+ ORDER BY file_path, rowid`
+
+// VirtualContainerMemberFreshnessPages returns how many stored member
+// freshness pages this archive has listed.
+func (db *DB) VirtualContainerMemberFreshnessPages() int64 {
+	return db.memberFreshnessPages.Load()
+}
+
 // ListVirtualContainerMemberFreshnessPage returns the freshness signal for
 // stored sessions whose file_path is a virtual member of the shared container
 // at containerPath ("<containerPath>#<sessionID>"), excluding source-missing
@@ -3848,84 +3937,29 @@ type VirtualContainerMemberFreshnessRow struct {
 // into the sync pipeline while peak memory stays one page — never the
 // container's full membership.
 //
-// Two queries per page keep each path's fold complete without materializing
-// the container: a DISTINCT path page rides idx_sessions_file_path ('$' is
-// the ASCII successor of '#', so the half-open range covers exactly the
-// "<containerPath>#" prefix), and the row fetch is bounded to that page's
-// [first, last] interval, so duplicate session rows for one path can never
-// split across pages. Folded in Go rather than GROUP BY: the fold needs
-// MAX(file_mtime), MIN(data_version), and the hash of the newest-mtime row,
-// and SQLite's bare-column-from-the-extreme-row guarantee only holds with
-// exactly one min/max aggregate in the query.
+// One ordered scan rides idx_sessions_file_path, read lazily up to limit
+// paths. '$' is the ASCII successor of '#', so the half-open range covers
+// exactly the "<containerPath>#" prefix. A page ends only when the path
+// changes, keeping each path's fold complete. Duplicates fold in rowid order:
+// MAX(file_mtime), MIN(data_version), and the hash of the first newest-mtime
+// row. SQLite's bare-column-from-the-extreme-row guarantee only holds with
+// exactly one min/max aggregate, so the fold stays in Go.
 func (db *DB) ListVirtualContainerMemberFreshnessPage(
 	ctx context.Context, containerPath, idPrefix, afterPath string, limit int,
 ) ([]VirtualContainerMemberFreshnessRow, bool, error) {
 	if containerPath == "" || limit <= 0 {
 		return nil, true, nil
 	}
-	notMissing := " AND source_missing_at IS NULL"
+	db.memberFreshnessPages.Add(1)
 	lower := containerPath + "#"
 	lowerOp := ">="
 	if afterPath > lower {
 		lower = afterPath
 		lowerOp = ">"
 	}
-	pathRows, err := db.getReader().QueryContext(ctx,
-		"SELECT DISTINCT file_path FROM sessions"+
-			" WHERE file_path "+lowerOp+" ? AND file_path < ? || '$'"+
-			notMissing+
-			" ORDER BY file_path LIMIT ?",
-		lower, containerPath, limit,
-	)
-	if err != nil {
-		return nil, false, fmt.Errorf(
-			"listing container member paths %s: %w", containerPath, err,
-		)
-	}
-	defer pathRows.Close()
-	var paths []string
-	for pathRows.Next() {
-		var path string
-		if err := pathRows.Scan(&path); err != nil {
-			return nil, false, fmt.Errorf(
-				"scanning container member path %s: %w", containerPath, err,
-			)
-		}
-		paths = append(paths, path)
-	}
-	if err := pathRows.Err(); err != nil {
-		return nil, false, err
-	}
-	excluded, err := db.listExcludedContainerMemberPaths(
-		ctx, containerPath, idPrefix, afterPath, limit,
-	)
-	if err != nil {
-		return nil, false, err
-	}
-	done := len(paths) < limit && len(excluded) < limit
-	merged, excludedSet := mergeContainerMemberPaths(paths, excluded)
-	if len(merged) > limit {
-		merged = merged[:limit]
-		done = false
-	}
-	if len(merged) == 0 {
-		return nil, true, nil
-	}
-	paths = paths[:0]
-	for _, path := range merged {
-		if _, ok := excludedSet[path]; !ok {
-			paths = append(paths, path)
-		}
-	}
-	if len(paths) == 0 {
-		return excludedContainerMemberRows(merged), done, nil
-	}
-
 	rows, err := db.getReader().QueryContext(ctx,
-		"SELECT file_path, file_mtime, data_version, file_hash,"+
-			" deleted_at IS NOT NULL, agent, project FROM sessions"+
-			" WHERE file_path >= ? AND file_path <= ?"+notMissing,
-		paths[0], paths[len(paths)-1],
+		fmt.Sprintf(virtualContainerMemberFreshnessQuery, lowerOp),
+		lower, containerPath,
 	)
 	if err != nil {
 		return nil, false, fmt.Errorf(
@@ -3933,7 +3967,8 @@ func (db *DB) ListVirtualContainerMemberFreshnessPage(
 		)
 	}
 	defer rows.Close()
-	members := make(map[string]VirtualContainerMemberFreshness, len(paths))
+	var paths []string
+	members := make(map[string]VirtualContainerMemberFreshness, limit)
 	for rows.Next() {
 		var path string
 		var mtime, version sql.NullInt64
@@ -3954,6 +3989,10 @@ func (db *DB) ListVirtualContainerMemberFreshnessPage(
 		}
 		member, seen := members[path]
 		if !seen {
+			if len(paths) == limit {
+				break
+			}
+			paths = append(paths, path)
 			members[path] = row
 			continue
 		}
@@ -3970,6 +4009,26 @@ func (db *DB) ListVirtualContainerMemberFreshnessPage(
 	}
 	if err := rows.Err(); err != nil {
 		return nil, false, err
+	}
+	// An early page boundary leaves rows open. Release this reader before
+	// querying exclusions so one page uses only one reader connection.
+	if err := rows.Close(); err != nil {
+		return nil, false, err
+	}
+	excluded, err := db.listExcludedContainerMemberPaths(
+		ctx, containerPath, idPrefix, afterPath, limit,
+	)
+	if err != nil {
+		return nil, false, err
+	}
+	done := len(paths) < limit && len(excluded) < limit
+	merged, excludedSet := mergeContainerMemberPaths(paths, excluded)
+	if len(merged) > limit {
+		merged = merged[:limit]
+		done = false
+	}
+	if len(merged) == 0 {
+		return nil, true, nil
 	}
 	page := make([]VirtualContainerMemberFreshnessRow, 0, len(merged))
 	for _, path := range merged {
@@ -4062,14 +4121,6 @@ func mergeContainerMemberPaths(
 		merged = append(merged, excluded[j:]...)
 	}
 	return merged, excludedSet
-}
-
-func excludedContainerMemberRows(paths []string) []VirtualContainerMemberFreshnessRow {
-	page := make([]VirtualContainerMemberFreshnessRow, 0, len(paths))
-	for _, path := range paths {
-		page = append(page, VirtualContainerMemberFreshnessRow{Path: path, Excluded: true})
-	}
-	return page
 }
 
 // GetProjectByPath returns the stored project for the newest
@@ -4427,7 +4478,7 @@ func (db *DB) ListSessionWriteIdentitiesByID(
 				args[i] = id
 			}
 			rows, err := db.getReader().QueryContext(ctx, `
-			SELECT id, machine, agent, COALESCE(cwd, ''),
+			SELECT id, machine, agent, cwd,
 			       COALESCE(file_path, ''), COALESCE(file_hash, ''),
 			       session_name
 			FROM sessions
@@ -5311,12 +5362,21 @@ func baselineActiveSessionSourcePathsTx(
 			continue
 		}
 		execArgs := append([]any{machine}, args...)
-		if _, err := tx.ExecContext(ctx, `
+		if _, err := tx.ExecContext(ctx, baselineActiveSessionSourcePathsQuery(filter), execArgs...); err != nil {
+			return fmt.Errorf("baselining active session source paths: %w", err)
+		}
+	}
+	return nil
+}
+
+func baselineActiveSessionSourcePathsQuery(filter string) string {
+	// Seek the admitted paths instead of scanning every session on the machine.
+	return `
 			INSERT INTO local_session_source_baselines
 				(session_id, machine, agent, file_path)
 			SELECT id, machine, agent, file_path
-			FROM sessions
-			WHERE machine = ? AND `+filter+`
+			FROM sessions INDEXED BY idx_sessions_file_path
+			WHERE machine = ? AND ` + filter + `
 			  AND file_path IS NOT NULL AND deleted_at IS NULL
 			  AND source_missing_at IS NULL
 			ON CONFLICT(session_id) DO UPDATE SET
@@ -5325,13 +5385,7 @@ func baselineActiveSessionSourcePathsTx(
 				file_path = excluded.file_path
 			WHERE local_session_source_baselines.machine IS NOT excluded.machine
 			   OR local_session_source_baselines.agent IS NOT excluded.agent
-			   OR local_session_source_baselines.file_path IS NOT excluded.file_path`,
-			execArgs...,
-		); err != nil {
-			return fmt.Errorf("baselining active session source paths: %w", err)
-		}
-	}
-	return nil
+			   OR local_session_source_baselines.file_path IS NOT excluded.file_path`
 }
 
 // MarkSessionSourceMissing records unavailable source material only while the
@@ -5348,10 +5402,7 @@ func (db *DB) MarkSessionSourceMissing(
 	defer db.mu.Unlock()
 	result, err := db.getWriter().ExecContext(ctx, `
 		UPDATE sessions
-		SET source_missing_at = COALESCE(
-		        source_missing_at,
-		        strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		    ),
+		SET source_missing_at = strftime('%Y-%m-%dT%H:%M:%fZ','now'),
 		    local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		WHERE machine = ? AND agent = ? AND id = ? AND file_path = ?
 		  AND source_missing_at IS NULL
@@ -5725,6 +5776,9 @@ func deleteSessionsTx(ctx context.Context, tx *sql.Tx, where string, args ...any
 	if err != nil {
 		return 0, err
 	}
+	if err := retainTrailerProjectsTx(ctx, tx, ids); err != nil {
+		return 0, fmt.Errorf("retaining deleted trailer projects: %w", err)
+	}
 	children, err := sessionIDsTx(ctx, tx, `id IN (
 		SELECT tc.subagent_session_id FROM tool_calls tc
 		WHERE tc.session_id IN (SELECT id FROM sessions WHERE `+where+`)
@@ -5770,7 +5824,7 @@ func deleteSessionsTx(ctx context.Context, tx *sql.Tx, where string, args ...any
 		return 0, err
 	}
 	if threadScope {
-		pages, err := purgeExcludedSessionsTx(ctx, tx)
+		pages, err := purgeExcludedSessionsTx(ctx, tx, true)
 		if err != nil {
 			return 0, err
 		}
@@ -6187,11 +6241,9 @@ func (db *DB) FindPruneCandidates(ctx context.Context,
 		args = append(args, escapeLike(f.FirstMessage)+"%")
 	}
 
-	prefix := ""
-	if f.Agent != "" {
-		// Kept sessions protect every ancestor, including through matching rows
-		// and legacy whole-thread trash anchors.
-		prefix = `WITH RECURSIVE matched(id) AS (
+	// Kept sessions protect every ancestor, including through matching rows
+	// and legacy whole-thread trash anchors.
+	prefix := `WITH RECURSIVE matched(id) AS (
 			SELECT id FROM sessions WHERE ` + where + `
 		), protected(id) AS (
 			SELECT id FROM sessions
@@ -6208,12 +6260,7 @@ func (db *DB) FindPruneCandidates(ctx context.Context,
 			  AND a.deleted_at IS NOT NULL
 			  AND a.trash_includes_codex_pages = 1
 		) `
-		where = "id IN (SELECT id FROM matched) AND id NOT IN (SELECT id FROM protected)"
-	} else {
-		where += ` AND NOT EXISTS (
-			SELECT 1 FROM sessions AS child
-			WHERE child.parent_session_id = sessions.id)`
-	}
+	where = "id IN (SELECT id FROM matched) AND id NOT IN (SELECT id FROM protected)"
 
 	query := prefix + "SELECT " + sessionPruneCols +
 		" FROM sessions WHERE " + where + `
@@ -6881,6 +6928,22 @@ func (db *DB) WaitForWriter(ctx context.Context) error {
 	return nil
 }
 
+// RetryAcrossHandoff retries a write rejected by a closed writer, waiting for
+// the worker handoff to finish or ctx to end before trying again.
+func RetryAcrossHandoff[T any](
+	ctx context.Context, local *DB, write func() (T, error),
+) (T, error) {
+	for {
+		value, err := write()
+		if !errors.Is(err, ErrWriterClosed) {
+			return value, err
+		}
+		if err := local.WaitForWriter(ctx); err != nil {
+			return value, err
+		}
+	}
+}
+
 type writerWaitNoticeKey struct{}
 
 // WithWriterWaitNotice returns a context whose WaitForWriter calls notice when
@@ -6972,9 +7035,11 @@ type SessionMirrorSnapshot struct {
 	Session             Session
 	Messages            []Message
 	Usage               []UsageEvent
+	CommitLinks         []CommitLinkRow
 	Findings            []SecretFinding
 	Pins                []PinnedMessage
 	PlanUsage           *SessionPlanUsage // nil when the session has none
+	ImageText           []ImageTextRow
 	UsageFingerprint    string
 	ToolCallFingerprint string
 }
@@ -7007,10 +7072,24 @@ func (db *DB) loadSessionMirrorSnapshot(ctx context.Context, id string, afterSes
 	if result.Findings, err = sessionSecretFindingsWithQuerier(ctx, tx, id); err != nil {
 		return nil, err
 	}
+	identities, err := json.Marshal(sessionTrailerIdentities(id))
+	if err != nil {
+		return nil, err
+	}
+	owners, err := resolveTrailerOwners(ctx, tx, `session_id IN (SELECT value FROM json_each(?))`, string(identities))
+	if err != nil {
+		return nil, err
+	}
+	if result.CommitLinks, err = sessionCommitLinkRows(ctx, tx, owners, "l.session_id=?", id); err != nil {
+		return nil, err
+	}
 	if result.Pins, err = pinnedMessagesWithQuerier(ctx, tx, id, ""); err != nil {
 		return nil, err
 	}
 	if result.PlanUsage, err = sessionPlanUsageWithQuerier(ctx, tx, id); err != nil {
+		return nil, err
+	}
+	if result.ImageText, err = sessionImageTextRows(ctx, tx, []string{id}); err != nil {
 		return nil, err
 	}
 	usage := make(map[string]string, 1)

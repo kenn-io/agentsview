@@ -26,7 +26,7 @@ func TestMachineLabelsPersistUpdatesAndSurviveResync(t *testing.T) {
 	assert.Equal(t, want, labels)
 
 	replacement := testDB(t)
-	require.NoError(t, replacement.CopySyncStateFrom(source.Path()))
+	require.NoError(t, replacement.CopySyncStateFrom(t.Context(), source.Path()))
 	labels, err = replacement.GetMachineLabels(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, want, labels)

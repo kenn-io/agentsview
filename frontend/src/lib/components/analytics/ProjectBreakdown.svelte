@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { formatCount } from "../../utils/format.js";
   import { analytics } from "../../stores/analytics.svelte.js";
+  import PanelStatus from "./PanelStatus.svelte";
   import type { DbProjectAnalytics as ProjectAnalytics } from "../../api/generated/index.js";
   import { m } from "../../i18n/index.js";
 
@@ -74,11 +76,11 @@
     const parts: string[] = [
       m.analytics_project_messages({
         count: project.messages,
-        countLabel: project.messages.toLocaleString(),
+        countLabel: formatCount(project.messages),
       }),
       m.analytics_project_sessions({
         count: project.sessions,
-        countLabel: project.sessions.toLocaleString(),
+        countLabel: formatCount(project.sessions),
       }),
     ];
     if (agents) parts.push(agents);
@@ -100,23 +102,19 @@
     {#if rows.length > 0}
       <span class="count">
         {m.analytics_total_count({
-          countLabel: (analytics.projects?.projects.length ?? 0).toLocaleString(),
+          countLabel: formatCount(analytics.projects?.projects.length ?? 0),
         })}
       </span>
     {/if}
   </div>
 
-  {#if analytics.errors.projects}
-    <div class="error">
-      {analytics.errors.projects}
-      <button
-        class="retry-btn"
-        onclick={() => analytics.fetchProjects()}
-      >
-        {m.shared_retry()}
-      </button>
-    </div>
-  {:else if rows.length > 0}
+  <PanelStatus
+    hasData={analytics.projects !== null}
+    pending={analytics.querying.projects}
+    error={analytics.errors.projects}
+    onRetry={() => analytics.fetchProjects()}
+  />
+  {#if rows.length > 0}
     <div class="bar-list">
       {#each rows as project, i}
         <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -140,7 +138,7 @@
             ></div>
           </div>
           <span class="bar-value">
-            {project.messages.toLocaleString()}
+            {formatCount(project.messages)}
           </span>
         </div>
       {/each}
@@ -154,7 +152,7 @@
         <span>{tooltip.text}</span>
       </div>
     {/if}
-  {:else}
+  {:else if analytics.projects}
     <div class="empty">{m.analytics_projects_empty()}</div>
   {/if}
 </div>
@@ -179,7 +177,7 @@
   }
 
   .count {
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-muted);
   }
 
@@ -249,7 +247,7 @@
     flex-shrink: 0;
     width: 52px;
     text-align: right;
-    font-size: 10px;
+    font-size: 11px;
     font-family: var(--font-mono);
     color: var(--text-muted);
   }
@@ -260,7 +258,7 @@
     padding: 4px 8px;
     background: var(--text-primary);
     color: var(--bg-primary);
-    font-size: 10px;
+    font-size: 11px;
     border-radius: var(--radius-sm);
     white-space: nowrap;
     pointer-events: none;
@@ -272,23 +270,5 @@
     font-size: 12px;
     padding: 24px;
     text-align: center;
-  }
-
-  .error {
-    color: var(--accent-red);
-    font-size: 12px;
-    padding: 12px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .retry-btn {
-    padding: 2px 8px;
-    border: 1px solid currentColor;
-    border-radius: var(--radius-sm);
-    font-size: 11px;
-    color: inherit;
-    cursor: pointer;
   }
 </style>

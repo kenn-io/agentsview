@@ -1,7 +1,10 @@
 package main
 
 import (
+	"io"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,6 +14,14 @@ import (
 	"go.kenn.io/agentsview/internal/vector"
 	kitvec "go.kenn.io/kit/vector"
 )
+
+func TestUsageOnlyRejectsEmbeddingsBuild(t *testing.T) {
+	dir := testDataDir(t)
+	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "config.toml"), []byte("archive_content = \"usage\"\n"), 0o600))
+	err := runEmbeddingsBuild(t.Context(), io.Discard, strings.NewReader("yes\n"), EmbeddingsBuildOptions{})
+	require.ErrorIs(t, err, db.ErrArchiveContentExcluded)
+}
 
 func TestUsageOnlyClearsExistingVectorContent(t *testing.T) {
 	cfg := enabledVectorConfig(t)
@@ -31,7 +42,7 @@ func TestUsageOnlyClearsExistingVectorContent(t *testing.T) {
 	cfg.Vector.Enabled = true
 	require.ErrorIs(t, requireVectorEnabled(cfg), db.ErrArchiveContentExcluded)
 	assert.Nil(t, newVectorPushSource(cfg))
-	assert.Nil(t, installDirectVectorSearcher(cfg, database))
+	assert.Nil(t, installDirectVectorSearcher(t.Context(), cfg, database))
 	serving, err := setupVectorServing(t.Context(), cfg, database, nil)
 	require.NoError(t, err)
 	assert.Nil(t, serving.Scheduler)

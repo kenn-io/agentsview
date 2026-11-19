@@ -4,6 +4,7 @@
 package parser
 
 import (
+	"context"
 	"encoding/json/v2"
 	"fmt"
 	"os"
@@ -314,14 +315,14 @@ func extractCoworkAITitle(transcriptPath string) string {
 // parsed results plus session IDs the parser intentionally excluded
 // (prefixed), matching ParseClaudeSessionWithExclusions.
 func parseCoworkSession(
-	transcriptPath, machine string,
+	ctx context.Context, transcriptPath, machine string,
 ) ([]ParseResult, []string, error) {
 	metaPath := coworkMetaPathForTranscript(transcriptPath)
 	meta := readCoworkMeta(metaPath)
 	project := coworkProjectName(meta)
 
 	results, excluded, err := claudeParseWithExclusions(
-		transcriptPath, project, machine,
+		ctx, transcriptPath, project, machine,
 	)
 	if err != nil {
 		return nil, nil, err

@@ -95,8 +95,11 @@ benchmarks with stable work.
 The simulator reports process-wide allocations, including asynchronous signal
 work. These samples can vary; use them to find expensive paths, then add a
 focused benchmark or work-count regression for a confirmed fix. The regular
-suite checks the simulator's parsed output and usage totals. It does not enforce
-machine-dependent latency thresholds.
+suite checks the simulator's parsed output and usage totals.
+`TestActiveAppendGrowth` also compares append time at 1,000 and 10,000 sessions
+after an in-process import. It syncs eight active JSONL sources and limits
+growth to 2x, using the fastest of nine samples at each size. The growth check
+skips under `-short`.
 
 ## Limits
 
@@ -178,8 +181,8 @@ workload flags to retain producer files without running the in-process engine.
 The new directory contains `sources.json` with source paths, provider roots,
 workload options, and generator build provenance. Point a separately configured
 branch server at those roots and a new archive directory. Disable all other
-providers and update checks, build with telemetry disabled, and bind to
-loopback. Do not use the installed server's config or archive.
+providers and update checks, and bind to loopback. Do not use the installed
+server's config or archive.
 
 For OpenCode, keep a SQLite writer open in WAL mode, append message/part rows,
 and separately edit a part without advancing the session timestamp. Use current

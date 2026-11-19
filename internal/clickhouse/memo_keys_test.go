@@ -17,7 +17,7 @@ func TestAnalyticsSessionMemoKeyKeepsArgumentBoundaries(t *testing.T) {
 	require.NotEqual(t, a, analyticsSessionMemoKey("s.project IN (?, ?)", []any{"a b", 1}))
 }
 
-func TestUsageRowMemoKeyKeepsCustomModelBoundaries(t *testing.T) {
+func TestUsageRowMemoKeyKeepsReadInputsDistinct(t *testing.T) {
 	f := db.UsageFilter{Timezone: "UTC", From: "2026-01-12", To: "2026-01-12"}
 	a, err := usageRowMemoKeyFor("daily", f, "", "digest", [][2]string{{"a b", "c"}})
 	require.NoError(t, err)
@@ -29,6 +29,10 @@ func TestUsageRowMemoKeyKeepsCustomModelBoundaries(t *testing.T) {
 	d, err := usageRowMemoKeyFor("daily", f, "", "digest", nil)
 	require.NoError(t, err)
 	require.NotEqual(t, c, d)
+	f.PairwiseSides = true
+	e, err := usageRowMemoKeyFor("daily", f, "", "digest", nil)
+	require.NoError(t, err)
+	require.NotEqual(t, d, e)
 }
 
 // A termination filter that compares session times with the current time
@@ -50,35 +54,6 @@ func TestUsageRowMemoSkipsTimeDependentTermination(t *testing.T) {
 		f := db.UsageFilter{Timezone: "UTC", From: "2026-01-12", To: "2026-01-12", Termination: c.termination}
 		slot, err := usageRowMemoKeyFor("daily", f, "", "digest", nil)
 		require.NoError(t, err)
-		var memo usageRowMemo[int]
-		memo.put(slot, "parts", []int{1})
-		_, ok := memo.get(slot, "parts")
-		require.Equal(t, c.kept, ok, c.termination)
+		require.Equal(t, c.kept, slot != "", c.termination)
 	}
-}
-
-// A memo with a size keeps no more than its byte cap: the oldest written
-// slots go first, and rows larger than the cap are not kept at all.
-func TestUsageRowMemoKeepsWithinItsByteCap(t *testing.T) {
-	memo := usageRowMemo[int]{size: func(n int) int64 { return int64(n) }, maxBytes: 10}
-	memo.put("a", "v", []int{4})
-	memo.put("b", "v", []int{4})
-	memo.put("a", "v", []int{4})
-	memo.put("c", "v", []int{4})
-	_, ok := memo.get("b", "v")
-	require.False(t, ok, "b was written longest ago")
-	for _, slot := range []string{"a", "c"} {
-		_, ok := memo.get(slot, "v")
-		require.True(t, ok, slot)
-	}
-	memo.put("a", "v", []int{11})
-	_, ok = memo.get("a", "v")
-	require.False(t, ok, "rows over the cap replace the slot's older rows with nothing")
-	_, ok = memo.get("c", "v")
-	require.True(t, ok)
-
-	memo.deleteSlots(func(slot string) bool { return slot == "c" })
-	_, ok = memo.get("c", "v")
-	require.False(t, ok)
-	require.Zero(t, memo.bytes)
 }

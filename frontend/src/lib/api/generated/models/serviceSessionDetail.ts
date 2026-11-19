@@ -64,6 +64,8 @@ export interface ServiceSessionDetail {
   secret_leak_count: number;
   session_kind?: string;
   signals_pending_since?: string;
+  /** Contributing hosted device machine IDs; omitted for sessions without hosted provenance. */
+  source_machines?: string[];
   source_session_id?: string;
   source_version?: string;
   /** @nullable */

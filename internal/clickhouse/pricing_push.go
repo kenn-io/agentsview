@@ -3,8 +3,10 @@ package clickhouse
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 
@@ -19,7 +21,7 @@ import (
 const pricingUpsertBatch = 100
 
 func (s *Sync) syncModelPricing(ctx context.Context) error {
-	prices, err := s.local.ListModelPricing(ctx)
+	prices, localOpenRouter, err := s.local.ListModelPricingWithOpenRouter(ctx)
 	if err != nil {
 		return err
 	}
@@ -34,20 +36,82 @@ func (s *Sync) syncModelPricing(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	prices, removePatterns, err := db.PlanModelPricingSync(existing, prices)
+	existingOpenRouter, err := readPricingMeta(ctx, s.conn, pricingpkg.OpenRouterModelsMetaKey)
+	if err != nil {
+		return err
+	}
+	plan, err := db.PlanModelPricingSync(existing, existingOpenRouter, prices, localOpenRouter)
 	if err != nil {
 		return fmt.Errorf("planning clickhouse pricing sync: %w", err)
 	}
-	if len(prices) == 0 && len(removePatterns) == 0 {
-		return s.syncGenAIPricing(ctx)
+	// ClickHouse has no transaction around the price and ownership
+	// writes, and a later plan treats a mirror row the list does not own
+	// as another machine's price. A push that saved a new OpenRouter price
+	// but stopped before recording its ownership would leave that price
+	// withheld from every later push. So new ownership is recorded before
+	// the price writes, and ownership this push retires only after them.
+	recorded := existingOpenRouter
+	if plan.OpenRouterModels != "" {
+		grown, err := addedOpenRouterModels(existingOpenRouter, plan.OpenRouterModels)
+		if err != nil {
+			return err
+		}
+		if err := s.writeOpenRouterModels(ctx, recorded, grown); err != nil {
+			return err
+		}
+		recorded = grown
 	}
-	if err := s.removeModelPricing(ctx, removePatterns); err != nil {
+	if err := s.removeModelPricing(ctx, plan.Remove); err != nil {
 		return err
 	}
-	if err := s.replaceModelPricing(ctx, prices); err != nil {
+	if err := s.replaceModelPricing(ctx, plan.Changed); err != nil {
 		return err
+	}
+	if plan.OpenRouterModels != "" {
+		if err := s.writeOpenRouterModels(ctx, recorded, plan.OpenRouterModels); err != nil {
+			return err
+		}
 	}
 	return s.syncGenAIPricing(ctx)
+}
+
+// addedOpenRouterModels returns the mirror's ownership list with the
+// patterns of the planned list added and none removed.
+func addedOpenRouterModels(existing, planned string) (string, error) {
+	owned, err := pricingpkg.DecodeOpenRouterModels(existing)
+	if err != nil {
+		return "", fmt.Errorf("mirror OpenRouter models: %w", err)
+	}
+	added, err := pricingpkg.DecodeOpenRouterModels(planned)
+	if err != nil {
+		return "", fmt.Errorf("planned OpenRouter models: %w", err)
+	}
+	owned = append(owned, added...)
+	slices.Sort(owned)
+	return pricingpkg.EncodeOpenRouterModels(slices.Compact(owned)), nil
+}
+
+// writeOpenRouterModels stores the ownership list when it differs from
+// the one the mirror holds.
+func (s *Sync) writeOpenRouterModels(ctx context.Context, recorded, models string) error {
+	if models == recorded {
+		return nil
+	}
+	return insertRows(ctx, s.conn, "pricing_meta", [][]any{{
+		pricingpkg.OpenRouterModelsMetaKey, models, newPushVersion(),
+	}})
+}
+
+// readPricingMeta reads a pricing_meta value from the mirror. Returns ""
+// if not found.
+func readPricingMeta(ctx context.Context, conn *sql.DB, key string) (string, error) {
+	var value string
+	if err := conn.QueryRowContext(ctx,
+		`SELECT argMax(value, push_version) FROM pricing_meta WHERE key = ?`, key,
+	).Scan(&value); err != nil {
+		return "", fmt.Errorf("reading clickhouse pricing meta %q: %w", key, err)
+	}
+	return value, nil
 }
 
 func (s *Sync) removeModelPricing(ctx context.Context, patterns []string) error {
@@ -72,6 +136,10 @@ func (s *Sync) replaceModelPricing(ctx context.Context, prices []db.ModelPricing
 	patterns := make([]string, 0, len(prices))
 	for _, p := range prices {
 		patterns = append(patterns, p.ModelPattern)
+		priceTime, err := db.MirrorPricingTime(p.UpdatedAt)
+		if err != nil {
+			return fmt.Errorf("pricing for %q: %w", p.ModelPattern, err)
+		}
 		priceRows = append(priceRows, []any{
 			p.ModelPattern,
 			p.InputPerMTok.Microdollars,
@@ -79,13 +147,15 @@ func (s *Sync) replaceModelPricing(ctx context.Context, prices []db.ModelPricing
 			p.CacheCreationPerMTok.Microdollars,
 			p.CacheCreation1hPerMTok.Microdollars,
 			p.CacheReadPerMTok.Microdollars,
-			p.UpdatedAt,
+			priceTime,
 			version,
 		})
 		for _, band := range p.Bands {
-			updatedAt := band.UpdatedAt
-			if updatedAt == "" {
-				updatedAt = p.UpdatedAt
+			updatedAt := priceTime
+			if band.UpdatedAt != "" {
+				if updatedAt, err = db.MirrorPricingTime(band.UpdatedAt); err != nil {
+					return fmt.Errorf("pricing band for %q: %w", p.ModelPattern, err)
+				}
 			}
 			bandRows = append(bandRows, []any{
 				p.ModelPattern,
@@ -150,9 +220,10 @@ func loadGenAIPricing(
 func scanGenAIPricing(row genAIPricingRow) (*db.GenAIPricingDocument, error) {
 	var document db.GenAIPricingDocument
 	var data string
+	var updatedAt sql.NullTime
 	err := row.Scan(
 		&document.Version, &document.SourceRef, &document.Source,
-		&data, &document.UpdatedAt,
+		&data, &updatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -161,44 +232,107 @@ func scanGenAIPricing(row genAIPricingRow) (*db.GenAIPricingDocument, error) {
 		return nil, fmt.Errorf("reading clickhouse GenAI pricing document: %w", err)
 	}
 	document.Data = []byte(data)
+	document.UpdatedAt = db.FormatMirrorPricingTime(updatedAt)
 	return &document, nil
 }
 
-func genAIEffectivePricingRow(
-	document *db.GenAIPricingDocument,
+// loadGenAIPricingRow returns the pricing row of the mirror's GenAI Prices
+// document. It reads the document's provenance and the server's SHA-256 of
+// its JSON first, and reads the JSON, several hundred KB, only when this
+// process has not parsed a document with those bytes yet.
+func loadGenAIPricingRow(
+	ctx context.Context, q genAIPricingQuerier,
 ) (export.EffectivePricingRow, error) {
-	if document == nil {
-		embedded := pricingpkg.EmbeddedGenAIDocument()
-		return export.EffectivePricingRow{
-			GenAI: embedded.Prices, GenAIVersion: embedded.Version,
-			GenAISource: export.PricingRowSourceEmbedded,
-		}, nil
-	}
-	parsed, err := pricingpkg.ParseGenAIDocument(
-		document.Data, document.Version, document.SourceRef,
+	var digest db.GenAIPricingDigest
+	var sum string
+	var updatedAt sql.NullTime
+	err := q.QueryRowContext(ctx, `
+		SELECT version, source_ref, source, updated_at, hex(SHA256(data_json))
+		FROM genai_pricing WHERE singleton = 1`).Scan(
+		&digest.Version, &digest.SourceRef, &digest.Source, &updatedAt, &sum,
 	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return db.GenAIEffectivePricingRow(nil)
+	}
 	if err != nil {
 		return export.EffectivePricingRow{}, fmt.Errorf(
-			"parsing clickhouse GenAI pricing document: %w", err,
-		)
+			"reading clickhouse GenAI pricing digest: %w", err)
 	}
-	var updatedAt *time.Time
-	if parsedTime, parseErr := time.Parse(
-		time.RFC3339Nano, document.UpdatedAt,
-	); parseErr == nil {
-		utc := parsedTime.UTC()
-		updatedAt = &utc
+	digest.UpdatedAt = db.FormatMirrorPricingTime(updatedAt)
+	if digest.Sum, err = db.ParseGenAIPricingSum([]byte(sum)); err != nil {
+		return export.EffectivePricingRow{}, err
 	}
-	source := export.PricingRowSourceFetched
-	if document.Source == db.GenAIPricingSourceEmbedded {
-		source = export.PricingRowSourceEmbedded
+	if row, ok := db.CachedGenAIEffectivePricingRow(digest); ok {
+		return row, nil
 	}
-	return export.EffectivePricingRow{
-		GenAI: parsed.Prices, GenAIVersion: parsed.Version,
-		GenAISource: source, GenAIUpdatedAt: updatedAt,
-	}, nil
+	document, err := loadGenAIPricing(ctx, q)
+	if err != nil {
+		return export.EffectivePricingRow{}, err
+	}
+	row, err := db.GenAIEffectivePricingRow(document)
+	if err != nil {
+		return export.EffectivePricingRow{}, fmt.Errorf("clickhouse: %w", err)
+	}
+	return row, nil
 }
 
+// genAIUpdatedAt parses a stored document's updated_at, which is empty for
+// a document that was never fetched.
+func genAIUpdatedAt(updatedAt string) *time.Time {
+	parsed, err := time.Parse(time.RFC3339Nano, updatedAt)
+	if err != nil {
+		return nil
+	}
+	utc := parsed.UTC()
+	return &utc
+}
+
+// loadGenAIPricingState reads the mirror's GenAI pricing document without
+// its data, which a push compares by digest instead of transferring.
+func loadGenAIPricingState(
+	ctx context.Context, q genAIPricingQuerier,
+) (*db.GenAIPricingState, error) {
+	var state db.GenAIPricingState
+	// SHA256 returns the raw 32-byte digest; encoding it here sends half the
+	// bytes a hex string would.
+	var digest string
+	var updatedAt sql.NullTime
+	err := q.QueryRowContext(ctx, `
+		SELECT version, source_ref, source, SHA256(data_json), updated_at
+		FROM genai_pricing WHERE singleton = 1`).Scan(
+		&state.Version, &state.SourceRef, &state.Source,
+		&digest, &updatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("reading clickhouse GenAI pricing state: %w", err)
+	}
+	state.DataSHA256 = hex.EncodeToString([]byte(digest))
+	state.UpdatedAt = db.FormatMirrorPricingTime(updatedAt)
+	return &state, nil
+}
+
+// genAIPricingKey identifies a GenAI pricing document's content and
+// provenance: what its parsed pricing row depends on, apart from the
+// observation time.
+type genAIPricingKey struct {
+	version, sourceRef, source, dataSHA256 string
+}
+
+// genAIPricingCache is the parsed pricing row of the GenAI document the
+// mirror held when this Sync last checked it.
+type genAIPricingCache struct {
+	key genAIPricingKey
+	row export.EffectivePricingRow
+}
+
+// syncGenAIPricing makes the mirror hold the archive's GenAI pricing
+// document and records its parsed row for the push's pricer. The pricer
+// must resolve exactly as a reader of the mirror would, because the pricing
+// digest keys the stored price records, so the row is parsed from the
+// document the mirror now holds, with the mirror's observation time.
 func (s *Sync) syncGenAIPricing(ctx context.Context) error {
 	document, err := s.local.GetGenAIPricing(ctx)
 	if err != nil {
@@ -208,12 +342,45 @@ func (s *Sync) syncGenAIPricing(ctx context.Context) error {
 		embedded := db.EmbeddedGenAIPricingDocument()
 		document = &embedded
 	}
-	existing, err := loadGenAIPricing(ctx, s.conn)
+	existing, err := loadGenAIPricingState(ctx, s.conn)
 	if err != nil {
 		return err
 	}
-	if db.GenAIPricingDocumentsEqual(existing, document) {
-		return nil
+	if existing == nil || !existing.Matches(document) {
+		if err := s.writeGenAIPricing(ctx, document); err != nil {
+			return err
+		}
+		// Another host whose clock runs ahead may have written a different
+		// document with a higher push_version, which the mirror keeps over
+		// this write. Check what it kept before pricing with it.
+		existing, err = loadGenAIPricingState(ctx, s.conn)
+		if err != nil {
+			return err
+		}
+		if existing == nil || !existing.Matches(document) {
+			retained, err := loadGenAIPricing(ctx, s.conn)
+			if err != nil {
+				return err
+			}
+			if retained == nil {
+				return errors.New(
+					"clickhouse genai_pricing has no document after writing one",
+				)
+			}
+			return s.cacheGenAIPricing(retained)
+		}
+	}
+	stored := *document
+	stored.UpdatedAt = existing.UpdatedAt
+	return s.cacheGenAIPricing(&stored)
+}
+
+func (s *Sync) writeGenAIPricing(
+	ctx context.Context, document *db.GenAIPricingDocument,
+) error {
+	updatedAt, err := db.MirrorPricingTime(document.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("GenAI pricing document: %w", err)
 	}
 	version := newPushVersion()
 	row := [][]any{{
@@ -222,7 +389,7 @@ func (s *Sync) syncGenAIPricing(ctx context.Context) error {
 		document.SourceRef,
 		document.Source,
 		string(document.Data),
-		document.UpdatedAt,
+		updatedAt,
 		version,
 	}}
 	if err := insertRows(ctx, s.conn, "genai_pricing", row); err != nil {
@@ -234,6 +401,26 @@ func (s *Sync) syncGenAIPricing(ctx context.Context) error {
 	); err != nil {
 		return fmt.Errorf("deleting older clickhouse genai_pricing rows: %w", err)
 	}
+	return nil
+}
+
+// cacheGenAIPricing records the parsed row of the document the mirror
+// holds, parsing it only when its content or provenance changed since this
+// Sync last parsed one.
+func (s *Sync) cacheGenAIPricing(document *db.GenAIPricingDocument) error {
+	key := genAIPricingKey{
+		version: document.Version, sourceRef: document.SourceRef,
+		source: document.Source, dataSHA256: db.GenAIPricingDataSHA256(document.Data),
+	}
+	if s.genAI != nil && s.genAI.key == key {
+		s.genAI.row.GenAIUpdatedAt = genAIUpdatedAt(document.UpdatedAt)
+		return nil
+	}
+	row, err := db.GenAIEffectivePricingRow(document)
+	if err != nil {
+		return fmt.Errorf("clickhouse: %w", err)
+	}
+	s.genAI = &genAIPricingCache{key: key, row: row}
 	return nil
 }
 
@@ -254,6 +441,7 @@ func readModelPricing(ctx context.Context, conn *sql.DB) ([]db.ModelPricing, err
 	byPattern := make(map[string]int)
 	for rows.Next() {
 		var p db.ModelPricing
+		var updatedAt sql.NullTime
 		if err := rows.Scan(
 			&p.ModelPattern,
 			&p.InputPerMTok,
@@ -261,10 +449,11 @@ func readModelPricing(ctx context.Context, conn *sql.DB) ([]db.ModelPricing, err
 			&p.CacheCreationPerMTok,
 			&p.CacheCreation1hPerMTok,
 			&p.CacheReadPerMTok,
-			&p.UpdatedAt,
+			&updatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning clickhouse pricing: %w", err)
 		}
+		p.UpdatedAt = db.FormatMirrorPricingTime(updatedAt)
 		byPattern[p.ModelPattern] = len(out)
 		out = append(out, p)
 	}
@@ -284,7 +473,8 @@ func readModelPricing(ctx context.Context, conn *sql.DB) ([]db.ModelPricing, err
 	}
 	defer bandRows.Close()
 	for bandRows.Next() {
-		var pattern, updatedAt string
+		var pattern string
+		var updatedAt sql.NullTime
 		var threshold int64
 		var input, output, cacheCreation, cacheCreation1h, cacheRead money.Money
 		if err := bandRows.Scan(
@@ -311,7 +501,7 @@ func readModelPricing(ctx context.Context, conn *sql.DB) ([]db.ModelPricing, err
 			CacheCreationPerMTok:   cacheCreation,
 			CacheCreation1hPerMTok: cacheCreation1h,
 			CacheReadPerMTok:       cacheRead,
-			UpdatedAt:              updatedAt,
+			UpdatedAt:              db.FormatMirrorPricingTime(updatedAt),
 		})
 	}
 	if err := bandRows.Err(); err != nil {
@@ -320,7 +510,7 @@ func readModelPricing(ctx context.Context, conn *sql.DB) ([]db.ModelPricing, err
 	return out, nil
 }
 
-// syncCursorUsageEvents appends the cursor admin usage rows the mirror has
+// syncCursorUsageEvents appends the account usage rows the mirror has
 // not consumed yet, tracked by a high-water id in mirror sync_metadata.
 // Project-filtered pushes skip these rows: they are global and unattributed.
 func (s *Sync) syncCursorUsageEvents(ctx context.Context) error {
@@ -358,8 +548,13 @@ func (s *Sync) syncCursorUsageEvents(ctx context.Context) error {
 			return fmt.Errorf("parsing cursor usage occurred_at %q", ev.OccurredAt)
 		}
 		ts := occurredAt
+		agent := ev.Agent
+		if agent == "" {
+			agent = "cursor"
+		}
 		rows = append(rows, []any{
 			ev.ID,
+			db.SanitizeUTF8(agent),
 			&ts,
 			db.SanitizeUTF8(ev.Model),
 			db.SanitizeUTF8(ev.Kind),

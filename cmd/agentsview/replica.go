@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
@@ -95,7 +96,7 @@ func replicaVectorPushSource(
 }
 
 func runReplicaPush(
-	backend storage.Replica, cfg ReplicaPushConfig, targetName string,
+	ctx context.Context, backend storage.Replica, cfg ReplicaPushConfig, targetName string,
 ) error {
 	appCfg, err := config.LoadMinimalFor(replicaConfigScope(backend, &cfg))
 	if err != nil {
@@ -126,7 +127,7 @@ func runReplicaPush(
 
 	applyClassifierConfig(appCfg)
 	ctx, stop := signal.NotifyContext(
-		context.Background(), os.Interrupt,
+		ctx, os.Interrupt,
 	)
 	defer stop()
 
@@ -356,6 +357,15 @@ func writeReplicaPushSummary(
 	if result.SkippedResumed > 0 {
 		fmt.Fprintf(w, "Skipped %d session(s) already pushed by the unfinished full push\n", result.SkippedResumed)
 	}
+	if result.SessionsAppended > 0 {
+		fmt.Fprintf(w, "Appended new messages to %d pushed session(s) whose earlier messages were unchanged\n", result.SessionsAppended)
+	}
+	if result.SessionRowsOnly > 0 {
+		fmt.Fprintf(w, "Rewrote only the session row of %d pushed session(s) whose messages were unchanged\n", result.SessionRowsOnly)
+	}
+	if result.CommitLinksOnly > 0 {
+		fmt.Fprintf(w, "Rewrote only the commit links of %d session(s)\n", result.CommitLinksOnly)
+	}
 	if result.DeletedStale > 0 {
 		fmt.Fprintf(w, "Removed %d stale session(s)\n", result.DeletedStale)
 	}
@@ -439,7 +449,7 @@ func runReplicaStatus(
 			fmt.Printf("Target: %s\n", target.Label())
 		}
 		if err := runReplicaStatusTarget(
-			backend, database, appCfg, target, cfg,
+			ctx, backend, database, appCfg, target, cfg,
 		); err != nil {
 			if len(targets) == 1 {
 				return err
@@ -470,6 +480,7 @@ func runReplicaStatus(
 var replicaStatusQueryTimeout = time.Minute
 
 func runReplicaStatusTarget(
+	ctx context.Context,
 	backend storage.Replica,
 	database *db.DB,
 	appCfg config.Config,
@@ -511,14 +522,14 @@ func runReplicaStatusTarget(
 		if stall := replicaWatchStall(rec, now, cfg.MaxStale); stall != "" {
 			writeReplicaStatus(os.Stdout, storage.ReplicaStatus{Rows: watchRows})
 			return fmt.Errorf(
-				"push watcher stalled for more than --max-stale %s: %s; run `agentsview %s service logs` for details",
+				"push watcher stalled for more than --max-stale %s: %s; run `agentsview replica %s service logs` for details",
 				cfg.MaxStale, stall, backend.Name(),
 			)
 		}
 	}
 
 	ctx, stop := signal.NotifyContext(
-		context.Background(), os.Interrupt,
+		ctx, os.Interrupt,
 	)
 	defer stop()
 	if cfg.MaxStale > 0 {
@@ -543,7 +554,7 @@ func runReplicaStatusTarget(
 	writeReplicaStatus(os.Stdout, status)
 	if cfg.MaxStale > 0 && recErr != nil {
 		return fmt.Errorf(
-			"--max-stale needs a record from `agentsview %s push --watch` for this target: %w",
+			"--max-stale needs a record from `agentsview replica %s push --watch` for this target: %w",
 			backend.Name(), recErr,
 		)
 	}
@@ -590,8 +601,8 @@ type replicaServeStartup struct {
 var prepareReplicaServe = prepareReplicaServeImpl
 
 func prepareReplicaServeImpl(
-	backend storage.Replica, appCfg config.Config, basePath string,
-	watch *ReplicaPushConfig,
+	ctx context.Context, backend storage.Replica, appCfg config.Config, basePath string,
+	watch *ReplicaPushConfig, pprof bool,
 ) (replicaServeStartup, error) {
 	name := backend.Name()
 	if err := validateServeConfig(appCfg); err != nil {
@@ -614,13 +625,13 @@ func prepareReplicaServeImpl(
 			return replicaServeStartup{}, err
 		}
 		if pg.RawTenant != "" {
-			return prepareHostedPGServe(appCfg, pg, basePath)
+			return prepareHostedPGServe(ctx, appCfg, pg, basePath, pprof)
 		}
 	}
 
 	applyClassifierConfig(appCfg)
 	ctx, stop := signal.NotifyContext(
-		context.Background(),
+		ctx,
 		os.Interrupt, syscall.SIGTERM,
 	)
 	store, err := backend.OpenServeStore(ctx, target.Target)
@@ -644,8 +655,16 @@ func prepareReplicaServeImpl(
 	}
 
 	var closeExtras func() error
+	var listener net.Listener
 	cleanup := func() {
 		stop()
+		// The server closes the listener when it shuts down; this covers a
+		// startup that fails before serving.
+		if listener != nil {
+			if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				log.Printf("warning: closing %s serve listener: %v", name, err)
+			}
+		}
 		if closeExtras != nil {
 			if err := closeExtras(); err != nil {
 				log.Printf("warning: closing %s serve extras: %v", name, err)
@@ -663,11 +682,12 @@ func prepareReplicaServeImpl(
 		BasePath:      basePath,
 		RequestedPort: appCfg.Port,
 	}
-	appCfg, err = prepareServeRuntimeConfig(ctx, appCfg, rtOpts)
+	appCfg, listener, err = claimServeRuntimeConfig(ctx, appCfg, rtOpts)
 	if err != nil {
 		cleanup()
 		return replicaServeStartup{}, fmt.Errorf("%s serve: %w", name, err)
 	}
+	rtOpts.Listener = listener
 
 	opts := []server.Option{
 		server.WithVersion(server.VersionInfo{
@@ -679,6 +699,7 @@ func prepareReplicaServeImpl(
 		}),
 		server.WithDataDir(appCfg.DataDir),
 		server.WithBaseContext(ctx),
+		server.WithPprof(pprof),
 	}
 	if extras, ok := backend.(replicaServeExtras); ok {
 		extraOpts, closeFn, err := extras.serveOptions(ctx, appCfg, target.Target, store)
@@ -712,7 +733,7 @@ func supportsInsightGeneration(store storage.ReplicaStore) bool {
 	return ok && capable.InsightGenerationAvailable()
 }
 
-func runReplicaServe(backend storage.Replica, appCfg config.Config, basePath string, watch *ReplicaPushConfig) {
+func runReplicaServe(ctx context.Context, backend storage.Replica, appCfg config.Config, basePath string, watch *ReplicaPushConfig, pprof bool) {
 	name := backend.Name()
 	setupLogFile(appCfg.DataDir)
 	if appCfg.RequireAuth {
@@ -721,7 +742,7 @@ func runReplicaServe(backend storage.Replica, appCfg config.Config, basePath str
 		}
 	}
 
-	startup, err := prepareReplicaServe(backend, appCfg, basePath, watch)
+	startup, err := prepareReplicaServe(ctx, backend, appCfg, basePath, watch, pprof)
 	if err != nil {
 		fatal("%v", err)
 	}

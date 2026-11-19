@@ -6,6 +6,7 @@ import type {
   EmbeddingsBuildResponse,
   EmbeddingsGenerationActionRequest,
   EmbeddingsGenerationsResponse,
+  EmbeddingsSetupInputBody,
   GetApiV1EmbeddingsGenerationsParams,
   GetApiV1EmbeddingsStatusParams,
   PostApiV1EmbeddingsGenerationsByIdActivateParams,
@@ -193,6 +194,44 @@ export const postApiV1EmbeddingsGenerationsByIdRetire = async (
     method: "POST",
     headers: { "Content-Type": "application/json", ...getHeaders(options?.headers) },
     body: JSON.stringify(embeddingsGenerationActionRequest),
+  });
+};
+
+export const getPostApiV1EmbeddingsSetupUrl = () => {
+  return `/api/v1/embeddings/setup`;
+};
+
+/**
+ * @summary Set up search by meaning
+ */
+export const postApiV1EmbeddingsSetup = async (
+  embeddingsSetupInputBody: EmbeddingsSetupInputBody,
+  options?: Parameters<typeof orvalFetch>[1],
+): Promise<EmbeddingsBuildResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return orvalFetch<EmbeddingsBuildResponse>(getPostApiV1EmbeddingsSetupUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getHeaders(options?.headers) },
+    body: JSON.stringify(embeddingsSetupInputBody),
   });
 };
 

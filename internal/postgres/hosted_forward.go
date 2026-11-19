@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"fmt"
 	"io"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -24,14 +25,6 @@ func (h *HostedStore) GetActiveProjectLabels(ctx context.Context) ([]string, err
 
 func (h *HostedStore) GetAgents(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]db.AgentInfo, error) {
 	return h.physical.GetAgents(ctx, excludeOneShot, excludeAutomated)
-}
-
-func (h *HostedStore) GetMachines(ctx context.Context, excludeOneShot, excludeAutomated bool) ([]string, error) {
-	return h.physical.GetMachines(ctx, excludeOneShot, excludeAutomated)
-}
-
-func (h *HostedStore) GetMachineLabels(ctx context.Context) (map[string]string, error) {
-	return h.physical.GetMachineLabels(ctx)
 }
 
 func (h *HostedStore) GetMachineAliases(ctx context.Context) (map[string]string, error) {
@@ -99,7 +92,19 @@ func (h *HostedStore) GetAnalyticsSignals(ctx context.Context, f db.AnalyticsFil
 }
 
 func (h *HostedStore) GetTrendsTerms(ctx context.Context, f db.AnalyticsFilter, terms []db.TrendTermInput, granularity string) (db.TrendsTermsResponse, error) {
-	return h.physical.GetTrendsTerms(ctx, f, terms, granularity)
+	version := func(ctx context.Context, _ string) string {
+		if h.readTx != nil {
+			return ""
+		}
+		r, err := h.revision(ctx)
+		if err != nil || r == (hostedRevision{}) {
+			return ""
+		}
+		return fmt.Sprintf("hosted|%d|%d|%d", r.Identity, r.Selection, r.Corpus)
+	}
+	return keptAnalyticsWith(ctx, h.physical, "trends|"+db.TrendsKeptVariant(terms, granularity), f, version, func(ctx context.Context, f db.AnalyticsFilter) (db.TrendsTermsResponse, error) {
+		return h.physical.loadTrendsTerms(ctx, f, terms, granularity)
+	})
 }
 
 func (h *HostedStore) GetDailyUsage(ctx context.Context, f db.UsageFilter) (db.DailyUsageResult, error) {
@@ -197,7 +202,3 @@ func (h *HostedStore) WriteSessionBatchAtomic(ctx context.Context,
 	return h.physical.WriteSessionBatchAtomic(ctx, writes, beforeCommit...)
 }
 func (h *HostedStore) ReadOnly() bool { return h.physical.ReadOnly() }
-
-func (h *HostedStore) GetMatchingMachineIDs(ctx context.Context, candidates []string) ([]string, error) {
-	return h.physical.GetMatchingMachineIDs(ctx, candidates)
-}

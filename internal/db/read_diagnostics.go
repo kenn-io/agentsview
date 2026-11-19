@@ -78,8 +78,15 @@ type diagnosticReaderConn struct {
 	reads *readRegistry
 }
 
+type readerQueryUnlockKey struct{}
+
 func (c *diagnosticReaderConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
 	read := c.reads.start()
+	// database/sql has leased this connection. Cached SQL executes its first
+	// step here, so release the pool-swap lock before that work can block.
+	if unlock, ok := ctx.Value(readerQueryUnlockKey{}).(func()); ok {
+		unlock()
+	}
 	rows, err := c.SQLiteConn.QueryContext(ctx, query, args)
 	if err != nil {
 		c.reads.finish(read)

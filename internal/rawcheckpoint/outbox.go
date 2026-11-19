@@ -870,7 +870,8 @@ func (s *Store) queueTombstone(
 	committed := false
 	defer func() {
 		if !committed {
-			_ = s.ReleaseReservation(context.Background(), reservation.ID)
+			// Release even when ctx ended so the reservation does not leak.
+			_ = s.ReleaseReservation(context.WithoutCancel(ctx), reservation.ID)
 		}
 	}()
 	captureID, err := randomCheckpointID()

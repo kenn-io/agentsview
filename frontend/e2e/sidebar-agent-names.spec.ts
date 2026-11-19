@@ -4,11 +4,15 @@ const SIDEBAR_WIDTH_KEY = "agentsview-sidebar-width";
 const REVIEW_LABEL = "Open Code Review";
 const LONG_LABEL = "Open Code Review With a Very Long Custom Label";
 const REGISTRY_LABEL = "Opencode";
+const READ_PROGRESS_KEY = "agentsview-read-progress";
+const CROWDED_ID = "crowded-session";
+const CROWDED_PROJECT = "an-extremely-long-project-name-that-cannot-fit-in-a-narrow-sidebar";
 
 interface SidebarFixtureRow {
   id: string;
-  parent_session_id: null;
-  relationship_type: null;
+  parent_session_id: string | null;
+  relationship_type: string | null;
+  transcript_revision?: string;
   project: string;
   machine: string;
   agent: string;
@@ -87,6 +91,62 @@ const fixtureRows: SidebarFixtureRow[] = [
     user_message_count: 4,
     is_automated: false,
     is_teammate: false,
+  },
+  // Everything the meta line can hold at once: a long project, a four-digit
+  // count, an unread marker, subagent and teammate children, and a long
+  // agent label on a remote machine.
+  {
+    id: CROWDED_ID,
+    parent_session_id: null,
+    relationship_type: null,
+    project: CROWDED_PROJECT,
+    machine: "build-machine-with-a-long-hostname",
+    agent: "opencode",
+    agent_label: REVIEW_LABEL,
+    display_name: "Crowded metadata session",
+    first_message: "Crowded metadata session",
+    transcript_revision: "rev-2",
+    started_at: now,
+    ended_at: now,
+    created_at: now,
+    message_count: 2400,
+    user_message_count: 1234,
+    is_automated: false,
+    is_teammate: false,
+  },
+  {
+    id: "crowded-subagent",
+    parent_session_id: CROWDED_ID,
+    relationship_type: "subagent",
+    project: CROWDED_PROJECT,
+    machine: "build-machine-with-a-long-hostname",
+    agent: "opencode",
+    display_name: "Crowded subagent",
+    first_message: "Crowded subagent",
+    started_at: now,
+    ended_at: now,
+    created_at: now,
+    message_count: 2,
+    user_message_count: 1,
+    is_automated: false,
+    is_teammate: false,
+  },
+  {
+    id: "crowded-teammate",
+    parent_session_id: CROWDED_ID,
+    relationship_type: "subagent",
+    project: CROWDED_PROJECT,
+    machine: "build-machine-with-a-long-hostname",
+    agent: "opencode",
+    display_name: "Crowded teammate",
+    first_message: "Crowded teammate",
+    started_at: now,
+    ended_at: now,
+    created_at: now,
+    message_count: 2,
+    user_message_count: 1,
+    is_automated: false,
+    is_teammate: true,
   },
 ];
 
@@ -179,7 +239,7 @@ async function openSessions(page: Page, viewportWidth: number, sidebarWidth: num
 async function measureRow(page: Page, sessionId: string) {
   return page.locator(`[data-session-id="${sessionId}"]`).evaluate((row) => {
     const rect = row.getBoundingClientRect();
-    const meta = row.querySelector<HTMLElement>(".side-meta")!;
+    const meta = row.querySelector<HTMLElement>(".meta-end")!;
     const agent = row.querySelector<HTMLElement>(".agent-tag")!;
     const name = row.querySelector<HTMLElement>(".session-name")!;
     const controls = [...row.querySelectorAll<HTMLElement>("button, a")];
@@ -238,7 +298,7 @@ async function collectRenderFindings(page: Page) {
     for (const row of sidebar.querySelectorAll<HTMLElement>(".session-item")) {
       const rowRect = row.getBoundingClientRect();
       const name = row.querySelector<HTMLElement>(".session-name");
-      const meta = row.querySelector<HTMLElement>(".side-meta");
+      const meta = row.querySelector<HTMLElement>(".meta-end");
       if (rowRect.right > sidebarRect.right + 1) violations.push("row escaped sidebar");
       if (name && name.getBoundingClientRect().right > rowRect.right + 1) {
         violations.push("title escaped row");
@@ -247,7 +307,7 @@ async function collectRenderFindings(page: Page) {
         violations.push("metadata escaped row");
       }
       for (const element of row.querySelectorAll<HTMLElement>(
-        ".session-name, .side-meta, .side-meta > *, button, a",
+        ".session-name, .meta-end, .meta-end > *, button, a",
       )) {
         const elementRect = element.getBoundingClientRect();
         if (elementRect.right > rowRect.right + 1 || elementRect.left < rowRect.left - 1) {
@@ -268,6 +328,35 @@ async function capture(page: Page, testInfo: TestInfo, name: string) {
   return screenshotPath;
 }
 
+async function measureCrowdedRow(page: Page) {
+  return page.locator(`[data-session-id="${CROWDED_ID}"]`).evaluate((row) => {
+    const rowRect = row.getBoundingClientRect();
+    const box = (selector: string) => {
+      const element = row.querySelector<HTMLElement>(selector);
+      if (!element) return null;
+      const rect = element.getBoundingClientRect();
+      return { left: rect.left, right: rect.right, width: rect.width };
+    };
+    const meta = row.querySelector<HTMLElement>(".session-meta")!;
+    const escaped = [...meta.children].filter((child) => {
+      const rect = child.getBoundingClientRect();
+      return rect.right > rowRect.right + 1 || rect.left < rowRect.left - 1;
+    }).length;
+    return {
+      height: rowRect.height,
+      metaOverflows: meta.scrollWidth > meta.clientWidth + 1,
+      escaped,
+      project: box(".session-project"),
+      agent: box(".agent-tag"),
+      machine: box(".machine-tag"),
+      checkbox: box(".select-checkbox"),
+      unread: box(".session-unread-indicator"),
+      icons: row.querySelectorAll(".group-hint-icon").length,
+      count: row.querySelector(".session-count")?.textContent,
+    };
+  });
+}
+
 test.describe("sidebar agent names", () => {
   test.beforeEach(async ({ page }) => {
     await installSyntheticRoutes(page);
@@ -280,12 +369,12 @@ test.describe("sidebar agent names", () => {
     const wide = await measureRow(page, "open-code-review-session");
     expect(wide.row.width).toBeGreaterThanOrEqual(518);
     expect(wide.row.width).toBeLessThanOrEqual(520);
-    expect(wide.meta.width).toBeLessThanOrEqual(wide.row.width * 0.4 + 1);
+    expect(wide.meta.width).toBeLessThanOrEqual(wide.row.width * 0.6 + 1);
     expect(wide.agent.scrollWidth).toBeLessThanOrEqual(wide.agent.clientWidth + 1);
     console.log(`width=520px ${JSON.stringify(wide)}`);
     await expect(
       page.locator('[data-session-id="open-code-review-session"] .agent-tag'),
-    ).toHaveAttribute("title", REVIEW_LABEL);
+    ).toHaveAttribute("title", `${REVIEW_LABEL} · sdk-cli`);
     await expect(page.locator('[data-session-id="opencode-session"] .agent-tag')).toHaveAttribute(
       "title",
       REGISTRY_LABEL,
@@ -303,23 +392,192 @@ test.describe("sidebar agent names", () => {
     const narrow = await measureRow(page, "open-code-review-session");
     expect(narrow.row.width).toBeGreaterThanOrEqual(218);
     expect(narrow.row.width).toBeLessThanOrEqual(220);
-    expect(narrow.meta.width).toBeLessThanOrEqual(narrow.row.width * 0.4 + 1);
+    expect(narrow.meta.width).toBeLessThanOrEqual(narrow.row.width * 0.6 + 1);
     expect(
       await prefixFitsBeforeEllipsis(page, "open-code-review-session", "Open Code".length),
     ).toBe(true);
     const longLabel = await measureRow(page, "long-label-session");
     expect(longLabel.row.height).toBeCloseTo(42, 0);
-    expect(longLabel.meta.width).toBeLessThanOrEqual(longLabel.row.width * 0.4 + 1);
+    expect(longLabel.meta.width).toBeLessThanOrEqual(longLabel.row.width * 0.6 + 1);
     expect(longLabel.name.width).toBeGreaterThan(0);
     expect(longLabel.agent.scrollWidth).toBeGreaterThan(longLabel.agent.clientWidth);
-    expect(longLabel.entrypoint?.bottom).toBeLessThanOrEqual(longLabel.row.bottom + 1);
-    expect(longLabel.entrypoint?.top).toBeGreaterThanOrEqual(longLabel.row.top - 1);
+    // The entrypoint moved from the row into the agent tooltip.
+    expect(longLabel.entrypoint).toBeNull();
     await expect(page.locator('[data-session-id="long-label-session"] .agent-tag')).toHaveAttribute(
       "title",
-      LONG_LABEL,
+      `${LONG_LABEL} · sdk-python-experimental-runner`,
     );
     console.log(`width=220px ${JSON.stringify(narrow)}`);
     console.log(`width=220px long-label ${JSON.stringify(longLabel)}`);
+  });
+
+  test("a long project gives way first on a crowded 220px row, even in multi-select", async ({
+    page,
+  }) => {
+    // A stored marker with an older revision makes the row unread.
+    await page.addInitScript(
+      ({ key, id }) =>
+        localStorage.setItem(
+          key,
+          JSON.stringify({
+            version: 2,
+            sessions: { [id]: { token: "rev-1", ordinal: null, touched_at: 1 } },
+          }),
+        ),
+      { key: READ_PROGRESS_KEY, id: CROWDED_ID },
+    );
+    await openSessions(page, 1280, 220);
+
+    const plain = await measureCrowdedRow(page);
+    console.log(`width=220px crowded ${JSON.stringify(plain)}`);
+    expect(plain.count).toBe("1.2K");
+    expect(plain.unread).not.toBeNull();
+    expect(plain.icons).toBe(2);
+
+    await page.getByRole("button", { name: "Multi-select" }).click();
+    await expect(page.locator(`[data-session-id="${CROWDED_ID}"] .select-checkbox`)).toBeVisible();
+    const selecting = await measureCrowdedRow(page);
+    console.log(`width=220px crowded multi-select ${JSON.stringify(selecting)}`);
+
+    for (const row of [plain, selecting]) {
+      expect(row.height).toBeCloseTo(42, 0);
+      expect(row.metaOverflows).toBe(false);
+      expect(row.escaped).toBe(0);
+      // The project truncated well below the agent label's share.
+      expect(row.project!.width).toBeLessThan(row.agent!.width + 1);
+      // The machine gives way before the agent.
+      expect(row.machine!.width).toBeLessThan(row.agent!.width);
+    }
+    expect(selecting.checkbox).not.toBeNull();
+    expect(await prefixFitsBeforeEllipsis(page, CROWDED_ID, "Open".length)).toBe(true);
+    await page.getByRole("button", { name: "Exit multi-select" }).click();
+    expect(await prefixFitsBeforeEllipsis(page, CROWDED_ID, "Open".length)).toBe(true);
+  });
+
+  test("rows showing years fit at 280px and 220px with children", async ({ page }) => {
+    // A two-digit day and month give the widest dates; Korean writes them
+    // longest of the shipped locales.
+    const ended_at = "2026-12-15T12:00:00Z";
+    await page.route("**/api/v1/sessions/sidebar-index**", (route) =>
+      route.fulfill({
+        json: { ...sidebarResponse(), sessions: fixtureRows.map((row) => ({ ...row, ended_at })) },
+      }),
+    );
+    await page.addInitScript(() => localStorage.setItem("agentsview-always-show-year", "true"));
+    for (const locale of ["en", "ko"]) {
+      await page.addInitScript((value) => localStorage.setItem("agentsview-locale", value), locale);
+      await openSessions(page, 1280, 280);
+      const row = await page
+        .locator('[data-session-id="open-code-review-session"]')
+        .evaluate((item) => {
+          const itemRect = item.getBoundingClientRect();
+          const times = [...item.querySelectorAll<HTMLElement>(".session-time")];
+          const rows = [...document.querySelectorAll("#session-sidebar .session-item")];
+          const next = rows[rows.indexOf(item) + 1];
+          return {
+            gapToNext: next ? next.getBoundingClientRect().top - itemRect.bottom : 0,
+            text: times.map((time) => time.textContent).join(" "),
+            clipped: times.filter((time) => {
+              const rect = time.getBoundingClientRect();
+              return (
+                time.scrollWidth > time.clientWidth + 1 ||
+                rect.right > itemRect.right + 1 ||
+                rect.top < itemRect.top - 1 ||
+                rect.bottom > itemRect.bottom + 1
+              );
+            }).length,
+            name: item.querySelector(".session-name")!.getBoundingClientRect().width,
+            meta: item.querySelector(".session-meta")!.getBoundingClientRect().width,
+            column: item.querySelector(".session-info")!.getBoundingClientRect().width,
+          };
+        });
+      console.log(`width=280px with years locale=${locale} ${JSON.stringify(row)}`);
+      expect(row.gapToNext).toBeGreaterThanOrEqual(-0.5);
+      expect(row.text).toContain("2026");
+      expect(row.text).toMatch(/\d{1,2}:\d{2}/);
+      expect(row.clipped).toBe(0);
+      expect(row.name).toBeGreaterThan(row.column * 0.6);
+      expect(row.meta).toBeGreaterThanOrEqual(row.column - 1);
+    }
+
+    for (const locale of ["az", "en", "es", "fr", "ja", "ko", "zh-CN", "zh-TW"]) {
+      await page.addInitScript((value) => localStorage.setItem("agentsview-locale", value), locale);
+      await openSessions(page, 1280, 220);
+      // Expanding the parent also opens its subagent group.
+      await page.locator(`[data-session-id="${CROWDED_ID}"] .tree-toggle`).click();
+      await page.locator(".select-toggle-btn").click();
+
+      for (const id of [CROWDED_ID, "crowded-subagent", "crowded-teammate"]) {
+        const item = page.locator(`[data-session-id="${id}"]`);
+        await expect(item.locator(".select-checkbox")).toBeVisible();
+        const row = await item.evaluate((element) => {
+          const itemRect = element.getBoundingClientRect();
+          const rows = [...document.querySelectorAll("#session-sidebar .session-item")];
+          const next = rows[rows.indexOf(element) + 1];
+          const time = element.querySelector<HTMLElement>(".session-time")!;
+          const count = element.querySelector<HTMLElement>(".session-count")!;
+          const range = document.createRange();
+          range.selectNodeContents(time);
+          const text = range.getBoundingClientRect();
+          const escapes = (rect: DOMRect) =>
+            rect.left < itemRect.left - 1 ||
+            rect.right > itemRect.right + 1 ||
+            rect.top < itemRect.top - 1 ||
+            rect.bottom > itemRect.bottom + 1;
+          const overlapped = [
+            ...element.querySelectorAll<HTMLElement>(
+              ".tree-toggle, .select-checkbox, .kit-status-dot, .session-name, .session-meta",
+            ),
+          ].filter((other) => {
+            const rect = other.getBoundingClientRect();
+            return (
+              rect.width > 0 &&
+              rect.left < text.right - 1 &&
+              rect.right > text.left + 1 &&
+              rect.top < text.bottom - 1 &&
+              rect.bottom > text.top + 1
+            );
+          }).length;
+          const name = element.querySelector<HTMLElement>(".session-name")!;
+          const column = element.querySelector(".session-info")!.getBoundingClientRect();
+          const box = element.querySelector(".select-checkbox")!.getBoundingClientRect();
+          const dot = element.querySelector(".kit-status-dot")!.getBoundingClientRect();
+          const fontSize = (node: HTMLElement) => parseFloat(getComputedStyle(node).fontSize);
+          return {
+            gapToNext: next ? next.getBoundingClientRect().top - itemRect.bottom : 0,
+            text: time.textContent,
+            // The timestamp reads as part of its own row: it starts at the
+            // title's edge, stays inside the text column, and is smaller
+            // than the title it describes.
+            leftOfTitle: name.getBoundingClientRect().left - text.left,
+            pastColumn: text.right - column.right,
+            sizeOverTitle: fontSize(time) - fontSize(name),
+            timeEscapes: escapes(text),
+            overlapped,
+            countClipped:
+              escapes(count.getBoundingClientRect()) || count.scrollWidth > count.clientWidth + 1,
+            name: element.querySelector(".session-name")!.getBoundingClientRect().width,
+            // Like a parent row: checkbox, then dot, then the title.
+            dotAfterBox: dot.left - box.right,
+            dotToTitle: name.getBoundingClientRect().left - dot.right,
+          };
+        });
+        console.log(`width=220px years locale=${locale} multi-select ${id} ${JSON.stringify(row)}`);
+        expect(row.text).toContain("2026");
+        expect(row.text).toMatch(/\d{1,2}:\d{2}/);
+        expect(row.leftOfTitle).toBeLessThanOrEqual(0.5);
+        expect(row.pastColumn).toBeLessThanOrEqual(0.5);
+        expect(row.sizeOverTitle).toBeLessThan(0);
+        expect(row.timeEscapes).toBe(false);
+        expect(row.overlapped).toBe(0);
+        expect(row.countClipped).toBe(false);
+        expect(row.name).toBeGreaterThan(0);
+        expect(row.gapToNext).toBeGreaterThanOrEqual(-0.5);
+        expect(row.dotAfterBox).toBeGreaterThanOrEqual(0);
+        expect(row.dotToTitle).toBeGreaterThanOrEqual(0);
+        expect(row.dotToTitle).toBeLessThanOrEqual(8);
+      }
+    }
   });
 
   test("metadata boundary preserves rows and controls across desktop and mobile widths", async ({
@@ -329,10 +587,10 @@ test.describe("sidebar agent names", () => {
     const desktop = await measureRow(page, "open-code-review-session");
     expect(desktop.row.height).toBeCloseTo(42, 0);
     expect(desktop.name.width).toBeGreaterThan(0);
-    expect(desktop.meta.width).toBeLessThanOrEqual(desktop.row.width * 0.4 + 1);
+    expect(desktop.meta.width).toBeLessThanOrEqual(desktop.row.width * 0.6 + 1);
     expect(desktop.controls.every((control) => control.right <= desktop.row.right + 1)).toBe(true);
     const longDesktop = await measureRow(page, "long-label-session");
-    expect(longDesktop.entrypoint?.bottom).toBeLessThanOrEqual(longDesktop.row.bottom + 1);
+    expect(longDesktop.entrypoint).toBeNull();
     const desktopLint = await collectRenderFindings(page);
     expect(desktopLint).toEqual([]);
     console.log(`render-lint width=1280px violations=${JSON.stringify(desktopLint)}`);
@@ -373,7 +631,7 @@ test.describe("sidebar agent names", () => {
     expect(drawerBox?.width).toBeCloseTo(280, 0);
     const mobile = await measureRow(page, "open-code-review-session");
     expect(mobile.row.height).toBeCloseTo(42, 0);
-    expect(mobile.meta.width).toBeLessThanOrEqual(mobile.row.width * 0.4 + 1);
+    expect(mobile.meta.width).toBeLessThanOrEqual(mobile.row.width * 0.6 + 1);
     const mobileLint = await collectRenderFindings(page);
     expect(mobileLint).toEqual([]);
     console.log(`render-lint viewport=400px drawer=280px violations=${JSON.stringify(mobileLint)}`);

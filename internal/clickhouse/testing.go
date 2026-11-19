@@ -3,7 +3,7 @@
 package clickhouse
 
 import (
-	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 
@@ -29,6 +29,13 @@ const (
 // finding, star and pin; beta in project "beta") plus a subagent child of
 // alpha, and returns a Target pointing at a fresh ClickHouse database.
 func seedFixture(t *testing.T) (*db.DB, Target) {
+	t.Helper()
+	local := seedFixtureArchive(t)
+	dsn, database := chtest.FreshDatabase(t)
+	return local, Target{URL: dsn, Database: database}
+}
+
+func seedFixtureArchive(t *testing.T) *db.DB {
 	t.Helper()
 	local := dbtest.OpenTestDB(t)
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
@@ -131,14 +138,13 @@ func seedFixture(t *testing.T) (*db.DB, Target) {
 	ok, err := local.StarSession(t.Context(), fixtureAlphaID)
 	require.NoError(t, err)
 	require.True(t, ok)
-	msgs, err := local.GetAllMessages(context.Background(), fixtureAlphaID)
+	msgs, err := local.GetAllMessages(t.Context(), fixtureAlphaID)
 	require.NoError(t, err)
 	note := "pin alpha"
 	_, err = local.PinMessage(t.Context(), fixtureAlphaID, msgs[0].ID, &note)
 	require.NoError(t, err)
 
-	dsn, database := chtest.FreshDatabase(t)
-	return local, Target{URL: dsn, Database: database}
+	return local
 }
 
 func fixtureSession(id, project, first, ts string, messageCount int) db.Session {
@@ -192,7 +198,7 @@ func fixtureMessage(
 // newTestSync runs EnsureSchema so tests can push immediately.
 func newTestSync(t *testing.T, local *db.DB, target Target, opts storage.PusherOptions) *Sync {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	s, err := New(ctx, target, local, fixtureMachine, opts)
 	require.NoError(t, err)
 	require.NoError(t, s.EnsureSchema(ctx))
@@ -200,11 +206,20 @@ func newTestSync(t *testing.T, local *db.DB, target Target, opts storage.PusherO
 	return s
 }
 
+// newTestStore wraps conn with a native connection to target's database.
+func newTestStore(tb testing.TB, conn *sql.DB, target Target) *Store {
+	tb.Helper()
+	bulk, err := openBulk(tb.Context(), target)
+	require.NoError(tb, err)
+	tb.Cleanup(func() { require.NoError(tb, bulk.Close()) })
+	return NewStoreFromDB(conn, bulk)
+}
+
 // appendMessage adds one assistant message to a session locally and bumps
 // its message count so the session becomes an incremental candidate.
 func appendMessage(t *testing.T, local *db.DB, sessionID, content, ts string) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	sess, err := local.GetSessionFull(ctx, sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
@@ -223,9 +238,28 @@ func appendMessage(t *testing.T, local *db.DB, sessionID, content, ts string) {
 	require.NoError(t, err)
 }
 
+// growSession adds one assistant message after a session's stored messages
+// the way an incremental sync does, so the earlier rows keep their IDs.
+func growSession(t *testing.T, local *db.DB, sessionID, content, ts string) {
+	t.Helper()
+	ctx := t.Context()
+	sess, err := local.GetSessionFull(ctx, sessionID)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	sess.MessageCount++
+	sess.EndedAt = &ts
+	sess.LocalModifiedAt = &ts
+	_, err = local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
+		Session:     *sess,
+		Messages:    []db.Message{fixtureMessage(sessionID, sess.MessageCount-1, "assistant", content, ts)},
+		DataVersion: 1,
+	}})
+	require.NoError(t, err)
+}
+
 func newPushedStore(t *testing.T) (*Store, *Sync, *db.DB) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	local, target := seedFixture(t)
 	syncer := newTestSync(t, local, target, storage.PusherOptions{})
 	_, err := syncer.Push(ctx, false, nil)

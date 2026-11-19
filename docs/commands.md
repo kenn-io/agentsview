@@ -1,10 +1,223 @@
 ---
-last_edited: 2026-10-27
+last_edited: 2026-11-17
 title: CLI Reference
 description: All AgentsView commands, flags, and environment variables
 ---
 
+## Start from help
+
+`agentsview --help` includes a numbered workflow for
+syncing sources, finding sessions, reading transcripts, and checking usage.
+It explains session IDs, backend selection, output streams, exit codes, and
+environment variables. Run `agentsview source list --json` for the provider
+catalog, built-in source locations, and environment override names. It does not
+resolve configured directory arrays. Run `agentsview openapi` for the API schema.
+
+Use `agentsview session --help` for common backend and output flags. Core
+commands include examples and describe their limits.
+
+## Recover from CLI errors
+
+Failed commands print `fatal: <message>` followed by
+`hint: <next step>` on stderr. The hint names CLI commands, flags, or settings.
+Unknown commands and flags point to the relevant command's `--help`.
+
+Commands that accept `--json` or `--format json` write one JSON diagnostic line
+to stderr instead:
+
+```json
+{"error":"usage","message":"unknown flag: --bogus","hint":"run `agentsview session list --help` for flags and examples"}
+```
+
+The `error` value identifies the category: `usage`, `validation`, `unavailable`,
+`authentication`, `forbidden`, `conflict`, `not_found`, or the general `error`.
+A true `--json` takes precedence over `--format`; repeated flags use their final
+valid values. Rejections on fixed-stream commands also honor the requested
+JSON error format. Existing warnings can precede the diagnostic on stderr. Success
+reports, transcript streams, and API response formats keep their existing
+formats on stdout.
+
+If a session is missing, copy a canonical ID from
+`agentsview session list --json`. For a new session, run
+`agentsview source sync` on the archive host. If autostart is disabled with
+`AGENTSVIEW_NO_DAEMON=1`, run
+`agentsview daemon start` before retrying a daemon read. An explicit remote
+`--server` needs that host's URL and token, supplied through
+`--server-token-file` or `AGENTSVIEW_SERVER_TOKEN`.
+
+### Exit codes
+
+Existing command-specific outcomes take precedence over the general error
+classes. Read the process status separately from stdout: a usage report can
+be present with exit 3.
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Success. An empty result can still succeed. |
+| 1 | General error, authentication or policy rejection, a server conflict, or an existing command-specific failure. |
+| 2 | Session not found for `session usage` / `token-use`; `raw-sync backfill` also uses 2 for failure. |
+| 3 | `session usage` / `token-use` found no usage figures, or `serve --check-data-version` found a newer database format. |
+| 4 | Export cursor reset or conversation reconciliation required. |
+| 5 | An exported conversation revision changed. |
+| 64 | Command syntax, unknown flags, missing arguments, or incompatible CLI flags. |
+| 65 | Malformed flag values or invalid values checked by the CLI. |
+| 69 | A daemon, server, or semantic search index is unavailable. |
+| 70 | `capture report` failed. |
+
+`capture run` preserves the captured command's exit status. `session usage`
+keeps exit 3 silent after writing its normal report. `session usage-batch`
+keeps per-session exit codes in its result document and succeeds when the batch
+itself completes. Export cursor/revision errors retain their existing flat
+JSON documents on stderr. Hidden worker and browser-host protocols keep their
+existing diagnostics. `parse-diff --fail-on-change` retains its normal report
+and exit 1 when changes or parse failures are found. Remote sync failures keep
+their per-host summary and add recovery advice.
+
 ## Commands
+
+### Find a command by task
+
+Describe a task to get up to five matching commands:
+
+```bash
+agentsview cli search "show token cost for a conversation"
+agentsview cli search list supported providers --limit 3 --json
+```
+
+Search reads the command tree locally. It needs no configuration, database,
+daemon, network connection, or credentials. Results use current command paths;
+hidden legacy commands, help-only groups, browser setup, and interactive
+service installation are omitted. Eligible actions inside groups remain
+searchable.
+
+`--limit` accepts 1–20 (default 5). `--json` and `--format json` return
+`{"query":"...","results":[{"command":"...","summary":"...","usage":"..."}]}`.
+An unmatched task succeeds with an empty `results` array. Text output includes
+a command help hint for flags and examples. Run `agentsview cli` for help.
+
+Root help lists command domains. Run `agentsview source --help`, for example,
+to find the actions in that domain, then `agentsview source sync --help` for
+flags. These command paths follow `main`; older releases use the legacy names
+below.
+
+### Command migration
+
+Related actions now share a noun. Existing command names continue to work for
+at least one release. They are hidden from root help and completion, and an
+invoked legacy action prints its replacement on stderr. `agentsview sync` is
+the exception: it stays a supported shortcut for `source sync`, appears in root
+help, and prints no deprecation notice. Flags, arguments,
+stdout documents, exit codes, HTTP routes, and MCP tools keep their behavior.
+Daemon, SSH sync, browser host, and parser child protocols keep their existing
+launch paths.
+
+| Legacy command                             | Preferred command                                                  |
+| ------------------------------------------ | ------------------------------------------------------------------ |
+| `agents [agent...]`                        | `source list [agent...]`                                           |
+| `import`                                   | `source import`                                                    |
+| `chrome setup`                             | `source chrome setup`                                              |
+| `raw-sync ...`                             | `source raw ...`                                                   |
+| `usage cursor`                             | `source cursor sync-usage`                                         |
+| `projects`                                 | `project list`                                                     |
+| `health [session-id]`                      | `session health [session-id]`                                      |
+| `prune`                                    | `session prune`                                                    |
+| `stats`                                    | `report stats`                                                     |
+| `activity report`                          | `report activity`                                                  |
+| `usage daily` / `usage statusline`         | `report usage daily` / `report usage statusline`                   |
+| `pg ...` / `clickhouse ...`                | `replica pg ...` / `replica clickhouse ...`                        |
+| `embeddings ...`                           | `index embeddings ...`                                             |
+| `classifier ...` (recovery only)           | `index classifier ...` (recovery only)                             |
+| `parse-diff`                               | `archive diff`                                                     |
+| `token-use ID` (already deprecated)        | `session usage ID --json`                                          |
+
+Keep using `agentsview usage grok <csv>` to import xAI billing files. Its
+deprecation notice names `report usage grok`, which does not exist in 0.47.0.
+
+`session prune` operates on the local archive. It rejects the session group's
+inherited `--server`, `--server-token-file`, `--pg`, `--json`, and `--format`
+flags before accessing storage. Use `--dry-run` to inspect the selection.
+
+### `agentsview git-hook`
+
+Add the current agent session to commits in a repository:
+
+```sh
+agentsview git-hook install
+```
+
+The `prepare-commit-msg` and `commit-msg` hooks work together. The first records
+the message Git prepared; the second adds `Agent-Session:
+<agent>:<session-id>` to commits made without an editor, including `-m`, `-F`,
+`-C`, `--amend --no-edit`, and `merge --no-edit`. An unchanged commit template
+stays untouched so Git can reject it. A conflicted cherry-pick finished with
+`--no-edit` or `--continue` also carries the current session. Editor commits
+keep their original messages. Git doesn't run `commit-msg` for
+`git revert --no-edit` or rebase picks, so they get no new trailer. Rebase picks
+keep their existing trailers. Amending from a different session adds a second
+`Agent-Session` line.
+
+The hook skips messages containing only blank lines, Git comments, or signoffs.
+Git still rejects empty messages. A comment-only message such as `-m '#123 fix'`
+can still commit when Git retains comments, but gets no trailer. Git doesn't
+tell hooks whether `-s` added a signoff, so when a commit template already ends
+with your own signoff and another hook changes that line, the commit gets no
+trailer. With `core.commentChar=auto`, Git picks its comment character per
+commit and doesn't tell hooks which. The hook then treats lines starting with
+any of `#;@!$%^&|:` as possible comments, so a message made only of such lines
+gets no trailer, and commits that start from a commit template get none either.
+
+AgentsView must be on `PATH`. A missing or failing binary, or a missing,
+invalid, or ambiguous session, leaves the commit message unchanged.
+
+Discovery reads the session variable each supported harness sets for the
+commands its agent runs:
+
+| Agent | Variable |
+| --- | --- |
+| Claude Code | `CLAUDE_CODE_SESSION_ID` |
+| Codex | `CODEX_THREAD_ID`, or `CODEX_SESSION_ID` when that is unset or empty |
+| Cursor CLI | `CURSOR_CONVERSATION_ID` |
+| OpenCode 2.0.19 and later | `OPENCODE_SESSION_ID` |
+| Pi | `PI_SESSION_ID` |
+| Oh My Pi | `PI_SESSION_ID` with `OMPCODE=1` |
+| Qwen Code | `QWEN_CODE_SESSION_ID` |
+| Goose | `AGENT_SESSION_ID`, only in Goose's `YYYYMMDD_N` form |
+| Hermes | `HERMES_SESSION_ID` |
+
+Claude and Codex IDs must be UUIDs. Commits from unlisted harnesses get no
+trailer unless you set the override pair. When an agent runs inside another
+agent's shell, such as Pi started from Claude Code, both variables are set. The
+hook then leaves the message unchanged and prints a warning. Set both
+`AGENTSVIEW_SESSION_AGENT` and `AGENTSVIEW_SESSION_ID` to resolve this
+ambiguity or override discovery.
+Override agent names accept lowercase letters, digits, and hyphens, up to 32
+characters, starting with a letter or digit. IDs for agents other than Claude
+and Codex accept letters, digits, dots, underscores, and hyphens, up to 128
+characters, starting with a letter or digit.
+
+Installation writes both hooks into the directory Git uses. Rerunning it
+succeeds without changing byte-identical hooks. A `core.hooksPath` setting,
+including a global one, makes installation apply to every repository sharing
+that path. The two hooks only work as a pair. When either one already exists
+with other content, installation writes nothing and prints the steps for both:
+the line to add to each existing hook, and the file to create for a missing
+one. Put the `prepare-commit-msg` line right after the hook's first line, so it
+saves the template before your hook edits it:
+
+```sh
+if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer-prepare "$@" || :; fi
+```
+
+Put the `commit-msg` line last, before any final `exit`, so it stamps after your
+hook's edits. It keeps the status of your hook's last command and doesn't exit,
+so a failing check still rejects the commit and a final `exit` still decides:
+
+```sh
+agentsview_status=$?; if command -v agentsview >/dev/null 2>&1; then agentsview git-trailer "$1" || :; fi; (exit "$agentsview_status") && :
+```
+
+To remove the hooks, delete the installed `prepare-commit-msg` and `commit-msg`
+files. For shared hooks, remove the added lines.
 
 ### `agentsview archive`
 
@@ -192,9 +405,10 @@ configuration. Seed import and restore generate fresh local authentication and l
 Previously retained raw files are preserved without redaction and may contain
 credentials. Seeded and restored databases are permanently archive-only: foreground starts,
 background starts and restarts do not scan the receiving machine. Ordinary sync,
-source transfers over HTTP or SSH, ChatGPT, Claude.ai and Gemini Apps imports, artifact exchange,
-mirror publication and raw-sync watch are refused. Browsing, curation, archive
-import, verification, extraction, backup and explicit reparse remain available. Use a separate data directory to collect new
+source transfers over HTTP or SSH, ChatGPT, Claude.ai, Gemini Apps and Grok web
+imports and Sync, artifact exchange, mirror publication and raw-sync watch are
+refused. Browsing, curation, archive import, verification, extraction, backup and
+explicit reparse remain available. Use a separate data directory to collect new
 local sessions; no runtime flag or config setting disables archive-only mode.
 
 Startup resync keeps archive-only sessions and their acceptance records without
@@ -231,7 +445,9 @@ behavior, failure codes, and a complete GitHub Actions job.
 
 ______________________________________________________________________
 
-### `agentsview raw-sync`
+<a id="agentsview-raw-sync"></a>
+
+### `agentsview source raw`
 
 Capture supported local provider sources and upload their raw generations to
 hosted custody:
@@ -240,9 +456,9 @@ hosted custody:
 export AGENTSVIEW_RAW_SYNC_URL=https://agents.example.com
 export AGENTSVIEW_RAW_SYNC_DEVICE_ID=device-id
 export AGENTSVIEW_RAW_SYNC_CREDENTIAL=device-credential
-agentsview raw-sync watch
-agentsview raw-sync status
-agentsview raw-sync server-status
+agentsview source raw watch
+agentsview source raw status
+agentsview source raw server-status
 ```
 
 `raw-sync watch` runs an initial bounded audit, watches for filesystem changes,
@@ -272,10 +488,10 @@ device ID and credential; there is no public enrollment command yet. See
 [Hosted Raw Sync](/docs/hosted-raw-sync/) for the current boundary.
 
 `raw-sync clean-uploads` runs one server-side cleanup pass for the PostgreSQL
-upload sessions and private spool used by `agentsview pg serve`:
+upload sessions and private spool used by `agentsview replica pg serve`:
 
 ```bash
-agentsview raw-sync clean-uploads
+agentsview source raw clean-uploads
 ```
 
 The command uses the effective PostgreSQL target and AgentsView data directory
@@ -293,12 +509,43 @@ upload spool.
 
 ______________________________________________________________________
 
+### `agentsview why`
+
+Find recorded sessions and prompts behind a commit or file lines:
+
+```bash
+agentsview why internal/db/messages.go:120-140
+agentsview why --commit 1a2b3c4
+agentsview why main.go --format json
+```
+
+Use `path:N` for one line, `path:N-M` for an inclusive range, or `path` for the
+whole file. Line numbers start at 1. The file is blamed in its own Git
+repository, including when you run the command from another directory.
+Whitespace changes count, and uncommitted lines appear as a separate count. A
+file name ending in `:digits` is interpreted as a line range and can't be blamed
+by that name.
+
+`--commit` accepts a SHA or prefix and works outside a checkout. Ambiguous
+prefixes return all recorded candidates. Add `--format json` or `--json` for
+scripts. Each commit keeps its own session links and the prompt before each
+commit call, even when one session made several commits.
+
+The command calls no model. Run `agentsview source sync`
+first if you need newer records. A transcript link identifies the session that
+ran the commit; it doesn't prove who wrote each line. Deleted or trashed sessions
+appear as missing records without a prompt.
+
+______________________________________________________________________
+
 ### `agentsview daemon`
 
 Manage the writable SQLite server. The daemon provides the web UI, API, session
 sync, and file watchers in one process. `daemon start` launches the same server
 as `serve --background`, using saved configuration and without opening a
-browser. It does not require a separate `serve` command.
+browser. It does not require a separate `serve` command. Unlike
+`serve --background`, which exits after `daemon_idle_timeout` when idle,
+`daemon start` stays running until `daemon stop`.
 
 ```bash
 agentsview daemon start
@@ -307,12 +554,33 @@ agentsview daemon restart
 agentsview daemon stop
 ```
 
-| Command   | Behavior                                                                |
-| --------- | ----------------------------------------------------------------------- |
-| `start`   | Start the daemon, or report the existing writable daemon                |
-| `status`  | Show writable daemon state, URL, PID, version, and uptime               |
-| `restart` | Stop and restart the writable daemon; start it if it is already stopped |
-| `stop`    | Stop the writable daemon, or report that it is already stopped          |
+| Command   | Behavior                                                                   |
+| --------- | -------------------------------------------------------------------------- |
+| `start`   | Start a persistent daemon, or make the running automatic daemon persistent |
+| `status`  | Show writable daemon state, URL, PID, version, and uptime                  |
+| `restart` | Stop and restart the writable daemon; start it if it is already stopped    |
+| `stop`    | Stop the writable daemon, or report that it is already stopped             |
+
+Settings offers **Restart now** on writable detached daemons and foreground
+servers. It preserves launch options and can interrupt sync. It reloads the
+configuration within the existing process, keeping its process ID, foreground
+attachment, and loaded executable. Use the external restart or update workflow
+to apply a newly installed binary.
+The settings page reloads after an identified replacement answers and returns to
+the selected panel. Read-only servers cannot restart from Settings.
+Authentication changes take effect immediately.
+
+An explicit `--require-auth` flag takes precedence until authentication is saved
+in Settings. Later Settings restarts use the latest saved value, including
+subsequent file edits. A fresh CLI start or restart uses normal deployment and
+flag precedence.
+
+If the page cannot reconnect within 30 seconds, **Check connection** polls for
+another 30 seconds. To find the server address, run `agentsview serve status`
+on the server machine and open the
+address it prints. If the server stopped or never restarted, restart it the way
+you originally started it. An automatically selected port may change when the
+old port is occupied. An explicitly selected port must be available.
 
 `daemon start` and `daemon restart` load the normal effective configuration from
 `config.toml` and supported environment variables. They accept no serve-specific
@@ -326,7 +594,8 @@ for a one-off unauthenticated non-loopback bind; a persistent non-loopback
 These commands manage only the writable SQLite daemon for the current data
 directory, including a foreground `serve` process or a daemon auto-started by a
 CLI command. `daemon stop` stops the web UI and background sync together. They
-ignore read-only `agentsview pg serve` and `agentsview duckdb serve` processes.
+ignore read-only `agentsview replica pg serve` and
+`agentsview replica clickhouse serve` processes.
 If only read-only servers are running, `daemon status` reports that no daemon is
 running, and `daemon stop` and `daemon restart` leave those servers alive.
 
@@ -363,7 +632,7 @@ or `serve stop` also stops its sync and file watchers. `--no-sync` disables
 automatic sync in that process; it does not create a separate sync daemon.
 When an upgrade needs a full archive rebuild, `--no-sync` skips it at startup
 and says so. Until the rebuild runs, sessions that need the new parsers are
-missing. Click **Sync** in the web UI or run `agentsview sync` to rebuild.
+missing. Click **Sync** in the web UI or run `agentsview source sync` to rebuild.
 
 ```bash
 agentsview serve [flags]
@@ -398,13 +667,15 @@ in `config.toml` is busy. An explicit nonzero `--port` exits when that port is
 occupied. Use `--port 0` to select any available port. For a supervised daemon
 that must keep a fixed port, pass `--port` in its launch command.
 
-When replacing a running daemon, an occupied explicit port is rejected before
-the daemon stops. The daemon's existing host and port can be reused, including
-narrowing a wildcard bind to loopback. To widen a bind on the same explicit
-port, stop the daemon first with `agentsview daemon stop`.
+When replacing a running daemon, an occupied fixed positive port is rejected
+before the daemon stops. The daemon's existing host and port can be reused,
+including narrowing a wildcard bind to loopback. To widen a bind on the same
+explicit port, stop the daemon first with `agentsview daemon stop`.
 
-`agentsview update` preserves the original `--port` choice recorded by the
-running daemon, including `0`. Without an explicit port, restart tries the
+Settings restart tries to reuse an automatically selected address so the page
+can reconnect, with fallback if the address is occupied. `agentsview update`
+preserves the original `--port` choice recorded by the running daemon,
+including `0`. Without an explicit port, restart tries the
 previous listening port and retains automatic fallback. See
 [Remote Access](/docs/remote-access/) for details on the remote access and proxy
 flags.
@@ -425,8 +696,9 @@ On startup, the server:
 
 1. Loads or creates `~/.agentsview/sessions.db`
 1. Runs initial sync across all discovered session directories
-1. Starts the file watcher (500ms event batching; watcher sync starts remain at
-    least five seconds apart)
+1. Starts the file watcher (500ms event batching; while nobody is watching the
+    archive, watcher sync starts remain at least ten minutes apart by default; see
+    [`background_sync_interval`](/docs/configuration/#config-file))
 1. Starts periodic sync (every 15 minutes)
 1. Serves the Svelte SPA and REST API
 
@@ -495,7 +767,7 @@ line. If the server cannot return the status, or fails while answering,
 `serve status` prints one line saying why, even when the source is not
 configured. Read-only servers, and older servers without this status, add no
 lines. `serve stop` retains its broad lifecycle scope: it gracefully terminates
-confirmed writable SQLite and read-only PostgreSQL or DuckDB server processes
+confirmed writable SQLite and read-only PostgreSQL or ClickHouse server processes
 for the data directory and cleans up their runtime records.
 
 `serve restart` is intentionally narrower and config-driven. It restarts only
@@ -529,10 +801,14 @@ guidance.
 Background servers also act as the shared local daemon for the desktop app and
 CLI. The daemon owns local SQLite writes for its data directory, so common write
 and freshness-sensitive commands proxy to it instead of opening the archive as a
-second writer. A background daemon self-exits after the idle timeout when no
-external request or daemon-owned job is active. Periodic sync and file-watcher
-work prevent exit while they run, but do not keep the daemon alive forever by
-themselves.
+second writer. An automatically started daemon self-exits after the idle timeout
+when no external request or daemon-owned job is active. Periodic sync and
+file-watcher work prevent exit while they run, but do not keep the daemon alive
+forever by themselves.
+
+`sync_idle_after = "10m"` pauses local collection while idle; `"0"` disables the
+pause. `background_sync_interval = "10m"` spaces out syncs while nobody is
+watching the archive; `"0s"` syncs at `sync_interval` all the time.
 
 #### CLI daemon behavior
 
@@ -545,7 +821,7 @@ starting a daemon or changing configuration.
 Commands that need fresh data or need to write auto-start the detached daemon
 when no compatible daemon is running. That includes local `sync`,
 `session sync`, `token-use`, normal `usage` refresh paths,
-`pg push`/`pg push --watch`, `duckdb push`, and `clickhouse push`. If a writable
+`pg push`/`pg push --watch`, and `clickhouse push`. If a writable
 daemon is known to own the archive but is not reachable, these commands refuse
 instead of writing directly.
 
@@ -564,12 +840,23 @@ and `serve --background` report the child's failure as before.
 
 ______________________________________________________________________
 
-### `agentsview sync`
+<a id="agentsview-sync"></a>
+
+### `agentsview source sync`
 
 Refresh the local archive. For local sync, the CLI uses the running daemon or
 starts a detached daemon so SQLite writes stay owned by one process. That daemon
 also serves the web UI and remains running after the CLI exits, until stopped or
 its idle timeout expires. The command prints the server URL and how to stop it.
+
+When the daemon is already running, an incremental sync applies only the changes
+its file watchers collected, including changes that failed earlier and wait for
+a retry, and it retries unfinished archive imports. It does not rescan every
+session source, so it stays quick on a large archive. The daemon runs a full
+discovery pass instead before its startup sync finishes, when it was started
+with `--no-sync`, when the archive needs a rebuild, and after a Settings change
+to session sources until a full pass completes. Roots that no watcher covers
+keep the daemon's polling schedule. Pass `--rescan` to rescan every source now.
 
 An incremental local-only sync through the default daemon waits when another
 sync or maintenance pass owns it, then runs its requested pass. It prints
@@ -584,7 +871,7 @@ For a one-shot offline sync, stop the writable daemon first, then run:
 
 ```bash
 agentsview daemon stop
-AGENTSVIEW_NO_DAEMON=1 agentsview sync
+AGENTSVIEW_NO_DAEMON=1 agentsview source sync
 ```
 
 The environment variable disables daemon auto-start. It does not stop an
@@ -592,29 +879,31 @@ existing daemon or bypass its write-owner lock. The offline command acquires
 that lock, syncs directly, and exits without leaving a server running.
 
 ```bash
-agentsview sync [flags]
+agentsview source sync [flags]
 ```
 
-| Flag       | Default | Description                                         |
-| ---------- | ------- | --------------------------------------------------- |
-| `--full`   | `false` | Force a full resync regardless of data version       |
-| `--target` |         | Exchange normalized artifacts with a trusted folder |
-| `--host`   |         | Configured remote host name                         |
+| Flag       | Default | Description                                                  |
+| ---------- | ------- | ------------------------------------------------------------ |
+| `--full`   | `false` | Force a full resync regardless of data version               |
+| `--rescan` | `false` | Rescan every session source instead of the collected changes |
+| `--target` |         | Exchange normalized artifacts with a trusted folder          |
+| `--host`   |         | Configured remote host name                                  |
 
 **Examples:**
 
 ```bash
-agentsview sync           # incremental sync and exit
-agentsview sync --full    # full resync and exit
-agentsview sync --target /path/to/shared-folder
-agentsview sync --host devbox1
+agentsview source sync           # incremental sync and exit
+agentsview source sync --full    # full resync and exit
+agentsview source sync --rescan  # rescan every session source and exit
+agentsview source sync --target /path/to/shared-folder
+agentsview source sync --host devbox1
 ```
 
-After syncing, a summary of session and message counts is printed to stdout.
-With `--target`, AgentsView then performs one bounded normalized-artifact
-exchange. See [Artifact Folder Sync](/docs/artifact-sync/) for the trust model,
-first-use requirements, and exclusions. `--target` cannot be combined with
-`--host`.
+After a discovery pass, a summary of session counts is printed to stdout. A sync
+that applied only the collected changes says so instead. With `--target`,
+AgentsView then performs one bounded normalized-artifact exchange. See
+[Artifact Folder Sync](/docs/artifact-sync/) for the trust model, first-use
+requirements, and exclusions. `--target` cannot be combined with `--host`.
 
 When `--host` is set, AgentsView syncs only the matching configured
 `[[remote_hosts]]` entry and fails fast on error. This also applies to offline
@@ -626,7 +915,7 @@ HTTP entry; see [SSH Remote Sync](/docs/remote-access/#ssh-remote-sync).
 Local sync can also read configured Claude, Codex, and Cursor roots from
 S3-compatible object storage. Add `s3://` entries to `agents.claude.dirs`,
 `agents.codex.dirs`, or `agents.cursor.dirs` in `~/.agentsview/config.toml`,
-then run `agentsview sync` normally. Object storage is treated as a read-only
+then run `agentsview source sync` normally. Object storage is treated as a read-only
 session source, using object size and `LastModified` metadata to skip unchanged
 sessions and downloading only objects that need
 parsing. See
@@ -635,7 +924,7 @@ parsing. See
 #### Configured Remote Hosts
 
 Declare remote hosts in `~/.agentsview/config.toml` so a single bare
-`agentsview sync` covers a whole fleet. An entry uses `transport = "http"` (the
+`agentsview source sync` covers a whole fleet. An entry uses `transport = "http"` (the
 default) to reach a remote daemon, or `transport = "ssh"` to reach a machine
 over `ssh` with no AgentsView running there:
 
@@ -652,7 +941,7 @@ transport = "ssh"
 destination = "user@devbox.example.com" # optional; defaults to host
 ```
 
-With hosts configured, `agentsview sync` (no `--host`) includes local sources
+With hosts configured, `agentsview source sync` (no `--host`) includes local sources
 and configured hosts, HTTP and SSH, in one coordinated sync. During a full or
 automatic data-version rebuild, AgentsView prepares every remote mirror,
 bulk-ingests the local and remote sources into one temporary database with FTS
@@ -701,12 +990,14 @@ them, restart the local collector daemon.
 
 ______________________________________________________________________
 
-### `agentsview prune`
+<a id="agentsview-prune"></a>
+
+### `agentsview session prune`
 
 Delete sessions matching one or more filters. At least one filter is required.
 
 ```bash
-agentsview prune [flags]
+agentsview session prune [flags]
 ```
 
 | Flag              | Default | Description                                         |
@@ -719,10 +1010,11 @@ agentsview prune [flags]
 | `--dry-run`       | `false` | Show what would be pruned without deleting          |
 | `--yes`           | `false` | Skip confirmation prompt                            |
 
-Filters combine with AND. With `--agent`, one prune removes matching parents
-and descendants, including matching sessions in trash. A descendant that fails
-any filter keeps all its ancestors. Without `--agent`, prune skips trash and
-parents. The summary shows how many matches are in trash.
+Filters combine with AND. One prune removes matching parents and descendants.
+A descendant that fails any filter keeps all its ancestors. Without `--agent`,
+prune skips trash, so a trashed descendant keeps its ancestors. With `--agent`,
+prune includes matching sessions in trash. The summary shows how many matches
+are in trash.
 
 Prune keeps deleted sessions out of later syncs. To keep new sessions from
 that agent out of the archive, add it to
@@ -732,19 +1024,19 @@ that agent out of the archive, add it to
 
 ```bash
 # Preview what would be deleted
-agentsview prune --project "scratch" --dry-run
+agentsview session prune --project "scratch" --dry-run
 
 # Preview cleanup of an agent after stopping the daemon
-agentsview prune --agent mimocode --dry-run
+agentsview session prune --agent mimocode --dry-run
 
 # Delete short sessions from before 2025
-agentsview prune --max-messages 2 --before 2025-01-01
+agentsview session prune --max-messages 2 --before 2025-01-01
 
 # Delete sessions starting with a specific message
-agentsview prune --first-message "test" --yes
+agentsview session prune --first-message "test" --yes
 
 # Combine filters (AND logic)
-agentsview prune --project "old-project" --max-messages 5 --before 2025-06-01
+agentsview session prune --project "old-project" --max-messages 5 --before 2025-06-01
 ```
 
 Prune deletes each matching session's source file, except the shared
@@ -788,12 +1080,45 @@ for automatic adoption and mirror updates.
 
 ______________________________________________________________________
 
+### `agentsview db repair-projects`
+
+Available in 0.47.0 and later. Preview corrections for temporary
+worktree project names using repository URLs already saved in the archive:
+
+```bash
+agentsview db repair-projects
+agentsview db repair-projects --project sample_feature --format json
+agentsview db repair-projects --project sample_feature --apply
+```
+
+The default is read-only. `--project` selects an exact current project label;
+omit it to examine all projects. `--apply` requires exclusive archive access, so
+stop the daemon or desktop app first. JSON output includes each repository, old
+and new project names, reason, session count, and the number of sessions left
+unresolved because checkout names conflict. See
+[repair worktree project names](/docs/data/#repair-worktree-project-names) for
+the naming rules and preservation guarantees.
+
+______________________________________________________________________
+
 ### `agentsview db compact`
 
 Reclaim unused space in the local SQLite archive. The command writes and checks
 a compacted database before replacing the original, and truncates the
 write-ahead log (WAL). It preserves stored sessions and does not change what
 future imports retain.
+
+Compaction first removes deleted-message records from the conversation export
+index, except records of messages with a native source ID, which stay so a
+returning message keeps its export ID. The daemon also removes the same records
+on its own once they are a week or two old, but only compaction shrinks the
+database file. Change-stream and
+conversation-export readers keep these records only so they can learn about a
+deletion. A reader whose position predates a removed record restarts: the change
+stream sends `reset`, and `export conversations changes` returns
+`reconciliation_required`. Readers that have already read past every removed
+record continue unchanged. The `--dry-run` estimate does not include the space
+these records free.
 
 ```bash
 agentsview db compact [flags]
@@ -914,7 +1239,9 @@ matching `{dataDir}/assets` directory as well as the copied database content.
 Run `db compact` separately to measure SQLite file-space reclamation after
 migration. Back up the `{dataDir}/assets` directory together with the archive.
 
-The raw `agentsview session export` command still streams provider source bytes.
+The raw `agentsview session export` command streams provider source, with
+detected secrets masked unless you pass `--reveal`, and keeps inline image
+payloads.
 See [image storage](/docs/data/#ingest-time-image-offload) for export and
 remote-backend limits.
 
@@ -1004,7 +1331,9 @@ valid response invalid does.
 
 ______________________________________________________________________
 
-### `agentsview agents`
+<a id="agentsview-agents"></a>
+
+### `agentsview source list`
 
 List every agent AgentsView can read, where it looks for each agent's
 sessions, and which session details each agent's parser extracts. Pass one or
@@ -1012,9 +1341,9 @@ more agent types to show only those agents. The command does not need a running
 daemon, configuration, or database.
 
 ```bash
-agentsview agents
-agentsview agents codex claude
-agentsview agents --json
+agentsview source list
+agentsview source list codex claude
+agentsview source list --json
 ```
 
 ```
@@ -1026,7 +1355,7 @@ codex (Codex)
 
 The `sessions` line shows the default locations relative to your home
 directory. The `override` line names the environment variable that replaces
-them. Import-only agents show `imported with agentsview import` instead.
+them. Import-only agents show `imported with agentsview source import` instead.
 
 The JSON contract has `schema_version` (currently `1`) and an `agents` array.
 Each agent has these fields:
@@ -1035,7 +1364,7 @@ Each agent has these fields:
 | --------------- | ------- | --------------------------------------------------------------------------------- |
 | `type`          | string  | Agent type used by `--agent` filters and session IDs                              |
 | `display_name`  | string  | Human-readable agent name                                                         |
-| `import_only`   | boolean | Sessions arrive only through `agentsview import`                                  |
+| `import_only`   | boolean | Sessions arrive only through `agentsview source import`                           |
 | `file_based`    | boolean | Sessions are files rather than an application database                            |
 | `default_dirs`  | array   | Default session locations, relative to the home directory                         |
 | `data_dir_root` | string  | Location under the AgentsView data directory, for agents AgentsView stores itself |
@@ -1047,14 +1376,16 @@ names they do not recognize.
 
 ______________________________________________________________________
 
-### `agentsview usage daily`
+<a id="agentsview-usage-daily"></a>
+
+### `agentsview report usage daily`
 
 Report token usage and estimated cost aggregated by local-time day, scoped to
 the last 30 days by default. See [Token Usage & Costs](/docs/token-usage/) for a
 full write-up on reporting behavior and agent coverage.
 
 The report reads committed archive data. If it starts the daemon, session sync
-runs in the background; run `agentsview sync` first when new source changes must
+runs in the background; run `agentsview source sync` first when new source changes must
 be included. An older archive that requires reparsing is upgraded before the
 daemon starts serving, with startup progress shown in the terminal. A cold usage
 cache prepares the sessions needed for the report without waiting for the full
@@ -1073,7 +1404,7 @@ requires a resync, run `agentsview daemon restart` and let the resync finish
 before retrying the offline command.
 
 ```bash
-agentsview usage daily [flags]
+agentsview report usage daily [flags]
 ```
 
 | Flag          | Default       | Description                                                              |
@@ -1098,22 +1429,24 @@ captured only in part add a second note that their token counts are low. With
 **Examples:**
 
 ```bash
-agentsview usage daily                           # last 30 days
-agentsview usage daily --all                     # full history
-agentsview usage daily --since 14d               # last 14 days
-agentsview usage daily --since 2026-04-01 --breakdown
-agentsview usage daily --json --agent claude
+agentsview report usage daily                           # last 30 days
+agentsview report usage daily --all                     # full history
+agentsview report usage daily --since 14d               # last 14 days
+agentsview report usage daily --since 2026-04-01 --breakdown
+agentsview report usage daily --json --agent claude
 ```
 
 ______________________________________________________________________
 
-### `agentsview usage statusline`
+<a id="agentsview-usage-statusline"></a>
+
+### `agentsview report usage statusline`
 
 Print today's total estimated cost as a single line, for shell prompts and tmux
 status lines.
 
 ```bash
-agentsview usage statusline [flags]
+agentsview report usage statusline [flags]
 ```
 
 | Flag        | Default | Description                                      |
@@ -1127,12 +1460,12 @@ agentsview usage statusline [flags]
 **Example:**
 
 ```bash
-$ agentsview usage statusline
+$ agentsview report usage statusline
 $9.61 today
 ```
 
 ```bash
-$ agentsview usage statusline --json
+$ agentsview report usage statusline --json
 {
   "date": "2026-08-04",
   "cost": {
@@ -1146,13 +1479,15 @@ integration examples (Starship, tmux).
 
 ______________________________________________________________________
 
-### `agentsview usage cursor`
+<a id="agentsview-usage-cursor"></a>
+
+### `agentsview source cursor sync-usage`
 
 Fetch Cursor Admin API usage events and store them in the local archive so they
 contribute to the Usage dashboard and daily reports.
 
 ```bash
-agentsview usage cursor [flags]
+agentsview source cursor sync-usage [flags]
 ```
 
 | Flag          | Default       | Description                          |
@@ -1164,12 +1499,23 @@ agentsview usage cursor [flags]
 | `--email`     | config        | Filter by Cursor team member email   |
 | `--user-id`   | config        | Filter by Cursor team member user ID |
 
+Cursor allows 60 requests per minute to this API for each team, shared by every
+tool that uses the team's admin keys. The command starts requests, retries
+included, at least one second apart. When Cursor answers with
+`429 Too Many Requests` or a server error, the command waits and requests the
+same page again, up to 5 attempts per page. It waits as long as Cursor's
+`Retry-After` header asks, up to 60 seconds, or backs off from about 2 seconds
+when the header is absent. Each wait is reported on stderr. Any other error,
+such as a rejected key, stops the run at once. Nothing is stored unless every
+page is fetched, so a larger `--page-size`, which needs fewer requests, makes a
+long sync less likely to fail.
+
 **Examples:**
 
 ```bash
-agentsview usage cursor
-agentsview usage cursor --since 2026-05-01 --until 2026-05-31
-agentsview usage cursor --all --email you@example.com
+agentsview source cursor sync-usage
+agentsview source cursor sync-usage --since 2026-05-01 --until 2026-05-31
+agentsview source cursor sync-usage --all --email you@example.com
 ```
 
 See [Cursor Admin Usage Events](/docs/token-usage/#cursor-admin-usage-events)
@@ -1177,14 +1523,16 @@ for setup and reporting behavior.
 
 ______________________________________________________________________
 
-### `agentsview activity report`
+<a id="agentsview-activity-report"></a>
+
+### `agentsview report activity`
 
 Report active time, concurrency, cost, token, breakdown, and session rows for a
 resolved date range. The command uses the same report model as the web UI's
 [Activity](/docs/activity/) page.
 
 ```bash
-agentsview activity report [flags]
+agentsview report activity [flags]
 ```
 
 | Flag         | Default   | Description                                           |
@@ -1206,9 +1554,9 @@ agentsview activity report [flags]
 **Examples:**
 
 ```bash
-agentsview activity report --preset day --date 2026-06-20
-agentsview activity report --preset week --date 2026-06-20 --json
-agentsview activity report --preset custom \
+agentsview report activity --preset day --date 2026-06-20
+agentsview report activity --preset week --date 2026-06-20 --json
+agentsview report activity --preset custom \
   --from 2026-06-20T14:00:00Z \
   --to 2026-06-20T18:00:00Z \
   --bucket 15m
@@ -1281,13 +1629,15 @@ for the full field reference and exit-code contract.
 
 ______________________________________________________________________
 
-### `agentsview pg push`
+<a id="agentsview-pg-push"></a>
+
+### `agentsview replica pg push`
 
 Sync sessions from local SQLite to PostgreSQL. See
 [PostgreSQL Sync](/docs/pg-sync/) for full documentation.
 
 ```bash
-agentsview pg push [target] [flags]
+agentsview replica pg push [target] [flags]
 ```
 
 | Flag                 | Default | Description                                                                                                        |
@@ -1318,12 +1668,14 @@ the archive. It cannot be combined with
 
 ______________________________________________________________________
 
-### `agentsview pg status`
+<a id="agentsview-pg-status"></a>
+
+### `agentsview replica pg status`
 
 Show PostgreSQL sync status.
 
 ```bash
-agentsview pg status [target] [flags]
+agentsview replica pg status [target] [flags]
 ```
 
 | Flag                 | Default | Description                                                      |
@@ -1336,7 +1688,9 @@ agentsview pg status [target] [flags]
 
 ______________________________________________________________________
 
-### `agentsview pg serve`
+<a id="agentsview-pg-serve"></a>
+
+### `agentsview replica pg serve`
 
 Start a read-only session web UI backed by PostgreSQL. On a writable PostgreSQL
 schema, the same server also registers the
@@ -1344,11 +1698,11 @@ schema, the same server also registers the
 [PostgreSQL Sync](/docs/pg-sync/) for full server documentation.
 
 ```bash
-agentsview pg serve [flags]
+agentsview replica pg serve [flags]
 ```
 
 ```bash
-agentsview pg serve --push-watch
+agentsview replica pg serve --push-watch
 ```
 
 Use `--push-watch` to ingest mounted sessions and publish them in the same
@@ -1364,12 +1718,14 @@ from pgvector — see
 
 ______________________________________________________________________
 
-### `agentsview pg service`
+<a id="agentsview-pg-service"></a>
+
+### `agentsview replica pg service`
 
 Install and manage the PostgreSQL auto-push service, which runs
-`agentsview pg push --watch` in the background. Supported service managers are
+`agentsview replica pg push --watch` in the background. Supported service managers are
 launchd on macOS and `systemd --user` on Linux. See
-[PostgreSQL Sync — `agentsview pg service`](/docs/pg-sync/#agentsview-pg-service)
+[PostgreSQL Sync — `agentsview replica pg service`](/docs/pg-sync/#agentsview-pg-service)
 for setup notes.
 
 Use `service install --no-start-daemon` with your own collector. The push
@@ -1379,12 +1735,12 @@ arguments. The default installation still starts a missing daemon. Reinstalling
 without `--no-start-daemon` restores daemon autostart.
 
 ```bash
-agentsview pg service install
-agentsview pg service status
-agentsview pg service logs [-f]
-agentsview pg service start
-agentsview pg service stop
-agentsview pg service uninstall
+agentsview replica pg service install
+agentsview replica pg service status
+agentsview replica pg service logs [-f]
+agentsview replica pg service start
+agentsview replica pg service stop
+agentsview replica pg service uninstall
 ```
 
 | Command     | Description                                               |
@@ -1398,14 +1754,16 @@ agentsview pg service uninstall
 
 ______________________________________________________________________
 
-### `agentsview pg vectors`
+<a id="agentsview-pg-vectors"></a>
+
+### `agentsview replica pg vectors`
 
 Inspect and drop semantic-search embedding generations stored in PostgreSQL. See
 [Semantic Search — Maintenance](/docs/semantic-search/#maintenance) for details.
 
 ```bash
-agentsview pg vectors list [flags]
-agentsview pg vectors drop <id> [flags]
+agentsview replica pg vectors list [flags]
+agentsview replica pg vectors drop <id> [flags]
 ```
 
 | Command     | Description                                                                              |
@@ -1420,45 +1778,18 @@ agentsview pg vectors drop <id> [flags]
 
 ______________________________________________________________________
 
-### `agentsview duckdb`
+<a id="agentsview-clickhouse"></a>
 
-Mirror the local SQLite archive into DuckDB and serve from it, locally or over
-the Quack remote protocol. See [DuckDB Mirror](/docs/duckdb/) for full
-documentation.
-
-```bash
-agentsview duckdb push          # mirror SQLite into sessions.duckdb
-agentsview duckdb status        # show mirror sync status
-agentsview duckdb serve         # read-only web UI from the mirror
-agentsview duckdb quack serve   # expose the mirror over Quack
-```
-
-`duckdb push` accepts the same `--full` / `--projects` / `--exclude-projects` /
-`--all-projects` / `--watch` / `--debounce` / `--interval` flags as `pg push`.
-`duckdb push` always writes the local mirror file at `[duckdb].path`; it never
-targets a remote Quack endpoint. If `[duckdb].url` or `AGENTSVIEW_DUCKDB_URL` is
-configured, push fails immediately with an error to unset it and serve the
-mirror remotely with `duckdb quack serve` instead. `duckdb status` and
-`duckdb serve` do target the remote Quack endpoint when `[duckdb].url` or
-`AGENTSVIEW_DUCKDB_URL` is set, and the local mirror file otherwise. When
-`[duckdb].path` or `AGENTSVIEW_DUCKDB_PATH` is set, `duckdb quack serve` exposes
-that same mirror by default unless `--path` overrides it. `duckdb serve` accepts
-the same serve flags as `pg serve`. The DuckDB backend is unavailable on Windows
-ARM64 (the upstream bindings ship no prebuilt library for that platform); all
-other commands work normally there.
-
-______________________________________________________________________
-
-### `agentsview clickhouse`
+### `agentsview replica clickhouse`
 
 Push the local SQLite archive into ClickHouse and serve the read-only web UI
 from it. See [ClickHouse Sync](/docs/clickhouse-sync/) for full documentation.
 
 ```bash
-agentsview clickhouse push [target] [flags]
-agentsview clickhouse status [target] [flags]
-agentsview clickhouse serve [flags]
-agentsview clickhouse service install
+agentsview replica clickhouse push [target] [flags]
+agentsview replica clickhouse status [target] [flags]
+agentsview replica clickhouse serve [flags]
+agentsview replica clickhouse service install
 ```
 
 `clickhouse push` accepts the same `--full` / `--projects` /
@@ -1473,12 +1804,14 @@ user unit and writes `clickhouse-watch.log`. Use
 
 ______________________________________________________________________
 
-### `agentsview projects`
+<a id="agentsview-projects"></a>
+
+### `agentsview project list`
 
 List all projects in the local database with their session counts.
 
 ```bash
-agentsview projects [flags]
+agentsview project list [flags]
 ```
 
 | Flag       | Default | Description                      |
@@ -1489,20 +1822,22 @@ agentsview projects [flags]
 **Examples:**
 
 ```bash
-agentsview projects         # tabular output
-agentsview projects --json   # JSON array
+agentsview project list         # tabular output
+agentsview project list --json   # JSON array
 ```
 
 ______________________________________________________________________
 
-### `agentsview health`
+<a id="agentsview-health"></a>
+
+### `agentsview session health`
 
 Inspect session intelligence in a human-friendly CLI view. See
 [Session Intelligence](/docs/session-intelligence/) for the scoring and signal
 model.
 
 ```bash
-agentsview health [session-id] [flags]
+agentsview session health [session-id] [flags]
 ```
 
 | Flag       | Default | Description                                            |
@@ -1514,10 +1849,10 @@ agentsview health [session-id] [flags]
 **Examples:**
 
 ```bash
-agentsview health
-agentsview health --limit 50
-agentsview health 550e8400-e29b-41d4-a716-446655440000
-agentsview health agent-a86574e --json
+agentsview session health
+agentsview session health --limit 50
+agentsview session health 550e8400-e29b-41d4-a716-446655440000
+agentsview session health agent-a86574e --json
 ```
 
 Without a session ID, the command lists recent sessions with grade and outcome
@@ -1526,13 +1861,15 @@ session.
 
 ______________________________________________________________________
 
-### `agentsview stats`
+<a id="agentsview-stats"></a>
+
+### `agentsview report stats`
 
 Experimental window-scoped workspace analytics across sessions and git activity.
 See [Stats](/docs/stats/) for the full write-up.
 
 ```bash
-agentsview stats [flags]
+agentsview report stats [flags]
 ```
 
 | Flag                | Default | Description                                                           |
@@ -1549,9 +1886,9 @@ agentsview stats [flags]
 **Examples:**
 
 ```bash
-agentsview stats
-agentsview stats --format json --since 2026-04-01 --until 2026-04-15
-agentsview stats --agent claude --include-project agentsview
+agentsview report stats
+agentsview report stats --format json --since 2026-04-01 --until 2026-04-15
+agentsview report stats --agent claude --include-project agentsview
 ```
 
 The command is experimental. The exact human output may change, and the JSON
@@ -1590,7 +1927,9 @@ The report includes:
 
 ______________________________________________________________________
 
-### `agentsview parse-diff`
+<a id="agentsview-parse-diff"></a>
+
+### `agentsview archive diff`
 
 Validate parser changes against the real session archive already in your local
 SQLite database. The command re-parses source files with the current binary,
@@ -1598,7 +1937,7 @@ normalizes them through the sync path, and reports field-level differences from
 the stored rows without writing updated session data.
 
 ```bash
-agentsview parse-diff [flags]
+agentsview archive diff [flags]
 ```
 
 | Flag               | Default | Description                                                             |
@@ -1613,9 +1952,9 @@ agentsview parse-diff [flags]
 **Examples:**
 
 ```bash
-agentsview parse-diff --agent claude --limit 100
-agentsview parse-diff --agent codex --fail-on-change
-agentsview parse-diff --json > parser-report.json
+agentsview archive diff --agent claude --limit 100
+agentsview archive diff --agent codex --fail-on-change
+agentsview archive diff --json > parser-report.json
 ```
 
 `parse-diff` is intended for parser development and release QA. Run it against a
@@ -1641,17 +1980,20 @@ through the normalization path and restores strict `parse-diff` scrutiny.
 
 ______________________________________________________________________
 
-### `agentsview chrome setup`
+<a id="agentsview-chrome-setup"></a>
 
-Install the native host and unpacked extension for Claude.ai Sync through Google
-Chrome. The command prints the extension folder. AgentsView opens its Chrome
-connection only after setup, so restart AgentsView if it is already running.
-Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**,
-and select that folder. Keep Chrome open during Sync. Registration is per OS
-user; the last setup wins. The first connected Chrome profile is used. Rerun
-setup and reload the extension when the executable path or data directory
-changes. After an upgrade mismatch, restart AgentsView if you upgraded it, rerun
-setup, reload the extension at `chrome://extensions`, then Sync again.
+### `agentsview source chrome setup`
+
+Install the native host and unpacked extension to sync Claude.ai, ChatGPT,
+Gemini Apps, and Grok web chats through Google Chrome. The command prints the
+extension folder. AgentsView opens its Chrome connection only after setup, so
+restart AgentsView if it is already running. Open `chrome://extensions`, enable
+**Developer mode**, choose **Load unpacked**, and select that folder. Keep
+Chrome open during Sync. Registration is per OS user; the last setup wins. The
+first connected Chrome profile is used. Rerun setup and reload the extension
+when the executable path or data directory changes. After an upgrade mismatch,
+restart AgentsView if you upgraded it, rerun setup, reload the extension at
+`chrome://extensions`, then Sync again.
 
 See
 [Sync Claude.ai chats](https://agentsview.io/docs/chat-import/#sync-claudeai-chats)
@@ -1659,24 +2001,29 @@ for connection and removal instructions.
 
 ______________________________________________________________________
 
-### `agentsview import`
+<a id="agentsview-import"></a>
 
-Import Claude.ai, ChatGPT, or Gemini Apps conversations into the local database.
-See [Chat Import](/docs/chat-import/) for full documentation.
+### `agentsview source import`
+
+Import Claude.ai, ChatGPT, Gemini Apps, or Grok web conversations into the local
+database. See [Chat Import](/docs/chat-import/) for full documentation.
 
 ```bash
-agentsview import --type <type> <path>
+agentsview source import --type <type> <path>
+agentsview source import --type <type> --sync
 ```
 
-| Flag        | Default | Description                                                                                           |
-| ----------- | ------- | ----------------------------------------------------------------------------------------------------- |
-| `--type`    |         | Import type: `claude-ai`, `chatgpt`, or `gemini-apps` (required)                                      |
-| `--replace` |         | Session ID to replace when the default import refuses it; repeatable (claude-ai, chatgpt)             |
-| `--sync`    | `false` | Sync Claude.ai through Chrome; requires a running server and Chrome host, with no path or `--replace` |
+| Flag        | Default | Description                                                                                                                              |
+| ----------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `--type`    |         | Import type: `claude-ai`, `chatgpt`, or `gemini-apps`; with `--sync`, also `grok-web` (required)                                         |
+| `--replace` |         | Session ID to replace when the default import refuses it; repeatable (claude-ai, chatgpt)                                                |
+| `--sync`    | `false` | Sync Claude.ai, ChatGPT, Gemini Apps, or Grok web through Chrome; requires a running server and Chrome host, with no path or `--replace` |
 
 Set up the
 [Chrome host](https://agentsview.io/docs/commands/#agentsview-chrome-setup) once
-and keep Chrome open for `agentsview import --type claude-ai --sync`.
+and keep Chrome open for `agentsview source import --type <type> --sync`, where
+`<type>` is `claude-ai`, `chatgpt`, `gemini-apps`, or `grok-web`. AgentsView
+imports Grok web chats only through Sync, so `grok-web` needs `--sync`.
 
 The path can be a `.zip` file, a `conversations.json` file (Claude.ai only), a
 Gemini Apps `MyActivity.html` file, or a directory containing the extracted
@@ -1685,11 +2032,12 @@ export.
 **Examples:**
 
 ```bash
-agentsview import --type claude-ai ~/Downloads/claude.zip
-agentsview import --type chatgpt ~/Downloads/chatgpt.zip
-agentsview import --type claude-ai ./conversations.json
-agentsview import --type gemini-apps ~/Downloads/takeout.zip
-agentsview import --type chatgpt --replace 'chatgpt:<conversation-id>' ~/Downloads/chatgpt.zip
+agentsview source import --type claude-ai ~/Downloads/claude.zip
+agentsview source import --type chatgpt ~/Downloads/chatgpt.zip
+agentsview source import --type claude-ai ./conversations.json
+agentsview source import --type gemini-apps ~/Downloads/takeout.zip
+agentsview source import --type grok-web --sync
+agentsview source import --type chatgpt --replace 'chatgpt:<conversation-id>' ~/Downloads/chatgpt.zip
 ```
 
 ______________________________________________________________________
@@ -1710,6 +2058,7 @@ agentsview export sessions [flags]
 | `--limit`             | `500`   | Maximum sessions to return; max `db.MaxSessionLimit`      |
 | `--cursor`            |         | Opaque cursor from a previous response                    |
 | `--all`               | `false` | Export every eligible page as one output stream           |
+| `--wait`              | `false` | Wait for project identification                           |
 | `--project`           |         | Filter by exact project name                              |
 | `--exclude-project`   |         | Exclude sessions from the given project                   |
 | `--machine`           |         | ID, alias, ID/alias list, or unique display name          |
@@ -1730,6 +2079,12 @@ agentsview export sessions [flags]
 | `--min-tool-failures` |         | Minimum tool-failure signal count                         |
 | `--has-secret`        | `false` | Only sessions with detected secret leaks                  |
 
+With `--wait`, export starts or discovers the local daemon and waits for project
+identity evidence to finish. Progress goes to standard error. Cancel the command
+to stop waiting. A failed backfill or unavailable daemon reports recovery
+commands. Archive-only databases cannot run the backfill; finish it on the
+writable source and restore an archive containing the evidence.
+
 By default, one-shot and automated sessions are excluded, so token and cost
 totals can be lower than the full archive unless the corresponding include flags
 are used.
@@ -1745,7 +2100,7 @@ agentsview export sessions --all --format ndjson --project agentsview
 The JSON top level has `schema_version`, `archive_id`, `database_id`, `cursor`,
 `pricing`, `projects`, and `sessions`. NDJSON writes the same metadata as the
 first line, then one session row per following line. Current builds emit
-`schema_version: 6`; see [Session Export](/docs/session-export/#versioning) for
+`schema_version: 7`; see [Session Export](/docs/session-export/#versioning) for
 the v1 and transitional 0.38 release history. The default and maximum page size
 is `db.MaxSessionLimit`, currently 500.
 
@@ -1754,8 +2109,9 @@ For performance diagnosis, `export sessions`, `export hour`, `export day`, and
 `--trace <file>`. These write profiling data to files and keep the export on
 stdout.
 
-When `--cursor` is present, only `--format`, `--json`, `--limit`, and the
-profiling flags may be combined with it. Cursor reset errors write structured
+When `--cursor` is present, only `--format`, `--json`, `--limit`, `--wait`, and
+the profiling flags may be combined with it. With a cursor, `--wait` suppresses
+progress to keep stderr machine-readable. Cursor reset errors write structured
 JSON to stderr, leave stdout empty, and exit with code 4:
 
 ```json
@@ -1774,12 +2130,18 @@ checkpoint and coverage rules.
 ```bash
 agentsview export conversations changes
 agentsview export conversations changes --checkpoint SAVED_CHECKPOINT
+agentsview export conversations changes --tool-summaries
 agentsview export conversations message SESSION_ID MESSAGE_ID \
   --database-id DATABASE_ID --revision REVISION
 ```
 
 These commands read the local archive and do not send content to another system.
-Existing session summary and activity exports remain content-free.
+`--tool-summaries` adds each session's tool call totals and skills to the
+listing; see
+[Session tool summaries](/docs/conversation-export/#session-tool-summaries).
+`message` masks detected secrets by default and marks such bodies with
+`redacted: true`; pass `--reveal` to return the stored text unchanged. Existing
+session summary and activity exports remain content-free.
 
 ______________________________________________________________________
 
@@ -1829,17 +2191,52 @@ agentsview session get <id>              # metadata + signals
 agentsview session list [flags]          # filtered list
 agentsview session list --resume         # recently-active resume table
 agentsview session messages <id>         # paginated messages
+agentsview session compactions <id>      # compaction summaries
+agentsview session compactions --active-since 2024-01-01T00:00:00Z --json
+agentsview session commits <id>          # commits and their prompts
 agentsview session tool-calls <id>       # flat tool-call list
-agentsview session export <id>           # stream raw source file
+agentsview session export <id>           # stream raw source, secrets masked
 agentsview session sync <path-or-id>     # parse + insert
 agentsview session watch <id>            # NDJSON event stream
 agentsview session search <pattern>      # content search across sessions
+agentsview session diagnose <id> --format json  # archived usage and diagnostic evidence
 agentsview session usage <id>            # token usage and cost estimate
 agentsview session usage <id> --own-only # exclude subagent transcripts
 agentsview session usage-batch <id>...   # ordered usage results for several sessions
 agentsview session label <id> k=v ...    # add or remove labels
 agentsview session parent <id> <parent>  # record the launching session
 ```
+
+For `session compactions`, `--limit` counts sessions per page, not response
+bytes; `--limit 0` uses the default of 20. Resume `--cursor` with the same
+`--active-since`, even when a page has no summaries. Ambiguous older Evener
+labels are reported separately with their session ID and ordinal.
+
+`agentsview session commits <id>` lists transcript and Git trailer commits
+linked to a session. The `SOURCE` column distinguishes `transcript` from
+`commit message`. JSON keeps `source: "trailer"` for commit message links.
+[`agentsview git-hook`](#agentsview-git-hook) adds those trailers. Use
+`--format json` for structured output. The table shows the session, exact message ordinal,
+call time, source, recorded SHA, branch, subject, and user turn, shortened to
+100 terminal columns. Transcript links use the last real prompt before the
+commit call. Trailer links use the last real prompt at or before Git's author
+time and mark the turn as estimated. They require a session message within the
+five minutes before that time; an idle session has no suggested turn. The prompt
+can be older than five minutes when later messages keep the session active.
+Trashed or permanently deleted sessions carry `missing: true` and omit the turn. See
+[commit lookups](https://agentsview.io/docs/session-api/#commit-lookups) for
+retention and lookup limits. Transcript links require stored Git summaries with SHAs of 7
+to 64 characters. Quiet commits have no transcript link. Links include Codex
+poll results paired with the original call. Calls spanning repositories use the
+first directory; the last `cd` before the first commit invocation adjusts it.
+Archives retaining only transcripts keep trailer links; usage-only archives have
+no links. Hosted PostgreSQL returns HTTP 501. Sessions permanently deleted
+before this release have no transcript links. JSON output keeps `call_index`.
+Code-mode scripts with exactly one tool call and a fixed command literal can
+link commits, including output without a process ID. Command literals containing
+`${` have no links. A single-call `write_stdin` script can poll an earlier
+commit execution. Scripts with several tool calls cannot start new commit links;
+their polls need output process IDs matching an earlier commit call.
 
 `session list --label k=v` and `--pr owner/repo#123` filter by
 [labels](/docs/session-api/#agentsview-session-label) and
@@ -1850,13 +2247,37 @@ agentsview session parent <id> <parent>  # record the launching session
 refresh behavior, missing-session exit codes, and the `refresh_incomplete`
 JSON field.
 
+An empty first page of `session search` keeps `(no matches)` on stdout and prints
+measured hints on stderr when one-shot, automated, or child sessions contain
+matches. Each hint
+includes a command that preserves your filters and enables the required include
+flags. JSON adds `hints` entries with `code`, `message`, and a full `next` command.
+Counts use a bounded search and say `more than N` when more matches exist, or
+`at least N` for semantic and hybrid searches or when filtering or candidate
+limits prevent an exact count.
+`excluded_combined` gives a retry with the remaining
+include flags for matches beyond the individual class hints. Failed diagnostic
+searches add no hint.
+
 `session search` supports substring (default), `--regex`, `--fts`, `--semantic`,
-and `--hybrid` modes. Repeatable `--exclude-session <id>` drops matches from
-those sessions before `--limit`. Semantic and hybrid results can be scoped with
-`--scope top|all|subordinate` (default `all`) to include or exclude sidechain
-and subagent content — see
-[Semantic Search](/docs/semantic-search/#scoping-results-scope). The
-human-readable table includes an `AGE` column derived from each match's
+and `--hybrid` modes. On SQLite, PostgreSQL, and ClickHouse, a default search of several words lists matches
+of the exact text first, from every selected source. Messages holding every
+word follow, then messages holding fewer of the words; `matched_words` in JSON
+counts them, excluding unquoted stop words. Regular word forms match, so
+`invoice` also finds `invoices`.
+A single word, a fully quoted query such as `'"rounding of invoices"'`, and a
+search whose `--in` leaves out `messages` match the exact text only. A quoted
+phrase inside a longer query requires its words together and in order. `--fts`
+and hybrid's keyword matches rank messages by words the same way; hybrid
+keyword matches report their word count. An `--fts` query made only of
+quoted phrases, or one that uses FTS5 operators after a leading quote, such as
+`'"fix" OR "missing"'`, keeps its FTS5 meaning. Repeatable `--exclude-session <id>` drops matches from
+those sessions before `--limit`. Hybrid returns keyword matches with a note
+while the embedding index is unavailable. Semantic and hybrid
+results can be scoped with `--scope top|all|subordinate` (default `all`) to include or exclude sidechain and subagent content — see
+[Semantic Search](/docs/semantic-search/#scoping-results-scope). HTTP and MCP
+also accept `scope` for substring and regex searches. CLI lexical searches use
+`--include-children` instead. The human-readable table includes an `AGE` column derived from each match's
 timestamp, so recent evidence is visible without opening the session. Matches
 without a usable timestamp show `—`.
 
@@ -1867,10 +2288,18 @@ exceptions: they stream raw bytes and NDJSON respectively, so they reject
 `AGENTSVIEW_SERVER_TOKEN` or `--server-token-file <path>` when that daemon
 requires auth, or `--pg` to read from configured PostgreSQL.
 
-`agentsview session list` excludes one-shot and automated sessions by default.
-When that hides matching sessions on the first page, it reports the counts and
-the corresponding `--include-one-shot` or `--include-automated` flags on stderr.
-Stdout, including `--format json`, keeps its existing shape for pipelines.
+`agentsview session list` excludes one-shot, automated, and child sessions by
+default. When that hides matching sessions on the first page, it reports the
+counts and the corresponding `--include-one-shot`, `--include-automated`, or
+`--include-children` flags on stderr, including when the list has visible results.
+Child counts include sessions hidden by several defaults; the notice lists
+every remaining include flag to use together. Child counts use one bounded page;
+a positive count from a partial page says `at least N`. Stdout, including
+`--format json`, keeps its existing shape for pipelines.
+
+An older daemon can return sessions without exclusion counts. The CLI lists
+those sessions and omits the exclusion notice. Cursor pages and lists with all
+three `--include-*` flags also omit the notice.
 
 `AGENTSVIEW_PG_URL`, a legacy `[pg].url`, or the effective default target from
 `default_pg` plus `[pg.NAME]` are sync configuration only; they do not change
@@ -1879,7 +2308,7 @@ in which case they fail fast if no connection URL is available. Mutating
 commands such as `session sync` and local-only raw source export continue to use
 the local archive.
 
-Use [`agentsview health`](#agentsview-health) for a human-first signal view and
+Use [`agentsview session health`](#agentsview-health) for a human-first signal view and
 [Session API](/docs/session-api/) for the full programmatic contract, including
 daemon-first transport behavior and markdown export details.
 
@@ -1891,17 +2320,19 @@ alias to show sessions active in the last 15 minutes; combine either flag with
 
 ______________________________________________________________________
 
-### `agentsview embeddings`
+<a id="agentsview-embeddings"></a>
 
-Manage the local semantic search embedding index. Requires `[vector]` to be
-enabled in config. See [Semantic Search](/docs/semantic-search/) for full
-documentation, including configuration and the search surface.
+### `agentsview index embeddings`
+
+Manage the local semantic search embedding index. `build` turns search on when
+needed. The other commands require it to be enabled. See
+[Semantic Search](/docs/semantic-search/) for configuration and search details.
 
 ```bash
-agentsview embeddings build           # build or refresh the index
-agentsview embeddings list            # list embedding generations
-agentsview embeddings activate <id>   # activate a generation
-agentsview embeddings retire <id>     # retire a generation
+agentsview index embeddings build           # build or refresh the index
+agentsview index embeddings list            # list embedding generations
+agentsview index embeddings activate <id>   # activate a generation
+agentsview index embeddings retire <id>     # retire a generation
 ```
 
 ______________________________________________________________________
@@ -1914,7 +2345,7 @@ scoring, and trust policy evolve. See [Recall (Experimental)](/docs/recall/) for
 its current guarantees and limitations.
 
 ```bash
-agentsview recall list
+agentsview recall list [--updated-since <timestamp>] [--created-since <timestamp>] [--cursor <cursor>]
 agentsview recall get <id>
 agentsview recall query <text>
 agentsview recall brief <task>
@@ -1927,6 +2358,13 @@ agentsview recall extract doctor
 agentsview recall extract preview --session <id>
 agentsview recall import <accepted-recall.jsonl> --dry-run
 ```
+
+`--updated-since` and `--created-since` take RFC3339 timestamps and include
+the boundary. A bounded list returns the oldest change first and includes
+archived entries. Pass the returned `next_cursor` to `--cursor` for the next
+page. If Recall changes during the walk, restart from the first page with the
+same original time bound(s). See [Recall](/docs/recall/) for following changes over
+time.
 
 Model-backed extraction requires an enabled `[recall.extract]` config section —
 see [Recall](/docs/recall/#automatic-extraction). `preview` replaces the earlier
@@ -1945,6 +2383,20 @@ When `--server <url>` targets an explicit daemon, provide remote credentials
 with `AGENTSVIEW_SERVER_TOKEN` or `--server-token-file <path>`. Recall never
 sends the local daemon token from `config.toml` to an explicitly supplied
 server.
+
+______________________________________________________________________
+
+### `agentsview kata status`
+
+Shows whether the configured Kata instance is reachable, compatible (API
+schema 0.21.0 or newer), authenticated, and has the configured project. With a
+running daemon it reports the daemon's view. When no daemon owns the data
+directory, it probes from the local config without starting one. An
+unreachable owner returns an error. `--format json` prints the status
+object; `--json` is an alias. `--format human` selects the default text output.
+`--server URL` asks an explicit AgentsView daemon; use
+`AGENTSVIEW_SERVER_TOKEN` or `--server-token-file PATH` for its credential. See
+[Kata](/docs/kata/).
 
 ______________________________________________________________________
 
@@ -1987,6 +2439,20 @@ sent to an explicitly supplied server.
 
 ______________________________________________________________________
 
+### `agentsview agent setup`
+
+Install the conversation search skill and focused MCP profile for installed Claude Code and Codex clients:
+
+```bash
+agentsview agent setup [--agent claude|codex]... [--check] [--force] [--print] [--format json]
+```
+
+Setup refuses to replace a different `agentsview` MCP entry without `--force` and preserves other entries. Pass `--force` to replace the entry and overwrite edited skill files. `--check` changes nothing, and `--print` shows the MCP commands to run by hand.
+
+Setup registers `agentsview mcp --profile memory` with no server flags. For a remote archive, set `AGENTSVIEW_MEMORY_SERVER` or `AGENTSVIEW_MEMORY_PG` where the agent starts the MCP server, and point the skill at the same server with [`agentsview skills install --server`](#agentsview-skills).
+
+______________________________________________________________________
+
 ### `agentsview doctor memory`
 
 Inspect the selected conversation-memory target and the local client package:
@@ -2006,15 +2472,13 @@ older remote server reports `unknown` with reason `unsupported`; authentication
 and transport failures remain command errors instead of looking like an empty
 archive.
 
-The client section checks the native package's recall skill, focused MCP
+By default the client section checks installed Claude Code and Codex integrations. It checks the native package's recall skill, focused MCP
 configuration, and SessionStart hook when `--plugin-root`, `PLUGIN_ROOT`, or
 `CLAUDE_PLUGIN_ROOT` identifies the package. It also detects standalone
 AgentsView skills and reports when their baked target differs from the selected
 archive. Human and JSON output omit plugin paths, server URLs, and token values.
 
-Local diagnostics open the archive read-only and do not start a daemon. Every
-mode is metadata-only: the command does not sync transcripts, rebuild vectors,
-probe an embedding provider, or modify client files. `--server`, `--pg`, and
+Local diagnostics open the archive read-only. The client check may start the configured client and MCP process; it calls no data tools and does not start the local archive daemon, sync transcripts, or rebuild vectors. Codex may create its own runtime state. The diagnostic does not probe an embedding provider or modify client configuration. `--server`, `--pg`, and
 the `AGENTSVIEW_MEMORY_SERVER`, `AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, and
 `AGENTSVIEW_MEMORY_PG` environment variables select the same read target used
 by `agentsview mcp --profile memory`.
@@ -2062,6 +2526,32 @@ those files.
 
 ______________________________________________________________________
 
+### `agentsview diagnostics append`
+
+Record a failure outside an agent session for the Friction Log:
+
+```bash
+agentsview diagnostics append --source worker --message "launch failed" [--at RFC3339] [--id UUID] [--server URL] [--json]
+```
+
+The occurrence time defaults to now. Supply `--at` to place a delayed report
+on the day it happened; it can be at most five minutes in the future. The
+zero timestamp `0001-01-01T00:00:00Z` is not accepted. The
+source is limited to 64 characters and the message to 500. The command prints
+its event ID and occurrence time; reuse both with the same source and message
+to retry without counting the event twice. When supplying `--id` without `--at`,
+reusing the ID and content also returns the original event. A local append reaches a PostgreSQL
+hub on the next replica push, including a project-filtered push. An explicit
+`--server` writes to that daemon instead. Read-only servers and `--pg` cannot
+append. Events appear in digests only when Friction review is enabled on the
+archive that builds them.
+
+`POST /api/v1/diagnostics` accepts a required UUID `id`, `source`, `message`,
+and an optional RFC 3339 `occurred_at`. It requires an authenticated server or
+a localhost request. Reusing an ID with different content returns HTTP 409.
+
+______________________________________________________________________
+
 ### `agentsview friction`
 
 Build and read the [Friction Log](/docs/configuration/#friction-log). Review
@@ -2072,6 +2562,9 @@ agentsview friction run [--date YYYY-MM-DD] [--rebuild] [--dry-run] [--format hu
 agentsview friction digest [--date D | --from D --to D] [--format md|json | --json]
 agentsview friction findings [--date D] [--kind K] [--session ID] [--limit N] [--cursor C] [--format table|json | --json]
 agentsview friction patterns [--kind K] [--since D] [--limit N] [--cursor C] [--format table|json | --json]
+agentsview friction file <fingerprint> [--dry-run] [--format human|json | --json]
+agentsview friction link <fingerprint> <issue>
+agentsview friction unlink <fingerprint>
 ```
 
 - `friction run` without flags builds every complete local day that has no
@@ -2082,14 +2575,18 @@ agentsview friction patterns [--kind K] [--since D] [--limit N] [--cursor C] [--
 - `friction digest` prints the latest digest as Markdown unless `--date` or a
   range is given. `--format json` prints the stored summary JSON.
 - `friction findings` lists stored findings. `friction patterns` ranks
-  recurring patterns by occurrences. `--kind` accepts `correction`, `error`,
-  `workaround`, `deferral`, `pattern`, `frustration`, and `interruption`.
+  recurring patterns by occurrences and shows each pattern's Kata issue.
+  `--kind` accepts `correction`, `error`, `workaround`, `deferral`, `pattern`,
+  `frustration`, and `interruption`.
+- `friction file` files a pattern to [Kata](/docs/kata/), or links the issue
+  Kata already holds for it. `friction link` and `friction unlink` set or
+  remove a pattern's issue by hand. Only the AgentsView hub files.
 
 Read commands use the running daemon (starting one when needed), an explicit
 `--server <url>`, or `--pg` for the configured PostgreSQL hub. Provide a
 `--server` token with `AGENTSVIEW_SERVER_TOKEN` or `--server-token-file <path>`.
-`friction run` uses the daemon when one is running and otherwise writes the
-local archive directly.
+`friction run`, `friction file`, `friction link`, and `friction unlink` use the
+daemon when one is running and otherwise write the local archive directly.
 
 ______________________________________________________________________
 
@@ -2127,7 +2624,7 @@ SQLite archive directly. See
 daemon again.
 
 Use `--profile memory` when the client should discover only the
-`get_memory_status`, `search_content`, and `get_messages` conversation-memory
+`get_memory_status`, `search_content`, `get_messages`, and `get_compaction_summaries` conversation-memory
 tools. `get_memory_status` reports archive, lexical, semantic, vector coverage,
 and source-telemetry readiness without running a search probe. The default
 `full` profile preserves the complete MCP tool surface. Profile selection works
@@ -2136,7 +2633,7 @@ with both stdio and StreamableHTTP and does not change backend selection.
 Use `--server <url>` to point at an explicit running daemon. When the daemon
 requires auth, provide `AGENTSVIEW_SERVER_TOKEN` or
 `--server-token-file <path>`. Use `--pg` to read from configured PostgreSQL
-directly, or run [`agentsview pg serve`](/docs/pg-sync/#agentsview-pg-serve) and
+directly, or run [`agentsview replica pg serve`](/docs/pg-sync/#agentsview-pg-serve) and
 pass its URL with `--server`.
 
 | Flag                         | Default | Description                                         |
@@ -2218,7 +2715,8 @@ hash: install updates safe generated files, refuses hand-edited or foreign files
 unless `--force` is passed, continues processing the other artifacts, and exits
 non-zero if anything was refused. `list` reports HARNESS, ARTIFACT, LEVEL, STATE
 (`missing`, `current`, `stale`, `modified`, `foreign`), and PATH for every
-artifact.
+artifact. When local semantic search is off, a successful install shows how to
+turn it on.
 
 `--server` / `--server-token-file` (or `AGENTSVIEW_SKILLS_SERVER` /
 `AGENTSVIEW_SKILLS_SERVER_TOKEN_FILE`) bake those flags into every example
@@ -2238,6 +2736,56 @@ still needs `--server` unless the baked examples supply it.
 
 ______________________________________________________________________
 
+### `agentsview completion`
+
+Generate a completion script for Bash, Fish, PowerShell, or Zsh. The command
+writes the script to standard output; it does not modify shell startup files.
+Pass `--no-descriptions` after the shell name to omit command descriptions.
+
+Load completion for the current shell session:
+
+=== "Bash"
+
+    ```bash
+    source <(agentsview completion bash)
+    ```
+
+=== "Fish"
+
+    ```fish
+    agentsview completion fish | source
+    ```
+
+=== "PowerShell"
+
+    ```powershell
+    agentsview completion powershell | Out-String | Invoke-Expression
+    ```
+
+=== "Zsh"
+
+    ```zsh
+    source <(agentsview completion zsh)
+    ```
+
+For persistent completion, install the generated script in the location for the
+shell:
+
+- Bash requires the `bash-completion` package. Write the script to
+  `/etc/bash_completion.d/agentsview` on Linux or
+  `$(brew --prefix)/etc/bash_completion.d/agentsview` on macOS.
+- Fish loads `~/.config/fish/completions/agentsview.fish` automatically.
+- Zsh requires completion to be enabled with `compinit`. Write the script to
+  `${fpath[1]}/_agentsview` on Linux or
+  `$(brew --prefix)/share/zsh/site-functions/_agentsview` on macOS.
+- PowerShell users can add the current-session command above to their profile.
+
+Run `agentsview completion <shell> --help` for the exact installation command
+and shell-specific prerequisites. Start a new shell after installing a generated
+script.
+
+______________________________________________________________________
+
 ### `agentsview help`
 
 Print usage information.
@@ -2248,117 +2796,115 @@ agentsview help
 
 ## Environment Variables
 
-| Variable                              | Default                                              | Description                                                                                         |
-| ------------------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `AIDER_DIR`                           | unset                                                | Aider discovery root; set this to opt into scanning a code root                                     |
-| `AMP_DIR`                             | `~/.local/share/amp/threads`                         | Deprecated; historical local Amp thread JSON files only                                             |
-| `ANTIGRAVITY_DIR`                     | `~/.gemini/antigravity`, `~/.gemini/antigravity-ide` | Google Antigravity IDE sessions directories                                                         |
-| `ANTIGRAVITY_CLI_DIR`                 | `~/.gemini/antigravity-cli`                          | Google Antigravity CLI sessions directory                                                           |
-| `ANTIGRAVITY_KEY`                     |                                                      | Optional key for decrypting Antigravity CLI `.pb` transcripts (defaults to summary mode without it) |
-| `AUGURE_CODE_SESSIONS_DIR`            | `~/.augure/sessions`                                 | Augure Code sessions directory                                                                      |
-| `AUGURE_DESKTOP_DIR`                  | (platform-specific)                                  | Augure Desktop data root containing `state.db` and `sessions/`                                      |
-| `CLAUDE_PROJECTS_DIR`                 | `~/.claude/projects`                                 | Claude Code projects directory                                                                      |
-| `CLAUDE_CONFIG_DIR`                   | unset                                                | Claude Code config home that re-roots the default `projects/` discovery path                        |
-| `OPENCLAUDE_PROJECTS_DIR`             | `~/.openclaude/projects`                             | OpenClaude projects directory                                                                       |
-| `OPENCLAUDE_CONFIG_DIR`               | unset                                                | OpenClaude config home that re-roots the default `projects/` discovery path                         |
-| `COWORK_DIR`                          | (platform-specific)                                  | Claude Desktop cowork sessions directory                                                            |
-| `CODEX_SESSIONS_DIR`                  | `~/.codex/sessions`                                  | Codex sessions directory                                                                            |
-| `CODEX_HOME`                          | unset                                                | Codex home that re-roots the default `sessions/` and `archived_sessions/` discovery paths           |
-| `CLINE_DIR`                           | `~/.cline`                                           | Cline CLI sessions directory (discovers under `<root>/data/sessions/` or direct sessions root)      |
-| `CODEBUFF_DIR`                        | `~/.config/manicode/projects`                        | Codebuff/Freebuff sessions directory                                                                |
-| `COMMANDCODE_PROJECTS_DIR`            | `~/.commandcode/projects`                            | Command Code projects directory                                                                     |
-| `COPILOT_DIR`                         | `~/.copilot`                                         | Copilot CLI sessions directory                                                                      |
-| `CRUSH_DIR`                           | (platform-specific)                                  | Crush registry, project data directory, or `crush.db` path                                          |
-| `CRUSH_GLOBAL_DATA`                   | unset                                                | Absolute path overriding the default Crush global data directory                                   |
-| `CORTEX_DIR`                          | `~/.snowflake/cortex/conversations`                  | Cortex Code conversations directory                                                                 |
-| `CURSOR_PROJECTS_DIR`                 | `~/.cursor/projects`                                 | Cursor transcripts directory                                                                        |
-| `DEEPSEEK_TUI_SESSIONS_DIR`           | `~/.codewhale/sessions` and `~/.deepseek/sessions`   | DeepSeek TUI sessions directory                                                                     |
-| `DEEPSEEK_HARNESS_SESSIONS_DIR`       | `~/.dsh/sessions`                                    | DeepSeek Harness sessions directory                                                                 |
-| `DSH_HOME`                            | unset                                                | DeepSeek Harness home that re-roots the default `sessions/` discovery path                          |
-| `FORGE_DIR`                           | `~/.forge`                                           | Forge directory (contains `.forge.db`)                                                              |
-| `FREEBUFF_CONFIG_DIR`                 | unset                                                | Freebuff config home that re-roots the default `projects/` discovery path                           |
-| `GEMINI_DIR`                          | `~/.gemini`                                          | Gemini CLI directory                                                                                |
-| `GOOSE_PATH_ROOT`                     | (platform-specific)                                  | Goose path root; sessions are read from `<root>/data/sessions/sessions.db`                          |
-| `GPTME_DIR`                           | `~/.local/share/gptme/logs`                          | gptme logs directory                                                                                |
-| `GROK_DIR`                            | `~/.grok/sessions`                                   | Grok sessions directory                                                                             |
-| `HERMES_SESSIONS_DIR`                 | `~/.hermes/sessions` (macOS/Linux), `~/AppData/Local/hermes/sessions` (Windows) | Hermes Agent sessions root; sibling SQLite `state.db` is discovered even when `sessions/` is absent |
-| `IFLOW_DIR`                           | `~/.iflow/projects`                                  | iFlow projects directory                                                                            |
-| `FX_SESSIONS_DIR`                     | `~/.fx/sessions`                                     | fx sessions directory                                                                               |
-| `JUNIE_DIR`                           | `~/.junie/sessions`                                  | Junie CLI session store directory                                                                   |
-| `JUNIE_HOME`                          | `~/.junie`                                           | Junie home that re-roots the default `sessions/` discovery path                                     |
-| `KILO_DIR`                            | `~/.local/share/kilo`                                | Kilo data directory                                                                                 |
-| `KILO_LEGACY_DIR`                     | (platform-specific)                                  | Kilo legacy VS Code extension data directory                                                        |
-| `KIMI_DIR`                            | `~/.kimi/sessions` and `~/.kimi-code/sessions`       | Kimi sessions directory                                                                             |
-| `KIMI_WORK_DIR`                       | (platform-specific)                                  | Kimi Work (kimi-desktop daimon) sessions directory                                                  |
-| `KIRO_SESSIONS_DIR`                   | `~/.kiro/sessions/cli` and `~/.local/share/kiro-cli` | Kiro CLI sessions directory (JSONL and SQLite)                                                      |
-| `KIRO_IDE_DIR`                        | (platform-specific)                                  | Kiro IDE sessions directory                                                                         |
-| `MIMOCODE_DIR`                        | `~/.local/share/mimocode`                            | MiMoCode data directory                                                                             |
-| `MUSE_SESSIONS_DIR`                   | `~/.local/share/muse/sessions`                       | Muse Code sessions directory; defaults to `$XDG_DATA_HOME/muse/sessions` when set                   |
-| `VIBE_SESSIONS_DIR`                   | `~/.vibe/logs/session`                               | Mistral Vibe sessions directory                                                                     |
-| `OMP_DIR`                             | `~/.omp/agent/sessions`                              | OhMyPi sessions directory                                                                           |
-| `OPENCLAW_DIR`                        | `~/.openclaw/agents` and `~/.kimi_openclaw/agents`   | OpenClaw agents directory                                                                           |
-| `OPENCODE_DIR`                        | `~/.local/share/opencode`                            | OpenCode data directory                                                                             |
-| `OPENCODEREVIEW_DIR`                  | `~/.opencodereview/sessions`                         | Open Code Review sessions directory                                                                 |
-| `OPENHANDS_CONVERSATIONS_DIR`         | `~/.openhands/conversations`                         | OpenHands CLI conversations directory                                                               |
-| `PI_DIR`                              | `~/.pi/agent/sessions`                               | Pi sessions directory                                                                               |
-| `PI_CODING_AGENT_DIR`                 | unset                                                | Pi agent home that re-roots the default `sessions/` discovery path                                  |
-| `PI_CODING_AGENT_SESSION_DIR`         | unset                                                | Pi session directory override; `PI_DIR` takes precedence                                            |
-| `STEPCODE_DIR`                        | `~/.stepcode/agent/sessions`                         | StepCode sessions directory                                                                         |
-| `STEP_CODING_AGENT_DIR`               | unset                                                | StepCode agent home that re-roots the default `sessions/` discovery path                            |
-| `STEP_CODING_AGENT_SESSION_DIR`       | unset                                                | StepCode session directory override; `STEPCODE_DIR` takes precedence                                |
-| `PRIME_AGENT_SESSION_DIR`             | `~/.prime/agent/sessions`                            | Prime Agent sessions directory                                                                      |
-| `PIEBALD_DIR`                         | `~/.local/share/piebald`                             | Piebald directory (contains `app.db`)                                                               |
-| `POOLSIDE_DIR`                        | (platform-specific)                                  | Poolside Agent CLI trajectory directory                                                             |
-| `POSIT_ASSISTANT_DIR`                 | `~/.posit/assistant/workspaces`                      | Posit Assistant workspaces directory                                                                |
-| `POSITRON_DIR`                        | (platform-specific)                                  | Positron Assistant user directory                                                                   |
-| `QCLAW_DIR`                           | `~/.qclaw/agents`                                    | QClaw agents directory                                                                              |
-| `QODER_PROJECTS_DIR`                  | Legacy and platform-specific roots                   | Qoder projects directory; see [Session Discovery](/docs/configuration/#session-discovery)           |
-| `QWEN_PROJECTS_DIR`                   | `~/.qwen/projects`                                   | Qwen Code projects directory                                                                        |
-| `QWENPAW_DIR`                         | `~/.copaw/workspaces`                                | QwenPaw workspaces directory                                                                        |
-| `REASONIX_DIR`                        | `~/.reasonix` and `~/AppData/Roaming/reasonix`       | Reasonix data directory                                                                             |
-| `ROOCODE_DIR`                         | (platform-specific)                                  | RooCode VS Code extension data directory                                                            |
-| `SHELLEY_DIR`                         | `~/.config/shelley`                                  | Shelley data directory                                                                              |
-| `TRAE_DIR`                            | (platform-specific)                                  | Trae editor user-data directory                                                                     |
-| `VISUALSTUDIO_COPILOT_DIR`            | (platform-specific)                                  | Visual Studio Copilot traces directory                                                              |
-| `VSCODE_COPILOT_DIR`                  | (platform-specific)                                  | VS Code Copilot sessions directory                                                                  |
-| `WINDSURF_DIR`                        | (platform-specific)                                  | Windsurf user-data directory                                                                        |
-| `WARP_DIR`                            | (platform-specific)                                  | Warp database directory                                                                             |
-| `WORKBUDDY_PROJECTS_DIR`              | `~/.workbuddy/projects`                              | WorkBuddy projects directory                                                                        |
-| `CODEBUDDY_DIR`                       | (platform-specific)                                  | Tencent CodeBuddy CN data directory                                                                 |
-| `ZCODE_DIR`                           | `~/.zcode/cli/db` and `~/.zcode/cli`                 | ZCode data directory (contains `db.sqlite`)                                                         |
-| `ZED_DIR`                             | (platform-specific)                                  | Zed data directory (contains `threads/threads.db`)                                                  |
-| `ZENCODER_DIR`                        | `~/.zencoder/sessions`                               | Zencoder sessions directory                                                                         |
-| `AGENTSVIEW_DATA_DIR`                 | `~/.agentsview`                                      | Data directory (database, config)                                                                   |
-| `AGENTSVIEW_AUTH_TOKEN`               |                                                      | Bearer token for `require_auth`; overrides `auth_token` in `config.toml`                            |
-| `AGENTSVIEW_MODE`                     |                                                      | `serve` or `pg-serve`; turns on the [container deployment](/docs/configuration/#container-deployment) variables |
-| `AGENTSVIEW_HOST`                     |                                                      | Listener address under `AGENTSVIEW_MODE`; non-loopback needs authentication                         |
-| `AGENTSVIEW_REQUIRE_AUTH`             |                                                      | Require bearer authentication under `AGENTSVIEW_MODE`                                               |
-| `AGENTSVIEW_NO_BROWSER`               |                                                      | Do not open a browser under `AGENTSVIEW_MODE`                                                       |
-| `AGENTSVIEW_AUTH_TOKEN_FILE`          |                                                      | Bearer token file under `AGENTSVIEW_MODE`; overrides `auth_token` in `config.toml`                  |
-| `AGENTSVIEW_SKILLS_SERVER`            |                                                      | Remote daemon URL baked into `skills install` examples; not a default for `session` commands        |
-| `AGENTSVIEW_SKILLS_SERVER_TOKEN_FILE` |                                                      | Token file path baked into `skills install` examples with `AGENTSVIEW_SKILLS_SERVER`                |
-| `AGENTSVIEW_PG_URL`                   |                                                      | PostgreSQL connection URL                                                                           |
-| `AGENTSVIEW_PG_MACHINE`               |                                                      | Machine name for PG push sync                                                                       |
-| `AGENTSVIEW_PG_SCHEMA`                | `agentsview`                                         | PostgreSQL schema name                                                                              |
-| `AGENTSVIEW_PG_ALLOW_INSECURE`        |                                                      | Allow a plaintext default PostgreSQL target under `AGENTSVIEW_MODE`                                 |
-| `AGENTSVIEW_EMBEDDINGS_ENDPOINT`      |                                                      | Embeddings endpoint for adopting a recipe published to PostgreSQL, under `AGENTSVIEW_MODE`          |
-| `AGENTSVIEW_EMBEDDINGS_API_KEY`       |                                                      | Inline API key for `AGENTSVIEW_EMBEDDINGS_ENDPOINT`; cannot be combined with the file form          |
-| `AGENTSVIEW_EMBEDDINGS_API_KEY_FILE`  |                                                      | API key file for `AGENTSVIEW_EMBEDDINGS_ENDPOINT`                                                   |
-| `AGENTSVIEW_EMBEDDINGS_BATCH_SIZE`    | `32`                                                 | Positive number of inputs per embeddings request when adopting a published PostgreSQL recipe       |
-| `AGENTSVIEW_DUCKDB_PATH`              | `~/.agentsview/sessions.duckdb`                      | DuckDB mirror file path                                                                             |
-| `AGENTSVIEW_DUCKDB_URL`               |                                                      | Remote Quack endpoint URL for `duckdb status` and `duckdb serve` (read side only)                   |
-| `AGENTSVIEW_DUCKDB_TOKEN`             |                                                      | Quack authentication token                                                                          |
-| `AGENTSVIEW_DUCKDB_MACHINE`           |                                                      | Machine name for DuckDB push                                                                        |
-| `AGENTSVIEW_CLICKHOUSE_URL`           |                                                      | ClickHouse connection URL for the default target                                                    |
-| `AGENTSVIEW_CLICKHOUSE_DATABASE`      | `agentsview`                                         | ClickHouse database name for the default target                                                     |
-| `AGENTSVIEW_CLICKHOUSE_MACHINE`       |                                                      | Machine name for ClickHouse push                                                                    |
-| `AGENTSVIEW_GITHUB_TOKEN`             |                                                      | GitHub token used for local Gist publishing fallback and `agentsview stats` PR aggregation          |
-| `AGENTSVIEW_DISABLE_UPDATE_CHECK`     |                                                      | Set to `1` to disable the update check                                                              |
-| `AGENTSVIEW_ARCHIVE_CONTENT`          | `full`                                               | Archive storage policy when `config.toml` sets none: `full`, `transcripts`, or `usage`              |
-| `AGENTSVIEW_NO_DAEMON`                |                                                      | Set to `1`, `true`, `yes`, or `on` to disable CLI daemon auto-start                                 |
-| `AGENTSVIEW_DAEMON_IDLE_TIMEOUT`      | `20m`                                                | Override idle self-shutdown duration for detached background daemons                                |
-| `AGENTSVIEW_TELEMETRY_ENABLED`        |                                                      | Set to `0` to disable [anonymous daemon telemetry](/docs/configuration/#anonymous-daemon-telemetry) |
-| `DO_NOT_TRACK`                        |                                                      | Set to `1` to disable telemetry                                                                     |
+| Variable                              | Default                                                                         | Description                                                                                                     |
+| ------------------------------------- | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `AIDER_DIR`                           | unset                                                                           | Aider discovery root; set this to opt into scanning a code root                                                 |
+| `AMP_DIR`                             | `~/.local/share/amp/threads`                                                    | Deprecated; historical local Amp thread JSON files only                                                         |
+| `ANTIGRAVITY_DIR`                     | `~/.gemini/antigravity`, `~/.gemini/antigravity-ide`                            | Google Antigravity IDE sessions directories                                                                     |
+| `ANTIGRAVITY_CLI_DIR`                 | `~/.gemini/antigravity-cli`                                                     | Google Antigravity CLI sessions directory                                                                       |
+| `ANTIGRAVITY_KEY`                     |                                                                                 | Optional key for decrypting Antigravity CLI `.pb` transcripts (defaults to summary mode without it)             |
+| `AUGURE_CODE_SESSIONS_DIR`            | `~/.augure/sessions`                                                            | Augure Code sessions directory                                                                                  |
+| `AUGURE_DESKTOP_DIR`                  | (platform-specific)                                                             | Augure Desktop data root containing `state.db` and `sessions/`                                                  |
+| `CLAUDE_PROJECTS_DIR`                 | `~/.claude/projects`                                                            | Claude Code projects directory                                                                                  |
+| `CLAUDE_CONFIG_DIR`                   | unset                                                                           | Claude Code config home that re-roots the default `projects/` discovery path                                    |
+| `OPENCLAUDE_PROJECTS_DIR`             | `~/.openclaude/projects`                                                        | OpenClaude projects directory                                                                                   |
+| `OPENCLAUDE_CONFIG_DIR`               | unset                                                                           | OpenClaude config home that re-roots the default `projects/` discovery path                                     |
+| `COWORK_DIR`                          | (platform-specific)                                                             | Claude Desktop cowork sessions directory                                                                        |
+| `CODEX_SESSIONS_DIR`                  | `~/.codex/sessions`                                                             | Codex sessions directory                                                                                        |
+| `CODEX_HOME`                          | unset                                                                           | Codex home that re-roots the default `sessions/` and `archived_sessions/` discovery paths                       |
+| `INTERPRETER_HOME`                    | unset                                                                           | Open Interpreter home that re-roots the default `sessions/` and `archived_sessions/` paths                      |
+| `CLINE_DIR`                           | `~/.cline`                                                                      | Cline CLI sessions directory (discovers under `<root>/data/sessions/` or direct sessions root)                  |
+| `CODEBUFF_DIR`                        | `~/.config/manicode/projects`                                                   | Codebuff/Freebuff sessions directory                                                                            |
+| `COMMANDCODE_PROJECTS_DIR`            | `~/.commandcode/projects`                                                       | Command Code projects directory                                                                                 |
+| `COPILOT_DIR`                         | `~/.copilot`                                                                    | Copilot CLI sessions directory                                                                                  |
+| `CRUSH_DIR`                           | (platform-specific)                                                             | Crush registry, project data directory, or `crush.db` path                                                      |
+| `CRUSH_GLOBAL_DATA`                   | unset                                                                           | Absolute path overriding the default Crush global data directory                                                |
+| `CORTEX_DIR`                          | `~/.snowflake/cortex/conversations`                                             | Cortex Code conversations directory                                                                             |
+| `CURSOR_PROJECTS_DIR`                 | `~/.cursor/projects`                                                            | Cursor transcripts directory                                                                                    |
+| `DEEPSEEK_TUI_SESSIONS_DIR`           | `~/.codewhale/sessions` and `~/.deepseek/sessions`                              | DeepSeek TUI sessions directory                                                                                 |
+| `DEEPSEEK_HARNESS_SESSIONS_DIR`       | `~/.dsh/sessions`                                                               | DeepSeek Harness sessions directory                                                                             |
+| `DSH_HOME`                            | unset                                                                           | DeepSeek Harness home that re-roots the default `sessions/` discovery path                                      |
+| `FORGE_DIR`                           | `~/.forge`                                                                      | Forge directory (contains `.forge.db`)                                                                          |
+| `FREEBUFF_CONFIG_DIR`                 | unset                                                                           | Freebuff config home that re-roots the default `projects/` discovery path                                       |
+| `GEMINI_DIR`                          | `~/.gemini`                                                                     | Gemini CLI directory                                                                                            |
+| `GOOSE_PATH_ROOT`                     | (platform-specific)                                                             | Goose path root; sessions are read from `<root>/data/sessions/sessions.db`                                      |
+| `GPTME_DIR`                           | `~/.local/share/gptme/logs`                                                     | gptme logs directory                                                                                            |
+| `GROK_DIR`                            | `~/.grok/sessions`                                                              | Grok sessions directory                                                                                         |
+| `HERMES_SESSIONS_DIR`                 | `~/.hermes/sessions` (macOS/Linux), `~/AppData/Local/hermes/sessions` (Windows) | Hermes Agent sessions root; sibling SQLite `state.db` is discovered even when `sessions/` is absent             |
+| `IFLOW_DIR`                           | `~/.iflow/projects`                                                             | iFlow projects directory                                                                                        |
+| `FX_SESSIONS_DIR`                     | `~/.fx/sessions`                                                                | fx sessions directory                                                                                           |
+| `JUNIE_DIR`                           | `~/.junie/sessions`                                                             | Junie CLI session store directory                                                                               |
+| `JUNIE_HOME`                          | `~/.junie`                                                                      | Junie home that re-roots the default `sessions/` discovery path                                                 |
+| `KILO_DIR`                            | `~/.local/share/kilo`                                                           | Kilo data directory                                                                                             |
+| `KILO_LEGACY_DIR`                     | (platform-specific)                                                             | Kilo legacy VS Code extension data directory                                                                    |
+| `KIMI_DIR`                            | `~/.kimi/sessions` and `~/.kimi-code/sessions`                                  | Kimi sessions directory                                                                                         |
+| `KIMI_WORK_DIR`                       | (platform-specific)                                                             | Kimi Work (kimi-desktop daimon) sessions directory                                                              |
+| `KIRO_SESSIONS_DIR`                   | `~/.kiro/sessions/cli` and `~/.local/share/kiro-cli`                            | Kiro CLI sessions directory (JSONL and SQLite)                                                                  |
+| `KIRO_IDE_DIR`                        | (platform-specific)                                                             | Kiro IDE sessions directory                                                                                     |
+| `MIMOCODE_DIR`                        | `~/.local/share/mimocode`                                                       | MiMoCode data directory                                                                                         |
+| `MUSE_SESSIONS_DIR`                   | `~/.local/share/muse/sessions`                                                  | Muse Code sessions directory; defaults to `$XDG_DATA_HOME/muse/sessions` when set                               |
+| `MUSE_PERSONAL_AGENTS_DIR`            | `~/agents`                                                                      | Muse Personal agents directory; scans `agent-<uuid>/sessions/` beneath it                                       |
+| `VIBE_SESSIONS_DIR`                   | `~/.vibe/logs/session`                                                          | Mistral Vibe sessions directory                                                                                 |
+| `OMP_DIR`                             | `~/.omp/agent/sessions`                                                         | OhMyPi sessions directory                                                                                       |
+| `OPENCLAW_DIR`                        | `~/.openclaw/agents` and `~/.kimi_openclaw/agents`                              | OpenClaw agents directory                                                                                       |
+| `OPENCODE_DIR`                        | `~/.local/share/opencode`                                                       | OpenCode data directory                                                                                         |
+| `OPENCODEREVIEW_DIR`                  | `~/.opencodereview/sessions`                                                    | Open Code Review sessions directory                                                                             |
+| `OPEN_INTERPRETER_SESSIONS_DIR`       | `~/.openinterpreter/sessions` and `archived_sessions`                           | Open Interpreter sessions directory                                                                             |
+| `OPENHANDS_CONVERSATIONS_DIR`         | `~/.openhands/conversations`                                                    | OpenHands CLI conversations directory                                                                           |
+| `PI_DIR`                              | `~/.pi/agent/sessions`                                                          | Pi sessions directory                                                                                           |
+| `PI_CODING_AGENT_DIR`                 | unset                                                                           | Pi agent home that re-roots the default `sessions/` discovery path                                              |
+| `PI_CODING_AGENT_SESSION_DIR`         | unset                                                                           | Pi session directory override; `PI_DIR` takes precedence                                                        |
+| `DIRECT_API_DIR`                      | `~/.agentsview/direct-api`                                                      | Direct API sessions directory                                                                                   |
+| `STEPCODE_DIR`                        | `~/.stepcode/agent/sessions`                                                    | StepCode sessions directory                                                                                     |
+| `STEP_CODING_AGENT_DIR`               | unset                                                                           | StepCode agent home that re-roots the default `sessions/` discovery path                                        |
+| `STEP_CODING_AGENT_SESSION_DIR`       | unset                                                                           | StepCode session directory override; `STEPCODE_DIR` takes precedence                                            |
+| `PRIME_AGENT_SESSION_DIR`             | `~/.prime/agent/sessions`                                                       | Prime Agent sessions directory                                                                                  |
+| `PIEBALD_DIR`                         | `~/.local/share/piebald`                                                        | Piebald directory (contains `app.db`)                                                                           |
+| `POOLSIDE_DIR`                        | (platform-specific)                                                             | Poolside Agent CLI trajectory directory                                                                         |
+| `POSIT_ASSISTANT_DIR`                 | `~/.posit/assistant/workspaces`                                                 | Posit Assistant workspaces directory                                                                            |
+| `POSITRON_DIR`                        | (platform-specific)                                                             | Positron Assistant user directory                                                                               |
+| `QCLAW_DIR`                           | `~/.qclaw/agents`                                                               | QClaw agents directory                                                                                          |
+| `QODER_PROJECTS_DIR`                  | Legacy and platform-specific roots                                              | Qoder projects directory; see [Session Discovery](/docs/configuration/#session-discovery)                       |
+| `QWEN_PROJECTS_DIR`                   | `~/.qwen/projects`                                                              | Qwen Code projects directory                                                                                    |
+| `QWENPAW_DIR`                         | `~/.copaw/workspaces`                                                           | QwenPaw workspaces directory                                                                                    |
+| `REASONIX_DIR`                        | `~/.reasonix` and `~/AppData/Roaming/reasonix`                                  | Reasonix data directory                                                                                         |
+| `ROOCODE_DIR`                         | (platform-specific)                                                             | RooCode VS Code extension data directory                                                                        |
+| `SHELLEY_DIR`                         | `~/.config/shelley`                                                             | Shelley data directory                                                                                          |
+| `TRAE_DIR`                            | (platform-specific)                                                             | Trae editor user-data directory                                                                                 |
+| `VISUALSTUDIO_COPILOT_DIR`            | (platform-specific)                                                             | Visual Studio Copilot traces directory                                                                          |
+| `VSCODE_COPILOT_DIR`                  | (platform-specific)                                                             | VS Code Copilot sessions directory                                                                              |
+| `WINDSURF_DIR`                        | (platform-specific)                                                             | Windsurf user-data directory                                                                                    |
+| `WARP_DIR`                            | (platform-specific)                                                             | Warp database directory                                                                                         |
+| `WORKBUDDY_PROJECTS_DIR`              | `~/.workbuddy/projects`                                                         | WorkBuddy projects directory                                                                                    |
+| `CODEBUDDY_DIR`                       | (platform-specific)                                                             | Tencent CodeBuddy CN data directory                                                                             |
+| `ZCODE_DIR`                           | `~/.zcode/cli/db` and `~/.zcode/cli`                                            | ZCode data directory (contains `db.sqlite`)                                                                     |
+| `ZED_DIR`                             | (platform-specific)                                                             | Zed data directory (contains `threads/threads.db`)                                                              |
+| `ZENCODER_DIR`                        | `~/.zencoder/sessions`                                                          | Zencoder sessions directory                                                                                     |
+| `AGENTSVIEW_DATA_DIR`                 | `~/.agentsview`                                                                 | Data directory (database, config)                                                                               |
+| `AGENTSVIEW_AUTH_TOKEN`               |                                                                                 | Bearer token for `require_auth`; overrides `auth_token` in `config.toml`                                        |
+| `AGENTSVIEW_MODE`                     |                                                                                 | `serve` or `pg-serve`; turns on the [container deployment](/docs/configuration/#container-deployment) variables |
+| `AGENTSVIEW_HOST`                     |                                                                                 | Listener address under `AGENTSVIEW_MODE`; non-loopback needs authentication                                     |
+| `AGENTSVIEW_REQUIRE_AUTH`             |                                                                                 | Require bearer authentication under `AGENTSVIEW_MODE`                                                           |
+| `AGENTSVIEW_NO_BROWSER`               |                                                                                 | Do not open a browser under `AGENTSVIEW_MODE`                                                                   |
+| `AGENTSVIEW_AUTH_TOKEN_FILE`          |                                                                                 | Bearer token file under `AGENTSVIEW_MODE`; overrides `auth_token` in `config.toml`                              |
+| `AGENTSVIEW_SKILLS_SERVER`            |                                                                                 | Remote daemon URL baked into `skills install` examples; not a default for `session` commands                    |
+| `AGENTSVIEW_SKILLS_SERVER_TOKEN_FILE` |                                                                                 | Token file path baked into `skills install` examples with `AGENTSVIEW_SKILLS_SERVER`                            |
+| `AGENTSVIEW_PG_URL`                   |                                                                                 | PostgreSQL connection URL                                                                                       |
+| `AGENTSVIEW_PG_MACHINE`               |                                                                                 | Machine name for PG push sync                                                                                   |
+| `AGENTSVIEW_PG_SCHEMA`                | `agentsview`                                                                    | PostgreSQL schema name                                                                                          |
+| `AGENTSVIEW_PG_ALLOW_INSECURE`        |                                                                                 | Allow a plaintext default PostgreSQL target under `AGENTSVIEW_MODE`                                             |
+| `AGENTSVIEW_EMBEDDINGS_ENDPOINT`      |                                                                                 | Embeddings endpoint for adopting a recipe published to PostgreSQL, under `AGENTSVIEW_MODE`                      |
+| `AGENTSVIEW_EMBEDDINGS_API_KEY`       |                                                                                 | Inline API key for `AGENTSVIEW_EMBEDDINGS_ENDPOINT`; cannot be combined with the file form                      |
+| `AGENTSVIEW_EMBEDDINGS_API_KEY_FILE`  |                                                                                 | API key file for `AGENTSVIEW_EMBEDDINGS_ENDPOINT`                                                               |
+| `AGENTSVIEW_EMBEDDINGS_BATCH_SIZE`    | `32`                                                                            | Positive number of inputs per embeddings request when adopting a published PostgreSQL recipe                    |
+| `AGENTSVIEW_CLICKHOUSE_URL`           |                                                                                 | ClickHouse connection URL for the default target                                                                |
+| `AGENTSVIEW_CLICKHOUSE_DATABASE`      | `agentsview`                                                                    | ClickHouse database name for the default target                                                                 |
+| `AGENTSVIEW_CLICKHOUSE_MACHINE`       |                                                                                 | Machine name for ClickHouse push                                                                                |
+| `AGENTSVIEW_GITHUB_TOKEN`             |                                                                                 | GitHub token used for local Gist publishing fallback and `agentsview report stats` PR aggregation               |
+| `AGENTSVIEW_DISABLE_UPDATE_CHECK`     |                                                                                 | Set to `1` to disable the update check                                                                          |
+| `AGENTSVIEW_ARCHIVE_CONTENT`          | `full`                                                                          | Archive storage policy when `config.toml` sets none: `full`, `transcripts`, or `usage`                          |
+| `AGENTSVIEW_NO_DAEMON`                |                                                                                 | Set to `1`, `true`, `yes`, or `on` to disable CLI daemon auto-start                                             |
+| `AGENTSVIEW_DAEMON_IDLE_TIMEOUT`      | `20m`                                                                           | Override idle self-shutdown duration for automatically started and `serve --background` daemons                 |
 
 Environment variables override the built-in defaults. Set them in your shell
 profile or pass them inline:
@@ -2366,3 +2912,29 @@ profile or pass them inline:
 ```bash
 AGENTSVIEW_DATA_DIR=/tmp/av-test agentsview serve
 ```
+
+### Search text in images
+
+AgentsView can index text in retained tool-result images with a local GLM-OCR
+service. Enable it in the [configuration](configuration.md#image-text) and
+restart the daemon.
+
+The endpoint must be an `http://` URL on a loopback host, with an explicit port
+and the path `/glmocr/parse`. It defaults to
+`http://127.0.0.1:30004/glmocr/parse` and must serve the
+[Docbank v0.17.0 deployment](https://github.com/kenn-io/docbank/tree/v0.17.0/deploy/glmocr),
+which requires an NVIDIA GB10 host. AgentsView reads PNG, JPEG, and WebP images
+up to 64 MiB stored inline or in the asset directory. Larger images are skipped
+and logged. Indexing starts with the daemon and
+continues in the background, so searches can initially return partial results.
+AgentsView checks for new images every minute. Missing or damaged assets and
+failed extractions retry with backoff. Images in other formats are skipped. Search in
+the web palette or with, for example,
+`agentsview session search 'invoice 42' --in tool_result`. Substring and regex
+`tool_result` searches include image text; other `--in` sources and in-session
+find search only text shown in the transcript. Each new extraction is sent on
+the next incremental push to PostgreSQL and ClickHouse, so `pg serve` and
+`clickhouse serve` return the same matches. Removing the last retained copy of an image removes its extracted text.
+Disabling image text and restarting clears extracted text and removes replica
+matches on the next push. Session and artifact exports carry image references or
+placeholders rather than extracted text.

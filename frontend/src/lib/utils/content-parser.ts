@@ -1,6 +1,7 @@
 import type { DbMessage as Message, DbToolCall as ToolCall } from "../api/generated/index.js";
+import type { BlockType } from "../stores/ui.svelte.js";
 import { LRUCache } from "./cache.js";
-import { isSystemBoundaryMessage } from "./messages.js";
+import { isHookSuccessMessage, isSystemBoundaryMessage } from "./messages.js";
 
 export type SegmentType = "text" | "thinking" | "tool" | "code" | "skill";
 
@@ -530,10 +531,11 @@ export function enrichSegments(
  * `isVisible` is called with a BlockType string -- the component
  * passes `ui.isBlockVisible`, but tests can supply any predicate.
  */
-export function hasVisibleSegments(
-  msg: Message,
-  isVisible: (type: "user" | "assistant" | "thinking" | "tool" | "code" | "system") => boolean,
-): boolean {
+export function hasVisibleSegments(msg: Message, isVisible: (type: BlockType) => boolean): boolean {
+  // Hook output is a card of its own, so the hook toggle owns its
+  // visibility. The generic system toggle and the role toggles must not
+  // hide it, and it must not hide the other boundary cards.
+  if (isHookSuccessMessage(msg)) return isVisible("hook");
   // A boundary card shows a label and a one-line preview, never the parsed
   // segments of its body, so its own block type owns its visibility. Parsing
   // the body here would let an unrelated toggle hide the card, and would tie

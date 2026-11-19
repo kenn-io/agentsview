@@ -18,13 +18,14 @@ import (
 )
 
 func TestServeSessionsMessagesAndSearch(t *testing.T) {
+	t.Parallel()
 	store, _, _ := clickhouse.TestingNewPushedStore(t)
 	cfg := config.Config{Host: "127.0.0.1", DataDir: t.TempDir()}
 	handler := server.New(cfg, store, nil, server.WithVersion(server.VersionInfo{ReadOnly: true})).Handler()
 
 	get := func(path string) *httptest.ResponseRecorder {
 		t.Helper()
-		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:0"+path, nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://127.0.0.1:0"+path, nil)
 		req.RemoteAddr = "127.0.0.1:1234"
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)

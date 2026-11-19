@@ -1,6 +1,7 @@
 package rawderive
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -31,9 +32,9 @@ func TestSandboxGeminiWirePreservesTokenCoverage(t *testing.T) {
 			outcome, err := provider.Parse(t.Context(), parser.ParseRequest{Source: parser.SourceRef{Provider: parser.AgentGemini, DisplayPath: path}})
 			require.NoError(t, err)
 			require.Len(t, outcome.Results, 1)
-			encoded, err := encodeParserOutcome(ParsedManifest{Outcome: outcome})
-			require.NoError(t, err)
-			wire, err := decodeParserOutcome(encoded)
+			var encoded bytes.Buffer
+			require.NoError(t, encodeParserOutcome(&encoded, ParsedManifest{Outcome: outcome}))
+			wire, err := decodeParserOutcome(&encoded)
 			require.NoError(t, err)
 			parsed := wire.Outcome.Results[0].Result
 			candidate, err := ingest.PrepareCandidate(t.Context(), parsed, ingest.ContentOptions{})
@@ -71,9 +72,9 @@ func TestSandboxWirePreservesAuthoritativeAndLegacyPresence(t *testing.T) {
 			}
 			message.RestoreTokenPresenceKnown(tc.known)
 			session.RestoreAggregateTokenPresenceKnown(tc.known)
-			data, err := encodeParserOutcome(ParsedManifest{Outcome: parser.ParseOutcome{Results: []parser.ParseResultOutcome{{Result: parser.ParseResult{Session: session, Messages: []parser.ParsedMessage{message}}}}}})
-			require.NoError(t, err)
-			wire, err := decodeParserOutcome(data)
+			var data bytes.Buffer
+			require.NoError(t, encodeParserOutcome(&data, ParsedManifest{Outcome: parser.ParseOutcome{Results: []parser.ParseResultOutcome{{Result: parser.ParseResult{Session: session, Messages: []parser.ParsedMessage{message}}}}}}))
+			wire, err := decodeParserOutcome(&data)
 			require.NoError(t, err)
 			result := wire.Outcome.Results[0].Result
 			context, output := result.Messages[0].TokenPresence()

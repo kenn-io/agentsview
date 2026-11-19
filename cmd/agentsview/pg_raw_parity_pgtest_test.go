@@ -47,19 +47,28 @@ func requireHostedSandbox(t *testing.T) {
 		t.Skip("kernel isolation unavailable")
 	}
 }
-func startParityRuntime(t *testing.T, policy config.ArchiveContent) (*replicaServeStartup, *postgres.HostedStore, *sql.DB) {
+func startParityRuntime(t *testing.T, policy config.ArchiveContent, configure ...func(*config.Config, *sql.DB)) (*replicaServeStartup, *postgres.HostedStore, *sql.DB) {
+	return startParityRuntimeConfigured(t, policy, true, configure...)
+}
+
+func startParityRuntimeConfigured(t *testing.T, policy config.ArchiveContent, checkSandbox bool, configure ...func(*config.Config, *sql.DB)) (*replicaServeStartup, *postgres.HostedStore, *sql.DB) {
 	t.Helper()
-	requireHostedSandbox(t)
 	cfg, admin := hostedRuntimeConfig(t)
 	cfg.PG.RawDerivation = true
 	cfg.PG.RawPollSeconds = 1
 	cfg.PG.RawMaxAttempts = 2
 	cfg.ArchiveContent = policy
+	for _, fn := range configure {
+		fn(&cfg, admin)
+	}
+	if cfg.PG.RawDerivation && checkSandbox {
+		requireHostedSandbox(t)
+	}
 	// An occupied archive path makes an accidental hosted archive open fail.
 	cfg.DBPath = filepath.Join(cfg.DataDir, "sessions.db")
 	require.NoError(t, os.Mkdir(cfg.DBPath, 0700))
 	require.NoError(t, os.WriteFile(filepath.Join(cfg.DBPath, "sentinel"), []byte("not an archive"), 0600))
-	startup, err := prepareReplicaServeImpl(pgReplica{}, cfg, "", nil)
+	startup, err := prepareReplicaServeImpl(t.Context(), pgReplica{}, cfg, "", nil, false)
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(startup.ctx)
 	startup.ctx = ctx
@@ -79,7 +88,7 @@ func startParityRuntime(t *testing.T, policy config.ArchiveContent) (*replicaSer
 		assert.NoError(t, err)
 		assert.Equal(t, "not an archive", string(body))
 	})
-	store, err := postgres.NewHostedStore(cfg.PG.URL, cfg.PG.Schema, cfg.PG.RawTenant, false)
+	store, err := postgres.NewHostedStore(t.Context(), cfg.PG.URL, cfg.PG.Schema, cfg.PG.RawTenant, false)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	return &startup, store, admin
@@ -100,15 +109,16 @@ func newHostedCaptureClient(t *testing.T, startup *replicaServeStartup, store *p
 	t.Cleanup(func() { require.NoError(t, cp.Close()) })
 	require.NoError(t, cp.SetDevice(t.Context(), enrolled.Identity.DeviceID))
 	c := &hostedCaptureClient{checkpoint: cp, provider: provider, device: enrolled.Identity.DeviceID, startup: startup}
-	reply := c.request("POST", "/api/v1/raw-sync/tokens", enrolled.Credential, "application/json", []byte(`{"scopes":["upload","commit"]}`))
+	reply := c.request(t, "POST", "/api/v1/raw-sync/tokens", enrolled.Credential, "application/json", []byte(`{"scopes":["upload","commit"]}`))
 	require.Equal(t, 200, reply.Code, reply.Body.String())
 	var token struct{ Token string }
 	require.NoError(t, json.Unmarshal(reply.Body.Bytes(), &token))
 	c.token = token.Token
 	return c
 }
-func (c *hostedCaptureClient) request(method, path, token, kind string, body []byte) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(method, "http://127.0.0.1"+path, bytes.NewReader(body))
+func (c *hostedCaptureClient) request(t *testing.T, method, path, token, kind string, body []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequestWithContext(t.Context(), method, "http://127.0.0.1"+path, bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", kind)
 	req.Header.Set("X-AgentsView-Device-ID", c.device)
@@ -121,7 +131,7 @@ func (c *hostedCaptureClient) commit(t *testing.T, m rawsync.Manifest) rawsync.C
 	t.Helper()
 	body, err := json.Marshal(m)
 	require.NoError(t, err)
-	rec := c.request("POST", "/api/v1/raw-sync/manifests", c.token, "application/json", body)
+	rec := c.request(t, "POST", "/api/v1/raw-sync/manifests", c.token, "application/json", body)
 	require.Equal(t, 200, rec.Code, rec.Body.String())
 	var result struct {
 		ManifestID string `json:"manifest_id"`
@@ -141,7 +151,7 @@ func (c *hostedCaptureClient) flush(t *testing.T) rawsync.CommitResult {
 		for _, ref := range entry.Objects {
 			body, err := json.Marshal(map[string]any{"provider": m.Provider, "object": ref})
 			require.NoError(t, err)
-			rec := c.request("POST", "/api/v1/raw-sync/uploads", c.token, "application/json", body)
+			rec := c.request(t, "POST", "/api/v1/raw-sync/uploads", c.token, "application/json", body)
 			require.Contains(t, []int{200, 201}, rec.Code, rec.Body.String())
 			var upload struct {
 				UploadID string `json:"upload_id"`
@@ -152,7 +162,7 @@ func (c *hostedCaptureClient) flush(t *testing.T) rawsync.CommitResult {
 				require.NotEmpty(t, upload.UploadID)
 				payload, err := os.ReadFile(c.checkpoint.ObjectPath(ref))
 				require.NoError(t, err)
-				rec = c.request("PATCH", "/api/v1/raw-sync/uploads/"+upload.UploadID, c.token, "application/octet-stream", payload)
+				rec = c.request(t, "PATCH", "/api/v1/raw-sync/uploads/"+upload.UploadID, c.token, "application/octet-stream", payload)
 				require.Equal(t, 200, rec.Code, rec.Body.String())
 			}
 		}
@@ -180,7 +190,7 @@ func waitCaptureJob(t *testing.T, pg *sql.DB, manifest, state string, attempts i
 	require.Eventually(t, func() bool {
 		var got string
 		var count int
-		err := pg.QueryRow(`SELECT state,attempt_count FROM raw_ingest_jobs WHERE manifest_id=$1`, manifest).Scan(&got, &count)
+		err := pg.QueryRowContext(t.Context(), `SELECT state,attempt_count FROM raw_ingest_jobs WHERE manifest_id=$1`, manifest).Scan(&got, &count)
 		return err == nil && got == state && count == attempts
 	}, 30*time.Second, 50*time.Millisecond)
 }
@@ -215,7 +225,7 @@ func TestHostedRuntimeCapturedParity(t *testing.T) {
 			receipt := client.capture(t)
 			waitCaptureJob(t, admin, receipt.ManifestID, "complete", 1)
 			rawtest.EqualStored(t, t.Context(), oracle, store, ids...)
-			core, err := postgres.NewRawProjectionStore(store.DB(), postgres.RawProjectionOptions{Tenant: "tenant-runtime"})
+			core, err := postgres.NewRawProjectionStore(t.Context(), store.DB(), postgres.RawProjectionOptions{Tenant: "tenant-runtime"})
 			require.NoError(t, err)
 			for _, id := range ids {
 				resolved, err := core.Resolve(t.Context(), id)
@@ -253,11 +263,11 @@ func TestHostedRuntimeCapturedParity(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, rawcapture.StatusUnchanged, unchanged.Status)
 			var revision int64
-			require.NoError(t, admin.QueryRow(`SELECT corpus_revision FROM raw_corpus_state`).Scan(&revision))
+			require.NoError(t, admin.QueryRowContext(t.Context(), `SELECT corpus_revision FROM raw_corpus_state`).Scan(&revision))
 			replay := client.commit(t, client.last)
 			assert.False(t, replay.Created)
 			var after int64
-			require.NoError(t, admin.QueryRow(`SELECT corpus_revision FROM raw_corpus_state`).Scan(&after))
+			require.NoError(t, admin.QueryRowContext(t.Context(), `SELECT corpus_revision FROM raw_corpus_state`).Scan(&after))
 			assert.Equal(t, revision, after)
 			waitCaptureJob(t, admin, receipt.ManifestID, "complete", 1)
 			rawtest.AppendClaude(t, path)
@@ -338,10 +348,10 @@ func TestHostedRuntimeCapturedPartialRetryExhaustion(t *testing.T) {
 	assert.Equal(t, "Fork inspected.", messages[1].Content)
 	require.NoError(t, store.RenameSession(t.Context(), id, new("Partial curation")))
 	var revision int64
-	require.NoError(t, admin.QueryRow(`SELECT corpus_revision FROM raw_corpus_state`).Scan(&revision))
+	require.NoError(t, admin.QueryRowContext(t.Context(), `SELECT corpus_revision FROM raw_corpus_state`).Scan(&revision))
 	replay := client.commit(t, client.last)
 	assert.False(t, replay.Created)
-	core, err := postgres.NewRawProjectionStore(store.DB(), postgres.RawProjectionOptions{Tenant: "tenant-runtime"})
+	core, err := postgres.NewRawProjectionStore(t.Context(), store.DB(), postgres.RawProjectionOptions{Tenant: "tenant-runtime"})
 	require.NoError(t, err)
 	rollout, err := core.ScheduleCurrentHeads(t.Context(), "same-version-replay", rawProcessingVersion(), 64)
 	require.NoError(t, err)
@@ -349,11 +359,11 @@ func TestHostedRuntimeCapturedPartialRetryExhaustion(t *testing.T) {
 	// Three worker polls after failure must not claim an exhausted generation.
 	require.Never(t, func() bool {
 		var attempts int
-		err := admin.QueryRow(`SELECT attempt_count FROM raw_ingest_jobs WHERE manifest_id=$1`, partial.ManifestID).Scan(&attempts)
+		err := admin.QueryRowContext(t.Context(), `SELECT attempt_count FROM raw_ingest_jobs WHERE manifest_id=$1`, partial.ManifestID).Scan(&attempts)
 		return err != nil || attempts != 2
 	}, 3200*time.Millisecond, 100*time.Millisecond)
 	var after int64
-	require.NoError(t, admin.QueryRow(`SELECT corpus_revision FROM raw_corpus_state`).Scan(&after))
+	require.NoError(t, admin.QueryRowContext(t.Context(), `SELECT corpus_revision FROM raw_corpus_state`).Scan(&after))
 	assert.Equal(t, revision, after)
 	rawtest.CodexParent(t, root)
 	sources, err := parser.DiscoverRawCaptureSources(t.Context(), client.provider)

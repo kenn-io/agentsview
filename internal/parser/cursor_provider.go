@@ -125,7 +125,7 @@ func (p *cursorProvider) Parse(
 		cwd = req.Source.CwdResolution.Path
 	}
 	sess, msgs, err := p.parseSession(
-		path, req.Source.ProjectHint, cwd, machine,
+		ctx, path, req.Source.ProjectHint, cwd, machine,
 	)
 	if err != nil {
 		return ParseOutcome{}, err
@@ -926,7 +926,7 @@ func (s cursorSourceSet) Fingerprint(
 	}
 	hash := ""
 	if info.Size() <= maxCursorTranscriptSize {
-		hash, err = hashJSONLSourceFile(path)
+		hash, err = hashJSONLSourceFileContext(ctx, path)
 		if err != nil {
 			return SourceFingerprint{}, err
 		}

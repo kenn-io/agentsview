@@ -20,13 +20,45 @@ import (
 
 // FrictionAvailable reports whether startup proved this role can write the
 // friction review tables. pg serve runs the friction-review job only then.
-func (s *Store) FrictionAvailable() bool { return s.frictionAvailable.Load() }
+func (s *Store) FrictionAvailable() bool { return s.runtimeState().frictionAvailable.Load() }
 
-// frictionSessionVersionColumn selects the engine's committed row version.
+// FrictionDiagnosticsAvailable reports whether startup proved this role can
+// read diagnostic events. Session review remains available without this grant.
+func (s *Store) FrictionDiagnosticsAvailable() bool {
+	return s.runtimeState().frictionDiagnosticsAvailable.Load()
+}
+
+func (s *Store) probeFrictionDiagnosticRead(ctx context.Context) (available bool) {
+	rows, err := s.pg.QueryContext(ctx, "SELECT id FROM diagnostic_events LIMIT 0")
+	if err != nil {
+		if isInsufficientPrivilege(err) {
+			log.Printf(
+				"friction diagnostics unavailable: GRANT SELECT ON diagnostic_events TO <serve role>: %v",
+				err,
+			)
+		} else if !isUndefinedTable(err) {
+			log.Printf("friction diagnostics read probe: %v", err)
+		}
+		return false
+	}
+	defer func() {
+		if err := rows.Close(); err != nil {
+			log.Printf("friction diagnostics read probe: %v", err)
+			available = false
+		}
+	}()
+	if err := rows.Err(); err != nil {
+		log.Printf("friction diagnostics read probe: %v", err)
+		return false
+	}
+	return true
+}
+
+// sessionVersionColumnPG selects the engine's committed row version.
 // Both values change with session updates without relying on writer versions.
-func (s *Store) frictionSessionVersionColumn(ctx context.Context) (string, error) {
+func sessionVersionColumnPG(ctx context.Context, pg hostedQuerier) (string, error) {
 	var version string
-	if err := s.pg.QueryRowContext(ctx, "SELECT version()").Scan(&version); err != nil {
+	if err := pg.QueryRowContext(ctx, "SELECT version()").Scan(&version); err != nil {
 		return "", fmt.Errorf("reading database engine: %w", err)
 	}
 	if strings.HasPrefix(version, "CockroachDB") {
@@ -35,30 +67,32 @@ func (s *Store) frictionSessionVersionColumn(ctx context.Context) (string, error
 	return "xmin", nil
 }
 
-// DetectFrictionAvailability probes the review tables inside a rolled-back
-// transaction. A missing table or a read-only role disables the job; any
-// other failure is logged and also disables it, so startup never fails on
-// an optional feature (spec §20).
+// DetectFrictionAvailability probes review writes and diagnostic reads
+// separately. A missing review table or a read-only role disables the job;
+// missing diagnostic access only disables diagnostic signals, so startup
+// never fails on this optional feature (spec §20).
 func (s *Store) DetectFrictionAvailability(ctx context.Context) {
+	s.runtimeState().frictionDiagnosticsAvailable.Store(s.probeFrictionDiagnosticRead(ctx))
+	s.runtimeState().frictionIssueLinksWritable.Store(s.probeFrictionIssueLinkWrite(ctx))
 	for _, table := range []string{"friction_digests", "friction_digest_sessions", "friction_patterns"} {
 		if !pgHasTable(ctx, s.pg, table) {
-			s.frictionAvailable.Store(false)
+			s.runtimeState().frictionAvailable.Store(false)
 			return
 		}
 	}
-	column, err := s.frictionSessionVersionColumn(ctx)
+	column, err := sessionVersionColumnPG(ctx, s.pg)
 	if err == nil {
 		_, err = s.pg.ExecContext(ctx, "SELECT "+column+" FROM sessions LIMIT 0")
 	}
 	if err != nil {
 		log.Printf("friction: session version probe: %v", err)
-		s.frictionAvailable.Store(false)
+		s.runtimeState().frictionAvailable.Store(false)
 		return
 	}
-	tx, err := s.pg.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		log.Printf("friction: capability probe: %v", err)
-		s.frictionAvailable.Store(false)
+		s.runtimeState().frictionAvailable.Store(false)
 		return
 	}
 	defer func() { _ = tx.Rollback() }()
@@ -97,10 +131,10 @@ func (s *Store) DetectFrictionAvailability(ctx context.Context) {
 		if !IsReadOnlyError(err) {
 			log.Printf("friction: capability probe: %v", err)
 		}
-		s.frictionAvailable.Store(false)
+		s.runtimeState().frictionAvailable.Store(false)
 		return
 	}
-	s.frictionAvailable.Store(true)
+	s.runtimeState().frictionAvailable.Store(true)
 }
 
 func (s *Store) FrictionPendingDates(ctx context.Context, first, last string, loc *time.Location) ([]string, error) {
@@ -165,7 +199,7 @@ func (s *Store) FrictionSubjectsForDate(
 	if err != nil {
 		return nil, err
 	}
-	column, err := s.frictionSessionVersionColumn(ctx)
+	column, err := sessionVersionColumnPG(ctx, s.pg)
 	if err != nil {
 		return nil, err
 	}
@@ -272,11 +306,11 @@ func (s *Store) SaveFrictionDigest(
 	ctx context.Context, d db.FrictionDigest,
 	subjects []db.FrictionDigestSubject, patterns []db.FrictionPatternUpdate,
 ) error {
-	column, err := s.frictionSessionVersionColumn(ctx)
+	column, err := sessionVersionColumnPG(ctx, s.pg)
 	if err != nil {
 		return err
 	}
-	tx, err := s.pg.BeginTx(ctx, nil)
+	tx, err := s.beginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("beginning friction digest tx: %w", err)
 	}

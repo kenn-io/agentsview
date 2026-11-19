@@ -11,12 +11,13 @@ import (
 )
 
 func TestFleetBatchAndSearchMetadata(t *testing.T) {
+	t.Parallel()
 	store := setupContentSearch(t)
 	for _, id := range []string{"codex:shared", "node-a~codex:shared", "unrelated"} {
 		insertCSSession(t, store, id, "app", "codex", "2026-09-01T12:00:00Z", "2026-09-01T12:01:00Z")
 		insertCSMessage(t, store, id, 0, "user", "fleetneedle", "2026-09-01T12:00:00Z", false)
 	}
-	_, err := store.DB().Exec(`UPDATE sessions SET session_name='Provider title'`)
+	_, err := store.DB().ExecContext(t.Context(), `UPDATE sessions SET session_name='Provider title'`)
 	require.NoError(t, err)
 	page, err := store.ListSessions(t.Context(), db.SessionFilter{IDs: []string{"codex:shared"}})
 	require.NoError(t, err)

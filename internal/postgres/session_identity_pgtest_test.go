@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"database/sql"
 	"path/filepath"
 	"testing"
@@ -15,16 +14,14 @@ import (
 )
 
 func TestPGClaudeProvenanceVisibleInReadPaths(t *testing.T) {
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_session_identity_test"
-	pg, err := Open(pgURL, schema, true)
+	t.Parallel()
+	const schema = "agentsview"
+	pgURL := testPGSchemaURL(t, schema)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
-	ctx := context.Background()
-	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
-	require.NoError(t, err, "drop schema")
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -77,7 +74,7 @@ func TestPGClaudeProvenanceVisibleInReadPaths(t *testing.T) {
 	assert.Equal(t, "sdk-cli", entrypoint.String)
 	assert.Equal(t, "bg", sessionKind.String)
 
-	store, err := NewStore(pgURL, schema, true)
+	store, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 

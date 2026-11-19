@@ -26,7 +26,7 @@ always_run = true
 id = "huma-check"
 name = "Check Huma API contract"
 language = "system"
-entry = "go run go.kenn.io/kit/cmd/huma-check@e9840a327158da2559458186b253b0c15a5e2c2b -fix=false ./..."
+entry = "make lint-huma"
 stages = ["pre-push"]
 pass_filenames = false
 always_run = true
@@ -48,4 +48,4 @@ language = "system"
 entry = "uvx --from mdformat==0.7.22 --with mdformat-frontmatter --with mdformat-mkdocs --with mdformat-tables==1.0.0 mdformat --wrap 80 --align-semantic-breaks-in-lists"
 types = ["markdown"]
 # Plugin skill and agent Markdown is checked against its generator by Go tests.
-exclude = "^docs/(activity|changelog|chat-import|commands|configuration|duckdb|index|insights|pg-sync|quickstart|recent-edits|remote-access|session-api|session-intelligence|stats|token-usage|usage)\\.md$|^plugins/agentsview-memory/(agents|skills)/"
+exclude = "^docs/(activity|changelog|chat-import|commands|configuration|index|insights|pg-sync|quickstart|recent-edits|remote-access|session-api|session-intelligence|stats|token-usage|usage)\\.md$|^plugins/agentsview-memory/(agents|skills)/"

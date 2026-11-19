@@ -21,6 +21,7 @@ var hostedProjectionPrivileges = []struct{ table, privileges string }{
 	{"tool_result_events", "SELECT,INSERT"},
 	{"usage_events", "SELECT,INSERT"},
 	{"session_plan_usage", "SELECT,INSERT"},
+	{"session_usage_totals", "SELECT,INSERT"},
 	{"secret_findings", "SELECT,INSERT"},
 	{"friction_findings", "SELECT,INSERT,DELETE"},
 	{"excluded_sessions", "SELECT,INSERT,UPDATE"},
@@ -98,7 +99,7 @@ func CheckHostedRuntimeWritable(ctx context.Context, database *sql.DB, schema st
 		}
 	}
 	if archive.UsageOnly() {
-		return checkHostedUsageVectorPrivileges(ctx, database, schema)
+		return checkHostedUsageVectorPrivileges(ctx, database, schema, "")
 	}
 	return nil
 }
@@ -115,7 +116,25 @@ func checkHostedTablePrivileges(ctx context.Context, database *sql.DB, schema, t
 	return nil
 }
 
-func checkHostedUsageVectorPrivileges(ctx context.Context, database *sql.DB, schema string) error {
+func checkHostedUsageVectorPrivileges(ctx context.Context, database *sql.DB, schema, fingerprint string) error {
+	var active int64
+	if fingerprint != "" {
+		id, _, ok, err := LookupVectorGeneration(ctx, database, fingerprint)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errors.New("hosted embedding generation is missing; run hosted-provision")
+		}
+		exists, err := VectorChunkTableExists(ctx, database, id)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return fmt.Errorf("%s is missing; run hosted-provision", vectorChunkTable(id))
+		}
+		active = id
+	}
 	var exists bool
 	if err := database.QueryRowContext(ctx, `SELECT to_regclass(format('%I.vector_documents',$1::text)) IS NOT NULL`, schema).Scan(&exists); err != nil {
 		return err
@@ -123,7 +142,11 @@ func checkHostedUsageVectorPrivileges(ctx context.Context, database *sql.DB, sch
 	if !exists {
 		return nil
 	}
-	for _, grant := range []struct{ table, privileges string }{{"vector_generations", "SELECT"}, {"vector_documents", "SELECT,DELETE"}, {"vector_push_state", "SELECT,DELETE"}} {
+	shared := "SELECT,DELETE"
+	if fingerprint != "" {
+		shared = "SELECT,INSERT,UPDATE,DELETE"
+	}
+	for _, grant := range []struct{ table, privileges string }{{"vector_generations", "SELECT"}, {"vector_documents", shared}, {"vector_push_state", shared}} {
 		if err := checkHostedTablePrivileges(ctx, database, schema, grant.table, grant.privileges); err != nil {
 			return err
 		}
@@ -149,9 +172,18 @@ func checkHostedUsageVectorPrivileges(ctx context.Context, database *sql.DB, sch
 		return err
 	}
 	for _, table := range tables {
-		if err = checkHostedTablePrivileges(ctx, database, schema, table, "SELECT,DELETE"); err != nil {
+		privileges := "SELECT,DELETE"
+		if active != 0 && table == vectorChunkTable(active) {
+			privileges = "SELECT,INSERT,DELETE"
+		}
+		if err = checkHostedTablePrivileges(ctx, database, schema, table, privileges); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// CheckHostedVectorPrivileges checks the grants needed by the embedding worker.
+func CheckHostedVectorPrivileges(ctx context.Context, database *sql.DB, schema, fingerprint string) error {
+	return checkHostedUsageVectorPrivileges(ctx, database, schema, fingerprint)
 }

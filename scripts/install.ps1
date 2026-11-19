@@ -341,6 +341,7 @@ function Install-Agentsview {
         Write-Host "Get started:"
         Write-Host "  agentsview serve    # Start the server and open browser"
         Write-Host "  agentsview update   # Check for and install updates"
+        Write-Host "  To enable search by meaning, choose Settings -> Embeddings -> Turn on."
 
     } finally {
         if (Test-Path $tmpDir) {

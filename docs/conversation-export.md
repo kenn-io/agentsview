@@ -12,7 +12,7 @@ for a reporting hour to close.
 These commands read normalized messages from the local SQLite archive. They work
 across all supported agents and imported archives, including sessions whose
 source files are no longer available. They do not contact an agent, reparse its
-transcripts, start a server, or read the DuckDB mirror.
+transcripts, start a server, or read a replica.
 
 The first `changes` call on an archive builds the conversation change index from
 existing database records, so it takes longer than later calls; syncing never
@@ -58,6 +58,132 @@ fetching bodies; a display label alone does not establish repository identity.
 The project reference follows the evidence rules in
 [Session Export](/docs/session-export/#project-evidence).
 
+## Follow changes live
+
+A subscriber such as a sync client or dashboard can follow archive changes as
+they happen and resume after a disconnect with no gap and no repeat. Open the
+server-sent events stream on the local daemon:
+
+```http
+GET /api/v1/changes/stream?after=CURSOR
+```
+
+Omit `after` on the first connection. Afterwards, pass the `to` value of the
+last `changes` event you finished processing. Treat cursors as opaque. The
+stream uses the same authentication as `/api/v1/events`, including the `?token=`
+fallback for native browser `EventSource` clients described in
+[SSE Endpoints](/docs/remote-access/#sse-endpoints). A server without a local
+SQLite archive answers HTTP 501.
+
+The stream reads the archive and never writes your sessions or messages. On an
+archive that has never had a conversation export, the daemon first builds the
+conversation change index, the same one-time step that
+`export conversations changes` runs. The stream sends `ready`, then heartbeats
+while the index builds, then the replay. The build runs in one archive write
+transaction, so sync waits for it; it finishes even if the subscriber
+disconnects. A read-only daemon cannot build the index and streams session
+records only.
+
+A `changes` event follows each sync pass that wrote archive data, without the
+`events_coalesce_interval` delay that `/api/v1/events` applies. While nobody is
+watching the archive, watcher-triggered syncs start at most once per
+`background_sync_interval` (default `"10m"`). While at least one subscriber is
+connected, the daemon shortens that interval to one second, or keeps a shorter
+configured `sync_interval`, so a session file change usually reaches the stream
+within about a second. When the last subscriber disconnects, the background
+interval applies again.
+
+The stream sends these events. Each `data` line is one JSON object:
+
+| Event       | Data                                                                                                                                       |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ready`     | `schema_version`, `archive_id`, `database_id`, `head`, the cursor of the newest change when the connection opened, and `local_machine_id`. |
+| `changes`   | `schema_version`, `archive_id`, `database_id`, `from`, `to`, `reset`, `sessions`, and `messages`.                                          |
+| `heartbeat` | A timestamp, sent on the same interval as `/api/v1/events`.                                                                                |
+| `error`     | `{"error": "..."}` when a read fails. The stream then closes; reconnect with the last `to` you processed.                                  |
+
+How `changes` events fit together:
+
+- The first event starts at the `after` cursor. Each later event's `from` equals
+  the previous event's `to`. When the cursor is already current, no `changes`
+  event arrives until something changes.
+- The stream first replays everything after the cursor in pages of at most 500
+  message and session changes, then stays open and sends new changes as the
+  daemon publishes them. Changes that arrive together are sent as one event.
+- `reset` is `true`, with an empty `from`, when `after` is empty, belongs to
+  another database generation, predates deleted-message records that were
+  removed, or is not a cursor this archive issued. The replay then starts at
+  the beginning of the archive. Replace your copy with what follows instead of
+  merging into it. A full resync or a compaction during a connection produces
+  the same reset. The daemon removes deleted-message records after one to two
+  weeks, so a reader that reads at least weekly is not reset by that.
+- Like the changes listing, this is compact current state. A record changed
+  twice before you read it arrives once, in its newest state.
+
+Each event carries the current state of every session a change touches. A
+message change also sends its session, so the session totals are always current.
+A session object has:
+
+- `session_id` and `deleted`. A trashed or deleted session has `deleted: true`,
+  a `null` project, `null` usage, and empty fields other than `machine_id`.
+- `machine_id`, the machine the session originated on.
+- `agent` and `automation` (`interactive`, `automated`, or `subagent`).
+- `project`, the same project reference the changes listing uses.
+- `models`, `started_at`, `last_activity_at`, and `message_count`.
+- `usage`, the session's token and cost totals.
+
+A message object has no text and no digest of its text:
+
+- `session_id`, `message_id`, `revision`, `deleted`, `role`, and `timestamp`,
+  matching the changes listing.
+- `machine_id`, the same value as its session's.
+- `model` and `project`.
+- `usage`, or `null` when the message recorded none.
+
+An archive can hold copies of sessions synced from other machines. To tell which
+sessions started on this machine, compare each record's `machine_id` with the
+`local_machine_id` from `ready`. They are equal strings for this machine's
+sessions. Both use the originating machine identities of
+[per-machine reporting exports](reporting-export.md#report-an-archive-that-contains-several-machines):
+
+- `local_machine_id` is this installation's identity. The daemon records it when
+  it starts. It is `null` only when the archive has no recorded installation
+  identity.
+- A copy from another machine carries that machine's identity. A recorded
+  machine alias resolves to the identity it names.
+- A session stored without a machine carries `archive:<archive_id>`.
+- A trashed session and its messages keep their `machine_id`. A permanently
+  deleted session no longer has a record, so its `deleted` session and message
+  records carry `machine_id: null`.
+- A message keeps the `machine_id` it was sent with until the message changes.
+  When a session's machine changes, the session is sent again with the new
+  value; use the session's value as current.
+
+A usage object has `input_tokens`, `output_tokens`, `cache_creation_tokens`,
+`cache_read_tokens`, `cost_microdollars`, and `priced`. Cost is an exact integer
+number of microdollars from AgentsView's model pricing, using the same rules as
+session summaries. `priced` is `true` only when every counted usage has a price.
+Otherwise `cost_microdollars` covers only the priced part, and a session without
+usage reports zeros with `priced: false`.
+
+A message is sent again, with the same `revision` and its current `usage`, when
+its usage changes while its text does not. Examples are token usage that a later
+sync adds to an earlier reply, and a usage record attached to that message. Only
+the messages whose stored usage changed are sent again, and each change is sent
+once. A rewrite of a session's usage records can also re-send messages after the
+first changed record whose usage did not change. Some changes alter a message's
+computed `usage` while its own stored usage stays the same, so they update only
+the session totals or send nothing:
+
+- Model pricing updates change computed costs without sending any message or
+  session. Reconnect without a cursor to recompute every value.
+- When two sessions store the same Claude response, such as a resumed or forked
+  transcript, a write to one can move that usage between them. The written
+  session is sent; the other session's message and totals keep their earlier
+  usage until it changes again.
+- A session-level reported cost spread across messages changes their shares when
+  any of its usage changes. Only the changed messages are sent again.
+
 ## Read only the text you need
 
 ```bash
@@ -73,11 +199,12 @@ includes the current project reference from the same read snapshot as the text.
 Check it again before disclosing the body to another system.
 
 `text` contains a UTF-8-safe chunk. `offset` and `next_offset` are byte offsets;
-`text_bytes` describes the complete message. Continue until `next_offset`
-reaches `text_bytes`, preserving the same generation and revision on every
-request. `--max-bytes` defaults to 65,536 and must allow at least four bytes,
-the maximum length of one UTF-8 character. A stale revision fails instead of
-returning a different message version. No text is silently truncated.
+`text_bytes` in the body response describes the complete message as this command
+returns it. Continue until `next_offset` reaches that `text_bytes`, preserving
+the same generation and revision on every request. `--max-bytes` defaults to
+65,536 and must allow at least four bytes, the maximum length of one UTF-8
+character. A stale revision fails instead of returning a different message
+version. No text is silently truncated.
 
 A superseded revision leaves stdout empty, emits `revision_changed` JSON on
 stderr and exits with code 5. Discard any partial body for that revision and
@@ -88,6 +215,38 @@ A digest identifies content equality, not chronology or message identity. Two
 identical utterances remain distinct messages. A pricing update does not
 invalidate unchanged visible text. Consumers may use retained digests to avoid
 fetching bodies they already hold when reconciling a rebuilt archive.
+
+### Secrets are masked by default
+
+Message bodies mask detected secrets, such as API keys, tokens and private keys,
+before they are written. The export uses the same detector and masked form as
+search results and the secrets list, for example `AKIA…PLJM` for an AWS access
+key. Detection is best-effort; see
+[SECURITY.md](https://github.com/kenn-io/agentsview/blob/main/SECURITY.md#secrets-subsystem)
+for its limits.
+
+The whole message is masked before it is split into chunks, so a secret that
+crosses a chunk boundary is still caught. When a body contains a masked secret:
+
+- The response has `redacted: true`.
+- `text_bytes`, `offset` and `next_offset` count bytes of the masked text. They
+  can differ from the `text_bytes` in the changes listing, which describes the
+  stored message.
+- `digest` still identifies the stored message, so the masked text does not hash
+  to it. Keep using it to tell whether a message changed.
+
+To export the stored text unchanged, pass `--reveal` on every body read of that
+message:
+
+```bash
+agentsview export conversations message SESSION_ID MESSAGE_ID \
+  --database-id DATABASE_ID --revision REVISION --reveal
+```
+
+With `--reveal`, `redacted` is absent and the body's `text_bytes` matches the
+listing. Do not mix masked and revealed reads of the same message, because their
+offsets differ. The changes listing never contains text, so it has no `--reveal`
+flag.
 
 ## What text means
 
@@ -110,7 +269,7 @@ agentsview export conversations message SESSION_ID MESSAGE_ID \
 This uses the same stored dialogue that local message search uses, when its
 parser has classified the source text. It keeps user and assistant text without
 rendered tool calls or reasoning. Authored text that quotes tool markers, code
-or logs remains text; this is not a secret-redaction feature.
+or logs remains text. Secrets in it are masked the same way as in stored mode.
 
 The export requires stored classification. Unlike message search, it does not
 fall back to rendered `content` when `dialogue_text` is absent. Such records
@@ -165,13 +324,91 @@ evidence and text. Consumers should compare it across chunked reads, as they do
 project evidence. Deletions omit it; absence is not evidence that a retained
 message came from an interactive session.
 
+## Session tool summaries
+
+Exported text leaves out tool calls. Add `--tool-summaries` to the changes
+listing to learn what a session's tools did without exporting their names,
+arguments or results:
+
+```bash
+agentsview export conversations changes --tool-summaries
+agentsview export conversations changes --tool-summaries --checkpoint SAVED_CHECKPOINT
+```
+
+The listing then also contains `tool_summary` changes, one per session. Each
+carries the session's project reference and a `tool_summary` object with the
+session's complete current totals:
+
+```json
+{
+  "duration_ms": 70000,
+  "categories": [
+    {"category": "Bash", "calls": 3, "observed": 2, "errored": 1, "timed": 2, "duration_ms": 60000},
+    {"category": "Read", "calls": 1, "observed": 1, "errored": 0, "timed": 1, "duration_ms": 20000}
+  ],
+  "skills": [{"name": "review-change", "calls": 2}]
+}
+```
+
+- `categories` has one entry per tool category, sorted by name. `calls` counts
+  every call in the category, including one still running.
+- `observed` counts the calls whose result AgentsView classified, and `errored`
+  the ones it classified as an error. Report errors against `observed`, not
+  `calls`. The classification reads result text, so `errored` is a sign of
+  trouble, not proof that the task failed.
+- `timed` counts the calls with a measured start and end, and `duration_ms`
+  covers only those. A call that is not timed has an unknown duration, not a
+  zero one.
+- The top-level `duration_ms` merges overlapping calls. Category durations
+  overlap each other, so they do not add up to it. Durations are measured as
+  in the session's timing view, clipped to the session's recorded start and
+  end. For a session with no recorded start, that view clips to the first
+  prompt and the summary does not.
+- `skills` lists the skills the session invoked by name, sorted by name.
+- A subagent session has its own summary. Its parent's delegation call already
+  spans it, so do not add a parent's totals to its subagents'.
+
+A summary is sent again when the session's transcript, start or end changes,
+when a call's result is classified, when a subagent session it delegated to
+arrives, is deleted or changes its start or end, when its storage policy gap
+changes, and when the session is trashed or restored. Replace the summary you
+hold; consecutive summaries can be equal. Other rules:
+
+- A trashed session's summary has `deleted: true` and no `tool_summary`. A
+  permanently deleted session has no summary change; its session change
+  reports the deletion.
+- A session stored under `archive_content=usage` has
+  `gap: "archive_content_excluded"` and no `tool_summary`. Its calls are not
+  stored, so this means unknown, not zero.
+- A summary is not sent again when the session's project reference changes. Its
+  session change reports the new reference. A session with neither an exported
+  message nor an earlier session change gets none, so its summary keeps the
+  reference it was listed with.
+- A walk lists its summaries after its message and session changes.
+- Summaries have their own `revision` sequence. Compare a summary's revision
+  only with another summary's, and keep the same database generation rule as
+  for messages.
+
+A cursor or checkpoint records how far it has delivered summaries. When you add
+`--tool-summaries` to a walk whose saved checkpoint did not include them, the
+walk returns every session's current summary, without listing its messages
+again. A walk without the flag gives up that place, so asking again later
+returns every summary again. Responses remain schema 1. An archive last written
+by an older version needs one writable open, such as a daemon restart, before
+summaries can be listed.
+
 ## Identity, gaps and rebuilding
 
 The logical key is `(archive_id, session_id, message_id)` within one source
 writer's lineage. The physical `database_id` changes on full resync. A changed
 generation invalidates a saved checkpoint: the command leaves stdout empty,
 writes a `reconciliation_required` JSON error to stderr, and exits with code 4.
-Reconcile the new generation rather than treating it as an empty update.
+Reconcile the new generation rather than treating it as an empty update. The
+daemon removes deleted-message records after one to two weeks, and
+[`db compact`](/docs/commands/#agentsview-db-compact) removes them at once, so a
+checkpoint saved before the newest removed record fails the same way. Records of
+messages with a native source ID are never removed, so a returning message keeps
+its `message_id`.
 
 Native identities stored in `source_uuid` support edits, insertion and deletion
 without turning every change into another utterance. Some source formats lack
@@ -183,8 +420,11 @@ the same utterance.
 
 A full resync is a replacement too. If a session's complete projection changes,
 messages without native IDs can become `identity_ambiguous` even when their own
-text is unchanged. An identical complete projection preserves those IDs. Each
-exported message corresponds to a normalized database message record.
+text is unchanged. An identical complete projection preserves those IDs. So does
+a projection that is identical except that messages gain native IDs, each used
+once, such as after a parser upgrade starts keeping them; those messages lose
+their `identity_unavailable` gap. Each exported message corresponds to a
+normalized database message record.
 
 Messages without stored content and content excluded by archive policy are
 explicit gaps. They are not empty successful conversations. The `gap` values

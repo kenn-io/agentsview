@@ -34,22 +34,6 @@ type archiveWriteBackend interface {
 		projects []string,
 		excludeProjects []string,
 	) (storage.PushResult, error)
-	DuckDBPush(
-		ctx context.Context,
-		duckCfg config.DuckDBConfig,
-		cfg DuckDBPushConfig,
-		projects []string,
-		excludeProjects []string,
-	) (storage.MirrorPushResult, error)
-	DuckDBPushWatch(
-		ctx context.Context,
-		duckCfg config.DuckDBConfig,
-		cfg DuckDBPushConfig,
-		projects []string,
-		excludeProjects []string,
-		debounce time.Duration,
-		interval time.Duration,
-	) error
 	// ReplicaPushWatch runs the long-lived watch loop that pushes into
 	// target through backend on change and on a periodic floor.
 	ReplicaPushWatch(
@@ -75,9 +59,6 @@ type archivePushWatchHooks struct {
 		string, time.Duration, time.Duration,
 		func(context.Context, pushReason, *syncpkg.WatchBatch) error,
 	) (*pushLoop, func())
-	duckDBPush func(
-		context.Context, pushReason, bool,
-	) (storage.MirrorPushResult, error)
 	replicaPush func(
 		context.Context, pushReason, ReplicaPushConfig,
 	) (storage.PushResult, error)
@@ -85,7 +66,6 @@ type archivePushWatchHooks struct {
 		context.Context, *syncpkg.Engine, bool,
 	) (bool, error)
 	newReplicaPusher   func(*syncpkg.Engine) *replicaPusher
-	newDuckDBPusher    func(*syncpkg.Engine) *duckDBPusher
 	newUnwatchedPoller func(context.Context, unwatchedPollSyncer) unwatchedRootPoller
 }
 
@@ -103,7 +83,7 @@ type unwatchedRootPoller interface {
 // unavailable scopes to their polling probes, and the interval push runs a
 // plain SyncAll that never tombstones missed deletions, so without this owner
 // a deletion lost while a root was unavailable would stay active in the
-// archive (and every pushed mirror) indefinitely after the root returns.
+// archive (and every pushed replica) indefinitely after the root returns.
 func newArchivePushUnwatchedPoller(
 	ctx context.Context,
 	hooks *archivePushWatchHooks,
@@ -130,8 +110,8 @@ func startArchivePushWatcher(
 		stop, open, unwatched := hooks.startWatcher(cfg, engine, callback, options)
 		return stop, open, unwatched, nil
 	}
-	stop, open, unwatched, _, flush := startFileWatcher(cfg, engine, callback, options)
-	return stop, open, unwatched, flush
+	watcher := startFileWatcher(cfg, cfg.SyncInterval, engine, callback, options)
+	return watcher.stop, watcher.openDispatch, watcher.unwatchedDirs, watcher.flushPending
 }
 
 func newArchivePushLoop(
@@ -172,24 +152,6 @@ func archivePushWatchWatcherOptions(
 		},
 		OnPollingReleased: poller.RemoveObligation,
 	}
-}
-
-func completeDuckDBWatchPush(
-	res storage.MirrorPushResult, reason pushReason, full bool,
-) error {
-	logDuckDBWatchPushResult(res, reason)
-	if full && res.Diagnostics.Deferred && !res.ArchiveRebuilt {
-		// A deferred push wrote nothing, so the requested full push is
-		// still owed. After a daemon rebuilt the archive the mirror pushes
-		// in full anyway, and asking again would rebuild the archive again.
-		return storage.PushNotStartedError{
-			Err: fmt.Errorf("full push deferred: %s", res.Diagnostics.DeferredReason),
-		}
-	}
-	if res.Errors > 0 {
-		return fmt.Errorf("%d session(s) failed to push", res.Errors)
-	}
-	return nil
 }
 
 func completeReplicaWatchPush(
@@ -248,8 +210,8 @@ func watchBatchIsAffirmativelyNonData(
 		return false
 	}
 
-	providers := configuredWatchPathRelevanceProviders(cfg)
-	if len(providers) == 0 {
+	providers, err := configuredWatchPathRelevanceProviders(ctx, cfg)
+	if err != nil || len(providers) == 0 {
 		return false
 	}
 	for _, path := range batch.Paths {
@@ -283,8 +245,9 @@ func watchBatchIsAffirmativelyNonData(
 }
 
 func configuredWatchPathRelevanceProviders(
+	ctx context.Context,
 	cfg config.Config,
-) []watchPathRelevanceProvider {
+) ([]watchPathRelevanceProvider, error) {
 	var providers []watchPathRelevanceProvider
 	for _, factory := range cfg.LocalProviderFactories() {
 		relevanceSupported := factory.Capabilities().Source.ChangedPathRelevance ==
@@ -295,20 +258,39 @@ func configuredWatchPathRelevanceProviders(
 				continue
 			}
 			root = absRootPath(root)
-			var provider parser.Provider
-			if relevanceSupported {
-				provider = factory.NewProvider(parser.ProviderConfig{
-					Roots: []string{root},
-				})
+			if !relevanceSupported {
+				providers = append(providers, watchPathRelevanceProvider{root: root})
+				continue
 			}
+			provider := factory.NewProvider(parser.ProviderConfig{
+				Roots: []string{root},
+			})
 			providers = append(providers, watchPathRelevanceProvider{
 				provider:           provider,
 				root:               root,
-				relevanceSupported: relevanceSupported,
+				relevanceSupported: true,
 			})
+			// A provider can watch directories outside its configured root,
+			// as Codex watches its home directory for the title index. Events
+			// there match the provider only through those watch roots.
+			watchRoots, err := parser.ResolveWatchRoots(ctx, provider)
+			if err != nil {
+				return nil, err
+			}
+			for _, watchRoot := range watchRoots {
+				path := absRootPath(watchRoot.Path)
+				if path == root {
+					continue
+				}
+				providers = append(providers, watchPathRelevanceProvider{
+					provider:           provider,
+					root:               path,
+					relevanceSupported: true,
+				})
+			}
 		}
 	}
-	return providers
+	return providers, nil
 }
 
 func watchBatchNeedsPushAck(batch syncpkg.WatchBatch) bool {
@@ -463,14 +445,14 @@ func startDaemonPushHeartbeatTo(w io.Writer, label string) func() {
 // progress events. A push that waits for a local sync prints a line each time
 // the daemon reports the wait. The returned finish func stops the heartbeat
 // (if no event ever arrived) and clears the in-place line.
-func daemonPushProgress[P any](
-	label string, phase func(P) string, render func(P),
-) (onProgress func(P), finish func()) {
+func daemonPushProgress(
+	label string, render func(storage.PushProgress),
+) (onProgress func(storage.PushProgress), finish func()) {
 	stop := startDaemonPushHeartbeat(label)
 	var once, waitOnce stdsync.Once
 	stopHeartbeat := func() { once.Do(stop) }
-	onProgress = func(p P) {
-		switch phase(p) {
+	onProgress = func(p storage.PushProgress) {
+		switch p.Phase {
 		case storage.PushPhaseWaiting:
 			waitOnce.Do(func() {
 				fmt.Println("Waiting for another push on the daemon to finish...")
@@ -492,12 +474,6 @@ func daemonPushProgress[P any](
 	}
 }
 
-// pushProgressPhase and mirrorPushProgressPhase read a progress report's
-// phase for daemonPushProgress.
-func pushProgressPhase(p storage.PushProgress) string { return p.Phase }
-
-func mirrorPushProgressPhase(p storage.MirrorPushProgress) string { return p.Phase }
-
 func (b daemonArchiveWriteBackend) ReplicaPush(
 	ctx context.Context,
 	backend storage.Replica,
@@ -514,7 +490,7 @@ func (b daemonArchiveWriteBackend) ReplicaPush(
 		return storage.PushResult{}, err
 	}
 	onProgress, finish := daemonPushProgress(
-		backend.DisplayName(), pushProgressPhase, newReplicaPushProgressPrinter(),
+		backend.DisplayName(), newReplicaPushProgressPrinter(),
 	)
 	defer finish()
 	return postDaemonPush[storage.PushResult](
@@ -538,119 +514,6 @@ func (b daemonArchiveWriteBackend) ReplicaPush(
 			LastReconciledVectorGeneration: new(cfg.LastReconciledVectorGeneration),
 			WatchBatch:                     generatedWatchBatch(cfg.WatchBatch),
 			WatchRecovery:                  generatedWatchRecovery(cfg.WatchRecovery),
-		},
-		onProgress,
-	)
-}
-
-func (b daemonArchiveWriteBackend) DuckDBPush(
-	ctx context.Context,
-	duckCfg config.DuckDBConfig,
-	cfg DuckDBPushConfig,
-	projects []string,
-	excludeProjects []string,
-) (storage.MirrorPushResult, error) {
-	return b.duckDBPush(ctx, duckCfg, cfg, projects, excludeProjects)
-}
-
-func (b daemonArchiveWriteBackend) DuckDBPushWatch(
-	ctx context.Context,
-	duckCfg config.DuckDBConfig,
-	cfg DuckDBPushConfig,
-	projects []string,
-	excludeProjects []string,
-	debounce time.Duration,
-	interval time.Duration,
-) error {
-	if err := requireDaemonSourceSync(ctx, b.appCfg); err != nil {
-		return err
-	}
-	debounce, interval = watchTimings(debounce, interval)
-	pushWriter := b.watchPushWriter()
-	push := func(
-		pctx context.Context, reason pushReason, full bool,
-		_ *syncpkg.WatchBatch,
-	) error {
-		pushCfg := cfg
-		pushCfg.Full = full
-		// Watch pushes are automatic: a mirror held by a live serve
-		// process defers instead of rebuilding the whole archive on
-		// every changed batch, and archive-scale diagnostics are
-		// skipped. Push ignores the defer behavior when full is set.
-		pushCfg.Automatic = true
-		var res storage.MirrorPushResult
-		var err error
-		if b.watchHooks != nil && b.watchHooks.duckDBPush != nil {
-			res, err = b.watchHooks.duckDBPush(pctx, reason, full)
-		} else {
-			writer, cleanup, werr := pushWriter(pctx)
-			if werr != nil {
-				return storage.PushNotStartedError{Err: werr}
-			}
-			defer cleanup()
-			res, err = writer.DuckDBPush(
-				pctx, duckCfg, pushCfg, projects, excludeProjects,
-			)
-		}
-		if err != nil {
-			return err
-		}
-		return completeDuckDBWatchPush(res, reason, full)
-	}
-	return archivePushWatch{
-		hooks:    b.watchHooks,
-		appCfg:   b.appCfg,
-		label:    "duckdb watch",
-		debounce: debounce,
-		interval: interval,
-		full:     cfg.Full,
-		push:     push,
-	}.run(ctx)
-}
-
-func (b daemonArchiveWriteBackend) duckDBPush(
-	ctx context.Context,
-	duckCfg config.DuckDBConfig,
-	cfg DuckDBPushConfig,
-	projects []string,
-	excludeProjects []string,
-) (storage.MirrorPushResult, error) {
-	if err := mirrorBackend.ValidatePushTarget(duckCfg); err != nil {
-		return storage.MirrorPushResult{}, err
-	}
-	// Never send a mirror path to the daemon: the daemon pins pushes to its
-	// own resolved path and rejects any request naming a different one, and
-	// a configured RELATIVE path absolutizes against each process's cwd, so
-	// the CLI and daemon can disagree on the absolute form of the same
-	// configured path. An empty path defers to the server's pinned path;
-	// non-path fields (machine name, filters) still apply.
-	duckCfg.Path = ""
-	onProgress, finish := daemonPushProgress(
-		mirrorBackend.DisplayName(), mirrorPushProgressPhase, func(p storage.MirrorPushProgress) {
-			fmt.Printf(
-				"\rPushing... %d/%d sessions, %d messages\x1b[K",
-				p.SessionsDone, p.SessionsTotal, p.MessagesDone,
-			)
-		},
-	)
-	defer finish()
-	return postDaemonPush[storage.MirrorPushResult](
-		ctx, b.tr, b.appCfg.AuthToken, mirrorPushOperation,
-		apiclient.DaemonPushRequest{
-			Full:            cfg.Full,
-			Projects:        projects,
-			ExcludeProjects: excludeProjects,
-			Duckdb: &apiclient.ConfigDuckDBConfig{
-				Path:            duckCfg.Path,
-				URL:             duckCfg.URL,
-				Token:           new(duckCfg.Token),
-				MachineName:     duckCfg.MachineName,
-				AllowInsecure:   duckCfg.AllowInsecure,
-				AttachTimeout:   new(int64(duckCfg.AttachTimeout)),
-				Projects:        duckCfg.Projects,
-				ExcludeProjects: duckCfg.ExcludeProjects,
-			},
-			Automatic: new(cfg.Automatic),
 		},
 		onProgress,
 	)
@@ -836,6 +699,7 @@ func (b *localArchiveWriteBackend) ReplicaPush(
 	defer session.Close()
 	result, err := session.Push(ctx, storage.PushOptions{
 		Full:                           cfg.Full || didResync,
+		RewriteUnchanged:               cfg.Full,
 		ScopeVectorsToChangedSessions:  cfg.ScopeVectorsToChangedSessions,
 		LastReconciledVectorGeneration: cfg.LastReconciledVectorGeneration,
 	}, newReplicaPushProgressPrinter())
@@ -867,153 +731,6 @@ func printReplicaPushStage(display string) func(archivepush.Stage) func() {
 		}
 		return nil
 	}
-}
-
-func (b *localArchiveWriteBackend) DuckDBPush(
-	ctx context.Context,
-	duckCfg config.DuckDBConfig,
-	cfg DuckDBPushConfig,
-	projects []string,
-	excludeProjects []string,
-) (storage.MirrorPushResult, error) {
-	if err := b.database.RequireSourceSync(ctx); err != nil {
-		return storage.MirrorPushResult{}, err
-	}
-	if err := mirrorBackend.ValidatePushTarget(duckCfg); err != nil {
-		return storage.MirrorPushResult{}, err
-	}
-	didResync, err := runLocalSyncAuthoritative(
-		ctx, b.appCfg, b.database, cfg.Full,
-	)
-	if err != nil {
-		return storage.MirrorPushResult{}, err
-	}
-
-	fmt.Println("Starting DuckDB push...")
-	return b.duckDBMirrorPush(
-		ctx, duckCfg, cfg, projects, excludeProjects, cfg.Full || didResync,
-	)
-}
-
-func (b *localArchiveWriteBackend) duckDBMirrorPush(
-	ctx context.Context,
-	duckCfg config.DuckDBConfig,
-	cfg DuckDBPushConfig,
-	projects []string,
-	excludeProjects []string,
-	forceFull bool,
-) (storage.MirrorPushResult, error) {
-	if err := mirrorBackend.ValidatePushTarget(duckCfg); err != nil {
-		return storage.MirrorPushResult{}, err
-	}
-	result, err := archivepush.MirrorPush{
-		Mirror:  mirrorBackend,
-		Config:  duckCfg,
-		Archive: b.database,
-		Options: storage.MirrorPushOptions{
-			Projects:        projects,
-			ExcludeProjects: excludeProjects,
-			Automatic:       cfg.Automatic,
-		},
-		EnsurePricing: b.ensureCurrentPricing,
-	}.Push(ctx, forceFull, func(p storage.MirrorPushProgress) {
-		fmt.Printf(
-			"\rPushing... %d/%d sessions, %d messages\x1b[K",
-			p.SessionsDone, p.SessionsTotal, p.MessagesDone,
-		)
-	})
-	fmt.Print("\r\033[K")
-	if err != nil {
-		return storage.MirrorPushResult{}, err
-	}
-	return result, nil
-}
-
-func (b *localArchiveWriteBackend) newDuckDBPusher(
-	duckCfg config.DuckDBConfig,
-	cfg DuckDBPushConfig,
-	projects, exclude []string,
-) *duckDBPusher {
-	pushCfg := cfg
-	pushCfg.Automatic = true
-	return &duckDBPusher{
-		mirrorPush: func(c context.Context, forceFull bool) (
-			storage.MirrorPushResult, error,
-		) {
-			return b.duckDBMirrorPush(
-				c, duckCfg, pushCfg, projects, exclude, forceFull,
-			)
-		},
-	}
-}
-
-func (b *localArchiveWriteBackend) DuckDBPushWatch(
-	ctx context.Context,
-	duckCfg config.DuckDBConfig,
-	cfg DuckDBPushConfig,
-	projects []string,
-	exclude []string,
-	debounce time.Duration,
-	interval time.Duration,
-) error {
-	engine, err := b.startWatchEngine(ctx, nil)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil
-		}
-		return err
-	}
-	defer engine.Close()
-
-	var pusher *duckDBPusher
-	if b.watchHooks != nil && b.watchHooks.newDuckDBPusher != nil {
-		pusher = b.watchHooks.newDuckDBPusher(engine)
-	} else {
-		pusher = b.newDuckDBPusher(duckCfg, cfg, projects, exclude)
-	}
-
-	debounce, interval = watchTimings(debounce, interval)
-	return archivePushWatch{
-		hooks:    b.watchHooks,
-		appCfg:   b.appCfg,
-		engine:   engine,
-		database: b.database,
-		label:    "duckdb watch",
-		debounce: debounce,
-		interval: interval,
-		full:     cfg.Full,
-		push:     ignoreWatchBatch(pusher.push),
-	}.run(ctx)
-}
-
-func logDuckDBWatchPushResult(res storage.MirrorPushResult, reason pushReason) {
-	if res.Diagnostics.Deferred {
-		log.Printf(
-			"duckdb watch: push deferred: %s (%s)",
-			res.Diagnostics.DeferredReason, reason,
-		)
-		return
-	}
-	if res.Diagnostics.Cutoff != "" {
-		log.Printf(
-			"duckdb watch: source %s; wrote sessions %s, messages %d (%s)",
-			formatDuckDBPushSource(res.Diagnostics),
-			formatDuckDBPushSessionCounts(res.Diagnostics.PushedSessions),
-			res.MessagesPushed,
-			reason,
-		)
-	}
-	if res.Errors > 0 {
-		log.Printf(
-			"duckdb watch: pushed %d sessions, %d messages, %d errors (%s)",
-			res.SessionsPushed, res.MessagesPushed, res.Errors, reason,
-		)
-		return
-	}
-	log.Printf(
-		"duckdb watch: pushed %d sessions, %d messages (%s)",
-		res.SessionsPushed, res.MessagesPushed, reason,
-	)
 }
 
 func (b *localArchiveWriteBackend) ReplicaPushWatch(
@@ -1081,6 +798,7 @@ func (b *localArchiveWriteBackend) ReplicaPushWatch(
 		pusher.session.FrictionReview = engine
 	}
 	pusher.vectors.fullPending = cfg.Full
+	pusher.vectors.rewritePending = cfg.Full
 	defer pusher.session.Close()
 
 	fmt.Printf(

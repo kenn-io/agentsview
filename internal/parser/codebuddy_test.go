@@ -67,7 +67,7 @@ func TestCodeBuddyDiscoveryParseFingerprint(t *testing.T) {
 	updated, err := set.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 	assert.NotEqual(t, fp.Hash, updated.Hash)
-	sess, _, err := parseCodeBuddySession(index, sources[0].ProjectHint, "test")
+	sess, _, err := parseCodeBuddySession(t.Context(), index, sources[0].ProjectHint, "test")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, "ws_hash", sess.Project)
@@ -142,7 +142,7 @@ func TestCodeBuddyThinkingAndUsageOnly(t *testing.T) {
 		index := writeCodeBuddyFixture(t, root, "ws_test", "conv_1")
 		message := fmt.Sprintf(`{"role":"assistant","message":{"content":%s},"extra":{"statsSnapshot":{"thinkingTokens":12}}}`, content)
 		require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(index), "messages", "u1.json"), []byte(message), 0o600))
-		sess, msgs, err := parseCodeBuddySession(index, "", "test")
+		sess, msgs, err := parseCodeBuddySession(t.Context(), index, "", "test")
 		require.NoError(t, err)
 		require.NotNil(t, sess)
 		require.Len(t, msgs, 1)
@@ -178,13 +178,13 @@ func TestCodeBuddyMalformedMessages(t *testing.T) {
 	index := writeCodeBuddyFixture(t, root, "ws_test", "conv_1")
 	require.NoError(t, os.WriteFile(index, []byte(`{"messages":[{"id":"u1"},{"id":"missing"},{"id":"bad"},{"id":"../outside"}]}`), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(index), "messages", "bad.json"), []byte(`{`), 0o600))
-	sess, msgs, err := parseCodeBuddySession(index, "", "test")
+	sess, msgs, err := parseCodeBuddySession(t.Context(), index, "", "test")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Len(t, msgs, 1)
 	assert.Equal(t, 3, sess.MalformedLines)
 	require.NoError(t, os.WriteFile(index, []byte(`{`), 0o600))
-	_, _, err = parseCodeBuddySession(index, "", "test")
+	_, _, err = parseCodeBuddySession(t.Context(), index, "", "test")
 	assert.Error(t, err)
 }
 
@@ -323,7 +323,7 @@ func TestParseCodeBuddySession(t *testing.T) {
 }`
 	require.NoError(t, os.WriteFile(filepath.Join(messagesDir, "msg_a2.json"), []byte(asstMsg2Content), 0o644))
 
-	sess, msgs, err := parseCodeBuddySession(indexPath, "", "local")
+	sess, msgs, err := parseCodeBuddySession(t.Context(), indexPath, "", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 

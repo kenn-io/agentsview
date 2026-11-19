@@ -61,14 +61,14 @@ func (db *DB) resolveAnalyticsMessageScope(
 
 	contentExpr := "''"
 	if includeContent {
-		contentExpr = "COALESCE(content, '')"
+		contentExpr = "content"
 	}
 
 	if err := queryChunked(unique, func(chunk []string) error {
 		reducer := NewScopeReducer(flt, emit)
 		ph, args := InPlaceholders(chunk)
 		rows, err := db.getReader().QueryContext(ctx, `
-			SELECT session_id, ordinal, role, COALESCE(source_subtype, ''), is_system, COALESCE(model, ''),
+			SELECT session_id, ordinal, role, source_subtype, is_system, model,
 				has_thinking, has_tool_use, COALESCE(timestamp, ''),
 				output_tokens, has_output_tokens, content_length, `+contentExpr+`
 			FROM messages

@@ -13,13 +13,12 @@ clickhouse serve <- HTTP API / UI ----+
 
 Operator steps, config keys, and commands live in
 [ClickHouse Sync](../clickhouse-sync.md). Agent rules live in
-[storage](../agents/storage.md#clickhouse-mirror).
+[storage](../agents/storage.md#clickhouse-replica).
 
 ## Problem
 
-PostgreSQL already had configure, push, watch or OS service, then serve. DuckDB
-is a local file you rebuild and swap, not a remote database. ClickHouse needed
-the PostgreSQL operator path with SQL that MergeTree can run.
+PostgreSQL already had configure, push, watch or OS service, then serve.
+ClickHouse needed the PostgreSQL operator path with SQL that MergeTree can run.
 
 ## Behavior
 
@@ -37,8 +36,9 @@ empty. `HasFTS()` is true (ILIKE). `HasSemantic()` is true once
 Content search matches dialogue in `messages` and reasoning in `thinking` for
 substring and regex modes. Hybrid keyword hits use dialogue for matching and
 snippets; vector-only hits use rendered messages. A per-archive dialogue marker
-forces a full push after upgrading. That push re-sends every session in the
-configured mirror scope, including sessions without dialogue. Session
+forces a full push after upgrading. That push rewrites every session in the
+configured mirror scope, including sessions without dialogue, because rows
+written before dialogue existed have matching fingerprints. Session
 fingerprints include nullable dialogue values so later dialogue-only changes
 trigger another write. The marker is set after a clean full push.
 
@@ -56,16 +56,21 @@ trigger another write. The marker is set after a clean full push.
 
 ## Decisions
 
-**Write model from DuckDB, operator model from PostgreSQL.** Whole-session
-replace gated by a fingerprint on the session row, cursor in the mirror. Not
-DuckDB's rebuild-and-swap file, and not PostgreSQL's local watermark plus remote
-reset blob. A missing row reads back as an empty fingerprint, so a reset mirror
-repairs on the next push.
+**Whole-session writes, operator model from PostgreSQL.** Each push replaces
+whole sessions, gated by a fingerprint on the session row, and keeps its cursor
+in the mirror. PostgreSQL's local watermark plus remote reset blob was rejected
+for ClickHouse. A missing row reads back as an empty fingerprint, so a reset
+mirror repairs on the next push.
 
 **Driver `github.com/ClickHouse/clickhouse-go/v2` through `database/sql`.**
-Stores stay in the same `Query`/`Scan` shape as DuckDB and PostgreSQL. Every
+Stores stay in the same `Query`/`Scan` shape as PostgreSQL. Every
 connection sets `final=1` so `ReplacingMergeTree` collapses duplicates without
-`FINAL` in SQL.
+`FINAL` in SQL. Activity reads that return many rows are the exception: serve
+reads the pairing inputs and the Activity usage sums on a second pool that uses
+the driver's native API with the same settings. `database/sql` boxes every
+value and round-trips integers through text; on one production mirror, reading
+1.5 million usage rows that way left ClickHouse waiting 3.8 of 4.2 seconds for
+serve to take them.
 
 **Vectors are pushed and searched, keyed by fingerprint and archive.**
 `clickhouse push` runs the vector phase after the session phase when the local
@@ -82,11 +87,29 @@ scale ever demands it.
 
 The vector phase writes changed sessions in batches of up to 500 sessions or
 about 32 MiB of document text and embeddings, whichever fills first. Each batch
-inserts its documents and chunks, deletes its sessions' older chunks and
-documents, then inserts their `vector_push_state` rows, all under one version.
-The statement count grows with the number of batches, not sessions. A crash
-before the state rows land leaves every session in the batch stale, so the next
-push repeats them.
+inserts its documents and chunks, deletes the rows its sessions no longer hold,
+then inserts their `vector_push_state` rows, all under one version. The delete
+covers documents and chunks whose key the batch did not rewrite. A rewritten key
+keeps its older row until `ReplacingMergeTree` collapses it, which every
+`final=1` read already does. Deleting those rows too would write a patch row for
+each one, and every later read of the table pays to apply patch rows until
+merges fold them in. The batch sends its rewritten keys as query parameters.
+Over HTTP each parameter is a URL field, which the server limits to 128 KiB after
+URL encoding, so a batch whose keys pass 96 KiB splits them into sorted key
+ranges and runs one pair of deletes per range. One long session can need several
+ranges. Evictions run in batches of 500 sessions as well, so the
+statement count grows with the number of batches, not sessions. A crash before
+the state rows land leaves every session in the batch stale, so the next push
+repeats them.
+
+The vector tables are not sorted by session, but every `doc_key` starts with one
+of four prefixes that name its session (`vector.DocKeySessionPrefixes`). In a
+batch of up to 100 sessions, the flush and eviction statements add those
+prefixes to their `session_id` filter, so the primary key skips other sessions'
+rows. Each row a statement reads pays to evaluate the prefix terms, and in a
+larger batch the sessions are scattered across most of the table. A larger
+batch therefore reads the whole table without them. This depends on the push
+writing only keys that `vector.DocKey` builds.
 
 **Tables are `ReplacingMergeTree(push_version)`.** `push_version` is the push
 start time in Unix nanoseconds. Same-key rows from a retry collapse on merge and
@@ -100,22 +123,48 @@ transactions. Per batch of changed sessions (100 by default, set by the target's
 1. Insert dependent rows (messages, tool calls, result events, usage, findings,
    pins).
 1. `DELETE ... WHERE session_id IN (...) AND push_version < v` per dependent
-   table and for `usage_messages`. Its materialized view never sees deletes,
-   so a shorter republished session would otherwise leave obsolete usage rows
-   in the mirror.
+   table and for `usage_messages`, limited to rows whose sort key has no row
+   at `v` or later. Its materialized view never sees deletes, so a shorter
+   republished session would otherwise leave obsolete usage rows in the
+   mirror. Tool result events and tool calls go before messages, so a failure
+   between deletes never leaves calls whose copied message fields name a
+   deleted message.
 1. Insert session rows with fingerprint and `source_archive_id`.
+
+A session whose messages and other dependent rows are unchanged skips steps 1
+and 2: the push rewrites only its session row and usage snapshot. See
+[Pushes rewrite only what differs](#pushes-rewrite-only-what-differs).
+
+The delete removes only keys the session no longer has, such as messages cut
+from a shorter session or a tool call dropped from a kept message. A key the
+push rewrote keeps its older row until `ReplacingMergeTree` collapses it, which
+every `final=1` read already does, as the vector push does for rewritten
+documents. On a server that runs deletes as patch parts
+(`lightweight_delete_mode = lightweight_update`), deleting those rows too
+wrote one patch row per row of every re-pushed session, and every later read of
+the table paid to apply them until a merge or `APPLY PATCHES` folded them in.
+Re-pushed sessions usually keep all their keys, so most of these deletes now
+match no rows and write nothing.
 
 A crash before step 3 leaves the fingerprint stale, so the next push re-selects
 the session. A crash between 1 and 2 leaves extra old rows that step 2 removes
 on retry.
 
+**A large rewrite ends in a compaction.** See
+[Compaction after a large rewrite](#compaction-after-a-large-rewrite).
+
 **Full pushes resume.** A full push writes a run record under
 `agentsview_full_push_run:<archive>` in `sync_metadata` before its first batch
 and clears it with the cursor. The record holds the run's starting push version,
-the archive database ID, the scope, and the schema and data versions. A later
-push that finds the record with matching values resumes the run. It treats a
-session as done when this archive's mirror session row has the local fingerprint
-and a push version at or after the run's. The vector phase skips a session whose
+the archive database ID, the scope, the schema and data versions, and whether
+the run rewrites every session. A later push that finds the record with
+matching values resumes the run. A run that rewrites every session treats a
+session as done when this archive's mirror session row has the local
+fingerprint and a push version at or after the run's. Any other run compares
+each session with the mirror as it did when it started, so the sessions the
+earlier process wrote now match and are skipped. A push that must rewrite every
+session does not resume a run that skips unchanged ones. The vector phase
+skips a session whose
 `vector_push_state` row has a matching hash and a version at or after the run's.
 Any mismatch starts a new full push, and so does `--full`. A run that ends with
 session errors stays recorded with an `errored` flag. A matching record resumes
@@ -130,11 +179,182 @@ earlier process may have stopped before its vector phase. A resumed run skips
 the whole-mirror usage repricing that the run's first process already did.
 Pushes send sessions newest activity first (`ended_at`, then `started_at`, then
 `created_at`). A Codex revert page goes right after its thread's session, which
-mirrors read to decide whether the page is trashed. PostgreSQL pushes and DuckDB
-rebuilds use the same order.
+mirrors read to decide whether the page is trashed. PostgreSQL pushes use the
+same order.
 
-**Shared filter builder, ClickHouse dialect.** Existing SQLite, PostgreSQL, and
-DuckDB SQL stay byte-identical. ClickHouse uses `UNION ALL` in recursive CTEs,
+**Pushes rewrite only what differs.** Each session row stores four fingerprints.
+`agentsview_push_fingerprint` hashes the session fields and all of its content.
+`agentsview_content_fingerprint` hashes only the content: messages, dialogue,
+usage and tool call digests, secret findings, pins, commit links, image text,
+plan usage, and the usage total. `agentsview_message_rows_fingerprint` hashes
+the rows stored in the tables keyed by message ordinal (`messages`,
+`tool_calls`, `tool_result_events`, and `image_text`) for the session's
+`stored_message_count` messages, exactly as the push rendered them, and
+`agentsview_leading_message_rows_fingerprint` hashes the same rows without the
+last stored message's. `content_version` records the push version of the oldest
+dependent rows the session row describes. Readers pair a session with its
+messages, image text, usage rows, and tool result events by accepting rows at or
+above it. `push_version` stays the version of the session row itself, which
+caches keyed on it rely on.
+
+A push plans each session against its mirror row:
+
+| Mirror row                                            | Push writes                                  |
+| ----------------------------------------------------- | -------------------------------------------- |
+| Missing, or content fingerprint differs               | Every table, at the new version              |
+| Content differs, stored message rows still match      | New messages and small tables                |
+| Content differs, only the last stored message changed | That message, new messages, and small tables |
+| Content matches, session fields differ                | Session row and usage snapshot               |
+| Fingerprint matches, row is in an older format        | Session row and usage snapshot               |
+| Fingerprint matches, another archive owns it (full)   | Session row and usage snapshot               |
+| Fingerprint matches                                   | Nothing                                      |
+
+A session row that rewrites only itself keeps the `content_version` of the
+rows it kept. If the archive changes between planning and writing, the batch
+compares the content fingerprint it loaded with the one it planned on and
+rewrites the whole session instead. A row in an older format lacks a stored
+message count, current dashboard facts, or a content fingerprint. Without a
+content fingerprint, any session-field change would rewrite the whole session,
+so the first push after upgrading republishes every session row of its archive
+once, with its content fingerprint, and keeps the messages.
+
+**A session that only grew gets its new messages appended.** Most changed
+sessions are agent sessions that gained messages since the last push. On one
+production mirror, two pushing machines wrote 4.28 million `messages` rows in a
+day for 44,500 new messages, 96 times what changed, because each push rewrote
+every row of each changed session. The upload took most of the insert time and
+left superseded copies for merges to collapse.
+
+When the content fingerprint differs, the local session has at least
+`stored_message_count` messages, and the mirror row has a message rows
+fingerprint, the plan asks to keep the stored rows. The batch then hashes the
+rows it would write, one message at a time, and records the hash after that
+many leading local messages, and after one fewer, on its way to the new
+fingerprints. A match proves the mirror already holds those rows. When only the
+shorter hash matches, the push keeps one message fewer and writes the last
+stored message again. That is the usual case for an active session: a push
+often runs while the last message waits on a tool result, and the result fills
+in that message's tool call row when it arrives. In a test on a real archive,
+three of five sessions that grew between two pushes had changed only that row.
+
+The hash covers the rows the session row published, which can differ from the
+rows a read sees. Another archive's push of the same session can stop after
+writing its rows and before publishing its session row. Its rows carry a newer
+version, so they win over the published rows on read. Its delete, or its
+deletion of the whole session, can remove published rows. The session row
+records `rows_version`, the newest version among the rows it published. A push
+that rewrites only the session row, such as a rename, keeps that value, so the
+other archive's rows stay newer than it. Before keeping rows, the push reads the
+versions and counts of the stored rows at or below the last kept ordinal in
+`messages`, `tool_calls`, `tool_result_events`, and `image_text`. Any version
+below `content_version` or above `rows_version`, or any count other than the
+local session's, makes the push rewrite the whole session. Push versions follow
+start time, so the check misses only a push of the same session that runs at the
+same time. Then the push:
+
+1. Inserts the rows of the later messages, and the image text anchored after
+   the last kept message, at the new version.
+1. Rewrites the tables not keyed by message ordinal (usage events, plan usage,
+   the usage total, secret findings, pins, and commit links), which are small.
+1. Deletes rows older pushes left in the ordinal-keyed tables after the last
+   kept ordinal under keys this push did not write, such as rows an interrupted
+   push wrote before it stopped. Rows at or below that ordinal stay.
+1. Publishes the session row with the old `content_version`, the new message
+   rows fingerprints, and the push's version as both `rows_version` and
+   `push_version`.
+
+Anything else that changes a kept row changes the hash, and the push rewrites
+the whole session at the new version: an edited or renumbered earlier message, a
+tool result filled in for a call before the last stored message, image text
+added for an earlier image, a resync, or a parser change. The archive renumbers
+every message when a sync replaces a session's transcript, so a session
+re-parsed in full gets a full rewrite even when it only grew. On the production
+mirror, about one in ten re-pushed sessions changed a tool call in an earlier
+message, and most Codex cloud sessions were re-parsed in full on every sync.
+Rows written before the message rows fingerprints existed record none, so the
+first push that changes such a session rewrites it in full and records them.
+
+Because an append keeps `content_version`, a session's dependent rows can carry
+several versions from `content_version` through `rows_version`. Reads accept
+that range: usage and image text reads keep rows at or above `content_version`,
+the terminal event snapshot takes the latest event in the range, and the
+session source binding and the Usage carry check accept rows from
+`content_version` through `rows_version` while the counts match. A rename moves
+`push_version` past rows another archive's interrupted push left, so these
+checks use `rows_version` as the upper bound. A
+routine push that only appends writes too few messages to trigger
+[compaction](#compaction-after-a-large-rewrite).
+
+**A kept message's usage stays in the mirror's snapshot.** Each push writes
+one `usage_session_snapshots` row per published session, and that row holds the
+usage of every message the session has. Sending it whole made the snapshot most
+of what a push uploaded after appends: on a copy of a real archive, it was
+nearly 90% of the bytes a push of a few changed sessions sent. When a push keeps
+a session's stored message rows, or all of its content in a row-only write, it
+sends the snapshot's session fields, its usage events, and the usage of the
+messages after the last kept ordinal in an external table. One `INSERT ...
+SELECT` per batch builds each complete row on the server from the session's
+current snapshot, under `FINAL`, keeping that snapshot's usage messages at or
+below the last kept ordinal.
+
+The server uses a stored snapshot only when it records the message rows
+fingerprint the plan kept. A snapshot copies the session row it was written
+with, and the push builds both from one payload, so that fingerprint vouches
+for the snapshot's usage messages as it does for the message rows: every field
+of a usage message is also a field of the message row it hashes. A change to
+the usage message tuple must keep it within `messageRow`. The push then reads
+which carried sessions got a row at its version and sends the whole row for
+the rest, such as a session whose current snapshot came from an interrupted
+push. Readers still see one complete snapshot per session, so nothing reads
+the table differently.
+
+Four pushes of successive copies of a real archive (47,517 sessions), each
+sent to a mirror with and without this change, uploaded:
+
+| Push | Sessions written | Without | With | Reduction |
+| --- | --- | --- | --- | --- |
+| 1 | 118: 18 appended, 33 row-only, 67 whole | 11.05 MB | 7.18 MB | 1.5x |
+| 2 | 4 appended | 904 KB | 140 KB | 6.5x |
+| 3 | none | 36.8 KB | 36.7 KB | 1.0x |
+| 4 | 15: 2 appended, 13 row-only | 1.61 MB | 172 KB | 9.3x |
+| Total | | 13.60 MB | 7.53 MB | 1.8x |
+
+The first push followed half an hour of archive changes, so new sessions,
+which go whole either way, dominate it. Both mirrors ended up identical row for
+row, including every usage table, and returned the same Usage page results.
+
+Each full-push reason gets its own scope:
+
+- Rebuilt archive, local deletion journal reset, push scope change, and a
+  resync before a push: rewrite only sessions that differ, then remove mirror
+  sessions missing locally. A data-version resync usually changes only
+  `data_version`, so most sessions rewrite only their session row.
+- Missing commit links marker: rewrite only `commit_links` for every session.
+- Session rows in an older format (`republishing session rows from an older
+  format`): rewrite only those session rows.
+- Missing message dialogue or usage snapshot marker: rewrite every session,
+  because rows written before those formats lack data their fingerprints
+  cannot see.
+- `--full` (`PushOptions.RewriteUnchanged`): rewrite every session. It is the
+  manual repair for mirror rows damaged outside a push. A `--full` watch keeps
+  the request until a full push starts, so a full push the watch starts on its
+  own after that rewrites only what changed.
+
+A full push no longer repairs mirror rows that differ from what their
+fingerprints claim. A change to how a push renders content that its
+fingerprints do not cover needs a new marker that rewrites every session, or
+a fingerprint change. A serve binary from before `content_version` reads
+dependent rows against `push_version`, so on a mirror where a newer client
+rewrote only some session rows it hides those sessions' image text and
+Activity usage until it upgrades. A serve binary from before appends requires
+every evidence row at exactly `content_version`, so it refuses the source
+binding of an appended session and fails its tool-sequence and file-reference
+reads, and a pushing client from before appends
+restores the terminal event view that matches events at exactly
+`content_version`. Upgrade serve and every pushing client together.
+
+**Shared filter builder, ClickHouse dialect.** Existing SQLite and PostgreSQL
+SQL stay byte-identical. ClickHouse uses `UNION ALL` in recursive CTEs,
 `IN (SELECT)` instead of correlated `EXISTS`,
 `parent_session_id IS NULL OR NOT IN (SELECT id FROM sessions)` for orphans
 (`NULL NOT IN (...)` is unknown and would hide NULL-parent rows), `ILIKE` with
@@ -159,7 +379,7 @@ PostgreSQL watcher.
 
 ## Rejected alternatives
 
-- Pasting PostgreSQL or DuckDB SQL. Correlated `EXISTS`, `date_trunc`, and
+- Pasting PostgreSQL SQL. Correlated `EXISTS`, `date_trunc`, and
   `UNION` without ALL fail or return wrong rows on 25.8.
 - Plain `MergeTree` with delete-then-insert. A crash between the two leaves a
   session with no content and a matching fingerprint, so the next push skips
@@ -169,6 +389,179 @@ PostgreSQL watcher.
   PostgreSQL's. Shared pieces are `db.Store`, dialect hooks, named-target
   parsing, and `serviceKind`.
 
+## Compaction after a large rewrite
+
+A push that rewrites a session writes a new version of each of its rows. The
+older version stays on disk until a merge puts both into one part, and the
+merge selector rarely merges a multi-gigabyte part with smaller ones. After full
+pushes, one production mirror stored 3.7 readable copies of every `messages`
+row, and every `final=1` read paid to collapse them. The evidence is in
+[ClickHouse read performance](clickhouse-performance.md).
+
+After a push writes its cursor, it compacts when it wrote at least a quarter of
+the mirror's live messages (`compactionShare`). Live messages are the sum of
+`stored_message_count` on the session rows, which is cheap to read. A full push
+from either of the two archives that share production's mirror qualifies (55%
+and 45% of live messages). A routine incremental push writes far less. One
+decision covers every table, since the tables a push rewrites grow with its
+messages.
+
+The push then runs `OPTIMIZE TABLE <table> FINAL` on each table a session push
+rewrites (`compactionTables`), largest on disk first, and waits for each merge:
+
+- It sets `optimize_throw_if_noop = 1`. Without it, the server returns success
+  when it declines the merge and says why only in its own log. It declines when
+  the disk lacks free space for twice the table's size, or when a background
+  merge on the table is still running after 120 s.
+- It runs on its own one-connection pool with a one-hour read timeout. The
+  server sends nothing while it merges, and the driver's default five-minute
+  read timeout would end the wait on a large table while the merge keeps
+  running.
+- Compaction only speeds up reads. A failure, such as a role without the
+  `OPTIMIZE` grant, is logged and skips the remaining tables; the push still
+  succeeds. Cancellation still ends the push.
+
+Reads keep working during a merge: queries read the old parts until the merged
+part replaces them. A merge does compete with reads for CPU and disk.
+
+On a copy of production's tables with their stored copies (merges stopped
+while copying, then started on every table as on the server), compaction took
+233 s on a machine that runs production queries 2.4x to 3x faster:
+`tool_result_events` 79 s (13.1 GiB to 2.0 GiB), `usage_session_snapshots`
+133 s (1.11 GiB to 217 MiB, with the one-row granules described below),
+`messages` 13 s (6.88 GiB to 797 MiB, after background merges had started on
+it), and under 5 s for each other table. Expect about 10 minutes on the
+production server. Cold pages, the first request after
+a serve restart and the median of three:
+
+| Page                        | Copies (s) | Compacted (s) | Speed-up |
+| --------------------------- | ---------- | ------------- | -------- |
+| Activity, one year          | 6.631      | 5.625         | 1.18x    |
+| Activity, one week          | 1.274      | 0.466         | 2.73x    |
+| Usage summary, one year     | 0.459      | 0.446         | 1.03x    |
+| Analytics summary, one year | 0.466      | 0.232         | 2.00x    |
+| Trends, one year            | 2.204      | 0.968         | 2.28x    |
+| Content search              | 11.717     | 3.164         | 3.70x    |
+
+Usage reads `prepared_usage`, a plain `MergeTree` without stored copies, and a
+one-year Activity report spends most of its time in Go, so neither changes much.
+
+### Snapshot table granularity
+
+Releases before this change created `usage_session_snapshots` with
+`index_granularity = 1`, one row per granule. A merge reads a part one granule
+at a time, so every merge of that table processed one-row blocks through each
+of its columns and array substreams. The merge was CPU-bound and far slower per
+byte than any other table: production's compaction merge of about 505,000 rows
+took 437 s, 407 s of it CPU, and loaded 19.2 million marks.
+
+The table now uses ClickHouse's default granularity (8,192 rows, with each
+granule capped at 10 MiB, about 850 snapshot rows). On a copy of production's
+snapshots, four versions of 114,792 sessions (459,168 rows):
+
+| Granularity | `OPTIMIZE ... FINAL` (s) | Speed-up | Insert of 152,094 rows (s) | Speed-up |
+| ----------- | ------------------------ | -------- | -------------------------- | -------- |
+| 1           | 166.8                    | 1.0x     | 16.6                       | 1.0x     |
+| 64          | 4.7                      | 35x      | 4.0                        | 4.2x     |
+| 8192        | 2.6                      | 64x      | 3.3                        | 5.0x     |
+
+Reads of the compacted copy, median of three with `final = 1` and
+`max_threads = 8`:
+
+| Read                                    | Granularity 1 (ms) | Default (ms) | Speed-up |
+| --------------------------------------- | ------------------ | ------------ | -------- |
+| Prepared usage refresh query, all rows  | 1539               | 625          | 2.5x     |
+| Snapshot stamp                          | 32                 | 9            | 3.6x     |
+| Revisions of 2,000 changed sessions     | 21                 | 5            | 4.2x     |
+| Prepared rows of 2,000 changed sessions | 224                | 162          | 1.4x     |
+| Prepared rows of 50 changed sessions    | 36                 | 61           | 0.59x    |
+
+Only reads of a few sessions slow down, because each reads a whole granule. A
+granularity of 64 kept those reads as they were, but merged half as fast and did
+not speed up full scans.
+
+ClickHouse cannot change `index_granularity` on an existing table, so the
+schema step rebuilds a table it finds with one-row granules
+(`rebuildUsageSnapshots`):
+
+1. It takes a rebuild number N above every number it saw and no lower than
+   the server clock in nanoseconds, and creates
+   `usage_session_snapshots_rebuild_N` with the old table's columns, including
+   the `MATERIALIZED` expressions that table was created with, and the default
+   granularity. `CREATE TABLE` fails when the name exists, so one process owns
+   each number, and numbers only grow, so a dropped number is never taken
+   again.
+2. It copies every row, older versions included, with the stored values of the
+   `MATERIALIZED` columns (`insert_allow_materialized_columns`), so nothing is
+   recomputed.
+3. It deletes the copied rows the old table no longer holds and copies the rows
+   it gained, which covers pushes from other processes during the copy. Then it
+   records the copy's `(id, revision)` pairs in
+   `usage_session_snapshots_baseline_N`.
+4. It swaps the tables with `EXCHANGE TABLES`, so reads and pushes always find
+   a complete table.
+5. Measured against the baseline, it applies what pushes changed in the old
+   table between step 3 and the swap: it copies the rows the old table gained,
+   deletes them from the old table, and deletes the rows the old table lost. A
+   session in the baseline and deleted after the swap is in both the baseline
+   and the old table, so it stays deleted. A session copied by step 5 and
+   deleted afterwards stays deleted too, because a resumed step 5 finds nothing
+   left to copy. Then it drops the baseline and the old table.
+
+On 140,912 production rows the copy took 1.4 s and the checks in steps 3 and 5
+under 0.5 s on the faster test machine. Two cases are missed, and the next full
+push repairs both:
+
+- A push still writing at the swap, whose insert or delete lands in the old
+  table after step 5 reads it.
+- A session first pushed between step 3 and the swap and deleted while step 5
+  copies it, or after a process stopped between that copy and the delete from
+  the old table. The baseline cannot tell its rows from rows step 5 has yet to
+  copy, so step 5 brings the session back.
+
+If `EXCHANGE TABLES` returns an error, the swap may still have run on the
+server. The rebuild then reads the rebuild table's granularity. One-row
+granules show the swap ran, so it keeps the tables, and a start after they are
+an hour old finishes step 5. If the check fails, it also keeps them; a later
+start finishes step 5 if the swap ran, or drops them and rebuilds if it did
+not. Otherwise the swap did not run, and it drops them as after any other
+failure.
+
+Rebuild tables under an hour old belong to another process, and the schema step
+leaves them alone. Older ones belong to a process that stopped:
+
+- Before the swap, the schema step rebuilds with a new number and drops them
+  just before its own swap. It drops only the numbers it saw, and a process
+  that claims a number after a newer one exists gives it up, so a process
+  acting on an old view of the tables never drops a newer rebuild's copy.
+  Dropping them only at the swap keeps the old table of a stopped rebuild that
+  wakes up and swaps during the copy: that swap gives the snapshot table the
+  default granularity, so the new rebuild stops, and a later start finishes
+  the woken rebuild's step 5. A woken rebuild that swaps in the moment between
+  that check and the drop loses the rows pushed since its step 3; the next
+  full push repairs them.
+
+Processes that start together take different numbers, so before its claim
+counts and again before its swap, a rebuild stops when it finds another
+rebuild's tables under an hour old. Both may stop, and a later start rebuilds;
+this keeps two rebuilds from both swapping and running step 5 against the
+wrong table.
+- After the swap, with the baseline still there, the process stopped during
+  step 5, so the schema step finishes step 5. Without the baseline, step 5
+  already ran, and the schema step only drops the old table: copying its rows
+  again could bring back sessions deleted since.
+
+`EXCHANGE TABLES` keeps each table's metadata time, so the rebuild rewrites the
+old table's comment just before the swap to make the swapped-out table look as
+new as the swap. A database that cannot swap tables keeps one-row granules: two
+renames would leave a moment with no snapshot table.
+
+The rebuild only makes merges faster, so a failed rebuild, such as one that
+lacks a privilege or times out, logs a warning and the schema step continues.
+A failure before the swap leaves the slow table, and the next start tries
+again. A failure after the swap leaves the fast table and step 5 unfinished,
+and a start after the rebuild tables are an hour old finishes it.
+
 ## Stored usage prices
 
 Push stores exact Go-computed request prices and their pricing contexts in
@@ -176,19 +569,91 @@ ClickHouse. Daily usage queries deduplicate events within the requested window,
 join those prices, and return grouped totals. Request rounding, historical
 rates, token tiers, and provider adjustments still use the Go pricing rules.
 
-Price records are keyed by their normalized inputs and a digest of the shared
-pricing catalog, billing policy, and price format. A catalog change causes the
-next push to price the existing mirror again without re-exporting sessions.
-Unchanged pushes price new session batches and Cursor events. Old pricing
-generations remain available to readers and exporters using them.
+Price records are keyed by their normalized inputs and a pricing digest. The
+digest covers the price format, the provider billing policies, and, for each
+model registered in `usage_price_models`, everything the shared catalog resolves
+that model to at any time (`PricingResolver.DependencyFingerprint`, which the
+SQLite usage cache also uses). Catalog rows no registered model resolves to do
+not count. The mirrored catalog merges what every exporting machine last
+fetched, so unrelated rows change on most pushes. A digest over the whole
+catalog repriced the whole mirror each time, about nine times a day on a mirror
+fed by three machines, and kept every generation.
+
+A pricing pass reads message usage from `usage_messages`, the narrow copy of the
+usage columns that every usage reader also reads, and gets the same price keys
+a read of the token JSON in `messages` would. `usage_messages`
+indexes every 64 rows. For a batch of 100 sessions, a pass over `messages` read
+whole index granules of the wide table: about 1.5 million rows on a production
+mirror, for under 3,000 usage rows.
+
+A push prices the whole mirror when the digest changed, on a full push, and on a
+mirror no pass has covered. Otherwise it prices new session batches under the
+current digest, and passes over the Cursor rows only when one could find
+something:
+
+- `cursor_usage_events` has rows, and
+- the mark in `sync_metadata` key `usage_prices_cursor` differs from the
+  current one. The mark covers the digest, the active parts of
+  `cursor_usage_events` with their file hashes, the lowest block number of the
+  digest's `usage_event_prices` parts, and the query that derives Cursor price
+  keys. A push reads the parts before pricing and records the mark after the
+  pass, or the whole pass, finishes.
+
+New Cursor rows, merges, and mutations change the parts. Dropping the digest's
+partition raises its lowest block number. A build that changes how price keys
+are derived changes the query. Each forces the next pass. An unchanged mark
+means the rows a finished pass priced are still the only rows, and their
+records are still there. Reading the parts takes about 2 ms, against about
+315 ms and 1.68 million rows for a pass on a production mirror with no Cursor
+rows. The first pass under a new digest records a mark from before the
+digest's first records, so the next push passes once more.
+
+A usage row whose model the digest does not cover is not priced under it,
+because a catalog that resolves that model differently would map to the same
+digest:
+
+1. The session batch registers the model as pending and leaves its rows to
+   per-request pricing.
+1. When its batches are done, the push prices the whole mirror under the digest
+   that adds every pending model, then registers the models.
+1. Readers derive the digest from the registered models, so they move to the new
+   digest only after its records are complete.
+
+A push that stops between the first two steps leaves the models pending, and the
+next push adopts them before its batches.
+
+**Pruning.** Each digest is its own partition of `usage_event_prices` and
+`usage_price_contexts`. After pricing, every push drops the partitions of
+digests that are not the one it priced under, not the mirror's current digest,
+not the digest `prepared_usage` was built from, and have had nothing written
+under them for 24 hours. Exporters whose catalogs disagree on a priced model, or
+that run an older build, alternate between digests; the window keeps those
+switches from repricing the whole mirror each time. Listing digests reads two
+columns of the price tables (about 0.2 s at 20 million rows), and dropping a
+partition rewrites nothing. Lightweight deletes would write patch parts as large
+as the deleted rows on servers in `lightweight_update` mode.
+
+A push that revives a digest idle for 24 hours while another push drops it can
+lose part of that digest's records, or keep records whose contexts were dropped.
+Reads stay correct. They price rows without a record per request. The next push
+prices the Cursor rows again; session rows wait for the next whole pass. A read
+that still finds a record without its context after three attempts prices every
+row per request.
+
+A read lists the context IDs of its digest on every request, but the store keeps
+the contexts it has decoded and fetches the JSON only for IDs it has not seen. A
+context ID is a hash of the context's JSON, so a decoded context stays valid for
+as long as its ID exists.
 
 Serve stays read-only. Missing prices and reader-specific custom rates are
 computed for that request using the current pricing rules while push fills the
-shared records. A response never mixes prices from different catalog digests.
+shared records. A response never mixes prices from different pricing digests.
 Copilot authoritative costs retain their per-session selection and allocation.
 
-The first push after the schema upgrade creates and fills the price tables.
-These are derived data; SQLite remains the archive.
+The price tables are derived data; SQLite remains the archive. The schema step
+drops price tables that an older version created without partitions, creates
+them partitioned, and clears the mirror's current digest, so the next push
+prices the mirror again.
 
 ## Activity report reads
 
@@ -204,11 +669,40 @@ named `activity_candidate_ids`, and every later query reads
 `IN (...)` list is inlined into statement text.
 
 **Tool events pair per session in Go.** Serve loads the candidate sessions'
-messages and terminal tool events in two ordered scans, then pairs each tool
-event with the next stamped message or the next tool event per session. A
-segment tree over message timestamps finds the lowest eligible ordinal even when
-timestamps run backwards, so ordinal and timestamp behavior matches the old SQL,
-including reversed clocks and the tail pairing after the last message.
+messages and terminal tool events in ordered scans, then pairs each tool event
+with the next stamped message or the next tool event per session. A segment tree
+over message timestamps finds the lowest eligible ordinal even when timestamps
+run backwards, so ordinal and timestamp behavior matches the old SQL, including
+reversed clocks and the tail pairing after the last message.
+
+One goroutine scanning millions of message rows kept ClickHouse waiting to send
+them for seconds. So the sessions are dealt into one slice per 4,096 sessions,
+up to two, and each slice's messages are read at once on the native connection
+pool, beside the tool event read. More pairing slices slowed the usage read that
+runs beside them without making pairing ready sooner. Each session's messages
+arrive together, so a slice appends them without a map lookup per row. Pairing a
+session reads only its own inputs, so sessions are paired on every available
+core.
+
+**Each session keeps its runs.** After pairing a session over all time, serve
+caps each interval at the gap, trims it against the session's earlier activity,
+and joins touching pieces with the same model into runs. It keeps those runs
+and the times of the session's counted user and assistant messages in memory,
+keyed by session, push version, and gap cap, within a 256 MiB budget. A refresh
+reads and pairs only the sessions whose push version changed, clips every kept
+session's runs to the range, and sweeps the runs in start order through
+`activity.BuildRunArtifactsWithSurvivorUsage`. A long range has about twenty
+times fewer runs than interval candidates. A run's pieces do not depend on the
+range: clipping after the trim gives the pieces that clipping each candidate
+first gives, and the candidates a range leaves out of pairing are ones the
+aggregator rejects for that range anyway. Runs keep their piece boundaries, so a
+range end inside a run still finds the start of the last piece left, which
+bucket membership needs. The shared aggregator sums interval durations as
+integers and converts to minutes once, so minutes do not depend on how activity
+was split into intervals, on every backend. Storing runs in ClickHouse at push
+time was rejected: it needs a schema change, upgraded pushers on every machine,
+and a re-push of existing sessions. A server that has just started still reads
+every session once.
 
 **Usage is stored, not parsed.** The insert-maintained `usage_messages` table
 stores token counters that its view computes from `token_usage` at insert time,
@@ -225,13 +719,15 @@ version resolution instead of scanning `tool_result_events`.
 Both derived tables use `ReplacingMergeTree(revision)` with
 `revision = push_version * 2` for backfilled rows and `push_version * 2 + 1` for
 rows written by the materialized view. A live insert therefore beats a
-concurrent backfill of the same version. Readers compare each row with
-`sessions.push_version`. A push writes messages before it publishes the session
-row, and an interrupted push never publishes it, so usage rows count when their
-version is at or above the session's; an exact match would report no usage for
-that session until its next successful push. Rows that a shorter republished
-session left behind stay below the session's version and never surface. Terminal
-snapshots are written by the session insert itself and match exactly.
+concurrent backfill of the same version. Readers compare usage rows with
+`sessions.content_version`. A push writes messages before it publishes the
+session row, and an interrupted push never publishes it, so usage rows count
+when their version is at or above the session's; an exact match would report no
+usage for that session until its next successful push. Rows that a shorter
+republished session left behind stay below the session's version and never
+surface. Terminal snapshots are written by the session insert itself, read
+`tool_result_events` at or above the session's `content_version`, and match
+`sessions.push_version` exactly.
 
 The snapshot view runs inside every `sessions` insert, and ClickHouse reads a
 view's joined table in full. The view therefore limits `tool_result_events` to
@@ -244,19 +740,25 @@ read-only role cannot run the fill and fails the compatibility check until a
 capable push completes it.
 
 **Freshness is checked from part metadata.** Every report request first asks
-whether the mirror changed. That source probe used to scan `sessions`,
-`messages`, `usage_events`, both pricing tables, and `sync_metadata` for their
-counts and maxima on every request. The store now hashes the active
-`system.parts` rows of those six tables, plus `usage_session_snapshots` and
-`prepared_usage`, which is metadata and reads no data, and reuses the last probe
-result while the hash is unchanged. A merge changes the parts without changing
-the data, so the hash is never the report token: on a hash miss the store
-recomputes the original probe and caches it under the new hash, and only a real
-data change moves the token or resets pagination. The mutex protects only the
-cached pair, never a query, and an error is not cached. This is whole-mirror
-invalidation; any insert, delete, or merge on one of those tables triggers one
-full probe. Reading `system.parts` needs its own grant, described in
-[ClickHouse sync](../clickhouse-sync.md#3-serve-the-dashboard).
+whether the mirror changed. The store hashes the active `system.parts` rows of
+`sessions`, `messages`, `usage_events`, both pricing tables, `sync_metadata`,
+`usage_session_snapshots`, and `prepared_usage`, which is metadata and reads
+no data, and reuses the last probe result while the hash is unchanged. A merge
+changes the parts without changing the data, so the hash is never the report
+token: on a hash miss the store recomputes the original probe and caches it
+under the new hash, and only a real data change moves the token or resets
+pagination. The mutex protects only the cached pair, never a query, and an
+error is not cached.
+
+A hash miss reads what changed, not whole tables. The highest message and usage
+event ids come from the 16 highest ids of each part, which the store keeps per
+part name: a lightweight delete can hide rows of a part but every other write
+makes a new part, so a FINAL read of the sessions above the highest kept
+threshold finds the maximum unless all those rows were replaced, and only then
+does the probe read every id. Usage coverage comes from the row trackers
+described in [Kept reads](#kept-reads). Reading `system.parts` needs its own
+grant, described in [ClickHouse
+sync](../clickhouse-sync.md#3-serve-the-dashboard).
 
 ## Prepared usage
 
@@ -269,15 +771,28 @@ in one transaction and writes them to `usage_session_snapshots` as one versioned
 snapshot. A retry of a failed batch reuses the payload it already loaded, so one
 push version never mixes two archive states.
 
+**Views keep the query in the code.** `CREATE MATERIALIZED VIEW IF NOT EXISTS`
+leaves an existing view alone, so a mirror created by an older release would
+keep that release's query. Each view therefore carries a comment with a hash of
+its query. Every schema step compares the live comment with the code's and, when
+they differ, runs `ALTER TABLE ... MODIFY QUERY` and then updates the comment.
+`MODIFY QUERY` replaces the query in place without stopping inserts, so no
+insert runs without the view and no derived rows go missing. It keeps the view's
+source table, columns, and clauses (`TO`, `REFRESH`); a change to those needs a
+new view. `usage_messages_mv`, `terminal_event_snapshots_mv`, and
+`prepare_usage` use this check. For `prepare_usage` it also catches a change to
+the refresh settings, which the `prepared_usage` table comment does not cover.
+
 **Refreshed table.** The refreshable materialized view `prepare_usage` turns the
-snapshots into `prepared_usage` every 15 minutes, and every push starts a
-refresh. Rows are sorted by their stored UTC time, so a day read touches only
-that day's granules. Each row stores its price model, price key, and a copy of
-its price record, stamped with the pricing digest it was priced under. The table
-comment names the query that built it; a table built by another query is dropped
-and rebuilt on the next schema step, and a rebuild that stopped halfway finishes
-on the next start. The schema step adds a missing projection only with the
-refresh stopped, and always starts it again.
+snapshots into `prepared_usage` when a push finds a refresh due, and once a day
+as a backstop; see "When a push rebuilds" and "The view's schedule" below. Rows
+are sorted by their stored UTC time, so a day read touches only that day's
+granules. Each row stores its price model, price key, and a copy of its price
+record, stamped with the pricing digest it was priced under. The table comment
+names the query that built it; a table built by another query is dropped and
+rebuilt on the next schema step, and a rebuild that stopped halfway finishes on
+the next start. The schema step adds a missing projection only with the refresh
+stopped, and always starts it again.
 
 **Refresh without a table exchange.** Every refresh of the view ends with
 `EXCHANGE TABLES`, which ClickHouse runs as a `renameat2` call with the
@@ -308,17 +823,18 @@ only while a lock exists and the newest one is not retired. A database that can
 swap tables has no lock. A push there that finds the view missing, as while a
 schema step recreates it, never rebuilds.
 
-Each push in rebuild mode rebuilds the table itself before it returns. It runs
-the view's query into a new `prepared_usage_build_<n>` table and moves that
-table's parts into `prepared_usage` with `REPLACE PARTITION`, which replaces all
-the parts at once. Readers see the previous rows or the new ones, never a mix,
-and read them as they read rows the view prepared. A push skips its rebuild when
-the stored stamp equals the current one, both before and after it takes the
-lock. After publishing, the holder rebuilds once more if the snapshots changed
-meanwhile. If they changed again, it logs that and leaves the rest to the next
-push. Without the view, nothing refreshes on a schedule, and a failed rebuild
-waits for the next push. Because `prepared_usage` is then not a refreshable
-view's target, native backups include its rows without
+Each push in rebuild mode rebuilds the table itself before it returns, once a
+rebuild is due. It runs the view's query into a new `prepared_usage_build_<n>`
+table and moves that table's parts into `prepared_usage` with `REPLACE
+PARTITION`, which replaces all the parts at once. Readers see the previous rows
+or the new ones, never a mix, and read them as they read rows the view prepared.
+A push checks that a rebuild is due both before and after it takes the lock.
+After publishing, the holder rebuilds once more if the snapshots that changed
+meanwhile make one due. If they make one due again, it logs that and leaves the
+rest to the next push that writes usage; see "What the check reads" below.
+Without the view, nothing refreshes on a schedule, and a failed rebuild waits
+for that push. Because `prepared_usage` is then not a
+refreshable view's target, native backups include its rows without
 `backup_data_from_refreshable_materialized_view_targets`.
 
 Rebuilds take turns, as the view's refreshes do. A read checks freshness and
@@ -380,10 +896,296 @@ A lock can outlive its holder:
 session has a current snapshot. Sessions pushed since the last refresh form a
 delta: their rows are prepared and priced in Go once per snapshot, sent to the
 read as an external table, and replace that session's stored rows. A refresh
-empties the delta. Before the first refresh, or while a session lacks a current
-snapshot, reads use raw rows. When the stored price copies no longer match the
-price records, for example after the records were cleared, reads keep the
-prepared rows and price them through the per-request join.
+empties the delta. A snapshot from which the refresh keeps no row, such as a
+trashed session's or one whose messages name a model but report no tokens, has
+nothing to prepare and never joins the delta. Each snapshot stores that answer
+in its `prepares_usage` column, so the check reads no usage arrays. Before the
+first refresh, or while a session lacks a current snapshot, reads use raw rows.
+When the stored price copies no longer match the price records, for example
+after the records were cleared, reads keep the prepared rows and price them
+through the per-request join.
+
+**When a push rebuilds.** Because reads stay exact while the table is behind, a
+rebuild only changes what reads cost, and it rewrites the whole table. On a
+mirror whose data directory is on NFS, rebuilding on every push wrote the whole
+table hundreds of times a day. A push therefore rebuilds, or starts the view's
+refresh, only when one of these holds:
+
+- The table is empty.
+- The pricing digest changed, or the price record count fell below the stored
+  one, so the stored price copies no longer serve reads.
+- The rows reads prepare themselves reach one `chPreparedUsageBehindShare`
+  (one-fiftieth) of the stored rows.
+
+The push counts those rows over the snapshots that no stored row was derived
+from, with the delta query's message and event eligibility, so a snapshot that
+prepares no rows counts nothing. The count reads only the usage array fields
+that eligibility checks, and a test holds it equal to the rows the delta query
+returns. A rebuild then rewrites at most fifty times the rows that
+changed, and reads prepare at most a fiftieth of what they read. On a
+300,000-row test table, a 5,000-row delta added about 0.13 seconds to the first
+read after a push. Deleted sessions' rows stay until the next
+rebuild, and reads skip them.
+
+**What the check reads.** A push compares the stamp stored on the rows with the
+stamp a refresh would store now, and counts rows only when the two differ. It
+reads the snapshot count and hash without FINAL, from the highest revision of
+each session, which gives the values the refresh's FINAL read gives. It reads
+the price record count from part metadata, which counts a key twice while two
+pushes that priced it at once both hold it unmerged. That count can only be too
+high, so a count below the stored one still proves the records were cleared; a
+clearing refilled with enough duplicates to reach the stored count goes unseen.
+On a copy of the production layout, the check read 323,000 rows (17 MiB) in 22
+ms, against 2.56 million rows (234 MiB) in 188 ms with FINAL: 8.5x faster.
+
+A push that wrote no snapshots, deletions, price records, or pricing digest
+checks only that the table is not empty. A push that changed those inputs
+checks after its own writes. When that push ends with session errors, which
+skip the check, or a rebuild leaves the next push to rebuild, the rebuild
+waits for the next push that writes, or for the view's daily refresh. Reads
+stay exact meanwhile, only slower.
+
+**The view's schedule.** The view refreshes on its own once a day
+(`chPreparedUsageRefresh`, `EVERY 1 DAY`), at midnight in the ClickHouse
+server's time zone. Every refresh rewrites the whole table, and a push already
+starts a refresh whenever one is due, so the schedule only covers a due refresh
+that no push started: a push that ended with session errors, or a refresh
+request that failed. The next push that writes checks again and catches both,
+so the schedule matters only when no push writes for a day. The table comment
+hashes the schedule, so changing it drops and rebuilds `prepared_usage` once on
+the next schema step.
+
+Until November 2026 the schedule was `EVERY 15 MINUTE`. On a production mirror
+with 1.56 million prepared rows, each refresh read 4.5 million rows (1.8 GiB),
+wrote every row, and took about 6 seconds. The schedule ran it 96 times a day
+whether or not anything changed, and the build table took about 16 GiB of new
+parts a day.
+
+A simulated day on a scratch server with 1.5 million prepared rows ran 27
+pushes every 15 minutes, each republishing 3 sessions, and one full push of
+22,000 sessions in 10 pushes. The view's clock was faked with
+`SYSTEM TEST VIEW ... SET FAKE TIME`:
+
+| Schedule | Refreshes | Started by pushes | Rows written | Bytes written |
+| --- | --- | --- | --- | --- |
+| `EVERY 15 MINUTE` | 106 | 10 | 159 million | 53.2 GiB |
+| `EVERY 1 DAY` | 14 | 13 | 21 million | 7.0 GiB |
+
+The daily schedule wrote 7.6x less. Without the 15-minute reset, the steady
+pushes reached the one-fiftieth limit three times, so pushes started three
+more refreshes.
+
+Bursts of push-started refreshes follow a full push from another host. After
+a deploy, a second host's full push republishes every session with a new
+revision, about 4,000 sessions a minute. Each push from a host that is already
+done finds the table one-fiftieth behind again and starts a refresh, about
+every 33 seconds until the full push ends. Each refresh in those bursts was
+due by the rule above, and none was requested while another was running.
+
+## Usage rollup
+
+A cold Usage page still ranked every prepared row to deduplicate it, then
+grouped and priced the survivors. Almost none of those rows change between
+refreshes, so push stores the result for the rows whose deduplication cannot
+depend on other rows, and reads rank only the rest.
+
+**What the table holds.** `usage_rollup` has one partition per prepared stamp.
+Its key is the table comment, which hashes the table and build SQL, plus the
+`prepared_usage` stamp: the snapshot count and hash, the pricing digest, and the
+price record count. A partition holds three kinds of rows:
+
+- `aggregate`: priced sums per session, model, price model, explicit group, and
+  15-minute UTC bucket. Explicit groups keep their own rows, because Go reads
+  their per-row values.
+- `exception`: prepared rows copied unchanged, for every (session, bucket) unit
+  that holds a deduplication group the rollup cannot sum. A group cannot be
+  summed when its rows span units, when its rows disagree on a null time or, for
+  non-Claude rows, on the model, or when a Cursor usage event names it. The rule
+  works on whole units because Claude deduplication joins rows by session, time,
+  and ordinal across groups.
+- `identity`: the hash of each summed group's identity and its unit, for groups
+  whose identity is not a single row.
+
+Buckets are Unix seconds computed from the microsecond time, so times before
+1970 and after 2106 keep their own bucket. One table at 15-minute grain serves
+every zone: each bucket falls on one local date wherever the offset is a
+multiple of 15 minutes and does not change inside the bucket.
+
+**Building.** After a push requests a prepared refresh, it waits for the
+refresh to finish. It then reads the stamp, and builds the partition if that
+stamp has none. Three inserts fill a `usage_rollup_build_<n>` table, the push
+checks that the stamp did not change meanwhile, and `REPLACE PARTITION` moves
+the partition in whole. A push also drops build tables a killed push left an
+hour ago, and partitions of other stamps that no push has written for an hour.
+A failed build is logged, and reads stay exact without it.
+
+**Reading.** A read uses the partition only when the result stays identical:
+
+- Prepared usage is ready, no host serves raw rows, and the partition for the
+  current stamp exists.
+- For priced reads, the prepared rows' pricing digest matches the catalog, and
+  no custom rate names a model and price model the rollup summed.
+- The zone keeps every summed bucket on one date. Reads without a zone check
+  the fixed offset; reads with one check the partition's buckets in ClickHouse
+  once per zone.
+
+The read ranks the exception rows, the delta rows, and, from `prepared_usage`,
+every summed unit whose identity a delta row or Cursor row also names. It adds
+the aggregate rows of live sessions that pass the filters and are not replaced
+by the delta or ranked again, dates them by bucket, and regroups the result.
+Money sums as `Int128` and keeps today's overflow check. The read collects its
+groups before returning them and checks afterwards that the partition still
+exists; a push that dropped it meanwhile sends the read back to the prepared
+rows.
+
+**Cost and gain.** On a copy of a production mirror with 1.58 million prepared
+rows, the rollup held 170,000 aggregate, 21,000 exception, and 805,000 identity
+rows. Its three inserts took 3.4 seconds and about 1 GiB of memory. A push that
+starts a prepared refresh now also waits for it, which took 3.4 to 4.1 seconds
+there; before, the push returned while the refresh ran. Pushes that start no
+refresh only check that the partition exists.
+
+First Usage requests after a serve start, in `America/New_York`, median of five
+starts:
+
+| Request | Before (s) | Rollup (s) | Speed-up |
+| --- | --- | --- | --- |
+| One-year summary | 1.477 | 0.826 | 1.8x |
+| 30-day summary | 0.602 | 0.428 | 1.4x |
+| 30-day top sessions | 0.519 | 0.359 | 1.4x |
+
+Repeat requests reuse the grouped rows they read before, so the rollup does not
+change them.
+
+## Dashboard facts
+
+The Analytics panels used to rebuild per-session numbers from `messages` and
+`tool_calls` on every load. On a mirror of about 107,000 sessions, 2.5 million
+messages, and 1.7 million tool calls, that meant FINAL scans of both tables for
+Activity, a transfer of every message's role, time, and length for Velocity, a
+join of every tool call to its message for Tools and Skills, and, after each
+serve restart, a 22 s scan of every user prompt's text for Signals.
+
+Push already holds each session's messages and tool calls, so it computes these
+numbers once and stores them on the session row (`dashboard_facts.go`):
+
+| Column | Counts | Replaces the scan in |
+| --- | --- | --- |
+| `fact_user_messages` | user rows that are not system rows or tool results | Activity, Session Shape autonomy |
+| `fact_assistant_messages`, `fact_thinking_messages` | assistant rows, rows with thinking | Activity |
+| `fact_tool_use_messages` | assistant rows with tool use | Session Shape autonomy |
+| `fact_tool_calls` | tool calls | Activity, Velocity |
+| `fact_frustration_markers` | prompts `signals.IsFrustrationMarker` flags | Signals |
+| `fact_velocity_*` | the session's `db.SessionVelocity` over messages without Claude hooks | Velocity |
+
+`stored_message_count` already gives the message total. Each tool call row also
+carries its message's `message_timestamp` and `message_model`, so Tools and
+Skills group calls without joining `messages`.
+
+**Reads fall back per row.** A sessions row whose `dashboard_facts_version` is
+not `dashboardFactsVersion`, or a tool call row whose `message_facts` is false,
+came from an older writer. Reads split each panel into a part that reads facts
+and a part that scans messages for exactly those sessions or calls, then
+combine them. The scan part prunes by session ID, so it reads nothing once
+every row carries facts. Results never depend on the backfill finishing.
+
+**Facts match the scan they replace.** Each fact uses the scan's predicate and
+the same Go function the scan feeds (`IsFrustrationMarker`,
+`db.ComputeSessionVelocity`). Velocity facts use timestamps truncated to
+microseconds, as `DateTime64(6)` stores them, so turn cycles match a scan of the
+stored rows exactly. `TestDashboardFactsMatchMessageScans` compares every
+affected panel with facts, with some sessions scanned, and with all scanned.
+While a push is between its inserts and its session row, the facts describe the
+published session version and a scan would read the newer messages; both
+settle when the session row lands.
+
+**Backfill is one full push.** A push that finds rows of its archive below the
+current facts version, or without `stored_message_count` or a content
+fingerprint, runs one full push (`republishing session rows from an older
+format`) and repeats it until one finishes without errors. The facts come from the local archive, so the push rewrites only the
+stale session rows and keeps their messages. Bump `dashboardFactsVersion` when
+a fact's definition changes.
+
+**FINAL stays on.** The panels that used facts now read `sessions` with FINAL
+instead of `messages` and `tool_calls`, which removes most of FINAL's cost
+from them.
+
+**The Signals scan judges most prompts in ClickHouse.** For sessions without a
+current `fact_frustration_markers`, Signals runs one query
+(`chFrustrationPromptsSQL`) with the session IDs as an external table. A prompt
+made only of ASCII and a fixed set of symbols (dashes, quotes, arrows, check
+marks, box drawing, emoji, private use) is judged in SQL and comes back only
+when it is a marker, without its text. Over such text ClickHouse's RE2 and Go's
+`regexp` see the same letters, spaces, and word boundaries, so the SQL follows
+`IsFrustrationMarker` step by step with the same pattern and thresholds, which
+`internal/signals` exports. Any other prompt, including invalid UTF-8, comes
+back with its text and Go judges it. The set is `signals.PlainPromptSymbols`,
+which PostgreSQL shares, and a unit test checks every symbol in it against Go's
+Unicode tables. ClickHouse tests compare the counts with
+`IsFrustrationMarker` on edge cases and on a random corpus, and require that
+only prompts outside the set come back with text.
+
+The query reads without FINAL, because FINAL would merge the text of every
+message in the sessions, assistant replies included. A subquery with
+`final = 1` finds the newest version of each prompt from key and filter
+columns, and the outer read takes text for those versions only. On the
+production mirror, for the 6,811 sessions of one Signals load, the old chunked
+scan ran 8 queries that read 10.6 GiB, sent 1.13 GiB to Go, and peaked at
+1.21 GiB of memory per query. The new query reads 3.3 GiB, sends 1.6 MiB, and
+peaks near 290 MiB, with the same per-session counts.
+
+**Rejected alternatives.**
+
+- Partitioning the large tables and setting
+  `do_not_merge_across_partitions_select_final`. ClickHouse cannot add a
+  partition key in place, so every large table would be copied, and every
+  version of a row must stay in one partition.
+- Computing frustration counts eagerly on message writes as part of quality
+  signals. That would recompute every session's signals and republish every
+  replica for a count ClickHouse can compute on demand. SQLite instead saves
+  counts lazily on read, keyed by transcript revision and marker version.
+- Porting all of `IsFrustrationMarker` to ClickHouse SQL. Unicode letters,
+  spaces, and case folding differ between Go and ClickHouse, so only prompts in
+  the shared alphabet above are judged in SQL.
+- Filtering prompts in SQL with a looser test that keeps every possible
+  marker, such as matching the phrase words alone. Long pasted prompts contain
+  those words, so on the production mirror such a filter dropped almost none of
+  the 4.25 GiB of prompt text.
+
+SQLite keeps its scan in Go, which skips system rows in SQL. PostgreSQL judges
+plain prompts in SQL as well; see
+[PostgreSQL frustration marker reads](../agents/storage.md#postgresql-frustration-marker-reads).
+
+**Go judges each prompt in a few passes.** SQLite sends prompts from sessions
+without a current stored count to `IsFrustrationMarker`. PostgreSQL and
+ClickHouse send the prompts they cannot judge in SQL. SQLite stores each
+count with its transcript key, so later visits after a restart reuse unchanged
+counts. The first visit after upgrading counts each session once. Full resync
+keeps matching counts for unchanged reparsed sessions and copied sessions
+whose prompt rows remain unchanged. Changed or transformed prompts are
+recounted on the next read. The function strips code fences once. One pass
+builds the normalized prompt and counts capitalized words, and another finds
+the first phrase literal. The regular expression starts one byte before that
+literal, because no match can begin earlier. Tests compare the function with
+its original step-by-step form on edge cases, a random corpus, and a fuzz target.
+
+Before SQLite stored these counts, a scratch archive of 7,000 sessions with
+140,000 prompts (594 MiB of prompt text) saw its first Signals load after a
+restart fall from 9.2 s to 2.2 s with the file in the page cache, and from
+10.4 s to 3.3-3.6 s with it evicted. Allocation fell from 12.4 GiB to 3.2 GiB,
+and the count stayed the same. SQLite returned the prompt text in 0.42 s; the
+judge took 8.3 s before and 2.0 s after. A load the memo answered took 15 ms
+either way.
+
+Rejected for SQLite:
+
+- Storing a marker flag per message, or a count per session, when messages are
+  written. The first load would then read stored numbers. But every path that
+  writes or replaces messages would have to keep them current, and existing
+  archives would need a backfill that judges every prompt once anyway. With the
+  faster judge, the cost it removes was about 2 s once per restart.
+- Judging prompts in SQL. SQLite has no `REGEXP`, and a function registered from
+  Go would run the same Go check behind SQL.
 
 ## Kept reads
 
@@ -391,17 +1193,69 @@ Serve keeps the results of recent reads in memory so a repeat request between
 pushes reads no rows from ClickHouse; it still runs the small metadata queries
 that check whether its inputs changed. Each kept read has one slot per selection
 (filter, range, and similar inputs), and its key names the rows it read: the
-prepared usage stamp and the parts of the small tables it joins, the candidate
-sessions and their push versions, or the parts of the tables it scanned. A push
-that changes those replaces the slot; a push that does not leaves it in place.
-Usage reads filtered by `active`, `stale`, or `unclean` termination compare
-session times with the current time, so their rows are never kept. Kept reads
-include usage rows, analytics session listings, Activity pairing inputs per
-session version, candidate listings, project label maps, and the whole report of
-an ended range.
+prepared usage stamp and row identities for fully prepared range reads, the
+candidate sessions and their push versions, or the parts of the tables it
+scanned. Row identity probes run only for tables whose parts changed. The
+sessions, snapshot, and price record tables, which hold most of the rows a check
+would hash, are followed by row trackers (`finalRows`) that keep the count and
+hash sum of the rows FINAL returns, and each key's push version, machine,
+revision, and `prepares_usage` flag for usage coverage. A tracker compares the
+active parts with the parts it last read. Block numbers grow with every insert
+and mutation, and a merge keeps the block range of the parts it combines, so a
+new part whose range the vanished parts cover exactly at the same mutation is a
+merge, and costs nothing. Any other new part holds new rows: the tracker reads
+the keys it holds and a FINAL read of those keys for the row each returns now.
+The sessions and snapshot trackers keep each key's row, which is the row FINAL
+returned before. The price tracker keeps no per-key rows, since one digest holds
+millions of records; it reads the keys' rows in the parts it had already seen,
+and keeps the rows of parts up to 8,192 rows, so the earlier row is still at
+hand after a merge folds a small part into a new one. A mutation, a patch part,
+a dropped part, a new part over 8,192 rows, or a price merge of a large part
+with unread rows rereads the whole table. Every read names the parts it was
+planned against, and the parts are read again afterwards; when they moved,
+nothing is kept. The price record table keeps the records of every pricing
+digest, so its tracker covers only the partition of the digest a read joins;
+hashing the whole table took two minutes on a mirror holding 534 digests. A
+failed probe or parts moving during it serves that read uncached. Raw, mixed,
+and single-session Usage reads keep parts versions. A push that changes those
+versions replaces the slot; a push that does not leaves it in place. Usage reads
+filtered by `active`, `stale`, or `unclean` termination compare session times
+with the current time, so their rows are never kept. Kept reads include usage
+rows, analytics session listings, Activity runs per session version, Activity
+usage sums, candidate listings, project label maps, and the whole report of an
+ended range.
+
+**Activity usage sums.** An Activity report's usage survivors are selected,
+priced at billing time, and summed per session, model, and bucket window in one
+ClickHouse query, so serve receives sums instead of every usage row. Go builds
+the rate schedule the query prices with; see [Backend
+Parity](../agents/storage.md#backend-parity). Serve keeps each query's sums in
+memory per candidate set, range, bucket, and pricing digest until a push changes
+the mirror's parts. A range in progress moves its effective end with every
+request; its sums still answer while no source row lies between the end they
+were read to and the new end. On a one-year mirror of about 1.5 million usage
+rows, the cold report of a year in progress took 1.9 s against 4.3 s for the Go
+selection over every row, 2.2x faster, and an ended year 1.9 s against 5.4 s,
+2.9x faster. A cold week took 0.53 s against 0.45 s, 0.86x: ClickHouse runs the
+query's row scan once per reference, which costs more than reading a week's rows
+into Go. Reopening a report without a push costs the same as before.
+
+Ungrouped Top sessions are the exception. Each request reloads display metadata
+for its ranked winners. Grouped Top sessions keep member metadata with their
+totals.
 
 Nothing rebuilds kept reads in the background. The first request after a push
 that changes a read's rows pays for that read.
+
+**Usage on disk.** Fully prepared Usage selections keep their ordered priced
+rows and Top session totals across restarts. Memory and disk share a selection,
+so a memory hit refreshes its file or restores it if it was removed. Serve
+removes the least recently opened files first and checks the source and pricing
+before reusing or publishing a selection. A range ending after the latest usage
+can reuse the same rows on a later day. A changed source rebuilds the selection
+on the next read; pushes do no cache rebuilding. Raw, mixed, and time-dependent
+selections stay on their existing read path. The cache limits are in
+[ClickHouse sync](../clickhouse-sync.md#agentsview-clickhouse-serve).
 
 **Reports on disk.** When a client opens an ended day, its report is written to
 the report cache described in
@@ -424,7 +1278,9 @@ Several machines can share one database without ownership conflict detection.
 Two archives that reuse a session ID overwrite each other.
 
 Until a merge, both old and new `push_version` rows can exist on disk. `final=1`
-hides the stale ones from readers.
+hides the stale ones from readers, at a read cost that grows with the number of
+copies; see
+[Compaction after a large rewrite](#compaction-after-a-large-rewrite).
 
 ## Tests
 

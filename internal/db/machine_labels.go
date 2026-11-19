@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"go.kenn.io/agentsview/internal/config"
+	"golang.org/x/sync/errgroup"
 )
 
 // MachineLabelKeyPrefix identifies display labels in archive and mirror metadata.
@@ -115,12 +116,20 @@ func ResolveMachineFilter(ctx context.Context, store Store, machine string) (str
 	if machine == "" {
 		return "", nil
 	}
-	labels, err := store.GetMachineLabels(ctx)
-	if err != nil {
-		return "", err
-	}
-	aliases, err := machineFilterAliases(ctx, store)
-	if err != nil {
+	// Labels and aliases are independent reads.
+	var labels, aliases map[string]string
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.Go(func() error {
+		var err error
+		labels, err = store.GetMachineLabels(groupCtx)
+		return err
+	})
+	group.Go(func() error {
+		var err error
+		aliases, err = machineFilterAliases(groupCtx, store)
+		return err
+	})
+	if err := group.Wait(); err != nil {
 		return "", err
 	}
 	return ResolveMachineFilterWithMetadata(ctx, store, machine, labels, aliases)

@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -15,20 +16,44 @@ import (
 )
 
 func TestRawProjectionPreservesAbsentProviderTitleFromSameSource(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, accepted := f.accept(t, "device-a", "named", "")
 	named := projectionOutcome("first")
 	named.Outcome.Results[0].Result.Session.SessionName = "Provider title"
 	named.Outcome.Results[0].Result.Session.SessionNamePresent = true
+	named.Outcome.Results[0].Result.Session.GroupKey = "retained group"
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, named))
+	first, err := f.sink.Resolve(t.Context(), "codex:portable")
+	require.NoError(t, err)
+	// A replacement needs prior metadata, but must not read the old transcript.
+	// Restrict only this fixture's first captured revision; keep new rows visible.
+	var policy string
+	require.NoError(t, f.admin.QueryRowContext(t.Context(), `SELECT format('CREATE POLICY unavailable_prior_content ON %I.raw_content_revisions AS RESTRICTIVE FOR SELECT TO %I USING (session_id <> %L)', $1::text, $2::text, $3::text)`, f.schema, f.role, first.SessionID).Scan(&policy))
+	_, err = f.admin.ExecContext(t.Context(), policy)
+	require.NoError(t, err)
+	var visible int
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT count(*) FROM raw_content_revisions WHERE session_id=$1`, first.SessionID).Scan(&visible))
+	require.Zero(t, visible)
 	next, receipt := f.accept(t, "device-a", "unnamed", accepted.Receipt)
-	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, next), next, projectionOutcome("changed content")))
+	changed := projectionOutcome("changed content")
+	changed.Outcome.Results[0].Result.Session.KeepStoredGroupKey = true
+	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, next), next, changed))
 	identity, err := f.sink.Resolve(t.Context(), "codex:portable")
 	require.NoError(t, err)
 	var title *string
 	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT session_name FROM sessions WHERE id=$1`, identity.SessionID).Scan(&title))
 	require.NotNil(t, title)
 	assert.Equal(t, "Provider title", *title)
+	var groupKey string
+	require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT group_key FROM sessions WHERE id=$1`, identity.SessionID).Scan(&groupKey))
+	assert.Equal(t, "retained group", groupKey)
+	messages, err := (&Store{pg: f.runtime}).GetMessages(t.Context(), identity.SessionID, 0, 10, true)
+	require.NoError(t, err)
+	require.NotEmpty(t, messages)
+	assert.Equal(t, "changed content", messages[0].Content)
+	_, err = f.admin.ExecContext(t.Context(), fmt.Sprintf(`DROP POLICY unavailable_prior_content ON %q.raw_content_revisions`, f.schema))
+	require.NoError(t, err)
 	cleared, _ := f.accept(t, "device-a", "cleared", receipt.Receipt)
 	explicit := projectionOutcome("changed content")
 	explicit.Outcome.Results[0].Result.Session.SessionNamePresent = true
@@ -40,6 +65,7 @@ func TestRawProjectionPreservesAbsentProviderTitleFromSameSource(t *testing.T) {
 }
 
 func TestRawProjectionEqualSourcesNoOpAndRemoval(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	a, ar := f.accept(t, "device-a", "equal-a", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, projectionOutcome("equal")))
@@ -83,6 +109,7 @@ func TestRawProjectionEqualSourcesNoOpAndRemoval(t *testing.T) {
 }
 
 func TestRawProjectionPartialMembersKeepPriorProof(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, accepted := f.accept(t, "device-a", "multi-a", "")
 	outcome := projectionOutcome("first")
@@ -110,6 +137,7 @@ func TestRawProjectionPartialMembersKeepPriorProof(t *testing.T) {
 	assert.Equal(t, "retrying", state)
 }
 func TestRawProjectionRetainsProviderHistoryAndEveryAcceptedContributor(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, accepted := f.accept(t, "device-a", "history-a", "", parser.AgentRooCode)
 	outcome := projectionOutcome("retained history")
@@ -171,6 +199,7 @@ func TestRawProjectionRetainsProviderHistoryAndEveryAcceptedContributor(t *testi
 }
 
 func TestRawProjectionUsageOnlyMemberAndDerivedFindings(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "complete-graph", "")
 	outcome := projectionOutcome("inspect")
@@ -209,6 +238,7 @@ func TestRawProjectionUsageOnlyMemberAndDerivedFindings(t *testing.T) {
 }
 
 func TestRawProjectionKeepsLegacyProofSeparate(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	_, err := f.runtime.ExecContext(t.Context(), `INSERT INTO sessions(id,project,machine,agent,first_message) VALUES('codex:portable','legacy','archive','codex','legacy preserved')`)
 	require.NoError(t, err)
@@ -225,6 +255,7 @@ func TestRawProjectionKeepsLegacyProofSeparate(t *testing.T) {
 }
 
 func TestRawProjectionProviderFallbackAliasSurvivesConflict(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	for _, device := range []string{"device-a", "device-b"} {
 		m, _ := f.accept(t, device, "vibe-"+device, "", parser.AgentVibe)
@@ -246,6 +277,7 @@ func TestRawProjectionProviderFallbackAliasSurvivesConflict(t *testing.T) {
 }
 
 func TestRawProjectionNonportableIdentityHasExplicitAliasConflict(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	a, ar := f.accept(t, "device-a", "opaque-a", "")
 	out := projectionOutcome("equal text")
@@ -272,6 +304,7 @@ func TestRawProjectionNonportableIdentityHasExplicitAliasConflict(t *testing.T) 
 }
 
 func TestRawProjectionHonorsExplicitExclusionWithoutReplacingMembership(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	first, accepted := f.accept(t, "device-a", "included", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, first), first, projectionOutcome("retained")))
@@ -287,6 +320,7 @@ func TestRawProjectionHonorsExplicitExclusionWithoutReplacingMembership(t *testi
 }
 
 func TestRawProjectionReprocessedCronPublishesGroup(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	manifest, _ := f.accept(t, "device-a", "ungrouped-cron", "", parser.AgentHermes)
 	outcome := projectionOutcome("same transcript")

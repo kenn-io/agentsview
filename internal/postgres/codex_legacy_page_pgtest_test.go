@@ -18,14 +18,13 @@ import (
 // <thread>_<rollout>. The remote title, star and pin follow the page and the
 // bare-rollout duplicate disappears.
 func TestCodexLegacyHeaderPageMovesToCanonicalPostgresRow(t *testing.T) {
+	t.Parallel()
 	const thread = "codex:11111111-1111-4111-8111-111111111111"
 	const rollout = "codex:22222222-2222-4222-8222-222222222222"
 	const page = thread + "_22222222-2222-4222-8222-222222222222"
-	const schema = "agentsview_codex_legacy_page_test"
+	const schema = pgPushTestSchema
 	ctx := t.Context()
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	pgURL := testPGSchemaURL(t, schema)
 
 	source := testDB(t)
 	sourcePath := source.Path()
@@ -42,7 +41,7 @@ func TestCodexLegacyHeaderPageMovesToCanonicalPostgresRow(t *testing.T) {
 	}
 	require.NoError(t, source.InsertMessages(ctx, []db.Message{message}))
 	require.NoError(t, source.SetSessionDataVersion(ctx, rollout, 133))
-	syncer, err := New(pgURL, schema, source, "machine", true, storage.PusherOptions{})
+	syncer, err := New(t.Context(), pgURL, schema, source, "machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	pushed, err := syncer.Push(ctx, true, nil)
@@ -65,8 +64,8 @@ func TestCodexLegacyHeaderPageMovesToCanonicalPostgresRow(t *testing.T) {
 	require.NoError(t, raw.Close())
 
 	rebuilt := testDB(t)
-	require.NoError(t, rebuilt.CopyArchiveIdentityFrom(sourcePath))
-	require.NoError(t, rebuilt.CopySyncStateFrom(sourcePath))
+	require.NoError(t, rebuilt.CopyArchiveIdentityFrom(t.Context(), sourcePath))
+	require.NoError(t, rebuilt.CopySyncStateFrom(t.Context(), sourcePath))
 	sess.ID = page
 	sess.ParentSessionID = new(thread)
 	sess.RelationshipType = "continuation"
@@ -75,7 +74,7 @@ func TestCodexLegacyHeaderPageMovesToCanonicalPostgresRow(t *testing.T) {
 	require.NoError(t, rebuilt.InsertMessages(ctx, []db.Message{message}))
 	require.NoError(t, rebuilt.SetSessionDataVersion(ctx, page, db.CurrentDataVersion()))
 
-	upgraded, err := New(pgURL, schema, rebuilt, "machine", true, storage.PusherOptions{})
+	upgraded, err := New(t.Context(), pgURL, schema, rebuilt, "machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, upgraded.Close()) })
 	for range 2 {
@@ -110,14 +109,13 @@ func TestCodexLegacyHeaderPageMovesToCanonicalPostgresRow(t *testing.T) {
 // page the user permanently purged remotely: only its exclusion remains. The
 // upgraded push must not republish the page under its canonical id.
 func TestCodexPurgedRolloutExclusionBlocksCanonicalPage(t *testing.T) {
+	t.Parallel()
 	const thread = "codex:11111111-1111-4111-8111-111111111111"
 	const rollout = "codex:22222222-2222-4222-8222-222222222222"
 	const page = thread + "_22222222-2222-4222-8222-222222222222"
-	const schema = "agentsview_codex_purged_rollout_test"
+	const schema = pgPushTestSchema
 	ctx := t.Context()
-	pgURL := testPGURL(t)
-	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
+	pgURL := testPGSchemaURL(t, schema)
 
 	local := testDB(t)
 	pagePath := filepath.Join(t.TempDir(), "rollout-2026-09-25T12-00-00-"+page[len("codex:"):]+".jsonl")
@@ -130,7 +128,7 @@ func TestCodexPurgedRolloutExclusionBlocksCanonicalPage(t *testing.T) {
 		SessionID: page, Role: "assistant", Content: "page answer",
 		Timestamp: "2026-09-25T12:00:00Z",
 	}}))
-	syncer, err := New(pgURL, schema, local, "machine", true, storage.PusherOptions{})
+	syncer, err := New(t.Context(), pgURL, schema, local, "machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	require.NoError(t, syncer.EnsureSchema(ctx))

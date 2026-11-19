@@ -1,0 +1,21 @@
+{
+  "metadata": {
+    "id": "session_tools",
+    "title": "Read main.go",
+    "created_at": "2026-06-01T10:00:00Z",
+    "updated_at": "2026-06-01T10:02:00Z",
+    "model": "deepseek-chat",
+    "workspace": "/home/user/code/app"
+  },
+  "messages": [
+    {"role": "user", "content": [{"type": "text", "text": "Read main.go and tell me what it does"}], "timestamp": "2026-06-01T10:00:05Z"},
+    {"role": "assistant", "content": [
+      {"type": "thinking", "thinking": "Need to inspect the target."},
+      {"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {"file_path": "main.go"}}
+    ], "timestamp": "2026-06-01T10:00:08Z"},
+    {"role": "user", "content": [
+      {"type": "tool_result", "tool_use_id": "toolu_1", "content": "package main\n\nfunc main() {}"}
+    ], "timestamp": "2026-06-01T10:00:09Z"},
+    {"role": "assistant", "content": [{"type": "text", "text": "It is an empty Go program."}], "timestamp": "2026-06-01T10:00:12Z"}
+  ]
+}

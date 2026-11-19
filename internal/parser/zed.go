@@ -42,12 +42,8 @@ func ZedSQLiteSessionExists(ctx context.Context, dbPath, sessionID string) bool 
 	return err == nil
 }
 
-// ZedSQLiteSourceMtime resolves the per-thread updated_at timestamp
+// ZedSQLiteSourceMtimeContext resolves the per-thread updated_at timestamp
 // for a virtual Zed SQLite source path.
-func ZedSQLiteSourceMtime(path string) (int64, error) {
-	return ZedSQLiteSourceMtimeContext(context.Background(), path)
-}
-
 func ZedSQLiteSourceMtimeContext(ctx context.Context, path string) (int64, error) {
 	dbPath, sessionID, ok := parseZedVirtualPath(path)
 	if !ok {
@@ -252,7 +248,7 @@ func parseZedThreadFromDBWithSchema(
 	if err != nil {
 		return nil, wrapZedLoadingError(rawID, err)
 	}
-	result, ok := buildZedParseResult(row, dbPath, dbInfo, machine)
+	result, ok := buildZedParseResult(ctx, row, dbPath, dbInfo, machine)
 	if !ok {
 		return nil, nil
 	}
@@ -285,6 +281,7 @@ type zedThreadRow struct {
 }
 
 func buildZedParseResult(
+	ctx context.Context,
 	row zedThreadRow,
 	dbPath string,
 	info os.FileInfo,
@@ -320,7 +317,7 @@ func buildZedParseResult(
 		endedAt = startedAt
 	}
 
-	project := zedProjectFromFolderPaths(row.folderPaths)
+	project := zedProjectFromFolderPaths(ctx, row.folderPaths)
 	var firstMessage string
 	var userCount int
 	for _, msg := range messages {

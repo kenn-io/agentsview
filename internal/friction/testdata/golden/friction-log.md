@@ -1,6 +1,6 @@
 ---
 date: 2026-09-16
-signals_captured: 12
+signals_captured: 15
 p0_count: 2
 corrections: 2
 errors: 2
@@ -9,6 +9,7 @@ deferrals: 1
 patterns: 2
 frustrations: 1
 interruptions: 3
+diagnostics: 3
 ---
 
 # Friction Log — 2026-09-16
@@ -49,3 +50,7 @@ interruptions: 3
 
 - `agent:claude` `s-2` interruptions=2
 - `s-1` interruptions=1
+
+## Diagnostics
+
+- `worker`: `launch failed` x3

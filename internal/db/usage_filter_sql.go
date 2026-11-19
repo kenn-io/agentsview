@@ -22,10 +22,13 @@ func BuildUsageSessionFilter(f UsageFilter, b *QueryBuilder, sessionID string) [
 	for _, item := range []struct {
 		col    string
 		values []string
-	}{{"s.agent", CSVFilterValues(f.Agent)}, {"s.project", f.ProjectFilterLabels()}, {"s.machine", CSVFilterValues(f.Machine)}} {
+	}{{"s.agent", CSVFilterValues(f.Agent)}, {"s.project", f.ProjectFilterLabels()}} {
 		if pred := b.ValuesPredicate(item.col, item.values, true); pred != "" {
 			preds = append(preds, pred)
 		}
+	}
+	if values := CSVFilterValues(f.Machine); len(values) > 0 {
+		preds = append(preds, b.MachinePredicate("s.id", "s.machine", values))
 	}
 	if f.GitBranch != "" {
 		preds = append(preds, BranchPairPredicate("s.project", "s.git_branch", f.GitBranch, func(v string) string { return b.Add(v) }))

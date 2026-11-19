@@ -36,6 +36,18 @@ type availableFrictionStore struct {
 
 func (s availableFrictionStore) FrictionAvailable() bool { return *s.available }
 
+type unavailableDiagnosticFrictionStore struct {
+	availableFrictionStore
+}
+
+func (unavailableDiagnosticFrictionStore) FrictionDiagnosticsAvailable() bool { return false }
+
+func (unavailableDiagnosticFrictionStore) DiagnosticSignalsForDate(
+	context.Context, string, *time.Location,
+) ([]friction.Signal, error) {
+	return nil, errors.New("permission denied for table diagnostic_events")
+}
+
 func TestNewFrictionRunner(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	yes, no := true, false
@@ -95,7 +107,7 @@ func TestFrictionReviewIsOptIn(t *testing.T) {
 	r, err = newFrictionRunner(cfg, d, time.Now)
 	require.NoError(t, err)
 	require.NotNil(t, r)
-	assert.Nil(t, r.Diagnostics)
+	assert.Same(t, d, r.Diagnostics)
 }
 
 func TestFrictionReviewSkipsUsageOnlyArchive(t *testing.T) {
@@ -122,6 +134,44 @@ func TestFrictionReviewSkipsUsageOnlyArchive(t *testing.T) {
 	got, err := d.GetFrictionDigest(t.Context(), ended[:10])
 	require.NoError(t, err)
 	assert.Nil(t, got)
+}
+
+func TestNewFrictionRunnerKeepsSessionReviewWhenDiagnosticsAreUnavailable(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	ended := "2026-10-01T12:00:00Z"
+	dbtest.SeedSession(t, d, "session", "project", func(s *db.Session) { s.EndedAt = &ended })
+	require.NoError(t, d.UpdateSessionSignals(t.Context(), "session", db.SessionSignalUpdate{
+		Friction: &db.SessionFrictionUpdate{
+			RulesVersion: friction.RulesVersion,
+			Hash:         "session",
+			Findings: []db.FrictionFinding{{
+				SessionID: "session", Kind: "correction", Detector: "correction.coding",
+				Title: "Use the existing helper", Fingerprint: "fl1:session",
+				RulesVersion: friction.RulesVersion,
+			}},
+		},
+	}))
+	available := true
+	store := unavailableDiagnosticFrictionStore{
+		availableFrictionStore{readOnlyFrictionStore{
+			Store: d, readOnly: true, available: &available,
+		}},
+	}
+	cfg := config.Config{Friction: config.FrictionConfig{
+		Enabled: true, Timezone: "UTC", BackfillDays: 3,
+	}}
+	runner, err := newFrictionRunner(cfg, store, func() time.Time {
+		return time.Date(2026, 10, 3, 10, 0, 0, 0, time.UTC)
+	})
+	require.NoError(t, err)
+	require.NotNil(t, runner)
+
+	_, err = runner.CatchUp(t.Context())
+	require.NoError(t, err)
+	digest, err := d.GetFrictionDigest(t.Context(), "2026-10-01")
+	require.NoError(t, err)
+	require.NotNil(t, digest)
+	assert.Equal(t, 1, digest.SessionsScanned)
 }
 
 // Pause after selecting real subjects, before retrieving their findings.

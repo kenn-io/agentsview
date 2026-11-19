@@ -72,7 +72,7 @@ func decodeSingleResult(t *testing.T, out *bytes.Buffer) workerResult {
 func TestSyncWorkerStartupModeSyncsAndEmitsTerminalResult(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	var out bytes.Buffer
-	require.NoError(t, runSyncWorker(cfg, syncWorkerRequest{Mode: "startup"}, &out))
+	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &out))
 
 	var results []workerResult
 	sawProgress := false
@@ -103,7 +103,7 @@ func TestSyncWorkerStartupModeSyncsAndEmitsTerminalResult(t *testing.T) {
 func TestSyncWorkerAuditModeForwardsReconciliationProgress(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	var out bytes.Buffer
-	require.NoError(t, runSyncWorker(cfg, syncWorkerRequest{Mode: "audit"}, &out))
+	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "audit"}, &out))
 
 	sawActiveProgress := false
 	sc := bufio.NewScanner(&out)
@@ -130,7 +130,7 @@ func TestSyncWorkerStartupUsesConfiguredSourceMachine(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	require.NoError(t, runSyncWorker(cfg, syncWorkerRequest{Mode: "startup"}, &out))
+	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &out))
 	assert.Equal(t, "ok", decodeSingleResult(t, &out).Status)
 
 	database, err := db.OpenReadOnly(t.Context(), cfg.DBPath)
@@ -196,7 +196,7 @@ func TestSyncWorkerFailsWhenWriteLockHeld(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	holdWriteOwnerLockForTest(t, cfg.DataDir) // hold db.write.lock like a daemon
 	var out bytes.Buffer
-	err := runSyncWorker(cfg, syncWorkerRequest{Mode: "startup"}, &out)
+	err := runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &out)
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "write lock")
 }
@@ -204,7 +204,7 @@ func TestSyncWorkerFailsWhenWriteLockHeld(t *testing.T) {
 func TestSyncWorkerRejectsUnknownMode(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	var out bytes.Buffer
-	err := runSyncWorker(cfg, syncWorkerRequest{Mode: "bogus"}, &out)
+	err := runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "bogus"}, &out)
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "unknown sync-worker mode")
 }
@@ -221,7 +221,7 @@ func TestSyncWorkerResyncBuildModeBuildsReplacement(t *testing.T) {
 	require.NoError(t, database.Close())
 
 	var out bytes.Buffer
-	require.NoError(t, runSyncWorker(cfg, syncWorkerRequest{Mode: "resync-build"}, &out))
+	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "resync-build"}, &out))
 	result := decodeSingleResult(t, &out)
 	assert.Equal(t, "ok", result.Status)
 	assert.True(t, result.DiscoveryComplete)
@@ -254,7 +254,7 @@ func TestSyncWorkerResyncBuildUsesConfiguredImagePolicy(t *testing.T) {
 
 	cfg.ToolResultImages = config.ToolResultImagesDrop
 	var out bytes.Buffer
-	require.NoError(t, runSyncWorker(cfg, syncWorkerRequest{Mode: "resync-build"}, &out))
+	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "resync-build"}, &out))
 	require.Equal(t, "ok", decodeSingleResult(t, &out).Status)
 
 	replacement, err := db.Open(t.Context(), cfg.DBPath+"-resync")
@@ -306,7 +306,7 @@ func TestSyncWorkerResyncBuildAppliesClassifierConfig(t *testing.T) {
 	require.NoError(t, database.Close())
 
 	var out bytes.Buffer
-	require.NoError(t, runSyncWorker(cfg, syncWorkerRequest{Mode: "resync-build"}, &out))
+	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "resync-build"}, &out))
 	require.Equal(t, "ok", decodeSingleResult(t, &out).Status)
 
 	conn, err := sql.Open("sqlite3", cfg.DBPath+"-resync")
@@ -419,7 +419,7 @@ func TestSyncWorkerStartupAbortedResyncFallsBackIncremental(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	require.NoError(t, runSyncWorker(cfg, syncWorkerRequest{Mode: "startup"}, &out),
+	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &out),
 		"the incremental fallback must complete the pass")
 	result := decodeSingleResult(t, &out)
 	assert.Equal(t, "ok", result.Status,
@@ -437,7 +437,7 @@ func TestSyncWorkerStartupAbortedResyncFallsBackIncremental(t *testing.T) {
 }
 
 // TestResyncBuildResultFromStatsToleratesMinorityParseFailures pins the
-// resync-build completion semantics: shouldAbortResyncSwap already folds the
+// resync-build completion semantics: resyncSwapAbortReason already folds the
 // failure-majority judgment into stats.Aborted, so a completed build with a
 // minority of permanent parse failures is a valid replacement the daemon must
 // not discard.
@@ -467,7 +467,7 @@ func TestResyncBuildResultFromStatsToleratesMinorityParseFailures(t *testing.T) 
 			name:       "deferred processing",
 			ctx:        t.Context(),
 			stats:      sync.SyncStats{Deferred: 1},
-			wantStatus: "failed",
+			wantStatus: "ok",
 		},
 		{
 			name:       "build error",
@@ -505,14 +505,123 @@ func TestResyncBuildResultFromStatsToleratesMinorityParseFailures(t *testing.T) 
 	}
 }
 
+func TestWorkerRebuildHandsDeferredForkToWatcher(t *testing.T) {
+	const parent = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	const child = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	const timestamp = "2026-09-01T10:00:00Z"
+	cfg := testConfigWithClaudeFixture(t)
+	root := t.TempDir()
+	cfg.AgentDirs[parser.AgentCodex] = []string{root}
+	childPath := filepath.Join(root, "rollout-2026-09-01T11-00-00-"+child+".jsonl")
+	require.NoError(t, os.WriteFile(childPath, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexForkedSessionMetaJSON(child, parent, "/work/project", "user", timestamp),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "parent-turn", timestamp),
+		testjsonl.CodexMsgJSON("assistant", "replayed answer", timestamp),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", timestamp),
+		testjsonl.CodexMsgJSON("assistant", "child answer", timestamp),
+	)), 0o600))
+	database, _ := openTestWriteDB(t, cfg)
+	var retry sync.WatchBatch
+	engineCfg := workerEngineConfig(cfg)
+	engineCfg.OnRebuildDeferred = func(batch sync.WatchBatch) { retry = batch }
+	engine := sync.NewEngine(t.Context(), database, engineCfg)
+	t.Cleanup(engine.Close)
+	restore := stubLaunchSyncWorker(t, func(ctx context.Context, cfg config.Config, request syncWorkerRequest, _ func(workerLine)) (workerResult, error) {
+		var wire bytes.Buffer
+		err := runSyncWorkerContext(ctx, cfg, request, &wire)
+		return decodeSingleResult(t, &wire), err
+	})
+	t.Cleanup(restore)
+	result, err, spawnFailed := runWorkerResyncBuild(t.Context(), t.Context(), cfg, engine, database, nil, true, nil)
+	require.NoError(t, err)
+	require.False(t, spawnFailed)
+	assert.Equal(t, "ok", result.Status)
+	assert.Equal(t, 1, result.Deferred)
+	assert.True(t, statsFromWorkerResult(result).ArchiveRebuilt, "the returned stats must report the installed archive")
+	assert.Equal(t, []string{childPath}, retry.Paths)
+	assert.True(t, engine.StartupReconciled())
+	assert.Less(t, database.GetSessionDataVersion(t.Context(), "codex:"+child), db.CurrentDataVersion())
+	parentPath := filepath.Join(root, "rollout-2026-09-01T10-00-00-"+parent+".jsonl")
+	require.NoError(t, os.WriteFile(parentPath, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexSessionMetaJSON(parent, "/work/project", "user", timestamp),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "parent-turn", timestamp),
+	)), 0o600))
+	require.NoError(t, engine.SyncPathsContext(t.Context(), retry.Paths))
+	messages, err := database.GetAllMessages(t.Context(), "codex:"+child)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "child answer", messages[0].Content)
+	assert.Equal(t, db.CurrentDataVersion(), database.GetSessionDataVersion(t.Context(), "codex:"+child))
+}
+
+func TestStartupWorkerQueuesMissingParentAfterRestart(t *testing.T) {
+	const parent = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	const child = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	const timestamp = "2026-09-01T10:00:00Z"
+	cfg := testConfigWithClaudeFixture(t)
+	root := t.TempDir()
+	cfg.AgentDirs[parser.AgentCodex] = []string{root}
+	childPath := filepath.Join(root, "rollout-2026-09-01T11-00-00-"+child+".jsonl")
+	require.NoError(t, os.WriteFile(childPath, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexForkedSessionMetaJSON(child, parent, "/work/project", "user", timestamp),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", timestamp),
+		testjsonl.CodexMsgJSON("assistant", "child answer", timestamp),
+	)), 0o600))
+	var wire bytes.Buffer
+	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &wire))
+	result := decodeSingleResult(t, &wire)
+	require.Equal(t, "ok", result.Status)
+	require.Equal(t, 1, result.Deferred)
+	assert.Empty(t, result.Error, "a startup whose only open work is queued retries has no error")
+	database, _ := openTestWriteDB(t, cfg)
+	var retries []sync.WatchBatch
+	engineCfg := workerEngineConfig(cfg)
+	engineCfg.OnRebuildDeferred = func(batch sync.WatchBatch) { retries = append(retries, batch) }
+	engine := sync.NewEngine(t.Context(), database, engineCfg)
+	t.Cleanup(engine.Close)
+	completeWorkerStartupReconciliation(t.Context(), reconcileRootPaths(cfg), statsFromWorkerResult(result),
+		engine.RetainSubagentLinkRetry, engine.ReconcileWatchRoots,
+		func(batch sync.WatchBatch) { retries = append(retries, batch) }, engine.RecordStartupReconciled)
+	assert.True(t, engine.StartupReconciled())
+	require.NotEmpty(t, retries)
+	assert.Contains(t, retries[0].Paths, childPath)
+}
+
 func TestSyncWorkerSyncModeSyncsLikeStartup(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	var out bytes.Buffer
-	require.NoError(t, runSyncWorker(cfg, syncWorkerRequest{Mode: "sync"}, &out))
+	require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "sync"}, &out))
 	result := decodeSingleResult(t, &out)
 	assert.Equal(t, "ok", result.Status)
 	assert.True(t, result.DiscoveryComplete)
 	assert.Equal(t, 3, result.Synced)
+}
+
+// A live sync that holds a fork for retry fails, and the result the daemon
+// logs names the fork and its missing parent.
+func TestSyncWorkerFailureNamesDeferredFork(t *testing.T) {
+	const parent = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	const child = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	const timestamp = "2026-09-01T10:00:00Z"
+	cfg := testConfigWithClaudeFixture(t)
+	root := t.TempDir()
+	cfg.AgentDirs[parser.AgentCodex] = []string{root}
+	childPath := filepath.Join(root, "rollout-2026-09-01T11-00-00-"+child+".jsonl")
+	require.NoError(t, os.WriteFile(childPath, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexForkedSessionMetaJSON(child, parent, "/work/project", "user", timestamp),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", timestamp),
+		testjsonl.CodexMsgJSON("assistant", "child answer", timestamp),
+	)), 0o600))
+	var wire bytes.Buffer
+
+	err := runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "sync"}, &wire)
+
+	want := "1 session waits for a retry; why: codex:" + child + " (" + childPath +
+		"): could not read the Codex session it was forked from (" + parent + ")"
+	require.EqualError(t, err, "sync worker sync: failed ("+want+")")
+	result := decodeSingleResult(t, &wire)
+	assert.Equal(t, "failed", result.Status)
+	assert.Equal(t, want, result.Error)
 }
 
 // Run the real worker body and protocol through the daemon's writer handoff.
@@ -544,7 +653,7 @@ func TestWorkerParentLinkHandoff(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := testConfigWithClaudeFixture(t)
 			var initial bytes.Buffer
-			require.NoError(t, runSyncWorker(cfg, syncWorkerRequest{Mode: "startup"}, &initial))
+			require.NoError(t, runSyncWorkerContext(t.Context(), cfg, syncWorkerRequest{Mode: "startup"}, &initial))
 			database, lock := openTestWriteDB(t, cfg)
 			for _, id := range []string{"worker-parent", "worker-child"} {
 				require.NoError(t, database.UpsertSession(t.Context(), db.Session{

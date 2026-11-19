@@ -213,6 +213,48 @@ describe("MessageList follow cancellation", () => {
     document.body.innerHTML = "";
   });
 
+  it("keeps row positions matched to message heights when sort order changes", async () => {
+    ui.followLatest = false;
+    messages.messages = [makeMessage(0), makeMessage(1), makeMessage(2), makeMessage(3)];
+    const { instance } = realJumpScroll();
+    instance.setOptions({
+      ...instance.options,
+      measureElement: (row) => (row.querySelector(".is-user") ? 320 : 80),
+    });
+    component = mount(MessageList, { target: document.body });
+    await flushScrollUpdates();
+
+    instance.measure();
+    await flushScrollUpdates();
+    expect(
+      [...document.querySelectorAll<HTMLElement>(".virtual-row")].map((row) => row.style.transform),
+    ).toEqual(["translateY(0px)", "translateY(320px)", "translateY(400px)", "translateY(720px)"]);
+
+    ui.sortNewestFirst = true;
+    await flushScrollUpdates();
+
+    const rows = [...document.querySelectorAll<HTMLElement>(".virtual-row")];
+    expect(rows.map((row) => row.querySelector(".role-label")?.textContent)).toEqual([
+      "Assistant",
+      "User",
+      "Assistant",
+      "User",
+    ]);
+    expect(rows.map((row) => row.style.transform)).toEqual([
+      "translateY(0px)",
+      "translateY(80px)",
+      "translateY(400px)",
+      "translateY(480px)",
+    ]);
+
+    ui.sortNewestFirst = false;
+    await flushScrollUpdates();
+
+    expect(
+      [...document.querySelectorAll<HTMLElement>(".virtual-row")].map((row) => row.style.transform),
+    ).toEqual(["translateY(0px)", "translateY(320px)", "translateY(400px)", "translateY(720px)"]);
+  });
+
   it("opens a collapsed empty row when a jump targets a message inside it", async () => {
     ui.followLatest = false;
     const empty = (ordinal: number) => ({
@@ -286,6 +328,29 @@ describe("MessageList follow cancellation", () => {
     await vi.waitFor(() => {
       expect(virtualizerMock.scrollToOffset).toHaveBeenCalledWith(320);
     });
+  });
+
+  it("refreshes Docbank when the same transcript is remounted", async () => {
+    const { fileReferences } = await import("../../stores/file-references.svelte.js");
+    fileReferences.enabled = true;
+    await fileReferences.track(null, null);
+    messages.loadedRevision = "revision-1";
+    docbankLookup.mockResolvedValue({
+      integration: "enabled",
+      transcript_revision: "revision-1",
+      occurrences: [],
+    });
+    onTestFinished(() => {
+      fileReferences.enabled = false;
+    });
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    await vi.waitFor(() => expect(docbankLookup).toHaveBeenCalledTimes(1));
+    await unmount(component);
+    component = undefined;
+    component = mount(MessageList, { target: document.body });
+    await tick();
+    await vi.waitFor(() => expect(docbankLookup).toHaveBeenCalledTimes(2));
   });
 
   it("keeps an ordinal jump on its message through an older load past five seconds", async () => {
@@ -421,7 +486,10 @@ describe("MessageList follow cancellation", () => {
     await flushScrollUpdates();
     flushFrames();
 
-    expect(element.scrollTop).toBe(800);
+    // The new top row renders at the fixture's 100px instead of the 120px
+    // estimate, and TanStack keeps the view steady by scrolling up 20px.
+    // A jump still reconciling would land on ordinal 11 at 900.
+    expect(element.scrollTop).toBe(780);
   });
 
   it.each(["search closes", "match disappears", "ordinal target is hidden"])(
@@ -512,6 +580,36 @@ describe("MessageList follow cancellation", () => {
     await sessions.refreshActiveSession();
     await tick();
     expect(reportErrorShown).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows a failed transcript load with Retry instead of an empty transcript", async () => {
+    vi.spyOn(SessionsService, "getApiV1SessionsById").mockResolvedValue({
+      id: "s1",
+      message_count: 1,
+    } as Awaited<ReturnType<typeof SessionsService.getApiV1SessionsById>>);
+    const page = vi
+      .spyOn(SessionsService, "getApiV1SessionsByIdMessages")
+      .mockRejectedValueOnce(new Error("database is locked"));
+    messages.messages = [];
+
+    component = mount(MessageList, { target: document.body });
+    await messages.loadSession("s1");
+    const alert = await vi.waitFor(() => {
+      const el = document.querySelector('[role="alert"]');
+      expect(el).not.toBeNull();
+      return el!;
+    });
+
+    expect(alert.textContent).toContain("Failed to load");
+    expect(alert.textContent).toContain("database is locked");
+    expect(reportErrorShown).toHaveBeenCalledWith("session");
+
+    page.mockResolvedValueOnce({ messages: [makeMessage(0)], count: 1 } as Awaited<
+      ReturnType<typeof SessionsService.getApiV1SessionsByIdMessages>
+    >);
+    alert.querySelector<HTMLButtonElement>("button")!.click();
+    await vi.waitFor(() => expect(document.querySelector('[role="alert"]')).toBeNull());
+    expect(messages.messages.map((message) => message.content)).toEqual(["msg 0"]);
   });
 
   it("renders empty and loading states in Simplified Chinese", async () => {
@@ -1285,3 +1383,9 @@ describe("MessageList follow cancellation", () => {
     expect(readProgress.get("s1")?.token).toBe("current");
   });
 });
+
+const docbankLookup = vi.hoisted(() => vi.fn());
+vi.mock("../../api/generated/sessions/sessions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../api/generated/sessions/sessions.js")>()),
+  getApiV1SessionsByIdFileReferences: docbankLookup,
+}));

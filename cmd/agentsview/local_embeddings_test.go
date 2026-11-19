@@ -64,9 +64,13 @@ func TestLocalEmbeddingsBuildConsent(t *testing.T) {
 						"POST /api/v1/embeddings/build": func(w http.ResponseWriter, _ *http.Request) {
 							assert.True(t, installed)
 							dispatched = true
+							w.Header().Set("Content-Type", "application/json")
 							w.WriteHeader(http.StatusAccepted)
+							_, _ = io.WriteString(w, `{"started":true,"build_id":1}`)
 						},
-						"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, `{"running":false}`) },
+						"GET /api/v1/embeddings/status": func(w http.ResponseWriter, _ *http.Request) {
+							_, _ = io.WriteString(w, `{"running":false,"build_id":1,"last_result":{}}`)
+						},
 					})
 				}
 				var out bytes.Buffer
@@ -148,7 +152,7 @@ func TestLocalEmbeddingsResolution(t *testing.T) {
 		encoders, err := vectorDocumentEncoderSet(c)
 		require.NoError(t, err)
 		_, err = encoders.ByName["shared"].Encode(t.Context(), []string{"hello"})
-		require.EqualError(t, err, "local embeddings: run agentsview embeddings build to approve the first download")
+		require.EqualError(t, err, "local embeddings: run agentsview index embeddings build to approve the first download")
 		cause := errors.New("install lock failed")
 		installLocalEmbeddings = func(context.Context, embedlocal.InstallOptions) (embedlocal.Installation, error) {
 			return embedlocal.Installation{}, fmt.Errorf("install interrupted: %w", cause)

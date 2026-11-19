@@ -17,7 +17,7 @@ func parseIflowSessionForTest(
 	t *testing.T, path, project, machine string,
 ) ([]ParseResult, error) {
 	t.Helper()
-	return parseIflowSession(path, project, machine)
+	return parseIflowSession(t.Context(), path, project, machine)
 }
 
 func TestParseIflowSession(t *testing.T) {

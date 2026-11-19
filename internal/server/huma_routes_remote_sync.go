@@ -53,7 +53,7 @@ func (s *Server) humaRemoteSyncTargets(
 	if _, ok := s.db.(*db.DB); !ok {
 		return nil, apiError(http.StatusNotImplemented, "not available in remote mode")
 	}
-	targets, err := remotesync.ResolveTargets(s.ingestionConfig())
+	targets, err := remotesync.ResolveTargets(ctx, s.ingestionConfig())
 	if err != nil {
 		return nil, apiError(http.StatusInternalServerError, err.Error())
 	}
@@ -132,7 +132,7 @@ func (s *Server) remoteSyncArchiveHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid archive request", http.StatusBadRequest)
 		return
 	}
-	plan, err := remotesync.PlanArchive(s.ingestionConfig(), req)
+	plan, err := remotesync.PlanArchive(r.Context(), s.ingestionConfig(), req)
 	switch {
 	case errors.Is(err, remotesync.ErrTargetNotAllowed),
 		errors.Is(err, remotesync.ErrFileNotAllowed):

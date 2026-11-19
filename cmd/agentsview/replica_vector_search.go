@@ -10,6 +10,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/storage"
 )
 
@@ -26,7 +27,7 @@ func replicaVectorUnavailableReason(
 		fps = append(fps, g.Fingerprint)
 	}
 	return fmt.Sprintf(
-		"semantic search: %s (present: %s); run 'agentsview %s push' from a "+
+		"semantic search: %s (present: %s); run 'agentsview replica %s push' from a "+
 			"machine with a matching [vector.embeddings] config",
 		unavailable, strings.Join(fps, ", "), backend.Name())
 }
@@ -59,6 +60,8 @@ func wireReplicaVectorSearch(
 	if !ok {
 		return nil
 	}
+	_, hosted := store.(*postgres.HostedStore)
+	hostedHint := "configure [vector] and [vector.embeddings] for the hosted target, then run 'agentsview replica pg hosted-provision provision' with the owner target"
 	provider, ok := backend.(storage.VectorSearchProvider)
 	if !ok {
 		vectorStore.SetSemanticUnavailableReason(fmt.Sprintf(
@@ -73,17 +76,26 @@ func wireReplicaVectorSearch(
 	if !appCfg.Vector.Enabled && appCfg.DeploymentEmbeddings != nil {
 		adopted, err := adoptReplicaVectorConfig(ctx, appCfg, backend, store)
 		if err != nil {
-			vectorStore.SetSemanticUnavailableReason(err.Error())
-			log.Printf("%s: %v", label, err)
+			reason := err.Error()
+			if hosted {
+				reason, _, _ = strings.Cut(reason, ";")
+				reason += "; " + hostedHint
+			}
+			vectorStore.SetSemanticUnavailableReason(reason)
+			log.Printf("%s: %s", label, reason)
 			return nil
 		}
 		appCfg = adopted
 	}
 	if !appCfg.Vector.Enabled {
+		if hosted {
+			vectorStore.SetSemanticUnavailableReason("semantic search: " + hostedHint)
+			return nil
+		}
 		vectorStore.SetSemanticUnavailableReason(fmt.Sprintf(
 			"semantic search: %s requires [vector] enabled with a matching "+
 				"[vector.embeddings] config and a generation pushed by "+
-				"'agentsview %s push'", backend.DisplayName(), backend.Name()))
+				"'agentsview replica %s push'", backend.DisplayName(), backend.Name()))
 		return nil
 	}
 	gen := vectorGeneration(appCfg.Vector.Embeddings)
@@ -106,6 +118,10 @@ func wireReplicaVectorSearch(
 			log.Printf("%s: listing vector generations: %v", label, err)
 		}
 		reason := replicaVectorUnavailableReason(backend, unavailable, present)
+		if hosted {
+			unavailable = strings.TrimSuffix(unavailable, " (interrupted push?)")
+			reason = "semantic search: " + unavailable + "; " + hostedHint
+		}
 		vectorStore.SetSemanticUnavailableReason(reason)
 		log.Printf("%s: %s", label, reason)
 		return nil
@@ -130,14 +146,14 @@ var wireReplicaReadVectorSearchFn = wireReplicaReadVectorSearch
 // db.ErrSemanticUnavailable. Stores that are not replica stores (test fakes
 // injected through the store opener) are left untouched.
 func wireReplicaReadVectorSearch(
-	cfg config.Config, backend storage.Replica, store db.Store,
+	ctx context.Context, cfg config.Config, backend storage.Replica, store db.Store,
 ) {
 	replicaStore, ok := store.(storage.ReplicaStore)
 	if !ok {
 		return
 	}
 	if err := wireReplicaVectorSearch(
-		context.Background(), cfg, backend, replicaStore, backend.Name()+" read",
+		ctx, cfg, backend, replicaStore, backend.Name()+" read",
 	); err != nil {
 		log.Printf(
 			"warning: wiring %s semantic search: %v; continuing without semantic search",

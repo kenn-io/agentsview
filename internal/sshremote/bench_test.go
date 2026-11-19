@@ -24,7 +24,7 @@ func BenchmarkServeArchiveZstd(b *testing.B) {
 	b.Setenv("HOME", home)
 	cfg, err := config.LoadReadOnly()
 	require.NoError(b, err)
-	targets, err := remotesync.ResolveTargets(cfg)
+	targets, err := remotesync.ResolveTargets(b.Context(), cfg)
 	require.NoError(b, err)
 	var raw countingWriter
 	require.NoError(b, remotesync.WriteArchive(b.Context(), &raw, targets))

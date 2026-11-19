@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -54,6 +53,7 @@ func TestWatcherAcknowledgesLifecycleOnlyAfterSuccessfulReconciliation(t *testin
 	gate := &recordingLifecycleGate{acknowledged: make(chan uint64, 1)}
 	calls := make(chan WatchBatch, 2)
 	releaseSuccess := make(chan struct{})
+	release := sync.OnceFunc(func() { close(releaseSuccess) })
 	var attempts atomic.Int32
 	w, err := newWatcherWithBackend(
 		0, 0,
@@ -70,6 +70,9 @@ func TestWatcherAcknowledgesLifecycleOnlyAfterSuccessfulReconciliation(t *testin
 	require.NoError(t, err)
 	w.Start()
 	t.Cleanup(w.Stop)
+	// Cleanups run last-in first-out: release the callback before Stop waits
+	// for it, so a failed assertion ends the test instead of hanging it.
+	t.Cleanup(release)
 
 	backend.sendBackendEvent(t, backendEvent{
 		Path: "/sync", Root: "/sync", Op: backendOpReconcileRootChange,
@@ -84,7 +87,7 @@ func TestWatcherAcknowledgesLifecycleOnlyAfterSuccessfulReconciliation(t *testin
 	}
 	second := requireReceiveWithin(t, calls, time.Second)
 	assert.Equal(t, []string{"/sync"}, second.ReconcileRoots)
-	close(releaseSuccess)
+	release()
 	assert.Equal(t, uint64(7), requireReceiveWithin(t, gate.acknowledged, time.Second))
 }
 
@@ -842,41 +845,51 @@ func TestWatcherBatchesPathsAndEnforcesDispatchFloor(t *testing.T) {
 }
 
 func TestWatcherSchedulerSustainedEventsProgress(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		const (
-			batchDelay  = 50 * time.Millisecond
-			minInterval = 300 * time.Millisecond
-			eventEvery  = 10 * time.Millisecond
-		)
-		backend := newFakeWatchBackend()
-		var calls []watcherCall
-		w, err := newWatcherWithBackend(
-			batchDelay, minInterval,
-			func(_ context.Context, batch WatchBatch) error {
-				calls = append(calls, watcherCall{paths: batch.Paths, at: time.Now()})
-				return nil
-			},
-			backend, 8, 1_000,
-		)
-		require.NoError(t, err)
-		w.Start()
-		t.Cleanup(w.Stop)
+	for _, tt := range []struct {
+		name                                       string
+		batchDelay, interval, eventEvery, duration time.Duration
+		want                                       int
+	}{
+		{"continuous burst", 50 * time.Millisecond, 300 * time.Millisecond, 10 * time.Millisecond, 900 * time.Millisecond, 3},
+		{"one minute", 500 * time.Millisecond, time.Minute, time.Second, 3 * time.Minute, 3},
+		{"five seconds", 500 * time.Millisecond, 5 * time.Second, time.Second, 3 * time.Minute, 36},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				backend := newFakeWatchBackend()
+				var calls []watcherCall
+				w, err := newWatcherWithBackend(
+					tt.batchDelay, tt.interval,
+					func(_ context.Context, batch WatchBatch) error {
+						calls = append(calls, watcherCall{paths: batch.Paths, at: time.Now()})
+						return nil
+					},
+					backend, 8, 1_000,
+				)
+				require.NoError(t, err)
+				w.Start()
+				t.Cleanup(w.Stop)
 
-		start := time.Now()
-		for time.Since(start) < 3*minInterval {
-			backend.sendEvent(t, "/sessions/active.jsonl")
-			synctest.Wait()
-			time.Sleep(eventEvery)
-		}
-		synctest.Wait()
+				start := time.Now()
+				for time.Since(start) < tt.duration {
+					// Settle a due batch timer before delivering an event at the
+					// same instant, so it belongs to the next batch.
+					synctest.Wait()
+					backend.sendEvent(t, "/sessions/active.jsonl")
+					synctest.Wait()
+					time.Sleep(tt.eventEvery)
+				}
+				synctest.Wait()
 
-		require.Len(t, calls, 3, "sustained events must make bounded progress")
-		for i, call := range calls {
-			assert.Equal(t, []string{"/sessions/active.jsonl"}, call.paths)
-			assert.Equal(t, batchDelay+time.Duration(i)*minInterval, call.at.Sub(start),
-				"new events must not postpone dispatch or bypass the minimum interval")
-		}
-	})
+				require.Len(t, calls, tt.want, "sustained events must make bounded progress")
+				for i, call := range calls {
+					assert.Equal(t, []string{"/sessions/active.jsonl"}, call.paths)
+					assert.Equal(t, tt.batchDelay+time.Duration(i)*tt.interval, call.at.Sub(start),
+						"new events must not postpone dispatch or bypass the minimum interval")
+				}
+			})
+		})
+	}
 }
 
 func TestWatcherSustainedWritesProgress(t *testing.T) {
@@ -1659,6 +1672,8 @@ func TestWatcherRecurringFreshFailuresDoNotPostponeOlderRetry(t *testing.T) {
 				olderAt = append(olderAt, c.at)
 			}
 		}
+		// Finish the callback's event send before Stop removes its receiver.
+		synctest.Wait()
 		ms := time.Millisecond
 		// The older retry backs off 20, 40, 80ms. Fresh failures from 80ms on
 		// must not push its fourth attempt past 140ms.
@@ -2492,42 +2507,6 @@ func TestWatcherHandlesRemoveAndRename(t *testing.T) {
 	assert.Contains(t, got, renamePath)
 }
 
-func TestWatchRecursive_ExcludesDirectoryNames(t *testing.T) {
-	w := newFSNotifyTestWatcher(t, []string{".git", "node_modules"})
-
-	root := t.TempDir()
-	included := filepath.Join(root, "project", "src")
-	excludedGit := filepath.Join(root, "project", ".git", "objects")
-	excludedModules := filepath.Join(root, "project", "node_modules", "pkg")
-	for _, p := range []string{included, excludedGit, excludedModules} {
-		require.NoError(t, os.MkdirAll(p, 0o755), "MkdirAll(%s)", p)
-	}
-
-	watched, unwatched, err := w.WatchRecursive(root)
-	require.NoError(t, err, "WatchRecursive")
-	assert.Equal(t, 3, watched, "only root, project, and src should be watched")
-	assert.Zero(t, unwatched)
-}
-
-func TestWatchRecursiveBudget_DegradesWhenBudgetExhausted(t *testing.T) {
-	root := t.TempDir()
-	for i := range 5 {
-		require.NoError(t, os.MkdirAll(filepath.Join(root, fmt.Sprintf("dir-%d", i)), 0o755))
-	}
-
-	w := newFSNotifyTestWatcher(t, nil)
-
-	result := w.WatchRecursiveBudgeted(root, 3)
-	assert.Equal(t, 3, result.Watched)
-	assert.True(t, result.BudgetExhausted, "BudgetExhausted = false, want true")
-}
-
-func TestIsWatchResourceExhaustion(t *testing.T) {
-	assert.True(t, isWatchResourceExhaustion(syscall.EMFILE), "EMFILE should be resource exhaustion")
-	assert.True(t, isWatchResourceExhaustion(syscall.ENOSPC), "ENOSPC should be resource exhaustion")
-	assert.False(t, isWatchResourceExhaustion(os.ErrNotExist), "ErrNotExist should not be resource exhaustion")
-}
-
 func TestWatcherAutoWatchesNewDirs_RespectsExcludes(t *testing.T) {
 	pathsCh := make(chan []string, 10)
 	w, err := NewWatcher(20*time.Millisecond, func(batch WatchBatch) {
@@ -2630,60 +2609,6 @@ func TestWatcherShallowParentDoesNotShadowRecursiveChild(t *testing.T) {
 	waitForPath(t, pathsCh, sessionFile)
 }
 
-func TestWatchRecursive_RootUnderExcludedAncestorStillWatchesDescendants(t *testing.T) {
-	w := newFSNotifyTestWatcher(t, []string{"venv"})
-
-	base := t.TempDir()
-	root := filepath.Join(base, "venv", "project")
-	included := filepath.Join(root, "src")
-	require.NoError(t, os.MkdirAll(included, 0o755), "MkdirAll(%s)", included)
-
-	watched, unwatched, err := w.WatchRecursive(root)
-	require.NoError(t, err, "WatchRecursive")
-	assert.Equal(t, 2, watched, "root and descendant should both be watched")
-	assert.Zero(t, unwatched)
-}
-
-func TestWatchRecursive_ExcludesSlashPatternRelativeToRoot(t *testing.T) {
-	w := newFSNotifyTestWatcher(t, []string{"foo/bar"})
-
-	root := t.TempDir()
-	excluded := filepath.Join(root, "foo", "bar")
-	includedSibling := filepath.Join(root, "foo", "baz")
-	for _, p := range []string{excluded, includedSibling} {
-		require.NoError(t, os.MkdirAll(p, 0o755), "MkdirAll(%s)", p)
-	}
-
-	watched, unwatched, err := w.WatchRecursive(root)
-	require.NoError(t, err, "WatchRecursive")
-	assert.Equal(t, 3, watched, "root, foo, and foo/baz should be watched")
-	assert.Zero(t, unwatched)
-}
-
-func TestWatchRecursive_OverlappingRoots_UsesMostSpecificRoot(t *testing.T) {
-	w := newFSNotifyTestWatcher(t, []string{"venv"})
-
-	base := t.TempDir()
-	parentRoot := filepath.Join(base, "workspace")
-	nestedRoot := filepath.Join(parentRoot, "venv", "project")
-	included := filepath.Join(nestedRoot, "src")
-	for _, p := range []string{parentRoot, included} {
-		require.NoError(t, os.MkdirAll(p, 0o755), "MkdirAll(%s)", p)
-	}
-
-	parentWatched, parentUnwatched, err := w.WatchRecursive(parentRoot)
-	require.NoError(t, err, "WatchRecursive(parent)")
-	assert.Equal(t, 1, parentWatched,
-		"the excluded venv subtree should be skipped from the parent root")
-	assert.Zero(t, parentUnwatched)
-
-	nestedWatched, nestedUnwatched, err := w.WatchRecursive(nestedRoot)
-	require.NoError(t, err, "WatchRecursive(nested)")
-	assert.Equal(t, 2, nestedWatched,
-		"the nested root and descendant should use the nested exclusion scope")
-	assert.Zero(t, nestedUnwatched)
-}
-
 func TestNewWatcher_NilOnChange(t *testing.T) {
 	_, err := NewWatcher(time.Second, nil, nil)
 	require.Error(t, err, "NewWatcher(nil) should return error")
@@ -2691,22 +2616,4 @@ func TestNewWatcher_NilOnChange(t *testing.T) {
 
 	expectedMsg := "onChange callback is nil"
 	assert.Equal(t, expectedMsg+": "+os.ErrInvalid.Error(), err.Error())
-}
-
-func newFSNotifyTestWatcher(t *testing.T, excludes []string) *Watcher {
-	t.Helper()
-	backend, err := newFSNotifyBackend(excludes)
-	require.NoError(t, err)
-	w, err := newWatcherWithBackend(
-		time.Second,
-		time.Second,
-		func(context.Context, WatchBatch) error { return nil },
-		backend,
-		defaultWatchBatchMaxEntries,
-		defaultWatchBatchMaxPathBytes,
-	)
-	require.NoError(t, err)
-	w.Start()
-	t.Cleanup(w.Stop)
-	return w
 }

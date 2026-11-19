@@ -51,12 +51,7 @@ function call(
   params: Record<string, unknown> = {},
   rest: Partial<ToolCall> = {},
 ): ToolCall {
-  return {
-    category: "",
-    tool_name,
-    input_json: JSON.stringify(params),
-    ...rest,
-  };
+  return { call_index: 0, category: "", tool_name, input_json: JSON.stringify(params), ...rest };
 }
 const text = (selector: string) => document.querySelector(selector)?.textContent ?? "";
 const longCommand = Array.from({ length: 30 }, (_, i) => `echo hidden-line-${i}`).join("\n");
@@ -152,6 +147,7 @@ describe("ToolBlock output and controls", () => {
     const result =
       '[{"type":"input_text","text":"Before"},{"byte_size":3,"media_type":"image/png","sha256":"","text":"[Image: image/png, 3 bytes]","type":"agentsview_image","version":1},{"type":"text","text":"After"}]';
     const toolCall: ToolCall = {
+      call_index: 0,
       tool_name: "view_image",
       category: "Other",
       result_content: result,
@@ -197,6 +193,7 @@ describe("ToolBlock output and controls", () => {
     expect(new TextEncoder().encode(result).byteLength).toBe(1_441_138);
 
     const toolCall: ToolCall = {
+      call_index: 0,
       tool_name: "view_image",
       category: "Other",
       result_content: result,
@@ -238,6 +235,7 @@ describe("ToolBlock output and controls", () => {
   it("renders an image-only retained result", async () => {
     const result = JSON.stringify([{ type: "input_image", image_url: SMALL_PNG_DATA_URI }]);
     const toolCall: ToolCall = {
+      call_index: 0,
       tool_name: "view_image",
       category: "Other",
       result_content: result,
@@ -280,6 +278,7 @@ describe("ToolBlock output and controls", () => {
     document.head.appendChild(base);
 
     const toolCall: ToolCall = {
+      call_index: 0,
       tool_name: "view_image",
       category: "Other",
       result_content: result,
@@ -602,6 +601,46 @@ describe("ToolBlock input source and copy", () => {
     await click('button[aria-label="Copy input"]');
     expect(copyToClipboardMock).toHaveBeenCalledExactlyOnceWith("make build");
   });
+  it("shows the file field and the leading hunk header as one strip", async () => {
+    await render({
+      toolCall: call(
+        "Edit",
+        { file_path: "src/app.go", old_string: "before", new_string: "after" },
+        { category: "Edit" },
+      ),
+    });
+    await click(".tool-header");
+    const strip = document.querySelector(".tool-meta.diff-strip");
+    expect(strip?.textContent).toContain("src/app.go");
+    const hunk = strip?.querySelector(".diff-strip-hunk")?.textContent ?? "";
+    expect(hunk.startsWith("@@")).toBe(true);
+    // The header moves into the strip rather than repeating above the code.
+    expect(text(".diff-view")).not.toContain("@@");
+    expect(text(".diff-view")).toContain("-before");
+    expect(text(".diff-view")).toContain("+after");
+  });
+  it("keeps the leading hunk header in the diff while in-session search runs", async () => {
+    // Search offsets index the diff's source text, so the header must stay
+    // in the code block instead of moving into the strip.
+    searchState.active = true;
+    searchState.current = "3:tool-input:0";
+    searchState.query = "after";
+    await render({
+      toolCall: call(
+        "Edit",
+        { file_path: "src/app.go", old_string: "before", new_string: "after" },
+        { category: "Edit" },
+      ),
+      searchScope: { ordinal: 3, callIdx: 0 },
+    });
+    expect(document.querySelector(".tool-header")?.getAttribute("aria-expanded")).toBe("true");
+    expect(document.querySelector(".tool-meta.diff-strip")).not.toBeNull();
+    expect(document.querySelector(".diff-strip-hunk")).toBeNull();
+    const diff = text(".diff-view");
+    expect(diff.startsWith("@@")).toBe(true);
+    expect(diff).toContain("-before");
+    expect(diff).toContain("+after");
+  });
   it("names the file in the header and copies the diff of a per-file change", async () => {
     const diff = "@@ -1 +1 @@\n-old\n+new\n";
     await render({
@@ -626,6 +665,7 @@ describe("ToolBlock input source and copy", () => {
     await render({
       content: "legacy",
       toolCall: {
+        call_index: 0,
         category: "",
         tool_name: "Read",
         input_json: "{",
@@ -639,6 +679,7 @@ describe("ToolBlock input source and copy", () => {
   it("handles a tool call without input_json", async () => {
     await render({
       toolCall: {
+        call_index: 0,
         category: "",
         tool_name: "Read",
       },
@@ -916,4 +957,53 @@ describe("ToolBlock result images", () => {
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(ui.activeModal).toBeNull();
   });
+});
+
+const docbankLookup = vi.hoisted(() => vi.fn());
+vi.mock("../../api/generated/sessions/sessions.js", () => ({
+  getApiV1SessionsByIdFileReferences: docbankLookup,
+}));
+
+it("mounts tracked Docbank rows for tool output and history events", async () => {
+  const { imageOccurrence, trackDocbank } = await import("./docbankTestHelpers.js");
+  await trackDocbank({
+    integration: "enabled",
+    occurrences: [
+      { ...imageOccurrence, size: 3, call_index: 0, tool_use_id: "read-1", tool_name: "Read" },
+      {
+        ...imageOccurrence,
+        size: 3,
+        call_index: 0,
+        tool_use_id: "read-1",
+        tool_name: "Read",
+        event_index: 0,
+      },
+    ],
+  });
+  await render({
+    sessionId: "session-1",
+    ordinal: 0,
+    toolCall: call(
+      "Read",
+      {},
+      {
+        tool_use_id: "read-1",
+        result_content: "Image removed from archive",
+        result_events: [
+          {
+            event_index: 0,
+            source: "tool_result",
+            status: "completed",
+            content: "old result",
+            content_length: 10,
+            timestamp: "2026-01-01T00:00:00Z",
+          },
+        ],
+      },
+    ),
+  });
+  await click(".tool-header");
+  expect(document.querySelectorAll(".docbank-matches")).toHaveLength(1);
+  await click(".history-header");
+  expect(document.querySelectorAll(".docbank-matches")).toHaveLength(2);
 });

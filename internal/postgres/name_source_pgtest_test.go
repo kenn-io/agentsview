@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -19,16 +18,14 @@ import (
 // SQLite to PostgreSQL and survives a round-trip via the sidebar index
 // read path and the scanPGSession read path.
 func TestPushSessionNameRoundTrip(t *testing.T) {
-	pgURL := testPGURL(t)
-
-	const schema = "agentsview_push_sessionname_test"
-	pg, err := Open(pgURL, schema, true)
+	t.Parallel()
+	const schema = pgPushTestSchema
+	pgURL := testPGSchemaURL(t, schema)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "Open")
 	defer pg.Close()
 
-	ctx := context.Background()
-	_, err = pg.Exec(`DROP SCHEMA IF EXISTS ` + schema + ` CASCADE`)
-	require.NoError(t, err, "drop schema")
+	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -71,7 +68,7 @@ func TestPushSessionNameRoundTrip(t *testing.T) {
 
 	// Read back session_name via direct query.
 	var gotSessionName *string
-	require.NoError(t, pg.QueryRow(
+	require.NoError(t, pg.QueryRowContext(t.Context(),
 		`SELECT session_name FROM sessions WHERE id = $1`,
 		sess.ID,
 	).Scan(&gotSessionName), "read back session_name")
@@ -79,7 +76,7 @@ func TestPushSessionNameRoundTrip(t *testing.T) {
 	assert.Equal(t, "Agent Title", *gotSessionName, "session_name round-trip")
 
 	// Read back via store and GetSidebarSessionIndex.
-	store, err := NewStore(pgURL, schema, true)
+	store, err := NewStore(t.Context(), pgURL, schema, true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 
@@ -112,7 +109,7 @@ func TestPushSessionNameRoundTrip(t *testing.T) {
 	}
 	require.NoError(t, tx2.Commit(), "Commit (second)")
 
-	require.NoError(t, pg.QueryRow(
+	require.NoError(t, pg.QueryRowContext(t.Context(),
 		`SELECT session_name FROM sessions WHERE id = $1`,
 		sess.ID,
 	).Scan(&gotSessionName), "read back session_name after clear")
@@ -124,19 +121,18 @@ func TestPushSessionNameRoundTrip(t *testing.T) {
 // pushSession call. ListSessionsForMirrorWindow reads sessionFullCols, so a
 // missing session_name there would silently drop the value on every real push.
 func TestPushSessionNameViaPushPath(t *testing.T) {
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 	ps, err := New(
-		pgURL, "agentsview", local, "machine-sessionname-push", true,
+		t.Context(), pgURL, "agentsview", local, "machine-sessionname-push", true,
 		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, ps.EnsureSchema(ctx), "ensure schema")
 
 	started := time.Now().UTC().Format(time.RFC3339)
@@ -157,13 +153,13 @@ func TestPushSessionNameViaPushPath(t *testing.T) {
 	require.NoError(t, err, "push")
 	require.Equal(t, 1, pushResult.SessionsPushed)
 
-	store, err := NewStore(pgURL, "agentsview", true)
+	store, err := NewStore(t.Context(), pgURL, "agentsview", true)
 	require.NoError(t, err, "opening store")
 	defer store.Close()
 
 	// Verify session_name was pushed correctly via direct SQL.
 	var pushedSessionName *string
-	require.NoError(t, ps.DB().QueryRow(
+	require.NoError(t, ps.DB().QueryRowContext(t.Context(),
 		`SELECT session_name FROM agentsview.sessions WHERE id = $1`,
 		"sn-push-001",
 	).Scan(&pushedSessionName), "read session_name via direct SQL")

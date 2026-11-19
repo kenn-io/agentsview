@@ -3,6 +3,7 @@ import { reportErrorShown } from "../../utils/telemetry.js";
 vi.mock("../../utils/telemetry.js", () => ({ reportErrorShown: vi.fn() }));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
+import { screen } from "@testing-library/svelte";
 import { analytics } from "../../stores/analytics.svelte.js";
 import { analyticsPageDates } from "../../stores/analyticsPageDates.js";
 import { router } from "../../stores/router.svelte.js";
@@ -163,18 +164,12 @@ async function selectCustomRange(fromLabel: string, toLabel: string) {
   customTab!.click();
   await flushEffects();
 
-  const from = document.querySelector<HTMLButtonElement>(
-    `.kit-calendar button[aria-label="${fromLabel}"]`,
-  );
-  expect(from).not.toBeNull();
-  from!.click();
+  const from = screen.getByRole("gridcell", { name: fromLabel });
+  from.click();
   await flushEffects();
 
-  const to = document.querySelector<HTMLButtonElement>(
-    `.kit-calendar button[aria-label="${toLabel}"]`,
-  );
-  expect(to).not.toBeNull();
-  to!.click();
+  const to = screen.getByRole("gridcell", { name: toLabel });
+  to.click();
   await flushEffects();
 }
 
@@ -408,7 +403,7 @@ describe("QualityPage date yoke integration", () => {
 
     component = mount(QualityPage, { target: document.body });
     await flushEffects();
-    await selectCustomRange("Jul 1, 2026", "Jul 7, 2026");
+    await selectCustomRange("Wednesday, July 1, 2026", "Tuesday, July 7, 2026");
 
     router.navigate("usage");
     unmount(component);
@@ -521,6 +516,30 @@ describe("QualityPage evidence navigation", () => {
     window.history.replaceState(null, "", "/");
     router.route = "sessions";
     router.params = {};
+  });
+
+  it("labels pattern columns and keeps each grade count beside its letter", async () => {
+    component = mount(QualityPage, { target: document.body });
+    await flushEffects();
+
+    const card = document.querySelector<HTMLElement>(".pattern-card")!;
+    const head = Array.from(card.querySelectorAll(".driver-head span"), (cell) =>
+      cell.textContent?.trim(),
+    );
+    expect(head).toEqual(["Signal", "Count", "Sessions", "Outcome"]);
+
+    const row = card.querySelector<HTMLButtonElement>(".driver-row")!;
+    const [label, ...values] = Array.from(row.children, (cell) => cell.textContent?.trim());
+    expect(values).toEqual(["2", "2", "Examples only"]);
+    expect(row.getAttribute("aria-label")).toBe(`${label}: 2, 2 sessions, Examples only`);
+
+    const grades = Array.from(document.querySelectorAll(".grade-bar"), (bar) =>
+      Array.from(bar.children, (cell) => cell.textContent?.trim()).slice(0, 2),
+    );
+    expect(grades.slice(0, 2)).toEqual([
+      ["A", "1"],
+      ["B", "1"],
+    ]);
   });
 
   it("reports the analytics kind when signal evidence fails", async () => {

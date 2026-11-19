@@ -336,9 +336,16 @@ func (db *DB) Compact(ctx context.Context, options CompactOptions) (result Compa
 	}
 
 	// The backfill pass holds long read snapshots that would stall the final
-	// swap's drain; it is restarted by restoreCompactServices on every exit.
+	// swap's drain and pin WAL frames during pruning; it is restarted by
+	// restoreCompactServices on every exit.
 	db.StopUsageCacheBackfill()
 	defer db.restoreCompactServices()
+	// Deleted conversation rows otherwise stay in the export index for good,
+	// and nothing frees their pages for the VACUUM below to reclaim.
+	if _, err := db.PruneConversationTombstones(ctx); err != nil {
+		_ = os.Remove(op.opDir)
+		return result, fmt.Errorf("remove deleted conversation records: %w", err)
+	}
 	if err := db.CloseWriter(); err != nil {
 		primary := fmt.Errorf("close archive writer for compaction: %w", err)
 		_ = os.Remove(op.opDir)
@@ -375,12 +382,12 @@ func (db *DB) Compact(ctx context.Context, options CompactOptions) (result Compa
 	// the caller (an HTTP request, a Ctrl-C'd CLI) has gone away.
 	opCtx := context.WithoutCancel(ctx)
 	if err := db.verifyReopenedArchive(opCtx, op.verification); err != nil {
-		return result, db.rollbackCompactInstall(ctx,
+		return result, db.rollbackCompactInstall(opCtx,
 			fmt.Errorf("verify reopened archive: %w", err), op)
 	}
 	op.manifest.Phase = compactPhaseCommitted
 	if err := writeCompactManifest(op.manifestPath, op.manifest); err != nil {
-		return result, db.rollbackCompactInstall(ctx,
+		return result, db.rollbackCompactInstall(opCtx,
 			fmt.Errorf("record committed archive compaction: %w", err), op)
 	}
 	// Commit point: the compacted archive is authoritative from here on.

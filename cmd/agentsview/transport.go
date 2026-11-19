@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/url"
@@ -23,6 +24,15 @@ import (
 	"go.kenn.io/agentsview/internal/servicehttp"
 	"go.kenn.io/agentsview/internal/update"
 )
+
+type daemonProgressContextKey struct{}
+
+func daemonProgressWriter(ctx context.Context) io.Writer {
+	if w, ok := ctx.Value(daemonProgressContextKey{}).(io.Writer); ok {
+		return w
+	}
+	return os.Stderr
+}
 
 type transportMode int
 
@@ -89,6 +99,7 @@ type customPricingStore interface {
 }
 
 var openPGReadStore = func(
+	ctx context.Context,
 	cfg config.Config,
 	pgCfg config.PGConfig,
 ) (db.Store, func(), error) {
@@ -97,7 +108,7 @@ var openPGReadStore = func(
 		return nil, nil, err
 	}
 	if pgCfg.RawTenant != "" {
-		store, err := postgres.NewHostedStore(pgCfg.URL, pgCfg.Schema, pgCfg.RawTenant, pgCfg.AllowInsecure)
+		store, err := postgres.NewHostedStore(ctx, pgCfg.URL, pgCfg.Schema, pgCfg.RawTenant, pgCfg.AllowInsecure)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -108,7 +119,7 @@ var openPGReadStore = func(
 		return store, func() { _ = store.Close() }, nil
 	}
 	backend := pgReplica{}
-	store, err := backend.OpenStore(postgres.ReplicaTarget(pgCfg))
+	store, err := backend.OpenStore(ctx, postgres.ReplicaTarget(pgCfg))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -117,21 +128,6 @@ var openPGReadStore = func(
 		return nil, nil, err
 	}
 	return store, func() { _ = store.Close() }, nil
-}
-
-// detectTransport picks the transport mode:
-//  1. If a kit runtime record points to a live daemon, use HTTP.
-//  2. If a daemon start lock exists, wait up to waitTimeout for the
-//     daemon to become ready, then try again.
-//  3. If a writable local daemon owns the SQLite archive but is not
-//     reachable by ping, use direct read-only access.
-//  4. Otherwise use direct access.
-func detectTransport(
-	dataDir string, authToken string, waitTimeout time.Duration,
-) (transport, error) {
-	return detectTransportContext(
-		context.Background(), dataDir, authToken, waitTimeout,
-	)
 }
 
 // detectClientTransportContext probes an existing daemon using deployment
@@ -159,6 +155,13 @@ func loadDaemonClientConfig(scope config.ValidationScope) (config.Config, error)
 	return cfg, err
 }
 
+// detectTransportContext picks the transport mode:
+//  1. If a kit runtime record points to a live daemon, use HTTP.
+//  2. If a daemon start lock exists, wait up to waitTimeout for the
+//     daemon to become ready, then try again.
+//  3. If a writable local daemon owns the SQLite archive but is not
+//     reachable by ping, use direct read-only access.
+//  4. Otherwise use direct access.
 func detectTransportContext(
 	ctx context.Context,
 	dataDir string,
@@ -169,7 +172,7 @@ func detectTransportContext(
 		return transport{}, err
 	}
 	if isExternalDaemonStarting(dataDir) {
-		fmt.Fprintln(os.Stderr,
+		fmt.Fprintln(daemonProgressWriter(ctx),
 			"server is starting up, waiting...")
 		if waitTimeout <= 0 {
 			waitTimeout = startupWaitTimeout
@@ -188,7 +191,7 @@ func detectTransportContext(
 		return transportFromRuntime(sf), nil
 	}
 	if IsDaemonStarting(dataDir) {
-		fmt.Fprintln(os.Stderr,
+		fmt.Fprintln(daemonProgressWriter(ctx),
 			"server is starting up, waiting...")
 		if waitTimeout <= 0 {
 			waitTimeout = startupWaitTimeout
@@ -224,16 +227,6 @@ func detectTransportContext(
 		}, nil
 	}
 	return transport{Mode: transportDirect}, nil
-}
-
-func ensureTransport(
-	cfg *config.Config,
-	intent transportIntent,
-	waitTimeout time.Duration,
-) (transport, error) {
-	return ensureTransportContext(
-		context.Background(), cfg, intent, waitTimeout,
-	)
 }
 
 func ensureTransportContext(
@@ -342,12 +335,12 @@ func ensureTransportContext(
 	}
 	if intent == transportIntentRead {
 		if autostartDisabled {
-			return transport{}, errors.New(
-				"daemon autostart is disabled; direct SQLite reads are " +
-					"not supported for this command. Start a daemon with " +
-					"`agentsview daemon start` or unset " +
+			return transport{}, cliUnavailableError(errors.New(
+				"daemon autostart is disabled; direct SQLite reads are "+
+					"not supported for this command. Start a daemon with "+
+					"`agentsview daemon start` or unset "+
 					"AGENTSVIEW_NO_DAEMON",
-			)
+			), "run `agentsview daemon start`, then retry; unset AGENTSVIEW_NO_DAEMON only if this command should start a daemon automatically")
 		}
 		if tr.DirectReadOnly {
 			if tr.DirectReason != "" {
@@ -430,7 +423,7 @@ func waitForBackgroundLaunchBeforeArchiveWrite(
 	}
 	started := time.Now()
 	deadline := started.Add(waitTimeout)
-	progress := daemonLaunchProgressWriter{w: os.Stderr}
+	progress := daemonLaunchProgressWriter{w: daemonProgressWriter(ctx)}
 	var lastUpdate time.Time
 	for isBackgroundLaunchActive(dataDir) {
 		if backgroundServeProbeHook != nil {
@@ -474,11 +467,19 @@ func shouldReplaceDaemonRuntime(rt *DaemonRuntime, currentVersion string) bool {
 	return update.IsNewer(currentVersion, rt.Record.Version)
 }
 
-func longLivedDaemonCompatibilityError(err error) error {
-	return fmt.Errorf("%w\n\nThis long-running client cannot use the running daemon and will not replace it. "+
+type longLivedCompatibilityError struct{ cause error }
+
+func (e *longLivedCompatibilityError) Unwrap() error { return e.cause }
+
+func (e *longLivedCompatibilityError) Error() string {
+	return fmt.Sprintf("%v\n\nThis long-running client cannot use the running daemon and will not replace it. "+
 		"Restart this command with the current agentsview binary (`mcp`, `pg push --watch`, "+
-		"`duckdb push --watch`, or the installed push service). If the daemon still needs "+
-		"replacement, run `agentsview daemon restart` from that install", err)
+		"`clickhouse push --watch`, or the installed push service). If the daemon still needs "+
+		"replacement, run `agentsview daemon restart` from that install", e.cause)
+}
+
+func longLivedDaemonCompatibilityError(err error) error {
+	return &longLivedCompatibilityError{cause: err}
 }
 
 func shouldReplaceIncompatibleDaemonRuntime(
@@ -595,7 +596,7 @@ func newService(ctx context.Context,
 				"opening db: %w", err,
 			)
 		}
-		closeVectorSearcher := installDirectVectorSearcher(cfg, d)
+		closeVectorSearcher := installDirectVectorSearcher(ctx, cfg, d)
 		cleanup := func() {
 			if closeVectorSearcher != nil {
 				if cerr := closeVectorSearcher(); cerr != nil {
@@ -608,6 +609,7 @@ func newService(ctx context.Context,
 		// is handled via the HTTP daemon when one is running.
 		return service.NewDirectBackend(
 			d, nil, service.WithModelGroups(service.NewModelGroups(cfg.ModelAliases)),
+			service.WithConfiguredDocbank(cfg),
 		), cleanup, nil
 	}
 }
@@ -641,9 +643,9 @@ func appendDaemonCompatibilityHint(tr transport, err error) error {
 // --semantic|--hybrid` and `mcp --pg` get the same semantic search
 // the SQLite direct path wires via installDirectVectorSearcher.
 func newPGReadService(
-	cfg config.Config, pgCfg config.PGConfig,
+	ctx context.Context, cfg config.Config, pgCfg config.PGConfig,
 ) (service.SessionService, func(), error) {
-	store, cleanup, err := openPGReadStore(cfg, pgCfg)
+	store, cleanup, err := openPGReadStore(ctx, cfg, pgCfg)
 	if err != nil {
 		if cleanup != nil {
 			cleanup()
@@ -655,8 +657,9 @@ func newPGReadService(
 			priced.SetCustomPricing(cfg.CustomModelPricing)
 		}
 	}
-	wireReplicaReadVectorSearchFn(cfg, pgReplica{}, store)
+	wireReplicaReadVectorSearchFn(ctx, cfg, pgReplica{}, store)
 	return service.NewReadOnlyBackend(
 		store, service.WithModelGroups(service.NewModelGroups(cfg.ModelAliases)),
+		service.WithConfiguredDocbank(cfg),
 	), cleanup, nil
 }

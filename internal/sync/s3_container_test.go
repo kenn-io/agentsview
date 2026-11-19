@@ -22,8 +22,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/minio/minio-go/v7"
-	"github.com/minio/minio-go/v7/pkg/credentials"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -70,8 +71,7 @@ func startS3Container(ctx context.Context, t *testing.T) string {
 	)
 	require.NoError(t, err, "start S3 container")
 	t.Cleanup(func() {
-		// Use a fresh context so cleanup runs even if the test ctx is done.
-		_ = container.Terminate(context.Background())
+		_ = container.Terminate(context.WithoutCancel(t.Context()))
 	})
 
 	host, err := container.Host(ctx)
@@ -83,14 +83,13 @@ func startS3Container(ctx context.Context, t *testing.T) string {
 
 // putS3Object uploads body to s3://<bucket>/<key> using a direct client.
 func putS3Object(
-	ctx context.Context, t *testing.T, cl *minio.Client, key, body string,
+	ctx context.Context, t *testing.T, cl *s3.Client, key, body string,
 ) {
 	t.Helper()
-	_, err := cl.PutObject(
-		ctx, s3TestBucket, key,
-		bytes.NewReader([]byte(body)), int64(len(body)),
-		minio.PutObjectOptions{ContentType: "application/jsonl"},
-	)
+	_, err := cl.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: new(s3TestBucket), Key: new(key),
+		Body: bytes.NewReader([]byte(body)), ContentType: new("application/jsonl"),
+	})
 	require.NoError(t, err, "put object %s", key)
 }
 
@@ -101,7 +100,7 @@ func putS3Object(
 // fetched, parsed, and persisted machine-namespaced under the s3 root's machine
 // segment -- the end-to-end path that has no other real-store coverage.
 func TestS3DiscoverySyncAgainstContainer(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	endpoint := startS3Container(ctx, t)
 
 	// Point the production s3Client (env-driven) at the container. The endpoint
@@ -109,16 +108,18 @@ func TestS3DiscoverySyncAgainstContainer(t *testing.T) {
 	t.Setenv("AWS_S3_ENDPOINT", "http://"+endpoint)
 	t.Setenv("AWS_ACCESS_KEY_ID", s3TestAccessKey)
 	t.Setenv("AWS_SECRET_ACCESS_KEY", s3TestSecretKey)
+	t.Setenv("AWS_SESSION_TOKEN", "")
 	t.Setenv("AWS_REGION", "us-east-1")
 
-	uploadClient, err := minio.New(endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(s3TestAccessKey, s3TestSecretKey, ""),
-		Secure: false,
+	uploadClient := s3.NewFromConfig(aws.Config{
+		Region:      "us-east-1",
+		Credentials: credentials.NewStaticCredentialsProvider(s3TestAccessKey, s3TestSecretKey, ""),
+	}, func(opts *s3.Options) {
+		opts.BaseEndpoint = new("http://" + endpoint)
+		opts.UsePathStyle = true
 	})
-	require.NoError(t, err, "build upload client")
-	require.NoError(t, uploadClient.MakeBucket(
-		ctx, s3TestBucket, minio.MakeBucketOptions{},
-	), "make bucket")
+	_, err := uploadClient.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: new(s3TestBucket)})
+	require.NoError(t, err, "make bucket")
 
 	const (
 		claudeID = "11111111-1111-4111-8111-111111111111"

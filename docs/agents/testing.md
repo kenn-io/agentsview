@@ -20,13 +20,28 @@ Read this file before adding or changing tests.
 - Test helpers must use testify for their own assertions.
 - Use the existing `testDB(t)` helper for database tests.
 - Use `t.TempDir()` for temporary directories.
+- Register `t.Cleanup` to close a Docbank vault, artifact repository, or raw
+  archive right after opening it, even when the test also closes it explicitly.
+  A failed `require` skips the explicit close, and `t.TempDir()` then removes
+  the directory under the open vault. Docbank keeps its upload-directory lock in
+  a per-user registry keyed by directory inode, so the next directory that
+  reuses that inode cannot open a vault in any test process until the leaked
+  vault exits.
 - Never locate files from a path returned by `runtime.Caller` or a stack trace;
   builds use `-trimpath`, so those paths are module-relative. Tests run from
   their package directory, so use paths relative to it, such as `testdata/...`
   or `filepath.Join("..", "..", "docs")`.
+- Put a test that exercises the macOS file watcher in a `watch*_test.go` or
+  `*_darwin_test.go` file, or give its file a build constraint that names
+  darwin. On pull requests, the macOS FSEvents job runs only the tests that
+  `scripts/macos-watcher-tests.sh` selects by those rules.
 - A package whose tests load IANA timezone names, such as `America/New_York`,
   keeps a `tzdata_test.go` that imports `time/tzdata`. Trimmed test binaries
   cannot read the zone database in `GOROOT`, and Windows has no system copy.
+
+For ClickHouse read tests that need the standard populated mirror, use
+`newClonedReadStore(t)`. Choose the fixture for each test using the
+[ClickHouse storage guide](storage.md#clickhouse-test-fixtures).
 
 ### Timing budgets
 
@@ -46,7 +61,7 @@ what holds the wait.
 
 The check sees only the `fts5` test files each lint run compiles: Linux and
 Windows in full, and on macOS only the packages the macOS job lints. Tests
-behind `pgtest`, `chtest`, `duckdbtest`, or `s3test` go unchecked. It skips
+behind `pgtest`, `chtest`, or `s3test` go unchecked. It skips
 short positive `Never` windows, which cannot fail.
 
 ## Frontend and End-to-End Tests

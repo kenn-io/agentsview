@@ -243,7 +243,7 @@ func TestMessageDialogueFingerprints(t *testing.T) {
 	insertSession(t, d, "legacy", "proj")
 	insertMessages(t, d,
 		Message{SessionID: "classified", Ordinal: 2, Role: "assistant", DialogueText: new("a\x00bc\xff")},
-		Message{SessionID: "classified", Ordinal: 1, Role: "tool", DialogueText: new("")},
+		Message{SessionID: "classified", Ordinal: 1, Role: "tool", Content: "tool output", DialogueText: new("")},
 		Message{SessionID: "classified", Ordinal: 0, Role: "assistant", Content: "unclassified"},
 		Message{SessionID: "legacy", Ordinal: 0, Role: "assistant", Content: "legacy"},
 	)

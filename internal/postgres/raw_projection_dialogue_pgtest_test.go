@@ -15,8 +15,9 @@ import (
 )
 
 func TestRawProjectionRefreshesDialogueWithoutNewContent(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
-	_, grantErr := f.admin.Exec(`REVOKE UPDATE ON messages FROM "` + f.role + `"; GRANT UPDATE(dialogue_text) ON messages TO "` + f.role + `"`)
+	_, grantErr := f.admin.ExecContext(t.Context(), `REVOKE UPDATE ON messages FROM "`+f.role+`"; GRANT UPDATE(dialogue_text) ON messages TO "`+f.role+`"`)
 	require.NoError(t, grantErr)
 	m, _ := f.accept(t, "device-a", "dialogue-capture", "")
 	outcome := projectionOutcome("question")
@@ -27,7 +28,10 @@ func TestRawProjectionRefreshesDialogueWithoutNewContent(t *testing.T) {
 	parsed.Messages[1].Content = rendered
 	parsed.Messages[1].ThinkingText = "reasonneedle"
 	parsed.Messages[1].HasThinking = true
-	parsed.Messages = append(parsed.Messages, parser.ParsedMessage{Ordinal: 2, Role: parser.RoleTool, Content: "toolneedle"})
+	parsed.Messages = append(parsed.Messages,
+		parser.ParsedMessage{Ordinal: 2, Role: parser.RoleTool, Content: "toolneedle"},
+		// Dialogue that repeats content is retained as a marked empty row.
+		parser.ParsedMessage{Ordinal: 3, Role: parser.RoleAssistant, Content: "copyneedle", DialogueText: new("copyneedle")})
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, outcome))
 	before, err := f.sink.Resolve(t.Context(), "codex:portable")
 	require.NoError(t, err)
@@ -85,7 +89,10 @@ func TestRawProjectionRefreshesDialogueWithoutNewContent(t *testing.T) {
 		assert.Equal(t, before.SessionID, after.SessionID)
 		var retainedDialogue []byte
 		require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT jsonb_object_agg(ordinal,dialogue_text) FROM raw_message_dialogue WHERE session_id=$1`, after.SessionID).Scan(&retainedDialogue))
-		assert.JSONEq(t, `{"1":"answerneedle","2":""}`, string(retainedDialogue))
+		assert.JSONEq(t, `{"1":"answerneedle","2":"","3":""}`, string(retainedDialogue))
+		var retainedCopies []byte
+		require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT jsonb_object_agg(ordinal,is_content) FROM raw_message_dialogue WHERE session_id=$1`, after.SessionID).Scan(&retainedCopies))
+		assert.JSONEq(t, `{"1":false,"2":false,"3":true}`, string(retainedCopies))
 		var version int
 		require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT data_version FROM sessions WHERE id=$1`, after.SessionID).Scan(&version))
 		assert.Equal(t, db.CurrentDataVersion(), version)
@@ -100,7 +107,7 @@ func TestRawProjectionRefreshesDialogueWithoutNewContent(t *testing.T) {
 		assert.Equal(t, revision, gotRevision)
 		assert.Equal(t, revisions, gotRevisions)
 		assert.Equal(t, outbox, gotOutbox)
-		for ordinal, want := range []sql.NullString{{}, {String: "answerneedle", Valid: true}, {Valid: true}} {
+		for ordinal, want := range []sql.NullString{{}, {String: "answerneedle", Valid: true}, {Valid: true}, {}} {
 			var got sql.NullString
 			require.NoError(t, f.runtime.QueryRowContext(t.Context(), `SELECT dialogue_text FROM messages WHERE session_id=$1 AND ordinal=$2`, after.SessionID, ordinal).Scan(&got))
 			assert.Equal(t, want, got, "stage %s, ordinal %d", stage, ordinal)
@@ -118,6 +125,7 @@ func TestRawProjectionRefreshesDialogueWithoutNewContent(t *testing.T) {
 		assert.Nil(t, payload.Messages[0].DialogueText)
 		require.NotNil(t, payload.Messages[1].DialogueText)
 		assert.Equal(t, "answerneedle", *payload.Messages[1].DialogueText)
+		assert.Equal(t, new("copyneedle"), payload.Messages[3].DialogueText)
 		require.NoError(t, tx.Commit())
 	}
 }
@@ -125,6 +133,7 @@ func TestRawProjectionRefreshesDialogueWithoutNewContent(t *testing.T) {
 // A prefix can retain its own revision while its branch selects a longer one.
 // Refreshing that prefix must retain dialogue until it materializes.
 func TestRawProjectionDialogueUpgradeRefreshesRetainedRevision(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	short := projectionOutcome("prefixneedle")
 	short.Outcome.Results[0].Result.Messages = short.Outcome.Results[0].Result.Messages[:1]
@@ -163,16 +172,17 @@ func TestRawProjectionDialogueUpgradeRefreshesRetainedRevision(t *testing.T) {
 }
 
 func TestRawProjectionDialogueVersionChecksAtOpen(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	m, _ := f.accept(t, "device-a", "original", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, m), m, projectionOutcome("question")))
 	_, err := f.runtime.ExecContext(t.Context(), `UPDATE sessions SET data_version=$1`, db.CurrentDataVersion()+1)
 	require.NoError(t, err)
-	_, err = NewRawProjectionStore(f.runtime, RawProjectionOptions{Tenant: f.tenant})
+	_, err = NewRawProjectionStore(t.Context(), f.runtime, RawProjectionOptions{Tenant: f.tenant})
 	var tooNew *db.DataVersionTooNewError
 	require.ErrorAs(t, err, &tooNew)
 	assert.Equal(t, db.CurrentDataVersion()+1, tooNew.DatabaseVersion)
-	store, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
+	store, err := NewHostedStore(t.Context(), f.dsn, f.schema, f.tenant, false)
 	if store != nil {
 		t.Cleanup(func() { assert.NoError(t, store.Close()) })
 	}

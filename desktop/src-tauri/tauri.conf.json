@@ -22,7 +22,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' http://127.0.0.1:* http://localhost:*; script-src 'self' http://127.0.0.1:* http://localhost:*; connect-src 'self' http: https: ws: wss:; img-src 'self' data: blob: http://127.0.0.1:* http://localhost:*; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com http://127.0.0.1:* http://localhost:*; font-src 'self' data: https://fonts.gstatic.com http://127.0.0.1:* http://localhost:*; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+      "csp": "default-src 'self' http://127.0.0.1:* http://localhost:*; script-src 'self' http://127.0.0.1:* http://localhost:* 'sha256-Eym3PxQdYuGzQsfi2PA2bxFhXVJD9GuQ/Ig3m6m3of8='; connect-src 'self' http: https: ws: wss:; img-src 'self' data: blob: http://127.0.0.1:* http://localhost:*; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com http://127.0.0.1:* http://localhost:*; font-src 'self' data: https://fonts.gstatic.com http://127.0.0.1:* http://localhost:*; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
     }
   },
   "bundle": {
@@ -54,9 +54,9 @@
       }
     },
     "updater": {
-      "pubkey": "NOT_SET",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEMwQTQ1QjFERjk3ODczQ0IKUldUTGMzajVIVnVrd0xjKzRSY2M2K1YzOWM4WXh3QXNHYUw0a2tLSHlyOFZJSkZ3Z0N2VzZxcmMK",
       "endpoints": [
-        "https://github.com/wesm/agentsview/releases/download/updater/latest.json"
+        "https://github.com/kenn-io/agentsview/releases/download/updater/latest.json"
       ]
     }
   }

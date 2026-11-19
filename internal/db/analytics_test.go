@@ -155,23 +155,40 @@ func mustProjects(
 }
 
 func TestAnalyticsSummaryReturnsFirstReadError(t *testing.T) {
-	d := testDB(t)
-	insertSession(t, d, "summary", "project", func(s *Session) {
-		s.StartedAt = new("2024-06-01T09:00:00Z")
-	})
-	d.rawReader().SetMaxOpenConns(1)
-	conn, err := d.getReader().Conn(t.Context())
-	require.NoError(t, err)
-	// Fail during SQLite row evaluation, after QueryContext has returned rows.
-	require.NoError(t, conn.Raw(func(driverConn any) error {
-		return driverConn.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("strftime", func(...any) (string, error) {
-			return "", errors.New("summary read failure")
-		}, false)
-	}))
-	require.NoError(t, conn.Close())
+	for _, tc := range []struct {
+		name string
+		want string
+	}{
+		{"serving", "querying analytics summary: summary read failure"},
+		{"cold read-only", "querying analytics summary: summary read failure"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "summary", "project", func(s *Session) {
+				s.StartedAt = new("2024-06-01T09:00:00Z")
+			})
+			if tc.name == "cold read-only" {
+				reader, err := OpenReadOnly(t.Context(), d.Path())
+				require.NoError(t, err)
+				t.Cleanup(func() { require.NoError(t, reader.Close()) })
+				d = reader
+			}
+			d.rawReader().SetMaxOpenConns(1)
+			conn, err := d.getReader().Conn(t.Context())
+			require.NoError(t, err)
+			// Both serving and cold read-only queries must return errors
+			// from evaluating their first row.
+			require.NoError(t, conn.Raw(func(driverConn any) error {
+				return driverConn.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("strftime", func(...any) (string, error) {
+					return "", errors.New("summary read failure")
+				}, false)
+			}))
+			require.NoError(t, conn.Close())
 
-	_, err = d.GetAnalyticsSummary(t.Context(), baseFilter())
-	require.EqualError(t, err, "summary read failure")
+			_, err = d.GetAnalyticsSummary(t.Context(), baseFilter())
+			require.EqualError(t, err, tc.want)
+		})
+	}
 }
 
 func TestGetAnalyticsSummary(t *testing.T) {
@@ -240,7 +257,7 @@ func TestGetAnalyticsSummary(t *testing.T) {
 
 // TestRelationshipExclusionSQL covers the shared predicate helper that
 // the analytics builders and the stats pipeline both use, including the
-// column qualifier the DuckDB builder relies on.
+// column qualifier the replica builders rely on.
 func TestRelationshipExclusionSQL(t *testing.T) {
 	cases := []struct {
 		includeSubagents bool
@@ -323,6 +340,13 @@ func TestAnalyticsSubagentScope(t *testing.T) {
 	shape, err := d.GetAnalyticsSessionShape(ctx, f)
 	require.NoError(t, err, "GetAnalyticsSessionShape")
 	assert.Equal(t, 1, shape.Count, "session-shape stays root-only")
+
+	insertSession(t, d, "continuation", "project-alpha", func(s *Session) {
+		withTokens("continuation", 5, 2, 200)(s)
+		s.ParentSessionID = new("root")
+	})
+	assert.Equal(t, 3, mustSummary(t, d, ctx, f).TotalSessions,
+		"summary also counts the parented continuation")
 }
 
 func TestAnalyticsModelFilter(t *testing.T) {
@@ -658,7 +682,7 @@ func TestAnalyticsFilterMachineMultiSelect(t *testing.T) {
 
 // TestAnalyticsFilterAgentMultiSelectTrimsWhitespace guards backend
 // parity: a comma-separated agent filter with surrounding spaces must
-// match every listed agent, the same way the PostgreSQL and DuckDB
+// match every listed agent, the same way the PostgreSQL and ClickHouse
 // analytics paths trim CSV values. Before the fix the SQLite path split
 // on "," without trimming, so "claude, codex" matched only claude.
 func TestAnalyticsFilterAgentMultiSelectTrimsWhitespace(t *testing.T) {
@@ -2626,16 +2650,6 @@ func TestGetAnalyticsTools(t *testing.T) {
 	})
 }
 
-func TestAnalyticsToolsToolCallsQueryAggregatesInSQL(t *testing.T) {
-	q := analyticsToolsQuery("(?,?)", "", "", false)
-	normalized := strings.Join(strings.Fields(strings.ToLower(q)), " ")
-
-	assert.Contains(t, normalized,
-		"select tc.session_id, tc.category, trim(coalesce(tc.tool_name, '')), count(*)")
-	assert.Contains(t, normalized,
-		"group by tc.session_id, tc.category, trim(coalesce(tc.tool_name, ''))")
-}
-
 func TestGetAnalyticsToolsModelFilterCountsOnlyMatchingToolCalls(
 	t *testing.T,
 ) {
@@ -3182,23 +3196,6 @@ func TestGetAnalyticsSkillsDateBoundaries(t *testing.T) {
 		"only the in-range week is bucketed")
 }
 
-func TestAnalyticsSkillsToolCallsQueryAggregatesInSQL(t *testing.T) {
-	q := analyticsSkillsQuery("(?,?)", "", "")
-	normalized := strings.Join(strings.Fields(strings.ToLower(q)), " ")
-
-	assert.Contains(t, normalized,
-		"select tc.session_id, trim(tc.skill_name), count(*), "+
-			"coalesce(m.timestamp, '')")
-	assert.Contains(t, normalized,
-		"left join messages m on m.session_id = tc.session_id "+
-			"and m.id = tc.message_id")
-	assert.Contains(t, normalized,
-		"trim(coalesce(tc.skill_name, '')) != ''")
-	assert.Contains(t, normalized,
-		"group by tc.session_id, trim(tc.skill_name), "+
-			"coalesce(m.timestamp, '')")
-}
-
 func TestGetAnalyticsSkillsModelFilterCountsOnlyMatchingSkillCalls(
 	t *testing.T,
 ) {
@@ -3394,6 +3391,11 @@ func TestGetAnalyticsTopSessions(t *testing.T) {
 				"done",
 				"2024-06-02T11:00:00Z",
 			),
+			Message{
+				SessionID: "wall-dominant", Ordinal: 3, Role: "user",
+				Content: "hook output", Timestamp: "2024-06-02T11:10:00Z",
+				IsSystem: true, SourceType: "attachment", SourceSubtype: "hook_success",
+			},
 		)
 
 		insertSession(t, d, "actively-working", "project-gamma", func(s *Session) {
@@ -3655,7 +3657,7 @@ func TestGetAnalyticsTopSessions(t *testing.T) {
 		// A reversed (ended < started) or empty-timestamp session can
 		// still accumulate positive message-gap active duration, so
 		// without an eligibility guard it would rank into the duration
-		// list. The SQL path must reject both, matching DuckDB and the Go
+		// list. The SQL path must reject both, matching the Go
 		// fallback.
 		insertSession(t, d, "elig-valid", "project-elig-sql", func(s *Session) {
 			s.StartedAt = Ptr("2024-07-01T09:00:00Z")
@@ -5199,6 +5201,136 @@ func TestGetAnalyticsToolsExcludesOutOfRangeToolCallRowsInSQL(t *testing.T) {
 	t.Log("production tool query carried the message window predicate; TotalCalls == 3; sessions == 2")
 }
 
+func TestGetAnalyticsToolsLocalDayBoundaries(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "boundary", "window", func(s *Session) { s.StartedAt = new("2025-03-09T12:00:00Z") })
+	for n, ts := range []string{
+		"2025-03-10T03:59:59.999999999Z",
+		"2025-03-10T00:30:00+01:00",
+		"2025-03-10T04:00:00Z",
+		"2025-03-10T04:01:00Z",
+		"2025-03-10 malformed",
+		"2025-03-10T24:00:00Z",
+		"",
+	} {
+		m := asstMsgAt("boundary", n, "read", ts)
+		m.ToolCalls = []ToolCall{{SessionID: "boundary", ToolName: "Read", Category: "Read"}}
+		insertMessages(t, d, m)
+	}
+	filter := AnalyticsFilter{From: "2025-03-01", To: "2025-03-12", Timezone: "America/New_York"}
+	rows, err := d.analyticsToolRows(t.Context(), filter)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	counts := make(map[string]int)
+	for _, row := range rows {
+		counts[row.Date] = row.Count
+	}
+	assert.Equal(t, map[string]int{"2025-03-09": 3, "2025-03-10": 4}, counts)
+	resp, err := d.GetAnalyticsTools(t.Context(), filter)
+	require.NoError(t, err)
+	assert.Equal(t, 7, resp.TotalCalls)
+	require.Len(t, resp.ByTool, 1)
+	assert.Equal(t, 1, resp.ByTool[0].SessionCount)
+	assert.Equal(t, []ToolTrendEntry{
+		{Date: "2025-03-03", ByCat: map[string]int{"Read": 3}},
+		{Date: "2025-03-10", ByCat: map[string]int{"Read": 4}},
+	}, resp.Trend)
+}
+
+func TestGetAnalyticsToolsBlankAndMalformedTimestamps(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "blank-time", "window", func(s *Session) {
+		s.StartedAt = new("2025-03-09T12:00:00Z")
+	})
+	for n, ts := range []string{"\t", "\u00a0", "bad"} {
+		m := asstMsgAt("blank-time", n, "read", ts)
+		m.ToolCalls = []ToolCall{{SessionID: "blank-time", ToolName: "Read", Category: "Read"}}
+		insertMessages(t, d, m)
+	}
+	for _, zone := range []string{"UTC", "America/New_York"} {
+		resp, err := d.GetAnalyticsTools(t.Context(), AnalyticsFilter{From: "2025-03-09", To: "2025-03-09", Timezone: zone})
+		require.NoError(t, err)
+		assert.Equal(t, 2, resp.TotalCalls, "zone %s", zone)
+		assert.Equal(t, []ToolTrendEntry{{Date: "2025-03-03", ByCat: map[string]int{"Read": 2}}}, resp.Trend, "zone %s", zone)
+	}
+	resp, err := d.GetAnalyticsTools(t.Context(), AnalyticsFilter{Timezone: "America/New_York"})
+	require.NoError(t, err)
+	assert.Equal(t, 3, resp.TotalCalls)
+	assert.Equal(t, []ToolTrendEntry{
+		{Date: "", ByCat: map[string]int{"Read": 1}},
+		{Date: "2025-03-03", ByCat: map[string]int{"Read": 2}},
+	}, resp.Trend)
+}
+
+func TestSQLiteToolsDateKeyMatchesResolver(t *testing.T) {
+	d := testDB(t)
+	insertSession(t, d, "keys", "window", func(s *Session) { s.StartedAt = new("2025-03-09T12:00:00Z") })
+	stamps := []string{
+		"2025-03-09T06:59:59Z", "2025-03-09T07:00:00Z", "2025-03-10T03:59:59.999999999Z",
+		"2025-03-10T04:00:00Z", "2025-03-09T18:14:59Z", "2025-03-09T18:15:00Z",
+		"2025-11-02T05:59:59Z", "2025-11-02T06:00:00Z", "2025-03-10T00:30:00+01:00",
+		"2025-03-10T24:00:00Z", "2025-03-10 malformed", "2025-03-10Z", "2024-01-01T00:00:00Z",
+		"", "\t", "bad", "２０２５-03-09T12:00:00Z",
+	}
+	for n, ts := range stamps {
+		insertMessages(t, d, asstMsgAt("keys", n, "read", ts))
+	}
+	for _, f := range []AnalyticsFilter{
+		{From: "2025-03-01", To: "2025-03-12", Timezone: "UTC"},
+		{From: "2025-03-01", To: "2025-03-12", Timezone: "America/New_York"},
+		{From: "2025-03-01", To: "2025-03-12", Timezone: "Asia/Kathmandu"},
+		{From: "2025-10-30", To: "2025-11-04", Timezone: "America/New_York"},
+		{From: "bad", To: "2025-12-31", Timezone: "America/New_York"},
+		{Timezone: "America/New_York"},
+	} {
+		key := sqliteToolsDateKey(f)
+		require.NotEmpty(t, key)
+		rows, err := d.getReader().QueryContext(t.Context(), `SELECT COALESCE(m.timestamp, ''), COALESCE(NULLIF(s.started_at, ''), s.created_at), `+key+`
+			FROM messages m JOIN sessions s ON s.id = m.session_id WHERE m.session_id = 'keys'`, f.Timezone)
+		require.NoError(t, err)
+		defer rows.Close()
+		seen := 0
+		for rows.Next() {
+			var msg, session, got string
+			require.NoError(t, rows.Scan(&msg, &session, &got))
+			_, want, _ := (AnalyticsFilter{Timezone: f.Timezone}).ResolveSkillRowTime(msg, session)
+			assert.Equal(t, want, got, "%s %s..%s %q", f.Timezone, f.From, f.To, msg)
+			seen++
+		}
+		require.NoError(t, rows.Err())
+		require.NoError(t, rows.Close())
+		assert.Equal(t, len(stamps), seen)
+	}
+}
+
+func TestGetAnalyticsToolsLocalWeeks(t *testing.T) {
+	for _, tc := range []struct {
+		name, zone, before, after, firstWeek, secondWeek string
+	}{
+		{"fall DST", "America/New_York", "2025-11-03T04:59:59Z", "2025-11-03T05:00:00Z", "2025-10-27", "2025-11-03"},
+		{"unknown zone", "Invalid/Zone", "2025-03-09T23:59:59Z", "2025-03-10T00:00:00Z", "2025-03-03", "2025-03-10"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "weeks", "window", func(s *Session) { s.StartedAt = new(tc.before) })
+			for n, ts := range []string{tc.before, tc.after} {
+				m := asstMsgAt("weeks", n, "read", ts)
+				m.ToolCalls = []ToolCall{{SessionID: "weeks", ToolName: "Read", Category: "Read"}}
+				insertMessages(t, d, m)
+			}
+			resp, err := d.GetAnalyticsTools(t.Context(), AnalyticsFilter{From: "2025-01-01", To: "2025-12-31", Timezone: tc.zone})
+			require.NoError(t, err)
+			require.Len(t, resp.Trend, 2)
+			assert.Equal(t, tc.firstWeek, resp.Trend[0].Date)
+			assert.Equal(t, tc.secondWeek, resp.Trend[1].Date)
+			assert.Equal(t, 1, resp.Trend[0].ByCat["Read"])
+			assert.Equal(t, 1, resp.Trend[1].ByCat["Read"])
+			assert.Equal(t, 2, resp.TotalCalls)
+			assert.Equal(t, 1, resp.ByTool[0].SessionCount)
+		})
+	}
+}
+
 func TestAnalyticsMessageWindowBoundsDoNotOverflowMaxDate(t *testing.T) {
 	from, to := (AnalyticsFilter{
 		From: "9999-12-31", To: "9999-12-31", Timezone: "UTC",
@@ -5261,7 +5393,7 @@ func TestGetAnalyticsToolsChunksSessionsAtMaxSQLVars(t *testing.T) {
 	from, to := f.messageWindowBoundsUTC()
 	pred, windowArgs := analyticsMessageWindowPred("m.timestamp", from, to)
 	args = append(append(args, modelArgs...), windowArgs...)
-	rows, err := d.getReader().QueryContext(t.Context(), analyticsToolsQuery(ph, modelPred, pred, true), args...)
+	rows, err := d.getReader().QueryContext(t.Context(), analyticsToolsQuery(ph, modelPred, pred, true, sqliteAnalyticsMinuteKey()), args...)
 	require.NoError(t, err)
 	defer rows.Close()
 	var all []ToolAnalyticsRow
@@ -5277,4 +5409,130 @@ func TestGetAnalyticsToolsChunksSessionsAtMaxSQLVars(t *testing.T) {
 	assert.Equal(t, BuildToolsAnalytics(all), resp)
 	assert.Equal(t, 501, resp.TotalCalls)
 	t.Log("chunked and unchunked responses match; TotalCalls == 501")
+}
+
+func TestGetAnalyticsVelocityIgnoresHookRows(t *testing.T) {
+	d := testDB(t)
+	ctx := t.Context()
+	require.NoError(t, d.UpsertSession(ctx, Session{
+		ID: "hooks", Project: "proj", Agent: "claude", Machine: "local",
+		StartedAt: new("2024-06-01T09:00:00Z"), MessageCount: 4, UserMessageCount: 1,
+	}))
+	require.NoError(t, d.ReplaceSessionMessages(ctx, "hooks", []Message{
+		{SessionID: "hooks", Ordinal: 0, Role: "user", IsSystem: true, SourceType: "attachment", SourceSubtype: "hook_success", Timestamp: "2024-06-01T09:00:00Z", Content: "startup output"},
+		{SessionID: "hooks", Ordinal: 1, Role: "user", Timestamp: "2024-06-01T09:01:00Z", Content: "question"},
+		{SessionID: "hooks", Ordinal: 2, Role: "user", IsSystem: true, SourceType: "attachment", SourceSubtype: "hook_additional_context", Timestamp: "2024-06-01T09:01:09Z", Content: "prompt context"},
+		{SessionID: "hooks", Ordinal: 3, Role: "assistant", Timestamp: "2024-06-01T09:01:10Z", Content: "answer"},
+	}))
+	resp, err := d.GetAnalyticsVelocity(ctx, baseFilter())
+	require.NoError(t, err)
+	assert.InDelta(t, 10.0, resp.Overall.FirstResponseSec.P50, 0.001)
+	assert.InDelta(t, 10.0, resp.Overall.TurnCycleSec.P50, 0.001)
+}
+
+func TestAnalyticsDateWindowPlan(t *testing.T) {
+	d := testDB(t)
+	seedAnalyticsData(t, d)
+	for _, tc := range []struct {
+		name, from, to string
+		indexed        bool
+	}{
+		{"2-day", "2024-06-01", "2024-06-03", true},
+		{"90-day", "2024-06-01", "2024-08-30", true},
+		{"91-day", "2024-06-01", "2024-08-31", false},
+		{"year", "2024-01-01", "2025-01-01", false},
+		{"from-only", "2024-06-01", "", false},
+		{"to-only", "", "2024-06-03", false},
+		{"all-time", "", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := baseFilter()
+			f.From, f.To = tc.from, tc.to
+			for _, table := range []struct{ name, date string }{
+				{"sessions", "COALESCE(NULLIF(started_at, ''), created_at)"},
+				{"sessions s", "COALESCE(NULLIF(s.started_at, ''), s.created_at)"},
+			} {
+				where, args := f.buildWhere(table.date)
+				plan := queryPlanOf(t, d, "SELECT id FROM "+table.name+" WHERE "+where, args...)
+				if tc.indexed {
+					assert.Contains(t, plan, "idx_sessions_effective_start")
+				} else {
+					assert.NotContains(t, plan, "idx_sessions_effective_start")
+				}
+			}
+		})
+	}
+}
+
+func TestGetAnalyticsTopSessionsEmptyDateWindowWork(t *testing.T) {
+	for _, history := range []int{30000} {
+		t.Run(fmt.Sprintf("history_%d", history), func(t *testing.T) {
+			d := testDB(t)
+			_, err := d.getWriter().ExecContext(t.Context(), `
+				WITH RECURSIVE seq(n) AS (
+					SELECT 0 UNION ALL SELECT n + 1 FROM seq WHERE n < ? - 1
+				)
+				INSERT INTO sessions (id, project, machine, agent, message_count, started_at)
+				SELECT printf('old-%06d', n), 'project-a', 'local', 'claude',
+					n + 1, '2024-01-01T12:00:00Z' FROM seq`, history)
+			require.NoError(t, err)
+
+			// Count date evaluations using NULLIF's semantics for the fixture's
+			// non-NULL text starts. A date-index seek uses stored expression
+			// values; an archive-wide ranking walk evaluates each old row.
+			// Register only on the reader, leaving the stored index intact.
+			d.rawReader().SetMaxOpenConns(1)
+			conn, err := d.getReader().Conn(t.Context())
+			require.NoError(t, err)
+			var evaluations int
+			require.NoError(t, conn.Raw(func(driverConn any) error {
+				return driverConn.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("nullif", func(value, other string) any {
+					evaluations++
+					if value == other {
+						return nil
+					}
+					return value
+				}, true)
+			}))
+			require.NoError(t, conn.Close())
+
+			for _, timezone := range []string{"UTC", "Asia/Kolkata"} {
+				t.Run(timezone, func(t *testing.T) {
+					evaluations = 0
+					resp, err := d.GetAnalyticsTopSessions(t.Context(), AnalyticsFilter{
+						From: "2024-06-01", To: "2024-06-02", Timezone: timezone,
+					}, "messages")
+					require.NoError(t, err)
+					assert.Equal(t, "messages", resp.Metric)
+					assert.Empty(t, resp.Sessions)
+					assert.LessOrEqual(t, evaluations, 16, "empty-window date evaluations must stay bounded as history grows")
+					t.Logf("date evaluations: %d", evaluations)
+				})
+			}
+		})
+	}
+}
+
+func TestAnalyticsDateWindowCreatedAtFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		startedAt *string
+	}{
+		{"null", nil},
+		{"empty", new("")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := testDB(t)
+			insertSession(t, d, "fallback", "project-a", func(s *Session) { s.StartedAt = tc.startedAt })
+			_, err := d.getWriter().ExecContext(t.Context(), "UPDATE sessions SET created_at = '2024-06-02T12:00:00Z' WHERE id = 'fallback'")
+			require.NoError(t, err)
+			summary, err := d.GetAnalyticsSummary(t.Context(), baseFilter())
+			require.NoError(t, err)
+			assert.Equal(t, 1, summary.TotalSessions)
+			top, err := d.GetAnalyticsTopSessions(t.Context(), baseFilter(), "messages")
+			require.NoError(t, err)
+			require.Len(t, top.Sessions, 1)
+			assert.Equal(t, "fallback", top.Sessions[0].ID)
+		})
+	}
 }

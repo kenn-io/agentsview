@@ -1,0 +1,6 @@
+{"id":"event-1","timestamp":"2026-07-08T07:20:51.089334-04:00","type":"session.start","session_start":{"workspace":"","working_directories":["/workspace/project"],"prompt":""}}
+{"id":"event-2","timestamp":"2026-07-08T07:20:51.092132-04:00","type":"session.input","session_input":{"id":"","prompt":"Hello, can you help me?","estimated_prompt_token_usage":10,"mode":"build"}}
+{"id":"event-3","timestamp":"2026-07-08T07:20:55.564843-04:00","type":"assistant_message.start","assistant_message_start":{}}
+{"id":"event-4","timestamp":"2026-07-08T07:20:56.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"I can help you with that."}}
+{"id":"event-5","step_id":"step-event-5","timestamp":"2026-07-08T07:21:00.000000-04:00","type":"tool_call.inference.start","tool_call_inference_start":{"chat_completion_request":{"model":"poolside/laguna-m.1"}}}
+{"id":"event-6","step_id":"step-event-5","timestamp":"2026-07-08T07:21:00.000000-04:00","type":"tool_call.inference.end","tool_call_inference_end":{"input_tokens":1000,"output_tokens":50,"cache_read_input_tokens":500,"cache_write_input_tokens":0}}

@@ -15,7 +15,7 @@
   import ParallelGroup from "./ParallelGroup.svelte";
   import { CopyButton } from "@kenn-io/kit-ui";
   import { displayToolName } from "../../utils/toolDisplay.js";
-  import { SettingsIcon } from "../../icons.js";
+  import { WrenchIcon } from "../../icons.js";
   import { m } from "../../i18n/index.js";
 
   interface Props {
@@ -41,18 +41,6 @@
   let totalCalls = $derived(messages.reduce((n, message) => n + messageToolCount(message), 0));
   let label = $derived(m.tool_call_group_call_count({ count: totalCalls }));
   let displayMessages = $derived(sortNewestFirst ? [...messages].reverse() : messages);
-  let turnByMessage = $derived.by(() => {
-    const map = new Map<number, TurnTiming>();
-    for (const turn of sessionTiming.timing?.turns ?? []) map.set(turn.message_id, turn);
-    return map;
-  });
-  let callByToolUseID = $derived.by(() => {
-    const map = new Map<string, CallTiming>();
-    for (const turn of sessionTiming.timing?.turns ?? []) {
-      for (const call of turn.calls) map.set(call.tool_use_id, call);
-    }
-    return map;
-  });
 
   function soloDurationLabel(
     ct: CallTiming | undefined,
@@ -70,7 +58,7 @@
 
   function isRunningTurn(msg: Message): boolean {
     if (!sessionTiming.timing?.running) return false;
-    const turn = turnByMessage.get(msg.id);
+    const turn = sessionTiming.index.turnByMessage.get(msg.id);
     return turn != null && turn.duration_ms == null;
   }
 
@@ -88,7 +76,7 @@
 
 <div class="tool-group">
   <div class="tool-group-header">
-    <span class="gear-icon"><SettingsIcon size="12" strokeWidth="2" aria-hidden="true" /></span>
+    <span class="tool-icon"><WrenchIcon size="12" strokeWidth="2" aria-hidden="true" /></span>
     <span class="group-label">{label}</span>
     <CopyButton
       revealOnHover
@@ -99,7 +87,7 @@
       copiedTitle={m.tool_call_group_copied()}
       onclick={handleCopy}
     />
-    <span class="group-timestamp">{formatTimestamp(timestamp)}</span>
+    <span class="group-timestamp">{formatTimestamp(timestamp, ui.alwaysShowYear)}</span>
   </div>
   <div class="tool-group-body">
     {#each displayMessages as message (message.ordinal)}
@@ -107,7 +95,7 @@
         <div class="read-progress-divider" role="separator" aria-label={m.read_progress_boundary()}>{divider.label}</div>
       {/if}
       {@const calls = message.tool_calls ?? []}
-      {@const turn = turnByMessage.get(message.id)}
+      {@const turn = sessionTiming.index.turnByMessage.get(message.id)}
       <div data-message-ordinal={message.ordinal}>
         {#if ui.isBlockVisible("thinking")}
           {#each collectSearchBlocks(message).filter((block) => block.kind === "thinking") as block (block.key)}
@@ -116,12 +104,12 @@
         {/if}
         {#if calls.length === 1}
           {@const soloCall = calls[0]!}
-          <ToolBlock
+          <ToolBlock sessionId={message.session_id} ordinal={message.ordinal}
             toolCall={soloCall}
             content=""
             label={displayToolName(soloCall)}
             durationLabel={soloDurationLabel(
-              callByToolUseID.get(soloCall.tool_use_id ?? ""),
+              sessionTiming.index.callByToolUseID.get(soloCall.tool_use_id ?? ""),
               turn,
               message,
             )}
@@ -129,15 +117,15 @@
             searchScope={searchable ? { ordinal: message.ordinal, callIdx: 0 } : undefined}
           />
         {:else if calls.length >= 2}
-          <ParallelGroup
+          <ParallelGroup sessionId={message.session_id} ordinal={message.ordinal}
             toolCalls={calls}
-            callTimingByID={callByToolUseID}
+            callTimingByID={sessionTiming.index.callByToolUseID}
             isRunning={isRunningTurn(message)}
             searchOrdinal={searchable ? message.ordinal : undefined}
           />
         {:else}
           {#each enrichSegments(parseContent(message.content, message.has_tool_use, message.id, message.content_length), message.tool_calls).filter((s) => s.type === "tool") as seg, segIdx (`${message.id}-${segIdx}`)}
-            <ToolBlock
+            <ToolBlock sessionId={message.session_id} ordinal={message.ordinal}
               content={seg.content}
               label={seg.label}
               toolCall={seg.toolCall}
@@ -152,17 +140,27 @@
 
 <style>
   .tool-group {
-    border-left: calc(var(--role-tool-bar-width) + 1px) var(--role-tool-bar-style) var(--role-tool-accent);
+    border-left: var(--role-tool-bar-width) var(--role-tool-bar-style) var(--role-tool-accent);
     background: var(--tool-bg);
     border-radius: 0 var(--radius-md) var(--radius-md) 0;
-    padding: 8px 12px;
+    /* Same inline padding as a message card, so the header icon, tool rows,
+       and timestamp line up with the role header and prose above. Layouts
+       with other card padding override it in MessageList. */
+    padding: 6px 16px;
   }
-  .tool-group-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-  .gear-icon { display: flex; align-items: center; flex-shrink: 0; color: var(--role-tool-accent); }
-  .group-label { font-size: 12px; font-weight: 600; color: var(--role-tool-ink); }
-  .group-timestamp { font-size: 12px; color: var(--text-muted); margin-left: auto; }
+  :global(:root:not(.dark)) .tool-icon { color: color-mix(in srgb, var(--role-tool-accent) 65%, var(--text-primary)); }
+  .tool-group-header { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
+  .tool-icon { display: flex; align-items: center; flex-shrink: 0; color: var(--role-tool-ink); }
+  .group-label { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+  .group-timestamp { font-size: 12px; color: var(--text-muted); margin-left: auto; font-variant-numeric: tabular-nums; }
   .tool-group:hover :global(.kit-copy-btn) { opacity: 1; }
-  .tool-group-body { display: flex; flex-direction: column; gap: 2px; }
+  /* Consecutive tool rows touch and use the tighter row padding from
+     ToolBlock, so a run of calls reads as one unit beside the prose. */
+  .tool-group-body {
+    display: flex; flex-direction: column; gap: 0;
+    --tool-row-pad-block: 3px;
+    --tool-row-copy-trim: -1px;
+  }
   .read-progress-divider {
     display: flex;
     align-items: center;

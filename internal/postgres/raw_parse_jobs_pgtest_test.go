@@ -3,8 +3,8 @@
 package postgres
 
 import (
+	"context"
 	"database/sql"
-	"encoding/json/v2"
 	"fmt"
 	"net/url"
 	"testing"
@@ -16,6 +16,7 @@ import (
 )
 
 func TestRawParseJobsLeaseExclusivelyAndFenceExpiredAttempts(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -64,6 +65,7 @@ func TestRawParseJobsLeaseExclusivelyAndFenceExpiredAttempts(t *testing.T) {
 }
 
 func TestRawParseJobsSupersedeNonHeadManifestsOnShortClaim(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -100,6 +102,7 @@ func TestRawParseJobsSupersedeNonHeadManifestsOnShortClaim(t *testing.T) {
 }
 
 func TestRawParseJobsRetryOnlyWhenAvailable(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -130,6 +133,7 @@ func TestRawParseJobsRetryOnlyWhenAvailable(t *testing.T) {
 }
 
 func TestRawParseJobsFenceRetryAfterSourceHeadAdvances(t *testing.T) {
+	t.Parallel()
 	_, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -158,6 +162,7 @@ func TestRawParseJobsFenceRetryAfterSourceHeadAdvances(t *testing.T) {
 }
 
 func TestRawParseJobsRecordTerminalFailureWithLeaseFence(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -190,6 +195,7 @@ func TestRawParseJobsRecordTerminalFailureWithLeaseFence(t *testing.T) {
 }
 
 func TestClaimRawParseJobsSupersedeBatchIsBounded(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -252,6 +258,7 @@ func reOpenSupersededRawParseJobs(t *testing.T, pg *sql.DB) {
 }
 
 func TestClaimRawParseJobsSkipsSupersedeWhenBatchFillsWithCurrentHeads(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	// Two sources, each with one obsolete ready job behind a current-head
 	// ready job: four claimable-looking rows, two of which may never lease.
@@ -308,6 +315,7 @@ func TestClaimRawParseJobsSkipsSupersedeWhenBatchFillsWithCurrentHeads(t *testin
 }
 
 func TestClaimRawParseJobsRequiresCurrentHeadEvenWhenSupersedeMissed(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -376,6 +384,7 @@ func TestClaimRawParseJobsRequiresCurrentHeadEvenWhenSupersedeMissed(t *testing.
 // by parse workers nor retired by their cleanup, while obsolete parse jobs
 // keep draining.
 func TestClaimRawParseJobsLeasesAndSupersedesOnlyParseStageJobs(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
 	object := rawIngestObject(t, "a", 7)
@@ -449,18 +458,19 @@ func TestClaimRawParseJobsLeasesAndSupersedesOnlyParseStageJobs(t *testing.T) {
 // would never notice, and the documented clause order (LIMIT before the
 // locking clause) is exercised by both statements end to end.
 func TestClaimRawParseJobsRunsUnderRestrictedParseWorkerPrivileges(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
 	pg, store := newRawIngestTestStore(t)
+	pgURL := testPGURL(t)
 	const role = "agentsview_parse_worker"
 	const rolePassword = "agentsview_parse_worker_pw"
 
-	_, _ = pg.Exec(`DROP OWNED BY ` + role)
-	_, _ = pg.Exec(`DROP ROLE IF EXISTS ` + role)
-	_, err := pg.Exec(`CREATE ROLE ` + role + ` LOGIN PASSWORD '` + rolePassword + `'`)
+	_, _ = pg.ExecContext(t.Context(), `DROP OWNED BY `+role)
+	_, _ = pg.ExecContext(t.Context(), `DROP ROLE IF EXISTS `+role)
+	_, err := pg.ExecContext(t.Context(), `CREATE ROLE `+role+` LOGIN PASSWORD '`+rolePassword+`'`)
 	require.NoError(t, err, "create parse worker role")
 	t.Cleanup(func() {
-		_, _ = pg.Exec(`DROP OWNED BY ` + role)
-		_, _ = pg.Exec(`DROP ROLE IF EXISTS ` + role)
+		_, _ = pg.ExecContext(context.WithoutCancel(t.Context()), `DROP OWNED BY `+role)
+		_, _ = pg.ExecContext(context.WithoutCancel(t.Context()), `DROP ROLE IF EXISTS `+role)
 	})
 	for _, grant := range []string{
 		`GRANT USAGE ON SCHEMA ` + schemaTestSchema + ` TO ` + role,
@@ -468,13 +478,13 @@ func TestClaimRawParseJobsRunsUnderRestrictedParseWorkerPrivileges(t *testing.T)
 		`GRANT SELECT ON ` + schemaTestSchema + `.raw_source_heads TO ` + role,
 		`GRANT SELECT, UPDATE ON ` + schemaTestSchema + `.raw_ingest_jobs TO ` + role,
 	} {
-		_, err = pg.Exec(grant)
+		_, err = pg.ExecContext(t.Context(), grant)
 		require.NoError(t, err, grant)
 	}
 	workerURL, err := url.Parse(pgURL)
 	require.NoError(t, err)
 	workerURL.User = url.UserPassword(role, rolePassword)
-	workerDB, err := Open(workerURL.String(), schemaTestSchema, true)
+	workerDB, err := Open(t.Context(), workerURL.String(), schemaTestSchema, true)
 	require.NoError(t, err, "Open parse worker")
 	t.Cleanup(func() { require.NoError(t, workerDB.Close()) })
 	workerStore, err := NewRawIngestStore(workerDB)
@@ -540,8 +550,9 @@ func claimOneRawParseJob(t *testing.T, store *RawIngestStore) rawderive.JobLease
 }
 
 func TestRawParseCleanupSkipsFutureRetryBacklog(t *testing.T) {
+	t.Parallel()
 	pg, _ := newRawIngestTestStore(t)
-	var smallBuffers int
+	var smallBuffers float64
 	for _, count := range []int{100, 10000} {
 		_, err := pg.ExecContext(t.Context(), `
 			INSERT INTO raw_manifests (tenant_id, manifest_id, device_id, provider,
@@ -567,20 +578,11 @@ func TestRawParseCleanupSkipsFutureRetryBacklog(t *testing.T) {
 			ANALYZE raw_manifests; ANALYZE raw_source_heads; ANALYZE raw_ingest_jobs;
 		`)
 		require.NoError(t, err)
-		var raw []byte
-		require.NoError(t, pg.QueryRowContext(t.Context(),
-			"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "+rawParseSupersedeSQL,
-			maxRawParseSupersedeBatch).Scan(&raw))
-		var plans []struct {
-			Plan struct {
-				Hits  int `json:"Shared Hit Blocks"`
-				Reads int `json:"Shared Read Blocks"`
-			}
-		}
-		require.NoError(t, json.Unmarshal(raw, &plans))
-		require.Len(t, plans, 1)
-		buffers := plans[0].Plan.Hits + plans[0].Plan.Reads
-		t.Logf("future retry jobs=%d cleanup buffers=%d", count, buffers)
+		tx, err := pg.BeginTx(t.Context(), nil)
+		require.NoError(t, err)
+		_, buffers := explainUserBlocks(t, tx, rawParseSupersedeSQL, maxRawParseSupersedeBatch)
+		require.NoError(t, tx.Rollback())
+		t.Logf("future retry jobs=%d cleanup user blocks=%.0f", count, buffers)
 		if count == 100 {
 			smallBuffers = buffers
 		} else {

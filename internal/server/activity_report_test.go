@@ -674,6 +674,57 @@ func TestActivityReportEndpointNegotiatesProgressAndPagesSessions(t *testing.T) 
 	assert.Contains(t, recorder.Body.String(), "event: report\n")
 }
 
+func TestActivityReportSessionPageRefreshKeepsRequestedSort(t *testing.T) {
+	te := setup(t)
+	seedActivityReportFixture(t, te)
+	initialResponse := te.get(t, "/api/v1/activity/report?preset=day&date="+
+		activityDate+"&timezone=UTC")
+	assertStatus(t, initialResponse, http.StatusOK)
+	initial := decode[activity.Report](t, initialResponse)
+	require.NotEmpty(t, initial.ReportID)
+
+	// A sync between the report load and the sort makes the report stale.
+	started, ended := activityDate+"T11:00:00Z", activityDate+"T11:03:00Z"
+	te.seedSession(t, "d3", "gamma", 2, func(s *db.Session) {
+		s.StartedAt, s.EndedAt = &started, &ended
+	})
+	te.seedMessages(t, "d3", 2, func(i int, message *db.Message) {
+		message.Timestamp = []string{started, activityDate + "T11:02:00Z"}[i]
+	})
+
+	sortResponse := te.get(t, "/api/v1/activity/report/"+initial.ReportID+
+		"/sessions?limit=2&sort=project&direction=desc")
+	assertStatus(t, sortResponse, http.StatusOK)
+	var sorted struct {
+		RefreshRequired bool             `json:"refresh_required"`
+		Report          *activity.Report `json:"report"`
+	}
+	require.NoError(t, json.Unmarshal(sortResponse.Body.Bytes(), &sorted))
+	require.True(t, sorted.RefreshRequired)
+	require.NotNil(t, sorted.Report)
+	assert.Equal(t, []string{"gamma", "beta"}, sessionProjects(sorted.Report.BySession),
+		"the replacement report's first page follows the requested sort")
+	require.NotEmpty(t, sorted.Report.SessionsNextCursor)
+
+	nextResponse := te.get(t, "/api/v1/activity/report/"+sorted.Report.ReportID+
+		"/sessions?cursor="+url.QueryEscape(sorted.Report.SessionsNextCursor))
+	assertStatus(t, nextResponse, http.StatusOK)
+	var next struct {
+		Sessions []activity.SessionRow `json:"sessions"`
+	}
+	require.NoError(t, json.Unmarshal(nextResponse.Body.Bytes(), &next))
+	assert.Equal(t, []string{"alpha"}, sessionProjects(next.Sessions),
+		"the replacement cursor continues the requested sort")
+}
+
+func sessionProjects(rows []activity.SessionRow) []string {
+	projects := make([]string, 0, len(rows))
+	for _, row := range rows {
+		projects = append(projects, row.Project)
+	}
+	return projects
+}
+
 func TestActivityReportSessionPageRefreshesAfterIdentityOnlyChange(t *testing.T) {
 	te := setup(t)
 	seedActivityReportFixture(t, te)

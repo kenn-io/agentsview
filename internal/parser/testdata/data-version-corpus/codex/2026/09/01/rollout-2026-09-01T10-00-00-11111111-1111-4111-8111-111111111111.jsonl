@@ -1,0 +1,2 @@
+{"type":"session_meta","timestamp":"2026-09-01T11:00:00Z","payload":{"cwd":"/work/project","originator":"codex_cli_rs","history_mode":"paginated","id":"11111111-1111-4111-8111-111111111111"}}
+{"type":"response_item","timestamp":"2026-09-01T10:00:01Z","payload":{"role":"user","content":[{"type":"input_text","text":"parent question"}]}}

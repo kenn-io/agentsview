@@ -6,7 +6,7 @@ description: Fast token usage and cost reports from your local AgentsView databa
 AgentsView records token usage while ingesting messages and usage events from
 agents that write model and token metadata to their local logs. The database
 already knows the input, output, cache-creation, and cache-read tokens those
-agents have logged, and the `agentsview usage` commands turn that into daily
+agents have logged, and the `agentsview report usage` commands turn that into daily
 cost reports and a one-line today's-spend summary without re-reading source
 files. To see that same cost attributed to specific time ranges and concurrent
 agent activity, see the [Activity](/docs/activity/) dashboard.
@@ -18,7 +18,7 @@ coding yesterday?" — across multiple coding agents from one archive.
 !!! warning "Experimental"
 
     Token usage and cost reporting is a newer area of AgentsView and is still
-    maturing. The Usage dashboard and the `agentsview usage` CLI may have rough
+    maturing. The Usage dashboard and the `agentsview report usage` CLI may have rough
     edges, especially around agents whose parsers were recently taught to emit token
     counts. Bug reports and feature requests are very welcome — please
     [open an issue](https://github.com/kenn-io/agentsview/issues).
@@ -34,9 +34,10 @@ coding yesterday?" — across multiple coding agents from one archive.
     **Qwen Code**, **OpenClaw**, **QClaw**, **Hermes**, **WorkBuddy**, **Forge**,
     **Piebald**, **Antigravity IDE/CLI**, **Zed**, **VS Code Copilot**, **Visual
     Studio Copilot**, **Mistral Vibe**, **gptme**, **Amp**, **Junie CLI**, **OMO**,
-    and **StepCode**. Coverage also includes **Cline CLI**, **Tencent CodeBuddy
-    CN**, **Augure Code**, **Augure Desktop 3 beta**, **Charm Crush**, **fx**, and
-    **Muse Code**, and reads **DeepSeek Harness** formats through version 3.
+    **StepCode**, and **Direct API** usage files. Coverage also includes **Cline
+    CLI**, **Tencent CodeBuddy CN**, **Augure Code**, **Open Interpreter**,
+    **Augure Desktop 3 beta**, **Charm Crush**, **fx**, and **Muse Code**, and
+    reads **DeepSeek Harness** formats through version 3.
 
     Command Code forks count only usage produced after the fork.
 
@@ -85,7 +86,7 @@ the turns that finished before it, back to the last time OpenAI restarted that
 total. Chats AgentsView never listened in on carry plan usage instead. OpenAI's
 usage report gives each one's share of your ChatGPT plan's weekly and five-hour
 limits, and a credits figure. Those chats are left out of token and cost totals.
-The Usage page and `agentsview usage daily` say how many were left out, and
+The Usage page and `agentsview report usage daily` say how many were left out, and
 per-model rows show "Plan usage" where those chats are the model's only usage. A
 chat that AgentsView has not asked about yet is counted too, and its session
 details say "Plan usage: not checked yet". A chat with recorded token counts and
@@ -117,7 +118,7 @@ Cursor has two usage sources in AgentsView:
 - local Cursor transcripts, when `~/.cursor/projects` contains usable token
   metadata
 - Cursor Admin API usage events, imported on demand with
-  `agentsview usage cursor`
+  `agentsview source cursor sync-usage`
 
 The admin import is useful when you want billable team usage from Cursor itself,
 including headless/background events that may not map cleanly to a local
@@ -132,13 +133,13 @@ cursor_admin_user_id = "152683922"     # optional default filter
 
 ```bash
 # Import the last 30 days
-agentsview usage cursor
+agentsview source cursor sync-usage
 
 # Import a specific inclusive local-date window
-agentsview usage cursor --since 2026-05-01 --until 2026-05-31
+agentsview source cursor sync-usage --since 2026-05-01 --until 2026-05-31
 
 # Import everything Cursor returns for this admin key/filter
-agentsview usage cursor --all
+agentsview source cursor sync-usage --all
 ```
 
 The command calls Cursor's filtered usage-events endpoint, follows pagination,
@@ -146,8 +147,8 @@ stores the returned rows in the local archive, and deduplicates rows by a stable
 event fingerprint. It is safe to rerun the same window after new events arrive.
 
 Imported admin rows are folded into the Usage dashboard,
-`agentsview usage daily`, DuckDB mirrors, and PostgreSQL after the usual
-push/sync path. They appear as `agent = cursor`; because Cursor Admin events are
+`agentsview report usage daily`, and PostgreSQL after the usual push/sync path.
+They appear as `agent = cursor`; because Cursor Admin events are
 account-level billing rows rather than session transcripts, project, machine,
 session-count, and top-session filters do not apply to those rows. Model and
 date filters do apply.
@@ -155,6 +156,41 @@ date filters do apply.
 Costs for admin rows come from Cursor's `chargedCents` field instead of
 AgentsView's model-pricing table, so they can report spend even for models that
 do not have a LiteLLM price entry.
+
+### xAI account usage CSV
+
+Import a usage CSV downloaded from xAI with:
+
+```bash
+agentsview usage grok usage.csv
+```
+
+The command validates the entire file before writing billing events to the local
+archive. Reimporting overlapping exports skips existing `Billing Item ID`
+values. It accepts `grok-build`, `grok-bot`, and `cursor` products, which appear
+under the `grok`, `grok-bot`, and `cursor` agents. Their events contribute to the
+Usage dashboard and daily reports, and follow the usual mirror push paths.
+The Agent filter includes billing-only products. The All range starts at the
+earliest session or billing event, including archives with no local sessions.
+
+Prompt, completion, cached prompt, and cache-write counters stay separate.
+Billing counters may aggregate many requests and have no per-request token cap.
+Costs come from the export's USD `Pricing Contracted` field, rounded to
+microdollars. A reported $0 stays $0 even when model pricing is available.
+Cache savings are estimates at base model rates; aggregate counters do not
+establish a single request's context size for pricing bands.
+Blank models remain blank in the archive and display as `<unknown>` in reports.
+Event timestamps retain their instant in UTC; reports use the selected timezone.
+
+These exports contain no conversations, session IDs, projects, machine names, or
+automation evidence. The import creates no sessions. Project, machine, and
+session-only filters exclude these billing events. Agent, model, and date
+filters apply. `Charge Category` and `Usage Type` are retained with the product
+in each event's kind.
+
+Billing IDs cannot be matched to native session events or Cursor Admin API
+fingerprints. Importing overlapping usage through those sources can count it
+twice. CSV reimport deduplication applies only to the same billing IDs.
 
 ## Usage Dashboard
 
@@ -357,12 +393,12 @@ cache creation without earning the reads back.
 
 The dashboard reads from the same `model_pricing` table that backs the CLI
 commands below, so the numbers line up exactly with what
-`agentsview usage daily` prints.
+`agentsview report usage daily` prints.
 
 ### PostgreSQL-Backed Usage
 
 As of 0.23.0, the Usage page and usage API also work when the UI is served from
-PostgreSQL via [`agentsview pg serve`](/docs/pg-sync/). That means shared or
+PostgreSQL via [`agentsview replica pg serve`](/docs/pg-sync/). That means shared or
 multi-machine deployments can browse the same cost and token dashboards without
 relying on a local SQLite archive.
 
@@ -373,20 +409,20 @@ The live SSE refresh path is still specific to the normal local `serve` runtime.
 
 ```bash
 # Last 30 days of spend as a terminal table
-agentsview usage daily
+agentsview report usage daily
 
 # Full history, with per-model breakdown rows
-agentsview usage daily --all --breakdown
+agentsview report usage daily --all --breakdown
 
 # JSON output for scripting
-agentsview usage daily --json > spend.json
+agentsview report usage daily --json > spend.json
 
 ```
 
 Examples:
 
 ```
-> agentsview usage daily --since 2026-04-01
+> agentsview report usage daily --since 2026-04-01
 DATE        INPUT      OUTPUT    CACHE_CR   CACHE_RD    COST        MODELS
 ----        -----      ------    --------   --------    ----        ------
 2026-04-01  77116868   2220604   39278251   887929665   $867.5794   claude-opus-4-6, gpt-5.4, claude-haiku-4-5-20251001, claude-sonnet-4-6, gemini-3.1-pro-preview
@@ -405,7 +441,7 @@ DATE        INPUT      OUTPUT    CACHE_CR   CACHE_RD    COST        MODELS
 TOTAL       369376132  18650016  288882628  6114711413  $5814.8710
 
 # One-line today's spend (for prompt or tmux status line)
-> agentsview usage statusline
+> agentsview report usage statusline
 $195.64 today
 ```
 
@@ -477,6 +513,45 @@ fetched and embedded catalogs. Processing variants such as Batch, Flex,
 regional, Ultrafast, and one-hour cache pricing are not inferred when the stored
 usage does not identify that service tier. Codex Fast is the exception; see below.
 
+### Costs the Agent Records Itself
+
+Some agents compute a cost from their own price table and write it into the
+session. AgentsView keeps that figure as a recorded cost, but uses it as the
+price only when its own catalog has no rate for the model. When the catalog can
+price the model, the catalog price is used and the recorded cost is kept for
+comparison. A recorded cost of $0 never prices a row, because agents write $0
+for models they have no rate for; those rows stay unpriced.
+
+AgentsView keeps recorded costs from Pi and the agents built on it, OpenClaw,
+QClaw, Shelley, fx, and OpenCode, Kilo, and MiMo Code. For the OpenCode family
+it sums the cost of each model request in a message. Some of these figures are
+what a provider or gateway billed rather than an estimate; they follow the same
+rule. fx costs are kept only when fx has a billing record for every request.
+Existing sessions from these agents are re-read once after upgrading.
+
+`agentsview session usage <id>` compares the two: an `Agent cost:` line, and a
+`recorded_cost` object in JSON, show what the agent recorded next to what
+AgentsView charged for the same rows. A large gap usually means the agent
+used different rates, or that the transcript is missing calls the agent
+billed.
+
+Claude Code also writes a running total for each session: its own cost
+estimate and token counts per model, including subagents and side calls such
+as title generation that never reach the transcript. AgentsView keeps the last
+one and shows it as an `Agent total:` line and a `session_total` object. It is
+never added to usage totals, because it overlaps the per-call rows. Compare
+it with a report that includes subagents, which is the default. Expect it to
+run slightly above AgentsView's figure in short sessions, where the title call
+is a larger share of the work.
+
+Agents whose cost AgentsView already used as the price, such as Junie, gptme,
+Codebuff, Hermes, Goose, and Crush, keep that treatment: their reported cost is
+the price.
+
+A usage record that carries a cost but names no model is counted under the
+`<unknown>` model, the same label Cursor account imports use. Its cost and
+tokens appear in totals and breakdowns instead of being dropped.
+
 ### Anthropic Web Search Fee
 
 Anthropic charges a flat
@@ -527,16 +602,31 @@ output_microdollars_per_mtok = 800_000
 | `cache_creation_microdollars_per_mtok`    | Integer microdollars per million cache-creation tokens (optional)                                                                                           |
 | `cache_creation_1h_microdollars_per_mtok` | Integer microdollars per million 1-hour-TTL cache-creation tokens (optional; when omitted or `0`, 1h writes bill at `cache_creation_microdollars_per_mtok`) |
 | `cache_read_microdollars_per_mtok`        | Integer microdollars per million cache-read tokens (optional)                                                                                               |
+| `price_as`                                | Target model whose rates and tiers this name uses; excludes rate fields                                                                                    |
 
 The table key is the model name as it appears in your session data (match the
 string the agent itself writes, dots and all — quote the key if it contains
 special characters). Custom rates take precedence over LiteLLM, OpenRouter, and
-the embedded fallback, and apply to the Usage dashboard, the `agentsview usage`
-CLI, and `pg serve` alike. A custom entry replaces the full rate row for that
-model, so omitted fields are treated as zero rather than falling through to
-another catalog. A custom row is flat and suppresses any fetched request bands
-for that model. Models without a custom entry continue to resolve through the
-stored catalog.
+the embedded fallback, and apply to the Usage dashboard, the `agentsview report usage`
+CLI, and `pg serve` alike. An entry with explicit rates replaces the full rate
+row for that model, so omitted fields are treated as zero rather than falling
+through to another catalog. Explicit rates are flat and suppress fetched
+request bands for that model. Models without a custom entry continue to resolve
+through the stored catalog.
+
+To use a catalog model's rates and later updates for a deployment name:
+
+```toml
+[custom_model_pricing."gateway-deployment"]
+price_as = "gpt-6-sol"
+```
+
+A bare key also matches a provider-prefixed name; a key containing `/` matches
+only that exact name. An exact custom rate takes precedence. Each entry selects
+its target once, then uses the target's pricing ladder, including any custom rate.
+Unknown targets remain unpriced. Empty rate tables set all rates to zero.
+Restart after changing mappings, and use the same configuration on machines
+that share a mirror.
 
 ### Model aliases
 
@@ -619,24 +709,34 @@ doesn't keep historical Fast prices.
 ### Copilot CLI Token Metrics
 
 As of 0.32.0, Copilot CLI sessions contribute to usage and cost reports.
-AgentsView reads per-message assistant output tokens from
-`assistant.message.outputTokens`, then reads model-level session totals from
-`session.shutdown.modelMetrics`. When Copilot has not written a usable shutdown
-summary, known per-message output tokens still appear in usage reports. That
-partial fallback cannot report input, cache, reasoning, or Copilot AI Credit
-totals. Fresh input tokens are computed as total input minus cache reads and
-cache writes; cache writes map to cache-creation tokens, and cache reads map to
+When available, per-call usage from `session-store.db` supplies input, output,
+cache, and reasoning counts for sessions starting June 1, 2026 or later.
+Otherwise, `session.usage_record` receipts supply those counts at each request's
+own timestamp, including for sessions without a shutdown summary. Store rows
+replace all `session.shutdown.modelMetrics` rollups. With receipts, AgentsView
+sums shutdown token rows from before the first usable receipt, just as it does
+for sessions without receipts. Shutdowns written after that receipt are cumulative
+snapshots of what receipts already record, so AgentsView drops those token rows.
+The published
+[Copilot CLI 1.0.105 schema](https://registry.npmjs.org/@github/copilot-linux-x64/-/copilot-linux-x64-1.0.105.tgz)
+describes `tokenDetails` and `totalNanoAiu` as "Session-wide accumulated" and
+`accountingSnapshot` as "captured atomically with receipt watermarks". It defines
+`session.usage_checkpoint` for "reconstructing aggregate accounting on resume".
+Without either per-call source, AgentsView sums shutdown token metrics,
+then known `assistant.message.outputTokens`.
+The message-only fallback cannot report input, cache, reasoning, or Copilot AI
+Credit totals. Fresh input tokens are computed as total input minus cache reads
+and cache writes; cache writes map to cache-creation tokens, and cache reads map to
 cache-read tokens. Copilot's Claude model IDs use dotted version numbers, so the
 parser normalizes names such as `claude-sonnet-4.6` to `claude-sonnet-4-6`
 before pricing lookup.
 
-For sessions starting June 1, 2026 or later, available per-call usage from
-`session-store.db` supplies input, output, cache, and reasoning counts before
-shutdown. Store updates refresh the affected sessions without rereading
-unchanged transcripts. Overlapping transcript output contributes only its
-positive per-model difference from store totals; missing input cannot be
-reconstructed. Store tokens use catalog estimates, while the latest shutdown
-reported cost retains the treatment described below.
+Store updates refresh the affected sessions without rereading unchanged
+transcripts. Overlapping transcript output contributes only its positive
+per-model difference from the selected per-call totals; missing input cannot be
+reconstructed. Per-call tokens use request-level catalog estimates. The latest
+shutdown reported cost retains the treatment described below, unless a later
+receipt makes that total stale and receipts are the selected source.
 
 Upgrading to 0.32.0 bumps the parser data version so existing Copilot CLI
 sessions are re-indexed with the new usage rows.
@@ -756,9 +856,34 @@ Note that recent Amp versions keep complete threads server-side and leave only
 stub files on disk. AgentsView reports usage for whatever complete threads are
 present locally; threads that exist only as stubs have nothing to read.
 
+### Direct API Sessions
+
+Tools that call model APIs directly, with no coding agent in between, can
+record their token usage as **Direct API** sessions. The tool writes one
+body-free JSONL file per session: never prompts, documents, or replies. Each
+line is one JSON object. After the header, each line's `parentId` is the `id`
+of the line before it, and the first line after the header has a null
+`parentId`:
+
+1. Header, with a UUID4 `id`, an ISO `timestamp`, and the absolute `cwd`:
+   `{"type":"session","version":3,"id":<uuid4>,"timestamp":<iso>,"cwd":<cwd>}`
+2. Optional name, with an 8-hex `id`:
+   `{"type":"session_info","id":<8 hex>,"parentId":null,"timestamp":<iso>,"name":<name>}`
+3. One line per model call, with an 8-hex `id` and `timestamp` in epoch
+   milliseconds inside `message`:
+   `{"type":"message","id":<8 hex>,"parentId":<previous line id>,"timestamp":<iso>,"message":{"role":"assistant","provider":<provider>,"model":<model>,"content":[],"usage":{"input":I,"output":O,"cacheRead":C,"cacheWrite":0,"totalTokens":I+O+C},"timestamp":<epoch ms>}}`
+
+`input` excludes cached prompt tokens, and `cacheRead` is the cached prompt
+tokens, so `totalTokens` is `input + output + cacheRead`. AgentsView prices the
+tokens from the catalog.
+
+Files go in `~/.agentsview/direct-api/` by default. To read another directory,
+set `DIRECT_API_DIR`, or `dirs` under `[agents.direct-api]` in the
+[config file](configuration.md#multiple-directories).
+
 ## Reporting Model
 
-`agentsview usage` reads token and cost facts from the same SQLite archive as
+`agentsview report usage` reads token and cost facts from the same SQLite archive as
 the UI, then joins them with the applicable pricing data.
 
 Version 0.42.0 also keeps an exact daily rollup cache for repeated reports. The
@@ -776,11 +901,13 @@ workflow also:
   [Analytics](/docs/usage/#dashboard) and session detail views, so there's no
   second index to keep fresh.
 - **Reads committed archive data** — daily reports can run while the daemon
-  imports new source changes. Run `agentsview sync` first when those changes
+  imports new source changes. Run `agentsview source sync` first when those changes
   must be included. Session usage and statusline finish any pending startup
   ingestion before querying, including when they reuse an existing daemon.
 
-## `agentsview usage daily`
+<a id="agentsview-usage-daily"></a>
+
+## `agentsview report usage daily`
 
 Daily cost report. Outputs a tab-aligned table to stdout by default, or JSON
 with `--format json` (or the `--json` alias).
@@ -799,7 +926,7 @@ terminal. Restart older daemons after upgrading to provide the usage progress
 endpoint.
 
 ```bash
-agentsview usage daily [flags]
+agentsview report usage daily [flags]
 ```
 
 | Flag          | Default       | Description                                                              |
@@ -948,7 +1075,7 @@ change `schema_version`.
 
 ### JSON Contract
 
-`agentsview usage daily --json` is a versioned JSON surface. The Usage daily
+`agentsview report usage daily --json` is a versioned JSON surface. The Usage daily
 JSON, Activity report JSON, and session summary export JSON/NDJSON are separate
 versioned surfaces, so a future bump in one does not imply a bump in the others.
 Usage and activity already emitted `schema_version: 1` before 0.38, and the
@@ -1099,19 +1226,21 @@ removed. Absolute paths, raw remotes, and credentials do not cross the export
 boundary. Remote-backed catalog identities omit machine-local `root_key`;
 session rows retain their own complete root, worktree, and checkout facts.
 
-SQLite catalog keys are archive-scoped. Shared PostgreSQL and DuckDB dashboard
-responses may aggregate archives, so their catalog keys are response-scoped and
+SQLite catalog keys are archive-scoped. Shared PostgreSQL and ClickHouse
+dashboard responses may aggregate archives, so their catalog keys are response-scoped and
 must not be persisted as durable selectors. The canonical `identity.key`, not
 the display label or catalog key, represents project continuity.
 
-## `agentsview usage statusline`
+<a id="agentsview-usage-statusline"></a>
+
+## `agentsview report usage statusline`
 
 One-line today's spend, designed for shell prompts, tmux status lines, and
 window titles. Statusline has a 30-second deadline covering startup and the
 report request; it returns an error if that deadline expires.
 
 ```bash
-agentsview usage statusline [flags]
+agentsview report usage statusline [flags]
 ```
 
 | Flag        | Default | Description                                      |
@@ -1149,16 +1278,18 @@ microdollars rather than a formatted string:
 `agent` is included when `--agent` filtered the query.
 
 The command always scopes to the current local-time day. Use
-`agentsview usage daily --since $(date +%Y-%m-%d)` if you want the full row
+`agentsview report usage daily --since $(date +%Y-%m-%d)` if you want the full row
 instead.
 
-## `agentsview usage cursor`
+<a id="agentsview-usage-cursor"></a>
+
+## `agentsview source cursor sync-usage`
 
 Import Cursor Admin API usage events into the local archive so they contribute
 to the Usage dashboard and daily reports.
 
 ```bash
-agentsview usage cursor [flags]
+agentsview source cursor sync-usage [flags]
 ```
 
 | Flag          | Default       | Description                                              |
@@ -1180,7 +1311,7 @@ default member filters can be supplied with `cursor_admin_email` /
 ```toml
 # ~/.config/starship.toml
 [custom.agentsview]
-command = "agentsview usage statusline --offline --no-sync"
+command = "agentsview report usage statusline --offline --no-sync"
 when = "true"
 format = "[$output]($style) "
 style = "bold green"
@@ -1188,13 +1319,13 @@ style = "bold green"
 
 The offline flags read the existing archive without starting a daemon or syncing
 source files. A separate `agentsview serve` process or periodic
-`agentsview sync` keeps the archive fresh. Cache preparation can still take
+`agentsview source sync` keeps the archive fresh. Cache preparation can still take
 time.
 
 ## Source Freshness
 
 `usage daily` reads committed archive data. When it starts a daemon, routine
-source ingestion runs after readiness. Run `agentsview sync` before the report
+source ingestion runs after readiness. Run `agentsview source sync` before the report
 when it must include new source changes. Full parser rebuilds serve the retained
 archive with a stale warning; scoped upgrades and schema repairs finish before
 the daemon serves requests.
@@ -1219,6 +1350,12 @@ direct online query, when daemon autostart is disabled, retains its incremental
 refresh before reading. Read-only mirror daemons do not refresh the local SQLite
 archive; stop them to run a local online usage report.
 
+For an archived cost investigation, `session diagnose <id>` combines usage with
+context growth, compactions, large tool results, retry candidates, and child
+links. It uses the same source refresh as `session usage`. See the
+[diagnosis contract](https://agentsview.io/docs/session-api/#agentsview-session-diagnose)
+for coverage limits.
+
 ## Scripting Examples
 
 **Monthly spend for the current month:**
@@ -1227,7 +1364,7 @@ Costs are reported as `money` objects, so read `.microdollars` and divide when
 you want dollars:
 
 ```bash
-agentsview usage daily \
+agentsview report usage daily \
   --since "$(date +%Y-%m-01)" \
   --json \
   | jq '.totals.totalCost.microdollars / 1000000'
@@ -1243,7 +1380,7 @@ since=$(date -v-7d +%Y-%m-%d 2>/dev/null \
   || date -d '7 days ago' +%Y-%m-%d)
 
 for a in claude codex copilot gemini; do
-  total=$(agentsview usage daily \
+  total=$(agentsview report usage daily \
     --since "$since" \
     --agent "$a" \
     --json 2>/dev/null \
@@ -1264,7 +1401,7 @@ when the value is missing, so a broken read cannot pass for an under-budget day:
 
 ```bash
 budget_usd=25
-spent=$(agentsview usage statusline --json --offline --no-sync \
+spent=$(agentsview report usage statusline --json --offline --no-sync \
   | jq -e '.cost.microdollars') || exit 1
 if [ "$spent" -gt $((budget_usd * 1000000)) ]; then
   printf 'AgentsView: $%d.%02d today (over $%d)\n' \
@@ -1283,5 +1420,5 @@ in a small `model_pricing` table that's refreshed on each `usage` invocation.
 Usage data stays on your machine unless you enable a sharing feature. The usage
 command's only outbound requests are the LiteLLM and OpenRouter pricing fetches,
 which you can disable with `--offline`. See
-[Privacy and Telemetry](/docs/configuration/#privacy-and-telemetry) for the full
+[Privacy](/docs/configuration/#privacy) for the full
 picture.

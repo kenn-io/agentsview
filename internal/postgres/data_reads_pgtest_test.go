@@ -16,13 +16,13 @@ import (
 // GetProjectInventory, ListProjectRules, and ListArchiveWorktreeCandidates --
 // through the db.Store interface rather than the concrete *Store type,
 // proving the PG backend satisfies the same server-facing capability surface
-// as SQLite and DuckDB (internal/db/store_contract_test.go and
-// internal/duckdb/store_contract_test.go run the equivalent case for those
-// backends). Task 6 and Task 8's tests already cover per-method parity in
+// as SQLite (internal/db/store_contract_test.go runs the equivalent case for
+// that backend). Task 6 and Task 8's tests already cover per-method parity in
 // depth; this test's job is narrower: prove all three methods are reachable
 // through db.Store on a store built the way the HTTP server builds it.
 func TestPGDataReadsThroughStoreInterface(t *testing.T) {
-	const schema = "agentsview_data_reads_test"
+	t.Parallel()
+	const schema = pgPushTestSchema
 	sync, localDB, pg, ctx := newSessionProvenancePushSync(t, schema)
 
 	// seedPGCandidateSessionNoSnapshot (worktree_candidates_pgtest_test.go)

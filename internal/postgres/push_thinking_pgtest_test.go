@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -20,20 +19,19 @@ import (
 // or invalid UTF-8 in a thinking block would make the PG INSERT
 // reject the entire batch and stall the push.
 func TestPushThinkingText_SanitizesNullAndInvalidUTF8(t *testing.T) {
-	pgURL := testPGURL(t)
-	cleanPGSchema(t, pgURL)
-	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, "agentsview")
 
 	local := testDB(t)
 	ps, err := New(
-		pgURL, "agentsview", local,
+		t.Context(), pgURL, "agentsview", local,
 		"thinking-test-machine", true,
 		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, ps.EnsureSchema(ctx), "ensure schema")
 
 	started := time.Now().UTC().Format(time.RFC3339)
@@ -65,7 +63,7 @@ func TestPushThinkingText_SanitizesNullAndInvalidUTF8(t *testing.T) {
 	_, err = ps.Push(ctx, false, nil)
 	require.NoError(t, err, "push")
 
-	store, err := NewStore(pgURL, "agentsview", true)
+	store, err := NewStore(t.Context(), pgURL, "agentsview", true)
 	require.NoError(t, err, "NewStore")
 	defer store.Close()
 

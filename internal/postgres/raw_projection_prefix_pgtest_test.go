@@ -15,6 +15,7 @@ import (
 )
 
 func TestRawProjectionPrefixCopiesRetainSourceHistory(t *testing.T) {
+	t.Parallel()
 	for _, longerFirst := range []bool{false, true} {
 		t.Run(fmt.Sprint(longerFirst), func(t *testing.T) {
 			f := newProjectionFixture(t)
@@ -26,6 +27,14 @@ func TestRawProjectionPrefixCopiesRetainSourceHistory(t *testing.T) {
 			if longerFirst {
 				b, accepted = f.accept(t, "device-b", "long", "")
 				require.NoError(t, f.sink.Project(t.Context(), f.lease(t, b), b, long))
+				// Rebuild the selected retained longer copy, not the incoming
+				// shorter payload that this next projection inserts.
+				retained, err := f.sink.Resolve(t.Context(), "codex:portable")
+				require.NoError(t, err)
+				_, err = f.runtime.ExecContext(t.Context(), rawSourceProofDetachSQL, retained.SessionID)
+				require.NoError(t, err)
+				_, err = f.runtime.ExecContext(t.Context(), `DELETE FROM sessions WHERE id=$1`, retained.SessionID)
+				require.NoError(t, err)
 			}
 			a, shortAccepted := f.accept(t, "device-a", "short", "")
 			require.NoError(t, f.sink.Project(t.Context(), f.lease(t, a), a, short))
@@ -33,7 +42,7 @@ func TestRawProjectionPrefixCopiesRetainSourceHistory(t *testing.T) {
 				b, accepted = f.accept(t, "device-b", "long", "")
 				require.NoError(t, f.sink.Project(t.Context(), f.lease(t, b), b, long))
 			}
-			h, err := NewHostedStore(f.dsn, f.schema, f.tenant, false)
+			h, err := NewHostedStore(t.Context(), f.dsn, f.schema, f.tenant, false)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, h.Close()) })
 			page, err := h.ListSessions(t.Context(), db.SessionFilter{Limit: 10})
@@ -74,6 +83,7 @@ func TestRawProjectionPrefixCopiesRetainSourceHistory(t *testing.T) {
 }
 
 func TestRawProjectionPrefixDoesNotChooseDivergentContinuation(t *testing.T) {
+	t.Parallel()
 	f := newProjectionFixture(t)
 	for i := range 3 {
 		outcome := projectionOutcome("shared prompt")

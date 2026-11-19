@@ -3,7 +3,6 @@
 package postgres
 
 import (
-	"context"
 	"database/sql"
 	"testing"
 	"time"
@@ -18,9 +17,12 @@ const reTestSchema = "agentsview_recentedits_test"
 
 func reEnsureSchema(t *testing.T, pgURL string) *sql.DB {
 	t.Helper()
-	pg, err := Open(pgURL, reTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, reTestSchema, true)
 	require.NoError(t, err, "Open")
-	ctx := context.Background()
+	if takeFreshSchemaCopy(t, pgURL, reTestSchema) {
+		return pg
+	}
+	ctx := t.Context()
 	_, err = pg.ExecContext(ctx,
 		`DROP SCHEMA IF EXISTS `+reTestSchema+` CASCADE`,
 	)
@@ -39,7 +41,7 @@ func reInsertSession(
 	if deletedAt != "" {
 		da = deletedAt
 	}
-	_, err := pg.Exec(`
+	_, err := pg.ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent,
 			 message_count, user_message_count, deleted_at)
@@ -58,7 +60,7 @@ func reInsertMessage(
 	if ts != "" {
 		tsAny = ts
 	}
-	_, err := pg.Exec(`
+	_, err := pg.ExecContext(t.Context(), `
 		INSERT INTO messages
 			(session_id, ordinal, role, content,
 			 timestamp, content_length)
@@ -78,7 +80,7 @@ func reInsertToolCall(
 	if filePath != "" {
 		fp = filePath
 	}
-	_, err := pg.Exec(`
+	_, err := pg.ExecContext(t.Context(), `
 		INSERT INTO tool_calls
 			(session_id, tool_name, category, call_index,
 			 message_ordinal, file_path)
@@ -117,7 +119,7 @@ func reSeedEditTrashed(
 
 func reNewStore(t *testing.T, pgURL string) *Store {
 	t.Helper()
-	store, err := NewStore(pgURL, reTestSchema, true)
+	store, err := NewStore(t.Context(), pgURL, reTestSchema, true)
 	require.NoError(t, err, "NewStore")
 	return store
 }
@@ -126,7 +128,7 @@ func reNewStore(t *testing.T, pgURL string) *Store {
 // the INSERT above has no ON CONFLICT, so call this before the second seed.
 func reUpsertSession(t *testing.T, pg *sql.DB, id, project string) {
 	t.Helper()
-	_, err := pg.Exec(`
+	_, err := pg.ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, machine, project, agent,
 			 message_count, user_message_count)
@@ -150,15 +152,16 @@ func reAddEdit(
 
 // TestPGRecentEditsGroupingAndOrdering mirrors TestRecentEditsGroupingAndOrdering.
 func TestPGRecentEditsGroupingAndOrdering(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, reTestSchema)
 	pg := reEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
-		_, _ = pg.Exec(
-			`DROP SCHEMA IF EXISTS ` + reTestSchema + ` CASCADE`,
+		_, _ = pg.ExecContext(t.Context(),
+			`DROP SCHEMA IF EXISTS `+reTestSchema+` CASCADE`,
 		)
 	}()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// projA: same session, two messages editing config.go.
 	reUpsertSession(t, pg, "sA1", "projA")
@@ -184,15 +187,16 @@ func TestPGRecentEditsGroupingAndOrdering(t *testing.T) {
 
 // TestPGRecentEditsExcludesTrash mirrors TestRecentEditsExcludesTrash.
 func TestPGRecentEditsExcludesTrash(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, reTestSchema)
 	pg := reEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
-		_, _ = pg.Exec(
-			`DROP SCHEMA IF EXISTS ` + reTestSchema + ` CASCADE`,
+		_, _ = pg.ExecContext(t.Context(),
+			`DROP SCHEMA IF EXISTS `+reTestSchema+` CASCADE`,
 		)
 	}()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	reSeedEdit(t, pg, "proj", "sLive", 1, 0, "main.go", "2026-06-24T10:00:00Z")
 	reSeedEditTrashed(t, pg, "proj", "sDead", 1, 0, "deleted.go", "2026-06-24T11:00:00Z")
@@ -208,15 +212,16 @@ func TestPGRecentEditsExcludesTrash(t *testing.T) {
 
 // TestPGRecentEditsProjectFilter mirrors TestRecentEditsProjectFilter.
 func TestPGRecentEditsProjectFilter(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, reTestSchema)
 	pg := reEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
-		_, _ = pg.Exec(
-			`DROP SCHEMA IF EXISTS ` + reTestSchema + ` CASCADE`,
+		_, _ = pg.ExecContext(t.Context(),
+			`DROP SCHEMA IF EXISTS `+reTestSchema+` CASCADE`,
 		)
 	}()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	reSeedEdit(t, pg, "alpha", "sAlpha", 1, 0, "a.go", "2026-06-24T10:00:00Z")
 	reSeedEdit(t, pg, "beta", "sBeta", 1, 0, "b.go", "2026-06-24T10:00:00Z")
@@ -233,15 +238,16 @@ func TestPGRecentEditsProjectFilter(t *testing.T) {
 
 // TestPGRecentEditsSearchFilter mirrors TestRecentEditsSearchFilter.
 func TestPGRecentEditsSearchFilter(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, reTestSchema)
 	pg := reEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
-		_, _ = pg.Exec(
-			`DROP SCHEMA IF EXISTS ` + reTestSchema + ` CASCADE`,
+		_, _ = pg.ExecContext(t.Context(),
+			`DROP SCHEMA IF EXISTS `+reTestSchema+` CASCADE`,
 		)
 	}()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	reSeedEdit(t, pg, "proj", "s1", 1, 0, "internal/db/Recent.go", "2026-06-24T10:00:00Z")
 	reSeedEdit(t, pg, "proj", "s2", 1, 0, "internal/server/handler.go", "2026-06-24T09:00:00Z")
@@ -278,15 +284,16 @@ func TestPGRecentEditsSearchFilter(t *testing.T) {
 
 // TestPGRecentEditsTruncationAndHasMore mirrors TestRecentEditsTruncationAndHasMore.
 func TestPGRecentEditsTruncationAndHasMore(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, reTestSchema)
 	pg := reEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
-		_, _ = pg.Exec(
-			`DROP SCHEMA IF EXISTS ` + reTestSchema + ` CASCADE`,
+		_, _ = pg.ExecContext(t.Context(),
+			`DROP SCHEMA IF EXISTS `+reTestSchema+` CASCADE`,
 		)
 	}()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	reSeedEdit(t, pg, "proj", "s1", 1, 0, "a.go", "2026-06-24T10:00:00Z")
 	reSeedEdit(t, pg, "proj", "s2", 1, 0, "b.go", "2026-06-24T09:00:00Z")
@@ -319,15 +326,16 @@ func TestPGRecentEditsTruncationAndHasMore(t *testing.T) {
 
 // TestPGRecentEditsNullTimestampsSortLast mirrors TestRecentEditsNullTimestampsSortLast.
 func TestPGRecentEditsNullTimestampsSortLast(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, reTestSchema)
 	pg := reEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
-		_, _ = pg.Exec(
-			`DROP SCHEMA IF EXISTS ` + reTestSchema + ` CASCADE`,
+		_, _ = pg.ExecContext(t.Context(),
+			`DROP SCHEMA IF EXISTS `+reTestSchema+` CASCADE`,
 		)
 	}()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	reSeedEdit(t, pg, "proj", "sReal", 1, 0, "real.go", "2026-06-24T10:00:00Z")
 	// Empty ts → NULL timestamp in both message and tool_call.
@@ -345,15 +353,16 @@ func TestPGRecentEditsNullTimestampsSortLast(t *testing.T) {
 
 // TestPGRecentEditsTieByCallIndex mirrors TestRecentEditsTieByCallIndex.
 func TestPGRecentEditsTieByCallIndex(t *testing.T) {
-	pgURL := testPGURL(t)
+	t.Parallel()
+	pgURL := testPGSchemaURL(t, reTestSchema)
 	pg := reEnsureSchema(t, pgURL)
 	defer pg.Close()
 	defer func() {
-		_, _ = pg.Exec(
-			`DROP SCHEMA IF EXISTS ` + reTestSchema + ` CASCADE`,
+		_, _ = pg.ExecContext(t.Context(),
+			`DROP SCHEMA IF EXISTS `+reTestSchema+` CASCADE`,
 		)
 	}()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Insert session and one message.
 	reUpsertSession(t, pg, "sTie", "proj")

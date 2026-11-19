@@ -153,6 +153,7 @@ func mergeSyncStats(dst *SyncStats, src SyncStats) {
 	dst.Tombstoned += src.Tombstoned
 	dst.Warnings = append(dst.Warnings, src.Warnings...)
 	dst.Aborted = dst.Aborted || src.Aborted
+	dst.mergeCauses(src)
 	dst.RebuildPhases = append(dst.RebuildPhases, src.RebuildPhases...)
 	dst.Anomalies.merge(src.Anomalies)
 	dst.filesOK += src.filesOK

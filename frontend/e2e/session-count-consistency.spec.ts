@@ -36,15 +36,9 @@ test.describe("Session count consistency", () => {
     const summaryCards = page.locator(".summary-cards");
     await expect(summaryCards).toBeVisible({ timeout: 5_000 });
 
-    // Wait for the summary to finish loading.
     const sessionsCard = summaryCards
       .locator(".card")
       .filter({ has: page.locator(".card-label", { hasText: /^Sessions$/ }) });
-    await expect(sessionsCard.locator(".card-value")).not.toHaveText("--", { timeout: 10_000 });
-    await expect(sessionsCard.locator(".skeleton-value")).toHaveCount(0, { timeout: 5_000 });
-
-    const cardValue = await sessionsCard.locator(".card-value").textContent();
-    const analyticsCount = parseInt(cardValue?.replace(/,/g, "") ?? "0", 10);
 
     // Navigation surfaces (list, status bar) show only root sessions
     // and must agree. The analytics summary counts subagents on top, so
@@ -52,6 +46,8 @@ test.describe("Session count consistency", () => {
     // sessions stay excluded everywhere.
     expect(listCount, "session list").toBe(EXPECTED_ROOT_SESSIONS);
     expect(statsCount, "status bar").toBe(EXPECTED_ROOT_SESSIONS);
-    expect(analyticsCount, "analytics summary").toBe(EXPECTED_ANALYTICS_SESSIONS);
+    await expect(sessionsCard.locator(".card-value"), "analytics summary").toHaveText(
+      String(EXPECTED_ANALYTICS_SESSIONS),
+    );
   });
 });

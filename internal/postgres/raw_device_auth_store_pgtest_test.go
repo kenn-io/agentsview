@@ -15,6 +15,7 @@ import (
 )
 
 func TestRawDeviceAuthStoreLifecycleAndTenantIsolation(t *testing.T) {
+	t.Parallel()
 	pg, store := newRawDeviceAuthTestStore(t)
 	service, err := rawsync.NewDeviceAuthService(store, time.Hour)
 	require.NoError(t, err)
@@ -117,7 +118,7 @@ func newRawDeviceAuthTestStore(t *testing.T) (*sql.DB, *RawDeviceAuthStore) {
 	pgURL := testPGURL(t)
 	cleanSchemaTestPG(t, pgURL)
 	t.Cleanup(func() { cleanSchemaTestPG(t, pgURL) })
-	pg, err := Open(pgURL, schemaTestSchema, true)
+	pg, err := Open(t.Context(), pgURL, schemaTestSchema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, pg.Close()) })
 	require.NoError(t, EnsureSchema(t.Context(), pg, schemaTestSchema))

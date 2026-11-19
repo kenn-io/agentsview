@@ -68,7 +68,7 @@ function stubAppDependencies() {
   vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
   vi.spyOn(sync, "startPolling").mockImplementation(() => {});
   vi.spyOn(codexCloudStatus, "load").mockResolvedValue();
-  vi.spyOn(sync, "watchSession").mockImplementation(() => {});
+  vi.spyOn(sync, "watchSession").mockResolvedValue(false);
   vi.spyOn(sessions, "loadProjects").mockResolvedValue();
   vi.spyOn(sessions, "loadAgents").mockResolvedValue();
   vi.spyOn(sessions, "attachSidebar").mockReturnValue(() => {});
@@ -98,6 +98,7 @@ afterEach(() => {
   router.sessionId = null;
   router.isRootPath = false;
   sessions.activeSessionId = null;
+  sessions.archiveEmpty = false;
   sessions.filters.date = "";
   sessions.filters.dateFrom = "";
   sessions.filters.dateTo = "";
@@ -211,6 +212,7 @@ describe("App Recall availability", () => {
       friction_available: false,
       friction_build_allowed: false,
       insight_generation_available: false,
+      kata_available: false,
       version: "dev",
       commit: "unknown",
       build_date: "",
@@ -229,6 +231,99 @@ describe("App Recall availability", () => {
 });
 
 describe("App session URL date state", () => {
+  it.each(["selection change", "selection cleared", "route exit", "unmount"])(
+    "ignores an old watch's children fallback after %s",
+    async (change) => {
+      stubAppDependencies();
+      vi.spyOn(sessions, "load").mockResolvedValue();
+      vi.spyOn(sessions, "navigateToSession").mockResolvedValue();
+      const ready = Promise.withResolvers<boolean>();
+      vi.mocked(sync.watchSession).mockReturnValueOnce(ready.promise);
+      router.route = "sessions";
+      router.isRootPath = false;
+      router.sessionId = "session-1";
+      sessions.activeSessionId = "session-1";
+      component = mount(App, { target: document.body });
+      await flushEffects();
+      expect(sync.watchSession).toHaveBeenCalledWith(
+        "session-1",
+        expect.any(Function),
+        expect.any(Function),
+      );
+      expect(sessions.loadChildSessions).not.toHaveBeenCalled();
+
+      if (change === "selection change") {
+        sessions.activeSessionId = "session-2";
+      } else if (change === "selection cleared") {
+        sessions.activeSessionId = null;
+      } else if (change === "route exit") {
+        router.navigate("usage");
+      } else {
+        await unmount(component);
+        component = undefined;
+      }
+      await flushEffects();
+      vi.mocked(sessions.loadChildSessions).mockClear();
+
+      ready.resolve(false);
+      await flushEffects();
+      expect(sessions.loadChildSessions).not.toHaveBeenCalled();
+    },
+  );
+
+  it("requests children once when the session watch becomes ready on open", async () => {
+    stubAppDependencies();
+    vi.mocked(sync.watchSession).mockRestore();
+    vi.mocked(sessions.loadChildSessions).mockRestore();
+    vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    vi.spyOn(sessions, "navigateToSession").mockResolvedValue();
+    vi.spyOn(sessions, "refreshActiveSession").mockResolvedValue();
+    vi.spyOn(messages, "reload").mockResolvedValue();
+    let stream!: ReadableStreamDefaultController<Uint8Array>;
+    const watch = vi.spyOn(SessionsService, "getApiV1SessionsByIdWatch").mockResolvedValue(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            stream = controller;
+          },
+        }),
+        { headers: { "Content-Type": "text/event-stream" } },
+      ),
+    );
+    const fetchSpy = vi.fn(
+      async (_input: RequestInfo | URL) =>
+        new Response("[]", {
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+    router.route = "sessions";
+    router.sessionId = "session-1";
+    sessions.activeSessionId = "session-1";
+    try {
+      component = mount(App, { target: document.body });
+      await flushEffects();
+      expect(watch).toHaveBeenCalledWith({ id: "session-1" }, expect.anything());
+      stream.enqueue(new TextEncoder().encode("event: session_ready\ndata: {}\n\n"));
+      await vi.waitFor(() =>
+        expect(
+          fetchSpy.mock.calls.some(([input]) =>
+            requestUrl(input).endsWith("/api/v1/sessions/session-1/children"),
+          ),
+        ).toBe(true),
+      );
+      await flushEffects();
+      const childrenRequests = fetchSpy.mock.calls.filter(([input]) =>
+        requestUrl(input).endsWith("/api/v1/sessions/session-1/children"),
+      );
+      expect(childrenRequests).toHaveLength(1);
+    } finally {
+      sync.unwatchSession();
+      stream.close();
+    }
+  });
+
   it("cancels session reads on route exit and restarts an incomplete load on return", async () => {
     vi.stubGlobal(
       "ResizeObserver",
@@ -246,7 +341,8 @@ describe("App session URL date state", () => {
     vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
     vi.spyOn(sync, "startPolling").mockImplementation(() => {});
     vi.spyOn(codexCloudStatus, "load").mockResolvedValue();
-    vi.spyOn(sync, "watchSession").mockImplementation(() => {});
+    const ready = Promise.resolve(false);
+    vi.spyOn(sync, "watchSession").mockReturnValue(ready);
     vi.spyOn(sessions, "load").mockResolvedValue();
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
@@ -265,6 +361,7 @@ describe("App session URL date state", () => {
     component = mount(App, { target: document.body });
     await flushEffects();
 
+    expect(loadMessages).toHaveBeenCalledWith("session-1", ready);
     router.navigate("usage");
     await flushEffects();
     expect(cancelRouteReads).toHaveBeenCalled();
@@ -292,7 +389,7 @@ describe("App session URL date state", () => {
     vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
     vi.spyOn(sync, "startPolling").mockImplementation(() => {});
     vi.spyOn(codexCloudStatus, "load").mockResolvedValue();
-    vi.spyOn(sync, "watchSession").mockImplementation(() => {});
+    vi.spyOn(sync, "watchSession").mockResolvedValue(false);
     vi.spyOn(sessions, "load").mockResolvedValue();
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
@@ -337,7 +434,7 @@ describe("App session URL date state", () => {
     vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
     vi.spyOn(sync, "startPolling").mockImplementation(() => {});
     vi.spyOn(codexCloudStatus, "load").mockResolvedValue();
-    vi.spyOn(sync, "watchSession").mockImplementation(() => {});
+    vi.spyOn(sync, "watchSession").mockResolvedValue(false);
     vi.spyOn(sessions, "load").mockResolvedValue();
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
@@ -387,7 +484,7 @@ describe("App session URL date state", () => {
     vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
     vi.spyOn(sync, "startPolling").mockImplementation(() => {});
     vi.spyOn(codexCloudStatus, "load").mockResolvedValue();
-    vi.spyOn(sync, "watchSession").mockImplementation(() => {});
+    vi.spyOn(sync, "watchSession").mockResolvedValue(false);
     vi.spyOn(sessions, "load").mockResolvedValue();
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
@@ -431,7 +528,7 @@ describe("App session URL date state", () => {
     vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
     vi.spyOn(sync, "startPolling").mockImplementation(() => {});
     vi.spyOn(codexCloudStatus, "load").mockResolvedValue();
-    vi.spyOn(sync, "watchSession").mockImplementation(() => {});
+    vi.spyOn(sync, "watchSession").mockResolvedValue(false);
     vi.spyOn(sessions, "load").mockResolvedValue();
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
@@ -479,7 +576,7 @@ describe("App session URL date state", () => {
     vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
     vi.spyOn(sync, "startPolling").mockImplementation(() => {});
     vi.spyOn(codexCloudStatus, "load").mockResolvedValue();
-    vi.spyOn(sync, "watchSession").mockImplementation(() => {});
+    vi.spyOn(sync, "watchSession").mockResolvedValue(false);
     vi.spyOn(sessions, "load").mockResolvedValue();
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
@@ -553,7 +650,7 @@ describe("App session URL date state", () => {
     vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
     vi.spyOn(sync, "startPolling").mockImplementation(() => {});
     vi.spyOn(codexCloudStatus, "load").mockResolvedValue();
-    vi.spyOn(sync, "watchSession").mockImplementation(() => {});
+    vi.spyOn(sync, "watchSession").mockResolvedValue(false);
     vi.spyOn(sessions, "load").mockResolvedValue();
     vi.spyOn(sessions, "loadProjects").mockResolvedValue();
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
@@ -597,6 +694,19 @@ describe("App root Sessions landing", () => {
     router.sessionId = null;
     router.isRootPath = true;
   }
+
+  it.each([true, false])("renders the landing view for archive empty %s", async (empty) => {
+    stubAppDependencies();
+    vi.spyOn(sessions, "load").mockResolvedValue();
+    sessions.archiveEmpty = empty;
+    router.navigate("sessions");
+
+    component = mount(App, { target: document.body });
+    await flushEffects();
+
+    expect(document.body.querySelector(".empty-archive-panel") !== null).toBe(empty);
+    expect(document.body.querySelector(".analytics-page") !== null).toBe(!empty);
+  });
 
   it("resets filters without changing the bare root URL or saved value", async () => {
     stubAppDependencies();
@@ -1395,7 +1505,7 @@ describe("App analytics date navigation", () => {
     vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
     vi.spyOn(sync, "startPolling").mockImplementation(() => {});
     vi.spyOn(codexCloudStatus, "load").mockResolvedValue();
-    vi.spyOn(sync, "watchSession").mockImplementation(() => {});
+    vi.spyOn(sync, "watchSession").mockResolvedValue(false);
     vi.spyOn(sessions, "load").mockImplementation(() => {
       const shared = yokedDates.seedForPanel();
       datesAtSessionLoad.push({
@@ -1492,7 +1602,7 @@ describe("App analytics date navigation", () => {
     vi.spyOn(sync, "checkForUpdate").mockResolvedValue();
     vi.spyOn(sync, "startPolling").mockImplementation(() => {});
     vi.spyOn(codexCloudStatus, "load").mockResolvedValue();
-    vi.spyOn(sync, "watchSession").mockImplementation(() => {});
+    vi.spyOn(sync, "watchSession").mockResolvedValue(false);
     vi.spyOn(sessions, "load").mockImplementation(() => {
       sessionLoadDates.push({
         dateFrom: sessions.filters.dateFrom,

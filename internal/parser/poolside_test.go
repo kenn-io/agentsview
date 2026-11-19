@@ -22,7 +22,7 @@ func TestParsePoolsideSession(t *testing.T) {
 `
 	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
-	sess, msgs, usageEvents, err := parsePoolsideSession(trajectoryPath, "", "test-machine")
+	sess, msgs, usageEvents, err := parsePoolsideSession(t.Context(), trajectoryPath, "", "test-machine")
 	require.NoError(t, err)
 
 	assert.Contains(t, sess.ID, "poolside:")
@@ -64,7 +64,7 @@ func TestParsePoolsideSessionWithToolCalls(t *testing.T) {
 `
 	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
-	sess, msgs, _, err := parsePoolsideSession(trajectoryPath, "", "")
+	sess, msgs, _, err := parsePoolsideSession(t.Context(), trajectoryPath, "", "")
 	require.NoError(t, err)
 
 	assert.Equal(t, 2, sess.MessageCount)
@@ -96,7 +96,7 @@ func TestParsePoolsideMultipleCallsSameStep(t *testing.T) {
 `
 	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
-	_, msgs, _, err := parsePoolsideSession(trajectoryPath, "", "")
+	_, msgs, _, err := parsePoolsideSession(t.Context(), trajectoryPath, "", "")
 	require.NoError(t, err)
 
 	require.Len(t, msgs, 2)
@@ -134,7 +134,7 @@ func TestParsePoolsideMultipleShellCallsSameStep(t *testing.T) {
 `
 	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
-	_, msgs, _, err := parsePoolsideSession(trajectoryPath, "", "")
+	_, msgs, _, err := parsePoolsideSession(t.Context(), trajectoryPath, "", "")
 	require.NoError(t, err)
 
 	// Find shell_status calls and verify enrichment.
@@ -178,7 +178,7 @@ func TestParsePoolsideSessionWithThinking(t *testing.T) {
 `
 	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
-	sess, msgs, _, err := parsePoolsideSession(trajectoryPath, "", "")
+	sess, msgs, _, err := parsePoolsideSession(t.Context(), trajectoryPath, "", "")
 	require.NoError(t, err)
 
 	assert.Equal(t, 2, sess.MessageCount)
@@ -197,7 +197,7 @@ func TestParsePoolsideSessionEmpty(t *testing.T) {
 `
 	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
-	sess, msgs, _, err := parsePoolsideSession(trajectoryPath, "", "")
+	sess, msgs, _, err := parsePoolsideSession(t.Context(), trajectoryPath, "", "")
 	require.NoError(t, err)
 
 	assert.Contains(t, sess.ID, "poolside:")
@@ -310,7 +310,7 @@ func TestParsePoolsideMultipleThoughts(t *testing.T) {
 `
 	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
-	_, msgs, _, err := parsePoolsideSession(trajectoryPath, "", "")
+	_, msgs, _, err := parsePoolsideSession(t.Context(), trajectoryPath, "", "")
 	require.NoError(t, err)
 
 	require.Len(t, msgs, 2)
@@ -337,7 +337,7 @@ func TestParsePoolsideMalformedFinalLineSetsTruncated(t *testing.T) {
 {"id":"malformed`
 	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
-	sess, _, _, err := parsePoolsideSession(trajectoryPath, "", "")
+	sess, _, _, err := parsePoolsideSession(t.Context(), trajectoryPath, "", "")
 	require.NoError(t, err)
 
 	assert.True(t, sess.IsTruncated,
@@ -449,7 +449,7 @@ func TestParsePoolsideShellEnrichment(t *testing.T) {
 `
 	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
-	_, msgs, _, err := parsePoolsideSession(trajectoryPath, "", "")
+	_, msgs, _, err := parsePoolsideSession(t.Context(), trajectoryPath, "", "")
 	require.NoError(t, err)
 
 	// Find the shell_status tool call
@@ -483,7 +483,7 @@ func TestParsePoolsideDeniedToolCall(t *testing.T) {
 `
 	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
-	_, msgs, _, err := parsePoolsideSession(trajectoryPath, "", "")
+	_, msgs, _, err := parsePoolsideSession(t.Context(), trajectoryPath, "", "")
 	require.NoError(t, err)
 
 	assert.Len(t, msgs, 2)
@@ -532,7 +532,7 @@ func TestParsePoolsideSkillToolName(t *testing.T) {
 `
 			require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
-			_, msgs, _, err := parsePoolsideSession(trajectoryPath, "", "")
+			_, msgs, _, err := parsePoolsideSession(t.Context(), trajectoryPath, "", "")
 			require.NoError(t, err)
 
 			require.Len(t, msgs[1].ToolCalls, 1)
@@ -556,7 +556,7 @@ func TestParsePoolsideSkillInferenceFromReadTool(t *testing.T) {
 `
 	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
-	sess, msgs, _, err := parsePoolsideSession(trajectoryPath, "/test", "")
+	sess, msgs, _, err := parsePoolsideSession(t.Context(), trajectoryPath, "/test", "")
 	require.NoError(t, err)
 
 	require.Len(t, msgs[1].ToolCalls, 1)
@@ -596,7 +596,7 @@ func TestParsePoolsideSessionModelSwitch(t *testing.T) {
 `
 	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
-	sess, msgs, usageEvents, err := parsePoolsideSession(trajectoryPath, "", "")
+	sess, msgs, usageEvents, err := parsePoolsideSession(t.Context(), trajectoryPath, "", "")
 	require.NoError(t, err)
 
 	// Two inferences -> two usage events, one per model.
@@ -666,7 +666,7 @@ func TestParsePoolsideSessionToolOnlyModelAttribution(t *testing.T) {
 `
 	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
-	sess, msgs, usageEvents, err := parsePoolsideSession(trajectoryPath, "", "")
+	sess, msgs, usageEvents, err := parsePoolsideSession(t.Context(), trajectoryPath, "", "")
 	require.NoError(t, err)
 
 	require.Len(t, msgs, 2, "user + assistant")
@@ -718,7 +718,7 @@ func TestParsePoolsideSessionPeakContextIsMax(t *testing.T) {
 `
 	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
-	sess, _, usageEvents, err := parsePoolsideSession(trajectoryPath, "", "")
+	sess, _, usageEvents, err := parsePoolsideSession(t.Context(), trajectoryPath, "", "")
 	require.NoError(t, err)
 
 	require.Len(t, usageEvents, 3)
@@ -752,7 +752,7 @@ func TestParsePoolsideSessionInferenceWithoutStart(t *testing.T) {
 `
 	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
-	_, _, usageEvents, err := parsePoolsideSession(trajectoryPath, "", "")
+	_, _, usageEvents, err := parsePoolsideSession(t.Context(), trajectoryPath, "", "")
 	require.NoError(t, err)
 
 	require.Len(t, usageEvents, 2)
@@ -776,7 +776,7 @@ func TestPoolsideInferenceSourceAndDedupKeyShape(t *testing.T) {
 `
 	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
-	_, _, usageEvents, err := parsePoolsideSession(trajectoryPath, "", "")
+	_, _, usageEvents, err := parsePoolsideSession(t.Context(), trajectoryPath, "", "")
 	require.NoError(t, err)
 	require.Len(t, usageEvents, 1)
 	ev := usageEvents[0]

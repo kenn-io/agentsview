@@ -3,10 +3,59 @@ package db
 import (
 	"encoding/json/jsontext"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+// BenchmarkMessageTokenUsageUpdate guards against re-tokenizing unchanged text
+// for late usage receipts. Body size grows while each operation updates eight
+// messages. Reset writes run outside the timer and the rows/op count.
+func BenchmarkMessageTokenUsageUpdate(b *testing.B) {
+	for _, size := range []int{1 << 10, 32 << 10, 256 << 10} {
+		b.Run(fmt.Sprintf("body=%dKiB", size>>10), func(b *testing.B) {
+			const count = 8
+			d := testDB(b)
+			seedBenchSession(b, d, "bench-usage", 0)
+			var body strings.Builder
+			for i := 0; body.Len() < size; i++ {
+				fmt.Fprintf(&body, "word%08d ", i)
+			}
+			messages := benchSessionMessages("bench-usage", count)
+			update := IncrementalSessionUpdate{MsgCount: count, NextOrdinal: count}
+			for i := range messages {
+				messages[i].Role = "assistant"
+				messages[i].Content = body.String()[:size]
+				messages[i].ContentLength = size
+				messages[i].TokenUsage = nil
+				update.MessageTokenUsageUpdates = append(update.MessageTokenUsageUpdates, MessageTokenUsageUpdate{
+					Ordinal: i, TokenUsage: jsontext.Value(`{"output_tokens":7}`),
+					OutputTokens: 7, HasOutputTokens: true,
+				})
+			}
+			require.NoError(b, d.InsertMessages(b.Context(), messages))
+			var writes int64
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				b.StopTimer()
+				_, err := d.getWriter().Exec(b.Context(), `UPDATE messages
+SET token_usage = '', output_tokens = 0, has_output_tokens = 0 WHERE session_id = 'bench-usage'`)
+				require.NoError(b, err)
+				var before, after int64
+				require.NoError(b, d.getWriter().QueryRow(b.Context(), "SELECT total_changes()").Scan(&before))
+				b.StartTimer()
+				_, err = d.WriteSessionIncremental(b.Context(), "bench-usage", nil, update)
+				b.StopTimer()
+				require.NoError(b, err)
+				require.NoError(b, d.getWriter().QueryRow(b.Context(), "SELECT total_changes()").Scan(&after))
+				writes += after - before
+			}
+			b.ReportMetric(float64(writes)/float64(b.N), "rows/op")
+		})
+	}
+}
 
 // Hot-path benchmarks for the message write and usage aggregation
 // paths that have regressed in the past. CI's bench-gate workflow

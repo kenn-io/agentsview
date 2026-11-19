@@ -133,7 +133,7 @@ func newDaemonArtifactExchangeRunner(
 		if engine == nil {
 			err = work()
 		} else {
-			err = engine.RunExclusiveFlushed(work)
+			err = engine.RunExclusiveFlushed(ctx, work)
 		}
 		if result.ImportedSessions > 0 && emitter != nil {
 			emitter.Emit("sessions")

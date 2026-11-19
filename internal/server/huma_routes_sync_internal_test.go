@@ -30,7 +30,6 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
-	"go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/remotesync"
@@ -75,6 +74,7 @@ type syncRouteFixtureConfig struct {
 
 type syncRouteFixtureOption func(*syncRouteFixtureConfig)
 
+// Serial: callers replace the process-wide log output.
 func captureServerLogOutput(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var buf bytes.Buffer
@@ -170,7 +170,7 @@ func newSyncRouteFixture(
 		serverConfig.AgentDirs[agent] = append([]string(nil), dirs...)
 	}
 	serverOptions := []Option{
-		WithReplicas(postgres.Backend{}, clickhouse.Backend{}), WithMirror(duckdb.Mirror{}),
+		WithReplicas(postgres.Backend{}, clickhouse.Backend{}),
 	}
 	if cfg.broadcaster != nil {
 		serverOptions = append(serverOptions, WithBroadcaster(cfg.broadcaster))
@@ -325,6 +325,7 @@ func assertSessionCount(t *testing.T, database *db.DB, want int) {
 	assert.Len(t, page.Sessions, want)
 }
 
+// Serial: callers replace a package variable every server reads.
 func stubRunRemoteHostSync(
 	t *testing.T,
 	fn func(context.Context, config.RemoteHost, bool) (remotesync.SyncStats, error),
@@ -505,6 +506,7 @@ func (c *failingRebuildCleanup) Close() error {
 }
 
 func TestRebuildCleanupFailureIsRetainedByHTTPCleanupRegistry(t *testing.T) {
+	t.Parallel()
 	f := newSyncRouteFixture(t)
 	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
 	cleanup := &failingRebuildCleanup{errors: []error{
@@ -539,6 +541,7 @@ func TestRebuildCleanupFailureIsRetainedByHTTPCleanupRegistry(t *testing.T) {
 		"retained cleanup must finish before the next callback")
 }
 
+// Serial: callers replace a package variable every server reads.
 func stubPrepareHTTPRebuild(
 	t *testing.T,
 	fn func(context.Context, []remotesync.RemoteSync) (preparedHTTPRebuild, error),
@@ -1457,6 +1460,7 @@ func TestSyncEngineForLocalReusesNoSyncEngineConcurrently(t *testing.T) {
 }
 
 func TestArchiveMaintenanceNoSyncSharesBarrier(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		run  func(*Server, context.Context, func() error) error
@@ -1465,6 +1469,7 @@ func TestArchiveMaintenanceNoSyncSharesBarrier(t *testing.T) {
 		{"background", (*Server).SerializeArchiveWrite},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			f := newSyncRouteFixture(t)
 			t.Cleanup(func() { require.NoError(t, f.srv.Shutdown(t.Context())) })
 			started := make(chan struct{})
@@ -1592,6 +1597,7 @@ func TestHumaSyncSessionRouteIsNotWriteTimeoutWrapped(t *testing.T) {
 }
 
 func TestHumaTriggerSyncLocalNoSyncResyncsStaleDB(t *testing.T) {
+	t.Parallel()
 	f := newSyncRouteFixture(t, withStaleDB())
 	f.writeClaudeSession(t, "proj/session.jsonl", "stale no sync route")
 	require.True(t, f.db.NeedsResync())
@@ -1607,8 +1613,10 @@ func TestHumaTriggerSyncLocalNoSyncResyncsStaleDB(t *testing.T) {
 // whose required rebuild aborts. The engine falls back to an incremental pass,
 // so the route must report the still-stale archive instead of success.
 func TestHumaLocalSyncReportsIncompleteArchiveRebuild(t *testing.T) {
+	t.Parallel()
 	for _, path := range []string{"/api/v1/sync", "/api/v1/resync"} {
 		t.Run(path, func(t *testing.T) {
+			t.Parallel()
 			f := newSyncRouteFixture(t, withStaleDB())
 			// An archived file-backed session whose source is gone makes the
 			// rebuild find nothing to replace it with, so the swap aborts.
@@ -1636,6 +1644,7 @@ func TestHumaLocalSyncReportsIncompleteArchiveRebuild(t *testing.T) {
 // runner, which also falls back to an incremental pass and returns complete
 // stats when the rebuild safety-aborts.
 func TestHumaWorkerResyncReportsIncompleteArchiveRebuild(t *testing.T) {
+	t.Parallel()
 	ran := false
 	f := newSyncRouteFixture(t, withStaleDB(), withLocalResyncRunner(
 		func(context.Context, func(syncpkg.Progress)) (syncpkg.SyncStats, error) {
@@ -1651,6 +1660,38 @@ func TestHumaWorkerResyncReportsIncompleteArchiveRebuild(t *testing.T) {
 	assert.Contains(t, body, "event: error")
 	assert.NotContains(t, body, "event: done")
 	assert.Contains(t, body, "the required archive rebuild did not complete")
+}
+
+func TestHumaResyncCompletesWithDeferredCodexFork(t *testing.T) {
+	const parent = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	const child = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	const timestamp = "2026-09-01T10:00:00Z"
+	root := t.TempDir()
+	path := filepath.Join(root, "rollout-2026-09-01T11-00-00-"+child+".jsonl")
+	require.NoError(t, os.WriteFile(path, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexForkedSessionMetaJSON(child, parent, "/work/project", "user", timestamp),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", timestamp),
+		testjsonl.CodexMsgJSON("assistant", "child answer", timestamp),
+	)), 0o600))
+	f := newSyncRouteFixture(t, withDisabledAgents(nil, map[parser.AgentType][]string{parser.AgentCodex: {root}}))
+	body := serveJSON(t, f.handler, http.MethodPost, "/api/v1/resync", nil).Body.String()
+	assert.Contains(t, body, "event: done")
+	assert.NotContains(t, body, "event: error")
+	messages, err := f.db.GetAllMessages(t.Context(), "codex:"+child)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "child answer", messages[0].Content)
+}
+
+func TestHumaWorkerResyncCompletesWithDeferredFork(t *testing.T) {
+	f := newSyncRouteFixture(t, withLocalResyncRunner(
+		func(context.Context, func(syncpkg.Progress)) (syncpkg.SyncStats, error) {
+			return syncpkg.SyncStats{ArchiveRebuilt: true, Deferred: 1}, nil
+		},
+	))
+	body := serveJSON(t, f.handler, http.MethodPost, "/api/v1/resync", nil).Body.String()
+	assert.Contains(t, body, "event: done")
+	assert.NotContains(t, body, "event: error")
 }
 
 // TestHumaTriggerSyncWorkerBackedRejectsStaleArchive pins the new UX: with the
@@ -1678,6 +1719,7 @@ func TestHumaTriggerSyncWorkerBackedRejectsStaleArchive(t *testing.T) {
 }
 
 func TestHumaForegroundSyncTerminalErrors(t *testing.T) {
+	t.Parallel()
 	for _, path := range []string{"/api/v1/sync", "/api/v1/resync"} {
 		for _, tc := range []struct {
 			name  string
@@ -1687,9 +1729,12 @@ func TestHumaForegroundSyncTerminalErrors(t *testing.T) {
 		}{
 			{"complete stats", syncpkg.SyncStats{}, errors.New("worker failed"), ""},
 			{"incomplete without worker error", syncpkg.SyncStats{Deferred: 1}, nil, ""},
+			{"rebuild with failed source", syncpkg.SyncStats{ArchiveRebuilt: true, Deferred: 1, Failed: 1}, nil, ""},
+			{"aborted rebuild", syncpkg.SyncStats{ArchiveRebuilt: true, Deferred: 1, Aborted: true}, nil, ""},
 			{"busy", syncpkg.SyncStats{}, syncpkg.ErrSyncInProgress, "sync_running"},
 		} {
 			t.Run(path+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
 				runner := func(context.Context, func(syncpkg.Progress)) (syncpkg.SyncStats, error) { return tc.stats, tc.err }
 				f := newSyncRouteFixture(t, withLocalSyncRunner(runner), withLocalResyncRunner(runner))
 				body := serveJSON(t, f.handler, http.MethodPost, path, nil).Body.String()
@@ -1711,6 +1756,7 @@ func TestHumaForegroundSyncTerminalErrors(t *testing.T) {
 }
 
 func TestHumaTriggerSyncRetryDecision(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, path string
 		err        error
@@ -1721,6 +1767,7 @@ func TestHumaTriggerSyncRetryDecision(t *testing.T) {
 		{"worker failed with wait", "/api/v1/sync?wait=true", errors.New("worker failed"), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			f := newSyncRouteFixture(t)
 			require.NoError(t, f.db.CloseWriter())
 			calls := 0
@@ -1748,6 +1795,7 @@ func TestHumaTriggerSyncRetryDecision(t *testing.T) {
 	}
 }
 
+// Serial: waits only one second for real startup maintenance.
 func TestForegroundSyncReleasesDeferredStartupMaintenance(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1939,6 +1987,38 @@ func TestHumaSyncRemotesStreamsLocalProgress(t *testing.T) {
 	assertOnlySessionFirstMessageContains(t, f.db, "remote progress")
 }
 
+func TestHumaSyncRemotesCompletesRebuildWithDeferredFork(t *testing.T) {
+	const parent = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	const child = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	const timestamp = "2026-09-01T10:00:00Z"
+	root := t.TempDir()
+	path := filepath.Join(root, "rollout-2026-09-01T11-00-00-"+child+".jsonl")
+	require.NoError(t, os.WriteFile(path, []byte(testjsonl.JoinJSONL(
+		testjsonl.CodexForkedSessionMetaJSON(child, parent, "/work/project", "user", timestamp),
+		testjsonl.CodexTurnContextWithIDJSON("gpt-5", "child-turn", timestamp),
+		testjsonl.CodexMsgJSON("assistant", "child answer", timestamp),
+	)), 0o600))
+	f := newSyncRouteFixture(t,
+		withDisabledAgents(nil, map[parser.AgentType][]string{parser.AgentCodex: {root}}),
+		withRemoteHosts(config.RemoteHost{Host: "alpha", URL: "https://alpha.example.test", Token: "remote-token"}),
+	)
+	stubPrepareHTTPRebuild(t, func(context.Context, []remotesync.RemoteSync) (preparedHTTPRebuild, error) {
+		return &fakePreparedHTTPRebuild{}, nil
+	})
+	w := serveJSON(t, f.handler, http.MethodPost, "/api/v1/sync/remotes", remoteSyncRequest{
+		Full: true, IncludeLocal: true, Hosts: []config.RemoteHost{{Host: "alpha"}},
+	})
+	require.Equal(t, http.StatusOK, w.Code)
+	var response remoteSyncResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.Empty(t, response.Error)
+	assert.Empty(t, response.Failures)
+	messages, err := f.db.GetAllMessages(t.Context(), "codex:"+child)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "child answer", messages[0].Content)
+}
+
 func TestHumaSyncRemotesStreamsRemoteProgress(t *testing.T) {
 	var mu stdlibsync.Mutex
 	var paths []string
@@ -1985,6 +2065,91 @@ func TestHumaSyncRemotesStreamsRemoteProgress(t *testing.T) {
 		"/api/v1/remote-sync/targets",
 		"/api/v1/remote-sync/manifest",
 	}, paths)
+}
+
+// A client that disconnects mid-sync, such as a CLI killed by its caller's
+// timeout, must not cancel the daemon's remote import: retries would restart
+// the whole download and reparse every time.
+func TestHumaSyncRemotesFinishesAfterClientDisconnects(t *testing.T) {
+	var mu stdlibsync.Mutex
+	var paths []string
+	targetsReached := make(chan struct{})
+	releaseTargets := make(chan struct{})
+	var reachedOnce stdlibsync.Once
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		remotesync.SetProtocolHeader(w.Header())
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/remote-sync/targets":
+			reachedOnce.Do(func() { close(targetsReached) })
+			<-releaseTargets
+			_, _ = w.Write([]byte(`{}`))
+		case "/api/v1/remote-sync/manifest":
+			_, _ = w.Write([]byte(`{"files":[]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	released := false
+	t.Cleanup(func() {
+		if !released {
+			close(releaseTargets)
+		}
+		ts.Close()
+	})
+	f := newSyncRouteFixture(t, withRemoteHosts(config.RemoteHost{
+		Host: "alpha", URL: ts.URL, Token: "remote-token",
+	}))
+	logs := captureServerLogOutput(t)
+	requestCtx, disconnect := context.WithCancel(t.Context())
+	defer disconnect()
+	payload, err := json.Marshal(remoteSyncRequest{
+		Hosts: []config.RemoteHost{{Host: "alpha"}},
+	})
+	require.NoError(t, err)
+	req := httptest.NewRequestWithContext(requestCtx, http.MethodPost,
+		"/api/v1/sync/remotes", bytes.NewReader(payload))
+	req.Host = "127.0.0.1:0"
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("Origin", "http://127.0.0.1:0")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	w := httptest.NewRecorder()
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		f.handler.ServeHTTP(w, req)
+	}()
+
+	select {
+	case <-targetsReached:
+	case <-time.After(30 * time.Second):
+		require.FailNow(t, "remote sync never reached the remote host")
+	}
+	disconnect()
+	released = true
+	close(releaseTargets)
+	select {
+	case <-served:
+	case <-time.After(30 * time.Second):
+		require.FailNow(t, "remote sync request never returned")
+	}
+
+	mu.Lock()
+	assert.Equal(t, []string{
+		"/api/v1/remote-sync/targets",
+		"/api/v1/remote-sync/manifest",
+	}, paths, "the sync continues to the manifest after the client leaves")
+	mu.Unlock()
+	output := logs.String()
+	assert.Contains(t, output, "remote sync host finished: host=alpha")
+	assert.Contains(t, output, "outcome=completed")
+	assert.NotContains(t, output, "context canceled")
+	assert.NotContains(t, w.Body.String(), "event: done",
+		"no events are written to a client that has gone")
 }
 
 func TestRunRemoteSyncRequestSerializesNoSyncRemoteWrites(t *testing.T) {
@@ -2055,8 +2220,10 @@ func TestRunRemoteSyncRequestSerializesNoSyncRemoteWrites(t *testing.T) {
 }
 
 func TestHumaSyncRemotesRejectsUnconfiguredHost(t *testing.T) {
+	t.Parallel()
 	for _, addr := range []string{"127.0.0.1:1234", "203.0.113.10:1234"} {
 		t.Run(addr, func(t *testing.T) {
+			t.Parallel()
 			f := newSyncRouteFixture(t)
 			w := postRemoteSync(t, f.handler,
 				[]config.RemoteHost{{Host: "unconfigured-box"}},
@@ -2487,6 +2654,7 @@ func TestStartupRebuildWriteGate(t *testing.T) {
 		{http.MethodPost, "/api/v1/sessions/retained/open", `{}`, false, false, http.StatusBadRequest, "opener"},
 		{http.MethodPost, "/api/v1/settings/worktree-mappings/preview", `{"machine":"local","path_prefix":"/work","project":"new-project","enabled":true}`, false, false, http.StatusOK, ""},
 		{http.MethodGet, "/api/v1/sessions", "", false, false, http.StatusOK, ""},
+		{http.MethodPost, "/api/v1/commits/sessions", `{"shas":["abc1234"]}`, false, false, http.StatusOK, `"sha":"abc1234"`},
 		{http.MethodGet, "/api/v1/sync/status", "", false, true, http.StatusOK, ""},
 	} {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
@@ -2553,6 +2721,7 @@ func TestHandlerErrorsPreserveOnlyWriterClosedCause(t *testing.T) {
 }
 
 func TestUsageRefreshRoute(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		run  func(*testing.T)
@@ -2561,6 +2730,7 @@ func TestUsageRefreshRoute(t *testing.T) {
 			name: "nil engine allows refresh when startup sync is disabled",
 			run: func(t *testing.T) {
 				t.Helper()
+				t.Parallel()
 				f := newSyncRouteFixture(t)
 				require.Nil(t, f.srv.engine)
 				content := testjsonl.NewSessionBuilder().
@@ -2581,6 +2751,7 @@ func TestUsageRefreshRoute(t *testing.T) {
 			name: "defers a known session until startup finishes",
 			run: func(t *testing.T) {
 				t.Helper()
+				t.Parallel()
 				f := newSyncRouteFixture(t)
 				content := testjsonl.NewSessionBuilder().
 					AddClaudeUserWithSessionID("2026-01-01T10:00:00Z", "start", "parent").
@@ -2617,6 +2788,7 @@ func TestUsageRefreshRoute(t *testing.T) {
 			name: "returns conflict while another sync owns the engine",
 			run: func(t *testing.T) {
 				t.Helper()
+				t.Parallel()
 				f := newSyncRouteFixture(t)
 				dbtest.SeedSessionWithMessages(t, f.db, "retained", "project",
 					[]db.Message{dbtest.UserMsg("retained", 0, "stored transcript")})

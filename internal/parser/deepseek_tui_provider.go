@@ -31,9 +31,9 @@ func newDeepSeekTUISourceSet(roots []string) JSONLSourceSet {
 }
 
 func deepSeekTUIParseFile(
-	_ context.Context, path string, req ParseRequest,
+	ctx context.Context, path string, req ParseRequest,
 ) ([]ParseResult, []string, error) {
-	sess, msgs, err := parseDeepSeekTUISession(path, req.Machine)
+	sess, msgs, err := parseDeepSeekTUISession(ctx, path, req.Machine)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -51,7 +51,7 @@ func isDeepSeekTUISourcePath(root, path string) bool {
 }
 
 func deepSeekTUIProviderCapabilities() Capabilities {
-	return Capabilities{
+	return withPollMetadataScan(Capabilities{
 		Source: jsonlFileProviderSourceCapabilities(),
 		Content: ContentCapabilities{
 			FirstMessage: CapabilitySupported,
@@ -62,5 +62,5 @@ func deepSeekTUIProviderCapabilities() Capabilities {
 			ToolCalls:    CapabilitySupported,
 			ToolResults:  CapabilitySupported,
 		},
-	}
+	})
 }

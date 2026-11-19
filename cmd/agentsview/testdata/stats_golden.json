@@ -590,7 +590,7 @@
       "p50": 10,
       "p90": 10
     },
-    "messages_per_active_hour": 125.47112462006079,
+    "messages_per_active_hour": 125.47112462006083,
     "turn_cycle_seconds": {
       "mean": 10,
       "p50": 10,

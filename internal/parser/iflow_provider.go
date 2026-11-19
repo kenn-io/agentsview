@@ -35,7 +35,7 @@ func iflowParseFile(
 	ctx context.Context, path string, req ParseRequest,
 ) ([]ParseResult, []string, error) {
 	project := iflowResolveProject(ctx, req.Source, path)
-	results, err := parseIflowSession(path, project, req.Machine)
+	results, err := parseIflowSession(ctx, path, project, req.Machine)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -93,7 +93,7 @@ func iflowSessionIDFromPath(root, path string) string {
 }
 
 func iflowProviderCapabilities() Capabilities {
-	return Capabilities{
+	return withPollMetadataScan(Capabilities{
 		Source: jsonlFileProviderSourceCapabilities(),
 		Content: ContentCapabilities{
 			FirstMessage: CapabilitySupported,
@@ -101,5 +101,5 @@ func iflowProviderCapabilities() Capabilities {
 			ToolCalls:    CapabilitySupported,
 			ToolResults:  CapabilitySupported,
 		},
-	}
+	})
 }

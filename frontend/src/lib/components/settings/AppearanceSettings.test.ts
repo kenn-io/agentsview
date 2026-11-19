@@ -51,6 +51,7 @@ describe("AppearanceSettings", () => {
     messageColors.applyPreset("default");
     ui.setZoomLevel(100);
     ui.renderUnknownXmlBlocksAsPreformatted = false;
+    ui.alwaysShowYear = false;
     if (ui.highContrast) ui.toggleHighContrast();
     settings.chartPalette = "agentsview";
     settings.readOnly = false;
@@ -158,9 +159,18 @@ describe("AppearanceSettings", () => {
     expect(ui.zoomLevel).toBe(100);
   });
 
+  it("toggles the year display", async () => {
+    const { getByRole } = render(AppearanceSettings);
+    const toggle = getByRole("switch", { name: "Always show year" });
+    expect((toggle as HTMLInputElement).checked).toBe(false);
+    await fireEvent.click(toggle);
+    expect(ui.alwaysShowYear).toBe(true);
+    expect((toggle as HTMLInputElement).checked).toBe(true);
+  });
+
   it("toggles rendering unknown XML blocks as preformatted text", async () => {
     const { getByRole } = render(AppearanceSettings);
-    const checkbox = getByRole("checkbox", {
+    const checkbox = getByRole("switch", {
       name: "Render unknown XML blocks as preformatted text",
     });
 
@@ -173,8 +183,11 @@ describe("AppearanceSettings", () => {
   it("toggles high contrast", async () => {
     const { getByRole } = render(AppearanceSettings);
     expect(ui.highContrast).toBe(false);
-    await fireEvent.click(getByRole("button", { name: "Off" }));
+    const toggle = getByRole("switch", { name: "High contrast" });
+    expect((toggle as HTMLInputElement).checked).toBe(false);
+    await fireEvent.click(toggle);
     expect(ui.highContrast).toBe(true);
+    expect((toggle as HTMLInputElement).checked).toBe(true);
   });
 
   it("saves and confirms the selected chart palette", async () => {
@@ -238,7 +251,7 @@ describe("AppearanceSettings", () => {
         "#0072b2",
       );
       expect(
-        getByRole("checkbox", { name: "Mark message types with line patterns as well as color" }),
+        getByRole("switch", { name: "Mark message types with line patterns as well as color" }),
       ).toHaveProperty("checked", true);
       expect(
         preset.getByRole("radio", { name: "Color-blind safe" }).getAttribute("aria-checked"),

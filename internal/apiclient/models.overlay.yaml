@@ -3,6 +3,9 @@ info:
   title: Reuse AgentsView response models in the Go client
   version: 1.0.0
 actions:
+  - target: $.components.schemas.DiagnosticAppendInputBody.properties.id
+    update:
+      x-go-type: string
   - target: $.components.schemas.ActivityReport
     update:
       x-go-type: activity.Report
@@ -54,6 +57,12 @@ actions:
   - target: $.components.schemas.DbSession
     update:
       x-go-type: db.Session
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/db
+        name: db
+  - target: $.components.schemas.DbSessionExclusionCounts
+    update:
+      x-go-type: db.SessionExclusionCounts
       x-go-type-import:
         path: go.kenn.io/agentsview/internal/db
         name: db
@@ -153,6 +162,12 @@ actions:
       x-go-type-import:
         path: go.kenn.io/agentsview/internal/vector
         name: vector
+  - target: $.components.schemas.KataStatus
+    update:
+      x-go-type: kata.Status
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/kata
+        name: kata
   - target: $.components.schemas.VectorGenerationInfo
     update:
       x-go-type: vector.GenerationInfo
@@ -261,3 +276,45 @@ actions:
       x-go-type-import:
         path: go.kenn.io/agentsview/internal/rawsync
         name: rawsync
+  - target: $.components.schemas.DbCommitLink
+    update:
+      x-go-type: db.CommitLink
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/db
+        name: db
+  - target: $.components.schemas.DbCommitTurn
+    update:
+      x-go-type: db.CommitTurn
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/db
+        name: db
+  - target: $.components.schemas.DbSessionCommitList
+    update:
+      x-go-type: db.SessionCommitList
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/db
+        name: db
+  - target: $.components.schemas.DbCommitSessionMatch
+    update:
+      x-go-type: db.CommitSessionMatch
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/db
+        name: db
+  - target: $.components.schemas.DbCommitSessionList
+    update:
+      x-go-type: db.CommitSessionList
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/db
+        name: db
+  - target: $.components.schemas.ServiceFileReferencesResult
+    update:
+      x-go-type: service.FileReferencesResult
+      x-go-type-import:
+        path: go.kenn.io/agentsview/internal/service
+        name: service
+  # Issue metadata values are strings and numbers; the generator turns an
+  # untyped additionalProperties into map[string]struct{}, which cannot
+  # decode them.
+  - target: $.components.schemas.FrictionIssuePreview.properties.metadata
+    update:
+      x-go-type: map[string]any

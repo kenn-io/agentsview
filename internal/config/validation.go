@@ -19,6 +19,7 @@ const (
 	ScopePG
 	ScopeClickHouse
 	ScopeDeployment
+	ScopeDocbank
 )
 
 func (s ValidationScope) uses(section ValidationScope) bool {
@@ -44,24 +45,50 @@ func (c *Config) validateSections() error {
 		{ScopeServer, "proxy", func() error { return normalizeProxyConfig(&c.Proxy) }},
 		// The public URL joins the allowed origins, so one bad value is one warning.
 		{ScopeServer, "public_url/public_origins", c.resolvePublicConfig},
-		{ScopeServer, "daemon_idle_timeout", func() error {
-			if c.DaemonIdleTimeout < 0 {
-				return fmt.Errorf("invalid daemon_idle_timeout: %s", c.DaemonIdleTimeout)
-			}
-			return nil
-		}},
-		{ScopeVector, "[vector]", c.Vector.Validate},
-		{ScopeRecall, "[recall.extract]", c.Recall.Extract.Validate},
-		{ScopeInsights, "[insights]", c.Insights.Validate},
+		{ScopeServer, "daemon_idle_timeout", c.validateDaemonIdleTimeout},
+		{ScopeServer, "sync_idle_after", c.validateSyncIdleAfter},
+		// Sections with *_file secrets read them once they validate.
+		{ScopeVector, "[vector]", func() error { return resolveVectorSecrets(&c.Vector) }},
+		{ScopeRecall, "[recall.extract]", func() error { return resolveRecallExtractSecrets(&c.Recall.Extract) }},
+		{ScopeInsights, "[insights]", func() error { return resolveInsightsSecrets(&c.Insights) }},
+		{ScopeServer, "[image_text]", c.ImageText.Validate},
 		{ScopeServer, "[friction]", c.Friction.Validate},
+		{ScopeServer, "[kata]", func() error { return resolveKataSecrets(&c.Kata) }},
 		{ScopePG, "[pg]", func() error { return c.pgConfigErr }},
 		{ScopeClickHouse, "[clickhouse]", func() error { return c.clickHouseConfigErr }},
+		{ScopeDocbank, "[integrations.docbank]", func() error { return resolveDocbankSecrets(&c.Integrations.Docbank) }},
 	} {
 		if err := c.validateSection(section.scope, section.name, section.validate); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (c *Config) validateDaemonIdleTimeout() error {
+	if c.DaemonIdleTimeout < 0 {
+		return fmt.Errorf("invalid daemon_idle_timeout: %s", c.DaemonIdleTimeout)
+	}
+	return nil
+}
+
+func (c *Config) validateSyncIdleAfter() error {
+	if c.SyncIdleAfter < 0 {
+		return fmt.Errorf("invalid sync_idle_after: %s", c.SyncIdleAfter)
+	}
+	return nil
+}
+
+// ResolvedPublicURL validates public_url as the server does and returns it
+// normalized. A command that loads only local settings, where an invalid
+// value is just a warning, calls it before putting the URL into content
+// that leaves the machine.
+func (c Config) ResolvedPublicURL() (string, error) {
+	value, err := resolvePublicURL(c.PublicURL, c.Proxy)
+	if err != nil {
+		return "", fmt.Errorf("invalid public url: %w", err)
+	}
+	return value, nil
 }
 
 func (c *Config) resolvePublicConfig() error {

@@ -40,9 +40,22 @@ type Sync struct {
 	// snapshot syncUsagePrices loaded.
 	pricer *usagePricer
 
+	// genAI is the parsed GenAI pricing row of the document the mirror held
+	// at this Sync's last pricing sync. The pricer uses it instead of reading
+	// the document back, and repeated pushes reuse it until the document
+	// changes.
+	genAI *genAIPricingCache
+
 	// fullRunRecorded reports that the current push recorded its full push
 	// run, so a later failure can resume it.
 	fullRunRecorded bool
+
+	// usageWritten reports that the current push wrote or deleted usage
+	// snapshots, wrote or dropped price records, or wrote the pricing
+	// digest: the inputs of the prepared usage stamp. A push that changed
+	// none of them skips the prepared usage check; see
+	// preparedUsageRebuildDue.
+	usageWritten bool
 
 	// unownedPruned records that this Sync already removed this machine's
 	// mirror sessions without an archive id that the archive no longer
@@ -54,6 +67,10 @@ type Sync struct {
 	// vectorBatchSessions overrides the vector flush session bound when
 	// positive; tests lower it to cover several flushes in one push.
 	vectorBatchSessions int
+	// vectorFlushKeysBytes overrides the bound on a vector flush DELETE's
+	// key parameters when positive; tests set it to split flushes over the
+	// native protocol too.
+	vectorFlushKeysBytes int
 
 	closeOnce sync.Once
 	closeErr  error
@@ -155,7 +172,7 @@ func (s *Sync) Close() error {
 func (s *Sync) Push(
 	ctx context.Context, full bool, onProgress func(storage.PushProgress),
 ) (storage.PushResult, error) {
-	return s.PushWithOptions(ctx, storage.PushOptions{Full: full}, onProgress)
+	return s.PushWithOptions(ctx, storage.PushOptions{Full: full, RewriteUnchanged: full}, onProgress)
 }
 
 func (s *Sync) isFiltered() bool {

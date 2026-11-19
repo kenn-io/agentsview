@@ -65,11 +65,56 @@ func (c *cancelAfterNextErrContext) Err() error {
 
 func newCurrentProtocolServer(t *testing.T, handler http.Handler) *httptest.Server {
 	t.Helper()
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return httptest.NewServer(currentProtocolHandler(t, handler))
+}
+
+// currentProtocolHandler answers as a current remote-sync daemon and asserts
+// that each remote-sync request carries the protocol header. Any process on
+// the host can connect to an httptest port. In CI, agentsview's startup probe
+// from another test package lost a port race and reached one of these
+// servers. The client under test calls only remote-sync endpoints, so other
+// paths get a 404 without failing the test.
+func currentProtocolHandler(t assert.TestingT, handler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/v1/remote-sync/") {
+			http.NotFound(w, r)
+			return
+		}
 		assert.Equal(t, strconv.Itoa(ProtocolVersion), r.Header.Get(ProtocolHeader))
 		SetProtocolHeader(w.Header())
 		handler.ServeHTTP(w, r)
-	}))
+	})
+}
+
+// failureRecorder collects assertion failures so a test can check whether a
+// helper reports one.
+type failureRecorder struct {
+	failures []string
+}
+
+func (r *failureRecorder) Errorf(format string, args ...any) {
+	r.failures = append(r.failures, fmt.Sprintf(format, args...))
+}
+
+func TestCurrentProtocolHandlerChecksOnlyRemoteSyncRequests(t *testing.T) {
+	served := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	serve := func(path string) (*failureRecorder, *httptest.ResponseRecorder) {
+		failures := &failureRecorder{}
+		response := httptest.NewRecorder()
+		currentProtocolHandler(failures, served).ServeHTTP(response,
+			httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil))
+		return failures, response
+	}
+
+	foreign, response := serve("/_agentsview/startup")
+	assert.Equal(t, http.StatusNotFound, response.Code)
+	assert.Empty(t, foreign.failures, "a probe from another process must not fail the test")
+
+	unversioned, response := serve("/api/v1/remote-sync/targets")
+	assert.Equal(t, http.StatusNoContent, response.Code)
+	assert.NotEmpty(t, unversioned.failures, "a remote-sync request without the protocol header must fail the test")
 }
 
 func TestHTTPSyncRejectsRemoteWithoutProtocolHandshake(t *testing.T) {
@@ -955,7 +1000,13 @@ type mirrorTestRemote struct {
 	onManifest        func() // called before serving a manifest response
 	onManifestRequest func(*http.Request)
 	rejectDelta       bool
-	ts                *httptest.Server
+	// serveManifest and serveArchive, when set, replace the default
+	// response for that endpoint. Set them before any request: the server
+	// is already accepting connections, so swapping ts.Config.Handler
+	// instead races with a request from another process.
+	serveManifest http.HandlerFunc
+	serveArchive  http.HandlerFunc
+	ts            *httptest.Server
 }
 
 func newMirrorTestRemote(t *testing.T) *mirrorTestRemote {
@@ -975,6 +1026,10 @@ func newMirrorTestRemote(t *testing.T) *mirrorTestRemote {
 				return
 			}
 		case "/api/v1/remote-sync/manifest":
+			if remote.serveManifest != nil {
+				remote.serveManifest(w, r)
+				return
+			}
 			if remote.onManifest != nil {
 				remote.onManifest()
 			}
@@ -1015,6 +1070,10 @@ func newMirrorTestRemote(t *testing.T) *mirrorTestRemote {
 				return
 			}
 		case "/api/v1/remote-sync/archive":
+			if remote.serveArchive != nil {
+				remote.serveArchive(w, r)
+				return
+			}
 			var req ArchiveRequest
 			if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) {
 				return
@@ -1450,8 +1509,8 @@ func TestHTTPUnchangedMirrorImportsIntoNewDatabaseGeneration(t *testing.T) {
 	replacement, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "replacement.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, replacement.Close()) })
-	require.NoError(t, replacement.CopySyncStateFrom(database.Path()))
-	require.NoError(t, replacement.CopySessionMetadataFrom(database.Path()))
+	require.NoError(t, replacement.CopySyncStateFrom(t.Context(), database.Path()))
+	require.NoError(t, replacement.CopySessionMetadataFrom(t.Context(), database.Path()))
 	hs.DB = replacement
 
 	second, err := hs.Run(t.Context())
@@ -1465,6 +1524,25 @@ func TestHTTPUnchangedMirrorImportsIntoNewDatabaseGeneration(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.Equal(t, "generation refresh", messages[0].Content)
+}
+
+func TestHTTPCompatibilityVersionDoesNotForceFullImport(t *testing.T) {
+	remote := newMirrorTestRemote(t)
+	remote.writeSession(t, "session.jsonl", time.Date(2026, 8, 14, 10, 0, 0, 0, time.UTC), "unchanged")
+	database, hs := newMirrorSync(t, remote, t.TempDir())
+	_, err := hs.Run(t.Context())
+	require.NoError(t, err)
+	require.NoError(t, database.SetRemoteImportDataVersion(t.Context(), hs.Host, db.ImageTextDataVersion-1))
+	prepared, err := hs.Prepare(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, prepared.Close()) })
+	require.NotNil(t, prepared.mirrorImport)
+	if db.ScopedDataVersionProviders(db.ImageTextDataVersion-1, db.CurrentDataVersion()) == nil {
+		t.Skip("a later data version requires a full rebuild")
+	}
+	assert.Empty(t, prepared.mirrorImport.fullReason)
+	assert.False(t, prepared.mirrorImport.journal.FullImport)
+	assert.False(t, prepared.mirrorImport.pending.Stats.PruneHostWideScope)
 }
 
 func TestHTTPMirrorJournalFlipFailureRetainsArmedWork(t *testing.T) {

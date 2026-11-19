@@ -24,12 +24,9 @@ export async function clickNavTab(page: Page, label: string): Promise<void> {
 
 /** Assert `label` is the active TopBar destination in either nav mode. */
 export async function expectActiveNavTab(page: Page, label: string): Promise<void> {
-  const activeTab = page.locator(".kit-top-bar__tabs .kit-top-bar__tab.active", { hasText: label });
+  const activeTab = page.locator(".kit-top-bar__tabs .kit-top-bar__tab.active");
   const value = page.locator(".kit-top-bar__nav-select .kit-select-dropdown__value");
-  await expect(activeTab.or(value)).toBeVisible();
-  if (await value.isVisible()) {
-    await expect(value).toHaveText(label);
-  } else {
-    await expect(activeTab).toBeVisible();
-  }
+  // Resolve the current mode on every assertion poll. ResizeObserver can
+  // replace the tabs with the dropdown after a visibility snapshot.
+  await expect(activeTab.or(value).filter({ visible: true })).toHaveText(label);
 }

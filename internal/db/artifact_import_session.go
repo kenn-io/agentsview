@@ -72,7 +72,10 @@ func (db *DB) applyArtifactImportedSession(
 			"artifact imported session write does not match provenance",
 		)
 	}
-	write = sanitizeSessionBatchWrite(write)
+	write, err := sanitizeSessionBatchWriteContext(ctx, write)
+	if err != nil {
+		return result, err
+	}
 	write.Messages = db.projectSessionBatchMessages(write)
 	write.Session, write.Messages = db.sessionAndMessagesForStorage(
 		write.Session, write.Messages,
@@ -143,6 +146,11 @@ func (db *DB) applyArtifactImportedSession(
 		return result, err
 	}
 	if result.Written {
+		if write.ReplaceMessages {
+			if err := clearCodexForkSummaryParticipantsTx(ctx, tx, write.Session.ID); err != nil {
+				return ArtifactImportedSessionResult{}, err
+			}
+		}
 		if _, err := linkSubagentSessionsForSessionsTx(ctx, tx, []string{write.Session.ID}); err != nil {
 			return ArtifactImportedSessionResult{}, err
 		}

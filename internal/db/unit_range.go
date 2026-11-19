@@ -58,7 +58,7 @@ type UnitBoundsQuerier interface {
 // SubordinateSession reports the session-level subordinate classification
 // (subagent/fork-typed, or parent-linked non-continuation). Exported
 // wrapper over the existing isSubordinateSession logic so the PG and
-// DuckDB packages compute the same subordinate flag.
+// ClickHouse packages compute the same subordinate flag.
 func SubordinateSession(relationshipType, parentSessionID string) bool {
 	return isSubordinateSession(relationshipType, sql.NullString{
 		String: parentSessionID, Valid: parentSessionID != "",

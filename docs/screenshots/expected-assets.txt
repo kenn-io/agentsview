@@ -21,6 +21,7 @@ screenshots/data-workspace.png
 screenshots/date-range.png
 screenshots/focused-transcript.png
 screenshots/follow-latest-toggle.png
+screenshots/friction-log.png
 screenshots/grade-badge.png
 screenshots/heatmap-filtered.png
 screenshots/heatmap.png

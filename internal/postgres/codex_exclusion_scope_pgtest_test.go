@@ -11,12 +11,12 @@ import (
 )
 
 func TestCodexLegacyExclusionsSurvivePageSplit(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	const schema = "agentsview_codex_exclusion_test"
 	pgURL := testPGURL(t)
 	cleanNamedPGSchema(t, pgURL, schema)
-	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
-	pg, err := Open(pgURL, schema, true)
+	pg, err := Open(t.Context(), pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, pg.Close()) })
 	// Start with the shipped exclusion table, before per-file Codex identities.

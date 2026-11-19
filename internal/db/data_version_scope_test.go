@@ -29,6 +29,45 @@ func TestAntigravityCLIPromptEnvelopeUpgradeScopes(t *testing.T) {
 		ScopedDataVersionProviders(158, 160))
 }
 
+func TestCommitLinkUpgradeScope(t *testing.T) {
+	d := testDB(t)
+	for _, agent := range []string{"codex", "claude"} {
+		insertSession(t, d, agent, "project", func(s *Session) { s.Agent = agent })
+		require.NoError(t, d.SetSessionDataVersion(t.Context(), agent, 169))
+	}
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		if err := writeUserVersion(t.Context(), tx, 169); err != nil {
+			return err
+		}
+		return advanceDataVersion(t.Context(), tx, 170)
+	}))
+	assert.Equal(t, 169, d.GetSessionDataVersion(t.Context(), "codex"))
+	assert.Equal(t, 170, d.GetSessionDataVersion(t.Context(), "claude"))
+}
+
+func TestImageTextCompatibilityVersion(t *testing.T) {
+	require.Equal(t, 173, ImageTextDataVersion)
+	require.ElementsMatch(t, []parser.AgentType{parser.AgentClaude, parser.AgentCowork, parser.AgentQoder, parser.AgentIcodemate}, ScopedDataVersionProviders(170, 171))
+	require.ElementsMatch(t, []parser.AgentType{parser.AgentCursorIDE}, ScopedDataVersionProviders(171, 172))
+	providers := ScopedDataVersionProviders(172, ImageTextDataVersion)
+	require.NotNil(t, providers)
+	require.Empty(t, providers)
+	d := testDB(t)
+	for _, id := range []string{"complete", "retry"} {
+		insertSession(t, d, id, "project", func(s *Session) { s.Agent = "codex" })
+	}
+	require.NoError(t, d.SetSessionDataVersion(t.Context(), "complete", 172))
+	require.NoError(t, d.SetSessionDataVersion(t.Context(), "retry", 171))
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		if err := writeUserVersion(t.Context(), tx, 172); err != nil {
+			return err
+		}
+		return advanceDataVersion(t.Context(), tx, ImageTextDataVersion)
+	}))
+	assert.Equal(t, ImageTextDataVersion, d.GetSessionDataVersion(t.Context(), "complete"))
+	assert.Equal(t, 171, d.GetSessionDataVersion(t.Context(), "retry"))
+}
+
 // Version 134 reshapes Codex session IDs, so it must rebuild every provider.
 func TestCodexLegacyPageVersionRebuildsEveryProvider(t *testing.T) {
 	assert.Nil(t, ScopedDataVersionProviders(133, 134))
@@ -76,11 +115,6 @@ func TestValidateDataVersionScopes(t *testing.T) {
 				dataVersion + 1: {parser.AgentHermes},
 			},
 			wantErr: "declare only versions",
-		},
-		{
-			name:    "empty declaration",
-			scopes:  map[int][]parser.AgentType{dataVersion: {}},
-			wantErr: "lists no providers",
 		},
 		{
 			name:    "stored alias",

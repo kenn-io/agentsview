@@ -17,7 +17,7 @@ jobs:
     name: CI gate
     needs: run
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-linux-1cpu
     steps:
       - name: Require successful CI
         if: needs.run.result != 'success'

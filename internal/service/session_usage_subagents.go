@@ -608,8 +608,8 @@ func combineSubagentUsageFromSessions(
 	if err != nil {
 		return nil, err
 	}
-	combined := newSessionUsageAccumulator(ctx, out, len(root.Breakdown))
-	if err := combined.add(root, ""); err != nil {
+	combined := newSessionUsageAccumulator(out, len(root.Breakdown))
+	if err := combined.add(ctx, root, ""); err != nil {
 		return nil, err
 	}
 	allSessionsHaveTokens := root.HasTokenData
@@ -636,7 +636,7 @@ func combineSubagentUsageFromSessions(
 		) && (usage == nil || usage.BreakdownCount == 0) {
 			breakdownComplete = false
 		}
-		if err := combined.add(usage, descendant.ID); err != nil {
+		if err := combined.add(ctx, usage, descendant.ID); err != nil {
 			return nil, err
 		}
 	}
@@ -673,7 +673,6 @@ func sessionHasPositiveTokens(outputTokens, peakContextTokens int) bool {
 }
 
 type sessionUsageAccumulator struct {
-	ctx             context.Context
 	out             *db.SessionUsage
 	models          map[string]struct{}
 	unpriced        map[string]struct{}
@@ -686,32 +685,32 @@ type sessionUsageAccumulator struct {
 }
 
 func newSessionUsageAccumulator(
-	ctx context.Context, out *db.SessionUsage, breakdownSize int,
+	out *db.SessionUsage, breakdownSize int,
 ) *sessionUsageAccumulator {
 	return &sessionUsageAccumulator{
-		ctx: ctx, out: out, models: make(map[string]struct{}),
+		out: out, models: make(map[string]struct{}),
 		unpriced: make(map[string]struct{}), allPriced: true,
 		breakdown: make([]db.SessionUsageBreakdownEntry, 0, breakdownSize),
 	}
 }
 
 func (combined *sessionUsageAccumulator) add(
-	usage *db.SessionUsage, subagentID string,
+	ctx context.Context, usage *db.SessionUsage, subagentID string,
 ) error {
-	if err := combined.ctx.Err(); err != nil || usage == nil {
+	if err := ctx.Err(); err != nil || usage == nil {
 		return err
 	}
 	if usage.HasTokenData && !usage.HasCost {
 		combined.allPriced = false
 	}
 	for _, model := range usage.Models {
-		if err := combined.ctx.Err(); err != nil {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		combined.models[model] = struct{}{}
 	}
 	for _, model := range usage.UnpricedModels {
-		if err := combined.ctx.Err(); err != nil {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		combined.unpriced[model] = struct{}{}
@@ -732,7 +731,7 @@ func (combined *sessionUsageAccumulator) add(
 	}
 	combined.out.BreakdownCount += usage.BreakdownCount
 	for _, entry := range usage.Breakdown {
-		if err := combined.ctx.Err(); err != nil {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 		entry.Ordinal = len(combined.breakdown) + 1
@@ -768,6 +767,9 @@ func newCombinedSessionUsage(
 		// usage, so the root's figures describe the combined result.
 		// withDescendantCoverage adds the descendants' capture coverage.
 		PlanUsage: root.PlanUsage,
+		// The agent's own session total keeps its subagent scope, so it
+		// stays the root's figure in the combined result.
+		SessionTotal: root.SessionTotal,
 	}
 	for _, descendant := range descendants {
 		if err := ctx.Err(); err != nil {
@@ -819,6 +821,10 @@ func usageRowBreakdownEntry(
 		WebSearchRequests:        row.WebSearchRequests,
 		Cost:                     cost,
 		HasCost:                  priced,
+		RecordedCost:             row.RecordedCost,
+		// A recorded cost prices a row only as its reported cost.
+		RecordedCostPriced: row.RecordedCost != nil &&
+			row.CostSource == export.CostSourceReported,
 	}
 	sourceSessionID := usageRowSourceSessionID(row)
 	if sourceSessionID != rootID {

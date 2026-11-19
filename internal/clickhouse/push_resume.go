@@ -40,6 +40,10 @@ type fullPushRun struct {
 	// stored cutoff, which only a full push writes back, so this run stays
 	// pending until it ends without errors.
 	MustFinish bool `json:"must_finish,omitempty"`
+	// RewriteAll reports that the run rewrites every session, not only the
+	// ones whose mirror rows differ. Such a run counts a session as done
+	// only when it wrote the session itself, so its record must say so.
+	RewriteAll bool `json:"rewrite_all,omitempty"`
 }
 
 func (r fullPushRun) encode() (string, error) {
@@ -85,7 +89,7 @@ func (s *Sync) pendingFullPushRun(stored, databaseID string) (run fullPushRun, p
 		return fullPushRun{Reason: "unfinished full push"}, true, false
 	}
 	current := s.newFullPushRun(run.Version, databaseID, run.Reason)
-	current.Errored, current.MustFinish = run.Errored, run.MustFinish
+	current.Errored, current.MustFinish, current.RewriteAll = run.Errored, run.MustFinish, run.RewriteAll
 	if run.Version == 0 || run != current {
 		log.Printf("clickhouse push: starting over instead of resuming the unfinished full push (%s) because the archive, scope, or format changed since it began",
 			run.Reason)

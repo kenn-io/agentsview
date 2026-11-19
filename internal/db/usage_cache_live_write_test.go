@@ -46,7 +46,7 @@ func appendLiveWriteMessage(
 
 func liveWriteDailyInput(t *testing.T, database *DB, project string) int {
 	t.Helper()
-	daily, err := database.GetDailyUsage(t.Context(), UsageFilter{
+	daily, err := database.getDailyUsageUncached(t.Context(), UsageFilter{
 		From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
 		Project: project, SkipSessionCounts: true,
 	})
@@ -91,6 +91,10 @@ func TestUsageSummarySurvivesArchiveWriteDuringRollupBuild(t *testing.T) {
 			require.NoError(t, err)
 			cache, err := database.usageCache.Generation(
 				t.Context(), snapshot.DatabaseID)
+			require.NoError(t, err)
+			// Keep the filled facts, but force the next request to build rollups.
+			_, err = cache.db.ExecContext(t.Context(),
+				`DELETE FROM usage_rollup_installs WHERE session_id = 'reported'`)
 			require.NoError(t, err)
 			var written atomic.Bool
 			cache.rollup.observer.beforeEnsure = func() {
@@ -226,6 +230,19 @@ func TestUsageNotificationLeavesCursorRollupForRequest(t *testing.T) {
 	daily, err := database.GetDailyUsage(t.Context(), UsageFilter{Timezone: "UTC"})
 	require.NoError(t, err)
 	assert.Equal(t, 1011, daily.Totals.InputTokens)
+}
+
+func TestUsageNotificationDeletesSessionAfterReset(t *testing.T) {
+	database, cache := usageSpoolExtractionFixture(t, 2)
+	require.NoError(t, cache.resetRewoundUsage(t.Context(), 0))
+	snapshot, err := database.captureUsageQuery(t.Context(), UsageFilter{}, usageQueryKindToken)
+	require.NoError(t, err)
+	_, err = cache.fill.Ensure(t.Context(), snapshot.Versions, 0)
+	require.NoError(t, err)
+	require.Equal(t, 1, usageCacheCount(t, cache, "usage_cached_sessions"))
+	require.NoError(t, database.SoftDeleteSession(t.Context(), "session"))
+	cache.fill.processNotificationBatch(map[string]bool{"session": true}, false)
+	require.Zero(t, usageCacheCount(t, cache, "usage_cached_sessions"))
 }
 
 func TestUsageNotificationRequeuesPeersWhenChannelFull(t *testing.T) {
@@ -489,4 +506,37 @@ func TestUsageTimezoneRecencyBreaksStampTies(t *testing.T) {
 				"equal stamps did not favor the zone requested last")
 		})
 	}
+}
+
+// A resync bulk load suspends the usage generation insert trigger. Usage
+// cached before the load must not let a message inserted before the cached
+// tail during the load be skipped as an append, and the restored trigger must
+// keep catching such inserts afterwards.
+func TestBulkImportRestoresUsageGenerationInvalidation(t *testing.T) {
+	database := testDB(t)
+	const day = "2026-08-10T09:00:00Z"
+	seedLiveWriteSession(t, database, "session", "project", day, 0, 10)
+	appendLiveWriteMessage(t, database, "session", day, 4, 7)
+	require.Equal(t, 17, liveWriteDailyInput(t, database, "project"))
+
+	require.NoError(t, database.DropBulkImportIndexes(t.Context()))
+	appendLiveWriteMessage(t, database, "session", day, 2, 5)
+	seedLiveWriteSession(t, database, "loaded", "project", day, 0, 3)
+	require.NoError(t, database.RebuildBulkImportIndexes(t.Context()))
+
+	// Append reuse needs a generation; a session created during the load has
+	// none until the rebuild assigns one. Check before any later insert, whose
+	// restored trigger would assign one itself.
+	var missing int
+	require.NoError(t, database.getReader().QueryRow(t.Context(),
+		`SELECT count(*) FROM sessions WHERE usage_generation IS NULL`,
+	).Scan(&missing))
+	assert.Zero(t, missing)
+
+	assert.Equal(t, 25, liveWriteDailyInput(t, database, "project"))
+
+	appendLiveWriteMessage(t, database, "session", day, 1, 11)
+	assert.Equal(t, 36, liveWriteDailyInput(t, database, "project"))
+	appendLiveWriteMessage(t, database, "loaded", day, 1, 13)
+	assert.Equal(t, 49, liveWriteDailyInput(t, database, "project"))
 }

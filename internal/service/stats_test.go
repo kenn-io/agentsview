@@ -41,6 +41,7 @@ func TestHTTPBackendStats(t *testing.T) {
 		IncludeProjects:       []string{"alpha"},
 		ExcludeProjects:       []string{"beta"},
 		Timezone:              "UTC",
+		OutcomesOnly:          true,
 		IncludeGitOutcomes:    true,
 		IncludeGitHubOutcomes: true,
 	})
@@ -56,6 +57,7 @@ func TestHTTPBackendStats(t *testing.T) {
 	assert.Equal(t, "alpha", gotQuery.Get("include_project"))
 	assert.Equal(t, "beta", gotQuery.Get("exclude_project"))
 	assert.Equal(t, "UTC", gotQuery.Get("timezone"))
+	assert.Equal(t, "true", gotQuery.Get("outcomes_only"))
 	assert.Equal(t, "true", gotQuery.Get("include_git_outcomes"))
 	assert.Equal(t, "true", gotQuery.Get("include_github_outcomes"))
 	assert.Equal(t, 7, stats.Totals.SessionsAll)

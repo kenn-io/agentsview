@@ -22,6 +22,13 @@ const LEGACY_GOAL_CONTEXT_PREFIX = "<goal_context>";
 const CODEX_INTERNAL_CONTEXT_TAG_PREFIX = "<codex_internal_context";
 const GOAL_CONTEXT_SOURCE_ATTR_RE = /(?:^|\s)source="goal"(?:\s|\/|$)/;
 
+export const HOOK_SUBTYPES = new Set([
+  "hook_success",
+  "hook_additional_context",
+  "hook_cancelled",
+  "stop_hook_summary",
+]);
+
 // Subtypes the Claude parser promotes into visible system messages
 // that the SPA renders via SystemBoundaryCard. These must pass
 // through the MessageList filter even though is_system=true.
@@ -32,6 +39,7 @@ const VISIBLE_SYSTEM_SUBTYPES = new Set([
   "task_notification",
   "stop_hook",
   "peer_message",
+  ...HOOK_SUBTYPES,
 ]);
 
 /**
@@ -46,6 +54,16 @@ export function isSystemBoundaryMessage(m: Message): m is Message & { source_sub
   return !!m.source_subtype && m.source_subtype !== "compact_boundary";
 }
 
+/** Reports whether the message carries imported hook output. */
+export function isHookSuccessMessage(m: Message): boolean {
+  return (
+    m.is_system === true &&
+    !!m.source_subtype &&
+    HOOK_SUBTYPES.has(m.source_subtype) &&
+    m.source_type === (m.source_subtype === "stop_hook_summary" ? "system" : "attachment")
+  );
+}
+
 /**
  * Returns true if the message is system-injected and should be
  * hidden from the UI. Checks the backend is_system flag first,
@@ -55,7 +73,8 @@ export function isSystemBoundaryMessage(m: Message): m is Message & { source_sub
  * (continuation, resume, interrupted, task_notification, stop_hook,
  * peer_message)
  * are system-flagged but rendered as dividers/cards, so they are
- * kept visible here.
+ * kept visible here. Hook output rows are system-flagged too and are
+ * rendered as their own card, so they stay visible as well.
  */
 export function isSystemMessage(m: Message): boolean {
   if (m.is_compact_boundary) return false;
@@ -164,6 +183,22 @@ export function previewMessage(text: string | null | undefined): MessagePreview 
     return { text: originalOut, isShell: originalIsShell };
   }
   return { text: out, isShell };
+}
+
+// Claude Code stores a shell shortcut's output as its own user row that
+// opens with its stdout or stderr block.
+const SHELL_OUTPUT_START_RE = /^\s*<bash-(?:stdout|stderr)>/;
+
+/**
+ * Reports whether a message is a prompt someone typed: not injected
+ * context, tool output stored on the user role, shell output, or a
+ * boundary card.
+ */
+export function isPromptMessage(m: Message): boolean {
+  if (m.role !== "user" || m.is_compact_boundary || m.is_system) return false;
+  if (m.source_subtype === "tool_result") return false;
+  if (SHELL_OUTPUT_START_RE.test(stripLeadingReminderEnvelopes(m.content))) return false;
+  return !isSystemMessage(m) && !isSystemBoundaryMessage(m);
 }
 
 /** Plain-text variant of `previewMessage` for non-visual callers

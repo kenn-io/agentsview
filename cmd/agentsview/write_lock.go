@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/gofrs/flock"
+
+	"go.kenn.io/agentsview/internal/config"
 )
 
 const writeOwnerLockFile = "db.write.lock"
@@ -120,4 +123,21 @@ func (e writeOwnerLockHeldError) Error() string {
 			"finish or stop it",
 		e.path, e.path,
 	)
+}
+
+// waitForStoppedDaemonWriter waits for the database lock after process exit.
+// Windows releases a killed process's file locks asynchronously, so observing
+// its exit status alone does not make the archive ready for a replacement.
+// See https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfileex.
+func waitForStoppedDaemonWriter(ctx context.Context, cfg config.Config) error {
+	ctx, cancel := context.WithTimeout(ctx, serveStopGraceTimeout)
+	defer cancel()
+	path := writeOwnerLockPath(writeLockDataDir(cfg))
+	lock := flock.New(path)
+	// The lock library waits for actual ownership, with cancellation between probes.
+	_, err := lock.TryLockContext(ctx, 25*time.Millisecond)
+	if err != nil {
+		return fmt.Errorf("waiting for stopped daemon to release write lock %s: %w", path, err)
+	}
+	return lock.Unlock()
 }
