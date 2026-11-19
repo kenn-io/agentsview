@@ -2899,8 +2899,8 @@ func (s *Store) populateFrustrationMarkers(
 			return remaining
 		}
 		ids = load(ids)
-		if len(ids) > 0 && s.joinFrustrationFill(ctx, ids, generation) {
-			ids = load(reuse(ids))
+		if len(ids) > 0 && s.joinFrustrationFill(ctx, ids) {
+			ids = load(ids)
 		}
 		if len(ids) == 0 {
 			return nil

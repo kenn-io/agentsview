@@ -3,24 +3,19 @@ package postgres
 import (
 	"context"
 	"errors"
+	"log"
 	"slices"
 	"sync"
 	"time"
-
-	"go.kenn.io/agentsview/internal/poller"
 )
 
 // Bound a slow chunk so later chunks can still be prepared.
 var frustrationFillChunkTimeout = 30 * time.Second
 
 type frustrationChunk struct {
-	ids       []string
-	scanned   chan struct{}
-	done      chan struct{}
-	isScanned bool
-	complete  bool
-	counts    map[string]int
-	versions  map[string]string
+	ids      []string
+	done     chan struct{}
+	complete bool
 }
 
 type frustrationFillState struct {
@@ -29,15 +24,7 @@ type frustrationFillState struct {
 	chunks  []*frustrationChunk
 }
 
-// markScanned wakes requests waiting for the chunk's counts. Callers hold mu.
-func (c *frustrationChunk) markScanned() {
-	if !c.isScanned {
-		c.isScanned = true
-		close(c.scanned)
-	}
-}
-
-// release drops a finished chunk's session IDs and results and wakes waiters.
+// release drops a finished chunk's session IDs and wakes waiters.
 func (state *frustrationFillState) release(chunk *frustrationChunk) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -47,16 +34,13 @@ func (state *frustrationFillState) release(chunk *frustrationChunk) {
 	for _, id := range chunk.ids {
 		delete(state.pending, id)
 	}
-	chunk.ids, chunk.counts, chunk.versions = nil, nil, nil
+	chunk.ids = nil
 	chunk.complete = true
-	chunk.markScanned()
 	close(chunk.done)
 }
 
-// joinFrustrationFill waits for the active chunks that hold ids. A request
-// that covers a whole chunk waits for its persistence. A filtered request
-// waits only for the scan and reuses the result through the memo.
-func (s *Store) joinFrustrationFill(ctx context.Context, ids []string, generation uint64) bool {
+// joinFrustrationFill waits only for chunks fully covered by the request.
+func (s *Store) joinFrustrationFill(ctx context.Context, ids []string) bool {
 	state := &s.runtimeState().frustrationFill
 	state.mu.Lock()
 	wanted := make(map[*frustrationChunk]int)
@@ -68,8 +52,13 @@ func (s *Store) joinFrustrationFill(ctx context.Context, ids []string, generatio
 		}
 		wanted[chunk]++
 	}
-	var waits []*frustrationChunk
-	filtered := make(map[*frustrationChunk]bool)
+	for chunk, count := range wanted {
+		if count != len(chunk.ids) {
+			state.mu.Unlock()
+			return false
+		}
+	}
+	var waits []<-chan struct{}
 	for _, chunk := range state.chunks {
 		if chunk.complete {
 			continue
@@ -78,8 +67,7 @@ func (s *Store) joinFrustrationFill(ctx context.Context, ids []string, generatio
 			state.mu.Unlock()
 			return false
 		}
-		filtered[chunk] = wanted[chunk] < len(chunk.ids)
-		waits = append(waits, chunk)
+		waits = append(waits, chunk.done)
 		if len(waits) == len(wanted) {
 			break
 		}
@@ -92,42 +80,14 @@ func (s *Store) joinFrustrationFill(ctx context.Context, ids []string, generatio
 		waitCtx, cancel = context.WithTimeout(ctx, time.Until(deadline)/2)
 		defer cancel()
 	}
-	for _, chunk := range waits {
-		wait := chunk.done
-		if filtered[chunk] {
-			wait = chunk.scanned
-		}
+	for _, wait := range waits {
 		select {
 		case <-waitCtx.Done():
 			return true
 		case <-wait:
 		}
-		if filtered[chunk] {
-			state.mu.Lock()
-			for id, version := range chunk.versions {
-				s.runtimeState().frustrationMarkers.Store(generation, id, version, chunk.counts[id])
-			}
-			state.mu.Unlock()
-		}
 	}
 	return true
-}
-
-// fillFrustrationChunk publishes a chunk's scan for filtered requests, then
-// persists it.
-func (s *Store) fillFrustrationChunk(ctx context.Context, chunk *frustrationChunk, column string) error {
-	state := &s.runtimeState().frustrationFill
-	counts, versions, err := s.scanFrustrationCounts(ctx, chunk.ids, column)
-	state.mu.Lock()
-	if err == nil {
-		chunk.counts, chunk.versions = counts, versions
-	}
-	chunk.markScanned()
-	state.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	return s.storeFrustrationCounts(ctx, versions, counts, column)
 }
 
 func (s *Store) fillFrustrationCounts(ctx context.Context, ids []string, column string) error {
@@ -138,7 +98,7 @@ func (s *Store) fillFrustrationCounts(ctx context.Context, ids []string, column 
 	}
 	state.chunks = nil
 	for ids := range slices.Chunk(ids, maxPGVars) {
-		chunk := &frustrationChunk{ids: ids, scanned: make(chan struct{}), done: make(chan struct{})}
+		chunk := &frustrationChunk{ids: ids, done: make(chan struct{})}
 		state.chunks = append(state.chunks, chunk)
 		for _, id := range ids {
 			state.pending[id] = chunk
@@ -154,7 +114,10 @@ func (s *Store) fillFrustrationCounts(ctx context.Context, ids []string, column 
 	var timedOut bool
 	for _, chunk := range chunks {
 		chunkCtx, cancel := context.WithTimeout(ctx, frustrationFillChunkTimeout)
-		err := s.fillFrustrationChunk(chunkCtx, chunk, column)
+		counts, versions, err := s.scanFrustrationCounts(chunkCtx, chunk.ids, column)
+		if err == nil {
+			err = s.storeFrustrationCounts(chunkCtx, versions, counts, column)
+		}
 		cancel()
 		state.release(chunk)
 		if err != nil {
@@ -173,55 +136,41 @@ func (s *Store) fillFrustrationCounts(ctx context.Context, ids []string, column 
 	return nil
 }
 
-// StartFrustrationFill prepares counts for writable replicas until stopped.
+// StartFrustrationFill prepares stale counts after the launch Usage warm-up.
 func (s *Store) StartFrustrationFill(ctx context.Context) func() {
 	if s.DB() == nil || s.readTx != nil || s.hostedRelations {
 		return func() {}
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	var revision int64
-	var oid uint32
-	scheduler := poller.Start(ctx, poller.Job{Name: "frustration counts", Interval: 5 * time.Second, RunAtStart: true, Run: func(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if s.usageCache != nil {
+			if err := s.usageCache.WaitWarm(ctx); err != nil {
+				return
+			}
+		}
 		writable, err := s.canFillFrustrationCounts(ctx)
-		if err != nil || !writable {
-			return err
-		}
-		currentOID, err := usageJournalOID(ctx, s.pg)
-		if isUndefinedTable(err) || isInsufficientPrivilege(err) {
-			return nil
-		}
 		if err != nil {
-			return err
+			log.Printf("checking frustration count fill: %v", err)
+			return
 		}
-		var current int64
-		var changed []string
-		if currentOID != oid {
-			current, err = s.UsageChangeRevision(ctx)
-		} else {
-			current, changed, err = s.LoadUsageChanges(ctx, revision)
-		}
-		if err != nil || current == 0 {
-			return err
-		}
-		if currentOID != oid || current < revision {
-			changed = nil
-		} else if len(changed) == 0 {
-			revision, oid = current, currentOID
-			return nil
+		if !writable {
+			return
 		}
 		column, err := sessionVersionColumnPG(ctx, s.pg)
 		if err != nil {
-			return err
+			log.Printf("selecting frustration count version: %v", err)
+			return
 		}
-		ids, err := s.staleFrustrationSessions(ctx, column, changed)
+		ids, err := s.staleFrustrationSessions(ctx, column, nil)
 		if err != nil {
-			return err
+			log.Printf("selecting stale frustration counts: %v", err)
+			return
 		}
-		if err := s.fillFrustrationCounts(ctx, ids, column); err != nil {
-			return err
+		if err := s.fillFrustrationCounts(ctx, ids, column); err != nil && ctx.Err() == nil {
+			log.Printf("filling frustration counts: %v", err)
 		}
-		revision, oid = current, currentOID
-		return nil
-	}})
-	return func() { cancel(); scheduler.Wait() }
+	}()
+	return func() { cancel(); <-done }
 }

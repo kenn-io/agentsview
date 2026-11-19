@@ -139,6 +139,6 @@ func (s *Store) staleFrustrationSessions(ctx context.Context, versionColumn stri
 
 func (s *Store) canFillFrustrationCounts(ctx context.Context) (bool, error) {
 	var writable bool
-	err := s.pg.QueryRowContext(ctx, `SELECT COALESCE(NOT pg_is_in_recovery() AND has_table_privilege(to_regclass('session_frustration_counts'), 'SELECT') AND has_table_privilege(to_regclass('session_frustration_counts'), 'INSERT') AND has_table_privilege(to_regclass('session_frustration_counts'), 'UPDATE') AND has_table_privilege(to_regclass('usage_session_changes'), 'SELECT'), false)`).Scan(&writable)
+	err := s.pg.QueryRowContext(ctx, `SELECT COALESCE(NOT pg_is_in_recovery() AND has_table_privilege(to_regclass('session_frustration_counts'), 'SELECT') AND has_table_privilege(to_regclass('session_frustration_counts'), 'INSERT') AND has_table_privilege(to_regclass('session_frustration_counts'), 'UPDATE'), false)`).Scan(&writable)
 	return writable, err
 }
