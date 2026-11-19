@@ -167,16 +167,8 @@ func (s *Store) BuildActivityReportArtifacts(
 				return activity.CandidateArtifacts{}, err
 			}
 			if hit {
-				entries, ok := memo.Get(selection, version)
-				if ok {
-					entry := entries[0]
-					if entry.identity != identity || entry.identityUnavailable != unavailable {
-						entry.identity, entry.identityUnavailable = identity, unavailable
-						memo.Put(selection, version, []pgActivityKept{entry})
-					}
-					if identity != "" {
-						s.activityReports.Keep(selection, identity+"|"+version, func() ([]byte, error) { return encodePGActivityReport(entry) })
-					}
+				if entries, ok := memo.Get(selection, version); ok {
+					s.keepActivityReport(selection, version, entries[0], identity, unavailable)
 				}
 				activity.ReportProgress(onProgress, report.Done)
 				return report.Artifacts, nil

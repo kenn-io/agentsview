@@ -59,6 +59,24 @@ func (s *Store) saveActivityReport(selection, version string, entry pgActivityKe
 	}
 }
 
+// keepActivityReport records the identity a memo hit just resolved. A report
+// whose identity was already saved only refreshes its open time; one whose
+// identity just became available replaces the stale file saved under it.
+func (s *Store) keepActivityReport(selection, version string, entry pgActivityKept, identity string, unavailable bool) {
+	saved := entry.identity == identity
+	if !saved || entry.identityUnavailable != unavailable {
+		entry.identity, entry.identityUnavailable = identity, unavailable
+		s.runtimeState().activityKept.Put(selection, version, []pgActivityKept{entry})
+	}
+	switch {
+	case identity == "":
+	case saved:
+		s.activityReports.Keep(selection, identity+"|"+version, func() ([]byte, error) { return encodePGActivityReport(entry) })
+	default:
+		s.saveActivityReport(selection, version, entry)
+	}
+}
+
 func (s *Store) activityReportIdentity(ctx context.Context, selection, version string, q activity.Query) (identity string, unavailable bool) {
 	memo := &s.runtimeState().activityKept
 	entries, ok := memo.Get(selection, version)
