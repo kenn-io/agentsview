@@ -104,6 +104,12 @@ func TestPGActivityReportSavedRestart(t *testing.T) {
 				requirePGKeptEqual(t, want, got)
 				assert.Empty(t, reads.transcriptReads)
 				assert.Empty(t, reads.usageReads)
+				pgKeptSession(t, local, "b", "project-a", "2026-06-14")
+				pgKeptPush(t, syncer, false)
+				updated := pgKeptBuild(t, restarted, f, q, true)
+				assert.Len(t, updated.Sessions, 2)
+				assert.NotEmpty(t, reads.transcriptReads)
+				assert.NotEmpty(t, reads.usageReads)
 			} else {
 				assert.NotEmpty(t, reads.transcriptReads)
 				assert.NotEmpty(t, reads.usageReads)
