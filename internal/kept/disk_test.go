@@ -12,30 +12,50 @@ import (
 )
 
 func TestDiskEvictsLeastRecentlyOpened(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	disk := Disk{MaxFiles: 2}
-	require.NoError(t, disk.Open("test-usage", "mirror", 1024, 0))
-	disk.Put("first", "v1", []byte("one"))
-	disk.Put("second", "v1", []byte("two"))
-	old := time.Now().Add(-time.Hour)
-	require.NoError(t, os.Chtimes(disk.reports.disk.path("first"), old, old))
-	payload, ok := disk.Get("first", "v1")
-	require.True(t, ok)
-	require.Equal(t, "one", string(payload))
-	require.NoError(t, os.Chtimes(disk.reports.disk.path("second"), old, old))
-	disk.Put("third", "v1", []byte("six"))
-	_, ok = disk.Get("second", "v1")
-	require.False(t, ok)
-	require.NoError(t, os.Chtimes(disk.reports.disk.path("third"), old, old))
-	info, err := os.Stat(disk.reports.disk.path("first"))
-	require.NoError(t, err)
-	var trimmed Disk
-	require.NoError(t, trimmed.Open("test-usage", "mirror", 1024, info.Size()))
-	_, ok = trimmed.Get("third", "v1")
-	require.False(t, ok)
-	payload, ok = trimmed.Get("first", "v1")
-	require.True(t, ok)
-	require.Equal(t, "one", string(payload))
+	for _, limit := range []string{"files", "bytes"} {
+		t.Run(limit, func(t *testing.T) {
+			t.Setenv("CACHE_DIRECTORY", t.TempDir())
+			var initial Disk
+			require.NoError(t, initial.Open("test-usage", "mirror", 1024, 0))
+			require.True(t, initial.Put("first", "v1", []byte("one")))
+			require.True(t, initial.Put("second", "v1", []byte("two")))
+			info, err := os.Stat(initial.reports.disk.path("first"))
+			require.NoError(t, err)
+			var disk Disk
+			var maxBytes int64
+			if limit == "files" {
+				disk.MaxFiles = 2
+			} else {
+				maxBytes = 2 * info.Size()
+			}
+			require.NoError(t, disk.Open("test-usage", "mirror", 1024, maxBytes))
+			old := time.Now().Add(-time.Hour)
+			require.NoError(t, os.Chtimes(disk.reports.disk.path("first"), old, old))
+			payload, ok := disk.Get("first", "v1")
+			require.True(t, ok)
+			require.Equal(t, "one", string(payload))
+			require.NoError(t, os.Chtimes(disk.reports.disk.path("second"), old, old))
+			require.True(t, disk.Put("third", "v1", []byte("six")))
+			_, ok = disk.Get("second", "v1")
+			require.False(t, ok)
+			payload, ok = disk.Get("first", "v1")
+			require.True(t, ok)
+			require.Equal(t, "one", string(payload))
+			payload, ok = disk.Get("third", "v1")
+			require.True(t, ok)
+			require.Equal(t, "six", string(payload))
+			if limit == "bytes" {
+				require.NoError(t, os.Chtimes(disk.reports.disk.path("third"), old, old))
+				var trimmed Disk
+				require.NoError(t, trimmed.Open("test-usage", "mirror", 1024, info.Size()))
+				_, ok = trimmed.Get("third", "v1")
+				require.False(t, ok)
+				payload, ok = trimmed.Get("first", "v1")
+				require.True(t, ok)
+				require.Equal(t, "one", string(payload))
+			}
+		})
+	}
 }
 
 func TestDiskLimitsAndUnavailableDirectory(t *testing.T) {
