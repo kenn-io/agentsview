@@ -86,18 +86,27 @@ set +e
 status=$?
 set -e
 [[ $status == 7 ]]
-rg -q 'cleanup failed; scheduled cleanup will retry' "$tmp/error"
-rg -q -- '-p agentsview-test-123 .* up -d --wait postgres' "$DOCKER_LOG"
-rg -q -- '-p agentsview-test-123 .* down -v --remove-orphans' "$DOCKER_LOG"
+grep -qE 'cleanup failed; scheduled cleanup will retry' "$tmp/error"
+grep -qE -- '-p agentsview-test-123 .* up -d --wait postgres' "$DOCKER_LOG"
+grep -qE -- '-p agentsview-test-123 .* down -v --remove-orphans' "$DOCKER_LOG"
 [[ -f "$lease" ]]
 
+# Cleanup failure fails a successful test.
+set +e
+(cd "$root" && ./scripts/test-service-compose.sh postgres 5432 true) 2>"$tmp/cleanup-error"
+status=$?
+set -e
+[[ $status == 1 ]]
+grep -qE 'cleanup failed; scheduled cleanup will retry' "$tmp/cleanup-error"
+
 # The public targets invoke the lease wrapper; manual targets retain their project.
+export DOWN_STATUS=0
 (cd "$root" && make -n test-postgres test-clickhouse bench-pg-usage) > "$tmp/make"
-rg -q 'test-lease.sh agentsview .* postgres 5432 .*test-postgres-run' "$tmp/make"
-rg -q 'test-lease.sh agentsview .* clickhouse 9000 .*test-clickhouse-run' "$tmp/make"
-rg -q 'test-lease.sh agentsview .* postgres 5432 .*bench-pg-usage-run' "$tmp/make"
+grep -qE 'test-lease.sh agentsview .* postgres 5432 .*test-postgres-run' "$tmp/make"
+grep -qE 'test-lease.sh agentsview .* clickhouse 9000 .*test-clickhouse-run' "$tmp/make"
+grep -qE 'test-lease.sh agentsview .* postgres 5432 .*bench-pg-usage-run' "$tmp/make"
 (cd "$root" && make -n postgres-up clickhouse-up) > "$tmp/manual"
-if rg -q 'test-lease| -p ' "$tmp/manual"; then exit 1; fi
+if grep -qE 'test-lease| -p ' "$tmp/manual"; then exit 1; fi
 
 # A signal while Compose is starting still runs cleanup.
 : > "$DOCKER_LOG"
@@ -114,10 +123,11 @@ status=$?
 set -e
 launcher=
 [[ $status == 143 ]]
-rg -q -- '-p agentsview-test-123 .* down -v --remove-orphans' "$DOCKER_LOG"
+grep -qE -- '-p agentsview-test-123 .* down -v --remove-orphans' "$DOCKER_LOG"
 
 # Two overlapping runs select different projects and clean up their own project.
-unset TEST_SERVICE_LEASE WAIT_UP
+unset WAIT_UP
+export TEST_SERVICE_LEASE=agentsview-parent-123
 : > "$DOCKER_LOG"
 (cd "$root" && ./scripts/test-lease.sh agentsview ./scripts/test-service-compose.sh postgres 5432 sh -c 'sleep 1') &
 first=$!
@@ -127,8 +137,9 @@ wait "$first"
 wait "$second"
 projects=$(awk '$1 == "compose" && $2 == "-p" && $8 == "up" {print $3}' "$DOCKER_LOG" | sort -u)
 [[ $(printf '%s\n' "$projects" | wc -l) == 2 ]]
+[[ "$projects" != *agentsview-parent-123* ]]
 while IFS= read -r project; do
-    rg -q -- "-p $project .* down -v --remove-orphans" "$DOCKER_LOG"
+    grep -qE -- "-p $project .* down -v --remove-orphans" "$DOCKER_LOG"
 done <<< "$projects"
 
 # A missing Python interpreter stops before Docker can start anything.
@@ -140,4 +151,42 @@ PATH="$tmp/no-python" /bin/sh "$root/scripts/test-lease.sh" agentsview docker in
 status=$?
 set -e
 [[ $status == 2 && ! -s "$DOCKER_LOG" ]]
-rg -q 'python3 is required' "$tmp/no-python.out"
+grep -qE 'python3 is required' "$tmp/no-python.out"
+
+# An absent home or unavailable locking support stops before Docker starts.
+unset TEST_SERVICE_LEASE
+for home_mode in unset empty; do
+    : > "$DOCKER_LOG"
+    set +e
+    if [[ "$home_mode" == unset ]]; then
+        env -u HOME "$root/scripts/test-lease.sh" agentsview docker info >"$tmp/home-error" 2>&1
+    else
+        HOME= "$root/scripts/test-lease.sh" agentsview docker info >"$tmp/home-error" 2>&1
+    fi
+    status=$?
+    set -e
+    [[ $status != 0 && ! -s "$DOCKER_LOG" ]]
+    grep -qE 'HOME must be set' "$tmp/home-error"
+done
+mkdir "$tmp/no-fcntl"
+cat > "$tmp/no-fcntl/python3" <<'PYTHON'
+#!/bin/sh
+exec "$REAL_PYTHON" -c '
+import builtins, sys
+original = builtins.__import__
+def no_fcntl(name, *args, **kwargs):
+    if name == "fcntl": raise ImportError("unavailable")
+    return original(name, *args, **kwargs)
+builtins.__import__ = no_fcntl
+sys.argv = sys.argv[1:]
+exec(sys.stdin.read())
+' "$@"
+PYTHON
+chmod +x "$tmp/no-fcntl/python3"
+: > "$DOCKER_LOG"
+set +e
+REAL_PYTHON="$python_bin" PATH="$tmp/no-fcntl:$PATH" "$root/scripts/test-lease.sh" agentsview docker info >"$tmp/fcntl-error" 2>&1
+status=$?
+set -e
+[[ $status != 0 && ! -s "$DOCKER_LOG" ]]
+grep -qE 'platform with Python fcntl support' "$tmp/fcntl-error"

@@ -10,19 +10,22 @@
 # cleaner uses the lease to reclaim run containers and project networks after unlock.
 set -eu
 
-if [ -n "${TEST_SERVICE_LEASE:-}" ]; then
-    shift
-    exec "$@"
-fi
 if ! command -v python3 >/dev/null 2>&1; then
     echo 'python3 is required; use postgres-up or clickhouse-up for a manual service' >&2
     exit 2
 fi
 exec python3 - "$@" <<'PY'
-import fcntl
 import os
 import sys
 import time
+
+try:
+    import fcntl
+except ImportError:
+    sys.exit("test service leases require a platform with Python fcntl support")
+
+if not os.environ.get("HOME"):
+    sys.exit("HOME must be set to create a test service lease")
 
 name, *command = sys.argv[1:]
 lease = f"{name}-{int(time.time())}-{os.getpid()}"
