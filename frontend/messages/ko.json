@@ -3160,5 +3160,11 @@
   "session_toc_empty_prompt": "빈 프롬프트",
   "session_toc_search": "프롬프트 검색",
   "session_toc_no_match": "일치하는 프롬프트가 없습니다",
-  "shortcuts_toggle_session_toc": "프롬프트로 이동"
+  "shortcuts_toggle_session_toc": "프롬프트로 이동",
+  "getting_started_title": "시작하기",
+  "getting_started_dismiss": "닫기",
+  "getting_started_open_session": "세션 열기",
+  "getting_started_search": "기록 검색",
+  "getting_started_usage": "토큰 사용량 보기",
+  "getting_started_insights": "인사이트 읽기"
 }

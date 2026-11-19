@@ -3305,5 +3305,11 @@
   "session_toc_empty_prompt": "Prompt vide",
   "session_toc_search": "Rechercher dans les prompts",
   "session_toc_no_match": "Aucun prompt ne correspond",
-  "shortcuts_toggle_session_toc": "Aller à un prompt"
+  "shortcuts_toggle_session_toc": "Aller à un prompt",
+  "getting_started_title": "Bien démarrer",
+  "getting_started_dismiss": "Fermer",
+  "getting_started_open_session": "Ouvrir une session",
+  "getting_started_search": "Rechercher dans votre historique",
+  "getting_started_usage": "Voir votre utilisation des jetons",
+  "getting_started_insights": "Lire vos analyses"
 }

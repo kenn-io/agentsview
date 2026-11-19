@@ -53,9 +53,9 @@ const state = vi.hoisted(() => {
       tasks: [],
       loading: false,
       error: null as string | null,
-      selectedId: 42,
+      selectedId: 42 as number | null,
       selectedTaskId: null as string | null,
-      selectedItem,
+      selectedItem: selectedItem as typeof selectedItem | undefined,
       selectedTask: undefined as InsightTask | undefined,
       cancelInFlightReads: mocks.cancelInFlightReads,
       deleteItem: mocks.deleteItem,
@@ -76,6 +76,7 @@ const state = vi.hoisted(() => {
     },
   };
 });
+const savedInsight = state.store.items[0]!;
 
 vi.mock("../../stores/insights.svelte.js", async () => {
   const { SvelteMap } = await import("svelte/reactivity");
@@ -113,16 +114,19 @@ vi.mock("../../utils/markdown.js", () => ({
 
 // @ts-ignore
 import GeneratedInsightsPanel from "./GeneratedInsightsPanel.svelte";
+import { gettingStarted } from "../../stores/gettingStarted.svelte.js";
 
 describe("GeneratedInsightsPanel", () => {
   let component: ReturnType<typeof mount> | undefined;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    gettingStarted.done = new Set();
     state.serverVersion.insight_generation_available = true;
     state.serverVersion.read_only = false;
     router.route = "recall";
     router.params = { tab: "generated" };
+    state.store.items = [savedInsight];
     state.store.selectedTask = undefined;
     state.store.selectedId = 42;
     state.store.selectedItem = state.store.items[0]!;
@@ -189,10 +193,26 @@ describe("GeneratedInsightsPanel", () => {
     }
   });
 
+  it("completes the checklist for a selected report or an empty archive", async () => {
+    component = mount(GeneratedInsightsPanel, { target: document.body });
+    await tick();
+    expect(gettingStarted.done.has("insights")).toBe(true);
+    await unmount(component);
+    component = undefined;
+    gettingStarted.done = new Set();
+    state.store.items = [];
+    state.store.selectedId = null;
+    state.store.selectedItem = undefined;
+    component = mount(GeneratedInsightsPanel, { target: document.body });
+    await tick();
+    await mocks.load.mock.results.at(-1)!.value;
+
+    expect(gettingStarted.done.has("insights")).toBe(true);
+  });
+
   it("shows every input that scopes a generated report", async () => {
     component = mount(GeneratedInsightsPanel, { target: document.body });
     await tick();
-
     const text = document.body.textContent ?? "";
     for (const label of [
       "Date range",
