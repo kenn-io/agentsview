@@ -12,7 +12,28 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/money"
 )
+
+func TestPGActivityReportSavedPricingVariants(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	target, directory := testPGURL(t), t.TempDir()
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	for i, rate := range []int64{20_000_000, 40_000_000, 20_000_000, 40_000_000} {
+		store := openPGActivityInputStore(t, target, syncer.schema, directory)
+		t.Cleanup(func() { require.NoError(t, store.Close()) })
+		store.SetCustomPricing(map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: rate}})
+		got := pgKeptBuild(t, store, f, q, i < 2)
+		want := money.MustParseDollars("0.01")
+		if rate == 40_000_000 {
+			want = money.MustParseDollars("0.02")
+		}
+		assert.Equal(t, want, got.Report.Totals.Cost)
+	}
+}
 
 func TestPGActivityReportSavedRestart(t *testing.T) {
 	for _, mode := range []string{"restart", "revision", "sweep", "pricing", "unavailable", "memo-rejected"} {
