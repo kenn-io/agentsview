@@ -11,6 +11,9 @@ The latest release is
 
 **New features**
 
+- MCP session and content searches default to the last 30 days. Pass an earlier
+  `date_from` to search further back.
+
 - Sync ChatGPT chats into AgentsView without waiting for an export email. Run
   `agentsview source import --type chatgpt --sync` with Chrome open and signed
   in to ChatGPT. Later runs fetch only chats that changed. New turns are added
