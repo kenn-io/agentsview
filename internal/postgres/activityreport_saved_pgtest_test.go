@@ -73,7 +73,10 @@ func TestPGActivityReportSaved(t *testing.T) {
 			if mode == "unavailable" || mode == "memo-rejected" {
 				return
 			}
+			var saved []byte
 			if mode == "restart" {
+				saved, err = os.ReadFile(files[0])
+				require.NoError(t, err)
 				pgKeptSession(t, local, "b", "project-b", "2026-07-14")
 				pgKeptPush(t, syncer, false)
 			}
@@ -98,6 +101,9 @@ func TestPGActivityReportSaved(t *testing.T) {
 			got := pgKeptBuild(t, restarted, f, q, false)
 			if mode == "restart" {
 				requirePGKeptEqual(t, want, got)
+				after, err := os.ReadFile(files[0])
+				require.NoError(t, err)
+				assert.Equal(t, saved, after)
 				pgKeptSession(t, local, "b", "project-a", "2026-06-14")
 				pgKeptPush(t, syncer, false)
 				updated := pgKeptBuild(t, restarted, f, q, true)
