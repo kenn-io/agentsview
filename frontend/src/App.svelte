@@ -97,6 +97,7 @@
     type PanelDateState,
   } from "./lib/stores/yokedDates.svelte.js";
   import { m } from "./lib/i18n/index.js";
+  import { documentTitle } from "./lib/utils/documentTitle.js";
   import { setAuthToken, getAuthToken, setServerUrl } from "./lib/api/runtime.js";
   import { setupVisibilityHealthCheck } from "./lib/utils/health.js";
   import { gettingStarted } from "./lib/stores/gettingStarted.svelte.js";
@@ -114,6 +115,13 @@
   } from "./lib/stores/sessionRouteParams.js";
 
   let globalAuthToken: string = $state("");
+  let title = $derived(documentTitle({
+    route: router.route,
+    needsAuth: settings.needsAuth,
+    sessionId: router.sessionId,
+    session: sessions.activeSessionId === router.sessionId ? sessions.activeSession : undefined,
+    sessionNotFound: sessions.activeSessionId === router.sessionId && sessions.activeSessionNotFound,
+  }));
   function handleGlobalAuth() {
     const token = globalAuthToken.trim();
     if (!token) return;
@@ -852,6 +860,8 @@
   });
 
 </script>
+
+<svelte:head><title>{title}</title></svelte:head>
 
 {#if settings.needsAuth && router.route !== "settings"}
   <div class="auth-overlay">

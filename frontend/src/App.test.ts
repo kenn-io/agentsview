@@ -30,6 +30,7 @@ import App, { findUserPromptOrdinal } from "./App.svelte";
 import { requestUrl } from "./lib/test-support/request-url.js";
 
 let component: ReturnType<typeof mount> | undefined;
+const originalTitle = document.title;
 
 async function flushEffects() {
   await tick();
@@ -91,6 +92,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   document.body.innerHTML = "";
+  document.title = originalTitle;
   localStorage.clear();
   window.history.replaceState(null, "", "/");
   router.route = "sessions";
@@ -1932,6 +1934,25 @@ describe("App telemetry", () => {
       }),
     );
   }
+
+  it("updates the tab title as the screen and session change", async () => {
+    setup();
+    router.route = "activity";
+    sessions.sessions = [hydratedSession("session-1", "codex", { display_name: "Fix login" })];
+    component = mount(App, { target: document.body });
+    await flushEffects();
+    expect(document.title).toBe("Activity · AgentsView");
+    router.navigate("usage");
+    await flushEffects();
+    expect(document.title).toBe("Usage · AgentsView");
+    router.navigateToSession("session-1");
+    await flushEffects();
+    expect(document.title).toBe("Fix login · proj-a · AgentsView");
+    sessions.sessions = [hydratedSession("session-1", "codex", { display_name: "Renamed" })];
+    await flushEffects();
+    expect(document.title).toBe("Renamed · proj-a · AgentsView");
+    sessions.sessions = [];
+  });
 
   function postedFor(event: string) {
     return posted.filter((p) => p.event === event).map((p) => p.properties);
