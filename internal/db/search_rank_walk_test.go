@@ -44,7 +44,10 @@ func TestSearchRankWalkMatchesFullRanking(t *testing.T) {
 	// stored, and so read, after its tie.
 	for i := range 3 {
 		id := fmt.Sprintf("late-%d", i)
-		insertSession(t, d, id, "proj", func(s *Session) { s.FirstMessage = new("untitled") })
+		insertSession(t, d, id, "proj", func(s *Session) {
+			s.FirstMessage = new("untitled")
+			s.EndedAt = new("2026-05-11T12:00:00Z")
+		})
 		insertMessages(t, d, userMsg(id, 5, "handler"))
 		insertMessages(t, d, userMsg(id, 2, "handler"))
 	}
@@ -54,25 +57,30 @@ func TestSearchRankWalkMatchesFullRanking(t *testing.T) {
 	require.NotNil(t, walk, "the walk must serve a page with distinct ranks")
 	assert.False(t, walk.complete)
 
-	for _, query := range []string{"handler", "deploy"} {
-		for _, limit := range []int{1, 2, 7, 50} {
-			var walked, ranked []SearchResult
-			for cursor := 0; ; cursor += limit {
-				got, err := d.Search(ctx, SearchFilter{Query: query, Limit: limit, Cursor: cursor})
-				require.NoError(t, err)
-				want, err := d.Search(ctx, SearchFilter{Query: query, Limit: limit, Cursor: cursor, Project: "proj"})
-				require.NoError(t, err)
-				require.Equal(t, want, got, "%s limit %d cursor %d", query, limit, cursor)
-				walked = append(walked, got.Results...)
-				ranked = append(ranked, want.Results...)
-				if got.NextCursor == 0 {
-					break
+	for _, from := range []string{"", "2026-05-08", "2026-05-09", "2027-01-01"} {
+		for _, query := range []string{"handler", "deploy"} {
+			for _, limit := range []int{1, 2, 7, 50} {
+				var walked, ranked []SearchResult
+				for cursor := 0; ; cursor += limit {
+					got, err := d.Search(ctx, SearchFilter{Query: query, Limit: limit, Cursor: cursor, DateFrom: from})
+					require.NoError(t, err)
+					want, err := d.Search(ctx, SearchFilter{Query: query, Limit: limit, Cursor: cursor, DateFrom: from, Project: "proj"})
+					require.NoError(t, err)
+					require.Equal(t, want, got, "%s from %s limit %d cursor %d", query, from, limit, cursor)
+					walked = append(walked, got.Results...)
+					ranked = append(ranked, want.Results...)
+					if got.NextCursor == 0 {
+						break
+					}
 				}
-			}
-			assert.Equal(t, ranked, walked)
-			if query == "handler" {
-				require.Len(t, walked, 116, "limit %d", limit)
-				assert.Equal(t, -1, walked[len(walked)-1].Ordinal, "title-only rows come last")
+				assert.Equal(t, ranked, walked)
+				if query == "handler" && from == "" {
+					require.Len(t, walked, 116, "limit %d", limit)
+					assert.Equal(t, -1, walked[len(walked)-1].Ordinal, "title-only rows come last")
+				}
+				if from == "2027-01-01" {
+					assert.Empty(t, walked)
+				}
 			}
 		}
 	}
