@@ -1991,7 +1991,6 @@ describe("App telemetry", () => {
 
   it("reports session_viewed and completes the session checklist once the session hydrates", async () => {
     const { gettingStarted } = await import("./lib/stores/gettingStarted.svelte.js");
-    localStorage.removeItem("agentsview-getting-started");
     gettingStarted.done = new Set();
     setup();
     sessions.sessions = [hydratedSession("session-1", "codex")];

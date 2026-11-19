@@ -121,7 +121,6 @@ describe("GeneratedInsightsPanel", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    localStorage.clear();
     gettingStarted.done = new Set();
     state.serverVersion.insight_generation_available = true;
     state.serverVersion.read_only = false;
