@@ -461,7 +461,7 @@ func TestSearchSessions_Pagination(t *testing.T) {
 	require.NotNil(t, page1.NextCursor, "first page should set next_cursor")
 
 	page2 := mustSearch(t, ts, searchSessionsIn{
-		Query: "pageterm", Sort: "recency", Limit: 2, Cursor: *page1.NextCursor,
+		Query: "pageterm", Sort: "recency", Limit: 2, Cursor: *page1.NextCursor, DateFrom: page1.DateFrom,
 	})
 	require.Len(t, page2.Results, 2)
 
@@ -2269,4 +2269,63 @@ func TestListRecallPagesWithEvidenceAndSourceSessionFilter(t *testing.T) {
 	filtered := decodeStructured[listRecallOut](t, res)
 	require.Len(t, filtered.Entries, 1)
 	assert.Equal(t, "s2", filtered.Entries[0].SourceSessionID)
+}
+
+func TestSearchDefaultWindowPaginationAcrossMidnight(t *testing.T) {
+	ts, d := newTestToolset(t)
+	if !d.HasFTS(t.Context()) {
+		t.Skip("FTS not available")
+	}
+	now := time.Date(2024, 6, 15, 23, 59, 0, 0, time.UTC)
+	ts.now = func() time.Time { return now }
+	for id, date := range map[string]string{"recent": "2024-06-01T10:00:00Z", "boundary": "2024-05-16T10:00:00Z"} {
+		dbtest.SeedSession(t, d, id, "proj", func(s *db.Session) {
+			s.MessageCount = 3
+			s.UserMessageCount = 2
+			s.StartedAt = &date
+			s.EndedAt = &date
+		})
+		require.NoError(t, d.InsertMessages(t.Context(), []db.Message{dbtest.UserMsg(id, 0, "midnightneedle")}))
+	}
+
+	_, sessions, err := ts.searchSessions(t.Context(), nil, searchSessionsIn{Query: "midnightneedle", Sort: "recency", Limit: 1})
+	require.NoError(t, err)
+	require.Len(t, sessions.Results, 1)
+	require.NotNil(t, sessions.NextCursor)
+	assert.Equal(t, "2024-05-16", sessions.DateFrom)
+	_, content, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "midnightneedle", Limit: 1, IncludeActive: true})
+	require.NoError(t, err)
+	require.Len(t, content.Matches, 1)
+	require.NotNil(t, content.NextCursor)
+	assert.Equal(t, "2024-05-16", content.DateFrom)
+
+	now = now.Add(2 * time.Minute)
+	_, _, err = ts.searchSessions(t.Context(), nil, searchSessionsIn{Query: "midnightneedle", Sort: "recency", Limit: 1, Cursor: *sessions.NextCursor})
+	require.ErrorContains(t, err, "date_from is required")
+	_, nextSessions, err := ts.searchSessions(t.Context(), nil, searchSessionsIn{Query: "midnightneedle", Sort: "recency", Limit: 1, Cursor: *sessions.NextCursor, DateFrom: sessions.DateFrom})
+	require.NoError(t, err)
+	require.Len(t, nextSessions.Results, 1)
+	assert.ElementsMatch(t, []string{"recent", "boundary"}, []string{sessions.Results[0].SessionID, nextSessions.Results[0].SessionID})
+
+	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "midnightneedle", Limit: 1, Cursor: *content.NextCursor, IncludeActive: true})
+	require.ErrorContains(t, err, "date_from is required")
+	_, nextContent, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "midnightneedle", Limit: 1, Cursor: *content.NextCursor, DateFrom: content.DateFrom, IncludeActive: true})
+	require.NoError(t, err)
+	require.Len(t, nextContent.Matches, 1)
+	assert.ElementsMatch(t, []string{"recent", "boundary"}, []string{content.Matches[0].SessionID, nextContent.Matches[0].SessionID})
+
+	for _, in := range []searchSessionsIn{
+		{Query: "midnightneedle", Cursor: 1, DateTo: "2024-06-15"},
+		{SessionID: "boundary", Cursor: 1},
+	} {
+		_, _, err := ts.searchSessions(t.Context(), nil, in)
+		require.NoError(t, err)
+	}
+	for _, in := range []searchContentIn{
+		{Pattern: "midnightneedle", Cursor: 1, DateTo: "2024-06-15", IncludeActive: true},
+		{Pattern: "midnightneedle", Cursor: 1, SessionID: "boundary", IncludeActive: true},
+	} {
+		_, _, err := ts.searchContent(t.Context(), nil, in)
+		require.NoError(t, err)
+	}
 }

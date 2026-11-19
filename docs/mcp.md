@@ -222,8 +222,9 @@ create its own runtime state.
 include sessions whose activity overlaps the requested days in UTC. Either bound
 can be omitted. When both bounds and `session_id` are omitted, the search starts
 30 days before the current UTC date. The response note gives the start date; pass
-an earlier `date_from` to search further back. Malformed dates and ranges where
-`date_from` is after `date_to` return an error.
+an earlier `date_from` to search further back. To continue a defaulted search,
+pass the returned `date_from` and use `next_cursor` as `cursor`. Malformed dates
+and ranges where `date_from` is after `date_to` return an error.
 
 HTTP-backed session and search results include `web_url` when a browser address
 is available. Use that link when citing a session; it preserves the server's
@@ -295,8 +296,9 @@ error without it. Exact `session_id`, `git_branch`, `project`, `agent`,
 `date_from`, and `date_to` filters apply before the final limit. When both date
 bounds and `session_id` are omitted, the search starts 30 days before the current
 UTC date. The response note gives the start date; pass an earlier `date_from` to
-search further back. Limits default to 10 and go up to 50; a value outside that
-range falls back to the default.
+search further back. To continue a defaulted search, pass the returned `date_from`
+and use `next_cursor` as `cursor`. Limits default to 10 and go up to 50; a value
+outside that range falls back to the default.
 
 To find one past session that covered several ideas, pass `concepts` instead of
 `pattern`: two to five distinct natural-language strings. The mode defaults to
@@ -334,8 +336,9 @@ pass `next_cursor` as the numeric `cursor` and echo the returned RFC3339
 fixed across pages of an unchanged archive, including on older servers. A
 positive cursor without the cutoff returns a restart error when that exclusion
 applies. Restart without a cursor to obtain both fields. `include_active: true`
-or an explicit `current_session_id` allows numeric-only continuation. Archive
-edits retain the existing offset-pagination behavior.
+or an explicit `current_session_id` removes the activity cutoff requirement.
+The date window requirement still applies. Archive edits retain the existing
+offset-pagination behavior.
 
 `exclusions.children` reports whether child sessions were excluded, including in
 empty results. It is true for `scope: top` and FTS searches without an exact
