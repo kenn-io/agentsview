@@ -91,31 +91,29 @@ func (s *Store) saveActivityInputs() {
 		for id, session := range input.sessions {
 			rows = append(rows, kept.Part[pgActivityDiskPart]{ID: id, Value: pgActivityDiskPart{Runs: session.runs.Wire(), Users: session.users, Assistants: session.assistants, Candidate: input.candidates[id]}})
 		}
-		data, err := kept.EncodeRows(rows, 256<<20, pgActivityDiskPartBytes)
+		data, err := kept.EncodeRows(rows, 256<<20, func(part kept.Part[pgActivityDiskPart]) int64 {
+			size := int64(len(part.ID) + len(part.Value.Identity))
+			size += int64(len(part.Value.Users)+len(part.Value.Assistants)) * 8
+			size += int64(len(part.Value.Runs.Bounds)+len(part.Value.Runs.Trimmed)) * 8
+			for _, run := range part.Value.Runs.Runs {
+				size += int64(len(run.Model) + 8)
+			}
+			if priced := part.Value.Priced; priced != nil {
+				size += int64(len(priced.Block) + len(priced.PricingDigest))
+				for _, row := range priced.Rows {
+					size += int64(len(row.Attribution) + 20)
+				}
+			}
+			for _, row := range part.Value.Usage {
+				size += int64(len(row.SessionID) + len(row.UsageSource) + len(row.Model) + len(row.ProviderID) + len(row.Agent) +
+					len(row.ClaudeMessageID) + len(row.ClaudeRequestID) + len(row.SourceUUID) + len(row.UsageDedupKey))
+			}
+			return size
+		})
 		if err == nil {
 			s.activityDisk.Put(slot.Slot, pgActivityDiskVersion+slot.Version, data)
 		}
 	}
-}
-
-func pgActivityDiskPartBytes(part kept.Part[pgActivityDiskPart]) int64 {
-	size := int64(len(part.ID) + len(part.Value.Identity))
-	size += int64(len(part.Value.Users)+len(part.Value.Assistants)) * 8
-	size += int64(len(part.Value.Runs.Bounds)+len(part.Value.Runs.Trimmed)) * 8
-	for _, run := range part.Value.Runs.Runs {
-		size += int64(len(run.Model) + 8)
-	}
-	if priced := part.Value.Priced; priced != nil {
-		size += int64(len(priced.Block) + len(priced.PricingDigest))
-		for _, row := range priced.Rows {
-			size += int64(len(row.Attribution) + 20)
-		}
-	}
-	for _, row := range part.Value.Usage {
-		size += int64(len(row.SessionID) + len(row.UsageSource) + len(row.Model) + len(row.ProviderID) + len(row.Agent) +
-			len(row.ClaudeMessageID) + len(row.ClaudeRequestID) + len(row.SourceUUID) + len(row.UsageDedupKey))
-	}
-	return size
 }
 
 func (s *Store) loadActivityInputs(slot, version, identity string) (pgActivityInputs, bool) {

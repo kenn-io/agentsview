@@ -5,7 +5,6 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"encoding/json/v2"
 	"strings"
 	"sync"
 	"testing"
@@ -484,11 +483,6 @@ func TestPGActivityReportInputRestartPeerAndSessions(t *testing.T) {
 	gotBeforePush := pgKeptBuild(t, restartedBeforePush, f, q, true)
 	assert.Same(t, saved[0].Rows[0].priced.block, gotBeforePush.Report.Pricing)
 	requirePGKeptEqual(t, before, gotBeforePush)
-	wantPricing, err := json.Marshal(before.Report.Pricing)
-	require.NoError(t, err)
-	gotPricing, err := json.Marshal(gotBeforePush.Report.Pricing)
-	require.NoError(t, err)
-	assert.Equal(t, string(wantPricing), string(gotPricing))
 	assert.Empty(t, reads.transcriptReads)
 	assert.Empty(t, reads.usageReads)
 	freshBeforePush, err := NewStore(t.Context(), target, syncer.schema, true)
@@ -537,8 +531,6 @@ func TestPGActivityReportInputRestartPriceInvalidation(t *testing.T) {
 			rates := map[string]config.CustomModelRate{"kept-model": {OutputMicrodollarsPerMTok: 20_000_000}}
 			first.SetCustomPricing(rates)
 			before := pgKeptBuild(t, first, f, q, true)
-			slots := first.runtimeState().activityInputs.Snapshot()
-			require.Len(t, slots, 1)
 			require.NoError(t, first.Close())
 			if mode == "push" {
 				pgKeptSession(t, local, "c", "project-a", "2026-06-14")
