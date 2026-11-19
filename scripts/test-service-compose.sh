@@ -23,8 +23,9 @@ export TEST_CH_NATIVE_PUBLISH=127.0.0.1::9000
 docker compose -p "$TEST_SERVICE_LEASE" -f docker-compose.test.yml -f docker-compose.test-lease.yml up -d --wait "$service"
 address=$(docker compose -p "$TEST_SERVICE_LEASE" -f docker-compose.test.yml -f docker-compose.test-lease.yml port "$service" "$port")
 case "$service" in
-    postgres) export TEST_PG_URL="postgres://agentsview_test:agentsview_test_password@${address}/agentsview_test?sslmode=disable" ;;
-    clickhouse) export TEST_CLICKHOUSE_URL="clickhouse://${address}/default" ;;
+    postgres) url="TEST_PG_URL=postgres://agentsview_test:agentsview_test_password@${address}/agentsview_test?sslmode=disable" ;;
+    clickhouse) url="TEST_CLICKHOUSE_URL=clickhouse://${address}/default" ;;
 esac
-# Override any lease passed to the parent Make on its command line.
-"$@" "TEST_SERVICE_LEASE=$TEST_SERVICE_LEASE"
+export "$url"
+# Override values passed to the parent Make on its command line.
+"$@" "TEST_SERVICE_LEASE=$TEST_SERVICE_LEASE" "$url"
