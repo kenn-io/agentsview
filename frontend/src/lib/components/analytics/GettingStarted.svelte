@@ -76,8 +76,6 @@
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-4) var(--space-8);
-    margin: 0;
-    padding: 0;
     list-style: none;
   }
 
@@ -96,7 +94,6 @@
 
   .label {
     min-width: 0;
-    padding: 0;
     font-size: 12px;
     text-align: left;
   }

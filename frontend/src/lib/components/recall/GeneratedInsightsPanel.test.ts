@@ -204,7 +204,6 @@ describe("GeneratedInsightsPanel", () => {
     expect(gettingStarted.done.has("insights")).toBe(true);
     await unmount(component);
     component = undefined;
-    localStorage.removeItem("agentsview-getting-started");
     gettingStarted.done = new Set();
     state.store.items = [savedInsight];
     state.store.selectedId = 42;

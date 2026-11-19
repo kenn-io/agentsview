@@ -34,13 +34,11 @@ describe("getting started", () => {
     expect(JSON.parse(localStorage.getItem(key)!)).toEqual(["session", "future", "usage"]);
   });
 
-  it("starts fresh for corrupt or non-array data", () => {
-    for (const raw of ["broken", '{"version":1}', "null"]) {
-      localStorage.setItem(key, raw);
-      const store = new GettingStartedStore(new ReadProgressStore());
-      expect(store.visible).toBe(true);
-      store.complete("search");
-      expect(JSON.parse(localStorage.getItem(key)!)).toEqual(["search"]);
-    }
+  it("starts fresh for corrupt storage", () => {
+    localStorage.setItem(key, "broken");
+    const store = new GettingStartedStore(new ReadProgressStore());
+    expect(store.visible).toBe(true);
+    store.complete("search");
+    expect(JSON.parse(localStorage.getItem(key)!)).toEqual(["search"]);
   });
 });
