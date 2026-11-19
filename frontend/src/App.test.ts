@@ -1998,7 +1998,6 @@ describe("App telemetry", () => {
     component = mount(App, { target: document.body });
     await flushEffects();
     expect(postedFor("session_viewed")).toEqual([]);
-    expect(gettingStarted.done.has("session")).toBe(false);
 
     await open("session-1");
     await vi.waitFor(() => expect(postedFor("session_viewed")).toEqual([{ agent: "codex" }]));

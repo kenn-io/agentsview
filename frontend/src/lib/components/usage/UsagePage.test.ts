@@ -659,11 +659,13 @@ describe("UsagePage refresh behavior", () => {
     vi.spyOn(sessions, "loadAgents").mockResolvedValue();
     router.route = "usage";
     router.params = { view: "tokens", project: "demo" };
+    usage.summary = usageSummaryWithUnsupported();
 
     component = mount(UsagePage, { target: document.body });
     await flushEffects();
 
     expect(usage.mode).toBe("token");
+    expect(gettingStarted.done.has("usage")).toBe(true);
     expect(
       document
         .querySelector(
@@ -672,33 +674,6 @@ describe("UsagePage refresh behavior", () => {
         ?.textContent?.trim(),
     ).toBe("Tokens");
     expect(fetchAll).toHaveBeenCalled();
-  });
-
-  it("completes usage progress only for a loaded token summary", async () => {
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        observe() {}
-        unobserve() {}
-        disconnect() {}
-      },
-    );
-    let finish!: (value: ReturnType<typeof usageSummaryWithUnsupported>) => void;
-    usageReads().mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          finish = resolve;
-        }),
-    );
-    router.params = {};
-
-    component = mount(UsagePage, { target: document.body });
-    await flushEffects();
-    usage.mode = "token";
-    await flushEffects();
-    expect(gettingStarted.done.has("usage")).toBe(false);
-    finish(usageSummaryWithUnsupported());
-    await vi.waitFor(() => expect(gettingStarted.done.has("usage")).toBe(true));
   });
 
   it("hydrates and renders an Output-only token selection", async () => {

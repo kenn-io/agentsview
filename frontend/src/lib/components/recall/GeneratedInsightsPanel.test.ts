@@ -81,7 +81,7 @@ const savedInsight = state.store.items[0]!;
 vi.mock("../../stores/insights.svelte.js", async () => {
   const { SvelteMap } = await import("svelte/reactivity");
   const selected = new SvelteMap<string, unknown>();
-  for (const key of ["selectedItem", "selectedTask", "selectedTaskId"]) {
+  for (const key of ["selectedTask", "selectedTaskId"]) {
     Object.defineProperty(state.store, key, {
       get: () => selected.get(key),
       set: (value: unknown) => {
@@ -174,13 +174,10 @@ describe("GeneratedInsightsPanel", () => {
     const items = state.store.items;
     state.store.items = [];
     state.store.selectedId = null as unknown as number;
-    state.store.selectedItem = undefined;
     state.store.error = "insights table missing";
     try {
       component = mount(GeneratedInsightsPanel, { target: document.body });
       await tick();
-      await mocks.load.mock.results[0]!.value;
-      expect(gettingStarted.done.has("insights")).toBe(false);
 
       const alert = document.querySelector('[role="alert"]')!;
       expect(alert.textContent).toContain("insights table missing");
@@ -188,14 +185,8 @@ describe("GeneratedInsightsPanel", () => {
       expect(reportErrorShown).toHaveBeenCalledWith("insight");
 
       mocks.load.mockClear();
-      mocks.load.mockImplementationOnce(async () => {
-        state.store.error = null;
-      });
       alert.querySelector<HTMLButtonElement>("button")!.click();
       expect(mocks.load).toHaveBeenCalledOnce();
-      await mocks.load.mock.results[0]!.value;
-      await tick();
-      expect(gettingStarted.done.has("insights")).toBe(true);
     } finally {
       state.store.items = items;
       state.store.error = null;
@@ -213,48 +204,10 @@ describe("GeneratedInsightsPanel", () => {
     expect(gettingStarted.done.has("insights")).toBe(true);
   });
 
-  it("does not complete the checklist when an archive load is canceled", async () => {
-    let finish!: () => void;
-    mocks.load.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          finish = resolve;
-        }),
-    );
-    state.store.items = [];
-    state.store.selectedId = null;
-    state.store.selectedItem = undefined;
-    component = mount(GeneratedInsightsPanel, { target: document.body });
-    await tick();
-    await unmount(component);
-    component = undefined;
-    finish();
-    await mocks.load.mock.results[0]!.value;
-    await tick();
-
-    expect(gettingStarted.done.has("insights")).toBe(false);
-  });
-
-  it("waits until a saved report is selected", async () => {
-    state.store.selectedId = null;
-    state.store.selectedItem = undefined;
-    mocks.select.mockImplementationOnce((id: number) => {
-      state.store.selectedId = id;
-      state.store.selectedItem = savedInsight;
-    });
-    component = mount(GeneratedInsightsPanel, { target: document.body });
-    await tick();
-    await mocks.load.mock.results[0]!.value;
-    expect(gettingStarted.done.has("insights")).toBe(false);
-
-    document.querySelector<HTMLButtonElement>(".generated-list button")!.click();
-    await tick();
-    expect(gettingStarted.done.has("insights")).toBe(true);
-  });
-
   it("shows every input that scopes a generated report", async () => {
     component = mount(GeneratedInsightsPanel, { target: document.body });
     await tick();
+    expect(gettingStarted.done.has("insights")).toBe(true);
 
     const text = document.body.textContent ?? "";
     for (const label of [

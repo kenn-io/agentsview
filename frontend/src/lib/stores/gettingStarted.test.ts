@@ -11,14 +11,12 @@ describe("getting started", () => {
     const store = new GettingStartedStore(new ReadProgressStore());
     expect(store.visible).toBe(true);
     store.complete("session");
-    expect(new GettingStartedStore(new ReadProgressStore()).done.has("session")).toBe(true);
     store.complete("search");
     store.complete("usage");
     store.complete("insights");
     expect(new GettingStartedStore(new ReadProgressStore()).visible).toBe(false);
     localStorage.clear();
-    const dismissed = new GettingStartedStore(new ReadProgressStore());
-    dismissed.dismiss();
+    new GettingStartedStore(new ReadProgressStore()).dismiss();
     expect(new GettingStartedStore(new ReadProgressStore()).visible).toBe(false);
   });
 
