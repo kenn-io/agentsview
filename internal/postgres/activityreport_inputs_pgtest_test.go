@@ -461,6 +461,7 @@ func TestPGActivityReportInputRestartPeerAndSessions(t *testing.T) {
 	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC", Project: "project-a"}
 	q.Partial, q.EffectiveEnd = true, q.RangeStart.Add(10*time.Hour+time.Minute)
 	first := openPGActivityInputStore(t, target, syncer.schema, directory)
+	pgKeptBuild(t, first, db.AnalyticsFilter{Timezone: "UTC", Project: "project-b"}, q, true)
 	before := pgKeptBuild(t, first, f, q, true)
 	assert.Equal(t, 5, before.Report.Totals.OutputTokens)
 	require.NoError(t, first.Close())
