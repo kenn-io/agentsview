@@ -193,23 +193,20 @@ describe("GeneratedInsightsPanel", () => {
     }
   });
 
-  it("completes the checklist for an empty archive or a selected report", async () => {
+  it("completes the checklist for a selected report or an empty archive", async () => {
+    component = mount(GeneratedInsightsPanel, { target: document.body });
+    await tick();
+    expect(gettingStarted.done.has("insights")).toBe(true);
+    await unmount(component);
+    component = undefined;
+    gettingStarted.done = new Set();
     state.store.items = [];
     state.store.selectedId = null;
     state.store.selectedItem = undefined;
     component = mount(GeneratedInsightsPanel, { target: document.body });
     await tick();
-    await mocks.load.mock.results[0]!.value;
+    await mocks.load.mock.results.at(-1)!.value;
 
-    expect(gettingStarted.done.has("insights")).toBe(true);
-    await unmount(component);
-    component = undefined;
-    gettingStarted.done = new Set();
-    state.store.items = [savedInsight];
-    state.store.selectedId = 42;
-    state.store.selectedItem = savedInsight;
-    component = mount(GeneratedInsightsPanel, { target: document.body });
-    await tick();
     expect(gettingStarted.done.has("insights")).toBe(true);
   });
 

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { GettingStartedStore } from "./gettingStarted.svelte.js";
 import { ReadProgressStore } from "./read-progress.svelte.js";
 
@@ -16,8 +16,14 @@ describe("getting started", () => {
     store.complete("insights");
     expect(new GettingStartedStore(new ReadProgressStore()).visible).toBe(false);
     localStorage.clear();
-    new GettingStartedStore(new ReadProgressStore()).dismiss();
+    const dismissed = new GettingStartedStore(new ReadProgressStore());
+    dismissed.dismiss();
     expect(new GettingStartedStore(new ReadProgressStore()).visible).toBe(false);
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    dismissed.complete("search");
+    const writes = setItem.mock.calls.length;
+    setItem.mockRestore();
+    expect(writes).toBe(0);
   });
 
   it("keeps the checklist hidden for existing readers", () => {

@@ -25,6 +25,7 @@ export class GettingStartedStore {
   }
 
   complete(item: Item | "dismissed") {
+    if (this.done.has(item) || this.done.has("dismissed")) return;
     this.done = new Set([...read(), ...this.done, item]);
     try {
       localStorage.setItem(key, JSON.stringify([...this.done]));
