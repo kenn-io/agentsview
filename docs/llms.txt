@@ -44,7 +44,7 @@ The Markdown pages are canonical for machine readers; the HTML routes drop the
 - [Session API](https://agentsview.io/docs/session-api.md): Programmatic access to session data via the CLI and REST endpoints.
 - [Session Export](https://agentsview.io/docs/session-export.md): Content-free session summary exports for scripting and analytics.
 - [Conversation Export](https://agentsview.io/docs/conversation-export.md): Visible user and assistant prose with incremental changes and revision-pinned reads.
-- [Chat Import](https://agentsview.io/docs/chat-import.md): Sync Claude.ai through Chrome or import Claude.ai, ChatGPT, and Gemini Apps exports.
+- [Chat Import](https://agentsview.io/docs/chat-import.md): Sync Claude.ai, ChatGPT, Gemini Apps, and Grok web chats through Chrome, or import Claude.ai, ChatGPT, and Gemini Apps exports.
 
 ## Sync and Share
 

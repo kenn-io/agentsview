@@ -544,8 +544,9 @@ it with a report that includes subagents, which is the default. Expect it to
 run slightly above AgentsView's figure in short sessions, where the title call
 is a larger share of the work.
 
-Costs that an agent or provider reports as billed keep their existing
-treatment: the reported cost is the price.
+Agents whose cost AgentsView already used as the price, such as Junie, gptme,
+Codebuff, Hermes, Goose, and Crush, keep that treatment: their reported cost is
+the price.
 
 A usage record that carries a cost but names no model is counted under the
 `<unknown>` model, the same label Cursor account imports use. Its cost and
@@ -860,12 +861,13 @@ present locally; threads that exist only as stubs have nothing to read.
 Tools that call model APIs directly, with no coding agent in between, can
 record their token usage as **Direct API** sessions. The tool writes one
 body-free JSONL file per session: never prompts, documents, or replies. Each
-line is one JSON object, and each line's `parentId` is the `id` of the line
-before it:
+line is one JSON object. After the header, each line's `parentId` is the `id`
+of the line before it, and the first line after the header has a null
+`parentId`:
 
 1. Header, with a UUID4 `id`, an ISO `timestamp`, and the absolute `cwd`:
    `{"type":"session","version":3,"id":<uuid4>,"timestamp":<iso>,"cwd":<cwd>}`
-2. Name, with an 8-hex `id` and a null `parentId`:
+2. Optional name, with an 8-hex `id`:
    `{"type":"session_info","id":<8 hex>,"parentId":null,"timestamp":<iso>,"name":<name>}`
 3. One line per model call, with an 8-hex `id` and `timestamp` in epoch
    milliseconds inside `message`:
@@ -875,9 +877,9 @@ before it:
 tokens, so `totalTokens` is `input + output + cacheRead`. AgentsView prices the
 tokens from the catalog.
 
-Files go in `~/.agentsview/direct-api/` by default. Set `DIRECT_API_DIR`, or
-`direct_api_dirs` in the [config file](configuration.md), to read another
-directory.
+Files go in `~/.agentsview/direct-api/` by default. To read another directory,
+set `DIRECT_API_DIR`, or `dirs` under `[agents.direct-api]` in the
+[config file](configuration.md#multiple-directories).
 
 ## Reporting Model
 

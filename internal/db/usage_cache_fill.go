@@ -545,7 +545,7 @@ func (c *usageFillCoordinator) extractSessions(
 		return nil, nil, err
 	}
 
-	// Pin one cache snapshot while comparing bounded batches. This connection
+	// Pin one cache snapshot for cached sessions and append checks. This connection
 	// writes only the disposable spool; WAL lets cache writers keep progressing.
 	if _, err := spool.db.ExecContext(ctx,
 		`ATTACH DATABASE ? AS comparison`, makeDSN(c.cache.path, true),
@@ -575,7 +575,8 @@ func (c *usageFillCoordinator) extractSessions(
 	messageIndexes := make(map[string]int, len(versions))
 	activityIndexes := make(map[string]int, len(versions))
 	eventIndexes := make(map[string]int, len(versions))
-	spoolWriter := usageFactSpoolWriter{ctx: ctx, tx: spoolTx, compare: true}
+	spoolWriter := usageFactSpoolWriter{ctx: ctx, tx: spoolTx, expected: expected}
+	defer spoolWriter.Close()
 	if err := c.extractUsageAppends(ctx, tx, spoolTx, extracted, expected, messageIndexes); err != nil {
 		return nil, nil, err
 	}
@@ -637,7 +638,7 @@ func (c *usageFillCoordinator) extractUsageAppends(
 	}
 	defer cachedTail.Close()
 	for id, version := range versions {
-		if version.UsageGeneration == "" || version.UsageEventFingerprint != "" {
+		if !expected[id].Exists || version.UsageGeneration == "" || version.UsageEventFingerprint != "" {
 			continue
 		}
 		var ordinal sql.NullInt64
@@ -654,18 +655,22 @@ func (c *usageFillCoordinator) extractUsageAppends(
 		if _, err := comparison.ExecContext(ctx, `SAVEPOINT usage_append`); err != nil {
 			return err
 		}
-		delta := usageFactSpoolWriter{ctx: ctx, tx: comparison}
 		deltaIndexes := map[string]int{id: count}
-		eligible, err := c.extractUsageMessageFacts(ctx, archive, &delta, deltaIndexes, usageMessageExtraction{
-			query: usageFillAppendFactsSQL, args: []any{id, ordinal}, appendOnly: true, tail: tail,
-		})
+		eligible, err := func() (bool, error) {
+			delta := usageFactSpoolWriter{ctx: ctx, tx: comparison}
+			defer delta.Close()
+			eligible, err := c.extractUsageMessageFacts(ctx, archive, &delta, deltaIndexes, usageMessageExtraction{
+				query: usageFillAppendFactsSQL, args: []any{id, ordinal}, appendOnly: true, tail: tail,
+			})
+			if err != nil || !eligible {
+				return eligible, err
+			}
+			return true, delta.Flush()
+		}()
 		if err != nil {
 			return err
 		}
 		if eligible {
-			if err := delta.Flush(); err != nil {
-				return err
-			}
 			indexes[id] = deltaIndexes[id]
 			if _, err := archive.ExecContext(ctx, `DELETE FROM usage_fill_sessions WHERE session_id=?`, id); err != nil {
 				return err
@@ -810,26 +815,48 @@ type usageFactSpoolRow struct {
 type usageFactSpoolWriter struct {
 	ctx  context.Context
 	tx   *sql.Tx
-	rows []usageFactSpoolRow
+	rows [2][]usageFactSpoolRow
 
-	compare   bool
-	fullBatch *sql.Stmt
+	expected  map[string]usageFillInstallExpectation
+	fullBatch [2]*sql.Stmt
+}
+
+func (w *usageFactSpoolWriter) Close() {
+	for _, stmt := range w.fullBatch {
+		if stmt != nil {
+			_ = stmt.Close()
+		}
+	}
 }
 
 func (w *usageFactSpoolWriter) Add(
 	sessionID string, index int, fact usagefacts.Fact,
 ) error {
-	w.rows = append(w.rows, usageFactSpoolRow{
+	batch := 0
+	if w.expected[sessionID].Exists {
+		batch = 1
+	}
+	w.rows[batch] = append(w.rows[batch], usageFactSpoolRow{
 		sessionID: sessionID, index: index, fact: fact,
 	})
-	if len(w.rows) < usageFactSpoolBatchSize {
+	if len(w.rows[batch]) < usageFactSpoolBatchSize {
 		return nil
 	}
-	return w.Flush()
+	return w.flushBatch(batch)
 }
 
 func (w *usageFactSpoolWriter) Flush() error {
-	if len(w.rows) == 0 {
+	for batch := range w.rows {
+		if err := w.flushBatch(batch); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (w *usageFactSpoolWriter) flushBatch(batch int) error {
+	rows := w.rows[batch]
+	if len(rows) == 0 {
 		return nil
 	}
 	const columns = `
@@ -841,15 +868,15 @@ func (w *usageFactSpoolWriter) Flush() error {
 		source_uuid, usage_dedup_key, token_eligible, activity_eligible, ranking_output_tokens
 	`
 	prefix := `INSERT INTO facts(` + columns + `) VALUES `
-	if w.compare {
+	if batch == 1 {
 		prefix = `WITH incoming(` + columns + `) AS (VALUES `
 	}
 	const placeholders = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	var query strings.Builder
-	query.Grow(len(prefix) + len(w.rows)*(len(placeholders)+1))
+	query.Grow(len(prefix) + len(rows)*(len(placeholders)+1))
 	query.WriteString(prefix)
-	args := make([]any, 0, len(w.rows)*28)
-	for rowIndex, row := range w.rows {
+	args := make([]any, 0, len(rows)*28)
+	for rowIndex, row := range rows {
 		if rowIndex > 0 {
 			query.WriteByte(',')
 		}
@@ -868,7 +895,7 @@ func (w *usageFactSpoolWriter) Flush() error {
 			boolInt(fact.TokenEligible), boolInt(fact.ActivityEligible), fact.RankingOutputTokens,
 		)
 	}
-	if w.compare {
+	if batch == 1 {
 		// Never omit rows based on a different cache installation. The final
 		// install fence rejects a race even if it occurred before this snapshot.
 		query.WriteString(`) INSERT INTO facts(` + columns + `) SELECT * FROM incoming
@@ -898,22 +925,22 @@ func (w *usageFactSpoolWriter) Flush() error {
 			)`)
 	}
 	var err error
-	if len(w.rows) == usageFactSpoolBatchSize {
-		// Preparing the large VALUES expression costs more than comparing a
-		// batch. Reuse it within this extraction; the transaction closes it.
-		if w.fullBatch == nil {
-			w.fullBatch, err = w.tx.PrepareContext(w.ctx, query.String())
+	if len(rows) == usageFactSpoolBatchSize {
+		// Preparing the large VALUES expression is costly. Reuse it within
+		// this extraction.
+		if w.fullBatch[batch] == nil {
+			w.fullBatch[batch], err = w.tx.PrepareContext(w.ctx, query.String()) //nolint:kennlint // sqlclosecheck: Close closes the cached statements.
 		}
 		if err == nil {
-			_, err = w.fullBatch.ExecContext(w.ctx, args...)
+			_, err = w.fullBatch[batch].ExecContext(w.ctx, args...)
 		}
 	} else {
 		_, err = w.tx.ExecContext(w.ctx, query.String(), args...)
 	}
 	if err != nil {
-		return fmt.Errorf("spooling %d usage facts: %w", len(w.rows), err)
+		return fmt.Errorf("spooling %d usage facts: %w", len(rows), err)
 	}
-	w.rows = w.rows[:0]
+	w.rows[batch] = rows[:0]
 	return nil
 }
 

@@ -20,6 +20,7 @@ import (
 var (
 	_ Provider                          = (*codexProvider)(nil)
 	_ ActivityHintProvider              = (*codexProvider)(nil)
+	_ ChangedPathRelevanceProvider      = (*codexProvider)(nil)
 	_ S3Provider                        = (*codexProvider)(nil)
 	_ RawCaptureProvider                = (*codexProvider)(nil)
 	_ RawCaptureSourceProvider          = (*codexProvider)(nil)
@@ -144,6 +145,8 @@ func (f *codexProviderFactory) Capabilities() Capabilities {
 	if f.spec.agent == AgentCodex {
 		caps.Source.S3Discovery = CapabilitySupported
 		caps.Source.PollMetadataScan = CapabilitySupported
+		// Only Codex watches its home directory; see ChangedPathRelevance.
+		caps.Source.ChangedPathRelevance = CapabilitySupported
 	} else {
 		caps.RawCapture = RawCaptureCapabilities{}
 	}
@@ -369,6 +372,13 @@ func (p *codexProvider) SourcesForChangedPath(
 	req ChangedPathRequest,
 ) ([]SourceRef, error) {
 	return p.sources.SourcesForChangedPath(ctx, req)
+}
+
+func (p *codexProvider) ChangedPathRelevance(
+	ctx context.Context,
+	req ChangedPathRequest,
+) (ChangedPathRelevance, error) {
+	return p.sources.ChangedPathRelevance(ctx, req)
 }
 
 func (p *codexProvider) FindSource(
@@ -1200,6 +1210,56 @@ func (s codexSourceSet) WatchPlan(context.Context) (WatchPlan, error) {
 		}
 	}
 	return WatchPlan{Roots: roots}, nil
+}
+
+// ChangedPathRelevance classifies the direct children of Codex's home
+// directory, which the watch observes without recursion for the title
+// index. Codex also keeps its own SQLite databases, logs, lock files, and
+// caches there and changes them constantly; none of them holds session data.
+// Activity hints in history.jsonl are polled separately and do not need the
+// watch. The title index is data. A transcript root, or a directory that
+// holds one, stays unclassified, as does everything under the transcript
+// roots, for SourcesForChangedPath to map.
+func (s codexSourceSet) ChangedPathRelevance(
+	ctx context.Context,
+	req ChangedPathRequest,
+) (ChangedPathRelevance, error) {
+	if err := ctx.Err(); err != nil {
+		return ChangedPathUnclassified, err
+	}
+	if !s.ownsCodexSidecars() || req.WatchRoot == "" {
+		return ChangedPathUnclassified, nil
+	}
+	home := filepath.Clean(req.WatchRoot)
+	path := filepath.Clean(req.Path)
+	if filepath.Dir(path) != home || !s.isMetadataDir(home) {
+		return ChangedPathUnclassified, nil
+	}
+	if filepath.Base(path) == CodexSessionIndexFilename {
+		return ChangedPathDataBearing, nil
+	}
+	for _, root := range s.roots {
+		if !isS3URI(root) && isWithinRoot(path, root) {
+			return ChangedPathUnclassified, nil
+		}
+	}
+	return ChangedPathNonData, nil
+}
+
+// isMetadataDir reports whether dir is the metadata directory of a local
+// transcript root, which the watch plan observes for the title index.
+func (s codexSourceSet) isMetadataDir(dir string) bool {
+	for _, root := range s.roots {
+		if isS3URI(root) {
+			continue
+		}
+		for _, candidate := range s.metadata.dirs(root) {
+			if filepath.Clean(candidate) == dir {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s codexSourceSet) SourcesForChangedPath(

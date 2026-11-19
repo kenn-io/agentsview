@@ -38,7 +38,7 @@ release includes.
 | Browse extracted, provenance-linked knowledge     | [Recall](/docs/recall/)                                                                                                                                                                                    |
 | Give agents and scripts access to the archive     | [MCP Server](/docs/mcp/) and [Session API](/docs/session-api/)                                                                                                                                             |
 | Share sessions across machines                    | [Local Session Archive](https://agentsview.io/docs/commands/#agentsview-archive), [Hosted Raw Sync](/docs/hosted-raw-sync/), [PostgreSQL Sync](/docs/pg-sync/), [ClickHouse Sync](/docs/clickhouse-sync/), [Filesystem Session Sync](/docs/filesystem-sync/) |
-| Sync Claude.ai or import chat exports | [Chat Import](/docs/chat-import/) |
+| Sync web chats through Chrome or import chat exports | [Chat Import](/docs/chat-import/) |
 | Fetch Codex cloud chats | [Codex Cloud](/docs/configuration/#codex-cloud) |
 | Sync a remote machine over SSH | [SSH Remote Sync](/docs/remote-access/#ssh-remote-sync) |
 | Configure discovery, paths, and settings          | [Configuration](/docs/configuration/)                                                                                                                                                                      |

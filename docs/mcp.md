@@ -79,31 +79,31 @@ For local desktop-style MCP clients, use stdio:
 Restart or reload your MCP client after adding the server. Once connected, the
 client will see these tools:
 
-| Tool                          | Purpose                                                                  |
-| ----------------------------- | ------------------------------------------------------------------------ |
-| `search_sessions`             | Full-text search across recorded sessions                                |
-| `list_sessions`               | List recent or filtered sessions                                         |
-| `get_session_overview`        | Fetch metadata and a compact message preview                             |
-| `get_compaction_summaries`    | Read compaction summaries for one or more sessions                       |
-| `get_messages`                | Read paginated message bodies from one session                           |
-| `get_memory_status`           | Report archive, lexical, semantic, and source readiness                  |
-| `search_content`              | Substring, regex, terms, semantic, or hybrid search over session text    |
-| `get_usage_summary`           | Aggregate token and cost usage                                           |
-| `get_session_usage`           | Show one session's tokens and cost by model and by request               |
-| `list_recall`                 | List Recall entries changed or created since a time, with a cursor       |
-| `query_recall`                | Search extracted Recall entries when the backend supports Recall queries |
-| `get_session_file_references` | Find retained image bytes in Docbank, including prior versions and trash |
-| `get_tool_calls`              | List the tool calls one session made, with inputs and result sizes       |
-| `get_recent_edits`            | Find which sessions edited a file, newest edit first                     |
-| `get_child_sessions`          | List the sub-agent and fork sessions started from one session            |
-| `compare_usage`               | Compare token usage and cost between two models or two projects          |
-| `get_activity_report`         | Report agent time, sessions, and cost for a day, week, month, or range   |
-| `get_tool_usage`              | Count tool calls by category, agent, and tool name                       |
-| `get_quality_signals`         | Show health grades, outcomes, failures, and example sessions             |
-| `get_term_trends`             | Legacy term-frequency counts over time, kept for agent harnesses         |
-| `search_docs`                 | Search the AgentsView guides bundled with this version                   |
-| `get_friction_digest`         | Read a dated Friction Log digest as Markdown or the summary object       |
-| `list_friction_patterns`      | List recurring friction patterns ranked by occurrences                   |
+| Tool                          | Purpose                                                                                                   |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `search_sessions`             | Full-text search across recorded sessions                                                                 |
+| `list_sessions`               | List recent or filtered sessions                                                                          |
+| `get_session_overview`        | Fetch metadata and a compact message preview                                                              |
+| `get_compaction_summaries`    | Read compaction summaries for one or more sessions                                                        |
+| `get_messages`                | Read paginated message bodies from one session                                                            |
+| `get_memory_status`           | Report archive, lexical, semantic, and source readiness                                                   |
+| `search_content`              | Substring, regex, terms, semantic, or hybrid search over session text                                     |
+| `get_usage_summary`           | Aggregate token and cost usage                                                                            |
+| `get_session_usage`           | Show one session's tokens and cost by model and by request                                                |
+| `list_recall`                 | List Recall entries, optionally changed or created since a time, when the backend supports Recall queries |
+| `query_recall`                | Search extracted Recall entries when the backend supports Recall queries                                  |
+| `get_session_file_references` | Find retained image bytes in Docbank, including prior versions and trash                                  |
+| `get_tool_calls`              | List the tool calls one session made, with inputs and result sizes                                        |
+| `get_recent_edits`            | Find which sessions edited a file, newest edit first                                                      |
+| `get_child_sessions`          | List the sub-agent and fork sessions started from one session                                             |
+| `compare_usage`               | Compare token usage and cost between two models or two projects                                           |
+| `get_activity_report`         | Report agent time, sessions, and cost for a day, week, month, or range                                    |
+| `get_tool_usage`              | Count tool calls by category, agent, and tool name                                                        |
+| `get_quality_signals`         | Show health grades, outcomes, failures, and example sessions                                              |
+| `get_term_trends`             | Legacy term-frequency counts over time, kept for agent harnesses                                          |
+| `search_docs`                 | Search the AgentsView guides bundled with this version                                                    |
+| `get_friction_digest`         | Read a dated Friction Log digest as Markdown or the summary object                                        |
+| `list_friction_patterns`      | List recurring friction patterns ranked by occurrences                                                    |
 
 `get_compaction_summaries` accepts a session ID or `active_since` timestamp. The
 limit counts sessions; 0 uses the default of 20. Resume `next_cursor` with the

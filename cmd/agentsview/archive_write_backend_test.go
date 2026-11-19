@@ -1497,3 +1497,30 @@ func TestResolveArchiveWriteBackendRequiresDaemon(t *testing.T) {
 		})
 	}
 }
+
+// Codex keeps its own databases, logs, and lock files next to the title index
+// in its home directory, which the watch observes. Only the index may start a
+// push.
+func TestDaemonPushWatchIgnoresCodexHomeFiles(t *testing.T) {
+	home := t.TempDir()
+	cfg := config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentCodex: {filepath.Join(home, "sessions")},
+		},
+	}
+	for _, tc := range []struct {
+		paths []string
+		push  bool
+	}{
+		{[]string{filepath.Join(home, "logs_2.sqlite"), filepath.Join(home, "state_5.sqlite-wal")}, false},
+		{[]string{filepath.Join(home, parser.CodexSessionIndexFilename)}, true},
+		{[]string{filepath.Join(home, "logs_2.sqlite"), filepath.Join(home, parser.CodexSessionIndexFilename)}, true},
+	} {
+		loop, _, _ := newTestLoop(func(context.Context, pushReason) error { return nil })
+		require.NoError(t, notifyPushForWatchBatchWithConfig(
+			t.Context(), loop, cfg, syncpkg.WatchBatch{Paths: tc.paths},
+		))
+		pending, _ := pushLoopPendingState(loop)
+		assert.Equal(t, tc.push, pending, "paths %v", tc.paths)
+	}
+}

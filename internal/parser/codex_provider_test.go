@@ -2345,3 +2345,50 @@ func TestCodexProviderIncrementalUserBoundaryDoesNotBackfillCommittedUsage(t *te
 		assert.Empty(t, outcome.MessageTokenUsageUpdates)
 	})
 }
+
+// Codex's home directory holds the title index next to Codex's own databases,
+// logs, and lock files. Only the index, and the transcript roots inside the
+// home directory, may keep a watch event alive.
+func TestCodexChangedPathRelevance(t *testing.T) {
+	home := t.TempDir()
+	sessions := filepath.Join(home, "sessions")
+	archived := filepath.Join(home, "archived_sessions")
+	rollout := filepath.Join(sessions, "2026", "11", "15", "rollout-2026-11-15T10-00-00-019eb791-cf7d-75c1-8439-9ed74c1229e3.jsonl")
+	other := t.TempDir()
+	newProvider := func(agent AgentType) Provider {
+		def, ok := AgentByType(agent)
+		require.True(t, ok)
+		factory := newCodexProviderFactory(def)
+		if agent == AgentTraeX {
+			factory = newTraeXProviderFactory(def)
+		}
+		return factory.NewProvider(ProviderConfig{Roots: []string{sessions, archived}})
+	}
+	for _, tc := range []struct {
+		name      string
+		agent     AgentType
+		watchRoot string
+		path      string
+		want      ChangedPathRelevance
+	}{
+		{"own database", AgentCodex, home, filepath.Join(home, "logs_2.sqlite"), ChangedPathNonData},
+		{"own database log", AgentCodex, home, filepath.Join(home, "state_5.sqlite-wal"), ChangedPathNonData},
+		{"index lock", AgentCodex, home, filepath.Join(home, "session_index.jsonl.lock"), ChangedPathNonData},
+		{"installation id", AgentCodex, home, filepath.Join(home, "installation_id"), ChangedPathNonData},
+		{"polled activity hints", AgentCodex, home, filepath.Join(home, "history.jsonl"), ChangedPathNonData},
+		{"title index", AgentCodex, home, filepath.Join(home, CodexSessionIndexFilename), ChangedPathDataBearing},
+		{"transcript root", AgentCodex, home, sessions, ChangedPathUnclassified},
+		{"archive root", AgentCodex, home, archived, ChangedPathUnclassified},
+		{"rollout", AgentCodex, sessions, rollout, ChangedPathUnclassified},
+		{"nested under home", AgentCodex, home, filepath.Join(home, "log", "codex-tui.log"), ChangedPathUnclassified},
+		{"unrelated directory", AgentCodex, other, filepath.Join(other, "logs_2.sqlite"), ChangedPathUnclassified},
+		{"fork", AgentTraeX, home, filepath.Join(home, "logs_2.sqlite"), ChangedPathUnclassified},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ResolveChangedPathRelevance(t.Context(), newProvider(tc.agent),
+				ChangedPathRequest{Path: tc.path, WatchRoot: tc.watchRoot})
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}

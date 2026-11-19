@@ -759,7 +759,7 @@ Access** section lets you:
 
 ![Settings remote access](/docs/assets/generated/screenshots/settings-remote.png)
 
-Changes that affect bind or auth behavior may require a server restart.
+Auth changes take effect when you save.
 
 ## CLI Flags Reference
 

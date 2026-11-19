@@ -46,8 +46,8 @@ The latest release is
 - Track token usage and cost for tools that call model APIs directly, with no
   coding agent in between. Such a tool writes body-free session files to
   `~/.agentsview/direct-api/`, and AgentsView lists them as **Direct API**
-  sessions. `DIRECT_API_DIR` or `direct_api_dirs` change the directory. See
-  [Direct API Sessions](/docs/token-usage/#direct-api-sessions).
+  sessions. `DIRECT_API_DIR` or `[agents.direct-api] dirs` change the directory.
+  See [Direct API Sessions](/docs/token-usage/#direct-api-sessions).
 
 - A `[custom_model_pricing."<model>"]` entry can set `price_as` to price a model
   name exactly like a catalog model, such as a private gateway deployment name
@@ -83,7 +83,61 @@ The latest release is
   to install and run AgentsView there. See
   [Muse Personal](/docs/configuration/#muse-personal).
 
+- Press `t` in a session to search its prompts and jump to one. See
+  [Jump to a Prompt](/docs/usage/#jump-to-a-prompt).
+
+- Search can match text inside screenshots that tools returned. Turn on
+  `[image_text]` with a local GLM-OCR service. See
+  [Image text](/docs/configuration/#image-text).
+
+- Read a session's compaction summaries with `agentsview session compactions`
+  or the `get_compaction_summaries` MCP tool. See
+  [`session compactions`](/docs/session-api/#agentsview-session-compactions).
+
+- List Recall entries changed or created since a checkpoint with
+  `recall list --updated-since` or `--created-since`, or the `list_recall` MCP
+  tool. See [Recall](/docs/recall/#current-surface).
+
+- `agentsview agent setup` installs the AgentsView skills and registers the MCP
+  server for Claude Code and Codex in one step. See
+  [`agentsview agent setup`](/docs/commands/#agentsview-agent-setup).
+
+- Claude Code users can install AgentsView Memory from the repository's plugin
+  marketplace. See
+  [Choose an installation route](/docs/mcp/#choose-an-installation-route).
+
+- `agentsview git-hook install` adds an `Agent-Session:` trailer to commits an
+  agent makes without an editor, so you can trace a commit to its session. See
+  [`agentsview git-hook`](/docs/commands/#agentsview-git-hook).
+
+- Sessions on models the pricing catalog does not know now show the cost the
+  agent recorded. The catalog price still wins when it has one. See
+  [Costs the Agent Records Itself](/docs/token-usage/#costs-the-agent-records-itself).
+
+- `agentsview session usage` shows the agent's own cost figures next to
+  AgentsView's, including Claude Code's running session total, so you can spot
+  calls missing from the transcript.
+
+- **Always show year** in Settings > Appearance adds the year to session and
+  message dates.
+
+- `agentsview index embeddings build` turns on search by meaning when it is off,
+  with no config edit or restart.
+
+- `agentsview export sessions --wait` waits for project identification to
+  finish before exporting.
+
+- `integrations.docbank.allow_http = true` allows plain HTTP to Docbank on a
+  trusted network.
+
 **Improvements**
+
+- Session search finds messages that hold your words in any order and in
+  their regular forms, ranking exact matches first. See
+  [`session search`](/docs/session-api/#agentsview-session-search).
+
+- A calmer, denser design across the app, with a new **Reading width** setting
+  for transcripts.
 
 - Searches and other CLI or MCP reads through a running daemon answer without
   waiting for a sync on most requests. A read now keeps the daemon syncing
@@ -293,6 +347,9 @@ The latest release is
 
 **Upgrade notes**
 
+- If you turned on built-in search by meaning in another app that uses Kit,
+  AgentsView now turns it on too. Set `[vector] enabled = false` to keep it off.
+  See [Turned on in another app](/docs/semantic-search/#turned-on-in-another-app).
 - The **Trends** page is no longer in the web UI, and old `/trends` links open
   Sessions. Agent harnesses that read term counts can call the new
   `get_term_trends` MCP tool, and `GET /api/v1/trends/terms` still works.

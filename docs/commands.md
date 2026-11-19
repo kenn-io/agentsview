@@ -405,9 +405,10 @@ configuration. Seed import and restore generate fresh local authentication and l
 Previously retained raw files are preserved without redaction and may contain
 credentials. Seeded and restored databases are permanently archive-only: foreground starts,
 background starts and restarts do not scan the receiving machine. Ordinary sync,
-source transfers over HTTP or SSH, ChatGPT, Claude.ai and Gemini Apps imports, artifact exchange,
-mirror publication and raw-sync watch are refused. Browsing, curation, archive
-import, verification, extraction, backup and explicit reparse remain available. Use a separate data directory to collect new
+source transfers over HTTP or SSH, ChatGPT, Claude.ai, Gemini Apps and Grok web
+imports and Sync, artifact exchange, mirror publication and raw-sync watch are
+refused. Browsing, curation, archive import, verification, extraction, backup and
+explicit reparse remain available. Use a separate data directory to collect new
 local sessions; no runtime flag or config setting disables archive-only mode.
 
 Startup resync keeps archive-only sessions and their acceptance records without
@@ -1238,7 +1239,9 @@ matching `{dataDir}/assets` directory as well as the copied database content.
 Run `db compact` separately to measure SQLite file-space reclamation after
 migration. Back up the `{dataDir}/assets` directory together with the archive.
 
-The raw `agentsview session export` command still streams provider source bytes.
+The raw `agentsview session export` command streams provider source, with
+detected secrets masked unless you pass `--reveal`, and keeps inline image
+payloads.
 See [image storage](/docs/data/#ingest-time-image-offload) for export and
 remote-backend limits.
 
@@ -2097,7 +2100,7 @@ agentsview export sessions --all --format ndjson --project agentsview
 The JSON top level has `schema_version`, `archive_id`, `database_id`, `cursor`,
 `pricing`, `projects`, and `sessions`. NDJSON writes the same metadata as the
 first line, then one session row per following line. Current builds emit
-`schema_version: 6`; see [Session Export](/docs/session-export/#versioning) for
+`schema_version: 7`; see [Session Export](/docs/session-export/#versioning) for
 the v1 and transitional 0.38 release history. The default and maximum page size
 is `db.MaxSessionLimit`, currently 500.
 
@@ -2211,7 +2214,8 @@ labels are reported separately with their session ID and ordinal.
 
 `agentsview session commits <id>` lists transcript and Git trailer commits
 linked to a session. The `SOURCE` column distinguishes `transcript` from
-`commit message`. JSON keeps `source: "trailer"` for commit message links. Use
+`commit message`. JSON keeps `source: "trailer"` for commit message links.
+[`agentsview git-hook`](#agentsview-git-hook) adds those trailers. Use
 `--format json` for structured output. The table shows the session, exact message ordinal,
 call time, source, recorded SHA, branch, subject, and user turn, shortened to
 100 terminal columns. Transcript links use the last real prompt before the
@@ -2440,10 +2444,12 @@ ______________________________________________________________________
 Install the conversation search skill and focused MCP profile for installed Claude Code and Codex clients:
 
 ```bash
-agentsview agent setup [--agent claude|codex] [--check] [--force]
+agentsview agent setup [--agent claude|codex]... [--check] [--force] [--print] [--format json]
 ```
 
-Setup refuses to replace a different `agentsview` MCP entry without `--force` and preserves other entries. Pass `--force` to replace the entry and overwrite edited skill files. The memory profile supports `AGENTSVIEW_MEMORY_SERVER`, `AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, and `AGENTSVIEW_MEMORY_PG`.
+Setup refuses to replace a different `agentsview` MCP entry without `--force` and preserves other entries. Pass `--force` to replace the entry and overwrite edited skill files. `--check` changes nothing, and `--print` shows the MCP commands to run by hand.
+
+Setup registers `agentsview mcp --profile memory` with no server flags. For a remote archive, set `AGENTSVIEW_MEMORY_SERVER` or `AGENTSVIEW_MEMORY_PG` where the agent starts the MCP server, and point the skill at the same server with [`agentsview skills install --server`](#agentsview-skills).
 
 ______________________________________________________________________
 
@@ -2540,9 +2546,9 @@ hub on the next replica push, including a project-filtered push. An explicit
 append. Events appear in digests only when Friction review is enabled on the
 archive that builds them.
 
-`POST /api/v1/diagnostics` accepts `id`, `source`, `message`, and an optional
-RFC 3339 `occurred_at`. It requires an authenticated server or a localhost
-request. Reusing an ID with different content returns HTTP 409.
+`POST /api/v1/diagnostics` accepts a required UUID `id`, `source`, `message`,
+and an optional RFC 3339 `occurred_at`. It requires an authenticated server or
+a localhost request. Reusing an ID with different content returns HTTP 409.
 
 ______________________________________________________________________
 
@@ -2913,7 +2919,8 @@ AgentsView can index text in retained tool-result images with a local GLM-OCR
 service. Enable it in the [configuration](configuration.md#image-text) and
 restart the daemon.
 
-The endpoint must be loopback. It defaults to
+The endpoint must be an `http://` URL on a loopback host, with an explicit port
+and the path `/glmocr/parse`. It defaults to
 `http://127.0.0.1:30004/glmocr/parse` and must serve the
 [Docbank v0.17.0 deployment](https://github.com/kenn-io/docbank/tree/v0.17.0/deploy/glmocr),
 which requires an NVIDIA GB10 host. AgentsView reads PNG, JPEG, and WebP images

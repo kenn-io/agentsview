@@ -1216,11 +1216,12 @@ Output:        15230
 Peak ctx:      84000
 Subagents:     2 (included)
 Cost:          ~$2.41 (claude-opus-4-7)
+Agent total:   $2.38 for the session, including subagents
 ```
 
-The `Subagents` line appears only when the figures cover subagent transcripts,
-so a session without them (or a `--own-only` run) prints the same five lines it
-always has.
+The `Subagents` line appears only when the figures cover subagent transcripts.
+`Agent cost` and `Agent total` appear when the agent recorded its own figures;
+see [Costs the Agent Records Itself](/docs/token-usage/#costs-the-agent-records-itself).
 
 When refresh is incomplete, human output adds `Usage refresh is incomplete. Saved totals may be out of date.`.
 
@@ -1614,7 +1615,7 @@ against `pg serve`, with the same masking and `--reveal` constraints.
 
 ### Ingest-time image offload
 
-The normalized Markdown endpoint `/api/v1/sessions/{id}/md` carries stored tool-result content, including `agentsview_image` placeholders and `image_ref` asset references. The HTML export keeps its existing contract. A serving host needs the matching `{dataDir}/assets` directory. PostgreSQL and CockroachDB retain the reference text but cannot resolve local assets. The raw `agentsview session export` command streams provider source bytes and retains their original inline payloads.
+The normalized Markdown endpoint `/api/v1/sessions/{id}/md` carries stored tool-result content, including `agentsview_image` placeholders and `image_ref` asset references. The HTML export keeps its existing contract. A serving host needs the matching `{dataDir}/assets` directory. PostgreSQL and CockroachDB retain the reference text but cannot resolve local assets. The raw `agentsview session export` command streams provider source with detected secrets masked unless you pass `--reveal`, and keeps the original inline image payloads.
 
 ## Commit lookups
 
@@ -1675,6 +1676,8 @@ transcript links; `"usage"` archives keep neither.
 
 ### Git trailer links
 
+Run `agentsview git-hook install` in a repository to add these lines to new
+commits; see [`agentsview git-hook`](/docs/commands/#agentsview-git-hook).
 Commits containing `Agent-Session: <agent>:<session-id>` lines appear with
 `source: "trailer"`, a full SHA, Git's author time, and a repository path.
 Claude IDs omit the `claude:` prefix in the archive; other agents use their

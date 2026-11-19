@@ -27,8 +27,8 @@ The dashboard header includes:
 - **Search bar** — opens the command palette (`Cmd+K`)
 - **Sync button** — triggers a manual sync of session files
 - **Theme toggle** — switch between light and dark mode
-- **Import button** — opens the [Chat Import](/docs/chat-import/) dialog for
-  importing Claude.ai or ChatGPT conversations
+- **More actions → Import conversations** — opens the
+  [Chat Import](/docs/chat-import/) dialog
 - **Shortcuts button** (`?`) — shows all keyboard shortcuts
 
 The status bar at the bottom shows session count, message count, project count,
@@ -366,8 +366,6 @@ Each session item shows:
   `session_index.jsonl` for both current and archived sessions. Qwen Code,
   Gemini CLI, Kimi CLI, and OpenClaw titles, current Claude Code `/rename`
   names, and keeping titles out of the first message are included in 0.45.0.
-- **Model name** — the AI model used for the session, shown when available
-  (including Codex session models).
 - **Star button** — click the star icon or press `s` to star a session. Starred
   sessions persist in the SQLite database so they survive server restarts.
 - **Agent tag** — agent name on the right side, tinted with the agent's accent
@@ -375,7 +373,7 @@ Each session item shows:
 - **Machine label** — when using [PostgreSQL sync](/docs/pg-sync/), sessions
   from other machines show a machine name tag. Only visible in shared multi-host
   deployments.
-- **Project name** — abbreviated, right-aligned
+- **Project name**
 - **Session time** — relative time such as "2h ago", or the date and time with the year when **Always show year** is on
 - **User prompt count** — number of user messages in the session
 
@@ -504,8 +502,8 @@ attach independently launched workers to their manager and roll up their costs.
   linked to that pull request by Claude Code.
 - **Min Prompts** — filter to sessions with at least 2, 3, 5, or 10 user
   messages
-- **Include single-turn** — toggle to include sessions with one or fewer user
-  messages (excluded by default to reduce noise)
+- **Hide single-turn** — toggle to hide sessions with one or fewer user
+  messages (shown by default)
 - **Include automated** — toggle to include sessions classified as automation
   (roborev runs, title generation, AgentsView's own internal prompts, and any
   patterns you've added to
@@ -573,7 +571,7 @@ Available URL filters:
 | `active_since`                 | `true` to limit to the last 24 hours                                                                                      |
 | `min_messages`, `max_messages` | numeric message count bounds                                                                                              |
 | `min_user_messages`            | numeric user-message threshold                                                                                            |
-| `include_one_shot`             | `false` to hide single-turn sessions (default)                                                                            |
+| `include_one_shot`             | `false` to hide single-turn sessions; when omitted, they are shown                                                        |
 | `include_automated`            | `true` to include automated sessions                                                                                      |
 | `exclude_project`              | comma-separated projects to hide (e.g. `unknown`)                                                                         |
 
@@ -627,15 +625,15 @@ browser-local and is not synced through SQLite or PostgreSQL.
 ### Message Layouts
 
 Four layouts control how messages are rendered. Cycle between them with the `l`
-key or the layout button in the header, or pick one directly in Settings >
-Appearance:
+key, choose one under **Layout** in the session header's **View** menu, or set
+one in Settings > Appearance:
 
-| Layout  | Description                                               |
-| ------- | --------------------------------------------------------- |
-| Default | Full card layout with colored borders and spacing         |
-| Compact | Condensed view with minimal spacing                       |
-| Stream  | Continuous flow optimized for reading                     |
-| Skim    | Collapses tool calls to summary headers for fast skimming |
+| Layout  | Description                                |
+| ------- | ------------------------------------------ |
+| Default | Expanded messages                          |
+| Compact | The same content with tighter spacing      |
+| Stream  | Chat without speaker labels                |
+| Skim    | One line per message and tool call         |
 
 ### Focused Transcript Mode
 
@@ -648,8 +646,8 @@ agents still collapses to its prompts and final answers.
 
 ![Focused transcript mode](/docs/assets/generated/screenshots/focused-transcript.png)
 
-Switch between Normal and Focused mode in the **Transcript view** menu in the
-session header: under **Content**, choose **All messages and tool calls** or
+Switch between Normal and Focused mode in the **View** menu in the session
+header: under **Content**, choose **All messages and tool calls** or
 **Only your prompts and final answers**. The mode preference is saved in
 localStorage.
 
@@ -770,8 +768,8 @@ so matches can be highlighted.
 
 ### Block-Type Filtering
 
-Click the filter icon in the message viewer header to open a dropdown that
-toggles visibility of seven content categories:
+Open the **View** menu in the session header. Its **Block Visibility** group
+toggles seven content categories:
 
 | Category  | What It Controls          |
 | --------- | ------------------------- |
@@ -794,9 +792,7 @@ resume, an interrupted request, a task notification, or stop hook feedback.
 Hiding the category removes all of them; the rest of the transcript is
 unaffected.
 
-All categories are visible by default. When any are hidden, a badge on the
-filter button shows the count of hidden types. Click **Show all** to restore
-visibility.
+All categories are visible by default. **Show all** in the menu restores them.
 
 ### Sorting
 
@@ -813,6 +809,12 @@ in the header. The arrow icon indicates the current direction.
 
 Prompt navigation follows the visible transcript, so it respects Focused mode
 and the active block-type filter.
+
+### Jump to a Prompt
+
+Press `t`, or click **Jump to prompt** in the session header, to search the
+prompts typed in the session and jump to one, even in a part of the transcript
+that has not loaded yet.
 
 ### In-Session Search
 
@@ -1069,8 +1071,7 @@ controls. Search starts with the sidebar's selected project; choose another
 project or **All Projects** without changing the sidebar.
 
 Choose a relative period, calendar period, or custom dates. The filters apply
-to Full text, Semantic, and Hybrid searches. Closing the palette clears its date
-range; the next opening starts with the sidebar's current project again.
+to Full text, Semantic, and Hybrid searches.
 
 ![Command palette with project and date filters](/docs/assets/generated/screenshots/search-filters.png)
 
@@ -1313,6 +1314,7 @@ Press `?` to see all shortcuts in a modal overlay.
 | `k` / `↑` | Previous message                  |
 | `Shift+J` | Next user prompt                  |
 | `Shift+K` | Previous user prompt              |
+| `t`       | Jump to a prompt                  |
 | `]`       | Next session                      |
 | `[`       | Previous session                  |
 | `o`       | Toggle sort order                 |
@@ -1339,7 +1341,7 @@ organized into sections:
 | Section            | What You Can Configure                                                                                   |
 | ------------------ | -------------------------------------------------------------------------------------------------------- |
 | Language           | Interface language (Azerbaijani, English, French, Japanese, Korean, Spanish, Simplified Chinese, or Traditional Chinese)       |
-| Appearance         | Theme (light/dark), high-contrast mode, chart colors, message colors, message layout, zoom, always show year, block visibility |
+| Appearance         | Theme (light/dark), high-contrast mode, chart colors, message colors, message layout, reading width, zoom, always show year, block visibility |
 | Date ranges        | Browser-local checkbox for linking date selections across Sessions, Usage, Activity, and Quality          |
 | Session Providers  | Enable session providers, inspect their session directories, and add alternate agent homes               |
 | Tool-result images | Choose whether future imports keep, drop, or offload tool-result images; preview and remove images already stored |
@@ -1359,8 +1361,9 @@ load; a saved language preference takes precedence.
 
 ![Chart color palette setting](/docs/assets/generated/screenshots/settings-chart-colors.png)
 
-Language, theme, high contrast, message colors, message layout, zoom, block
-visibility, and Date ranges preferences use local storage in the current browser or desktop
+Language, theme, high contrast, message colors, message layout, reading width,
+zoom, always show year, block visibility, and Date ranges preferences use local
+storage in the current browser or desktop
 webview profile. Each profile keeps its own choices. The optional `zoom_level`
 setting supplies a default when no local zoom or text-size preference exists.
 
