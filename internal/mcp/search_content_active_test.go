@@ -185,9 +185,11 @@ func TestSearchContent_ActiveFilterHTTPCompatibility(t *testing.T) {
 func TestSearchContent_HintsApplyLegacyActivityFilter(t *testing.T) {
 	for _, response := range []string{"active", "mixed", "idle", "active first page"} {
 		t.Run(response, func(t *testing.T) {
-			limit := 10
+			// The idle case shows automated sessions, so its hint search serves
+			// one-shot sessions alone and keeps the caller's limit of one.
+			limit, hintLimit, includeAutomated := 10, "500", false
 			if response == "idle" {
-				limit = 1
+				limit, hintLimit, includeAutomated = 1, "1", true
 			}
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
@@ -202,9 +204,9 @@ func TestSearchContent_HintsApplyLegacyActivityFilter(t *testing.T) {
 						}
 						return
 					}
-					// The hint search shares one page between one-shot and
-					// automated sessions, so it asks for the widest page.
-					assert.Equal(t, "500", r.URL.Query().Get("limit"))
+					// A hint search shared between one-shot and automated
+					// sessions asks for the widest page.
+					assert.Equal(t, hintLimit, r.URL.Query().Get("limit"))
 					switch response {
 					case "active":
 						_, _ = w.Write([]byte(`{"matches":[{"session_id":"active"}]}`))
@@ -228,7 +230,7 @@ func TestSearchContent_HintsApplyLegacyActivityFilter(t *testing.T) {
 			}))
 			defer srv.Close()
 			ts := &toolset{svc: servicehttp.NewHTTPBackend(srv.URL, "", false, ""), now: func() time.Time { return fixedNow }}
-			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "marker", Limit: limit})
+			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "marker", Limit: limit, IncludeAutomated: includeAutomated})
 			require.NoError(t, err)
 			assert.Empty(t, out.Matches)
 			if response == "active first page" {

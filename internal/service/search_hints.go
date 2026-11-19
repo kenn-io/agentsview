@@ -284,10 +284,11 @@ func SearchContentHints(ctx context.Context, svc SessionService, req ContentSear
 				continue
 			}
 			if shared {
+				// A match whose rows are missing is unsorted. It still counts
+				// when show says so, and then the count is a lower bound.
 				shown, known := show(match.SessionID)
 				if !known {
 					lower, unsorted = true, true
-					continue
 				}
 				if !shown {
 					continue
@@ -323,13 +324,15 @@ func SearchContentHints(ctx context.Context, svc SessionService, req ContentSear
 		return true, unsorted
 	}
 	// A semantic search returns no cursor, so a page holding the full limit
-	// may have left matches out.
+	// may have left matches out. A hybrid page can also come up short while
+	// incomplete: its keyword leg reads at most a few batches, and matches
+	// the retry would show can use them up.
 	vectorLimit := req.Limit
 	if vectorLimit <= 0 || vectorLimit > db.MaxContentSearchLimit {
 		vectorLimit = db.DefaultContentSearchLimit
 	}
 	incomplete := func(page *ContentSearchResult) bool {
-		return page.NextCursor != 0 || page.CandidateTruncated || vector && len(page.Matches) >= vectorLimit
+		return page.NextCursor != 0 || page.CandidateTruncated || vector && (req.Mode == "hybrid" || len(page.Matches) >= vectorLimit)
 	}
 	// classify counts one hint from its shared page. When that page failed,
 	// or showed none of the hint's matches while it was incomplete or held
@@ -371,10 +374,17 @@ func SearchContentHints(ctx context.Context, svc SessionService, req ContentSear
 		// a tree root through known rows.
 		reach := hintProbe{oneShot: true, automated: true, children: true}
 		measure(hintProbe{code: "excluded_combined", args: args}, combined, true, func(id string) (bool, bool) {
-			if shown, known := reach.shows(rows, id, children || tree, false); !shown || !known {
-				return false, known
-			}
 			if singles[id] {
+				return false, true
+			}
+			// Every match on this page is hidden by default and shown by the
+			// combined retry. One whose rows are missing counts toward a lower
+			// bound, since a single retry might also show it.
+			shown, known := reach.shows(rows, id, children || tree, false)
+			if !known {
+				return true, false
+			}
+			if !shown {
 				return false, true
 			}
 			// The flat page may not list every session a flat retry shows; a

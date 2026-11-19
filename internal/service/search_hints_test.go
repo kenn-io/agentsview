@@ -522,3 +522,42 @@ func TestSearchContentHintsFlatPageSkipsAncestors(t *testing.T) {
 	}, hints)
 	assert.Equal(t, 1, svc.lists)
 }
+
+func TestSearchContentHintsMissingParentRow(t *testing.T) {
+	page := service.ContentSearchResult{Matches: []db.ContentMatch{{SessionID: "kid"}}}
+	svc := &rowService{search: expandedOnly(page), rows: map[string]db.Session{
+		// The lookup skips the trashed parent, so its row never arrives.
+		"kid": {ID: "kid", RelationshipType: "subagent", UserMessageCount: 1, IsAutomated: true, ParentSessionIDs: []string{"trashed"}},
+	}}
+	req := service.ContentSearchRequest{Pattern: "marker", IncludeChildren: true}
+	hints := service.SearchContentHints(t.Context(), svc, req, &service.ContentSearchResult{}, true, nil)
+	assert.Equal(t, []service.ContentSearchHint{
+		{Code: "excluded_combined", Message: "at least 1 match is hidden by default", RetryWith: map[string]any{"include_one_shot": true, "include_automated": true}},
+	}, hints)
+}
+
+func TestSearchContentHintsShortHybridPage(t *testing.T) {
+	one := service.ContentSearchResult{Matches: []db.ContentMatch{{SessionID: "one"}}}
+	auto := service.ContentSearchResult{Matches: []db.ContentMatch{{SessionID: "auto"}}}
+	svc := &rowService{
+		rows: map[string]db.Session{"one": {ID: "one", UserMessageCount: 1}, "auto": {ID: "auto", UserMessageCount: 2, IsAutomated: true}},
+		search: func(req service.ContentSearchRequest) service.ContentSearchResult {
+			switch {
+			case req.IncludeOneShot && req.IncludeAutomated:
+				return one
+			case req.IncludeAutomated:
+				return auto
+			}
+			return service.ContentSearchResult{}
+		},
+	}
+	// The shared hybrid page is short but missed the automated match, as when
+	// one-shot rows used up the keyword batches.
+	req := service.ContentSearchRequest{Pattern: "marker", Mode: "hybrid"}
+	hints := service.SearchContentHints(t.Context(), svc, req, &service.ContentSearchResult{}, true, nil)
+	assert.Equal(t, []service.ContentSearchHint{
+		{Code: "excluded_one_shot", Message: "at least 1 match is in one-shot sessions, hidden by default", RetryWith: map[string]any{"include_one_shot": true}},
+		{Code: "excluded_automated", Message: "at least 1 match is in automated sessions, hidden by default", RetryWith: map[string]any{"include_automated": true}},
+	}, hints)
+	assert.Equal(t, 2, svc.searches)
+}
