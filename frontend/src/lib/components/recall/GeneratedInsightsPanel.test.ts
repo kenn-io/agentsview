@@ -19,7 +19,10 @@ const mocks = vi.hoisted(() => ({
   selectTask: vi.fn(),
 }));
 
-const gettingStarted = vi.hoisted(() => ({ complete: vi.fn() }));
+const gettingStarted = vi.hoisted(() => ({
+  complete: vi.fn<(item: "insights") => void>(),
+  delegate: undefined as ((item: "insights") => void) | undefined,
+}));
 
 const state = vi.hoisted(() => {
   const selectedItem = {
@@ -124,6 +127,9 @@ describe("GeneratedInsightsPanel", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    gettingStarted.complete.mockImplementation((item: "insights") =>
+      gettingStarted.delegate?.(item),
+    );
     state.serverVersion.insight_generation_available = true;
     state.serverVersion.read_only = false;
     router.route = "recall";
@@ -143,6 +149,7 @@ describe("GeneratedInsightsPanel", () => {
 
   afterEach(async () => {
     if (component) await unmount(component);
+    gettingStarted.delegate = undefined;
     component = undefined;
     document.body.innerHTML = "";
     router.params = {};
@@ -262,6 +269,23 @@ describe("GeneratedInsightsPanel", () => {
     report!.click();
     await tick();
     expect(gettingStarted.complete).toHaveBeenCalledExactlyOnceWith("insights");
+  });
+
+  it("records a selected report with the real checklist store", async () => {
+    localStorage.removeItem("agentsview-getting-started");
+    const { GettingStartedStore } = await vi.importActual<
+      typeof import("../../stores/gettingStarted.svelte.js")
+    >("../../stores/gettingStarted.svelte.js");
+    const progress = new GettingStartedStore();
+    gettingStarted.delegate = (item) => progress.complete(item);
+    state.store.selectedId = null;
+    state.store.selectedItem = undefined;
+    component = mount(GeneratedInsightsPanel, { target: document.body });
+    await tick();
+    document.querySelector<HTMLButtonElement>(".generated-list button")!.click();
+    await tick();
+    expect(progress.done.has("insights")).toBe(true);
+    localStorage.removeItem("agentsview-getting-started");
   });
 
   it("completes the checklist when a saved report is opened from its URL", async () => {
