@@ -2892,11 +2892,19 @@ func (s *Store) populateFrustrationMarkers(
 		ids = remaining
 		if len(ids) > 0 {
 			if done := s.frustrationFillDone(ids); done != nil {
+				budget := time.Second
+				if deadline, ok := ctx.Deadline(); ok {
+					budget = min(budget, time.Until(deadline)/2)
+				}
+				timer := time.NewTimer(budget)
 				select {
 				case <-ctx.Done():
+					timer.Stop()
 					return ctx.Err()
 				case <-done:
+				case <-timer.C:
 				}
+				timer.Stop()
 				counts, err = s.loadStoredFrustrationCounts(ctx, ids, versions, versionColumn)
 				if err != nil {
 					log.Printf("loading frustration counts: %v", err)

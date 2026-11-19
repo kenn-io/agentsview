@@ -36,21 +36,24 @@ func (s *Store) frustrationFillDone(ids []string) <-chan struct{} {
 }
 
 func (s *Store) fillFrustrationCounts(ctx context.Context, ids []string, column string) error {
-	return pgQueryChunked(ids, func(ids []string) error {
-		batch := &frustrationBatch{ids: make(map[string]struct{}, len(ids)), done: make(chan struct{})}
-		for _, id := range ids {
-			batch.ids[id] = struct{}{}
-		}
-		state := &s.runtimeState().frustrationFill
+	if len(ids) == 0 {
+		return nil
+	}
+	batch := &frustrationBatch{ids: make(map[string]struct{}, len(ids)), done: make(chan struct{})}
+	for _, id := range ids {
+		batch.ids[id] = struct{}{}
+	}
+	state := &s.runtimeState().frustrationFill
+	state.mu.Lock()
+	state.active = batch
+	state.mu.Unlock()
+	defer func() {
 		state.mu.Lock()
-		state.active = batch
+		state.active = nil
+		close(batch.done)
 		state.mu.Unlock()
-		defer func() {
-			state.mu.Lock()
-			state.active = nil
-			close(batch.done)
-			state.mu.Unlock()
-		}()
+	}()
+	return pgQueryChunked(ids, func(ids []string) error {
 		counts, versions, err := s.scanFrustrationCounts(ctx, ids, column)
 		if err != nil {
 			return err
