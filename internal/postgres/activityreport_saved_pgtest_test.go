@@ -145,6 +145,40 @@ func TestPGActivityReportSavedPricingVariants(t *testing.T) {
 	requirePGKeptEqual(t, priced, pgKeptBuild(t, restartedOther, f, q, false))
 }
 
+func TestPGActivityReportSavedRevisionAfterUnrelatedWrite(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	target, directory := testPGURL(t), t.TempDir()
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	first := openPGActivityInputStore(t, target, syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, first.Close()) })
+	want := pgKeptBuild(t, first, f, q, true)
+	pgKeptSession(t, local, "b", "project-b", "2026-07-14")
+	pgKeptPush(t, syncer, false)
+	restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, restarted.Close()) })
+	requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, false))
+
+	again := openPGActivityInputStore(t, target, syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, again.Close()) })
+	f.IncludeSubagents, f.IncludeForks = true, true
+	pricing, err := again.loadPricingMap(t.Context())
+	require.NoError(t, err)
+	digest, err := export.EffectivePricingDigest(pricing)
+	require.NoError(t, err)
+	version, _, err := again.activityKeptVersion(t.Context(), digest)
+	require.NoError(t, err)
+	identity, err := again.activitySourceIdentity(t.Context(), "")
+	require.NoError(t, err)
+	entry, ok := again.loadActivityReport(kept.Selection(f, q), version, identity)
+	require.True(t, ok)
+	_, changed, err := again.LoadUsageChanges(t.Context(), entry.revision)
+	require.NoError(t, err)
+	assert.Empty(t, changed)
+}
+
 func TestPGActivityReportSavedSweepOnMemoHit(t *testing.T) {
 	cache := t.TempDir()
 	t.Setenv("CACHE_DIRECTORY", cache)
