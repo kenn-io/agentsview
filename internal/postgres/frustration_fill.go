@@ -85,8 +85,13 @@ func (s *Store) joinFrustrationFill(ctx context.Context, ids []string, generatio
 		}
 	}
 	state.mu.Unlock()
-	waitCtx, cancel := halfDeadline(ctx)
-	defer cancel()
+	// Leave the rest of the request's time for its own scan.
+	waitCtx := ctx
+	if deadline, ok := ctx.Deadline(); ok {
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithTimeout(ctx, time.Until(deadline)/2)
+		defer cancel()
+	}
 	for _, chunk := range waits {
 		wait := chunk.done
 		if filtered[chunk] {
@@ -98,28 +103,14 @@ func (s *Store) joinFrustrationFill(ctx context.Context, ids []string, generatio
 		case <-wait:
 		}
 		if filtered[chunk] {
-			s.memoizeFrustrationChunk(chunk, generation)
+			state.mu.Lock()
+			for id, version := range chunk.versions {
+				s.runtimeState().frustrationMarkers.Store(generation, id, version, chunk.counts[id])
+			}
+			state.mu.Unlock()
 		}
 	}
 	return true
-}
-
-// halfDeadline leaves the rest of a request's time for its own scan.
-func halfDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
-	if deadline, ok := ctx.Deadline(); ok {
-		return context.WithTimeout(ctx, time.Until(deadline)/2)
-	}
-	return ctx, func() {}
-}
-
-// memoizeFrustrationChunk lets a filtered request reuse a chunk's scan.
-func (s *Store) memoizeFrustrationChunk(chunk *frustrationChunk, generation uint64) {
-	state := &s.runtimeState().frustrationFill
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	for id, version := range chunk.versions {
-		s.runtimeState().frustrationMarkers.Store(generation, id, version, chunk.counts[id])
-	}
 }
 
 // fillFrustrationChunk publishes a chunk's scan for filtered requests, then
