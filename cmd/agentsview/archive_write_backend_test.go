@@ -620,12 +620,6 @@ func (h *pushWatchOwnerHarness) nextPGWatchAttempt(
 	return h.nextAttemptWithOptionsLocked(reason, cfg.Full, cfg.NoSourceSync)
 }
 
-func (h *pushWatchOwnerHarness) nextAttemptLocked(
-	reason pushReason,
-) (int, bool) {
-	return h.nextAttemptWithOptionsLocked(reason, false, false)
-}
-
 func (h *pushWatchOwnerHarness) nextAttemptWithOptionsLocked(
 	reason pushReason,
 	full, noSourceSync bool,
