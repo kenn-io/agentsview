@@ -1054,3 +1054,27 @@ func TestPlanChangedPathsAntigravityTitleStoreIndex(t *testing.T) {
 	assert.Empty(t, plan.FallbackProviders,
 		"reading titles rewrites their WAL index without changing any session")
 }
+
+// Codex's own databases and lock files in its home directory change
+// constantly. Before Codex classified them, each event fell back to a scan
+// of every Codex transcript.
+func TestPlanChangedPathsCodexHomeFilesNeedNoSync(t *testing.T) {
+	home := t.TempDir()
+	sessions := filepath.Join(home, "sessions")
+	require.NoError(t, os.MkdirAll(sessions, 0o755))
+	paths := []string{filepath.Join(home, "logs_2.sqlite"), filepath.Join(home, "session_index.jsonl.lock")}
+	for _, path := range paths {
+		require.NoError(t, os.WriteFile(path, []byte("x"), 0o600))
+	}
+	engine := NewEngine(t.Context(), dbtest.OpenTestDB(t), EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {sessions}},
+		Machine:   "local",
+	})
+	t.Cleanup(engine.Close)
+
+	plan, err := engine.PlanChangedPathsContext(t.Context(), paths)
+
+	require.NoError(t, err)
+	assert.Empty(t, plan.Files)
+	assert.Empty(t, plan.FallbackProviders)
+}
