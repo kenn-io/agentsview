@@ -26,4 +26,5 @@ case "$service" in
     postgres) export TEST_PG_URL="postgres://agentsview_test:agentsview_test_password@${address}/agentsview_test?sslmode=disable" ;;
     clickhouse) export TEST_CLICKHOUSE_URL="clickhouse://${address}/default" ;;
 esac
-"$@"
+# Override any lease passed to the parent Make on its command line.
+"$@" "TEST_SERVICE_LEASE=$TEST_SERVICE_LEASE"

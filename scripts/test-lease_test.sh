@@ -21,7 +21,20 @@ cat > "$tmp/bin/docker" <<'DOCKER'
 #!/bin/sh
 printf '%s\n' "$*" >> "$DOCKER_LOG"
 case " $* " in
-  *' up '*) if [ -n "${WAIT_UP:-}" ]; then touch "$WAIT_UP/started"; while [ ! -f "$WAIT_UP/release-up" ]; do sleep .1; done; fi ;;
+  *' up '*)
+    if [ -n "${CHECK_LEASE:-}" ]; then
+      [ "$2" = -p ] && [ "$3" = "$TEST_SERVICE_LEASE" ] || exit 1
+      grep -Fq 'test-service.lease: "${TEST_SERVICE_LEASE}"' docker-compose.test-lease.yml || exit 1
+      python3 - "$HOME/.local/state/test-service-leases/$TEST_SERVICE_LEASE" <<'PROBE'
+import fcntl, sys
+with open(sys.argv[1]) as f:
+    try: fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError: sys.exit(0)
+sys.exit(1)
+PROBE
+      printf '%s\n' "$TEST_SERVICE_LEASE" > "$CHECK_LEASE"
+    fi
+    if [ -n "${WAIT_UP:-}" ]; then touch "$WAIT_UP/started"; while [ ! -f "$WAIT_UP/release-up" ]; do sleep .1; done; fi ;;
   *' port '*) echo 127.0.0.1:49153 ;;
   *' down '*) exit "${DOWN_STATUS:-0}" ;;
 esac
@@ -107,6 +120,13 @@ grep -qE 'test-lease.sh agentsview .* clickhouse 9000 .*test-clickhouse-run' "$t
 grep -qE 'test-lease.sh agentsview .* postgres 5432 .*bench-pg-usage-run' "$tmp/make"
 (cd "$root" && make -n postgres-up clickhouse-up) > "$tmp/manual"
 if grep -qE 'test-lease| -p ' "$tmp/manual"; then exit 1; fi
+
+# A command-line lease cannot override the new lease in the nested Make.
+printf '%s\n' '$(info LEASE_FROM_MAKE=$(TEST_SERVICE_LEASE))' > "$tmp/inspect.mk"
+(cd "$root" && CHECK_LEASE="$tmp/project" MAKEFILES="$tmp/inspect.mk" make -n test-postgres TEST_SERVICE_LEASE=old) > "$tmp/make-lease"
+project=$(cat "$tmp/project")
+[[ "$project" != old ]]
+grep -Fxq "LEASE_FROM_MAKE=$project" "$tmp/make-lease"
 
 # A signal while Compose is starting still runs cleanup.
 : > "$DOCKER_LOG"
