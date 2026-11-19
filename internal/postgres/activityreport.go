@@ -147,7 +147,8 @@ func (s *Store) BuildActivityReportArtifacts(
 		return activity.CandidateArtifacts{}, err
 	}
 
-	var selection, version string
+	var selection, version, identity string
+	var pending bool
 	var revision int64
 	if !q.Partial && !s.hostedRelations && !db.TerminationUsesTime(f.Termination) {
 		version, err = s.activityKeptVersion(ctx, pricingDigest)
@@ -156,6 +157,31 @@ func (s *Store) BuildActivityReportArtifacts(
 		}
 		if version != "" {
 			selection = kept.Selection(f, q)
+			memo := &s.runtimeState().activityKept
+			now := time.Now()
+			eligible := false
+			if q.Loc != nil && s.activityReports.Enabled() {
+				local := now.In(q.Loc)
+				midnight := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, q.Loc)
+				eligible = !q.RangeEnd.After(midnight)
+			}
+			entries, ok := memo.Get(selection, version)
+			if ok {
+				identity = entries[0].identity
+				pending = entries[0].pending
+			}
+			if eligible && (!ok || pending) {
+				identity, _ = s.activitySourceIdentity(ctx, "")
+				pending = false
+				if !ok && identity != "" {
+					s.activityReports.Sweep(now)
+					if entry, found := s.loadActivityReport(selection, version, identity); found {
+						memo.Put(selection, version, []pgActivityKept{entry})
+					}
+				}
+			} else if !ok && q.Loc != nil && s.activityReports.Enabled() && !eligible {
+				pending = true
+			}
 			var report kept.Report
 			var hit bool
 			report, revision, hit, err = s.keptActivityReport(ctx, selection, version, f,
@@ -164,6 +190,17 @@ func (s *Store) BuildActivityReportArtifacts(
 				return activity.CandidateArtifacts{}, err
 			}
 			if hit {
+				entries, ok := memo.Get(selection, version)
+				if ok {
+					entry := entries[0]
+					if entry.identity != identity || entry.pending != pending {
+						entry.identity, entry.pending = identity, pending
+						memo.Put(selection, version, []pgActivityKept{entry})
+					}
+					if identity != "" {
+						s.activityReports.Keep(selection, identity+"|"+version, func() ([]byte, error) { return encodePGActivityReport(entry) })
+					}
+				}
 				activity.ReportProgress(onProgress, report.Done)
 				return report.Artifacts, nil
 			}
@@ -230,11 +267,17 @@ func (s *Store) BuildActivityReportArtifacts(
 		for _, id := range candidates {
 			delete(read, id)
 		}
-		s.runtimeState().activityKept.Put(selection, version, []pgActivityKept{{
+		memo := &s.runtimeState().activityKept
+		memo.Put(selection, version, []pgActivityKept{{
 			report: kept.Report{Artifacts: artifacts, Done: done}, revision: revision,
 			candidates: candidates, peers: slices.Clip(slices.Sorted(maps.Keys(read))),
-			labels: activity.ProjectLabels(sessions),
+			labels: activity.ProjectLabels(sessions), identity: identity, pending: pending,
 		}})
+		if identity != "" {
+			if entries, ok := memo.Get(selection, version); ok {
+				s.saveActivityReport(selection, version, entries[0])
+			}
+		}
 	}
 	return artifacts, err
 }

@@ -33,6 +33,7 @@ type Store struct {
 	pricingSnapshot *pricingSnapshot
 	usageCache      *db.UsageCacheReader
 	activityDisk    kept.Disk
+	activityReports kept.Disk
 	trendsDisk      kept.Disk
 	trendsIdentity  string
 	trendsVersion   string

@@ -41,6 +41,12 @@ func (s *Store) ConfigureUsageCache(ctx context.Context, directory, targetURL, s
 	} else {
 		s.activityDisk.Sweep(time.Now())
 	}
+	s.activityReports.MaxFiles = 8
+	if err := s.activityReports.Open("postgres-activity-reports", strings.ReplaceAll(fingerprint, ":", "-"), 128<<20, 128<<20); err != nil {
+		log.Printf("opening activity reports cache: %v", err)
+	} else {
+		s.activityReports.Sweep(time.Now())
+	}
 	if column != "xmin" {
 		return nil
 	}

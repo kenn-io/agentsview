@@ -1179,6 +1179,11 @@ or an in-window Claude peer changes; a changed project identity map also
 invalidates it. Partial reports, read-only archives, and reports filtered by
 active, stale, or unclean termination status bypass this cache.
 
+PostgreSQL saves finished Activity reports when built for reuse after restart.
+It keeps up to eight files and 128 MiB. Reports expire after 30 days unopened,
+checked before a saved report is loaded. Reuse requires matching database
+identity and pricing, and the usage change journal validates the report.
+
 SQLite and native PostgreSQL track the inputs to Tools, Velocity, and Signals
 with separate change tokens. A score-only edit refreshes Signals while Tools
 and Velocity remain reusable. SQLite and native PostgreSQL save these results

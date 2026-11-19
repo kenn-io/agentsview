@@ -16,6 +16,8 @@ import (
 
 // Disk retains opaque selections using the same directory and binary identity as reports.
 type Disk struct {
+	// MaxFiles caps retained files; zero means no limit.
+	MaxFiles          int
 	reports           Reports
 	mu                sync.Mutex
 	maxFile, maxBytes int64
@@ -167,8 +169,8 @@ func (d *Disk) trim() error {
 		total += info.Size()
 	}
 	slices.SortFunc(files, func(a, b file) int { return a.mod.Compare(b.mod) })
-	for _, f := range files {
-		if d.maxBytes <= 0 || total <= d.maxBytes {
+	for i, f := range files {
+		if (d.maxBytes <= 0 || total <= d.maxBytes) && (d.MaxFiles <= 0 || len(files)-i <= d.MaxFiles) {
 			break
 		}
 		if err := os.Remove(filepath.Join(d.reports.disk.dir, f.name)); err != nil && !errors.Is(err, os.ErrNotExist) {

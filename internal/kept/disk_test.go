@@ -39,6 +39,23 @@ func TestDiskEvictsLeastRecentlyOpened(t *testing.T) {
 	require.Equal(t, "one", string(payload))
 }
 
+func TestDiskMaxFiles(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	disk := Disk{MaxFiles: 2}
+	require.NoError(t, disk.Open("test-usage", "mirror", 1024, 0))
+	require.True(t, disk.Put("first", "v", []byte("one")))
+	old := time.Now().Add(-time.Hour)
+	require.NoError(t, os.Chtimes(disk.reports.disk.path("first"), old, old))
+	require.True(t, disk.Put("second", "v", []byte("two")))
+	require.True(t, disk.Put("third", "v", []byte("three")))
+	_, ok := disk.Get("first", "v")
+	require.False(t, ok)
+	_, ok = disk.Get("second", "v")
+	require.True(t, ok)
+	_, ok = disk.Get("third", "v")
+	require.True(t, ok)
+}
+
 func TestDiskLimitsAndUnavailableDirectory(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	var disk Disk

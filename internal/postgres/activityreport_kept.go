@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json/v2"
 	"fmt"
 	"math"
 	"reflect"
@@ -14,9 +15,44 @@ import (
 )
 
 type pgActivityKept struct {
+	identity                  string
+	pending                   bool
 	report                    kept.Report
 	revision                  int64
 	candidates, peers, labels []string
+}
+
+type pgActivitySavedReport struct {
+	Revision                  int64
+	Candidates, Peers, Labels []string
+	Report                    kept.Report
+}
+
+func (s *Store) loadActivityReport(selection, version, identity string) (pgActivityKept, bool) {
+	data, ok := s.activityReports.Get(selection, identity+"|"+version)
+	if !ok {
+		return pgActivityKept{}, false
+	}
+	var saved pgActivitySavedReport
+	if json.Unmarshal(data, &saved) != nil || saved.Revision <= 0 {
+		return pgActivityKept{}, false
+	}
+	for key, project := range saved.Report.Artifacts.Report.Projects {
+		project.ProjectKey = key
+		saved.Report.Artifacts.Report.Projects[key] = project
+	}
+	return pgActivityKept{identity: identity, revision: saved.Revision, candidates: saved.Candidates, peers: saved.Peers, labels: saved.Labels, report: saved.Report}, true
+}
+
+func encodePGActivityReport(entry pgActivityKept) ([]byte, error) {
+	return json.Marshal(pgActivitySavedReport{Revision: entry.revision, Candidates: entry.candidates, Peers: entry.peers, Labels: entry.labels, Report: entry.report}, json.FormatNilSliceAsNull(true))
+}
+
+func (s *Store) saveActivityReport(selection, version string, entry pgActivityKept) {
+	data, err := encodePGActivityReport(entry)
+	if err == nil {
+		s.activityReports.Put(selection, entry.identity+"|"+version, data)
+	}
 }
 
 func (s *Store) activityKeptVersion(ctx context.Context, pricingDigest string) (string, error) {
