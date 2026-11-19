@@ -146,9 +146,8 @@ GRANT INSERT ON hosted_sessions.raw_device_tokens,
   hosted_sessions.raw_manifest_entries, hosted_sessions.raw_manifest_objects,
   hosted_sessions.messages, hosted_sessions.tool_calls,
   hosted_sessions.tool_result_events, hosted_sessions.usage_events,
-  hosted_sessions.session_plan_usage, hosted_sessions.secret_findings,
-  hosted_sessions.excluded_sessions,
-  hosted_sessions.raw_projection_generations,
+  hosted_sessions.session_plan_usage, hosted_sessions.session_usage_totals,
+  hosted_sessions.secret_findings, hosted_sessions.raw_projection_generations,
   hosted_sessions.raw_source_contributions,
   hosted_sessions.raw_session_public_aliases,
   hosted_sessions.raw_embedding_outbox TO hosted_runtime;
@@ -160,8 +159,8 @@ GRANT INSERT, UPDATE ON hosted_sessions.raw_objects,
   hosted_sessions.raw_source_heads, hosted_sessions.raw_ingest_jobs,
   hosted_sessions.raw_source_projections, hosted_sessions.raw_session_groups,
   hosted_sessions.raw_content_revisions, hosted_sessions.raw_session_branches,
-  hosted_sessions.raw_corpus_state, hosted_sessions.raw_projection_rollouts
-  TO hosted_runtime;
+  hosted_sessions.raw_corpus_state, hosted_sessions.raw_projection_rollouts,
+  hosted_sessions.excluded_sessions TO hosted_runtime;
 GRANT INSERT ON hosted_sessions.raw_manifests TO hosted_runtime;
 GRANT SELECT, INSERT, UPDATE, DELETE ON hosted_sessions.raw_message_dialogue
   TO hosted_runtime;
