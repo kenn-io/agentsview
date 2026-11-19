@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root=$(cd "$(dirname "$0")/.." && pwd)
+tmp=$(mktemp -d)
+launcher=
+cleanup() {
+    touch "$tmp/release" "$tmp/release-up"
+    if [[ -n "$launcher" ]] && kill -0 "$launcher" 2>/dev/null; then
+        touch "$tmp/release"
+        wait "$launcher" 2>/dev/null || true
+    fi
+    find "$tmp" -depth -delete
+}
+trap cleanup EXIT
+go_bin="$(go env GOROOT)/bin/go"
+python_bin=$(command -v python3)
+if command -v mise >/dev/null 2>&1 && [[ "$python_bin" == */mise/shims/* ]]; then python_bin=$(mise which python3); fi
+export HOME="$tmp/home"
+mkdir -p "$HOME" "$tmp/bin" "$tmp/module"
+cat > "$tmp/bin/docker" <<'DOCKER'
+#!/bin/sh
+printf '%s\n' "$*" >> "$DOCKER_LOG"
+case " $* " in
+  *' up '*) if [ -n "${WAIT_UP:-}" ]; then touch "$WAIT_UP/started"; while [ ! -f "$WAIT_UP/release-up" ]; do sleep .1; done; fi ;;
+  *' port '*) echo 127.0.0.1:49153 ;;
+  *' down '*) exit "${DOWN_STATUS:-0}" ;;
+esac
+DOCKER
+chmod +x "$tmp/bin/docker"
+ln -s "$python_bin" "$tmp/bin/python3"
+ln -s "$go_bin" "$tmp/bin/go"
+export PATH="$tmp/bin:$PATH" DOCKER_LOG="$tmp/docker.log"
+
+# A real test binary retains the lease after its launcher dies.
+cat > "$tmp/module/go.mod" <<'MOD'
+module example.com/lease-test
+
+go 1.21
+MOD
+cat > "$tmp/module/lease_test.go" <<'GO'
+package lease_test
+import (
+    "os"
+    "testing"
+    "time"
+)
+func TestLease(t *testing.T) {
+    os.WriteFile(os.Getenv("READY"), []byte("ready"), 0600)
+    for { if _, err := os.Stat(os.Getenv("RELEASE")); err == nil { return }; time.Sleep(10 * time.Millisecond) }
+}
+GO
+export READY="$tmp/ready" RELEASE="$tmp/release"
+(cd "$tmp/module" && exec "$root/scripts/test-lease.sh" agentsview go test ./...) >"$tmp/go.log" 2>&1 &
+launcher=$!
+for _ in {1..600}; do [[ -f "$READY" ]] && break; sleep .1; done
+[[ -f "$READY" ]] || { cat "$tmp/go.log"; exit 1; }
+lease=$(find "$HOME/.local/state/test-service-leases" -type f -print -quit)
+kill -9 "$launcher"
+wait "$launcher" 2>/dev/null || true
+launcher=
+probe() {
+    python3 - "$lease" <<'PY'
+import fcntl, sys
+with open(sys.argv[1]) as f:
+    try: fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError: sys.exit(1)
+PY
+}
+if probe; then echo 'lease released while test still runs' >&2; exit 1; fi
+touch "$RELEASE"
+for _ in {1..100}; do if probe; then break; fi; sleep .1; done
+probe
+
+# The compose runner preserves status, labels the project, and reports cleanup failure.
+export TEST_SERVICE_LEASE=agentsview-test-123 DOWN_STATUS=1
+set +e
+(cd "$root" && ./scripts/test-service-compose.sh postgres 5432 sh -c 'test "$TEST_PG_URL" = "postgres://agentsview_test:agentsview_test_password@127.0.0.1:49153/agentsview_test?sslmode=disable" || exit 8; exit 7') 2>"$tmp/error"
+status=$?
+set -e
+[[ $status == 7 ]]
+rg -q 'cleanup failed; scheduled cleanup will retry' "$tmp/error"
+rg -q -- '-p agentsview-test-123 .* up -d --wait postgres' "$DOCKER_LOG"
+rg -q -- '-p agentsview-test-123 .* down -v --remove-orphans' "$DOCKER_LOG"
+[[ -f "$lease" ]]
+
+# The public targets invoke the lease wrapper; manual targets retain their project.
+(cd "$root" && make -n test-postgres test-clickhouse bench-pg-usage) > "$tmp/make"
+rg -q 'test-lease.sh agentsview .* postgres 5432 .*test-postgres-run' "$tmp/make"
+rg -q 'test-lease.sh agentsview .* clickhouse 9000 .*test-clickhouse-run' "$tmp/make"
+rg -q 'test-lease.sh agentsview .* postgres 5432 .*bench-pg-usage-run' "$tmp/make"
+(cd "$root" && make -n postgres-up clickhouse-up) > "$tmp/manual"
+if rg -q 'test-lease| -p ' "$tmp/manual"; then exit 1; fi
+
+# A signal while Compose is starting still runs cleanup.
+: > "$DOCKER_LOG"
+export DOWN_STATUS=0 WAIT_UP="$tmp"
+(cd "$root" && exec ./scripts/test-service-compose.sh postgres 5432 true) >"$tmp/signal.log" 2>&1 &
+launcher=$!
+for _ in {1..100}; do [[ -f "$tmp/started" ]] && break; sleep .1; done
+[[ -f "$tmp/started" ]]
+kill -TERM "$launcher"
+touch "$tmp/release-up"
+set +e
+wait "$launcher"
+status=$?
+set -e
+launcher=
+[[ $status == 143 ]]
+rg -q -- '-p agentsview-test-123 .* down -v --remove-orphans' "$DOCKER_LOG"
+
+# Two overlapping runs select different projects and clean up their own project.
+unset TEST_SERVICE_LEASE WAIT_UP
+: > "$DOCKER_LOG"
+(cd "$root" && ./scripts/test-lease.sh agentsview ./scripts/test-service-compose.sh postgres 5432 sh -c 'sleep 1') &
+first=$!
+(cd "$root" && ./scripts/test-lease.sh agentsview ./scripts/test-service-compose.sh postgres 5432 sh -c 'sleep 1') &
+second=$!
+wait "$first"
+wait "$second"
+projects=$(awk '$1 == "compose" && $2 == "-p" && $8 == "up" {print $3}' "$DOCKER_LOG" | sort -u)
+[[ $(printf '%s\n' "$projects" | wc -l) == 2 ]]
+while IFS= read -r project; do
+    rg -q -- "-p $project .* down -v --remove-orphans" "$DOCKER_LOG"
+done <<< "$projects"
+
+# A missing Python interpreter stops before Docker can start anything.
+mkdir "$tmp/no-python"
+ln -s "$tmp/bin/docker" "$tmp/no-python/docker"
+: > "$DOCKER_LOG"
+set +e
+PATH="$tmp/no-python" /bin/sh "$root/scripts/test-lease.sh" agentsview docker info >"$tmp/no-python.out" 2>&1
+status=$?
+set -e
+[[ $status == 2 && ! -s "$DOCKER_LOG" ]]
+rg -q 'python3 is required' "$tmp/no-python.out"
