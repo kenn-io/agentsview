@@ -112,6 +112,7 @@ These run without any configuration. None of them sends session content,
 prompts, project names, file paths, or hostnames. Each one reveals your IP
 address to the host it contacts.
 
+- **Usage reporting.** Anonymous telemetry, sent only after consent.
 - **Update check.** When the web UI loads in a browser, the server requests
   `github.com/kenn-io/agentsview/releases/latest` and reads the release tag
   from the redirect. It caches the answer for one hour, or 15 minutes for
