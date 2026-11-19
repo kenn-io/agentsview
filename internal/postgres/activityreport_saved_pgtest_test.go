@@ -84,7 +84,7 @@ func TestPGActivityReportSaved(t *testing.T) {
 				require.Empty(t, files)
 				if mode == "today" {
 					require.Len(t, first.runtimeState().activityKept.Snapshot(), 1)
-				} else if mode != "memo-rejected" {
+				} else if mode == "unavailable" {
 					lookups := 0
 					if denied != nil {
 						lookups = denied.queries
@@ -156,9 +156,9 @@ func TestPGActivityReportSaved(t *testing.T) {
 			switch mode {
 			case "restart":
 				requirePGKeptEqual(t, want, got)
-				pgKeptSession(t, local, "b", "project-a", "2026-06-14")
+				pgKeptSession(t, local, "a", "project-a", "2026-06-15")
 				pgKeptPush(t, syncer, false)
-				assert.Len(t, pgKeptBuild(t, restarted, f, q, true).Sessions, 2)
+				assert.Empty(t, pgKeptBuild(t, restarted, f, q, true).Sessions)
 			case "replaced":
 				assert.Equal(t, 600, got.Report.Totals.OutputTokens)
 			case "identity-retry":
@@ -199,8 +199,7 @@ func TestPGActivityMemoHitDoesNotRestoreEvictedReport(t *testing.T) {
 	store.keepActivityReport("selection-0", "version", entry, "identity", false)
 	_, ok := store.activityReports.Get("selection-0|identity|version", "identity|version")
 	require.False(t, ok)
-	for _, file := range files {
-		_, err := os.Stat(file)
-		require.NoError(t, err)
-	}
+	after, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
+	require.NoError(t, err)
+	require.Equal(t, files, after)
 }
