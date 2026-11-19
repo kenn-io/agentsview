@@ -133,7 +133,7 @@ func (d *Disk) Put(selection, version string, payload []byte) bool {
 	if disk.dir == "" {
 		return false
 	}
-	if saved, err := disk.save(selection, version, payload, d.maxFile); saved && err == nil {
+	if saved, _ := disk.save(selection, version, payload, d.maxFile); saved {
 		_ = d.trim()
 		return true
 	}

@@ -112,10 +112,10 @@ func savePGActivityParts(disk *kept.Disk, slot, version string, rows []kept.Part
 		})
 	}
 	data, err := encode()
-	if err == nil && disk.Put(slot, version, data) {
+	if err != nil || disk.Put(slot, version, data) {
 		return
 	}
-	if len(rows) > 0 && rows[0].Value.Priced != nil {
+	if rows[0].Value.Priced != nil {
 		rows[0].Value.Priced = nil
 		if data, err := encode(); err == nil {
 			disk.Put(slot, version, data)
