@@ -385,3 +385,52 @@ func TestSyncClassifiesOnlyNeverStartedConflict(t *testing.T) {
 		})
 	}
 }
+
+func TestSearchDateFiltersRequireSupportedServer(t *testing.T) {
+	for _, version := range []int{8, 9} {
+		for _, known := range []bool{false, true} {
+			for _, bounds := range []struct{ from, to string }{{"2024-05-16", ""}, {"", "2024-06-15"}, {"2024-05-16", "2024-06-15"}, {"", ""}} {
+				name := fmt.Sprintf("api%d/known=%t/from=%s/to=%s", version, known, bounds.from, bounds.to)
+				t.Run(name, func(t *testing.T) {
+					var paths []string
+					srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						paths = append(paths, r.URL.Path)
+						w.Header().Set("Content-Type", "application/json")
+						if r.URL.Path == "/api/v1/version" {
+							_, _ = fmt.Fprintf(w, `{"api_version":%d}`, version)
+							return
+						}
+						assert.Equal(t, "/api/v1/search", r.URL.Path)
+						assert.Equal(t, bounds.from, r.URL.Query().Get("date_from"))
+						assert.Equal(t, bounds.to, r.URL.Query().Get("date_to"))
+						_, _ = w.Write([]byte(`{"results":[{"session_id":"recent"}],"next":0}`))
+					}))
+					t.Cleanup(srv.Close)
+					backend := NewHTTPBackend(srv.URL, "", false, "")
+					if known {
+						backend = NewHTTPBackendForServer(srv.URL, "", HTTPServerCapabilities{APIVersion: version})
+					}
+					result, err := backend.Search(t.Context(), service.SearchRequest{Query: "needle", DateFrom: bounds.from, DateTo: bounds.to})
+					bounded := bounds.from != "" || bounds.to != ""
+					if bounded && version == 8 {
+						require.ErrorContains(t, err, "restart or upgrade the server")
+						if known {
+							assert.Empty(t, paths)
+						} else {
+							assert.Equal(t, []string{"/api/v1/version"}, paths)
+						}
+						return
+					}
+					require.NoError(t, err)
+					require.Len(t, result.Results, 1)
+					assert.Equal(t, "recent", result.Results[0].SessionID)
+					if !known && bounded {
+						assert.Equal(t, []string{"/api/v1/version", "/api/v1/search"}, paths)
+					} else {
+						assert.Equal(t, []string{"/api/v1/search"}, paths)
+					}
+				})
+			}
+		}
+	}
+}

@@ -2126,6 +2126,9 @@ func TestSearchSessions_DateRange(t *testing.T) {
 						break
 					}
 					args["cursor"] = *out.NextCursor
+					if out.DateFrom != "" {
+						args["date_from"] = out.DateFrom
+					}
 				}
 				assert.ElementsMatch(t, tc.want, ids, "query %s", query)
 			}
@@ -2438,4 +2441,35 @@ func TestSearchDefaultWindowPaginationAcrossMidnight(t *testing.T) {
 		_, _, err := ts.searchContent(t.Context(), nil, in)
 		require.NoError(t, err)
 	}
+}
+
+func TestSearchSessionsRemoteDefaultDateWindow(t *testing.T) {
+	old := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected request to old server: %s", r.URL.Path)
+	}))
+	t.Cleanup(old.Close)
+	oldTools := &toolset{svc: servicehttp.NewHTTPBackendForServer(old.URL, "", servicehttp.HTTPServerCapabilities{APIVersion: 8}), now: func() time.Time { return fixedNow }}
+	_, out, err := oldTools.searchSessions(t.Context(), nil, searchSessionsIn{Query: "remote"})
+	require.ErrorContains(t, err, "restart or upgrade the server")
+	assert.Empty(t, out.Note)
+	assert.Empty(t, out.DateFrom)
+
+	_, d := newTestToolset(t)
+	if !d.HasFTS(t.Context()) {
+		t.Skip("FTS not available")
+	}
+	seedFTSSession(t, d, "recent", "proj", "remoteneedle", "2024-06-05T10:00:00Z")
+	seedFTSSession(t, d, "old", "proj", "remoteneedle", "2024-04-16T10:00:00Z")
+	httpServer := httptest.NewUnstartedServer(nil)
+	srv := server.New(config.Config{Host: "127.0.0.1", Port: httpServer.Listener.Addr().(*net.TCPAddr).Port, DataDir: t.TempDir(), WriteTimeout: 30 * time.Second}, d, nil)
+	httpServer.Config.Handler = srv.Handler()
+	httpServer.Start()
+	t.Cleanup(httpServer.Close)
+	remote := &toolset{svc: servicehttp.NewHTTPBackend(httpServer.URL, "", false, ""), now: func() time.Time { return fixedNow }}
+	_, out, err = remote.searchSessions(t.Context(), nil, searchSessionsIn{Query: "remoteneedle"})
+	require.NoError(t, err)
+	require.Len(t, out.Results, 1)
+	assert.Equal(t, "recent", out.Results[0].SessionID)
+	assert.Equal(t, "2024-05-16", out.DateFrom)
+	assert.Contains(t, out.Note, "2024-05-16")
 }

@@ -226,7 +226,9 @@ can be omitted. When both bounds and `session_id` are omitted, the search starts
 30 days before the current UTC date. The response note gives the start date; pass
 an earlier `date_from` to search further back. To continue a defaulted search,
 pass the returned `date_from` and use `next_cursor` as `cursor`. Malformed dates
-and ranges where `date_from` is after `date_to` return an error.
+and ranges where `date_from` is after `date_to` return an error. Remote session
+searches with either date bound require server API 9 or later; older servers
+return an upgrade error.
 
 HTTP-backed session and search results include `web_url` when a browser address
 is available. Use that link when citing a session; it preserves the server's
