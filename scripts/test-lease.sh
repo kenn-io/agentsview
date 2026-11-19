@@ -16,16 +16,12 @@ if ! command -v python3 >/dev/null 2>&1; then
     exit 2
 fi
 exec python3 - "$@" <<'PY'
+import fcntl
 import os
 import signal
 import subprocess
 import sys
 import time
-
-try:
-    import fcntl
-except ImportError:
-    sys.exit("test service leases require a platform with Python fcntl support")
 
 if not os.environ.get("HOME"):
     sys.exit("HOME must be set to create a test service lease")

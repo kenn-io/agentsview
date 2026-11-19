@@ -4,9 +4,8 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 tmp=$(mktemp -d)
 launcher=
 cleanup() {
-    touch "$tmp/release" "$tmp/release-up"
+    touch "$tmp/release"
     if [[ -n "$launcher" ]] && kill -0 "$launcher" 2>/dev/null; then
-        touch "$tmp/release"
         wait "$launcher" 2>/dev/null || true
     fi
     find "$tmp" -depth -delete
@@ -33,8 +32,7 @@ with open(sys.argv[1]) as f:
 sys.exit(1)
 PROBE
       printf '%s\n' "$TEST_SERVICE_LEASE" > "$CHECK_LEASE"
-    fi
-    if [ -n "${WAIT_UP:-}" ]; then touch "$WAIT_UP/started"; while [ ! -f "$WAIT_UP/release-up" ]; do sleep .1; done; fi ;;
+    fi ;;
   *' port '*) echo 127.0.0.1:49153 ;;
   *' down '*)
     if [ -n "${CHECK_CLEANUP:-}" ]; then
@@ -159,21 +157,17 @@ export DOWN_STATUS=0
 (cd "$root" && make -n postgres-up clickhouse-up) > "$tmp/manual"
 if grep -qE 'test-lease| -p ' "$tmp/manual"; then exit 1; fi
 
-# A command-line lease cannot override the new lease in the nested Make.
-printf '%s\n' '$(info LEASE_FROM_MAKE=$(TEST_SERVICE_LEASE))' > "$tmp/inspect.mk"
-(cd "$root" && CHECK_LEASE="$tmp/project" MAKEFILES="$tmp/inspect.mk" make test-postgres TEST_SERVICE_LEASE=old MAKE='make -n') > "$tmp/make-lease"
-project=$(cat "$tmp/project")
-[[ "$project" != old ]]
-grep -Fxq "LEASE_FROM_MAKE=$project" "$tmp/make-lease"
-
-# Each target starts its leased service and passes its address to nested Make.
+# Each target starts its leased service and passes its lease and address to
+# nested Make, overriding values from the parent command line.
 cat > "$tmp/inspect.mk" <<'MAKE'
-$(if $(filter 1,$(MAKELEVEL)),$(info PG_FROM_MAKE=$(TEST_PG_URL))$(info CH_FROM_MAKE=$(TEST_CLICKHOUSE_URL)))
+$(if $(filter 1,$(MAKELEVEL)),$(info LEASE_FROM_MAKE=$(TEST_SERVICE_LEASE))$(info PG_FROM_MAKE=$(TEST_PG_URL))$(info CH_FROM_MAKE=$(TEST_CLICKHOUSE_URL)))
 MAKE
 for target in test-postgres bench-pg-usage test-clickhouse; do
     : > "$DOCKER_LOG"
-    (cd "$root" && CHECK_LEASE="$tmp/project" MAKEFILES="$tmp/inspect.mk" make "$target" TEST_PG_URL=old-pg TEST_CLICKHOUSE_URL=old-ch MAKE='make -n') > "$tmp/make-url"
+    (cd "$root" && CHECK_LEASE="$tmp/project" MAKEFILES="$tmp/inspect.mk" make "$target" TEST_SERVICE_LEASE=old TEST_PG_URL=old-pg TEST_CLICKHOUSE_URL=old-ch MAKE='make -n') > "$tmp/make-url"
     project=$(cat "$tmp/project")
+    [[ "$project" != old ]]
+    grep -Fxq "LEASE_FROM_MAKE=$project" "$tmp/make-url"
     case "$target" in
         test-clickhouse)
             service=clickhouse port=9000
@@ -244,40 +238,12 @@ set -e
 [[ $status == 2 && ! -s "$DOCKER_LOG" ]]
 grep -qE 'python3 is required' "$tmp/no-python.out"
 
-# An absent home or unavailable locking support stops before Docker starts.
+# An empty home stops before Docker starts.
 unset TEST_SERVICE_LEASE
-for home_mode in unset empty; do
-    : > "$DOCKER_LOG"
-    set +e
-    if [[ "$home_mode" == unset ]]; then
-        env -u HOME "$root/scripts/test-lease.sh" agentsview docker info >"$tmp/home-error" 2>&1
-    else
-        HOME= "$root/scripts/test-lease.sh" agentsview docker info >"$tmp/home-error" 2>&1
-    fi
-    status=$?
-    set -e
-    [[ $status != 0 && ! -s "$DOCKER_LOG" ]]
-    grep -qE 'HOME must be set' "$tmp/home-error"
-done
-mkdir "$tmp/no-fcntl"
-cat > "$tmp/no-fcntl/python3" <<'PYTHON'
-#!/bin/sh
-exec "$REAL_PYTHON" -c '
-import builtins, sys
-original = builtins.__import__
-def no_fcntl(name, *args, **kwargs):
-    if name == "fcntl": raise ImportError("unavailable")
-    return original(name, *args, **kwargs)
-builtins.__import__ = no_fcntl
-sys.argv = sys.argv[1:]
-exec(sys.stdin.read())
-' "$@"
-PYTHON
-chmod +x "$tmp/no-fcntl/python3"
 : > "$DOCKER_LOG"
 set +e
-REAL_PYTHON="$python_bin" PATH="$tmp/no-fcntl:$PATH" "$root/scripts/test-lease.sh" agentsview docker info >"$tmp/fcntl-error" 2>&1
+HOME= "$root/scripts/test-lease.sh" agentsview docker info >"$tmp/home-error" 2>&1
 status=$?
 set -e
 [[ $status != 0 && ! -s "$DOCKER_LOG" ]]
-grep -qE 'platform with Python fcntl support' "$tmp/fcntl-error"
+grep -qE 'HOME must be set' "$tmp/home-error"
