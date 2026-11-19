@@ -2876,9 +2876,6 @@ func (s *Store) populateFrustrationMarkers(
 		return nil
 	}
 	if s.DB() != nil && !s.hostedRelations {
-		if err := s.joinFrustrationFill(ctx, ids); err != nil {
-			return err
-		}
 		counts, err := s.loadStoredFrustrationCounts(ctx, ids, versions, versionColumn)
 		if err != nil {
 			log.Printf("loading frustration counts: %v", err)
@@ -2893,6 +2890,28 @@ func (s *Store) populateFrustrationMarkers(
 			}
 		}
 		ids = remaining
+		if len(ids) > 0 {
+			joined, err := s.joinFrustrationFill(ctx, ids)
+			if err != nil {
+				return err
+			}
+			if joined {
+				counts, err = s.loadStoredFrustrationCounts(ctx, ids, versions, versionColumn)
+				if err != nil {
+					log.Printf("loading frustration counts: %v", err)
+				}
+				remaining = ids[:0]
+				for _, id := range ids {
+					if count, ok := counts[id]; ok {
+						rows[idx[id]].FrustrationMarkerCount = count
+						memo.Store(generation, id, versions[id], count)
+					} else {
+						remaining = append(remaining, id)
+					}
+				}
+				ids = remaining
+			}
+		}
 		if len(ids) == 0 {
 			return nil
 		}

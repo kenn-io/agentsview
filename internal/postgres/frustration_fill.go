@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"sync"
 	"time"
@@ -9,82 +10,125 @@ import (
 	"go.kenn.io/agentsview/internal/poller"
 )
 
-// The fixture's 500-session chunks averaged 0.27 seconds. Five seconds leaves
-// room for slower chunks while releasing requests blocked behind a writer.
-const frustrationFillChunkTimeout = 5 * time.Second
+// The initial limit has headroom over the fixture's average chunk time.
+// Retry slow chunks with more time, while still bounding every attempt.
+const (
+	frustrationFillChunkTimeout = 5 * time.Second
+	frustrationFillMaxTimeout   = time.Minute
+)
+
+type frustrationChunk struct {
+	ids      []string
+	done     chan struct{}
+	complete bool
+}
 
 type frustrationFillState struct {
 	mu      sync.Mutex
-	pending map[string]chan struct{}
+	pending map[string]*frustrationChunk
+	chunks  []*frustrationChunk
+	timeout time.Duration
 }
 
-func (s *Store) joinFrustrationFill(ctx context.Context, ids []string) error {
+func (s *Store) joinFrustrationFill(ctx context.Context, ids []string) (bool, error) {
 	state := &s.runtimeState().frustrationFill
 	state.mu.Lock()
-	channels := make(map[chan struct{}]struct{})
+	wanted := make(map[*frustrationChunk]struct{})
 	for _, id := range ids {
-		done, ok := state.pending[id]
+		chunk, ok := state.pending[id]
 		if !ok {
 			state.mu.Unlock()
-			return nil
+			return false, nil
 		}
-		channels[done] = struct{}{}
+		wanted[chunk] = struct{}{}
+	}
+	channels := make([]<-chan struct{}, 0, len(wanted))
+	for _, chunk := range state.chunks {
+		if chunk.complete {
+			continue
+		}
+		if _, ok := wanted[chunk]; !ok {
+			state.mu.Unlock()
+			return false, nil
+		}
+		channels = append(channels, chunk.done)
+		if len(channels) == len(wanted) {
+			break
+		}
 	}
 	state.mu.Unlock()
-	for done := range channels {
+	for _, done := range channels {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return true, ctx.Err()
 		case <-done:
 		}
 	}
-	return nil
+	return true, nil
 }
 
 func (s *Store) fillFrustrationCounts(ctx context.Context, ids []string, column string) error {
 	state := &s.runtimeState().frustrationFill
-	chunks := make([][]string, 0, (len(ids)+maxPGVars-1)/maxPGVars)
-	done := make([]chan struct{}, 0, cap(chunks))
 	state.mu.Lock()
 	if state.pending == nil {
-		state.pending = make(map[string]chan struct{}, len(ids))
+		state.pending = make(map[string]*frustrationChunk, len(ids))
 	}
-	for chunk := range slices.Chunk(ids, maxPGVars) {
-		ch := make(chan struct{})
-		chunks = append(chunks, chunk)
-		done = append(done, ch)
-		for _, id := range chunk {
-			state.pending[id] = ch
+	state.chunks = nil
+	for ids := range slices.Chunk(ids, maxPGVars) {
+		chunk := &frustrationChunk{ids: ids, done: make(chan struct{})}
+		state.chunks = append(state.chunks, chunk)
+		for _, id := range ids {
+			state.pending[id] = chunk
 		}
 	}
+	chunks := state.chunks
+	timeout := max(state.timeout, frustrationFillChunkTimeout)
 	state.mu.Unlock()
-	release := func(i int) {
+	release := func(chunk *frustrationChunk) {
 		state.mu.Lock()
 		defer state.mu.Unlock()
-		if len(chunks[i]) == 0 || state.pending[chunks[i][0]] != done[i] {
+		if chunk.complete {
 			return
 		}
-		for _, id := range chunks[i] {
+		for _, id := range chunk.ids {
 			delete(state.pending, id)
 		}
-		close(done[i])
+		chunk.complete = true
+		close(chunk.done)
 	}
 	defer func() {
-		for i := range chunks {
-			release(i)
+		for _, chunk := range chunks {
+			release(chunk)
 		}
 	}()
-	for i, chunk := range chunks {
-		chunkCtx, cancel := context.WithTimeout(ctx, frustrationFillChunkTimeout)
-		counts, versions, err := s.scanFrustrationCounts(chunkCtx, chunk, column)
+	var timedOut bool
+	for _, chunk := range chunks {
+		chunkCtx, cancel := context.WithTimeout(ctx, timeout)
+		counts, versions, err := s.scanFrustrationCounts(chunkCtx, chunk.ids, column)
 		if err == nil {
 			err = s.storeFrustrationCounts(chunkCtx, versions, counts, column)
 		}
 		cancel()
-		release(i)
+		release(chunk)
 		if err != nil {
-			return err
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if !errors.Is(err, context.DeadlineExceeded) {
+				return err
+			}
+			timedOut = true
 		}
+	}
+	state.mu.Lock()
+	if timedOut {
+		state.timeout = min(timeout*2, frustrationFillMaxTimeout)
+	} else {
+		state.timeout = 0
+	}
+	state.mu.Unlock()
+	if timedOut {
+		return context.DeadlineExceeded
 	}
 	return nil
 }
