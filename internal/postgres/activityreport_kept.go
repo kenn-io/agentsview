@@ -31,9 +31,13 @@ type pgActivitySavedReport struct {
 	Report                    kept.Report
 }
 
+func pgActivityDiskSelection(selection, version, identity string) string {
+	return fmt.Sprintf("%q|%q|%q", selection, version, identity)
+}
+
 func (s *Store) loadActivityReport(selection, version, identity string) (pgActivityKept, bool) {
 	s.activityReports.Sweep(time.Now())
-	data, ok := s.activityReports.Get(selection, identity+"|"+version)
+	data, ok := s.activityReports.Get(pgActivityDiskSelection(selection, version, identity), identity+"|"+version)
 	if !ok {
 		return pgActivityKept{}, false
 	}
@@ -55,7 +59,7 @@ func encodePGActivityReport(entry pgActivityKept) ([]byte, error) {
 func (s *Store) saveActivityReport(selection, version string, entry pgActivityKept) {
 	data, err := encodePGActivityReport(entry)
 	if err == nil {
-		s.activityReports.Put(selection, entry.identity+"|"+version, data)
+		s.activityReports.Put(pgActivityDiskSelection(selection, version, entry.identity), entry.identity+"|"+version, data)
 	}
 }
 
@@ -71,13 +75,13 @@ func (s *Store) keepActivityReport(selection, version string, entry pgActivityKe
 	switch {
 	case identity == "":
 	case saved:
-		s.activityReports.Keep(selection, identity+"|"+version, func() ([]byte, error) { return encodePGActivityReport(entry) })
+		s.activityReports.Keep(pgActivityDiskSelection(selection, version, identity), identity+"|"+version, func() ([]byte, error) { return encodePGActivityReport(entry) })
 	default:
 		s.saveActivityReport(selection, version, entry)
 	}
 }
 
-func (s *Store) activityReportIdentity(ctx context.Context, selection, version string, q activity.Query) (identity string, unavailable bool) {
+func (s *Store) activityReportIdentity(ctx context.Context, selection, version string, q activity.Query, oid uint32) (identity string, unavailable bool) {
 	memo := &s.runtimeState().activityKept
 	entries, ok := memo.Get(selection, version)
 	if ok {
@@ -91,7 +95,7 @@ func (s *Store) activityReportIdentity(ctx context.Context, selection, version s
 		return identity, unavailable
 	}
 	var err error
-	identity, err = s.activitySourceIdentity(ctx, "")
+	identity, err = s.activitySourceIdentityWithOID(ctx, "", oid)
 	unavailable = errors.Is(err, db.ErrUsageSourceUnavailable)
 	if !ok && identity != "" {
 		if entry, found := s.loadActivityReport(selection, version, identity); found {
@@ -101,17 +105,17 @@ func (s *Store) activityReportIdentity(ctx context.Context, selection, version s
 	return identity, unavailable
 }
 
-func (s *Store) activityKeptVersion(ctx context.Context, pricingDigest string) (string, error) {
+func (s *Store) activityKeptVersion(ctx context.Context, pricingDigest string) (string, uint32, error) {
 	// Include the table identity so recreating the journal
 	// cannot validate a report built against the previous schema.
 	oid, err := usageJournalOID(ctx, s.pg)
 	if isUndefinedTable(err) || isInsufficientPrivilege(err) {
-		return "", nil
+		return "", 0, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("reading kept activity version: %w", err)
+		return "", 0, fmt.Errorf("reading kept activity version: %w", err)
 	}
-	return fmt.Sprintf("%d|%s", oid, pricingDigest), nil
+	return fmt.Sprintf("%d|%s", oid, pricingDigest), oid, nil
 }
 
 func (s *Store) keptActivityReport(ctx context.Context, selection, version string, f db.AnalyticsFilter, rangeStart, rangeEnd, lower, upper string) (kept.Report, int64, bool, error) {
