@@ -116,25 +116,15 @@ func TestPGActivityDiskInputsRoundTrip(t *testing.T) {
 
 func TestPGActivityDiskKeepsRawInputsWhenPricesExceedLimit(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	for _, tc := range []struct {
-		name           string
-		estimate, file int64
-	}{
-		{"estimate", 1000, 10000},
-		{"file", 10000, 2000},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var disk kept.Disk
-			require.NoError(t, disk.Open(tc.name, "mirror", tc.file, 0))
-			rows := []kept.Part[pgActivityDiskPart]{{Value: pgActivityDiskPart{Identity: "source", Usage: []pgActivityDiskRow{{SessionID: "session", Output: 42}}, Priced: &pgActivityDiskPriced{Block: []byte(strings.Repeat("x", 5000))}}}}
-			savePGActivityParts(&disk, "slot", "version", rows, tc.estimate)
-			data, ok := disk.Get("slot", "version")
-			require.True(t, ok)
-			got, ok := kept.DecodeRows[kept.Part[pgActivityDiskPart]](data)
-			require.True(t, ok)
-			require.Len(t, got, 1)
-			assert.Equal(t, rows[0].Value.Usage, got[0].Value.Usage)
-			assert.Nil(t, got[0].Value.Priced)
-		})
-	}
+	var disk kept.Disk
+	require.NoError(t, disk.Open("file", "mirror", 2000, 0))
+	rows := []kept.Part[pgActivityDiskPart]{{Value: pgActivityDiskPart{Identity: "source", Usage: []pgActivityDiskRow{{SessionID: "session", Output: 42}}, Priced: &pgActivityDiskPriced{Block: []byte(strings.Repeat("x", 5000))}}}}
+	savePGActivityParts(&disk, "slot", "version", rows)
+	data, ok := disk.Get("slot", "version")
+	require.True(t, ok)
+	got, ok := kept.DecodeRows[kept.Part[pgActivityDiskPart]](data)
+	require.True(t, ok)
+	require.Len(t, got, 1)
+	assert.Equal(t, rows[0].Value.Usage, got[0].Value.Usage)
+	assert.Nil(t, got[0].Value.Priced)
 }

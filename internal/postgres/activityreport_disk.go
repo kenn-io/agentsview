@@ -91,24 +91,18 @@ func (s *Store) saveActivityInputs() {
 		for id, session := range input.sessions {
 			rows = append(rows, kept.Part[pgActivityDiskPart]{ID: id, Value: pgActivityDiskPart{Runs: session.runs.Wire(), Users: session.users, Assistants: session.assistants, Candidate: input.candidates[id]}})
 		}
-		savePGActivityParts(&s.activityDisk, slot.Slot, pgActivityDiskVersion+slot.Version, rows, 256<<20)
+		savePGActivityParts(&s.activityDisk, slot.Slot, pgActivityDiskVersion+slot.Version, rows)
 	}
 }
 
-func savePGActivityParts(disk *kept.Disk, slot, version string, rows []kept.Part[pgActivityDiskPart], limit int64) {
+func savePGActivityParts(disk *kept.Disk, slot, version string, rows []kept.Part[pgActivityDiskPart]) {
 	encode := func() ([]byte, error) {
-		return kept.EncodeRows(rows, limit, func(part kept.Part[pgActivityDiskPart]) int64 {
+		return kept.EncodeRows(rows, 256<<20, func(part kept.Part[pgActivityDiskPart]) int64 {
 			size := int64(len(part.ID) + len(part.Value.Identity))
 			size += int64(len(part.Value.Users)+len(part.Value.Assistants)) * 8
 			size += int64(len(part.Value.Runs.Bounds)+len(part.Value.Runs.Trimmed)) * 8
 			for _, run := range part.Value.Runs.Runs {
 				size += int64(len(run.Model) + 8)
-			}
-			if priced := part.Value.Priced; priced != nil {
-				size += int64(len(priced.Block) + len(priced.PricingDigest))
-				for _, row := range priced.Rows {
-					size += int64(len(row.Attribution) + 20)
-				}
 			}
 			for _, row := range part.Value.Usage {
 				size += int64(len(row.SessionID) + len(row.UsageSource) + len(row.Model) + len(row.ProviderID) + len(row.Agent) +
