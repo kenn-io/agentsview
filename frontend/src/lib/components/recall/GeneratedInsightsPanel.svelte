@@ -275,7 +275,9 @@
 
   async function loadInsights() {
     await insights.load();
-    if (mounted && !insights.error) gettingStarted.complete("insights");
+    if (mounted && !insights.error && insights.items.length === 0 && insights.tasks.length === 0) {
+      gettingStarted.complete("insights");
+    }
   }
 
   onMount(() => {
@@ -294,6 +296,10 @@
     const id = selectedInsightFromRoute();
     if (id === null || insights.selectedId === id) return;
     if (insights.items.some((item) => item.id === id)) insights.select(id);
+  });
+
+  $effect(() => {
+    if (insights.selectedItem) gettingStarted.complete("insights");
   });
 </script>
 
