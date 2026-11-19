@@ -683,14 +683,21 @@ describe("UsagePage refresh behavior", () => {
         disconnect() {}
       },
     );
-    usageReads().mockResolvedValueOnce(usageSummaryWithUnsupported());
+    let finish!: (value: ReturnType<typeof usageSummaryWithUnsupported>) => void;
+    usageReads().mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
     router.params = {};
 
     component = mount(UsagePage, { target: document.body });
-    await vi.waitFor(() => expect(usage.summary).not.toBeNull());
-    expect(gettingStarted.done.has("usage")).toBe(false);
-
+    await flushEffects();
     usage.mode = "token";
+    await flushEffects();
+    expect(gettingStarted.done.has("usage")).toBe(false);
+    finish(usageSummaryWithUnsupported());
     await vi.waitFor(() => expect(gettingStarted.done.has("usage")).toBe(true));
   });
 

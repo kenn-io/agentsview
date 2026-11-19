@@ -587,8 +587,16 @@ describe("CommandPalette", () => {
     const items = document.querySelectorAll(".palette-item");
     expect(items).toHaveLength(1);
     expect(items[0]?.textContent).toContain("消融实验的结果");
-    expect(gettingStarted.done.has("search")).toBe(true);
+    unmount(component);
+  });
 
+  it("completes the search checklist item for a nonempty query", async () => {
+    const component = mount(CommandPalette, { target: document.body });
+    await tick();
+    await enterSearchQuery("   ");
+    expect(gettingStarted.done.has("search")).toBe(false);
+    await enterSearchQuery("match");
+    expect(gettingStarted.done.has("search")).toBe(true);
     unmount(component);
   });
 

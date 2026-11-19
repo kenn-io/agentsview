@@ -172,7 +172,6 @@ describe("GeneratedInsightsPanel", () => {
   });
 
   it("shows a failed archive read with Retry instead of the empty archive", async () => {
-    localStorage.removeItem("agentsview-getting-started");
     const items = state.store.items;
     state.store.items = [];
     state.store.selectedId = null as unknown as number;
@@ -182,6 +181,7 @@ describe("GeneratedInsightsPanel", () => {
       component = mount(GeneratedInsightsPanel, { target: document.body });
       await tick();
       await mocks.load.mock.results[0]!.value;
+      expect(gettingStarted.done.has("insights")).toBe(false);
 
       const alert = document.querySelector('[role="alert"]')!;
       expect(alert.textContent).toContain("insights table missing");
@@ -200,7 +200,6 @@ describe("GeneratedInsightsPanel", () => {
     } finally {
       state.store.items = items;
       state.store.error = null;
-      localStorage.removeItem("agentsview-getting-started");
     }
   });
 
