@@ -586,9 +586,11 @@ in the same cache directory. Each selection can use up to 128 MiB, with a
 pricing change, new binary, or deletion of the cache directory. If the cache is
 unavailable, Usage reads the mirror instead.
 
-Trends keeps per-session counts in the same cache. The first visit builds them,
-and after a push it recounts only changed sessions. Hour, model, Local timezone,
-and time-dependent selections still read the mirror directly.
+Term-trend reads, through the `get_term_trends` MCP tool or
+`GET /api/v1/trends/terms`, keep per-session counts in the same cache. The first
+read builds them, and after a push it recounts only changed sessions. Hour,
+model, Local timezone, and time-dependent selections still read the mirror
+directly.
 
 When `require_auth` is enabled, a bearer token is generated if needed and
 printed on startup. Pass it via `Authorization: Bearer <token>` on API requests.
