@@ -31,45 +31,68 @@ type hintProbe struct {
 }
 
 // shows reports whether the probe's search shows a match on session id, and
-// whether rows held every session needed to decide that. A tree search
-// reaches a child through any of its parents, so the match shows when some
-// path from the session to a tree root passes. It mirrors the session scope
-// SQL: automation is checked on every session along the path, the one-shot
-// gate on the root only, and an automated root passes the one-shot gate when
-// the probe shows automated sessions. A flat search checks only the
-// session's own row.
+// whether rows decide that. It mirrors the session scope SQL: automation is
+// checked on every session along a parent path, the one-shot gate on the
+// root only, and an automated root passes the one-shot gate when the probe
+// shows automated sessions. A flat search checks only the session's own row.
+//
+// A tree search reaches a child through a parent path whose root passes the
+// search's other filters, and the classifier cannot check those filters. So
+// when a child's parent paths disagree about the probe, the match is
+// undecided.
 func (p hintProbe) shows(rows map[string]db.Session, id string, tree, exemptChildren bool) (shown, known bool) {
-	return p.showsPath(rows, id, tree, exemptChildren, make(map[string]bool))
+	switch p.verdict(rows, id, tree, exemptChildren, make(map[string]bool)) {
+	case hintShown:
+		return true, true
+	case hintUnknown:
+		return false, false
+	default:
+		return false, true
+	}
 }
 
-func (p hintProbe) showsPath(rows map[string]db.Session, id string, tree, exemptChildren bool, path map[string]bool) (shown, known bool) {
+type hintVerdict int
+
+const (
+	// hintNoRoot marks a parent loop, which never reaches a root.
+	hintNoRoot hintVerdict = iota
+	hintHidden
+	hintShown
+	hintUnknown
+)
+
+func (p hintProbe) verdict(rows map[string]db.Session, id string, tree, exemptChildren bool, path map[string]bool) hintVerdict {
 	if path[id] {
-		// A parent loop never reaches a root.
-		return false, true
+		return hintNoRoot
 	}
 	s, ok := rows[id]
 	if !ok {
-		return false, false
+		return hintUnknown
 	}
 	if !p.automated && s.IsAutomated {
-		return false, true
+		return hintHidden
 	}
 	parents := hintParentIDs(s)
 	if !tree || hintTreeRoot(s) {
-		return p.oneShot || s.UserMessageCount > 1 || p.automated && s.IsAutomated ||
-			exemptChildren && db.IsSidebarChildRelationship(s.RelationshipType) && len(parents) > 0, true
+		if p.oneShot || s.UserMessageCount > 1 || p.automated && s.IsAutomated ||
+			exemptChildren && db.IsSidebarChildRelationship(s.RelationshipType) && len(parents) > 0 {
+			return hintShown
+		}
+		return hintHidden
 	}
 	path[id] = true
 	defer delete(path, id)
-	known = true
+	result := hintNoRoot
 	for _, parent := range parents {
-		shown, ok := p.showsPath(rows, parent, tree, exemptChildren, path)
-		if shown {
-			return true, true
+		switch v := p.verdict(rows, parent, tree, exemptChildren, path); {
+		case v == hintNoRoot:
+		case result == hintNoRoot:
+			result = v
+		case result != v:
+			return hintUnknown
 		}
-		known = known && ok
 	}
-	return false, known
+	return result
 }
 
 // hintParentIDs returns every parent a session lists. Hosted reads fill
@@ -89,28 +112,44 @@ func hintTreeRoot(s db.Session) bool {
 	return !db.IsCanonicalChildRelationship(s.RelationshipType) || len(hintParentIDs(s)) == 0
 }
 
-// hintSessions loads the rows the classifier reads: the matched sessions
-// and, when walk is set, every ancestor up to the tree roots. Each parent
-// level costs one more lookup; tried stops a parent loop.
-func hintSessions(ctx context.Context, svc SessionService, pages []*ContentSearchResult, walk bool) (map[string]db.Session, error) {
+// hintLookup is a shared page whose matched sessions the classifier reads.
+// walk says the page is classified as a tree, so each match's ancestors up to
+// the tree roots are needed too.
+type hintLookup struct {
+	page *ContentSearchResult
+	walk bool
+}
+
+// hintSessions loads the rows the classifier reads. Each parent level costs
+// one more lookup; tried and climbed stop a parent loop.
+func hintSessions(ctx context.Context, svc SessionService, lookups []hintLookup) (map[string]db.Session, error) {
 	rows := make(map[string]db.Session)
 	tried := make(map[string]bool)
-	var pending []string
-	add := func(id string) {
+	climbed := make(map[string]bool)
+	var pending, queue []string
+	need := func(id string) {
 		if id != "" && !tried[id] {
 			tried[id] = true
 			pending = append(pending, id)
 		}
 	}
-	for _, page := range pages {
-		for _, match := range page.Matches {
-			add(match.SessionID)
-			if walk {
-				add(match.ParentSessionID)
+	climb := func(id string) {
+		if id != "" && !climbed[id] {
+			climbed[id] = true
+			queue = append(queue, id)
+			need(id)
+		}
+	}
+	for _, l := range lookups {
+		for _, match := range l.page.Matches {
+			need(match.SessionID)
+			if l.walk {
+				climb(match.SessionID)
+				climb(match.ParentSessionID)
 			}
 		}
 	}
-	for len(pending) > 0 {
+	for len(pending) > 0 || len(queue) > 0 {
 		batch := pending
 		pending = nil
 		for ids := range slices.Chunk(batch, MaxListSessionIDs) {
@@ -122,13 +161,14 @@ func hintSessions(ctx context.Context, svc SessionService, pages []*ContentSearc
 				rows[s.ID] = s
 			}
 		}
-		if !walk {
-			break
-		}
-		for _, id := range batch {
+		// Every queued session has been fetched by now, either in this
+		// batch or an earlier one.
+		climbing := queue
+		queue = nil
+		for _, id := range climbing {
 			if s, ok := rows[id]; ok && !hintTreeRoot(s) {
 				for _, parent := range hintParentIDs(s) {
-					add(parent)
+					climb(parent)
 				}
 			}
 		}
@@ -213,14 +253,14 @@ func SearchContentHints(ctx context.Context, svc SessionService, req ContentSear
 		retry.IncludeOneShot, retry.IncludeAutomated, retry.IncludeChildren = true, true, true
 		treePage = search(shareLimit(retry, treeShared))
 	}
-	var lookup []*ContentSearchResult
+	var lookup []hintLookup
 	if flatShared && flatPage != nil {
-		lookup = append(lookup, flatPage)
+		lookup = append(lookup, hintLookup{flatPage, tree})
 	}
 	if treeShared && treePage != nil {
-		lookup = append(lookup, treePage)
+		lookup = append(lookup, hintLookup{treePage, true})
 	}
-	rows, err := hintSessions(ctx, svc, lookup, treeShared || tree && flatShared)
+	rows, err := hintSessions(ctx, svc, lookup)
 	if err != nil {
 		if flatShared {
 			flatPage = nil

@@ -433,25 +433,23 @@ func TestSearchContentHintsFullSemanticPage(t *testing.T) {
 	}, hints)
 }
 
-// multiParentService answers searches with one page and session lookups
-// from a fixed set of rows, the way a hosted read lists several parents.
-type multiParentService struct {
+// rowService answers searches from a fixed function and session lookups
+// from fixed rows, the way a hosted read lists several parents.
+type rowService struct {
 	service.SessionService
-	page     service.ContentSearchResult
-	rows     map[string]db.Session
-	searches int
+	search          func(service.ContentSearchRequest) service.ContentSearchResult
+	rows            map[string]db.Session
+	searches, lists int
 }
 
-func (s *multiParentService) SearchContent(_ context.Context, req service.ContentSearchRequest) (*service.ContentSearchResult, error) {
+func (s *rowService) SearchContent(_ context.Context, req service.ContentSearchRequest) (*service.ContentSearchResult, error) {
 	s.searches++
-	if !req.IncludeOneShot || !req.IncludeAutomated {
-		return &service.ContentSearchResult{}, nil
-	}
-	page := s.page
+	page := s.search(req)
 	return &page, nil
 }
 
-func (s *multiParentService) List(_ context.Context, f service.ListFilter) (*service.SessionList, error) {
+func (s *rowService) List(_ context.Context, f service.ListFilter) (*service.SessionList, error) {
+	s.lists++
 	var list service.SessionList
 	for _, id := range f.IDs {
 		if row, ok := s.rows[id]; ok {
@@ -461,22 +459,66 @@ func (s *multiParentService) List(_ context.Context, f service.ListFilter) (*ser
 	return &list, nil
 }
 
-func TestSearchContentHintsEveryParent(t *testing.T) {
-	svc := &multiParentService{
-		page: service.ContentSearchResult{Matches: []db.ContentMatch{{SessionID: "kid"}}},
-		rows: map[string]db.Session{
-			"kid":    {ID: "kid", RelationshipType: "subagent", UserMessageCount: 1, ParentSessionIDs: []string{"lonely", "robot"}},
-			"lonely": {ID: "lonely", UserMessageCount: 1},
-			"robot":  {ID: "robot", UserMessageCount: 3, IsAutomated: true},
-		},
+// expandedOnly returns page for the shared search that shows one-shot and
+// automated sessions, and nothing for any other retry.
+func expandedOnly(page service.ContentSearchResult) func(service.ContentSearchRequest) service.ContentSearchResult {
+	return func(req service.ContentSearchRequest) service.ContentSearchResult {
+		if req.IncludeOneShot && req.IncludeAutomated {
+			return page
+		}
+		return service.ContentSearchResult{}
 	}
+}
+
+func TestSearchContentHintsEveryParent(t *testing.T) {
+	kid := func(parents ...string) db.Session {
+		return db.Session{ID: "kid", RelationshipType: "subagent", UserMessageCount: 2, ParentSessionIDs: parents}
+	}
+	roots := map[string]db.Session{
+		"lonely": {ID: "lonely", UserMessageCount: 1},
+		"quiet":  {ID: "quiet", UserMessageCount: 1},
+		"busy":   {ID: "busy", UserMessageCount: 3},
+	}
+	page := service.ContentSearchResult{Matches: []db.ContentMatch{{SessionID: "kid"}}}
 	req := service.ContentSearchRequest{Pattern: "marker", IncludeChildren: true}
-	// The child reaches a one-shot root through one parent and an automated
-	// root through the other, so either retry shows it.
+	oneShot := service.ContentSearchHint{Code: "excluded_one_shot", Message: "1 match is in one-shot sessions, hidden by default", RetryWith: map[string]any{"include_one_shot": true}}
+
+	// Both parents are one-shot roots, so only the one-shot retry reaches
+	// the child, though the child itself has two user messages.
+	rows := map[string]db.Session{"kid": kid("lonely", "quiet"), "lonely": roots["lonely"], "quiet": roots["quiet"]}
+	svc := &rowService{search: expandedOnly(page), rows: rows}
 	hints := service.SearchContentHints(t.Context(), svc, req, &service.ContentSearchResult{}, true, nil)
+	assert.Equal(t, []service.ContentSearchHint{oneShot}, hints)
+	assert.Equal(t, 1, svc.searches)
+
+	// The parents disagree about the automated retry. The busy root may
+	// fail a filter such as the project, so that retry runs on its own and
+	// finds nothing here.
+	rows = map[string]db.Session{"kid": kid("lonely", "busy"), "lonely": roots["lonely"], "busy": roots["busy"]}
+	svc = &rowService{search: expandedOnly(page), rows: rows}
+	hints = service.SearchContentHints(t.Context(), svc, req, &service.ContentSearchResult{}, true, nil)
+	assert.Equal(t, []service.ContentSearchHint{oneShot}, hints)
+	assert.Equal(t, 2, svc.searches)
+}
+
+func TestSearchContentHintsFlatPageSkipsAncestors(t *testing.T) {
+	rows := map[string]db.Session{
+		"cont": {ID: "cont", RelationshipType: "continuation", UserMessageCount: 1, ParentSessionIDs: []string{"p1"}},
+		"p1":   {ID: "p1", RelationshipType: "continuation", UserMessageCount: 2, ParentSessionIDs: []string{"p2"}},
+		"p2":   {ID: "p2", UserMessageCount: 2},
+	}
+	flat := service.ContentSearchResult{Matches: []db.ContentMatch{{SessionID: "cont", ParentSessionID: "p1"}}}
+	svc := &rowService{rows: rows, search: func(req service.ContentSearchRequest) service.ContentSearchResult {
+		if req.IncludeOneShot && req.IncludeAutomated && !req.IncludeChildren {
+			return flat
+		}
+		return service.ContentSearchResult{}
+	}}
+	// The tree search finds nothing, as when the root belongs to another
+	// project. The flat hint reads only the continuation's own row.
+	hints := service.SearchContentHints(t.Context(), svc, service.ContentSearchRequest{Pattern: "marker"}, &service.ContentSearchResult{}, true, nil)
 	assert.Equal(t, []service.ContentSearchHint{
 		{Code: "excluded_one_shot", Message: "1 match is in one-shot sessions, hidden by default", RetryWith: map[string]any{"include_one_shot": true}},
-		{Code: "excluded_automated", Message: "1 match is in automated sessions, hidden by default", RetryWith: map[string]any{"include_automated": true}},
 	}, hints)
-	assert.Equal(t, 1, svc.searches)
+	assert.Equal(t, 1, svc.lists)
 }
