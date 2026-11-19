@@ -2876,41 +2876,25 @@ func (s *Store) populateFrustrationMarkers(
 		return nil
 	}
 	if s.DB() != nil && !s.hostedRelations {
-		counts, err := s.loadStoredFrustrationCounts(ctx, ids, versions, versionColumn)
-		if err != nil {
-			log.Printf("loading frustration counts: %v", err)
-		}
-		remaining := ids[:0]
-		for _, id := range ids {
-			if count, ok := counts[id]; ok {
-				rows[idx[id]].FrustrationMarkerCount = count
-				memo.Store(generation, id, versions[id], count)
-			} else {
-				remaining = append(remaining, id)
-			}
-		}
-		ids = remaining
-		if len(ids) > 0 {
-			joined, err := s.joinFrustrationFill(ctx, ids)
+		load := func(ids []string) []string {
+			counts, err := s.loadStoredFrustrationCounts(ctx, ids, versions, versionColumn)
 			if err != nil {
-				return err
+				log.Printf("loading frustration counts: %v", err)
 			}
-			if joined {
-				counts, err = s.loadStoredFrustrationCounts(ctx, ids, versions, versionColumn)
-				if err != nil {
-					log.Printf("loading frustration counts: %v", err)
+			remaining := ids[:0]
+			for _, id := range ids {
+				if count, ok := counts[id]; ok {
+					rows[idx[id]].FrustrationMarkerCount = count
+					memo.Store(generation, id, versions[id], count)
+				} else {
+					remaining = append(remaining, id)
 				}
-				remaining = ids[:0]
-				for _, id := range ids {
-					if count, ok := counts[id]; ok {
-						rows[idx[id]].FrustrationMarkerCount = count
-						memo.Store(generation, id, versions[id], count)
-					} else {
-						remaining = append(remaining, id)
-					}
-				}
-				ids = remaining
 			}
+			return remaining
+		}
+		ids = load(ids)
+		if len(ids) > 0 && s.joinFrustrationFill(ctx, ids) {
+			ids = load(ids)
 		}
 		if len(ids) == 0 {
 			return nil

@@ -10,12 +10,8 @@ import (
 	"go.kenn.io/agentsview/internal/poller"
 )
 
-// The initial limit has headroom over the fixture's average chunk time.
-// Retry slow chunks with more time, while still bounding every attempt.
-const (
-	frustrationFillChunkTimeout = 5 * time.Second
-	frustrationFillMaxTimeout   = time.Minute
-)
+// Bound a slow chunk so later chunks can still be prepared.
+var frustrationFillChunkTimeout = 30 * time.Second
 
 type frustrationChunk struct {
 	ids      []string
@@ -27,20 +23,25 @@ type frustrationFillState struct {
 	mu      sync.Mutex
 	pending map[string]*frustrationChunk
 	chunks  []*frustrationChunk
-	timeout time.Duration
 }
 
-func (s *Store) joinFrustrationFill(ctx context.Context, ids []string) (bool, error) {
+func (s *Store) joinFrustrationFill(ctx context.Context, ids []string) bool {
 	state := &s.runtimeState().frustrationFill
 	state.mu.Lock()
-	wanted := make(map[*frustrationChunk]struct{})
+	wanted := make(map[*frustrationChunk]int)
 	for _, id := range ids {
 		chunk, ok := state.pending[id]
 		if !ok {
 			state.mu.Unlock()
-			return false, nil
+			return false
 		}
-		wanted[chunk] = struct{}{}
+		wanted[chunk]++
+	}
+	for chunk, count := range wanted {
+		if count != len(chunk.ids) {
+			state.mu.Unlock()
+			return false
+		}
 	}
 	channels := make([]<-chan struct{}, 0, len(wanted))
 	for _, chunk := range state.chunks {
@@ -49,7 +50,7 @@ func (s *Store) joinFrustrationFill(ctx context.Context, ids []string) (bool, er
 		}
 		if _, ok := wanted[chunk]; !ok {
 			state.mu.Unlock()
-			return false, nil
+			return false
 		}
 		channels = append(channels, chunk.done)
 		if len(channels) == len(wanted) {
@@ -57,14 +58,20 @@ func (s *Store) joinFrustrationFill(ctx context.Context, ids []string) (bool, er
 		}
 	}
 	state.mu.Unlock()
+	waitCtx := ctx
+	if deadline, ok := ctx.Deadline(); ok {
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithTimeout(ctx, time.Until(deadline)/2)
+		defer cancel()
+	}
 	for _, done := range channels {
 		select {
-		case <-ctx.Done():
-			return true, ctx.Err()
+		case <-waitCtx.Done():
+			return true
 		case <-done:
 		}
 	}
-	return true, nil
+	return true
 }
 
 func (s *Store) fillFrustrationCounts(ctx context.Context, ids []string, column string) error {
@@ -82,7 +89,6 @@ func (s *Store) fillFrustrationCounts(ctx context.Context, ids []string, column 
 		}
 	}
 	chunks := state.chunks
-	timeout := max(state.timeout, frustrationFillChunkTimeout)
 	state.mu.Unlock()
 	release := func(chunk *frustrationChunk) {
 		state.mu.Lock()
@@ -103,7 +109,7 @@ func (s *Store) fillFrustrationCounts(ctx context.Context, ids []string, column 
 	}()
 	var timedOut bool
 	for _, chunk := range chunks {
-		chunkCtx, cancel := context.WithTimeout(ctx, timeout)
+		chunkCtx, cancel := context.WithTimeout(ctx, frustrationFillChunkTimeout)
 		counts, versions, err := s.scanFrustrationCounts(chunkCtx, chunk.ids, column)
 		if err == nil {
 			err = s.storeFrustrationCounts(chunkCtx, versions, counts, column)
@@ -120,13 +126,6 @@ func (s *Store) fillFrustrationCounts(ctx context.Context, ids []string, column 
 			timedOut = true
 		}
 	}
-	state.mu.Lock()
-	if timedOut {
-		state.timeout = min(timeout*2, frustrationFillMaxTimeout)
-	} else {
-		state.timeout = 0
-	}
-	state.mu.Unlock()
 	if timedOut {
 		return context.DeadlineExceeded
 	}
