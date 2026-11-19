@@ -3246,25 +3246,33 @@ func TestSessionUsageWaitContinuesAfterStartupFailure(t *testing.T) {
 		t.Run(fmt.Sprintf("missing=%v", missing), func(t *testing.T) {
 			ts, reqs := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "remote-session"})
 			original := ts.Config.Handler
-			statuses, starts := 0, 0
+			startupFailed := make(chan struct{})
+			starts := 0
 			ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/api/v1/sync/status":
-					statuses++
-					if statuses == 1 {
-						writeJSONResponse(w, `{"startup_pending":true}`)
-					} else {
+					// Keep startup pending until the failed request reaches the server.
+					// Clearing it on a poll count can cancel that request before it arrives.
+					select {
+					case <-startupFailed:
 						writeJSONResponse(w, `{}`)
+					default:
+						writeJSONResponse(w, `{"startup_pending":true}`)
 					}
 					return
 				case "/api/v1/sync":
 					starts++
 					http.Error(w, "startup failed", http.StatusServiceUnavailable)
+					close(startupFailed)
 					return
 				case "/api/v1/sessions/remote-session":
-					if missing && statuses < 2 {
-						http.NotFound(w, r)
-						return
+					if missing {
+						select {
+						case <-startupFailed:
+						default:
+							http.NotFound(w, r)
+							return
+						}
 					}
 				}
 				original.ServeHTTP(w, r)
