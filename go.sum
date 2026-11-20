@@ -369,6 +369,8 @@ go.kenn.io/kit v0.58.1-0.20261120005328-611f5e4277b2 h1:8CJZSsR8cgF159/YeN8RO2IG
 go.kenn.io/kit v0.58.1-0.20261120005328-611f5e4277b2/go.mod h1:WhCrEse/1UUy9Zg3rnhn2RVqE/UVojN1Blv16GdS7MI=
 go.kenn.io/kit v0.58.1-0.20261120020010-c9ba6bbf73de h1:JImsp3Tqv0aM0vMoU2ogMCDMpeT6CZfI56KY1QKtajY=
 go.kenn.io/kit v0.58.1-0.20261120020010-c9ba6bbf73de/go.mod h1:WhCrEse/1UUy9Zg3rnhn2RVqE/UVojN1Blv16GdS7MI=
+go.kenn.io/kit v0.58.1-0.20261120060142-8d2e21d490eb h1:54baWmpY6PtwlmLz6TKLchLWA7e/bZwPp5JJTdlhhbY=
+go.kenn.io/kit v0.58.1-0.20261120060142-8d2e21d490eb/go.mod h1:WhCrEse/1UUy9Zg3rnhn2RVqE/UVojN1Blv16GdS7MI=
 go.mongodb.org/mongo-driver/v2 v2.10.0 h1:BYJLuVSu3/xDvToG+VQyoTPS+jxq9tuQDf+1nAlFKSE=
 go.mongodb.org/mongo-driver/v2 v2.10.0/go.mod h1:PxPyIAlsI1jkYZvUNfTr++ggyBP+RSaxHYctt6TcZc4=
 go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ64=

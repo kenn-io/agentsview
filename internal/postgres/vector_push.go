@@ -1197,29 +1197,28 @@ ON CONFLICT (doc_key) DO UPDATE SET
 
 // replaceVectorChunks replaces all session chunks except covered documents.
 func replaceVectorChunks(ctx context.Context, tx *sql.Tx, store *pgvector.Chunks[string], sessionID string, docs []storage.VectorPushDoc, keep []string, loadChunks func(string) ([]storage.VectorPushChunk, error)) (int, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT doc_key FROM vector_documents WHERE session_id=$1`, sessionID)
-	if err != nil {
-		return 0, err
-	}
-	defer rows.Close()
 	covered := make(map[string]struct{}, len(keep))
 	for _, key := range keep {
 		covered[key] = struct{}{}
 	}
-	var keys []string
-	for rows.Next() {
-		var key string
-		if err := rows.Scan(&key); err != nil {
-			return 0, err
+	keys, err := func() (keys []string, err error) {
+		rows, err := tx.QueryContext(ctx, `SELECT doc_key FROM vector_documents WHERE session_id=$1`, sessionID)
+		if err != nil {
+			return nil, err
 		}
-		if _, ok := covered[key]; !ok {
-			keys = append(keys, key)
+		defer func() { err = errors.Join(err, rows.Close()) }()
+		for rows.Next() {
+			var key string
+			if err := rows.Scan(&key); err != nil {
+				return nil, err
+			}
+			if _, ok := covered[key]; !ok {
+				keys = append(keys, key)
+			}
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return 0, err
-	}
-	if err := rows.Close(); err != nil {
+		return keys, rows.Err()
+	}()
+	if err != nil {
 		return 0, err
 	}
 	return store.ReplaceTx(ctx, tx, keys, func(yield func(pgvector.Chunk[string], error) bool) {

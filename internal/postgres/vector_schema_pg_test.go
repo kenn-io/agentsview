@@ -248,7 +248,7 @@ func TestEnsureSchemaFastPathCreatesVectorTables(t *testing.T) {
 }
 
 // TestVectorHalfvecGate pins the availability gate's two observable shapes:
-// on a server with pgvector >= 0.7 the gate reports available (empty reason)
+// on a server with halfvec available the gate reports available (empty reason)
 // and the halfvec probe returns the type plus a version; on a server without
 // pgvector the gate degrades to a reason instead of an error, which is what
 // keeps an old or missing extension from hard-failing `pg push`.
