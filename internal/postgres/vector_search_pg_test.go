@@ -5,9 +5,9 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -23,15 +23,6 @@ import (
 // resolve anchors/snippets. It is small so the run fixture's short content
 // re-splits into multiple chunks (see runContent), exercising member anchoring.
 const searchMaxInputChars = 20
-
-func newVectorSearcherForTest(t *testing.T, pg *sql.DB, genID int64, _ int, maxInputChars int, encode storage.VectorQueryEncoder) db.VectorSearcher {
-	t.Helper()
-	store, err := openVectorStore(t.Context(), pg)
-	require.NoError(t, err)
-	var fingerprint string
-	require.NoError(t, pg.QueryRowContext(t.Context(), `SELECT gen_key FROM vector_generations WHERE id=$1`, genID).Scan(&fingerprint))
-	return &vectorSearcher{pg: pg, store: store, fingerprint: fingerprint, maxInputChars: maxInputChars, encode: encode}
-}
 
 // fixedEncoder returns a storage.VectorQueryEncoder that always emits vec, ignoring the
 // query text: the fixture's chunk vectors are chosen so a fixed query yields a
@@ -88,15 +79,13 @@ func insertSearchChunk(
 	chunkIndex int, emb []float32,
 ) {
 	t.Helper()
-	literal, err := json.Marshal(emb)
-	require.NoError(t, err)
-	_, err = pg.ExecContext(t.Context(),
+	literal := fmt.Sprint(emb)
+	literal = strings.ReplaceAll(literal, " ", ",")
+	_, err := pg.ExecContext(t.Context(),
 		`INSERT INTO `+table+` (doc_key, chunk_index, embedding)
 		 VALUES ($1, $2, $3::`+halfvecType+`)`,
-		docKey, chunkIndex, string(literal))
+		docKey, chunkIndex, literal)
 	require.NoError(t, err, "insert chunk "+docKey)
-	_, err = pg.ExecContext(t.Context(), `INSERT INTO vector_stamps(generation_id,doc_key,revision) SELECT id,$1,'h' FROM vector_generations WHERE 'vector_chunks_g'||id=$2 ON CONFLICT DO NOTHING`, docKey, table)
-	require.NoError(t, err)
 }
 
 // seedVectorSearchFixture builds a deterministic KNN fixture for query
@@ -151,13 +140,53 @@ var (
 	runOffsets = `[{"o":10,"r":0,"b":0},{"o":12,"r":19,"b":19}]`
 )
 
+func TestVectorSearcherReaderBeforeWriter(t *testing.T) {
+	pg := newVectorSearchTestPG(t)
+	ctx := t.Context()
+	genID, table := seedVectorSearchFixture(t, pg)
+	const role = "agentsview_vector_reader_upgrade"
+	_, err := pg.ExecContext(ctx, `CREATE ROLE `+role+` LOGIN PASSWORD 'reader_fixture'`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = pg.ExecContext(context.WithoutCancel(ctx), `DROP OWNED BY `+role)
+		_, _ = pg.ExecContext(context.WithoutCancel(ctx), `DROP ROLE `+role)
+	})
+	_, err = pg.ExecContext(ctx, `GRANT USAGE ON SCHEMA `+vectorSearchTestSchema+` TO `+role+`; GRANT SELECT ON ALL TABLES IN SCHEMA `+vectorSearchTestSchema+` TO `+role)
+	require.NoError(t, err)
+	readerURL, err := url.Parse(testPGSchemaURL(t, vectorSearchTestSchema))
+	require.NoError(t, err)
+	readerURL.User = url.UserPassword(role, "reader_fixture")
+	reader, err := NewStore(ctx, readerURL.String(), vectorSearchTestSchema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reader.Close() })
+	require.NoError(t, prepareServeStore(ctx, reader, vectorSearchTestSchema))
+	encoder := fixedEncoder([]float32{1, 0, 0, 0})
+	searcher, reason, err := (Backend{}).OpenVectorSearcher(ctx, reader, storage.VectorGenerationInfo{Fingerprint: "fp-search"}, searchMaxInputChars, encoder)
+	require.NoError(t, err)
+	require.Empty(t, reason)
+	hits, err := dbtest.SemanticSearch(ctx, searcher, "query", 10)
+	require.NoError(t, err)
+	require.Len(t, hits, 3)
+	assert.Equal(t, "alpha user content", hits[0].Snippet)
+	assert.InDelta(t, 1, hits[0].Score, 0.001)
+	_, err = reader.pg.ExecContext(ctx, `DELETE FROM `+table)
+	require.Error(t, err)
+	var count int
+	require.NoError(t, pg.QueryRowContext(ctx, `SELECT count(*) FROM `+table).Scan(&count))
+	assert.Equal(t, 6, count)
+	var stored string
+	require.NoError(t, pg.QueryRowContext(ctx, `SELECT embedding::text FROM `+table+` WHERE doc_key='u1'`).Scan(&stored))
+	assert.Equal(t, "[1,0,0,0]", stored)
+	assert.Positive(t, genID)
+}
+
 func TestPGVectorSearcher(t *testing.T) {
 	t.Parallel()
 	pg := newVectorSearchTestPG(t)
 	ctx := t.Context()
 
 	genID, _ := seedVectorSearchFixture(t, pg)
-	searcher := newVectorSearcherForTest(t,
+	searcher := NewVectorSearcher(
 		pg, genID, 4, searchMaxInputChars, fixedEncoder([]float32{1, 0, 0, 0}))
 
 	t.Run("ranking rollup hydration tombstone", func(t *testing.T) {
@@ -194,7 +223,7 @@ func TestPGVectorSearcher(t *testing.T) {
 
 	t.Run("prepared expansion and exhaustion", func(t *testing.T) {
 		encodes := 0
-		prepared := newVectorSearcherForTest(t, pg, genID, 4, searchMaxInputChars, func(_ context.Context, query string) ([]float32, error) {
+		prepared := NewVectorSearcher(pg, genID, 4, searchMaxInputChars, func(_ context.Context, query string) ([]float32, error) {
 			encodes++
 			assert.Equal(t, "query", query)
 			return []float32{1, 0, 0, 0}, nil
@@ -220,7 +249,7 @@ func TestPGVectorSearcher(t *testing.T) {
 	})
 
 	t.Run("encoder error is transient", func(t *testing.T) {
-		bad := newVectorSearcherForTest(t, pg, genID, 4, searchMaxInputChars,
+		bad := NewVectorSearcher(pg, genID, 4, searchMaxInputChars,
 			func(context.Context, string) ([]float32, error) {
 				return nil, errors.New("embeddings endpoint down")
 			})
@@ -231,7 +260,7 @@ func TestPGVectorSearcher(t *testing.T) {
 	})
 
 	t.Run("dimension mismatch is rejected", func(t *testing.T) {
-		wrongDim := newVectorSearcherForTest(t, pg, genID, 4, searchMaxInputChars,
+		wrongDim := NewVectorSearcher(pg, genID, 4, searchMaxInputChars,
 			fixedEncoder([]float32{1, 0, 0}))
 		_, err := dbtest.SemanticSearch(ctx, wrongDim, "query", 5)
 		require.Error(t, err)
@@ -314,7 +343,7 @@ func TestPGVectorSearcherExactK(t *testing.T) {
 	insertSearchChunk(t, pg, table, halfvec, "multi", 1, []float32{1, 0.1, 0, 0})
 	insertSearchChunk(t, pg, table, halfvec, "outside", 0, []float32{0, 1, 0, 0})
 
-	searcher := newVectorSearcherForTest(t,
+	searcher := NewVectorSearcher(
 		pg, genID, 4, searchMaxInputChars, fixedEncoder([]float32{1, 0, 0, 0}))
 	hits, err := dbtest.SemanticSearch(ctx, searcher, "query", 2)
 	require.NoError(t, err, "SemanticSearch")
@@ -350,7 +379,7 @@ func TestPGVectorSearcherEfSearchRecall(t *testing.T) {
 		insertSearchChunk(t, pg, table, halfvec, key, 0, emb)
 	}
 
-	searcher := newVectorSearcherForTest(t,
+	searcher := NewVectorSearcher(
 		pg, genID, 4, searchMaxInputChars, fixedEncoder([]float32{1, 0, 0, 0}))
 	hits, err := dbtest.SemanticSearch(ctx, searcher, "query", docCount)
 	require.NoError(t, err, "SemanticSearch")
@@ -388,12 +417,10 @@ INSERT INTO `+table+` (doc_key, chunk_index, embedding)
 SELECT 'd' || i, 0, ('[1,' || (i::float8 / $1) || ',' || ((i % 97)::float8 / 97) || ',0]')::`+extSchema+`.halfvec
   FROM generate_series(0, $1 - 1) AS i`, docCount)
 	require.NoError(t, err, "insert chunks")
-	_, err = pg.ExecContext(ctx, `INSERT INTO vector_stamps(generation_id,doc_key,revision) SELECT $1,doc_key,content_hash FROM vector_documents`, genID)
-	require.NoError(t, err)
 	_, err = pg.ExecContext(ctx, `ANALYZE `+table)
 	require.NoError(t, err, "analyze chunks")
 
-	searcher := newVectorSearcherForTest(t,
+	searcher := NewVectorSearcher(
 		pg, genID, 4, searchMaxInputChars, fixedEncoder([]float32{1, 0, 0, 0}))
 	page, _, err := searcher.PrepareSemanticSearch(ctx, "query")
 	require.NoError(t, err, "PrepareSemanticSearch")

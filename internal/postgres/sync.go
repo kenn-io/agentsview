@@ -568,7 +568,7 @@ func (s *Sync) ensureSchemaLocked(ctx context.Context) error {
 		}
 		return nil
 	}
-	optional, err := ensureSchemaPG(ctx, s.pg, s.schema, true)
+	optional, err := ensureSchemaPG(ctx, s.pg, s.schema)
 	if err != nil {
 		return err
 	}

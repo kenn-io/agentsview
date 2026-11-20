@@ -68,9 +68,6 @@ func EnsureHostedTenant(ctx context.Context, database *sql.DB, schema, tenant st
 		if err = installHostedCoreUpgrade(ctx, tx, schema, tenant); err != nil {
 			return err
 		}
-		if err = migrateVectorCatalogPG(ctx, tx); err != nil {
-			return err
-		}
 		if err = migratePricingLayoutPG(ctx, tx); err != nil {
 			return err
 		}

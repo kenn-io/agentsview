@@ -15,6 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/vector"
 	"go.kenn.io/kit/embedclient"
 	kitvec "go.kenn.io/kit/vector"
+	"go.kenn.io/kit/vector/pgvector"
 )
 
 func embeddingFailureCause(err error) string {
@@ -35,14 +36,14 @@ func embeddingFailureCause(err error) string {
 
 // EmbedBatch drains one pass of pending hosted sessions.
 func EmbedBatch(ctx context.Context, pg *sql.DB, generation storage.VectorGenerationInfo, encode kitvec.EncodeFunc, maxInputChars, concurrency int, includeAutomated bool, batch ...kitvec.BatchOption) error {
-	id, _, ok, err := LookupVectorGeneration(ctx, pg, generation.Fingerprint)
+	id, dimension, ok, err := LookupVectorGeneration(ctx, pg, generation.Fingerprint)
 	if err != nil {
 		return err
 	}
 	if !ok {
 		return errors.New("hosted embedding generation is missing; run hosted-provision")
 	}
-	store, err := openVectorStore(ctx, pg)
+	chunks, err := pgvector.AttachChunks[string](ctx, pg, vectorChunkTable(id), dimension)
 	if err != nil {
 		return fmt.Errorf("hosted embeddings require pgvector and hosted-provision: %w", err)
 	}
@@ -58,7 +59,7 @@ func EmbedBatch(ctx context.Context, pg *sql.DB, generation storage.VectorGenera
 	if rollbackErr != nil {
 		return rollbackErr
 	}
-	scope := vectorPushScope{gen: vectorGeneration{id: id, fingerprint: generation.Fingerprint}, genIDs: ids, store: store}
+	scope := vectorPushScope{gen: vectorGeneration{id: id}, genIDs: ids, chunks: chunks}
 	var failedSessions int
 	var failures []string
 	cursor := ""
@@ -226,7 +227,7 @@ func writeHostedVectors(ctx context.Context, pg *sql.DB, scope vectorPushScope, 
 
 // coveredHostedDocuments reuses matching documents with every expected chunk.
 func coveredHostedDocuments(ctx context.Context, pg *sql.DB, generation int64, sessionID string, docs []storage.VectorPushDoc, maxInputChars int) ([]storage.VectorPushDoc, []storage.VectorPushDoc, error) {
-	rows, err := pg.QueryContext(ctx, fmt.Sprintf(`SELECT d.doc_key,d.content_hash,c.chunk_index FROM vector_documents d JOIN vector_stamps s ON s.doc_key=d.doc_key AND s.generation_id=$2 AND s.revision=d.content_hash LEFT JOIN %s c ON c.doc_key=d.doc_key WHERE d.session_id=$1 AND d.ordinal>=0 ORDER BY d.doc_key,c.chunk_index`, vectorChunkTable(generation)), sessionID, generation)
+	rows, err := pg.QueryContext(ctx, fmt.Sprintf(`SELECT d.doc_key,d.content_hash,c.chunk_index FROM vector_documents d LEFT JOIN %s c ON c.doc_key=d.doc_key WHERE d.session_id=$1 AND d.ordinal>=0 ORDER BY d.doc_key,c.chunk_index`, vectorChunkTable(generation)), sessionID)
 	if err != nil {
 		return nil, nil, err
 	}

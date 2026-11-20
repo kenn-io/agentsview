@@ -58,7 +58,6 @@ var hostedTables = append([]HostedTable{
 	{Name: "vector_generations", Key: []string{"id"}},
 	{Name: "vector_generation_machines", Key: []string{"generation_id", "machine"}},
 	{Name: "vector_documents", Key: []string{"doc_key"}},
-	{Name: "vector_stamps", Key: []string{"generation_id", "doc_key"}, ForeignKeys: []HostedForeignKey{{Columns: []string{"doc_key"}, Table: "vector_documents", References: []string{"doc_key"}, Delete: "CASCADE"}}},
 	{Name: "vector_push_state", Key: []string{"generation_id", "session_id"}},
 	{Name: "hosted_tenant_binding", Key: []string{"singleton"}},
 	{Name: "sync_metadata", Key: []string{"key"}},
@@ -113,7 +112,6 @@ var hostedTables = append([]HostedTable{
 // hostedCoreUpgradeTables are inventoried core tables added after hosted
 // schemas were first provisioned, with the DDL that creates each one.
 var hostedCoreUpgradeTables = []struct{ name, ddl string }{
-	{"vector_stamps", vectorStampsDDL},
 	{"session_plan_usage", sessionPlanUsageDDL},
 	{"session_usage_totals", sessionUsageTotalsDDL},
 	{"commit_links", commitLinksDDL},

@@ -3,8 +3,10 @@
 package postgres
 
 import (
+	"context"
 	"database/sql"
 	"errors"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // semanticSearchSchema is an isolated schema for semantic-search tests.
@@ -117,11 +120,56 @@ func seedSemanticFixture(t *testing.T, store *Store) (int64, string) {
 	return genID, table
 }
 
+func TestSemanticAndHybridReaderBeforeWriter(t *testing.T) {
+	writer, genID, table := setupSemanticSearch(t)
+	ctx := t.Context()
+	wireSemanticSearcher(t, writer, genID)
+	var before []db.ContentSearchPage
+	for _, mode := range []string{"semantic", "hybrid"} {
+		page, err := writer.SearchContent(ctx, db.ContentSearchFilter{Pattern: "content", Mode: mode, Limit: 50})
+		require.NoError(t, err)
+		require.NotEmpty(t, page.Matches)
+		before = append(before, page)
+	}
+	const role = "agentsview_semantic_reader_upgrade"
+	_, err := writer.DB().ExecContext(ctx, `CREATE ROLE `+role+` LOGIN PASSWORD 'reader_fixture'`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = writer.DB().ExecContext(context.WithoutCancel(ctx), `DROP OWNED BY `+role)
+		_, _ = writer.DB().ExecContext(context.WithoutCancel(ctx), `DROP ROLE `+role)
+	})
+	_, err = writer.DB().ExecContext(ctx, `GRANT USAGE ON SCHEMA `+semanticSearchSchema+` TO `+role+`; GRANT SELECT ON ALL TABLES IN SCHEMA `+semanticSearchSchema+` TO `+role)
+	require.NoError(t, err)
+	dsn, err := url.Parse(testPGSchemaURL(t, semanticSearchSchema))
+	require.NoError(t, err)
+	dsn.User = url.UserPassword(role, "reader_fixture")
+	reader, err := NewStore(ctx, dsn.String(), semanticSearchSchema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reader.Close() })
+	require.NoError(t, prepareServeStore(ctx, reader, semanticSearchSchema))
+	searcher, reason, err := (Backend{}).OpenVectorSearcher(ctx, reader, storage.VectorGenerationInfo{Fingerprint: "fp-sem"}, searchMaxInputChars, fixedEncoder([]float32{1, 0, 0, 0}))
+	require.NoError(t, err)
+	require.Empty(t, reason)
+	reader.SetVectorSearcher(searcher)
+	for i, mode := range []string{"semantic", "hybrid"} {
+		page, err := reader.SearchContent(ctx, db.ContentSearchFilter{Pattern: "content", Mode: mode, Limit: 50})
+		require.NoError(t, err)
+		assert.Equal(t, before[i].Matches, page.Matches)
+	}
+	var vector string
+	require.NoError(t, writer.DB().QueryRowContext(ctx, `SELECT embedding::text FROM `+table+` WHERE doc_key='d1'`).Scan(&vector))
+	assert.Equal(t, "[1,0.19995117,0,0]", vector)
+	_, err = writer.DB().ExecContext(ctx, `INSERT INTO vector_generations (fingerprint,model,dimension) VALUES ('old-writer','m',4)`)
+	require.NoError(t, err)
+	_, err = writer.DB().ExecContext(ctx, `INSERT INTO vector_push_state (generation_id,session_id,doc_agg_hash) VALUES ($1,'S1','old-writer') ON CONFLICT (generation_id,session_id) DO UPDATE SET doc_agg_hash=EXCLUDED.doc_agg_hash`, genID)
+	require.NoError(t, err)
+}
+
 // wireSemanticSearcher wires a fixed-query searcher over the fixture and
 // returns the store for a semantic SearchContent call.
 func wireSemanticSearcher(t *testing.T, store *Store, genID int64) {
 	t.Helper()
-	store.SetVectorSearcher(newVectorSearcherForTest(t,
+	store.SetVectorSearcher(NewVectorSearcher(
 		store.DB(), genID, 4, searchMaxInputChars, fixedEncoder([]float32{1, 0, 0, 0})))
 }
 

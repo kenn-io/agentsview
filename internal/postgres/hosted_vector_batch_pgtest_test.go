@@ -46,7 +46,7 @@ func TestHostedVectorGenerationSwitch(t *testing.T) {
 		return out, nil
 	}
 	store := &Store{pg: f.runtime}
-	store.SetVectorSearcher(newVectorSearcherForTest(t, f.runtime, aID, 2, 100, func(context.Context, string) ([]float32, error) { return []float32{1, 0}, nil }))
+	store.SetVectorSearcher(NewVectorSearcher(f.runtime, aID, 2, 100, func(context.Context, string) ([]float32, error) { return []float32{1, 0}, nil }))
 	searchAutomated := func() db.ContentSearchPage {
 		page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "search", Mode: "semantic", SessionID: "automated", IncludeOneShot: true, IncludeAutomated: true, Limit: 20})
 		require.NoError(t, err)

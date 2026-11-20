@@ -100,7 +100,7 @@ func TestHostedVectorPermanentRejectionWaitsForChange(t *testing.T) {
 	}
 	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false, kitvec.WithBatchSize(8)))
 	store := &Store{pg: f.runtime}
-	store.SetVectorSearcher(newVectorSearcherForTest(t, f.runtime, id, 2, 128, func(context.Context, string) ([]float32, error) { return []float32{1, 0}, nil }))
+	store.SetVectorSearcher(NewVectorSearcher(f.runtime, id, 2, 128, func(context.Context, string) ([]float32, error) { return []float32{1, 0}, nil }))
 	page, err := store.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "search", Mode: "semantic", IncludeOneShot: true, Limit: 10})
 	require.NoError(t, err)
 	var snippets []string

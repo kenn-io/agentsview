@@ -6,11 +6,11 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"sync"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/agentsview/internal/vector"
-	"go.kenn.io/kit/search/sqlquery"
 	kitvec "go.kenn.io/kit/vector"
 	"go.kenn.io/kit/vector/pgvector"
 )
@@ -22,16 +22,19 @@ import (
 type vectorSearcher struct {
 	pg              *sql.DB
 	tx              *sql.Tx
+	genID           int64
+	dimension       int
 	maxInputChars   int
 	encode          storage.VectorQueryEncoder
+	chunkTable      string
 	afterCandidates func()
 
-	store       *pgvector.Store[string, string]
-	fingerprint string
+	chunksMu sync.Mutex
+	chunks   *pgvector.Chunks[string]
 }
 
 func (v *vectorSearcher) inTx(tx *sql.Tx) *vectorSearcher {
-	return &vectorSearcher{pg: v.pg, tx: tx, maxInputChars: v.maxInputChars, encode: v.encode, afterCandidates: v.afterCandidates, store: v.store, fingerprint: v.fingerprint}
+	return &vectorSearcher{pg: v.pg, tx: tx, genID: v.genID, dimension: v.dimension, maxInputChars: v.maxInputChars, encode: v.encode, chunkTable: v.chunkTable, afterCandidates: v.afterCandidates}
 }
 
 func (v *vectorSearcher) queryExecutor() interface {
@@ -42,6 +45,23 @@ func (v *vectorSearcher) queryExecutor() interface {
 		return v.tx
 	}
 	return v.pg
+}
+
+// NewVectorSearcher builds a PG vector searcher for generation genID. The
+// chunk table (vector_chunks_g<genID>) and dimension must match what the push
+// phase created; maxInputChars is the build-time chunk size, threaded into
+// vector.DocAnchor so anchor/snippet re-splitting matches how chunks were cut.
+func NewVectorSearcher(
+	pg *sql.DB, genID int64, dimension, maxInputChars int, encode storage.VectorQueryEncoder,
+) db.VectorSearcher {
+	return &vectorSearcher{
+		pg:            pg,
+		genID:         genID,
+		dimension:     dimension,
+		maxInputChars: maxInputChars,
+		encode:        encode,
+		chunkTable:    vectorChunkTable(genID),
+	}
 }
 
 // PrepareSemanticSearch implements db.VectorSearcher. It embeds query once.
@@ -59,22 +79,20 @@ func (v *vectorSearcher) PrepareSemanticSearch(
 	if err != nil {
 		return nil, 0, fmt.Errorf("%w: %w", db.ErrSemanticTransient, err)
 	}
+	if len(vec) != v.dimension {
+		return nil, 0, fmt.Errorf(
+			"query embedding has %d dimensions, generation expects %d",
+			len(vec), v.dimension)
+	}
 	return func(ctx context.Context, limit int) ([]db.VectorHit, bool, error) {
-		var chunks []kitvec.Hit[string]
-		var err error
-		predicate := sqlquery.Predicate{SQL: "d.ordinal >= 0"}
-		if v.tx != nil {
-			chunks, err = v.store.QueryGenerationWithPredicateTx(ctx, v.tx, v.fingerprint, kitvec.Vector(vec), max(limit, 0), predicate)
-		} else {
-			chunks, err = v.store.QueryGenerationWithPredicate(ctx, v.fingerprint, kitvec.Vector(vec), max(limit, 0), predicate)
-		}
+		chunks, rowCap, err := v.knnChunks(ctx, vec, limit)
 		if err != nil {
 			return nil, false, err
 		}
 		if v.afterCandidates != nil {
 			v.afterCandidates()
 		}
-		exhausted := len(chunks) < limit
+		exhausted := knnExhausted(len(chunks), limit, rowCap)
 		docs, err := kitvec.RollupByDocument(chunks)
 		if err != nil {
 			return nil, false, fmt.Errorf("rolling up vector hits: %w", err)
@@ -90,8 +108,48 @@ func (v *vectorSearcher) PrepareSemanticSearch(
 	}, 0, nil
 }
 
-// chunkHit carries the indexed revision through hydration.
+// knnExhausted reports whether a KNN that asked for limit rows and returned
+// rows read every chunk. Only an HNSW index scan stops at rowCap below limit;
+// a sequential scan has no cap. A short result therefore proves exhaustion
+// unless it is exactly the cap, which a capped index scan also returns when
+// more rows remain.
+func knnExhausted(rows, limit, rowCap int) bool {
+	return rows < limit && (rowCap >= limit || rows != rowCap)
+}
+
+// chunkHit is one chunk-level KNN neighbor: the document it belongs to, which
+// chunk matched, and its cosine similarity (1 - cosine distance, higher is
+// better).
 type chunkHit = kitvec.Hit[string]
+
+// knnChunks searches on the borrowed transaction when one is present.
+func (v *vectorSearcher) knnChunks(ctx context.Context, vec []float32, limit int) ([]chunkHit, int, error) {
+	tx := v.tx
+	if tx == nil {
+		var err error
+		tx, err = v.pg.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+		if err != nil {
+			return nil, 0, err
+		}
+		defer func() { _ = tx.Rollback() }()
+	}
+	v.chunksMu.Lock()
+	if v.chunks == nil {
+		var err error
+		v.chunks, err = pgvector.AttachChunks[string](ctx, tx, v.chunkTable, v.dimension)
+		if err != nil {
+			v.chunksMu.Unlock()
+			return nil, 0, err
+		}
+	}
+	chunks := v.chunks
+	v.chunksMu.Unlock()
+	page, err := chunks.SearchTx(ctx, tx, kitvec.Vector(vec), limit)
+	if err != nil {
+		return nil, 0, err
+	}
+	return page.Hits, page.ScanCap, nil
+}
 
 // vectorDoc is the subset of a vector_documents row needed to hydrate a chunk
 // hit into a db.VectorHit. offsets is empty for user documents and carries one
@@ -103,7 +161,6 @@ type vectorDoc struct {
 	subordinate bool
 	offsets     []db.UnitOffset
 	content     string
-	contentHash string
 }
 
 // hydrateHits looks up each hit's document row and builds its db.VectorHit,
@@ -127,7 +184,7 @@ func (v *vectorSearcher) hydrateHits(
 	out := make([]db.VectorHit, 0, len(hits))
 	for _, h := range hits {
 		doc, ok := docs[h.Doc]
-		if !ok || h.Revision != doc.contentHash {
+		if !ok {
 			continue
 		}
 		anchorOrdinal, snippet := vector.DocAnchor(
@@ -160,7 +217,7 @@ func (v *vectorSearcher) lookupDocs(
 	}
 	rows, err := v.queryExecutor().QueryContext(ctx, `
 SELECT d.doc_key, d.session_id, d.ordinal, d.ordinal_end,
-       d.subordinate OR `+db.SubordinateSessionSQL("s")+`, d.offsets, d.content, d.content_hash
+       d.subordinate OR `+db.SubordinateSessionSQL("s")+`, d.offsets, d.content
   FROM vector_documents d
   LEFT JOIN sessions s ON s.id = d.session_id
  WHERE d.ordinal >= 0 AND d.doc_key = ANY($1)`, docKeys)
@@ -173,7 +230,7 @@ SELECT d.doc_key, d.session_id, d.ordinal, d.ordinal_end,
 		var key, offsets string
 		var doc vectorDoc
 		if err := rows.Scan(&key, &doc.sessionID, &doc.ordinal,
-			&doc.ordinalEnd, &doc.subordinate, &offsets, &doc.content, &doc.contentHash); err != nil {
+			&doc.ordinalEnd, &doc.subordinate, &offsets, &doc.content); err != nil {
 			return nil, fmt.Errorf("scanning search hit document: %w", err)
 		}
 		if err := json.Unmarshal([]byte(offsets), &doc.offsets); err != nil {

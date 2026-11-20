@@ -472,11 +472,6 @@ func TestHostedVectorProvisionAndPrivileges(t *testing.T) {
 	_, err = f.admin.ExecContext(t.Context(), `GRANT SELECT ON `+vectorChunkTable(oldID)+` TO "`+f.role+`"`)
 	require.NoError(t, err)
 	require.NoError(t, CheckHostedVectorPrivileges(t.Context(), f.runtime, f.schema, gen.Fingerprint))
-	_, err = f.admin.ExecContext(t.Context(), `REVOKE INSERT ON vector_stamps FROM "`+f.role+`"`)
-	require.NoError(t, err)
-	require.ErrorContains(t, CheckHostedVectorPrivileges(t.Context(), f.runtime, f.schema, gen.Fingerprint), "vector_stamps")
-	_, err = f.admin.ExecContext(t.Context(), `GRANT INSERT ON vector_stamps TO "`+f.role+`"`)
-	require.NoError(t, err)
 	_, err = f.admin.ExecContext(t.Context(), `CREATE TABLE vector_chunks_g999999 (doc_key text)`)
 	require.NoError(t, err)
 	badGen := storage.VectorGenerationInfo{Fingerprint: "rolled-back", Model: "fixture", Dimension: 2}
