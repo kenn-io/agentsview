@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
@@ -23,6 +24,8 @@ func TestPGSavedActivityReportRespectsChangedRowPolicy(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	local, syncer, _ := newUsageJournalFixture(t)
 	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	today := time.Now().UTC().Format("2006-01-02")
+	pgKeptSession(t, local, "today", "project-a", today)
 	pgKeptPush(t, syncer, false)
 	ctx := t.Context()
 	role := fmt.Sprintf("activity_reader_%x", rand.Uint64())
@@ -61,12 +64,18 @@ func TestPGSavedActivityReportRespectsChangedRowPolicy(t *testing.T) {
 	require.NoError(t, err)
 	first := openPGActivityInputStore(t, target, syncer.schema, directory)
 	require.Len(t, pgKeptBuild(t, first, f, q, true).Sessions, 1)
+	todayQuery := pgDayQuery(t, today, "UTC")
+	require.False(t, first.activityReportEligible(todayQuery))
+	require.Len(t, pgKeptBuild(t, first, f, todayQuery, true).Sessions, 1)
+	require.Len(t, pgKeptBuild(t, first, f, todayQuery, false).Sessions, 1)
 	_, err = syncer.pg.ExecContext(ctx, `ALTER TABLE sessions ENABLE ROW LEVEL SECURITY; ALTER POLICY activity_reader ON sessions USING (false)`)
 	require.NoError(t, err)
 	require.Empty(t, pgKeptBuild(t, first, f, q, true).Sessions)
+	require.Empty(t, pgKeptBuild(t, first, f, todayQuery, true).Sessions)
 	_, err = syncer.pg.ExecContext(ctx, `ALTER TABLE sessions DISABLE ROW LEVEL SECURITY`)
 	require.NoError(t, err)
 	require.Len(t, pgKeptBuild(t, first, f, q, false).Sessions, 1)
+	require.Len(t, pgKeptBuild(t, first, f, todayQuery, true).Sessions, 1)
 	require.NoError(t, first.Close())
 	files, err = filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
 	require.NoError(t, err)

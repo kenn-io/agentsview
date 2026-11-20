@@ -191,7 +191,7 @@ func (s *Store) BuildActivityReportArtifacts(
 			if len(entries) > 0 {
 				previousRevision = entries[0].revision
 			}
-			report, rev, currentCheckpoint, hit, checkErr := s.validateKeptActivityReport(ctx, selection, version, entries, eligible, f, rangeStartUTC, rangeEndUTC, lowerBound, upperBound)
+			report, rev, currentCheckpoint, hit, checkErr := s.validateKeptActivityReport(ctx, selection, version, entries, f, rangeStartUTC, rangeEndUTC, lowerBound, upperBound)
 			if checkErr != nil {
 				return activity.CandidateArtifacts{}, checkErr
 			}
@@ -308,7 +308,7 @@ func (s *Store) BuildActivityReportArtifacts(
 		}
 		through, _, checkErr := s.LoadUsageChanges(ctx, revision)
 		current, _, tokenErr := usageHistoryCheckpoints(ctx, s.pg, revision, revision)
-		if checkErr == nil && tokenErr == nil && through == revision && current == checkpoint && (!eligible || !s.activityReportRestricted(ctx)) {
+		if checkErr == nil && tokenErr == nil && through == revision && current == checkpoint && !s.activityReportRestricted(ctx) {
 			memo := &s.runtimeState().activityKept
 			memo.Put(selection, version, []pgActivityKept{entry})
 			if identity != "" && checkpoint != "" {

@@ -144,7 +144,7 @@ func (s *Store) activityKeptVersion(ctx context.Context, pricingDigest string) (
 	return fmt.Sprintf("%d|%s|%s", oid, pricingDigest, pricing.ConfiguredAliasesDigest()), nil
 }
 
-func (s *Store) validateKeptActivityReport(ctx context.Context, selection, version string, entries []pgActivityKept, eligible bool, f db.AnalyticsFilter, rangeStart, rangeEnd, lower, upper string) (kept.Report, int64, string, bool, error) {
+func (s *Store) validateKeptActivityReport(ctx context.Context, selection, version string, entries []pgActivityKept, f db.AnalyticsFilter, rangeStart, rangeEnd, lower, upper string) (kept.Report, int64, string, bool, error) {
 	hadEntry := len(entries) > 0
 	reader := s
 	var tx *sql.Tx
@@ -170,7 +170,7 @@ func (s *Store) validateKeptActivityReport(ctx context.Context, selection, versi
 			return kept.Report{}, 0, "", false, err
 		}
 	}
-	if eligible && s.activityReportRestricted(ctx) {
+	if s.activityReportRestricted(ctx) {
 		s.runtimeState().activityKept.DeleteSlots(func(slot string) bool { return slot == selection })
 		return kept.Report{}, revision, checkpoint, false, nil
 	}
