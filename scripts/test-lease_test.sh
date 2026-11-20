@@ -264,7 +264,7 @@ for target in test-postgres bench-pg-usage test-clickhouse; do
     [[ "$project" != old ]]
     grep -Fxq "TARGET_FROM_MAKE=$target-run" "$tmp/make-url"
     grep -Fxq "LEASE_FROM_MAKE=$project" "$tmp/make-url"
-    grep -Fxq 'NO_EXCHANGE_FROM_MAKE=' "$tmp/make-url"
+    grep -Fxq 'NO_EXCHANGE_FROM_MAKE=old-no-exchange' "$tmp/make-url"
     case "$target" in
         test-clickhouse)
             service=clickhouse port=9000

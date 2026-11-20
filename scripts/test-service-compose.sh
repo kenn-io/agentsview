@@ -23,4 +23,4 @@ case "$service" in
     clickhouse) ch_url="clickhouse://${address}/default" ;;
 esac
 # Override values passed to the parent Make on its command line.
-exec "$@" "TEST_SERVICE_LEASE=$TEST_SERVICE_LEASE" "TEST_PG_URL=$pg_url" "TEST_CLICKHOUSE_URL=$ch_url" "TEST_PG_STANDBY_URL=" "TEST_CLICKHOUSE_NO_EXCHANGE_URL="
+exec "$@" "TEST_SERVICE_LEASE=$TEST_SERVICE_LEASE" "TEST_PG_URL=$pg_url" "TEST_CLICKHOUSE_URL=$ch_url" "TEST_PG_STANDBY_URL="
