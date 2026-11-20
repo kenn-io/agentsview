@@ -112,6 +112,7 @@ These run without any configuration. None of them sends session content,
 prompts, project names, file paths, or hostnames. Each one reveals your IP
 address to the host it contacts.
 
+- **Usage reporting.** Anonymous telemetry, sent only after consent.
 - **Update check.** When the web UI loads in a browser, the server requests
   `github.com/kenn-io/agentsview/releases/latest` and reads the release tag
   from the redirect. It caches the answer for one hour, or 15 minutes for
@@ -190,14 +191,19 @@ Each of these is off until you configure or run it.
   `cursor_admin_api_key`, optional user filters, and a date range to
   `api.cursor.com`. It runs only when you invoke it. See
   [Cursor Admin Usage Events](docs/token-usage.md#cursor-admin-usage-events).
-- **Claude.ai sync.** When you click **Sync**, your Claude.ai chats are fetched
-  with a signed-in Claude.ai session. With Chrome, the extension you install
-  with `agentsview source chrome setup` makes the requests using Chrome's
-  session and passes the chats to agentsview over a local socket. The desktop
-  build instead makes the requests from its own sign-in window, which keeps a
-  separate Claude.ai session. The agentsview server never contacts Claude.ai,
-  and credentials stay in Chrome or the sign-in window. See
-  [Sync Claude.ai chats](docs/chat-import.md#sync-claudeai-chats).
+- **Chrome Sync.** When you click **Sync** or run
+  `agentsview source import --sync`, your chats are fetched from `claude.ai`,
+  `chatgpt.com`, `gemini.google.com`, or `grok.com` with the session you are
+  signed in to there. With Chrome, the extension you install with
+  `agentsview source chrome setup` makes the requests using Chrome's session
+  and passes the chats to agentsview over a local socket. For Claude.ai only,
+  the desktop build can instead make the requests from its own sign-in window,
+  which keeps a separate Claude.ai session. The agentsview server never
+  contacts these sites, and credentials stay in Chrome or the sign-in window.
+  See [Sync Claude.ai chats](docs/chat-import.md#sync-claudeai-chats),
+  [Sync ChatGPT chats](docs/chat-import.md#sync-chatgpt-chats),
+  [Sync Gemini Apps chats](docs/chat-import.md#sync-gemini-apps-chats), and
+  [Sync Grok web chats](docs/chat-import.md#sync-grok-web-chats).
 - **Generated insights.** When `[insights]` sets `endpoint` and `model`,
   agentsview sends transcript-derived content to that OpenAI-compatible
   endpoint. Remote endpoints must use HTTPS unless `allow_http = true`. With
@@ -226,7 +232,9 @@ Each of these is off until you configure or run it.
 - **Docbank.** With `[integrations.docbank]` configured, agentsview sends the
   SHA-256 digests of transcript images to your Docbank server to find where it
   stores them. Only digests leave the machine. The URL must use HTTPS, or HTTP
-  on loopback. See
+  on loopback, unless `allow_http = true`. That setting allows plain HTTP to
+  any host and exposes the API key and digests on the network, so use it only
+  on a network you trust. See
   [Find transcript images in Docbank](docs/configuration.md#find-transcript-images-in-docbank).
 - **Publish to Gist.** Publishing a session or insight uploads its HTML export
   to GitHub as a public or secret gist. The server uses the token saved in

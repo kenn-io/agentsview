@@ -365,6 +365,7 @@ local Amp thread JSON files.
 | Cursor                | `~/.cursor/projects/`                                                                                                                                                                                                                                |
 | DeepSeek TUI          | `~/.codewhale/sessions/`, `~/.deepseek/sessions/`                                                                                                                                                                                                    |
 | DeepSeek Harness      | `~/.dsh/sessions/` (or `$DSH_HOME/sessions/`)                                                                                                                                                                                                        |
+| Factory Droid         | `~/.factory/sessions/`                                                                                                                                                                                                                               |
 | Forge                 | `~/.forge/`                                                                                                                                                                                                                                          |
 | Gemini CLI            | `~/.gemini/`                                                                                                                                                                                                                                         |
 | Goose                 | `~/.local/share/goose/sessions/` (macOS and Linux), `%APPDATA%\\Block\\goose\\data\\sessions\\` (Windows)                                                                                                                                            |
@@ -747,6 +748,8 @@ configuration.
 All session data stays on your machine. The server binds to `127.0.0.1` by
 default. The update check is optional and can be disabled with
 `--no-update-check`.
+
+See [Usage Reporting](docs/configuration.md#usage-reporting) for telemetry.
 
 ## Documentation
 
