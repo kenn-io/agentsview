@@ -155,7 +155,7 @@ func (s *Store) BuildActivityReportArtifacts(
 		if err != nil {
 			return activity.CandidateArtifacts{}, err
 		}
-		if version != "" && !s.activityReportRestricted(ctx) {
+		if version != "" {
 			var fileErr error
 			files, fileErr = s.activityTableIdentity(ctx)
 			if fileErr != nil && !isInsufficientPrivilege(fileErr) {
@@ -163,7 +163,7 @@ func (s *Store) BuildActivityReportArtifacts(
 			}
 			if files != "" {
 				version += "|" + files
-				if q.Timezone == "Local" && q.Loc != nil {
+				if q.Loc != nil {
 					version += "|" + db.TrendsTimezoneKey(db.AnalyticsFilter{Timezone: q.Loc.String()})
 				}
 			} else {
@@ -172,13 +172,17 @@ func (s *Store) BuildActivityReportArtifacts(
 		}
 		if version != "" {
 			selection = kept.Selection(f, q)
-			identity = s.activityReportIdentity(ctx, q)
+			if !s.activityReportRestricted(ctx) {
+				identity = s.activityReportIdentity(ctx, q)
+			}
+			diskLoaded := false
 			memo := &s.runtimeState().activityKept
 			if _, ok := memo.Get(selection, version); !ok && identity != "" {
 				if entry, found := s.loadActivityReport(selection, version, identity); found {
 					token, _, checkErr := usageHistoryCheckpoints(ctx, s.pg, entry.revision, entry.revision)
 					if checkErr == nil && token != "" && token == entry.checkpoint {
 						memo.Put(selection, version, []pgActivityKept{entry})
+						diskLoaded = true
 					}
 				}
 			}
@@ -191,10 +195,16 @@ func (s *Store) BuildActivityReportArtifacts(
 				return activity.CandidateArtifacts{}, checkErr
 			}
 			revision = rev
-			if hit && !s.activityReportRestricted(ctx) {
+			if diskLoaded && s.activityReportRestricted(ctx) {
+				memo.DeleteSlots(func(slot string) bool { return slot == selection })
+				selection = ""
+			} else if hit {
+				restricted := s.activityReportRestricted(ctx)
 				currentFiles, fileErr := s.activityTableIdentity(ctx)
 				if fileErr == nil && currentFiles == files {
-					s.refreshActivityReport(selection, version, identity, previousRevision, rev, currentCheckpoint)
+					if !restricted {
+						s.refreshActivityReport(selection, version, identity, previousRevision, rev, currentCheckpoint)
+					}
 					activity.ReportProgress(onProgress, report.Done)
 					return report.Artifacts, nil
 				}
@@ -298,10 +308,10 @@ func (s *Store) BuildActivityReportArtifacts(
 		}
 		through, _, checkErr := s.LoadUsageChanges(ctx, revision)
 		current, _, tokenErr := usageHistoryCheckpoints(ctx, s.pg, revision, revision)
-		if checkErr == nil && tokenErr == nil && through == revision && current == checkpoint && !s.activityReportRestricted(ctx) {
+		if checkErr == nil && tokenErr == nil && through == revision && current == checkpoint {
 			memo := &s.runtimeState().activityKept
 			memo.Put(selection, version, []pgActivityKept{entry})
-			if identity != "" && checkpoint != "" {
+			if identity != "" && checkpoint != "" && !s.activityReportRestricted(ctx) {
 				if _, ok := memo.Get(selection, version); ok {
 					s.saveActivityReport(selection, version, entry)
 				}
