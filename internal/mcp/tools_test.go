@@ -2195,12 +2195,12 @@ func TestSearchContent_LexicalChildScope(t *testing.T) {
 func TestSearchContent_HybridKeywordFallbackMetadata(t *testing.T) {
 	const note = "Search by meaning is unavailable: index is building: 40% complete. Returned hybrid keyword matches only. Query words must appear. If matches are empty or few, try short substring queries with key terms or synonyms."
 	fake := &fakeContentSearchService{result: &service.ContentSearchResult{EffectiveMode: "hybrid_keyword", Note: note}}
-	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
-	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Mode: "hybrid", IncludeActive: true})
+	ts := &toolset{svc: fake}
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Mode: "hybrid", IncludeActive: true, DateFrom: "2024-05-16"})
 	require.NoError(t, err)
 	assert.True(t, fake.lastReq.KeywordFallback)
 	assert.Equal(t, "hybrid_keyword", out.EffectiveMode)
-	assert.Contains(t, out.Note, note)
+	assert.Equal(t, note, out.Note)
 }
 
 func TestListRecallPagesWithEvidenceAndSourceSessionFilter(t *testing.T) {

@@ -206,6 +206,7 @@ func TestSearchContentActivityCandidateExpansion(t *testing.T) {
 		{"fetch budget exhausted", VectorHit{SessionID: "active"}, 6400, 1, activityCutoff, "", "", nil, []int{200, 400, 800, 1600, 3200, 4096}},
 		{"all active", VectorHit{SessionID: "active"}, 200, 1, epochCutoff, "", "", nil, []int{200, 400}},
 		{"sparse project with other filters", VectorHit{SessionID: "idle", Ordinal: 3}, 6400, 1, activityCutoff, "project-b", "2024-06-01", nil, []int{200}},
+		{"sparse project without activity rejection", VectorHit{SessionID: "idle", Ordinal: 3}, 6400, 1, time.Time{}, "project-b", "", nil, []int{200}},
 		{"date from", VectorHit{SessionID: "old"}, 200, 1, time.Time{}, "", "2024-06-01", []int{0, 1, 2}, []int{200, 400}},
 	} {
 		modes := []string{"semantic"}
