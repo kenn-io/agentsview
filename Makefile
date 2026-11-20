@@ -523,6 +523,8 @@ ifeq ($(CLICKHOUSE_LANE),usage)
 CLICKHOUSE_TEST_FILTER = -run '$(CLICKHOUSE_USAGE_TESTS)'
 else ifeq ($(CLICKHOUSE_LANE),rest)
 CLICKHOUSE_TEST_FILTER = -skip '$(CLICKHOUSE_USAGE_TESTS)'
+else ifneq ($(CLICKHOUSE_LANE),)
+CLICKHOUSE_TEST_FILTER = $(error Invalid CLICKHOUSE_LANE: $(CLICKHOUSE_LANE))
 endif
 
 # ClickHouse integration tests for CI (clickhouse already running as service)
