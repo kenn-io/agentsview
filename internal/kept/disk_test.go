@@ -152,6 +152,7 @@ func TestDiskLimitsFiles(t *testing.T) {
 		require.Equal(t, key, string(payload))
 	}
 }
+
 func TestDiskRewriteMissingDoesNotEncode(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	var disk Disk
