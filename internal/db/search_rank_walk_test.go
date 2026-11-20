@@ -65,6 +65,9 @@ func TestSearchRankWalkMatchesFullRanking(t *testing.T) {
 	for i := range 100 {
 		seed(fmt.Sprintf("tie-%03d", i), "untitled", "intro", "deploy the handler", "middle", "deploy the handler")
 	}
+	for i := range 257 {
+		seed(fmt.Sprintf("cap-%03d", i), "untitled", "terminustie")
+	}
 	for i := range 10 {
 		seed(fmt.Sprintf("varied-%02d", i), "untitled",
 			"handler "+strings.Repeat("word ", i), strings.Repeat("filler ", 3)+"handler")
@@ -162,6 +165,33 @@ func TestSearchRankWalkMatchesFullRanking(t *testing.T) {
 	assert.Equal(t, full, page)
 	require.GreaterOrEqual(t, rankReads, 2, "search must look past one session to find a broad window")
 	require.Less(t, rankingWindows, fullWindows, "broad window must avoid the full-ranking CTE")
+
+	filter = SearchFilter{Query: "terminustie", Limit: 1, DateFrom: "2026-05-01", Project: "proj"}
+	full, _, fullWindows = observe(filter)
+	require.GreaterOrEqual(t, fullWindows, 3, "project filter must use full ranking")
+	filter.Project = ""
+	page, rankReads, rankingWindows = observe(filter)
+	require.Len(t, page.Results, 1)
+	assert.Equal(t, "cap-000", page.Results[0].SessionID)
+	assert.Contains(t, page.Results[0].Snippet, "terminustie")
+	assert.Equal(t, full, page)
+	require.GreaterOrEqual(t, rankReads, 2, "search must prepare the rank walk")
+	require.Less(t, rankingWindows, fullWindows, "a 257-row tie must finish without full ranking")
+	filter.Cursor = 1
+	page, _, _ = observe(filter)
+	require.Len(t, page.Results, 1)
+	assert.Equal(t, "cap-001", page.Results[0].SessionID)
+	filter.Project = "proj"
+	full, _, _ = observe(filter)
+	assert.Equal(t, full, page)
+
+	seed("cap-257", "untitled", "terminustie")
+	filter.Cursor = 0
+	full, _, fullWindows = observe(filter)
+	filter.Project = ""
+	page, _, rankingWindows = observe(filter)
+	assert.Equal(t, full, page)
+	require.GreaterOrEqual(t, rankingWindows, fullWindows, "a larger tie must use full ranking")
 
 	for _, from := range []string{"", "2026-05-08", "2026-05-09", "2027-01-01"} {
 		for _, query := range []string{"handler", "deploy"} {
