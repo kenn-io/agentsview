@@ -1100,10 +1100,26 @@ jobs:
         run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       - name: Run PostgreSQL integration tests
+        if: matrix.name == 'PostgreSQL core'
         run: make ${{ matrix.postgres-target }}
         env:
           CGO_ENABLED: "1"
           TEST_PG_URL: postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable
+
+      - name: Run PostgreSQL and ClickHouse integration tests
+        if: matrix.name == 'PostgreSQL raw-sync and ClickHouse'
+        run: |
+          make pricing-snapshot ensure-embed-dir
+          # The suites use separate service containers, so they run together.
+          CGO_ENABLED=1 TEST_CLICKHOUSE_URL=clickhouse://localhost:19000/default make -o pricing-snapshot -o ensure-embed-dir test-clickhouse-ci CLICKHOUSE_LANE=${{ matrix.clickhouse-lane }} &
+          clickhouse_pid=$!
+          postgres_status=0
+          CGO_ENABLED=1 TEST_PG_URL='postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable' make -o pricing-snapshot -o ensure-embed-dir ${{ matrix.postgres-target }} || postgres_status=$?
+          clickhouse_status=0
+          wait "$clickhouse_pid" || clickhouse_status=$?
+          if [ "$postgres_status" -ne 0 ]; then echo '::error::PostgreSQL integration tests failed'; fi
+          if [ "$clickhouse_status" -ne 0 ]; then echo '::error::ClickHouse integration tests failed'; fi
+          if [ "$postgres_status" -ne 0 ] || [ "$clickhouse_status" -ne 0 ]; then exit 1; fi
 
       - name: Start PostgreSQL standby
         if: matrix.name == 'PostgreSQL core'
@@ -1151,6 +1167,7 @@ jobs:
           TEST_PG_URL: postgres://root@127.0.0.1:26257/defaultdb?sslmode=disable
 
       - name: Run ClickHouse integration tests
+        if: matrix.name == 'PostgreSQL core'
         run: make test-clickhouse-ci CLICKHOUSE_LANE=${{ matrix.clickhouse-lane }}
         env:
           CGO_ENABLED: "1"
