@@ -115,7 +115,7 @@ describe("documentTitle", () => {
 
   it.each([
     ["codex:12345678abcdef", "12345678 · AgentsView"],
-    ["source-a~12345678abcdef", "source-a:12345678 · AgentsView"],
+    ["source-a~codex:12345678abcdef", "source-a:12345678 · AgentsView"],
   ])("shows the breadcrumb ID for %s while loading", (sessionId, expected) => {
     expect(documentTitle({ ...base, route: "sessions", sessionId })).toBe(expected);
   });
