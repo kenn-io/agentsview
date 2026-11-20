@@ -242,7 +242,7 @@ func TestEnsureSchemaFastPathCreatesVectorTables(t *testing.T) {
 	assert.True(t, tableExistsPG(t, pg, "vector_push_state"))
 }
 
-// TestVectorHalfvecGate checks supported extensions and search without pgvector.
+// TestVectorSearcherReportsMissingExtension checks search without pgvector.
 func TestVectorSearcherReportsMissingExtension(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)

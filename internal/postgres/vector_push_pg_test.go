@@ -1197,7 +1197,6 @@ func TestVectorPushLazyChunkAttachment(t *testing.T) {
 		require.Equal(t, [][]string{{"A"}}, src.hashScopes)
 		assert.Zero(t, result.SessionsPushed)
 	})
-
 }
 
 // TestVectorPushFullRepairsSilentCorruption pins --full's repair contract for
