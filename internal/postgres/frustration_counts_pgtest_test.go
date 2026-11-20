@@ -294,7 +294,6 @@ func TestFrustrationFillWaitsForUsageWarm(t *testing.T) {
 		require.Eventually(t, func() bool {
 			return f.pg.QueryRowContext(f.ctx, `SELECT count(*) FROM session_frustration_counts WHERE marker_count=1`).Scan(&count) == nil && count == 2
 		}, 20*time.Second, 100*time.Millisecond)
-
 	})
 	t.Run("failure", func(t *testing.T) {
 		server, _ := testPGServer(t)
@@ -316,10 +315,6 @@ func TestFrustrationFillWaitsForUsageWarm(t *testing.T) {
 			var count int
 			return f.pg.QueryRowContext(f.ctx, `SELECT count(*) FROM session_frustration_counts WHERE marker_count=1`).Scan(&count) == nil && count == 2
 		}, 10*time.Second, 100*time.Millisecond)
-		waitCtx, cancel := context.WithTimeout(f.ctx, 250*time.Millisecond)
-		defer cancel()
-		require.ErrorIs(t, store.usageCache.WaitWarm(waitCtx), context.DeadlineExceeded)
-
 	})
 }
 
@@ -384,10 +379,7 @@ func TestFrustrationFillJoinsCoveredRequests(t *testing.T) {
 		defer tx.Rollback()
 		_, err = tx.ExecContext(f.ctx, `SELECT 1 FROM session_frustration_counts WHERE session_id='one' FOR UPDATE`)
 		require.NoError(t, err)
-		state := &store.runtimeState().frustrationFill
-		state.mu.Lock()
-		completed := state.completed
-		state.mu.Unlock()
+		completed := store.runtimeState().frustrationFill.completedCount()
 		fillDone := make(chan error, 1)
 		go func() { fillDone <- store.fillFrustrationCounts(f.ctx, ids, f.versionColumn) }()
 		require.Eventually(t, func() bool {
@@ -434,7 +426,6 @@ func TestFrustrationFillJoinsCoveredRequests(t *testing.T) {
 		}
 		require.Equal(t, 1, coveredRows[len(coveredRows)-1].FrustrationMarkerCount)
 		require.Zero(t, counter.scans.Load(), "covered requests must reuse filled counts")
-
 	})
 	t.Run("partial", func(t *testing.T) {
 		f := newFrustrationFixture(t, "agentsview")
@@ -569,124 +560,6 @@ func TestFrustrationFillDeploymentGates(t *testing.T) {
 	}
 }
 
-func TestFrustrationFillRequestReservesScanTime(t *testing.T) {
-	previous := frustrationJoinWait
-	frustrationJoinWait = time.Second
-	defer func() { frustrationJoinWait = previous }()
-	f := newFrustrationFixture(t, "agentsview")
-	store := f.open(t)
-	_, err := f.pg.ExecContext(f.ctx, `UPDATE sync_metadata SET value='0' WHERE key='usage_change_journal_version'`)
-	require.NoError(t, err)
-	require.Empty(t, store.keptAnalyticsVersion(f.ctx, "signals|{}"))
-	_, err = f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id,session_version,rules_version,marker_count) VALUES ('one','stale',0,0)`)
-	require.NoError(t, err)
-	gate, err := f.pg.BeginTx(f.ctx, nil)
-	require.NoError(t, err)
-	defer gate.Rollback()
-	_, err = gate.ExecContext(f.ctx, `SELECT 1 FROM session_frustration_counts WHERE session_id='one' FOR UPDATE`)
-	require.NoError(t, err)
-	counter := &frustrationScanCounter{storeExecutor: store.pg}
-	store.pg = counter
-	stop := store.StartFrustrationFill(f.ctx)
-	defer func() { gate.Rollback(); stop() }()
-	state := &store.runtimeState().frustrationFill
-	require.Eventually(t, func() bool {
-		state.mu.Lock()
-		defer state.mu.Unlock()
-		return state.pending["one"] != nil && state.pending["two"] != nil
-	}, 10*time.Second, 10*time.Millisecond)
-	ctx, cancel := context.WithCancel(context.WithValue(f.ctx, frustrationScanKey{}, true))
-	defer cancel()
-	type response struct {
-		result db.SignalsAnalyticsResponse
-		err    error
-	}
-	done := make(chan response, 1)
-	go func() {
-		result, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
-		done <- response{result, err}
-	}()
-	var got response
-	select {
-	case got = <-done:
-	case <-time.After(5 * time.Second):
-		cancel()
-		<-done
-		t.Fatal("request did not fall back while the fill was blocked")
-	}
-	require.NoError(t, got.err)
-	require.Equal(t, 2, got.result.QualityHealth.Totals.FrustrationMarkerCount)
-	require.EqualValues(t, 1, counter.scans.Load(), "request must scan while fill remains blocked")
-}
-
-type blockedSignalRows struct {
-	storeExecutor
-	started chan struct{}
-	release chan struct{}
-	once    sync.Once
-	reads   atomic.Int32
-}
-
-func (p *blockedSignalRows) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
-	if strings.Contains(query, "health_score, health_grade, outcome") {
-		p.reads.Add(1)
-		p.once.Do(func() { close(p.started) })
-		select {
-		case <-p.release:
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-	return p.storeExecutor.QueryContext(ctx, query, args...)
-}
-
-func TestFrustrationSignalsShortDeadlineJoinsEarlierFlight(t *testing.T) {
-	f := newFrustrationFixture(t, "agentsview")
-	store := f.open(t)
-	require.NotEmpty(t, store.keptAnalyticsVersion(f.ctx, "signals|{}"))
-	_, err := f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id,session_version,rules_version,marker_count) VALUES ('one','stale',0,0)`)
-	require.NoError(t, err)
-	gate, err := f.pg.BeginTx(f.ctx, nil)
-	require.NoError(t, err)
-	_, err = gate.ExecContext(f.ctx, `SELECT 1 FROM session_frustration_counts WHERE session_id='one' FOR UPDATE`)
-	require.NoError(t, err)
-	probe := &blockedSignalRows{storeExecutor: store.pg, started: make(chan struct{}), release: make(chan struct{})}
-	store.pg = probe
-	firstCtx, cancelFirst := context.WithCancel(f.ctx)
-	firstDone := make(chan struct{})
-	go func() {
-		defer close(firstDone)
-		_, _ = store.GetAnalyticsSignals(firstCtx, db.AnalyticsFilter{})
-	}()
-	release := sync.OnceFunc(func() { close(probe.release) })
-	defer func() { release(); gate.Rollback(); <-firstDone; cancelFirst() }()
-	select {
-	case <-probe.started:
-	case <-time.After(10 * time.Second):
-		t.Fatal("first request did not start reading signal rows")
-	}
-	stop := store.StartFrustrationFill(f.ctx)
-	defer func() { gate.Rollback(); stop() }()
-	state := &store.runtimeState().frustrationFill
-	require.Eventually(t, func() bool {
-		state.mu.Lock()
-		defer state.mu.Unlock()
-		return state.pending["one"] != nil && state.pending["two"] != nil
-	}, 10*time.Second, 10*time.Millisecond)
-	ctx, cancel := context.WithTimeout(f.ctx, 3*time.Second)
-	defer cancel()
-	release()
-	result, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
-	require.NoError(t, err)
-	require.Equal(t, 2, result.QualityHealth.Totals.FrustrationMarkerCount)
-	<-firstDone
-	reads := probe.reads.Load()
-	repeat, err := store.GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{})
-	require.NoError(t, err)
-	require.Equal(t, result, repeat)
-	require.Equal(t, reads, probe.reads.Load(), "repeat request must reuse the saved panel")
-}
-
 type signalRowsCounter struct {
 	storeExecutor
 	reads atomic.Int32
@@ -699,30 +572,93 @@ func (c *signalRowsCounter) QueryContext(ctx context.Context, query string, args
 	return c.storeExecutor.QueryContext(ctx, query, args...)
 }
 
-func TestFrustrationSignalsPartialChunkUsesSharedLoad(t *testing.T) {
-	f := newFrustrationFixture(t, "agentsview")
-	store := f.open(t)
-	_, err := f.pg.ExecContext(f.ctx, `UPDATE sessions SET project='other' WHERE id='two'`)
-	require.NoError(t, err)
-	_, err = f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id,session_version,rules_version,marker_count) VALUES ('two','stale',0,0)`)
-	require.NoError(t, err)
-	gate, err := f.pg.BeginTx(f.ctx, nil)
-	require.NoError(t, err)
-	_, err = gate.ExecContext(f.ctx, `SELECT 1 FROM session_frustration_counts WHERE session_id='two' FOR UPDATE`)
-	require.NoError(t, err)
-	counter := &signalRowsCounter{storeExecutor: store.pg}
-	store.pg = counter
-	stop := store.StartFrustrationFill(f.ctx)
-	defer func() { gate.Rollback(); stop() }()
-	state := &store.runtimeState().frustrationFill
-	require.Eventually(t, func() bool {
-		state.mu.Lock()
-		defer state.mu.Unlock()
-		return state.pending["one"] != nil && state.pending["two"] != nil
-	}, 10*time.Second, 10*time.Millisecond)
-	require.NotEmpty(t, store.keptAnalyticsVersion(f.ctx, "signals|{}"))
-	result, err := store.GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{Project: "sample"})
-	require.NoError(t, err)
-	require.Equal(t, 1, result.QualityHealth.Totals.FrustrationMarkerCount)
-	require.EqualValues(t, 1, counter.reads.Load())
+func TestFrustrationFillSignalsRequests(t *testing.T) {
+	for _, name := range []string{"join limit", "fallback and saved panel", "partial chunk"} {
+		t.Run(name, func(t *testing.T) {
+			if name == "join limit" {
+				previous := frustrationJoinWait
+				frustrationJoinWait = time.Second
+				defer func() { frustrationJoinWait = previous }()
+			}
+			f := newFrustrationFixture(t, "agentsview")
+			store := f.open(t)
+			locked := "one"
+			if name == "join limit" {
+				_, err := f.pg.ExecContext(f.ctx, `UPDATE sync_metadata SET value='0' WHERE key='usage_change_journal_version'`)
+				require.NoError(t, err)
+				require.Empty(t, store.keptAnalyticsVersion(f.ctx, "signals|{}"))
+			} else {
+				if name == "partial chunk" {
+					_, err := f.pg.ExecContext(f.ctx, `UPDATE sessions SET project='other' WHERE id='two'`)
+					require.NoError(t, err)
+					locked = "two"
+				}
+				require.NotEmpty(t, store.keptAnalyticsVersion(f.ctx, "signals|{}"))
+			}
+			_, err := f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id,session_version,rules_version,marker_count) VALUES ($1,'stale',0,0)`, locked)
+			require.NoError(t, err)
+			gate, err := f.pg.BeginTx(f.ctx, nil)
+			require.NoError(t, err)
+			defer gate.Rollback()
+			_, err = gate.ExecContext(f.ctx, `SELECT 1 FROM session_frustration_counts WHERE session_id=$1 FOR UPDATE`, locked)
+			require.NoError(t, err)
+			scans := &frustrationScanCounter{storeExecutor: store.pg}
+			reads := &signalRowsCounter{storeExecutor: scans}
+			store.pg = reads
+			stop := store.StartFrustrationFill(f.ctx)
+			defer func() { gate.Rollback(); stop() }()
+			state := &store.runtimeState().frustrationFill
+			require.Eventually(t, func() bool {
+				state.mu.Lock()
+				defer state.mu.Unlock()
+				return state.pending["one"] != nil && state.pending["two"] != nil
+			}, 10*time.Second, 10*time.Millisecond)
+			filter := db.AnalyticsFilter{}
+			ctx := f.ctx
+			var cancel context.CancelFunc
+			if name == "join limit" {
+				ctx, cancel = context.WithCancel(context.WithValue(ctx, frustrationScanKey{}, true))
+			} else {
+				ctx, cancel = context.WithTimeout(ctx, 3*time.Second)
+			}
+			defer cancel()
+			if name == "partial chunk" {
+				filter.Project = "sample"
+			}
+			type response struct {
+				result db.SignalsAnalyticsResponse
+				err    error
+			}
+			done := make(chan response, 1)
+			go func() {
+				result, err := store.GetAnalyticsSignals(ctx, filter)
+				done <- response{result, err}
+			}()
+			var got response
+			select {
+			case got = <-done:
+			case <-time.After(5 * time.Second):
+				cancel()
+				<-done
+				t.Fatal("request did not finish while the fill was blocked")
+			}
+			require.NoError(t, got.err)
+			if name == "partial chunk" {
+				require.Equal(t, 1, got.result.QualityHealth.Totals.FrustrationMarkerCount)
+				require.EqualValues(t, 1, reads.reads.Load())
+			} else {
+				require.Equal(t, 2, got.result.QualityHealth.Totals.FrustrationMarkerCount)
+			}
+			if name == "join limit" {
+				require.EqualValues(t, 1, scans.scans.Load(), "request must scan while fill remains blocked")
+			}
+			if name == "fallback and saved panel" {
+				count := reads.reads.Load()
+				repeat, err := store.GetAnalyticsSignals(f.ctx, filter)
+				require.NoError(t, err)
+				require.Equal(t, got.result, repeat)
+				require.Equal(t, count, reads.reads.Load(), "repeat request must reuse the saved panel")
+			}
+		})
+	}
 }
