@@ -91,7 +91,7 @@ func TestSearchDefaultDateWindow(t *testing.T) {
 		{name: "session only", session: "old"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			fake := &dateWindowSearchService{fakeContentSearchService: fakeContentSearchService{result: &service.ContentSearchResult{Note: "service note"}}}
+			fake := &dateWindowSearchService{result: &service.ContentSearchResult{Note: "service note"}}
 			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
 			if tc.session == "" {
 				_, sessions, err := ts.searchSessions(t.Context(), nil, searchSessionsIn{Query: "needle", DateFrom: tc.from, DateTo: tc.to})
