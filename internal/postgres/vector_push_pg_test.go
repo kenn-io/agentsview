@@ -1103,7 +1103,7 @@ func TestVectorPushDeltaNoop(t *testing.T) {
 	assert.Equal(t, 0, res.Vectors.DocsPushed)
 }
 
-func TestVectorPushUnchangedAfterGenerationDrop(t *testing.T) {
+func TestVectorPushUnchangedAfterChunkTableDrop(t *testing.T) {
 	t.Parallel()
 	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
