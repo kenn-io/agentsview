@@ -113,31 +113,6 @@ func TestReaderPoolRetainsConfiguredBurstConnections(t *testing.T) {
 	assert.Zero(t, stats.MaxIdleClosed)
 }
 
-func TestQuickReadKeepsAReaderWhileAnalyticsFillThePool(t *testing.T) {
-	database := testDB(t)
-	insertSession(t, database, "summary", "project", func(s *Session) {
-		s.StartedAt = new("2024-06-01T09:00:00Z")
-	})
-	reader := database.rawReader()
-	for range bulkReadSlots {
-		release, err := database.acquireBulkRead(t.Context())
-		require.NoError(t, err)
-		defer release()
-		conn, err := reader.Conn(t.Context())
-		require.NoError(t, err)
-		defer conn.Close()
-	}
-	quickCtx, quickCancel := context.WithTimeout(t.Context(), 2*time.Second)
-	defer quickCancel()
-	session, err := database.GetSession(quickCtx, "summary")
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	assert.Equal(t, "summary", session.ID)
-	probe, err := database.ActivityReportSourceProbe(quickCtx)
-	require.NoError(t, err)
-	assert.EqualValues(t, 1, probe.SessionCount)
-}
-
 func TestSubstringSearchesAndAnalyticsCanReadTogether(t *testing.T) {
 	database := testDB(t)
 	insertSession(t, database, "parallel", "project")
@@ -202,6 +177,9 @@ func TestSubstringSearchesAndAnalyticsCanReadTogether(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	assert.Equal(t, "parallel", session.ID)
+	probe, err := database.ActivityReportSourceProbe(quickCtx)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, probe.SessionCount)
 	releaseOnce.Do(func() { close(release) })
 	for range bulkReadSlots + bulkSearchSlots {
 		require.NoError(t, <-results)

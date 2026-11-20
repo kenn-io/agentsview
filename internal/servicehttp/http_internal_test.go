@@ -106,13 +106,13 @@ func TestSearchDateFiltersProbeChangedServer(t *testing.T) {
 	_, err = backend.Search(t.Context(), req)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, searches.Load())
-	_, err = backend.Search(t.Context(), service.SearchRequest{Query: "needle", DateTo: "2024-06-15"})
-	require.NoError(t, err)
-	assert.EqualValues(t, 2, searches.Load())
 	version.Store(8)
+	_, err = backend.Search(t.Context(), service.SearchRequest{Query: "needle", DateTo: "2024-06-15"})
+	require.ErrorContains(t, err, "restart or upgrade the server")
+	assert.EqualValues(t, 1, searches.Load())
 	_, err = backend.Search(t.Context(), req)
 	require.ErrorContains(t, err, "restart or upgrade the server")
-	assert.EqualValues(t, 2, searches.Load())
+	assert.EqualValues(t, 1, searches.Load())
 }
 
 func TestStatsForwardsGitHubOutcomes(t *testing.T) {
