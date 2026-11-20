@@ -1,7 +1,7 @@
 import { m } from "../i18n/index.js";
 import type { Route } from "../stores/router.svelte.js";
 import type { Session } from "../api/types/core.js";
-import { normalizeMessagePreview } from "./messages.js";
+import { sessionLabel } from "./messages.js";
 import { sessionDisplayId } from "./sessionDisplayId.js";
 
 export function documentTitle({
@@ -24,10 +24,13 @@ export function documentTitle({
     if (sessionNotFound) {
       label = `${m.message_list_session_not_found()} (${sessionDisplayId(sessionId)})`;
     } else if (session?.id === sessionId) {
-      const name = (session.display_name || normalizeMessagePreview(session.first_message))
-        .replace(/\s+/g, " ")
+      const name = sessionLabel(session.display_name?.trim(), session.first_message, "")
+        .text.replace(/\s+/g, " ")
         .trim();
-      label = name ? `${name} · ${session.project}` : session.project;
+      const project = session.project.trim();
+      const shortId = sessionDisplayId(sessionId).slice(0, 8);
+      label = name ? `${name} (${shortId})` : project ? `${project} (${shortId})` : shortId;
+      if (name && project) label += ` · ${project}`;
     } else {
       label = sessionDisplayId(sessionId);
     }

@@ -1947,10 +1947,10 @@ describe("App telemetry", () => {
     expect(document.title).toBe("Usage · AgentsView");
     router.navigateToSession("session-1");
     await flushEffects();
-    expect(document.title).toBe("Fix login · proj-a · AgentsView");
+    expect(document.title).toBe("Fix login (session-) · proj-a · AgentsView");
     sessions.sessions = [hydratedSession("session-1", "codex", { display_name: "Renamed" })];
     await flushEffects();
-    expect(document.title).toBe("Renamed · proj-a · AgentsView");
+    expect(document.title).toBe("Renamed (session-) · proj-a · AgentsView");
     sessions.sessions = [];
   });
 

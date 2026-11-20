@@ -25,22 +25,47 @@ describe("documentTitle", () => {
 
   it("names a session using its name, first message, or project", () => {
     const session = {
-      id: "abc",
+      id: "host:12345678abcdef",
       display_name: "Fix\n login",
       first_message: "First\n prompt",
       project: "project-a",
     } as Session;
-    const input = { ...base, route: "sessions" as const, sessionId: "abc", session };
-    expect(documentTitle(input)).toBe("Fix login · project-a · AgentsView");
+    const input = {
+      ...base,
+      route: "sessions" as const,
+      sessionId: "host:12345678abcdef",
+      session,
+    };
+    expect(documentTitle(input)).toBe("Fix login (12345678) · project-a · AgentsView");
     expect(documentTitle({ ...input, session: { ...session, display_name: undefined } })).toBe(
-      "First prompt · project-a · AgentsView",
+      "First prompt (12345678) · project-a · AgentsView",
     );
     expect(
       documentTitle({
         ...input,
         session: { ...session, display_name: undefined, first_message: null },
       }),
-    ).toBe("project-a · AgentsView");
+    ).toBe("project-a (12345678) · AgentsView");
+    expect(
+      documentTitle({
+        ...input,
+        session: { ...session, display_name: " ", first_message: null, project: " " },
+      }),
+    ).toBe("12345678 · AgentsView");
+    expect(documentTitle({ ...input, session: { ...session, project: "" } })).toBe(
+      "Fix login (12345678) · AgentsView",
+    );
+    expect(
+      documentTitle({
+        ...input,
+        session: {
+          ...session,
+          display_name: undefined,
+          first_message:
+            "<teammate-message>You are a teammate on a team. Work together. Task #2: Fix the login flow 3. Report back</teammate-message>",
+        },
+      }),
+    ).toBe("Fix the login flow (12345678) · project-a · AgentsView");
     expect(documentTitle({ ...input, sessionId: "host:other" })).toBe("other · AgentsView");
     expect(documentTitle({ ...input, sessionId: "host:other", sessionNotFound: true })).toBe(
       "Session not found (other) · AgentsView",

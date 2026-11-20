@@ -185,6 +185,28 @@ export function previewMessage(text: string | null | undefined): MessagePreview 
   return { text: out, isShell };
 }
 
+export function sessionLabel(
+  name: string | null | undefined,
+  firstMessage: string | null | undefined,
+  project: string,
+): MessagePreview {
+  if (name) return { text: name, isShell: false };
+  let msg = firstMessage ?? "";
+  if (msg.includes("<teammate-message")) {
+    msg = msg
+      .replace(/<teammate-message[^>]*>/g, "")
+      .replace(/<\/teammate-message>/g, "")
+      .trim();
+    const taskMatch = msg.match(/Task\s*#?\d+[:\s]+(.+?)(?:\s+\d+\.|$)/s);
+    if (taskMatch) return { text: taskMatch[1]!.trim(), isShell: false };
+    const afterTeam =
+      msg.match(/team[."]\s*[^.]*?[.]\s+(.+)/s) ?? msg.match(/You are a teammate[^.]*\.\s+(.+)/s);
+    if (afterTeam) return { text: afterTeam[1]!.trim(), isShell: false };
+  }
+  const preview = previewMessage(msg);
+  return preview.text ? preview : { text: project, isShell: false };
+}
+
 // Claude Code stores a shell shortcut's output as its own user row that
 // opens with its stdout or stderr block.
 const SHELL_OUTPUT_START_RE = /^\s*<bash-(?:stdout|stderr)>/;
