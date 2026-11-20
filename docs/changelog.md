@@ -296,6 +296,13 @@ The latest release is
 
 **Bug fixes**
 
+- The container image now accepts hosted raw-sync uploads when it runs as a
+  non-root uid with no passwd entry, such as a Kubernetes pod with `runAsUser`.
+  Before, every upload failed and the client kept retrying it as pending. The
+  image now sets `DOCBANK_LOCK_DIR=/data/docbank-locks`. The server also logs
+  the cause of any unexpected raw-sync failure. See
+  [Hosted Raw Sync](/docs/hosted-raw-sync/#provision-a-hosted-instance).
+
 - `agentsview source cursor sync-usage` no longer aborts when Cursor rate-limits
   it. Cursor allows 60 requests per minute per team, so a sync that needed more
   than about 60 pages, or one that ran while other tools used the same team's
