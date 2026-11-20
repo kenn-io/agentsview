@@ -89,39 +89,43 @@ func TestSearchRankWalkMatchesFullRanking(t *testing.T) {
 	require.NotNil(t, walk, "the walk must serve a page with distinct ranks")
 	assert.False(t, walk.complete)
 
-	// The project filter forces full ranking; all sessions have that project.
-	// SQLite's authorizer sees rank reads as statements are prepared and an
-	// extra row_number window when the full-ranking CTE is prepared.
-	d.rawReader().SetMaxOpenConns(1)
-	conn, err := d.getReader().Conn(ctx)
-	require.NoError(t, err)
-	var rankReads, rankingWindows int
-	require.NoError(t, conn.Raw(func(raw any) error {
-		raw.(interface {
-			RegisterAuthorizer(func(int, string, string, string) int)
-		}).RegisterAuthorizer(func(op int, arg1, arg2, _ string) int {
-			if op == sqlite3.SQLITE_READ && arg1 == "messages_fts" && arg2 == "rank" && rankingWindows == 0 {
-				rankReads++
-			}
-			if op == sqlite3.SQLITE_FUNCTION && arg2 == "row_number" {
-				rankingWindows++
-			}
-			return sqlite3.SQLITE_OK
-		})
-		return nil
-	}))
-	require.NoError(t, conn.Close())
+	// Each observation uses a fresh reader so statement caching cannot hide
+	// the authorizer events for either the walk or the full-ranking CTE.
+	observe := func(filter SearchFilter) (SearchPage, int, int) {
+		t.Helper()
+		reader, err := OpenReadOnly(ctx, d.Path())
+		require.NoError(t, err)
+		defer func() { require.NoError(t, reader.Close()) }()
+		reader.rawReader().SetMaxOpenConns(1)
+		conn, err := reader.getReader().Conn(ctx)
+		require.NoError(t, err)
+		var rankReads, rankingWindows int
+		require.NoError(t, conn.Raw(func(raw any) error {
+			raw.(interface {
+				RegisterAuthorizer(func(int, string, string, string) int)
+			}).RegisterAuthorizer(func(op int, arg1, arg2, _ string) int {
+				if op == sqlite3.SQLITE_READ && arg1 == "messages_fts" && arg2 == "rank" && rankingWindows == 0 {
+					rankReads++
+				}
+				if op == sqlite3.SQLITE_FUNCTION && arg2 == "row_number" {
+					rankingWindows++
+				}
+				return sqlite3.SQLITE_OK
+			})
+			return nil
+		}))
+		require.NoError(t, conn.Close())
+		page, err := reader.Search(ctx, filter)
+		require.NoError(t, err)
+		return page, rankReads, rankingWindows
+	}
 	filter := SearchFilter{Query: "deploy", Limit: 1, DateFrom: "2026-05-01", Project: "proj"}
-	full, err := d.Search(ctx, filter)
-	require.NoError(t, err)
-	fullWindows := rankingWindows
+	full, _, fullWindows := observe(filter)
 	require.GreaterOrEqual(t, fullWindows, 3, "project filter must use full ranking")
-	rankReads, rankingWindows = 0, 0
 	filter.Project = ""
 	for cursor, want := range []string{"tie-000", "tie-001"} {
 		filter.Cursor = cursor
-		page, err := d.Search(ctx, filter)
-		require.NoError(t, err)
+		page, rankReads, rankingWindows := observe(filter)
 		require.Len(t, page.Results, 1)
 		assert.Equal(t, want, page.Results[0].SessionID)
 		assert.Contains(t, page.Results[0].Snippet, "deploy")
@@ -133,52 +137,31 @@ func TestSearchRankWalkMatchesFullRanking(t *testing.T) {
 	}
 	for _, from := range []string{"2026-05-11", "2027-01-01"} {
 		filter = SearchFilter{Query: "handler", Limit: 1, DateFrom: from, Project: "proj"}
-		rankReads, rankingWindows = 0, 0
-		full, err := d.Search(ctx, filter)
-		require.NoError(t, err)
-		fullWindows := rankingWindows
-		rankReads, rankingWindows = 0, 0
+		full, _, fullWindows := observe(filter)
+		require.GreaterOrEqual(t, fullWindows, 3, "project filter must use full ranking")
 		filter.Project = ""
-		page, err := d.Search(ctx, filter)
-		require.NoError(t, err)
+		page, _, rankingWindows := observe(filter)
 		assert.Equal(t, full, page)
 		require.GreaterOrEqual(t, rankingWindows, fullWindows, "sparse window %s must rank eligible matches directly", from)
 	}
 	filter = SearchFilter{Query: "dominatedtoken", Limit: 1, DateFrom: "2026-05-01", Project: "proj"}
-	rankReads, rankingWindows = 0, 0
-	full, err = d.Search(ctx, filter)
-	require.NoError(t, err)
-	fullWindows = rankingWindows
-	rankReads, rankingWindows = 0, 0
+	full, _, fullWindows = observe(filter)
+	require.GreaterOrEqual(t, fullWindows, 3, "project filter must use full ranking")
 	filter.Project = ""
-	page, err := d.Search(ctx, filter)
-	require.NoError(t, err)
+	page, _, rankingWindows := observe(filter)
 	require.Len(t, page.Results, 1)
 	assert.Equal(t, "dominant", page.Results[0].SessionID)
 	assert.Contains(t, page.Results[0].Snippet, "dominatedtoken")
 	assert.Equal(t, full, page)
 	require.GreaterOrEqual(t, rankingWindows, fullWindows, "one recent session must rank eligible matches directly")
 	filter = SearchFilter{Query: "expandsample", Limit: 1, DateFrom: "2026-05-01", Project: "proj"}
-	rankReads, rankingWindows = 0, 0
-	full, err = d.Search(ctx, filter)
-	require.NoError(t, err)
-	fullWindows = rankingWindows
-	rankReads, rankingWindows = 0, 0
+	full, _, fullWindows = observe(filter)
+	require.GreaterOrEqual(t, fullWindows, 3, "project filter must use full ranking")
 	filter.Project = ""
-	page, err = d.Search(ctx, filter)
-	require.NoError(t, err)
+	page, rankReads, rankingWindows := observe(filter)
 	assert.Equal(t, full, page)
 	require.GreaterOrEqual(t, rankReads, 2, "search must look past one session to find a broad window")
 	require.Less(t, rankingWindows, fullWindows, "broad window must avoid the full-ranking CTE")
-	conn, err = d.getReader().Conn(ctx)
-	require.NoError(t, err)
-	require.NoError(t, conn.Raw(func(raw any) error {
-		raw.(interface {
-			RegisterAuthorizer(func(int, string, string, string) int)
-		}).RegisterAuthorizer(nil)
-		return nil
-	}))
-	require.NoError(t, conn.Close())
 
 	for _, from := range []string{"", "2026-05-08", "2026-05-09", "2027-01-01"} {
 		for _, query := range []string{"handler", "deploy"} {

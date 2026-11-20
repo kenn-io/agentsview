@@ -1373,11 +1373,14 @@ type VectorSessionEligibility struct {
 	DateAllowed     bool
 }
 
-// VectorSessionDatePredicate uses the same date boundaries as session search.
+// VectorSessionDatePredicate uses the same date and activity bounds as session search.
 func VectorSessionDatePredicate(b *QueryBuilder, f ContentSearchFilter) string {
 	q := func(col string) string { return col }
 	preds := b.SessionDateRangePredicates(f.Date, f.Date, f.Timezone, q)
 	preds = append(preds, b.SessionDateRangePredicates(f.DateFrom, f.DateTo, f.Timezone, q)...)
+	if f.ActiveSince != "" {
+		preds = append(preds, b.dialect.dateEndExpr(q)+" >= "+b.dialect.dateParam(b.Add(f.ActiveSince)))
+	}
 	if len(preds) == 0 {
 		return "1 = 1"
 	}
@@ -2098,6 +2101,7 @@ func (db *DB) semanticAllowedSessionIDs(
 	sessionFilter := SemanticContentSessionFilter(f)
 	sessionFilter.ExcludeActiveSince = time.Time{}
 	sessionFilter.Date, sessionFilter.DateFrom, sessionFilter.DateTo = "", "", ""
+	sessionFilter.ActiveSince = ""
 	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
 	activity := "1"
 	if !f.ExcludeActiveSince.IsZero() {

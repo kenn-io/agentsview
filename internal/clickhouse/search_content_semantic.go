@@ -93,6 +93,7 @@ func (s *Store) semanticAllowedSessionIDs(
 	sessionFilter := db.SemanticContentSessionFilter(f)
 	sessionFilter.ExcludeActiveSince = time.Time{}
 	sessionFilter.Date, sessionFilter.DateFrom, sessionFilter.DateTo = "", "", ""
+	sessionFilter.ActiveSince = ""
 	b := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
 	activity := "1"
 	if !f.ExcludeActiveSince.IsZero() {
