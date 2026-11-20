@@ -40,6 +40,28 @@ func TestSearchRankWalkMatchesFullRanking(t *testing.T) {
 		older = append(older, userMsg("older", i, "deploy the handler"))
 	}
 	insertMessages(t, d, older...)
+	var olderDominated []Message
+	for i := range 200 {
+		olderDominated = append(olderDominated, userMsg("older", 200+i, "dominatedtoken"))
+	}
+	insertMessages(t, d, olderDominated...)
+	insertSession(t, d, "dominant", "proj", func(s *Session) {
+		s.FirstMessage = new("untitled")
+		s.EndedAt = new("2026-05-11T12:00:00Z")
+	})
+	var dominant []Message
+	for i := range 40 {
+		dominant = append(dominant, userMsg("dominant", i, "dominatedtoken"))
+	}
+	insertMessages(t, d, dominant...)
+	for i := range 3 {
+		seed(fmt.Sprintf("sample-%d", i), "untitled", "expandsample")
+	}
+	var sampleDominant []Message
+	for i := range 40 {
+		sampleDominant = append(sampleDominant, userMsg("dominant", 40+i, "expandsample"))
+	}
+	insertMessages(t, d, sampleDominant...)
 	for i := range 100 {
 		seed(fmt.Sprintf("tie-%03d", i), "untitled", "intro", "deploy the handler", "middle", "deploy the handler")
 	}
@@ -122,6 +144,32 @@ func TestSearchRankWalkMatchesFullRanking(t *testing.T) {
 		assert.Equal(t, full, page)
 		require.GreaterOrEqual(t, rankingWindows, fullWindows, "sparse window %s must rank eligible matches directly", from)
 	}
+	filter = SearchFilter{Query: "dominatedtoken", Limit: 1, DateFrom: "2026-05-01", Project: "proj"}
+	rankReads, rankingWindows = 0, 0
+	full, err = d.Search(ctx, filter)
+	require.NoError(t, err)
+	fullWindows = rankingWindows
+	rankReads, rankingWindows = 0, 0
+	filter.Project = ""
+	page, err := d.Search(ctx, filter)
+	require.NoError(t, err)
+	require.Len(t, page.Results, 1)
+	assert.Equal(t, "dominant", page.Results[0].SessionID)
+	assert.Contains(t, page.Results[0].Snippet, "dominatedtoken")
+	assert.Equal(t, full, page)
+	require.GreaterOrEqual(t, rankingWindows, fullWindows, "one recent session must rank eligible matches directly")
+	filter = SearchFilter{Query: "expandsample", Limit: 1, DateFrom: "2026-05-01", Project: "proj"}
+	rankReads, rankingWindows = 0, 0
+	full, err = d.Search(ctx, filter)
+	require.NoError(t, err)
+	fullWindows = rankingWindows
+	rankReads, rankingWindows = 0, 0
+	filter.Project = ""
+	page, err = d.Search(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, full, page)
+	require.GreaterOrEqual(t, rankReads, 2, "search must look past one session to find a broad window")
+	require.Less(t, rankingWindows, fullWindows, "broad window must avoid the full-ranking CTE")
 	conn, err = d.getReader().Conn(ctx)
 	require.NoError(t, err)
 	require.NoError(t, conn.Raw(func(raw any) error {

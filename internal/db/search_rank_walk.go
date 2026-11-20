@@ -23,7 +23,7 @@ const searchRankWalkRowsPerSession = 64
 const searchRankWalkDateMinRows = 256
 
 // Sample recent FTS rows without ranking to choose the dated search path.
-const searchRankWalkDateSampleRows = 32
+const searchRankWalkDateSampleRows = 256
 
 // searchBestMatch is a session's best message match: the lowest rank, then
 // the lowest ordinal, then the lowest FTS rowid.
@@ -68,7 +68,7 @@ func walkSearchRanks(
 		return nil, nil
 	}
 	if dateBounded {
-		broad, err := searchDateHasBroadMatches(ctx, q, table, innerWhereSQL, ftsArgs)
+		broad, err := searchDateHasBroadMatches(ctx, q, table, innerWhereSQL, ftsArgs, need)
 		if err != nil || !broad {
 			return nil, err
 		}
@@ -126,31 +126,32 @@ func walkSearchRanks(
 }
 
 // searchDateHasBroadMatches samples the newest matching FTS rowids without
-// ranking. Rejected or absent hits select the full-ranking query.
-func searchDateHasBroadMatches(ctx context.Context, q messageRowsQuerier, table, innerWhereSQL string, ftsArgs []any) (bool, error) {
+// ranking. Sparse hits or too few sessions select the full-ranking query.
+func searchDateHasBroadMatches(ctx context.Context, q messageRowsQuerier, table, innerWhereSQL string, ftsArgs []any, need int) (bool, error) {
 	// The first predicate is the FTS match; the rest apply to joined rows.
 	match, eligible, _ := strings.Cut(innerWhereSQL, " AND ")
 	query := strings.ReplaceAll(`WITH sample AS MATERIALIZED (
 		SELECT rowid FROM messages_fts WHERE `+match+`
 		ORDER BY rowid DESC LIMIT `+strconv.Itoa(searchRankWalkDateSampleRows)+`)
-		SELECT COUNT(*), COUNT(CASE WHEN `+eligible+` THEN 1 END)
+		SELECT COUNT(*), COUNT(eligible_session), COUNT(DISTINCT eligible_session)
+		FROM (SELECT CASE WHEN `+eligible+` THEN m2.session_id END AS eligible_session
 		FROM sample LEFT JOIN messages m2 ON sample.rowid = m2.id
-		LEFT JOIN sessions s2 ON m2.session_id = s2.id`, "messages_fts", table)
+		LEFT JOIN sessions s2 ON m2.session_id = s2.id)`, "messages_fts", table)
 	rows, err := q.QueryContext(ctx, query, ftsArgs...)
 	if err != nil {
 		return false, fmt.Errorf("checking recent search matches: %w", err)
 	}
 	defer rows.Close()
-	var count, eligibleCount int
+	var count, eligibleCount, sessions int
 	if rows.Next() {
-		if err := rows.Scan(&count, &eligibleCount); err != nil {
+		if err := rows.Scan(&count, &eligibleCount, &sessions); err != nil {
 			return false, fmt.Errorf("scanning recent search matches: %w", err)
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return false, fmt.Errorf("reading recent search matches: %w", err)
 	}
-	return count > 0 && count == eligibleCount, nil
+	return count > 0 && eligibleCount*2 >= count && sessions >= need, nil
 }
 
 // bestRowsSQL renders the walk's best matches as the best_rows CTE, opening
