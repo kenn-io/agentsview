@@ -13,16 +13,6 @@ var frustrationFillChunkTimeout = 30 * time.Second
 
 var frustrationJoinWait = 5 * time.Second
 
-type frustrationDeadlineKey struct{}
-
-func frustrationRequestDeadline(ctx context.Context) (time.Time, bool) {
-	deadline, ok := ctx.Deadline()
-	if hint, hasHint := ctx.Value(frustrationDeadlineKey{}).(time.Time); hasHint && (!ok || hint.Before(deadline)) {
-		return hint, true
-	}
-	return deadline, ok
-}
-
 type frustrationChunk struct {
 	ids  []string
 	done chan struct{}
@@ -78,7 +68,7 @@ func (s *Store) joinFrustrationFill(ctx context.Context, ids []string, completed
 		return false
 	}
 	budget := frustrationJoinWait
-	if deadline, ok := frustrationRequestDeadline(ctx); ok {
+	if deadline, ok := ctx.Deadline(); ok {
 		budget = min(budget, time.Until(deadline)/2)
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, budget)

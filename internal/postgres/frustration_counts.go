@@ -58,7 +58,7 @@ func (s *Store) loadStoredFrustrationCounts(ctx context.Context, ids []string, v
 // Reserve request time for evidence reads when another writer holds a count row.
 func (s *Store) storeFrustrationCountsForRead(ctx context.Context, versions map[string]string, counts map[string]int, versionColumn string) error {
 	budget := time.Second
-	if deadline, ok := frustrationRequestDeadline(ctx); ok {
+	if deadline, ok := ctx.Deadline(); ok {
 		budget = min(budget, time.Until(deadline)/2)
 	}
 	writeCtx, cancel := context.WithTimeout(ctx, budget)
