@@ -8,6 +8,10 @@ if ! command -v python3 >/dev/null 2>&1; then
     echo 'python3 is required; use postgres-up or clickhouse-up for a manual service' >&2
     exit 2
 fi
+if [ -z "${HOME:-}" ]; then
+    echo 'HOME must be set to create a test service lease' >&2
+    exit 2
+fi
 exec python3 - "$@" <<'PY'
 import fcntl
 import os
@@ -16,9 +20,6 @@ import signal
 import subprocess
 import sys
 import time
-
-if not os.environ.get("HOME"):
-    sys.exit("HOME must be set to create a test service lease")
 
 command = sys.argv[1:]
 lease = f"agentsview-{int(time.time())}-{os.getpid()}"
@@ -79,10 +80,6 @@ with lock:
             if status == 0:
                 status = 1
         else:
-            try:
-                if os.stat(path).st_ino == os.fstat(lock.fileno()).st_ino:
-                    os.unlink(path)
-            except FileNotFoundError:
-                pass
+            os.unlink(path)
 sys.exit(status)
 PY

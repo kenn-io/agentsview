@@ -24,29 +24,25 @@ case " $* " in
   *' up '*)
     [ "$2" = -p ] && [ "$3" = "$TEST_SERVICE_LEASE" ] || exit 1
     printf 'publish %s %s %s\n' "${TEST_PG_PUBLISH-}" "${TEST_CH_HTTP_PUBLISH-}" "${TEST_CH_NATIVE_PUBLISH-}" >> "$DOCKER_LOG"
-    python3 - "$HOME/.local/state/test-service-leases/$TEST_SERVICE_LEASE" <<'PROBE' || exit 1
-import fcntl, sys
-with open(sys.argv[1]) as f:
-    try: fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError: sys.exit(0)
-sys.exit(1)
-PROBE
+    lease-held "$HOME/.local/state/test-service-leases/$TEST_SERVICE_LEASE" || exit 1
     printf '%s\n' "$TEST_SERVICE_LEASE" > "$CHECK_LEASE"
     if [ "${BLOCK_UP:-}" = 1 ]; then touch "$READY"; while :; do sleep .1; done; fi ;;
   *' port '*) echo 127.0.0.1:49153 ;;
   *' down '*)
     [ "$2" = -p ] && [ "$3" = "$TEST_SERVICE_LEASE" ] || exit 1
-    python3 - "$HOME/.local/state/test-service-leases/$TEST_SERVICE_LEASE" <<'PROBE' || exit 1
+    lease-held "$HOME/.local/state/test-service-leases/$TEST_SERVICE_LEASE" || exit 1
+    exit "${DOWN_STATUS:-0}" ;;
+esac
+DOCKER
+cat > "$tmp/bin/lease-held" <<'HELD'
+#!/usr/bin/env python3
 import fcntl, sys
 with open(sys.argv[1]) as f:
     try: fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError: sys.exit(0)
 sys.exit(1)
-PROBE
-    exit "${DOWN_STATUS:-0}" ;;
-esac
-DOCKER
-chmod +x "$tmp/bin/docker"
+HELD
+chmod +x "$tmp/bin/docker" "$tmp/bin/lease-held"
 ln -s "$python_bin" "$tmp/bin/python3"
 export PATH="$tmp/bin:$PATH" DOCKER_LOG="$tmp/docker.log"
 
@@ -57,15 +53,6 @@ services = json.load(sys.stdin)["services"]
 for name in ("postgres", "clickhouse"):
     assert services[name]["labels"]["test-service.lease"] == "agentsview-test-123"
 '
-
-probe() {
-    python3 - "$lease" <<'PY'
-import fcntl, sys
-with open(sys.argv[1]) as f:
-    try: fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError: sys.exit(1)
-PY
-}
 
 # Cleanup waits for a descendant to release the lease.
 export READY="$tmp/ready" RELEASE="$tmp/release" EXITED="$tmp/exited" MAIN="$tmp/main" CHECK_LEASE="$tmp/project"
@@ -78,7 +65,7 @@ main_pid=$(cat "$MAIN")
 for _ in {1..100}; do if ! kill -0 "$main_pid" 2>/dev/null; then break; fi; sleep .1; done
 if kill -0 "$main_pid" 2>/dev/null; then echo 'foreground command did not exit' >&2; exit 1; fi
 lease="$HOME/.local/state/test-service-leases/$(cat "$CHECK_LEASE")"
-if probe; then echo 'lease released while descendant still runs' >&2; exit 1; fi
+lease-held "$lease"
 if grep -q ' down ' "$DOCKER_LOG"; then echo 'cleanup ran while descendant held lease' >&2; exit 1; fi
 touch "$RELEASE"
 for _ in {1..100}; do [[ -f "$EXITED" ]] && break; sleep .1; done
@@ -121,13 +108,13 @@ kill -KILL "$first"
 wait "$first" 2>/dev/null || true
 first=
 [[ -f "$lease" ]]
-if probe; then echo 'lease released while test still runs' >&2; exit 1; fi
+lease-held "$lease"
 touch "$RELEASE"
 for _ in {1..100}; do [[ -f "$EXITED" ]] && break; sleep .1; done
 [[ -f "$EXITED" ]]
 [[ -f "$lease" ]]
-for _ in {1..100}; do if probe; then break; fi; sleep .1; done
-probe
+for _ in {1..100}; do lease-held "$lease" || break; sleep .1; done
+if lease-held "$lease"; then echo 'lease still held after test exited' >&2; exit 1; fi
 if grep -q ' down ' "$DOCKER_LOG"; then echo 'killed supervisor ran cleanup' >&2; exit 1; fi
 unset READY RELEASE EXITED
 
@@ -205,11 +192,12 @@ status=$?
 set -e
 [[ $status == 2 && ! -s "$DOCKER_LOG" ]]
 grep -q 'python3 is required' "$tmp/no-python.out"
+
 set +e
-HOME= "$root/scripts/test-lease.sh" docker info >"$tmp/home-error" 2>&1
+HOME= "$root/scripts/test-lease.sh" true >"$tmp/home-error" 2>&1
 status=$?
 set -e
-[[ $status != 0 && ! -s "$DOCKER_LOG" ]]
+[[ $status == 2 && ! -s "$DOCKER_LOG" ]]
 grep -q 'HOME must be set' "$tmp/home-error"
 
 # A loose lease directory is rejected before Docker starts.
