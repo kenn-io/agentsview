@@ -2,8 +2,8 @@ package postgres
 
 import (
 	"context"
-	"errors"
 	"log"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -12,10 +12,18 @@ import (
 // Bound a slow chunk so later chunks can still be prepared.
 var frustrationFillChunkTimeout = 30 * time.Second
 
+const frustrationJoinWait = 5 * time.Second
+
 type frustrationChunk struct {
 	ids      []string
 	done     chan struct{}
 	complete bool
+}
+
+func (state *frustrationFillState) removePending(versions map[string]string) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	maps.DeleteFunc(versions, func(id, _ string) bool { return state.pending[id] != nil })
 }
 
 type frustrationFillState struct {
@@ -74,12 +82,8 @@ func (s *Store) joinFrustrationFill(ctx context.Context, ids []string) bool {
 	}
 	state.mu.Unlock()
 	// Leave the rest of the request's time for its own scan.
-	waitCtx := ctx
-	if deadline, ok := ctx.Deadline(); ok {
-		var cancel context.CancelFunc
-		waitCtx, cancel = context.WithTimeout(ctx, time.Until(deadline)/2)
-		defer cancel()
-	}
+	waitCtx, cancel := context.WithTimeout(ctx, frustrationJoinWait)
+	defer cancel()
 	for _, wait := range waits {
 		select {
 		case <-waitCtx.Done():
@@ -111,7 +115,7 @@ func (s *Store) fillFrustrationCounts(ctx context.Context, ids []string, column 
 			state.release(chunk)
 		}
 	}()
-	var timedOut bool
+	var firstErr error
 	for _, chunk := range chunks {
 		chunkCtx, cancel := context.WithTimeout(ctx, frustrationFillChunkTimeout)
 		counts, versions, err := s.scanFrustrationCounts(chunkCtx, chunk.ids, column)
@@ -124,16 +128,12 @@ func (s *Store) fillFrustrationCounts(ctx context.Context, ids []string, column 
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			if !errors.Is(err, context.DeadlineExceeded) {
-				return err
+			if firstErr == nil {
+				firstErr = err
 			}
-			timedOut = true
 		}
 	}
-	if timedOut {
-		return context.DeadlineExceeded
-	}
-	return nil
+	return firstErr
 }
 
 // StartFrustrationFill prepares stale counts after the launch Usage warm-up.
