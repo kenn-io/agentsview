@@ -210,3 +210,37 @@ func TestSkillsInstallMCPPointer(t *testing.T) {
 		})
 	}
 }
+
+func TestAgentSetupWithoutMCP(t *testing.T) {
+	for _, tc := range []struct{ agent, config, content string }{
+		{"claude", ".claude.json", `{"mcpServers":{"agentsview":{"command":"custom","args":["serve"],"env":{"DATA":"fixture"},"disabled":true}}}`},
+		{"codex", ".codex/config.toml", "[mcp_servers.agentsview]\ncommand = 'custom'\nargs = ['serve']\nenabled = false\n"},
+		{"codex", ".codex/config.toml", "[invalid toml"},
+	} {
+		t.Run(tc.agent, func(t *testing.T) {
+			home := t.TempDir()
+			setDoctorMemoryTestEnvironment(t, home)
+			fakeAgent(t, tc.agent, "")
+			path := filepath.Join(home, tc.config)
+			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+			require.NoError(t, os.WriteFile(path, []byte(tc.content), 0o600))
+			out, err := executeCommand(newRootCommand(), "agent", "setup", "--agent", tc.agent, "--mcp=false")
+			require.NoError(t, err, out)
+			out, err = executeCommand(newRootCommand(), "agent", "setup", "--agent", tc.agent, "--mcp=false", "--check", "--json")
+			require.NoError(t, err, out)
+			var report struct {
+				Rows []struct {
+					Piece string `json:"piece"`
+					State string `json:"state"`
+				} `json:"rows"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(out), &report))
+			require.Len(t, report.Rows, 1)
+			require.Equal(t, "skill", report.Rows[0].Piece)
+			require.Equal(t, "ok", report.Rows[0].State)
+			got, err := os.ReadFile(path)
+			require.NoError(t, err)
+			require.Equal(t, tc.content, string(got))
+		})
+	}
+}

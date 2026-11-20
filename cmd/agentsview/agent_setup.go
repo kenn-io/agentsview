@@ -16,10 +16,11 @@ import (
 func newAgentCommand() *cobra.Command {
 	group := &cobra.Command{Use: "agent", Short: "Set up coding agents", Long: "Connect Claude Code and Codex to conversation memory by installing skills and registering the agentsview MCP server.", GroupID: groupMeta}
 	var force bool
+	mcp := true
 	cmd := agentsetup.NewCommand(agentsetup.Options{
 		SetupCommand: "agentsview agent setup",
 		Items: func(agent string) ([]agentsetup.Item, error) {
-			return setupItems(agent, force)
+			return setupItems(agent, force, mcp)
 		},
 	})
 	format := formatFlag("human")
@@ -30,13 +31,14 @@ func newAgentCommand() *cobra.Command {
 		}
 		return nil
 	}
+	cmd.Flags().BoolVar(&mcp, "mcp", true, "Register and check the MCP server")
 	cmd.Flags().BoolVar(&force, "force", false,
 		"Overwrite edited skills and a different MCP entry")
 	group.AddCommand(cmd)
 	return group
 }
 
-func setupItems(agent string, force bool) ([]agentsetup.Item, error) {
+func setupItems(agent string, force, withMCP bool) ([]agentsetup.Item, error) {
 	var harness skills.Harness
 	switch agent {
 	case "claude":
@@ -91,6 +93,9 @@ func setupItems(agent string, force bool) ([]agentsetup.Item, error) {
 			return runSkillsInstall(
 				io.Discard, []skills.Harness{harness}, home, force, skillRemote)
 		},
+	}
+	if !withMCP {
+		return []agentsetup.Item{skill}, nil
 	}
 	mcp := setupMCP(agent)
 	installMCP := mcp.Install
