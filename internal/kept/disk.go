@@ -24,17 +24,21 @@ type Disk struct {
 }
 
 func (d *Disk) Open(subdir, id string, maxFile, maxBytes int64) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	if err := d.reports.OpenDisk(subdir, id); err != nil {
 		return err
 	}
 	d.reports.disk.suffix = ".gob"
 	d.maxFile, d.maxBytes = maxFile, maxBytes
-	d.mu.Lock()
-	defer d.mu.Unlock()
 	return d.trim()
 }
 
-func (d *Disk) Enabled() bool { return d.reports.disk.dir != "" }
+func (d *Disk) Enabled() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.reports.disk.dir != ""
+}
 
 func (d *Disk) Sweep(now time.Time) {
 	d.mu.Lock()
