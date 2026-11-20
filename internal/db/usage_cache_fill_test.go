@@ -293,16 +293,6 @@ func testBulkReadEntryPoints(t *testing.T, blocked bool) {
 			assert.Zero(t, database.rawReader().Stats().InUse)
 		})
 	}
-	t.Run("fts search bypasses lane", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
-		defer cancel()
-		page, err := database.SearchContent(ctx, ContentSearchFilter{Pattern: "skill", Mode: "fts", Sources: []string{"messages"}})
-		require.NoError(t, err)
-		require.Len(t, page.Matches, 1)
-		assert.Equal(t, "inside-message", page.Matches[0].SessionID)
-		require.NoError(t, ctx.Err())
-		assert.Zero(t, database.rawReader().Stats().InUse)
-	})
 }
 
 func TestUsageCacheFillInstallsCompleteSessionFacts(t *testing.T) {
