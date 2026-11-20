@@ -276,11 +276,15 @@ func restoreSnapshotFile(ctx context.Context,
 		return fmt.Errorf("checking existing snapshot: %w", err)
 	}
 
-	tmp := outPath + ".tmp"
-	if err := os.Remove(tmp); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("removing stale temp snapshot: %w", err)
+	tmpDir, err := os.MkdirTemp(filepath.Dir(outPath), "."+filepath.Base(outPath)+".tmp-")
+	if err != nil {
+		return fmt.Errorf("creating temporary snapshot directory: %w", err)
 	}
-	defer os.Remove(tmp)
+	tmp := filepath.Join(tmpDir, filepath.Base(outPath))
+	defer func() {
+		_ = os.Remove(tmp)
+		_ = os.Remove(tmpDir)
+	}()
 
 	if err := restoreSnapshotFileFromGit(ctx, tmp, ref, snapshotPath, branch); err != nil {
 		if snapshotURL == "" {
@@ -314,12 +318,7 @@ func restoreSnapshotFile(ctx context.Context,
 	}
 
 	if err := atomicfile.Replace(tmp, outPath); err != nil {
-		if removeErr := os.Remove(outPath); removeErr != nil && !os.IsNotExist(removeErr) {
-			return fmt.Errorf("replacing existing snapshot: %w", removeErr)
-		}
-		if renameErr := atomicfile.Replace(tmp, outPath); renameErr != nil {
-			return fmt.Errorf("moving snapshot into place: %w", renameErr)
-		}
+		return fmt.Errorf("moving snapshot into place: %w", err)
 	}
 
 	fmt.Printf("Restored %s\n", outPath)

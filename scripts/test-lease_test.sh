@@ -23,11 +23,20 @@ printf '%s\n' "$*" >> "$DOCKER_LOG"
 case " $* " in
   *' up '*)
     [ "$2" = -p ] && [ "$3" = "$TEST_SERVICE_LEASE" ] || exit 1
-    printf 'publish %s %s %s\n' "${TEST_PG_PUBLISH-}" "${TEST_CH_HTTP_PUBLISH-}" "${TEST_CH_NATIVE_PUBLISH-}" >> "$DOCKER_LOG"
+    case " $* " in
+      *' up -d --wait postgres '*)
+        [ "${TEST_PG_PUBLISH-}" = 127.0.0.1::5432 ] && [ -z "${TEST_CH_HTTP_PUBLISH-}" ] && [ -z "${TEST_CH_NATIVE_PUBLISH-}" ] || exit 1
+        printf 'publish postgres %s\n' "$TEST_PG_PUBLISH" >> "$DOCKER_LOG" ;;
+      *' up -d --wait clickhouse '*)
+        [ -z "${TEST_PG_PUBLISH-}" ] && [ "${TEST_CH_HTTP_PUBLISH-}" = 127.0.0.1::8123 ] && [ "${TEST_CH_NATIVE_PUBLISH-}" = 127.0.0.1::9000 ] || exit 1
+        printf 'publish clickhouse %s %s\n' "$TEST_CH_HTTP_PUBLISH" "$TEST_CH_NATIVE_PUBLISH" >> "$DOCKER_LOG" ;;
+    esac
     lease-held "$HOME/.local/state/test-service-leases/$TEST_SERVICE_LEASE" || exit 1
     printf '%s\n' "$TEST_SERVICE_LEASE" > "$CHECK_LEASE"
     if [ "${BLOCK_UP:-}" = 1 ]; then touch "$READY"; while :; do sleep .1; done; fi ;;
-  *' port '*) echo 127.0.0.1:49153 ;;
+  *' port postgres 5432 '*) echo 127.0.0.1:49153 ;;
+  *' port clickhouse 9000 '*) echo 127.0.0.1:49153 ;;
+  *' port '*) exit 1 ;;
   *' down '*)
     [ "$2" = -p ] && [ "$3" = "$TEST_SERVICE_LEASE" ] || exit 1
     lease-held "$HOME/.local/state/test-service-leases/$TEST_SERVICE_LEASE" || exit 1
@@ -46,18 +55,45 @@ chmod +x "$tmp/bin/docker" "$tmp/bin/lease-held"
 ln -s "$python_bin" "$tmp/bin/python3"
 export PATH="$tmp/bin:$PATH" DOCKER_LOG="$tmp/docker.log"
 
-# Both services carry the project lease label in the resolved Compose config.
-(cd "$root" && TEST_SERVICE_LEASE=agentsview-test-123 "$docker_bin" compose -p agentsview-test-123 -f docker-compose.test.yml -f docker-compose.test-lease.yml config --format json) | python3 -c '
+# Leased services bind to dynamic loopback ports; manually started services keep fixed ports.
+(cd "$root" && TEST_SERVICE_LEASE=agentsview-test-123 TEST_PG_PUBLISH=127.0.0.1::5432 TEST_CH_HTTP_PUBLISH=127.0.0.1::8123 TEST_CH_NATIVE_PUBLISH=127.0.0.1::9000 "$docker_bin" compose -p agentsview-test-123 -f docker-compose.test.yml -f docker-compose.test-lease.yml config --format json) > "$tmp/leased-compose.json"
+python3 - "$tmp/leased-compose.json" <<'PY'
 import json, sys
-services = json.load(sys.stdin)["services"]
+with open(sys.argv[1]) as compose:
+    services = json.load(compose)["services"]
 for name in ("postgres", "clickhouse"):
     assert services[name]["labels"]["test-service.lease"] == "agentsview-test-123"
-'
+expected = {"postgres": {5432}, "clickhouse": {8123, 9000}}
+for name, targets in expected.items():
+    ports = services[name]["ports"]
+    assert {port["target"] for port in ports} == targets
+    for port in ports:
+        assert port["host_ip"] == "127.0.0.1"
+        assert port.get("published") in (None, "")
+PY
+(cd "$root" && TEST_PG_PUBLISH= TEST_CH_HTTP_PUBLISH= TEST_CH_NATIVE_PUBLISH= "$docker_bin" compose -f docker-compose.test.yml config --format json) > "$tmp/manual-compose.json"
+python3 - "$tmp/manual-compose.json" <<'PY'
+import json, sys
+with open(sys.argv[1]) as compose:
+    services = json.load(compose)["services"]
+expected = {"postgres": {(5432, "5433")}, "clickhouse": {(8123, "18123"), (9000, "19000")}}
+for name, ports in expected.items():
+    actual = {(port["target"], str(port["published"])) for port in services[name]["ports"]}
+    assert actual == ports, (name, actual)
+PY
 
 # Cleanup waits for a descendant to release the lease.
-export READY="$tmp/ready" RELEASE="$tmp/release" EXITED="$tmp/exited" MAIN="$tmp/main" CHECK_LEASE="$tmp/project"
+export READY="$tmp/ready" RELEASE="$tmp/release" EXITED="$tmp/exited" MAIN="$tmp/main" CHECK_LEASE="$tmp/project" DESCENDANT="$tmp/descendant"
+cat > "$DESCENDANT" <<'CHILD'
+#!/bin/sh
+trap 'touch "$EXITED"; exit 0' TERM
+touch "$READY"
+while [ ! -f "$RELEASE" ]; do sleep 0.1; done
+touch "$EXITED"
+CHILD
+chmod +x "$DESCENDANT"
 : > "$DOCKER_LOG"
-(cd "$root" && ./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 sh -c 'echo $$ > "$MAIN"; sh -c '\''touch "$READY"; while [ ! -f "$RELEASE" ]; do sleep 0.1; done; touch "$EXITED"'\'' >/dev/null 2>&1 & while [ ! -f "$READY" ]; do sleep 0.1; done; exit 7') &
+(cd "$root" && ./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 sh -c 'echo $$ > "$MAIN"; "$DESCENDANT" >/dev/null 2>&1 & while [ ! -f "$READY" ]; do sleep 0.1; done; exit 7') &
 first=$!
 for _ in {1..100}; do [[ -f "$READY" ]] && break; sleep .1; done
 [[ -f "$READY" ]]
@@ -67,7 +103,10 @@ if kill -0 "$main_pid" 2>/dev/null; then echo 'foreground command did not exit' 
 lease="$HOME/.local/state/test-service-leases/$(cat "$CHECK_LEASE")"
 lease-held "$lease"
 if grep -q ' down ' "$DOCKER_LOG"; then echo 'cleanup ran while descendant held lease' >&2; exit 1; fi
-touch "$RELEASE"
+supervisor=${lease##*-}
+supervisor_args=$(ps -p "$supervisor" -o args=)
+[[ "$supervisor_args" == *'python3 -'* ]]
+kill -TERM "$supervisor"
 for _ in {1..100}; do [[ -f "$EXITED" ]] && break; sleep .1; done
 [[ -f "$EXITED" ]]
 set +e
@@ -75,7 +114,7 @@ wait "$first"
 status=$?
 set -e
 first=
-[[ $status == 7 ]]
+[[ $status == 143 ]]
 grep -qE -- "-p $(cat "$CHECK_LEASE") .* down -v --remove-orphans" "$DOCKER_LOG"
 [[ ! -e "$lease" ]]
 unset READY RELEASE EXITED MAIN
@@ -131,29 +170,32 @@ chmod +x "$tmp/bin/go"
 
 # Each target passes the new lease and service address to nested Make.
 cat > "$tmp/inspect.mk" <<'MAKE'
-$(if $(filter 1,$(MAKELEVEL)),$(info TARGET_FROM_MAKE=$(MAKECMDGOALS))$(info LEASE_FROM_MAKE=$(TEST_SERVICE_LEASE))$(info PG_FROM_MAKE=$(TEST_PG_URL))$(info CH_FROM_MAKE=$(TEST_CLICKHOUSE_URL))$(info STANDBY_FROM_MAKE=$(TEST_PG_STANDBY_URL)))
+$(if $(filter 1,$(MAKELEVEL)),$(info TARGET_FROM_MAKE=$(MAKECMDGOALS))$(info LEASE_FROM_MAKE=$(TEST_SERVICE_LEASE))$(info PG_FROM_MAKE=$(TEST_PG_URL))$(info CH_FROM_MAKE=$(TEST_CLICKHOUSE_URL))$(info STANDBY_FROM_MAKE=$(TEST_PG_STANDBY_URL))$(info NO_EXCHANGE_FROM_MAKE=$(TEST_CLICKHOUSE_NO_EXCHANGE_URL)))
 MAKE
 for target in test-postgres bench-pg-usage test-clickhouse; do
     : > "$DOCKER_LOG"
-    (cd "$root" && MAKEFILES="$tmp/inspect.mk" make -o pricing-snapshot "$target" TEST_SERVICE_LEASE=old TEST_PG_URL=old-pg TEST_CLICKHOUSE_URL=old-ch TEST_PG_STANDBY_URL=old-standby MAKE='make -n') > "$tmp/make-url"
+    (cd "$root" && MAKELEVEL=0 MAKEFILES="$tmp/inspect.mk" make -o pricing-snapshot "$target" TEST_SERVICE_LEASE=old TEST_PG_URL=old-pg TEST_CLICKHOUSE_URL=old-ch TEST_PG_STANDBY_URL=old-standby TEST_CLICKHOUSE_NO_EXCHANGE_URL=old-no-exchange MAKE='make -n') > "$tmp/make-url"
     project=$(cat "$CHECK_LEASE")
     [[ "$project" != old ]]
     grep -Fxq "TARGET_FROM_MAKE=$target-run" "$tmp/make-url"
     grep -Fxq "LEASE_FROM_MAKE=$project" "$tmp/make-url"
+    grep -Fxq 'NO_EXCHANGE_FROM_MAKE=' "$tmp/make-url"
     case "$target" in
         test-clickhouse)
             service=clickhouse port=9000
             grep -Fxq 'STANDBY_FROM_MAKE=' "$tmp/make-url"
             grep -Fxq 'PG_FROM_MAKE=' "$tmp/make-url"
             grep -Fxq 'CH_FROM_MAKE=clickhouse://127.0.0.1:49153/default' "$tmp/make-url"
-            grep -Fxq 'publish 127.0.0.1::5432 127.0.0.1::8123 127.0.0.1::9000' "$DOCKER_LOG" ;;
+            grep -Fxq 'publish clickhouse 127.0.0.1::8123 127.0.0.1::9000' "$DOCKER_LOG" ;;
         test-postgres)
             service=postgres port=5432
             grep -Fxq 'STANDBY_FROM_MAKE=' "$tmp/make-url"
             grep -Fxq 'CH_FROM_MAKE=' "$tmp/make-url"
             grep -Fxq 'PG_FROM_MAKE=postgres://agentsview_test:agentsview_test_password@127.0.0.1:49153/agentsview_test?sslmode=disable' "$tmp/make-url"
-            grep -Fxq 'publish 127.0.0.1::5432 127.0.0.1::8123 127.0.0.1::9000' "$DOCKER_LOG" ;;
-        bench-pg-usage) service=postgres port=5432 ;;
+            grep -Fxq 'publish postgres 127.0.0.1::5432' "$DOCKER_LOG" ;;
+        bench-pg-usage)
+            service=postgres port=5432
+            grep -Fxq 'publish postgres 127.0.0.1::5432' "$DOCKER_LOG" ;;
     esac
     grep -qE -- "-p $project .* -f docker-compose.test-lease.yml up -d --wait $service" "$DOCKER_LOG"
     grep -qE -- "-p $project .* port $service $port" "$DOCKER_LOG"
@@ -185,4 +227,4 @@ set +e
 status=$?
 set -e
 [[ $status != 0 && ! -s "$DOCKER_LOG" ]]
-grep -q 'lease directory must be owned' "$tmp/mode-error"
+grep -Fq "lease directory $HOME/.local/state/test-service-leases must be owned by the current user and grant no permissions to group or other users" "$tmp/mode-error"

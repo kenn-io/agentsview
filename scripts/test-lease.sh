@@ -27,39 +27,40 @@ directory = os.path.join(os.environ["HOME"], ".local", "state", "test-service-le
 os.makedirs(directory, mode=0o700, exist_ok=True)
 info = os.stat(directory)
 if info.st_uid != os.getuid() or info.st_mode & 0o077:
-    sys.exit("test service lease directory must be owned by the current user and private")
+    sys.exit(f"lease directory {directory} must be owned by the current user and grant no permissions to group or other users")
 path = os.path.join(directory, lease)
 fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
 os.set_inheritable(fd, True)
 fcntl.flock(fd, fcntl.LOCK_EX)
 os.environ["TEST_SERVICE_LEASE"] = lease
 child = None
+process_group = None
 received = None
 
 def forward(signum, frame):
     global received
     received = signum
-    if child is not None:
+    if process_group is not None:
         try:
-            os.killpg(child.pid, signum)
+            os.killpg(process_group, signum)
         except ProcessLookupError:
             pass
 
 for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
     signal.signal(sig, forward)
 child = subprocess.Popen(command, pass_fds=(fd,), start_new_session=True)
+process_group = child.pid
 if received is not None:
     forward(received, None)
 status = child.wait()
 child = None
-received = None
 if status < 0:
     status = 128 - status
 os.close(fd)
 try:
     lock = open(path, "r")
 except FileNotFoundError:
-    sys.exit(status)
+    sys.exit(128 + received if received is not None else status)
 with lock:
     while True:
         try:
@@ -67,8 +68,9 @@ with lock:
             break
         except BlockingIOError:
             if received is not None:
-                sys.exit(128 + received)
+                forward(received, None)
             time.sleep(0.1)
+    process_group = None
     try:
         same_file = os.stat(path).st_ino == os.fstat(lock.fileno()).st_ino
     except FileNotFoundError:
@@ -81,5 +83,7 @@ with lock:
                 status = 1
         else:
             os.unlink(path)
+if received is not None:
+    status = 128 + received
 sys.exit(status)
 PY

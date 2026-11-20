@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -263,6 +264,46 @@ func TestRestoreSnapshotFileRestoresPinnedArtifact(t *testing.T) {
 	require.FileExists(t, out)
 	require.NoError(t, validateSnapshotFile(out))
 	assert.Equal(t, sha256FileForTest(t, source), sha256FileForTest(t, out))
+}
+
+func TestRestoreSnapshotFileConcurrentRuns(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test")
+
+	source := filepath.Join(repo, "litellm_snapshot.json.gz")
+	require.NoError(t, os.WriteFile(source, gzipSnapshot(t, []byte(`{
+		"version": "litellm-test",
+		"source_ref": "551e5d097c11f08fd2400a25a651b1844fcf89c2",
+		"models": [{"ModelPattern": "test-model", "InputPerMTok": {"microdollars": 1000000}}]
+	}`)), 0o644))
+	runGit(t, repo, "add", "litellm_snapshot.json.gz")
+	runGit(t, repo, "commit", "-m", "snapshot")
+	ref := runGit(t, repo, "rev-parse", "HEAD")
+	t.Chdir(repo)
+
+	out := filepath.Join(repo, "out", "snapshot.json.gz")
+	expected := sha256FileForTest(t, source)
+	const runs = 8
+	var wait sync.WaitGroup
+	errs := make(chan error, runs)
+	for range runs {
+		wait.Go(func() {
+			errs <- restoreSnapshotFile(t.Context(), out, ref, "litellm_snapshot.json.gz", expected, "unused-snapshot-branch", "")
+		})
+	}
+	wait.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, expected, sha256FileForTest(t, out))
+	entries, err := os.ReadDir(filepath.Dir(out))
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, filepath.Base(out), entries[0].Name())
 }
 
 func TestRestoreSnapshotFileFetchesPinnedArtifactAfterBranchAdvances(t *testing.T) {

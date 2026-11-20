@@ -300,7 +300,7 @@ jobs:
           bash scripts/install_test.sh
           bash scripts/e2e-server_test.sh
           bash scripts/macos-watcher-tests_test.sh
-          bash scripts/test-lease_test.sh
+          make test-service-lease
           bash desktop/scripts/test-repair-appimage-diricon.sh
 
   # Merge groups run these Linux suites. test-extended shares their steps and
