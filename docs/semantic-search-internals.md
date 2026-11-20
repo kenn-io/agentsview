@@ -577,7 +577,7 @@ covers the invariants.
   content duplicated into PG so snippets and anchoring reuse the exact local
   mirror semantics (rebuilding content from `messages` at query time would
   need duplicate extraction logic that can drift).
-- Kit attaches to each application-owned chunk table for replacement and raw nearest-chunk search. AgentsView owns generations, document metadata, and result hydration. Search uses iterative HNSW scans when the installed extension supports them.
+- Kit attaches to each application-owned chunk table for replacement and raw nearest-chunk search. AgentsView owns generations, document metadata, and result hydration.
 - `vector_chunks_g<id>` is one table per generation with a `halfvec(N)` column
   and an HNSW cosine index. Per-generation tables are required because a
   pgvector column has a fixed typed dimension; `halfvec` stays under HNSW's

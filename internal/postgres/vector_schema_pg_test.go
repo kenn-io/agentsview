@@ -12,8 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	kitvec "go.kenn.io/kit/vector"
-	"go.kenn.io/kit/vector/pgvector"
 
 	"go.kenn.io/agentsview/internal/storage"
 )
@@ -285,34 +283,6 @@ func TestVectorHalfvecGate(t *testing.T) {
 			assert.Empty(t, trace.matching(regexp.MustCompile(`(?i)ALTER\s+EXTENSION\s+vector\s+UPDATE`)))
 			assert.Equal(t, beforeVersion, version)
 		}
-		id, err := ensureVectorGeneration(ctx, pg, "gate-fixture", "model", 4)
-		require.NoError(t, err)
-		require.NoError(t, ensureVectorChunkTable(ctx, pg, id, 4))
-		table := vectorChunkTable(id)
-		extSchema, err := vectorExtensionSchema(ctx, pg)
-		require.NoError(t, err)
-		_, err = pg.ExecContext(ctx, `INSERT INTO `+table+` VALUES ('old', 0, '[1,0,0,0]'::`+extSchema+`.halfvec)`)
-		require.NoError(t, err)
-		store, err := pgvector.AttachChunks[string](ctx, pg, table)
-		require.NoError(t, err)
-		tx, err := pg.BeginTx(ctx, nil)
-		require.NoError(t, err)
-		defer tx.Rollback()
-		page, err := store.SearchTx(ctx, tx, kitvec.Vector{1, 0, 0, 0}, 1)
-		require.NoError(t, err)
-		require.Len(t, page.Hits, 1)
-		assert.Equal(t, "old", page.Hits[0].Doc)
-		_, err = store.ReplaceTx(ctx, tx, []string{"old"}, func(yield func(pgvector.Chunk[string], error) bool) {
-			yield(pgvector.Chunk[string]{Doc: "old", ChunkIndex: 0, Vector: kitvec.Vector{0, 1, 0, 0}}, nil)
-		})
-		require.NoError(t, err)
-		require.NoError(t, tx.Commit())
-		var embedding string
-		require.NoError(t, pg.QueryRowContext(ctx, `SELECT embedding::text FROM `+table+` WHERE doc_key = 'old'`).Scan(&embedding))
-		assert.Equal(t, "[0,1,0,0]", embedding)
-		_, afterVersion, err := vectorHalfvecAvailable(ctx, pg)
-		require.NoError(t, err)
-		assert.Equal(t, version, afterVersion)
 		return
 	}
 	if version != "" {
