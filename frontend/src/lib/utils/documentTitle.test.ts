@@ -14,33 +14,33 @@ describe("documentTitle", () => {
   });
 
   it.each([
-    ["codex:01900000-0000-7000-8000-000000000001", "Sessions · Codex · 000000000001 · AgentsView"],
-    ["codex:01900000-0000-7000-8000-000000000002", "Sessions · Codex · 000000000002 · AgentsView"],
+    ["codex:01900000-0000-7000-8000-000000000001", "Sessions · 00000001 · Codex · AgentsView"],
+    ["codex:01900000-0000-7000-8000-000000000002", "Sessions · 00000002 · Codex · AgentsView"],
     [
       "codex:01900000-0000-7000-8000-000000000001_11111111-1111-4111-8111-111111111111",
-      "Sessions · Codex · 111111111111 · AgentsView",
+      "Sessions · 11111111 · Codex · AgentsView",
     ],
     [
       "codex:01900000-0000-7000-8000-000000000001_22222222-2222-4222-8222-222222222222",
-      "Sessions · Codex · 222222222222 · AgentsView",
+      "Sessions · 22222222 · Codex · AgentsView",
     ],
     [
       "kimi:workspace:01900000-0000-7000-8000-000000000001",
-      "Sessions · Kimi · 000000000001 · AgentsView",
+      "Sessions · 00000001 · Kimi · AgentsView",
     ],
     [
       "kimi:workspace:01900000-0000-7000-8000-000000000002",
-      "Sessions · Kimi · 000000000002 · AgentsView",
+      "Sessions · 00000002 · Kimi · AgentsView",
     ],
     [
       "source-a~codex:01900000-0000-7000-8000-000000000001",
-      "Sessions · source-a · Codex · 000000000001 · AgentsView",
+      "Sessions · source-a:00000001 · Codex · AgentsView",
     ],
     [
       "source-b~codex:01900000-0000-7000-8000-000000000001",
-      "Sessions · source-b · Codex · 000000000001 · AgentsView",
+      "Sessions · source-b:00000001 · Codex · AgentsView",
     ],
-    ["01900000-0000-7000-8000-000000000001", "Sessions · Claude · 000000000001 · AgentsView"],
+    ["01900000-0000-7000-8000-000000000001", "Sessions · 00000001 · Claude · AgentsView"],
   ])("identifies %s", (sessionId, expected) => {
     expect(documentTitle({ ...base, route: "sessions", sessionId })).toBe(expected);
   });
@@ -53,21 +53,21 @@ describe("documentTitle", () => {
         sessionId: "source-a~codex:12345678abcdef",
         sessionNotFound: true,
       }),
-    ).toBe("Sessions · source-a · Codex · 345678abcdef · Session not found · AgentsView");
+    ).toBe("Sessions · source-a:78abcdef · Codex · Session not found · AgentsView");
   });
 
   it.each([
     [
       "codex:01900000-0000-7000-8000-000000000001",
-      "Sessions · Codex · 000000000001 · Session not found · AgentsView",
+      "Sessions · 00000001 · Codex · Session not found · AgentsView",
     ],
     [
       "codex:01900000-0000-7000-8000-000000000001_11111111-1111-4111-8111-111111111111",
-      "Sessions · Codex · 111111111111 · Session not found · AgentsView",
+      "Sessions · 11111111 · Codex · Session not found · AgentsView",
     ],
     [
       "codex:01900000-0000-7000-8000-000000000001_22222222-2222-4222-8222-222222222222",
-      "Sessions · Codex · 222222222222 · Session not found · AgentsView",
+      "Sessions · 22222222 · Codex · Session not found · AgentsView",
     ],
   ])("identifies missing session %s", (sessionId, expected) => {
     expect(documentTitle({ ...base, route: "sessions", sessionId, sessionNotFound: true })).toBe(
