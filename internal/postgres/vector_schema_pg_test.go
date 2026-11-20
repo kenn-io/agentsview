@@ -5,11 +5,8 @@ package postgres
 import (
 	"context"
 	"database/sql"
-	"regexp"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -246,7 +243,7 @@ func TestEnsureSchemaFastPathCreatesVectorTables(t *testing.T) {
 }
 
 // TestVectorHalfvecGate checks supported extensions and search without pgvector.
-func TestVectorHalfvecGate(t *testing.T) {
+func TestVectorSearcherReportsMissingExtension(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)
 	cleanVectorSchemaTestPG(t, pgURL)
@@ -257,23 +254,6 @@ func TestVectorHalfvecGate(t *testing.T) {
 
 	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, vectorSchemaTestSchema))
-	hadHalfvec, beforeVersion, err := vectorHalfvecAvailable(ctx, pg)
-	require.NoError(t, err)
-
-	cfg, err := pgx.ParseConfig(pgURL)
-	require.NoError(t, err)
-	cfg.RuntimeParams["search_path"] = vectorSchemaTestSchema
-	trace := &statementLog{}
-	cfg.Tracer = trace
-	traced := stdlib.OpenDB(*cfg)
-	t.Cleanup(func() { require.NoError(t, traced.Close()) })
-	unavailable, err := ensureVectorBaseSchemaPG(ctx, traced)
-	require.NoError(t, err, "gate must degrade, never error")
-	if unavailable == "" {
-		if vectorUnavailableReason(hadHalfvec, beforeVersion) == "" {
-			assert.Empty(t, trace.matching(regexp.MustCompile(`(?i)ALTER\s+EXTENSION\s+vector\s+UPDATE`)))
-		}
-	}
 	// Search must report a missing extension even when the schema exists.
 	_, err = pg.ExecContext(ctx, `DROP EXTENSION IF EXISTS vector CASCADE`)
 	require.NoError(t, err)

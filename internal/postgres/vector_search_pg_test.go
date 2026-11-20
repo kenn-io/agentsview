@@ -137,6 +137,40 @@ var (
 	runOffsets = `[{"o":10,"r":0,"b":0},{"o":12,"r":19,"b":19}]`
 )
 
+func TestPGVectorSearcherReadOnlyRole(t *testing.T) {
+	t.Parallel()
+	pg := newVectorSearchTestPG(t)
+	ctx := t.Context()
+	genID, _ := seedVectorSearchFixture(t, pg)
+	searcher := NewVectorSearcher(pg, genID, 4, searchMaxInputChars, fixedEncoder([]float32{1, 0, 0, 0}))
+	role := "reader_" + pgDatabaseName(t, testPGURL(t))
+	_, err := pg.ExecContext(ctx, `CREATE ROLE `+role+` LOGIN PASSWORD 'reader_fixture'`)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = pg.ExecContext(context.WithoutCancel(ctx), `DROP OWNED BY `+role)
+		_, _ = pg.ExecContext(context.WithoutCancel(ctx), `DROP ROLE `+role)
+	})
+	_, err = pg.ExecContext(ctx, `GRANT USAGE ON SCHEMA `+vectorSearchTestSchema+` TO `+role+`; GRANT SELECT ON ALL TABLES IN SCHEMA `+vectorSearchTestSchema+` TO `+role)
+	require.NoError(t, err)
+	readerURL, err := url.Parse(testPGSchemaURL(t, vectorSearchTestSchema))
+	require.NoError(t, err)
+	readerURL.User = url.UserPassword(role, "reader_fixture")
+	reader, err := NewStore(ctx, readerURL.String(), vectorSearchTestSchema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reader.Close() })
+	require.NoError(t, prepareServeStore(ctx, reader, vectorSearchTestSchema))
+	encoder := fixedEncoder([]float32{1, 0, 0, 0})
+	readerSearcher, reason, err := (Backend{}).OpenVectorSearcher(ctx, reader, storage.VectorGenerationInfo{Fingerprint: "fp-search"}, searchMaxInputChars, encoder)
+	require.NoError(t, err)
+	require.Empty(t, reason)
+	hits, err := dbtest.SemanticSearch(ctx, readerSearcher, "query", 10)
+	require.NoError(t, err)
+	require.NotEmpty(t, hits)
+	expected, err := dbtest.SemanticSearch(ctx, searcher, "query", 10)
+	require.NoError(t, err)
+	assert.Equal(t, expected, hits)
+}
+
 func TestPGVectorSearcher(t *testing.T) {
 	t.Parallel()
 	pg := newVectorSearchTestPG(t)
@@ -145,35 +179,6 @@ func TestPGVectorSearcher(t *testing.T) {
 	genID, _ := seedVectorSearchFixture(t, pg)
 	searcher := NewVectorSearcher(
 		pg, genID, 4, searchMaxInputChars, fixedEncoder([]float32{1, 0, 0, 0}))
-
-	t.Run("read-only role", func(t *testing.T) {
-		role := "reader_" + pgDatabaseName(t, testPGURL(t))
-		_, err := pg.ExecContext(ctx, `CREATE ROLE `+role+` LOGIN PASSWORD 'reader_fixture'`)
-		require.NoError(t, err)
-		t.Cleanup(func() {
-			_, _ = pg.ExecContext(context.WithoutCancel(ctx), `DROP OWNED BY `+role)
-			_, _ = pg.ExecContext(context.WithoutCancel(ctx), `DROP ROLE `+role)
-		})
-		_, err = pg.ExecContext(ctx, `GRANT USAGE ON SCHEMA `+vectorSearchTestSchema+` TO `+role+`; GRANT SELECT ON ALL TABLES IN SCHEMA `+vectorSearchTestSchema+` TO `+role)
-		require.NoError(t, err)
-		readerURL, err := url.Parse(testPGSchemaURL(t, vectorSearchTestSchema))
-		require.NoError(t, err)
-		readerURL.User = url.UserPassword(role, "reader_fixture")
-		reader, err := NewStore(ctx, readerURL.String(), vectorSearchTestSchema, true)
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = reader.Close() })
-		require.NoError(t, prepareServeStore(ctx, reader, vectorSearchTestSchema))
-		encoder := fixedEncoder([]float32{1, 0, 0, 0})
-		readerSearcher, reason, err := (Backend{}).OpenVectorSearcher(ctx, reader, storage.VectorGenerationInfo{Fingerprint: "fp-search"}, searchMaxInputChars, encoder)
-		require.NoError(t, err)
-		require.Empty(t, reason)
-		hits, err := dbtest.SemanticSearch(ctx, readerSearcher, "query", 10)
-		require.NoError(t, err)
-		require.NotEmpty(t, hits)
-		expected, err := dbtest.SemanticSearch(ctx, searcher, "query", 10)
-		require.NoError(t, err)
-		assert.Equal(t, expected, hits)
-	})
 
 	t.Run("ranking rollup hydration tombstone", func(t *testing.T) {
 		hits, err := dbtest.SemanticSearch(ctx, searcher, "query", 10)

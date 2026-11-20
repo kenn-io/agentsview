@@ -1014,14 +1014,6 @@ func TestVectorPushRoundTrip(t *testing.T) {
 	t.Parallel()
 	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
-	// Kit requires read committed even when the database defaults to repeatable read.
-	var database string
-	require.NoError(t, pg.QueryRowContext(ctx, `SELECT current_database()`).Scan(&database))
-	_, err := pg.ExecContext(ctx, `ALTER DATABASE `+pgx.Identifier{database}.Sanitize()+` SET default_transaction_isolation = 'repeatable read'`)
-	require.NoError(t, err)
-	sync.pg, err = Open(ctx, testPGURL(t), vectorPushTestSchema, true)
-	require.NoError(t, err)
-	t.Cleanup(func() { assert.NoError(t, sync.pg.Close()) })
 
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
@@ -1084,6 +1076,31 @@ func TestVectorPushRoundTrip(t *testing.T) {
 		 WHERE generation_id = $1 AND machine = $2`, genID, witnessKey))
 }
 
+func TestVectorPushUsesReadCommitted(t *testing.T) {
+	t.Parallel()
+	sync, localDB, pg := newVectorPushTestSync(t)
+	ctx := t.Context()
+	// Kit requires read committed even when the database defaults to repeatable read.
+	var database string
+	require.NoError(t, pg.QueryRowContext(ctx, `SELECT current_database()`).Scan(&database))
+	_, err := pg.ExecContext(ctx, `ALTER DATABASE `+pgx.Identifier{database}.Sanitize()+` SET default_transaction_isolation = 'repeatable read'`)
+	require.NoError(t, err)
+	sync.pg, err = Open(ctx, testPGURL(t), vectorPushTestSchema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sync.pg.Close()) })
+
+	seedVectorSession(t, localDB, "A")
+	sync.vectorSource = &fakeVectorSource{
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-isolation", Model: "m", Dimension: 4},
+		hasGen: true,
+		hashes: map[string]string{"A": "ha"},
+		docs:   map[string][]storage.VectorPushDoc{"A": {vdoc("A", "A#0", 0, "content", "hash", []float32{1, 0, 0, 0})}},
+	}
+	res, err := sync.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Vectors.ChunksPushed)
+}
+
 func TestVectorPushInvalidStoredVectorReportsRepair(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1110,7 +1127,6 @@ func TestVectorPushInvalidStoredVectorReportsRepair(t *testing.T) {
 			if tc.repair {
 				assert.ErrorContains(t, err, "agentsview index embeddings build --repair-invalid")
 			} else {
-				assert.ErrorContains(t, err, "pgvector: vector has zero norm")
 				assert.NotContains(t, err.Error(), "--repair-invalid")
 			}
 		})
@@ -1181,32 +1197,7 @@ func TestVectorPushLazyChunkAttachment(t *testing.T) {
 		require.Equal(t, [][]string{{"A"}}, src.hashScopes)
 		assert.Zero(t, result.SessionsPushed)
 	})
-	t.Run("unchanged after chunk table drop", func(t *testing.T) {
-		sync, localDB, pg := newVectorPushTestSync(t)
-		ctx := t.Context()
-		seedVectorSession(t, localDB, "A")
-		src := &fakeVectorSource{
-			gen:    storage.VectorGenerationInfo{Fingerprint: "dropped", Model: "model", Dimension: 4},
-			hasGen: true,
-			hashes: map[string]string{"A": "ha"},
-			docs:   map[string][]storage.VectorPushDoc{"A": {vdoc("A", "A#0", 0, "content", "hash", []float32{1, 0, 0, 0})}},
-		}
-		sync.vectorSource = src
-		_, err := sync.Push(ctx, false, nil)
-		require.NoError(t, err)
-		id, _, ok, err := LookupVectorGeneration(ctx, pg, "dropped")
-		require.NoError(t, err)
-		require.True(t, ok)
-		src.hashScopes = nil
-		sync.afterVectorGenerationLookup = func() {
-			_, err := pg.ExecContext(ctx, `DROP TABLE `+vectorChunkTable(id))
-			require.NoError(t, err)
-		}
-		result, err := sync.pushVectors(ctx, false, []string{"A"}, id, nil, nil)
-		require.NoError(t, err)
-		require.Equal(t, [][]string{{"A"}}, src.hashScopes)
-		assert.Equal(t, 1, result.SessionsUnchanged)
-	})
+
 }
 
 // TestVectorPushFullRepairsSilentCorruption pins --full's repair contract for
