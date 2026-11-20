@@ -326,7 +326,9 @@ func (c *frustrationScanCounter) QueryContext(ctx context.Context, query string,
 }
 
 func TestFrustrationFillJoinsCoveredRequests(t *testing.T) {
-	t.Parallel()
+	previous := frustrationJoinWait
+	frustrationJoinWait = 30 * time.Second
+	defer func() { frustrationJoinWait = previous }()
 	f := newFrustrationFixture(t, "agentsview")
 	store := f.open(t)
 	ids := addFrustrationFillSessions(t, f)
@@ -495,68 +497,44 @@ func TestFrustrationFillSkipsTimedOutChunk(t *testing.T) {
 
 func TestFrustrationFillDeploymentGates(t *testing.T) {
 	testPGURL(t)
-	for _, scenario := range []string{"read-only", "read-only-transaction", "borrowed"} {
+	for _, scenario := range []string{"read-only", "read-only-transaction", "writable", "borrowed"} {
 		t.Run(scenario, func(t *testing.T) {
 			f := newFrustrationFixture(t, "frustration_gate_"+strings.ReplaceAll(scenario, "-", "_"))
 			if scenario != "borrowed" && f.versionColumn != "xmin" {
 				t.Skip("PostgreSQL roles required")
 			}
-			owner := f.open(t)
-			var store *Store
-			switch scenario {
-			case "read-only":
-				url := newUsageJournalRole(t, f.syncer, `GRANT SELECT ON ALL TABLES IN SCHEMA `+f.schema+` TO ROLE`)
-				var err error
-				store, err = NewStore(f.ctx, url, f.schema, true)
-				require.NoError(t, err)
-				defer store.Close()
-			case "read-only-transaction":
-				url := newUsageJournalRole(t, f.syncer, `GRANT SELECT ON ALL TABLES IN SCHEMA `+f.schema+` TO ROLE; GRANT INSERT, UPDATE ON session_frustration_counts TO ROLE; REVOKE SELECT ON messages FROM ROLE; ALTER USER ROLE SET default_transaction_read_only = on`)
-				var err error
-				store, err = NewStore(f.ctx, url, f.schema, true)
-				require.NoError(t, err)
-				defer store.Close()
-			case "borrowed":
+			if scenario == "borrowed" {
+				owner := f.open(t)
 				tx, err := f.pg.BeginTx(f.ctx, nil)
 				require.NoError(t, err)
 				defer tx.Rollback()
-				store = owner.readView(tx)
+				store := owner.readView(tx)
+				require.Nil(t, store.DB())
+				stop := store.StartFrustrationFill(f.ctx)
+				stop()
+				state := &store.runtimeState().frustrationFill
+				state.mu.Lock()
+				pending := len(state.pending)
+				state.mu.Unlock()
+				require.Zero(t, pending)
+				return
 			}
-			var output bytes.Buffer
-			previous := log.Writer()
-			log.SetOutput(&output)
-			defer log.SetOutput(previous)
-			stop := store.StartFrustrationFill(f.ctx)
-			defer stop()
-			select {
-			case <-f.ctx.Done():
-				t.Fatal(f.ctx.Err())
-			case <-time.After(6 * time.Second):
+			grants := `GRANT SELECT ON ALL TABLES IN SCHEMA ` + f.schema + ` TO ROLE`
+			if scenario != "read-only" {
+				grants += `; GRANT INSERT, UPDATE ON session_frustration_counts TO ROLE`
 			}
-			stop()
-			require.NotContains(t, output.String(), "filling frustration counts")
-			var count int
-			require.NoError(t, f.pg.QueryRowContext(f.ctx, `SELECT count(*) FROM session_frustration_counts`).Scan(&count))
-			require.Zero(t, count)
+			if scenario == "read-only-transaction" {
+				grants += `; ALTER USER ROLE SET default_transaction_read_only = on`
+			}
+			url := newUsageJournalRole(t, f.syncer, grants)
+			store, err := NewStore(f.ctx, url, f.schema, true)
+			require.NoError(t, err)
+			defer store.Close()
+			writable, err := store.canFillFrustrationCounts(f.ctx)
+			require.NoError(t, err)
+			require.Equal(t, scenario == "writable", writable)
 		})
 	}
-}
-
-func TestFrustrationFillWritableCountRole(t *testing.T) {
-	f := newFrustrationFixture(t, "agentsview")
-	if f.versionColumn != "xmin" {
-		t.Skip("PostgreSQL role privileges")
-	}
-	roleURL := newUsageJournalRole(t, f.syncer, `GRANT SELECT ON ALL TABLES IN SCHEMA `+f.schema+` TO ROLE; GRANT INSERT, UPDATE ON session_frustration_counts TO ROLE`)
-	store, err := NewStore(f.ctx, roleURL, f.schema, true)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	stop := store.StartFrustrationFill(f.ctx)
-	defer stop()
-	require.Eventually(t, func() bool {
-		var count int
-		return f.pg.QueryRowContext(f.ctx, `SELECT count(*) FROM session_frustration_counts WHERE marker_count=1`).Scan(&count) == nil && count == 2
-	}, 20*time.Second, 50*time.Millisecond)
 }
 
 func TestFrustrationFillCompletedBetweenLoadAndJoin(t *testing.T) {

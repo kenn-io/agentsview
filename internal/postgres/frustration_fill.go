@@ -11,7 +11,7 @@ import (
 // Bound a slow chunk so later chunks can still be prepared.
 var frustrationFillChunkTimeout = 30 * time.Second
 
-const frustrationJoinWait = 5 * time.Second
+var frustrationJoinWait = 5 * time.Second
 
 type frustrationChunk struct {
 	ids      []string
