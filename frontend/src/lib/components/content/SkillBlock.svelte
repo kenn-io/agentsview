@@ -124,7 +124,7 @@
   }
 
   .skill-content {
-    padding: 8px 14px 12px;
+    padding: 10px 10px 12px;
     font-size: 13px;
     color: var(--text-secondary);
     line-height: 1.65;
