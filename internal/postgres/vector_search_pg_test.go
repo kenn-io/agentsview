@@ -169,6 +169,7 @@ func TestPGVectorSearcher(t *testing.T) {
 		require.Empty(t, reason)
 		hits, err := dbtest.SemanticSearch(ctx, readerSearcher, "query", 10)
 		require.NoError(t, err)
+		require.NotEmpty(t, hits)
 		expected, err := dbtest.SemanticSearch(ctx, searcher, "query", 10)
 		require.NoError(t, err)
 		assert.Equal(t, expected, hits)

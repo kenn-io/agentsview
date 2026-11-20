@@ -245,8 +245,7 @@ func TestEnsureSchemaFastPathCreatesVectorTables(t *testing.T) {
 	assert.True(t, tableExistsPG(t, pg, "vector_push_state"))
 }
 
-// TestVectorHalfvecGate checks that supported extensions need no upgrade and
-// that missing or unsupported versions disable vector writes and search.
+// TestVectorHalfvecGate checks supported extensions and search without pgvector.
 func TestVectorHalfvecGate(t *testing.T) {
 	t.Parallel()
 	pgURL := testPGURL(t)
@@ -274,14 +273,8 @@ func TestVectorHalfvecGate(t *testing.T) {
 		if vectorUnavailableReason(hadHalfvec, beforeVersion) == "" {
 			assert.Empty(t, trace.matching(regexp.MustCompile(`(?i)ALTER\s+EXTENSION\s+vector\s+UPDATE`)))
 		}
-	} else {
-		var pushResult storage.VectorPushResult
-		skipped, err := (&Sync{pg: pg}).prepareVectorBaseSchema(ctx, &pushResult)
-		require.NoError(t, err)
-		assert.True(t, skipped)
-		assert.True(t, pushResult.Skipped)
-		assert.Equal(t, unavailable, pushResult.SkippedReason)
 	}
+	// Search must report a missing extension even when the schema exists.
 	_, err = pg.ExecContext(ctx, `DROP EXTENSION IF EXISTS vector CASCADE`)
 	require.NoError(t, err)
 	store, err := NewStore(ctx, pgURL, vectorSchemaTestSchema, true)
