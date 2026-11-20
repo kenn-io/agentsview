@@ -29,6 +29,22 @@ type frustrationFillState struct {
 	running   bool
 }
 
+var errSignalsNotSaved = errors.New("signals panel not saved")
+
+// signalsLoader reads rows directly when no count fill is active. During a fill
+// it only reuses a saved panel, so a miss returns to the caller's own deadline.
+func (s *Store) signalsLoader() func(context.Context, db.AnalyticsFilter) (db.SignalsAnalyticsResponse, error) {
+	state := &s.runtimeState().frustrationFill
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.running || len(state.pending) > 0 {
+		return func(context.Context, db.AnalyticsFilter) (db.SignalsAnalyticsResponse, error) {
+			return db.SignalsAnalyticsResponse{}, errSignalsNotSaved
+		}
+	}
+	return s.loadAnalyticsSignals
+}
+
 // release drops a finished chunk's session IDs and wakes waiters.
 func (state *frustrationFillState) release(chunk *frustrationChunk) {
 	state.mu.Lock()
@@ -119,9 +135,6 @@ func (s *Store) fillFrustrationCounts(ctx context.Context, ids []string, column 
 
 // StartFrustrationFill prepares stale counts after the launch Usage warm-up.
 func (s *Store) StartFrustrationFill(ctx context.Context) func() {
-	if s.DB() == nil || s.hostedRelations {
-		return func() {}
-	}
 	warmErr := s.WarmUsageCache(ctx)
 	if warmErr != nil && !errors.Is(warmErr, db.ErrUsageSourceUnavailable) {
 		log.Printf("pg serve: queueing Usage cache warm: %v", warmErr)

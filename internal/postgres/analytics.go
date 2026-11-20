@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -2604,14 +2605,11 @@ func (s *Store) GetAnalyticsTopSessions(
 func (s *Store) GetAnalyticsSignals(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.SignalsAnalyticsResponse, error) {
-	state := &s.runtimeState().frustrationFill
-	state.mu.Lock()
-	filling := state.running || len(state.pending) > 0
-	state.mu.Unlock()
-	if filling {
+	result, err := keptAnalytics(ctx, s, "signals", f, s.signalsLoader())
+	if errors.Is(err, errSignalsNotSaved) {
 		return s.loadAnalyticsSignals(ctx, f)
 	}
-	return keptAnalytics(ctx, s, "signals", f, s.loadAnalyticsSignals)
+	return result, err
 }
 
 func (s *Store) loadAnalyticsSignals(ctx context.Context, f db.AnalyticsFilter) (db.SignalsAnalyticsResponse, error) {
