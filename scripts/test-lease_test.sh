@@ -92,21 +92,24 @@ chmod +x "$tmp/bin/go"
 
 # Each target passes the new lease and service address to nested Make.
 cat > "$tmp/inspect.mk" <<'MAKE'
-$(if $(filter 1,$(MAKELEVEL)),$(info TARGET_FROM_MAKE=$(MAKECMDGOALS))$(info LEASE_FROM_MAKE=$(TEST_SERVICE_LEASE))$(info PG_FROM_MAKE=$(TEST_PG_URL))$(info CH_FROM_MAKE=$(TEST_CLICKHOUSE_URL)))
+$(if $(filter 1,$(MAKELEVEL)),$(info TARGET_FROM_MAKE=$(MAKECMDGOALS))$(info LEASE_FROM_MAKE=$(TEST_SERVICE_LEASE))$(info PG_FROM_MAKE=$(TEST_PG_URL))$(info CH_FROM_MAKE=$(TEST_CLICKHOUSE_URL))$(info STANDBY_FROM_MAKE=$(TEST_PG_STANDBY_URL)))
 MAKE
 for target in test-postgres bench-pg-usage test-clickhouse; do
     : > "$DOCKER_LOG"
-    (cd "$root" && MAKEFILES="$tmp/inspect.mk" make -o pricing-snapshot "$target" TEST_SERVICE_LEASE=old TEST_PG_URL=old-pg TEST_CLICKHOUSE_URL=old-ch MAKE='make -n') > "$tmp/make-url"
+    (cd "$root" && MAKEFILES="$tmp/inspect.mk" make -o pricing-snapshot "$target" TEST_SERVICE_LEASE=old TEST_PG_URL=old-pg TEST_CLICKHOUSE_URL=old-ch TEST_PG_STANDBY_URL=old-standby MAKE='make -n') > "$tmp/make-url"
     project=$(cat "$CHECK_LEASE")
     [[ "$project" != old ]]
     grep -Fxq "TARGET_FROM_MAKE=$target-run" "$tmp/make-url"
     grep -Fxq "LEASE_FROM_MAKE=$project" "$tmp/make-url"
+    grep -Fxq 'STANDBY_FROM_MAKE=' "$tmp/make-url"
     case "$target" in
         test-clickhouse)
             service=clickhouse port=9000
+            grep -Fxq 'PG_FROM_MAKE=' "$tmp/make-url"
             grep -Fxq 'CH_FROM_MAKE=clickhouse://127.0.0.1:49153/default' "$tmp/make-url" ;;
         *)
             service=postgres port=5432
+            grep -Fxq 'CH_FROM_MAKE=' "$tmp/make-url"
             grep -Fxq 'PG_FROM_MAKE=postgres://agentsview_test:agentsview_test_password@127.0.0.1:49153/agentsview_test?sslmode=disable' "$tmp/make-url" ;;
     esac
     grep -qE -- "-p $project .* -f docker-compose.test-lease.yml up -d --wait $service" "$DOCKER_LOG"

@@ -9,9 +9,11 @@ export TEST_CH_HTTP_PUBLISH=127.0.0.1::8123
 export TEST_CH_NATIVE_PUBLISH=127.0.0.1::9000
 docker compose -p "$TEST_SERVICE_LEASE" -f docker-compose.test.yml -f docker-compose.test-lease.yml up -d --wait "$service"
 address=$(docker compose -p "$TEST_SERVICE_LEASE" -f docker-compose.test.yml -f docker-compose.test-lease.yml port "$service" "$port")
+pg_url=
+ch_url=
 case "$service" in
-    postgres) url="TEST_PG_URL=postgres://agentsview_test:agentsview_test_password@${address}/agentsview_test?sslmode=disable" ;;
-    clickhouse) url="TEST_CLICKHOUSE_URL=clickhouse://${address}/default" ;;
+    postgres) pg_url="postgres://agentsview_test:agentsview_test_password@${address}/agentsview_test?sslmode=disable" ;;
+    clickhouse) ch_url="clickhouse://${address}/default" ;;
 esac
 # Override values passed to the parent Make on its command line.
-exec "$@" "TEST_SERVICE_LEASE=$TEST_SERVICE_LEASE" "$url"
+exec "$@" "TEST_SERVICE_LEASE=$TEST_SERVICE_LEASE" "TEST_PG_URL=$pg_url" "TEST_CLICKHOUSE_URL=$ch_url" "TEST_PG_STANDBY_URL="
