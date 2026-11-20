@@ -157,6 +157,89 @@ set -e
 [[ $status != 0 && ! -s "$DOCKER_LOG" ]]
 grep -q 'HOME must be set' "$tmp/home-error"
 
+# Cancelling the public target reaches an active test and delays cleanup until it exits.
+cat > "$tmp/bin/go" <<'GO'
+#!/usr/bin/env python3
+import os
+import signal
+import sys
+import time
+
+if sys.argv[1] == "env":
+    sys.exit(0)
+
+def stop(signum, frame):
+    open(os.environ["SIGNAL_SEEN"], "w").close()
+    while not os.path.exists(os.environ["SIGNAL_RELEASE"]):
+        time.sleep(0.05)
+    open(os.environ["SIGNAL_EXITED"], "w").close()
+    sys.exit(128 + signum)
+
+signal.signal(signal.SIGTERM, stop)
+signal.alarm(20)
+ready = os.environ["SIGNAL_READY"]
+with open(ready + ".tmp", "w") as f:
+    f.write(f'{os.environ["TEST_SERVICE_LEASE"]} {os.getpid()}')
+os.replace(ready + ".tmp", ready)
+signal.pause()
+GO
+chmod +x "$tmp/bin/go"
+export SIGNAL_READY="$tmp/signal-ready" SIGNAL_SEEN="$tmp/signal-seen" SIGNAL_RELEASE="$tmp/signal-release" SIGNAL_EXITED="$tmp/signal-exited"
+: > "$DOCKER_LOG"
+python3 - "$root" "$tmp/bin/go" <<'PYTEST'
+import os
+import signal
+import subprocess
+import sys
+import time
+
+root, fake_go = sys.argv[1:]
+ready, seen, release, exited = (os.environ[k] for k in ("SIGNAL_READY", "SIGNAL_SEEN", "SIGNAL_RELEASE", "SIGNAL_EXITED"))
+log = os.environ["DOCKER_LOG"]
+
+def wait_for(path):
+    deadline = time.monotonic() + 8
+    while not os.path.exists(path):
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"timed out waiting for {os.path.basename(path)}")
+        time.sleep(0.05)
+
+def stop_if_owned(pid, expected):
+    if not pid:
+        return
+    result = subprocess.run(["ps", "-p", str(pid), "-o", "args="], capture_output=True, text=True, timeout=5)
+    if result.returncode == 0 and expected in result.stdout:
+        os.kill(pid, signal.SIGKILL)
+
+output = open(os.path.join(os.path.dirname(log), "signal-output"), "w")
+proc = subprocess.Popen(["make", "-o", "pricing-snapshot", "MAKE=make -o ensure-embed-dir", "test-postgres"], cwd=root, stdout=output, stderr=output)
+supervisor = descendant = None
+try:
+    wait_for(ready)
+    project, child = open(ready).read().split()
+    supervisor = int(project.rsplit("-", 1)[1])
+    descendant = int(child)
+    args = subprocess.run(["ps", "-p", str(supervisor), "-o", "args="], check=True, capture_output=True, text=True, timeout=5).stdout
+    assert "python3 - agentsview" in args
+    os.kill(supervisor, signal.SIGTERM)
+    wait_for(seen)
+    assert " down " not in open(log).read(), "cleanup ran while the descendant held the lease"
+    open(release, "w").close()
+    assert proc.wait(timeout=10) == 2, "cancelled make returned an unexpected status"
+    assert "Error 143" in open(output.name).read(), "the supervisor did not preserve the cancellation status"
+    assert os.path.exists(exited), "the descendant did not exit"
+    assert f"-p {project} " in open(log).read() and " down " in open(log).read(), "the project was not cleaned up"
+finally:
+    open(release, "w").close()
+    stop_if_owned(descendant, fake_go)
+    stop_if_owned(supervisor, "python3 - agentsview")
+    if proc.poll() is None:
+        proc.kill()
+    proc.wait(timeout=10)
+    output.close()
+PYTEST
+unset SIGNAL_READY SIGNAL_SEEN SIGNAL_RELEASE SIGNAL_EXITED
+
 # Three parallel targets share the top-level snapshot preparation.
 cat > "$tmp/bin/go" <<'GO'
 #!/bin/sh
