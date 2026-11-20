@@ -74,12 +74,14 @@ func (s *Store) storeFrustrationCounts(ctx context.Context, versions map[string]
 		tokens = append(tokens, version)
 		values = append(values, int32(counts[id]))
 	}
+	// A blocked write must not replace a count saved after its snapshot.
 	_, err := s.DB().ExecContext(ctx, `INSERT INTO session_frustration_counts (session_id, session_version, rules_version, marker_count)
         SELECT t.id, t.version, $4, t.count FROM unnest($1::text[], $2::text[], $3::integer[]) AS t(id, version, count)
         JOIN sessions s ON s.id = t.id AND `+frustrationSessionVersion("s."+versionColumn)+` = t.version
         ORDER BY t.id
         ON CONFLICT (session_id) DO UPDATE SET session_version = EXCLUDED.session_version, rules_version = EXCLUDED.rules_version, marker_count = EXCLUDED.marker_count
-        WHERE session_frustration_counts.rules_version <= EXCLUDED.rules_version`, ids, tokens, values, frustrationMarkerRulesVersion)
+        WHERE session_frustration_counts.rules_version <= EXCLUDED.rules_version
+          AND session_frustration_counts.session_version IS NOT DISTINCT FROM (SELECT prior.session_version FROM session_frustration_counts prior WHERE prior.session_id = EXCLUDED.session_id)`, ids, tokens, values, frustrationMarkerRulesVersion)
 	if err != nil {
 		return fmt.Errorf("writing frustration counts: %w", err)
 	}
@@ -120,8 +122,8 @@ func (s *Store) scanFrustrationCounts(ctx context.Context, ids []string, version
 	return counts, versions, nil
 }
 
-func (s *Store) staleFrustrationSessions(ctx context.Context, versionColumn string, ids []string) ([]string, error) {
-	rows, err := s.pg.QueryContext(ctx, `SELECT s.id FROM sessions s LEFT JOIN session_frustration_counts c ON c.session_id=s.id WHERE s.deleted_at IS NULL AND ($1::text[] IS NULL OR s.id=ANY($1)) AND (c.session_id IS NULL OR c.rules_version < $2 OR c.session_version <> `+frustrationSessionVersion("s."+versionColumn)+`) ORDER BY s.id`, ids, frustrationMarkerRulesVersion)
+func (s *Store) staleFrustrationSessions(ctx context.Context, versionColumn string) ([]string, error) {
+	rows, err := s.pg.QueryContext(ctx, `SELECT s.id FROM sessions s LEFT JOIN session_frustration_counts c ON c.session_id=s.id WHERE s.deleted_at IS NULL AND (c.session_id IS NULL OR c.rules_version < $1 OR c.session_version <> `+frustrationSessionVersion("s."+versionColumn)+`) ORDER BY s.id`, frustrationMarkerRulesVersion)
 	if err != nil {
 		return nil, err
 	}

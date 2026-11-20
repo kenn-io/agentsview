@@ -16,6 +16,7 @@ const frustrationJoinWait = 5 * time.Second
 
 type frustrationChunk struct {
 	ids      []string
+	versions map[string]string
 	done     chan struct{}
 	complete bool
 }
@@ -23,7 +24,10 @@ type frustrationChunk struct {
 func (state *frustrationFillState) removePending(versions map[string]string) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	maps.DeleteFunc(versions, func(id, _ string) bool { return state.pending[id] != nil })
+	maps.DeleteFunc(versions, func(id, version string) bool {
+		chunk := state.pending[id]
+		return chunk != nil && chunk.versions[id] == version
+	})
 }
 
 type frustrationFillState struct {
@@ -43,6 +47,7 @@ func (state *frustrationFillState) release(chunk *frustrationChunk) {
 		delete(state.pending, id)
 	}
 	chunk.ids = nil
+	chunk.versions = nil
 	chunk.complete = true
 	close(chunk.done)
 }
@@ -120,6 +125,9 @@ func (s *Store) fillFrustrationCounts(ctx context.Context, ids []string, column 
 		chunkCtx, cancel := context.WithTimeout(ctx, frustrationFillChunkTimeout)
 		counts, versions, err := s.scanFrustrationCounts(chunkCtx, chunk.ids, column)
 		if err == nil {
+			state.mu.Lock()
+			chunk.versions = versions
+			state.mu.Unlock()
 			err = s.storeFrustrationCounts(chunkCtx, versions, counts, column)
 		}
 		cancel()
@@ -163,7 +171,7 @@ func (s *Store) StartFrustrationFill(ctx context.Context) func() {
 			log.Printf("selecting frustration count version: %v", err)
 			return
 		}
-		ids, err := s.staleFrustrationSessions(ctx, column, nil)
+		ids, err := s.staleFrustrationSessions(ctx, column)
 		if err != nil {
 			log.Printf("selecting stale frustration counts: %v", err)
 			return

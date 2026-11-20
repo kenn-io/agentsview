@@ -652,3 +652,46 @@ func TestFrustrationFillContinuesAfterLockTimeout(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
 }
+
+func TestFrustrationFillPersistsChangedSession(t *testing.T) {
+	f := newFrustrationFixture(t, "agentsview")
+	store := f.open(t)
+	_, err := f.pg.ExecContext(f.ctx, `UPDATE sessions SET machine='selected' WHERE id='two'`)
+	require.NoError(t, err)
+	_, err = f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id, session_version, rules_version, marker_count) VALUES ('one', 'stale', 0, 0)`)
+	require.NoError(t, err)
+	tx, err := f.pg.BeginTx(f.ctx, nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+	_, err = tx.ExecContext(f.ctx, `SELECT 1 FROM session_frustration_counts WHERE session_id='one' FOR UPDATE`)
+	require.NoError(t, err)
+	fillCtx, stop := context.WithCancel(f.ctx)
+	done := make(chan error, 1)
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		done <- store.fillFrustrationCounts(fillCtx, []string{"one", "two"}, f.versionColumn)
+	}()
+	defer func() { stop(); <-stopped }()
+	require.Eventually(t, func() bool {
+		var count int
+		err := f.pg.QueryRowContext(f.ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE '%INSERT INTO session_frustration_counts%'`).Scan(&count)
+		return err == nil && count > 0
+	}, 10*time.Second, 10*time.Millisecond)
+	_, err = f.pg.ExecContext(f.ctx, `UPDATE messages SET content='all good' WHERE session_id='two'`)
+	require.NoError(t, err)
+	_, err = f.pg.ExecContext(f.ctx, `UPDATE sessions SET updated_at=now() WHERE id='two'`)
+	require.NoError(t, err)
+	result, err := store.GetAnalyticsSignals(f.ctx, db.AnalyticsFilter{Machine: "selected"})
+	require.NoError(t, err)
+	require.Zero(t, result.QualityHealth.Totals.FrustrationMarkerCount)
+	var count int
+	err = f.pg.QueryRowContext(f.ctx, `SELECT c.marker_count FROM session_frustration_counts c JOIN sessions s ON s.id=c.session_id WHERE c.session_id='two' AND c.session_version=`+frustrationSessionVersion("s."+f.versionColumn)).Scan(&count)
+	require.NoError(t, err)
+	require.Zero(t, count)
+	require.NoError(t, tx.Rollback())
+	require.NoError(t, <-done)
+	err = f.pg.QueryRowContext(f.ctx, `SELECT c.marker_count FROM session_frustration_counts c JOIN sessions s ON s.id=c.session_id WHERE c.session_id='two' AND c.session_version=`+frustrationSessionVersion("s."+f.versionColumn)).Scan(&count)
+	require.NoError(t, err)
+	require.Zero(t, count)
+}
