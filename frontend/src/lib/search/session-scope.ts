@@ -11,7 +11,7 @@ import type { DbMessage as Message } from "../api/generated/index.js";
 import type { BlockType } from "../stores/ui.svelte.js";
 import { hasVisibleSegments } from "../utils/content-parser.js";
 import { buildDisplayItems, type DisplayItem } from "../utils/display-items.js";
-import { isSystemMessage } from "../utils/messages.js";
+import { isSkillInvocationMessage, isSystemMessage } from "../utils/messages.js";
 import { filterDisplayItemsByTranscriptMode } from "../utils/transcript-mode.js";
 import type { SearchBlockKind } from "./block-text.js";
 
@@ -93,7 +93,22 @@ export function projectSessionScope(input: SessionScopeInput): SessionScope {
   const visibleItems = (source: DisplayItem[]): DisplayItem[] =>
     source.flatMap((item): DisplayItem[] => {
       if (item.kind === "tool-group") return [item];
-      if (item.kind === "message") return messageVisible(item.message) ? [item] : [];
+      if (item.kind === "message") {
+        const skill = item.skill;
+        if (skill !== undefined) {
+          // The skill disclosure and its prompt are filtered independently:
+          // split them back apart when only one block type is shown.
+          const skillShown = messageVisible(skill);
+          const promptShown = messageVisible(item.message);
+          if (skillShown && promptShown) return [item];
+          if (skillShown) return [{ kind: "message", message: skill, ordinals: [skill.ordinal] }];
+          if (promptShown) {
+            return [{ kind: "message", message: item.message, ordinals: [item.message.ordinal] }];
+          }
+          return [];
+        }
+        return messageVisible(item.message) ? [item] : [];
+      }
       const members = item.messages.filter(messageVisible);
       const [first] = members;
       if (first === undefined) return [];
@@ -139,7 +154,11 @@ export function projectSessionScope(input: SessionScopeInput): SessionScope {
     items,
     normalItems,
     messages,
+    // Skill expansions are never searchable, whether they render on their own
+    // row or attached to the prompt that follows them.
     allowsBlock: (message, kind) =>
-      included.has(message) && kindVisible(isVisible, message.role, kind),
+      !isSkillInvocationMessage(message) &&
+      included.has(message) &&
+      kindVisible(isVisible, message.role, kind),
   };
 }

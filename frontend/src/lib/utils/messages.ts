@@ -29,10 +29,15 @@ export const HOOK_SUBTYPES = new Set([
   "stop_hook_summary",
 ]);
 
-// Subtypes the Claude parser promotes into visible system messages
-// that the SPA renders via SystemBoundaryCard. These must pass
-// through the MessageList filter even though is_system=true.
+/** Subtype of a Pi `/skill:NAME` expansion stored as its own system row. */
+export const SKILL_INVOCATION_SUBTYPE = "skill_invocation";
+
+// Subtypes the parsers promote into visible system messages. Most render via
+// SystemBoundaryCard; skill_invocation renders as an ordinary message row
+// (see isSkillInvocationMessage). These must pass through the MessageList
+// filter even though is_system=true.
 const VISIBLE_SYSTEM_SUBTYPES = new Set([
+  SKILL_INVOCATION_SUBTYPE,
   "continuation",
   "resume",
   "interrupted",
@@ -43,6 +48,15 @@ const VISIBLE_SYSTEM_SUBTYPES = new Set([
 ]);
 
 /**
+ * Reports whether the message is a skill expansion row. It stays on role
+ * "user" but is not a prompt; the transcript renders its
+ * `[Skill: NAME]...[/Skill]` content as a collapsed skill block.
+ */
+export function isSkillInvocationMessage(m: Message): boolean {
+  return m.is_system === true && m.source_subtype === SKILL_INVOCATION_SUBTYPE;
+}
+
+/**
  * Reports whether the transcript renders this message as a system boundary
  * card instead of ordinary message content. The Claude parser keeps these
  * rows on role "user" so analytics do not count them as assistant replies,
@@ -51,6 +65,7 @@ const VISIBLE_SYSTEM_SUBTYPES = new Set([
 export function isSystemBoundaryMessage(m: Message): m is Message & { source_subtype: string } {
   if (m.is_compact_boundary) return false;
   if (!m.is_system) return false;
+  if (isSkillInvocationMessage(m)) return false;
   return !!m.source_subtype && m.source_subtype !== "compact_boundary";
 }
 

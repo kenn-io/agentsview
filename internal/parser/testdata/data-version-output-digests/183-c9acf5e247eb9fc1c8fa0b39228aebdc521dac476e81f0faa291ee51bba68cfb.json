@@ -1,0 +1,9 @@
+{
+  "version": 183,
+  "digest": "c9acf5e247eb9fc1c8fa0b39228aebdc521dac476e81f0faa291ee51bba68cfb",
+  "providers": {
+    "pi": {
+      "encoded-cwd/session-skill.jsonl": "caaaa60d9b39f3928ac5a22272a0f09395a78ef96b482e5e6833580a039ca34f"
+    }
+  }
+}

@@ -72,6 +72,7 @@ var dataVersionScopes = map[int][]parser.AgentType{
 	pricingMetaDataVersion:      {}, // Older binaries keep pricing metadata in model_pricing; nothing to reparse.
 	182:                         {parser.AgentEvener},
 	183:                         {parser.AgentAntigravity, parser.AgentAntigravityCLI},
+	184:                         {parser.AgentPi, parser.AgentOMP, parser.AgentOMO, parser.AgentStepCode, parser.AgentDirectAPI, parser.AgentPrimeAgent},
 }
 
 // firstScopedDataVersion is the oldest version that may be declared. Released
