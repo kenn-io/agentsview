@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json/v2"
 	"fmt"
 	"math"
@@ -114,7 +115,7 @@ func activityTimezoneKey(q activity.Query) string {
 		}
 		cursor = end
 	}
-	return fmt.Sprintf("%x", h.Sum(nil))
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func (s *Store) activityTableIdentity(ctx context.Context) (string, error) {
