@@ -128,17 +128,8 @@ func setupItems(agent string, force, withMCP bool) ([]agentsetup.Item, error) {
 	skill := agentsetup.Item{
 		Name:  "skill",
 		Check: checkSkills,
-		Install: func(ctx context.Context) error {
-			err := runSkillsInstall(io.Discard, []skills.Harness{harness}, home, force, skillRemote)
-			if err != nil && !withMCP && !force {
-				if _, isPathError := errors.AsType[*os.PathError](err); isPathError {
-					return err
-				}
-				if status, checkErr := checkSkills(ctx); checkErr == nil && status.State == agentsetup.StateModified {
-					return fmt.Errorf("%s: %w", status.Reason, err)
-				}
-			}
-			return err
+		Install: func(context.Context) error {
+			return runSkillsInstall(io.Discard, []skills.Harness{harness}, home, force, skillRemote)
 		},
 	}
 	if !withMCP {

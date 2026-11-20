@@ -169,7 +169,7 @@ func runSkillsInstall(
 
 	if len(refused) > 0 {
 		return fmt.Errorf(
-			"skills install: %d target(s) refused; rerun with --force to overwrite",
+			"Skill files were edited: skills install: %d target(s) refused; rerun with --force to overwrite",
 			len(refused),
 		)
 	}
