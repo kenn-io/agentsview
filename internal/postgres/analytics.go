@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -2605,18 +2604,14 @@ func (s *Store) GetAnalyticsTopSessions(
 func (s *Store) GetAnalyticsSignals(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.SignalsAnalyticsResponse, error) {
-	deadline, hasDeadline := ctx.Deadline()
-	if !hasDeadline || f.ActiveSince != "" || f.Timezone == "Local" || db.TerminationUsesTime(f.Termination) || s.keptAnalyticsVersion(ctx, "signals") == "" {
-		return keptAnalytics(ctx, s, "signals", f, s.loadAnalyticsSignals)
-	}
-	// A shared load has no caller deadline. Leave time for a direct scan.
-	waitCtx, cancel := context.WithTimeout(ctx, time.Until(deadline)/2)
-	defer cancel()
-	result, err := keptAnalytics(waitCtx, s, "signals", f, s.loadAnalyticsSignals)
-	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+	state := &s.runtimeState().frustrationFill
+	state.mu.Lock()
+	filling := state.running || len(state.pending) > 0
+	state.mu.Unlock()
+	if filling {
 		return s.loadAnalyticsSignals(ctx, f)
 	}
-	return result, err
+	return keptAnalytics(ctx, s, "signals", f, s.loadAnalyticsSignals)
 }
 
 func (s *Store) loadAnalyticsSignals(ctx context.Context, f db.AnalyticsFilter) (db.SignalsAnalyticsResponse, error) {

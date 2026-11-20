@@ -639,3 +639,110 @@ func TestFrustrationFillAfterUsageWarmFailure(t *testing.T) {
 	defer cancel()
 	require.ErrorIs(t, store.usageCache.WaitWarm(waitCtx), context.DeadlineExceeded)
 }
+
+type slowSignalRows struct {
+	storeExecutor
+	reads atomic.Int32
+}
+
+func (s *slowSignalRows) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	if strings.Contains(query, "health_score, health_grade, outcome") {
+		s.reads.Add(1)
+		if _, err := s.storeExecutor.ExecContext(ctx, `SELECT pg_sleep(2.5)`); err != nil {
+			return nil, err
+		}
+	}
+	return s.storeExecutor.QueryContext(ctx, query, args...)
+}
+
+func TestFrustrationSignalsSlowReadWithoutFill(t *testing.T) {
+	f := newFrustrationFixture(t, "agentsview")
+	store := f.open(t)
+	require.NotEmpty(t, store.keptAnalyticsVersion(f.ctx, "signals|{}"))
+	slow := &slowSignalRows{storeExecutor: store.pg}
+	store.pg = slow
+	ctx, cancel := context.WithTimeout(f.ctx, 4*time.Second)
+	defer cancel()
+	result, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+	require.NoError(t, err)
+	require.Equal(t, 2, result.QualityHealth.Totals.FrustrationMarkerCount)
+	require.EqualValues(t, 1, slow.reads.Load())
+}
+
+type startingFillProbe struct {
+	storeExecutor
+	selectStarted, selectRelease chan struct{}
+	rowsStarted, rowsRelease     chan struct{}
+	selectOnce, rowsOnce         sync.Once
+}
+
+func (p *startingFillProbe) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	var started, release chan struct{}
+	var once *sync.Once
+	switch {
+	case strings.Contains(query, "SELECT s.id FROM sessions s LEFT JOIN session_frustration_counts"):
+		started, release, once = p.selectStarted, p.selectRelease, &p.selectOnce
+	case strings.Contains(query, "health_score, health_grade, outcome"):
+		started, release, once = p.rowsStarted, p.rowsRelease, &p.rowsOnce
+	}
+	if started != nil {
+		once.Do(func() { close(started) })
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return p.storeExecutor.QueryContext(ctx, query, args...)
+}
+
+func TestFrustrationSignalsDuringFillSelection(t *testing.T) {
+	f := newFrustrationFixture(t, "agentsview")
+	store := f.open(t)
+	require.NotEmpty(t, store.keptAnalyticsVersion(f.ctx, "signals|{}"))
+	_, err := f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id,session_version,rules_version,marker_count) VALUES ('one','stale',0,0)`)
+	require.NoError(t, err)
+	gate, err := f.pg.BeginTx(f.ctx, nil)
+	require.NoError(t, err)
+	defer gate.Rollback()
+	_, err = gate.ExecContext(f.ctx, `SELECT 1 FROM session_frustration_counts WHERE session_id='one' FOR UPDATE`)
+	require.NoError(t, err)
+	probe := &startingFillProbe{storeExecutor: store.pg, selectStarted: make(chan struct{}), selectRelease: make(chan struct{}), rowsStarted: make(chan struct{}), rowsRelease: make(chan struct{})}
+	store.pg = probe
+	releaseSelection := sync.OnceFunc(func() { close(probe.selectRelease) })
+	releaseRows := sync.OnceFunc(func() { close(probe.rowsRelease) })
+	stop := store.StartFrustrationFill(f.ctx)
+	defer func() { releaseSelection(); releaseRows(); gate.Rollback(); stop() }()
+	select {
+	case <-probe.selectStarted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("fill did not start selecting sessions")
+	}
+	ctx, cancel := context.WithTimeout(f.ctx, 3*time.Second)
+	defer cancel()
+	type response struct {
+		result db.SignalsAnalyticsResponse
+		err    error
+	}
+	done := make(chan response, 1)
+	go func() {
+		result, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+		done <- response{result, err}
+	}()
+	select {
+	case <-probe.rowsStarted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("request did not start reading sessions")
+	}
+	releaseSelection()
+	state := &store.runtimeState().frustrationFill
+	require.Eventually(t, func() bool {
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		return state.pending["one"] != nil && state.pending["two"] != nil
+	}, 10*time.Second, 10*time.Millisecond)
+	releaseRows()
+	got := <-done
+	require.NoError(t, got.err)
+	require.Equal(t, 2, got.result.QualityHealth.Totals.FrustrationMarkerCount)
+}

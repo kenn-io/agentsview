@@ -26,6 +26,7 @@ type frustrationFillState struct {
 	pending   map[string]*frustrationChunk
 	chunks    []*frustrationChunk
 	completed uint64
+	running   bool
 }
 
 // release drops a finished chunk's session IDs and wakes waiters.
@@ -134,6 +135,15 @@ func (s *Store) StartFrustrationFill(ctx context.Context) func() {
 				return
 			}
 		}
+		state := &s.runtimeState().frustrationFill
+		state.mu.Lock()
+		state.running = true
+		state.mu.Unlock()
+		defer func() {
+			state.mu.Lock()
+			state.running = false
+			state.mu.Unlock()
+		}()
 		writable, err := s.canFillFrustrationCounts(ctx)
 		if err != nil {
 			log.Printf("checking frustration count fill: %v", err)
