@@ -218,7 +218,11 @@ func TestAnalyticsToolsSkillsSQLiteParity(t *testing.T) {
 		t.Setenv("TZ", "America/New_York")
 		origLocal := time.Local                      //nolint:forbidigo // "Local" analytics follow the process timezone.
 		t.Cleanup(func() { time.Local = origLocal }) //nolint:forbidigo // "Local" analytics follow the process timezone.
-		time.Local = newYork                         //nolint:forbidigo // "Local" analytics follow the process timezone.
+		// Resolve Local before switching zones to reproduce an earlier test
+		// warming the shared timezone cache while the process still uses UTC.
+		time.Local = time.UTC //nolint:forbidigo // Warm the resolver in a different process timezone.
+		db.LoadLocationOr("Local", time.UTC)
+		time.Local = newYork //nolint:forbidigo // "Local" analytics follow the process timezone.
 
 		f := march("Local")
 		wantTools, err := local.GetAnalyticsTools(t.Context(), f)

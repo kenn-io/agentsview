@@ -168,10 +168,7 @@ func runSkillsInstall(
 	}
 
 	if len(refused) > 0 {
-		return fmt.Errorf(
-			"skills install: %d target(s) refused; rerun with --force to overwrite",
-			len(refused),
-		)
+		return skillInstallRefusalError(len(refused))
 	}
 	if local {
 		cfg, err := config.LoadReadOnlyFor(config.ScopeVector)
@@ -180,6 +177,13 @@ func runSkillsInstall(
 		}
 	}
 	return nil
+}
+
+// skillInstallRefusalError distinguishes edited files from an interrupted write.
+type skillInstallRefusalError int
+
+func (n skillInstallRefusalError) Error() string {
+	return fmt.Sprintf("skills install: %d target(s) refused; rerun with --force to overwrite", n)
 }
 
 func newSkillsListCommand() *cobra.Command {

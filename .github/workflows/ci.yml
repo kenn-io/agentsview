@@ -1041,9 +1041,10 @@ jobs:
           - name: PostgreSQL core
             postgres-target: test-postgres-core-fast-ci
             cockroach: true
+            clickhouse-lane: usage
           - name: PostgreSQL raw-sync and ClickHouse
             postgres-target: test-postgres-raw-sync-ci test-postgres-core-heavy-ci
-            clickhouse: true
+            clickhouse-lane: rest
     services:
       postgres:
         image: pgvector/pgvector:pg18
@@ -1065,8 +1066,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
       clickhouse:
-        # An empty image omits this service for the PostgreSQL-only lane.
-        image: ${{ matrix.clickhouse && 'clickhouse/clickhouse-server:26.8' || '' }}
+        image: clickhouse/clickhouse-server:26.8
         env:
           CLICKHOUSE_SKIP_USER_SETUP: "1"
         ports:
@@ -1151,8 +1151,7 @@ jobs:
           TEST_PG_URL: postgres://root@127.0.0.1:26257/defaultdb?sslmode=disable
 
       - name: Run ClickHouse integration tests
-        if: matrix.clickhouse
-        run: make test-clickhouse-ci
+        run: make test-clickhouse-ci CLICKHOUSE_LANE=${{ matrix.clickhouse-lane }}
         env:
           CGO_ENABLED: "1"
           TEST_CLICKHOUSE_URL: clickhouse://localhost:19000/default
@@ -1203,7 +1202,7 @@ jobs:
         if: failure() || github.run_attempt > 1 || hashFiles('gotestsum/clickhouse-reruns.txt') != ''
         uses: actions/upload-artifact@v7.0.2
         with:
-          name: gotestsum-clickhouse-attempt-${{ github.run_attempt }}
+          name: gotestsum-clickhouse-${{ matrix.name }}-attempt-${{ github.run_attempt }}
           path: gotestsum/clickhouse.json
           retention-days: 14
           if-no-files-found: ignore
@@ -1212,7 +1211,7 @@ jobs:
         if: failure() || github.run_attempt > 1 || hashFiles('gotestsum/clickhouse-service-reruns.txt') != ''
         uses: actions/upload-artifact@v7.0.2
         with:
-          name: gotestsum-clickhouse-service-attempt-${{ github.run_attempt }}
+          name: gotestsum-clickhouse-service-${{ matrix.name }}-attempt-${{ github.run_attempt }}
           path: gotestsum/clickhouse-service.json
           retention-days: 14
           if-no-files-found: ignore
