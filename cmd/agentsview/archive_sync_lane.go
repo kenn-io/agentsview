@@ -19,22 +19,23 @@ import (
 // archivePushWatch runs a push-watch process. The same loop serves both
 // archive owners. When this process owns the SQLite archive, engine is set:
 // watcher batches and periodic syncs write the archive on their own
-// goroutines, independently of publication. When the daemon owns
-// the archive, engine is nil: notifications from the daemon trigger copies of
-// committed archive changes. Startup, periodic and shutdown pushes still sync
-// sources before copying the archive.
+// goroutines, and each push copies whatever the archive holds when it starts,
+// so a push that takes an hour never delays ingestion. When the daemon owns
+// the archive, engine is nil: the daemon syncs before each push, and watcher
+// batches travel with the push requests.
 type archivePushWatch struct {
 	hooks  *archivePushWatchHooks
 	appCfg config.Config
 	engine *syncpkg.Engine
-	// database is the archive for engine. Set both fields together.
+	// database is the archive engine writes. Set it with engine.
 	database           *db.DB
 	label              string
 	debounce, interval time.Duration
 	full               bool
-	push               func(ctx context.Context, reason pushReason, full bool, batch *syncpkg.WatchBatch) error
-	startNotifications func(context.Context, func()) (stop, open func())
-	wake               <-chan struct{}
+	// push runs one push. batch is the watcher scope a daemon owner syncs
+	// before it pushes; a local owner has already synced it.
+	push func(ctx context.Context, reason pushReason, full bool, batch *syncpkg.WatchBatch) error
+	wake <-chan struct{}
 }
 
 func (w archivePushWatch) run(ctx context.Context) error {
@@ -67,16 +68,9 @@ func (w archivePushWatch) run(ctx context.Context) error {
 		options = archivePushWatchWatcherOptions(lane.notifyCoverageDegraded, poller)
 		unwatchedCoverage = fmt.Sprintf("polling every %s", unwatchedPollInterval)
 	}
-	var stopWatcher, openDispatch func()
-	var unwatchedDirs []string
-	var flushPending func(context.Context) error
-	if w.engine == nil {
-		stopWatcher, openDispatch = w.startNotifications(ctx, loop.NotifyArchiveChanged)
-	} else {
-		stopWatcher, openDispatch, unwatchedDirs, flushPending = startArchivePushWatcher(
-			w.hooks, w.appCfg, w.engine, callback, options,
-		)
-	}
+	stopWatcher, openDispatch, unwatchedDirs, flushPending := startArchivePushWatcher(
+		w.hooks, w.appCfg, w.engine, callback, options,
+	)
 	stopWatcher = stdsync.OnceFunc(stopWatcher)
 	defer stopWatcher()
 	// Stop the watcher as soon as shutdown starts. A watcher batch can hold

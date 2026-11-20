@@ -116,7 +116,6 @@ func (v *vectorReconcile) options(reason pushReason, full bool) storage.PushOpti
 		FullVectors:                    v.fullPending,
 		FullVectorSessions:             slices.Sorted(maps.Keys(v.repairSessions)),
 		ScopeVectorsToChangedSessions:  scopedVectorPush(reason, full, v.needed || repairPending),
-		SkipIfUnchanged:                reason == reasonChange && !full,
 		LastReconciledVectorGeneration: v.lastGeneration,
 	}
 }
@@ -170,7 +169,7 @@ func (v *vectorReconcile) push(
 func scopedVectorPush(
 	reason pushReason, full, reconcileNeeded bool,
 ) bool {
-	return (reason == reasonChange || reason == reasonArchiveChange) && !full && !reconcileNeeded
+	return reason == reasonChange && !full && !reconcileNeeded
 }
 
 // nextVectorReconcile folds the post-push update of the reconcile bit and

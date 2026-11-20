@@ -487,7 +487,8 @@ func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage,
 		matchPosSQL = "0"
 	}
 
-	// innerWhere selects the message matches used by both search branches.
+	// innerWhere is used in the ROW_NUMBER inner subquery and the NOT IN
+	// subquery for the name branch.
 	matchSQL := "messages_fts.rendered MATCH ?"
 	if hasFTSColumnFilter(f.Query) {
 		matchSQL = "messages_fts MATCH ?"
@@ -551,13 +552,15 @@ func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage,
 		}
 	}
 
-	args := ftsArgs
-	withSQL := `WITH best_rows AS MATERIALIZED (SELECT session_id, best_rowid, best_ordinal, best_rank
+	var args []any
+	withSQL := "WITH "
+	bestSQL := `SELECT session_id, best_rowid, best_ordinal, best_rank, best_query
 				FROM (
 					SELECT m2.session_id,
 						messages_fts.rowid AS best_rowid,
 						m2.ordinal AS best_ordinal,
 						rank AS best_rank,
+						? AS best_query,
 						ROW_NUMBER() OVER (
 							PARTITION BY m2.session_id
 							ORDER BY rank ASC, m2.ordinal ASC,
@@ -568,14 +571,21 @@ func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage,
 					JOIN sessions s2 ON m2.session_id = s2.id
 					WHERE ` + innerWhereSQL + `
 				)
-				WHERE rn = 1), `
-	bestSQL := "SELECT session_id, best_rowid, best_ordinal, best_rank, ? AS best_query FROM best_rows"
-	bestArgs := []any{plainQuery}
-	ftsSessionsSQL := "SELECT session_id FROM best_rows"
-	var ftsSessionsArgs []any
+				WHERE rn = 1`
+	ftsSessionsSQL := `SELECT m2.session_id
+					FROM messages_fts
+					JOIN messages m2 ON messages_fts.rowid = m2.id
+					JOIN sessions s2 ON m2.session_id = s2.id
+					WHERE ` + innerWhereSQL
+	bestArgs := append([]any{plainQuery}, ftsArgs...)
+	ftsSessionsArgs := ftsArgs
 	includeNames := true
 	if walk != nil {
 		withSQL, args = walk.bestRowsSQL()
+		bestSQL = "SELECT session_id, best_rowid, best_ordinal, best_rank, ? AS best_query FROM best_rows"
+		bestArgs = []any{plainQuery}
+		ftsSessionsSQL = "SELECT session_id FROM best_rows"
+		ftsSessionsArgs = nil
 		// Name rows rank after every message and image match.
 		includeNames = walk.complete
 	}

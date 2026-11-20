@@ -181,18 +181,16 @@ func TestSearchContent_ActiveFilterHTTPCompatibility(t *testing.T) {
 func TestSearchContent_HintsApplyLegacyActivityFilter(t *testing.T) {
 	for _, response := range []string{"active", "mixed", "idle", "active first page"} {
 		t.Run(response, func(t *testing.T) {
-			// The idle case shows automated sessions, so its hint search serves
-			// one-shot sessions alone and keeps the caller's limit of one.
-			limit, hintLimit, includeAutomated := 10, "500", false
+			limit := 10
 			if response == "idle" {
-				limit, hintLimit, includeAutomated = 1, "1", true
+				limit = 1
 			}
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				if r.URL.Path == "/api/v1/search/content" {
 					assert.Equal(t, "2024-06-15T11:50:00Z", r.URL.Query().Get("exclude_active_since"))
+					assert.Equal(t, strconv.Itoa(limit), r.URL.Query().Get("limit"))
 					if r.URL.Query().Get("include_one_shot") != "true" {
-						assert.Equal(t, strconv.Itoa(limit), r.URL.Query().Get("limit"))
 						if response == "active first page" {
 							_, _ = w.Write([]byte(`{"matches":[{"session_id":"active"}]}`))
 						} else {
@@ -200,9 +198,6 @@ func TestSearchContent_HintsApplyLegacyActivityFilter(t *testing.T) {
 						}
 						return
 					}
-					// A hint search shared between one-shot and automated
-					// sessions asks for the widest page.
-					assert.Equal(t, hintLimit, r.URL.Query().Get("limit"))
 					switch response {
 					case "active":
 						_, _ = w.Write([]byte(`{"matches":[{"session_id":"active"}]}`))
@@ -211,10 +206,6 @@ func TestSearchContent_HintsApplyLegacyActivityFilter(t *testing.T) {
 					default:
 						_, _ = w.Write([]byte(`{"matches":[{"session_id":"active"},{"session_id":"idle"}]}`))
 					}
-					return
-				}
-				if r.URL.Path == "/api/v1/sessions" {
-					_, _ = w.Write([]byte(`{"sessions":[{"id":"active","user_message_count":1},{"id":"idle","user_message_count":1}]}`))
 					return
 				}
 				id := strings.TrimPrefix(r.URL.Path, "/api/v1/sessions/")
@@ -226,7 +217,7 @@ func TestSearchContent_HintsApplyLegacyActivityFilter(t *testing.T) {
 			}))
 			defer srv.Close()
 			ts := &toolset{svc: servicehttp.NewHTTPBackend(srv.URL, "", false, ""), now: func() time.Time { return fixedNow }}
-			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "marker", Limit: limit, IncludeAutomated: includeAutomated})
+			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "marker", Limit: limit})
 			require.NoError(t, err)
 			assert.Empty(t, out.Matches)
 			if response == "active first page" {

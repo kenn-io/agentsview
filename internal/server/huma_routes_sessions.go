@@ -142,7 +142,7 @@ func parseSessionIDs(raw string) ([]string, error) {
 		service.SessionIDsRequireCSVEncoding(records[0]) {
 		members = records[0]
 	}
-	if len(members) > service.MaxListSessionIDs {
+	if len(members) > 100 {
 		return nil, apiError(http.StatusBadRequest, "ids must contain 1 to 100 non-empty session IDs")
 	}
 	ids := make([]string, 0, len(members))

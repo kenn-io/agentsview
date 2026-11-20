@@ -540,7 +540,6 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentHermes,
 		AgentAugureDesktop,
 		AgentGrok,
-		AgentFactory,
 		AgentGoose,
 		AgentForge,
 		AgentDevin,

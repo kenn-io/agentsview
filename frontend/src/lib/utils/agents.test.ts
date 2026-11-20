@@ -52,7 +52,6 @@ describe("KNOWN_AGENTS", () => {
       "qclaw",
       "iflow",
       "junie",
-      "factory",
       "kimi",
       "kimi-work",
       "claude-ai",

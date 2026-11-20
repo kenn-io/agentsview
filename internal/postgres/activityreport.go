@@ -156,9 +156,9 @@ func (s *Store) BuildActivityReportArtifacts(
 		if err != nil {
 			return activity.CandidateArtifacts{}, err
 		}
-		if version != "" {
+		if version != "" && !s.activityReportRestricted(ctx) {
 			if q.Timezone != "Local" && q.Loc != nil {
-				version += "|" + db.TrendsTimezoneRangeKey(q.Loc, q.RangeStart, q.RangeEnd)
+				version += "|" + activityTimezoneKey(q.Loc, q.RangeStart, q.RangeEnd)
 			}
 			selection = kept.Selection(f, q)
 			identity, unavailable = s.activityReportIdentity(ctx, selection, version, q)
@@ -169,17 +169,41 @@ func (s *Store) BuildActivityReportArtifacts(
 			if err != nil {
 				return activity.CandidateArtifacts{}, err
 			}
-			if hit {
+			if hit && !s.activityReportRestricted(ctx) {
 				activity.ReportProgress(onProgress, report.Done)
 				return report.Artifacts, nil
 			}
-			if revision == 0 {
+			if revision == 0 || hit {
 				selection = ""
 			}
 		}
 	}
 
-	sessions, ids, err := s.activityReportSessions(
+	return s.buildActivityReport(ctx, f, q, onProgress, rangeStartUTC, rangeEndUTC, lowerBound, upperBound, selection, version, identity, unavailable, revision, checkpoint, pricing, pricingDigest)
+}
+
+func (s *Store) buildActivityReport(ctx context.Context, f db.AnalyticsFilter, q activity.Query, onProgress activity.ProgressFunc, rangeStartUTC, rangeEndUTC, lowerBound, upperBound, selection, version, identity string, unavailable bool, revision int64, checkpoint string, pricing []export.EffectivePricingRow, pricingDigest string) (activity.CandidateArtifacts, error) {
+	reader := s
+	var tx *sql.Tx
+	if selection != "" && s.readTx == nil {
+		// Keep the journal and report reads in one snapshot, even if a restore
+		// returns the live journal to its earlier checkpoint during the build.
+		var err error
+		tx, err = s.beginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+		if err != nil {
+			return activity.CandidateArtifacts{}, err
+		}
+		defer tx.Rollback()
+		reader = s.readView(tx)
+		revision, _, checkpoint, _, err = reader.loadUsageChangesWithHistory(ctx, revision)
+		if err != nil {
+			return activity.CandidateArtifacts{}, err
+		}
+		if revision == 0 || reader.activityReportRestricted(ctx) {
+			selection = ""
+		}
+	}
+	sessions, ids, err := reader.activityReportSessions(
 		ctx, f, rangeStartUTC, rangeEndUTC, nil)
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
@@ -213,7 +237,7 @@ func (s *Store) BuildActivityReportArtifacts(
 		inputs:        inputs,
 		pricing:       pricing,
 		pricingDigest: pricingDigest,
-		Store:         s,
+		Store:         reader,
 		lowerBound:    lowerBound, upperBound: upperBound,
 	}
 	var reportBackend activity.ReportBackend = backend
@@ -222,6 +246,11 @@ func (s *Store) BuildActivityReportArtifacts(
 	}
 	artifacts, done, err := activity.BuildReportArtifacts(
 		ctx, reportBackend, sessions, ids, q, onProgress, "aggregating pg activity report")
+	if err == nil && tx != nil {
+		if err := tx.Commit(); err != nil {
+			return activity.CandidateArtifacts{}, err
+		}
+	}
 	if err == nil && ctx.Err() == nil && inputs != nil {
 		for id := range inputs.sessions {
 			if !inputs.candidates[id] {
@@ -242,7 +271,7 @@ func (s *Store) BuildActivityReportArtifacts(
 			labels: activity.ProjectLabels(sessions), identity: identity, identityUnavailable: unavailable,
 		}
 		through, _, current, _, checkErr := s.loadUsageChangesWithHistory(ctx, revision)
-		if checkErr == nil && through == revision && current == checkpoint {
+		if checkErr == nil && through == revision && current == checkpoint && !s.activityReportRestricted(ctx) {
 			s.runtimeState().activityKept.Put(selection, version, []pgActivityKept{entry})
 			if identity != "" {
 				s.saveActivityReport(selection, version, entry)

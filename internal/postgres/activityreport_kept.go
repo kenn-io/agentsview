@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -61,6 +62,12 @@ func (s *Store) saveActivityReport(selection, version string, entry pgActivityKe
 	}
 }
 
+func (s *Store) activityReportRestricted(ctx context.Context) bool {
+	var restricted bool
+	err := s.pg.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND c.relname IN ('sessions', 'messages', 'tool_result_events', 'usage_events', 'cursor_usage_events', 'sync_metadata', 'usage_session_changes', 'model_pricing', 'model_pricing_bands', 'genai_pricing', 'pricing_meta', 'source_archives', 'source_project_identity_observations') AND c.relkind IN ('r', 'p', 'v', 'm', 'f') AND (c.relkind IN ('v', 'm', 'f') OR row_security_active(c.oid) OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attnum > 0 AND NOT a.attisdropped AND NOT has_column_privilege(c.oid, a.attnum, 'SELECT'))))`).Scan(&restricted)
+	return err != nil || restricted
+}
+
 func (s *Store) activityReportIdentity(ctx context.Context, selection, version string, q activity.Query) (identity string, unavailable bool) {
 	memo := &s.runtimeState().activityKept
 	entries, ok := memo.Get(selection, version)
@@ -74,12 +81,7 @@ func (s *Store) activityReportIdentity(ctx context.Context, selection, version s
 	if q.RangeEnd.After(time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, q.Loc)) {
 		return identity, unavailable
 	}
-	var restricted bool
-	err := s.pg.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND c.relkind IN ('r', 'p') AND (row_security_active(c.oid) OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attnum > 0 AND NOT a.attisdropped AND NOT has_column_privilege(c.oid, a.attnum, 'SELECT'))))`).Scan(&restricted)
-	if err != nil || restricted {
-		return "", true
-	}
-	identity, err = s.activitySourceIdentity(ctx, "")
+	identity, err := s.activitySourceIdentity(ctx, "")
 	unavailable = errors.Is(err, db.ErrUsageSourceUnavailable)
 	if !ok && identity != "" {
 		if entry, found := s.loadActivityReport(selection, version, identity); found {
@@ -87,6 +89,18 @@ func (s *Store) activityReportIdentity(ctx context.Context, selection, version s
 		}
 	}
 	return identity, unavailable
+}
+
+func activityTimezoneKey(location *time.Location, start, end time.Time) string {
+	digest := sha256.New()
+	fmt.Fprint(digest, db.TrendsTimezoneRangeKey(location, start, end))
+	for _, spec := range []activity.BucketSpec{{Unit: activity.BucketDay, NominalSeconds: 86400}, {Unit: activity.BucketWeek, NominalSeconds: 604800}} {
+		windows, _ := activity.BuildBuckets(start, end, spec, location)
+		for _, window := range windows {
+			fmt.Fprintf(digest, "|%d:%d", window.Start.Unix(), window.End.Unix())
+		}
+	}
+	return fmt.Sprintf("%x", digest.Sum(nil))
 }
 
 func (s *Store) activityKeptVersion(ctx context.Context, pricingDigest string) (string, error) {

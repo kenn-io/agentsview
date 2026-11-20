@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/config"
@@ -51,10 +52,22 @@ func TestPGSavedActivityReportRespectsChangedRowPolicy(t *testing.T) {
 	first := openPGActivityInputStore(t, target, syncer.schema, directory)
 	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
 	require.Len(t, pgKeptBuild(t, first, f, q, true).Sessions, 1)
+	_, err = syncer.pg.ExecContext(ctx, `ALTER TABLE sessions ENABLE ROW LEVEL SECURITY; ALTER POLICY activity_reader ON sessions USING (false)`)
+	require.NoError(t, err)
+	hidden, err := first.BuildActivityReportArtifacts(ctx, f, q, nil)
+	require.NoError(t, err)
+	assert.Empty(t, hidden.Sessions)
+	_, err = syncer.pg.ExecContext(ctx, `ALTER TABLE sessions DISABLE ROW LEVEL SECURITY; ALTER POLICY activity_reader ON sessions USING (true)`)
+	require.NoError(t, err)
 	require.NoError(t, first.Close())
 	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
 	require.NoError(t, err)
 	require.Len(t, files, 1)
+	_, err = syncer.pg.ExecContext(ctx, `CREATE TABLE unrelated_private (value text)`)
+	require.NoError(t, err)
+	withUnrelated := openPGActivityInputStore(t, target, syncer.schema, directory)
+	require.Len(t, pgKeptBuild(t, withUnrelated, f, q, false).Sessions, 1)
+	require.NoError(t, withUnrelated.Close())
 	var allowed string
 	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT string_agg(quote_ident(column_name), ',') FROM information_schema.columns WHERE table_schema=$1 AND table_name='sessions' AND column_name <> 'agent'`, syncer.schema).Scan(&allowed))
 	_, err = syncer.pg.ExecContext(ctx, `REVOKE SELECT (`+columns+`) ON sessions FROM "`+role+`"; GRANT SELECT (`+allowed+`) ON sessions TO "`+role+`"`)
@@ -74,6 +87,14 @@ func TestPGSavedActivityReportRespectsChangedRowPolicy(t *testing.T) {
 	require.Zero(t, visible)
 	got := pgKeptBuild(t, restarted, f, q, true)
 	require.Empty(t, got.Sessions)
+	require.NoError(t, restarted.Close())
+	_, err = syncer.pg.ExecContext(ctx, `ALTER TABLE sessions DISABLE ROW LEVEL SECURITY; ALTER TABLE sessions RENAME TO sessions_base; CREATE VIEW sessions AS SELECT * FROM sessions_base WHERE false; GRANT SELECT ON sessions TO "`+role+`"`)
+	require.NoError(t, err)
+	view := openPGActivityInputStore(t, target, syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, view.Close()) })
+	hidden, err = view.BuildActivityReportArtifacts(ctx, f, q, nil)
+	require.NoError(t, err)
+	require.Empty(t, hidden.Sessions)
 }
 
 func TestPGSavedActivityReportNamedZoneRuleChange(t *testing.T) {
@@ -180,4 +201,36 @@ func TestPGSavedActivityReportConfiguredAlias(t *testing.T) {
 		require.Equal(t, money.MustParseDollars(want), got.Report.Totals.Cost)
 		require.NoError(t, store.Close())
 	}
+}
+
+func TestPGActivityTimezoneBoundaryBeforeRange(t *testing.T) {
+	start := time.Date(1969, 6, 14, 12, 0, 0, 0, time.UTC)
+	end := start.AddDate(0, 0, 9)
+	transition := time.Date(1969, 6, 14, 6, 0, 0, 0, time.UTC)
+	var keys []string
+	var windows [][]activity.BucketWindow
+	for _, tc := range []struct {
+		offset     int32
+		transition time.Time
+	}{{0, transition}, {-12 * 60 * 60, transition}, {-12 * 60 * 60, transition.AddDate(0, 0, -14)}} {
+		zone := make([]byte, 44+4+1+12+4)
+		copy(zone, "TZif")
+		binary.BigEndian.PutUint32(zone[32:36], 1)
+		binary.BigEndian.PutUint32(zone[36:40], 2)
+		binary.BigEndian.PutUint32(zone[40:44], 4)
+		binary.BigEndian.PutUint32(zone[44:48], uint32(int32(tc.transition.Unix())))
+		zone[48] = 1
+		binary.BigEndian.PutUint32(zone[49:53], uint32(tc.offset))
+		copy(zone[61:], "TST\x00")
+		loc, err := time.LoadLocationFromTZData("Test/Zone", zone)
+		require.NoError(t, err)
+		buckets, err := activity.BuildBuckets(start, end, activity.BucketSpec{Unit: activity.BucketWeek, NominalSeconds: 604800}, loc)
+		require.NoError(t, err)
+		windows = append(windows, buckets)
+		keys = append(keys, activityTimezoneKey(loc, start, end))
+	}
+	require.NotEqual(t, windows[0], windows[1])
+	require.NotEqual(t, keys[0], keys[1])
+	require.Equal(t, windows[0], windows[2])
+	require.Equal(t, keys[0], keys[2])
 }

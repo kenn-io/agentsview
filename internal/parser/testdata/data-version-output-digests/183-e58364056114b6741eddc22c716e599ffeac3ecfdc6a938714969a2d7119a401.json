@@ -1,9 +1,0 @@
-{
-  "version": 183,
-  "digest": "e58364056114b6741eddc22c716e599ffeac3ecfdc6a938714969a2d7119a401",
-  "providers": {
-    "factory": {
-      "-home-dev-workspace-demo-app/0f9c1c2e-6f7d-4b3a-9c2e-1a2b3c4d5e6f.jsonl": "bf76bdc7967b3a46d47dfeeb57a3ad8cdb43fb9e86797a83d2d0ec5b6c64acfc"
-    }
-  }
-}

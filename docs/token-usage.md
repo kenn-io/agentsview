@@ -36,8 +36,8 @@ coding yesterday?" — across multiple coding agents from one archive.
     Studio Copilot**, **Mistral Vibe**, **gptme**, **Amp**, **Junie CLI**, **OMO**,
     **StepCode**, and **Direct API** usage files. Coverage also includes **Cline
     CLI**, **Tencent CodeBuddy CN**, **Augure Code**, **Open Interpreter**,
-    **Augure Desktop 3 beta**, **Charm Crush**, **fx**, **Muse Code**, and
-    **Factory Droid**, and reads **DeepSeek Harness** formats through version 3.
+    **Augure Desktop 3 beta**, **Charm Crush**, **fx**, and **Muse Code**, and
+    reads **DeepSeek Harness** formats through version 3.
 
     Command Code forks count only usage produced after the fork.
 
@@ -51,19 +51,6 @@ Crush contributes recorded session totals and cost, with no per-message token or
 cache breakdown. Its aggregate usage is attributed to the most recent assistant
 model, so it does not provide a model-by-model account of a session that
 switched models.
-
-Factory Droid records one running token total per session, with no per-message
-breakdown, in the `<id>.settings.json` file beside each transcript. AgentsView
-reports it as one usage entry dated at the session's last activity and prices
-it from the pricing catalog; Factory credits are not used. Subagent totals are
-added to the session that started them and priced as that session's model,
-since Droid does not record which model a subagent used. A subagent session
-that has its own transcript shows its messages but no usage, because its parent
-already counts it. Factory sessions report total output tokens but no peak
-context size, since Droid does not record per-request usage. A
-bring-your-own-key model is recorded under its Droid name, such as
-`custom:my-model-0`, which the catalog cannot price until you map it with
-`price_as` in [custom model pricing](#custom-model-pricing).
 
 gptme messages use provider-reported billed costs when available, including a
 reported zero. Messages with estimated costs still use catalog pricing.
@@ -1440,5 +1427,5 @@ in a small `model_pricing` table that's refreshed on each `usage` invocation.
 Usage data stays on your machine unless you enable a sharing feature. The usage
 command's only outbound requests are the LiteLLM and OpenRouter pricing fetches,
 which you can disable with `--offline`. See
-[Privacy and Telemetry](/docs/configuration/#privacy-and-telemetry) for the full
+[Privacy](/docs/configuration/#privacy) for the full
 picture.

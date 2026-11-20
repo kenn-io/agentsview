@@ -171,7 +171,6 @@ type daemonPushInput struct {
 
 type daemonPushRequest struct {
 	Full            bool     `json:"full"`
-	NoSourceSync    bool     `json:"no_source_sync,omitzero" doc:"Copy committed archive changes without scanning source files. Full pushes and stale archives still synchronise sources."`
 	Projects        []string `json:"projects,omitempty"`
 	ExcludeProjects []string `json:"exclude_projects,omitempty"`
 	// Replica is the remote target a replica push writes to. Omitted, the
@@ -276,19 +275,9 @@ func (s *Server) replicaPushTarget(
 	return target.Target, nil
 }
 
-func (req daemonPushRequest) validateArchiveCopyScope() error {
-	if req.NoSourceSync && (req.WatchBatch != nil || req.WatchRecovery != nil) {
-		return errors.New("no_source_sync cannot be combined with a watch scope")
-	}
-	return nil
-}
-
 func validatePushWatchScope(
 	ctx context.Context, req daemonPushRequest, cfg config.Config,
 ) error {
-	if err := req.validateArchiveCopyScope(); err != nil {
-		return err
-	}
 	if req.WatchBatch == nil {
 		if req.WatchRecovery != nil {
 			return errors.New("watch recovery requires a watch batch")
@@ -441,13 +430,6 @@ func (p *pushTurn) take(ctx context.Context, onWait func()) (func(), error) {
 	}
 }
 
-type pushSyncScope struct {
-	full         bool
-	noSourceSync bool
-	batch        *syncpkg.WatchBatch
-	recovery     *syncpkg.WatchRecoveryScope
-}
-
 // syncThenRunForPush brings the local archive current and then runs the push
 // work. The push runs after the sync, not under its lock: watcher and periodic
 // syncs keep writing the archive while a long push copies it, and each push
@@ -467,15 +449,16 @@ type pushSyncScope struct {
 // resync runner wired they route the rebuild through the worker (matching
 // /api/v1/resync and the pre-session-sync resync) instead of running an
 // in-process resync in the long-lived daemon. A validated batch on a current
-// archive applies only its bounded changed scope. Archive notifications copy
-// committed rows without scanning sources. Other requests without a batch
+// archive applies only its bounded changed scope. Requests without a batch
 // run a normal sync. Without a runner (tests, remote-mode-less setups), full
 // and stale cases keep the in-process resync.
 func (s *Server) syncThenRunForPush(
 	ctx context.Context,
 	engine *syncpkg.Engine,
 	local *db.DB,
-	scope pushSyncScope,
+	full bool,
+	watchBatch *syncpkg.WatchBatch,
+	watchRecovery *syncpkg.WatchRecoveryScope,
 	onPhase func(phase string),
 	work func(forceFull bool) error,
 ) error {
@@ -492,7 +475,7 @@ func (s *Server) syncThenRunForPush(
 		return storage.PushNotStartedError{Err: err}
 	}
 	forceFull, incomplete, err := s.syncForPush(
-		ctx, engine, local, scope,
+		ctx, engine, local, full, watchBatch, watchRecovery,
 	)
 	rebuilt, idErr := archiveRebuiltSince(ctx, local, startDatabaseID)
 	if idErr != nil {
@@ -570,23 +553,22 @@ func (s *Server) syncForPush(
 	ctx context.Context,
 	engine *syncpkg.Engine,
 	local *db.DB,
-	scope pushSyncScope,
+	full bool,
+	watchBatch *syncpkg.WatchBatch,
+	watchRecovery *syncpkg.WatchRecoveryScope,
 ) (forceFull bool, incomplete, err error) {
-	if scope.noSourceSync && !scope.full && !local.NeedsResync() {
-		return false, nil, nil
-	}
-	if scope.batch != nil && !scope.full && !local.NeedsResync() {
+	if watchBatch != nil && !full && !local.NeedsResync() {
 		stats, err := engine.SyncWatchBatchThenRun(
-			ctx, *scope.batch, scope.recovery, func() error { return nil },
+			ctx, *watchBatch, watchRecovery, func() error { return nil },
 		)
 		if err == nil {
 			err = requireProcessingComplete(stats)
 		}
 		return false, nil, err
 	}
-	if s.localResyncRunner == nil || (!scope.full && !local.NeedsResync()) {
-		currentArchive := !scope.full && !local.NeedsResync()
-		stats, err := engine.SyncThenRun(ctx, scope.full, nil,
+	if s.localResyncRunner == nil || (!full && !local.NeedsResync()) {
+		currentArchive := !full && !local.NeedsResync()
+		stats, err := engine.SyncThenRun(ctx, full, nil,
 			func(f bool) error {
 				forceFull = f
 				return nil
@@ -719,29 +701,26 @@ func (s *Server) humaReplicaPush(
 			}
 			defer session.Close()
 			var result storage.PushResult
-			err := s.syncThenRunForPush(pushCtx, engine, local, pushSyncScope{
-				full: body.Full, noSourceSync: body.NoSourceSync,
-				batch: body.WatchBatch, recovery: body.WatchRecovery,
-			}, reportPhase, func(forceFull bool) error {
-				var err error
-				result, err = session.Push(pushCtx, storage.PushOptions{
-					Full:             forceFull,
-					RewriteUnchanged: body.Full,
-					// Only a push for a change the watcher saw carries a
-					// batch or a copy-only request; its startup and
-					// interval pushes do not.
-					SkipIfUnchanged: body.WatchBatch != nil || body.NoSourceSync,
-					ScopeVectorsToChangedSessions: body.
-						ScopeVectorsToChangedSessions,
-					LastReconciledVectorGeneration: body.
-						LastReconciledVectorGeneration,
-				}, onProgress)
-				// The replica records a full push only once the copy starts.
-				if err != nil && stage != archivepush.StagePush {
-					return storage.PushNotStartedError{Err: err}
-				}
-				return err
-			})
+			err := s.syncThenRunForPush(
+				pushCtx, engine, local, body.Full, body.WatchBatch, body.WatchRecovery,
+				reportPhase,
+				func(forceFull bool) error {
+					var err error
+					result, err = session.Push(pushCtx, storage.PushOptions{
+						Full:             forceFull,
+						RewriteUnchanged: body.Full,
+						ScopeVectorsToChangedSessions: body.
+							ScopeVectorsToChangedSessions,
+						LastReconciledVectorGeneration: body.
+							LastReconciledVectorGeneration,
+					}, onProgress)
+					// The replica records a full push only once the copy starts.
+					if err != nil && stage != archivepush.StagePush {
+						return storage.PushNotStartedError{Err: err}
+					}
+					return err
+				},
+			)
 			return result, err
 		})
 	}}, nil

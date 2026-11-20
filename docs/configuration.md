@@ -335,7 +335,7 @@ Set it to `"0"` to keep syncing while idle. Restart the server after changing it
 | `zoom_level`                        | Default interface zoom for clients without a local preference: `67`, `75`, `80`, `90`, `100`, `110`, `120`, `125`, `130`, `150`, `175`, or `200`. Defaults to `100` when omitted. Restart the daemon after manual edits                                                                                                                                                                                                                                                          |
 | `disabled_agents`                   | Session providers to exclude from local filesystem scanning — see [Disabling Session Providers](#disabling-session-providers)                                                                                                                                                                                                                                                                                                                                                    |
 | `[proxy]`                           | Managed proxy configuration table — see [Remote Access](/docs/remote-access/)                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `disable_update_check`              | Disable the automatic update check (see [Privacy](#privacy-and-telemetry))                                                                                                                                                                                                                                                                                                                                                                                         |
+| `disable_update_check`              | Disable the automatic update check (see [Privacy](#privacy))                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `scan_protected_paths`              | Allow Git discovery inside macOS privacy-protected folders and volumes under `/Volumes`, accepting one consent prompt per location — see [macOS Protected Folders](#macos-protected-folders)                                                                                                                                                                                                                                                                                     |
 | `[pg]`                              | PostgreSQL sync configuration — see [PostgreSQL Sync](/docs/pg-sync/)                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `[clickhouse]`                      | ClickHouse sync configuration — see [ClickHouse Sync](/docs/clickhouse-sync/)                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -698,7 +698,6 @@ keeps its default directories.
 | Cursor IDE            | (platform-specific, see below)                                                                                                                                   | Shared VS Code-style `globalStorage/state.vscdb` database, one session per Composer                                                                           |
 | DeepSeek TUI          | `~/.codewhale/sessions/` and `~/.deepseek/sessions/`                                                                                                             | JSON per session                                                                                                                                              |
 | DeepSeek Harness      | `~/.dsh/sessions/` (or `$DSH_HOME/sessions/`)                                                                                                                    | Plain or multi-frame zstd JSONL per session                                                                                                                   |
-| Factory Droid         | `~/.factory/sessions/`                                                                                                                                           | JSONL per session plus a `<id>.settings.json` token-usage sidecar                                                                                             |
 | Forge                 | `~/.forge/`                                                                                                                                                      | SQLite database (`.forge.db`)                                                                                                                                 |
 | Gemini CLI            | `~/.gemini/`                                                                                                                                                     | JSONL in `tmp/` subdirectory                                                                                                                                  |
 | Goose                 | (platform-specific, see below)                                                                                                                                   | SQLite `sessions.db` with transcripts, tool activity, relationships, usage, and recorded costs                                                                |
@@ -1270,7 +1269,6 @@ export CORTEX_DIR=~/custom/cortex
 export CURSOR_PROJECTS_DIR=~/custom/cursor
 export DEEPSEEK_TUI_SESSIONS_DIR=~/custom/deepseek/sessions
 export DEEPSEEK_HARNESS_SESSIONS_DIR=~/custom/deepseek-harness/sessions
-export FACTORY_DIR=~/custom/factory/sessions
 export FORGE_DIR=~/custom/forge
 export GEMINI_DIR=~/custom/gemini
 export GOOSE_PATH_ROOT=~/custom/goose
@@ -1682,17 +1680,11 @@ source trees out of remote exports.
 A change saved on the Settings page applies to the running daemon right away:
 file watching and polling switch to the new provider set. Sessions already on
 disk for a newly enabled provider arrive with the next sync. The daemon reads
-edits made directly to `config.toml` at its next start. Previously archived
-sessions from a disabled provider remain available and exportable, including
-when the archive is rebuilt. The setting does not disable that provider as a
-Recall execution backend.
-
-Daemon-backed `pg push --watch` and `clickhouse push --watch` processes follow
-committed archive changes from the daemon. Only the daemon discovers and watches
-source roots, so provider changes do not require restarting these push watchers.
-Startup, lifecycle, periodic catch-up and shutdown pushes still sync sources
-through the archive owner. If a push watcher owns the archive without a daemon,
-restart that process after changing this setting.
+edits made directly to `config.toml` at its next start. Restart any separate
+`pg push --watch` or `clickhouse push --watch` process after changing the
+setting. Previously archived sessions from a disabled
+provider remain available and exportable, including during archive rebuilds.
+The setting does not disable that provider as a Recall execution backend.
 
 ### Multiple Directories
 
@@ -1789,9 +1781,8 @@ metadata paths remain separate from the shared transcript root.
 
 The Session Providers section of the Settings page edits the same lists. Adding
 or removing a home there updates `homes` in that provider's `[agents.<id>]`
-table in `config.toml`. Provider-home changes take effect after the AgentsView
-daemon restarts. A push watcher that owns the archive without a daemon must
-also restart.
+table in `config.toml`. Like the provider enable toggles, the change takes
+effect after the AgentsView daemon and any separate push-watch process restart.
 
 ![Codex alternate homes in Session Providers settings](/docs/assets/generated/screenshots/settings-agent-homes.png)
 
@@ -2718,7 +2709,7 @@ with daemon API 15, `sync_pending` alongside sync progress. See the
 [session usage contract](/docs/session-api/#agentsview-session-usage) for how
 `session usage --wait` uses these states.
 
-## Privacy and Telemetry
+## Privacy
 
 By default, all session data stays on your local machine in SQLite. Normal
 browsing, search, and reports do not send session content, project names,
@@ -2748,17 +2739,6 @@ The automatic outbound requests include update checks and pricing refreshes:
 - **Pricing** — the server downloads public model-pricing catalogs from GitHub
     and OpenRouter at startup and daily; see
     [Pricing Source](/docs/token-usage/#pricing-source).
-
-### Usage Reporting
-
-AgentsView can send general, anonymous usage telemetry. Usage telemetry is off
-unless you have opted in or set `TELEMETRY_ENABLED=1`. Development builds never
-send it.
-
-Any of these turns it off, even after you opted in:
-`AGENTSVIEW_TELEMETRY_ENABLED=0`, `TELEMETRY_ENABLED=0`, `DO_NOT_TRACK=1`, or
-setting `CI` to any value. Restart the server after changing them.
-
 ### Disabling Update Checks
 
 Disable the CLI/web UI update check with any of:

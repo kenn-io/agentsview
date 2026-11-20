@@ -161,12 +161,6 @@ func TestProviderSyncSemanticsDeclarations(t *testing.T) {
 		AgentFx: {
 			FingerprintHashRequiredForFreshness: true,
 		},
-		// A Factory settings sidecar rewrite can keep the combined size and
-		// mtime, so freshness depends on the content fingerprint. Behavior is
-		// covered by TestSyncFactorySameSizeSettingsRewriteResyncs.
-		AgentFactory: {
-			FingerprintHashRequiredForFreshness: true,
-		},
 		// Codebuff requires the per-component stat-hash digest (persisted in
 		// the provider_freshness side-table) before a warm pass may consider a
 		// source fresh; the side-table row is the only signal that sees

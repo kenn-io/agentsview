@@ -91,10 +91,6 @@ func TestPGActivityReportSaved(t *testing.T) {
 			case "restart":
 				pgKeptSession(t, local, "b", "project-b", "2026-07-14")
 				pgKeptPush(t, syncer, false)
-			case "sweep":
-				old := time.Now().Add(-31 * 24 * time.Hour)
-				require.NoError(t, os.Chtimes(files[0], old, old))
-
 			case "replaced":
 				var revision int64
 				require.NoError(t, first.pg.QueryRowContext(ctx, `SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'`).Scan(&revision))
@@ -113,6 +109,10 @@ func TestPGActivityReportSaved(t *testing.T) {
 			}
 			restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
 			t.Cleanup(func() { require.NoError(t, restarted.Close()) })
+			if mode == "sweep" {
+				old := time.Now().Add(-31 * 24 * time.Hour)
+				require.NoError(t, os.Chtimes(files[0], old, old))
+			}
 			got := pgKeptBuild(t, restarted, f, q, mode == "sweep" || mode == "replaced")
 			switch mode {
 			case "restart":

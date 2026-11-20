@@ -510,25 +510,6 @@ func readModelPricing(ctx context.Context, conn *sql.DB) ([]db.ModelPricing, err
 	return out, nil
 }
 
-// pendingCursorUsageEvents loads the local Cursor usage rows after the
-// mirror's stored high-water id and returns that id as a number.
-func (s *Sync) pendingCursorUsageEvents(
-	ctx context.Context, stored string,
-) ([]db.CursorUsageEvent, int64, error) {
-	var sinceID int64
-	if stored != "" {
-		var err error
-		if sinceID, err = strconv.ParseInt(stored, 10, 64); err != nil {
-			return nil, 0, fmt.Errorf("parsing cursor usage high-water id %q: %w", stored, err)
-		}
-	}
-	events, err := s.local.GetCursorUsageEvents(ctx, sinceID)
-	if err != nil {
-		return nil, 0, fmt.Errorf("loading local cursor usage events: %w", err)
-	}
-	return events, sinceID, nil
-}
-
 // syncCursorUsageEvents appends the account usage rows the mirror has
 // not consumed yet, tracked by a high-water id in mirror sync_metadata.
 // Project-filtered pushes skip these rows: they are global and unattributed.
@@ -542,9 +523,17 @@ func (s *Sync) syncCursorUsageEvents(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	events, sinceID, err := s.pendingCursorUsageEvents(ctx, stored[key])
+	var sinceID int64
+	if v := stored[key]; v != "" {
+		sinceID, err = strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return fmt.Errorf("parsing cursor usage high-water id %q: %w", v, err)
+		}
+	}
+
+	events, err := s.local.GetCursorUsageEvents(ctx, sinceID)
 	if err != nil {
-		return err
+		return fmt.Errorf("loading local cursor usage events: %w", err)
 	}
 	if len(events) == 0 {
 		return nil

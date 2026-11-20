@@ -66,7 +66,6 @@ const (
 	AgentHermes         AgentType = "hermes"
 	AgentAugureDesktop  AgentType = "augure-desktop"
 	AgentGrok           AgentType = "grok"
-	AgentFactory        AgentType = "factory"
 	AgentGoose          AgentType = "goose"
 	AgentWorkBuddy      AgentType = "workbuddy"
 	AgentCodeBuddy      AgentType = "codebuddy"
@@ -880,18 +879,6 @@ var Registry = []AgentDef{
 		DefaultDirs: []string{".grok/sessions"},
 		IDPrefix:    "grok:",
 		FileBased:   true,
-	},
-	{
-		Type:        AgentFactory,
-		DisplayName: "Factory Droid",
-		EnvVar:      "FACTORY_DIR",
-		ConfigKey:   "factory_dirs",
-		DefaultDirs: []string{".factory/sessions"},
-		IDPrefix:    "factory:",
-		FileBased:   true,
-		Usage: UsageCapabilities{
-			NoPerMessageTokenData: true,
-		},
 	},
 	{
 		Type:              AgentGoose,
