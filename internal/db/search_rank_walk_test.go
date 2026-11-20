@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"unicode/utf8"
 
+	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -67,28 +67,34 @@ func TestSearchRankWalkMatchesFullRanking(t *testing.T) {
 	require.NotNil(t, walk, "the walk must serve a page with distinct ranks")
 	assert.False(t, walk.complete)
 
-	// Count the visibility checks made while ranking the same eligible hits.
-	// A project filter forces full ranking; all sessions have that project.
+	// The project filter forces full ranking; all sessions have that project.
+	// SQLite's authorizer sees rank reads as statements are prepared and an
+	// extra row_number window when the full-ranking CTE is prepared.
 	d.rawReader().SetMaxOpenConns(1)
 	conn, err := d.getReader().Conn(ctx)
 	require.NoError(t, err)
-	visited := 0
+	var rankReads, rankingWindows int
 	require.NoError(t, conn.Raw(func(raw any) error {
-		return raw.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("unicode", func(content string) int {
-			if content == "deploy the handler" {
-				visited++
+		raw.(interface {
+			RegisterAuthorizer(func(int, string, string, string) int)
+		}).RegisterAuthorizer(func(op int, arg1, arg2, _ string) int {
+			if op == sqlite3.SQLITE_READ && arg1 == "messages_fts" && arg2 == "rank" && rankingWindows == 0 {
+				rankReads++
 			}
-			r, _ := utf8.DecodeRuneInString(content)
-			return int(r)
-		}, false)
+			if op == sqlite3.SQLITE_FUNCTION && arg2 == "row_number" {
+				rankingWindows++
+			}
+			return sqlite3.SQLITE_OK
+		})
+		return nil
 	}))
 	require.NoError(t, conn.Close())
 	filter := SearchFilter{Query: "deploy", Limit: 1, DateFrom: "2026-05-01", Project: "proj"}
 	full, err := d.Search(ctx, filter)
 	require.NoError(t, err)
-	fullVisits := visited
-	require.GreaterOrEqual(t, fullVisits, 200)
-	visited = 0
+	fullWindows := rankingWindows
+	require.GreaterOrEqual(t, fullWindows, 3, "project filter must use full ranking")
+	rankReads, rankingWindows = 0, 0
 	filter.Project = ""
 	for cursor, want := range []string{"tie-000", "tie-001"} {
 		filter.Cursor = cursor
@@ -99,9 +105,19 @@ func TestSearchRankWalkMatchesFullRanking(t *testing.T) {
 		assert.Contains(t, page.Results[0].Snippet, "deploy")
 		if cursor == 0 {
 			assert.Equal(t, full, page)
-			require.Equal(t, fullVisits, visited, "search must not rank the matches twice")
+			require.GreaterOrEqual(t, rankReads, 2, "search must prepare the rank walk")
+			require.Less(t, rankingWindows, fullWindows, "search must avoid the full-ranking CTE")
 		}
 	}
+	conn, err = d.getReader().Conn(ctx)
+	require.NoError(t, err)
+	require.NoError(t, conn.Raw(func(raw any) error {
+		raw.(interface {
+			RegisterAuthorizer(func(int, string, string, string) int)
+		}).RegisterAuthorizer(nil)
+		return nil
+	}))
+	require.NoError(t, conn.Close())
 
 	for _, from := range []string{"", "2026-05-08", "2026-05-09", "2027-01-01"} {
 		for _, query := range []string{"handler", "deploy"} {
