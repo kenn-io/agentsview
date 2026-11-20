@@ -88,9 +88,12 @@ func TestPGSavedActivityReportRespectsChangedRowPolicy(t *testing.T) {
 		require.Len(t, pgKeptBuild(t, changingStore, f, q, true).Sessions, 1)
 		require.NoError(t, changingStore.Close())
 	})
-	for _, tc := range []struct{ name, date string }{
-		{"policy tightened after retention", "2026-06-14"},
-		{"policy tightened today", time.Now().UTC().Format("2006-01-02")},
+	for _, tc := range []struct {
+		name, date string
+		wantUsage  bool
+	}{
+		{"policy tightened after retention", "2026-06-14", false},
+		{"policy tightened today", time.Now().UTC().Format("2006-01-02"), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, syncer, target, directory, _, _ := activityPolicyFixture(t)
@@ -104,7 +107,7 @@ func TestPGSavedActivityReportRespectsChangedRowPolicy(t *testing.T) {
 			require.Empty(t, pgKeptBuild(t, first, f, q, true).Sessions)
 			_, err = syncer.pg.ExecContext(ctx, `ALTER TABLE sessions DISABLE ROW LEVEL SECURITY`)
 			require.NoError(t, err)
-			require.Len(t, pgKeptBuild(t, first, f, q, true).Sessions, 1)
+			require.Len(t, pgKeptBuild(t, first, f, q, tc.wantUsage).Sessions, 1)
 			require.NoError(t, first.Close())
 		})
 	}
