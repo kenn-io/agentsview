@@ -10,11 +10,12 @@ to handle a data-version change.
 
 Use non-destructive schema migrations such as `ALTER TABLE` and `UPDATE`.
 
-Dashboard analytics, report scans, regex and terms searches, change stream reads, and other
-multi-second scans over message or usage rows, take the lane; the list and
+Dashboard analytics, report scans, change stream reads, and other multi-second
+scans over message or usage rows take the lane; the list and
 sidebar reads every page loads (session list, stats, project list) and reads
 scoped to one session stay outside. The lane uses `acquireBulkRead` and has
-four slots. Archive-wide substring searches use a separate four-slot lane.
+four slots. Archive-wide session searches and lexical content searches use a
+separate four-slot lane.
 Both lanes share a pool of nine readers, leaving one for quick reads.
 Each holder uses one reader connection at a time. Validate input before
 acquiring a permit. Release it before waiting for another bulk reader or doing
