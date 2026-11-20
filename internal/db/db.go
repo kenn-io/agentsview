@@ -696,7 +696,8 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // (182: distinguish empty Evener compaction labels from source text. Re-parse
 // Evener sources in place; source and session identities are unchanged.)
 // (183: prefer structured Antigravity user prompts over skill expansions.)
-const dataVersion = 183
+// (184: split Pi /skill: expansions into a skill row and the typed prompt.)
+const dataVersion = 184
 
 const archiveOnlyVersionBase = 1 << 20
 

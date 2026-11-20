@@ -1167,6 +1167,113 @@ func TestPiSubagentRelationshipUpgradeReparsesInPlace(t *testing.T) {
 	assert.Equal(t, 2, sessions)
 }
 
+func TestPiSkillExpansionUpgradeReparsesInPlace(t *testing.T) {
+	scope := db.ScopedDataVersionProviders(183, 184)
+	assert.ElementsMatch(t, []parser.AgentType{
+		parser.AgentPi, parser.AgentOMP, parser.AgentOMO, parser.AgentStepCode,
+		parser.AgentDirectAPI, parser.AgentPrimeAgent,
+	}, scope)
+	version := db.CurrentDataVersion()
+	t.Cleanup(db.InstallDataVersionScopesForTest(map[int][]parser.AgentType{version: scope}))
+	ctx := t.Context()
+	database := dbtest.OpenTestDB(t)
+	root := t.TempDir()
+	source := filepath.Join(root, "encoded-cwd", "2026-11-01T10-00-00-000Z_skill-session.jsonl")
+	dbtest.WriteTestFile(t, source, []byte(
+		`{"type":"session","version":3,"id":"skill-session","timestamp":"2026-11-01T10:00:00Z","cwd":"/work/project"}`+"\n"+
+			`{"type":"message","id":"entry-1","parentId":null,"timestamp":"2026-11-01T10:00:01Z","message":{"role":"user","content":"<skill name=\"review\" location=\"/skills/review/SKILL.md\">\nCheck the diff.\n</skill>\n\nreview the auth module"}}`+"\n"+
+			`{"type":"message","id":"entry-2","parentId":"entry-1","timestamp":"2026-11-01T10:00:02Z","message":{"role":"assistant","content":"ok"}}`+"\n"))
+	cfg := sync.EngineConfig{Machine: "local", AgentDirs: map[parser.AgentType][]string{parser.AgentPi: {root}}}
+	engine := sync.NewEngine(ctx, database, cfg)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+	engine.Close()
+	const id = "pi:skill-session"
+
+	// Reproduce the version-183 archive: the parser stored the whole
+	// expansion as one user message and the typed prompt did not exist.
+	const expansion = `<skill name="review" location="/skills/review/SKILL.md">
+Check the diff.
+</skill>
+
+review the auth module`
+	msgs, err := database.GetAllMessages(ctx, id)
+	require.NoError(t, err)
+	require.Len(t, msgs, 3)
+	oldUser := msgs[1]
+	oldUser.Ordinal = 0
+	oldUser.Content = expansion
+	oldUser.ContentLength = len(expansion)
+	oldUser.SourceParentUUID = ""
+	oldAssistant := msgs[2]
+	oldAssistant.Ordinal = 1
+	require.NoError(t, database.ReplaceSessionMessages(ctx, id, []db.Message{oldUser, oldAssistant}))
+
+	// Pin the archived user prompt so the upgrade has a pin to carry over.
+	oldMsgs, err := database.GetAllMessages(ctx, id)
+	require.NoError(t, err)
+	require.Len(t, oldMsgs, 2)
+	require.Equal(t, "user", oldMsgs[0].Role)
+	note := "keep this prompt"
+	pinID, err := database.PinMessage(ctx, id, oldMsgs[0].ID, &note)
+	require.NoError(t, err)
+	require.NotZero(t, pinID)
+
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, fmt.Sprintf("UPDATE sessions SET data_version=%d; PRAGMA user_version=%d", version-1, version-1))
+		return err
+	}))
+	path := database.Path()
+	require.NoError(t, database.Close())
+	database, err = db.OpenIsolated(ctx, path)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	needsSync, fullRebuild, err := db.ArchiveResyncState(ctx, path)
+	require.NoError(t, err)
+	assert.True(t, needsSync)
+	assert.False(t, fullRebuild, "the Pi skill expansion upgrade must reparse in place")
+
+	engine = sync.NewEngine(ctx, database, cfg)
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(ctx, nil).Synced)
+
+	var sessions int
+	require.NoError(t, database.Reader().QueryRow(ctx, "SELECT count(*) FROM sessions").Scan(&sessions))
+	assert.Equal(t, 1, sessions, "the upgrade must not duplicate the session")
+	assert.Equal(t, source, database.GetSessionFilePath(ctx, id), "source path is unchanged")
+	assert.Equal(t, version, database.GetSessionDataVersion(ctx, id))
+
+	msgs, err = database.GetAllMessages(ctx, id)
+	require.NoError(t, err)
+	require.Len(t, msgs, 3)
+	for i, msg := range msgs {
+		assert.Equal(t, i, msg.Ordinal, "ordinals must stay contiguous")
+	}
+	skillRow := msgs[0]
+	assert.Equal(t, "user", skillRow.Role)
+	assert.True(t, skillRow.IsSystem)
+	assert.Equal(t, "system", skillRow.SourceType)
+	assert.Equal(t, "skill_invocation", skillRow.SourceSubtype)
+	assert.Equal(t, "[Skill: review]\nCheck the diff.\n[/Skill]", skillRow.Content)
+	assert.Equal(t, "entry-1:skill", skillRow.SourceUUID)
+	assert.Empty(t, skillRow.SourceParentUUID)
+	userRow := msgs[1]
+	assert.Equal(t, "user", userRow.Role)
+	assert.False(t, userRow.IsSystem)
+	assert.Equal(t, "review the auth module", userRow.Content)
+	assert.Equal(t, "entry-1", userRow.SourceUUID)
+	assert.Equal(t, "entry-1:skill", userRow.SourceParentUUID)
+	assert.Equal(t, "ok", msgs[2].Content)
+
+	// The pin on the original user message survives on the user row.
+	pins, err := database.ListPinnedMessages(ctx, "", "")
+	require.NoError(t, err)
+	require.Len(t, pins, 1)
+	assert.Equal(t, id, pins[0].SessionID)
+	assert.Equal(t, userRow.ID, pins[0].MessageID)
+	assert.Equal(t, &note, pins[0].Note)
+	assert.Equal(t, &userRow.Content, pins[0].Content)
+}
+
 func TestOMPParentLinkUpgradePreservesSessionIdentityAndCuration(t *testing.T) {
 	scope := db.ScopedDataVersionProviders(157, 158)
 	require.Equal(t, []parser.AgentType{parser.AgentOMP}, scope)
