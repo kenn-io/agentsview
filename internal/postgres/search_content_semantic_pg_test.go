@@ -233,10 +233,10 @@ func TestPGSemanticSessionDateEligibility(t *testing.T) {
 	store := &Store{pg: pg}
 	ids := []string{"S1", "S2"}
 	for _, tc := range []struct {
-		date, activeSince string
-		want              bool
-	}{{"2026-05-01", "", true}, {"2026-05-02", "", false}, {"", "2026-05-01T10:30:00Z", true}, {"", "2026-05-01T10:30:01Z", false}} {
-		allowed, err := store.semanticAllowedSessionIDsPG(t.Context(), db.ContentSearchFilter{Project: "alpha", Date: tc.date, ActiveSince: tc.activeSince}, ids)
+		date string
+		want bool
+	}{{"2026-05-01", true}, {"2026-05-02", false}} {
+		allowed, err := store.semanticAllowedSessionIDsPG(t.Context(), db.ContentSearchFilter{Project: "alpha", Date: tc.date}, ids)
 		require.NoError(t, err)
 		require.Contains(t, allowed, "S1")
 		assert.Equal(t, tc.want, allowed["S1"].DateAllowed)

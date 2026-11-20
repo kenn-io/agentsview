@@ -194,24 +194,22 @@ func TestSearchContentActivityCandidateExpansion(t *testing.T) {
 		{SessionID: "idle", Ordinal: 2, OrdinalStart: 2, OrdinalEnd: 2},
 	}
 	for _, tc := range []struct {
-		name                           string
-		prefix                         VectorHit
-		count, chunks                  int
-		cutoff                         time.Time
-		project, dateFrom, activeSince string
-		wantOrdinals, wantLimits       []int
+		name                     string
+		prefix                   VectorHit
+		count, chunks            int
+		cutoff                   time.Time
+		project, dateFrom        string
+		wantOrdinals, wantLimits []int
 	}{
-		{"boundary", VectorHit{SessionID: "active"}, 200, 1, activityCutoff, "", "", "", []int{0, 1, 2}, []int{200, 400}},
-		{"collapsed chunks", VectorHit{SessionID: "active"}, 1, 200, activityCutoff, "", "", "", []int{0, 1, 2}, []int{200, 400, 800}},
-		{"fetch budget exhausted", VectorHit{SessionID: "active"}, 6400, 1, activityCutoff, "", "", "", nil, []int{200, 400, 800, 1600, 3200, 4096}},
-		{"all active", VectorHit{SessionID: "active"}, 200, 1, epochCutoff, "", "", "", nil, []int{200, 400}},
-		{"sparse project with other filters", VectorHit{SessionID: "idle", Ordinal: 3}, 6400, 1, activityCutoff, "project-b", "2024-06-01", "", nil, []int{200}},
-		{"sparse project without activity rejection", VectorHit{SessionID: "idle", Ordinal: 3}, 6400, 1, time.Time{}, "project-b", "", "2024-06-01T00:00:00Z", nil, []int{200}},
-		{"date from", VectorHit{SessionID: "old"}, 200, 1, time.Time{}, "", "2024-06-01", "", []int{0, 1, 2}, []int{200, 400}},
-		{"active since", VectorHit{SessionID: "old"}, 200, 1, time.Time{}, "", "", "2024-06-01T00:00:00Z", []int{0, 1, 2}, []int{200, 400}},
+		{"boundary", VectorHit{SessionID: "active"}, 200, 1, activityCutoff, "", "", []int{0, 1, 2}, []int{200, 400}},
+		{"collapsed chunks", VectorHit{SessionID: "active"}, 1, 200, activityCutoff, "", "", []int{0, 1, 2}, []int{200, 400, 800}},
+		{"fetch budget exhausted", VectorHit{SessionID: "active"}, 6400, 1, activityCutoff, "", "", nil, []int{200, 400, 800, 1600, 3200, 4096}},
+		{"all active", VectorHit{SessionID: "active"}, 200, 1, epochCutoff, "", "", nil, []int{200, 400}},
+		{"sparse project with other filters", VectorHit{SessionID: "idle", Ordinal: 3}, 6400, 1, activityCutoff, "project-b", "2024-06-01", nil, []int{200}},
+		{"date from", VectorHit{SessionID: "old"}, 200, 1, time.Time{}, "", "2024-06-01", []int{0, 1, 2}, []int{200, 400}},
 	} {
 		modes := []string{"semantic"}
-		if tc.name == "boundary" || tc.name == "active since" {
+		if tc.name == "boundary" {
 			modes = append(modes, "hybrid")
 		}
 		for _, mode := range modes {
@@ -227,13 +225,13 @@ func TestSearchContentActivityCandidateExpansion(t *testing.T) {
 				searcher := &activityVectorSearcher{hits: hits, chunksPerHit: tc.chunks}
 				d.SetVectorSearcher(searcher)
 				page, err := d.SearchContent(t.Context(), ContentSearchFilter{
-					Pattern: "absent keyword", Mode: mode, Limit: 3, ExcludeActiveSince: tc.cutoff, Project: tc.project, DateFrom: tc.dateFrom, ActiveSince: tc.activeSince,
+					Pattern: "absent keyword", Mode: mode, Limit: 3, ExcludeActiveSince: tc.cutoff, Project: tc.project, DateFrom: tc.dateFrom,
 				})
 				require.NoError(t, err)
 				ordinals := make([]int, 0, len(page.Matches))
 				for _, match := range page.Matches {
 					ordinals = append(ordinals, match.Ordinal)
-					if tc.dateFrom != "" || tc.activeSince != "" {
+					if tc.dateFrom != "" {
 						assert.Equal(t, "idle", match.SessionID)
 					}
 				}
