@@ -11,7 +11,7 @@ import type { DbMessage as Message } from "../api/generated/index.js";
 import type { BlockType } from "../stores/ui.svelte.js";
 import { hasVisibleSegments } from "../utils/content-parser.js";
 import { buildDisplayItems, type DisplayItem } from "../utils/display-items.js";
-import { isSystemMessage } from "../utils/messages.js";
+import { isSkillInvocationMessage, isSystemMessage } from "../utils/messages.js";
 import { filterDisplayItemsByTranscriptMode } from "../utils/transcript-mode.js";
 import type { SearchBlockKind } from "./block-text.js";
 
@@ -154,7 +154,11 @@ export function projectSessionScope(input: SessionScopeInput): SessionScope {
     items,
     normalItems,
     messages,
+    // Skill expansions are never searchable, whether they render on their own
+    // row or attached to the prompt that follows them.
     allowsBlock: (message, kind) =>
-      included.has(message) && kindVisible(isVisible, message.role, kind),
+      !isSkillInvocationMessage(message) &&
+      included.has(message) &&
+      kindVisible(isVisible, message.role, kind),
   };
 }
