@@ -377,6 +377,7 @@ func installToolResultJournalPG(ctx context.Context, tx *sql.Tx) error {
 	for _, trigger := range []struct{ event, referencing string }{
 		{"INSERT", "NEW TABLE AS new_rows"}, {"UPDATE", "OLD TABLE AS old_rows NEW TABLE AS new_rows"}, {"DELETE", "OLD TABLE AS old_rows"},
 	} {
+		fmt.Fprintf(&ddl, "DROP TRIGGER IF EXISTS trg_uc_tool_result_events_%s ON tool_result_events;\n", strings.ToLower(trigger.event))
 		fmt.Fprintf(&ddl, "CREATE TRIGGER trg_uc_tool_result_events_%s AFTER %s ON tool_result_events REFERENCING %s FOR EACH STATEMENT EXECUTE FUNCTION mark_usage_tool_result_events();\n", strings.ToLower(trigger.event), trigger.event, trigger.referencing)
 	}
 	ddl.WriteString(`UPDATE sync_metadata SET value=pg_catalog.gen_random_uuid()::text WHERE key='usage_history_token';
