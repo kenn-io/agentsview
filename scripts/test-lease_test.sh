@@ -338,11 +338,11 @@ chmod +x "$tmp/bin/go"
 
 # Each target passes the new lease and service address to nested Make.
 cat > "$tmp/inspect.mk" <<'MAKE'
-$(if $(filter 1,$(MAKELEVEL)),$(info LEASE_FROM_MAKE=$(TEST_SERVICE_LEASE))$(info PG_FROM_MAKE=$(TEST_PG_URL))$(info CH_FROM_MAKE=$(TEST_CLICKHOUSE_URL))$(info STANDBY_FROM_MAKE=$(TEST_PG_STANDBY_URL))$(info NO_EXCHANGE_FROM_MAKE=$(TEST_CLICKHOUSE_NO_EXCHANGE_URL)))
+$(if $(filter 1,$(MAKELEVEL)),$(info LEASE_FROM_MAKE=$(TEST_SERVICE_LEASE))$(info PG_FROM_MAKE=$(TEST_PG_URL))$(info CH_FROM_MAKE=$(TEST_CLICKHOUSE_URL))$(info STANDBY_FROM_MAKE=$(TEST_PG_STANDBY_URL)))
 MAKE
 for target in test-postgres bench-pg-usage test-clickhouse; do
     : > "$DOCKER_LOG"
-    (cd "$root" && MAKELEVEL=0 MAKEFILES="$tmp/inspect.mk" make -o pricing-snapshot "$target" TEST_SERVICE_LEASE=old TEST_PG_URL=old-pg TEST_CLICKHOUSE_URL=old-ch TEST_PG_STANDBY_URL=old-standby TEST_CLICKHOUSE_NO_EXCHANGE_URL=old-no-exchange MAKE='make -n') > "$tmp/make-url"
+    (cd "$root" && MAKELEVEL=0 MAKEFILES="$tmp/inspect.mk" make -o pricing-snapshot "$target" TEST_SERVICE_LEASE=old TEST_PG_URL=old-pg TEST_CLICKHOUSE_URL=old-ch TEST_PG_STANDBY_URL=old-standby MAKE='make -n') > "$tmp/make-url"
     project=$(cat "$CHECK_LEASE")
     [[ "$project" != old ]]
     grep -Fxq "LEASE_FROM_MAKE=$project" "$tmp/make-url"
