@@ -3,6 +3,8 @@ package postgres
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -62,6 +64,34 @@ func (s *Store) saveActivityReport(selection, version string, entry pgActivityKe
 	}
 }
 
+func (s *Store) refreshActivityReport(selection, version, identity string, previousRevision int64) {
+	memo := &s.runtimeState().activityKept
+	entries, ok := memo.Get(selection, version)
+	if !ok {
+		return
+	}
+	defer s.activityReports.Sweep(time.Now())
+	if identity == "" {
+		return
+	}
+	entry := entries[0]
+	if entry.identity == "" {
+		entry.identity = identity
+		memo.Put(selection, version, []pgActivityKept{entry})
+		s.saveActivityReport(selection, version, entry)
+		return
+	}
+	var data []byte
+	if entry.revision != previousRevision {
+		var err error
+		data, err = json.Marshal(pgActivitySavedReport{Revision: entry.revision, Checkpoint: entry.checkpoint, Candidates: entry.candidates, Peers: entry.peers, Labels: entry.labels, Report: entry.report}, json.FormatNilSliceAsNull(true))
+		if err != nil {
+			return
+		}
+	}
+	s.activityReports.Refresh(selection+"|"+identity+"|"+version, identity+"|"+version, data)
+}
+
 func (s *Store) activityReportRestricted(ctx context.Context) bool {
 	var restricted bool
 	err := s.pg.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND c.relname IN ('sessions', 'messages', 'tool_result_events', 'usage_events', 'cursor_usage_events', 'sync_metadata', 'usage_session_changes', 'model_pricing', 'model_pricing_bands', 'genai_pricing', 'pricing_meta', 'source_archives', 'source_project_identity_observations') AND c.relkind IN ('r', 'p', 'v', 'm', 'f') AND (c.relkind IN ('v', 'm', 'f') OR row_security_active(c.oid) OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attnum > 0 AND NOT a.attisdropped AND NOT has_column_privilege(c.oid, a.attnum, 'SELECT'))))`).Scan(&restricted)
@@ -92,6 +122,9 @@ func (s *Store) activityReportIdentity(ctx context.Context, selection, version s
 }
 
 func activityTimezoneKey(location *time.Location, start, end time.Time) string {
+	if activityTimezoneSkipsDay(location, start.Add(-8*24*time.Hour), end) {
+		return db.TrendsTimezoneRangeKey(location, start.Add(-8*24*time.Hour), end)
+	}
 	digest := sha256.New()
 	fmt.Fprint(digest, db.TrendsTimezoneRangeKey(location, start, end))
 	for _, spec := range []activity.BucketSpec{{Unit: activity.BucketDay, NominalSeconds: 86400}, {Unit: activity.BucketWeek, NominalSeconds: 604800}} {
@@ -100,7 +133,24 @@ func activityTimezoneKey(location *time.Location, start, end time.Time) string {
 			fmt.Fprintf(digest, "|%d:%d", window.Start.Unix(), window.End.Unix())
 		}
 	}
-	return fmt.Sprintf("%x", digest.Sum(nil))
+	return hex.EncodeToString(digest.Sum(nil))
+}
+
+func activityTimezoneSkipsDay(location *time.Location, start, end time.Time) bool {
+	for cursor := start; cursor.Before(end); {
+		local := cursor.In(location)
+		_, before := local.Zone()
+		_, next := local.ZoneBounds()
+		if next.IsZero() || !next.After(cursor) || next.After(end) {
+			return false
+		}
+		_, after := next.In(location).Zone()
+		if after-before >= 24*60*60 {
+			return true
+		}
+		cursor = next
+	}
+	return false
 }
 
 func (s *Store) activityKeptVersion(ctx context.Context, pricingDigest string) (string, error) {
@@ -116,7 +166,37 @@ func (s *Store) activityKeptVersion(ctx context.Context, pricingDigest string) (
 	return fmt.Sprintf("%d|%s|%s|%s", oid, pricingDigest, pricing.BillingPolicyVersion(), pricing.ConfiguredAliasesDigest()), nil
 }
 
-func (s *Store) keptActivityReport(ctx context.Context, selection, version string, f db.AnalyticsFilter, rangeStart, rangeEnd, lower, upper string) (kept.Report, int64, string, bool, error) {
+func (s *Store) validateKeptActivityReport(ctx context.Context, selection, version string, f db.AnalyticsFilter, rangeStart, rangeEnd, lower, upper string) (kept.Report, int64, string, bool, error) {
+	reader := s
+	var tx *sql.Tx
+	if s.readTx == nil {
+		var err error
+		tx, err = s.beginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+		if err != nil {
+			return kept.Report{}, 0, "", false, err
+		}
+		defer func() { _ = tx.Rollback() }()
+		reader = s.readView(tx)
+	}
+	if reader.activityReportRestricted(ctx) {
+		return kept.Report{}, 0, "", false, nil
+	}
+	entry, revision, checkpoint, hit, err := reader.keptActivityReport(ctx, selection, version, f, rangeStart, rangeEnd, lower, upper)
+	if err != nil {
+		return kept.Report{}, revision, checkpoint, false, err
+	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return kept.Report{}, 0, "", false, err
+		}
+	}
+	if hit {
+		s.runtimeState().activityKept.Put(selection, version, []pgActivityKept{entry})
+	}
+	return entry.report, revision, checkpoint, hit, nil
+}
+
+func (s *Store) keptActivityReport(ctx context.Context, selection, version string, f db.AnalyticsFilter, rangeStart, rangeEnd, lower, upper string) (pgActivityKept, int64, string, bool, error) {
 	memo := &s.runtimeState().activityKept
 	entries, ok := memo.Get(selection, version)
 	after := int64(math.MaxInt64)
@@ -125,32 +205,32 @@ func (s *Store) keptActivityReport(ctx context.Context, selection, version strin
 	}
 	through, changed, current, previous, err := s.loadUsageChangesWithHistory(ctx, after)
 	if isInsufficientPrivilege(err) || isUndefinedTable(err) {
-		return kept.Report{}, 0, "", false, nil
+		return pgActivityKept{}, 0, "", false, nil
 	}
 	if err != nil || through == 0 || !ok {
-		return kept.Report{}, through, current, false, err
+		return pgActivityKept{}, through, current, false, err
 	}
 	entry := entries[0]
 	if entry.checkpoint != "" && entry.checkpoint != previous {
-		return kept.Report{}, through, current, false, nil
+		return pgActivityKept{}, through, current, false, nil
 	}
 	if through == entry.revision {
-		return entry.report, through, current, true, nil
+		return entry, through, current, true, nil
 	}
 	if through < entry.revision {
-		return kept.Report{}, through, current, false, nil
+		return pgActivityKept{}, through, current, false, nil
 	}
 	for _, id := range changed {
 		_, candidate := slices.BinarySearch(entry.candidates, id)
 		_, peer := slices.BinarySearch(entry.peers, id)
 		if candidate || peer {
-			return kept.Report{}, through, current, false, nil
+			return pgActivityKept{}, through, current, false, nil
 		}
 	}
 	if len(changed) > 0 {
 		_, ids, err := s.activityReportSessions(ctx, f, rangeStart, rangeEnd, changed)
 		if err != nil || len(ids) > 0 {
-			return kept.Report{}, through, current, false, err
+			return pgActivityKept{}, through, current, false, err
 		}
 		var overlaps bool
 		err = s.pg.QueryRowContext(ctx, `SELECT EXISTS (
@@ -162,21 +242,20 @@ func (s *Store) keptActivityReport(ctx context.Context, selection, version strin
     AND COALESCE(m.timestamp, s.started_at) <= $4::timestamptz)`,
 			pgx.QueryExecModeDescribeExec, changed, entry.candidates, lower, upper).Scan(&overlaps)
 		if err != nil {
-			return kept.Report{}, through, current, false, fmt.Errorf("checking kept activity changes: %w", err)
+			return pgActivityKept{}, through, current, false, fmt.Errorf("checking kept activity changes: %w", err)
 		}
 		if overlaps {
-			return kept.Report{}, through, current, false, nil
+			return pgActivityKept{}, through, current, false, nil
 		}
 	}
 	projects, err := s.BuildProjectIdentityMap(ctx, entry.labels)
 	if err != nil {
-		return kept.Report{}, through, current, false, err
+		return pgActivityKept{}, through, current, false, err
 	}
 	if !reflect.DeepEqual(export.ProjectMapForWire(projects), entry.report.Artifacts.Report.Projects) {
-		return kept.Report{}, through, current, false, nil
+		return pgActivityKept{}, through, current, false, nil
 	}
 	entry.revision = through
 	entry.checkpoint = current
-	memo.Put(selection, version, []pgActivityKept{entry})
-	return entry.report, through, current, true, nil
+	return entry, through, current, true, nil
 }

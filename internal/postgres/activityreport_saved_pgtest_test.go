@@ -3,6 +3,8 @@
 package postgres
 
 import (
+	"context"
+	"encoding/json/v2"
 	"os"
 	"path/filepath"
 	"testing"
@@ -194,4 +196,171 @@ func TestPGActivityReportRestoreDuringBuild(t *testing.T) {
 	afterRestart, err := restarted.BuildActivityReportArtifacts(ctx, f, q, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 500, afterRestart.Report.Totals.OutputTokens)
+}
+
+func TestPGSavedActivityReportMemoryVisits(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, t.TempDir())
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	want := pgKeptBuild(t, store, f, q, true)
+	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	old := time.Now().Add(-31 * 24 * time.Hour)
+	require.NoError(t, os.Chtimes(files[0], old, old))
+	require.True(t, store.activityReports.Put("expired", "v", []byte("report")))
+	allFiles, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
+	require.NoError(t, err)
+	require.Len(t, allFiles, 2)
+	stale := allFiles[0]
+	if stale == files[0] {
+		stale = allFiles[1]
+	}
+	expired := time.Now().Add(-31 * 24 * time.Hour)
+	require.NoError(t, os.Chtimes(stale, expired, expired))
+	requirePGKeptEqual(t, want, pgKeptBuild(t, store, f, q, false))
+	_, err = os.Stat(stale)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	info, err := os.Stat(files[0])
+	require.NoError(t, err)
+	assert.True(t, info.ModTime().After(old))
+	pgKeptSession(t, local, "b", "project-b", "2026-07-14")
+	pgKeptPush(t, syncer, false)
+	requirePGKeptEqual(t, want, pgKeptBuild(t, store, f, q, false))
+	entries := store.runtimeState().activityKept.Snapshot()
+	require.Len(t, entries, 1)
+	entry := entries[0]
+	data, ok := store.activityReports.Get(entry.Slot+"|"+entry.Rows[0].identity+"|"+entry.Version, entry.Rows[0].identity+"|"+entry.Version)
+	require.True(t, ok)
+	var saved pgActivitySavedReport
+	require.NoError(t, json.Unmarshal(data, &saved))
+	require.Equal(t, entry.Rows[0].revision, saved.Revision)
+	require.Equal(t, entry.Rows[0].checkpoint, saved.Checkpoint)
+	require.NoError(t, os.Remove(files[0]))
+	requirePGKeptEqual(t, want, pgKeptBuild(t, store, f, q, false))
+	_, err = os.Stat(files[0])
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestPGSavedActivityReportSkippedDay(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2011-12-29")
+	pgKeptPush(t, syncer, false)
+	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, t.TempDir())
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	q, err := activity.ResolveQuery(activity.QueryInput{
+		Preset: "custom", From: "2011-12-29T10:00:00Z", To: "2011-12-31T10:00:00Z", Timezone: "Pacific/Apia", BucketOverride: "1h",
+	}, time.Now())
+	require.NoError(t, err)
+	done := make(chan error, 1)
+	go func() {
+		_, err := store.BuildActivityReportArtifacts(t.Context(), db.AnalyticsFilter{Timezone: "Pacific/Apia"}, q, nil)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("building an hourly report hung across the skipped day")
+	}
+}
+
+func TestPGSavedActivityReportRestoreBetweenValidationReads(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptSession(t, local, "b", "project-b", "2026-07-14")
+	pgKeptPush(t, syncer, false)
+	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, t.TempDir())
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	require.Equal(t, 500, pgKeptBuild(t, store, f, q, true).Report.Totals.OutputTokens)
+	var revision int64
+	require.NoError(t, syncer.pg.QueryRowContext(t.Context(), `SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'`).Scan(&revision))
+	_, err := syncer.pg.ExecContext(t.Context(), `UPDATE sessions SET message_count=message_count+1 WHERE id='b'`)
+	require.NoError(t, err)
+	var temporaryToken string
+	require.NoError(t, syncer.pg.QueryRowContext(t.Context(), `SELECT value FROM sync_metadata WHERE key='usage_history_token'`).Scan(&temporaryToken))
+	tx, err := syncer.pg.BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+	_, err = tx.ExecContext(t.Context(), `LOCK TABLE sessions IN ACCESS EXCLUSIVE MODE`)
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	type result struct {
+		report activity.CandidateArtifacts
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		report, err := store.BuildActivityReportArtifacts(ctx, f, q, nil)
+		done <- result{report, err}
+	}()
+	require.Eventually(t, func() bool {
+		var waiting bool
+		err := syncer.pg.QueryRowContext(t.Context(), `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE '%FROM sessions s%' AND query LIKE '%s.id = ANY%')`).Scan(&waiting)
+		return err == nil && waiting
+	}, 10*time.Second, 50*time.Millisecond)
+	_, err = tx.ExecContext(t.Context(), `DELETE FROM usage_session_changes WHERE revision > $1`, revision)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(t.Context(), `UPDATE sync_metadata SET value=$1::bigint::text WHERE key='usage_change_revision'`, revision)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(t.Context(), `UPDATE messages SET token_usage='{"output_tokens":700}' WHERE session_id='a' AND role='assistant'`)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(t.Context(), `UPDATE sessions SET updated_at=now() WHERE id='a'`)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(t.Context(), `SET CONSTRAINTS ALL IMMEDIATE`)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(t.Context(), `UPDATE sync_metadata SET value=$1 WHERE key='usage_history_token'`, temporaryToken)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+	got := <-done
+	require.NoError(t, got.err)
+	require.Equal(t, 500, got.report.Report.Totals.OutputTokens)
+	require.Equal(t, 700, pgKeptBuild(t, store, f, q, true).Report.Totals.OutputTokens)
+}
+
+func TestPGSavedActivityReportRecoversIdentity(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	directory := t.TempDir()
+	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	probe := &activityIdentityError{storeExecutor: store.pg}
+	store.pg = probe
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	want := pgKeptBuild(t, store, f, q, true)
+	requirePGKeptEqual(t, want, pgKeptBuild(t, store, f, q, false))
+	require.GreaterOrEqual(t, probe.queries, 2)
+	restarted := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, restarted.Close()) })
+	requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, false))
+}
+
+func TestPGSavedActivityReportTruncated(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	directory := t.TempDir()
+	first := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	require.Len(t, pgKeptBuild(t, first, f, q, true).Sessions, 1)
+	require.NoError(t, first.Close())
+	restarted := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+	require.Len(t, pgKeptBuild(t, restarted, f, q, false).Sessions, 1)
+	require.NoError(t, restarted.Close())
+	_, err := syncer.pg.ExecContext(t.Context(), `TRUNCATE sessions CASCADE`)
+	require.NoError(t, err)
+	after := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, after.Close()) })
+	require.Empty(t, pgKeptBuild(t, after, f, q, true).Sessions)
 }

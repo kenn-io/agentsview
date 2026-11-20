@@ -162,14 +162,19 @@ func (s *Store) BuildActivityReportArtifacts(
 			}
 			selection = kept.Selection(f, q)
 			identity, unavailable = s.activityReportIdentity(ctx, selection, version, q)
+			var previousRevision int64
+			if entries, ok := s.runtimeState().activityKept.Get(selection, version); ok {
+				previousRevision = entries[0].revision
+			}
 			var report kept.Report
 			var hit bool
-			report, revision, checkpoint, hit, err = s.keptActivityReport(ctx, selection, version, f,
+			report, revision, checkpoint, hit, err = s.validateKeptActivityReport(ctx, selection, version, f,
 				rangeStartUTC, rangeEndUTC, lowerBound, upperBound)
 			if err != nil {
 				return activity.CandidateArtifacts{}, err
 			}
 			if hit && !s.activityReportRestricted(ctx) {
+				s.refreshActivityReport(selection, version, identity, previousRevision)
 				activity.ReportProgress(onProgress, report.Done)
 				return report.Artifacts, nil
 			}
@@ -193,7 +198,7 @@ func (s *Store) buildActivityReport(ctx context.Context, f db.AnalyticsFilter, q
 		if err != nil {
 			return activity.CandidateArtifacts{}, err
 		}
-		defer tx.Rollback()
+		defer func() { _ = tx.Rollback() }()
 		reader = s.readView(tx)
 		revision, _, checkpoint, _, err = reader.loadUsageChangesWithHistory(ctx, revision)
 		if err != nil {
