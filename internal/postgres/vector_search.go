@@ -136,7 +136,7 @@ func (v *vectorSearcher) knnChunks(ctx context.Context, vec []float32, limit int
 	v.chunksMu.Lock()
 	if v.chunks == nil {
 		var err error
-		v.chunks, err = pgvector.AttachChunks[string](ctx, tx, v.chunkTable, v.dimension)
+		v.chunks, err = pgvector.AttachChunks[string](ctx, tx, v.chunkTable)
 		if err != nil {
 			v.chunksMu.Unlock()
 			return nil, 0, err

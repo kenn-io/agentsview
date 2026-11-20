@@ -36,14 +36,14 @@ func embeddingFailureCause(err error) string {
 
 // EmbedBatch drains one pass of pending hosted sessions.
 func EmbedBatch(ctx context.Context, pg *sql.DB, generation storage.VectorGenerationInfo, encode kitvec.EncodeFunc, maxInputChars, concurrency int, includeAutomated bool, batch ...kitvec.BatchOption) error {
-	id, dimension, ok, err := LookupVectorGeneration(ctx, pg, generation.Fingerprint)
+	id, _, ok, err := LookupVectorGeneration(ctx, pg, generation.Fingerprint)
 	if err != nil {
 		return err
 	}
 	if !ok {
 		return errors.New("hosted embedding generation is missing; run hosted-provision")
 	}
-	chunks, err := pgvector.AttachChunks[string](ctx, pg, vectorChunkTable(id), dimension)
+	chunks, err := pgvector.AttachChunks[string](ctx, pg, vectorChunkTable(id))
 	if err != nil {
 		return fmt.Errorf("hosted embeddings require pgvector and hosted-provision: %w", err)
 	}

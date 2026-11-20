@@ -531,11 +531,7 @@ func (s *Sync) applyVectorDeltas(
 	if err != nil {
 		return err
 	}
-	var dimension int
-	if err := s.pg.QueryRowContext(ctx, `SELECT dimension FROM vector_generations WHERE id=$1`, gen.id).Scan(&dimension); err != nil {
-		return err
-	}
-	chunks, err := pgvector.AttachChunks[string](ctx, s.pg, vectorChunkTable(gen.id), dimension)
+	chunks, err := pgvector.AttachChunks[string](ctx, s.pg, vectorChunkTable(gen.id))
 	if err != nil {
 		return err
 	}
