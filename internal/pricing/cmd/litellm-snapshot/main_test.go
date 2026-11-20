@@ -337,7 +337,7 @@ func TestRestoreSnapshotFileFetchesPinnedArtifactAfterBranchAdvances(t *testing.
 	clone := filepath.Join(t.TempDir(), "clone")
 	runGit(t, "", "clone", "--depth=1", fileURLForPath(remote), clone)
 	t.Chdir(clone)
-	require.Error(t, exec.Command("git", "cat-file", "-e", oldRef+"^{commit}").Run())
+	require.Error(t, exec.CommandContext(t.Context(), "git", "cat-file", "-e", oldRef+"^{commit}").Run())
 
 	const runs = 8
 	start := make(chan struct{})
