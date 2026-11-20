@@ -1,7 +1,7 @@
 #!/bin/sh
 # The lease name is the Compose project and the test-service.lease label.
 # The inheritable flock stays held until the last test process exits.
-# Cleanup holds the lease while removing the project.
+# Cleanup reopens the lease before releasing the inherited descriptor.
 set -eu
 
 if ! command -v python3 >/dev/null 2>&1; then
@@ -50,8 +50,9 @@ if pending:
 status = child.wait()
 if status < 0:
     status = 128 - status
+lock = open(path, "r+")
 os.close(fd)
-with open(path, "r+") as lock:
+with lock:
     fcntl.flock(lock, fcntl.LOCK_EX)
     process_group = None
     cleanup = ["docker", "compose", "-p", lease, "-f", "docker-compose.test.yml", "-f", "docker-compose.test-lease.yml", "down", "-v", "--remove-orphans"]
@@ -75,7 +76,10 @@ with open(path, "r+") as lock:
         if status == 0:
             status = 1
     else:
-        os.unlink(path)
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
 if received is not None:
     status = 128 + received
 sys.exit(status)

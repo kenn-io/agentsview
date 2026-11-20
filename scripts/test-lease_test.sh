@@ -123,6 +123,38 @@ grep -qE -- "-p $(cat "$CHECK_LEASE") .* down -v --remove-orphans" "$DOCKER_LOG"
 [[ ! -e "$lease" ]]
 unset READY RELEASE EXITED MAIN
 
+# The cleaner can acquire and remove the lease before cleanup takes its lock.
+mkdir "$tmp/handoff"
+cat > "$tmp/handoff/sitecustomize.py" <<'PY'
+import fcntl
+import os
+import sys
+
+def trace(frame, event, arg):
+    if event == "line" and frame.f_code.co_filename == "<stdin>" and "lock" in frame.f_globals:
+        try:
+            os.fstat(frame.f_globals["fd"])
+            return trace
+        except OSError:
+            pass
+        sys.settrace(None)
+        with open(frame.f_globals["path"], "r+") as cleaner:
+            fcntl.flock(cleaner, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            os.unlink(cleaner.name)
+        open(os.environ["HANDOFF_DONE"], "w").close()
+        return None
+    return trace
+
+sys.settrace(trace)
+PY
+set +e
+(cd "$root" && HANDOFF_DONE="$tmp/handoff-done" PYTHONPATH="$tmp/handoff" ./scripts/test-lease.sh sh -c 'exit 7') > "$tmp/handoff-output" 2>&1
+status=$?
+set -e
+[[ $status == 7 ]]
+[[ -f "$tmp/handoff-done" ]]
+[[ ! -s "$tmp/handoff-output" ]]
+
 # Cleanup reports failures and removes labelled containers.
 for case_name in down-failure-command-ok down-failure-command-fails sidecar-failure sidecar-success; do
     command_status=0 DOWN_STATUS=0 LEFTOVER=0 REMOVE_STATUS=0
