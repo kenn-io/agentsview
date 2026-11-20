@@ -531,12 +531,7 @@ func (s *Sync) applyVectorDeltas(
 	if err != nil {
 		return err
 	}
-	chunks, err := pgvector.AttachChunks[string](ctx, s.pg, vectorChunkTable(gen.id))
-	if err != nil {
-		return err
-	}
 	scope := vectorPushScope{
-		chunks: chunks,
 		gen:    gen,
 		genIDs: genIDs,
 		owner:  owner,
@@ -578,6 +573,12 @@ func (s *Sync) applyVectorDeltas(
 		if _, failed := failedSessions[sessionID]; failed {
 			res.DeferSession(sessionID)
 			continue
+		}
+		if scope.chunks == nil {
+			scope.chunks, err = pgvector.AttachChunks[string](ctx, s.pg, vectorChunkTable(gen.id))
+			if err != nil {
+				return err
+			}
 		}
 		outcome, err := s.pushVectorSession(ctx, scope, export, sessionID, agg)
 		if err != nil {
@@ -1200,19 +1201,22 @@ func replaceVectorChunks(ctx context.Context, tx *sql.Tx, store *pgvector.Chunks
 	if err != nil {
 		return 0, err
 	}
+	defer rows.Close()
+	covered := make(map[string]struct{}, len(keep))
+	for _, key := range keep {
+		covered[key] = struct{}{}
+	}
 	var keys []string
 	for rows.Next() {
 		var key string
 		if err := rows.Scan(&key); err != nil {
-			_ = rows.Close()
 			return 0, err
 		}
-		if !slices.Contains(keep, key) {
+		if _, ok := covered[key]; !ok {
 			keys = append(keys, key)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		_ = rows.Close()
 		return 0, err
 	}
 	if err := rows.Close(); err != nil {

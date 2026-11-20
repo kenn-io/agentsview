@@ -143,9 +143,22 @@ var (
 func TestVectorSearcherReaderBeforeWriter(t *testing.T) {
 	pg := newVectorSearchTestPG(t)
 	ctx := t.Context()
+	// Freeze the vector tables at the schema shipped before this change.
+	_, err := pg.ExecContext(ctx, `
+DROP TABLE vector_push_state, vector_generation_machines, vector_documents, vector_generations CASCADE;
+CREATE TABLE vector_generations (id BIGSERIAL PRIMARY KEY, fingerprint TEXT NOT NULL UNIQUE, model TEXT NOT NULL, dimension INTEGER NOT NULL, params JSONB, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE TABLE vector_generation_machines (generation_id BIGINT NOT NULL, machine TEXT NOT NULL, last_push_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (generation_id, machine));
+CREATE TABLE vector_documents (doc_key TEXT PRIMARY KEY, session_id TEXT NOT NULL, source_uuid TEXT NOT NULL DEFAULT '', ordinal INTEGER NOT NULL, ordinal_end INTEGER NOT NULL, subordinate BOOLEAN NOT NULL DEFAULT FALSE, offsets TEXT NOT NULL DEFAULT '[]', content TEXT NOT NULL, content_hash TEXT NOT NULL);
+CREATE UNIQUE INDEX idx_vector_documents_session_ordinal ON vector_documents (session_id, ordinal);
+CREATE TABLE vector_push_state (generation_id BIGINT NOT NULL, session_id TEXT NOT NULL, doc_agg_hash TEXT NOT NULL, PRIMARY KEY (generation_id, session_id))`)
+	require.NoError(t, err)
+	extSchema, err := vectorExtensionSchema(ctx, pg)
+	require.NoError(t, err)
+	_, err = pg.ExecContext(ctx, `CREATE TABLE vector_chunks_g1 (doc_key TEXT NOT NULL, chunk_index INTEGER NOT NULL, embedding `+extSchema+`.halfvec(4) NOT NULL, PRIMARY KEY (doc_key, chunk_index))`)
+	require.NoError(t, err)
 	seedVectorSearchFixture(t, pg)
 	const role = "agentsview_vector_reader_upgrade"
-	_, err := pg.ExecContext(ctx, `CREATE ROLE `+role+` LOGIN PASSWORD 'reader_fixture'`)
+	_, err = pg.ExecContext(ctx, `CREATE ROLE `+role+` LOGIN PASSWORD 'reader_fixture'`)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_, _ = pg.ExecContext(context.WithoutCancel(ctx), `DROP OWNED BY `+role)

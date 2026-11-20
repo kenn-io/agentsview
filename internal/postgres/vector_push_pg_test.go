@@ -1103,6 +1103,24 @@ func TestVectorPushDeltaNoop(t *testing.T) {
 	assert.Equal(t, 0, res.Vectors.DocsPushed)
 }
 
+func TestVectorPushUnchangedAfterGenerationDrop(t *testing.T) {
+	t.Parallel()
+	sync, _, pg := newVectorPushTestSync(t)
+	id, err := ensureVectorGeneration(t.Context(), pg, "dropped", "model", 4)
+	require.NoError(t, err)
+	require.NoError(t, ensureVectorChunkTable(t.Context(), pg, id, 4))
+	_, err = pg.ExecContext(t.Context(), `DROP TABLE `+vectorChunkTable(id))
+	require.NoError(t, err)
+	_, err = pg.ExecContext(t.Context(), `DELETE FROM vector_generations WHERE id = $1`, id)
+	require.NoError(t, err)
+	state := map[string]vectorPushStateRow{"A": {docAggHash: "ha", machine: "test-machine", sessionExists: true}}
+	result := &storage.VectorPushResult{}
+	err = sync.applyVectorDeltas(t.Context(), vectorGeneration{id: id}, vectorOwnerIdentity{machine: "test-machine"}, false,
+		map[string]string{"A": "ha"}, state, nil, nil, nil, result)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.SessionsUnchanged)
+}
+
 // TestVectorPushFullRepairsSilentCorruption pins --full's repair contract for
 // the vector phase: a chunk row missing from PG while vector_push_state still
 // reports the session current is invisible to a normal delta push, but a full
