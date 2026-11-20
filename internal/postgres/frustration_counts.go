@@ -121,29 +121,31 @@ func (s *Store) scanFrustrationCounts(ctx context.Context, ids []string, version
 	return counts, versions, nil
 }
 
-func (s *Store) staleFrustrationSessions(ctx context.Context, versionColumn string) ([]string, []string, []string, error) {
+func (s *Store) staleFrustrationSessions(ctx context.Context, versionColumn string) ([]string, []string, []string, []string, error) {
 	where := db.BuildAnalyticsWhere(db.AnalyticsFilter{}, db.NewQueryBuilder(s.sessionDialect(), 1), "s.", "", nil)
-	rows, err := s.pg.QueryContext(ctx, `SELECT s.id, COALESCE(NOT s.is_automated AND COALESCE(s.started_at, s.created_at) >= (date_trunc('day', now() AT TIME ZONE 'UTC') - interval '364 days') AT TIME ZONE 'UTC' AND COALESCE(s.started_at, s.created_at) < (date_trunc('day', now() AT TIME ZONE 'UTC') + interval '1 day') AT TIME ZONE 'UTC', false), COALESCE(NOT s.is_automated AND COALESCE(s.started_at, s.created_at) >= (date_trunc('day', now() AT TIME ZONE 'UTC') - interval '365 days') AT TIME ZONE 'UTC' AND COALESCE(s.started_at, s.created_at) < (date_trunc('day', now() AT TIME ZONE 'UTC') - interval '364 days') AT TIME ZONE 'UTC', false) FROM sessions s LEFT JOIN session_frustration_counts c ON c.session_id=s.id WHERE `+where+` AND (c.session_id IS NULL OR (c.rules_version <= $1 AND (c.rules_version < $1 OR c.session_version <> `+frustrationSessionVersion("s."+versionColumn)+`))) ORDER BY s.id`, frustrationMarkerRulesVersion)
+	rows, err := s.pg.QueryContext(ctx, `SELECT s.id, COALESCE(NOT s.is_automated AND COALESCE(s.started_at, s.created_at) >= (date_trunc('day', now() AT TIME ZONE 'UTC') - interval '364 days') AT TIME ZONE 'UTC' AND COALESCE(s.started_at, s.created_at) < (date_trunc('day', now() AT TIME ZONE 'UTC') + interval '1 day') AT TIME ZONE 'UTC', false), COALESCE(NOT s.is_automated AND COALESCE(s.started_at, s.created_at) >= (date_trunc('day', now() AT TIME ZONE 'UTC') - interval '365 days') AT TIME ZONE 'UTC' AND COALESCE(s.started_at, s.created_at) < (date_trunc('day', now() AT TIME ZONE 'UTC') - interval '364 days') AT TIME ZONE 'UTC', false), COALESCE(NOT s.is_automated AND COALESCE(s.started_at, s.created_at) >= (date_trunc('day', now() AT TIME ZONE 'UTC') + interval '1 day') AT TIME ZONE 'UTC' AND COALESCE(s.started_at, s.created_at) < (date_trunc('day', now() AT TIME ZONE 'UTC') + interval '2 days') AT TIME ZONE 'UTC', false) FROM sessions s LEFT JOIN session_frustration_counts c ON c.session_id=s.id WHERE `+where+` AND (c.session_id IS NULL OR (c.rules_version <= $1 AND (c.rules_version < $1 OR c.session_version <> `+frustrationSessionVersion("s."+versionColumn)+`))) ORDER BY s.id`, frustrationMarkerRulesVersion)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	defer rows.Close()
-	var dash, edge, rest []string
+	var dash, edge, next, rest []string
 	for rows.Next() {
 		var id string
-		var inDashboard, inEdge bool
-		if err := rows.Scan(&id, &inDashboard, &inEdge); err != nil {
-			return nil, nil, nil, err
+		var inDashboard, inEdge, inNext bool
+		if err := rows.Scan(&id, &inDashboard, &inEdge, &inNext); err != nil {
+			return nil, nil, nil, nil, err
 		}
 		if inDashboard {
 			dash = append(dash, id)
 		} else if inEdge {
 			edge = append(edge, id)
+		} else if inNext {
+			next = append(next, id)
 		} else {
 			rest = append(rest, id)
 		}
 	}
-	return dash, edge, rest, rows.Err()
+	return dash, edge, next, rest, rows.Err()
 }
 
 func (s *Store) canFillFrustrationCounts(ctx context.Context) (bool, error) {
