@@ -47,7 +47,7 @@ func TestSearchContent_ActivityCutoffPagination(t *testing.T) {
 	assert.Equal(t, 2, *first.NextCursor)
 	now = fixedNow.Add(2 * time.Second)
 	_, second, err := ts.searchContent(t.Context(), nil, searchContentIn{
-		Pattern: "needle", Limit: 2, Cursor: *first.NextCursor, ActivityCutoff: first.ActivityCutoff,
+		Pattern: "needle", Limit: 2, Cursor: *first.NextCursor, ActivityCutoff: first.ActivityCutoff, DateFrom: first.DateFrom,
 	})
 	require.NoError(t, err)
 	require.Len(t, second.Matches, 1)
@@ -88,6 +88,7 @@ func TestSearchContent_ActivityCutoffContinuationInputs(t *testing.T) {
 			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
 			in := tc.in
 			in.Pattern = "needle"
+			in.DateFrom = "2024-05-16"
 			_, out, err := ts.searchContent(t.Context(), nil, in)
 			if tc.wantErr != "" {
 				require.EqualError(t, err, tc.wantErr)
@@ -153,7 +154,7 @@ func TestSearchContent_ActiveFilterHTTPCompatibility(t *testing.T) {
 			}))
 			t.Cleanup(srv.Close)
 			ts := &toolset{svc: servicehttp.NewHTTPBackend(srv.URL, "", false, ""), now: func() time.Time { return fixedNow.Add(2 * time.Second) }}
-			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Limit: 8, Cursor: 4, ActivityCutoff: "2024-06-15T11:50:00Z"})
+			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Limit: 8, Cursor: 4, ActivityCutoff: "2024-06-15T11:50:00Z", DateFrom: "2024-05-16"})
 			require.NoError(t, err)
 			assert.Equal(t, "2024-06-15T11:50:00Z", out.ActivityCutoff)
 			require.NotNil(t, out.NextCursor)

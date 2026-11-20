@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 	"unicode/utf8"
 
@@ -97,6 +98,7 @@ func TestSearchDefaultDateWindow(t *testing.T) {
 				_, sessions, err := ts.searchSessions(t.Context(), nil, searchSessionsIn{Query: "needle", DateFrom: tc.from, DateTo: tc.to})
 				require.NoError(t, err)
 				assert.Equal(t, tc.want, fake.sessionReq.DateFrom)
+				assert.Equal(t, tc.want, sessions.DateFrom)
 				if tc.note {
 					assert.Contains(t, sessions.Note, "2024-05-16")
 					assert.Contains(t, sessions.Note, "earlier date_from")
@@ -107,6 +109,7 @@ func TestSearchDefaultDateWindow(t *testing.T) {
 			_, content, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", DateFrom: tc.from, DateTo: tc.to, SessionID: tc.session, IncludeActive: true})
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, fake.lastReq.DateFrom)
+			assert.Equal(t, tc.want, content.DateFrom)
 			assert.Equal(t, tc.session, fake.lastReq.SessionID)
 			if tc.note {
 				assert.Contains(t, content.Note, "2024-05-16")
@@ -115,6 +118,83 @@ func TestSearchDefaultDateWindow(t *testing.T) {
 			} else {
 				assert.Equal(t, "service note", content.Note)
 			}
+		})
+	}
+}
+
+func TestSearchDateWindowAcrossMidnight(t *testing.T) {
+	now := time.Date(2024, 6, 15, 23, 59, 59, 0, time.UTC)
+	fake := &dateWindowSearchService{result: &service.ContentSearchResult{}}
+	ts := &toolset{svc: fake, now: func() time.Time { return now }}
+	_, sessions, err := ts.searchSessions(t.Context(), nil, searchSessionsIn{Query: "needle"})
+	require.NoError(t, err)
+	_, content, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: true})
+	require.NoError(t, err)
+	assert.Equal(t, "2024-05-16", sessions.DateFrom)
+	assert.Equal(t, "2024-05-16", content.DateFrom)
+	now = now.Add(2 * time.Second)
+	_, _, err = ts.searchSessions(t.Context(), nil, searchSessionsIn{Query: "needle", Cursor: 1})
+	require.ErrorContains(t, err, "date_from is required")
+	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Cursor: 1, IncludeActive: true})
+	require.ErrorContains(t, err, "date_from is required")
+	_, _, err = ts.searchSessions(t.Context(), nil, searchSessionsIn{Query: "needle", Cursor: 1, DateFrom: sessions.DateFrom})
+	require.NoError(t, err)
+	assert.Equal(t, "2024-05-16", fake.sessionReq.DateFrom)
+	fake.lastReq = service.ContentSearchRequest{}
+	_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", Cursor: 1, DateFrom: content.DateFrom, IncludeActive: true})
+	require.NoError(t, err)
+	assert.Equal(t, "2024-05-16", fake.lastReq.DateFrom)
+}
+
+type timeoutSearchService struct {
+	service.SessionService
+	slot  chan struct{}
+	calls int
+}
+
+func (f *timeoutSearchService) wait(ctx context.Context) error {
+	f.slot <- struct{}{}
+	defer func() { <-f.slot }()
+	f.calls++
+	if f.calls == 1 {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return nil
+}
+
+func (f *timeoutSearchService) Search(ctx context.Context, _ service.SearchRequest) (*service.SessionSearchResult, error) {
+	if err := f.wait(ctx); err != nil {
+		return nil, err
+	}
+	return &service.SessionSearchResult{}, nil
+}
+
+func (f *timeoutSearchService) SearchContent(ctx context.Context, _ service.ContentSearchRequest) (*service.ContentSearchResult, error) {
+	if err := f.wait(ctx); err != nil {
+		return nil, err
+	}
+	return &service.ContentSearchResult{ActiveFilterApplied: true}, nil
+}
+
+func TestSearchTimeoutReleasesBackend(t *testing.T) {
+	for _, content := range []bool{false, true} {
+		t.Run(fmt.Sprintf("content=%t", content), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				fake := &timeoutSearchService{slot: make(chan struct{}, 1)}
+				ts := &toolset{svc: fake}
+				search := func() error {
+					if content {
+						_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: true, IncludeOneShot: true, IncludeAutomated: true})
+						return err
+					}
+					_, _, err := ts.searchSessions(t.Context(), nil, searchSessionsIn{Query: "needle", IncludeActive: true})
+					return err
+				}
+				require.ErrorIs(t, search(), errSearchTimeout)
+				require.NoError(t, search())
+				assert.Equal(t, 2, fake.calls)
+			})
 		})
 	}
 }
@@ -449,7 +529,7 @@ func TestSearchSessions_Pagination(t *testing.T) {
 	require.NotNil(t, page1.NextCursor, "first page should set next_cursor")
 
 	page2 := mustSearch(t, ts, searchSessionsIn{
-		Query: "pageterm", Sort: "recency", Limit: 2, Cursor: *page1.NextCursor,
+		Query: "pageterm", Sort: "recency", Limit: 2, Cursor: *page1.NextCursor, DateFrom: page1.DateFrom,
 	})
 	require.Len(t, page2.Results, 2)
 
