@@ -26,23 +26,6 @@ type frustrationFillState struct {
 	pending   map[string]*frustrationChunk
 	chunks    []*frustrationChunk
 	completed uint64
-	running   bool
-}
-
-var errSignalsNotSaved = errors.New("signals panel not saved")
-
-// signalsLoader reads rows directly when no count fill is active. During a fill
-// it only reuses a saved panel, so a miss returns to the caller's own deadline.
-func (s *Store) signalsLoader() func(context.Context, db.AnalyticsFilter) (db.SignalsAnalyticsResponse, error) {
-	state := &s.runtimeState().frustrationFill
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	if state.running || len(state.pending) > 0 {
-		return func(context.Context, db.AnalyticsFilter) (db.SignalsAnalyticsResponse, error) {
-			return db.SignalsAnalyticsResponse{}, errSignalsNotSaved
-		}
-	}
-	return s.loadAnalyticsSignals
 }
 
 // release drops a finished chunk's session IDs and wakes waiters.
@@ -148,15 +131,6 @@ func (s *Store) StartFrustrationFill(ctx context.Context) func() {
 				return
 			}
 		}
-		state := &s.runtimeState().frustrationFill
-		state.mu.Lock()
-		state.running = true
-		state.mu.Unlock()
-		defer func() {
-			state.mu.Lock()
-			state.running = false
-			state.mu.Unlock()
-		}()
 		writable, err := s.canFillFrustrationCounts(ctx)
 		if err != nil {
 			log.Printf("checking frustration count fill: %v", err)
