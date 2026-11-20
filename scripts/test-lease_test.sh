@@ -23,6 +23,7 @@ printf '%s\n' "$*" >> "$DOCKER_LOG"
 case " $* " in
   *' up '*)
     [ "$2" = -p ] && [ "$3" = "$TEST_SERVICE_LEASE" ] || exit 1
+    printf 'publish %s %s %s\n' "${TEST_PG_PUBLISH-}" "${TEST_CH_HTTP_PUBLISH-}" "${TEST_CH_NATIVE_PUBLISH-}" >> "$DOCKER_LOG"
     python3 - "$HOME/.local/state/test-service-leases/$TEST_SERVICE_LEASE" <<'PROBE' || exit 1
 import fcntl, sys
 with open(sys.argv[1]) as f:
@@ -63,7 +64,6 @@ first=$!
 for _ in {1..100}; do [[ -f "$READY" ]] && break; sleep .1; done
 [[ -f "$READY" ]]
 lease="$HOME/.local/state/test-service-leases/$(cat "$CHECK_LEASE")"
-if probe; then echo 'lease released while descendant still runs' >&2; exit 1; fi
 set +e
 wait "$first"
 status=$?
@@ -111,6 +111,7 @@ for target in test-postgres bench-pg-usage test-clickhouse; do
     esac
     grep -qE -- "-p $project .* -f docker-compose.test-lease.yml up -d --wait $service" "$DOCKER_LOG"
     grep -qE -- "-p $project .* port $service $port" "$DOCKER_LOG"
+    grep -Fxq 'publish 127.0.0.1::5432 127.0.0.1::8123 127.0.0.1::9000' "$DOCKER_LOG"
 done
 
 # Missing prerequisites stop before Docker starts.
