@@ -2,10 +2,13 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"log"
 	"slices"
 	"sync"
 	"time"
+
+	"go.kenn.io/agentsview/internal/db"
 )
 
 // Bound a slow chunk so later chunks can still be prepared.
@@ -118,11 +121,15 @@ func (s *Store) StartFrustrationFill(ctx context.Context) func() {
 	if s.DB() == nil || s.hostedRelations {
 		return func() {}
 	}
+	warmErr := s.WarmUsageCache(ctx)
+	if warmErr != nil && !errors.Is(warmErr, db.ErrUsageSourceUnavailable) {
+		log.Printf("pg serve: queueing Usage cache warm: %v", warmErr)
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		if s.usageCache != nil {
+		if warmErr == nil && s.usageCache != nil {
 			if err := s.usageCache.WaitWarm(ctx); err != nil {
 				return
 			}

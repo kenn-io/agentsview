@@ -8,6 +8,8 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -543,7 +545,7 @@ func TestFrustrationFillDeploymentGates(t *testing.T) {
 }
 
 func TestFrustrationFillRequestReservesScanTime(t *testing.T) {
-	for _, name := range []string{"direct", "join limit"} {
+	for _, name := range []string{"direct", "shared", "join limit"} {
 		t.Run(name, func(t *testing.T) {
 			if name == "join limit" {
 				previous := frustrationJoinWait
@@ -552,10 +554,14 @@ func TestFrustrationFillRequestReservesScanTime(t *testing.T) {
 			}
 			f := newFrustrationFixture(t, "agentsview")
 			store := f.open(t)
-			_, err := f.pg.ExecContext(f.ctx, `UPDATE sync_metadata SET value='0' WHERE key='usage_change_journal_version'`)
-			require.NoError(t, err)
-			require.Empty(t, store.keptAnalyticsVersion(f.ctx, "signals|{}"))
-			_, err = f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id,session_version,rules_version,marker_count) VALUES ('one','stale',0,0)`)
+			if name == "shared" {
+				require.NotEmpty(t, store.keptAnalyticsVersion(f.ctx, "signals|{}"))
+			} else {
+				_, err := f.pg.ExecContext(f.ctx, `UPDATE sync_metadata SET value='0' WHERE key='usage_change_journal_version'`)
+				require.NoError(t, err)
+				require.Empty(t, store.keptAnalyticsVersion(f.ctx, "signals|{}"))
+			}
+			_, err := f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id,session_version,rules_version,marker_count) VALUES ('one','stale',0,0)`)
 			require.NoError(t, err)
 			gate, err := f.pg.BeginTx(f.ctx, nil)
 			require.NoError(t, err)
@@ -607,4 +613,29 @@ func TestFrustrationFillRequestReservesScanTime(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFrustrationFillAfterUsageWarmFailure(t *testing.T) {
+	server, _ := testPGServer(t)
+	if server.cockroach {
+		t.Skip("Usage warm-up requires PostgreSQL")
+	}
+	f := newFrustrationFixture(t, "agentsview")
+	store := f.open(t)
+	path := filepath.Join(t.TempDir(), "unavailable")
+	require.NoError(t, os.WriteFile(path, []byte("unavailable"), 0600))
+	attachUsageCacheProbe(t, store, path)
+	store.usageCache.SetWarmRetryDelayForTest(time.Second)
+	store.usageCache.DeferWork()
+	t.Setenv("TMPDIR", path)
+	require.Error(t, store.WarmUsageCache(f.ctx))
+	stop := store.StartFrustrationFill(f.ctx)
+	defer stop()
+	require.Eventually(t, func() bool {
+		var count int
+		return f.pg.QueryRowContext(f.ctx, `SELECT count(*) FROM session_frustration_counts WHERE marker_count=1`).Scan(&count) == nil && count == 2
+	}, 10*time.Second, 100*time.Millisecond)
+	waitCtx, cancel := context.WithTimeout(f.ctx, 250*time.Millisecond)
+	defer cancel()
+	require.ErrorIs(t, store.usageCache.WaitWarm(waitCtx), context.DeadlineExceeded)
 }
