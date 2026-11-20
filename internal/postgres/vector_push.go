@@ -1031,7 +1031,7 @@ type vectorSessionOutcome struct {
 func (s *Sync) pushVectorSession(
 	ctx context.Context, scope *vectorPushScope, export storage.VectorExport, sessionID, aggHash string,
 ) (vectorSessionOutcome, error) {
-	tx, err := s.pg.BeginTx(ctx, nil)
+	tx, err := s.pg.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return vectorSessionOutcome{}, fmt.Errorf("begin vector push tx: %w", err)
 	}

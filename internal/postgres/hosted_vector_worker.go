@@ -181,7 +181,7 @@ func clearHostedOrphan(ctx context.Context, pg *sql.DB, sessionID string) error 
 }
 
 func writeHostedVectors(ctx context.Context, pg *sql.DB, scope vectorPushScope, id, revision string, automated bool, docs, covered []storage.VectorPushDoc, loadChunks func(string) ([]storage.VectorPushChunk, error)) error {
-	tx, err := pg.BeginTx(ctx, nil)
+	tx, err := pg.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return err
 	}

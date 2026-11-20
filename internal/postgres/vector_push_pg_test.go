@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -1020,6 +1021,13 @@ func TestVectorPushRoundTrip(t *testing.T) {
 	t.Parallel()
 	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
+	var database string
+	require.NoError(t, pg.QueryRowContext(ctx, `SELECT current_database()`).Scan(&database))
+	_, err := pg.ExecContext(ctx, `ALTER DATABASE `+pgx.Identifier{database}.Sanitize()+` SET default_transaction_isolation = 'repeatable read'`)
+	require.NoError(t, err)
+	sync.pg, err = Open(ctx, testPGURL(t), vectorPushTestSchema, true)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, sync.pg.Close()) })
 
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
@@ -15,7 +16,14 @@ import (
 
 func TestHostedVectorUploadEditAndSearchSnapshot(t *testing.T) {
 	f := newProjectionFixture(t)
-	_, err := f.admin.ExecContext(t.Context(), `CREATE EXTENSION IF NOT EXISTS vector SCHEMA public`)
+	var database string
+	require.NoError(t, f.admin.QueryRowContext(t.Context(), `SELECT current_database()`).Scan(&database))
+	_, err := f.admin.ExecContext(t.Context(), `ALTER DATABASE `+pgx.Identifier{database}.Sanitize()+` SET default_transaction_isolation = 'repeatable read'`)
+	require.NoError(t, err)
+	writer, err := OpenHosted(t.Context(), f.dsn, f.schema, f.tenant, false)
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, writer.Close()) })
+	_, err = f.admin.ExecContext(t.Context(), `CREATE EXTENSION IF NOT EXISTS vector SCHEMA public`)
 	require.NoError(t, err)
 	gen := storage.VectorGenerationInfo{Fingerprint: "snapshot-fixture", Model: "fixture", Dimension: 2}
 	require.NoError(t, ProvisionHostedVector(t.Context(), f.admin, f.schema, f.tenant, gen))
@@ -33,7 +41,7 @@ func TestHostedVectorUploadEditAndSearchSnapshot(t *testing.T) {
 	}
 	upload, receipt := f.accept(t, "device-a", "upload", "")
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, upload), upload, projectionOutcome("old words")))
-	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false))
+	require.NoError(t, EmbedBatch(t.Context(), writer, gen, encode, 128, 1, false))
 	reader, err := OpenHosted(t.Context(), f.dsn, f.schema, f.tenant, false)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, reader.Close()) })
