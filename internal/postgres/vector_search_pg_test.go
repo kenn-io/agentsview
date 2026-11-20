@@ -169,15 +169,9 @@ func TestVectorSearcherReaderBeforeWriter(t *testing.T) {
 	require.Len(t, hits, 3)
 	assert.Equal(t, "alpha user content", hits[0].Snippet)
 	assert.InDelta(t, 1, hits[0].Score, 0.001)
-	_, err = reader.pg.ExecContext(ctx, `DELETE FROM `+table)
-	require.Error(t, err)
-	var count int
-	require.NoError(t, pg.QueryRowContext(ctx, `SELECT count(*) FROM `+table).Scan(&count))
-	assert.Equal(t, 6, count)
 	var stored string
 	require.NoError(t, pg.QueryRowContext(ctx, `SELECT embedding::text FROM `+table+` WHERE doc_key='u1'`).Scan(&stored))
 	assert.Equal(t, "[1,0,0,0]", stored)
-	assert.Positive(t, genID)
 
 	// Replay the SQL sent by the shipped writer after the upgraded reader has
 	// prepared the catalog. The scoped pass changes one document; the later

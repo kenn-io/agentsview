@@ -1394,6 +1394,9 @@ func TestVectorPushSharedDocAcrossGenerations(t *testing.T) {
 	fake.docs["X"] = []storage.VectorPushDoc{vdoc("X", "X#0", 0, "updated shared text", "hx2", []float32{0, 1, 0, 0})}
 	_, err = sync.Push(ctx, false, nil)
 	require.NoError(t, err)
+	var updatedVector string
+	require.NoError(t, pg.QueryRowContext(ctx, `SELECT embedding::text FROM `+vectorChunkTable(genB)+` WHERE doc_key=$1 AND chunk_index=0`, "X#0").Scan(&updatedVector))
+	assert.Equal(t, "[0,1,0,0]", updatedVector)
 	searcher := NewVectorSearcher(pg, genA, 4, 100, fixedEncoder([]float32{1, 0, 0, 0}))
 	hits, err := dbtest.SemanticSearch(ctx, searcher, "query", 10)
 	require.NoError(t, err)

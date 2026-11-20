@@ -159,10 +159,6 @@ func TestSemanticAndHybridReaderBeforeWriter(t *testing.T) {
 	var vector string
 	require.NoError(t, writer.DB().QueryRowContext(ctx, `SELECT embedding::text FROM `+table+` WHERE doc_key='d1'`).Scan(&vector))
 	assert.Equal(t, "[1,0.19995117,0,0]", vector)
-	_, err = writer.DB().ExecContext(ctx, `INSERT INTO vector_generations (fingerprint,model,dimension) VALUES ('old-writer','m',4)`)
-	require.NoError(t, err)
-	_, err = writer.DB().ExecContext(ctx, `INSERT INTO vector_push_state (generation_id,session_id,doc_agg_hash) VALUES ($1,'S1','old-writer') ON CONFLICT (generation_id,session_id) DO UPDATE SET doc_agg_hash=EXCLUDED.doc_agg_hash`, genID)
-	require.NoError(t, err)
 }
 
 // wireSemanticSearcher wires a fixed-query searcher over the fixture and

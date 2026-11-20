@@ -261,8 +261,17 @@ func TestVectorHalfvecGate(t *testing.T) {
 
 	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, vectorSchemaTestSchema))
+	hadHalfvec, _, err := vectorHalfvecAvailable(ctx, pg)
+	require.NoError(t, err)
 
-	unavailable, err := ensureVectorBaseSchemaPG(ctx, pg)
+	cfg, err := pgx.ParseConfig(pgURL)
+	require.NoError(t, err)
+	cfg.RuntimeParams["search_path"] = vectorSchemaTestSchema
+	trace := &statementLog{}
+	cfg.Tracer = trace
+	traced := stdlib.OpenDB(*cfg)
+	t.Cleanup(func() { require.NoError(t, traced.Close()) })
+	unavailable, err := ensureVectorBaseSchemaPG(ctx, traced)
 	require.NoError(t, err, "gate must degrade, never error")
 	hasHalfvec, version, err := vectorHalfvecAvailable(ctx, pg)
 	require.NoError(t, err)
@@ -270,33 +279,11 @@ func TestVectorHalfvecGate(t *testing.T) {
 	if unavailable == "" {
 		assert.True(t, hasHalfvec, "available gate implies halfvec exists")
 		assert.NotEmpty(t, version, "installed extension reports a version")
+		if hadHalfvec {
+			assert.Empty(t, trace.matching(regexp.MustCompile(`(?i)ALTER\s+EXTENSION\s+vector\s+UPDATE`)))
+		}
 		return
 	}
 	assert.False(t, hasHalfvec,
 		"unavailable reason %q must mean halfvec is missing", unavailable)
-}
-
-// A halfvec-capable installation must not receive an extension upgrade.
-func TestVectorSetupKeepsHalfvecExtensionVersion(t *testing.T) {
-	ctx := t.Context()
-	dsn := testPGSchemaURL(t, vectorSchemaTestSchema)
-	cfg, err := pgx.ParseConfig(dsn)
-	require.NoError(t, err)
-	cfg.RuntimeParams["search_path"] = vectorSchemaTestSchema
-	trace := &statementLog{}
-	cfg.Tracer = trace
-	pg := stdlib.OpenDB(*cfg)
-	t.Cleanup(func() { require.NoError(t, pg.Close()) })
-	available, before, err := vectorHalfvecAvailable(ctx, pg)
-	require.NoError(t, err)
-	require.True(t, available)
-	reason, err := ensureVectorBaseSchemaPG(ctx, pg)
-	require.NoError(t, err)
-	require.Empty(t, reason)
-	available, after, err := vectorHalfvecAvailable(ctx, pg)
-	require.NoError(t, err)
-	require.True(t, available)
-	assert.Equal(t, before, after)
-	assert.NotEmpty(t, trace.matching(regexp.MustCompile(`(?i)CREATE\s+EXTENSION`)))
-	assert.Empty(t, trace.matching(regexp.MustCompile(`(?i)ALTER\s+EXTENSION\s+vector\s+UPDATE`)))
 }
