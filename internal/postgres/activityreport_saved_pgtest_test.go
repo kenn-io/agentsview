@@ -24,7 +24,7 @@ import (
 )
 
 func TestPGActivityReportSaved(t *testing.T) {
-	for _, mode := range []string{"restart", "sweep", "legacy", "replaced", "pricing", "today", "local"} {
+	for _, mode := range []string{"restart", "sweep", "legacy", "replaced", "pricing", "today"} {
 		t.Run(mode, func(t *testing.T) {
 			cache := t.TempDir()
 			t.Setenv("CACHE_DIRECTORY", cache)
@@ -39,9 +39,6 @@ func TestPGActivityReportSaved(t *testing.T) {
 			}
 			target, directory := testPGURL(t), t.TempDir()
 			q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
-			if mode == "local" {
-				q, f = pgDayQuery(t, "2026-06-14", "Local"), db.AnalyticsFilter{Timezone: "Local"}
-			}
 			first := openPGActivityInputStore(t, target, syncer.schema, directory)
 			t.Cleanup(func() { require.NoError(t, first.Close()) })
 			if mode == "pricing" {
@@ -326,34 +323,6 @@ func TestPGSavedActivityReportRestoreBetweenValidationReads(t *testing.T) {
 	require.Equal(t, 700, pgKeptBuild(t, store, f, q, true).Report.Totals.OutputTokens)
 }
 
-func TestPGSavedActivityReportLocalTimezoneChange(t *testing.T) {
-	t.Setenv("CACHE_DIRECTORY", t.TempDir())
-	previous := time.Local                      //nolint:forbidigo // The report follows the process timezone.
-	t.Cleanup(func() { time.Local = previous }) //nolint:forbidigo // Restore the process timezone.
-	firstZone, err := time.LoadLocation("Etc/GMT+4")
-	require.NoError(t, err)
-	secondZone, err := time.LoadLocation("Etc/GMT-4")
-	require.NoError(t, err)
-	time.Local = firstZone //nolint:forbidigo // Simulate the first process timezone.
-	local, syncer, _ := newUsageJournalFixture(t)
-	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
-	pgKeptPush(t, syncer, false)
-	directory := t.TempDir()
-	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "Local"}
-	q.Timezone, q.Loc = "Local", firstZone
-	pgKeptBuild(t, store, f, q, true)
-	restarted := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
-	t.Cleanup(func() { require.NoError(t, restarted.Close()) })
-	pgKeptBuild(t, restarted, f, q, false)
-	time.Local = secondZone //nolint:forbidigo // Simulate the next process timezone.
-	q.Loc = secondZone
-	changed := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
-	t.Cleanup(func() { require.NoError(t, changed.Close()) })
-	pgKeptBuild(t, changed, f, q, true)
-}
-
 func TestPGSavedActivityReportRevisitedAfterEviction(t *testing.T) {
 	for _, advance := range []bool{false, true} {
 		t.Run(fmt.Sprintf("advance=%t", advance), func(t *testing.T) {
@@ -395,9 +364,9 @@ func TestPGSavedActivityReportNamedTimezoneRules(t *testing.T) {
 		t.Setenv("CACHE_DIRECTORY", os.Getenv("ACTIVITY_TZ_CACHE"))
 		store := openPGActivityInputStore(t, os.Getenv("ACTIVITY_TZ_URL"), os.Getenv("ACTIVITY_TZ_SCHEMA"), os.Getenv("ACTIVITY_TZ_DIRECTORY"))
 		t.Cleanup(func() { require.NoError(t, store.Close()) })
-		q, err := activity.ResolveQuery(activity.QueryInput{Preset: "custom", From: "2026-06-14T00:00:00Z", To: "2026-06-15T00:00:00Z", Timezone: "Test/Shift"}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
+		q, err := activity.ResolveQuery(activity.QueryInput{Preset: "custom", From: "2026-06-14T00:00:00Z", To: "2026-06-15T00:00:00Z", Timezone: os.Getenv("ACTIVITY_TZ_FILTER")}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
 		require.NoError(t, err)
-		pgKeptBuild(t, store, db.AnalyticsFilter{Timezone: "Test/Shift"}, q, os.Getenv("ACTIVITY_TZ_BUILD") == "1")
+		pgKeptBuild(t, store, db.AnalyticsFilter{Timezone: os.Getenv("ACTIVITY_TZ_FILTER")}, q, os.Getenv("ACTIVITY_TZ_BUILD") == "1")
 		return
 	}
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
@@ -411,7 +380,7 @@ func TestPGSavedActivityReportNamedTimezoneRules(t *testing.T) {
 	zones, err := zip.OpenReader(filepath.Join(strings.TrimSpace(string(goRoot)), "lib", "time", "zoneinfo.zip"))
 	require.NoError(t, err)
 	defer zones.Close()
-	run := func(zone string, build bool) {
+	run := func(filter, zone string, build bool) {
 		t.Helper()
 		for _, file := range zones.File {
 			if file.Name != zone {
@@ -424,15 +393,56 @@ func TestPGSavedActivityReportNamedTimezoneRules(t *testing.T) {
 			require.NoError(t, r.Close())
 			require.NoError(t, os.WriteFile(filepath.Join(zoneDir, "Test", "Shift"), data, 0o600))
 			cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestPGSavedActivityReportNamedTimezoneRules$")
-			cmd.Env = append(os.Environ(), "ACTIVITY_TZ_CHILD=1", "ACTIVITY_TZ_CACHE="+os.Getenv("CACHE_DIRECTORY"), "ACTIVITY_TZ_URL="+testPGURL(t), "ACTIVITY_TZ_SCHEMA="+syncer.schema, "ACTIVITY_TZ_DIRECTORY="+directory, fmt.Sprintf("ACTIVITY_TZ_BUILD=%d", map[bool]int{false: 0, true: 1}[build]), "ZONEINFO="+zoneDir)
+			cmd.Env = append(os.Environ(), "ACTIVITY_TZ_CHILD=1", "ACTIVITY_TZ_FILTER="+filter, "TZ=:"+filepath.Join(zoneDir, "Test", "Shift"), "ACTIVITY_TZ_CACHE="+os.Getenv("CACHE_DIRECTORY"), "ACTIVITY_TZ_URL="+testPGURL(t), "ACTIVITY_TZ_SCHEMA="+syncer.schema, "ACTIVITY_TZ_DIRECTORY="+directory, fmt.Sprintf("ACTIVITY_TZ_BUILD=%d", map[bool]int{false: 0, true: 1}[build]), "ZONEINFO="+zoneDir)
 			output, err := cmd.CombinedOutput()
 			require.NoError(t, err, "%s", output)
 			return
 		}
 		t.Fatal("timezone missing from Go zoneinfo")
 	}
-	run("Etc/GMT+12", true)
-	run("Etc/GMT+12", false)
-	run("Etc/GMT-12", true)
-	run("Etc/GMT-12", false)
+	for _, filter := range []string{"Test/Shift", "Local"} {
+		run(filter, "Etc/GMT+12", true)
+		run(filter, "Etc/GMT+12", false)
+		run(filter, "Etc/GMT-12", true)
+		run(filter, "Etc/GMT-12", false)
+	}
+}
+
+func TestPGSavedActivityReportRestoredAfterHistoryExpires(t *testing.T) {
+	for _, mode := range []string{"memory", "restart"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("CACHE_DIRECTORY", t.TempDir())
+			local, syncer, _ := newUsageJournalFixture(t)
+			pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+			pgKeptSession(t, local, "b", "project-b", "2026-07-14")
+			pgKeptPush(t, syncer, false)
+			directory := t.TempDir()
+			store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+			t.Cleanup(func() { require.NoError(t, store.Close()) })
+			q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+			require.Equal(t, 500, pgKeptBuild(t, store, f, q, true).Report.Totals.OutputTokens)
+			var revision int64
+			require.NoError(t, syncer.pg.QueryRowContext(t.Context(), `SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'`).Scan(&revision))
+			for i := 0; i < 130; i++ {
+				_, err := syncer.pg.ExecContext(t.Context(), `UPDATE sessions SET message_count=message_count+1 WHERE id='b'`)
+				require.NoError(t, err)
+			}
+			_, previous, err := usageHistoryCheckpoints(t.Context(), syncer.pg, revision+130, revision)
+			require.NoError(t, err)
+			require.Empty(t, previous)
+			tx, err := syncer.pg.BeginTx(t.Context(), nil)
+			require.NoError(t, err)
+			defer func() { _ = tx.Rollback() }()
+			_, err = tx.ExecContext(t.Context(), `SET LOCAL session_replication_role = replica; UPDATE messages SET token_usage='{"output_tokens":700}' WHERE session_id='a' AND role='assistant'`)
+			require.NoError(t, err)
+			require.NoError(t, tx.Commit())
+			if mode == "restart" {
+				restarted := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+				t.Cleanup(func() { require.NoError(t, restarted.Close()) })
+				require.Equal(t, 700, pgKeptBuild(t, restarted, f, q, true).Report.Totals.OutputTokens)
+				return
+			}
+			require.Equal(t, 700, pgKeptBuild(t, store, f, q, true).Report.Totals.OutputTokens)
+		})
+	}
 }

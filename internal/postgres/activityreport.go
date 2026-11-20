@@ -164,7 +164,7 @@ func (s *Store) BuildActivityReportArtifacts(
 			if files != "" {
 				version += "|" + files
 				if q.Loc != nil {
-					version += "|" + db.TrendsTimezoneKey(db.AnalyticsFilter{Timezone: q.Loc.String()})
+					version += "|" + db.TrendsTimezoneKey(db.AnalyticsFilter{Timezone: q.Timezone})
 				}
 			} else {
 				version = ""
