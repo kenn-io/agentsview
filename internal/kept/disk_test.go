@@ -34,6 +34,8 @@ func TestDiskEvictsLeastRecentlyOpened(t *testing.T) {
 			require.True(t, disk.Put("third", "v1", []byte("six")))
 			_, ok = disk.Get("second", "v1")
 			require.False(t, ok)
+			_, ok = disk.Get("first", "v1")
+			require.True(t, ok)
 			_, ok = disk.Get("third", "v1")
 			require.True(t, ok)
 			if limit == "bytes" {
