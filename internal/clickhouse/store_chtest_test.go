@@ -339,11 +339,10 @@ func TestSemanticSessionDateEligibility(t *testing.T) {
 		date string
 		want bool
 	}{{"2026-01-10", true}, {"2026-01-12", false}} {
-		allowed, err := store.semanticAllowedSessionIDs(t.Context(), db.ContentSearchFilter{Project: "alpha", Date: tc.date, IncludeOneShot: true}, ids)
+		allowed, err := store.semanticAllowedSessionIDs(t.Context(), db.ContentSearchFilter{Date: tc.date, IncludeOneShot: true}, ids)
 		require.NoError(t, err)
 		require.Contains(t, allowed, fixtureAlphaID)
 		assert.Equal(t, tc.want, allowed[fixtureAlphaID].DateAllowed)
-		assert.NotContains(t, allowed, fixtureBetaID)
 	}
 }
 

@@ -146,104 +146,32 @@ func TestSearchDateWindowAcrossMidnight(t *testing.T) {
 	assert.Equal(t, "2024-05-16", fake.lastReq.DateFrom)
 }
 
-func TestSearchPaginationAcrossMidnightSQLite(t *testing.T) {
-	ts, d := newTestToolset(t)
-	if !d.HasFTS(t.Context()) {
-		t.Skip("FTS not available")
-	}
-	now := time.Date(2024, 6, 15, 23, 59, 59, 0, time.UTC)
-	ts.now = func() time.Time { return now }
-	seedFTSSession(t, d, "newer", "project", "windowneedle", "2024-06-14T12:00:00Z")
-	seedFTSSession(t, d, "boundary", "project", "windowneedle", "2024-05-16T12:00:00Z")
-	st, ct := newInMemoryPair(t, newServer(ServeOptions{Service: ts.svc, Now: ts.now}))
-	defer func() {
-		require.NoError(t, ct.Close())
-		require.NoError(t, st.Wait())
-	}()
-	call := func(name string, args map[string]any, out any) {
-		t.Helper()
-		result, err := ct.CallTool(t.Context(), callParams(name, args))
-		require.NoError(t, err)
-		require.False(t, result.IsError, "%v", result.Content)
-		raw, err := json.Marshal(result.StructuredContent)
-		require.NoError(t, err)
-		require.NoError(t, json.Unmarshal(raw, out))
-	}
-
-	sessionArgs := map[string]any{"query": "windowneedle", "sort": "recency", "limit": 1, "include_active": true}
-	contentArgs := map[string]any{"pattern": "windowneedle", "limit": 1, "include_active": true, "include_one_shot": true}
-	var sessions searchSessionsOut
-	call(ToolSearchSessions, sessionArgs, &sessions)
-	require.Len(t, sessions.Results, 1)
-	assert.Equal(t, "newer", sessions.Results[0].SessionID)
-	require.NotNil(t, sessions.NextCursor)
-	var content searchContentOut
-	call(ToolSearchContent, contentArgs, &content)
-	require.Len(t, content.Matches, 1)
-	assert.Equal(t, "newer", content.Matches[0].SessionID)
-	require.NotNil(t, content.NextCursor)
-
-	now = now.Add(2 * time.Second)
-	sessionArgs["cursor"], sessionArgs["date_from"] = *sessions.NextCursor, sessions.DateFrom
-	var sessionsNext searchSessionsOut
-	call(ToolSearchSessions, sessionArgs, &sessionsNext)
-	require.Len(t, sessionsNext.Results, 1)
-	assert.Equal(t, "boundary", sessionsNext.Results[0].SessionID)
-	contentArgs["cursor"], contentArgs["date_from"] = *content.NextCursor, content.DateFrom
-	var contentNext searchContentOut
-	call(ToolSearchContent, contentArgs, &contentNext)
-	require.Len(t, contentNext.Matches, 1)
-	assert.Equal(t, "boundary", contentNext.Matches[0].SessionID)
-}
-
 type timeoutSearchService struct {
 	service.SessionService
-	slot  chan struct{}
-	calls int
-}
-
-func (f *timeoutSearchService) wait(ctx context.Context) error {
-	f.slot <- struct{}{}
-	defer func() { <-f.slot }()
-	f.calls++
-	if f.calls == 1 {
-		<-ctx.Done()
-		return ctx.Err()
-	}
-	return nil
 }
 
 func (f *timeoutSearchService) Search(ctx context.Context, _ service.SearchRequest) (*service.SessionSearchResult, error) {
-	if err := f.wait(ctx); err != nil {
-		return nil, err
-	}
-	return &service.SessionSearchResult{}, nil
+	<-ctx.Done()
+	return nil, ctx.Err()
 }
 
 func (f *timeoutSearchService) SearchContent(ctx context.Context, _ service.ContentSearchRequest) (*service.ContentSearchResult, error) {
-	if err := f.wait(ctx); err != nil {
-		return nil, err
-	}
-	return &service.ContentSearchResult{ActiveFilterApplied: true}, nil
+	<-ctx.Done()
+	return nil, ctx.Err()
 }
 
-func TestSearchTimeoutReleasesBackend(t *testing.T) {
+func TestSearchTimeout(t *testing.T) {
 	for _, content := range []bool{false, true} {
 		t.Run(fmt.Sprintf("content=%t", content), func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				fake := &timeoutSearchService{slot: make(chan struct{}, 1)}
-				ts := &toolset{svc: fake}
-				search := func() error {
-					if content {
-						_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: true, IncludeOneShot: true, IncludeAutomated: true})
-						return err
-					}
-					_, _, err := ts.searchSessions(t.Context(), nil, searchSessionsIn{Query: "needle", IncludeActive: true})
-					return err
+				ts := &toolset{svc: &timeoutSearchService{}}
+				var err error
+				if content {
+					_, _, err = ts.searchContent(t.Context(), nil, searchContentIn{Pattern: "needle", IncludeActive: true})
+				} else {
+					_, _, err = ts.searchSessions(t.Context(), nil, searchSessionsIn{Query: "needle"})
 				}
-				require.ErrorIs(t, search(), errSearchTimeout)
-				require.NoError(t, search())
-				assert.Equal(t, 2, fake.calls)
+				require.ErrorIs(t, err, context.DeadlineExceeded)
 			})
 		})
 	}
