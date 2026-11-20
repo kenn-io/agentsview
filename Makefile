@@ -84,14 +84,10 @@ ensure-embed-dir:
 # without lengthening each prerequisite list.
 sqlite-vec-header:
 	@$(DOWNLOAD_RETRY) go mod download github.com/mattn/go-sqlite3
-	@mkdir -p "$(SQLITE_INCLUDE_DIR)"
-	@set -eu; \
-		source="$$(go list -m -f '{{.Dir}}' github.com/mattn/go-sqlite3)/sqlite3-binding.h"; \
-		tmp=$$(mktemp "$(SQLITE_INCLUDE_DIR)/.sqlite3.h.XXXXXX"); \
-		cleanup() { [ ! -e "$$tmp" ] || rm -- "$$tmp"; }; \
-		trap cleanup EXIT; \
-		install -m 0644 "$$source" "$$tmp"; \
-		mv -f "$$tmp" "$(SQLITE_INCLUDE_DIR)/sqlite3.h"
+	@mkdir -p $(SQLITE_INCLUDE_DIR)
+	@install -m 0644 \
+		"$$(go list -m -f '{{.Dir}}' github.com/mattn/go-sqlite3)/sqlite3-binding.h" \
+		$(SQLITE_INCLUDE_DIR)/sqlite3.h
 
 # Restore the generated LiteLLM fallback snapshot from its artifact branch.
 # Pinned ref, SHA256, and branch are compiled into the snapshot tool.

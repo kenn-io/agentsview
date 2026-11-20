@@ -22,7 +22,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gofrs/flock"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/pricing/catalog"
 	"go.kenn.io/kit/atomicfile"
@@ -277,15 +276,11 @@ func restoreSnapshotFile(ctx context.Context,
 		return fmt.Errorf("checking existing snapshot: %w", err)
 	}
 
-	tmpDir, err := os.MkdirTemp(filepath.Dir(outPath), "."+filepath.Base(outPath)+".tmp-")
-	if err != nil {
-		return fmt.Errorf("creating temporary snapshot directory: %w", err)
+	tmp := outPath + ".tmp"
+	if err := os.Remove(tmp); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("removing stale temp snapshot: %w", err)
 	}
-	tmp := filepath.Join(tmpDir, filepath.Base(outPath))
-	defer func() {
-		_ = os.Remove(tmp)
-		_ = os.Remove(tmpDir)
-	}()
+	defer os.Remove(tmp)
 
 	if err := restoreSnapshotFileFromGit(ctx, tmp, ref, snapshotPath, branch); err != nil {
 		if snapshotURL == "" {
@@ -319,7 +314,12 @@ func restoreSnapshotFile(ctx context.Context,
 	}
 
 	if err := atomicfile.Replace(tmp, outPath); err != nil {
-		return fmt.Errorf("moving snapshot into place: %w", err)
+		if removeErr := os.Remove(outPath); removeErr != nil && !os.IsNotExist(removeErr) {
+			return fmt.Errorf("replacing existing snapshot: %w", removeErr)
+		}
+		if renameErr := atomicfile.Replace(tmp, outPath); renameErr != nil {
+			return fmt.Errorf("moving snapshot into place: %w", renameErr)
+		}
 	}
 
 	fmt.Printf("Restored %s\n", outPath)
@@ -397,19 +397,6 @@ func ensureGitCommit(ctx context.Context, ref, branch string) error {
 	if gitCommand(ctx, "cat-file", "-e", ref+"^{commit}") == nil {
 		return nil
 	}
-	commonDir, err := gitCommonDir(ctx)
-	if err != nil {
-		return fmt.Errorf("locating snapshot repository: %w", err)
-	}
-	fetchLock := flock.New(filepath.Join(commonDir, "agentsview-snapshot-fetch.lock"))
-	if _, err := fetchLock.TryLockContext(ctx, 10*time.Millisecond); err != nil {
-		return fmt.Errorf("locking snapshot fetch: %w", err)
-	}
-	defer func() { _ = fetchLock.Unlock() }()
-
-	if gitCommand(ctx, "cat-file", "-e", ref+"^{commit}") == nil {
-		return nil
-	}
 
 	if err := fetchGitRef(ctx, ref); err == nil {
 		if gitCommand(ctx, "cat-file", "-e", ref+"^{commit}") == nil {
@@ -428,19 +415,6 @@ func ensureGitCommit(ctx context.Context, ref, branch string) error {
 		return fmt.Errorf("artifact ref %s is not available after fetch: %w", ref, err)
 	}
 	return nil
-}
-
-func gitCommonDir(ctx context.Context) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--git-common-dir")
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("running git rev-parse: %w", err)
-	}
-	commonDir, err := filepath.Abs(filepath.Clean(strings.TrimSpace(string(out))))
-	if err != nil {
-		return "", fmt.Errorf("resolving git common directory: %w", err)
-	}
-	return commonDir, nil
 }
 
 func fetchGitRef(ctx context.Context, refspec string) error {

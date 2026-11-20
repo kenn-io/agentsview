@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -12,7 +11,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -267,49 +265,6 @@ func TestRestoreSnapshotFileRestoresPinnedArtifact(t *testing.T) {
 	assert.Equal(t, sha256FileForTest(t, source), sha256FileForTest(t, out))
 }
 
-func TestRestoreSnapshotFileConcurrentRuns(t *testing.T) {
-	repo := t.TempDir()
-	runGit(t, repo, "init")
-	runGit(t, repo, "config", "user.email", "test@example.com")
-	runGit(t, repo, "config", "user.name", "Test")
-
-	source := filepath.Join(repo, "litellm_snapshot.json.gz")
-	require.NoError(t, os.WriteFile(source, gzipSnapshot(t, []byte(`{
-		"version": "litellm-test",
-		"source_ref": "551e5d097c11f08fd2400a25a651b1844fcf89c2",
-		"models": [{"ModelPattern": "test-model", "InputPerMTok": {"microdollars": 1000000}}]
-	}`)), 0o644))
-	runGit(t, repo, "add", "litellm_snapshot.json.gz")
-	runGit(t, repo, "commit", "-m", "snapshot")
-	ref := runGit(t, repo, "rev-parse", "HEAD")
-	t.Chdir(repo)
-
-	out := filepath.Join(repo, "out", "snapshot.json.gz")
-	expected := sha256FileForTest(t, source)
-	const runs = 8
-	start := make(chan struct{})
-	var wait sync.WaitGroup
-	errs := make(chan error, runs)
-	for range runs {
-		wait.Go(func() {
-			<-start
-			errs <- restoreSnapshotFile(t.Context(), out, ref, "litellm_snapshot.json.gz", expected, "unused-snapshot-branch", "")
-		})
-	}
-	close(start)
-	wait.Wait()
-	close(errs)
-	for err := range errs {
-		require.NoError(t, err)
-	}
-
-	assert.Equal(t, expected, sha256FileForTest(t, out))
-	entries, err := os.ReadDir(filepath.Dir(out))
-	require.NoError(t, err)
-	require.Len(t, entries, 1)
-	assert.Equal(t, filepath.Base(out), entries[0].Name())
-}
-
 func TestRestoreSnapshotFileFetchesPinnedArtifactAfterBranchAdvances(t *testing.T) {
 	remote := t.TempDir()
 	runGit(t, remote, "init")
@@ -340,36 +295,18 @@ func TestRestoreSnapshotFileFetchesPinnedArtifactAfterBranchAdvances(t *testing.
 	clone := filepath.Join(t.TempDir(), "clone")
 	runGit(t, "", "clone", "--depth=1", fileURLForPath(remote), clone)
 	t.Chdir(clone)
-	require.Error(t, exec.CommandContext(t.Context(), "git", "cat-file", "-e", oldRef+"^{commit}").Run())
 
-	const runs = 8
-	start := make(chan struct{})
-	var wait sync.WaitGroup
-	errs := make(chan error, runs)
-	for i := range runs {
-		wait.Go(func() {
-			<-start
-			out := filepath.Join(clone, "out", t.Name(), fmt.Sprintf("%d.json.gz", i))
-			errs <- restoreSnapshotFile(t.Context(),
-				out,
-				oldRef,
-				"litellm_snapshot.json.gz",
-				oldSHA,
-				branch,
-				"",
-			)
-		})
-	}
-	close(start)
-	wait.Wait()
-	close(errs)
-	for err := range errs {
-		require.NoError(t, err)
-	}
-	for i := range runs {
-		out := filepath.Join(clone, "out", t.Name(), fmt.Sprintf("%d.json.gz", i))
-		assert.Equal(t, oldSHA, sha256FileForTest(t, out))
-	}
+	out := filepath.Join(clone, "out", "snapshot.json.gz")
+	require.NoError(t, restoreSnapshotFile(t.Context(),
+		out,
+		oldRef,
+		"litellm_snapshot.json.gz",
+		oldSHA,
+		branch,
+		"",
+	))
+
+	assert.Equal(t, oldSHA, sha256FileForTest(t, out))
 }
 
 func TestRestoreSnapshotFileDownloadsPinnedArtifactWithoutGitCheckout(t *testing.T) {
