@@ -304,6 +304,60 @@ func TestFrustrationFillWaitsForUsageWarm(t *testing.T) {
 	}, 20*time.Second, 100*time.Millisecond)
 }
 
+func TestFrustrationFillDashboardRevisit(t *testing.T) {
+	f := newFrustrationFixture(t, "agentsview")
+	store := f.open(t)
+	_, err := f.pg.ExecContext(f.ctx, `UPDATE sessions SET project='other' WHERE id='two'`)
+	require.NoError(t, err)
+	_, err = f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id, session_version, rules_version, marker_count) VALUES ('one', 'stale', 0, 0)`)
+	require.NoError(t, err)
+	tx, err := f.pg.BeginTx(f.ctx, nil)
+	require.NoError(t, err)
+	defer tx.Rollback()
+	_, err = tx.ExecContext(f.ctx, `SELECT 1 FROM session_frustration_counts WHERE session_id='one' FOR UPDATE`)
+	require.NoError(t, err)
+	stop := store.StartFrustrationFill(f.ctx)
+	defer func() { tx.Rollback(); stop() }()
+	require.Eventually(t, func() bool {
+		state := &store.runtimeState().frustrationFill
+		state.mu.Lock()
+		defer state.mu.Unlock()
+		return state.pending["one"] != nil && state.pending["two"] != nil
+	}, 10*time.Second, 10*time.Millisecond)
+	ctx, cancel := context.WithTimeout(f.ctx, 15*time.Second)
+	defer cancel()
+	type result struct {
+		response db.SignalsAnalyticsResponse
+		err      error
+	}
+	all := make(chan result, 1)
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		response, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+		all <- result{response, err}
+	}()
+	<-started
+	filtered, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{Project: "sample"})
+	require.NoError(t, err)
+	require.Equal(t, 1, filtered.QualityHealth.Totals.FrustrationMarkerCount)
+	require.NoError(t, tx.Rollback())
+	select {
+	case got := <-all:
+		require.NoError(t, got.err)
+		require.Equal(t, 2, got.response.QualityHealth.Totals.FrustrationMarkerCount)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	f.replace(t, "one", "Please explain this function.")
+	unfiltered, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+	require.NoError(t, err)
+	require.Equal(t, 1, unfiltered.QualityHealth.Totals.FrustrationMarkerCount)
+	filtered, err = store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{Project: "sample"})
+	require.NoError(t, err)
+	require.Zero(t, filtered.QualityHealth.Totals.FrustrationMarkerCount)
+}
+
 func addFrustrationFillSessions(t *testing.T, f *frustrationFixture) []string {
 	t.Helper()
 	_, err := f.pg.ExecContext(f.ctx, `UPDATE sessions SET machine=CASE WHEN id='one' THEN 'first' ELSE 'later' END, started_at='2026-01-01'`)

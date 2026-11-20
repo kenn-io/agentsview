@@ -130,7 +130,7 @@ func (s *Store) fillFrustrationCounts(ctx context.Context, ids []string, column 
 
 // StartFrustrationFill prepares stale counts after the launch Usage warm-up.
 func (s *Store) StartFrustrationFill(ctx context.Context) func() {
-	if s.DB() == nil || s.readTx != nil || s.hostedRelations {
+	if s.DB() == nil || s.hostedRelations {
 		return func() {}
 	}
 	ctx, cancel := context.WithCancel(ctx)
