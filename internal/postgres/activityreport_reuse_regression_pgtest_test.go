@@ -214,3 +214,88 @@ func TestPGSavedActivityReportMissingHistoryMarker(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, restarted.Close()) })
 	requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, true))
 }
+
+func TestPGSavedActivityReportNewYorkRestart(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	directory := t.TempDir()
+	first := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+	q, f := pgDayQuery(t, "2026-06-14", "America/New_York"), db.AnalyticsFilter{Timezone: "America/New_York"}
+	want := pgKeptBuild(t, first, f, q, true)
+	require.Len(t, want.Sessions, 1)
+	require.NoError(t, first.Close())
+	restarted := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, restarted.Close()) })
+	requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, false))
+}
+
+func TestPGActivityReportViewReadsFreshRows(t *testing.T) {
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	_, err := syncer.pg.ExecContext(t.Context(), `ALTER TABLE messages RENAME TO messages_data; CREATE VIEW messages AS SELECT * FROM messages_data`)
+	require.NoError(t, err)
+	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, t.TempDir())
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	require.Equal(t, 500, pgKeptBuild(t, store, f, q, true).Report.Totals.OutputTokens)
+	_, err = syncer.pg.ExecContext(t.Context(), `UPDATE messages_data SET token_usage='{"output_tokens":700}' WHERE session_id='a' AND role='assistant'`)
+	require.NoError(t, err)
+	require.Equal(t, 700, pgKeptBuild(t, store, f, q, true).Report.Totals.OutputTokens)
+}
+
+func TestPGActivityReportToolResultChanges(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptSession(t, local, "b", "project-b", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, t.TempDir())
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	pgKeptBuild(t, store, f, q, true)
+	for _, change := range []struct {
+		statement string
+		ids       []string
+	}{
+		{`INSERT INTO tool_result_events (session_id, tool_call_message_ordinal, source, status, content, timestamp) VALUES ('a', 1, 'tool_execution', 'completed', '', '2026-06-14 10:10:00+00')`, []string{"a"}},
+		{`UPDATE tool_result_events SET session_id='b', timestamp='2026-06-14 10:20:00+00' WHERE session_id='a'`, []string{"a", "b"}},
+		{`DELETE FROM tool_result_events WHERE session_id='b'`, []string{"b"}},
+	} {
+		before, err := store.UsageChangeRevision(t.Context())
+		require.NoError(t, err)
+		_, err = syncer.pg.ExecContext(t.Context(), change.statement)
+		require.NoError(t, err)
+		after, ids, err := store.LoadUsageChanges(t.Context(), before)
+		require.NoError(t, err)
+		require.Greater(t, after, before)
+		require.Equal(t, change.ids, ids)
+		pgKeptBuild(t, store, f, q, true)
+	}
+}
+
+func TestPGActivityReportToolResultJournalUpgrade(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	directory := t.TempDir()
+	first := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	pgKeptBuild(t, first, f, q, true)
+	require.NoError(t, first.Close())
+	_, err := syncer.pg.ExecContext(t.Context(), `DROP FUNCTION mark_usage_tool_result_events() CASCADE;
+ UPDATE sync_metadata SET value='3' WHERE key='usage_change_journal_version';
+ INSERT INTO tool_result_events (session_id, tool_call_message_ordinal, source, status, content, timestamp) VALUES ('a', 1, 'tool_execution', 'completed', '', '2026-06-14 10:10:00+00')`)
+	require.NoError(t, err)
+	untracked := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+	pgKeptBuild(t, untracked, f, q, true)
+	pgKeptBuild(t, untracked, f, q, true)
+	require.NoError(t, untracked.Close())
+	require.True(t, ensureUsageChangeJournalPG(t.Context(), syncer.pg))
+	upgraded := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, upgraded.Close()) })
+	pgKeptBuild(t, upgraded, f, q, true)
+}

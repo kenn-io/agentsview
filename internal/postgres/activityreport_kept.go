@@ -119,6 +119,10 @@ func (s *Store) activityReportIdentity(ctx context.Context, selection, version s
 }
 
 func (s *Store) activityKeptVersion(ctx context.Context, pricingDigest string) (string, error) {
+	revision, err := s.UsageChangeRevision(ctx)
+	if err != nil || revision == 0 {
+		return "", err
+	}
 	// Include the table identity so recreating the journal
 	// cannot validate a report built against the previous schema.
 	oid, err := usageJournalOID(ctx, s.pg)
@@ -128,7 +132,7 @@ func (s *Store) activityKeptVersion(ctx context.Context, pricingDigest string) (
 	if err != nil {
 		return "", fmt.Errorf("reading kept activity version: %w", err)
 	}
-	return fmt.Sprintf("%d|%s|%s", oid, pricingDigest, pricing.ConfiguredAliasesDigest()), nil
+	return fmt.Sprintf("%d|%d|%s|%s", usageChangeJournalVersionPG, oid, pricingDigest, pricing.ConfiguredAliasesDigest()), nil
 }
 
 func (s *Store) activityTableIdentity(ctx context.Context) (string, error) {

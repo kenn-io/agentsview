@@ -71,7 +71,7 @@ func TestPGActivityReportKeptVersion1Journal(t *testing.T) {
 	require.NoError(t, err)
 	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
 	first := pgKeptBuild(t, store, f, q, true)
-	second := pgKeptBuild(t, store, f, q, false)
+	second := pgKeptBuild(t, store, f, q, true)
 	requirePGKeptEqual(t, first, second)
 }
 
