@@ -74,7 +74,26 @@ func (s *Store) storeFrustrationCounts(ctx context.Context, versions map[string]
 		tokens = append(tokens, version)
 		values = append(values, int32(counts[id]))
 	}
-	_, err := s.DB().ExecContext(ctx, `INSERT INTO session_frustration_counts (session_id, session_version, rules_version, marker_count)
+	tx, err := s.DB().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("starting frustration counts write: %w", err)
+	}
+	defer tx.Rollback()
+	// Lock in ID order, then recheck versions in a fresh statement snapshot.
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM sessions WHERE id = ANY($1) ORDER BY id FOR SHARE`, ids)
+	if err != nil {
+		return fmt.Errorf("locking frustration sessions: %w", err)
+	}
+	for rows.Next() {
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("locking frustration sessions: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("locking frustration sessions: %w", err)
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO session_frustration_counts (session_id, session_version, rules_version, marker_count)
         SELECT t.id, t.version, $4, t.count FROM unnest($1::text[], $2::text[], $3::integer[]) AS t(id, version, count)
         JOIN sessions s ON s.id = t.id AND `+frustrationSessionVersion("s."+versionColumn)+` = t.version
         ORDER BY t.id
@@ -83,7 +102,7 @@ func (s *Store) storeFrustrationCounts(ctx context.Context, versions map[string]
 	if err != nil {
 		return fmt.Errorf("writing frustration counts: %w", err)
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (s *Store) scanFrustrationCounts(ctx context.Context, ids []string, versionColumn string) (map[string]int, map[string]string, error) {

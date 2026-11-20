@@ -74,7 +74,11 @@ func (s *Store) joinFrustrationFill(ctx context.Context, ids []string) bool {
 		}
 	}
 	state.mu.Unlock()
-	waitCtx, cancel := context.WithTimeout(ctx, frustrationJoinWait)
+	budget := frustrationJoinWait
+	if deadline, ok := ctx.Deadline(); ok {
+		budget = min(budget, time.Until(deadline)/2)
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	for _, wait := range waits {
 		select {

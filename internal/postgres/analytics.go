@@ -2604,10 +2604,23 @@ func (s *Store) GetAnalyticsTopSessions(
 func (s *Store) GetAnalyticsSignals(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.SignalsAnalyticsResponse, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		waitCtx, cancel := context.WithTimeout(ctx, time.Until(deadline)/2)
+		defer cancel()
+		result, err := keptAnalytics(waitCtx, s, "signals", f, s.loadAnalyticsSignals)
+		if waitCtx.Err() != nil && ctx.Err() == nil {
+			return s.loadAnalyticsSignalsWithFill(ctx, f, false)
+		}
+		return result, err
+	}
 	return keptAnalytics(ctx, s, "signals", f, s.loadAnalyticsSignals)
 }
 
 func (s *Store) loadAnalyticsSignals(ctx context.Context, f db.AnalyticsFilter) (db.SignalsAnalyticsResponse, error) {
+	return s.loadAnalyticsSignalsWithFill(ctx, f, true)
+}
+
+func (s *Store) loadAnalyticsSignalsWithFill(ctx context.Context, f db.AnalyticsFilter, joinFill bool) (db.SignalsAnalyticsResponse, error) {
 	versionColumn, err := sessionVersionColumnPG(ctx, s.pg)
 	if err != nil {
 		return db.SignalsAnalyticsResponse{}, err
@@ -2616,7 +2629,7 @@ func (s *Store) loadAnalyticsSignals(ctx context.Context, f db.AnalyticsFilter) 
 	if err != nil {
 		return db.SignalsAnalyticsResponse{}, err
 	}
-	if err := s.populateFrustrationMarkers(ctx, all, versions, versionColumn); err != nil {
+	if err := s.populateFrustrationMarkersWithFill(ctx, all, versions, versionColumn, joinFill); err != nil {
 		return db.SignalsAnalyticsResponse{}, err
 	}
 
@@ -2857,6 +2870,10 @@ func (s *Store) populateFrustrationMarkers(
 	versions map[string]string,
 	versionColumn string,
 ) error {
+	return s.populateFrustrationMarkersWithFill(ctx, rows, versions, versionColumn, true)
+}
+
+func (s *Store) populateFrustrationMarkersWithFill(ctx context.Context, rows []db.SignalRow, versions map[string]string, versionColumn string, joinFill bool) error {
 	if rows == nil {
 		return nil
 	}
@@ -2893,7 +2910,7 @@ func (s *Store) populateFrustrationMarkers(
 			return remaining
 		}
 		ids = load(ids)
-		if len(ids) > 0 && s.joinFrustrationFill(ctx, ids) {
+		if len(ids) > 0 && joinFill && s.joinFrustrationFill(ctx, ids) {
 			ids = load(ids)
 		}
 		if len(ids) == 0 {
