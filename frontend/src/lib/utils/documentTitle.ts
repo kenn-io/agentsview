@@ -22,9 +22,11 @@ export function documentTitle({
     const providerSeparator = rawId.indexOf(":");
     const provider = providerSeparator >= 0 ? rawId.slice(0, providerSeparator) : "claude";
     const id = providerSeparator >= 0 ? rawId.slice(providerSeparator + 1) : rawId;
+    const source = separator >= 0 ? sessionId.slice(0, separator) : "";
+    const shortSource = source.length > 8 ? `${source.slice(0, 7)}…` : source;
     label = [
       m.nav_sessions(),
-      `${separator >= 0 ? `${sessionId.slice(0, separator)}:` : ""}${id.slice(-8)}`,
+      `${shortSource ? `${shortSource}:` : ""}${id.slice(-6)}`,
       agentLabel(provider),
       ...(sessionNotFound ? [m.message_list_session_not_found()] : []),
     ].join(" · ");
