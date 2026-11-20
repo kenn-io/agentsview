@@ -75,7 +75,17 @@ with lock:
         }
         cleanup_env = os.environ.copy()
         cleanup_env.update(cleanup_vars)
-        if subprocess.call(cleanup, env=cleanup_env, start_new_session=True) != 0:
+        failed = subprocess.call(cleanup, env=cleanup_env, start_new_session=True) != 0
+        # Testcontainers started outside Compose carry the same lease label.
+        listing = ["docker", "ps", "-aq", "--filter", f"label=test-service.lease={lease}"]
+        try:
+            containers = subprocess.check_output(listing, text=True, start_new_session=True).split()
+            if containers:
+                subprocess.check_call(["docker", "rm", "-f", "-v", *containers], start_new_session=True)
+            failed |= bool(subprocess.check_output(listing, text=True, start_new_session=True).strip())
+        except subprocess.CalledProcessError:
+            failed = True
+        if failed:
             print(f"cleanup failed; Compose project {lease} may still be running", file=sys.stderr)
             if status == 0:
                 status = 1

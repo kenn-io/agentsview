@@ -24,6 +24,8 @@ cat > "$tmp/bin/docker" <<'DOCKER'
 #!/bin/sh
 printf '%s\n' "$*" >> "$DOCKER_LOG"
 case " $* " in
+  *' ps -aq '*) [ "$*" = "ps -aq --filter label=test-service.lease=$TEST_SERVICE_LEASE" ] || exit 1; [ "${LEFTOVER:-0}" = 0 ] || [ -f "$REMOVED" ] || echo container-1 ;;
+  *' rm -f -v '*) [ "$*" = 'rm -f -v container-1' ] || exit 1; [ "${REMOVE_STATUS:-0}" = 0 ] || exit "$REMOVE_STATUS"; touch "$REMOVED" ;;
   *' up '*)
     [ "$2" = -p ] && [ "$3" = "$TEST_SERVICE_LEASE" ] || exit 1
     case " $* " in
@@ -61,6 +63,7 @@ HELD
 chmod +x "$tmp/bin/docker" "$tmp/bin/lease-held"
 ln -s "$python_bin" "$tmp/bin/python3"
 export PATH="$tmp/bin:$PATH" DOCKER_LOG="$tmp/docker.log"
+export REMOVED="$tmp/removed"
 
 # Leased services bind to dynamic loopback ports; manually started services keep fixed ports.
 (cd "$root" && TEST_SERVICE_LEASE=agentsview-test-123 TEST_PG_PUBLISH=127.0.0.1::5432 TEST_CH_HTTP_PUBLISH=127.0.0.1::8123 TEST_CH_NATIVE_PUBLISH=127.0.0.1::9000 "$docker_bin" compose -p agentsview-test-123 -f docker-compose.test.yml -f docker-compose.test-lease.yml config --format json) > "$tmp/leased-compose.json"
@@ -155,6 +158,18 @@ for command_status in 0 7; do
     grep -q ' down ' "$DOCKER_LOG"
     [[ -f "$HOME/.local/state/test-service-leases/$(cat "$CHECK_LEASE")" ]]
 done
+
+# A sidecar that survives Compose cleanup keeps the lease if removal fails.
+set +e
+(cd "$root" && LEFTOVER=1 REMOVE_STATUS=1 ./scripts/test-lease.sh ./scripts/test-service-compose.sh clickhouse 9000 true) > "$tmp/sidecar-error" 2>&1
+status=$?
+set -e
+[[ $status == 1 ]]
+project=$(cat "$CHECK_LEASE")
+[[ -f "$HOME/.local/state/test-service-leases/$project" ]]
+grep -q 'cleanup failed' "$tmp/sidecar-error"
+LEFTOVER=1 "$root/scripts/test-lease.sh" true
+[[ -f "$REMOVED" ]]
 
 # Cancellation during cleanup waits for Compose, which holds the lease.
 export DOWN_STARTED="$tmp/down-started" DOWN_RELEASE="$tmp/down-release" DOWN_FINISHED="$tmp/down-finished"
@@ -254,25 +269,30 @@ chmod +x "$tmp/bin/go"
 
 # Each target passes the new lease and service address to nested Make.
 cat > "$tmp/inspect.mk" <<'MAKE'
-$(if $(filter 1,$(MAKELEVEL)),$(info TARGET_FROM_MAKE=$(MAKECMDGOALS))$(info LEASE_FROM_MAKE=$(TEST_SERVICE_LEASE))$(info PG_FROM_MAKE=$(TEST_PG_URL))$(info CH_FROM_MAKE=$(TEST_CLICKHOUSE_URL))$(info STANDBY_FROM_MAKE=$(TEST_PG_STANDBY_URL))$(info NO_EXCHANGE_FROM_MAKE=$(TEST_CLICKHOUSE_NO_EXCHANGE_URL)))
+$(if $(filter 1,$(MAKELEVEL)),$(info LEASE_FROM_MAKE=$(TEST_SERVICE_LEASE))$(info PG_FROM_MAKE=$(TEST_PG_URL))$(info CH_FROM_MAKE=$(TEST_CLICKHOUSE_URL))$(info STANDBY_FROM_MAKE=$(TEST_PG_STANDBY_URL))$(info NO_EXCHANGE_FROM_MAKE=$(TEST_CLICKHOUSE_NO_EXCHANGE_URL)))
 MAKE
 for target in test-postgres bench-pg-usage test-clickhouse; do
     : > "$DOCKER_LOG"
     (cd "$root" && MAKELEVEL=0 MAKEFILES="$tmp/inspect.mk" make -o pricing-snapshot "$target" TEST_SERVICE_LEASE=old TEST_PG_URL=old-pg TEST_CLICKHOUSE_URL=old-ch TEST_PG_STANDBY_URL=old-standby TEST_CLICKHOUSE_NO_EXCHANGE_URL=old-no-exchange MAKE='make -n') > "$tmp/make-url"
     project=$(cat "$CHECK_LEASE")
     [[ "$project" != old ]]
-    grep -Fxq "TARGET_FROM_MAKE=$target-run" "$tmp/make-url"
     grep -Fxq "LEASE_FROM_MAKE=$project" "$tmp/make-url"
     grep -Fxq 'NO_EXCHANGE_FROM_MAKE=old-no-exchange' "$tmp/make-url"
     case "$target" in
         test-clickhouse)
             service=clickhouse port=9000
+            grep -Fq 'go test -tags "fts5,chtest" -v ./internal/clickhouse/...' "$tmp/make-url"
             grep -Fxq 'STANDBY_FROM_MAKE=' "$tmp/make-url"
             grep -Fxq 'PG_FROM_MAKE=' "$tmp/make-url"
             grep -Fxq 'CH_FROM_MAKE=clickhouse://127.0.0.1:49153/default' "$tmp/make-url"
             ;;
         test-postgres|bench-pg-usage)
             service=postgres port=5432
+            if [[ $target == bench-pg-usage ]]; then
+                grep -Fq -- "-bench 'BenchmarkPGUsage(Read|Refresh)'" "$tmp/make-url"
+            else
+                grep -Fq 'go test -p 1 -tags "fts5,pgtest" -v ./internal/postgres/...' "$tmp/make-url"
+            fi
             grep -Fxq 'STANDBY_FROM_MAKE=' "$tmp/make-url"
             grep -Fxq 'CH_FROM_MAKE=' "$tmp/make-url"
             grep -Fxq 'PG_FROM_MAKE=postgres://agentsview_test:agentsview_test_password@127.0.0.1:49153/agentsview_test?sslmode=disable' "$tmp/make-url"
