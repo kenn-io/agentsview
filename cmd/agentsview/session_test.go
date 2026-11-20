@@ -178,6 +178,15 @@ func newRemoteUsageServer(
 	t *testing.T, spec remoteUsageSpec,
 ) (*httptest.Server, *remoteUsageRequests) {
 	t.Helper()
+	handler, reqs := newRemoteUsageHandler(t, spec)
+	ts := httptest.NewServer(handler)
+	t.Cleanup(ts.Close)
+	return ts, reqs
+}
+
+// newRemoteUsageHandler shares the usage fixture between socket and in-memory tests.
+func newRemoteUsageHandler(t *testing.T, spec remoteUsageSpec) (http.Handler, *remoteUsageRequests) {
+	t.Helper()
 	if spec.agent == "" {
 		spec.agent = "codex"
 	}
@@ -196,8 +205,7 @@ func newRemoteUsageServer(
 	detailJSON := fmt.Sprintf(`{"id":%q,"agent":%q,"project":%q}`,
 		spec.canonicalID, spec.agent, spec.project)
 	usageJSON := remoteUsageJSON(spec)
-	var serverURL string
-	ts := httptest.NewServer(http.HandlerFunc(func(
+	handler := http.HandlerFunc(func(
 		w http.ResponseWriter, r *http.Request,
 	) {
 		if spec.bearer != "" {
@@ -221,7 +229,7 @@ func newRemoteUsageServer(
 			if !assert.Equal(t, http.MethodPost, r.Method) {
 				return
 			}
-			if !assert.Equal(t, serverURL, r.Header.Get("Origin")) {
+			if !assert.Equal(t, "http://"+r.Host, r.Header.Get("Origin")) {
 				return
 			}
 			if !assert.NoError(t, json.UnmarshalRead(r.Body, &reqs.SyncInput)) {
@@ -238,10 +246,8 @@ func newRemoteUsageServer(
 		default:
 			http.NotFound(w, r)
 		}
-	}))
-	serverURL = ts.URL
-	t.Cleanup(ts.Close)
-	return ts, reqs
+	})
+	return handler, reqs
 }
 
 // remoteUsageJSON builds the session-usage response body for a
@@ -2697,7 +2703,6 @@ func TestSessionUsageWait(t *testing.T) {
 		{name: "still missing after catch-up", missing: true, missingForever: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ts, _ := newRemoteUsageServer(t, remoteUsageSpec{canonicalID: "codex:remote-session"})
 			synctest.Test(t, func(t *testing.T) {
 				if tc.missingForever {
 					previous := sessionUsageWaitTimeout
@@ -2706,9 +2711,9 @@ func TestSessionUsageWait(t *testing.T) {
 					sessionUsageWaitTimeout = 105 * time.Millisecond
 					t.Cleanup(func() { sessionUsageWaitTimeout = previous })
 				}
-				original := ts.Config.Handler
+				original, _ := newRemoteUsageHandler(t, remoteUsageSpec{canonicalID: "codex:remote-session"})
 				statuses, syncs := 0, 0
-				ts.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					switch r.URL.Path {
 					case "/api/v1/sync/status":
 						statuses++
@@ -2731,10 +2736,10 @@ func TestSessionUsageWait(t *testing.T) {
 				// Serve requests in memory so virtual time advances only between polls,
 				// never while the operating system is scheduling a socket response.
 				previousTransport := http.DefaultTransport
-				http.DefaultTransport = sessionUsageHandlerTransport{ts.Config.Handler}
+				http.DefaultTransport = sessionUsageHandlerTransport{handler}
 				t.Cleanup(func() { http.DefaultTransport = previousTransport })
 				started := time.Now()
-				out, code, err := httpSessionUsageData(t.Context(), ts.URL, "", sessionUsageQuery{SessionID: "codex:remote-session", Wait: true})
+				out, code, err := httpSessionUsageData(t.Context(), "http://usage.test", "", sessionUsageQuery{SessionID: "codex:remote-session", Wait: true})
 				require.NoError(t, err)
 				if tc.missingForever {
 					assert.Equal(t, sessionUsageWaitTimeout, time.Since(started))
