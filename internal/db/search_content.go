@@ -1779,18 +1779,7 @@ func (db *DB) hybridVectorLeg(
 	ctx context.Context, f ContentSearchFilter, searcher VectorSearcher, k int,
 ) (hybridLeg, error) {
 	leg := hybridLeg{display: make(map[string]hybridDisplay)}
-	allowedSessions := db.semanticAllowedSessionIDs
-	if f.SessionID == "" {
-		allowedSessions = func(ctx context.Context, f ContentSearchFilter, ids []string) (map[string]bool, error) {
-			release, err := db.acquireBulkRead(ctx)
-			if err != nil {
-				return nil, err
-			}
-			defer release()
-			return db.semanticAllowedSessionIDs(ctx, f, ids)
-		}
-	}
-	hits, err := SelectSurvivingVectorHits(ctx, f, searcher, k, allowedSessions)
+	hits, err := SelectSurvivingVectorHits(ctx, f, searcher, k, db.semanticAllowedSessionIDs)
 	if err != nil {
 		return hybridLeg{}, err
 	}
