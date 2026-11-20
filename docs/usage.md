@@ -1003,8 +1003,8 @@ and with less overhead.
 ### Follow latest message
 
 As of 0.30.0, the session header includes a **Follow latest messages** toggle.
-When enabled, the message list auto-scrolls to the newest message as updates
-stream in, keeping a long-running session pinned to the bottom without manual
+When enabled, the message list auto-scrolls as updates stream in, so a
+long-running session stays pinned to the newest message without manual
 scrolling. The toggle also snaps back to the latest message after a sync
 rebuilds the session once the re-rendered list settles.
 
