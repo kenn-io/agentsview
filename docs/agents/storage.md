@@ -1489,8 +1489,12 @@ independent rules version. A saved count must match both the version selected
 for Signals and the current session version at lookup. A mismatch triggers a
 fresh count. Bump `frustrationMarkerRulesVersion` whenever the Go or PostgreSQL
 frustration classifier changes a verdict. On startup, writable PostgreSQL
-stores fill missing or stale counts after the Usage cache warms. Requests also
-scan and save missing or stale counts, including zero counts. A save skips
+stores fill missing or stale counts after the Usage cache warms. A Signals
+request waits up to five seconds when the active fill covers all its missing
+counts, then scans any remaining misses. Matching cacheable cold Signals
+requests share their load, while each caller can cancel its own wait. Requests
+also scan and
+save missing or stale counts, including zero counts. A save skips
 sessions changed before the write starts. A sync overlapping the save can leave
 a stale row; later reads reject that row and recount the session.
 

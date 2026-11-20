@@ -74,30 +74,7 @@ func (s *Store) storeFrustrationCounts(ctx context.Context, versions map[string]
 		tokens = append(tokens, version)
 		values = append(values, int32(counts[id]))
 	}
-	if s.cockroach {
-		_, err := retryPGCuration(ctx, func() (struct{}, error) {
-			return struct{}{}, s.writeFrustrationCounts(ctx, ids, tokens, values, versionColumn)
-		})
-		return err
-	}
-	return s.writeFrustrationCounts(ctx, ids, tokens, values, versionColumn)
-}
-
-func (s *Store) writeFrustrationCounts(ctx context.Context, ids, tokens []string, values []int32, versionColumn string) error {
-	tx, err := s.DB().BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("starting frustration counts write: %w", err)
-	}
-	defer tx.Rollback()
-	// Lock in ID order before rechecking session versions.
-	lock := "FOR SHARE"
-	if s.cockroach {
-		lock = "FOR UPDATE"
-	}
-	if _, err := tx.ExecContext(ctx, `SELECT 1 FROM sessions WHERE id = ANY($1) ORDER BY id `+lock, ids); err != nil {
-		return fmt.Errorf("locking frustration sessions: %w", err)
-	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO session_frustration_counts (session_id, session_version, rules_version, marker_count)
+	_, err := s.DB().ExecContext(ctx, `INSERT INTO session_frustration_counts (session_id, session_version, rules_version, marker_count)
         SELECT t.id, t.version, $4, t.count FROM unnest($1::text[], $2::text[], $3::integer[]) AS t(id, version, count)
         JOIN sessions s ON s.id = t.id AND `+frustrationSessionVersion("s."+versionColumn)+` = t.version
         ORDER BY t.id
@@ -106,7 +83,7 @@ func (s *Store) writeFrustrationCounts(ctx context.Context, ids, tokens []string
 	if err != nil {
 		return fmt.Errorf("writing frustration counts: %w", err)
 	}
-	return tx.Commit()
+	return nil
 }
 
 func (s *Store) scanFrustrationCounts(ctx context.Context, ids []string, versionColumn string) (map[string]int, map[string]string, error) {

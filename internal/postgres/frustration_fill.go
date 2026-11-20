@@ -20,9 +20,10 @@ type frustrationChunk struct {
 }
 
 type frustrationFillState struct {
-	mu      sync.Mutex
-	pending map[string]*frustrationChunk
-	chunks  []*frustrationChunk
+	mu        sync.Mutex
+	pending   map[string]*frustrationChunk
+	chunks    []*frustrationChunk
+	completed uint64
 }
 
 // release drops a finished chunk's session IDs and wakes waiters.
@@ -37,19 +38,21 @@ func (state *frustrationFillState) release(chunk *frustrationChunk) {
 	}
 	chunk.ids = nil
 	chunk.complete = true
+	state.completed++
 	close(chunk.done)
 }
 
 // joinFrustrationFill waits only for chunks fully covered by the request.
-func (s *Store) joinFrustrationFill(ctx context.Context, ids []string) bool {
+func (s *Store) joinFrustrationFill(ctx context.Context, ids []string, completed uint64) bool {
 	state := &s.runtimeState().frustrationFill
 	state.mu.Lock()
 	wanted := make(map[*frustrationChunk]int)
 	for _, id := range ids {
 		chunk, ok := state.pending[id]
 		if !ok {
+			changed := state.completed != completed
 			state.mu.Unlock()
-			return false
+			return changed
 		}
 		wanted[chunk]++
 	}
@@ -74,11 +77,7 @@ func (s *Store) joinFrustrationFill(ctx context.Context, ids []string) bool {
 		}
 	}
 	state.mu.Unlock()
-	budget := frustrationJoinWait
-	if deadline, ok := ctx.Deadline(); ok {
-		budget = min(budget, time.Until(deadline)/2)
-	}
-	waitCtx, cancel := context.WithTimeout(ctx, budget)
+	waitCtx, cancel := context.WithTimeout(ctx, frustrationJoinWait)
 	defer cancel()
 	for _, wait := range waits {
 		select {
