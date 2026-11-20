@@ -25,7 +25,7 @@ import (
 )
 
 func TestPGActivityReportSaved(t *testing.T) {
-	for _, mode := range []string{"restart", "sweep", "legacy", "replaced", "today", "corrupt"} {
+	for _, mode := range []string{"restart", "sweep", "legacy", "replaced", "rebuilt", "today", "corrupt"} {
 		t.Run(mode, func(t *testing.T) {
 			cache := t.TempDir()
 			t.Setenv("CACHE_DIRECTORY", cache)
@@ -78,6 +78,13 @@ func TestPGActivityReportSaved(t *testing.T) {
 			case "restart":
 				pgKeptSession(t, local, "b", "project-b", "2026-07-14")
 				pgKeptPush(t, syncer, false)
+			case "rebuilt":
+				_, err := first.pg.ExecContext(ctx, `UPDATE messages SET token_usage='{"output_tokens":600}' WHERE session_id='a' AND role='assistant'`)
+				require.NoError(t, err)
+				_, err = first.pg.ExecContext(ctx, `UPDATE sessions SET updated_at=now() WHERE id='a'`)
+				require.NoError(t, err)
+				got := pgKeptBuild(t, first, f, q, true)
+				require.Equal(t, 600, got.Report.Totals.OutputTokens)
 			case "replaced":
 				var revision int64
 				require.NoError(t, first.pg.QueryRowContext(ctx, `SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'`).Scan(&revision))
@@ -104,7 +111,7 @@ func TestPGActivityReportSaved(t *testing.T) {
 			switch mode {
 			case "restart":
 				requirePGKeptEqual(t, want, got)
-			case "replaced":
+			case "replaced", "rebuilt":
 				assert.Equal(t, 600, got.Report.Totals.OutputTokens)
 			default:
 				requirePGKeptEqual(t, want, got)
