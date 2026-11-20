@@ -175,17 +175,17 @@ func promptURLToken(text string) string {
 // "pull/1,https://", starts a new link.
 func standalonePromptURLStarts(text string) []int {
 	var starts []int
-	enclosingEnd := 0
+	enclosingStart, enclosingEnd := 0, 0
 	for _, match := range promptURLStart.FindAllStringIndex(text, -1) {
 		start := match[0]
 		if start < enclosingEnd {
-			enclosing := text[starts[len(starts)-1]:start]
+			enclosing := text[enclosingStart:start]
 			if strings.ContainsAny(enclosing, "?#") || strings.HasSuffix(enclosing, "/") || strings.HasSuffix(enclosing, "=") {
 				continue
 			}
 		}
 		starts = append(starts, start)
-		enclosingEnd = start + len(promptURLToken(text[start:]))
+		enclosingStart, enclosingEnd = start, start+len(promptURLToken(text[start:]))
 	}
 	return starts
 }
@@ -198,7 +198,8 @@ func standalonePromptURLStarts(text string) []int {
 // subpage of the request.
 func promptPRRoute(path string) (repository, number, routePath string, found bool) {
 	segments := strings.Split(strings.TrimPrefix(path, "/"), "/")
-	repoLen, numberAt := slices.Index(segments, "-"), 0
+	repoLen := slices.Index(segments, "-")
+	var numberAt int
 	switch {
 	case repoLen >= 0 && repoLen+2 < len(segments) && segments[repoLen+1] == "merge_requests":
 		numberAt = repoLen + 2
