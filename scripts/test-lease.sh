@@ -58,7 +58,7 @@ if status < 0:
     status = 128 - status
 os.close(fd)
 try:
-    lock = open(path, "r")
+    lock = open(path, "r+")
 except FileNotFoundError:
     sys.exit(128 + received if received is not None else status)
 with lock:
@@ -77,7 +77,7 @@ with lock:
         same_file = False
     if same_file:
         cleanup = ["docker", "compose", "-p", lease, "-f", "docker-compose.test.yml", "-f", "docker-compose.test-lease.yml", "down", "-v", "--remove-orphans"]
-        if subprocess.call(cleanup) != 0:
+        if subprocess.call(cleanup, start_new_session=True) != 0:
             print(f"cleanup failed; run from the repository root: TEST_SERVICE_LEASE={lease} {shlex.join(cleanup)}", file=sys.stderr)
             if status == 0:
                 status = 1

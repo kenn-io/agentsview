@@ -5,6 +5,7 @@ tmp=$(mktemp -d)
 first=
 cleanup() {
     touch "$tmp/release"
+    touch "$tmp/down-release"
     [[ -z "$first" ]] || wait "$first" 2>/dev/null || true
     if [[ -f "$tmp/ready" ]]; then
         for _ in {1..100}; do [[ -f "$tmp/exited" ]] && break; sleep .1; done
@@ -40,6 +41,11 @@ case " $* " in
   *' down '*)
     [ "$2" = -p ] && [ "$3" = "$TEST_SERVICE_LEASE" ] || exit 1
     lease-held "$HOME/.local/state/test-service-leases/$TEST_SERVICE_LEASE" || exit 1
+    if [ "${BLOCK_DOWN:-0}" = 1 ]; then
+        touch "$DOWN_STARTED"
+        while [ ! -f "$DOWN_RELEASE" ]; do sleep .1; done
+        touch "$DOWN_FINISHED"
+    fi
     exit "${DOWN_STATUS:-0}" ;;
 esac
 DOCKER
@@ -132,6 +138,65 @@ for command_status in 0 7; do
     grep -q ' down ' "$DOCKER_LOG"
     [[ -f "$HOME/.local/state/test-service-leases/$(cat "$CHECK_LEASE")" ]]
 done
+
+# Cancellation during cleanup waits for Compose, which holds the lease.
+export DOWN_STARTED="$tmp/down-started" DOWN_RELEASE="$tmp/down-release" DOWN_FINISHED="$tmp/down-finished"
+: > "$DOCKER_LOG"
+BLOCK_DOWN=1 python3 - "$root" <<'PY'
+import fcntl
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
+
+root = Path(sys.argv[1])
+env = os.environ.copy()
+process = subprocess.Popen(
+    ["./scripts/test-lease.sh", "./scripts/test-service-compose.sh", "postgres", "5432", "true"],
+    cwd=root,
+    env=env,
+    start_new_session=True,
+)
+started = Path(env["DOWN_STARTED"])
+release = Path(env["DOWN_RELEASE"])
+finished = Path(env["DOWN_FINISHED"])
+try:
+    deadline = time.monotonic() + 10
+    while not started.exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert started.exists(), "cleanup did not start"
+    lease = Path(env["HOME"]) / ".local/state/test-service-leases" / Path(env["CHECK_LEASE"]).read_text().strip()
+    with lease.open("r+") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            pass
+        else:
+            raise AssertionError("cleanup did not hold the lease")
+    args = subprocess.run(
+        ["ps", "-p", str(process.pid), "-o", "args="],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert "python3 - ./scripts/test-service-compose.sh" in args, args
+    os.killpg(process.pid, signal.SIGTERM)
+    time.sleep(0.2)
+    assert process.poll() is None, "cleanup exited before it was released"
+    assert not finished.exists(), "cleanup ignored the release gate"
+    release.touch()
+    assert process.wait(timeout=10) == 143
+    assert finished.exists(), "Compose did not finish cleanup"
+    assert not lease.exists(), "successful cleanup kept the lease file"
+finally:
+    release.touch()
+    if process.poll() is None:
+        process.terminate()
+        process.wait(timeout=10)
+PY
+unset DOWN_STARTED DOWN_RELEASE DOWN_FINISHED
 
 # Termination during startup and while the command runs cleans up the project.
 export READY="$tmp/ready"
