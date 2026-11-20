@@ -15,6 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/kept"
+	"go.kenn.io/agentsview/internal/pricing"
 )
 
 type pgActivityKept struct {
@@ -60,24 +61,6 @@ func (s *Store) saveActivityReport(selection, version string, entry pgActivityKe
 	}
 }
 
-// keepActivityReport records the identity a memo hit just resolved. A report
-// whose identity was already saved refreshes its open time; one whose
-// identity just became available is saved.
-func (s *Store) keepActivityReport(selection, version string, entry pgActivityKept, identity string, unavailable bool) {
-	saved := entry.identity == identity
-	if !saved || entry.identityUnavailable != unavailable {
-		entry.identity, entry.identityUnavailable = identity, unavailable
-		s.runtimeState().activityKept.Put(selection, version, []pgActivityKept{entry})
-	}
-	if identity != "" && entry.checkpoint != "" {
-		if saved {
-			s.activityReports.Touch(selection + "|" + identity + "|" + version)
-		} else {
-			s.saveActivityReport(selection, version, entry)
-		}
-	}
-}
-
 func (s *Store) activityReportIdentity(ctx context.Context, selection, version string, q activity.Query) (identity string, unavailable bool) {
 	memo := &s.runtimeState().activityKept
 	entries, ok := memo.Get(selection, version)
@@ -92,7 +75,7 @@ func (s *Store) activityReportIdentity(ctx context.Context, selection, version s
 		return identity, unavailable
 	}
 	var restricted bool
-	err := s.pg.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND c.relkind IN ('r', 'p') AND row_security_active(c.oid))`).Scan(&restricted)
+	err := s.pg.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND c.relkind IN ('r', 'p') AND (row_security_active(c.oid) OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attnum > 0 AND NOT a.attisdropped AND NOT has_column_privilege(c.oid, a.attnum, 'SELECT'))))`).Scan(&restricted)
 	if err != nil || restricted {
 		return "", true
 	}
@@ -116,10 +99,10 @@ func (s *Store) activityKeptVersion(ctx context.Context, pricingDigest string) (
 	if err != nil {
 		return "", fmt.Errorf("reading kept activity version: %w", err)
 	}
-	return fmt.Sprintf("%d|%s", oid, pricingDigest), nil
+	return fmt.Sprintf("%d|%s|%s|%s", oid, pricingDigest, pricing.BillingPolicyVersion(), pricing.ConfiguredAliasesDigest()), nil
 }
 
-func (s *Store) keptActivityReport(ctx context.Context, selection, version string, f db.AnalyticsFilter, rangeStart, rangeEnd, lower, upper string) (kept.Report, int64, bool, error) {
+func (s *Store) keptActivityReport(ctx context.Context, selection, version string, f db.AnalyticsFilter, rangeStart, rangeEnd, lower, upper string) (kept.Report, int64, string, bool, error) {
 	memo := &s.runtimeState().activityKept
 	entries, ok := memo.Get(selection, version)
 	after := int64(math.MaxInt64)
@@ -128,32 +111,32 @@ func (s *Store) keptActivityReport(ctx context.Context, selection, version strin
 	}
 	through, changed, current, previous, err := s.loadUsageChangesWithHistory(ctx, after)
 	if isInsufficientPrivilege(err) || isUndefinedTable(err) {
-		return kept.Report{}, 0, false, nil
+		return kept.Report{}, 0, "", false, nil
 	}
 	if err != nil || through == 0 || !ok {
-		return kept.Report{}, through, false, err
+		return kept.Report{}, through, current, false, err
 	}
 	entry := entries[0]
 	if entry.checkpoint != "" && entry.checkpoint != previous {
-		return kept.Report{}, through, false, nil
+		return kept.Report{}, through, current, false, nil
 	}
 	if through == entry.revision {
-		return entry.report, through, true, nil
+		return entry.report, through, current, true, nil
 	}
 	if through < entry.revision {
-		return kept.Report{}, through, false, nil
+		return kept.Report{}, through, current, false, nil
 	}
 	for _, id := range changed {
 		_, candidate := slices.BinarySearch(entry.candidates, id)
 		_, peer := slices.BinarySearch(entry.peers, id)
 		if candidate || peer {
-			return kept.Report{}, through, false, nil
+			return kept.Report{}, through, current, false, nil
 		}
 	}
 	if len(changed) > 0 {
 		_, ids, err := s.activityReportSessions(ctx, f, rangeStart, rangeEnd, changed)
 		if err != nil || len(ids) > 0 {
-			return kept.Report{}, through, false, err
+			return kept.Report{}, through, current, false, err
 		}
 		var overlaps bool
 		err = s.pg.QueryRowContext(ctx, `SELECT EXISTS (
@@ -165,24 +148,21 @@ func (s *Store) keptActivityReport(ctx context.Context, selection, version strin
     AND COALESCE(m.timestamp, s.started_at) <= $4::timestamptz)`,
 			pgx.QueryExecModeDescribeExec, changed, entry.candidates, lower, upper).Scan(&overlaps)
 		if err != nil {
-			return kept.Report{}, through, false, fmt.Errorf("checking kept activity changes: %w", err)
+			return kept.Report{}, through, current, false, fmt.Errorf("checking kept activity changes: %w", err)
 		}
 		if overlaps {
-			return kept.Report{}, through, false, nil
+			return kept.Report{}, through, current, false, nil
 		}
 	}
 	projects, err := s.BuildProjectIdentityMap(ctx, entry.labels)
 	if err != nil {
-		return kept.Report{}, through, false, err
+		return kept.Report{}, through, current, false, err
 	}
 	if !reflect.DeepEqual(export.ProjectMapForWire(projects), entry.report.Artifacts.Report.Projects) {
-		return kept.Report{}, through, false, nil
+		return kept.Report{}, through, current, false, nil
 	}
 	entry.revision = through
 	entry.checkpoint = current
 	memo.Put(selection, version, []pgActivityKept{entry})
-	if entry.identity != "" && s.activityReports.Touch(selection+"|"+entry.identity+"|"+version) {
-		s.saveActivityReport(selection, version, entry)
-	}
-	return entry.report, through, true, nil
+	return entry.report, through, current, true, nil
 }

@@ -3,7 +3,9 @@ package db
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json/v2"
 	"fmt"
 	"maps"
@@ -63,6 +65,25 @@ var trendPartsObserver struct {
 // TrendsTimezoneKey identifies the resolved rules used to bucket messages.
 func TrendsTimezoneKey(f AnalyticsFilter) string {
 	return usageTimezoneIdentityFor(f.location(), nil).Key
+}
+
+// TrendsTimezoneRangeKey identifies the timezone rules used within a report range.
+func TrendsTimezoneRangeKey(location *time.Location, start, end time.Time) string {
+	digest := sha256.New()
+	writeUsageHashString(digest, location.String())
+	for cursor := start; !cursor.After(end); {
+		localized := cursor.In(location)
+		zone, offset := localized.Zone()
+		writeUsageHashString(digest, zone)
+		writeUsageHashInt64(digest, int64(offset))
+		_, next := localized.ZoneBounds()
+		if next.IsZero() || !next.After(cursor) || next.After(end) {
+			break
+		}
+		writeUsageHashInt64(digest, next.Unix())
+		cursor = next
+	}
+	return hex.EncodeToString(digest.Sum(nil))
 }
 
 // SetTrendPartsReadObserver installs an observer for tests and returns its reset function.

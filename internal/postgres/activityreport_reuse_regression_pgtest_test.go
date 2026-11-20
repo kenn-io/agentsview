@@ -3,24 +3,23 @@
 package postgres
 
 import (
-	"archive/zip"
 	"context"
-	"database/sql"
+	"encoding/binary"
 	"encoding/json/v2"
 	"fmt"
-	"io"
 	"math/rand/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/activity"
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/pricing"
 )
 
 func TestPGSavedActivityReportRespectsChangedRowPolicy(t *testing.T) {
@@ -41,6 +40,10 @@ func TestPGSavedActivityReportRespectsChangedRowPolicy(t *testing.T) {
  GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_system(), pg_catalog.pg_current_wal_lsn(), pg_catalog.pg_walfile_name(pg_lsn) TO "`+role+`";
  CREATE POLICY activity_reader ON sessions FOR SELECT TO "`+role+`" USING (true)`)
 	require.NoError(t, err)
+	var columns string
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT string_agg(quote_ident(column_name), ',') FROM information_schema.columns WHERE table_schema=$1 AND table_name='sessions'`, syncer.schema).Scan(&columns))
+	_, err = syncer.pg.ExecContext(ctx, `REVOKE SELECT ON sessions FROM "`+role+`"; GRANT SELECT (`+columns+`) ON sessions TO "`+role+`"`)
+	require.NoError(t, err)
 	password := setHostedFixturePassword(t, syncer.pg, role)
 	target, err := appendConnParams(testPGURL(t), map[string]string{"user": role, "password": password})
 	require.NoError(t, err)
@@ -52,6 +55,16 @@ func TestPGSavedActivityReportRespectsChangedRowPolicy(t *testing.T) {
 	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
 	require.NoError(t, err)
 	require.Len(t, files, 1)
+	var allowed string
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT string_agg(quote_ident(column_name), ',') FROM information_schema.columns WHERE table_schema=$1 AND table_name='sessions' AND column_name <> 'agent'`, syncer.schema).Scan(&allowed))
+	_, err = syncer.pg.ExecContext(ctx, `REVOKE SELECT (`+columns+`) ON sessions FROM "`+role+`"; GRANT SELECT (`+allowed+`) ON sessions TO "`+role+`"`)
+	require.NoError(t, err)
+	restricted := openPGActivityInputStore(t, target, syncer.schema, directory)
+	_, err = restricted.BuildActivityReportArtifacts(ctx, f, q, nil)
+	require.Error(t, err)
+	require.NoError(t, restricted.Close())
+	_, err = syncer.pg.ExecContext(ctx, `GRANT SELECT (agent) ON sessions TO "`+role+`"`)
+	require.NoError(t, err)
 	_, err = syncer.pg.ExecContext(ctx, `ALTER TABLE sessions ENABLE ROW LEVEL SECURITY; ALTER POLICY activity_reader ON sessions USING (false)`)
 	require.NoError(t, err)
 	restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
@@ -69,7 +82,7 @@ func TestPGSavedActivityReportNamedZoneRuleChange(t *testing.T) {
 		target, schema := os.Getenv("ACTIVITY_ZONE_TARGET"), os.Getenv("ACTIVITY_ZONE_SCHEMA")
 		store := openPGActivityInputStore(t, target, schema, os.Getenv("ACTIVITY_ZONE_DIRECTORY"))
 		defer store.Close()
-		q, err := activity.ResolveQuery(activity.QueryInput{Preset: "custom", From: "2026-06-14T00:00:00Z", To: "2026-06-16T00:00:00Z", Timezone: "Test/Zone", BucketOverride: "1d"}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
+		q, err := activity.ResolveQuery(activity.QueryInput{Preset: "custom", From: "1969-06-14T00:00:00Z", To: "1969-06-16T00:00:00Z", Timezone: "Test/Zone", BucketOverride: "1d"}, time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC))
 		require.NoError(t, err)
 		loaded := false
 		got, err := store.BuildActivityReportArtifacts(t.Context(), db.AnalyticsFilter{Timezone: "Test/Zone"}, q, func(p activity.Progress) { loaded = loaded || p.Phase == activity.ProgressLoadingUsage })
@@ -84,22 +97,23 @@ func TestPGSavedActivityReportNamedZoneRuleChange(t *testing.T) {
 	}
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	local, syncer, _ := newUsageJournalFixture(t)
-	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptSession(t, local, "a", "project-a", "1969-06-14")
 	pgKeptPush(t, syncer, false)
 	target, directory := testPGURL(t), t.TempDir()
 	exe, err := os.Executable()
 	require.NoError(t, err)
-	zones, err := zip.OpenReader(filepath.Join(runtime.GOROOT(), "lib", "time", "zoneinfo.zip"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, zones.Close()) })
-	for i, source := range []string{"UTC", "Etc/GMT+12"} {
+	for i, offset := range []int32{0, -12 * 60 * 60} {
 		zoneDir := t.TempDir()
 		require.NoError(t, os.Mkdir(filepath.Join(zoneDir, "Test"), 0700))
-		zoneFile, err := zones.Open(source)
-		require.NoError(t, err)
-		zone, err := io.ReadAll(zoneFile)
-		require.NoError(t, err)
-		require.NoError(t, zoneFile.Close())
+		// Both zones use UTC from 1970 onward, but differ before it.
+		zone := make([]byte, 44+4+1+12+4)
+		copy(zone, "TZif")
+		binary.BigEndian.PutUint32(zone[32:36], 1)
+		binary.BigEndian.PutUint32(zone[36:40], 2)
+		binary.BigEndian.PutUint32(zone[40:44], 4)
+		zone[48] = 1
+		binary.BigEndian.PutUint32(zone[49:53], uint32(offset))
+		copy(zone[61:], "TST\x00")
 		require.NoError(t, os.WriteFile(filepath.Join(zoneDir, "Test", "Zone"), zone, 0600))
 		out := filepath.Join(t.TempDir(), "report.json")
 		cmd := exec.CommandContext(t.Context(), exe, "-test.run=^TestPGSavedActivityReportNamedZoneRuleChange$")
@@ -121,65 +135,47 @@ func TestPGSavedActivityReportNamedZoneRuleChange(t *testing.T) {
 	}
 }
 
-type activityHistorySwitch struct {
-	storeExecutor
-	switchHistory func(context.Context) error
-	err           error
-}
-
-func (s *activityHistorySwitch) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
-	rows, err := s.storeExecutor.QueryContext(ctx, query, args...)
-	if err == nil && s.switchHistory != nil && strings.Contains(query, "LEFT JOIN usage_session_changes c") {
-		s.err = s.switchHistory(ctx)
-		s.switchHistory = nil
-	}
-	return rows, err
-}
-
-func TestPGSavedActivityReportHistoryChangesBetweenReads(t *testing.T) {
+func TestPGSavedActivityReportWriteDuringBuild(t *testing.T) {
 	t.Setenv("CACHE_DIRECTORY", t.TempDir())
 	local, syncer, _ := newUsageJournalFixture(t)
 	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
-	pgKeptSession(t, local, "b", "project-b", "2026-07-14")
 	pgKeptPush(t, syncer, false)
-	target, directory := testPGURL(t), t.TempDir()
-	store := openPGActivityInputStore(t, target, syncer.schema, directory)
+	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, t.TempDir())
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
-	require.Equal(t, 500, pgKeptBuild(t, store, f, q, true).Report.Totals.OutputTokens)
-	var revision int64
-	require.NoError(t, syncer.pg.QueryRowContext(t.Context(), `SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'`).Scan(&revision))
-	_, err := syncer.pg.ExecContext(t.Context(), `UPDATE sessions SET message_count=message_count+1 WHERE id='b'`)
+	pushed := false
+	_, err := store.BuildActivityReportArtifacts(t.Context(), f, q, func(p activity.Progress) {
+		if p.Phase == activity.ProgressLoadingUsage && !pushed {
+			pushed = true
+			pgKeptSession(t, local, "b", "project-b", "2026-07-14")
+			pgKeptPush(t, syncer, false)
+		}
+	})
 	require.NoError(t, err)
-	switcher := &activityHistorySwitch{storeExecutor: store.pg}
-	switcher.switchHistory = func(ctx context.Context) error {
-		tx, err := syncer.pg.BeginTx(ctx, nil)
-		if err != nil {
-			return err
-		}
-		defer tx.Rollback()
-		if _, err = tx.ExecContext(ctx, `DELETE FROM usage_session_changes WHERE revision > $1`, revision); err != nil {
-			return err
-		}
-		if _, err = tx.ExecContext(ctx, `UPDATE sync_metadata SET value=$1::bigint::text WHERE key='usage_change_revision'`, revision); err != nil {
-			return err
-		}
-		if _, err = tx.ExecContext(ctx, `UPDATE messages SET token_usage='{"output_tokens":700}' WHERE session_id='a' AND role='assistant'`); err != nil {
-			return err
-		}
-		if _, err = tx.ExecContext(ctx, `UPDATE sessions SET updated_at=now() WHERE id='a'`); err != nil {
-			return err
-		}
-		return tx.Commit()
+	require.True(t, pushed)
+	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
+	require.NoError(t, err)
+	require.Empty(t, files)
+}
+
+func TestPGSavedActivityReportConfiguredAlias(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	t.Cleanup(func() { pricing.SetConfiguredAliases(nil) })
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	directory := t.TempDir()
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	for i, target := range []string{"alias-one", "alias-two"} {
+		pricing.SetConfiguredAliases(map[string]string{"kept-model": target})
+		store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+		store.SetCustomPricing(map[string]config.CustomModelRate{
+			"alias-one": {OutputMicrodollarsPerMTok: 20_000_000},
+			"alias-two": {OutputMicrodollarsPerMTok: 40_000_000},
+		})
+		got := pgKeptBuild(t, store, f, q, true)
+		want := []string{"0.01", "0.02"}[i]
+		require.Equal(t, money.MustParseDollars(want), got.Report.Totals.Cost)
+		require.NoError(t, store.Close())
 	}
-	store.pg = switcher
-	first := pgKeptBuild(t, store, f, q, false)
-	require.NoError(t, switcher.err)
-	require.Nil(t, switcher.switchHistory)
-	require.Equal(t, 500, first.Report.Totals.OutputTokens)
-	var through int64
-	require.NoError(t, syncer.pg.QueryRowContext(t.Context(), `SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'`).Scan(&through))
-	require.Equal(t, revision+1, through)
-	got := pgKeptBuild(t, store, f, q, true)
-	require.Equal(t, 700, got.Report.Totals.OutputTokens)
 }

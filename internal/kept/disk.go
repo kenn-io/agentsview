@@ -61,16 +61,6 @@ func (d *Disk) Get(selection, version string) ([]byte, bool) {
 	return data, true
 }
 
-// Touch records an open only when the selection is still on disk.
-func (d *Disk) Touch(selection string) bool {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.reports.disk.dir != "" && selection != "" {
-		return d.reports.disk.touch(selection) == nil
-	}
-	return false
-}
-
 func (d activityReportDisk) load(selection, key string, maxFile int64) ([]byte, bool, error) {
 	file, err := os.Open(d.path(selection))
 	if err != nil {

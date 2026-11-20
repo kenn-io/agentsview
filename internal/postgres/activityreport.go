@@ -157,31 +157,24 @@ func (s *Store) BuildActivityReportArtifacts(
 			return activity.CandidateArtifacts{}, err
 		}
 		if version != "" {
-			version += "|" + db.TrendsTimezoneKey(db.AnalyticsFilter{Timezone: q.Timezone})
+			if q.Timezone != "Local" && q.Loc != nil {
+				version += "|" + db.TrendsTimezoneRangeKey(q.Loc, q.RangeStart, q.RangeEnd)
+			}
 			selection = kept.Selection(f, q)
-			memo := &s.runtimeState().activityKept
 			identity, unavailable = s.activityReportIdentity(ctx, selection, version, q)
 			var report kept.Report
 			var hit bool
-			report, revision, hit, err = s.keptActivityReport(ctx, selection, version, f,
+			report, revision, checkpoint, hit, err = s.keptActivityReport(ctx, selection, version, f,
 				rangeStartUTC, rangeEndUTC, lowerBound, upperBound)
 			if err != nil {
 				return activity.CandidateArtifacts{}, err
 			}
 			if hit {
-				if entries, ok := memo.Get(selection, version); ok {
-					s.keepActivityReport(selection, version, entries[0], identity, unavailable)
-				}
 				activity.ReportProgress(onProgress, report.Done)
 				return report.Artifacts, nil
 			}
 			if revision == 0 {
 				selection = ""
-			} else {
-				checkpoint, _, err = usageHistoryCheckpoints(ctx, s.pg, revision, revision)
-				if err != nil {
-					return activity.CandidateArtifacts{}, err
-				}
 			}
 		}
 	}
@@ -243,16 +236,15 @@ func (s *Store) BuildActivityReportArtifacts(
 		for _, id := range candidates {
 			delete(read, id)
 		}
-		memo := &s.runtimeState().activityKept
-		memo.Put(selection, version, []pgActivityKept{{
+		entry := pgActivityKept{
 			report: kept.Report{Artifacts: artifacts, Done: done}, revision: revision, checkpoint: checkpoint,
 			candidates: candidates, peers: slices.Clip(slices.Sorted(maps.Keys(read))),
 			labels: activity.ProjectLabels(sessions), identity: identity, identityUnavailable: unavailable,
-		}})
-		if identity != "" {
-			if entries, ok := memo.Get(selection, version); ok {
-				s.saveActivityReport(selection, version, entries[0])
-			}
+		}
+		s.runtimeState().activityKept.Put(selection, version, []pgActivityKept{entry})
+		through, _, current, _, checkErr := s.loadUsageChangesWithHistory(ctx, revision)
+		if checkErr == nil && through == revision && current == checkpoint && identity != "" {
+			s.saveActivityReport(selection, version, entry)
 		}
 	}
 	return artifacts, err
