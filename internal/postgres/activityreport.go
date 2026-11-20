@@ -241,10 +241,12 @@ func (s *Store) BuildActivityReportArtifacts(
 			candidates: candidates, peers: slices.Clip(slices.Sorted(maps.Keys(read))),
 			labels: activity.ProjectLabels(sessions), identity: identity, identityUnavailable: unavailable,
 		}
-		s.runtimeState().activityKept.Put(selection, version, []pgActivityKept{entry})
 		through, _, current, _, checkErr := s.loadUsageChangesWithHistory(ctx, revision)
-		if checkErr == nil && through == revision && current == checkpoint && identity != "" {
-			s.saveActivityReport(selection, version, entry)
+		if checkErr == nil && through == revision && current == checkpoint {
+			s.runtimeState().activityKept.Put(selection, version, []pgActivityKept{entry})
+			if identity != "" {
+				s.saveActivityReport(selection, version, entry)
+			}
 		}
 	}
 	return artifacts, err

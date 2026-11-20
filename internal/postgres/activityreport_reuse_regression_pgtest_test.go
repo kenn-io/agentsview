@@ -147,15 +147,17 @@ func TestPGSavedActivityReportWriteDuringBuild(t *testing.T) {
 	_, err := store.BuildActivityReportArtifacts(t.Context(), f, q, func(p activity.Progress) {
 		if p.Phase == activity.ProgressLoadingUsage && !pushed {
 			pushed = true
-			pgKeptSession(t, local, "b", "project-b", "2026-07-14")
+			pgKeptSession(t, local, "a", "project-a", "2026-06-15")
 			pgKeptPush(t, syncer, false)
 		}
 	})
 	require.NoError(t, err)
 	require.True(t, pushed)
+	require.Len(t, store.runtimeState().activityKept.Snapshot(), 0)
 	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
 	require.NoError(t, err)
 	require.Empty(t, files)
+	require.Empty(t, pgKeptBuild(t, store, f, q, true).Sessions)
 }
 
 func TestPGSavedActivityReportConfiguredAlias(t *testing.T) {
