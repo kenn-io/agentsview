@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/BurntSushi/toml"
@@ -239,6 +240,62 @@ func TestAgentSetupWithoutMCP(t *testing.T) {
 			require.Equal(t, "skill", report.Rows[0].Piece)
 			require.Equal(t, "ok", report.Rows[0].State)
 			got, err := os.ReadFile(path)
+			require.NoError(t, err)
+			require.Equal(t, tc.content, string(got))
+		})
+	}
+}
+
+func TestAgentSetupWithoutMCPRepairHintsKeepCustomEntry(t *testing.T) {
+	for _, tc := range []struct{ agent, config, content string }{
+		{"claude", ".claude.json", `{"mcpServers":{"agentsview":{"command":"custom","args":["serve"],"env":{"DATA":"fixture"}}}}`},
+		{"codex", ".codex/config.toml", "[mcp_servers.agentsview]\ncommand = 'custom'\nargs = ['serve']\n"},
+	} {
+		t.Run(tc.agent, func(t *testing.T) {
+			home := t.TempDir()
+			setDoctorMemoryTestEnvironment(t, home)
+			fakeAgent(t, tc.agent, "")
+			config := filepath.Join(home, tc.config)
+			require.NoError(t, os.MkdirAll(filepath.Dir(config), 0o700))
+			require.NoError(t, os.WriteFile(config, []byte(tc.content), 0o600))
+			out, err := executeCommand(newRootCommand(), "agent", "setup", "--agent", tc.agent, "--mcp=false", "--check", "--json")
+			require.Error(t, err)
+			var report struct {
+				Rows []struct {
+					NextStep string `json:"next_step"`
+				} `json:"rows"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(out), &report))
+			require.Len(t, report.Rows, 1)
+			require.Contains(t, report.Rows[0].NextStep, "--mcp=false")
+			require.Contains(t, report.Rows[0].NextStep, "--agent "+tc.agent)
+			out, err = executeCommand(newRootCommand(), "agent", "setup", "--agent", tc.agent, "--mcp=false")
+			require.NoError(t, err, out)
+			harness := skills.HarnessClaude
+			if tc.agent == "codex" {
+				harness = skills.HarnessAgents
+			}
+			skill := filepath.Join(skills.TargetDir(harness, home), skillFileName)
+			data, err := os.ReadFile(skill)
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(skill, append(data, []byte("\ncustom edit\n")...), 0o600))
+			out, err = executeCommand(newRootCommand(), "agent", "setup", "--agent", tc.agent, "--mcp=false", "--check", "--json")
+			require.Error(t, err)
+			require.NoError(t, json.Unmarshal([]byte(out), &report))
+			repair := report.Rows[0].NextStep
+			require.Equal(t, "agentsview agent setup --mcp=false --agent "+tc.agent+" --force", repair)
+			out, err = executeCommand(newRootCommand(), "agent", "setup", "--agent", tc.agent, "--mcp=false", "--json")
+			require.Error(t, err)
+			require.NoError(t, json.Unmarshal([]byte(out), &report))
+			require.Equal(t, repair, report.Rows[0].NextStep)
+			human, err := executeCommand(newRootCommand(), "agent", "setup", "--agent", tc.agent, "--mcp=false")
+			require.Error(t, err)
+			require.Contains(t, human, "agentsview agent setup --mcp=false --agent "+tc.agent+" --check")
+			args := strings.Fields(repair)
+			require.Equal(t, "agentsview", args[0])
+			out, err = executeCommand(newRootCommand(), args[1:]...)
+			require.NoError(t, err, out)
+			got, err := os.ReadFile(config)
 			require.NoError(t, err)
 			require.Equal(t, tc.content, string(got))
 		})

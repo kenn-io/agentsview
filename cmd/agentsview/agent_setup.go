@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/kit/agentmcp"
@@ -23,6 +26,19 @@ func newAgentCommand() *cobra.Command {
 			return setupItems(agent, force, mcp)
 		},
 	})
+	run := cmd.RunE
+	cmd.RunE = func(cmd *cobra.Command, args []string) error {
+		if mcp {
+			return run(cmd, args)
+		}
+		out := cmd.OutOrStdout()
+		var buffer bytes.Buffer
+		cmd.SetOut(&buffer)
+		err := run(cmd, args)
+		cmd.SetOut(out)
+		_, writeErr := io.WriteString(out, mcpSafeSetupOutput(buffer.String()))
+		return errors.Join(err, writeErr)
+	}
 	format := formatFlag("human")
 	cmd.Flags().Var(&format, "format", "Output format: human or json")
 	cmd.PreRunE = func(cmd *cobra.Command, _ []string) error {
@@ -77,10 +93,14 @@ func setupItems(agent string, force, withMCP bool) ([]agentsetup.Item, error) {
 					state = agentsetup.StateOutdated
 				}
 			case "modified", "foreign":
+				next := "agentsview agent setup --force"
+				if !withMCP {
+					next = fmt.Sprintf("agentsview agent setup --mcp=false --agent %s --force", agent)
+				}
 				return agentsetup.Status{
 					State:    agentsetup.StateModified,
 					Reason:   "Skill files were edited",
-					NextStep: "agentsview agent setup --force",
+					NextStep: next,
 				}, nil
 			}
 		}
@@ -89,9 +109,14 @@ func setupItems(agent string, force, withMCP bool) ([]agentsetup.Item, error) {
 	skill := agentsetup.Item{
 		Name:  "skill",
 		Check: checkSkills,
-		Install: func(context.Context) error {
-			return runSkillsInstall(
-				io.Discard, []skills.Harness{harness}, home, force, skillRemote)
+		Install: func(ctx context.Context) error {
+			err := runSkillsInstall(io.Discard, []skills.Harness{harness}, home, force, skillRemote)
+			if err != nil && !withMCP {
+				if status, checkErr := checkSkills(ctx); checkErr == nil && status.State == agentsetup.StateModified {
+					return errors.New(status.Reason)
+				}
+			}
+			return err
 		},
 	}
 	if !withMCP {
@@ -128,4 +153,27 @@ func memoryMCPServer() agentmcp.Server {
 		Command: "agentsview",
 		Args:    []string{"mcp", "--profile", "memory"},
 	}
+}
+
+// mcpSafeSetupOutput keeps the MCP setting in commands produced by agentsetup.
+func mcpSafeSetupOutput(output string) string {
+	const command = "agentsview agent setup"
+	var result strings.Builder
+	for {
+		before, after, found := strings.Cut(output, command)
+		result.WriteString(before)
+		if !found {
+			break
+		}
+		result.WriteString(command)
+		end := strings.IndexAny(after, "\n\r\"`;")
+		if end < 0 {
+			end = len(after)
+		}
+		if !strings.Contains(after[:end], "--mcp=false") {
+			result.WriteString(" --mcp=false")
+		}
+		output = after
+	}
+	return result.String()
 }
