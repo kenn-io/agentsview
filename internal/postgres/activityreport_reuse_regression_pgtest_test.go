@@ -10,8 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -92,6 +95,69 @@ type activityFilenodeProbe struct {
 	storeExecutor
 	after  func()
 	denied bool
+}
+
+type activityPolicyProbe struct {
+	storeExecutor
+	checks int
+}
+
+func (p *activityPolicyProbe) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	if strings.Contains(query, "row_security_active") {
+		p.checks++
+	}
+	return p.storeExecutor.QueryRowContext(ctx, query, args...)
+}
+
+func TestPGActivityReportWarmHitPolicyChecks(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, t.TempDir())
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	pgKeptBuild(t, store, f, q, true)
+	probe := &activityPolicyProbe{storeExecutor: store.pg}
+	store.pg = probe
+	pgKeptBuild(t, store, f, q, false)
+	require.Equal(t, 1, probe.checks)
+}
+
+type activityHistoryTracer struct{ reads atomic.Int32 }
+
+func (p *activityHistoryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	if strings.Contains(data.SQL, "LEFT JOIN usage_session_changes c") {
+		p.reads.Add(1)
+	}
+	return ctx
+}
+
+func (*activityHistoryTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+func TestPGActivityReportAdvancedHitHistoryReads(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptSession(t, local, "b", "project-b", "2026-07-14")
+	pgKeptPush(t, syncer, false)
+	config, err := pgx.ParseConfig(testPGURL(t))
+	require.NoError(t, err)
+	config.RuntimeParams["search_path"] = syncer.schema
+	config.RuntimeParams["TimeZone"] = "UTC"
+	trace := &activityHistoryTracer{}
+	config.Tracer = trace
+	pool := stdlib.OpenDB(*config)
+	store := &Store{pg: pool, ownedDB: pool}
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(t, store.ConfigureUsageCache(t.Context(), t.TempDir(), testPGURL(t), syncer.schema))
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	pgKeptBuild(t, store, f, q, true)
+	_, err = syncer.pg.ExecContext(t.Context(), `UPDATE sessions SET message_count=message_count+1 WHERE id='b'`)
+	require.NoError(t, err)
+	trace.reads.Store(0)
+	pgKeptBuild(t, store, f, q, false)
+	require.EqualValues(t, 2, trace.reads.Load())
 }
 
 func (p *activityFilenodeProbe) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {

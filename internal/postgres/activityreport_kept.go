@@ -134,23 +134,13 @@ func (s *Store) validateKeptActivityReport(ctx context.Context, selection, versi
 		defer func() { _ = tx.Rollback() }()
 		reader = s.readView(tx)
 	}
-	entry, revision, checkpoint, hit, err := reader.keptActivityReport(ctx, selection, version, f, rangeStart, rangeEnd, lower, upper)
+	var snapshotChanges []string
+	entry, revision, checkpoint, hit, err := reader.keptActivityReport(ctx, entries, hadEntry, f, rangeStart, rangeEnd, lower, upper, &snapshotChanges)
 	if err != nil {
 		return kept.Report{}, revision, checkpoint, false, err
 	}
-	var snapshotChanges []string
-	var snapshotErr error
-	if hit && hadEntry && entry.revision != entries[0].revision && entries[0].checkpoint != "" && tx != nil {
-		_, snapshotChanges, _, _, snapshotErr = reader.loadUsageChangesWithHistory(ctx, entries[0].revision)
-	}
 	if !hit {
 		return kept.Report{}, revision, checkpoint, false, nil
-	}
-	if isInsufficientPrivilege(snapshotErr) || isUndefinedTable(snapshotErr) {
-		return kept.Report{}, 0, "", false, nil
-	}
-	if snapshotErr != nil {
-		return kept.Report{}, 0, "", false, snapshotErr
 	}
 	if tx != nil {
 		if err := tx.Commit(); err != nil {
@@ -161,7 +151,7 @@ func (s *Store) validateKeptActivityReport(ctx context.Context, selection, versi
 		// A restore can replace the history while validation holds its snapshot.
 		// Do not advance the memo until the live journal still matches it.
 		if hadEntry && entry.revision != entries[0].revision && entries[0].checkpoint != "" {
-			if tx != nil && snapshotErr == nil {
+			if tx != nil {
 				through, changes, current, previous, checkErr := s.loadUsageChangesWithHistory(ctx, entries[0].revision)
 				if checkErr == nil && through == revision && current == checkpoint && previous == entries[0].checkpoint && slices.Equal(changes, snapshotChanges) {
 					s.runtimeState().activityKept.Put(selection, version, []pgActivityKept{entry})
@@ -174,14 +164,13 @@ func (s *Store) validateKeptActivityReport(ctx context.Context, selection, versi
 	return entry.report, revision, checkpoint, hit, nil
 }
 
-func (s *Store) keptActivityReport(ctx context.Context, selection, version string, f db.AnalyticsFilter, rangeStart, rangeEnd, lower, upper string) (pgActivityKept, int64, string, bool, error) {
-	memo := &s.runtimeState().activityKept
-	entries, ok := memo.Get(selection, version)
+func (s *Store) keptActivityReport(ctx context.Context, entries []pgActivityKept, ok bool, f db.AnalyticsFilter, rangeStart, rangeEnd, lower, upper string, snapshotChanges *[]string) (pgActivityKept, int64, string, bool, error) {
 	after := int64(math.MaxInt64)
 	if ok {
 		after = entries[0].revision
 	}
 	through, changed, current, previous, err := s.loadUsageChangesWithHistory(ctx, after)
+	*snapshotChanges = changed
 	if isInsufficientPrivilege(err) || isUndefinedTable(err) {
 		return pgActivityKept{}, 0, "", false, nil
 	}

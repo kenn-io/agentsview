@@ -172,17 +172,19 @@ func (s *Store) BuildActivityReportArtifacts(
 		}
 		if version != "" {
 			selection = kept.Selection(f, q)
-			if !s.activityReportRestricted(ctx) {
-				identity = s.activityReportIdentity(ctx, q)
-			}
 			diskLoaded := false
 			memo := &s.runtimeState().activityKept
-			if _, ok := memo.Get(selection, version); !ok && identity != "" {
-				if entry, found := s.loadActivityReport(selection, version, identity); found {
-					token, _, checkErr := usageHistoryCheckpoints(ctx, s.pg, entry.revision, entry.revision)
-					if checkErr == nil && token != "" && token == entry.checkpoint {
-						memo.Put(selection, version, []pgActivityKept{entry})
-						diskLoaded = true
+			if _, ok := memo.Get(selection, version); !ok {
+				if !s.activityReportRestricted(ctx) {
+					identity = s.activityReportIdentity(ctx, q)
+				}
+				if identity != "" {
+					if entry, found := s.loadActivityReport(selection, version, identity); found {
+						token, _, checkErr := usageHistoryCheckpoints(ctx, s.pg, entry.revision, entry.revision)
+						if checkErr == nil && token != "" && token == entry.checkpoint {
+							memo.Put(selection, version, []pgActivityKept{entry})
+							diskLoaded = true
+						}
 					}
 				}
 			}
@@ -195,14 +197,17 @@ func (s *Store) BuildActivityReportArtifacts(
 				return activity.CandidateArtifacts{}, checkErr
 			}
 			revision = rev
-			if diskLoaded && s.activityReportRestricted(ctx) {
+			restricted := (diskLoaded || hit) && s.activityReportRestricted(ctx)
+			if diskLoaded && restricted {
 				memo.DeleteSlots(func(slot string) bool { return slot == selection })
 				selection = ""
 			} else if hit {
-				restricted := s.activityReportRestricted(ctx)
 				currentFiles, fileErr := s.activityTableIdentity(ctx)
 				if fileErr == nil && currentFiles == files {
 					if !restricted {
+						if identity == "" {
+							identity = s.activityReportIdentity(ctx, q)
+						}
 						s.refreshActivityReport(selection, version, identity, previousRevision, rev, currentCheckpoint)
 					}
 					activity.ReportProgress(onProgress, report.Done)
