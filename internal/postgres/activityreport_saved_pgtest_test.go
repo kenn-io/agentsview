@@ -3,6 +3,7 @@
 package postgres
 
 import (
+	"encoding/json/v2"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,13 +19,13 @@ import (
 )
 
 func TestPGActivityReportSaved(t *testing.T) {
-	for _, mode := range []string{"restart", "sweep", "unavailable", "memo-rejected", "legacy", "replaced", "repeated", "identity-retry", "pricing", "today"} {
+	for _, mode := range []string{"restart", "sweep", "unavailable", "memo-rejected", "legacy", "replaced", "repeated", "evicted", "identity-retry", "pricing", "today", "local"} {
 		t.Run(mode, func(t *testing.T) {
 			cache := t.TempDir()
 			t.Setenv("CACHE_DIRECTORY", cache)
 			local, syncer, _ := newUsageJournalFixture(t)
 			pgKeptSession(t, local, "a", "project-a", "2026-06-14")
-			if mode == "repeated" {
+			if mode == "repeated" || mode == "evicted" {
 				pgKeptSession(t, local, "b", "project-b", "2026-07-14")
 			}
 			require.NoError(t, local.UpsertProjectIdentityObservation(t.Context(), pgKeptIdentity("a", 14)))
@@ -36,6 +37,9 @@ func TestPGActivityReportSaved(t *testing.T) {
 			}
 			target, directory := testPGURL(t), t.TempDir()
 			q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+			if mode == "local" {
+				q, f = pgDayQuery(t, "2026-06-14", "Local"), db.AnalyticsFilter{Timezone: "Local"}
+			}
 			first := openPGActivityInputStore(t, target, syncer.schema, directory)
 			t.Cleanup(func() { require.NoError(t, first.Close()) })
 			if mode == "pricing" {
@@ -80,10 +84,16 @@ func TestPGActivityReportSaved(t *testing.T) {
 			want := pgKeptBuild(t, first, f, q, true)
 			files, err := filepath.Glob(filepath.Join(cache, "postgres-activity-reports", "*", "*.gob"))
 			require.NoError(t, err)
-			if mode == "unavailable" || mode == "memo-rejected" || mode == "legacy" || mode == "today" {
+			if mode == "unavailable" || mode == "memo-rejected" || mode == "legacy" || mode == "today" || mode == "local" {
 				require.Empty(t, files)
-				if mode == "today" {
+				if mode == "today" || mode == "local" {
 					require.Len(t, first.runtimeState().activityKept.Snapshot(), 1)
+					if mode == "local" {
+						requirePGKeptEqual(t, want, pgKeptBuild(t, first, f, q, false))
+						restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
+						t.Cleanup(func() { require.NoError(t, restarted.Close()) })
+						requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, true))
+					}
 				} else if mode == "unavailable" {
 					lookups := 0
 					if denied != nil {
@@ -98,7 +108,6 @@ func TestPGActivityReportSaved(t *testing.T) {
 				return
 			}
 			require.Len(t, files, 1)
-			var saved []byte
 			switch mode {
 			case "restart":
 				pgKeptSession(t, local, "b", "project-b", "2026-07-14")
@@ -113,17 +122,32 @@ func TestPGActivityReportSaved(t *testing.T) {
 			case "identity-retry":
 				pgKeptSession(t, local, "b", "project-a", "2026-06-14")
 				pgKeptPush(t, syncer, false)
-			case "repeated":
-				saved, err = os.ReadFile(files[0])
-				require.NoError(t, err)
+			case "repeated", "evicted":
 				for range 2 {
 					_, err := first.pg.ExecContext(ctx, `UPDATE sessions SET message_count=message_count+1 WHERE id='b'`)
 					require.NoError(t, err)
 					requirePGKeptEqual(t, want, pgKeptBuild(t, first, f, q, false))
-					after, err := os.ReadFile(files[0])
+					var revision int64
+					var checkpoint string
+					require.NoError(t, first.pg.QueryRowContext(ctx, `SELECT revision.value::bigint, checkpoint.value FROM sync_metadata revision JOIN sync_metadata checkpoint ON checkpoint.key='usage_history_checkpoint:' || revision.value WHERE revision.key='usage_change_revision'`).Scan(&revision, &checkpoint))
+					require.NotEmpty(t, checkpoint)
+					entries := first.runtimeState().activityKept.Snapshot()
+					require.Len(t, entries, 1)
+					data, ok := first.activityReports.Get(entries[0].Slot+"|"+entries[0].Rows[0].identity+"|"+entries[0].Version, entries[0].Rows[0].identity+"|"+entries[0].Version)
+					require.True(t, ok)
+					var saved pgActivitySavedReport
+					require.NoError(t, json.Unmarshal(data, &saved))
+					require.Equal(t, revision, saved.Revision)
+					require.Equal(t, checkpoint, saved.Checkpoint)
+				}
+				if mode == "evicted" {
+					require.NoError(t, os.Remove(files[0]))
+					_, err := first.pg.ExecContext(ctx, `UPDATE sessions SET message_count=message_count+1 WHERE id='b'`)
 					require.NoError(t, err)
-					require.NotEqual(t, saved, after)
-					saved = after
+					requirePGKeptEqual(t, want, pgKeptBuild(t, first, f, q, false))
+					_, err = os.Stat(files[0])
+					require.ErrorIs(t, err, os.ErrNotExist)
+					return
 				}
 			case "replaced":
 				var revision int64

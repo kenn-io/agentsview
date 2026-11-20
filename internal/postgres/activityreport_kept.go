@@ -88,7 +88,7 @@ func (s *Store) activityReportIdentity(ctx context.Context, selection, version s
 	if ok {
 		identity, unavailable = entries[0].identity, entries[0].identityUnavailable
 	}
-	if identity != "" || unavailable || q.Loc == nil || !s.activityReports.Enabled() {
+	if identity != "" || unavailable || q.Loc == nil || q.Timezone == "Local" || !s.activityReports.Enabled() {
 		return identity, unavailable
 	}
 	local := time.Now().In(q.Loc)
@@ -181,7 +181,7 @@ func (s *Store) keptActivityReport(ctx context.Context, selection, version strin
 	entry.revision = through
 	entry.checkpoint = current
 	memo.Put(selection, version, []pgActivityKept{entry})
-	if entry.identity != "" {
+	if entry.identity != "" && s.activityReports.Touch(selection+"|"+entry.identity+"|"+version) {
 		s.saveActivityReport(selection, version, entry)
 	}
 	return entry.report, through, true, nil
