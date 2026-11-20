@@ -225,6 +225,27 @@ func TestLoadArtifactExportDataRawByteBoundaries(t *testing.T) {
 		_, err = database.LoadArtifactExportData(t.Context(), "session", limits)
 		require.ErrorIs(t, err, ErrArtifactExportLimit)
 	})
+	t.Run("mixed prompt at byte limit", func(t *testing.T) {
+		database := artifactExportLoadTestDB(t)
+		content := "first\n[Thinking]\nplan\n[/Thinking]\nlast"
+		dialogue := "first\nlast"
+		require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []Message{{
+			SessionID: "session", Role: "user", Content: content,
+			ThinkingText: "plan", DialogueText: &dialogue, HasThinking: true,
+		}}))
+		limits := smallArtifactExportLoadLimits()
+		// Four role bytes, 38 content bytes, and four thinking bytes.
+		limits.MessageBytes = 46
+		data, err := database.LoadArtifactExportData(t.Context(), "session", limits)
+		require.NoError(t, err)
+		require.Len(t, data.Messages, 1)
+		assert.Equal(t, content, data.Messages[0].Content)
+		assert.Equal(t, "plan", data.Messages[0].ThinkingText)
+		assert.Equal(t, &dialogue, data.Messages[0].DialogueText)
+		limits.MessageBytes = 45
+		_, err = database.LoadArtifactExportData(t.Context(), "session", limits)
+		require.ErrorIs(t, err, ErrArtifactExportLimit)
+	})
 	t.Run("dialogue projection is omitted", func(t *testing.T) {
 		database := artifactExportLoadTestDB(t)
 		dialogue := strings.Repeat("x", 1024)
