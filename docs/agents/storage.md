@@ -1774,7 +1774,7 @@ Because each test owns a database, the tests run in parallel:
   10 s per test there, against 86 s on a disk store.
 
 Use `make test-postgres` to start a disposable container and run the suite.
-The same lease and reaper contract described above applies to PostgreSQL.
+The same lease applies to PostgreSQL.
 Use `make postgres-up` and `make postgres-down` to manage a separate standing
 test container.
 The leased PostgreSQL, ClickHouse, and usage benchmark targets use Unix file

@@ -55,43 +55,33 @@ status = child.wait()
 if status < 0:
     status = 128 - status
 os.close(fd)
-try:
-    lock = open(path, "r+")
-except FileNotFoundError:
-    sys.exit(128 + received if received is not None else status)
-with lock:
+with open(path, "r+") as lock:
     fcntl.flock(lock, fcntl.LOCK_EX)
     process_group = None
+    cleanup = ["docker", "compose", "-p", lease, "-f", "docker-compose.test.yml", "-f", "docker-compose.test-lease.yml", "down", "-v", "--remove-orphans"]
+    cleanup_vars = {
+        "TEST_SERVICE_LEASE": lease,
+        "TEST_PG_PUBLISH": "127.0.0.1::5432",
+        "TEST_CH_HTTP_PUBLISH": "127.0.0.1::8123",
+        "TEST_CH_NATIVE_PUBLISH": "127.0.0.1::9000",
+    }
+    cleanup_env = os.environ.copy()
+    cleanup_env.update(cleanup_vars)
+    failed = subprocess.call(cleanup, env=cleanup_env, start_new_session=True) != 0
+    # Testcontainers started outside Compose carry the same lease label.
+    listing = ["docker", "ps", "-aq", "--filter", f"label=test-service.lease={lease}"]
     try:
-        same_file = os.stat(path).st_ino == os.fstat(lock.fileno()).st_ino
-    except FileNotFoundError:
-        same_file = False
-    if same_file:
-        cleanup = ["docker", "compose", "-p", lease, "-f", "docker-compose.test.yml", "-f", "docker-compose.test-lease.yml", "down", "-v", "--remove-orphans"]
-        cleanup_vars = {
-            "TEST_SERVICE_LEASE": lease,
-            "TEST_PG_PUBLISH": "127.0.0.1::5432",
-            "TEST_CH_HTTP_PUBLISH": "127.0.0.1::8123",
-            "TEST_CH_NATIVE_PUBLISH": "127.0.0.1::9000",
-        }
-        cleanup_env = os.environ.copy()
-        cleanup_env.update(cleanup_vars)
-        failed = subprocess.call(cleanup, env=cleanup_env, start_new_session=True) != 0
-        # Testcontainers started outside Compose carry the same lease label.
-        listing = ["docker", "ps", "-aq", "--filter", f"label=test-service.lease={lease}"]
-        try:
-            containers = subprocess.check_output(listing, text=True, start_new_session=True).split()
-            if containers:
-                subprocess.check_call(["docker", "rm", "-f", "-v", *containers], start_new_session=True)
-            failed |= bool(subprocess.check_output(listing, text=True, start_new_session=True).strip())
-        except subprocess.CalledProcessError:
-            failed = True
-        if failed:
-            print(f"cleanup failed; Compose project {lease} may still be running", file=sys.stderr)
-            if status == 0:
-                status = 1
-        else:
-            os.unlink(path)
+        containers = subprocess.check_output(listing, text=True, start_new_session=True).split()
+        if containers:
+            subprocess.check_call(["docker", "rm", "-f", "-v", *containers], start_new_session=True)
+    except subprocess.CalledProcessError:
+        failed = True
+    if failed:
+        print(f"cleanup failed; Compose project {lease} may still be running", file=sys.stderr)
+        if status == 0:
+            status = 1
+    else:
+        os.unlink(path)
 if received is not None:
     status = 128 + received
 sys.exit(status)

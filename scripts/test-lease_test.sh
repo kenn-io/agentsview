@@ -22,7 +22,7 @@ cat > "$tmp/bin/docker" <<'DOCKER'
 #!/bin/sh
 printf '%s\n' "$*" >> "$DOCKER_LOG"
 case " $* " in
-  *' ps -aq '*) [ "$*" = "ps -aq --filter label=test-service.lease=$TEST_SERVICE_LEASE" ] || exit 1; [ "${LEFTOVER:-0}" = 0 ] || [ -f "$REMOVED" ] || echo container-1 ;;
+  *' ps -aq '*) [ "$*" = "ps -aq --filter label=test-service.lease=$TEST_SERVICE_LEASE" ] || exit 1; [ "${LEFTOVER:-0}" = 0 ] || echo container-1 ;;
   *' rm -f -v '*) [ "$*" = 'rm -f -v container-1' ] || exit 1; [ "${REMOVE_STATUS:-0}" = 0 ] || exit "$REMOVE_STATUS"; touch "$REMOVED" ;;
   *' up '*)
     [ "$2" = -p ] && [ "$3" = "$TEST_SERVICE_LEASE" ] || exit 1
