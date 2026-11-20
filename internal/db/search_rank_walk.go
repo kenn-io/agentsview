@@ -89,7 +89,8 @@ func walkSearchRanks(
 	var boundary float64
 	maxRows := need * searchRankWalkRowsPerSession
 	if dateBounded {
-		maxRows = max(maxRows, searchRankWalkDateMinRows)
+		// One extra row lets a tie ending just past the bound complete.
+		maxRows = max(maxRows, searchRankWalkDateMinRows) + 1
 	}
 	for read := 0; rows.Next(); read++ {
 		if read == maxRows {
