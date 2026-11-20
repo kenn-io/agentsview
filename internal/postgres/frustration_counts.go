@@ -55,10 +55,10 @@ func (s *Store) loadStoredFrustrationCounts(ctx context.Context, ids []string, v
 	return counts, rows.Err()
 }
 
-// Reserve request time for evidence reads when another writer holds a count row.
+// Reserve request time when another writer holds a count row.
 func (s *Store) storeFrustrationCountsForRead(ctx context.Context, versions map[string]string, counts map[string]int, versionColumn string) error {
 	budget := time.Second
-	if deadline, ok := ctx.Deadline(); ok {
+	if deadline, ok := frustrationRequestDeadline(ctx); ok {
 		budget = min(budget, time.Until(deadline)/2)
 	}
 	writeCtx, cancel := context.WithTimeout(ctx, budget)
@@ -121,22 +121,27 @@ func (s *Store) scanFrustrationCounts(ctx context.Context, ids []string, version
 	return counts, versions, nil
 }
 
-func (s *Store) staleFrustrationSessions(ctx context.Context, versionColumn string) ([]string, error) {
+func (s *Store) staleFrustrationSessions(ctx context.Context, versionColumn string) ([]string, []string, error) {
 	where := db.BuildAnalyticsWhere(db.AnalyticsFilter{}, db.NewQueryBuilder(s.sessionDialect(), 1), "s.", "", nil)
-	rows, err := s.pg.QueryContext(ctx, `SELECT s.id FROM sessions s LEFT JOIN session_frustration_counts c ON c.session_id=s.id WHERE `+where+` AND (c.session_id IS NULL OR (c.rules_version <= $1 AND (c.rules_version < $1 OR c.session_version <> `+frustrationSessionVersion("s."+versionColumn)+`))) ORDER BY s.id`, frustrationMarkerRulesVersion)
+	rows, err := s.pg.QueryContext(ctx, `SELECT s.id, NOT s.is_automated AND COALESCE(s.started_at, s.created_at) >= now() - interval '364 days' FROM sessions s LEFT JOIN session_frustration_counts c ON c.session_id=s.id WHERE `+where+` AND (c.session_id IS NULL OR (c.rules_version <= $1 AND (c.rules_version < $1 OR c.session_version <> `+frustrationSessionVersion("s."+versionColumn)+`))) ORDER BY s.id`, frustrationMarkerRulesVersion)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rows.Close()
-	var result []string
+	var dash, rest []string
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
+		var inDashboard bool
+		if err := rows.Scan(&id, &inDashboard); err != nil {
+			return nil, nil, err
 		}
-		result = append(result, id)
+		if inDashboard {
+			dash = append(dash, id)
+		} else {
+			rest = append(rest, id)
+		}
 	}
-	return result, rows.Err()
+	return dash, rest, rows.Err()
 }
 
 func (s *Store) canFillFrustrationCounts(ctx context.Context) (bool, error) {

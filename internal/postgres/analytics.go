@@ -2604,7 +2604,14 @@ func (s *Store) GetAnalyticsTopSessions(
 func (s *Store) GetAnalyticsSignals(
 	ctx context.Context, f db.AnalyticsFilter,
 ) (db.SignalsAnalyticsResponse, error) {
-	return keptAnalytics(ctx, s, "signals", f, s.loadAnalyticsSignals)
+	// The shared load outlives individual waiters; this only budgets its count work.
+	deadline, hasDeadline := ctx.Deadline()
+	return keptAnalytics(ctx, s, "signals", f, func(loadCtx context.Context, f db.AnalyticsFilter) (db.SignalsAnalyticsResponse, error) {
+		if hasDeadline {
+			loadCtx = context.WithValue(loadCtx, frustrationDeadlineKey{}, deadline)
+		}
+		return s.loadAnalyticsSignals(loadCtx, f)
+	})
 }
 
 func (s *Store) loadAnalyticsSignals(ctx context.Context, f db.AnalyticsFilter) (db.SignalsAnalyticsResponse, error) {

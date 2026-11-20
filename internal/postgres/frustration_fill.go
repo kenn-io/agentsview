@@ -13,6 +13,16 @@ var frustrationFillChunkTimeout = 30 * time.Second
 
 var frustrationJoinWait = 5 * time.Second
 
+type frustrationDeadlineKey struct{}
+
+func frustrationRequestDeadline(ctx context.Context) (time.Time, bool) {
+	deadline, hasDeadline := ctx.Deadline()
+	if hint, ok := ctx.Value(frustrationDeadlineKey{}).(time.Time); ok && (!hasDeadline || hint.Before(deadline)) {
+		return hint, true
+	}
+	return deadline, hasDeadline
+}
+
 type frustrationChunk struct {
 	ids      []string
 	done     chan struct{}
@@ -77,7 +87,14 @@ func (s *Store) joinFrustrationFill(ctx context.Context, ids []string, completed
 		}
 	}
 	state.mu.Unlock()
-	waitCtx, cancel := context.WithTimeout(ctx, frustrationJoinWait)
+	budget := frustrationJoinWait
+	if deadline, ok := frustrationRequestDeadline(ctx); ok {
+		budget = min(budget, time.Until(deadline)/2)
+	}
+	if budget <= 0 {
+		return false
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	for _, wait := range waits {
 		select {
@@ -89,16 +106,18 @@ func (s *Store) joinFrustrationFill(ctx context.Context, ids []string, completed
 	return true
 }
 
-func (s *Store) fillFrustrationCounts(ctx context.Context, ids []string, column string) error {
+func (s *Store) fillFrustrationCounts(ctx context.Context, dash, rest []string, column string) error {
 	state := &s.runtimeState().frustrationFill
 	state.mu.Lock()
-	state.pending = make(map[string]*frustrationChunk, len(ids))
+	state.pending = make(map[string]*frustrationChunk, len(dash)+len(rest))
 	state.chunks = nil
-	for ids := range slices.Chunk(ids, maxPGVars) {
-		chunk := &frustrationChunk{ids: ids, done: make(chan struct{})}
-		state.chunks = append(state.chunks, chunk)
-		for _, id := range ids {
-			state.pending[id] = chunk
+	for _, group := range [][]string{dash, rest} {
+		for ids := range slices.Chunk(group, maxPGVars) {
+			chunk := &frustrationChunk{ids: ids, done: make(chan struct{})}
+			state.chunks = append(state.chunks, chunk)
+			for _, id := range ids {
+				state.pending[id] = chunk
+			}
 		}
 	}
 	chunks := state.chunks
@@ -151,12 +170,12 @@ func (s *Store) StartFrustrationFill(ctx context.Context) func() {
 			log.Printf("selecting frustration count version: %v", err)
 			return
 		}
-		ids, err := s.staleFrustrationSessions(ctx, column)
+		dash, rest, err := s.staleFrustrationSessions(ctx, column)
 		if err != nil {
 			log.Printf("selecting stale frustration counts: %v", err)
 			return
 		}
-		if err := s.fillFrustrationCounts(ctx, ids, column); err != nil && ctx.Err() == nil {
+		if err := s.fillFrustrationCounts(ctx, dash, rest, column); err != nil && ctx.Err() == nil {
 			log.Printf("filling frustration counts: %v", err)
 		}
 	}()
