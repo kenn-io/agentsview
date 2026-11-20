@@ -116,7 +116,7 @@ func TestFrustrationMemoPublicationBetweenReads(t *testing.T) {
 				require.NoError(t, pg.QueryRowContext(ctx, `SELECT `+frustrationSessionVersion(versionColumn)+` FROM sessions WHERE id = $1`, id).Scan(&publishedVersion))
 			}
 
-			require.NoError(t, store.populateFrustrationMarkers(ctx, rows, versions, versionColumn))
+			require.NoError(t, store.populateFrustrationMarkers(ctx, rows, versions, versionColumn, false))
 			if test.name != "remove-session" {
 				assert.Equal(t, test.want, rows[0].FrustrationMarkerCount)
 			}

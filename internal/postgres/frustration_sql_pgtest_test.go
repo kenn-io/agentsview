@@ -77,7 +77,7 @@ func scanMarkers(t *testing.T, store *Store, ids []string) []int {
 	for i, id := range ids {
 		rows[i].ID = id
 	}
-	require.NoError(t, store.populateFrustrationMarkers(ctx, rows, nil, versionColumn))
+	require.NoError(t, store.populateFrustrationMarkers(ctx, rows, nil, versionColumn, false))
 	counts := make([]int, len(rows))
 	for i := range rows {
 		counts[i] = rows[i].FrustrationMarkerCount

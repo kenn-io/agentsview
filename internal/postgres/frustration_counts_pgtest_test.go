@@ -398,7 +398,9 @@ func TestFrustrationFillJoinsCoveredRequests(t *testing.T) {
 		}, 10*time.Second, 10*time.Millisecond)
 		lastRows := []db.SignalRow{two}
 		lastDone := make(chan error, 1)
-		go func() { lastDone <- store.populateFrustrationMarkers(f.ctx, lastRows, versions, f.versionColumn) }()
+		go func() {
+			lastDone <- store.populateFrustrationMarkers(f.ctx, lastRows, versions, f.versionColumn, false)
+		}()
 		select {
 		case err := <-lastDone:
 			require.NoError(t, err)
@@ -412,7 +414,7 @@ func TestFrustrationFillJoinsCoveredRequests(t *testing.T) {
 		coveredRows := append(append([]db.SignalRow{}, firstRows...), laterRows...)
 		coveredDone := make(chan error, 1)
 		go func() {
-			coveredDone <- store.populateFrustrationMarkers(coveredCtx, coveredRows, versions, f.versionColumn)
+			coveredDone <- store.populateFrustrationMarkers(coveredCtx, coveredRows, versions, f.versionColumn, false)
 		}()
 		select {
 		case err := <-coveredDone:
@@ -421,7 +423,7 @@ func TestFrustrationFillJoinsCoveredRequests(t *testing.T) {
 		}
 		require.NoError(t, tx.Rollback())
 		require.NoError(t, <-fillDone)
-		joined, err := store.joinFrustrationFill(f.ctx, []string{"one", "two"}, completed)
+		joined, err := store.joinFrustrationFill(f.ctx, []string{"one", "two"}, completed, false)
 		require.NoError(t, err)
 		require.True(t, joined)
 		require.NoError(t, <-coveredDone)
@@ -470,7 +472,7 @@ func TestFrustrationFillJoinsCoveredRequests(t *testing.T) {
 		require.Len(t, rows, maxPGVars+1)
 		ctx := context.WithValue(f.ctx, frustrationScanKey{}, true)
 		done := make(chan error, 1)
-		go func() { done <- store.populateFrustrationMarkers(ctx, rows, versions, f.versionColumn) }()
+		go func() { done <- store.populateFrustrationMarkers(ctx, rows, versions, f.versionColumn, false) }()
 		select {
 		case err := <-done:
 			t.Fatalf("request returned before covered chunk: %v", err)

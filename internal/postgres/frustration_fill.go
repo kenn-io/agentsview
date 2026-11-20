@@ -28,19 +28,14 @@ type frustrationFillState struct {
 	completed uint64
 }
 
-type sharedLoadKey struct{}
-
 var errSharedFillWait = errors.New("shared load cannot wait for count fill")
-
-// sharedLoad marks a build detached from every caller's deadline.
-func sharedLoad(ctx context.Context) context.Context {
-	return context.WithValue(ctx, sharedLoadKey{}, true)
-}
 
 // keptSignals lets a caller whose shared load would wait on a pending count
 // fill load under its own deadline instead.
 func (s *Store) keptSignals(ctx context.Context, f db.AnalyticsFilter) (db.SignalsAnalyticsResponse, error) {
-	result, err := keptAnalytics(ctx, s, "signals", f, s.loadAnalyticsSignals)
+	result, err := keptAnalyticsWithLoads(ctx, s, "signals", f, s.keptAnalyticsVersion, s.loadAnalyticsSignals, func(ctx context.Context, f db.AnalyticsFilter) (db.SignalsAnalyticsResponse, error) {
+		return s.loadAnalyticsSignalsWithMode(ctx, f, true)
+	})
 	if errors.Is(err, errSharedFillWait) {
 		return s.loadAnalyticsSignals(ctx, f)
 	}
@@ -67,7 +62,7 @@ func (state *frustrationFillState) release(chunk *frustrationChunk) {
 }
 
 // joinFrustrationFill waits only for chunks fully covered by the request.
-func (s *Store) joinFrustrationFill(ctx context.Context, ids []string, completed uint64) (bool, error) {
+func (s *Store) joinFrustrationFill(ctx context.Context, ids []string, completed uint64, shared bool) (bool, error) {
 	state := &s.runtimeState().frustrationFill
 	state.mu.Lock()
 	wanted := make(map[*frustrationChunk]int)
@@ -96,7 +91,7 @@ func (s *Store) joinFrustrationFill(ctx context.Context, ids []string, completed
 	if len(waits) == 0 {
 		return false, nil
 	}
-	if ctx.Value(sharedLoadKey{}) != nil {
+	if shared {
 		return false, errSharedFillWait
 	}
 	budget := frustrationJoinWait
