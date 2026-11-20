@@ -93,9 +93,6 @@ func walkSearchRanks(
 		maxRows = max(maxRows, searchRankWalkDateMinRows) + 1
 	}
 	for read := 0; rows.Next(); read++ {
-		if read == maxRows {
-			return nil, nil
-		}
 		var m searchBestMatch
 		if err := rows.Scan(&m.sessionID, &m.rowid, &m.ordinal, &m.rank); err != nil {
 			return nil, fmt.Errorf("scanning ranked search match: %w", err)
@@ -103,6 +100,9 @@ func walkSearchRanks(
 		if len(walk.best) >= need && m.rank > boundary {
 			walk.complete = false
 			break
+		}
+		if read == maxRows {
+			return nil, nil
 		}
 		i, ok := index[m.sessionID]
 		if !ok {
