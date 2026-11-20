@@ -325,8 +325,43 @@ func TestAgentSetupWithoutMCPReportsWriteErrorAndRepair(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(out), &report), out)
 	require.Len(t, report.Rows, 1)
 	require.Contains(t, report.Rows[0].Reason, "skills: write "+skill)
-	require.Equal(t, "agentsview agent setup --mcp=false --agent claude --force", report.Rows[0].NextStep)
+	require.Equal(t, "agentsview agent setup --mcp=false --agent claude", report.Rows[0].NextStep)
 	human, err := executeCommand(newRootCommand(), "agent", "setup", "--agent", "claude", "--mcp=false", "--force")
 	require.Error(t, err)
 	require.Contains(t, human, "skills: write "+skill)
+}
+
+func TestAgentSetupWithoutMCPWriteErrorAfterRefusal(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("requires unprivileged Unix file permissions")
+	}
+	home := t.TempDir()
+	setDoctorMemoryTestEnvironment(t, home)
+	fakeAgent(t, "claude", "")
+	out, err := executeCommand(newRootCommand(), "agent", "setup", "--agent", "claude", "--mcp=false")
+	require.NoError(t, err, out)
+	dir := skills.TargetDir(skills.HarnessClaude, home)
+	skill := filepath.Join(dir, skillFileName)
+	data, err := os.ReadFile(skill)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(skill, append(data, []byte("\ncustom edit\n")...), 0o600))
+	license := filepath.Join(dir, "LICENSE")
+	data, err = os.ReadFile(license)
+	require.NoError(t, err)
+	protected := filepath.Join(home, "protected-license")
+	require.NoError(t, os.WriteFile(protected, data, 0o400))
+	require.NoError(t, os.Remove(license))
+	require.NoError(t, os.Symlink(protected, license))
+	out, err = executeCommand(newRootCommand(), "agent", "setup", "--agent", "claude", "--mcp=false", "--json")
+	require.Error(t, err)
+	var report struct {
+		Rows []struct {
+			Reason   string `json:"reason"`
+			NextStep string `json:"next_step"`
+		} `json:"rows"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &report), out)
+	require.Len(t, report.Rows, 1)
+	require.Contains(t, report.Rows[0].Reason, "skills: write "+license)
+	require.NotContains(t, report.Rows[0].NextStep, "--force")
 }
