@@ -135,7 +135,7 @@ func (s *Store) validateKeptActivityReport(ctx context.Context, selection, versi
 		reader = s.readView(tx)
 	}
 	var snapshotChanges []string
-	entry, revision, checkpoint, hit, err := reader.keptActivityReport(ctx, entries, hadEntry, f, rangeStart, rangeEnd, lower, upper, &snapshotChanges)
+	entry, revision, checkpoint, hit, err := reader.keptActivityReport(ctx, entries, f, rangeStart, rangeEnd, lower, upper, &snapshotChanges)
 	if err != nil {
 		return kept.Report{}, revision, checkpoint, false, err
 	}
@@ -164,9 +164,9 @@ func (s *Store) validateKeptActivityReport(ctx context.Context, selection, versi
 	return entry.report, revision, checkpoint, hit, nil
 }
 
-func (s *Store) keptActivityReport(ctx context.Context, entries []pgActivityKept, ok bool, f db.AnalyticsFilter, rangeStart, rangeEnd, lower, upper string, snapshotChanges *[]string) (pgActivityKept, int64, string, bool, error) {
+func (s *Store) keptActivityReport(ctx context.Context, entries []pgActivityKept, f db.AnalyticsFilter, rangeStart, rangeEnd, lower, upper string, snapshotChanges *[]string) (pgActivityKept, int64, string, bool, error) {
 	after := int64(math.MaxInt64)
-	if ok {
+	if len(entries) > 0 {
 		after = entries[0].revision
 	}
 	through, changed, current, previous, err := s.loadUsageChangesWithHistory(ctx, after)
@@ -174,7 +174,7 @@ func (s *Store) keptActivityReport(ctx context.Context, entries []pgActivityKept
 	if isInsufficientPrivilege(err) || isUndefinedTable(err) {
 		return pgActivityKept{}, 0, "", false, nil
 	}
-	if err != nil || through == 0 || !ok {
+	if err != nil || through == 0 || len(entries) == 0 {
 		return pgActivityKept{}, through, current, false, err
 	}
 	entry := entries[0]
