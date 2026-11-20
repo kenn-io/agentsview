@@ -283,7 +283,7 @@ func TestUsageRollupSameZoneBuildsRunOneAtATime(t *testing.T) {
 		abandoned bool
 	}{
 		{name: "overlapping sessions", queued: 1},
-		{name: "warm reads with queued builds", queued: readerMaxOpenConns, warmRead: true},
+		{name: "warm reads with queued builds", queued: usageCacheMaxOpenConns, warmRead: true},
 		{name: "abandoned queued chunk", queued: 1, abandoned: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
