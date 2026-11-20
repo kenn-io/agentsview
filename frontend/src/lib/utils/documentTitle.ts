@@ -1,20 +1,16 @@
 import { m } from "../i18n/index.js";
 import type { Route } from "../stores/router.svelte.js";
-import type { Session } from "../api/types/core.js";
-import { sessionLabel } from "./messages.js";
-import { sessionDisplayId } from "./sessionDisplayId.js";
+import { agentLabel } from "./agents.js";
 
 export function documentTitle({
   route,
   needsAuth,
   sessionId,
-  session,
   sessionNotFound,
 }: {
   route: Route;
   needsAuth: boolean;
   sessionId: string | null;
-  session?: Session;
   sessionNotFound: boolean;
 }): string {
   let label: string;
@@ -23,19 +19,16 @@ export function documentTitle({
   } else if (route === "sessions" && sessionId) {
     const separator = sessionId.indexOf("~");
     const rawId = separator >= 0 ? sessionId.slice(separator + 1) : sessionId;
-    const displayId = `${separator >= 0 ? `${sessionId.slice(0, separator)}:` : ""}${sessionDisplayId(rawId).slice(0, 8)}`;
-    if (sessionNotFound) {
-      label = `${m.message_list_session_not_found()} (${displayId})`;
-    } else if (session) {
-      const name = sessionLabel(session.display_name?.trim(), session.first_message, "")
-        .text.replace(/\s+/g, " ")
-        .trim();
-      const project = session.project.trim();
-      label = name ? `${name} (${displayId})` : project ? `${project} (${displayId})` : displayId;
-      if (name && project) label += ` · ${project}`;
-    } else {
-      label = displayId;
-    }
+    const providerSeparator = rawId.indexOf(":");
+    const provider = providerSeparator >= 0 ? rawId.slice(0, providerSeparator) : "claude";
+    const id = providerSeparator >= 0 ? rawId.slice(providerSeparator + 1) : rawId;
+    label = [
+      m.nav_sessions(),
+      ...(sessionNotFound ? [m.message_list_session_not_found()] : []),
+      ...(separator >= 0 ? [sessionId.slice(0, separator)] : []),
+      agentLabel(provider),
+      id.slice(-12),
+    ].join(" · ");
   } else {
     const labels: Record<Route, () => string> = {
       sessions: m.nav_sessions,

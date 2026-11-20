@@ -1968,19 +1968,28 @@ describe("App telemetry", () => {
       await flushEffects();
       router.navigateToSession(id);
       await flushEffects();
-      expect(document.title).toBe("source-a:12345678 · AgentsView");
+      expect(document.title).toBe("Sessions · source-a · Codex · 345678abcdef · AgentsView");
       response.resolve(
         state === "loaded"
           ? new Response(
-              JSON.stringify(hydratedSession(id, "codex", { display_name: "Fix login" })),
+              JSON.stringify(
+                hydratedSession(id, "codex", {
+                  display_name: "Private title",
+                  first_message: "Private prompt",
+                  project: "Private project",
+                }),
+              ),
               { status: 200, headers: { "Content-Type": "application/json" } },
             )
           : new Response("not found", { status: 404 }),
       );
       const expected =
         state === "loaded"
-          ? "Fix login (source-a:12345678) · proj-a · AgentsView"
-          : "Session not found (source-a:12345678) · AgentsView";
+          ? "Sessions · source-a · Codex · 345678abcdef · AgentsView"
+          : "Sessions · Session not found · source-a · Codex · 345678abcdef · AgentsView";
+      if (state === "loaded") {
+        await vi.waitFor(() => expect(sessions.activeSession?.display_name).toBe("Private title"));
+      }
       await vi.waitFor(() => expect(document.title).toBe(expected));
     },
   );

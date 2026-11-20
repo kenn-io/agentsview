@@ -120,7 +120,6 @@
     route: router.route,
     needsAuth: settings.needsAuth,
     sessionId: router.sessionId,
-    session: sessionMatchesRoute ? sessions.activeSession : undefined,
     sessionNotFound: sessionMatchesRoute && sessions.activeSessionNotFound,
   }));
   function handleGlobalAuth() {
