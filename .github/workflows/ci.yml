@@ -1046,6 +1046,7 @@ jobs:
           - name: PostgreSQL raw-sync and ClickHouse
             postgres-target: test-postgres-raw-sync-ci test-postgres-core-heavy-ci
             clickhouse-lane: rest
+            parallel-suites: true
     services:
       postgres:
         image: pgvector/pgvector:pg18
@@ -1101,10 +1102,27 @@ jobs:
         run: kit-retry 3 5 go run ./internal/pricing/cmd/litellm-snapshot -restore
 
       - name: Run PostgreSQL integration tests
+        if: ${{ !matrix.parallel-suites }}
         run: make ${{ matrix.postgres-target }}
         env:
           CGO_ENABLED: "1"
           TEST_PG_URL: postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable
+
+      - name: Run PostgreSQL and ClickHouse integration tests
+        if: matrix.parallel-suites
+        shell: bash
+        run: |
+          make pricing-snapshot ensure-embed-dir
+          # The suites use separate service containers, so they run together.
+          CGO_ENABLED=1 TEST_CLICKHOUSE_URL=clickhouse://localhost:19000/default make -o pricing-snapshot -o ensure-embed-dir test-clickhouse-ci CLICKHOUSE_LANE=${{ matrix.clickhouse-lane }} 2>&1 | sed -u 's/^/[ClickHouse] /' &
+          clickhouse_pid=$!
+          postgres_status=0
+          CGO_ENABLED=1 TEST_PG_URL='postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable' make -o pricing-snapshot -o ensure-embed-dir ${{ matrix.postgres-target }} 2>&1 | sed -u 's/^/[PostgreSQL] /' || postgres_status=$?
+          clickhouse_status=0
+          wait "$clickhouse_pid" || clickhouse_status=$?
+          if [ "$postgres_status" -ne 0 ]; then echo '::error::PostgreSQL integration tests failed'; fi
+          if [ "$clickhouse_status" -ne 0 ]; then echo '::error::ClickHouse integration tests failed'; fi
+          if [ "$postgres_status" -ne 0 ] || [ "$clickhouse_status" -ne 0 ]; then exit 1; fi
 
       - name: Start PostgreSQL standby
         if: matrix.name == 'PostgreSQL core'
@@ -1152,6 +1170,7 @@ jobs:
           TEST_PG_URL: postgres://root@127.0.0.1:26257/defaultdb?sslmode=disable
 
       - name: Run ClickHouse integration tests
+        if: ${{ !matrix.parallel-suites }}
         run: make test-clickhouse-ci CLICKHOUSE_LANE=${{ matrix.clickhouse-lane }}
         env:
           CGO_ENABLED: "1"
