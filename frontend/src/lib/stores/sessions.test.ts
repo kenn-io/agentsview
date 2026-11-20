@@ -3538,17 +3538,17 @@ describe("SessionsStore", () => {
   describe("bare UUID navigation", () => {
     const uuid = "123e4567-e89b-12d3-a456-426614174000";
     const canonical = `pi:${uuid}`;
-    let replace: ReturnType<typeof vi.spyOn>;
+    let resolveSession: ReturnType<typeof vi.spyOn>;
     beforeEach(() => {
       router.navigateToSession(uuid);
-      replace = vi.spyOn(router, "resolveSession");
+      resolveSession = vi.spyOn(router, "resolveSession");
       vi.mocked(api.getSession)
         .mockRejectedValueOnce(new ApiError(404, "missing"))
         .mockResolvedValue(makeSession({ id: canonical }));
       vi.mocked(SessionsService.getApiV1SessionIdsResolve).mockResolvedValue({ ids: [canonical] });
     });
     afterEach(() => {
-      replace.mockRestore();
+      resolveSession.mockRestore();
       router.replace("sessions");
     });
     async function pendingLookup() {
@@ -3561,7 +3561,7 @@ describe("SessionsStore", () => {
       return async () => {
         resolve({ ids: [canonical] });
         await navigation;
-        expect(replace).not.toHaveBeenCalled();
+        expect(resolveSession).not.toHaveBeenCalled();
       };
     }
     it("resolves a missing bare UUID and keeps its URL", async () => {
@@ -3573,7 +3573,7 @@ describe("SessionsStore", () => {
       expect(sessions.activeSessionId).toBe(canonical);
       expect(sessions.activeSession?.id).toBe(canonical);
       expect(sessions.activeSessionNotFound).toBe(false);
-      expect(replace).toHaveBeenCalledExactlyOnceWith(canonical);
+      expect(resolveSession).toHaveBeenCalledExactlyOnceWith(canonical);
       expect(window.location.pathname).toBe(`/sessions/${uuid}`);
     });
     it.each([
@@ -3586,7 +3586,7 @@ describe("SessionsStore", () => {
       await sessions.navigateToSession(uuid);
       expect(sessions.activeSessionId).toBe(uuid);
       expect(sessions.activeSessionNotFound).toBe(true);
-      expect(replace).not.toHaveBeenCalled();
+      expect(resolveSession).not.toHaveBeenCalled();
     });
     it("refuses ambiguity between a hosted branch and an ordinary canonical ID", async () => {
       vi.mocked(SessionsService.getApiV1SessionIdsResolve).mockResolvedValue({
@@ -3595,7 +3595,7 @@ describe("SessionsStore", () => {
       await sessions.navigateToSession(uuid);
       expect(sessions.activeSessionId).toBe(uuid);
       expect(sessions.activeSessionNotFound).toBe(true);
-      expect(replace).not.toHaveBeenCalled();
+      expect(resolveSession).not.toHaveBeenCalled();
     });
     it("does not resolve an exact Claude UUID hit", async () => {
       vi.mocked(api.getSession)
