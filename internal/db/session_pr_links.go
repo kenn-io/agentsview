@@ -280,33 +280,34 @@ func (db *DB) GetSessionStructuredPRLinks(ctx context.Context, id string) ([]PRL
 	return DecodePRLinks(encoded), nil
 }
 
-func (db *DB) backfillPromptPRLinksLocked(ctx context.Context, w *writerHandle) error {
-	const key = "prompt_pr_links_backfill_v1"
+// promptPRLinksDataVersion is the first data version whose pr_links include
+// links found in retained prompts.
+const promptPRLinksDataVersion = 184
+
+// upgradePromptPRLinksTx indexes stored prompts in the transaction that raises
+// the archive to promptPRLinksDataVersion. An older binary may have rewritten
+// pr_links without structured_pr_links since the column was added, so the
+// structured column is refreshed first. Doing both with the version change
+// means an archive an older binary still accepts never holds prompt links.
+func (db *DB) upgradePromptPRLinksTx(ctx context.Context, tx *sql.Tx) error {
+	version, _, err := readUserVersion(ctx, tx)
+	if err != nil || version >= promptPRLinksDataVersion {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE sessions SET structured_pr_links=pr_links WHERE structured_pr_links IS NOT pr_links`); err != nil {
+		return fmt.Errorf("copying structured PR links: %w", err)
+	}
 	if db.usageOnlyStorage() {
 		return nil
 	}
-	tx, err := w.BeginTx(ctx, nil)
+	ids, err := sessionIDsTx(ctx, tx, "id IN (SELECT session_id FROM messages WHERE "+promptPRLinkCandidateSQL+")")
 	if err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback() }()
-	var done bool
-	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM stats WHERE key=? AND value!=0)`, key).Scan(&done); err != nil {
-		return err
-	}
-	if !done {
-		ids, err := sessionIDsTx(ctx, tx, "id IN (SELECT session_id FROM messages WHERE "+promptPRLinkCandidateSQL+")")
-		if err != nil {
-			return err
-		}
-		for _, id := range ids {
-			if err := refreshSessionPromptPRLinksTx(tx, id); err != nil {
-				return fmt.Errorf("backfilling prompt PR links: %w", err)
-			}
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO stats(key,value) VALUES (?,1)`, key); err != nil {
-			return err
+	for _, id := range ids {
+		if err := refreshSessionPromptPRLinksTx(tx, id); err != nil {
+			return fmt.Errorf("backfilling prompt PR links: %w", err)
 		}
 	}
-	return tx.Commit()
+	return nil
 }
