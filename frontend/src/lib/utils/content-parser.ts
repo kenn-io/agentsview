@@ -31,10 +31,6 @@ const THINKING_MARKED_RE = /\[Thinking\]\n?([\s\S]*?)\n?\[\/Thinking\]/g;
 const THINKING_LEGACY_RE = /\[Thinking\]\n?([\s\S]*?)(?=\n\[|\n\n|$)/g;
 
 /**
- * Skill blocks use [Skill: name]...[/Skill] delimiters,
- * same pattern as thinking blocks.
- */
-/**
  * The envelope the parsers write for a skill_invocation row. The body is
  * opaque Markdown, so only the outermost delimiters count: a literal
  * `[/Skill]` inside it, such as in a code example, must not end it early.
@@ -48,6 +44,10 @@ export function parseSkillInvocation(content: string): ContentSegment | null {
   return { type: "skill", content: (m[2] ?? "").trim(), label: m[1] ?? "" };
 }
 
+/**
+ * Skill blocks use [Skill: name]...[/Skill] delimiters,
+ * same pattern as thinking blocks.
+ */
 const SKILL_RE = /\[Skill: (.+?)\]\n?([\s\S]*?)\n?\[\/Skill\]/g;
 
 const TOOL_NAMES =
