@@ -1676,10 +1676,11 @@ own metadata, which is why the docs below call the database a mirror.
 
 ### ClickHouse test fixtures
 
-Run `make test-clickhouse` to start a compose service with a lease. A scheduled
-reaper can remove it after the test processes exit. Use `make clickhouse-up` and
-`make clickhouse-down` to manage a separate standing service. When running tagged
-Go tests directly, set `TEST_CLICKHOUSE_URL` to reuse a dedicated test server.
+Run `make test-clickhouse` to start a disposable compose service. The target
+removes it after the tests and reports a failure if cleanup fails. Use
+`make clickhouse-up` and `make clickhouse-down` to manage a separate standing
+service. When running tagged Go tests directly, set `TEST_CLICKHOUSE_URL` to
+reuse a dedicated test server.
 These tests use the `chtest` build tag. Never point them at a live mirror.
 
 - For reads against the standard populated mirror, use `newClonedReadStore(t)`.
@@ -1768,10 +1769,10 @@ Because each test owns a database, the tests run in parallel:
   (`start-single-node --store=type=mem,size=4GiB`). Schema setup takes about
   10 s per test there, against 86 s on a disk store.
 
-Use `make test-postgres` to start a container with a lease and run the suite.
-A scheduled reaper can remove the container after the test processes exit. Use
-`make postgres-up` and `make postgres-down` to manage a separate standing test
-container.
+Use `make test-postgres` to start a disposable container and run the suite.
+The target removes it after the tests and reports a failure if cleanup fails.
+Use `make postgres-up` and `make postgres-down` to manage a separate standing
+test container.
 
 To use an existing dedicated instance, run:
 
