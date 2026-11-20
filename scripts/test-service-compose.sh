@@ -5,8 +5,12 @@ port=$2
 shift 2
 
 case "$service" in
-    postgres) export TEST_PG_PUBLISH=127.0.0.1::5432 ;;
+    postgres)
+        export TEST_PG_PUBLISH=127.0.0.1::5432
+        export TEST_CH_HTTP_PUBLISH=
+        export TEST_CH_NATIVE_PUBLISH= ;;
     clickhouse)
+        export TEST_PG_PUBLISH=
         export TEST_CH_HTTP_PUBLISH=127.0.0.1::8123
         export TEST_CH_NATIVE_PUBLISH=127.0.0.1::9000 ;;
 esac

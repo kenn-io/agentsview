@@ -1777,6 +1777,9 @@ Use `make test-postgres` to start a disposable container and run the suite.
 The same lease and reaper contract described above applies to PostgreSQL.
 Use `make postgres-up` and `make postgres-down` to manage a separate standing
 test container.
+The leased PostgreSQL, ClickHouse, and usage benchmark targets use Unix file
+locks and process groups. On native Windows, run them from WSL with the checkout
+in WSL's Linux filesystem.
 
 To use an existing dedicated instance, run:
 

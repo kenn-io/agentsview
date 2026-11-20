@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gofrs/flock"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/pricing/catalog"
 	"go.kenn.io/kit/atomicfile"
@@ -396,6 +397,23 @@ func ensureGitCommit(ctx context.Context, ref, branch string) error {
 	if gitCommand(ctx, "cat-file", "-e", ref+"^{commit}") == nil {
 		return nil
 	}
+	commonDir, err := gitCommonDir(ctx)
+	if err != nil {
+		return fmt.Errorf("locating snapshot repository: %w", err)
+	}
+	fetchLock := flock.New(filepath.Join(commonDir, "agentsview-snapshot-fetch.lock"))
+	locked, err := fetchLock.TryLockContext(ctx, 10*time.Millisecond)
+	if err != nil {
+		return fmt.Errorf("locking snapshot fetch: %w", err)
+	}
+	if !locked {
+		return errors.New("locking snapshot fetch: lock was not acquired")
+	}
+	defer func() { _ = fetchLock.Unlock() }()
+
+	if gitCommand(ctx, "cat-file", "-e", ref+"^{commit}") == nil {
+		return nil
+	}
 
 	if err := fetchGitRef(ctx, ref); err == nil {
 		if gitCommand(ctx, "cat-file", "-e", ref+"^{commit}") == nil {
@@ -414,6 +432,19 @@ func ensureGitCommit(ctx context.Context, ref, branch string) error {
 		return fmt.Errorf("artifact ref %s is not available after fetch: %w", ref, err)
 	}
 	return nil
+}
+
+func gitCommonDir(ctx context.Context) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--git-common-dir")
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("running git rev-parse: %w", err)
+	}
+	commonDir, err := filepath.Abs(filepath.Clean(strings.TrimSpace(string(out))))
+	if err != nil {
+		return "", fmt.Errorf("resolving git common directory: %w", err)
+	}
+	return commonDir, nil
 }
 
 func fetchGitRef(ctx context.Context, refspec string) error {

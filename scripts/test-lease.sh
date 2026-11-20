@@ -13,13 +13,17 @@ if [ -z "${HOME:-}" ]; then
     exit 2
 fi
 exec python3 - "$@" <<'PY'
-import fcntl
 import os
 import shlex
 import signal
 import subprocess
 import sys
 import time
+
+if os.name == "nt":
+    sys.exit("native Windows is unsupported; run leased test targets from WSL")
+
+import fcntl
 
 command = sys.argv[1:]
 lease = f"agentsview-{int(time.time())}-{os.getpid()}"
@@ -77,8 +81,17 @@ with lock:
         same_file = False
     if same_file:
         cleanup = ["docker", "compose", "-p", lease, "-f", "docker-compose.test.yml", "-f", "docker-compose.test-lease.yml", "down", "-v", "--remove-orphans"]
-        if subprocess.call(cleanup, start_new_session=True) != 0:
-            print(f"cleanup failed; run from the repository root: TEST_SERVICE_LEASE={lease} {shlex.join(cleanup)}", file=sys.stderr)
+        cleanup_vars = {
+            "TEST_SERVICE_LEASE": lease,
+            "TEST_PG_PUBLISH": "127.0.0.1::5432",
+            "TEST_CH_HTTP_PUBLISH": "127.0.0.1::8123",
+            "TEST_CH_NATIVE_PUBLISH": "127.0.0.1::9000",
+        }
+        cleanup_env = os.environ.copy()
+        cleanup_env.update(cleanup_vars)
+        if subprocess.call(cleanup, env=cleanup_env, start_new_session=True) != 0:
+            assignments = " ".join(f"{key}={shlex.quote(value)}" for key, value in cleanup_vars.items())
+            print(f"cleanup failed; run from the repository root: {assignments} {shlex.join(cleanup)}", file=sys.stderr)
             if status == 0:
                 status = 1
         else:

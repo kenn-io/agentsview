@@ -40,6 +40,7 @@ case " $* " in
   *' port '*) exit 1 ;;
   *' down '*)
     [ "$2" = -p ] && [ "$3" = "$TEST_SERVICE_LEASE" ] || exit 1
+    [ "$TEST_PG_PUBLISH" = 127.0.0.1::5432 ] && [ "$TEST_CH_HTTP_PUBLISH" = 127.0.0.1::8123 ] && [ "$TEST_CH_NATIVE_PUBLISH" = 127.0.0.1::9000 ] || exit 1
     lease-held "$HOME/.local/state/test-service-leases/$TEST_SERVICE_LEASE" || exit 1
     if [ "${BLOCK_DOWN:-0}" = 1 ]; then
         touch "$DOWN_STARTED"
@@ -129,12 +130,12 @@ unset READY RELEASE EXITED MAIN
 for command_status in 0 7; do
     : > "$DOCKER_LOG"
     set +e
-    (cd "$root" && DOWN_STATUS=1 ./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 sh -c "exit $command_status") > "$tmp/cleanup-error" 2>&1
+    (cd "$root" && TEST_PG_PUBLISH=invalid TEST_CH_HTTP_PUBLISH=invalid TEST_CH_NATIVE_PUBLISH=invalid DOWN_STATUS=1 ./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 sh -c "exit $command_status") > "$tmp/cleanup-error" 2>&1
     status=$?
     set -e
     if [[ $command_status == 0 ]]; then [[ $status == 1 ]]; else [[ $status == 7 ]]; fi
     project=$(cat "$CHECK_LEASE")
-    grep -Fxq "cleanup failed; run from the repository root: TEST_SERVICE_LEASE=$project docker compose -p $project -f docker-compose.test.yml -f docker-compose.test-lease.yml down -v --remove-orphans" "$tmp/cleanup-error"
+    grep -Fxq "cleanup failed; run from the repository root: TEST_SERVICE_LEASE=$project TEST_PG_PUBLISH=127.0.0.1::5432 TEST_CH_HTTP_PUBLISH=127.0.0.1::8123 TEST_CH_NATIVE_PUBLISH=127.0.0.1::9000 docker compose -p $project -f docker-compose.test.yml -f docker-compose.test-lease.yml down -v --remove-orphans" "$tmp/cleanup-error"
     grep -q ' down ' "$DOCKER_LOG"
     [[ -f "$HOME/.local/state/test-service-leases/$(cat "$CHECK_LEASE")" ]]
 done
