@@ -1947,12 +1947,67 @@ describe("App telemetry", () => {
     expect(document.title).toBe("Usage · AgentsView");
     router.navigateToSession("session-1");
     await flushEffects();
-    expect(document.title).toBe("Fix login (session-) · proj-a · AgentsView");
+    expect(document.title).toBe("Fix login (session-1) · proj-a · AgentsView");
     sessions.sessions = [hydratedSession("session-1", "codex", { display_name: "Renamed" })];
     await flushEffects();
-    expect(document.title).toBe("Renamed (session-) · proj-a · AgentsView");
+    expect(document.title).toBe("Renamed (session-1) · proj-a · AgentsView");
     sessions.sessions = [];
   });
+
+  it.each(["loaded", "not found"] as const)(
+    "tab title distinguishes imported copies when %s",
+    async (state) => {
+      setup();
+      vi.mocked(sessions.navigateToSession).mockRestore();
+      sessions.sessions = [];
+      sessions.details.clear();
+      const ids = ["source-a~codex:12345678abcdef", "source-b~codex:12345678abcdef"];
+      const responses = ids.map(() => Promise.withResolvers<Response>());
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((input: RequestInfo | URL) => {
+          const url = requestUrl(input);
+          const index = ids.findIndex((id) =>
+            url.endsWith(`/api/v1/sessions/${encodeURIComponent(id)}`),
+          );
+          if (index >= 0) return responses[index]!.promise;
+          return Promise.resolve(
+            new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
+          );
+        }),
+      );
+      router.route = "activity";
+      component = mount(App, { target: document.body });
+      await flushEffects();
+      router.navigate("usage");
+      await flushEffects();
+      const titles: string[][] = [];
+      for (const [index, id] of ids.entries()) {
+        router.navigateToSession(id);
+        await flushEffects();
+        expect(document.title).toBe(`${id} · AgentsView`);
+        const loading = document.title;
+        responses[index]!.resolve(
+          state === "loaded"
+            ? new Response(
+                JSON.stringify(hydratedSession(id, "codex", { display_name: "Fix login" })),
+                { status: 200, headers: { "Content-Type": "application/json" } },
+              )
+            : new Response("not found", { status: 404 }),
+        );
+        const expected =
+          state === "loaded"
+            ? `Fix login (${id}) · proj-a · AgentsView`
+            : `Session not found (${id}) · AgentsView`;
+        await vi.waitFor(() => expect(document.title).toBe(expected));
+        titles.push([loading, document.title]);
+      }
+      expect(titles[0]![0]).not.toBe(titles[1]![0]);
+      expect(titles[0]![1]).not.toBe(titles[1]![1]);
+      sessions.sessions = [];
+      sessions.details.clear();
+    },
+  );
 
   function postedFor(event: string) {
     return posted.filter((p) => p.event === event).map((p) => p.properties);
