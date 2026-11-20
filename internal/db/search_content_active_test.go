@@ -205,7 +205,7 @@ func TestSearchContentActivityCandidateExpansion(t *testing.T) {
 		{"collapsed chunks", VectorHit{SessionID: "active"}, 1, 200, activityCutoff, "", "", []int{0, 1, 2}, []int{200, 400, 800}},
 		{"fetch budget exhausted", VectorHit{SessionID: "active"}, 6400, 1, activityCutoff, "", "", nil, []int{200, 400, 800, 1600, 3200, 4096}},
 		{"all active", VectorHit{SessionID: "active"}, 200, 1, epochCutoff, "", "", nil, []int{200, 400}},
-		{"sparse project without activity rejection", VectorHit{SessionID: "idle", Ordinal: 3}, 6400, 1, activityCutoff, "project-b", "", nil, []int{200}},
+		{"sparse project without activity rejection", VectorHit{SessionID: "idle", Ordinal: 3}, 6400, 1, activityCutoff, "project-b", "2024-06-01", nil, []int{200}},
 		{"date from", VectorHit{SessionID: "old"}, 200, 1, time.Time{}, "", "2024-06-01", []int{0, 1, 2}, []int{200, 400}},
 	} {
 		modes := []string{"semantic"}
@@ -261,7 +261,7 @@ func TestSelectSurvivingVectorHitsErrors(t *testing.T) {
 				searcher.hits = []VectorHit{{SessionID: "session"}}
 			}
 			_, err := SelectSurvivingVectorHits(ctx, ContentSearchFilter{Limit: 3, ExcludeActiveSince: activityCutoff}, searcher, 200,
-				func(_ context.Context, _ ContentSearchFilter, sessionIDs []string) (map[string]bool, error) {
+				func(_ context.Context, _ ContentSearchFilter, sessionIDs []string) (map[string]VectorSessionEligibility, error) {
 					if tc.lookupErr != nil {
 						assert.Equal(t, []string{"session"}, sessionIDs)
 					}

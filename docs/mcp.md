@@ -225,7 +225,9 @@ include sessions whose activity overlaps the requested days in UTC. Either bound
 can be omitted. When both bounds and `session_id` are omitted, the search starts
 30 days before the current UTC date. The response note gives the start date; pass
 an earlier `date_from` to search further back. Malformed dates and ranges where
-`date_from` is after `date_to` return an error.
+`date_from` is after `date_to` return an error. Remote session searches with
+date bounds require a server with API version 9 or later; upgrade the server
+if it reports an older version.
 
 HTTP-backed session and search results include `web_url` when a browser address
 is available. Use that link when citing a session; it preserves the server's

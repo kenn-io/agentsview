@@ -42,8 +42,8 @@ func TestSemanticAllowedSessionIDsOverSQLiteVarLimit(t *testing.T) {
 	allowed, err := d.semanticAllowedSessionIDs(ctx, f, ids)
 	require.NoError(t, err)
 
-	assert.True(t, allowed["real-1"])
-	assert.True(t, allowed["real-2"])
+	assert.True(t, allowed["real-1"].ActivityAllowed)
+	assert.True(t, allowed["real-2"].ActivityAllowed)
 	assert.Len(t, allowed, 2, "no nonexistent id should appear in the result")
 }
 

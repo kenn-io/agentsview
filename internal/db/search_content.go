@@ -1366,17 +1366,29 @@ const SemanticOverfetchMin = 200
 // that PostgreSQL and ClickHouse would otherwise do for large limits.
 const maxActivityExpansionCandidates = 4096
 
-// SelectSurvivingVectorHits returns the ranked vector hits that pass the
-// filter's session scope. When a date filter or activity cutoff leaves
-// fewer than f.Limit units, it fetches again with twice the candidates, until
-// the engine is exhausted or the candidate cap is reached. When
-// f.Candidates is set it expands the same way whenever fewer than f.Limit
-// units survive, and records whether the engine was exhausted. allowedSessions
-// returns an entry for each otherwise eligible session; false marks a
-// session that the activity cutoff rejects.
+// VectorSessionEligibility records the date and activity checks for a session
+// that passed the other filters.
+type VectorSessionEligibility struct {
+	ActivityAllowed bool
+	DateAllowed     bool
+}
+
+// VectorSessionDatePredicate uses the same date boundaries as session search.
+func VectorSessionDatePredicate(b *QueryBuilder, f ContentSearchFilter) string {
+	q := func(col string) string { return col }
+	preds := b.SessionDateRangePredicates(f.Date, f.Date, f.Timezone, q)
+	preds = append(preds, b.SessionDateRangePredicates(f.DateFrom, f.DateTo, f.Timezone, q)...)
+	if len(preds) == 0 {
+		return "1 = 1"
+	}
+	return "COALESCE((" + strings.Join(preds, " AND ") + "), 1 = 0)"
+}
+
+// SelectSurvivingVectorHits expands when a date or activity check rejects a
+// hit, or when Candidates requests a complete candidate accounting.
 func SelectSurvivingVectorHits(
 	ctx context.Context, f ContentSearchFilter, searcher VectorSearcher, k int,
-	allowedSessions func(context.Context, ContentSearchFilter, []string) (map[string]bool, error),
+	allowedSessions func(context.Context, ContentSearchFilter, []string) (map[string]VectorSessionEligibility, error),
 ) ([]VectorHit, error) {
 	search, ceiling, err := searcher.PrepareSemanticSearch(ctx, f.Pattern)
 	if err != nil {
@@ -1395,7 +1407,7 @@ func SelectSurvivingVectorHits(
 		if err != nil {
 			return nil, err
 		}
-		surviving, units, activityRejected := filterVectorHits(hits, allowed, f.Scope)
+		surviving, units, rejected := filterVectorHits(hits, allowed, f.Scope)
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -1403,7 +1415,7 @@ func SelectSurvivingVectorHits(
 			f.Candidates.Exhausted = exhausted
 		}
 		next := clampRecallVectorCandidates(k*2, ceiling)
-		expand := activityRejected || f.Candidates != nil || f.Date != "" || f.DateFrom != "" || f.DateTo != ""
+		expand := rejected || f.Candidates != nil
 		if !expand || units >= f.Limit || exhausted || next <= k {
 			return surviving, nil
 		}
@@ -1412,27 +1424,27 @@ func SelectSurvivingVectorHits(
 }
 
 // filterVectorHits keeps hits from allowed sessions inside scope. It reports
-// the number of distinct surviving units and whether the activity cutoff
+// the number of distinct surviving units and whether a date or activity check
 // rejected any otherwise eligible hit.
 func filterVectorHits(
-	hits []VectorHit, allowed map[string]bool, scope string,
+	hits []VectorHit, allowed map[string]VectorSessionEligibility, scope string,
 ) ([]VectorHit, int, bool) {
 	surviving := make([]VectorHit, 0, len(hits))
 	units := make(map[string]struct{})
-	activityRejected := false
+	rejected := false
 	for _, h := range hits {
-		activityAllowed, eligible := allowed[h.SessionID]
+		status, eligible := allowed[h.SessionID]
 		if !eligible || ScopeExcludes(scope, h.Subordinate) {
 			continue
 		}
-		if !activityAllowed {
-			activityRejected = true
+		if !status.ActivityAllowed || !status.DateAllowed {
+			rejected = true
 			continue
 		}
 		surviving = append(surviving, h)
 		units[UnitFusionKey(h.SessionID, h.OrdinalStart)] = struct{}{}
 	}
-	return surviving, len(units), activityRejected
+	return surviving, len(units), rejected
 }
 
 // validateSemanticSources returns a SearchInputError unless f.Sources is
@@ -2067,8 +2079,8 @@ func UniqueSessionIDs(hits []VectorHit) []string {
 }
 
 // semanticAllowedSessionIDs runs one query per maxSQLVars-sized chunk of ids
-// returning activity eligibility for ids passing the other metadata filters
-// (project, agent, date range, one-shot/automated, ...), reusing the same
+// returning activity and date eligibility for ids passing the other metadata
+// filters (project, agent, one-shot/automated, ...), reusing the same
 // SessionFilter mapping sessionScopeSubquery uses so the two paths cannot
 // drift apart. Like semanticSessionScopeSubquery it deliberately omits the
 // sidebar-child exclusion and exempts child sessions from the one-shot
@@ -2079,23 +2091,25 @@ func UniqueSessionIDs(hits []VectorHit) []string {
 // of distinct sessions, well past a single IN clause's budget.
 func (db *DB) semanticAllowedSessionIDs(
 	ctx context.Context, f ContentSearchFilter, ids []string,
-) (map[string]bool, error) {
+) (map[string]VectorSessionEligibility, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
 	sessionFilter := SemanticContentSessionFilter(f)
 	sessionFilter.ExcludeActiveSince = time.Time{}
+	sessionFilter.Date, sessionFilter.DateFrom, sessionFilter.DateTo = "", "", ""
 	b := NewQueryBuilder(SQLiteQueryDialect(), 0)
 	activity := "1"
 	if !f.ExcludeActiveSince.IsZero() {
 		activity = b.ExcludeActiveSincePredicate(f.ExcludeActiveSince)
 	}
+	date := VectorSessionDatePredicate(b, f)
 	where, filterArgs := buildSessionBaseFilter(sessionFilter)
 	where, filterArgs = AppendExcludeSessionIDs(where, filterArgs, "id", f.ExcludeSessionIDs)
 	filterArgs = append(b.Args(), filterArgs...)
-	query := "SELECT id, " + activity + " FROM sessions WHERE " + where + " AND id IN "
+	query := "SELECT id, " + activity + ", " + date + " FROM sessions WHERE " + where + " AND id IN "
 
-	allowed := make(map[string]bool, len(ids))
+	allowed := make(map[string]VectorSessionEligibility, len(ids))
 	err := queryChunked(ids, func(chunk []string) error {
 		placeholders, chunkArgs := InPlaceholders(chunk)
 		args := make([]any, 0, len(filterArgs)+len(chunkArgs))
@@ -2109,12 +2123,12 @@ func (db *DB) semanticAllowedSessionIDs(
 		defer rows.Close()
 		for rows.Next() {
 			var id string
-			var activityAllowed bool
-			if err := rows.Scan(&id, &activityAllowed); err != nil {
+			var eligibility VectorSessionEligibility
+			if err := rows.Scan(&id, &eligibility.ActivityAllowed, &eligibility.DateAllowed); err != nil {
 				rows.Close()
 				return fmt.Errorf("scan semantic session id: %w", err)
 			}
-			allowed[id] = activityAllowed
+			allowed[id] = eligibility
 		}
 		if err := rows.Err(); err != nil {
 			rows.Close()

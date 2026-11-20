@@ -83,6 +83,38 @@ func TestSearchForwardsCursor(t *testing.T) {
 	assert.NotEmpty(t, result.Results[0].WebURL)
 }
 
+func TestSearchDateFiltersProbeChangedServer(t *testing.T) {
+	var version atomic.Int32
+	version.Store(8)
+	var searches atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/v1/version" {
+			_, _ = fmt.Fprintf(w, `{"api_version":%d}`, version.Load())
+			return
+		}
+		searches.Add(1)
+		_, _ = w.Write([]byte(`{"results":[],"next":0}`))
+	}))
+	t.Cleanup(srv.Close)
+	backend := NewHTTPBackendForServer(srv.URL, "", HTTPServerCapabilities{APIVersion: 8})
+	req := service.SearchRequest{Query: "needle", DateFrom: "2024-05-16"}
+	_, err := backend.Search(t.Context(), req)
+	require.ErrorContains(t, err, "restart or upgrade the server")
+	assert.Zero(t, searches.Load())
+	version.Store(9)
+	_, err = backend.Search(t.Context(), req)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, searches.Load())
+	_, err = backend.Search(t.Context(), service.SearchRequest{Query: "needle", DateTo: "2024-06-15"})
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, searches.Load())
+	version.Store(8)
+	_, err = backend.Search(t.Context(), req)
+	require.ErrorContains(t, err, "restart or upgrade the server")
+	assert.EqualValues(t, 2, searches.Load())
+}
+
 func TestStatsForwardsGitHubOutcomes(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/v1/session-stats", r.URL.Path)

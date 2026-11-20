@@ -87,8 +87,8 @@ func (s *Store) survivingVectorHitsPG(
 	return db.SelectSurvivingVectorHits(ctx, f, searcher, k, s.semanticAllowedSessionIDsPG)
 }
 
-// semanticAllowedSessionIDsPG returns activity eligibility for ids passing
-// the other metadata filters (project, agent, date range,
+// semanticAllowedSessionIDsPG returns activity and date eligibility for ids passing
+// the other metadata filters (project, agent,
 // one-shot/automated, ...), reusing buildPGSessionBaseFilter so this path
 // cannot drift from the substring/regex scope subquery. Like SQLite's
 // semanticAllowedSessionIDs it omits the sidebar-child exclusion and exempts
@@ -98,12 +98,13 @@ func (s *Store) survivingVectorHitsPG(
 // parameter (pgx expands ANY natively), so no IN chunking is needed.
 func (s *Store) semanticAllowedSessionIDsPG(
 	ctx context.Context, f db.ContentSearchFilter, ids []string,
-) (map[string]bool, error) {
+) (map[string]db.VectorSessionEligibility, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
 	sessionFilter := db.SemanticContentSessionFilter(f)
 	sessionFilter.ExcludeActiveSince = time.Time{}
+	sessionFilter.Date, sessionFilter.DateFrom, sessionFilter.DateTo = "", "", ""
 	where, args := buildPGSessionBaseFilter(sessionFilter, s.sessionDialect())
 	where, args = appendExcludeSessionIDsPG(where, args, "id", f.ExcludeSessionIDs)
 	b := db.NewQueryBuilder(db.PostgresQueryDialect(), len(args))
@@ -111,9 +112,10 @@ func (s *Store) semanticAllowedSessionIDsPG(
 	if !f.ExcludeActiveSince.IsZero() {
 		activity = b.ExcludeActiveSincePredicate(f.ExcludeActiveSince)
 	}
+	date := db.VectorSessionDatePredicate(b, f)
 	args = append(args, b.Args()...)
 	query := fmt.Sprintf(
-		"SELECT id, %s FROM sessions WHERE %s AND id = ANY($%d)", activity, where, len(args)+1)
+		"SELECT id, %s, %s FROM sessions WHERE %s AND id = ANY($%d)", activity, date, where, len(args)+1)
 	args = append(args, ids)
 
 	rows, err := s.pg.QueryContext(ctx, query, args...)
@@ -123,14 +125,14 @@ func (s *Store) semanticAllowedSessionIDsPG(
 	defer rows.Close()
 	defer func() { _ = rows.Close() }()
 
-	allowed := make(map[string]bool, len(ids))
+	allowed := make(map[string]db.VectorSessionEligibility, len(ids))
 	for rows.Next() {
 		var id string
-		var activityAllowed bool
-		if err := rows.Scan(&id, &activityAllowed); err != nil {
+		var eligibility db.VectorSessionEligibility
+		if err := rows.Scan(&id, &eligibility.ActivityAllowed, &eligibility.DateAllowed); err != nil {
 			return nil, fmt.Errorf("scan pg semantic session id: %w", err)
 		}
-		allowed[id] = activityAllowed
+		allowed[id] = eligibility
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
