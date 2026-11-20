@@ -94,17 +94,7 @@ func (s *Store) writeFrustrationCounts(ctx context.Context, ids, tokens []string
 	if s.cockroach {
 		lock = "FOR UPDATE"
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT id FROM sessions WHERE id = ANY($1) ORDER BY id `+lock, ids)
-	if err != nil {
-		return fmt.Errorf("locking frustration sessions: %w", err)
-	}
-	for rows.Next() {
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return fmt.Errorf("locking frustration sessions: %w", err)
-	}
-	if err := rows.Close(); err != nil {
+	if _, err := tx.ExecContext(ctx, `SELECT 1 FROM sessions WHERE id = ANY($1) ORDER BY id `+lock, ids); err != nil {
 		return fmt.Errorf("locking frustration sessions: %w", err)
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO session_frustration_counts (session_id, session_version, rules_version, marker_count)
