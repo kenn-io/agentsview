@@ -365,3 +365,45 @@ func TestAgentSetupWithoutMCPWriteErrorAfterRefusal(t *testing.T) {
 	require.Contains(t, report.Rows[0].Reason, "skills: write "+license)
 	require.NotContains(t, report.Rows[0].NextStep, "--force")
 }
+
+func TestAgentSetupWithoutMCPFormatJSON(t *testing.T) {
+	home := t.TempDir()
+	setDoctorMemoryTestEnvironment(t, home)
+	fakeAgent(t, "claude", "")
+	path := filepath.Join(home, ".claude.json")
+	original := `{"mcpServers":{"agentsview":{"command":"custom"}}}`
+	require.NoError(t, os.WriteFile(path, []byte(original), 0o600))
+	out, err := executeCommand(newRootCommand(), "agent", "setup", "--agent", "claude", "--mcp=false", "--check", "--format", "json")
+	require.Error(t, err)
+	var report struct {
+		Rows []struct {
+			Agent    string `json:"agent"`
+			Piece    string `json:"piece"`
+			NextStep string `json:"next_step"`
+		} `json:"rows"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &report), out)
+	require.Len(t, report.Rows, 1)
+	require.Equal(t, "claude", report.Rows[0].Agent)
+	require.Equal(t, "skill", report.Rows[0].Piece)
+	require.Equal(t, "agentsview agent setup --mcp=false --agent claude", report.Rows[0].NextStep)
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, original, string(data))
+}
+
+func TestSkillsInstallRefusalMessage(t *testing.T) {
+	home := t.TempDir()
+	setDoctorMemoryTestEnvironment(t, home)
+	path := filepath.Join(skills.TargetDir(skills.HarnessClaude, home), skillFileName)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, []byte("custom skill"), 0o600))
+	_, err := executeCommand(newRootCommand(), "skills", "install", "--harness", "claude")
+	require.EqualError(t, err, "skills install: 1 target(s) refused; rerun with --force to overwrite")
+}
+
+func TestAgentSetupWithoutMCPRejectsPrint(t *testing.T) {
+	out, err := executeCommand(newRootCommand(), "agent", "setup", "--mcp=false", "--print")
+	require.EqualError(t, err, "--print requires MCP setup; remove --mcp=false")
+	require.Empty(t, out)
+}

@@ -21,13 +21,20 @@ func newAgentCommand() *cobra.Command {
 	cmd := agentsetup.NewCommand(agentsetup.Options{
 		SetupCommand: "agentsview agent setup",
 		Items: func(agent string) ([]agentsetup.Item, error) {
-			return setupItems(agent, force, mcp)
+			return setupItems(agent, force, true)
 		},
 	})
 	run := cmd.RunE
 	cmd.RunE = func(cmd *cobra.Command, args []string) error {
 		if mcp {
 			return run(cmd, args)
+		}
+		print, err := cmd.Flags().GetBool("print")
+		if err != nil {
+			return err
+		}
+		if print {
+			return errors.New("--print requires MCP setup; remove --mcp=false")
 		}
 		agents, err := cmd.Flags().GetStringSlice("agent")
 		if err != nil {
@@ -129,7 +136,11 @@ func setupItems(agent string, force, withMCP bool) ([]agentsetup.Item, error) {
 		Name:  "skill",
 		Check: checkSkills,
 		Install: func(context.Context) error {
-			return runSkillsInstall(io.Discard, []skills.Harness{harness}, home, force, skillRemote)
+			err := runSkillsInstall(io.Discard, []skills.Harness{harness}, home, force, skillRemote)
+			if _, refused := errors.AsType[skillInstallRefusal](err); refused && !withMCP {
+				return fmt.Errorf("Skill files were edited: %w", err)
+			}
+			return err
 		},
 	}
 	if !withMCP {

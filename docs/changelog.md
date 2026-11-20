@@ -111,7 +111,8 @@ The latest release is
   tool. See [Recall](/docs/recall/#current-surface).
 
 - `agentsview agent setup` installs the AgentsView skills and registers the MCP
-  server for Claude Code and Codex in one step. See
+  server for Claude Code and Codex in one step. Use `--mcp=false` to leave an
+  existing MCP entry alone while installing or checking skills. See
   [`agentsview agent setup`](/docs/commands/#agentsview-agent-setup).
 
 - Claude Code users can install AgentsView Memory from the repository's plugin
