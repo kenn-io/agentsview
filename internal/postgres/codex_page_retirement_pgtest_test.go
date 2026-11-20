@@ -29,7 +29,10 @@ func TestCodexPageUpgradeRetiresMissingPostgresHead(t *testing.T) {
 		promptLink        bool
 	}{
 		{name: "unpinned"},
-		{name: "pinned", pinned: true, promptLink: true},
+		{name: "pinned", pinned: true},
+		// Migrates the page directly to check that it carries the page's
+		// stored prompt links; the push that follows has no migration left.
+		{name: "pinned_prompt_link", pinned: true, promptLink: true},
 		{name: "newer_page_curation", pinned: true, newerPage: true},
 		{name: "restore_page", pinned: true, trashAction: "page"},
 		{name: "restore_thread", pinned: true, trashAction: "thread"},
