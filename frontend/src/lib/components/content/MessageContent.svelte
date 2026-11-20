@@ -294,8 +294,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
         {/if}
       {:else if segment.type === "skill"}
         {#if showText}
-          <!-- The .markdown rules below are scoped to this component, so wrap
-               SkillBlock to give its rendered body the same prose styles. -->
+          <!-- Scoped .markdown styles only reach descendants of this wrapper. -->
           <div class="markdown">
             <SkillBlock content={segment.content} name={segment.label} {searchKey} />
           </div>
