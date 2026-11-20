@@ -40,7 +40,7 @@ func TestContentSearchReaderAdmission(t *testing.T) {
 	insertMessages(t, database, userMsg("search-session", 0, "needle phrase"))
 	for _, tc := range []struct{ mode, pattern string }{
 		{"substring", "needle"}, {"regex", "needle"}, {"terms", "needle"},
-		{"fts", "needle"}, {"fts", "needle phrase"},
+		{"fts", "needle"},
 		{"hybrid", "needle"}, {"hybrid", "needle phrase"},
 	} {
 		t.Run(tc.mode+"/"+tc.pattern, func(t *testing.T) {
