@@ -189,6 +189,8 @@ func TestHostedCrossSourceLinkLookupsStayBounded(t *testing.T) {
 		require.NoError(t, err)
 		for _, mode := range []string{"force_custom_plan", "force_generic_plan"} {
 			t.Run(fmt.Sprintf("%d/%s", size, mode), func(t *testing.T) {
+				// Include a new database session whose system catalog cache is cold.
+				f.runtime.SetMaxIdleConns(0)
 				plan := rawLookupPlan(t, f.runtime, mode, `SELECT DISTINCT target.session_id `+hostedLinkFromSQL+` AND owner.session_id=$1`, identity.SessionID, size == 32)
 				assert.Equal(t, float64(1), plan["Actual Rows"])
 				buffers := plan["Shared Hit Blocks"].(float64) + plan["Shared Read Blocks"].(float64)
