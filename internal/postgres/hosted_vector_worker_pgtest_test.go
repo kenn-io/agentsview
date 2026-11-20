@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -51,7 +52,9 @@ func TestHostedVectorUploadEditAndSearchSnapshot(t *testing.T) {
 		}
 	}()
 	hosted.SetVectorSearcher(searcher)
-	initial, err := hosted.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "old", Mode: "semantic", IncludeOneShot: true, Limit: 10})
+	searchCtx, cancelSearch := context.WithTimeout(t.Context(), time.Minute)
+	defer cancelSearch()
+	initial, err := hosted.SearchContent(searchCtx, db.ContentSearchFilter{Pattern: "old", Mode: "semantic", IncludeOneShot: true, Limit: 10})
 	require.NoError(t, err)
 	var initialSnippets []string
 	for _, match := range initial.Matches {
@@ -63,7 +66,7 @@ func TestHostedVectorUploadEditAndSearchSnapshot(t *testing.T) {
 	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false))
 	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET deleted_at=now()`)
 	require.NoError(t, err)
-	trashed, err := hosted.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "old", Mode: "semantic", IncludeOneShot: true, Limit: 10})
+	trashed, err := hosted.SearchContent(searchCtx, db.ContentSearchFilter{Pattern: "old", Mode: "semantic", IncludeOneShot: true, Limit: 10})
 	require.NoError(t, err)
 	assert.Empty(t, trashed.Matches)
 	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET deleted_at=NULL`)
@@ -75,13 +78,15 @@ func TestHostedVectorUploadEditAndSearchSnapshot(t *testing.T) {
 	}
 	resultCh := make(chan result, 1)
 	go func() {
-		page, err := hosted.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "old", Mode: "semantic", IncludeOneShot: true, Limit: 10})
+		page, err := hosted.SearchContent(searchCtx, db.ContentSearchFilter{Pattern: "old", Mode: "semantic", IncludeOneShot: true, Limit: 10})
 		resultCh <- result{page, err}
 	}()
 	select {
 	case <-selected:
-	case <-t.Context().Done():
-		t.Fatal(t.Context().Err())
+	case res := <-resultCh:
+		t.Fatalf("search ended before selecting candidates: %v", res.err)
+	case <-searchCtx.Done():
+		t.Fatal(searchCtx.Err())
 	}
 	second, _ := f.accept(t, "device-a", "snapshot-second", receipt.Receipt)
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, second), second, projectionOutcome("new snapshot words")))
@@ -95,7 +100,7 @@ func TestHostedVectorUploadEditAndSearchSnapshot(t *testing.T) {
 	}
 	assert.Contains(t, snippets, "old snapshot words")
 	searcher.afterCandidates = nil
-	page, err := hosted.SearchContent(t.Context(), db.ContentSearchFilter{Pattern: "new", Mode: "semantic", IncludeOneShot: true, Limit: 10})
+	page, err := hosted.SearchContent(searchCtx, db.ContentSearchFilter{Pattern: "new", Mode: "semantic", IncludeOneShot: true, Limit: 10})
 	require.NoError(t, err)
 	snippets = nil
 	for _, match := range page.Matches {

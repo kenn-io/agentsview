@@ -124,10 +124,10 @@ func newVectorPushTestSync(t *testing.T) (*Sync, *db.DB, *sql.DB) {
 		require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 	}
 
-	halfvec, version, err := vectorHalfvecAvailable(ctx, pg)
-	require.NoError(t, err, "vectorHalfvecAvailable")
-	if reason := vectorUnavailableReason(halfvec, version); reason != "" {
-		t.Skip(reason)
+	unavailable, err := ensureVectorBaseSchemaPG(ctx, pg)
+	require.NoError(t, err, "ensureVectorBaseSchemaPG")
+	if unavailable != "" {
+		t.Skip(unavailable)
 	}
 
 	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
@@ -1110,74 +1110,74 @@ func TestVectorPushDeltaNoop(t *testing.T) {
 	assert.Equal(t, 0, res.Vectors.DocsPushed)
 }
 
-func TestVectorPushMissingSessionAfterGenerationDrop(t *testing.T) {
+func TestVectorPushLazyChunkAttachment(t *testing.T) {
 	t.Parallel()
-	sync, localDB, pg := newVectorPushTestSync(t)
-	ctx := t.Context()
-	seedVectorSession(t, localDB, "A")
-	seedVectorSession(t, localDB, "B")
-	src := &fakeVectorSource{
-		gen:    storage.VectorGenerationInfo{Fingerprint: "race-drop", Model: "model", Dimension: 4},
-		hasGen: true,
-		hashes: map[string]string{"A": "ha", "B": "hb"},
-		docs: map[string][]storage.VectorPushDoc{
-			"A": {vdoc("A", "A#0", 0, "a", "a1", []float32{1, 0, 0, 0})},
-			"B": {vdoc("B", "B#0", 0, "b", "b1", []float32{0, 1, 0, 0})},
-		},
-	}
-	sync.vectorSource = src
-	_, err := sync.Push(ctx, false, nil)
-	require.NoError(t, err)
-	id, _, ok, err := LookupVectorGeneration(ctx, pg, "race-drop")
-	require.NoError(t, err)
-	require.True(t, ok)
-	src.hashes["A"] = "changed"
-	src.hashesHook = func() {
-		for _, q := range []string{
-			`DELETE FROM sessions WHERE id = 'A'`,
-			`DROP TABLE ` + vectorChunkTable(id),
-			`DELETE FROM vector_generation_machines WHERE generation_id = $1`,
-			`DELETE FROM vector_generations WHERE id = $1`,
-		} {
-			var err error
-			if strings.Contains(q, "$1") {
-				_, err = pg.ExecContext(ctx, q, id)
-			} else {
-				_, err = pg.ExecContext(ctx, q)
+	t.Run("missing session after generation drop", func(t *testing.T) {
+		sync, localDB, pg := newVectorPushTestSync(t)
+		ctx := t.Context()
+		seedVectorSession(t, localDB, "A")
+		seedVectorSession(t, localDB, "B")
+		src := &fakeVectorSource{
+			gen:    storage.VectorGenerationInfo{Fingerprint: "race-drop", Model: "model", Dimension: 4},
+			hasGen: true,
+			hashes: map[string]string{"A": "ha", "B": "hb"},
+			docs: map[string][]storage.VectorPushDoc{
+				"A": {vdoc("A", "A#0", 0, "a", "a1", []float32{1, 0, 0, 0})},
+				"B": {vdoc("B", "B#0", 0, "b", "b1", []float32{0, 1, 0, 0})},
+			},
+		}
+		sync.vectorSource = src
+		_, err := sync.Push(ctx, false, nil)
+		require.NoError(t, err)
+		id, _, ok, err := LookupVectorGeneration(ctx, pg, "race-drop")
+		require.NoError(t, err)
+		require.True(t, ok)
+		src.hashes["A"] = "changed"
+		src.hashesHook = func() {
+			for _, q := range []string{
+				`DELETE FROM sessions WHERE id = 'A'`,
+				`DROP TABLE ` + vectorChunkTable(id),
+				`DELETE FROM vector_generation_machines WHERE generation_id = $1`,
+				`DELETE FROM vector_generations WHERE id = $1`,
+			} {
+				var err error
+				if strings.Contains(q, "$1") {
+					_, err = pg.ExecContext(ctx, q, id)
+				} else {
+					_, err = pg.ExecContext(ctx, q)
+				}
+				require.NoError(t, err)
 			}
+		}
+		result, err := sync.pushVectors(ctx, false, []string{"A"}, id, nil, nil)
+		require.NoError(t, err)
+		assert.NotEqual(t, id, result.GenerationID)
+		assert.Equal(t, 1, result.SessionsPushed)
+		assert.Equal(t, 1, countRows(t, pg, `SELECT COUNT(*) FROM `+vectorChunkTable(result.GenerationID)+` WHERE doc_key = 'B#0'`))
+	})
+	t.Run("unchanged after chunk table drop", func(t *testing.T) {
+		sync, localDB, pg := newVectorPushTestSync(t)
+		ctx := t.Context()
+		seedVectorSession(t, localDB, "A")
+		sync.vectorSource = &fakeVectorSource{
+			gen:    storage.VectorGenerationInfo{Fingerprint: "dropped", Model: "model", Dimension: 4},
+			hasGen: true,
+			hashes: map[string]string{"A": "ha"},
+			docs:   map[string][]storage.VectorPushDoc{"A": {vdoc("A", "A#0", 0, "content", "hash", []float32{1, 0, 0, 0})}},
+		}
+		_, err := sync.Push(ctx, false, nil)
+		require.NoError(t, err)
+		id, _, ok, err := LookupVectorGeneration(ctx, pg, "dropped")
+		require.NoError(t, err)
+		require.True(t, ok)
+		sync.afterVectorGenerationLookup = func() {
+			_, err := pg.ExecContext(ctx, `DROP TABLE `+vectorChunkTable(id))
 			require.NoError(t, err)
 		}
-	}
-	result, err := sync.pushVectors(ctx, false, []string{"A"}, id, nil, nil)
-	require.NoError(t, err)
-	assert.NotEqual(t, id, result.GenerationID)
-	assert.Equal(t, 1, result.SessionsPushed)
-	assert.Equal(t, 1, countRows(t, pg, `SELECT COUNT(*) FROM `+vectorChunkTable(result.GenerationID)+` WHERE doc_key = 'B#0'`))
-}
-
-func TestVectorPushUnchangedAfterChunkTableDrop(t *testing.T) {
-	t.Parallel()
-	sync, localDB, pg := newVectorPushTestSync(t)
-	ctx := t.Context()
-	seedVectorSession(t, localDB, "A")
-	sync.vectorSource = &fakeVectorSource{
-		gen:    storage.VectorGenerationInfo{Fingerprint: "dropped", Model: "model", Dimension: 4},
-		hasGen: true,
-		hashes: map[string]string{"A": "ha"},
-		docs:   map[string][]storage.VectorPushDoc{"A": {vdoc("A", "A#0", 0, "content", "hash", []float32{1, 0, 0, 0})}},
-	}
-	_, err := sync.Push(ctx, false, nil)
-	require.NoError(t, err)
-	id, _, ok, err := LookupVectorGeneration(ctx, pg, "dropped")
-	require.NoError(t, err)
-	require.True(t, ok)
-	sync.afterVectorGenerationLookup = func() {
-		_, err := pg.ExecContext(ctx, `DROP TABLE `+vectorChunkTable(id))
+		result, err := sync.pushVectors(ctx, false, []string{"A"}, id, nil, nil)
 		require.NoError(t, err)
-	}
-	result, err := sync.pushVectors(ctx, false, []string{"A"}, id, nil, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, result.SessionsUnchanged)
+		assert.Equal(t, 1, result.SessionsUnchanged)
+	})
 }
 
 // TestVectorPushFullRepairsSilentCorruption pins --full's repair contract for

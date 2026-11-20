@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/mod/semver"
 
 	"go.kenn.io/agentsview/internal/storage"
 )
@@ -213,10 +212,10 @@ func TestEnsureSchemaFastPathCreatesVectorTables(t *testing.T) {
 	ctx := t.Context()
 	require.NoError(t, EnsureSchema(ctx, pg, vectorSchemaTestSchema))
 
-	halfvec, version, err := vectorHalfvecAvailable(ctx, pg)
+	unavailable, err := ensureVectorBaseSchemaPG(ctx, pg)
 	require.NoError(t, err)
-	if reason := vectorUnavailableReason(halfvec, version); reason != "" {
-		t.Skip(reason)
+	if unavailable != "" {
+		t.Skip(unavailable)
 	}
 	require.True(t, pushSchemaCurrent(ctx, pg),
 		"a freshly ensured schema must read as current so the fast path is exercised")
@@ -273,12 +272,14 @@ func TestVectorHalfvecGate(t *testing.T) {
 	require.NoError(t, err, "gate must degrade, never error")
 	hasHalfvec, version, err := vectorHalfvecAvailable(ctx, pg)
 	require.NoError(t, err)
+	require.Equal(t, vectorUnavailableReason(hasHalfvec, version), unavailable)
 
-	if hadHalfvec && semver.IsValid("v"+beforeVersion) && semver.Compare("v"+beforeVersion, "v0.8.0") >= 0 {
-		assert.Empty(t, unavailable)
+	if unavailable == "" {
 		assert.True(t, hasHalfvec, "available gate implies halfvec exists")
 		assert.NotEmpty(t, version, "installed extension reports a version")
-		assert.Empty(t, trace.matching(regexp.MustCompile(`(?i)ALTER\s+EXTENSION\s+vector\s+UPDATE`)))
+		if vectorUnavailableReason(hadHalfvec, beforeVersion) == "" {
+			assert.Empty(t, trace.matching(regexp.MustCompile(`(?i)ALTER\s+EXTENSION\s+vector\s+UPDATE`)))
+		}
 		return
 	}
 	assert.NotEmpty(t, unavailable)

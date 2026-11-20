@@ -140,7 +140,7 @@ var (
 	runOffsets = `[{"o":10,"r":0,"b":0},{"o":12,"r":19,"b":19}]`
 )
 
-func TestVectorSearcherReaderBeforeWriter(t *testing.T) {
+func TestVectorSearcherReadOnlyRole(t *testing.T) {
 	pg := newVectorSearchTestPG(t)
 	ctx := t.Context()
 	seedVectorSearchFixture(t, pg)
@@ -340,48 +340,9 @@ func TestPGVectorSearcherExactK(t *testing.T) {
 	assert.Equal(t, 1, hits[0].Ordinal, "only multi survives; outside sits beyond k")
 }
 
-// TestPGVectorSearcherEfSearchRecall pins the HNSW recall contract: with a
-// candidate pool larger than pgvector's default hnsw.ef_search (40), a search
-// for k neighbors must return k docs, not ~40. The searcher raises ef_search to
-// k inside the query transaction; without that the KNN silently caps the pool
-// below k, diverging from the local backend's exact scan.
-func TestPGVectorSearcherEfSearchRecall(t *testing.T) {
-	t.Parallel()
-	pg := newVectorSearchTestPG(t)
-	ctx := t.Context()
-
-	genID, err := ensureVectorGeneration(ctx, pg, "fp-efsearch", "m", 4)
-	require.NoError(t, err, "ensureVectorGeneration")
-	require.NoError(t, ensureVectorChunkTable(ctx, pg, genID, 4), "ensureVectorChunkTable")
-	extSchema, err := vectorExtensionSchema(ctx, pg)
-	require.NoError(t, err, "vectorExtensionSchema")
-	halfvec := extSchema + ".halfvec"
-	table := vectorChunkTable(genID)
-
-	// 100 distinct docs (> the ef_search default of 40), one chunk each. The
-	// vectors spread across the plane so all are neighbors of the query.
-	const docCount = 100
-	for i := 0; i < docCount; i++ {
-		key := fmt.Sprintf("d%d", i)
-		insertSearchDoc(t, pg, key, "S", i, i, "[]", fmt.Sprintf("doc %d", i))
-		emb := []float32{1, float32(i) / float32(docCount), 0, 0}
-		insertSearchChunk(t, pg, table, halfvec, key, 0, emb)
-	}
-
-	searcher := NewVectorSearcher(
-		pg, genID, 4, searchMaxInputChars, fixedEncoder([]float32{1, 0, 0, 0}))
-	hits, err := dbtest.SemanticSearch(ctx, searcher, "query", docCount)
-	require.NoError(t, err, "SemanticSearch")
-	assert.Len(t, hits, docCount,
-		"ef_search raised to k returns all %d docs, not the ~40 default cap", docCount)
-}
-
-// TestPGVectorSearcherCappedScanIsNotExhausted pins the exhaustion signal past
-// hnsw.ef_search's 1000-row ceiling. Without iterative scan (pgvector < 0.8)
-// an HNSW index scan for k=1600 returns 1000 rows; with it, 1600. Either way
-// rows remain, so the page must not report the index exhausted. The table is
-// large enough that the planner scans the index instead of sorting rows.
-func TestPGVectorSearcherCappedScanIsNotExhausted(t *testing.T) {
+// TestPGVectorSearcherLargePageIsNotExhausted checks that iterative scans
+// return the requested page while more documents remain.
+func TestPGVectorSearcherLargePageIsNotExhausted(t *testing.T) {
 	t.Parallel()
 	pg := newVectorSearchTestPG(t)
 	ctx := t.Context()
@@ -415,6 +376,6 @@ SELECT 'd' || i, 0, ('[1,' || (i::float8 / $1) || ',' || ((i % 97)::float8 / 97)
 	require.NoError(t, err, "PrepareSemanticSearch")
 	hits, exhausted, err := page(ctx, k)
 	require.NoError(t, err, "page")
-	assert.GreaterOrEqual(t, len(hits), 1000)
+	assert.Len(t, hits, k)
 	assert.False(t, exhausted, "%d of %d docs returned", len(hits), docCount)
 }
