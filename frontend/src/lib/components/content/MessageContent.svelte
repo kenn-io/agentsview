@@ -299,7 +299,13 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
           </div>
         {/if}
       {:else if segment.type === "skill"}
-        {#if showText}<SkillBlock content={segment.content} name={segment.label} {searchKey} />{/if}
+        {#if showText}
+          <!-- The .markdown rules below are scoped to this component, so wrap
+               SkillBlock to give its rendered body the same prose styles. -->
+          <div class="markdown">
+            <SkillBlock content={segment.content} name={segment.label} {searchKey} />
+          </div>
+        {/if}
       {:else}
         {#if showText}
           <div class="text-content markdown" {@attach searchBlock(searchKey)}
