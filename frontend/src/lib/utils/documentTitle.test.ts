@@ -34,11 +34,11 @@ describe("documentTitle", () => {
     ],
     [
       "source-a~codex:01900000-0000-7000-8000-000000000001",
-      "Sessions · 00000001 · source-a · Codex · AgentsView",
+      "Sessions · source-a:00000001 · Codex · AgentsView",
     ],
     [
       "source-b~codex:01900000-0000-7000-8000-000000000001",
-      "Sessions · 00000001 · source-b · Codex · AgentsView",
+      "Sessions · source-b:00000001 · Codex · AgentsView",
     ],
     ["01900000-0000-7000-8000-000000000001", "Sessions · 00000001 · Claude · AgentsView"],
   ])("identifies %s", (sessionId, expected) => {
@@ -53,7 +53,7 @@ describe("documentTitle", () => {
         sessionId: "source-a~codex:12345678abcdef",
         sessionNotFound: true,
       }),
-    ).toBe("Sessions · 78abcdef · source-a · Codex · Session not found · AgentsView");
+    ).toBe("Sessions · source-a:78abcdef · Codex · Session not found · AgentsView");
   });
 
   it.each([

@@ -24,8 +24,7 @@ export function documentTitle({
     const id = providerSeparator >= 0 ? rawId.slice(providerSeparator + 1) : rawId;
     label = [
       m.nav_sessions(),
-      id.slice(-8),
-      ...(separator >= 0 ? [sessionId.slice(0, separator)] : []),
+      `${separator >= 0 ? `${sessionId.slice(0, separator)}:` : ""}${id.slice(-8)}`,
       agentLabel(provider),
       ...(sessionNotFound ? [m.message_list_session_not_found()] : []),
     ].join(" · ");
