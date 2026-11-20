@@ -32,6 +32,10 @@ func (s *Store) keptAnalyticsVersion(ctx context.Context, slot string) string {
 }
 
 func keptAnalyticsWith[T any](ctx context.Context, s *Store, panel string, f db.AnalyticsFilter, versionFor func(context.Context, string) string, load func(context.Context, db.AnalyticsFilter) (T, error)) (T, error) {
+	return keptAnalyticsMode(ctx, s, panel, f, versionFor, load, true)
+}
+
+func keptAnalyticsMode[T any](ctx context.Context, s *Store, panel string, f db.AnalyticsFilter, versionFor func(context.Context, string) string, load func(context.Context, db.AnalyticsFilter) (T, error), share bool) (T, error) {
 	if f.ActiveSince != "" || f.Timezone == "Local" || db.TerminationUsesTime(f.Termination) {
 		return load(ctx, f)
 	}
@@ -47,6 +51,33 @@ func keptAnalyticsWith[T any](ctx context.Context, s *Store, panel string, f db.
 	var savedVersion string
 	if panelVersion := s.keptDashboardVersion(ctx, panel, f); panelVersion != "" {
 		version, savedVersion = panelVersion, panelVersion+"|"+db.TrendsTimezoneKey(f)
+	}
+	if !share {
+		var result T
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
+		cache := &s.runtimeState().analytics
+		if encoded, ok := cache.Get(slot, version); ok && json.Unmarshal(encoded, &result) == nil {
+			return result, nil
+		}
+		if savedVersion != "" {
+			if encoded, ok := s.trendsDisk.Get(slot, savedVersion); ok && json.Unmarshal(encoded, &result) == nil {
+				cache.Put(slot, version, encoded)
+				return result, nil
+			}
+		}
+		result, err := load(ctx, f)
+		if err != nil {
+			return result, err
+		}
+		if encoded, err := json.Marshal(result, json.FormatNilSliceAsNull(true), json.FormatNilMapAsNull(true)); err == nil {
+			cache.Put(slot, version, encoded)
+			if savedVersion != "" {
+				s.trendsDisk.Put(slot, savedVersion, encoded)
+			}
+		}
+		return result, nil
 	}
 	encoded, err := s.runtimeState().analytics.DoSaved(ctx, &s.trendsDisk, slot, version, savedVersion, func(b []byte) ([]byte, error) { return b, nil }, func(b []byte) ([]byte, error) {
 		var result T

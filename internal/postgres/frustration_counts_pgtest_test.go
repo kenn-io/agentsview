@@ -450,6 +450,51 @@ func TestFrustrationFillShortDeadline(t *testing.T) {
 	require.True(t, pending, "startup fill must still be blocked")
 }
 
+func TestFrustrationSignalsSlowScanWithoutFill(t *testing.T) {
+	f := newFrustrationFixture(t, "agentsview")
+	store := f.open(t)
+	gate, err := f.pg.BeginTx(f.ctx, nil)
+	require.NoError(t, err)
+	defer gate.Rollback()
+	var gatePID int
+	require.NoError(t, gate.QueryRowContext(f.ctx, `SELECT pg_backend_pid()`).Scan(&gatePID))
+	_, err = gate.ExecContext(f.ctx, `LOCK TABLE sessions IN ACCESS EXCLUSIVE MODE`)
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(f.ctx, 10*time.Second)
+	defer cancel()
+	type result struct {
+		response db.SignalsAnalyticsResponse
+		err      error
+	}
+	done := make(chan result, 1)
+	go func() {
+		response, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+		done <- result{response, err}
+	}()
+	var pid int
+	var queryStart time.Time
+	require.Eventually(t, func() bool {
+		err := f.pg.QueryRowContext(ctx, `SELECT pid, query_start FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)) AND query LIKE '%quality_signal_version%'`, gatePID).Scan(&pid, &queryStart)
+		return err == nil
+	}, 3*time.Second, 10*time.Millisecond)
+	select {
+	case <-time.After(6 * time.Second):
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	var stillRunning bool
+	require.NoError(t, f.pg.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid=$1 AND query_start=$2 AND $3 = ANY(pg_blocking_pids(pid)))`, pid, queryStart, gatePID).Scan(&stillRunning))
+	require.True(t, stillRunning, "the original scan must keep the request's full deadline")
+	require.NoError(t, gate.Rollback())
+	select {
+	case got := <-done:
+		require.NoError(t, got.err)
+		require.Equal(t, 2, got.response.QualityHealth.Totals.FrustrationMarkerCount)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+}
+
 func addFrustrationFillSessions(t *testing.T, f *frustrationFixture) []string {
 	t.Helper()
 	_, err := f.pg.ExecContext(f.ctx, `UPDATE sessions SET machine=CASE WHEN id='one' THEN 'first' ELSE 'later' END, started_at='2026-01-01'`)
