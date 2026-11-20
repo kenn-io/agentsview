@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"math"
 	"reflect"
@@ -36,7 +37,6 @@ type pgActivitySavedReport struct {
 }
 
 func (s *Store) loadActivityReport(selection, version, identity string) (pgActivityKept, bool) {
-	s.activityReports.Sweep(time.Now())
 	data, ok := s.activityReports.Get(selection+"|"+identity+"|"+version, identity+"|"+version)
 	if !ok {
 		return pgActivityKept{}, false
@@ -65,7 +65,9 @@ func (s *Store) saveActivityReport(selection, version string, entry pgActivityKe
 	}
 }
 
-func (s *Store) refreshActivityReport(selection, version, identity string, previousRevision, revision int64, checkpoint string) {
+var errReportNotRewritten = errors.New("report not rewritten")
+
+func (s *Store) refreshActivityReport(selection, version, identity string, revision int64, checkpoint string) {
 	entries, ok := s.runtimeState().activityKept.Get(selection, version)
 	if !ok || identity == "" || entries[0].checkpoint == "" || entries[0].revision != revision || entries[0].checkpoint != checkpoint {
 		return
@@ -74,10 +76,10 @@ func (s *Store) refreshActivityReport(selection, version, identity string, previ
 	stale := entry.identity != identity
 	entry.identity = identity
 	key := selection + "|" + identity + "|" + version
-	if !stale && entry.revision == previousRevision {
-		s.activityReports.Keep(key, identity+"|"+version, entry.encode)
-	} else {
+	if stale {
 		s.saveActivityReport(selection, version, entry)
+	} else {
+		s.activityReports.Keep(key, identity+"|"+version, func() ([]byte, error) { return nil, errReportNotRewritten })
 	}
 	s.runtimeState().activityKept.Put(selection, version, []pgActivityKept{entry})
 }

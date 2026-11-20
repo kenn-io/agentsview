@@ -45,6 +45,7 @@ func (s *Store) ConfigureUsageCache(ctx context.Context, directory, targetURL, s
 	if err := s.activityReports.Open("postgres-activity-reports", strings.ReplaceAll(fingerprint, ":", "-"), 128<<20, 128<<20); err != nil {
 		log.Printf("opening activity reports cache: %v", err)
 	} else {
+		s.activityReports.Sweep(time.Now())
 		s.activityReports.StartSweep(ctx)
 	}
 	if column != "xmin" {

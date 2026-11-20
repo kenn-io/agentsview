@@ -25,6 +25,8 @@ type Disk struct {
 }
 
 func (d *Disk) Open(subdir, id string, maxFile, maxBytes int64) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	if err := d.reports.OpenDisk(subdir, id); err != nil {
 		return err
 	}

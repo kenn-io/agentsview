@@ -180,10 +180,6 @@ func (s *Store) BuildActivityReportArtifacts(
 					}
 				}
 			}
-			var previousRevision int64
-			if len(entries) > 0 {
-				previousRevision = entries[0].revision
-			}
 			report, rev, currentCheckpoint, hit, checkErr := s.validateKeptActivityReport(ctx, selection, version, entries, f, rangeStartUTC, rangeEndUTC, lowerBound, upperBound)
 			if checkErr != nil {
 				return activity.CandidateArtifacts{}, checkErr
@@ -193,10 +189,13 @@ func (s *Store) BuildActivityReportArtifacts(
 				currentFiles, fileErr := s.activityTableIdentity(ctx)
 				if (fileErr == nil || (files == "" && isInsufficientPrivilege(fileErr))) && currentFiles == files {
 					if eligible {
+						if identity == "" && len(entries) > 0 {
+							identity = entries[0].identity
+						}
 						if identity == "" {
 							identity = s.activityReportIdentity(ctx)
 						}
-						s.refreshActivityReport(selection, version, identity, previousRevision, rev, currentCheckpoint)
+						s.refreshActivityReport(selection, version, identity, rev, currentCheckpoint)
 					}
 					activity.ReportProgress(onProgress, report.Done)
 					return report.Artifacts, nil

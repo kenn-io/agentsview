@@ -101,12 +101,12 @@ func TestPGActivityReportSaved(t *testing.T) {
 				require.NoError(t, first.pg.QueryRowContext(ctx, `SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'`).Scan(&after))
 				require.Equal(t, revision, after)
 			}
-			restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
-			t.Cleanup(func() { require.NoError(t, restarted.Close()) })
 			if mode == "sweep" {
 				old := time.Now().Add(-31 * 24 * time.Hour)
 				require.NoError(t, os.Chtimes(files[0], old, old))
 			}
+			restarted := openPGActivityInputStore(t, target, syncer.schema, directory)
+			t.Cleanup(func() { require.NoError(t, restarted.Close()) })
 			got := pgKeptBuild(t, restarted, f, q, mode == "sweep" || mode == "replaced" || mode == "corrupt")
 			switch mode {
 			case "restart":
@@ -296,7 +296,7 @@ func TestPGActivityReportRefreshesSavedReport(t *testing.T) {
 		requirePGKeptEqual(t, want, pgKeptBuild(t, store, f, q, false))
 		restarted := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
 		t.Cleanup(func() { require.NoError(t, restarted.Close()) })
-		requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, false))
+		requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, true))
 	})
 }
 
@@ -319,10 +319,25 @@ func TestPGSavedActivityReportRevisitedAfterEviction(t *testing.T) {
 	}
 	_, err = os.Stat(files[0])
 	require.ErrorIs(t, err, os.ErrNotExist)
+	remaining, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
+	require.NoError(t, err)
+	require.Len(t, remaining, 8)
+	infos := make([]os.FileInfo, len(remaining))
+	for i, name := range remaining {
+		infos[i], err = os.Stat(name)
+		require.NoError(t, err)
+	}
 	requirePGKeptEqual(t, want, pgKeptBuild(t, store, f, q, false))
+	_, err = os.Stat(files[0])
+	require.ErrorIs(t, err, os.ErrNotExist)
+	for i, name := range remaining {
+		info, err := os.Stat(name)
+		require.NoError(t, err)
+		require.True(t, os.SameFile(infos[i], info))
+	}
 	restarted := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
 	t.Cleanup(func() { require.NoError(t, restarted.Close()) })
-	requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, false))
+	requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, true))
 	files, err = filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
 	require.NoError(t, err)
 	require.Len(t, files, 8)
