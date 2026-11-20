@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -66,30 +67,40 @@ func TestSearchRankWalkMatchesFullRanking(t *testing.T) {
 	require.NotNil(t, walk, "the walk must serve a page with distinct ranks")
 	assert.False(t, walk.complete)
 
-	// A small page can finish this 200-message tie without ranking it twice.
+	// Count the visibility checks made while ranking the same eligible hits.
+	// A project filter forces full ranking; all sessions have that project.
+	d.rawReader().SetMaxOpenConns(1)
 	conn, err := d.getReader().Conn(ctx)
 	require.NoError(t, err)
-	defer conn.Close()
 	visited := 0
 	require.NoError(t, conn.Raw(func(raw any) error {
-		return raw.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("count_rank_walk", func(int64) bool {
-			visited++
-			return true
+		return raw.(interface{ RegisterFunc(string, any, bool) error }).RegisterFunc("unicode", func(content string) int {
+			if content == "deploy the handler" {
+				visited++
+			}
+			r, _ := utf8.DecodeRuneInString(content)
+			return int(r)
 		}, false)
 	}))
-	tied, err := walkSearchRanks(ctx, conn, "messages_fts", "messages_fts.rendered MATCH ? AND s2.ended_at >= ? AND count_rank_walk(m2.id)", []any{`"deploy"`, "2026-05-01"}, 2, true)
+	require.NoError(t, conn.Close())
+	filter := SearchFilter{Query: "deploy", Limit: 1, DateFrom: "2026-05-01", Project: "proj"}
+	full, err := d.Search(ctx, filter)
 	require.NoError(t, err)
-	require.NotNil(t, tied)
-	assert.True(t, tied.complete)
-	assert.Len(t, tied.best, 100)
-	assert.GreaterOrEqual(t, visited, 200)
-	assert.LessOrEqual(t, visited, 400)
+	fullVisits := visited
+	require.GreaterOrEqual(t, fullVisits, 200)
+	visited = 0
+	filter.Project = ""
 	for cursor, want := range []string{"tie-000", "tie-001"} {
-		page, err := d.Search(ctx, SearchFilter{Query: "deploy", Limit: 1, Cursor: cursor, DateFrom: "2026-05-01"})
+		filter.Cursor = cursor
+		page, err := d.Search(ctx, filter)
 		require.NoError(t, err)
 		require.Len(t, page.Results, 1)
 		assert.Equal(t, want, page.Results[0].SessionID)
 		assert.Contains(t, page.Results[0].Snippet, "deploy")
+		if cursor == 0 {
+			assert.Equal(t, full, page)
+			require.Equal(t, fullVisits, visited, "search must not rank the matches twice")
+		}
 	}
 
 	for _, from := range []string{"", "2026-05-08", "2026-05-09", "2027-01-01"} {
