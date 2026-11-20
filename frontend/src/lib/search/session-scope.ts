@@ -93,7 +93,22 @@ export function projectSessionScope(input: SessionScopeInput): SessionScope {
   const visibleItems = (source: DisplayItem[]): DisplayItem[] =>
     source.flatMap((item): DisplayItem[] => {
       if (item.kind === "tool-group") return [item];
-      if (item.kind === "message") return messageVisible(item.message) ? [item] : [];
+      if (item.kind === "message") {
+        const skill = item.skill;
+        if (skill !== undefined) {
+          // The skill disclosure and its prompt are filtered independently:
+          // split them back apart when only one block type is shown.
+          const skillShown = messageVisible(skill);
+          const promptShown = messageVisible(item.message);
+          if (skillShown && promptShown) return [item];
+          if (skillShown) return [{ kind: "message", message: skill, ordinals: [skill.ordinal] }];
+          if (promptShown) {
+            return [{ kind: "message", message: item.message, ordinals: [item.message.ordinal] }];
+          }
+          return [];
+        }
+        return messageVisible(item.message) ? [item] : [];
+      }
       const members = item.messages.filter(messageVisible);
       const [first] = members;
       if (first === undefined) return [];

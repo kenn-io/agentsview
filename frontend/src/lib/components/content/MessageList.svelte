@@ -1097,6 +1097,7 @@
             {:else}
               <MessageContent
                 message={item.message}
+                skillMessage={item.skill}
                 searchOrdinal={item.message.ordinal}
               />
             {/if}

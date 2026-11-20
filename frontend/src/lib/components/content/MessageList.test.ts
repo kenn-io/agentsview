@@ -1126,7 +1126,7 @@ describe("MessageList follow cancellation", () => {
     expect(document.querySelector(".system-boundary")).toBeNull();
   });
 
-  it("shows a skill invocation row as a collapsed skill block with its own label", async () => {
+  it("shows a standalone skill invocation row as a collapsed skill block with its own label", async () => {
     messages.messages = [
       {
         ...makeMessage(0),
@@ -1136,7 +1136,7 @@ describe("MessageList follow cancellation", () => {
         source_type: "system",
         source_subtype: "skill_invocation",
       },
-      { ...makeMessage(1), role: "user", content: "check the diff" },
+      { ...makeMessage(1), role: "assistant", content: "reviewing" },
     ];
     messages.messageCount = 2;
     setVirtualRows(2);
@@ -1153,11 +1153,44 @@ describe("MessageList follow cancellation", () => {
     expect(skillRow.querySelector(".role-label")?.textContent?.trim()).toBe("Skill");
     expect(skillRow.classList.contains("is-user")).toBe(false);
     expect(document.querySelector(".system-boundary")).toBeNull();
-    expect(rows[1]!.querySelector(".role-label")?.textContent?.trim()).toBe("User");
 
     ui.setBlockVisible("system", false);
     await tick();
     expect(document.querySelectorAll(".message")).toHaveLength(1);
+  });
+
+  it("attaches a skill invocation to the user prompt that follows it", async () => {
+    messages.messages = [
+      {
+        ...makeMessage(0),
+        role: "user",
+        content: "[Skill: review]\nReferences are relative to /skills/review.\n[/Skill]",
+        is_system: true,
+        source_type: "system",
+        source_subtype: "skill_invocation",
+      },
+      { ...makeMessage(1), role: "user", content: "check the diff" },
+    ];
+    messages.messageCount = 2;
+    setVirtualRows(1);
+
+    component = mount(MessageList, { target: document.body });
+    await tick();
+
+    const rows = document.querySelectorAll(".message");
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    expect(row.querySelector(".role-label")?.textContent?.trim()).toBe("User");
+    expect(row.querySelector(".skill-label")?.textContent?.trim()).toBe("Skill: review");
+    expect(row.querySelector(".skill-header")?.getAttribute("aria-expanded")).toBe("false");
+    expect(row.textContent).toContain("check the diff");
+
+    ui.setBlockVisible("system", false);
+    await tick();
+    const after = document.querySelectorAll(".message");
+    expect(after).toHaveLength(1);
+    expect(after[0]!.querySelector(".skill-label")).toBeNull();
+    expect(after[0]!.textContent).toContain("check the diff");
   });
 
   it("keeps hiding system rows with an unknown subtype", async () => {

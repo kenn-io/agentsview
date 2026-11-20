@@ -1,9 +1,13 @@
 import type { DbMessage as Message } from "../api/generated/index.js";
 import { isToolOnly } from "./content-parser.js";
+import { isSkillInvocationMessage } from "./messages.js";
 
 export interface MessageItem {
   kind: "message";
   message: Message;
+  /** Skill expansion row that directly precedes this user message. The
+   *  message renders it as a disclosure attached to its own card. */
+  skill?: Message;
   ordinals: number[];
 }
 
@@ -69,6 +73,24 @@ export function buildDisplayItems(
         ? "tool-group"
         : null;
     if (kind === null) {
+      const prev = items.at(-1);
+      if (
+        prev?.kind === "message" &&
+        prev.skill === undefined &&
+        isSkillInvocationMessage(prev.message) &&
+        msg.role === "user" &&
+        !msg.is_system &&
+        prev.message.session_id === msg.session_id &&
+        msg.ordinal === prev.message.ordinal + 1
+      ) {
+        items[items.length - 1] = {
+          kind: "message",
+          message: msg,
+          skill: prev.message,
+          ordinals: [prev.message.ordinal, msg.ordinal],
+        };
+        continue;
+      }
       items.push({
         kind: "message",
         message: msg,
