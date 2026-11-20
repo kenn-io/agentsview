@@ -128,3 +128,70 @@ func TestPGActivityReportSaved(t *testing.T) {
 		})
 	}
 }
+
+func TestPGActivityReportRestoreDuringBuild(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	ctx := t.Context()
+	var revision, sessionRevision int64
+	var checkpoint, updatedAt string
+	require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT r.value::bigint, c.value, s.updated_at::text, u.revision FROM sync_metadata r JOIN sync_metadata c ON c.key='usage_history_checkpoint:' || r.value CROSS JOIN sessions s JOIN usage_session_changes u ON u.session_id=s.id WHERE r.key='usage_change_revision' AND s.id='a'`).Scan(&revision, &checkpoint, &updatedAt, &sessionRevision))
+
+	directory := t.TempDir()
+	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	pushed, restored := false, false
+	_, err := store.BuildActivityReportArtifacts(ctx, f, q, func(p activity.Progress) {
+		switch {
+		case p.Phase == activity.ProgressLoadingUsage && !pushed:
+			pushed = true
+			require.NoError(t, local.ReplaceSessionMessages(ctx, "a", []db.Message{
+				{SessionID: "a", Ordinal: 0, Role: "user", Content: "question", Timestamp: "2026-06-14T10:00:00Z"},
+				{SessionID: "a", Ordinal: 1, Role: "assistant", Content: "answer", Timestamp: "2026-06-14T10:01:00Z", Model: "kept-model", TokenUsage: []byte(`{"output_tokens":700}`)},
+			}))
+			pgKeptPush(t, syncer, false)
+			var pushedRevision int64
+			var tokens string
+			require.NoError(t, syncer.pg.QueryRowContext(ctx, `SELECT r.value::bigint, m.token_usage FROM sync_metadata r CROSS JOIN messages m WHERE r.key='usage_change_revision' AND m.session_id='a' AND m.role='assistant'`).Scan(&pushedRevision, &tokens))
+			require.Greater(t, pushedRevision, revision)
+			require.JSONEq(t, `{"output_tokens":700}`, tokens)
+		case p.Phase == activity.ProgressFinalizing && pushed && !restored:
+			restored = true
+			// Restore the original rows and journal in one transaction, as a data restore would.
+			tx, err := syncer.pg.BeginTx(ctx, nil)
+			require.NoError(t, err)
+			defer tx.Rollback()
+			_, err = tx.ExecContext(ctx, `SET LOCAL session_replication_role = replica`)
+			require.NoError(t, err)
+			_, err = tx.ExecContext(ctx, `UPDATE messages SET token_usage='{"output_tokens":500}' WHERE session_id='a' AND role='assistant'`)
+			require.NoError(t, err)
+			_, err = tx.ExecContext(ctx, `UPDATE sessions SET updated_at=$1::timestamptz WHERE id='a'`, updatedAt)
+			require.NoError(t, err)
+			_, err = tx.ExecContext(ctx, `UPDATE usage_session_changes SET revision=$1 WHERE session_id='a'`, sessionRevision)
+			require.NoError(t, err)
+			_, err = tx.ExecContext(ctx, `DELETE FROM usage_session_changes WHERE revision > $1`, revision)
+			require.NoError(t, err)
+			_, err = tx.ExecContext(ctx, `UPDATE sync_metadata SET value=$1::bigint::text WHERE key='usage_change_revision'`, revision)
+			require.NoError(t, err)
+			_, err = tx.ExecContext(ctx, `UPDATE sync_metadata SET value=$2 WHERE key IN ('usage_history_token', 'usage_history_checkpoint:' || $1::bigint::text)`, revision, checkpoint)
+			require.NoError(t, err)
+			_, err = tx.ExecContext(ctx, `DELETE FROM sync_metadata WHERE key LIKE 'usage_history_checkpoint:%' AND substring(key from length('usage_history_checkpoint:') + 1)::bigint > $1`, revision)
+			require.NoError(t, err)
+			require.NoError(t, tx.Commit())
+		}
+	})
+	require.NoError(t, err)
+	require.True(t, pushed)
+	require.True(t, restored)
+	again, err := store.BuildActivityReportArtifacts(ctx, f, q, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 500, again.Report.Totals.OutputTokens)
+	restarted := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, restarted.Close()) })
+	afterRestart, err := restarted.BuildActivityReportArtifacts(ctx, f, q, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 500, afterRestart.Report.Totals.OutputTokens)
+}
