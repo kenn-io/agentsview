@@ -171,7 +171,7 @@ func TestSearchWaitsForBulkReadAndLeavesReaderForQuickRead(t *testing.T) {
 	select {
 	case got := <-result:
 		t.Fatalf("search returned while bulk slots were occupied: %v", got.err)
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(100 * time.Millisecond): //nolint:kennlint // deadlinetest: absence check; occupied bulk slots keep the search waiting
 	}
 	quickCtx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()

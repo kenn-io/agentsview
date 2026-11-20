@@ -435,7 +435,7 @@ func TestSearchDateFiltersRequireSupportedServer(t *testing.T) {
 }
 
 func TestSearchDateFiltersProbeChangedServer(t *testing.T) {
-	version := 9
+	version := 8
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/api/v1/version" {
@@ -445,9 +445,12 @@ func TestSearchDateFiltersProbeChangedServer(t *testing.T) {
 		_, _ = w.Write([]byte(`{"results":[],"next":0}`))
 	}))
 	t.Cleanup(srv.Close)
-	backend := NewHTTPBackendForServer(srv.URL, "", HTTPServerCapabilities{APIVersion: 9})
+	backend := NewHTTPBackendForServer(srv.URL, "", HTTPServerCapabilities{APIVersion: 8})
 	req := service.SearchRequest{Query: "needle", DateFrom: "2024-05-16"}
 	_, err := backend.Search(t.Context(), req)
+	require.ErrorContains(t, err, "restart or upgrade the server")
+	version = 9
+	_, err = backend.Search(t.Context(), req)
 	require.NoError(t, err)
 	version = 8
 	_, err = backend.Search(t.Context(), req)
