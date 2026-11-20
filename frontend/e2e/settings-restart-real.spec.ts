@@ -82,6 +82,8 @@ test("retries a lost restart request against the real daemon", async ({
       .getByRole("button", { name: /Remote access/ })
       .click();
     await page.getByRole("switch", { name: "Require auth token" }).click();
+    // The switch changes immediately, but stays disabled until the save finishes.
+    await expect(page.getByRole("switch", { name: "Require auth token" })).toBeEnabled();
     await expect(page.getByRole("switch", { name: "Require auth token" })).toBeChecked();
     expect((await page.request.get(`${base}/api/ping`)).status()).toBe(401);
     await page
