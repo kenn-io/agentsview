@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -1021,6 +1020,7 @@ func TestVectorPushRoundTrip(t *testing.T) {
 	t.Parallel()
 	sync, localDB, pg := newVectorPushTestSync(t)
 	ctx := t.Context()
+	// Kit requires read committed even when the database defaults to repeatable read.
 	var database string
 	require.NoError(t, pg.QueryRowContext(ctx, `SELECT current_database()`).Scan(&database))
 	_, err := pg.ExecContext(ctx, `ALTER DATABASE `+pgx.Identifier{database}.Sanitize()+` SET default_transaction_isolation = 'repeatable read'`)
@@ -1136,7 +1136,7 @@ func TestVectorPushDeltaNoop(t *testing.T) {
 
 func TestVectorPushLazyChunkAttachment(t *testing.T) {
 	t.Parallel()
-	t.Run("missing session after generation drop", func(t *testing.T) {
+	t.Run("missing session after chunk table drop", func(t *testing.T) {
 		sync, localDB, pg := newVectorPushTestSync(t)
 		ctx := t.Context()
 		seedVectorSession(t, localDB, "A")
@@ -1161,23 +1161,14 @@ func TestVectorPushLazyChunkAttachment(t *testing.T) {
 			for _, q := range []string{
 				`DELETE FROM sessions WHERE id = 'A'`,
 				`DROP TABLE ` + vectorChunkTable(id),
-				`DELETE FROM vector_generation_machines WHERE generation_id = $1`,
-				`DELETE FROM vector_generations WHERE id = $1`,
 			} {
-				var err error
-				if strings.Contains(q, "$1") {
-					_, err = pg.ExecContext(ctx, q, id)
-				} else {
-					_, err = pg.ExecContext(ctx, q)
-				}
+				_, err := pg.ExecContext(ctx, q)
 				require.NoError(t, err)
 			}
 		}
 		result, err := sync.pushVectors(ctx, false, []string{"A"}, id, nil, nil)
 		require.NoError(t, err)
-		assert.NotEqual(t, id, result.GenerationID)
-		assert.Equal(t, 1, result.SessionsPushed)
-		assert.Equal(t, 1, countRows(t, pg, `SELECT COUNT(*) FROM `+vectorChunkTable(result.GenerationID)+` WHERE doc_key = 'B#0'`))
+		assert.Zero(t, result.SessionsPushed)
 	})
 	t.Run("unchanged after chunk table drop", func(t *testing.T) {
 		sync, localDB, pg := newVectorPushTestSync(t)

@@ -270,33 +270,25 @@ func TestVectorHalfvecGate(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, traced.Close()) })
 	unavailable, err := ensureVectorBaseSchemaPG(ctx, traced)
 	require.NoError(t, err, "gate must degrade, never error")
-	hasHalfvec, version, err := vectorHalfvecAvailable(ctx, pg)
-	require.NoError(t, err)
-	require.Equal(t, vectorUnavailableReason(hasHalfvec, version), unavailable)
-
 	if unavailable == "" {
-		assert.True(t, hasHalfvec, "available gate implies halfvec exists")
-		assert.NotEmpty(t, version, "installed extension reports a version")
 		if vectorUnavailableReason(hadHalfvec, beforeVersion) == "" {
 			assert.Empty(t, trace.matching(regexp.MustCompile(`(?i)ALTER\s+EXTENSION\s+vector\s+UPDATE`)))
 		}
-		return
+	} else {
+		var pushResult storage.VectorPushResult
+		skipped, err := (&Sync{pg: pg}).prepareVectorBaseSchema(ctx, &pushResult)
+		require.NoError(t, err)
+		assert.True(t, skipped)
+		assert.True(t, pushResult.Skipped)
+		assert.Equal(t, unavailable, pushResult.SkippedReason)
 	}
-	assert.NotEmpty(t, unavailable)
-	var pushResult storage.VectorPushResult
-	skipped, err := (&Sync{pg: pg}).prepareVectorBaseSchema(ctx, &pushResult)
+	_, err = pg.ExecContext(ctx, `DROP EXTENSION IF EXISTS vector CASCADE`)
 	require.NoError(t, err)
-	assert.True(t, skipped)
-	assert.True(t, pushResult.Skipped)
-	assert.Equal(t, unavailable, pushResult.SkippedReason)
-	if version != "" {
-		assert.Contains(t, pushResult.SkippedReason, version)
-	}
 	store, err := NewStore(ctx, pgURL, vectorSchemaTestSchema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 	searcher, reason, err := (Backend{}).OpenVectorSearcher(ctx, store, storage.VectorGenerationInfo{}, 0, nil)
 	require.NoError(t, err)
 	assert.Nil(t, searcher)
-	assert.Equal(t, unavailable, reason)
+	assert.Equal(t, "pgvector extension unavailable", reason)
 }

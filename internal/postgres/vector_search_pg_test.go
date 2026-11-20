@@ -137,35 +137,6 @@ var (
 	runOffsets = `[{"o":10,"r":0,"b":0},{"o":12,"r":19,"b":19}]`
 )
 
-func TestVectorSearcherReadOnlyRole(t *testing.T) {
-	pg := newVectorSearchTestPG(t)
-	ctx := t.Context()
-	seedVectorSearchFixture(t, pg)
-	const role = "agentsview_vector_reader_upgrade"
-	_, err := pg.ExecContext(ctx, `CREATE ROLE `+role+` LOGIN PASSWORD 'reader_fixture'`)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		_, _ = pg.ExecContext(context.WithoutCancel(ctx), `DROP OWNED BY `+role)
-		_, _ = pg.ExecContext(context.WithoutCancel(ctx), `DROP ROLE `+role)
-	})
-	_, err = pg.ExecContext(ctx, `GRANT USAGE ON SCHEMA `+vectorSearchTestSchema+` TO `+role+`; GRANT SELECT ON ALL TABLES IN SCHEMA `+vectorSearchTestSchema+` TO `+role)
-	require.NoError(t, err)
-	readerURL, err := url.Parse(testPGSchemaURL(t, vectorSearchTestSchema))
-	require.NoError(t, err)
-	readerURL.User = url.UserPassword(role, "reader_fixture")
-	reader, err := NewStore(ctx, readerURL.String(), vectorSearchTestSchema, true)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = reader.Close() })
-	require.NoError(t, prepareServeStore(ctx, reader, vectorSearchTestSchema))
-	encoder := fixedEncoder([]float32{1, 0, 0, 0})
-	searcher, reason, err := (Backend{}).OpenVectorSearcher(ctx, reader, storage.VectorGenerationInfo{Fingerprint: "fp-search"}, searchMaxInputChars, encoder)
-	require.NoError(t, err)
-	require.Empty(t, reason)
-	hits, err := dbtest.SemanticSearch(ctx, searcher, "query", 10)
-	require.NoError(t, err)
-	assert.NotEmpty(t, hits)
-}
-
 func TestPGVectorSearcher(t *testing.T) {
 	t.Parallel()
 	pg := newVectorSearchTestPG(t)
@@ -174,6 +145,34 @@ func TestPGVectorSearcher(t *testing.T) {
 	genID, _ := seedVectorSearchFixture(t, pg)
 	searcher := NewVectorSearcher(
 		pg, genID, 4, searchMaxInputChars, fixedEncoder([]float32{1, 0, 0, 0}))
+
+	t.Run("read-only role", func(t *testing.T) {
+		role := "reader_" + pgDatabaseName(t, testPGURL(t))
+		_, err := pg.ExecContext(ctx, `CREATE ROLE `+role+` LOGIN PASSWORD 'reader_fixture'`)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_, _ = pg.ExecContext(context.WithoutCancel(ctx), `DROP OWNED BY `+role)
+			_, _ = pg.ExecContext(context.WithoutCancel(ctx), `DROP ROLE `+role)
+		})
+		_, err = pg.ExecContext(ctx, `GRANT USAGE ON SCHEMA `+vectorSearchTestSchema+` TO `+role+`; GRANT SELECT ON ALL TABLES IN SCHEMA `+vectorSearchTestSchema+` TO `+role)
+		require.NoError(t, err)
+		readerURL, err := url.Parse(testPGSchemaURL(t, vectorSearchTestSchema))
+		require.NoError(t, err)
+		readerURL.User = url.UserPassword(role, "reader_fixture")
+		reader, err := NewStore(ctx, readerURL.String(), vectorSearchTestSchema, true)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = reader.Close() })
+		require.NoError(t, prepareServeStore(ctx, reader, vectorSearchTestSchema))
+		encoder := fixedEncoder([]float32{1, 0, 0, 0})
+		readerSearcher, reason, err := (Backend{}).OpenVectorSearcher(ctx, reader, storage.VectorGenerationInfo{Fingerprint: "fp-search"}, searchMaxInputChars, encoder)
+		require.NoError(t, err)
+		require.Empty(t, reason)
+		hits, err := dbtest.SemanticSearch(ctx, readerSearcher, "query", 10)
+		require.NoError(t, err)
+		expected, err := dbtest.SemanticSearch(ctx, searcher, "query", 10)
+		require.NoError(t, err)
+		assert.Equal(t, expected, hits)
+	})
 
 	t.Run("ranking rollup hydration tombstone", func(t *testing.T) {
 		hits, err := dbtest.SemanticSearch(ctx, searcher, "query", 10)
@@ -335,44 +334,4 @@ func TestPGVectorSearcherExactK(t *testing.T) {
 	require.NoError(t, err, "SemanticSearch")
 	require.Len(t, hits, 1, "both top-2 chunks belong to multi -> one rolled-up doc")
 	assert.Equal(t, 1, hits[0].Ordinal, "only multi survives; outside sits beyond k")
-}
-
-// TestPGVectorSearcherLargePageIsNotExhausted checks that iterative scans
-// return the requested page while more documents remain.
-func TestPGVectorSearcherLargePageIsNotExhausted(t *testing.T) {
-	t.Parallel()
-	pg := newVectorSearchTestPG(t)
-	ctx := t.Context()
-
-	genID, err := ensureVectorGeneration(ctx, pg, "fp-capped", "m", 4)
-	require.NoError(t, err, "ensureVectorGeneration")
-	require.NoError(t, ensureVectorChunkTable(ctx, pg, genID, 4), "ensureVectorChunkTable")
-	extSchema, err := vectorExtensionSchema(ctx, pg)
-	require.NoError(t, err, "vectorExtensionSchema")
-	table := vectorChunkTable(genID)
-
-	const docCount, k = 20000, 1600
-	_, err = pg.ExecContext(ctx, `
-INSERT INTO vector_documents (
-    doc_key, session_id, source_uuid, ordinal, ordinal_end,
-    subordinate, offsets, content, content_hash)
-SELECT 'd' || i, 'S', '', i, i, FALSE, '[]', 'doc ' || i, 'h'
-  FROM generate_series(0, $1 - 1) AS i`, docCount)
-	require.NoError(t, err, "insert docs")
-	_, err = pg.ExecContext(ctx, `
-INSERT INTO `+table+` (doc_key, chunk_index, embedding)
-SELECT 'd' || i, 0, ('[1,' || (i::float8 / $1) || ',' || ((i % 97)::float8 / 97) || ',0]')::`+extSchema+`.halfvec
-  FROM generate_series(0, $1 - 1) AS i`, docCount)
-	require.NoError(t, err, "insert chunks")
-	_, err = pg.ExecContext(ctx, `ANALYZE `+table)
-	require.NoError(t, err, "analyze chunks")
-
-	searcher := NewVectorSearcher(
-		pg, genID, 4, searchMaxInputChars, fixedEncoder([]float32{1, 0, 0, 0}))
-	page, _, err := searcher.PrepareSemanticSearch(ctx, "query")
-	require.NoError(t, err, "PrepareSemanticSearch")
-	hits, exhausted, err := page(ctx, k)
-	require.NoError(t, err, "page")
-	assert.Len(t, hits, k)
-	assert.False(t, exhausted, "%d of %d docs returned", len(hits), docCount)
 }

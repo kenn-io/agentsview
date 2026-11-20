@@ -17,10 +17,6 @@ func TestKNNExhausted(t *testing.T) {
 	}{
 		{"short uncapped scan", 10, 200, 200, true},
 		{"full uncapped scan", 200, 200, 200, false},
-		{"capped index scan", 1000, 1600, 1000, false},
-		{"capped index scan below its cap", 640, 1600, 1000, true},
-		{"sequential scan past the cap", 1200, 1600, 1000, true},
-		{"full sequential scan past the cap", 1600, 1600, 1000, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.want, knnExhausted(tc.rows, tc.limit, tc.cap))

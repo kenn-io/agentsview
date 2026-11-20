@@ -16,6 +16,7 @@ import (
 
 func TestHostedVectorUploadEditAndSearchSnapshot(t *testing.T) {
 	f := newProjectionFixture(t)
+	// Kit requires read committed even when the database defaults to repeatable read.
 	var database string
 	require.NoError(t, f.admin.QueryRowContext(t.Context(), `SELECT current_database()`).Scan(&database))
 	_, err := f.admin.ExecContext(t.Context(), `ALTER DATABASE `+pgx.Identifier{database}.Sanitize()+` SET default_transaction_isolation = 'repeatable read'`)
@@ -71,7 +72,7 @@ func TestHostedVectorUploadEditAndSearchSnapshot(t *testing.T) {
 	assert.Contains(t, initialSnippets, "old words")
 	first, receipt := f.accept(t, "device-a", "snapshot-first", receipt.Receipt)
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, first), first, projectionOutcome("old snapshot words")))
-	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false))
+	require.NoError(t, EmbedBatch(t.Context(), writer, gen, encode, 128, 1, false))
 	_, err = f.runtime.ExecContext(t.Context(), `UPDATE sessions SET deleted_at=now()`)
 	require.NoError(t, err)
 	trashed, err := hosted.SearchContent(searchCtx, db.ContentSearchFilter{Pattern: "old", Mode: "semantic", IncludeOneShot: true, Limit: 10})
@@ -98,7 +99,7 @@ func TestHostedVectorUploadEditAndSearchSnapshot(t *testing.T) {
 	}
 	second, _ := f.accept(t, "device-a", "snapshot-second", receipt.Receipt)
 	require.NoError(t, f.sink.Project(t.Context(), f.lease(t, second), second, projectionOutcome("new snapshot words")))
-	require.NoError(t, EmbedBatch(t.Context(), f.runtime, gen, encode, 128, 1, false))
+	require.NoError(t, EmbedBatch(t.Context(), writer, gen, encode, 128, 1, false))
 	close(resume)
 	res := <-resultCh
 	require.NoError(t, res.err)
