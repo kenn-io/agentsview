@@ -2,11 +2,13 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json/v2"
 	"fmt"
 	"math"
 	"reflect"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -62,6 +64,21 @@ func (s *Store) saveActivityReport(selection, version string, entry pgActivityKe
 	}
 }
 
+func (s *Store) refreshActivityReport(selection, version, identity string, previousRevision, revision int64, checkpoint string) {
+	entries, ok := s.runtimeState().activityKept.Get(selection, version)
+	if !ok || identity == "" || entries[0].checkpoint == "" || entries[0].revision != revision || entries[0].checkpoint != checkpoint {
+		return
+	}
+	entry := entries[0]
+	key := selection + "|" + identity + "|" + version
+	if entry.revision == previousRevision {
+		s.activityReports.Touch(key)
+	} else {
+		s.activityReports.Rewrite(key, identity+"|"+version, entry.encode)
+	}
+	s.activityReports.Sweep(time.Now())
+}
+
 func (s *Store) activityReportRestricted(ctx context.Context) bool {
 	var restricted bool
 	err := s.pg.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=current_schema() AND c.relname IN ('sessions', 'messages', 'tool_result_events', 'usage_events', 'sync_metadata', 'usage_session_changes', 'model_pricing', 'model_pricing_bands', 'genai_pricing', 'source_archives', 'source_project_identity_observations') AND c.relkind IN ('r', 'p', 'v', 'm', 'f') AND (c.relkind IN ('v', 'm', 'f') OR row_security_active(c.oid) OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid=c.oid AND a.attnum > 0 AND NOT a.attisdropped AND NOT has_column_privilege(c.oid, a.attnum, 'SELECT'))))`).Scan(&restricted)
@@ -104,35 +121,103 @@ func (s *Store) activityKeptVersion(ctx context.Context, pricingDigest string) (
 	return fmt.Sprintf("%d|%s|%s", oid, pricingDigest, pricing.ConfiguredAliasesDigest()), nil
 }
 
-func (s *Store) keptActivityReport(ctx context.Context, selection, version string, f db.AnalyticsFilter, rangeStart, rangeEnd, lower, upper string) (kept.Report, int64, bool, error) {
+func (s *Store) validateKeptActivityReport(ctx context.Context, selection, version string, f db.AnalyticsFilter, rangeStart, rangeEnd, lower, upper string) (kept.Report, int64, string, bool, error) {
+	entries, hadEntry := s.runtimeState().activityKept.Get(selection, version)
+	reader := s
+	var tx *sql.Tx
+	if s.readTx == nil {
+		var err error
+		tx, err = s.beginTx(ctx, &sql.TxOptions{ReadOnly: true, Isolation: sql.LevelRepeatableRead})
+		if err != nil {
+			return kept.Report{}, 0, "", false, err
+		}
+		defer func() { _ = tx.Rollback() }()
+		reader = s.readView(tx)
+	}
+	entry, revision, checkpoint, hit, err := reader.keptActivityReport(ctx, selection, version, f, rangeStart, rangeEnd, lower, upper)
+	if err != nil {
+		return kept.Report{}, revision, checkpoint, false, err
+	}
+	var snapshotChanges []string
+	var snapshotErr error
+	if hit && hadEntry && entry.revision != entries[0].revision && entries[0].checkpoint != "" && tx != nil {
+		_, snapshotChanges, _, _, snapshotErr = reader.loadUsageChangesWithHistory(ctx, entries[0].revision)
+	}
+	if !hit {
+		return kept.Report{}, revision, checkpoint, false, nil
+	}
+	if isInsufficientPrivilege(snapshotErr) || isUndefinedTable(snapshotErr) {
+		return kept.Report{}, 0, "", false, nil
+	}
+	if snapshotErr != nil {
+		return kept.Report{}, 0, "", false, snapshotErr
+	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return kept.Report{}, 0, "", false, err
+		}
+	}
+	if hit {
+		// A restore can replace the history while validation holds its snapshot.
+		// Do not advance the memo until the live journal still matches it.
+		if hadEntry && entry.revision != entries[0].revision && entries[0].checkpoint != "" {
+			if tx != nil && snapshotErr == nil {
+				through, changes, current, previous, checkErr := s.loadUsageChangesWithHistory(ctx, entries[0].revision)
+				if checkErr == nil && through == revision && current == checkpoint && previous == entries[0].checkpoint && slices.Equal(changes, snapshotChanges) {
+					s.runtimeState().activityKept.Put(selection, version, []pgActivityKept{entry})
+				}
+			}
+		} else if !hadEntry || entry.revision != entries[0].revision || entry.checkpoint != entries[0].checkpoint || entry.identity != entries[0].identity {
+			s.runtimeState().activityKept.Put(selection, version, []pgActivityKept{entry})
+		}
+	}
+	return entry.report, revision, checkpoint, hit, nil
+}
+
+func (s *Store) keptActivityReport(ctx context.Context, selection, version string, f db.AnalyticsFilter, rangeStart, rangeEnd, lower, upper string) (pgActivityKept, int64, string, bool, error) {
 	memo := &s.runtimeState().activityKept
 	entries, ok := memo.Get(selection, version)
 	after := int64(math.MaxInt64)
 	if ok {
 		after = entries[0].revision
 	}
-	through, changed, err := s.LoadUsageChanges(ctx, after)
+	through, changed, current, previous, err := s.loadUsageChangesWithHistory(ctx, after)
+	if isInsufficientPrivilege(err) || isUndefinedTable(err) {
+		return pgActivityKept{}, 0, "", false, nil
+	}
 	if err != nil || through == 0 || !ok {
-		return kept.Report{}, through, false, err
+		return pgActivityKept{}, through, current, false, err
 	}
 	entry := entries[0]
+	if entry.checkpoint != "" && entry.checkpoint != previous {
+		return pgActivityKept{}, through, current, false, nil
+	}
 	if through == entry.revision {
-		return entry.report, through, true, nil
+		if entry.checkpoint != "" {
+			var token string
+			if err := s.pg.QueryRowContext(ctx, `SELECT COALESCE((SELECT value FROM sync_metadata WHERE key='usage_history_token'), '')`).Scan(&token); err != nil {
+				return pgActivityKept{}, through, current, false, err
+			}
+			if token != entry.checkpoint {
+				return pgActivityKept{}, through, current, false, nil
+			}
+		}
+		return entry, through, current, true, nil
 	}
 	if through < entry.revision {
-		return kept.Report{}, through, false, nil
+		return pgActivityKept{}, through, current, false, nil
 	}
 	for _, id := range changed {
 		_, candidate := slices.BinarySearch(entry.candidates, id)
 		_, peer := slices.BinarySearch(entry.peers, id)
 		if candidate || peer {
-			return kept.Report{}, through, false, nil
+			return pgActivityKept{}, through, current, false, nil
 		}
 	}
 	if len(changed) > 0 {
 		_, ids, err := s.activityReportSessions(ctx, f, rangeStart, rangeEnd, changed)
 		if err != nil || len(ids) > 0 {
-			return kept.Report{}, through, false, err
+			return pgActivityKept{}, through, current, false, err
 		}
 		var overlaps bool
 		err = s.pg.QueryRowContext(ctx, `SELECT EXISTS (
@@ -144,20 +229,46 @@ func (s *Store) keptActivityReport(ctx context.Context, selection, version strin
     AND COALESCE(m.timestamp, s.started_at) <= $4::timestamptz)`,
 			pgx.QueryExecModeDescribeExec, changed, entry.candidates, lower, upper).Scan(&overlaps)
 		if err != nil {
-			return kept.Report{}, through, false, fmt.Errorf("checking kept activity changes: %w", err)
+			return pgActivityKept{}, through, current, false, fmt.Errorf("checking kept activity changes: %w", err)
 		}
 		if overlaps {
-			return kept.Report{}, through, false, nil
+			return pgActivityKept{}, through, current, false, nil
 		}
 	}
 	projects, err := s.BuildProjectIdentityMap(ctx, entry.labels)
 	if err != nil {
-		return kept.Report{}, through, false, err
+		return pgActivityKept{}, through, current, false, err
 	}
 	if !reflect.DeepEqual(export.ProjectMapForWire(projects), entry.report.Artifacts.Report.Projects) {
-		return kept.Report{}, through, false, nil
+		return pgActivityKept{}, through, current, false, nil
 	}
 	entry.revision = through
-	memo.Put(selection, version, []pgActivityKept{entry})
-	return entry.report, through, true, nil
+	entry.checkpoint = current
+	return entry, through, current, true, nil
+}
+
+func (s *Store) loadUsageChangesWithHistory(ctx context.Context, afterRevision int64) (int64, []string, string, string, error) {
+	rows, err := s.pg.QueryContext(ctx, `SELECT r.revision, c.session_id,
+ COALESCE((SELECT value FROM sync_metadata WHERE key='usage_history_checkpoint:' || r.revision::text), ''),
+ COALESCE((SELECT value FROM sync_metadata WHERE key='usage_history_checkpoint:' || $2::bigint::text), '')
+ FROM (SELECT `+supportedUsageChangeRevisionSQL+` AS revision) r
+ LEFT JOIN usage_session_changes c ON r.revision > 0 AND c.revision > $2 AND c.revision <= r.revision AND c.session_id <> ''
+ ORDER BY c.revision, c.session_id`, strconv.Itoa(usageChangeJournalVersionPG), afterRevision)
+	if err != nil {
+		return 0, nil, "", "", err
+	}
+	defer rows.Close()
+	var revision int64
+	var current, previous string
+	var ids []string
+	for rows.Next() {
+		var id sql.NullString
+		if err := rows.Scan(&revision, &id, &current, &previous); err != nil {
+			return 0, nil, "", "", err
+		}
+		if id.Valid {
+			ids = append(ids, id.String)
+		}
+	}
+	return revision, ids, current, previous, rows.Err()
 }

@@ -167,7 +167,7 @@ func (s *Store) BuildActivityReportArtifacts(
 				version = ""
 			}
 		}
-		if version != "" && !s.activityReportRestricted(ctx) {
+		if version != "" {
 			selection = kept.Selection(f, q)
 			identity = s.activityReportIdentity(ctx, q)
 			memo := &s.runtimeState().activityKept
@@ -179,7 +179,11 @@ func (s *Store) BuildActivityReportArtifacts(
 					}
 				}
 			}
-			report, rev, hit, checkErr := s.keptActivityReport(ctx, selection, version, f, rangeStartUTC, rangeEndUTC, lowerBound, upperBound)
+			var previousRevision int64
+			if entries, ok := memo.Get(selection, version); ok {
+				previousRevision = entries[0].revision
+			}
+			report, rev, currentCheckpoint, hit, checkErr := s.validateKeptActivityReport(ctx, selection, version, f, rangeStartUTC, rangeEndUTC, lowerBound, upperBound)
 			if checkErr != nil {
 				return activity.CandidateArtifacts{}, checkErr
 			}
@@ -187,6 +191,7 @@ func (s *Store) BuildActivityReportArtifacts(
 			if hit && !s.activityReportRestricted(ctx) {
 				currentFiles, fileErr := s.activityTableIdentity(ctx)
 				if fileErr == nil && currentFiles == files {
+					s.refreshActivityReport(selection, version, identity, previousRevision, rev, currentCheckpoint)
 					activity.ReportProgress(onProgress, report.Done)
 					return report.Artifacts, nil
 				}

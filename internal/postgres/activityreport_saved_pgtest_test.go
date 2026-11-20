@@ -3,6 +3,7 @@
 package postgres
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -247,4 +248,105 @@ func TestPGSavedActivityReportTruncated(t *testing.T) {
 	again := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
 	t.Cleanup(func() { require.NoError(t, again.Close()) })
 	require.Empty(t, pgKeptBuild(t, again, f, q, false).Sessions)
+}
+
+func TestPGActivityReportMemoryVisitRefreshesDisk(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptPush(t, syncer, false)
+	directory := t.TempDir()
+	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	want := pgKeptBuild(t, store, f, q, true)
+	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	old := time.Now().Add(-29 * 24 * time.Hour)
+	require.NoError(t, os.Chtimes(files[0], old, old))
+	requirePGKeptEqual(t, want, pgKeptBuild(t, store, f, q, false))
+	info, err := os.Stat(files[0])
+	require.NoError(t, err)
+	require.True(t, info.ModTime().After(old.Add(time.Hour)))
+}
+
+func TestPGActivityReportVisitsKeepHistoryForRestart(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptSession(t, local, "b", "project-b", "2026-07-14")
+	pgKeptPush(t, syncer, false)
+	directory := t.TempDir()
+	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	want := pgKeptBuild(t, store, f, q, true)
+	for i := 0; i < 130; i++ {
+		_, err := syncer.pg.ExecContext(t.Context(), `UPDATE sessions SET message_count=message_count+1 WHERE id='b'`)
+		require.NoError(t, err)
+		if i%20 == 19 {
+			requirePGKeptEqual(t, want, pgKeptBuild(t, store, f, q, false))
+		}
+	}
+	requirePGKeptEqual(t, want, pgKeptBuild(t, store, f, q, false))
+	restarted := openPGActivityInputStore(t, testPGURL(t), syncer.schema, directory)
+	t.Cleanup(func() { require.NoError(t, restarted.Close()) })
+	requirePGKeptEqual(t, want, pgKeptBuild(t, restarted, f, q, false))
+}
+
+func TestPGSavedActivityReportRestoreBetweenValidationReads(t *testing.T) {
+	t.Setenv("CACHE_DIRECTORY", t.TempDir())
+	local, syncer, _ := newUsageJournalFixture(t)
+	pgKeptSession(t, local, "a", "project-a", "2026-06-14")
+	pgKeptSession(t, local, "b", "project-b", "2026-07-14")
+	pgKeptPush(t, syncer, false)
+	store := openPGActivityInputStore(t, testPGURL(t), syncer.schema, t.TempDir())
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
+	require.Equal(t, 500, pgKeptBuild(t, store, f, q, true).Report.Totals.OutputTokens)
+	var revision int64
+	require.NoError(t, syncer.pg.QueryRowContext(t.Context(), `SELECT value::bigint FROM sync_metadata WHERE key='usage_change_revision'`).Scan(&revision))
+	_, err := syncer.pg.ExecContext(t.Context(), `UPDATE sessions SET message_count=message_count+1 WHERE id='b'`)
+	require.NoError(t, err)
+	var temporaryToken string
+	require.NoError(t, syncer.pg.QueryRowContext(t.Context(), `SELECT value FROM sync_metadata WHERE key='usage_history_token'`).Scan(&temporaryToken))
+	tx, err := syncer.pg.BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+	_, err = tx.ExecContext(t.Context(), `LOCK TABLE sessions IN ACCESS EXCLUSIVE MODE`)
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	type result struct {
+		report activity.CandidateArtifacts
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() {
+		report, err := store.BuildActivityReportArtifacts(ctx, f, q, nil)
+		done <- result{report, err}
+	}()
+	require.Eventually(t, func() bool {
+		var waiting bool
+		err := syncer.pg.QueryRowContext(t.Context(), `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE wait_event_type='Lock' AND query LIKE '%FROM sessions s%' AND query LIKE '%s.id = ANY%')`).Scan(&waiting)
+		return err == nil && waiting
+	}, 10*time.Second, 50*time.Millisecond)
+	_, err = tx.ExecContext(t.Context(), `DELETE FROM usage_session_changes WHERE revision > $1`, revision)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(t.Context(), `UPDATE sync_metadata SET value=$1::bigint::text WHERE key='usage_change_revision'`, revision)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(t.Context(), `UPDATE messages SET token_usage='{"output_tokens":700}' WHERE session_id='a' AND role='assistant'`)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(t.Context(), `UPDATE sessions SET updated_at=now() WHERE id='a'`)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(t.Context(), `SET CONSTRAINTS ALL IMMEDIATE`)
+	require.NoError(t, err)
+	_, err = tx.ExecContext(t.Context(), `UPDATE sync_metadata SET value=$1 WHERE key='usage_history_token'`, temporaryToken)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+	got := <-done
+	require.NoError(t, got.err)
+	require.Equal(t, 500, got.report.Report.Totals.OutputTokens)
+	require.Equal(t, 700, pgKeptBuild(t, store, f, q, true).Report.Totals.OutputTokens)
 }
