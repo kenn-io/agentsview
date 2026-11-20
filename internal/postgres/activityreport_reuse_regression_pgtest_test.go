@@ -318,7 +318,7 @@ func TestPGActivityReportFilenodeDenied(t *testing.T) {
 	q, f := pgDayQuery(t, "2026-06-14", "UTC"), db.AnalyticsFilter{Timezone: "UTC"}
 	first := pgKeptBuild(t, store, f, q, true)
 	require.Len(t, first.Sessions, 1)
-	requirePGKeptEqual(t, first, pgKeptBuild(t, store, f, q, true))
+	requirePGKeptEqual(t, first, pgKeptBuild(t, store, f, q, false))
 	files, err := filepath.Glob(filepath.Join(os.Getenv("CACHE_DIRECTORY"), "postgres-activity-reports", "*", "*.gob"))
 	require.NoError(t, err)
 	require.Empty(t, files)

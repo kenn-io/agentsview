@@ -162,18 +162,14 @@ func (s *Store) BuildActivityReportArtifacts(
 			if fileErr != nil && !isInsufficientPrivilege(fileErr) {
 				return activity.CandidateArtifacts{}, fileErr
 			}
-			if files != "" {
-				version += "|" + files
-				if q.Loc != nil {
-					version += "|" + activityTimezoneKey(q)
-				}
-			} else {
-				version = ""
+			version += "|" + files
+			if q.Loc != nil {
+				version += "|" + activityTimezoneKey(q)
 			}
 		}
 		if version != "" {
 			selection = kept.Selection(f, q)
-			eligible = s.activityReportEligible(q)
+			eligible = files != "" && s.activityReportEligible(q)
 			memo := &s.runtimeState().activityKept
 			entries, ok := memo.Get(selection, version)
 			if eligible && !ok {
@@ -195,7 +191,7 @@ func (s *Store) BuildActivityReportArtifacts(
 			revision = rev
 			if hit {
 				currentFiles, fileErr := s.activityTableIdentity(ctx)
-				if fileErr == nil && currentFiles == files {
+				if (fileErr == nil || (files == "" && isInsufficientPrivilege(fileErr))) && currentFiles == files {
 					if eligible {
 						if identity == "" {
 							identity = s.activityReportIdentity(ctx)
