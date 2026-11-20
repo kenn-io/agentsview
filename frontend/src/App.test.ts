@@ -99,6 +99,8 @@ afterEach(() => {
   router.isRootPath = false;
   sessions.activeSessionId = null;
   sessions.activeSessionNotFound = false;
+  sessions.sessions = [];
+  sessions.details.clear();
   sessions.archiveEmpty = false;
   sessions.filters.date = "";
   sessions.filters.dateFrom = "";
@@ -1917,7 +1919,6 @@ describe("App telemetry", () => {
     vi.spyOn(sessions, "load").mockResolvedValue();
     // Selects without fetching, as the real store does before hydration lands.
     vi.spyOn(sessions, "navigateToSession").mockImplementation(async (id: string) => {
-      if (sessions.activeSessionId !== id) sessions.activeSessionNotFound = false;
       sessions.activeSessionId = id;
     });
     posted = [];
@@ -1947,20 +1948,17 @@ describe("App telemetry", () => {
   });
 
   it.each(["loaded", "not found"] as const)(
-    "tab title distinguishes imported copies when %s",
+    "tab title shows an imported session when %s",
     async (state) => {
       setup();
       vi.mocked(sessions.navigateToSession).mockRestore();
-      const ids = ["source-a~codex:12345678abcdef", "source-b~codex:12345678abcdef"];
-      const responses = ids.map(() => Promise.withResolvers<Response>());
+      const id = "source-a~codex:12345678abcdef";
+      const response = Promise.withResolvers<Response>();
       vi.stubGlobal(
         "fetch",
         vi.fn((input: RequestInfo | URL) => {
           const url = requestUrl(input);
-          const index = ids.findIndex((id) =>
-            url.endsWith(`/api/v1/sessions/${encodeURIComponent(id)}`),
-          );
-          if (index >= 0) return responses[index]!.promise;
+          if (url.endsWith(`/api/v1/sessions/${encodeURIComponent(id)}`)) return response.promise;
           return Promise.resolve(
             new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } }),
           );
@@ -1968,27 +1966,22 @@ describe("App telemetry", () => {
       );
       component = mount(App, { target: document.body });
       await flushEffects();
-      for (const [index, id] of ids.entries()) {
-        router.navigateToSession(id);
-        await flushEffects();
-        const displayId = index === 0 ? "source-a:12345678" : "source-b:12345678";
-        expect(document.title).toBe(`${displayId} · AgentsView`);
-        responses[index]!.resolve(
-          state === "loaded"
-            ? new Response(
-                JSON.stringify(hydratedSession(id, "codex", { display_name: "Fix login" })),
-                { status: 200, headers: { "Content-Type": "application/json" } },
-              )
-            : new Response("not found", { status: 404 }),
-        );
-        const expected =
-          state === "loaded"
-            ? `Fix login (${displayId}) · proj-a · AgentsView`
-            : `Session not found (${displayId}) · AgentsView`;
-        await vi.waitFor(() => expect(document.title).toBe(expected));
-      }
-      sessions.sessions = [];
-      sessions.details.clear();
+      router.navigateToSession(id);
+      await flushEffects();
+      expect(document.title).toBe("source-a:12345678 · AgentsView");
+      response.resolve(
+        state === "loaded"
+          ? new Response(
+              JSON.stringify(hydratedSession(id, "codex", { display_name: "Fix login" })),
+              { status: 200, headers: { "Content-Type": "application/json" } },
+            )
+          : new Response("not found", { status: 404 }),
+      );
+      const expected =
+        state === "loaded"
+          ? "Fix login (source-a:12345678) · proj-a · AgentsView"
+          : "Session not found (source-a:12345678) · AgentsView";
+      await vi.waitFor(() => expect(document.title).toBe(expected));
     },
   );
 

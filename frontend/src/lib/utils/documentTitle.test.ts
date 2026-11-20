@@ -56,6 +56,7 @@ describe("documentTitle", () => {
   it.each([
     ["codex:12345678abcdef", "12345678"],
     ["source-a~codex:12345678abcdef", "source-a:12345678"],
+    ["source-b~codex:12345678abcdef", "source-b:12345678"],
   ])("shows the short ID for %s while loading or missing", (sessionId, id) => {
     const input = { ...base, route: "sessions" as const, sessionId };
     expect(documentTitle(input)).toBe(`${id} · AgentsView`);
