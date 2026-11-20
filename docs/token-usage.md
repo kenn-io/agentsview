@@ -4,10 +4,10 @@ description: Fast token usage and cost reports from your local AgentsView databa
 ---
 
 AgentsView records token usage as it ingests messages and usage events from
-agents that write model and token metadata to their local logs. The
-database already stores the input, output, cache-creation, and cache-read
-tokens those agents logged, and the `agentsview report usage` commands turn
-that data into daily cost reports and a one-line today's-spend summary without re-reading
+agents that write model and token metadata to their local logs. The database
+already holds the input, output, cache-creation, and cache-read tokens those
+agents logged, and the `agentsview report usage` commands build daily cost
+reports and a one-line today's-spend summary from that data without re-reading
 source files. To attribute that same spend to specific time ranges and
 concurrent agent activity, open the [Activity](/docs/activity/) dashboard.
 
@@ -58,18 +58,19 @@ Factory Droid writes one running token total per session, with no per-message
 breakdown, in the `<id>.settings.json` file beside each transcript. AgentsView
 reports it as a single usage entry dated at the session's last activity and
 prices it from the pricing catalog; Factory credits are not used. AgentsView
-adds subagent totals to the session that started them and prices them as that
-session's model, since Droid does not record which model a subagent used. A
-subagent session with its own transcript shows its messages but no usage,
-because its parent already counts it. Droid also omits per-request usage, so
-Factory sessions report total output tokens without a peak context size. A
-bring-your-own-key model appears under its Droid name, such as
-`custom:my-model-0`, which stays unpriced until you map it with `price_as` in
-[custom model pricing](#custom-model-pricing).
+adds subagent totals to the session that started them. Because Droid does not
+record which model a subagent used, AgentsView prices those totals as that
+session's model. A subagent session with its own transcript shows its messages
+but no usage, because its parent already counts it. Droid also omits
+per-request usage, so Factory sessions report total output tokens without a
+peak context size. A bring-your-own-key model appears under its Droid name,
+such as `custom:my-model-0`, which stays unpriced until you map it with
+`price_as` in [custom model pricing](#custom-model-pricing).
 
-gptme messages use provider-reported billed costs when available, including a
-reported zero. Messages with estimated costs still use catalog pricing.
-Provider-routing suffixes in model names do not block a catalog match.
+For gptme messages, AgentsView uses provider-reported billed costs when
+available, including a reported zero, while gptme messages with estimated costs
+still use catalog pricing. Provider-routing suffixes in model names do not
+block a catalog match.
 
 fx stopped writing `usage-v2.json` in
 [vercel-labs/fx#1226](https://github.com/vercel-labs/fx/pull/1226). When an
@@ -79,12 +80,12 @@ modification time. Sessions from current fx have no token usage, and an old
 session resumed in newer fx keeps its old totals. Costs come from AgentsView's
 pricing catalog. Tool results use saved `.txt` output only when it is a regular
 UTF-8 file that matches the saved byte count or reaches the 16 MiB cap;
-otherwise the preview stays. Restored files refresh the result on the next sync. Freshness
-checks cover entry names, sizes, and modification times in `tool-results/`,
-which is enough because fx names result files by content hash.
+otherwise the preview stays. Restoring a file refreshes the tool result on the
+next sync. Freshness checks cover entry names, sizes, and modification times in
+`tool-results/`, which is enough because fx names result files by content hash.
 
-Muse Code records token counts for each model call but no cost.
-AgentsView prices them from Meta's published Muse Spark and Muse Wonder rates.
+Muse Code records token counts for each model call without a cost. AgentsView
+prices those tokens using Meta's published Muse Spark and Muse Wonder rates.
 Because Muse counts cached prompt tokens inside its input total, AgentsView
 bills those tokens once at the cached rate. Automated approval reviews are not
 counted.
@@ -196,21 +197,22 @@ Prompt, completion, cached prompt, and cache-write counters stay separate.
 Billing counters can aggregate many requests and have no per-request token cap.
 Costs come from the export's USD `Pricing Contracted` field, rounded to
 microdollars, and a reported $0 stays $0 even when model pricing is available.
-Cache savings are estimated at base model rates, and aggregate counters do
+AgentsView estimates cache savings at base model rates. Aggregate counters do
 not establish a single request's context size for pricing bands. Blank models
 stay blank in the archive and appear as `<unknown>` in reports. Event
 timestamps retain their UTC instant, and reports display them in the selected
 timezone.
 
-These exports contain no conversations, session IDs, projects, machine names,
-or automation evidence. The import creates no sessions. Project, machine,
-and session-only filters exclude these billing events, while agent, model, and
-date filters apply. Each event's kind retains `Charge Category` and
+These exports do not include conversations, session IDs, projects, machine
+names, or automation evidence, and the import creates no sessions. Project,
+machine, and session-only filters exclude these billing events, while agent,
+model, and date filters apply. Each event's kind retains `Charge Category` and
 `Usage Type` alongside the product.
 
-Billing IDs cannot be matched to native session events or Cursor Admin API
-fingerprints. Importing overlapping usage through those sources can count it
-twice. CSV reimport deduplication applies only to identical billing IDs.
+AgentsView cannot match billing IDs to native session events or Cursor Admin
+API fingerprints, and importing overlapping usage through those sources can
+count the same usage twice. CSV reimport deduplication applies only to
+identical billing IDs.
 
 ## Usage dashboard
 
@@ -261,7 +263,7 @@ select it and click **Open** beside **Clear selection** (on touch screens, use
 **Open**). Usage outside the opened project's top 100 tiles appears under
 **Other**. You can also press Enter or Space to select any item.
 
-Hermes and Augure Desktop usage includes model calls recorded in
+For Hermes and Augure Desktop, usage counts model calls recorded in
 `session_model_usage`, including background review and title generation.
 Main-loop and voice-chat calls count once alongside any main usage recorded
 only in the session summary, and each ledger row keeps its recorded model and
@@ -320,14 +322,15 @@ are unchanged.
 
 ### Summary cards
 
-Ten baseline cards at the top summarize the selected window, with the **Total
-Cost** card featured with a larger value. **Total Input** adds uncached input,
-cache writes, and cache reads to show the full prompt volume the models read.
-**Uncached Input** counts input not reported as a cache read or cache write,
-with cache reads noted beneath it. The remaining cards show output tokens,
-daily burn, peak day, cache hit rate, project and model counts, and active
-days. When Copilot-family sessions have priced usage, an extra **Copilot AI
-Credits** card shows the same spend converted at 100 credits per dollar.
+Ten baseline cards at the top summarize the selected window, and the **Total
+Cost** card shows its value in larger text. **Total Input** adds uncached
+input, cache writes, and cache reads to show the full prompt volume the models
+read. **Uncached Input** counts input not reported as a cache read or cache
+write, with cache reads noted beneath it. The remaining cards show output
+tokens, daily burn, peak day, cache hit rate, project and model counts, and
+active days. When Copilot-family sessions have priced usage, an extra
+**Copilot AI Credits** card shows the same spend converted at 100 credits per
+dollar.
 
 ![Usage summary cards](/docs/assets/generated/screenshots/usage-summary-cards.png)
 
@@ -339,10 +342,10 @@ Each series uses the same color as the attribution panel below so you can
 cross-reference them. Attribution selections and sidebar session-filter changes
 preserve the range selected with the chart's brush.
 
-Choose **Smooth**, **Lines**, or **Bars** in the chart header, and the page
-remembers the style in your browser. Days without spend stay visible as zero,
-and you can drag across the chart to select a narrower date range. The same controls
-work in **Tokens** mode.
+Pick **Smooth**, **Lines**, or **Bars** in the chart header, and the page
+saves that style in your browser. Days with no spend stay visible as zero, and
+you can drag across the chart to select a narrower date range. The same
+controls work in **Tokens** mode.
 
 ![Cost over time chart](/docs/assets/generated/screenshots/usage-cost-trend.png)
 
@@ -679,9 +682,9 @@ The selected variant names appear on hover and are available to screen readers.
 On Analytics, the trigger also shows the selected variant names; click the row
 once to clear those variants, and click again to apply the whole group. On
 Usage, excluding individual variants keeps the group row ticked and shows the
-hidden-variant count on the trigger. A raw model sharing the group's name can
-still have visible usage even when every configured variant is excluded. The
-row appears unticked only when the group name itself is excluded. Clicking the
+hidden-variant count on the trigger. Even when you exclude every configured
+variant, a raw model sharing the group's name can still have visible usage.
+The row appears unticked only when you exclude the group name. Clicking the
 ticked row excludes the whole group and replaces its individual variant
 exclusions; clicking the unticked row removes the group exclusion. Grouped
 summary responses include the `model_aliases` map used to display these
@@ -717,15 +720,14 @@ Codex messages whose latest `thread_settings_applied` event records provider
 prices. This reflects the selected tier rather than the tier Codex sent on
 every request. Because Codex can omit priority for a model that does not
 advertise support, the estimate can exceed the billed cost. Fast bands take
-precedence at matching thresholds. A standard input threshold fills a gap,
-with its published companion rates filling fields missing from that Fast band
-and other fields falling back to the Fast base rate. If neither row publishes
-bands, Fast base rates apply at every request size. Ultrafast and other
-recorded tiers use standard rates, as do rollouts without a tier record. Forks
-can inherit the parent's last recorded tier through replay until the child
-records a new setting. The embedded catalog includes tier prices for offline
-use, and any model without a price for its tier (or with a custom override)
-keeps its standard rates.
+precedence at matching thresholds. A standard input threshold fills a gap; its
+published companion rates supply fields missing from that Fast band, and other
+fields use the Fast base rate. If neither row publishes bands, Fast base rates
+apply at every request size. Ultrafast and other recorded tiers use standard
+rates, as do rollouts without a tier record. Forks can inherit the parent's
+last recorded tier through replay until the child records a new setting. The
+embedded catalog includes tier prices for offline use, and any model without a
+price for its tier (or with a custom override) keeps its standard rates.
 
 Because the catalog does not keep historical Fast prices, LiteLLM's current
 Fast prices apply to every session date.
@@ -809,9 +811,9 @@ without `totalNanoAiu` and other Copilot-family agents keep catalog pricing.
 For unfiltered reports, AgentsView allocates the session total across the
 selected usage rows in proportion to their catalog-price estimates. That keeps
 per-day and per-model breakdowns additive, so their costs sum to the displayed
-session or report total. In a multi-model session, those per-model costs are
-estimated attributions. Copilot reports only the session total, not a charge
-per model.
+session or report total. In a multi-model session, those model costs are
+estimated attributions, and Copilot reports only the session total rather than
+a charge for each model.
 
 A date window containing only rows before the reported settlement can still
 show catalog estimates because the later session total falls outside the
@@ -836,8 +838,8 @@ expose the `copilotAICredits` field.
 
 ### Claude streaming & Codex token events
 
-The 0.20.0 cost tracking release also improved how raw token usage is
-extracted, so the input side of the equation is accurate:
+The 0.20.0 cost tracking release also improved how AgentsView extracts raw
+token usage so the input side is accurate:
 
 - **Claude Code.** Streaming deltas previously wrote the same token counts
   multiple times, roughly doubling input totals. The parser now deduplicates
@@ -913,8 +915,8 @@ archive as the UI and joins them with the applicable pricing data.
 
 Version 0.42.0 also maintains an exact daily rollup cache for repeated reports.
 The cache is disposable rather than authoritative: AgentsView rebuilds any
-missing or stale day from the archived usage rows before returning it.
-Reporting also:
+missing or stale day from the archived usage rows before returning it. This
+reporting workflow also:
 
 - **Works beyond Claude Code.** Coverage includes Claude Code, Codex, Copilot
   CLI, OpenCode-format tools, Pi, Prime Agent, Gemini, Qwen Code,
@@ -947,10 +949,11 @@ detached child running.
 
 Full parser rebuilds continue serving the retained archive while rebuilding,
 and CLI reports print a stale warning to stderr. Scoped upgrades and schema
-repairs finish before the daemon serves requests. While the CLI waits for them
-at startup, it shows phases and keeps waiting as long as progress updates arrive,
-including when a foreground server starts in another terminal. Restart older
-daemons after upgrading so the usage progress endpoint is available.
+repairs finish before the daemon serves requests. While waiting for those
+upgrades and repairs at startup, the CLI displays phases and keeps waiting as
+long as progress updates arrive, including when a foreground server starts in
+another terminal. Restart older daemons after upgrading so the usage progress
+endpoint is available.
 
 ```bash
 agentsview report usage daily [flags]
@@ -1304,9 +1307,8 @@ microdollars instead of a formatted string:
 
 When you filter with `--agent`, the JSON object includes `agent`.
 
-This command always reports the current local-time day. If you want the full
-row instead, run
-`agentsview report usage daily --since $(date +%Y-%m-%d)`.
+This command always reports the current local-time day. To get the full row
+instead, run `agentsview report usage daily --since $(date +%Y-%m-%d)`.
 
 <a id="agentsview-usage-cursor"></a>
 
@@ -1358,8 +1360,8 @@ continue serving the retained archive with a stale warning, while scoped
 upgrades and schema repairs finish before the daemon serves requests.
 
 `usage statusline` waits for pending startup ingestion to finish before
-querying, even when an earlier daily report started the daemon. Once startup
-ingestion finishes, later queries do not repeat a full sync, and the daemon's
+querying, even when an earlier daily report started the daemon. After startup
+ingestion finishes, subsequent queries do not repeat a full sync. The daemon's
 file watcher handles later source changes. During a full parser rebuild,
 statusline skips startup ingestion and reads the retained archive with a stale
 warning.
