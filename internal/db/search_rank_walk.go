@@ -18,10 +18,6 @@ const searchRankWalkMaxSessions = 4096
 // hands the page to the query that ranks every match.
 const searchRankWalkRowsPerSession = 64
 
-// A long run of equal ranks needs the query to order all tied sessions.
-// Detect it early on date-bounded searches before doing more of the walk.
-const searchRankWalkDateTieLimit = 32
-
 // searchBestMatch is a session's best message match: the lowest rank, then
 // the lowest ordinal, then the lowest FTS rowid.
 type searchBestMatch struct {
@@ -58,7 +54,7 @@ type searchRankWalk struct {
 // session only as the walk pulls it. The walk returns nil when it reaches
 // more sessions than the page query can bind or reads too many matches.
 func walkSearchRanks(
-	ctx context.Context, q messageRowsQuerier, table, innerWhereSQL string, ftsArgs []any, need int, dateBounded bool,
+	ctx context.Context, q messageRowsQuerier, table, innerWhereSQL string, ftsArgs []any, need int,
 ) (*searchRankWalk, error) {
 	if need > searchRankWalkMaxSessions {
 		return nil, nil
@@ -77,8 +73,6 @@ func walkSearchRanks(
 	walk := &searchRankWalk{complete: true}
 	index := make(map[string]int, need)
 	var boundary float64
-	var previousRank float64
-	tied := 0
 	maxRows := need * searchRankWalkRowsPerSession
 	for read := 0; rows.Next(); read++ {
 		if read == maxRows {
@@ -87,17 +81,6 @@ func walkSearchRanks(
 		var m searchBestMatch
 		if err := rows.Scan(&m.sessionID, &m.rowid, &m.ordinal, &m.rank); err != nil {
 			return nil, fmt.Errorf("scanning ranked search match: %w", err)
-		}
-		if dateBounded {
-			if read == 0 || m.rank != previousRank {
-				tied = 1
-			} else {
-				tied++
-			}
-			previousRank = m.rank
-			if tied == searchRankWalkDateTieLimit {
-				return nil, nil
-			}
 		}
 		if len(walk.best) >= need && m.rank > boundary {
 			walk.complete = false

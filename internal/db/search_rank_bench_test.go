@@ -66,27 +66,13 @@ func BenchmarkSearchCommonContentAndTitleWord(b *testing.B) {
 	}
 }
 
-func BenchmarkSearchDateRank(b *testing.B) {
+func BenchmarkSearchCommonContentWordRecent(b *testing.B) {
 	d := seedSearchRankBenchmark(b)
-	for _, tc := range []struct{ name, from string }{
-		{"broad", "2026-03-02"},
-		{"selective", "2026-05-20"},
-	} {
-		b.Run(tc.name, func(b *testing.B) {
-			for b.Loop() {
-				page, err := d.search(b.Context(), SearchFilter{Query: "handler", DateFrom: tc.from, Limit: 25}, false)
-				require.NoError(b, err)
-				require.Len(b, page.Results, 25)
-			}
-		})
+	f := SearchFilter{Query: "handler", Limit: 25, DateFrom: "2026-04-24"}
+	b.ReportAllocs()
+	for b.Loop() {
+		page, err := d.Search(b.Context(), f)
+		require.NoError(b, err)
+		require.Len(b, page.Results, 25)
 	}
-	_, err := d.getWriter().Exec(b.Context(), `UPDATE messages SET content = 'the handler checks' WHERE role = 'assistant'`)
-	require.NoError(b, err)
-	b.Run("ties", func(b *testing.B) {
-		for b.Loop() {
-			page, err := d.search(b.Context(), SearchFilter{Query: "handler", DateFrom: "2026-03-02", Limit: 25}, false)
-			require.NoError(b, err)
-			require.Len(b, page.Results, 25)
-		}
-	})
 }

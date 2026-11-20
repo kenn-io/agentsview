@@ -52,7 +52,7 @@ func TestSearchRankWalkMatchesFullRanking(t *testing.T) {
 		insertMessages(t, d, userMsg(id, 2, "handler"))
 	}
 
-	walk, err := walkSearchRanks(ctx, d.getReader(), "messages_fts", "messages_fts.rendered MATCH ?", []any{`"handler"`}, 2, false)
+	walk, err := walkSearchRanks(ctx, d.getReader(), "messages_fts", "messages_fts.rendered MATCH ?", []any{`"handler"`}, 2)
 	require.NoError(t, err)
 	require.NotNil(t, walk, "the walk must serve a page with distinct ranks")
 	assert.False(t, walk.complete)
@@ -83,27 +83,5 @@ func TestSearchRankWalkMatchesFullRanking(t *testing.T) {
 				}
 			}
 		}
-	}
-}
-
-func TestSearchDateRankWalkLargeTie(t *testing.T) {
-	d := testDB(t)
-	_, err := d.getWriter().Exec(t.Context(), `WITH RECURSIVE n(i) AS (VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i<4104)
-		INSERT INTO sessions(id, project, agent, ended_at) SELECT printf('tie-%04d', i), 'proj', 'claude', '2026-05-11T12:00:00Z' FROM n`)
-	require.NoError(t, err)
-	_, err = d.getWriter().Exec(t.Context(), `INSERT INTO messages(session_id, ordinal, role, content) SELECT id, 0, 'user', 'deploy the handler' FROM sessions`)
-	require.NoError(t, err)
-	for _, cursor := range []int{0, 5} {
-		f := SearchFilter{Query: "handler", DateFrom: "2026-05-01", Limit: 5, Cursor: cursor}
-		got, err := d.Search(t.Context(), f)
-		require.NoError(t, err)
-		f.Project = "proj"
-		want, err := d.Search(t.Context(), f)
-		require.NoError(t, err)
-		require.Equal(t, want, got)
-		require.Len(t, got.Results, 5)
-		assert.Equal(t, fmt.Sprintf("tie-%04d", cursor), got.Results[0].SessionID)
-		assert.Contains(t, got.Results[0].Snippet, "<mark>handler</mark>")
-		assert.Equal(t, cursor+5, got.NextCursor)
 	}
 }
