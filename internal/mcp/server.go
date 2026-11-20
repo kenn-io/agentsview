@@ -176,7 +176,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 				"match_ordinal usable with get_messages to read the surrounding conversation. For prior-work " +
 				"questions, prefer search_content with mode hybrid or semantic when a vector search index " +
 				"is configured. Use this tool for keyword search, with optional date_from/date_to bounds. " +
-				"When date_from, date_to, and session_id are omitted, searches the last 30 days; pass an earlier date_from to search further back. " +
+				"Without dates or session_id, searches 30 days; set earlier date_from. " +
 				"Every term must appear (AND); wrap the query in double quotes for an exact phrase. " +
 				"Sessions active in the last 10 minutes (including the current conversation) are excluded " +
 				"unless include_active is set. Empty pages with excluded active sessions return a hints entry " +
@@ -249,7 +249,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 			"user/assistant exchange, or fully quoted substring text or regex for exact error messages, identifiers, and code fragments. " +
 			"Use concepts with two to five semantic ideas to keep only sessions with evidence for every idea; concepts always use semantic mode. " +
 			"Use session_id without pattern or concepts to list messages. " +
-			"When date_from, date_to, and session_id are omitted, searches the last 30 days; pass an earlier date_from to search further back. " +
+			"Without dates or session_id, searches 30 days; set earlier date_from. " +
 			"The default mode remains substring. On SQLite, PostgreSQL, and ClickHouse, a substring search of several words lists exact text first, " +
 			"then messages holding every word, then those holding more of the words, and reports matched_words. Scope defaults to all, including child sessions and sidechain messages; " +
 			"top excludes them and subordinate returns only them. Child sessions bypass the one-shot exclusion. " +
