@@ -163,7 +163,10 @@ describe("session search scope", () => {
     const prompt = message(8, "check the diff", { role: "user" });
     for (const input of [[skill], [skill, prompt]]) {
       for (const visible of [ALL, new Set<BlockType>(["system"]), new Set<BlockType>(["user"])]) {
-        const result = scope(input, { visibleBlocks: visible, hasBlockFilters: visible.size < ALL.size });
+        const result = scope(input, {
+          visibleBlocks: visible,
+          hasBlockFilters: visible.size < ALL.size,
+        });
         expect(result.allowsBlock(skill, "text")).toBe(false);
         expect(result.allowsBlock(skill, "skill")).toBe(false);
       }
