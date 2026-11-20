@@ -518,7 +518,7 @@ test-clickhouse: pricing-snapshot ensure-embed-dir clickhouse-up
 # The usage lane moves these reporting tests to the other integration job.
 # The rest lane runs every test outside these prefixes.
 CLICKHOUSE_LANE ?=
-CLICKHOUSE_USAGE_TESTS := ^(TestPreparedUsage|TestUsageRollup|TestDailyUsage|TestUsagePairwise|TestUsageReadersSkipPairwiseEvidence|TestUsageSnapshotRanking)
+CLICKHOUSE_USAGE_TESTS := ^(TestPreparedUsage|TestUsageRollup|TestDailyUsage|TestUsagePairwise|TestUsageReadersSkipPairwiseEvidence|TestUsageSnapshotRanking|TestUsagePriceContext)
 ifeq ($(CLICKHOUSE_LANE),usage)
 CLICKHOUSE_TEST_FILTER = -run '$(CLICKHOUSE_USAGE_TESTS)'
 else ifeq ($(CLICKHOUSE_LANE),rest)
