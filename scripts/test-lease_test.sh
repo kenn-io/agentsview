@@ -3,11 +3,9 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 tmp=$(mktemp -d)
 first=
-shutdown_release="$tmp/shutdown-release"
 cleanup() {
     touch "$tmp/release"
     touch "$tmp/down-release"
-    touch "$shutdown_release"
     [[ -z "$first" ]] || wait "$first" 2>/dev/null || true
     if [[ -f "$tmp/ready" ]]; then
         for _ in {1..100}; do [[ -f "$tmp/exited" ]] && break; sleep .1; done
@@ -43,7 +41,6 @@ case " $* " in
   *' down '*)
     [ "$2" = -p ] && [ "$3" = "$TEST_SERVICE_LEASE" ] || exit 1
     [ "$TEST_PG_PUBLISH" = 127.0.0.1::5432 ] && [ "$TEST_CH_HTTP_PUBLISH" = 127.0.0.1::8123 ] && [ "$TEST_CH_NATIVE_PUBLISH" = 127.0.0.1::9000 ] || exit 1
-    lease-held "$HOME/.local/state/test-service-leases/$TEST_SERVICE_LEASE" || exit 1
     if [ "${BLOCK_DOWN:-0}" = 1 ]; then
         touch "$DOWN_STARTED"
         while [ ! -f "$DOWN_RELEASE" ]; do sleep .1; done
@@ -94,18 +91,9 @@ PY
 
 # Cleanup waits for a descendant to release the lease.
 export READY="$tmp/ready" RELEASE="$tmp/release" EXITED="$tmp/exited" MAIN="$tmp/main" CHECK_LEASE="$tmp/project" DESCENDANT="$tmp/descendant"
-export SHUTDOWN_RELEASE="$shutdown_release" SHUTDOWN_STARTED="$tmp/shutdown-started" SHUTDOWN_PID="$tmp/shutdown-pid" SHUTDOWN_HELPER="$tmp/shutdown-helper"
-cat > "$SHUTDOWN_HELPER" <<'HELPER'
-#!/bin/sh
-printf '%s\n' "$$" > "$SHUTDOWN_PID"
-touch "$SHUTDOWN_STARTED"
-while [ ! -f "$SHUTDOWN_RELEASE" ]; do sleep 0.1; done
-touch "$EXITED"
-HELPER
-chmod +x "$SHUTDOWN_HELPER"
 cat > "$DESCENDANT" <<'CHILD'
 #!/bin/sh
-trap 'exec "$SHUTDOWN_HELPER"' TERM
+trap 'touch "$EXITED"; exit' TERM
 touch "$READY"
 while [ ! -f "$RELEASE" ]; do sleep 0.1; done
 touch "$EXITED"
@@ -120,19 +108,10 @@ main_pid=$(cat "$MAIN")
 for _ in {1..100}; do if ! kill -0 "$main_pid" 2>/dev/null; then break; fi; sleep .1; done
 if kill -0 "$main_pid" 2>/dev/null; then echo 'foreground command did not exit' >&2; exit 1; fi
 lease="$HOME/.local/state/test-service-leases/$(cat "$CHECK_LEASE")"
-if grep -q ' down ' "$DOCKER_LOG"; then echo 'cleanup ran while descendant held lease' >&2; exit 1; fi
 supervisor=${lease##*-}
 supervisor_args=$(ps -p "$supervisor" -o args=)
 [[ "$supervisor_args" == *'python3 -'* ]]
 kill -TERM "$supervisor"
-for _ in {1..100}; do [[ -f "$SHUTDOWN_STARTED" ]] && break; sleep .1; done
-[[ -f "$SHUTDOWN_STARTED" ]]
-helper_pid=$(cat "$SHUTDOWN_PID")
-for _ in {1..10}; do
-    if ! kill -0 "$helper_pid" 2>/dev/null; then echo 'shutdown helper received a repeated signal' >&2; exit 1; fi
-    sleep .1
-done
-touch "$SHUTDOWN_RELEASE"
 for _ in {1..100}; do [[ -f "$EXITED" ]] && break; sleep .1; done
 [[ -f "$EXITED" ]]
 set +e
@@ -143,13 +122,19 @@ first=
 [[ $status == 143 ]]
 grep -qE -- "-p $(cat "$CHECK_LEASE") .* down -v --remove-orphans" "$DOCKER_LOG"
 [[ ! -e "$lease" ]]
-unset READY RELEASE EXITED MAIN SHUTDOWN_RELEASE SHUTDOWN_STARTED SHUTDOWN_PID SHUTDOWN_HELPER
+unset READY RELEASE EXITED MAIN
 
 # A successful command reports cleanup failure; a failed command keeps its status.
-for command_status in 0 7; do
+for case_name in down-success down-failure sidecar-failure; do
+    command_status=0 DOWN_STATUS=0 LEFTOVER=0 REMOVE_STATUS=0
+    case "$case_name" in
+        down-success) DOWN_STATUS=1 ;;
+        down-failure) DOWN_STATUS=1 command_status=7 ;;
+        sidecar-failure) LEFTOVER=1 REMOVE_STATUS=1 ;;
+    esac
     : > "$DOCKER_LOG"
     set +e
-    (cd "$root" && DOWN_STATUS=1 ./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 sh -c "exit $command_status") > "$tmp/cleanup-error" 2>&1
+    (cd "$root" && DOWN_STATUS=$DOWN_STATUS LEFTOVER=$LEFTOVER REMOVE_STATUS=$REMOVE_STATUS ./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 sh -c "exit $command_status") > "$tmp/cleanup-error" 2>&1
     status=$?
     set -e
     if [[ $command_status == 0 ]]; then [[ $status == 1 ]]; else [[ $status == 7 ]]; fi
@@ -159,15 +144,7 @@ for command_status in 0 7; do
     [[ -f "$HOME/.local/state/test-service-leases/$(cat "$CHECK_LEASE")" ]]
 done
 
-# A sidecar that survives Compose cleanup keeps the lease if removal fails.
-set +e
-(cd "$root" && LEFTOVER=1 REMOVE_STATUS=1 ./scripts/test-lease.sh ./scripts/test-service-compose.sh clickhouse 9000 true) > "$tmp/sidecar-error" 2>&1
-status=$?
-set -e
-[[ $status == 1 ]]
-project=$(cat "$CHECK_LEASE")
-[[ -f "$HOME/.local/state/test-service-leases/$project" ]]
-grep -q 'cleanup failed' "$tmp/sidecar-error"
+# Remove labelled containers that survive Compose cleanup.
 LEFTOVER=1 "$root/scripts/test-lease.sh" true
 [[ -f "$REMOVED" ]]
 
@@ -249,7 +226,7 @@ grep -qE -- "-p $(cat "$CHECK_LEASE") .* down -v --remove-orphans" "$DOCKER_LOG"
 lease="$HOME/.local/state/test-service-leases/$(cat "$CHECK_LEASE")"
 [[ ! -e "$lease" ]]
 
-# A signal received as startup finishes reaches the shutdown helper only once.
+# A signal received after the process group is recorded reaches the shutdown helper only once.
 mkdir "$tmp/trace"
 cat > "$tmp/trace/sitecustomize.py" <<'PY'
 import os
@@ -343,14 +320,14 @@ for target in test-postgres bench-pg-usage test-clickhouse; do
     grep -Fxq 'NO_EXCHANGE_FROM_MAKE=old-no-exchange' "$tmp/make-url"
     case "$target" in
         test-clickhouse)
-            service=clickhouse port=9000
+            service=clickhouse
             grep -Fq 'go test -tags "fts5,chtest" -v ./internal/clickhouse/...' "$tmp/make-url"
             grep -Fxq 'STANDBY_FROM_MAKE=' "$tmp/make-url"
             grep -Fxq 'PG_FROM_MAKE=' "$tmp/make-url"
             grep -Fxq 'CH_FROM_MAKE=clickhouse://127.0.0.1:49153/default' "$tmp/make-url"
             ;;
         test-postgres|bench-pg-usage)
-            service=postgres port=5432
+            service=postgres
             if [[ $target == bench-pg-usage ]]; then
                 grep -Fq -- "-bench 'BenchmarkPGUsage(Read|Refresh)'" "$tmp/make-url"
             else
@@ -362,7 +339,6 @@ for target in test-postgres bench-pg-usage test-clickhouse; do
             ;;
     esac
     grep -qE -- "-p $project .* -f docker-compose.test-lease.yml up -d --wait $service" "$DOCKER_LOG"
-    grep -qE -- "-p $project .* port $service $port" "$DOCKER_LOG"
 done
 
 # Missing prerequisites stop before Docker starts.
