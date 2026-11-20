@@ -579,30 +579,37 @@ func TestFrustrationFillDeploymentGates(t *testing.T) {
 }
 
 func TestFrustrationFillSharedRequestWaitBound(t *testing.T) {
-	f := newFrustrationFixture(t, "agentsview")
-	store := f.open(t)
-	_, err := f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id, session_version, rules_version, marker_count) VALUES ('one', 'stale', 0, 0)`)
-	require.NoError(t, err)
-	tx, err := f.pg.BeginTx(f.ctx, nil)
-	require.NoError(t, err)
-	defer tx.Rollback()
-	_, err = tx.ExecContext(f.ctx, `SELECT 1 FROM session_frustration_counts WHERE session_id='one' FOR UPDATE`)
-	require.NoError(t, err)
-	fillCtx, stop := context.WithCancel(f.ctx)
-	done := make(chan error, 1)
-	go func() { done <- store.fillFrustrationCounts(fillCtx, []string{"one", "two"}, f.versionColumn) }()
-	defer func() { stop(); <-done }()
-	require.Eventually(t, func() bool {
-		state := &store.runtimeState().frustrationFill
-		state.mu.Lock()
-		defer state.mu.Unlock()
-		return state.pending["one"] != nil
-	}, 10*time.Second, 10*time.Millisecond)
-	ctx, cancel := context.WithTimeout(f.ctx, 8*time.Second)
-	defer cancel()
-	result, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
-	require.NoError(t, err)
-	require.Equal(t, 2, result.QualityHealth.Totals.FrustrationMarkerCount)
+	for _, tc := range []struct {
+		name    string
+		timeout time.Duration
+	}{{"long", 8 * time.Second}, {"short", 3 * time.Second}} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFrustrationFixture(t, "agentsview")
+			store := f.open(t)
+			_, err := f.pg.ExecContext(f.ctx, `INSERT INTO session_frustration_counts(session_id, session_version, rules_version, marker_count) VALUES ('one', 'stale', 0, 0)`)
+			require.NoError(t, err)
+			tx, err := f.pg.BeginTx(f.ctx, nil)
+			require.NoError(t, err)
+			defer tx.Rollback()
+			_, err = tx.ExecContext(f.ctx, `SELECT 1 FROM session_frustration_counts WHERE session_id='one' FOR UPDATE`)
+			require.NoError(t, err)
+			fillCtx, stop := context.WithCancel(f.ctx)
+			done := make(chan error, 1)
+			go func() { done <- store.fillFrustrationCounts(fillCtx, []string{"one", "two"}, f.versionColumn) }()
+			defer func() { stop(); <-done }()
+			require.Eventually(t, func() bool {
+				state := &store.runtimeState().frustrationFill
+				state.mu.Lock()
+				defer state.mu.Unlock()
+				return state.pending["one"] != nil
+			}, 10*time.Second, 10*time.Millisecond)
+			ctx, cancel := context.WithTimeout(f.ctx, tc.timeout)
+			defer cancel()
+			result, err := store.GetAnalyticsSignals(ctx, db.AnalyticsFilter{})
+			require.NoError(t, err)
+			require.Equal(t, 2, result.QualityHealth.Totals.FrustrationMarkerCount)
+		})
+	}
 }
 
 func TestFrustrationFillFilteredRequestSkipsPendingWrite(t *testing.T) {

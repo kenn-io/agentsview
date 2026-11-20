@@ -52,6 +52,14 @@ func (state *frustrationFillState) release(chunk *frustrationChunk) {
 	close(chunk.done)
 }
 
+// frustrationJoinTimeout caps the join at half the caller's remaining time.
+func frustrationJoinTimeout(ctx context.Context) time.Duration {
+	if deadline, ok := ctx.Deadline(); ok {
+		return min(frustrationJoinWait, time.Until(deadline)/2)
+	}
+	return frustrationJoinWait
+}
+
 // joinFrustrationFill waits only for chunks fully covered by the request.
 func (s *Store) joinFrustrationFill(ctx context.Context, ids []string) bool {
 	state := &s.runtimeState().frustrationFill
@@ -87,7 +95,7 @@ func (s *Store) joinFrustrationFill(ctx context.Context, ids []string) bool {
 	}
 	state.mu.Unlock()
 	// Leave the rest of the request's time for its own scan.
-	waitCtx, cancel := context.WithTimeout(ctx, frustrationJoinWait)
+	waitCtx, cancel := context.WithTimeout(ctx, frustrationJoinTimeout(ctx))
 	defer cancel()
 	for _, wait := range waits {
 		select {
