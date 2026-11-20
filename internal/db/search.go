@@ -532,12 +532,6 @@ func (db *DB) search(ctx context.Context, f SearchFilter, cjk bool) (SearchPage,
 	}
 	likePattern := "%" + escapeLike(plainQuery) + "%"
 
-	release, err := db.acquireBulkRead(ctx)
-	if err != nil {
-		return SearchPage{}, err
-	}
-	defer release()
-
 	// Relevance pages come from a walk over the matches in rank order when
 	// it can stop early; see walkSearchRanks. Recency pages rank every match
 	// inside the query, as do project and upper-date filters.
