@@ -1092,18 +1092,34 @@ func TestVectorPushRoundTrip(t *testing.T) {
 
 func TestVectorPushInvalidStoredVectorReportsRepair(t *testing.T) {
 	t.Parallel()
-	sync, localDB, _ := newVectorPushTestSync(t)
-	seedVectorSession(t, localDB, "A")
-	sync.vectorSource = &fakeVectorSource{
-		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-invalid", Model: "m", Dimension: 4},
-		hasGen: true,
-		hashes: map[string]string{"A": "ha"},
-		docs: map[string][]storage.VectorPushDoc{
-			"A": {vdoc("A", "A#0", 0, "content", "hash", []float32{0, 0, 0, 0})},
-		},
+	for _, tc := range []struct {
+		name   string
+		vector []float32
+		repair bool
+	}{
+		{"zero", []float32{0, 0, 0, 0}, true},
+		{"rounds to zero", []float32{1e-10, 0, 0, 0}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sync, localDB, _ := newVectorPushTestSync(t)
+			seedVectorSession(t, localDB, "A")
+			sync.vectorSource = &fakeVectorSource{
+				gen:    storage.VectorGenerationInfo{Fingerprint: "fp-invalid", Model: "m", Dimension: 4},
+				hasGen: true,
+				hashes: map[string]string{"A": "ha"},
+				docs: map[string][]storage.VectorPushDoc{
+					"A": {vdoc("A", "A#0", 0, "content", "hash", tc.vector)},
+				},
+			}
+			_, err := sync.Push(t.Context(), false, nil)
+			require.Error(t, err)
+			if tc.repair {
+				assert.ErrorContains(t, err, "agentsview index embeddings build --repair-invalid")
+			} else {
+				assert.NotContains(t, err.Error(), "--repair-invalid")
+			}
+		})
 	}
-	_, err := sync.Push(t.Context(), false, nil)
-	require.ErrorContains(t, err, "agentsview index embeddings build --repair-invalid")
 }
 
 func TestVectorPushDeltaNoop(t *testing.T) {
