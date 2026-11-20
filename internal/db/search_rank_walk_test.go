@@ -52,6 +52,11 @@ func TestSearchRankWalkMatchesFullRanking(t *testing.T) {
 		insertMessages(t, d, userMsg(id, 2, "handler"))
 	}
 
+	walk, err := walkSearchRanks(ctx, d.getReader(), "messages_fts", "messages_fts.rendered MATCH ?", []any{`"handler"`}, 2)
+	require.NoError(t, err)
+	require.NotNil(t, walk, "the walk must serve a page with distinct ranks")
+	assert.False(t, walk.complete)
+
 	for _, from := range []string{"", "2026-05-08", "2026-05-09", "2027-01-01"} {
 		for _, query := range []string{"handler", "deploy"} {
 			for _, limit := range []int{1, 2, 7, 50} {
