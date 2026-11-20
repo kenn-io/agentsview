@@ -1478,13 +1478,19 @@ func TestServer_SearchContentIncludeOneShot(t *testing.T) {
 // fakeContentSearchService captures the first ContentSearchRequest a tool builds
 // and returns a canned result or error, so semantic-mode passthrough and
 // context-mapping can be asserted without a full backend. Unused methods
-// fall through to the embedded nil interface (never called by searchContent
-// when IncludeActive is set, which skips the session-activity lookup).
+// fall through to the embedded nil interface.
 type fakeContentSearchService struct {
 	service.SessionService
 	lastReq service.ContentSearchRequest
 	result  *service.ContentSearchResult
 	err     error
+}
+
+func (f *fakeContentSearchService) Get(_ context.Context, id string) (*service.SessionDetail, error) {
+	if id == "child" || id == "older" {
+		return &service.SessionDetail{Session: db.Session{ID: id}}, nil
+	}
+	return nil, fmt.Errorf("unexpected session lookup: %s", id)
 }
 
 func (f *fakeContentSearchService) SearchContent(
@@ -2317,4 +2323,94 @@ func TestListRecallPagesWithEvidenceAndSourceSessionFilter(t *testing.T) {
 	filtered := decodeStructured[listRecallOut](t, res)
 	require.Len(t, filtered.Entries, 1)
 	assert.Equal(t, "s2", filtered.Entries[0].SourceSessionID)
+}
+
+func TestSessionToolsResolvePlainIDs(t *testing.T) {
+	ts, d := newTestToolset(t)
+	ts.svc = service.NewDirectBackend(d, nil, withTestDocbank())
+	seedFTSSession(t, d, "codex:plain", "proj", "needle in the transcript", "2024-06-14T10:00:00Z")
+	dbtest.SeedMessages(t, d, toolCallMsg("codex:plain", 1, db.ToolCall{ToolName: "Bash", Category: "Bash"}))
+	dbtest.SeedSession(t, d, "child", "proj", func(s *db.Session) { s.ParentSessionID = new("codex:plain") })
+	dbtest.SeedSession(t, d, "codex:ambiguous", "proj")
+	dbtest.SeedSession(t, d, "host~ambiguous", "proj")
+	dbtest.SeedSession(t, d, "codex:empty", "proj")
+
+	tests := []struct {
+		name string
+		call func(*testing.T, string) error
+	}{
+		{"overview", func(t *testing.T, id string) error {
+			_, out, err := ts.sessionOverview(t.Context(), nil, sessionOverviewIn{SessionID: id})
+			if err == nil {
+				assert.Equal(t, "codex:plain", out.Session.SessionID)
+				assert.NotEmpty(t, out.LastMessages)
+			}
+			return err
+		}},
+		{"messages", func(t *testing.T, id string) error {
+			_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: id})
+			if err == nil {
+				require.NotEmpty(t, out.Messages)
+				assert.Equal(t, "needle in the transcript", out.Messages[0].Content)
+			}
+			return err
+		}},
+		{"tool calls", func(t *testing.T, id string) error {
+			_, out, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: id})
+			if err == nil {
+				require.Len(t, out.ToolCalls, 1)
+				assert.Equal(t, "Bash", out.ToolCalls[0].ToolName)
+			}
+			return err
+		}},
+		{"children", func(t *testing.T, id string) error {
+			_, out, err := ts.childSessions(t.Context(), nil, childSessionsIn{SessionID: id})
+			if err == nil {
+				require.Len(t, out.Sessions, 1)
+				assert.Equal(t, "child", out.Sessions[0].SessionID)
+			}
+			return err
+		}},
+		{"file references", func(t *testing.T, id string) error {
+			_, out, err := ts.fileReferences(t.Context(), nil, fileReferencesIn{SessionID: id})
+			if err == nil {
+				assert.Equal(t, "enabled", out.Integration)
+				assert.NotEmpty(t, out.TranscriptRevision)
+			}
+			return err
+		}},
+		{"search content", func(t *testing.T, id string) error {
+			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{SessionID: id, Pattern: "needle", IncludeActive: true, IncludeOneShot: true})
+			if err == nil {
+				require.Len(t, out.Matches, 1)
+				assert.Equal(t, "codex:plain", out.Matches[0].SessionID)
+			}
+			return err
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, tc.call(t, "plain"))
+			require.ErrorContains(t, tc.call(t, "missing"), "session not found: missing")
+			require.ErrorContains(t, tc.call(t, "ambiguous"), `ambiguous session UUID "ambiguous"`)
+		})
+	}
+	_, messages, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "empty"})
+	require.NoError(t, err)
+	assert.Empty(t, messages.Messages)
+	_, calls, err := ts.toolCalls(t.Context(), nil, toolCallsIn{SessionID: "empty"})
+	require.NoError(t, err)
+	assert.Empty(t, calls.ToolCalls)
+	_, children, err := ts.childSessions(t.Context(), nil, childSessionsIn{SessionID: "empty"})
+	require.NoError(t, err)
+	assert.Empty(t, children.Sessions)
+
+	_, first, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "plain", MaxCharsPerMessage: 6})
+	require.NoError(t, err)
+	require.NotEmpty(t, first.Messages)
+	require.NotEmpty(t, first.Messages[0].BodyCursor)
+	_, next, err := ts.getMessages(t.Context(), nil, getMessagesIn{SessionID: "codex:plain", BodyCursor: first.Messages[0].BodyCursor, MaxCharsPerMessage: 6})
+	require.NoError(t, err)
+	require.Len(t, next.Messages, 1)
+	assert.Equal(t, " in th", next.Messages[0].Content)
 }

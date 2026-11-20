@@ -236,8 +236,8 @@ raw suffix matches more than one session. A raw UUID matches an exact stored ID,
 an agent ID ending in `:<uuid>`, or a host ID ending in `~<uuid>`; the delimiter
 is part of the match, so a fork entry separated by `-` is not selected. The row
 has an empty `snippet`, `match_ordinal` set to `0`, and no `next_cursor`. Call
-`get_messages` with that ordinal to read the first message. For a known full ID,
-`get_session_overview` remains the way to get a compact message preview. Remote
+`get_messages` with that ordinal to read the first message. For a known full ID
+or raw UUID, `get_session_overview` provides a compact message preview. Remote
 bare UUID lookup requires AgentsView 0.44.0 or later on the server. Use an exact
 full stored ID with an older server.
 
@@ -294,7 +294,8 @@ sidechain messages; `top` excludes them, and `subordinate` returns only them.
 Child sessions bypass the one-shot exclusion; top-level one-shot sessions still
 require `include_one_shot: true`. Semantic mode needs the opt-in
 [semantic search](/docs/semantic-search/) index and returns a "not available"
-error without it. Exact `session_id`, `git_branch`, `project`, `agent`,
+error without it. `session_id` accepts a full stored ID or a raw UUID that
+matches one session. Exact `git_branch`, `project`, `agent`,
 `date_from`, and `date_to` filters apply before the final limit. Limits default
 to 10 and go up to 50; a value outside that range falls back to the default.
 
