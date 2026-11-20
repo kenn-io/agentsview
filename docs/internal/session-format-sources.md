@@ -1,5 +1,5 @@
 ---
-last_edited: 2026-11-17
+last_edited: 2026-11-20
 ---
 
 # Session Format Source Inventory
@@ -3609,6 +3609,30 @@ schemas keep their existing ordering behavior.
   Nested child transcripts outside artifact directories remain discoverable,
   and unreadable session directories still report incomplete discovery. The
   transcript format, parsed output, and data version are unchanged.
+- **Skill expansion (2026-11-20):** Reverified against the published
+  [pi-coding-agent 1.5.2 npm tarball](https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-1.5.2.tgz),
+  published 2026-11-10, SHA1
+  `26300ab187a9b5a6db0efc8dd4d41a6c6bfcd610`, in
+  `dist/core/agent-session.js` (`parseSkillBlock` near line 63,
+  `_expandSkillCommand` near line 1811); the source is
+  [badlogic/pi-mono](https://github.com/badlogic/pi-mono) at
+  `packages/coding-agent/src/core/agent-session.ts`. When the user types
+  `/skill:NAME args`, `_expandSkillCommand` replaces the message text with
+  `<skill name="NAME" location="PATH">\nReferences are relative to DIR.\n\nBODY\n</skill>`,
+  appending `\n\nARGS` only when args are present. Pi's own parser matches
+  `^<skill name="([^"]+)" location="([^"]+)">\n([\s\S]*?)\n<\/skill>(?:\n\n([\s\S]+))?$`,
+  and Pi's TUI and HTML export render the block as a collapsed skill entry
+  followed by the user's text. Across roughly 3,500 local Pi session files,
+  all 101 `/skill:` expansions matched that regex and no other skill-injection
+  format appeared in user messages. OhMyPi uses a separate custom message
+  built from prompt templates, so it does not produce this format. Agentsview
+  splits a matching user message (`internal/parser/pi.go`,
+  `piSkillExpansionRE` / `parsePiUserMessages`) into a `skill_invocation`
+  system row (`[Skill: NAME]\nBODY\n[/Skill]`, source UUID
+  `<entry id>:skill`) and a user row with the trimmed args, or `/skill:NAME`
+  when there are none (source UUID `<entry id>`). Non-matching text is
+  unchanged. Data version 184 reparses Pi, OMP, OMO, StepCode, Direct API,
+  and Prime Agent in place.
 - **Agentsview:** `internal/parser/pi.go` and `internal/parser/pi_provider.go`;
   alternate branches remain in the file but only the active ancestry is a
   conversation. Reverified 2026-09-03 against 156 local Pi transcripts: the
