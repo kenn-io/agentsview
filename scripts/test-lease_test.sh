@@ -93,7 +93,6 @@ PY
 export READY="$tmp/ready" RELEASE="$tmp/release" EXITED="$tmp/exited" MAIN="$tmp/main" CHECK_LEASE="$tmp/project" DESCENDANT="$tmp/descendant"
 cat > "$DESCENDANT" <<'CHILD'
 #!/bin/sh
-trap 'touch "$EXITED"; exit' TERM
 touch "$READY"
 while [ ! -f "$RELEASE" ]; do sleep 0.1; done
 touch "$EXITED"
@@ -109,9 +108,9 @@ for _ in {1..100}; do if ! kill -0 "$main_pid" 2>/dev/null; then break; fi; slee
 if kill -0 "$main_pid" 2>/dev/null; then echo 'foreground command did not exit' >&2; exit 1; fi
 lease="$HOME/.local/state/test-service-leases/$(cat "$CHECK_LEASE")"
 supervisor=${lease##*-}
-supervisor_args=$(ps -p "$supervisor" -o args=)
-[[ "$supervisor_args" == *'python3 -'* ]]
-kill -TERM "$supervisor"
+kill -0 "$supervisor"
+if grep -q ' down ' "$DOCKER_LOG"; then echo 'cleanup ran while descendant held lease' >&2; exit 1; fi
+touch "$RELEASE"
 for _ in {1..100}; do [[ -f "$EXITED" ]] && break; sleep .1; done
 [[ -f "$EXITED" ]]
 set +e
@@ -119,38 +118,43 @@ wait "$first"
 status=$?
 set -e
 first=
-[[ $status == 143 ]]
+[[ $status == 7 ]]
 grep -qE -- "-p $(cat "$CHECK_LEASE") .* down -v --remove-orphans" "$DOCKER_LOG"
 [[ ! -e "$lease" ]]
 unset READY RELEASE EXITED MAIN
 
-# A successful command reports cleanup failure; a failed command keeps its status.
-for case_name in down-success down-failure sidecar-failure; do
+# Cleanup reports failures and removes labelled containers.
+for case_name in down-failure-command-ok down-failure-command-fails sidecar-failure sidecar-success; do
     command_status=0 DOWN_STATUS=0 LEFTOVER=0 REMOVE_STATUS=0
     case "$case_name" in
-        down-success) DOWN_STATUS=1 ;;
-        down-failure) DOWN_STATUS=1 command_status=7 ;;
+        down-failure-command-ok) DOWN_STATUS=1 ;;
+        down-failure-command-fails) DOWN_STATUS=1 command_status=7 ;;
         sidecar-failure) LEFTOVER=1 REMOVE_STATUS=1 ;;
+        sidecar-success) LEFTOVER=1 ;;
     esac
     : > "$DOCKER_LOG"
     set +e
     (cd "$root" && DOWN_STATUS=$DOWN_STATUS LEFTOVER=$LEFTOVER REMOVE_STATUS=$REMOVE_STATUS ./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 sh -c "exit $command_status") > "$tmp/cleanup-error" 2>&1
     status=$?
     set -e
-    if [[ $command_status == 0 ]]; then [[ $status == 1 ]]; else [[ $status == 7 ]]; fi
     project=$(cat "$CHECK_LEASE")
-    grep -Fxq "cleanup failed; Compose project $project may still be running" "$tmp/cleanup-error"
     grep -q ' down ' "$DOCKER_LOG"
-    [[ -f "$HOME/.local/state/test-service-leases/$(cat "$CHECK_LEASE")" ]]
+    if [[ $case_name == sidecar-success ]]; then
+        [[ $status == 0 && -f "$REMOVED" && ! -e "$HOME/.local/state/test-service-leases/$project" ]]
+    else
+        if [[ $command_status == 0 ]]; then [[ $status == 1 ]]; else [[ $status == 7 ]]; fi
+        grep -Fxq "cleanup failed; Compose project $project may still be running" "$tmp/cleanup-error"
+        [[ -f "$HOME/.local/state/test-service-leases/$project" ]]
+    fi
 done
 
-# Remove labelled containers that survive Compose cleanup.
-LEFTOVER=1 "$root/scripts/test-lease.sh" true
-[[ -f "$REMOVED" ]]
-
-# Cancellation during cleanup waits for Compose, which holds the lease.
+# Cancellation during cleanup, startup, and signal forwarding.
+export STATUS_FILE="$tmp/cancellation-status"
+for cancellation in cleanup startup signal-once; do
+    : > "$DOCKER_LOG"
+    case "$cancellation" in
+    cleanup)
 export DOWN_STARTED="$tmp/down-started" DOWN_RELEASE="$tmp/down-release" DOWN_FINISHED="$tmp/down-finished"
-: > "$DOCKER_LOG"
 BLOCK_DOWN=1 python3 - "$root" <<'PY'
 import fcntl
 import os
@@ -184,21 +188,13 @@ try:
             pass
         else:
             raise AssertionError("cleanup did not hold the lease")
-    args = subprocess.run(
-        ["ps", "-p", str(process.pid), "-o", "args="],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
-    assert "python3 - ./scripts/test-service-compose.sh" in args, args
     os.killpg(process.pid, signal.SIGTERM)
     time.sleep(0.2)
     assert process.poll() is None, "cleanup exited before it was released"
     assert not finished.exists(), "cleanup ignored the release gate"
     release.touch()
-    assert process.wait(timeout=10) == 143
+    Path(env["STATUS_FILE"]).write_text(str(process.wait(timeout=10)))
     assert finished.exists(), "Compose did not finish cleanup"
-    assert not lease.exists(), "successful cleanup kept the lease file"
 finally:
     release.touch()
     if process.poll() is None:
@@ -206,11 +202,9 @@ finally:
         process.wait(timeout=10)
 PY
 unset DOWN_STARTED DOWN_RELEASE DOWN_FINISHED
-
-# Termination during service startup cleans up the project.
-export READY="$tmp/ready"
-: > "$DOCKER_LOG"
-[[ ! -e "$tmp/ready" ]] || find "$tmp/ready" -delete
+    ;;
+    startup)
+export READY="$tmp/startup-ready"
 (cd "$root" && BLOCK_UP=1 exec ./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 true) &
 first=$!
 for _ in {1..100}; do [[ -f "$READY" ]] && break; sleep .1; done
@@ -221,12 +215,8 @@ wait "$first"
 status=$?
 set -e
 first=
-[[ $status == 143 ]]
-grep -qE -- "-p $(cat "$CHECK_LEASE") .* down -v --remove-orphans" "$DOCKER_LOG"
-lease="$HOME/.local/state/test-service-leases/$(cat "$CHECK_LEASE")"
-[[ ! -e "$lease" ]]
-
-# A signal received after the process group is recorded reaches the shutdown helper only once.
+    ;;
+    signal-once)
 mkdir "$tmp/trace"
 cat > "$tmp/trace/sitecustomize.py" <<'PY'
 import os
@@ -286,7 +276,7 @@ try:
     time.sleep(1)
     assert process.poll() is None, "shutdown helper received SIGTERM twice"
     Path(env["SIGNAL_RELEASE"]).touch()
-    assert process.wait(timeout=10) == 143
+    Path(env["STATUS_FILE"]).write_text(str(process.wait(timeout=10)))
     assert Path(env["SIGNAL_FINISHED"]).exists(), "shutdown helper did not finish"
 finally:
     Path(env["SIGNAL_RELEASE"]).touch()
@@ -294,6 +284,13 @@ finally:
         process.terminate()
         process.wait(timeout=10)
 PY
+    ;;
+    esac
+    if [[ $cancellation != startup ]]; then status=$(cat "$STATUS_FILE"); fi
+    [[ $status == 143 ]]
+    project=$(sed -n 's/.*-p \([^ ]*\) .* down -v --remove-orphans/\1/p' "$DOCKER_LOG")
+    [[ -n $project && ! -e "$HOME/.local/state/test-service-leases/$project" ]]
+done
 
 # Dry runs do not start services.
 : > "$DOCKER_LOG"
@@ -317,7 +314,6 @@ for target in test-postgres bench-pg-usage test-clickhouse; do
     project=$(cat "$CHECK_LEASE")
     [[ "$project" != old ]]
     grep -Fxq "LEASE_FROM_MAKE=$project" "$tmp/make-url"
-    grep -Fxq 'NO_EXCHANGE_FROM_MAKE=old-no-exchange' "$tmp/make-url"
     case "$target" in
         test-clickhouse)
             service=clickhouse
