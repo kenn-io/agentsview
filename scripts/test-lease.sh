@@ -71,8 +71,6 @@ with lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             break
         except BlockingIOError:
-            if received is not None:
-                forward(received, None)
             time.sleep(0.1)
     process_group = None
     try:

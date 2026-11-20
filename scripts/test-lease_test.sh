@@ -3,9 +3,11 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 tmp=$(mktemp -d)
 first=
+shutdown_release="$tmp/shutdown-release"
 cleanup() {
     touch "$tmp/release"
     touch "$tmp/down-release"
+    touch "$shutdown_release"
     [[ -z "$first" ]] || wait "$first" 2>/dev/null || true
     if [[ -f "$tmp/ready" ]]; then
         for _ in {1..100}; do [[ -f "$tmp/exited" ]] && break; sleep .1; done
@@ -91,9 +93,18 @@ PY
 
 # Cleanup waits for a descendant to release the lease.
 export READY="$tmp/ready" RELEASE="$tmp/release" EXITED="$tmp/exited" MAIN="$tmp/main" CHECK_LEASE="$tmp/project" DESCENDANT="$tmp/descendant"
+export SHUTDOWN_RELEASE="$shutdown_release" SHUTDOWN_STARTED="$tmp/shutdown-started" SHUTDOWN_PID="$tmp/shutdown-pid" SHUTDOWN_HELPER="$tmp/shutdown-helper"
+cat > "$SHUTDOWN_HELPER" <<'HELPER'
+#!/bin/sh
+printf '%s\n' "$$" > "$SHUTDOWN_PID"
+touch "$SHUTDOWN_STARTED"
+while [ ! -f "$SHUTDOWN_RELEASE" ]; do sleep 0.1; done
+touch "$EXITED"
+HELPER
+chmod +x "$SHUTDOWN_HELPER"
 cat > "$DESCENDANT" <<'CHILD'
 #!/bin/sh
-trap 'touch "$EXITED"; exit 0' TERM
+trap 'exec "$SHUTDOWN_HELPER"' TERM
 touch "$READY"
 while [ ! -f "$RELEASE" ]; do sleep 0.1; done
 touch "$EXITED"
@@ -114,6 +125,14 @@ supervisor=${lease##*-}
 supervisor_args=$(ps -p "$supervisor" -o args=)
 [[ "$supervisor_args" == *'python3 -'* ]]
 kill -TERM "$supervisor"
+for _ in {1..100}; do [[ -f "$SHUTDOWN_STARTED" ]] && break; sleep .1; done
+[[ -f "$SHUTDOWN_STARTED" ]]
+helper_pid=$(cat "$SHUTDOWN_PID")
+for _ in {1..10}; do
+    if ! kill -0 "$helper_pid" 2>/dev/null; then echo 'shutdown helper received a repeated signal' >&2; exit 1; fi
+    sleep .1
+done
+touch "$SHUTDOWN_RELEASE"
 for _ in {1..100}; do [[ -f "$EXITED" ]] && break; sleep .1; done
 [[ -f "$EXITED" ]]
 set +e
@@ -124,7 +143,7 @@ first=
 [[ $status == 143 ]]
 grep -qE -- "-p $(cat "$CHECK_LEASE") .* down -v --remove-orphans" "$DOCKER_LOG"
 [[ ! -e "$lease" ]]
-unset READY RELEASE EXITED MAIN
+unset READY RELEASE EXITED MAIN SHUTDOWN_RELEASE SHUTDOWN_STARTED SHUTDOWN_PID SHUTDOWN_HELPER
 
 # A successful command reports cleanup failure; a failed command keeps its status.
 for command_status in 0 7; do
