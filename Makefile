@@ -453,9 +453,9 @@ postgres-up:
 .PHONY: bench-pg-usage-run test-postgres-run test-clickhouse-run
 TEST_SERVICE_MAKE = $(MAKE)
 bench-pg-usage: pricing-snapshot
-	./scripts/test-lease.sh agentsview 'docker compose -p "$$TEST_SERVICE_LEASE" -f docker-compose.test.yml -f docker-compose.test-lease.yml down -v --remove-orphans' ./scripts/test-service-compose.sh postgres 5432 $(TEST_SERVICE_MAKE) -o pricing-snapshot bench-pg-usage-run
+	./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 $(TEST_SERVICE_MAKE) bench-pg-usage-run
 
-bench-pg-usage-run: pricing-snapshot
+bench-pg-usage-run:
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" ./internal/postgres \
 		-run '^$$' -bench 'BenchmarkPGUsage(Read|Refresh)' -benchmem -count=5
 
@@ -465,9 +465,9 @@ postgres-down:
 
 # Run PostgreSQL integration tests (starts postgres automatically)
 test-postgres: pricing-snapshot
-	./scripts/test-lease.sh agentsview 'docker compose -p "$$TEST_SERVICE_LEASE" -f docker-compose.test.yml -f docker-compose.test-lease.yml down -v --remove-orphans' ./scripts/test-service-compose.sh postgres 5432 $(TEST_SERVICE_MAKE) -o pricing-snapshot test-postgres-run
+	./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 $(TEST_SERVICE_MAKE) test-postgres-run
 
-test-postgres-run: pricing-snapshot ensure-embed-dir
+test-postgres-run: ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5,pgtest" -v ./cmd/agentsview \
 		-run 'TestRawSync.*CleanUploads|TestPGServeKataHubConnection|TestRawSyncBackfill|TestRawProjectionDialogueRolloutRequeuesCompletedProductionVersion|TestHostedRuntimeHealthRequiresStatusToken|TestReplicaRecipeQueryWithoutConfig|TestReplicaServeWatchPublication' -count=1
 	CGO_ENABLED=1 go test -p 1 -tags "fts5,pgtest" -v ./internal/postgres/... ./internal/activity/... -count=1 -timeout=20m
@@ -510,9 +510,9 @@ clickhouse-down:
 
 # Run ClickHouse integration tests (starts clickhouse automatically)
 test-clickhouse: pricing-snapshot
-	./scripts/test-lease.sh agentsview 'docker compose -p "$$TEST_SERVICE_LEASE" -f docker-compose.test.yml -f docker-compose.test-lease.yml down -v --remove-orphans' ./scripts/test-service-compose.sh clickhouse 9000 $(TEST_SERVICE_MAKE) -o pricing-snapshot test-clickhouse-run
+	./scripts/test-lease.sh ./scripts/test-service-compose.sh clickhouse 9000 $(TEST_SERVICE_MAKE) test-clickhouse-run
 
-test-clickhouse-run: pricing-snapshot ensure-embed-dir
+test-clickhouse-run: ensure-embed-dir
 	CGO_ENABLED=1 go test -tags "fts5,chtest" -v ./internal/clickhouse/... ./internal/activity/... -count=1 -timeout=20m
 	CGO_ENABLED=1 go test -tags "fts5,chtest" -v ./internal/service -run '^TestPlanUsageCountsParity$$' -count=1
 

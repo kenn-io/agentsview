@@ -32,21 +32,11 @@ sys.exit(1)
 PROBE
     printf '%s\n' "$TEST_SERVICE_LEASE" > "$CHECK_LEASE" ;;
   *' port '*) echo 127.0.0.1:49153 ;;
-  *' down '*)
-    python3 - "$HOME/.local/state/test-service-leases/$TEST_SERVICE_LEASE" <<'PROBE' || exit 1
-import fcntl, sys
-with open(sys.argv[1]) as f:
-    try: fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError: sys.exit(0)
-sys.exit(1)
-PROBE
-    exit "${DOWN_STATUS:-0}" ;;
 esac
 DOCKER
 chmod +x "$tmp/bin/docker"
 ln -s "$python_bin" "$tmp/bin/python3"
 export PATH="$tmp/bin:$PATH" DOCKER_LOG="$tmp/docker.log"
-cleanup_cmd='docker compose -p "$TEST_SERVICE_LEASE" -f docker-compose.test.yml -f docker-compose.test-lease.yml down -v --remove-orphans'
 
 # Both services carry the project lease label in the resolved Compose config.
 (cd "$root" && TEST_SERVICE_LEASE=agentsview-test-123 "$docker_bin" compose -p agentsview-test-123 -f docker-compose.test.yml -f docker-compose.test-lease.yml config --format json) | python3 -c '
@@ -65,34 +55,28 @@ with open(sys.argv[1]) as f:
 PY
 }
 
-# Cleanup waits for a descendant to release the lease and retains the test status.
+# A descendant retains the lease after the main process exits.
 export READY="$tmp/ready" RELEASE="$tmp/release" EXITED="$tmp/exited" CHECK_LEASE="$tmp/project"
 : > "$DOCKER_LOG"
-(cd "$root" && ./scripts/test-lease.sh agentsview "$cleanup_cmd" ./scripts/test-service-compose.sh postgres 5432 sh -c 'sh -c '\''touch "$READY"; while [ ! -f "$RELEASE" ]; do sleep 0.1; done; touch "$EXITED"'\'' >/dev/null 2>&1 & while [ ! -f "$READY" ]; do sleep 0.1; done; exit 7') &
+(cd "$root" && ./scripts/test-lease.sh ./scripts/test-service-compose.sh postgres 5432 sh -c 'sh -c '\''touch "$READY"; while [ ! -f "$RELEASE" ]; do sleep 0.1; done; touch "$EXITED"'\'' >/dev/null 2>&1 & while [ ! -f "$READY" ]; do sleep 0.1; done; exit 7') &
 first=$!
 for _ in {1..100}; do [[ -f "$READY" ]] && break; sleep .1; done
 [[ -f "$READY" ]]
 lease="$HOME/.local/state/test-service-leases/$(cat "$CHECK_LEASE")"
 if probe; then echo 'lease released while descendant still runs' >&2; exit 1; fi
-if grep -q ' down ' "$DOCKER_LOG"; then echo 'cleanup ran while descendant held lease' >&2; exit 1; fi
-touch "$RELEASE"
 set +e
 wait "$first"
 status=$?
 set -e
 first=
-[[ $status == 7 && -f "$EXITED" ]]
-grep -qE -- "-p $(cat "$CHECK_LEASE") .* down -v --remove-orphans" "$DOCKER_LOG"
+[[ $status == 7 ]]
+if probe; then echo 'lease released while descendant still runs' >&2; exit 1; fi
+touch "$RELEASE"
+for _ in {1..100}; do [[ -f "$EXITED" ]] && break; sleep .1; done
+[[ -f "$EXITED" ]]
+for _ in {1..100}; do if probe; then break; fi; sleep .1; done
 probe
 unset READY RELEASE EXITED
-
-# A cleanup failure turns a successful test into a failure.
-set +e
-(cd "$root" && DOWN_STATUS=1 ./scripts/test-lease.sh agentsview "$cleanup_cmd" true) > "$tmp/cleanup-error" 2>&1
-status=$?
-set -e
-[[ $status == 1 ]]
-grep -q 'cleanup failed; retry from the repository root:' "$tmp/cleanup-error"
 
 # Dry runs do not start services or create leases.
 : > "$DOCKER_LOG"
@@ -127,7 +111,6 @@ for target in test-postgres bench-pg-usage test-clickhouse; do
     esac
     grep -qE -- "-p $project .* -f docker-compose.test-lease.yml up -d --wait $service" "$DOCKER_LOG"
     grep -qE -- "-p $project .* port $service $port" "$DOCKER_LOG"
-    grep -qE -- "-p $project .* down -v --remove-orphans" "$DOCKER_LOG"
 done
 
 # Missing prerequisites stop before Docker starts.
@@ -135,102 +118,24 @@ mkdir "$tmp/no-python"
 ln -s "$tmp/bin/docker" "$tmp/no-python/docker"
 : > "$DOCKER_LOG"
 set +e
-PATH="$tmp/no-python" /bin/sh "$root/scripts/test-lease.sh" agentsview "$cleanup_cmd" docker info >"$tmp/no-python.out" 2>&1
+PATH="$tmp/no-python" /bin/sh "$root/scripts/test-lease.sh" docker info >"$tmp/no-python.out" 2>&1
 status=$?
 set -e
 [[ $status == 2 && ! -s "$DOCKER_LOG" ]]
 grep -q 'python3 is required' "$tmp/no-python.out"
 set +e
-HOME= "$root/scripts/test-lease.sh" agentsview "$cleanup_cmd" docker info >"$tmp/home-error" 2>&1
+HOME= "$root/scripts/test-lease.sh" docker info >"$tmp/home-error" 2>&1
 status=$?
 set -e
 [[ $status != 0 && ! -s "$DOCKER_LOG" ]]
 grep -q 'HOME must be set' "$tmp/home-error"
 
-# A signal to the supervisor reaches the test process group and preserves its status.
-cat > "$tmp/bin/go" <<'GO'
-#!/usr/bin/env python3
-import os
-import signal
-import sys
-
-if sys.argv[1] == "env":
-    sys.exit(0)
-
-def stop(signum, frame):
-    open(os.environ["SIGNAL_SEEN"], "w").close()
-    sys.exit(128 + signum)
-
-signal.signal(signal.SIGTERM, stop)
-signal.alarm(20)
-ready = os.environ["SIGNAL_READY"]
-with open(ready + ".tmp", "w") as f:
-    f.write(f'{os.environ["TEST_SERVICE_LEASE"]} {os.getpid()}')
-os.replace(ready + ".tmp", ready)
-signal.pause()
-GO
-chmod +x "$tmp/bin/go"
-export SIGNAL_READY="$tmp/signal-ready" SIGNAL_SEEN="$tmp/signal-seen"
+# A loose lease directory is rejected before Docker starts.
+chmod 755 "$HOME/.local/state/test-service-leases"
 : > "$DOCKER_LOG"
-python3 - "$root" "$tmp/bin/go" <<'PYTEST'
-import os
-import signal
-import subprocess
-import sys
-import time
-
-root, fake_go = sys.argv[1:]
-ready, seen = (os.environ[k] for k in ("SIGNAL_READY", "SIGNAL_SEEN"))
-log = os.environ["DOCKER_LOG"]
-
-def wait_for(path):
-    deadline = time.monotonic() + 8
-    while not os.path.exists(path):
-        if time.monotonic() >= deadline:
-            raise AssertionError(f"timed out waiting for {os.path.basename(path)}")
-        time.sleep(0.05)
-
-def stop_if_owned(pid, expected):
-    if not pid:
-        return
-    result = subprocess.run(["ps", "-p", str(pid), "-o", "args="], capture_output=True, text=True, timeout=5)
-    if result.returncode == 0 and expected in result.stdout:
-        os.kill(pid, signal.SIGKILL)
-
-output = open(os.path.join(os.path.dirname(log), "signal-output"), "w")
-proc = subprocess.Popen(["make", "-o", "pricing-snapshot", "MAKE=make -o ensure-embed-dir", "test-postgres"], cwd=root, stdout=output, stderr=output)
-supervisor = descendant = None
-try:
-    wait_for(ready)
-    project, child = open(ready).read().split()
-    supervisor = int(project.rsplit("-", 1)[1])
-    descendant = int(child)
-    args = subprocess.run(["ps", "-p", str(supervisor), "-o", "args="], check=True, capture_output=True, text=True, timeout=5).stdout
-    assert "python3 - agentsview" in args
-    os.kill(supervisor, signal.SIGTERM)
-    wait_for(seen)
-    assert proc.wait(timeout=10) == 2, "cancelled make returned an unexpected status"
-    assert "Error 143" in open(output.name).read(), "the supervisor did not preserve the cancellation status"
-finally:
-    stop_if_owned(descendant, fake_go)
-    stop_if_owned(supervisor, "python3 - agentsview")
-    if proc.poll() is None:
-        proc.kill()
-    proc.wait(timeout=10)
-    output.close()
-PYTEST
-unset SIGNAL_READY SIGNAL_SEEN
-
-# Three parallel targets share the top-level snapshot preparation.
-cat > "$tmp/bin/go" <<'GO'
-#!/bin/sh
-[ "$1" != env ] || exit 0
-printf '%s\n' "$1" >> "$GO_LOG"
-GO
-chmod +x "$tmp/bin/go"
-export GO_LOG="$tmp/go.log"
-: > "$DOCKER_LOG"
-(cd "$root" && make -j3 -o sqlite-vec-header -o ensure-embed-dir MAKE='make -o sqlite-vec-header -o ensure-embed-dir' test-postgres test-clickhouse bench-pg-usage) > "$tmp/parallel.log" 2>&1 || { cat "$tmp/parallel.log"; exit 1; }
-[[ $(grep -c '^run$' "$GO_LOG") == 1 ]]
-projects=$(awk '$1 == "compose" && $2 == "-p" && $8 == "up" {print $3}' "$DOCKER_LOG" | sort -u)
-[[ $(printf '%s\n' "$projects" | wc -l) == 3 ]]
+set +e
+"$root/scripts/test-lease.sh" docker info >"$tmp/mode-error" 2>&1
+status=$?
+set -e
+[[ $status != 0 && ! -s "$DOCKER_LOG" ]]
+grep -q 'lease directory must be owned' "$tmp/mode-error"

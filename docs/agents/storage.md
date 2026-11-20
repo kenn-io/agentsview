@@ -1676,8 +1676,11 @@ own metadata, which is why the docs below call the database a mirror.
 
 ### ClickHouse test fixtures
 
-Run `make test-clickhouse` to start a disposable compose service. The target
-removes it after the tests and reports a failure if cleanup fails. Use
+Run `make test-clickhouse` to start a disposable compose service. Its container
+carries a `test-service.lease` label, and the tests hold an exclusive lock on
+`~/.local/state/test-service-leases/<id>` until the last descendant exits. A
+separate reaper removes labeled containers when the lock is free or missing.
+Manual services have no lease label. Use
 `make clickhouse-up` and `make clickhouse-down` to manage a separate standing
 service. When running tagged Go tests directly, set `TEST_CLICKHOUSE_URL` to
 reuse a dedicated test server.
@@ -1770,7 +1773,7 @@ Because each test owns a database, the tests run in parallel:
   10 s per test there, against 86 s on a disk store.
 
 Use `make test-postgres` to start a disposable container and run the suite.
-The target removes it after the tests and reports a failure if cleanup fails.
+The same lease and reaper contract described above applies to PostgreSQL.
 Use `make postgres-up` and `make postgres-down` to manage a separate standing
 test container.
 

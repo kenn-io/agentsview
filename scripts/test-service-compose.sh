@@ -13,6 +13,5 @@ case "$service" in
     postgres) url="TEST_PG_URL=postgres://agentsview_test:agentsview_test_password@${address}/agentsview_test?sslmode=disable" ;;
     clickhouse) url="TEST_CLICKHOUSE_URL=clickhouse://${address}/default" ;;
 esac
-export "$url"
 # Override values passed to the parent Make on its command line.
 exec "$@" "TEST_SERVICE_LEASE=$TEST_SERVICE_LEASE" "$url"
