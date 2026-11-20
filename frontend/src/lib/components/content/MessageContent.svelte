@@ -2,7 +2,7 @@
   import type { Session } from "../../api/types.js";
 import type { DbMessage as Message } from "../../api/generated/index.js";
   import type { DbCallTiming as CallTiming, DbTurnTiming as TurnTiming } from "../../api/generated/index.js";
-  import { parseContent, enrichSegments } from "../../utils/content-parser.js";
+  import { parseContent, parseSkillInvocation, enrichSegments } from "../../utils/content-parser.js";
   import { isSkillInvocationMessage } from "../../utils/messages.js";
   import { formatTimestamp, formatTokenUsage } from "../../utils/format.js";
   import { formatDuration } from "../../utils/duration.js";
@@ -46,15 +46,18 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     allowMutations?: boolean;
   }
   let { message, skillMessage, session, isSubagentContext = false, searchOrdinal, compact = false, allowMutations = true }: Props = $props();
+  /** A skill row holds one opaque body, so read it from the outer envelope. */
+  function skillSegments(msg: Message) {
+    if (!isSkillInvocationMessage(msg)) return null;
+    const segment = parseSkillInvocation(msg.content);
+    return segment ? [segment] : null;
+  }
   let copied = $state(false);
   let segments = $derived(enrichSegments(
-    parseContent(message.content, message.has_tool_use, message.id, message.content_length),
+    skillSegments(message) ?? parseContent(message.content, message.has_tool_use, message.id, message.content_length),
     message.tool_calls,
   ));
-  let attachedSkill = $derived(skillMessage
-    ? parseContent(skillMessage.content, false, skillMessage.id, skillMessage.content_length)
-        .find((s) => s.type === "skill")
-    : undefined);
+  let attachedSkill = $derived(skillMessage ? parseSkillInvocation(skillMessage.content) : null);
   // Embedded subagents have their own ordinal namespace and are never searched here.
   let activeSearchOrdinal = $derived(isSubagentContext ? undefined : searchOrdinal);
   let hasSearchQuery = $derived(activeSearchOrdinal !== undefined && inSessionSearch.isActive);
@@ -88,7 +91,6 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
   // drops the user label, icon, and colors.
   let isSkillInvocation = $derived(isSkillInvocationMessage(message));
   let roleLabel = $derived.by(() => {
-    if (isSkillInvocation) return m.message_content_role_skill();
     if (!isUser) return m.message_content_role_assistant();
     if (isSubagentContext || sessionKind === "subagent") return m.message_content_role_agent();
     if (sessionKind === "teammate" || hasInlineTeammateMessage) return m.message_content_role_teammate();
@@ -227,7 +229,7 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
 <div class="message" class:is-user={isUser && !isSkillInvocation} class:compact style:border-left-color={railColor} style:background={roleBg}>
   <div class="message-header">
     <span class="role-icon" style:background={accentColor} style:color={accentForeground}>{roleIcon}</span>
-    <span class="role-label" style:color={roleInk}>{roleLabel}</span>
+    {#if !isSkillInvocation}<span class="role-label" style:color={roleInk}>{roleLabel}</span>{/if}
     <CopyButton revealOnHover {copied} ariaLabel={m.message_content_copy_message()}
       copiedAriaLabel={m.message_content_copied_message()} title={m.message_content_copy_message()}
       copiedTitle={m.message_content_copied()} onclick={handleCopy} />

@@ -1,6 +1,7 @@
 <script module lang="ts">
-  import type {
-    DisplayItem as PromptDisplayItem,
+  import {
+    primaryOrdinal,
+    type DisplayItem as PromptDisplayItem,
   } from "./lib/utils/display-items.js";
 
   export function findUserPromptOrdinal(
@@ -17,7 +18,7 @@
       switch (item.kind) {
         case "message":
           return [{
-            ordinal: item.ordinals[0]!,
+            ordinal: primaryOrdinal(item),
             prompt: item.message.role === "user" && !item.message.is_system,
           }];
         case "tool-group":
@@ -315,7 +316,7 @@
     const selected = ui.selectedOrdinal;
     if (selected === null) {
       const first = sorted[0]!;
-      navigateToMessageOrdinal(first.ordinals[0]!);
+      navigateToMessageOrdinal(primaryOrdinal(first));
       return;
     }
 
@@ -329,7 +330,7 @@
     if (nextIdx === curIdx) return;
 
     const next = sorted[nextIdx]!;
-    navigateToMessageOrdinal(next.ordinals[0]!);
+    navigateToMessageOrdinal(primaryOrdinal(next));
   }
 
   function navigateUserPrompt(delta: number) {
