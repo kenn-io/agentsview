@@ -112,7 +112,7 @@ func TestSearchDateFiltersAPIVersion(t *testing.T) {
 					assert.Equal(t, tc.request.DateTo, r.URL.Query().Get("date_to"))
 					_, _ = w.Write([]byte(`{"results":[{"session_id":"session-a"}]}`))
 				default:
-					t.Errorf("unexpected path: %s", r.URL.Path)
+					assert.Fail(t, "unexpected path", "path: %s", r.URL.Path)
 					w.WriteHeader(http.StatusNotFound)
 				}
 			}))
